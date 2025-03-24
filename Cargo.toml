@@ -1,0 +1,9 @@
+[package]
+name = "elaboration-zoo-lsp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lsp-types = "0.95"
+lsp-server = "0.7.7"
+colored = "2.1.0"
