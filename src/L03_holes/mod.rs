@@ -36,6 +36,33 @@ enum Tm {
     InsertedMeta(MetaVar, List<BD>),
 }
 
+impl Tm {
+    fn pretty(&self, names: List<(Span<String>, Val)>) -> String {
+        match self {
+            Tm::Var(x) => names.iter().nth(x.0 as usize).unwrap().0.data.to_string(),
+            Tm::Lam(_, t) => {
+                let x = names.iter().nth(0).unwrap().0.data.to_string();
+                let body = t.pretty(names.tail());
+                format!("λ{x}.{body}")
+            }
+            Tm::App(t1, t2) => {format!("{} {}", t1.pretty(names.clone()), t2.pretty(names))}
+            Tm::U => "U".to_owned(),
+            Tm::Pi(span, tm, tm1) => {
+                format!("Pi({:?} {} -> {})", span, tm.pretty(names.clone()), tm1.pretty(names))
+            },
+            Tm::Let(span, tm, tm1, tm2) => {
+                format!("Let({:?}: {} = {} in {})", span, tm.pretty(names.clone()), tm1.pretty(names.clone()), tm2.pretty(names))
+            },
+            Tm::Meta(meta_var) => {
+                format!("Meta({:?})", meta_var)
+            },
+            Tm::InsertedMeta(meta_var, list) => {
+                format!("InsertedMeta({:?}, {})", meta_var, list.iter().map(|x| format!("{x:?}")).collect::<Vec<_>>().join(", "))
+            },
+        }
+    }
+}
+
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -230,7 +257,11 @@ impl Infer {
     }
 
     fn v_app_sp(&self, t: Val, spine: Spine) -> Val {
-        spine.iter().fold(t, |acc, u| self.v_app(acc, u.clone()))
+        //spine.iter().rev().fold(t, |acc, u| self.v_app(acc, u.clone()))//TODO: need List to support rev()
+        match spine {
+            List { head: None } => t,
+            a => self.v_app(self.v_app_sp(t, a.tail()), a.head().unwrap().clone()),
+        }
     }
 
     fn v_app_bds(&self, env: &Env, v: Val, bds: &List<BD>) -> Val {
@@ -248,10 +279,26 @@ impl Infer {
         }
     }
 
+    fn invert_go(&self, sp: Spine) -> Result<(Lvl, HashMap<u32, Lvl>), UnifyError> {
+        match sp {
+            List { head: None } => Ok((Lvl(0), HashMap::new())),
+            a => {
+                let (dom, mut ren) = self.invert_go(a.tail())?;
+                match self.force(a.head().unwrap().clone()) {
+                    Val::Rigid(x, List { head: None }) if !ren.contains_key(&x.0) => {
+                        ren.insert(x.0, dom);
+                        Ok((dom + 1, ren))
+                    }
+                    _ => Err(UnifyError)
+                }
+            }
+        }
+    }
     fn invert(&self, gamma: Lvl, sp: Spine) -> Result<PartialRenaming, UnifyError> {
         //println!("{} {:?} {:?}", "invert".green(), gamma, sp);
-        let (dom, ren) = sp
+        let (dom, ren) = self.invert_go(sp)?;/*sp
             .iter()
+            .rev()//TODO: need List to support rev()
             .try_fold((Lvl(0), HashMap::new()), |(dom, mut ren), t| {
                 match self.force(t.clone()) {
                     Val::Rigid(x, List { head: None }) if !ren.contains_key(&x.0) => {
@@ -260,7 +307,7 @@ impl Infer {
                     }
                     _ => Err(UnifyError),
                 }
-            })?;
+            })?;*/
 
         Ok(PartialRenaming {
             dom,
@@ -385,8 +432,15 @@ impl Infer {
                     self.quote(cxt.lvl, t),
                     self.quote(cxt.lvl, t_prime),
                 )*/
+                //println!("{}", cxt.types.iter().map(|x| format!("{:?}", x.0)).reduce(|a, b| a + "\n" + &b).unwrap_or_default());
+                //dbg!(format!("{:?}", cxt.env));
                 //Error(format!("can't unify {:?} == {:?}", self.quote(cxt.lvl, t), self.quote(cxt.lvl, t_prime)))
-                Error(format!("can't unify {:?} == {:?}", t, t_prime))
+                Error(format!(
+                    "can't unify {} == {}",
+                    self.quote(cxt.lvl, t).pretty(cxt.types.clone()),
+                    self.quote(cxt.lvl, t_prime).pretty(cxt.types.clone()))
+                )
+                //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             })
     }
 
@@ -501,7 +555,7 @@ impl Infer {
             // Infer function applications
             Raw::App(t, u) => {
                 let (t_inferred, tty) = self.infer(cxt, *t.clone())?;
-                println!("{} {:?} -> {:?}", "infer___".red(), t, tty); //debug
+                //println!("{} {:?} -> {:?}", "infer___".red(), t, tty); //debug
                 let (a, b_closure) = match self.force(tty) {
                     Val::Pi(_, a, b_closure) => (*a, b_closure),
                     tty => {
@@ -670,5 +724,6 @@ U
 "#;
     let ast = crate::L03_holes::parser::parser(input, 0).unwrap();
     let typ = Infer::new().infer(&Cxt::empty(), ast).unwrap();
-    println!("{:#?}", typ);
+    println!("{:?}", typ);
+    println!("success");
 }
