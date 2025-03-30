@@ -54,6 +54,7 @@ pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     is(';')
         .map(|x| x.map(|t| (t, Semi)))
+        .or(is('_').map(|x| x.map(|t| (t, Hole))))
         .or(pmatch(|c: char| c.is_alphabetic() || c == '_')
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
@@ -80,7 +81,9 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     let lparen = is('(').map(|x| x.map(|y| (y, LParen)));
     let rparen = is(')').map(|x| x.map(|y| (y, RParen)));
-    lparen.or(rparen).parse(input)
+    let lcurly = is('{').map(|x| x.map(|y| (y, LCurly)));
+    let rcurly = is('}').map(|x| x.map(|y| (y, RCurly)));
+    lparen.or(rparen).or(lcurly).or(rcurly).parse(input)
 }
 
 fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
@@ -89,7 +92,7 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             || ('*'..='/').contains(&c)
             || ((':'..='@').contains(&c) && c != ';')
             || c == '\\'
-            || ('^'..='`').contains(&c)
+            || (('^'..='`').contains(&c) && c != '_')
             || c == '|'
             || c == '~'
     })
@@ -141,20 +144,20 @@ let the : (A : _) -> A -> A = \_ x. x;
 
 let argTest1 = const {U}{U} U;
 
-let argTest2 = const {B = U} U;  -- only give B, the second implicit arg
+let argTest2 = const {B = U} U;
 
 let id2 : {A} -> A -> A = \{A} x. x;
 
-let namedLam  : {A B C} -> A -> B -> C -> A = \{B = B} a b c. a; -- second arg in scope as B
-let namedLam2 : {A B C} -> A -> B -> C -> A = \{B = X} a b c. a; -- second arg in scope as X
-let namedLam2 : {A B C} -> A -> B -> C -> A = \{C = X} a b c. a; -- third arg in scope as X
+let namedLam  : {A B C} -> A -> B -> C -> A = \{B = B} a b c. a;
+let namedLam2 : {A B C} -> A -> B -> C -> A = \{B = X} a b c. a;
+let namedLam2 : {A B C} -> A -> B -> C -> A = \{C = X} a b c. a;
 
 
 let insert : {A} -> A -> A = id;
 
 let noinsert = \{A} x. the A x;
 
-let insert2 = (\{A} x. the A x) U;  -- (\{A} x. the A x) {U} U
+let insert2 = (\{A} x. the A x) U;
 
 
 let Bool : U
@@ -199,8 +202,8 @@ let Eq : {A} -> A -> A -> U
 let refl : {A}{x : A} -> Eq x x
     = \_ px. px;
 
-let sym : {A x y} → Eq {A} x y → Eq y x
-  = λ {A}{x}{y} p. p (λ y. Eq y x) refl;
+let sym : {A x y} -> Eq {A} x y -> Eq y x
+  = \ {A}{x}{y} p. p (\ y. Eq y x) refl;
 
 the (Eq (mul ten ten) hundred) refl
 

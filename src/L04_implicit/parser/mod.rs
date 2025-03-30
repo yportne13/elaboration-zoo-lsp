@@ -116,8 +116,10 @@ fn p_pi_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode
     // 解析隐式参数 {x : A} 或 {x}
     let implicit_binder = brace((
         p_bind.many1(),               // 解析一个或多个绑定变量 xs
-        (kw(Colon),p_raw).map(|(_, x)| x)     // 解析类型 A，可选
-            .or(kw(Hole).map(|_| Raw::Hole)) // 如果没有类型，默认为 Hole
+        (kw(Colon),p_raw).option().map(|x| match x {
+            Some((_, x)) => x,
+            None => Raw::Hole,
+        })
     ))
     .map(|(xs, a)| (xs, a, Icit::Impl)); // 返回 (xs, a, Impl)
 
@@ -185,54 +187,80 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
 #[test]
 fn test() {
     let input = r#"
-let id : (A : _) -> A -> A
-  = \A x. x;
+let id : {A : U} -> A -> A = \x. x;
 
-let List : U -> U
-  = \A. (L : _) -> (A -> L -> L) -> L -> L;
+let const : {A B} -> A -> B -> A = \x y. x;
 
-let nil : (A : _) -> List A
-  = \A L cons nil. nil;
+let group1 : {A B : U}(x y z : A) -> B -> B = \x y z b. b;
+let group2 : {A B}(x y z : A) -> B -> B = \x y z b. b;
 
-let cons : (A : _) -> A -> List A -> List A
-  = \A x xs L cons nil. cons x (xs _ cons nil);
+let the : (A : _) -> A -> A = \_ x. x;
+
+let argTest1 = const {U}{U} U;
+
+let argTest2 = const {B = U} U;
+
+let id2 : {A} -> A -> A = \{A} x. x;
+
+let namedLam  : {A B C} -> A -> B -> C -> A = \{B = B} a b c. a;
+let namedLam2 : {A B C} -> A -> B -> C -> A = \{B = X} a b c. a;
+let namedLam2 : {A B C} -> A -> B -> C -> A = \{C = X} a b c. a;
+
+
+let insert : {A} -> A -> A = id;
+
+let noinsert = \{A} x. the A x;
+
+let insert2 = (\{A} x. the A x) U;
+
 
 let Bool : U
-  = (B : _) -> B -> B -> B;
-
+    = (B : _) -> B -> B -> B;
 let true : Bool
-  = \B t f. t;
-
+    = \B t f. t;
 let false : Bool
-  = \B t f. f;
-
+    = \B t f. f;
 let not : Bool -> Bool
-  = \b B t f. b B f t;
+    = \b B t f. b B f t;
 
+let List : U -> U
+    = \A. (L : _) -> (A -> L -> L) -> L -> L;
+let nil : {A} -> List A
+    = \L cons nil. nil;
+let cons : {A} -> A -> List A -> List A
+    = \x xs L cons nil. cons x (xs L cons nil);
+let map : {A B} -> (A -> B) -> List A -> List B
+    = \{A}{B} f xs L c n. xs L (\a. c (f a)) n;
 let list1 : List Bool
-  = cons _ (id _ true) (nil _);
+    = cons true (cons false (cons true nil));
 
-let Eq : (A : _) -> A -> A -> U
-  = \A x y. (P : A -> U) -> P x -> P y;
+let comp : {A}{B : A -> U}{C : {a} -> B a -> U}
+           (f : {a}(b : B a) -> C b)
+           (g : (a : A) -> B a)
+           (a : A)
+           -> C (g a)
+    = \f g a. f (g a);
 
-let refl : (A : _)(x : A) -> Eq A x x
-  = \A x P px. px;
+let compExample = comp (cons true) (cons false) nil;
 
-let list1 : List Bool
-  = cons _ true (cons _ false (nil _));
+let Nat : U
+    = (N : U) -> (N -> N) -> N -> N;
+let mul : Nat -> Nat -> Nat
+    = \a b N s z. a _ (b _ s) z;
+let ten : Nat
+    = \N s z. s (s (s (s (s (s (s (s (s (s z)))))))));
+let hundred = mul ten ten;
 
-let Nat  : U = (N : U) -> (N -> N) -> N -> N;
-let five : Nat = \N s z. s (s (s (s (s z))));
-let add  : Nat -> Nat -> Nat = \a b N s z. a N s (b N s z);
-let mul  : Nat -> Nat -> Nat = \a b N s z. a N (b N s) z;
+let Eq : {A} -> A -> A -> U
+    = \{A} x y. (P : A -> U) -> P x -> P y;
+let refl : {A}{x : A} -> Eq x x
+    = \_ px. px;
 
-let ten      : Nat = add five five;
-let hundred  : Nat = mul ten ten;
-let thousand : Nat = mul ten hundred;
+let sym : {A x y} -> Eq {A} x y -> Eq y x
+  = \ {A}{x}{y} p. p (\ y. Eq y x) refl;
 
-let eqTest : Eq _ hundred hundred = refl _ _;
+the (Eq (mul ten ten) hundred) refl
 
-U
 "#;
     println!("{:#?}", parser(input, 0).unwrap());
 }

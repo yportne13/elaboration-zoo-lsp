@@ -1,13 +1,13 @@
 use crate::parser_lib::Span;
 
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy, PartialEq)]
 pub enum Icit {
     Impl,
     Expl,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Either {
     Name(Span<String>),
     Icit(Icit),
