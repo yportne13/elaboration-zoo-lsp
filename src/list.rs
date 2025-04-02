@@ -40,6 +40,15 @@ impl<T> List<T> {
         List { head: self.head.as_ref().and_then(|node| node.next.clone()) }
     }
 
+    pub fn map<U, F>(&self, f: F) -> List<U>
+    where
+        F: Fn(&T) -> U + Copy,
+    {
+        match self {
+            List { head: None } => List::new(),
+            x => x.tail().map(f).prepend(f(self.head().unwrap()))
+        }
+    }
 }
 
 pub struct Iter<'a, T> {
