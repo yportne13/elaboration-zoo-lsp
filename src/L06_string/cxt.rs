@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use super::{syntax::{Locals, Pruning}, *};
-
+use super::{
+    syntax::{Locals, Pruning},
+    *,
+};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum NameOrigin {
@@ -13,14 +15,23 @@ type Types = List<(Span<String>, NameOrigin, Val)>;
 
 #[derive(Debug, Clone)]
 pub struct Cxt {
-    pub env: Env,      // Used for evaluation
-    pub lvl: Lvl,      // Used for unification
+    pub env: Env, // Used for evaluation
+    pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: HashMap<String, (Lvl, VTy)>
+    pub src_names: HashMap<String, (Lvl, VTy)>,
 }
 
 impl Cxt {
+    pub fn new() -> Self {
+        Self::empty().define(
+            empty_span("String".to_owned()),
+            Tm::LiteralType,
+            Val::LiteralType,
+            Tm::U,
+            Val::U,
+        )
+    }
     pub fn empty() -> Self {
         Cxt {
             env: List::new(),

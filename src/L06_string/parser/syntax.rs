@@ -22,6 +22,7 @@ pub enum Raw {
     Pi(Span<String>, Icit, Box<Raw>, Box<Raw>),
     Let(Span<String>, Box<Raw>, Box<Raw>, Box<Raw>),
     Hole,
+    LiteralIntro(Span<String>),
 }
 
 #[derive(Clone, Debug)]

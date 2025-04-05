@@ -324,6 +324,10 @@ impl Infer {
                 let t = self.fresh_meta(cxt, a.clone());
                 Ok((t, a))
             }
+
+            Raw::LiteralIntro(literal) => {
+                Ok((Tm::LiteralIntro(literal), Val::LiteralType))
+            }
         }
     }
 }

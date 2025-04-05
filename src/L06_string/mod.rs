@@ -51,6 +51,8 @@ enum Tm {
     Pi(Span<String>, Icit, Box<Ty>, Box<Ty>),
     Let(Span<String>, Box<Ty>, Box<Tm>, Box<Tm>),
     Meta(MetaVar),
+    LiteralType,
+    LiteralIntro(Span<String>),
 }
 
 type Ty = Tm;
@@ -78,6 +80,8 @@ enum Val {
     Lam(Span<String>, Icit, Closure),
     Pi(Span<String>, Icit, Box<VTy>, Closure),
     U,
+    LiteralType,
+    LiteralIntro(Span<String>),
 }
 
 type VTy = Val;
@@ -205,6 +209,8 @@ impl Infer {
             Tm::U => Val::U,
             Tm::Meta(m) => self.v_meta(m),
             Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, *t), &pr),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(x),
+            Tm::LiteralType => Val::LiteralType,
         }
     }
 
@@ -232,6 +238,8 @@ impl Infer {
                 Box::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
             ),
             Val::U => Tm::U,
+            Val::LiteralIntro(x) => Tm::LiteralIntro(x),
+            Val::LiteralType => Tm::LiteralType,
         }
     }
 
@@ -261,16 +269,12 @@ impl Infer {
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     let ast = parser::parser(input, path_id).unwrap();
-    let mut decl = vec![];
-    let mut cxt = Cxt::empty();
+    let mut cxt = Cxt::new();
+    let mut ret = String::new();
     for tm in ast {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
-        decl.push(x);
-    }
-    let mut ret = String::new();
-    for d in decl {
-        if let DeclTm::Println(x) = d {
+        if let DeclTm::Println(x) = x {
             ret += &format!("{:?}", infer.nf(&cxt.env, x));
             ret += "\n";
         }
@@ -306,6 +310,14 @@ def ten : Nat
 def hundred = mul ten ten
 
 println hundred
+
+def mystr = "hello world"
+
+def str_id(x: String): String = x
+
+def mystr2 = str_id mystr
+
+println mystr2
 
 "#;
     /*let ast = parser::parser(input, 0).unwrap();

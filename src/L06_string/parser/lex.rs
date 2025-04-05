@@ -88,6 +88,12 @@ macro_rules! T {
 
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
+fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
+    (is('"'), pmatch(|c: char| c != '"'), is('"'))
+        .map(|(_, x, _)| x.map(|t| (t, Str)))
+        .parse(input)
+}
+
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     is(';')
         .map(|x| x.map(|t| (t, T![;])))
@@ -160,7 +166,7 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     whitespace
         .with(
             //ws(brace.or(ident).or(num).or(op))
-            ws(brace.or(op).or(num).or(ident))
+            ws(string.or(brace).or(op).or(num).or(ident))
                 //.or(ws(endline))
                 .or(ws(err_token))
                 .many0(),
@@ -173,23 +179,34 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
 fn test() {
     let input = r#"
 def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def refl[A : U, x: A]: Eq[A](x, x) = _ => px => px
+def refl[A : U, x: A]: Eq[A] x x = _ => px => px
 
 def the(A : U)(x: A): A = x
 
 def m(A : U)(B : U): U -> U -> U = _
-def test = a => b => the (Eq (m a a) (\ x y. y)) refl
+def test = a => b => the (Eq (m a a) (x => y => y)) refl
 
 def m : U -> U -> U -> U = _
 def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
 
-println test
 
 def pr1 = f => x => f x
 def pr2 = f => x => y => f x y
 def pr3 = f => f U
 
-U
+def Nat : U
+    = (N : U) -> (N -> N) -> N -> N
+def mul : Nat -> Nat -> Nat
+    = a => b => N => s => z => a _ (b _ s) z
+def ten : Nat
+    = N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
+def hundred = mul ten ten
+
+println hundred
+
+def mystr = "hello world"
+
+println mystr
 
 "#;
     let ret = lex(Span {
