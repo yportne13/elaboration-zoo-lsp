@@ -53,6 +53,7 @@ enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
+    Prim,
 }
 
 type Ty = Tm;
@@ -82,6 +83,7 @@ enum Val {
     U,
     LiteralType,
     LiteralIntro(Span<String>),
+    Prim,
 }
 
 type VTy = Val;
@@ -211,6 +213,12 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, *t), &pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x),
             Tm::LiteralType => Val::LiteralType,
+            Tm::Prim => match (env.iter().nth(1).unwrap(), env.iter().nth(0).unwrap()) {
+                (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
+                    Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data)))
+                },
+                _ => Val::Prim,
+            },
         }
     }
 
@@ -240,6 +248,7 @@ impl Infer {
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
             Val::LiteralType => Tm::LiteralType,
+            Val::Prim => Tm::Prim,
         }
     }
 
@@ -313,16 +322,53 @@ println hundred
 
 def mystr = "hello world"
 
-def str_id(x: String): String = x
+def add_tail(x: String): String = string_concat x "!"
 
-def mystr2 = str_id mystr
+def mystr2 = add_tail mystr
 
 println mystr2
 
 "#;
-    /*let ast = parser::parser(input, 0).unwrap();
-    let typ = Infer::new().infer(&Cxt::empty(), ast[0].clone()).unwrap();
-    println!("{:?}", typ.0);*/
     println!("{}", run(input, 0).unwrap());
+    println!("success");
+}
+
+
+pub fn run1(input: &str, path_id: u32) -> Result<String, Error> {
+    let mut infer = Infer::new();
+    let ast = parser::parser(input, path_id).unwrap();
+    let mut cxt = Cxt::new();
+    let mut ret = String::new();
+    for tm in ast {
+        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        cxt = new_cxt;
+        if let DeclTm::Println(x) = x {
+            ret += &format!("{:?}", infer.nf(&cxt.env, x));
+            ret += "\n";
+        }
+    }
+    println!("{:?}", cxt);
+    Ok(ret)
+}
+
+#[test]
+fn test1() {
+    let input = r#"
+def str_id(x: String, y: String): String = "builtin"
+
+"#;
+    println!("{}", run1(input, 0).unwrap());
+    let input = r#"
+def str_id(x: String, y: String): String = x
+
+"#;
+    println!("{}", run1(input, 0).unwrap());
+    let input = r#"
+def str_id: String = string_concat "hello " "world"
+
+println str_id
+
+"#;
+    println!("{}", run1(input, 0).unwrap());
     println!("success");
 }

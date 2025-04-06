@@ -30,6 +30,12 @@ impl Cxt {
             Val::LiteralType,
             Tm::U,
             Val::U,
+        ).define(
+            empty_span("string_concat".to_owned()),
+            Tm::Lam(empty_span("x".to_owned()), Icit::Expl, Box::new(Tm::Lam(empty_span("y".to_owned()), Icit::Expl, Box::new(Tm::Prim)))),
+            Val::Lam(empty_span("x".to_owned()), Icit::Expl, Closure(List::new().prepend(Val::LiteralType), Box::new(Tm::Lam(empty_span("y".to_owned()), Icit::Expl, Box::new(Tm::Prim))))),
+            Tm::Pi(empty_span("x".to_owned()), Icit::Expl, Box::new(Tm::Var(Ix(0))), Box::new(Tm::Pi(empty_span("y".to_owned()), Icit::Expl, Box::new(Tm::Var(Ix(1))), Box::new(Tm::Var(Ix(2)))))),
+            Val::Pi(empty_span("x".to_owned()), Icit::Expl, Box::new(Val::LiteralType), Closure(List::new().prepend(Val::LiteralType), Box::new(Tm::Pi(empty_span("y".to_owned()), Icit::Expl, Box::new(Tm::Var(Ix(1))), Box::new(Tm::Var(Ix(2)))))))
         )
     }
     pub fn empty() -> Self {
@@ -67,6 +73,7 @@ impl Cxt {
     }
 
     pub fn define(&self, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
+        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl, va));
         Cxt {

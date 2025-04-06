@@ -267,6 +267,7 @@ impl Infer {
             Val::U => Ok(Tm::U),
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
+            Val::Prim => Ok(Tm::Prim),
         }
     }
     fn lams_go(&self, l: Lvl, t: Tm, a: VTy, l_prime: Lvl) -> Tm {
@@ -466,6 +467,8 @@ impl Infer {
                 self.solve(l, *m_prime, sp_prime.clone(), t.clone())
             }
             (Val::LiteralType, Val::LiteralType) => Ok(()),
+            (Val::LiteralType, Val::Prim) => Ok(()),
+            (Val::Prim, Val::LiteralType) => Ok(()),
             _ => Err(UnifyError), // Rigid mismatch error
         }
     }
