@@ -197,6 +197,15 @@ pub trait Parser<I: Copy, A>: Sized + Copy {
             x => x,
         }
     }
+    fn many1_sep<P, X>(self, sep: P) -> impl Parser<I, Vec<A>>
+    where
+        P: Parser<I, X>,
+    {
+        move |input| match self.many0_sep(sep).parse(input) {
+            Some((_, v)) if v.is_empty() => None,
+            x => x,
+        }
+    }
 }
 
 impl<I: Copy, A, F> Parser<I, A> for F

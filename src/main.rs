@@ -8,6 +8,7 @@ mod L03_holes;
 mod L04_implicit;
 mod L05_pruning;
 mod L06_string;
+mod L07_sum_type;
 
 fn main() {
     println!("Hello, world!");

@@ -5,7 +5,10 @@ pub enum TokenKind {
     DefKeyword,
     LetKeyword,
     PrintlnKeyword,
+    EnumKeyword,
     UKeyword, //Universe
+    MatchKeyword,
+    CaseKeyword,
 
     Hole,
     LParen,
@@ -30,6 +33,8 @@ pub enum TokenKind {
     Op,
     Str,
 
+    EndLine,
+
     ErrToken,
 
     Eof,
@@ -39,11 +44,14 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 4] = [
+const KEYWORD: [(&str, TokenKind); 7] = [
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
+    ("enum", EnumKeyword),
     ("U", UKeyword),
+    ("match", MatchKeyword),
+    ("case", CaseKeyword),
 ];
 
 const OP: [(&str, TokenKind); 15] = [
@@ -132,11 +140,11 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     let num = pmatch(|c: char| c.is_ascii_digit()).map(|x| x.map(|y| (y, Num)));
-    //let endline = pmatch("\n").map(|x| x.map(|y| (y, EndLine)));
+    let endline = pmatch("\n").map(|x| x.map(|y| (y, EndLine)));
     let err_token = pmatch(|c: char| !c.is_ascii_whitespace()).map(|x| x.map(|y| (y, ErrToken)));
     fn ws<'a, A, P: Parser<Span<&'a str>, A>>(p: P) -> impl Parser<Span<&'a str>, A> {
-        //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
-        let whitespace = pmatch(|c: char| c.is_whitespace()).option();
+        let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
+        //let whitespace = pmatch(|c: char| c.is_whitespace()).option();
         p.with(whitespace).map(|(a, _)| a)
     }
     //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
@@ -145,7 +153,7 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
         .with(
             //ws(brace.or(ident).or(num).or(op))
             ws(string.or(brace).or(op).or(num).or(ident))
-                //.or(ws(endline))
+                .or(ws(endline))
                 .or(ws(err_token))
                 .many0(),
         )
@@ -185,6 +193,29 @@ println hundred
 def mystr = "hello world"
 
 println mystr
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+
+def two = succ(succ(zero))
+
+def add(x: Nat, y: Nat): Nat = {
+    match x {
+        case zero => y
+        case succ(n) => succ(add(n, y))
+    }
+}
+
+def four = add(two, two)
+
+println four
 
 "#;
     let ret = lex(Span {
