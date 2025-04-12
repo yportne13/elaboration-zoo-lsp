@@ -126,21 +126,6 @@ impl Infer {
                 body
             } => {
                 let ret_cxt = cxt;
-                /*let mut cxt = cxt.clone();
-                let param: Vec<Param<usize>> = params
-                    .iter()
-                    .map(|x| {
-                        let (typ, _) = self.infer_expr(&cxt, &x.1)?;
-                        let vtyp = self.eval(cxt.env.clone(), typ.clone());
-                        cxt = cxt.bind(x.0.clone(), vtyp); //TODO: last param may not vtyp
-                        Ok(Param(x.0.clone(), Box::new(typ)))
-                    })
-                    .collect::<Result<_, _>>()?;
-                let result_u = check(&cxt, &result, &Value::U)?;
-                let ret_val = eval(cxt.env.clone(), result_u.clone());
-                let body_u = check(&cxt, body, &ret_val)?;
-                let vt = eval(cxt.env.clone(), body_u.clone());*/
-                //tele.iter().for_each(|x| cxt = cxt.bind(x.0, x.1));
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
@@ -178,7 +163,56 @@ impl Infer {
                     cxt.clone(),
                 ))
             },
-            Decl::Enum { name, params, cases } => todo!(),
+            Decl::Enum { name, params, cases } => {
+                let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
+                let sum = Raw::Sum(name.clone(), new_params.clone());
+                let typ = params.iter().rev().fold(Raw::U, |a, b| {
+                    Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                });
+                let bod = params
+                    .iter()
+                    .rev()
+                    .fold(sum.clone(), |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
+                let mut cxt = {
+                    let typ_tm = self.check(cxt, typ, Val::U)?;
+                    let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                    let t_tm = self.check(cxt, bod, vtyp.clone())?;
+                    let vt = self.eval(&cxt.env, t_tm.clone());
+                    cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
+                };
+                for c in cases {
+                    let typ = params.iter().cloned()
+                        .chain(c.1.iter()
+                            .enumerate()
+                            .map(|(idx, x)| (empty_span(format!("_{idx}")), x.clone(), Icit::Expl)))
+                        .rev()
+                        .fold(sum.clone(), |a, b| {
+                            Raw::Pi(b.0, b.2, Box::new(b.1), Box::new(a))
+                        });
+                    let bod = params.iter().cloned()
+                        .chain(c.1.iter()
+                            .enumerate()
+                            .map(|(idx, x)| (empty_span(format!("_{idx}")), x.clone(), Icit::Expl)))
+                        .rev()
+                        .fold(Raw::SumCase {
+                            sum_name: name.clone(),
+                            params: new_params.clone(),
+                            case_name: c.0.clone(),
+                        }, |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
+                    cxt = {
+                        let typ_tm = self.check(&cxt, typ, Val::U)?;
+                        let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                        let t_tm = self.check(&cxt, bod, vtyp.clone())?;
+                        let vt = self.eval(&cxt.env, t_tm.clone());
+                        cxt.define(c.0, t_tm, vt, typ_tm, vtyp)
+                    };
+                }
+                Ok((
+                    DeclTm::Enum {},
+                    Val::U,
+                    cxt,
+                ))
+            },
         }
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
@@ -331,6 +365,26 @@ impl Infer {
             }
 
             Raw::Match(expr, clause) => todo!(),
+
+            Raw::Sum(name, params) => {
+                let new_params = params.iter().map(|ty| {
+                    let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
+                    Ok(ty_checked)
+                }).collect::<Result<Vec<_>, _>>()?;
+                Ok((Tm::Sum(name, new_params), Val::U))
+            },
+
+            Raw::SumCase { sum_name, params, case_name} => {
+                let new_params = params.iter().map(|ty| {
+                    let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
+                    let ty_checked = self.eval(&cxt.env, ty_checked);
+                    Ok(ty_checked)
+                }).collect::<Result<Vec<_>, _>>()?;
+                Ok((Tm::SumCase {
+                    sum_name: sum_name.clone(),
+                    case_name,
+                }, Val::Sum(sum_name, new_params)))
+            },
         }
     }
 }

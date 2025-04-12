@@ -323,7 +323,11 @@ println hundred
 
 def mystr = "hello world"
 
-println mystr
+def add_tail(x: String): String = string_concat x "!"
+
+def mystr2 = add_tail mystr
+
+println mystr2
 
 enum Bool {
     true

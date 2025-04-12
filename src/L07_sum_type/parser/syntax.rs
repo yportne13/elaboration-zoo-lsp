@@ -1,4 +1,4 @@
-use crate::parser_lib::Span;
+use crate::{list::List, parser_lib::Span};
 
 
 #[derive(Clone, Debug, Copy, PartialEq)]
@@ -27,6 +27,12 @@ pub enum Raw {
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
+    Sum(Span<String>, Vec<Raw>),//TODO:
+    SumCase {
+        sum_name: Span<String>,
+        params: Vec<Raw>,
+        case_name: Span<String>,
+    },//TODO:
 }
 
 #[derive(Clone, Debug)]

@@ -39,6 +39,9 @@ pub enum DeclTm {
         body: Tm,*/
     },
     Println(Tm),
+    Enum {
+        //TODO:
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +57,11 @@ enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
+    Sum(Span<String>, Vec<Ty>),//TODO:
+    SumCase {
+        sum_name: Span<String>,
+        case_name: Span<String>,
+    },//TODO:
 }
 
 type Ty = Tm;
@@ -84,6 +92,11 @@ enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
+    Sum(Span<String>, Vec<Val>),//TODO:
+    SumCase {
+        sum_name: Span<String>,
+        case_name: Span<String>,
+    },//TODO:
 }
 
 type VTy = Val;
@@ -219,6 +232,13 @@ impl Infer {
                 },
                 _ => Val::Prim,
             },
+            Tm::Sum(name, params) => {
+                let new_params = params.into_iter().map(|x| {
+                    self.eval(&env.clone(), x)
+                }).collect();
+                Val::Sum(name, new_params)
+            },
+            Tm::SumCase { sum_name, case_name } => Val::SumCase { sum_name, case_name },
         }
     }
 
@@ -249,6 +269,13 @@ impl Infer {
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
+            Val::Sum(name, params) => {
+                let new_params = params.into_iter().map(|x| {
+                    self.quote(l, x)
+                }).collect();
+                Tm::Sum(name, new_params)
+            },
+            Val::SumCase { sum_name, case_name } => Tm::SumCase { sum_name, case_name },
         }
     }
 
@@ -292,6 +319,49 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
 }
 
 #[test]
+fn test2() {
+    let input = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(Nat)
+}
+
+enum List[A] {
+    nil
+    cons(A, List[A])
+}
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons true (cons false nil)
+
+def two = succ (succ zero)
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def four = add two two
+
+println four
+
+"#;
+    println!("{}", run(input, 0).unwrap());
+    println!("success");
+}
+
+#[test]
 fn test() {
     let input = r#"
 def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
@@ -310,12 +380,12 @@ def pr1 = f => x => f x
 def pr2 = f => x => y => f x y
 def pr3 = f => f U
 
-def Nat : U
-    = (N : U) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat
-    = a => b => N => s => z => a _ (b _ s) z
-def ten : Nat
-    = N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
+def Nat : U =
+    (N : U) -> (N -> N) -> N -> N
+def mul : Nat -> Nat -> Nat =
+    a => b => N => s => z => a _ (b _ s) z
+def ten : Nat =
+    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
 def hundred = mul ten ten
 
 println hundred
@@ -327,6 +397,28 @@ def add_tail(x: String): String = string_concat x "!"
 def mystr2 = add_tail mystr
 
 println mystr2
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(Nat)
+}
+
+def two = succ (succ zero)
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def four = add two two
+
+println four
 
 "#;
     println!("{}", run(input, 0).unwrap());
