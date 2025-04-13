@@ -57,7 +57,7 @@ enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Ty>),//TODO:
+    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Tm>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -92,7 +92,7 @@ enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Val>),//TODO:
+    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Tm>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -232,11 +232,11 @@ impl Infer {
                 },
                 _ => Val::Prim,
             },
-            Tm::Sum(name, params) => {
+            Tm::Sum(name, params, cases) => {
                 let new_params = params.into_iter().map(|x| {
                     self.eval(&env.clone(), x)
                 }).collect();
-                Val::Sum(name, new_params)
+                Val::Sum(name, new_params, cases)
             },
             Tm::SumCase { sum_name, case_name } => Val::SumCase { sum_name, case_name },
         }
@@ -269,11 +269,11 @@ impl Infer {
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
-            Val::Sum(name, params) => {
+            Val::Sum(name, params, cases) => {
                 let new_params = params.into_iter().map(|x| {
                     self.quote(l, x)
                 }).collect();
-                Tm::Sum(name, new_params)
+                Tm::Sum(name, new_params, cases)
             },
             Val::SumCase { sum_name, case_name } => Tm::SumCase { sum_name, case_name },
         }

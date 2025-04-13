@@ -1,6 +1,6 @@
 use colored::Colorize;
 
-use crate::parser_lib::Span;
+use crate::{list::List, parser_lib::Span};
 
 use super::{
     cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val
@@ -165,7 +165,7 @@ impl Infer {
             },
             Decl::Enum { name, params, cases } => {
                 let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
-                let sum = Raw::Sum(name.clone(), new_params.clone());
+                let sum = Raw::Sum(name.clone(), new_params.clone(), cases.clone());
                 let typ = params.iter().rev().fold(Raw::U, |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
@@ -176,11 +176,12 @@ impl Infer {
                 let mut cxt = {
                     let typ_tm = self.check(cxt, typ, Val::U)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                    let t_tm = self.check(cxt, bod, vtyp.clone())?;
-                    let vt = self.eval(&cxt.env, t_tm.clone());
+                    let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
+                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
-                for c in cases {
+                for c in cases.clone() {
                     let typ = params.iter().cloned()
                         .chain(c.1.iter()
                             .enumerate()
@@ -197,6 +198,7 @@ impl Infer {
                         .fold(Raw::SumCase {
                             sum_name: name.clone(),
                             params: new_params.clone(),
+                            cases: cases.clone(),
                             case_name: c.0.clone(),
                         }, |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
                     cxt = {
@@ -364,26 +366,44 @@ impl Infer {
                 Ok((Tm::LiteralIntro(literal), Val::LiteralType))
             }
 
-            Raw::Match(expr, clause) => todo!(),
+            Raw::Match(expr, clause) => {
+                println!("match {:?}", expr);
+                let expr = self.infer_expr(cxt, *expr)?;
+                println!("   is {:?}", expr.0);
+                println!("   is {:?}", expr.1);
+                todo!()
+            },
 
-            Raw::Sum(name, params) => {
+            Raw::Sum(name, params, cases) => {
                 let new_params = params.iter().map(|ty| {
                     let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
                     Ok(ty_checked)
                 }).collect::<Result<Vec<_>, _>>()?;
-                Ok((Tm::Sum(name, new_params), Val::U))
+                let new_cases = cases.into_iter().map(|(name, ty)| {
+                    let ty_checked = ty.into_iter()
+                        .map(|x| self.check(cxt, x, Val::U))
+                        .collect::<Result<_, _>>()?;
+                    Ok((name, ty_checked))
+                }).collect::<Result<Vec<_>, _>>()?;
+                Ok((Tm::Sum(name, new_params, new_cases), Val::U))
             },
 
-            Raw::SumCase { sum_name, params, case_name} => {
+            Raw::SumCase { sum_name, params, cases, case_name} => {
                 let new_params = params.iter().map(|ty| {
                     let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
                     let ty_checked = self.eval(&cxt.env, ty_checked);
                     Ok(ty_checked)
                 }).collect::<Result<Vec<_>, _>>()?;
+                let cases = cases.into_iter().map(|(name, ty)| {
+                    let ty_checked = ty.into_iter()
+                        .map(|x| self.check(cxt, x, Val::U))
+                        .collect::<Result<_, _>>()?;
+                    Ok((name, ty_checked))
+                }).collect::<Result<Vec<_>, _>>()?;
                 Ok((Tm::SumCase {
                     sum_name: sum_name.clone(),
                     case_name,
-                }, Val::Sum(sum_name, new_params)))
+                }, Val::Sum(sum_name, new_params, cases)))
             },
         }
     }

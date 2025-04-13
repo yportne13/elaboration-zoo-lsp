@@ -268,12 +268,12 @@ impl Infer {
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
             Val::Prim => Ok(Tm::Prim),
-            Val::Sum(x, params) => {
+            Val::Sum(x, params, cases) => {
                 let new_params = params
                     .into_iter()
                     .map(|x| self.rename(pren, x))
                     .collect::<Result<_, _>>()?;
-                Ok(Tm::Sum(x, new_params))
+                Ok(Tm::Sum(x, new_params, cases))
             },
             Val::SumCase { sum_name, case_name} => Ok(Tm::SumCase { sum_name, case_name}),
         }
@@ -477,7 +477,7 @@ impl Infer {
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (Val::LiteralType, Val::Prim) => Ok(()),
             (Val::Prim, Val::LiteralType) => Ok(()),
-            (Val::Sum(a, params_a), Val::Sum(b, params_b)) if a.data == b.data => {
+            (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
                     self.unify(l, a.clone(), b.clone())?;
