@@ -219,7 +219,8 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'
     (
         string(Ident),
         paren(p_pattern.many0_sep(kw(T![,]))).option().map(|x| x.unwrap_or_default()),
-    ).map(|(x, t)| Pattern(x, t)).parse(input)
+    ).map(|(x, t)| Pattern::Con(x, t))
+    .or(kw(T![_]).map(Pattern::Any)).parse(input)
 }
 
 fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {

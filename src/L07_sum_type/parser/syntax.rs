@@ -14,7 +14,10 @@ pub enum Either {
 }
 
 #[derive(Clone, Debug)]
-pub struct Pattern(pub Span<String>, pub Vec<Pattern>);
+pub enum Pattern {
+    Any(Span<()>),
+    Con(Span<String>, Vec<Pattern>)
+}
 
 #[derive(Clone, Debug)]
 pub enum Raw {

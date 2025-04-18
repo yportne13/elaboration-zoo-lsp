@@ -1,6 +1,6 @@
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span};
+use crate::{list::List, parser_lib::Span, L07_sum_type::pattern_match::Compiler};
 
 use super::{
     cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val
@@ -63,7 +63,7 @@ impl Infer {
     ) -> Result<(Tm, VTy), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
-    fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
+    pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         match (t, self.force(a)) {
             // Check lambda expressions
@@ -368,10 +368,23 @@ impl Infer {
 
             Raw::Match(expr, clause) => {
                 println!("match {:?}", expr);
-                let expr = self.infer_expr(cxt, *expr)?;
-                println!("   is {:?}", expr.0);
-                println!("   is {:?}", expr.1);
-                todo!()
+                let (tm, typ) = self.infer_expr(cxt, *expr)?;
+                println!("   is {:?}", typ);
+                let mut compiler = Compiler::new();
+                let (ret, error) = compiler.compile(
+                    self,
+                    tm,
+                    typ,
+                    &clause,
+                    cxt,
+                )?;
+                if !error.is_empty() {
+                    Err(Error(format!("{error:?}")))
+                } else {
+                    println!("{ret:?}");
+                    println!("---- {:?}", compiler.ret_type);
+                    todo!()
+                }
             },
 
             Raw::Sum(name, params, cases) => {
@@ -381,7 +394,7 @@ impl Infer {
                 }).collect::<Result<Vec<_>, _>>()?;
                 let new_cases = cases.into_iter().map(|(name, ty)| {
                     let ty_checked = ty.into_iter()
-                        .map(|x| self.check(cxt, x, Val::U))
+                        .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
                         .collect::<Result<_, _>>()?;
                     Ok((name, ty_checked))
                 }).collect::<Result<Vec<_>, _>>()?;
@@ -396,7 +409,7 @@ impl Infer {
                 }).collect::<Result<Vec<_>, _>>()?;
                 let cases = cases.into_iter().map(|(name, ty)| {
                     let ty_checked = ty.into_iter()
-                        .map(|x| self.check(cxt, x, Val::U))
+                        .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
                         .collect::<Result<_, _>>()?;
                     Ok((name, ty_checked))
                 }).collect::<Result<Vec<_>, _>>()?;

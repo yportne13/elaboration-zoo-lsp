@@ -11,6 +11,7 @@ mod elaboration;
 mod cxt;
 mod unification;
 mod syntax;
+mod pattern_match;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MetaVar(u32);
@@ -57,7 +58,7 @@ enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Tm>)>),
+    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Val>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -92,7 +93,7 @@ enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Tm>)>),
+    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Val>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -345,6 +346,12 @@ def create1: List[Bool] = cons true nil
 def create2: List[Bool] = cons true (cons false nil)
 
 def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
 
 def add(x: Nat, y: Nat): Nat =
     match x {

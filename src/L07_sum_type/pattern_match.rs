@@ -1,0 +1,312 @@
+use std::{collections::{BTreeSet, HashMap}, rc::Rc};
+
+use crate::parser_lib::{Span, ToSpan};
+
+use super::{cxt::Cxt, empty_span, parser::syntax::{Pattern, Raw}, Error, Infer, Tm, Val};
+
+type Var = i32;
+
+type MatchBody = Tm;
+type TypeName = Span<String>;
+type Constructor = Span<String>;
+
+#[derive(Debug, Clone)]
+pub enum DecisionTree {
+    Fail,
+    Leaf(MatchBody),
+    Branch(
+        TypeName,
+        Var,
+        Vec<(Constructor, Vec<Var>, Box<DecisionTree>)>,
+    ),
+}
+
+#[derive(Debug, Clone)]
+pub enum Warning {
+    Unreachable(Raw),
+    Unmatched(Pattern),
+}
+
+pub struct Compiler {
+    warnings: Vec<Warning>,
+    reachable: HashMap<usize, ()>,
+    seed: i32,
+    pub ret_type: Option<Val>,
+}
+
+impl Compiler {
+    pub fn new() -> Self {
+        Compiler {
+            warnings: Vec::new(),
+            reachable: HashMap::new(),
+            seed: 0,
+            ret_type: None,
+        }
+    }
+
+    fn fresh(&mut self) -> i32 {
+        self.seed += 1;
+        self.seed
+    }
+
+    fn fill_context(ctx: &MatchContext, pat: &Pattern) -> Pattern {
+        match ctx {
+            MatchContext::Outermost => pat.clone(),
+            MatchContext::InCons {
+                parent,
+                constr,
+                before,
+                after,
+            } => {
+                let mut new_before = before.clone();
+                new_before.reverse();
+                new_before.push(pat.clone());
+                new_before.extend(after.clone());
+                Self::fill_context(parent, &Pattern::Con(constr.clone(), new_before))
+            }
+        }
+    }
+
+    fn next_hole(&self, ctx: &MatchContext, pat: &Pattern) -> MatchContext {
+        match ctx {
+            MatchContext::Outermost => panic!("next_hole"),
+            MatchContext::InCons {
+                parent,
+                constr,
+                before,
+                after,
+            } => match after[..] {
+                [] => self.next_hole(parent, &Pattern::Con(constr.clone(), before.clone())),
+                _ => MatchContext::InCons {
+                    parent: parent.clone(),
+                    constr: constr.clone(),
+                    before: vec![pat.clone()],
+                    after: after[1..].to_vec(),
+                },
+            },
+        }
+    }
+
+    fn compile_aux(
+        &mut self,
+        infer: &mut Infer,
+        heads: &[(Var, Tm, Val)],
+        arms: &[(MatchArm, usize, Cxt)],
+        context: &MatchContext,
+        cxt_global: &Cxt,
+    ) -> Result<Box<DecisionTree>, Error> {
+        match heads {
+            [] => match arms {
+                [(arm, idx, cxt), ..] if arm.pats.is_empty() => {
+                    self.reachable.insert(*idx, ());
+                    match &self.ret_type {
+                        Some(ret_type) => {
+                            let ret = infer.check(cxt, arm.body.clone(), ret_type.clone())?;
+                            Ok(Box::new(DecisionTree::Leaf(ret)))
+                        },
+                        None => {
+                            let ret = infer.infer_expr(cxt, arm.body.clone())?;
+                            self.ret_type = Some(ret.1);
+                            Ok(Box::new(DecisionTree::Leaf(ret.0)))
+                        },
+                    }
+                }
+                _ => panic!("impossible"),
+            },
+            [(var, tm, typ), heads_rest @ ..] => {
+                let is_necessary = arms
+                    .iter()
+                    .any(|arm| matches!(arm.0.pats[..], [Pattern::Con(..), ..]));
+
+                if !is_necessary {
+                    let new_context = self.next_hole(context, &Pattern::Any(empty_span(())));
+                    let new_arms = arms
+                        .iter()
+                        .map(|arm| (MatchArm {
+                            pats: arm.0.pats[1..].to_vec(),
+                            body: arm.0.body.clone(),
+                        }, arm.1, arm.2.clone()))
+                        .collect::<Vec<_>>();
+                    self.compile_aux(infer, heads_rest, &new_arms, &new_context, cxt_global)
+                } else {
+                    let (typename, constrs) = match typ {
+                        Val::Sum(span, _, cases) => (span, cases),
+                        _ => panic!("by now only can match a sum type, but get {:?}", typ),
+                    };
+
+                    let constrs_name = constrs.iter()
+                        .map(|x| x.0.data.clone())
+                        .collect::<BTreeSet<_>>();
+
+                    let decision_tree_branches = constrs
+                        .iter()
+                        .map(|(constr, item_typs)| {
+                            let new_heads = item_typs
+                                .iter()
+                                .map(|typ| (self.fresh(), infer.quote(cxt_global.lvl, typ.clone()), typ.clone()))
+                                .collect::<Vec<_>>();
+                            let remaining_arms = arms
+                                .iter()
+                                .filter_map(|(arm, idx, cxt)| match &arm.pats[..] {
+                                    [Pattern::Any(x), ..] => Some((MatchArm {
+                                        pats: vec![Pattern::Any(*x); item_typs.len()]
+                                            .into_iter()
+                                            .chain(arm.pats[1..].iter().cloned())
+                                            .collect(),
+                                        body: arm.body.clone(),
+                                    }, *idx, cxt.clone())),
+                                    [Pattern::Con(constr_, item_pats), ..] if !constrs_name.contains(&constr_.data) => {
+                                        if cxt.src_names.contains_key(&constr_.data) {
+                                            //return Err(Error(format!("match fail: {:?}", constr_)))
+                                            todo!()
+                                        } else {
+                                            Some((MatchArm {
+                                                pats: vec![Pattern::Any(constr_.to_span()); item_typs.len()]
+                                                    .into_iter()
+                                                    .chain(arm.pats[1..].iter().cloned())
+                                                    .collect(),
+                                                body: arm.body.clone(),
+                                            }, *idx, cxt.bind(constr_.clone(), tm.clone(), typ.clone())))
+                                        }
+                                    },
+                                    [Pattern::Con(constr_, item_pats), ..] if constr_ == constr => {
+                                        Some((MatchArm {
+                                            pats: item_pats
+                                                .iter()
+                                                .chain(&arm.pats[1..])
+                                                .cloned()
+                                                .collect(),
+                                            body: arm.body.clone(),
+                                        }, *idx, cxt.clone()))
+                                    }
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+
+                            let subtree = if remaining_arms.is_empty() {
+                                let unmatched = Self::fill_context(
+                                    context,
+                                    &Pattern::Con(
+                                        constr.clone(),
+                                        vec![Pattern::Any(empty_span(())); item_typs.len()],
+                                    ),
+                                );
+                                self.warnings.push(Warning::Unmatched(unmatched));
+                                Box::new(DecisionTree::Fail)
+                            } else {
+                                let context_ = if new_heads.is_empty() {
+                                    if heads_rest.is_empty() {
+                                        context.clone()
+                                    } else {
+                                        self.next_hole(
+                                            context,
+                                            &Pattern::Con(constr.clone(), vec![]),
+                                        )
+                                    }
+                                } else {
+                                    MatchContext::InCons {
+                                        parent: context.clone().into(),
+                                        constr: constr.clone(),
+                                        before: vec![],
+                                        after: vec![
+                                            Pattern::Any(empty_span(()));
+                                            new_heads.len() - 1
+                                        ],
+                                    }
+                                };
+                                self.compile_aux(
+                                    infer,
+                                    &new_heads
+                                        .iter()
+                                        .chain(heads_rest)
+                                        .cloned()
+                                        .collect::<Vec<_>>(),
+                                    &remaining_arms,
+                                    &context_,
+                                    cxt_global,
+                                )?
+                            };
+
+                            Ok((
+                                constr.clone(),
+                                new_heads.iter().map(|(var, _, _)| *var).collect(),
+                                subtree,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    Ok(Box::new(DecisionTree::Branch(
+                        typename.clone(),
+                        *var,
+                        decision_tree_branches,
+                    )))
+                }
+            }
+        }
+    }
+
+    pub fn compile(
+        &mut self,
+        infer: &mut Infer,
+        tm: Tm,
+        typ: Val,
+        arms: &[(Pattern, Raw)],
+        cxt: &Cxt,
+    ) -> Result<(Box<DecisionTree>, Vec<Warning>), Error> {
+        let reachable = HashMap::new();
+        self.reachable = reachable;
+        self.warnings = Vec::new();
+
+        let tree = self.compile_aux(
+            infer,
+            &[(0, tm, typ)],
+            &arms
+                .iter()
+                .enumerate()
+                .map(|(idx, (pat, body))| (MatchArm {
+                    pats: vec![pat.clone()],
+                    body: body.clone(),
+                }, idx, cxt.clone()))
+                .collect::<Vec<_>>(),
+            &MatchContext::Outermost,
+            cxt,
+        )?;
+
+        let unreachable = arms
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, (_, body))| {
+                if !self.reachable.contains_key(&idx) {
+                    Some(Warning::Unreachable(body.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Ok((
+            tree,
+            unreachable
+                .into_iter()
+                .chain(self.warnings.clone())
+                .collect(),
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
+enum MatchContext {
+    Outermost,
+    InCons {
+        parent: Rc<MatchContext>,
+        constr: Constructor,
+        before: Vec<Pattern>,
+        after: Vec<Pattern>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct MatchArm {
+    pats: Vec<Pattern>,
+    body: Raw,
+}
