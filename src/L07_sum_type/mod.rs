@@ -1,6 +1,7 @@
 use colored::Colorize;
 use cxt::Cxt;
 use parser::syntax::{Either, Icit, Raw};
+use pattern_match::DecisionTree;
 use syntax::{close_ty, Pruning};
 
 use crate::list::List;
@@ -63,6 +64,7 @@ enum Tm {
         sum_name: Span<String>,
         case_name: Span<String>,
     },//TODO:
+    Match(Box<Tm>, Box<DecisionTree>),
 }
 
 type Ty = Tm;
@@ -207,7 +209,7 @@ impl Infer {
             (a, b) if a.head().is_some() && matches!(b.head(), Some(None)) => {
                 self.v_app_pruning(&a.tail(), v, &b.tail())
             }
-            _ => panic!("impossible"),
+            _ => panic!("impossible {v:?}"),
         }
     }
 
@@ -240,6 +242,9 @@ impl Infer {
                 Val::Sum(name, new_params, cases)
             },
             Tm::SumCase { sum_name, case_name } => Val::SumCase { sum_name, case_name },
+            Tm::Match(tm, cases) => {
+                todo!()
+            }
         }
     }
 
@@ -290,13 +295,15 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
-        self.unify(cxt.lvl, t.clone(), t_prime.clone())
+        self.unify(cxt.lvl, cxt, t.clone(), t_prime.clone())
             .map_err(|_| {
                 /*Error::CantUnify(
                     cxt.clone(),
                     self.quote(cxt.lvl, t),
                     self.quote(cxt.lvl, t_prime),
                 )*/
+                //println!("{:?} == {:?}", t, t_prime);
+                //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
                 Error(format!("can't unify {:?} == {:?}", self.quote(cxt.lvl, t), self.quote(cxt.lvl, t_prime)))
                 //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             })

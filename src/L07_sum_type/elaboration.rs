@@ -139,9 +139,10 @@ impl Infer {
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let t_tm = self.check(ret_cxt, bod, vtyp.clone())?;
+                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     //println!("begin vt {}", "------".green());
-                    let vt = self.eval(&ret_cxt.env, t_tm.clone());
+                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     ret_cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 Ok((
@@ -367,13 +368,11 @@ impl Infer {
             }
 
             Raw::Match(expr, clause) => {
-                println!("match {:?}", expr);
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
-                println!("   is {:?}", typ);
                 let mut compiler = Compiler::new();
                 let (ret, error) = compiler.compile(
                     self,
-                    tm,
+                    tm.clone(),
                     typ,
                     &clause,
                     cxt,
@@ -381,9 +380,7 @@ impl Infer {
                 if !error.is_empty() {
                     Err(Error(format!("{error:?}")))
                 } else {
-                    println!("{ret:?}");
-                    println!("---- {:?}", compiler.ret_type);
-                    todo!()
+                    Ok((Tm::Match(Box::new(tm), ret), compiler.ret_type.unwrap_or(Val::U)))//if there is any posible that has no return type?
                 }
             },
 

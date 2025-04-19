@@ -3,8 +3,7 @@ use colored::Colorize;
 use crate::{L07_sum_type::empty_span, list::List};
 
 use super::{
-    Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, lvl2ix,
-    parser::syntax::Icit, syntax::Pruning,
+    cxt::Cxt, lvl2ix, parser::syntax::Icit, syntax::Pruning, Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val
 };
 
 use std::collections::{HashMap, HashSet};
@@ -356,12 +355,12 @@ impl Infer {
 
         Ok(())
     }
-    fn unify_sp(&mut self, l: Lvl, sp: &Spine, sp_prime: &Spine) -> Result<(), UnifyError> {
+    fn unify_sp(&mut self, l: Lvl, cxt: &Cxt, sp: &Spine, sp_prime: &Spine) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
             (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
             (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
-                self.unify_sp(l, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
-                self.unify(l, a.head().unwrap().0.clone(), b.head().unwrap().0.clone()) // Unify the current values
+                self.unify_sp(l, cxt, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
+                self.unify(l, cxt, a.head().unwrap().0.clone(), b.head().unwrap().0.clone()) // Unify the current values
             }
             _ => Err(UnifyError), // Rigid mismatch error
         }
@@ -419,12 +418,13 @@ impl Infer {
     fn intersect(
         &mut self,
         l: Lvl,
+        cxt: &Cxt,
         m: MetaVar,
         sp: Spine,
         sp_prime: Spine,
     ) -> Result<(), UnifyError> {
         match self.intersect_go(sp.clone(), sp_prime.clone()) {
-            None => self.unify_sp(l, &sp, &sp_prime),
+            None => self.unify_sp(l, cxt, &sp, &sp_prime),
             Some(pr) if pr.iter().any(|x| x.is_none()) => {
                 self.prune_meta(pr, m)?;
                 Ok(())
@@ -432,41 +432,45 @@ impl Infer {
             Some(_) => Ok(()),
         }
     }
-    pub fn unify(&mut self, l: Lvl, t: Val, u: Val) -> Result<(), UnifyError> {
+    pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
         let t = self.force(t);
         let u = self.force(u);
 
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(l, *a.clone(), *a_prime.clone())?;
+                self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
                 self.unify(
                     l + 1,
+                    cxt,
                     self.closure_apply(&b, Val::vvar(l)),
                     self.closure_apply(&b_prime, Val::vvar(l)),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
-                self.unify_sp(l, sp, sp_prime)
+                self.unify_sp(l, cxt, sp, sp_prime)
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
-                self.intersect(l, *m, sp.clone(), sp_prime.clone())
+                self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
                 self.flex_flex(l, *m, sp.clone(), *m_prime, sp_prime.clone())
             }
             (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify(
                 l + 1,
+                cxt,
                 self.closure_apply(&t, Val::vvar(l)),
                 self.closure_apply(&t_prime, Val::vvar(l)),
             ),
             (t, Val::Lam(_, i, t_prime)) => self.unify(
                 l + 1,
+                cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
                 self.closure_apply(&t_prime, Val::vvar(l)),
             ),
             (Val::Lam(_, i, t), t_prime) => self.unify(
                 l + 1,
+                cxt,
                 self.closure_apply(&t, Val::vvar(l)),
                 self.v_app(t_prime.clone(), Val::vvar(l), *i),
             ),
@@ -480,9 +484,15 @@ impl Infer {
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, a.clone(), b.clone())?;
+                    self.unify(l, cxt, a.clone(), b.clone())?;
                 }
                 Ok(())
+            },
+            (Val::Sum(_, _, _), Val::Rigid(_, _)) => {
+                self.unify(l, cxt, t, self.eval(&cxt.env, self.quote(cxt.lvl, u)))
+            },
+            (Val::Rigid(_, _), Val::Sum(_, _, _)) => {
+                self.unify(l, cxt, self.eval(&cxt.env, self.quote(cxt.lvl, t)), u)
             },
             _ => Err(UnifyError), // Rigid mismatch error
         }

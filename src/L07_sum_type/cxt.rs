@@ -61,6 +61,19 @@ impl Cxt {
         }
     }
 
+    pub fn fake_bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
+        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
+        let mut src_names = self.src_names.clone();
+        src_names.insert(x.data.clone(), (self.lvl, a));
+        Cxt {
+            env: self.env.clone(),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names,
+        }
+    }
+
     pub fn new_binder(&self, x: Span<String>, a_quote: Tm) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         Cxt {

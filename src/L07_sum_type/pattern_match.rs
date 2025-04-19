@@ -69,7 +69,8 @@ impl Compiler {
 
     fn next_hole(&self, ctx: &MatchContext, pat: &Pattern) -> MatchContext {
         match ctx {
-            MatchContext::Outermost => panic!("next_hole"),
+            //MatchContext::Outermost => panic!("next_hole"),
+            MatchContext::Outermost => MatchContext::Outermost,//TODO: is this correct?
             MatchContext::InCons {
                 parent,
                 constr,
@@ -129,7 +130,14 @@ impl Compiler {
                         .collect::<Vec<_>>();
                     self.compile_aux(infer, heads_rest, &new_arms, &new_context, cxt_global)
                 } else {
-                    let (typename, constrs) = match typ {
+                    let new_typ = match typ {
+                        rigid @ Val::Rigid(_, _) => {
+                            let new_tm = infer.quote(cxt_global.lvl, rigid.clone());
+                            infer.eval(&cxt_global.env, new_tm)
+                        },
+                        x => x.clone()
+                    };
+                    let (typename, constrs) = match new_typ {
                         Val::Sum(span, _, cases) => (span, cases),
                         _ => panic!("by now only can match a sum type, but get {:?}", typ),
                     };
