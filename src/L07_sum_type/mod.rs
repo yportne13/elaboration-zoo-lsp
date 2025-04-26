@@ -1,7 +1,7 @@
 use colored::Colorize;
 use cxt::Cxt;
-use parser::syntax::{Either, Icit, Raw};
-use pattern_match::DecisionTree;
+use parser::syntax::{Either, Icit, Pattern, Raw};
+use pattern_match::{Compiler, DecisionTree};
 use syntax::{close_ty, Pruning};
 
 use crate::list::List;
@@ -47,7 +47,7 @@ pub enum DeclTm {
 }
 
 #[derive(Debug, Clone)]
-enum Tm {
+pub enum Tm {
     Var(Ix),
     Lam(Span<String>, Icit, Box<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
@@ -63,8 +63,10 @@ enum Tm {
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
+        params: Vec<Tm>,
+        cases_name: Vec<Span<String>>,
     },//TODO:
-    Match(Box<Tm>, Box<DecisionTree>),
+    Match(Box<Tm>, Vec<(Pattern, Tm)>),
 }
 
 type Ty = Tm;
@@ -99,6 +101,8 @@ enum Val {
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
+        params: Vec<Val>,
+        cases_name: Vec<Span<String>>,
     },//TODO:
 }
 
@@ -182,7 +186,7 @@ impl Infer {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
             Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
             Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
-            _ => panic!("impossible"),
+            x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
 
@@ -214,7 +218,7 @@ impl Infer {
     }
 
     fn eval(&self, env: &Env, tm: Tm) -> Val {
-        //println!("{} {:?}", "eval".yellow(), tm);
+        //print!("{} {:?}\n   ", "eval".yellow(), tm);
         match tm {
             Tm::Var(x) => env.iter().nth(x.0 as usize).unwrap().clone(),
             Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
@@ -241,9 +245,16 @@ impl Infer {
                 }).collect();
                 Val::Sum(name, new_params, cases)
             },
-            Tm::SumCase { sum_name, case_name } => Val::SumCase { sum_name, case_name },
+            Tm::SumCase { sum_name, case_name, params, cases_name } => {
+                let params = params.into_iter()
+                    .map(|p| self.eval(env, p))
+                    .collect();
+                Val::SumCase { sum_name, case_name, params, cases_name }
+            },
             Tm::Match(tm, cases) => {
-                todo!()
+                let val = self.eval(env, *tm);
+                let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
+                self.eval(&env, tm)
             }
         }
     }
@@ -281,7 +292,12 @@ impl Infer {
                 }).collect();
                 Tm::Sum(name, new_params, cases)
             },
-            Val::SumCase { sum_name, case_name } => Tm::SumCase { sum_name, case_name },
+            Val::SumCase { sum_name, case_name, params, cases_name } => {
+                let params = params.into_iter()
+                    .map(|p| self.quote(l, p))
+                    .collect();
+                Tm::SumCase { sum_name, case_name, params, cases_name }
+            },
         }
     }
 
@@ -359,6 +375,8 @@ def not(x: Bool): Bool =
         case true => false
         case false => true
     }
+
+println (not true)
 
 def add(x: Nat, y: Nat): Nat =
     match x {

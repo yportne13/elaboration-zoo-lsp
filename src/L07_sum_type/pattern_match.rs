@@ -2,11 +2,11 @@ use std::{collections::{BTreeSet, HashMap}, rc::Rc};
 
 use crate::parser_lib::{Span, ToSpan};
 
-use super::{cxt::Cxt, empty_span, parser::syntax::{Pattern, Raw}, Error, Infer, Tm, Val};
+use super::{cxt::Cxt, empty_span, parser::syntax::{Pattern, Raw}, Env, Error, Infer, Tm, Val};
 
 type Var = i32;
 
-type MatchBody = Tm;
+type MatchBody = (Tm, usize);
 type TypeName = Span<String>;
 type Constructor = Span<String>;
 
@@ -19,6 +19,19 @@ pub enum DecisionTree {
         Var,
         Vec<(Constructor, Vec<Var>, Box<DecisionTree>)>,
     ),
+}
+
+impl DecisionTree {
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &MatchBody> + '_> {
+        match self {
+            DecisionTree::Fail => Box::new(std::iter::empty()),
+            DecisionTree::Leaf(x) => Box::new(std::iter::once(x)),
+            DecisionTree::Branch(_, _, items) => {
+                Box::new(items.iter()
+                    .flat_map(|x| x.2.iter()))
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -102,13 +115,13 @@ impl Compiler {
                     self.reachable.insert(*idx, ());
                     match &self.ret_type {
                         Some(ret_type) => {
-                            let ret = infer.check(cxt, arm.body.clone(), ret_type.clone())?;
-                            Ok(Box::new(DecisionTree::Leaf(ret)))
+                            let ret = infer.check(cxt, arm.body.0.clone(), ret_type.clone())?;
+                            Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
                         },
                         None => {
-                            let ret = infer.infer_expr(cxt, arm.body.clone())?;
+                            let ret = infer.infer_expr(cxt, arm.body.0.clone())?;
                             self.ret_type = Some(ret.1);
-                            Ok(Box::new(DecisionTree::Leaf(ret.0)))
+                            Ok(Box::new(DecisionTree::Leaf((ret.0, arm.body.1))))
                         },
                     }
                 }
@@ -273,7 +286,7 @@ impl Compiler {
                 .enumerate()
                 .map(|(idx, (pat, body))| (MatchArm {
                     pats: vec![pat.clone()],
-                    body: body.clone(),
+                    body: (body.clone(), idx),
                 }, idx, cxt.clone()))
                 .collect::<Vec<_>>(),
             &MatchContext::Outermost,
@@ -300,6 +313,49 @@ impl Compiler {
                 .collect(),
         ))
     }
+
+    pub fn eval_aux(
+        infer: &Infer,
+        heads: Val,
+        cxt: &Env,
+        arms: &[(Pattern, Tm)],
+    ) -> Option<(Tm, Env)> {
+        
+            //let new_typ = infer.eval(cxt, heads.clone());
+            let (case_name, params, constrs_name) = match heads.clone() {
+                Val::SumCase { sum_name, case_name, params, cases_name} => (case_name, params, cases_name),
+                _ => panic!("by now only can match a sum type, but get {:?}", heads),
+            };
+
+            arms
+                .iter()
+                .filter_map(|(pattern, body)| match pattern {
+                    Pattern::Any(_) => Some((body.clone(), cxt.clone())),
+                    Pattern::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
+                        /*if cxt.src_names.contains_key(&constr_.data) {
+                            //return Err(Error(format!("match fail: {:?}", constr_)))
+                            todo!()
+                        } else */{
+                            //TODO: item_pats should be zero
+                            println!("-----  {:?}", heads);
+                            Some((body.clone(), cxt.prepend(heads.clone())))
+                        }
+                    },
+                    Pattern::Con(constr_, item_pats) if constr_ == &case_name => {
+                        params.iter()
+                            .zip(item_pats.iter())
+                            .try_fold((body.clone(), cxt.clone()), |(body, cxt), (param, pat): (&Val, &Pattern)| {
+                                Self::eval_aux(
+                                    infer,
+                                    param.clone(),
+                                    &cxt,
+                                    &[(pat.clone(), body)],
+                                )
+                            })
+                    }
+                    _ => None,
+                }).next()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -316,5 +372,5 @@ enum MatchContext {
 #[derive(Debug, Clone)]
 struct MatchArm {
     pats: Vec<Pattern>,
-    body: Raw,
+    body: (Raw, usize),
 }

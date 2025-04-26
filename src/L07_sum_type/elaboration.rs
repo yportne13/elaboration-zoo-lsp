@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use colored::Colorize;
 
 use crate::{list::List, parser_lib::Span, L07_sum_type::pattern_match::Compiler};
@@ -201,6 +203,11 @@ impl Infer {
                             params: new_params.clone(),
                             cases: cases.clone(),
                             case_name: c.0.clone(),
+                            datas: params.iter()
+                                .map(|x| x.0.clone())
+                                .chain(c.1.iter().enumerate().map(|(idx, _)| empty_span(format!("_{idx}"))))
+                                .map(|x| Raw::Var(x))
+                                .collect(),
                         }, |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
                     cxt = {
                         let typ_tm = self.check(&cxt, typ, Val::U)?;
@@ -380,7 +387,14 @@ impl Infer {
                 if !error.is_empty() {
                     Err(Error(format!("{error:?}")))
                 } else {
-                    Ok((Tm::Match(Box::new(tm), ret), compiler.ret_type.unwrap_or(Val::U)))//if there is any posible that has no return type?
+                    let tree = ret.iter()
+                        .map(|x| (x.1, x.0.clone()))
+                        .collect::<HashMap<_, _>>();
+                    let t = clause.into_iter()
+                        .enumerate()
+                        .map(|(idx, x)| (x.0, tree.get(&idx).unwrap().clone()))
+                        .collect();
+                    Ok((Tm::Match(Box::new(tm), t), compiler.ret_type.unwrap_or(Val::U)))//if there is any posible that has no return type?
                 }
             },
 
@@ -398,12 +412,15 @@ impl Infer {
                 Ok((Tm::Sum(name, new_params, new_cases), Val::U))
             },
 
-            Raw::SumCase { sum_name, params, cases, case_name} => {
+            Raw::SumCase { sum_name, params, cases, case_name, datas } => {
                 let new_params = params.iter().map(|ty| {
                     let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
                     let ty_checked = self.eval(&cxt.env, ty_checked);
                     Ok(ty_checked)
                 }).collect::<Result<Vec<_>, _>>()?;
+                let datas = datas.into_iter()
+                    .map(|x| self.infer_expr(cxt, x).map(|x| x.0))
+                    .collect::<Result<_, _>>()?;
                 let cases = cases.into_iter().map(|(name, ty)| {
                     let ty_checked = ty.into_iter()
                         .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
@@ -413,6 +430,8 @@ impl Infer {
                 Ok((Tm::SumCase {
                     sum_name: sum_name.clone(),
                     case_name,
+                    params: datas,
+                    cases_name: cases.iter().map(|x| x.0.clone()).collect(),
                 }, Val::Sum(sum_name, new_params, cases)))
             },
         }

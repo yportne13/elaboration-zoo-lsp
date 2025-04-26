@@ -274,7 +274,12 @@ impl Infer {
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::Sum(x, new_params, cases))
             },
-            Val::SumCase { sum_name, case_name} => Ok(Tm::SumCase { sum_name, case_name}),
+            Val::SumCase { sum_name, case_name, params, cases_name} => {
+                let params = params.into_iter()
+                    .map(|p| self.rename(pren, p))
+                    .collect::<Result<_, _>>()?;
+                Ok(Tm::SumCase { sum_name, case_name, params, cases_name })
+            },
         }
     }
     fn lams_go(&self, l: Lvl, t: Tm, a: VTy, l_prime: Lvl) -> Tm {
