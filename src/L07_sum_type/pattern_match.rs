@@ -2,7 +2,7 @@ use std::{collections::{BTreeSet, HashMap}, rc::Rc};
 
 use crate::parser_lib::{Span, ToSpan};
 
-use super::{cxt::Cxt, empty_span, parser::syntax::{Pattern, Raw}, Env, Error, Infer, Tm, Val};
+use super::{cxt::Cxt, empty_span, parser::syntax::{Pattern, Raw}, Env, Error, Infer, Lvl, Tm, Val};
 
 type Var = i32;
 
@@ -321,8 +321,16 @@ impl Compiler {
         arms: &[(Pattern, Tm)],
     ) -> Option<(Tm, Env)> {
         
-            //let new_typ = infer.eval(cxt, heads.clone());
-            let (case_name, params, constrs_name) = match heads.clone() {
+            let new_typ = match heads.clone() {
+                rigid @ Val::Rigid(_, _) => {
+                    println!("{:?}: {}", rigid, cxt.iter().count());
+                    println!("{:?}", cxt.iter().nth(1));
+                    let new_tm = infer.quote(Lvl(cxt.iter().count() as u32), rigid.clone());//TODO: can here lvl get from env?
+                    infer.eval(cxt, new_tm)
+                },
+                x => x.clone()
+            };
+            let (case_name, params, constrs_name) = match new_typ {
                 Val::SumCase { sum_name, case_name, params, cases_name} => (case_name, params, cases_name),
                 _ => panic!("by now only can match a sum type, but get {:?}", heads),
             };
@@ -337,7 +345,7 @@ impl Compiler {
                             todo!()
                         } else */{
                             //TODO: item_pats should be zero
-                            println!("-----  {:?}", heads);
+                            //println!("-----  {:?}", heads);
                             Some((body.clone(), cxt.prepend(heads.clone())))
                         }
                     },

@@ -142,9 +142,11 @@ impl Infer {
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 100000));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    self.global.insert(cxt.lvl, vt.clone());
                     ret_cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 Ok((
@@ -206,7 +208,7 @@ impl Infer {
                             datas: params.iter()
                                 .map(|x| x.0.clone())
                                 .chain(c.1.iter().enumerate().map(|(idx, _)| empty_span(format!("_{idx}"))))
-                                .map(|x| Raw::Var(x))
+                                .map(Raw::Var)
                                 .collect(),
                         }, |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
                     cxt = {

@@ -71,7 +71,7 @@ pub enum Tm {
 
 type Ty = Tm;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Lvl(u32);
 
 impl Add<u32> for Lvl {
@@ -81,11 +81,24 @@ impl Add<u32> for Lvl {
     }
 }
 
+impl Sub<u32> for Lvl {
+    type Output = Lvl;
+    fn sub(self, rhs: u32) -> Lvl {
+        Lvl(self.0 - rhs)
+    }
+}
+
 type Env = List<Val>;
 type Spine = List<(Val, Icit)>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Closure(Env, Box<Tm>);
+
+impl std::fmt::Debug for Closure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Closure(.., {:?})", self.1)
+    }
+}
 
 #[derive(Debug, Clone)]
 enum Val {
@@ -119,10 +132,14 @@ impl Val {
 }
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
-    Ix(l.0 - x.0 - 1)
+    if x.0 > 100000 {
+        Ix(x.0)
+    } else {
+        Ix(l.0 - x.0 - 1)
+    }
 }
 
-use std::ops::Add;
+use std::{collections::HashMap, ops::{Add, Sub}};
 
 #[derive(Debug)]
 struct UnifyError;
@@ -141,11 +158,12 @@ pub struct Error(String);
 
 pub struct Infer {
     meta: Vec<MetaEntry>,
+    global: HashMap<Lvl, VTy>,
 }
 
 impl Infer {
     pub fn new() -> Self {
-        Self { meta: vec![] }
+        Self { meta: vec![], global: HashMap::new() }
     }
     fn new_meta(&mut self, a: VTy) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
@@ -218,9 +236,14 @@ impl Infer {
     }
 
     fn eval(&self, env: &Env, tm: Tm) -> Val {
-        //print!("{} {:?}\n   ", "eval".yellow(), tm);
+        //println!("{} {:?}", "eval".yellow(), tm);
         match tm {
-            Tm::Var(x) => env.iter().nth(x.0 as usize).unwrap().clone(),
+            Tm::Var(x) => match env.iter().nth(x.0 as usize) {
+                Some(v) => v.clone(),
+                None => {
+                    self.global.get(&Lvl(x.0 - 100000)).unwrap().clone()
+                }
+            },
             Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
             Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
             Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(env, *a)), Closure(env.clone(), b)),
