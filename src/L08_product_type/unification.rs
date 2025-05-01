@@ -1,6 +1,6 @@
 use colored::Colorize;
 
-use crate::{L07_sum_type::empty_span, list::List};
+use crate::{L08_product_type::empty_span, list::List};
 
 use super::{
     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
@@ -291,6 +291,13 @@ impl Infer {
                     params,
                     cases_name,
                 })
+            }
+            Val::Struct(x, params, fields) => {
+                let new_params = params
+                    .into_iter()
+                    .map(|x| self.rename(pren, x))
+                    .collect::<Result<_, _>>()?;
+                Ok(Tm::Struct(x, new_params, fields))
             }
         }
     }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use colored::Colorize;
 
-use crate::{L07_sum_type::pattern_match::Compiler, list::List, parser_lib::Span};
+use crate::{L08_product_type::pattern_match::Compiler, list::List, parser_lib::Span};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
@@ -238,6 +238,30 @@ impl Infer {
                 }
                 Ok((DeclTm::Enum {}, Val::U, cxt))
             }
+            Decl::Struct {
+                name,
+                params,
+                fields,
+            } => {
+                let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
+                let sum = Raw::Struct(name.clone(), new_params.clone(), fields.clone());
+                let typ = params.iter().rev().fold(Raw::U, |a, b| {
+                    Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                });
+                let bod = params.iter().rev().fold(sum.clone(), |a, b| {
+                    Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
+                });
+                let mut cxt = {
+                    let typ_tm = self.check(cxt, typ, Val::U)?;
+                    let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                    let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
+                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
+                };
+                //TODO:
+                Ok((DeclTm::Struct {}, Val::U, cxt))
+            }
         }
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
@@ -257,6 +281,8 @@ impl Infer {
                 Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), a.clone())),
                 None => Err(Error(format!("error name not in scope: {:?}", x))),
             },
+
+            Raw::Obj(x, t) => todo!(),
 
             // Infer lambda expressions
             Raw::Lam(x, Either::Icit(i), t) => {
@@ -473,6 +499,26 @@ impl Infer {
                     },
                     Val::Sum(sum_name, new_params, cases),
                 ))
+            }
+
+            Raw::Struct(name, params, fields) => {
+                let new_params = params
+                    .iter()
+                    .map(|ty| {
+                        let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
+                        Ok(ty_checked)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let new_fields = fields
+                    .into_iter()
+                    .map(|(name, ty)| {
+                        let ty_checked = self
+                            .check(cxt, ty, Val::U)
+                            .map(|tm| self.eval(&cxt.env, tm))?;
+                        Ok((name, ty_checked))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((Tm::Struct(name, new_params, new_fields), Val::U))
             }
         }
     }

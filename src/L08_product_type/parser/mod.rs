@@ -8,6 +8,8 @@ pub mod syntax;
 
 use TokenKind::*;
 
+use super::empty_span;
+
 pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
     super::parser::lex::lex(Span {
         data: input,
@@ -19,24 +21,24 @@ pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
 }
 
 macro_rules! T {
-    [def] => { $crate::L07_sum_type::parser::TokenKind::DefKeyword };
-    [let] => { $crate::L07_sum_type::parser::TokenKind::LetKeyword };
-    [U] => { $crate::L07_sum_type::parser::TokenKind::UKeyword };
-    [_] => { $crate::L07_sum_type::parser::TokenKind::Hole };
-    ['('] => { $crate::L07_sum_type::parser::TokenKind::LParen };
-    [')'] => { $crate::L07_sum_type::parser::TokenKind::RParen };
-    ['['] => { $crate::L07_sum_type::parser::TokenKind::LSquare };
-    [']'] => { $crate::L07_sum_type::parser::TokenKind::RSquare };
-    ['{'] => { $crate::L07_sum_type::parser::TokenKind::LCurly };
-    ['}'] => { $crate::L07_sum_type::parser::TokenKind::RCurly };
-    [.] => { $crate::L07_sum_type::parser::TokenKind::Dot };
-    [,] => { $crate::L07_sum_type::parser::TokenKind::Comma };
-    [=] => { $crate::L07_sum_type::parser::TokenKind::Eq };
-    [;] => { $crate::L07_sum_type::parser::TokenKind::Semi };
-    [:] => { $crate::L07_sum_type::parser::TokenKind::Colon };
-    [->] => { $crate::L07_sum_type::parser::TokenKind::Arrow };
-    [=>] => { $crate::L07_sum_type::parser::TokenKind::DoubleArrow };
-    ['\\'] => { $crate::L07_sum_type::parser::TokenKind::Lambda };
+    [def] => { $crate::L08_product_type::parser::TokenKind::DefKeyword };
+    [let] => { $crate::L08_product_type::parser::TokenKind::LetKeyword };
+    [U] => { $crate::L08_product_type::parser::TokenKind::UKeyword };
+    [_] => { $crate::L08_product_type::parser::TokenKind::Hole };
+    ['('] => { $crate::L08_product_type::parser::TokenKind::LParen };
+    [')'] => { $crate::L08_product_type::parser::TokenKind::RParen };
+    ['['] => { $crate::L08_product_type::parser::TokenKind::LSquare };
+    [']'] => { $crate::L08_product_type::parser::TokenKind::RSquare };
+    ['{'] => { $crate::L08_product_type::parser::TokenKind::LCurly };
+    ['}'] => { $crate::L08_product_type::parser::TokenKind::RCurly };
+    [.] => { $crate::L08_product_type::parser::TokenKind::Dot };
+    [,] => { $crate::L08_product_type::parser::TokenKind::Comma };
+    [=] => { $crate::L08_product_type::parser::TokenKind::Eq };
+    [;] => { $crate::L08_product_type::parser::TokenKind::Semi };
+    [:] => { $crate::L08_product_type::parser::TokenKind::Colon };
+    [->] => { $crate::L08_product_type::parser::TokenKind::Arrow };
+    [=>] => { $crate::L08_product_type::parser::TokenKind::DoubleArrow };
+    ['\\'] => { $crate::L08_product_type::parser::TokenKind::Lambda };
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
@@ -53,6 +55,7 @@ fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Str
     }
 }
 
+/// ( p )
 fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O>
 where
     P: Parser<&'b [TokenNode<'a>], O>,
@@ -60,6 +63,7 @@ where
     (kw(LParen), p, kw(RParen)).map(|c| c.1)
 }
 
+/// [ p ]
 fn square<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O>
 where
     P: Parser<&'b [TokenNode<'a>], O>,
@@ -67,6 +71,7 @@ where
     (kw(LSquare), p, kw(RSquare)).map(|c| c.1)
 }
 
+/// { p }
 fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O>
 where
     P: Parser<&'b [TokenNode<'a>], O>,
@@ -81,13 +86,22 @@ where
         .map(|c| c.2)
 }
 
-fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     string(Ident)
         .map(Raw::Var)
         .or(kw(UKeyword).map(|_| Raw::U))
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
         .or(paren(p_raw))
+        .parse(input)
+}
+
+fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+    (p_atom1, (kw(T![.]), string(Ident)).option())
+        .map(|(x, t)| match t {
+            Some((_, t)) => Raw::Obj(Box::new(x), t),
+            None => x,
+        })
         .parse(input)
 }
 
@@ -313,8 +327,36 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
         .parse(input)
 }
 
+fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
+    (
+        kw(StructKeyword),
+        string(Ident),
+        p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
+        brace(
+            (string(Ident), kw(T![:]), p_raw)
+                .map(|(name, _, ty)| (name, ty))
+                .many0_sep(kw(EndLine)), // named fields
+        ), /*.or(
+               paren(p_raw.many1_sep(kw(T![,]))).map(|fields| {
+                   // tuple-like struct with positional fields
+                   let mut unnamed_fields = Vec::new();
+                   for (idx, field) in fields.into_iter().enumerate() {
+                       unnamed_fields.push((empty_span(format!("{idx}")), field));
+                   }
+                   unnamed_fields
+               })
+           )*/
+    )
+        .map(|(_, name, params, fields)| Decl::Struct {
+            name,
+            params,
+            fields,
+        })
+        .parse(input)
+}
+
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
-    p_def.or(p_print).or(p_enum).parse(input)
+    p_def.or(p_print).or(p_enum).or(p_struct).parse(input)
 }
 
 #[test]
@@ -375,6 +417,19 @@ def add(x: Nat, y: Nat): Nat =
 def four = add two two
 
 println four
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Span[T] {
+    data: T
+    start: Nat
+    end: Nat
+}
+
+def get_x(p: Point): Nat = p.x
 
 "#;
     println!("{:#?}", parser(input, 0).unwrap());

@@ -6,6 +6,7 @@ pub enum TokenKind {
     LetKeyword,
     PrintlnKeyword,
     EnumKeyword,
+    StructKeyword,
     UKeyword, //Universe
     MatchKeyword,
     CaseKeyword,
@@ -44,11 +45,12 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 7] = [
+const KEYWORD: [(&str, TokenKind); 8] = [
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
     ("enum", EnumKeyword),
+    ("struct", StructKeyword),
     ("U", UKeyword),
     ("match", MatchKeyword),
     ("case", CaseKeyword),
@@ -222,6 +224,19 @@ def add(x: Nat, y: Nat): Nat = {
 def four = add(two, two)
 
 println four
+
+struct SimplePoint(Nat, Nat)
+
+struct Point {
+    x: Nat,
+    y: Nat,
+}
+
+struct Span[T] {
+    data: T,
+    start: Nat,
+    end: Nat,
+}
 
 "#;
     let ret = lex(Span {

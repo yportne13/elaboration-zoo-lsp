@@ -9,6 +9,7 @@ mod L04_implicit;
 mod L05_pruning;
 mod L06_string;
 mod L07_sum_type;
+mod L08_product_type;
 
 fn main() {
     println!("Hello, world!");

@@ -44,6 +44,7 @@ pub enum DeclTm {
     Enum {
         //TODO:
     },
+    Struct {},
 }
 
 #[derive(Debug, Clone)]
@@ -65,7 +66,8 @@ pub enum Tm {
         case_name: Span<String>,
         params: Vec<Tm>,
         cases_name: Vec<Span<String>>,
-    }, //TODO:
+    },
+    Struct(Span<String>, Vec<Ty>, Vec<(Span<String>, Val)>),
     Match(Box<Tm>, Vec<(Pattern, Tm)>),
 }
 
@@ -116,7 +118,8 @@ enum Val {
         case_name: Span<String>,
         params: Vec<Val>,
         cases_name: Vec<Span<String>>,
-    }, //TODO:
+    },
+    Struct(Span<String>, Vec<Val>, Vec<(Span<String>, Val)>),
 }
 
 type VTy = Val;
@@ -297,6 +300,13 @@ impl Infer {
                 let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
                 self.eval(&env, tm)
             }
+            Tm::Struct(name, params, fields) => {
+                let new_params = params
+                    .into_iter()
+                    .map(|x| self.eval(&env.clone(), x))
+                    .collect();
+                Val::Struct(name, new_params, fields)
+            }
         }
     }
 
@@ -344,6 +354,10 @@ impl Infer {
                     params,
                     cases_name,
                 }
+            }
+            Val::Struct(name, params, fields) => {
+                let params = params.into_iter().map(|x| self.quote(l, x)).collect();
+                Tm::Struct(name, params, fields)
             }
         }
     }
@@ -438,6 +452,11 @@ def add(x: Nat, y: Nat): Nat =
 def four = add two two
 
 println four
+
+struct Point {
+    x: Nat
+    y: Nat
+}
 
 "#;
     println!("{}", run(input, 0).unwrap());

@@ -21,6 +21,7 @@ pub enum Pattern {
 #[derive(Clone, Debug)]
 pub enum Raw {
     Var(Span<String>),
+    Obj(Box<Raw>, Span<String>),
     Lam(Span<String>, Either, Box<Raw>),
     App(Box<Raw>, Box<Raw>, Either),
     U,
@@ -37,6 +38,7 @@ pub enum Raw {
         case_name: Span<String>,
         datas: Vec<Raw>,
     },
+    Struct(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>),
 }
 
 #[derive(Clone, Debug)]
@@ -52,5 +54,10 @@ pub enum Decl {
         name: Span<String>,
         params: Vec<(Span<String>, Raw, Icit)>,
         cases: Vec<(Span<String>, Vec<Raw>)>,
+    },
+    Struct {
+        name: Span<String>,
+        params: Vec<(Span<String>, Raw, Icit)>,
+        fields: Vec<(Span<String>, Raw)>,
     },
 }
