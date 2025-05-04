@@ -59,7 +59,7 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Val>)>),
+    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Raw>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -110,7 +110,7 @@ enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Val>)>),
+    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Raw>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -358,6 +358,7 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
+        //println!("{:?} == {:?}", t, t_prime);
         self.unify(cxt.lvl, cxt, t.clone(), t_prime.clone())
             .map_err(|_| {
                 /*Error::CantUnify(
@@ -366,6 +367,7 @@ impl Infer {
                     self.quote(cxt.lvl, t_prime),
                 )*/
                 //println!("{:?} == {:?}", t, t_prime);
+                //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t.clone())));
                 //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
                 Error(format!(
                     "can't unify {:?} == {:?}",
@@ -438,6 +440,34 @@ def add(x: Nat, y: Nat): Nat =
 def four = add two two
 
 println four
+
+def is_zero(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(n) => false
+    }
+
+println (is_zero zero)
+
+println (is_zero four)
+
+enum Option[T] {
+    Some(T)
+    None
+}
+
+def map[T, X](x: Option[T], f: T -> X): Option[X] =
+    match x {
+        case None => None
+        case Some(t) => Some (f t)
+    }
+
+def some_four = Some four
+
+def is_false = map (some_four) (x => is_zero x)
+
+println "Option(false):"
+println is_false
 
 "#;
     println!("{}", run(input, 0).unwrap());

@@ -282,7 +282,22 @@ impl Infer {
                 None => Err(Error(format!("error name not in scope: {:?}", x))),
             },
 
-            Raw::Obj(x, t) => todo!(),
+            Raw::Obj(x, t) => {
+                let (tm, a) = self.infer_expr(cxt, *x)?;
+                match (tm, a) {
+                    (tm, Val::Struct(_, _, fields)) => {
+                        Ok((
+                            Tm::Obj(Box::new(tm), t.clone()),
+                            fields
+                                .into_iter()
+                                .find(|(fields_name, _)| fields_name == &t)
+                                .map(|(_, ty)| ty)
+                                .ok_or_else(|| Error("error in obj".to_owned()))?
+                        ))
+                    }
+                    _ => Err(Error("error in obj".to_owned())),
+                }
+            },
 
             // Infer lambda expressions
             Raw::Lam(x, Either::Icit(i), t) => {
@@ -448,17 +463,7 @@ impl Infer {
                         Ok(ty_checked)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let new_cases = cases
-                    .into_iter()
-                    .map(|(name, ty)| {
-                        let ty_checked = ty
-                            .into_iter()
-                            .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
-                            .collect::<Result<_, _>>()?;
-                        Ok((name, ty_checked))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((Tm::Sum(name, new_params, new_cases), Val::U))
+                Ok((Tm::Sum(name, new_params, cases), Val::U))
             }
 
             Raw::SumCase {
@@ -480,16 +485,6 @@ impl Infer {
                     .into_iter()
                     .map(|x| self.infer_expr(cxt, x).map(|x| x.0))
                     .collect::<Result<_, _>>()?;
-                let cases = cases
-                    .into_iter()
-                    .map(|(name, ty)| {
-                        let ty_checked = ty
-                            .into_iter()
-                            .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
-                            .collect::<Result<_, _>>()?;
-                        Ok((name, ty_checked))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
                 Ok((
                     Tm::SumCase {
                         sum_name: sum_name.clone(),

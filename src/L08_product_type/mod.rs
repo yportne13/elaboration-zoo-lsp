@@ -50,6 +50,7 @@ pub enum DeclTm {
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
+    Obj(Box<Tm>, Span<String>),
     Lam(Span<String>, Icit, Box<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
@@ -60,7 +61,7 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Val>)>),
+    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Raw>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -112,7 +113,7 @@ enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Val>)>),
+    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Raw>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -254,6 +255,16 @@ impl Infer {
                 Some(v) => v.clone(),
                 None => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
             },
+            Tm::Obj(tm, name) => {
+                match self.eval(env, *tm) {
+                    Val::Struct(_, _, fields) => {
+                        fields.into_iter()
+                            .find(|(f_name, _)| f_name == &name)
+                            .unwrap().1
+                    },
+                    _ => panic!("impossible"),
+                }
+            }
             Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
             Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
             Tm::Pi(x, i, a, b) => {
@@ -457,6 +468,8 @@ struct Point {
     x: Nat
     y: Nat
 }
+
+def get_x(p: Point): Nat = p.x
 
 "#;
     println!("{}", run(input, 0).unwrap());

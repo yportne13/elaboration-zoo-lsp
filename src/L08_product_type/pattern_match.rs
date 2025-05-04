@@ -163,7 +163,12 @@ impl Compiler {
                     };
                     let (typename, constrs) = match new_typ {
                         Val::Sum(span, _, cases) => (span, cases),
-                        _ => panic!("by now only can match a sum type, but get {:?}", typ),
+                        //_ => panic!("by now only can match a sum type, but get {:?}", typ),
+                        _ => {
+                            //let idx = arms[0].1;
+                            //self.reachable.insert(idx, ());
+                            (empty_span("$unknown$".to_owned()), vec![(empty_span("$unknown$".to_owned()), vec![])])
+                        }
                     };
 
                     let constrs_name = constrs
@@ -177,10 +182,12 @@ impl Compiler {
                             let new_heads = item_typs
                                 .iter()
                                 .map(|typ| {
+                                    let tm = infer.check(cxt_global, typ.clone(), Val::U).unwrap();//TODO:do not unwrap
+                                    let val = infer.eval(&cxt_global.env, tm.clone());
                                     (
                                         self.fresh(),
-                                        infer.quote(cxt_global.lvl, typ.clone()),
-                                        typ.clone(),
+                                        tm,
+                                        val,
                                     )
                                 })
                                 .collect::<Vec<_>>();
@@ -377,7 +384,8 @@ impl Compiler {
                 params,
                 cases_name,
             } => (case_name, params, cases_name),
-            _ => panic!("by now only can match a sum type, but get {:?}", heads),
+            //_ => panic!("by now only can match a sum type, but get {:?}", heads),
+            _ => (empty_span("$unknown$".to_owned()), vec![], vec![])
         };
 
         arms.iter()

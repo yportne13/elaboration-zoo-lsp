@@ -422,17 +422,7 @@ impl Infer {
                         Ok(ty_checked)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let new_cases = cases
-                    .into_iter()
-                    .map(|(name, ty)| {
-                        let ty_checked = ty
-                            .into_iter()
-                            .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
-                            .collect::<Result<_, _>>()?;
-                        Ok((name, ty_checked))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((Tm::Sum(name, new_params, new_cases), Val::U))
+                Ok((Tm::Sum(name, new_params, cases), Val::U))
             }
 
             Raw::SumCase {
@@ -454,16 +444,6 @@ impl Infer {
                     .into_iter()
                     .map(|x| self.infer_expr(cxt, x).map(|x| x.0))
                     .collect::<Result<_, _>>()?;
-                let cases = cases
-                    .into_iter()
-                    .map(|(name, ty)| {
-                        let ty_checked = ty
-                            .into_iter()
-                            .map(|x| self.check(cxt, x, Val::U).map(|tm| self.eval(&cxt.env, tm)))
-                            .collect::<Result<_, _>>()?;
-                        Ok((name, ty_checked))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
                 Ok((
                     Tm::SumCase {
                         sum_name: sum_name.clone(),
