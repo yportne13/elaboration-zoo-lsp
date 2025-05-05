@@ -38,7 +38,8 @@ pub enum Raw {
         case_name: Span<String>,
         datas: Vec<Raw>,
     },
-    Struct(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>),
+    StructType(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>),
+    StructData(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>),
 }
 
 #[derive(Clone, Debug)]

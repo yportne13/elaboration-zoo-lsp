@@ -249,6 +249,9 @@ impl Infer {
                     self.rename_sp(pren, t, &sp)
                 }
             },
+            Val::Obj(x, name) => Ok(Tm::Obj(Box::new(
+                self.rename(pren, *x)?
+            ), name.clone())),
             Val::Lam(x, i, closure) => {
                 let t = self.rename(
                     &lift(pren),
@@ -292,12 +295,23 @@ impl Infer {
                     cases_name,
                 })
             }
-            Val::Struct(x, params, fields) => {
+            Val::StructType(x, params, fields) => {
                 let new_params = params
                     .into_iter()
                     .map(|x| self.rename(pren, x))
                     .collect::<Result<_, _>>()?;
-                Ok(Tm::Struct(x, new_params, fields))
+                Ok(Tm::StructType(x, new_params, fields))
+            }
+            Val::StructData(x, params, fields) => {
+                let new_params = params
+                    .into_iter()
+                    .map(|x| self.rename(pren, x))
+                    .collect::<Result<_, _>>()?;
+                let fields = fields
+                    .into_iter()
+                    .map(|(x, v)| Ok((x, self.rename(pren, v)?)))
+                    .collect::<Result<_, _>>()?;
+                Ok(Tm::StructData(x, new_params, fields))
             }
         }
     }
@@ -528,6 +542,13 @@ impl Infer {
             }
             (Val::Rigid(_, _), Val::Sum(_, _, _)) => {
                 self.unify(l, cxt, self.eval(&cxt.env, self.quote(cxt.lvl, t)), u)
+            }
+            (Val::StructType(a, params_a, _), Val::StructType(b, params_b, _)) if a.data == b.data => {
+                // params_a.len() always equal to params_b.len()?
+                for (a, b) in params_a.iter().zip(params_b.iter()) {
+                    self.unify(l, cxt, a.clone(), b.clone())?;
+                }
+                Ok(())
             }
             _ => Err(UnifyError), // Rigid mismatch error
         }

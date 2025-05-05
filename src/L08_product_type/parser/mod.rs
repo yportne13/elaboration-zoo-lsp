@@ -175,21 +175,25 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
     .parse(input)
 }
 
-fn p_pi_binder<'a: 'b, 'b>(
+/// (x: A)
+fn p_pi_expl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
 ) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
-    // 解析显式参数 (x : A)
-    let explicit_binder = paren(
+    paren(
         (
             p_bind,                // 解析一个或多个绑定变量 xs
             kw(Colon).with(p_raw), // 解析类型 A
         )
             .map(|(xs, a)| (xs, a.1, Icit::Expl))
             .many0_sep(kw(T![,])),
-    ); // 返回 (xs, a, Expl)
+    ).parse(input) // 返回 (xs, a, Expl)
+}
 
+fn p_pi_binder<'a: 'b, 'b>(
+    input: &'b [TokenNode<'a>],
+) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
     // 组合所有可能的解析器
-    p_pi_impl_binder.or(explicit_binder).parse(input)
+    p_pi_impl_binder.or(p_pi_expl_binder).parse(input)
 }
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
@@ -268,12 +272,26 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         .parse(input)
 }
 
+fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+    (
+        kw(newKeyword),
+        string(Ident),
+        paren(p_raw.many0_sep(kw(T![,]))),
+    )
+        .map(|(_, scrutinee, args)| args.into_iter()
+            .fold(Raw::Var(scrutinee.map(|x| format!("{x}.apply"))), |acc, x| 
+                Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
+            ))
+        .parse(input)
+}
+
 fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     p_lam
         .or(p_let)
         .or(p_pi)
         .or(fun_or_spine)
         .or(p_match)
+        .or(p_new)
         .parse(input)
 }
 

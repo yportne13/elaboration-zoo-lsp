@@ -68,7 +68,8 @@ pub enum Tm {
         params: Vec<Tm>,
         cases_name: Vec<Span<String>>,
     },
-    Struct(Span<String>, Vec<Ty>, Vec<(Span<String>, Val)>),
+    StructType(Span<String>, Vec<Ty>, Vec<(Span<String>, Val)>),
+    StructData(Span<String>, Vec<Ty>, Vec<(Span<String>, Tm)>),
     Match(Box<Tm>, Vec<(Pattern, Tm)>),
 }
 
@@ -107,6 +108,7 @@ impl std::fmt::Debug for Closure {
 enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
+    Obj(Box<Val>, Span<String>),
     Lam(Span<String>, Icit, Closure),
     Pi(Span<String>, Icit, Box<VTy>, Closure),
     U,
@@ -120,7 +122,8 @@ enum Val {
         params: Vec<Val>,
         cases_name: Vec<Span<String>>,
     },
-    Struct(Span<String>, Vec<Val>, Vec<(Span<String>, Val)>),
+    StructType(Span<String>, Vec<Val>, Vec<(Span<String>, Val)>),
+    StructData(Span<String>, Vec<Val>, Vec<(Span<String>, Val)>),
 }
 
 type VTy = Val;
@@ -257,12 +260,20 @@ impl Infer {
             },
             Tm::Obj(tm, name) => {
                 match self.eval(env, *tm) {
-                    Val::Struct(_, _, fields) => {
+                    Val::StructType(_, _, fields) => {
                         fields.into_iter()
                             .find(|(f_name, _)| f_name == &name)
                             .unwrap().1
                     },
-                    _ => panic!("impossible"),
+                    Val::StructData(_, _, fields) => {
+                        fields.into_iter()
+                            .find(|(f_name, _)| f_name == &name)
+                            .unwrap().1
+                    },
+                    x @ Val::Rigid(_, _) => {
+                        Val::Obj(Box::new(x), name)
+                    }
+                    x => panic!("impossible {x:?}"),
                 }
             }
             Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
@@ -311,12 +322,23 @@ impl Infer {
                 let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
                 self.eval(&env, tm)
             }
-            Tm::Struct(name, params, fields) => {
+            Tm::StructType(name, params, fields) => {
                 let new_params = params
                     .into_iter()
                     .map(|x| self.eval(&env.clone(), x))
                     .collect();
-                Val::Struct(name, new_params, fields)
+                Val::StructType(name, new_params, fields)
+            }
+            Tm::StructData(name, params, fields) => {
+                let new_params = params
+                    .into_iter()
+                    .map(|x| self.eval(&env.clone(), x))
+                    .collect();
+                let new_fields = fields
+                    .into_iter()
+                    .map(|(f_name, f_val)| (f_name, self.eval(&env.clone(), f_val)))
+                    .collect();
+                Val::StructData(name, new_params, new_fields)
             }
         }
     }
@@ -333,6 +355,7 @@ impl Infer {
         match t {
             Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
+            Val::Obj(x, name) => Tm::Obj(Box::new(self.quote(l, *x)), name),
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
@@ -366,9 +389,17 @@ impl Infer {
                     cases_name,
                 }
             }
-            Val::Struct(name, params, fields) => {
+            Val::StructType(name, params, fields) => {
                 let params = params.into_iter().map(|x| self.quote(l, x)).collect();
-                Tm::Struct(name, params, fields)
+                Tm::StructType(name, params, fields)
+            }
+            Val::StructData(name, params, fields) => {
+                let params = params.into_iter().map(|x| self.quote(l, x)).collect();
+                let fields = fields
+                    .into_iter()
+                    .map(|(f_name, f_val)| (f_name, self.quote(l, f_val)))
+                    .collect();
+                Tm::StructData(name, params, fields)
             }
         }
     }
@@ -470,6 +501,17 @@ struct Point {
 }
 
 def get_x(p: Point): Nat = p.x
+
+def point_add(p1: Point, p2: Point): Point =
+    new Point((add p1.x p2.x), (add p1.y p2.y))
+
+def start_point = new Point(zero, four)
+
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+
+println (point_add start_point end_point)
 
 "#;
     println!("{}", run(input, 0).unwrap());

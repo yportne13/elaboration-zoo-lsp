@@ -10,6 +10,7 @@ pub enum TokenKind {
     UKeyword, //Universe
     MatchKeyword,
     CaseKeyword,
+    newKeyword,
 
     Hole,
     LParen,
@@ -45,7 +46,7 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 8] = [
+const KEYWORD: [(&str, TokenKind); 9] = [
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
@@ -54,6 +55,7 @@ const KEYWORD: [(&str, TokenKind); 8] = [
     ("U", UKeyword),
     ("match", MatchKeyword),
     ("case", CaseKeyword),
+    ("new", newKeyword),
 ];
 
 const OP: [(&str, TokenKind); 15] = [

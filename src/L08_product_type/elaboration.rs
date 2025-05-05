@@ -244,20 +244,41 @@ impl Infer {
                 fields,
             } => {
                 let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
-                let sum = Raw::Struct(name.clone(), new_params.clone(), fields.clone());
+                let sum = Raw::StructType(name.clone(), new_params.clone(), fields.clone());
                 let typ = params.iter().rev().fold(Raw::U, |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
                 let bod = params.iter().rev().fold(sum.clone(), |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let mut cxt = {
+                let cxt = {
                     let typ_tm = self.check(cxt, typ, Val::U)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
                     let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
+                };
+
+                let new_fields: Vec<_> = fields.iter().map(|x| (x.0.clone(), Raw::Var(x.0.clone()))).collect();
+                let data = Raw::StructData(name.clone(), new_params.clone(), new_fields.clone());
+                let typ = params.iter().cloned().chain(
+                    fields.iter().cloned().map(|(a, b)| (a, b, Icit::Expl))
+                ).rev().fold(sum, |a, b| {
+                    Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                });
+                let bod = params.iter().cloned().chain(
+                    fields.iter().cloned().map(|(a, b)| (a, b, Icit::Expl))
+                ).rev().fold(data.clone(), |a, b| {
+                    Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
+                });
+                let cxt = {
+                    let typ_tm = self.check(&cxt, typ, Val::U)?;
+                    let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                    let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
+                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    cxt.define(name.map(|x| format!("{x}.apply")), t_tm, vt, typ_tm, vtyp)
                 };
                 //TODO:
                 Ok((DeclTm::Struct {}, Val::U, cxt))
@@ -285,7 +306,17 @@ impl Infer {
             Raw::Obj(x, t) => {
                 let (tm, a) = self.infer_expr(cxt, *x)?;
                 match (tm, a) {
-                    (tm, Val::Struct(_, _, fields)) => {
+                    (tm, Val::StructType(_, _, fields)) => {
+                        Ok((
+                            Tm::Obj(Box::new(tm), t.clone()),
+                            fields
+                                .into_iter()
+                                .find(|(fields_name, _)| fields_name == &t)
+                                .map(|(_, ty)| ty)
+                                .ok_or_else(|| Error("error in obj".to_owned()))?
+                        ))
+                    }
+                    (tm, Val::StructData(_, _, fields)) => {
                         Ok((
                             Tm::Obj(Box::new(tm), t.clone()),
                             fields
@@ -496,7 +527,7 @@ impl Infer {
                 ))
             }
 
-            Raw::Struct(name, params, fields) => {
+            Raw::StructType(name, params, fields) => {
                 let new_params = params
                     .iter()
                     .map(|ty| {
@@ -513,7 +544,28 @@ impl Infer {
                         Ok((name, ty_checked))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((Tm::Struct(name, new_params, new_fields), Val::U))
+                Ok((Tm::StructType(name, new_params, new_fields), Val::U))
+            }
+            Raw::StructData(name, params, fields) => {
+                let new_params = params
+                    .iter()
+                    .map(|ty| {
+                        let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
+                        Ok(ty_checked)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let params_type = new_params.iter()
+                    .map(|x| self.eval(&cxt.env, x.clone()))
+                    .collect();
+                let (new_fields_data, new_fields_type) = fields
+                    .into_iter()
+                    .map(|(name, ty)| {
+                        let (tm, ty_checked) = self
+                            .infer_expr(cxt, ty)?;
+                        Ok(((name.clone(), tm), (name, ty_checked)))
+                    })
+                    .collect::<Result<(Vec<_>, Vec<_>), _>>()?;
+                Ok((Tm::StructData(name.clone(), new_params, new_fields_data), Val::StructType(name, params_type, new_fields_type)))
             }
         }
     }
