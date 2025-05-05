@@ -68,7 +68,7 @@ pub enum Tm {
         params: Vec<Tm>,
         cases_name: Vec<Span<String>>,
     },
-    StructType(Span<String>, Vec<Ty>, Vec<(Span<String>, Val)>),
+    StructType(Span<String>, Vec<Ty>, Vec<(Span<String>, Tm)>),
     StructData(Span<String>, Vec<Ty>, Vec<(Span<String>, Tm)>),
     Match(Box<Tm>, Vec<(Pattern, Tm)>),
 }
@@ -216,6 +216,7 @@ impl Infer {
     }
 
     fn v_app(&self, t: Val, u: Val, i: Icit) -> Val {
+        //println!("v_app {t:?} {u:?}");
         match t {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
             Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
@@ -327,6 +328,10 @@ impl Infer {
                     .into_iter()
                     .map(|x| self.eval(&env.clone(), x))
                     .collect();
+                let fields = fields
+                    .into_iter()
+                    .map(|(f_name, f_val)| (f_name, self.eval(&env.clone(), f_val)))
+                    .collect();
                 Val::StructType(name, new_params, fields)
             }
             Tm::StructData(name, params, fields) => {
@@ -391,6 +396,10 @@ impl Infer {
             }
             Val::StructType(name, params, fields) => {
                 let params = params.into_iter().map(|x| self.quote(l, x)).collect();
+                let fields = fields
+                    .into_iter()
+                    .map(|(f_name, f_val)| (f_name, self.quote(l, f_val)))
+                    .collect();
                 Tm::StructType(name, params, fields)
             }
             Val::StructData(name, params, fields) => {
@@ -495,14 +504,14 @@ def four = add two two
 
 println four
 
-struct Point {
-    x: Nat
-    y: Nat
+struct Point[T] {
+    x: T
+    y: T
 }
 
-def get_x(p: Point): Nat = p.x
+def get_x[T](p: Point[T]) = p.x
 
-def point_add(p1: Point, p2: Point): Point =
+def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
     new Point((add p1.x p2.x), (add p1.y p2.y))
 
 def start_point = new Point(zero, four)

@@ -539,8 +539,7 @@ impl Infer {
                     .into_iter()
                     .map(|(name, ty)| {
                         let ty_checked = self
-                            .check(cxt, ty, Val::U)
-                            .map(|tm| self.eval(&cxt.env, tm))?;
+                            .check(cxt, ty, Val::U)?;
                         Ok((name, ty_checked))
                     })
                     .collect::<Result<Vec<_>, _>>()?;

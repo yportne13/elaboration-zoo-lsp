@@ -300,6 +300,10 @@ impl Infer {
                     .into_iter()
                     .map(|x| self.rename(pren, x))
                     .collect::<Result<_, _>>()?;
+                let fields = fields
+                    .into_iter()
+                    .map(|(x, v)| Ok((x, self.rename(pren, v)?)))
+                    .collect::<Result<_, _>>()?;
                 Ok(Tm::StructType(x, new_params, fields))
             }
             Val::StructData(x, params, fields) => {
@@ -482,6 +486,7 @@ impl Infer {
         }
     }
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
+        //println!("unify: {t:?} {u:?}");
         let t = self.force(t);
         let u = self.force(u);
 
