@@ -10,9 +10,9 @@ use super::{
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
-struct PartialRenaming {
+pub struct PartialRenaming {
     occ: Option<MetaVar>,
-    dom: Lvl,               // size of Γ
+    pub dom: Lvl,               // size of Γ
     cod: Lvl,               // size of Δ
     ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
@@ -70,7 +70,7 @@ impl Infer {
             }
         }
     }
-    fn invert(
+    pub fn invert(
         &self,
         gamma: Lvl,
         sp: Spine,
@@ -119,7 +119,7 @@ impl Infer {
             _ => Err(UnifyError), // impossible case
         }
     }
-    fn prune_ty(&mut self, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
+    pub fn prune_ty(&mut self, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
         self.prune_ty_go(
             pr,
             &PartialRenaming {

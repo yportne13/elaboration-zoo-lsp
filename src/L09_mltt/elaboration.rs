@@ -2,7 +2,7 @@ use std::{cmp::max, collections::HashMap};
 
 use colored::Colorize;
 
-use crate::{L09_mltt::pattern_match::Compiler, list::List, parser_lib::Span};
+use crate::{list::List, parser_lib::Span, L09_mltt::{pattern_match::Compiler, MetaEntry}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
@@ -73,6 +73,33 @@ impl Infer {
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         match inferred_type {
             Val::U(u) => Ok((t_inferred, u)),
+            Val::Flex(m, sp) => {
+                let (pren, prune_non_linear) = self.invert(cxt.lvl, sp.clone())
+                    .map_err(|_| Error("invert failed".to_owned()))?;
+                let mty = match self.meta[m.0 as usize] {
+                    MetaEntry::Unsolved(ref a) => a.clone(),
+                    _ => unreachable!(),
+                };
+
+                // if the spine was non-linear, we check that the non-linear arguments
+                // can be pruned from the meta type (i.e. that the pruned solution will
+                // be well-typed)
+                if let Some(pr) = prune_non_linear {
+                    self.prune_ty(&pr, mty.clone()).map_err(|_| Error("prune failed".to_owned()))?; //TODO:revPruning?
+                }
+
+                if pren.dom.0 == 0 {
+                    match self.force(mty.clone()) {
+                        Val::U(x) => {//TODO:x?
+                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(0), mty);
+                            Ok((t_inferred, 0))
+                        },
+                        _ => Err(Error(format!("meta type {:?} is not a universe", self.force(mty)))),
+                    }
+                } else {
+                    Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
+                }
+            }
             _ => Err(Error(format!("expected universe, got {:?}", inferred_type))),
         }
     }
@@ -191,8 +218,7 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let mut cxt = {
-                    let (typ_tm, lvl) = self.check_universe(cxt, typ)?;
-                    universe_lvl = max(universe_lvl, lvl);
+                    let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
                     let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
@@ -267,8 +293,7 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let cxt = {
-                    let (typ_tm, lvl) = self.check_universe(cxt, typ)?;
-                    universe_lvl = max(universe_lvl, lvl);
+                    let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
                     let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
@@ -429,7 +454,7 @@ impl Infer {
             }
 
             // Infer universe type
-            Raw::U(x) => Ok((Tm::U(x), Val::U(x))),
+            Raw::U(x) => Ok((Tm::U(x), Val::U(x + 1))),
 
             // Infer dependent function types
             Raw::Pi(x, i, a, b) => {

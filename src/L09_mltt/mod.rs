@@ -471,7 +471,7 @@ enum Nat {
     succ(Nat)
 }
 
-enum List[A: Type 0] {
+enum List[A] {
     nil
     cons(A, List[A])
 }
@@ -484,7 +484,7 @@ def create1: List[Bool] = cons true nil
 
 def create2: List[Bool] = cons true (cons false nil)
 
-def two: Nat = succ (succ zero)
+def two = succ (succ zero)
 
 def not(x: Bool): Bool =
     match x {
@@ -500,27 +500,31 @@ def add(x: Nat, y: Nat): Nat =
         case succ(n) => succ (add n y)
     }
 
-def four: Nat = add two two
+def four = add two two
 
 println four
 
-struct Point[T: Type 0] {
+struct Point[T] {
     x: T
     y: T
 }
 
-def get_x[T: Type 0](p: Point[T]): T = p.x
+def get_x[T](p: Point[T]): T = p.x
 
 def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
     new Point((add p1.x p2.x), (add p1.y p2.y))
 
-def start_point: Point[_] = new Point(zero, four)
+def start_point = new Point(zero, four)
 
-def end_point: Point[_] = new Point(four, two)
+def end_point = new Point(four, two)
 
 println (get_x start_point)
 
 println (point_add start_point end_point)
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
 
 "#;
     println!("{}", run(input, 0).unwrap());
