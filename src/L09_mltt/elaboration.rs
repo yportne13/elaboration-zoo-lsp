@@ -209,9 +209,21 @@ impl Infer {
                 cases,
             } => {
                 let mut universe_lvl = 0;
+                for p in params.iter() {
+                    if let Ok((Tm::U(lvl), _)) = self.infer_expr(cxt, p.1.clone()) {
+                        universe_lvl = max(lvl, universe_lvl);
+                    }
+                }
+                for case in cases.iter() {
+                    for c in case.1.iter() {
+                        if let Ok((_, lvl)) = self.check_universe(cxt, c.clone()) {
+                            universe_lvl = max(lvl, universe_lvl);
+                        }
+                    }
+                }
                 let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
                 let sum = Raw::Sum(name.clone(), new_params.clone(), cases.clone());
-                let typ = params.iter().rev().fold(Raw::U(0), |a, b| {
+                let typ = params.iter().rev().fold(Raw::U(universe_lvl), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
                 let bod = params.iter().rev().fold(sum.clone(), |a, b| {
@@ -265,16 +277,12 @@ impl Infer {
                                 |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)),
                             );
                     cxt = {
-                        let (typ_tm, lvl) = self.check_universe(&cxt, typ)?;
-                        universe_lvl = max(universe_lvl, lvl);
+                        let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                         let vtyp = self.eval(&cxt.env, typ_tm.clone());
                         let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                         let vt = self.eval(&cxt.env, t_tm.clone());
                         cxt.define(c.0, t_tm, vt, typ_tm, vtyp)
                     };
-                }
-                if universe_lvl > 0 {
-                    panic!("this need recheck")
                 }
                 Ok((DeclTm::Enum {}, Val::U(0), cxt))
             }
@@ -284,9 +292,19 @@ impl Infer {
                 fields,
             } => {
                 let mut universe_lvl = 0;
+                for p in params.iter() {
+                    if let Ok((Tm::U(lvl), _)) = self.infer_expr(cxt, p.1.clone()) {
+                        universe_lvl = max(lvl, universe_lvl);
+                    }
+                }
+                for field in fields.iter() {
+                    if let Ok((_, lvl)) = self.check_universe(cxt, field.1.clone()) {
+                        universe_lvl = max(lvl, universe_lvl);
+                    }
+                }
                 let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
                 let sum = Raw::StructType(name.clone(), new_params.clone(), fields.clone());
-                let typ = params.iter().rev().fold(Raw::U(0), |a, b| {
+                let typ = params.iter().rev().fold(Raw::U(universe_lvl), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
                 let bod = params.iter().rev().fold(sum.clone(), |a, b| {
@@ -314,18 +332,13 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let cxt = {
-                    let (typ_tm, lvl) = self.check_universe(&cxt, typ)?;
-                    universe_lvl = max(universe_lvl, lvl);
+                    let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
                     let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     cxt.define(name.map(|x| format!("{x}.apply")), t_tm, vt, typ_tm, vtyp)
                 };
-                if universe_lvl > 0 {
-                    panic!("this need recheck")
-                }
-                //TODO:
                 Ok((DeclTm::Struct {}, Val::U(0), cxt))
             }
         }
@@ -543,6 +556,13 @@ impl Infer {
                         Ok(ty_checked)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                for case in cases.iter() {
+                    let (_, case_params) = case;
+                    for c in case_params {
+                        let (_, lvl) = self.check_universe(cxt, c.clone())?;
+                        universe = max(universe, lvl);
+                    }
+                }
                 //TODO: universe need to consider cases?
                 Ok((Tm::Sum(name, new_params, cases), Val::U(universe)))
             }

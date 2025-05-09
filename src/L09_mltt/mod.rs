@@ -526,6 +526,69 @@ def test0: Type 1 = Type 0
 
 def test1: Type 2 = Type 1 -> Type 0
 
+enum HighLvl[A] {
+    case1(A)
+    case2(test1)
+}
+
+def test2: HighLvl[Nat] = case1 zero
+
+def test3: Type 2 = HighLvl[Nat]
+
+enum HighLvl2[A: Type 2] {
+    case2_1(A)
+    case2_2(Nat)
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(Nat)
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
+
+"#;
+    println!("{}", run(input, 0).unwrap());
+    let input = r#"
+enum Nat {
+    zero
+    succ(Nat)
+}
+
+def test1: Type 2 = Type 1 -> Type 0
+
+struct HighLvl[A] {
+    case1: A
+    case2: test1
+}
+
+def test2: HighLvl[Nat] = new HighLvl(zero, Type 1 => Type 0)
+
+def test3: Type 2 = HighLvl[Nat]
+
+struct HighLvl2[A: Type 2] {
+    case2_1: A
+    case2_2: Nat
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = new HighLvl2(test2, zero)
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+struct HighLvl3[A: Type 2] {
+    case3_1: Nat
+    case3_2: Nat
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = new HighLvl3(zero, zero)
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
 "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");
