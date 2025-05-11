@@ -11,6 +11,7 @@ mod L06_string;
 mod L07_sum_type;
 mod L08_product_type;
 mod L09_mltt;
+mod L10_typeclass;
 
 fn main() {
     println!("Hello, world!");
