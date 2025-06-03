@@ -254,9 +254,8 @@ impl Infer {
                 let cxt = {
                     let typ_tm = self.check(cxt, typ, Val::U)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                    let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
-                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    let t_tm = self.check(cxt, bod, vtyp.clone())?;
+                    let vt = self.eval(&cxt.env, t_tm.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
 
@@ -305,7 +304,7 @@ impl Infer {
 
             Raw::Obj(x, t) => {
                 let (tm, a) = self.infer_expr(cxt, *x)?;
-                match (tm, a) {
+                match (tm, self.force(a)) {
                     (tm, Val::StructType(_, _, fields)) => {
                         Ok((
                             Tm::Obj(Box::new(tm), t.clone()),

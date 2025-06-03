@@ -93,7 +93,7 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             .map(|(head, tail)| {
                 let tail_len = tail.map(|t| t.len()).unwrap_or(0);
                 let ident = unsafe {
-                    head.data
+                    input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)
                 };
                 let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
