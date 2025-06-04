@@ -542,6 +542,16 @@ impl Infer {
                 }
                 Ok(())
             }
+            (
+                Val::SumCase { sum_name: a, case_name: ca, params: params_a, cases_name: _ },
+                Val::SumCase { sum_name: b, case_name: cb, params: params_b, cases_name: _ },
+            ) if a.data == b.data && ca.data == cb.data => {
+                // params_a.len() always equal to params_b.len()?
+                for (a, b) in params_a.iter().zip(params_b.iter()) {
+                    self.unify(l, cxt, a.clone(), b.clone())?;
+                }
+                Ok(())
+            }
             (Val::Sum(_, _, _), Val::Rigid(_, _)) => {
                 self.unify(l, cxt, t, self.eval(&cxt.env, self.quote(cxt.lvl, u)))
             }
