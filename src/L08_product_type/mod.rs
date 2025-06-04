@@ -522,6 +522,17 @@ println (get_x start_point)
 
 println (point_add start_point end_point)
 
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def get_name(x: Bits) = x.name
+
+def sigA = new Bits("A", four)
+
+println get_name sigA
+
 "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");

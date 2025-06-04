@@ -553,6 +553,16 @@ def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
 
 def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
 
+def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+struct Bits {
+    size: Nat
+}
+
+def get_name(x: Bits) = x.size
+
 "#;
     println!("{}", run(input, 0).unwrap());
     let input = r#"

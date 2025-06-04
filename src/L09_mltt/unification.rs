@@ -11,10 +11,10 @@ use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
-    occ: Option<MetaVar>,
+    pub occ: Option<MetaVar>,
     pub dom: Lvl,               // size of Γ
-    cod: Lvl,               // size of Δ
-    ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    pub cod: Lvl,               // size of Δ
+    pub ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
 }
 
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
@@ -236,7 +236,7 @@ impl Infer {
             }
         }
     }
-    fn rename(&mut self, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
+    pub fn rename(&mut self, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
         match self.force(t) {
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == m_prime => Err(UnifyError),
@@ -351,7 +351,7 @@ impl Infer {
             }
         }
     }
-    fn lams(&self, l: Lvl, a: VTy, t: Tm) -> Tm {
+    pub fn lams(&self, l: Lvl, a: VTy, t: Tm) -> Tm {
         self.lams_go(l, t, a, Lvl(0))
     }
     fn solve(&mut self, gamma: Lvl, m: MetaVar, sp: Spine, rhs: Val) -> Result<(), UnifyError> {

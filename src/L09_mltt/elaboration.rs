@@ -2,7 +2,7 @@ use std::{cmp::max, collections::HashMap};
 
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span, L09_mltt::{pattern_match::Compiler, MetaEntry}};
+use crate::{list::List, parser_lib::Span, L09_mltt::{pattern_match::Compiler, unification::PartialRenaming, MetaEntry}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
@@ -97,7 +97,18 @@ impl Infer {
                         _ => Err(Error(format!("meta type {:?} is not a universe", self.force(mty)))),
                     }
                 } else {
-                    Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
+                    let rhs = self.rename(
+                        &PartialRenaming {
+                            occ: Some(m),
+                            ..pren
+                        },
+                        Val::U(0),
+                    ).map_err(|_| Error("when check universe, try to rename failed".to_string()))?;
+                    let solution = self.eval(&List::new(), self.lams(pren.dom, mty.clone(), rhs));
+                    self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
+
+                    Ok((t_inferred, 0))
+                    //Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
                 }
             }
             _ => Err(Error(format!("expected universe, got {:?}", inferred_type))),
@@ -313,9 +324,8 @@ impl Infer {
                 let cxt = {
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                    let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
-                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    let t_tm = self.check(cxt, bod, vtyp.clone())?;
+                    let vt = self.eval(&cxt.env, t_tm.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
 
