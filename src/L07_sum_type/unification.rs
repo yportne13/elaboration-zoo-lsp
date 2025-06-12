@@ -292,6 +292,22 @@ impl Infer {
                     cases_name,
                 })
             }
+            Val::Match(val, env, cases) => {
+                let val = self.rename(pren, *val)?;
+                /*todo!();
+                let cases = cases
+                    .into_iter()
+                    .map(|(pat, tm)| {
+                        let body = self.rename(
+                            &lift(pren),
+                            self.closure_apply(&super::Closure(env.clone(), Box::new(tm)), Val::vvar(pren.cod)),
+                        )?;
+                        Ok((pat, body))
+                    })
+                    .collect::<Result<_, _>>()?;*/
+                //TODO:need rename?
+                Ok(Tm::Match(Box::new(val), cases))
+            }
         }
     }
     fn lams_go(&self, l: Lvl, t: Tm, a: VTy, l_prime: Lvl) -> Tm {
@@ -531,6 +547,44 @@ impl Infer {
             }
             (Val::Rigid(_, _), Val::Sum(_, _, _)) => {
                 self.unify(l, cxt, self.eval(&cxt.env, self.quote(cxt.lvl, t)), u)
+            }
+            // 在 unify 的 match (self.force(t), self.force(t_prime)) 中添加：
+            (Val::Match(s1, _, cases1), Val::Match(s2, _, cases2)) => {
+                // 1. 合一 scrutinees
+                self.unify(l, cxt, *s1.clone(), *s2.clone())?;
+
+                // 2. 检查分支数量是否相同
+                if cases1.len() != cases2.len() {
+                    return Err(UnifyError);
+                }
+
+                // 3. 遍历并合一每一个对应的分支
+                for ((p1, clos1), (p2, clos2)) in cases1.iter().zip(cases2.iter()) {
+                    // 3a. 检查模式是否完全相同。
+                    // 这里我们假设 Pattern 可以通过 `PartialEq` 进行比较。
+                    // 如果模式的结构更复杂（例如包含类型信息），你可能需要一个递归的模式合一函数。
+                    // 对于你目前的定义，`PartialEq` 应该是足够的。
+                    if p1 != p2 {
+                        return Err(UnifyError);
+                    }
+
+                    // 3b. 在扩展的上下文中合一分支的 body。这是最关键的一步。
+                    // 我们需要模拟进入 case 分支的作用域。
+                    let num_binders = p1.count_binders();
+
+                    // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
+                    // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。
+                    /*let body1_val = self.apply_match_closure(lvl, clos1.clone(), num_binders);
+                    let body2_val = self.apply_match_closure(lvl, clos2.clone(), num_binders);
+
+                    // 现在，我们在一个扩展了 num_binders 个变量的上下文中，对实例化后的 body进行合一。
+                    // 这个扩展的上下文是通过将 level 增加 num_binders 来表示的。
+                    self.unify(l + num_binders, cxt, body1_val, body2_val)?;*/
+                    //TODO:todo!()
+                }
+
+                // 如果所有检查都通过，则合一成功
+                Ok(())
             }
             _ => Err(UnifyError), // Rigid mismatch error
         }

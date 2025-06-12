@@ -117,6 +117,7 @@ enum Val {
         params: Vec<Val>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
+    Match(Box<Val>, Env, Vec<(Pattern, Tm)>),
 }
 
 type VTy = Val;
@@ -208,6 +209,23 @@ impl Infer {
         self.eval(&closure.0.prepend(u), *closure.1.clone())
     }
 
+    /*fn closure_apply_pats(&self, closure: &Closure, l: Lvl, pat: &Pattern) -> Val {
+        match pat {
+            Pattern::Any(_) => {
+                // 为这个绑定的变量创建一个新的 `Val::vvar(l)`
+                self.closure_apply(closure, Val::vvar(l))
+            }
+            Pattern::Con(_, sub_pats) => {
+                // 这是一个困难的部分，因为你需要同时为所有子模式应用绑定
+                // 简化的方法是假定 quote 时不需要深入 closure 内部
+                // 一个更简单的 `quote` 实现可能不需要这个函数
+                // 让我们简化 quote 的实现
+                let body_tm = self.quote(l + pat.count_binders(), closure.1.clone());
+                self.eval(&closure.0, body_tm)
+            }
+        }
+    }*/
+
     fn v_app(&self, t: Val, u: Val, i: Icit) -> Val {
         match t {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
@@ -294,8 +312,16 @@ impl Infer {
             }
             Tm::Match(tm, cases) => {
                 let val = self.eval(env, *tm);
-                let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
-                self.eval(&env, tm)
+                let val = self.force(val);
+                match val {
+                    neutral @ (Val::Rigid(..) | Val::Flex(..)) => {
+                        Val::Match(Box::new(neutral), env.clone(), cases)
+                    }
+                    val => {
+                        let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
+                        self.eval(&env, tm)
+                    }
+                }
             }
         }
     }
@@ -344,6 +370,21 @@ impl Infer {
                     params,
                     cases_name,
                 }
+            }
+            Val::Match(val, env, cases) => {
+                /*TODO:let tm_cases = cases
+                    .into_iter()
+                    .map(|(p, clos)| {
+                        let binders_count = p.count_binders();
+                        let body_tm = self.quote(l + binders_count, self.closure_apply_pats(&clos, l, &p));
+                        (p, body_tm)
+                    })
+                    .collect();*/
+                let tm_cases = cases
+                    .into_iter()
+                    .map(|x| (x.0, x.1))
+                    .collect();
+                Tm::Match(Box::new(self.quote(l, *val)), tm_cases)
             }
         }
     }
@@ -437,6 +478,12 @@ def add(x: Nat, y: Nat): Nat =
         case succ(n) => succ (add n y)
     }
 
+def mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
 def four = add two two
 
 println four
@@ -468,6 +515,13 @@ def is_false = map (some_four) (x => is_zero x)
 
 println "Option(false):"
 println is_false
+
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def refl[A : U, x: A]: Eq[A] x x = _ => px => px
+
+println mul two four
+
+def ck(x: Nat): Eq (add x x) (mul two x) = refl
 
 "#;
     println!("{}", run(input, 0).unwrap());
