@@ -296,6 +296,8 @@ fn test() {
     let input = r#"
 def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
 def refl[A : U, x: A]: Eq[A] x x = _ => px => px
+def symmetry [A : U] (a: A, b: A) (eqab : Eq a b) : Eq b a =
+  eqab (bb => (Eq bb a)) refl
 
 def the(A : U)(x: A): A = x
 

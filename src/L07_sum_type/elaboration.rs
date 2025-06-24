@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use colored::Colorize;
 
-use crate::{L07_sum_type::pattern_match::Compiler, list::List, parser_lib::Span};
+use crate::{list::List, parser_lib::Span, L07_sum_type::{parser::syntax::Pattern, pattern_match::Compiler, PatternDetail}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
@@ -405,7 +405,7 @@ impl Infer {
                     let t = clause
                         .into_iter()
                         .enumerate()
-                        .map(|(idx, x)| (x.0, tree.get(&idx).unwrap().clone()))
+                        .map(|(idx, x)| (pattern_to_detail(cxt, x.0), tree.get(&idx).unwrap().clone()))
                         .collect();
                     Ok((
                         Tm::Match(Box::new(tm), t),
@@ -454,6 +454,22 @@ impl Infer {
                     Val::Sum(sum_name, new_params, cases),
                 ))
             }
+        }
+    }
+}
+
+fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
+    match pattern {
+        Pattern::Any(name) => PatternDetail::Any(name),
+        Pattern::Con(name, params) if params.is_empty() && !cxt.src_names.contains_key(&name.data) => {
+            PatternDetail::Bind(name)
+        },
+        Pattern::Con(name, params) => {
+            let new_params = params
+                .into_iter()
+                .map(|x| pattern_to_detail(cxt, x))
+                .collect();
+            PatternDetail::Con(name, new_params)
         }
     }
 }

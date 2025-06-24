@@ -66,7 +66,26 @@ pub enum Tm {
         params: Vec<Tm>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
-    Match(Box<Tm>, Vec<(Pattern, Tm)>),
+    Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PatternDetail {
+    Any(Span<()>),
+    Bind(Span<String>),
+    Con(Span<String>, Vec<PatternDetail>),
+}
+
+impl PatternDetail {
+    fn bind_count(&self) -> u32 {
+        match self {
+            PatternDetail::Any(_) => 0,
+            PatternDetail::Bind(_) => 1,
+            PatternDetail::Con(_, pattern_details) => {
+                pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()
+            },
+        }
+    }
 }
 
 type Ty = Tm;
@@ -117,7 +136,7 @@ enum Val {
         params: Vec<Val>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
-    Match(Box<Val>, Env, Vec<(Pattern, Tm)>),
+    Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
 }
 
 type VTy = Val;
@@ -518,10 +537,20 @@ println is_false
 
 def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
 def refl[A : U, x: A]: Eq[A] x x = _ => px => px
+def symmetry [A : U] (a: A, b: A) (eqab : Eq a b) : Eq b a =
+  eqab (bb => (Eq bb a)) refl
 
 println mul two four
 
-def ck(x: Nat): Eq (add x x) (mul two x) = refl
+def three = add two (succ zero)
+
+def ck(x: Nat): Eq (add x x) (mul two x) =
+    match x {
+        case zero => refl
+        case succ(xx) => refl
+    }
+
+println "final"
 
 "#;
     println!("{}", run(input, 0).unwrap());

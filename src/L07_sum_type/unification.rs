@@ -549,7 +549,7 @@ impl Infer {
                 self.unify(l, cxt, self.eval(&cxt.env, self.quote(cxt.lvl, t)), u)
             }
             // 在 unify 的 match (self.force(t), self.force(t_prime)) 中添加：
-            (Val::Match(s1, _, cases1), Val::Match(s2, _, cases2)) => {
+            (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
                 self.unify(l, cxt, *s1.clone(), *s2.clone())?;
 
@@ -568,9 +568,23 @@ impl Infer {
                         return Err(UnifyError);
                     }
 
-                    // 3b. 在扩展的上下文中合一分支的 body。这是最关键的一步。
-                    // 我们需要模拟进入 case 分支的作用域。
-                    let num_binders = p1.count_binders();
+                    let count = p1.bind_count();
+
+                    let env1 = (0..count).fold(env1.clone(), |env, idx| {
+                        env.prepend(Val::vvar(cxt.lvl + idx))
+                    });
+
+                    let env2 = (0..count).fold(env2.clone(), |env, idx| {
+                        env.prepend(Val::vvar(cxt.lvl + idx))
+                    });
+
+                    //let body1_val = self.eval(&bind_env, clos1.clone());
+                    //let body2_val = self.eval(&bind_env, clos2.clone());
+                    let body1_val = self.eval(&env1, clos1.clone());
+                    let body2_val = self.eval(&env2, clos2.clone());
+
+                    println!("   {:?}\n== {:?}", body1_val, body2_val);
+                    self.unify(l, cxt, body1_val, body2_val)?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
                     // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。

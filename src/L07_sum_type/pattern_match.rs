@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::parser_lib::{Span, ToSpan};
+use crate::{parser_lib::{Span, ToSpan}, L07_sum_type::PatternDetail};
 
 use super::{
     Env, Error, Infer, Lvl, Tm, Val,
@@ -366,7 +366,7 @@ impl Compiler {
         infer: &Infer,
         heads: Val,
         cxt: &Env,
-        arms: &[(Pattern, Tm)],
+        arms: &[(PatternDetail, Tm)],
     ) -> Option<(Tm, Env)> {
         let new_typ = match heads.clone() {
             rigid @ Val::Rigid(_, _) => {
@@ -390,8 +390,11 @@ impl Compiler {
 
         arms.iter()
             .filter_map(|(pattern, body)| match pattern {
-                Pattern::Any(_) => Some((body.clone(), cxt.clone())),
-                Pattern::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
+                PatternDetail::Any(_) => Some((body.clone(), cxt.clone())),
+                PatternDetail::Bind(_) => {
+                    Some((body.clone(), cxt.prepend(heads.clone())))
+                }
+                PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
                     /*if cxt.src_names.contains_key(&constr_.data) {
                         //return Err(Error(format!("match fail: {:?}", constr_)))
                         todo!()
@@ -402,10 +405,10 @@ impl Compiler {
                         Some((body.clone(), cxt.prepend(heads.clone())))
                     }
                 }
-                Pattern::Con(constr_, item_pats) if constr_ == &case_name => {
+                PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
                     params.iter().zip(item_pats.iter()).try_fold(
                         (body.clone(), cxt.clone()),
-                        |(body, cxt), (param, pat): (&Val, &Pattern)| {
+                        |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
                             Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
                         },
                     )
