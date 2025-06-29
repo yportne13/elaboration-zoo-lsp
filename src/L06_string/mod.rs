@@ -11,6 +11,7 @@ mod elaboration;
 mod cxt;
 mod unification;
 mod syntax;
+mod pretty;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MetaVar(u32);
@@ -277,18 +278,38 @@ impl Infer {
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(input, path_id).unwrap();
+    let ast = parser::parser(&preprocess(input), path_id).unwrap();
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
-            ret += &format!("{:?}", infer.nf(&cxt.env, x));
+            //ret += &format!("{:?}", infer.nf(&cxt.env, x));
+            ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.env, x));
             ret += "\n";
         }
     }
     Ok(ret)
+}
+
+pub fn preprocess(s: &str) -> String {
+    let s = s.split("/*")
+        .map(|x| {
+            x.split_once("*/")
+                .map(|(a, b)| a.replace(|c: char| !c.is_whitespace(), " ") + "  " + b)
+                .unwrap_or(x.to_owned())
+        })
+        .reduce(|a, b| a + "  " + &b)
+        .unwrap_or(s.to_owned());
+    s.lines()
+        .map(|x| {
+            x.split_once("//")
+                .map(|(a, b)| a.to_owned() + "  " + &b.replace(|c: char| !c.is_whitespace(), " "))
+                .unwrap_or(x.to_owned())
+        })
+        .reduce(|a, b| a + "\n" + &b)
+        .unwrap_or(s.to_owned())
 }
 
 #[test]
@@ -328,6 +349,11 @@ def add_tail(x: String): String = string_concat x "!"
 
 def mystr2 = add_tail mystr
 
+/*
+multi line comment
+*/
+
+//final
 println mystr2
 
 "#;

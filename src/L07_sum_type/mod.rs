@@ -13,6 +13,7 @@ mod parser;
 mod pattern_match;
 mod syntax;
 mod unification;
+mod pretty;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MetaVar(u32);
@@ -441,18 +442,38 @@ impl Infer {
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(input, path_id).unwrap();
+    let ast = parser::parser(&preprocess(input), path_id).unwrap();
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
-            ret += &format!("{:?}", infer.nf(&cxt.env, x));
+            //ret += &format!("{:?}", infer.nf(&cxt.env, x));
+            ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.env, x));
             ret += "\n";
         }
     }
     Ok(ret)
+}
+
+pub fn preprocess(s: &str) -> String {
+    let s = s.split("/*")
+        .map(|x| {
+            x.split_once("*/")
+                .map(|(a, b)| a.replace(|c: char| !c.is_whitespace(), " ") + "  " + b)
+                .unwrap_or(x.to_owned())
+        })
+        .reduce(|a, b| a + "  " + &b)
+        .unwrap_or(s.to_owned());
+    s.lines()
+        .map(|x| {
+            x.split_once("//")
+                .map(|(a, b)| a.to_owned() + "  " + &b.replace(|c: char| !c.is_whitespace(), " "))
+                .unwrap_or(x.to_owned())
+        })
+        .reduce(|a, b| a + "\n" + &b)
+        .unwrap_or(s.to_owned())
 }
 
 #[test]
@@ -532,7 +553,7 @@ def some_four = Some four
 
 def is_false = map (some_four) (x => is_zero x)
 
-println "Option(false):"
+println "Option(false) is"
 println is_false
 
 def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
@@ -540,15 +561,15 @@ def refl[A : U, x: A]: Eq[A] x x = _ => px => px
 def symmetry [A : U] (a: A, b: A) (eqab : Eq a b) : Eq b a =
   eqab (bb => (Eq bb a)) refl
 
-println mul two four
+println (mul two four)
 
 def three = add two (succ zero)
 
-def ck(x: Nat): Eq (add x x) (mul two x) =
+/*def ck(x: Nat): Eq (add x x) (mul two x) =
     match x {
         case zero => refl
         case succ(xx) => refl
-    }
+    }*/
 
 println "final"
 

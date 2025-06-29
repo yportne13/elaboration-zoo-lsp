@@ -18,16 +18,6 @@ pub enum Pattern {
     Con(Span<String>, Vec<Pattern>),
 }
 
-impl Pattern {
-    pub fn count_binders(&self) -> u32 {
-        match self {
-            Pattern::Any(_) => 1, // 假设 Any 绑定一个变量
-            Pattern::Con(_, pats) => pats.iter().map(|p| p.count_binders()).sum(),
-            // 如果有 Pattern::Var, 也是返回 1
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub enum Raw {
     Var(Span<String>),

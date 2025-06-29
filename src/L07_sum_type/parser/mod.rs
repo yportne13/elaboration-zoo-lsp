@@ -15,7 +15,7 @@ pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
         end_offset: input.len() as u32,
         path_id: id,
     })
-    .and_then(|(_, ret)| p_decl.many1_sep(kw(EndLine)).parse(&ret).map(|x| x.1))
+    .and_then(|(_, ret)| p_decl.many1_sep(kw(EndLine).many1()).parse(&ret).map(|x| x.1))
 }
 
 macro_rules! T {
@@ -294,7 +294,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
     (
         kw(EnumKeyword),
         string(Ident),
-        p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
+        p_pi_binder.option().map(|x| x.unwrap_or_default()),
         brace(
             (
                 string(Ident),

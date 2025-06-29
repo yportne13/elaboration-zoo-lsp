@@ -92,6 +92,17 @@ impl Cxt {
         }
     }
 
+    pub fn names(&self) -> List<String> {
+        fn go(locals: &Locals) -> List<String> {
+            match locals {
+                Locals::Here => List::new(),
+                Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
+                Locals::Bind(locals, name, _) => go(locals).prepend(name.data.clone()),
+            }
+        }
+        go(&self.locals)
+    }
+
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
