@@ -78,9 +78,9 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 Icit::Impl => bracket(x),
             };
 
-            let body_printer = format!(". {}", pretty_tm(LETP, new_ns, &body));
+            let body_printer = format!("=> {}", pretty_tm(LETP, new_ns, body));
 
-            let ret = format!("λ {binder}{body_printer}");
+            let ret = format!("{binder}{body_printer}");
             if need_paren {
                 paren(ret)
             } else {
@@ -93,7 +93,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             let is_anonymous = name_span.data == "_" || matches!(i, Icit::Impl);
             if is_anonymous {
                 let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns, b);
+                let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
                 let ret = format!("{f_a} → {f_b}");
                 if need_paren {
                     paren(ret)

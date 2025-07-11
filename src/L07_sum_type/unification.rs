@@ -1,6 +1,6 @@
 use colored::Colorize;
 
-use crate::{L07_sum_type::empty_span, list::List};
+use crate::{list::List, L07_sum_type::{empty_span, pretty::pretty_tm}};
 
 use super::{
     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
@@ -479,6 +479,11 @@ impl Infer {
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
         let t = self.force(t);
         let u = self.force(u);
+        println!(
+            "uni {}\n == {}",
+            pretty_tm(0, cxt.names(), &self.quote(l, t.clone())),
+            pretty_tm(0, cxt.names(), &self.quote(l, u.clone())),
+        );
 
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
@@ -486,7 +491,7 @@ impl Infer {
                 self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
                 self.unify(
                     l + 1,
-                    cxt,
+                    &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a.clone()),
                     self.closure_apply(&b, Val::vvar(l)),
                     self.closure_apply(&b_prime, Val::vvar(l)),
                 )
@@ -542,12 +547,12 @@ impl Infer {
                 }
                 Ok(())
             }
-            (Val::Sum(_, _, _), Val::Rigid(_, _)) => {
-                self.unify(l, cxt, t, self.eval(&cxt.env, self.quote(cxt.lvl, u)))
+            /*(Val::Sum(_, _, _), Val::Rigid(_, _)) => {
+                self.unify(l, cxt, t, self.eval(&cxt.env, self.quote(l, u)))
             }
             (Val::Rigid(_, _), Val::Sum(_, _, _)) => {
-                self.unify(l, cxt, self.eval(&cxt.env, self.quote(cxt.lvl, t)), u)
-            }
+                self.unify(l, cxt, self.eval(&cxt.env, self.quote(l, t)), u)
+            }*/
             // 在 unify 的 match (self.force(t), self.force(t_prime)) 中添加：
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
@@ -570,20 +575,31 @@ impl Infer {
 
                     let count = p1.bind_count();
 
+                    let lvl1 = Lvl(env1.iter().count() as u32);
+                    let lvl2 = Lvl(env2.iter().count() as u32);
                     let env1 = (0..count).fold(env1.clone(), |env, idx| {
-                        env.prepend(Val::vvar(cxt.lvl + idx))
+                        env.prepend(Val::vvar(lvl1 + idx))
                     });
 
                     let env2 = (0..count).fold(env2.clone(), |env, idx| {
-                        env.prepend(Val::vvar(cxt.lvl + idx))
+                        env.prepend(Val::vvar(lvl2 + idx))
                     });
 
+                    println!(
+                        "unify {:?}\n   == {:?}",
+                        pretty_tm(0, cxt.names(), clos1),
+                        pretty_tm(0, cxt.names(), clos2),
+                    );
                     //let body1_val = self.eval(&bind_env, clos1.clone());
                     //let body2_val = self.eval(&bind_env, clos2.clone());
                     let body1_val = self.eval(&env1, clos1.clone());
                     let body2_val = self.eval(&env2, clos2.clone());
 
-                    println!("   {:?}\n== {:?}", body1_val, body2_val);
+                    println!(
+                        "-> {:?}\n== {:?}",
+                        pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
+                        pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
+                    );
                     self.unify(l, cxt, body1_val, body2_val)?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
