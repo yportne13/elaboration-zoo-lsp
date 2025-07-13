@@ -15,7 +15,17 @@ pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
         end_offset: input.len() as u32,
         path_id: id,
     })
-    .and_then(|(_, ret)| p_decl.many1_sep(kw(EndLine).many1()).parse(&ret).map(|x| x.1))
+    .and_then(|(_, ret)| {
+        p_decl
+            .many1_sep(kw(EndLine).many1())
+            .parse(&ret)
+            .map(|x| {
+                if !x.0.is_empty() {
+                    panic!("unexpected token: {:?}", x.0);
+                }
+                x.1
+            })
+    })
 }
 
 macro_rules! T {
@@ -37,6 +47,7 @@ macro_rules! T {
     [->] => { $crate::L07_sum_type::parser::TokenKind::Arrow };
     [=>] => { $crate::L07_sum_type::parser::TokenKind::DoubleArrow };
     ['\\'] => { $crate::L07_sum_type::parser::TokenKind::Lambda };
+    [:=] => { $crate::L07_sum_type::parser::TokenKind::AssignEq };
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
@@ -294,13 +305,25 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
     (
         kw(EnumKeyword),
         string(Ident),
-        p_pi_binder.option().map(|x| x.unwrap_or_default()),
+        p_pi_binder
+            .many0()
+            .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         brace(
             (
                 string(Ident),
-                paren(p_raw.many0_sep(kw(T![,])))
+                p_pi_binder
+                    .many0()
+                    .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
+                /*paren(p_raw.many0_sep(kw(T![,])))
                     .option()
-                    .map(|x| x.unwrap_or_default()),
+                    .map(|x| x.unwrap_or_default()),*/
+                paren(
+                    (string(Ident), kw(T![:=]), p_raw)
+                    .map(|x| (x.0, x.2))
+                    .many1_sep(kw(T![,]))
+                )
+                    .option()
+                    .map(|x| x.unwrap_or(vec![]))
             )
                 .many1_sep(kw(EndLine)),
         ),

@@ -167,7 +167,7 @@ impl Compiler {
                         _ => {
                             //let idx = arms[0].1;
                             //self.reachable.insert(idx, ());
-                            (empty_span("$unknown$".to_owned()), vec![(empty_span("$unknown$".to_owned()), vec![])])
+                            (empty_span("$unknown$".to_owned()), vec![(empty_span("$unknown$".to_owned()), vec![], vec![])])
                         }
                     };
 
@@ -178,7 +178,7 @@ impl Compiler {
 
                     let decision_tree_branches = constrs
                         .iter()
-                        .map(|(constr, item_typs)| {
+                        .map(|(constr, item_typs, ret_bind)| {
                             let new_heads = item_typs
                                 .iter()
                                 .map(|typ| {

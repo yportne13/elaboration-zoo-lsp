@@ -4,7 +4,7 @@ use parser::syntax::{Either, Icit, Pattern, Raw};
 use pattern_match::{Compiler, DecisionTree};
 use syntax::{Pruning, close_ty};
 
-use crate::list::List;
+use crate::{list::List, L07_sum_type::pretty::pretty_tm};
 use crate::parser_lib::Span;
 
 mod cxt;
@@ -16,7 +16,7 @@ mod unification;
 mod pretty;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct MetaVar(u32);
+pub struct MetaVar(u32);
 
 #[derive(Debug)]
 enum MetaEntry {
@@ -25,7 +25,7 @@ enum MetaEntry {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Ix(u32);
+pub struct Ix(u32);
 
 #[derive(Debug, Clone)]
 enum BD {
@@ -60,7 +60,7 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Raw>)>),
+    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -112,7 +112,7 @@ type Env = List<Val>;
 type Spine = List<(Val, Icit)>;
 
 #[derive(Clone)]
-struct Closure(Env, Box<Tm>);
+pub struct Closure(Env, Box<Tm>);
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -121,7 +121,7 @@ impl std::fmt::Debug for Closure {
 }
 
 #[derive(Debug, Clone)]
-enum Val {
+pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
     Lam(Span<String>, Icit, Closure),
@@ -130,7 +130,7 @@ enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Raw>)>),
+    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
@@ -420,6 +420,12 @@ impl Infer {
 
     fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
         //println!("{:?} == {:?}", t, t_prime);
+        //println!("---------------");
+        //println!(
+        //    "unify {:?}\n   == {:?}",
+        //    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t.clone())),
+        //    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime.clone())),
+        //);
         self.unify(cxt.lvl, cxt, t.clone(), t_prime.clone())
             .map_err(|_| {
                 /*Error::CantUnify(
@@ -432,14 +438,15 @@ impl Infer {
                 //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
                 Error(format!(
                     "can't unify {:?} == {:?}",
-                    self.quote(cxt.lvl, t),
-                    self.quote(cxt.lvl, t_prime)
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
                 ))
                 //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             })
     }
 }
 
+#[allow(unused)]
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
@@ -486,12 +493,12 @@ enum Bool {
 
 enum Nat {
     zero
-    succ(Nat)
+    succ(x: Nat)
 }
 
 enum List[A] {
     nil
-    cons(A, List[A])
+    cons(head: A, tail: List[A])
 }
 
 def listid(x: List[Bool]): List[Bool] = x
@@ -539,7 +546,7 @@ println (is_zero zero)
 println (is_zero four)
 
 enum Option[T] {
-    Some(T)
+    Some(t: T)
     None
 }
 
@@ -565,15 +572,38 @@ println (mul two four)
 
 def three = add two (succ zero)
 
-/*def ck(x: Nat): Eq (add x x) (mul two x) =
+def ck(x: Nat): Eq (add x x) (mul two x) =
     match x {
-        case zero => refl
-        case succ(xx) => refl
-    }*/
+        case zero => refl[Nat][zero]
+        case succ(xx) => _
+    }
 
 println "final"
 
 "#;
+    println!("{}", run(input, 0).unwrap());
+    println!("success");
+}
+
+#[test]
+fn test_index() {
+    let input = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A](x := a, y := a)
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def test: Eq two two = refl
+    
+    "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");
 }

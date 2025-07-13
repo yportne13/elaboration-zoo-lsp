@@ -201,7 +201,14 @@ impl Infer {
                 cases,
             } => {
                 let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
-                let sum = Raw::Sum(name.clone(), new_params.clone(), cases.clone());
+                let sum = Raw::Sum(
+                    name.clone(),
+                    new_params.clone(),
+                    cases.clone()
+                        .into_iter()
+                        .map(|x| (x.0, x.1.into_iter().map(|x| x.1).collect(), x.2))
+                        .collect(),
+                );
                 let typ = params.iter().rev().fold(Raw::U, |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
@@ -217,42 +224,70 @@ impl Infer {
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 for c in cases.clone() {
+                    let typ_ret = c.2.iter()
+                        .rev()
+                        .fold(sum.clone(), |ret, x| Raw::Let(
+                            x.0.clone(),
+                            Box::new(Raw::Hole),
+                            Box::new(x.1.clone()),
+                            Box::new(ret),
+                        ));
                     let typ =
                         params
                             .iter()
+                            .filter(|x| match x.2 {
+                                Icit::Impl => true,
+                                Icit::Expl => false,
+                            })
                             .cloned()
-                            .chain(c.1.iter().enumerate().map(|(idx, x)| {
+                            .chain(c.1.clone().into_iter()/*.enumerate().map(|(idx, x)| {
                                 (empty_span(format!("_{idx}")), x.clone(), Icit::Expl)
-                            }))
+                            })*/)
                             .rev()
-                            .fold(sum.clone(), |a, b| {
+                            .fold(typ_ret, |a, b| {
                                 Raw::Pi(b.0, b.2, Box::new(b.1), Box::new(a))
                             });
-                    let bod =
-                        params
-                            .iter()
-                            .cloned()
-                            .chain(c.1.iter().enumerate().map(|(idx, x)| {
-                                (empty_span(format!("_{idx}")), x.clone(), Icit::Expl)
-                            }))
-                            .rev()
-                            .fold(
-                                Raw::SumCase {
+                    let body_ret_type = Raw::SumCase {
                                     sum_name: name.clone(),
                                     params: new_params.clone(),
-                                    cases: cases.clone(),
+                                    cases: cases
+                                        .clone()
+                                        .into_iter()
+                                        .map(|x| (x.0, x.1.into_iter().map(|x| x.1).collect(), x.2))
+                                        .collect(),
                                     case_name: c.0.clone(),
                                     datas: params
                                         .iter()
                                         .map(|x| x.0.clone())
                                         .chain(
                                             c.1.iter()
-                                                .enumerate()
-                                                .map(|(idx, _)| empty_span(format!("_{idx}"))),
+                                                .map(|(name, _, _)| name.clone()),
                                         )
                                         .map(Raw::Var)
                                         .collect(),
-                                },
+                                };
+                    let body_ret_type = c.2.into_iter()
+                        .rev()
+                        .fold(body_ret_type, |ret, x| Raw::Let(
+                            x.0,
+                            Box::new(Raw::Hole),
+                            Box::new(x.1),
+                            Box::new(ret),
+                        ));
+                    let bod =
+                        params
+                            .iter()
+                            .filter(|x| match x.2 {
+                                Icit::Impl => true,
+                                Icit::Expl => false,
+                            })
+                            .cloned()
+                            .chain(c.1.clone().into_iter()/*.enumerate().map(|(idx, x)| {
+                                (empty_span(format!("_{idx}")), x.clone(), Icit::Expl)
+                            })*/)
+                            .rev()
+                            .fold(
+                                body_ret_type,
                                 |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)),
                             );
                     cxt = {
@@ -424,7 +459,7 @@ impl Infer {
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
+                        let (ty_checked, _) = self.infer_expr(cxt, ty.clone())?;
                         Ok(ty_checked)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -441,7 +476,7 @@ impl Infer {
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let ty_checked = self.check(cxt, ty.clone(), Val::U)?;
+                        let (ty_checked, _) = self.infer_expr(cxt, ty.clone())?;
                         let ty_checked = self.eval(&cxt.env, ty_checked);
                         Ok(ty_checked)
                     })

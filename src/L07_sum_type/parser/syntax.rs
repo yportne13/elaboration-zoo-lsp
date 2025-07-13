@@ -29,11 +29,11 @@ pub enum Raw {
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<Raw>, Vec<(Span<String>, Vec<Raw>)>),
+    Sum(Span<String>, Vec<Raw>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         params: Vec<Raw>,
-        cases: Vec<(Span<String>, Vec<Raw>)>,
+        cases: Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>,
         case_name: Span<String>,
         datas: Vec<Raw>,
     },
@@ -51,6 +51,6 @@ pub enum Decl {
     Enum {
         name: Span<String>,
         params: Vec<(Span<String>, Raw, Icit)>,
-        cases: Vec<(Span<String>, Vec<Raw>)>,
+        cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Raw)>)>,
     },
 }

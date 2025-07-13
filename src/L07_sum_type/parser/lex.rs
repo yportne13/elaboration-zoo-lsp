@@ -27,6 +27,7 @@ pub enum TokenKind {
     DoubleArrow,
     Lambda,
     Comma,
+    AssignEq,
 
     Ident,
     Num,
@@ -54,7 +55,7 @@ const KEYWORD: [(&str, TokenKind); 7] = [
     ("case", CaseKeyword),
 ];
 
-const OP: [(&str, TokenKind); 15] = [
+const OP: [(&str, TokenKind); 16] = [
     ("_", Hole),
     ("(", LParen),
     (")", RParen),
@@ -70,6 +71,7 @@ const OP: [(&str, TokenKind); 15] = [
     ("->", Arrow),
     ("=>", DoubleArrow),
     ("\\", Lambda),
+    (":=", AssignEq),
 ];
 
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
