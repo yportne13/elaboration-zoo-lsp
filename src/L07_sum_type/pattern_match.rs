@@ -406,7 +406,7 @@ impl Compiler {
                     }
                 }
                 PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
-                    params.iter().zip(item_pats.iter()).try_fold(
+                    params.iter().map(|x| &x.1).zip(item_pats.iter()).try_fold(
                         (body.clone(), cxt.clone()),
                         |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
                             Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])

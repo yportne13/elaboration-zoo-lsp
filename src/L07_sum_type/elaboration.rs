@@ -200,7 +200,10 @@ impl Infer {
                 params,
                 cases,
             } => {
-                let new_params: Vec<_> = params.iter().map(|x| Raw::Var(x.0.clone())).collect();
+                let new_params: Vec<_> = params
+                    .iter()
+                    .map(|x| (x.0.clone(), Raw::Var(x.0.clone())))
+                    .collect();
                 let sum = Raw::Sum(
                     name.clone(),
                     new_params.clone(),
@@ -263,7 +266,7 @@ impl Infer {
                                             c.1.iter()
                                                 .map(|(name, _, _)| name.clone()),
                                         )
-                                        .map(Raw::Var)
+                                        .map(|x| (x.clone(), Raw::Var(x)))
                                         .collect(),
                                 };
                     let body_ret_type = c.2.into_iter()
@@ -318,6 +321,33 @@ impl Infer {
             Raw::Var(x) => match cxt.src_names.get(&x.data) {
                 Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), a.clone())),
                 None => Err(Error(format!("error name not in scope: {:?}", x))),
+            },
+
+            Raw::Obj(x, t) => {
+                let (tm, a) = self.infer_expr(cxt, *x)?;
+                match (tm, self.force(a)) {
+                    (tm, Val::Sum(_, params, _)) => {
+                        Ok((
+                            Tm::Obj(Box::new(tm), t.clone()),
+                            params
+                                .into_iter()
+                                .find(|(fields_name, _)| fields_name == &t)
+                                .map(|(_, ty)| ty)
+                                .ok_or_else(|| Error("error in obj".to_owned()))?
+                        ))
+                    }
+                    (tm, Val::SumCase { params, .. }) => {
+                        Ok((
+                            Tm::Obj(Box::new(tm), t.clone()),
+                            params
+                                .into_iter()
+                                .find(|(fields_name, _)| fields_name == &t)
+                                .map(|(_, ty)| ty)
+                                .ok_or_else(|| Error("error in obj".to_owned()))?
+                        ))
+                    }
+                    _ => Err(Error("error in obj".to_owned())),
+                }
             },
 
             // Infer lambda expressions
@@ -459,8 +489,8 @@ impl Infer {
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let (ty_checked, _) = self.infer_expr(cxt, ty.clone())?;
-                        Ok(ty_checked)
+                        let (ty_checked, _) = self.infer_expr(cxt, ty.1.clone())?;
+                        Ok((ty.0.clone(), ty_checked))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok((Tm::Sum(name, new_params, cases), Val::U))
@@ -476,14 +506,14 @@ impl Infer {
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let (ty_checked, _) = self.infer_expr(cxt, ty.clone())?;
+                        let (ty_checked, _) = self.infer_expr(cxt, ty.1.clone())?;
                         let ty_checked = self.eval(&cxt.env, ty_checked);
-                        Ok(ty_checked)
+                        Ok((ty.0.clone(), ty_checked))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let datas = datas
                     .into_iter()
-                    .map(|x| self.infer_expr(cxt, x).map(|x| x.0))
+                    .map(|x| self.infer_expr(cxt, x.1).map(|z| (x.0, z.0)))
                     .collect::<Result<_, _>>()?;
                 Ok((
                     Tm::SumCase {

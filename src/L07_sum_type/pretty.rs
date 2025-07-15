@@ -55,6 +55,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
+        Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
             let f_t = pretty_tm(APPP, ns.clone(), t);
@@ -141,7 +142,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             "{}{}",
             span.data,
             tms.iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), tm))
+                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
                 .reduce(|acc, x| acc + ", " + &x)
                 .map(|x| format!("[{x}]"))
                 .unwrap_or("".to_owned()),
@@ -152,7 +153,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             case_name.data,
             params
                 .iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), tm))
+                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
                 .reduce(|acc, x| acc + ", " + &x)
                 .map(|x| format!("({x})"))
                 .unwrap_or("".to_owned()),

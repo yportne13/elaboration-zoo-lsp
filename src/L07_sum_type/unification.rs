@@ -249,6 +249,9 @@ impl Infer {
                     self.rename_sp(pren, t, &sp)
                 }
             },
+            Val::Obj(x, name) => Ok(Tm::Obj(Box::new(
+                self.rename(pren, *x)?
+            ), name.clone())),
             Val::Lam(x, i, closure) => {
                 let t = self.rename(
                     &lift(pren),
@@ -271,7 +274,7 @@ impl Infer {
             Val::Sum(x, params, cases) => {
                 let new_params = params
                     .into_iter()
-                    .map(|x| self.rename(pren, x))
+                    .map(|x| self.rename(pren, x.1).map(|z| (x.0, z)))
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::Sum(x, new_params, cases))
             }
@@ -283,7 +286,7 @@ impl Infer {
             } => {
                 let params = params
                     .into_iter()
-                    .map(|p| self.rename(pren, p))
+                    .map(|p| self.rename(pren, p.1).map(|z| (p.0, z)))
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
                     sum_name,
@@ -533,7 +536,7 @@ impl Infer {
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.clone(), b.clone())?;
+                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
                 }
                 Ok(())
             }
@@ -543,7 +546,7 @@ impl Infer {
             ) if a.data == b.data && ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.clone(), b.clone())?;
+                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
                 }
                 Ok(())
             }

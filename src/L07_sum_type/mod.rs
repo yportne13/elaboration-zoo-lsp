@@ -50,6 +50,7 @@ pub enum DeclTm {
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
+    Obj(Box<Tm>, Span<String>),
     Lam(Span<String>, Icit, Box<Tm>),
     App(Box<Tm>, Box<Tm>, Icit),
     AppPruning(Box<Tm>, Pruning),
@@ -60,11 +61,11 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Ty>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Ty)>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
-        params: Vec<Tm>,
+        params: Vec<(Span<String>, Tm)>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
     Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
@@ -124,17 +125,18 @@ impl std::fmt::Debug for Closure {
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
+    Obj(Box<Val>, Span<String>),
     Lam(Span<String>, Icit, Closure),
     Pi(Span<String>, Icit, Box<VTy>, Closure),
     U,
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<Val>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Val)>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         case_name: Span<String>,
-        params: Vec<Val>,
+        params: Vec<(Span<String>, Val)>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
     Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
@@ -289,6 +291,24 @@ impl Infer {
                 Some(v) => v.clone(),
                 None => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
             },
+            Tm::Obj(tm, name) => {
+                match self.eval(env, *tm) {
+                    Val::Sum(_, params, _) => {
+                        params.into_iter()
+                            .find(|(f_name, _)| f_name == &name)
+                            .unwrap().1
+                    },
+                    Val::SumCase { params, .. } => {
+                        params.into_iter()
+                            .find(|(f_name, _)| f_name == &name)
+                            .unwrap().1
+                    },
+                    x @ Val::Rigid(_, _) => {
+                        Val::Obj(Box::new(x), name)
+                    }
+                    x => panic!("impossible {x:?}"),
+                }
+            }
             Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
             Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
             Tm::Pi(x, i, a, b) => {
@@ -312,7 +332,7 @@ impl Infer {
             Tm::Sum(name, params, cases) => {
                 let new_params = params
                     .into_iter()
-                    .map(|x| self.eval(&env.clone(), x))
+                    .map(|x| (x.0, self.eval(&env.clone(), x.1)))
                     .collect();
                 Val::Sum(name, new_params, cases)
             }
@@ -322,7 +342,7 @@ impl Infer {
                 params,
                 cases_name,
             } => {
-                let params = params.into_iter().map(|p| self.eval(env, p)).collect();
+                let params = params.into_iter().map(|p| (p.0, self.eval(env, p.1))).collect();
                 Val::SumCase {
                     sum_name,
                     case_name,
@@ -358,6 +378,7 @@ impl Infer {
         match t {
             Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
+            Val::Obj(x, name) => Tm::Obj(Box::new(self.quote(l, *x)), name),
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
@@ -374,7 +395,7 @@ impl Infer {
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
             Val::Sum(name, params, cases) => {
-                let new_params = params.into_iter().map(|x| self.quote(l, x)).collect();
+                let new_params = params.into_iter().map(|x| (x.0, self.quote(l, x.1))).collect();
                 Tm::Sum(name, new_params, cases)
             }
             Val::SumCase {
@@ -383,7 +404,7 @@ impl Infer {
                 params,
                 cases_name,
             } => {
-                let params = params.into_iter().map(|p| self.quote(l, p)).collect();
+                let params = params.into_iter().map(|p| (p.0, self.quote(l, p.1))).collect();
                 Tm::SumCase {
                     sum_name,
                     case_name,
@@ -603,6 +624,20 @@ def three = succ (succ (succ zero))
 
 def test: Eq two two = refl
     
+enum Vec[A](len: Nat) {
+    nil(len := zero)
+    cons[l: Nat](x: A, xs: Vec[A] l)(len := (succ l))
+}
+
+def t = cons zero (cons two (cons three (cons two nil)))
+
+println t.len
+
+def head[T, l: Nat](x: Vec[T] (succ l)): T =
+    match x {
+        case cons(x, _) => x
+    }
+
     "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");

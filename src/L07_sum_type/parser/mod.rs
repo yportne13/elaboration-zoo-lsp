@@ -92,13 +92,22 @@ where
         .map(|c| c.2)
 }
 
-fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     string(Ident)
         .map(Raw::Var)
         .or(kw(UKeyword).map(|_| Raw::U))
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
         .or(paren(p_raw))
+        .parse(input)
+}
+
+fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+    (p_atom1, (kw(T![.]), string(Ident)).option())
+        .map(|(x, t)| match t {
+            Some((_, t)) => Raw::Obj(Box::new(x), t),
+            None => x,
+        })
         .parse(input)
 }
 

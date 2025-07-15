@@ -21,6 +21,7 @@ pub enum Pattern {
 #[derive(Clone, Debug)]
 pub enum Raw {
     Var(Span<String>),
+    Obj(Box<Raw>, Span<String>),
     Lam(Span<String>, Either, Box<Raw>),
     App(Box<Raw>, Box<Raw>, Either),
     U,
@@ -29,13 +30,13 @@ pub enum Raw {
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<Raw>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Raw)>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
-        params: Vec<Raw>,
+        params: Vec<(Span<String>, Raw)>,
         cases: Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>,
         case_name: Span<String>,
-        datas: Vec<Raw>,
+        datas: Vec<(Span<String>, Raw)>,
     },
 }
 
