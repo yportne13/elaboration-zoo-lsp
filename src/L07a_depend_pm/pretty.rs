@@ -147,7 +147,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 .map(|x| format!("[{x}]"))
                 .unwrap_or("".to_owned()),
         ),
-        Tm::SumCase { sum_name, case_name, params, cases_name: _ } => format!(
+        Tm::SumCase { sum_name, global_params: _, case_name, params, cases_name: _ } => format!(
             "{}::{}{}",
             sum_name.data,
             case_name.data,

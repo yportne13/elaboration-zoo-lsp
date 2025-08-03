@@ -274,22 +274,36 @@ impl Infer {
             Val::Sum(x, params, cases) => {
                 let new_params = params
                     .into_iter()
-                    .map(|x| self.rename(pren, x.1).map(|z| (x.0, z)))
+                    .map(|x| match (self.rename(pren, x.1), self.rename(pren, x.2)) {
+                        (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
+                        (Err(x), _) | (_, Err(x)) => Err(x),
+                    })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::Sum(x, new_params, cases))
             }
             Val::SumCase {
                 sum_name,
+                global_params,
                 case_name,
                 params,
                 cases_name,
             } => {
+                let global_params = global_params
+                    .into_iter()
+                    .map(|x| {
+                        match (self.rename(pren, x.1), self.rename(pren, x.2)) {
+                            (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
+                            (Err(e), _) | (_, Err(e)) => Err(e),
+                        }
+                    })
+                    .collect::<Result<_, _>>()?;
                 let params = params
                     .into_iter()
-                    .map(|p| self.rename(pren, p.1).map(|z| (p.0, z)))
+                    .map(|p| self.rename(pren, p.1).map(|z| (p.0, z, p.2)))
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
                     sum_name,
+                    global_params,
                     case_name,
                     params,
                     cases_name,
@@ -482,11 +496,11 @@ impl Infer {
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
         let t = self.force(t);
         let u = self.force(u);
-        println!(
+        /*println!(
             "uni {}\n == {}",
             pretty_tm(0, cxt.names(), &self.quote(l, t.clone())),
             pretty_tm(0, cxt.names(), &self.quote(l, u.clone())),
-        );
+        );*/
 
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
@@ -541,8 +555,8 @@ impl Infer {
                 Ok(())
             }
             (
-                Val::SumCase { sum_name: a, case_name: ca, params: params_a, cases_name: _ },
-                Val::SumCase { sum_name: b, case_name: cb, params: params_b, cases_name: _ },
+                Val::SumCase { sum_name: a, global_params: _, case_name: ca, params: params_a, cases_name: _ },
+                Val::SumCase { sum_name: b, global_params: _, case_name: cb, params: params_b, cases_name: _ },
             ) if a.data == b.data && ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

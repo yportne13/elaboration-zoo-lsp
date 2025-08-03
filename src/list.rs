@@ -25,6 +25,10 @@ impl<T> List<T> {
         List { head: None }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.head.is_none()
+    }
+
     pub fn prepend(&self, elem: T) -> List<T> {
         List { head: Some(Rc::new(Node {
             elem,

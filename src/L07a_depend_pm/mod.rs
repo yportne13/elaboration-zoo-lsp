@@ -15,6 +15,7 @@ mod pattern_match;
 mod syntax;
 mod unification;
 mod pretty;
+mod subst;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -62,11 +63,12 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<(Span<String>, Ty)>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<(Span<String>, Vec<(Raw, Icit)>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
+        global_params: Vec<(Span<String>, Tm, Ty, Icit)>,
         case_name: Span<String>,
-        params: Vec<(Span<String>, Tm)>,
+        params: Vec<(Span<String>, Tm, Icit)>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
     Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
@@ -93,7 +95,7 @@ impl PatternDetail {
 
 type Ty = Tm;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub struct Lvl(u32);
 
 impl Add<u32> for Lvl {
@@ -133,11 +135,12 @@ pub enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<(Span<String>, Val)>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Val, VTy, Icit)>, Vec<(Span<String>, Vec<(Raw, Icit)>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
+        global_params: Vec<(Span<String>, Val, VTy, Icit)>,
         case_name: Span<String>,
-        params: Vec<(Span<String>, Val)>,
+        params: Vec<(Span<String>, Val, Icit)>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
     Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
@@ -296,12 +299,12 @@ impl Infer {
                 match self.eval(env, *tm) {
                     Val::Sum(_, params, _) => {
                         params.into_iter()
-                            .find(|(f_name, _)| f_name == &name)
+                            .find(|(f_name, _, _, _)| f_name == &name)
                             .unwrap().1
                     },
                     Val::SumCase { params, .. } => {
                         params.into_iter()
-                            .find(|(f_name, _)| f_name == &name)
+                            .find(|(f_name, _, _)| f_name == &name)
                             .unwrap().1
                     },
                     x @ Val::Rigid(_, _) => {
@@ -333,19 +336,25 @@ impl Infer {
             Tm::Sum(name, params, cases) => {
                 let new_params = params
                     .into_iter()
-                    .map(|x| (x.0, self.eval(&env.clone(), x.1)))
+                    .map(|x| (x.0, self.eval(&env.clone(), x.1), self.eval(&env.clone(), x.2), x.3))
                     .collect();
                 Val::Sum(name, new_params, cases)
             }
             Tm::SumCase {
                 sum_name,
+                global_params,
                 case_name,
                 params,
                 cases_name,
             } => {
-                let params = params.into_iter().map(|p| (p.0, self.eval(env, p.1))).collect();
+                let global_params = global_params
+                    .into_iter()
+                    .map(|x| (x.0, self.eval(&env.clone(), x.1), self.eval(&env.clone(), x.2), x.3))
+                    .collect();
+                let params = params.into_iter().map(|p| (p.0, self.eval(env, p.1), p.2)).collect();
                 Val::SumCase {
                     sum_name,
+                    global_params,
                     case_name,
                     params,
                     cases_name,
@@ -396,18 +405,24 @@ impl Infer {
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
             Val::Sum(name, params, cases) => {
-                let new_params = params.into_iter().map(|x| (x.0, self.quote(l, x.1))).collect();
+                let new_params = params.into_iter().map(|x| (x.0, self.quote(l, x.1), self.quote(l, x.2), x.3)).collect();
                 Tm::Sum(name, new_params, cases)
             }
             Val::SumCase {
                 sum_name,
+                global_params,
                 case_name,
                 params,
                 cases_name,
             } => {
-                let params = params.into_iter().map(|p| (p.0, self.quote(l, p.1))).collect();
+                let global_params = global_params
+                    .into_iter()
+                    .map(|x| (x.0, self.quote(l, x.1), self.quote(l, x.2), x.3))
+                    .collect();
+                let params = params.into_iter().map(|p| (p.0, self.quote(l, p.1), p.2)).collect();
                 Tm::SumCase {
                     sum_name,
+                    global_params,
                     case_name,
                     params,
                     cases_name,
@@ -458,6 +473,11 @@ impl Infer {
                 //println!("{:?} == {:?}", t, t_prime);
                 //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t.clone())));
                 //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
+                /*panic!(
+                    "can't unify {:?} == {:?}",
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
+                );*/
                 Error(format!(
                     "can't unify {:?} == {:?}",
                     pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
@@ -572,7 +592,7 @@ enum Option[T] {
     None
 }
 
-def map[T, X](x: Option[T], f: T -> X): Option[X] =
+def map[R, X](x: Option[R], f: R -> X): Option[X] =
     match x {
         case None => None
         case Some(t) => Some (f t)

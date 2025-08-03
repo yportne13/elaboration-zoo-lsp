@@ -20,6 +20,7 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: HashMap<String, (Lvl, VTy)>,
+    pub subst: List<(Val, Val)>,
 }
 
 impl Cxt {
@@ -89,6 +90,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: HashMap::new(),
+            subst: List::new(),
         }
     }
 
@@ -113,6 +115,7 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
+            subst: self.subst.clone(),
         }
     }
 
@@ -126,6 +129,7 @@ impl Cxt {
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
             src_names,
+            subst: self.subst.clone(),
         }
     }
 
@@ -137,6 +141,7 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
+            subst: self.subst.clone(),
         }
     }
 
@@ -150,6 +155,18 @@ impl Cxt {
             locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
+            subst: self.subst.clone(),
+        }
+    }
+
+    pub fn subst(&self, x: Val, y: Val) -> Self {
+        Self {
+            env: self.env.clone(),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names: self.src_names.clone(),
+            subst: self.subst.prepend((x, y)),
         }
     }
 }

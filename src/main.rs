@@ -9,9 +9,10 @@ mod L04_implicit;
 mod L05_pruning;
 mod L06_string;
 mod L07_sum_type;
+mod L07a_depend_pm;
 mod L08_product_type;
 mod L09_mltt;
-mod L10_typeclass;
+//mod L10_typeclass;
 
 fn main() {
     println!("Hello, world!");
