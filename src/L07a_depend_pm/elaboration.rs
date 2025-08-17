@@ -70,7 +70,13 @@ impl Infer {
     ) -> Result<(Tm, VTy), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
+    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
+        self.check_base::<true>(cxt, t, a)
+    }
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
+        self.check_base::<false>(cxt, t, a)
+    }
+    pub fn check_base<const PM: bool>(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         match (t, self.force(a)) {
             // Check lambda expressions
@@ -144,7 +150,7 @@ impl Infer {
             (t, expected) => {
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-                self.unify_catch(cxt, expected, inferred_type)?;
+                self.unify_catch::<PM>(cxt, expected, inferred_type)?;
                 Ok(t_inferred)
             }
         }
@@ -262,7 +268,7 @@ impl Infer {
                                     case_name: c.0.clone(),
                                     datas: params
                                         .iter()
-                                        .map(|x| (x.0.clone(), x.2))
+                                        .map(|x| (x.0.clone(), Icit::Impl))
                                         .chain(
                                             c.1.iter()
                                                 .map(|(name, _, icit)| (name.clone(), *icit)),
@@ -308,12 +314,14 @@ impl Infer {
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
         /*println!(
-            "{} {:?} in {}",
+            "{} {:?} in\n{}",
             "infer".red(),
             t,
-            cxt.types
+            cxt.env
                 .iter()
-                .map(|x| format!("{x:?}"))
+                .map(|x| super::pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, x.clone())))
+                .map(|x| format!("    {x}"))
+                //.map(|x| format!("{x:?}"))
                 .reduce(|a, b| a + "\n" + &b)
                 .unwrap_or(String::new())
         );*/
@@ -333,7 +341,7 @@ impl Infer {
                             params
                                 .into_iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
-                                .map(|(_, ty, _, _)| ty)
+                                .map(|(_, _, ty, _)| ty)
                                 .ok_or_else(|| Error("error in obj".to_owned()))?
                         ))
                     }
@@ -409,7 +417,7 @@ impl Infer {
                                 Val::U,
                             )),
                         );
-                        self.unify_catch(
+                        self.unify_catch::<false>(
                             cxt,
                             Val::Pi(
                                 empty_span("x".to_string()),
@@ -514,13 +522,6 @@ impl Infer {
                         Ok(((ty.0.clone(), tm, vtm, ty.1), (ty.0.clone(), ty_checked, vty, ty.1)))
                     })
                     .collect::<Result<(Vec<_>, Vec<_>), _>>()?;
-                let cxt = new_params_val
-                    .iter()
-                    .filter(|x| x.3 == Icit::Impl)
-                    .fold(cxt.clone(), |cxt, (x, a, b, _)| {
-                        cxt.define(x.clone(), self.quote(cxt.lvl, a.clone()), a.clone(), self.quote(cxt.lvl, b.clone()), b.clone())
-                        //cxt.bind(x.clone(), infer.quote(cxt.lvl, a.clone()), a.clone())
-                    });
                 let datas = datas
                     .into_iter()
                     .map(|x| self.infer_expr(&cxt, x.1).map(|z| (x.0, z.0, x.2)))
@@ -541,9 +542,18 @@ impl Infer {
 }
 
 fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
+    let all_constr_name = cxt.env.iter()
+        .flat_map(|x| match x {
+            Val::Sum(_, _, x) => Some(
+                x.iter().map(|x| x.0.data.clone()).collect::<Vec<_>>()
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect::<std::collections::HashSet<_>>();
     match pattern {
         Pattern::Any(name) => PatternDetail::Any(name),
-        Pattern::Con(name, params) if params.is_empty() && !cxt.src_names.contains_key(&name.data) => {
+        Pattern::Con(name, params) if params.is_empty() && !all_constr_name.contains(&name.data) => {
             PatternDetail::Bind(name)
         },
         Pattern::Con(name, params) => {

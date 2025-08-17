@@ -20,7 +20,7 @@ mod subst;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum MetaEntry {
     Solved(Val, VTy),
     Unsolved(VTy),
@@ -186,6 +186,7 @@ fn empty_span<T>(data: T) -> Span<T> {
 #[derive(Debug)]
 pub struct Error(String);
 
+#[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
     global: HashMap<Lvl, VTy>,
@@ -455,7 +456,7 @@ impl Infer {
         Closure(cxt.env.clone(), Box::new(self.quote(cxt.lvl + 1, t)))
     }
 
-    fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
+    fn unify_catch<const PM: bool>(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
         //println!("{:?} == {:?}", t, t_prime);
         //println!("---------------");
         //println!(
@@ -463,7 +464,7 @@ impl Infer {
         //    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t.clone())),
         //    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime.clone())),
         //);
-        self.unify(cxt.lvl, cxt, t.clone(), t_prime.clone())
+        self.unify::<PM>(cxt.lvl, cxt, t.clone(), t_prime.clone())
             .map_err(|_| {
                 /*Error::CantUnify(
                     cxt.clone(),
@@ -657,6 +658,14 @@ println t.len
 def head[T, l: Nat](x: Vec[T] (succ l)): T =
     match x {
         case cons(x, _) => x
+    }
+
+println (head (cons zero nil))
+
+def length[T, l: Nat](x: (Vec[T] l)): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (xs.len)
     }
 
     "#;

@@ -106,6 +106,60 @@ impl Compiler {
         }
     }
 
+    fn filter_accessible_constrs<'a>(
+        &mut self,
+        infer: &mut Infer,
+        cxt: &Cxt,
+        typ: &Val, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
+        all_constrs: &'a [(
+            Constructor,
+            Vec<(Raw, Icit)>, // Constructor argument types
+            Vec<(Span<String>, Raw)>, // Constructor return type arguments
+        )],
+    ) -> Result<
+        Vec<&'a (
+            Constructor,
+            Vec<(Raw, Icit)>,
+            Vec<(Span<String>, Raw)>,
+        )>,
+        Error,
+    > {
+        let mut accessible = Vec::new();
+
+        match infer.force(typ.clone()) {
+            Val::Sum(..) => {},
+            _ => {
+                for constr_def in all_constrs {
+                    accessible.push(constr_def);
+                }
+                return Ok(accessible)
+            }
+        }
+
+        for constr_def @ (constr_name, constr_arg_tys_raw, _) in all_constrs {
+            // We create a temporary, throwaway inference state for the unification check
+            // to avoid polluting the main inference state with temporary metavariables.
+            let mut temp_infer = infer.clone();
+
+            // 1. Create fresh metavariables for the constructor's own arguments.
+            //    We need their types first, which are given as raw syntax.
+            let mut to_check = Raw::Var(constr_name.clone());
+            for (_, icit) in constr_arg_tys_raw {
+                if *icit == Icit::Expl { // Only explicit args matter for the structure 
+                    to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
+                }
+            }
+
+            // 4. Try to unify it with the type of the matched term.
+            if temp_infer.check_pm(cxt, to_check.clone(), typ.clone()).is_ok() {
+                // If unification succeeds, the constructor is accessible.
+                accessible.push(constr_def);
+            }
+        }
+
+        Ok(accessible)
+    }
+
     fn compile_aux(
         &mut self,
         infer: &mut Infer,
@@ -167,7 +221,14 @@ impl Compiler {
                         .map(|x| x.0.data.clone())
                         .collect::<BTreeSet<_>>();
 
-                    let decision_tree_branches = constrs
+                    let accessible_constrs = self.filter_accessible_constrs(
+                        infer,
+                        &cxt_global,
+                        typ,
+                        &constrs,
+                    )?;
+
+                    let decision_tree_branches = accessible_constrs
                         .iter()
                         .map(|(constr, item_typs, ret_bind)| {
                             let new_heads = item_typs
@@ -219,7 +280,7 @@ impl Compiler {
                                             MatchArm {
                                                 pats: vec![
                                                     Pattern::Any(constr_.to_span());
-                                                    item_typs.len()
+                                                    item_typs.iter().filter(|x| x.1 == Icit::Expl).count()
                                                 ]
                                                 .into_iter()
                                                 .chain(arm.pats[1..].iter().cloned())
@@ -381,7 +442,7 @@ impl Compiler {
             _ => (empty_span("$unknown$".to_owned()), vec![], vec![], vec![])
         };
 
-        let cxt = global_prarams
+        let cxt_new = global_prarams
             .into_iter()
             .filter(|x| x.3 == Icit::Impl)
             .fold(cxt.clone(), |cxt, (name, val, vty, _)| {
@@ -401,13 +462,14 @@ impl Compiler {
                     } else */
                     {
                         //TODO: item_pats should be zero
-                        //println!("-----  {:?}", heads);
                         Some((body.clone(), cxt.prepend(heads.clone())))
                     }
                 }
                 PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
-                    params.iter().map(|x| &x.1).zip(item_pats.iter()).try_fold(
-                        (body.clone(), cxt.clone()),
+                    params.iter()
+                        .filter(|x| x.2 == Icit::Expl)
+                    .map(|x| &x.1).zip(item_pats.iter()).try_fold(
+                        (body.clone(), cxt_new.clone()),
                         |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
                             Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
                         },

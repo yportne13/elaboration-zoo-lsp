@@ -405,7 +405,7 @@ impl Infer {
 
         Ok(())
     }
-    fn unify_sp(
+    fn unify_sp<const PM: bool>(
         &mut self,
         l: Lvl,
         cxt: &Cxt,
@@ -415,8 +415,8 @@ impl Infer {
         match (sp, sp_prime) {
             (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
             (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
-                self.unify_sp(l, cxt, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
-                self.unify(
+                self.unify_sp::<PM>(l, cxt, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
+                self.unify::<PM>(
                     l,
                     cxt,
                     a.head().unwrap().0.clone(),
@@ -476,7 +476,7 @@ impl Infer {
             _ => unreachable!(),
         }
     }
-    fn intersect(
+    fn intersect<const PM: bool>(
         &mut self,
         l: Lvl,
         cxt: &Cxt,
@@ -485,7 +485,7 @@ impl Infer {
         sp_prime: Spine,
     ) -> Result<(), UnifyError> {
         match self.intersect_go(sp.clone(), sp_prime.clone()) {
-            None => self.unify_sp(l, cxt, &sp, &sp_prime),
+            None => self.unify_sp::<PM>(l, cxt, &sp, &sp_prime),
             Some(pr) if pr.iter().any(|x| x.is_none()) => {
                 self.prune_meta(pr, m)?;
                 Ok(())
@@ -493,7 +493,7 @@ impl Infer {
             Some(_) => Ok(()),
         }
     }
-    pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
+    pub fn unify<const PM: bool>(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
         let t = self.force(t);
         let u = self.force(u);
         /*println!(
@@ -502,11 +502,23 @@ impl Infer {
             pretty_tm(0, cxt.names(), &self.quote(l, u.clone())),
         );*/
 
+        if PM {
+            match (&t, &u) {
+                (Val::Rigid(_, sp), _) if sp.is_empty() => { 
+                    return Ok(())
+                }
+                (_, Val::Rigid(_, sp)) if sp.is_empty() => { 
+                    return Ok(())
+                }
+                _ => {}
+            }
+        }
+
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
-                self.unify(
+                self.unify::<PM>(l, cxt, *a.clone(), *a_prime.clone())?;
+                self.unify::<PM>(
                     l + 1,
                     &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a.clone()),
                     self.closure_apply(&b, Val::vvar(l)),
@@ -514,27 +526,27 @@ impl Infer {
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
-                self.unify_sp(l, cxt, sp, sp_prime)
+                self.unify_sp::<PM>(l, cxt, sp, sp_prime)
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
-                self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
+                self.intersect::<PM>(l, cxt, *m, sp.clone(), sp_prime.clone())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
                 self.flex_flex(l, *m, sp.clone(), *m_prime, sp_prime.clone())
             }
-            (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify(
+            (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify::<PM>(
                 l + 1,
                 cxt,
                 self.closure_apply(&t, Val::vvar(l)),
                 self.closure_apply(&t_prime, Val::vvar(l)),
             ),
-            (t, Val::Lam(_, i, t_prime)) => self.unify(
+            (t, Val::Lam(_, i, t_prime)) => self.unify::<PM>(
                 l + 1,
                 cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
                 self.closure_apply(&t_prime, Val::vvar(l)),
             ),
-            (Val::Lam(_, i, t), t_prime) => self.unify(
+            (Val::Lam(_, i, t), t_prime) => self.unify::<PM>(
                 l + 1,
                 cxt,
                 self.closure_apply(&t, Val::vvar(l)),
@@ -550,7 +562,7 @@ impl Infer {
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify::<PM>(l, cxt, a.1.clone(), b.1.clone())?;
                 }
                 Ok(())
             }
@@ -560,7 +572,7 @@ impl Infer {
             ) if a.data == b.data && ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify::<PM>(l, cxt, a.1.clone(), b.1.clone())?;
                 }
                 Ok(())
             }
@@ -573,7 +585,7 @@ impl Infer {
             // 在 unify 的 match (self.force(t), self.force(t_prime)) 中添加：
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
-                self.unify(l, cxt, *s1.clone(), *s2.clone())?;
+                self.unify::<PM>(l, cxt, *s1.clone(), *s2.clone())?;
 
                 // 2. 检查分支数量是否相同
                 if cases1.len() != cases2.len() {
@@ -617,7 +629,7 @@ impl Infer {
                         pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
                         pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
                     );
-                    self.unify(l, cxt, body1_val, body2_val)?;
+                    self.unify::<PM>(l, cxt, body1_val, body2_val)?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
                     // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。
