@@ -97,7 +97,7 @@ impl Infer {
                 sum_name,
                 global_params,
                 case_name,
-                params,
+                datas: params,
                 cases_name,
             } => {
                 // 递归地在参数值上执行替换
@@ -113,7 +113,7 @@ impl Infer {
                     sum_name,
                     global_params,
                     case_name,
-                    params,
+                    datas: params,
                     cases_name,
                 }
             }
@@ -235,7 +235,7 @@ impl Infer {
                 sum_name,
                 global_params,
                 case_name,
-                params,
+                datas: params,
                 cases_name,
             } => {
                 let global_params = global_params
@@ -250,7 +250,7 @@ impl Infer {
                     sum_name,
                     global_params,
                     case_name,
-                    params,
+                    datas: params,
                     cases_name,
                 }
             }

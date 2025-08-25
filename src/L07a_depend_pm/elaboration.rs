@@ -214,10 +214,7 @@ impl Infer {
                 let sum = Raw::Sum(
                     name.clone(),
                     new_params.clone(),
-                    cases.clone()
-                        .into_iter()
-                        .map(|x| (x.0, x.1.into_iter().map(|x| (x.1, x.2)).collect(), x.2))
-                        .collect(),
+                    cases.clone(),
                 );
                 let typ = params.iter().rev().fold(Raw::U, |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -261,18 +258,15 @@ impl Infer {
                                     sum_name: name.clone(),
                                     params: new_params.clone(),
                                     cases: cases
-                                        .clone()
-                                        .into_iter()
-                                        .map(|x| (x.0, x.1.into_iter().map(|x| (x.1, x.2)).collect(), x.2))
-                                        .collect(),
+                                        .clone(),
                                     case_name: c.0.clone(),
-                                    datas: params
+                                    datas: /*params
                                         .iter()
-                                        .map(|x| (x.0.clone(), Icit::Impl))
-                                        .chain(
+                                        .map(|x| (x.0.clone(), Icit::Impl))*/
+                                        //.chain(
                                             c.1.iter()
-                                                .map(|(name, _, icit)| (name.clone(), *icit)),
-                                        )
+                                                .map(|(name, _, icit)| (name.clone(), *icit))
+                                        //)
                                         .map(|x| (x.0.clone(), Raw::Var(x.0), x.1))
                                         .collect(),
                                 };
@@ -345,7 +339,7 @@ impl Infer {
                                 .ok_or_else(|| Error("error in obj".to_owned()))?
                         ))
                     }
-                    (tm, Val::SumCase { params, .. }) => {
+                    (tm, Val::SumCase { datas: params, .. }) => {
                         Ok((
                             Tm::Obj(Box::new(tm), t.clone()),
                             params
@@ -531,7 +525,7 @@ impl Infer {
                         sum_name: sum_name.clone(),
                         global_params: new_params_tm,
                         case_name,
-                        params: datas,
+                        datas,
                         cases_name: cases.iter().map(|x| x.0.clone()).collect(),
                     },
                     Val::Sum(sum_name, new_params_val, cases),

@@ -285,7 +285,7 @@ impl Infer {
                 sum_name,
                 global_params,
                 case_name,
-                params,
+                datas: params,
                 cases_name,
             } => {
                 let global_params = global_params
@@ -305,7 +305,7 @@ impl Infer {
                     sum_name,
                     global_params,
                     case_name,
-                    params,
+                    datas: params,
                     cases_name,
                 })
             }
@@ -567,8 +567,8 @@ impl Infer {
                 Ok(())
             }
             (
-                Val::SumCase { sum_name: a, global_params: _, case_name: ca, params: params_a, cases_name: _ },
-                Val::SumCase { sum_name: b, global_params: _, case_name: cb, params: params_b, cases_name: _ },
+                Val::SumCase { sum_name: a, global_params: _, case_name: ca, datas: params_a, cases_name: _ },
+                Val::SumCase { sum_name: b, global_params: _, case_name: cb, datas: params_b, cases_name: _ },
             ) if a.data == b.data && ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

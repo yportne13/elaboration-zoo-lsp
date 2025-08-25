@@ -63,12 +63,12 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<(Span<String>, Vec<(Raw, Icit)>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         global_params: Vec<(Span<String>, Tm, Ty, Icit)>,
         case_name: Span<String>,
-        params: Vec<(Span<String>, Tm, Icit)>,
+        datas: Vec<(Span<String>, Tm, Icit)>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
     Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
@@ -135,12 +135,12 @@ pub enum Val {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<(Span<String>, Val, VTy, Icit)>, Vec<(Span<String>, Vec<(Raw, Icit)>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Val, VTy, Icit)>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Raw)>)>),
     SumCase {
         sum_name: Span<String>,
         global_params: Vec<(Span<String>, Val, VTy, Icit)>,
         case_name: Span<String>,
-        params: Vec<(Span<String>, Val, Icit)>,
+        datas: Vec<(Span<String>, Val, Icit)>,
         cases_name: Vec<Span<String>>,
     }, //TODO:
     Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
@@ -303,8 +303,11 @@ impl Infer {
                             .find(|(f_name, _, _, _)| f_name == &name)
                             .unwrap().1
                     },
-                    Val::SumCase { params, .. } => {
-                        params.into_iter()
+                    Val::SumCase { datas, global_params, .. } => {
+                        global_params.into_iter()
+                            .map(|x| (x.0, x.1, x.3))
+                            .chain(datas)
+                        //datas.into_iter()
                             .find(|(f_name, _, _)| f_name == &name)
                             .unwrap().1
                     },
@@ -345,7 +348,7 @@ impl Infer {
                 sum_name,
                 global_params,
                 case_name,
-                params,
+                datas: params,
                 cases_name,
             } => {
                 let global_params = global_params
@@ -357,7 +360,7 @@ impl Infer {
                     sum_name,
                     global_params,
                     case_name,
-                    params,
+                    datas: params,
                     cases_name,
                 }
             }
@@ -413,7 +416,7 @@ impl Infer {
                 sum_name,
                 global_params,
                 case_name,
-                params,
+                datas: params,
                 cases_name,
             } => {
                 let global_params = global_params
@@ -425,7 +428,7 @@ impl Infer {
                     sum_name,
                     global_params,
                     case_name,
-                    params,
+                    datas: params,
                     cases_name,
                 }
             }
@@ -655,7 +658,7 @@ def t = cons zero (cons two (cons three (cons two nil)))
 
 println t.len
 
-def head[T, l: Nat](x: Vec[T] (succ l)): T =
+def head[T, L: Nat](x: Vec[T] (succ L)): T =
     match x {
         case cons(x, _) => x
     }

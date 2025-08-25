@@ -113,13 +113,13 @@ impl Compiler {
         typ: &Val, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
         all_constrs: &'a [(
             Constructor,
-            Vec<(Raw, Icit)>, // Constructor argument types
+            Vec<(Span<String>, Raw, Icit)>, // Constructor argument types
             Vec<(Span<String>, Raw)>, // Constructor return type arguments
         )],
     ) -> Result<
         Vec<&'a (
             Constructor,
-            Vec<(Raw, Icit)>,
+            Vec<(Span<String>, Raw, Icit)>,
             Vec<(Span<String>, Raw)>,
         )>,
         Error,
@@ -144,7 +144,7 @@ impl Compiler {
             // 1. Create fresh metavariables for the constructor's own arguments.
             //    We need their types first, which are given as raw syntax.
             let mut to_check = Raw::Var(constr_name.clone());
-            for (_, icit) in constr_arg_tys_raw {
+            for (_, _, icit) in constr_arg_tys_raw {
                 if *icit == Icit::Expl { // Only explicit args matter for the structure 
                     to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
                 }
@@ -207,7 +207,7 @@ impl Compiler {
                             (empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), vec![], vec![])])
                         }
                     };
-                    let cxt_global = param
+                    let mut cxt_global = param
                         .iter()
                         .filter(|x| x.3 == Icit::Impl)
                         .fold(cxt_global.clone(), |cxt, (x, a, b, _)| {
@@ -233,8 +233,22 @@ impl Compiler {
                         .map(|(constr, item_typs, ret_bind)| {
                             let new_heads = item_typs
                                 .iter()
-                                .filter(|x| x.1 == Icit::Expl)
-                                .map(|(typ, _)| {
+                                .flat_map(|x| match x.2 {
+                                    Icit::Impl => {
+                                        let tm = infer.check(&cxt_global, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
+                                        let val = infer.eval(&cxt_global.env, tm.clone());
+                                        cxt_global = cxt_global.bind(x.0.clone(), tm, val);
+                                        None
+                                    }
+                                    Icit::Expl => {
+                                        let tm = infer.check(&cxt_global, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
+                                        let val = infer.eval(&cxt_global.env, tm.clone());
+                                        cxt_global = cxt_global.bind(x.0.clone(), tm.clone(), val.clone());
+                                        Some((self.fresh(), tm, val))
+                                    },
+                                })
+                                /*.filter(|x| x.2 == Icit::Expl)
+                                .map(|(_, typ, _)| {
                                     let tm = infer.check(&cxt_global, typ.clone(), Val::U).unwrap();//TODO:do not unwrap
                                     //let (tm, _) = infer.infer_expr(&cxt_global, typ.clone()).unwrap();//TODO:do not unwrap
                                     let val = infer.eval(&cxt_global.env, tm.clone());
@@ -243,7 +257,7 @@ impl Compiler {
                                         tm,
                                         val,
                                     )
-                                })
+                                })*/
                                 .collect::<Vec<_>>();
                             let remaining_arms = arms
                                 .iter()
@@ -280,7 +294,7 @@ impl Compiler {
                                             MatchArm {
                                                 pats: vec![
                                                     Pattern::Any(constr_.to_span());
-                                                    item_typs.iter().filter(|x| x.1 == Icit::Expl).count()
+                                                    item_typs.iter().filter(|x| x.2 == Icit::Expl).count()
                                                 ]
                                                 .into_iter()
                                                 .chain(arm.pats[1..].iter().cloned())
@@ -435,7 +449,7 @@ impl Compiler {
                 sum_name: _,
                 case_name,
                 global_params,
-                params,
+                datas: params,
                 cases_name,
             } => (case_name, global_params, params, cases_name),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
