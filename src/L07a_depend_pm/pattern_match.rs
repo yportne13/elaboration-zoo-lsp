@@ -207,7 +207,7 @@ impl Compiler {
                             (empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), vec![], vec![])])
                         }
                     };
-                    let mut cxt_global = param
+                    let cxt_global = param
                         .iter()
                         .filter(|x| x.3 == Icit::Impl)
                         .fold(cxt_global.clone(), |cxt, (x, a, b, _)| {
@@ -231,33 +231,23 @@ impl Compiler {
                     let decision_tree_branches = accessible_constrs
                         .iter()
                         .map(|(constr, item_typs, ret_bind)| {
+                            let mut cxt_param = cxt_global.clone();//TODO: sum should be closure. use cxt in closure
                             let new_heads = item_typs
                                 .iter()
                                 .flat_map(|x| match x.2 {
                                     Icit::Impl => {
-                                        let tm = infer.check(&cxt_global, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
-                                        let val = infer.eval(&cxt_global.env, tm.clone());
-                                        cxt_global = cxt_global.bind(x.0.clone(), tm, val);
+                                        let tm = infer.check(&cxt_param, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
+                                        let val = infer.eval(&cxt_param.env, tm.clone());
+                                        cxt_param = cxt_param.bind(x.0.clone(), tm, val);
                                         None
                                     }
                                     Icit::Expl => {
-                                        let tm = infer.check(&cxt_global, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
-                                        let val = infer.eval(&cxt_global.env, tm.clone());
-                                        cxt_global = cxt_global.bind(x.0.clone(), tm.clone(), val.clone());
+                                        let tm = infer.check(&cxt_param, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
+                                        let val = infer.eval(&cxt_param.env, tm.clone());
+                                        cxt_param = cxt_param.bind(x.0.clone(), tm.clone(), val.clone());
                                         Some((self.fresh(), tm, val))
                                     },
                                 })
-                                /*.filter(|x| x.2 == Icit::Expl)
-                                .map(|(_, typ, _)| {
-                                    let tm = infer.check(&cxt_global, typ.clone(), Val::U).unwrap();//TODO:do not unwrap
-                                    //let (tm, _) = infer.infer_expr(&cxt_global, typ.clone()).unwrap();//TODO:do not unwrap
-                                    let val = infer.eval(&cxt_global.env, tm.clone());
-                                    (
-                                        self.fresh(),
-                                        tm,
-                                        val,
-                                    )
-                                })*/
                                 .collect::<Vec<_>>();
                             let remaining_arms = arms
                                 .iter()
