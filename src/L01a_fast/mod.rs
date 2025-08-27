@@ -1,0 +1,201 @@
+mod nbe_closure;
+mod nbe_closure1;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Term {
+    Idx(usize),
+    Lam(Box<Term>),
+    App(Box<Term>, Box<Term>),
+}
+
+impl Term {
+    pub fn to_vec(self) -> Vec<u8> {
+        match self {
+            Term::Idx(x) => {
+                let mut result = x.to_le_bytes().to_vec();
+                result.push(0);
+                result
+            },
+            Term::Lam(term) => {
+                let mut result = term.to_vec();
+                let len = result.len() as u64;
+                result.extend_from_slice(&len.to_le_bytes());
+                result.push(1);
+                result
+            },
+            Term::App(term1, term2) => {
+                let mut result = term1.to_vec();
+                result.extend(term2.to_vec());
+                result.push(2);
+                result
+            },
+        }
+    }
+
+    pub fn from_vec(mut bytes: Vec<u8>) -> (Term, Vec<u8>) {
+        let tag = unsafe { *bytes.get_unchecked(bytes.len() - 1) };
+        bytes.pop();
+        
+        match tag {
+            0 => {
+                // Idx case: read 8 bytes as usize
+                let mut idx_bytes = [0u8; 8];
+                let start = bytes.len() - 8;
+                idx_bytes.copy_from_slice(unsafe { bytes.get_unchecked(start..start + 8) });
+                bytes.truncate(start);
+                let idx = usize::from_le_bytes(idx_bytes);
+                (Term::Idx(idx), bytes)
+            },
+            1 => {
+                // Lam case: read length (8 bytes) and extract term
+                let mut len_bytes = [0u8; 8];
+                let start = bytes.len() - 8;
+                len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(start..start + 8) });
+                bytes.truncate(start);
+                let len = u64::from_le_bytes(len_bytes) as usize;
+                let term_start = bytes.len() - len;
+                let term_bytes = bytes[term_start..].to_vec();
+                bytes.truncate(term_start);
+                let (term, _) = Term::from_vec(term_bytes);
+                (Term::Lam(Box::new(term)), bytes)
+            },
+            2 => {
+                // App case: need to parse from right to left
+                // First parse the second argument
+                let (arg2, remaining) = Term::from_vec(bytes);
+                // Then parse the first argument
+                let (arg1, final_remaining) = Term::from_vec(remaining);
+                (Term::App(Box::new(arg1), Box::new(arg2)), final_remaining)
+            },
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+
+    pub fn to_vec2(self) -> Vec<u8> {
+        match self {
+            Term::Idx(x) => {
+                let mut result = vec![0]; // tag for Idx
+                result.extend_from_slice(&x.to_le_bytes());
+                result
+            },
+            Term::Lam(term) => {
+                let term_bytes = term.to_vec2();
+                let mut result = vec![1]; // tag for Lam
+                result.extend_from_slice(&(term_bytes.len() as u64).to_le_bytes());
+                result.extend(term_bytes);
+                result
+            },
+            Term::App(term1, term2) => {
+                let term1_bytes = term1.to_vec2();
+                let term2_bytes = term2.to_vec2();
+                let mut result = vec![2]; // tag for App
+                result.extend(term1_bytes);
+                result.extend(term2_bytes);
+                result
+            },
+        }
+    }
+
+    pub fn from_vec2(mut bytes: Vec<u8>) -> (Term, Vec<u8>) {
+        let tag = unsafe { *bytes.get_unchecked(0) };
+        bytes.drain(0..1);
+        
+        match tag {
+            0 => {
+                // Idx case: read 8 bytes as usize
+                let mut idx_bytes = [0u8; 8];
+                idx_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
+                bytes.drain(0..8);
+                let idx = usize::from_le_bytes(idx_bytes);
+                (Term::Idx(idx), bytes)
+            },
+            1 => {
+                // Lam case: read length (8 bytes) then the term
+                let mut len_bytes = [0u8; 8];
+                len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
+                bytes.drain(0..8);
+                let len = u64::from_le_bytes(len_bytes) as usize;
+                let term_bytes = bytes[..len].to_vec();
+                bytes.drain(0..len);
+                let (term, _) = Term::from_vec2(term_bytes);
+                (Term::Lam(Box::new(term)), bytes)
+            },
+            2 => {
+                // App case: parse two consecutive terms
+                let (term1, remaining) = Term::from_vec2(bytes);
+                let (term2, final_remaining) = Term::from_vec2(remaining);
+                (Term::App(Box::new(term1), Box::new(term2)), final_remaining)
+            },
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+}
+
+fn lam(body: Term) -> Term {
+    Term::Lam(Box::new(body))
+}
+
+fn apply(f: Term, args: Vec<Term>) -> Term {
+    args.into_iter().fold(f, |acc, a| Term::App(Box::new(acc), Box::new(a)))
+}
+
+/// let rec church_aux = function
+///    | 0 -> Idx 0
+///    | n -> App(Idx 1, church_aux (n - 1))
+fn church_aux(n: usize) -> Term {
+    match n {
+        0 => Term::Idx(0),
+        _ => Term::App(Box::new(Term::Idx(1)), Box::new(church_aux(n - 1))),
+    }
+}
+
+fn church(n: usize) -> Term {
+    Term::Lam(Box::new(Term::Lam(Box::new(church_aux(n)))))
+}
+
+fn church_add() -> Term {
+    lam(
+        lam(
+            lam(
+                lam(
+                    apply(
+                        Term::Idx(3),
+                        vec![Term::Idx(1), apply(Term::Idx(2), vec![Term::Idx(1), Term::Idx(0)])])
+                )
+            )
+        )
+    )
+}
+
+pub fn main() {
+    //println!("Hello, world!");
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let add = add.to_vec();
+    let start = std::time::Instant::now();
+    let result = nbe_closure::normalize(add);
+    let end = start.elapsed();
+    println!("{:?}s", end.as_secs_f64());
+    let result = Term::from_vec(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    println!("{}", result == check);
+}
+
+pub fn main2() {
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let add = add.to_vec2();
+    let start = std::time::Instant::now();
+    let result = nbe_closure1::normalize(add);
+    let end = start.elapsed();
+    println!("{:?}s", end.as_secs_f64());
+    let result = Term::from_vec2(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    println!("{}", result == check);
+}
