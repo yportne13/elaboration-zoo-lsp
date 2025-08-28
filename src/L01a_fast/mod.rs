@@ -1,5 +1,10 @@
+use crate::L01a_fast::list_arena::ListArena;
+
 mod nbe_closure;
 mod nbe_closure1;
+mod nbe_closure2;
+mod nbe_closure3;
+mod list_arena;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term {
@@ -192,6 +197,40 @@ pub fn main2() {
     let add = add.to_vec2();
     let start = std::time::Instant::now();
     let result = nbe_closure1::normalize(add);
+    let end = start.elapsed();
+    println!("{:?}s", end.as_secs_f64());
+    let result = Term::from_vec2(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    println!("{}", result == check);
+}
+
+pub fn main3() {
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let add = add.to_vec2();
+    let start = std::time::Instant::now();
+    let mut arena = ListArena::new();
+    let result = nbe_closure2::normalize(add, &mut arena);
+    let end = start.elapsed();
+    println!("{:?}s", end.as_secs_f64());
+    let result = Term::from_vec2(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    println!("{}", result == check);
+}
+
+pub fn main4() {
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let add = add.to_vec2();
+    let start = std::time::Instant::now();
+    let mut arena = ListArena::new();
+    let result = nbe_closure3::normalize(add, &mut arena);
     let end = start.elapsed();
     println!("{:?}s", end.as_secs_f64());
     let result = Term::from_vec2(result).0;

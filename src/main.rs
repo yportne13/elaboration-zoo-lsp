@@ -19,4 +19,6 @@ fn main() {
     //println!("Hello, world!");
     L01a_fast::main();
     L01a_fast::main2();
+    L01a_fast::main3();
+    L01a_fast::main4();
 }
