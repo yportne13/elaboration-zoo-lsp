@@ -1,5 +1,7 @@
 #![feature(pattern)]
 
+use std::time::Duration;
+
 mod parser_lib;
 mod list;
 mod L01_eval;
@@ -15,10 +17,22 @@ mod L08_product_type;
 mod L09_mltt;
 //mod L10_typeclass;
 
+fn calcu<F>(f: F)
+where
+    F: Fn() -> Duration
+{
+    let mut ret = Duration::new(0, 0);
+    for _i in 0..10 {
+        ret += f()
+    }
+    println!("{ret:?}")
+}
+
 fn main() {
     //println!("Hello, world!");
-    L01a_fast::main();
-    L01a_fast::main2();
-    L01a_fast::main3();
-    L01a_fast::main4();
+    calcu(L01a_fast::main);
+    calcu(L01a_fast::main1);
+    calcu(L01a_fast::main2);
+    calcu(L01a_fast::main3);
+    calcu(L01a_fast::main4);
 }

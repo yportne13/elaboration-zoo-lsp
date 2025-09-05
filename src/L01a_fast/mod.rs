@@ -1,6 +1,9 @@
+use std::time::Duration;
+
 use crate::L01a_fast::list_arena::ListArena;
 
 mod nbe_closure;
+mod nbe_closure_rc;
 mod nbe_closure1;
 mod nbe_closure2;
 mod nbe_closure3;
@@ -172,24 +175,41 @@ fn church_add() -> Term {
     )
 }
 
-pub fn main() {
+pub fn main() -> Duration {
     //println!("Hello, world!");
     let i = 1000;
     let a = church(i);
     let b = church(i);
     let add = apply(church_add(), vec![a, b]);
-    let add = add.to_vec();
+    //let add = add.to_vec();
     let start = std::time::Instant::now();
     let result = nbe_closure::normalize(add);
     let end = start.elapsed();
-    println!("{:?}s", end.as_secs_f64());
-    let result = Term::from_vec(result).0;
+    //let result = Term::from_vec(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
     println!("{}", result == check);
+    end
 }
 
-pub fn main2() {
+pub fn main1() -> Duration {
+    //println!("Hello, world!");
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    //let add = add.to_vec();
+    let start = std::time::Instant::now();
+    let result = nbe_closure_rc::normalize(add);
+    let end = start.elapsed();
+    //let result = Term::from_vec(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    println!("{}", result == check);
+    end
+}
+
+pub fn main2() -> Duration {
     let i = 1000;
     let a = church(i);
     let b = church(i);
@@ -198,14 +218,14 @@ pub fn main2() {
     let start = std::time::Instant::now();
     let result = nbe_closure1::normalize(add);
     let end = start.elapsed();
-    println!("{:?}s", end.as_secs_f64());
     let result = Term::from_vec2(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
     println!("{}", result == check);
+    end
 }
 
-pub fn main3() {
+pub fn main3() -> Duration {
     let i = 1000;
     let a = church(i);
     let b = church(i);
@@ -215,14 +235,14 @@ pub fn main3() {
     let mut arena = ListArena::new();
     let result = nbe_closure2::normalize(add, &mut arena);
     let end = start.elapsed();
-    println!("{:?}s", end.as_secs_f64());
     let result = Term::from_vec2(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
     println!("{}", result == check);
+    end
 }
 
-pub fn main4() {
+pub fn main4() -> Duration {
     let i = 1000;
     let a = church(i);
     let b = church(i);
@@ -232,9 +252,9 @@ pub fn main4() {
     let mut arena = ListArena::new();
     let result = nbe_closure3::normalize(add, &mut arena);
     let end = start.elapsed();
-    println!("{:?}s", end.as_secs_f64());
     let result = Term::from_vec2(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
     println!("{}", result == check);
+    end
 }

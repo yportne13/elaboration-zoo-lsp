@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{list::List};
 
 
@@ -5,7 +7,7 @@ use crate::{list::List};
 enum Value {
     Lvl(usize),
     Lam(List<Value>, Vec<u8>),
-    App(Box<Value>, Box<Value>),
+    App(Rc<Value>, Rc<Value>),
 }
 
 /// eval env tm =
@@ -53,7 +55,7 @@ fn eval(env: List<Value>, tm: &[u8]) -> (Value, &[u8]) {
 fn apply_val(vf: Value, va: Value) -> Value {
     match vf {
         Value::Lam(env, body) => eval(env.prepend(va), &body).0,
-        _ => Value::App(Box::new(vf), Box::new(va)),
+        _ => Value::App(Rc::new(vf), Rc::new(va)),
     }
 }
 
@@ -62,37 +64,14 @@ fn apply_val(vf: Value, va: Value) -> Value {
 ///      | VLvl lvl        -> Idx(level - lvl - 1)
 ///      | VLam(env, body) -> Lam(quote (level + 1) @@ eval (VLvl level :: env) body)
 ///      | VApp(vf, va)    -> App(quote level vf, quote level va)
-fn quote(level: usize, value: Value) -> Vec<u8> {
-    match value {
-        Value::Lvl(lvl) => {
-            let mut ret = Vec::with_capacity(9);
-            ret.push(0);
-            ret.extend_from_slice(&(level - lvl - 1).to_le_bytes());
-            ret
-        },
-        Value::Lam(env, body) => {
-            let t = quote(
-                level + 1,
-                eval(env.prepend(Value::Lvl(level)), &body).0
-            );
-            let len = t.len() as u64;
-            let mut ret = Vec::with_capacity(9 + t.len());
-            ret.push(1);
-            ret.extend_from_slice(&len.to_le_bytes());
-            ret.extend(t);
-            ret
-        },
-        Value::App(vf, va) => {
-            let mut ret = vec![2];
-            quote_append(level, *vf, &mut ret);
-            quote_append(level, *va, &mut ret);
-            ret
-        },
-    }
+fn quote(level: usize, value: Rc<Value>) -> Vec<u8> {
+    let mut ret = Vec::with_capacity(9);
+    quote_append(level, value, &mut ret);
+    ret
 }
 
-fn quote_append(level: usize, value: Value, ret: &mut Vec<u8>) {
-    match value {
+fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>) {
+    match value.as_ref() {
         Value::Lvl(lvl) => {
             ret.push(0);
             ret.extend_from_slice(&(level - lvl - 1).to_le_bytes());
@@ -100,7 +79,7 @@ fn quote_append(level: usize, value: Value, ret: &mut Vec<u8>) {
         Value::Lam(env, body) => {
             let t = quote(
                 level + 1,
-                eval(env.prepend(Value::Lvl(level)), &body).0
+                eval(env.prepend(Value::Lvl(level)), body).0.into()
             );
             let len = t.len() as u64;
             ret.push(1);
@@ -109,12 +88,12 @@ fn quote_append(level: usize, value: Value, ret: &mut Vec<u8>) {
         },
         Value::App(vf, va) => {
             ret.push(2);
-            quote_append(level, *vf, ret);
-            quote_append(level, *va, ret);
+            quote_append(level, vf.clone(), ret);
+            quote_append(level, va.clone(), ret);
         },
     }
 }
 
 pub fn normalize(t: Vec<u8>) -> Vec<u8> {
-    quote(0, eval(List::new(), &t).0)
+    quote(0, eval(List::new(), &t).0.into())
 }

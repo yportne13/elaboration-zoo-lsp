@@ -1,4 +1,4 @@
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, rc::Rc};
 
 use crate::{L01a_fast::list_arena::ListArena};
 
@@ -7,7 +7,7 @@ use crate::{L01a_fast::list_arena::ListArena};
 pub enum Value {
     Lvl(usize),
     Lam(NonZeroUsize, Vec<u8>),
-    App(Box<Value>, Box<Value>),
+    App(Rc<Value>, Rc<Value>),
 }
 
 impl Default for Value {
@@ -65,7 +65,7 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
             &body,//TODO:no need to get tail length and split right?
             arena
         ).0,
-        _ => Value::App(Box::new(vf), Box::new(va)),
+        _ => Value::App(Rc::new(vf), Rc::new(va)),
     }
 }
 
@@ -74,61 +74,45 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
 ///      | VLvl lvl        -> Idx(level - lvl - 1)
 ///      | VLam(env, body) -> Lam(quote (level + 1) @@ eval (VLvl level :: env) body)
 ///      | VApp(vf, va)    -> App(quote level vf, quote level va)
-fn quote(level: usize, value: Value, arena: &mut ListArena<Value>) -> Vec<u8> {
-    match value {
-        Value::Lvl(lvl) => {
-            let mut ret = Vec::with_capacity(9);
-            ret.push(0);
-            ret.extend_from_slice(&(level - lvl - 1).to_le_bytes());
-            ret
-        },
-        Value::Lam(env, body) => {
-            let t = quote(
-                level + 1,
-                eval(arena.prepend(env, Value::Lvl(level)), &body, arena).0,
-                arena,
-            );
-            let len = t.len() as u64;
-            let mut ret = Vec::with_capacity(9 + t.len());
-            ret.push(1);
-            ret.extend_from_slice(&len.to_le_bytes());
-            ret.extend(t);
-            ret
-        },
-        Value::App(vf, va) => {
-            let mut ret = vec![2];
-            quote_append(level, *vf, &mut ret, arena);
-            quote_append(level, *va, &mut ret, arena);
-            ret
-        },
-    }
+fn quote(level: usize, value: Rc<Value>, arena: &mut ListArena<Value>) -> Vec<u8> {
+    let mut ret = Vec::with_capacity(9);
+    quote_append(level, value, &mut ret, arena);
+    ret
 }
 
-fn quote_append(level: usize, value: Value, ret: &mut Vec<u8>, arena: &mut ListArena<Value>) {
-    match value {
+fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>, arena: &mut ListArena<Value>) {
+    match value.as_ref() {
         Value::Lvl(lvl) => {
             ret.push(0);
             ret.extend_from_slice(&(level - lvl - 1).to_le_bytes());
         },
         Value::Lam(env, body) => {
-            let t = quote(
-                level + 1,
-                eval(arena.prepend(env, Value::Lvl(level)), &body, arena).0,
-                arena,
-            );
-            let len = t.len() as u64;
-            ret.push(1);
-            ret.extend_from_slice(&len.to_le_bytes());
-            ret.extend(t);
+            // 构造闭包体的值
+            let (evaluated_body, _) = eval(arena.prepend(*env, Value::Lvl(level)), body, arena);
+
+            // 写 tag 和占位长度
+            let pos = ret.len();
+            ret.push(1); // tag
+            ret.extend_from_slice(&(0u64).to_le_bytes()); // 占位长度
+
+            // 递归写入 body 到 ret 中
+            quote_append(level + 1, evaluated_body.into(), ret, arena);
+
+            // 回填长度
+            let len = (ret.len() - pos - 9) as u64;
+            //ret[pos + 1..pos + 9].copy_from_slice(&len.to_le_bytes());
+            unsafe {
+                (ret.as_mut_ptr().add(pos + 1) as *mut u64).write_unaligned(len.to_le());
+            }
         },
         Value::App(vf, va) => {
             ret.push(2);
-            quote_append(level, *vf, ret, arena);
-            quote_append(level, *va, ret, arena);
+            quote_append(level, vf.clone(), ret, arena);
+            quote_append(level, va.clone(), ret, arena);
         },
     }
 }
 
 pub fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    quote(0, eval(unsafe {NonZeroUsize::new_unchecked(1)}, &t, arena).0, arena)
+    quote(0, eval(unsafe {NonZeroUsize::new_unchecked(1)}, &t, arena).0.into(), arena)
 }
