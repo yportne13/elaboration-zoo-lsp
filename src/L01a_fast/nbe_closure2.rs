@@ -6,7 +6,7 @@ use crate::{L01a_fast::list_arena::ListArena};
 #[derive(Debug, Clone)]
 pub enum Value {
     Lvl(usize),
-    Lam(NonZeroUsize, Vec<u8>),
+    Lam(NonZeroUsize, Rc<Vec<u8>>),
     App(Rc<Value>, Rc<Value>),
 }
 
@@ -37,7 +37,7 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
         [1, a0, a1, a2, a3, a4, a5, a6, a7, tail @ ..] => {
             let len = usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7]);
             let (tm, tail) = tail.split_at(len);
-            let value = Value::Lam(env, tm.to_vec());
+            let value = Value::Lam(env, tm.to_vec().into());
             (value, tail)
         },
         [2, tail @ ..] => {
@@ -75,7 +75,7 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
 ///      | VLam(env, body) -> Lam(quote (level + 1) @@ eval (VLvl level :: env) body)
 ///      | VApp(vf, va)    -> App(quote level vf, quote level va)
 fn quote(level: usize, value: Rc<Value>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    let mut ret = Vec::with_capacity(9);
+    let mut ret = Vec::new();//Vec::with_capacity(200);
     quote_append(level, value, &mut ret, arena);
     ret
 }

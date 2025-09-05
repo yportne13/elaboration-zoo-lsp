@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use crate::{list::List, L01a_fast::list_arena::ListArena};
+use super::list_arena::ListArena;
 
 
 #[derive(Debug, Clone, Default)]
@@ -46,8 +46,8 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
             let (tm, tail) = tail.split_at(len);
             let mut value = Vec::with_capacity(25 + tm.len());
             value.push(1);
-            value.extend(unsafe { env.get().to_le_bytes() });
-            value.extend(unsafe {  tm.len().to_le_bytes() });
+            value.extend(env.get().to_le_bytes());
+            value.extend(tm.len().to_le_bytes());
             value.extend(tm);
             (Value(value), tail)
         },
@@ -56,7 +56,7 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
             // This requires more context about how the terms were combined
             // For now, let's use a simplified approach
             // In practice, you'd want to parse this more carefully
-            let (value1, remaining_tm) = eval(env.clone(), tail, arena);
+            let (value1, remaining_tm) = eval(env, tail, arena);
             let (value2, final_tm) = eval(env, remaining_tm, arena);
             let result = apply_val(value1, value2, arena);
             (result, final_tm)
@@ -97,41 +97,9 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
 ///      | VLam(env, body) -> Lam(quote (level + 1) @@ eval (VLvl level :: env) body)
 ///      | VApp(vf, va)    -> App(quote level vf, quote level va)
 fn quote<'a>(level: usize, value: &'a [u8], arena: &mut ListArena<Value>) -> (Vec<u8>, &'a [u8]) {
-    match value {
-        [0, a0, a1, a2, a3, a4, a5, a6, a7, tail @ ..] => {
-            let lvl = usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7]);
-            let mut ret = Vec::with_capacity(9);
-            ret.push(0);
-            ret.extend_from_slice(&(level - lvl - 1).to_le_bytes());
-            (ret, tail)
-        },
-        [
-            1, a0, a1, a2, a3, a4, a5, a6, a7,
-            b0, b1, b2, b3, b4, b5, b6, b7,
-            tail @ ..
-        ] => {
-            let env = unsafe { NonZeroUsize::new_unchecked(usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7])) };
-            let (body, tail) = tail.split_at(unsafe { usize::from_le_bytes([*b0, *b1, *b2, *b3, *b4, *b5, *b6, *b7]) });
-            let t = quote(
-                level + 1,
-                &eval(arena.prepend(env, Value::lvl(level)), &body, arena).0.0,
-                arena,
-            ).0;
-            let len = t.len() as u64;
-            let mut ret = Vec::with_capacity(9 + t.len());
-            ret.push(1);
-            ret.extend_from_slice(&len.to_le_bytes());
-            ret.extend(t);
-            (ret, tail)
-        },
-        [2, tail @ ..] => {
-            let mut ret = vec![2];
-            let tail = quote_append(level, tail, &mut ret, arena);
-            let tail = quote_append(level, tail, &mut ret, arena);
-            (ret, tail)
-        },
-        _ => unsafe { std::hint::unreachable_unchecked() },
-    }
+    let mut ret = Vec::with_capacity(9);
+    let t = quote_append(level, value, &mut ret, arena);
+    (ret, t)
 }
 
 fn quote_append<'a>(level: usize, value: &'a [u8], ret: &mut Vec<u8>, arena: &mut ListArena<Value>) -> &'a [u8] {
@@ -148,10 +116,10 @@ fn quote_append<'a>(level: usize, value: &'a [u8], ret: &mut Vec<u8>, arena: &mu
             tail @ ..
         ] => {
             let env = unsafe { NonZeroUsize::new_unchecked(usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7])) };
-            let (body, tail) = tail.split_at(unsafe { usize::from_le_bytes([*b0, *b1, *b2, *b3, *b4, *b5, *b6, *b7]) });
+            let (body, tail) = tail.split_at(usize::from_le_bytes([*b0, *b1, *b2, *b3, *b4, *b5, *b6, *b7]));
             let t = quote(
                 level + 1,
-                &eval(arena.prepend(env, Value::lvl(level)), &body, arena).0.0,
+                &eval(arena.prepend(env, Value::lvl(level)), body, arena).0.0,
                 arena,
             ).0;
             let len = t.len() as u64;

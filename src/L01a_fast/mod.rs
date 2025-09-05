@@ -1,12 +1,14 @@
-use std::time::Duration;
+use std::{rc::Rc, time::Duration};
 
 use crate::L01a_fast::list_arena::ListArena;
 
 mod nbe_closure;
 mod nbe_closure_rc;
+mod nbe_closure_rc2;
 mod nbe_closure1;
 mod nbe_closure2;
 mod nbe_closure3;
+mod nbe_closure4;
 mod list_arena;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +139,21 @@ impl Term {
             _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
+
+    pub fn into_rc(self) -> TermRc {
+        match self {
+            Term::Idx(idx) => TermRc::Idx(idx),
+            Term::Lam(body) => TermRc::Lam(body.into_rc().into()),
+            Term::App(f, a) => TermRc::App(f.into_rc().into(), a.into_rc().into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TermRc {
+    Idx(usize),
+    Lam(Rc<TermRc>),
+    App(Rc<TermRc>, Rc<TermRc>),
 }
 
 fn lam(body: Term) -> Term {
@@ -188,7 +205,7 @@ pub fn main() -> Duration {
     //let result = Term::from_vec(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
-    println!("{}", result == check);
+    assert!(result == check);
     end
 }
 
@@ -205,7 +222,24 @@ pub fn main1() -> Duration {
     //let result = Term::from_vec(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
-    println!("{}", result == check);
+    assert!(result == check);
+    end
+}
+
+pub fn main11() -> Duration {
+    //println!("Hello, world!");
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let add = add.into_rc();
+    let start = std::time::Instant::now();
+    let result = nbe_closure_rc2::normalize(add);
+    let end = start.elapsed();
+    //let result = Term::from_vec(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    assert!(result == check);
     end
 }
 
@@ -221,7 +255,7 @@ pub fn main2() -> Duration {
     let result = Term::from_vec2(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
-    println!("{}", result == check);
+    assert!(result == check);
     end
 }
 
@@ -238,7 +272,7 @@ pub fn main3() -> Duration {
     let result = Term::from_vec2(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
-    println!("{}", result == check);
+    assert!(result == check);
     end
 }
 
@@ -255,6 +289,23 @@ pub fn main4() -> Duration {
     let result = Term::from_vec2(result).0;
     //println!("{:?}", result);
     let check = church(i + i);
-    println!("{}", result == check);
+    assert!(result == check);
+    end
+}
+
+pub fn main5() -> Duration {
+    //println!("Hello, world!");
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let add = add.to_vec();
+    let start = std::time::Instant::now();
+    let result = nbe_closure4::normalize(add);
+    let end = start.elapsed();
+    let result = Term::from_vec(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    assert!(result == check);
     end
 }

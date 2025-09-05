@@ -17,7 +17,7 @@ mod L08_product_type;
 mod L09_mltt;
 //mod L10_typeclass;
 
-fn calcu<F>(f: F)
+fn calcu<F>(f: F, name: &str)
 where
     F: Fn() -> Duration
 {
@@ -25,14 +25,16 @@ where
     for _i in 0..10 {
         ret += f()
     }
-    println!("{ret:?}")
+    println!("{name}: {ret:?}")
 }
 
 fn main() {
     //println!("Hello, world!");
-    calcu(L01a_fast::main);
-    calcu(L01a_fast::main1);
-    calcu(L01a_fast::main2);
-    calcu(L01a_fast::main3);
-    calcu(L01a_fast::main4);
+    calcu(L01a_fast::main, "basic");
+    calcu(L01a_fast::main1, "rc");
+    calcu(L01a_fast::main2, "vec");
+    calcu(L01a_fast::main3, "vec2");
+    calcu(L01a_fast::main4, "value vec");
+    calcu(L01a_fast::main5, "tail vec");
+    calcu(L01a_fast::main11, "rc2");
 }
