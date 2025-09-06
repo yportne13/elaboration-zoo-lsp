@@ -34,6 +34,7 @@ fn main() {
     calcu(L01a_fast::main1, "rc");
     calcu(L01a_fast::main2, "vec");
     calcu(L01a_fast::main3, "vec2");
+    calcu(L01a_fast::main32, "vec2 arena");
     calcu(L01a_fast::main4, "value vec");
     calcu(L01a_fast::main5, "tail vec");
     calcu(L01a_fast::main11, "rc2");

@@ -7,6 +7,7 @@ mod nbe_closure_rc;
 mod nbe_closure_rc2;
 mod nbe_closure1;
 mod nbe_closure2;
+mod nbe_closure22;
 mod nbe_closure3;
 mod nbe_closure4;
 mod list_arena;
@@ -134,6 +135,63 @@ impl Term {
                 // App case: parse two consecutive terms
                 let (term1, remaining) = Term::from_vec2(bytes);
                 let (term2, final_remaining) = Term::from_vec2(remaining);
+                (Term::App(Box::new(term1), Box::new(term2)), final_remaining)
+            },
+            _ => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+
+    pub fn to_vec3(self, arena_tm: &mut Vec<Rc<Vec<u8>>>) -> Vec<u8> {
+        match self {
+            Term::Idx(x) => {
+                let mut result = vec![0]; // tag for Idx
+                result.extend_from_slice(&x.to_le_bytes());
+                result
+            },
+            Term::Lam(term) => {
+                let term_bytes = term.to_vec3(arena_tm);
+                let mut result = vec![1]; // tag for Lam
+                result.extend_from_slice(&arena_tm.len().to_le_bytes());
+                arena_tm.push(term_bytes.into());
+                result
+            },
+            Term::App(term1, term2) => {
+                let term1_bytes = term1.to_vec3(arena_tm);
+                let term2_bytes = term2.to_vec3(arena_tm);
+                let mut result = vec![2]; // tag for App
+                result.extend(term1_bytes);
+                result.extend(term2_bytes);
+                result
+            },
+        }
+    }
+
+    pub fn from_vec3(mut bytes: Vec<u8>, arena_tm: &Vec<Rc<Vec<u8>>>) -> (Term, Vec<u8>) {
+        let tag = unsafe { *bytes.get_unchecked(0) };
+        bytes.drain(0..1);
+        
+        match tag {
+            0 => {
+                // Idx case: read 8 bytes as usize
+                let mut idx_bytes = [0u8; 8];
+                idx_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
+                bytes.drain(0..8);
+                let idx = usize::from_le_bytes(idx_bytes);
+                (Term::Idx(idx), bytes)
+            },
+            1 => {
+                // Lam case: read length (8 bytes) then the term
+                let mut len_bytes = [0u8; 8];
+                len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
+                bytes.drain(0..8);
+                let len = u64::from_le_bytes(len_bytes) as usize;
+                let (term, _) = Term::from_vec3(arena_tm.get(len).unwrap().to_vec(), arena_tm);
+                (Term::Lam(Box::new(term)), bytes)
+            },
+            2 => {
+                // App case: parse two consecutive terms
+                let (term1, remaining) = Term::from_vec3(bytes, arena_tm);
+                let (term2, final_remaining) = Term::from_vec3(remaining, arena_tm);
                 (Term::App(Box::new(term1), Box::new(term2)), final_remaining)
             },
             _ => unsafe { std::hint::unreachable_unchecked() },
@@ -270,6 +328,24 @@ pub fn main3() -> Duration {
     let result = nbe_closure2::normalize(add, &mut arena);
     let end = start.elapsed();
     let result = Term::from_vec2(result).0;
+    //println!("{:?}", result);
+    let check = church(i + i);
+    assert!(result == check);
+    end
+}
+
+pub fn main32() -> Duration {
+    let i = 1000;
+    let a = church(i);
+    let b = church(i);
+    let add = apply(church_add(), vec![a, b]);
+    let mut arena_tm = Vec::new();
+    let add = add.to_vec3(&mut arena_tm);
+    let start = std::time::Instant::now();
+    let mut arena = ListArena::new();
+    let result = nbe_closure22::normalize(add, &mut arena, &mut arena_tm);
+    let end = start.elapsed();
+    let result = Term::from_vec3(result, &arena_tm).0;
     //println!("{:?}", result);
     let check = church(i + i);
     assert!(result == check);
