@@ -70,13 +70,46 @@ impl Infer {
     ) -> Result<(Tm, VTy), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
-    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
-        self.check_base::<true>(cxt, t, a)
+    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<(Tm, Cxt), Error> {
+        let x = self.infer_expr(cxt, t);
+        let (t_inferred, inferred_type) = self.insert(cxt, x)?;
+        let new_cxt = self.unify_pm(cxt, a, inferred_type)?;
+        Ok((t_inferred, new_cxt))
+    }
+    fn unify_pm(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<Cxt, Error> {
+        //println!("  {}", self.meta.len());
+        //println!("{:?} == {:?}", t, t_prime);
+        let ret = match (self.force(t), self.force(t_prime)) {
+            (Val::Rigid(x, sp), v) if sp.is_empty() => { 
+                Ok(cxt.update_cxt(self, x, v))
+            }
+            (v, Val::Rigid(x, sp)) if sp.is_empty() => { 
+                Ok(cxt.update_cxt(self, x, v))
+            }
+            (
+                //Val::SumCase { case_name: name1, datas: d1, .. },
+                //Val::SumCase { case_name: name2, datas: d2, .. },
+                Val::Sum(name1, d1, ..),
+                Val::Sum(name2, d2, ..),
+            ) => {
+                if name1 == name2 {
+                    let mut cxt = cxt.clone();
+                    for (x, y) in d1.iter().zip(d2.iter()) {
+                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone())?;
+                    }
+                    Ok(cxt)
+                } else {
+                    Err(Error("".to_string()))
+                }
+            }
+            (u, v) => {
+                self.unify_catch(cxt, u, v)
+                    .map(|_| cxt.clone())
+            }
+        };
+        ret
     }
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
-        self.check_base::<false>(cxt, t, a)
-    }
-    pub fn check_base<const PM: bool>(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         match (t, self.force(a)) {
             // Check lambda expressions
@@ -150,7 +183,7 @@ impl Infer {
             (t, expected) => {
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-                self.unify_catch::<PM>(cxt, expected, inferred_type)?;
+                self.unify_catch(cxt, expected, inferred_type)?;
                 Ok(t_inferred)
             }
         }
@@ -411,7 +444,7 @@ impl Infer {
                                 Val::U,
                             )),
                         );
-                        self.unify_catch::<false>(
+                        self.unify_catch(
                             cxt,
                             Val::Pi(
                                 empty_span("x".to_string()),

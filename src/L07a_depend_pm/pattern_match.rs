@@ -117,24 +117,24 @@ impl Compiler {
             Vec<(Span<String>, Raw)>, // Constructor return type arguments
         )],
     ) -> Result<
-        Vec<&'a (
+        Vec<(&'a (
             Constructor,
             Vec<(Span<String>, Raw, Icit)>,
             Vec<(Span<String>, Raw)>,
-        )>,
+        ), Cxt)>,
         Error,
     > {
         let mut accessible = Vec::new();
 
-        match infer.force(typ.clone()) {
-            Val::Sum(..) => {},
+        let forced_type = match infer.force(typ.clone()) {
+            x @ Val::Sum(..) => x,
             _ => {
                 for constr_def in all_constrs {
-                    accessible.push(constr_def);
+                    accessible.push((constr_def, cxt.clone()));
                 }
                 return Ok(accessible)
             }
-        }
+        };
 
         for constr_def @ (constr_name, constr_arg_tys_raw, _) in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
@@ -151,9 +151,9 @@ impl Compiler {
             }
 
             // 4. Try to unify it with the type of the matched term.
-            if temp_infer.check_pm(cxt, to_check.clone(), typ.clone()).is_ok() {
+            if let Ok((_, cxt)) = temp_infer.check_pm(cxt, to_check.clone(), forced_type.clone()) {
                 // If unification succeeds, the constructor is accessible.
-                accessible.push(constr_def);
+                accessible.push((constr_def, cxt));
             }
         }
 
@@ -201,6 +201,8 @@ impl Compiler {
                         .collect::<Vec<_>>();
                     self.compile_aux(infer, heads_rest, &new_arms, &new_context, cxt_global)
                 } else {
+                    //println!(" -- {}", infer.meta.len());
+                    //println!("  {:?}", typ);
                     let (typename, param, constrs) = match infer.force(typ.clone()) {
                         Val::Sum(span, param, cases) => (span, param, cases),
                         _ => {
@@ -227,10 +229,24 @@ impl Compiler {
                         typ,
                         &constrs,
                     )?;
+                    /*cxt_global.env
+                        .iter()
+                        .for_each(|x|
+                            println!(
+                                "{x:?}\n  {}",
+                                super::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, x.clone())),
+                            )
+                        );
+                    println!("----------------");*/
 
                     let decision_tree_branches = accessible_constrs
                         .iter()
-                        .map(|(constr, item_typs, ret_bind)| {
+                        .map(|((constr, item_typs, ret_bind), cxt_global)| {
+                            /*cxt_global.env
+                                .iter()
+                                .for_each(|x|
+                                    println!("{:?}", x)
+                                );*/
                             let mut cxt_param = cxt_global.clone();//TODO: sum should be closure. use cxt in closure
                             let new_heads = item_typs
                                 .iter()

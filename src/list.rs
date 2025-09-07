@@ -44,6 +44,10 @@ impl<T> List<T> {
         List { head: self.head.as_ref().and_then(|node| node.next.clone()) }
     }
 
+    pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
     pub fn map<U, F>(&self, f: F) -> List<U>
     where
         F: Fn(&T) -> U + Copy,
@@ -51,6 +55,29 @@ impl<T> List<T> {
         match self {
             List { head: None } => List::new(),
             x => x.tail().map(f).prepend(f(self.head().unwrap()))
+        }
+    }
+}
+
+impl<T: Clone> List<T> {
+    pub fn change_n(&self, n: usize, f: impl FnOnce(&T) -> T) -> List<T> {
+        if n == 0 {
+            self.tail().prepend(f(self.head().unwrap()))
+        } else {
+            self.tail().change_n(n - 1, f).prepend(self.head().unwrap().clone())
+        }
+    }
+
+    pub fn change_tail(self, new_tail: List<T>) -> List<T> {
+        let head_len = self.len() - new_tail.len();
+        self.change_tail_helper(new_tail, head_len)
+    }
+
+    fn change_tail_helper(self, new_tail: List<T>, head_len: usize) -> List<T> {
+        if head_len == 0 {
+            new_tail
+        } else {
+            self.tail().change_tail_helper(new_tail, head_len - 1).prepend(self.head().unwrap().clone())
         }
     }
 }

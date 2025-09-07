@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::bimap::BiMap;
+
 use super::{
     syntax::{Locals, Pruning},
     *,
@@ -19,8 +21,7 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: HashMap<String, (Lvl, VTy)>,
-    pub subst: List<(Val, Val)>,
+    pub src_names: BiMap<String, Lvl, VTy>,
 }
 
 impl Cxt {
@@ -89,8 +90,7 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
-            subst: List::new(),
+            src_names: BiMap::new(),
         }
     }
 
@@ -115,7 +115,6 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
-            subst: self.subst.clone(),
         }
     }
 
@@ -129,7 +128,6 @@ impl Cxt {
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
             src_names,
-            subst: self.subst.clone(),
         }
     }
 
@@ -141,7 +139,6 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
-            subst: self.subst.clone(),
         }
     }
 
@@ -155,18 +152,45 @@ impl Cxt {
             locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
-            subst: self.subst.clone(),
         }
     }
 
-    pub fn subst(&self, x: Val, y: Val) -> Self {
-        Self {
-            env: self.env.clone(),
+    /// freshVal 函数实现
+    /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
+    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: Val) -> Val {
+        // quote def from (Lvl (length from))
+        let quoted = infer.quote(Lvl(from.iter().count() as u32), val);
+
+        // eval def to
+        infer.eval(to, quoted)
+    }
+
+    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Val) -> Cxt {
+        let x_prime = lvl2ix(self.lvl, x).0 as usize;
+        let env = self.env.change_n(x_prime, |_| v);
+        let mut new_src_names = self.src_names.clone();
+        let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
+        
+        Cxt {
+            env: env_t,
             lvl: self.lvl,
-            locals: self.locals.clone(),
+            locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
             pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            subst: self.subst.prepend((x, y)),
+            src_names: new_src_names,
+        }
+    }
+
+    fn refresh(&self, infer: &Infer, env: &List<Val>, src_names: &mut BiMap<String, Lvl, Val>, env2: List<Val>) -> List<Val> {
+        if env.is_empty() {
+            List::new()
+        } else {
+            let env_t = self.refresh(infer, &env.tail(), src_names, env2.clone());
+            let env_tt = env2.change_tail(env_t.clone());
+            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap().clone());
+            let ret = env_t.prepend(ret);
+            let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
+            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change.clone());
+            ret
         }
     }
 }

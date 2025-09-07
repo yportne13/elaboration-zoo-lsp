@@ -4,6 +4,7 @@ use std::time::Duration;
 
 mod parser_lib;
 mod list;
+mod bimap;
 mod L01_eval;
 mod L01a_fast;
 mod L02_tyck;
