@@ -237,6 +237,7 @@ impl Infer {
         }
     }
     fn rename(&mut self, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
+        //println!(" rename {:?}\n >> {:?}", pren, t);
         match self.force(t) {
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == m_prime => Err(UnifyError),
@@ -272,14 +273,41 @@ impl Infer {
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
             Val::Prim => Ok(Tm::Prim),
             Val::Sum(x, params, cases) => {
+                let mut pren = pren.clone();
                 let new_params = params
                     .into_iter()
-                    .map(|x| match (self.rename(pren, x.1), self.rename(pren, x.2)) {
-                        (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
-                        (Err(x), _) | (_, Err(x)) => Err(x),
+                    .map(|x| {
+                        let ret = match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
+                            (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
+                            (Err(x), _) | (_, Err(x)) => Err(x),
+                        };
+                        pren = lift(&pren);
+                        ret
                     })
                     .collect::<Result<_, _>>()?;
-                Ok(Tm::Sum(x, new_params, cases))
+                let new_cases = cases
+                    .into_iter()
+                    .map(|x| {
+                        let mut pren = pren.clone();
+                        Ok((
+                            x.0,
+                            x.1.into_iter()
+                                .map(|y| {
+                                    let t = self.rename(&pren, y.1)?;
+                                    pren = lift(&pren);
+                                    Ok((y.0, t, y.2))
+                                })
+                                .collect::<Result<_, UnifyError>>()?,
+                            x.2.into_iter()
+                                .map(|y| {
+                                    let t = self.rename(&pren, y.1)?;
+                                    Ok((y.0, t))
+                                })
+                                .collect::<Result<_, UnifyError>>()?,
+                        ))
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(Tm::Sum(x, new_params, new_cases))
             }
             Val::SumCase {
                 sum_name,
@@ -288,18 +316,25 @@ impl Infer {
                 datas: params,
                 cases_name,
             } => {
+                let mut pren = pren.clone();
                 let global_params = global_params
                     .into_iter()
                     .map(|x| {
-                        match (self.rename(pren, x.1), self.rename(pren, x.2)) {
+                        let ret = match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
                             (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
                             (Err(e), _) | (_, Err(e)) => Err(e),
-                        }
+                        };
+                        pren = lift(&pren);
+                        ret
                     })
                     .collect::<Result<_, _>>()?;
                 let params = params
                     .into_iter()
-                    .map(|p| self.rename(pren, p.1).map(|z| (p.0, z, p.2)))
+                    .map(|p| {
+                        let z = self.rename(&pren, p.1)?;
+                        pren = lift(&pren);
+                        Ok((p.0, z, p.2))
+                    })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
                     sum_name,
@@ -393,6 +428,7 @@ impl Infer {
             self.prune_ty(&pr, mty.clone())?; //TODO:revPruning?
         }
 
+        //println!(">>> {:?}\n >  {:?}", pren, rhs);
         let rhs = self.rename(
             &PartialRenaming {
                 occ: Some(m),
@@ -504,13 +540,13 @@ impl Infer {
 
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
-            (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+            (Val::Pi(x, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
                 self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
                 self.unify(
                     l + 1,
                     &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a.clone()),
-                    self.closure_apply(&b, Val::vvar(l)),
-                    self.closure_apply(&b_prime, Val::vvar(l)),
+                    self.closure_apply(b, Val::vvar(l)),
+                    self.closure_apply(b_prime, Val::vvar(l)),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
@@ -525,19 +561,19 @@ impl Infer {
             (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify(
                 l + 1,
                 cxt,
-                self.closure_apply(&t, Val::vvar(l)),
-                self.closure_apply(&t_prime, Val::vvar(l)),
+                self.closure_apply(t, Val::vvar(l)),
+                self.closure_apply(t_prime, Val::vvar(l)),
             ),
             (t, Val::Lam(_, i, t_prime)) => self.unify(
                 l + 1,
                 cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
-                self.closure_apply(&t_prime, Val::vvar(l)),
+                self.closure_apply(t_prime, Val::vvar(l)),
             ),
             (Val::Lam(_, i, t), t_prime) => self.unify(
                 l + 1,
                 cxt,
-                self.closure_apply(&t, Val::vvar(l)),
+                self.closure_apply(t, Val::vvar(l)),
                 self.v_app(t_prime.clone(), Val::vvar(l), *i),
             ),
             (Val::Flex(m, sp), t_prime) => self.solve(l, *m, sp.clone(), t_prime.clone()),
@@ -549,18 +585,25 @@ impl Infer {
             (Val::Prim, Val::LiteralType) => Ok(()),
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
+                let mut cxt = cxt.clone();
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
+                    cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());
                 }
                 Ok(())
             }
             (
-                Val::SumCase { sum_name: a, global_params: _, case_name: ca, datas: params_a, cases_name: _ },
+                Val::SumCase { sum_name: a, global_params, case_name: ca, datas: params_a, cases_name: _ },
                 Val::SumCase { sum_name: b, global_params: _, case_name: cb, datas: params_b, cases_name: _ },
             ) if a.data == b.data && ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
+                let mut cxt = cxt.clone();
+                for p in global_params {
+                    cxt = cxt.bind(p.0.clone(), self.quote(cxt.lvl, p.1.clone()), p.1.clone());
+                }
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
+                    cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());
                 }
                 Ok(())
             }

@@ -79,7 +79,7 @@ impl Infer {
     fn unify_pm(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         //println!("{:?} == {:?}", t, t_prime);
-        let ret = match (self.force(t), self.force(t_prime)) {
+        match (self.force(t), self.force(t_prime)) {
             (Val::Rigid(x, sp), v) if sp.is_empty() => { 
                 Ok(cxt.update_cxt(self, x, v))
             }
@@ -106,8 +106,7 @@ impl Infer {
                 self.unify_catch(cxt, u, v)
                     .map(|_| cxt.clone())
             }
-        };
-        ret
+        }
     }
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
@@ -522,15 +521,40 @@ impl Infer {
             Raw::Match(_, _) => Err(Error("try to infer match".to_owned())),
 
             Raw::Sum(name, params, cases) => {
+                let mut cxt = cxt.clone();
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let (ty_checked, typ) = self.infer_expr(cxt, ty.2.clone())?;
-                        let typ = self.quote(cxt.lvl, typ);
+                        let (ty_checked, typ_val) = self.infer_expr(&cxt, ty.2.clone())?;
+                        let typ = self.quote(cxt.lvl, typ_val.clone());
+                        cxt = cxt.bind(ty.0.clone(), typ.clone(), typ_val);
                         Ok((ty.0.clone(), ty_checked, typ, ty.1))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok((Tm::Sum(name, new_params, cases), Val::U))
+                let new_cases = cases
+                    .iter()
+                    .map(|(name, ty, index)| {
+                        let mut cxt = cxt.clone();
+                        Ok((
+                            name.clone(),
+                            ty.iter()
+                                .map(|x| {
+                                    let (ty_checked, typ_val) = self.infer_expr(&cxt, x.1.clone())?;
+                                    let typ = self.quote(cxt.lvl, typ_val.clone());
+                                    cxt = cxt.bind(x.0.clone(), typ, typ_val);
+                                    Ok((x.0.clone(), ty_checked, x.2))
+                                })
+                                .collect::<Result<_, Error>>()?,
+                            index.iter()
+                                .map(|x| {
+                                    let (ty_checked, _) = self.infer_expr(&cxt, x.1.clone())?;
+                                    Ok((x.0.clone(), ty_checked))
+                                })
+                                .collect::<Result<_, Error>>()?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((Tm::Sum(name, new_params, new_cases), Val::U))
             }
 
             Raw::SumCase {
@@ -540,19 +564,58 @@ impl Infer {
                 case_name,
                 datas,
             } => {
+                let mut cxt = cxt.clone();
                 let (new_params_tm, new_params_val) = params
                     .iter()
                     .map(|ty| {
-                        let (tm, vty) = self.infer_expr(cxt, ty.2.clone())?;
+                        let (tm, vty) = self.infer_expr(&cxt, ty.2.clone())?;
                         let vtm = self.quote(cxt.lvl, vty.clone());
                         let ty_checked = self.eval(&cxt.env, tm.clone());
+                        cxt = cxt.bind(ty.0.clone(), vtm.clone(), vty.clone());
                         Ok(((ty.0.clone(), tm, vtm, ty.1), (ty.0.clone(), ty_checked, vty, ty.1)))
                     })
                     .collect::<Result<(Vec<_>, Vec<_>), _>>()?;
+                let mut cxt_data = cxt.clone();
                 let datas = datas
                     .into_iter()
-                    .map(|x| self.infer_expr(&cxt, x.1).map(|z| (x.0, z.0, x.2)))
-                    .collect::<Result<_, _>>()?;
+                    .map(|x| {
+                        let (tm, typ_val) = self.infer_expr(&cxt_data, x.1)?;
+                        cxt_data = cxt_data.bind(
+                            x.0.clone(),
+                            self.quote(cxt_data.lvl, typ_val.clone()),
+                            typ_val
+                        );
+                        Ok((x.0, tm, x.2))
+                    })
+                    .collect::<Result<_, _>>()?;//TODO:this need new cxt
+                let new_cases = cases
+                    .iter()
+                    .map(|(name, ty, index)| {
+                        let mut cxt = cxt.clone();
+                        Ok((
+                            name.clone(),
+                            ty.iter()
+                                .map(|x| {
+                                    let (ty_checked, typ_val) = self.infer_expr(&cxt, x.1.clone())?;
+                                    let typ = self.eval(&cxt.env, ty_checked);
+                                    cxt = cxt.bind(
+                                        x.0.clone(),
+                                        self.quote(cxt.lvl, typ_val.clone()),
+                                        typ_val
+                                    );
+                                    Ok((x.0.clone(), typ, x.2))
+                                })
+                                .collect::<Result<_, Error>>()?,
+                            index.iter()
+                                .map(|x| {
+                                    let (ty_checked, _) = self.infer_expr(&cxt, x.1.clone())?;
+                                    let typ = self.eval(&cxt.env, ty_checked);
+                                    Ok((x.0.clone(), typ))
+                                })
+                                .collect::<Result<_, Error>>()?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok((
                     Tm::SumCase {
                         sum_name: sum_name.clone(),
@@ -561,7 +624,7 @@ impl Infer {
                         datas,
                         cases_name: cases.iter().map(|x| x.0.clone()).collect(),
                     },
-                    Val::Sum(sum_name, new_params_val, cases),
+                    Val::Sum(sum_name, new_params_val, new_cases),
                 ))
             }
         }

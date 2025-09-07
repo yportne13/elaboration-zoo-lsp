@@ -113,14 +113,14 @@ impl Compiler {
         typ: &Val, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
         all_constrs: &'a [(
             Constructor,
-            Vec<(Span<String>, Raw, Icit)>, // Constructor argument types
-            Vec<(Span<String>, Raw)>, // Constructor return type arguments
+            Vec<(Span<String>, Val, Icit)>, // Constructor argument types
+            Vec<(Span<String>, Val)>, // Constructor return type arguments
         )],
     ) -> Result<
         Vec<(&'a (
             Constructor,
-            Vec<(Span<String>, Raw, Icit)>,
-            Vec<(Span<String>, Raw)>,
+            Vec<(Span<String>, Val, Icit)>,
+            Vec<(Span<String>, Val)>,
         ), Cxt)>,
         Error,
     > {
@@ -252,16 +252,14 @@ impl Compiler {
                                 .iter()
                                 .flat_map(|x| match x.2 {
                                     Icit::Impl => {
-                                        let tm = infer.check(&cxt_param, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
-                                        let val = infer.eval(&cxt_param.env, tm.clone());
-                                        cxt_param = cxt_param.bind(x.0.clone(), tm, val);
+                                        let tm = infer.quote(cxt_param.lvl, x.1.clone());
+                                        cxt_param = cxt_param.bind(x.0.clone(), tm, x.1.clone());
                                         None
                                     }
                                     Icit::Expl => {
-                                        let tm = infer.check(&cxt_param, x.1.clone(), Val::U).unwrap();//TODO:do not unwrap
-                                        let val = infer.eval(&cxt_param.env, tm.clone());
-                                        cxt_param = cxt_param.bind(x.0.clone(), tm.clone(), val.clone());
-                                        Some((self.fresh(), tm, val))
+                                        let tm = infer.quote(cxt_param.lvl, x.1.clone());
+                                        cxt_param = cxt_param.bind(x.0.clone(), tm.clone(), x.1.clone());
+                                        Some((self.fresh(), tm, x.1.clone()))
                                     },
                                 })
                                 .collect::<Vec<_>>();
