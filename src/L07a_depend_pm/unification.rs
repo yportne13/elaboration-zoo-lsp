@@ -244,7 +244,11 @@ impl Infer {
                 _ => self.prune_vflex(pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => Err(UnifyError), // scope error
+                None => if x.0 <= 1919810 {
+                    Err(UnifyError)
+                } else {
+                    Ok(Tm::Var(lvl2ix(pren.dom, x)))
+                }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
                     self.rename_sp(pren, t, &sp)
@@ -273,75 +277,43 @@ impl Infer {
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
             Val::Prim => Ok(Tm::Prim),
             Val::Sum(x, params, cases) => {
-                let mut pren = pren.clone();
                 let new_params = params
                     .into_iter()
                     .map(|x| {
-                        let ret = match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
+                        match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
                             (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
                             (Err(x), _) | (_, Err(x)) => Err(x),
-                        };
-                        pren = lift(&pren);
-                        ret
+                        }
                     })
                     .collect::<Result<_, _>>()?;
-                let new_cases = cases
+                /*let new_cases = cases//TODO:?
                     .into_iter()
                     .map(|x| {
-                        let mut pren = pren.clone();
                         Ok((
                             x.0,
-                            x.1.into_iter()
-                                .map(|y| {
-                                    let t = self.rename(&pren, y.1)?;
-                                    pren = lift(&pren);
-                                    Ok((y.0, t, y.2))
-                                })
-                                .collect::<Result<_, UnifyError>>()?,
-                            x.2.into_iter()
-                                .map(|y| {
-                                    let t = self.rename(&pren, y.1)?;
-                                    Ok((y.0, t))
-                                })
-                                .collect::<Result<_, UnifyError>>()?,
+                            self.rename(&pren, x.1)?,
                         ))
                     })
-                    .collect::<Result<_, _>>()?;
-                Ok(Tm::Sum(x, new_params, new_cases))
+                    .collect::<Result<_, _>>()?;*/
+                Ok(Tm::Sum(x, new_params, cases))
             }
             Val::SumCase {
-                sum_name,
-                global_params,
+                typ,
                 case_name,
                 datas: params,
-                cases_name,
             } => {
-                let mut pren = pren.clone();
-                let global_params = global_params
-                    .into_iter()
-                    .map(|x| {
-                        let ret = match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
-                            (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
-                            (Err(e), _) | (_, Err(e)) => Err(e),
-                        };
-                        pren = lift(&pren);
-                        ret
-                    })
-                    .collect::<Result<_, _>>()?;
+                let typ = self.rename(&pren, *typ)?;
                 let params = params
                     .into_iter()
                     .map(|p| {
                         let z = self.rename(&pren, p.1)?;
-                        pren = lift(&pren);
                         Ok((p.0, z, p.2))
                     })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
-                    sum_name,
-                    global_params,
+                    typ: Box::new(typ),
                     case_name,
                     datas: params,
-                    cases_name,
                 })
             }
             Val::Match(val, env, cases) => {
@@ -593,14 +565,12 @@ impl Infer {
                 Ok(())
             }
             (
-                Val::SumCase { sum_name: a, global_params, case_name: ca, datas: params_a, cases_name: _ },
-                Val::SumCase { sum_name: b, global_params: _, case_name: cb, datas: params_b, cases_name: _ },
-            ) if a.data == b.data && ca.data == cb.data => {
+                Val::SumCase { typ: a, case_name: ca, datas: params_a },
+                Val::SumCase { typ: b, case_name: cb, datas: params_b },
+            ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
                 let mut cxt = cxt.clone();
-                for p in global_params {
-                    cxt = cxt.bind(p.0.clone(), self.quote(cxt.lvl, p.1.clone()), p.1.clone());
-                }
+                self.unify(l, &cxt, *a.clone(), *b.clone())?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
                     self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
                     cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());

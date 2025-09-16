@@ -111,17 +111,9 @@ impl Compiler {
         infer: &mut Infer,
         cxt: &Cxt,
         typ: &Val, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
-        all_constrs: &'a [(
-            Constructor,
-            Vec<(Span<String>, Val, Icit)>, // Constructor argument types
-            Vec<(Span<String>, Val)>, // Constructor return type arguments
-        )],
+        all_constrs: &'a [Constructor],
     ) -> Result<
-        Vec<(&'a (
-            Constructor,
-            Vec<(Span<String>, Val, Icit)>,
-            Vec<(Span<String>, Val)>,
-        ), Cxt)>,
+        Vec<(&'a Constructor, Vec<(Span<String>, Val, Icit)>, Cxt, Infer)>,
         Error,
     > {
         let mut accessible = Vec::new();
@@ -130,13 +122,13 @@ impl Compiler {
             x @ Val::Sum(..) => x,
             _ => {
                 for constr_def in all_constrs {
-                    accessible.push((constr_def, cxt.clone()));
+                    accessible.push((constr_def, vec![], cxt.clone(), infer.clone()));
                 }
                 return Ok(accessible)
             }
         };
 
-        for constr_def @ (constr_name, constr_arg_tys_raw, _) in all_constrs {
+        for constr_def @ constr_name in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
             // to avoid polluting the main inference state with temporary metavariables.
             let mut temp_infer = infer.clone();
@@ -144,16 +136,31 @@ impl Compiler {
             // 1. Create fresh metavariables for the constructor's own arguments.
             //    We need their types first, which are given as raw syntax.
             let mut to_check = Raw::Var(constr_name.clone());
-            for (_, _, icit) in constr_arg_tys_raw {
+            let mut params = vec![];
+            let mut cxt = cxt.clone();
+            loop {
+                let (_, typ) = temp_infer.infer_expr(&cxt, to_check.clone())?;
+                match typ {
+                    Val::Pi(name, icit, ty, _) => {
+                        if icit == Icit::Expl { // Only explicit args matter for the structure 
+                            params.push((name.clone(), *ty.clone(), icit));
+                        }
+                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(icit));
+                        cxt = cxt.bind(name, temp_infer.quote(cxt.lvl, *ty.clone()), *ty);
+                    },
+                    _ => {break;}
+                }
+            }
+            /*for (_, _, icit) in constr_arg_tys_raw {
                 if *icit == Icit::Expl { // Only explicit args matter for the structure 
                     to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
                 }
-            }
+            }*/
 
             // 4. Try to unify it with the type of the matched term.
-            if let Ok((_, cxt)) = temp_infer.check_pm(cxt, to_check.clone(), forced_type.clone()) {
+            if let Ok((_, cxt)) = temp_infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
                 // If unification succeeds, the constructor is accessible.
-                accessible.push((constr_def, cxt));
+                accessible.push((constr_def, params, cxt, temp_infer));
             }
         }
 
@@ -206,59 +213,34 @@ impl Compiler {
                     let (typename, param, constrs) = match infer.force(typ.clone()) {
                         Val::Sum(span, param, cases) => (span, param, cases),
                         _ => {
-                            (empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), vec![], vec![])])
+                            //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
+                            (empty_span("$unknown$".to_owned()), vec![], vec![empty_span("$unknown$".to_owned())])
                         }
                     };
-                    let cxt_global = param
-                        .iter()
-                        .filter(|x| x.3 == Icit::Impl)
-                        .fold(cxt_global.clone(), |cxt, (x, a, b, _)| {
-                            //cxt.define(x.clone(), infer.quote(cxt.lvl, a.clone()), a.clone(), Tm::Var(Ix(0)), Val::vvar(cxt.lvl))
-                            cxt.define(x.clone(), infer.quote(cxt.lvl, a.clone()), a.clone(), infer.quote(cxt.lvl, b.clone()), b.clone())
-                            //cxt.bind(x.clone(), infer.quote(cxt.lvl, a.clone()), a.clone())
-                        });
 
                     let constrs_name = constrs
                         .iter()
-                        .map(|x| x.0.data.clone())
+                        .map(|x| x.data.clone())
                         .collect::<BTreeSet<_>>();
 
                     let accessible_constrs = self.filter_accessible_constrs(
                         infer,
-                        &cxt_global,
+                        cxt_global,
                         typ,
                         &constrs,
                     )?;
-                    /*cxt_global.env
-                        .iter()
-                        .for_each(|x|
-                            println!(
-                                "{x:?}\n  {}",
-                                super::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, x.clone())),
-                            )
-                        );
-                    println!("----------------");*/
 
                     let decision_tree_branches = accessible_constrs
-                        .iter()
-                        .map(|((constr, item_typs, ret_bind), cxt_global)| {
-                            /*cxt_global.env
-                                .iter()
-                                .for_each(|x|
-                                    println!("{:?}", x)
-                                );*/
-                            let mut cxt_param = cxt_global.clone();//TODO: sum should be closure. use cxt in closure
+                        .into_iter()
+                        .map(|(constr, item_typs, cxt_t, mut infer)| {
                             let new_heads = item_typs
                                 .iter()
                                 .flat_map(|x| match x.2 {
                                     Icit::Impl => {
-                                        let tm = infer.quote(cxt_param.lvl, x.1.clone());
-                                        cxt_param = cxt_param.bind(x.0.clone(), tm, x.1.clone());
                                         None
                                     }
                                     Icit::Expl => {
-                                        let tm = infer.quote(cxt_param.lvl, x.1.clone());
-                                        cxt_param = cxt_param.bind(x.0.clone(), tm.clone(), x.1.clone());
+                                        let tm = infer.quote(cxt_t.lvl, x.1.clone());
                                         Some((self.fresh(), tm, x.1.clone()))
                                     },
                                 })
@@ -359,7 +341,7 @@ impl Compiler {
                                     }
                                 };
                                 self.compile_aux(
-                                    infer,
+                                    &mut infer,
                                     &new_heads
                                         .iter()
                                         .chain(heads_rest)
@@ -367,7 +349,7 @@ impl Compiler {
                                         .collect::<Vec<_>>(),
                                     &remaining_arms,
                                     &context_,
-                                    &cxt_global,
+                                    &cxt_t,
                                 )?
                             };
 
@@ -448,24 +430,18 @@ impl Compiler {
         cxt: &Env,
         arms: &[(PatternDetail, Tm)],
     ) -> Option<(Tm, Env)> {
-        let (case_name, global_prarams, params, constrs_name) = match infer.force(heads.clone()) {
+        let (case_name, params, constrs_name) = match infer.force(heads.clone()) {
             Val::SumCase {
-                sum_name: _,
+                typ,
                 case_name,
-                global_params,
                 datas: params,
-                cases_name,
-            } => (case_name, global_params, params, cases_name),
+            } => (case_name, params, match *typ {
+                Val::Sum(_, _, cases) => cases,
+                _ => panic!("by now only can match a sum type, but get {:?}", heads),
+            }),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (empty_span("$unknown$".to_owned()), vec![], vec![], vec![])
+            _ => (empty_span("$unknown$".to_owned()), vec![], vec![])
         };
-
-        let cxt_new = global_prarams
-            .into_iter()
-            .filter(|x| x.3 == Icit::Impl)
-            .fold(cxt.clone(), |cxt, (name, val, vty, _)| {
-                cxt.prepend(val)
-            });
 
         arms.iter()
             .filter_map(|(pattern, body)| match pattern {
@@ -487,7 +463,7 @@ impl Compiler {
                     params.iter()
                         .filter(|x| x.2 == Icit::Expl)
                     .map(|x| &x.1).zip(item_pats.iter()).try_fold(
-                        (body.clone(), cxt_new.clone()),
+                        (body.clone(), cxt.clone()),
                         |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
                             Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
                         },

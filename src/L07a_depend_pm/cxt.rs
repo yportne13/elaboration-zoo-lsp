@@ -194,3 +194,13 @@ impl Cxt {
         }
     }
 }
+
+impl Cxt {
+    pub fn print_env(&self, infer: &Infer) {
+        self.env
+            .iter()
+            .for_each(|x| {
+                println!("{}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x.clone())))
+            });
+    }
+}

@@ -243,10 +243,26 @@ impl Infer {
                     .iter()
                     .map(|x| (x.0.clone(), x.2, Raw::Var(x.0.clone())))
                     .collect();
+                let new_cases = cases
+                    .clone()
+                    .into_iter()
+                    .map(|(case_name, p, bind)| (
+                        case_name,
+                        params
+                            .iter()
+                            .filter(|x| x.2 == Icit::Impl)
+                            .cloned()
+                            .chain(p)
+                            .rev()
+                            .fold(bind.unwrap_or(Raw::Var(name.clone())), |ret, x| {
+                                Raw::Pi(x.0.clone(), x.2, Box::new(x.1.clone()), Box::new(ret))
+                            })
+                    ))//TODO: need to check the basic ret is this sum type or not
+                    .collect::<Vec<_>>();
                 let sum = Raw::Sum(
                     name.clone(),
                     new_params.clone(),
-                    cases.clone(),
+                    new_cases.iter().map(|x| x.0.clone()).collect(),
                 );
                 let typ = params.iter().rev().fold(Raw::U, |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -257,59 +273,27 @@ impl Infer {
                 let mut cxt = {
                     let typ_tm = self.check(cxt, typ, Val::U)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                    let fake_cxt = cxt.bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    self.global.insert(cxt.lvl, vt.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
-                for c in cases.clone() {
-                    let typ_ret = c.2.iter()
-                        .rev()
-                        .fold(sum.clone(), |ret, x| Raw::Let(
-                            x.0.clone(),
-                            Box::new(Raw::Hole),
-                            Box::new(x.1.clone()),
-                            Box::new(ret),
-                        ));
-                    let typ =
-                        params
-                            .iter()
-                            .filter(|x| match x.2 {
-                                Icit::Impl => true,
-                                Icit::Expl => false,
-                            })
-                            .cloned()
-                            .chain(c.1.clone().into_iter()/*.enumerate().map(|(idx, x)| {
-                                (empty_span(format!("_{idx}")), x.clone(), Icit::Expl)
-                            })*/)
-                            .rev()
-                            .fold(typ_ret, |a, b| {
-                                Raw::Pi(b.0, b.2, Box::new(b.1), Box::new(a))
-                            });
+                for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
-                                    sum_name: name.clone(),
-                                    params: new_params.clone(),
-                                    cases: cases
-                                        .clone(),
-                                    case_name: c.0.clone(),
-                                    datas: /*params
-                                        .iter()
-                                        .map(|x| (x.0.clone(), Icit::Impl))*/
-                                        //.chain(
-                                            c.1.iter()
-                                                .map(|(name, _, icit)| (name.clone(), *icit))
-                                        //)
-                                        .map(|x| (x.0.clone(), Raw::Var(x.0), x.1))
-                                        .collect(),
-                                };
-                    let body_ret_type = c.2.into_iter()
-                        .rev()
-                        .fold(body_ret_type, |ret, x| Raw::Let(
-                            x.0,
-                            Box::new(Raw::Hole),
-                            Box::new(x.1),
-                            Box::new(ret),
-                        ));
+                        typ: Box::new(c.2.clone().unwrap_or(Raw::Var(name.clone()))),
+                        case_name: c.0.clone(),
+                        datas: /*params
+                            .iter()
+                            .map(|x| (x.0.clone(), Icit::Impl))*/
+                            //.chain(
+                                c.1.iter()
+                                    .map(|(name, _, icit)| (name.clone(), *icit))
+                            //)
+                            .map(|x| (x.0.clone(), Raw::Var(x.0), x.1))
+                            .collect(),
+                    };
                     let bod =
                         params
                             .iter()
@@ -326,12 +310,13 @@ impl Infer {
                                 body_ret_type,
                                 |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)),
                             );
+                    let typ = typ.1;
                     cxt = {
                         let typ_tm = self.check(&cxt, typ, Val::U)?;
                         let vtyp = self.eval(&cxt.env, typ_tm.clone());
                         let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                         let vt = self.eval(&cxt.env, t_tm.clone());
-                        cxt.define(c.0, t_tm, vt, typ_tm, vtyp)
+                        cxt.define(c.0.clone(), t_tm, vt, typ_tm, vtyp)
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U, cxt))
@@ -521,110 +506,47 @@ impl Infer {
             Raw::Match(_, _) => Err(Error("try to infer match".to_owned())),
 
             Raw::Sum(name, params, cases) => {
-                let mut cxt = cxt.clone();
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let (ty_checked, typ_val) = self.infer_expr(&cxt, ty.2.clone())?;
+                        let (ty_checked, typ_val) = self.infer_expr(cxt, ty.2.clone())?;
                         let typ = self.quote(cxt.lvl, typ_val.clone());
-                        cxt = cxt.bind(ty.0.clone(), typ.clone(), typ_val);
                         Ok((ty.0.clone(), ty_checked, typ, ty.1))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let new_cases = cases
+                /*let new_cases = cases
                     .iter()
-                    .map(|(name, ty, index)| {
-                        let mut cxt = cxt.clone();
+                    .map(|(name, ty)| {
                         Ok((
                             name.clone(),
-                            ty.iter()
-                                .map(|x| {
-                                    let (ty_checked, typ_val) = self.infer_expr(&cxt, x.1.clone())?;
-                                    let typ = self.quote(cxt.lvl, typ_val.clone());
-                                    cxt = cxt.bind(x.0.clone(), typ, typ_val);
-                                    Ok((x.0.clone(), ty_checked, x.2))
-                                })
-                                .collect::<Result<_, Error>>()?,
-                            index.iter()
-                                .map(|x| {
-                                    let (ty_checked, _) = self.infer_expr(&cxt, x.1.clone())?;
-                                    Ok((x.0.clone(), ty_checked))
-                                })
-                                .collect::<Result<_, Error>>()?,
+                            self.infer_expr(&cxt, ty.clone())?.0,
                         ))
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok((Tm::Sum(name, new_params, new_cases), Val::U))
+                    .collect::<Result<Vec<_>, _>>()?;*/
+                Ok((Tm::Sum(name, new_params, cases), Val::U))
             }
 
             Raw::SumCase {
-                sum_name,
-                params,
-                cases,
+                typ,
                 case_name,
                 datas,
             } => {
-                let mut cxt = cxt.clone();
-                let (new_params_tm, new_params_val) = params
-                    .iter()
-                    .map(|ty| {
-                        let (tm, vty) = self.infer_expr(&cxt, ty.2.clone())?;
-                        let vtm = self.quote(cxt.lvl, vty.clone());
-                        let ty_checked = self.eval(&cxt.env, tm.clone());
-                        cxt = cxt.bind(ty.0.clone(), vtm.clone(), vty.clone());
-                        Ok(((ty.0.clone(), tm, vtm, ty.1), (ty.0.clone(), ty_checked, vty, ty.1)))
-                    })
-                    .collect::<Result<(Vec<_>, Vec<_>), _>>()?;
-                let mut cxt_data = cxt.clone();
+                let (typ_checked, _) = self.infer_expr(cxt, *typ)?;
+                let typ_val = self.eval(&cxt.env, typ_checked.clone());
                 let datas = datas
                     .into_iter()
                     .map(|x| {
-                        let (tm, typ_val) = self.infer_expr(&cxt_data, x.1)?;
-                        cxt_data = cxt_data.bind(
-                            x.0.clone(),
-                            self.quote(cxt_data.lvl, typ_val.clone()),
-                            typ_val
-                        );
+                        let (tm, _) = self.infer_expr(cxt, x.1)?;
                         Ok((x.0, tm, x.2))
                     })
                     .collect::<Result<_, _>>()?;//TODO:this need new cxt
-                let new_cases = cases
-                    .iter()
-                    .map(|(name, ty, index)| {
-                        let mut cxt = cxt.clone();
-                        Ok((
-                            name.clone(),
-                            ty.iter()
-                                .map(|x| {
-                                    let (ty_checked, typ_val) = self.infer_expr(&cxt, x.1.clone())?;
-                                    let typ = self.eval(&cxt.env, ty_checked);
-                                    cxt = cxt.bind(
-                                        x.0.clone(),
-                                        self.quote(cxt.lvl, typ_val.clone()),
-                                        typ_val
-                                    );
-                                    Ok((x.0.clone(), typ, x.2))
-                                })
-                                .collect::<Result<_, Error>>()?,
-                            index.iter()
-                                .map(|x| {
-                                    let (ty_checked, _) = self.infer_expr(&cxt, x.1.clone())?;
-                                    let typ = self.eval(&cxt.env, ty_checked);
-                                    Ok((x.0.clone(), typ))
-                                })
-                                .collect::<Result<_, Error>>()?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
                 Ok((
                     Tm::SumCase {
-                        sum_name: sum_name.clone(),
-                        global_params: new_params_tm,
+                        typ: Box::new(typ_checked),
                         case_name,
                         datas,
-                        cases_name: cases.iter().map(|x| x.0.clone()).collect(),
                     },
-                    Val::Sum(sum_name, new_params_val, new_cases),
+                    typ_val,
                 ))
             }
         }
@@ -635,7 +557,7 @@ fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
     let all_constr_name = cxt.env.iter()
         .flat_map(|x| match x {
             Val::Sum(_, _, x) => Some(
-                x.iter().map(|x| x.0.data.clone()).collect::<Vec<_>>()
+                x.iter().map(|x| x.data.clone()).collect::<Vec<_>>()
             ),
             _ => None,
         })

@@ -326,13 +326,12 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
                 /*paren(p_raw.many0_sep(kw(T![,])))
                     .option()
                     .map(|x| x.unwrap_or_default()),*/
-                paren(
-                    (string(Ident), kw(T![:=]), p_raw)
-                    .map(|x| (x.0, x.2))
-                    .many1_sep(kw(T![,]))
+                (
+                    kw(T![->]),
+                    p_raw,
                 )
                     .option()
-                    .map(|x| x.unwrap_or(vec![]))
+                    .map(|x| x.map(|y| y.1))
             )
                 .many1_sep(kw(EndLine)),
         ),
@@ -393,7 +392,7 @@ enum Bool {
 
 enum Nat {
     zero
-    succ(Nat)
+    succ(x: Nat)
 }
 
 def two = succ succ zero
