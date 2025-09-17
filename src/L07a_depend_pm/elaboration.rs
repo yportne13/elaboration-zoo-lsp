@@ -243,6 +243,13 @@ impl Infer {
                     .iter()
                     .map(|x| (x.0.clone(), x.2, Raw::Var(x.0.clone())))
                     .collect();
+                let default_ret = params
+                    .iter()
+                    .filter(|x| x.2 == Icit::Impl)
+                    .rev()
+                    .fold(Raw::Var(name.clone()), |ret, x| {
+                        Raw::App(Box::new(ret), Box::new(Raw::Var(x.0.clone())), super::parser::syntax::Either::Icit(x.2))
+                    });
                 let new_cases = cases
                     .clone()
                     .into_iter()
@@ -254,7 +261,7 @@ impl Infer {
                             .cloned()
                             .chain(p)
                             .rev()
-                            .fold(bind.unwrap_or(Raw::Var(name.clone())), |ret, x| {
+                            .fold(bind.unwrap_or(default_ret.clone()), |ret, x| {
                                 Raw::Pi(x.0.clone(), x.2, Box::new(x.1.clone()), Box::new(ret))
                             })
                     ))//TODO: need to check the basic ret is this sum type or not
@@ -282,7 +289,7 @@ impl Infer {
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
-                        typ: Box::new(c.2.clone().unwrap_or(Raw::Var(name.clone()))),
+                        typ: Box::new(c.2.clone().unwrap_or(default_ret.clone())),
                         case_name: c.0.clone(),
                         datas: /*params
                             .iter()
