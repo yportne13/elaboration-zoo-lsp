@@ -507,6 +507,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             parser::syntax::Decl::Def { name, .. }
             | parser::syntax::Decl::Enum { name, .. } => {
                 println!("> {}", name.data);
+                //cxt.print_env(&infer);
             },
             parser::syntax::Decl::Println(raw) => {},
         }
