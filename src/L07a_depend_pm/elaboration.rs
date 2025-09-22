@@ -572,9 +572,9 @@ fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
         .collect::<std::collections::HashSet<_>>();
     match pattern {
         Pattern::Any(name) => PatternDetail::Any(name),
-        Pattern::Con(name, params) if params.is_empty() && !all_constr_name.contains(&name.data) => {
-            PatternDetail::Bind(name)
-        },
+        //Pattern::Con(name, params) if params.is_empty() && !all_constr_name.contains(&name.data) => {
+        //    PatternDetail::Bind(name)
+        //},
         Pattern::Con(name, params) => {
             let new_params = params
                 .into_iter()

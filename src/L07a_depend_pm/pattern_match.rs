@@ -226,7 +226,7 @@ impl Compiler {
                         Val::Sum(span, param, cases) => (span, param, cases),
                         _ => {
                             //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
-                            (empty_span("$unknown$".to_owned()), vec![], vec![])
+                            (empty_span("$unknown$".to_owned()), vec![], vec![empty_span("$any$".to_owned())])
                         }
                     };
 
@@ -241,30 +241,32 @@ impl Compiler {
                             let remaining_arms = arms
                                 .iter()
                                 .filter_map(|(arm, idx, cxt)| {
-                                    let accessible_constrs = self.filter_accessible_constrs(
-                                        infer,
-                                        cxt,
-                                        typ,
-                                        &constrs,
-                                    ).ok()?;
-                                    if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
-                                        return Some(None);
-                                    }
-
-                                    let (_, typ) = infer.infer_expr(cxt, Raw::Var(constr.clone())).ok()?;
                                     let mut new_heads = vec![];
-                                    let mut param = param.clone();
-                                    param.reverse();
-                                    let mut typ = typ;
-                                    while let Val::Pi(_, icit, ty, closure) = typ {
-                                        if icit == Icit::Expl {
-                                            new_heads.push((self.fresh(), *ty));
-                                            typ = infer.closure_apply(&closure, Val::U);
-                                        } else {
-                                            let val = param.pop()
-                                                .map(|x| x.2)
-                                                .unwrap_or(Val::U);
-                                            typ = infer.closure_apply(&closure, val);
+                                    if constr.data != "$any$" {
+                                        let accessible_constrs = self.filter_accessible_constrs(
+                                            infer,
+                                            cxt,
+                                            typ,
+                                            &constrs,
+                                        ).ok()?;
+                                        if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
+                                            return Some(None);
+                                        }
+
+                                        let (_, typ) = infer.infer_expr(cxt, Raw::Var(constr.clone())).ok()?;
+                                        let mut param = param.clone();
+                                        param.reverse();
+                                        let mut typ = typ;
+                                        while let Val::Pi(_, icit, ty, closure) = typ {
+                                            if icit == Icit::Expl {
+                                                new_heads.push((self.fresh(), *ty));
+                                                typ = infer.closure_apply(&closure, Val::U);
+                                            } else {
+                                                let val = param.pop()
+                                                    .map(|x| x.1)
+                                                    .unwrap_or(Val::U);
+                                                typ = infer.closure_apply(&closure, val);
+                                            }
                                         }
                                     }
                                     match &arm.pats[..] {
@@ -281,7 +283,7 @@ impl Compiler {
                                             new_heads,
                                         ))),
                                         [Pattern::Con(constr_, item_pats), ..]
-                                            if !constrs_name.contains(&constr_.data) =>
+                                            if constr.data == "$any$" || !constrs_name.contains(&constr_.data) =>
                                         {
                                             Some(Some((
                                                 MatchArm {
