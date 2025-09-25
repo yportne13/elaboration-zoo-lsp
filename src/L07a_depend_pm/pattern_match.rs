@@ -171,7 +171,7 @@ impl Compiler {
         &mut self,
         infer: &mut Infer,
         heads: &[(Var, Val)],
-        arms: &[(MatchArm, usize, Cxt)],
+        arms: &[(MatchArm, usize, Cxt, Raw, Val, Val)],
         context: &MatchContext,
     ) -> Result<Box<DecisionTree>, Error> {
         /*println!(
@@ -189,11 +189,12 @@ impl Compiler {
         );*/
         match heads {
             [] => match arms {
-                [(arm, idx, cxt), ..] if arm.pats.is_empty() => {
+                [(arm, idx, cxt, raw, target_typ, ori), ..] if arm.pats.is_empty() => {
+                    let (_, cxt) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
                     self.reachable.insert(*idx, ());
                     //println!("prepare to check {:?}", arm.body);
                     //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
-                    let ret = infer.check(cxt, arm.body.0.clone(), self.ret_type.clone())?;
+                    let ret = infer.check(&cxt, arm.body.0.clone(), self.ret_type.clone())?;
                     Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
                 }
                 _ => panic!("impossible"),
@@ -215,6 +216,9 @@ impl Compiler {
                                 },
                                 arm.1,
                                 arm.2.clone(),
+                                arm.3.clone(),
+                                arm.4.clone(),
+                                arm.5.clone(),
                             )
                         })
                         .collect::<Vec<_>>();
@@ -240,7 +244,7 @@ impl Compiler {
                         .map(|constr| {
                             let remaining_arms = arms
                                 .iter()
-                                .filter_map(|(arm, idx, cxt)| {
+                                .filter_map(|(arm, idx, cxt, raw, target_typ, ori)| {
                                     let mut new_heads = vec![];
                                     if constr.data != "$any$" {
                                         let accessible_constrs = self.filter_accessible_constrs(
@@ -281,6 +285,9 @@ impl Compiler {
                                             *idx,
                                             cxt.clone(),
                                             new_heads,
+                                            raw.clone(),
+                                            target_typ.clone(),
+                                            ori.clone(),
                                         ))),
                                         [Pattern::Con(constr_, item_pats), ..]
                                             if constr.data == "$any$" || !constrs_name.contains(&constr_.data) =>
@@ -299,6 +306,9 @@ impl Compiler {
                                                 *idx,
                                                 cxt.bind(constr_.clone(), infer.quote(cxt.lvl, typ.clone()), typ.clone()),
                                                 new_heads,
+                                                raw.clone(),
+                                                target_typ.clone(),
+                                                ori.clone(),
                                             )))
                                         }
                                         [Pattern::Con(constr_, item_pats), ..] if constr_ == constr => {
@@ -314,6 +324,9 @@ impl Compiler {
                                                 *idx,
                                                 cxt.clone(),
                                                 new_heads,
+                                                raw.clone(),
+                                                target_typ.clone(),
+                                                ori.clone(),
                                             )))
                                         }
                                         _ => None,
@@ -374,7 +387,7 @@ impl Compiler {
                                     &remaining_arms
                                         .into_iter()
                                         .flatten()
-                                        .map(|x| (x.0, x.1, x.2))
+                                        .map(|x| (x.0, x.1, x.2, x.4, x.5, x.6))
                                         .collect::<Vec<_>>(),
                                     &context_,
                                 )?
@@ -407,12 +420,13 @@ impl Compiler {
         typ: Val,
         arms: &[(Pattern, Raw)],
         cxt: &Cxt,
+        target_val: Val,
     ) -> Result<(Box<DecisionTree>, Vec<Warning>), Error> {
         self.warnings = Vec::new();
         self.reachable = HashMap::new();
         let tree = self.compile_aux(
             infer,
-            &[(0, typ)],
+            &[(0, typ.clone())],
             &arms
                 .iter()
                 .enumerate()
@@ -424,6 +438,9 @@ impl Compiler {
                         },
                         idx,
                         cxt.clone(),
+                        pat.to_raw(),
+                        typ.clone(),
+                        target_val.clone(),
                     )
                 })
                 .collect::<Vec<_>>(),

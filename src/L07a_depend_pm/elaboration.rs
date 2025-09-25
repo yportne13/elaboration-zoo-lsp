@@ -70,6 +70,13 @@ impl Infer {
     ) -> Result<(Tm, VTy), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
+    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Val, ori: Val) -> Result<(Tm, Cxt), Error> {
+        let x = self.infer_expr(cxt, t);
+        let (t_inferred, inferred_type) = self.insert(cxt, x)?;
+        let new_cxt = self.unify_pm(cxt, a, inferred_type)?;
+        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()))?;
+        Ok((t_inferred, new_cxt))
+    }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<(Tm, Cxt), Error> {
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
@@ -156,7 +163,7 @@ impl Infer {
             (Raw::Match(expr, clause), expected) => {
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
                 let mut compiler = Compiler::new(expected);
-                let (ret, error) = compiler.compile(self, typ, &clause, cxt)?;
+                let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
                 if !error.is_empty() {
                     Err(Error(format!("{error:?}")))
                 } else {

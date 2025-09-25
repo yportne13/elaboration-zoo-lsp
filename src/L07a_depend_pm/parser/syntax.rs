@@ -18,6 +18,20 @@ pub enum Pattern {
     Con(Span<String>, Vec<Pattern>),
 }
 
+impl Pattern {
+    pub fn to_raw(&self) -> Raw {
+        match self {
+            Pattern::Any(_) => Raw::Hole,
+            Pattern::Con(name, pats) => pats.iter()
+                .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
+                    Box::new(ret),
+                    Box::new(p.to_raw()),
+                    Either::Icit(Icit::Expl),
+                )),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Raw {
     Var(Span<String>),

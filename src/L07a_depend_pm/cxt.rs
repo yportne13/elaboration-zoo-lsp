@@ -166,17 +166,28 @@ impl Cxt {
     }
 
     pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Val) -> Cxt {
-        let x_prime = lvl2ix(self.lvl, x).0 as usize;
-        let env = self.env.change_n(x_prime, |_| v);
-        let mut new_src_names = self.src_names.clone();
-        let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
+        match v {
+            Val::Flex(..) => self.clone(),
+            v => {
+                let x_prime = lvl2ix(self.lvl, x).0 as usize;
+                /*println!(
+                    " update {}: {} with {}",
+                    x.0,
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, self.env.iter().nth(x_prime).unwrap().clone())),
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
+                );*/
+                let env = self.env.change_n(x_prime, |_| v);
+                let mut new_src_names = self.src_names.clone();
+                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
         
-        Cxt {
-            env: env_t,
-            lvl: self.lvl,
-            locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-            pruning: self.pruning.clone(),
-            src_names: new_src_names,
+                Cxt {
+                    env: env_t,
+                    lvl: self.lvl,
+                    locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
+                    pruning: self.pruning.clone(),
+                    src_names: new_src_names,
+                }
+            }
         }
     }
 
