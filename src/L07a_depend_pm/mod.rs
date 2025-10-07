@@ -447,7 +447,19 @@ impl Infer {
                     .collect();*/
                 let tm_cases = cases
                     .into_iter()
-                    .map(|x| (x.0, x.1))
+                    .map(|x| (
+                        x.0.clone(),
+                        {
+                            let env = (0..x.0.bind_count())
+                                .fold(env.clone(), |env, _| env.prepend(Val::vvar(Lvl(env.len() as u32))));
+                            let mut avoid_recursive = self.clone();
+                            avoid_recursive.global
+                                .iter_mut()
+                                .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()));
+                            let tm = avoid_recursive.eval(&env, x.1);
+                            self.quote(l+x.0.bind_count(), tm)
+                        }
+                    ))
                     .collect();
                 Tm::Match(Box::new(self.quote(l, *val)), tm_cases)
             }

@@ -194,7 +194,9 @@ impl Compiler {
                     self.reachable.insert(*idx, ());
                     //println!("prepare to check {:?}", arm.body);
                     //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
-                    let ret = infer.check(&cxt, arm.body.0.clone(), self.ret_type.clone())?;
+                    let ret_type = infer.quote(cxt.lvl, self.ret_type.clone());
+                    let ret_type = infer.eval(&cxt.env, ret_type);
+                    let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
                     Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
                 }
                 _ => panic!("impossible"),

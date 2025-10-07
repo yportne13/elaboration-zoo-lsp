@@ -184,7 +184,7 @@ impl Cxt {
                     env: env_t,
                     lvl: self.lvl,
                     locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-                    pruning: self.pruning.clone(),
+                    pruning: self.pruning.change_n(x_prime, |_| None),
                     src_names: new_src_names,
                 }
             }
@@ -198,6 +198,17 @@ impl Cxt {
             let env_t = self.refresh(infer, &env.tail(), src_names, env2.clone());
             let env_tt = env2.change_tail(env_t.clone());
             let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap().clone());
+            /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
+            let b = pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()));
+            if a != b {
+                println!(
+                    "refresh {}: {} with {}",
+                    env.len(),
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone())),
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()))
+                );
+            }*/
+            
             let ret = env_t.prepend(ret);
             let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
             *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change.clone());
