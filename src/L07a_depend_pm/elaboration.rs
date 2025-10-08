@@ -573,14 +573,27 @@ fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
             Val::Sum(_, _, x) => Some(
                 x.iter().map(|x| x.data.clone()).collect::<Vec<_>>()
             ),
+            Val::Lam(_, _, c) => {
+                let mut tm = &c.1;
+                let mut ret = None;
+                loop {
+                    match tm.as_ref() {
+                        Tm::Sum(_, _, x) => {
+                            ret = Some(x.iter().map(|x| x.data.clone()).collect::<Vec<_>>());
+                            break;
+                        }
+                        Tm::Lam(_, _, c) => {
+                            tm = c;
+                        }
+                        _ => {break;}
+                    }
+                }
+                ret
+            }
             _ => None,
         })
         .flatten()
         .collect::<std::collections::HashSet<_>>();
-    all_constr_name.insert("None".to_string());
-    all_constr_name.insert("Some".to_string());
-    all_constr_name.insert("nil".to_string());
-    all_constr_name.insert("cons".to_string());
     match pattern {
         Pattern::Any(name) => PatternDetail::Any(name),
         Pattern::Con(name, params) if params.is_empty() && !all_constr_name.contains(&name.data) => {
