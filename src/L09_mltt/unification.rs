@@ -1,10 +1,10 @@
 use colored::Colorize;
 
-use crate::{L09_mltt::empty_span, list::List};
+use crate::list::List;
 
 use super::{
     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
-    parser::syntax::Icit, syntax::Pruning,
+    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -243,7 +243,11 @@ impl Infer {
                 _ => self.prune_vflex(pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => Err(UnifyError), // scope error
+                None => if x.0 <= 1919810 {
+                    Err(UnifyError)
+                } else {
+                    Ok(Tm::Var(lvl2ix(pren.dom, x)))
+                }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
                     self.rename_sp(pren, t, &sp)
@@ -274,48 +278,49 @@ impl Infer {
             Val::Sum(x, params, cases) => {
                 let new_params = params
                     .into_iter()
-                    .map(|x| self.rename(pren, x))
+                    .map(|x| {
+                        match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
+                            (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
+                            (Err(x), _) | (_, Err(x)) => Err(x),
+                        }
+                    })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::Sum(x, new_params, cases))
             }
             Val::SumCase {
-                sum_name,
+                typ,
                 case_name,
-                params,
-                cases_name,
+                datas: params,
             } => {
+                let typ = self.rename(&pren, *typ)?;
                 let params = params
                     .into_iter()
-                    .map(|p| self.rename(pren, p))
+                    .map(|p| {
+                        let z = self.rename(&pren, p.1)?;
+                        Ok((p.0, z, p.2))
+                    })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
-                    sum_name,
+                    typ: Box::new(typ),
                     case_name,
-                    params,
-                    cases_name,
+                    datas: params,
                 })
             }
-            Val::StructType(x, params, fields) => {
-                let new_params = params
+            Val::Match(val, env, cases) => {
+                let val = self.rename(pren, *val)?;
+                /*todo!();
+                let cases = cases
                     .into_iter()
-                    .map(|x| self.rename(pren, x))
-                    .collect::<Result<_, _>>()?;
-                let fields = fields
-                    .into_iter()
-                    .map(|(x, v)| Ok((x, self.rename(pren, v)?)))
-                    .collect::<Result<_, _>>()?;
-                Ok(Tm::StructType(x, new_params, fields))
-            }
-            Val::StructData(x, params, fields) => {
-                let new_params = params
-                    .into_iter()
-                    .map(|x| self.rename(pren, x))
-                    .collect::<Result<_, _>>()?;
-                let fields = fields
-                    .into_iter()
-                    .map(|(x, v)| Ok((x, self.rename(pren, v)?)))
-                    .collect::<Result<_, _>>()?;
-                Ok(Tm::StructData(x, new_params, fields))
+                    .map(|(pat, tm)| {
+                        let body = self.rename(
+                            &lift(pren),
+                            self.closure_apply(&super::Closure(env.clone(), Box::new(tm)), Val::vvar(pren.cod)),
+                        )?;
+                        Ok((pat, body))
+                    })
+                    .collect::<Result<_, _>>()?;*/
+                //TODO:need rename?
+                Ok(Tm::Match(Box::new(val), cases))
             }
         }
     }
@@ -489,16 +494,21 @@ impl Infer {
         //println!("unify: {t:?} {u:?}");
         let t = self.force(t);
         let u = self.force(u);
+        /*println!(
+            "uni {}\n == {}",
+            pretty_tm(0, cxt.names(), &self.quote(l, t.clone())),
+            pretty_tm(0, cxt.names(), &self.quote(l, u.clone())),
+        );*/
 
         match (&t, &u) {
             (Val::U(x), Val::U(y)) if x == y => Ok(()),
-            (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+            (Val::Pi(x, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
                 self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
                 self.unify(
                     l + 1,
-                    cxt,
-                    self.closure_apply(&b, Val::vvar(l)),
-                    self.closure_apply(&b_prime, Val::vvar(l)),
+                    &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a.clone()),
+                    self.closure_apply(b, Val::vvar(l)),
+                    self.closure_apply(b_prime, Val::vvar(l)),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
@@ -513,19 +523,19 @@ impl Infer {
             (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify(
                 l + 1,
                 cxt,
-                self.closure_apply(&t, Val::vvar(l)),
-                self.closure_apply(&t_prime, Val::vvar(l)),
+                self.closure_apply(t, Val::vvar(l)),
+                self.closure_apply(t_prime, Val::vvar(l)),
             ),
             (t, Val::Lam(_, i, t_prime)) => self.unify(
                 l + 1,
                 cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
-                self.closure_apply(&t_prime, Val::vvar(l)),
+                self.closure_apply(t_prime, Val::vvar(l)),
             ),
             (Val::Lam(_, i, t), t_prime) => self.unify(
                 l + 1,
                 cxt,
-                self.closure_apply(&t, Val::vvar(l)),
+                self.closure_apply(t, Val::vvar(l)),
                 self.v_app(t_prime.clone(), Val::vvar(l), *i),
             ),
             (Val::Flex(m, sp), t_prime) => self.solve(l, *m, sp.clone(), t_prime.clone()),
@@ -537,32 +547,86 @@ impl Infer {
             (Val::Prim, Val::LiteralType) => Ok(()),
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
+                let mut cxt = cxt.clone();
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.clone(), b.clone())?;
+                    self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
+                    cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());
                 }
                 Ok(())
             }
             (
-                Val::SumCase { sum_name: a, case_name: ca, params: params_a, cases_name: _ },
-                Val::SumCase { sum_name: b, case_name: cb, params: params_b, cases_name: _ },
-            ) if a.data == b.data && ca.data == cb.data => {
+                Val::SumCase { typ: a, case_name: ca, datas: params_a },
+                Val::SumCase { typ: b, case_name: cb, datas: params_b },
+            ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
+                let mut cxt = cxt.clone();
+                self.unify(l, &cxt, *a.clone(), *b.clone())?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.clone(), b.clone())?;
+                    self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
+                    cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());
                 }
                 Ok(())
             }
-            (Val::Sum(_, _, _), Val::Rigid(_, _)) => {
-                self.unify(l, cxt, t, self.eval(&cxt.env, self.quote(cxt.lvl, u)))
-            }
-            (Val::Rigid(_, _), Val::Sum(_, _, _)) => {
-                self.unify(l, cxt, self.eval(&cxt.env, self.quote(cxt.lvl, t)), u)
-            }
-            (Val::StructType(a, params_a, _), Val::StructType(b, params_b, _)) if a.data == b.data => {
-                // params_a.len() always equal to params_b.len()?
-                for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.clone(), b.clone())?;
+            (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
+                // 1. 合一 scrutinees
+                self.unify(l, cxt, *s1.clone(), *s2.clone())?;
+
+                // 2. 检查分支数量是否相同
+                if cases1.len() != cases2.len() {
+                    return Err(UnifyError);
                 }
+
+                // 3. 遍历并合一每一个对应的分支
+                for ((p1, clos1), (p2, clos2)) in cases1.iter().zip(cases2.iter()) {
+                    // 3a. 检查模式是否完全相同。
+                    // 这里我们假设 Pattern 可以通过 `PartialEq` 进行比较。
+                    // 如果模式的结构更复杂（例如包含类型信息），你可能需要一个递归的模式合一函数。
+                    // 对于你目前的定义，`PartialEq` 应该是足够的。
+                    if p1 != p2 {
+                        return Err(UnifyError);
+                    }
+
+                    let count = p1.bind_count();
+
+                    let lvl1 = Lvl(env1.iter().count() as u32);
+                    let lvl2 = Lvl(env2.iter().count() as u32);
+                    let env1 = (0..count).fold(env1.clone(), |env, idx| {
+                        env.prepend(Val::vvar(lvl1 + idx))
+                    });
+
+                    let env2 = (0..count).fold(env2.clone(), |env, idx| {
+                        env.prepend(Val::vvar(lvl2 + idx))
+                    });
+
+                    println!(
+                        "unify {:?}\n   == {:?}",
+                        pretty_tm(0, cxt.names(), clos1),
+                        pretty_tm(0, cxt.names(), clos2),
+                    );
+                    //let body1_val = self.eval(&bind_env, clos1.clone());
+                    //let body2_val = self.eval(&bind_env, clos2.clone());
+                    let body1_val = self.eval(&env1, clos1.clone());
+                    let body2_val = self.eval(&env2, clos2.clone());
+
+                    println!(
+                        "-> {:?}\n== {:?}",
+                        pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
+                        pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
+                    );
+                    self.unify(l, cxt, body1_val, body2_val)?;
+
+                    // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
+                    // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。
+                    /*let body1_val = self.apply_match_closure(lvl, clos1.clone(), num_binders);
+                    let body2_val = self.apply_match_closure(lvl, clos2.clone(), num_binders);
+
+                    // 现在，我们在一个扩展了 num_binders 个变量的上下文中，对实例化后的 body进行合一。
+                    // 这个扩展的上下文是通过将 level 增加 num_binders 来表示的。
+                    self.unify(l + num_binders, cxt, body1_val, body2_val)?;*/
+                    //TODO:todo!()
+                }
+
+                // 如果所有检查都通过，则合一成功
                 Ok(())
             }
             _ => Err(UnifyError), // Rigid mismatch error

@@ -12,10 +12,24 @@ pub enum Either {
     Icit(Icit),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Any(Span<()>),
     Con(Span<String>, Vec<Pattern>),
+}
+
+impl Pattern {
+    pub fn to_raw(&self) -> Raw {
+        match self {
+            Pattern::Any(_) => Raw::Hole,
+            Pattern::Con(name, pats) => pats.iter()
+                .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
+                    Box::new(ret),
+                    Box::new(p.to_raw()),
+                    Either::Icit(Icit::Expl),
+                )),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -30,16 +44,12 @@ pub enum Raw {
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<Raw>, Vec<(Span<String>, Vec<Raw>)>),
+    Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>, u32),
     SumCase {
-        sum_name: Span<String>,
-        params: Vec<Raw>,
-        cases: Vec<(Span<String>, Vec<Raw>)>,
+        typ: Box<Raw>,
         case_name: Span<String>,
-        datas: Vec<Raw>,
+        datas: Vec<(Span<String>, Raw, Icit)>,
     },
-    StructType(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>),
-    StructData(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>),
 }
 
 #[derive(Clone, Debug)]
@@ -54,11 +64,6 @@ pub enum Decl {
     Enum {
         name: Span<String>,
         params: Vec<(Span<String>, Raw, Icit)>,
-        cases: Vec<(Span<String>, Vec<Raw>)>,
-    },
-    Struct {
-        name: Span<String>,
-        params: Vec<(Span<String>, Raw, Icit)>,
-        fields: Vec<(Span<String>, Raw)>,
+        cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
     },
 }

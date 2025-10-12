@@ -279,7 +279,7 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         paren(p_raw.many0_sep(kw(T![,]))),
     )
         .map(|(_, scrutinee, args)| args.into_iter()
-            .fold(Raw::Var(scrutinee.map(|x| format!("{x}.apply"))), |acc, x| 
+            .fold(Raw::Var(scrutinee.map(|x| format!("{x}.mk"))), |acc, x| 
                 Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
             ))
         .parse(input)
@@ -326,13 +326,24 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
     (
         kw(EnumKeyword),
         string(Ident),
-        p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
+        p_pi_binder
+            .many0()
+            .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         brace(
             (
                 string(Ident),
-                paren(p_raw.many0_sep(kw(T![,])))
+                p_pi_binder
+                    .many0()
+                    .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
+                /*paren(p_raw.many0_sep(kw(T![,])))
                     .option()
-                    .map(|x| x.unwrap_or_default()),
+                    .map(|x| x.unwrap_or_default()),*/
+                (
+                    kw(T![->]),
+                    p_raw,
+                )
+                    .option()
+                    .map(|x| x.map(|y| y.1))
             )
                 .many1_sep(kw(EndLine)),
         ),
@@ -365,10 +376,18 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a
                })
            )*/
     )
-        .map(|(_, name, params, fields)| Decl::Struct {
-            name,
-            params,
-            fields,
+        .map(|(_, name, params, fields)| Decl::Enum {
+            name: name.clone(),
+            params: params.clone().into_iter()
+                //.chain(fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)))
+                .collect(),
+            cases: vec![
+                (
+                    name.clone().map(|x| format!("{x}.mk")),
+                    fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
+                    None,
+                ),
+            ]
         })
         .parse(input)
 }
