@@ -8,8 +8,6 @@ pub mod syntax;
 
 use TokenKind::*;
 
-use super::empty_span;
-
 pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
     super::parser::lex::lex(Span {
         data: input,

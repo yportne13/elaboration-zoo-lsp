@@ -1,4 +1,4 @@
-use crate::{list::List, parser_lib::Span};
+use crate::{parser_lib::{Span, ToSpan}, L09_mltt::empty_span};
 
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub enum Icit {
@@ -50,6 +50,34 @@ pub enum Raw {
         case_name: Span<String>,
         datas: Vec<(Span<String>, Raw, Icit)>,
     },
+}
+
+impl Raw {
+    pub fn to_span(&self) -> Span<()> {
+        match self {
+            Raw::Var(span) => span.to_span(),
+            Raw::Obj(raw, span) => raw.to_span() + span.to_span(),
+            Raw::Lam(span, _, raw) => span.to_span() + raw.to_span(),
+            Raw::App(raw, raw1, either) => raw.to_span() + match either {
+                Either::Name(span) => span.to_span(),
+                Either::Icit(_) => raw1.to_span(),
+            },
+            Raw::U(_) => empty_span(()),//TODO:
+            Raw::Pi(span, _, _, raw1) => span.to_span() + raw1.to_span(),
+            Raw::Let(span, _, _, raw2) => span.to_span() + raw2.to_span(),
+            Raw::Hole => empty_span(()),//TODO:
+            Raw::LiteralIntro(span) => span.to_span(),
+            Raw::Match(raw, items) => items.last()
+                .map(|x| raw.to_span() + x.1.to_span())
+                .unwrap_or(raw.to_span()),
+            Raw::Sum(span, params, items, _) => items.last()
+                .map(|x| span.to_span() + x.to_span())
+                .unwrap_or(params.last().map(|x| span.to_span() + x.2.to_span()).unwrap_or(span.to_span())),
+            Raw::SumCase { typ, case_name, datas } => datas.last()
+                .map(|x| case_name.to_span() + x.1.to_span())
+                .unwrap_or(case_name.to_span()),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

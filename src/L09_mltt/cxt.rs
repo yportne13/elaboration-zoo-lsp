@@ -1,19 +1,9 @@
-use std::collections::HashMap;
-
 use crate::bimap::BiMap;
 
 use super::{
     syntax::{Locals, Pruning},
     *,
 };
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum NameOrigin {
-    Inserted,
-    Source,
-}
-
-type Types = List<(Span<String>, NameOrigin, Val)>;
 
 #[derive(Debug, Clone)]
 pub struct Cxt {
@@ -118,7 +108,7 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
+    pub fn fake_bind(&self, x: Span<String>, a: Val) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl + 1919810, a));
@@ -218,6 +208,7 @@ impl Cxt {
 }
 
 impl Cxt {
+    #[allow(unused)]
     pub fn print_env(&self, infer: &Infer) {
         self.env
             .iter()

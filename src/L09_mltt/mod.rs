@@ -183,7 +183,7 @@ fn empty_span<T>(data: T) -> Span<T> {
 }
 
 #[derive(Debug)]
-pub struct Error(String);
+pub struct Error(pub Span<String>);
 
 #[derive(Clone)]
 pub struct Infer {
@@ -363,9 +363,16 @@ impl Infer {
     }
 
     fn quote_sp(&self, l: Lvl, t: Tm, spine: Spine) -> Tm {
-        spine.iter().fold(t, |acc, u| {
+        /*spine.iter().fold(t, |acc, u| {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
-        })
+        })*/
+        match spine {
+            List { head: None } => t,
+            _ => {
+                let head = spine.head().unwrap();
+                Tm::App(Box::new(self.quote_sp(l, t, spine.tail())), Box::new(self.quote(l, head.0.clone())), head.1)
+            }
+        }
     }
 
     fn quote(&self, l: Lvl, t: Val) -> Tm {
@@ -454,7 +461,7 @@ impl Infer {
         Closure(cxt.env.clone(), Box::new(self.quote(cxt.lvl + 1, t)))
     }
 
-    fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
+    fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val, span: Span<()>) -> Result<(), Error> {
         self.unify(cxt.lvl, cxt, t.clone(), t_prime.clone())
             .map_err(|_| {
                 /*Error::CantUnify(
@@ -464,12 +471,13 @@ impl Infer {
                 )*/
                 //println!("{:?} == {:?}", t, t_prime);
                 //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
-                Error(format!(
+                let err = format!(
                     //"can't unify {:?} == {:?}",
                     "can't unify\n      find: {}\n  expected: {}",
                     pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
                     pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
-                ))
+                );
+                Error(span.map(|_| err.clone()))
                 //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             })
     }

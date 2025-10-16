@@ -367,9 +367,16 @@ impl Infer {
     }
 
     fn quote_sp(&self, l: Lvl, t: Tm, spine: Spine) -> Tm {
-        spine.iter().fold(t, |acc, u| {
+        /*spine.iter().fold(t, |acc, u| {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
-        })
+        })*/
+        match spine {
+            List { head: None } => t,
+            _ => {
+                let head = spine.head().unwrap();
+                Tm::App(Box::new(self.quote_sp(l, t, spine.tail())), Box::new(self.quote(l, head.0.clone())), head.1)
+            }
+        }
     }
 
     fn quote(&self, l: Lvl, t: Val) -> Tm {

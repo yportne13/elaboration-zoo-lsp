@@ -2,15 +2,15 @@ use std::{cmp::max, collections::HashMap};
 
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span, L09_mltt::{unification::PartialRenaming, MetaEntry}};
+use crate::{list::List, parser_lib::Span};
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
-    cxt::NameOrigin,
+    Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw, Pattern},
-    pattern_match::Compiler,
+    pattern_match::Compiler, MetaEntry,
     PatternDetail,
+    unification::PartialRenaming,
 };
 
 impl Infer {
@@ -59,7 +59,7 @@ impl Infer {
                     )
                 }
             }
-            _ => Err(Error(format!("no named implicit arg {:?}", name))),
+            _ => Err(Error(name.map(|x| format!("no named implicit arg {}", x)))),
         }
     }
     fn insert_until_name(
@@ -71,19 +71,21 @@ impl Infer {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
     pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Val, ori: Val) -> Result<(Tm, Cxt), Error> {
+        let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, a, inferred_type)?;
-        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()))?;
+        let new_cxt = self.unify_pm(cxt, a, inferred_type, t_span)?;
+        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()), t_span)?;
         Ok((t_inferred, new_cxt))
     }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<(Tm, Cxt), Error> {
+        let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, a, inferred_type)?;
+        let new_cxt = self.unify_pm(cxt, a, inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
-    fn unify_pm(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<Cxt, Error> {
+    fn unify_pm(&mut self, cxt: &Cxt, t: Val, t_prime: Val, t_span: Span<()>) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         //println!("{:?} == {:?}", t, t_prime);
         match (self.force(t), self.force(t_prime)) {
@@ -102,27 +104,28 @@ impl Infer {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone())?;
+                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone(), t_span)?;
                     }
                     Ok(cxt)
                 } else {
-                    Err(Error("".to_string()))
+                    Err(Error(t_span.map(|_| "".to_string())))
                 }
             }
             (u, v) => {
-                self.unify_catch(cxt, u, v)
+                self.unify_catch(cxt, u, v, t_span)
                     .map(|_| cxt.clone())
             }
         }
     }
     pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, u32), Error> {
+        let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         match inferred_type {
             Val::U(u) => Ok((t_inferred, u)),
             Val::Flex(m, sp) => {
                 let (pren, prune_non_linear) = self.invert(cxt.lvl, sp.clone())
-                    .map_err(|_| Error("invert failed".to_owned()))?;
+                    .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned())))?;
                 let mty = match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(ref a) => a.clone(),
                     _ => unreachable!(),
@@ -132,7 +135,7 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&pr, mty.clone()).map_err(|_| Error("prune failed".to_owned()))?; //TODO:revPruning?
+                    self.prune_ty(&pr, mty.clone()).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
                 }
 
                 if pren.dom.0 == 0 {
@@ -141,7 +144,10 @@ impl Infer {
                             self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(0), mty);
                             Ok((t_inferred, 0))
                         },
-                        _ => Err(Error(format!("meta type {:?} is not a universe", self.force(mty)))),
+                        _ => {
+                            let err_typ = self.force(mty);
+                            Err(Error(t_span.map(|_|  format!("meta type {:?} is not a universe", err_typ))))
+                        },
                     }
                 } else {
                     let rhs = self.rename(
@@ -150,7 +156,7 @@ impl Infer {
                             ..pren
                         },
                         Val::U(0),
-                    ).map_err(|_| Error("when check universe, try to rename failed".to_string()))?;
+                    ).map_err(|_| Error(t_span.map(|_| "when check universe, try to rename failed".to_string())))?;
                     let solution = self.eval(&List::new(), self.lams(pren.dom, mty.clone(), rhs));
                     self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
@@ -158,7 +164,7 @@ impl Infer {
                     //Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
                 }
             }
-            _ => Err(Error(format!("expected universe, got {:?}", inferred_type))),
+            _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)))),
         }
     }
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
@@ -207,11 +213,12 @@ impl Infer {
             (Raw::Hole, a) => Ok(self.fresh_meta(cxt, a)),
 
             (Raw::Match(expr, clause), expected) => {
+                let expr_span = expr.to_span();
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
                 let mut compiler = Compiler::new(expected);
                 let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
                 if !error.is_empty() {
-                    Err(Error(format!("{error:?}")))
+                    Err(Error(expr_span.map(|_| format!("{error:?}"))))
                 } else {
                     let tree = ret
                         .iter()
@@ -233,9 +240,10 @@ impl Infer {
 
             // General case: infer type and unify
             (t, expected) => {
+                let t_span = t.to_span();
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-                self.unify_catch(cxt, expected, inferred_type)?;
+                self.unify_catch(cxt, expected, inferred_type, t_span)?;
                 Ok(t_inferred)
             }
         }
@@ -261,7 +269,7 @@ impl Infer {
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone());
                     self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     //println!("begin vt {}", "------".green());
@@ -346,7 +354,7 @@ impl Infer {
                 let mut cxt = {
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
+                    let fake_cxt = cxt.fake_bind(name.clone(), vtyp.clone());
                     self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
@@ -407,11 +415,12 @@ impl Infer {
                 .reduce(|a, b| a + "\n" + &b)
                 .unwrap_or(String::new())
         );*/
+        let t_span = t.to_span();
         match t {
             // Infer variable types
             Raw::Var(x) => match cxt.src_names.get(&x.data) {
                 Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), a.clone())),
-                None => Err(Error(format!("error name not in scope: {:?}", x))),
+                None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
             },
 
             Raw::Obj(x, t) => {
@@ -455,12 +464,12 @@ impl Infer {
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
                                 .map(|(_, _, ty, _)| ty)
                             )
-                                .ok_or_else(|| Error(format!(
+                                .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
                                     super::pretty_tm(0, cxt.names(), &tm),
                                     a,
-                                    t.data,
-                                )))?
+                                    t,
+                                ))))?
                         ))
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
@@ -470,19 +479,19 @@ impl Infer {
                                 .into_iter()
                                 .find(|(fields_name, _, _)| fields_name == &t)
                                 .map(|(_, ty, _)| ty)
-                                .ok_or_else(|| Error(format!(
+                                .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
                                     super::pretty_tm(0, cxt.names(), &tm),
                                     a,
-                                    t.data,
-                                )))?
+                                    t,
+                                ))))?
                         ))
                     }
-                    (tm, _) => Err(Error(format!(
+                    (tm, _) => Err(Error(t.map(|t| format!(
                         "`{}` has no object `{}`",
                         super::pretty_tm(0, cxt.names(), &tm),
-                        t.data,
-                    ))),
+                        t,
+                    )))),
                 }
             },
 
@@ -501,10 +510,11 @@ impl Infer {
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+            Raw::Lam(x, Either::Name(_), t) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
 
             // Infer function applications
             Raw::App(t, u, i) => {
+                let t_span = t.to_span();
                 let (i, t, tty) = match i {
                     Either::Name(name) => {
                         let infered = self.infer_expr(cxt, *t);
@@ -527,7 +537,7 @@ impl Infer {
                         if i == i_t {
                             (*a, b_closure)
                         } else {
-                            return Err(Error(format!("icit mismatch {:?} {:?}", i, i_t)));
+                            return Err(Error(t_span.map(|_| format!("icit mismatch {:?} {:?}", i, i_t))));
                         }
                     }
                     tty => {
@@ -553,6 +563,7 @@ impl Infer {
                                 b_closure.clone(),
                             ),
                             tty,
+                            t_span,
                         )?;
                         (a, b_closure)
                     }
@@ -621,14 +632,15 @@ impl Infer {
 
             Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal), Val::LiteralType)),
 
-            Raw::Match(_, _) => Err(Error("try to infer match".to_owned())),
+            Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()))),
 
             Raw::Sum(name, params, cases, universe) => {
                 let new_params = params
                     .iter()
                     .map(|ty| {
-                        let (ty_checked, lvl) = self.check_universe(cxt, ty.2.clone())?;
-                        Ok((ty.0.clone(), ty_checked, Tm::U(lvl), ty.1))
+                        let (ty_checked, typ_val) = self.infer_expr(cxt, ty.2.clone())?;
+                        let typ = self.quote(cxt.lvl, typ_val.clone());
+                        Ok((ty.0.clone(), ty_checked, typ, ty.1))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 //TODO: universe need to consider cases?
