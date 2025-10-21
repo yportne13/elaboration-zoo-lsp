@@ -596,13 +596,13 @@ def not(x: Bool): Bool =
 
 println (not true)
 
-def add(x: Nat, y: Nat): Nat =
+def add(x: Nat, y: Nat) =
     match x {
         case zero => y
         case succ(n) => succ (add n y)
     }
 
-def mul(x: Nat, y: Nat): Nat =
+def mul(x: Nat, y: Nat) =
     match x {
         case zero => zero
         case succ(n) => add y (mul n y)

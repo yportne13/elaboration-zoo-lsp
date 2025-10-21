@@ -564,13 +564,13 @@ def not(x: Bool): Bool =
 
 println (not true)
 
-def add(x: Nat, y: Nat): Nat =
+def add(x: Nat, y: Nat) =
     match x {
         case zero => y
         case succ(n) => succ (add n y)
     }
 
-def mul(x: Nat, y: Nat): Nat = match x {
+def mul(x: Nat, y: Nat) = match x {
     case zero => zero
     case succ(n) => add y (mul n y)
 }
@@ -602,8 +602,8 @@ def test0: Type 1 = Type 0
 def test1: Type 2 = Type 1 -> Type 0
 
 enum HighLvl[A] {
-    case1(A)
-    case2(test1)
+    case1(a: A)
+    case2(a: test1)
 }
 
 def test2: HighLvl[Nat] = case1 zero
@@ -611,8 +611,8 @@ def test2: HighLvl[Nat] = case1 zero
 def test3: Type 2 = HighLvl[Nat]
 
 enum HighLvl2[A: Type 2] {
-    case2_1(A)
-    case2_2(Nat)
+    case2_1(x: A)
+    case2_2(x: Nat)
 }
 
 def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
