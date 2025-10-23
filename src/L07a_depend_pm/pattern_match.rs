@@ -193,14 +193,17 @@ impl Compiler {
                     let (_, cxt) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
                     self.reachable.insert(*idx, ());
                     //println!("prepare to check {:?}", arm.body);
-                    //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
+                    //println!(" == {}", super::pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, self.ret_type.clone())));
                     let ret_type = match self.ret_type.clone() {
                         t @ Val::Flex(_, _) => t,
                         ret_type => {
                             let ret_type = infer.quote(cxt.lvl, ret_type);
+                            //println!(" == {}", super::pretty::pretty_tm(0, cxt.names(), &ret_type));
+                            //println!(" == {:?}", ret_type);
                             infer.eval(&cxt.env, ret_type)
                         },
                     };
+                    //println!(" == {}", super::pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ret_type.clone())));
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
                     Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
                 }
@@ -514,12 +517,14 @@ impl Compiler {
                 PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
                     params.iter()
                         .filter(|x| x.2 == Icit::Expl)
-                    .map(|x| &x.1).zip(item_pats.iter()).try_fold(
-                        (body.clone(), cxt.clone()),
-                        |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
-                            Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
-                        },
-                    )
+                        .map(|x| &x.1)
+                        .zip(item_pats.iter())
+                        .try_fold(
+                            (body.clone(), cxt.clone()),
+                            |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
+                                Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
+                            },
+                        )
                 }
                 _ => None,
             })

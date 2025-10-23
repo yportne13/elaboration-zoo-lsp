@@ -118,7 +118,7 @@ pub struct Closure(Env, Box<Tm>);
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Closure(.., {:?})", self.1)
+        write!(f, "Closure(..{}, {:?})", self.0.len(), self.1)
     }
 }
 
@@ -458,7 +458,7 @@ impl Infer {
                         x.0.clone(),
                         {
                             let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, _| env.prepend(Val::vvar(Lvl(env.len() as u32))));
+                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x)));
                             let mut avoid_recursive = self.clone();
                             avoid_recursive.global
                                 .iter_mut()
@@ -558,6 +558,49 @@ pub fn preprocess(s: &str) -> String {
         })
         .reduce(|a, b| a + "\n" + &b)
         .unwrap_or(s.to_owned())
+}
+
+#[test]
+fn test4() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+"#;
+    println!("{}", run(input, 0).unwrap());
+    println!("success");
 }
 
 #[test]

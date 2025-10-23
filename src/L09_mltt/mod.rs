@@ -621,7 +621,7 @@ def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
 
 enum HighLvl3[A: Type 2] {
     case3_1
-    case3_2(Nat)
+    case3_2(x: Nat)
 }
 
 def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
@@ -652,8 +652,6 @@ def sigD = new Bits("D", two)
 def ab = assign sigA sigB refl
 
 def cd = assign sigC sigD refl
-
-def xy(t: Nat) = assign (new Bits("AA", add t t)) (new Bits("BB", mul two t)) refl
 
 "#;
     println!("{}", run(input, 0).unwrap());

@@ -201,7 +201,6 @@ impl Compiler {
                             infer.eval(&cxt.env, ret_type)
                         },
                     };
-                    println!("{:?}", ret_type);
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
                     Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
                 }
