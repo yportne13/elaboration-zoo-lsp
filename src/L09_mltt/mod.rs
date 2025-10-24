@@ -350,12 +350,12 @@ impl Infer {
                 let val = self.eval(env, *tm);
                 let val = self.force(val);
                 match val {
-                    neutral @ (Val::Rigid(..) | Val::Flex(..)) => {
-                        Val::Match(Box::new(neutral), env.clone(), cases)
-                    }
-                    val => {
+                    val @ Val::SumCase { .. } => {
                         let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
                         self.eval(&env, tm)
+                    }
+                    neutral => {
+                        Val::Match(Box::new(neutral), env.clone(), cases)
                     }
                 }
             }

@@ -367,12 +367,12 @@ impl Infer {
                 let val = self.eval(env, *tm);
                 let val = self.force(val);
                 match val {
-                    neutral @ (Val::Rigid(..) | Val::Flex(..)) => {
-                        Val::Match(Box::new(neutral), env.clone(), cases)
-                    }
-                    val => {
+                    val @ Val::SumCase { .. } => {
                         let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
                         self.eval(&env, tm)
+                    }
+                    neutral => {
+                        Val::Match(Box::new(neutral), env.clone(), cases)
                     }
                 }
             }
@@ -584,6 +584,9 @@ enum Eq[A](x: A, y: A) {
     refl(a: A) -> Eq a a
 }
 
+def rfl[A][a: A]: Eq a a =
+    refl a
+
 def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
     match e {
         case refl(a) => refl (f a)
@@ -596,6 +599,34 @@ def add_zero_right(a: Nat): Eq (add a zero) a =
     match a {
         case zero => refl zero
         case succ(t) => cong_succ (add_zero_right t)
+    }
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add n (succ m)) (succ (add n m)) =
+    match n {
+        case zero => refl[Nat] (succ m)
+        case succ(k) => cong_succ (add_succ_right k m)
+    }
+
+def add_comm (n: Nat, m: Nat): Eq[Nat] (add n m) (add m n) =
+    match n {
+        case zero => symm (add_zero_right m)
+        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
+    }
+
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add n (add m k)) =
+    match n {
+        case zero => rfl
+        case succ(l) => cong_succ (add_assoc l m k)
     }
 
 "#;
