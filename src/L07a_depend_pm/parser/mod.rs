@@ -235,9 +235,10 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         kw(Eq),
         p_raw,
         kw(Semi),
+        kw(EndLine).option(),
         p_raw,
     )
-        .map(|(_, binder, ann, _, val, _, body)| {
+        .map(|(_, binder, ann, _, val, _, _, body)| {
             Raw::Let(
                 binder,
                 Box::new(ann.unwrap_or(Raw::Hole)),
@@ -265,8 +266,8 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         kw(MatchKeyword),
         p_raw,
         brace(
-            (kw(CaseKeyword), p_pattern, kw(T![=>]), p_raw)
-                .map(|(_, pattern, _, body)| (pattern, body))
+            (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
+                .map(|(_, pattern, _, _, body)| (pattern, body))
                 .many0_sep(kw(EndLine)),
         ),
     )

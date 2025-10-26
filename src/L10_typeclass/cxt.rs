@@ -1,17 +1,9 @@
-use std::collections::HashMap;
+use crate::bimap::BiMap;
 
 use super::{
     syntax::{Locals, Pruning},
     *,
 };
-
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum NameOrigin {
-    Inserted,
-    Source,
-}
-
-type Types = List<(Span<String>, NameOrigin, Val)>;
 
 #[derive(Debug, Clone)]
 pub struct Cxt {
@@ -19,7 +11,7 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: HashMap<String, (Lvl, VTy)>,
+    pub src_names: BiMap<String, Lvl, VTy>,
 }
 
 impl Cxt {
@@ -88,8 +80,19 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
+            src_names: BiMap::new(),
         }
+    }
+
+    pub fn names(&self) -> List<String> {
+        fn go(locals: &Locals) -> List<String> {
+            match locals {
+                Locals::Here => List::new(),
+                Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
+                Locals::Bind(locals, name, _) => go(locals).prepend(name.data.clone()),
+            }
+        }
+        go(&self.locals)
     }
 
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
@@ -105,7 +108,7 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
+    pub fn fake_bind(&self, x: Span<String>, a: Val) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl + 1919810, a));
@@ -140,5 +143,77 @@ impl Cxt {
             pruning: self.pruning.prepend(None),
             src_names,
         }
+    }
+
+    /// freshVal 函数实现
+    /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
+    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: Val) -> Val {
+        // quote def from (Lvl (length from))
+        let quoted = infer.quote(Lvl(from.iter().count() as u32), val);
+
+        // eval def to
+        infer.eval(to, quoted)
+    }
+
+    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Val) -> Cxt {
+        match v {
+            Val::Flex(..) => self.clone(),
+            v => {
+                let x_prime = lvl2ix(self.lvl, x).0 as usize;
+                /*println!(
+                    " update {}: {} with {}",
+                    x.0,
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, self.env.iter().nth(x_prime).unwrap().clone())),
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
+                );*/
+                let env = self.env.change_n(x_prime, |_| v);
+                let mut new_src_names = self.src_names.clone();
+                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
+        
+                Cxt {
+                    env: env_t,
+                    lvl: self.lvl,
+                    locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
+                    pruning: self.pruning.change_n(x_prime, |_| None),
+                    src_names: new_src_names,
+                }
+            }
+        }
+    }
+
+    fn refresh(&self, infer: &Infer, env: &List<Val>, src_names: &mut BiMap<String, Lvl, Val>, env2: List<Val>) -> List<Val> {
+        if env.is_empty() {
+            List::new()
+        } else {
+            let env_t = self.refresh(infer, &env.tail(), src_names, env2.clone());
+            let env_tt = env2.change_tail(env_t.clone());
+            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap().clone());
+            /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
+            let b = pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()));
+            if a != b {
+                println!(
+                    "refresh {}: {} with {}",
+                    env.len(),
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone())),
+                    pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()))
+                );
+            }*/
+            
+            let ret = env_t.prepend(ret);
+            let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
+            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change.clone());
+            ret
+        }
+    }
+}
+
+impl Cxt {
+    #[allow(unused)]
+    pub fn print_env(&self, infer: &Infer) {
+        self.env
+            .iter()
+            .for_each(|x| {
+                println!("{}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x.clone())))
+            });
     }
 }

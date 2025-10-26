@@ -89,17 +89,10 @@ where
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     string(Ident)
         .map(Raw::Var)
-        .or((kw(TypeKeyword), string(Num)).map(|(_, num)| Raw::U(num.data.parse::<u32>().unwrap()))) //TODO:do not unwrap
+        .or((kw(TypeKeyword), string(Num)).map(|(_, num)| Raw::U(num.data.parse::<u32>().unwrap())))//TODO:do not unwrap
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
         .or(paren(p_raw))
-        .or(paren(p_atom.many0_sep(kw(T![,]))).map(|x| {
-            let len = x.len();
-            x.into_iter().fold(
-                Raw::Var(empty_span(format!("Tuple{}.apply", len))),
-                |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Expl)),
-            )
-        }))
         .parse(input)
 }
 
@@ -193,8 +186,7 @@ fn p_pi_expl_binder<'a: 'b, 'b>(
         )
             .map(|(xs, a)| (xs, a.1, Icit::Expl))
             .many0_sep(kw(T![,])),
-    )
-    .parse(input) // 返回 (xs, a, Expl)
+    ).parse(input) // 返回 (xs, a, Expl)
 }
 
 fn p_pi_binder<'a: 'b, 'b>(
@@ -241,9 +233,10 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         kw(Eq),
         p_raw,
         kw(Semi),
+        kw(EndLine).option(),
         p_raw,
     )
-        .map(|(_, binder, ann, _, val, _, body)| {
+        .map(|(_, binder, ann, _, val, _, _, body)| {
             Raw::Let(
                 binder,
                 Box::new(ann.unwrap_or(Raw::Hole)),
@@ -263,8 +256,6 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'
     )
         .map(|(x, t)| Pattern::Con(x, t))
         .or(kw(T![_]).map(Pattern::Any))
-        .or(paren(p_pattern.many1_sep(kw(T![,])))
-            .map(|x| Pattern::Con(empty_span(format!("Tuple{}", x.len())), x)))
         .parse(input)
 }
 
@@ -273,8 +264,8 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         kw(MatchKeyword),
         p_raw,
         brace(
-            (kw(CaseKeyword), p_pattern, kw(T![=>]), p_raw)
-                .map(|(_, pattern, _, body)| (pattern, body))
+            (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
+                .map(|(_, pattern, _, _, body)| (pattern, body))
                 .many0_sep(kw(EndLine)),
         ),
     )
@@ -288,12 +279,10 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         string(Ident),
         paren(p_raw.many0_sep(kw(T![,]))),
     )
-        .map(|(_, scrutinee, args)| {
-            args.into_iter().fold(
-                Raw::Var(scrutinee.map(|x| format!("{x}.apply"))),
-                |acc, x| Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl)),
-            )
-        })
+        .map(|(_, scrutinee, args)| args.into_iter()
+            .fold(Raw::Var(scrutinee.map(|x| format!("{x}.mk"))), |acc, x| 
+                Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
+            ))
         .parse(input)
 }
 
@@ -338,13 +327,24 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
     (
         kw(EnumKeyword),
         string(Ident),
-        p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
+        p_pi_binder
+            .many0()
+            .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         brace(
             (
                 string(Ident),
-                paren(p_raw.many0_sep(kw(T![,])))
+                p_pi_binder
+                    .many0()
+                    .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
+                /*paren(p_raw.many0_sep(kw(T![,])))
                     .option()
-                    .map(|x| x.unwrap_or_default()),
+                    .map(|x| x.unwrap_or_default()),*/
+                (
+                    kw(T![->]),
+                    p_raw,
+                )
+                    .option()
+                    .map(|x| x.map(|y| y.1))
             )
                 .many1_sep(kw(EndLine)),
         ),
@@ -377,10 +377,18 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a
                })
            )*/
     )
-        .map(|(_, name, params, fields)| Decl::Struct {
-            name,
-            params,
-            fields,
+        .map(|(_, name, params, fields)| Decl::Enum {
+            name: name.clone(),
+            params: params.clone().into_iter()
+                //.chain(fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)))
+                .collect(),
+            cases: vec![
+                (
+                    name.clone().map(|x| format!("{x}.mk")),
+                    fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
+                    None,
+                ),
+            ]
         })
         .parse(input)
 }
@@ -430,13 +438,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
-    p_def
-        .or(p_print)
-        .or(p_enum)
-        .or(p_struct)
-        .or(p_trait_def)
-        .or(p_impl)
-        .parse(input)
+    p_def.or(p_print).or(p_enum).or(p_struct).or(p_trait_def).or(p_impl).parse(input)
 }
 
 #[test]
@@ -476,20 +478,13 @@ enum Bool {
 
 enum Nat {
     zero
-    succ(Nat)
-}
-
-enum Ordering {
-    Less
-    Equal
-    Greater
-}
-
-trait Ord {
-    def cmp(x: Nat, y: Nat): Ordering
+    succ(x: Nat)
 }
 
 def two = succ succ zero
+
+def t = let one = succ zero;
+    succ one
 
 def add(x: Nat, y: Nat): Nat =
     match x {

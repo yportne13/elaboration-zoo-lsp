@@ -668,7 +668,9 @@ struct HighLvl[A] {
     case2: test1
 }
 
-def test2: HighLvl[Nat] = new HighLvl(zero, Type 1 => Type 0)
+def test2_t: Type 1 -> Type 0 = t => Nat
+
+def test2: HighLvl[Nat] = new HighLvl(zero, test2_t)
 
 def test3: Type 2 = HighLvl[Nat]
 

@@ -93,13 +93,13 @@ fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     is(';')
         .map(|x| x.map(|t| (t, Semi)))
-        //.or(is('_').map(|x| x.map(|t| (t, Hole))))
+        .or(is('_').map(|x| x.map(|t| (t, Hole))))
         .or(pmatch(|c: char| c.is_alphabetic() || c == '_')
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
                 let tail_len = tail.map(|t| t.len()).unwrap_or(0);
                 let ident = unsafe {
-                    head.data
+                    input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)
                 };
                 let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
