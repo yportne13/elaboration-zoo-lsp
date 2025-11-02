@@ -2,7 +2,7 @@ use crate::{parser_lib::{Span, ToSpan}};
 
 use super::empty_span;
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Icit {
     Impl,
     Expl,
@@ -102,7 +102,7 @@ pub enum Decl {
         methods: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>,
     },
     ImplDecl {
-        name: Span<String>,
+        name: Raw,
         params: Vec<(Span<String>, Raw, Icit)>,
         trait_name: Span<String>,
         trait_params: Vec<(Span<String>, Raw, Icit)>,

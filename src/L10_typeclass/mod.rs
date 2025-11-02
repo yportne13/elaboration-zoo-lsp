@@ -14,6 +14,7 @@ mod parser;
 mod pattern_match;
 mod syntax;
 mod unification;
+mod typeclass;
 mod pretty;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,6 +45,12 @@ pub enum DeclTm {
     },
     Println(Tm),
     Enum {
+        //TODO:
+    },
+    Trait {
+        //TODO:
+    },
+    TraitImpl {
         //TODO:
     },
 }
@@ -189,6 +196,8 @@ pub struct Error(pub Span<String>);
 pub struct Infer {
     meta: Vec<MetaEntry>,
     global: HashMap<Lvl, VTy>,
+    trait_solver: typeclass::Synth,
+    trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
 }
 
 impl Infer {
@@ -196,6 +205,8 @@ impl Infer {
         Self {
             meta: vec![],
             global: HashMap::new(),
+            trait_solver: Default::default(),
+            trait_definition: Default::default(),
         }
     }
     fn new_meta(&mut self, a: VTy) -> u32 {
@@ -493,12 +504,14 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         match &tm {
             parser::syntax::Decl::Def { name, .. }
             | parser::syntax::Decl::Enum { name, .. }
-            | parser::syntax::Decl::ImplDecl { name, .. }
             | parser::syntax::Decl::TraitDecl { name, .. } => {
                 println!("> {}", name.data);
                 //cxt.print_env(&infer);
             },
             parser::syntax::Decl::Println(raw) => {},
+            parser::syntax::Decl::ImplDecl { .. } => {
+                println!("> impl");
+            }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
@@ -528,6 +541,135 @@ pub fn preprocess(s: &str) -> String {
         })
         .reduce(|a, b| a + "\n" + &b)
         .unwrap_or(s.to_owned())
+}
+
+#[test]
+fn test_trait() {
+    let input = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+trait Add {
+    def add(that: Nat): Nat
+}
+
+impl Add for Nat {
+    def add(that: Nat): Nat =
+        match that {
+            case zero => this
+            case succ(n) => succ (n.add this)
+        }
+}
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => y.add (mul n y)
+}
+
+def four = two.add two
+
+println four
+
+struct Point[T] {
+    x: T
+    y: T
+}
+
+def get_x[T](p: Point[T]): T = p.x
+
+impl Add for Point[Nat] {
+    def add(that: Point[Nat]): Point[Nat] =
+        new Point(this.x.add that.x, this.y.add that.y)
+}
+
+def start_point = new Point(zero, four)
+
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+
+println (start_point.add end_point)
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: test1)
+}
+
+def test2: HighLvl[Nat] = case1 zero
+
+def test3: Type 2 = HighLvl[Nat]
+
+enum HighLvl2[A: Type 2] {
+    case2_1(x: A)
+    case2_2(x: Nat)
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(x: Nat)
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
+
+def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def get_name(x: Bits) = x.name
+
+def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = a.name
+
+def sigA = new Bits("A", four)
+
+def sigB = new Bits("B", four)
+
+def sigC = new Bits("C", two)
+
+def sigD = new Bits("D", two)
+
+def ab = assign sigA sigB refl
+
+def cd = assign sigC sigD refl
+
+"#;
+    println!("{}", run(input, 0).unwrap());
 }
 
 #[test]

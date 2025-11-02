@@ -24,6 +24,7 @@ macro_rules! T {
     [def] => { $crate::L10_typeclass::parser::TokenKind::DefKeyword };
     [let] => { $crate::L10_typeclass::parser::TokenKind::LetKeyword };
     [Type] => { $crate::L10_typeclass::parser::TokenKind::TypeKeyword };
+    [this] => { $crate::L10_typeclass::parser::TokenKind::ThisKeyword };
     [_] => { $crate::L10_typeclass::parser::TokenKind::Hole };
     ['('] => { $crate::L10_typeclass::parser::TokenKind::LParen };
     [')'] => { $crate::L10_typeclass::parser::TokenKind::RParen };
@@ -89,6 +90,7 @@ where
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     string(Ident)
         .map(Raw::Var)
+        .or(kw(ThisKeyword).map(|s| Raw::Var(s.map(|_| "this".to_string()))))
         .or((kw(TypeKeyword), string(Num)).map(|(_, num)| Raw::U(num.data.parse::<u32>().unwrap())))//TODO:do not unwrap
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
@@ -97,11 +99,10 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
-    (p_atom1, (kw(T![.]), string(Ident)).option())
-        .map(|(x, t)| match t {
-            Some((_, t)) => Raw::Obj(Box::new(x), t),
-            None => x,
-        })
+    (p_atom1, (kw(T![.]), string(Ident)).many0())
+        .map(|(x, t)| t.into_iter().fold(x, |x, t| {
+            Raw::Obj(Box::new(x), t.1)
+        }))
         .parse(input)
 }
 
@@ -423,11 +424,11 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
         string(Ident),
         //p_generic_params(),
         kw(ForKeyword),
-        string(Ident),
+        p_raw,
         //p_generic_params(),
         brace(p_def.many0_sep(kw(EndLine))),
     )
-        .map(|(_, name, _, trait_name, body)| Decl::ImplDecl {
+        .map(|(_, trait_name, _, name, body)| Decl::ImplDecl {
             name,
             params: vec![],
             trait_name,

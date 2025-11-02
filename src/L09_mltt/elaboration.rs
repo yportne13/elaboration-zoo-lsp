@@ -319,7 +319,6 @@ impl Infer {
                 let default_ret = params
                     .iter()
                     .filter(|x| x.2 == Icit::Impl)
-                    .rev()
                     .fold(Raw::Var(name.clone()), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(Raw::Var(x.0.clone())), super::parser::syntax::Either::Icit(x.2))
                     });
@@ -424,6 +423,11 @@ impl Infer {
             },
 
             Raw::Obj(x, t) => {
+                if t.data == "mk" {
+                    if let Raw::Var(sum_name) = x.as_ref() {
+                        return self.infer_expr(cxt, Raw::Var(sum_name.clone().map(|n| format!("{n}.mk"))))
+                    }
+                }
                 let (tm, a) = self.infer_expr(cxt, *x)?;
                 match (tm, self.force(a.clone())) {
                     (tm, Val::Sum(_, params, cases)) => {

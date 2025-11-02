@@ -255,7 +255,7 @@ impl Infer {
                 let default_ret = params
                     .iter()
                     .filter(|x| x.2 == Icit::Impl)
-                    .rev()
+                    //.rev()
                     .fold(Raw::Var(name.clone()), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(Raw::Var(x.0.clone())), super::parser::syntax::Either::Icit(x.2))
                     });

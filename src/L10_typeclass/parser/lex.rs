@@ -14,6 +14,7 @@ pub enum TokenKind {
     TraitKeyword,
     ImplKeyword,
     ForKeyword,
+    ThisKeyword,
 
     Hole,
     LParen,
@@ -49,7 +50,7 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 12] = [
+const KEYWORD: [(&str, TokenKind); 13] = [
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
@@ -62,6 +63,7 @@ const KEYWORD: [(&str, TokenKind); 12] = [
     ("trait", TraitKeyword),
     ("impl", ImplKeyword),
     ("for", ForKeyword),
+    ("this", ThisKeyword),
 ];
 
 const OP: [(&str, TokenKind); 15] = [

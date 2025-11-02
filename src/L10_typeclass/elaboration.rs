@@ -2,14 +2,14 @@ use std::{cmp::max, collections::HashMap};
 
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span};
+use crate::{list::List, parser_lib::Span, L10_typeclass::typeclass::Assertion};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw, Pattern},
     pattern_match::Compiler, MetaEntry,
-    PatternDetail,
+    PatternDetail, typeclass::Instance,
     unification::PartialRenaming,
 };
 
@@ -402,8 +402,38 @@ impl Infer {
                 }
                 Ok((DeclTm::Enum {}, Val::U(0), cxt))
             }
-            Decl::ImplDecl { name, params, trait_name, trait_params, methods } => todo!(),
-            Decl::TraitDecl { name, params, methods } => todo!(),
+            Decl::ImplDecl { name, params, trait_name, trait_params, methods } => {
+                let span = name.to_span();
+                let typ = self.check_universe(cxt, name.clone())?.0;
+                let typ = self.eval(&cxt.env, typ)
+                    .to_typ()
+                    .ok_or_else(|| Error(span.map(|_| "Not a type".to_string())))?;
+                let typ_name = format!("{typ:?}");
+                let inst = Instance {
+                    assertion: Assertion { name: trait_name.data.clone(), arguments: vec![typ] },
+                    dependencies: List::new(),
+                };
+                self.trait_solver.impl_trait_for(trait_name.data, inst);
+                let mut cxt = cxt.clone();
+                for decl in methods {
+                    if let Decl::Def { name: def_name, params, ret_type, body } = decl {
+                        let func = Decl::Def {
+                            name: def_name.clone().map(|n| format!("{typ_name}.{n}")),
+                            params: [vec![(def_name.map(|_| "this".to_owned()), name.clone(), Icit::Expl)], params].concat(),
+                            ret_type,
+                            body,
+                        };
+                        let (_, _, c) = self.infer(&cxt, func)?;
+                        cxt = c;
+                    }
+                }
+                Ok((DeclTm::TraitImpl {}, Val::U(0), cxt.clone()))
+            },
+            Decl::TraitDecl { name, params, methods } => {
+                self.trait_solver.new_trait(name.data.clone());
+                self.trait_definition.insert(name.data.clone(), (params.clone(), methods.clone()));
+                Ok((DeclTm::Trait {}, Val::U(0), cxt.clone()))
+            },
         }
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
@@ -426,8 +456,36 @@ impl Infer {
             },
 
             Raw::Obj(x, t) => {
-                let (tm, a) = self.infer_expr(cxt, *x)?;
-                match (tm, self.force(a.clone())) {
+                let traits = self.trait_definition
+                    .iter()
+                    .flat_map(|(trait_name, (_, methods))| {
+                        if methods.iter().any(|x| x.0.data == t.data) {
+                            Some(trait_name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let (tm, a) = self.infer_expr(cxt, *x.clone())?;
+                let a = self.force(a);
+                if let Some(typ_name) = a.to_typ() {
+                    let typ_name = format!("{:?}", typ_name);
+                    for _ in traits {
+                        self.infer_expr(cxt, Raw::App(
+                            Box::new(Raw::Var(t.clone().map(|t| format!("{typ_name}.{t}")))),
+                            x.clone(),
+                            Either::Icit(Icit::Expl)
+                        )).unwrap();
+                        if let Ok((tm, val)) = self.infer_expr(cxt, Raw::App(
+                            Box::new(Raw::Var(t.clone().map(|t| format!("{typ_name}.{t}")))),
+                            x.clone(),
+                            Either::Icit(Icit::Expl)
+                        )) {
+                            return Ok((tm, val))
+                        }
+                    }
+                }
+                match (tm, a.clone()) {
                     (tm, Val::Sum(_, params, cases)) => {
                         let mut c = None;
                         if cases.len() == 1 {
