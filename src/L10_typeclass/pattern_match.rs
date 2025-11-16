@@ -234,7 +234,7 @@ impl Compiler {
                     //println!(" -- {}", infer.meta.len());
                     //println!("  {:?}", typ);
                     let (typename, param, constrs) = match infer.force(typ.clone()) {
-                        Val::Sum(span, param, cases) => (span, param, cases),
+                        Val::Sum(span, param, cases, _) => (span, param, cases),
                         _ => {
                             //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
                             (empty_span("$unknown$".to_owned()), vec![], vec![empty_span("$any$".to_owned())])
@@ -484,11 +484,12 @@ impl Compiler {
     ) -> Option<(Tm, Env)> {
         let (case_name, params, constrs_name) = match infer.force(heads.clone()) {
             Val::SumCase {
+                is_trait: _,
                 typ,
                 case_name,
                 datas: params,
             } => (case_name, params, match *typ {
-                Val::Sum(_, _, cases) => cases,
+                Val::Sum(_, _, cases, _) => cases,
                 _ => panic!("by now only can match a sum type, but get {:?}", heads),
             }),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),

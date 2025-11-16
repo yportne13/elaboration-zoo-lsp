@@ -176,6 +176,15 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
     .parse(input)
 }
 
+fn p_pi_impl_binder_option<'a: 'b, 'b>(
+    input: &'b [TokenNode<'a>],
+) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
+    p_pi_impl_binder
+        .option()
+        .map(|x| x.unwrap_or(vec![]))
+        .parse(input)
+}
+
 /// (x: A)
 fn p_pi_expl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
@@ -351,6 +360,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
         ),
     )
         .map(|(_, name, params, fields)| Decl::Enum {
+            is_trait: false,
             name,
             params,
             cases: fields,
@@ -379,6 +389,7 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a
            )*/
     )
         .map(|(_, name, params, fields)| Decl::Enum {
+            is_trait: false,
             name: name.clone(),
             params: params.clone().into_iter()
                 //.chain(fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)))
@@ -407,12 +418,12 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode
     (
         kw(TraitKeyword),
         string(Ident),
-        //p_generic_params(),
+        p_pi_impl_binder_option,
         brace(p_def_declare.many0_sep(kw(EndLine))),
     )
-        .map(|(_, name, body)| Decl::TraitDecl {
+        .map(|(_, name, params, body)| Decl::TraitDecl {
             name,
-            params: vec![],
+            params,
             methods: body,
         })
         .parse(input)
@@ -421,18 +432,19 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode
 fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
     (
         kw(ImplKeyword),
+        p_pi_impl_binder_option,
         string(Ident),
-        //p_generic_params(),
+        square(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.unwrap_or(vec![])),
         kw(ForKeyword),
         p_raw,
         //p_generic_params(),
         brace(p_def.many0_sep(kw(EndLine))),
     )
-        .map(|(_, trait_name, _, name, body)| Decl::ImplDecl {
+        .map(|(_, params, trait_name, trait_params, _, name, body)| Decl::ImplDecl {
             name,
-            params: vec![],
+            params,
             trait_name,
-            trait_params: vec![],
+            trait_params,
             methods: body,
         })
         .parse(input)

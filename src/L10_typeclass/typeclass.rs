@@ -9,6 +9,7 @@ use super::{Val, Span};
 pub enum Typ {
     Any,
     Val(Span<String>),
+    Var(u32),
     Construct(Span<String>, Vec<Typ>),
     Fn(Box<Typ>, Box<Typ>),
     Trait(Span<String>),
@@ -18,7 +19,8 @@ impl Val {
     pub fn to_typ(&self) -> Option<Typ> {
         match self {
             Val::Flex(..) => None,
-            Val::Rigid(lvl, list) => None,
+            Val::Rigid(lvl, list) if list.is_empty() => Some(Typ::Var(lvl.0)),
+            Val::Rigid(_, _) => None,
             Val::Obj(val, span) => None,
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => todo!(),
@@ -26,7 +28,7 @@ impl Val {
             Val::LiteralType => todo!(),
             Val::LiteralIntro(span) => todo!(),
             Val::Prim => todo!(),
-            Val::Sum(span, items, _) => Some(
+            Val::Sum(span, items, _, _) => Some(
                 if items.is_empty() {
                     Typ::Val(span.clone())
                 } else {
@@ -105,7 +107,7 @@ pub struct TableEntry {
 }
 
 /// The state of the algorithm.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Synth {
     /// A stack of [`GeneratorNode`]s.
     ///
@@ -121,18 +123,6 @@ pub struct Synth {
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.
     root_answer: Option<Assertion>,
-}
-
-impl Default for Synth {
-    fn default() -> Self {
-        Self {
-            generator_stack: vec![],
-            resume_stack: vec![],
-            class_instances: HashMap::new(),
-            assertion_table: HashMap::new(),
-            root_answer: None,
-        }
-    }
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -151,16 +141,39 @@ impl Synth {
     pub fn impl_trait_for(&mut self, trait_name: String, instance: Instance) {
         self.class_instances
             .entry(trait_name)
-            .or_insert(vec![])
+            .or_default()
             .push(instance);
     }
 
     fn try_answer(&mut self, subgoal: &Assertion, answer: &Assertion) -> bool {
-        todo!("try_answer")
+        subgoal == answer
     }
 
     fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<List<Assertion>> {
-        todo!("try_resolve")
+        // 名字必须匹配
+        if goal.name != instance.assertion.name {
+            return None;
+        }
+
+        // 参数数量必须一致
+        if goal.arguments.len() != instance.assertion.arguments.len() {
+            return None;
+        }
+
+        // 执行合一
+        let mut subst = Subst::new();
+        for (g_arg, i_arg) in goal.arguments.iter().zip(&instance.assertion.arguments) {
+            if !unify(g_arg, i_arg, &mut subst) {
+                return None;
+            }
+        }
+
+        // 应用代换到 dependencies，得到具体 subgoals
+        let concrete_deps = instance
+            .dependencies
+            .map(|dep| apply_subst_to_assertion(dep, &subst));
+
+        Some(concrete_deps)
     }
 
     /// The entry point for the algorithm.
@@ -303,5 +316,69 @@ impl Synth {
                 }
             }
         }
+    }
+}
+
+type Subst = HashMap<u32, Typ>; // 类型变量代换：Var(i) ↦ Typ
+
+/// 将代换应用到类型上
+fn apply_subst_to_typ(t: &Typ, subst: &Subst) -> Typ {
+    match t {
+        Typ::Var(i) => subst.get(i).cloned().unwrap_or_else(|| t.clone()),
+        Typ::Construct(name, args) => {
+            Typ::Construct(
+                name.clone(),
+                args.iter().map(|a| apply_subst_to_typ(a, subst)).collect(),
+            )
+        }
+        Typ::Fn(a, b) => Typ::Fn(
+            Box::new(apply_subst_to_typ(a, subst)),
+            Box::new(apply_subst_to_typ(b, subst)),
+        ),
+        _ => t.clone(), // Val, Any, Trait 等是 ground，不变
+    }
+}
+
+/// 将代换应用到 Assertion 上
+fn apply_subst_to_assertion(assert: &Assertion, subst: &Subst) -> Assertion {
+    Assertion {
+        name: assert.name.clone(),
+        arguments: assert
+            .arguments
+            .iter()
+            .map(|t| apply_subst_to_typ(t, subst))
+            .collect(),
+    }
+}
+
+/// 合一两个类型，更新代换 subst
+/// 返回 false 表示失败（冲突）
+fn unify(t1: &Typ, t2: &Typ, subst: &mut Subst) -> bool {
+    let t1 = apply_subst_to_typ(t1, subst);
+    let t2 = apply_subst_to_typ(t2, subst);
+
+    match (&t1, &t2) {
+        (Typ::Var(i), Typ::Var(j)) if i == j => true,
+        (Typ::Var(i), _) => {
+            // Occurs check omitted for simplicity
+            subst.insert(*i, t2);
+            true
+        }
+        (_, Typ::Var(i)) => {
+            subst.insert(*i, t1);
+            true
+        }
+        (Typ::Val(s1), Typ::Val(s2)) => s1 == s2,
+        (Typ::Construct(n1, args1), Typ::Construct(n2, args2)) => {
+            n1 == n2
+                && args1.len() == args2.len()
+                && args1
+                    .iter()
+                    .zip(args2)
+                    .all(|(a1, a2)| unify(a1, a2, subst))
+        }
+        (Typ::Fn(a1, b1), Typ::Fn(a2, b2)) => unify(a1, a2, subst) && unify(b1, b2, subst),
+        (Typ::Any, _) | (_, Typ::Any) => true, // Any 与任何类型匹配（可选）
+        _ => false,
     }
 }

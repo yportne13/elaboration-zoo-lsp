@@ -275,7 +275,7 @@ impl Infer {
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
             Val::Prim => Ok(Tm::Prim),
-            Val::Sum(x, params, cases) => {
+            Val::Sum(x, params, cases, is_trait) => {
                 let new_params = params
                     .into_iter()
                     .map(|x| {
@@ -285,9 +285,10 @@ impl Infer {
                         }
                     })
                     .collect::<Result<_, _>>()?;
-                Ok(Tm::Sum(x, new_params, cases))
+                Ok(Tm::Sum(x, new_params, cases, is_trait))
             }
             Val::SumCase {
+                is_trait,
                 typ,
                 case_name,
                 datas: params,
@@ -301,6 +302,7 @@ impl Infer {
                     })
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::SumCase {
+                    is_trait,
                     typ: Box::new(typ),
                     case_name,
                     datas: params,
@@ -545,7 +547,7 @@ impl Infer {
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (Val::LiteralType, Val::Prim) => Ok(()),
             (Val::Prim, Val::LiteralType) => Ok(()),
-            (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
+            (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 let mut cxt = cxt.clone();
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
@@ -555,8 +557,8 @@ impl Infer {
                 Ok(())
             }
             (
-                Val::SumCase { typ: a, case_name: ca, datas: params_a },
-                Val::SumCase { typ: b, case_name: cb, datas: params_b },
+                Val::SumCase { is_trait: _, typ: a, case_name: ca, datas: params_a },
+                Val::SumCase { is_trait: _, typ: b, case_name: cb, datas: params_b },
             ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
                 let mut cxt = cxt.clone();

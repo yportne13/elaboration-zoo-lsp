@@ -46,7 +46,7 @@ pub enum Raw {
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>, u32),
+    Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>, u32, bool),
     SumCase {
         typ: Box<Raw>,
         case_name: Span<String>,
@@ -72,7 +72,7 @@ impl Raw {
             Raw::Match(raw, items) => items.last()
                 .map(|x| raw.to_span() + x.1.to_span())
                 .unwrap_or(raw.to_span()),
-            Raw::Sum(span, params, items, _) => items.last()
+            Raw::Sum(span, params, items, _, _) => items.last()
                 .map(|x| span.to_span() + x.to_span())
                 .unwrap_or(params.last().map(|x| span.to_span() + x.2.to_span()).unwrap_or(span.to_span())),
             Raw::SumCase { typ, case_name, datas } => datas.last()
@@ -92,6 +92,7 @@ pub enum Decl {
     },
     Println(Raw),
     Enum {
+        is_trait: bool,
         name: Span<String>,
         params: Vec<(Span<String>, Raw, Icit)>,
         cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
@@ -105,7 +106,7 @@ pub enum Decl {
         name: Raw,
         params: Vec<(Span<String>, Raw, Icit)>,
         trait_name: Span<String>,
-        trait_params: Vec<(Span<String>, Raw, Icit)>,
+        trait_params: Vec<Raw>,
         methods: Vec<Decl>,
     },
 }

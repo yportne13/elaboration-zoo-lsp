@@ -38,10 +38,11 @@ enum BD {
 #[derive(Clone, Debug)]
 pub enum DeclTm {
     Def {
-        /*name: Span<String>,
-        params: Vec<(Span<String>, Tm, Icit)>,
-        ret_type: Tm,
-        body: Tm,*/
+        name: Span<String>,
+        typ: Val,
+        body: Val,
+        typ_pretty: String,
+        body_pretty: String,
     },
     Println(Tm),
     Enum {
@@ -69,11 +70,12 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim,
-    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<Span<String>>),
+    Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<Span<String>>, bool),
     SumCase {
         typ: Box<Tm>,
         case_name: Span<String>,
         datas: Vec<(Span<String>, Tm, Icit)>,
+        is_trait: bool,
     },
     Match(Box<Tm>, Vec<(PatternDetail, Tm)>),
 }
@@ -142,9 +144,11 @@ pub enum Val {
     Sum(
         Span<String>,
         Vec<(Span<String>, Val, VTy, Icit)>,
-        Vec<Span<String>>
+        Vec<Span<String>>,
+        bool,
     ),
     SumCase {
+        is_trait: bool,
         typ: Box<Val>,
         case_name: Span<String>,
         datas: Vec<(Span<String>, Val, Icit)>,
@@ -292,14 +296,14 @@ impl Infer {
             },
             Tm::Obj(tm, name) => {
                 match self.eval(env, *tm) {
-                    Val::Sum(_, params, cases) => {
+                    Val::Sum(_, params, cases, _) => {
                         params.into_iter()
                             .find(|(f_name, _, _, _)| f_name == &name)
                             .unwrap().1
                     },
                     Val::SumCase { datas, typ, .. } => {
                         (match *typ {
-                            Val::Sum(_, params, _) => params,
+                            Val::Sum(_, params, _, _) => params,
                             _ => panic!("impossible {typ:?}"),
                         }).into_iter()
                             .map(|x| (x.0, x.1, x.3))
@@ -334,14 +338,15 @@ impl Infer {
                 }
                 _ => Val::Prim,
             },
-            Tm::Sum(name, params, cases) => {
+            Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = params
                     .into_iter()
                     .map(|x| (x.0, self.eval(env, x.1), self.eval(env, x.2), x.3))
                     .collect();
-                Val::Sum(name, new_params, cases)
+                Val::Sum(name, new_params, cases, is_trait)
             }
             Tm::SumCase {
+                is_trait,
                 typ,
                 case_name,
                 datas,
@@ -352,6 +357,7 @@ impl Infer {
                     .collect();
                 let typ = self.eval(env, *typ);
                 Val::SumCase {
+                    is_trait,
                     typ: Box::new(typ),
                     case_name,
                     datas,
@@ -408,15 +414,16 @@ impl Infer {
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
-            Val::Sum(name, params, cases) => {
+            Val::Sum(name, params, cases, is_trait) => {
                 let new_params = params.into_iter()
                     .map(|x| {
                         (x.0, self.quote(l, x.1), self.quote(l, x.2), x.3)
                     })
                     .collect();
-                Tm::Sum(name, new_params, cases)
+                Tm::Sum(name, new_params, cases, is_trait)
             }
             Val::SumCase {
+                is_trait,
                 typ,
                 case_name,
                 datas,
@@ -428,6 +435,7 @@ impl Infer {
                     })
                     .collect();
                 Tm::SumCase {
+                    is_trait,
                     typ: Box::new(self.quote(l, *typ)),
                     case_name,
                     datas,
@@ -571,11 +579,28 @@ def not(x: Bool): Bool =
 
 println (not true)
 
-trait Add {
-    def add(that: Nat): Nat
+trait ToString {
+    def to_string: String
 }
 
-impl Add for Nat {
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+def t[T](x: T)[s: ToString[T]]: String =
+    s.to_string x
+
+println (t true)
+
+trait Add[T, O] {
+    def add(that: T): O
+}
+
+impl Add[Nat, Nat] for Nat {
     def add(that: Nat): Nat =
         match that {
             case zero => this
@@ -599,9 +624,14 @@ struct Point[T] {
 
 def get_x[T](p: Point[T]): T = p.x
 
-impl Add for Point[Nat] {
+impl Add[Point[Nat], Point[Nat]] for Point[Nat] {
     def add(that: Point[Nat]): Point[Nat] =
         new Point(this.x.add that.x, this.y.add that.y)
+}
+
+impl Add[Nat, Point[Nat]] for Point[Nat] {
+    def add(that: Nat): Point[Nat] =
+        new Point(this.x.add that, this.y.add that)
 }
 
 def start_point = new Point(zero, four)

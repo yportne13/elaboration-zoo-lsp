@@ -138,7 +138,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
         Tm::Prim => "Prim Func".to_owned(),
-        Tm::Sum(span, tms, items) => format!(
+        Tm::Sum(span, tms, items, _) => format!(
             "{}{}",
             span.data,
             tms.iter()
@@ -147,10 +147,10 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 .map(|x| format!("[{x}]"))
                 .unwrap_or("".to_owned()),
         ),
-        Tm::SumCase { typ, case_name, datas: params } => format!(
+        Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
             "{}::{}{}",
             match typ.as_ref() {
-                Tm::Sum(name, _, _) => &name.data,
+                Tm::Sum(name, _, _, _) => &name.data,
                 _ => panic!("Sum case must be applied to a sum"),
             },
             case_name.data,
