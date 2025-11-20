@@ -125,7 +125,7 @@ impl std::fmt::Debug for Closure {
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
-    Obj(Box<Val>, Span<String>),
+    Obj(Box<Val>, Span<String>, Spine),
     Lam(Span<String>, Icit, Closure),
     Pi(Span<String>, Icit, Box<VTy>, Closure),
     U,
@@ -241,6 +241,7 @@ impl Infer {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
             Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
             Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
+            Val::Obj(x, name, sp) => Val::Obj(x, name, sp.prepend((u, i))),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
@@ -298,7 +299,7 @@ impl Infer {
                             .unwrap().1
                     },
                     x @ Val::Rigid(_, _) => {
-                        Val::Obj(Box::new(x), name)
+                        Val::Obj(Box::new(x), name, List::new())
                     }
                     x => panic!("impossible {x:?}"),
                 }
@@ -381,7 +382,7 @@ impl Infer {
         match t {
             Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
-            Val::Obj(x, name) => Tm::Obj(Box::new(self.quote(l, *x)), name),
+            Val::Obj(x, name, sp) => self.quote_sp(l, Tm::Obj(Box::new(self.quote(l, *x)), name), sp),
             Val::Lam(x, i, closure) => Tm::Lam(
                 x,
                 i,
@@ -544,6 +545,13 @@ enum List[A] {
     cons(head: A, tail: List[A])
 }
 
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
 def listid(x: List[Bool]): List[Bool] = x
 
 def create0: List[Bool] = nil
@@ -600,6 +608,14 @@ def get_name(x: Bits) = x.name
 def sigA = new Bits("A", four)
 
 println get_name sigA
+
+struct Exists[A: U, P: A -> U] {
+    witness: A
+    proof: (P witness)
+}
+
+def exists_two: Exists[Nat][x => Eq x two] =
+    Exists.mk[Nat][x => Eq x two] two rfl
 
 "#;
     println!("{}", run(input, 0).unwrap());

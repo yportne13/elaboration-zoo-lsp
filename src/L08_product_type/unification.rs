@@ -254,9 +254,11 @@ impl Infer {
                     self.rename_sp(pren, t, &sp)
                 }
             },
-            Val::Obj(x, name) => Ok(Tm::Obj(Box::new(
-                self.rename(pren, *x)?
-            ), name.clone())),
+            Val::Obj(x, name, sp) => {
+                let t = self.rename(pren, *x)?;
+                let t = Tm::Obj(Box::new(t), name.clone());
+                self.rename_sp(pren, t, &sp)
+            },
             Val::Lam(x, i, closure) => {
                 let t = self.rename(
                     &lift(pren),

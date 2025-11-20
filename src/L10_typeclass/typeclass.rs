@@ -21,7 +21,7 @@ impl Val {
             Val::Flex(..) => None,
             Val::Rigid(lvl, list) if list.is_empty() => Some(Typ::Var(lvl.0)),
             Val::Rigid(_, _) => None,
-            Val::Obj(val, span) => None,
+            Val::Obj(val, span, sp) => None,
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => todo!(),
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),

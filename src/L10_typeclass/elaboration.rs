@@ -444,8 +444,8 @@ impl Infer {
                 self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
                 let mut ret = trait_params
                     .into_iter()
-                    .chain(std::iter::once(name))
                     .rev()
+                    .chain(std::iter::once(name))
                     .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
@@ -475,10 +475,10 @@ impl Infer {
             },
             Decl::TraitDecl { name, mut params, methods } => {
                 self.trait_solver.new_trait(name.data.clone());
-                self.trait_definition.insert(name.data.clone(), (params.clone(), methods.clone()));
-                let mut cxt = cxt.clone();
                 let mut param = vec![(name.clone().map(|_| "Self".to_owned()), Raw::Hole, Icit::Impl)];
                 param.append(&mut params);
+                self.trait_definition.insert(name.data.clone(), (param.clone(), methods.clone()));
+                let mut cxt = cxt.clone();
                 if let Ok((_, _, c)) = self.infer(&cxt, Decl::Enum {
                     is_trait: true,
                     name: name.clone(),
@@ -489,9 +489,8 @@ impl Infer {
                             .into_iter()
                             .map(|x| (
                                 x.0.clone(),
-                                x.1
-                                    .into_iter()
-                                    .chain(std::iter::once((x.0.clone().map(|_| "this".to_owned()), Raw::Var(x.0.map(|_| "Self".to_owned())), Icit::Expl)))
+                                std::iter::once((x.0.clone().map(|_| "this".to_owned()), Raw::Var(x.0.map(|_| "Self".to_owned())), Icit::Expl))
+                                    .chain(x.1.into_iter())
                                     .rev()
                                     .fold(x.2, |a, b| {
                                         Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -530,37 +529,94 @@ impl Infer {
             Raw::Obj(x, t) => {
                 let (tm, a) = self.infer_expr(cxt, *x.clone())?;
                 let a = self.force(a);
-                if let Some(typ) = a.to_typ() {
-                    let typ_name = format!("{:?}", typ);
+                let ret = if let Some(typ) = a.to_typ() {
                     let traits = self.trait_definition
+                        .clone()//TODO: can remove this clone?
                         .iter()
-                        .flat_map(|(trait_name, (_, methods))| {
-                            if methods.iter().any(|x| x.0.data == t.data) {
-                                Some(trait_name.clone())
-                            } else {
-                                None
+                        .flat_map(|(trait_name, (trait_params, methods))| {
+                            methods.iter()
+                                .find(|x| x.0.data == t.data)
+                                .map(|x| (trait_name, trait_params, x))
+                        })
+                        .filter(|(x, args, _)| {
+                            let mut args = vec![super::typeclass::Typ::Any; args.len()];
+                            args[0] = typ.clone();
+                            self.trait_solver
+                                .synth(Assertion {
+                                    name: x.clone().clone(),
+                                    arguments: args,
+                                })
+                                .is_some()
+                        })
+                        .map(|(trait_name, trait_params, (methods_name, methods_params, ret_type))| (
+                            trait_name.clone(),
+                            Decl::Def {
+                                name: methods_name.clone().map(|x| format!("${x}")),
+                                params: {
+                                    let mut params = trait_params.clone();
+                                    params.append(&mut methods_params.clone());
+                                    params.push((
+                                        methods_name.clone().map(|_| "$$".to_owned()),
+                                        std::iter::once(methods_name.clone().map(|_| "Self".to_owned()))
+                                            .chain(trait_params.into_iter()
+                                                .map(|x| x.0.clone())
+                                            )
+                                            .fold(
+                                                Raw::Var(methods_name.clone().map(|_| trait_name.clone())),
+                                                |ret, x| Raw::App(Box::new(ret), Box::new(Raw::Var(x)), Either::Icit(Icit::Expl))
+                                            ),
+                                        Icit::Impl
+                                    ));
+                                    params
+                                },
+                                ret_type: ret_type.clone(),
+                                body: std::iter::once(*x.clone())
+                                    .chain(methods_params.into_iter().map(|x| Raw::Var(x.0.clone())))
+                                    .fold(
+                                        Raw::Obj(
+                                            Box::new(Raw::Var(methods_name.clone().map(|_| "$$".to_owned()))),
+                                            methods_name.clone(),
+                                        ),
+                                        |ret, x| Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Expl))
+                                    ),
                             }
-                        })
-                        .flat_map(|x| {
-                            self.trait_solver.synth(Assertion { name: x, arguments: vec![typ.clone(), super::typeclass::Typ::Any, super::typeclass::Typ::Any] })
-                        })
+                        ))
                         .collect::<Vec<_>>();
-                    for t_assert in traits {
-                        let mut trait_param = t_assert.arguments;
-                        self.infer_expr(cxt, Raw::App(
-                            Box::new(Raw::Var(t.clone().map(|t| format!("{typ_name}{trait_param:?}.{t}")))),
-                            x.clone(),
-                            Either::Icit(Icit::Expl)
-                        )).unwrap();
-                        if let Ok((tm, val)) = self.infer_expr(cxt, Raw::App(
-                            Box::new(Raw::Var(t.clone().map(|t| format!("{typ_name}.{t}")))),
+                    //TODO: if traits.len() > 1, return err
+                    let traits = traits.first().and_then(|(name, decl)| {
+                            self.infer(cxt, decl.clone()).map(|x| x.2).ok()
+                        });
+                    if let Some(cxt) = traits {
+                        if let Ok((tm, val)) = self.infer_expr(&cxt, Raw::App(
+                            Box::new(Raw::Var(t.clone().map(|t| format!("${}", t)))),
                             x.clone(),
                             Either::Icit(Icit::Expl)
                         )) {
-                            return Ok((tm, val))
+                            Ok((tm, val))
+                        } else {
+                            Err(Error(t.clone().map(|t| format!(
+                                "`{}`: {:?} has no object `{}`",
+                                super::pretty_tm(0, cxt.names(), &tm),
+                                a,
+                                t,
+                            ))))
                         }
+                    } else {
+                        Err(Error(t.clone().map(|t| format!(
+                            "`{}`: {:?} has no object `{}`",
+                            super::pretty_tm(0, cxt.names(), &tm),
+                            a,
+                            t,
+                        ))))
                     }
-                }
+                } else {
+                    Err(Error(t.clone().map(|t| format!(
+                        "`{}`: {:?} has no object `{}`",
+                        super::pretty_tm(0, cxt.names(), &tm),
+                        a,
+                        t,
+                    ))))
+                };
                 match (tm, a.clone()) {
                     (tm, Val::Sum(_, params, cases, _)) => {
                         let mut c = None;
@@ -588,9 +644,7 @@ impl Infer {
                                 }
                             }
                         }
-                        Ok((
-                            Tm::Obj(Box::new(tm.clone()), t.clone()),
-                            c.and_then(|params| {
+                        if let Some(val) = c.and_then(|params| {
                                 params.into_iter()
                                     .find(|(fields_name, _)| fields_name == &t)
                                     .map(|(_, ty)| ty)
@@ -599,35 +653,29 @@ impl Infer {
                                 .into_iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
                                 .map(|(_, _, ty, _)| ty)
-                            )
-                                .ok_or_else(|| Error(t.map(|t| format!(
-                                    "`{}`: {:?} has no object `{}`",
-                                    super::pretty_tm(0, cxt.names(), &tm),
-                                    a,
-                                    t,
-                                ))))?
-                        ))
+                            ) {
+                                Ok((
+                                    Tm::Obj(Box::new(tm.clone()), t.clone()),
+                                    val,
+                                ))
+                            } else {
+                                ret
+                            }
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
-                        Ok((
-                            Tm::Obj(Box::new(tm.clone()), t.clone()),
-                            params
-                                .into_iter()
-                                .find(|(fields_name, _, _)| fields_name == &t)
-                                .map(|(_, ty, _)| ty)
-                                .ok_or_else(|| Error(t.map(|t| format!(
-                                    "`{}`: {:?} has no object `{}`",
-                                    super::pretty_tm(0, cxt.names(), &tm),
-                                    a,
-                                    t,
-                                ))))?
-                        ))
+                        if let Some(val) = params
+                            .into_iter()
+                            .find(|(fields_name, _, _)| fields_name == &t)
+                            .map(|(_, ty, _)| ty) {
+                                Ok((
+                                    Tm::Obj(Box::new(tm.clone()), t.clone()),
+                                    val,
+                                ))
+                            } else {
+                                ret
+                            }
                     }
-                    (tm, _) => Err(Error(t.map(|t| format!(
-                        "`{}` has no object `{}`",
-                        super::pretty_tm(0, cxt.names(), &tm),
-                        t,
-                    )))),
+                    (_, _) => ret,
                 }
             },
 
