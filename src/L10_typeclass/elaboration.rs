@@ -442,10 +442,8 @@ impl Infer {
                 // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
                 // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
                 self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
-                let mut ret = trait_params
-                    .into_iter()
-                    .rev()
-                    .chain(std::iter::once(name))
+                let mut ret = std::iter::once(name)
+                    .chain(trait_params.into_iter())
                     .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
@@ -509,14 +507,9 @@ impl Infer {
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
         /*println!(
-            "{} {:?} in {}",
+            "{} {:?}",
             "infer".red(),
             t,
-            cxt.types
-                .iter()
-                .map(|x| format!("{x:?}"))
-                .reduce(|a, b| a + "\n" + &b)
-                .unwrap_or(String::new())
         );*/
         let t_span = t.to_span();
         match t {
@@ -529,94 +522,6 @@ impl Infer {
             Raw::Obj(x, t) => {
                 let (tm, a) = self.infer_expr(cxt, *x.clone())?;
                 let a = self.force(a);
-                let ret = if let Some(typ) = a.to_typ() {
-                    let traits = self.trait_definition
-                        .clone()//TODO: can remove this clone?
-                        .iter()
-                        .flat_map(|(trait_name, (trait_params, methods))| {
-                            methods.iter()
-                                .find(|x| x.0.data == t.data)
-                                .map(|x| (trait_name, trait_params, x))
-                        })
-                        .filter(|(x, args, _)| {
-                            let mut args = vec![super::typeclass::Typ::Any; args.len()];
-                            args[0] = typ.clone();
-                            self.trait_solver
-                                .synth(Assertion {
-                                    name: x.clone().clone(),
-                                    arguments: args,
-                                })
-                                .is_some()
-                        })
-                        .map(|(trait_name, trait_params, (methods_name, methods_params, ret_type))| (
-                            trait_name.clone(),
-                            Decl::Def {
-                                name: methods_name.clone().map(|x| format!("${x}")),
-                                params: {
-                                    let mut params = trait_params.clone();
-                                    params.append(&mut methods_params.clone());
-                                    params.push((
-                                        methods_name.clone().map(|_| "$$".to_owned()),
-                                        std::iter::once(methods_name.clone().map(|_| "Self".to_owned()))
-                                            .chain(trait_params.into_iter()
-                                                .map(|x| x.0.clone())
-                                            )
-                                            .fold(
-                                                Raw::Var(methods_name.clone().map(|_| trait_name.clone())),
-                                                |ret, x| Raw::App(Box::new(ret), Box::new(Raw::Var(x)), Either::Icit(Icit::Expl))
-                                            ),
-                                        Icit::Impl
-                                    ));
-                                    params
-                                },
-                                ret_type: ret_type.clone(),
-                                body: std::iter::once(*x.clone())
-                                    .chain(methods_params.into_iter().map(|x| Raw::Var(x.0.clone())))
-                                    .fold(
-                                        Raw::Obj(
-                                            Box::new(Raw::Var(methods_name.clone().map(|_| "$$".to_owned()))),
-                                            methods_name.clone(),
-                                        ),
-                                        |ret, x| Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Expl))
-                                    ),
-                            }
-                        ))
-                        .collect::<Vec<_>>();
-                    //TODO: if traits.len() > 1, return err
-                    let traits = traits.first().and_then(|(name, decl)| {
-                            self.infer(cxt, decl.clone()).map(|x| x.2).ok()
-                        });
-                    if let Some(cxt) = traits {
-                        if let Ok((tm, val)) = self.infer_expr(&cxt, Raw::App(
-                            Box::new(Raw::Var(t.clone().map(|t| format!("${}", t)))),
-                            x.clone(),
-                            Either::Icit(Icit::Expl)
-                        )) {
-                            Ok((tm, val))
-                        } else {
-                            Err(Error(t.clone().map(|t| format!(
-                                "`{}`: {:?} has no object `{}`",
-                                super::pretty_tm(0, cxt.names(), &tm),
-                                a,
-                                t,
-                            ))))
-                        }
-                    } else {
-                        Err(Error(t.clone().map(|t| format!(
-                            "`{}`: {:?} has no object `{}`",
-                            super::pretty_tm(0, cxt.names(), &tm),
-                            a,
-                            t,
-                        ))))
-                    }
-                } else {
-                    Err(Error(t.clone().map(|t| format!(
-                        "`{}`: {:?} has no object `{}`",
-                        super::pretty_tm(0, cxt.names(), &tm),
-                        a,
-                        t,
-                    ))))
-                };
                 match (tm, a.clone()) {
                     (tm, Val::Sum(_, params, cases, _)) => {
                         let mut c = None;
@@ -659,7 +564,7 @@ impl Infer {
                                     val,
                                 ))
                             } else {
-                                ret
+                                self.trait_wrap(cxt, t, a, x, tm)
                             }
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
@@ -672,10 +577,10 @@ impl Infer {
                                     val,
                                 ))
                             } else {
-                                ret
+                                self.trait_wrap(cxt, t, a, x, tm)
                             }
                     }
-                    (_, _) => ret,
+                    (tm, _) => self.trait_wrap(cxt, t, a, x, tm),
                 }
             },
 
@@ -762,6 +667,7 @@ impl Infer {
                                 .iter()
                                 .flat_map(|(_, tm, _, _)| self.force(tm.clone()).to_typ())
                                 .collect::<Vec<_>>();
+                            self.trait_solver.clean();
                             if let Some(x) = self.trait_solver.synth(Assertion {
                                 name: name.data.clone(),
                                 arguments: params.clone(),
@@ -882,6 +788,100 @@ impl Infer {
                     typ_val,
                 ))
             }
+        }
+    }
+    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Val, x: Box<Raw>, tm: Tm) -> Result<(Tm, Val), Error> {
+        if let Some(typ) = a.to_typ() {
+            let traits = self.trait_definition
+                .clone()//TODO: can remove this clone?
+                .iter()
+                .flat_map(|(trait_name, (trait_params, methods))| {
+                    methods.iter()
+                        .find(|x| x.0.data == t.data)
+                        .map(|x| (trait_name, trait_params, x))
+                })
+                .filter(|(x, args, _)| {
+                    let mut args = vec![super::typeclass::Typ::Any; args.len()];
+                    args[0] = typ.clone();
+                    self.trait_solver.clean();
+                    self.trait_solver
+                        .synth(Assertion {
+                            name: x.clone().clone(),
+                            arguments: args,
+                        })
+                        .is_some()
+                })
+                .map(|(trait_name, trait_params, (methods_name, methods_params, ret_type))| (
+                    trait_name.clone(),
+                    {
+                        let params = {
+                            let mut params = trait_params.clone();
+                            params.push((
+                                methods_name.clone().map(|_| "$this".to_owned()),
+                                Raw::Var(methods_name.clone().map(|_| "Self".to_owned())),
+                                Icit::Expl
+                            ));
+                            params.append(&mut methods_params.clone());
+                            params.push((
+                                methods_name.clone().map(|_| "$$".to_owned()),
+                                trait_params.iter()
+                                    .map(|x| x.0.clone())
+                                    .fold(
+                                        Raw::Var(methods_name.clone().map(|_| trait_name.clone())),
+                                        |ret, x| Raw::App(Box::new(ret), Box::new(Raw::Var(x)), Either::Icit(Icit::Impl))
+                                    ),
+                                Icit::Impl
+                            ));
+                            params
+                        };
+                        let body = std::iter::once(Raw::Var(methods_name.clone().map(|_| "$this".to_owned())))
+                            .chain(methods_params.iter().map(|x| Raw::Var(x.0.clone())))
+                            .fold(
+                                Raw::Obj(
+                                    Box::new(Raw::Var(methods_name.clone().map(|_| "$$".to_owned()))),
+                                    methods_name.clone(),
+                                ),
+                                |ret, x| Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Expl))
+                            );
+                        Raw::Let(
+                            methods_name.clone().map(|x| format!("${x}")),
+                            Box::new(params.iter().rev().fold(ret_type.clone(), |a, b| {
+                                Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                            })),
+                            Box::new(params.iter().rev().fold(body.clone(), |a, b| {
+                                Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
+                            })),
+                            Box::new(Raw::App(
+                                Box::new(Raw::Var(methods_name.clone().map(|x| format!("${x}")))),
+                                x.clone(),
+                                Either::Icit(Icit::Expl),
+                            )),
+                        )
+                    }
+                ))
+                .collect::<Vec<_>>();
+            //TODO: if traits.len() > 1, return err
+            let traits = traits.first().and_then(|(name, decl)| {
+                    self.infer_expr(cxt, decl.clone()).ok()
+                });
+            if let Some(ret) = traits {
+                //println!("{}", super::pretty_tm(0, cxt.names(), &ret.0));
+                Ok(ret)
+            } else {
+                Err(Error(t.clone().map(|t| format!(
+                    "`{}`: {:?} has no object `{}`",
+                    super::pretty_tm(0, cxt.names(), &tm),
+                    a,
+                    t,
+                ))))
+            }
+        } else {
+            Err(Error(t.clone().map(|t| format!(
+                "`{}`: {:?} has no object `{}`",
+                super::pretty_tm(0, cxt.names(), &tm),
+                a,
+                t,
+            ))))
         }
     }
 }

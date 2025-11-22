@@ -491,6 +491,12 @@ impl Infer {
                 )*/
                 //println!("{:?} == {:?}", t, t_prime);
                 //println!("{:?}", self.eval(&cxt.env, self.quote(cxt.lvl, t_prime.clone())));
+                /*panic!(
+                    //"can't unify {:?} == {:?}",
+                    "can't unify\n      find: {}\n  expected: {}",
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
+                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
+                );*/
                 let err = format!(
                     //"can't unify {:?} == {:?}",
                     "can't unify\n      find: {}\n  expected: {}",
@@ -597,11 +603,11 @@ def t[T](x: T)[s: ToString[T]]: String =
 
 println (t true)
 
-trait Add[T, O] {
-    def add(that: T): O
+trait Add[T] {
+    def add(that: T): Self
 }
 
-impl Add[Nat, Nat] for Nat {
+impl Add[Nat] for Nat {
     def add(that: Nat): Nat =
         match that {
             case zero => this
@@ -625,12 +631,12 @@ struct Point[T] {
 
 def get_x[T](p: Point[T]): T = p.x
 
-impl Add[Point[Nat], Point[Nat]] for Point[Nat] {
+impl Add[Point[Nat]] for Point[Nat] {
     def add(that: Point[Nat]): Point[Nat] =
         new Point(this.x.add that.x, this.y.add that.y)
 }
 
-impl Add[Nat, Point[Nat]] for Point[Nat] {
+impl Add[Nat] for Point[Nat] {
     def add(that: Nat): Point[Nat] =
         new Point(this.x.add that, this.y.add that)
 }

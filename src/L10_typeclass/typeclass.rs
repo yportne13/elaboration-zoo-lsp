@@ -145,6 +145,13 @@ impl Synth {
             .push(instance);
     }
 
+    pub fn clean(&mut self) {
+        self.generator_stack.clear();
+        self.resume_stack.clear();
+        self.assertion_table.clear();
+        self.root_answer = None;
+    }
+
     fn try_answer(&mut self, subgoal: &Assertion, answer: &Assertion) -> bool {
         subgoal == answer
     }
