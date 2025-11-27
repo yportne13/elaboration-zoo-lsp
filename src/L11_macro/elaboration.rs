@@ -2,7 +2,7 @@ use std::{cmp::max, collections::HashMap};
 
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span, L10_typeclass::typeclass::Assertion};
+use crate::{list::List, parser_lib::Span};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
@@ -11,6 +11,7 @@ use super::{
     pattern_match::Compiler, MetaEntry,
     PatternDetail, typeclass::Instance,
     unification::PartialRenaming,
+    typeclass::Assertion,
 };
 
 impl Infer {
@@ -272,8 +273,8 @@ impl Infer {
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone());
                     self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
-                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
+                    //let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
+                    //let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     self.global.insert(cxt.lvl, vt.clone());
@@ -281,8 +282,8 @@ impl Infer {
                         ret_cxt.define(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
                         vtyp,
                         vt,
-                        vtyp_pretty,
-                        vt_pretty,
+                        "".to_owned(),
+                        "".to_owned(),
                     )
                 };
                 Ok((
@@ -520,6 +521,7 @@ impl Infer {
             },
 
             Raw::Obj(x, t) => {
+                let t = t.unwrap_or(empty_span("".to_owned()));
                 let (tm, a) = self.infer_expr(cxt, *x.clone())?;
                 let a = self.force(a);
                 match (tm, a.clone()) {
@@ -839,7 +841,7 @@ impl Infer {
                             .fold(
                                 Raw::Obj(
                                     Box::new(Raw::Var(methods_name.clone().map(|_| "$$".to_owned()))),
-                                    methods_name.clone(),
+                                    Some(methods_name.clone()),
                                 ),
                                 |ret, x| Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Expl))
                             );

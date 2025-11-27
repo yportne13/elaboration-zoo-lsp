@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 mod parser_lib;
+mod parser_lib_resilient;
 mod list;
 mod bimap;
 mod L01_eval;
@@ -17,6 +18,7 @@ mod L07a_depend_pm;
 mod L08_product_type;
 mod L09_mltt;
 mod L10_typeclass;
+mod L11_macro;
 
 fn calcu<F>(f: F, name: &str)
 where
