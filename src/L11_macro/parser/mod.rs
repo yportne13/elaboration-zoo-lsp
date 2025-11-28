@@ -149,7 +149,15 @@ fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Str
 }
 
 /// ( p )
-fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, Vec<IError>, IError>
+fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, Vec<IError>, IError>
+where
+    P: Parser<&'b [TokenNode<'a>], O, Vec<IError>, IError>,
+{
+    (kw(LParen), p, kw(RParen)).map(|c| c.1)
+}
+
+/// ( p )
+fn paren_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, Vec<IError>, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, Vec<IError>, IError>,
 {
@@ -157,7 +165,15 @@ where
 }
 
 /// [ p ]
-fn square<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, Vec<IError>, IError>
+fn square<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, Vec<IError>, IError>
+where
+    P: Parser<&'b [TokenNode<'a>], O, Vec<IError>, IError>,
+{
+    (kw(LSquare), p, kw(RSquare)).map(|c| c.1)
+}
+
+/// [ p ]
+fn square_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, Vec<IError>, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, Vec<IError>, IError>,
 {
@@ -188,7 +204,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> I
         )))//TODO:do not unwrap
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
-        .or(paren(p_raw).map(|x| x.unwrap_or(Raw::Hole)))
+        .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole)))
         .parse(input, state)
 }
 
@@ -202,7 +218,7 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
 }
 
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, (Either, Raw)> {
-    let named_impl_arg = square(
+    let named_impl_arg = square_cut(
         (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
     ).map(|x| x.unwrap_or((Either::Icit(Icit::Impl), Raw::Hole)));
@@ -237,7 +253,7 @@ fn p_lam_binder<'a: 'b, 'b>(
     let implicit_name_binder = square(
         (string(Ident), Cut((kw(Eq), p_bind))).map(|(x, (_, y))| (y.unwrap_or(empty_span("".to_owned())), Either::Name(x)))
             .or(p_bind.map(|x| (x, Either::Icit(Icit::Impl))))
-    ).map(|x| x.unwrap_or((empty_span("".to_owned()), Either::Icit(Icit::Impl))));
+    );
 
     explicit_binder
         .or(implicit_name_binder)
@@ -260,7 +276,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut Vec<IError>,
 ) -> Result<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>), IError> {
-    square(
+    square_cut(
         (
             p_bind, // 解析一个或多个绑定变量 xs
             (kw(Colon), p_raw).option().map(|x| match x {
@@ -298,7 +314,6 @@ fn p_pi_expl_binder<'a: 'b, 'b>(
             .map(|(xs, a)| (xs, a.1, Icit::Expl))
             .many0_sep(kw(T![,])),
     )
-    .map(|x| x.unwrap_or(vec![]))
     .parse(input, state) // 返回 (xs, a, Expl)
 }
 
@@ -364,7 +379,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Pattern> {
     (
         string(Ident),
-        paren(p_pattern.many1_sep(kw(T![,])))
+        paren_cut(p_pattern.many1_sep(kw(T![,])))
             .option()
             .map(|x| x.flatten().unwrap_or_default()),
     )
@@ -394,7 +409,7 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
     Cut((
         kw(NewKeyword),
         string(Ident),
-        paren(p_raw.many1_sep(kw(T![,]))),
+        paren_cut(p_raw.many1_sep(kw(T![,]))),
     ))
         .map(|(_, scrutinee, args)| args.flatten().unwrap_or_default().into_iter()
             .fold(Raw::Var(scrutinee.map_or(empty_span("".to_owned()), |x| x.map(|x| format!("{x}.mk")))), |acc, x| 
@@ -542,7 +557,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
         kw(ImplKeyword),
         p_pi_impl_binder_option,
         string(Ident),
-        square(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or(vec![])),
+        square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or(vec![])),
         kw(ForKeyword),
         p_raw,
         //p_generic_params(),
