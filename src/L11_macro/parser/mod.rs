@@ -21,7 +21,7 @@ pub enum ErrMsg {
 
 #[derive(Debug, Clone, Copy)]
 pub struct IError {
-    msg: Span<ErrMsg>,
+    pub msg: Span<ErrMsg>,
 }
 
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;

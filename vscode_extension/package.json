@@ -1,0 +1,89 @@
+{
+	"name": "wasm-language-server",
+	"description": "An example demonstrating how to implement a language server as a WebAssembly module.",
+	"author": "Microsoft Corporation",
+	"license": "MIT",
+	"version": "1.0.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Microsoft/vscode-extension-samples"
+	},
+	"publisher": "TyportHDL",
+	"categories": [],
+	"activationEvents": [
+    	"onLanguage:typort"
+  	],
+	"keywords": [
+		"WASM",
+		"Component Model",
+		"LSP",
+		"Language Server"
+	],
+	"engines": {
+		"vscode": "^1.88.0"
+	},
+	"main": "./client/out/extension",
+	"browser": "./client/dist/web/extension",
+	"extensionDependencies": [
+		"ms-vscode.wasm-wasi-core"
+	],
+	"contributes": {
+		"languages": [
+			{
+				"id": "typort",
+				"extensions": [
+					".typort"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"configuration": {
+			"type": "object",
+			"title": "typort-language-server",
+			"properties": {
+				"typort-language-server.trace.server": {
+					"type": "string",
+					"scope": "window",
+					"enum": [
+						"off",
+						"messages",
+						"verbose"
+					],
+					"enumDescriptions": [
+						"No traces",
+						"Error only",
+						"Full log"
+					],
+					"default": "off",
+					"description": "Traces the communication between VS Code and the language server."
+				}
+			}
+		},
+		"grammars": [
+			{
+				"language": "typort",
+				"scopeName": "source.typort",
+				"path": "./syntaxes/typort.tmLanguage.json"
+			}
+		]
+	},
+	"dependencies": {
+	},
+	"devDependencies": {
+		"@typescript-eslint/eslint-plugin": "^7.6.0",
+		"@typescript-eslint/parser": "^7.6.0",
+		"@types/node": "^18.14.6",
+		"eslint": "^8.57.0",
+		"typescript": "^5.4.5",
+		"esbuild": "^0.21.3",
+		"serve": "^14.2.3"
+	},
+	"scripts": {
+		"postinstall": "cd client && npm install && cd ..",
+		"vscode:prepublish": "npm run build",
+		"build": "cd client && npm run compile && cd ../.. && cargo rustc --release --target wasm32-wasip1-threads -- -Clink-arg=--initial-memory=10485760 -Clink-arg=--max-memory=10485760 && cp -f target/wasm32-wasip1-threads/release/elaboration-zoo-lsp.wasm vscode_extension/client/server.wasm",
+		"lint": "cd client && npm run lint && cd ..",
+		"esbuild": "node ./bin/esbuild.js",
+		"serve": "serve --cors -l 5000 --ssl-cert $HOME/certs/localhost.pem --ssl-key $HOME/certs/localhost-key.pem"
+	}
+}

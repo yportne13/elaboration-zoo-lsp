@@ -1,6 +1,6 @@
 use colored::Colorize;
 use cxt::Cxt;
-use parser::syntax::{Either, Icit, Pattern, Raw};
+use parser::{syntax::{Either, Icit, Pattern, Raw}, IError};
 use pattern_match::{Compiler, DecisionTree};
 use syntax::{Pruning, close_ty};
 use pretty::pretty_tm;
@@ -8,9 +8,9 @@ use pretty::pretty_tm;
 use crate::list::List;
 use crate::parser_lib::Span;
 
-mod cxt;
+pub mod cxt;
 mod elaboration;
-mod parser;
+pub mod parser;
 mod pattern_match;
 mod syntax;
 mod unification;
@@ -198,6 +198,12 @@ fn empty_span<T>(data: T) -> Span<T> {
 
 #[derive(Debug)]
 pub struct Error(pub Span<String>);
+
+impl IError {
+    pub fn to_err(self) -> Error {
+        Error(self.msg.map(|x| format!("{:?}", x)))
+    }
+}
 
 #[derive(Clone)]
 pub struct Infer {

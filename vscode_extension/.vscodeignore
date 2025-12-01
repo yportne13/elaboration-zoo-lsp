@@ -1,0 +1,5 @@
+client/node_modules
+package-lock.json
+tsconfig.json
+node_modules
+*.vsix

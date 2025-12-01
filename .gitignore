@@ -1,1 +1,7 @@
 /target
+vscode_extension/client/node_modules
+vscode_extension/client/dist
+vscode_extension/client/out
+node_modules
+*.vsix
+vscode_extension/client/server.wasm

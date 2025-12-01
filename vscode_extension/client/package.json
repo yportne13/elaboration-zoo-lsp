@@ -1,0 +1,76 @@
+{
+	"name": "client",
+	"description": "The language client",
+	"author": "Microsoft Corporation",
+	"license": "MIT",
+	"version": "0.1.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/Microsoft/vscode-extension-samples"
+	},
+	"publisher": "vscode-samples",
+	"categories": [],
+	"keywords": [
+		"WASM",
+		"Component Model",
+		"LSP",
+		"Language Server"
+	],
+	"activationEvents": [
+    	"onLanguage:typort"
+  	],
+	"engines": {
+		"vscode": "^1.89.0"
+	},
+	"main": "./out/extension",
+	"browser": "./dist/web/extension",
+	"contributes": {
+		"configuration": [
+			{
+				"title": "TyportHDL Language Server",
+				"properties": {
+					"typort-hdl.typort-lsp-Binary.path": {
+						"scope": "window",
+						"type": "string",
+						"default": "typort-lsp",
+						"markdownDescription": "Specify typort-lsp binary path."
+					}
+				}
+			}
+		],
+		"languages": [
+			{
+				"id": "typort",
+				"aliases": [
+					"typort",
+					"typort"
+				],
+				"extensions": [
+					".typort"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "typort",
+				"scopeName": "source.typort",
+				"path": "./syntaxes/typort.tmLanguage.json"
+			}
+		]
+	},
+	"dependencies": {
+		"@vscode/wasm-wasi": "^1.0.1",
+		"@vscode/wasm-wasi-lsp": "0.1.0-pre.6"
+	},
+	"devDependencies": {
+		"@types/node": "^18.14.6",
+		"@types/vscode": "1.89.0"
+	},
+	"scripts": {
+		"compile": "tsc -b && node ./bin/esbuild",
+		"watch": "tsc -b -w",
+		"lint": "eslint ./src --ext .ts,.tsx",
+		"esbuild": "node ./bin/esbuild"
+	}
+}
