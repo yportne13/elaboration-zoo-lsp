@@ -443,7 +443,7 @@ impl Infer {
                 // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
                 self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
                 let mut ret = std::iter::once(name)
-                    .chain(trait_params.into_iter())
+                    .chain(trait_params)
                     .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
@@ -506,11 +506,11 @@ impl Infer {
         }
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
-        /*println!(
-            "{} {:?}",
+        println!(
+            "{} {}",
             "infer".red(),
             t,
-        );*/
+        );
         let t_span = t.to_span();
         match t {
             // Infer variable types
@@ -660,7 +660,7 @@ impl Infer {
                 let u_checked = self.check(cxt, *u, a)?;
                 let mut ret_val = Tm::App(Box::new(t), Box::new(u_checked.clone()), i);
                 let mut ret_type = self.closure_apply(&b_closure, self.eval(&cxt.env, u_checked));
-                while let Val::Pi(p_name, Icit::Impl, typ, clos) = &ret_type {
+                /*while let Val::Pi(p_name, Icit::Impl, typ, clos) = &ret_type {
                     match typ.as_ref() {
                         Val::Sum(name, params, _, true) => {
                             let params = params
@@ -685,7 +685,7 @@ impl Infer {
                         }
                         _ => break,
                     }
-                }
+                }*/
                 Ok((
                     ret_val,
                     ret_type,
@@ -821,7 +821,6 @@ impl Infer {
                                 Raw::Var(methods_name.clone().map(|_| "Self".to_owned())),
                                 Icit::Expl
                             ));
-                            params.append(&mut methods_params.clone());
                             params.push((
                                 methods_name.clone().map(|_| "$$".to_owned()),
                                 trait_params.iter()
@@ -832,6 +831,7 @@ impl Infer {
                                     ),
                                 Icit::Impl
                             ));
+                            params.append(&mut methods_params.clone());
                             params
                         };
                         let body = std::iter::once(Raw::Var(methods_name.clone().map(|_| "$this".to_owned())))

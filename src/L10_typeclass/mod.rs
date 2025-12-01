@@ -182,7 +182,10 @@ use std::{
 };
 
 #[derive(Debug)]
-struct UnifyError;
+enum UnifyError {
+    Basic,
+    Trait(String),
+}
 
 fn empty_span<T>(data: T) -> Span<T> {
     Span {
@@ -235,6 +238,9 @@ impl Infer {
                 MetaEntry::Solved(t_solved, _) => self.force(self.v_app_sp(t_solved.clone(), sp)),
                 MetaEntry::Unsolved(_) => Val::Flex(m, sp),
             },
+            Val::Obj(x, a, b) => {
+                Val::Obj(Box::new(self.force(*x)), a, b)
+            }
             _ => t,
         }
     }
@@ -313,7 +319,7 @@ impl Infer {
                             .find(|(f_name, _, _)| f_name == &name)
                             .unwrap().1
                     },
-                    x @ Val::Rigid(_, _) => {
+                    x @ Val::Rigid(_, _) | x @ Val::Flex(_, _) => {
                         Val::Obj(Box::new(x), name, List::new())
                     }
                     x => panic!("impossible {x:?}"),
@@ -483,7 +489,7 @@ impl Infer {
 
     fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val, span: Span<()>) -> Result<(), Error> {
         self.unify(cxt.lvl, cxt, t.clone(), t_prime.clone())
-            .map_err(|_| {
+            .map_err(|e| {
                 /*Error::CantUnify(
                     cxt.clone(),
                     self.quote(cxt.lvl, t),
@@ -497,12 +503,15 @@ impl Infer {
                     pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
                     pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
                 );*/
-                let err = format!(
-                    //"can't unify {:?} == {:?}",
-                    "can't unify\n      find: {}\n  expected: {}",
-                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
-                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
-                );
+                let err = match e {
+                    UnifyError::Basic => format!(
+                        //"can't unify {:?} == {:?}",
+                        "can't unify\n      find: {}\n  expected: {}",
+                        pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
+                        pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
+                    ),
+                    UnifyError::Trait(e) => e,
+                };
                 Error(span.map(|_| err.clone()))
                 //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             })
@@ -536,6 +545,13 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             ret += "\n";
         }
     }
+    cxt.env
+        .iter()
+        .for_each(|ty| {
+            println!("{}: {}\n", "", pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ty.clone())));
+            //println!("{:?}\n", ty);
+        });
+    println!("{:?}", infer.meta[33]);
     Ok(ret)
 }
 
@@ -556,6 +572,30 @@ pub fn preprocess(s: &str) -> String {
         })
         .reduce(|a, b| a + "\n" + &b)
         .unwrap_or(s.to_owned())
+}
+
+#[test]
+fn test_trait0() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Add[T] {
+    def add(that: T): Self
+}
+
+impl Add[Nat] for Nat {
+    def add(that: Nat): Nat =
+        match that {
+            case zero => this
+            case succ(n) => succ (this.add n)
+        }
+}
+
+"#;
+    println!("{}", run(input, 0).unwrap());
 }
 
 #[test]
@@ -598,7 +638,7 @@ impl ToString for Bool {
         }
 }
 
-def t[T](x: T)[s: ToString[T]]: String =
+def t[T][s: ToString[T]](x: T): String =
     s.to_string x
 
 println (t true)
