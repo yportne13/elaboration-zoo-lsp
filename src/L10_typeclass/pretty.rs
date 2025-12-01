@@ -165,5 +165,14 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             "(unsolved match {})",
             pretty_tm(prec, ns, tm),
         ),
+        /*Tm::Match(tm, cases) => format!(
+            "(match {} {{\n{}\n}})",
+            pretty_tm(prec, ns.clone(), tm),
+            cases
+                .iter()
+                .map(|(pat, tm)| format!("{:?} => {}", pat, pretty_tm(prec, ns.prepend("n".to_owned()), tm)))
+                .reduce(|acc, x| acc + ",\n" + &x)
+                .unwrap_or("".to_owned())
+        ),*/
     }
 }

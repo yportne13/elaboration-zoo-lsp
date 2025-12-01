@@ -4,7 +4,7 @@ use crate::list::List;
 
 use super::{
     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
-    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -65,7 +65,7 @@ impl Infer {
                             Ok((dom + 1, ren, nlvars, fsp.prepend((x, a.head().unwrap().1))))
                         }
                     }
-                    _ => Err(UnifyError),
+                    _ => Err(UnifyError::Basic),
                 }
             }
         }
@@ -116,7 +116,7 @@ impl Infer {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
                 self.prune_ty_go(&list.tail(), &skip(pren), b)
             }
-            _ => Err(UnifyError), // impossible case
+            _ => Err(UnifyError::Basic), // impossible case
         }
     }
     pub fn prune_ty(&mut self, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
@@ -169,14 +169,14 @@ impl Infer {
                             .prepend((Some(Tm::Var(lvl2ix(pren.dom, *x))), sp.head().unwrap().1)),
                         status,
                     )),
-                    (None, SpinePruneStatus::OKNonRenaming) => Err(UnifyError),
+                    (None, SpinePruneStatus::OKNonRenaming) => Err(UnifyError::Basic),
                     (None, _) => Ok((
                         sp_rest.prepend((None, sp.head().unwrap().1)),
                         SpinePruneStatus::NeedsPruning,
                     )),
                 },
                 t => match status {
-                    SpinePruneStatus::NeedsPruning => Err(UnifyError),
+                    SpinePruneStatus::NeedsPruning => Err(UnifyError::Basic),
                     _ => {
                         let t = self.rename(pren, t)?;
                         Ok((
@@ -239,12 +239,12 @@ impl Infer {
     pub fn rename(&mut self, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
         match self.force(t) {
             Val::Flex(m_prime, sp) => match pren.occ {
-                Some(m) if m == m_prime => Err(UnifyError),
+                Some(m) if m == m_prime => Err(UnifyError::Basic),
                 _ => self.prune_vflex(pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
                 None => if x.0 <= 1919810 {
-                    Err(UnifyError)
+                    Err(UnifyError::Basic)
                 } else {
                     Ok(Tm::Var(lvl2ix(pren.dom, x)))
                 }, // scope error
@@ -406,6 +406,46 @@ impl Infer {
 
         Ok(())
     }
+    fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar) -> Result<(), UnifyError>{
+        let prepare = self.meta.get(m.0 as usize ..)
+            .iter()
+            .flat_map(|x| x.iter())
+            .flat_map(|x| if let MetaEntry::Unsolved(x) = x { Some(x) } else { None })
+            .cloned()
+            .enumerate()
+            .collect::<Vec<_>>();
+        for (idx, x) in prepare {
+            let typ = self.solve_trait(cxt, &x)
+                .map_err(UnifyError::Trait)?;
+            if let Some((_, val)) = typ {
+                //println!("solve trait {:?}\nmeta: {}", val, idx);
+                self.meta[idx + m.0 as usize + 1] = MetaEntry::Solved(val, x);
+            }
+        }
+        Ok(())
+    }
+    pub fn solve_trait(&mut self, cxt: &Cxt, x: &Val) -> Result<Option<(Tm, Val)>, String> {
+        if let Val::Sum(name, params, _, true) = &x {
+            let params = params
+                .iter()
+                .flat_map(|(_, tm, _, _)| self.force(tm.clone()).to_typ())
+                .collect::<Vec<_>>();
+            self.trait_solver.clean();
+            if let Some(a) = self.trait_solver.synth(Assertion {
+                name: name.data.clone(),
+                arguments: params.clone(),
+            }) {
+                let (tm, _) = self.infer_expr(cxt, Raw::Var(name.clone().map(|_| format!("{:?}{:?}", a.name, a.arguments))))
+                    .map_err(|e| e.0.data)?;
+                let val = self.eval(&cxt.env, tm.clone());
+                Ok(Some((tm, val)))
+            } else {
+                Err(format!("solve trait failed: {:?}", params))?
+            }
+        } else {
+            Ok(None)
+        }
+    }
     fn unify_sp(
         &mut self,
         l: Lvl,
@@ -424,13 +464,14 @@ impl Infer {
                     b.head().unwrap().0.clone(),
                 ) // Unify the current values
             }
-            _ => Err(UnifyError), // Rigid mismatch error
+            _ => Err(UnifyError::Basic), // Rigid mismatch error
         }
     }
 
     fn flex_flex(
         &mut self,
         gamma: Lvl,
+        cxt: &Cxt,
         m: MetaVar,
         sp: Spine,
         m_prime: MetaVar,
@@ -439,7 +480,10 @@ impl Infer {
         let mut go =
             |m: MetaVar, sp: Spine, m_prime: MetaVar, sp_prime: Spine| -> Result<(), UnifyError> {
                 match self.invert(gamma, sp.clone()) {
-                    Err(UnifyError) => self.solve(gamma, m_prime, sp_prime, Val::Flex(m, sp)),
+                    Err(_) => {
+                        self.solve(gamma, m_prime, sp_prime, Val::Flex(m, sp))?;
+                        self.solve_multi_trait(cxt, m_prime)
+                    },
                     Ok((pren, p1)) => {
                         self.solve_with_pren(m, pren, p1, Val::Flex(m_prime, sp_prime))
                     }
@@ -522,7 +566,7 @@ impl Infer {
                 self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
-                self.flex_flex(l, *m, sp.clone(), *m_prime, sp_prime.clone())
+                self.flex_flex(l, cxt, *m, sp.clone(), *m_prime, sp_prime.clone())
             }
             (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify(
                 l + 1,
@@ -542,9 +586,10 @@ impl Infer {
                 self.closure_apply(t, Val::vvar(l)),
                 self.v_app(t_prime.clone(), Val::vvar(l), *i),
             ),
-            (Val::Flex(m, sp), t_prime) => self.solve(l, *m, sp.clone(), t_prime.clone()),
-            (t, Val::Flex(m_prime, sp_prime)) => {
-                self.solve(l, *m_prime, sp_prime.clone(), t.clone())
+            (Val::Flex(m, sp), t)
+                | (t, Val::Flex(m, sp)) => {
+                self.solve(l, *m, sp.clone(), t.clone())?;
+                self.solve_multi_trait(cxt, *m)
             }
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (Val::LiteralType, Val::Prim) => Ok(()),
@@ -577,7 +622,7 @@ impl Infer {
 
                 // 2. 检查分支数量是否相同
                 if cases1.len() != cases2.len() {
-                    return Err(UnifyError);
+                    return Err(UnifyError::Basic);
                 }
 
                 // 3. 遍历并合一每一个对应的分支
@@ -587,7 +632,7 @@ impl Infer {
                     // 如果模式的结构更复杂（例如包含类型信息），你可能需要一个递归的模式合一函数。
                     // 对于你目前的定义，`PartialEq` 应该是足够的。
                     if p1 != p2 {
-                        return Err(UnifyError);
+                        return Err(UnifyError::Basic);
                     }
 
                     let count = p1.bind_count();
@@ -633,7 +678,7 @@ impl Infer {
                 // 如果所有检查都通过，则合一成功
                 Ok(())
             }
-            _ => Err(UnifyError), // Rigid mismatch error
+            _ => Err(UnifyError::Basic), // Rigid mismatch error
         }
     }
 }
