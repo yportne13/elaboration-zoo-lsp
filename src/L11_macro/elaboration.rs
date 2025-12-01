@@ -273,8 +273,8 @@ impl Infer {
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone());
                     self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                    //let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
-                    //let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
+                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
+                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     self.global.insert(cxt.lvl, vt.clone());
@@ -282,8 +282,8 @@ impl Infer {
                         ret_cxt.define(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
                         vtyp,
                         vt,
-                        "".to_owned(),
-                        "".to_owned(),
+                        vtyp_pretty,
+                        vt_pretty,
                     )
                 };
                 Ok((
@@ -444,7 +444,7 @@ impl Infer {
                 // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
                 self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
                 let mut ret = std::iter::once(name)
-                    .chain(trait_params.into_iter())
+                    .chain(trait_params)
                     .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
@@ -508,7 +508,7 @@ impl Infer {
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
         /*println!(
-            "{} {:?}",
+            "{} {}",
             "infer".red(),
             t,
         );*/
@@ -662,7 +662,7 @@ impl Infer {
                 let u_checked = self.check(cxt, *u, a)?;
                 let mut ret_val = Tm::App(Box::new(t), Box::new(u_checked.clone()), i);
                 let mut ret_type = self.closure_apply(&b_closure, self.eval(&cxt.env, u_checked));
-                while let Val::Pi(p_name, Icit::Impl, typ, clos) = &ret_type {
+                /*while let Val::Pi(p_name, Icit::Impl, typ, clos) = &ret_type {
                     match typ.as_ref() {
                         Val::Sum(name, params, _, true) => {
                             let params = params
@@ -687,7 +687,7 @@ impl Infer {
                         }
                         _ => break,
                     }
-                }
+                }*/
                 Ok((
                     ret_val,
                     ret_type,

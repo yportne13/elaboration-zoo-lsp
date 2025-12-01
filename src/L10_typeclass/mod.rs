@@ -244,7 +244,7 @@ impl Infer {
             },
             Val::Obj(x, a, b) => {
                 Val::Obj(Box::new(self.force(*x)), a, b)
-            }
+            },
             _ => t,
         }
     }
