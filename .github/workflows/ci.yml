@@ -70,12 +70,12 @@ jobs:
           name: TyportHDL-1.0.0
           path: |
             vscode_extension/*.vsix
-      - name: Upload release assets pdf
+      - name: Upload release
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: TyportHDL-1.0.0.vsix
+          asset_path: vscode_extension/TyportHDL-1.0.0.vsix
           asset_name: TyportHDL-1.0.0.vsix
           asset_content_type: application/zip
