@@ -1,0 +1,73 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "typort",
+	"patterns": [
+		{
+            "include": "#comments"
+        },
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+            "include": "#numbers"
+        },
+		{
+            "include": "#types"
+        },
+        {
+            "include": "#variables"
+        }
+	],
+	"repository": {
+		"comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.typort",
+                    "match": "//.*$"
+                },
+                {
+                    "name": "comment.block.typort",
+                    "begin": "/\\*",
+                    "end": "\\*/"
+                }
+            ]
+        },
+		"keywords": {
+			"patterns": [{
+				"name": "keyword.control.typort",
+				"match": "\\b(if|while|for|return|enum|struct|match|def|import|extends|else)\\b"
+			}]
+		},
+		"strings": {
+			"name": "string.quoted.double.typort",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.typort",
+					"match": "\\\\."
+				}
+			]
+		},
+		"numbers": {
+            "name": "constant.numeric.typort",
+            "match": "\\b\\d+(\\.\\d+)?\\b"
+        },
+		"types": {
+            "patterns": [{
+                "name": "entity.name.type.typort",
+                "match": "\\b[A-Z][a-zA-Z0-9_]*\\b"
+            }]
+        },
+        "variables": {
+            "patterns": [{
+                "name": "variable.other.typort",
+                "match": "\\b[a-z_][a-zA-Z0-9_]*\\b"
+            }]
+        }
+	},
+	"scopeName": "source.typort"
+}
