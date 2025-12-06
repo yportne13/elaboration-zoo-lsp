@@ -94,6 +94,20 @@ impl Infer {
                 Ok(cxt.update_cxt(self, x, v))
             }
             (
+                Val::SumCase { case_name: name1, datas: d1, .. },
+                Val::SumCase { case_name: name2, datas: d2, .. },
+            ) => {
+                if name1 == name2 {
+                    let mut cxt = cxt.clone();
+                    for (x, y) in d1.iter().zip(d2.iter()) {
+                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone())?;
+                    }
+                    Ok(cxt)
+                } else {
+                    Err(Error("".to_string()))
+                }
+            }
+            (
                 //Val::SumCase { case_name: name1, datas: d1, .. },
                 //Val::SumCase { case_name: name2, datas: d2, .. },
                 Val::Sum(name1, d1, ..),
@@ -598,11 +612,11 @@ fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
         .flatten()
         .collect::<std::collections::HashSet<_>>();
     match pattern {
-        Pattern::Any(name) => PatternDetail::Any(name),
-        Pattern::Con(name, params) if params.is_empty() && !all_constr_name.contains(&name.data) => {
+        Pattern::Any(name, _) => PatternDetail::Any(name),
+        Pattern::Con(name, params, _) if params.is_empty() && !all_constr_name.contains(&name.data) => {
             PatternDetail::Bind(name)
         },
-        Pattern::Con(name, params) => {
+        Pattern::Con(name, params, _) => {
             let new_params = params
                 .into_iter()
                 .map(|x| pattern_to_detail(cxt, x))

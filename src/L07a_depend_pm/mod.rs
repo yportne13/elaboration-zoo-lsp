@@ -562,6 +562,30 @@ pub fn preprocess(s: &str) -> String {
 }
 
 #[test]
+fn test5() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => cons x (t xs ys)
+        }
+    }
+"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
 fn test4() {
     let input = r#"
 enum Nat {
