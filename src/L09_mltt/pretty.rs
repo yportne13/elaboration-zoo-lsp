@@ -79,7 +79,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 Icit::Impl => bracket(x),
             };
 
-            let body_printer = format!("=> {}", pretty_tm(LETP, new_ns, body));
+            let body_printer = format!(" => {}", pretty_tm(LETP, new_ns, body));
 
             let ret = format!("{binder}{body_printer}");
             if need_paren {

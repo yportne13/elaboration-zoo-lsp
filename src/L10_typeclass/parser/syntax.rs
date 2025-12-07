@@ -16,19 +16,34 @@ pub enum Either {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
-    Any(Span<()>),
-    Con(Span<String>, Vec<Pattern>),
+    Any(Span<()>, Icit),
+    Con(Span<String>, Vec<Pattern>, Icit),
+}
+
+impl Pattern {
+    pub fn to_impl(self) -> Self {
+        match self {
+            Pattern::Any(span, _) => Pattern::Any(span, Icit::Impl),
+            Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Icit::Impl),
+        }
+    }
+
+    pub fn get_icit(&self) -> Icit {
+        match self {
+            Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => *icit,
+        }
+    }
 }
 
 impl Pattern {
     pub fn to_raw(&self) -> Raw {
         match self {
-            Pattern::Any(_) => Raw::Hole,
-            Pattern::Con(name, pats) => pats.iter()
+            Pattern::Any(_, _) => Raw::Hole,
+            Pattern::Con(name, pats, _) => pats.iter()
                 .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
                     Box::new(ret),
                     Box::new(p.to_raw()),
-                    Either::Icit(Icit::Expl),
+                    Either::Icit(p.get_icit()),
                 )),
         }
     }
@@ -48,6 +63,7 @@ pub enum Raw {
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
     Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>, u32, bool),
     SumCase {
+        is_trait: bool,
         typ: Box<Raw>,
         case_name: Span<String>,
         datas: Vec<(Span<String>, Raw, Icit)>,
@@ -75,7 +91,7 @@ impl Raw {
             Raw::Sum(span, params, items, _, _) => items.last()
                 .map(|x| span.to_span() + x.to_span())
                 .unwrap_or(params.last().map(|x| span.to_span() + x.2.to_span()).unwrap_or(span.to_span())),
-            Raw::SumCase { typ, case_name, datas } => datas.last()
+            Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
                 .map(|x| case_name.to_span() + x.1.to_span())
                 .unwrap_or(case_name.to_span()),
         }
@@ -103,16 +119,16 @@ impl std::fmt::Display for Raw {
                 write!(f, "(match {}", expr)?;
                 for (pattern, result) in cases {
                     match pattern {
-                        Pattern::Any(_) => write!(f, " _ => {}", result)?,
-                        Pattern::Con(name, patterns) => {
+                        Pattern::Any(_, _) => write!(f, " _ => {}", result)?,
+                        Pattern::Con(name, patterns, _) => {
                             if patterns.is_empty() {
                                 write!(f, " {} => {}", name.data, result)?;
                             } else {
                                 write!(f, " {}({}) => {}", name.data,
                                     patterns.iter().map(|p| {
                                         match p {
-                                            Pattern::Any(_) => "_".to_string(),
-                                            Pattern::Con(n, _) => n.data.clone(),
+                                            Pattern::Any(_, _) => "_".to_string(),
+                                            Pattern::Con(n, _, _) => n.data.clone(),
                                         }
                                     }).collect::<Vec<_>>().join(" "),
                                     result)?;
@@ -144,7 +160,7 @@ impl std::fmt::Display for Raw {
                 
                 write!(f, ")")
             },
-            Raw::SumCase { typ, case_name, datas } => {
+            Raw::SumCase { is_trait: _, typ, case_name, datas } => {
                 write!(f, "(case {} of {} ", typ, case_name.data)?;
                 for (data_name, data_type, icit) in datas {
                     match icit {

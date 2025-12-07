@@ -251,11 +251,12 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'
     (
         string(Ident),
         paren(p_pattern.many0_sep(kw(T![,])))
-            .option()
-            .map(|x| x.unwrap_or_default()),
+            .or(square(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))))
+            .many0()
+            .map(|x| x.concat()),
     )
-        .map(|(x, t)| Pattern::Con(x, t))
-        .or(kw(T![_]).map(Pattern::Any))
+        .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
+        .or(kw(T![_]).map(|x| Pattern::Any(x, Icit::Expl)))
         .parse(input)
 }
 

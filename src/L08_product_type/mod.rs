@@ -282,7 +282,7 @@ impl Infer {
             },
             Tm::Obj(tm, name) => {
                 match self.eval(env, *tm) {
-                    Val::Sum(_, params, cases) => {
+                    Val::Sum(_, params, _) => {
                         params.into_iter()
                             .find(|(f_name, _, _, _)| f_name == &name)
                             .unwrap().1
@@ -438,7 +438,7 @@ impl Infer {
                         x.0.clone(),
                         {
                             let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, _| env.prepend(Val::vvar(Lvl(env.len() as u32))));
+                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x)));
                             let mut avoid_recursive = self.clone();
                             avoid_recursive.global
                                 .iter_mut()

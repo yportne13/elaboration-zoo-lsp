@@ -223,6 +223,9 @@ impl Infer {
     fn fresh_meta(&mut self, cxt: &Cxt, a: VTy) -> Tm {
         if let Ok(Some((a, _))) = self.solve_trait(cxt, &a) {
             a
+        } else if let Val::Sum(_, _, _, true) = a {
+            let m = self.new_meta(a);
+            Tm::Meta(MetaVar(m))
         } else {
             let closed = self.eval(
                 &List::new(),
@@ -467,7 +470,7 @@ impl Infer {
                         x.0.clone(),
                         {
                             let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, _| env.prepend(Val::vvar(Lvl(env.len() as u32))));
+                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x)));
                             let mut avoid_recursive = self.clone();
                             avoid_recursive.global
                                 .iter_mut()
@@ -556,6 +559,9 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             println!("{}: {}", name, pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ty.clone())));
             //println!("{:?}\n", ty);
         });*/
+    /*for m in infer.meta {
+        println!("{:?}", m);
+    }*/
     Ok(ret)
 }
 
@@ -576,6 +582,29 @@ pub fn preprocess(s: &str) -> String {
         })
         .reduce(|a, b| a + "\n" + &b)
         .unwrap_or(s.to_owned())
+}
+
+#[test]
+fn test_trait0() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Add[T] {
+    def add(that: T): Self
+}
+
+impl Add[Nat] for Nat {
+    def add(that: Nat): Nat =
+        match that {
+            case zero => this
+            case succ(n) => succ (n.add this)
+        }
+}
+"#;
+    println!("{}", run(input, 0).unwrap());
 }
 
 #[test]
@@ -623,11 +652,11 @@ def t[T][s: ToString[T]](x: T): String =
 
 println (t true)
 
-trait Add[T] {
-    def add(that: T): Self
+trait Add[T, O] {
+    def add(that: T): O
 }
 
-impl Add[Nat] for Nat {
+impl Add[Nat, Nat] for Nat {
     def add(that: Nat): Nat =
         match that {
             case zero => this
@@ -651,12 +680,12 @@ struct Point[T] {
 
 def get_x[T](p: Point[T]): T = p.x
 
-impl Add[Point[Nat]] for Point[Nat] {
+impl Add[Point[Nat], Point[Nat]] for Point[Nat] {
     def add(that: Point[Nat]): Point[Nat] =
         new Point(this.x.add that.x, this.y.add that.y)
 }
 
-impl Add[Nat] for Point[Nat] {
+impl Add[Nat, Point[Nat] ] for Point[Nat] {
     def add(that: Nat): Point[Nat] =
         new Point(this.x.add that, this.y.add that)
 }
@@ -727,6 +756,51 @@ def cd = assign sigC sigD refl
 
 "#;
     println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
+pub fn test_index() {
+    let input = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def test: Eq two two = refl
+    
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t = cons zero (cons two (cons three (cons two nil)))
+
+println t.len
+
+def head[T, L: Nat](x: Vec[T] (succ L)): T =
+    match x {
+        case cons(x, _) => x
+    }
+
+println (head (cons zero nil))
+
+def length[T, l: Nat](x: (Vec[T] l)): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (xs.len)
+    }
+
+    "#;
+    println!("{}", run(input, 0).unwrap());
+    println!("success");
 }
 
 #[test]

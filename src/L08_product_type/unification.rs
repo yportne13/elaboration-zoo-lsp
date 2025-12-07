@@ -247,7 +247,8 @@ impl Infer {
                 None => if x.0 <= 1919810 {
                     Err(UnifyError)
                 } else {
-                    Ok(Tm::Var(lvl2ix(pren.dom, x)))
+                    let t = Tm::Var(lvl2ix(pren.dom, x));
+                    self.rename_sp(pren, t, &sp)
                 }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
@@ -282,7 +283,7 @@ impl Infer {
                 let new_params = params
                     .into_iter()
                     .map(|x| {
-                        match (self.rename(&pren, x.1), self.rename(&pren, x.2)) {
+                        match (self.rename(pren, x.1), self.rename(pren, x.2)) {
                             (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
                             (Err(x), _) | (_, Err(x)) => Err(x),
                         }
@@ -304,11 +305,11 @@ impl Infer {
                 case_name,
                 datas: params,
             } => {
-                let typ = self.rename(&pren, *typ)?;
+                let typ = self.rename(pren, *typ)?;
                 let params = params
                     .into_iter()
                     .map(|p| {
-                        let z = self.rename(&pren, p.1)?;
+                        let z = self.rename(pren, p.1)?;
                         Ok((p.0, z, p.2))
                     })
                     .collect::<Result<_, _>>()?;
@@ -320,18 +321,25 @@ impl Infer {
             }
             Val::Match(val, env, cases) => {
                 let val = self.rename(pren, *val)?;
-                /*todo!();
                 let cases = cases
                     .into_iter()
                     .map(|(pat, tm)| {
+                        let (env, pren) = (0..pat.bind_count())
+                            .fold((env.clone(), pren.clone()), |(env, pren), _| (
+                                env.prepend(Val::vvar(pren.cod)),
+                                lift(&pren),
+                            ));
+                        let mut avoid_recursive = self.clone();
+                        avoid_recursive.global
+                            .iter_mut()
+                            .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()));
                         let body = self.rename(
-                            &lift(pren),
-                            self.closure_apply(&super::Closure(env.clone(), Box::new(tm)), Val::vvar(pren.cod)),
+                            &pren,
+                            avoid_recursive.eval(&env, tm),
                         )?;
                         Ok((pat, body))
                     })
-                    .collect::<Result<_, _>>()?;*/
-                //TODO:need rename?
+                    .collect::<Result<_, _>>()?;
                 Ok(Tm::Match(Box::new(val), cases))
             }
         }
@@ -559,10 +567,8 @@ impl Infer {
             (Val::Prim, Val::LiteralType) => Ok(()),
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
-                let mut cxt = cxt.clone();
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
-                    cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());
+                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
                 }
                 Ok(())
             }
@@ -571,11 +577,9 @@ impl Infer {
                 Val::SumCase { typ: b, case_name: cb, datas: params_b },
             ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
-                let mut cxt = cxt.clone();
-                self.unify(l, &cxt, *a.clone(), *b.clone())?;
+                self.unify(l, cxt, *a.clone(), *b.clone())?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, &cxt, a.1.clone(), b.1.clone())?;
-                    cxt = cxt.bind(a.0.clone(), self.quote(cxt.lvl, a.1.clone()), a.1.clone());
+                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
                 }
                 Ok(())
             }
@@ -607,32 +611,34 @@ impl Infer {
 
                     let count = p1.bind_count();
 
-                    let lvl1 = Lvl(env1.iter().count() as u32);
-                    let lvl2 = Lvl(env2.iter().count() as u32);
                     let env1 = (0..count).fold(env1.clone(), |env, idx| {
-                        env.prepend(Val::vvar(lvl1 + idx))
+                        env.prepend(Val::vvar(l + idx))
                     });
 
                     let env2 = (0..count).fold(env2.clone(), |env, idx| {
-                        env.prepend(Val::vvar(lvl2 + idx))
+                        env.prepend(Val::vvar(l + idx))
                     });
 
-                    println!(
+                    /*println!(
                         "unify {:?}\n   == {:?}",
                         pretty_tm(0, cxt.names(), clos1),
                         pretty_tm(0, cxt.names(), clos2),
-                    );
+                    );*/
                     //let body1_val = self.eval(&bind_env, clos1.clone());
                     //let body2_val = self.eval(&bind_env, clos2.clone());
-                    let body1_val = self.eval(&env1, clos1.clone());
-                    let body2_val = self.eval(&env2, clos2.clone());
+                    let mut avoid_recursive = self.clone();
+                    avoid_recursive.global
+                        .iter_mut()
+                        .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()));
+                    let body1_val = avoid_recursive.eval(&env1, clos1.clone());
+                    let body2_val = avoid_recursive.eval(&env2, clos2.clone());
 
-                    println!(
+                    /*println!(
                         "-> {:?}\n== {:?}",
                         pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
                         pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
-                    );
-                    self.unify(l, cxt, body1_val, body2_val)?;
+                    );*/
+                    self.unify(l + count, cxt, body1_val, body2_val)?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
                     // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。

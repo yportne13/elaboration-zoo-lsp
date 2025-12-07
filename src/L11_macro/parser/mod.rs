@@ -379,12 +379,13 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Pattern> {
     (
         string(Ident),
-        paren_cut(p_pattern.many1_sep(kw(T![,])))
-            .option()
-            .map(|x| x.flatten().unwrap_or_default()),
+        paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
+            .or(square_cut(p_pattern.map(|x| x.to_impl()).many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default()))
+            .many0()
+            .map(|x| x.concat()),
     )
-        .map(|(x, t)| Pattern::Con(x, t))
-        .or(kw(T![_]).map(Pattern::Any))
+        .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
+        .or(kw(T![_]).map(|x| Pattern::Any(x, Icit::Expl)))
         .parse(input, state)
 }
 

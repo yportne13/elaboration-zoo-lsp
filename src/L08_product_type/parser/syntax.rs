@@ -14,19 +14,34 @@ pub enum Either {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
-    Any(Span<()>),
-    Con(Span<String>, Vec<Pattern>),
+    Any(Span<()>, Icit),
+    Con(Span<String>, Vec<Pattern>, Icit),
+}
+
+impl Pattern {
+    pub fn to_impl(self) -> Self {
+        match self {
+            Pattern::Any(span, _) => Pattern::Any(span, Icit::Impl),
+            Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Icit::Impl),
+        }
+    }
+
+    pub fn get_icit(&self) -> Icit {
+        match self {
+            Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => *icit,
+        }
+    }
 }
 
 impl Pattern {
     pub fn to_raw(&self) -> Raw {
         match self {
-            Pattern::Any(_) => Raw::Hole,
-            Pattern::Con(name, pats) => pats.iter()
+            Pattern::Any(_, _) => Raw::Hole,
+            Pattern::Con(name, pats, _) => pats.iter()
                 .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
                     Box::new(ret),
                     Box::new(p.to_raw()),
-                    Either::Icit(Icit::Expl),
+                    Either::Icit(p.get_icit()),
                 )),
         }
     }

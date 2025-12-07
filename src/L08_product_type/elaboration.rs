@@ -6,7 +6,7 @@ use crate::{list::List, parser_lib::Span};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
-    cxt::NameOrigin,
+    cxt::NameOrigin, Lvl,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw, Pattern},
     pattern_match::Compiler,
@@ -92,6 +92,20 @@ impl Infer {
             }
             (v, Val::Rigid(x, sp)) if sp.is_empty() => { 
                 Ok(cxt.update_cxt(self, x, v))
+            }
+            (
+                Val::SumCase { case_name: name1, datas: d1, .. },
+                Val::SumCase { case_name: name2, datas: d2, .. },
+            ) => {
+                if name1 == name2 {
+                    let mut cxt = cxt.clone();
+                    for (x, y) in d1.iter().zip(d2.iter()) {
+                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone())?;
+                    }
+                    Ok(cxt)
+                } else {
+                    Err(Error("".to_string()))
+                }
             }
             (
                 //Val::SumCase { case_name: name1, datas: d1, .. },
@@ -210,18 +224,19 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let ret_cxt = {
+                    let global_idx = Lvl(self.global.len() as u32);
                     let typ_tm = self.check(ret_cxt, typ, Val::U)?;
                     let vtyp = self.eval(&ret_cxt.env, typ_tm.clone());
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
-                    self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
+                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone(), global_idx);
+                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     //println!("begin to check {}", name.data.red());
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
-                    self.global.insert(cxt.lvl, vt.clone());
+                    self.global.insert(global_idx, vt.clone());
                     ret_cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 Ok((
@@ -284,13 +299,14 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let mut cxt = {
+                    let global_idx = Lvl(self.global.len() as u32);
                     let typ_tm = self.check(cxt, typ, Val::U)?;
                     let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone());
-                    self.global.insert(cxt.lvl, Val::vvar(cxt.lvl + 1919810));
+                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone(), global_idx);
+                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
-                    self.global.insert(cxt.lvl, vt.clone());
+                    self.global.insert(global_idx, vt.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
@@ -644,11 +660,11 @@ fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
         .flatten()
         .collect::<std::collections::HashSet<_>>();
     match pattern {
-        Pattern::Any(name) => PatternDetail::Any(name),
-        Pattern::Con(name, params) if params.is_empty() && !all_constr_name.contains(&name.data) => {
+        Pattern::Any(name, _) => PatternDetail::Any(name),
+        Pattern::Con(name, params, _) if params.is_empty() && !all_constr_name.contains(&name.data) => {
             PatternDetail::Bind(name)
         },
-        Pattern::Con(name, params) => {
+        Pattern::Con(name, params, _) => {
             let new_params = params
                 .into_iter()
                 .map(|x| pattern_to_detail(cxt, x))

@@ -229,6 +229,9 @@ impl Infer {
     fn fresh_meta(&mut self, cxt: &Cxt, a: VTy) -> Tm {
         if let Ok(Some((a, _))) = self.solve_trait(cxt, &a) {
             a
+        } else if let Val::Sum(_, _, _, true) = a {
+            let m = self.new_meta(a);
+            Tm::Meta(MetaVar(m))
         } else {
             let closed = self.eval(
                 &List::new(),
@@ -473,7 +476,7 @@ impl Infer {
                         x.0.clone(),
                         {
                             let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, _| env.prepend(Val::vvar(Lvl(env.len() as u32))));
+                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x)));
                             let mut avoid_recursive = self.clone();
                             avoid_recursive.global
                                 .iter_mut()

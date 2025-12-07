@@ -108,10 +108,10 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a: Val) -> Self {
+    pub fn fake_bind(&self, x: Span<String>, a: Val, global_idx: Lvl) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl + 1919810, a));
+        src_names.insert(x.data.clone(), (global_idx + 1919810, a));
         Cxt {
             env: self.env.clone(),
             lvl: self.lvl,

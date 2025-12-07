@@ -282,7 +282,7 @@ impl Infer {
             },
             Tm::Obj(tm, name) => {
                 match self.eval(env, *tm) {
-                    Val::Sum(_, params, cases) => {
+                    Val::Sum(_, params, _) => {
                         params.into_iter()
                             .find(|(f_name, _, _, _)| f_name == &name)
                             .unwrap().1
@@ -438,7 +438,7 @@ impl Infer {
                         x.0.clone(),
                         {
                             let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, _| env.prepend(Val::vvar(Lvl(env.len() as u32))));
+                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x)));
                             let mut avoid_recursive = self.clone();
                             avoid_recursive.global
                                 .iter_mut()
@@ -692,70 +692,6 @@ struct HighLvl3[A: Type 2] {
 def test2_2: HighLvl3[HighLvl[Nat]] = new HighLvl3(zero, zero)
 
 def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
-"#;
-    println!("{}", run(input, 0).unwrap());
-    println!("success");
-}
-
-#[test]
-fn test() {
-    let input = r#"
-def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def refl[A : U, x: A]: Eq[A] x x = _ => px => px
-
-def the(A : U)(x: A): A = x
-
-def m(A : U)(B : U): U -> U -> U = _
-def test = a => b => the (Eq (m a a) (x => y => y)) refl
-
-def m : U -> U -> U -> U = _
-def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
-
-
-def pr1 = f => x => f x
-def pr2 = f => x => y => f x y
-def pr3 = f => f U
-
-def Nat : U =
-    (N : U) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat =
-    a => b => N => s => z => a _ (b _ s) z
-def ten : Nat =
-    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
-def hundred = mul ten ten
-
-println hundred
-
-def mystr = "hello world"
-
-def add_tail(x: String): String = string_concat x "!"
-
-def mystr2 = add_tail mystr
-
-println mystr2
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(Nat)
-}
-
-def two = succ (succ zero)
-
-def add(x: Nat, y: Nat): Nat =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
-    }
-
-def four = add two two
-
-println four
-
 "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");
