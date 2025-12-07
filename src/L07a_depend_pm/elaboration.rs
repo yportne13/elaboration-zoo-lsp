@@ -74,7 +74,7 @@ impl Infer {
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         let new_cxt = self.unify_pm(cxt, a, inferred_type)?;
-        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()))?;
+        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone())).unwrap_or(new_cxt);
         Ok((t_inferred, new_cxt))
     }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<(Tm, Cxt), Error> {

@@ -76,7 +76,7 @@ impl Infer {
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         let new_cxt = self.unify_pm(cxt, a, inferred_type, t_span)?;
-        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()), t_span)?;
+        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()), t_span).unwrap_or(new_cxt);
         Ok((t_inferred, new_cxt))
     }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<(Tm, Cxt), Error> {
@@ -289,7 +289,7 @@ impl Infer {
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
-                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
+                    let vt_pretty = "".to_owned();//super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     self.global.insert(global_idx, vt.clone());

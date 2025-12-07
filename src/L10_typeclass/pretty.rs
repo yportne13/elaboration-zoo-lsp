@@ -54,7 +54,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     match tm {
-        Tm::Var(ix) => go_ix(ns, ix.0),
+        Tm::Var(ix) => if ix.0 >= 1919810 {format!("recursive_{}", ix.0 - 1919810)} else {go_ix(ns, ix.0)},
         Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
