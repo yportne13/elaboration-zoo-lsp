@@ -18,8 +18,8 @@ struct MetaVar(u32);
 
 #[derive(Debug)]
 enum MetaEntry {
-    Solved(Val, VTy),
-    Unsolved(VTy),
+    Solved(Rc<Val>, Rc<VTy>),
+    Unsolved(Rc<VTy>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,18 +69,18 @@ impl Add<u32> for Lvl {
     }
 }
 
-type Env = List<Val>;
-type Spine = List<(Val, Icit)>;
+type Env = List<Rc<Val>>;
+type Spine = List<(Rc<Val>, Icit)>;
 
 #[derive(Debug, Clone)]
-struct Closure(Env, Box<Tm>);
+struct Closure(Env, Rc<Tm>);
 
 #[derive(Debug, Clone)]
 enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
     Lam(Span<String>, Icit, Closure),
-    Pi(Span<String>, Icit, Box<VTy>, Closure),
+    Pi(Span<String>, Icit, Rc<VTy>, Closure),
     U,
     LiteralType,
     LiteralIntro(Span<String>),
@@ -104,6 +104,7 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 }
 
 use std::ops::Add;
+use std::rc::Rc;
 
 #[derive(Debug)]
 struct UnifyError;
@@ -128,50 +129,50 @@ impl Infer {
     pub fn new() -> Self {
         Self { meta: vec![] }
     }
-    fn new_meta(&mut self, a: VTy) -> u32 {
+    fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
         self.meta.len() as u32 - 1
     }
-    fn fresh_meta(&mut self, cxt: &Cxt, a: VTy) -> Tm {
-        let closed = self.eval(&List::new(), close_ty(cxt.locals.clone(), self.quote(cxt.lvl, a)));
+    fn fresh_meta(&mut self, cxt: &Cxt, a: &Rc<VTy>) -> Tm {
+        let closed = self.eval(&List::new(), &close_ty(cxt.locals.clone(), self.quote(cxt.lvl, a)));
         let m = self.new_meta(closed);
         Tm::AppPruning(Box::new(Tm::Meta(MetaVar(m))), cxt.pruning.clone())
     }
-    fn lookup_meta(&self, m: MetaVar) -> &MetaEntry {
+    fn lookup_meta(&self, m: &MetaVar) -> &MetaEntry {
         &self.meta[m.0 as usize]
     }
-    fn force(&self, t: Val) -> Val {
+    fn force(&self, t: &Rc<Val>) -> Rc<Val> {
         //println!("{} {:?}", "force".red(), t);
-        match t {
+        match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(m) {
-                MetaEntry::Solved(t_solved, _) => self.force(self.v_app_sp(t_solved.clone(), sp)),
-                MetaEntry::Unsolved(_) => Val::Flex(m, sp),
+                MetaEntry::Solved(t_solved, _) => self.force(&self.v_app_sp(t_solved.clone(), sp.clone())),
+                MetaEntry::Unsolved(_) => Val::Flex(*m, sp.clone()).into(),
             },
-            _ => t,
+            _ => t.clone(),
         }
     }
-    fn v_meta(&self, m: MetaVar) -> Val {
+    fn v_meta(&self, m: &MetaVar) -> Rc<Val> {
         match self.lookup_meta(m) {
             MetaEntry::Solved(v, _) => v.clone(),
-            MetaEntry::Unsolved(_) => Val::vmeta(m),
+            MetaEntry::Unsolved(_) => Val::vmeta(*m).into(),
         }
     }
 
-    fn closure_apply(&self, closure: &Closure, u: Val) -> Val {
+    fn closure_apply(&self, closure: &Closure, u: Rc<Val>) -> Rc<Val> {
         //println!("{} {:?} {:?}", "closure apply".yellow(), closure, u);
-        self.eval(&closure.0.prepend(u), *closure.1.clone())
+        self.eval(&closure.0.prepend(u), &closure.1)
     }
 
-    fn v_app(&self, t: Val, u: Val, i: Icit) -> Val {
-        match t {
+    fn v_app(&self, t: Rc<Val>, u: Rc<Val>, i: Icit) -> Rc<Val> {
+        match t.as_ref() {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
-            Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
-            Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
+            Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
+            Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             _ => panic!("impossible"),
         }
     }
 
-    fn v_app_sp(&self, t: Val, spine: Spine) -> Val {
+    fn v_app_sp(&self, t: Rc<Val>, spine: Spine) -> Rc<Val> {
         //spine.iter().rev().fold(t, |acc, (u, i)| self.v_app(acc, u.clone(), *i))
         match spine {
             List { head: None } => t,
@@ -182,7 +183,7 @@ impl Infer {
         }
     }
 
-    fn v_app_pruning(&self, env: &Env, v: Val, pr: &Pruning) -> Val {
+    fn v_app_pruning(&self, env: &Env, v: Rc<Val>, pr: &Pruning) -> Rc<Val> {
         //println!("{} {:?} {:?}", "v_app_bds".green(), v, bds);
         match (env, pr) {
             (List { head: None }, List { head: None }) => v,
@@ -198,27 +199,27 @@ impl Infer {
         }
     }
 
-    fn eval(&self, env: &Env, tm: Tm) -> Val {
+    fn eval(&self, env: &Env, tm: &Tm) -> Rc<Val> {
         //println!("{} {:?}", "eval".yellow(), tm);
         match tm {
             Tm::Var(x) => env.iter().nth(x.0 as usize).unwrap().clone(),
-            Tm::App(t, u, i) => self.v_app(self.eval(env, *t), self.eval(env, *u), i),
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
-            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(env, *a)), Closure(env.clone(), b)),
+            Tm::App(t, u, i) => self.v_app(self.eval(env, t), self.eval(env, u), *i),
+            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone().into())).into(),//TODO:use reference?
+            Tm::Pi(x, i, a, b) => Val::Pi(x.clone(), *i, self.eval(env, a), Closure(env.clone(), b.clone().into())).into(),//TODO:use reference?
             Tm::Let(_, _, t, u) => {
-                let t_val = self.eval(env, *t);
-                self.eval(&env.prepend(t_val), *u)
+                let t_val = self.eval(env, t);
+                self.eval(&env.prepend(t_val), u)
             }
-            Tm::U => Val::U,
+            Tm::U => Val::U.into(),
             Tm::Meta(m) => self.v_meta(m),
-            Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, *t), &pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x),
-            Tm::LiteralType => Val::LiteralType,
-            Tm::Prim => match (env.iter().nth(1).unwrap(), env.iter().nth(0).unwrap()) {
+            Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, t), &pr),
+            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
+            Tm::LiteralType => Val::LiteralType.into(),
+            Tm::Prim => match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
                 (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-                    Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data)))
+                    Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
                 },
-                _ => Val::Prim,
+                _ => Val::Prim.into(),
             },
         }
     }
@@ -231,30 +232,30 @@ impl Infer {
             List { head: None } => t,
             _ => {
                 let head = spine.head().unwrap();
-                Tm::App(Box::new(self.quote_sp(l, t, spine.tail())), Box::new(self.quote(l, head.0.clone())), head.1)
+                Tm::App(Box::new(self.quote_sp(l, t, spine.tail())), Box::new(self.quote(l, &head.0)), head.1)
             }
         }
     }
 
-    fn quote(&self, l: Lvl, t: Val) -> Tm {
+    fn quote(&self, l: Lvl, t: &Rc<Val>) -> Tm {
         //println!("{} {:?}", "quote".green(), t);
         let t = self.force(t);
-        match t {
-            Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(m), sp),
-            Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, x)), sp),
+        match t.as_ref() {
+            Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(*m), sp.clone()),
+            Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, *x)), sp.clone()),
             Val::Lam(x, i, closure) => Tm::Lam(
-                x,
-                i,
-                Box::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
+                x.clone(),
+                *i,
+                Box::new(self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into()))),
             ),
             Val::Pi(x, i, a, closure) => Tm::Pi(
-                x,
-                i,
-                Box::new(self.quote(l, *a)),
-                Box::new(self.quote(l + 1, self.closure_apply(&closure, Val::vvar(l)))),
+                x.clone(),
+                *i,
+                Box::new(self.quote(l, a)),
+                Box::new(self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into()))),
             ),
             Val::U => Tm::U,
-            Val::LiteralIntro(x) => Tm::LiteralIntro(x),
+            Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()),
             Val::LiteralType => Tm::LiteralType,
             Val::Prim => Tm::Prim,
         }
@@ -262,15 +263,15 @@ impl Infer {
 
     pub fn nf(&self, env: &Env, t: Tm) -> Tm {
         let l = Lvl(env.iter().count() as u32);
-        self.quote(l, self.eval(env, t))
+        self.quote(l, &self.eval(env, &t))
     }
 
-    fn close_val(&self, cxt: &Cxt, t: Val) -> Closure {
-        Closure(cxt.env.clone(), Box::new(self.quote(cxt.lvl + 1, t)))
+    fn close_val(&self, cxt: &Cxt, t: &Rc<Val>) -> Closure {
+        Closure(cxt.env.clone(), Rc::new(self.quote(cxt.lvl + 1, t)))
     }
 
-    fn unify_catch(&mut self, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
-        self.unify(cxt.lvl, t.clone(), t_prime.clone())
+    fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>) -> Result<(), Error> {
+        self.unify(cxt.lvl, t, t_prime)
             .map_err(|_| {
                 /*Error::CantUnify(
                     cxt.clone(),
