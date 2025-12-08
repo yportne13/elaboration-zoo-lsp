@@ -289,7 +289,7 @@ impl Infer {
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
                     let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
-                    let vt_pretty = "".to_owned();//super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
+                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, t_tm.clone());
                     self.global.insert(global_idx, vt.clone());

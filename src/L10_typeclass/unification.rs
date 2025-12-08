@@ -418,16 +418,15 @@ impl Infer {
         let prepare = self.meta.get(m.0 as usize ..)
             .iter()
             .flat_map(|x| x.iter())
-            .flat_map(|x| if let MetaEntry::Unsolved(x) = x { Some(x) } else { None })
-            .cloned()
             .enumerate()
+            .flat_map(|x| if let MetaEntry::Unsolved(v) = x.1 { Some((x.0, v.clone())) } else { None })
             .collect::<Vec<_>>();
         for (idx, x) in prepare {
             let typ = self.solve_trait(cxt, &x)
                 .map_err(UnifyError::Trait)?;
             if let Some((_, val)) = typ {
-                //println!("solve trait {:?}\nmeta: {}", val, idx);
-                self.meta[idx + m.0 as usize + 1] = MetaEntry::Solved(val, x);
+                //println!("solve trait {:?}\nmeta: {}\n{:?}", val, idx, self.meta[idx + m.0 as usize]);
+                self.meta[idx + m.0 as usize] = MetaEntry::Solved(val, x);
             }
         }
         Ok(())

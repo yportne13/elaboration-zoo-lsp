@@ -660,7 +660,7 @@ impl Add[Nat, Nat] for Nat {
     def add(that: Nat): Nat =
         match that {
             case zero => this
-            case succ(n) => succ (n.add this)
+            case succ(n) => succ (this.add n)
         }
 }
 
@@ -669,7 +669,7 @@ def mul(x: Nat, y: Nat) = match x {
     case succ(n) => y.add (mul n y)
 }
 
-def four = two.add two
+def four: Nat = two.add two
 
 println four
 
