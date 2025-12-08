@@ -1,18 +1,18 @@
 use crate::{list::List, parser_lib::Span};
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Icit {
     Impl,
     Expl,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Either {
     Name(Span<String>),
     Icit(Icit),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
     Any(Span<()>, Icit),
     Con(Span<String>, Vec<Pattern>, Icit),
@@ -47,7 +47,7 @@ impl Pattern {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Raw {
     Var(Span<String>),
     Obj(Box<Raw>, Span<String>),

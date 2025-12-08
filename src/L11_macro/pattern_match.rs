@@ -49,6 +49,7 @@ pub enum Warning {
 pub struct Compiler {
     warnings: Vec<Warning>,
     reachable: HashMap<usize, ()>,
+    checked_ret: HashMap<Raw, Tm>,
     seed: i32,
     ret_type: Val,
 }
@@ -58,6 +59,7 @@ impl Compiler {
         Compiler {
             warnings: Vec::new(),
             reachable: HashMap::new(),
+            checked_ret: HashMap::new(),
             seed: 0,
             ret_type,
         }
@@ -195,6 +197,9 @@ impl Compiler {
                 [(arm, idx, cxt, raw, target_typ, ori), ..] if arm.pats.is_empty() => {
                     let (_, cxt) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
                     self.reachable.insert(*idx, ());
+                    if let Some(ret) = self.checked_ret.get(raw) {
+                        return Ok(Box::new(DecisionTree::Leaf((ret.clone(), arm.body.1))))
+                    }
                     //println!("prepare to check {:?}", arm.body);
                     //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
                     let ret_type = match self.ret_type.clone() {
@@ -205,6 +210,7 @@ impl Compiler {
                         },
                     };
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
+                    self.checked_ret.insert(raw.clone(), ret.clone());
                     Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
                 }
                 _ => Ok(Box::new(DecisionTree::Fail)),

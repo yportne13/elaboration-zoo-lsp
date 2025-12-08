@@ -586,6 +586,32 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
 }
 
 #[test]
+fn test6() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => match t xs ys {
+                case cons(z, zs) => cons zero (cons zero zs)
+            }
+        }
+    }
+"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
 fn test4() {
     let input = r#"
 enum Nat {
