@@ -235,7 +235,7 @@ impl Infer {
                 if !error.is_empty() {
                     Err(Error(expr_span.map(|_| format!("{error:?}"))))
                 } else {
-                    let tree = ret
+                    /*let tree = ret
                         .iter()
                         .map(|x| (x.1, x.0.clone()))
                         .collect::<HashMap<_, _>>();
@@ -243,12 +243,12 @@ impl Infer {
                         .into_iter()
                         .enumerate()
                         .map(|(idx, x)| (pattern_to_detail(cxt, x.0), tree.get(&idx).unwrap().clone()))
-                        .collect();
+                        .collect();*/
                     /*if let Some(ret_type) = compiler.ret_type.clone() {
                         println!("get match ret: {:?}", ret_type);
                     }*/
                     Ok(
-                        Tm::Match(Box::new(tm), t)
+                        Tm::Match(Box::new(tm), compiler.pats)
                     ) //if there is any posible that has no return type?
                 }
             }
@@ -691,48 +691,6 @@ impl Infer {
                     typ_val,
                 ))
             }
-        }
-    }
-}
-
-fn pattern_to_detail(cxt: &Cxt, pattern: Pattern) -> PatternDetail {
-    let mut all_constr_name = cxt.env.iter()
-        .flat_map(|x| match x {
-            Val::Sum(_, _, x) => Some(
-                x.iter().map(|x| x.data.clone()).collect::<Vec<_>>()
-            ),
-            Val::Lam(_, _, c) => {
-                let mut tm = &c.1;
-                let mut ret = None;
-                loop {
-                    match tm.as_ref() {
-                        Tm::Sum(_, _, x) => {
-                            ret = Some(x.iter().map(|x| x.data.clone()).collect::<Vec<_>>());
-                            break;
-                        }
-                        Tm::Lam(_, _, c) => {
-                            tm = c;
-                        }
-                        _ => {break;}
-                    }
-                }
-                ret
-            }
-            _ => None,
-        })
-        .flatten()
-        .collect::<std::collections::HashSet<_>>();
-    match pattern {
-        Pattern::Any(name, _) => PatternDetail::Any(name),
-        Pattern::Con(name, params, _) if params.is_empty() && !all_constr_name.contains(&name.data) => {
-            PatternDetail::Bind(name)
-        },
-        Pattern::Con(name, params, _) => {
-            let new_params = params
-                .into_iter()
-                .map(|x| pattern_to_detail(cxt, x))
-                .collect();
-            PatternDetail::Con(name, new_params)
         }
     }
 }

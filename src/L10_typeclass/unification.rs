@@ -414,7 +414,7 @@ impl Infer {
 
         Ok(())
     }
-    fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar) -> Result<(), UnifyError>{
+    pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar) -> Result<(), UnifyError>{
         let prepare = self.meta.get(m.0 as usize ..)
             .iter()
             .flat_map(|x| x.iter())
