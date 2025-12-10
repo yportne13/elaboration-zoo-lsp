@@ -90,7 +90,7 @@ pub enum PatternDetail {
 impl PatternDetail {
     fn bind_count(&self) -> u32 {
         match self {
-            PatternDetail::Any(_) => 0,
+            PatternDetail::Any(_) => 1,
             PatternDetail::Bind(_) => 1,
             PatternDetail::Con(_, pattern_details) => {
                 pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()

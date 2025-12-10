@@ -232,22 +232,10 @@ impl Infer {
                 let expr_span = expr.to_span();
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
                 let mut compiler = Compiler::new(expected);
-                let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
+                let error = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
                 if !error.is_empty() {
                     Err(Error(expr_span.map(|_| format!("{error:?}"))))
                 } else {
-                    /*let tree = ret
-                        .iter()
-                        .map(|x| (x.1, x.0.clone()))
-                        .collect::<HashMap<_, _>>();
-                    let t = clause
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, x)| (pattern_to_detail(cxt, x.0), tree.get(&idx).unwrap().clone()))
-                        .collect();*/
-                    /*if let Some(ret_type) = compiler.ret_type.clone() {
-                        println!("get match ret: {:?}", ret_type);
-                    }*/
                     Ok(
                         Tm::Match(Box::new(tm), compiler.pats)
                     ) //if there is any posible that has no return type?

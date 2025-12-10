@@ -218,7 +218,7 @@ impl Compiler {
         heads: &[(Var, Val, Span<String>, Icit)],
         arms: &[(MatchArm, usize, Cxt, Raw, Val, Val, PatConstructor)],
         context: &MatchContext,
-    ) -> Result<Box<DecisionTree>, Error> {
+    ) -> Result<bool, Error> {
         /*println!(
             " arms: {}\nheads: {}",
             arms
@@ -235,10 +235,15 @@ impl Compiler {
         match heads {
             [] => match arms {
                 [(arm, idx, cxt, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() => {
-                    let (_, cxt) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
+                    let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
+                        Ok(x) => x,
+                        Err(e) => {
+                            return Ok(false);
+                        }
+                    };
                     self.reachable.insert(*idx, ());
                     if let Some(ret) = self.checked_ret.get(raw) {
-                        return Ok(Box::new(DecisionTree::Leaf((ret.clone(), arm.body.1))))
+                        return Ok(true)
                     }
                     //println!("prepare to check {:?}", arm.body);
                     //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
@@ -254,9 +259,13 @@ impl Compiler {
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
                     self.pats.push((patcon.data[0].1[0].clone(), ret.clone()));
-                    Ok(Box::new(DecisionTree::Leaf((ret, arm.body.1))))
-                }
-                _ => Ok(Box::new(DecisionTree::Fail)),
+                    Ok(true)
+                },
+                [arm, ..] => Err(Error(match &arm.0.pats[0] {
+                    Pattern::Any(span, _) => span.map(|_| "invalid pattern".to_owned()),
+                    Pattern::Con(span, _, _) => span.clone().map(|x| format!("invalid pattern {}", x)),
+                })),
+                [] => Ok(false)
             },
             [(var, typ, head_name, icit), heads_rest @ ..] => {
                 let not_necessary = arms
@@ -408,8 +417,7 @@ impl Compiler {
                                 })
                                 .collect::<Vec<_>>();
 
-                            let mut new_heads_ret = vec![];
-                            let subtree = if remaining_arms.is_empty() {
+                            let valid_tree = if remaining_arms.is_empty() {
                                 let unmatched = Self::fill_context(
                                     context,
                                     &Pattern::Con(
@@ -419,13 +427,13 @@ impl Compiler {
                                     ),
                                 );
                                 self.warnings.push(Warning::Unmatched(unmatched));
-                                Box::new(DecisionTree::Fail)
+                                false
                             } else if remaining_arms
                                         .iter()
                                         .flatten()
                                         .map(|_| ())
                                         .collect::<Vec<_>>().is_empty() {
-                                return Ok(None)
+                                return Ok(false)
                             } else {
                                 let new_heads = remaining_arms
                                     .first()
@@ -435,7 +443,6 @@ impl Compiler {
                                     .first()
                                     .and_then(|x| x.as_ref().map(|y| y.8))
                                     .unwrap_or(false);
-                                new_heads_ret = new_heads.clone();
                                 let context_ = if new_heads.is_empty() {
                                     if heads_rest.is_empty() || is_impl {
                                         context.clone()
@@ -473,22 +480,13 @@ impl Compiler {
                                 )?
                             };
 
-                            Ok(Some((
-                                constr.clone(),
-                                new_heads_ret.iter().map(|(var, _, _, _)| *var).collect(),
-                                subtree,
-                            )))
+                            Ok(valid_tree)
                         })
                         .collect::<Result<Vec<_>, _>>()?
                         .into_iter()
-                        .flatten()
-                        .collect();
+                        .any(|x| x);
 
-                    Ok(Box::new(DecisionTree::Branch(
-                        typename.clone(),
-                        *var,
-                        decision_tree_branches,
-                    )))
+                    Ok(decision_tree_branches)
                 }
             }
         }
@@ -501,10 +499,10 @@ impl Compiler {
         arms: &[(Pattern, Raw)],
         cxt: &Cxt,
         target_val: Val,
-    ) -> Result<(Box<DecisionTree>, Vec<Warning>), Error> {
+    ) -> Result<Vec<Warning>, Error> {
         self.warnings = Vec::new();
         self.reachable = HashMap::new();
-        let tree = self.compile_aux(
+        self.compile_aux(
             infer,
             &[(0, typ.clone(), empty_span("".to_owned()), Icit::Expl)],
             &arms
@@ -541,13 +539,12 @@ impl Compiler {
             })
             .collect::<Vec<_>>();
 
-        Ok((
-            tree,
+        Ok(
             unreachable
                 .into_iter()
                 .chain(self.warnings.clone())
-                .collect(),
-        ))
+                .collect()
+        )
     }
 
     pub fn eval_aux(

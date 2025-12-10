@@ -90,7 +90,7 @@ pub enum PatternDetail {
 impl PatternDetail {
     fn bind_count(&self) -> u32 {
         match self {
-            PatternDetail::Any(_) => 0,
+            PatternDetail::Any(_) => 1,
             PatternDetail::Bind(_) => 1,
             PatternDetail::Con(_, pattern_details) => {
                 pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()
@@ -743,6 +743,130 @@ def cd = assign sigC sigD refl
 }
 
 #[test]
+fn test5() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => cons x (t xs ys)
+        }
+    }
+"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
+fn test6() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => match t xs ys {
+                case cons(z, zs) => cons zero (cons zero zs)
+            }
+        }
+    }
+"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
+fn test4() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add n (succ m)) (succ (add n m)) =
+    match n {
+        case zero => refl[Nat] (succ m)
+        case succ(k) => cong_succ (add_succ_right k m)
+    }
+
+def add_comm (n: Nat, m: Nat): Eq[Nat] (add n m) (add m n) =
+    match n {
+        case zero => symm (add_zero_right m)
+        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
+    }
+
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add n (add m k)) =
+    match n {
+        case zero => rfl
+        case succ(l) => cong_succ (add_assoc l m k)
+    }
+
+"#;
+    println!("{}", run(input, 0).unwrap());
+    println!("success");
+}
+
+#[test]
 fn test2() {
     let input = r#"
 enum Bool {
@@ -908,6 +1032,114 @@ def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
 "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");
+}
+
+#[test]
+fn test0() {
+    let input = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+enum Product[A, B] {
+    product(a: A, b: B)
+}
+
+def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
+    match lhs {
+        case false => product false rhs
+        case true => match rhs {
+            case false => product false true
+            case true => product true false
+        }
+    }
+
+def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
+    match lhs {
+        case false => half_adder rhs carrier
+        case true => match rhs {
+            case false => half_adder true carrier
+            case true => product true carrier
+        }
+    }
+
+def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (succ len) =
+    match lhs {
+        case nil => cons carrier nil
+        case cons(n, taill) => match rhs {
+            case cons(m, tailr) => match bits_adder_carrier taill tailr carrier {
+                case cons(c, tail) => match full_adder n m c {
+                    case product(a, b) => cons a (cons b tail)
+                }
+            }
+        }
+    }
+
+def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (succ len) =
+    bits_adder_carrier lhs rhs false
+
+println bits_adder (cons true nil) (cons false nil)
+"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
+pub fn test_index() {
+    let input = r#"
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def test: Eq two two = refl
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t = cons zero (cons two (cons three (cons two nil)))
+
+println t.len
+
+def head[T, L: Nat](x: Vec[T] (succ L)): T =
+    match x {
+        case cons(x, _) => x
+    }
+
+println (head (cons zero nil))
+
+def length[T, l: Nat](x: (Vec[T] l)): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (xs.len)
+    }
+
+    "#;
+    println!("{}", run(input, 0).unwrap());
 }
 
 #[test]
