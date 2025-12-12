@@ -11,7 +11,7 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: BiMap<String, Lvl, VTy>,
+    pub src_names: BiMap<String, Lvl, Rc<VTy>>,
 }
 
 impl Cxt {
@@ -19,59 +19,59 @@ impl Cxt {
         Self::empty()
             .define(
                 empty_span("String".to_owned()),
-                Tm::LiteralType,
-                Val::LiteralType,
-                Tm::U(0),
-                Val::U(0),
+                Tm::LiteralType.into(),
+                Val::LiteralType.into(),
+                Tm::U(0).into(),
+                Val::U(0).into(),
             )
             .define(
                 empty_span("string_concat".to_owned()),
                 Tm::Lam(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Tm::Lam(
+                    Rc::new(Tm::Lam(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Box::new(Tm::Prim),
+                        Rc::new(Tm::Prim),
                     )),
-                ),
+                ).into(),
                 Val::Lam(
                     empty_span("x".to_owned()),
                     Icit::Expl,
                     Closure(
-                        List::new().prepend(Val::LiteralType),
-                        Box::new(Tm::Lam(
+                        List::new().prepend(Val::LiteralType.into()),
+                        Tm::Lam(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Box::new(Tm::Prim),
-                        )),
+                            Rc::new(Tm::Prim),
+                        ).into(),
                     ),
-                ),
+                ).into(),
                 Tm::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Tm::Var(Ix(0))),
-                    Box::new(Tm::Pi(
+                    Rc::new(Tm::Var(Ix(0))),
+                    Rc::new(Tm::Pi(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Box::new(Tm::Var(Ix(1))),
-                        Box::new(Tm::Var(Ix(2))),
+                        Rc::new(Tm::Var(Ix(1))),
+                        Rc::new(Tm::Var(Ix(2))),
                     )),
-                ),
+                ).into(),
                 Val::Pi(
                     empty_span("x".to_owned()),
                     Icit::Expl,
-                    Box::new(Val::LiteralType),
+                    Rc::new(Val::LiteralType),
                     Closure(
-                        List::new().prepend(Val::LiteralType),
-                        Box::new(Tm::Pi(
+                        List::new().prepend(Val::LiteralType.into()),
+                        Rc::new(Tm::Pi(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Box::new(Tm::Var(Ix(1))),
-                            Box::new(Tm::Var(Ix(2))),
+                            Rc::new(Tm::Var(Ix(1))),
+                            Rc::new(Tm::Var(Ix(2))),
                         )),
                     ),
-                ),
+                ).into(),
             )
     }
     pub fn empty() -> Self {
@@ -95,12 +95,12 @@ impl Cxt {
         go(&self.locals)
     }
 
-    pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
+    pub fn bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl, a));
         Cxt {
-            env: self.env.prepend(Val::vvar(self.lvl)),
+            env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
@@ -108,7 +108,7 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a: Val, global_idx: Lvl) -> Self {
+    pub fn fake_bind(&self, x: Span<String>, a: Rc<Val>, global_idx: Lvl) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (global_idx + 1919810, a));
@@ -121,10 +121,10 @@ impl Cxt {
         }
     }
 
-    pub fn new_binder(&self, x: Span<String>, a_quote: Tm) -> Self {
+    pub fn new_binder(&self, x: Span<String>, a_quote: Rc<Tm>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         Cxt {
-            env: self.env.prepend(Val::vvar(self.lvl)),
+            env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
@@ -132,7 +132,7 @@ impl Cxt {
         }
     }
 
-    pub fn define(&self, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
+    pub fn define(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl, va));
@@ -147,18 +147,18 @@ impl Cxt {
 
     /// freshVal 函数实现
     /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
-    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: Val) -> Val {
+    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: &Rc<Val>) -> Rc<Val> {
         // quote def from (Lvl (length from))
         let quoted = infer.quote(Lvl(from.iter().count() as u32), val);
 
         // eval def to
-        infer.eval(to, quoted)
+        infer.eval(to, &quoted)
     }
 
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Val) -> Cxt {
-        match v {
+    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>) -> Cxt {
+        match v.as_ref() {
             Val::Flex(..) => self.clone(),
-            v => {
+            _ => {
                 let x_prime = lvl2ix(self.lvl, x).0 as usize;
                 /*println!(
                     " update {}: {} with {}",
@@ -181,13 +181,13 @@ impl Cxt {
         }
     }
 
-    fn refresh(&self, infer: &Infer, env: &List<Val>, src_names: &mut BiMap<String, Lvl, Val>, env2: List<Val>) -> List<Val> {
+    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, Rc<Val>>, env2: List<Rc<Val>>) -> List<Rc<Val>> {
         if env.is_empty() {
             List::new()
         } else {
             let env_t = self.refresh(infer, &env.tail(), src_names, env2.clone());
             let env_tt = env2.change_tail(env_t.clone());
-            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap().clone());
+            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap());
             /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
             let b = pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()));
             if a != b {
@@ -201,7 +201,7 @@ impl Cxt {
             
             let ret = env_t.prepend(ret);
             let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
-            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change.clone());
+            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change);
             ret
         }
     }
@@ -213,7 +213,7 @@ impl Cxt {
         self.env
             .iter()
             .for_each(|x| {
-                println!("{}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x.clone())))
+                println!("{}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x)))
             });
     }
 }

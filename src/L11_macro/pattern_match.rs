@@ -87,14 +87,14 @@ impl PatConstructor {
 pub struct Compiler {
     warnings: Vec<Warning>,
     reachable: HashMap<usize, ()>,
-    checked_ret: HashMap<Raw, Tm>,
-    pub pats: Vec<(PatternDetail, Tm)>,
+    checked_ret: HashMap<Raw, Rc<Tm>>,
+    pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     seed: i32,
-    ret_type: Val,
+    ret_type: Rc<Val>,
 }
 
 impl Compiler {
-    pub fn new(ret_type: Val) -> Self {
+    pub fn new(ret_type: Rc<Val>) -> Self {
         Compiler {
             warnings: Vec::new(),
             reachable: HashMap::new(),
@@ -155,16 +155,17 @@ impl Compiler {
         &mut self,
         infer: &mut Infer,
         cxt: &Cxt,
-        typ: &Val, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
+        typ: &Rc<Val>, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
         all_constrs: &'a [Constructor],
     ) -> Result<
-        Vec<(&'a Constructor, Vec<(Span<String>, Val, Icit)>, Cxt)>,
+        Vec<(&'a Constructor, Vec<(Span<String>, Rc<Val>, Icit)>, Cxt)>,
         Error,
     > {
         let mut accessible = Vec::new();
 
-        let forced_type = match infer.force(typ.clone()) {
-            x @ Val::Sum(..) => x,
+        let typ = infer.force(typ);
+        let forced_type = match typ.as_ref() {
+            Val::Sum(..) => typ,
             _ => {
                 for constr_def in all_constrs {
                     accessible.push((constr_def, vec![], cxt.clone()));
@@ -184,13 +185,13 @@ impl Compiler {
             let mut cxt = cxt.clone();
             loop {
                 let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
-                match typ {
+                match typ.as_ref() {
                     Val::Pi(name, icit, ty, _) => {
-                        if icit == Icit::Expl { // Only explicit args matter for the structure 
-                            params.push((name.clone(), *ty.clone(), icit));
+                        if *icit == Icit::Expl { // Only explicit args matter for the structure 
+                            params.push((name.clone(), ty.clone(), *icit));
                         }
-                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(icit));
-                        cxt = cxt.bind(name, infer.quote(cxt.lvl, *ty.clone()), *ty);
+                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(*icit));
+                        cxt = cxt.bind(name.clone(), infer.quote(cxt.lvl, ty), ty.clone());
                     },
                     _ => {break;}
                 }
@@ -215,8 +216,8 @@ impl Compiler {
     fn compile_aux(
         &mut self,
         infer: &mut Infer,
-        heads: &[(Var, Val, Span<String>, Icit)],
-        arms: &[(MatchArm, usize, Cxt, Raw, Val, Val, PatConstructor)],
+        heads: &[(Var, Rc<Val>, Span<String>, Icit)],
+        arms: &[(MatchArm, usize, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
         context: &MatchContext,
     ) -> Result<bool, Error> {
         /*println!(
@@ -247,18 +248,18 @@ impl Compiler {
                     }
                     //println!("prepare to check {:?}", arm.body);
                     //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
-                    let ret_type = match self.ret_type.clone() {
-                        t @ Val::Flex(_, _) => t,
-                        ret_type => {
-                            let ret_type = infer.quote(cxt.lvl, ret_type);
-                            infer.eval(&cxt.env, ret_type)
+                    let ret_type = match self.ret_type.as_ref() {
+                        Val::Flex(_, _) => &self.ret_type,
+                        _ => {
+                            let ret_type = infer.quote(cxt.lvl, &self.ret_type);
+                            &infer.eval(&cxt.env, &ret_type)
                         },
                     };
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
                     self.checked_ret.insert(raw.clone(), ret.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
-                    self.pats.push((patcon.data[0].1[0].clone(), ret.clone()));
+                    self.pats.push((patcon.data[0].1[0].clone(), ret));
                     Ok(true)
                 },
                 [arm, ..] => Err(Error(match &arm.0.pats[0] {
@@ -284,7 +285,7 @@ impl Compiler {
                                     body: arm.0.body.clone(),
                                 },
                                 arm.1,
-                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, typ.clone()), typ.clone()),
+                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, typ), typ.clone()),
                                 arm.3.clone(),
                                 arm.4.clone(),
                                 arm.5.clone(),
@@ -296,11 +297,12 @@ impl Compiler {
                 } else {
                     //println!(" -- {}", infer.meta.len());
                     //println!("  {:?}", typ);
-                    let (typename, param, constrs) = match infer.force(typ.clone()) {
+                    let typ = infer.force(typ);
+                    let (typename, param, constrs) = match typ.as_ref() {
                         Val::Sum(span, param, cases, _) => (span, param, cases),
                         _ => {
                             //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
-                            (empty_span("$unknown$".to_owned()), vec![], vec![empty_span("$any$".to_owned())])
+                            (&empty_span("$unknown$".to_owned()), &vec![], &vec![empty_span("$any$".to_owned())])
                         }
                     };
 
@@ -320,7 +322,7 @@ impl Compiler {
                                         let accessible_constrs = self.filter_accessible_constrs(
                                             infer,
                                             cxt,
-                                            typ,
+                                            &typ,
                                             &constrs,
                                         ).ok()?;
                                         if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
@@ -331,15 +333,15 @@ impl Compiler {
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
                                         param.reverse();
                                         let mut typ = typ;
-                                        while let Val::Pi(name, icit, ty, closure) = typ {
+                                        while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
                                             if !param.is_empty() {
                                                 let val = param.pop()
                                                     .map(|x| x.1)
-                                                    .unwrap_or(Val::U(0));
+                                                    .unwrap_or(Val::U(0).into());
                                                 typ = infer.closure_apply(&closure, val);
                                             } else {
-                                                new_heads.push((self.fresh(), *ty, name, icit));
-                                                typ = infer.closure_apply(&closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1));
+                                                new_heads.push((self.fresh(), ty.clone(), name.clone(), *icit));
+                                                typ = infer.closure_apply(&closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
                                     }
@@ -351,7 +353,7 @@ impl Compiler {
                                                 body: arm.body.clone(),
                                             },
                                             *idx,
-                                            cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, typ.clone()), typ.clone()),
+                                            cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, &typ), typ.clone()),
                                             vec![],
                                             raw.clone(),
                                             target_typ.clone(),
@@ -368,7 +370,7 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(constr_.clone(), infer.quote(cxt.lvl, typ.clone()), typ.clone()),
+                                                cxt.bind(constr_.clone(), infer.quote(cxt.lvl, &typ), typ.clone()),
                                                 vec![],
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -404,7 +406,7 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, typ.clone()), typ.clone()),
+                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, &typ), typ.clone()),
                                                 vec![],
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -495,10 +497,10 @@ impl Compiler {
     pub fn compile(
         &mut self,
         infer: &mut Infer,
-        typ: Val,
+        typ: Rc<Val>,
         arms: &[(Pattern, Raw)],
         cxt: &Cxt,
-        target_val: Val,
+        target_val: Rc<Val>,
     ) -> Result<Vec<Warning>, Error> {
         self.warnings = Vec::new();
         self.reachable = HashMap::new();
@@ -549,22 +551,20 @@ impl Compiler {
 
     pub fn eval_aux(
         infer: &Infer,
-        heads: Val,
+        heads: &Rc<Val>,
         cxt: &Env,
-        arms: &[(PatternDetail, Tm)],
-    ) -> Option<(Tm, Env)> {
-        let (case_name, params, constrs_name) = match infer.force(heads.clone()) {
+        arms: &[(PatternDetail, Rc<Tm>)],
+    ) -> Option<(Rc<Tm>, Env)> {
+        let head = infer.force(heads);
+        let (case_name, params) = match head.as_ref() {
             Val::SumCase {
                 is_trait: _,
-                typ,
+                typ: _,
                 case_name,
                 datas: params,
-            } => (case_name, params, match *typ {
-                Val::Sum(_, _, cases, _) => cases,
-                _ => panic!("by now only can match a sum type, but get {:?}", heads),
-            }),
+            } => (case_name, params),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (empty_span("$unknown$".to_owned()), vec![], vec![])
+            _ => (&empty_span("$unknown$".to_owned()), &vec![])
         };
 
         arms.iter()
@@ -573,25 +573,15 @@ impl Compiler {
                 PatternDetail::Bind(_) => {
                     Some((body.clone(), cxt.prepend(heads.clone())))
                 }
-                PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
-                    /*if cxt.src_names.contains_key(&constr_.data) {
-                        //return Err(Error(format!("match fail: {:?}", constr_)))
-                        todo!()
-                    } else */
-                    {
-                        //TODO: item_pats should be zero
-                        Some((body.clone(), cxt.prepend(heads.clone())))
-                    }
-                }
-                PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
+                PatternDetail::Con(constr_, item_pats) if constr_ == case_name => {
                     params.iter()
                         //.filter(|x| x.2 == Icit::Expl)
                         .map(|x| &x.1)
                         .zip(item_pats.iter())
                         .try_fold(
                             (body.clone(), cxt.clone()),
-                            |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
-                                Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
+                            |(body, cxt), (param, pat): (&Rc<Val>, &PatternDetail)| {
+                                Self::eval_aux(infer, param, &cxt, &[(pat.clone(), body)])
                             },
                         )
                 }
