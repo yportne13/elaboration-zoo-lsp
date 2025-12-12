@@ -1,4 +1,4 @@
-use std::{cmp::max, collections::HashMap, rc::Rc};
+use std::{cmp::max, rc::Rc};
 
 use colored::Colorize;
 
@@ -8,9 +8,9 @@ use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
     Lvl,
     empty_span, lvl2ix,
-    parser::syntax::{Decl, Either, Icit, Raw, Pattern},
+    parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
-    PatternDetail, typeclass::Instance,
+    typeclass::Instance,
     unification::PartialRenaming,
     typeclass::Assertion,
 };
@@ -20,12 +20,12 @@ impl Infer {
         let va = self.force(&va);
         match va.as_ref() {
             Val::Pi(_, Icit::Impl, a, b) => {
-                let m = self.fresh_meta(cxt, a.clone()).into();
+                let m = self.fresh_meta(cxt, a.clone());
                 let mv = self.eval(&cxt.env, &m);
                 self.insert_go(
                     cxt,
                     Tm::App(t, m, Icit::Impl).into(),
-                    self.closure_apply(&b, mv),
+                    self.closure_apply(b, mv),
                 )
             }
             _ => (t, va),
@@ -53,13 +53,13 @@ impl Infer {
                 if x.data == name.data {
                     Ok((t, Val::Pi(x.clone(), Icit::Impl, a.clone(), b.clone()).into()))
                 } else {
-                    let m = self.fresh_meta(cxt, a.clone()).into();
+                    let m = self.fresh_meta(cxt, a.clone());
                     let mv = self.eval(&cxt.env, &m);
                     self.insert_until_go(
                         cxt,
                         name,
                         Tm::App(t, m, Icit::Impl).into(),
-                        self.closure_apply(&b, mv),
+                        self.closure_apply(b, mv),
                     )
                 }
             }
@@ -178,7 +178,7 @@ impl Infer {
                         },
                         &Val::U(0).into(),
                     ).map_err(|_| Error(t_span.map(|_| "when check universe, try to rename failed".to_string())))?;
-                    let solution = self.eval(&List::new(), &self.lams(pren.dom, &mty, rhs).into());
+                    let solution = self.eval(&List::new(), &self.lams(pren.dom, &mty, rhs));
                     self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
                     Ok((t_inferred, 0))
@@ -200,7 +200,7 @@ impl Infer {
                 let body = self.check(
                     &cxt.bind(x.clone(), self.quote(cxt.lvl, a), a.clone()),
                     *t,
-                    &self.closure_apply(&b_closure, Val::vvar(cxt.lvl).into()),
+                    &self.closure_apply(b_closure, Val::vvar(cxt.lvl).into()),
                 )?;
                 Ok(Tm::Lam(x.clone(), *i_t, body).into())
             }
@@ -208,7 +208,7 @@ impl Infer {
                 let body = self.check(
                     &cxt.new_binder(x.clone(), self.quote(cxt.lvl, a)),
                     t,
-                    &self.closure_apply(&b_closure, Val::vvar(cxt.lvl).into()),
+                    &self.closure_apply(b_closure, Val::vvar(cxt.lvl).into()),
                 )?;
                 Ok(Tm::Lam(x.clone(), Icit::Impl, body).into())
             }
@@ -232,7 +232,7 @@ impl Infer {
             }
 
             // Handle holes
-            (Raw::Hole, _) => Ok(self.fresh_meta(cxt, a).into()),
+            (Raw::Hole, _) => Ok(self.fresh_meta(cxt, a)),
 
             (Raw::Match(expr, clause), _) => {
                 let expr_span = expr.to_span();
@@ -324,14 +324,10 @@ impl Infer {
                 let mut universe_lvl = 0;
                 for p in params.iter() {
                     let u = self.infer_expr(cxt, p.1.clone());
-                    match u {
-                        Ok(t) => match t.0.as_ref() {
-                            Tm::U(lvl) => {
-                                universe_lvl = max(*lvl, universe_lvl);
-                            }
-                            _ => {},
-                        },
-                        _ => {}
+                    if let Ok(t) = u {
+                        if let Tm::U(lvl) = t.0.as_ref() {
+                            universe_lvl = max(*lvl, universe_lvl);
+                        }
                     }
                 }
                 for case in cases.iter() {
@@ -469,7 +465,7 @@ impl Infer {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
                 for decl in methods {
-                    if let Decl::Def { name: def_name, params, ret_type, body } = decl {
+                    if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
                         ret = Raw::App(
                             Box::new(ret),
                             Box::new(Raw::Lam(
@@ -555,22 +551,17 @@ impl Infer {
                                     let mut typ = case_typ;
                                     let mut param = params.clone();
                                     param.reverse();
-                                    loop {
-                                        let ret = if let Val::Pi(name, icit, ty, closure) = typ.as_ref().clone() {
-                                            if icit == Icit::Expl {
-                                                ret.push((name, ty.clone()));
-                                                self.closure_apply(&closure, Val::U(0).into())//TODO:not Val::U(0)
-                                            } else {
-                                                let val = param.pop()
-                                                    .map(|x| x.1)
-                                                    .unwrap_or(Val::U(0).into());
-                                                ret.push((name, ty.clone()));
-                                                self.closure_apply(&closure, val)
-                                            }
+                                    while let Val::Pi(name, icit, ty, closure) = typ.as_ref().clone() {
+                                        if icit == Icit::Expl {
+                                            ret.push((name, ty.clone()));
+                                            typ = self.closure_apply(&closure, Val::U(0).into())//TODO:not Val::U(0)
                                         } else {
-                                            break;
-                                        };
-                                        typ = ret;
+                                            let val = param.pop()
+                                                .map(|x| x.1)
+                                                .unwrap_or(Val::U(0).into());
+                                            ret.push((name, ty.clone()));
+                                            typ = self.closure_apply(&closure, val)
+                                        }
                                     }
                                     c = Some(ret);
                                 }
@@ -582,7 +573,7 @@ impl Infer {
                                     .map(|(_, ty)| ty)
                             }).or(
                             params
-                                .into_iter()
+                                .iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
                                 .map(|(_, _, ty, _)| ty)
                                 .cloned()
@@ -597,7 +588,7 @@ impl Infer {
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
                         if let Some(val) = params
-                            .into_iter()
+                            .iter()
                             .find(|(fields_name, _, _)| fields_name == &t)
                             .map(|(_, ty, _)| ty) {
                                 Ok((
@@ -615,7 +606,7 @@ impl Infer {
             // Infer lambda expressions
             Raw::Lam(x, Either::Icit(i), t) => {
                 let new_meta = self.fresh_meta(cxt, Val::U(0).into());
-                let a = self.eval(&cxt.env, &new_meta.into());
+                let a = self.eval(&cxt.env, &new_meta);
                 //TODO:below may be wrong
                 let new_cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, &a), a.clone());
                 let infered = self.infer_expr(&new_cxt, *t);
@@ -627,7 +618,7 @@ impl Infer {
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), t) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
+            Raw::Lam(x, Either::Name(_), _) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
 
             // Infer function applications
             Raw::App(t, u, i) => {
@@ -660,7 +651,7 @@ impl Infer {
                     }
                     _ => {
                         let new_meta = self.fresh_meta(cxt, Val::U(0).into());
-                        let a = self.eval(&cxt.env, &new_meta.into());
+                        let a = self.eval(&cxt.env, &new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
                             self.fresh_meta(
@@ -670,7 +661,7 @@ impl Infer {
                                     a.clone(),
                                 ),
                                 Val::U(0).into(),
-                            ).into(),
+                            ),
                         );
                         self.unify_catch(
                             cxt,
@@ -744,9 +735,9 @@ impl Infer {
             // Infer holes
             Raw::Hole => {
                 let new_meta = self.fresh_meta(cxt, Val::U(0).into());
-                let a = self.eval(&cxt.env, &new_meta.into());
+                let a = self.eval(&cxt.env, &new_meta);
                 let t = self.fresh_meta(cxt, a.clone());
-                Ok((t.into(), a))
+                Ok((t, a))
             }
 
             Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal).into(), Val::LiteralType.into())),
@@ -809,7 +800,7 @@ impl Infer {
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
-                            name: x.clone().clone(),
+                            name: x.to_string(),
                             arguments: args,
                         })
                         .is_some()
@@ -864,7 +855,7 @@ impl Infer {
                 ))
                 .collect::<Vec<_>>();
             //TODO: if traits.len() > 1, return err
-            let traits = traits.first().and_then(|(name, decl)| {
+            let traits = traits.first().and_then(|(_, decl)| {
                     self.infer_expr(cxt, decl.clone()).ok()
                 });
             if let Some(ret) = traits {

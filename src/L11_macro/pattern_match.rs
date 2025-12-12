@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     rc::Rc,
 };
 
@@ -15,30 +15,7 @@ use super::{
 
 type Var = i32;
 
-type MatchBody = (Tm, usize);
-type TypeName = Span<String>;
 type Constructor = Span<String>;
-
-#[derive(Debug, Clone)]
-pub enum DecisionTree {
-    Fail,
-    Leaf(MatchBody),
-    Branch(
-        TypeName,
-        Var,
-        Vec<(Constructor, Vec<Var>, Box<DecisionTree>)>,
-    ),
-}
-
-impl DecisionTree {
-    pub fn iter(&self) -> Box<dyn Iterator<Item = &MatchBody> + '_> {
-        match self {
-            DecisionTree::Fail => Box::new(std::iter::empty()),
-            DecisionTree::Leaf(x) => Box::new(std::iter::once(x)),
-            DecisionTree::Branch(_, _, items) => Box::new(items.iter().flat_map(|x| x.2.iter())),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum Warning {
@@ -87,7 +64,7 @@ impl PatConstructor {
 pub struct Compiler {
     warnings: Vec<Warning>,
     reachable: HashMap<usize, ()>,
-    checked_ret: HashMap<Raw, Rc<Tm>>,
+    checked_ret: HashSet<Raw>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     seed: i32,
     ret_type: Rc<Val>,
@@ -98,7 +75,7 @@ impl Compiler {
         Compiler {
             warnings: Vec::new(),
             reachable: HashMap::new(),
-            checked_ret: HashMap::new(),
+            checked_ret: HashSet::new(),
             pats: Vec::new(),
             seed: 0,
             ret_type,
@@ -243,7 +220,7 @@ impl Compiler {
                         }
                     };
                     self.reachable.insert(*idx, ());
-                    if let Some(ret) = self.checked_ret.get(raw) {
+                    if self.checked_ret.contains(raw) {
                         return Ok(true)
                     }
                     //println!("prepare to check {:?}", arm.body);
@@ -256,7 +233,7 @@ impl Compiler {
                         },
                     };
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
-                    self.checked_ret.insert(raw.clone(), ret.clone());
+                    self.checked_ret.insert(raw.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
                     self.pats.push((patcon.data[0].1[0].clone(), ret));
@@ -298,11 +275,11 @@ impl Compiler {
                     //println!(" -- {}", infer.meta.len());
                     //println!("  {:?}", typ);
                     let typ = infer.force(typ);
-                    let (typename, param, constrs) = match typ.as_ref() {
-                        Val::Sum(span, param, cases, _) => (span, param, cases),
+                    let (param, constrs) = match typ.as_ref() {
+                        Val::Sum(_, param, cases, _) => (param, cases),
                         _ => {
                             //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
-                            (&empty_span("$unknown$".to_owned()), &vec![], &vec![empty_span("$any$".to_owned())])
+                            (&vec![], &vec![empty_span("$any$".to_owned())])
                         }
                     };
 
@@ -323,7 +300,7 @@ impl Compiler {
                                             infer,
                                             cxt,
                                             &typ,
-                                            &constrs,
+                                            constrs,
                                         ).ok()?;
                                         if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
                                             return Some(None);
@@ -338,10 +315,10 @@ impl Compiler {
                                                 let val = param.pop()
                                                     .map(|x| x.1)
                                                     .unwrap_or(Val::U(0).into());
-                                                typ = infer.closure_apply(&closure, val);
+                                                typ = infer.closure_apply(closure, val);
                                             } else {
                                                 new_heads.push((self.fresh(), ty.clone(), name.clone(), *icit));
-                                                typ = infer.closure_apply(&closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
+                                                typ = infer.closure_apply(closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
                                     }

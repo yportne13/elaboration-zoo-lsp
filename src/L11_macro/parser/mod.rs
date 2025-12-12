@@ -109,7 +109,7 @@ macro_rules! T {
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, Vec<IError>, IError> {
-    move |input: &'b [TokenNode<'a>], state: &mut Vec<IError>| match input.first() {
+    move |input: &'b [TokenNode<'a>], _: &mut Vec<IError>| match input.first() {
         Some(x) => if x.data.1 == p {
             input
                 .get(1..)
@@ -129,7 +129,7 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, Ve
 }
 
 fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<String>, Vec<IError>, IError> {
-    move |input: &'b [TokenNode<'a>], state: &mut Vec<IError>| match input.first() {
+    move |input: &'b [TokenNode<'a>], _: &mut Vec<IError>| match input.first() {
         Some(x) => if x.data.1 == p {
             input
                 .get(1..)
@@ -287,7 +287,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
             .map(|(xs, a)| (xs, a, Icit::Impl))
             .many0_sep(kw(T![,])),
     )
-    .map(|x| x.unwrap_or(vec![]))
+    .map(|x| x.unwrap_or_default())
     .parse(input, state)
 }
 
@@ -297,7 +297,7 @@ fn p_pi_impl_binder_option<'a: 'b, 'b>(
 ) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
     p_pi_impl_binder
         .option()
-        .map(|x| x.unwrap_or(vec![]))
+        .map(|x| x.unwrap_or_default())
         .parse(input, state)
 }
 
@@ -558,7 +558,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
         kw(ImplKeyword),
         p_pi_impl_binder_option,
         string(Ident),
-        square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or(vec![])),
+        square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or_default()),
         kw(ForKeyword),
         p_raw,
         //p_generic_params(),

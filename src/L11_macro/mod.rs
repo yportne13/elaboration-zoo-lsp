@@ -1,7 +1,7 @@
 use colored::Colorize;
 use cxt::Cxt;
-use parser::{syntax::{Either, Icit, Pattern, Raw}, IError};
-use pattern_match::{Compiler, DecisionTree};
+use parser::{syntax::{Either, Icit, Raw}, IError};
+use pattern_match::Compiler;
 use syntax::{Pruning, close_ty};
 use pretty::pretty_tm;
 
@@ -272,7 +272,7 @@ impl Infer {
     fn v_app(&self, t: &Rc<Val>, u: Rc<Val>, i: Icit) -> Rc<Val> {
         //println!("v_app {t:?} {u:?}");
         match t.as_ref() {
-            Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
+            Val::Lam(_, _, closure) => self.closure_apply(closure, u),
             Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
@@ -317,8 +317,8 @@ impl Infer {
             Tm::Obj(tm, name) => {
                 let a = self.eval(env, tm);
                 match a.as_ref() {
-                    Val::Sum(_, params, cases, _) => {
-                        params.into_iter()
+                    Val::Sum(_, params, _, _) => {
+                        params.iter()
                             .find(|(f_name, _, _, _)| f_name == name)
                             .unwrap().1.clone()
                     },
@@ -326,9 +326,9 @@ impl Infer {
                         (match typ.as_ref() {
                             Val::Sum(_, params, _, _) => params,
                             _ => panic!("impossible {typ:?}"),
-                        }).into_iter()
+                        }).iter()
                             .map(|x| (x.0.clone(), x.1.clone(), x.3))
-                            .chain(datas.into_iter().cloned())
+                            .chain(datas.iter().cloned())
                         //datas.into_iter()
                             .find(|(f_name, _, _)| f_name == name)
                             .unwrap().1.clone()
@@ -361,7 +361,7 @@ impl Infer {
             },
             Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|x| (x.0.clone(), self.eval(env, &x.1), self.eval(env, &x.2), x.3))
                     .collect();
                 Val::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
@@ -373,7 +373,7 @@ impl Infer {
                 datas,
             } => {
                 let datas = datas
-                    .into_iter()
+                    .iter()
                     .map(|p| (p.0.clone(), self.eval(env, &p.1), p.2))
                     .collect();
                 let typ = self.eval(env, typ);
@@ -389,7 +389,7 @@ impl Infer {
                 let val = self.force(&val);
                 match val.as_ref() {
                     Val::SumCase { .. } => {
-                        let (tm, env) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
+                        let (tm, env) = Compiler::eval_aux(self, &val, env, cases).unwrap();
                         self.eval(&env, &tm)
                     }
                     _ => {
@@ -423,20 +423,20 @@ impl Infer {
             Val::Lam(x, i, closure) => Tm::Lam(
                 x.clone(),
                 *i,
-                self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into())),
+                self.quote(l + 1, &self.closure_apply(closure, Val::vvar(l).into())),
             ).into(),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x.clone(),
                 *i,
                 self.quote(l, a),
-                self.quote(l + 1, &self.closure_apply(&closure, Val::vvar(l).into())),
+                self.quote(l + 1, &self.closure_apply(closure, Val::vvar(l).into())),
             ).into(),
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
             Val::LiteralType => Tm::LiteralType.into(),
             Val::Prim => Tm::Prim.into(),
             Val::Sum(name, params, cases, is_trait) => {
-                let new_params = params.into_iter()
+                let new_params = params.iter()
                     .map(|x| {
                         (x.0.clone(), self.quote(l, &x.1), self.quote(l, &x.2), x.3)
                     })
@@ -450,7 +450,7 @@ impl Infer {
                 datas,
             } => {
                 let datas = datas
-                    .into_iter()
+                    .iter()
                     .map(|p| {
                         (p.0.clone(), self.quote(l, &p.1), p.2)
                     })
@@ -472,7 +472,7 @@ impl Infer {
                     })
                     .collect();*/
                 let tm_cases = cases
-                    .into_iter()
+                    .iter()
                     .map(|x| (
                         x.0.clone(),
                         {

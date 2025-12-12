@@ -3,7 +3,7 @@ use colored::Colorize;
 use crate::list::List;
 
 use super::{
-    Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw,
 };
 
@@ -214,13 +214,13 @@ impl Infer {
                 }
             }
             SpinePruneStatus::NeedsPruning => {
-                self.prune_meta(sp.map(|(mt, i)| mt.as_ref().map(|_| i.clone())), m)?
+                self.prune_meta(sp.map(|(mt, i)| mt.as_ref().map(|_| *i)), m)?
             }
         };
 
         let t = sp.iter().fold(Tm::Meta(m_prime), |t, (mu, i)| {
             if let Some(u) = mu {
-                Tm::App(t.into(), u.clone(), i.clone())
+                Tm::App(t.into(), u.clone(), *i)
             } else {
                 t
             }
@@ -250,22 +250,22 @@ impl Infer {
                     Err(UnifyError::Basic)
                 } else {
                     let t = Tm::Var(lvl2ix(pren.dom, *x));
-                    self.rename_sp(pren, t.into(), &sp)
+                    self.rename_sp(pren, t.into(), sp)
                 }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
-                    self.rename_sp(pren, t.into(), &sp)
+                    self.rename_sp(pren, t.into(), sp)
                 }
             },
             Val::Obj(x, name, sp) => {
                 let t = self.rename(pren, x)?;
                 let t = Tm::Obj(t, name.clone());
-                self.rename_sp(pren, t.into(), &sp)
+                self.rename_sp(pren, t.into(), sp)
             },
             Val::Lam(x, i, closure) => {
                 let t = self.rename(
                     &lift(pren),
-                    &self.closure_apply(&closure, Val::vvar(pren.cod).into()),
+                    &self.closure_apply(closure, Val::vvar(pren.cod).into()),
                 )?;
                 Ok(Tm::Lam(x.clone(), *i, t).into())
             }
@@ -273,7 +273,7 @@ impl Infer {
                 let a = self.rename(pren, a)?;
                 let b = self.rename(
                     &lift(pren),
-                    &self.closure_apply(&closure, Val::vvar(pren.cod).into()),
+                    &self.closure_apply(closure, Val::vvar(pren.cod).into()),
                 )?;
                 Ok(Tm::Pi(x.clone(), *i, a, b).into())
             }
@@ -283,7 +283,7 @@ impl Infer {
             Val::Prim => Ok(Tm::Prim.into()),
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = params
-                    .into_iter()
+                    .iter()
                     .map(|x| {
                         match (self.rename(pren, &x.1), self.rename(pren, &x.2)) {
                             (Ok(a), Ok(b)) => Ok((x.0.clone(), a, b, x.3)),
@@ -301,7 +301,7 @@ impl Infer {
             } => {
                 let typ = self.rename(pren, typ)?;
                 let params = params
-                    .into_iter()
+                    .iter()
                     .map(|p| {
                         let z = self.rename(pren, &p.1)?;
                         Ok((p.0.clone(), z, p.2))
@@ -317,7 +317,7 @@ impl Infer {
             Val::Match(val, env, cases) => {
                 let val = self.rename(pren, val)?;
                 let cases = cases
-                    .into_iter()
+                    .iter()
                     .map(|(pat, tm)| {
                         let (env, pren) = (0..pat.bind_count())
                             .fold((env.clone(), pren.clone()), |(env, pren), _| (
@@ -352,7 +352,7 @@ impl Infer {
                         self.lams_go(
                             l,
                             t,
-                            &self.closure_apply(&closure, Val::Rigid(l_prime, List::new()).into()),
+                            &self.closure_apply(closure, Val::Rigid(l_prime, List::new()).into()),
                             l_prime + 1,
                         ),
                     ).into()
@@ -363,7 +363,7 @@ impl Infer {
                     self.lams_go(
                         l,
                         t,
-                        &self.closure_apply(&closure, Val::Rigid(l_prime, List::new()).into()),
+                        &self.closure_apply(closure, Val::Rigid(l_prime, List::new()).into()),
                         l_prime + 1,
                     ),
                 ).into(),
@@ -471,7 +471,7 @@ impl Infer {
     ) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
             (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
-            (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
+            (a, b) if a.head().is_some() && b.head().is_some() => {
                 self.unify_sp(l, cxt, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
                 self.unify(
                     l,
