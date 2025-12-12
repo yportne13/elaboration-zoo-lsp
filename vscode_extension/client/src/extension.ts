@@ -24,7 +24,7 @@ export async function activate(context: ExtensionContext) {
 		const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
 		const bits = await workspace.fs.readFile(filename);
 		const module = await WebAssembly.compile(bits);
-		const process = await wasm.createProcess('lsp-server', module, { initial: 160, maximum: 160, shared: true }, options);
+		const process = await wasm.createProcess('lsp-server', module, { initial: 160, maximum: 16384, shared: true }, options);
 
 		const decoder = new TextDecoder('utf-8');
 		process.stderr!.onData((data) => {
