@@ -1,62 +1,65 @@
-use std::{cmp::max, collections::HashMap};
+use std::{cmp::max, rc::Rc};
 
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span, L10_typeclass::typeclass::Assertion};
+use crate::{list::List, parser_lib::Span};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
     Lvl,
     empty_span, lvl2ix,
-    parser::syntax::{Decl, Either, Icit, Raw, Pattern},
+    parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
-    PatternDetail, typeclass::Instance,
+    typeclass::Instance,
     unification::PartialRenaming,
+    typeclass::Assertion,
 };
 
 impl Infer {
-    fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> (Tm, VTy) {
-        match self.force(va) {
+    fn insert_go(&mut self, cxt: &Cxt, t: Rc<Tm>, va: Rc<Val>) -> (Rc<Tm>, Rc<VTy>) {
+        let va = self.force(&va);
+        match va.as_ref() {
             Val::Pi(_, Icit::Impl, a, b) => {
-                let m = self.fresh_meta(cxt, *a);
-                let mv = self.eval(&cxt.env, m.clone());
+                let m = self.fresh_meta(cxt, a.clone());
+                let mv = self.eval(&cxt.env, &m);
                 self.insert_go(
                     cxt,
-                    Tm::App(Box::new(t), Box::new(m), Icit::Impl),
-                    self.closure_apply(&b, mv),
+                    Tm::App(t, m, Icit::Impl).into(),
+                    self.closure_apply(b, mv),
                 )
             }
-            va => (t, va),
+            _ => (t, va),
         }
     }
-    fn insert_t(&mut self, cxt: &Cxt, act: Result<(Tm, VTy), Error>) -> Result<(Tm, VTy), Error> {
+    fn insert_t(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.map(|(t, va)| self.insert_go(cxt, t, va))
     }
-    fn insert(&mut self, cxt: &Cxt, act: Result<(Tm, VTy), Error>) -> Result<(Tm, VTy), Error> {
-        act.and_then(|x| match x {
-            (t @ Tm::Lam(_, Icit::Impl, _), va) => Ok((t, va)),
-            (t, va) => self.insert_t(cxt, Ok((t, va))),
+    fn insert(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
+        act.and_then(|x| if let Tm::Lam(_, Icit::Impl, _) = x.0.as_ref() {
+            Ok(x)
+        } else {
+            self.insert_t(cxt, Ok(x))
         })
     }
     fn insert_until_go(
         &mut self,
         cxt: &Cxt,
         name: Span<String>,
-        t: Tm,
-        va: Val,
-    ) -> Result<(Tm, VTy), Error> {
-        match self.force(va) {
+        t: Rc<Tm>,
+        va: Rc<Val>,
+    ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
+        match self.force(&va).as_ref() {
             Val::Pi(x, Icit::Impl, a, b) => {
                 if x.data == name.data {
-                    Ok((t, Val::Pi(x, Icit::Impl, a, b)))
+                    Ok((t, Val::Pi(x.clone(), Icit::Impl, a.clone(), b.clone()).into()))
                 } else {
-                    let m = self.fresh_meta(cxt, *a);
-                    let mv = self.eval(&cxt.env, m.clone());
+                    let m = self.fresh_meta(cxt, a.clone());
+                    let mv = self.eval(&cxt.env, &m);
                     self.insert_until_go(
                         cxt,
                         name,
-                        Tm::App(Box::new(t), Box::new(m), Icit::Impl),
-                        self.closure_apply(&b, mv),
+                        Tm::App(t, m, Icit::Impl).into(),
+                        self.closure_apply(b, mv),
                     )
                 }
             }
@@ -67,34 +70,36 @@ impl Infer {
         &mut self,
         cxt: &Cxt,
         name: Span<String>,
-        act: Result<(Tm, VTy), Error>,
-    ) -> Result<(Tm, VTy), Error> {
+        act: Result<(Rc<Tm>, Rc<VTy>), Error>,
+    ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
-    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Val, ori: Val) -> Result<(Tm, Cxt), Error> {
+    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, a, inferred_type, t_span)?;
-        let new_cxt = self.unify_pm(&new_cxt, ori, self.eval(&new_cxt.env, t_inferred.clone()), t_span).unwrap_or(new_cxt);
+        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
+        let new_cxt = self.unify_pm(&new_cxt, &ori, &self.eval(&new_cxt.env, &t_inferred), t_span).unwrap_or(new_cxt);
         Ok((t_inferred, new_cxt))
     }
-    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<(Tm, Cxt), Error> {
+    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, a, inferred_type, t_span)?;
+        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
-    fn unify_pm(&mut self, cxt: &Cxt, t: Val, t_prime: Val, t_span: Span<()>) -> Result<Cxt, Error> {
+    fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         //println!("{:?} == {:?}", t, t_prime);
-        match (self.force(t), self.force(t_prime)) {
-            (Val::Rigid(x, sp), v) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, x, v))
+        let t = self.force(t);
+        let t_prime = self.force(t_prime);
+        match (t.as_ref(), t_prime.as_ref()) {
+            (Val::Rigid(x, sp), _) if sp.is_empty() => { 
+                Ok(cxt.update_cxt(self, *x, t_prime))
             }
-            (v, Val::Rigid(x, sp)) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, x, v))
+            (_, Val::Rigid(x, sp)) if sp.is_empty() => { 
+                Ok(cxt.update_cxt(self, *x, t))
             }
             (
                 Val::SumCase { case_name: name1, datas: d1, .. },
@@ -103,7 +108,7 @@ impl Infer {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone(), t_span)?;
+                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
                     }
                     Ok(cxt)
                 } else {
@@ -119,27 +124,27 @@ impl Infer {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone(), t_span)?;
+                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
                     }
                     Ok(cxt)
                 } else {
                     Err(Error(t_span.map(|_| "".to_string())))
                 }
             }
-            (u, v) => {
-                self.unify_catch(cxt, u, v, t_span)
+            (_, _) => {
+                self.unify_catch(cxt, &t, &t_prime, t_span)
                     .map(|_| cxt.clone())
             }
         }
     }
-    pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, u32), Error> {
+    pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, u32), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        match inferred_type {
-            Val::U(u) => Ok((t_inferred, u)),
+        match inferred_type.as_ref() {
+            Val::U(u) => Ok((t_inferred, *u)),
             Val::Flex(m, sp) => {
-                let (pren, prune_non_linear) = self.invert(cxt.lvl, sp.clone())
+                let (pren, prune_non_linear) = self.invert(cxt.lvl, sp)
                     .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned())))?;
                 let mty = match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(ref a) => a.clone(),
@@ -150,29 +155,30 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&pr, mty.clone()).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
+                    self.prune_ty(&pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
                 }
 
                 if pren.dom.0 == 0 {
-                    match self.force(mty.clone()) {
+                    let mty = self.force(&mty);
+                    match mty.as_ref() {
                         Val::U(x) => {//TODO:x?
-                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(0), mty);
+                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(0).into(), mty);
                             Ok((t_inferred, 0))
                         },
                         _ => {
-                            let err_typ = self.force(mty);
+                            let err_typ = self.force(&mty);
                             Err(Error(t_span.map(|_|  format!("meta type {:?} is not a universe", err_typ))))
                         },
                     }
                 } else {
                     let rhs = self.rename(
                         &PartialRenaming {
-                            occ: Some(m),
+                            occ: Some(*m),
                             ..pren
                         },
-                        Val::U(0),
+                        &Val::U(0).into(),
                     ).map_err(|_| Error(t_span.map(|_| "when check universe, try to rename failed".to_string())))?;
-                    let solution = self.eval(&List::new(), self.lams(pren.dom, mty.clone(), rhs));
+                    let solution = self.eval(&List::new(), &self.lams(pren.dom, &mty, rhs));
                     self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
                     Ok((t_inferred, 0))
@@ -182,88 +188,77 @@ impl Infer {
             _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)))),
         }
     }
-    pub fn check(&mut self, cxt: &Cxt, t: Raw, a: Val) -> Result<Tm, Error> {
+    pub fn check(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
-        match (t, self.force(a)) {
+        let a = self.force(a);
+        match (t, a.as_ref()) {
             // Check lambda expressions
             (Raw::Lam(x, i, t), Val::Pi(x_t, i_t, a, b_closure))
-                if (i.clone(), i_t) == (Either::Name(x_t.clone()), Icit::Impl)
-                    || i == Either::Icit(i_t) =>
+                if (i.clone(), *i_t) == (Either::Name(x_t.clone()), Icit::Impl)
+                    || i == Either::Icit(*i_t) =>
             {
                 let body = self.check(
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a),
+                    &cxt.bind(x.clone(), self.quote(cxt.lvl, a), a.clone()),
                     *t,
-                    self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
+                    &self.closure_apply(b_closure, Val::vvar(cxt.lvl).into()),
                 )?;
-                Ok(Tm::Lam(x, i_t, Box::new(body)))
+                Ok(Tm::Lam(x.clone(), *i_t, body).into())
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
                 let body = self.check(
-                    &cxt.new_binder(x.clone(), self.quote(cxt.lvl, *a)),
+                    &cxt.new_binder(x.clone(), self.quote(cxt.lvl, a)),
                     t,
-                    self.closure_apply(&b_closure, Val::vvar(cxt.lvl)),
+                    &self.closure_apply(b_closure, Val::vvar(cxt.lvl).into()),
                 )?;
-                Ok(Tm::Lam(x, Icit::Impl, Box::new(body)))
+                Ok(Tm::Lam(x.clone(), Icit::Impl, body).into())
             }
             // Check let bindings
-            (Raw::Let(x, a, t, u), a_prime) => {
-                let (a_checked, _) = self.check_universe(cxt, *a)?;
-                let va = self.eval(&cxt.env, a_checked.clone());
-                let t_checked = self.check(cxt, *t, va.clone())?;
-                let vt = self.eval(&cxt.env, t_checked.clone());
+            (Raw::Let(x, ret_typ, t, u), _) => {
+                let (a_checked, _) = self.check_universe(cxt, *ret_typ)?;
+                let va = self.eval(&cxt.env, &a_checked);
+                let t_checked = self.check(cxt, *t, &va)?;
+                let vt = self.eval(&cxt.env, &t_checked);
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
-                    a_prime,
+                    &a,
                 )?;
                 Ok(Tm::Let(
                     x,
-                    Box::new(a_checked),
-                    Box::new(t_checked),
-                    Box::new(u_checked),
-                ))
+                    a_checked,
+                    t_checked,
+                    u_checked,
+                ).into())
             }
 
             // Handle holes
-            (Raw::Hole, a) => Ok(self.fresh_meta(cxt, a)),
+            (Raw::Hole, _) => Ok(self.fresh_meta(cxt, a)),
 
-            (Raw::Match(expr, clause), expected) => {
+            (Raw::Match(expr, clause), _) => {
                 let expr_span = expr.to_span();
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
-                let mut compiler = Compiler::new(expected);
-                let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
+                let mut compiler = Compiler::new(a);
+                let error = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, &tm))?;
                 if !error.is_empty() {
                     Err(Error(expr_span.map(|_| format!("{error:?}"))))
                 } else {
-                    /*let tree = ret
-                        .iter()
-                        .map(|x| (x.1, x.0.clone()))
-                        .collect::<HashMap<_, _>>();
-                    let t = clause
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, x)| (pattern_to_detail(cxt, x.0), tree.get(&idx).unwrap().clone()))
-                        .collect();*/
-                    /*if let Some(ret_type) = compiler.ret_type.clone() {
-                        println!("get match ret: {:?}", ret_type);
-                    }*/
                     Ok(
-                        Tm::Match(Box::new(tm), compiler.pats)
+                        Tm::Match(tm, compiler.pats).into()
                     ) //if there is any posible that has no return type?
                 }
             }
 
             // General case: infer type and unify
-            (t, expected) => {
+            (t, _) => {
                 let t_span = t.to_span();
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-                self.unify_catch(cxt, expected, inferred_type, t_span)?;
+                self.unify_catch(cxt, &a, &inferred_type, t_span)?;
                 Ok(t_inferred)
             }
         }
     }
-    pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
+    pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
         match t {
             Decl::Def {
                 name,
@@ -281,18 +276,18 @@ impl Infer {
                 let (ret_cxt, vty, vt, vtyp_pretty, vt_pretty) = {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
-                    let vtyp = self.eval(&ret_cxt.env, typ_tm.clone());
+                    let vtyp = self.eval(&ret_cxt.env, &typ_tm);
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone(), global_idx);
-                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
-                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
+                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
+                    let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
-                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, typ_tm.clone()));
-                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, t_tm.clone()));
+                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, &typ_tm));
+                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, &t_tm));
                     //println!("begin vt {}", "------".green());
-                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    let vt = self.eval(&fake_cxt.env, &t_tm);
                     self.global.insert(global_idx, vt.clone());
                     (
                         ret_cxt.define(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
@@ -311,13 +306,13 @@ impl Infer {
                         body_pretty: vt_pretty,
                     },
                     //vt,
-                    Val::U(0),
+                    Val::U(0).into(),
                     ret_cxt,
                 )) //TODO:vt may be wrong
             }
             Decl::Println(t) => Ok((
                 DeclTm::Println(self.infer_expr(cxt, t)?.0),
-                Val::U(0),
+                Val::U(0).into(),
                 cxt.clone(),
             )),
             Decl::Enum {
@@ -328,8 +323,11 @@ impl Infer {
             } => {
                 let mut universe_lvl = 0;
                 for p in params.iter() {
-                    if let Ok((Tm::U(lvl), _)) = self.infer_expr(cxt, p.1.clone()) {
-                        universe_lvl = max(lvl, universe_lvl);
+                    let u = self.infer_expr(cxt, p.1.clone());
+                    if let Ok(t) = u {
+                        if let Tm::U(lvl) = t.0.as_ref() {
+                            universe_lvl = max(*lvl, universe_lvl);
+                        }
                     }
                 }
                 for case in cases.iter() {
@@ -382,11 +380,11 @@ impl Infer {
                 let mut cxt = {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
-                    let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                    let vtyp = self.eval(&cxt.env, &typ_tm);
                     let fake_cxt = cxt.fake_bind(name.clone(), vtyp.clone(), global_idx);
-                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810));
-                    let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                    let vt = self.eval(&fake_cxt.env, t_tm.clone());
+                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
+                    let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
+                    let vt = self.eval(&fake_cxt.env, &t_tm);
                     self.global.insert(global_idx, vt.clone());
                     cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
@@ -424,30 +422,30 @@ impl Infer {
                     let typ = typ.1;
                     cxt = {
                         let (typ_tm, _) = self.check_universe(&cxt, typ)?;
-                        let vtyp = self.eval(&cxt.env, typ_tm.clone());
-                        let t_tm = self.check(&cxt, bod, vtyp.clone())?;
-                        let vt = self.eval(&cxt.env, t_tm.clone());
+                        let vtyp = self.eval(&cxt.env, &typ_tm);
+                        let t_tm = self.check(&cxt, bod, &vtyp)?;
+                        let vt = self.eval(&cxt.env, &t_tm);
                         cxt.define(c.0.clone(), t_tm, vt, typ_tm, vtyp)
                     };
                 }
-                Ok((DeclTm::Enum {}, Val::U(0), cxt))
+                Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
             }
             Decl::ImplDecl { name, params, trait_name, trait_params, methods } => {
                 let span = name.to_span();
                 let mut cxt = cxt.clone();
                 for (x, a, _) in params {
                     let (a_checked, _) = self.check_universe(&cxt, a)?;
-                    let a_eval = self.eval(&cxt.env, a_checked.clone());
-                    cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, a_eval.clone()), a_eval);
+                    let a_eval = self.eval(&cxt.env, &a_checked);
+                    cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, &a_eval), a_eval);
                 }
                 let typ = self.check_universe(&cxt, name.clone())?.0;
-                let typ = self.eval(&cxt.env, typ)
+                let typ = self.eval(&cxt.env, &typ)
                     .to_typ()
                     .ok_or_else(|| Error(span.map(|_| "Not a type".to_string())))?;
                 let mut trait_param = vec![typ.clone()];
                 for a in trait_params.clone() {
                     let (a_checked, _) = self.check_universe(&cxt, a)?;
-                    let a_eval = self.eval(&cxt.env, a_checked.clone());
+                    let a_eval = self.eval(&cxt.env, &a_checked);
                     match a_eval.to_typ() {
                         Some(x) => trait_param.push(x),
                         None => return Err(Error(span.map(|_| "Not a type".to_string()))),
@@ -467,7 +465,7 @@ impl Infer {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
                 for decl in methods {
-                    if let Decl::Def { name: def_name, params, ret_type, body } = decl {
+                    if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
                         ret = Raw::App(
                             Box::new(ret),
                             Box::new(Raw::Lam(
@@ -488,7 +486,7 @@ impl Infer {
                     body: ret,
                 })?;
                 cxt = c;
-                Ok((DeclTm::TraitImpl {}, Val::U(0), cxt.clone()))
+                Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
             Decl::TraitDecl { name, mut params, methods } => {
                 self.trait_solver.new_trait(name.data.clone());
@@ -520,11 +518,11 @@ impl Infer {
                 }) {
                     cxt = c;
                 }
-                Ok((DeclTm::Trait {}, Val::U(0), cxt.clone()))
+                Ok((DeclTm::Trait {}, Val::U(0).into(), cxt.clone()))
             },
         }
     }
-    pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
+    pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         /*println!(
             "{} {}",
             "infer".red(),
@@ -534,14 +532,14 @@ impl Infer {
         match t {
             // Infer variable types
             Raw::Var(x) => match cxt.src_names.get(&x.data) {
-                Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), a.clone())),
+                Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone())),
                 None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
             },
 
             Raw::Obj(x, t) => {
                 let (tm, a) = self.infer_expr(cxt, *x.clone())?;
-                let a = self.force(a);
-                match (tm, a.clone()) {
+                let a = self.force(&a);
+                match (tm, a.as_ref()) {
                     (tm, Val::Sum(_, params, cases, _)) => {
                         let mut c = None;
                         if cases.len() == 1 {
@@ -552,16 +550,16 @@ impl Infer {
                                     let mut typ = case_typ;
                                     let mut param = params.clone();
                                     param.reverse();
-                                    while let Val::Pi(name, icit, ty, closure) = typ {
+                                    while let Val::Pi(name, icit, ty, closure) = typ.as_ref().clone() {
                                         if icit == Icit::Expl {
-                                            ret.push((name, *ty));
-                                            typ = self.closure_apply(&closure, Val::U(0));//TODO:not Val::U(0)
+                                            ret.push((name, ty.clone()));
+                                            typ = self.closure_apply(&closure, Val::U(0).into())//TODO:not Val::U(0)
                                         } else {
                                             let val = param.pop()
                                                 .map(|x| x.1)
-                                                .unwrap_or(Val::U(0));
-                                            ret.push((name, *ty));
-                                            typ = self.closure_apply(&closure, val);
+                                                .unwrap_or(Val::U(0).into());
+                                            ret.push((name, ty.clone()));
+                                            typ = self.closure_apply(&closure, val)
                                         }
                                     }
                                     c = Some(ret);
@@ -574,12 +572,13 @@ impl Infer {
                                     .map(|(_, ty)| ty)
                             }).or(
                             params
-                                .into_iter()
+                                .iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
                                 .map(|(_, _, ty, _)| ty)
+                                .cloned()
                             ) {
                                 Ok((
-                                    Tm::Obj(Box::new(tm.clone()), t.clone()),
+                                    Tm::Obj(tm, t).into(),
                                     val,
                                 ))
                             } else {
@@ -588,12 +587,12 @@ impl Infer {
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
                         if let Some(val) = params
-                            .into_iter()
+                            .iter()
                             .find(|(fields_name, _, _)| fields_name == &t)
                             .map(|(_, ty, _)| ty) {
                                 Ok((
-                                    Tm::Obj(Box::new(tm.clone()), t.clone()),
-                                    val,
+                                    Tm::Obj(tm, t).into(),
+                                    val.clone(),
                                 ))
                             } else {
                                 self.trait_wrap(cxt, t, a, x, tm)
@@ -605,20 +604,20 @@ impl Infer {
 
             // Infer lambda expressions
             Raw::Lam(x, Either::Icit(i), t) => {
-                let new_meta = self.fresh_meta(cxt, Val::U(0));
-                let a = self.eval(&cxt.env, new_meta);
+                let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                let a = self.eval(&cxt.env, &new_meta);
                 //TODO:below may be wrong
-                let new_cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, a.clone()), a.clone());
+                let new_cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, &a), a.clone());
                 let infered = self.infer_expr(&new_cxt, *t);
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
-                let b_closure = self.close_val(cxt, b);
+                let b_closure = self.close_val(cxt, &b);
                 Ok((
-                    Tm::Lam(x.clone(), i, Box::new(t_inferred)),
-                    Val::Pi(x, i, Box::new(a), b_closure),
+                    Tm::Lam(x.clone(), i, t_inferred).into(),
+                    Val::Pi(x, i, a, b_closure).into(),
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), t) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
+            Raw::Lam(x, Either::Name(_), _) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
 
             // Infer function applications
             Raw::App(t, u, i) => {
@@ -640,103 +639,77 @@ impl Infer {
                     }
                 };
                 //println!("{} {:?} -> {:?}", "infer___".red(), t, tty); //debug
-                let (a, b_closure) = match self.force(tty) {
+                let tty = self.force(&tty);
+                let (a, b_closure) = match tty.as_ref() {
                     Val::Pi(_, i_t, a, b_closure) => {
-                        if i == i_t {
-                            (*a, b_closure)
+                        if i == *i_t {
+                            (a.clone(), b_closure.clone())
                         } else {
                             return Err(Error(t_span.map(|_| format!("icit mismatch {:?} {:?}", i, i_t))));
                         }
                     }
-                    tty => {
-                        let new_meta = self.fresh_meta(cxt, Val::U(0));
-                        let a = self.eval(&cxt.env, new_meta);
+                    _ => {
+                        let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                        let a = self.eval(&cxt.env, &new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
-                            Box::new(self.fresh_meta(
+                            self.fresh_meta(
                                 &cxt.bind(
                                     empty_span("x".to_string()),
-                                    self.quote(cxt.lvl, a.clone()),
+                                    self.quote(cxt.lvl, &a),
                                     a.clone(),
                                 ),
-                                Val::U(0),
-                            )),
+                                Val::U(0).into(),
+                            ),
                         );
                         self.unify_catch(
                             cxt,
-                            Val::Pi(
+                            &Val::Pi(
                                 empty_span("x".to_string()),
                                 i,
-                                Box::new(a.clone()),
+                                a.clone(),
                                 b_closure.clone(),
-                            ),
-                            tty,
+                            ).into(),
+                            &tty,
                             t_span,
                         )?;
                         (a, b_closure)
                     }
                 };
-                let u_checked = self.check(cxt, *u, a)?;
-                let mut ret_val = Tm::App(Box::new(t), Box::new(u_checked.clone()), i);
-                let mut ret_type = self.closure_apply(&b_closure, self.eval(&cxt.env, u_checked));
-                /*while let Val::Pi(p_name, Icit::Impl, typ, clos) = &ret_type {
-                    match typ.as_ref() {
-                        Val::Sum(name, params, _, true) => {
-                            let params = params
-                                .iter()
-                                .flat_map(|(_, tm, _, _)| self.force(tm.clone()).to_typ())
-                                .collect::<Vec<_>>();
-                            self.trait_solver.clean();
-                            if let Some(x) = self.trait_solver.synth(Assertion {
-                                name: name.data.clone(),
-                                arguments: params.clone(),
-                            }) {
-                                let (tm, val) = self.infer_expr(cxt, Raw::Var(name.clone().map(|_| format!("{:?}{:?}", x.name, x.arguments))))?;
-                                ret_val = Tm::App(
-                                    Box::new(ret_val),
-                                    Box::new(tm),
-                                    Icit::Impl,
-                                );
-                                ret_type = self.closure_apply(clos, val);
-                            } else {
-                                Err(Error(p_name.clone().map(|_| format!("solve trait failed: {:?}", params))))?
-                            }
-                        }
-                        _ => break,
-                    }
-                }*/
+                let u_checked = self.check(cxt, *u, &a)?;
+                let ret_type = self.closure_apply(&b_closure, self.eval(&cxt.env, &u_checked));
                 Ok((
-                    ret_val,
+                    Tm::App(t, u_checked, i).into(),
                     ret_type,
                 ))
             }
 
             // Infer universe type
-            Raw::U(x) => Ok((Tm::U(x), Val::U(x + 1))),
+            Raw::U(x) => Ok((Tm::U(x).into(), Val::U(x + 1).into())),
 
             // Infer dependent function types
             Raw::Pi(x, i, a, b) => {
                 let mut universe = 0;
                 let (a_checked, lvl) = self.check_universe(cxt, *a)?;
                 universe = max(universe, lvl);
-                let a_eval = self.eval(&cxt.env, a_checked.clone());
+                let a_eval = self.eval(&cxt.env, &a_checked);
                 let (b_checked, lvl) = self.check_universe(
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, a_eval.clone()), a_eval),
+                    &cxt.bind(x.clone(), self.quote(cxt.lvl, &a_eval), a_eval),
                     *b,
                 )?;
                 universe = max(universe, lvl);
                 Ok((
-                    Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
-                    Val::U(universe),
+                    Tm::Pi(x, i, a_checked, b_checked).into(),
+                    Val::U(universe).into(),
                 ))
             }
 
             // Infer let bindings
             Raw::Let(x, a, t, u) => {
                 let (a_checked, _) = self.check_universe(cxt, *a)?;
-                let va = self.eval(&cxt.env, a_checked.clone());
-                let t_checked = self.check(cxt, *t, va.clone())?;
-                let vt = self.eval(&cxt.env, t_checked.clone());
+                let va = self.eval(&cxt.env, &a_checked);
+                let t_checked = self.check(cxt, *t, &va)?;
+                let vt = self.eval(&cxt.env, &t_checked);
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),
@@ -750,23 +723,23 @@ impl Infer {
                 Ok((
                     Tm::Let(
                         x,
-                        Box::new(a_checked),
-                        Box::new(t_checked),
-                        Box::new(u_inferred),
-                    ),
+                        a_checked,
+                        t_checked,
+                        u_inferred,
+                    ).into(),
                     b,
                 ))
             }
 
             // Infer holes
             Raw::Hole => {
-                let new_meta = self.fresh_meta(cxt, Val::U(0));
-                let a = self.eval(&cxt.env, new_meta);
+                let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                let a = self.eval(&cxt.env, &new_meta);
                 let t = self.fresh_meta(cxt, a.clone());
                 Ok((t, a))
             }
 
-            Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal), Val::LiteralType)),
+            Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal).into(), Val::LiteralType.into())),
 
             Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()))),
 
@@ -775,12 +748,12 @@ impl Infer {
                     .iter()
                     .map(|ty| {
                         let (ty_checked, typ_val) = self.infer_expr(cxt, ty.2.clone())?;
-                        let typ = self.quote(cxt.lvl, typ_val.clone());
+                        let typ = self.quote(cxt.lvl, &typ_val);
                         Ok((ty.0.clone(), ty_checked, typ, ty.1))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 //TODO: universe need to consider cases?
-                Ok((Tm::Sum(name, new_params, cases, is_trait), Val::U(universe)))
+                Ok((Tm::Sum(name, new_params, cases, is_trait).into(), Val::U(universe).into()))
             }
 
             Raw::SumCase {
@@ -790,7 +763,7 @@ impl Infer {
                 datas,
             } => {
                 let (typ_checked, _) = self.infer_expr(cxt, *typ)?;
-                let typ_val = self.eval(&cxt.env, typ_checked.clone());
+                let typ_val = self.eval(&cxt.env, &typ_checked);
                 let datas = datas
                     .into_iter()
                     .map(|x| {
@@ -801,16 +774,16 @@ impl Infer {
                 Ok((
                     Tm::SumCase {
                         is_trait,
-                        typ: Box::new(typ_checked),
+                        typ: typ_checked,
                         case_name,
                         datas,
-                    },
+                    }.into(),
                     typ_val,
                 ))
             }
         }
     }
-    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Val, x: Box<Raw>, tm: Tm) -> Result<(Tm, Val), Error> {
+    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         if let Some(typ) = a.to_typ() {
             let traits = self.trait_definition
                 .clone()//TODO: can remove this clone?
@@ -826,7 +799,7 @@ impl Infer {
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
-                            name: x.clone().clone(),
+                            name: x.to_string(),
                             arguments: args,
                         })
                         .is_some()
@@ -881,7 +854,7 @@ impl Infer {
                 ))
                 .collect::<Vec<_>>();
             //TODO: if traits.len() > 1, return err
-            let traits = traits.first().and_then(|(name, decl)| {
+            let traits = traits.first().and_then(|(_, decl)| {
                     self.infer_expr(cxt, decl.clone()).ok()
                 });
             if let Some(ret) = traits {
