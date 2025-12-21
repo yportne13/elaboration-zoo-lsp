@@ -23,7 +23,7 @@ impl Val {
             Val::Rigid(_, _) => None,
             Val::Obj(val, span, sp) => None,
             Val::Lam(..) => None,
-            Val::Pi(span, icit, val, closure) => todo!(),
+            Val::Pi(span, icit, val, closure) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
             Val::LiteralType => todo!(),
             Val::LiteralIntro(span) => todo!(),

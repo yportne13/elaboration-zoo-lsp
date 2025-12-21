@@ -210,7 +210,8 @@ pub struct Infer {
     meta: Vec<MetaEntry>,
     global: HashMap<Lvl, Rc<VTy>>,
     trait_solver: typeclass::Synth,
-    trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
+    trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
+    trait_out_param: HashMap<String, Vec<bool>>,
 }
 
 impl Infer {
@@ -220,6 +221,7 @@ impl Infer {
             global: HashMap::new(),
             trait_solver: Default::default(),
             trait_definition: Default::default(),
+            trait_out_param: Default::default(),
         }
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
@@ -389,8 +391,10 @@ impl Infer {
                 let val = self.force(&val);
                 match val.as_ref() {
                     Val::SumCase { .. } => {
-                        let (tm, env) = Compiler::eval_aux(self, &val, env, cases).unwrap();
-                        self.eval(&env, &tm)
+                        match Compiler::eval_aux(self, &val, env, cases) {
+                            Some((tm, env)) => self.eval(&env, &tm),
+                            None => Val::Match(val, env.clone(), cases.clone()).into(),
+                        }
                     }
                     _ => {
                         Val::Match(val, env.clone(), cases.clone()).into()
@@ -520,7 +524,7 @@ impl Infer {
                 let err = match e {
                     UnifyError::Basic => format!(
                         //"can't unify {:?} == {:?}",
-                        "can't unify\n      find: {}\n  expected: {}",
+                        "can't unify\n  expected: {}\n      find: {}",
                         pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
                         pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
                     ),
@@ -1203,6 +1207,319 @@ def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (suc
     bits_adder_carrier lhs rhs false
 
 println bits_adder (cons true nil) (cons false nil)"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
+fn test8() {
+    let input = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Eq[T](x: T, y: T) {
+    refl(a: T) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons true (cons false nil)
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => add y (mul n y)
+}
+
+def four = add two two
+
+println four
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add n (succ m)) (succ (add n m)) =
+    match n {
+        case zero => refl[Nat] (succ m)
+        case succ(k) => cong_succ (add_succ_right k m)
+    }
+
+def add_comm (n: Nat, m: Nat): Eq[Nat] (add n m) (add m n) =
+    match n {
+        case zero => symm (add_zero_right m)
+        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
+    }
+
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add n (add m k)) =
+    match n {
+        case zero => rfl
+        case succ(l) => cong_succ (add_assoc l m k)
+    }
+
+def add_zero_left(m: Nat): Eq[Nat] (add zero m) m =
+    rfl
+
+def mul_zero_right(n: Nat): Eq[Nat] (mul n zero) zero =
+    match n {
+        case zero => rfl
+        case succ(k) => trans (refl (add zero (mul k zero))) (mul_zero_right k)
+    }
+
+def add_succ_zero_left(k: Nat): Eq[Nat] (add (succ zero) k) (succ k) =
+    cong_succ (add_zero_left k)
+
+def mul_one_right(n: Nat): Eq[Nat] (mul n (succ zero)) n =
+    match n {
+        case zero => rfl[Nat][zero]
+        case succ(k) =>
+            let ih = mul_one_right k;
+            let lemma: Eq[Nat] (add (succ zero) k) (succ k) = cong_succ (add_zero_left k);
+            trans (cong[Nat][Nat][add (succ zero)][mul k (succ zero)][k] ih) lemma
+    }
+
+struct Exists[A: Type 0, P: A -> Type 0] {
+    witness: A
+    proof: P witness
+}
+
+def exists_two: Exists[Nat][x => Eq x two] = Exists.mk[Nat][x => Eq x two] two rfl
+
+struct Point[T] {
+    x: T
+    y: T
+}
+
+def get_x[T](p: Point[T]): T = p.x
+
+def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
+    new Point((add p1.x p2.x), (add p1.y p2.y))
+
+def start_point = new Point(zero, four)
+
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+
+println (point_add start_point end_point)
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+enum HighLvl[A] {
+    case1(x: A)
+    case2(x: test1)
+}
+
+def test2: HighLvl[Nat] = case1 zero
+
+def test3: Type 2 = HighLvl[Nat]
+
+enum HighLvl2[A: Type 2] {
+    case2_1(x: A)
+    case2_2(x: Nat)
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(x: Nat)
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
+
+def Eq[A](x: A, y: A): Type 1 = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = string_concat a.name b.name
+
+def sigA = new Bits("A", four)
+
+def sigB = new Bits("B", four)
+
+def sigC = new Bits("C", two)
+
+def sigD = new Bits("D", two)
+
+def ab = assign sigA sigB refl
+
+def cd = assign sigC sigD refl
+
+def three = add two (succ zero)
+"#;
+    println!("{}", run(input, 0).unwrap());
+}
+
+#[test]
+fn test9() {
+    let input = r#"
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq[A] a a
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+enum Product[A, B] {
+    product(a: A, b: B)
+}
+
+def trans[A, x, y, z: A](e1: Eq x y, e2: Eq y z): Eq x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
+    match lhs {
+        case false => product false rhs
+        case true => match rhs {
+            case false => product false true
+            case true => product true false
+        }
+    }
+
+def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
+    match lhs {
+        case false => half_adder rhs carrier
+        case true => match rhs {
+            case false => half_adder true carrier
+            case true => product true carrier
+        }
+    }
+
+def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (succ len) =
+    match lhs {
+        case nil => cons carrier nil
+        case cons[_](n, taill) => match rhs {
+            case cons[_](m, tailr) => match bits_adder_carrier taill tailr carrier {
+                case cons[_](c, tail) => match full_adder n m c {
+                    case product(a, b) => cons a (cons b tail)
+                }
+            }
+        }
+    }
+
+def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (succ len) =
+    bits_adder_carrier lhs rhs false
+
+println bits_adder (cons true nil) (cons false nil)
+
+def full_adder_comm(x: Bool, y: Bool, c: Bool): Eq (full_adder x y c) (full_adder y x c) = _
+
+def step[len: Nat](n: Bool, m: Bool, v: Vec[Bool] (succ len)): Vec[Bool] (succ (succ len)) =
+    match v {
+        case cons(c0, tail0) => match full_adder n m c0 {
+            case product(a, b) => cons a (cons b tail0)
+        }
+    }
+
+def cong_step[len: Nat, n: Bool, m: Bool, x: Vec[Bool] (succ len), y: Vec[Bool] (succ len)](e: Eq x y): Eq (step n m x) (step n m y) =
+    match e {
+        case refl(a) => refl[Vec[Bool] (succ (succ len))] (step[len] n m a)
+    }
+
+def carry_step[len: Nat](tail: Vec[Bool] len, p: Product[Bool][Bool]): Vec[Bool] (succ (succ len)) =
+    match p {
+        case product(a, b) => cons a (cons b tail)
+    }
+
+def cong_carry_step[len: Nat, tail: Vec[Bool] len, p: Product[Bool][Bool], q: Product[Bool][Bool]](e: Eq p q): Eq (carry_step tail p) (carry_step tail q) =
+    match e {
+        case refl(a) => refl (carry_step tail a)
+    }
+
+def bits_adder_carrier_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, c: Bool): Eq (bits_adder_carrier lhs rhs c) (bits_adder_carrier rhs lhs c) =
+    match lhs {
+        case nil => match rhs {
+            case nil => refl (cons c nil)
+        }
+        case cons(n, taill) => match rhs {
+            case cons(m, tailr) =>
+                trans (cong_step[x=bits_adder_carrier taill tailr c][bits_adder_carrier tailr taill c] (bits_adder_carrier_comm taill tailr c)) (match bits_adder_carrier tailr taill c {
+                        case cons(c1, tail1) =>
+                            cong_carry_step[tail=tail1][full_adder n m c1][full_adder m n c1] (full_adder_comm n m c1)
+                    })
+        }
+    }
+
+"#;
     println!("{}", run(input, 0).unwrap());
 }
 

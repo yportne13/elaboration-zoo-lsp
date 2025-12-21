@@ -401,7 +401,7 @@ impl Compiler {
                                     context,
                                     &Pattern::Con(
                                         constr.clone(),
-                                        vec![Pattern::Any(empty_span(()), Icit::Expl); 999],
+                                        vec![],
                                         *icit,
                                     ),
                                 );

@@ -169,6 +169,7 @@ impl Cxt {
                 let env = self.env.change_n(x_prime, |_| v);
                 let mut new_src_names = self.src_names.clone();
                 let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
+                //let locals = self.locals.clone().update_by_cxt(infer, self.lvl, &self.env);
         
                 Cxt {
                     env: env_t,

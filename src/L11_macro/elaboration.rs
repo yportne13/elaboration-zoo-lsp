@@ -451,6 +451,13 @@ impl Infer {
                         None => return Err(Error(span.map(|_| "Not a type".to_string()))),
                     };
                 }
+                let out_param = self.trait_out_param.get(&trait_name.data)
+                    .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n))))?;
+                let trait_param = trait_param.into_iter()
+                    .zip(out_param)
+                    .filter(|x| !x.1)
+                    .map(|x| x.0)
+                    .collect();
                 let typ_name = format!("{:?}{:?}", trait_name.data, trait_param);
                 let inst = Instance {
                     assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
@@ -492,7 +499,12 @@ impl Infer {
                 self.trait_solver.new_trait(name.data.clone());
                 let mut param = vec![(name.clone().map(|_| "Self".to_owned()), Raw::Hole, Icit::Impl)];
                 param.append(&mut params);
-                self.trait_definition.insert(name.data.clone(), (param.clone(), methods.clone()));
+                let out_param = param.iter().map(|x| match &x.1 {
+                        Raw::App(t, ..) if matches!(t.as_ref(), Raw::Var(d) if d.data == "outParam") => true,
+                        _ => false,
+                    }).collect::<Vec<_>>();
+                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), methods.clone()));
+                self.trait_out_param.insert(name.data.clone(), out_param);
                 let mut cxt = cxt.clone();
                 if let Ok((_, _, c)) = self.infer(&cxt, Decl::Enum {
                     is_trait: true,
@@ -538,6 +550,11 @@ impl Infer {
 
             Raw::Obj(x, t) => {
                 let t = t.unwrap_or(empty_span("".to_owned()));
+                if t.data == "mk" {
+                    if let Raw::Var(sum_name) = x.as_ref() {
+                        return self.infer_expr(cxt, Raw::Var(sum_name.clone().map(|n| format!("{n}.mk"))))
+                    }
+                }
                 let (tm, a) = self.infer_expr(cxt, *x.clone())?;
                 let a = self.force(&a);
                 match (tm, a.as_ref()) {
@@ -789,13 +806,14 @@ impl Infer {
             let traits = self.trait_definition
                 .clone()//TODO: can remove this clone?
                 .iter()
-                .flat_map(|(trait_name, (trait_params, methods))| {
+                .flat_map(|(trait_name, (trait_params, out_param, methods))| {
                     methods.iter()
                         .find(|x| x.0.data == t.data)
-                        .map(|x| (trait_name, trait_params, x))
+                        .map(|x| (trait_name, trait_params, out_param, x))
                 })
-                .filter(|(x, args, _)| {
-                    let mut args = vec![super::typeclass::Typ::Any; args.len()];
+                .filter(|(x, _, out_param, _)| {
+                    let len = out_param.iter().filter(|x| !**x).count();
+                    let mut args = vec![super::typeclass::Typ::Any; len];
                     args[0] = typ.clone();
                     self.trait_solver.clean();
                     self.trait_solver
@@ -805,7 +823,7 @@ impl Infer {
                         })
                         .is_some()
                 })
-                .map(|(trait_name, trait_params, (methods_name, methods_params, ret_type))| (
+                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type))| (
                     trait_name.clone(),
                     {
                         let params = {

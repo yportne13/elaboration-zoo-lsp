@@ -158,7 +158,15 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     let num = pmatch(|c: char| c.is_ascii_digit()).map(|x| x.map(|y| (y, Num)));
-    let endline = pmatch("\n").map(|x| x.map(|y| (y, EndLine)));
+    let endline = ws(pmatch("\n")).many1().map(|x| {
+        let x0 = x.first().unwrap();
+        Span {
+            data: (x0.data, EndLine),
+            start_offset: x0.start_offset,
+            end_offset: x.last().unwrap().end_offset,
+            path_id: x0.path_id,
+        }
+    });
     let err_token = pmatch(|c: char| !c.is_ascii_whitespace()).map(|x| x.map(|y| (y, ErrToken)));
     fn ws<'a, A, P: Parser<Span<&'a str>, A>>(p: P) -> impl Parser<Span<&'a str>, A> {
         let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();

@@ -385,8 +385,10 @@ impl Infer {
                 let val = self.force(&val);
                 match val.as_ref() {
                     Val::SumCase { .. } => {
-                        let (tm, env) = Compiler::eval_aux(self, &val, env, cases).unwrap();
-                        self.eval(&env, &tm)
+                        match Compiler::eval_aux(self, &val, env, cases) {
+                            Some((tm, env)) => self.eval(&env, &tm),
+                            None => Val::Match(val, env.clone(), cases.clone()).into(),
+                        }
                     }
                     _ => {
                         Val::Match(val, env.clone(), cases.clone()).into()
