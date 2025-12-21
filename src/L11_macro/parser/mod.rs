@@ -204,6 +204,16 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> I
         )))//TODO:do not unwrap
         .or(kw(Hole).map(|_| Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
+        .or(string(Num).map(|x| {
+            let num_span = x.map(|x| x.parse::<u64>().unwrap());
+            let mut ret = Raw::Var(num_span.to_span().map(|_| "zero".to_owned()));
+            let mut num = num_span.data;
+            while num > 0 {
+                ret = Raw::app(Raw::Var(num_span.to_span().map(|_| "succ".to_owned())), ret);
+                num -= 1;
+            }
+            ret
+        }))
         .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole)))
         .parse(input, state)
 }
@@ -217,13 +227,128 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
         .map_err(|e| IError { msg: e.msg.map(|_| ErrMsg::ExpectAtom) })
 }
 
+fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<IError>, IError> {
+    move |input: &'b [TokenNode<'a>], state: &mut Vec<IError>| {
+        let (mut input, mut lhs) = p_atom/*.or(
+            (string(Op), expr_bp())
+        )*/.parse(input, state)?;
+
+        while let Ok((input_t, op)) = string(Op).parse(input, state) {
+            input = input_t;
+
+            if let Some((l_bp, ())) = postfix_binding_power(&op) {
+                if l_bp < min_bp {
+                    break;
+                }
+
+                lhs = /*if op == '[' {
+                    let rhs = expr_bp(lexer, 0);
+                    assert_eq!(lexer.next(), Token::Op(']'));
+                    S::Cons(op, vec![lhs, rhs])
+                } else*/ {
+                    Raw::app(lhs, Raw::Var(op))
+                };
+                continue;
+            }
+
+            if let Some((l_bp, r_bp)) = infix_binding_power(&op) {
+                if l_bp < min_bp {
+                    break;
+                }
+
+                lhs = if &op.data == "?" {
+                    let mhs = match expr_bp(0).parse(input, state) {
+                        Ok((input_t, mhs)) => {
+                            input = input_t;
+                            mhs
+                        }
+                        Err(e) => {
+                            state.push(e);
+                            Raw::Hole
+                        }
+                    };
+                    match kw(T![:]).parse(input, state) {
+                        Ok((input_t, _)) => {
+                            input = input_t;
+                        }
+                        Err(e) => {
+                            state.push(e);
+                        }
+                    }
+                    let rhs = match expr_bp(r_bp).parse(input, state) {
+                        Ok((input_t, rhs)) => {
+                            input = input_t;
+                            rhs
+                        },
+                        Err(e) => {
+                            state.push(e);
+                            Raw::Hole
+                        }
+                    };
+                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span("mux".to_owned())), lhs), mhs), rhs)
+                } else {
+                    let rhs = match expr_bp(r_bp).parse(input, state) {
+                        Ok((input_t, rhs)) => {
+                            input = input_t;
+                            rhs
+                        },
+                        Err(e) => {
+                            state.push(e);
+                            Raw::Hole
+                        }
+                    };
+                    Raw::app(Raw::Obj(Box::new(lhs), Some(op)), rhs)
+                };
+                continue;
+            }
+
+            break;
+        }
+
+        Ok((input, lhs))
+    }
+}
+
+fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Raw> {
+    expr_bp(0).parse(input, state)
+}
+
+fn prefix_binding_power(op: &Span<String>) -> ((), u8) {
+    match op.data.as_str() {
+        "+" | "-" => ((), 9),
+        _ => panic!("bad op: {:?}", op),
+    }
+}
+
+fn postfix_binding_power(op: &Span<String>) -> Option<(u8, ())> {
+    let res = match op.data.as_str() {
+        "!" => (11, ()),
+        "[" => (11, ()),
+        _ => return None,
+    };
+    Some(res)
+}
+
+fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
+    let res = match op.data.as_str() {
+        "=" => (2, 1),
+        "?" => (4, 3),
+        "+" | "-" => (5, 6),
+        "*" | "/" => (7, 8),
+        "." => (15, 16),
+        "::" => (14, 13),
+        _ => return None,
+    };
+    Some(res)
+}
+
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, (Either, Raw)> {
     let named_impl_arg = square_cut(
         (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
     ).map(|x| x.unwrap_or((Either::Icit(Icit::Impl), Raw::Hole)));
 
-    let explicit_arg = p_atom.map(|t| (Either::Icit(Icit::Expl), t));
+    let explicit_arg = expr.map(|t| (Either::Icit(Icit::Expl), t));
 
     let arg_parser = named_impl_arg.or(explicit_arg);
 
@@ -231,7 +356,7 @@ fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
 }
 
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Raw> {
-    let (input, head) = p_atom(input, state)?;
+    let (input, head) = expr(input, state)?;
     let (input, args) = p_arg.many0().parse(input, state)?;
 
     let result = args.into_iter().fold(head, |acc, (icit, arg)| {
@@ -435,7 +560,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
 fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Decl> {
     Cut((
         kw(DefKeyword),
-        string(Ident),
+        string(Ident).or(string(Op)),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
@@ -532,7 +657,7 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> 
 fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Decl> {
     let p_def_declare = (
         kw(DefKeyword),
-        string(Ident),
+        string(Ident).or(string(Op)),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),

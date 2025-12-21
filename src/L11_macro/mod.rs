@@ -599,6 +599,8 @@ pub fn preprocess(s: &str) -> String {
 #[test]
 fn test_trait() {
     let input = r#"
+def outParam[A](a: A): A = a
+
 enum Bool {
     true
     false
@@ -641,24 +643,24 @@ def t[T][s: ToString[T]](x: T): String =
 
 println (t true)
 
-trait Add[T] {
-    def add(that: T): Self
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
 }
 
-impl Add[Nat] for Nat {
-    def add(that: Nat): Nat =
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
         match that {
             case zero => this
-            case succ(n) => succ (n.add this)
+            case succ(n) => succ (n + this)
         }
 }
 
 def mul(x: Nat, y: Nat) = match x {
     case zero => zero
-    case succ(n) => y.add (mul n y)
+    case succ(n) => y + (mul n y)
 }
 
-def four = two.add two
+def four = two + two
 
 println four
 
@@ -669,14 +671,14 @@ struct Point[T] {
 
 def get_x[T](p: Point[T]): T = p.x
 
-impl Add[Point[Nat]] for Point[Nat] {
-    def add(that: Point[Nat]): Point[Nat] =
-        new Point(this.x.add that.x, this.y.add that.y)
+impl Add[Point[Nat], Point[Nat]] for Point[Nat] {
+    def +(that: Point[Nat]): Point[Nat] =
+        new Point(this.x + that.x, this.y + that.y)
 }
 
-impl Add[Nat] for Point[Nat] {
-    def add(that: Nat): Point[Nat] =
-        new Point(this.x.add that, this.y.add that)
+impl Add[Nat, Point[Nat]] for Point[Nat] {
+    def +(that: Nat): Point[Nat] =
+        new Point(this.x + that, this.y + that)
 }
 
 def start_point = new Point(zero, four)
@@ -685,7 +687,7 @@ def end_point = new Point(four, two)
 
 println (get_x start_point)
 
-println (start_point.add end_point)
+println (start_point + end_point)
 
 def test0: Type 1 = Type 0
 
@@ -1411,6 +1413,8 @@ def ab = assign sigA sigB refl
 def cd = assign sigC sigD refl
 
 def three = add two (succ zero)
+
+println 5
 "#;
     println!("{}", run(input, 0).unwrap());
 }

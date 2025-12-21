@@ -71,6 +71,9 @@ pub enum Raw {
 }
 
 impl Raw {
+    pub fn app(lhs: Raw, rhs: Raw) -> Self {
+        Raw::App(Box::new(lhs), Box::new(rhs), Either::Icit(Icit::Expl))
+    }
     pub fn to_span(&self) -> Span<()> {
         match self {
             Raw::Var(span) => span.to_span(),
