@@ -442,8 +442,16 @@ impl Infer {
             lvl = lvl + 1;
         }*/
         if let Val::Sum(name, params, _, true) = &x {
+            let out_param = if let Some(o) = self.trait_out_param.get(&name.data) {
+                o
+            } else {
+                return Ok(None)
+            };
             let params = params
                 .iter()
+                .zip(out_param)
+                .filter(|(_, x)| !**x)
+                .map(|x| x.0)
                 .flat_map(|(_, tm, _, _)| self.force(tm).to_typ())
                 .collect::<Vec<_>>();
             self.trait_solver.clean();

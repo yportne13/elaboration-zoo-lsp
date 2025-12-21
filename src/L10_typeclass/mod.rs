@@ -204,7 +204,8 @@ pub struct Infer {
     meta: Vec<MetaEntry>,
     global: HashMap<Lvl, Rc<VTy>>,
     trait_solver: typeclass::Synth,
-    trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
+    trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
+    trait_out_param: HashMap<String, Vec<bool>>,
 }
 
 impl Infer {
@@ -214,6 +215,7 @@ impl Infer {
             global: HashMap::new(),
             trait_solver: Default::default(),
             trait_definition: Default::default(),
+            trait_out_param: Default::default(),
         }
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
@@ -514,7 +516,7 @@ impl Infer {
                 let err = match e {
                     UnifyError::Basic => format!(
                         //"can't unify {:?} == {:?}",
-                        "can't unify\n      find: {}\n  expected: {}",
+                        "can't unify\n  expected: {}\n      find: {}",
                         pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
                         pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
                     ),
@@ -585,6 +587,8 @@ pub fn preprocess(s: &str) -> String {
 #[test]
 fn test_trait() {
     let input = r#"
+def outParam[A](a: A): A = a
+
 enum Bool {
     true
     false
@@ -627,11 +631,11 @@ def t[T][s: ToString[T]](x: T): String =
 
 println (t true)
 
-trait Add[T] {
-    def add(that: T): Self
+trait Add[T, O: outParam(Type 0)] {
+    def add(that: T): O
 }
 
-impl Add[Nat] for Nat {
+impl Add[Nat, Nat] for Nat {
     def add(that: Nat): Nat =
         match that {
             case zero => this
@@ -655,12 +659,12 @@ struct Point[T] {
 
 def get_x[T](p: Point[T]): T = p.x
 
-impl Add[Point[Nat]] for Point[Nat] {
+impl Add[Point[Nat], Point[Nat]] for Point[Nat] {
     def add(that: Point[Nat]): Point[Nat] =
         new Point(this.x.add that.x, this.y.add that.y)
 }
 
-impl Add[Nat] for Point[Nat] {
+impl Add[Nat, Point[Nat]] for Point[Nat] {
     def add(that: Nat): Point[Nat] =
         new Point(this.x.add that, this.y.add that)
 }
