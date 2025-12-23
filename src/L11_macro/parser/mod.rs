@@ -315,15 +315,15 @@ fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRes
 
 fn prefix_binding_power(op: &Span<String>) -> ((), u8) {
     match op.data.as_str() {
-        "+" | "-" => ((), 9),
+        "+" | "-" => ((), 19),
         _ => panic!("bad op: {:?}", op),
     }
 }
 
 fn postfix_binding_power(op: &Span<String>) -> Option<(u8, ())> {
     let res = match op.data.as_str() {
-        "!" => (11, ()),
-        "[" => (11, ()),
+        "!" => (20, ()),
+        "[" => (20, ()),
         _ => return None,
     };
     Some(res)
@@ -333,11 +333,25 @@ fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
     let res = match op.data.as_str() {
         "=" => (2, 1),
         "?" => (4, 3),
-        "+" | "-" => (5, 6),
-        "*" | "/" => (7, 8),
-        "." => (15, 16),
-        "::" => (14, 13),
-        _ => return None,
+        "+" | "-" => (15, 16),
+        "*" | "/" | "%" => (17, 18),
+        "." => (25, 26),
+        "::" => (24, 23),
+        x => if x.contains(':') {
+            (22, 21)
+        } else if x.contains(['*', '/', '%']){
+            (17, 18)
+        } else if x.contains(['+', '-']) {
+            (15, 16)
+        } else if x.contains(['=', '<', '>']) {
+            (13, 14)
+        } else if x.contains(['&', '|']) {
+            (11, 12)
+        } else if x.contains(['^']) {
+            (9, 10)
+        } else {
+            return None
+        },
     };
     Some(res)
 }
