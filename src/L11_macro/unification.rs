@@ -459,8 +459,7 @@ impl Infer {
                 name: name.data.clone(),
                 arguments: params.clone(),
             }) {
-                let (tm, _) = self.infer_expr(cxt, Raw::Var(name.clone().map(|_| format!("{:?}{:?}", a.name, a.arguments))))
-                    .map_err(|e| e.0.data)?;
+                let tm = Tm::Var(lvl2ix(cxt.lvl, a)).into();
                 let val = self.eval(&cxt.env, &tm);
                 Ok(Some((tm, val)))
             } else {

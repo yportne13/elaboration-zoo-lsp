@@ -462,6 +462,7 @@ impl Infer {
                 let inst = Instance {
                     assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
                     dependencies: List::new(),
+                    lvl: cxt.lvl,
                 };
                 // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
                 // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
@@ -832,7 +833,6 @@ impl Infer {
                                 Raw::Var(methods_name.clone().map(|_| "Self".to_owned())),
                                 Icit::Expl
                             ));
-                            params.append(&mut methods_params.clone());
                             params.push((
                                 methods_name.clone().map(|_| "$$".to_owned()),
                                 trait_params.iter()
@@ -843,6 +843,7 @@ impl Infer {
                                     ),
                                 Icit::Impl
                             ));
+                            params.append(&mut methods_params.clone());
                             params
                         };
                         let body = std::iter::once(Raw::Var(methods_name.clone().map(|_| "$this".to_owned())))

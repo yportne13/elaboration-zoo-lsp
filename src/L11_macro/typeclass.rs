@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::list::List;
 
-use super::{Val, Span, empty_span};
+use super::{Val, Span, empty_span, Lvl};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Typ {
@@ -56,6 +56,7 @@ pub struct Assertion {
 pub struct Instance {
     pub assertion: Assertion,
     pub dependencies: List<Assertion>,
+    pub lvl: Lvl,
 }
 
 /// A node in the "search tree" that stores information about
@@ -74,6 +75,7 @@ pub struct GeneratorNode {
 pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
+    lvl: Lvl,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -103,7 +105,7 @@ pub enum Waiter {
 #[derive(Debug, Clone)]
 pub struct TableEntry {
     waiters: Vec<Waiter>,
-    answers: Vec<Assertion>,
+    answers: Vec<(Assertion, Lvl)>,
 }
 
 /// The state of the algorithm.
@@ -122,7 +124,7 @@ pub struct Synth {
     /// Information about each `subgoal` being solved.
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Assertion>,
+    root_answer: Option<Lvl>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -156,7 +158,7 @@ impl Synth {
         subgoal == answer
     }
 
-    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<List<Assertion>> {
+    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Lvl)> {
         // 名字必须匹配
         if goal.name != instance.assertion.name {
             return None;
@@ -180,11 +182,11 @@ impl Synth {
             .dependencies
             .map(|dep| apply_subst_to_assertion(dep, &subst));
 
-        Some(concrete_deps)
+        Some((concrete_deps, instance.lvl))
     }
 
     /// The entry point for the algorithm.
-    pub fn synth(&mut self, assertion: Assertion) -> Option<Assertion> {
+    pub fn synth(&mut self, assertion: Assertion) -> Option<Lvl> {
         // Insert the "root" goal to be solved.
         self.new_subgoal(&assertion, &Waiter::Root);
 
@@ -232,6 +234,7 @@ impl Synth {
                             self.consume(ConsumerNode {
                                 goal: consumer_node.goal,
                                 subgoals: remaining,
+                                lvl: consumer_node.lvl,
                             });
                         } else {
                             continue;
@@ -246,8 +249,8 @@ impl Synth {
                     generator_node.index -= 1;
                     let goal = generator_node.goal.clone();
                     let instance = generator_node.instances[generator_node.index].clone();
-                    if let Some(subgoals) = self.try_resolve(&goal, &instance) {
-                        self.consume(ConsumerNode { goal, subgoals });
+                    if let Some((subgoals, lvl)) = self.try_resolve(&goal, &instance) {
+                        self.consume(ConsumerNode { goal, subgoals, lvl });
                     }
                 }
             } else {
@@ -298,10 +301,10 @@ impl Synth {
                     .entry(consumer_node.goal.clone())
                     .and_modify(|TableEntry { waiters, answers }| {
                         let answer = consumer_node.goal;
-                        answers.push(answer.clone());
+                        answers.push((answer.clone(), consumer_node.lvl));
                         for waiter in waiters {
                             match waiter {
-                                Waiter::Root => self.root_answer = Some(answer.clone()),
+                                Waiter::Root => self.root_answer = Some(consumer_node.lvl),
                                 Waiter::ConsumerNode(consumer_node) => self
                                     .resume_stack
                                     .push((consumer_node.clone(), answer.clone())),
@@ -315,7 +318,7 @@ impl Synth {
                 {
                     for answer in answers {
                         self.resume_stack
-                            .push((consumer_node.clone(), answer.clone()));
+                            .push((consumer_node.clone(), answer.0.clone()));
                     }
                     waiters.push(Waiter::ConsumerNode(consumer_node));
                 } else {

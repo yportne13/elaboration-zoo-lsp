@@ -633,16 +633,29 @@ def t[T][s: ToString[T]](x: T): String =
 
 println (t true)
 
+trait Say {
+    def say(x: Nat): String
+}
+
+impl[T] Say for T {
+    def say(x: Nat): String = "hello"
+}
+
+println (zero.say zero)
+
 trait Add[T, O: outParam(Type 0)] {
     def add(that: T): O
 }
 
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
 impl Add[Nat, Nat] for Nat {
     def add(that: Nat): Nat =
-        match that {
-            case zero => this
-            case succ(n) => succ (n.add this)
-        }
+        nat_add_helper this that
 }
 
 def mul(x: Nat, y: Nat) = match x {
