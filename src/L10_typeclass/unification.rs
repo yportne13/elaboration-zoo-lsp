@@ -434,14 +434,14 @@ impl Infer {
         }
         Ok(())
     }
-    pub fn solve_trait(&mut self, cxt: &Cxt, x: &Val) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
+    pub fn solve_trait(&mut self, cxt: &Cxt, x: &Rc<Val>) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
         /*let mut x = x.clone();
         let mut lvl = cxt.lvl;
         while let Val::Pi(_, _, _, clos) = x {
             x = self.closure_apply(&clos, Val::vvar(lvl));
             lvl = lvl + 1;
         }*/
-        if let Val::Sum(name, params, _, true) = &x {
+        if let Val::Sum(name, params, _, true) = x.as_ref() {
             let out_param = if let Some(o) = self.trait_out_param.get(&name.data) {
                 o
             } else {
@@ -461,6 +461,9 @@ impl Infer {
             }) {
                 let tm = Tm::Var(lvl2ix(cxt.lvl, a)).into();
                 let val = self.eval(&cxt.env, &tm);
+                if let Val::SumCase { typ, .. } = val.as_ref() {
+                    let _ = self.unify(cxt.lvl, cxt, typ, x);
+                }
                 Ok(Some((tm, val)))
             } else {
                 Err(format!("solve trait failed: {:?}", params))?

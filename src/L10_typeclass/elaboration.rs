@@ -846,14 +846,14 @@ impl Infer {
                             params.append(&mut methods_params.clone());
                             params
                         };
-                        let body = std::iter::once(Raw::Var(methods_name.clone().map(|_| "$this".to_owned())))
-                            .chain(methods_params.iter().map(|x| Raw::Var(x.0.clone())))
+                        let body = std::iter::once((Raw::Var(methods_name.clone().map(|_| "$this".to_owned())), Icit::Expl))
+                            .chain(methods_params.iter().map(|x| (Raw::Var(x.0.clone()), x.2)))
                             .fold(
                                 Raw::Obj(
                                     Box::new(Raw::Var(methods_name.clone().map(|_| "$$".to_owned()))),
                                     methods_name.clone(),
                                 ),
-                                |ret, x| Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Expl))
+                                |ret, (x, icit)| Raw::App(Box::new(ret), Box::new(x), Either::Icit(icit))
                             );
                         Raw::Let(
                             methods_name.clone().map(|x| format!("${x}")),
