@@ -37,7 +37,7 @@ const sharedDesktopOptions = {
 
 /** @type BuildOptions */
 const desktopOptions = {
-	entryPoints: ['src/extension.ts'],
+	entryPoints: ['src/extension.desktop.ts'],
 	outfile: 'dist/desktop/extension.js',
 	format: 'cjs',
 	...sharedDesktopOptions,

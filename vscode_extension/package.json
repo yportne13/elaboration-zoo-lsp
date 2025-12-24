@@ -22,7 +22,7 @@
 	"engines": {
 		"vscode": "^1.88.0"
 	},
-	"main": "./client/out/extension",
+	"main": "./client/dist/desktop/extension",
 	"browser": "./client/dist/web/extension",
 	"extensionDependencies": [
 		"ms-vscode.wasm-wasi-core"

@@ -4,7 +4,7 @@
  * ------------------------------------------------------------------------------------------ */
 
 import { ExtensionContext, Uri, window, workspace, commands } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } from 'vscode-languageclient/node';
+import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } from 'vscode-languageclient';
 import { Wasm, ProcessOptions } from '@vscode/wasm-wasi';
 import { createStdioOptions, createUriConverters, startServer } from '@vscode/wasm-wasi-lsp';
 
