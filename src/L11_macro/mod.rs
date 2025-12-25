@@ -1435,6 +1435,8 @@ println 5
 #[test]
 fn test9() {
     let input = r#"
+def outParam[A](a: A): A = a
+
 enum Eq[A](x: A, y: A) {
     refl(a: A) -> Eq[A] a a
 }
@@ -1444,82 +1446,162 @@ enum Bool {
     false
 }
 
+trait Not {
+    def not: Self
+}
+
+impl Not for Bool {
+    def not: Bool = match this {
+        case true => false
+        case false => true
+    }
+}
+
+trait Xor[T, O: outParam(Type 0)] {
+    def ^(that: T): O
+}
+
+impl Xor[Bool, Bool] for Bool {
+    def ^(that: Bool): Bool =
+        match this {
+            case false => that
+            case true => that.not
+        }
+}
+
+trait And[T, O: outParam(Type 0)] {
+    def &(that: T): O
+}
+
+impl And[Bool, Bool] for Bool {
+    def &(that: Bool): Bool =
+        match this {
+            case false => false
+            case true => that
+        }
+}
+
+trait Or[T, O: outParam(Type 0)] {
+    def |(that: T): O
+}
+
+impl Or[Bool, Bool] for Bool {
+    def |(that: Bool): Bool =
+        match this {
+            case false => that
+            case true => true
+        }
+}
+
 enum Nat {
     zero
     succ(x: Nat)
 }
 
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
 enum Vec[A](len: Nat) {
     nil -> Vec[A] zero
-    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (l + 1)
 }
 
 enum Product[A, B] {
     product(a: A, b: B)
 }
 
-def trans[A, x, y, z: A](e1: Eq x y, e2: Eq y z): Eq x z =
-    match e1 {
-        case refl(a) => e2
-    }
+trait Cons {
+    def ::[l: Nat](that: Vec[Self] l): Vec[Self] (l + 1)
+}
+
+impl[T] Cons for T {
+    def ::[l: Nat](that: Vec[T] l): Vec[T] (l + 1) =
+        cons this that
+}
 
 def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
-    match lhs {
-        case false => product false rhs
-        case true => match rhs {
-            case false => product false true
-            case true => product true false
-        }
-    }
+    product (lhs & rhs) (lhs ^ rhs)
 
 def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
-    match lhs {
-        case false => half_adder rhs carrier
-        case true => match rhs {
-            case false => half_adder true carrier
-            case true => product true carrier
-        }
-    }
+    let s1 = lhs ^ rhs;
+    product ((s1 & carrier) | (lhs & rhs)) (s1 ^ carrier)
 
-def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (succ len) =
+def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (len + 1) =
     match lhs {
-        case nil => cons carrier nil
-        case cons[_](n, taill) => match rhs {
-            case cons[_](m, tailr) => match bits_adder_carrier taill tailr carrier {
-                case cons[_](c, tail) => match full_adder n m c {
-                    case product(a, b) => cons a (cons b tail)
+        case nil => carrier :: nil
+        case cons(n, taill) => match rhs {
+            case cons(m, tailr) => match bits_adder_carrier taill tailr carrier {
+                case cons(c, tail) => match full_adder n m c {
+                    case product(a, b) => a :: b :: tail
                 }
             }
         }
     }
 
-def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (succ len) =
+impl[len: Nat] Add[Vec[Bool] len, Vec[Bool] (len + 1)] for Vec[Bool] len {
+    def +(that: Vec[Bool] len): Vec[Bool] (len + 1) =
+        bits_adder_carrier this that false
+}
+
+def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (len + 1) =
     bits_adder_carrier lhs rhs false
 
-println bits_adder (cons true nil) (cons false nil)
+println bits_adder (true :: nil) (false :: nil)
 
-def full_adder_comm(x: Bool, y: Bool, c: Bool): Eq (full_adder x y c) (full_adder y x c) = _
-
-def step[len: Nat](n: Bool, m: Bool, v: Vec[Bool] (succ len)): Vec[Bool] (succ (succ len)) =
-    match v {
-        case cons(c0, tail0) => match full_adder n m c0 {
-            case product(a, b) => cons a (cons b tail0)
+def full_adder_comm(lhs: Bool, rhs: Bool, carrier: Bool): Eq (full_adder lhs rhs carrier) (full_adder rhs lhs carrier) =
+    match lhs {
+        case false => match rhs {
+            case false => refl (product false carrier)
+            case true => match carrier {
+                case false => refl (product false true)
+                case true => refl (product true false)
+            }
+        }
+        case true => match rhs {
+            case false => match carrier {
+                case false => refl (product false true)
+                case true => refl (product true false)
+            }
+            case true => match carrier {
+                case false => refl (product true false)
+                case true => refl (product true true)
+            }
         }
     }
 
-def cong_step[len: Nat, n: Bool, m: Bool, x: Vec[Bool] (succ len), y: Vec[Bool] (succ len)](e: Eq x y): Eq (step n m x) (step n m y) =
-    match e {
-        case refl(a) => refl[Vec[Bool] (succ (succ len))] (step[len] n m a)
+def adder_type[len: Nat](x: Vec[Bool] (succ len), n: Bool, m: Bool): Vec[Bool] (succ (succ len)) = match x {
+    case cons(c, tail) => match full_adder n m c {
+        case product(a, b) => a :: b :: tail
     }
+}
 
 def carry_step[len: Nat](tail: Vec[Bool] len, p: Product[Bool][Bool]): Vec[Bool] (succ (succ len)) =
     match p {
-        case product(a, b) => cons a (cons b tail)
+        case product(a, b) => a :: b :: tail
     }
 
 def cong_carry_step[len: Nat, tail: Vec[Bool] len, p: Product[Bool][Bool], q: Product[Bool][Bool]](e: Eq p q): Eq (carry_step tail p) (carry_step tail q) =
     match e {
         case refl(a) => refl (carry_step tail a)
+    }
+
+def step1[len: Nat, x: Vec[Bool] (succ len), y: Vec[Bool] (succ len)](e0: Eq x y, n: Bool, m: Bool): Eq (adder_type[len] x n m) (adder_type[len] y m n) =
+    match e0 {
+        case refl(cons(c, tail)) =>
+            let p = full_adder_comm n m c;
+            cong_carry_step[tail=tail] p
     }
 
 def bits_adder_carrier_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, c: Bool): Eq (bits_adder_carrier lhs rhs c) (bits_adder_carrier rhs lhs c) =
@@ -1529,13 +1611,13 @@ def bits_adder_carrier_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, c:
         }
         case cons(n, taill) => match rhs {
             case cons(m, tailr) =>
-                trans (cong_step[x=bits_adder_carrier taill tailr c][bits_adder_carrier tailr taill c] (bits_adder_carrier_comm taill tailr c)) (match bits_adder_carrier tailr taill c {
-                        case cons(c1, tail1) =>
-                            cong_carry_step[tail=tail1][full_adder n m c1][full_adder m n c1] (full_adder_comm n m c1)
-                    })
+                let e0 = bits_adder_carrier_comm taill tailr c;
+                step1 e0 n m
         }
     }
 
+def bits_adder_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Eq (bits_adder lhs rhs) (bits_adder rhs lhs) =
+    bits_adder_carrier_comm lhs rhs false
 "#;
     println!("{}", run(input, 0).unwrap());
 }

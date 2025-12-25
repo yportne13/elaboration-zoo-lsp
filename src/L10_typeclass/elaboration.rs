@@ -2,7 +2,7 @@ use std::{cmp::max, rc::Rc};
 
 use colored::Colorize;
 
-use crate::{list::List, parser_lib::Span};
+use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
@@ -34,7 +34,7 @@ impl Infer {
     fn insert_t(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.map(|(t, va)| self.insert_go(cxt, t, va))
     }
-    fn insert(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
+    pub fn insert(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.and_then(|x| if let Tm::Lam(_, Icit::Impl, _) = x.0.as_ref() {
             Ok(x)
         } else {
@@ -433,7 +433,7 @@ impl Infer {
             Decl::ImplDecl { name, params, trait_name, trait_params, methods } => {
                 let span = name.to_span();
                 let mut cxt = cxt.clone();
-                for (x, a, _) in params {
+                for (x, a, _) in params.clone() {
                     let (a_checked, _) = self.check_universe(&cxt, a)?;
                     let a_eval = self.eval(&cxt.env, &a_checked);
                     cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, &a_eval), a_eval);
@@ -467,8 +467,8 @@ impl Infer {
                 // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
                 // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
                 self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
-                let mut ret = std::iter::once(name)
-                    .chain(trait_params)
+                let mut ret = std::iter::once(name.clone())
+                    .chain(trait_params.clone())
                     .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                     });
@@ -488,9 +488,14 @@ impl Infer {
                     }
                 }
                 let (_, _, c) = self.infer(&cxt, Decl::Def {
-                    name: trait_name.map(|_| typ_name.clone()),
-                    params: vec![],
-                    ret_type: Raw::Hole,
+                    name: trait_name.to_span().map(|_| typ_name.clone()),
+                    params,
+                    ret_type: trait_params.into_iter()
+                        .fold(Raw::App(
+                            Raw::Var(trait_name).into(),
+                            name.into(),
+                            Either::Icit(Icit::Impl)
+                        ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))),
                     body: ret,
                 })?;
                 cxt = c;

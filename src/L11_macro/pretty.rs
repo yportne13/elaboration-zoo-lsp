@@ -150,7 +150,14 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
             "{}::{}{}",
             match typ.as_ref() {
-                Tm::Sum(name, _, _, _) => &name.data,
+                Tm::Sum(name, params, _, _) => params
+                    .iter()
+                    .filter(|x| x.3 == Icit::Impl)
+                    .map(|x| &x.1)
+                    .map(|x| pretty_tm(prec, ns.clone(), x).to_string())
+                    .reduce(|a, b| a + ", " + &b)
+                    .map(|x| format!("{}[{}]", name.data, x))
+                    .unwrap_or(name.data.to_string()),
                 _ => panic!("Sum case must be applied to a sum"),
             },
             case_name.data,
