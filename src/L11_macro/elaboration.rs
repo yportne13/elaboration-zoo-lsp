@@ -462,7 +462,7 @@ impl Infer {
                 let inst = Instance {
                     assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
                     dependencies: List::new(),
-                    lvl: cxt.lvl,
+                    lvl: trait_name.to_span().map(|_| typ_name.clone()),
                 };
                 // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
                 // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
