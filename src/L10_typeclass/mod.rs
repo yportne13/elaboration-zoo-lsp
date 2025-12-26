@@ -312,6 +312,7 @@ impl Infer {
             },
             Tm::Obj(tm, name) => {
                 let a = self.eval(env, tm);
+                let a = self.force(&a);
                 match a.as_ref() {
                     Val::Sum(_, params, _, _) => {
                         params.iter()

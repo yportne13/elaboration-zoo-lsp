@@ -316,6 +316,7 @@ fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRes
 fn prefix_binding_power(op: &Span<String>) -> ((), u8) {
     match op.data.as_str() {
         "+" | "-" => ((), 19),
+        "!" => ((), 30),
         _ => panic!("bad op: {:?}", op),
     }
 }
@@ -356,13 +357,14 @@ fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
     Some(res)
 }
 
-fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, (Either, Raw)> {
+fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
     let named_impl_arg = square_cut(
         (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
-    ).map(|x| x.unwrap_or((Either::Icit(Icit::Impl), Raw::Hole)));
+            .many0_sep(kw(T![,]))
+    ).map(|x| x.unwrap_or_default());
 
-    let explicit_arg = expr.map(|t| (Either::Icit(Icit::Expl), t));
+    let explicit_arg = expr.map(|t| vec![(Either::Icit(Icit::Expl), t)]);
 
     let arg_parser = named_impl_arg.or(explicit_arg);
 
@@ -371,7 +373,7 @@ fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
 
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Raw> {
     let (input, head) = expr(input, state)?;
-    let (input, args) = p_arg.many0().parse(input, state)?;
+    let (input, args) = p_arg.many0().map(|x| x.concat()).parse(input, state)?;
 
     let result = args.into_iter().fold(head, |acc, (icit, arg)| {
         Raw::App(Box::new(acc), Box::new(arg), icit)

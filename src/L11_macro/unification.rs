@@ -709,6 +709,10 @@ impl Infer {
                 // 如果所有检查都通过，则合一成功
                 Ok(())
             }
+            (Val::Obj(a1, b1, sp1), Val::Obj(a2, b2, sp2)) if b1.data == b2.data => {
+                self.unify(l, cxt, a1, a2)?;
+                self.unify_sp(l, cxt, sp1, sp2)
+            }
             _ => Err(UnifyError::Basic), // Rigid mismatch error
         }
     }

@@ -318,6 +318,7 @@ impl Infer {
             },
             Tm::Obj(tm, name) => {
                 let a = self.eval(env, tm);
+                let a = self.force(&a);
                 match a.as_ref() {
                     Val::Sum(_, params, _, _) => {
                         params.iter()
@@ -1522,6 +1523,11 @@ enum Product[A, B] {
     product(a: A, b: B)
 }
 
+struct Tuple2[A, B] {
+    x_1: A
+    x_2: B
+}
+
 trait Cons {
     def ::[l: Nat](that: Vec[Self] l): Vec[Self] (l + 1)
 }
@@ -1531,21 +1537,20 @@ impl[T] Cons for T {
         cons this that
 }
 
-def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
-    product (lhs & rhs) (lhs ^ rhs)
+def half_adder(lhs: Bool, rhs: Bool): Tuple2[Bool, Bool] =
+    Tuple2.mk (lhs & rhs) (lhs ^ rhs)
 
-def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
+def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Tuple2[Bool, Bool] =
     let s1 = lhs ^ rhs;
-    product ((s1 & carrier) | (lhs & rhs)) (s1 ^ carrier)
+    Tuple2.mk ((s1 & carrier) | (lhs & rhs)) (s1 ^ carrier)
 
 def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (len + 1) =
     match lhs {
         case nil => carrier :: nil
         case cons(n, taill) => match rhs {
             case cons(m, tailr) => match bits_adder_carrier taill tailr carrier {
-                case cons(c, tail) => match full_adder n m c {
-                    case product(a, b) => a :: b :: tail
-                }
+                case cons(c, tail) => let t = full_adder n m c;
+                    t.x_1 :: t.x_2 :: tail
             }
         }
     }
@@ -1563,36 +1568,33 @@ println bits_adder (true :: nil) (false :: nil)
 def full_adder_comm(lhs: Bool, rhs: Bool, carrier: Bool): Eq (full_adder lhs rhs carrier) (full_adder rhs lhs carrier) =
     match lhs {
         case false => match rhs {
-            case false => refl (product false carrier)
+            case false => refl (Tuple2.mk false carrier)
             case true => match carrier {
-                case false => refl (product false true)
-                case true => refl (product true false)
+                case false => refl (Tuple2.mk false true)
+                case true => refl (Tuple2.mk true false)
             }
         }
         case true => match rhs {
             case false => match carrier {
-                case false => refl (product false true)
-                case true => refl (product true false)
+                case false => refl (Tuple2.mk false true)
+                case true => refl (Tuple2.mk true false)
             }
             case true => match carrier {
-                case false => refl (product true false)
-                case true => refl (product true true)
+                case false => refl (Tuple2.mk true false)
+                case true => refl (Tuple2.mk true true)
             }
         }
     }
 
 def adder_type[len: Nat](x: Vec[Bool] (succ len), n: Bool, m: Bool): Vec[Bool] (succ (succ len)) = match x {
-    case cons(c, tail) => match full_adder n m c {
-        case product(a, b) => a :: b :: tail
-    }
+    case cons(c, tail) => let t = full_adder n m c;
+        t.x_1 :: t.x_2 :: tail
 }
 
-def carry_step[len: Nat](tail: Vec[Bool] len, p: Product[Bool][Bool]): Vec[Bool] (succ (succ len)) =
-    match p {
-        case product(a, b) => a :: b :: tail
-    }
+def carry_step[len: Nat](tail: Vec[Bool] len, p: Tuple2[Bool, Bool]): Vec[Bool] (succ (succ len)) =
+    p.x_1 :: p.x_2 :: tail
 
-def cong_carry_step[len: Nat, tail: Vec[Bool] len, p: Product[Bool][Bool], q: Product[Bool][Bool]](e: Eq p q): Eq (carry_step tail p) (carry_step tail q) =
+def cong_carry_step[len: Nat, tail: Vec[Bool] len, p: Tuple2[Bool, Bool], q: Tuple2[Bool, Bool]](e: Eq p q): Eq (carry_step tail p) (carry_step tail q) =
     match e {
         case refl(a) => refl (carry_step tail a)
     }
@@ -1621,107 +1623,3 @@ def bits_adder_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Eq (bits_
 "#;
     println!("{}", run(input, 0).unwrap());
 }
-
-#[test]
-fn test() {
-    let input = r#"
-def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def refl[A : U, x: A]: Eq[A] x x = _ => px => px
-
-def the(A : U)(x: A): A = x
-
-def m(A : U)(B : U): U -> U -> U = _
-def test = a => b => the (Eq (m a a) (x => y => y)) refl
-
-def m : U -> U -> U -> U = _
-def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
-
-
-def pr1 = f => x => f x
-def pr2 = f => x => y => f x y
-def pr3 = f => f U
-
-def Nat : U =
-    (N : U) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat =
-    a => b => N => s => z => a _ (b _ s) z
-def ten : Nat =
-    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
-def hundred = mul ten ten
-
-println hundred
-
-def mystr = "hello world"
-
-def add_tail(x: String): String = string_concat x "!"
-
-def mystr2 = add_tail mystr
-
-println mystr2
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(Nat)
-}
-
-def two = succ (succ zero)
-
-def add(x: Nat, y: Nat): Nat =
-    match x {
-        case zero => y
-        case succ(n) => succ (add n y)
-    }
-
-def four = add two two
-
-println four
-
-"#;
-    println!("{}", run(input, 0).unwrap());
-    println!("success");
-}
-
-pub fn run1(input: &str, path_id: u32) -> Result<String, Error> {
-    let mut infer = Infer::new();
-    let ast = parser::parser(input, path_id).unwrap();
-    let mut cxt = Cxt::new();
-    let mut ret = String::new();
-    for tm in ast.0 {
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
-        cxt = new_cxt;
-        if let DeclTm::Println(x) = x {
-            ret += &format!("{:?}", infer.nf(&cxt.env, &x));
-            ret += "\n";
-        }
-    }
-    println!("{:?}", cxt);
-    Ok(ret)
-}
-
-#[test]
-fn test1() {
-    let input = r#"
-def str_id(x: String, y: String): String = "builtin"
-
-"#;
-    println!("{}", run1(input, 0).unwrap());
-    let input = r#"
-def str_id(x: String, y: String): String = x
-
-"#;
-    println!("{}", run1(input, 0).unwrap());
-    let input = r#"
-def str_id: String = string_concat "hello " "world"
-
-println str_id
-
-"#;
-    println!("{}", run1(input, 0).unwrap());
-    println!("success");
-}
-
