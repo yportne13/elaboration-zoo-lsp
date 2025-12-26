@@ -87,6 +87,9 @@ impl Infer {
         //println!("  {}", self.meta.len());
         //println!("{:?} == {:?}", t, t_prime);
         match (self.force(t), self.force(t_prime)) {
+            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if sp1.is_empty() && sp2.is_empty() && x1 == x2 => {
+                Ok(cxt.clone())
+            }
             (Val::Rigid(x, sp), v) if sp.is_empty() => { 
                 Ok(cxt.update_cxt(self, x, v))
             }
