@@ -201,8 +201,9 @@ impl Cxt {
             }*/
             
             let ret = env_t.prepend(ret);
-            let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
-            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change);
+            if let Some(x) = src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)) {
+                *x = self.fresh_val(infer, &self.env, &env_tt, x);
+            }
             ret
         }
     }

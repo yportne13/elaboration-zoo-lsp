@@ -49,7 +49,45 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
 }
 
 fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
-    todo!()
+    fn go_pr_inner(
+        p: i32,
+        top_ns: &List<String>,
+        mut ns: List<String>,
+        t: &Tm,
+        mut pr: Pruning,
+        arg_index: u32,
+    ) -> String {
+        loop {
+            match (ns.split(), pr.split()) {
+                ((None, _), (None, _)) => return pretty_tm(p, top_ns.clone(), t),
+                ((Some(n), rest_ns), (Some(prune), rest_pr)) => {
+                    if let Some(i) = prune {
+                        let need_paren = p > APPP;
+                        let arg_str = if n == "_" {
+                            format!("@{}", arg_index)
+                        } else {
+                            n.clone()
+                        };
+                        let arg_display = match i {
+                            Icit::Expl => arg_str,
+                            Icit::Impl => bracket(arg_str),
+                        };
+                        let inner = go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1);
+                        let result = format!("{} {}", inner, arg_display);
+                        return if need_paren { paren(result) } else { result };
+                    } else {
+                        // Skip implicit argument
+                        ns = rest_ns;
+                        pr = rest_pr;
+                        // continue loop
+                    }
+                }
+                _ => panic!("Mismatch between names and pruning list"),
+            }
+        }
+    }
+
+    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0)
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
