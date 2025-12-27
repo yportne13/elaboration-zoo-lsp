@@ -57,9 +57,30 @@ impl<T> List<T> {
             x => x.tail().map(f).prepend(f(self.head().unwrap()))
         }
     }
+
+    pub fn split(&self) -> (Option<&T>, List<T>) {
+        match self {
+            List { head: None } => (None, List::new()),
+            x => (x.head(), x.tail()),
+        }
+    }
 }
 
 impl<T: Clone> List<T> {
+    pub fn filter<F>(&self, f: F) -> List<T>
+    where
+        F: Fn(&T) -> bool + Copy,
+    {
+        match self {
+            List { head: None } => List::new(),
+            x => if f(x.head().unwrap()) {
+                x.tail().filter(f).prepend(x.head().unwrap().clone())
+            } else {
+                x.tail().filter(f)
+            },
+        }
+    }
+
     pub fn change_n(&self, n: usize, f: impl FnOnce(&T) -> T) -> List<T> {
         if n == 0 {
             self.tail().prepend(f(self.head().unwrap()))
