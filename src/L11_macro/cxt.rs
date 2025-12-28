@@ -161,7 +161,7 @@ impl Cxt {
         infer.eval(to, &quoted)
     }
 
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>) -> Cxt {
+    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>, update_prune: bool) -> Cxt {
         match v.as_ref() {
             Val::Flex(..) => self.clone(),
             _ => {
@@ -190,7 +190,8 @@ impl Cxt {
                     env: env_t,
                     lvl: self.lvl,
                     locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-                    pruning: self.pruning.change_n(x_prime, |_| None),
+                    //locals: self.locals.clone().update_by_cxt(infer, self.lvl, &self.env),
+                    pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},
                     src_names: new_src_names,
                     update_from: Some(update_from),
                 }

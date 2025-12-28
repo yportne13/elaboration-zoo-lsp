@@ -1620,6 +1620,39 @@ def bits_adder_carrier_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, c:
 
 def bits_adder_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Eq (bits_adder lhs rhs) (bits_adder rhs lhs) =
     bits_adder_carrier_comm lhs rhs false
+
+
+def fold[T, len: Nat](vec: Vec[T] len, base: T, f: T -> T -> T): T =
+    match vec {
+        case nil => base
+        case cons(x, tail) => fold tail (f x base) f
+    }
+
+def reduce[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T =
+    match vec {
+        case cons(x, tail) => fold tail x f
+    }
+
+def div2Up(len: Nat) =
+    match len {
+        case zero => zero
+        case succ(zero) => 1
+        case succ(succ(n)) => succ (div2Up n)
+    }
+
+def mkpair[T, len: Nat](vec: Vec[T] len, f: T -> T -> T): Vec[T] (div2Up len) =
+    match vec {
+        case nil => nil
+        case cons(x, nil) => x :: nil
+        case cons(x, cons(y, tail)) => (f x y) :: (mkpair tail f)
+    }
+
+def reduce_balanced_tree[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T =
+    let helper: [U: Type 0] -> [l: Nat] -> (Vec[U] (succ l)) -> (U -> U -> U) -> U = vec => f => (match vec {
+        case cons(x, nil) => x
+        case t => reduce_balanced_tree t f
+    });
+    helper (mkpair vec f) f
 "#;
     println!("{}", run(input, 0).unwrap());
 }

@@ -96,13 +96,13 @@ impl Infer {
         let t_prime = self.force(t_prime);
         match (t.as_ref(), t_prime.as_ref()) {
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if sp1.is_empty() && sp2.is_empty() && x1 == x2 => {
-                Ok(cxt.clone())
+                Ok(cxt.update_cxt(self, *x1, t_prime, false))
             }
             (Val::Rigid(x, sp), _) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, *x, t_prime))
+                Ok(cxt.update_cxt(self, *x, t_prime, true))
             }
             (_, Val::Rigid(x, sp)) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, *x, t))
+                Ok(cxt.update_cxt(self, *x, t, true))
             }
             (
                 Val::SumCase { case_name: name1, datas: d1, .. },

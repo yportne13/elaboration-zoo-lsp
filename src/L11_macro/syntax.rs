@@ -26,7 +26,8 @@ impl Locals {
                             Box::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())),
                             name,
                             ty,
-                            infer.quote(lvl, v),
+                            //infer.quote(lvl, v),
+                            tm,
                         )
                     },
                     _ => panic!("Internal error: unexpected value in context"),

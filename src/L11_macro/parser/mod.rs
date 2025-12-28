@@ -526,7 +526,7 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) ->
             .map(|x| x.concat()),
     )
         .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
-        .or(kw(T![_]).map(|x| Pattern::Any(x, Icit::Expl)))
+        .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Icit::Expl)))
         .parse(input, state)
 }
 
