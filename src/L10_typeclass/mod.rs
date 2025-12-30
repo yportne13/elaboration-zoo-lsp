@@ -330,10 +330,9 @@ impl Infer {
                             .find(|(f_name, _, _)| f_name == name)
                             .unwrap().1.clone()
                     },
-                    Val::Rigid(_, _) | Val::Flex(_, _) => {
+                    _ => {
                         Val::Obj(a, name.clone(), List::new()).into()
-                    }
-                    x => panic!("impossible {x:?}"),
+                    },
                 }
             }
             Tm::App(t, u, i) => self.v_app(&self.eval(env, t), self.eval(env, u), *i),

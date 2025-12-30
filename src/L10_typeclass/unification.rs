@@ -459,10 +459,8 @@ impl Infer {
                 name: name.data.clone(),
                 arguments: params.clone(),
             }) {
-                let tm = Tm::Var(lvl2ix(cxt.lvl, a)).into();
-                let typ = cxt.src_names.get_by_key2(&a)
-                    .ok_or(format!("solve trait failed: {:?}", params))?;
-                let (tm, _) = self.insert(cxt, Ok((tm, typ.clone())))
+                let ret = self.infer_expr(cxt, Raw::Var(a));
+                let (tm, _) = self.insert(cxt, ret)
                     .map_err(|e| e.0.data)?;
                 let val = self.eval(&cxt.env, &tm);
                 if let Val::SumCase { typ, .. } = val.as_ref() {

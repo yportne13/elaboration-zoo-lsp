@@ -16,7 +16,7 @@ pub enum Either {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
-    Any(Span<()>, Icit),
+    Any(Span<bool>, Icit),
     Con(Span<String>, Vec<Pattern>, Icit),
 }
 

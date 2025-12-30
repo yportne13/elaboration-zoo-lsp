@@ -1,9 +1,9 @@
 
 use std::collections::HashMap;
 
-use crate::{list::List, L10_typeclass::empty_span};
+use crate::list::List;
 
-use super::{Val, Span, Lvl};
+use super::{Val, Span, empty_span};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Typ {
@@ -23,7 +23,7 @@ impl Val {
             Val::Rigid(_, _) => None,
             Val::Obj(val, span, sp) => None,
             Val::Lam(..) => None,
-            Val::Pi(span, icit, val, closure) => todo!(),
+            Val::Pi(span, icit, val, closure) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
             Val::LiteralType => todo!(),
             Val::LiteralIntro(span) => todo!(),
@@ -56,7 +56,7 @@ pub struct Assertion {
 pub struct Instance {
     pub assertion: Assertion,
     pub dependencies: List<Assertion>,
-    pub lvl: Lvl,
+    pub lvl: Span<String>,
 }
 
 /// A node in the "search tree" that stores information about
@@ -75,7 +75,7 @@ pub struct GeneratorNode {
 pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
-    lvl: Lvl,
+    lvl: Span<String>,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -105,7 +105,7 @@ pub enum Waiter {
 #[derive(Debug, Clone)]
 pub struct TableEntry {
     waiters: Vec<Waiter>,
-    answers: Vec<(Assertion, Lvl)>,
+    answers: Vec<(Assertion, Span<String>)>,
 }
 
 /// The state of the algorithm.
@@ -124,7 +124,7 @@ pub struct Synth {
     /// Information about each `subgoal` being solved.
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Lvl>,
+    root_answer: Option<Span<String>>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -158,7 +158,7 @@ impl Synth {
         subgoal == answer
     }
 
-    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Lvl)> {
+    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Span<String>)> {
         // 名字必须匹配
         if goal.name != instance.assertion.name {
             return None;
@@ -182,11 +182,11 @@ impl Synth {
             .dependencies
             .map(|dep| apply_subst_to_assertion(dep, &subst));
 
-        Some((concrete_deps, instance.lvl))
+        Some((concrete_deps, instance.lvl.clone()))
     }
 
     /// The entry point for the algorithm.
-    pub fn synth(&mut self, assertion: Assertion) -> Option<Lvl> {
+    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<String>> {
         // Insert the "root" goal to be solved.
         self.new_subgoal(&assertion, &Waiter::Root);
 
@@ -301,10 +301,10 @@ impl Synth {
                     .entry(consumer_node.goal.clone())
                     .and_modify(|TableEntry { waiters, answers }| {
                         let answer = consumer_node.goal;
-                        answers.push((answer.clone(), consumer_node.lvl));
+                        answers.push((answer.clone(), consumer_node.lvl.clone()));
                         for waiter in waiters {
                             match waiter {
-                                Waiter::Root => self.root_answer = Some(consumer_node.lvl),
+                                Waiter::Root => self.root_answer = Some(consumer_node.lvl.clone()),
                                 Waiter::ConsumerNode(consumer_node) => self
                                     .resume_stack
                                     .push((consumer_node.clone(), answer.clone())),

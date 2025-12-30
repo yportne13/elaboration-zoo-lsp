@@ -12,6 +12,7 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: BiMap<String, Lvl, Rc<VTy>>,
+    update_from: Option<usize>,
 }
 
 impl Cxt {
@@ -81,6 +82,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
+            update_from: None,
         }
     }
 
@@ -105,6 +107,7 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
+            update_from: self.update_from,
         }
     }
 
@@ -118,6 +121,7 @@ impl Cxt {
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
             src_names,
+            update_from: self.update_from,
         }
     }
 
@@ -129,6 +133,7 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
+            update_from: self.update_from,
         }
     }
 
@@ -142,6 +147,7 @@ impl Cxt {
             locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
+            update_from: self.update_from,
         }
     }
 
@@ -155,10 +161,19 @@ impl Cxt {
         infer.eval(to, &quoted)
     }
 
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>) -> Cxt {
+    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>, update_prune: bool) -> Cxt {
         match v.as_ref() {
             Val::Flex(..) => self.clone(),
             _ => {
+                let update_from = if let Some(u) = self.update_from {
+                    if u < x.0 as usize {
+                        u
+                    } else {
+                        x.0 as usize
+                    }
+                } else {
+                    x.0 as usize
+                };
                 let x_prime = lvl2ix(self.lvl, x).0 as usize;
                 /*println!(
                     " update {}: {} with {}",
@@ -168,24 +183,27 @@ impl Cxt {
                 );*/
                 let env = self.env.change_n(x_prime, |_| v);
                 let mut new_src_names = self.src_names.clone();
-                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
+                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env, self.lvl.0 as usize - update_from);
+                //let locals = self.locals.clone().update_by_cxt(infer, self.lvl, &self.env);
         
                 Cxt {
                     env: env_t,
                     lvl: self.lvl,
                     locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-                    pruning: self.pruning.change_n(x_prime, |_| None),
+                    //locals: self.locals.clone().update_by_cxt(infer, self.lvl, &self.env),
+                    pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},
                     src_names: new_src_names,
+                    update_from: Some(update_from),
                 }
             }
         }
     }
 
-    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, Rc<Val>>, env2: List<Rc<Val>>) -> List<Rc<Val>> {
+    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, Rc<Val>>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
         if env.is_empty() {
             List::new()
         } else {
-            let env_t = self.refresh(infer, &env.tail(), src_names, env2.clone());
+            let env_t = if walk == 0 {env.tail()} else {self.refresh(infer, &env.tail(), src_names, env2.clone(), walk - 1)};
             let env_tt = env2.change_tail(env_t.clone());
             let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap());
             /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
@@ -200,8 +218,9 @@ impl Cxt {
             }*/
             
             let ret = env_t.prepend(ret);
-            let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
-            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change);
+            if let Some(x) = src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)) {
+                *x = self.fresh_val(infer, &self.env, &env_tt, x);
+            }
             ret
         }
     }
