@@ -433,9 +433,27 @@ impl Infer {
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
             }
-            Decl::ImplDecl { name, params, trait_name, trait_params, methods } => {
+            Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => {
                 let span = name.to_span();
                 let mut cxt = cxt.clone();
+                if need_create {
+                    let new_methods = methods
+                        .clone()
+                        .into_iter()
+                        .flat_map(|x| match x {
+                            Decl::Def { name, params, ret_type, body: _ } => {
+                                Some((name, params, ret_type))
+                            },
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    let (_, _, new_cxt) = self.infer(&cxt, Decl::TraitDecl {
+                        name: trait_name.clone(),
+                        params: params.clone(),
+                        methods: new_methods,
+                    })?;
+                    cxt = new_cxt;
+                }
                 for (x, a, _) in params.clone() {
                     let (a_checked, _) = self.check_universe(&cxt, a)?;
                     let a_eval = self.eval(&cxt.env, &a_checked);
@@ -515,7 +533,7 @@ impl Infer {
                 self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
                 let mut cxt = cxt.clone();
-                if let Ok((_, _, c)) = self.infer(&cxt, Decl::Enum {
+                let (_, _, c) = self.infer(&cxt, Decl::Enum {
                     is_trait: true,
                     name: name.clone(),
                     params: param,
@@ -536,9 +554,8 @@ impl Infer {
                             .collect(),
                         None,
                     )],
-                }) {
-                    cxt = c;
-                }
+                })?;
+                cxt = c;
                 Ok((DeclTm::Trait {}, Val::U(0).into(), cxt.clone()))
             },
         }

@@ -440,13 +440,27 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
         p_raw,
         //p_generic_params(),
         brace(p_def.many0_sep(kw(EndLine))),
-    )
-        .map(|(_, params, trait_name, trait_params, _, name, body)| Decl::ImplDecl {
+    ).map(|x| (x, false)).or((
+        kw(ImplKeyword),
+        p_pi_impl_binder_option,
+        p_raw,
+        //p_generic_params(),
+        brace(p_def.many0_sep(kw(EndLine))),
+    ).map(|x| ((
+        x.0,
+        x.1.clone(),
+        x.0.map(|_| format!("$trait_name${}", x.2)),
+        x.1.into_iter().map(|x| Raw::Var(x.0)).collect(),
+        x.0,
+        x.2,
+        x.3), true)
+    )).map(|((_, params, trait_name, trait_params, _, name, body), need_create)| Decl::ImplDecl {
             name,
             params,
             trait_name,
             trait_params,
             methods: body,
+            need_create,
         })
         .parse(input)
 }

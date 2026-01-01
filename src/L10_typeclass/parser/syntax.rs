@@ -200,5 +200,6 @@ pub enum Decl {
         trait_name: Span<String>,
         trait_params: Vec<Raw>,
         methods: Vec<Decl>,
+        need_create: bool,
     },
 }

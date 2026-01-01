@@ -606,7 +606,32 @@ enum List[A] {
     cons(head: A, tail: List[A])
 }
 
+impl List[Nat] {
+    def map1(f: Nat -> Bool): List[Bool] =
+        match this {
+            case nil => nil
+            case cons(head, tail) => cons (f head) (tail.map1 f)
+        }
+}
+
+def listmap[T, U](xs: List[T], f: T -> U): List[U] =
+    match xs {
+        case nil => nil
+        case cons(head, tail) => cons (f head) (listmap tail f)
+    }
+
+impl[T] List[T] {
+    def map[U](f: T -> U): List[U] =
+        listmap this f
+}
+
 def two = succ (succ zero)
+
+def listnat = cons two (cons (succ zero) nil)
+
+def listnat2 = listnat.map (x => succ x)
+
+println listnat2
 
 def not(x: Bool): Bool =
     match x {
