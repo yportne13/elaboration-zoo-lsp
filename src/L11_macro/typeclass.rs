@@ -34,11 +34,11 @@ impl Val {
                 } else {
                     Typ::Construct(
                         span.clone(),
-                        items.iter().flat_map(|x| x.1.to_typ()).collect(),//TODO:
+                        items.iter().map(|x| x.1.to_typ()).collect::<Option<Vec<_>>>()?,//TODO:
                     )
                 }
             ),
-            Val::SumCase { .. } => None,
+            Val::SumCase { case_name, .. } => Some(Typ::Val(case_name.clone())),
             Val::Match(..) => None,
         }
     }
@@ -120,7 +120,7 @@ pub struct Synth {
     /// A more in-depth explanation can be found in [`Synth::synth`].
     resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
-    class_instances: HashMap<String, Vec<Instance>>,
+    pub class_instances: HashMap<String, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.

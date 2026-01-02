@@ -698,19 +698,35 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
     Cut((
         kw(ImplKeyword),
         p_pi_impl_binder_option,
-        string(Ident),
-        square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or_default()),
-        kw(ForKeyword),
-        p_raw,
+        (
+            string(Ident),
+            square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or_default()),
+            Cut((
+                kw(ForKeyword),
+                p_raw,
+            )),
+        ).map(Ok).or(p_raw.map(Err)),
         //p_generic_params(),
         brace(p_def.many0_sep(kw(EndLine))),
-    ))
-        .map(|(_, params, trait_name, trait_params, _, name, body)| Decl::ImplDecl {
-            name: name.unwrap_or(Raw::Hole),
+    )).map(|x| match x.2 {
+        Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole), x.3, false),
+        Some(Err(name)) => (
+            x.1.clone(),
+            x.0.map(|_| format!("$trait_name${}", name)),
+            x.1.unwrap_or_default().into_iter().map(|x| Raw::Var(x.0)).collect(),
+            name,
+            x.3,
+            true,
+        ),
+        None => (x.1, empty_span("".to_owned()), vec![], Raw::Hole, x.3, false)
+    })
+        .map(|(params, trait_name, trait_params, name, body, need_create)| Decl::ImplDecl {
+            name,
             params: params.unwrap_or_default(),
-            trait_name: trait_name.unwrap_or(empty_span("".to_owned())),
-            trait_params: trait_params.unwrap_or_default(),
+            trait_name,
+            trait_params,
             methods: body.flatten().unwrap_or_default(),
+            need_create,
         })
         .parse(input, state)
 }

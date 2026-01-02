@@ -231,8 +231,9 @@ impl Cxt {
     pub fn print_env(&self, infer: &Infer) {
         self.env
             .iter()
-            .for_each(|x| {
-                println!("{}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x)))
+            .zip(self.names().iter())
+            .for_each(|(x, name)| {
+                println!("{name}: {}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x)))
             });
     }
 }

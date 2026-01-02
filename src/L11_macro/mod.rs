@@ -336,10 +336,9 @@ impl Infer {
                             .find(|(f_name, _, _)| f_name == name)
                             .unwrap().1.clone()
                     },
-                    Val::Rigid(_, _) | Val::Flex(_, _) => {
+                    _ => {
                         Val::Obj(a, name.clone(), List::new()).into()
-                    }
-                    x => panic!("impossible {x:?}"),
+                    },
                 }
             }
             Tm::App(t, u, i) => self.v_app(&self.eval(env, t), self.eval(env, u), *i),
@@ -1519,6 +1518,17 @@ enum Vec[A](len: Nat) {
     cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (l + 1)
 }
 
+def vecmap[T, U, len: Nat](x: Vec[T] len, f: T -> U): Vec[U] len =
+    match x {
+        case nil => nil
+        case cons(x, xs) => cons (f x) (vecmap xs f)
+    }
+
+impl[T, len: Nat] Vec[T] len {
+    def map[U](f: T -> U): Vec[U] len =
+        vecmap this f
+}
+
 enum Product[A, B] {
     product(a: A, b: B)
 }
@@ -1536,6 +1546,10 @@ impl[T] Cons for T {
     def ::[l: Nat](that: Vec[T] l): Vec[T] (l + 1) =
         cons this that
 }
+
+def temp = 3 :: 2 :: nil
+
+println temp.map(x => succ(x))
 
 def half_adder(lhs: Bool, rhs: Bool): Tuple2[Bool, Bool] =
     Tuple2.mk (lhs & rhs) (lhs ^ rhs)
@@ -1654,5 +1668,8 @@ def reduce_balanced_tree[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T 
     });
     helper (mkpair vec f) f
 "#;
-    println!("{}", run(input, 0).unwrap());
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
 }

@@ -3,7 +3,7 @@ use colored::Colorize;
 use crate::list::List;
 
 use super::{
-    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw,
 };
 
@@ -452,7 +452,7 @@ impl Infer {
                 .zip(out_param)
                 .filter(|(_, x)| !**x)
                 .map(|x| x.0)
-                .flat_map(|(_, tm, _, _)| self.force(tm).to_typ())
+                .map(|(_, tm, _, _)| self.force(tm).to_typ().unwrap_or(Typ::Any))
                 .collect::<Vec<_>>();
             self.trait_solver.clean();
             if let Some(a) = self.trait_solver.synth(Assertion {
@@ -468,7 +468,19 @@ impl Infer {
                 }
                 Ok(Some((tm, val)))
             } else {
-                Err(format!("solve trait failed: {:?}", params))?
+                Err(format!(
+                    "solve trait failed: {}[{:?}]\n{}",
+                    name.data,
+                    params,
+                    self.trait_solver
+                        .class_instances
+                        .get(&name.data)
+                        .unwrap_or(&vec![])
+                        .iter()
+                        .map(|x| format!("{:?}", x))
+                        .reduce(|a, b| a + "\n" + &b)
+                        .unwrap_or_default(),
+                ))?
             }
         } else {
             Ok(None)
