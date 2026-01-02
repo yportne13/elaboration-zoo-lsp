@@ -12,7 +12,7 @@ use super::{
     pattern_match::Compiler, MetaEntry,
     typeclass::Instance,
     unification::PartialRenaming,
-    typeclass::Assertion,
+    typeclass::{Assertion, Typ},
 };
 
 impl Infer {
@@ -828,7 +828,8 @@ impl Infer {
         }
     }
     fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
-        if let Some(typ) = a.to_typ() {
+        let typ = self.eval(&cxt.env, &self.quote(cxt.lvl, &a)).to_typ().unwrap_or(Typ::Val(empty_span("$unknown$".to_owned())));
+        {
             let traits = self.trait_definition
                 .clone()//TODO: can remove this clone?
                 .iter()
@@ -907,19 +908,12 @@ impl Infer {
                 Ok(ret)
             } else {
                 Err(Error(t.clone().map(|t| format!(
-                    "`{}`: {:?} has no object `{}`",
+                    "`{}`: {} has no object `{}`",
                     super::pretty_tm(0, cxt.names(), &tm),
                     super::pretty_tm(0, cxt.names(), &self.nf(&cxt.env, &self.quote(cxt.lvl, &a))),
                     t,
                 ))))
             }
-        } else {
-            Err(Error(t.clone().map(|t| format!(
-                "`{}`: {:?} has no object `{}`",
-                super::pretty_tm(0, cxt.names(), &tm),
-                super::pretty_tm(0, cxt.names(), &self.nf(&cxt.env, &self.quote(cxt.lvl, &a))),
-                t,
-            ))))
         }
     }
 }

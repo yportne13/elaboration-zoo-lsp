@@ -1547,9 +1547,7 @@ impl[T] Cons for T {
         cons this that
 }
 
-def temp = 3 :: 2 :: nil
-
-println temp.map(x => succ(x))
+println (3 :: 2 :: nil).map(x => succ(x))
 
 def half_adder(lhs: Bool, rhs: Bool): Tuple2[Bool, Bool] =
     Tuple2.mk (lhs & rhs) (lhs ^ rhs)

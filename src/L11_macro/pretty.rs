@@ -160,7 +160,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             let x = fresh(ns.clone(), &name_span.data);
             let new_ns = ns.prepend(x.clone());
             let ret = format!(
-                "let {x}: {} = {};\n\n{}",
+                "let {x}: {} = {};\n  {}",
                 pretty_tm(LETP, ns.clone(), a),
                 pretty_tm(LETP, ns, t),
                 pretty_tm(LETP, new_ns, u),
