@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification};
 use lsp_types::*;
+use crate::L11_macro::pretty::pretty_tm;
 use crate::ls::Result;
 
 use L11_macro::parser::parser;
@@ -51,6 +52,7 @@ struct Backend {
     type_map: HashMap<String, Vec<DeclTm>>,
     document_map: HashMap<String, Rope>,
     document_id: HashMap<String, u32>,
+    hover_table: HashMap<String, Infer>,
 }
 
 impl Backend {
@@ -61,6 +63,7 @@ impl Backend {
             type_map: Default::default(),
             document_map: Default::default(),
             document_id: Default::default(),
+            hover_table: Default::default(),
         }
     }
     pub fn init(&self) -> std::result::Result<serde_json::Value, ProtocolError> {
@@ -356,6 +359,24 @@ impl LanguageServer for Backend {
                         offset_to_position(x.0.end_offset as usize, rope)?,
                     )),
                 }))
+                .or_else(|| {
+                    self.hover_table
+                        .get(uri.as_str())
+                        .and_then(|x| x.hover_table.iter()
+                            .find(|x| x.0.contains(offset))
+                            .map(|t| (t.0, pretty_tm(0, t.1.names(), &x.quote(t.1.lvl, &t.2))))
+                        )
+                        .and_then(|x| Some(Hover {
+                            contents: HoverContents::Markup(MarkupContent {
+                                kind: MarkupKind::Markdown,
+                                value: x.1.to_string(),
+                            }),
+                            range: Some(Range::new(
+                                offset_to_position(x.0.start_offset as usize, rope)?,
+                                offset_to_position(x.0.end_offset as usize, rope)?,
+                            )),
+                        }))
+                })
         };
          Ok(hover())
     }
@@ -729,6 +750,7 @@ impl Backend {
             }
             eprintln!("infer {:?}", start.elapsed().as_secs_f32());
             self.type_map.insert(params.uri.to_string(), terms);
+            self.hover_table.insert(params.uri.to_string(), infer.clone());
             //eprintln!("{:?}", err_collect);
             let diag = err_collect
                 .into_iter()

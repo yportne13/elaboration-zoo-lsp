@@ -15,7 +15,7 @@ mod pattern_match;
 mod syntax;
 mod unification;
 mod typeclass;
-mod pretty;
+pub mod pretty;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -212,6 +212,7 @@ pub struct Infer {
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
+    pub hover_table: Vec<(Span<()>, Cxt, Rc<Val>)>,
 }
 
 impl Infer {
@@ -222,6 +223,7 @@ impl Infer {
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
+            hover_table: vec![],
         }
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
@@ -237,7 +239,7 @@ impl Infer {
         } else {
             let closed = self.eval(
                 &List::new(),
-                &close_ty(cxt.locals.clone(), self.quote(cxt.lvl, &a)),
+                &close_ty(&cxt.locals, self.quote(cxt.lvl, &a)),
             );
             let m = self.new_meta(closed);
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
@@ -417,7 +419,7 @@ impl Infer {
         }
     }
 
-    fn quote(&self, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
+    pub fn quote(&self, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
         //println!("{} {:?}", "quote".green(), t);
         let t = self.force(t);
         match t.as_ref() {

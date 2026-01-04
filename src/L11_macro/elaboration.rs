@@ -569,9 +569,12 @@ impl Infer {
         let t_span = t.to_span();
         match t {
             // Infer variable types
-            Raw::Var(x) => match cxt.src_names.get(&x.data) {
-                Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone())),
-                None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
+            Raw::Var(name) => match cxt.src_names.get(&name.data) {
+                Some((x, a)) => {
+                    self.hover_table.push((t_span, cxt.clone_without_src_names(), a.clone()));
+                    Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone()))
+                },
+                None => Err(Error(name.map(|x| format!("error name not in scope: {}", x)))),
             },
 
             Raw::Obj(x, t) => {

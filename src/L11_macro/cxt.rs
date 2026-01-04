@@ -85,6 +85,16 @@ impl Cxt {
             update_from: None,
         }
     }
+    pub fn clone_without_src_names(&self) -> Self {
+        Cxt {
+            env: self.env.clone(),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names: BiMap::new(),
+            update_from: self.update_from,
+        }
+    }
 
     pub fn names(&self) -> List<String> {
         fn go(locals: &Locals) -> List<String> {
@@ -104,7 +114,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
             update_from: self.update_from,
@@ -130,7 +140,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
             update_from: self.update_from,
@@ -144,7 +154,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
-            locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
+            locals: Locals::Define(Rc::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
             update_from: self.update_from,
