@@ -28,6 +28,7 @@ use std::error::Error;
 use std::fs;
 
 use client::Client;
+use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
 use lsp_server::{Connection, ExtractError, Message, ProtocolError, Request, RequestId, Response};
@@ -46,25 +47,61 @@ use L11_macro::parser::syntax::Decl;
 use L11_macro::{DeclTm, Infer};
 use L11_macro::cxt::Cxt;
 
+use std::sync::{Arc, Mutex, RwLock, Condvar};
+use std::thread;
+use crossbeam_channel::Sender; // lsp_server 内部使用的是 crossbeam 或类似的 channel
+
+// 2. 定义传递给工作线程的任务包
+struct AnalysisJob {
+    uri: Url,
+    text: String,
+    version: Option<i32>,
+}
+
+// 3. 修改 Backend 结构
 struct Backend {
     client: Client,
-    ast_map: HashMap<String, Vec<Decl>>,
-    type_map: HashMap<String, Vec<DeclTm>>,
-    document_map: HashMap<String, Rope>,
-    document_id: HashMap<String, u32>,
-    hover_table: HashMap<String, Infer>,
+    ast_map: DashMap<String, Vec<Decl>>,
+    type_map: DashMap<String, Vec<DeclTm>>,
+    document_map: DashMap<String, Rope>,
+    document_id: DashMap<String, u32>,
+    hover_table: DashMap<String, Infer>,
+    // 信号机制：(任务槽, 条件变量)
+    worker_signal: Arc<(Mutex<Option<AnalysisJob>>, Condvar)>,
 }
 
 impl Backend {
-    pub fn new(client: Client) -> Self {
-        Backend {
+    pub fn new(client: Client) -> Arc<Self> {
+        let ast_map = Default::default();
+        let type_map = Default::default();
+        let document_map = Default::default();
+        let document_id = Default::default();
+        let hover_table = Default::default();
+        
+        let worker_signal = Arc::new((Mutex::new(None), Condvar::new()));
+        
+        // 4. 启动后台工作线程
+        let signal_clone = worker_signal.clone();
+        let sender_clone = client.connection.sender.clone(); // 假设 Connection sender 是可 Clone 的
+
+        /*thread::spawn(move || {
+            worker_loop(state_clone, signal_clone, sender_clone);
+        });*/
+
+        let ret = Arc::new(Backend {
             client,
-            ast_map: Default::default(),
-            type_map: Default::default(),
-            document_map: Default::default(),
-            document_id: Default::default(),
-            hover_table: Default::default(),
-        }
+            ast_map,
+            type_map,
+            document_map,
+            document_id,
+            hover_table,
+            worker_signal,
+        });
+        let for_thread = ret.clone();
+        thread::spawn(move || {
+            for_thread.worker_loop(signal_clone);
+        });
+        ret
     }
     pub fn init(&self) -> std::result::Result<serde_json::Value, ProtocolError> {
         let server_capabilities = serde_json::to_value(
@@ -72,7 +109,7 @@ impl Backend {
         ).unwrap();
         self.client.connection.initialize(server_capabilities)
     }
-    pub fn main_loop(&mut self) -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
+    pub fn main_loop(&self) -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
         eprintln!("starting example main loop");
         for msg in self.client.connection.receiver.clone() {
             //eprintln!("got msg: {msg:?}");
@@ -302,32 +339,65 @@ impl LanguageServer for Backend {
         Ok(())
     }
 
-    fn did_open(&mut self, params: DidOpenTextDocumentParams) {
+    fn did_open(&self, params: DidOpenTextDocumentParams) {
         //debug!("file opened");
-        self.on_change(TextDocumentItem {
+        /*self.on_change(TextDocumentItem {
             uri: params.text_document.uri,
             text: &params.text_document.text,
             version: Some(params.text_document.version),
-        })
+        })*/
+        let job = AnalysisJob {
+            uri: params.text_document.uri.clone(),
+            text: params.text_document.text.to_string(),
+            version: Some(params.text_document.version),
+        };
+
+        // 3. 更新任务槽并通知
+        let (lock, cvar) = &*self.worker_signal;
+        let mut pending = lock.lock().unwrap();
+        *pending = Some(job); // 覆盖之前的任务（如果 worker 还没来得及拿，旧的就丢弃了）
+        cvar.notify_one();
     }
 
-    fn did_change(&mut self, params: DidChangeTextDocumentParams) {
-        self.on_change(TextDocumentItem {
+    fn did_change(&self, params: DidChangeTextDocumentParams) {
+        /*self.on_change(TextDocumentItem {
             text: &params.content_changes[0].text,
             uri: params.text_document.uri,
             version: Some(params.text_document.version),
-        })
+        })*/
+        let job = AnalysisJob {
+            uri: params.text_document.uri.clone(),
+            text: params.content_changes[0].text.to_string(),
+            version: Some(params.text_document.version),
+        };
+
+        // 3. 更新任务槽并通知
+        let (lock, cvar) = &*self.worker_signal;
+        let mut pending = lock.lock().unwrap();
+        *pending = Some(job); // 覆盖之前的任务（如果 worker 还没来得及拿，旧的就丢弃了）
+        cvar.notify_one();
     }
 
-    fn did_save(&mut self, params: DidSaveTextDocumentParams) {
+    fn did_save(&self, params: DidSaveTextDocumentParams) {
         //dbg!(&params.text);
         if let Some(text) = params.text {
-            let item = TextDocumentItem {
+            /*let item = TextDocumentItem {
                 uri: params.text_document.uri,
                 text: &text,
                 version: None,
             };
-            self.on_change(item);
+            self.on_change(item);*/
+            let job = AnalysisJob {
+                uri: params.text_document.uri.clone(),
+                text,
+                version: None,
+            };
+
+            // 3. 更新任务槽并通知
+            let (lock, cvar) = &*self.worker_signal;
+            let mut pending = lock.lock().unwrap();
+            *pending = Some(job); // 覆盖之前的任务（如果 worker 还没来得及拿，旧的就丢弃了）
+            cvar.notify_one();
             //TODO:_ = self.client.semantic_tokens_refresh();
         }
         debug!("file saved!");
@@ -342,7 +412,7 @@ impl LanguageServer for Backend {
             let semantic = self.type_map.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position_params.position;
-            let offset = position_to_offset(position, rope)?;
+            let offset = position_to_offset(position, &rope)?;
             semantic.iter()
                 .flat_map(|x| match x {
                     DeclTm::Def { name, typ_pretty, body_pretty, .. } => Some((name, typ_pretty, body_pretty)),
@@ -355,8 +425,8 @@ impl LanguageServer for Backend {
                         value: format!("{}\n\n{}", x.1, x.2),
                     }),
                     range: Some(Range::new(
-                        offset_to_position(x.0.start_offset as usize, rope)?,
-                        offset_to_position(x.0.end_offset as usize, rope)?,
+                        offset_to_position(x.0.start_offset as usize, &rope)?,
+                        offset_to_position(x.0.end_offset as usize, &rope)?,
                     )),
                 }))
                 .or_else(|| {
@@ -372,8 +442,8 @@ impl LanguageServer for Backend {
                                 value: x.1.to_string(),
                             }),
                             range: Some(Range::new(
-                                offset_to_position(x.0.start_offset as usize, rope)?,
-                                offset_to_position(x.0.end_offset as usize, rope)?,
+                                offset_to_position(x.0.start_offset as usize, &rope)?,
+                                offset_to_position(x.0.end_offset as usize, &rope)?,
                             )),
                         }))
                 })
@@ -712,14 +782,38 @@ struct TextDocumentItem<'a> {
 }
 
 impl Backend {
-    fn on_change(&mut self, params: TextDocumentItem<'_>) {
+    fn worker_loop(
+        &self,
+        signal: Arc<(Mutex<Option<AnalysisJob>>, Condvar)>,
+    ) {
+        loop {
+            // 1. 等待任务
+            let job = {
+                let (lock, cvar) = &*signal;
+                let mut pending = lock.lock().unwrap();
+                while pending.is_none() {
+                    pending = cvar.wait(pending).unwrap();
+                }
+                pending.take().unwrap() // 取出任务，并将槽置空
+            };
+
+            // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
+            eprintln!("Worker starting job for version {:?}", job.version);
+            self.on_change(TextDocumentItem {
+                uri: job.uri,
+                text: &job.text,
+                version: job.version,
+            });
+        }
+    }
+    fn on_change(&self, params: TextDocumentItem<'_>) {
         let start_all = std::time::Instant::now();
         //dbg!(&params.version);
         let rope = ropey::Rope::from_str(params.text);
         self.document_map
             .insert(params.uri.to_string(), rope.clone());
         let now_id = self.document_id.get(params.uri.as_str())
-            .copied()
+            .map(|x| *x)
             .unwrap_or(self.document_id.len() as u32);
         self.document_id.insert(params.uri.to_string(), now_id);
         let start = std::time::Instant::now();

@@ -1,13 +1,12 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
-    rc::Rc,
 };
 
 use crate::parser_lib::{Span, ToSpan};
 
 use super::{
     Env, Error, Infer, Tm, Val,
-    cxt::Cxt,
+    cxt::Cxt, Rc,
     empty_span,
     parser::syntax::{Pattern, Raw, Icit},
     PatternDetail,

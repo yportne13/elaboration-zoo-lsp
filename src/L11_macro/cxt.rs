@@ -1,4 +1,4 @@
-use crate::bimap::BiMap;
+use crate::{bimap::BiMap, parser_lib::ToSpan};
 
 use super::{
     syntax::{Locals, Pruning},
@@ -12,6 +12,7 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: BiMap<String, Lvl, Rc<VTy>>,
+    pub decl: HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
     update_from: Option<usize>,
 }
 
@@ -82,6 +83,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
+            decl: HashMap::new(),
             update_from: None,
         }
     }
@@ -92,6 +94,7 @@ impl Cxt {
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
             src_names: BiMap::new(),
+            decl: self.decl.clone(),
             update_from: self.update_from,
         }
     }
@@ -117,6 +120,7 @@ impl Cxt {
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
+            decl: self.decl.clone(),
             update_from: self.update_from,
         }
     }
@@ -131,6 +135,7 @@ impl Cxt {
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
             src_names,
+            decl: self.decl.clone(),
             update_from: self.update_from,
         }
     }
@@ -143,6 +148,7 @@ impl Cxt {
             locals: Locals::Bind(Rc::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
+            decl: self.decl.clone(),
             update_from: self.update_from,
         }
     }
@@ -157,8 +163,27 @@ impl Cxt {
             locals: Locals::Define(Rc::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
+            decl: self.decl.clone(),
             update_from: self.update_from,
         }
+    }
+
+    pub fn decl(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
+        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
+        let mut decl = self.decl.clone();
+        let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+        if let Some((span, _, _, _, _)) = t {
+            return Err(Error(span.map(|_| format!("redefine {}", x.data))));
+        }
+        Ok(Cxt {
+            env: self.env.clone(),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names: self.src_names.clone(),
+            decl,
+            update_from: self.update_from,
+        })
     }
 
     /// freshVal 函数实现
@@ -203,6 +228,7 @@ impl Cxt {
                     //locals: self.locals.clone().update_by_cxt(infer, self.lvl, &self.env),
                     pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},
                     src_names: new_src_names,
+                    decl: self.decl.clone(),
                     update_from: Some(update_from),
                 }
             }

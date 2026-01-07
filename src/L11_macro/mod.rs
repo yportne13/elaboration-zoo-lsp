@@ -17,6 +17,8 @@ mod unification;
 mod typeclass;
 pub mod pretty;
 
+type Rc<T> = std::sync::Arc<T>;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
 
@@ -178,7 +180,7 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 
 use std::{
     collections::HashMap,
-    ops::{Add, Sub}, rc::Rc,
+    ops::{Add, Sub},
 };
 
 #[derive(Debug)]

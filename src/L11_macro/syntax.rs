@@ -1,8 +1,6 @@
-use std::rc::Rc;
-
 use crate::{list::List, parser_lib::Span};
 
-use super::{Tm, Ty, parser::syntax::Icit, Val, Infer, Lvl};
+use super::{Tm, Ty, parser::syntax::Icit, Val, Infer, Lvl, Rc};
 
 pub type Pruning = List<Option<Icit>>;
 

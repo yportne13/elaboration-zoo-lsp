@@ -1,4 +1,4 @@
-use std::{cmp::max, rc::Rc};
+use std::cmp::max;
 
 use colored::Colorize;
 
@@ -6,7 +6,7 @@ use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
-    Lvl,
+    Lvl, Rc,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,

@@ -34,15 +34,15 @@ pub trait LanguageServer {
 
     fn shutdown(&self) -> Result<()>;
 
-    fn did_open(&mut self, params: DidOpenTextDocumentParams) {
+    fn did_open(&self, params: DidOpenTextDocumentParams) {
         let _ = params;
     }
 
-    fn did_change(&mut self, params: DidChangeTextDocumentParams) {
+    fn did_change(&self, params: DidChangeTextDocumentParams) {
         let _ = params;
     }
 
-    fn did_save(&mut self, params: DidSaveTextDocumentParams) {
+    fn did_save(&self, params: DidSaveTextDocumentParams) {
         let _ = params;
     }
 
@@ -66,7 +66,7 @@ pub trait LanguageServer {
     }
 
     fn semantic_tokens_full(
-        &mut self,
+        &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let _ = params;
