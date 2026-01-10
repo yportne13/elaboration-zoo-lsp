@@ -480,8 +480,13 @@ impl Infer {
                 .zip(out_param)
                 .filter(|(_, x)| !**x)
                 .map(|x| x.0)
-                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm).to_typ().unwrap_or(Typ::Any))
-                .collect::<Vec<_>>();
+                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm).to_typ())
+                .collect::<Option<Vec<_>>>();
+            let params = if let Some(params) = params {
+                params
+            } else {
+                return Ok(None)
+            };
             self.trait_solver.clean();
             if let Some(a) = self.trait_solver.synth(Assertion {
                 name: name.data.clone(),

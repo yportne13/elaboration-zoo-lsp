@@ -434,7 +434,7 @@ impl LanguageServer for Backend {
                         .get(uri.as_str())
                         .and_then(|x| x.hover_table.iter()
                             .find(|x| x.0.contains(offset))
-                            .map(|t| (t.0, pretty_tm(0, t.1.names(), &x.quote(t.1.lvl, &t.2))))
+                            .map(|t| (t.0, pretty_tm(0, t.1.names(), &x.quote(&t.1.decl, t.1.lvl, &t.2))))
                         )
                         .and_then(|x| Some(Hover {
                             contents: HoverContents::Markup(MarkupContent {
