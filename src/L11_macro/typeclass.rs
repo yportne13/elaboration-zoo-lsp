@@ -21,6 +21,8 @@ impl Val {
             Val::Flex(..) => None,
             Val::Rigid(lvl, list) if list.is_empty() => Some(Typ::Var(lvl.0)),
             Val::Rigid(_, _) => None,
+            Val::Decl(x, list) if list.is_empty() => Some(Typ::Val(x.clone())),
+            Val::Decl(_, _) => None,
             Val::Obj(val, span, sp) => None,
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => None,

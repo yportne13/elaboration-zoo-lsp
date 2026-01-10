@@ -6,7 +6,7 @@ use crate::parser_lib::{Span, ToSpan};
 
 use super::{
     Env, Error, Infer, Tm, Val,
-    cxt::Cxt, Rc,
+    cxt::Cxt, Rc, Decl,
     empty_span,
     parser::syntax::{Pattern, Raw, Icit},
     PatternDetail,
@@ -139,7 +139,7 @@ impl Compiler {
     > {
         let mut accessible = Vec::new();
 
-        let typ = infer.force(typ);
+        let typ = infer.force(&cxt.decl, typ);
         let forced_type = match typ.as_ref() {
             Val::Sum(..) => typ,
             _ => {
@@ -167,7 +167,7 @@ impl Compiler {
                             params.push((name.clone(), ty.clone(), *icit));
                         }
                         to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(*icit));
-                        cxt = cxt.bind(name.clone(), infer.quote(cxt.lvl, ty), ty.clone());
+                        cxt = cxt.bind(name.clone(), infer.quote(&cxt.decl, cxt.lvl, ty), ty.clone());
                     },
                     _ => {break;}
                 }
@@ -227,8 +227,8 @@ impl Compiler {
                     let ret_type = match self.ret_type.as_ref() {
                         Val::Flex(_, _) => &self.ret_type,
                         _ => {
-                            let ret_type = infer.quote(cxt.lvl, &self.ret_type);
-                            &infer.eval(&cxt.env, &ret_type)
+                            let ret_type = infer.quote(&cxt.decl, cxt.lvl, &self.ret_type);
+                            &infer.eval(&cxt.decl, &cxt.env, &ret_type)
                         },
                     };
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
@@ -264,7 +264,7 @@ impl Compiler {
                                 if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
                                     cxt.clone()
                                 } else {
-                                    cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, typ), typ.clone())
+                                    cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
                                 },
                                 arm.3.clone(),
                                 arm.4.clone(),
@@ -281,7 +281,7 @@ impl Compiler {
                 } else {
                     //println!(" -- {}", infer.meta.len());
                     //println!("  {:?}", typ);
-                    let typ = infer.force(typ);
+                    //let typ = infer.force(typ);
                     let (param, constrs) = match typ.as_ref() {
                         Val::Sum(_, param, cases, _) => (param, cases),
                         _ => {
@@ -322,10 +322,10 @@ impl Compiler {
                                                 let val = param.pop()
                                                     .map(|x| x.1)
                                                     .unwrap_or(Val::U(0).into());
-                                                typ = infer.closure_apply(closure, val);
+                                                typ = infer.closure_apply(&cxt.decl, closure, val);
                                             } else {
                                                 new_heads.push((self.fresh(), ty.clone(), name.clone(), *icit));
-                                                typ = infer.closure_apply(closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
+                                                typ = infer.closure_apply(&cxt.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
                                     }
@@ -346,7 +346,7 @@ impl Compiler {
                                             if !x.data {
                                                 cxt.clone()
                                             } else {
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, &typ), typ.clone())
+                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone())
                                             },
                                             new_heads,
                                             raw.clone(),
@@ -374,7 +374,7 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(constr_.clone(), infer.quote(cxt.lvl, &typ), typ.clone()),
+                                                cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
                                                 new_heads,
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -410,7 +410,7 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(cxt.lvl, &typ), typ.clone()),
+                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
                                                 vec![],
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -508,6 +508,7 @@ impl Compiler {
     ) -> Result<Vec<Warning>, Error> {
         self.warnings = Vec::new();
         self.reachable = HashMap::new();
+        let typ = infer.force(&cxt.decl, &typ);
         self.compile_aux(
             infer,
             &[(0, typ.clone(), empty_span("".to_owned()), Icit::Expl)],
@@ -556,10 +557,11 @@ impl Compiler {
     pub fn eval_aux(
         infer: &Infer,
         heads: &Rc<Val>,
+        decl: &Decl,
         cxt: &Env,
         arms: &[(PatternDetail, Rc<Tm>)],
     ) -> Option<(Rc<Tm>, Env)> {
-        let head = infer.force(heads);
+        let head = infer.force(decl, heads);
         let (case_name, params) = match head.as_ref() {
             Val::SumCase {
                 is_trait: _,
@@ -585,7 +587,7 @@ impl Compiler {
                         .try_fold(
                             (body.clone(), cxt.clone()),
                             |(body, cxt), (param, pat): (&Rc<Val>, &PatternDetail)| {
-                                Self::eval_aux(infer, param, &cxt, &[(pat.clone(), body)])
+                                Self::eval_aux(infer, param, decl, &cxt, &[(pat.clone(), body)])
                             },
                         )
                 }

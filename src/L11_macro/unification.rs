@@ -4,7 +4,7 @@ use crate::list::List;
 
 use super::{
     Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
-    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc
+    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -48,13 +48,14 @@ enum SpinePruneStatus {
 impl Infer {
     fn invert_go(
         &self,
+        decl: &Decl,
         sp: &Spine,
     ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
             List { head: None } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
             a => {
-                let (dom, mut ren, mut nlvars, fsp) = self.invert_go(&a.tail())?;
-                match self.force(&a.head().unwrap().0).as_ref() {
+                let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
+                match self.force(decl, &a.head().unwrap().0).as_ref() {
                     Val::Rigid(x, List { head: None }) => {
                         if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
                             ren.remove(&x.0);
@@ -73,10 +74,11 @@ impl Infer {
     pub fn invert(
         &self,
         gamma: Lvl,
+        decl: &Decl,
         sp: &Spine,
     ) -> Result<(PartialRenaming, Option<Pruning>), UnifyError> {
         //println!("{} {:?} {:?}", "invert".green(), gamma, sp);
-        let (dom, ren, nlvars, fsp) = self.invert_go(sp)?;
+        let (dom, ren, nlvars, fsp) = self.invert_go(decl, sp)?;
 
         Ok((
             PartialRenaming {
@@ -100,28 +102,30 @@ impl Infer {
     }
     fn prune_ty_go(
         &mut self,
+        decl: &Decl,
         pr: &Pruning,
         pren: &PartialRenaming,
         a: &Rc<Val>,
     ) -> Result<Rc<Tm>, UnifyError> {
-        let a = self.force(a);
+        let a = self.force(decl, a);
         match (pr, a.as_ref()) {
-            (List { head: None }, _) => self.rename(pren, &a),
+            (List { head: None }, _) => self.rename(decl, pren, &a),
             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
-                let a = self.rename(pren, a)?;
-                let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                let b = self.prune_ty_go(&list.tail(), &lift(pren), &b)?;
+                let a = self.rename(decl, pren, a)?;
+                let b = self.closure_apply(decl, &b, Val::vvar(pren.cod).into());
+                let b = self.prune_ty_go(decl, &list.tail(), &lift(pren), &b)?;
                 Ok(Tm::Pi(x.clone(), *i, a, b).into())
             }
             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
-                let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                self.prune_ty_go(&list.tail(), &skip(pren), &b)
+                let b = self.closure_apply(decl, &b, Val::vvar(pren.cod).into());
+                self.prune_ty_go(decl, &list.tail(), &skip(pren), &b)
             }
             _ => Err(UnifyError::Basic), // impossible case
         }
     }
-    pub fn prune_ty(&mut self, pr: &Pruning, a: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+    pub fn prune_ty(&mut self, decl: &Decl, pr: &Pruning, a: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
         self.prune_ty_go(
+            decl,
             pr,
             &PartialRenaming {
                 occ: None,
@@ -132,20 +136,22 @@ impl Infer {
             a,
         )
     }
-    fn prune_meta(&mut self, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
+    fn prune_meta(&mut self, decl: &Decl, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
         let mty = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a) => a.clone(),
             _ => unreachable!(),
         };
 
-        let prune_ty = self.prune_ty(&pruning, &mty)?;
-        let prunedty = self.eval(&List::new(), &prune_ty); //TODO:revPruning
+        let prune_ty = self.prune_ty(decl, &pruning, &mty)?;
+        let prunedty = self.eval(decl, &List::new(), &prune_ty); //TODO:revPruning
         let m_prime = MetaVar(self.new_meta(prunedty));
 
         let solution = self.eval(
+            decl,
             &List::new(),
             &self.lams(
                 Lvl(pruning.iter().count() as u32), // Assuming Lvl is based on length of pruning
+                decl,
                 &mty,
                 Tm::AppPruning(Tm::Meta(m_prime).into(), pruning).into(),
             ),
@@ -156,14 +162,15 @@ impl Infer {
     }
     fn prune_vflex_go(
         &mut self,
+        decl: &Decl,
         pren: &PartialRenaming,
         sp: Spine,
     ) -> Result<(List<(Option<Rc<Tm>>, Icit)>, SpinePruneStatus), UnifyError> {
         if sp.head().is_none() {
             Ok((List::new(), SpinePruneStatus::OKRenaming))
         } else {
-            let (sp_rest, status) = self.prune_vflex_go(pren, sp.tail())?;
-            let t = self.force(&sp.head().unwrap().0);
+            let (sp_rest, status) = self.prune_vflex_go(decl, pren, sp.tail())?;
+            let t = self.force(decl, &sp.head().unwrap().0);
             match t.as_ref() {
                 Val::Rigid(x, List { head: None }) => match (pren.ren.get(&x.0), status) {
                     (Some(x), _) => Ok((
@@ -180,7 +187,7 @@ impl Infer {
                 _ => match status {
                     SpinePruneStatus::NeedsPruning => Err(UnifyError::Basic),
                     _ => {
-                        let t = self.rename(pren, &t)?;
+                        let t = self.rename(decl, pren, &t)?;
                         Ok((
                             sp_rest.prepend((Some(t), sp.head().unwrap().1)),
                             SpinePruneStatus::OKNonRenaming,
@@ -192,11 +199,12 @@ impl Infer {
     }
     fn prune_vflex(
         &mut self,
+        decl: &Decl,
         pren: &PartialRenaming,
         m: MetaVar,
         sp: Spine,
     ) -> Result<Rc<Tm>, UnifyError> {
-        let (sp, status) = self.prune_vflex_go(pren, sp)?;
+        let (sp, status) = self.prune_vflex_go(decl, pren, sp)?;
 
         let m_prime = match status {
             SpinePruneStatus::OKRenaming => {
@@ -214,7 +222,7 @@ impl Infer {
                 }
             }
             SpinePruneStatus::NeedsPruning => {
-                self.prune_meta(sp.map(|(mt, i)| mt.as_ref().map(|_| *i)), m)?
+                self.prune_meta(decl, sp.map(|(mt, i)| mt.as_ref().map(|_| *i)), m)?
             }
         };
 
@@ -228,52 +236,58 @@ impl Infer {
 
         Ok(t.into())
     }
-    fn rename_sp(&mut self, pren: &PartialRenaming, t: Rc<Tm>, sp: &Spine) -> Result<Rc<Tm>, UnifyError> {
+    fn rename_sp(&mut self, decl: &Decl, pren: &PartialRenaming, t: Rc<Tm>, sp: &Spine) -> Result<Rc<Tm>, UnifyError> {
         match sp {
             List { head: None } => Ok(t),
             a => {
-                let t = self.rename_sp(pren, t, &a.tail())?;
-                let u = self.rename(pren, &a.head().unwrap().0)?;
+                let t = self.rename_sp(decl, pren, t, &a.tail())?;
+                let u = self.rename(decl, pren, &a.head().unwrap().0)?;
                 Ok(Tm::App(t, u, a.head().unwrap().1).into())
             }
         }
     }
-    pub fn rename(&mut self, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
-        let t = self.force(t);
+    pub fn rename(&mut self, decl: &Decl, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+        let t = self.force(decl, t);
         match t.as_ref() {
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == *m_prime => Err(UnifyError::Basic),
-                _ => self.prune_vflex(pren, *m_prime, sp.clone()),
+                _ => self.prune_vflex(decl, pren, *m_prime, sp.clone()),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
                 None => if x.0 <= 1919810 {
                     Err(UnifyError::Basic)
                 } else {
                     let t = Tm::Var(lvl2ix(pren.dom, *x));
-                    self.rename_sp(pren, t.into(), sp)
+                    self.rename_sp(decl, pren, t.into(), sp)
                 }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
-                    self.rename_sp(pren, t.into(), sp)
+                    self.rename_sp(decl, pren, t.into(), sp)
                 }
             },
+            Val::Decl(x, sp) => {
+                let t = Tm::Decl(x.clone());
+                self.rename_sp(decl, pren, t.into(), sp)
+            }
             Val::Obj(x, name, sp) => {
-                let t = self.rename(pren, x)?;
+                let t = self.rename(decl, pren, x)?;
                 let t = Tm::Obj(t, name.clone());
-                self.rename_sp(pren, t.into(), sp)
+                self.rename_sp(decl, pren, t.into(), sp)
             },
             Val::Lam(x, i, closure) => {
                 let t = self.rename(
+                    decl,
                     &lift(pren),
-                    &self.closure_apply(closure, Val::vvar(pren.cod).into()),
+                    &self.closure_apply(decl, closure, Val::vvar(pren.cod).into()),
                 )?;
                 Ok(Tm::Lam(x.clone(), *i, t).into())
             }
             Val::Pi(x, i, a, closure) => {
-                let a = self.rename(pren, a)?;
+                let a = self.rename(decl, pren, a)?;
                 let b = self.rename(
+                    decl,
                     &lift(pren),
-                    &self.closure_apply(closure, Val::vvar(pren.cod).into()),
+                    &self.closure_apply(decl, closure, Val::vvar(pren.cod).into()),
                 )?;
                 Ok(Tm::Pi(x.clone(), *i, a, b).into())
             }
@@ -285,7 +299,7 @@ impl Infer {
                 let new_params = params
                     .iter()
                     .map(|x| {
-                        match (self.rename(pren, &x.1), self.rename(pren, &x.2)) {
+                        match (self.rename(decl, pren, &x.1), self.rename(decl, pren, &x.2)) {
                             (Ok(a), Ok(b)) => Ok((x.0.clone(), a, b, x.3)),
                             (Err(x), _) | (_, Err(x)) => Err(x),
                         }
@@ -299,11 +313,11 @@ impl Infer {
                 case_name,
                 datas: params,
             } => {
-                let typ = self.rename(pren, typ)?;
+                let typ = self.rename(decl, pren, typ)?;
                 let params = params
                     .iter()
                     .map(|p| {
-                        let z = self.rename(pren, &p.1)?;
+                        let z = self.rename(decl, pren, &p.1)?;
                         Ok((p.0.clone(), z, p.2))
                     })
                     .collect::<Result<_, _>>()?;
@@ -315,7 +329,7 @@ impl Infer {
                 }.into())
             }
             Val::Match(val, env, cases) => {
-                let val = self.rename(pren, val)?;
+                let val = self.rename(decl, pren, val)?;
                 let cases = cases
                     .iter()
                     .map(|(pat, tm)| {
@@ -328,9 +342,19 @@ impl Infer {
                         avoid_recursive.global
                             .iter_mut()
                             .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
+                        let declb = decl.iter()
+                            .map(|x| (x.0.clone(), (
+                                x.1.0,
+                                Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                                Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                                x.1.3.clone(),
+                                x.1.4.clone(),
+                            )))
+                            .collect();
                         let body = self.rename(
+                            decl,
                             &pren,
-                            &avoid_recursive.eval(&env, tm),
+                            &avoid_recursive.eval(&declb, &env, tm),
                         )?;
                         Ok((pat.clone(), body))
                     })
@@ -339,11 +363,11 @@ impl Infer {
             }
         }
     }
-    fn lams_go(&self, l: Lvl, t: Rc<Tm>, a: &Rc<VTy>, l_prime: Lvl) -> Rc<Tm> {
+    fn lams_go(&self, l: Lvl, decl: &Decl, t: Rc<Tm>, a: &Rc<VTy>, l_prime: Lvl) -> Rc<Tm> {
         if l == l_prime {
             t
         } else {
-            match self.force(a).as_ref() {
+            match self.force(decl, a).as_ref() {
                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
                     let var_name = format!("x{}", l_prime.0);
                     Tm::Lam(
@@ -351,8 +375,9 @@ impl Infer {
                         *icit,
                         self.lams_go(
                             l,
+                            decl,
                             t,
-                            &self.closure_apply(closure, Val::Rigid(l_prime, List::new()).into()),
+                            &self.closure_apply(decl, closure, Val::Rigid(l_prime, List::new()).into()),
                             l_prime + 1,
                         ),
                     ).into()
@@ -362,8 +387,9 @@ impl Infer {
                     *icit,
                     self.lams_go(
                         l,
+                        decl,
                         t,
-                        &self.closure_apply(closure, Val::Rigid(l_prime, List::new()).into()),
+                        &self.closure_apply(decl, closure, Val::Rigid(l_prime, List::new()).into()),
                         l_prime + 1,
                     ),
                 ).into(),
@@ -371,10 +397,10 @@ impl Infer {
             }
         }
     }
-    pub fn lams(&self, l: Lvl, a: &Rc<VTy>, t: Rc<Tm>) -> Rc<Tm> {
-        self.lams_go(l, t, a, Lvl(0))
+    pub fn lams(&self, l: Lvl, decl: &Decl, a: &Rc<VTy>, t: Rc<Tm>) -> Rc<Tm> {
+        self.lams_go(l, decl, t, a, Lvl(0))
     }
-    fn solve(&mut self, gamma: Lvl, m: MetaVar, sp: Spine, rhs: &Rc<Val>) -> Result<(), UnifyError> {
+    fn solve(&mut self, gamma: Lvl, decl: &Decl, m: MetaVar, sp: Spine, rhs: &Rc<Val>) -> Result<(), UnifyError> {
         /*println!(
             "{} {:?} {:?} {:?}\n  rhs: {:?}",
             "solve".red(),
@@ -383,11 +409,12 @@ impl Infer {
             sp,
             rhs
         );*/
-        let (pren, prune_non_linear) = self.invert(gamma, &sp)?;
-        self.solve_with_pren(m, pren, prune_non_linear, rhs)
+        let (pren, prune_non_linear) = self.invert(gamma, decl, &sp)?;
+        self.solve_with_pren(decl, m, pren, prune_non_linear, rhs)
     }
     fn solve_with_pren(
         &mut self,
+        decl: &Decl,
         m: MetaVar,
         pren: PartialRenaming,
         prune_non_linear: Option<Pruning>,
@@ -402,17 +429,18 @@ impl Infer {
         // can be pruned from the meta type (i.e. that the pruned solution will
         // be well-typed)
         if let Some(pr) = prune_non_linear {
-            self.prune_ty(&pr, &mty)?; //TODO:revPruning?
+            self.prune_ty(decl, &pr, &mty)?; //TODO:revPruning?
         }
 
         let rhs = self.rename(
+            decl,
             &PartialRenaming {
                 occ: Some(m),
                 ..pren
             },
             rhs,
         )?;
-        let solution = self.eval(&List::new(), &self.lams(pren.dom, &mty, rhs));
+        let solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
         self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
         Ok(())
@@ -452,7 +480,7 @@ impl Infer {
                 .zip(out_param)
                 .filter(|(_, x)| !**x)
                 .map(|x| x.0)
-                .map(|(_, tm, _, _)| self.force(tm).to_typ().unwrap_or(Typ::Any))
+                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm).to_typ().unwrap_or(Typ::Any))
                 .collect::<Vec<_>>();
             self.trait_solver.clean();
             if let Some(a) = self.trait_solver.synth(Assertion {
@@ -462,7 +490,7 @@ impl Infer {
                 let ret = self.infer_expr(cxt, Raw::Var(a));
                 let (tm, _) = self.insert(cxt, ret)
                     .map_err(|e| e.0.data)?;
-                let val = self.eval(&cxt.env, &tm);
+                let val = self.eval(&cxt.decl, &cxt.env, &tm);
                 if let Val::SumCase { typ, .. } = val.as_ref() {
                     let _ = self.unify(cxt.lvl, cxt, typ, x);
                 }
@@ -519,13 +547,13 @@ impl Infer {
     ) -> Result<(), UnifyError> {
         let mut go =
             |m: MetaVar, sp: Spine, m_prime: MetaVar, sp_prime: Spine| -> Result<(), UnifyError> {
-                match self.invert(gamma, &sp) {
+                match self.invert(gamma, &cxt.decl, &sp) {
                     Err(_) => {
-                        self.solve(gamma, m_prime, sp_prime, &Val::Flex(m, sp).into())?;
+                        self.solve(gamma, &cxt.decl, m_prime, sp_prime, &Val::Flex(m, sp).into())?;
                         self.solve_multi_trait(cxt, m_prime)
                     },
                     Ok((pren, p1)) => {
-                        self.solve_with_pren(m, pren, p1, &Val::Flex(m_prime, sp_prime).into())
+                        self.solve_with_pren(&cxt.decl, m, pren, p1, &Val::Flex(m_prime, sp_prime).into())
                     }
                 }
             };
@@ -537,18 +565,18 @@ impl Infer {
         }
     }
 
-    fn intersect_go(&mut self, sp: Spine, sp_prime: Spine) -> Option<List<Option<Icit>>> {
+    fn intersect_go(&mut self, decl: &Decl, sp: Spine, sp_prime: Spine) -> Option<List<Option<Icit>>> {
         match (sp, sp_prime) {
             (List { head: None }, List { head: None }) => Some(List::new()),
             (a, b) if a.head().is_some() && b.head().is_some() => {
                 match (
-                    self.force(&a.head().unwrap().0).as_ref(),
-                    self.force(&b.head().unwrap().0).as_ref(),
+                    self.force(decl, &a.head().unwrap().0).as_ref(),
+                    self.force(decl, &b.head().unwrap().0).as_ref(),
                 ) {
                     (
                         Val::Rigid(x, List { head: None }),
                         Val::Rigid(x_prime, List { head: None }),
-                    ) => self.intersect_go(a.tail(), b.tail()).map(|l| {
+                    ) => self.intersect_go(decl, a.tail(), b.tail()).map(|l| {
                         l.prepend(if x == x_prime {
                             Some(a.head().unwrap().1)
                         } else {
@@ -569,10 +597,10 @@ impl Infer {
         sp: Spine,
         sp_prime: Spine,
     ) -> Result<(), UnifyError> {
-        match self.intersect_go(sp.clone(), sp_prime.clone()) {
+        match self.intersect_go(&cxt.decl, sp.clone(), sp_prime.clone()) {
             None => self.unify_sp(l, cxt, &sp, &sp_prime),
             Some(pr) if pr.iter().any(|x| x.is_none()) => {
-                self.prune_meta(pr, m)?;
+                self.prune_meta(&cxt.decl, pr, m)?;
                 Ok(())
             }
             Some(_) => Ok(()),
@@ -580,8 +608,8 @@ impl Infer {
     }
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
         //println!("unify: {t:?} {u:?}");
-        let t = self.force(t);
-        let u = self.force(u);
+        let t = self.force(&cxt.decl, t);
+        let u = self.force(&cxt.decl, u);
         /*println!(
             "uni {}\n == {}",
             pretty_tm(0, cxt.names(), &self.quote(l, &t)),
@@ -594,12 +622,15 @@ impl Infer {
                 self.unify(l, cxt, a, a_prime)?;
                 self.unify(
                     l + 1,
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, a), a.clone()),
-                    &self.closure_apply(b, Val::vvar(l).into()),
-                    &self.closure_apply(b_prime, Val::vvar(l).into()),
+                    &cxt.bind(x.clone(), self.quote(&cxt.decl, cxt.lvl, a), a.clone()),
+                    &self.closure_apply(&cxt.decl, b, Val::vvar(l).into()),
+                    &self.closure_apply(&cxt.decl, b_prime, Val::vvar(l).into()),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
+                self.unify_sp(l, cxt, sp, sp_prime)
+            }
+            (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime)
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
@@ -611,27 +642,27 @@ impl Infer {
             (Val::Lam(_, _, t), Val::Lam(_, _, t_prime)) => self.unify(
                 l + 1,
                 cxt,
-                &self.closure_apply(t, Val::vvar(l).into()),
-                &self.closure_apply(t_prime, Val::vvar(l).into()),
+                &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
+                &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
             ),
             (_, Val::Lam(_, i, t_prime)) => self.unify(
                 l + 1,
                 cxt,
-                &self.v_app(&t, Val::vvar(l).into(), *i),
-                &self.closure_apply(t_prime, Val::vvar(l).into()),
+                &self.v_app(&cxt.decl, &t, Val::vvar(l).into(), *i),
+                &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
             ),
             (Val::Lam(_, i, t), _) => self.unify(
                 l + 1,
                 cxt,
-                &self.closure_apply(t, Val::vvar(l).into()),
-                &self.v_app(&u, Val::vvar(l).into(), *i),
+                &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
+                &self.v_app(&cxt.decl, &u, Val::vvar(l).into(), *i),
             ),
             (Val::Flex(m, sp), _) => {
-                self.solve(l, *m, sp.clone(), &u)?;
+                self.solve(l, &cxt.decl, *m, sp.clone(), &u)?;
                 self.solve_multi_trait(cxt, *m)
             },
             (_, Val::Flex(m, sp)) => {
-                self.solve(l, *m, sp.clone(), &t)?;
+                self.solve(l, &cxt.decl, *m, sp.clone(), &t)?;
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
@@ -695,8 +726,17 @@ impl Infer {
                     avoid_recursive.global
                         .iter_mut()
                         .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
-                    let body1_val = avoid_recursive.eval(&env1, clos1);
-                    let body2_val = avoid_recursive.eval(&env2, clos2);
+                    let declb = cxt.decl.iter()
+                        .map(|x| (x.0.clone(), (
+                            x.1.0,
+                            Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                            Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                            x.1.3.clone(),
+                            x.1.4.clone(),
+                        )))
+                        .collect();
+                    let body1_val = avoid_recursive.eval(&declb, &env1, clos1);
+                    let body2_val = avoid_recursive.eval(&declb, &env2, clos2);
 
                     /*println!(
                         "-> {:?}\n== {:?}",

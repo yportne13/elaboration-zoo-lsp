@@ -1,6 +1,6 @@
 use crate::{list::List, parser_lib::Span};
 
-use super::{Tm, Ty, parser::syntax::Icit, Val, Infer, Lvl, Rc};
+use super::{Tm, Ty, parser::syntax::Icit, Val, Infer, Lvl, Rc, Decl};
 
 pub type Pruning = List<Option<Icit>>;
 
@@ -12,16 +12,16 @@ pub enum Locals {
 }
 
 impl Locals {
-    pub fn update_by_cxt(&self, infer: &Infer, lvl: Lvl, cxt: &List<Rc<Val>>) -> Self {
+    pub fn update_by_cxt(&self, infer: &Infer, decl: &Decl, lvl: Lvl, cxt: &List<Rc<Val>>) -> Self {
         match (self, cxt) {
             (Locals::Here, _) => Locals::Here,
             (Locals::Define(mcl, name, ty, tm), cxt) => {
                 //Locals::Define(Box::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())), name, ty, tm)
                 match cxt.head() {
                     Some(v) => match v.as_ref() {
-                        Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())), name.clone(), ty.clone()),
+                        Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone()),
                         _ => Locals::Define(
-                            Rc::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())),
+                            Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())),
                             name.clone(),
                             ty.clone(),
                             //infer.quote(lvl, v),
@@ -34,12 +34,12 @@ impl Locals {
             (Locals::Bind(mcl, name, ty), cxt) => {
                 match cxt.head() {
                     Some(v) => match v.as_ref() {
-                        Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())), name.clone(), ty.clone()),
+                        Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone()),
                         _ => Locals::Define(
-                            Rc::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())),
+                            Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())),
                             name.clone(),
                             ty.clone(),
-                            infer.quote(lvl, v),
+                            infer.quote(decl, lvl, v),
                         )
                     },
                     _ => panic!("Internal error: unexpected value in context"),

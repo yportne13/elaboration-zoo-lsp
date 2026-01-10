@@ -19,6 +19,8 @@ pub mod pretty;
 
 type Rc<T> = std::sync::Arc<T>;
 
+type Decl = HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
 
@@ -61,6 +63,7 @@ pub enum DeclTm {
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
+    Decl(Span<String>),
     Obj(Rc<Tm>, Span<String>),
     Lam(Span<String>, Icit, Rc<Tm>),
     App(Rc<Tm>, Rc<Tm>, Icit),
@@ -136,6 +139,7 @@ impl std::fmt::Debug for Closure {
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
+    Decl(Span<String>, Spine),
     Obj(Rc<Val>, Span<String>, Spine),
     Lam(Span<String>, Icit, Closure),
     Pi(Span<String>, Icit, Rc<VTy>, Closure),
@@ -240,8 +244,9 @@ impl Infer {
             Tm::Meta(MetaVar(m)).into()
         } else {
             let closed = self.eval(
+                &cxt.decl, 
                 &List::new(),
-                &close_ty(&cxt.locals, self.quote(cxt.lvl, &a)),
+                &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a)),
             );
             let m = self.new_meta(closed);
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
@@ -250,15 +255,15 @@ impl Infer {
     fn lookup_meta(&self, m: MetaVar) -> &MetaEntry {
         &self.meta[m.0 as usize]
     }
-    fn force(&self, t: &Rc<Val>) -> Rc<Val> {
+    fn force(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
         //println!("{} {:?}", "force".red(), t);
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
-                MetaEntry::Solved(t_solved, _) => self.force(&self.v_app_sp(t_solved.clone(), sp)),
+                MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp)),
                 MetaEntry::Unsolved(_) => Val::Flex(*m, sp.clone()).into(),
             },
             Val::Obj(x, a, b) => {
-                Val::Obj(self.force(x), a.clone(), b.clone()).into()
+                Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
             },
             _ => t.clone(),
         }
@@ -270,59 +275,62 @@ impl Infer {
         }
     }
 
-    fn closure_apply(&self, closure: &Closure, u: Rc<Val>) -> Rc<Val> {
+    fn closure_apply(&self, decl: &Decl, closure: &Closure, u: Rc<Val>) -> Rc<Val> {
         //println!("{} {:?} {:?}", "closure apply".yellow(), closure, u);
-        self.eval(&closure.0.prepend(u), &closure.1)
+        self.eval(decl, &closure.0.prepend(u), &closure.1)
     }
 
-    fn v_app(&self, t: &Rc<Val>, u: Rc<Val>, i: Icit) -> Rc<Val> {
+    fn v_app(&self, decl: &Decl, t: &Rc<Val>, u: Rc<Val>, i: Icit) -> Rc<Val> {
         //println!("v_app {t:?} {u:?}");
         match t.as_ref() {
-            Val::Lam(_, _, closure) => self.closure_apply(closure, u),
+            Val::Lam(_, _, closure) => self.closure_apply(decl, closure, u),
             Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
+            Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
 
-    fn v_app_sp(&self, t: Rc<Val>, spine: &Spine) -> Rc<Val> {
+    fn v_app_sp(&self, decl: &Decl, t: Rc<Val>, spine: &Spine) -> Rc<Val> {
         //spine.iter().rev().fold(t, |acc, (u, i)| self.v_app(acc, u.clone(), *i))
         match spine {
             List { head: None } => t,
             a => {
                 let (u, i) = a.head().unwrap();
-                self.v_app(&self.v_app_sp(t, &a.tail()), u.clone(), *i)
+                self.v_app(decl, &self.v_app_sp(decl, t, &a.tail()), u.clone(), *i)
             }
         }
     }
 
-    fn v_app_pruning(&self, env: &Env, v: Rc<Val>, pr: &Pruning) -> Rc<Val> {
+    fn v_app_pruning(&self, decl: &Decl, env: &Env, v: Rc<Val>, pr: &Pruning) -> Rc<Val> {
         //println!("{} {:?} {:?}", "v_app_bds".green(), v, bds);
         match (env, pr) {
             (List { head: None }, List { head: None }) => v,
             (a, b) if a.head().is_some() && matches!(b.head(), Some(Some(_))) => self.v_app(
-                &self.v_app_pruning(&a.tail(), v, &b.tail()),
+                decl,
+                &self.v_app_pruning(decl, &a.tail(), v, &b.tail()),
                 a.head().unwrap().clone(),
                 b.head().unwrap().unwrap(),
             ),
             (a, b) if a.head().is_some() && matches!(b.head(), Some(None)) => {
-                self.v_app_pruning(&a.tail(), v, &b.tail())
+                self.v_app_pruning(decl, &a.tail(), v, &b.tail())
             }
             _ => panic!("impossible {v:?}"),
         }
     }
 
-    fn eval(&self, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
+    fn eval(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
         //println!("{} {:?}", "eval".yellow(), tm);
         match tm.as_ref() {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
                 None => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
             },
+            Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),//TODO:directly unwrap?
             Tm::Obj(tm, name) => {
-                let a = self.eval(env, tm);
-                let a = self.force(&a);
+                let a = self.eval(decl, env, tm);
+                let a = self.force(decl, &a);
                 match a.as_ref() {
                     Val::Sum(_, params, _, _) => {
                         params.iter()
@@ -345,18 +353,18 @@ impl Infer {
                     },
                 }
             }
-            Tm::App(t, u, i) => self.v_app(&self.eval(env, t), self.eval(env, u), *i),
+            Tm::App(t, u, i) => self.v_app(decl, &self.eval(decl, env, t), self.eval(decl, env, u), *i),
             Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
             Tm::Pi(x, i, a, b) => {
-                Val::Pi(x.clone(), *i, self.eval(env, a), Closure(env.clone(), b.clone())).into()
+                Val::Pi(x.clone(), *i, self.eval(decl, env, a), Closure(env.clone(), b.clone())).into()
             }
             Tm::Let(_, _, t, u) => {
-                let t_val = self.eval(env, t);
-                self.eval(&env.prepend(t_val), u)
+                let t_val = self.eval(decl, env, t);
+                self.eval(decl, &env.prepend(t_val), u)
             }
             Tm::U(x) => Val::U(*x).into(),
             Tm::Meta(m) => self.v_meta(*m),
-            Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, t), pr),
+            Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
             Tm::Prim => match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
@@ -368,7 +376,7 @@ impl Infer {
             Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
-                    .map(|x| (x.0.clone(), self.eval(env, &x.1), self.eval(env, &x.2), x.3))
+                    .map(|x| (x.0.clone(), self.eval(decl, env, &x.1), self.eval(decl, env, &x.2), x.3))
                     .collect();
                 Val::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
             }
@@ -380,9 +388,9 @@ impl Infer {
             } => {
                 let datas = datas
                     .iter()
-                    .map(|p| (p.0.clone(), self.eval(env, &p.1), p.2))
+                    .map(|p| (p.0.clone(), self.eval(decl, env, &p.1), p.2))
                     .collect();
-                let typ = self.eval(env, typ);
+                let typ = self.eval(decl, env, typ);
                 Val::SumCase {
                     is_trait: *is_trait,
                     typ,
@@ -391,12 +399,12 @@ impl Infer {
                 }.into()
             }
             Tm::Match(tm, cases) => {
-                let val = self.eval(env, tm);
-                let val = self.force(&val);
+                let val = self.eval(decl, env, tm);
+                let val = self.force(decl, &val);
                 match val.as_ref() {
                     Val::SumCase { .. } => {
-                        match Compiler::eval_aux(self, &val, env, cases) {
-                            Some((tm, env)) => self.eval(&env, &tm),
+                        match Compiler::eval_aux(self, &val, decl, env, cases) {
+                            Some((tm, env)) => self.eval(decl, &env, &tm),
                             None => Val::Match(val, env.clone(), cases.clone()).into(),
                         }
                     }
@@ -408,7 +416,7 @@ impl Infer {
         }
     }
 
-    fn quote_sp(&self, l: Lvl, t: Rc<Tm>, spine: &Spine) -> Rc<Tm> {
+    fn quote_sp(&self, decl: &Decl, l: Lvl, t: Rc<Tm>, spine: &Spine) -> Rc<Tm> {
         /*spine.iter().fold(t, |acc, u| {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
         })*/
@@ -416,28 +424,29 @@ impl Infer {
             List { head: None } => t,
             _ => {
                 let head = spine.head().unwrap();
-                Tm::App(self.quote_sp(l, t, &spine.tail()), self.quote(l, &head.0), head.1).into()
+                Tm::App(self.quote_sp(decl, l, t, &spine.tail()), self.quote(decl, l, &head.0), head.1).into()
             }
         }
     }
 
-    pub fn quote(&self, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
+    pub fn quote(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
         //println!("{} {:?}", "quote".green(), t);
-        let t = self.force(t);
+        let t = self.force(decl, t);
         match t.as_ref() {
-            Val::Flex(m, sp) => self.quote_sp(l, Tm::Meta(*m).into(), sp),
-            Val::Rigid(x, sp) => self.quote_sp(l, Tm::Var(lvl2ix(l, *x)).into(), sp),
-            Val::Obj(x, name, sp) => self.quote_sp(l, Tm::Obj(self.quote(l, x), name.clone()).into(), sp),
+            Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(*m).into(), sp),
+            Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, *x)).into(), sp),
+            Val::Decl(x, sp) => self.quote_sp(decl, l, Tm::Decl(x.clone()).into(), sp),
+            Val::Obj(x, name, sp) => self.quote_sp(decl, l, Tm::Obj(self.quote(decl, l, x), name.clone()).into(), sp),
             Val::Lam(x, i, closure) => Tm::Lam(
                 x.clone(),
                 *i,
-                self.quote(l + 1, &self.closure_apply(closure, Val::vvar(l).into())),
+                self.quote(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into())),
             ).into(),
             Val::Pi(x, i, a, closure) => Tm::Pi(
                 x.clone(),
                 *i,
-                self.quote(l, a),
-                self.quote(l + 1, &self.closure_apply(closure, Val::vvar(l).into())),
+                self.quote(decl, l, a),
+                self.quote(decl, l + 1, &self.closure_apply(decl, closure, Val::vvar(l).into())),
             ).into(),
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
@@ -446,7 +455,7 @@ impl Infer {
             Val::Sum(name, params, cases, is_trait) => {
                 let new_params = params.iter()
                     .map(|x| {
-                        (x.0.clone(), self.quote(l, &x.1), self.quote(l, &x.2), x.3)
+                        (x.0.clone(), self.quote(decl, l, &x.1), self.quote(decl, l, &x.2), x.3)
                     })
                     .collect();
                 Tm::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
@@ -460,12 +469,12 @@ impl Infer {
                 let datas = datas
                     .iter()
                     .map(|p| {
-                        (p.0.clone(), self.quote(l, &p.1), p.2)
+                        (p.0.clone(), self.quote(decl, l, &p.1), p.2)
                     })
                     .collect();
                 Tm::SumCase {
                     is_trait: *is_trait,
-                    typ: self.quote(l, typ),
+                    typ: self.quote(decl, l, typ),
                     case_name: case_name.clone(),
                     datas,
                 }.into()
@@ -490,23 +499,32 @@ impl Infer {
                             avoid_recursive.global
                                 .iter_mut()
                                 .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
-                            let tm = avoid_recursive.eval(&env, &x.1);
-                            self.quote(l+x.0.bind_count(), &tm)
+                            let declb = decl.iter()
+                                .map(|x| (x.0.clone(), (
+                                    x.1.0,
+                                    Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                                    Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                                    x.1.3.clone(),
+                                    x.1.4.clone(),
+                                )))
+                                .collect();
+                            let tm = avoid_recursive.eval(&declb, &env, &x.1);
+                            self.quote(decl, l+x.0.bind_count(), &tm)
                         }
                     ))
                     .collect();
-                Tm::Match(self.quote(l, val), tm_cases).into()
+                Tm::Match(self.quote(decl, l, val), tm_cases).into()
             }
         }
     }
 
-    pub fn nf(&self, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
+    pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
         let l = Lvl(env.iter().count() as u32);
-        self.quote(l, &self.eval(env, t))
+        self.quote(decl, l, &self.eval(decl, env, t))
     }
 
     fn close_val(&self, cxt: &Cxt, t: &Rc<Val>) -> Closure {
-        Closure(cxt.env.clone(), self.quote(cxt.lvl + 1, t))
+        Closure(cxt.env.clone(), self.quote(&cxt.decl, cxt.lvl + 1, t))
     }
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
@@ -529,8 +547,8 @@ impl Infer {
                     UnifyError::Basic => format!(
                         //"can't unify {:?} == {:?}",
                         "can't unify\n  expected: {}\n      find: {}",
-                        pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
-                        pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
+                        pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
+                        pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
                     ),
                     UnifyError::Trait(e) => e,
                 };
@@ -567,7 +585,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));
-            ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.env, &x));
+            ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.decl, &cxt.env, &x));
             ret += "\n";
         }
     }

@@ -125,19 +125,22 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a: Rc<Val>, global_idx: Lvl) -> Self {
+    pub fn fake_bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>, global_idx: Lvl) -> Result<Self, Error> {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (global_idx + 1919810, a));
-        Cxt {
+        let mut decl = self.decl.clone();
+        let t = decl.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
+        if let Some((span, _, _, _, _)) = t {
+            return Err(Error(span.map(|_| format!("redefine {}", x.data))));
+        }
+        Ok(Cxt {
             env: self.env.clone(),
             lvl: self.lvl,
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
-            src_names,
-            decl: self.decl.clone(),
+            src_names: self.src_names.clone(),
+            decl,
             update_from: self.update_from,
-        }
+        })
     }
 
     pub fn new_binder(&self, x: Span<String>, a_quote: Rc<Tm>) -> Self {
@@ -172,9 +175,9 @@ impl Cxt {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut decl = self.decl.clone();
         let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
-        if let Some((span, _, _, _, _)) = t {
+        /*if let Some((span, _, _, _, _)) = t {
             return Err(Error(span.map(|_| format!("redefine {}", x.data))));
-        }
+        }*/
         Ok(Cxt {
             env: self.env.clone(),
             lvl: self.lvl,
@@ -190,10 +193,10 @@ impl Cxt {
     /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
     pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: &Rc<Val>) -> Rc<Val> {
         // quote def from (Lvl (length from))
-        let quoted = infer.quote(Lvl(from.iter().count() as u32), val);
+        let quoted = infer.quote(&self.decl, Lvl(from.iter().count() as u32), val);
 
         // eval def to
-        infer.eval(to, &quoted)
+        infer.eval(&self.decl, to, &quoted)
     }
 
     pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>, update_prune: bool) -> Cxt {
@@ -269,7 +272,7 @@ impl Cxt {
             .iter()
             .zip(self.names().iter())
             .for_each(|(x, name)| {
-                println!("{name}: {}", pretty_tm(0, self.names(), &infer.quote(self.lvl, x)))
+                println!("{name}: {}", pretty_tm(0, self.names(), &infer.quote(&self.decl, self.lvl, x)))
             });
     }
 }

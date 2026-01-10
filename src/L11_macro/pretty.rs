@@ -93,6 +93,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => if ix.0 >= 1919810 {format!("recursive_{}", ix.0 - 1919810)} else {go_ix(ns, ix.0)},
+        Tm::Decl(x) => x.data.to_string(),
         Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
@@ -129,7 +130,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         Tm::U(uni) => format!("Type {uni}"),
         Tm::Pi(name_span, i, a, b) => {
             let need_paren = prec > PIP;
-            let is_anonymous = name_span.data == "_" || matches!(i, Icit::Impl);
+            let is_anonymous = name_span.data == "_";
             if is_anonymous {
                 let f_a = pretty_tm(APPP, ns.clone(), a);
                 let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
