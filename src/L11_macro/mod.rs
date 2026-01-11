@@ -213,7 +213,7 @@ pub struct Infer {
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
-    pub hover_table: Vec<(Span<()>, Cxt, Rc<Val>)>,
+    pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
 }
 
 impl Infer {

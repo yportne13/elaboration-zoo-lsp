@@ -11,7 +11,7 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: BiMap<String, Lvl, Rc<VTy>>,
+    pub src_names: BiMap<String, Lvl, (Span<()>, Rc<VTy>)>,
     pub decl: HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
     update_from: Option<usize>,
 }
@@ -113,7 +113,7 @@ impl Cxt {
     pub fn bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, a));
+        src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), a)));
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
@@ -159,7 +159,7 @@ impl Cxt {
     pub fn define(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, va));
+        src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), va)));
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
@@ -238,7 +238,7 @@ impl Cxt {
         }
     }
 
-    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, Rc<Val>>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
+    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, (Span<()>, Rc<Val>)>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
         if env.is_empty() {
             List::new()
         } else {
@@ -257,7 +257,7 @@ impl Cxt {
             }*/
             
             let ret = env_t.prepend(ret);
-            if let Some(x) = src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)) {
+            if let Some((_, x)) = src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)) {
                 *x = self.fresh_val(infer, &self.env, &env_tt, x);
             }
             ret

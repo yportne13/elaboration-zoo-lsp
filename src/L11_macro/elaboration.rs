@@ -567,12 +567,12 @@ impl Infer {
             // Infer variable types
             Raw::Var(name) => match cxt.src_names.get(&name.data) {
                 Some((x, a)) => {
-                    self.hover_table.push((t_span, cxt.clone_without_src_names(), a.clone()));
-                    Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone()))
+                    self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
+                    Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
-                    Some((_, _, _, _, vty)) => {
-                        self.hover_table.push((t_span, cxt.clone_without_src_names(), vty.clone()));
+                    Some((def, _, _, _, vty)) => {
+                        self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {

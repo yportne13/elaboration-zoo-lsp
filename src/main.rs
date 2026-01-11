@@ -324,8 +324,8 @@ impl LanguageServer for Backend {
                     ),
                 ),*/
                 // definition: Some(GotoCapability::default()),
-                //definition_provider: Some(OneOf::Left(true)),
-                //references_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 //rename_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
@@ -434,7 +434,7 @@ impl LanguageServer for Backend {
                         .get(uri.as_str())
                         .and_then(|x| x.hover_table.iter()
                             .find(|x| x.0.contains(offset))
-                            .map(|t| (t.0, pretty_tm(0, t.1.names(), &x.quote(&t.1.decl, t.1.lvl, &t.2))))
+                            .map(|(span, _, cxt, val)| (*span, pretty_tm(0, cxt.names(), &x.quote(&cxt.decl, cxt.lvl, &val))))
                         )
                         .and_then(|x| Some(Hover {
                             contents: HoverContents::Markup(MarkupContent {
@@ -451,68 +451,78 @@ impl LanguageServer for Backend {
          Ok(hover())
     }
 
-    /*fn goto_definition(
+    fn goto_definition(
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
         let definition = || -> Option<GotoDefinitionResponse> {
             let uri = params.text_document_position_params.text_document.uri;
-            let semantic = self.semantic_map.get(uri.as_str())?;
+            let semantic = self.hover_table.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position_params.position;
             let offset = position_to_offset(position, &rope)?;
 
-            let interval = semantic.ident_range.find(offset, offset + 1).next()?;
-            let interval_val = interval.val;
-            let range = match interval_val {
-                IdentType::Binding(symbol_id) => {
-                    let span = &semantic.table.symbol_id_to_span[symbol_id];
-                    Some(span.clone())
-                }
-                IdentType::Reference(reference_id) => {
-                    let reference = semantic.table.reference_id_to_reference.get(reference_id)?;
-                    let symbol_id = reference.symbol_id?;
-                    let symbol_range = semantic.table.symbol_id_to_span.get(symbol_id)?;
-                    Some(symbol_range.clone())
-                }
-            };
-
-            range.and_then(|range| {
-                let start_position = offset_to_position(range.start, &rope)?;
-                let end_position = offset_to_position(range.end, &rope)?;
-                Some(GotoDefinitionResponse::Scalar(Location::new(
-                    uri,
-                    Range::new(start_position, end_position),
-                )))
-            })
+            let interval = semantic.hover_table
+                .iter()
+                .find(|x| x.0.contains(offset))
+                .and_then(|x| {
+                    let start_position = offset_to_position(x.1.start_offset as usize, &rope)?;
+                    let end_position = offset_to_position(x.1.end_offset as usize, &rope)?;
+                    Some(GotoDefinitionResponse::Scalar(
+                        Location::new(
+                            uri.clone(),
+                            Range::new(start_position, end_position),
+                        )
+                    ))
+                })
+                .or({
+                    let ret: Vec<Location> = semantic.hover_table
+                        .iter()
+                        .filter(|x| x.1.contains(offset))
+                        .map(|x| x.0)
+                        .flat_map(|x| Some(Location::new(
+                            uri.clone(),
+                            Range::new(
+                                offset_to_position(x.start_offset as usize, &rope)?,
+                                offset_to_position(x.end_offset as usize, &rope)?,
+                            )
+                        )))
+                        .collect();
+                    if ret.is_empty() {
+                        None
+                    } else {
+                        Some(GotoDefinitionResponse::Array(ret))
+                    }
+                });
+            interval
         }();
         Ok(definition)
-    }*/
+    }
 
-    /*fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+    fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let reference_list = || -> Option<Vec<Location>> {
             let uri = params.text_document_position.text_document.uri;
-            let semantic = self.semantic_map.get(uri.as_str())?;
+            let semantic = self.hover_table.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position.position;
             let offset = position_to_offset(position, &rope)?;
-            let reference_span_list = get_references(&semantic, offset, offset + 1, false)?;
 
-            let ret = reference_span_list
-                .into_iter()
-                .filter_map(|range| {
-                    let start_position = offset_to_position(range.start, &rope)?;
-                    let end_position = offset_to_position(range.end, &rope)?;
-
-                    let range = Range::new(start_position, end_position);
-
-                    Some(Location::new(uri.clone(), range))
-                })
-                .collect::<Vec<_>>();
+            let ret: Vec<Location> = semantic.hover_table
+                .iter()
+                .filter(|x| x.1.contains(offset))
+                .map(|x| x.0)
+                .flat_map(|x| Some(Location::new(
+                    uri.clone(),
+                    Range::new(
+                        offset_to_position(x.start_offset as usize, &rope)?,
+                        offset_to_position(x.end_offset as usize, &rope)?,
+                    )
+                )))
+                .collect();
             Some(ret)
         }();
         Ok(reference_list)
-    }*/
+    }
 
     /*fn semantic_tokens_full(
         &mut self,
