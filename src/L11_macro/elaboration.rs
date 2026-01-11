@@ -278,21 +278,18 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let (ret_cxt, vty, vt, vtyp_pretty, vt_pretty) = {
-                    let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
                     let vtyp = self.eval(&ret_cxt.decl, &ret_cxt.env, &typ_tm);
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone(), global_idx)?;
-                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
+                    let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
                     let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm));
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
-                    self.global.insert(global_idx, vt.clone());
                     (
                         ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone())?,
                         vtyp,
@@ -382,14 +379,11 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let mut cxt = {
-                    let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
-                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone(), global_idx)?;
-                    self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
+                    let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.decl, &fake_cxt.env, &t_tm);
-                    self.global.insert(global_idx, vt.clone());
                     cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp)?
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
@@ -577,9 +571,8 @@ impl Infer {
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
-                    Some((_, tm, _, _, vty)) => {
+                    Some((_, _, _, _, vty)) => {
                         self.hover_table.push((t_span, cxt.clone_without_src_names(), vty.clone()));
-                        //Ok((tm.clone(), vty.clone()))
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {

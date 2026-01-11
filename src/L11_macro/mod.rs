@@ -175,11 +175,7 @@ impl Val {
 }
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
-    if x.0 > 1919810 {
-        Ix(x.0)
-    } else {
-        Ix(l.0 - x.0 - 1)
-    }
+    Ix(l.0 - x.0 - 1)
 }
 
 use std::{
@@ -214,7 +210,6 @@ impl IError {
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
-    global: HashMap<Lvl, Rc<VTy>>,
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
@@ -225,7 +220,6 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
-            global: HashMap::new(),
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
@@ -325,7 +319,7 @@ impl Infer {
         match tm.as_ref() {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
-                None => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
+                None => panic!("var not found"),
             },
             Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),//TODO:directly unwrap?
             Tm::Obj(tm, name) => {
@@ -495,10 +489,6 @@ impl Infer {
                         {
                             let env = (0..x.0.bind_count())
                                 .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
-                            let mut avoid_recursive = self.clone();
-                            avoid_recursive.global
-                                .iter_mut()
-                                .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
                             let declb = decl.iter()
                                 .map(|x| (x.0.clone(), (
                                     x.1.0,
@@ -508,7 +498,7 @@ impl Infer {
                                     x.1.4.clone(),
                                 )))
                                 .collect();
-                            let tm = avoid_recursive.eval(&declb, &env, &x.1);
+                            let tm = self.eval(&declb, &env, &x.1);
                             self.quote(decl, l+x.0.bind_count(), &tm)
                         }
                     ))
@@ -1424,10 +1414,6 @@ def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
 
 def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
 
-def Eq[A](x: A, y: A): Type 1 = (P : A -> Type 0) -> P x -> P y
-
-def refl[A, x: A]: Eq[A] x x = _ => px => px
-
 struct Bits {
     name: String
     size: Nat
@@ -1443,9 +1429,9 @@ def sigC = new Bits("C", two)
 
 def sigD = new Bits("D", two)
 
-def ab = assign sigA sigB refl
+def ab = assign sigA sigB rfl
 
-def cd = assign sigC sigD refl
+def cd = assign sigC sigD rfl
 
 def three = add two (succ zero)
 

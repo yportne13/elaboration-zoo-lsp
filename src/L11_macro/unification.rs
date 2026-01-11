@@ -254,11 +254,8 @@ impl Infer {
                 _ => self.prune_vflex(decl, pren, *m_prime, sp.clone()),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => if x.0 <= 1919810 {
+                None => {
                     Err(UnifyError::Basic)
-                } else {
-                    let t = Tm::Var(lvl2ix(pren.dom, *x));
-                    self.rename_sp(decl, pren, t.into(), sp)
                 }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
@@ -338,10 +335,6 @@ impl Infer {
                                 env.prepend(Val::vvar(pren.cod).into()),
                                 lift(&pren),
                             ));
-                        let mut avoid_recursive = self.clone();
-                        avoid_recursive.global
-                            .iter_mut()
-                            .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
                         let declb = decl.iter()
                             .map(|x| (x.0.clone(), (
                                 x.1.0,
@@ -354,7 +347,7 @@ impl Infer {
                         let body = self.rename(
                             decl,
                             &pren,
-                            &avoid_recursive.eval(&declb, &env, tm),
+                            &self.eval(&declb, &env, tm),
                         )?;
                         Ok((pat.clone(), body))
                     })
@@ -727,10 +720,6 @@ impl Infer {
                     );*/
                     //let body1_val = self.eval(&bind_env, clos1.clone());
                     //let body2_val = self.eval(&bind_env, clos2.clone());
-                    let mut avoid_recursive = self.clone();
-                    avoid_recursive.global
-                        .iter_mut()
-                        .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
                     let declb = cxt.decl.iter()
                         .map(|x| (x.0.clone(), (
                             x.1.0,
@@ -740,8 +729,8 @@ impl Infer {
                             x.1.4.clone(),
                         )))
                         .collect();
-                    let body1_val = avoid_recursive.eval(&declb, &env1, clos1);
-                    let body2_val = avoid_recursive.eval(&declb, &env2, clos2);
+                    let body1_val = self.eval(&declb, &env1, clos1);
+                    let body2_val = self.eval(&declb, &env2, clos2);
 
                     /*println!(
                         "-> {:?}\n== {:?}",

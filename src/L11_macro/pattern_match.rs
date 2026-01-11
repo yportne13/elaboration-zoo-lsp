@@ -192,7 +192,7 @@ impl Compiler {
     fn compile_aux(
         &mut self,
         infer: &mut Infer,
-        heads: &[(Var, Rc<Val>, Span<String>, Icit)],
+        heads: &[(Rc<Val>, Span<String>, Icit)],
         arms: &[(MatchArm, usize, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
         context: &MatchContext,
     ) -> Result<bool, Error> {
@@ -244,7 +244,7 @@ impl Compiler {
                 })),
                 [] => Ok(false)
             },
-            [(var, typ, head_name, icit), heads_rest @ ..] => {
+            [(typ, head_name, icit), heads_rest @ ..] => {
                 let not_necessary = arms
                     .iter()
                     .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, i), ..] if &i == icit));
@@ -324,7 +324,7 @@ impl Compiler {
                                                     .unwrap_or(Val::U(0).into());
                                                 typ = infer.closure_apply(&cxt.decl, closure, val);
                                             } else {
-                                                new_heads.push((self.fresh(), ty.clone(), name.clone(), *icit));
+                                                new_heads.push((ty.clone(), name.clone(), *icit));
                                                 typ = infer.closure_apply(&cxt.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
@@ -336,7 +336,7 @@ impl Compiler {
                                                 pats: [
                                                     new_heads
                                                         .iter()
-                                                        .map(|n| Pattern::Any(x.to_span().map(|_| false), n.3))
+                                                        .map(|n| Pattern::Any(x.to_span().map(|_| false), n.2))
                                                         .collect::<Vec<_>>(),
                                                     arm.pats[1..].to_vec(),
                                                 ].concat(),
@@ -367,7 +367,7 @@ impl Compiler {
                                                     pats: [
                                                         new_heads
                                                             .iter()
-                                                            .map(|n| Pattern::Any(constr_.to_span().map(|_| false), n.3))
+                                                            .map(|n| Pattern::Any(constr_.to_span().map(|_| false), n.2))
                                                             .collect::<Vec<_>>(),
                                                         arm.pats[1..].to_vec(),
                                                     ].concat(),
@@ -511,7 +511,7 @@ impl Compiler {
         let typ = infer.force(&cxt.decl, &typ);
         self.compile_aux(
             infer,
-            &[(0, typ.clone(), empty_span("".to_owned()), Icit::Expl)],
+            &[(typ.clone(), empty_span("".to_owned()), Icit::Expl)],
             &arms
                 .iter()
                 .enumerate()
