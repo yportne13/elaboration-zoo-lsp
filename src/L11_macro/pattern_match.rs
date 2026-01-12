@@ -178,9 +178,9 @@ impl Compiler {
                 }
             }*/
 
-            let mut temp_infer = infer.clone();
+            //let mut temp_infer = infer.clone();
             // 4. Try to unify it with the type of the matched term.
-            if let Ok((_, cxt)) = temp_infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
+            if let Ok((_, cxt)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
                 // If unification succeeds, the constructor is accessible.
                 accessible.push((constr_def, params, cxt));
             }
