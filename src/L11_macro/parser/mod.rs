@@ -810,3 +810,13 @@ def get_x(p: Point): Nat = p.x
 "#;
     println!("{:#?}", parser(input, 0).unwrap());
 }
+
+#[test]
+fn test1() {
+    let input = r#"
+def t = match x {
+    case zero => a.b :: c.
+}
+"#;
+    println!("{:#?}", parser(input, 0).unwrap());
+}

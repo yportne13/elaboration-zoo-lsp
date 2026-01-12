@@ -66,8 +66,12 @@ struct Backend {
     document_map: DashMap<String, Rope>,
     document_id: DashMap<String, u32>,
     hover_table: DashMap<String, Infer>,
+    // 状态标记和条件变量
+    processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：(任务槽, 条件变量)
     worker_signal: Arc<(Mutex<Option<AnalysisJob>>, Condvar)>,
+    // 处理完成的信号
+    processed_signal: Arc<(Mutex<HashMap<String, bool>>, Condvar)>,
 }
 
 impl Backend {
@@ -84,6 +88,8 @@ impl Backend {
         let signal_clone = worker_signal.clone();
         let sender_clone = client.connection.sender.clone(); // 假设 Connection sender 是可 Clone 的
 
+        let processed_signal = Arc::new((Mutex::new(HashMap::new()), Condvar::new()));
+
         /*thread::spawn(move || {
             worker_loop(state_clone, signal_clone, sender_clone);
         });*/
@@ -95,7 +101,9 @@ impl Backend {
             document_map,
             document_id,
             hover_table,
+            processing_uris: DashMap::new(),
             worker_signal,
+            processed_signal,
         });
         let for_thread = ret.clone();
         thread::spawn(move || {
@@ -279,14 +287,14 @@ impl LanguageServer for Backend {
                     },
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
-                /*completion_provider: Some(CompletionOptions {
+                completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(vec![".".to_string()]),
                     work_done_progress_options: Default::default(),
                     all_commit_characters: None,
                     completion_item: None,
                 }),
-                execute_command_provider: Some(ExecuteCommandOptions {
+                /*execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec!["dummy.do_something".to_string()],
                     work_done_progress_options: Default::default(),
                 }),*/
@@ -675,16 +683,49 @@ impl LanguageServer for Backend {
         Ok(Some(inlay_hint_list))
     }*/
 
-    /*fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+    fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
+        let uri_str = uri.to_string();
+
+        // 5. 等待当前URI处理完成（带超时）
+        let (lock, cvar) = &*self.processed_signal;
+        let mut processed = lock.lock().unwrap();
+        
+        // 等待直到该URI已处理完成（或超时）
+        let start = std::time::Instant::now();
+        while self.processing_uris.contains_key(&uri_str) && start.elapsed() < Duration::from_millis(3500) {
+            // 检查是否已处理完成
+            if processed.get(&uri_str).is_some() {
+                break;
+            }
+            processed = cvar.wait_timeout(processed, Duration::from_millis(100)).unwrap().0;
+        }
+
+        // 清理已处理的标记
+        processed.remove(&uri_str);
+        drop(processed);
+
+        eprintln!("on completion");
         let position = params.text_document_position.position;
         let completions = || -> Option<Vec<CompletionItem>> {
             let rope = self.document_map.get(&uri.to_string())?;
-            let ast = self.ast_map.get(&uri.to_string())?;
+            let infer = self.hover_table.get(&uri.to_string())?;
             let char = rope.try_line_to_char(position.line as usize).ok()?;
             let offset = char + position.character as usize;
-            let completions = completion(&ast, offset);
-            let mut ret = Vec::with_capacity(completions.len());
+            //eprintln!("{}: {:?}", offset, infer.completion_table);
+            let completions = infer.completion_table
+                .iter()
+                .filter(|x| x.0.contains(offset - 2))
+                //.inspect(|x| eprintln!("{}", x.1))
+                .map(|x| CompletionItem {
+                    label: x.1.clone(),
+                    insert_text: Some(x.1.clone()),
+                    kind: Some(CompletionItemKind::VARIABLE),
+                    detail: Some(x.1.clone()),
+                    ..Default::default()
+                })
+                .collect();
+            /*let mut ret = Vec::with_capacity(completions.len());
             for (_, item) in completions {
                 match item {
                     crate::completion::ImCompleteCompletionItem::Variable(var) => {
@@ -718,11 +759,11 @@ impl LanguageServer for Backend {
                         });
                     }
                 }
-            }
-            Some(ret)
+            }*/
+            Some(completions)
         }();
         Ok(completions.map(CompletionResponse::Array))
-    }*/
+    }
 
     /*fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let workspace_edit = || -> Option<WorkspaceEdit> {
@@ -807,6 +848,15 @@ impl Backend {
                 pending.take().unwrap() // 取出任务，并将槽置空
             };
 
+            let uri_str = job.uri.to_string();
+            {
+                let (lock, cvar) = &*self.processed_signal;
+                let mut processed = lock.lock().unwrap();
+                processed.remove(&uri_str);
+                drop(processed);
+            }
+            self.processing_uris.insert(uri_str.clone(), true);
+
             // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
             eprintln!("Worker starting job for version {:?}", job.version);
             self.on_change(TextDocumentItem {
@@ -814,6 +864,12 @@ impl Backend {
                 text: &job.text,
                 version: job.version,
             });
+
+            self.processing_uris.remove(&uri_str);
+            let (lock, cvar) = &*self.processed_signal;
+            let mut processed = lock.lock().unwrap();
+            processed.insert(uri_str, true);
+            cvar.notify_all();
         }
     }
     fn on_change(&self, params: TextDocumentItem<'_>) {

@@ -214,6 +214,7 @@ pub struct Infer {
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
+    pub completion_table: Vec<(Span<()>, String)>,
 }
 
 impl Infer {
@@ -224,6 +225,7 @@ impl Infer {
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
             hover_table: vec![],
+            completion_table: vec![],
         }
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {

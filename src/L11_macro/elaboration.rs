@@ -617,6 +617,17 @@ impl Infer {
                                 }
                             }
                         }
+                        if t.data.is_empty() {
+                            c.iter()
+                                .flatten()
+                                .map(|x| (t_span, x.0.data.clone()))
+                                .chain(
+                                    params
+                                        .iter()
+                                        .map(|x| (t_span, x.0.data.clone()))
+                                )
+                                .for_each(|x| self.completion_table.push(x));
+                        }
                         if let Some(val) = c.and_then(|params| {
                                 params.into_iter()
                                     .find(|(fields_name, _)| fields_name == &t)
@@ -633,7 +644,7 @@ impl Infer {
                                     val,
                                 ))
                             } else {
-                                self.trait_wrap(cxt, t, a, x, tm)
+                                self.trait_wrap(cxt, t, a, x, tm, t_span)
                             }
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
@@ -646,10 +657,10 @@ impl Infer {
                                     val.clone(),
                                 ))
                             } else {
-                                self.trait_wrap(cxt, t, a, x, tm)
+                                self.trait_wrap(cxt, t, a, x, tm, t_span)
                             }
                     }
-                    (tm, _) => self.trait_wrap(cxt, t, a, x, tm),
+                    (tm, _) => self.trait_wrap(cxt, t, a, x, tm, t_span),
                 }
             },
 
@@ -834,8 +845,27 @@ impl Infer {
             }
         }
     }
-    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
+    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         let typ = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a)).to_typ().unwrap_or(Typ::Val(empty_span("$unknown$".to_owned())));
+        if t.data.is_empty() {
+            self.trait_definition
+                .clone()//TODO: can remove this clone?
+                .iter()
+                .filter(|(x, (_, out_param, _))| {
+                    let len = out_param.iter().filter(|x| !**x).count();
+                    let mut args = vec![super::typeclass::Typ::Any; len];
+                    args[0] = typ.clone();
+                    self.trait_solver.clean();
+                    self.trait_solver
+                        .synth(Assertion {
+                            name: x.to_string(),
+                            arguments: args,
+                        })
+                        .is_some()
+                })
+                .flat_map(|x| x.1.2.iter())
+                .for_each(|x| self.completion_table.push((t_span, x.0.data.clone())))
+        }
         {
             let traits = self.trait_definition
                 .clone()//TODO: can remove this clone?
