@@ -44,7 +44,7 @@ use crate::ls::Result;
 
 use L11_macro::parser::parser;
 use L11_macro::parser::syntax::Decl;
-use L11_macro::{DeclTm, Infer};
+use L11_macro::{DeclTm, Infer, preprocess};
 use L11_macro::cxt::Cxt;
 
 use std::sync::{Arc, Mutex, RwLock, Condvar};
@@ -883,7 +883,7 @@ impl Backend {
             .unwrap_or(self.document_id.len() as u32);
         self.document_id.insert(params.uri.to_string(), now_id);
         let start = std::time::Instant::now();
-        if let Some(ast) = parser(params.text, now_id) {
+        if let Some(ast) = parser(&preprocess(params.text), now_id) {
             eprintln!("parser {:?}", start.elapsed().as_secs_f32());
             let mut err_collect = vec![];
             self.ast_map.insert(params.uri.to_string(), ast.0.clone());

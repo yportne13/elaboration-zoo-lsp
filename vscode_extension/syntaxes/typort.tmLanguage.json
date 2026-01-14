@@ -38,7 +38,7 @@
 		"keywords": {
 			"patterns": [{
 				"name": "keyword.control.typort",
-				"match": "\\b(if|while|for|return|enum|struct|match|def|import|extends|else|case|new|trait|impl|module)\\b"
+				"match": "\\b(if|while|for|return|enum|struct|match|def|import|extends|else|case|new|trait|impl|module|let)\\b"
 			}]
 		},
 		"strings": {
