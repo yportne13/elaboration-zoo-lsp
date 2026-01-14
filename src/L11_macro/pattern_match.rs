@@ -193,7 +193,7 @@ impl Compiler {
         &mut self,
         infer: &mut Infer,
         heads: &[(Rc<Val>, Span<String>, Icit)],
-        arms: &[(MatchArm, usize, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
+        arms: &[(MatchArm, usize, Cxt, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
         context: &MatchContext,
     ) -> Result<bool, Error> {
         /*println!(
@@ -211,7 +211,7 @@ impl Compiler {
         );*/
         match heads {
             [] => match arms {
-                [(arm, idx, cxt, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
+                [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
                     let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
                         Ok(x) => x,
                         Err(e) => {
@@ -266,13 +266,14 @@ impl Compiler {
                                 } else {
                                     cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
                                 },
-                                arm.3.clone(),
+                                arm.3.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&arm.3.decl, arm.3.lvl, typ), typ.clone()),
                                 arm.4.clone(),
                                 arm.5.clone(),
+                                arm.6.clone(),
                                 if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
-                                    arm.6.clone()
+                                    arm.7.clone()
                                 } else {
-                                    arm.6.clone().clean().push(PatternDetail::Any(empty_span(())))
+                                    arm.7.clone().clean().push(PatternDetail::Any(empty_span(())))
                                 },
                             )
                         })
@@ -300,20 +301,20 @@ impl Compiler {
                         .map(|constr| {
                             let remaining_arms = arms
                                 .iter()
-                                .filter_map(|(arm, idx, cxt, raw, target_typ, ori, patcon)| {
+                                .filter_map(|(arm, idx, cxt, cxt_for_filter, raw, target_typ, ori, patcon)| {
                                     let mut new_heads = vec![];
                                     if constr.data != "$any$" {
                                         let accessible_constrs = self.filter_accessible_constrs(
                                             infer,
-                                            cxt,
-                                            &typ,
+                                            cxt_for_filter,
+                                            typ,
                                             constrs,
                                         ).ok()?;
                                         if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
                                             return Some(None);
                                         }
 
-                                        let (_, typ) = infer.infer_expr(cxt, Raw::Var(constr.clone())).ok()?;
+                                        let (_, typ) = infer.infer_expr(cxt_for_filter, Raw::Var(constr.clone())).ok()?;
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
                                         param.reverse();
                                         let mut typ = typ;
@@ -322,10 +323,10 @@ impl Compiler {
                                                 let val = param.pop()
                                                     .map(|x| x.1)
                                                     .unwrap_or(Val::U(0).into());
-                                                typ = infer.closure_apply(&cxt.decl, closure, val);
+                                                typ = infer.closure_apply(&cxt_for_filter.decl, closure, val);
                                             } else {
                                                 new_heads.push((ty.clone(), name.clone(), *icit));
-                                                typ = infer.closure_apply(&cxt.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
+                                                typ = infer.closure_apply(&cxt_for_filter.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
                                     }
@@ -346,8 +347,9 @@ impl Compiler {
                                             if !x.data {
                                                 cxt.clone()
                                             } else {
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone())
+                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
                                             },
+                                            cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
                                             new_heads,
                                             raw.clone(),
                                             target_typ.clone(),
@@ -375,6 +377,7 @@ impl Compiler {
                                                 },
                                                 *idx,
                                                 cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
+                                                cxt_for_filter.bind(constr_.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, &typ), typ.clone()),
                                                 new_heads,
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -395,6 +398,7 @@ impl Compiler {
                                                 },
                                                 *idx,
                                                 cxt.clone(),
+                                                cxt_for_filter.clone(),
                                                 new_heads,
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -411,6 +415,7 @@ impl Compiler {
                                                 },
                                                 *idx,
                                                 cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
+                                                cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, &typ), typ.clone()),
                                                 vec![],
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -443,11 +448,11 @@ impl Compiler {
                             } else {
                                 let new_heads = remaining_arms
                                     .first()
-                                    .and_then(|x| x.as_ref().map(|y| y.3.clone()))
+                                    .and_then(|x| x.as_ref().map(|y| y.4.clone()))
                                     .unwrap_or(vec![]);
                                 let is_impl = remaining_arms
                                     .first()
-                                    .and_then(|x| x.as_ref().map(|y| y.8))
+                                    .and_then(|x| x.as_ref().map(|y| y.9))
                                     .unwrap_or(false);
                                 let context_ = if new_heads.is_empty() {
                                     if heads_rest.is_empty() || is_impl {
@@ -480,7 +485,7 @@ impl Compiler {
                                     &remaining_arms
                                         .into_iter()
                                         .flatten()
-                                        .map(|x| (x.0, x.1, x.2, x.4, x.5, x.6, x.7))
+                                        .map(|x| (x.0, x.1, x.2, x.3, x.5, x.6, x.7, x.8))
                                         .collect::<Vec<_>>(),
                                     &context_,
                                 )?
@@ -522,6 +527,7 @@ impl Compiler {
                             body: (body.clone(), idx),
                         },
                         idx,
+                        cxt.clone(),
                         cxt.clone(),
                         pat.to_raw(),
                         typ.clone(),

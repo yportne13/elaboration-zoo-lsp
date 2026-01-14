@@ -19,14 +19,15 @@ pub struct Cxt {
 impl Cxt {
     pub fn new() -> Self {
         Self::empty()
-            .define(
+            .decl(
                 empty_span("String".to_owned()),
                 Tm::LiteralType.into(),
                 Val::LiteralType.into(),
                 Tm::U(0).into(),
                 Val::U(0).into(),
             )
-            .define(
+            .unwrap()
+            .decl(
                 empty_span("string_concat".to_owned()),
                 Tm::Lam(
                     empty_span("x".to_owned()),
@@ -75,6 +76,7 @@ impl Cxt {
                     ),
                 ).into(),
             )
+            .unwrap()
     }
     pub fn empty() -> Self {
         Cxt {
