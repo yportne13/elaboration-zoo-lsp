@@ -234,12 +234,11 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
         )*/.parse(input, state)?;
 
         while let Ok((input_t, op)) = string(Op).parse(input, state) {
-            input = input_t;
-
             if let Some((l_bp, ())) = postfix_binding_power(&op) {
                 if l_bp < min_bp {
                     break;
                 }
+                input = input_t;
 
                 lhs = /*if op == '[' {
                     let rhs = expr_bp(lexer, 0);
@@ -255,6 +254,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                 if l_bp < min_bp {
                     break;
                 }
+                input = input_t;
 
                 lhs = if &op.data == "?" {
                     let mhs = match expr_bp(0).parse(input, state) {
@@ -527,6 +527,11 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) ->
     )
         .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Icit::Expl)))
+        .or(paren(p_pattern.many1_sep(kw(T![,]))).map(|x| Pattern::Con(
+            empty_span(format!("Tuple{}.mk", x.len())),
+            x,
+            Icit::Expl,
+        )))
         .parse(input, state)
 }
 
@@ -819,4 +824,37 @@ def t = match x {
 }
 "#;
     println!("{:#?}", parser(input, 0).unwrap());
+}
+
+//pub fn parser_test<'a, T, P: Parser<&'a [TokenNode<'a>], T, Vec<IError>, IError>>(p: P, input: &'a str, id: u32) -> Option<(Vec<T>, Vec<IError>)> {
+pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
+    let mut err_collect = vec![];
+    let ret = super::parser::lex::lex(Span {
+        data: input,
+        start_offset: 0,
+        end_offset: input.len() as u32,
+        path_id: id,
+    }).unwrap();
+    let o = p_raw.many0().parse(&ret.1, &mut err_collect);
+    match o {
+        Ok(ret) => if ret.0.is_empty() {
+            Some((ret.1, err_collect))
+        } else {
+            err_collect.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(EndLine)) });
+            Some((ret.1, err_collect))
+        }
+        Err(e) => {
+            err_collect.push(e);
+            Some((vec![], err_collect))
+        }
+    }
+}
+
+#[test]
+fn test2() {
+    let input = r#"(a + b) + c"#;
+    println!("{:#?}", parser_test(input, 0).unwrap());
+    println!("--------------");
+    let input = r#"a + b + c"#;
+    println!("{:#?}", parser_test(input, 0).unwrap());
 }
