@@ -20,6 +20,7 @@ impl Infer {
         let va = self.force(&cxt.decl, &va);
         match va.as_ref() {
             Val::Pi(_, Icit::Impl, a, b) => {
+                //println!("insert {:?}", a);
                 let m = self.fresh_meta(cxt, a.clone());
                 let mv = self.eval(&cxt.decl, &cxt.env, &m);
                 self.insert_go(
@@ -279,15 +280,23 @@ impl Infer {
                 });
                 let (ret_cxt, vty, vt, vtyp_pretty, vt_pretty) = {
                     let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
+                    /*let typ_nf_tm = self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm);
+                    if !typ_nf_tm.no_metas() {
+                        return Err(Error(typ.to_span().map(|_| format!("find unsolved meta in {}", pretty_tm(0, ret_cxt.names(), &typ_nf_tm)))));
+                    }*/
                     let vtyp = self.eval(&ret_cxt.decl, &ret_cxt.env, &typ_tm);
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
-                    let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
+                    let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
+                    let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
+                    if !t_tm_nf.no_metas() {
+                        return Err(Error(bod.to_span().map(|_| format!("find unsolved meta in {}", super::pretty_tm(0, ret_cxt.names(), &t_tm)))));
+                    }
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
-                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm));
+                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
                     (

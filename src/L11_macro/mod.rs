@@ -85,6 +85,25 @@ pub enum Tm {
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
 }
 
+impl Tm {
+    pub fn no_metas(&self) -> bool {
+        match self {
+            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => true,
+            Tm::Obj(tm, _) => tm.no_metas(),
+            Tm::Lam(_, _, t) => t.no_metas(),
+            Tm::App(t, u, _) => t.no_metas() && u.no_metas(),
+            Tm::AppPruning(t, _) => t.no_metas(),
+            Tm::Pi(_, _, t, u) => t.no_metas() && u.no_metas(),
+            Tm::Let(_, a, t, u) => a.no_metas() && t.no_metas() && u.no_metas(),
+            Tm::Meta(_) => false,
+            Tm::Sum(_, items, _, _) => items.iter().all(|(_, t, ty, _)| t.no_metas() && ty.no_metas()),
+            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas()
+                && datas.iter().all(|(_, t, _)| t.no_metas()),
+            Tm::Match(tm, items) => tm.no_metas() && items.iter().all(|(_, t)| t.no_metas()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatternDetail {
     Any(Span<()>),
@@ -239,8 +258,11 @@ impl Infer {
             let m = self.new_meta(a);
             Tm::Meta(MetaVar(m)).into()
         } else {
+            //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
+            //println!("{:?}: {}", a, pretty_tm(0, cxt.names(), temp));
+            //println!("{:?}: {:?}", a, temp);
             let closed = self.eval(
-                &cxt.decl, 
+                &cxt.decl,
                 &List::new(),
                 &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a)),
             );
@@ -321,7 +343,7 @@ impl Infer {
         match tm.as_ref() {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
-                None => panic!("var not found"),
+                None => panic!("var {:?} not found", x.0),
             },
             Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),//TODO:directly unwrap?
             Tm::Obj(tm, name) => {
@@ -1676,6 +1698,47 @@ def reduce_balanced_tree[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T 
     });
     helper (mkpair vec f) f
 "#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test10() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+
+def up_fin[x: Nat](n: Fin x): Fin (x + 1) = match n {
+    case fzero => fzero
+    case fsucc[x](t) => fsucc (up_fin t)
+}
+    "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
         Err(e) => panic!("{}", e.0.data),
