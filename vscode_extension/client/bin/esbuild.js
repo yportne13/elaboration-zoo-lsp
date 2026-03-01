@@ -20,7 +20,7 @@ const sharedWebOptions = {
 
 /** @type BuildOptions */
 const webOptions = {
-	entryPoints: ['src/extension.ts'],
+	entryPoints: ['src/extension.web.ts'],
 	outfile: 'dist/web/extension.js',
 	format: 'cjs',
 	...sharedWebOptions,
