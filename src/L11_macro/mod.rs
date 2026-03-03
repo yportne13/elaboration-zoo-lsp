@@ -48,7 +48,7 @@ pub enum DeclTm {
         typ_pretty: String,
         body_pretty: String,
     },
-    Println(Rc<Tm>),
+    Println(Rc<Tm>, String, Span<()>),
     Enum {
         //TODO:
     },
@@ -86,20 +86,24 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas(&self) -> bool {
+    pub fn no_metas<'a>(&self, infer: &'a Infer) -> Option<&'a Rc<Val>> {
         match self {
-            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => true,
-            Tm::Obj(tm, _) => tm.no_metas(),
-            Tm::Lam(_, _, t) => t.no_metas(),
-            Tm::App(t, u, _) => t.no_metas() && u.no_metas(),
-            Tm::AppPruning(t, _) => t.no_metas(),
-            Tm::Pi(_, _, t, u) => t.no_metas() && u.no_metas(),
-            Tm::Let(_, a, t, u) => a.no_metas() && t.no_metas() && u.no_metas(),
-            Tm::Meta(_) => false,
-            Tm::Sum(_, items, _, _) => items.iter().all(|(_, t, ty, _)| t.no_metas() && ty.no_metas()),
-            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas()
-                && datas.iter().all(|(_, t, _)| t.no_metas()),
-            Tm::Match(tm, items) => tm.no_metas() && items.iter().all(|(_, t)| t.no_metas()),
+            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => None,
+            Tm::Obj(tm, _) => tm.no_metas(infer),
+            Tm::Lam(_, _, t) => t.no_metas(infer),
+            Tm::App(t, u, _) => t.no_metas(infer).or(u.no_metas(infer)),
+            Tm::AppPruning(t, _) => t.no_metas(infer),
+            Tm::Pi(_, _, t, u) => t.no_metas(infer).or(u.no_metas(infer)),
+            Tm::Let(_, a, t, u) => a.no_metas(infer).or(t.no_metas(infer)).or(u.no_metas(infer)),
+            Tm::Meta(m) => if let MetaEntry::Unsolved(ty) = infer.lookup_meta(*m) {
+                Some(ty)
+            } else {
+                None
+            },
+            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer).or(ty.no_metas(infer))).next(),
+            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer)
+                .or(datas.iter().flat_map(|(_, t, _)| t.no_metas(infer)).next()),
+            Tm::Match(tm, items) => tm.no_metas(infer).or(items.iter().flat_map(|(_, t)| t.no_metas(infer)).next()),
         }
     }
 }
@@ -597,9 +601,9 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
-        if let DeclTm::Println(x) = x {
+        if let DeclTm::Println(_, s, _) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));
-            ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.decl, &cxt.env, &x));
+            ret += &s;
             ret += "\n";
         }
     }
@@ -1582,11 +1586,11 @@ impl[T] Cons for T {
 println (3 :: 2 :: nil).map(x => succ(x))
 
 def half_adder(lhs: Bool, rhs: Bool): Tuple2[Bool, Bool] =
-    Tuple2.mk (lhs & rhs) (lhs ^ rhs)
+    Tuple2.mk (lhs & rhs, lhs ^ rhs)
 
 def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Tuple2[Bool, Bool] =
     let s1 = lhs ^ rhs;
-    Tuple2.mk ((s1 & carrier) | (lhs & rhs)) (s1 ^ carrier)
+    Tuple2.mk ((s1 & carrier) | (lhs & rhs), s1 ^ carrier)
 
 def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (len + 1) =
     match lhs {

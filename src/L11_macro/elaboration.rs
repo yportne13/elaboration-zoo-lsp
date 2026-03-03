@@ -291,12 +291,17 @@ impl Infer {
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
-                    let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if !t_tm_nf.no_metas() {
-                        return Err(Error(bod.to_span().map(|_| format!("find unsolved meta in {}", super::pretty_tm(0, ret_cxt.names(), &t_tm)))));
+                    //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
+                    if let Some(meta_ty) = t_tm.no_metas(self) {
+                        return Err(Error(bod.to_span().map(|_|
+                            format!(
+                                "find unsolved meta with type `{}`",
+                                super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, meta_ty))
+                            )
+                        )));
                     }
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
-                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
+                    let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
                     (
@@ -321,7 +326,12 @@ impl Infer {
                 )) //TODO:vt may be wrong
             }
             Decl::Println(t) => Ok((
-                DeclTm::Println(self.infer_expr(cxt, t)?.0),
+                {
+                    let span = t.to_span();
+                    let tm = self.infer_expr(cxt, t)?.0;
+                    let t_pretty = super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &tm));
+                    DeclTm::Println(tm, t_pretty, span)
+                },
                 Val::U(0).into(),
                 cxt.clone(),
             )),

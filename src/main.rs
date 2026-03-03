@@ -895,11 +895,17 @@ impl Backend {
             for tm in ast.0 {
                 match infer.infer(&cxt, tm.clone()) {
                     Ok((x, _, new_cxt)) => {
+                        if let DeclTm::Println(_, ref s, span) = x {
+                            err_collect.push((
+                                crate::L11_macro::Error(span.map(|_| s.clone())),
+                                DiagnosticSeverity::INFORMATION
+                            ))
+                        }
                         terms.push(x);
                         cxt = new_cxt;
                     },
                     Err(err) => {
-                        err_collect.push(err);
+                        err_collect.push((err, DiagnosticSeverity::ERROR));
                         //Diagnostic::new_simple(Range::new(start, end), format!("{:?}", err))
                     }
                 }
@@ -914,14 +920,16 @@ impl Backend {
             //eprintln!("{:?}", err_collect);
             let diag = err_collect
                 .into_iter()
-                .chain(ast.1.into_iter().map(|e| e.to_err()))
-                .filter_map(|e| {
+                .chain(ast.1.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR)))
+                .filter_map(|(e, severity)| {
                     let start_position = offset_to_position(e.0.start_offset as usize, &rope)?;
                     let end_position = offset_to_position(e.0.end_offset as usize, &rope)?;
-                    Some(Diagnostic::new_simple(
+                    let mut ret = Diagnostic::new_simple(
                         Range::new(start_position, end_position),
                         e.0.data,
-                    ))
+                    );
+                    ret.severity = Some(severity);
+                    Some(ret)
                 })
                 .collect();
             self.client
