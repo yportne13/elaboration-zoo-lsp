@@ -38,7 +38,7 @@ impl Pattern {
 impl Pattern {
     pub fn to_raw(&self) -> Raw {
         match self {
-            Pattern::Any(_, _) => Raw::Hole,
+            Pattern::Any(s, _) => Raw::Hole(s.to_span()),
             Pattern::Con(name, pats, _) => pats.iter()
                 .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
                     Box::new(ret),
@@ -58,7 +58,7 @@ pub enum Raw {
     U(u32),
     Pi(Span<String>, Icit, Box<Raw>, Box<Raw>),
     Let(Span<String>, Box<Raw>, Box<Raw>, Box<Raw>),
-    Hole,
+    Hole(Span<()>),
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
     Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>, u32, bool),
@@ -73,6 +73,9 @@ pub enum Raw {
 impl Raw {
     pub fn app(lhs: Raw, rhs: Raw) -> Self {
         Raw::App(Box::new(lhs), Box::new(rhs), Either::Icit(Icit::Expl))
+    }
+    pub fn app_impl(lhs: Raw, rhs: Raw) -> Self {
+        Raw::App(Box::new(lhs), Box::new(rhs), Either::Icit(Icit::Impl))
     }
     pub fn to_span(&self) -> Span<()> {
         match self {
@@ -89,7 +92,7 @@ impl Raw {
             Raw::U(_) => empty_span(()),//TODO:
             Raw::Pi(span, _, _, raw1) => span.to_span() + raw1.to_span(),
             Raw::Let(span, _, _, raw2) => span.to_span() + raw2.to_span(),
-            Raw::Hole => empty_span(()),//TODO:
+            Raw::Hole(span) => span.clone(),//TODO:
             Raw::LiteralIntro(span) => span.to_span(),
             Raw::Match(raw, items) => items.last()
                 .map(|x| raw.to_span() + x.1.to_span())
@@ -119,7 +122,7 @@ impl std::fmt::Display for Raw {
             Raw::Pi(param, Icit::Impl, domain, codomain) => write!(f, "([{} : {}] -> {})", param.data, domain, codomain),
             Raw::Pi(param, Icit::Expl, domain, codomain) => write!(f, "({} : {}) -> {}", param.data, domain, codomain),
             Raw::Let(name, typ, expr, body) => write!(f, "(let {} : {} = {};\n{})", name.data, typ, expr, body),
-            Raw::Hole => write!(f, "_"),
+            Raw::Hole(_) => write!(f, "_"),
             Raw::LiteralIntro(lit) => write!(f, "\"{}\"", lit.data),
             Raw::Match(expr, cases) => {
                 write!(f, "(match {}", expr)?;

@@ -166,7 +166,7 @@ impl Compiler {
                         if *icit == Icit::Expl { // Only explicit args matter for the structure 
                             params.push((name.clone(), ty.clone(), *icit));
                         }
-                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(*icit));
+                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole(name.to_span())), super::Either::Icit(*icit));
                         cxt = cxt.bind(name.clone(), infer.quote(&cxt.decl, cxt.lvl, ty), ty.clone());
                     },
                     _ => {break;}

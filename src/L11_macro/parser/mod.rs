@@ -202,7 +202,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> I
         .or(Cut((kw(TypeKeyword), string(Num))).map(|(_, num)| Raw::U(
             num.and_then(|x| x.data.parse::<u32>().ok()).unwrap_or(0)
         )))//TODO:do not unwrap
-        .or(kw(Hole).map(|_| Raw::Hole))
+        .or(kw(Hole).map(Raw::Hole))
         .or(string(Str).map(Raw::LiteralIntro))
         .or(string(Num).map(|x| {
             let num_span = x.map(|x| x.parse::<u64>().unwrap());
@@ -214,7 +214,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> I
             }
             ret
         }))
-        .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole)))
+        .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole(empty_span(())))))
         .parse(input, state)
 }
 
@@ -240,11 +240,21 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                 }
                 input = input_t;
 
-                lhs = /*if op == '[' {
-                    let rhs = expr_bp(lexer, 0);
-                    assert_eq!(lexer.next(), Token::Op(']'));
-                    S::Cons(op, vec![lhs, rhs])
-                } else*/ {
+                lhs = if &op.data == "[" {
+                    let (input_t, rhs) = p_raw
+                        .many1_sep((kw(T![,]), kw(EndLine).option()))
+                        .parse(input, state)?;
+                    let (input_t, _) = kw(RSquare).parse(input_t, state)?;
+                    input = input_t;
+                    rhs.into_iter().fold(lhs, Raw::app_impl)
+                } else if &op.data == "(" {
+                    let (input_t, rhs) = p_raw
+                        .many1_sep((kw(T![,]), kw(EndLine).option()))
+                        .parse(input, state)?;
+                    let (input_t, _) = kw(RParen).parse(input_t, state)?;
+                    input = input_t;
+                    rhs.into_iter().fold(lhs, Raw::app)
+                } else {
                     Raw::app(lhs, Raw::Var(op))
                 };
                 continue;
@@ -264,7 +274,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                         }
                         Err(e) => {
                             state.push(e);
-                            Raw::Hole
+                            Raw::Hole(empty_span(()))
                         }
                     };
                     match kw(T![:]).parse(input, state) {
@@ -282,7 +292,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                         },
                         Err(e) => {
                             state.push(e);
-                            Raw::Hole
+                            Raw::Hole(empty_span(()))
                         }
                     };
                     Raw::app(Raw::app(Raw::app(Raw::Var(empty_span("mux".to_owned())), lhs), mhs), rhs)
@@ -294,7 +304,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                         },
                         Err(e) => {
                             state.push(e);
-                            Raw::Hole
+                            Raw::Hole(empty_span(()))
                         }
                     };
                     Raw::app(Raw::Obj(Box::new(lhs), Some(op)), rhs)
@@ -325,6 +335,7 @@ fn postfix_binding_power(op: &Span<String>) -> Option<(u8, ())> {
     let res = match op.data.as_str() {
         "!" => (20, ()),
         "[" => (20, ()),
+        "(" => (20, ()),
         _ => return None,
     };
     Some(res)
@@ -359,7 +370,7 @@ fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
 
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
     let named_impl_arg = square_cut(
-        (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
+        (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
             .many0_sep(kw(T![,]))
     ).map(|x| x.unwrap_or_default());
@@ -422,11 +433,11 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
             p_bind, // 解析一个或多个绑定变量 xs
             (kw(Colon), p_raw).option().map(|x| match x {
                 Some((_, x)) => x,
-                None => Raw::Hole,
+                None => Raw::Hole(empty_span(())),
             }),
         )
             .map(|(xs, a)| (xs, a, Icit::Impl))
-            .many0_sep(kw(T![,])),
+            .many0_sep((kw(T![,]), kw(EndLine).option())),
     )
     .map(|x| x.unwrap_or_default())
     .parse(input, state)
@@ -453,7 +464,7 @@ fn p_pi_expl_binder<'a: 'b, 'b>(
             kw(Colon).with(p_raw), // 解析类型 A
         )
             .map(|(xs, a)| (xs, a.1, Icit::Expl))
-            .many0_sep(kw(T![,])),
+            .many0_sep((kw(T![,]), kw(EndLine).option())),
     )
     .parse(input, state) // 返回 (xs, a, Expl)
 }
@@ -509,9 +520,9 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
         .map(|(_, binder, ann, _, val, _, _, body)| {
             Raw::Let(
                 binder.unwrap_or(empty_span("".to_owned())),
-                Box::new(ann.flatten().unwrap_or(Raw::Hole)),
-                Box::new(val.unwrap_or(Raw::Hole)),
-                Box::new(body.unwrap_or(Raw::Hole)),
+                Box::new(ann.flatten().unwrap_or(Raw::Hole(empty_span(())))),
+                Box::new(val.unwrap_or(Raw::Hole(empty_span(())))),
+                Box::new(body.unwrap_or(Raw::Hole(empty_span(())))),
             )
         })
         .parse(input, state)
@@ -546,7 +557,7 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> I
         ),
     ))
         .map(|(_, scrutinee, body)| Raw::Match(
-            Box::new(scrutinee.unwrap_or(Raw::Hole)),
+            Box::new(scrutinee.unwrap_or(Raw::Hole(empty_span(())))),
             body.flatten().unwrap_or_default()
         ))
         .parse(input, state)
@@ -593,15 +604,15 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IRe
         .map(|(_, name, params, ret, _, _, body)| Decl::Def {
             name: name.unwrap_or(empty_span("".to_owned())),
             params: params.unwrap_or_default(),
-            ret_type: ret.flatten().unwrap_or(Raw::Hole),
-            body: body.unwrap_or(Raw::Hole),
+            ret_type: ret.flatten().unwrap_or(Raw::Hole(empty_span(()))),
+            body: body.unwrap_or(Raw::Hole(empty_span(()))),
         })
         .parse(input, state)
 }
 
 fn p_print<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IResult<'a, 'b, Decl> {
     Cut((kw(PrintlnKeyword), p_raw))
-        .map(|(_, x)| Decl::Println(x.unwrap_or(Raw::Hole)))
+        .map(|(_, x)| Decl::Println(x.unwrap_or(Raw::Hole(empty_span(())))))
         .parse(input, state)
 }
 
@@ -714,7 +725,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
         //p_generic_params(),
         brace(p_def.many0_sep(kw(EndLine))),
     )).map(|x| match x.2 {
-        Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole), x.3, false),
+        Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole(empty_span(()))), x.3, false),
         Some(Err(name)) => (
             x.1.clone(),
             x.0.map(|_| format!("$trait_name${}", name)),
@@ -723,7 +734,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
             x.3,
             true,
         ),
-        None => (x.1, empty_span("".to_owned()), vec![], Raw::Hole, x.3, false)
+        None => (x.1, empty_span("".to_owned()), vec![], Raw::Hole(empty_span(())), x.3, false)
     })
         .map(|(params, trait_name, trait_params, name, body, need_create)| Decl::ImplDecl {
             name,

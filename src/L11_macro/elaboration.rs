@@ -237,7 +237,7 @@ impl Infer {
             }
 
             // Handle holes
-            (Raw::Hole, _) => Ok(self.fresh_meta(cxt, a)),
+            (Raw::Hole(_), _) => Ok(self.fresh_meta(cxt, a)),
 
             (Raw::Match(expr, clause), _) => {
                 let expr_span = expr.to_span();
@@ -539,7 +539,7 @@ impl Infer {
             },
             Decl::TraitDecl { name, mut params, methods } => {
                 self.trait_solver.new_trait(name.data.clone());
-                let mut param = vec![(name.clone().map(|_| "Self".to_owned()), Raw::Hole, Icit::Impl)];
+                let mut param = vec![(name.clone().map(|_| "Self".to_owned()), Raw::Hole(name.to_span()), Icit::Impl)];
                 param.append(&mut params);
                 let out_param = param.iter().map(|x| match &x.1 {
                         Raw::App(t, ..) if matches!(t.as_ref(), Raw::Var(d) if d.data == "outParam") => true,
@@ -813,7 +813,7 @@ impl Infer {
             }
 
             // Infer holes
-            Raw::Hole => {
+            Raw::Hole(_) => {
                 let new_meta = self.fresh_meta(cxt, Val::U(0).into());
                 let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
                 let t = self.fresh_meta(cxt, a.clone());
