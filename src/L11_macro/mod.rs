@@ -60,6 +60,15 @@ pub enum DeclTm {
     },
 }
 
+#[derive(Clone)]
+pub struct PrimFunc(Rc<dyn Fn(&Decl, &Env, Rc<Val>) -> Rc<Val> + Send + Sync>);
+
+impl std::fmt::Debug for PrimFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PrimFunc")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
@@ -74,7 +83,7 @@ pub enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    Prim(Rc<Val>, PrimFunc),
     Sum(Span<String>, Vec<(Span<String>, Rc<Tm>, Rc<Ty>, Icit)>, Vec<Span<String>>, bool),
     SumCase {
         typ: Rc<Tm>,
@@ -88,7 +97,7 @@ pub enum Tm {
 impl Tm {
     pub fn no_metas<'a>(&self, infer: &'a Infer) -> Option<&'a Rc<Val>> {
         match self {
-            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => None,
+            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer),
             Tm::Lam(_, _, t) => t.no_metas(infer),
             Tm::App(t, u, _) => t.no_metas(infer).or(u.no_metas(infer)),
@@ -169,7 +178,7 @@ pub enum Val {
     U(u32),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    Prim(Rc<Val>, PrimFunc),
     Sum(
         Span<String>,
         Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>,
@@ -389,12 +398,7 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
-            Tm::Prim => match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
-                (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-                    Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
-                }
-                _ => Val::Prim.into(),
-            },
+            Tm::Prim(typ, func) => func.0(decl, env, typ.clone()),
             Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
@@ -473,7 +477,7 @@ impl Infer {
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
             Val::LiteralType => Tm::LiteralType.into(),
-            Val::Prim => Tm::Prim.into(),
+            Val::Prim(typ, func) => Tm::Prim(typ.clone(), func.clone()).into(),
             Val::Sum(name, params, cases, is_trait) => {
                 let new_params = params.iter()
                     .map(|x| {

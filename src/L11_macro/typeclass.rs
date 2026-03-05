@@ -29,7 +29,7 @@ impl Val {
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
             Val::LiteralType => todo!(),
             Val::LiteralIntro(span) => todo!(),
-            Val::Prim => todo!(),
+            Val::Prim(_, _) => todo!(),
             Val::Sum(span, items, _, _) => Some(
                 if items.is_empty() {
                     Typ::Val(span.clone())

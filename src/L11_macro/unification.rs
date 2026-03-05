@@ -291,7 +291,7 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(*x).into()),
             Val::LiteralType => Ok(Tm::LiteralType.into()),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
-            Val::Prim => Ok(Tm::Prim.into()),
+            Val::Prim(typ, func) => Ok(Tm::Prim(typ.clone(), func.clone()).into()),
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
@@ -610,8 +610,8 @@ impl Infer {
         let u = self.force(&cxt.decl, u);
         /*println!(
             "uni {}\n == {}",
-            pretty_tm(0, cxt.names(), &self.quote(l, &t)),
-            pretty_tm(0, cxt.names(), &self.quote(l, &u)),
+            pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &t)),
+            pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &u)),
         );*/
 
         match (t.as_ref(), u.as_ref()) {
@@ -664,8 +664,8 @@ impl Infer {
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            (Val::LiteralType, Val::Prim) => Ok(()),
-            (Val::Prim, Val::LiteralType) => Ok(()),
+            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, &b),
+            (Val::Prim(a, _), _) => self.unify(l, cxt, &a, &u),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

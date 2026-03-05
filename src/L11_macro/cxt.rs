@@ -16,8 +16,18 @@ pub struct Cxt {
     update_from: Option<usize>,
 }
 
+fn string_concat(_: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
+        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
+            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
+        },
+        _ => Val::Prim(typ, PrimFunc(Rc::new(string_concat))).into(),
+    }
+}
+
 impl Cxt {
     pub fn new() -> Self {
+        let string_concat = PrimFunc(Rc::new(string_concat));
         Self::empty()
             .decl(
                 empty_span("String".to_owned()),
@@ -35,7 +45,7 @@ impl Cxt {
                     Rc::new(Tm::Lam(
                         empty_span("y".to_owned()),
                         Icit::Expl,
-                        Rc::new(Tm::Prim),
+                        Rc::new(Tm::Prim(Val::LiteralType.into(), string_concat.clone())),
                     )),
                 ).into(),
                 Val::Lam(
@@ -46,7 +56,7 @@ impl Cxt {
                         Tm::Lam(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Rc::new(Tm::Prim),
+                            Rc::new(Tm::Prim(Val::LiteralType.into(), string_concat)),
                         ).into(),
                     ),
                 ).into(),
