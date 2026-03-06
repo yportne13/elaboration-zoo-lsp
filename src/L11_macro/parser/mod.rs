@@ -233,7 +233,10 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
             (string(Op), expr_bp())
         )*/.parse(input, state)?;
 
-        while let Ok((input_t, op)) = string(Op).parse(input, state) {
+        while let Ok((input_t, op)) = string(Op)
+            .or(kw(LParen).map(|x| x.map(|_| "(".to_owned())))
+            .or(kw(LSquare).map(|x| x.map(|_| "[".to_owned())))
+            .parse(input, state) {
             if let Some((l_bp, ())) = postfix_binding_power(&op) {
                 if l_bp < min_bp {
                     break;
@@ -241,12 +244,22 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                 input = input_t;
 
                 lhs = if &op.data == "[" {
-                    let (input_t, rhs) = p_raw
-                        .many1_sep((kw(T![,]), kw(EndLine).option()))
-                        .parse(input, state)?;
+                    let (input_t, ret) = if let Ok((input_t, (icit, raw))) = (string(Ident), Cut((kw(Eq), p_raw)))
+                        .map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
+                        .parse(input, state) {
+                            (
+                                input_t,
+                                Raw::App(Box::new(lhs), Box::new(raw), icit)
+                            )
+                    } else {
+                        let (input_t, rhs) = p_raw
+                            .many1_sep((kw(T![,]), kw(EndLine).option()))
+                            .parse(input, state)?;
+                        (input_t, rhs.into_iter().fold(lhs, Raw::app_impl))
+                    };
                     let (input_t, _) = kw(RSquare).parse(input_t, state)?;
                     input = input_t;
-                    rhs.into_iter().fold(lhs, Raw::app_impl)
+                    ret
                 } else if &op.data == "(" {
                     let (input_t, rhs) = p_raw
                         .many1_sep((kw(T![,]), kw(EndLine).option()))

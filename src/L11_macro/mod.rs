@@ -823,7 +823,7 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
     match x {
         case nil => cons zero nil
         case cons(x, xs) => match y {
-            case cons(y, ys) => cons x (t xs ys)
+            case cons(y, ys) => cons(x, t xs ys)
         }
     }
 "#;
@@ -848,7 +848,7 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
         case nil => cons zero nil
         case cons(x, xs) => match y {
             case cons(y, ys) => match t xs ys {
-                case cons(z, zs) => cons zero (cons zero zs)
+                case cons(z, zs) => cons(zero, cons zero zs)
             }
         }
     }
@@ -873,7 +873,7 @@ def add(x: Nat, y: Nat) =
 def mul(x: Nat, y: Nat) =
     match x {
         case zero => zero
-        case succ(n) => add y (mul n y)
+        case succ(n) => add(y, mul n y)
     }
 
 enum Eq[A](x: A, y: A) {
@@ -907,19 +907,19 @@ def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
         case refl(a) => e2
     }
 
-def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add n (succ m)) (succ (add n m)) =
+def add_succ_right (n: Nat, m: Nat): Eq (add (n, succ m)) (succ (add n m)) =
     match n {
         case zero => refl[Nat] (succ m)
         case succ(k) => cong_succ (add_succ_right k m)
     }
 
-def add_comm (n: Nat, m: Nat): Eq[Nat] (add n m) (add m n) =
+def add_comm (n: Nat, m: Nat): Eq (add n m) (add m n) =
     match n {
         case zero => symm (add_zero_right m)
         case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
     }
 
-def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add n (add m k)) =
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq (add (add n m) k) (add(n, add m k)) =
     match n {
         case zero => rfl
         case succ(l) => cong_succ (add_assoc l m k)
@@ -954,7 +954,7 @@ def create0: List[Bool] = nil
 
 def create1: List[Bool] = cons true nil
 
-def create2: List[Bool] = cons true (cons false nil)
+def create2: List[Bool] = cons (true, cons false nil)
 
 def two = succ (succ zero)
 
@@ -974,7 +974,7 @@ def add(x: Nat, y: Nat) =
 
 def mul(x: Nat, y: Nat) = match x {
     case zero => zero
-    case succ(n) => add y (mul n y)
+    case succ(n) => add (y, mul n y)
 }
 
 def four = add two two
@@ -1148,7 +1148,7 @@ def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier
         case cons(n, taill) => match rhs {
             case cons(m, tailr) => match bits_adder_carrier taill tailr carrier {
                 case cons(c, tail) => match full_adder n m c {
-                    case product(a, b) => cons a (cons b tail)
+                    case product(a, b) => cons (a, cons b tail)
                 }
             }
         }
@@ -1185,7 +1185,7 @@ enum Vec[A](len: Nat) {
     cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
 }
 
-def t = cons zero (cons two (cons three (cons two nil)))
+def t = cons (zero, cons(two, cons(three, cons two nil)))
 
 println t.len
 
@@ -1256,7 +1256,7 @@ def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier
         case cons[_](n, taill) => match rhs {
             case cons[_](m, tailr) => match bits_adder_carrier taill tailr carrier {
                 case cons[_](c, tail) => match full_adder n m c {
-                    case product(a, b) => cons a (cons b tail)
+                    case product(a, b) => cons(a, cons b tail)
                 }
             }
         }
@@ -1300,7 +1300,7 @@ def create0: List[Bool] = nil
 
 def create1: List[Bool] = cons true nil
 
-def create2: List[Bool] = cons true (cons false nil)
+def create2: List[Bool] = cons(true, cons false nil)
 
 def two = succ (succ zero)
 
@@ -1320,7 +1320,7 @@ def add(x: Nat, y: Nat) =
 
 def mul(x: Nat, y: Nat) = match x {
     case zero => zero
-    case succ(n) => add y (mul n y)
+    case succ(n) => add(y, mul n y)
 }
 
 def four = add two two
@@ -1351,7 +1351,7 @@ def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
         case refl(a) => e2
     }
 
-def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add n (succ m)) (succ (add n m)) =
+def add_succ_right (n: Nat, m: Nat): Eq[Nat] (add(n, succ m)) (succ (add n m)) =
     match n {
         case zero => refl[Nat] (succ m)
         case succ(k) => cong_succ (add_succ_right k m)
@@ -1363,7 +1363,7 @@ def add_comm (n: Nat, m: Nat): Eq[Nat] (add n m) (add m n) =
         case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
     }
 
-def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add n (add m k)) =
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq[Nat] (add (add n m) k) (add(n, add m k)) =
     match n {
         case zero => rfl
         case succ(l) => cong_succ (add_assoc l m k)
@@ -1375,19 +1375,19 @@ def add_zero_left(m: Nat): Eq[Nat] (add zero m) m =
 def mul_zero_right(n: Nat): Eq[Nat] (mul n zero) zero =
     match n {
         case zero => rfl
-        case succ(k) => trans (refl (add zero (mul k zero))) (mul_zero_right k)
+        case succ(k) => trans (refl (add(zero, mul k zero))) (mul_zero_right k)
     }
 
 def add_succ_zero_left(k: Nat): Eq[Nat] (add (succ zero) k) (succ k) =
     cong_succ (add_zero_left k)
 
-def mul_one_right(n: Nat): Eq[Nat] (mul n (succ zero)) n =
+def mul_one_right(n: Nat): Eq[Nat] (mul (n, succ zero)) n =
     match n {
         case zero => rfl[Nat][zero]
         case succ(k) =>
             let ih = mul_one_right k;
             let lemma: Eq[Nat] (add (succ zero) k) (succ k) = cong_succ (add_zero_left k);
-            trans (cong[Nat][Nat][add (succ zero)][mul k (succ zero)][k] ih) lemma
+            trans (cong[Nat][Nat][add (succ zero)][mul (k, succ zero)][k] ih) lemma
     }
 
 struct Exists[A: Type 0, P: A -> Type 0] {
@@ -1465,7 +1465,7 @@ def ab = assign sigA sigB rfl
 
 def cd = assign sigC sigD rfl
 
-def three = add two (succ zero)
+def three = add(two, succ zero)
 
 println 5
 "#;
@@ -1677,7 +1677,7 @@ def bits_adder_comm[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Eq (bits_
 def fold[T, len: Nat](vec: Vec[T] len, base: T, f: T -> T -> T): T =
     match vec {
         case nil => base
-        case cons(x, tail) => fold tail (f x base) f
+        case cons(x, tail) => fold (tail, f x base) f
     }
 
 def reduce[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T =
