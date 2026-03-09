@@ -236,6 +236,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
         while let Ok((input_t, op)) = string(Op)
             .or(kw(LParen).map(|x| x.map(|_| "(".to_owned())))
             .or(kw(LSquare).map(|x| x.map(|_| "[".to_owned())))
+            .or(kw(Dot).map(|x| x.map(|_| ".".to_owned())))
             .parse(input, state) {
             if let Some((l_bp, ())) = postfix_binding_power(&op) {
                 if l_bp < min_bp {
@@ -309,6 +310,18 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Vec<
                         }
                     };
                     Raw::app(Raw::app(Raw::app(Raw::Var(empty_span("mux".to_owned())), lhs), mhs), rhs)
+                } else if &op.data == "." {
+                    let name = match string(Ident).parse(input, state) {
+                        Ok((input_t, name)) => {
+                            input = input_t;
+                            name
+                        },
+                        Err(e) => {
+                            state.push(e);
+                            empty_span("".to_owned())
+                        }
+                    };
+                    Raw::Obj(Box::new(lhs), Some(name))
                 } else {
                     let rhs = match expr_bp(r_bp).parse(input, state) {
                         Ok((input_t, rhs)) => {
