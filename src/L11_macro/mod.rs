@@ -826,6 +826,20 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
             case cons(y, ys) => cons(x, t xs ys)
         }
     }
+
+impl[T, len: Nat] Vec[T](len) {
+    def map[U](f: T -> U): Vec[U] len =
+        match this {
+            case nil => nil
+            case cons(x, xs) => cons(f x, xs.map f)
+        }
+}
+
+def tt = cons(zero, cons(zero, nil)).map[U=Nat](x => match x {
+    case succ(z) => succ(zero)
+    case zero => zero
+})
+
 "#;
     println!("{}", run(input, 0).unwrap());
 }

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{bimap::BiMap, parser_lib::ToSpan};
 
 use super::{
@@ -13,6 +15,7 @@ pub struct Cxt {
     pub pruning: Pruning,
     pub src_names: BiMap<String, Lvl, (Span<()>, Rc<VTy>)>,
     pub decl: HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
+    pub namespace: List<(Rc<Val>, HashSet<String>, Raw)>,
     update_from: Option<usize>,
 }
 
@@ -96,6 +99,7 @@ impl Cxt {
             pruning: List::new(),
             src_names: BiMap::new(),
             decl: HashMap::new(),
+            namespace: List::new(),
             update_from: None,
         }
     }
@@ -107,6 +111,7 @@ impl Cxt {
             pruning: self.pruning.clone(),
             src_names: BiMap::new(),
             decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
             update_from: self.update_from,
         }
     }
@@ -133,6 +138,7 @@ impl Cxt {
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
             decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
             update_from: self.update_from,
         }
     }
@@ -151,6 +157,7 @@ impl Cxt {
             pruning: self.pruning.clone(),
             src_names: self.src_names.clone(),
             decl,
+            namespace: self.namespace.clone(),
             update_from: self.update_from,
         })
     }
@@ -164,6 +171,7 @@ impl Cxt {
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
             decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
             update_from: self.update_from,
         }
     }
@@ -179,6 +187,7 @@ impl Cxt {
             pruning: self.pruning.prepend(None),
             src_names,
             decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
             update_from: self.update_from,
         }
     }
@@ -197,6 +206,7 @@ impl Cxt {
             pruning: self.pruning.clone(),
             src_names: self.src_names.clone(),
             decl,
+            namespace: self.namespace.clone(),
             update_from: self.update_from,
         })
     }
@@ -246,6 +256,7 @@ impl Cxt {
                     pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},
                     src_names: new_src_names,
                     decl: self.decl.clone(),
+                    namespace: self.namespace.clone(),
                     update_from: Some(update_from),
                 }
             }

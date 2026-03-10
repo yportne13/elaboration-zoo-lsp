@@ -755,7 +755,8 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Vec<IError>) -> IR
         Some(Err(name)) => (
             x.1.clone(),
             x.0.map(|_| format!("$trait_name${}", name)),
-            x.1.unwrap_or_default().into_iter().map(|x| Raw::Var(x.0)).collect(),
+            //x.1.unwrap_or_default().into_iter().map(|x| Raw::Var(x.0)).collect(),
+            vec![],
             name,
             x.3,
             true,

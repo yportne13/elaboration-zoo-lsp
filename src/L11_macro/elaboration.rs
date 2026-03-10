@@ -451,90 +451,114 @@ impl Infer {
                 let span = name.to_span();
                 let mut cxt = cxt.clone();
                 if need_create {
-                    let new_methods = methods
-                        .clone()
-                        .into_iter()
-                        .flat_map(|x| match x {
-                            Decl::Def { name, params, ret_type, body: _ } => {
-                                Some((name, params, ret_type))
+                    let name_raw = params.iter()
+                        .fold(name.clone(), |a, b| Raw::Pi(
+                            b.0.clone(),
+                            b.2,
+                            Box::new(b.1.clone()),
+                            Box::new(a)
+                        ));
+                    let (name_t, _) = self.infer_expr(&cxt, name_raw.clone())?;
+                    let name_v = self.eval(&cxt.decl, &cxt.env, &name_t);
+                    //cxt = new_cxt;
+                    cxt.namespace = cxt.namespace.prepend((name_v, methods.iter().flat_map(|x| match x {
+                        Decl::Def { name, .. } => Some(name.data.clone()),
+                        _ => None
+                    }).collect(), name_raw.clone()));
+                    for decl in methods.iter() {
+                        match decl {
+                            Decl::Def { name: name_d, params: p, ret_type, body } => {
+                                let prefix_name = name_raw.to_string();
+                                let t = self.infer(&cxt, Decl::Def {
+                                    name: name_d.clone().map(|x| format!("{}{x}", prefix_name)),
+                                    params: params.iter()
+                                        .cloned()
+                                        .chain(std::iter::once((
+                                            name_d.to_span().map(|_| "this".to_owned()),
+                                            name.clone(),
+                                            Icit::Expl,
+                                        )))
+                                        .chain(p.iter().cloned())
+                                        .collect(),
+                                    ret_type: ret_type.clone(),
+                                    body: body.clone(),
+                                })?;
+                                cxt = t.2;
                             },
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    let (_, _, new_cxt) = self.infer(&cxt, Decl::TraitDecl {
-                        name: trait_name.clone(),
-                        params: params.clone(),
-                        methods: new_methods,
-                    })?;
-                    cxt = new_cxt;
-                }
-                let mut temp_cxt = cxt.clone();
-                for (x, a, _) in params.clone() {
-                    let (a_checked, _) = self.check_universe(&temp_cxt, a)?;
-                    let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
-                    temp_cxt = temp_cxt.bind(x.clone(), self.quote(&temp_cxt.decl, temp_cxt.lvl, &a_eval), a_eval);
-                }
-                let typ = self.check_universe(&temp_cxt, name.clone())?.0;
-                let typ = self.eval(&temp_cxt.decl, &temp_cxt.env, &typ)
-                    .to_typ()
-                    .ok_or_else(|| Error(span.map(|_| "Not a type".to_string())))?;
-                let mut trait_param = vec![typ.clone()];
-                for a in trait_params.clone() {
-                    let (a_checked, _) = self.infer_expr(&temp_cxt, a)?;
-                    let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
-                    match a_eval.to_typ() {
-                        Some(x) => trait_param.push(x),
-                        None => return Err(Error(span.map(|_| "Not a type".to_string()))),
-                    };
-                }
-                let out_param = self.trait_out_param.get(&trait_name.data)
-                    .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n))))?;
-                let trait_param = trait_param.into_iter()
-                    .zip(out_param)
-                    .filter(|x| !x.1)
-                    .map(|x| x.0)
-                    .collect();
-                let typ_name = format!("{:?}{:?}", trait_name.data, trait_param);
-                let inst = Instance {
-                    assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
-                    dependencies: List::new(),
-                    lvl: trait_name.to_span().map(|_| typ_name.clone()),
-                };
-                // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
-                // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
-                self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
-                let mut ret = std::iter::once(name.clone())
-                    .chain(trait_params.clone())
-                    .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
-                        Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
-                    });
-                for decl in methods {
-                    if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
-                        ret = Raw::App(
-                            Box::new(ret),
-                            Box::new(Raw::Lam(
-                                def_name.map(|_| "this".to_owned()),
-                                Either::Icit(Icit::Expl),
-                                Box::new(params.into_iter().rev()
-                                    .fold(body, |ret, x| Raw::Lam(x.0.clone(), Either::Icit(x.2), Box::new(ret)))
-                                )
-                            )),
-                            Either::Icit(Icit::Expl),
-                        );
+                            _ => {
+                                todo!()
+                            },
+                        }
                     }
+                } else {
+                    let mut temp_cxt = cxt.clone();
+                    for (x, a, _) in params.clone() {
+                        let (a_checked, _) = self.check_universe(&temp_cxt, a)?;
+                        let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
+                        temp_cxt = temp_cxt.bind(x.clone(), self.quote(&temp_cxt.decl, temp_cxt.lvl, &a_eval), a_eval);
+                    }
+                    let typ = self.check_universe(&temp_cxt, name.clone())?.0;
+                    let typ = self.eval(&temp_cxt.decl, &temp_cxt.env, &typ)
+                        .to_typ()
+                        .ok_or_else(|| Error(span.map(|_| "Not a type".to_string())))?;
+                    let mut trait_param = vec![typ.clone()];
+                    for a in trait_params.clone() {
+                        let (a_checked, _) = self.infer_expr(&temp_cxt, a)?;
+                        let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
+                        match a_eval.to_typ() {
+                            Some(x) => trait_param.push(x),
+                            None => return Err(Error(span.map(|_| "Not a type".to_string()))),
+                        };
+                    }
+                    let out_param = self.trait_out_param.get(&trait_name.data)
+                        .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n))))?;
+                    let trait_param = trait_param.into_iter()
+                        .zip(out_param)
+                        .filter(|x| !x.1)
+                        .map(|x| x.0)
+                        .collect();
+                    let typ_name = format!("{:?}{:?}", trait_name.data, trait_param);
+                    let inst = Instance {
+                        assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
+                        dependencies: List::new(),
+                        lvl: trait_name.to_span().map(|_| typ_name.clone()),
+                    };
+                    // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
+                    // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
+                    self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
+                    let mut ret = std::iter::once(name.clone())
+                        .chain(trait_params.clone())
+                        .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
+                            Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
+                        });
+                    for decl in methods {
+                        if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
+                            ret = Raw::App(
+                                Box::new(ret),
+                                Box::new(Raw::Lam(
+                                    def_name.map(|_| "this".to_owned()),
+                                    Either::Icit(Icit::Expl),
+                                    Box::new(params.into_iter().rev()
+                                        .fold(body, |ret, x| Raw::Lam(x.0.clone(), Either::Icit(x.2), Box::new(ret)))
+                                    )
+                                )),
+                                Either::Icit(Icit::Expl),
+                            );
+                        }
+                    }
+                    let (_, _, c) = self.infer(&cxt, Decl::Def {
+                        name: trait_name.to_span().map(|_| typ_name.clone()),
+                        params,
+                        ret_type: trait_params.into_iter()
+                            .fold(Raw::App(
+                                Raw::Var(trait_name).into(),
+                                name.into(),
+                                Either::Icit(Icit::Impl)
+                            ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))),
+                        body: ret,
+                    })?;
+                    cxt = c;
                 }
-                let (_, _, c) = self.infer(&cxt, Decl::Def {
-                    name: trait_name.to_span().map(|_| typ_name.clone()),
-                    params,
-                    ret_type: trait_params.into_iter()
-                        .fold(Raw::App(
-                            Raw::Var(trait_name).into(),
-                            name.into(),
-                            Either::Icit(Icit::Impl)
-                        ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))),
-                    body: ret,
-                })?;
-                cxt = c;
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
             Decl::TraitDecl { name, mut params, methods } => {
@@ -865,7 +889,8 @@ impl Infer {
         }
     }
     fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
-        let typ = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a)).to_typ().unwrap_or(Typ::Val(empty_span("$unknown$".to_owned())));
+        let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
+        let typ = typ_raw.to_typ().unwrap_or(Typ::Val(empty_span("$unknown$".to_owned())));
         if t.data.is_empty() {
             self.trait_definition
                 .clone()//TODO: can remove this clone?
@@ -885,6 +910,20 @@ impl Infer {
                 .flat_map(|x| x.1.2.iter())
                 .for_each(|x| self.completion_table.push((t_span, x.0.data.clone())))
         }
+        if let Some(x) = cxt.namespace.iter()
+            .filter(|x| x.1.contains(&t.data))
+            .find(|x| {
+                let mut check_typ = x.0.clone();
+                while let Val::Pi(_, Icit::Impl, t, c) = check_typ.as_ref() {
+                    let u = self.fresh_meta(&cxt, t.clone());
+                    let u = self.eval(&cxt.decl, &cxt.env, &u);
+                    check_typ = self.closure_apply(&cxt.decl, c, u);
+                }
+                self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok()
+            })
+            .map(|y| self.infer_expr(cxt, Raw::app(Raw::Var(t_span.map(|_| format!("{}{}", y.2, t.data))), *x.clone()))) {
+                return x
+            }
         {
             let traits = self.trait_definition
                 .clone()//TODO: can remove this clone?
