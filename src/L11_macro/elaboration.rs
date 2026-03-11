@@ -452,6 +452,7 @@ impl Infer {
                 let mut cxt = cxt.clone();
                 if need_create {
                     let name_raw = params.iter()
+                        .rev()
                         .fold(name.clone(), |a, b| Raw::Pi(
                             b.0.clone(),
                             b.2,
