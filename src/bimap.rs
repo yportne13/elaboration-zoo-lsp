@@ -1,9 +1,16 @@
-use std::collections::HashMap;
+use im::HashMap;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct BiMap<K1, K2, V> {
     map1: HashMap<K1, K2>,
     map2: HashMap<K2, V>,
+}
+
+impl<K1, K2, V> std::fmt::Debug for BiMap<K1, K2, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BiMap")
+            .finish()
+    }
 }
 
 impl<K1, K2, V> BiMap<K1, K2, V>

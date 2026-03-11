@@ -210,10 +210,8 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
 }
 
-use std::{
-    collections::HashMap,
-    ops::{Add, Sub},
-};
+use std::ops::{Add, Sub};
+use im::HashMap;
 
 #[derive(Debug)]
 enum UnifyError {
