@@ -61,7 +61,7 @@ pub enum DeclTm {
 }
 
 #[derive(Clone)]
-pub struct PrimFunc(Rc<dyn Fn(&Decl, &Env, Rc<Val>) -> Rc<Val> + Send + Sync>);
+pub struct PrimFunc(Rc<dyn Fn(&Infer, &Decl, &Env, Rc<Val>) -> Rc<Val> + Send + Sync>);
 
 impl std::fmt::Debug for PrimFunc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -243,6 +243,7 @@ pub struct Infer {
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
+    mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, String)>,
 }
@@ -254,6 +255,7 @@ impl Infer {
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
+            mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
         }
@@ -396,7 +398,7 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
-            Tm::Prim(typ, func) => func.0(decl, env, typ.clone()),
+            Tm::Prim(typ, func) => func.0(self, decl, env, typ.clone()),
             Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = params
                     .iter()
@@ -864,6 +866,14 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
             }
         }
     }
+
+def ttt =
+    let useless1 = create_global "Nat" 2;
+    let useless2 = change_mutable("Nat", z => succ(z));
+    get_global "Nat"
+
+println ttt
+
 "#;
     println!("{}", run(input, 0).unwrap());
 }
