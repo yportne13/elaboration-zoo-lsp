@@ -15,6 +15,7 @@ pub enum TokenKind {
     ImplKeyword,
     ForKeyword,
     ThisKeyword,
+    MacroKeyword,
 
     Hole,
     LParen,
@@ -35,6 +36,7 @@ pub enum TokenKind {
     Comma,
 
     Ident,
+    MacroIdent,
     Num,
     Op,
     Str,
@@ -50,7 +52,7 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 13] = [
+const KEYWORD: [(&str, TokenKind); 14] = [
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
@@ -64,6 +66,7 @@ const KEYWORD: [(&str, TokenKind); 13] = [
     ("impl", ImplKeyword),
     ("for", ForKeyword),
     ("this", ThisKeyword),
+    ("macro_rules", MacroKeyword),
 ];
 
 const OP: [(&str, TokenKind); 15] = [
@@ -116,6 +119,26 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
                     path_id: head.path_id,
                 }
             }))
+        .parse(input)
+}
+
+fn macro_ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
+    is('$')
+        .with(pmatch(|c: char| c.is_alphabetic() || c == '_'))
+        .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
+        .map(|((head, tail0), tail)| {
+            let tail_len = tail.map(|t| t.len()).unwrap_or(0);
+            let ident = unsafe {
+                input.data
+                    .get_unchecked(..head.len() as usize + tail0.len() as usize + tail_len as usize)
+            };
+            Span {
+                data: (ident, MacroIdent),
+                start_offset: head.start_offset,
+                end_offset: head.start_offset + head.len() + tail0.len() + tail_len,
+                path_id: head.path_id,
+            }
+        })
         .parse(input)
 }
 
@@ -178,7 +201,7 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     whitespace
         .with(
             //ws(brace.or(ident).or(num).or(op))
-            ws(string.or(brace).or(op).or(num).or(ident))
+            ws(string.or(macro_ident).or(brace).or(op).or(num).or(ident))
                 .or(ws(endline))
                 .or(ws(err_token))
                 .many0(),
