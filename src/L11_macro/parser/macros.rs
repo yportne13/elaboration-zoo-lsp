@@ -1,7 +1,7 @@
-use crate::parser_lib::Span;
+use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-
+use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, empty_span};
 
 #[derive(Clone, Debug)]
 pub enum TokenTree {
@@ -36,6 +36,55 @@ pub enum MacroMatcher {
     Group(Delimiter, Vec<MacroMatcher>),*/
     // 序列
     Sequence(Vec<MacroMatcher>),
+}
+
+impl MacroMatcher {
+    pub fn to_parser<'a: 'b, 'b>(&self) -> impl Parser<&'b [TokenNode<'a>], Vec<(String, &'b [TokenNode<'a>])>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
+        move |input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| {
+            match self {
+                MacroMatcher::Token(kind, span) => {
+                    match input.first() {
+                        Some(token) => {
+                            if token.data.1 == *kind && token.data.0 == span.data {
+                                Ok((input.get(1..).unwrap(), vec![]))
+                            } else {
+                                Err(IError {
+                                    msg: token.map(|x| ErrMsg::Expect(*kind)),
+                                })
+                            }
+                        }
+                        None => {
+                            Err(IError {
+                                msg: empty_span(ErrMsg::Expect(*kind)),
+                            })
+                        }
+                    }
+                }
+                MacroMatcher::Metavar { name, fragment } => {
+                    match fragment {
+                        MacroFragment::Ident => string(TokenKind::Ident).parse(input, state)
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap())])),
+                        MacroFragment::Raw => p_raw(input, state)
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(i.len() - input.len())).unwrap())])),
+                    }
+                },
+                MacroMatcher::Sequence(macro_matchers) => {
+                    let mut input = input;
+                    let mut ret = vec![];
+                    for x in  macro_matchers {
+                        match x.to_parser().parse(input, state) {
+                            Ok((i, t)) => {
+                                input = i;
+                                ret.extend(t);
+                            },
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Ok((input, ret))
+                },
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,7 +130,37 @@ pub enum MacroTranscriber<'a: 'b, 'b> {
     Group(Delimiter, Vec<MacroTranscriber>),
     // 序列
     Sequence(Vec<MacroTranscriber>),*/
-    Sequence(&'b [Span<(&'a str, TokenKind)>])
+    Sequence(&'b [Span<(&'a str, TokenKind)>]),
+    BuiltIn,//TODO: more builtin
+}
+
+impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
+    pub fn replace(&self, metavars: Vec<(String, &'b [TokenNode<'a>])>) -> Vec<Span<(&'a str, TokenKind)>> {
+        match self {
+            MacroTranscriber::Sequence(x) => {
+                let mut ret = vec![];
+                for x in x.iter() {
+                    if x.data.1 == TokenKind::MacroIdent {
+                        if let Some(y) = metavars.iter().find(|z| z.0 == x.data.0) {
+                            ret.extend(y.1);
+                        } else {
+                            ret.push(*x);
+                        }
+                    } else {
+                        ret.push(*x);
+                    }
+                }
+                //TODO:truncate head endline and tail endline
+                ret
+            },
+            MacroTranscriber::BuiltIn => {
+                metavars.into_iter()
+                    .flat_map(|x| x.1.iter())
+                    .map(|z| z.map(|(s, _)| (s, TokenKind::Str)))
+                    .collect()
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

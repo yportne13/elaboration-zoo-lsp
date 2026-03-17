@@ -111,7 +111,11 @@ tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4
 tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6, H | PH | 7);
 
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    let mut err_collect = (vec![], Default::default());
+    let mut err_collect: (Vec<IError>, HashMap<String, Vec<MacroRule<'_, '_>>>) = (vec![], Default::default());
+    err_collect.1.insert("stringify".to_owned(), vec![MacroRule {
+        matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
+        transcriber: MacroTranscriber::BuiltIn,
+    }]);
     match super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,
@@ -620,6 +624,10 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, H
             x,
             Icit::Expl,
         )))
+        .or((
+            string(Ident),
+            brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
+        ).map(|x| Pattern::Con(x.0.map(|t| format!("{t}.mk")), x.1, Icit::Expl)))
         .parse(input, state)
 }
 
@@ -654,6 +662,21 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
 }
 
 fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Raw> {
+    if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
+        for m in macro_decl {
+            if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
+                let t = m.transcriber.replace(t);
+                let mut temp_state = (vec![], state.1.clone());
+                let ret = p_raw(&t, &mut temp_state)?;
+                state.0.extend(temp_state.0);
+                if !ret.0.is_empty() {
+                    state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(TokenKind::EndLine)) })
+                } else {
+                    return Ok((i, ret.1))
+                }
+            }
+        }
+    }
     p_lam
         .or(p_let)
         .or(p_pi)
@@ -1128,6 +1151,21 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>,
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Decl> {
+    if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
+        for m in macro_decl {
+            if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
+                let t = m.transcriber.replace(t);
+                let mut temp_state = (vec![], state.1.clone());
+                let ret = p_decl(&t, &mut temp_state)?;
+                state.0.extend(temp_state.0);
+                if !ret.0.is_empty() {
+                    state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(TokenKind::EndLine)) })
+                } else {
+                    return Ok((i, ret.1))
+                }
+            }
+        }
+    }
     p_def.or(p_print).or(p_enum).or(p_struct).or(p_trait_def).or(p_impl)
         .parse(input, state)
         .map_err(|e| IError {

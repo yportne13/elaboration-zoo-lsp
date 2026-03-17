@@ -874,6 +874,16 @@ def ttt =
 
 println ttt
 
+println stringify t123
+
+macro_rules module {
+    ($name: ident) => {def $name = string_concat("module ", stringify $name)};
+}
+
+module test1
+
+println test1
+
 "#;
     println!("{}", run(input, 0).unwrap());
 }
