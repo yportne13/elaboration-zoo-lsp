@@ -877,12 +877,17 @@ println ttt
 println stringify t123
 
 macro_rules module {
+    ($name: ident $body: raw) => {def $name = string_concat(string_concat("module ", stringify $name), $body)};
     ($name: ident) => {def $name = string_concat("module ", stringify $name)};
 }
 
-module test1
+module test1 " {}"
 
 println test1
+
+module test2
+
+println test2
 
 "#;
     println!("{}", run(input, 0).unwrap());

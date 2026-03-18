@@ -65,7 +65,7 @@ impl MacroMatcher {
                         MacroFragment::Ident => string(TokenKind::Ident).parse(input, state)
                             .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap())])),
                         MacroFragment::Raw => p_raw(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(i.len() - input.len())).unwrap())])),
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap())])),
                     }
                 },
                 MacroMatcher::Sequence(macro_matchers) => {

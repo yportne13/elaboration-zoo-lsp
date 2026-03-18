@@ -612,22 +612,21 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Pattern> {
     (
         string(Ident),
-        paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
-            .or(square_cut(p_pattern.map(|x| x.to_impl()).many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default()))
-            .many0()
-            .map(|x| x.concat()),
-    )
-        .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
+        brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
+    ).map(|x| Pattern::Con(x.0.map(|t| format!("{t}.mk")), x.1, Icit::Expl))
+        .or((
+            string(Ident),
+            paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
+                .or(square_cut(p_pattern.map(|x| x.to_impl()).many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default()))
+                .many0()
+                .map(|x| x.concat()),
+        ).map(|(x, t)| Pattern::Con(x, t, Icit::Expl)))
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Icit::Expl)))
         .or(paren(p_pattern.many1_sep(kw(T![,]))).map(|x| Pattern::Con(
             empty_span(format!("Tuple{}.mk", x.len())),
             x,
             Icit::Expl,
         )))
-        .or((
-            string(Ident),
-            brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
-        ).map(|x| Pattern::Con(x.0.map(|t| format!("{t}.mk")), x.1, Icit::Expl)))
         .parse(input, state)
 }
 
@@ -1131,12 +1130,15 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>,
         //p_pi_expl_binder.option().map(|x| x.unwrap_or_default()),  // 可选参数
         brace(
             // 解析多条规则: (matcher => transcriber);
-            (
+            Cut((
                 paren(p_macro_matcher),  // 匹配器在 (...) 中
                 kw(T![=>]),
                 p_macro_transcriber_single,  // 转写器在 (...) 中
-            ).map(|(matcher, _, transcriber)| MacroRule { matcher, transcriber })
-            .many1_sep(kw(T![;]))  // 规则用 ; 分隔
+            )).map(|(matcher, _, transcriber)| MacroRule {
+                matcher,
+                transcriber: transcriber.unwrap_or(MacroTranscriber::Sequence(&[])),
+            })
+            .many1_sep((kw(T![;]), kw(EndLine).option()))  // 规则用 ; 分隔
         ),
     ))
     .parse(input, state) {
