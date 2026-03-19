@@ -1,7 +1,7 @@
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, empty_span};
+use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, p_pi_binder, empty_span, ParserExt};
 
 #[derive(Clone, Debug)]
 pub enum TokenTree {
@@ -66,6 +66,8 @@ impl MacroMatcher {
                             .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap())])),
                         MacroFragment::Raw => p_raw(input, state)
                             .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap())])),
+                        MacroFragment::Param => p_pi_binder.many1().parse(input, state)
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap())])),
                     }
                 },
                 MacroMatcher::Sequence(macro_matchers) => {
@@ -98,6 +100,7 @@ pub enum RepetitionOp {
 pub enum MacroFragment {
     Ident,
     Raw,
+    Param,
     //Expr,      // 表达式
     //Ident,     // 标识符
     //Ty,        // 类型

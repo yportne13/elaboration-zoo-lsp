@@ -62,54 +62,6 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, (Vec<IError>, HashMap<Stri
     }
 }
 
-macro_rules! tuple_cut_parser_ext {
-    ($t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),*) => {
-        impl<
-            I: Copy,
-            Err,
-            T,
-            $t0, $($t),*,
-            $p0, $($p),*
-        > Parser<I, ($t0, $(Option<$t>),*), (Vec<Err>, T), Err> for Cut<($p0, $($p),*)>
-        where
-            $p0: Parser<I, $t0, (Vec<Err>, T), Err>,
-            $($p: Parser<I, $t, (Vec<Err>, T), Err>),*
-        {
-            fn parse(&self, input: I, state: &mut (Vec<Err>, T)) -> Result<(I, ($t0, $(Option<$t>),*)), Err> {
-                let (input, val) = self.0.$idx0.parse(input, state)?;
-                tuple_cut_parser_ext!(self => input => state => val => $($t | $p | $idx),*)
-            }
-        }
-    };
-    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),+) => ({
-        let (input, val) = match $self.0.$idx0.parse($input, $state) {
-            Ok((i, v)) => (i, Some(v)),
-            Err(e) => {
-                $state.0.push(e);
-                ($input, None)
-            }
-        };
-        tuple_cut_parser_ext!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
-    });
-    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt) => ({
-        match $self.0.$idx0.parse($input, $state) {
-            Ok((input, val)) => Ok((input, ($($parsed),*, Some(val)))),
-            Err(e) => {
-                $state.0.push(e);
-                Ok(($input, ($($parsed),*, None)))
-            }
-        }
-    });
-}
-
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6, H | PH | 7);
-
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
     let mut err_collect: (Vec<IError>, HashMap<String, Vec<MacroRule<'_, '_>>>) = (vec![], Default::default());
     err_collect.1.insert("stringify".to_owned(), vec![MacroRule {
@@ -859,6 +811,7 @@ fn parse_fragment_kind<'a: 'b, 'b>(
             //"expr" => MacroFragment::Expr,
             "ident" => MacroFragment::Ident,
             "raw" => MacroFragment::Raw,
+            "params" => MacroFragment::Param,
             //"ty" => MacroFragment::Ty,
             //"pat" => MacroFragment::Pat,
             //"stmt" => MacroFragment::Stmt,
