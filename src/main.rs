@@ -21,6 +21,7 @@ mod L08_product_type;
 mod L09_mltt;
 mod L10_typeclass;
 mod L11_macro;
+mod L12_canonical;
 
 
 use std::collections::HashMap;
@@ -39,13 +40,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification};
 use lsp_types::*;
-use crate::L11_macro::pretty::pretty_tm;
 use crate::ls::Result;
 
-use L11_macro::parser::parser;
-use L11_macro::parser::syntax::Decl;
-use L11_macro::{DeclTm, Infer, preprocess};
-use L11_macro::cxt::Cxt;
+use L12_canonical::pretty::pretty_tm;
+use L12_canonical::parser::parser;
+use L12_canonical::parser::syntax::Decl;
+use L12_canonical::{DeclTm, Infer, preprocess};
+use L12_canonical::cxt::Cxt;
 
 use std::sync::{Arc, Mutex, RwLock, Condvar};
 use std::thread;
@@ -897,7 +898,7 @@ impl Backend {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
                             err_collect.push((
-                                crate::L11_macro::Error(span.map(|_| s.clone())),
+                                crate::L12_canonical::Error(span.map(|_| s.clone())),
                                 DiagnosticSeverity::INFORMATION
                             ))
                         }
