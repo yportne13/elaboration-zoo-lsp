@@ -151,7 +151,7 @@ impl Infer {
                 let (pren, prune_non_linear) = self.invert(cxt.lvl, &cxt.decl, sp)
                     .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned())))?;
                 let mty = match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(ref a) => a.clone(),
+                    MetaEntry::Unsolved(ref a, _) => a.clone(),
                     _ => unreachable!(),
                 };
 
@@ -292,11 +292,13 @@ impl Infer {
                     let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if let Some(meta_ty) = t_tm.no_metas(self) {
+                    if let Some((metavar, meta_ty, meta_cxt)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
+                        let ret = self.search(&meta_cxt, vec![(metavar, meta_ty.clone())], vec![], 5, vec![], &name.data);
                         return Err(Error(bod.to_span().map(|_|
                             format!(
-                                "find unsolved meta with type `{}`",
-                                super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, meta_ty))
+                                "find unsolved meta with type `{}`\n{:?}",
+                                super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
+                                ret,
                             )
                         )));
                     }

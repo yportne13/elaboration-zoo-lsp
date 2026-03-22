@@ -218,7 +218,7 @@ impl Cxt {
                         Rc::new(Tm::Pi(
                             empty_span("y".to_owned()),
                             Icit::Expl,
-                            Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into()),
+                            Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                             Rc::new(Tm::U(0)),
                         )),
                     ),
@@ -312,7 +312,7 @@ impl Cxt {
                     empty_span("x".to_owned()),
                     Icit::Expl,
                     Rc::new(Tm::Decl(empty_span("String".to_owned()))),
-                    Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into()),
+                    Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                 ).into(),
                 Val::Pi(
                     empty_span("x".to_owned()),
@@ -320,7 +320,7 @@ impl Cxt {
                     Rc::new(Val::LiteralType),
                     Closure(
                         List::new(),
-                        Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into()),
+                        Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                     ),
                 ).into(),
             )

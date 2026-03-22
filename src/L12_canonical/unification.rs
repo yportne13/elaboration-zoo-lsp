@@ -138,13 +138,15 @@ impl Infer {
     }
     fn prune_meta(&mut self, decl: &Decl, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
         let mty = match self.meta[m.0 as usize] {
-            MetaEntry::Unsolved(ref a) => a.clone(),
+            MetaEntry::Unsolved(ref a, _) => a.clone(),
             _ => unreachable!(),
         };
 
         let prune_ty = self.prune_ty(decl, &pruning, &mty)?;
         let prunedty = self.eval(decl, &List::new(), &prune_ty); //TODO:revPruning
-        let m_prime = MetaVar(self.new_meta(prunedty));
+        let mut empty_cxt = Cxt::new();
+        empty_cxt.decl = decl.clone();
+        let m_prime = MetaVar(self.new_meta(prunedty, empty_cxt));
 
         let solution = self.eval(
             decl,
@@ -209,14 +211,14 @@ impl Infer {
         let m_prime = match status {
             SpinePruneStatus::OKRenaming => {
                 match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(_) => m,
+                    MetaEntry::Unsolved(_, _) => m,
                     //_ => return Err(Error::Impossible),
                     _ => unreachable!(),
                 }
             }
             SpinePruneStatus::OKNonRenaming => {
                 match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(_) => m,
+                    MetaEntry::Unsolved(_, _) => m,
                     //_ => return Err(Error::Impossible),
                     _ => unreachable!(),
                 }
@@ -414,7 +416,7 @@ impl Infer {
         rhs: &Rc<Val>,
     ) -> Result<(), UnifyError> {
         let mty = match self.meta[m.0 as usize] {
-            MetaEntry::Unsolved(ref a) => a.clone(),
+            MetaEntry::Unsolved(ref a, _) => a.clone(),
             _ => unreachable!(),
         };
 
@@ -443,7 +445,7 @@ impl Infer {
             .iter()
             .flat_map(|x| x.iter())
             .enumerate()
-            .flat_map(|x| if let MetaEntry::Unsolved(v) = x.1 { Some((x.0, v.clone())) } else { None })
+            .flat_map(|x| if let MetaEntry::Unsolved(v, _) = x.1 { Some((x.0, v.clone())) } else { None })
             .collect::<Vec<_>>();
         for (idx, x) in prepare {
             let typ = self.solve_trait(cxt, &x)

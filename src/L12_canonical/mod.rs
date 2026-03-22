@@ -16,6 +16,7 @@ mod syntax;
 mod unification;
 mod typeclass;
 pub mod pretty;
+mod canonical;
 
 type Rc<T> = std::sync::Arc<T>;
 
@@ -27,7 +28,7 @@ pub struct MetaVar(u32);
 #[derive(Debug, Clone)]
 enum MetaEntry {
     Solved(Rc<Val>, Rc<VTy>),
-    Unsolved(Rc<VTy>),
+    Unsolved(Rc<VTy>, Cxt),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -95,24 +96,25 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas<'a>(&self, infer: &'a Infer) -> Option<&'a Rc<Val>> {
+    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
-            Tm::Obj(tm, _) => tm.no_metas(infer),
-            Tm::Lam(_, _, t) => t.no_metas(infer),
-            Tm::App(t, u, _) => t.no_metas(infer).or(u.no_metas(infer)),
-            Tm::AppPruning(t, _) => t.no_metas(infer),
-            Tm::Pi(_, _, t, u) => t.no_metas(infer).or(u.no_metas(infer)),
-            Tm::Let(_, a, t, u) => a.no_metas(infer).or(t.no_metas(infer)).or(u.no_metas(infer)),
-            Tm::Meta(m) => if let MetaEntry::Unsolved(ty) = infer.lookup_meta(*m) {
-                Some(ty)
-            } else {
-                None
+            Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
+            Tm::Lam(_, _, t) => t.no_metas(infer, decl, l),
+            Tm::App(t, u, _) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
+            Tm::AppPruning(t, _) => t.no_metas(infer, decl, l),
+            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
+            Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or(t.no_metas(infer, decl, l)).or(u.no_metas(infer, decl, l)),
+            Tm::Meta(m) => match infer.lookup_meta(*m) {
+                MetaEntry::Unsolved(ty, cxt) => Some((*m, ty.clone(), cxt.clone())),
+                MetaEntry::Solved(v, _) => {
+                    infer.quote(decl, l, v).no_metas(infer, decl, l)
+                }
             },
-            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer).or(ty.no_metas(infer))).next(),
-            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer)
-                .or(datas.iter().flat_map(|(_, t, _)| t.no_metas(infer)).next()),
-            Tm::Match(tm, items) => tm.no_metas(infer).or(items.iter().flat_map(|(_, t)| t.no_metas(infer)).next()),
+            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer, decl, l).or(ty.no_metas(infer, decl, l))).next(),
+            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
+                .or(datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
+            Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or(items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
         }
     }
 }
@@ -163,7 +165,7 @@ pub struct Closure(Env, Rc<Tm>);
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Closure(.., {:?})", self.1)
+        write!(f, "Closure(..{}, {:?})", self.0.len(), self.1)
     }
 }
 
@@ -260,15 +262,15 @@ impl Infer {
             completion_table: vec![],
         }
     }
-    fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
-        self.meta.push(MetaEntry::Unsolved(a));
+    fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt) -> u32 {
+        self.meta.push(MetaEntry::Unsolved(a, cxt));
         self.meta.len() as u32 - 1
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {
         if let Ok(Some((a, _))) = self.solve_trait(cxt, &a) {
             a
         } else if let Val::Sum(_, _, _, true) = a.as_ref() {
-            let m = self.new_meta(a);
+            let m = self.new_meta(a, cxt.clone());
             Tm::Meta(MetaVar(m)).into()
         } else {
             //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
@@ -279,7 +281,7 @@ impl Infer {
                 &List::new(),
                 &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a)),
             );
-            let m = self.new_meta(closed);
+            let m = self.new_meta(closed, cxt.clone());
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
         }
     }
@@ -291,7 +293,7 @@ impl Infer {
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
                 MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp)),
-                MetaEntry::Unsolved(_) => Val::Flex(*m, sp.clone()).into(),
+                MetaEntry::Unsolved(_, _) => Val::Flex(*m, sp.clone()).into(),
             },
             Val::Obj(x, a, b) => {
                 Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
@@ -302,7 +304,7 @@ impl Infer {
     fn v_meta(&self, m: MetaVar) -> Rc<Val> {
         match self.lookup_meta(m) {
             MetaEntry::Solved(v, _) => v.clone(),
-            MetaEntry::Unsolved(_) => Val::vmeta(m).into(),
+            MetaEntry::Unsolved(_, _) => Val::vmeta(m).into(),
         }
     }
 
@@ -562,8 +564,8 @@ impl Infer {
                 /*panic!(
                     //"can't unify {:?} == {:?}",
                     "can't unify\n      find: {}\n  expected: {}",
-                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t)),
-                    pretty_tm(0, cxt.names(), &self.quote(cxt.lvl, t_prime)),
+                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
+                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
                 );*/
                 let err = match e {
                     UnifyError::Basic => format!(
@@ -1784,6 +1786,40 @@ def up_fin[x: Nat](n: Fin x): Fin (x + 1) = match n {
     case fsucc[x](t) => fsucc (up_fin t)
 }
     "#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test11() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add(y, mul n y)
+    }
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def tt: Eq 0 0 = _
+
+def t: Nat = _
+"#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
         Err(e) => panic!("{}", e.0.data),
