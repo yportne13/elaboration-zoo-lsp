@@ -96,17 +96,20 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt)> {
+    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt, Pruning)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
             Tm::Lam(_, _, t) => t.no_metas(infer, decl, l),
             Tm::App(t, u, _) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
-            Tm::AppPruning(t, _) => t.no_metas(infer, decl, l),
+            Tm::AppPruning(t, s) => {
+                t.no_metas(infer, decl, l)
+                    .map(|(a, b, c, _)| (a, b, c, s.clone()))
+            },
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or(t.no_metas(infer, decl, l)).or(u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(ty, cxt) => Some((*m, ty.clone(), cxt.clone())),
+                MetaEntry::Unsolved(ty, cxt) => Some((*m, ty.clone(), cxt.clone(), List::new())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -1816,7 +1819,13 @@ enum Eq[A](x: A, y: A) {
     refl(a: A) -> Eq a a
 }
 
-def tt: Eq 0 0 = _
+//def z1: (a: Nat) -> Eq a a = _
+
+def z(a: Nat, b: Nat): Eq a a = _
+
+//def add_comm(a: Nat, b: Nat): Eq (add a b) (add b a) = _
+
+//def tt: Eq 0 0 = _
 
 def t: Nat = _
 "#;

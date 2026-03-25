@@ -395,7 +395,7 @@ impl Infer {
     pub fn lams(&self, l: Lvl, decl: &Decl, a: &Rc<VTy>, t: Rc<Tm>) -> Rc<Tm> {
         self.lams_go(l, decl, t, a, Lvl(0))
     }
-    fn solve(&mut self, gamma: Lvl, decl: &Decl, m: MetaVar, sp: Spine, rhs: &Rc<Val>) -> Result<(), UnifyError> {
+    pub fn solve(&mut self, gamma: Lvl, decl: &Decl, m: MetaVar, sp: Spine, rhs: &Rc<Val>) -> Result<(), UnifyError> {
         /*println!(
             "{} {:?} {:?} {:?}\n  rhs: {:?}",
             "solve".red(),
