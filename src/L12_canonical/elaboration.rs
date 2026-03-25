@@ -297,7 +297,7 @@ impl Infer {
                             &meta_cxt,
                             vec![(metavar, meta_ty.clone(), pr.zip(&meta_cxt.env).flat_map(|(a, b)| a.map(|a| (b.clone(), a))))],
                             vec![],
-                            5,
+                            7,
                             vec![],
                             &name.data,
                         );
