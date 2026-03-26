@@ -58,6 +58,19 @@ impl<T> List<T> {
         }
     }
 
+    pub fn flat_map<U, F>(&self, f: F) -> List<U>
+    where
+        F: Fn(&T) -> Option<U> + Copy,
+    {
+        match self {
+            List { head: None } => List::new(),
+            x => match f(self.head().unwrap()) {
+                Some(t) => x.tail().flat_map(f).prepend(t),
+                None => x.tail().flat_map(f),
+            }
+        }
+    }
+
     pub fn split(&self) -> (Option<&T>, List<T>) {
         match self {
             List { head: None } => (None, List::new()),
@@ -92,6 +105,13 @@ impl<T: Clone> List<T> {
     pub fn change_tail(self, new_tail: List<T>) -> List<T> {
         let head_len = self.len() - new_tail.len();
         self.change_tail_helper(new_tail, head_len)
+    }
+
+    pub fn zip<U: Clone>(&self, other: &List<U>) -> List<(T, U)> {
+        match (self, other) {
+            (List { head: None }, _) | (_, List { head: None }) => List::new(),
+            (x, y) => x.tail().zip(&y.tail()).prepend((x.head().unwrap().clone(), y.head().unwrap().clone()))
+        }
     }
 
     fn change_tail_helper(self, new_tail: List<T>, head_len: usize) -> List<T> {
