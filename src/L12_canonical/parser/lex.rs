@@ -34,6 +34,9 @@ pub enum TokenKind {
     DoubleArrow,
     Lambda,
     Comma,
+    MacroGroupStart,
+    MacroGroupEnd0,
+    MacroGroupEnd1,
 
     Ident,
     MacroIdent,
@@ -69,7 +72,7 @@ const KEYWORD: [(&str, TokenKind); 14] = [
     ("macro_rules", MacroKeyword),
 ];
 
-const OP: [(&str, TokenKind); 15] = [
+const OP: [(&str, TokenKind); 18] = [
     ("_", Hole),
     ("(", LParen),
     (")", RParen),
@@ -85,6 +88,9 @@ const OP: [(&str, TokenKind); 15] = [
     ("->", Arrow),
     ("=>", DoubleArrow),
     ("\\", Lambda),
+    ("$(", MacroGroupStart),
+    (")*", MacroGroupEnd1),
+    (")+", MacroGroupEnd1),
 ];
 
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;

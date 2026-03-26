@@ -90,7 +90,7 @@ const OP: [(&str, TokenKind); 18] = [
     ("\\", Lambda),
     ("$(", MacroGroupStart),
     (")*", MacroGroupEnd1),
-    (")+", MacroGroupEnd1)
+    (")+", MacroGroupEnd1),
 ];
 
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;

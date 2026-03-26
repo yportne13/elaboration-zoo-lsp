@@ -616,7 +616,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         for m in macro_decl {
             if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
-                let t = m.transcriber.replace(t);
+                let t = m.transcriber.replace(t)?;
                 let mut temp_state = (vec![], state.1.clone());
                 let ret = p_raw(&t, &mut temp_state)?;
                 state.0.extend(temp_state.0);
@@ -811,6 +811,7 @@ fn parse_fragment_kind<'a: 'b, 'b>(
             //"expr" => MacroFragment::Expr,
             "ident" => MacroFragment::Ident,
             "raw" => MacroFragment::Raw,
+            "params" => MacroFragment::Param,
             //"ty" => MacroFragment::Ty,
             //"pat" => MacroFragment::Pat,
             //"stmt" => MacroFragment::Stmt,
@@ -818,10 +819,10 @@ fn parse_fragment_kind<'a: 'b, 'b>(
             //"block" => MacroFragment::Block,
             //"tt" => MacroFragment::Tt,
             _ => {
-                state.0.push(IError {
-                    msg: span.to_span().map(|_| ErrMsg::Expect(Ident))
-                });
-                MacroFragment::Raw  // 默认回退
+                //state.0.push(IError {
+                //    msg: span.to_span().map(|_| ErrMsg::Expect(Ident))
+                //});
+                MacroFragment::Name(span)
             }
         };
         (input, fragment)
@@ -849,6 +850,15 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         .or(brace(p_macro_matcher_sequence.map(|opt| {
             MacroMatcher::Group(Delimiter::Brace, opt.map(|m| vec![m]).unwrap_or_default())
         })));*/
+    let group_parser = (
+        kw(MacroGroupEnd0),
+        p_macro_matcher_sequence,
+        string(MacroGroupEnd0).or(string(MacroGroupEnd1)),
+    ).map(|(_, m, s)| if &s.data == ")*" {
+        MacroMatcher::Many0(MacroMatcher::Sequence(m).into())
+    } else {
+        MacroMatcher::Many1(MacroMatcher::Sequence(m).into())
+    });
     
     // 尝试解析普通 token
     let token_parser = string(Ident)
@@ -881,7 +891,7 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         }));
     
     metavar_parser
-        //.or(group_parser)
+        .or(group_parser)
         .or(token_parser)
         .parse(input, state)
 }
@@ -973,11 +983,12 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
         .or(group_parser)
         .or(token_parser)
         .parse(input, state)*/
-    match kw(LCurly).parse(input, state) {
+    match (kw(LCurly), kw(EndLine).option()).parse(input, state) {
         Ok((input, _)) => {
             let mut lvl = 1;
             let mut input = input;
-            let i_back = input;
+            let mut i_back = input;
+            let mut ret = vec![];
             loop {
                 if let Ok((i, _)) = kw(RCurly).parse(input, state) {
                     lvl -= 1;
@@ -988,14 +999,22 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                 } else if let Ok((i, _)) = kw(LCurly).parse(input, state) {
                     lvl += 1;
                     input = i;
-                } else if input.is_empty() {
+                } else if input.is_empty() || kw(MacroGroupEnd0).parse(input, state).is_ok() || kw(MacroGroupEnd1).parse(input, state).is_ok() {
                     break;
+                } else if let Ok((i, _)) = kw(MacroGroupStart).parse(input, state) {
+                    let len = i_back.len() - input.len() - 1;
+                    ret.push(MacroTranscriber::Basic(i_back.get(..len).unwrap()));
+                    let (i, o) = p_macro_transcriber_single.parse(i, state)?;
+                    ret.push(MacroTranscriber::Group(o.into()));
+                    let (i, _) = kw(MacroGroupEnd0).or(kw(MacroGroupEnd1)).parse(i, state)?;//TODO: 0 or 1?
+                    i_back = i;
                 } else {
                     input = input.get(1..).unwrap();
                 }
             }
             let len = i_back.len() - input.len() - 1;
-            Ok((input, MacroTranscriber::Sequence(i_back.get(..len).unwrap())))
+            ret.push(MacroTranscriber::Basic(i_back.get(..len).unwrap()));
+            Ok((input, MacroTranscriber::Sequence(ret)))
         },
         Err(e) => Err(e),
     }
@@ -1088,7 +1107,7 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>,
                 p_macro_transcriber_single,  // 转写器在 (...) 中
             )).map(|(matcher, _, transcriber)| MacroRule {
                 matcher,
-                transcriber: transcriber.unwrap_or(MacroTranscriber::Sequence(&[])),
+                transcriber: transcriber.unwrap_or(MacroTranscriber::Sequence(vec![])),
             })
             .many1_sep((kw(T![;]), kw(EndLine).option()))  // 规则用 ; 分隔
         ),
@@ -1108,7 +1127,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         for m in macro_decl {
             if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
-                let t = m.transcriber.replace(t);
+                let t = m.transcriber.replace(t)?;
                 let mut temp_state = (vec![], state.1.clone());
                 let ret = p_decl(&t, &mut temp_state)?;
                 state.0.extend(temp_state.0);

@@ -1,21 +1,8 @@
+use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, empty_span};
-
-#[derive(Clone, Debug)]
-pub enum TokenTree {
-    Token(Span<(String, TokenKind)>),  // 单个 token
-    Group(Delimiter, Vec<TokenTree>),  // (...) [...] {...}
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum Delimiter {
-    Parenthesis,  // ()
-    Bracket,      // []
-    Brace,        // {}
-    None,         // 无分隔符（用于序列）
-}
+use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, p_pi_binder, empty_span, ParserExt, kw};
 
 #[derive(Clone, Debug)]
 pub enum MacroMatcher {
@@ -26,6 +13,8 @@ pub enum MacroMatcher {
         name: Span<String>,
         fragment: MacroFragment,
     },
+    Many0(Box<MacroMatcher>),
+    Many1(Box<MacroMatcher>),
     // 重复匹配：$(...)* $(...)+ $(...)?
     /*Repetition {
         inner: Box<MacroMatcher>,
@@ -39,7 +28,7 @@ pub enum MacroMatcher {
 }
 
 impl MacroMatcher {
-    pub fn to_parser<'a: 'b, 'b>(&self) -> impl Parser<&'b [TokenNode<'a>], Vec<(String, &'b [TokenNode<'a>])>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
+    pub fn to_parser<'a: 'b, 'b>(&self) -> impl Parser<&'b [TokenNode<'a>], Vec<(String, Vec<TokenNode<'a>>)>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
         move |input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| {
             match self {
                 MacroMatcher::Token(kind, span) => {
@@ -63,9 +52,21 @@ impl MacroMatcher {
                 MacroMatcher::Metavar { name, fragment } => {
                     match fragment {
                         MacroFragment::Ident => string(TokenKind::Ident).parse(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap())])),
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap().to_vec())])),
                         MacroFragment::Raw => p_raw(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap())])),
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().to_vec())])),
+                        MacroFragment::Param => p_pi_binder.many1().parse(input, state)
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().to_vec())])),
+                        MacroFragment::Name(name) => state.1.get(&name.data).cloned().and_then(|x| x.iter()
+                            .flat_map(|m| {
+                                m.matcher.to_parser().parse(input, state)
+                                    .and_then(|(i, t)| {
+                                        let t = m.transcriber.replace(t)?;
+                                        Ok((i, vec![(name.data.clone(), t)]))
+                                    })
+                            }).next()).ok_or(IError {
+                                msg: name.to_span().map(|_| ErrMsg::Expect(TokenKind::MacroGroupEnd0)),//TODO: err msg
+                            })
                     }
                 },
                 MacroMatcher::Sequence(macro_matchers) => {
@@ -82,6 +83,14 @@ impl MacroMatcher {
                     }
                     Ok((input, ret))
                 },
+                MacroMatcher::Many0(m) => m.to_parser()
+                    .many0_sep(kw(TokenKind::EndLine).option())
+                    .map(|x| x.concat())
+                    .parse(input, state),
+                MacroMatcher::Many1(m) => m.to_parser()
+                    .many1_sep(kw(TokenKind::EndLine).option())
+                    .map(|x| x.concat())
+                    .parse(input, state),
             }
         }
     }
@@ -98,6 +107,8 @@ pub enum RepetitionOp {
 pub enum MacroFragment {
     Ident,
     Raw,
+    Param,
+    Name(Span<String>),
     //Expr,      // 表达式
     //Ident,     // 标识符
     //Ty,        // 类型
@@ -130,19 +141,21 @@ pub enum MacroTranscriber<'a: 'b, 'b> {
     Group(Delimiter, Vec<MacroTranscriber>),
     // 序列
     Sequence(Vec<MacroTranscriber>),*/
-    Sequence(&'b [Span<(&'a str, TokenKind)>]),
+    Group(Box<MacroTranscriber<'a, 'b>>),
+    Basic(&'b [Span<(&'a str, TokenKind)>]),
+    Sequence(Vec<MacroTranscriber<'a, 'b>>),
     BuiltIn,//TODO: more builtin
 }
 
 impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
-    pub fn replace(&self, metavars: Vec<(String, &'b [TokenNode<'a>])>) -> Vec<Span<(&'a str, TokenKind)>> {
+    pub fn replace(&self, metavars: Vec<(String, Vec<TokenNode<'a>>)>) -> Result<Vec<Span<(&'a str, TokenKind)>>, IError> {
         match self {
-            MacroTranscriber::Sequence(x) => {
+            MacroTranscriber::Basic(x) => {
                 let mut ret = vec![];
                 for x in x.iter() {
                     if x.data.1 == TokenKind::MacroIdent {
                         if let Some(y) = metavars.iter().find(|z| z.0 == x.data.0) {
-                            ret.extend(y.1);
+                            ret.extend(y.1.clone());
                         } else {
                             ret.push(*x);
                         }
@@ -151,13 +164,68 @@ impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
                     }
                 }
                 //TODO:truncate head endline and tail endline
-                ret
+                Ok(ret)
+            },
+            MacroTranscriber::Sequence(x) => {
+                let mut ret = vec![];
+                for x in x.iter() {
+                    ret.extend(x.replace(metavars.clone())?);
+                }
+                Ok(ret)
+            },
+            MacroTranscriber::Group(x) => {
+                let vars = x.get_used_metavars();
+                let vars = vars.into_iter()
+                    .map(|x| {
+                        let t = metavars.iter().filter(|y| y.0 == x).collect::<Vec<_>>();
+                        (x, t)
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mut ret = vec![];
+                let loop_num = vars.iter()
+                    .map(|x| x.1.len())
+                    .max()
+                    .unwrap_or(0);
+                for i in 0..loop_num { 
+                    let tables = vars.iter()
+                        .map(|x| if x.1.len() == 1 {
+                            Ok(x.1[0].clone())
+                        } else if x.1.len() == loop_num {
+                            Ok(x.1[i].clone())
+                        } else {
+                            Err(IError { msg: empty_span(ErrMsg::Expect(TokenKind::MacroGroupStart)) })//TODO: err msg
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    ret.extend(x.replace(tables)?)
+                }
+                Ok(ret)
             },
             MacroTranscriber::BuiltIn => {
-                metavars.into_iter()
-                    .flat_map(|x| x.1.iter())
+                Ok(metavars.into_iter()
+                    .flat_map(|x| x.1.into_iter())
                     .map(|z| z.map(|(s, _)| (s, TokenKind::Str)))
+                    .collect())
+            },
+        }
+    }
+    fn get_used_metavars(&self) -> std::collections::HashSet<String> {
+        match self {
+            MacroTranscriber::Basic(x) => {
+                x.iter()
+                    .filter(|x| x.data.1 == TokenKind::MacroIdent)
+                    .map(|x| x.data.0.to_owned())
                     .collect()
+            },
+            MacroTranscriber::Sequence(x) => {
+                x.iter()
+                    .flat_map(|x| x.get_used_metavars().into_iter())
+                    .collect()
+            },
+            MacroTranscriber::Group(x) => {
+                x.get_used_metavars()
+            },
+            MacroTranscriber::BuiltIn => {
+                Default::default()
             },
         }
     }
