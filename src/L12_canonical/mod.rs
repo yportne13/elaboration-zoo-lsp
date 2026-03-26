@@ -1819,7 +1819,7 @@ enum Eq[A](x: A, y: A) {
     refl(a: A) -> Eq a a
 }
 
-//def z1: (a: Nat) -> Eq a a = _
+def z1(a: Nat, b: Nat): (c: Nat) -> (d: Nat) -> Eq c c = _
 
 def z(a: Nat, b: Nat): Eq a a = _
 
