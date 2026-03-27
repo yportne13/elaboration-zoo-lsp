@@ -216,7 +216,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             pretty_tm(prec, ns.clone(), tm),
             cases
                 .iter()
-                .map(|(pat, tm)| format!("{:?} => {}", pat, pretty_tm(prec, ns.prepend("n".to_owned()), tm)))
+                .map(|(pat, tm)| format!("{} => {}", pat, pretty_tm(prec, pat.bind_names(&ns), tm)))
                 .reduce(|acc, x| acc + ",\n" + &x)
                 .unwrap_or("".to_owned())
         ),

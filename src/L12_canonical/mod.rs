@@ -139,6 +139,37 @@ impl PatternDetail {
             },
         }
     }
+    fn bind_names(&self, ns: &List<String>) -> List<String> {
+        match self {
+            PatternDetail::Any(_) => ns.prepend("_".to_owned()),
+            PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
+            PatternDetail::Con(_, pattern_details) => {
+                pattern_details
+                    .iter()
+                    .fold(ns.clone(), |ns, pattern_detail| pattern_detail.bind_names(&ns))
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for PatternDetail {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PatternDetail::Any(_) => write!(f, "_"),
+            PatternDetail::Bind(name) => write!(f, "{}", name.data),
+            PatternDetail::Con(name, pattern_details) => {
+                let p = pattern_details
+                    .iter()
+                    .map(|pattern_detail| pattern_detail.to_string())
+                    .collect::<Vec<_>>();
+                if p.is_empty() {
+                    write!(f, "{}", name.data)
+                } else {
+                    write!(f, "{}({})", name.data, p.join(", "))
+                }
+            }
+        }
+    }
 }
 
 type Ty = Tm;
@@ -1819,13 +1850,13 @@ enum Eq[A](x: A, y: A) {
     refl(a: A) -> Eq a a
 }
 
-def z1(a: Nat, b: Nat): (c: Nat) -> (d: Nat) -> Eq c c = _
+//def z1(a: Nat, b: Nat): (c: Nat) -> (d: Nat) -> Eq c c = _
 
-def z(a: Nat, b: Nat): Eq a a = _
+//def z(a: Nat, b: Nat): Eq a a = _
 
 //def add_comm(a: Nat, b: Nat): Eq (add a b) (add b a) = _
 
-//def tt: Eq 0 0 = _
+def tt: Eq 0 0 = _
 
 def t: Nat = _
 "#;
