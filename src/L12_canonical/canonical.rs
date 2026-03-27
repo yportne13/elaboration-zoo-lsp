@@ -2,7 +2,7 @@
 use super::{
     Infer, MetaEntry, Cxt, Rc, Val, UnifyError, Ty, Span,
     MetaVar, Tm, Lvl, Ix, List, Closure, VTy, syntax::Locals,
-    empty_span, Raw, Either, Spine, close_ty,
+    empty_span, Raw, Either, Spine, close_ty, Icit,
 };
 
 impl Infer {
@@ -14,9 +14,11 @@ impl Infer {
         depth: u32,
         mut collect: Vec<String>,
         avoid_recurse: &str,//TODO: this is incorrect
+        meta_offset: usize,
     ) -> Result<String, UnifyError> {
         //println!("Searching...");
-        let infer_bak = self.clone();
+        let meta_bak: Vec<_> = self.meta.iter().skip(meta_offset).cloned().collect();
+        let meta_len_bak = self.meta.len();
         let mut typ = self.force(&cxt.decl, &target[0].1);
         let mut cxt = cxt.clone();
         let mut sp: Vec<_> = target[0].2.iter().collect();
@@ -39,7 +41,12 @@ impl Infer {
         }
 
         if depth == 0 {
-            *self = infer_bak;
+            if self.meta.len() > meta_len_bak {
+                self.meta.truncate(meta_len_bak);
+            }
+            for (i, entry) in meta_bak.clone().into_iter().enumerate() {
+                self.meta[meta_offset + i] = entry;
+            }
             //println!("search failed 0");
             return Err(UnifyError::Basic);
         } else {
@@ -79,7 +86,9 @@ impl Infer {
                         &List::new(),
                         &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, dom)),
                     );
-                    new_list.push((meta_var, closed, spine));
+                    if icit == Icit::Expl {
+                        new_list.push((meta_var, closed, spine));
+                    }
                     vt = self.closure_apply(&cxt.decl, clos, meta.clone());
                     vtm = self.v_app(&cxt.decl, &vtm, meta, icit);
                     //println!("{t}\n{:?}\n{:?}\n{:?}\n------------", vt, vtm, typ);
@@ -100,14 +109,14 @@ impl Infer {
                         if new_list.is_empty() {
                             if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
                                 collect.push(format!("{lamb_string}{t}"));
-                                return self.search(&cxt, target[1..].to_vec(), unify_list, depth, collect, avoid_recurse);
+                                return self.search(&cxt, target[1..].to_vec(), unify_list, depth, collect, avoid_recurse, meta_offset);
                             } else {
                                 return Ok(format!("({lamb_string}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t));
                             }
-                        } else if let Ok(ret) = self.search(&cxt, new_list, unify_list_d, depth - 1, vec![], avoid_recurse) {
+                        } else if let Ok(ret) = self.search(&cxt, new_list, unify_list_d, depth - 1, vec![], avoid_recurse, meta_offset) {
                             if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
                                 collect.push(format!("{lamb_string}{t}{ret}"));
-                                return self.search(&cxt, target[1..].to_vec(), unify_list, depth, collect, avoid_recurse);
+                                return self.search(&cxt, target[1..].to_vec(), unify_list, depth, collect, avoid_recurse, meta_offset);
                             } else {
                                 return Ok(format!("({lamb_string}{}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t, ret));
                             }
@@ -118,7 +127,12 @@ impl Infer {
 
 
         // 所有候选都失败
-        *self = infer_bak;
+        if self.meta.len() > meta_len_bak {
+            self.meta.truncate(meta_len_bak);
+        }
+        for (i, entry) in meta_bak.clone().into_iter().enumerate() {
+            self.meta[meta_offset + i] = entry;
+        }
         //println!("search failed");
         Err(UnifyError::Basic)
     }

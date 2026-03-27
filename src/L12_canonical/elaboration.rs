@@ -271,6 +271,7 @@ impl Infer {
                 ret_type,
                 body,
             } => {
+                let meta_offset = self.meta.len();
                 let ret_cxt = cxt;
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -300,6 +301,7 @@ impl Infer {
                             7,
                             vec![],
                             &name.data,
+                            meta_offset,
                         );
                         return Err(Error(bod.to_span().map(|_|
                             format!(
