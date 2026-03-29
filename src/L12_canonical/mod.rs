@@ -252,6 +252,7 @@ use im::HashMap;
 #[derive(Debug)]
 enum UnifyError {
     Basic,
+    Stuck,
     Trait(String),
 }
 
@@ -602,7 +603,7 @@ impl Infer {
                     pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
                 );*/
                 let err = match e {
-                    UnifyError::Basic => format!(
+                    UnifyError::Basic | UnifyError::Stuck => format!(
                         //"can't unify {:?} == {:?}",
                         "can't unify\n  expected: {}\n      find: {}",
                         pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
@@ -1850,7 +1851,7 @@ enum Eq[A](x: A, y: A) {
     refl(a: A) -> Eq a a
 }
 
-//def z1(a: Nat, b: Nat): (c: Nat) -> (d: Nat) -> Eq c c = _
+def z1(a: Nat, b: Nat): (c: Nat) -> (d: Nat) -> Eq c c = _
 
 //def z(a: Nat, b: Nat): Eq a a = _
 
@@ -1859,6 +1860,110 @@ enum Eq[A](x: A, y: A) {
 def tt: Eq 0 0 = _
 
 def t: Nat = _
+"#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test12() {
+    let input = r#"
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Eq[T](x: T, y: T) {
+    refl(a: T) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons(true, cons false nil)
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => add(y, mul n y)
+}
+
+def outParam[A](a: A): A = a
+
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+trait Mul[T, O: outParam(Type 0)] {
+    def *(that: T): O
+}
+
+def nat_mul_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => 0
+        case succ(n) => (nat_mul_helper x n) + x
+    }
+
+impl Mul[Nat, Nat] for Nat {
+    def *(that: Nat): Nat =
+        nat_mul_helper this that
+}
+
+def four = 2 + 2
+
+println four
+
+def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (x + 1) (y + 1) = cong(x => succ _, _)
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),

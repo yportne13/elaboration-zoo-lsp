@@ -66,7 +66,7 @@ impl Infer {
                             Ok((dom + 1, ren, nlvars, fsp.prepend((*x, a.head().unwrap().1))))
                         }
                     }
-                    _ => Err(UnifyError::Basic),
+                    _ => Err(UnifyError::Stuck),
                 }
             }
         }
