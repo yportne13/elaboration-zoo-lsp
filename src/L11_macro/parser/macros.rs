@@ -67,7 +67,7 @@ impl MacroMatcher {
                                         Ok((i, vec![(name.data.clone(), t)]))
                                     })
                             }).next()).ok_or(IError {
-                                msg: name.to_span().map(|_| ErrMsg::Expect(TokenKind::MacroGroupEnd0)),//TODO: err msg
+                                msg: name.to_span().map(|_| ErrMsg::Expect(TokenKind::RParen)),//TODO: err msg
                             })
                     }
                 },
@@ -195,7 +195,7 @@ impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
                         } else if x.1.len() == loop_num {
                             Ok(x.1[i].clone())
                         } else {
-                            Err(IError { msg: empty_span(ErrMsg::Expect(TokenKind::MacroGroupStart)) })//TODO: err msg
+                            Err(IError { msg: empty_span(ErrMsg::Expect(TokenKind::RParen)) })//TODO: err msg
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     ret.extend(x.replace(tables)?)

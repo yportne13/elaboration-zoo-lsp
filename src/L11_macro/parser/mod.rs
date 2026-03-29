@@ -135,9 +135,49 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, (V
     }
 }
 
+fn kw_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode<'a>], Span<()>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
+    move |input: &'b [TokenNode<'a>], _: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| match input.first() {
+        Some(x) => if x.data.1 == p && x.data.0 == s {
+            input
+                .get(1..)
+                .map(|i| (i, x.map(|_| ())))
+                .ok_or_else(|| IError {
+                    msg: x.map(|_| ErrMsg::Expect(p))
+                })
+        } else {
+            Err(IError {
+                msg: x.map(|_| ErrMsg::Expect(p))
+            })
+        },
+        _ => Err(IError {
+            msg: empty_span(ErrMsg::Expect(p))
+        }),
+    }
+}
+
 fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<String>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
     move |input: &'b [TokenNode<'a>], _: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| match input.first() {
         Some(x) => if x.data.1 == p {
+            input
+                .get(1..)
+                .map(|i| (i, x.map(|s| s.0.to_owned())))
+                .ok_or_else(|| IError {
+                    msg: x.map(|_| ErrMsg::Expect(p))
+                })
+        } else {
+            Err(IError {
+                msg: x.map(|_| ErrMsg::Expect(p))
+            })
+        },
+        _ => Err(IError {
+            msg: empty_span(ErrMsg::Expect(p))
+        }),
+    }
+}
+
+fn string_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode<'a>], Span<String>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
+    move |input: &'b [TokenNode<'a>], _: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| match input.first() {
+        Some(x) => if x.data.1 == p && x.data.0 == s {
             input
                 .get(1..)
                 .map(|i| (i, x.map(|s| s.0.to_owned())))
@@ -851,10 +891,12 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
             MacroMatcher::Group(Delimiter::Brace, opt.map(|m| vec![m]).unwrap_or_default())
         })));*/
     let group_parser = (
-        kw(MacroGroupEnd0),
+        kw_is(Op, "$"),
+        kw(LParen),
         p_macro_matcher_sequence,
-        string(MacroGroupEnd0).or(string(MacroGroupEnd1)),
-    ).map(|(_, m, s)| if &s.data == ")*" {
+        kw(RParen),
+        string_is(Op, "*").or(string_is(Op, "+")),
+    ).map(|(_, _, m, _, s)| if &s.data == "*" {
         MacroMatcher::Many0(MacroMatcher::Sequence(m).into())
     } else {
         MacroMatcher::Many1(MacroMatcher::Sequence(m).into())
@@ -888,7 +930,9 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         }))
         .or(string(RCurly).map(|span| {
             MacroMatcher::Token(RCurly, span)
-        }));
+        }))
+        .or(string(LetKeyword).map(|span| MacroMatcher::Token(LetKeyword, span)))
+        .or(string(Eq).map(|span| MacroMatcher::Token(Eq, span)));
 
     metavar_parser
         .or(group_parser)
@@ -999,15 +1043,16 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                 } else if let Ok((i, _)) = kw(LCurly).parse(input, state) {
                     lvl += 1;
                     input = i;
-                } else if input.is_empty() || kw(MacroGroupEnd0).parse(input, state).is_ok() || kw(MacroGroupEnd1).parse(input, state).is_ok() {
+                } else if input.is_empty() || (kw(RParen), kw_is(Op, "*")).parse(input, state).is_ok() || (kw(RParen), kw_is(Op, "+")).parse(input, state).is_ok() {
                     break;
-                } else if let Ok((i, _)) = kw(MacroGroupStart).parse(input, state) {
-                    let len = i_back.len() - input.len() - 1;
+                } else if let Ok((i, _)) = (kw_is(Op, "$"), kw(LParen)).parse(input, state) {
+                    let len = i_back.len() - input.len();
                     ret.push(MacroTranscriber::Basic(i_back.get(..len).unwrap()));
                     let (i, o) = p_macro_transcriber_single.parse(i, state)?;
                     ret.push(MacroTranscriber::Group(o.into()));
-                    let (i, _) = kw(MacroGroupEnd0).or(kw(MacroGroupEnd1)).parse(i, state)?;//TODO: 0 or 1?
+                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).parse(i, state)?;//TODO: 0 or 1?
                     i_back = i;
+                    input = i;
                 } else {
                     input = input.get(1..).unwrap();
                 }
