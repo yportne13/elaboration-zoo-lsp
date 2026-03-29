@@ -35,7 +35,9 @@ impl MacroMatcher {
                     match input.first() {
                         Some(token) => {
                             if token.data.1 == *kind && token.data.0 == span.data {
-                                Ok((input.get(1..).unwrap(), vec![]))
+                                kw(TokenKind::EndLine).option()
+                                    .map(|_| vec![])
+                                    .parse(input.get(1..).unwrap(), state)
                             } else {
                                 Err(IError {
                                     msg: token.map(|x| ErrMsg::Expect(*kind)),
@@ -57,7 +59,7 @@ impl MacroMatcher {
                             .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().to_vec())])),
                         MacroFragment::Param => p_pi_binder.many1().parse(input, state)
                             .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().to_vec())])),
-                        MacroFragment::Name(name) => state.1.get(&name.data).cloned().and_then(|x| x.iter()
+                        MacroFragment::Name(mname) => state.1.get(&mname.data).cloned().and_then(|x| x.iter()
                             .flat_map(|m| {
                                 m.matcher.to_parser().parse(input, state)
                                     .and_then(|(i, t)| {
