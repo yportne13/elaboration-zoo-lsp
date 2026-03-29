@@ -1172,6 +1172,13 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         for m in macro_decl {
             if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
+                let i = if matches!(i.first().map(|x| x.data.1), Some(EndLine)) || i.is_empty() {
+                    i
+                } else if input.len() != i.len() {
+                    input.get(input.len() - i.len() - 1 ..).unwrap()
+                } else {
+                    i
+                };
                 let t = m.transcriber.replace(t)?;
                 let mut temp_state = (vec![], state.1.clone());
                 let ret = p_decl(&t, &mut temp_state)?;
