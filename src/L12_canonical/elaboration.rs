@@ -298,7 +298,7 @@ impl Infer {
                             &meta_cxt,
                             vec![(metavar, meta_ty.clone(), pr.zip(&meta_cxt.env).flat_map(|(a, b)| a.map(|a| (b.clone(), a))))],
                             vec![],
-                            7,
+                            4,
                             vec![],
                             &name.data,
                             meta_offset,
@@ -837,6 +837,7 @@ impl Infer {
                     ),
                     *u,
                 )?;
+                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), vt.clone()));
                 Ok((
                     Tm::Let(
                         x,
