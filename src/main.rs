@@ -138,6 +138,8 @@ impl Backend {
             text: include_str!("prelude/vec.typort"),
             version: None,
         });
+        ret.infer.lock().unwrap().hover_table.clear();
+        ret.infer.lock().unwrap().completion_table.clear();
         let for_thread = ret.clone();
         thread::spawn(move || {
             for_thread.worker_loop(signal_clone);
@@ -475,7 +477,7 @@ impl LanguageServer for Backend {
                         .get(uri.as_str())
                         .and_then(|x| x.hover_table.iter()
                             .find(|x| x.0.contains(offset))
-                            .map(|(span, _, cxt, val)| (*span, pretty_tm(0, cxt.names(), &x.quote(&cxt.decl, cxt.lvl, &val))))
+                            .map(|(span, _, cxt, val)| (*span, pretty_tm(0, cxt.names(), &x.quote(&cxt.decl, cxt.lvl, val))))
                         )
                         .and_then(|x| Some(Hover {
                             contents: HoverContents::Markup(MarkupContent {
@@ -883,7 +885,7 @@ impl Backend {
 
             let uri_str = job.uri.to_string();
             {
-                let (lock, cvar) = &*self.processed_signal;
+                let (lock, _) = &*self.processed_signal;
                 let mut processed = lock.lock().unwrap();
                 processed.remove(&uri_str);
                 drop(processed);
@@ -934,10 +936,9 @@ impl Backend {
                 cxt = &mut cc;
             };
             let mut terms = vec![];
-            let mut ret = String::new();
             let start = std::time::Instant::now();
             for tm in ast.0 {
-                match infer.infer(&cxt, tm.clone()) {
+                match infer.infer(cxt, tm.clone()) {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
                             err_collect.push((
@@ -1045,7 +1046,7 @@ fn main() -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
 
     // Run the server and wait for the two threads to end (typically by trigger LSP Exit event).
-    let mut backend = Backend::new(Client { connection });
+    let backend = Backend::new(Client { connection });
     let _initialization_params = match backend.init() {
         Ok(it) => it,
         Err(e) => {
