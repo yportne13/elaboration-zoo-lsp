@@ -1,0 +1,37 @@
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] 0
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (l + 1)
+}
+
+def vecmap[T, U, len: Nat](x: Vec[T] len, f: T -> U): Vec[U] len =
+    match x {
+        case nil => nil
+        case cons(x, xs) => cons (f x) (vecmap xs f)
+    }
+
+impl[T, len: Nat] Vec[T] len {
+    def map[U](f: T -> U): Vec[U] len =
+        vecmap this f
+    def foldl[U](z: U, f: U -> T -> U): U =
+        match this {
+            case nil => z
+            case cons(x, xs) => f (xs.foldl z f) x
+        }
+}
+
+impl[T, len: Nat] Vec[T](succ len) {
+    def reduce[T](f: T -> T -> T): T =
+        match this {
+            case cons(x, xs) => xs.foldl x f
+        }
+}
+
+trait Cons {
+    def ::[l: Nat](that: Vec[Self] l): Vec[Self] (l + 1)
+}
+
+impl[T] Cons for T {
+    def ::[l: Nat](that: Vec[T] l): Vec[T] (l + 1) =
+        cons this that
+}

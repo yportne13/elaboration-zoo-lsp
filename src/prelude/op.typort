@@ -1,0 +1,29 @@
+def outParam[A](a: A): A = a
+
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+trait Sub[T, O: outParam(Type 0)] {
+    def -(that: T): O
+}
+
+trait Mul[T, O: outParam(Type 0)] {
+    def *(that: T): O
+}
+
+trait Div[T, O: outParam(Type 0)] {
+    def /(that: T): O
+}
+
+trait And[T, O: outParam(Type 0)] {
+    def &(that: T): O
+}
+
+trait Or[T, O: outParam(Type 0)] {
+    def |(that: T): O
+}
+
+trait Xor[T, O: outParam(Type 0)] {
+    def ^(that: T): O
+}

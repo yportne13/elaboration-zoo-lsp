@@ -1,0 +1,41 @@
+
+enum Bool {
+    true
+    false
+}
+
+trait Xor[T, O: outParam(Type 0)] {
+    def ^(that: T): O
+}
+
+impl Xor[Bool, Bool] for Bool {
+    def ^(that: Bool): Bool =
+        match this {
+            case false => that
+            case true => that.not
+        }
+}
+
+trait And[T, O: outParam(Type 0)] {
+    def &(that: T): O
+}
+
+impl And[Bool, Bool] for Bool {
+    def &(that: Bool): Bool =
+        match this {
+            case false => false
+            case true => that
+        }
+}
+
+trait Or[T, O: outParam(Type 0)] {
+    def |(that: T): O
+}
+
+impl Or[Bool, Bool] for Bool {
+    def |(that: Bool): Bool =
+        match this {
+            case false => that
+            case true => true
+        }
+}

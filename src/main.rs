@@ -73,6 +73,9 @@ struct Backend {
     worker_signal: Arc<(Mutex<Option<AnalysisJob>>, Condvar)>,
     // 处理完成的信号
     processed_signal: Arc<(Mutex<HashMap<String, bool>>, Condvar)>,
+
+    infer: Arc<Mutex<Infer>>,
+    cxt: Arc<Mutex<Cxt>>,
 }
 
 impl Backend {
@@ -94,6 +97,8 @@ impl Backend {
         /*thread::spawn(move || {
             worker_loop(state_clone, signal_clone, sender_clone);
         });*/
+        let infer = Infer::new();
+        let cxt = Cxt::new();
 
         let ret = Arc::new(Backend {
             client,
@@ -105,6 +110,33 @@ impl Backend {
             processing_uris: DashMap::new(),
             worker_signal,
             processed_signal,
+            infer: Arc::new(Mutex::new(infer)),
+            cxt: Arc::new(Mutex::new(cxt)),
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///op.typort").unwrap(),
+            text: include_str!("prelude/op.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///eq.typort").unwrap(),
+            text: include_str!("prelude/eq.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///nat.typort").unwrap(),
+            text: include_str!("prelude/nat.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///bool.typort").unwrap(),
+            text: include_str!("prelude/bool.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///vec.typort").unwrap(),
+            text: include_str!("prelude/vec.typort"),
+            version: None,
         });
         let for_thread = ret.clone();
         thread::spawn(move || {
@@ -860,7 +892,7 @@ impl Backend {
 
             // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
             eprintln!("Worker starting job for version {:?}", job.version);
-            self.on_change(TextDocumentItem {
+            self.on_change::<false>(TextDocumentItem {
                 uri: job.uri,
                 text: &job.text,
                 version: job.version,
@@ -873,7 +905,7 @@ impl Backend {
             cvar.notify_all();
         }
     }
-    fn on_change(&self, params: TextDocumentItem<'_>) {
+    fn on_change<const MUT:bool>(&self, params: TextDocumentItem<'_>) {
         let start_all = std::time::Instant::now();
         //dbg!(&params.version);
         let rope = ropey::Rope::from_str(params.text);
@@ -888,9 +920,20 @@ impl Backend {
             eprintln!("parser {:?}", start.elapsed().as_secs_f32());
             let mut err_collect = vec![];
             self.ast_map.insert(params.uri.to_string(), ast.0.clone());
-            let mut infer = Infer::new();
+            let mut i = self.infer.lock().unwrap();
+            let mut ic = i.clone();
+            let mut c = self.cxt.lock().unwrap();
+            let mut cc = c.clone();
+            let infer: &mut Infer;
+            let cxt: &mut Cxt;
+            if MUT {
+                infer = &mut i;
+                cxt = &mut c;
+            } else {
+                infer = &mut ic;
+                cxt = &mut cc;
+            };
             let mut terms = vec![];
-            let mut cxt = Cxt::new();
             let mut ret = String::new();
             let start = std::time::Instant::now();
             for tm in ast.0 {
@@ -903,7 +946,7 @@ impl Backend {
                             ))
                         }
                         terms.push(x);
-                        cxt = new_cxt;
+                        *cxt = new_cxt;
                     },
                     Err(err) => {
                         err_collect.push((err, DiagnosticSeverity::ERROR));

@@ -295,7 +295,7 @@ impl Infer {
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some((metavar, meta_ty, meta_cxt, pr)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
-                        let ret = self.search(
+                        /*let ret = self.search(
                             &meta_cxt,
                             vec![(metavar, meta_ty.clone(), pr.zip(&meta_cxt.env).flat_map(|(a, b)| a.map(|a| (b.clone(), a))))],
                             vec![],
@@ -303,12 +303,12 @@ impl Infer {
                             vec![],
                             &name.data,
                             meta_offset,
-                        );
+                        );*/
                         return Err(Error(bod.to_span().map(|_|
                             format!(
-                                "find unsolved meta with type `{}`\n{:?}",
+                                "find unsolved meta with type `{}`",//\n{:?}",
                                 super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
-                                ret,
+                                //ret,
                             )
                         )));
                     }

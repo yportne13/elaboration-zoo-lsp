@@ -1,0 +1,54 @@
+
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+def nat_mul_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => zero
+        case succ(n) => nat_add_helper(x, nat_mul_helper x n)
+    }
+
+impl Mul[Nat, Nat] for Nat {
+    def *(that: Nat): Nat =
+        nat_mul_helper this that
+}
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong succ e
+
+def add_zero_right(a: Nat): Eq (a + 0) a =
+    match a {
+        case zero => refl 0
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+def add_succ_right (n: Nat, m: Nat): Eq ((n + (succ m))) (succ (n + m)) =
+    match n {
+        case zero => refl[Nat] (succ m)
+        case succ(k) => cong_succ (add_succ_right k m)
+    }
+
+def add_comm (n: Nat, m: Nat): Eq(n + m, m + n) =
+    match n {
+        case zero => symm (add_zero_right m)
+        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
+    }
+
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq((n + m) + k, n + (m + k)) =
+    match n {
+        case zero => rfl
+        case succ(l) => cong_succ (add_assoc l m k)
+    }
