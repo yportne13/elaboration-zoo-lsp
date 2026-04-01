@@ -647,12 +647,16 @@ impl Infer {
                                     param.reverse();
                                     while let Val::Pi(name, icit, ty, closure) = typ.as_ref().clone() {
                                         if icit == Icit::Expl {
-                                            ret.push((name, ty.clone()));
-                                            typ = self.closure_apply(&cxt.decl, &closure, Val::U(0).into())//TODO:not Val::U(0)
+                                            ret.push((name.clone(), ty.clone()));
+                                            typ = self.closure_apply(
+                                                &cxt.decl,
+                                                &closure,
+                                                Val::Obj(self.eval(&cxt.decl, &cxt.env, &tm), name, List::new()).into(),
+                                            )
                                         } else {
                                             let val = param.pop()
                                                 .map(|x| x.1)
-                                                .unwrap_or(Val::U(0).into());
+                                                .unwrap_or(Val::Obj(self.eval(&cxt.decl, &cxt.env, &tm), name.clone(), List::new()).into());
                                             ret.push((name, ty.clone()));
                                             typ = self.closure_apply(&cxt.decl, &closure, val)
                                         }
