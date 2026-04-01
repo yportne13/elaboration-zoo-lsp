@@ -1033,11 +1033,15 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
             let mut input = input;
             let mut i_back = input;
             let mut ret = vec![];
+            let mut need_remove_endline = 0;
             loop {
-                if let Ok((i, _)) = kw(RCurly).parse(input, state) {
+                if let Ok((i, (endline, _))) = (kw(EndLine).option(), kw(RCurly)).parse(input, state) {
                     lvl -= 1;
                     input = i;
                     if lvl == 0 {
+                        if endline.is_some() {
+                            need_remove_endline = 1;
+                        }
                         break;
                     }
                 } else if let Ok((i, _)) = kw(LCurly).parse(input, state) {
@@ -1057,7 +1061,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                     input = input.get(1..).unwrap();
                 }
             }
-            let len = i_back.len() - input.len() - 1;
+            let len = i_back.len() - input.len() - 1 - need_remove_endline;
             ret.push(MacroTranscriber::Basic(i_back.get(..len).unwrap()));
             Ok((input, MacroTranscriber::Sequence(ret)))
         },
