@@ -45,7 +45,8 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
-    panic!("Variable index out of bounds");
+    //panic!("Variable index out of bounds");
+    "Variable index out of bounds".to_owned()
 }
 
 fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {

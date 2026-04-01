@@ -27,7 +27,7 @@ impl Val {
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
-            Val::LiteralType => todo!(),
+            Val::LiteralType => Some(Typ::Val(empty_span("String".to_owned()))),
             Val::LiteralIntro(span) => todo!(),
             Val::Prim(_, _) => todo!(),
             Val::Sum(span, items, _, _) => Some(

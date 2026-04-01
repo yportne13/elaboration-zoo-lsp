@@ -292,7 +292,8 @@ impl Infer {
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
-                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
+                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
+                        .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some((metavar, meta_ty, meta_cxt, pr)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         /*let ret = self.search(

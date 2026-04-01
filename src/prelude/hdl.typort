@@ -1,0 +1,100 @@
+
+enum Le(n: Nat, m: Nat) {
+    le_refl[n: Nat] -> Le n n
+    le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
+}
+
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+
+def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
+    case fzero => x
+    case fsucc(yy) => match x {
+        case succ(t) => sub t yy
+        case zero => match yy {}
+    }
+}
+
+def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
+    case nil => match x {
+        case fzero => nil
+        case fsucc(t) => match t {}
+    }
+    case cons(a, tail) => match x {
+        case fzero => cons a tail
+        case fsucc(t) => drop_vec tail t
+    }
+}
+
+//println drop_vec(1 :: 2 :: 3 :: nil, fsucc fzero)
+
+struct Exists[A: Type 0, P: A -> Type 0] {
+    witness: A
+    proof: P witness
+}
+
+def exists_two: Exists[Nat][x => Eq x 2] = Exists.mk[Nat][x => Eq x 2] 2 rfl
+
+struct Bits[width: Nat] {
+    name: String
+}
+
+impl[width: Nat] Add[Bits[width], Bits[width]] for Bits[width] {
+    def add(that: Bits[width]): Bits[width] =
+        Bits.mk(this.name + " + " + that.name)
+}
+
+impl[width: Nat] Mul[Bits[width], Bits[width]] for Bits[width] {
+    def mul(that: Bits[width]): Bits[width + width] =
+        Bits.mk(this.name + " * " + that.name)
+}
+
+impl[width: Nat] Bits[width] {
+    def +^(that: Bits[width]): Bits[width + 1] = Bits.mk(this.name + " +^ " + that.name)
+    def :=(that: Bits[width]): Bits[width] = Bits.mk(this.name + " := " + that.name)
+}
+
+enum Expr {
+    create(name: String)
+}
+
+struct Module {
+    name: String
+    expr_num: Nat
+    expr: Vec[Expr] expr_num
+}
+
+struct module {
+    num: Nat
+    data: Vec[Module] num
+}
+
+def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat): module = match data {
+    case nil => module.mk(1, Module.mk(name, 1, create(name) :: nil) :: nil)
+    case cons(head, tail) =>
+        let new_module = Module.mk(head.name, head.expr_num + 1, create(name) :: head.expr);
+        module.mk(num, new_module :: tail)
+}
+
+def newBits(name: String, w: Nat): Bits[w] =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
+    Bits.mk(name)
+
+macro_rules Expr {
+    (input $x:ident <- Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (output $x:ident <- Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (let $x:ident = $y:raw) => {let $x = $y;};
+    ($x: raw) => {let useless = $x;}
+}
+
+macro_rules module {
+    ($name: ident $args: params {$( $body: Expr )*}) => {
+        def $name $args =
+            let creat_module = change_mutable_default("module", x => x, module.mk(1, Module.mk(stringify $name, 0, nil) :: nil));
+            $({$body})*
+            get_global("module")
+        };
+}

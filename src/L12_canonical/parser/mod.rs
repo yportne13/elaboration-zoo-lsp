@@ -423,7 +423,7 @@ fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
         "." => (25, 26),
         "::" => (24, 23),
         x => if x.contains(':') {
-            (22, 21)
+            (2, 1)
         } else if x.contains(['*', '/', '%']){
             (17, 18)
         } else if x.contains(['+', '-']) {

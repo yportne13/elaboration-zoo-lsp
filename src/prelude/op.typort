@@ -27,3 +27,7 @@ trait Or[T, O: outParam(Type 0)] {
 trait Xor[T, O: outParam(Type 0)] {
     def ^(that: T): O
 }
+
+impl Add[String, String] for String {
+    def +(that: String): String = string_concat this that
+}

@@ -21,6 +21,14 @@ impl[T, len: Nat] Vec[T] len {
 }
 
 impl[T, len: Nat] Vec[T](succ len) {
+    def head: T =
+        match this {
+            case cons(x, _) => x
+        }
+    def tail: Vec[T] len =
+        match this {
+            case cons(_, xs) => xs
+        }
     def reduce[T](f: T -> T -> T): T =
         match this {
             case cons(x, xs) => xs.foldl x f
