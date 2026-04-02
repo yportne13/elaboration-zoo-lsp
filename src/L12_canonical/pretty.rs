@@ -187,6 +187,10 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 .map(|x| format!("[{x}]"))
                 .unwrap_or("".to_owned()),
         ),
+        Tm::SumCase { is_trait, typ, case_name, datas: params } if matches!(
+            typ.as_ref(),
+            Tm::Sum(name, _, _, _) if name.data == "Nat",
+        ) => if case_name.data == "zero" {"0".to_owned()} else {pretty_nat(prec, ns, params.first().map(|x| x.1.as_ref()), 1)},
         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
             "{}::{}{}",
             match typ.as_ref() {
@@ -221,5 +225,20 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 .reduce(|acc, x| acc + ",\n" + &x)
                 .unwrap_or("".to_owned())
         ),
+    }
+}
+
+fn pretty_nat(prec: i32, ns: List<String>, param: Option<&Tm>, sum: u128) -> String {
+    match param {
+        Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
+            typ.as_ref(),
+            Tm::Sum(name, _, _, _) if name.data == "Nat",
+        ) => if case_name.data == "zero" {
+            format!("{sum}")
+        } else {
+            pretty_nat(prec, ns, params.first().map(|x| x.1.as_ref()), sum + 1)
+        },
+        Some(tm) => format!("{} + {}", pretty_tm(prec, ns, tm), sum),
+        None => format!("unknown + {}", sum),
     }
 }

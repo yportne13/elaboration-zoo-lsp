@@ -1,0 +1,18 @@
+
+enum Option[T] {
+    Some(t: T)
+    None
+}
+
+impl[T] Option[T] {
+    def map[U](f: T -> U): Option[U] =
+        match this {
+            case Some(t) => Some(f(t))
+            case None => None
+        }
+    def unwrap_or(default: T): T =
+        match this {
+            case Some(t) => t
+            case None => default
+        }
+}

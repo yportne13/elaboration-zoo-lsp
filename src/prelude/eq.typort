@@ -6,7 +6,7 @@ enum Eq[A](x: A, y: A) {
 def rfl[A][a: A]: Eq a a =
     refl a
 
-def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
     match e {
         case refl(a) => refl (f a)
     }

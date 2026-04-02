@@ -18,6 +18,11 @@ impl[T, len: Nat] Vec[T] len {
             case nil => z
             case cons(x, xs) => f (xs.foldl z f) x
         }
+    def head_option: Option[T] =
+        match this {
+            case nil => None
+            case cons(x, _) => Some x
+        }
 }
 
 impl[T, len: Nat] Vec[T](succ len) {

@@ -71,6 +71,10 @@ struct module {
     data: Vec[Module] num
 }
 
+impl module {
+    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
+}
+
 def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat): module = match data {
     case nil => module.mk(1, Module.mk(name, 1, create(name) :: nil) :: nil)
     case cons(head, tail) =>
@@ -83,8 +87,8 @@ def newBits(name: String, w: Nat): Bits[w] =
     Bits.mk(name)
 
 macro_rules Expr {
-    (input $x:ident <- Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
-    (output $x:ident <- Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (input $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (output $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
     (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
     (let $x:ident = $y:raw) => {let $x = $y;};
     ($x: raw) => {let useless = $x;}
@@ -93,8 +97,10 @@ macro_rules Expr {
 macro_rules module {
     ($name: ident $args: params {$( $body: Expr )*}) => {
         def $name $args =
-            let creat_module = change_mutable_default("module", x => x, module.mk(1, Module.mk(stringify $name, 0, nil) :: nil));
+            let new_module = Module.mk(stringify $name, 0, nil);
+            let creat_module = change_mutable_default("module", x => x.insert(new_module), module.mk(1, new_module :: nil));
             $({$body})*
-            get_global("module")
+            let ret = get_global("module").data.head_option;
+            ret.unwrap_or(new_module)
         };
 }

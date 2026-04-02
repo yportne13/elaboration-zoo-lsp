@@ -134,12 +134,18 @@ impl Backend {
             version: None,
         });
         ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///option.typort").unwrap(),
+            text: include_str!("prelude/option.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///vec.typort").unwrap(),
             text: include_str!("prelude/vec.typort"),
             version: None,
         });
         ret.infer.lock().unwrap().hover_table.clear();
         ret.infer.lock().unwrap().completion_table.clear();
+        ret.infer.lock().unwrap().mutable_map.write().unwrap().clear();
         let for_thread = ret.clone();
         thread::spawn(move || {
             for_thread.worker_loop(signal_clone);

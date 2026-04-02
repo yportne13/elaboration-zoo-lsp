@@ -280,7 +280,7 @@ pub struct Infer {
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
-    mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
+    pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, String)>,
 }
@@ -1964,6 +1964,37 @@ def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
     }
 
 def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (x + 1) (y + 1) = cong(x => succ _, _)
+"#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test13() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+
+enum Eq[T](x: T, y: T) {
+    refl(a: T) -> Eq a a
+}
+
+def add(x: Nat, y: Nat) =
+    match y {
+        case zero => x
+        case succ(n) => succ (add x n)
+    }
+
+def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (add x 1) (add y 1) = _
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),

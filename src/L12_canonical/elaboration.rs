@@ -224,11 +224,11 @@ impl Infer {
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
                 let u_checked = self.check(
-                    &cxt.define(x.clone(), t_checked.clone(), vt.clone(), a_checked.clone(), va),
+                    &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone()),
                     *u,
                     &a,
                 )?;
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), vt));
+                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va));
                 Ok(Tm::Let(
                     x,
                     a_checked,
@@ -837,13 +837,13 @@ impl Infer {
                     &cxt.define(
                         x.clone(),
                         t_checked.clone(),
-                        vt.clone(),
+                        vt,
                         a_checked.clone(),
-                        va,
+                        va.clone(),
                     ),
                     *u,
                 )?;
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), vt.clone()));
+                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va));
                 Ok((
                     Tm::Let(
                         x,
