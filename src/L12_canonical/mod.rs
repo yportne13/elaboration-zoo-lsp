@@ -150,6 +150,17 @@ impl PatternDetail {
             },
         }
     }
+    fn bind_cxt(&self, cxt: &Cxt) -> Cxt {
+        match self {
+            PatternDetail::Any(_) => cxt.clone(),
+            PatternDetail::Bind(name) => cxt.bind(name.clone(), Tm::U(0).into(), Val::U(0).into()),
+            PatternDetail::Con(_, pattern_details) => {
+                pattern_details
+                    .iter()
+                    .fold(cxt.clone(), |cxt, pattern_detail| pattern_detail.bind_cxt(&cxt))
+            },
+        }
+    }
 }
 
 impl std::fmt::Display for PatternDetail {
@@ -999,6 +1010,30 @@ def add_assoc (n: Nat, m: Nat, k: Nat): Eq (add (add n m) k) (add(n, add m k)) =
         case succ(l) => cong_succ (add_assoc l m k)
     }
 
+def double(n: Nat): Nat = add n n
+
+def double_pow(k: Nat, n: Nat): Nat =
+    match k {
+        case zero => n
+        case succ(k) => double(double_pow k n)
+    }
+
+def double_add(a: Nat, b: Nat): Eq(double(add a b), add(double a, double b)) =
+    let e1 = add_assoc(a, b, add a b);
+    let e2 = cong[f=add a](add_comm (b, add a b));
+    let e3 = symm (add_assoc (a, add a b, b));
+    let e4 = symm (cong[f=x => add x b] (add_assoc a a b));
+    let e5 = add_assoc (add a a) b b;
+    trans(e1, trans(e2, trans(e3, trans e4 e5)))
+
+def prove(k: Nat, a: Nat, b: Nat): Eq(double_pow(k, add a b), add (double_pow k a) (double_pow k b)) =
+    match k {
+        case zero => rfl
+        case succ(kk) => let ih = prove kk a b;
+            let ih1 = cong[f=double] ih;
+            let ih2 = double_add(double_pow(kk, a), double_pow(kk, b));
+            trans ih1 ih2
+    }
 "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");

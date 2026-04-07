@@ -66,6 +66,7 @@ impl Infer {
                             Ok((dom + 1, ren, nlvars, fsp.prepend((*x, a.head().unwrap().1))))
                         }
                     }
+                    //Val::Flex(_, _) => Err(UnifyError::Stuck),
                     _ => Err(UnifyError::Stuck),
                 }
             }
@@ -633,6 +634,12 @@ impl Infer {
             (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime)
             }
+            (Val::Decl(x, sp), _) => {
+                self.unify(l, cxt, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t)), &u)
+            }
+            (_, Val::Decl(x, sp)) => {
+                self.unify(l, cxt, &t, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u)))
+            }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
                 self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
             }
@@ -739,7 +746,7 @@ impl Infer {
                         pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
                         pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
                     );*/
-                    self.unify(l + count, cxt, &body1_val, &body2_val)?;
+                    self.unify(l + count, &p1.bind_cxt(cxt), &body1_val, &body2_val)?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
                     // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。
