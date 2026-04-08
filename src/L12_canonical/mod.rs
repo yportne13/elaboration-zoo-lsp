@@ -598,7 +598,7 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
-        self.unify(cxt.lvl, cxt, t, t_prime)
+        self.unify(cxt.lvl, cxt, t, t_prime, 100)
             .map_err(|e| {
                 /*Error::CantUnify(
                     cxt.clone(),

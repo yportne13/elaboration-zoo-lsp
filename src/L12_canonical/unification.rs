@@ -493,7 +493,7 @@ impl Infer {
                     .map_err(|e| e.0.data)?;
                 let val = self.eval(&cxt.decl, &cxt.env, &tm);
                 if let Val::SumCase { typ, .. } = val.as_ref() {
-                    let _ = self.unify(cxt.lvl, cxt, typ, x);
+                    let _ = self.unify(cxt.lvl, cxt, typ, x, 100);
                 }
                 Ok(Some((tm, val)))
             } else {
@@ -521,16 +521,18 @@ impl Infer {
         cxt: &Cxt,
         sp: &Spine,
         sp_prime: &Spine,
+        fuel: u32,
     ) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
             (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
             (a, b) if a.head().is_some() && b.head().is_some() => {
-                self.unify_sp(l, cxt, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
+                self.unify_sp(l, cxt, &a.tail(), &b.tail(), fuel)?; // Recursively unify the rest of the spines
                 self.unify(
                     l,
                     cxt,
                     &a.head().unwrap().0,
                     &b.head().unwrap().0,
+                    fuel,
                 ) // Unify the current values
             }
             _ => Err(UnifyError::Basic), // Rigid mismatch error
@@ -599,7 +601,7 @@ impl Infer {
         sp_prime: Spine,
     ) -> Result<(), UnifyError> {
         match self.intersect_go(&cxt.decl, sp.clone(), sp_prime.clone()) {
-            None => self.unify_sp(l, cxt, &sp, &sp_prime),
+            None => self.unify_sp(l, cxt, &sp, &sp_prime, 100),
             Some(pr) if pr.iter().any(|x| x.is_none()) => {
                 self.prune_meta(&cxt.decl, pr, m)?;
                 Ok(())
@@ -607,7 +609,7 @@ impl Infer {
             Some(_) => Ok(()),
         }
     }
-    pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+    pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>, fuel: u32) -> Result<(), UnifyError> {
         //println!("unify: {t:?} {u:?}");
         let t = self.force(&cxt.decl, t);
         let u = self.force(&cxt.decl, u);
@@ -620,25 +622,34 @@ impl Infer {
         match (t.as_ref(), u.as_ref()) {
             (Val::U(x), Val::U(y)) if x == y => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(l, cxt, a, a_prime)?;
+                self.unify(l, cxt, a, a_prime, fuel)?;
                 self.unify(
                     l + 1,
                     &cxt.bind(x.clone(), self.quote(&cxt.decl, cxt.lvl, a), a.clone()),
                     &self.closure_apply(&cxt.decl, b, Val::vvar(l).into()),
                     &self.closure_apply(&cxt.decl, b_prime, Val::vvar(l).into()),
+                    fuel,
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
-                self.unify_sp(l, cxt, sp, sp_prime)
+                self.unify_sp(l, cxt, sp, sp_prime, fuel)
             }
             (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
-                self.unify_sp(l, cxt, sp, sp_prime)
+                self.unify_sp(l, cxt, sp, sp_prime, fuel)
             }
             (Val::Decl(x, sp), _) => {
-                self.unify(l, cxt, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t)), &u)
+                if fuel == 0 {
+                    Err(UnifyError::Basic)
+                } else {
+                    self.unify(l, cxt, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t)), &u, fuel - 1)
+                }
             }
             (_, Val::Decl(x, sp)) => {
-                self.unify(l, cxt, &t, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u)))
+                if fuel == 0 {
+                    Err(UnifyError::Basic)
+                } else {
+                    self.unify(l, cxt, &t, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u)), fuel - 1)
+                }
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
                 self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
@@ -651,18 +662,21 @@ impl Infer {
                 cxt,
                 &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
                 &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
+                fuel,
             ),
             (_, Val::Lam(_, i, t_prime)) => self.unify(
                 l + 1,
                 cxt,
                 &self.v_app(&cxt.decl, &t, Val::vvar(l).into(), *i),
                 &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
+                fuel,
             ),
             (Val::Lam(_, i, t), _) => self.unify(
                 l + 1,
                 cxt,
                 &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
                 &self.v_app(&cxt.decl, &u, Val::vvar(l).into(), *i),
+                fuel,
             ),
             (Val::Flex(m, sp), _) => {
                 self.solve(l, &cxt.decl, *m, sp.clone(), &u)?;
@@ -673,12 +687,12 @@ impl Infer {
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, &b),
-            (Val::Prim(a, _), _) => self.unify(l, cxt, &a, &u),
+            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, &b, fuel),
+            (Val::Prim(a, _), _) => self.unify(l, cxt, &a, &u, fuel),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, &a.1, &b.1)?;
+                    self.unify(l, cxt, &a.1, &b.1, fuel)?;
                 }
                 Ok(())
             }
@@ -687,15 +701,15 @@ impl Infer {
                 Val::SumCase { is_trait: _, typ: b, case_name: cb, datas: params_b },
             ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
-                self.unify(l, cxt, a, b)?;
+                self.unify(l, cxt, a, b, 100)?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, &a.1, &b.1)?;
+                    self.unify(l, cxt, &a.1, &b.1, 100)?;
                 }
                 Ok(())
             }
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
-                self.unify(l, cxt, s1, s2)?;
+                self.unify(l, cxt, s1, s2, fuel)?;
 
                 // 2. 检查分支数量是否相同
                 if cases1.len() != cases2.len() {
@@ -746,7 +760,7 @@ impl Infer {
                         pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
                         pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
                     );*/
-                    self.unify(l + count, &p1.bind_cxt(cxt), &body1_val, &body2_val)?;
+                    self.unify(l + count, &p1.bind_cxt(cxt), &body1_val, &body2_val, fuel)?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
                     // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。
@@ -763,8 +777,8 @@ impl Infer {
                 Ok(())
             }
             (Val::Obj(a1, b1, sp1), Val::Obj(a2, b2, sp2)) if b1.data == b2.data => {
-                self.unify(l, cxt, a1, a2)?;
-                self.unify_sp(l, cxt, sp1, sp2)
+                self.unify(l, cxt, a1, a2, fuel)?;
+                self.unify_sp(l, cxt, sp1, sp2, fuel)
             }
             _ => Err(UnifyError::Basic), // Rigid mismatch error
         }

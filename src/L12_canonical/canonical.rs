@@ -113,12 +113,15 @@ impl Infer {
                 //println!("spine: {:?}", target[0].2);
                 self.meta[target[0].0.0 as usize] = MetaEntry::Unsolved(target[0].1.clone(), cxt.clone());
                 self.solve(cxt.lvl, &cxt.decl, target[0].0, spine.clone(), &vtm);
-                if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ), Ok(_) | Err(UnifyError::Stuck))
-                    && unify_list.iter().all(|(a, b)| matches!(self.unify(cxt.lvl, &cxt, a, b), Ok(_) | Err(UnifyError::Stuck))) {
+                if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 100), Ok(_) | Err(UnifyError::Stuck))
+                    && unify_list.iter().all(|(a, b)| matches!(self.unify(cxt.lvl, &cxt, a, b, 100), Ok(_) | Err(UnifyError::Stuck))) {
                         /*println!(
-                            "#### {:?}\n{:?}\n== {:?}",
+                            "#### {:?}\n{}\n== {:?}",
                             super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &vt)),
-                            new_list,
+                            new_list.iter()
+                                .map(|x| format!("{:?} {:?} {:?}", x.0, super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &x.1)), x.2))
+                                .collect::<Vec<_>>()
+                                .join("\n"),
                             super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &typ)),
                         );*/
                         let mut unify_list_d = unify_list.clone();
