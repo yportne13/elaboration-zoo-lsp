@@ -605,19 +605,23 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, H
     (
         string(Ident),
         brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
-    ).map(|x| Pattern::Con(x.0.map(|t| format!("{t}.mk")), x.1, Icit::Expl))
+    ).map(|x| Pattern::Con(x.0.map(|t| format!("{t}.mk")), x.1, Either::Icit(Icit::Expl)))
         .or((
             string(Ident),
             paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
-                .or(square_cut(p_pattern.map(|x| x.to_impl()).many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default()))
+                .or(square_cut(
+                    (string(Ident), kw(Eq), p_pattern).map(|x| x.2.to_name(x.0))
+                        .or(p_pattern.map(|x| x.to_impl()))
+                    .many1_sep(kw(T![,]))
+                ).map(|x| x.unwrap_or_default()))
                 .many0()
                 .map(|x| x.concat()),
-        ).map(|(x, t)| Pattern::Con(x, t, Icit::Expl)))
-        .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Icit::Expl)))
+        ).map(|(x, t)| Pattern::Con(x, t, Either::Icit(Icit::Expl))))
+        .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
         .or(paren(p_pattern.many1_sep(kw(T![,]))).map(|x| Pattern::Con(
             empty_span(format!("Tuple{}.mk", x.len())),
             x,
-            Icit::Expl,
+            Either::Icit(Icit::Expl),
         )))
         .parse(input, state)
 }

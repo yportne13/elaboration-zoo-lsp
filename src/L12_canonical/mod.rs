@@ -888,6 +888,11 @@ def tt = cons(zero, cons(zero, nil)).map[U=Nat](x => match x {
     case zero => zero
 })
 
+def z[len: Nat](x: Vec[Nat]len) = match x {
+    case nil => 1
+    case cons[l=lll](x, xs) => lll
+}
+
 "#;
     println!("{}", run(input, 0).unwrap());
 }
@@ -1998,7 +2003,8 @@ def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
         case refl(a) => refl (f a)
     }
 
-def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (x + 1) (y + 1) = cong(x => succ _, _)
+//def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (x + 1) (y + 1) = cong(x => succ _, _)
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (x + 1) (y + 1) = cong(_, e)
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),

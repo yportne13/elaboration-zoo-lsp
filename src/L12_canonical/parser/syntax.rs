@@ -14,23 +14,38 @@ pub enum Either {
     Icit(Icit),
 }
 
+impl Either {
+    pub fn to_icit(&self) -> Icit {
+        match self {
+            Either::Name(_) => Icit::Impl,
+            Either::Icit(icit) => *icit,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
-    Any(Span<bool>, Icit),
-    Con(Span<String>, Vec<Pattern>, Icit),
+    Any(Span<bool>, Either),
+    Con(Span<String>, Vec<Pattern>, Either),
 }
 
 impl Pattern {
     pub fn to_impl(self) -> Self {
         match self {
-            Pattern::Any(span, _) => Pattern::Any(span, Icit::Impl),
-            Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Icit::Impl),
+            Pattern::Any(span, _) => Pattern::Any(span, Either::Icit(Icit::Impl)),
+            Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Either::Icit(Icit::Impl)),
+        }
+    }
+    pub fn to_name(self, name: Span<String>) -> Self {
+        match self {
+            Pattern::Any(span, _) => Pattern::Any(span, Either::Name(name)),
+            Pattern::Con(name1, pats, _) => Pattern::Con(name1, pats, Either::Name(name)),
         }
     }
 
-    pub fn get_icit(&self) -> Icit {
+    pub fn get_icit(&self) -> Either {
         match self {
-            Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => *icit,
+            Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => icit.clone(),
         }
     }
 }
@@ -43,7 +58,7 @@ impl Pattern {
                 .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
                     Box::new(ret),
                     Box::new(p.to_raw()),
-                    Either::Icit(p.get_icit()),
+                    p.get_icit(),
                 )),
         }
     }

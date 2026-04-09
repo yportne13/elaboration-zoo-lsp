@@ -7,7 +7,7 @@ use crate::parser_lib::{Span, ToSpan};
 use super::{
     Env, Error, Infer, Tm, Val,
     cxt::Cxt, Rc, Decl,
-    empty_span,
+    empty_span, Either,
     parser::syntax::{Pattern, Raw, Icit},
     PatternDetail,
 };
@@ -100,7 +100,7 @@ impl Compiler {
                 new_before.reverse();
                 new_before.push(pat.clone());
                 new_before.extend(after.clone());
-                Self::fill_context(parent, &Pattern::Con(constr.clone(), new_before, *icit))
+                Self::fill_context(parent, &Pattern::Con(constr.clone(), new_before, Either::Icit(*icit)))
             }
         }
     }
@@ -115,7 +115,7 @@ impl Compiler {
                 before,
                 after,
             } => match after[..] {
-                [] => self.next_hole(parent, &Pattern::Con(constr.clone(), before.clone(), *icit)),
+                [] => self.next_hole(parent, &Pattern::Con(constr.clone(), before.clone(), Either::Icit(*icit))),
                 _ => MatchContext::InCons {
                     parent: parent.clone(),
                     constr: constr.clone(),
@@ -247,10 +247,10 @@ impl Compiler {
             [(typ, head_name, icit), heads_rest @ ..] => {
                 let not_necessary = arms
                     .iter()
-                    .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, i), ..] if &i == icit));
+                    .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
 
                 if not_necessary {
-                    let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), *icit));
+                    let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), Either::Icit(*icit)));
                     let new_arms = arms
                         .iter()
                         .map(|arm| {
@@ -332,12 +332,12 @@ impl Compiler {
                                     }
                                     let new_heads_len = new_heads.len();
                                     match &arm.pats[..] {
-                                        [Pattern::Any(x, i), ..] if i == icit => Some(Some((
+                                        [Pattern::Any(x, i), ..] if &i.to_icit() == icit => Some(Some((
                                             MatchArm {
                                                 pats: [
                                                     new_heads
                                                         .iter()
-                                                        .map(|n| Pattern::Any(x.to_span().map(|_| false), n.2))
+                                                        .map(|n| Pattern::Any(x.to_span().map(|_| false), Either::Icit(n.2)))
                                                         .collect::<Vec<_>>(),
                                                     arm.pats[1..].to_vec(),
                                                 ].concat(),
@@ -362,14 +362,14 @@ impl Compiler {
                                             false,
                                         ))),
                                         [Pattern::Con(constr_, item_pats, i), ..]
-                                            if i == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
+                                            if &i.to_icit() == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
                                         {
                                             Some(Some((
                                                 MatchArm {
                                                     pats: [
                                                         new_heads
                                                             .iter()
-                                                            .map(|n| Pattern::Any(constr_.to_span().map(|_| false), n.2))
+                                                            .map(|n| Pattern::Any(constr_.to_span().map(|_| false), Either::Icit(n.2)))
                                                             .collect::<Vec<_>>(),
                                                         arm.pats[1..].to_vec(),
                                                     ].concat(),
@@ -386,7 +386,7 @@ impl Compiler {
                                                 false,
                                             )))
                                         }
-                                        [Pattern::Con(constr_, item_pats, i), ..] if i == icit && (constr_ == constr) => {
+                                        [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
                                             Some(Some((
                                                 MatchArm {
                                                     pats: item_pats
@@ -434,7 +434,7 @@ impl Compiler {
                                     &Pattern::Con(
                                         constr.clone(),
                                         vec![],
-                                        *icit,
+                                        Either::Icit(*icit),
                                     ),
                                 );
                                 self.warnings.push(Warning::Unmatched(unmatched));
@@ -460,7 +460,7 @@ impl Compiler {
                                     } else {
                                         self.next_hole(
                                             context,
-                                            &Pattern::Con(constr.clone(), vec![], *icit),
+                                            &Pattern::Con(constr.clone(), vec![], Either::Icit(*icit)),
                                         )
                                     }
                                 } else {
@@ -470,7 +470,7 @@ impl Compiler {
                                         icit: *icit,
                                         before: vec![],
                                         after: vec![
-                                            Pattern::Any(empty_span(true), *icit);
+                                            Pattern::Any(empty_span(true), Either::Icit(*icit));
                                             new_heads.len() - 1
                                         ],
                                     }
