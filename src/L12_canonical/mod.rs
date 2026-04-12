@@ -288,6 +288,7 @@ impl IError {
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
+    meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
@@ -300,6 +301,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
+            meta_contrains: vec![],
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
@@ -598,7 +600,8 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
-        self.unify(cxt.lvl, cxt, t, t_prime, 100)
+        self.meta_contrains.clear();
+        let ret = self.unify(cxt.lvl, cxt, t, t_prime, 100)
             .map_err(|e| {
                 /*Error::CantUnify(
                     cxt.clone(),
@@ -624,7 +627,19 @@ impl Infer {
                 };
                 Error(span.map(|_| err.clone()))
                 //Error(format!("can't unify {:?} == {:?}", t, t_prime))
-            })
+            });
+        if !self.meta_contrains.is_empty() {
+            let err = format!(
+                    //"can't unify {:?} == {:?}",
+                    "can't unify\n  expected: {}\n      find: {}",
+                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
+                    pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
+                );
+            self.meta_contrains.clear();
+            Err(Error(span.map(|_| err.clone())))?
+        }
+        self.meta_contrains.clear();
+        ret
     }
 }
 

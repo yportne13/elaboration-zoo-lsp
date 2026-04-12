@@ -493,7 +493,7 @@ impl Infer {
                     .map_err(|e| e.0.data)?;
                 let val = self.eval(&cxt.decl, &cxt.env, &tm);
                 if let Val::SumCase { typ, .. } = val.as_ref() {
-                    let _ = self.unify(cxt.lvl, cxt, typ, x, 100);
+                    let _ = self.unify_catch(cxt, typ, x, empty_span(()));
                 }
                 Ok(Some((tm, val)))
             } else {
@@ -679,11 +679,25 @@ impl Infer {
                 fuel,
             ),
             (Val::Flex(m, sp), _) => {
-                self.solve(l, &cxt.decl, *m, sp.clone(), &u)?;
+                match self.solve(l, &cxt.decl, *m, sp.clone(), &u) {
+                    Ok(()) => Ok(()),
+                    Err(UnifyError::Stuck) => {
+                        self.meta_contrains.push((t.clone(), u.clone()));
+                        Ok(())
+                    },
+                    Err(e) => Err(e),
+                }?;
                 self.solve_multi_trait(cxt, *m)
             },
             (_, Val::Flex(m, sp)) => {
-                self.solve(l, &cxt.decl, *m, sp.clone(), &t)?;
+                match self.solve(l, &cxt.decl, *m, sp.clone(), &t) {
+                    Ok(()) => Ok(()),
+                    Err(UnifyError::Stuck) => {
+                        self.meta_contrains.push((t.clone(), u.clone()));
+                        Ok(())
+                    },
+                    Err(e) => Err(e),
+                }?;
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),

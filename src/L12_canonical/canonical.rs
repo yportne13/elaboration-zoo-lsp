@@ -12,10 +12,11 @@ impl Infer {
         target: Vec<(MetaVar, Rc<Val>, Spine)>,
         unify_list: Vec<(Rc<Val>, Rc<Val>)>,
         depth: u32,
-        mut collect: Vec<String>,
+        collect: Vec<String>,
         avoid_recurse: &str,//TODO: this is incorrect
         meta_offset: usize,
     ) -> Result<String, UnifyError> {
+        self.meta_contrains.clear();
         //println!("Searching... {} {depth}", target.len());
         let meta_bak: Vec<_> = self.meta.iter().skip(meta_offset).cloned().collect();
         let meta_len_bak = self.meta.len();
@@ -64,6 +65,7 @@ impl Infer {
                 .filter(|(t, _, _)| ![
                     "create_global",
                     "change_mutable",
+                    "change_mutable_default",
                     "string_to_global_type",
                     "string_concat",
                     "get_global",
@@ -75,8 +77,9 @@ impl Infer {
                 .unwrap_or(String::new());
             if matches!(self.meta[target[0].0.0 as usize], MetaEntry::Solved(_, _)) {
                 if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
-                    collect.push(format!("{lamb_string}_"));
-                    if let Ok(ret) = self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect.clone(), avoid_recurse, meta_offset) {
+                    let mut collect_next = collect.clone();
+                    collect_next.push(format!("{lamb_string}_"));
+                    if let Ok(ret) = self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
                         return Ok(ret)
                     }
                 } else {
@@ -111,8 +114,35 @@ impl Infer {
                 }
                 //self.meta[target[0].0.0 as usize] = MetaEntry::Solved(vtm, target[0].1.clone());
                 //println!("spine: {:?}", target[0].2);
-                self.meta[target[0].0.0 as usize] = MetaEntry::Unsolved(target[0].1.clone(), cxt.clone());
-                self.solve(cxt.lvl, &cxt.decl, target[0].0, spine.clone(), &vtm);
+                self.meta[target[0].0.0 as usize] = MetaEntry::Solved(
+                    self.eval(
+                        &cxt.decl,
+                        &List::new(),
+                        &self.lams(Lvl(spine.len() as u32), &cxt.decl, &target[0].1, self.quote(&cxt.decl, cxt.lvl, &vtm)),
+                    ),
+                    target[0].1.clone(),
+                );
+                /*self.meta[target[0].0.0 as usize] = MetaEntry::Unsolved(target[0].1.clone(), cxt.clone());
+                if target.len() == 1 && depth == 2 {}
+                else {self.solve(cxt.lvl, &cxt.decl, target[0].0, spine.clone(), &vtm);}
+                println!(
+                    "target: {:?}, {}",
+                    target[0].0,
+                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &vtm)),
+                );*/
+                /*println!(
+                    "vt: {}   <>   {}",
+                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &vt)),
+                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &typ)),
+                );
+                for (a, b) in unify_list.iter() {
+                    println!(
+                        "unify: {}   <>   {}",
+                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &a)),
+                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &b)),
+                    );
+                }*/
+                //println!("unify: {:?}", unify_list);
                 if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 100), Ok(_) | Err(UnifyError::Stuck))
                     && unify_list.iter().all(|(a, b)| matches!(self.unify(cxt.lvl, &cxt, a, b, 100), Ok(_) | Err(UnifyError::Stuck))) {
                         /*println!(
@@ -129,8 +159,9 @@ impl Infer {
                         
                         if new_list.is_empty() {
                             if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
-                                collect.push(format!("{lamb_string}{t}"));
-                                if let Ok(ret) = self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect.clone(), avoid_recurse, meta_offset) {
+                                let mut collect_next = collect.clone();
+                                collect_next.push(format!("{lamb_string}{t}"));
+                                if let Ok(ret) = self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
                                     return Ok(ret)
                                 }
                             } else {
@@ -138,14 +169,22 @@ impl Infer {
                             }
                         } else if let Ok(ret) = self.search(&cxt, new_list, unify_list_d, depth - 1, vec![], avoid_recurse, meta_offset) {
                             if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
-                                collect.push(format!("{lamb_string}{t}{ret}"));
-                                if let Ok(ret) =  self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect.clone(), avoid_recurse, meta_offset) {
+                                let mut collect_next = collect.clone();
+                                collect_next.push(format!("{lamb_string}{t}{ret}"));
+                                if let Ok(ret) =  self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
                                     return Ok(ret)
                                 }
                             } else {
                                 return Ok(format!("({lamb_string}{}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t, ret));
                             }
                         }
+                }
+                //self.meta[target[0].0.0 as usize] = MetaEntry::Unsolved(target[0].1.clone(), cxt.clone());
+                if self.meta.len() > meta_len_bak {
+                    self.meta.truncate(meta_len_bak);
+                }
+                for (i, entry) in meta_bak.clone().into_iter().enumerate() {
+                    self.meta[meta_offset + i] = entry;
                 }
             }
         }
