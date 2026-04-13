@@ -10,6 +10,11 @@ impl[T] Option[T] {
             case Some(t) => Some(f(t))
             case None => None
         }
+    def flatmap[U](f: T -> Option[U]): Option[U] =
+        match this {
+            case Some(t) => f(t)
+            case None => None
+        }
     def unwrap_or(default: T): T =
         match this {
             case Some(t) => t

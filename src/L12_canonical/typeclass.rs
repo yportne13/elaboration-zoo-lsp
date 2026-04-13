@@ -18,7 +18,7 @@ pub enum Typ {
 impl Val {
     pub fn to_typ(&self) -> Option<Typ> {
         match self {
-            Val::Flex(..) => None,
+            Val::Flex(..) => Some(Typ::Any),
             Val::Rigid(lvl, list) if list.is_empty() => Some(Typ::Var(lvl.0)),
             Val::Rigid(_, _) => None,
             Val::Decl(x, list) if list.is_empty() => Some(Typ::Val(x.clone())),

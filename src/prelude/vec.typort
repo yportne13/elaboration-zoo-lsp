@@ -18,6 +18,11 @@ impl[T, len: Nat] Vec[T] len {
             case nil => z
             case cons(x, xs) => f (xs.foldl z f) x
         }
+    def fold[U](z: U, f: U -> T -> U): U =
+        match this {
+            case nil => z
+            case cons(x, xs) => f (xs.fold z f) x
+        }
     def head_option: Option[T] =
         match this {
             case nil => None
@@ -34,9 +39,9 @@ impl[T, len: Nat] Vec[T](succ len) {
         match this {
             case cons(_, xs) => xs
         }
-    def reduce[T](f: T -> T -> T): T =
+    def reduce(f: T -> T -> T): T =
         match this {
-            case cons(x, xs) => xs.foldl x f
+            case cons(x, xs) => xs.fold x f
         }
 }
 

@@ -691,7 +691,7 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
-        (kw(T![:]), p_raw).map(|(_, x)| x).option(),
+        (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
         kw(T![=]),
         kw(EndLine).option(),
         p_raw,

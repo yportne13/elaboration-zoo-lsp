@@ -42,17 +42,23 @@ struct Bits[width: Nat] {
 }
 
 impl[width: Nat] Add[Bits[width], Bits[width]] for Bits[width] {
-    def add(that: Bits[width]): Bits[width] =
+    def +(that: Bits[width]): Bits[width] =
         Bits.mk(this.name + " + " + that.name)
 }
 
-impl[width: Nat] Mul[Bits[width], Bits[width]] for Bits[width] {
-    def mul(that: Bits[width]): Bits[width + width] =
+impl[width: Nat] Sub[Bits[width], Bits[width]] for Bits[width] {
+    def -(that: Bits[width]): Bits[width] =
+        Bits.mk(this.name + " - " + that.name)
+}
+
+impl[width0: Nat, width1: Nat] Mul[Bits[width1], Bits[width0 + width1]] for Bits[width0] {
+    def *(that: Bits[width1]): Bits[width0 + width1] =
         Bits.mk(this.name + " * " + that.name)
 }
 
 impl[width: Nat] Bits[width] {
     def +^(that: Bits[width]): Bits[width + 1] = Bits.mk(this.name + " +^ " + that.name)
+    def -^(that: Bits[width]): Bits[width + 1] = Bits.mk(this.name + " -^ " + that.name)
     def :=(that: Bits[width]): Bits[width] = Bits.mk(this.name + " := " + that.name)
 }
 

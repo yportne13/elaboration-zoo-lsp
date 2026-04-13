@@ -30,25 +30,31 @@ def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
     cong succ e
 
 def add_zero_right(a: Nat): Eq (a + 0) a =
+    rfl
+
+def add_zero_left(a: Nat): Eq (0 + a) a =
     match a {
         case zero => refl 0
-        case succ(t) => cong_succ (add_zero_right t)
+        case succ(t) => cong_succ (add_zero_left t)
     }
 
 def add_succ_right (n: Nat, m: Nat): Eq ((n + (succ m))) (succ (n + m)) =
-    match n {
-        case zero => refl[Nat] (succ m)
-        case succ(k) => cong_succ (add_succ_right k m)
+    rfl
+
+def add_succ_left (n: Nat, m: Nat): Eq (((succ n) + m)) (succ (n + m)) =
+    match m {
+        case zero => refl[Nat] (succ n)
+        case succ(k) => cong_succ (add_succ_left n k)
     }
 
 def add_comm (n: Nat, m: Nat): Eq(n + m, m + n) =
-    match n {
-        case zero => symm (add_zero_right m)
-        case succ(k) => trans (cong_succ (add_comm k m)) (symm (add_succ_right m k))
+    match m {
+        case zero => symm(add_zero_left n)
+        case succ(k) => trans (cong_succ (add_comm n k)) (symm (add_succ_left k n))
     }
 
 def add_assoc (n: Nat, m: Nat, k: Nat): Eq((n + m) + k, n + (m + k)) =
-    match n {
+    match k {
         case zero => rfl
-        case succ(l) => cong_succ (add_assoc l m k)
+        case succ(l) => cong_succ (add_assoc n m l)
     }
