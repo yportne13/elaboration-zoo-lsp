@@ -126,4 +126,10 @@ pub trait LanguageServer {
         //error!("Got a textDocument/hover request, but it is not implemented");
         Err(Error::method_not_found())
     }
+
+    fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let _ = params;
+        //error!("Got a textDocument/codeAction request, but it is not implemented");
+        Err(Error::method_not_found())
+    }
 }

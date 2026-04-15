@@ -1,5 +1,6 @@
 #![feature(pattern)]
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 mod parser_lib;
@@ -33,7 +34,7 @@ use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
 use lsp_server::{Connection, ExtractError, Message, ProtocolError, Request, RequestId, Response};
-use lsp_types::request::{Completion, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
+use lsp_types::request::{CodeActionRequest, Completion, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
 //use crate::completion::completion;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -67,6 +68,7 @@ struct Backend {
     document_map: DashMap<String, Rope>,
     document_id: DashMap<String, u32>,
     hover_table: DashMap<String, Infer>,
+    quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<CodeActionOrCommand> + Send + Sync>>>>,
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：(任务槽, 条件变量)
@@ -107,6 +109,7 @@ impl Backend {
             document_map,
             document_id,
             hover_table,
+            quickfix_map: DashMap::new(),
             processing_uris: DashMap::new(),
             worker_signal,
             processed_signal,
@@ -264,6 +267,17 @@ impl Backend {
                         Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
                         Err(ExtractError::MethodMismatch(req)) => req,
                     };
+                    match cast::<CodeActionRequest>(req.clone()) {
+                        Ok((id, params)) => {
+                            let result = self.code_action(params)?;
+                            let result = serde_json::to_value(&result).unwrap();
+                            let resp = Response { id, result: Some(result), error: None };
+                            self.client.connection.sender.send(Message::Response(resp))?;
+                            continue;
+                        }
+                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                        Err(ExtractError::MethodMismatch(req)) => req,
+                    };
                     // ...
                 }
                 Message::Response(resp) => {
@@ -335,6 +349,7 @@ impl LanguageServer for Backend {
                     all_commit_characters: None,
                     completion_item: None,
                 }),
+                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 /*execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec!["dummy.do_something".to_string()],
                     work_done_progress_options: Default::default(),
@@ -859,6 +874,26 @@ impl LanguageServer for Backend {
 
         Ok(None)
     }
+
+    fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri.to_string();
+        if let Some(map) = self.quickfix_map.get(&uri) {
+            let mut actions = Vec::new();
+            for diagnostic in params.context.diagnostics {
+                if let Some(data) = diagnostic.data {
+                    if let Some(id) = data.as_str() {
+                        if let Some(code_actions) = map.get(id) {
+                            actions.extend(code_actions.iter().flat_map(|x| x()));
+                        }
+                    }
+                }
+            }
+            if !actions.is_empty() {
+                return Ok(Some(actions));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[allow(unused)]
@@ -948,7 +983,7 @@ impl Backend {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
                             err_collect.push((
-                                crate::L12_canonical::Error(span.map(|_| s.clone())),
+                                crate::L12_canonical::Error(span.map(|_| s.clone()), vec![]),
                                 DiagnosticSeverity::INFORMATION
                             ))
                         }
@@ -969,22 +1004,63 @@ impl Backend {
             self.type_map.insert(params.uri.to_string(), terms);
             self.hover_table.insert(params.uri.to_string(), infer.clone());
             //eprintln!("{:?}", err_collect);
-            let diag = err_collect
-                .into_iter()
-                .chain(ast.1.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR)))
-                .filter_map(|(e, severity)| {
-                    let start_position = offset_to_position(e.0.start_offset as usize, &rope)?;
-                    let end_position = offset_to_position(e.0.end_offset as usize, &rope)?;
-                    let mut ret = Diagnostic::new_simple(
-                        Range::new(start_position, end_position),
-                        e.0.data,
-                    );
-                    ret.severity = Some(severity);
-                    Some(ret)
-                })
-                .collect();
-            self.client
-                .publish_diagnostics(params.uri.clone(), diag, params.version);
+            let mut diags = Vec::new();
+            let mut quickfixes_for_uri = HashMap::new();
+
+            // 生成诊断（原有的 err_collect + parse errors）
+            for (e, severity) in err_collect.into_iter().chain(ast.1.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
+                let start_position = offset_to_position(e.0.start_offset as usize, &rope).unwrap_or_default();//TODO:not default
+                let end_position = offset_to_position(e.0.end_offset as usize, &rope).unwrap_or_default();
+                let mut diagnostic = Diagnostic::new_simple(
+                    Range::new(start_position, end_position),
+                    e.0.data.clone(),
+                );
+                diagnostic.severity = Some(severity);
+
+                // 如果有 Quick Fix 修复函数
+                if !e.1.is_empty() {
+                    // 生成唯一 ID（可用原子计数器或 UUID）
+                    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+                    let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
+                    diagnostic.data = Some(serde_json::Value::String(id.clone()));
+
+                    let mut code_actions: Vec<Box<dyn Fn() -> Option<CodeActionOrCommand> + Send + Sync>> = Vec::new();
+                    for fix_fn in e.1.into_iter() {
+                        let url = params.uri.clone();
+                        code_actions.push(Box::new(move || match fix_fn() {
+                            Some(new_text) => {
+                                eprintln!("quick fix: {}", new_text);//TODO:
+                                let edit = TextEdit {
+                                    range: Range::new(start_position, end_position),
+                                    new_text,
+                                };
+                                let workspace_edit = WorkspaceEdit {
+                                    changes: Some([(url.clone(), vec![edit])].into_iter().collect()),
+                                    document_changes: None,
+                                    change_annotations: None,
+                                };
+                                let action = CodeAction {
+                                    title: format!("Quick fix: Canonical"),
+                                    kind: Some(CodeActionKind::QUICKFIX),
+                                    edit: Some(workspace_edit),
+                                    ..Default::default()
+                                };
+                                Some(lsp_types::CodeActionOrCommand::CodeAction(action))
+                            }
+                            None => { None }
+                        }));
+                    }
+                    if !code_actions.is_empty() {
+                        quickfixes_for_uri.insert(id, code_actions);
+                    }
+                }
+                diags.push(diagnostic);
+            }
+
+            // 发布诊断
+            self.client.publish_diagnostics(params.uri.clone(), diags, params.version);
+            // 存储 Quick Fix 映射（覆盖旧的）
+            self.quickfix_map.insert(params.uri.to_string(), quickfixes_for_uri);
         } else {
             self.client
                 .publish_diagnostics(params.uri.clone(), vec![Diagnostic::new_simple(

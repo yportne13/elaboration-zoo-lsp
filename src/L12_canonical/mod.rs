@@ -261,7 +261,7 @@ use std::ops::{Add, Sub};
 use im::HashMap;
 
 #[derive(Debug)]
-enum UnifyError {
+pub enum UnifyError {
     Basic,
     Stuck,
     Trait(String),
@@ -276,12 +276,23 @@ fn empty_span<T>(data: T) -> Span<T> {
     }
 }
 
-#[derive(Debug)]
-pub struct Error(pub Span<String>);
+pub struct Error(
+    pub Span<String>,
+    pub Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>
+);
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // 只渲染第一个字段，输出效果如：Error(Span { ... })
+        f.debug_tuple("Error")
+            .field(&self.0)
+            .finish()
+    }
+}
 
 impl IError {
     pub fn to_err(self) -> Error {
-        Error(self.msg.map(|x| format!("{:?}", x)))
+        Error(self.msg.map(|x| format!("{:?}", x)), vec![])
     }
 }
 
@@ -625,18 +636,18 @@ impl Infer {
                     ),
                     UnifyError::Trait(e) => e,
                 };
-                Error(span.map(|_| err.clone()))
+                Error(span.map(|_| err.clone()), vec![])
                 //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             });
         if !self.meta_contrains.is_empty() {
             let err = format!(
                     //"can't unify {:?} == {:?}",
-                    "can't unify\n  expected: {}\n      find: {}",
+                    "can't unify for unsolved meta\n  expected: {}\n      find: {}",
                     pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t)),
                     pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, t_prime)),
                 );
             self.meta_contrains.clear();
-            Err(Error(span.map(|_| err.clone())))?
+            Err(Error(span.map(|_| err.clone()), vec![]))?
         }
         self.meta_contrains.clear();
         ret
@@ -649,6 +660,66 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
     let mut cxt = Cxt::new();
     let mut ret = String::new();
+    //TODO: do not print err. return error
+    for e in ast.1 {
+        println!("{:?}", e)
+    }
+    for tm in ast.0 {
+        match &tm {
+            parser::syntax::Decl::Def { name, .. }
+            | parser::syntax::Decl::Enum { name, .. }
+            | parser::syntax::Decl::TraitDecl { name, .. } => {
+                println!("> {}", name.data);
+                //cxt.print_env(&infer);
+            },
+            parser::syntax::Decl::Println(raw) => {},
+            parser::syntax::Decl::ImplDecl { .. } => {
+                println!("> impl");
+            }
+        }
+        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        cxt = new_cxt;
+        if let DeclTm::Println(_, s, _) = x {
+            //ret += &format!("{:?}", infer.nf(&cxt.env, x));
+            ret += &s;
+            ret += "\n";
+        }
+    }
+    /*cxt.env
+        .iter()
+        .zip(cxt.names().iter())
+        .for_each(|(ty, name)| {
+            println!("{}: {}", name, pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ty.clone())));
+            //println!("{:?}\n", ty);
+        });*/
+    Ok(ret)
+}
+
+#[allow(unused)]
+pub fn run_with_prelude(input: &str) -> Result<String, Error> {
+    let mut infer = Infer::new();
+    let prelude = &[
+        include_str!("../prelude/op.typort"),
+        include_str!("../prelude/eq.typort"),
+        include_str!("../prelude/nat.typort"),
+        include_str!("../prelude/bool.typort"),
+        include_str!("../prelude/option.typort"),
+        //include_str!("../prelude/vec.typort"),
+    ];
+    let ast = parser::parser(&preprocess(input), prelude.len() as u32).unwrap();
+    let mut cxt = Cxt::new();
+    let mut ret = String::new();
+
+    let mut id = 0;
+    for p in prelude {
+        let aast = parser::parser(&preprocess(p), id).unwrap();
+        id += 1;
+        for tm in aast.0 {
+            let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+            cxt = new_cxt;
+        }
+    }
+    println!("-----------------");
     //TODO: do not print err. return error
     for e in ast.1 {
         println!("{:?}", e)
@@ -2051,6 +2122,101 @@ def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
     }
 
 def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (add x 1) (add y 1) = _
+"#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test14() {
+    let input = r#"
+def add_zero_left1(a: Nat): Eq (0 + a) a =
+    match a {
+        case zero => refl zero
+        case succ(tt) => _
+    }
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        //Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
+        Err(e) => panic!("{} @ {}: {}\n{}", e.0.data, e.0.path_id, e.0.start_offset, e.1[0]().unwrap()),
+    }
+}
+
+#[test]
+fn test15() {
+    let input = r#"
+def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+def t =
+let the : (A : Type 1) -> A -> A = _ => x => x;
+
+
+let m : (A : Type 0) -> (B : Type 0) -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => the (Eq (m a a) (x => y => y)) refl;
+
+let m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => c => the (Eq (m a b c) (m c b a)) refl;
+
+let pr1 = f => x => f x;
+let pr2 = f => x => y => f x y;
+let pr3 = f => f (Type 0);
+
+test"#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test16() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+
+def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+def t(x: Nat): Type 1 = match x {
+    case succ(tt) =>
+let the : (A : Type 1) -> A -> A = _ => x => x;
+
+
+let m : (A : Type 0) -> (B : Type 0) -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => the (Eq (m a a) (x => y => y)) refl;
+
+let m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => c => the (Eq (m a b c) (m c b a)) refl;
+
+let pr1 = f => x => f x;
+let pr2 = f => x => y => f x y;
+let pr3 = f => f (Type 0);
+
+Type 0
+    case zero =>
+let the : (A : Type 1) -> A -> A = _ => x => x;
+
+
+let m : (A : Type 0) -> (B : Type 0) -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => the (Eq (m a a) (x => y => y)) refl;
+
+let m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => c => the (Eq (m a b c) (m c b a)) refl;
+
+let pr1 = f => x => f x;
+let pr2 = f => x => y => f x y;
+let pr3 = f => f (Type 0);
+
+Type 0
+}
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),

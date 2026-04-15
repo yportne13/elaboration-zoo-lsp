@@ -64,7 +64,7 @@ impl Infer {
                     )
                 }
             }
-            _ => Err(Error(name.map(|x| format!("no named implicit arg {}", x)))),
+            _ => Err(Error(name.map(|x| format!("no named implicit arg {}", x)), vec![])),
         }
     }
     fn insert_until_name(
@@ -116,7 +116,7 @@ impl Infer {
                     }
                     Ok(cxt)
                 } else {
-                    Err(Error(t_span.map(|_| "".to_string())))
+                    Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
             (
@@ -132,7 +132,7 @@ impl Infer {
                     }
                     Ok(cxt)
                 } else {
-                    Err(Error(t_span.map(|_| "".to_string())))
+                    Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
             (_, _) => {
@@ -149,7 +149,7 @@ impl Infer {
             Val::U(u) => Ok((t_inferred, *u)),
             Val::Flex(m, sp) => {
                 let (pren, prune_non_linear) = self.invert(cxt.lvl, &cxt.decl, sp)
-                    .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned())))?;
+                    .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned()), vec![]))?;
                 let mty = match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(ref a, _) => a.clone(),
                     _ => unreachable!(),
@@ -159,7 +159,7 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&cxt.decl, &pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
+                    self.prune_ty(&cxt.decl, &pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned()), vec![]))?; //TODO:revPruning?
                 }
 
                 if pren.dom.0 == 0 {
@@ -171,7 +171,7 @@ impl Infer {
                         },
                         _ => {
                             let err_typ = self.force(&cxt.decl, &mty);
-                            Err(Error(t_span.map(|_|  format!("meta type {:?} is not a universe", err_typ))))
+                            Err(Error(t_span.map(|_| format!("meta type {:?} is not a universe", err_typ)), vec![]))
                         },
                     }
                 } else {
@@ -182,7 +182,7 @@ impl Infer {
                             ..pren
                         },
                         &Val::U(0).into(),
-                    ).map_err(|_| Error(t_span.map(|_| "when check universe, try to rename failed".to_string())))?;
+                    ).map_err(|_| Error(t_span.map(|_| "when check universe, try to rename failed".to_string()), vec![]))?;
                     let solution = self.eval(&cxt.decl, &List::new(), &self.lams(pren.dom, &cxt.decl, &mty, rhs));
                     self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
@@ -190,7 +190,7 @@ impl Infer {
                     //Err(Error(format!("when check universe, get pren {}", pren.dom.0)))
                 }
             }
-            _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)))),
+            _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)), vec![])),
         }
     }
     pub fn check(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
@@ -246,7 +246,7 @@ impl Infer {
                 let mut compiler = Compiler::new(a);
                 let error = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.decl, &cxt.env, &tm))?;
                 if !error.is_empty() {
-                    Err(Error(expr_span.map(|_| format!("{error:?}"))))
+                    Err(Error(expr_span.map(|_| format!("{error:?}")), vec![]))
                 } else {
                     Ok(
                         Tm::Match(tm, compiler.pats).into()
@@ -293,25 +293,42 @@ impl Infer {
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
-                        .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
+                        .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some((metavar, meta_ty, meta_cxt, pr)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
-                        /*let ret = self.search(
-                            &meta_cxt,
-                            vec![(metavar, meta_ty.clone(), pr.zip(&meta_cxt.env).flat_map(|(a, b)| a.map(|a| (b.clone(), a))))],
-                            vec![],
-                            4,
-                            vec![],
-                            &name.data,
-                            meta_offset,
+                        let err_msg = format!(
+                            "find unsolved meta with type `{}`",//\n{:?}",
+                            super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
+                            //ret,
+                        );
+                        let infer = self.clone();
+                        /*println!("{:?}", meta_cxt.pruning);
+                        println!(
+                            "{}",
+                            super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &meta_ty)),
                         );*/
+                        //let prune_ty = self.prune_ty(&meta_cxt.decl, &meta_cxt.pruning, &meta_ty).unwrap();//TODO:do not unwrap
+                        //let meta_ty = self.eval(&meta_cxt.decl, &List::new(), &prune_ty);
+                        let ret = move || {
+                            let mut infer = infer.clone();
+                            infer.search(
+                                &meta_cxt,
+                                vec![(metavar, meta_ty.clone(), pr.zip(&meta_cxt.env).flat_map(|(a, b)| a.map(|a| (b.clone(), a))))],
+                                vec![],
+                                3,
+                                vec![],
+                                &name.data,
+                                meta_offset,
+                            ).and_then(|x| if !infer.meta_contrains.is_empty() {
+                                infer.meta_contrains.clear();
+                                Err(super::UnifyError::Basic)
+                            } else {
+                                Ok(x)
+                            }).ok()
+                        };
                         return Err(Error(bod.to_span().map(|_|
-                            format!(
-                                "find unsolved meta with type `{}`",//\n{:?}",
-                                super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
-                                //ret,
-                            )
-                        )));
+                            err_msg.clone()
+                        ), vec![Box::new(ret)]));
                     }
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
@@ -514,18 +531,18 @@ impl Infer {
                     let typ = self.check_universe(&temp_cxt, name.clone())?.0;
                     let typ = self.eval(&temp_cxt.decl, &temp_cxt.env, &typ)
                         .to_typ()
-                        .ok_or_else(|| Error(span.map(|_| "Not a type".to_string())))?;
+                        .ok_or_else(|| Error(span.map(|_| "Not a type".to_string()), vec![]))?;
                     let mut trait_param = vec![typ.clone()];
                     for a in trait_params.clone() {
                         let (a_checked, _) = self.infer_expr(&temp_cxt, a)?;
                         let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
                         match a_eval.to_typ() {
                             Some(x) => trait_param.push(x),
-                            None => return Err(Error(span.map(|_| "Not a type".to_string()))),
+                            None => return Err(Error(span.map(|_| "Not a type".to_string()), vec![])),
                         };
                     }
                     let out_param = self.trait_out_param.get(&trait_name.data)
-                        .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n))))?;
+                        .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n)), vec![]))?;
                     let trait_param = trait_param.into_iter()
                         .zip(out_param)
                         .filter(|x| !x.1)
@@ -633,7 +650,7 @@ impl Infer {
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {
-                        Err(Error(name.map(|x| format!("error name not in scope: {}", x))))
+                        Err(Error(name.map(|x| format!("error name not in scope: {}", x)), vec![]))
                     }
                 },
             },
@@ -740,7 +757,7 @@ impl Infer {
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), _) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
+            Raw::Lam(x, Either::Name(_), _) => Err(Error(x.map(|_| "infer named lambda".to_owned()), vec![])),
 
             // Infer function applications
             Raw::App(t, u, i) => {
@@ -768,7 +785,7 @@ impl Infer {
                         if i == *i_t {
                             (a.clone(), b_closure.clone())
                         } else {
-                            return Err(Error(t_span.map(|_| format!("icit mismatch {:?} {:?}", i, i_t))));
+                            return Err(Error(t_span.map(|_| format!("icit mismatch {:?} {:?}", i, i_t)), vec![]));
                         }
                     }
                     _ => {
@@ -865,7 +882,7 @@ impl Infer {
 
             Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal).into(), Val::LiteralType.into())),
 
-            Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()))),
+            Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()), vec![])),
 
             Raw::Sum(name, params, cases, universe, is_trait) => {
                 let new_params = params
@@ -1026,7 +1043,7 @@ impl Infer {
                     super::pretty_tm(0, cxt.names(), &tm),
                     super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a))),
                     t,
-                ))))
+                )), vec![]))
             }
         }
     }

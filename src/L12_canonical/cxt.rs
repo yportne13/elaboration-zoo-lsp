@@ -483,7 +483,7 @@ impl Cxt {
         let mut decl = self.decl.clone();
         let t = decl.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
         if let Some((span, _, _, _, _)) = t {
-            return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data))));
+            return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
         Ok(Cxt {
             env: self.env.clone(),
@@ -580,12 +580,12 @@ impl Cxt {
                 let env = self.env.change_n(x_prime, |_| v);
                 let mut new_src_names = self.src_names.clone();
                 let env_t = self.refresh(infer, &self.env, &mut new_src_names, env, self.lvl.0 as usize - update_from);
-                //let locals = self.locals.clone().update_by_cxt(infer, self.lvl, &self.env);
+                let locals = self.locals.clone().update_by_cxt(infer, &self.decl, self.lvl, &env_t);
         
                 Cxt {
                     env: env_t,
                     lvl: self.lvl,
-                    locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
+                    locals: if update_prune {locals} else {self.locals.clone()},//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
                     //locals: self.locals.clone().update_by_cxt(infer, &self.decl, self.lvl, &self.env),
                     //locals,
                     pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},

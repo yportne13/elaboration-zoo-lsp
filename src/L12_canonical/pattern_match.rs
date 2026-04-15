@@ -241,7 +241,7 @@ impl Compiler {
                 [arm, ..] => Err(Error(match &arm.0.pats[0] {
                     Pattern::Any(span, _) => span.map(|_| "invalid pattern".to_owned()),
                     Pattern::Con(span, _, _) => span.clone().map(|x| format!("invalid pattern {}", x)),
-                })),
+                }, vec![])),
                 [] => Ok(false)
             },
             [(typ, head_name, icit), heads_rest @ ..] => {

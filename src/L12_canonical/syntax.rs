@@ -56,7 +56,8 @@ impl Locals {
                             Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())),
                             name.clone(),
                             ty.clone(),
-                            infer.quote(decl, lvl, v),
+                            //infer.quote(decl, lvl, v),
+                            infer.quote(decl, lvl, &Val::U(0).into()),
                         )
                     },
                     _ => panic!("Internal error: unexpected value in context"),
