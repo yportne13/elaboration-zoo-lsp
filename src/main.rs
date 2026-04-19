@@ -146,6 +146,11 @@ impl Backend {
             text: include_str!("prelude/vec.typort"),
             version: None,
         });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///hdl.typort").unwrap(),
+            text: include_str!("prelude/hdl.typort"),
+            version: None,
+        });
         ret.infer.lock().unwrap().hover_table.clear();
         ret.infer.lock().unwrap().completion_table.clear();
         ret.infer.lock().unwrap().mutable_map.write().unwrap().clear();
