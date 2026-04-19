@@ -14,16 +14,15 @@ impl Infer {
         origin_target: &Rc<Val>,
         raw: Rc<dyn Fn(List<Raw>) -> Raw>,
         depth: u32,
-        collect: Vec<String>,
         avoid_recurse: &str,//TODO: this is incorrect
     ) -> Result<String, UnifyError> {
         let mut typ = self.force(&cxt.decl, &target[0].1);
         let mut cxt = cxt.clone();
-        let mut lamb = vec![];
+        let mut lamb = List::new();
         while let Val::Pi(span, icit, dom, clos) = typ.as_ref() {
             let lvl = cxt.lvl;
             if *icit == Icit::Expl {
-                lamb.push(span.data.clone());
+                lamb = lamb.prepend(span.data.clone());
             }
             cxt = cxt.bind(span.clone(), self.quote(&cxt.decl, cxt.lvl, dom), dom.clone());
             typ = self.closure_apply(&cxt.decl, clos, Val::vvar(lvl).into());
@@ -53,21 +52,6 @@ impl Infer {
                     "get_global",
                     "outParam",
                     avoid_recurse].contains(&t.as_str()));
-            let lamb_string = lamb.iter()
-                .map(|x| format!("{x} => "))
-                .reduce(|a, b| a + &b)
-                .unwrap_or(String::new());
-            /*if matches!(self.meta[target[0].0.0 as usize], MetaEntry::Solved(_, _)) {
-                if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
-                    let mut collect_next = collect.clone();
-                    collect_next.push(format!("{lamb_string}_"));
-                    if let Ok(ret) = self.search(&cxt, &target[1..], origin_target, unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
-                        return Ok(ret)
-                    }
-                } else {
-                    return Ok(format!("({lamb_string}{}_)", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new())));
-                }
-            }*/
             for (t, v, mut vtm) in iterator {
                 let mut vt = v.clone();
                 let mut new_list = vec![];
@@ -78,7 +62,7 @@ impl Infer {
                     let meta_var = self.meta.len();
                     let new_meta = self.fresh_meta(&cxt, dom.clone());
                     let meta = self.eval(&cxt.decl, &cxt.env, &new_meta);
-                    let (meta_var, spine) = match meta.as_ref() {
+                    let (meta_var, _) = match meta.as_ref() {
                         Val::Flex(m, sp) => (*m, sp.clone()),
                         _ => (MetaVar(meta_var as u32), List::new()),
                     };
@@ -93,7 +77,6 @@ impl Infer {
                     Raw::App(acc.into(), Raw::Hole(empty_span(())).into(), Either::Icit(Icit::Expl))
                 });
                 let this_raw = lamb.iter()
-                    .rev()
                     .fold(this_raw, |acc, x| {
                         Raw::Lam(empty_span(x.clone()), Either::Icit(Icit::Expl), acc.into())
                     });
@@ -116,13 +99,10 @@ impl Infer {
                         let new_list_len = new_list.len();
                         if new_list.is_empty() {
                             if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
-                                let mut collect_next = collect.clone();
-                                collect_next.push(format!("{lamb_string}{t}"));
-                                if let Ok(ret) = self.search(&cxt, &target[1..], origin_cxt, origin_target, Rc::new(move |t| raw.clone()(t.prepend(this_raw.clone()))), depth, collect_next, avoid_recurse) {
+                                if let Ok(ret) = self.search(&cxt, &target[1..], origin_cxt, origin_target, Rc::new(move |t| raw.clone()(t.prepend(this_raw.clone()))), depth, avoid_recurse) {
                                     return Ok(ret)
                                 }
                             } else {
-                                //return Ok(format!("({lamb_string}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t));
                                 return Ok(format!("{}", raw(List::new().prepend(this_raw))))
                             }
                         } else if let Ok(ret) = self.search(&cxt, &[new_list, target[1..].to_vec()].concat(), origin_cxt, origin_target, Rc::new(move |z| raw.clone()({
@@ -130,21 +110,11 @@ impl Infer {
                             b.prepend({
                                 let ret = a.iter().fold(Raw::Var(empty_span(t.clone())), |acc, x| Raw::App(acc.into(), x.clone().into(), Either::Icit(Icit::Expl)));
                                 lamb.clone().iter()
-                                    .rev()
                                     .fold(ret, |acc, x| {
                                         Raw::Lam(empty_span(x.clone()), Either::Icit(Icit::Expl), acc.into())
                                     })
                             })
-                        })), depth - 1, vec![], avoid_recurse) {
-                            /*if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
-                                let mut collect_next = collect.clone();
-                                collect_next.push(format!("{lamb_string}{t}{ret}"));
-                                if let Ok(ret) =  self.search(&cxt, &target[1..], origin_target, unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
-                                    return Ok(ret)
-                                }
-                            } else {
-                                return Ok(format!("({lamb_string}{}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t, ret));
-                            }*/
+                        })), depth - 1, avoid_recurse) {
                             return Ok(ret)
                         }
                 }

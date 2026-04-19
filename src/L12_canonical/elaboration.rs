@@ -333,7 +333,6 @@ impl Infer {
                                 &oty,
                                 Rc::new(|x| x.head().unwrap().clone()),
                                 3,
-                                vec![],
                                 &name.data,
                             ).and_then(|x| if !infer.meta_contrains.is_empty() {
                                 infer.meta_contrains.clear();
