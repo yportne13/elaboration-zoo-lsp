@@ -104,10 +104,9 @@ impl Tm {
             Tm::AppPruning(t, _) => t.no_metas(infer),
             Tm::Pi(_, _, t, u) => t.no_metas(infer).or(u.no_metas(infer)),
             Tm::Let(_, a, t, u) => a.no_metas(infer).or(t.no_metas(infer)).or(u.no_metas(infer)),
-            Tm::Meta(m) => if let MetaEntry::Unsolved(ty) = infer.lookup_meta(*m) {
-                Some(ty)
-            } else {
-                None
+            Tm::Meta(m) => match infer.lookup_meta(*m) {
+                MetaEntry::Unsolved(ty) => Some(ty),
+                MetaEntry::Solved(t, _) => None,//TODO: this is error. this will be fixed in L12
             },
             Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer).or(ty.no_metas(infer))).next(),
             Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer)
@@ -1789,6 +1788,279 @@ def up_fin[x: Nat](n: Fin x): Fin (x + 1) = match n {
     case fsucc[x](t) => fsucc (up_fin t)
 }
     "#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test11() {
+    let input = r#"
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Eq[T](x: T, y: T) {
+    refl(a: T) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons(true, cons false nil)
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => add(y, mul n y)
+}
+
+def outParam[A](a: A): A = a
+
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+trait Mul[T, O: outParam(Type 0)] {
+    def *(that: T): O
+}
+
+def nat_mul_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => 0
+        case succ(n) => (nat_mul_helper x n) + x
+    }
+
+impl Mul[Nat, Nat] for Nat {
+    def *(that: Nat): Nat =
+        nat_mul_helper this that
+}
+
+def four = 2 + 2
+
+println four
+
+def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (x + 1) (y + 1) =
+    cong succ e
+
+def add_zero_left(a: Nat): Eq (0 + a) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_left t)
+    }
+
+def symm[A, x, y: A](e: Eq x y): Eq y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+def trans[A, x, y, z: A](e1: Eq x y, e2: Eq y z): Eq x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add_succ_left (n: Nat, m: Nat): Eq ((n + 1) + m) (n + m + 1) =
+    match m {
+        case zero => refl (succ n)
+        case succ(k) => cong_succ (add_succ_left n k)
+    }
+
+def add_comm (n: Nat, m: Nat): Eq (n + m) (m + n) =
+    match m {
+        case zero => symm (add_zero_left n)
+        case succ(k) => trans (cong_succ (add_comm n k)) (symm (add_succ_left k n))
+    }
+
+def add_assoc (n: Nat, m: Nat, k: Nat): Eq (n + m + k) (n + (m + k)) =
+    match k {
+        case zero => rfl
+        case succ(l) => cong_succ (add_assoc n m l)
+    }
+
+def add_zero_right(m: Nat): Eq (m + 0) m =
+    rfl
+
+def mul_zero_left(n: Nat): Eq (0 * n) zero =
+    match n {
+        case zero => rfl
+        case succ(k) => trans (refl ((0 * k) + 0)) (mul_zero_left k)
+    }
+
+def add_succ_zero_left(k: Nat): Eq (add 1 k) (succ k) =
+    cong_succ (add_zero_right k)
+
+def mul_one_right(n: Nat): Eq[Nat] (mul n 1) n =
+    match n {
+        case zero => rfl[Nat][zero]
+        case succ(k) =>
+            let ih = mul_one_right k;
+            let lemma: Eq[Nat] (add 1 k) (succ k) = cong_succ (add_zero_right k);
+            trans(cong(add 1, ih), lemma)
+    }
+
+struct Exists[A: Type 0, P: A -> Type 0] {
+    witness: A
+    proof: P witness
+}
+
+def exists_two: Exists[Nat][x => Eq x two] = Exists.mk[Nat][x => Eq x two] two rfl
+
+struct Point[T] {
+    x: T
+    y: T
+}
+
+def get_x[T](p: Point[T]): T = p.x
+
+def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
+    new Point((add p1.x p2.x), (add p1.y p2.y))
+
+def start_point = new Point(zero, four)
+
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+
+println (point_add start_point end_point)
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+enum HighLvl[A] {
+    case1(x: A)
+    case2(x: test1)
+}
+
+def test2: HighLvl[Nat] = case1 zero
+
+def test3: Type 2 = HighLvl[Nat]
+
+enum HighLvl2[A: Type 2] {
+    case2_1(x: A)
+    case2_2(x: Nat)
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(x: Nat)
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
+
+def Eq1[A](x: A, y: A): Type 1 = (P : A -> Type 0) -> P x -> P y
+
+def refl1[A, x: A]: Eq1[A] x x = _ => px => px
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def assign(a: Bits, b: Bits)(eq: Eq1[Nat] a.size b.size): String = string_concat a.name b.name
+
+def sigA = new Bits("A", four)
+
+def sigB = new Bits("B", four)
+
+def sigC = new Bits("C", two)
+
+def sigD = new Bits("D", two)
+
+def ab = assign sigA sigB refl1
+
+def cd = assign sigC sigD refl1
+
+def three = add two 1
+
+enum Expr {
+    create(name: String)
+}
+
+struct module {
+    name: String
+    expr: List[Expr]
+}
+
+def newBits(name: String, w: Nat): Bits =
+    let create_sig = change_mutable("module", x => module.mk(x.name, cons(create(name), x.expr)));
+    Bits.mk(name, w)
+
+macro_rules Expr {
+    (input $x:ident <- Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+}
+
+macro_rules module {
+    ($name: ident $args: params {$( $body: Expr )*}) => {def $name $args = let creat_module = create_global("module", module.mk(stringify $name, nil));$({$body})* get_global("module")};
+    ($name: ident $body: raw) => {def $name = string_concat(string_concat("module ", stringify $name), $body)};
+    ($name: ident) => {def $name = string_concat("module ", stringify $name)};
+}
+
+module test[w: Nat] {
+    input z <- Bits[w]
+    input t <- Bits[w]
+    let r = Bits[w]
+}
+
+println (test[2])
+"#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
         Err(e) => panic!("{}", e.0.data),

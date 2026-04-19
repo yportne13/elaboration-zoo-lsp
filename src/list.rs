@@ -121,6 +121,15 @@ impl<T: Clone> List<T> {
             self.tail().change_tail_helper(new_tail, head_len - 1).prepend(self.head().unwrap().clone())
         }
     }
+
+    pub fn split_at(self, n: usize) -> (List<T>, List<T>) {
+        if n == 0 {
+            (List::new(), self)
+        } else {
+            let (left, right) = self.tail().split_at(n - 1);
+            (left.prepend(self.head.unwrap().elem.clone()), right)
+        }
+    }
 }
 
 pub struct Iter<'a, T> {

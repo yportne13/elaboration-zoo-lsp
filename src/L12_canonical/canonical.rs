@@ -9,45 +9,27 @@ impl Infer {
     pub fn search(
         &mut self,
         cxt: &Cxt,
-        target: Vec<(MetaVar, Rc<Val>, Spine)>,
-        unify_list: Vec<(Rc<Val>, Rc<Val>)>,
+        target: &[(MetaVar, Rc<Val>)],
+        origin_cxt: &Cxt,
+        origin_target: &Rc<Val>,
+        raw: Rc<dyn Fn(List<Raw>) -> Raw>,
         depth: u32,
         collect: Vec<String>,
         avoid_recurse: &str,//TODO: this is incorrect
-        meta_offset: usize,
     ) -> Result<String, UnifyError> {
-        self.meta_contrains.clear();
-        //println!("Searching... {} {depth}", target.len());
-        let meta_bak: Vec<_> = self.meta.iter().skip(meta_offset).cloned().collect();
-        let meta_len_bak = self.meta.len();
         let mut typ = self.force(&cxt.decl, &target[0].1);
         let mut cxt = cxt.clone();
-        let mut sp: Vec<_> = target[0].2.iter().collect();
-        let mut spine = target[0].2.clone();
         let mut lamb = vec![];
         while let Val::Pi(span, icit, dom, clos) = typ.as_ref() {
-            //let lvl = cxt.lvl;
-            //cxt = cxt.bind(span.clone(), self.quote(&cxt.decl, cxt.lvl, dom), dom.clone());
-            //typ = self.closure_apply(&cxt.decl, clos, Val::vvar(lvl).into());
-            if let Some(x) = sp.last() {
-                typ = self.closure_apply(&cxt.decl, clos, x.0.clone());
-                sp.pop();
-            } else {
-                let lvl = cxt.lvl;
+            let lvl = cxt.lvl;
+            if *icit == Icit::Expl {
                 lamb.push(span.data.clone());
-                cxt = cxt.bind(span.clone(), self.quote(&cxt.decl, cxt.lvl, dom), dom.clone());
-                spine = spine.prepend((Val::vvar(lvl).into(), *icit));
-                typ = self.closure_apply(&cxt.decl, clos, Val::vvar(lvl).into());
             }
+            cxt = cxt.bind(span.clone(), self.quote(&cxt.decl, cxt.lvl, dom), dom.clone());
+            typ = self.closure_apply(&cxt.decl, clos, Val::vvar(lvl).into());
         }
 
         if depth == 0 {
-            if self.meta.len() > meta_len_bak {
-                self.meta.truncate(meta_len_bak);
-            }
-            for (i, entry) in meta_bak.clone().into_iter().enumerate() {
-                self.meta[meta_offset + i] = entry;
-            }
             //println!("search failed 0");
             return Err(UnifyError::Basic);
         } else {
@@ -56,11 +38,11 @@ impl Infer {
                 .map(|t| {
                     let (l, (_, v)) = &cxt.src_names.get(t).unwrap();
                     let vtm = cxt.env.iter().nth((cxt.lvl - l.0 - 1).0 as usize).unwrap().clone();
-                    (t, v, vtm)
+                    (t.clone(), v, vtm)
                 })
                 .chain(
                     cxt.decl.iter()
-                        .map(|t| (t.0, &t.1.4, t.1.2.clone()))
+                        .map(|t| (t.0.clone(), &t.1.4, t.1.2.clone()))
                 )
                 .filter(|(t, _, _)| ![
                     "create_global",
@@ -75,22 +57,22 @@ impl Infer {
                 .map(|x| format!("{x} => "))
                 .reduce(|a, b| a + &b)
                 .unwrap_or(String::new());
-            if matches!(self.meta[target[0].0.0 as usize], MetaEntry::Solved(_, _)) {
-                if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
+            /*if matches!(self.meta[target[0].0.0 as usize], MetaEntry::Solved(_, _)) {
+                if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
                     let mut collect_next = collect.clone();
                     collect_next.push(format!("{lamb_string}_"));
-                    if let Ok(ret) = self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
+                    if let Ok(ret) = self.search(&cxt, &target[1..], origin_target, unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
                         return Ok(ret)
                     }
                 } else {
                     return Ok(format!("({lamb_string}{}_)", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new())));
                 }
-            }
+            }*/
             for (t, v, mut vtm) in iterator {
                 let mut vt = v.clone();
                 let mut new_list = vec![];
                 //println!("{t}\n{:?}\n{:?}\n{:?}\n------------", vt, vtm, typ);
-                //println!("1. {t} target: {}, depth: {depth}", target.len());
+                //println!("1. {t} target: {}, depth: {depth}, {:?}", target.len(), target[0].0);
                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
                     let icit = *icit;
                     let meta_var = self.meta.len();
@@ -100,51 +82,27 @@ impl Infer {
                         Val::Flex(m, sp) => (*m, sp.clone()),
                         _ => (MetaVar(meta_var as u32), List::new()),
                     };
-                    let closed = self.eval(
-                        &cxt.decl,
-                        &List::new(),
-                        &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, dom)),
-                    );
                     if icit == Icit::Expl {
-                        new_list.push((meta_var, closed, spine));
+                        new_list.push((meta_var, dom.clone()));
                     }
                     vt = self.closure_apply(&cxt.decl, clos, meta.clone());
                     vtm = self.v_app(&cxt.decl, &vtm, meta, icit);
                     //println!("{t}\n{:?}\n{:?}\n{:?}\n------------", vt, vtm, typ);
                 }
-                //self.meta[target[0].0.0 as usize] = MetaEntry::Solved(vtm, target[0].1.clone());
-                //println!("spine: {:?}", target[0].2);
-                self.meta[target[0].0.0 as usize] = MetaEntry::Solved(
-                    self.eval(
-                        &cxt.decl,
-                        &List::new(),
-                        &self.lams(Lvl(spine.len() as u32), &cxt.decl, &target[0].1, self.quote(&cxt.decl, cxt.lvl, &vtm)),
-                    ),
-                    target[0].1.clone(),
-                );
-                /*self.meta[target[0].0.0 as usize] = MetaEntry::Unsolved(target[0].1.clone(), cxt.clone());
-                if target.len() == 1 && depth == 2 {}
-                else {self.solve(cxt.lvl, &cxt.decl, target[0].0, spine.clone(), &vtm);}
-                println!(
-                    "target: {:?}, {}",
-                    target[0].0,
-                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &vtm)),
-                );*/
-                /*println!(
-                    "vt: {}   <>   {}",
-                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &vt)),
-                    super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &typ)),
-                );
-                for (a, b) in unify_list.iter() {
-                    println!(
-                        "unify: {}   <>   {}",
-                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &a)),
-                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &b)),
-                    );
-                }*/
-                //println!("unify: {:?}", unify_list);
+                let this_raw = (0..new_list.len()).fold(Raw::Var(empty_span(t.clone())), |acc, _| {
+                    Raw::App(acc.into(), Raw::Hole(empty_span(())).into(), Either::Icit(Icit::Expl))
+                });
+                let this_raw = lamb.iter()
+                    .rev()
+                    .fold(this_raw, |acc, x| {
+                        Raw::Lam(empty_span(x.clone()), Either::Icit(Icit::Expl), acc.into())
+                    });
+                let raw_list = (0..(target.len() - 1)).fold(List::new(), |acc, _| {
+                    acc.prepend(Raw::Hole(empty_span(())))
+                }).prepend(this_raw.clone());
+                let lamb = lamb.clone();
                 if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 100), Ok(_) | Err(UnifyError::Stuck))
-                    && unify_list.iter().all(|(a, b)| matches!(self.unify(cxt.lvl, &cxt, a, b, 100), Ok(_) | Err(UnifyError::Stuck))) {
+                    && self.check::<true>(origin_cxt, raw.clone()(raw_list), origin_target).is_ok() {
                         /*println!(
                             "#### {:?}\n{}\n== {:?}",
                             super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &vt)),
@@ -154,48 +112,43 @@ impl Infer {
                                 .join("\n"),
                             super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &typ)),
                         );*/
-                        let mut unify_list_d = unify_list.clone();
-                        unify_list_d.push((vt, typ.clone()));
-                        
+                        let raw = raw.clone();
+                        let new_list_len = new_list.len();
                         if new_list.is_empty() {
-                            if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
+                            if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
                                 let mut collect_next = collect.clone();
                                 collect_next.push(format!("{lamb_string}{t}"));
-                                if let Ok(ret) = self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
+                                if let Ok(ret) = self.search(&cxt, &target[1..], origin_cxt, origin_target, Rc::new(move |t| raw.clone()(t.prepend(this_raw.clone()))), depth, collect_next, avoid_recurse) {
                                     return Ok(ret)
                                 }
                             } else {
-                                return Ok(format!("({lamb_string}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t));
+                                //return Ok(format!("({lamb_string}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t));
+                                return Ok(format!("{}", raw(List::new().prepend(this_raw))))
                             }
-                        } else if let Ok(ret) = self.search(&cxt, new_list, unify_list_d, depth - 1, vec![], avoid_recurse, meta_offset) {
-                            if !target.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]).is_empty() {
+                        } else if let Ok(ret) = self.search(&cxt, &[new_list, target[1..].to_vec()].concat(), origin_cxt, origin_target, Rc::new(move |z| raw.clone()({
+                            let (a, b) = z.split_at(new_list_len);
+                            b.prepend({
+                                let ret = a.iter().fold(Raw::Var(empty_span(t.clone())), |acc, x| Raw::App(acc.into(), x.clone().into(), Either::Icit(Icit::Expl)));
+                                lamb.clone().iter()
+                                    .rev()
+                                    .fold(ret, |acc, x| {
+                                        Raw::Lam(empty_span(x.clone()), Either::Icit(Icit::Expl), acc.into())
+                                    })
+                            })
+                        })), depth - 1, vec![], avoid_recurse) {
+                            /*if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
                                 let mut collect_next = collect.clone();
                                 collect_next.push(format!("{lamb_string}{t}{ret}"));
-                                if let Ok(ret) =  self.search(&cxt, target[1..].to_vec(), unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
+                                if let Ok(ret) =  self.search(&cxt, &target[1..], origin_target, unify_list.clone(), depth, collect_next, avoid_recurse, meta_offset) {
                                     return Ok(ret)
                                 }
                             } else {
                                 return Ok(format!("({lamb_string}{}{}{})", collect.into_iter().map(|x| x + ", ").reduce(|a, b| a + &b).unwrap_or(String::new()), t, ret));
-                            }
+                            }*/
+                            return Ok(ret)
                         }
                 }
-                //self.meta[target[0].0.0 as usize] = MetaEntry::Unsolved(target[0].1.clone(), cxt.clone());
-                if self.meta.len() > meta_len_bak {
-                    self.meta.truncate(meta_len_bak);
-                }
-                for (i, entry) in meta_bak.clone().into_iter().enumerate() {
-                    self.meta[meta_offset + i] = entry;
-                }
             }
-        }
-
-
-        // 所有候选都失败
-        if self.meta.len() > meta_len_bak {
-            self.meta.truncate(meta_len_bak);
-        }
-        for (i, entry) in meta_bak.clone().into_iter().enumerate() {
-            self.meta[meta_offset + i] = entry;
         }
         //println!("search failed");
         Err(UnifyError::Basic)

@@ -28,7 +28,7 @@ pub struct MetaVar(u32);
 #[derive(Debug, Clone)]
 enum MetaEntry {
     Solved(Rc<Val>, Rc<VTy>),
-    Unsolved(Rc<VTy>, Cxt),
+    Unsolved(Rc<VTy>, Cxt, Rc<VTy>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -96,20 +96,20 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt, Pruning)> {
+    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt, Rc<Val>, Pruning)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
-            Tm::Lam(_, _, t) => t.no_metas(infer, decl, l),
+            Tm::Lam(_, _, t) => t.no_metas(infer, decl, l + 1),
             Tm::App(t, u, _) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
             Tm::AppPruning(t, s) => {
                 t.no_metas(infer, decl, l)
-                    .map(|(a, b, c, _)| (a, b, c, s.clone()))
+                    .map(|(a, b, c, d, _)| (a, b, c, d, s.clone()))
             },
-            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
+            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or(t.no_metas(infer, decl, l)).or(u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(ty, cxt) => Some((*m, ty.clone(), cxt.clone(), List::new())),
+                MetaEntry::Unsolved(ty, cxt, oty) => Some((*m, ty.clone(), cxt.clone(), oty.clone(), List::new())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -321,15 +321,15 @@ impl Infer {
             completion_table: vec![],
         }
     }
-    fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt) -> u32 {
-        self.meta.push(MetaEntry::Unsolved(a, cxt));
+    fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
+        self.meta.push(MetaEntry::Unsolved(a, cxt, origin_typ));
         self.meta.len() as u32 - 1
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {
         if let Ok(Some((a, _))) = self.solve_trait(cxt, &a) {
             a
         } else if let Val::Sum(_, _, _, true) = a.as_ref() {
-            let m = self.new_meta(a, cxt.clone());
+            let m = self.new_meta(a.clone(), cxt.clone(), a);
             Tm::Meta(MetaVar(m)).into()
         } else {
             //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
@@ -340,7 +340,7 @@ impl Infer {
                 &List::new(),
                 &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a)),
             );
-            let m = self.new_meta(closed, cxt.clone());
+            let m = self.new_meta(closed, cxt.clone(), a);
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
         }
     }
@@ -352,7 +352,7 @@ impl Infer {
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
                 MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp)),
-                MetaEntry::Unsolved(_, _) => Val::Flex(*m, sp.clone()).into(),
+                MetaEntry::Unsolved(_, _, _) => Val::Flex(*m, sp.clone()).into(),
             },
             Val::Obj(x, a, b) => {
                 Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
@@ -363,7 +363,7 @@ impl Infer {
     fn v_meta(&self, m: MetaVar) -> Rc<Val> {
         match self.lookup_meta(m) {
             MetaEntry::Solved(v, _) => v.clone(),
-            MetaEntry::Unsolved(_, _) => Val::vmeta(m).into(),
+            MetaEntry::Unsolved(_, _, _) => Val::vmeta(m).into(),
         }
     }
 
@@ -704,7 +704,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         include_str!("../prelude/nat.typort"),
         include_str!("../prelude/bool.typort"),
         include_str!("../prelude/option.typort"),
-        //include_str!("../prelude/vec.typort"),
+        include_str!("../prelude/vec.typort"),
     ];
     let ast = parser::parser(&preprocess(input), prelude.len() as u32).unwrap();
     let mut cxt = Cxt::new();
@@ -1989,7 +1989,7 @@ def t: Nat = _
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
-        Err(e) => panic!("{}", e.0.data),
+        Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
     }
 }
 
@@ -2125,18 +2125,37 @@ def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (add x 1) (add y 1) = _
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
-        Err(e) => panic!("{}", e.0.data),
+        Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
     }
 }
 
 #[test]
 fn test14() {
     let input = r#"
-def add_zero_left1(a: Nat): Eq (0 + a) a =
-    match a {
-        case zero => refl zero
-        case succ(tt) => _
-    }
+def Eq1[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl1[A, x: A]: Eq1[A] x x = _ => px => px
+
+def t(x: Nat): Type 1 = match x {
+    case succ(t) =>
+let the : (A : Type 1) -> A -> A = _ => x => x;
+
+
+let m : (A : Type 0) -> (B : Type 0) -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => the (Eq1 (m a a) (x => y => y)) refl1;
+
+let m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _;
+let test = a => b => c => the (Eq1 (m a b c) (m c b a)) refl1;
+
+let pr1 = f => x => f x;
+let pr2 = f => x => y => f x y;
+let pr3 = f => f (Type 0);
+
+Type 0
+    case zero =>
+
+Type 0
+}
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
@@ -2176,50 +2195,573 @@ test"#;
 #[test]
 fn test16() {
     let input = r#"
-enum Nat {
-    zero
-    succ(n: Nat)
+// Cast using a proof of type equality.
+// If T and U are provably equal (via Eq T U), then a value of type T can be used as type U.
+def cast[T, U](h: Eq T U, a: T): U = match h {
+    case refl(x) => a
 }
 
-def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+trait Not {
+    def not: Self
+}
 
-def refl[A, x: A]: Eq[A] x x = _ => px => px
+impl Not for Boolean {
+    def not: Boolean = match this {
+        case true => false
+        case false => true
+    }
+}
 
-def t(x: Nat): Type 1 = match x {
-    case succ(tt) =>
-let the : (A : Type 1) -> A -> A = _ => x => x;
+// Fin(len) is the type of natural numbers less than len.
+// It is a dependent type: valid values depend on the type-level argument len.
+// - fzero[n] : Fin (succ n)  represents 0 in [0, n+1)
+// - fsucc[n](i) : Fin (succ n) represents i+1, given i : Fin n
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+
+// Convert Fin(t) to Nat, discarding the bound information.
+def fin_to_nat[t: Nat](a: Fin t): Nat = match a {
+    case fzero => 0
+    case fsucc(z) => succ(fin_to_nat z)
+}
+
+impl[x: Nat] Fin(x) {
+    def to_nat: Nat = fin_to_nat this
+}
+
+// Existential quantification: exists (a : A), P(a)
+// - witness: a value of type A
+// - proof: evidence that P(witness) holds
+struct Exists[A: Type 0, P: A -> Type 0] {
+    witness: A
+    proof: P witness
+}
+
+// Example: There exists a natural number equal to 2.
+// Witness is 2, proof is refl(2) showing 2 = 2.
+def exists_two = Exists.mk[Nat][x => Eq x 2] (2, refl 2)
+
+def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
+    case fzero => x
+    case fsucc(yy) => match x {
+        case succ(t) => sub t yy
+        case zero => match yy {}
+    }
+}
+
+def mk_last(n: Nat): Fin (n + 1) = match n {
+    case zero => fzero
+    case succ(t) => fsucc (mk_last t)
+}
+
+def up_fin[x: Nat](n: Fin x): Fin (x + 1) = match n {
+    case fzero[x] => fzero[x+1]
+    case fsucc[x](t) => fsucc (up_fin t)
+}
+
+def sub_fin(x: Nat, y: Fin (x + 1)): Fin (x + 1) = match y {
+    case fzero => mk_last x
+    case fsucc(yy) => match x {
+        case succ(t) => up_fin (sub_fin t yy)
+        case zero => match yy {}
+    }
+}
+
+// Le(n, m) is a proof that n <= m.
+// - le_refl: n <= n
+// - le_step: if n <= m, then n <= succ(m)
+enum Le(n: Nat, m: Nat) {
+    le_refl[n: Nat] -> Le n n
+    le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
+}
+
+def lift_fin[x: Nat, target: Nat](n: Fin x, prove: Le x target): Fin target = match prove {
+        case le_refl[z] => n
+        case le_step(h) => up_fin (lift_fin n h)
+    }
+
+impl Nat {
+    def <=(that: Nat): Type 0 = Le this that
+}
+
+def le_succ_inv[n: Nat, m: Nat](h: (n + 1) <= m): n <= m =
+  match h {
+    case le_refl => le_step(le_refl[n])
+    case le_step(h1) => le_step(le_succ_inv h1)
+  }
+
+def trans_le[x: Nat, y: Nat, z: Nat](le1: x <= y, le2: y <= z): x <= z =
+    match le1 {
+        case le_refl[n] => le2
+        case le_step(h) => trans_le(h, le_succ_inv(le2))
+    }
+
+def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
+    case nil => match x {
+        case fzero => nil
+        case fsucc(t) => match t {}
+    }
+    case cons(a, tail) => match x {
+        case fzero => cons a tail
+        case fsucc(t) => drop_vec tail t
+    }
+}
+
+impl[T, len: Nat] Vec[T](len) {
+    def drop(x: Fin (len + 1)): Vec[T](sub len x) = drop_vec this x
+}
+
+enum Product[A, B] {
+    product(a: A, b: B)
+}
+
+struct Tuple2[A, B] {
+    x_1: A
+    x_2: B
+}
+
+struct Tuple3[A, B, C] {
+    x_1: A
+    x_2: B
+    x_3: C
+}
+
+def half_adder(lhs: Boolean, rhs: Boolean): Tuple2[Boolean, Boolean] =
+    Tuple2.mk (lhs & rhs) (lhs ^ rhs)
+
+def full_adder(lhs: Boolean, rhs: Boolean, carrier: Boolean): Tuple2[Boolean, Boolean] =
+    let s1 = lhs ^ rhs;
+    Tuple2.mk ((s1 & carrier) | (lhs & rhs)) (s1 ^ carrier)
+
+struct Bits[width: Nat] {
+    payload: Vec[Boolean] width
+}
+
+def sub_self_is_zero(width: Nat): Eq (sub (width, mk_last width)) 0 = match width {
+    case zero => refl zero
+    case succ(t) => sub_self_is_zero t
+}
+
+def up_fin_lemma(x: Nat, y: Fin (x + 1)): Eq (sub (succ x) (up_fin y)) (succ (sub x y)) =
+  match y {
+    case fzero => 
+      refl (succ (sub x fzero))
+    case fsucc(z) => 
+      match x {
+        case succ(t) =>
+          let ind = up_fin_lemma t z;
+          ind
+        case zero =>
+          match z {}
+      }
+  }
+
+def resize_drop_prove(width: Nat, w: Fin (width + 1)): Eq (sub(width, sub_fin width w)) (fin_to_nat w) = match w {
+    case fzero => sub_self_is_zero width
+    case fsucc(ww) => match width {
+        case succ(t) => let ind = resize_drop_prove t ww;
+            let lem = up_fin_lemma(t, sub_fin t ww);
+            let ind_succ = cong succ ind;
+            trans lem ind_succ
+        case zero => match ww {}
+    }
+}
+
+def resize[width: Nat, w: Fin (width + 1)](bits: Bits[width]): Bits[fin_to_nat w] =
+    cast (cong (x => Bits[x]) (resize_drop_prove width w)) (Bits.mk (drop_vec(bits.payload, sub_fin width w)))
+
+def lift_le[a: Nat][b: Nat](x: a <= b): (a + 1) <= (b + 1) = match x {
+    case le_refl[n] => le_refl[n + 1]
+    case le_step[n][m](h) => le_step (lift_le h)
+}
 
 
-let m : (A : Type 0) -> (B : Type 0) -> Type 0 -> Type 0 -> Type 0 = _;
-let test = a => b => the (Eq (m a a) (x => y => y)) refl;
 
-let m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _;
-let test = a => b => c => the (Eq (m a b c) (m c b a)) refl;
 
-let pr1 = f => x => f x;
-let pr2 = f => x => y => f x y;
-let pr3 = f => f (Type 0);
-
-Type 0
+// Auxiliary: convert a proof that n <= width into a Fin(width+1) with value n
+def nat_to_fin[width: Nat](n: Nat, proof: n <= width): Fin (width + 1) =
+  match width {
     case zero =>
-let the : (A : Type 1) -> A -> A = _ => x => x;
+      // width = 0, so n must be 0
+      match proof { case le_refl => fzero }
+    case succ(m) =>
+      match proof {
+        case le_refl => mk_last (succ m)          // n = succ m
+        case le_step(h) => up_fin (nat_to_fin[m] n h)  // n <= m
+      }
+  }
 
+// Lemma: fin_to_nat (mk_last n) = n
+def fin_to_nat_mk_last(n: Nat): Eq (fin_to_nat (mk_last n)) n =
+  match n {
+    case zero    => refl zero
+    case succ(t) => cong(succ, fin_to_nat_mk_last t)
+  }
 
-let m : (A : Type 0) -> (B : Type 0) -> Type 0 -> Type 0 -> Type 0 = _;
-let test = a => b => the (Eq (m a a) (x => y => y)) refl;
+// Lemma: fin_to_nat (up_fin x) = fin_to_nat x
+def fin_to_nat_up_fin[k: Nat](x: Fin k): Eq (fin_to_nat (up_fin x)) (fin_to_nat x) =
+  match x {
+    case fzero    => refl 0
+    case fsucc(y) => cong(succ, fin_to_nat_up_fin y)
+  }
 
-let m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _;
-let test = a => b => c => the (Eq (m a b c) (m c b a)) refl;
+// Main lemma: fin_to_nat (nat_to_fin n proof) = n
+def fin_to_nat_nat_to_fin_eq[width: Nat](n: Nat, proof: n <= width): Eq (fin_to_nat (nat_to_fin[width] n proof)) n =
+  match width {
+    case zero =>
+      match proof { case le_refl[n] => refl n }
+    case succ(m) =>
+      match proof {
+        case le_refl[n] => fin_to_nat_mk_last (n)
+        case le_step(h) =>
+          let ind = fin_to_nat_nat_to_fin_eq[m] n h;
+          let up = fin_to_nat_up_fin (nat_to_fin[m] n h);
+          trans up ind
+      }
+  }
 
-let pr1 = f => x => f x;
-let pr2 = f => x => y => f x y;
-let pr3 = f => f (Type 0);
+def resize_prove[width: Nat](bits: Bits[width], target: Nat, prove: target <= width): Bits[target] = 
+  let w = nat_to_fin[width] target prove;
+  let resized = resize[width, w](bits);
+  let eq = fin_to_nat_nat_to_fin_eq[width] target prove;
+  cast (cong(x => Bits[x], eq)) resized
 
-Type 0
+impl[width: Nat] Bits[width] {
+    def resize[w: Fin (width + 1)]: Bits[fin_to_nat w] = cast (cong(x => Bits[x], resize_drop_prove width w)) (Bits.mk (drop_vec(this.payload, sub_fin width w)))
 }
+
+trait Concat[T, O: outParam(Type 0)] {
+    def :+:(that: T): O
+}
+
+impl[width: Nat] Concat[Bits[width], Bits[width + 1]] for Boolean {
+    def :+:(that: Bits[width]): Bits[width + 1] = Bits.mk (this :: that.payload)
+}
+
+def bits_adder_carrier[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] len, carrier: Boolean): Vec[Boolean] (len + 1) =
+    match lhs {
+        case nil => carrier :: nil
+        case cons(n, taill) => match rhs {
+            case cons(m, tailr) => match bits_adder_carrier taill tailr carrier {
+                case cons(c, tail) => let t = full_adder n m c;
+                    t.x_1 :: t.x_2 :: tail
+            }
+        }
+    }
+
+impl[len: Nat] Add[Bits[len], Bits[len + 1]] for Bits[len] {
+    def +(that: Vec[Boolean] len): Vec[Boolean] (len + 1) =
+        Bits.mk (bits_adder_carrier this.payload that.payload false)
+}
+
+def bits_adder[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] len): Vec[Boolean] (len + 1) =
+    bits_adder_carrier lhs rhs false
+
+println bits_adder (true :: nil) (false :: nil)
+
+def full_adder_comm(lhs: Boolean, rhs: Boolean, carrier: Boolean): Eq (full_adder lhs rhs carrier) (full_adder rhs lhs carrier) =
+    match lhs {
+        case false => match rhs {
+            case false => refl (Tuple2.mk false carrier)
+            case true => match carrier {
+                case false => refl (Tuple2.mk false true)
+                case true => refl (Tuple2.mk true false)
+            }
+        }
+        case true => match rhs {
+            case false => match carrier {
+                case false => refl (Tuple2.mk false true)
+                case true => refl (Tuple2.mk true false)
+            }
+            case true => match carrier {
+                case false => refl (Tuple2.mk true false)
+                case true => refl (Tuple2.mk true true)
+            }
+        }
+    }
+
+def adder_type[len: Nat](x: Vec[Boolean] (succ len), n: Boolean, m: Boolean): Vec[Boolean] (succ (succ len)) = match x {
+    case cons(c, tail) => let t = full_adder n m c;
+        t.x_1 :: t.x_2 :: tail
+}
+
+def carry_step[len: Nat](tail: Vec[Boolean] len, p: Tuple2[Boolean, Boolean]): Vec[Boolean] (succ (succ len)) =
+    p.x_1 :: p.x_2 :: tail
+
+def cong_carry_step[len: Nat, tail: Vec[Boolean] len, p: Tuple2[Boolean, Boolean], q: Tuple2[Boolean, Boolean]](e: Eq p q): Eq (carry_step tail p) (carry_step tail q) =
+    match e {
+        case refl(a) => refl (carry_step tail a)
+    }
+
+def step1[len: Nat, x: Vec[Boolean] (succ len), y: Vec[Boolean] (succ len)](e0: Eq x y, n: Boolean, m: Boolean): Eq (adder_type[len] x n m) (adder_type[len] y m n) =
+    match e0 {
+        case refl(cons(c, tail)) =>
+            let p = full_adder_comm n m c;
+            cong_carry_step[tail=tail] p
+    }
+
+def bits_adder_carrier_comm[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] len, c: Boolean): Eq (bits_adder_carrier lhs rhs c) (bits_adder_carrier rhs lhs c) =
+    match lhs {
+        case nil => match rhs {
+            case nil => refl (cons c nil)
+        }
+        case cons(n, taill) => match rhs {
+            case cons(m, tailr) =>
+                let e0 = bits_adder_carrier_comm taill tailr c;
+                step1 e0 n m
+        }
+    }
+
+def bits_adder_comm[len: Nat](lhs: Bits[len], rhs: Bits[len]): Eq (lhs + rhs) (rhs + lhs) =
+    cong(Bits.mk[len + 1], bits_adder_carrier_comm lhs.payload rhs.payload false)
+
+def zip[T, U, len: Nat](vec1: Vec[T] len, vec2: Vec[U] len): Vec[Tuple2[T, U]] len = match vec1 {
+    case nil => match vec2 {
+        case nil => nil
+    }
+    case cons(a, tail1) => match vec2 {
+        case cons(b, tail2) => (Tuple2.mk a b) :: (zip tail1 tail2)
+    }
+}
+
+def zip3[T, U, V, len: Nat](vec1: Vec[T] len, vec2: Vec[U] len, vec3: Vec[V] len): Vec[Tuple3[T, U, V]] len = match vec1 {
+    case nil => match vec2 {
+        case nil => match vec3 {
+            case nil => nil
+        }
+    }
+    case cons(a, tail1) => match vec2 {
+        case cons(b, tail2) => match vec3 {
+            case cons(c, tail3) => (Tuple3.mk a b c) :: (zip3 tail1 tail2 tail3)
+        }
+    }
+}
+
+def fold[T, len: Nat](vec: Vec[T] len, base: T, f: T -> T -> T): T =
+    match vec {
+        case nil => base
+        case cons(x, tail) => fold (tail, f x base) f
+    }
+
+def reduce[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T =
+    match vec {
+        case cons(x, tail) => fold tail x f
+    }
+
+def map[T, U, len: Nat](vec: Vec[T] len, f: T -> U): Vec[U] len = match vec {
+    case nil => nil
+    case cons(a, tail) => (f a) :: (map tail f)
+}
+
+def tail_append[T, len: Nat](vec: Vec[T] len, item: T): Vec[T] (len + 1) = match vec {
+    case nil => item :: nil
+    case cons(a, tail) => a :: (tail_append tail item)
+}
+
+def div2(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 0
+    case succ(succ(t)) => (div2 t) + 1
+}
+
+def div2Up(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 1
+    case succ(succ(t)) => (div2Up t) + 1
+}
+
+def pred_div2Up_succ(len: Nat): Nat =
+    match len {
+        case zero => 0
+        case succ(t) => div2Up t
+    }
+
+def log2Up(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 0
+    case succ(succ(tail)) => (log2Up (div2Up (tail + 2))) + 1
+}
+
+def adder_tree_step[width: Nat, len: Nat](x: Vec[Bits[width]] len): Vec[Bits[width + 1]] (div2Up len) = match x {
+    case cons(a, cons(b, tail)) => (a + b) :: (adder_tree_step tail)
+    case cons(a, nil) => (false :+: a) :: nil
+    case nil => nil
+}
+
+def cast_prove[width: Nat, len: Nat]: Eq (Bits[(width + 1) + (log2Up len)]) (Bits[(width + (log2Up len)) + 1]) =
+    cong(t => Bits[t]) (add_succ_left(width, log2Up len))
+
+def adder_tree[width: Nat, len: Nat](x: Vec[Bits[width]](len + 1)): Bits[width + (log2Up(len + 1))] =
+    match x {
+        case cons(a, nil) => a
+        case cons(a, cons(b, tail)) => cast(cast_prove, adder_tree[width=width+1] (adder_tree_step x))
+    }
+
+
+
+
+
+
+
+
+
+
+def unzip2[T, U, len: Nat](v: Vec[Tuple2[T, U]] len): Tuple2[Vec[T] len, Vec[U] len] =
+    match v {
+        case nil => Tuple2.mk nil nil
+        case cons(p, tail) =>
+            let r = unzip2 tail;
+            Tuple2.mk (p.x_1 :: r.x_1) (p.x_2 :: r.x_2)
+    }
+
+def csa3[width: Nat](a: Bits[width], b: Bits[width], c: Bits[width]): Tuple2[Bits[width], Bits[width + 1]] =
+    let triples = zip3 a.payload b.payload c.payload;
+    let pairEach = map(triples, t => full_adder t.x_1 t.x_2 t.x_3);
+    let parts = unzip2 pairEach;
+    let carry_vec = parts.x_1;
+    let sum_vec = parts.x_2;
+    Tuple2.mk (Bits.mk sum_vec) (Bits.mk (false :: carry_vec))
+
+def compress32_len(x: Nat): Nat =
+    match x {
+        case zero => 0
+        case succ(zero) => 1
+        case succ(succ(zero)) => 2
+        case succ(succ(succ(t))) => (compress32_len t) + 2
+    }
+
+def wallace_stage[width: Nat, len: Nat](x: Vec[Bits[width]] len): Vec[Bits[width + 1]] (compress32_len len) =
+    match x {
+        case cons(a, cons(b, cons(c, tail))) =>
+            let t = csa3 a b c;
+            t.x_2 :: (false :+: t.x_1) :: (wallace_stage tail)
+        case cons(a, cons(b, nil)) =>
+            (false :+: a) :: (false :+: b) :: nil
+        case cons(a, nil) =>
+            (false :+: a) :: nil
+        case nil =>
+            nil
+    }
+
+def add_left[a: Nat][b: Nat](c: Nat, p: a <= b): (c + a) <= (c + b) = match p {
+    case le_refl[n] => le_refl
+    case le_step(h) => le_step (add_left c h)
+}
+
+
+
+
+
+
+
+
+
+
+
+def zero_le(n: Nat): 0 <= n = match n {
+  case zero => le_refl[0]
+  case succ(m) => le_step(zero_le(m))
+}
+
+def add_right[a: Nat][b: Nat](c: Nat, p: a <= b): (a + c) <= (b + c) = match c {
+  case zero => p
+  case succ(n) => lift_le(add_right n p)
+}
+
+def div2Up_succ_ge(m: Nat): (div2Up m) <= (div2Up (succ m)) = match m {
+  case zero => le_step(le_refl[0])          // 0 <= 1
+  case succ(zero) => le_refl[1]              // 1 <= 1
+  case succ(succ(n)) =>
+    // m = n+2
+    let ih = div2Up_succ_ge(n);               // Le (div2Up n) (div2Up (succ n))
+    lift_le(ih)                               // Le (div2Up n + 1) (div2Up (succ n) + 1)
+}
+
+def div2Up_mono(a: Nat, b: Nat, p: a <= b): (div2Up a) <= (div2Up b) = match p {
+  case le_refl[n] => le_refl[div2Up n]
+  case le_step[n,m](h) => trans_le (div2Up_mono a m h) (div2Up_succ_ge m)
+}
+
+def div2Up_add3_le_add2(k: Nat): (div2Up (k + 6)) <= ((div2Up (k + 3)) + 2) = match k {
+  case zero => le_step(le_refl[3])             // 3 <= 4
+  case succ(zero) => le_refl[4]                 // 4 <= 4
+  case succ(succ(k0)) =>
+    // k = k0+2
+    let ih = div2Up_add3_le_add2(k0);            // Le (div2Up (k0+6)) (div2Up (k0+3) + 2)
+    lift_le(ih)                                  // Le (div2Up (k0+6)+1) (div2Up (k0+3)+3)
+}
+
+def div2Up_le_compress_plus2(n: Nat): (div2Up (n + 3)) <= ((compress32_len n) + 2) = match n {
+  case zero => le_refl[2]
+  case succ(zero) => le_step(le_refl[2])
+  case succ(succ(zero)) => le_step(le_refl[3])
+  case succ(succ(succ(zero))) => le_step(le_refl[3])
+  case succ(succ(succ(n0))) =>
+    // Induction hypothesis for n0
+    let ih = div2Up_le_compress_plus2(n0);      // : Le (div2Up (n0+3)) (compress32_len n0 + 2)
+    // Lemma: div2Up (n0+6) <= div2Up (n0+3) + 2
+    let step = div2Up_add3_le_add2(n0);         // : Le (div2Up (n0+6)) (div2Up (n0+3) + 2)
+    // Add 2 to both sides of the induction hypothesis
+    let step2 = add_right 2 ih;               // : Le (div2Up (n0+3) + 2) (compress32_len n0 + 4)
+    // Transitivity gives the desired inequality
+    trans_le step step2
+}
+
+def log2Up_mono(a: Nat, b: Nat, p: Le a b): (log2Up a) <= (log2Up b) = match p {
+  case le_refl[n] => le_refl[log2Up n]
+  case le_step[n,m](h) =>
+    let ih = log2Up_mono a m h;                 // log2Up a <= log2Up n
+    // log2Up n <= log2Up (succ n)
+    let step: (log2Up m) <= (log2Up (m + 1)) = match m {
+      case zero => le_refl[0]
+      case succ(zero) => le_step(le_refl[0])
+      case succ(succ(k)) =>
+        // n = k+2
+        let x = div2Up (k + 2);
+        let y = div2Up (k + 3);
+        // x <= y
+        let x_le_y = div2Up_mono (k+2) (k+3) (le_step(le_refl[k+2]));
+        // x,y < n -> log2Up x <= log2Up y
+        let mono_xy = log2Up_mono x y x_le_y;
+        lift_le(mono_xy)                           // log2Up n <= log2Up (succ n)
+    };
+    trans_le ih step
+}
+
+// log2Up n <= 1 + log2Up(compress32_len n)
+def le_log_compress(n: Nat): (log2Up n) <= ((log2Up (compress32_len n)) + 1) = match n {
+    case zero => le_step(le_refl[0])
+    case succ(zero) => le_step(le_refl[0])
+    case succ(succ(zero)) => le_step(le_refl[1])
+    case succ(succ(succ(zero))) => le_refl[2]
+    case succ(succ(succ(t))) =>
+        let d = div2Up_le_compress_plus2(t);  // d : (div2Up (t + 3)) <= (compress32_len t + 2)
+        let mono = log2Up_mono (div2Up (t + 3)) ((compress32_len t) + 2) d;
+        // mono : Le (log2Up (div2Up (t + 3))) (log2Up (compress32_len t + 2))
+        //lift_le(mono)
+        _
+}
+
+def size_map[a: Nat][b: Nat](x: Bits[(a + 1) + b]): Bits[a + b + 1] = cast(cong(t => Bits[t], add_succ_left a b),x)
+
+def wallace_tree[width: Nat, len: Nat](x: Vec[Bits[width]] (len + 1)): Bits[width + (log2Up (len + 1))] =
+    match x {
+        case cons(a, nil) => a
+        case cons(a, cons(b, nil)) => a + b
+        case cons(a, cons(b, cons(c, tail))) =>
+            let before_resize = wallace_tree[width = width + 1](wallace_stage x);
+            resize_prove[width + (log2Up ((compress32_len (len + 1)))) + 1](size_map[width, (log2Up ((compress32_len (len + 1))))] before_resize, width + (log2Up (len + 1)), add_left width le_log_compress(len+1))
+    }
+
+def ttt(x: String, y: Nat -> Nat): Nat = 0
+
+println ttt
 "#;
-    match run(input, 0) {
+    match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
-        Err(e) => panic!("{}", e.0.data),
+        Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
+        //Err(e) => panic!("{}", e.0.data),
     }
 }

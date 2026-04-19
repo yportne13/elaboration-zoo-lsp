@@ -151,7 +151,7 @@ impl Infer {
                 let (pren, prune_non_linear) = self.invert(cxt.lvl, &cxt.decl, sp)
                     .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned()), vec![]))?;
                 let mty = match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(ref a, _) => a.clone(),
+                    MetaEntry::Unsolved(ref a, _, _) => a.clone(),
                     _ => unreachable!(),
                 };
 
@@ -193,7 +193,7 @@ impl Infer {
             _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)), vec![])),
         }
     }
-    pub fn check(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
+    pub fn check<const CANONICAL: bool>(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         let a = self.force(&cxt.decl, a);
         match (t, a.as_ref()) {
@@ -202,7 +202,7 @@ impl Infer {
                 if (i.clone(), *i_t) == (Either::Name(x_t.clone()), Icit::Impl)
                     || i == Either::Icit(*i_t) =>
             {
-                let body = self.check(
+                let body = self.check::<CANONICAL>(
                     &cxt.bind(x.clone(), self.quote(&cxt.decl, cxt.lvl, a), a.clone()),
                     *t,
                     &self.closure_apply(&cxt.decl, b_closure, Val::vvar(cxt.lvl).into()),
@@ -210,7 +210,7 @@ impl Infer {
                 Ok(Tm::Lam(x.clone(), *i_t, body).into())
             }
             (t, Val::Pi(x, Icit::Impl, a, b_closure)) => {
-                let body = self.check(
+                let body = self.check::<CANONICAL>(
                     &cxt.new_binder(x.clone(), self.quote(&cxt.decl, cxt.lvl, a)),
                     t,
                     &self.closure_apply(&cxt.decl, b_closure, Val::vvar(cxt.lvl).into()),
@@ -221,9 +221,9 @@ impl Infer {
             (Raw::Let(x, ret_typ, t, u), _) => {
                 let (a_checked, _) = self.check_universe(cxt, *ret_typ)?;
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
-                let t_checked = self.check(cxt, *t, &va)?;
+                let t_checked = self.check::<CANONICAL>(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                let u_checked = self.check(
+                let u_checked = self.check::<CANONICAL>(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone()),
                     *u,
                     &a,
@@ -259,7 +259,23 @@ impl Infer {
                 let t_span = t.to_span();
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-                self.unify_catch(cxt, &a, &inferred_type, t_span)?;
+                if CANONICAL {
+                    self.unify(cxt.lvl, cxt, &a, &inferred_type, 100).map_err(|e| {
+                        let err = match e {
+                            super::UnifyError::Basic | super::UnifyError::Stuck => format!(
+                                //"can't unify {:?} == {:?}",
+                                "can't unify\n  expected: {}\n      find: {}",
+                                super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &a)),
+                                super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &inferred_type)),
+                            ),
+                            super::UnifyError::Trait(e) => e,
+                        };
+                        Error(t_span.map(|_| err.clone()), vec![])
+                        //Error(format!("can't unify {:?} == {:?}", t, t_prime))
+                    })?;
+                } else {
+                    self.unify_catch(cxt, &a, &inferred_type, t_span)?;
+                }
                 Ok(t_inferred)
             }
         }
@@ -272,7 +288,6 @@ impl Infer {
                 ret_type,
                 body,
             } => {
-                let meta_offset = self.meta.len();
                 let ret_cxt = cxt;
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -291,11 +306,11 @@ impl Infer {
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
-                    let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
+                    let t_tm = self.check::<false>(&fake_cxt, bod.clone(), &vtyp)?;
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if let Some((metavar, meta_ty, meta_cxt, pr)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
+                    if let Some((metavar, meta_ty, meta_cxt, oty, pr)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         let err_msg = format!(
                             "find unsolved meta with type `{}`",//\n{:?}",
                             super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
@@ -313,12 +328,13 @@ impl Infer {
                             let mut infer = infer.clone();
                             infer.search(
                                 &meta_cxt,
-                                vec![(metavar, meta_ty.clone(), pr.zip(&meta_cxt.env).flat_map(|(a, b)| a.map(|a| (b.clone(), a))))],
-                                vec![],
+                                &[(metavar, oty.clone())],
+                                &meta_cxt,
+                                &oty,
+                                Rc::new(|x| x.head().unwrap().clone()),
                                 3,
                                 vec![],
                                 &name.data,
-                                meta_offset,
                             ).and_then(|x| if !infer.meta_contrains.is_empty() {
                                 infer.meta_contrains.clear();
                                 Err(super::UnifyError::Basic)
@@ -431,7 +447,7 @@ impl Infer {
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
                     let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
-                    let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
+                    let t_tm = self.check::<false>(&fake_cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.decl, &fake_cxt.env, &t_tm);
                     cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp)?
                 };
@@ -470,7 +486,7 @@ impl Infer {
                     cxt = {
                         let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                         let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
-                        let t_tm = self.check(&cxt, bod, &vtyp)?;
+                        let t_tm = self.check::<false>(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
                         cxt.decl(c.0.clone(), t_tm, vt, typ_tm, vtyp)?
                     };
@@ -816,7 +832,7 @@ impl Infer {
                         (a, b_closure)
                     }
                 };
-                let u_checked = self.check(cxt, *u, &a)?;
+                let u_checked = self.check::<false>(cxt, *u, &a)?;
                 let ret_type = self.closure_apply(&cxt.decl, &b_closure, self.eval(&cxt.decl, &cxt.env, &u_checked));
                 Ok((
                     Tm::App(t, u_checked, i).into(),
@@ -848,7 +864,7 @@ impl Infer {
             Raw::Let(x, a, t, u) => {
                 let (a_checked, _) = self.check_universe(cxt, *a)?;
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
-                let t_checked = self.check(cxt, *t, &va)?;
+                let t_checked = self.check::<false>(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(

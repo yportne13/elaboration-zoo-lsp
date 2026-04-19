@@ -231,7 +231,7 @@ impl Compiler {
                             &infer.eval(&cxt.decl, &cxt.env, &ret_type)
                         },
                     };
-                    let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
+                    let ret = infer.check::<false>(&cxt, arm.body.0.clone(), ret_type)?;
                     self.checked_ret.insert(raw.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
