@@ -888,7 +888,7 @@ impl LanguageServer for Backend {
                 if let Some(data) = diagnostic.data {
                     if let Some(id) = data.as_str() {
                         if let Some(code_actions) = map.get(id) {
-                            //actions.extend(code_actions.iter().flat_map(|x| x()));
+                            actions.extend(code_actions.iter().flat_map(|x| x()));
                         }
                     }
                 }

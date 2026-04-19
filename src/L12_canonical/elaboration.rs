@@ -326,13 +326,14 @@ impl Infer {
                         //let meta_ty = self.eval(&meta_cxt.decl, &List::new(), &prune_ty);
                         let ret = move || {
                             let mut infer = infer.clone();
-                            infer.search(
+                            infer.iddfs(
                                 &meta_cxt,
                                 &[oty.clone()],
                                 &meta_cxt,
                                 &oty,
                                 Rc::new(|x| x.head().unwrap().clone()),
-                                3,
+                                5,
+                                8,
                                 &name.data,
                             ).and_then(|x| if !infer.meta_contrains.is_empty() {
                                 infer.meta_contrains.clear();

@@ -6,6 +6,26 @@ use super::{
 };
 
 impl Infer {
+    pub fn iddfs(
+        &mut self,
+        cxt: &Cxt,
+        target: &[Rc<Val>],
+        origin_cxt: &Cxt,
+        origin_target: &Rc<Val>,
+        raw: Rc<dyn Fn(List<Raw>) -> Raw>,
+        depth: u32,
+        target_limit: usize,
+        avoid_recurse: &str,//TODO: this is incorrect
+    ) -> Result<String, UnifyError> {
+        let mut basic_target_limit = 1;
+        while basic_target_limit < target_limit {
+            if let Ok(s) = self.search(cxt, target, origin_cxt, origin_target, raw.clone(), depth, basic_target_limit, avoid_recurse) {
+                return Ok(s);
+            }
+            basic_target_limit *= 3;
+        }
+        Err(UnifyError::Basic)
+    }
     pub fn search(
         &mut self,
         cxt: &Cxt,
@@ -14,24 +34,24 @@ impl Infer {
         origin_target: &Rc<Val>,
         raw: Rc<dyn Fn(List<Raw>) -> Raw>,
         depth: u32,
+        target_limit: usize,
         avoid_recurse: &str,//TODO: this is incorrect
     ) -> Result<String, UnifyError> {
-        let mut typ = self.force(&cxt.decl, &target[0]);
-        let mut cxt = cxt.clone();
-        let mut lamb = List::new();
-        while let Val::Pi(span, icit, dom, clos) = typ.as_ref() {
-            let lvl = cxt.lvl;
-            if *icit == Icit::Expl {
-                lamb = lamb.prepend(span.data.clone());
-            }
-            cxt = cxt.bind(span.clone(), self.quote(&cxt.decl, cxt.lvl, dom), dom.clone());
-            typ = self.closure_apply(&cxt.decl, clos, Val::vvar(lvl).into());
-        }
-
-        if depth == 0 {
+        if depth == 0 || target.len() > target_limit {
             //println!("search failed 0");
             return Err(UnifyError::Basic);
         } else {
+            let mut typ = self.force(&cxt.decl, &target[0]);
+            let mut cxt = cxt.clone();
+            let mut lamb = List::new();
+            while let Val::Pi(span, icit, dom, clos) = typ.as_ref() {
+                let lvl = cxt.lvl;
+                if *icit == Icit::Expl {
+                    lamb = lamb.prepend(span.data.clone());
+                }
+                cxt = cxt.bind(span.clone(), self.quote(&cxt.decl, cxt.lvl, dom), dom.clone());
+                typ = self.closure_apply(&cxt.decl, clos, Val::vvar(lvl).into());
+            }
             let names = cxt.names();
             let iterator = names.iter()
                 .map(|t| {
@@ -56,7 +76,7 @@ impl Infer {
                 let mut vt = v.clone();
                 let mut new_list = vec![];
                 //println!("{t}\n{:?}\n{:?}\n{:?}\n------------", vt, vtm, typ);
-                //println!("1. {t} target: {}, depth: {depth}, {:?}", target.len(), target[0].0);
+                //println!("1. {t} target: {}, depth: {depth}", target.len());
                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
                     let icit = *icit;
                     let new_meta = self.fresh_meta(&cxt, dom.clone());
@@ -71,6 +91,7 @@ impl Infer {
                 let this_raw = (0..new_list.len()).fold(Raw::Var(empty_span(t.clone())), |acc, _| {
                     Raw::App(acc.into(), Raw::Hole(empty_span(())).into(), Either::Icit(Icit::Expl))
                 });
+                //println!("{}", this_raw);
                 let this_raw = lamb.iter()
                     .fold(this_raw, |acc, x| {
                         Raw::Lam(empty_span(x.clone()), Either::Icit(Icit::Expl), acc.into())
@@ -78,6 +99,7 @@ impl Infer {
                 let raw_list = (0..(target.len() - 1)).fold(List::new(), |acc, _| {
                     acc.prepend(Raw::Hole(empty_span(())))
                 }).prepend(this_raw.clone());
+                //println!("{}", raw.clone()(raw_list.clone()));
                 let lamb = lamb.clone();
                 if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 100), Ok(_) | Err(UnifyError::Stuck))
                     && self.check::<true>(origin_cxt, raw.clone()(raw_list), origin_target).is_ok() {
@@ -94,7 +116,7 @@ impl Infer {
                         let new_list_len = new_list.len();
                         if new_list.is_empty() {
                             if !target.get(1..).map(|x| x.is_empty()).unwrap_or(true) {
-                                if let Ok(ret) = self.search(&cxt, &target[1..], origin_cxt, origin_target, Rc::new(move |t| raw.clone()(t.prepend(this_raw.clone()))), depth, avoid_recurse) {
+                                if let Ok(ret) = self.search(&cxt, &target[1..], origin_cxt, origin_target, Rc::new(move |t| raw.clone()(t.prepend(this_raw.clone()))), depth, target_limit - 1, avoid_recurse) {
                                     return Ok(ret)
                                 }
                             } else {
@@ -109,7 +131,7 @@ impl Infer {
                                         Raw::Lam(empty_span(x.clone()), Either::Icit(Icit::Expl), acc.into())
                                     })
                             })
-                        })), depth - 1, avoid_recurse) {
+                        })), depth - 1, target_limit - 1, avoid_recurse) {
                             return Ok(ret)
                         }
                 }
