@@ -37,33 +37,93 @@ struct Exists[A: Type 0, P: A -> Type 0] {
 
 def exists_two: Exists[Nat][x => Eq x 2] = Exists.mk[Nat][x => Eq x 2] 2 rfl
 
+def div2Up(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 1
+    case succ(succ(t)) => (div2Up t) + 1
+}
+
+def log2Up(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 0
+    case succ(succ(tail)) => (log2Up (div2Up (tail + 2))) + 1
+}
+
+struct Bool {
+    name: Option[String]
+}
+
+impl Bool {
+    def :=(that: Bool): Bool = Bool.mk None
+}
+
+impl Into[Bool] for Boolean {
+    def into: Bool = Bool.mk None
+}
+
 struct Bits[width: Nat] {
-    name: String
+    name: Option[String]
 }
 
-impl[width: Nat] Add[Bits[width], Bits[width]] for Bits[width] {
-    def +(that: Bits[width]): Bits[width] =
-        Bits.mk(this.name + " + " + that.name)
+struct UInt[width: Nat] {
+    name: Option[String]
 }
 
-impl[width: Nat] Sub[Bits[width], Bits[width]] for Bits[width] {
-    def -(that: Bits[width]): Bits[width] =
-        Bits.mk(this.name + " - " + that.name)
+struct SInt[width: Nat] {
+    name: Option[String]
 }
 
-impl[width0: Nat, width1: Nat] Mul[Bits[width1], Bits[width0 + width1]] for Bits[width0] {
-    def *(that: Bits[width1]): Bits[width0 + width1] =
-        Bits.mk(this.name + " * " + that.name)
+/*impl[width: Nat] Into[Bits[width]] for Nat {
+    def into: Bits[width] = Bits.mk None
+}*/
+
+impl[width: Nat] Into[UInt[width]] for Nat {
+    def into: UInt[width] = UInt.mk None
 }
 
 impl[width: Nat] Bits[width] {
-    def +^(that: Bits[width]): Bits[width + 1] = Bits.mk(this.name + " +^ " + that.name)
-    def -^(that: Bits[width]): Bits[width + 1] = Bits.mk(this.name + " -^ " + that.name)
-    def :=(that: Bits[width]): Bits[width] = Bits.mk(this.name + " := " + that.name)
+    def :=(that: Bits[width]): Bits[width] = Bits.mk None
+}
+
+impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
+    def +(that: UInt[width]): UInt[width] =
+        UInt.mk None
+}
+
+impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
+    def -(that: UInt[width]): UInt[width] =
+        UInt.mk None
+}
+
+impl[width: Nat] UInt[width] {
+    def *[width1: Nat](that: UInt[width1]): UInt[width + width1] =
+        UInt.mk None
+    def +^(that: UInt[width]): UInt[width + 1] = UInt.mk None
+    def -^(that: UInt[width]): UInt[width + 1] = UInt.mk None
+    def :=(that: UInt[width]): UInt[width] = UInt.mk None
+}
+
+impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
+    def +(that: SInt[width]): SInt[width] =
+        SInt.mk None
+}
+
+impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
+    def -(that: SInt[width]): SInt[width] =
+        SInt.mk None
+}
+
+impl[width: Nat] SInt[width] {
+    def *[width1: Nat](that: SInt[width1]): SInt[width + width1] =
+        SInt.mk None
+    def +^(that: SInt[width]): SInt[width + 1] = SInt.mk None
+    def -^(that: SInt[width]): SInt[width + 1] = SInt.mk None
+    def :=(that: SInt[width]): SInt[width] = SInt.mk None
 }
 
 enum Expr {
     create(name: String)
+    binary(lhs: Expr, op: String, rhs: Expr)
 }
 
 struct Module {
@@ -90,13 +150,28 @@ def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat): module
 
 def newBits(name: String, w: Nat): Bits[w] =
     let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
-    Bits.mk(name)
+    Bits.mk(Some(name))
+
+def newUInt(name: String, w: Nat): UInt[w] =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
+    UInt.mk(Some(name))
+
+def newSInt(name: String, w: Nat): SInt[w] =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
+    SInt.mk(Some(name))
 
 macro_rules Expr {
     (input $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
     (output $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
     (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (let $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
+    (let $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
     (let $x:ident = $y:raw) => {let $x = $y;};
+    (when $cond:raw {$( $bodywhen: Expr )*} /*$( elsewhen $cond: raw {$( $bodyelse: Expr )*})**/ otherwise {$( $bodyother: Expr )*}) => {
+        $({$bodywhen})*
+        /*$({$bodyelse})**/
+        $({$bodyother})*
+    };
     ($x: raw) => {let useless = $x;}
 }
 

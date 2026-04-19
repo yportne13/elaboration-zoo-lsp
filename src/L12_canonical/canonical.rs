@@ -9,14 +9,14 @@ impl Infer {
     pub fn search(
         &mut self,
         cxt: &Cxt,
-        target: &[(MetaVar, Rc<Val>)],
+        target: &[Rc<Val>],
         origin_cxt: &Cxt,
         origin_target: &Rc<Val>,
         raw: Rc<dyn Fn(List<Raw>) -> Raw>,
         depth: u32,
         avoid_recurse: &str,//TODO: this is incorrect
     ) -> Result<String, UnifyError> {
-        let mut typ = self.force(&cxt.decl, &target[0].1);
+        let mut typ = self.force(&cxt.decl, &target[0]);
         let mut cxt = cxt.clone();
         let mut lamb = List::new();
         while let Val::Pi(span, icit, dom, clos) = typ.as_ref() {
@@ -59,15 +59,10 @@ impl Infer {
                 //println!("1. {t} target: {}, depth: {depth}, {:?}", target.len(), target[0].0);
                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
                     let icit = *icit;
-                    let meta_var = self.meta.len();
                     let new_meta = self.fresh_meta(&cxt, dom.clone());
                     let meta = self.eval(&cxt.decl, &cxt.env, &new_meta);
-                    let (meta_var, _) = match meta.as_ref() {
-                        Val::Flex(m, sp) => (*m, sp.clone()),
-                        _ => (MetaVar(meta_var as u32), List::new()),
-                    };
                     if icit == Icit::Expl {
-                        new_list.push((meta_var, dom.clone()));
+                        new_list.push(dom.clone());
                     }
                     vt = self.closure_apply(&cxt.decl, clos, meta.clone());
                     vtm = self.v_app(&cxt.decl, &vtm, meta, icit);

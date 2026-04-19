@@ -65,7 +65,6 @@ pub struct Compiler {
     reachable: HashMap<usize, ()>,
     checked_ret: HashSet<Raw>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
-    seed: i32,
     ret_type: Rc<Val>,
 }
 
@@ -76,14 +75,8 @@ impl Compiler {
             reachable: HashMap::new(),
             checked_ret: HashSet::new(),
             pats: Vec::new(),
-            seed: 0,
             ret_type,
         }
-    }
-
-    fn fresh(&mut self) -> i32 {
-        self.seed += 1;
-        self.seed
     }
 
     fn fill_context(ctx: &MatchContext, pat: &Pattern) -> Pattern {
@@ -376,8 +369,8 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
-                                                cxt_for_filter.bind(constr_.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, &typ), typ.clone()),
+                                                cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
+                                                cxt_for_filter.bind(constr_.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
                                                 new_heads,
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -414,8 +407,8 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
-                                                cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, &typ), typ.clone()),
+                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
+                                                cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
                                                 vec![],
                                                 raw.clone(),
                                                 target_typ.clone(),

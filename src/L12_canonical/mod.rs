@@ -96,20 +96,19 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt, Rc<Val>, Pruning)> {
+    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt, Rc<Val>)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
             Tm::Lam(_, _, t) => t.no_metas(infer, decl, l + 1),
             Tm::App(t, u, _) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
-            Tm::AppPruning(t, s) => {
+            Tm::AppPruning(t, _) => {
                 t.no_metas(infer, decl, l)
-                    .map(|(a, b, c, d, _)| (a, b, c, d, s.clone()))
             },
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or(t.no_metas(infer, decl, l)).or(u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(ty, cxt, oty) => Some((*m, ty.clone(), cxt.clone(), oty.clone(), List::new())),
+                MetaEntry::Unsolved(ty, cxt, oty) => Some((*m, ty.clone(), cxt.clone(), oty.clone())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -2763,5 +2762,73 @@ println ttt
         Ok(output) => println!("{}", output),
         Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
         //Err(e) => panic!("{}", e.0.data),
+    }
+}
+
+#[test]
+fn test17() {
+    let input = r#"
+
+enum Le(n: Nat, m: Nat) {
+    le_refl[n: Nat] -> Le n n
+    le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
+}
+
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+
+def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
+    case fzero => x
+    case fsucc(yy) => match x {
+        case succ(t) => sub t yy
+        case zero => match yy {}
+    }
+}
+
+def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
+    case nil => match x {
+        case fzero => nil
+        case fsucc(t) => match t {}
+    }
+    case cons(a, tail) => match x {
+        case fzero => cons a tail
+        case fsucc(t) => drop_vec tail t
+    }
+}
+
+//println drop_vec(1 :: 2 :: 3 :: nil, fsucc fzero)
+
+struct Exists[A: Type 0, P: A -> Type 0] {
+    witness: A
+    proof: P witness
+}
+
+def exists_two: Exists[Nat][x => Eq x 2] = Exists.mk[Nat][x => Eq x 2] 2 rfl
+
+struct Bits[width: Nat] {
+    name: String
+}
+
+impl[width: Nat] Add[Bits[width], Bits[width]] for Bits[width] {
+    def +(that: Bits[width]): Bits[width] =
+        Bits.mk(this.name + " + " + that.name)
+}
+
+impl[width: Nat] Sub[Bits[width], Bits[width]] for Bits[width] {
+    def -(that: Bits[width]): Bits[width] =
+        Bits.mk(this.name + " - " + that.name)
+}
+
+impl[width0: Nat, width1: Nat] Mul[Bits[width1], Bits[width0 + width1]] for Bits[width0] {
+    def *(that: Bits[width1]): Bits[width0 + width1] =
+        Bits.mk(this.name + " * " + that.name)
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        //Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }

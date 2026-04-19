@@ -310,7 +310,7 @@ impl Infer {
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if let Some((metavar, meta_ty, meta_cxt, oty, pr)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
+                    if let Some((metavar, meta_ty, meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         let err_msg = format!(
                             "find unsolved meta with type `{}`",//\n{:?}",
                             super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
@@ -328,7 +328,7 @@ impl Infer {
                             let mut infer = infer.clone();
                             infer.search(
                                 &meta_cxt,
-                                &[(metavar, oty.clone())],
+                                &[oty.clone()],
                                 &meta_cxt,
                                 &oty,
                                 Rc::new(|x| x.head().unwrap().clone()),

@@ -20,7 +20,7 @@ pub struct Cxt {
 }
 
 fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
+    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
         (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
             Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
         },
@@ -37,11 +37,11 @@ fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) ->
     }
 }
 
-fn create_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+fn create_global(infer: &Infer, _decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
     match env.iter().nth(1).unwrap().as_ref() {
         Val::LiteralIntro(a) => {
             if let Ok(mut x) = infer.mutable_map.write() {
-                x.insert(a.data.clone(), env.iter().nth(0).unwrap().clone());
+                x.insert(a.data.clone(), env.iter().next().unwrap().clone());
             };
             Val::U(0).into()
         }
@@ -482,7 +482,7 @@ impl Cxt {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut decl = self.decl.clone();
         let t = decl.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
-        if let Some((span, _, _, _, _)) = t {
+        if t.is_some() {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
         Ok(Cxt {

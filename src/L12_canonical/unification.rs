@@ -113,12 +113,12 @@ impl Infer {
             (List { head: None }, _) => self.rename(decl, pren, &a),
             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
                 let a = self.rename(decl, pren, a)?;
-                let b = self.closure_apply(decl, &b, Val::vvar(pren.cod).into());
+                let b = self.closure_apply(decl, b, Val::vvar(pren.cod).into());
                 let b = self.prune_ty_go(decl, &list.tail(), &lift(pren), &b)?;
                 Ok(Tm::Pi(x.clone(), *i, a, b).into())
             }
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
-                let b = self.closure_apply(decl, &b, Val::vvar(pren.cod).into());
+            (list, Val::Pi(_, _, _, b)) if list.head().unwrap().is_none() => {
+                let b = self.closure_apply(decl, b, Val::vvar(pren.cod).into());
                 self.prune_ty_go(decl, &list.tail(), &skip(pren), &b)
             }
             _ => Err(UnifyError::Basic), // impossible case
@@ -364,7 +364,7 @@ impl Infer {
             t
         } else {
             match self.force(decl, a).as_ref() {
-                Val::Pi(span, icit, val, closure) if span.data == "_" => {
+                Val::Pi(span, icit, _, closure) if span.data == "_" => {
                     let var_name = format!("x{}", l_prime.0);
                     Tm::Lam(
                         empty_span(var_name),
@@ -378,7 +378,7 @@ impl Infer {
                         ),
                     ).into()
                 }
-                Val::Pi(span, icit, val, closure) => Tm::Lam(
+                Val::Pi(span, icit, _, closure) => Tm::Lam(
                     span.clone(),
                     *icit,
                     self.lams_go(
@@ -637,14 +637,14 @@ impl Infer {
             (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime, fuel)
             }
-            (Val::Decl(x, sp), _) => {
+            (Val::Decl(..), _) => {
                 if fuel == 0 {
                     Err(UnifyError::Basic)
                 } else {
                     self.unify(l, cxt, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t)), &u, fuel - 1)
                 }
             }
-            (_, Val::Decl(x, sp)) => {
+            (_, Val::Decl(..)) => {
                 if fuel == 0 {
                     Err(UnifyError::Basic)
                 } else {
@@ -701,8 +701,8 @@ impl Infer {
                 self.solve_multi_trait(cxt, *m)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, &b, fuel),
-            (Val::Prim(a, _), _) => self.unify(l, cxt, &a, &u, fuel),
+            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, b, fuel),
+            (Val::Prim(a, _), _) => self.unify(l, cxt, a, &u, fuel),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
