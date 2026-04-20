@@ -22,7 +22,7 @@ impl Infer {
             if let Ok(s) = self.search(cxt, target, origin_cxt, origin_target, raw.clone(), depth, basic_target_limit, avoid_recurse) {
                 return Ok(s);
             }
-            basic_target_limit *= 3;
+            basic_target_limit += 2;
         }
         Err(UnifyError::Basic)
     }
@@ -37,6 +37,7 @@ impl Infer {
         target_limit: usize,
         avoid_recurse: &str,//TODO: this is incorrect
     ) -> Result<String, UnifyError> {
+        //println!("search {} {} {}", target.len(), target_limit, depth);
         if depth == 0 || target.len() > target_limit {
             //println!("search failed 0");
             return Err(UnifyError::Basic);
@@ -100,8 +101,10 @@ impl Infer {
                     acc.prepend(Raw::Hole(empty_span(())))
                 }).prepend(this_raw.clone());
                 //println!("{}", raw.clone()(raw_list.clone()));
+                //println!("{:?}", self.unify(cxt.lvl, &cxt, &vt, &typ, 100));
+                //println!("{:?}", self.check::<true>(origin_cxt, raw.clone()(raw_list.clone()), origin_target));
                 let lamb = lamb.clone();
-                if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 100), Ok(_) | Err(UnifyError::Stuck))
+                if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 5), Ok(_) | Err(UnifyError::Stuck))
                     && self.check::<true>(origin_cxt, raw.clone()(raw_list), origin_target).is_ok() {
                         /*println!(
                             "#### {:?}\n{}\n== {:?}",

@@ -289,6 +289,7 @@ impl Infer {
                 body,
             } => {
                 let ret_cxt = cxt;
+                let this_meta = self.meta.len();
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
@@ -307,13 +308,13 @@ impl Infer {
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check::<false>(&fake_cxt, bod.clone(), &vtyp)?;
-                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
+                    self.solve_multi_trait(&fake_cxt, super::MetaVar(this_meta as u32))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if let Some((metavar, meta_ty, meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
+                    if let Some((meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         let err_msg = format!(
                             "find unsolved meta with type `{}`",//\n{:?}",
-                            super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &meta_ty)),
+                            super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &oty)),
                             //ret,
                         );
                         let infer = self.clone();
@@ -333,7 +334,7 @@ impl Infer {
                                 &oty,
                                 Rc::new(|x| x.head().unwrap().clone()),
                                 5,
-                                8,
+                                6,
                                 &name.data,
                             ).and_then(|x| if !infer.meta_contrains.is_empty() {
                                 infer.meta_contrains.clear();
@@ -360,7 +361,7 @@ impl Infer {
                 };
                 Ok((
                     DeclTm::Def {
-                        name: name.clone(),
+                        name,
                         typ: vty,
                         body: vt,
                         typ_pretty: vtyp_pretty,

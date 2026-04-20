@@ -96,7 +96,7 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas<'a>(&self, infer: &'a Infer, decl: &Decl, l: Lvl) -> Option<(MetaVar, Rc<Val>, Cxt, Rc<Val>)> {
+    pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
@@ -108,7 +108,7 @@ impl Tm {
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or(t.no_metas(infer, decl, l)).or(u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(ty, cxt, oty) => Some((*m, ty.clone(), cxt.clone(), oty.clone())),
+                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.clone(), oty.clone())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -2739,8 +2739,8 @@ def le_log_compress(n: Nat): (log2Up n) <= ((log2Up (compress32_len n)) + 1) = m
         let d = div2Up_le_compress_plus2(t);  // d : (div2Up (t + 3)) <= (compress32_len t + 2)
         let mono = log2Up_mono (div2Up (t + 3)) ((compress32_len t) + 2) d;
         // mono : Le (log2Up (div2Up (t + 3))) (log2Up (compress32_len t + 2))
-        //lift_le(mono)
-        _
+        lift_le(mono)
+        //_
 }
 
 def size_map[a: Nat][b: Nat](x: Bits[(a + 1) + b]): Bits[a + b + 1] = cast(cong(t => Bits[t], add_succ_left a b),x)
@@ -2751,7 +2751,8 @@ def wallace_tree[width: Nat, len: Nat](x: Vec[Bits[width]] (len + 1)): Bits[widt
         case cons(a, cons(b, nil)) => a + b
         case cons(a, cons(b, cons(c, tail))) =>
             let before_resize = wallace_tree[width = width + 1](wallace_stage x);
-            resize_prove[width + (log2Up ((compress32_len (len + 1)))) + 1](size_map[width, (log2Up ((compress32_len (len + 1))))] before_resize, width + (log2Up (len + 1)), add_left width le_log_compress(len+1))
+            //resize_prove[width + (log2Up ((compress32_len (len + 1)))) + 1](size_map[width, (log2Up ((compress32_len (len + 1))))] before_resize, width + (log2Up (len + 1)), add_left width le_log_compress(len+1))
+            _
     }
 
 def ttt(x: String, y: Nat -> Nat): Nat = 0
