@@ -13,9 +13,9 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: BiMap<String, Lvl, (Span<()>, Rc<VTy>)>,
-    pub decl: HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
-    pub namespace: List<(Rc<Val>, HashSet<String>, Raw)>,
+    pub src_names: BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>,
+    pub decl: HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
+    pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
     update_from: Option<usize>,
 }
 
@@ -31,7 +31,7 @@ fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
 fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
     match env.iter().next().unwrap().as_ref() {
         Val::LiteralIntro(a) => {
-            infer.eval(decl, env, &Tm::Decl(a.clone()).into())
+            infer.eval(decl, env, &Tm::Decl(a.clone().map(|a| SmolStr::new(a))).into())
         }
         _ => Val::Prim(typ, PrimFunc(Rc::new(string_to_global_type))).into(),
     }
@@ -108,7 +108,7 @@ impl Cxt {
         let change_mutable_default = PrimFunc(Rc::new(change_mutable_default));
         Self::empty()
             .decl(
-                empty_span("String".to_owned()),
+                empty_span(SmolStr::new("String")),
                 Tm::LiteralType.into(),
                 Val::LiteralType.into(),
                 Tm::U(0).into(),
@@ -116,64 +116,64 @@ impl Cxt {
             )
             .unwrap()
             .decl(
-                empty_span("string_concat".to_owned()),
+                empty_span(SmolStr::new("string_concat")),
                 Tm::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
+                        empty_span(SmolStr::new("y")),
                         Icit::Expl,
                         Rc::new(Tm::Prim(Val::LiteralType.into(), string_concat.clone())),
                     )),
                 ).into(),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Closure(
                         List::new().prepend(Val::LiteralType.into()),
                         Tm::Lam(
-                            empty_span("y".to_owned()),
+                            empty_span(SmolStr::new("y")),
                             Icit::Expl,
                             Rc::new(Tm::Prim(Val::LiteralType.into(), string_concat)),
                         ).into(),
                     ),
                 ).into(),
                 Tm::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
-                    Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     Rc::new(Tm::Pi(
-                        empty_span("y".to_owned()),
+                        empty_span(SmolStr::new("y")),
                         Icit::Expl,
-                        Rc::new(Tm::Decl(empty_span("String".to_owned()))),
-                        Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                        Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
+                        Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     )),
                 ).into(),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
                         List::new().prepend(Val::LiteralType.into()),
                         Rc::new(Tm::Pi(
-                            empty_span("y".to_owned()),
+                            empty_span(SmolStr::new("y")),
                             Icit::Expl,
-                            Rc::new(Tm::Decl(empty_span("String".to_owned()))),
-                            Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                            Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
+                            Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                         )),
                     ),
                 ).into(),
             )
             .unwrap()
             .decl(
-                empty_span("string_to_global_type".to_owned()),
+                empty_span(SmolStr::new("string_to_global_type")),
                 Tm::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Tm::Prim(Val::LiteralType.into(), string_to_global_type.clone())),
                 ).into(),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Closure(
                         List::new(),
@@ -181,13 +181,13 @@ impl Cxt {
                     ),
                 ).into(),
                 Tm::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
-                    Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     Rc::new(Tm::U(0)),
                 ).into(),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
@@ -198,49 +198,49 @@ impl Cxt {
             )
             .unwrap()
             .decl(
-                empty_span("create_global".to_owned()),
+                empty_span(SmolStr::new("create_global")),
                 Tm::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
+                        empty_span(SmolStr::new("y")),
                         Icit::Expl,
                         Rc::new(Tm::Prim(Val::U(0).into(), create_global.clone())),
                     )),
                 ).into(),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Closure(
                         List::new(),
                         Tm::Lam(
-                            empty_span("y".to_owned()),
+                            empty_span(SmolStr::new("y")),
                             Icit::Expl,
                             Rc::new(Tm::Prim(Val::U(0).into(), create_global)),
                         ).into(),
                     ),
                 ).into(),
                 Tm::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
-                    Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     Rc::new(Tm::Pi(
-                        empty_span("y".to_owned()),
+                        empty_span(SmolStr::new("y")),
                         Icit::Expl,
-                        Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
+                        Rc::new(Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                         Rc::new(Tm::U(0)),
                     )),
                 ).into(),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
                         List::new(),
                         Rc::new(Tm::Pi(
-                            empty_span("y".to_owned()),
+                            empty_span(SmolStr::new("y")),
                             Icit::Expl,
-                            Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
+                            Rc::new(Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                             Rc::new(Tm::U(0)),
                         )),
                     ),
@@ -248,58 +248,58 @@ impl Cxt {
             )
             .unwrap()
             .decl(
-                empty_span("change_mutable".to_owned()),
+                empty_span(SmolStr::new("change_mutable")),
                 Tm::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
+                        empty_span(SmolStr::new("y")),
                         Icit::Expl,
                         Rc::new(Tm::Prim(Val::U(0).into(), change_mutable.clone())),
                     )),
                 ).into(),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Closure(
                         List::new(),
                         Tm::Lam(
-                            empty_span("y".to_owned()),
+                            empty_span(SmolStr::new("y")),
                             Icit::Expl,
                             Rc::new(Tm::Prim(Val::U(0).into(), change_mutable)),
                         ).into(),
                     ),
                 ).into(),
                 Tm::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
-                    Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     Rc::new(Tm::Pi(
-                        empty_span("f".to_owned()),
+                        empty_span(SmolStr::new("f")),
                         Icit::Expl,
                         Rc::new(Tm::Pi(
-                            empty_span("_".to_owned()),
+                            empty_span(SmolStr::new("_")),
                             Icit::Expl,
-                            Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
-                            Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
+                            Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
+                            Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
                         )),
                         Rc::new(Tm::U(0)),
                     )),
                 ).into(),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
                         List::new(),
                         Rc::new(Tm::Pi(
-                            empty_span("f".to_owned()),
+                            empty_span(SmolStr::new("f")),
                             Icit::Expl,
                             Rc::new(Tm::Pi(
-                                empty_span("_".to_owned()),
+                                empty_span(SmolStr::new("_")),
                                 Icit::Expl,
-                                Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
-                                Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
+                                Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
+                                Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
                             )),
                             Rc::new(Tm::U(0)),
                         )),
@@ -308,9 +308,9 @@ impl Cxt {
             )
             .unwrap()
             .decl(
-                empty_span("get_global".to_owned()),
+                empty_span(SmolStr::new("get_global")),
                 Tm::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Tm::Prim(
                         //Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
@@ -319,7 +319,7 @@ impl Cxt {
                     )),
                 ).into(),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Closure(
                         List::new(),
@@ -331,47 +331,47 @@ impl Cxt {
                     ),
                 ).into(),
                 Tm::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
-                    Rc::new(Tm::Decl(empty_span("String".to_owned()))),
-                    Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
+                    Rc::new(Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                 ).into(),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
                         List::new(),
-                        Rc::new(Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
+                        Rc::new(Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl)),
                     ),
                 ).into(),
             )
             .unwrap()
             .decl(
-                empty_span("change_mutable_default".to_owned()),
+                empty_span(SmolStr::new("change_mutable_default")),
                 Tm::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Tm::Lam(
-                        empty_span("y".to_owned()),
+                        empty_span(SmolStr::new("y")),
                         Icit::Expl,
                         Rc::new(Tm::Lam(
-                            empty_span("z".to_owned()),
+                            empty_span(SmolStr::new("z")),
                             Icit::Expl,
                             Rc::new(Tm::Prim(Val::U(0).into(), change_mutable_default.clone())),
                         )),
                     )),
                 ).into(),
                 Val::Lam(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Closure(
                         List::new(),
                         Tm::Lam(
-                            empty_span("y".to_owned()),
+                            empty_span(SmolStr::new("y")),
                             Icit::Expl,
                             Rc::new(Tm::Lam(
-                                empty_span("z".to_owned()),
+                                empty_span(SmolStr::new("z")),
                                 Icit::Expl,
                                 Rc::new(Tm::Prim(Val::U(0).into(), change_mutable_default)),
                             )),
@@ -379,45 +379,45 @@ impl Cxt {
                     ),
                 ).into(),
                 Tm::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
-                    Rc::new(Tm::Decl(empty_span("String".to_owned()))),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     Rc::new(Tm::Pi(
-                        empty_span("f".to_owned()),
+                        empty_span(SmolStr::new("f")),
                         Icit::Expl,
                         Rc::new(Tm::Pi(
-                            empty_span("_".to_owned()),
+                            empty_span(SmolStr::new("_")),
                             Icit::Expl,
-                            Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
-                            Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
+                            Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
+                            Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
                         )),
                         Rc::new(Tm::Pi(
-                            empty_span("z".to_owned()),
+                            empty_span(SmolStr::new("z")),
                             Icit::Expl,
-                            Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
+                            Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
                             Tm::U(0).into(),
                         )),
                     )),
                 ).into(),
                 Val::Pi(
-                    empty_span("x".to_owned()),
+                    empty_span(SmolStr::new("x")),
                     Icit::Expl,
                     Rc::new(Val::LiteralType),
                     Closure(
                         List::new(),
                         Rc::new(Tm::Pi(
-                            empty_span("f".to_owned()),
+                            empty_span(SmolStr::new("f")),
                             Icit::Expl,
                             Rc::new(Tm::Pi(
-                                empty_span("_".to_owned()),
+                                empty_span(SmolStr::new("_")),
                                 Icit::Expl,
-                                Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
-                                Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
+                                Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(0)).into(), Icit::Expl).into(),
+                                Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
                             )),
                             Rc::new(Tm::Pi(
-                                empty_span("z".to_owned()),
+                                empty_span(SmolStr::new("z")),
                                 Icit::Expl,
-                                Tm::App(Tm::Decl(empty_span("string_to_global_type".to_owned())).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
+                                Tm::App(Tm::Decl(empty_span(SmolStr::new("string_to_global_type"))).into(), Tm::Var(Ix(1)).into(), Icit::Expl).into(),
                                 Tm::U(0).into(),
                             )),
                         )),
@@ -451,8 +451,8 @@ impl Cxt {
         }
     }
 
-    pub fn names(&self) -> List<String> {
-        fn go(locals: &Locals) -> List<String> {
+    pub fn names(&self) -> List<SmolStr> {
+        fn go(locals: &Locals) -> List<SmolStr> {
             match locals {
                 Locals::Here => List::new(),
                 Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
@@ -462,7 +462,7 @@ impl Cxt {
         go(&self.locals)
     }
 
-    pub fn bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
+    pub fn bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), a)));
@@ -478,7 +478,7 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<String>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
+    pub fn fake_bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut decl = self.decl.clone();
         let t = decl.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
@@ -497,7 +497,7 @@ impl Cxt {
         })
     }
 
-    pub fn new_binder(&self, x: Span<String>, a_quote: Rc<Tm>) -> Self {
+    pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Rc<Tm>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
@@ -511,7 +511,7 @@ impl Cxt {
         }
     }
 
-    pub fn define(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
+    pub fn define(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), va)));
@@ -527,7 +527,7 @@ impl Cxt {
         }
     }
 
-    pub fn decl(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
+    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut decl = self.decl.clone();
         let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
@@ -598,7 +598,7 @@ impl Cxt {
         }
     }
 
-    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, (Span<()>, Rc<Val>)>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
+    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<SmolStr, Lvl, (Span<()>, Rc<Val>)>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
         if env.is_empty() {
             List::new()
         } else {

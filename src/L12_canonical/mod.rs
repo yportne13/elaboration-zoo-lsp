@@ -2,6 +2,7 @@ use colored::Colorize;
 use cxt::Cxt;
 use parser::{syntax::{Either, Icit, Raw}, IError};
 use pattern_match::Compiler;
+use smol_str::SmolStr;
 use syntax::{Pruning, close_ty};
 use pretty::pretty_tm;
 
@@ -20,7 +21,7 @@ mod canonical;
 
 type Rc<T> = std::sync::Arc<T>;
 
-type Decl = HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
+type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -43,7 +44,7 @@ enum BD {
 #[derive(Clone, Debug)]
 pub enum DeclTm {
     Def {
-        name: Span<String>,
+        name: Span<SmolStr>,
         typ: Rc<Val>,
         body: Rc<Val>,
         typ_pretty: String,
@@ -73,23 +74,23 @@ impl std::fmt::Debug for PrimFunc {
 #[derive(Debug, Clone)]
 pub enum Tm {
     Var(Ix),
-    Decl(Span<String>),
-    Obj(Rc<Tm>, Span<String>),
-    Lam(Span<String>, Icit, Rc<Tm>),
+    Decl(Span<SmolStr>),
+    Obj(Rc<Tm>, Span<SmolStr>),
+    Lam(Span<SmolStr>, Icit, Rc<Tm>),
     App(Rc<Tm>, Rc<Tm>, Icit),
     AppPruning(Rc<Tm>, Pruning),
     U(u32),
-    Pi(Span<String>, Icit, Rc<Ty>, Rc<Ty>),
-    Let(Span<String>, Rc<Ty>, Rc<Tm>, Rc<Tm>),
+    Pi(Span<SmolStr>, Icit, Rc<Ty>, Rc<Ty>),
+    Let(Span<SmolStr>, Rc<Ty>, Rc<Tm>, Rc<Tm>),
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
     Prim(Rc<Val>, PrimFunc),
-    Sum(Span<String>, Vec<(Span<String>, Rc<Tm>, Rc<Ty>, Icit)>, Vec<Span<String>>, bool),
+    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Rc<Tm>, Rc<Ty>, Icit)>, Vec<Span<SmolStr>>, bool),
     SumCase {
         typ: Rc<Tm>,
-        case_name: Span<String>,
-        datas: Vec<(Span<String>, Rc<Tm>, Icit)>,
+        case_name: Span<SmolStr>,
+        datas: Vec<(Span<SmolStr>, Rc<Tm>, Icit)>,
         is_trait: bool,
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
@@ -124,8 +125,8 @@ impl Tm {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatternDetail {
     Any(Span<()>),
-    Bind(Span<String>),
-    Con(Span<String>, Vec<PatternDetail>),
+    Bind(Span<SmolStr>),
+    Con(Span<SmolStr>, Vec<PatternDetail>),
 }
 
 impl PatternDetail {
@@ -138,9 +139,9 @@ impl PatternDetail {
             },
         }
     }
-    fn bind_names(&self, ns: &List<String>) -> List<String> {
+    fn bind_names(&self, ns: &List<SmolStr>) -> List<SmolStr> {
         match self {
-            PatternDetail::Any(_) => ns.prepend("_".to_owned()),
+            PatternDetail::Any(_) => ns.prepend(SmolStr::new("_")),
             PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
             PatternDetail::Con(_, pattern_details) => {
                 pattern_details
@@ -217,25 +218,25 @@ impl std::fmt::Debug for Closure {
 pub enum Val {
     Flex(MetaVar, Spine),
     Rigid(Lvl, Spine),
-    Decl(Span<String>, Spine),
-    Obj(Rc<Val>, Span<String>, Spine),
-    Lam(Span<String>, Icit, Closure),
-    Pi(Span<String>, Icit, Rc<VTy>, Closure),
+    Decl(Span<SmolStr>, Spine),
+    Obj(Rc<Val>, Span<SmolStr>, Spine),
+    Lam(Span<SmolStr>, Icit, Closure),
+    Pi(Span<SmolStr>, Icit, Rc<VTy>, Closure),
     U(u32),
     LiteralType,
     LiteralIntro(Span<String>),
     Prim(Rc<Val>, PrimFunc),
     Sum(
-        Span<String>,
-        Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>,
-        Vec<Span<String>>,
+        Span<SmolStr>,
+        Vec<(Span<SmolStr>, Rc<Val>, Rc<VTy>, Icit)>,
+        Vec<Span<SmolStr>>,
         bool,
     ),
     SumCase {
         is_trait: bool,
         typ: Rc<Val>,
-        case_name: Span<String>,
-        datas: Vec<(Span<String>, Rc<Val>, Icit)>,
+        case_name: Span<SmolStr>,
+        datas: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
     },
     Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
 }
@@ -300,11 +301,11 @@ pub struct Infer {
     meta: Vec<MetaEntry>,
     meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
     trait_solver: typeclass::Synth,
-    trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
-    trait_out_param: HashMap<String, Vec<bool>>,
+    trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
+    trait_out_param: HashMap<SmolStr, Vec<bool>>,
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
-    pub completion_table: Vec<(Span<()>, String)>,
+    pub completion_table: Vec<(Span<()>, SmolStr)>,
 }
 
 impl Infer {

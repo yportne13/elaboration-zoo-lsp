@@ -779,10 +779,10 @@ impl LanguageServer for Backend {
                 .filter(|x| x.0.contains(offset - 2))
                 //.inspect(|x| eprintln!("{}", x.1))
                 .map(|x| CompletionItem {
-                    label: x.1.clone(),
-                    insert_text: Some(x.1.clone()),
+                    label: x.1.to_string(),
+                    insert_text: Some(x.1.to_string()),
                     kind: Some(CompletionItemKind::VARIABLE),
-                    detail: Some(x.1.clone()),
+                    detail: Some(x.1.to_string()),
                     ..Default::default()
                 })
                 .collect();

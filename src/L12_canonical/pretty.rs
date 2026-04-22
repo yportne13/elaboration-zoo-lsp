@@ -1,3 +1,5 @@
+use smol_str::SmolStr;
+
 use crate::list::List;
 use super::syntax::Pruning;
 
@@ -18,7 +20,7 @@ fn paren(f: String) -> String {
     format!("({})", f)
 }
 
-fn fresh(ns: List<String>, suggested: &str) -> String {
+fn fresh(ns: List<SmolStr>, suggested: &str) -> String {
     if suggested == "_" {
         return "_".to_string();
     }
@@ -30,7 +32,7 @@ fn fresh(ns: List<String>, suggested: &str) -> String {
     candidate
 }
 
-fn go_ix(ns: List<String>, ix: u32) -> String {
+fn go_ix(ns: List<SmolStr>, ix: u32) -> String {
     let mut current_ix = ix;
     let current_ns = ns.iter();
     for name in current_ns {
@@ -47,11 +49,11 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
     "Variable index out of bounds".to_owned()
 }
 
-fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: &Pruning) -> String {
     fn go_pr_inner(
         p: i32,
-        top_ns: &List<String>,
-        mut ns: List<String>,
+        top_ns: &List<SmolStr>,
+        mut ns: List<SmolStr>,
         t: &Tm,
         mut pr: Pruning,
         arg_index: u32,
@@ -65,7 +67,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                         let arg_str = if n == "_" {
                             format!("@{}", arg_index)
                         } else {
-                            n.clone()
+                            n.clone().to_string()
                         };
                         let arg_display = match i {
                             Icit::Expl => arg_str,
@@ -89,7 +91,7 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
     go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0)
 }
 
-pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
         Tm::Decl(x) => x.data.to_string(),
@@ -110,7 +112,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         Tm::Lam(span, i, body) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &span.data);
-            let new_ns = ns.prepend(x.clone());
+            let new_ns = ns.prepend(SmolStr::new(&x));
 
             let binder = match i {
                 Icit::Expl => x,
@@ -132,7 +134,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             let is_anonymous = name_span.data == "_";
             if is_anonymous {
                 let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
+                let f_b = pretty_tm(PIP, ns.prepend(SmolStr::new("_")), b);
                 let ret = format!("{f_a} → {f_b}");
                 if need_paren {
                     paren(ret)
@@ -141,7 +143,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 }
             } else {
                 let x = fresh(ns.clone(), &name_span.data);
-                let new_ns = ns.prepend(x.clone());
+                let new_ns = ns.prepend(SmolStr::new(&x));
                 let binder = match i {
                     Icit::Expl => paren(format!("{x}: {}", pretty_tm(LETP, ns, a))),
                     Icit::Impl => bracket(format!("{x}: {}", pretty_tm(LETP, ns, a))),
@@ -158,7 +160,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         Tm::Let(name_span, a, t, u) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &name_span.data);
-            let new_ns = ns.prepend(x.clone());
+            let new_ns = ns.prepend(SmolStr::new(&x));
             let ret = format!(
                 "let {x}: {} = {};\n  {}",
                 pretty_tm(LETP, ns.clone(), a),
@@ -226,7 +228,7 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     }
 }
 
-fn pretty_nat(prec: i32, ns: List<String>, param: Option<&Tm>, sum: u128) -> String {
+fn pretty_nat(prec: i32, ns: List<SmolStr>, param: Option<&Tm>, sum: u128) -> String {
     match param {
         Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
             typ.as_ref(),

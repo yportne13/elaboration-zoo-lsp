@@ -1,4 +1,5 @@
 use colored::Colorize;
+use smol_str::SmolStr;
 
 use crate::list::List;
 
@@ -365,7 +366,7 @@ impl Infer {
         } else {
             match self.force(decl, a).as_ref() {
                 Val::Pi(span, icit, _, closure) if span.data == "_" => {
-                    let var_name = format!("x{}", l_prime.0);
+                    let var_name = SmolStr::new(format!("x{}", l_prime.0));
                     Tm::Lam(
                         empty_span(var_name),
                         *icit,

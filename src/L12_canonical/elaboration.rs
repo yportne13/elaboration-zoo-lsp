@@ -1,6 +1,7 @@
 use std::cmp::max;
 
 use colored::Colorize;
+use smol_str::SmolStr;
 
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
@@ -45,7 +46,7 @@ impl Infer {
     fn insert_until_go(
         &mut self,
         cxt: &Cxt,
-        name: Span<String>,
+        name: Span<SmolStr>,
         t: Rc<Tm>,
         va: Rc<Val>,
     ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
@@ -70,7 +71,7 @@ impl Infer {
     fn insert_until_name(
         &mut self,
         cxt: &Cxt,
-        name: Span<String>,
+        name: Span<SmolStr>,
         act: Result<(Rc<Tm>, Rc<VTy>), Error>,
     ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
@@ -314,7 +315,7 @@ impl Infer {
                     if let Some((meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         let err_msg = format!(
                             "find unsolved meta with type `{}`",//\n{:?}",
-                            super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, &oty)),
+                            super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
                             //ret,
                         );
                         let infer = self.clone();
@@ -518,11 +519,11 @@ impl Infer {
                             Decl::Def { name: name_d, params: p, ret_type, body } => {
                                 let prefix_name = name_raw.to_string();
                                 let t = self.infer(&cxt, Decl::Def {
-                                    name: name_d.clone().map(|x| format!("{}{x}", prefix_name)),
+                                    name: name_d.clone().map(|x| SmolStr::new(format!("{}{x}", prefix_name))),
                                     params: params.iter()
                                         .cloned()
                                         .chain(std::iter::once((
-                                            name_d.to_span().map(|_| "this".to_owned()),
+                                            name_d.to_span().map(|_| SmolStr::new("this")),
                                             name.clone(),
                                             Icit::Expl,
                                         )))
@@ -565,7 +566,7 @@ impl Infer {
                         .filter(|x| !x.1)
                         .map(|x| x.0)
                         .collect();
-                    let typ_name = format!("{:?}{:?}", trait_name.data, trait_param);
+                    let typ_name = SmolStr::new(format!("{:?}{:?}", trait_name.data, trait_param));
                     let inst = Instance {
                         assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
                         dependencies: List::new(),
@@ -576,7 +577,7 @@ impl Infer {
                     self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.clone())
-                        .fold(Raw::Var(trait_name.clone().map(|x| format!("{x}.mk"))), |ret, x| {
+                        .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
                             Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                         });
                     for decl in methods {
@@ -584,7 +585,7 @@ impl Infer {
                             ret = Raw::App(
                                 Box::new(ret),
                                 Box::new(Raw::Lam(
-                                    def_name.map(|_| "this".to_owned()),
+                                    def_name.map(|_| SmolStr::new("this")),
                                     Either::Icit(Icit::Expl),
                                     Box::new(params.into_iter().rev()
                                         .fold(body, |ret, x| Raw::Lam(x.0.clone(), Either::Icit(x.2), Box::new(ret)))
@@ -611,7 +612,7 @@ impl Infer {
             },
             Decl::TraitDecl { name, mut params, methods } => {
                 self.trait_solver.new_trait(name.data.clone());
-                let mut param = vec![(name.clone().map(|_| "Self".to_owned()), Raw::Hole(name.to_span()), Icit::Impl)];
+                let mut param = vec![(name.clone().map(|_| SmolStr::new("Self")), Raw::Hole(name.to_span()), Icit::Impl)];
                 param.append(&mut params);
                 let out_param = param.iter().map(|x| match &x.1 {
                         Raw::App(t, ..) if matches!(t.as_ref(), Raw::Var(d) if d.data == "outParam") => true,
@@ -625,12 +626,12 @@ impl Infer {
                     name: name.clone(),
                     params: param,
                     cases: vec![(
-                        name.map(|x| format!("{x}.mk")),
+                        name.map(|x| SmolStr::new(format!("{x}.mk"))),
                         methods
                             .into_iter()
                             .map(|x| (
                                 x.0.clone(),
-                                std::iter::once((x.0.clone().map(|_| "this".to_owned()), Raw::Var(x.0.map(|_| "Self".to_owned())), Icit::Expl))
+                                std::iter::once((x.0.clone().map(|_| SmolStr::new("this")), Raw::Var(x.0.map(|_| SmolStr::new("Self"))), Icit::Expl))
                                     .chain(x.1.into_iter())
                                     .rev()
                                     .fold(x.2, |a, b| {
@@ -673,10 +674,10 @@ impl Infer {
             },
 
             Raw::Obj(x, t) => {
-                let t = t.unwrap_or(empty_span("".to_owned()));
+                let t = t.unwrap_or(empty_span(SmolStr::new("")));
                 if t.data == "mk" {
                     if let Raw::Var(sum_name) = x.as_ref() {
-                        return self.infer_expr(cxt, Raw::Var(sum_name.clone().map(|n| format!("{n}.mk"))))
+                        return self.infer_expr(cxt, Raw::Var(sum_name.clone().map(|n| SmolStr::new(format!("{n}.mk")))))
                     }
                 }
                 let (tm, a) = self.infer_expr(cxt, *x.clone())?;
@@ -812,7 +813,7 @@ impl Infer {
                             cxt.env.clone(),
                             self.fresh_meta(
                                 &cxt.bind(
-                                    empty_span("x".to_string()),
+                                    empty_span(SmolStr::new("x")),
                                     self.quote(&cxt.decl, cxt.lvl, &a),
                                     a.clone(),
                                 ),
@@ -822,7 +823,7 @@ impl Infer {
                         self.unify_catch(
                             cxt,
                             &Val::Pi(
-                                empty_span("x".to_string()),
+                                empty_span(SmolStr::new("x")),
                                 i,
                                 a.clone(),
                                 b_closure.clone(),
@@ -941,9 +942,9 @@ impl Infer {
             }
         }
     }
-    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<String>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
+    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<SmolStr>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
-        let typ = typ_raw.to_typ().unwrap_or(Typ::Val(empty_span("$unknown$".to_owned())));
+        let typ = typ_raw.to_typ().unwrap_or(Typ::Val(empty_span(SmolStr::new("$unknown$"))));
         if t.data.is_empty() {
             self.trait_definition
                 .clone()//TODO: can remove this clone?
@@ -955,7 +956,7 @@ impl Infer {
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
-                            name: x.to_string(),
+                            name: x.clone().clone(),
                             arguments: args,
                         })
                         .is_some()
@@ -974,7 +975,7 @@ impl Infer {
                 }
                 self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok()
             })
-            .map(|y| self.infer_expr(cxt, Raw::app(Raw::Var(t_span.map(|_| format!("{}{}", y.2, t.data))), *x.clone()))) {
+            .map(|y| self.infer_expr(cxt, Raw::app(Raw::Var(t_span.map(|_| SmolStr::new(format!("{}{}", y.2, t.data)))), *x.clone()))) {
                 return x
             }
         {
@@ -993,7 +994,7 @@ impl Infer {
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
-                            name: x.to_string(),
+                            name: x.clone().clone(),
                             arguments: args,
                         })
                         .is_some()
@@ -1004,12 +1005,12 @@ impl Infer {
                         let params = {
                             let mut params = trait_params.clone();
                             params.push((
-                                methods_name.clone().map(|_| "$this".to_owned()),
-                                Raw::Var(methods_name.clone().map(|_| "Self".to_owned())),
+                                methods_name.clone().map(|_| SmolStr::new("$this")),
+                                Raw::Var(methods_name.clone().map(|_| SmolStr::new("Self"))),
                                 Icit::Expl
                             ));
                             params.push((
-                                methods_name.clone().map(|_| "$$".to_owned()),
+                                methods_name.clone().map(|_| SmolStr::new("$$")),
                                 trait_params.iter()
                                     .map(|x| x.0.clone())
                                     .fold(
@@ -1021,17 +1022,17 @@ impl Infer {
                             params.append(&mut methods_params.clone());
                             params
                         };
-                        let body = std::iter::once((Raw::Var(methods_name.clone().map(|_| "$this".to_owned())), Icit::Expl))
+                        let body = std::iter::once((Raw::Var(methods_name.clone().map(|_| SmolStr::new("$this"))), Icit::Expl))
                             .chain(methods_params.iter().map(|x| (Raw::Var(x.0.clone()), x.2)))
                             .fold(
                                 Raw::Obj(
-                                    Box::new(Raw::Var(methods_name.clone().map(|_| "$$".to_owned()))),
+                                    Box::new(Raw::Var(methods_name.clone().map(|_| SmolStr::new("$$")))),
                                     Some(methods_name.clone()),
                                 ),
                                 |ret, (x, icit)| Raw::App(Box::new(ret), Box::new(x), Either::Icit(icit))
                             );
                         Raw::Let(
-                            methods_name.clone().map(|x| format!("${x}")),
+                            methods_name.clone().map(|x| SmolStr::new(format!("${x}"))),
                             Box::new(params.iter().rev().fold(ret_type.clone(), |a, b| {
                                 Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                             })),
@@ -1039,7 +1040,7 @@ impl Infer {
                                 Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                             })),
                             Box::new(Raw::App(
-                                Box::new(Raw::Var(methods_name.clone().map(|x| format!("${x}")))),
+                                Box::new(Raw::Var(methods_name.clone().map(|x| SmolStr::new(format!("${x}"))))),
                                 x.clone(),
                                 Either::Icit(Icit::Expl),
                             )),

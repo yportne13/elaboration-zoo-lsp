@@ -1,6 +1,8 @@
 
 use std::collections::HashMap;
 
+use smol_str::SmolStr;
+
 use crate::list::List;
 
 use super::{Val, Span, empty_span};
@@ -8,11 +10,11 @@ use super::{Val, Span, empty_span};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Typ {
     Any,
-    Val(Span<String>),
+    Val(Span<SmolStr>),
     Var(u32),
-    Construct(Span<String>, Vec<Typ>),
+    Construct(Span<SmolStr>, Vec<Typ>),
     Fn(Box<Typ>, Box<Typ>),
-    Trait(Span<String>),
+    Trait(Span<SmolStr>),
 }
 
 impl Val {
@@ -26,8 +28,8 @@ impl Val {
             Val::Obj(val, span, sp) => None,
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => None,
-            Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
-            Val::LiteralType => Some(Typ::Val(empty_span("String".to_owned()))),
+            Val::U(x) => Some(Typ::Val(empty_span(SmolStr::new(format!("Type {x}"))))),
+            Val::LiteralType => Some(Typ::Val(empty_span(SmolStr::new("String")))),
             Val::LiteralIntro(span) => todo!(),
             Val::Prim(_, _) => todo!(),
             Val::Sum(span, items, _, _) => Some(
@@ -49,7 +51,7 @@ impl Val {
 /// A type class applied to arguments.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Assertion {
-    pub name: String,
+    pub name: SmolStr,
     pub arguments: Vec<Typ>,
 }
 
@@ -58,7 +60,7 @@ pub struct Assertion {
 pub struct Instance {
     pub assertion: Assertion,
     pub dependencies: List<Assertion>,
-    pub lvl: Span<String>,
+    pub lvl: Span<SmolStr>,
 }
 
 /// A node in the "search tree" that stores information about
@@ -77,7 +79,7 @@ pub struct GeneratorNode {
 pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
-    lvl: Span<String>,
+    lvl: Span<SmolStr>,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -107,7 +109,7 @@ pub enum Waiter {
 #[derive(Debug, Clone)]
 pub struct TableEntry {
     waiters: Vec<Waiter>,
-    answers: Vec<(Assertion, Span<String>)>,
+    answers: Vec<(Assertion, Span<SmolStr>)>,
 }
 
 /// The state of the algorithm.
@@ -122,11 +124,11 @@ pub struct Synth {
     /// A more in-depth explanation can be found in [`Synth::synth`].
     resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
-    pub class_instances: HashMap<String, Vec<Instance>>,
+    pub class_instances: HashMap<SmolStr, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
     assertion_table: HashMap<Assertion, TableEntry>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Span<String>>,
+    root_answer: Option<Span<SmolStr>>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -138,11 +140,11 @@ impl Synth {
         Self::default()
     }
 
-    pub fn new_trait(&mut self, name: String) {
+    pub fn new_trait(&mut self, name: SmolStr) {
         self.class_instances.insert(name, vec![]);
     }
 
-    pub fn impl_trait_for(&mut self, trait_name: String, instance: Instance) {
+    pub fn impl_trait_for(&mut self, trait_name: SmolStr, instance: Instance) {
         self.class_instances
             .entry(trait_name)
             .or_default()
@@ -160,7 +162,7 @@ impl Synth {
         subgoal == answer
     }
 
-    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Span<String>)> {
+    fn try_resolve(&mut self, goal: &Assertion, instance: &Instance) -> Option<(List<Assertion>, Span<SmolStr>)> {
         // 名字必须匹配
         if goal.name != instance.assertion.name {
             return None;
@@ -188,7 +190,7 @@ impl Synth {
     }
 
     /// The entry point for the algorithm.
-    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<String>> {
+    pub fn synth(&mut self, assertion: Assertion) -> Option<Span<SmolStr>> {
         // Insert the "root" goal to be solved.
         self.new_subgoal(&assertion, &Waiter::Root);
 

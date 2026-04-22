@@ -1,4 +1,5 @@
 use lex::{TokenKind, TokenNode};
+use smol_str::SmolStr;
 use syntax::{Decl, Either, Icit, Pattern, Raw};
 use std::collections::HashMap;
 use macros::*;
@@ -175,6 +176,26 @@ fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Str
     }
 }
 
+fn smolstr<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
+    move |input: &'b [TokenNode<'a>], _: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| match input.first() {
+        Some(x) => if x.data.1 == p {
+            input
+                .get(1..)
+                .map(|i| (i, x.map(|s| SmolStr::new(s.0))))
+                .ok_or_else(|| IError {
+                    msg: x.map(|_| ErrMsg::Expect(p))
+                })
+        } else {
+            Err(IError {
+                msg: x.map(|_| ErrMsg::Expect(p))
+            })
+        },
+        _ => Err(IError {
+            msg: empty_span(ErrMsg::Expect(p))
+        }),
+    }
+}
+
 fn string_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode<'a>], Span<String>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
     move |input: &'b [TokenNode<'a>], _: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| match input.first() {
         Some(x) => if x.data.1 == p && x.data.0 == s {
@@ -243,9 +264,9 @@ where
 }
 
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Raw> {
-    string(Ident)
+    smolstr(Ident)
         .map(Raw::Var)
-        .or(kw(ThisKeyword).map(|s| Raw::Var(s.map(|_| "this".to_string()))))
+        .or(kw(ThisKeyword).map(|s| Raw::Var(s.map(|_| SmolStr::new("this")))))
         .or(Cut((kw(TypeKeyword), string(Num))).map(|(_, num)| Raw::U(
             num.and_then(|x| x.data.parse::<u32>().ok()).unwrap_or(0)
         )))//TODO:do not unwrap
@@ -253,10 +274,10 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Has
         .or(string(Str).map(Raw::LiteralIntro))
         .or(string(Num).map(|x| {
             let num_span = x.map(|x| x.parse::<u64>().unwrap());
-            let mut ret = Raw::Var(num_span.to_span().map(|_| "zero".to_owned()));
+            let mut ret = Raw::Var(num_span.to_span().map(|_| SmolStr::new("zero")));
             let mut num = num_span.data;
             while num > 0 {
-                ret = Raw::app(Raw::Var(num_span.to_span().map(|_| "succ".to_owned())), ret);
+                ret = Raw::app(Raw::Var(num_span.to_span().map(|_| SmolStr::new("succ"))), ret);
                 num -= 1;
             }
             ret
@@ -266,7 +287,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Has
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Raw> {
-    (p_atom1, Cut((kw(T![.]), string(Ident))).many0())
+    (p_atom1, Cut((kw(T![.]), smolstr(Ident))).many0())
         .map(|(x, t)| t.into_iter().fold(x, |x, t| {
             Raw::Obj(Box::new(x), t.1)
         }))
@@ -280,10 +301,10 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, (Vec
             (string(Op), expr_bp())
         )*/.parse(input, state)?;
 
-        while let Ok((input_t, op)) = string(Op)
-            .or(kw(LParen).map(|x| x.map(|_| "(".to_owned())))
-            .or(kw(LSquare).map(|x| x.map(|_| "[".to_owned())))
-            .or(kw(Dot).map(|x| x.map(|_| ".".to_owned())))
+        while let Ok((input_t, op)) = smolstr(Op)
+            .or(kw(LParen).map(|x| x.map(|_| SmolStr::new("("))))
+            .or(kw(LSquare).map(|x| x.map(|_| SmolStr::new("["))))
+            .or(kw(Dot).map(|x| x.map(|_| SmolStr::new("."))))
             .parse(input, state) {
             if let Some((l_bp, ())) = postfix_binding_power(&op) {
                 if l_bp < min_bp {
@@ -292,7 +313,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, (Vec
                 input = input_t;
 
                 lhs = if &op.data == "[" {
-                    let (input_t, ret) = if let Ok((input_t, (icit, raw))) = (string(Ident), Cut((kw(Eq), p_raw)))
+                    let (input_t, ret) = if let Ok((input_t, (icit, raw))) = (smolstr(Ident), Cut((kw(Eq), p_raw)))
                         .map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
                         .parse(input, state) {
                             (
@@ -356,16 +377,16 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, (Vec
                             Raw::Hole(empty_span(()))
                         }
                     };
-                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span("mux".to_owned())), lhs), mhs), rhs)
+                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new("mux"))), lhs), mhs), rhs)
                 } else if &op.data == "." {
-                    let name = match string(Ident).parse(input, state) {
+                    let name = match smolstr(Ident).parse(input, state) {
                         Ok((input_t, name)) => {
                             input = input_t;
                             name
                         },
                         Err(e) => {
                             state.0.push(e);
-                            empty_span("".to_owned())
+                            empty_span(SmolStr::new(""))
                         }
                     };
                     Raw::Obj(Box::new(lhs), Some(name))
@@ -396,32 +417,32 @@ fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMa
     expr_bp(0).parse(input, state)
 }
 
-fn prefix_binding_power(op: &Span<String>) -> ((), u8) {
-    match op.data.as_str() {
-        "+" | "-" => ((), 19),
-        "!" => ((), 30),
+fn prefix_binding_power(op: &Span<SmolStr>) -> ((), u8) {
+    match &op.data {
+        s if (s == "+") | (s == "-") => ((), 19),
+        s if s == "!" => ((), 30),
         _ => panic!("bad op: {:?}", op),
     }
 }
 
-fn postfix_binding_power(op: &Span<String>) -> Option<(u8, ())> {
-    let res = match op.data.as_str() {
-        "!" => (20, ()),
-        "[" => (20, ()),
-        "(" => (20, ()),
+fn postfix_binding_power(op: &Span<SmolStr>) -> Option<(u8, ())> {
+    let res = match &op.data {
+        s if s == "!" => (20, ()),
+        s if s == "[" => (20, ()),
+        s if s == "(" => (20, ()),
         _ => return None,
     };
     Some(res)
 }
 
-fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
-    let res = match op.data.as_str() {
-        "=" => (2, 1),
-        "?" => (4, 3),
-        "+" | "-" => (15, 16),
-        "*" | "/" | "%" => (17, 18),
-        "." => (25, 26),
-        "::" => (24, 23),
+fn infix_binding_power(op: &Span<SmolStr>) -> Option<(u8, u8)> {
+    let res = match &op.data {
+        s if s == "=" => (2, 1),
+        s if s == "?" => (4, 3),
+        s if (s == "+") | (s == "-") => (15, 16),
+        s if (s == "*") | (s == "/") | (s == "%") => (17, 18),
+        s if s == "." => (25, 26),
+        s if s == "::" => (24, 23),
         x => if x.contains(':') {
             (2, 1)
         } else if x.contains(['*', '/', '%']){
@@ -443,7 +464,7 @@ fn infix_binding_power(op: &Span<String>) -> Option<(u8, u8)> {
 
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
     let named_impl_arg = square_cut(
-        (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
+        (smolstr(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
             .many0_sep(kw(T![,]))
     ).map(|x| x.unwrap_or_default());
@@ -466,17 +487,17 @@ fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Has
     Ok((input, result))
 }
 
-fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Span<String>> {
-    string(Ident).or(string(Hole)).parse(input, state)
+fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Span<SmolStr>> {
+    smolstr(Ident).or(smolstr(Hole)).parse(input, state)
 }
 
 fn p_lam_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>),
-) -> IResult<'a, 'b, (Span<String>, Either)> {
+) -> IResult<'a, 'b, (Span<SmolStr>, Either)> {
     let explicit_binder = p_bind.map(|x| (x, Either::Icit(Icit::Expl)));
     let implicit_name_binder = square(
-        (string(Ident), Cut((kw(Eq), p_bind))).map(|(x, (_, y))| (y.unwrap_or(empty_span("".to_owned())), Either::Name(x)))
+        (smolstr(Ident), Cut((kw(Eq), p_bind))).map(|(x, (_, y))| (y.unwrap_or(empty_span(SmolStr::new(""))), Either::Name(x)))
             .or(p_bind.map(|x| (x, Either::Icit(Icit::Impl))))
     );
 
@@ -500,7 +521,7 @@ fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
 fn p_pi_impl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>),
-) -> Result<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>), IError> {
+) -> Result<(&'b [TokenNode<'a>], Vec<(Span<SmolStr>, Raw, Icit)>), IError> {
     square_cut(
         (
             p_bind, // 解析一个或多个绑定变量 xs
@@ -519,7 +540,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
 fn p_pi_impl_binder_option<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
+) -> IResult<'a, 'b, Vec<(Span<SmolStr>, Raw, Icit)>> {
     p_pi_impl_binder
         .option()
         .map(|x| x.unwrap_or_default())
@@ -530,7 +551,7 @@ fn p_pi_impl_binder_option<'a: 'b, 'b>(
 fn p_pi_expl_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>),
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
+) -> IResult<'a, 'b, Vec<(Span<SmolStr>, Raw, Icit)>> {
     paren(
         (
             p_bind,                // 解析一个或多个绑定变量 xs
@@ -545,7 +566,7 @@ fn p_pi_expl_binder<'a: 'b, 'b>(
 fn p_pi_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>),
-) -> IResult<'a, 'b, Vec<(Span<String>, Raw, Icit)>> {
+) -> IResult<'a, 'b, Vec<(Span<SmolStr>, Raw, Icit)>> {
     // 组合所有可能的解析器
     p_pi_impl_binder.or(p_pi_expl_binder).parse(input, state)
 }
@@ -569,7 +590,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
             Some((kw, cod)) => Raw::Pi(
-                kw.map(|_| "_".to_owned()),
+                kw.map(|_| SmolStr::new("_")),
                 Icit::Expl,
                 Box::new(sp),
                 Box::new(cod),
@@ -582,7 +603,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Raw> {
     Cut((
         kw(LetKeyword),
-        string(Ident),
+        smolstr(Ident),
         (kw(Colon), p_raw).map(|(_, x)| x).option(),
         kw(Eq),
         p_raw,
@@ -592,7 +613,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
     ))
         .map(|(_, binder, ann, _, val, _, _, body)| {
             Raw::Let(
-                binder.unwrap_or(empty_span("".to_owned())),
+                binder.unwrap_or(empty_span(SmolStr::new(""))),
                 Box::new(ann.flatten().unwrap_or(Raw::Hole(empty_span(())))),
                 Box::new(val.unwrap_or(Raw::Hole(empty_span(())))),
                 Box::new(body.unwrap_or(Raw::Hole(empty_span(())))),
@@ -605,12 +626,12 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, H
     (
         string(Ident),
         brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
-    ).map(|x| Pattern::Con(x.0.map(|t| format!("{t}.mk")), x.1, Either::Icit(Icit::Expl)))
+    ).map(|x| Pattern::Con(x.0.map(|t| SmolStr::new(format!("{t}.mk"))), x.1, Either::Icit(Icit::Expl)))
         .or((
-            string(Ident),
+            smolstr(Ident),
             paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
                 .or(square_cut(
-                    (string(Ident), kw(Eq), p_pattern).map(|x| x.2.to_name(x.0))
+                    (smolstr(Ident), kw(Eq), p_pattern).map(|x| x.2.to_name(x.0))
                         .or(p_pattern.map(|x| x.to_impl()))
                     .many1_sep(kw(T![,]))
                 ).map(|x| x.unwrap_or_default()))
@@ -619,7 +640,7 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, H
         ).map(|(x, t)| Pattern::Con(x, t, Either::Icit(Icit::Expl))))
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
         .or(paren(p_pattern.many1_sep(kw(T![,]))).map(|x| Pattern::Con(
-            empty_span(format!("Tuple{}.mk", x.len())),
+            empty_span(SmolStr::new(format!("Tuple{}.mk", x.len()))),
             x,
             Either::Icit(Icit::Expl),
         )))
@@ -650,7 +671,7 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
         paren_cut(p_raw.many1_sep(kw(T![,]))),
     ))
         .map(|(_, scrutinee, args)| args.flatten().unwrap_or_default().into_iter()
-            .fold(Raw::Var(scrutinee.map_or(empty_span("".to_owned()), |x| x.map(|x| format!("{x}.mk")))), |acc, x| 
+            .fold(Raw::Var(scrutinee.map_or(empty_span(SmolStr::new("")), |x| x.map(|x| SmolStr::new(format!("{x}.mk"))))), |acc, x| 
                 Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
             ))
         .parse(input, state)
@@ -687,7 +708,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
 fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Decl> {
     Cut((
         kw(DefKeyword),
-        string(Ident).or(string(Op)),
+        smolstr(Ident).or(smolstr(Op)),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
@@ -697,7 +718,7 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashM
         p_raw,
     ))
         .map(|(_, name, params, ret, _, _, body)| Decl::Def {
-            name: name.unwrap_or(empty_span("".to_owned())),
+            name: name.unwrap_or(empty_span(SmolStr::new(""))),
             params: params.unwrap_or_default(),
             ret_type: ret.flatten().unwrap_or(Raw::Hole(empty_span(()))),
             body: body.unwrap_or(Raw::Hole(empty_span(()))),
@@ -714,13 +735,13 @@ fn p_print<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Has
 fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Decl> {
     Cut((
         kw(EnumKeyword),
-        string(Ident),
+        smolstr(Ident),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         brace(
             (
-                string(Ident),
+                smolstr(Ident),
                 p_pi_binder
                     .many0()
                     .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
@@ -739,7 +760,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
     ))
         .map(|(_, name, params, fields)| Decl::Enum {
             is_trait: false,
-            name: name.unwrap_or(empty_span("".to_owned())),
+            name: name.unwrap_or(empty_span(SmolStr::new(""))),
             params: params.unwrap_or_default(),
             cases: fields.flatten().unwrap_or_default(),
         })
@@ -749,10 +770,10 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
 fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Decl> {
     Cut((
         kw(StructKeyword),
-        string(Ident),
+        smolstr(Ident),
         p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
         brace(
-            (string(Ident), kw(T![:]), p_raw)
+            (smolstr(Ident), kw(T![:]), p_raw)
                 .map(|(name, _, ty)| (name, ty))
                 .many0_sep(kw(EndLine)), // named fields
         ), /*.or(
@@ -768,11 +789,11 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Ha
     ))
         .map(|(_, name, params, fields)| Decl::Enum {
             is_trait: false,
-            name: name.clone().unwrap_or(empty_span("".to_owned())),
+            name: name.clone().unwrap_or(empty_span(SmolStr::new(""))),
             params: params.clone().unwrap_or_default(),
             cases: vec![
                 (
-                    name.clone().map(|x| x.map(|x| format!("{x}.mk"))).unwrap_or(empty_span("".to_owned())),
+                    name.clone().map(|x| x.map(|x| SmolStr::new(format!("{x}.mk")))).unwrap_or(empty_span(SmolStr::new(""))),
                     fields.clone().flatten().unwrap_or_default().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
                     None,
                 ),
@@ -784,7 +805,7 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Ha
 fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Decl> {
     let p_def_declare = (
         kw(DefKeyword),
-        string(Ident).or(string(Op)),
+        smolstr(Ident).or(smolstr(Op)),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
@@ -793,7 +814,7 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>,
         .map(|(_, name, params, ret)| (name, params, ret));
     (
         kw(TraitKeyword),
-        string(Ident),
+        smolstr(Ident),
         p_pi_impl_binder_option,
         brace(p_def_declare.many0_sep(kw(EndLine))),
     )
@@ -810,7 +831,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
         kw(ImplKeyword),
         p_pi_impl_binder_option,
         (
-            string(Ident),
+            smolstr(Ident),
             square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or_default()),
             Cut((
                 kw(ForKeyword),
@@ -823,14 +844,14 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
         Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole(empty_span(()))), x.3, false),
         Some(Err(name)) => (
             x.1.clone(),
-            x.0.map(|_| format!("$trait_name${}", name)),
+            x.0.map(|_| SmolStr::new(format!("$trait_name${}", name))),
             //x.1.unwrap_or_default().into_iter().map(|x| Raw::Var(x.0)).collect(),
             vec![],
             name,
             x.3,
             true,
         ),
-        None => (x.1, empty_span("".to_owned()), vec![], Raw::Hole(empty_span(())), x.3, false)
+        None => (x.1, empty_span(SmolStr::new("")), vec![], Raw::Hole(empty_span(())), x.3, false)
     })
         .map(|(params, trait_name, trait_params, name, body, need_create)| Decl::ImplDecl {
             name,

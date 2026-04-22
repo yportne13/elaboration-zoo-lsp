@@ -138,6 +138,7 @@ impl Infer {
                             return Ok(ret)
                         }
                 }
+                self.meta_contrains.clear();
             }
         }
         //println!("search failed");

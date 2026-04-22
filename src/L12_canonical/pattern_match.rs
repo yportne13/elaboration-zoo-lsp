@@ -2,6 +2,8 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
 };
 
+use smol_str::SmolStr;
+
 use crate::parser_lib::{Span, ToSpan};
 
 use super::{
@@ -14,7 +16,7 @@ use super::{
 
 type Var = i32;
 
-type Constructor = Span<String>;
+type Constructor = Span<SmolStr>;
 
 #[derive(Debug, Clone)]
 pub enum Warning {
@@ -127,7 +129,7 @@ impl Compiler {
         typ: &Rc<Val>, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
         all_constrs: &'a [Constructor],
     ) -> Result<
-        Vec<(&'a Constructor, Vec<(Span<String>, Rc<Val>, Icit)>, Cxt)>,
+        Vec<(&'a Constructor, Vec<(Span<SmolStr>, Rc<Val>, Icit)>, Cxt)>,
         Error,
     > {
         let mut accessible = Vec::new();
@@ -185,7 +187,7 @@ impl Compiler {
     fn compile_aux(
         &mut self,
         infer: &mut Infer,
-        heads: &[(Rc<Val>, Span<String>, Icit)],
+        heads: &[(Rc<Val>, Span<SmolStr>, Icit)],
         arms: &[(MatchArm, usize, Cxt, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
         context: &MatchContext,
     ) -> Result<bool, Error> {
@@ -257,9 +259,9 @@ impl Compiler {
                                 if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
                                     cxt.clone()
                                 } else {
-                                    cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
+                                    cxt.bind(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
                                 },
-                                arm.3.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&arm.3.decl, arm.3.lvl, typ), typ.clone()),
+                                arm.3.bind(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), infer.quote(&arm.3.decl, arm.3.lvl, typ), typ.clone()),
                                 arm.4.clone(),
                                 arm.5.clone(),
                                 arm.6.clone(),
@@ -280,7 +282,7 @@ impl Compiler {
                         Val::Sum(_, param, cases, _) => (param, cases),
                         _ => {
                             //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
-                            (&vec![], &vec![empty_span("$any$".to_owned())])
+                            (&vec![], &vec![empty_span(SmolStr::new("$any$"))])
                         }
                     };
 
@@ -340,9 +342,9 @@ impl Compiler {
                                             if !x.data {
                                                 cxt.clone()
                                             } else {
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
+                                                cxt.bind(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
                                             },
-                                            cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
+                                            cxt_for_filter.bind(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
                                             new_heads,
                                             raw.clone(),
                                             target_typ.clone(),
@@ -407,8 +409,8 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
-                                                cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
+                                                cxt.bind(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
+                                                cxt_for_filter.bind(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
                                                 vec![],
                                                 raw.clone(),
                                                 target_typ.clone(),
@@ -509,7 +511,7 @@ impl Compiler {
         let typ = infer.force(&cxt.decl, &typ);
         self.compile_aux(
             infer,
-            &[(typ.clone(), empty_span("".to_owned()), Icit::Expl)],
+            &[(typ.clone(), empty_span(SmolStr::new("")), Icit::Expl)],
             &arms
                 .iter()
                 .enumerate()
@@ -569,7 +571,7 @@ impl Compiler {
                 datas: params,
             } => (case_name, params),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (&empty_span("$unknown$".to_owned()), &vec![])
+            _ => (&empty_span(SmolStr::new("$unknown$")), &vec![])
         };
 
         arms.iter()

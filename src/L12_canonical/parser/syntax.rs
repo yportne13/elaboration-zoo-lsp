@@ -1,3 +1,5 @@
+use smol_str::SmolStr;
+
 use crate::{parser_lib::{Span, ToSpan}};
 
 use super::empty_span;
@@ -10,7 +12,7 @@ pub enum Icit {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Either {
-    Name(Span<String>),
+    Name(Span<SmolStr>),
     Icit(Icit),
 }
 
@@ -26,7 +28,7 @@ impl Either {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
     Any(Span<bool>, Either),
-    Con(Span<String>, Vec<Pattern>, Either),
+    Con(Span<SmolStr>, Vec<Pattern>, Either),
 }
 
 impl Pattern {
@@ -36,7 +38,7 @@ impl Pattern {
             Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Either::Icit(Icit::Impl)),
         }
     }
-    pub fn to_name(self, name: Span<String>) -> Self {
+    pub fn to_name(self, name: Span<SmolStr>) -> Self {
         match self {
             Pattern::Any(span, _) => Pattern::Any(span, Either::Name(name)),
             Pattern::Con(name1, pats, _) => Pattern::Con(name1, pats, Either::Name(name)),
@@ -66,22 +68,22 @@ impl Pattern {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Raw {
-    Var(Span<String>),
-    Obj(Box<Raw>, Option<Span<String>>),
-    Lam(Span<String>, Either, Box<Raw>),
+    Var(Span<SmolStr>),
+    Obj(Box<Raw>, Option<Span<SmolStr>>),
+    Lam(Span<SmolStr>, Either, Box<Raw>),
     App(Box<Raw>, Box<Raw>, Either),
     U(u32),
-    Pi(Span<String>, Icit, Box<Raw>, Box<Raw>),
-    Let(Span<String>, Box<Raw>, Box<Raw>, Box<Raw>),
+    Pi(Span<SmolStr>, Icit, Box<Raw>, Box<Raw>),
+    Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
     Hole(Span<()>),
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>, u32, bool),
+    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Icit, Raw)>, Vec<Span<SmolStr>>, u32, bool),
     SumCase {
         is_trait: bool,
         typ: Box<Raw>,
-        case_name: Span<String>,
-        datas: Vec<(Span<String>, Raw, Icit)>,
+        case_name: Span<SmolStr>,
+        datas: Vec<(Span<SmolStr>, Raw, Icit)>,
     },
 }
 
@@ -151,7 +153,7 @@ impl std::fmt::Display for Raw {
                                 write!(f, " {}({}) => {}", name.data,
                                     patterns.iter().map(|p| {
                                         match p {
-                                            Pattern::Any(_, _) => "_".to_string(),
+                                            Pattern::Any(_, _) => SmolStr::new("_"),
                                             Pattern::Con(n, _, _) => n.data.clone(),
                                         }
                                     }).collect::<Vec<_>>().join(" "),
@@ -201,27 +203,27 @@ impl std::fmt::Display for Raw {
 #[derive(Clone, Debug)]
 pub enum Decl {
     Def {
-        name: Span<String>,
-        params: Vec<(Span<String>, Raw, Icit)>,
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
         ret_type: Raw,
         body: Raw,
     },
     Println(Raw),
     Enum {
         is_trait: bool,
-        name: Span<String>,
-        params: Vec<(Span<String>, Raw, Icit)>,
-        cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        cases: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Option<Raw>)>,
     },
     TraitDecl {
-        name: Span<String>,
-        params: Vec<(Span<String>, Raw, Icit)>,
-        methods: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>,
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        methods: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>,
     },
     ImplDecl {
         name: Raw,
-        params: Vec<(Span<String>, Raw, Icit)>,
-        trait_name: Span<String>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        trait_name: Span<SmolStr>,
         trait_params: Vec<Raw>,
         methods: Vec<Decl>,
         need_create: bool,
