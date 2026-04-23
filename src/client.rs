@@ -1,5 +1,5 @@
 use lsp_server::Connection;
-use lsp_types::*;
+use lsp_types::{notification::ShowMessage, *};
 use notification::{LogMessage, Notification, PublishDiagnostics};
 use std::fmt::Display;
 
@@ -34,6 +34,21 @@ impl Client {
                         version,
                     },
                 ),
+            ))
+            .unwrap();
+    }
+    pub fn show_message<M: Display>(&self, typ: MessageType, message: M) {
+        //self.log_message(typ, message);
+        self.connection
+            .sender
+            .send(lsp_server::Message::Notification(
+                lsp_server::Notification::new(
+                    ShowMessage::METHOD.to_owned(),
+                    ShowMessageParams {
+                        typ,
+                        message: message.to_string(),
+                    }
+                )
             ))
             .unwrap();
     }

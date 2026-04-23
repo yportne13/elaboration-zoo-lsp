@@ -34,7 +34,7 @@ use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
 use lsp_server::{Connection, ExtractError, Message, ProtocolError, Request, RequestId, Response};
-use lsp_types::request::{CodeActionRequest, Completion, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
+use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
 //use crate::completion::completion;
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ struct Backend {
     document_map: DashMap<String, Rope>,
     document_id: DashMap<String, u32>,
     hover_table: DashMap<String, Infer>,
-    quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<CodeActionOrCommand> + Send + Sync>>>>,
+    quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>>,
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：(任务槽, 条件变量)
@@ -283,6 +283,18 @@ impl Backend {
                         Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
                         Err(ExtractError::MethodMismatch(req)) => req,
                     };
+                    match cast::<ExecuteCommand>(req.clone()) {
+                        Ok((id, params)) => {
+                            //eprintln!("got executeCommand request #{id}: {params:?}");
+                            let result = self.execute_command(params)?;
+                            let result = serde_json::to_value(&result).unwrap();
+                            let resp = Response { id, result: Some(result), error: None };
+                            self.client.connection.sender.send(Message::Response(resp))?;
+                            continue;
+                        }
+                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                        Err(ExtractError::MethodMismatch(req)) => req,
+                    };
                     // ...
                 }
                 Message::Response(resp) => {
@@ -355,10 +367,10 @@ impl LanguageServer for Backend {
                     completion_item: None,
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-                /*execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec!["dummy.do_something".to_string()],
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec!["typort.applyQuickFix".to_string()],
                     work_done_progress_options: Default::default(),
-                }),*/
+                }),
 
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -868,15 +880,45 @@ impl LanguageServer for Backend {
         debug!("watched files have changed!");
     }
 
-    fn execute_command(&self, _: ExecuteCommandParams) -> Result<Option<Value>> {
-        debug!("command executed!");
+    fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+        if params.command == "typort.applyQuickFix" {
+            // 从 arguments 取出 uri 和 id
+            let args = params.arguments;
+            let uri: String = serde_json::from_value(args[0].clone()).unwrap();
+            let id: String = serde_json::from_value(args[1].clone()).unwrap();
 
-        /*TODO:match self.client.apply_edit(WorkspaceEdit::default()) {
-            Ok(res) if res.applied => self.client.log_message(MessageType::INFO, "applied"),
-            Ok(_) => self.client.log_message(MessageType::INFO, "rejected"),
-            Err(err) => self.client.log_message(MessageType::ERROR, err),
-        }*/
+            // 在这里进行实际的计算（可以访问之前的 AST、类型等）
+            //let result_text = self.compute_actual_fix(&uri, &id).await?;
+            let result_text = if let Some(map) = self.quickfix_map.get(&uri) {
+                if let Some(code_actions) = map.get(&id) {
+                    eprintln!("searching...");
+                    code_actions.iter().flat_map(|x| {
+                        let ret = x();
+                        eprintln!("{:?}", ret);
+                        ret
+                    }).next()
+                        .unwrap_or("failed to find a solution".to_owned())
+                } else {
+                    "failed to find a solution".to_owned()
+                }
+            } else {
+                "failed to find a solution".to_owned()
+            };
 
+            // 应用编辑（如果需要）
+            /*let edit = WorkspaceEdit {
+                changes: Some([(uri.clone(), vec![TextEdit {
+                    range: Range::new(Position::new(0,0), Position::new(0,0)), // 根据实际计算得出
+                    new_text: result_text.clone(),
+                }])].into()),
+                ..Default::default()
+            };*/
+            // 如果只是展示弹窗而不修改文件，可以忽略 apply_edit
+            //self.client.apply_edit(edit)?;
+
+            // 右下角弹窗
+            self.client.show_message(MessageType::INFO, format!("find a possible solution: {}", result_text));
+        }
         Ok(None)
     }
 
@@ -887,8 +929,23 @@ impl LanguageServer for Backend {
             for diagnostic in params.context.diagnostics {
                 if let Some(data) = diagnostic.data {
                     if let Some(id) = data.as_str() {
-                        if let Some(code_actions) = map.get(id) {
-                            actions.extend(code_actions.iter().flat_map(|x| x()));
+                        if map.get(id).is_some() {
+                            // 构建一个 command，命令名自定义，参数带上诊断 id 和 uri
+                            let command = Command {
+                                title: "Canonical Quick Fix".to_string(),
+                                command: "typort.applyQuickFix".to_string(),
+                                arguments: Some(vec![
+                                    serde_json::Value::String(uri.clone()),
+                                    serde_json::Value::String(id.to_string()),
+                                ]),
+                            };
+                            actions.push(/*CodeActionOrCommand::Command(command)*/CodeActionOrCommand::CodeAction(CodeAction {
+                                title: "Search solution".to_string(),
+                                kind: Some(CodeActionKind::QUICKFIX),
+                                command: Some(command),
+                                edit: None,   // 不立即带编辑，改用命令
+                                ..Default::default()
+                            }));
                         }
                     }
                 }
@@ -1029,10 +1086,10 @@ impl Backend {
                     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
                     diagnostic.data = Some(serde_json::Value::String(id.clone()));
 
-                    let mut code_actions: Vec<Box<dyn Fn() -> Option<CodeActionOrCommand> + Send + Sync>> = Vec::new();
+                    let mut code_actions: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = Vec::new();
                     for fix_fn in e.1.into_iter() {
                         let url = params.uri.clone();
-                        code_actions.push(Box::new(move || match fix_fn() {
+                        code_actions.push(fix_fn/*Box::new(move || match fix_fn() {
                             Some(new_text) => {
                                 eprintln!("quick fix: {}", new_text);//TODO:
                                 let edit = TextEdit {
@@ -1053,7 +1110,7 @@ impl Backend {
                                 Some(lsp_types::CodeActionOrCommand::CodeAction(action))
                             }
                             None => { None }
-                        }));
+                        })*/);
                     }
                     if !code_actions.is_empty() {
                         quickfixes_for_uri.insert(id, code_actions);
