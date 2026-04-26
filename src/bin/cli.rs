@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use elaboration_zoo_lsp::Backend;
-use elaboration_zoo_lsp::client::{CliClient, ClientLike};
+use elaboration_zoo_lsp::client::CliClient;
 use elaboration_zoo_lsp::TextDocumentItem;
 use lsp_types::Url;
 
@@ -14,9 +14,13 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         std::process::exit(1);
     }
 
+    // Create CLI client with source map for pretty-printed diagnostics.
+    let cli_client = CliClient::new();
+    let source_map = cli_client.source_map.clone();
+
     // Create backend with CLI client.
     // Backend::new loads the builtin prelude, sets up Infer/Cxt.
-    let backend = Backend::new(CliClient);
+    let backend = Backend::new(cli_client);
 
     for filepath in &args[1..] {
         let path = PathBuf::from(filepath);
@@ -24,6 +28,9 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         let uri = Url::from_file_path(path.canonicalize()?).unwrap();
 
         eprintln!("Analyzing: {} ({} bytes)", uri.as_str(), contents.len());
+
+        // Store source text so the CLI client can render diagnostics with source context.
+        source_map.insert(uri.as_str().to_string(), contents.clone());
 
         // Run the analysis pipeline (parse + infer + diagnostics).
         backend.on_change::<false>(TextDocumentItem {
@@ -33,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         });
 
         // Print inferred results
-        if let Some(type_map) = backend.type_map.get(uri.as_str()) {
+        /*if let Some(type_map) = backend.type_map.get(uri.as_str()) {
             println!("\n=== Inferred definitions in {} ===", filepath);
             for tm in type_map.iter() {
                 match tm {
@@ -68,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     );
                 }
             }
-        }
+        }*/
     }
 
     Ok(())
