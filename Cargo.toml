@@ -3,6 +3,14 @@ name = "elaboration-zoo-lsp"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "elaboration-zoo-lsp"
+path = "src/main.rs"
+
+[[bin]]
+name = "typort"
+path = "src/bin/cli.rs"
+
 [dependencies]
 lsp-types = { version = "0.95.1", features = ["proposed"] }
 lsp-server = "0.7.6"
