@@ -124,8 +124,12 @@ impl Synth {
         match (a, b) {
             // Flex (unsolved meta) in either side matches anything
             (Val::Flex(..), _) | (_, Val::Flex(..)) => true,
+            // Rigid vars - must be same level with empty spines
+            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if x1 == x2 && sp1.is_empty() && sp2.is_empty() => {
+                true
+            }
             // Rigid var in instance pattern (empty spine) - bind to ground goal value
-            (_, Val::Rigid(x, sp)) if sp.is_empty() => {
+            (_, Val::Rigid(x, sp)) | (Val::Rigid(x, sp), _) if sp.is_empty() => {
                 if let Some(existing) = subst.get(&x.0) {
                     // Already bound - check structural equality with existing binding
                     Self::vals_eq_ground(a, existing)
@@ -133,10 +137,6 @@ impl Synth {
                     subst.insert(x.0, a.clone());
                     true
                 }
-            }
-            // Rigid vars - must be same level with empty spines
-            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) => {
-                x1 == x2 && sp1.is_empty() && sp2.is_empty()
             }
             // Decl (named types) - must be same name, match spines
             (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) => {
@@ -204,6 +204,16 @@ impl Synth {
                 n1.data == n2.data
                     && p1.len() == p2.len()
                     && p1.iter().zip(p2.iter()).all(|((_, v1, _, _), (_, v2, _, _))| {
+                        Self::vals_eq_ground_impl(v1, v2, visited)
+                    })
+            }
+            (
+                Val::SumCase { case_name: n1, datas: d1, .. },
+                Val::SumCase { case_name: n2, datas: d2, .. },
+            ) => {
+                n1.data == n2.data
+                    && d1.len() == d2.len()
+                    && d1.iter().zip(d2.iter()).all(|((_, v1, _), (_, v2, _))| {
                         Self::vals_eq_ground_impl(v1, v2, visited)
                     })
             }
