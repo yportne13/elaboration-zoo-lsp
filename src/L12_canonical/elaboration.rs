@@ -7,13 +7,13 @@ use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
-    Lvl, Rc,
+    Lvl, Rc, MetaVar,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
     typeclass::Instance,
     unification::PartialRenaming,
-    typeclass::{Assertion, Typ},
+    typeclass::Assertion,
 };
 
 impl Infer {
@@ -546,22 +546,17 @@ impl Infer {
                         let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
                         temp_cxt = temp_cxt.bind(x.clone(), self.quote(&temp_cxt.decl, temp_cxt.lvl, &a_eval), a_eval);
                     }
-                    let typ = self.check_universe(&temp_cxt, name.clone())?.0;
-                    let typ = self.eval(&temp_cxt.decl, &temp_cxt.env, &typ)
-                        .to_typ()
-                        .ok_or_else(|| Error(span.map(|_| "Not a type".to_string()), vec![]))?;
-                    let mut trait_param = vec![typ.clone()];
+                    let (typ_tm, _) = self.check_universe(&temp_cxt, name.clone())?;
+                    let typ_val = self.eval(&temp_cxt.decl, &temp_cxt.env, &typ_tm);
+                    let mut trait_param: Vec<Rc<Val>> = vec![self.force(&cxt.decl, &typ_val)];
                     for a in trait_params.clone() {
                         let (a_checked, _) = self.infer_expr(&temp_cxt, a)?;
                         let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
-                        match a_eval.to_typ() {
-                            Some(x) => trait_param.push(x),
-                            None => return Err(Error(span.map(|_| "Not a type".to_string()), vec![])),
-                        };
+                        trait_param.push(self.force(&cxt.decl, &a_eval));
                     }
                     let out_param = self.trait_out_param.get(&trait_name.data)
                         .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n)), vec![]))?;
-                    let trait_param = trait_param.into_iter()
+                    let trait_param: Vec<Rc<Val>> = trait_param.into_iter()
                         .zip(out_param)
                         .filter(|x| !x.1)
                         .map(|x| x.0)
@@ -944,15 +939,19 @@ impl Infer {
     }
     fn trait_wrap(&mut self, cxt: &Cxt, t: Span<SmolStr>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
-        let typ = typ_raw.to_typ().unwrap_or(Typ::Val(empty_span(SmolStr::new("$unknown$"))));
+        // Wildcard Val: Flex metavariables match anything in val_eq
+        let wildcard_val: Rc<Val> = Val::Flex(MetaVar(u32::MAX), List::new()).into();
+
         if t.data.is_empty() {
-            self.trait_definition
-                .clone()//TODO: can remove this clone?
-                .iter()
+            // Collect completions: find traits whose first non-out param could match typ_raw
+            let trait_defs = self.trait_definition.clone();
+            let completions: Vec<_> = trait_defs.iter()
                 .filter(|(x, (_, out_param, _))| {
                     let len = out_param.iter().filter(|x| !**x).count();
-                    let mut args = vec![super::typeclass::Typ::Any; len];
-                    args[0] = typ.clone();
+                    let mut args = vec![typ_raw.clone()];
+                    for _ in 1..len {
+                        args.push(wildcard_val.clone());
+                    }
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
@@ -961,8 +960,11 @@ impl Infer {
                         })
                         .is_some()
                 })
-                .flat_map(|x| x.1.2.iter())
-                .for_each(|x| self.completion_table.push((t_span, x.0.data.clone())))
+                .flat_map(|x| x.1.2.clone())
+                .collect();
+            for method_decl in &completions {
+                self.completion_table.push((t_span, method_decl.0.data.clone()));
+            }
         }
         if let Some(x) = cxt.namespace.iter()
             .filter(|x| x.1.contains(&t.data))
@@ -989,8 +991,10 @@ impl Infer {
                 })
                 .filter(|(x, _, out_param, _)| {
                     let len = out_param.iter().filter(|x| !**x).count();
-                    let mut args = vec![super::typeclass::Typ::Any; len];
-                    args[0] = typ.clone();
+                    let mut args = vec![typ_raw.clone()];
+                    for _ in 1..len {
+                        args.push(wildcard_val.clone());
+                    }
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {

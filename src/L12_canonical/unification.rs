@@ -4,7 +4,7 @@ use smol_str::SmolStr;
 use crate::list::List;
 
 use super::{
-    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
+    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
@@ -460,30 +460,25 @@ impl Infer {
         Ok(())
     }
     pub fn solve_trait(&mut self, cxt: &Cxt, x: &Rc<Val>) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
-        /*let mut x = x.clone();
-        let mut lvl = cxt.lvl;
-        while let Val::Pi(_, _, _, clos) = x {
-            x = self.closure_apply(&clos, Val::vvar(lvl));
-            lvl = lvl + 1;
-        }*/
         if let Val::Sum(name, params, _, true) = x.as_ref() {
             let out_param = if let Some(o) = self.trait_out_param.get(&name.data) {
                 o
             } else {
                 return Ok(None)
             };
-            let params = params
+            // Collect non-output param values directly as Val.
+            // Skip if any param contains unsolved metas (Flex) - let unification handle later.
+            let params: Vec<Rc<Val>> = params
                 .iter()
                 .zip(out_param)
                 .filter(|(_, x)| !**x)
                 .map(|x| x.0)
-                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm).to_typ())
-                .collect::<Option<Vec<_>>>();
-            let params = if let Some(params) = params {
-                params
-            } else {
-                return Ok(None)
-            };
+                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm))
+                .collect();
+            // If any param is still Flex (unsolved meta), bail out
+            if params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
+                return Ok(None);
+            }
             self.trait_solver.clean();
             if let Some(a) = self.trait_solver.synth(Assertion {
                 name: name.data.clone(),
@@ -501,7 +496,7 @@ impl Infer {
                 Err(format!(
                     "solve trait failed: {}[{:?}]\n{}",
                     name.data,
-                    params,
+                    params.iter().map(|v| format!("{:?}", v)).collect::<Vec<_>>().join(", "),
                     self.trait_solver
                         .class_instances
                         .get(&name.data)
