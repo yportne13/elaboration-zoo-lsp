@@ -49,12 +49,20 @@ def log2Up(x: Nat): Nat = match x {
     case succ(succ(tail)) => (log2Up (div2Up (tail + 2))) + 1
 }
 
+enum Unit {
+    unit
+}
+
+trait Data {
+    def :=(that: Self): Unit
+}
+
 struct Bool {
     name: Option[String]
 }
 
-impl Bool {
-    def :=(that: Bool): Bool = Bool.mk None
+impl Data for Bool {
+    def :=(that: Bool): Unit = unit
 }
 
 impl Into[Bool] for Boolean {
@@ -81,8 +89,8 @@ impl[width: Nat] Into[UInt[width]] for Nat {
     def into: UInt[width] = UInt.mk None
 }
 
-impl[width: Nat] Bits[width] {
-    def :=(that: Bits[width]): Bits[width] = Bits.mk None
+impl[width: Nat] Data for Bits[width] {
+    def :=(that: Bits[width]): Unit = unit
 }
 
 impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
@@ -95,12 +103,18 @@ impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
         UInt.mk None
 }
 
-impl[width: Nat] UInt[width] {
-    def *[width1: Nat](that: UInt[width1]): UInt[width + width1] =
+impl[width1: Nat, width2: Nat] Mul[UInt[width1], UInt[width1+width2]] for UInt[width2] {
+    def *(that: UInt[width1]): UInt[width + width1] =
         UInt.mk None
+}
+
+impl[width: Nat] UInt[width] {
     def +^(that: UInt[width]): UInt[width + 1] = UInt.mk None
     def -^(that: UInt[width]): UInt[width + 1] = UInt.mk None
-    def :=(that: UInt[width]): UInt[width] = UInt.mk None
+}
+
+impl[width: Nat] Data for UInt[width] {
+    def :=(that: UInt[width]): Unit = unit
 }
 
 impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
@@ -118,7 +132,10 @@ impl[width: Nat] SInt[width] {
         SInt.mk None
     def +^(that: SInt[width]): SInt[width + 1] = SInt.mk None
     def -^(that: SInt[width]): SInt[width + 1] = SInt.mk None
-    def :=(that: SInt[width]): SInt[width] = SInt.mk None
+}
+
+impl[width: Nat] Data for SInt[width] {
+    def :=(that: SInt[width]): Unit = unit
 }
 
 enum Expr {

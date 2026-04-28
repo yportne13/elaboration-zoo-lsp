@@ -705,6 +705,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         include_str!("../prelude/bool.typort"),
         include_str!("../prelude/option.typort"),
         include_str!("../prelude/vec.typort"),
+        include_str!("../prelude/hdl.typort"),
     ];
     let ast = parser::parser(&preprocess(input), prelude.len() as u32).unwrap();
     let mut cxt = Cxt::new();
@@ -713,6 +714,9 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     let mut id = 0;
     for p in prelude {
         let aast = parser::parser(&preprocess(p), id).unwrap();
+        for ast_err in aast.1 {
+            println!("{:?}", ast_err)
+        }
         id += 1;
         for tm in aast.0 {
             let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -2827,6 +2831,18 @@ impl[width0: Nat, width1: Nat] Mul[Bits[width1], Bits[width0 + width1]] for Bits
     def *(that: Bits[width1]): Bits[width0 + width1] =
         Bits.mk(this.name + " * " + that.name)
 }
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        //Err(e) => panic!("{}\n{:?}", e.0.data, e.1[0]()),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test18() {
+    let input = r#"
+def f[w: Nat](x: UInt[w], y: UInt[w]): Unit = y := x
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
