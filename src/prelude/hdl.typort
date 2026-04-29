@@ -1,3 +1,8 @@
+// ============================================================
+// SpinalHDL-inspired Hardware Description DSL
+// ============================================================
+
+// ---------- utility types ----------
 
 enum Le(n: Nat, m: Nat) {
     le_refl[n: Nat] -> Le n n
@@ -28,8 +33,6 @@ def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = 
     }
 }
 
-//println drop_vec(1 :: 2 :: 3 :: nil, fsucc fzero)
-
 struct Exists[A: Type 0, P: A -> Type 0] {
     witness: A
     proof: P witness
@@ -49,6 +52,26 @@ def log2Up(x: Nat): Nat = match x {
     case succ(succ(tail)) => (log2Up (div2Up (tail + 2))) + 1
 }
 
+// ---------- width utilities ----------
+
+def maxNat(a: Nat, b: Nat): Nat = match a {
+    case zero => b
+    case succ(t) => match b {
+        case zero => a
+        case succ(u) => succ (maxNat t u)
+    }
+}
+
+def minNat(a: Nat, b: Nat): Nat = match a {
+    case zero => zero
+    case succ(t) => match b {
+        case zero => zero
+        case succ(u) => succ (minNat t u)
+    }
+}
+
+// ---------- Unit & Data ----------
+
 enum Unit {
     unit
 }
@@ -57,90 +80,440 @@ trait Data {
     def :=(that: Self): Unit
 }
 
+// ============================================================
+//  Hardware Bit Type (wire-level boolean)
+// ============================================================
+
 struct Bool {
     name: Option[String]
 }
 
-impl Data for Bool {
-    def :=(that: Bool): Unit = unit
+enum BoolValue {
+    False
+    True
 }
 
 impl Into[Bool] for Boolean {
     def into: Bool = Bool.mk None
 }
 
+impl Data for Bool {
+    def :=(that: Bool): Unit = unit
+}
+
+// ---------- Bits (raw bit vector) ----------
+
 struct Bits[width: Nat] {
     name: Option[String]
-}
-
-struct UInt[width: Nat] {
-    name: Option[String]
-}
-
-struct SInt[width: Nat] {
-    name: Option[String]
-}
-
-/*impl[width: Nat] Into[Bits[width]] for Nat {
-    def into: Bits[width] = Bits.mk None
-}*/
-
-impl[width: Nat] Into[UInt[width]] for Nat {
-    def into: UInt[width] = UInt.mk None
 }
 
 impl[width: Nat] Data for Bits[width] {
     def :=(that: Bits[width]): Unit = unit
 }
 
-impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
-    def +(that: UInt[width]): UInt[width] =
-        UInt.mk None
+// ---------- UInt (unsigned integer) ----------
+
+struct UInt[width: Nat] {
+    name: Option[String]
 }
 
-impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
-    def -(that: UInt[width]): UInt[width] =
-        UInt.mk None
-}
-
-impl[width1: Nat, width2: Nat] Mul[UInt[width1], UInt[width1+width2]] for UInt[width2] {
-    def *(that: UInt[width1]): UInt[width + width1] =
-        UInt.mk None
-}
-
-impl[width: Nat] UInt[width] {
-    def +^(that: UInt[width]): UInt[width + 1] = UInt.mk None
-    def -^(that: UInt[width]): UInt[width + 1] = UInt.mk None
+impl[width: Nat] Into[UInt[width]] for Nat {
+    def into: UInt[width] = UInt.mk None
 }
 
 impl[width: Nat] Data for UInt[width] {
     def :=(that: UInt[width]): Unit = unit
 }
 
-impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
-    def +(that: SInt[width]): SInt[width] =
-        SInt.mk None
-}
+// ---------- SInt (signed integer) ----------
 
-impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
-    def -(that: SInt[width]): SInt[width] =
-        SInt.mk None
-}
-
-impl[width: Nat] SInt[width] {
-    def *[width1: Nat](that: SInt[width1]): SInt[width + width1] =
-        SInt.mk None
-    def +^(that: SInt[width]): SInt[width + 1] = SInt.mk None
-    def -^(that: SInt[width]): SInt[width + 1] = SInt.mk None
+struct SInt[width: Nat] {
+    name: Option[String]
 }
 
 impl[width: Nat] Data for SInt[width] {
     def :=(that: SInt[width]): Unit = unit
 }
 
+// ============================================================
+//  Arithmetic Operations (with width tracking)
+// ============================================================
+
+// UInt arithmetic
+impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
+    def +(that: UInt[width]): UInt[width] = UInt.mk None
+}
+
+impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
+    def -(that: UInt[width]): UInt[width] = UInt.mk None
+}
+
+impl[width1: Nat, width2: Nat] Mul[UInt[width1], UInt[width1 + width2]] for UInt[width2] {
+    def *(that: UInt[width1]): UInt[width1 + width2] = UInt.mk None
+}
+
+// SInt arithmetic
+impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
+    def +(that: SInt[width]): SInt[width] = SInt.mk None
+}
+
+impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
+    def -(that: SInt[width]): SInt[width] = SInt.mk None
+}
+
+// ---- carry-generating operations (+^ -^) ----
+
+impl[width: Nat] UInt[width] {
+    def +^(that: UInt[width]): UInt[width + 1] = UInt.mk None
+    def -^(that: UInt[width]): UInt[width + 1] = UInt.mk None
+}
+
+impl[width: Nat] SInt[width] {
+    def +^(that: SInt[width]): SInt[width + 1] = SInt.mk None
+    def -^(that: SInt[width]): SInt[width + 1] = SInt.mk None
+}
+
+// ============================================================
+//  Bitwise Logic Operations
+// ============================================================
+
+// --- Bits bitwise ---
+
+impl[width: Nat] Bits[width] {
+    def &(that: Bits[width]): Bits[width] = Bits.mk None
+    def |(that: Bits[width]): Bits[width] = Bits.mk None
+    def ^(that: Bits[width]): Bits[width] = Bits.mk None
+}
+
+// --- UInt bitwise ---
+
+impl[width: Nat] UInt[width] {
+    def &(that: UInt[width]): UInt[width] = UInt.mk None
+    def |(that: UInt[width]): UInt[width] = UInt.mk None
+    def ^(that: UInt[width]): UInt[width] = UInt.mk None
+}
+
+// --- SInt bitwise ---
+
+impl[width: Nat] SInt[width] {
+    def &(that: SInt[width]): SInt[width] = SInt.mk None
+    def |(that: SInt[width]): SInt[width] = SInt.mk None
+    def ^(that: SInt[width]): SInt[width] = SInt.mk None
+}
+
+// ============================================================
+//  Shift Operations
+// ============================================================
+
+impl[width: Nat, shift: Nat] UInt[width] {
+    def <<(that: UInt[shift]): UInt[width] = UInt.mk None
+    def >>(that: UInt[shift]): UInt[width] = UInt.mk None
+}
+
+impl[width: Nat, shift: Nat] SInt[width] {
+    def <<(that: UInt[shift]): SInt[width] = SInt.mk None
+    def >>(that: UInt[shift]): SInt[width] = SInt.mk None
+}
+
+impl[width: Nat, shift: Nat] Bits[width] {
+    def <<(that: UInt[shift]): Bits[width] = Bits.mk None
+    def >>(that: UInt[shift]): Bits[width] = Bits.mk None
+}
+
+// ---- rotate ----
+impl[width: Nat] Bits[width] {
+    def rotateLeft[shift: Nat](that: UInt[shift]): Bits[width] = Bits.mk None
+    def rotateRight[shift: Nat](that: UInt[shift]): Bits[width] = Bits.mk None
+}
+
+// ============================================================
+//  Comparison Operations
+// ============================================================
+
+// --- UInt comparisons ---
+impl[width: Nat] UInt[width] {
+    def <(that: UInt[width]): Bool = Bool.mk None
+    def <=(that: UInt[width]): Bool = Bool.mk None
+    def >(that: UInt[width]): Bool = Bool.mk None
+    def >=(that: UInt[width]): Bool = Bool.mk None
+    def ===(that: UInt[width]): Bool = Bool.mk None
+    def =/=(that: UInt[width]): Bool = Bool.mk None
+}
+
+// --- SInt comparisons ---
+impl[width: Nat] SInt[width] {
+    def <(that: SInt[width]): Bool = Bool.mk None
+    def <=(that: SInt[width]): Bool = Bool.mk None
+    def >(that: SInt[width]): Bool = Bool.mk None
+    def >=(that: SInt[width]): Bool = Bool.mk None
+    def ===(that: SInt[width]): Bool = Bool.mk None
+    def =/=(that: SInt[width]): Bool = Bool.mk None
+}
+
+// --- Bool comparisons ---
+impl Bool {
+    def ===(that: Bool): Bool = Bool.mk None
+    def =/=(that: Bool): Bool = Bool.mk None
+}
+
+// ============================================================
+//  Reduction Operators
+// ============================================================
+
+impl[width: Nat] Bits[width] {
+    def andR: Bool = Bool.mk None
+    def orR: Bool = Bool.mk None
+    def xorR: Bool = Bool.mk None
+}
+
+impl[width: Nat] UInt[width] {
+    def andR: Bool = Bool.mk None
+    def orR: Bool = Bool.mk None
+    def xorR: Bool = Bool.mk None
+}
+
+impl[width: Nat] SInt[width] {
+    def andR: Bool = Bool.mk None
+    def orR: Bool = Bool.mk None
+    def xorR: Bool = Bool.mk None
+}
+
+// ============================================================
+//  Mux (Multiplexer)
+// ============================================================
+
+impl Bool {
+    def mux[T: Type 0](whenTrue: T, whenFalse: T): T = whenTrue
+}
+
+// ============================================================
+//  Cat (Bit Concatenation)
+// ============================================================
+
+trait Cat[T, O: outParam(Type 0)] {
+    def ##(that: T): O
+}
+
+impl[left: Nat, right: Nat] Cat[Bits[right], Bits[left + right]] for Bits[left] {
+    def ##(that: Bits[right]): Bits[left + right] = Bits.mk None
+}
+
+impl[left: Nat, right: Nat] Cat[UInt[right], Bits[left + right]] for Bits[left] {
+    def ##(that: UInt[right]): Bits[left + right] = Bits.mk None
+}
+
+// ============================================================
+//  Bit Extraction & Slicing
+// ============================================================
+
+impl[width: Nat] Bits[width] {
+    def msb: Bool = Bool.mk None
+    def lsb: Bool = Bool.mk None
+    def take[high: Nat](low: Fin width): Bits[high + 1] = Bits.mk None
+    def slice[hi_idx: Nat, lo_idx: Nat](hi_val: Fin width, lo_val: Fin width): Bits[hi_idx + 1] = Bits.mk None
+    def apply(idx: Fin width): Bool = Bool.mk None
+}
+
+impl[width: Nat] UInt[width] {
+    def msb: Bool = Bool.mk None
+    def lsb: Bool = Bool.mk None
+}
+
+impl[width: Nat] SInt[width] {
+    def msb: Bool = Bool.mk None
+    def lsb: Bool = Bool.mk None
+}
+
+// ============================================================
+//  Width Utilities
+// ============================================================
+
+impl[width: Nat] UInt[width] {
+    def resize[newWidth: Nat]: UInt[newWidth] = UInt.mk None
+    def asBits: Bits[width] = Bits.mk None
+    def asSInt: SInt[width] = SInt.mk None
+    def asBool: Bool = Bool.mk None
+}
+
+impl[width: Nat] SInt[width] {
+    def resize[newWidth: Nat]: SInt[newWidth] = SInt.mk None
+    def asBits: Bits[width] = Bits.mk None
+    def asUInt: UInt[width] = UInt.mk None
+}
+
+impl[width: Nat] Bits[width] {
+    def asUInt: UInt[width] = UInt.mk None
+    def asSInt: SInt[width] = SInt.mk None
+}
+
+// ============================================================
+//  Clock Domain
+// ============================================================
+
+enum ClockDomainConfig {
+    Sync
+    Async
+}
+
+struct ClockDomain {
+    clock: Bool
+    reset: Bool
+    config: ClockDomainConfig
+}
+
+def defaultClockDomain: ClockDomain = ClockDomain.mk (Bool.mk (Some "clk")) (Bool.mk (Some "reset")) Sync
+
+// ============================================================
+//  Registers (sequential logic)
+// ============================================================
+
+struct Reg[T] {
+    initial_value: T
+    clockDomain: ClockDomain
+}
+
+def RegInit[T](initVal: T, cd: ClockDomain): Reg[T] =
+    Reg.mk initVal cd
+
+def RegNext[T](nextVal: T): Reg[T] =
+    Reg.mk nextVal defaultClockDomain
+
+impl[T] Reg[T] {
+    def value: T = this.initial_value
+}
+
+impl[T] T {
+    def init[T0: Type 0](initVal: T0): Reg[T0] =
+        Reg.mk initVal defaultClockDomain
+}
+
+// ============================================================
+//  Mem (Memory)
+// ============================================================
+
+struct Mem[T] {
+    wordCount: Nat
+    initialValue: T
+    clockDomain: ClockDomain
+}
+
+impl[T] Mem[T] {
+    def write(address: UInt[log2Up (maxNat this.wordCount 1)], data: T, enable: Bool): Unit = unit
+    def readAsync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
+    def readSync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
+    def readSyncCC(address: UInt[log2Up (maxNat this.wordCount 1)], crossClock: Bool): T = this.initialValue
+}
+
+// ============================================================
+//  Bundle (structured IO)
+// ============================================================
+
+// IO direction tags
+enum IODirection {
+    In
+    Out
+    InOut
+}
+
+// A bundle is just a struct with direction annotations
+// The macro system makes it ergonomic
+
+struct Bundle0 {}
+struct Bundle1[A] {
+    b0: A
+}
+struct Bundle2[A, B] {
+    b0: A
+    b1: B
+}
+struct Bundle3[A, B, C] {
+    b0: A
+    b1: B
+    b2: C
+}
+struct Bundle4[A, B, C, D] {
+    b0: A
+    b1: B
+    b2: C
+    b3: D
+}
+
+// ============================================================
+//  Stream / Flow Buses
+// ============================================================
+
+struct Stream[T] {
+    valid: Bool
+    ready: Bool
+    payload: T
+}
+
+struct Flow[T] {
+    payload: T
+    valid: Bool
+}
+
+impl[T] Stream[T] {
+    def fire: Bool = Bool.mk None
+    def stage: Stream[T] = this
+}
+
+impl[T] Flow[T] {
+    def stage: Flow[T] = this
+}
+
+// ============================================================
+//  BlackBox (external module)
+// ============================================================
+
+struct BlackBox {
+    name: String
+    generic: Vec[String] 0
+}
+
+impl BlackBox {
+    def addGeneric(name: String, value: String): BlackBox = this
+    def setDefinitionName(name: String): BlackBox = this
+}
+
+// ============================================================
+//  FSM (Finite State Machine)
+// ============================================================
+
+enum StateAccess {
+    boot
+    entry
+    exit
+}
+
+struct State[T] {
+    name: String
+    stateEntry: Option[T]
+    stateExit: Option[T]
+}
+
+enum FSMEntryPoint {
+    entryPoint
+}
+
+// ============================================================
+//  Switch Statement DSL
+// ============================================================
+
+enum SwitchKey {
+    default
+}
+
+// ============================================================
+//  Module System
+// ============================================================
+
 enum Expr {
     create(name: String)
     binary(lhs: Expr, op: String, rhs: Expr)
+    assign(lhs: Expr, rhs: Expr)
+    when(cond: Expr, body: Expr, elseBody: Option[Expr])
+    switch(value: Expr, cases: Expr)
 }
 
 struct Module {
@@ -158,7 +531,7 @@ impl module {
     def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
 }
 
-def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat): module = match data {
+def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat, dir: IODirection): module = match data {
     case nil => module.mk(1, Module.mk(name, 1, create(name) :: nil) :: nil)
     case cons(head, tail) =>
         let new_module = Module.mk(head.name, head.expr_num + 1, create(name) :: head.expr);
@@ -166,32 +539,99 @@ def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat): module
 }
 
 def newBits(name: String, w: Nat): Bits[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, Out));
     Bits.mk(Some(name))
 
 def newUInt(name: String, w: Nat): UInt[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, Out));
     UInt.mk(Some(name))
 
 def newSInt(name: String, w: Nat): SInt[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, Out));
     SInt.mk(Some(name))
+
+def newBool(name: String): Bool =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, 1, Out));
+    Bool.mk(Some(name))
+
+def newUIntInput(name: String, w: Nat): UInt[w] =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, In));
+    UInt.mk(Some(name))
+
+def newBitsInput(name: String, w: Nat): Bits[w] =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, In));
+    Bits.mk(Some(name))
+
+def newSIntInput(name: String, w: Nat): SInt[w] =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, In));
+    SInt.mk(Some(name))
+
+def newBoolInput(name: String): Bool =
+    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, 1, In));
+    Bool.mk(Some(name))
+
+// ============================================================
+//  Macros - Ergonomic Hardware DSL
+// ============================================================
+
+// The Expr macro provides convenient syntax for hardware expressions
+// Usage:
+//   let mySignal = UInt[8]           -- creates a UInt[8] named "mySignal"
+//   input myInput = UInt[4]          -- creates an input UInt[4] named "myInput"  
+//   output myOutput = Bits[16]       -- creates an output Bits[16] named "myOutput"
+//   when condition {                  -- conditional assignment block
+//     a := b
+//   } otherwise {
+//     a := c
+//   }
+//   switch x {                        -- switch statement
+//     is value1 { ... }
+//     is value2 { ... }
+//     default { ... }
+//   }
 
 #[macro_export]
 macro_rules Expr {
-    (input $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    // ---- signal declarations ----
+    (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput(stringify $x, $width);};
     (output $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
     (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+
+    (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput(stringify $x, $width);};
+    (output $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
     (let $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
+
+    (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput(stringify $x, $width);};
+    (output $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
     (let $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
+
+    (input $x:ident = Bool) => {let $x = newBoolInput(stringify $x);};
+    (output $x:ident = Bool) => {let $x = newBool(stringify $x);};
+    (let $x:ident = Bool) => {let $x = newBool(stringify $x);};
+
+    // ---- generic let ----
     (let $x:ident = $y:raw) => {let $x = $y;};
-    (when $cond:raw {$( $bodywhen: Expr )*} /*$( elsewhen $cond: raw {$( $bodyelse: Expr )*})**/ otherwise {$( $bodyother: Expr )*}) => {
+
+    // ---- when/otherwise control flow ----
+    (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
         $({$bodywhen})*
-        /*$({$bodyelse})**/
+        $({$bodyelse})*
         $({$bodyother})*
     };
+
+    // ---- assignment ----
+    ($lhs:ident := $rhs:raw) => {let uselessrr = $lhs := $rhs;};
+
+    // ---- raw expression passthrough ----
     ($x: raw) => {let useless = $x;}
 }
+
+// The module macro provides convenient module definition syntax
+// Usage:
+//   module myAdder(a: UInt[8], b: UInt[8]) -> UInt[9] {
+//     let result = UInt[9]
+//     result := a +^ b
+//   }
 
 #[macro_export]
 macro_rules module {
@@ -204,3 +644,25 @@ macro_rules module {
             ret.unwrap_or(new_module)
         };
 }
+
+// The fsm macro provides convenient state machine definition 
+// Usage (inherently limited by STS; actual logic via when/switch):
+//   fsm myFSM {
+//     state IDLE
+//     state ACTIVE
+//     state DONE
+//   }
+
+// ============================================================
+//  Concrete examples / test module
+// ============================================================
+
+// Example: simple ALU using the DSL
+// module simpleALU(op: UInt[2], a: UInt[8], b: UInt[8]) -> UInt[9] {
+//     let result = UInt[9]
+//     switch op {
+//         is 0 { result := a +^ b }
+//         is 1 { result := a -^ b }
+//         default { result := a.asBits.resize[9].asUInt }
+//     }
+// }
