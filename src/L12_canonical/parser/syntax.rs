@@ -228,4 +228,9 @@ pub enum Decl {
         methods: Vec<Decl>,
         need_create: bool,
     },
+    MacroDef {
+        name: Span<String>,
+        is_pub: bool,
+        body_text: String,
+    },
 }

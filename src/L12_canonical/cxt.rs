@@ -16,6 +16,7 @@ pub struct Cxt {
     pub src_names: BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>,
     pub decl: HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
+    pub macros: std::collections::HashMap<String, (bool, String)>,  // name -> (is_pub, body_text)
     update_from: Option<usize>,
 }
 
@@ -435,6 +436,7 @@ impl Cxt {
             src_names: BiMap::new(),
             decl: HashMap::new(),
             namespace: List::new(),
+            macros: std::collections::HashMap::new(),
             update_from: None,
         }
     }
@@ -447,6 +449,7 @@ impl Cxt {
             src_names: BiMap::new(),
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
+            macros: self.macros.clone(),
             update_from: self.update_from,
         }
     }
@@ -474,6 +477,7 @@ impl Cxt {
             src_names,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
+            macros: self.macros.clone(),
             update_from: self.update_from,
         }
     }
@@ -493,6 +497,7 @@ impl Cxt {
             src_names: self.src_names.clone(),
             decl,
             namespace: self.namespace.clone(),
+            macros: self.macros.clone(),
             update_from: self.update_from,
         })
     }
@@ -507,6 +512,7 @@ impl Cxt {
             src_names: self.src_names.clone(),
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
+            macros: self.macros.clone(),
             update_from: self.update_from,
         }
     }
@@ -523,6 +529,7 @@ impl Cxt {
             src_names,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
+            macros: self.macros.clone(),
             update_from: self.update_from,
         }
     }
@@ -542,6 +549,7 @@ impl Cxt {
             src_names: self.src_names.clone(),
             decl,
             namespace: self.namespace.clone(),
+            macros: self.macros.clone(),
             update_from: self.update_from,
         })
     }
@@ -592,6 +600,7 @@ impl Cxt {
                     src_names: new_src_names,
                     decl: self.decl.clone(),
                     namespace: self.namespace.clone(),
+                    macros: self.macros.clone(),
                     update_from: Some(update_from),
                 }
             }

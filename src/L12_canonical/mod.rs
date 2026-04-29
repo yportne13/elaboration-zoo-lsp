@@ -675,6 +675,9 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             parser::syntax::Decl::Println(raw) => {},
             parser::syntax::Decl::ImplDecl { .. } => {
                 println!("> impl");
+            },
+            parser::syntax::Decl::MacroDef { name, .. } => {
+                println!("> macro {}", name.data);
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -739,6 +742,9 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             parser::syntax::Decl::Println(raw) => {},
             parser::syntax::Decl::ImplDecl { .. } => {
                 println!("> impl");
+            },
+            parser::syntax::Decl::MacroDef { name, .. } => {
+                println!("> macro {}", name.data);
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -2843,6 +2849,13 @@ impl[width0: Nat, width1: Nat] Mul[Bits[width1], Bits[width0 + width1]] for Bits
 fn test18() {
     let input = r#"
 def f[w: Nat](x: UInt[w], y: UInt[w]): Unit = y := x
+
+module Test[w: Nat] {
+    let a = UInt[w]
+    let b = UInt[w]
+    let c = UInt[w]
+    c := a + B
+}
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),

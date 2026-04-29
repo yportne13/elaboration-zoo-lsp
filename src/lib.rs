@@ -41,7 +41,7 @@ use lsp_types::*;
 use crate::ls::Result;
 
 use L12_canonical::pretty::pretty_tm;
-use L12_canonical::parser::parser;
+use L12_canonical::parser::{parser, parser_with_macros};
 use L12_canonical::parser::syntax::Decl;
 use L12_canonical::{DeclTm, Infer, preprocess};
 use L12_canonical::cxt::Cxt;
@@ -211,7 +211,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .unwrap_or(self.document_id.len() as u32);
         self.document_id.insert(params.uri.to_string(), now_id);
         let start = std::time::Instant::now();
-        if let Some(ast) = parser(&preprocess(params.text), now_id) {
+        // Get external macros from Cxt and pass to parser
+        let external_macros = self.cxt.lock().unwrap().macros.clone();
+        if let Some(ast) = parser_with_macros(&preprocess(params.text), now_id, &external_macros) {
             eprintln!("parser {:?}", start.elapsed().as_secs_f32());
             let mut err_collect = vec![];
             self.ast_map.insert(params.uri.to_string(), ast.0.clone());

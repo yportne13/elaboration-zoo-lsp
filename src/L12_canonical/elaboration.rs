@@ -641,6 +641,11 @@ impl Infer {
                 cxt = c;
                 Ok((DeclTm::Trait {}, Val::U(0).into(), cxt.clone()))
             },
+            Decl::MacroDef { name, is_pub, body_text } => {
+                let mut new_cxt = cxt.clone();
+                new_cxt.macros.insert(name.data.clone(), (is_pub, body_text));
+                Ok((DeclTm::Enum {}, Val::U(0).into(), new_cxt))
+            },
         }
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {

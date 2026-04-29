@@ -8,7 +8,7 @@ use crate::parser_lib_resilient::*;
 
 mod lex;
 pub mod syntax;
-mod macros;
+pub mod macros;
 
 use TokenKind::*;
 
@@ -64,25 +64,49 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, (Vec<IError>, HashMap<Stri
 }
 
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
+    parser_with_macros(input, id, &HashMap::new())
+}
+
+pub fn parser_with_macros(input: &str, id: u32, external_macros: &HashMap<String, (bool, String)>) -> Option<(Vec<Decl>, Vec<IError>)> {
+    // Build full input by prepending exported external macros
+    let full_input = if external_macros.is_empty() {
+        input.to_string()
+    } else {
+        let mut s = String::new();
+        for (name, (is_pub, body)) in external_macros {
+            if *is_pub {
+                s.push_str("macro_rules ");
+                s.push_str(name);
+                s.push(' ');
+                s.push('{');
+                s.push_str(body);
+                s.push('}');
+                s.push('\n');
+            }
+        }
+        s.push_str(input);
+        s
+    };
+
     let mut err_collect: (Vec<IError>, HashMap<String, Vec<MacroRule<'_, '_>>>) = (vec![], Default::default());
     err_collect.1.insert("stringify".to_owned(), vec![MacroRule {
         matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
         transcriber: MacroTranscriber::BuiltIn,
     }]);
-    match super::parser::lex::lex(Span {
-        data: input,
+    match lex::lex(Span {
+        data: &full_input,
         start_offset: 0,
-        end_offset: input.len() as u32,
+        end_offset: full_input.len() as u32,
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err))).many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+            let ret = p_decl.many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => if ret.0.is_empty() {
-                    Some((ret.1.into_iter().flatten().collect(), err_collect.0))
+                    Some((ret.1, err_collect.0))
                 } else {
                     err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(EndLine)) });
-                    Some((ret.1.into_iter().flatten().collect(), err_collect.0))
+                    Some((ret.1, err_collect.0))
                 }
                 Err(e) => {
                     err_collect.0.push(e);
@@ -1137,42 +1161,19 @@ fn p_macro_transcriber<'a: 'b, 'b>(
 }
 
 // 修改 p_macro_def
-fn p_macro_def<'a: 'b, 'b>(
-    input: &'b [TokenNode<'a>],
-    state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)
-) -> IResult<'a, 'b, Decl> {
-    Cut((
-        kw(MacroKeyword),
-        string(Ident),  // 宏名称
-        p_pi_expl_binder.option().map(|x| x.unwrap_or_default()),  // 可选参数
-        brace(
-            // 解析多条规则: (matcher) => (transcriber);
-            (
-                paren(p_macro_matcher),      // 匹配器在 (...) 中
-                kw(DoubleArrow),             // =>
-                paren(p_macro_transcriber),  // 转写器在 (...) 中
-            ).map(|(matcher, _, transcriber)| {
-                MacroRule { matcher, transcriber }
-            })
-            .many1_sep(kw(Semi))  // 规则用 ; 分隔
-        ),
-    ))
-    .map(|(_, name, params, rules_result)| {
-        Decl::Macro_Def {
-            name,
-            params,
-            rules: rules_result.flatten().unwrap_or_default(),
-        }
-    })
-    .parse(input, state)
 }*/
 
-// macro_rule <ident>($<ident>: raw|ident|..) {..}
-fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, ()> {
+// macro_rules or pub macro_rules definition, returns Decl::MacroDef
+fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)) -> IResult<'a, 'b, Decl> {
+    // Try optional "pub" keyword
+    let (input_after_pub, is_pub) = match kw(PubKeyword).parse(input, state) {
+        Ok((i, _)) => (i, true),
+        Err(_) => (input, false),
+    };
+
     match Cut((
         kw(MacroKeyword),
         string(Ident),  // 宏名称
-        //p_pi_expl_binder.option().map(|x| x.unwrap_or_default()),  // 可选参数
         brace(
             // 解析多条规则: (matcher => transcriber);
             Cut((
@@ -1186,14 +1187,72 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>,
             .many1_sep((kw(T![;]), kw(EndLine).option()))  // 规则用 ; 分隔
         ),
     ))
-    .parse(input, state) {
-        Ok((input, (_, name, rules))) => {
+    .parse(input_after_pub, state) {
+        Ok((input, (_, name, body_opt))) => {
             if let Some(name) = name {
-                state.1.insert(name.data.clone(), rules.flatten().unwrap_or(vec![]));
+                let body_text = extract_brace_body(input_after_pub);
+                let rules_vec = body_opt.flatten().unwrap_or(vec![]);
+                state.1.insert(name.data.clone(), rules_vec);
+                Ok((input, Decl::MacroDef {
+                    name,
+                    is_pub,
+                    body_text,
+                }))
+            } else {
+                Ok((input, Decl::MacroDef {
+                    name: empty_span(String::new()),
+                    is_pub,
+                    body_text: String::new(),
+                }))
             }
-            Ok((input, ()))
         },
         Err(e) => Err(e),
+    }
+}
+
+/// Extract text between the first { and matching } from the token slice.
+/// Uses unsafe pointer arithmetic to reconstruct the original input string.
+fn extract_brace_body<'a>(input: &[Span<(&'a str, TokenKind)>]) -> String {
+    let mut depth = 0u32;
+    let mut start: Option<u32> = None;
+    let mut end: Option<u32> = None;
+    for tok in input {
+        if tok.data.1 == LCurly {
+            if depth == 0 {
+                start = Some(tok.end_offset);
+            }
+            depth += 1;
+        } else if tok.data.1 == RCurly {
+            depth -= 1;
+            if depth == 0 {
+                end = Some(tok.start_offset);
+                break;
+            }
+        }
+    }
+    match (start, end) {
+        (Some(s), Some(e)) if e > s => {
+            // Reconstruct original input: all tokens reference substrings of the same input
+            // Use the first token to find the base of the input string
+            if let Some(first) = input.first() {
+                // The token's data.0 starts at offset `first.start_offset` in the original input
+                // So original input ptr = data.0.as_ptr() - first.start_offset
+                unsafe {
+                    let base_ptr = first.data.0.as_ptr().sub(first.start_offset as usize);
+                    let len = e as usize; // at least up to the end of the body
+                    let full_str = std::str::from_utf8_unchecked(
+                        std::slice::from_raw_parts(base_ptr, len)
+                    );
+                    let start_idx = s as usize;
+                    let end_idx = e as usize;
+                    if end_idx <= full_str.len() {
+                        return full_str[start_idx..end_idx].to_string();
+                    }
+                }
+            }
+            String::new()
+        }
+        _ => String::new(),
     }
 }
 
@@ -1220,7 +1279,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, Hash
             }
         }
     }
-    p_def.or(p_print).or(p_enum).or(p_struct).or(p_trait_def).or(p_impl)
+    p_def.or(p_print).or(p_enum).or(p_struct).or(p_trait_def).or(p_impl).or(p_macro_def)
         .parse(input, state)
         .map_err(|e| IError {
             msg: e.msg.map(|_| ErrMsg::ExpectDecl)
