@@ -177,6 +177,7 @@ def newSInt(name: String, w: Nat): SInt[w] =
     let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w));
     SInt.mk(Some(name))
 
+#[macro_export]
 macro_rules Expr {
     (input $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
     (output $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
@@ -192,6 +193,7 @@ macro_rules Expr {
     ($x: raw) => {let useless = $x;}
 }
 
+#[macro_export]
 macro_rules module {
     ($name: ident $args: params {$( $body: Expr )*}) => {
         def $name $args =

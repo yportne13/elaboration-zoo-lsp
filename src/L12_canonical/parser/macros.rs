@@ -2,7 +2,10 @@ use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, p_pi_binder, empty_span, ParserExt, kw};
+use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, p_pi_binder, empty_span, ParserExt, kw, MacroState};
+
+pub type OwnedToken = Span<(String, TokenKind)>;
+pub type OwnedTokenSlice = [Span<(String, TokenKind)>];
 
 #[derive(Clone, Debug)]
 pub enum MacroMatcher {
@@ -28,8 +31,8 @@ pub enum MacroMatcher {
 }
 
 impl MacroMatcher {
-    pub fn to_parser<'a: 'b, 'b>(&self) -> impl Parser<&'b [TokenNode<'a>], Vec<(String, Vec<TokenNode<'a>>)>, (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>), IError> {
-        move |input: &'b [TokenNode<'a>], state: &mut (Vec<IError>, HashMap<String, Vec<MacroRule<'a, 'b>>>)| {
+    pub fn to_parser<'a: 'b, 'b>(&self) -> impl Parser<&'b [TokenNode<'a>], Vec<(String, Vec<OwnedToken>)>, MacroState, IError> {
+        move |input: &'b [TokenNode<'a>], state: &mut MacroState| {
             match self {
                 MacroMatcher::Token(kind, span) => {
                     match input.first() {
@@ -54,11 +57,26 @@ impl MacroMatcher {
                 MacroMatcher::Metavar { name, fragment } => {
                     match fragment {
                         MacroFragment::Ident => string(TokenKind::Ident).parse(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap().to_vec())])),
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..1).unwrap().iter().map(|t| Span {
+                                data: (t.data.0.to_owned(), t.data.1),
+                                start_offset: t.start_offset,
+                                end_offset: t.end_offset,
+                                path_id: t.path_id,
+                            }).collect())])),
                         MacroFragment::Raw => p_raw(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().to_vec())])),
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().iter().map(|t| Span {
+                                data: (t.data.0.to_owned(), t.data.1),
+                                start_offset: t.start_offset,
+                                end_offset: t.end_offset,
+                                path_id: t.path_id,
+                            }).collect())])),
                         MacroFragment::Param => p_pi_binder.many1().parse(input, state)
-                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().to_vec())])),
+                            .map(|(i, _)| (i, vec![(name.data.clone(), input.get(0..(input.len() - i.len())).unwrap().iter().map(|t| Span {
+                                data: (t.data.0.to_owned(), t.data.1),
+                                start_offset: t.start_offset,
+                                end_offset: t.end_offset,
+                                path_id: t.path_id,
+                            }).collect())])),
                         MacroFragment::Name(mname) => state.1.get(&mname.data).cloned().and_then(|x| x.iter()
                             .flat_map(|m| {
                                 m.matcher.to_parser().parse(input, state)
@@ -127,7 +145,7 @@ pub enum MacroFragment {
 }
 
 #[derive(Clone, Debug)]
-pub enum MacroTranscriber<'a: 'b, 'b> {
+pub enum MacroTranscriber {
     // 普通 token 输出
     /*Token(TokenKind, Option<String>),  // TokenKind + 原始文本
     // 引用元变量：$name
@@ -143,26 +161,27 @@ pub enum MacroTranscriber<'a: 'b, 'b> {
     Group(Delimiter, Vec<MacroTranscriber>),
     // 序列
     Sequence(Vec<MacroTranscriber>),*/
-    Group(Box<MacroTranscriber<'a, 'b>>),
-    Basic(&'b [Span<(&'a str, TokenKind)>]),
-    Sequence(Vec<MacroTranscriber<'a, 'b>>),
+    Group(Box<MacroTranscriber>),
+    Basic(Vec<OwnedToken>),
+    Sequence(Vec<MacroTranscriber>),
     BuiltIn,//TODO: more builtin
 }
 
-impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
-    pub fn replace(&self, metavars: Vec<(String, Vec<TokenNode<'a>>)>) -> Result<Vec<Span<(&'a str, TokenKind)>>, IError> {
+impl MacroTranscriber {
+    /// Produce owned tokens from owned metavars.
+    pub fn replace(&self, metavars: Vec<(String, Vec<OwnedToken>)>) -> Result<Vec<OwnedToken>, IError> {
         match self {
             MacroTranscriber::Basic(x) => {
                 let mut ret = vec![];
-                for x in x.iter() {
-                    if x.data.1 == TokenKind::MacroIdent {
-                        if let Some(y) = metavars.iter().find(|z| z.0 == x.data.0) {
+                for tok in x.iter() {
+                    if tok.data.1 == TokenKind::MacroIdent {
+                        if let Some(y) = metavars.iter().find(|z| z.0 == tok.data.0) {
                             ret.extend(y.1.clone());
                         } else {
-                            ret.push(*x);
+                            ret.push(tok.clone());
                         }
                     } else {
-                        ret.push(*x);
+                        ret.push(tok.clone());
                     }
                 }
                 //TODO:truncate head endline and tail endline
@@ -205,7 +224,10 @@ impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
             MacroTranscriber::BuiltIn => {
                 Ok(metavars.into_iter()
                     .flat_map(|x| x.1.into_iter())
-                    .map(|z| z.map(|(s, _)| (s, TokenKind::Str)))
+                    .map(|mut z| {
+                        z.data.1 = TokenKind::Str;
+                        z
+                    })
                     .collect())
             },
         }
@@ -234,7 +256,7 @@ impl<'a: 'b, 'b> MacroTranscriber<'a, 'b> {
 }
 
 #[derive(Clone, Debug)]
-pub struct MacroRule<'a: 'b, 'b> {
+pub struct MacroRule {
     pub matcher: MacroMatcher,   // 匹配模式
-    pub transcriber: MacroTranscriber<'a, 'b>,  // 展开模板
+    pub transcriber: MacroTranscriber,  // 展开模板
 }

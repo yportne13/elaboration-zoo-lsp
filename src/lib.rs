@@ -41,7 +41,7 @@ use lsp_types::*;
 use crate::ls::Result;
 
 use L12_canonical::pretty::pretty_tm;
-use L12_canonical::parser::parser;
+use L12_canonical::parser::{parser, parser_with_macros, macros::MacroRule};
 use L12_canonical::parser::syntax::Decl;
 use L12_canonical::{DeclTm, Infer, preprocess};
 use L12_canonical::cxt::Cxt;
@@ -65,6 +65,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub document_id: DashMap<String, u32>,
     pub hover_table: DashMap<String, Infer>,
     pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>>,
+    /// Exported macros accumulated across all files (keyed by macro name)
+    pub exported_macros: DashMap<String, Vec<MacroRule>>,
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：(任务槽, 条件变量)
@@ -99,6 +101,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             document_id,
             hover_table,
             quickfix_map: DashMap::new(),
+            exported_macros: DashMap::new(),
             processing_uris: DashMap::new(),
             worker_signal,
             processed_signal,
@@ -211,10 +214,18 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .unwrap_or(self.document_id.len() as u32);
         self.document_id.insert(params.uri.to_string(), now_id);
         let start = std::time::Instant::now();
-        if let Some(ast) = parser(&preprocess(params.text), now_id) {
+        // Collect all currently exported macros from the global table
+        let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        if let Some((decls, parse_errs, new_exports)) = parser_with_macros(&preprocess(params.text), now_id, &global_macros) {
             eprintln!("parser {:?}", start.elapsed().as_secs_f32());
+            // Merge newly exported macros into the global table
+            for (name, rules) in new_exports {
+                self.exported_macros.insert(name, rules);
+            }
             let mut err_collect = vec![];
-            self.ast_map.insert(params.uri.to_string(), ast.0.clone());
+            self.ast_map.insert(params.uri.to_string(), decls.clone());
             let mut i = self.infer.lock().unwrap();
             let mut ic = i.clone();
             let mut c = self.cxt.lock().unwrap();
@@ -230,7 +241,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             };
             let mut terms = vec![];
             let start = std::time::Instant::now();
-            for tm in ast.0 {
+            for tm in decls {
                 match infer.infer(cxt, tm.clone()) {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
@@ -254,7 +265,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut quickfixes_for_uri = HashMap::new();
 
             // 生成诊断（原有的 err_collect + parse errors）
-            for (e, severity) in err_collect.into_iter().chain(ast.1.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
+            for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
                 let start_position = offset_to_position(e.0.start_offset as usize, &rope).unwrap_or_default();
                 let end_position = offset_to_position(e.0.end_offset as usize, &rope).unwrap_or_default();
                 let mut diagnostic = Diagnostic::new_simple(
