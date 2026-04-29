@@ -635,8 +635,8 @@ macro_rules Expr {
 
 #[macro_export]
 macro_rules module {
-    ($name: ident $args: params {$( $body: Expr )*}) => {
-        def $name $args =
+    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
+        def $name $({$args})* =
             let new_module = Module.mk(stringify $name, 0, nil);
             let creat_module = change_mutable_default("module", x => x.insert(new_module), module.mk(1, new_module :: nil));
             $({$body})*

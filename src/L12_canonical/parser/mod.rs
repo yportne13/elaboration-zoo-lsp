@@ -482,7 +482,8 @@ fn infix_binding_power(op: &Span<SmolStr>) -> Option<(u8, u8)> {
         } else if x.contains(['^']) {
             (9, 10)
         } else {
-            return None
+            //return None
+            (7, 8)
         },
     };
     Some(res)
