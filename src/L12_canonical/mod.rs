@@ -2884,6 +2884,8 @@ module Test {
     let c = SInt[16]
     let d = Bits[32]
     let e = Bool
+    let f = Bits[33]
+    f := e ## d
 }
 "#;
     match run_with_prelude(input) {
@@ -2989,13 +2991,14 @@ module Test[w: Nat] {
 
 #[test]
 fn test_hdl_mux() {
-    // Test multiplexer - using function call syntax
+    // Test multiplexer
     let input = r#"
 module Test[w: Nat] {
+    let cond = Bool
     let a = UInt[w]
     let b = UInt[w]
     let result = UInt[w]
-    result := a
+    result := cond.mux(a, b)
 }
 "#;
     match run_with_prelude(input) {

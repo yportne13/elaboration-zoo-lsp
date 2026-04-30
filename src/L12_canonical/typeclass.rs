@@ -121,6 +121,10 @@ impl Synth {
     /// First-order structural matching: goal (ground) against instance pattern (may have Rigid vars).
     /// Rigid vars in the pattern are bound to the corresponding goal values via substitution.
     fn val_match(a: &Val, b: &Val, subst: &mut HashMap<u32, Val>) -> bool {
+        //println!("val_match: {:?} {:?}", a, b);
+        //println!("------");
+        //println!("{:?}", subst.get(&0));
+        //println!("--------------------------");
         match (a, b) {
             // Flex (unsolved meta) in either side matches anything
             (Val::Flex(..), _) | (_, Val::Flex(..)) => true,
@@ -188,6 +192,7 @@ impl Synth {
     }
 
     fn vals_eq_ground_impl(a: &Val, b: &Val, visited: &mut HashMap<u32, u32>) -> bool {
+        //println!("###### {a:?} ===== {b:?}");
         match (a, b) {
             (Val::Flex(..), _) | (_, Val::Flex(..)) => true,
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) => {
@@ -219,6 +224,11 @@ impl Synth {
             }
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             (Val::LiteralType, Val::LiteralType) => true,
+            (Val::Match(a1, b1, c1), Val::Match(a2, b2, c2)) => {
+                Self::vals_eq_ground_impl(a1, a2, visited)
+                    && b1.len() == b2.len()
+                    //TODO:&& c1.iter().zip(c2.iter()).all(|()| )
+            }
             _ => false,
         }
     }
@@ -256,6 +266,10 @@ impl Synth {
         {
             return None;
         }
+        //println!("-----------------");
+        //println!("{:?}", goal.arguments);
+        //println!("<><><>");
+        //println!("{:?}", instance.assertion.arguments);
 
         // Collect subgoals (dependencies currently always empty)
         let concrete_deps = instance.dependencies.clone();

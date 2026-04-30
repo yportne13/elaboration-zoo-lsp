@@ -88,10 +88,9 @@ struct Bool {
     name: Option[String]
 }
 
-enum BoolValue {
-    False
-    True
-}
+def True: Bool = Bool.mk None
+
+def False: Bool = Bool.mk None
 
 impl Into[Bool] for Boolean {
     def into: Bool = Bool.mk None
@@ -292,6 +291,10 @@ impl Bool {
 
 trait Cat[T, O: outParam(Type 0)] {
     def ##(that: T): O
+}
+
+impl[width: Nat] Cat[Bits[width], Bits[width + 1]] for Bool {
+    def ##(that: Bits[width]): Bits[width + 1] = Bits.mk None
 }
 
 impl[left: Nat, right: Nat] Cat[Bits[right], Bits[left + right]] for Bits[left] {

@@ -20,3 +20,14 @@ def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
     match e1 {
         case refl(a) => e2
     }
+
+trait Cast[U] {
+    def cast(prove: Eq(Self, U)): U
+}
+
+impl[T, U] Cast[U] for T {
+    def cast(prove: Eq(T, U)): U =
+        match prove {
+            case refl(a) => this
+        }
+}
