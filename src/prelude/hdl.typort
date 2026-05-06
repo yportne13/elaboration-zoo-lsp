@@ -109,9 +109,86 @@ def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr
         module.mk(num, new_module :: tail)
 }
 
+// ---------- When context tracking ----------
+// When blocks track the current condition so assignments inside
+// when/elsewhen/otherwise create properly scoped Expr::when nodes.
+// Uses a linked list (enum-based stack) to avoid Vec length requirements.
+
+enum WhenState {
+    whenActive(cond: Expr)
+    whenOtherwise
+}
+
+enum WhenStack {
+    whenStackEmpty
+    whenStackPush(top: WhenState, rest: WhenStack)
+}
+
+// Initialize when stack global (creates if missing)
+def initWhenStack(): Unit =
+    let dummy = create_global("WhenStack", whenStackEmpty);
+    unit
+
+// Reset when stack to empty (called at module start)
+def resetWhenStack(): Unit =
+    let dummy = change_mutable("WhenStack", x => whenStackEmpty);
+    unit
+
+// Push a when condition
+def whenBegin(cond: Expr): Unit =
+    let state = whenActive(cond);
+    let dummy = change_mutable("WhenStack", x => whenStackPush(state, x));
+    unit
+
+// Pop the topmost when/elsewhen/otherwise context
+def whenEnd(dummy: Unit): Unit =
+    let d = dummy;
+    let d2 = change_mutable("WhenStack", x => match x {
+        case whenStackEmpty => x
+        case whenStackPush(_, rest) => rest
+    });
+    unit
+
+// Replace top condition with a new one (elsewhen)
+def whenElseBegin(cond: Expr): Unit =
+    let state = whenActive(cond);
+    let d2 = change_mutable("WhenStack", x => match x {
+        case whenStackEmpty => whenStackPush(state, whenStackEmpty)
+        case whenStackPush(_, rest) => whenStackPush(state, rest)
+    });
+    unit
+
+// Push otherwise marker (marks current level as default case)
+def whenOtherwiseBegin(dummy: Unit): Unit =
+    let d = dummy;
+    let d2 = change_mutable("WhenStack", x => whenStackPush(whenOtherwise, x));
+    unit
+
+// Wrap an expression with the current when context (if any)
+// For when/elsewhen: wrap as when(cond, e, None)
+// For otherwise: leave as-is
+def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
+    case whenStackEmpty => e
+    case whenStackPush(state, _) => match state {
+        case whenOtherwise => e
+        case whenActive(cond) => when(cond, e, None)
+    }
+}
+
+// Safely wrap an expression with the current when context.
+// Ensures WhenStack key exists (creates with empty stack if missing),
+// then applies the when context wrapping.
+def addWhenContext(e: Expr): Expr =
+    let ws_init = change_mutable_default("WhenStack", x => x, whenStackEmpty);
+    let ws = get_global("WhenStack");
+    wrapWithWhenContext(ws, e)
+
 // Helper used by signal creation and assignment to insert expr into module
+// When inside a when/elsewhen block, wraps the expression with Expr::when
 def createSignalExpr(name: String, e: Expr): Expr =
-    let dummy = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+    // Wrap with when context if inside a when/elsewhen block
+    let wrapped = addWhenContext(e);
+    let dummy = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
     e
 
 // Helper for assignment
@@ -708,10 +785,27 @@ macro_rules Expr {
     (let $x:ident = $y:raw) => {let $x = $y;};
 
     // ---- when/otherwise control flow ----
-    (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
+    // Pushes condition scope, evaluates body, pops scope.
+    // Functions with no real args take 'unit' due to parser many1 requirement.
+    (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
+        let w_push = whenBegin($cond.expr);
         $({$bodywhen})*
-        $({$bodyelse})*
+        let w_pop = whenEnd(unit);
+        $( let w_epush = whenElseBegin($cond2.expr);
+           $({$bodyelse})*
+           let w_epop = whenEnd(unit); )*
+        let w_opush = whenOtherwiseBegin(unit);
         $({$bodyother})*
+        let w_opop = whenEnd(unit);
+    };
+    // when without otherwise
+    (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
+        $( let w_epush = whenElseBegin($cond2.expr);
+           $({$bodyelse})*
+           let w_epop = whenEnd(unit); )*
     };
 
     // ---- assignment ----

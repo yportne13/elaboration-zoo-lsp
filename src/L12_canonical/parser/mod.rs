@@ -1135,7 +1135,45 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
             ret.push(MacroTranscriber::Basic(owned));
             Ok((input, MacroTranscriber::Sequence(ret)))
         },
-        Err(e) => Err(e),
+        //Err(e) => Err(e),
+        Err(_) => {
+            // No leading '{' - parse as flat token sequence with possible $(...) groups
+            let mut input = input;
+            let mut i_back = input;
+            let mut ret = vec![];
+            while !input.is_empty()
+                && (kw(RParen), kw_is(Op, "*")).parse(input, state).is_err()
+                && (kw(RParen), kw_is(Op, "+")).parse(input, state).is_err()
+                && (kw(EndLine).option(), kw(RCurly)).parse(input, state).is_err()
+            {
+                if let Ok((i, _)) = (kw_is(Op, "$"), kw(LParen)).parse(input, state) {
+                    let len = i_back.len() - input.len();
+                    let owned: Vec<OwnedToken> = i_back[..len].iter().map(|tok| Span {
+                        data: (tok.data.0.to_owned(), tok.data.1),
+                        start_offset: tok.start_offset,
+                        end_offset: tok.end_offset,
+                        path_id: tok.path_id,
+                    }).collect();
+                    ret.push(MacroTranscriber::Basic(owned));
+                    let (i, o) = p_macro_transcriber_single.parse(i, state)?;
+                    ret.push(MacroTranscriber::Group(o.into()));
+                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).parse(i, state)?;
+                    i_back = i;
+                    input = i;
+                } else {
+                    input = input.get(1..).unwrap();
+                }
+            }
+            let len = i_back.len() - input.len();
+            let owned: Vec<OwnedToken> = i_back[..len].iter().map(|tok| Span {
+                data: (tok.data.0.to_owned(), tok.data.1),
+                start_offset: tok.start_offset,
+                end_offset: tok.end_offset,
+                path_id: tok.path_id,
+            }).collect();
+            ret.push(MacroTranscriber::Basic(owned));
+            Ok((input, MacroTranscriber::Sequence(ret)))
+        },
     }
 }
 
