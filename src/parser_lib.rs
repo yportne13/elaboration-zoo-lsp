@@ -387,6 +387,26 @@ pub fn pmatch<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a 
     }
 }
 
+pub fn pmatch_empty<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a str>> {
+    move |input: Input<'a>| {
+        let x = input.data.trim_start_matches(pat);
+        Some((
+            Span {
+                data: x,
+                start_offset: input.start_offset + (input.data.len() - x.len()) as u32,
+                end_offset: input.end_offset,
+                path_id: input.path_id,
+            },
+            Span {
+                data: &input.data[..(input.data.len() - x.len())],
+                start_offset: input.start_offset,
+                end_offset: input.start_offset + (input.data.len() - x.len()) as u32,
+                path_id: input.path_id,
+            },
+        ))
+    }
+}
+
 pub fn is<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a str>> {
     move |input: Input<'a>| {
         input.data.strip_prefix(pat).map(|x| {

@@ -70,14 +70,58 @@ def minNat(a: Nat, b: Nat): Nat = match a {
     }
 }
 
-// ---------- Unit & Data ----------
+// ---------- Unit ----------
 
 enum Unit {
     unit
 }
 
+// ---------- Module system (shared helpers) ----------
+
+enum Expr {
+    create(name: String)
+    binary(lhs: Expr, op: String, rhs: Expr)
+    assign(lhs: Expr, rhs: Expr)
+    when(cond: Expr, body: Expr, elseBody: Option[Expr])
+    switch(value: Expr, cases: Expr)
+}
+
+struct Module {
+    name: String
+    expr_num: Nat
+    expr: Vec[Expr] expr_num
+}
+
+struct module {
+    num: Nat
+    data: Vec[Module] num
+}
+
+impl module {
+    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
+}
+
+// Generic helper: add an expression to the first module (or create one if none exists)
+def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr): module = match data {
+    case nil => module.mk(0 + 1, Module.mk(name, 0 + 1, e :: nil) :: nil)
+    case cons(head, tail) =>
+        let new_module = Module.mk(head.name, head.expr_num + 1, e :: head.expr);
+        module.mk(num, new_module :: tail)
+}
+
+// Helper used by signal creation and assignment to insert expr into module
+def createSignalExpr(name: String, e: Expr): Expr =
+    let dummy = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+    e
+
+// Helper for assignment
+// Note: the Data trait methods reference this function
+
+// ---------- Unit & Data ----------
+
 trait Data {
     def :=(that: Self): Unit
+    def expr: Expr
 }
 
 // ============================================================
@@ -86,52 +130,60 @@ trait Data {
 
 struct Bool {
     name: Option[String]
-}
-
-def True: Bool = Bool.mk None
-
-def False: Bool = Bool.mk None
-
-impl Into[Bool] for Boolean {
-    def into: Bool = Bool.mk None
+    zz_expr: Expr
 }
 
 impl Data for Bool {
-    def :=(that: Bool): Unit = unit
+    def :=(that: Bool): Unit =
+        let dummy_expr = createSignalExpr("", assign(this.expr, that.expr));
+        unit
+    def expr: Expr = this.zz_expr
 }
 
 // ---------- Bits (raw bit vector) ----------
 
 struct Bits[width: Nat] {
     name: Option[String]
+    zz_expr: Expr
 }
 
 impl[width: Nat] Data for Bits[width] {
-    def :=(that: Bits[width]): Unit = unit
+    def :=(that: Bits[width]): Unit =
+        let dummy_expr = createSignalExpr("", assign(this.zz_expr, that.zz_expr));
+        unit
+    def expr: Expr = this.zz_expr
 }
 
 // ---------- UInt (unsigned integer) ----------
 
 struct UInt[width: Nat] {
     name: Option[String]
+    zz_expr: Expr
 }
 
 impl[width: Nat] Into[UInt[width]] for Nat {
-    def into: UInt[width] = UInt.mk None
+    def into: UInt[width] = UInt.mk(None, create("uint_lit"))
 }
 
 impl[width: Nat] Data for UInt[width] {
-    def :=(that: UInt[width]): Unit = unit
+    def :=(that: UInt[width]): Unit =
+        let dummy_expr = createSignalExpr("", assign(this.zz_expr, that.zz_expr));
+        unit
+    def expr: Expr = this.zz_expr
 }
 
 // ---------- SInt (signed integer) ----------
 
 struct SInt[width: Nat] {
     name: Option[String]
+    zz_expr: Expr
 }
 
 impl[width: Nat] Data for SInt[width] {
-    def :=(that: SInt[width]): Unit = unit
+    def :=(that: SInt[width]): Unit =
+        let dummy_expr = createSignalExpr("", assign(this.zz_expr, that.zz_expr));
+        unit
+    def expr: Expr = this.zz_expr
 }
 
 // ============================================================
@@ -140,36 +192,45 @@ impl[width: Nat] Data for SInt[width] {
 
 // UInt arithmetic
 impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
-    def +(that: UInt[width]): UInt[width] = UInt.mk None
+    def +(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "+", that.expr))
 }
 
 impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
-    def -(that: UInt[width]): UInt[width] = UInt.mk None
+    def -(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "-", that.expr))
 }
 
 impl[width1: Nat, width2: Nat] Mul[UInt[width1], UInt[width1 + width2]] for UInt[width2] {
-    def *(that: UInt[width1]): UInt[width1 + width2] = UInt.mk None
+    def *(that: UInt[width1]): UInt[width1 + width2] =
+        UInt.mk(None, binary(this.expr, "*", that.expr))
 }
 
 // SInt arithmetic
 impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
-    def +(that: SInt[width]): SInt[width] = SInt.mk None
+    def +(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "+", that.expr))
 }
 
 impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
-    def -(that: SInt[width]): SInt[width] = SInt.mk None
+    def -(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "-", that.expr))
 }
 
 // ---- carry-generating operations (+^ -^) ----
 
 impl[width: Nat] UInt[width] {
-    def +^(that: UInt[width]): UInt[width + 1] = UInt.mk None
-    def -^(that: UInt[width]): UInt[width + 1] = UInt.mk None
+    def +^(that: UInt[width]): UInt[width + 1] =
+        UInt.mk(None, binary(this.expr, "+^", that.expr))
+    def -^(that: UInt[width]): UInt[width + 1] =
+        UInt.mk(None, binary(this.expr, "-^", that.expr))
 }
 
 impl[width: Nat] SInt[width] {
-    def +^(that: SInt[width]): SInt[width + 1] = SInt.mk None
-    def -^(that: SInt[width]): SInt[width + 1] = SInt.mk None
+    def +^(that: SInt[width]): SInt[width + 1] =
+        SInt.mk(None, binary(this.expr, "+^", that.expr))
+    def -^(that: SInt[width]): SInt[width + 1] =
+        SInt.mk(None, binary(this.expr, "-^", that.expr))
 }
 
 // ============================================================
@@ -179,25 +240,34 @@ impl[width: Nat] SInt[width] {
 // --- Bits bitwise ---
 
 impl[width: Nat] Bits[width] {
-    def &(that: Bits[width]): Bits[width] = Bits.mk None
-    def |(that: Bits[width]): Bits[width] = Bits.mk None
-    def ^(that: Bits[width]): Bits[width] = Bits.mk None
+    def &(that: Bits[width]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "&", that.expr))
+    def |(that: Bits[width]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "|", that.expr))
+    def ^(that: Bits[width]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "^", that.expr))
 }
 
 // --- UInt bitwise ---
 
 impl[width: Nat] UInt[width] {
-    def &(that: UInt[width]): UInt[width] = UInt.mk None
-    def |(that: UInt[width]): UInt[width] = UInt.mk None
-    def ^(that: UInt[width]): UInt[width] = UInt.mk None
+    def &(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "&", that.expr))
+    def |(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "|", that.expr))
+    def ^(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "^", that.expr))
 }
 
 // --- SInt bitwise ---
 
 impl[width: Nat] SInt[width] {
-    def &(that: SInt[width]): SInt[width] = SInt.mk None
-    def |(that: SInt[width]): SInt[width] = SInt.mk None
-    def ^(that: SInt[width]): SInt[width] = SInt.mk None
+    def &(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "&", that.expr))
+    def |(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "|", that.expr))
+    def ^(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "^", that.expr))
 }
 
 // ============================================================
@@ -205,24 +275,32 @@ impl[width: Nat] SInt[width] {
 // ============================================================
 
 impl[width: Nat, shift: Nat] UInt[width] {
-    def <<(that: UInt[shift]): UInt[width] = UInt.mk None
-    def >>(that: UInt[shift]): UInt[width] = UInt.mk None
+    def <<(that: UInt[shift]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "<<", that.expr))
+    def >>(that: UInt[shift]): UInt[width] =
+        UInt.mk(None, binary(this.expr, ">>", that.expr))
 }
 
 impl[width: Nat, shift: Nat] SInt[width] {
-    def <<(that: UInt[shift]): SInt[width] = SInt.mk None
-    def >>(that: UInt[shift]): SInt[width] = SInt.mk None
+    def <<(that: UInt[shift]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "<<", that.expr))
+    def >>(that: UInt[shift]): SInt[width] =
+        SInt.mk(None, binary(this.expr, ">>", that.expr))
 }
 
 impl[width: Nat, shift: Nat] Bits[width] {
-    def <<(that: UInt[shift]): Bits[width] = Bits.mk None
-    def >>(that: UInt[shift]): Bits[width] = Bits.mk None
+    def <<(that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "<<", that.expr))
+    def >>(that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, ">>", that.expr))
 }
 
 // ---- rotate ----
 impl[width: Nat] Bits[width] {
-    def rotateLeft[shift: Nat](that: UInt[shift]): Bits[width] = Bits.mk None
-    def rotateRight[shift: Nat](that: UInt[shift]): Bits[width] = Bits.mk None
+    def rotateLeft[shift: Nat](that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "rotateLeft", that.expr))
+    def rotateRight[shift: Nat](that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "rotateRight", that.expr))
 }
 
 // ============================================================
@@ -231,28 +309,42 @@ impl[width: Nat] Bits[width] {
 
 // --- UInt comparisons ---
 impl[width: Nat] UInt[width] {
-    def <(that: UInt[width]): Bool = Bool.mk None
-    def <=(that: UInt[width]): Bool = Bool.mk None
-    def >(that: UInt[width]): Bool = Bool.mk None
-    def >=(that: UInt[width]): Bool = Bool.mk None
-    def ===(that: UInt[width]): Bool = Bool.mk None
-    def =/=(that: UInt[width]): Bool = Bool.mk None
+    def <(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<", that.expr))
+    def <=(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<=", that.expr))
+    def >(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">", that.expr))
+    def >=(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">=", that.expr))
+    def ===(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "===", that.expr))
+    def =/=(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", that.expr))
 }
 
 // --- SInt comparisons ---
 impl[width: Nat] SInt[width] {
-    def <(that: SInt[width]): Bool = Bool.mk None
-    def <=(that: SInt[width]): Bool = Bool.mk None
-    def >(that: SInt[width]): Bool = Bool.mk None
-    def >=(that: SInt[width]): Bool = Bool.mk None
-    def ===(that: SInt[width]): Bool = Bool.mk None
-    def =/=(that: SInt[width]): Bool = Bool.mk None
+    def <(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<", that.expr))
+    def <=(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<=", that.expr))
+    def >(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">", that.expr))
+    def >=(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">=", that.expr))
+    def ===(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "===", that.expr))
+    def =/=(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", that.expr))
 }
 
 // --- Bool comparisons ---
 impl Bool {
-    def ===(that: Bool): Bool = Bool.mk None
-    def =/=(that: Bool): Bool = Bool.mk None
+    def ===(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "===", that.expr))
+    def =/=(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", that.expr))
 }
 
 // ============================================================
@@ -260,27 +352,37 @@ impl Bool {
 // ============================================================
 
 impl[width: Nat] Bits[width] {
-    def andR: Bool = Bool.mk None
-    def orR: Bool = Bool.mk None
-    def xorR: Bool = Bool.mk None
+    def andR: Bool =
+        Bool.mk(None, binary(this.expr, "andR", this.expr))
+    def orR: Bool =
+        Bool.mk(None, binary(this.expr, "orR", this.expr))
+    def xorR: Bool =
+        Bool.mk(None, binary(this.expr, "xorR", this.expr))
 }
 
 impl[width: Nat] UInt[width] {
-    def andR: Bool = Bool.mk None
-    def orR: Bool = Bool.mk None
-    def xorR: Bool = Bool.mk None
+    def andR: Bool =
+        Bool.mk(None, binary(this.expr, "andR", this.expr))
+    def orR: Bool =
+        Bool.mk(None, binary(this.expr, "orR", this.expr))
+    def xorR: Bool =
+        Bool.mk(None, binary(this.expr, "xorR", this.expr))
 }
 
 impl[width: Nat] SInt[width] {
-    def andR: Bool = Bool.mk None
-    def orR: Bool = Bool.mk None
-    def xorR: Bool = Bool.mk None
+    def andR: Bool =
+        Bool.mk(None, binary(this.expr, "andR", this.expr))
+    def orR: Bool =
+        Bool.mk(None, binary(this.expr, "orR", this.expr))
+    def xorR: Bool =
+        Bool.mk(None, binary(this.expr, "xorR", this.expr))
 }
 
 // ============================================================
 //  Mux (Multiplexer)
 // ============================================================
 
+// Helper to check if a type has expr (is a Data type)
 impl Bool {
     def mux[T: Type 0](whenTrue: T, whenFalse: T): T = whenTrue
 }
@@ -294,15 +396,18 @@ trait Cat[T, O: outParam(Type 0)] {
 }
 
 impl[width: Nat] Cat[Bits[width], Bits[width + 1]] for Bool {
-    def ##(that: Bits[width]): Bits[width + 1] = Bits.mk None
+    def ##(that: Bits[width]): Bits[width + 1] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
 }
 
 impl[left: Nat, right: Nat] Cat[Bits[right], Bits[left + right]] for Bits[left] {
-    def ##(that: Bits[right]): Bits[left + right] = Bits.mk None
+    def ##(that: Bits[right]): Bits[left + right] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
 }
 
 impl[left: Nat, right: Nat] Cat[UInt[right], Bits[left + right]] for Bits[left] {
-    def ##(that: UInt[right]): Bits[left + right] = Bits.mk None
+    def ##(that: UInt[right]): Bits[left + right] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
 }
 
 // ============================================================
@@ -310,21 +415,30 @@ impl[left: Nat, right: Nat] Cat[UInt[right], Bits[left + right]] for Bits[left] 
 // ============================================================
 
 impl[width: Nat] Bits[width] {
-    def msb: Bool = Bool.mk None
-    def lsb: Bool = Bool.mk None
-    def take[high: Nat](low: Fin width): Bits[high + 1] = Bits.mk None
-    def slice[hi_idx: Nat, lo_idx: Nat](hi_val: Fin width, lo_val: Fin width): Bits[hi_idx + 1] = Bits.mk None
-    def apply(idx: Fin width): Bool = Bool.mk None
+    def msb: Bool =
+        Bool.mk(None, binary(this.expr, "msb", this.expr))
+    def lsb: Bool =
+        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+    def take[high: Nat](low: Fin width): Bits[high + 1] =
+        Bits.mk(None, binary(this.expr, "take", this.expr))
+    def slice[hi_idx: Nat, lo_idx: Nat](hi_val: Fin width, lo_val: Fin width): Bits[hi_idx + 1] =
+        Bits.mk(None, binary(this.expr, "slice", this.expr))
+    def apply(idx: Fin width): Bool =
+        Bool.mk(None, binary(this.expr, "apply", this.expr))
 }
 
 impl[width: Nat] UInt[width] {
-    def msb: Bool = Bool.mk None
-    def lsb: Bool = Bool.mk None
+    def msb: Bool =
+        Bool.mk(None, binary(this.expr, "msb", this.expr))
+    def lsb: Bool =
+        Bool.mk(None, binary(this.expr, "lsb", this.expr))
 }
 
 impl[width: Nat] SInt[width] {
-    def msb: Bool = Bool.mk None
-    def lsb: Bool = Bool.mk None
+    def msb: Bool =
+        Bool.mk(None, binary(this.expr, "msb", this.expr))
+    def lsb: Bool =
+        Bool.mk(None, binary(this.expr, "lsb", this.expr))
 }
 
 // ============================================================
@@ -332,21 +446,30 @@ impl[width: Nat] SInt[width] {
 // ============================================================
 
 impl[width: Nat] UInt[width] {
-    def resize[newWidth: Nat]: UInt[newWidth] = UInt.mk None
-    def asBits: Bits[width] = Bits.mk None
-    def asSInt: SInt[width] = SInt.mk None
-    def asBool: Bool = Bool.mk None
+    def resize[newWidth: Nat]: UInt[newWidth] =
+        UInt.mk(None, binary(this.expr, "resize", this.expr))
+    def asBits: Bits[width] =
+        Bits.mk(None, binary(this.expr, "asBits", this.expr))
+    def asSInt: SInt[width] =
+        SInt.mk(None, binary(this.expr, "asSInt", this.expr))
+    def asBool: Bool =
+        Bool.mk(None, binary(this.expr, "asBool", this.expr))
 }
 
 impl[width: Nat] SInt[width] {
-    def resize[newWidth: Nat]: SInt[newWidth] = SInt.mk None
-    def asBits: Bits[width] = Bits.mk None
-    def asUInt: UInt[width] = UInt.mk None
+    def resize[newWidth: Nat]: SInt[newWidth] =
+        SInt.mk(None, binary(this.expr, "resize", this.expr))
+    def asBits: Bits[width] =
+        Bits.mk(None, binary(this.expr, "asBits", this.expr))
+    def asUInt: UInt[width] =
+        UInt.mk(None, binary(this.expr, "asUInt", this.expr))
 }
 
 impl[width: Nat] Bits[width] {
-    def asUInt: UInt[width] = UInt.mk None
-    def asSInt: SInt[width] = SInt.mk None
+    def asUInt: UInt[width] =
+        UInt.mk(None, binary(this.expr, "asUInt", this.expr))
+    def asSInt: SInt[width] =
+        SInt.mk(None, binary(this.expr, "asSInt", this.expr))
 }
 
 // ============================================================
@@ -364,7 +487,7 @@ struct ClockDomain {
     config: ClockDomainConfig
 }
 
-def defaultClockDomain: ClockDomain = ClockDomain.mk (Bool.mk (Some "clk")) (Bool.mk (Some "reset")) Sync
+def defaultClockDomain: ClockDomain = ClockDomain.mk (Bool.mk (Some "clk") (create("clk"))) (Bool.mk (Some "reset") (create("reset"))) Sync
 
 // ============================================================
 //  Registers (sequential logic)
@@ -457,7 +580,7 @@ struct Flow[T] {
 }
 
 impl[T] Stream[T] {
-    def fire: Bool = Bool.mk None
+    def fire: Bool = this.valid
     def stage: Stream[T] = this
 }
 
@@ -471,7 +594,6 @@ impl[T] Flow[T] {
 
 struct BlackBox {
     name: String
-    generic: Vec[String] 0
 }
 
 impl BlackBox {
@@ -508,70 +630,40 @@ enum SwitchKey {
 }
 
 // ============================================================
-//  Module System
+//  Signal Creation Functions
 // ============================================================
 
-enum Expr {
-    create(name: String)
-    binary(lhs: Expr, op: String, rhs: Expr)
-    assign(lhs: Expr, rhs: Expr)
-    when(cond: Expr, body: Expr, elseBody: Option[Expr])
-    switch(value: Expr, cases: Expr)
-}
-
-struct Module {
-    name: String
-    expr_num: Nat
-    expr: Vec[Expr] expr_num
-}
-
-struct module {
-    num: Nat
-    data: Vec[Module] num
-}
-
-impl module {
-    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
-}
-
-def newBitsHelper(num: Nat, data: Vec[Module] num, name: String, w: Nat, dir: IODirection): module = match data {
-    case nil => module.mk(1, Module.mk(name, 1, create(name) :: nil) :: nil)
-    case cons(head, tail) =>
-        let new_module = Module.mk(head.name, head.expr_num + 1, create(name) :: head.expr);
-        module.mk(num, new_module :: tail)
-}
-
 def newBits(name: String, w: Nat): Bits[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, Out));
-    Bits.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    Bits.mk(Some(name), e)
 
 def newUInt(name: String, w: Nat): UInt[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, Out));
-    UInt.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    UInt.mk(Some(name), e)
 
 def newSInt(name: String, w: Nat): SInt[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, Out));
-    SInt.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    SInt.mk(Some(name), e)
 
 def newBool(name: String): Bool =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, 1, Out));
-    Bool.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    Bool.mk(Some(name), e)
 
 def newUIntInput(name: String, w: Nat): UInt[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, In));
-    UInt.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    UInt.mk(Some(name), e)
 
 def newBitsInput(name: String, w: Nat): Bits[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, In));
-    Bits.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    Bits.mk(Some(name), e)
 
 def newSIntInput(name: String, w: Nat): SInt[w] =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, w, In));
-    SInt.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    SInt.mk(Some(name), e)
 
 def newBoolInput(name: String): Bool =
-    let create_sig = change_mutable("module", x => newBitsHelper(x.num, x.data, name, 1, In));
-    Bool.mk(Some(name))
+    let e = createSignalExpr(name, create(name));
+    Bool.mk(Some(name), e)
 
 // ============================================================
 //  Macros - Ergonomic Hardware DSL
@@ -641,7 +733,7 @@ macro_rules module {
     ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
         def $name $({$args})* =
             let new_module = Module.mk(stringify $name, 0, nil);
-            let creat_module = change_mutable_default("module", x => x.insert(new_module), module.mk(1, new_module :: nil));
+            let creat_module = change_mutable_default("module", x => x.insert(new_module), module.mk(0 + 1, new_module :: nil));
             $({$body})*
             let ret = get_global("module").data.head_option;
             ret.unwrap_or(new_module)

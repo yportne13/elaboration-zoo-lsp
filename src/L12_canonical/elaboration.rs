@@ -316,7 +316,7 @@ impl Infer {
                         let err_msg = format!(
                             "find unsolved meta with type `{}`",//\n{:?}",
                             super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
-                            //ret,
+                            //super::pretty::pretty_tm(0, cxt.names(), &t_tm),
                         );
                         let infer = self.clone();
                         /*println!("{:?}", meta_cxt.pruning);

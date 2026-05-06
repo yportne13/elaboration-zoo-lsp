@@ -90,7 +90,7 @@ const OP: [(&str, TokenKind); 15] = [
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    (is('"'), pmatch(|c: char| c != '"'), is('"'))
+    (is('"'), pmatch_empty(|c: char| c != '"'), is('"'))
         .map(|(_, x, _)| x.map(|t| (t, Str)))
         .parse(input)
 }

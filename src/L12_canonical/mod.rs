@@ -102,22 +102,22 @@ impl Tm {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
             Tm::Lam(_, _, t) => t.no_metas(infer, decl, l + 1),
-            Tm::App(t, u, _) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l)),
+            Tm::App(t, u, _) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l)),
             Tm::AppPruning(t, _) => {
                 t.no_metas(infer, decl, l)
             },
-            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or(u.no_metas(infer, decl, l + 1)),
-            Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or(t.no_metas(infer, decl, l)).or(u.no_metas(infer, decl, l)),
+            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
+            Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
                 MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.clone(), oty.clone())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
             },
-            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer, decl, l).or(ty.no_metas(infer, decl, l))).next(),
+            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer, decl, l).or_else(|| ty.no_metas(infer, decl, l))).next(),
             Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
-                .or(datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
-            Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or(items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
+                .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
+            Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
         }
     }
 }
