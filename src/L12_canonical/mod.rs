@@ -18,7 +18,6 @@ mod unification;
 mod typeclass;
 pub mod pretty;
 mod canonical;
-pub mod verilog;
 
 type Rc<T> = std::sync::Arc<T>;
 
@@ -766,50 +765,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             println!("{}: {}", name, pretty::pretty_tm(0, cxt.names(), &infer.quote(cxt.lvl, ty.clone())));
             //println!("{:?}\n", ty);
         });*/
-    let verilog_out = verilog::emit_verilog(&infer, &cxt.decl, cxt.lvl);
-    if !verilog_out.is_empty() {
-        ret += "\n=== Verilog ===\n";
-        ret += &verilog_out;
-    }
     Ok(ret)
-}
-
-/// Run with prelude, return only the Verilog output.
-#[allow(unused)]
-pub fn run_verilog(input: &str) -> Result<String, Error> {
-    let mut infer = Infer::new();
-    let prelude = &[
-        include_str!("../prelude/op.typort"),
-        include_str!("../prelude/eq.typort"),
-        include_str!("../prelude/nat.typort"),
-        include_str!("../prelude/bool.typort"),
-        include_str!("../prelude/option.typort"),
-        include_str!("../prelude/vec.typort"),
-        include_str!("../prelude/hdl.typort"),
-    ];
-    let mut cxt = Cxt::new();
-    let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
-    let mut id = 0;
-    for p in prelude {
-        if let Some((decls, _parse_errs, new_exports)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
-            for (name, rules) in new_exports {
-                global_macros.insert(name, rules);
-            }
-            for tm in decls {
-                let (_, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
-                cxt = new_cxt;
-            }
-        }
-        id += 1;
-    }
-    let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
-        .map(|(d, _, _)| d)
-        .unwrap();
-    for tm in ast {
-        let (_, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
-        cxt = new_cxt;
-    }
-    Ok(verilog::emit_verilog(&infer, &cxt.decl, cxt.lvl))
 }
 
 pub fn preprocess(s: &str) -> String {
@@ -3086,66 +3042,20 @@ module Test {
 }
 
 #[test]
-fn test_verilog_simple() {
+fn test_verilog_pure_typort() {
     let input = r#"
-module SimpleALU[w: Nat] {
-    let op = UInt[2]
-    let a = UInt[w]
-    let b = UInt[w]
-    let result = UInt[w + 1]
-    result := a +^ b
-}
-"#;
-    match run_verilog(input) {
-        Ok(output) => {
-            println!("=== Verilog Output ===\n{}", output);
-            assert!(!output.is_empty(), "Verilog output should not be empty");
-            assert!(output.contains("module"), "Output should contain 'module'");
-            assert!(output.contains("assign result = (a + b)"), "Should have addition assignment");
-        },
-        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
-    }
-}
-
-// TODO: when/otherwise macro has a known issue with $cond:raw being too greedy.
-// The whenBegin/whenEnd helpers also have trait resolution issues in the module body.
-// These will be fixed by either:
-//   a) Changing when syntax to `when (cond) { ... }` (needs LParen/RParen in macro token parser)
-//   b) Limiting $cond:raw to not consume block arguments
-
-#[test]
-fn test_verilog_bitwise() {
-    let input = r#"
-module GateTest {
-    let a = Bits[8]
-    let b = Bits[8]
-    let c = Bits[8]
-    c := a & b
-}
-"#;
-    match run_verilog(input) {
-        Ok(output) => {
-            println!("=== Verilog Output ===\n{}", output);
-            assert!(output.contains("assign c = (a & b)"));
-        },
-        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
-    }
-}
-
-#[test]
-fn test_verilog_comparison() {
-    let input = r#"
-module CmpTest {
+module Adder {
     let a = UInt[8]
     let b = UInt[8]
-    let c = Bool
-    c := a < b
+    let sum = UInt[8]
+    sum := a + b
 }
+println (moduleVL Adder)
 "#;
-    match run_verilog(input) {
+    match run_with_prelude(input) {
         Ok(output) => {
-            println!("=== Verilog Output ===\n{}", output);
-            assert!(output.contains("(a < b)"));
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("assign sum = (a + b)"), "{}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
