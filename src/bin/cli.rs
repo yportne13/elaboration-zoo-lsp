@@ -9,8 +9,18 @@ use lsp_types::Url;
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: typort <file.typort> [<file2.typort> ...]");
+    let mut verilog_mode = false;
+    let files: Vec<&String> = args.iter().skip(1).filter(|a| {
+        if a.as_str() == "--verilog" {
+            verilog_mode = true;
+            false
+        } else {
+            true
+        }
+    }).collect();
+
+    if files.is_empty() {
+        eprintln!("Usage: typort [--verilog] <file.typort> [<file2.typort> ...]");
         std::process::exit(1);
     }
 
@@ -22,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     // Backend::new loads the builtin prelude, sets up Infer/Cxt.
     let backend = Backend::new(cli_client);
 
-    for filepath in &args[1..] {
+    for filepath in &files {
         let path = PathBuf::from(filepath);
         let contents = fs::read_to_string(&path)?;
         let uri = Url::from_file_path(path.canonicalize()?).unwrap();
@@ -38,6 +48,22 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             text: &contents,
             version: None,
         });
+
+        // Emit Verilog if requested
+        if verilog_mode {
+            let infer = backend.get_infer();
+            let cxt = backend.get_cxt();
+            let infer = infer.lock().unwrap();
+            let cxt = cxt.lock().unwrap();
+            let verilog = elaboration_zoo_lsp::L12_canonical::verilog::emit_verilog(
+                &infer,
+                &cxt.decl,
+                cxt.lvl,
+            );
+            if !verilog.is_empty() {
+                println!("{}", verilog);
+            }
+        }
 
         // Print inferred results
         /*if let Some(type_map) = backend.type_map.get(uri.as_str()) {
