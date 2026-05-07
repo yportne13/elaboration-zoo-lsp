@@ -80,6 +80,8 @@ enum Unit {
 
 enum Expr {
     create(name: String)
+    createIn(name: String)
+    createOut(name: String)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
     when(cond: Expr, body: Expr, elseBody: Option[Expr])
@@ -727,19 +729,35 @@ def newBool(name: String): Bool =
     Bool.mk(Some(name), e)
 
 def newUIntInput(name: String, w: Nat): UInt[w] =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createIn(name));
     UInt.mk(Some(name), e)
 
 def newBitsInput(name: String, w: Nat): Bits[w] =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createIn(name));
     Bits.mk(Some(name), e)
 
 def newSIntInput(name: String, w: Nat): SInt[w] =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createIn(name));
     SInt.mk(Some(name), e)
 
 def newBoolInput(name: String): Bool =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createIn(name));
+    Bool.mk(Some(name), e)
+
+def newBitsOutput(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createOut(name));
+    Bits.mk(Some(name), e)
+
+def newUIntOutput(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createOut(name));
+    UInt.mk(Some(name), e)
+
+def newSIntOutput(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createOut(name));
+    SInt.mk(Some(name), e)
+
+def newBoolOutput(name: String): Bool =
+    let e = createSignalExpr(name, createOut(name));
     Bool.mk(Some(name), e)
 
 // ============================================================
@@ -766,19 +784,19 @@ def newBoolInput(name: String): Bool =
 macro_rules Expr {
     // ---- signal declarations ----
     (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput(stringify $x, $width);};
-    (output $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    (output $x:ident = Bits[$width:raw]) => {let $x = newBitsOutput(stringify $x, $width);};
     (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
 
     (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput(stringify $x, $width);};
-    (output $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
+    (output $x:ident = UInt[$width:raw]) => {let $x = newUIntOutput(stringify $x, $width);};
     (let $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
 
     (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput(stringify $x, $width);};
-    (output $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
+    (output $x:ident = SInt[$width:raw]) => {let $x = newSIntOutput(stringify $x, $width);};
     (let $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
 
     (input $x:ident = Bool) => {let $x = newBoolInput(stringify $x);};
-    (output $x:ident = Bool) => {let $x = newBool(stringify $x);};
+    (output $x:ident = Bool) => {let $x = newBoolOutput(stringify $x);};
     (let $x:ident = Bool) => {let $x = newBool(stringify $x);};
 
     // ---- generic let ----
@@ -849,6 +867,8 @@ def S7(a: String, b: String, c: String, d: String, e: String, f: String, g: Stri
 // Convert a single Expr to a Verilog expression string
 def exprVL(e: Expr): String = match e {
     case create(name) => name
+    case createIn(name) => name
+    case createOut(name) => name
     case binary(lhs, op, rhs) =>
         S5("(", exprVL(lhs), S3(" ", op, " "), exprVL(rhs), ")")
     case assign(lhs, rhs) =>
@@ -859,29 +879,34 @@ def exprVL(e: Expr): String = match e {
         S5("case (", exprVL(value), ") ", exprVL(cases), " endcase")
 }
 
+// Walk Vec[Expr]: collect port declarations (input/output wire name,)
 // Walk Vec[Expr] and join assignments only (filter out create)
 def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, tail) => match e {
         case create(_) => assignsVL tail
+        case createIn(_) => assignsVL tail
+        case createOut(_) => assignsVL tail
         case _ => S2(exprVL(e), assignsVL tail)
     }
 }
 
-// Collect signal names from Vec[Expr]
+// Collect signal names (ports + wires) from Vec[Expr]
 def namesVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, tail) => match e {
-        case create(name) => S3(name, " ", namesVL tail)
+        case createIn(name) => S4("input wire ", name, ", ", namesVL tail)
+        case createOut(name) => S4("output wire ", name, ", ", namesVL tail)
+        case create(name) => S3("wire ", name, S2("; ", namesVL tail))
         case _ => namesVL tail
     }
 }
 
 // Convert a Module to a Verilog string
 def moduleVL(m: Module): String =
-    let names = namesVL(m.expr);
+    let ports_wires = namesVL(m.expr);
     let assigns = assignsVL(m.expr);
-    S7("module ", m.name, " ( ", names, " ); ", assigns, "endmodule")
+    S5("module ", m.name, S3(" (", ports_wires, ");"), assigns, "endmodule")
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):

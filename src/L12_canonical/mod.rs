@@ -3045,9 +3045,9 @@ module Test {
 fn test_verilog_pure_typort() {
     let input = r#"
 module Adder {
-    let a = UInt[8]
-    let b = UInt[8]
-    let sum = UInt[8]
+    input a = UInt[8]
+    input b = UInt[8]
+    output sum = UInt[8]
     sum := a + b
 }
 println (moduleVL Adder)
@@ -3055,6 +3055,9 @@ println (moduleVL Adder)
     match run_with_prelude(input) {
         Ok(output) => {
             println!("=== Output ===\n{}", output);
+            assert!(output.contains("input wire a"), "{}", output);
+            assert!(output.contains("input wire b"), "{}", output);
+            assert!(output.contains("output wire sum"), "{}", output);
             assert!(output.contains("assign sum = (a + b)"), "{}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
