@@ -894,6 +894,12 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
 // Collect signal names (ports + wires) from Vec[Expr]
 def namesVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
+    case cons(e, nil) => match e {
+        case createIn(name) => S3("input wire ", name, " ")
+        case createOut(name) => S3("output wire ", name, " ")
+        case create(name) => S3("wire ", name, "; ")
+        case _ => ""
+    }
     case cons(e, tail) => match e {
         case createIn(name) => S4("input wire ", name, ", ", namesVL tail)
         case createOut(name) => S4("output wire ", name, ", ", namesVL tail)
