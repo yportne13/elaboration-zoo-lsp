@@ -297,7 +297,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             num.and_then(|x| x.data.parse::<u32>().ok()).unwrap_or(0)
         )))//TODO:do not unwrap
         .or(kw(Hole).map(Raw::Hole))
-        .or(string(Str).map(Raw::LiteralIntro))
+        .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(string(Num).map(|x| {
             let num_span = x.map(|x| x.parse::<u64>().unwrap());
             let mut ret = Raw::Var(num_span.to_span().map(|_| SmolStr::new("zero")));

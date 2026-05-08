@@ -458,6 +458,31 @@ impl AstDebug for &str {
     }
 }
 
+pub fn unescape(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('t') => result.push('\t'),
+                Some('r') => result.push('\r'),
+                Some('\\') => result.push('\\'),
+                Some('"') => result.push('"'),
+                Some('0') => result.push('\0'),
+                Some(c) => {
+                    result.push('\\');
+                    result.push(c);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 impl<T: std::fmt::Display> AstDebug for Span<T> {
     fn fmt(&self, s: &mut String, depth: usize) {
         s.push_str(&format!("{}{} @ {},{}\n", " ".repeat(depth), self.data, self.start_offset, self.end_offset))

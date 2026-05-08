@@ -870,11 +870,11 @@ def exprVL(e: Expr): String = match e {
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
     case assign(lhs, rhs) =>
-        "assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
+        "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";\n"
     case when(cond, body, elseBody) =>
-        "if (" + exprVL(cond) + ") begin " + exprVL(body) + " end"
+        "  if (" + exprVL(cond) + ") begin\n" + exprVL(body) + " end\n"
     case switch(value, cases) =>
-        "case (" + exprVL(value) + ") " + exprVL(cases) + " endcase"
+        "  case (" + exprVL(value) + ") " + exprVL(cases) + " endcase"
     case block(head, tail) => exprVL(head) + exprVL(tail)
     case nop => ""
 }
@@ -895,15 +895,15 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
 def namesVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, nil) => match e {
-        case createIn(name) => "input wire " + name + " "
-        case createOut(name) => "output wire " + name + " "
-        case create(name) => "wire " + name + "; "
+        case createIn(name) => "  input wire " + name + "\n"
+        case createOut(name) => "  output wire " + name + "\n"
+        case create(name) => "  wire " + name + ";\n"
         case _ => ""
     }
     case cons(e, tail) => match e {
-        case createIn(name) => "input wire " + name + ", " + (namesVL tail)
-        case createOut(name) => "output wire " + name + ", " + (namesVL tail)
-        case create(name) => "wire " + name + "; " + (namesVL tail)
+        case createIn(name) => "  input wire " + name + ",\n" + (namesVL tail)
+        case createOut(name) => "  output wire " + name + ",\n" + (namesVL tail)
+        case create(name) => "  wire " + name + ";\n" + (namesVL tail)
         case _ => namesVL tail
     }
 }
@@ -923,7 +923,7 @@ def moduleVL(m: Module): String =
     let ports_wires = namesVL(m.expr);
     let assigns = assignsVL(m.expr);
     let always = alwaysVL(m.expr);
-    "module " + m.name + " (" + ports_wires + ");" + NL + assigns + always + "endmodule" + NL
+    "module " + m.name + " (\n" + ports_wires + ");\n" + NL + assigns + always + "endmodule" + NL
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):
