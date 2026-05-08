@@ -28,6 +28,10 @@ fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
     }
 }
 
+fn string_newline(_: &Infer, _: &Decl, _: &Env, typ: Rc<Val>) -> Rc<Val> {
+    Val::LiteralIntro(Span { data: "\n".to_owned(), path_id: 0, start_offset: 0, end_offset: 0 }).into()
+}
+
 fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
     match env.iter().next().unwrap().as_ref() {
         Val::LiteralIntro(a) => {
@@ -106,6 +110,7 @@ impl Cxt {
         let change_mutable = PrimFunc(Rc::new(change_mutable));
         let get_global = PrimFunc(Rc::new(get_global));
         let change_mutable_default = PrimFunc(Rc::new(change_mutable_default));
+        let string_newline = PrimFunc(Rc::new(string_newline));
         Self::empty()
             .decl(
                 empty_span(SmolStr::new("String")),
@@ -161,6 +166,38 @@ impl Cxt {
                             Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                             Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                         )),
+                    ),
+                ).into(),
+            )
+            .unwrap()
+            .decl(
+                empty_span(SmolStr::new("string_newline")),
+                Tm::Lam(
+                    empty_span(SmolStr::new("x")),
+                    Icit::Expl,
+                    Rc::new(Tm::Prim(Val::LiteralType.into(), string_newline.clone())),
+                ).into(),
+                Val::Lam(
+                    empty_span(SmolStr::new("x")),
+                    Icit::Expl,
+                    Closure(
+                        List::new().prepend(Val::LiteralType.into()),
+                        Tm::Prim(Val::LiteralType.into(), string_newline).into(),
+                    ),
+                ).into(),
+                Tm::Pi(
+                    empty_span(SmolStr::new("x")),
+                    Icit::Expl,
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
+                    Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
+                ).into(),
+                Val::Pi(
+                    empty_span(SmolStr::new("x")),
+                    Icit::Expl,
+                    Rc::new(Val::LiteralType),
+                    Closure(
+                        List::new().prepend(Val::LiteralType.into()),
+                        Rc::new(Tm::Decl(empty_span(SmolStr::new("String")))),
                     ),
                 ).into(),
             )

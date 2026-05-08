@@ -3055,10 +3055,26 @@ println (moduleVL Adder)
     match run_with_prelude(input) {
         Ok(output) => {
             println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Adder"), "{}", output);
             assert!(output.contains("input wire a"), "{}", output);
             assert!(output.contains("input wire b"), "{}", output);
             assert!(output.contains("output wire sum"), "{}", output);
             assert!(output.contains("assign sum = (a + b)"), "{}", output);
+            assert!(output.contains("endmodule"), "{}", output);
+            assert!(output.contains("\n"), "should have newlines: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_string_add() {
+    let input = r#"
+println "a" + "b" + "c"
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

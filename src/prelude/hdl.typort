@@ -86,6 +86,8 @@ enum Expr {
     assign(lhs: Expr, rhs: Expr)
     when(cond: Expr, body: Expr, elseBody: Option[Expr])
     switch(value: Expr, cases: Expr)
+    block(head: Expr, tail: Expr)
+    nop
 }
 
 struct Module {
@@ -856,13 +858,9 @@ macro_rules module {
 //  Verilog Code Generation (pure typort library)
 // ============================================================
 
-// String concat helpers
-def S2(a: String, b: String): String = string_concat(a, b)
-def S3(a: String, b: String, c: String): String = S2(S2(a, b), c)
-def S4(a: String, b: String, c: String, d: String): String = S2(S3(a, b, c), d)
-def S5(a: String, b: String, c: String, d: String, e: String): String = S2(S4(a, b, c, d), e)
-def S6(a: String, b: String, c: String, d: String, e: String, f: String): String = S2(S5(a, b, c, d, e), f)
-def S7(a: String, b: String, c: String, d: String, e: String, f: String, g: String): String = S2(S6(a, b, c, d, e, f), g)
+// String concat helpers (avoid Add trait to prevent typeclass issues with dep-types)
+
+def NL: String = string_newline("")
 
 // Convert a single Expr to a Verilog expression string
 def exprVL(e: Expr): String = match e {
@@ -870,24 +868,26 @@ def exprVL(e: Expr): String = match e {
     case createIn(name) => name
     case createOut(name) => name
     case binary(lhs, op, rhs) =>
-        S5("(", exprVL(lhs), S3(" ", op, " "), exprVL(rhs), ")")
+        "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
     case assign(lhs, rhs) =>
-        S5("assign ", exprVL(lhs), " = ", exprVL(rhs), ";")
+        "assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
     case when(cond, body, elseBody) =>
-        S5("if (", exprVL(cond), ") begin ", exprVL(body), " end")
+        "if (" + exprVL(cond) + ") begin " + exprVL(body) + " end"
     case switch(value, cases) =>
-        S5("case (", exprVL(value), ") ", exprVL(cases), " endcase")
+        "case (" + exprVL(value) + ") " + exprVL(cases) + " endcase"
+    case block(head, tail) => exprVL(head) + exprVL(tail)
+    case nop => ""
 }
 
-// Walk Vec[Expr]: collect port declarations (input/output wire name,)
-// Walk Vec[Expr] and join assignments only (filter out create)
+// Walk Vec[Expr]: filter out declarations and when-blocks, join assignments
 def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, tail) => match e {
         case create(_) => assignsVL tail
         case createIn(_) => assignsVL tail
         case createOut(_) => assignsVL tail
-        case _ => S2(exprVL(e), assignsVL tail)
+        case when(_, _, _) => assignsVL tail
+        case _ => exprVL(e) + (assignsVL tail)
     }
 }
 
@@ -895,16 +895,26 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
 def namesVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, nil) => match e {
-        case createIn(name) => S3("input wire ", name, " ")
-        case createOut(name) => S3("output wire ", name, " ")
-        case create(name) => S3("wire ", name, "; ")
+        case createIn(name) => "input wire " + name + " "
+        case createOut(name) => "output wire " + name + " "
+        case create(name) => "wire " + name + "; "
         case _ => ""
     }
     case cons(e, tail) => match e {
-        case createIn(name) => S4("input wire ", name, ", ", namesVL tail)
-        case createOut(name) => S4("output wire ", name, ", ", namesVL tail)
-        case create(name) => S3("wire ", name, S2("; ", namesVL tail))
+        case createIn(name) => "input wire " + name + ", " + (namesVL tail)
+        case createOut(name) => "output wire " + name + ", " + (namesVL tail)
+        case create(name) => "wire " + name + "; " + (namesVL tail)
         case _ => namesVL tail
+    }
+}
+
+// Emit always @* blocks for when-nodes
+def alwaysVL[ne: Nat](es: Vec[Expr] ne): String = match es {
+    case nil => ""
+    case cons(e, tail) => match e {
+        case when(_, _, _) =>
+            "always @(*) begin" + NL + exprVL(e) + NL + "end" + NL + (alwaysVL tail)
+        case _ => alwaysVL tail
     }
 }
 
@@ -912,7 +922,8 @@ def namesVL[ne: Nat](es: Vec[Expr] ne): String = match es {
 def moduleVL(m: Module): String =
     let ports_wires = namesVL(m.expr);
     let assigns = assignsVL(m.expr);
-    S5("module ", m.name, S3(" (", ports_wires, ");"), assigns, "endmodule")
+    let always = alwaysVL(m.expr);
+    "module " + m.name + " (" + ports_wires + ");" + NL + assigns + always + "endmodule" + NL
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):

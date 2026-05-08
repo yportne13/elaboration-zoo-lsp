@@ -70,6 +70,7 @@ impl Infer {
                     "change_mutable_default",
                     "string_to_global_type",
                     "string_concat",
+                    "string_newline",
                     "get_global",
                     "outParam",
                     avoid_recurse].contains(&t.as_str()));
