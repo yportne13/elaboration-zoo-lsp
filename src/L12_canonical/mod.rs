@@ -658,7 +658,7 @@ impl Infer {
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
-    let mut cxt = Cxt::new();
+    let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     //TODO: do not print err. return error
     for e in ast.1 {
@@ -707,7 +707,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         include_str!("../prelude/vec.typort"),
         include_str!("../prelude/hdl.typort"),
     ];
-    let mut cxt = Cxt::new();
+    let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
 
     // Accumulate exported macros from prelude files

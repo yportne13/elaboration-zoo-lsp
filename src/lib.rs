@@ -91,7 +91,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
         let processed_signal = Arc::new((Mutex::new(HashMap::new()), Condvar::new()));
         let infer = Infer::new();
-        let cxt = Cxt::new();
+        let cxt = Cxt::new(&infer);
 
         let ret = Arc::new(Backend {
             client,

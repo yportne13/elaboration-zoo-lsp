@@ -146,7 +146,7 @@ impl Infer {
 
         let prune_ty = self.prune_ty(decl, &pruning, &mty)?;
         let prunedty = self.eval(decl, &List::new(), &prune_ty); //TODO:revPruning
-        let mut empty_cxt = Cxt::new();
+        let mut empty_cxt = Cxt::empty();
         empty_cxt.decl = decl.clone();
         let m_prime = MetaVar(self.new_meta(prunedty, empty_cxt, origin_ty));
 
