@@ -261,6 +261,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             eprintln!("infer {:?}", start.elapsed().as_secs_f32());
             self.type_map.insert(params.uri.to_string(), terms);
             self.hover_table.insert(params.uri.to_string(), infer.clone());
+            infer.hover_table.clear();
+            infer.completion_table.clear();
             let mut diags = Vec::new();
             let mut quickfixes_for_uri = HashMap::new();
 
@@ -410,6 +412,7 @@ impl LanguageServer for Backend<Client> {
             let uri = params.text_document_position_params.text_document.uri;
             let semantic = self.type_map.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
+            let id = self.document_id.get(uri.as_str())?;
             let position = params.text_document_position_params.position;
             let offset = position_to_offset(position, &rope)?;
             semantic.iter()
@@ -432,6 +435,7 @@ impl LanguageServer for Backend<Client> {
                     self.hover_table
                         .get(uri.as_str())
                         .and_then(|x| x.hover_table.iter()
+                            .filter(|x| x.0.path_id == *id)
                             .find(|x| x.0.contains(offset))
                             .map(|(span, _, cxt, val)| (*span, pretty_tm(0, cxt.names(), &x.quote(&cxt.decl, cxt.lvl, val))))
                         )
