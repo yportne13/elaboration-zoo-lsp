@@ -913,7 +913,7 @@ def alwaysVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, tail) => match e {
         case when(_, _, _) =>
-            "always @(*) begin" + NL + exprVL(e) + NL + "end" + NL + (alwaysVL tail)
+            "  always @(*) begin\n" + exprVL(e) + NL + "end\n" + (alwaysVL tail)
         case _ => alwaysVL tail
     }
 }
@@ -923,7 +923,7 @@ def moduleVL(m: Module): String =
     let ports_wires = namesVL(m.expr);
     let assigns = assignsVL(m.expr);
     let always = alwaysVL(m.expr);
-    "module " + m.name + " (\n" + ports_wires + ");\n" + NL + assigns + always + "endmodule" + NL
+    "module " + m.name + " (\n" + ports_wires + ");\n" + assigns + always + "endmodule\n"
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):

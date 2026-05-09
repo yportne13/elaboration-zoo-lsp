@@ -950,7 +950,14 @@ def ab = assign sigA sigB refl
 def cd = assign sigC sigD refl
 
 "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("hello"));
+    assert!(result.contains("Bool::false"));
+    assert!(result.contains("true"));
+    assert!(result.contains("4"));
+    assert!(result.contains("0"));
+    assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
 }
 
 #[test]
@@ -1139,7 +1146,8 @@ def prove(k: Nat, a: Nat, b: Nat): Eq(double_pow(k, add a b), add (double_pow k 
             trans ih1 ih2
     }
 "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
     println!("success");
 }
 
@@ -1269,7 +1277,12 @@ def ab = assign sigA sigB refl
 def cd = assign sigC sigD refl
 
 "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("Bool::false"));
+    assert!(result.contains("4"));
+    assert!(result.contains("0"));
+    assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
     let input = r#"
 enum Nat {
     zero
@@ -1307,7 +1320,8 @@ def test2_2: HighLvl3[HighLvl[Nat]] = new HighLvl3(zero, zero)
 
 def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
 "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
     println!("success");
 }
 
@@ -1372,7 +1386,9 @@ def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (suc
 
 println bits_adder (cons true nil) (cons false nil)
 "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("Vec[Bool]::cons(1, Bool::false, Vec[Bool]::cons(0, Bool::true, Vec[Bool]::nil)"));
 }
 
 #[test]
@@ -1416,7 +1432,10 @@ def length[T, l: Nat](x: (Vec[T] l)): Nat =
     }
 
     "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("4"));
+    assert!(result.contains("0"));
 }
 
 #[test]
@@ -1479,7 +1498,9 @@ def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (suc
     bits_adder_carrier lhs rhs false
 
 println bits_adder (cons true nil) (cons false nil)"#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("Vec[Bool]::cons(1, Bool::false, Vec[Bool]::cons(0, Bool::true, Vec[Bool]::nil)"));
 }
 
 #[test]
@@ -1682,7 +1703,13 @@ def three = add(two, succ zero)
 
 println 5
 "#;
-    println!("{}", run(input, 0).unwrap());
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("Bool::false"));
+    assert!(result.contains("4"));
+    assert!(result.contains("0"));
+    assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
+    assert!(result.contains("5"));
 }
 
 #[test]
@@ -3047,6 +3074,7 @@ fn test_verilog_pure_typort() {
 module Adder {
     input a = UInt[8]
     input b = UInt[8]
+    input cond = Bool
     output sum = UInt[8]
     sum := a + b
 }
