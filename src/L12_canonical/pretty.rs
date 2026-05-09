@@ -7,10 +7,10 @@ use super::parser::syntax::Icit;
 
 use super::Tm;
 
-const ATP: i32 = 3;  // atomp
-const APPP: i32 = 2; // appp
-const PIP: i32 = 1;  // pip
-const LETP: i32 = 0; // letp
+const ATP: i32 = 3;
+const APPP: i32 = 2;
+const PIP: i32 = 1;
+const LETP: i32 = 0;
 
 fn bracket(s: String) -> String {
     format!("{{{}}}", s)
@@ -24,7 +24,7 @@ fn fresh(ns: List<SmolStr>, suggested: &str) -> String {
     if suggested == "_" {
         return "_".to_string();
     }
-    
+
     let mut candidate = suggested.to_string();
     while ns.iter().any(|x| x == &candidate) {
         candidate = format!("{}'", candidate);
@@ -45,7 +45,6 @@ fn go_ix(ns: List<SmolStr>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
-    //panic!("Variable index out of bounds");
     "Variable index out of bounds".to_owned()
 }
 
@@ -77,10 +76,8 @@ fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: 
                         let result = format!("{} {}", inner, arg_display);
                         return if need_paren { paren(result) } else { result };
                     } else {
-                        // Skip implicit argument
                         ns = rest_ns;
                         pr = rest_pr;
-                        // continue loop
                     }
                 }
                 _ => panic!("Mismatch between names and pruning list"),
@@ -92,16 +89,20 @@ fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: 
 }
 
 pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
+    pretty_tm_indent(prec, 0, ns, tm)
+}
+
+fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
         Tm::Decl(x) => x.data.to_string(),
-        Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
+        Tm::Obj(x, name) => format!("{}.{}", pretty_tm_indent(prec, indent, ns, x), name.data),
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
-            let f_t = pretty_tm(APPP, ns.clone(), t);
+            let f_t = pretty_tm_indent(APPP, indent, ns.clone(), t);
             let f_u = match i {
-                Icit::Expl => pretty_tm(ATP, ns, u),
-                Icit::Impl => bracket(pretty_tm(ATP, ns, u)),
+                Icit::Expl => pretty_tm_indent(ATP, indent, ns, u),
+                Icit::Impl => bracket(pretty_tm_indent(ATP, indent, ns, u)),
             };
             if need_paren {
                 format!("{{{f_t} {f_u}}}")
@@ -119,7 +120,7 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
                 Icit::Impl => bracket(x),
             };
 
-            let body_printer = format!(" => {}", pretty_tm(LETP, new_ns, body));
+            let body_printer = format!(" => {}", pretty_tm_indent(LETP, indent, new_ns, body));
 
             let ret = format!("{binder}{body_printer}");
             if need_paren {
@@ -133,8 +134,8 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
             let need_paren = prec > PIP;
             let is_anonymous = name_span.data == "_";
             if is_anonymous {
-                let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns.prepend(SmolStr::new("_")), b);
+                let f_a = pretty_tm_indent(APPP, indent, ns.clone(), a);
+                let f_b = pretty_tm_indent(PIP, indent, ns.prepend(SmolStr::new("_")), b);
                 let ret = format!("{f_a} → {f_b}");
                 if need_paren {
                     paren(ret)
@@ -145,10 +146,10 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
                 let x = fresh(ns.clone(), &name_span.data);
                 let new_ns = ns.prepend(SmolStr::new(&x));
                 let binder = match i {
-                    Icit::Expl => paren(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm(LETP, ns, a))),
+                    Icit::Expl => paren(format!("{x}: {}", pretty_tm_indent(LETP, indent, ns, a))),
+                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm_indent(LETP, indent, ns, a))),
                 };
-                let f_b = pretty_tm(PIP, new_ns, b);
+                let f_b = pretty_tm_indent(PIP, indent, new_ns, b);
                 let ret = format!("{binder} → {f_b}");
                 if need_paren {
                     paren(ret)
@@ -162,12 +163,13 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
             let x = fresh(ns.clone(), &name_span.data);
             let new_ns = ns.prepend(SmolStr::new(&x));
             let ret = format!(
-                "let {x}: {} = {};\n  {}",
-                pretty_tm(LETP, ns.clone(), a),
-                pretty_tm(LETP, ns, t),
-                pretty_tm(LETP, new_ns, u),
+                "let {x}: {} = {};\n{}  {}",
+                pretty_tm_indent(LETP, indent, ns.clone(), a),
+                pretty_tm_indent(LETP, indent, ns, t),
+                "  ".repeat(indent),
+                pretty_tm_indent(LETP, indent + 1, new_ns, u),
             );
-            if need_paren { 
+            if need_paren {
                 paren(ret)
             } else {
                 ret
@@ -182,7 +184,12 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
             "{}{}",
             span.data,
             tms.iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
+                .map(|tm| {
+                    match &tm.3 {
+                        Icit::Expl => pretty_tm_indent(prec, indent, ns.clone(), &tm.1),
+                        Icit::Impl => bracket(pretty_tm_indent(prec, indent, ns.clone(), &tm.1)),
+                    }
+                })
                 .reduce(|acc, x| acc + ", " + &x)
                 .map(|x| format!("[{x}]"))
                 .unwrap_or("".to_owned()),
@@ -190,7 +197,7 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
         Tm::SumCase { is_trait, typ, case_name, datas: params } if matches!(
             typ.as_ref(),
             Tm::Sum(name, _, _, _) if name.data == "Nat",
-        ) => if case_name.data == "zero" {"0".to_owned()} else {pretty_nat(prec, ns, params.first().map(|x| x.1.as_ref()), 1)},
+        ) => if case_name.data == "zero" {"0".to_owned()} else {pretty_nat(prec, indent, ns, params.first().map(|x| x.1.as_ref()), 1)},
         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
             "{}::{}{}",
             match typ.as_ref() {
@@ -198,7 +205,7 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
                     .iter()
                     .filter(|x| x.3 == Icit::Impl)
                     .map(|x| &x.1)
-                    .map(|x| pretty_tm(prec, ns.clone(), x).to_string())
+                    .map(|x| pretty_tm_indent(prec, indent, ns.clone(), x).to_string())
                     .reduce(|a, b| a + ", " + &b)
                     .map(|x| format!("{}[{}]", name.data, x))
                     .unwrap_or(name.data.to_string()),
@@ -207,28 +214,32 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
             case_name.data,
             params
                 .iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
+                .map(|tm| pretty_tm_indent(prec, indent, ns.clone(), &tm.1))
                 .reduce(|acc, x| acc + ", " + &x)
                 .map(|x| format!("({x})"))
                 .unwrap_or("".to_owned()),
         ),
-        /*Tm::Match(tm, _) => format!(
-            "(unsolved match {})",
-            pretty_tm(prec, ns, tm),
-        ),*/
-        Tm::Match(tm, cases) => format!(
-            "(match {} {{\n{}\n}})",
-            pretty_tm(prec, ns.clone(), tm),
-            cases
-                .iter()
-                .map(|(pat, tm)| format!("{} => {}", pat, pretty_tm(prec, pat.bind_names(&ns), tm)))
-                .reduce(|acc, x| acc + ",\n" + &x)
-                .unwrap_or("".to_owned())
-        ),
+        Tm::Match(tm, cases) => {
+            let need_paren = prec > LETP;
+            let i = "  ".repeat(indent);
+            let scrutinee = pretty_tm_indent(prec, indent, ns.clone(), tm);
+            let arms: Vec<String> = cases.iter().map(|(pat, body)| {
+                let body_ns = pat.bind_names(&ns);
+                let body_str = pretty_tm_indent(prec, indent + 2, body_ns, body);
+                if body_str.contains('\n') {
+                    format!("{i}  {} =>\n{}", pat, body_str)
+                } else {
+                    format!("{i}  {} => {}", pat, body_str)
+                }
+            }).collect();
+            let ret = format!("{}match {} {{\n{}\n{}}}",
+                i, scrutinee, arms.join("\n"), i);
+            if need_paren { paren(ret) } else { ret }
+        },
     }
 }
 
-fn pretty_nat(prec: i32, ns: List<SmolStr>, param: Option<&Tm>, sum: u128) -> String {
+fn pretty_nat(prec: i32, indent: usize, ns: List<SmolStr>, param: Option<&Tm>, sum: u128) -> String {
     match param {
         Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
             typ.as_ref(),
@@ -236,9 +247,9 @@ fn pretty_nat(prec: i32, ns: List<SmolStr>, param: Option<&Tm>, sum: u128) -> St
         ) => if case_name.data == "zero" {
             format!("{sum}")
         } else {
-            pretty_nat(prec, ns, params.first().map(|x| x.1.as_ref()), sum + 1)
+            pretty_nat(prec, indent, ns, params.first().map(|x| x.1.as_ref()), sum + 1)
         },
-        Some(tm) => format!("{} + {}", pretty_tm(prec, ns, tm), sum),
+        Some(tm) => format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
         None => format!("unknown + {}", sum),
     }
 }
