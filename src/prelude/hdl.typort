@@ -860,8 +860,6 @@ macro_rules module {
 
 // String concat helpers (avoid Add trait to prevent typeclass issues with dep-types)
 
-def NL: String = string_newline("")
-
 // Convert a single Expr to a Verilog expression string
 def exprVL(e: Expr): String = match e {
     case create(name) => name
@@ -913,7 +911,7 @@ def alwaysVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, tail) => match e {
         case when(_, _, _) =>
-            "  always @(*) begin\n" + exprVL(e) + NL + "end\n" + (alwaysVL tail)
+            "  always @(*) begin\n" + exprVL(e) + "\n" + "end\n" + (alwaysVL tail)
         case _ => alwaysVL tail
     }
 }
