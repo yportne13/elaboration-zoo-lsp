@@ -1,0 +1,66 @@
+
+enum Either[A, B] {
+    left(a: A)
+    right(b: B)
+}
+
+impl[A, B] Either[A, B] {
+    def is_left: Boolean =
+        match this {
+            case left(_) => true
+            case right(_) => false
+        }
+    def is_right: Boolean =
+        match this {
+            case left(_) => false
+            case right(_) => true
+        }
+    def swap: Either[B, A] =
+        match this {
+            case left(a) => right(a)
+            case right(b) => left(b)
+        }
+    def map_left[C](f: A -> C): Either[C, B] =
+        match this {
+            case left(a) => left(f a)
+            case right(b) => right(b)
+        }
+    def map_right[C](f: B -> C): Either[A, C] =
+        match this {
+            case left(a) => left(a)
+            case right(b) => right(f b)
+        }
+    def elim[O](f: A -> O, g: B -> O): O =
+        match this {
+            case left(a) => f a
+            case right(b) => g b
+        }
+}
+
+def either_swap[A, B](e: Either[A, B]): Either[B, A] = e.swap
+
+def either_to_option[A, B](e: Either[A, B]): Option[B] =
+    match e {
+        case left(_) => None
+        case right(b) => Some b
+    }
+
+def result_to_either[Ok, Err](r: Result[Ok, Err]): Either[Err, Ok] =
+    match r {
+        case ok(v) => right(v)
+        case err(e) => left(e)
+    }
+
+def either_to_result[A, B](e: Either[A, B]): Result[B, A] =
+    match e {
+        case left(a) => err(a)
+        case right(b) => ok(b)
+    }
+
+impl[A, B] Either[A, B] {
+    def to_result[Err](f: B -> Err): Result[A, Err] =
+        match this {
+            case left(a) => ok(a)
+            case right(b) => err(f b)
+        }
+}

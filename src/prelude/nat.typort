@@ -58,3 +58,89 @@ def add_assoc (n: Nat, m: Nat, k: Nat): Eq((n + m) + k, n + (m + k)) =
         case zero => rfl
         case succ(l) => cong_succ (add_assoc n m l)
     }
+
+def pred(n: Nat): Nat =
+    match n {
+        case zero => zero
+        case succ(m) => m
+    }
+
+def nat_sub(n: Nat, m: Nat): Nat =
+    match n {
+        case zero => zero
+        case succ(k) =>
+            match m {
+                case zero => succ k
+                case succ(l) => nat_sub k l
+            }
+    }
+
+def double(n: Nat): Nat = n + n
+
+impl Sub[Nat, Nat] for Nat {
+    def -(that: Nat): Nat = nat_sub this that
+}
+
+def nat_div_helper(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(_) =>
+            match y {
+                case zero => x
+                case succ(_) =>
+                    let sub = nat_sub x y;
+                    match sub {
+                        case zero => zero
+                        case succ(_) => succ (nat_div_helper sub y)
+                    }
+            }
+    }
+
+impl Div[Nat, Nat] for Nat {
+    def /(that: Nat): Nat = nat_div_helper this that
+}
+
+def nat_rem_helper(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(_) =>
+            match y {
+                case zero => x
+                case succ(_) =>
+                    let sub = nat_sub x y;
+                    match sub {
+                        case zero => x
+                        case succ(_) => nat_rem_helper sub y
+                    }
+            }
+    }
+
+impl Rem[Nat, Nat] for Nat {
+    def %(that: Nat): Nat = nat_rem_helper this that
+}
+
+impl Default for Nat {
+    def default: Nat = zero
+}
+
+def nat_max(a: Nat, b: Nat): Nat =
+    match a {
+        case zero => b
+        case succ(as) =>
+            match b {
+                case zero => a
+                case succ(bs) => succ (nat_max as bs)
+            }
+    }
+
+def nat_min(a: Nat, b: Nat): Nat =
+    match a {
+        case zero => zero
+        case succ(as) =>
+            match b {
+                case zero => zero
+                case succ(bs) => succ (nat_min as bs)
+            }
+    }
+
+

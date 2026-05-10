@@ -1,0 +1,38 @@
+
+enum Ordering {
+    lt
+    eq
+    gt
+}
+
+def nat_compare(x: Nat, y: Nat): Ordering =
+    match x {
+        case zero =>
+            match y {
+                case zero => eq
+                case succ(_) => lt
+            }
+        case succ(xs) =>
+            match y {
+                case zero => gt
+                case succ(ys) => nat_compare xs ys
+            }
+    }
+
+impl Ordering {
+    def is_lt: Boolean =
+        match this {
+            case lt => true
+            case _ => false
+        }
+    def is_eq: Boolean =
+        match this {
+            case eq => true
+            case _ => false
+        }
+    def is_gt: Boolean =
+        match this {
+            case gt => true
+            case _ => false
+        }
+}

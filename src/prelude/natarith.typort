@@ -1,0 +1,4 @@
+
+enum NatEq(n: Nat, m: Nat) {
+    nat_eq_refl[n: Nat] -> NatEq n n
+}

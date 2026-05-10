@@ -1,0 +1,27 @@
+
+struct NonEmpty[T] {
+    head: T
+    tail: List[T]
+}
+
+impl[T] NonEmpty[T] {
+    def to_list: List[T] = lcons this.head this.tail
+    def map[U](f: T -> U): NonEmpty[U] =
+        new NonEmpty(f this.head, this.tail.map f)
+    def head_option: Option[T] = Some this.head
+    def length: Nat = 1 + this.tail.length
+    def last: T =
+        match this.tail {
+            case lnil => this.head
+            case lcons(x, xs) =>
+                let rest: NonEmpty[T] = new NonEmpty(x, xs);
+                rest.last
+        }
+    def reverse: NonEmpty[T] =
+        match this.tail {
+            case lnil => this
+            case lcons(x, xs) =>
+                let reversed_rest: NonEmpty[T] = (new NonEmpty(x, xs)).reverse;
+                new NonEmpty(reversed_rest.head, (reversed_rest.tail).append (lcons this.head lnil))
+        }
+}

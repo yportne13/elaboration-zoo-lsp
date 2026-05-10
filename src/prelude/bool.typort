@@ -35,3 +35,101 @@ impl Or[Boolean, Boolean] for Boolean {
             case true => true
         }
 }
+
+def if_then_else[A](cond: Boolean, t: A, e: A): A =
+    match cond {
+        case true => t
+        case false => e
+    }
+
+def nat_eq(x: Nat, y: Nat): Boolean =
+    match x {
+        case zero =>
+            match y {
+                case zero => true
+                case succ(_) => false
+            }
+        case succ(xs) =>
+            match y {
+                case zero => false
+                case succ(ys) => nat_eq xs ys
+            }
+    }
+
+def nat_lt(x: Nat, y: Nat): Boolean =
+    match x {
+        case zero =>
+            match y {
+                case zero => false
+                case succ(_) => true
+            }
+        case succ(xs) =>
+            match y {
+                case zero => false
+                case succ(ys) => nat_lt xs ys
+            }
+    }
+
+def nat_lte(x: Nat, y: Nat): Boolean =
+    match x {
+        case zero => true
+        case succ(xs) =>
+            match y {
+                case zero => false
+                case succ(ys) => nat_lte xs ys
+            }
+    }
+
+def nat_gt(x: Nat, y: Nat): Boolean = nat_lt y x
+
+def nat_gte(x: Nat, y: Nat): Boolean = nat_lte y x
+
+def is_even(n: Nat): Boolean =
+    match n {
+        case zero => true
+        case succ(m) =>
+            match m {
+                case zero => false
+                case succ(k) => is_even k
+            }
+    }
+
+def is_odd(n: Nat): Boolean =
+    match n {
+        case zero => false
+        case succ(m) => is_even m
+    }
+
+impl Default for Boolean {
+    def default: Boolean = false
+}
+
+def nat_to_bool(n: Nat): Boolean =
+    match n {
+        case zero => false
+        case succ(_) => true
+    }
+
+def bool_to_nat(b: Boolean): Nat =
+    match b {
+        case true => 1
+        case false => 0
+    }
+
+impl Neg[Boolean] for Boolean {
+    def neg: Boolean = this.not
+}
+
+def implies(a: Boolean, b: Boolean): Boolean =
+    match a {
+        case true => b
+        case false => true
+    }
+
+
+
+
+
+
+
+

@@ -1,0 +1,4 @@
+
+enum Void {}
+
+def absurd[A](v: Void): A = match v {}

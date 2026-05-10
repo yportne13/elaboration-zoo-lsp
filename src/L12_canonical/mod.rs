@@ -774,9 +774,18 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         include_str!("../prelude/op.typort"),
         include_str!("../prelude/eq.typort"),
         include_str!("../prelude/nat.typort"),
+        include_str!("../prelude/natarith.typort"),
         include_str!("../prelude/bool.typort"),
         include_str!("../prelude/option.typort"),
+        include_str!("../prelude/result.typort"),
+        include_str!("../prelude/order.typort"),
+        include_str!("../prelude/void.typort"),
+        include_str!("../prelude/decidable.typort"),
         include_str!("../prelude/vec.typort"),
+        include_str!("../prelude/either.typort"),
+        include_str!("../prelude/list.typort"),
+        include_str!("../prelude/string.typort"),
+        include_str!("../prelude/nonempty.typort"),
         include_str!("../prelude/hdl.typort"),
     ];
     let mut cxt = Cxt::new(&infer);

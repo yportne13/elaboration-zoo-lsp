@@ -28,6 +28,59 @@ impl[T, len: Nat] Vec[T] len {
             case nil => None
             case cons(x, _) => Some x
         }
+    def all(p: T -> Boolean): Boolean =
+        match this {
+            case nil => true
+            case cons(a, xs) =>
+                let b = p a;
+                match b {
+                    case true => xs.all p
+                    case false => false
+                }
+        }
+    def any(p: T -> Boolean): Boolean =
+        match this {
+            case nil => false
+            case cons(a, xs) =>
+                let b = p a;
+                match b {
+                    case true => true
+                    case false => xs.any p
+                }
+        }
+    def find(p: T -> Boolean): Option[T] =
+        match this {
+            case nil => None
+            case cons(a, xs) =>
+                let b = p a;
+                match b {
+                    case true => Some a
+                    case false => xs.find p
+                }
+        }
+    def elem(x: T, eq: T -> T -> Boolean): Boolean =
+        match this {
+            case nil => false
+            case cons(a, xs) =>
+                let b = eq a x;
+                match b {
+                    case true => true
+                    case false => xs.elem (x, eq)
+                }
+        }
+    def at(n: Nat, default: T): T =
+        match n {
+            case zero =>
+                match this {
+                    case nil => default
+                    case cons(x, _) => x
+                }
+            case succ(m) =>
+                match this {
+                    case nil => default
+                    case cons(_, xs) => xs.at (m, default)
+                }
+        }
 }
 
 impl[T, len: Nat] Vec[T](succ len) {
@@ -53,3 +106,5 @@ impl[T] Cons for T {
     def ::[l: Nat](that: Vec[T] l): Vec[T] (l + 1) =
         cons this that
 }
+
+

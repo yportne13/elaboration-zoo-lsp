@@ -35,3 +35,48 @@ impl Add[String, String] for String {
 trait Into[O: outParam(Type 0)] {
     def into: O
 }
+
+trait Neg[O: outParam(Type 0)] {
+    def neg: O
+}
+
+trait Default {
+    def default: Self
+}
+
+struct Product[A, B] {
+    fst: A
+    snd: B
+}
+
+def id[A](x: A): A = x
+
+def const[A, B](x: A, y: B): A = x
+
+def flip[A, B, C](f: A -> B -> C, x: B, y: A): C = f y x
+
+def compose[A, B, C](f: B -> C, g: A -> B, x: A): C = f (g x)
+
+trait Not {
+    def not: Self
+}
+
+trait Rem[T, O: outParam(Type 0)] {
+    def %(that: T): O
+}
+
+impl[A, B] Product[A, B] {
+    def swap: Product[B, A] = new Product(this.snd, this.fst)
+    def map_first[C](f: A -> C): Product[C, B] = new Product(f this.fst, this.snd)
+    def map_second[C](f: B -> C): Product[A, C] = new Product(this.fst, f this.snd)
+}
+
+def curry[A, B, C](f: Product[A, B] -> C, a: A, b: B): C = f (new Product(a, b))
+
+def uncurry[A, B, C](f: A -> B -> C, p: Product[A, B]): C = f p.fst p.snd
+
+trait Clone {
+    def clone: Self
+}
+
+

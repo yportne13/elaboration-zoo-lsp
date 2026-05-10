@@ -1,0 +1,61 @@
+
+enum Result[Ok, Err] {
+    ok(val: Ok)
+    err(val: Err)
+}
+
+impl[Ok, Err] Result[Ok, Err] {
+    def is_ok: Boolean =
+        match this {
+            case ok(_) => true
+            case err(_) => false
+        }
+    def is_err: Boolean =
+        match this {
+            case ok(_) => false
+            case err(_) => true
+        }
+    def map[U](f: Ok -> U): Result[U, Err] =
+        match this {
+            case ok(v) => ok(f v)
+            case err(e) => err(e)
+        }
+    def map_err[F](f: Err -> F): Result[Ok, F] =
+        match this {
+            case ok(v) => ok(v)
+            case err(e) => err(f e)
+        }
+    def unwrap_or(default: Ok): Ok =
+        match this {
+            case ok(v) => v
+            case err(_) => default
+        }
+    def ok_to_option: Option[Ok] =
+        match this {
+            case ok(v) => Some v
+            case err(_) => None
+        }
+    def err_to_option: Option[Err] =
+        match this {
+            case ok(_) => None
+            case err(e) => Some e
+        }
+    def and_then[U](f: Ok -> Result[U, Err]): Result[U, Err] =
+        match this {
+            case ok(v) => f v
+            case err(e) => err(e)
+        }
+    def or_else[F](f: Err -> Result[Ok, F]): Result[Ok, F] =
+        match this {
+            case ok(v) => ok(v)
+            case err(e) => f e
+        }
+}
+
+def option_to_result[A, E](o: Option[A], default_err: E): Result[A, E] =
+    match o {
+        case Some(a) => ok(a)
+        case None => err(default_err)
+    }
+
+def result_to_option[A, E](r: Result[A, E]): Option[A] = r.ok_to_option

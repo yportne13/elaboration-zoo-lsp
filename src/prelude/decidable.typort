@@ -1,0 +1,25 @@
+
+enum Dec[A] {
+    yes(proof: A)
+    no(proof: A -> Void)
+}
+
+impl[A] Dec[A] {
+    def is_yes: Boolean =
+        match this {
+            case yes(_) => true
+            case no(_) => false
+        }
+    def is_no: Boolean =
+        match this {
+            case yes(_) => false
+            case no(_) => true
+        }
+    def to_option: Option[A] =
+        match this {
+            case yes(a) => Some a
+            case no(_) => None
+        }
+}
+
+

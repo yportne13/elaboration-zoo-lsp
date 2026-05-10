@@ -20,4 +20,49 @@ impl[T] Option[T] {
             case Some(t) => t
             case None => default
         }
+    def is_some: Boolean =
+        match this {
+            case Some(_) => true
+            case None => false
+        }
+    def is_none: Boolean =
+        match this {
+            case Some(_) => false
+            case None => true
+        }
+    def or_else(other: Option[T]): Option[T] =
+        match this {
+            case Some(_) => this
+            case None => other
+        }
+    def map_or[U](default: U, f: T -> U): U =
+        match this {
+            case Some(t) => f t
+            case None => default
+        }
+    def contains(x: T, eq: T -> T -> Boolean): Boolean =
+        match this {
+            case Some(t) => eq t x
+            case None => false
+        }
+    def filter(p: T -> Boolean): Option[T] =
+        match this {
+            case Some(t) =>
+                let b = p t;
+                match b {
+                    case true => this
+                    case false => None
+                }
+            case None => None
+        }
 }
+
+impl[T] Default for Option[T] {
+    def default: Option[T] = None
+}
+
+def guard[T](cond: Boolean, x: T): Option[T] =
+    match cond {
+        case true => Some x
+        case false => None
+    }

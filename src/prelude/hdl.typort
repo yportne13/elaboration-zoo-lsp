@@ -22,16 +22,16 @@ def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
     }
 }
 
-def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
-    case nil => match x {
-        case fzero => nil
-        case fsucc(t) => match t {}
-    }
-    case cons(a, tail) => match x {
-        case fzero => cons a tail
-        case fsucc(t) => drop_vec tail t
-    }
-}
+// def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
+//     case nil => match x {
+//         case fzero => nil
+//         case fsucc(t) => match t {}
+//     }
+//     case cons(a, tail) => match x {
+//         case fzero => cons a tail
+//         case fsucc(t) => drop_vec tail t
+//     }
+// }
 
 struct Exists[A: Type 0, P: A -> Type 0] {
     witness: A

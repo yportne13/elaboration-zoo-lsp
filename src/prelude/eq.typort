@@ -31,3 +31,12 @@ impl[T, U] Cast[U] for T {
             case refl(a) => this
         }
 }
+
+def subst[A, P: A -> Type 0, x: A, y: A](e: Eq[A] x y, p: P x): P y =
+    match e {
+        case refl(a) => p
+    }
+
+def eq_comm[A, x: A, y: A](e: Eq[A] x y): Eq[A] y x = symm e
+
+def eq_congr[A, B, x: A, y: A, f: A -> B](e: Eq[A] x y): Eq[B] (f x) (f y) = cong f e

@@ -124,6 +124,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             version: None,
         });
         ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///natarith.typort").unwrap(),
+            text: include_str!("prelude/natarith.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///bool.typort").unwrap(),
             text: include_str!("prelude/bool.typort"),
             version: None,
@@ -134,8 +139,48 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             version: None,
         });
         ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///result.typort").unwrap(),
+            text: include_str!("prelude/result.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///order.typort").unwrap(),
+            text: include_str!("prelude/order.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///void.typort").unwrap(),
+            text: include_str!("prelude/void.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///decidable.typort").unwrap(),
+            text: include_str!("prelude/decidable.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///vec.typort").unwrap(),
             text: include_str!("prelude/vec.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///either.typort").unwrap(),
+            text: include_str!("prelude/either.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///list.typort").unwrap(),
+            text: include_str!("prelude/list.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///string.typort").unwrap(),
+            text: include_str!("prelude/string.typort"),
+            version: None,
+        });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///nonempty.typort").unwrap(),
+            text: include_str!("prelude/nonempty.typort"),
             version: None,
         });
         ret.on_change::<true>(TextDocumentItem {

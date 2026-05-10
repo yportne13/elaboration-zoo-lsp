@@ -1,0 +1,21 @@
+
+def str_repeat(s: String, n: Nat): String =
+    match n {
+        case zero => ""
+        case succ(m) => s + (str_repeat s m)
+    }
+
+def str_join(parts: List[String], sep: String): String =
+    match parts {
+        case lnil => ""
+        case lcons(x, lnil) => x
+        case lcons(x, xs) => x + sep + (str_join xs sep)
+    }
+
+impl Into[String] for Boolean {
+    def into: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}

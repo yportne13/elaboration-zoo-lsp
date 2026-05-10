@@ -1,0 +1,165 @@
+
+enum List[T] {
+    lnil
+    lcons(head: T, tail: List[T])
+}
+
+impl[T] List[T] {
+    def map[U](f: T -> U): List[U] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) => lcons(f x, xs.map f)
+        }
+    def length: Nat =
+        match this {
+            case lnil => 0
+            case lcons(_, xs) => 1 + xs.length
+        }
+    def append(that: List[T]): List[T] =
+        match this {
+            case lnil => that
+            case lcons(x, xs) => lcons(x, xs.append that)
+        }
+    def head_option: Option[T] =
+        match this {
+            case lnil => None
+            case lcons(x, _) => Some x
+        }
+    def reverse: List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) => xs.reverse.append (lcons x lnil)
+        }
+}
+
+impl[T] List[T] {
+    def zip[B](other: List[B]): List[Product[T, B]] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) =>
+                match other {
+                    case lnil => lnil
+                    case lcons(y, ys) => lcons(new Product(x, y), xs.zip ys)
+                }
+        }
+    def find(p: T -> Boolean): Option[T] =
+        match this {
+            case lnil => None
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => Some x
+                    case false => xs.find p
+                }
+        }
+    def take(n: Nat): List[T] =
+        match n {
+            case zero => lnil
+            case succ(m) =>
+                match this {
+                    case lnil => lnil
+                    case lcons(x, xs) => lcons(x, xs.take m)
+                }
+        }
+    def drop(n: Nat): List[T] =
+        match n {
+            case zero => this
+            case succ(m) =>
+                match this {
+                    case lnil => lnil
+                    case lcons(_, xs) => xs.drop m
+                }
+        }
+    def filter(p: T -> Boolean): List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => lcons(x, xs.filter p)
+                    case false => xs.filter p
+                }
+        }
+    def all(p: T -> Boolean): Boolean =
+        match this {
+            case lnil => true
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => xs.all p
+                    case false => false
+                }
+        }
+    def any(p: T -> Boolean): Boolean =
+        match this {
+            case lnil => false
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => true
+                    case false => xs.any p
+                }
+        }
+}
+
+impl[T] Default for List[T] {
+    def default: List[T] = lnil
+}
+
+def list_tail_option[T](l: List[T]): Option[List[T]] =
+    match l {
+        case lnil => None
+        case lcons(_, xs) => Some xs
+    }
+
+def list_init[T](l: List[T]): Option[List[T]] =
+    match l {
+        case lnil => None
+        case lcons(_, lnil) => Some lnil
+        case lcons(x, xs) =>
+            let rest = list_init xs;
+            match rest {
+                case Some(xs_init) => Some (lcons x xs_init)
+                case None => Some lnil
+            }
+    }
+
+def list_last[T](l: List[T]): Option[T] =
+    match l {
+        case lnil => None
+        case lcons(x, lnil) => Some x
+        case lcons(_, xs) => list_last xs
+    }
+
+def list_flatten[T](l: List[List[T]]): List[T] =
+    match l {
+        case lnil => lnil
+        case lcons(x, xs) => x.append (list_flatten xs)
+    }
+
+def list_concat_map[T, U](f: T -> List[U], l: List[T]): List[U] =
+    list_flatten (l.map f)
+
+def range(n: Nat): List[Nat] =
+    match n {
+        case zero => lnil
+        case succ(m) => (range m).append (lcons m lnil)
+    }
+
+def list_singleton[T](x: T): List[T] = lcons x lnil
+
+def list_head[T](l: List[T]): Option[T] = l.head_option
+
+def list_is_empty[T](l: List[T]): Boolean =
+    match l {
+        case lnil => true
+        case lcons(_, _) => false
+    }
+
+def list_map[T, U](f: T -> U, l: List[T]): List[U] = l.map f
+
+def list_append[T](l: List[T], r: List[T]): List[T] = l.append r
+
+def list_reverse[T](l: List[T]): List[T] = l.reverse
+
+def list_length[T](l: List[T]): Nat = l.length
