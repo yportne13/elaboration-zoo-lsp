@@ -329,7 +329,7 @@ impl Infer {
                     datas: params,
                 }.into())
             }
-            Val::Match(val, env, cases, _origin) => {
+            Val::Match(val, env, cases, _) => {
                 let val = self.rename(decl, pren, val)?;
                 let cases = cases
                     .iter()
@@ -360,7 +360,7 @@ impl Infer {
             }
             Val::Call(name, args, body) => {
                 let renamed_body = self.rename(decl, pren, body)?;
-                Ok(Tm::Call(name.clone(), args.clone(), renamed_body).into())
+                Ok(Tm::Call(name.clone(), args.clone(), vec![], renamed_body).into())
             },
         }
     }
@@ -433,6 +433,11 @@ impl Infer {
             self.prune_ty(decl, &pr, &mty)?; //TODO:revPruning?
         }
 
+        let saved_origin = match rhs.as_ref() {
+            Val::Match(_, _, _, Some((name, args))) => Some((name.clone(), args.clone())),
+            _ => None,
+        };
+
         let rhs = self.rename(
             decl,
             &PartialRenaming {
@@ -441,7 +446,12 @@ impl Infer {
             },
             rhs,
         )?;
-        let solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
+        let mut solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
+        if let Some((name, args)) = saved_origin {
+            if let Val::Match(scrut, env, cases, None) = solution.as_ref() {
+                solution = Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((name, args))).into();
+            }
+        }
         self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
         Ok(())

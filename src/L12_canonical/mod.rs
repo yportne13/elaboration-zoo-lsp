@@ -94,8 +94,8 @@ pub enum Tm {
         is_trait: bool,
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
-    /// Call(name, args, body) - body was inlined from function `name`
-    Call(SmolStr, Vec<Rc<Tm>>, Rc<Tm>),
+    /// Call(name, display_args, val_args, body) - body was inlined from function `name`
+    Call(SmolStr, Vec<Rc<Tm>>, Vec<Rc<Val>>, Rc<Tm>),
 }
 
 impl Tm {
@@ -120,7 +120,7 @@ impl Tm {
             Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
                 .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
             Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
-            Tm::Call(_, args, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
+            Tm::Call(_, args, _, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
         }
     }
 }
@@ -260,6 +260,26 @@ impl Val {
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
+}
+
+fn lookup_function_by_cases(decl: &Decl, cases: &[(PatternDetail, Rc<Tm>)]) -> Option<SmolStr> {
+    for (name, (_, body_tm, _, _, _)) in decl {
+        if match_has_same_patterns(cases, body_tm) {
+            return Some(name.clone());
+        }
+    }
+    None
+}
+
+fn match_has_same_patterns(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> bool {
+    match tm {
+        Tm::Match(_, inner_cases) => {
+            cases.len() == inner_cases.len()
+                && cases.iter().zip(inner_cases.iter()).all(|((p1, _), (p2, _))| p1 == p2)
+        }
+        Tm::Lam(_, _, inner) => match_has_same_patterns(cases, inner),
+        _ => false,
+    }
 }
 
 fn extract_decl_name(tm: &Tm) -> Option<Span<SmolStr>> {
@@ -473,20 +493,7 @@ impl Infer {
                     },
                 }
             }
-            Tm::App(t, u, i) => {
-                let name = extract_decl_name(t);
-                let fun_val = self.eval(decl, env, t);
-                let arg_val = self.eval(decl, env, u);
-                let result = self.v_app(decl, &fun_val, arg_val.clone(), *i);
-                if let Some(n) = name {
-                    if let Val::Match(scrut, env, cases, _) = result.as_ref() {
-                        if collect_app_args(t).is_empty() {
-                            return Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((n.data.clone(), vec![arg_val]))).into();
-                        }
-                    }
-                }
-                result
-            },
+            Tm::App(t, u, i) => self.v_app(decl, &self.eval(decl, env, t), self.eval(decl, env, u), *i),
             Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
             Tm::Pi(x, i, a, b) => {
                 Val::Pi(x.clone(), *i, self.eval(decl, env, a), Closure(env.clone(), b.clone())).into()
@@ -526,7 +533,14 @@ impl Infer {
                     datas,
                 }.into()
             }
-            Tm::Call(_, _, body) => self.eval(decl, env, body),
+            Tm::Call(name, _, val_args, body) => {
+                let result = self.eval(decl, env, body);
+                if let Val::Match(scrut, env, cases, _) = result.as_ref() {
+                    Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((name.clone(), val_args.clone()))).into()
+                } else {
+                    result
+                }
+            },
             Tm::Match(tm, cases) => {
                 let val = self.eval(decl, env, tm);
                 let val = self.force(decl, &val);
@@ -610,7 +624,7 @@ impl Infer {
             }
             Val::Call(name, args, body) => {
                 let quoted_body = self.quote(decl, l, body);
-                Tm::Call(name.clone(), args.clone(), quoted_body).into()
+                Tm::Call(name.clone(), args.clone(), vec![], quoted_body).into()
             },
             Val::Match(val, env, cases, origin) => {
                 /*TODO:let tm_cases = cases
@@ -643,11 +657,15 @@ impl Infer {
                     ))
                     .collect();
                 let quoted_match = Tm::Match(self.quote(decl, l, val), tm_cases).into();
-                if let Some((name, arg_vals)) = origin {
-                    let quoted_args: Vec<Rc<Tm>> = arg_vals.iter()
+                let effective_origin = match origin {
+                    Some((n, a)) => Some((n.clone(), a.clone())),
+                    None => lookup_function_by_cases(decl, cases).map(|name| (name, vec![val.clone()])),
+                };
+                if let Some((name, arg_vals)) = effective_origin {
+                    let display_args: Vec<Rc<Tm>> = arg_vals.iter()
                         .map(|v| self.quote(decl, l, v))
                         .collect();
-                    Tm::Call(name.clone(), quoted_args, quoted_match).into()
+                    Tm::Call(name.clone(), display_args, arg_vals.clone(), quoted_match).into()
                 } else {
                     quoted_match
                 }
@@ -3714,7 +3732,7 @@ def le_log_compress(n: Nat): (log2Up n) <= ((log2Up (compress32_len n)) + 1) = m
         let mono = log2Up_mono (div2Up (t + 3)) ((compress32_len t) + 2) d;
         // mono : Le (log2Up (div2Up (t + 3))) (log2Up (compress32_len t + 2))
         //lift_le(mono)
-        _
+        mono
 }
 
 def size_map[a: Nat][b: Nat](x: Bits1[(a + 1) + b]): Bits1[a + b + 1] = cast(cong(t => Bits1[t], add_succ_left a b),x)
