@@ -36,6 +36,7 @@ use lsp_server::{Connection, ExtractError, Message, ProtocolError, Request, Requ
 use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 use serde_json::Value;
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification};
 use lsp_types::*;
@@ -189,6 +190,22 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/hdl.typort"),
             version: None,
         });
+        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
+        {
+            let cxt_lock = ret.cxt.lock().unwrap();
+            let aliases: Vec<(SmolStr, _)> = cxt_lock.decl.iter()
+                .filter(|(k, _)| k.contains('.'))
+                .map(|(k, v)| {
+                    let short = SmolStr::new(k.split('.').last().unwrap());
+                    (short, v.clone())
+                })
+                .collect();
+            drop(cxt_lock);
+            let mut cxt_lock = ret.cxt.lock().unwrap();
+            for (short, v) in aliases {
+                cxt_lock.decl.entry(short).or_insert(v);
+            }
+        }
         ret.infer.lock().unwrap().hover_table.clear();
         ret.infer.lock().unwrap().completion_table.clear();
         ret.infer.lock().unwrap().mutable_map.write().unwrap().clear();

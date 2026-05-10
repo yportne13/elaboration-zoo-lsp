@@ -145,13 +145,23 @@ impl Compiler {
             }
         };
 
+        // Get the Sum type name for qualified constructor access
+        let sum_name = match forced_type.as_ref() {
+            Val::Sum(name, ..) => name.data.clone(),
+            _ => SmolStr::new(""),
+        };
         for constr_def @ constr_name in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
             // to avoid polluting the main inference state with temporary metavariables.
 
             // 1. Create fresh metavariables for the constructor's own arguments.
             //    We need their types first, which are given as raw syntax.
-            let mut to_check = Raw::Var(constr_name.clone());
+            // Use qualified name TypeName.constructor for lookup
+            let mut to_check = if sum_name.is_empty() {
+                Raw::Var(constr_name.clone())
+            } else {
+                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
+            };
             let mut params = vec![];
             let mut cxt = cxt.clone();
             loop {
@@ -309,7 +319,17 @@ impl Compiler {
                                             return Some(None);
                                         }
 
-                                        let (_, typ) = infer.infer_expr(cxt_for_filter, Raw::Var(constr.clone())).ok()?;
+                                        // Use qualified name TypeName.constructor for lookup
+                                        let sum_name = match typ.as_ref() {
+                                            Val::Sum(name, ..) => name.data.clone(),
+                                            _ => SmolStr::new(""),
+                                        };
+                                        let constr_raw = if sum_name.is_empty() {
+                                            Raw::Var(constr.clone())
+                                        } else {
+                                            Raw::Obj(Box::new(Raw::Var(empty_span(sum_name))), Some(constr.clone()))
+                                        };
+                                        let (_, typ) = infer.infer_expr(cxt_for_filter, constr_raw).ok()?;
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
                                         param.reverse();
                                         let mut typ = typ;

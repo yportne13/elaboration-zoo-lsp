@@ -207,7 +207,7 @@ pub enum Decl {
     },
     Import {
         prefix: Vec<SmolStr>,
-        name: Option<SmolStr>,
+        names: Vec<SmolStr>,
         wildcard: bool,
     },
     Def {

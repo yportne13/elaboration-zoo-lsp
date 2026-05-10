@@ -1330,17 +1330,19 @@ fn p_import<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
     }
     // Check for wildcard `._`
     if let Ok((i, _)) = (kw(T![.]), kw(T![_])).parse(input, state) {
-        let last = prefix.pop().unwrap_or(SmolStr::new(""));
-        let name = if prefix.is_empty() {
-            prefix.push(last);
-            None
-        } else {
-            Some(last)
-        };
-        Ok((i, Decl::Import { prefix, name, wildcard: true }))
+        Ok((i, Decl::Import { prefix, names: vec![], wildcard: true }))
+    } else if let Ok((i, _)) = (kw(T![.]), kw(LCurly)).parse(input, state) {
+        // import foo.bar.{Name1, Name2}
+        let (i, names) = smolstr(Ident)
+            .many1_sep((kw(T![,]), kw(EndLine).option()))
+            .parse(i, state)?;
+        let (i, _) = kw(RCurly).parse(i, state)?;
+        let names: Vec<SmolStr> = names.into_iter().map(|s| s.data).collect();
+        Ok((i, Decl::Import { prefix, names, wildcard: false }))
     } else {
-        let name = prefix.pop();
-        Ok((input, Decl::Import { prefix, name, wildcard: false }))
+        // import foo.bar.Name  — last segment is the name
+        let name = prefix.pop().unwrap_or(SmolStr::new(""));
+        Ok((input, Decl::Import { prefix, names: vec![name], wildcard: false }))
     }
 }
 

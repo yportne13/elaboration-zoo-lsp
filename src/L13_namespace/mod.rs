@@ -753,14 +753,16 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             parser::syntax::Decl::Package { path } => {
                 println!("> package {}", path.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join("."));
             }
-            parser::syntax::Decl::Import { prefix, name, wildcard } => {
+            parser::syntax::Decl::Import { prefix, names, wildcard } => {
                 let path = prefix.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(".");
                 if *wildcard {
-                println!("> import {}._", path);
-                    } else if let Some(n) = name {
+                    println!("> import {}._", path);
+                } else {
+                    for n in names {
                         println!("> import {}.{}", path, n);
                     }
                 }
+            }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
@@ -822,6 +824,17 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         }
         id += 1;
     }
+    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
+    let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
+        .filter(|(k, _)| k.contains('.'))
+        .map(|(k, v)| {
+            let short = SmolStr::new(k.split('.').last().unwrap());
+            (short, v.clone())
+        })
+        .collect();
+    for (short, v) in prelude_aliases {
+        cxt.decl.entry(short).or_insert(v);
+    }
     // Parse main file with accumulated macros from prelude
     let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
         .map(|(d, e, _)| (d, e))
@@ -846,12 +859,14 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             parser::syntax::Decl::Package { path } => {
                 println!("> package {}", path.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join("."));
             }
-            parser::syntax::Decl::Import { prefix, name, wildcard } => {
+            parser::syntax::Decl::Import { prefix, names, wildcard } => {
                 let path = prefix.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(".");
                 if *wildcard {
                     println!("> import {}._", path);
-                } else if let Some(n) = name {
-                    println!("> import {}.{}", path, n);
+                } else {
+                    for n in names {
+                        println!("> import {}.{}", path, n);
+                    }
                 }
             }
         }
@@ -3829,11 +3844,11 @@ enum Nat {
     succ(x: Nat)
 }
 
-def one: Nat = succ zero
+def one: Nat = Nat.succ(Nat.zero)
 
 def add(x: Nat, y: Nat): Nat = match x {
     case zero => y
-    case succ(n) => succ(add n y)
+    case succ(n) => Nat.succ(add n y)
 }
 
 def two = add one one
@@ -3927,5 +3942,74 @@ println result
             println!("{}", s);
             assert!(s.contains("succ"));
         }
+    }
+}
+
+#[test]
+fn test_import_brace() {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let input_decls = parser::parser(r#"
+package mylib
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat = match x {
+    case zero => y
+    case succ(n) => succ(add n y)
+}
+def one: Nat = succ zero
+def two: Nat = succ one
+"#, 0).unwrap().0;
+    for tm in input_decls {
+        let (_, _, new_cxt) = infer.infer(&cxt, tm).unwrap();
+        cxt = new_cxt;
+    }
+    // Brace import
+    let import_decls = parser::parser(r#"
+import mylib.{add, one, two}
+
+def result = add one two
+println result
+"#, 1).unwrap().0;
+    for tm in import_decls {
+        let (x, _, new_cxt) = infer.infer(&cxt, tm).unwrap();
+        cxt = new_cxt;
+        if let DeclTm::Println(_, s, _) = x {
+            println!("{}", s);
+            assert!(s.contains("succ"));
+        }
+    }
+}
+
+#[test]
+fn test_enum_case_namespace() {
+    // Test that both Nat.zero (inside package) and mylib.Nat.zero (outside) work
+    let input = r#"
+package mylib
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+// Inside the package, just Nat.zero and Nat.succ should work
+def one: Nat = Nat.succ(Nat.zero)
+def two: Nat = Nat.succ(one)
+
+// mylib.Nat.zero should also work (fully qualified)
+def three: Nat = mylib.Nat.succ(two)
+
+println three
+"#;
+    match run(input, 0) {
+        Ok(r) => {
+            println!("Success: {}", r);
+            assert!(r.contains("succ"));
+        }
+        Err(e) => panic!("ERROR: {} @ {:?}", e.0.data, e.0),
     }
 }

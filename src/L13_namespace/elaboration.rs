@@ -50,7 +50,7 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
         Decl::Package { path } => Decl::Package {
             path: path.into_iter().map(|s| s.map(|n| SmolStr::new(format!("{prefix}.{n}")))).collect(),
         },
-        Decl::Import { prefix: _, name: _, wildcard: _ } => d,
+        Decl::Import { .. } => d,
     }
 }
 
@@ -535,7 +535,9 @@ impl Infer {
                         let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
                         let t_tm = self.check::<false>(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
-                        cxt.decl(c.0.clone(), t_tm, vt, typ_tm, vtyp)?
+                        // Store as EnumName.caseName only — no bare caseName alias
+                        let case_key = c.0.clone().map(|n| SmolStr::new(format!("{}.{}", name.data, n)));
+                        cxt.decl(case_key, t_tm, vt, typ_tm, vtyp)?
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
@@ -692,7 +694,7 @@ impl Infer {
                 cxt.namespace_prefix = Some(SmolStr::new(&pkg_path));
                 Ok((DeclTm::Package, Val::U(0).into(), cxt))
             },
-            Decl::Import { prefix, name, wildcard } => {
+            Decl::Import { prefix, names, wildcard } => {
                 let prefix_str = prefix.join(".");
                 let mut cxt = cxt.clone();
                 if wildcard {
@@ -704,19 +706,21 @@ impl Infer {
                     for (stripped, v) in to_insert {
                         cxt.decl.insert(stripped, v);
                     }
-                    // Also bring the prefix itself
+                    // Also bring the prefix itself if it's a decl
                     if let Some(v) = cxt.decl.get(&SmolStr::new(&prefix_str)).cloned() {
                         let last = prefix.last().unwrap().clone();
                         cxt.decl.insert(last, v);
                     }
-                } else if let Some(n) = name {
-                    let full_name = if prefix.is_empty() {
-                        n.clone()
-                    } else {
-                        SmolStr::new(format!("{}.{}", prefix_str, n))
-                    };
-                    if let Some(v) = cxt.decl.get(&full_name).cloned() {
-                        cxt.decl.insert(n.clone(), v);
+                } else {
+                    for n in names {
+                        let full_name = if prefix.is_empty() {
+                            n.clone()
+                        } else {
+                            SmolStr::new(format!("{}.{}", prefix_str, n))
+                        };
+                        if let Some(v) = cxt.decl.get(&full_name).cloned() {
+                            cxt.decl.insert(n, v);
+                        }
                     }
                 }
                 Ok((DeclTm::Import, Val::U(0).into(), cxt))
@@ -751,6 +755,15 @@ impl Infer {
                                 return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
                             }
                         }
+                        // Try qualified fallback: find a decl entry `TypeName.name`
+                        let fallback = format!(".{}", name.data);
+                        let match_entry: Option<(SmolStr, _)> = cxt.decl.iter()
+                            .find(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
+                            .map(|(k, v)| (k.clone(), v.clone()));
+                        if let Some((full_key, (def_span, _, _, _, vty))) = match_entry {
+                            self.hover_table.push((t_span, def_span, cxt.clone_without_src_names(), vty.clone()));
+                            return Ok((Tm::Decl(empty_span(full_key)).into(), vty.clone()));
+                        }
                         Err(Error(name.map(|x| format!("error name not in scope: {}", x)), vec![]))
                     }
                 },
@@ -763,13 +776,22 @@ impl Infer {
                         return self.infer_expr(cxt, Raw::Var(sum_name.clone().map(|n| SmolStr::new(format!("{n}.mk")))))
                     }
                 }
-                // Check namespace-qualified access: Name.item in decl table
+                // Check namespace-qualified access: build full path and look up in decl table
                 if !t.data.is_empty() {
-                    if let Raw::Var(name) = x.as_ref() {
-                        let qualified = SmolStr::new(format!("{}.{}", name.data, t.data));
-                        if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&qualified) {
+                    let full_path = qualified_path_str(x.as_ref(), &t.data);
+                    if let Some(qual) = full_path {
+                        // Try the path as-is first
+                        if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&qual) {
                             self.hover_table.push((t_span, *def_span, cxt.clone_without_src_names(), vty.clone()));
-                            return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
+                            return Ok((Tm::Decl(empty_span(qual)).into(), vty.clone()));
+                        }
+                        // If not found, try with namespace prefix (for access inside a package)
+                        if let Some(ref prefix) = cxt.namespace_prefix {
+                            let prefixed = SmolStr::new(format!("{prefix}.{qual}"));
+                            if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&prefixed) {
+                                self.hover_table.push((t_span, *def_span, cxt.clone_without_src_names(), vty.clone()));
+                                return Ok((Tm::Decl(empty_span(prefixed)).into(), vty.clone()));
+                            }
                         }
                     }
                 }
@@ -1166,6 +1188,18 @@ impl Infer {
                 )), vec![]))
             }
         }
+    }
+}
+
+/// Build a dotted path string from a chain of Raw::Obj expressions.
+/// e.g., Raw::Obj(Raw::Obj(Raw::Var("a"), Some("b")), Some("c")) → Some("a.b.c")
+fn qualified_path_str(x: &Raw, field: &str) -> Option<SmolStr> {
+    match x {
+        Raw::Var(name) => Some(SmolStr::new(format!("{}.{}", name.data, field))),
+        Raw::Obj(inner, Some(seg)) => {
+            qualified_path_str(inner.as_ref(), &seg.data).map(|p| SmolStr::new(format!("{p}.{field}")))
+        }
+        _ => None,
     }
 }
 
