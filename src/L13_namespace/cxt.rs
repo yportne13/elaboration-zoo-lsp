@@ -100,6 +100,66 @@ fn change_mutable_default(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -
     }
 }
 
+fn file_read_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    match env.iter().next().unwrap().as_ref() {
+        Val::LiteralIntro(path) => {
+            let content = std::fs::read_to_string(&path.data)
+                .unwrap_or_else(|e| panic!("file_read_all_text: failed to read '{}': {}", path.data, e));
+            Val::LiteralIntro(path.clone().map(|_| content.clone())).into()
+        },
+        _ => Val::Prim(typ, PrimFunc(Rc::new(file_read_all_text))).into(),
+    }
+}
+
+fn file_write_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
+        (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
+            std::fs::write(&path.data, &content.data)
+                .unwrap_or_else(|e| panic!("file_write_all_text: failed to write '{}': {}", path.data, e));
+            Val::U(0).into()
+        },
+        _ => Val::Prim(typ, PrimFunc(Rc::new(file_write_all_text))).into(),
+    }
+}
+
+fn file_append_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
+        (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path.data)
+                .unwrap_or_else(|e| panic!("file_append_all_text: failed to open '{}': {}", path.data, e));
+            write!(file, "{}", content.data)
+                .unwrap_or_else(|e| panic!("file_append_all_text: failed to append to '{}': {}", path.data, e));
+            Val::U(0).into()
+        },
+        _ => Val::Prim(typ, PrimFunc(Rc::new(file_append_all_text))).into(),
+    }
+}
+
+fn file_exists(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    match env.iter().next().unwrap().as_ref() {
+        Val::LiteralIntro(path) => {
+            let exists = std::path::Path::new(&path.data).exists();
+            Val::LiteralIntro(path.clone().map(|_| if exists { "true".to_string() } else { "false".to_string() })).into()
+        },
+        _ => Val::Prim(typ, PrimFunc(Rc::new(file_exists))).into(),
+    }
+}
+
+fn file_delete(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    match env.iter().next().unwrap().as_ref() {
+        Val::LiteralIntro(path) => {
+            std::fs::remove_file(&path.data)
+                .unwrap_or_else(|e| panic!("file_delete: failed to delete '{}': {}", path.data, e));
+            Val::U(0).into()
+        },
+        _ => Val::Prim(typ, PrimFunc(Rc::new(file_delete))).into(),
+    }
+}
+
 // === helpers for building Tm trees ===
 
 fn tm_lam(names: &[&str], inner: Rc<Tm>) -> Rc<Tm> {
@@ -184,6 +244,37 @@ impl Cxt {
                 ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
                 ("z", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into())),
             ], Tm::U(0).into()),
+        ).unwrap();
+
+        let f_read_all = PrimFunc(Rc::new(file_read_all_text));
+        let f_write_all = PrimFunc(Rc::new(file_write_all_text));
+        let f_append_all = PrimFunc(Rc::new(file_append_all_text));
+        let f_exists = PrimFunc(Rc::new(file_exists));
+        let f_delete = PrimFunc(Rc::new(file_delete));
+
+        cxt = cxt.add_builtin(infer, "file_read_all_text",
+            tm_lam(&["path"], Tm::Prim(str_val.clone(), f_read_all).into()),
+            tm_pi(&[("path", tm_decl("String"))], tm_decl("String")),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "file_write_all_text",
+            tm_lam(&["path", "content"], Tm::Prim(Val::U(0).into(), f_write_all).into()),
+            tm_pi(&[("path", tm_decl("String")), ("content", tm_decl("String"))], Tm::U(0).into()),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "file_append_all_text",
+            tm_lam(&["path", "content"], Tm::Prim(Val::U(0).into(), f_append_all).into()),
+            tm_pi(&[("path", tm_decl("String")), ("content", tm_decl("String"))], Tm::U(0).into()),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "file_exists",
+            tm_lam(&["path"], Tm::Prim(str_val.clone(), f_exists).into()),
+            tm_pi(&[("path", tm_decl("String"))], tm_decl("String")),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "file_delete",
+            tm_lam(&["path"], Tm::Prim(Val::U(0).into(), f_delete).into()),
+            tm_pi(&[("path", tm_decl("String"))], Tm::U(0).into()),
         ).unwrap();
 
         cxt

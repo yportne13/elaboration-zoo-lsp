@@ -4013,3 +4013,57 @@ println three
         Err(e) => panic!("ERROR: {} @ {:?}", e.0.data, e.0),
     }
 }
+
+#[test]
+fn test_file_builtins() {
+    let path_str = "test_file.txt";
+
+    // Test 1: file_write_all_text + file_read_all_text
+    let input1 = format!(r#"
+def write_test : Type 0 = file_write_all_text "{path_str}" "Hello, World!"
+println (file_read_all_text "{path_str}")
+"#);
+    match run(&input1, 0) {
+        Ok(r) => {
+            assert_eq!(r.trim(), "Hello, World!");
+        }
+        Err(e) => panic!("ERROR: test_write_read: {} @ {:?}", e.0.data, e.0),
+    }
+
+    // Test 2: file_append_all_text + file_read_all_text
+    let input2 = format!(r#"
+def append_test : Type 0 = file_append_all_text "{path_str}" "
+Line 2"
+println (file_read_all_text "{path_str}")
+"#);
+    match run(&input2, 0) {
+        Ok(r) => {
+            assert!(r.contains("Hello, World!"));
+            assert!(r.contains("Line 2"));
+        }
+        Err(e) => panic!("ERROR: test_append: {} @ {:?}", e.0.data, e.0),
+    }
+
+    // Test 3: file_exists
+    let input3 = format!(r#"
+println (file_exists "{path_str}")
+"#);
+    match run(&input3, 0) {
+        Ok(r) => {
+            assert_eq!(r.trim(), "true");
+        }
+        Err(e) => panic!("ERROR: test_exists: {} @ {:?}", e.0.data, e.0),
+    }
+
+    // Test 4: file_delete + file_exists
+    let input4 = format!(r#"
+def delete_test : Type 0 = file_delete "{path_str}"
+println (file_exists "{path_str}")
+"#);
+    match run(&input4, 0) {
+        Ok(r) => {
+            assert_eq!(r.trim(), "false");
+        }
+        Err(e) => panic!("ERROR: test_delete: {} @ {:?}", e.0.data, e.0),
+    }
+}
