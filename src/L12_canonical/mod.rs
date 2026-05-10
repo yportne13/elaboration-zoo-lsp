@@ -94,6 +94,8 @@ pub enum Tm {
         is_trait: bool,
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
+    /// Call(name, args, body) - body was inlined from function `name`
+    Call(SmolStr, Vec<Rc<Tm>>, Rc<Tm>),
 }
 
 impl Tm {
@@ -118,6 +120,7 @@ impl Tm {
             Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
                 .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
             Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
+            Tm::Call(_, args, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
         }
     }
 }
@@ -238,7 +241,9 @@ pub enum Val {
         case_name: Span<SmolStr>,
         datas: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
     },
-    Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
+    Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>, Option<(SmolStr, Vec<Rc<Val>>)>),
+    /// Call(name, args, body) - value inlined from function `name`
+    Call(SmolStr, Vec<Rc<Tm>>, Rc<Val>),
 }
 
 type VTy = Val;
@@ -255,6 +260,25 @@ impl Val {
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
+}
+
+fn extract_decl_name(tm: &Tm) -> Option<Span<SmolStr>> {
+    match tm {
+        Tm::Decl(name) => Some(name.clone()),
+        Tm::App(t, _, _) => extract_decl_name(t),
+        _ => None,
+    }
+}
+
+fn collect_app_args(tm: &Tm) -> Vec<Rc<Tm>> {
+    match tm {
+        Tm::App(t, u, _) => {
+            let mut args = collect_app_args(t);
+            args.push(u.clone());
+            args
+        }
+        _ => vec![],
+    }
 }
 
 use std::ops::{Add, Sub};
@@ -357,6 +381,9 @@ impl Infer {
             Val::Obj(x, a, b) => {
                 Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
             },
+            Val::Call(name, args, body) => {
+                Val::Call(name.clone(), args.clone(), self.force(decl, body)).into()
+            },
             _ => t.clone(),
         }
     }
@@ -380,6 +407,7 @@ impl Infer {
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
+            Val::Call(_, _, body) => self.v_app(decl, body, u, i),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
@@ -445,7 +473,18 @@ impl Infer {
                     },
                 }
             }
-            Tm::App(t, u, i) => self.v_app(decl, &self.eval(decl, env, t), self.eval(decl, env, u), *i),
+            Tm::App(t, u, i) => {
+                let name = extract_decl_name(t);
+                let fun_val = self.eval(decl, env, t);
+                let arg_val = self.eval(decl, env, u);
+                let result = self.v_app(decl, &fun_val, arg_val.clone(), *i);
+                if let Some(n) = name {
+                    if let Val::Match(scrut, env, cases, _) = result.as_ref() {
+                        return Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((n.data.clone(), vec![arg_val]))).into();
+                    }
+                }
+                result
+            },
             Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
             Tm::Pi(x, i, a, b) => {
                 Val::Pi(x.clone(), *i, self.eval(decl, env, a), Closure(env.clone(), b.clone())).into()
@@ -485,6 +524,7 @@ impl Infer {
                     datas,
                 }.into()
             }
+            Tm::Call(_, _, body) => self.eval(decl, env, body),
             Tm::Match(tm, cases) => {
                 let val = self.eval(decl, env, tm);
                 let val = self.force(decl, &val);
@@ -492,11 +532,11 @@ impl Infer {
                     Val::SumCase { .. } => {
                         match Compiler::eval_aux(self, &val, decl, env, cases) {
                             Some((tm, env)) => self.eval(decl, &env, &tm),
-                            None => Val::Match(val, env.clone(), cases.clone()).into(),
+                            None => Val::Match(val, env.clone(), cases.clone(), None).into(),
                         }
                     }
                     _ => {
-                        Val::Match(val, env.clone(), cases.clone()).into()
+                        Val::Match(val, env.clone(), cases.clone(), None).into()
                     }
                 }
             }
@@ -566,7 +606,11 @@ impl Infer {
                     datas,
                 }.into()
             }
-            Val::Match(val, env, cases) => {
+            Val::Call(name, args, body) => {
+                let quoted_body = self.quote(decl, l, body);
+                Tm::Call(name.clone(), args.clone(), quoted_body).into()
+            },
+            Val::Match(val, env, cases, origin) => {
                 /*TODO:let tm_cases = cases
                     .into_iter()
                     .map(|(p, clos)| {
@@ -596,7 +640,15 @@ impl Infer {
                         }
                     ))
                     .collect();
-                Tm::Match(self.quote(decl, l, val), tm_cases).into()
+                let quoted_match = Tm::Match(self.quote(decl, l, val), tm_cases).into();
+                if let Some((name, arg_vals)) = origin {
+                    let quoted_args: Vec<Rc<Tm>> = arg_vals.iter()
+                        .map(|v| self.quote(decl, l, v))
+                        .collect();
+                    Tm::Call(name.clone(), quoted_args, quoted_match).into()
+                } else {
+                    quoted_match
+                }
             }
         }
     }

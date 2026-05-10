@@ -224,7 +224,7 @@ impl Synth {
             }
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             (Val::LiteralType, Val::LiteralType) => true,
-            (Val::Match(a1, b1, c1), Val::Match(a2, b2, c2)) => {
+            (Val::Match(a1, b1, c1, _), Val::Match(a2, b2, c2, _)) => {
                 Self::vals_eq_ground_impl(a1, a2, visited)
                     && b1.len() == b2.len()
                     //TODO:&& c1.iter().zip(c2.iter()).all(|()| )

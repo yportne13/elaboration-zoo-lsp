@@ -329,7 +329,7 @@ impl Infer {
                     datas: params,
                 }.into())
             }
-            Val::Match(val, env, cases) => {
+            Val::Match(val, env, cases, _origin) => {
                 let val = self.rename(decl, pren, val)?;
                 let cases = cases
                     .iter()
@@ -358,6 +358,10 @@ impl Infer {
                     .collect::<Result<_, _>>()?;
                 Ok(Tm::Match(val, cases).into())
             }
+            Val::Call(name, args, body) => {
+                let renamed_body = self.rename(decl, pren, body)?;
+                Ok(Tm::Call(name.clone(), args.clone(), renamed_body).into())
+            },
         }
     }
     fn lams_go(&self, l: Lvl, decl: &Decl, t: Rc<Tm>, a: &Rc<VTy>, l_prime: Lvl) -> Rc<Tm> {
@@ -616,6 +620,8 @@ impl Infer {
         );*/
 
         match (t.as_ref(), u.as_ref()) {
+            (Val::Call(_, _, t_body), _) => self.unify(l, cxt, t_body, &u, fuel),
+            (_, Val::Call(_, _, u_body)) => self.unify(l, cxt, &t, u_body, fuel),
             (Val::U(x), Val::U(y)) if x == y => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
                 self.unify(l, cxt, a, a_prime, fuel)?;
@@ -717,7 +723,7 @@ impl Infer {
                 }
                 Ok(())
             }
-            (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
+            (Val::Match(s1, env1, cases1, _), Val::Match(s2, env2, cases2, _)) => {
                 // 1. 合一 scrutinees
                 self.unify(l, cxt, s1, s2, fuel)?;
 
