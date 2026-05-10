@@ -23,6 +23,7 @@ mod L09_mltt;
 mod L10_typeclass;
 mod L11_macro;
 pub mod L12_canonical;
+pub mod L13_namespace;
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -40,11 +41,11 @@ use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOp
 use lsp_types::*;
 use crate::ls::Result;
 
-use L12_canonical::pretty::pretty_tm;
-use L12_canonical::parser::{parser, parser_with_macros, macros::MacroRule};
-use L12_canonical::parser::syntax::Decl;
-use L12_canonical::{DeclTm, Infer, preprocess};
-use L12_canonical::cxt::Cxt;
+use L13_namespace::pretty::pretty_tm;
+use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule};
+use L13_namespace::parser::syntax::Decl;
+use L13_namespace::{DeclTm, Infer, preprocess};
+use L13_namespace::cxt::Cxt;
 
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
@@ -291,7 +292,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
                             err_collect.push((
-                                crate::L12_canonical::Error(span.map(|_| s.clone()), vec![]),
+                                crate::L13_namespace::Error(span.map(|_| s.clone()), vec![]),
                                 DiagnosticSeverity::INFORMATION
                             ))
                         }
