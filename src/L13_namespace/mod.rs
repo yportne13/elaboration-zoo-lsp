@@ -4124,3 +4124,81 @@ println (file_exists "{path_str}")
         Err(e) => panic!("ERROR: test_delete: {} @ {:?}", e.0.data, e.0),
     }
 }
+
+/// Parse each prelude file individually and check for syntax errors.
+/// Then try the full prelude loading together.
+#[cfg(test)]
+mod prelude_tests {
+    use super::*;
+    use super::parser::parser as parse_file;
+
+    const PRELUDE_FILES: &[(&str, &str)] = &[
+        ("op.typort", include_str!("../prelude/op.typort")),
+        ("eq.typort", include_str!("../prelude/eq.typort")),
+        ("nat.typort", include_str!("../prelude/nat.typort")),
+        ("natarith.typort", include_str!("../prelude/natarith.typort")),
+        ("bool.typort", include_str!("../prelude/bool.typort")),
+        ("option.typort", include_str!("../prelude/option.typort")),
+        ("result.typort", include_str!("../prelude/result.typort")),
+        ("order.typort", include_str!("../prelude/order.typort")),
+        ("void.typort", include_str!("../prelude/void.typort")),
+        ("decidable.typort", include_str!("../prelude/decidable.typort")),
+        ("vec.typort", include_str!("../prelude/vec.typort")),
+        ("either.typort", include_str!("../prelude/either.typort")),
+        ("list.typort", include_str!("../prelude/list.typort")),
+        ("string.typort", include_str!("../prelude/string.typort")),
+        ("nonempty.typort", include_str!("../prelude/nonempty.typort")),
+        ("hdl.typort", include_str!("../prelude/hdl.typort")),
+    ];
+
+    #[test]
+    fn test_prelude_syntax() {
+        let mut all_ok = true;
+        for (name, content) in PRELUDE_FILES {
+            let processed = preprocess(content);
+            match parse_file(&processed, 0) {
+                Some((decls, errors)) => {
+                    if !errors.is_empty() {
+                        all_ok = false;
+                        eprintln!("[SYNTAX ERROR] {}: {:?}", name, errors);
+                        for e in &errors {
+                            eprintln!("  {:?}", e);
+                        }
+                    }
+                    if decls.is_empty() {
+                        all_ok = false;
+                        eprintln!("[EMPTY] {}: parsed no declarations", name);
+                    } else {
+                        eprintln!("[OK] {}: {} declarations", name, decls.len());
+                    }
+                }
+                None => {
+                    all_ok = false;
+                    eprintln!("[LEX ERROR] {}: lex failed", name);
+                }
+            }
+        }
+        assert!(all_ok, "Some prelude files have syntax errors");
+    }
+
+    #[test]
+    fn test_prelude_typecheck() {
+        let result = run_with_prelude("");
+        match result {
+            Ok(_) => eprintln!("Prelude type-checked successfully"),
+            Err(e) => panic!("Prelude type-check error: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+        }
+    }
+
+    /// Test that the full prelude can be loaded and used
+    #[test]
+    fn test_prelude_smoke() {
+        let result = run_with_prelude("println 42\n");
+        match result {
+            Ok(output) => {
+                eprintln!("Prelude smoke test output: {}", output);
+            }
+            Err(e) => panic!("Prelude smoke test failed: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+        }
+    }
+}

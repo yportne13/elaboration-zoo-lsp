@@ -790,7 +790,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                     .option()
                     .map(|x| x.map(|y| y.1))
             )
-                .many1_sep(kw(EndLine)),
+                .many0_sep(kw(EndLine)),
         ),
     ))
         .map(|(_, name, params, fields)| Decl::Enum {
