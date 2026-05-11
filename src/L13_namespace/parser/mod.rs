@@ -1348,30 +1348,37 @@ fn p_import<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
+        let is_cut = macro_decl.len() == 1;
         for m in macro_decl {
-            if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
-                let i = if matches!(i.first().map(|x| x.data.1), Some(EndLine)) || i.is_empty() {
-                    i
-                } else if input.len() != i.len() {
-                    input.get(input.len() - i.len() - 1 ..).unwrap()
-                } else {
-                    i
-                };
-                let t_owned = m.transcriber.replace(t)?;
-                let t_borrowed: Vec<_> = t_owned.iter().map(|tok| Span {
-                    data: (tok.data.0.as_str(), tok.data.1),
-                    start_offset: tok.start_offset,
-                    end_offset: tok.end_offset,
-                    path_id: tok.path_id,
-                }).collect();
-                let mut temp_state = (vec![], state.1.clone());
-                let ret = p_decl(&t_borrowed, &mut temp_state)?;
-                state.0.extend(temp_state.0);
-                if !ret.0.is_empty() {
-                    state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(TokenKind::EndLine)) })
-                } else {
-                    return Ok((i, ret.1))
+            let (i, t) = if is_cut {
+                m.matcher.to_parser().parse(input.get(1..).unwrap(), state)?
+            } else {
+                match m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
+                    Ok(x) => x,
+                    Err(_) => continue,
                 }
+            };
+            let i = if matches!(i.first().map(|x| x.data.1), Some(EndLine)) || i.is_empty() {
+                i
+            } else if input.len() != i.len() {
+                input.get(input.len() - i.len() - 1 ..).unwrap()
+            } else {
+                i
+            };
+            let t_owned = m.transcriber.replace(t)?;
+            let t_borrowed: Vec<_> = t_owned.iter().map(|tok| Span {
+                data: (tok.data.0.as_str(), tok.data.1),
+                start_offset: tok.start_offset,
+                end_offset: tok.end_offset,
+                path_id: tok.path_id,
+            }).collect();
+            let mut temp_state = (vec![], state.1.clone());
+            let ret = p_decl(&t_borrowed, &mut temp_state)?;
+            state.0.extend(temp_state.0);
+            if !ret.0.is_empty() {
+                state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(TokenKind::EndLine)) })
+            } else {
+                return Ok((i, ret.1))
             }
         }
     }

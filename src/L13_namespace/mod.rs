@@ -3216,6 +3216,63 @@ println (moduleVL Adder)
 }
 
 #[test]
+fn test_macro_cut_parse_error_in_body() {
+    // Test 1: Parse error INSIDE module body — verify error is at the
+    // expression position (offset ~53: `+ +`), not backtracked to declaration.
+    let input = r#"
+module Adder {
+    input a = UInt[8]
+    sum := a + + b
+}
+println (moduleVL Adder)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output (unexpected) ===\n{}", output);
+            panic!("Expected error but got output");
+        },
+        Err(e) => {
+            println!("Error at offset {}: {}", e.0.start_offset, e.0.data);
+            assert!(e.0.start_offset > 20,
+                "Error should be inside module body (offset > 20), not at declaration. Got: {}",
+                e.0.start_offset);
+        }
+    }
+}
+
+#[test]
+fn test_macro_cut_truncated_module() {
+    // Truncated module: the macro matcher fails (expects ident after `module`).
+    // With Cut in p_decl, the error from the macro matcher kills the parse
+    // immediately instead of falling through to other declaration parsers.
+    // The result should be EmptyVec (from many1_sep catching the error),
+    // NOT ExpectDecl (which would mean it fell through to p_def/p_print).
+    let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
+    let mut id = 0u32;
+    let prelude_files = &[
+        include_str!("../prelude/op.typort"),
+        include_str!("../prelude/nat.typort"),
+        include_str!("../prelude/hdl.typort"),
+    ];
+    for p in prelude_files {
+        if let Some((_, _, new_exports)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
+            for (name, rules) in new_exports {
+                global_macros.insert(name, rules);
+            }
+        }
+        id += 1;
+    }
+    let input = "module";
+    let (_, errors) = parser::parser_with_macros(input, id, &global_macros)
+        .map(|(d, e, _)| (d, e)).unwrap();
+    println!("Parse errors for truncated `module`: {:?}", errors);
+    // With Cut: no ExpectDecl (the macro matcher error prevents fallthrough).
+    // The error is EmptyVec from many1_sep catching p_decl's fault.
+    assert!(!errors.iter().any(|e| format!("{:?}", e).contains("ExpectDecl")),
+        "With Cut, should NOT fall through to ExpectDecl. Got: {:?}", errors);
+}
+
+#[test]
 fn test_string_add() {
     let input = r#"
 println "a" + "b" + "c"
