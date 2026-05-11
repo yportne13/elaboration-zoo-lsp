@@ -303,6 +303,15 @@ fn collect_app_args(tm: &Tm) -> Vec<Rc<Tm>> {
     }
 }
 
+fn extract_args_from_val(val: &Rc<Val>) -> Vec<Rc<Val>> {
+    match val.as_ref() {
+        Val::SumCase { datas, .. } if !datas.is_empty() => {
+            datas.iter().map(|(_, v, _)| v.clone()).collect()
+        }
+        _ => vec![val.clone()],
+    }
+}
+
 use std::ops::{Add, Sub};
 use im::HashMap;
 
@@ -469,7 +478,17 @@ impl Infer {
                 Some(v) => v.clone(),
                 None => panic!("var {:?} not found", x.0),
             },
-            Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),//TODO:directly unwrap?
+            Tm::Decl(x) => {
+                if let Some((_, _, body_val, _, _)) = decl.get(&x.data) {
+                    if matches!(body_val.as_ref(), Val::Lam(..)) {
+                        Val::Call(x.data.clone(), vec![], body_val.clone()).into()
+                    } else {
+                        body_val.clone()
+                    }
+                } else {
+                    Val::Decl(x.clone(), List::new()).into()
+                }
+            },
             Tm::Obj(tm, name) => {
                 let a = self.eval(decl, env, tm);
                 let a = self.force(decl, &a);
@@ -625,8 +644,25 @@ impl Infer {
                 }.into()
             }
             Val::Call(name, args, body) => {
-                let quoted_body = self.quote(decl, l, body);
-                Tm::Call(name.clone(), args.clone(), vec![], quoted_body).into()
+                if let Val::Match(match_val, _, _, _) = body.as_ref() {
+                    let forced_val = self.force(decl, match_val);
+                    let arg_vals = extract_args_from_val(&forced_val);
+                    let quoted_body = self.quote(decl, l, body);
+                    if matches!(quoted_body.as_ref(), Tm::Match(..)) {
+                        let safe_args: Vec<Rc<Val>> = arg_vals.iter()
+                            .filter(|v| !matches!(v.as_ref(), Val::Rigid(x, _) if x.0 >= l.0))
+                            .cloned()
+                            .collect();
+                        let display_args: Vec<Rc<Tm>> = safe_args.iter()
+                            .map(|v| self.quote(decl, l, v))
+                            .collect();
+                        Tm::Call(name.clone(), display_args, safe_args, quoted_body).into()
+                    } else {
+                        quoted_body
+                    }
+                } else {
+                    self.quote(decl, l, body)
+                }
             },
             Val::Match(val, env, cases, origin) => {
                 /*TODO:let tm_cases = cases
@@ -661,13 +697,20 @@ impl Infer {
                 let quoted_match = Tm::Match(self.quote(decl, l, val), tm_cases).into();
                 let effective_origin = match origin {
                     Some((n, a)) => Some((n.clone(), a.clone())),
-                    None => lookup_function_by_cases(decl, cases).map(|name| (name, vec![val.clone()])),
+                    None => lookup_function_by_cases(decl, cases).map(|name| {
+                        let forced_val = self.force(decl, val);
+                        (name, extract_args_from_val(&forced_val))
+                    }),
                 };
                 if let Some((name, arg_vals)) = effective_origin {
-                    let display_args: Vec<Rc<Tm>> = arg_vals.iter()
+                    let safe_args: Vec<Rc<Val>> = arg_vals.iter()
+                        .filter(|v| !matches!(v.as_ref(), Val::Rigid(x, _) if x.0 >= l.0))
+                        .cloned()
+                        .collect();
+                    let display_args: Vec<Rc<Tm>> = safe_args.iter()
                         .map(|v| self.quote(decl, l, v))
                         .collect();
-                    Tm::Call(name.clone(), display_args, arg_vals.clone(), quoted_match).into()
+                    Tm::Call(name.clone(), display_args, safe_args, quoted_match).into()
                 } else {
                     quoted_match
                 }
@@ -3297,17 +3340,6 @@ def cast[T, U](
     case refl(x) => a
 }
 
-trait Not {
-    def not: Self
-}
-
-impl Not for Boolean {
-    def not: Boolean = match this {
-        case true => false
-        case false => true
-    }
-}
-
 // Fin(len) is the type of natural numbers less than len.
 // It is a dependent type: valid values depend on the type-level argument len.
 // - fzero[n] : Fin (succ n)  represents 0 in [0, n+1)
@@ -3394,7 +3426,7 @@ def trans_le[x: Nat, y: Nat, z: Nat](le1: x <= y, le2: y <= z): x <= z =
         case le_step(h) => trans_le(h, le_succ_inv(le2))
     }
 
-/*def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
+def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
     case nil => match x {
         case fzero => nil
         case fsucc(t) => match t {}
@@ -3403,15 +3435,15 @@ def trans_le[x: Nat, y: Nat, z: Nat](le1: x <= y, le2: y <= z): x <= z =
         case fzero => cons a tail
         case fsucc(t) => drop_vec tail t
     }
-}*/
+}
 
 impl[T, len: Nat] Vec[T](len) {
     def drop(x: Fin (len + 1)): Vec[T](sub len x) = drop_vec this x
 }
 
-enum Product[A, B] {
+/*enum Product[A, B] {
     product(a: A, b: B)
-}
+}*/
 
 struct Tuple2[A, B] {
     x_1: A
