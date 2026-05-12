@@ -301,7 +301,7 @@ pub fn count_lams(tm: &Tm) -> u32 {
 }
 
 use std::ops::{Add, Sub};
-use im::HashMap;
+use im::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub enum UnifyError {
@@ -1431,26 +1431,6 @@ def cast[T, U](h: Eq T U, a: T): U = match h {
     case refl(x) => a
 }
 
-trait Not {
-    def not: Self
-}
-
-impl Not for Boolean {
-    def not: Boolean = match this {
-        case true => false
-        case false => true
-    }
-}
-
-// Fin(len) is the type of natural numbers less than len.
-// It is a dependent type: valid values depend on the type-level argument len.
-// - fzero[n] : Fin (succ n)  represents 0 in [0, n+1)
-// - fsucc[n](i) : Fin (succ n) represents i+1, given i : Fin n
-enum Fin(len: Nat) {
-    fzero[n: Nat] -> Fin (succ n)
-    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
-}
-
 // Convert Fin(t) to Nat, discarding the bound information.
 def fin_to_nat[t: Nat](a: Fin t): Nat = match a {
     case fzero => 0
@@ -1459,26 +1439,6 @@ def fin_to_nat[t: Nat](a: Fin t): Nat = match a {
 
 impl[x: Nat] Fin(x) {
     def to_nat: Nat = fin_to_nat this
-}
-
-// Existential quantification: exists (a : A), P(a)
-// - witness: a value of type A
-// - proof: evidence that P(witness) holds
-struct Exists[A: Type 0, P: A -> Type 0] {
-    witness: A
-    proof: P witness
-}
-
-// Example: There exists a natural number equal to 2.
-// Witness is 2, proof is refl(2) showing 2 = 2.
-def exists_two = Exists.mk[Nat][x => Eq x 2] (2, refl 2)
-
-def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
-    case fzero => x
-    case fsucc(yy) => match x {
-        case succ(t) => sub t yy
-        case zero => match yy {}
-    }
 }
 
 def mk_last(n: Nat): Fin (n + 1) = match n {
@@ -1497,14 +1457,6 @@ def sub_fin(x: Nat, y: Fin (x + 1)): Fin (x + 1) = match y {
         case succ(t) => up_fin (sub_fin t yy)
         case zero => match yy {}
     }
-}
-
-// Le(n, m) is a proof that n <= m.
-// - le_refl: n <= n
-// - le_step: if n <= m, then n <= succ(m)
-enum Le(n: Nat, m: Nat) {
-    le_refl[n: Nat] -> Le n n
-    le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
 }
 
 def lift_fin[x: Nat, target: Nat](n: Fin x, prove: Le x target): Fin target = match prove {
@@ -1543,10 +1495,6 @@ impl[T, len: Nat] Vec[T](len) {
     def drop(x: Fin (len + 1)): Vec[T](sub len x) = drop_vec this x
 }
 
-enum Product[A, B] {
-    product(a: A, b: B)
-}
-
 struct Tuple2[A, B] {
     x_1: A
     x_2: B
@@ -1565,7 +1513,7 @@ def full_adder(lhs: Boolean, rhs: Boolean, carrier: Boolean): Tuple2[Boolean, Bo
     let s1 = lhs ^ rhs;
     Tuple2.mk ((s1 & carrier) | (lhs & rhs)) (s1 ^ carrier)
 
-struct Bits[width: Nat] {
+struct Bits1[width: Nat] {
     payload: Vec[Boolean] width
 }
 
@@ -1599,8 +1547,8 @@ def resize_drop_prove(width: Nat, w: Fin (width + 1)): Eq (sub(width, sub_fin wi
     }
 }
 
-def resize[width: Nat, w: Fin (width + 1)](bits: Bits[width]): Bits[fin_to_nat w] =
-    cast (cong (x => Bits[x]) (resize_drop_prove width w)) (Bits.mk (drop_vec(bits.payload, sub_fin width w)))
+def resize[width: Nat, w: Fin (width + 1)](bits: Bits1[width]): Bits1[fin_to_nat w] =
+    cast (cong (x => Bits1[x]) (resize_drop_prove width w)) (Bits1.mk (drop_vec(bits.payload, sub_fin width w)))
 
 def lift_le[a: Nat][b: Nat](x: a <= b): (a + 1) <= (b + 1) = match x {
     case le_refl[n] => le_refl[n + 1]
@@ -1652,22 +1600,22 @@ def fin_to_nat_nat_to_fin_eq[width: Nat](n: Nat, proof: n <= width): Eq (fin_to_
       }
   }
 
-def resize_prove[width: Nat](bits: Bits[width], target: Nat, prove: target <= width): Bits[target] = 
+def resize_prove[width: Nat](bits: Bits1[width], target: Nat, prove: target <= width): Bits1[target] = 
   let w = nat_to_fin[width] target prove;
   let resized = resize[width, w](bits);
   let eq = fin_to_nat_nat_to_fin_eq[width] target prove;
-  cast (cong(x => Bits[x], eq)) resized
+  cast (cong(x => Bits1[x], eq)) resized
 
-impl[width: Nat] Bits[width] {
-    def resize[w: Fin (width + 1)]: Bits[fin_to_nat w] = cast (cong(x => Bits[x], resize_drop_prove width w)) (Bits.mk (drop_vec(this.payload, sub_fin width w)))
+impl[width: Nat] Bits1[width] {
+    def resize[w: Fin (width + 1)]: Bits1[fin_to_nat w] = cast (cong(x => Bits1[x], resize_drop_prove width w)) (Bits1.mk (drop_vec(this.payload, sub_fin width w)))
 }
 
 trait Concat[T, O: outParam(Type 0)] {
     def :+:(that: T): O
 }
 
-impl[width: Nat] Concat[Bits[width], Bits[width + 1]] for Boolean {
-    def :+:(that: Bits[width]): Bits[width + 1] = Bits.mk (this :: that.payload)
+impl[width: Nat] Concat[Bits1[width], Bits1[width + 1]] for Boolean {
+    def :+:(that: Bits1[width]): Bits1[width + 1] = Bits1.mk (this :: that.payload)
 }
 
 def bits_adder_carrier[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] len, carrier: Boolean): Vec[Boolean] (len + 1) =
@@ -1681,9 +1629,9 @@ def bits_adder_carrier[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] len, c
         }
     }
 
-impl[len: Nat] Add[Bits[len], Bits[len + 1]] for Bits[len] {
+impl[len: Nat] Add[Bits1[len], Bits1[len + 1]] for Bits1[len] {
     def +(that: Vec[Boolean] len): Vec[Boolean] (len + 1) =
-        Bits.mk (bits_adder_carrier this.payload that.payload false)
+        Bits1.mk (bits_adder_carrier this.payload that.payload false)
 }
 
 def bits_adder[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] len): Vec[Boolean] (len + 1) =
@@ -1744,8 +1692,8 @@ def bits_adder_carrier_comm[len: Nat](lhs: Vec[Boolean] len, rhs: Vec[Boolean] l
         }
     }
 
-def bits_adder_comm[len: Nat](lhs: Bits[len], rhs: Bits[len]): Eq (lhs + rhs) (rhs + lhs) =
-    cong(Bits.mk[len + 1], bits_adder_carrier_comm lhs.payload rhs.payload false)
+def bits_adder_comm[len: Nat](lhs: Bits1[len], rhs: Bits1[len]): Eq (lhs + rhs) (rhs + lhs) =
+    cong(Bits1.mk[len + 1], bits_adder_carrier_comm lhs.payload rhs.payload false)
 
 def zip[T, U, len: Nat](vec1: Vec[T] len, vec2: Vec[U] len): Vec[Tuple2[T, U]] len = match vec1 {
     case nil => match vec2 {
@@ -1796,34 +1744,22 @@ def div2(x: Nat): Nat = match x {
     case succ(succ(t)) => (div2 t) + 1
 }
 
-def div2Up(x: Nat): Nat = match x {
-    case zero => 0
-    case succ(zero) => 1
-    case succ(succ(t)) => (div2Up t) + 1
-}
-
 def pred_div2Up_succ(len: Nat): Nat =
     match len {
         case zero => 0
         case succ(t) => div2Up t
     }
 
-def log2Up(x: Nat): Nat = match x {
-    case zero => 0
-    case succ(zero) => 0
-    case succ(succ(tail)) => (log2Up (div2Up (tail + 2))) + 1
-}
-
-def adder_tree_step[width: Nat, len: Nat](x: Vec[Bits[width]] len): Vec[Bits[width + 1]] (div2Up len) = match x {
+def adder_tree_step[width: Nat, len: Nat](x: Vec[Bits1[width]] len): Vec[Bits1[width + 1]] (div2Up len) = match x {
     case cons(a, cons(b, tail)) => (a + b) :: (adder_tree_step tail)
     case cons(a, nil) => (false :+: a) :: nil
     case nil => nil
 }
 
-def cast_prove[width: Nat, len: Nat]: Eq (Bits[(width + 1) + (log2Up len)]) (Bits[(width + (log2Up len)) + 1]) =
-    cong(t => Bits[t]) (add_succ_left(width, log2Up len))
+def cast_prove[width: Nat, len: Nat]: Eq (Bits1[(width + 1) + (log2Up len)]) (Bits1[(width + (log2Up len)) + 1]) =
+    cong(t => Bits1[t]) (add_succ_left(width, log2Up len))
 
-def adder_tree[width: Nat, len: Nat](x: Vec[Bits[width]](len + 1)): Bits[width + (log2Up(len + 1))] =
+def adder_tree[width: Nat, len: Nat](x: Vec[Bits1[width]](len + 1)): Bits1[width + (log2Up(len + 1))] =
     match x {
         case cons(a, nil) => a
         case cons(a, cons(b, tail)) => cast(cast_prove, adder_tree[width=width+1] (adder_tree_step x))
@@ -1846,13 +1782,13 @@ def unzip2[T, U, len: Nat](v: Vec[Tuple2[T, U]] len): Tuple2[Vec[T] len, Vec[U] 
             Tuple2.mk (p.x_1 :: r.x_1) (p.x_2 :: r.x_2)
     }
 
-def csa3[width: Nat](a: Bits[width], b: Bits[width], c: Bits[width]): Tuple2[Bits[width], Bits[width + 1]] =
+def csa3[width: Nat](a: Bits1[width], b: Bits1[width], c: Bits1[width]): Tuple2[Bits1[width], Bits1[width + 1]] =
     let triples = zip3 a.payload b.payload c.payload;
     let pairEach = map(triples, t => full_adder t.x_1 t.x_2 t.x_3);
     let parts = unzip2 pairEach;
     let carry_vec = parts.x_1;
     let sum_vec = parts.x_2;
-    Tuple2.mk (Bits.mk sum_vec) (Bits.mk (false :: carry_vec))
+    Tuple2.mk (Bits1.mk sum_vec) (Bits1.mk (false :: carry_vec))
 
 def compress32_len(x: Nat): Nat =
     match x {
@@ -1862,7 +1798,7 @@ def compress32_len(x: Nat): Nat =
         case succ(succ(succ(t))) => (compress32_len t) + 2
     }
 
-def wallace_stage[width: Nat, len: Nat](x: Vec[Bits[width]] len): Vec[Bits[width + 1]] (compress32_len len) =
+def wallace_stage[width: Nat, len: Nat](x: Vec[Bits1[width]] len): Vec[Bits1[width + 1]] (compress32_len len) =
     match x {
         case cons(a, cons(b, cons(c, tail))) =>
             let t = csa3 a b c;
@@ -1974,9 +1910,9 @@ def le_log_compress(n: Nat): (log2Up n) <= ((log2Up (compress32_len n)) + 1) = m
         //_
 }
 
-def size_map[a: Nat][b: Nat](x: Bits[(a + 1) + b]): Bits[a + b + 1] = cast(cong(t => Bits[t], add_succ_left a b),x)
+def size_map[a: Nat][b: Nat](x: Bits1[(a + 1) + b]): Bits1[a + b + 1] = cast(cong(t => Bits1[t], add_succ_left a b),x)
 
-def wallace_tree[width: Nat, len: Nat](x: Vec[Bits[width]] (len + 1)): Bits[width + (log2Up (len + 1))] =
+def wallace_tree[width: Nat, len: Nat](x: Vec[Bits1[width]] (len + 1)): Bits1[width + (log2Up (len + 1))] =
     match x {
         case cons(a, nil) => a
         case cons(a, cons(b, nil)) => a + b
@@ -2001,24 +1937,6 @@ println ttt
 fn test17() {
     let input = r#"
 
-enum Le(n: Nat, m: Nat) {
-    le_refl[n: Nat] -> Le n n
-    le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
-}
-
-enum Fin(len: Nat) {
-    fzero[n: Nat] -> Fin (succ n)
-    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
-}
-
-def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
-    case fzero => x
-    case fsucc(yy) => match x {
-        case succ(t) => sub t yy
-        case zero => match yy {}
-    }
-}
-
 def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = match t {
     case nil => match x {
         case fzero => nil
@@ -2031,11 +1949,6 @@ def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = 
 }
 
 //println drop_vec(1 :: 2 :: 3 :: nil, fsucc fzero)
-
-struct Exists[A: Type 0, P: A -> Type 0] {
-    witness: A
-    proof: P witness
-}
 
 def exists_two: Exists[Nat][x => Eq x 2] = Exists.mk[Nat][x => Eq x 2] 2 rfl
 

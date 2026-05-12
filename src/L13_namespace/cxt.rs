@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::{bimap::BiMap, parser_lib::ToSpan};
 
 use super::{

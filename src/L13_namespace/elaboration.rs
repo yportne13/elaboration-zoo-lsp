@@ -1072,8 +1072,7 @@ impl Infer {
 
         if t.data.is_empty() {
             // Collect completions: find traits whose first non-out param could match typ_raw
-            let trait_defs = self.trait_definition.clone();
-            let completions: Vec<_> = trait_defs.iter()
+            let completions: Vec<_> = self.trait_definition.iter()
                 .filter(|(x, (_, out_param, _))| {
                     let len = out_param.iter().filter(|x| !**x).count();
                     let mut args = vec![typ_raw.clone()];
