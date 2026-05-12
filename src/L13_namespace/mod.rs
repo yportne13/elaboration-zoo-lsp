@@ -97,7 +97,7 @@ pub enum Tm {
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, display_args, val_args, body) - body was inlined from function `name`
-    Call(SmolStr, Vec<Rc<Tm>>, Vec<Rc<Val>>, Rc<Tm>),
+    Call(SmolStr, List<Rc<Tm>>, Rc<Tm>),
 }
 
 impl Tm {
@@ -122,7 +122,7 @@ impl Tm {
             Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
                 .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
             Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
-            Tm::Call(_, args, _, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
+            Tm::Call(_, args, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
         }
     }
 }
@@ -243,9 +243,9 @@ pub enum Val {
         case_name: Span<SmolStr>,
         datas: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
     },
-    Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>, Option<(SmolStr, Vec<Rc<Val>>)>),
+    Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, args, body) - value inlined from function `name`
-    Call(SmolStr, Vec<Rc<Tm>>, Rc<Val>),
+    Call(SmolStr, List<Rc<Val>>, Rc<Val>),
 }
 
 type VTy = Val;
@@ -264,64 +264,6 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
 }
 
-fn lookup_function_by_cases(decl: &Decl, cases: &[(PatternDetail, Rc<Tm>)]) -> Option<(SmolStr, u32)> {
-    for (name, (_, body_tm, _, _, _)) in decl {
-        if let Some(arity) = count_lams_to_match(cases, body_tm) {
-            return Some((name.clone(), arity));
-        }
-    }
-    None
-}
-
-fn count_lams_to_match(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> Option<u32> {
-    match tm {
-        Tm::Match(_, inner_cases) => {
-            if cases.len() == inner_cases.len()
-                && cases.iter().zip(inner_cases.iter()).all(|((p1, _), (p2, _))| p1 == p2)
-            {
-                Some(0)
-            } else {
-                None
-            }
-        }
-        Tm::Lam(_, _, inner) => count_lams_to_match(cases, inner).map(|n| n + 1),
-        Tm::Call(_, _, _, inner) => count_lams_to_match(cases, inner),
-        _ => None,
-    }
-}
-
-fn match_has_same_patterns(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> bool {
-    count_lams_to_match(cases, tm).is_some()
-}
-
-fn extract_decl_name(tm: &Tm) -> Option<Span<SmolStr>> {
-    match tm {
-        Tm::Decl(name) => Some(name.clone()),
-        Tm::App(t, _, _) => extract_decl_name(t),
-        _ => None,
-    }
-}
-
-fn collect_app_args(tm: &Tm) -> Vec<Rc<Tm>> {
-    match tm {
-        Tm::App(t, u, _) => {
-            let mut args = collect_app_args(t);
-            args.push(u.clone());
-            args
-        }
-        _ => vec![],
-    }
-}
-
-fn extract_args_from_val(val: &Rc<Val>) -> Vec<Rc<Val>> {
-    match val.as_ref() {
-        Val::SumCase { datas, .. } if !datas.is_empty() => {
-            datas.iter().map(|(_, v, _)| v.clone()).collect()
-        }
-        _ => vec![val.clone()],
-    }
-}
-
 pub fn tm_contains_match(tm: &Tm) -> bool {
     match tm {
         Tm::Match(..) => true,
@@ -330,13 +272,18 @@ pub fn tm_contains_match(tm: &Tm) -> bool {
     }
 }
 
-pub fn wrap_match_in_call(name: SmolStr, tm: &Tm) -> Tm {
+pub fn wrap_match_in_call(name: SmolStr, tm: &Tm, l: u32) -> Tm {
     match tm {
-        Tm::Lam(span, i, body) => Tm::Lam(span.clone(), *i, wrap_match_in_call(name, body).into()),
+        Tm::Lam(span, i, body) => Tm::Lam(span.clone(), *i, wrap_match_in_call(name, body, l+1).into()),
         Tm::Match(scru, cases) => Tm::Call(
             name,
-            vec![],
-            vec![],
+            {
+                let mut list = List::new();
+                for i in 0..l {
+                    list = list.prepend(Tm::Var(Ix(i)).into());
+                }
+                list
+            },
             Tm::Match(scru.clone(), cases.clone()).into(),
         ),
         _ => tm.clone(),
@@ -476,7 +423,7 @@ impl Infer {
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
-            Val::Call(_, _, body) => self.v_app(decl, body, u, i),
+            Val::Call(name, args, body) => Val::Call(name.clone(), args.prepend(u.clone()), self.v_app(decl, body, u, i)).into(),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
@@ -582,23 +529,12 @@ impl Infer {
                     datas,
                 }.into()
             }
-            Tm::Call(name, _, val_args, body) => {
+            Tm::Call(name, args, body) => {
                 let result = self.eval(decl, env, body);
-                if let Val::Match(scrut, match_env, cases, _) = result.as_ref() {
-                    let args: Vec<Rc<Val>> = if !val_args.is_empty() {
-                        val_args.clone()
-                    } else {
-                        let owned_name = name.clone();
-                        if let Some((_, body_tm, _, _, _)) = decl.get(&owned_name) {
-                            let arity = count_lams(body_tm) as usize;
-                            let mut args: Vec<Rc<Val>> = match_env.iter().take(arity).cloned().collect();
-                            args.reverse();
-                            args
-                        } else {
-                            vec![]
-                        }
-                    };
-                    Val::Match(scrut.clone(), match_env.clone(), cases.clone(), Some((name.clone(), args))).into()
+                if let Val::Match(..) = result.as_ref() {
+                    let args = args
+                        .map(|x| self.eval(decl, env, x));
+                    Val::Call(name.clone(), args, result).into()
                 } else {
                     result
                 }
@@ -610,11 +546,11 @@ impl Infer {
                     Val::SumCase { .. } => {
                         match Compiler::eval_aux(self, &val, decl, env, cases) {
                             Some((tm, env)) => self.eval(decl, &env, &tm),
-                            None => Val::Match(val, env.clone(), cases.clone(), None).into(),
+                            None => Val::Match(val, env.clone(), cases.clone()).into(),
                         }
                     }
                     _ => {
-                        Val::Match(val, env.clone(), cases.clone(), None).into()
+                        Val::Match(val, env.clone(), cases.clone()).into()
                     }
                 }
             }
@@ -684,8 +620,12 @@ impl Infer {
                     datas,
                 }.into()
             }
-            Val::Call(_, _, body) => self.quote(decl, l, body),
-            Val::Match(val, env, cases, origin) => {
+            Val::Call(name, args, body) => Tm::Call(
+                name.clone(),
+                args.map(|x| self.quote(decl, l, x)),
+                self.quote(decl, l, body),
+            ).into(),
+            Val::Match(val, env, cases) => {
                 /*TODO:let tm_cases = cases
                     .into_iter()
                     .map(|(p, clos)| {
@@ -715,23 +655,7 @@ impl Infer {
                         }
                     ))
                     .collect();
-                let quoted_match = Tm::Match(self.quote(decl, l, val), tm_cases).into();
-                let effective_origin = match origin {
-                    Some((n, a)) => Some((n.clone(), a.clone())),
-                    None => None,
-                };
-                if let Some((name, arg_vals)) = effective_origin {
-                    let safe_args: Vec<Rc<Val>> = arg_vals.iter()
-                        .filter(|v| !matches!(v.as_ref(), Val::Rigid(x, _) if x.0 >= l.0))
-                        .cloned()
-                        .collect();
-                    let display_args: Vec<Rc<Tm>> = safe_args.iter()
-                        .map(|v| self.quote(decl, l, v))
-                        .collect();
-                    Tm::Call(name.clone(), display_args, safe_args, quoted_match).into()
-                } else {
-                    quoted_match
-                }
+                Tm::Match(self.quote(decl, l, val), tm_cases).into()
             }
         }
     }

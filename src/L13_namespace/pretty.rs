@@ -219,7 +219,7 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                 .map(|x| format!("({x})"))
                 .unwrap_or("".to_owned()),
         ),
-        Tm::Call(name, args, _, body) => {
+        Tm::Call(name, args, body) => {
             if matches!(body.as_ref(), Tm::Match(..)) {
                 let args_str = args.iter()
                     .map(|a| pretty_tm_indent(prec, indent, ns.clone(), a))

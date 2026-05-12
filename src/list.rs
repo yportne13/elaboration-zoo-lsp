@@ -50,25 +50,50 @@ impl<T> List<T> {
 
     pub fn map<U, F>(&self, f: F) -> List<U>
     where
-        F: Fn(&T) -> U + Copy,
+        F: Fn(&T) -> U,
     {
-        match self {
-            List { head: None } => List::new(),
-            x => x.tail().map(f).prepend(f(self.head().unwrap()))
+        let mut buf = Vec::new();
+        for elem in self.iter() {
+            buf.push(f(elem));
         }
+        let mut result = List::new();
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
+        }
+        result
     }
 
     pub fn flat_map<U, F>(&self, f: F) -> List<U>
     where
-        F: Fn(&T) -> Option<U> + Copy,
+        F: Fn(&T) -> Option<U>,
     {
-        match self {
-            List { head: None } => List::new(),
-            x => match f(self.head().unwrap()) {
-                Some(t) => x.tail().flat_map(f).prepend(t),
-                None => x.tail().flat_map(f),
+        let mut buf = Vec::new();
+        for elem in self.iter() {
+            if let Some(mapped) = f(elem) {
+                buf.push(mapped);
             }
         }
+        let mut result = List::new();
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
+        }
+        result
+    }
+
+    pub fn result_map<U, E, F>(&self, f: F) -> Result<List<U>, E>
+    where
+        F: FnMut(&T) -> Result<U, E>,
+    {
+        let mut buf = Vec::new();
+        let mut f = f;
+        for elem in self.iter() {
+            buf.push(f(elem)?);
+        }
+        let mut result = List::new();
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
+        }
+        Ok(result)
     }
 
     pub fn split(&self) -> (Option<&T>, List<T>) {
@@ -82,53 +107,86 @@ impl<T> List<T> {
 impl<T: Clone> List<T> {
     pub fn filter<F>(&self, f: F) -> List<T>
     where
-        F: Fn(&T) -> bool + Copy,
+        F: Fn(&T) -> bool,
     {
-        match self {
-            List { head: None } => List::new(),
-            x => if f(x.head().unwrap()) {
-                x.tail().filter(f).prepend(x.head().unwrap().clone())
-            } else {
-                x.tail().filter(f)
-            },
+        let mut buf = Vec::new();
+        for elem in self.iter() {
+            if f(elem) {
+                buf.push(elem.clone());
+            }
         }
+        let mut result = List::new();
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
+        }
+        result
     }
 
     pub fn change_n(&self, n: usize, f: impl FnOnce(&T) -> T) -> List<T> {
-        if n == 0 {
-            self.tail().prepend(f(self.head().unwrap()))
-        } else {
-            self.tail().change_n(n - 1, f).prepend(self.head().unwrap().clone())
+        let mut f = Some(f);
+        let mut buf = Vec::new();
+        for (i, elem) in self.iter().enumerate() {
+            if i == n {
+                buf.push(f.take().unwrap()(elem));
+            } else {
+                buf.push(elem.clone());
+            }
         }
+        let mut result = List::new();
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
+        }
+        result
     }
 
     pub fn change_tail(self, new_tail: List<T>) -> List<T> {
         let head_len = self.len() - new_tail.len();
-        self.change_tail_helper(new_tail, head_len)
+        let mut buf = Vec::new();
+        for elem in self.iter().take(head_len) {
+            buf.push(elem.clone());
+        }
+        let mut result = new_tail;
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
+        }
+        result
     }
 
     pub fn zip<U: Clone>(&self, other: &List<U>) -> List<(T, U)> {
-        match (self, other) {
-            (List { head: None }, _) | (_, List { head: None }) => List::new(),
-            (x, y) => x.tail().zip(&y.tail()).prepend((x.head().unwrap().clone(), y.head().unwrap().clone()))
+        let mut buf = Vec::new();
+        let mut other_iter = other.iter();
+        for elem in self.iter() {
+            match other_iter.next() {
+                Some(other_elem) => buf.push((elem.clone(), other_elem.clone())),
+                None => break,
+            }
         }
-    }
-
-    fn change_tail_helper(self, new_tail: List<T>, head_len: usize) -> List<T> {
-        if head_len == 0 {
-            new_tail
-        } else {
-            self.tail().change_tail_helper(new_tail, head_len - 1).prepend(self.head().unwrap().clone())
+        let mut result = List::new();
+        for elem in buf.into_iter().rev() {
+            result = result.prepend(elem);
         }
+        result
     }
 
     pub fn split_at(self, n: usize) -> (List<T>, List<T>) {
-        if n == 0 {
-            (List::new(), self)
-        } else {
-            let (left, right) = self.tail().split_at(n - 1);
-            (left.prepend(self.head.unwrap().elem.clone()), right)
+        let mut left_buf = Vec::new();
+        let mut right_buf = Vec::new();
+        for (i, elem) in self.iter().enumerate() {
+            if i < n {
+                left_buf.push(elem.clone());
+            } else {
+                right_buf.push(elem.clone());
+            }
         }
+        let mut left = List::new();
+        for elem in left_buf.into_iter().rev() {
+            left = left.prepend(elem);
+        }
+        let mut right = List::new();
+        for elem in right_buf.into_iter().rev() {
+            right = right.prepend(elem);
+        }
+        (left, right)
     }
 }
 

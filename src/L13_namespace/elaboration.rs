@@ -358,7 +358,7 @@ impl Infer {
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check::<false>(&fake_cxt, bod.clone(), &vtyp)?;
-                    let t_tm = Rc::new(super::wrap_match_in_call(name.data.clone(), &t_tm));
+                    let t_tm = Rc::new(super::wrap_match_in_call(name.data.clone(), &t_tm, 0));
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(this_meta as u32))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);

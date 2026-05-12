@@ -329,7 +329,7 @@ impl Infer {
                     datas: params,
                 }.into())
             }
-            Val::Match(val, env, cases, _) => {
+            Val::Match(val, env, cases) => {
                 let val = self.rename(decl, pren, val)?;
                 let cases = cases
                     .iter()
@@ -359,8 +359,10 @@ impl Infer {
                 Ok(Tm::Match(val, cases).into())
             }
             Val::Call(name, args, body) => {
+                let args = args
+                    .result_map(|x| self.rename(decl, pren, x))?;
                 let renamed_body = self.rename(decl, pren, body)?;
-                Ok(Tm::Call(name.clone(), args.clone(), vec![], renamed_body).into())
+                Ok(Tm::Call(name.clone(), args, renamed_body).into())
             },
         }
     }
@@ -433,11 +435,6 @@ impl Infer {
             self.prune_ty(decl, &pr, &mty)?; //TODO:revPruning?
         }
 
-        let saved_origin = match rhs.as_ref() {
-            Val::Match(_, _, _, Some((name, args))) => Some((name.clone(), args.clone())),
-            _ => None,
-        };
-
         let rhs = self.rename(
             decl,
             &PartialRenaming {
@@ -447,11 +444,6 @@ impl Infer {
             rhs,
         )?;
         let mut solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
-        if let Some((name, args)) = saved_origin {
-            if let Val::Match(scrut, env, cases, None) = solution.as_ref() {
-                solution = Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((name, args))).into();
-            }
-        }
         self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
 
         Ok(())
@@ -733,7 +725,7 @@ impl Infer {
                 }
                 Ok(())
             }
-            (Val::Match(s1, env1, cases1, _), Val::Match(s2, env2, cases2, _)) => {
+            (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
                 self.unify(l, cxt, s1, s2, fuel)?;
 
