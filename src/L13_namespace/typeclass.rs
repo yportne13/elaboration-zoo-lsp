@@ -171,6 +171,10 @@ impl Synth {
             }
             // Universe level
             (Val::U(x1), Val::U(x2)) => x1 == x2,
+            // LiteralType (String) is equivalent to Decl("String")
+            (Val::LiteralType, Val::Decl(x, sp)) | (Val::Decl(x, sp), Val::LiteralType) => {
+                x.data == "String" && sp.is_empty()
+            }
             // LiteralType
             (Val::LiteralType, Val::LiteralType) => true,
             // Obj - same field name, match underlying val and spines
@@ -223,6 +227,9 @@ impl Synth {
                     })
             }
             (Val::U(x1), Val::U(x2)) => x1 == x2,
+            (Val::LiteralType, Val::Decl(x, sp)) | (Val::Decl(x, sp), Val::LiteralType) => {
+                x.data == "String" && sp.is_empty()
+            }
             (Val::LiteralType, Val::LiteralType) => true,
             (Val::Match(a1, b1, c1), Val::Match(a2, b2, c2)) => {
                 Self::vals_eq_ground_impl(a1, a2, visited)

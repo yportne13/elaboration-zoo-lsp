@@ -1,0 +1,12 @@
+
+trait Show {
+    def show: String
+}
+
+impl Nat {
+    def show: String =
+        match this {
+            case zero => "0"
+            case succ(n) => "succ"
+        }
+}

@@ -190,6 +190,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/hdl.typort"),
             version: None,
         });
+        ret.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///show.typort").unwrap(),
+            text: include_str!("prelude/show.typort"),
+            version: None,
+        });
         // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
         {
             let cxt_lock = ret.cxt.lock().unwrap();
