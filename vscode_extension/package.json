@@ -37,28 +37,56 @@
 				"configuration": "./language-configuration.json"
 			}
 		],
-		"configuration": {
-			"type": "object",
-			"title": "typort-language-server",
-			"properties": {
-				"typort-language-server.trace.server": {
-					"type": "string",
-					"scope": "window",
-					"enum": [
-						"off",
-						"messages",
-						"verbose"
-					],
-					"enumDescriptions": [
-						"No traces",
-						"Error only",
-						"Full log"
-					],
-					"default": "off",
-					"description": "Traces the communication between VS Code and the language server."
+		"configuration": [
+			{
+				"type": "object",
+				"title": "typort-language-server",
+				"properties": {
+					"typort-language-server.trace.server": {
+						"type": "string",
+						"scope": "window",
+						"enum": [
+							"off",
+							"messages",
+							"verbose"
+						],
+						"enumDescriptions": [
+							"No traces",
+							"Error only",
+							"Full log"
+						],
+						"default": "off",
+						"description": "Traces the communication between VS Code and the language server."
+					}
+				}
+			},
+			{
+				"type": "object",
+				"title": "TyportHDL",
+				"properties": {
+					"typort-hdl.lsp-mode": {
+						"type": "string",
+						"scope": "window",
+						"enum": [
+							"wasm",
+							"cli"
+						],
+						"enumDescriptions": [
+							"Use the built-in WASM language server",
+							"Use the CLI language server (external binary)"
+						],
+						"default": "wasm",
+						"markdownDescription": "Select which language server backend to use."
+					},
+					"typort-hdl.cli-server.path": {
+						"type": "string",
+						"scope": "machine",
+						"default": "",
+						"markdownDescription": "Path to the `typort` CLI binary for CLI server mode. If empty, the `typort` binary is searched in PATH."
+					}
 				}
 			}
-		},
+		],
 		"grammars": [
 			{
 				"language": "typort",

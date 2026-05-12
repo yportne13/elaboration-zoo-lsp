@@ -11,28 +11,38 @@ import { createStdioOptions, createUriConverters, startServer } from '@vscode/wa
 let client: LanguageClient;
 
 export async function activate(context: ExtensionContext) {
-	const wasm: Wasm = await Wasm.load();
+	const config = workspace.getConfiguration('typort-hdl');
+	const mode = config.get<string>('lsp-mode', 'wasm');
 
 	const channel = window.createOutputChannel('TyportHDL Language Server');
-	const serverOptions: ServerOptions = async () => {
-		const options: ProcessOptions = {
-			stdio: createStdioOptions(),
-			mountPoints: [
-				{ kind: 'workspaceFolder' },
-			]
+
+	let serverOptions: ServerOptions;
+	if (mode === 'cli') {
+		const command = config.get<string>('cli-server.path', '') || 'typort';
+		channel.appendLine(`Starting CLI language server: ${command} lsp`);
+		serverOptions = { command, args: ['lsp'] } as unknown as ServerOptions;
+	} else {
+		const wasm: Wasm = await Wasm.load();
+		serverOptions = async () => {
+			const options: ProcessOptions = {
+				stdio: createStdioOptions(),
+				mountPoints: [
+					{ kind: 'workspaceFolder' },
+				]
+			};
+			const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
+			const bits = await workspace.fs.readFile(filename);
+			const module = await WebAssembly.compile(bits);
+			const process = await wasm.createProcess('lsp-server', module, { initial: 160, maximum: 8000, shared: true }, options);
+
+			const decoder = new TextDecoder('utf-8');
+			process.stderr!.onData((data) => {
+				channel.append(decoder.decode(data));
+			});
+
+			return startServer(process);
 		};
-		const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
-		const bits = await workspace.fs.readFile(filename);
-		const module = await WebAssembly.compile(bits);
-		const process = await wasm.createProcess('lsp-server', module, { initial: 160, maximum: 8000, shared: true }, options);
-
-		const decoder = new TextDecoder('utf-8');
-		process.stderr!.onData((data) => {
-			channel.append(decoder.decode(data));
-		});
-
-		return startServer(process);
-	};
+	}
 
 	const clientOptions: LanguageClientOptions = {
     	documentSelector: [{ language: "typort" }],

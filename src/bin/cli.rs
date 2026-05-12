@@ -9,8 +9,16 @@ use lsp_types::Url;
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let args: Vec<String> = std::env::args().collect();
+
+    // Check for subcommands.
+    if args.len() >= 2 && args[1] == "lsp" {
+        return elaboration_zoo_lsp::run_lsp_server();
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: typort <file.typort> [<file2.typort> ...]");
+        eprintln!("Usage:");
+        eprintln!("  typort <file.typort> [<file2.typort> ...]    Analyze files");
+        eprintln!("  typort lsp                                    Start the language server");
         std::process::exit(1);
     }
 
