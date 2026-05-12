@@ -264,24 +264,34 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
 }
 
-fn lookup_function_by_cases(decl: &Decl, cases: &[(PatternDetail, Rc<Tm>)]) -> Option<SmolStr> {
+fn lookup_function_by_cases(decl: &Decl, cases: &[(PatternDetail, Rc<Tm>)]) -> Option<(SmolStr, u32)> {
     for (name, (_, body_tm, _, _, _)) in decl {
-        if match_has_same_patterns(cases, body_tm) {
-            return Some(name.clone());
+        if let Some(arity) = count_lams_to_match(cases, body_tm) {
+            return Some((name.clone(), arity));
         }
     }
     None
 }
 
-fn match_has_same_patterns(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> bool {
+fn count_lams_to_match(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> Option<u32> {
     match tm {
         Tm::Match(_, inner_cases) => {
-            cases.len() == inner_cases.len()
+            if cases.len() == inner_cases.len()
                 && cases.iter().zip(inner_cases.iter()).all(|((p1, _), (p2, _))| p1 == p2)
+            {
+                Some(0)
+            } else {
+                None
+            }
         }
-        Tm::Lam(_, _, inner) => match_has_same_patterns(cases, inner),
-        _ => false,
+        Tm::Lam(_, _, inner) => count_lams_to_match(cases, inner).map(|n| n + 1),
+        Tm::Call(_, _, _, inner) => count_lams_to_match(cases, inner),
+        _ => None,
     }
+}
+
+fn match_has_same_patterns(cases: &[(PatternDetail, Rc<Tm>)], tm: &Tm) -> bool {
+    count_lams_to_match(cases, tm).is_some()
 }
 
 fn extract_decl_name(tm: &Tm) -> Option<Span<SmolStr>> {
@@ -309,6 +319,34 @@ fn extract_args_from_val(val: &Rc<Val>) -> Vec<Rc<Val>> {
             datas.iter().map(|(_, v, _)| v.clone()).collect()
         }
         _ => vec![val.clone()],
+    }
+}
+
+pub fn tm_contains_match(tm: &Tm) -> bool {
+    match tm {
+        Tm::Match(..) => true,
+        Tm::Lam(_, _, body) => tm_contains_match(body),
+        _ => false,
+    }
+}
+
+pub fn wrap_match_in_call(name: SmolStr, tm: &Tm) -> Tm {
+    match tm {
+        Tm::Lam(span, i, body) => Tm::Lam(span.clone(), *i, wrap_match_in_call(name, body).into()),
+        Tm::Match(scru, cases) => Tm::Call(
+            name,
+            vec![],
+            vec![],
+            Tm::Match(scru.clone(), cases.clone()).into(),
+        ),
+        _ => tm.clone(),
+    }
+}
+
+pub fn count_lams(tm: &Tm) -> u32 {
+    match tm {
+        Tm::Lam(_, _, body) => 1 + count_lams(body),
+        _ => 0,
     }
 }
 
@@ -478,17 +516,7 @@ impl Infer {
                 Some(v) => v.clone(),
                 None => panic!("var {:?} not found", x.0),
             },
-            Tm::Decl(x) => {
-                if let Some((_, _, body_val, _, _)) = decl.get(&x.data) {
-                    if matches!(body_val.as_ref(), Val::Lam(..)) {
-                        Val::Call(x.data.clone(), vec![], body_val.clone()).into()
-                    } else {
-                        body_val.clone()
-                    }
-                } else {
-                    Val::Decl(x.clone(), List::new()).into()
-                }
-            },
+            Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),
             Tm::Obj(tm, name) => {
                 let a = self.eval(decl, env, tm);
                 let a = self.force(decl, &a);
@@ -556,8 +584,21 @@ impl Infer {
             }
             Tm::Call(name, _, val_args, body) => {
                 let result = self.eval(decl, env, body);
-                if let Val::Match(scrut, env, cases, _) = result.as_ref() {
-                    Val::Match(scrut.clone(), env.clone(), cases.clone(), Some((name.clone(), val_args.clone()))).into()
+                if let Val::Match(scrut, match_env, cases, _) = result.as_ref() {
+                    let args: Vec<Rc<Val>> = if !val_args.is_empty() {
+                        val_args.clone()
+                    } else {
+                        let owned_name = name.clone();
+                        if let Some((_, body_tm, _, _, _)) = decl.get(&owned_name) {
+                            let arity = count_lams(body_tm) as usize;
+                            let mut args: Vec<Rc<Val>> = match_env.iter().take(arity).cloned().collect();
+                            args.reverse();
+                            args
+                        } else {
+                            vec![]
+                        }
+                    };
+                    Val::Match(scrut.clone(), match_env.clone(), cases.clone(), Some((name.clone(), args))).into()
                 } else {
                     result
                 }
@@ -643,27 +684,7 @@ impl Infer {
                     datas,
                 }.into()
             }
-            Val::Call(name, args, body) => {
-                if let Val::Match(match_val, _, _, _) = body.as_ref() {
-                    let forced_val = self.force(decl, match_val);
-                    let arg_vals = extract_args_from_val(&forced_val);
-                    let quoted_body = self.quote(decl, l, body);
-                    if matches!(quoted_body.as_ref(), Tm::Match(..)) {
-                        let safe_args: Vec<Rc<Val>> = arg_vals.iter()
-                            .filter(|v| !matches!(v.as_ref(), Val::Rigid(x, _) if x.0 >= l.0))
-                            .cloned()
-                            .collect();
-                        let display_args: Vec<Rc<Tm>> = safe_args.iter()
-                            .map(|v| self.quote(decl, l, v))
-                            .collect();
-                        Tm::Call(name.clone(), display_args, safe_args, quoted_body).into()
-                    } else {
-                        quoted_body
-                    }
-                } else {
-                    self.quote(decl, l, body)
-                }
-            },
+            Val::Call(_, _, body) => self.quote(decl, l, body),
             Val::Match(val, env, cases, origin) => {
                 /*TODO:let tm_cases = cases
                     .into_iter()
@@ -697,10 +718,7 @@ impl Infer {
                 let quoted_match = Tm::Match(self.quote(decl, l, val), tm_cases).into();
                 let effective_origin = match origin {
                     Some((n, a)) => Some((n.clone(), a.clone())),
-                    None => lookup_function_by_cases(decl, cases).map(|name| {
-                        let forced_val = self.force(decl, val);
-                        (name, extract_args_from_val(&forced_val))
-                    }),
+                    None => None,
                 };
                 if let Some((name, arg_vals)) = effective_origin {
                     let safe_args: Vec<Rc<Val>> = arg_vals.iter()
@@ -805,6 +823,9 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
                         println!("> import {}.{}", path, n);
                     }
                 }
+            }
+            parser::syntax::Decl::Derive { .. } => {
+                panic!("Derive should have been expanded before run")
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -911,6 +932,9 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                         println!("> import {}.{}", path, n);
                     }
                 }
+            }
+            parser::syntax::Decl::Derive { .. } => {
+                panic!("Derive should have been expanded before run")
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -3329,6 +3353,19 @@ println "a" + "b" + "c"
 }
 
 #[test]
+fn test_match_pretty() {
+    let input = r#"
+println (a => Eq[Nat](nat_add_helper(1, a), nat_add_helper(2, a)))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_match() {
     let input = r#"
 // Cast using a proof of type equality.
@@ -4231,6 +4268,59 @@ mod prelude_tests {
                 eprintln!("Prelude smoke test output: {}", output);
             }
             Err(e) => panic!("Prelude smoke test failed: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+        }
+    }
+
+    #[test]
+    fn test_derive_show_struct() {
+        let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+#[derive(Show)]
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+def p: Point = Point.mk (succ zero) zero
+println p.show
+"#;
+        match run(input, 0) {
+            Ok(output) => {
+                eprintln!("derive test output: {}", output);
+                assert!(output.contains("Point"), "Expected Point in output, got: {}", output);
+            }
+            Err(e) => panic!("derive test failed: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+        }
+    }
+
+    #[test]
+    fn test_derive_show_enum() {
+        let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+#[derive(Show)]
+enum Color {
+    red
+    green
+    blue
+}
+
+def c: Color = Color.red
+println c.show
+"#;
+        match run(input, 0) {
+            Ok(output) => {
+                eprintln!("derive enum test output: {}", output);
+                assert!(output.contains("red"), "Expected red in output, got: {}", output);
+            }
+            Err(e) => panic!("derive enum test failed: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
         }
     }
 }

@@ -9,6 +9,7 @@ use crate::parser_lib_resilient::*;
 mod lex;
 pub mod syntax;
 pub mod macros;
+pub mod derive;
 
 use TokenKind::*;
 
@@ -67,7 +68,7 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 
 /// Parse with no pre-existing macros (for tests). Returns (declarations, parse errors, accumulated macros).
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    parser_with_macros(input, id, &Default::default()).map(|(d, e, _)| (d, e))
+    parser_with_macros(input, id, &Default::default()).map(|(d, e, _)| (expand_derives(d), e))
 }
 
 /// Parse with a pre-populated macro table (from macros in other files).
@@ -101,14 +102,14 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    Some((ret.1.into_iter().flatten().collect(), err_collect.0, exported))
+                    Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
                 } else {
                     err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(EndLine)) });
                     let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    Some((ret.1.into_iter().flatten().collect(), err_collect.0, exported))
+                    Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
                 }
                 Err(e) => {
                     err_collect.0.push(e);
@@ -1346,6 +1347,41 @@ fn p_import<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
     }
 }
 
+fn p_derive_attr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<Span<SmolStr>>> {
+    let attr = (kw_is(Op, "#"), kw(LSquare), string_is(Ident, "derive"), kw(LParen));
+    match attr.option().parse(input, state) {
+        Ok((input, Some(_))) => {
+            let (input, traits) = smolstr(Ident)
+                .many1_sep((kw(T![,]), kw(EndLine).option()))
+                .parse(input, state)?;
+            let (input, _) = kw(RParen).parse(input, state)?;
+            let (input, _) = kw(RSquare).parse(input, state)?;
+            let (input, _) = kw(EndLine).many0().parse(input, state)?;
+            Ok((input, traits))
+        }
+        Ok((input, None)) => Ok((input, vec![])),
+        Err(e) => Ok((input, vec![])), // No attribute found, not an error
+    }
+}
+
+/// Expand `Decl::Derive` items into their inner declaration + generated impl blocks.
+fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
+    let registry = derive::default_derive_registry();
+    let mut result = vec![];
+    for decl in decls {
+        match decl {
+            Decl::Derive { traits, decl } => {
+                let inner = *decl;
+                let generated = derive::expand_derive(&registry, &traits, &inner);
+                result.push(inner);
+                result.extend(generated);
+            }
+            other => result.push(other),
+        }
+    }
+    result
+}
+
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         let is_cut = macro_decl.len() == 1;
@@ -1381,6 +1417,14 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 return Ok((i, ret.1))
             }
         }
+    }
+    // Check for #[derive(Trait1, Trait2, ...)] attribute before enum/struct
+    let (input, derive_traits) = p_derive_attr.option().map(|x| x.unwrap_or_default()).parse(input, state)?;
+    if !derive_traits.is_empty() {
+        let (input, decl) = p_enum.or(p_struct).parse(input, state).map_err(|e| IError {
+            msg: e.msg.map(|_| ErrMsg::ExpectDecl)
+        })?;
+        return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))
     }
     p_def.or(p_print).or(p_enum).or(p_struct).or(p_trait_def).or(p_impl)
         .or(p_package).or(p_import)

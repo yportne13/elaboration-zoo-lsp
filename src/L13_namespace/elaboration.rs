@@ -51,6 +51,10 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             path: path.into_iter().map(|s| s.map(|n| SmolStr::new(format!("{prefix}.{n}")))).collect(),
         },
         Decl::Import { .. } => d,
+        Decl::Derive { traits, decl } => Decl::Derive {
+            traits,
+            decl: Box::new(prefix_decl_name(*decl, prefix)),
+        },
     }
 }
 
@@ -354,6 +358,7 @@ impl Infer {
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check::<false>(&fake_cxt, bod.clone(), &vtyp)?;
+                    let t_tm = Rc::new(super::wrap_match_in_call(name.data.clone(), &t_tm));
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(this_meta as u32))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
@@ -724,6 +729,9 @@ impl Infer {
                     }
                 }
                 Ok((DeclTm::Import, Val::U(0).into(), cxt))
+            },
+            Decl::Derive { .. } => {
+                panic!("Derive should have been expanded before elaboration")
             },
         }
     }

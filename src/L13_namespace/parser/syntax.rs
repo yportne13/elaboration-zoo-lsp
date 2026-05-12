@@ -236,4 +236,8 @@ pub enum Decl {
         methods: Vec<Decl>,
         need_create: bool,
     },
+    Derive {
+        traits: Vec<Span<SmolStr>>,
+        decl: Box<Decl>,
+    },
 }
