@@ -8,41 +8,31 @@ import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } fro
 import { Wasm, ProcessOptions } from '@vscode/wasm-wasi';
 import { createStdioOptions, createUriConverters, startServer } from '@vscode/wasm-wasi-lsp';
 
-let client: LanguageClient;
+let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext) {
-	const config = workspace.getConfiguration('typort-hdl');
-	const mode = config.get<string>('lsp-mode', 'wasm');
+	const wasm: Wasm = await Wasm.load();
 
 	const channel = window.createOutputChannel('TyportHDL Language Server');
-
-	let serverOptions: ServerOptions;
-	if (mode === 'cli') {
-		const command = config.get<string>('cli-server.path', '') || 'typort';
-		channel.appendLine(`Starting CLI language server: ${command} lsp`);
-		serverOptions = { command, args: ['lsp'] } as unknown as ServerOptions;
-	} else {
-		const wasm: Wasm = await Wasm.load();
-		serverOptions = async () => {
-			const options: ProcessOptions = {
-				stdio: createStdioOptions(),
-				mountPoints: [
-					{ kind: 'workspaceFolder' },
-				]
-			};
-			const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
-			const bits = await workspace.fs.readFile(filename);
-			const module = await WebAssembly.compile(bits);
-			const process = await wasm.createProcess('lsp-server', module, { initial: 160, maximum: 8000, shared: true }, options);
-
-			const decoder = new TextDecoder('utf-8');
-			process.stderr!.onData((data) => {
-				channel.append(decoder.decode(data));
-			});
-
-			return startServer(process);
+	const serverOptions: ServerOptions = async () => {
+		const options: ProcessOptions = {
+			stdio: createStdioOptions(),
+			mountPoints: [
+				{ kind: 'workspaceFolder' },
+			]
 		};
-	}
+		const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
+		const bits = await workspace.fs.readFile(filename);
+		const module = await WebAssembly.compile(bits);
+		const process = await wasm.createProcess('lsp-server', module, { initial: 160, maximum: 8000, shared: true }, options);
+
+		const decoder = new TextDecoder('utf-8');
+		process.stderr!.onData((data) => {
+			channel.append(decoder.decode(data));
+		});
+
+		return startServer(process);
+	};
 
 	const clientOptions: LanguageClientOptions = {
     	documentSelector: [{ language: "typort" }],
@@ -68,11 +58,13 @@ export async function activate(context: ExtensionContext) {
 		const folder = workspace.workspaceFolders![0].uri;
 		// We need to convert the folder URI to a URI that maps to the mounted WASI file system. This is something
 		// @vscode/wasm-wasi-lsp does for us.
-		const result = await client.sendRequest(CountFilesRequest, { folder: client.code2ProtocolConverter.asUri(folder) });
+		const result = await client!.sendRequest(CountFilesRequest, { folder: client!.code2ProtocolConverter.asUri(folder) });
 		window.showInformationMessage(`The workspace contains ${result} files.`);
 	}));
 }
 
-export function deactivate() {
-	return client.stop();
+export function deactivate(): Promise<void> | void {
+	if (client) {
+		return client.stop();
+	}
 }
