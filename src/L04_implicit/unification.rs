@@ -45,11 +45,11 @@ fn lams(l: List<Icit>, t: Tm) -> Tm {
 impl Infer {
     fn invert_go(&self, sp: Spine) -> Result<(Lvl, HashMap<u32, Lvl>), UnifyError> {
         match sp {
-            List { head: None } => Ok((Lvl(0), HashMap::new())),
+            List { head: None, .. } => Ok((Lvl(0), HashMap::new())),
             a => {
                 let (dom, mut ren) = self.invert_go(a.tail())?;
                 match self.force(a.head().unwrap().0.clone()) {
-                    Val::Rigid(x, List { head: None }) if !ren.contains_key(&x.0) => {
+                    Val::Rigid(x, List { head: None, .. }) if !ren.contains_key(&x.0) => {
                         ren.insert(x.0, dom);
                         Ok((dom + 1, ren))
                     }
@@ -76,7 +76,7 @@ impl Infer {
         sp: &Spine,
     ) -> Result<Tm, UnifyError> {
         match sp {
-            List { head: None } => Ok(t),
+            List { head: None, .. } => Ok(t),
             a => {
                 let t = self.rename_go_sp(m, pren, t, &a.tail())?;
                 let u = self.rename_go(m, pren, a.head().unwrap().0.clone())?;
@@ -148,7 +148,7 @@ impl Infer {
     }
     fn unify_sp(&mut self, l: Lvl, sp: &Spine, sp_prime: &Spine) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
-            (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
+            (List { head: None, .. }, List { head: None, .. }) => Ok(()), // Both spines are empty
             (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
                 self.unify_sp(l, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
                 self.unify(l, a.head().unwrap().0.clone(), b.head().unwrap().0.clone()) // Unify the current values

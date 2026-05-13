@@ -175,7 +175,7 @@ impl Infer {
     fn v_app_sp(&self, t: Rc<Val>, spine: Spine) -> Rc<Val> {
         //spine.iter().rev().fold(t, |acc, (u, i)| self.v_app(acc, u.clone(), *i))
         match spine {
-            List { head: None } => t,
+            List { head: None, .. } => t,
             a => {
                 let (u, i) = a.head().unwrap();
                 self.v_app(self.v_app_sp(t, a.tail()), u.clone(), *i)
@@ -186,7 +186,7 @@ impl Infer {
     fn v_app_pruning(&self, env: &Env, v: Rc<Val>, pr: &Pruning) -> Rc<Val> {
         //println!("{} {:?} {:?}", "v_app_bds".green(), v, bds);
         match (env, pr) {
-            (List { head: None }, List { head: None }) => v,
+            (List { head: None, .. }, List { head: None, .. }) => v,
             (a, b) if a.head().is_some() && matches!(b.head(), Some(Some(_))) => self.v_app(
                 self.v_app_pruning(&a.tail(), v, &b.tail()),
                 a.head().unwrap().clone(),
@@ -229,7 +229,7 @@ impl Infer {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
         })*/
         match spine {
-            List { head: None } => t,
+            List { head: None, .. } => t,
             _ => {
                 let head = spine.head().unwrap();
                 Tm::App(Box::new(self.quote_sp(l, t, spine.tail())), Box::new(self.quote(l, &head.0)), head.1)

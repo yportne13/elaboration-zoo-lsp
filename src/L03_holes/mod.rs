@@ -259,7 +259,7 @@ impl Infer {
     fn v_app_sp(&self, t: Val, spine: Spine) -> Val {
         //spine.iter().rev().fold(t, |acc, u| self.v_app(acc, u.clone()))//TODO: need List to support rev()
         match spine {
-            List { head: None } => t,
+            List { head: None, .. } => t,
             a => self.v_app(self.v_app_sp(t, a.tail()), a.head().unwrap().clone()),
         }
     }
@@ -267,7 +267,7 @@ impl Infer {
     fn v_app_bds(&self, env: &Env, v: Val, bds: &List<BD>) -> Val {
         //println!("{} {:?} {:?}", "v_app_bds".green(), v, bds);
         match (env, bds) {
-            (List { head: None }, List { head: None }) => v,
+            (List { head: None, .. }, List { head: None, .. }) => v,
             (a, b) if a.head().is_some() && matches!(b.head(), Some(BD::Bound)) => self.v_app(
                 self.v_app_bds(&a.tail(), v, &bds.tail()),
                 a.head().unwrap().clone(),
@@ -281,11 +281,11 @@ impl Infer {
 
     fn invert_go(&self, sp: Spine) -> Result<(Lvl, HashMap<u32, Lvl>), UnifyError> {
         match sp {
-            List { head: None } => Ok((Lvl(0), HashMap::new())),
+            List { head: None, .. } => Ok((Lvl(0), HashMap::new())),
             a => {
                 let (dom, mut ren) = self.invert_go(a.tail())?;
                 match self.force(a.head().unwrap().clone()) {
-                    Val::Rigid(x, List { head: None }) if !ren.contains_key(&x.0) => {
+                    Val::Rigid(x, List { head: None, .. }) if !ren.contains_key(&x.0) => {
                         ren.insert(x.0, dom);
                         Ok((dom + 1, ren))
                     }
@@ -301,7 +301,7 @@ impl Infer {
             .rev()//TODO: need List to support rev()
             .try_fold((Lvl(0), HashMap::new()), |(dom, mut ren), t| {
                 match self.force(t.clone()) {
-                    Val::Rigid(x, List { head: None }) if !ren.contains_key(&x.0) => {
+                    Val::Rigid(x, List { head: None, .. }) if !ren.contains_key(&x.0) => {
                         ren.insert(x.0, dom);
                         Ok((dom + 1, ren))
                     }
@@ -324,7 +324,7 @@ impl Infer {
         sp: &List<Val>,
     ) -> Result<Tm, UnifyError> {
         match sp {
-            List { head: None } => Ok(t),
+            List { head: None, .. } => Ok(t),
             a => {
                 let t = self.rename_go_sp(m, pren, t, &a.tail())?;
                 let u = self.rename_go(m, pren, a.head().unwrap().clone())?;
@@ -446,7 +446,7 @@ impl Infer {
 
     fn unify_sp(&mut self, l: Lvl, sp: &List<Val>, sp_prime: &List<Val>) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
-            (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
+            (List { head: None, .. }, List { head: None, .. }) => Ok(()), // Both spines are empty
             (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
                 self.unify_sp(l, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
                 self.unify(l, a.head().unwrap().clone(), b.head().unwrap().clone()) // Unify the current values

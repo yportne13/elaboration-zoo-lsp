@@ -4,6 +4,7 @@ use std::fmt::{Debug, Formatter};
 #[derive(Default, Clone)]
 pub struct List<T> {
     pub head: Link<T>,
+    pub size: usize,
 }
 
 impl<T: Debug> Debug for List<T> {
@@ -17,23 +18,28 @@ pub type Link<T> = Option<Rc<Node<T>>>;
 #[derive(Debug)]
 pub struct Node<T> {
     elem: T,
+    size: usize,
     next: Link<T>,
 }
 
 impl<T> List<T> {
     pub fn new() -> Self {
-        List { head: None }
+        List { head: None, size: 0 }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.head.is_none()
+        self.size == 0
     }
 
     pub fn prepend(&self, elem: T) -> List<T> {
-        List { head: Some(Rc::new(Node {
-            elem,
-            next: self.head.clone(),
-        }))}
+        List {
+            size: self.size + 1,
+            head: Some(Rc::new(Node {
+                elem,
+                size: self.size + 1,
+                next: self.head.clone(),
+            })),
+        }
     }
 
     pub fn head(&self) -> Option<&T> {
@@ -41,11 +47,17 @@ impl<T> List<T> {
     }
 
     pub fn tail(&self) -> List<T> {
-        List { head: self.head.as_ref().and_then(|node| node.next.clone()) }
+        match self.head.as_ref() {
+            None => List { head: None, size: 0 },
+            Some(node) => List {
+                size: node.next.as_ref().map(|n| n.size).unwrap_or(0),
+                head: node.next.clone(),
+            },
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.iter().count()
+        self.size
     }
 
     pub fn map<U, F>(&self, f: F) -> List<U>
@@ -98,7 +110,7 @@ impl<T> List<T> {
 
     pub fn split(&self) -> (Option<&T>, List<T>) {
         match self {
-            List { head: None } => (None, List::new()),
+            List { head: None, .. } => (None, List::new()),
             x => (x.head(), x.tail()),
         }
     }

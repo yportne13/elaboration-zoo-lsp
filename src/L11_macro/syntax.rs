@@ -12,12 +12,29 @@ pub enum Locals {
 }
 
 impl Locals {
+    pub fn update_at(&self, x: usize, v: Rc<Tm>) -> Self {
+        match self {
+            Locals::Here => Locals::Here,
+            Locals::Define(mcl, name, ty, tm) => if x == 0 {
+                //println!("update {:?} to {:?}", tm, v);
+                Locals::Define(mcl.clone(), name.clone(), ty.clone(), v)
+            } else {
+                Locals::Define(Rc::new(mcl.update_at(x - 1, v)), name.clone(), ty.clone(), tm.clone())
+            },
+            Locals::Bind(mcl, name, ty) => if x == 0 {
+                //println!("update bind to {:?}", v);
+                Locals::Define(mcl.clone(), name.clone(), ty.clone(), v)
+            } else {
+                Locals::Bind(Rc::new(mcl.update_at(x - 1, v)), name.clone(), ty.clone())
+            },
+        }
+    }
     pub fn update_by_cxt(&self, infer: &Infer, decl: &Decl, lvl: Lvl, cxt: &List<Rc<Val>>) -> Self {
         match (self, cxt) {
             (Locals::Here, _) => Locals::Here,
             (Locals::Define(mcl, name, ty, tm), cxt) => {
-                //Locals::Define(Box::new(mcl.update_by_cxt(infer, lvl, &cxt.tail())), name, ty, tm)
-                match cxt.head() {
+                Locals::Define(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone(), tm.clone())
+                /*match cxt.head() {
                     Some(v) => match v.as_ref() {
                         Val::Rigid(_, _) => Locals::Bind(Rc::new(mcl.update_by_cxt(infer, decl, lvl, &cxt.tail())), name.clone(), ty.clone()),
                         _ => Locals::Define(
@@ -29,7 +46,7 @@ impl Locals {
                         )
                     },
                     _ => panic!("Internal error: unexpected value in context"),
-                }
+                }*/
             }
             (Locals::Bind(mcl, name, ty), cxt) => {
                 match cxt.head() {

@@ -149,7 +149,7 @@ impl Infer {
     fn v_app_sp(&self, t: Val, spine: Spine) -> Val {
         //spine.iter().rev().fold(t, |acc, (u, i)| self.v_app(acc, u.clone(), *i))
         match spine {
-            List { head: None } => t,
+            List { head: None, .. } => t,
             a => {
                 let (u, i) = a.head().unwrap();
                 self.v_app(self.v_app_sp(t, a.tail()), u.clone(), *i)
@@ -160,7 +160,7 @@ impl Infer {
     fn v_app_bds(&self, env: &Env, v: Val, bds: &List<BD>) -> Val {
         //println!("{} {:?} {:?}", "v_app_bds".green(), v, bds);
         match (env, bds) {
-            (List { head: None }, List { head: None }) => v,
+            (List { head: None, .. }, List { head: None, .. }) => v,
             (a, b) if a.head().is_some() && matches!(b.head(), Some(BD::Bound)) => self.v_app(
                 self.v_app_bds(&a.tail(), v, &bds.tail()),
                 a.head().unwrap().clone(),

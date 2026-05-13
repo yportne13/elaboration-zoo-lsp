@@ -438,7 +438,7 @@ impl Cxt {
     /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
     pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: &Rc<Val>) -> Rc<Val> {
         // quote def from (Lvl (length from))
-        let quoted = infer.quote(&self.decl, Lvl(from.iter().count() as u32), val);
+        let quoted = infer.quote(&self.decl, Lvl(from.len() as u32), val);
 
         // eval def to
         infer.eval(&self.decl, to, &quoted)

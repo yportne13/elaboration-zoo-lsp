@@ -145,7 +145,7 @@ impl Synth {
             // Decl (named types) - must be same name, match spines
             (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) => {
                 x1.data == x2.data
-                    && sp1.iter().count() == sp2.iter().count()
+                    && sp1.len() == sp2.len()
                     && sp1.iter().zip(sp2.iter()).all(|((v1, i1), (v2, i2))| {
                         i1 == i2 && Self::val_match(v1, v2, subst)
                     })
@@ -181,7 +181,7 @@ impl Synth {
             (Val::Obj(a1, n1, sp1), Val::Obj(a2, n2, sp2)) => {
                 n1.data == n2.data
                     && Self::val_match(a1, a2, subst)
-                    && sp1.iter().count() == sp2.iter().count()
+                    && sp1.len() == sp2.len()
                     && sp1.iter().zip(sp2.iter()).all(|((v1, i1), (v2, i2))| {
                         i1 == i2 && Self::val_match(v1, v2, subst)
                     })
@@ -204,7 +204,7 @@ impl Synth {
             }
             (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) => {
                 x1.data == x2.data
-                    && sp1.iter().count() == sp2.iter().count()
+                    && sp1.len() == sp2.len()
                     && sp1.iter().zip(sp2.iter()).all(|((v1, i1), (v2, i2))| {
                         i1 == i2 && Self::vals_eq_ground_impl(v1, v2, visited)
                     })

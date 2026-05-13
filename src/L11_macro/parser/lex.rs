@@ -90,9 +90,38 @@ const OP: [(&str, TokenKind); 15] = [
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    (is('"'), pmatch(|c: char| c != '"'), is('"'))
-        .map(|(_, x, _)| x.map(|t| (t, Str)))
-        .parse(input)
+    let data = input.data.strip_prefix('"')?;
+    let bytes = data.as_bytes();
+    let mut end = 0;
+    while end < bytes.len() {
+        if bytes[end] == b'"' {
+            break;
+        }
+        if bytes[end] == b'\\' {
+            end += 2;
+        } else {
+            end += 1;
+        }
+    }
+    if end == 0 || end >= bytes.len() || bytes[end] != b'"' {
+        return None;
+    }
+    let content = &data[..end];
+    let remaining = &data[end + 1..];
+    Some((
+        Span {
+            data: remaining,
+            start_offset: input.start_offset + 2 + end as u32,
+            end_offset: input.end_offset,
+            path_id: input.path_id,
+        },
+        Span {
+            data: (content, Str),
+            start_offset: input.start_offset + 1,
+            end_offset: input.start_offset + 1 + end as u32,
+            path_id: input.path_id,
+        },
+    ))
 }
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {

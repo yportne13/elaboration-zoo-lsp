@@ -53,11 +53,11 @@ impl Infer {
         sp: &Spine,
     ) -> Result<(Lvl, HashMap<u32, Lvl>, HashSet<u32>, List<(Lvl, Icit)>), UnifyError> {
         match sp {
-            List { head: None } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
+            List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
                 match self.force(decl, &a.head().unwrap().0).as_ref() {
-                    Val::Rigid(x, List { head: None }) => {
+                    Val::Rigid(x, List { head: None, .. }) => {
                         if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
                             ren.remove(&x.0);
                             nlvars.insert(x.0);
@@ -111,7 +111,7 @@ impl Infer {
     ) -> Result<Rc<Tm>, UnifyError> {
         let a = self.force(decl, a);
         match (pr, a.as_ref()) {
-            (List { head: None }, _) => self.rename(decl, pren, &a),
+            (List { head: None, .. }, _) => self.rename(decl, pren, &a),
             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
                 let a = self.rename(decl, pren, a)?;
                 let b = self.closure_apply(decl, b, Val::vvar(pren.cod).into());
@@ -176,7 +176,7 @@ impl Infer {
             let (sp_rest, status) = self.prune_vflex_go(decl, pren, sp.tail())?;
             let t = self.force(decl, &sp.head().unwrap().0);
             match t.as_ref() {
-                Val::Rigid(x, List { head: None }) => match (pren.ren.get(&x.0), status) {
+                Val::Rigid(x, List { head: None, .. }) => match (pren.ren.get(&x.0), status) {
                     (Some(x), _) => Ok((
                         sp_rest
                             .prepend((Some(Tm::Var(lvl2ix(pren.dom, *x)).into()), sp.head().unwrap().1)),
@@ -242,7 +242,7 @@ impl Infer {
     }
     fn rename_sp(&mut self, decl: &Decl, pren: &PartialRenaming, t: Rc<Tm>, sp: &Spine) -> Result<Rc<Tm>, UnifyError> {
         match sp {
-            List { head: None } => Ok(t),
+            List { head: None, .. } => Ok(t),
             a => {
                 let t = self.rename_sp(decl, pren, t, &a.tail())?;
                 let u = self.rename(decl, pren, &a.head().unwrap().0)?;
@@ -534,7 +534,7 @@ impl Infer {
         fuel: u32,
     ) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
-            (List { head: None }, List { head: None }) => Ok(()), // Both spines are empty
+            (List { head: None, .. }, List { head: None, .. }) => Ok(()), // Both spines are empty
             (a, b) if a.head().is_some() && b.head().is_some() => {
                 self.unify_sp(l, cxt, &a.tail(), &b.tail(), fuel)?; // Recursively unify the rest of the spines
                 self.unify(
@@ -580,15 +580,15 @@ impl Infer {
 
     fn intersect_go(&mut self, decl: &Decl, sp: Spine, sp_prime: Spine) -> Option<List<Option<Icit>>> {
         match (sp, sp_prime) {
-            (List { head: None }, List { head: None }) => Some(List::new()),
+            (List { head: None, .. }, List { head: None, .. }) => Some(List::new()),
             (a, b) if a.head().is_some() && b.head().is_some() => {
                 match (
                     self.force(decl, &a.head().unwrap().0).as_ref(),
                     self.force(decl, &b.head().unwrap().0).as_ref(),
                 ) {
                     (
-                        Val::Rigid(x, List { head: None }),
-                        Val::Rigid(x_prime, List { head: None }),
+                        Val::Rigid(x, List { head: None, .. }),
+                        Val::Rigid(x_prime, List { head: None, .. }),
                     ) => self.intersect_go(decl, a.tail(), b.tail()).map(|l| {
                         l.prepend(if x == x_prime {
                             Some(a.head().unwrap().1)
