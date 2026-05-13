@@ -8,7 +8,8 @@ use super::{
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use im::HashMap;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
@@ -59,18 +60,13 @@ impl Infer {
                 match self.force(decl, &a.head().unwrap().0).as_ref() {
                     Val::Rigid(x, List { head: None }) => {
                         let in_nlvars = nlvars.contains(&x.0);
-                        match ren.entry(x.0) {
-                            Entry::Occupied(e) => {
-                                e.remove();
-                                if !in_nlvars {
-                                    nlvars.insert(x.0);
-                                }
+                        if ren.contains_key(&x.0) {
+                            ren.remove(&x.0);
+                            if !in_nlvars {
+                                nlvars.insert(x.0);
                             }
-                            Entry::Vacant(e) => {
-                                if !in_nlvars {
-                                    e.insert(dom);
-                                }
-                            }
+                        } else if !in_nlvars {
+                            ren.insert(x.0, dom);
                         }
                         Ok((dom + 1, ren, nlvars, fsp.prepend((*x, a.head().unwrap().1))))
                     }
