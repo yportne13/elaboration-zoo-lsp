@@ -36,8 +36,8 @@ trait Into[O: outParam(Type 0)] {
     def into: O
 }
 
-trait Neg[O: outParam(Type 0)] {
-    def neg: O
+trait Neg {
+    def - : Self
 }
 
 trait Default {
@@ -58,7 +58,7 @@ def flip[A, B, C](f: A -> B -> C, x: B, y: A): C = f y x
 def compose[A, B, C](f: B -> C, g: A -> B, x: A): C = f (g x)
 
 trait Not {
-    def not: Self
+    def ! : Self
 }
 
 trait Rem[T, O: outParam(Type 0)] {

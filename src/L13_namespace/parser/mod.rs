@@ -314,7 +314,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_atom1, Cut((kw(T![.]), smolstr(Ident))).many0())
+    (p_atom1, Cut((kw(T![.]), smolstr(Ident).or(smolstr(Op)))).many0())
         .map(|(x, t)| t.into_iter().fold(x, |x, t| {
             Raw::Obj(Box::new(x), t.1)
         }))
@@ -324,9 +324,15 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 
 fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, MacroState, IError> {
     move |input: &'b [TokenNode<'a>], state: &mut MacroState| {
-        let (mut input, mut lhs) = p_atom/*.or(
-            (string(Op), expr_bp())
-        )*/.parse(input, state)?;
+        let (mut input, mut lhs) = (|input: &'b [TokenNode<'a>], state: &mut MacroState| {
+            let (input, op) = smolstr(Op).parse(input, state)?;
+            if let Some(r_bp) = prefix_binding_power(&op) {
+                let (input, rhs) = expr_bp(r_bp).parse(input, state)?;
+                Ok((input, Raw::Obj(Box::new(rhs), Some(op))))
+            } else {
+                Err(IError { msg: op.map(|_| ErrMsg::ExpectAtom) })
+            }
+        }).or(p_atom).parse(input, state)?;
 
         while let Ok((input_t, op)) = smolstr(Op)
             .or(kw(LParen).map(|x| x.map(|_| SmolStr::new("("))))
@@ -406,7 +412,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     };
                     Raw::app(Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new("mux"))), lhs), mhs), rhs)
                 } else if &op.data == "." {
-                    let name = match smolstr(Ident).parse(input, state) {
+                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
                         Ok((input_t, name)) => {
                             input = input_t;
                             name
@@ -444,11 +450,10 @@ fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResu
     expr_bp(0).parse(input, state)
 }
 
-fn prefix_binding_power(op: &Span<SmolStr>) -> ((), u8) {
+fn prefix_binding_power(op: &Span<SmolStr>) -> Option<u8> {
     match &op.data {
-        s if (s == "+") | (s == "-") => ((), 19),
-        s if s == "!" => ((), 30),
-        _ => panic!("bad op: {:?}", op),
+        s if (s == "!") | (s == "~") => Some(30),
+        _ => None,
     }
 }
 

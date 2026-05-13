@@ -917,14 +917,26 @@ enum Bool {
 }
 
 trait Not {
-    def not: Self
+    def ! : Self
 }
 
 impl Not for Bool {
-    def not: Bool = match this {
+    def ! : Bool = match this {
         case true => false
         case false => true
     }
+}
+
+trait Neg {
+    def - : Self
+}
+
+trait BitNot {
+    def ~ : Self
+}
+
+impl BitNot for Bool {
+    def ~ : Bool = !this
 }
 
 trait Xor[T, O: outParam(Type 0)] {
@@ -935,7 +947,7 @@ impl Xor[Bool, Bool] for Bool {
     def ^(that: Bool): Bool =
         match this {
             case false => that
-            case true => that.not
+            case true => !that
         }
 }
 
