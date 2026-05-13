@@ -334,6 +334,15 @@ impl Infer {
             }
             Val::Match(val, env, cases) => {
                 let val = self.rename(decl, pren, val)?;
+                let declb = decl.iter()
+                    .map(|x| (x.0.clone(), (
+                        x.1.0,
+                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                        x.1.3.clone(),
+                        x.1.4.clone(),
+                    )))
+                    .collect();
                 let cases = cases
                     .iter()
                     .map(|(pat, tm)| {
@@ -342,15 +351,6 @@ impl Infer {
                                 env.prepend(Val::vvar(pren.cod).into()),
                                 lift(&pren),
                             ));
-                        let declb = decl.iter()
-                            .map(|x| (x.0.clone(), (
-                                x.1.0,
-                                Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                                Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                                x.1.3.clone(),
-                                x.1.4.clone(),
-                            )))
-                            .collect();
                         let body = self.rename(
                             decl,
                             &pren,
