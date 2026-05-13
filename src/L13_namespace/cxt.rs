@@ -16,6 +16,7 @@ pub struct Cxt {
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: HashSet<SmolStr>,
+    pub suffix_index: HashMap<SmolStr, SmolStr>,
     update_from: Option<usize>,
 }
 
@@ -295,6 +296,7 @@ impl Cxt {
             namespace: List::new(),
             namespace_prefix: None,
             namespaces: HashSet::new(),
+            suffix_index: HashMap::new(),
             update_from: None,
         }
     }
@@ -309,6 +311,7 @@ impl Cxt {
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
+            suffix_index: self.suffix_index.clone(),
             update_from: self.update_from,
         }
     }
@@ -338,6 +341,7 @@ impl Cxt {
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
+            suffix_index: self.suffix_index.clone(),
             update_from: self.update_from,
         }
     }
@@ -349,6 +353,10 @@ impl Cxt {
         if t.is_some() {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
+        let mut suffix_index = self.suffix_index.clone();
+        if let Some(pos) = x.data.rfind('.') {
+            suffix_index.insert(SmolStr::new(&x.data[pos + 1..]), x.data.clone());
+        }
         Ok(Cxt {
             env: self.env.clone(),
             lvl: self.lvl,
@@ -359,6 +367,7 @@ impl Cxt {
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
+            suffix_index,
             update_from: self.update_from,
         })
     }
@@ -375,6 +384,7 @@ impl Cxt {
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
+            suffix_index: self.suffix_index.clone(),
             update_from: self.update_from,
         }
     }
@@ -393,6 +403,7 @@ impl Cxt {
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
+            suffix_index: self.suffix_index.clone(),
             update_from: self.update_from,
         }
     }
@@ -404,6 +415,10 @@ impl Cxt {
         /*if let Some((span, _, _, _, _)) = t {
             return Err(Error(span.map(|_| format!("redefine {}", x.data))));
         }*/
+        let mut suffix_index = self.suffix_index.clone();
+        if let Some(pos) = x.data.rfind('.') {
+            suffix_index.insert(SmolStr::new(&x.data[pos + 1..]), x.data.clone());
+        }
         Ok(Cxt {
             env: self.env.clone(),
             lvl: self.lvl,
@@ -414,6 +429,7 @@ impl Cxt {
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
+            suffix_index,
             update_from: self.update_from,
         })
     }
@@ -466,6 +482,7 @@ impl Cxt {
                     namespace: self.namespace.clone(),
                     namespace_prefix: self.namespace_prefix.clone(),
                     namespaces: self.namespaces.clone(),
+                    suffix_index: self.suffix_index.clone(),
                     update_from: Some(update_from),
                 }
             }
