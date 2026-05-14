@@ -222,7 +222,10 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
         Tm::Call(name, args, body) => {
             if matches!(body.as_ref(), Tm::Match(..)) {
                 let args_str = args.iter()
-                    .map(|a| pretty_tm_indent(prec, indent, ns.clone(), a))
+                    .map(|(a, i)| match i {
+                        Icit::Expl => pretty_tm_indent(ATP, indent, ns.clone(), a),
+                        Icit::Impl => bracket(pretty_tm_indent(ATP, indent, ns.clone(), a)),
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("{}({})", name, args_str)

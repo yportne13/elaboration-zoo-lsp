@@ -363,7 +363,7 @@ impl Infer {
             }
             Val::Call(name, args, body) => {
                 let args = args
-                    .result_map(|x| self.rename(decl, pren, x))?;
+                    .result_map(|(x, i)| Ok((self.rename(decl, pren, x)?, *i)))?;
                 let renamed_body = self.rename(decl, pren, body)?;
                 Ok(Tm::Call(name.clone(), args, renamed_body).into())
             },

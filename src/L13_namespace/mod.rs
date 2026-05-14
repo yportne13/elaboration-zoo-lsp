@@ -100,7 +100,7 @@ pub enum Tm {
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, display_args, val_args, body) - body was inlined from function `name`
-    Call(SmolStr, List<Rc<Tm>>, Rc<Tm>),
+    Call(SmolStr, List<(Rc<Tm>, Icit)>, Rc<Tm>),
 }
 
 impl Tm {
@@ -125,7 +125,7 @@ impl Tm {
             Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
                 .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
             Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
-            Tm::Call(_, args, body) => args.iter().flat_map(|a| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
+            Tm::Call(_, args, body) => args.iter().flat_map(|(a, _)| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
         }
     }
 }
@@ -248,7 +248,7 @@ pub enum Val {
     },
     Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, args, body) - value inlined from function `name`
-    Call(SmolStr, List<Rc<Val>>, Rc<Val>),
+    Call(SmolStr, List<(Rc<Val>, Icit)>, Rc<Val>),
 }
 
 type VTy = Val;
@@ -283,22 +283,30 @@ pub fn tm_contains_match(tm: &Tm) -> bool {
     }
 }
 
-pub fn wrap_match_in_call(name: SmolStr, tm: &Tm, l: u32) -> Tm {
-    match tm {
-        Tm::Lam(span, i, body) => Tm::Lam(span.clone(), *i, wrap_match_in_call(name, body, l+1).into()),
-        Tm::Match(scru, cases) => Tm::Call(
-            name,
-            {
-                let mut list = List::new();
-                for i in 0..l {
-                    list = list.prepend(Tm::Var(Ix(i)).into());
-                }
-                list
-            },
-            Tm::Match(scru.clone(), cases.clone()).into(),
-        ),
-        _ => tm.clone(),
+pub fn wrap_match_in_call(name: SmolStr, tm: &Tm, _l: u32) -> Tm {
+    fn go(name: SmolStr, tm: &Tm, l: u32, icits: &mut Vec<Icit>) -> Tm {
+        match tm {
+            Tm::Lam(span, i, body) => {
+                icits.push(*i);
+                let result = Tm::Lam(span.clone(), *i, go(name, body, l + 1, icits).into());
+                icits.pop();
+                result
+            }
+            Tm::Match(scru, cases) => Tm::Call(
+                name,
+                {
+                    let mut list = List::new();
+                    for i in 0..l {
+                        list = list.prepend((Tm::Var(Ix(i)).into(), icits[(l - 1 - i) as usize]));
+                    }
+                    list
+                },
+                Tm::Match(scru.clone(), cases.clone()).into(),
+            ),
+            _ => tm.clone(),
+        }
     }
+    go(name, tm, 0, &mut Vec::new())
 }
 
 pub fn count_lams(tm: &Tm) -> u32 {
@@ -434,7 +442,7 @@ impl Infer {
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
             Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
-            Val::Call(name, args, body) => Val::Call(name.clone(), args.prepend(u.clone()), self.v_app(decl, body, u, i)).into(),
+            Val::Call(name, args, body) => Val::Call(name.clone(), args.prepend((u.clone(), i)), self.v_app(decl, body, u, i)).into(),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
@@ -544,7 +552,7 @@ impl Infer {
                 let result = self.eval(decl, env, body);
                 if let Val::Match(..) = result.as_ref() {
                     let args = args
-                        .map(|x| self.eval(decl, env, x));
+                        .map(|(x, i)| (self.eval(decl, env, x), *i));
                     Val::Call(name.clone(), args, result).into()
                 } else {
                     result
@@ -633,7 +641,7 @@ impl Infer {
             }
             Val::Call(name, args, body) => Tm::Call(
                 name.clone(),
-                args.map(|x| self.quote(decl, l, x)),
+                args.map(|(x, i)| (self.quote(decl, l, x), *i)),
                 self.quote(decl, l, body),
             ).into(),
             Val::Match(val, env, cases) => {
