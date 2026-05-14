@@ -289,7 +289,8 @@ impl Infer {
                 let mut compiler = Compiler::new(a);
                 let error = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.decl, &cxt.env, &tm))?;
                 if !error.is_empty() {
-                    Err(Error(expr_span.map(|_| format!("{error:?}")), vec![]))
+                    let msg = error.iter().map(|w| w.to_string()).collect::<Vec<_>>().join("; ");
+                    Err(Error(expr_span.map(|_| msg.clone()), vec![]))
                 } else {
                     Ok(
                         Tm::Match(tm, compiler.pats).into()

@@ -24,6 +24,15 @@ pub enum Warning {
     Unmatched(Pattern),
 }
 
+impl std::fmt::Display for Warning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Warning::Unreachable(body) => write!(f, "unreachable pattern: {}", body),
+            Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PatConstructor {
     data: Vec<(usize, Vec<PatternDetail>)>,
@@ -160,7 +169,11 @@ impl Compiler {
             let mut to_check = if sum_name.is_empty() {
                 Raw::Var(constr_name.clone())
             } else {
-                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
+                if constr_name.data.contains('.') {
+                    Raw::Var(constr_name.clone())
+                } else {
+                    Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
+                }
             };
             let mut params = vec![];
             let mut cxt = cxt.clone();
@@ -219,7 +232,7 @@ impl Compiler {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
                     let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
                         Ok(x) => x,
-                        Err(e) => {
+                        Err(_) => {
                             return Ok(false);
                         }
                     };
@@ -306,22 +319,26 @@ impl Compiler {
                                 .filter_map(|(arm, idx, cxt, cxt_for_filter, raw, target_typ, ori, patcon)| {
                                     let mut new_heads = vec![];
                                     if constr.data != "$any$" {
-                                        let accessible_constrs = self.filter_accessible_constrs(
-                                            infer,
-                                            cxt_for_filter,
-                                            typ,
-                                            &constrs[..],
-                                        ).ok()?;
-                                        if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
-                                            return Some(None);
-                                        }
+                                    let accessible_constrs = self.filter_accessible_constrs(
+                                        infer,
+                                        cxt_for_filter,
+                                        typ,
+                                        &constrs[..],
+                                    ).ok()?;
+                                    if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
+                                        return Some(None);
+                                    }
 
                                         // Use qualified name TypeName.constructor for lookup
                                         let sum_name = match typ.as_ref() {
                                             Val::Sum(name, ..) => name.data.clone(),
                                             _ => SmolStr::new(""),
                                         };
-                                        let constr_raw = if sum_name.is_empty() {
+                                        // If the constructor name is already fully qualified (e.g. "Module.mk"),
+                                        // use it directly; otherwise wrap with sum name (e.g. "Vec.nil").
+                                        let constr_raw = if constr.data.contains('.') {
+                                            Raw::Var(constr.clone())
+                                        } else if sum_name.is_empty() {
                                             Raw::Var(constr.clone())
                                         } else {
                                             Raw::Obj(Box::new(Raw::Var(empty_span(sum_name))), Some(constr.clone()))
@@ -399,13 +416,33 @@ impl Compiler {
                                             )))
                                         }
                                         [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
+                                            // Pad item_pats with wildcards for implicit params not explicitly matched.
+                                            // If item_pats already covers all new_heads (user wrote e.g. cons[l=lll](x,xs)),
+                                            // use them directly. Otherwise pad implicit args with Any(true).
+                                            let mut padded_pats = if item_pats.len() == new_heads_len {
+                                                item_pats.iter().cloned().collect::<Vec<_>>()
+                                            } else {
+                                                let mut p = Vec::with_capacity(new_heads_len);
+                                                let mut exp_idx = 0;
+                                                for head in &new_heads {
+                                                    if head.2 == Icit::Expl {
+                                                        if exp_idx < item_pats.len() {
+                                                            p.push(item_pats[exp_idx].clone());
+                                                        }
+                                                        exp_idx += 1;
+                                                    } else {
+                                                        p.push(Pattern::Any(
+                                                            constr_.to_span().map(|_| true),
+                                                            Either::Icit(Icit::Impl),
+                                                        ));
+                                                    }
+                                                }
+                                                p
+                                            };
+                                            padded_pats.extend(arm.pats[1..].iter().cloned());
                                             Some(Some((
                                                 MatchArm {
-                                                    pats: item_pats
-                                                        .iter()
-                                                        .chain(&arm.pats[1..])
-                                                        .cloned()
-                                                        .collect(),
+                                                    pats: padded_pats,
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,

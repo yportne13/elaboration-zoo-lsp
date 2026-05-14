@@ -52,6 +52,22 @@ impl Pattern {
     }
 }
 
+impl std::fmt::Display for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Pattern::Any(_, _) => write!(f, "_"),
+            Pattern::Con(name, pats, _) => {
+                if pats.is_empty() {
+                    write!(f, "{}", name.data)
+                } else {
+                    let inner = pats.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                    write!(f, "{}({})", name.data, inner)
+                }
+            }
+        }
+    }
+}
+
 impl Pattern {
     pub fn to_raw(&self) -> Raw {
         match self {
