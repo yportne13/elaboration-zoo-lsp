@@ -116,10 +116,6 @@ def bool_to_nat(b: Boolean): Nat =
         case false => 0
     }
 
-impl Neg[Boolean] for Boolean {
-    def neg: Boolean = this.not
-}
-
 def implies(a: Boolean, b: Boolean): Boolean =
     match a {
         case true => b

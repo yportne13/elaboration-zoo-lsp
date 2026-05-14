@@ -300,7 +300,7 @@ impl Infer {
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
             Val::Prim(typ, func) => Ok(Tm::Prim(typ.clone(), func.clone()).into()),
             Val::Sum(x, params, cases, is_trait) => {
-                let new_params = params
+                let new_params = Rc::new(params
                     .iter()
                     .map(|x| {
                         match (self.rename(decl, pren, &x.1), self.rename(decl, pren, &x.2)) {
@@ -308,7 +308,7 @@ impl Infer {
                             (Err(x), _) | (_, Err(x)) => Err(x),
                         }
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()?);
                 Ok(Tm::Sum(x.clone(), new_params, cases.clone(), *is_trait).into())
             }
             Val::SumCase {
@@ -318,13 +318,13 @@ impl Infer {
                 datas: params,
             } => {
                 let typ = self.rename(decl, pren, typ)?;
-                let params = params
+                let params = Rc::new(params
                     .iter()
                     .map(|p| {
                         let z = self.rename(decl, pren, &p.1)?;
                         Ok((p.0.clone(), z, p.2))
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()?);
                 Ok(Tm::SumCase {
                     is_trait: *is_trait,
                     typ,

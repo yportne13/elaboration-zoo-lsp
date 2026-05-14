@@ -289,11 +289,8 @@ impl Compiler {
                     //println!("  {:?}", typ);
                     //let typ = infer.force(typ);
                     let (param, constrs) = match typ.as_ref() {
-                        Val::Sum(_, param, cases, _) => (param, cases),
-                        _ => {
-                            //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
-                            (&vec![], &vec![empty_span(SmolStr::new("$any$"))])
-                        }
+                        Val::Sum(_, param, cases, _) => (param.clone(), cases.clone()),
+                        _ => (Rc::new(vec![]), Rc::new(vec![empty_span(SmolStr::new("$any$"))])),
                     };
 
                     let constrs_name = constrs
@@ -313,7 +310,7 @@ impl Compiler {
                                             infer,
                                             cxt_for_filter,
                                             typ,
-                                            constrs,
+                                            &constrs[..],
                                         ).ok()?;
                                         if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
                                             return Some(None);
@@ -588,10 +585,10 @@ impl Compiler {
                 is_trait: _,
                 typ: _,
                 case_name,
-                datas: params,
-            } => (case_name, params),
+                datas,
+            } => (case_name, datas.clone()),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (&empty_span(SmolStr::new("$unknown$")), &vec![])
+            _ => (&empty_span(SmolStr::new("$unknown$")), Rc::new(vec![])),
         };
 
         arms.iter()

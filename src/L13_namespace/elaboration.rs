@@ -816,7 +816,7 @@ impl Infer {
                                     let (_, case_typ) = self.infer_expr(cxt, Raw::Var(case.clone()))?;
                                     let mut ret = vec![];
                                     let mut typ = case_typ;
-                                    let mut param = params.clone();
+                                    let mut param: Vec<_> = params.iter().cloned().collect();
                                     param.reverse();
                                     while let Val::Pi(name, icit, ty, closure) = typ.as_ref().clone() {
                                         if icit == Icit::Expl {
@@ -1029,16 +1029,16 @@ impl Infer {
             Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()), vec![])),
 
             Raw::Sum(name, params, cases, universe, is_trait) => {
-                let new_params = params
+                let new_params = Rc::new(params
                     .iter()
                     .map(|ty| {
                         let (ty_checked, typ_val) = self.infer_expr(cxt, ty.2.clone())?;
                         let typ = self.quote(&cxt.decl, cxt.lvl, &typ_val);
                         Ok((ty.0.clone(), ty_checked, typ, ty.1))
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()?);
                 //TODO: universe need to consider cases?
-                Ok((Tm::Sum(name, new_params, cases, is_trait).into(), Val::U(universe).into()))
+                Ok((Tm::Sum(name, new_params, Rc::new(cases), is_trait).into(), Val::U(universe).into()))
             }
 
             Raw::SumCase {
@@ -1049,13 +1049,13 @@ impl Infer {
             } => {
                 let (typ_checked, _) = self.infer_expr(cxt, *typ)?;
                 let typ_val = self.eval(&cxt.decl, &cxt.env, &typ_checked);
-                let datas = datas
+                let datas = Rc::new(datas
                     .into_iter()
                     .map(|x| {
                         let (tm, _) = self.infer_expr(cxt, x.1)?;
                         Ok((x.0, tm, x.2))
                     })
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<Vec<_>, _>>()?);
                 Ok((
                     Tm::SumCase {
                         is_trait,

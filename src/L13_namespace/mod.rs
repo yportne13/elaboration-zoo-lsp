@@ -91,11 +91,11 @@ pub enum Tm {
     LiteralType,
     LiteralIntro(Span<String>),
     Prim(Rc<Val>, PrimFunc),
-    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Rc<Tm>, Rc<Ty>, Icit)>, Vec<Span<SmolStr>>, bool),
+    Sum(Span<SmolStr>, TmSumParams, TmSumCases, bool),
     SumCase {
         typ: Rc<Tm>,
         case_name: Span<SmolStr>,
-        datas: Vec<(Span<SmolStr>, Rc<Tm>, Icit)>,
+        datas: TmSumCaseDatas,
         is_trait: bool,
     },
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
@@ -236,15 +236,15 @@ pub enum Val {
     Prim(Rc<Val>, PrimFunc),
     Sum(
         Span<SmolStr>,
-        Vec<(Span<SmolStr>, Rc<Val>, Rc<VTy>, Icit)>,
-        Vec<Span<SmolStr>>,
+        SumParams,
+        SumCases,
         bool,
     ),
     SumCase {
         is_trait: bool,
         typ: Rc<Val>,
         case_name: Span<SmolStr>,
-        datas: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
+        datas: SumCaseDatas,
     },
     Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, args, body) - value inlined from function `name`
@@ -252,6 +252,14 @@ pub enum Val {
 }
 
 type VTy = Val;
+
+// Arc-wrapped Vec types to avoid deep cloning on Sum/SumCase clones
+type SumParams = Rc<Vec<(Span<SmolStr>, Rc<Val>, Rc<VTy>, Icit)>>;
+type SumCases = Rc<Vec<Span<SmolStr>>>;
+type SumCaseDatas = Rc<Vec<(Span<SmolStr>, Rc<Val>, Icit)>>;
+type TmSumParams = Rc<Vec<(Span<SmolStr>, Rc<Tm>, Rc<Ty>, Icit)>>;
+type TmSumCases = Rc<Vec<Span<SmolStr>>>;
+type TmSumCaseDatas = Rc<Vec<(Span<SmolStr>, Rc<Tm>, Icit)>>;
 
 impl Val {
     fn vvar(x: Lvl) -> Self {
@@ -508,10 +516,10 @@ impl Infer {
             Tm::LiteralType => Val::LiteralType.into(),
             Tm::Prim(typ, func) => func.0(self, decl, env, typ.clone()),
             Tm::Sum(name, params, cases, is_trait) => {
-                let new_params = params
+                let new_params = Rc::new(params
                     .iter()
                     .map(|x| (x.0.clone(), self.eval(decl, env, &x.1), self.eval(decl, env, &x.2), x.3))
-                    .collect();
+                    .collect());
                 Val::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
             }
             Tm::SumCase {
@@ -520,10 +528,10 @@ impl Infer {
                 case_name,
                 datas,
             } => {
-                let datas = datas
+                let datas = Rc::new(datas
                     .iter()
                     .map(|p| (p.0.clone(), self.eval(decl, env, &p.1), p.2))
-                    .collect();
+                    .collect());
                 let typ = self.eval(decl, env, typ);
                 Val::SumCase {
                     is_trait: *is_trait,
@@ -597,11 +605,11 @@ impl Infer {
             Val::LiteralType => Tm::LiteralType.into(),
             Val::Prim(typ, func) => Tm::Prim(typ.clone(), func.clone()).into(),
             Val::Sum(name, params, cases, is_trait) => {
-                let new_params = params.iter()
+                let new_params = Rc::new(params.iter()
                     .map(|x| {
                         (x.0.clone(), self.quote(decl, l, &x.1), self.quote(decl, l, &x.2), x.3)
                     })
-                    .collect();
+                    .collect());
                 Tm::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
             }
             Val::SumCase {
@@ -610,12 +618,12 @@ impl Infer {
                 case_name,
                 datas,
             } => {
-                let datas = datas
+                let datas = Rc::new(datas
                     .iter()
                     .map(|p| {
                         (p.0.clone(), self.quote(decl, l, &p.1), p.2)
                     })
-                    .collect();
+                    .collect());
                 Tm::SumCase {
                     is_trait: *is_trait,
                     typ: self.quote(decl, l, typ),
