@@ -169,11 +169,7 @@ impl Compiler {
             let mut to_check = if sum_name.is_empty() {
                 Raw::Var(constr_name.clone())
             } else {
-                if constr_name.data.contains('.') {
-                    Raw::Var(constr_name.clone())
-                } else {
-                    Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
-                }
+                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
             };
             let mut params = vec![];
             let mut cxt = cxt.clone();
@@ -334,11 +330,7 @@ impl Compiler {
                                             Val::Sum(name, ..) => name.data.clone(),
                                             _ => SmolStr::new(""),
                                         };
-                                        // If the constructor name is already fully qualified (e.g. "Module.mk"),
-                                        // use it directly; otherwise wrap with sum name (e.g. "Vec.nil").
-                                        let constr_raw = if constr.data.contains('.') {
-                                            Raw::Var(constr.clone())
-                                        } else if sum_name.is_empty() {
+                                        let constr_raw = if sum_name.is_empty() {
                                             Raw::Var(constr.clone())
                                         } else {
                                             Raw::Obj(Box::new(Raw::Var(empty_span(sum_name))), Some(constr.clone()))
@@ -416,33 +408,13 @@ impl Compiler {
                                             )))
                                         }
                                         [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
-                                            // Pad item_pats with wildcards for implicit params not explicitly matched.
-                                            // If item_pats already covers all new_heads (user wrote e.g. cons[l=lll](x,xs)),
-                                            // use them directly. Otherwise pad implicit args with Any(true).
-                                            let mut padded_pats = if item_pats.len() == new_heads_len {
-                                                item_pats.iter().cloned().collect::<Vec<_>>()
-                                            } else {
-                                                let mut p = Vec::with_capacity(new_heads_len);
-                                                let mut exp_idx = 0;
-                                                for head in &new_heads {
-                                                    if head.2 == Icit::Expl {
-                                                        if exp_idx < item_pats.len() {
-                                                            p.push(item_pats[exp_idx].clone());
-                                                        }
-                                                        exp_idx += 1;
-                                                    } else {
-                                                        p.push(Pattern::Any(
-                                                            constr_.to_span().map(|_| true),
-                                                            Either::Icit(Icit::Impl),
-                                                        ));
-                                                    }
-                                                }
-                                                p
-                                            };
-                                            padded_pats.extend(arm.pats[1..].iter().cloned());
                                             Some(Some((
                                                 MatchArm {
-                                                    pats: padded_pats,
+                                                    pats: item_pats
+                                                        .iter()
+                                                        .chain(&arm.pats[1..])
+                                                        .cloned()
+                                                        .collect(),
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
