@@ -81,10 +81,12 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let mut err_collect: MacroState = (vec![], clean_global);
-    err_collect.1.entry("stringify".to_owned()).or_insert_with(|| vec![MacroRule {
-        matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
-        transcriber: MacroTranscriber::BuiltIn,
-    }]);
+    if !err_collect.1.contains_key("stringify") {
+        err_collect.1.insert("stringify".to_owned(), vec![MacroRule {
+            matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
+            transcriber: MacroTranscriber::BuiltIn,
+        }]);
+    }
     match super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,

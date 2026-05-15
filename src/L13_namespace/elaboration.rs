@@ -541,12 +541,8 @@ impl Infer {
                         let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
                         let t_tm = self.check::<false>(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
-                        // If case name already contains a dot (struct/trait), it's already prefixed
-                        let case_key = if c.0.data.contains('.') {
-                            c.0.clone()
-                        } else {
-                            c.0.clone().map(|n| SmolStr::new(format!("{}.{}", name.data, n)))
-                        };
+                        // Store as EnumName.caseName only — no bare caseName alias
+                        let case_key = c.0.clone().map(|n| SmolStr::new(format!("{}.{}", name.data, n)));
                         cxt.decl(case_key, t_tm, vt, typ_tm, vtyp)?
                     };
                 }
@@ -768,12 +764,14 @@ impl Infer {
                                 return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
                             }
                         }
-                        // Try qualified fallback: use suffix index for O(1) lookup
-                        if let Some(full_key) = cxt.suffix_index.get(&name.data) {
-                            if let Some((def_span, _, _, _, vty)) = cxt.decl.get(full_key) {
-                                self.hover_table.push((t_span, *def_span, cxt.clone_without_src_names(), vty.clone()));
-                                return Ok((Tm::Decl(empty_span(full_key.clone())).into(), vty.clone()));
-                            }
+                        // Try qualified fallback: find a decl entry `TypeName.name`
+                        let fallback = format!(".{}", name.data);
+                        let match_entry: Option<(SmolStr, _)> = cxt.decl.iter()
+                            .find(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
+                            .map(|(k, v)| (k.clone(), v.clone()));
+                        if let Some((full_key, (def_span, _, _, _, vty))) = match_entry {
+                            self.hover_table.push((t_span, def_span, cxt.clone_without_src_names(), vty.clone()));
+                            return Ok((Tm::Decl(empty_span(full_key)).into(), vty.clone()));
                         }
                         Err(Error(name.map(|x| format!("error name not in scope: {}", x)), vec![]))
                     }
@@ -840,16 +838,15 @@ impl Infer {
                             }
                         }
                         if t.data.is_empty() {
-                            self.completion_table.extend(
-                                c.iter()
-                                    .flatten()
-                                    .map(|x| (t_span, x.0.data.clone()))
-                                    .chain(
-                                        params
-                                            .iter()
-                                            .map(|x| (t_span, x.0.data.clone()))
-                                    )
-                            );
+                            c.iter()
+                                .flatten()
+                                .map(|x| (t_span, x.0.data.clone()))
+                                .chain(
+                                    params
+                                        .iter()
+                                        .map(|x| (t_span, x.0.data.clone()))
+                                )
+                                .for_each(|x| self.completion_table.push(x));
                         }
                         if let Some(val) = c.and_then(|params| {
                                 params.into_iter()
@@ -1080,7 +1077,9 @@ impl Infer {
                 .filter(|(x, (_, out_param, _))| {
                     let len = out_param.iter().filter(|x| !**x).count();
                     let mut args = vec![typ_raw.clone()];
-                    args.resize(len, wildcard_val.clone());
+                    for _ in 1..len {
+                        args.push(wildcard_val.clone());
+                    }
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
@@ -1111,6 +1110,7 @@ impl Infer {
             }
         {
             let traits = self.trait_definition
+                .clone()//TODO: can remove this clone?
                 .iter()
                 .flat_map(|(trait_name, (trait_params, out_param, methods))| {
                     methods.iter()
@@ -1120,7 +1120,9 @@ impl Infer {
                 .filter(|(x, _, out_param, _)| {
                     let len = out_param.iter().filter(|x| !**x).count();
                     let mut args = vec![typ_raw.clone()];
-                    args.resize(len, wildcard_val.clone());
+                    for _ in 1..len {
+                        args.push(wildcard_val.clone());
+                    }
                     self.trait_solver.clean();
                     self.trait_solver
                         .synth(Assertion {
