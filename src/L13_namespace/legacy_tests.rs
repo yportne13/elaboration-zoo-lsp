@@ -924,3 +924,145 @@ println 5
     assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
     assert!(result.contains("5"));
 }
+
+#[test]
+fn test_hdl_basic_types() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = SInt[16]
+    let d = Bits[32]
+    let e = Bool
+    let f = Bits[33]
+    f := e ## d
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_arithmetic() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = UInt[w]
+    let b = UInt[w]
+    let sum = UInt[w]
+    let carry = UInt[w + 1]
+    sum := a + b
+    carry := a +^ b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bitwise_ops() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = Bits[w]
+    let b = Bits[w]
+    let and_result = Bits[w]
+    let or_result = Bits[w]
+    let xor_result = Bits[w]
+    and_result := a & b
+    or_result := a | b
+    xor_result := a ^ b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_comparisons() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = UInt[w]
+    let b = UInt[w]
+    let lt = Bool
+    let eq = Bool
+    lt := a < b
+    eq := a === b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_conversions() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = UInt[w]
+    let as_bits = Bits[w]
+    let resized = UInt[w + 1]
+    as_bits := a.asBits
+    resized := a.resize[w + 1]
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_reduction() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = Bits[w]
+    let all_ones = Bool
+    let any_one = Bool
+    all_ones := a.andR
+    any_one := a.orR
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_mux() {
+    let input = r#"
+module Test[w: Nat] {
+    let cond = Bool
+    let a = UInt[w]
+    let b = UInt[w]
+    let result = UInt[w]
+    result := cond.mux(a, b)
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_registers() {
+    let input = r#"
+module Test {
+    let reg_val = UInt[8]
+    let init_reg = UInt[8]
+    init_reg := RegInit(init_reg, defaultClockDomain).value
+    reg_val := RegNext(reg_val).value
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
