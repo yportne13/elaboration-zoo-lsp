@@ -59,14 +59,16 @@ impl Infer {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
                 match self.force(decl, &a.head().unwrap().0).as_ref() {
                     Val::Rigid(x, List { head: None, .. }) => {
-                        if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
+                        let in_nlvars = nlvars.contains(&x.0);
+                        if ren.contains_key(&x.0) {
                             ren.remove(&x.0);
-                            nlvars.insert(x.0);
-                            Ok((dom + 1, ren, nlvars, fsp.prepend((*x, a.head().unwrap().1))))
-                        } else {
+                            if !in_nlvars {
+                                nlvars.insert(x.0);
+                            }
+                        } else if !in_nlvars {
                             ren.insert(x.0, dom);
-                            Ok((dom + 1, ren, nlvars, fsp.prepend((*x, a.head().unwrap().1))))
                         }
+                        Ok((dom + 1, ren, nlvars, fsp.prepend((*x, a.head().unwrap().1))))
                     }
                     //Val::Flex(_, _) => Err(UnifyError::Stuck),
                     _ => Err(UnifyError::Stuck),
@@ -735,6 +737,17 @@ impl Infer {
                     return Err(UnifyError::Basic);
                 }
 
+                // 预计算 declb: 将所有声明包装为 Decl 形式的 map，用于分支体求值
+                let declb = cxt.decl.iter()
+                    .map(|x| (x.0.clone(), (
+                        x.1.0,
+                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                        x.1.3.clone(),
+                        x.1.4.clone(),
+                    )))
+                    .collect();
+
                 // 3. 遍历并合一每一个对应的分支
                 for ((p1, clos1), (p2, clos2)) in cases1.iter().zip(cases2.iter()) {
                     // 3a. 检查模式是否完全相同。
@@ -755,22 +768,6 @@ impl Infer {
                         env.prepend(Val::vvar(l + idx).into())
                     });
 
-                    /*println!(
-                        "unify {:?}\n   == {:?}",
-                        pretty_tm(0, cxt.names(), clos1),
-                        pretty_tm(0, cxt.names(), clos2),
-                    );*/
-                    //let body1_val = self.eval(&bind_env, clos1.clone());
-                    //let body2_val = self.eval(&bind_env, clos2.clone());
-                    let declb = cxt.decl.iter()
-                        .map(|x| (x.0.clone(), (
-                            x.1.0,
-                            Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                            Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                            x.1.3.clone(),
-                            x.1.4.clone(),
-                        )))
-                        .collect();
                     let body1_val = self.eval(&declb, &env1, clos1);
                     let body2_val = self.eval(&declb, &env2, clos2);
 

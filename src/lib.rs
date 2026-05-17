@@ -331,6 +331,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.hover_table.insert(params.uri.to_string(), infer.clone());
             infer.hover_table.clear();
             infer.completion_table.clear();
+            infer.mutable_map.write().unwrap().clear();
             let mut diags = Vec::new();
             let mut quickfixes_for_uri = HashMap::new();
 
