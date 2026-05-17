@@ -385,7 +385,7 @@ impl Infer {
         self.meta.len() as u32 - 1
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {
-        if let Ok(Some((a, _))) = self.solve_trait(cxt, &a) {
+        if let Ok(Some((a, _))) = self.solve_trait(cxt, &a, false) {
             a
         } else if let Val::Sum(_, _, _, true) = a.as_ref() {
             let m = self.new_meta(a.clone(), cxt.clone(), a);

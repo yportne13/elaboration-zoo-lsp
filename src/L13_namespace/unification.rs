@@ -451,7 +451,7 @@ impl Infer {
 
         Ok(())
     }
-    pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar) -> Result<(), UnifyError>{
+    pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError>{
         let prepare = self.meta.get(m.0 as usize ..)
             .iter()
             .flat_map(|x| x.iter())
@@ -459,7 +459,7 @@ impl Infer {
             .flat_map(|x| if let MetaEntry::Unsolved(v, _, _) = x.1 { Some((x.0, v.clone())) } else { None })
             .collect::<Vec<_>>();
         for (idx, x) in prepare {
-            let typ = self.solve_trait(cxt, &x)
+            let typ = self.solve_trait(cxt, &x, allow_flex_defaulting)
                 .map_err(UnifyError::Trait)?;
             if let Some((_, val)) = typ {
                 //println!("solve trait {:?}\nmeta: {}\n{:?}", val, idx, self.meta[idx + m.0 as usize]);
@@ -468,30 +468,55 @@ impl Infer {
         }
         Ok(())
     }
-    pub fn solve_trait(&mut self, cxt: &Cxt, x: &Rc<Val>) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
+    pub fn solve_trait(&mut self, cxt: &Cxt, x: &Rc<Val>, allow_flex_defaulting: bool) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
         if let Val::Sum(name, params, _, true) = x.as_ref() {
             let out_param = if let Some(o) = self.trait_out_param.get(&name.data) {
-                o
+                o.clone()
             } else {
                 return Ok(None)
             };
-            // Collect non-output param values directly as Val.
-            // Skip if any param contains unsolved metas (Flex) - let unification handle later.
-            let params: Vec<Rc<Val>> = params
-                .iter()
-                .zip(out_param)
-                .filter(|(_, x)| !**x)
-                .map(|x| x.0)
-                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm))
-                .collect();
-            // If any param is still Flex (unsolved meta), bail out
-            if params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
-                return Ok(None);
+            // Helper to re-collect forced non-out param values
+            let collect_params = |this: &mut Self| -> Vec<Rc<Val>> {
+                params
+                    .iter()
+                    .zip(&out_param)
+                    .filter(|(_, x)| !**x)
+                    .map(|x| x.0)
+                    .map(|(_, val, _, _)| this.force(&cxt.decl, val))
+                    .collect()
+            };
+            let mut trait_params = collect_params(self);
+            if allow_flex_defaulting && trait_params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
+                let known: Vec<&Rc<Val>> = trait_params.iter()
+                    .filter(|v| !matches!(v.as_ref(), Val::Flex(..)))
+                    .collect();
+                if known.len() == 1 && trait_params.len() > 1 {
+                    let known_type = known[0].clone();
+                    let mut ok = true;
+                    for v in &trait_params {
+                        if matches!(v.as_ref(), Val::Flex(..)) {
+                            if self.unify(cxt.lvl, cxt, v, &known_type, 100).is_err() {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if ok {
+                        trait_params = collect_params(self);
+                        if trait_params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
+                            return Ok(None);
+                        }
+                    } else {
+                        return Ok(None);
+                    }
+                } else {
+                    return Ok(None);
+                }
             }
             self.trait_solver.clean();
             if let Some(a) = self.trait_solver.synth(Assertion {
                 name: name.data.clone(),
-                arguments: params.clone(),
+                arguments: trait_params.clone(),
             }) {
                 let ret = self.infer_expr(cxt, Raw::Var(a));
                 let (tm, _) = self.insert(cxt, ret)
@@ -505,9 +530,8 @@ impl Infer {
                 Err(format!(
                     "solve trait failed: {}[{:?}]\n{}",
                     name.data,
-                    params.iter().map(|v| format!("{:?}", v)).collect::<Vec<_>>().join(", "),
-                    self.trait_solver
-                        .class_instances
+                    trait_params.iter().map(|v| format!("{:?}", v)).collect::<Vec<_>>().join(", "),
+                    self.trait_solver.class_instances
                         .get(&name.data)
                         .unwrap_or(&vec![])
                         .iter()
@@ -558,7 +582,7 @@ impl Infer {
                 match self.invert(gamma, &cxt.decl, &sp) {
                     Err(_) => {
                         self.solve(gamma, &cxt.decl, m_prime, sp_prime, &Val::Flex(m, sp).into())?;
-                        self.solve_multi_trait(cxt, m_prime)
+                        self.solve_multi_trait(cxt, m_prime, false)
                     },
                     Ok((pren, p1)) => {
                         self.solve_with_pren(&cxt.decl, m, pren, p1, &Val::Flex(m_prime, sp_prime).into())
@@ -694,7 +718,7 @@ impl Infer {
                     },
                     Err(e) => Err(e),
                 }?;
-                self.solve_multi_trait(cxt, *m)
+                self.solve_multi_trait(cxt, *m, false)
             },
             (_, Val::Flex(m, sp)) => {
                 match self.solve(l, &cxt.decl, *m, sp.clone(), &t) {
@@ -705,7 +729,7 @@ impl Infer {
                     },
                     Err(e) => Err(e),
                 }?;
-                self.solve_multi_trait(cxt, *m)
+                self.solve_multi_trait(cxt, *m, false)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, b, fuel),
