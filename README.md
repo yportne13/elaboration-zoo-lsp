@@ -16,6 +16,8 @@ this project is inspired by
 
 - [rust-nbe-for-mltt](https://github.com/brendanzab/rust-nbe-for-mltt)
 
+- [Canonical-min](https://github.com/chasenorman/Canonical-min) - A sound and complete solver for type inhabitation and unification in dependent type theory
+
 - [aya](https://github.com/aya-prover/aya-dev)
 
 - [lean4](https://github.com/leanprover/lean4)
