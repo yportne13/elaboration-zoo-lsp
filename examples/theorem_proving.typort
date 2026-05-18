@@ -1,0 +1,65 @@
+// ============================================================
+// Theorem Proving with Typort
+// ============================================================
+
+// ---------- 1: Basic equality ----------
+// refl proves that a value is equal to itself
+def one_eq_one: Eq(1, 1) = refl(1)
+
+// ---------- 2: Commutativity of addition ----------
+// add_comm is defined in the NatArith prelude
+def add_comm_eg: Eq(3 + 5, 5 + 3) = add_comm(3, 5)
+println("add_comm(3,5):")
+println(add_comm_eg)
+
+// ---------- 3: Symmetry ----------
+// If x = y then y = x
+def symm_eg: Eq(5 + 3, 3 + 5) = symm(add_comm(3, 5))
+println("symm(add_comm(3,5)):")
+println(symm_eg)
+
+// ---------- 4: Transitivity ----------
+// If x = y and y = z then x = z
+// From add_comm(0,5): Eq(0+5, 5+0)
+// From add_zero_right(5): Eq(5+0, 5)
+// trans gives Eq(0+5, 5)
+def trans_eg: Eq(0 + 5, 5) = trans(add_comm(0, 5), add_zero_right(5))
+println("trans(add_comm(0,5), add_zero_right(5)):")
+println(trans_eg)
+
+// ---------- 5: Congruence ----------
+// If x = y then f(x) = f(y)
+// add_zero_left(5): Eq(0+5, 5)
+// cong(succ, add_zero_left(5)): Eq(succ(0+5), succ(5))
+def cong_eg: Eq(succ(0 + 5), succ(5)) = cong(succ, add_zero_left(5))
+println("cong(succ, add_zero_left(5)):")
+println(cong_eg)
+
+// ---------- 6: Associativity of addition ----------
+// add_assoc: (a + b) + c = a + (b + c)
+def assoc_eg: Eq((1 + 2) + 3, 1 + (2 + 3)) = add_assoc(1, 2, 3)
+println("add_assoc(1,2,3):")
+println(assoc_eg)
+
+// ---------- 7: eq_congr (alias for cong with swapped args) ----------
+// eq_congr(e) = cong(f => f, e) equivalently
+def eq_congr_eg: Eq(succ(2 + 3), succ(3 + 2)) = eq_congr(add_comm(2, 3))
+println("eq_congr(add_comm(2,3)):")
+println(eq_congr_eg)
+
+// ---------- 8: Chaining multiple proofs ----------
+// Prove: succ(succ(0+5)) = succ(succ(5))
+// Step 1: Eq(0+5, 5) from trans above
+// Step 2: cong(succ, Eq(0+5, 5)) => Eq(succ(0+5), succ(5))
+// Step 3: cong(succ, that) => Eq(succ(succ(0+5)), succ(succ(5)))
+def chain_trans: Eq(0 + 5, 5) = trans(add_comm(0, 5), add_zero_right(5))
+def chain_cong1: Eq(succ(0 + 5), succ(5)) = cong(succ, chain_trans)
+def chain_cong2: Eq(succ(succ(0 + 5)), succ(succ(5))) = cong(succ, chain_cong1)
+println("chain: Eq(succ(succ(0+5)), succ(succ(5)))")
+println(chain_cong2)
+
+// ---------- 9: Using add_zero_left directly ----------
+// add_zero_left(n): Eq(0 + n, n)
+def zero_left_eg: Eq(0 + 42, 42) = add_zero_left(42)
+println("add_zero_left(42):")
+println(zero_left_eg)

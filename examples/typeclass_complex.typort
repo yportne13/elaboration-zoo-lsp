@@ -262,3 +262,31 @@ def repeat_str(s: String, n: Nat): String =
     }
 
 println(repeat_str("Ho ", 3))
+
+// ---------- 20: Theorem proving with Eq ----------
+
+// 20a. symm: if x = y then y = x
+// add_comm(3,2) proves Eq(3+2, 2+3); symm swaps to Eq(2+3, 3+2)
+def symm_eg: Eq(2 + 3, 3 + 2) = symm(add_comm(3, 2))
+println(symm_eg)
+
+// 20b. trans: chaining two equalities
+// From add_comm(0,5): Eq(0+5, 5+0)
+// From add_zero_right(5): Eq(5+0, 5)
+// trans gives Eq(0+5, 5)
+def trans_eg: Eq(0 + 5, 5) = trans(add_comm(0, 5), add_zero_right(5))
+println(trans_eg)
+
+// 20c. cong: if x = y then f(x) = f(y)
+// add_zero_left(5): Eq(0+5, 5)
+// cong(succ, add_zero_left(5)): Eq(succ(0+5), succ(5))
+def cong_eg: Eq(succ(0 + 5), succ(5)) = cong(succ, add_zero_left(5))
+println(cong_eg)
+
+// 20d. add_assoc: (a + b) + c = a + (b + c)
+def assoc_eg: Eq((1 + 2) + 3, 1 + (2 + 3)) = add_assoc(1, 2, 3)
+println(assoc_eg)
+
+// 20e. eq_congr: alias for cong with swapped args
+def eq_congr_eg: Eq(succ(2 + 3), succ(3 + 2)) = eq_congr(add_comm(2, 3))
+println(eq_congr_eg)
