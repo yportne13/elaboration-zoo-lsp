@@ -223,6 +223,7 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
+                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -820,6 +821,7 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
+                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),
