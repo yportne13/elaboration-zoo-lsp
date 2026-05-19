@@ -49,6 +49,7 @@ use L13_namespace::{DeclTm, Infer, preprocess};
 use L13_namespace::cxt::Cxt;
 
 use std::sync::{Arc, Mutex, Condvar, mpsc};
+use std::io::{self, BufRead, Write, stdin, stdout};
 use std::thread;
 
 // 2. 定义传递给工作线程的任务包
@@ -73,6 +74,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：mpsc 通道任务队列
     job_sender: mpsc::Sender<AnalysisJob>,
+    // Worker 线程的接收端（在 spawn_worker 时取出使用）
+    job_receiver: Mutex<Option<mpsc::Receiver<AnalysisJob>>>,
     // 处理完成的信号
     processed_signal: Arc<(Mutex<HashMap<String, bool>>, Condvar)>,
 
@@ -105,117 +108,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             exported_macros: DashMap::new(),
             processing_uris: DashMap::new(),
             job_sender: tx,
+            job_receiver: Mutex::new(Some(rx)),
             processed_signal,
             infer: Arc::new(Mutex::new(infer)),
             cxt: Arc::new(Mutex::new(cxt)),
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///op.typort").unwrap(),
-            text: include_str!("prelude/op.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///eq.typort").unwrap(),
-            text: include_str!("prelude/eq.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///nat.typort").unwrap(),
-            text: include_str!("prelude/nat.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///natarith.typort").unwrap(),
-            text: include_str!("prelude/natarith.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///bool.typort").unwrap(),
-            text: include_str!("prelude/bool.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///option.typort").unwrap(),
-            text: include_str!("prelude/option.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///result.typort").unwrap(),
-            text: include_str!("prelude/result.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///order.typort").unwrap(),
-            text: include_str!("prelude/order.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///void.typort").unwrap(),
-            text: include_str!("prelude/void.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///decidable.typort").unwrap(),
-            text: include_str!("prelude/decidable.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///vec.typort").unwrap(),
-            text: include_str!("prelude/vec.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///either.typort").unwrap(),
-            text: include_str!("prelude/either.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///list.typort").unwrap(),
-            text: include_str!("prelude/list.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///string.typort").unwrap(),
-            text: include_str!("prelude/string.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///nonempty.typort").unwrap(),
-            text: include_str!("prelude/nonempty.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///hdl.typort").unwrap(),
-            text: include_str!("prelude/hdl.typort"),
-            version: None,
-        });
-        ret.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///show.typort").unwrap(),
-            text: include_str!("prelude/show.typort"),
-            version: None,
-        });
-        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
-        {
-            let cxt_lock = ret.cxt.lock().unwrap();
-            let aliases: Vec<(SmolStr, _)> = cxt_lock.decl.iter()
-                .filter(|(k, _)| k.contains('.'))
-                .map(|(k, v)| {
-                    let short = SmolStr::new(k.split('.').last().unwrap());
-                    (short, v.clone())
-                })
-                .collect();
-            drop(cxt_lock);
-            let mut cxt_lock = ret.cxt.lock().unwrap();
-            for (short, v) in aliases {
-                cxt_lock.decl.entry(short).or_insert(v);
-            }
-        }
-        ret.infer.lock().unwrap().hover_table.clear();
-        ret.infer.lock().unwrap().completion_table.clear();
-        ret.infer.lock().unwrap().mutable_map.write().unwrap().clear();
-        let for_thread = ret.clone();
-        thread::spawn(move || {
-            for_thread.worker_loop(rx);
         });
         ret
     }
@@ -228,6 +124,127 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     pub fn get_cxt(&self) -> Arc<Mutex<Cxt>> {
         self.cxt.clone()
+    }
+
+    /// 在 LSP init 握手完成后加载 prelude 文件。
+    /// 这时 connection 已经建立，diagnostics 会正确发送给客户端。
+    pub fn load_prelude(self: &Arc<Self>) {
+        use lsp_types::Url;
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///op.typort").unwrap(),
+            text: include_str!("prelude/op.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///eq.typort").unwrap(),
+            text: include_str!("prelude/eq.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///nat.typort").unwrap(),
+            text: include_str!("prelude/nat.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///natarith.typort").unwrap(),
+            text: include_str!("prelude/natarith.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///bool.typort").unwrap(),
+            text: include_str!("prelude/bool.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///option.typort").unwrap(),
+            text: include_str!("prelude/option.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///result.typort").unwrap(),
+            text: include_str!("prelude/result.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///order.typort").unwrap(),
+            text: include_str!("prelude/order.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///void.typort").unwrap(),
+            text: include_str!("prelude/void.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///decidable.typort").unwrap(),
+            text: include_str!("prelude/decidable.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///vec.typort").unwrap(),
+            text: include_str!("prelude/vec.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///either.typort").unwrap(),
+            text: include_str!("prelude/either.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///list.typort").unwrap(),
+            text: include_str!("prelude/list.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///string.typort").unwrap(),
+            text: include_str!("prelude/string.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///nonempty.typort").unwrap(),
+            text: include_str!("prelude/nonempty.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///hdl.typort").unwrap(),
+            text: include_str!("prelude/hdl.typort"),
+            version: None,
+        });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///show.typort").unwrap(),
+            text: include_str!("prelude/show.typort"),
+            version: None,
+        });
+        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
+        {
+            let cxt_lock = self.cxt.lock().unwrap();
+            let aliases: Vec<(SmolStr, _)> = cxt_lock.decl.iter()
+                .filter(|(k, _)| k.contains('.'))
+                .map(|(k, v)| {
+                    let short = SmolStr::new(k.split('.').last().unwrap());
+                    (short, v.clone())
+                })
+                .collect();
+            drop(cxt_lock);
+            let mut cxt_lock = self.cxt.lock().unwrap();
+            for (short, v) in aliases {
+                cxt_lock.decl.entry(short).or_insert(v);
+            }
+        }
+        self.infer.lock().unwrap().hover_table.clear();
+        self.infer.lock().unwrap().completion_table.clear();
+        self.infer.lock().unwrap().mutable_map.write().unwrap().clear();
+    }
+
+    /// 启动工作线程处理分析任务。
+    /// 必须在 `load_prelude` 之后调用，确保 prelude 已就绪。
+    pub fn spawn_worker(self: &Arc<Self>) {
+        let rx = self.job_receiver.lock().unwrap().take()
+            .expect("spawn_worker() called more than once");
+        let for_thread = self.clone();
+        thread::spawn(move || {
+            for_thread.worker_loop(rx);
+        });
     }
 
     fn worker_loop(
@@ -262,6 +279,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     pub fn on_change<const MUT:bool>(&self, params: TextDocumentItem<'_>) {
         let start_all = std::time::Instant::now();
+        eprintln!("change: {}", params.uri.as_str());
         //dbg!(&params.version);
         let rope = ropey::Rope::from_str(params.text);
         self.document_map
@@ -900,6 +918,141 @@ where
 
 use std::fs;
 
+/// Debug-friendly IO threads with detailed parse error logging.
+struct DebugIoThreads {
+    reader: thread::JoinHandle<io::Result<()>>,
+    writer: thread::JoinHandle<io::Result<()>>,
+}
+
+impl DebugIoThreads {
+    fn join(self) -> io::Result<()> {
+        match self.reader.join() {
+            Ok(r) => r?,
+            Err(err) => std::panic::panic_any(err),
+        }
+        match self.writer.join() {
+            Ok(r) => r,
+            Err(err) => {
+                std::panic::panic_any(err);
+            }
+        }
+    }
+}
+
+/// Created a stdio LSP transport where parse errors log the raw body text.
+fn create_debug_stdio_transport(
+) -> (crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>, DebugIoThreads) {
+    use crossbeam_channel::bounded;
+
+    let (writer_sender, writer_receiver) = bounded::<Message>(0);
+    let writer = thread::Builder::new()
+        .name("LspServerWriter".to_owned())
+        .spawn(move || {
+            let stdout = stdout();
+            let mut stdout = stdout.lock();
+            writer_receiver.into_iter().try_for_each(|it| it.write(&mut stdout))
+        })
+        .unwrap();
+
+    let (reader_sender, reader_receiver) = bounded::<Message>(0);
+    let reader = thread::Builder::new()
+        .name("LspServerReader".to_owned())
+        .spawn(move || {
+            let stdin = stdin();
+            let mut stdin = stdin.lock();
+            while let Some(msg) = debug_read_message(&mut stdin)? {
+                let is_exit = matches!(&msg, Message::Notification(n) if n.method == "exit");
+                if let Err(e) = reader_sender.send(msg) {
+                    return Err(io::Error::new(io::ErrorKind::Other, e));
+                }
+                if is_exit {
+                    break;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+    (writer_sender, reader_receiver, DebugIoThreads { reader, writer })
+}
+
+/// Read a single LSP message (Content-Length framing) with detailed logging on error.
+fn debug_read_message(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
+    let text = match debug_read_body(r)? {
+        None => return Ok(None),
+        Some(text) => text,
+    };
+
+    match serde_json::from_str(&text) {
+        Ok(msg) => Ok(Some(msg)),
+        Err(e) => {
+            let col = e.column() as usize;
+            let line = text.lines().next().unwrap_or(&text);
+            eprintln!("=== LSP PARSE ERROR ===");
+            eprintln!("serde_json error: {e}");
+            eprintln!("Column: {col}, Body length: {} bytes", text.len());
+            // Print context around the error position in raw form
+            let start = col.saturating_sub(30);
+            let end = (col + 30).min(line.len());
+            let snippet = &line[start..end];
+            let arrow = format!("{: >width$}", "^", width = col - start + 1);
+            eprintln!("Context:");
+            eprintln!("  {snippet}");
+            eprintln!("  {arrow}");
+            // Hex dump of the problematic area
+            let hex_start = col.saturating_sub(4);
+            let hex_end = (col + 4).min(text.len());
+            let bytes = &text.as_bytes()[hex_start..hex_end];
+            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
+            eprintln!("Hex [{hex_start}..{hex_end}]: {}", hex.join(" "));
+            eprintln!("Full body (first 1KB): {}", &text[..text.len().min(1024)]);
+            eprintln!("=== END LSP PARSE ERROR ===");
+
+            Err(io::Error::new(io::ErrorKind::InvalidData,
+                format!("malformed LSP payload: {e}")))
+        }
+    }
+}
+
+/// Read Content-Length headers and body, same as lsp-server's read_msg_text.
+fn debug_read_body(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
+    fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
+        io::Error::new(io::ErrorKind::InvalidData, error)
+    }
+    macro_rules! invalid_data {
+        ($($tt:tt)*) => (invalid_data(format!($($tt)*)))
+    }
+
+    let mut size = None;
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        if inp.read_line(&mut buf)? == 0 {
+            return Ok(None);
+        }
+        if !buf.ends_with("\r\n") {
+            return Err(invalid_data!("malformed header: {:?}", buf));
+        }
+        let buf = &buf[..buf.len() - 2];
+        if buf.is_empty() {
+            break;
+        }
+        let mut parts = buf.splitn(2, ": ");
+        let header_name = parts.next().unwrap();
+        let header_value = parts.next()
+            .ok_or_else(|| invalid_data!("malformed header: {:?}", buf))?;
+        if header_name.eq_ignore_ascii_case("Content-Length") {
+            size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
+        }
+    }
+    let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
+    let mut buf = buf.into_bytes();
+    buf.resize(size, 0);
+    inp.read_exact(&mut buf)?;
+    let buf = String::from_utf8(buf).map_err(invalid_data)?;
+    Ok(Some(buf))
+}
+
 pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
     // Note that we must have our logging only write out to stderr.
     eprintln!("starting generic LSP server");
@@ -908,9 +1061,9 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     // See https://github.com/WebAssembly/wasi-libc/pull/491
     let _ = fs::metadata("/workspace");
 
-    // Create the transport. Includes the stdio (stdin and stdout) versions but this could
-    // also be implemented to use sockets or HTTP.
-    let (connection, io_threads) = Connection::stdio();
+    // Create the transport with detailed debug logging on parse errors.
+    let (writer, reader, io_threads) = create_debug_stdio_transport();
+    let connection = Connection { sender: writer, receiver: reader };
 
     // Run the server and wait for the two threads to end (typically by trigger LSP Exit event).
     let backend = Backend::new(Client { connection });
@@ -923,6 +1076,12 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
             return Err(e.into());
         }
     };
+
+    // 在 init 握手完成后加载 prelude，避免 diagnostics 发送在握手之前
+    backend.load_prelude();
+    // 然后启动工作线程处理用户文件
+    backend.spawn_worker();
+
     backend.main_loop()?;
     io_threads.join()?;
 
