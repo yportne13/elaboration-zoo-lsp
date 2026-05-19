@@ -1059,8 +1059,16 @@ fn debug_read_message(r: &mut StashingReader<impl BufRead>) -> io::Result<Option
                 if let Ok(msg) = serde_json::from_str(valid_json) {
                     eprintln!("LSP RECOVERY: Content-Length off by {} bytes (was {}, actual {})",
                         overflow.len(), text.len(), valid_end);
-                    // Push overflow back into the stashing reader
-                    r.push_back(overflow);
+                    // Skip leading CRLF in overflow — the bytes after JSON
+                    // might have \r\n before the next Content-Length header.
+                    let cleaned = trim_leading_crlf(overflow);
+                    if cleaned.len() < overflow.len() {
+                        eprintln!("LSP RECOVERY: trimmed {} leading CRLF byte(s)",
+                            overflow.len() - cleaned.len());
+                    }
+                    if !cleaned.is_empty() {
+                        r.push_back(cleaned);
+                    }
                     return Ok(Some(msg));
                 }
             }
@@ -1089,6 +1097,16 @@ fn debug_read_message(r: &mut StashingReader<impl BufRead>) -> io::Result<Option
                 format!("malformed LSP payload: {e}")))
         }
     }
+}
+
+/// Strip leading \r\n bytes from a byte slice (present between LSP JSON body
+/// and the next Content-Length header when Content-Length is off).
+fn trim_leading_crlf(data: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < data.len() && (data[i] == b'\r' || data[i] == b'\n') {
+        i += 1;
+    }
+    &data[i..]
 }
 
 /// Walk forward through the buffer to find where the outermost JSON object ends.
