@@ -48,7 +48,7 @@ use L13_namespace::parser::syntax::Decl;
 use L13_namespace::{DeclTm, Infer, preprocess};
 use L13_namespace::cxt::Cxt;
 
-use std::sync::{Arc, Mutex, Condvar};
+use std::sync::{Arc, Mutex, Condvar, mpsc};
 use std::thread;
 
 // 2. 定义传递给工作线程的任务包
@@ -71,8 +71,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
-    // 信号机制：(任务槽, 条件变量)
-    worker_signal: Arc<(Mutex<Option<AnalysisJob>>, Condvar)>,
+    // 信号机制：mpsc 通道任务队列
+    job_sender: mpsc::Sender<AnalysisJob>,
     // 处理完成的信号
     processed_signal: Arc<(Mutex<HashMap<String, bool>>, Condvar)>,
 
@@ -88,12 +88,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let document_id = Default::default();
         let hover_table = Default::default();
 
-        let worker_signal = Arc::new((Mutex::new(None), Condvar::new()));
-        let signal_clone = worker_signal.clone();
-
         let processed_signal = Arc::new((Mutex::new(HashMap::new()), Condvar::new()));
         let infer = Infer::new();
         let cxt = Cxt::new(&infer);
+
+        let (tx, rx) = mpsc::channel::<AnalysisJob>();
 
         let ret = Arc::new(Backend {
             client,
@@ -105,7 +104,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             quickfix_map: DashMap::new(),
             exported_macros: DashMap::new(),
             processing_uris: DashMap::new(),
-            worker_signal,
+            job_sender: tx,
             processed_signal,
             infer: Arc::new(Mutex::new(infer)),
             cxt: Arc::new(Mutex::new(cxt)),
@@ -216,7 +215,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         ret.infer.lock().unwrap().mutable_map.write().unwrap().clear();
         let for_thread = ret.clone();
         thread::spawn(move || {
-            for_thread.worker_loop(signal_clone);
+            for_thread.worker_loop(rx);
         });
         ret
     }
@@ -233,19 +232,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     fn worker_loop(
         &self,
-        signal: Arc<(Mutex<Option<AnalysisJob>>, Condvar)>,
+        rx: mpsc::Receiver<AnalysisJob>,
     ) {
-        loop {
-            // 1. 等待任务
-            let job = {
-                let (lock, cvar) = &*signal;
-                let mut pending = lock.lock().unwrap();
-                while pending.is_none() {
-                    pending = cvar.wait(pending).unwrap();
-                }
-                pending.take().unwrap() // 取出任务，并将槽置空
-            };
-
+        for job in rx {
             let uri_str = job.uri.to_string();
             {
                 let (lock, _) = &*self.processed_signal;
@@ -437,11 +426,7 @@ impl LanguageServer for Backend<Client> {
             text: params.text_document.text.to_string(),
             version: Some(params.text_document.version),
         };
-
-        let (lock, cvar) = &*self.worker_signal;
-        let mut pending = lock.lock().unwrap();
-        *pending = Some(job);
-        cvar.notify_one();
+        self.job_sender.send(job).ok();
     }
 
     fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -450,11 +435,7 @@ impl LanguageServer for Backend<Client> {
             text: params.content_changes[0].text.to_string(),
             version: Some(params.text_document.version),
         };
-
-        let (lock, cvar) = &*self.worker_signal;
-        let mut pending = lock.lock().unwrap();
-        *pending = Some(job);
-        cvar.notify_one();
+        self.job_sender.send(job).ok();
     }
 
     fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -464,11 +445,7 @@ impl LanguageServer for Backend<Client> {
                 text,
                 version: None,
             };
-
-            let (lock, cvar) = &*self.worker_signal;
-            let mut pending = lock.lock().unwrap();
-            *pending = Some(job);
-            cvar.notify_one();
+            self.job_sender.send(job).ok();
         }
         debug!("file saved!");
     }
