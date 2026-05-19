@@ -199,7 +199,8 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
             } else {
                 format!("({})", expls.join(", "))
             };
-            format!("{}{}{}", span.data, impl_str, expl_str)
+            let zwsp = if !impls.is_empty() && !expls.is_empty() { "\u{200b}" } else { "" };
+            format!("{}{}{}{}", span.data, impl_str, zwsp, expl_str)
         },
         Tm::SumCase { is_trait, typ, case_name, datas: params } if matches!(
             typ.as_ref(),
