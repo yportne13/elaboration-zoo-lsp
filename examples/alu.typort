@@ -24,8 +24,8 @@ module simpleALU {
 }
 
 // Print the generated Verilog module
-let alu_module_opt = get_global("module").data.head_option
-let alu_module = alu_module_opt.unwrap_or(Module.mk("simpleALU", 0, nil))
+def alu_module_opt = get_global("module").data.head_option
+def alu_module = alu_module_opt.unwrap_or(Module.mk("simpleALU", 0, nil))
 println(moduleVL(alu_module))
 
 // ---------- Multi-function ALU with selects ----------
@@ -48,13 +48,13 @@ module multiALU {
     bit_xor := a ^ b
 }
 
-let multi_module_opt = get_global("module").data.head_option
-let multi_module_after = multi_module_opt.unwrap_or(Module.mk("multiALU", 0, nil))
+def multi_module_opt = get_global("module").data.head_option
+def multi_module_after = multi_module_opt.unwrap_or(Module.mk("multiALU", 0, nil))
 
 // Delay-check: verify the module name
-let multi_module_check = get_global("module")
+def multi_module_check = get_global("module")
 
 // Print all accumulated module Verilog
-let all_modules = multi_module_check
+def all_modules = multi_module_check
 println("\n--- ALU Multi-Function Verilog ---")
 println(moduleVL(multi_module_after))
