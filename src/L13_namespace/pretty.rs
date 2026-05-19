@@ -180,20 +180,27 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
         Tm::Prim(_, _) => "Prim Func".to_owned(),
-        Tm::Sum(span, tms, items, _) => format!(
-            "{}{}",
-            span.data,
-            tms.iter()
-                .map(|tm| {
-                    match &tm.3 {
-                        Icit::Expl => pretty_tm_indent(prec, indent, ns.clone(), &tm.1),
-                        Icit::Impl => bracket(pretty_tm_indent(prec, indent, ns.clone(), &tm.1)),
-                    }
-                })
-                .reduce(|acc, x| acc + ", " + &x)
-                .map(|x| format!("[{x}]"))
-                .unwrap_or("".to_owned()),
-        ),
+        Tm::Sum(span, tms, items, _) => {
+            let impls: Vec<_> = tms.iter()
+                .filter(|tm| tm.3 == Icit::Impl)
+                .map(|tm| pretty_tm_indent(prec, indent, ns.clone(), &tm.1))
+                .collect();
+            let expls: Vec<_> = tms.iter()
+                .filter(|tm| tm.3 == Icit::Expl)
+                .map(|tm| pretty_tm_indent(prec, indent, ns.clone(), &tm.1))
+                .collect();
+            let impl_str = if impls.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", impls.join(", "))
+            };
+            let expl_str = if expls.is_empty() {
+                String::new()
+            } else {
+                format!("({})", expls.join(", "))
+            };
+            format!("{}{}{}", span.data, impl_str, expl_str)
+        },
         Tm::SumCase { is_trait, typ, case_name, datas: params } if matches!(
             typ.as_ref(),
             Tm::Sum(name, _, _, _) if name.data == "Nat",
