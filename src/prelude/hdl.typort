@@ -114,9 +114,9 @@ def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr
 }
 
 // ---------- When context tracking ----------
-// When blocks track the current condition so assignments inside
-// when/elsewhen/otherwise create properly scoped Expr::when nodes.
-// Uses a linked list (enum-based stack) to avoid Vec length requirements.
+// When blocks use a simple stack to track the current condition.
+// Each assignment inside a when/elsewhen/otherwise scope is wrapped
+// with the appropriate when(cond, e, None) by addWhenContext.
 
 enum WhenState {
     whenActive(cond: Expr)
@@ -128,23 +128,15 @@ enum WhenStack {
     whenStackPush(top: WhenState, rest: WhenStack)
 }
 
-// Initialize when stack global (creates if missing)
 def initWhenStack(): Unit =
     let dummy = create_global("WhenStack", whenStackEmpty);
     unit
 
-// Reset when stack to empty (called at module start)
-def resetWhenStack(): Unit =
-    let dummy = change_mutable("WhenStack", x => whenStackEmpty);
-    unit
-
-// Push a when condition
 def whenBegin(cond: Expr): Unit =
     let state = whenActive(cond);
     let dummy = change_mutable("WhenStack", x => whenStackPush(state, x));
     unit
 
-// Pop the topmost when/elsewhen/otherwise context
 def whenEnd(dummy: Unit): Unit =
     let d = dummy;
     let d2 = change_mutable("WhenStack", x => match x {
@@ -153,7 +145,6 @@ def whenEnd(dummy: Unit): Unit =
     });
     unit
 
-// Replace top condition with a new one (elsewhen)
 def whenElseBegin(cond: Expr): Unit =
     let state = whenActive(cond);
     let d2 = change_mutable("WhenStack", x => match x {
@@ -162,15 +153,11 @@ def whenElseBegin(cond: Expr): Unit =
     });
     unit
 
-// Push otherwise marker (marks current level as default case)
 def whenOtherwiseBegin(dummy: Unit): Unit =
     let d = dummy;
     let d2 = change_mutable("WhenStack", x => whenStackPush(whenOtherwise, x));
     unit
 
-// Wrap an expression with the current when context (if any)
-// For when/elsewhen: wrap as when(cond, e, None)
-// For otherwise: leave as-is
 def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
     case whenStackEmpty => e
     case whenStackPush(state, _) => match state {
@@ -179,21 +166,30 @@ def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
     }
 }
 
-// Safely wrap an expression with the current when context.
-// Ensures WhenStack key exists (creates with empty stack if missing),
-// then applies the when context wrapping.
 def addWhenContext(e: Expr): Expr =
     let ws_init = change_mutable_default("WhenStack", x => x, whenStackEmpty);
     let ws = get_global("WhenStack");
     wrapWithWhenContext(ws, e)
 
-// Helper used by signal creation and assignment to insert expr into module
-// When inside a when/elsewhen block, wraps the expression with Expr::when
+// Helper used by signal creation and assignment to insert expr into module.
+// Signal declarations (create/createIn/createOut) are added directly without when context.
+// Only assignments (assign) are conditionally wrapped via addWhenContext.
 def createSignalExpr(name: String, e: Expr): Expr =
-    // Wrap with when context if inside a when/elsewhen block
-    let wrapped = addWhenContext(e);
-    let dummy = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
-    e
+    match e {
+        case create(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createIn(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOut(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case _ =>
+            let wrapped = addWhenContext(e);
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
+            e
+    }
 
 // Helper for assignment
 // Note: the Data trait methods reference this function
@@ -806,7 +802,6 @@ macro_rules Expr {
 
     // ---- when/otherwise control flow ----
     // Pushes condition scope, evaluates body, pops scope.
-    // Functions with no real args take 'unit' due to parser many1 requirement.
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
         let w_push = whenBegin($cond.expr);
         $({$bodywhen})*
@@ -860,7 +855,9 @@ macro_rules module {
 
 // String concat helpers (avoid Add trait to prevent typeclass issues with dep-types)
 
-// Convert a single Expr to a Verilog expression string
+// Convert a single Expr to a Verilog expression string.
+// Handles one level of else-if nesting; deeper nesting may produce
+// nested if-statements (still functionally correct).
 def exprVL(e: Expr): String = match e {
     case create(name) => name
     case createIn(name) => name
@@ -870,7 +867,22 @@ def exprVL(e: Expr): String = match e {
     case assign(lhs, rhs) =>
         "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";\n"
     case when(cond, body, elseBody) =>
-        "  if (" + exprVL(cond) + ") begin\n" + exprVL(body) + " end\n"
+        "  if (" + exprVL(cond) + ") begin\n" + exprVL(body) + "  end" + (
+            match elseBody {
+                case None => "\n"
+                case Some(eb) => match eb {
+                    case when(ec, eb2, eb3) =>
+                        " else if (" + exprVL(ec) + ") begin\n" + exprVL(eb2) + "  end" + (
+                            match eb3 {
+                                case None => "\n"
+                                case Some(eb4) => " else begin\n" + exprVL(eb4) + "  end\n"
+                            }
+                        )
+                    case _ =>
+                        " else begin\n" + exprVL(eb) + "  end\n"
+                }
+            }
+        )
     case switch(value, cases) =>
         "  case (" + exprVL(value) + ") " + exprVL(cases) + " endcase"
     case block(head, tail) => exprVL(head) + exprVL(tail)
@@ -944,3 +956,5 @@ def moduleVL(m: Module): String =
 //         default { result := a.asBits.resize[9].asUInt }
 //     }
 // }
+
+

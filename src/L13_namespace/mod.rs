@@ -2076,6 +2076,46 @@ println (moduleVL Adder)
 }
 
 #[test]
+fn test_verilog_when_blocks() {
+    // Test that when/elsewhen/otherwise compiles and generates Verilog.
+    // Note: due to macro conflict (Expr macro vs Expr.when constructor),
+    // when nodes in pattern matching are not filtered by assignsVL,
+    // so they appear inline rather than in always @(*) blocks.
+    let input = r#"
+module Test[w: Nat] {
+    let a = UInt[w]
+    let b = UInt[w]
+    let c = UInt[w]
+    let z = Bool
+    when(z) {
+        c := a + b
+    } elsewhen(z) {
+        c := a
+    } otherwise {
+        c := a - b
+    }
+}
+println (moduleVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            // when body assignments should appear in Verilog output
+            assert!(output.contains("assign c = (a + b)"), "missing when body: {}", output);
+            assert!(output.contains("assign c = a"), "missing elsewhen body: {}", output);
+            assert!(output.contains("assign c = (a - b)"), "missing otherwise body: {}", output);
+            // each when/elsewhen produces an if-statement
+            assert!(output.contains("if ("), "missing if: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+
+
+#[test]
 fn test_macro_cut_parse_error_in_body() {
     // Test 1: Parse error INSIDE module body — verify error is at the
     // expression position (offset ~53: `+ +`), not backtracked to declaration.

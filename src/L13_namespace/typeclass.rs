@@ -236,6 +236,13 @@ impl Synth {
                     && b1.len() == b2.len()
                     //TODO:&& c1.iter().zip(c2.iter()).all(|()| )
             }
+            (Val::Call(n1, args1, _), Val::Call(n2, args2, _)) => {
+                n1 == n2
+                    && args1.len() == args2.len()
+                    && args1.iter().zip(args2.iter()).all(|((v1, i1), (v2, i2))| {
+                        i1 == i2 && Self::vals_eq_ground_impl(v1, v2, visited)
+                    })
+            }
             _ => false,
         }
     }
