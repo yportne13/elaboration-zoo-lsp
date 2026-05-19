@@ -917,6 +917,68 @@ where
 }
 
 use std::fs;
+use std::io::Read;
+
+/// A BufRead wrapper that can stash overflow data and feed it back
+/// on subsequent reads. Handles the case where Content-Length from
+/// the client is larger than the actual JSON body.
+struct StashingReader<R: BufRead> {
+    inner: R,
+    stash: Vec<u8>,
+    stash_pos: usize,
+}
+
+impl<R: BufRead> StashingReader<R> {
+    fn new(inner: R) -> Self {
+        StashingReader { inner, stash: Vec::new(), stash_pos: 0 }
+    }
+    /// Push overflow bytes back into the stash for the next read.
+    fn push_back(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.stash.splice(..0, data.iter().copied());
+            self.stash_pos = 0;
+        }
+    }
+}
+
+impl<R: BufRead> BufRead for StashingReader<R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        if self.stash_pos < self.stash.len() {
+            Ok(&self.stash[self.stash_pos..])
+        } else {
+            self.inner.fill_buf()
+        }
+    }
+    fn consume(&mut self, amt: usize) {
+        if self.stash_pos < self.stash.len() {
+            self.stash_pos += amt;
+            if self.stash_pos >= self.stash.len() {
+                self.stash.clear();
+                self.stash_pos = 0;
+            }
+        } else {
+            self.inner.consume(amt);
+        }
+    }
+}
+
+impl<R: BufRead> Read for StashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.stash_pos < self.stash.len() {
+            let avail = self.stash.len() - self.stash_pos;
+            let n = avail.min(buf.len());
+            buf[..n].copy_from_slice(&self.stash[self.stash_pos..self.stash_pos + n]);
+            self.stash_pos += n;
+            if self.stash_pos >= self.stash.len() {
+                self.stash.clear();
+                self.stash_pos = 0;
+            }
+            Ok(n)
+        } else {
+            self.inner.read(buf)
+        }
+    }
+}
 
 /// Debug-friendly IO threads with detailed parse error logging.
 struct DebugIoThreads {
@@ -959,7 +1021,7 @@ fn create_debug_stdio_transport(
         .name("LspServerReader".to_owned())
         .spawn(move || {
             let stdin = stdin();
-            let mut stdin = stdin.lock();
+            let mut stdin = StashingReader::new(stdin.lock());
             while let Some(msg) = debug_read_message(&mut stdin)? {
                 let is_exit = matches!(&msg, Message::Notification(n) if n.method == "exit");
                 if let Err(e) = reader_sender.send(msg) {
@@ -977,7 +1039,9 @@ fn create_debug_stdio_transport(
 }
 
 /// Read a single LSP message (Content-Length framing) with detailed logging on error.
-fn debug_read_message(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
+/// When the Content-Length from the client is too large (bug in WASM pipe layer),
+/// attempts to find the real JSON boundary and push back overflow bytes.
+fn debug_read_message(r: &mut StashingReader<impl BufRead>) -> io::Result<Option<Message>> {
     let text = match debug_read_body(r)? {
         None => return Ok(None),
         Some(text) => text,
@@ -986,12 +1050,26 @@ fn debug_read_message(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
     match serde_json::from_str(&text) {
         Ok(msg) => Ok(Some(msg)),
         Err(e) => {
+            // Try to recover: the Content-Length might be wrong (too large),
+            // causing extra bytes (next message's header) to be included.
+            // Find the actual end of the JSON message.
+            if let Some(valid_end) = find_json_end(&text) {
+                let overflow = &text.as_bytes()[valid_end..];
+                let valid_json = &text[..valid_end];
+                if let Ok(msg) = serde_json::from_str(valid_json) {
+                    eprintln!("LSP RECOVERY: Content-Length off by {} bytes (was {}, actual {})",
+                        overflow.len(), text.len(), valid_end);
+                    // Push overflow back into the stashing reader
+                    r.push_back(overflow);
+                    return Ok(Some(msg));
+                }
+            }
+
             let col = e.column() as usize;
             let line = text.lines().next().unwrap_or(&text);
             eprintln!("=== LSP PARSE ERROR ===");
             eprintln!("serde_json error: {e}");
             eprintln!("Column: {col}, Body length: {} bytes", text.len());
-            // Print context around the error position in raw form
             let start = col.saturating_sub(30);
             let end = (col + 30).min(line.len());
             let snippet = &line[start..end];
@@ -999,7 +1077,6 @@ fn debug_read_message(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
             eprintln!("Context:");
             eprintln!("  {snippet}");
             eprintln!("  {arrow}");
-            // Hex dump of the problematic area
             let hex_start = col.saturating_sub(4);
             let hex_end = (col + 4).min(text.len());
             let bytes = &text.as_bytes()[hex_start..hex_end];
@@ -1012,6 +1089,43 @@ fn debug_read_message(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
                 format!("malformed LSP payload: {e}")))
         }
     }
+}
+
+/// Walk forward through the buffer to find where the outermost JSON object ends.
+/// This handles the case where extra bytes from the next LSP message's framing
+/// `\r\n\r\nContent-Length: N\r\n\r\n{...}` follow the current JSON body.
+fn find_json_end(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if bytes.first() != Some(&b'{') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+        } else {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i + 1);
+                    }
+                }
+                b'"' => in_string = true,
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 /// Read Content-Length headers and body, same as lsp-server's read_msg_text.
