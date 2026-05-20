@@ -813,6 +813,15 @@ macro_rules Expr {
         $({$bodyother})*
         let w_opop = whenEnd(unit);
     };
+    // when with otherwise (no elsewhen)
+    (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
+    };
     // when without otherwise
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
         let w_push = whenBegin($cond.expr);

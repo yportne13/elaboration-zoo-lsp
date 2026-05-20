@@ -28,15 +28,9 @@ module multiALU {
 
     let add = UInt[8]
     let sub = UInt[8]
-    let bit_and = UInt[8]
-    let bit_or = UInt[8]
     add := a + b
     sub := a - b
-    bit_and := a & b
-    bit_or := a | b
-    let sel = Bool
-    sel := op === UInt.mk(None, create("uint_lit"))
-    let w_push = whenBegin(sel.expr)
+    let w_push = whenBegin((op === UInt.mk(None, create("uint_lit"))).expr)
     result := add
     let w_pop = whenEnd(unit)
     let w_opush = whenOtherwiseBegin(unit)
