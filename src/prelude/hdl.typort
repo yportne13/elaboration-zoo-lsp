@@ -910,6 +910,16 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     }
 }
 
+// Helper: check if Vec[Expr] contains any port declarations
+def hasPorts[ne: Nat](es: Vec[Expr] ne): Bool = match es {
+    case nil => false
+    case cons(e, tail) => match e {
+        case createIn(_) => true
+        case createOut(_) => true
+        case _ => hasPorts tail
+    }
+}
+
 // Collect port declarations (input/output) from Vec[Expr]
 def portsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
@@ -919,8 +929,16 @@ def portsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
         case _ => ""
     }
     case cons(e, tail) => match e {
-        case createIn(name) => "  input wire " + name + ",\n" + (portsVL tail)
-        case createOut(name) => "  output wire " + name + ",\n" + (portsVL tail)
+        case createIn(name) =>
+            "  input wire " + name + (match hasPorts tail {
+                case true => ",\n"
+                case false => "\n"
+            }) + (portsVL tail)
+        case createOut(name) =>
+            "  output wire " + name + (match hasPorts tail {
+                case true => ",\n"
+                case false => "\n"
+            }) + (portsVL tail)
         case _ => portsVL tail
     }
 }
