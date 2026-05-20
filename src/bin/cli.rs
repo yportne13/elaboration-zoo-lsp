@@ -27,8 +27,9 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let source_map = cli_client.source_map.clone();
 
     // Create backend with CLI client.
-    // Backend::new loads the builtin prelude, sets up Infer/Cxt.
     let backend = Backend::new(cli_client);
+    // Load builtin prelude (separated from Backend::new for LSP init timing).
+    backend.load_prelude();
 
     for filepath in &args[1..] {
         let path = PathBuf::from(filepath);

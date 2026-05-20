@@ -10,17 +10,7 @@ module simpleALU {
     input b = UInt[8]
     output result = UInt[8]
 
-    // Basic arithmetic
-    let sum = UInt[8]
-    sum := a + b
-
-    // Bitwise operations
-    let and_op = UInt[8]
-    and_op := a & b
-    let or_op = UInt[8]
-    or_op := a | b
-    let xor_op = UInt[8]
-    xor_op := a ^ b
+    result := a + b
 }
 
 // Print the generated Verilog module
@@ -37,24 +27,24 @@ module multiALU {
     output result = UInt[8]
 
     let add = UInt[8]
-    add := a + b
     let sub = UInt[8]
-    sub := a - b
     let bit_and = UInt[8]
-    bit_and := a & b
     let bit_or = UInt[8]
+    add := a + b
+    sub := a - b
+    bit_and := a & b
     bit_or := a | b
-    let bit_xor = UInt[8]
-    bit_xor := a ^ b
+    let sel = Bool
+    sel := op === UInt.mk(None, create("uint_lit"))
+    let w_push = whenBegin(sel.expr)
+    result := add
+    let w_pop = whenEnd(unit)
+    let w_opush = whenOtherwiseBegin(unit)
+    result := sub
+    let w_opop = whenEnd(unit)
 }
 
 def multi_module_opt = get_global("module").data.head_option
 def multi_module_after = multi_module_opt.unwrap_or(Module.mk("multiALU", 0, nil))
-
-// Delay-check: verify the module name
-def multi_module_check = get_global("module")
-
-// Print all accumulated module Verilog
-def all_modules = multi_module_check
 println("\n--- ALU Multi-Function Verilog ---")
 println(moduleVL(multi_module_after))
