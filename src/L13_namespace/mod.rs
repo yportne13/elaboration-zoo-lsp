@@ -924,7 +924,7 @@ pub fn preprocess(s: &str) -> String {
         })
         .reduce(|a, b| a + "  " + &b)
         .unwrap_or(s.to_owned());
-    s.lines()
+    s.split('\n')
         .map(|x| {
             x.split_once("//")
                 .map(|(a, b)| a.to_owned() + "  " + &replace_non_ws_preserve_bytes(b))
