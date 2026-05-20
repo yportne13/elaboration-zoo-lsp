@@ -888,16 +888,36 @@ pub struct TextDocumentItem<'a> {
 }
 
 pub fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
-    let line = rope.try_char_to_line(offset).ok()?;
-    let first_char_of_line = rope.try_line_to_char(line).ok()?;
-    let column = offset - first_char_of_line;
-    Some(Position::new(line as u32, column as u32))
+    let line = rope.try_byte_to_line(offset).ok()?;
+    let line_byte_start = rope.try_line_to_byte(line).ok()?;
+    let line_text = rope.line(line);
+    // Convert byte offset to UTF-16 code unit column position
+    let mut column = 0u32;
+    let mut byte_i = 0usize;
+    for ch in line_text.chars() {
+        if line_byte_start + byte_i >= offset {
+            break;
+        }
+        column += ch.len_utf16() as u32;
+        byte_i += ch.len_utf8();
+    }
+    Some(Position::new(line as u32, column))
 }
 
 pub fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
-    let line_char_offset = rope.try_line_to_char(position.line as usize).ok()?;
-    let slice = rope.slice(0..line_char_offset + position.character as usize);
-    Some(slice.len_bytes())
+    let line_byte_start = rope.try_line_to_byte(position.line as usize).ok()?;
+    let line_text = rope.line(position.line as usize);
+    // Convert UTF-16 code unit column to byte offset within line
+    let mut col_byte_offset = 0usize;
+    let mut utf16_count = 0u32;
+    for ch in line_text.chars() {
+        if utf16_count >= position.character {
+            break;
+        }
+        col_byte_offset += ch.len_utf8();
+        utf16_count += ch.len_utf16() as u32;
+    }
+    Some(line_byte_start + col_byte_offset)
 }
 
 pub fn cast<R>(req: Request) -> std::result::Result<(RequestId, R::Params), ExtractError<Request>>
