@@ -911,7 +911,7 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
 }
 
 // Helper: check if Vec[Expr] contains any port declarations
-def hasPorts[ne: Nat](es: Vec[Expr] ne): Bool = match es {
+def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
     case cons(e, tail) => match e {
         case createIn(_) => true
