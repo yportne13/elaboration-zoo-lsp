@@ -848,30 +848,32 @@ impl Infer {
                                 )
                                 .for_each(|x| self.completion_table.push(x));
                         }
-                        if let Some(val) = c.and_then(|params| {
+                        let field_info = c.and_then(|params| {
                                 params.into_iter()
                                     .find(|(fields_name, _)| fields_name == &t)
-                                    .map(|(_, ty)| ty)
-                            }).or(
+                                    .map(|(name, ty)| (name.to_span(), ty))
+                            }).or_else(|| {
                             params
                                 .iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
-                                .map(|(_, _, ty, _)| ty)
-                                .cloned()
-                            ) {
-                                Ok((
-                                    Tm::Obj(tm, t).into(),
-                                    val,
-                                ))
-                            } else {
-                                self.trait_wrap(cxt, t, a, x, tm, t_span)
+                                .map(|(name, _, ty, _)| (name.to_span(), ty.clone()))
+                            });
+                        if let Some((def_span, val)) = field_info {
+                            self.hover_table.push((t.to_span(), def_span, cxt.clone_without_src_names(), val.clone()));
+                            Ok((
+                                Tm::Obj(tm, t).into(),
+                                val,
+                            ))
+                        } else {
+                            self.trait_wrap(cxt, t, a, x, tm, t_span)
                             }
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
-                        if let Some(val) = params
+                        if let Some((def_span, val)) = params
                             .iter()
                             .find(|(fields_name, _, _)| fields_name == &t)
-                            .map(|(_, ty, _)| ty) {
+                            .map(|(name, ty, _)| (name.to_span(), ty)) {
+                                self.hover_table.push((t.to_span(), def_span, cxt.clone_without_src_names(), val.clone()));
                                 Ok((
                                     Tm::Obj(tm, t).into(),
                                     val.clone(),
