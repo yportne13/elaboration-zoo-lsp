@@ -910,20 +910,27 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     }
 }
 
-// Collect signal names (ports + wires) from Vec[Expr]
-def namesVL[ne: Nat](es: Vec[Expr] ne): String = match es {
+// Collect port declarations (input/output) from Vec[Expr]
+def portsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
     case nil => ""
     case cons(e, nil) => match e {
         case createIn(name) => "  input wire " + name + "\n"
         case createOut(name) => "  output wire " + name + "\n"
-        case create(name) => "  wire " + name + ";\n"
         case _ => ""
     }
     case cons(e, tail) => match e {
-        case createIn(name) => "  input wire " + name + ",\n" + (namesVL tail)
-        case createOut(name) => "  output wire " + name + ",\n" + (namesVL tail)
-        case create(name) => "  wire " + name + ";\n" + (namesVL tail)
-        case _ => namesVL tail
+        case createIn(name) => "  input wire " + name + ",\n" + (portsVL tail)
+        case createOut(name) => "  output wire " + name + ",\n" + (portsVL tail)
+        case _ => portsVL tail
+    }
+}
+
+// Collect wire declarations (internal signals) from Vec[Expr]
+def wiresVL[ne: Nat](es: Vec[Expr] ne): String = match es {
+    case nil => ""
+    case cons(e, tail) => match e {
+        case create(name) => "  wire " + name + ";\n" + (wiresVL tail)
+        case _ => wiresVL tail
     }
 }
 
@@ -939,10 +946,11 @@ def alwaysVL[ne: Nat](es: Vec[Expr] ne): String = match es {
 
 // Convert a Module to a Verilog string
 def moduleVL(m: Module): String =
-    let ports_wires = namesVL(m.expr);
+    let port_decls = portsVL(m.expr);
+    let wire_decls = wiresVL(m.expr);
     let assigns = assignsVL(m.expr);
     let always = alwaysVL(m.expr);
-    "module " + m.name + " (\n" + ports_wires + ");\n" + assigns + always + "endmodule\n"
+    "module " + m.name + " (\n" + port_decls + ");\n" + wire_decls + assigns + always + "endmodule\n"
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):
