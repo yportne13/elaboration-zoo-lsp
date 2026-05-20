@@ -282,6 +282,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, (Vec
 
         while let Ok((input_t, op)) = string(Op)
             .or(kw(LParen).map(|x| x.map(|_| "(".to_owned())))
+            .or(kw(LCurly).map(|x| x.map(|_| "{".to_owned())))
             .or(kw(LSquare).map(|x| x.map(|_| "[".to_owned())))
             .or(kw(Dot).map(|x| x.map(|_| ".".to_owned())))
             .parse(input, state) {
@@ -313,6 +314,13 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, (Vec
                         .many1_sep((kw(T![,]), kw(EndLine).option()))
                         .parse(input, state)?;
                     let (input_t, _) = kw(RParen).parse(input_t, state)?;
+                    input = input_t;
+                    rhs.into_iter().fold(lhs, Raw::app)
+                } else if &op.data == "{" {
+                    let (input_t, rhs) = p_raw
+                        .many1_sep((kw(T![,]), kw(EndLine).option()))
+                        .parse(input, state)?;
+                    let (input_t, _) = kw(RCurly).parse(input_t, state)?;
                     input = input_t;
                     rhs.into_iter().fold(lhs, Raw::app)
                 } else {
@@ -409,6 +417,7 @@ fn postfix_binding_power(op: &Span<String>) -> Option<(u8, ())> {
         "!" => (20, ()),
         "[" => (20, ()),
         "(" => (20, ()),
+        "{" => (20, ()),
         _ => return None,
     };
     Some(res)

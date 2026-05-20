@@ -329,6 +329,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 
         while let Ok((input_t, op)) = smolstr(Op)
             .or(kw(LParen).map(|x| x.map(|_| SmolStr::new("("))))
+            .or(kw(LCurly).map(|x| x.map(|_| SmolStr::new("{"))))
             .or(kw(LSquare).map(|x| x.map(|_| SmolStr::new("["))))
             .or(kw(Dot).map(|x| x.map(|_| SmolStr::new("."))))
             .parse(input, state) {
@@ -360,6 +361,13 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                         .many1_sep((kw(T![,]), kw(EndLine).option()))
                         .parse(input, state)?;
                     let (input_t, _) = kw(RParen).parse(input_t, state)?;
+                    input = input_t;
+                    rhs.into_iter().fold(lhs, Raw::app)
+                } else if &op.data == "{" {
+                    let (input_t, rhs) = p_raw
+                        .many1_sep((kw(T![,]), kw(EndLine).option()))
+                        .parse(input, state)?;
+                    let (input_t, _) = kw(RCurly).parse(input_t, state)?;
                     input = input_t;
                     rhs.into_iter().fold(lhs, Raw::app)
                 } else {
@@ -456,6 +464,7 @@ fn postfix_binding_power(op: &Span<SmolStr>) -> Option<(u8, ())> {
         s if s == "!" => (20, ()),
         s if s == "[" => (20, ()),
         s if s == "(" => (20, ()),
+        s if s == "{" => (20, ()),
         _ => return None,
     };
     Some(res)
