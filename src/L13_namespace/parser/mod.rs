@@ -336,7 +336,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 
         while let Ok((input_t, op)) = smolstr(Op)
             .or(kw(LParen).map(|x| x.map(|_| SmolStr::new("("))))
-            .or(kw(LCurly).map(|x| x.map(|_| SmolStr::new("{"))))
+            //.or(kw(LCurly).map(|x| x.map(|_| SmolStr::new("{"))))
             .or(kw(LSquare).map(|x| x.map(|_| SmolStr::new("["))))
             .or(kw(Dot).map(|x| x.map(|_| SmolStr::new("."))))
             .parse(input, state) {
