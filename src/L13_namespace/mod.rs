@@ -900,10 +900,26 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
 }
 
 pub fn preprocess(s: &str) -> String {
+    // Helper: replace each non-whitespace char with spaces equal to its byte length,
+    // so the preprocessed text has the same byte length as the original.
+    // This ensures parser span byte offsets still match the original text.
+    fn replace_non_ws_preserve_bytes(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        for c in input.chars() {
+            if c.is_whitespace() {
+                out.push(c);
+            } else {
+                for _ in 0..c.len_utf8() {
+                    out.push(' ');
+                }
+            }
+        }
+        out
+    }
     let s = s.split("/*")
         .map(|x| {
             x.split_once("*/")
-                .map(|(a, b)| a.replace(|c: char| !c.is_whitespace(), " ") + "  " + b)
+                .map(|(a, b)| replace_non_ws_preserve_bytes(a) + "  " + b)
                 .unwrap_or(x.to_owned())
         })
         .reduce(|a, b| a + "  " + &b)
@@ -911,7 +927,7 @@ pub fn preprocess(s: &str) -> String {
     s.lines()
         .map(|x| {
             x.split_once("//")
-                .map(|(a, b)| a.to_owned() + "  " + &b.replace(|c: char| !c.is_whitespace(), " "))
+                .map(|(a, b)| a.to_owned() + "  " + &replace_non_ws_preserve_bytes(b))
                 .unwrap_or(x.to_owned())
         })
         .reduce(|a, b| a + "\n" + &b)
