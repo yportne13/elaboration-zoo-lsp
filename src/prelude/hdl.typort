@@ -864,6 +864,12 @@ macro_rules module {
 
 // String concat helpers (avoid Add trait to prevent typeclass issues with dep-types)
 
+def joinLines(ls: List[String]): String = match ls {
+    case lnil => ""
+    case lcons(s, lnil) => s
+    case lcons(s, tail) => s + "\n" + joinLines(tail)
+}
+
 // Convert a single Expr to a Verilog expression string.
 // Handles one level of else-if nesting; deeper nesting may produce
 // nested if-statements (still functionally correct).
@@ -899,16 +905,19 @@ def exprVL(e: Expr): String = match e {
 }
 
 // Walk Vec[Expr]: filter out declarations and when-blocks, join assignments
-def assignsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
-    case nil => ""
+def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
     case cons(e, tail) => match e {
-        case create(_) => assignsVL tail
-        case createIn(_) => assignsVL tail
-        case createOut(_) => assignsVL tail
-        case when(_, _, _) => assignsVL tail
-        case _ => exprVL(e) + (assignsVL tail)
+        case create(_) => collectAssignLines tail
+        case createIn(_) => collectAssignLines tail
+        case createOut(_) => collectAssignLines tail
+        case when(_, _, _) => collectAssignLines tail
+        case _ => lcons (exprVL(e)) (collectAssignLines tail)
     }
 }
+
+def assignsVL[ne: Nat](es: Vec[Expr] ne): String =
+    joinLines(list_reverse(collectAssignLines es))
 
 // Helper: check if Vec[Expr] contains any port declarations
 def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
@@ -921,46 +930,56 @@ def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
 }
 
 // Collect port declarations (input/output) from Vec[Expr]
-def portsVL[ne: Nat](es: Vec[Expr] ne): String = match es {
-    case nil => ""
-    case cons(e, nil) => match e {
-        case createIn(name) => "  input wire " + name + "\n"
-        case createOut(name) => "  output wire " + name + "\n"
-        case _ => ""
-    }
+def collectPortLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
     case cons(e, tail) => match e {
-        case createIn(name) =>
-            "  input wire " + name + (match hasPorts tail {
-                case true => ",\n"
-                case false => "\n"
-            }) + (portsVL tail)
-        case createOut(name) =>
-            "  output wire " + name + (match hasPorts tail {
-                case true => ",\n"
-                case false => "\n"
-            }) + (portsVL tail)
-        case _ => portsVL tail
+        case createIn(name) => lcons ("  input wire " + name) (collectPortLines tail)
+        case createOut(name) => lcons ("  output wire " + name) (collectPortLines tail)
+        case _ => collectPortLines tail
     }
 }
+
+def joinPortLines(ls: List[String]): String = match ls {
+    case lnil => ""
+    case lcons(s, lnil) => s
+    case lcons(s, tail) => s + ",\n" + joinPortLines(tail)
+}
+
+def portsVL[ne: Nat](es: Vec[Expr] ne): String =
+    joinPortLines(list_reverse(collectPortLines es))
 
 // Collect wire declarations (internal signals) from Vec[Expr]
-def wiresVL[ne: Nat](es: Vec[Expr] ne): String = match es {
-    case nil => ""
+def collectWireLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
     case cons(e, tail) => match e {
-        case create(name) => "  wire " + name + ";\n" + (wiresVL tail)
-        case _ => wiresVL tail
+        case create(name) => lcons ("  wire " + name + ";") (collectWireLines tail)
+        case _ => collectWireLines tail
     }
 }
 
+def wiresVL[ne: Nat](es: Vec[Expr] ne): String =
+    let ls = list_reverse(collectWireLines es);
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
+
 // Emit always @* blocks for when-nodes
-def alwaysVL[ne: Nat](es: Vec[Expr] ne): String = match es {
-    case nil => ""
+def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
     case cons(e, tail) => match e {
         case when(_, _, _) =>
-            "  always @(*) begin\n" + exprVL(e) + "\n" + "end\n" + (alwaysVL tail)
-        case _ => alwaysVL tail
+            lcons ("  always @(*) begin\n" + exprVL(e) + "\n" + "end") (collectAlwaysLines tail)
+        case _ => collectAlwaysLines tail
     }
 }
+
+def alwaysVL[ne: Nat](es: Vec[Expr] ne): String =
+    let ls = list_reverse(collectAlwaysLines es);
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
 
 // Convert a Module to a Verilog string
 def moduleVL(m: Module): String =
@@ -968,7 +987,7 @@ def moduleVL(m: Module): String =
     let wire_decls = wiresVL(m.expr);
     let assigns = assignsVL(m.expr);
     let always = alwaysVL(m.expr);
-    "module " + m.name + " (\n" + port_decls + ");\n" + wire_decls + assigns + always + "endmodule\n"
+    "module " + m.name + " (\n" + port_decls + "\n);\n" + wire_decls + assigns + always + "endmodule\n"
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):
