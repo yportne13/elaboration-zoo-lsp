@@ -126,6 +126,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.cxt.clone()
     }
 
+    /// Look up the text content of a builtin:// URI from the document map.
+    /// Prelude files are loaded into `document_map` during `load_prelude()`.
+    pub fn get_builtin_content(&self, uri: &str) -> Option<String> {
+        self.document_map.get(uri).map(|rope| rope.to_string())
+    }
+
     /// 在 LSP init 握手完成后加载 prelude 文件。
     /// 这时 connection 已经建立，diagnostics 会正确发送给客户端。
     pub fn load_prelude(self: &Arc<Self>) {
@@ -748,6 +754,25 @@ impl Backend<Client> {
                 Message::Request(req) => {
                     if self.client.connection.handle_shutdown(&req)? {
                         return Ok(());
+                    }
+                    // Custom request: fetch prelude/builtin file content for virtual documents
+                    if req.method == "typort-hdl/builtinContent" {
+                        #[derive(Deserialize)]
+                        struct BuiltinContentParams {
+                            uri: String,
+                        }
+                        match serde_json::from_value::<BuiltinContentParams>(req.params) {
+                            Ok(params) => {
+                                let content = self.get_builtin_content(&params.uri);
+                                let resp = Response { id: req.id, result: Some(serde_json::to_value(&content).unwrap()), error: None };
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
+                            Err(_) => {
+                                let resp = Response::new_err(req.id, -32602, "Invalid params: expected { uri: string }".into());
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
+                        }
+                        continue;
                     }
                     match cast::<GotoDefinition>(req.clone()) {
                         Ok((id, params)) => {
