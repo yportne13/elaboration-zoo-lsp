@@ -590,13 +590,25 @@ impl LanguageServer for Backend<Client> {
                 .iter()
                 .filter(|x| x.1.contains(offset))
                 .map(|x| x.0)
-                .flat_map(|x| Some(Location::new(
-                    uri.clone(),
-                    Range::new(
-                        offset_to_position(x.start_offset as usize, &rope)?,
-                        offset_to_position(x.end_offset as usize, &rope)?,
-                    )
-                )))
+                .flat_map(|x| {
+                    let ref_uri = self.document_id.iter()
+                        .find(|e| *e.value() == x.path_id)
+                        .map(|e| Url::parse(e.key()).ok())
+                        .flatten()
+                        .unwrap_or_else(|| uri.clone());
+                    let ref_rope = if ref_uri == uri {
+                        rope.clone()
+                    } else {
+                        self.document_map.get(ref_uri.as_str())?.clone()
+                    };
+                    Some(Location::new(
+                        ref_uri,
+                        Range::new(
+                            offset_to_position(x.start_offset as usize, &ref_rope)?,
+                            offset_to_position(x.end_offset as usize, &ref_rope)?,
+                        )
+                    ))
+                })
                 .collect();
             Some(ret)
         }();
