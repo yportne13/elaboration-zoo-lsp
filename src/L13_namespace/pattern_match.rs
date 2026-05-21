@@ -602,10 +602,6 @@ impl Compiler {
 
         arms.iter()
             .filter_map(|(pattern, body)| match pattern {
-                PatternDetail::Any(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
-                PatternDetail::Bind(_) => {
-                    Some((body.clone(), cxt.prepend(heads.clone())))
-                }
                 PatternDetail::Con(constr_, item_pats) if constr_ == case_name => {
                     params.iter()
                         //.filter(|x| x.2 == Icit::Expl)
@@ -621,6 +617,15 @@ impl Compiler {
                 _ => None,
             })
             .next()
+            .or_else(|| {
+                arms.iter()
+                    .filter_map(|(pattern, body)| match pattern {
+                        PatternDetail::Any(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
+                        PatternDetail::Bind(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
+                        PatternDetail::Con(..) => None,
+                    })
+                    .next()
+            })
     }
 }
 
