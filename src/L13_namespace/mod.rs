@@ -363,10 +363,8 @@ pub struct Infer {
     trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<SmolStr, Vec<bool>>,
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
-    pub hover_table: Vec<(Span<()>, (Option<SmolStr>, Span<()>), Cxt, Rc<Val>)>,
+    pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
-    /// Tracks which source file URI each declaration name came from (for goto-definition).
-    pub decl_source: HashMap<SmolStr, SmolStr>,
 }
 
 impl Infer {
@@ -380,7 +378,6 @@ impl Infer {
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
-            decl_source: HashMap::new(),
         }
     }
     fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
