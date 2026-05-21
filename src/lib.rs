@@ -504,6 +504,7 @@ impl LanguageServer for Backend<Client> {
     fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let hover = || -> Option<Hover> {
             let uri = params.text_document_position_params.text_document.uri;
+            let uri = normalize_builtin_uri(&uri);
             let semantic = self.type_map.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let id = self.document_id.get(uri.as_str())?;
@@ -554,6 +555,7 @@ impl LanguageServer for Backend<Client> {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let definition = || -> Option<GotoDefinitionResponse> {
             let uri = params.text_document_position_params.text_document.uri;
+            let uri = normalize_builtin_uri(&uri);
             let semantic = self.hover_table.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position_params.position;
@@ -611,6 +613,7 @@ impl LanguageServer for Backend<Client> {
     fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let reference_list = || -> Option<Vec<Location>> {
             let uri = params.text_document_position.text_document.uri;
+            let uri = normalize_builtin_uri(&uri);
             let semantic = self.hover_table.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position.position;
@@ -647,6 +650,7 @@ impl LanguageServer for Backend<Client> {
 
     fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
+        let uri = normalize_builtin_uri(&uri);
         let uri_str = uri.to_string();
 
         // 5. 等待当前URI处理完成（带超时）
@@ -730,7 +734,7 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        let uri = params.text_document.uri.to_string();
+        let uri = normalize_builtin_uri(&params.text_document.uri).to_string();
         if let Some(map) = self.quickfix_map.get(&uri) {
             let mut actions = Vec::new();
             for diagnostic in params.context.diagnostics {
@@ -952,6 +956,19 @@ enum CustomNotification {}
 impl Notification for CustomNotification {
     type Params = InlayHintParams;
     const METHOD: &'static str = "custom/notification";
+}
+
+/// Normalize a builtin:// URI for map lookups.
+/// VS Code serializes builtin:/// → builtin:/ (empty authority → no //),
+/// but our maps store keys with builtin:///.
+fn normalize_builtin_uri(uri: &Url) -> Url {
+    let s = uri.as_str();
+    if s.starts_with("builtin:/") && !s.starts_with("builtin://") {
+        if let Ok(normalized) = Url::parse(&s.replacen("builtin:/", "builtin:///", 1)) {
+            return normalized;
+        }
+    }
+    uri.clone()
 }
 
 pub struct TextDocumentItem<'a> {
