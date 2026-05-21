@@ -58,6 +58,28 @@ export async function activate(context: ExtensionContext) {
 
 	client = await startLanguageServer(context, wasm);
 
+	// Register a text content provider for builtin:// URIs (e.g., prelude files).
+	// When the user navigates to a builtin:// URI via go-to-definition, VS Code
+	// calls this provider to get the file content instead of reading from disk.
+	context.subscriptions.push(
+		workspace.registerTextDocumentContentProvider('builtin', {
+			async provideTextDocumentContent(uri: Uri): Promise<string | undefined> {
+				if (!client) {
+					return undefined;
+				}
+				try {
+					const content = await client.sendRequest<string | null, { uri: string }>(
+						'typort-hdl/builtinContent',
+						{ uri: uri.toString() }
+					);
+					return content ?? undefined;
+				} catch {
+					return undefined;
+				}
+			}
+		})
+	);
+
 	type CountFileParams = { folder: string };
 	const CountFilesRequest = new RequestType<CountFileParams, number, void>('wasm-language-server/countFiles');
 	context.subscriptions.push(commands.registerCommand('vscode-samples.wasm-language-server.countFiles', async () => {
