@@ -1,9 +1,30 @@
-use crate::{bimap::BiMap, parser_lib::ToSpan};
+use crate::bimap::BiMap;
+use crate::parser_lib::ToSpan;
 
 use super::{
     syntax::{Locals, Pruning},
     *,
 };
+
+fn count_nat(val: &Rc<Val>) -> u64 {
+    match val.as_ref() {
+        Val::SumCase { case_name, datas, .. } if case_name.data == "zero" => 0,
+        Val::SumCase { case_name, datas, .. } if case_name.data == "succ" => {
+            if let Some((_, prev, _)) = datas.first() {
+                1 + count_nat(prev)
+            } else {
+                0
+            }
+        }
+        _ => 0,
+    }
+}
+
+pub(super) fn nat_to_dec(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    let nat_val = env.iter().next().unwrap().clone();
+    let count = count_nat(&nat_val);
+    Val::LiteralIntro(empty_span(count.to_string())).into()
+}
 
 #[derive(Debug, Clone)]
 pub struct Cxt {
@@ -160,21 +181,21 @@ fn file_delete(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
 
 // === helpers for building Tm trees ===
 
-fn tm_lam(names: &[&str], inner: Rc<Tm>) -> Rc<Tm> {
+pub(super) fn tm_lam(names: &[&str], inner: Rc<Tm>) -> Rc<Tm> {
     names.iter().rev().fold(inner, |acc, name|
         Tm::Lam(empty_span(SmolStr::new(*name)), Icit::Expl, acc).into())
 }
 
-fn tm_pi(args: &[(&str, Rc<Tm>)], ret: Rc<Tm>) -> Rc<Tm> {
+pub(super) fn tm_pi(args: &[(&str, Rc<Tm>)], ret: Rc<Tm>) -> Rc<Tm> {
     args.iter().rev().fold(ret, |acc, (name, ty)|
         Tm::Pi(empty_span(SmolStr::new(*name)), Icit::Expl, ty.clone(), acc).into())
 }
 
-fn tm_decl(name: &str) -> Rc<Tm> {
+pub(super) fn tm_decl(name: &str) -> Rc<Tm> {
     Tm::Decl(empty_span(SmolStr::new(name))).into()
 }
 
-fn tm_app(f: Rc<Tm>, arg: Rc<Tm>) -> Rc<Tm> {
+pub(super) fn tm_app(f: Rc<Tm>, arg: Rc<Tm>) -> Rc<Tm> {
     Tm::App(f, arg, Icit::Expl).into()
 }
 

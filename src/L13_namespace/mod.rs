@@ -831,6 +831,18 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             }
         }
         id += 1;
+            // After nat.typort is loaded (index 2), register nat_to_dec builtin
+            if id == 3 {
+                use cxt::tm_lam;
+                use cxt::tm_pi;
+                use cxt::tm_decl;
+                let f_nat_to_dec = PrimFunc(Rc::new(cxt::nat_to_dec));
+                let str_val = cxt.decl.get("String").map(|x| x.4.clone()).unwrap();
+                cxt = cxt.add_builtin(&infer, "nat_to_dec",
+                    tm_lam(&["n"], Tm::Prim(str_val.clone(), f_nat_to_dec).into()),
+                    tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
+                ).unwrap();
+            }
     }
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
     let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
@@ -2080,12 +2092,13 @@ println (moduleVL Adder)
         Ok(output) => {
             println!("=== Output ===\n{}", output);
             assert!(output.contains("module Adder"), "{}", output);
-            assert!(output.contains("input wire a"), "{}", output);
-            assert!(output.contains("input wire b"), "{}", output);
-            assert!(output.contains("output wire sum"), "{}", output);
+            assert!(output.contains("input wire [7:0] a"), "{}", output);
+            assert!(output.contains("input wire [7:0] b"), "{}", output);
+            assert!(output.contains("input wire cond"), "{}", output);
+            assert!(output.contains("output wire [7:0] sum"), "{}", output);
             assert!(output.contains("assign sum = (a + b)"), "{}", output);
             assert!(output.contains("endmodule"), "{}", output);
-            assert!(output.contains("\n"), "should have newlines: {}", output);
+            assert!(output.contains('\n'), "should have newlines: {}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

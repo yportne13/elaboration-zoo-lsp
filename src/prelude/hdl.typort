@@ -82,6 +82,9 @@ enum Expr {
     create(name: String)
     createIn(name: String)
     createOut(name: String)
+    createWidth(name: String, width: Nat)
+    createInWidth(name: String, width: Nat)
+    createOutWidth(name: String, width: Nat)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
     when(cond: Expr, body: Expr, elseBody: Option[Expr])
@@ -183,6 +186,15 @@ def createSignalExpr(name: String, e: Expr): Expr =
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createOut(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOutWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case _ =>
@@ -711,15 +723,15 @@ enum SwitchKey {
 // ============================================================
 
 def newBits(name: String, w: Nat): Bits[w] =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createWidth(name, w));
     Bits.mk(Some(name), e)
 
 def newUInt(name: String, w: Nat): UInt[w] =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createWidth(name, w));
     UInt.mk(Some(name), e)
 
 def newSInt(name: String, w: Nat): SInt[w] =
-    let e = createSignalExpr(name, create(name));
+    let e = createSignalExpr(name, createWidth(name, w));
     SInt.mk(Some(name), e)
 
 def newBool(name: String): Bool =
@@ -727,15 +739,15 @@ def newBool(name: String): Bool =
     Bool.mk(Some(name), e)
 
 def newUIntInput(name: String, w: Nat): UInt[w] =
-    let e = createSignalExpr(name, createIn(name));
+    let e = createSignalExpr(name, createInWidth(name, w));
     UInt.mk(Some(name), e)
 
 def newBitsInput(name: String, w: Nat): Bits[w] =
-    let e = createSignalExpr(name, createIn(name));
+    let e = createSignalExpr(name, createInWidth(name, w));
     Bits.mk(Some(name), e)
 
 def newSIntInput(name: String, w: Nat): SInt[w] =
-    let e = createSignalExpr(name, createIn(name));
+    let e = createSignalExpr(name, createInWidth(name, w));
     SInt.mk(Some(name), e)
 
 def newBoolInput(name: String): Bool =
@@ -743,15 +755,15 @@ def newBoolInput(name: String): Bool =
     Bool.mk(Some(name), e)
 
 def newBitsOutput(name: String, w: Nat): Bits[w] =
-    let e = createSignalExpr(name, createOut(name));
+    let e = createSignalExpr(name, createOutWidth(name, w));
     Bits.mk(Some(name), e)
 
 def newUIntOutput(name: String, w: Nat): UInt[w] =
-    let e = createSignalExpr(name, createOut(name));
+    let e = createSignalExpr(name, createOutWidth(name, w));
     UInt.mk(Some(name), e)
 
 def newSIntOutput(name: String, w: Nat): SInt[w] =
-    let e = createSignalExpr(name, createOut(name));
+    let e = createSignalExpr(name, createOutWidth(name, w));
     SInt.mk(Some(name), e)
 
 def newBoolOutput(name: String): Bool =
@@ -862,6 +874,10 @@ macro_rules module {
 //  Verilog Code Generation (pure typort library)
 // ============================================================
 
+// Convert Nat to decimal string (for Verilog width ranges like [7:0])
+// Uses the Rust builtin nat_to_dec which correctly counts Peano successors
+def natToDec(n: Nat): String = nat_to_dec(n)
+
 // String concat helpers (avoid Add trait to prevent typeclass issues with dep-types)
 
 def joinLines(ls: List[String]): String = match ls {
@@ -877,6 +893,9 @@ def exprVL(e: Expr): String = match e {
     case create(name) => name
     case createIn(name) => name
     case createOut(name) => name
+    case createWidth(name, _) => name
+    case createInWidth(name, _) => name
+    case createOutWidth(name, _) => name
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
     case assign(lhs, rhs) =>
@@ -911,6 +930,9 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case create(_) => collectAssignLines tail
         case createIn(_) => collectAssignLines tail
         case createOut(_) => collectAssignLines tail
+        case createWidth(_, _) => collectAssignLines tail
+        case createInWidth(_, _) => collectAssignLines tail
+        case createOutWidth(_, _) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
         case _ => lcons (exprVL(e)) (collectAssignLines tail)
     }
@@ -929,6 +951,8 @@ def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case cons(e, tail) => match e {
         case createIn(_) => true
         case createOut(_) => true
+        case createInWidth(_, _) => true
+        case createOutWidth(_, _) => true
         case _ => hasPorts tail
     }
 }
@@ -939,6 +963,8 @@ def collectPortLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case cons(e, tail) => match e {
         case createIn(name) => lcons ("  input wire " + name) (collectPortLines tail)
         case createOut(name) => lcons ("  output wire " + name) (collectPortLines tail)
+        case createInWidth(name, w) => lcons ("  input wire [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
+        case createOutWidth(name, w) => lcons ("  output wire [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
         case _ => collectPortLines tail
     }
 }
@@ -957,6 +983,7 @@ def collectWireLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case create(name) => lcons ("  wire " + name + ";") (collectWireLines tail)
+        case createWidth(name, w) => lcons ("  wire [" + natToDec(w - 1) + ":0] " + name + ";") (collectWireLines tail)
         case _ => collectWireLines tail
     }
 }
