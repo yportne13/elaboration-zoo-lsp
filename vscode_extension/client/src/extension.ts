@@ -61,6 +61,7 @@ export async function activate(context: ExtensionContext) {
 	// Register a text content provider for builtin:// URIs (e.g., prelude files).
 	// When the user navigates to a builtin:// URI via go-to-definition, VS Code
 	// calls this provider to get the file content instead of reading from disk.
+	const BuiltinContentRequest = new RequestType<{ uri: string }, string | null, void>('typort-hdl/builtinContent');
 	context.subscriptions.push(
 		workspace.registerTextDocumentContentProvider('builtin', {
 			async provideTextDocumentContent(uri: Uri): Promise<string | undefined> {
@@ -68,8 +69,8 @@ export async function activate(context: ExtensionContext) {
 					return undefined;
 				}
 				try {
-					const content = await client.sendRequest<string | null, { uri: string }>(
-						'typort-hdl/builtinContent',
+					const content = await client.sendRequest(
+						BuiltinContentRequest,
 						{ uri: uri.toString() }
 					);
 					return content ?? undefined;
