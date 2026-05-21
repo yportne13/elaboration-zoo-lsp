@@ -457,6 +457,10 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn did_open(&self, params: DidOpenTextDocumentParams) {
+        // Skip builtin:// prelude files — they are already loaded during load_prelude()
+        if params.text_document.uri.scheme() == "builtin" {
+            return;
+        }
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
             text: params.text_document.text.to_string(),
@@ -466,6 +470,10 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn did_change(&self, params: DidChangeTextDocumentParams) {
+        // Skip builtin:// prelude files — they are read-only virtual documents
+        if params.text_document.uri.scheme() == "builtin" {
+            return;
+        }
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
             text: params.content_changes[0].text.to_string(),
@@ -475,6 +483,10 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn did_save(&self, params: DidSaveTextDocumentParams) {
+        // Skip builtin:// prelude files — they are read-only virtual documents
+        if params.text_document.uri.scheme() == "builtin" {
+            return;
+        }
         if let Some(text) = params.text {
             let job = AnalysisJob {
                 uri: params.text_document.uri.clone(),
