@@ -533,11 +533,23 @@ impl LanguageServer for Backend<Client> {
                 .iter()
                 .find(|x| x.0.contains(offset))
                 .and_then(|x| {
-                    let start_position = offset_to_position(x.1.start_offset as usize, &rope)?;
-                    let end_position = offset_to_position(x.1.end_offset as usize, &rope)?;
+                    let def_span = &x.1;
+                    // Look up the source file URI for the definition span's path_id
+                    let def_uri = self.document_id.iter()
+                        .find(|e| *e.value() == def_span.path_id)
+                        .map(|e| Url::parse(e.key()).ok())
+                        .flatten()
+                        .unwrap_or_else(|| uri.clone());
+                    let def_rope = if def_uri == uri {
+                        rope.clone()
+                    } else {
+                        self.document_map.get(def_uri.as_str())?.clone()
+                    };
+                    let start_position = offset_to_position(def_span.start_offset as usize, &def_rope)?;
+                    let end_position = offset_to_position(def_span.end_offset as usize, &def_rope)?;
                     Some(GotoDefinitionResponse::Scalar(
                         Location::new(
-                            uri.clone(),
+                            def_uri,
                             Range::new(start_position, end_position),
                         )
                     ))
