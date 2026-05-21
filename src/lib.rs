@@ -129,7 +129,19 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// Look up the text content of a builtin:// URI from the document map.
     /// Prelude files are loaded into `document_map` during `load_prelude()`.
     pub fn get_builtin_content(&self, uri: &str) -> Option<String> {
-        self.document_map.get(uri).map(|rope| rope.to_string())
+        // Try the URI as-is first.
+        if let Some(content) = self.document_map.get(uri).map(|rope| rope.to_string()) {
+            return Some(content);
+        }
+        // VS Code normalizes builtin:/// → builtin:/ (empty authority → no //).
+        // Normalize to match the keys in document_map.
+        if uri.starts_with("builtin:/") && !uri.starts_with("builtin://") {
+            let normalized = uri.replacen("builtin:/", "builtin:///", 1);
+            if let Some(content) = self.document_map.get(&normalized).map(|rope| rope.to_string()) {
+                return Some(content);
+            }
+        }
+        None
     }
 
     /// 在 LSP init 握手完成后加载 prelude 文件。
