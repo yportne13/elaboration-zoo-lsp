@@ -25,7 +25,7 @@ mod L11_macro;
 pub mod L12_canonical;
 pub mod L13_namespace;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
 use client::{Client, ClientLike};
@@ -315,6 +315,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 cxt = &mut cc;
             };
             let mut terms = vec![];
+            // Record existing decl keys to detect new declarations from this file
+            let existing_decls: HashSet<SmolStr> = cxt.decl.keys().cloned().collect();
             let start = std::time::Instant::now();
             for tm in decls {
                 match infer.infer(cxt, tm.clone()) {
@@ -331,6 +333,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     Err(err) => {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
                     }
+                }
+            }
+            // Record source file for new declarations
+            let uri_str = params.uri.to_string();
+            for key in cxt.decl.keys() {
+                if !existing_decls.contains(key) {
+                    infer.decl_source.insert(key.clone(), SmolStr::new(&uri_str));
                 }
             }
             eprintln!("infer {:?}", start.elapsed().as_secs_f32());
@@ -533,11 +542,20 @@ impl LanguageServer for Backend<Client> {
                 .iter()
                 .find(|x| x.0.contains(offset))
                 .and_then(|x| {
-                    let start_position = offset_to_position(x.1.start_offset as usize, &rope)?;
-                    let end_position = offset_to_position(x.1.end_offset as usize, &rope)?;
+                    let (ref_source_uri, def_span) = &x.1;
+                    let source_uri = ref_source_uri.as_ref()
+                        .and_then(|u| Url::parse(u).ok())
+                        .unwrap_or_else(|| uri.clone());
+                    let rope = if source_uri.as_str() == uri.as_str() {
+                        rope.clone()
+                    } else {
+                        self.document_map.get(source_uri.as_str())?.clone()
+                    };
+                    let start_position = offset_to_position(def_span.start_offset as usize, &rope)?;
+                    let end_position = offset_to_position(def_span.end_offset as usize, &rope)?;
                     Some(GotoDefinitionResponse::Scalar(
                         Location::new(
-                            uri.clone(),
+                            source_uri,
                             Range::new(start_position, end_position),
                         )
                     ))
@@ -545,7 +563,7 @@ impl LanguageServer for Backend<Client> {
                 .or({
                     let ret: Vec<Location> = semantic.hover_table
                         .iter()
-                        .filter(|x| x.1.contains(offset))
+                        .filter(|x| x.1 .1.contains(offset))
                         .map(|x| x.0)
                         .flat_map(|x| Some(Location::new(
                             uri.clone(),
@@ -576,7 +594,7 @@ impl LanguageServer for Backend<Client> {
 
             let ret: Vec<Location> = semantic.hover_table
                 .iter()
-                .filter(|x| x.1.contains(offset))
+                        .filter(|x| x.1.1.contains(offset))
                 .map(|x| x.0)
                 .flat_map(|x| Some(Location::new(
                     uri.clone(),
