@@ -880,7 +880,7 @@ def exprVL(e: Expr): String = match e {
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
     case assign(lhs, rhs) =>
-        "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";\n"
+        "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
     case when(cond, body, elseBody) =>
         "  if (" + exprVL(cond) + ") begin\n" + exprVL(body) + "  end" + (
             match elseBody {
@@ -917,7 +917,11 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
 }
 
 def assignsVL[ne: Nat](es: Vec[Expr] ne): String =
-    joinLines(list_reverse(collectAssignLines es))
+    let ls = list_reverse(collectAssignLines es);
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
 
 // Helper: check if Vec[Expr] contains any port declarations
 def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {

@@ -403,6 +403,7 @@ impl Infer {
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
+                    self.hover_table.push((name.to_span(), name.to_span(), ret_cxt.clone_without_src_names(), vtyp.clone()));
                     (
                         ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone())?,
                         vtyp,
