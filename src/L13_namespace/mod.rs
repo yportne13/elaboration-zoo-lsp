@@ -380,6 +380,12 @@ impl Infer {
             completion_table: vec![],
         }
     }
+
+    pub fn meta_len(&self) -> usize { self.meta.len() }
+    pub fn meta_capacity(&self) -> usize { self.meta.capacity() }
+    pub fn meta_contrains_len(&self) -> usize { self.meta_contrains.len() }
+    pub fn meta_contrains_capacity(&self) -> usize { self.meta_contrains.capacity() }
+    pub fn trait_definition_len(&self) -> usize { self.trait_definition.len() }
     fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a, cxt, origin_typ));
         self.meta.len() as u32 - 1
@@ -391,9 +397,6 @@ impl Infer {
             let m = self.new_meta(a.clone(), cxt.clone(), a);
             Tm::Meta(MetaVar(m)).into()
         } else {
-            //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
-            //println!("{:?}: {}", a, pretty_tm(0, cxt.names(), temp));
-            //println!("{:?}: {:?}", a, temp);
             let closed = self.eval(
                 &cxt.decl,
                 &List::new(),

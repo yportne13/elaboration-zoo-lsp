@@ -1097,20 +1097,37 @@ impl Infer {
                 self.completion_table.push((t_span, method_decl.0.data.clone()));
             }
         }
-        if let Some(x) = cxt.namespace.iter()
+        // --- Namespace method lookup with meta cleanup ---
+        // Collect matching namespaces entries (clone to avoid borrow conflicts)
+        let ns_entries: Vec<_> = cxt.namespace.iter()
             .filter(|x| x.1.contains(&t.data))
-            .find(|x| {
-                let mut check_typ = x.0.clone();
-                while let Val::Pi(_, Icit::Impl, t, c) = check_typ.as_ref() {
-                    let u = self.fresh_meta(&cxt, t.clone());
+            .cloned()
+            .collect();
+        let ns_result = {
+            let mut result = None;
+            for ns_entry in &ns_entries {
+                let meta_before = self.meta.len();
+                let mut check_typ = ns_entry.0.clone();
+                while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
+                    let u = self.fresh_meta(&cxt, dom.clone());
                     let u = self.eval(&cxt.decl, &cxt.env, &u);
-                    check_typ = self.closure_apply(&cxt.decl, c, u);
+                    check_typ = self.closure_apply(&cxt.decl, cod, u);
                 }
-                self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok()
-            })
-            .map(|y| self.infer_expr(cxt, Raw::app(Raw::Var(t_span.map(|_| SmolStr::new(format!("{}{}", y.2, t.data)))), *x.clone()))) {
-                return x
+                if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
+                    result = Some(ns_entry.clone());
+                    break;
+                }
+                // Clean up metas created by this failed namespace entry
+                self.meta.truncate(meta_before);
             }
+            result
+        };
+        if let Some(ns_entry) = ns_result {
+            return self.infer_expr(cxt, Raw::app(
+                Raw::Var(t_span.map(|_| SmolStr::new(format!("{}{}", ns_entry.2, t.data)))),
+                *x.clone(),
+            ));
+        }
         {
             let traits = self.trait_definition
                 .clone()//TODO: can remove this clone?
