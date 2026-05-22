@@ -85,12 +85,22 @@ enum Expr {
     createWidth(name: String, width: Nat)
     createInWidth(name: String, width: Nat)
     createOutWidth(name: String, width: Nat)
+    createReg(name: String)
+    createRegWidth(name: String, width: Nat)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
+    regAssign(lhs: Expr, rhs: Expr)
     when(cond: Expr, body: Expr, elseBody: Option[Expr])
     switch(value: Expr, cases: Expr)
     block(head: Expr, tail: Expr)
     nop
+}
+
+// Check if an Expr is a register signal (createReg/createRegWidth)
+def isRegExpr(e: Expr): Boolean = match e {
+    case createReg(_) => true
+    case createRegWidth(_, _) => true
+    case _ => false
 }
 
 struct Module {
@@ -197,6 +207,12 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case createOutWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
+        case createReg(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
         case _ =>
             let wrapped = addWhenContext(e);
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
@@ -224,7 +240,12 @@ struct Bool {
 
 impl Data for Bool {
     def :=(that: Bool): Unit =
-        let dummy_expr = createSignalExpr("", assign(this.expr, that.expr));
+        let ass = isRegExpr(this.expr);
+        let assignment = match ass {
+            case true => regAssign(this.expr, that.expr)
+            case false => assign(this.expr, that.expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
 }
@@ -238,7 +259,12 @@ struct Bits[width: Nat] {
 
 impl[width: Nat] Data for Bits[width] {
     def :=(that: Bits[width]): Unit =
-        let dummy_expr = createSignalExpr("", assign(this.zz_expr, that.zz_expr));
+        let isReg = isRegExpr(this.zz_expr);
+        let assignment = match isReg {
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
 }
@@ -256,7 +282,12 @@ impl[width: Nat] Into[UInt[width]] for Nat {
 
 impl[width: Nat] Data for UInt[width] {
     def :=(that: UInt[width]): Unit =
-        let dummy_expr = createSignalExpr("", assign(this.zz_expr, that.zz_expr));
+        let isReg = isRegExpr(this.zz_expr);
+        let assignment = match isReg {
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
 }
@@ -270,7 +301,12 @@ struct SInt[width: Nat] {
 
 impl[width: Nat] Data for SInt[width] {
     def :=(that: SInt[width]): Unit =
-        let dummy_expr = createSignalExpr("", assign(this.zz_expr, that.zz_expr));
+        let isReg = isRegExpr(this.zz_expr);
+        let assignment = match isReg {
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
 }
@@ -770,6 +806,24 @@ def newBoolOutput(name: String): Bool =
     let e = createSignalExpr(name, createOut(name));
     Bool.mk(Some(name), e)
 
+// ---- Register signal creation ----
+
+def newUIntReg(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newBitsReg(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newSIntReg(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolReg(name: String): Bool =
+    let e = createSignalExpr(name, createReg(name));
+    Bool.mk(Some(name), e)
+
 // ============================================================
 //  Macros - Ergonomic Hardware DSL
 // ============================================================
@@ -808,6 +862,12 @@ macro_rules Expr {
     (input $x:ident = Bool) => {let $x = newBoolInput(stringify $x);};
     (output $x:ident = Bool) => {let $x = newBoolOutput(stringify $x);};
     (let $x:ident = Bool) => {let $x = newBool(stringify $x);};
+
+    // ---- register declarations ----
+    (reg $x:ident = Bits[$width:raw]) => {let $x = newBitsReg(stringify $x, $width);};
+    (reg $x:ident = UInt[$width:raw]) => {let $x = newUIntReg(stringify $x, $width);};
+    (reg $x:ident = SInt[$width:raw]) => {let $x = newSIntReg(stringify $x, $width);};
+    (reg $x:ident = Bool) => {let $x = newBoolReg(stringify $x);};
 
     // ---- generic let ----
     (let $x:ident = $y:raw) => {let $x = $y;};
@@ -896,10 +956,14 @@ def exprVL(e: Expr): String = match e {
     case createWidth(name, _) => name
     case createInWidth(name, _) => name
     case createOutWidth(name, _) => name
+    case createReg(name) => name
+    case createRegWidth(name, _) => name
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
     case assign(lhs, rhs) =>
         "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
+    case regAssign(lhs, rhs) =>
+        "    " + exprVL(lhs) + " <= " + exprVL(rhs) + ";"
     case when(cond, body, elseBody) =>
         "  if (" + exprVL(cond) + ") begin\n" + exprVL(body) + "  end" + (
             match elseBody {
@@ -933,6 +997,9 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createWidth(_, _) => collectAssignLines tail
         case createInWidth(_, _) => collectAssignLines tail
         case createOutWidth(_, _) => collectAssignLines tail
+        case createReg(_) => collectAssignLines tail
+        case createRegWidth(_, _) => collectAssignLines tail
+        case regAssign(_, _) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
         case _ => lcons (exprVL(e)) (collectAssignLines tail)
     }
@@ -988,6 +1055,25 @@ def collectWireLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
+// Collect reg declarations from Vec[Expr]
+def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case createReg(name) => lcons ("  reg " + name + ";") (collectRegLines tail)
+        case createRegWidth(name, w) => lcons ("  reg [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
+        case _ => collectRegLines tail
+    }
+}
+
+// Collect clocked assignments (regAssign) from Vec[Expr]
+def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case regAssign(_, _) => lcons (exprVL(e)) (collectClockLines tail)
+        case _ => collectClockLines tail
+    }
+}
+
 def wiresVL[ne: Nat](es: Vec[Expr] ne): String =
     let ls = list_reverse(collectWireLines es);
     match ls {
@@ -1012,13 +1098,43 @@ def alwaysVL[ne: Nat](es: Vec[Expr] ne): String =
         case _ => joinLines(ls) + "\n"
     }
 
+// Generate reg declarations (with leading newline if non-empty)
+def regsVL[ne: Nat](es: Vec[Expr] ne): String =
+    let ls = list_reverse(collectRegLines es);
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
+
+// Generate clocked always @(posedge clk) block from regAssign entries
+def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
+    let ls = list_reverse(collectClockLines es);
+    match ls {
+        case lnil => ""
+        case _ => "  always @(posedge clk) begin\n" + joinLines(ls) + "\n" + "  end\n"
+    }
+
 // Convert a Module to a Verilog string
 def moduleVL(m: Module): String =
     let port_decls = portsVL(m.expr);
     let wire_decls = wiresVL(m.expr);
+    let reg_decls = regsVL(m.expr);
     let assigns = assignsVL(m.expr);
     let always = alwaysVL(m.expr);
-    "module " + m.name + " (\n" + port_decls + "\n);\n" + wire_decls + assigns + always + "endmodule\n"
+    let clocked = clockedVL(m.expr);
+    let has_regs = match list_reverse(collectRegLines m.expr) {
+        case lnil => false
+        case _ => true
+    };
+    let clk_port = match has_regs {
+        case true => ",\n  input wire clk"
+        case false => ""
+    };
+    let reset_port = match has_regs {
+        case true => ",\n  input wire reset"
+        case false => ""
+    };
+    "module " + m.name + " (\n" + port_decls + clk_port + reset_port + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
 
 // The fsm macro provides convenient state machine definition 
 // Usage (inherently limited by STS; actual logic via when/switch):
