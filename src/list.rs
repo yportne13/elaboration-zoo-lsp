@@ -17,9 +17,9 @@ pub type Link<T> = Option<Rc<Node<T>>>;
 
 #[derive(Debug)]
 pub struct Node<T> {
-    elem: T,
-    size: usize,
-    next: Link<T>,
+    pub elem: T,
+    pub size: usize,
+    pub next: Link<T>,
 }
 
 impl<T> List<T> {

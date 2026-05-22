@@ -68,8 +68,8 @@ pub enum Waiter {
 ///    for code generation.
 #[derive(Debug, Clone)]
 pub struct TableEntry {
-    waiters: Vec<Waiter>,
-    answers: Vec<(Assertion, Span<SmolStr>)>,
+    pub waiters: Vec<Waiter>,
+    pub answers: Vec<(Assertion, Span<SmolStr>)>,
 }
 
 /// The state of the algorithm.
@@ -78,17 +78,17 @@ pub struct Synth {
     /// A stack of [`GeneratorNode`]s.
     ///
     /// A more in-depth explanation can be found in [`Synth::synth`].
-    generator_stack: Vec<GeneratorNode>,
+    pub generator_stack: Vec<GeneratorNode>,
     /// A stack of [`ConsumerNode`], [`Assertion`] pairs.
     ///
     /// A more in-depth explanation can be found in [`Synth::synth`].
-    resume_stack: Vec<(ConsumerNode, Assertion)>,
+    pub resume_stack: Vec<(ConsumerNode, Assertion)>,
     /// The instances available for a type class.
     pub class_instances: HashMap<SmolStr, Vec<Instance>>,
     /// Information about each `subgoal` being solved.
-    assertion_table: Vec<(Assertion, TableEntry)>,
+    pub assertion_table: Vec<(Assertion, TableEntry)>,
     /// The "final" answer for the algorithm.
-    root_answer: Option<Span<SmolStr>>,
+    pub root_answer: Option<Span<SmolStr>>,
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {

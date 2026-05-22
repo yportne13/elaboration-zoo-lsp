@@ -32,7 +32,7 @@ pub struct MetaVar(u32);
 #[derive(Debug, Clone)]
 pub enum MetaEntry {
     Solved(Rc<Val>, Rc<VTy>),
-    Unsolved(Rc<VTy>, Cxt, Rc<VTy>),
+    Unsolved(Rc<VTy>, std::sync::Arc<Cxt>, Rc<VTy>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,7 +116,7 @@ impl Tm {
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.clone(), oty.clone())),
+                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.as_ref().clone(), oty.clone())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -367,6 +367,273 @@ pub struct Infer {
     pub completion_table: Vec<(Span<()>, SmolStr)>,
 }
 
+// ── Memory profiling helpers ──
+
+fn arc_id<T>(rc: &Rc<T>) -> usize {
+    Rc::as_ptr(rc) as *const () as usize
+}
+
+#[derive(Default)]
+struct DetailCounts {
+    val_unique: usize,
+    tm_unique: usize,
+    /// Unique List spine nodes (Rc<Node<T>>) for Env
+    env_nodes: usize,
+    /// Unique List spine nodes for Spines
+    spine_nodes: usize,
+    /// Unique generic List spine nodes
+    list_other_nodes: usize,
+    smolstr_unique: usize,
+    smolstr_heap_est: usize,
+    span_void_count: usize,
+    span_smolstr_count: usize,
+    closure_count: usize,
+}
+
+impl DetailCounts {
+    fn walk_val(&mut self, val: &Rc<Val>, visited: &mut std::collections::HashSet<usize>) {
+        let id = arc_id(val);
+        if !visited.insert(id) {
+            return;
+        }
+        self.val_unique += 1;
+        self.walk_val_rec(val, visited);
+    }
+
+    fn walk_val_rec(&mut self, val: &Val, visited: &mut std::collections::HashSet<usize>) {
+        match val {
+            Val::Flex(_, sp) | Val::Rigid(_, sp) | Val::Decl(_, sp) | Val::Obj(_, _, sp) => {
+                self.walk_spine(sp, visited);
+            }
+            Val::Lam(name, _, clos) => {
+                self.span_smolstr_count += 1;
+                self.closure_count += 1;
+                self.walk_closure(clos, visited);
+            }
+            Val::Pi(name, _, vty, clos) => {
+                self.span_smolstr_count += 1;
+                self.walk_val_id(vty, visited);
+                self.closure_count += 1;
+                self.walk_closure(clos, visited);
+            }
+            Val::U(_) => {}
+            Val::LiteralType => {}
+            Val::LiteralIntro(s) => {
+                self.span_smolstr_count += 1; // Span<String> ~ Span<SmolStr>
+            }
+            Val::Prim(vty, _) => {
+                self.walk_val_id(vty, visited);
+            }
+            Val::Sum(name, params, cases, _) => {
+                self.span_smolstr_count += 1;
+                for (pname, pval, pvty, _) in params.iter() {
+                    self.span_smolstr_count += 1;
+                    self.walk_val_id(pval, visited);
+                    self.walk_val_id(pvty, visited);
+                }
+                for cname in cases.iter() {
+                    self.span_smolstr_count += 1;
+                }
+            }
+            Val::SumCase { typ, case_name, datas, .. } => {
+                self.walk_val_id(typ, visited);
+                self.span_smolstr_count += 1;
+                for (dname, dval, _) in datas.iter() {
+                    self.span_smolstr_count += 1;
+                    self.walk_val_id(dval, visited);
+                }
+            }
+            Val::Match(val, env, cases) => {
+                self.walk_val_id(val, visited);
+                self.walk_env(env, visited);
+                for (pat, tm) in cases {
+                    self.walk_tm_id(tm, visited);
+                }
+            }
+            Val::Call(_, args, body) => {
+                self.walk_spine(args, visited);
+                self.walk_val_id(body, visited);
+            }
+        }
+    }
+
+    fn walk_val_id(&mut self, val: &Rc<Val>, visited: &mut std::collections::HashSet<usize>) {
+        let id = arc_id(val);
+        if !visited.insert(id) {
+            return;
+        }
+        self.val_unique += 1;
+        self.walk_val_rec(val, visited);
+    }
+
+    fn walk_tm(&mut self, tm: &Rc<Tm>, visited: &mut std::collections::HashSet<usize>) {
+        let id = arc_id(tm);
+        if !visited.insert(id) {
+            return;
+        }
+        self.tm_unique += 1;
+        self.walk_tm_rec(tm, visited);
+    }
+
+    fn walk_tm_id(&mut self, tm: &Rc<Tm>, visited: &mut std::collections::HashSet<usize>) {
+        let id = arc_id(tm);
+        if !visited.insert(id) {
+            return;
+        }
+        self.tm_unique += 1;
+        self.walk_tm_rec(tm, visited);
+    }
+
+    fn walk_tm_rec(&mut self, tm: &Tm, visited: &mut std::collections::HashSet<usize>) {
+        match tm {
+            Tm::Var(_) => {}
+            Tm::Decl(name) => {
+                self.span_smolstr_count += 1;
+            }
+            Tm::Obj(inner, name) => {
+                self.walk_tm_id(inner, visited);
+                self.span_smolstr_count += 1;
+            }
+            Tm::Lam(name, _, body) => {
+                self.span_smolstr_count += 1;
+                self.walk_tm_id(body, visited);
+            }
+            Tm::App(f, a, _) => {
+                self.walk_tm_id(f, visited);
+                self.walk_tm_id(a, visited);
+            }
+            Tm::AppPruning(tm, _) => {
+                self.walk_tm_id(tm, visited);
+            }
+            Tm::U(_) => {}
+            Tm::Pi(name, _, ty_a, ty_b) => {
+                self.span_smolstr_count += 1;
+                self.walk_tm_id(ty_a, visited);
+                self.walk_tm_id(ty_b, visited);
+            }
+            Tm::Let(name, ty, val, body) => {
+                self.span_smolstr_count += 1;
+                self.walk_tm_id(ty, visited);
+                self.walk_tm_id(val, visited);
+                self.walk_tm_id(body, visited);
+            }
+            Tm::Meta(_) => {}
+            Tm::LiteralType => {}
+            Tm::LiteralIntro(_s) => {
+                self.span_smolstr_count += 1;
+            }
+            Tm::Prim(vty, _) => {
+                self.walk_val_id(vty, visited);
+            }
+            Tm::Sum(name, params, cases, _) => {
+                self.span_smolstr_count += 1;
+                for (pname, ptm, pty, _) in params.iter() {
+                    self.span_smolstr_count += 1;
+                    self.walk_tm_id(ptm, visited);
+                    self.walk_tm_id(pty, visited);
+                }
+                for cname in cases.iter() {
+                    self.span_smolstr_count += 1;
+                }
+            }
+            Tm::SumCase { typ, case_name, datas, .. } => {
+                self.walk_tm_id(typ, visited);
+                self.span_smolstr_count += 1;
+                for (dname, dtm, _) in datas.iter() {
+                    self.span_smolstr_count += 1;
+                    self.walk_tm_id(dtm, visited);
+                }
+            }
+            Tm::Match(tm, cases) => {
+                self.walk_tm_id(tm, visited);
+                for (pat, branch) in cases {
+                    self.walk_tm_id(branch, visited);
+                }
+            }
+            Tm::Call(_, args, body) => {
+                for (arg_tm, _) in args.iter() {
+                    self.walk_tm_id(arg_tm, visited);
+                }
+                self.walk_tm_id(body, visited);
+            }
+        }
+    }
+
+    fn walk_cxt(&mut self, cxt: &cxt::Cxt, visited: &mut std::collections::HashSet<usize>) {
+        // Walk env
+        self.walk_env(&cxt.env, visited);
+        // Walk decls (both Tm and Val sides)
+        for (_, (span, rtm, rval, rty, rvty)) in cxt.decl.iter() {
+            self.span_void_count += 1;
+            self.walk_tm_id(rtm, visited);
+            self.walk_val_id(rval, visited);
+            self.walk_tm_id(rty, visited);
+            self.walk_val_id(rvty, visited);
+        }
+        // Walk namespace
+        for (val, _, _raw) in cxt.namespace.iter() {
+            self.walk_val_id(val, visited);
+        }
+        // Walk src_names
+        for (_, _, (span, vty)) in cxt.src_names.iter_all() {
+            self.span_void_count += 1;
+            self.walk_val_id(vty, visited);
+        }
+    }
+
+    fn walk_env(&mut self, env: &List<Rc<Val>>, visited: &mut std::collections::HashSet<usize>) {
+        self.walk_list_spine_env(env, visited);
+        for val in env.iter() {
+            self.walk_val_id(val, visited);
+        }
+    }
+
+    fn walk_spine(&mut self, spine: &Spine, visited: &mut std::collections::HashSet<usize>) {
+        self.walk_list_spine_spine(spine, visited);
+        for (val, _) in spine.iter() {
+            self.walk_val_id(val, visited);
+        }
+    }
+
+    fn walk_list_spine_env(&mut self, list: &List<Rc<Val>>, visited: &mut std::collections::HashSet<usize>) {
+        let mut cur = &list.head;
+        while let Some(node) = cur {
+            let id = Rc::as_ptr(node) as *const () as usize;
+            if visited.insert(id) {
+                self.env_nodes += 1;
+            }
+            cur = &node.next;
+        }
+    }
+
+    fn walk_list_spine_spine(&mut self, spine: &Spine, visited: &mut std::collections::HashSet<usize>) {
+        let mut cur = &spine.head;
+        while let Some(node) = cur {
+            let id = Rc::as_ptr(node) as *const () as usize;
+            if visited.insert(id) {
+                self.spine_nodes += 1;
+            }
+            cur = &node.next;
+        }
+    }
+
+    fn walk_closure(&mut self, clos: &Closure, visited: &mut std::collections::HashSet<usize>) {
+        self.walk_env(&clos.0, visited);
+        self.walk_tm_id(&clos.1, visited);
+    }
+
+    // Count a SmolStr — track unique heap allocations
+    fn count_smolstr(&mut self, s: &SmolStr, visited: &mut std::collections::HashSet<usize>) {
+        if s.len() > 23 {
+            let id = s.as_str().as_ptr() as usize;
+            if visited.insert(id) {
+                self.smolstr_unique += 1;
+                self.smolstr_heap_est += s.len();
+            }
+        }
+    }
+}
+
 impl Infer {
     pub fn new() -> Self {
         Self {
@@ -386,9 +653,14 @@ impl Infer {
     pub fn meta_contrains_len(&self) -> usize { self.meta_contrains.len() }
     pub fn meta_contrains_capacity(&self) -> usize { self.meta_contrains.capacity() }
     pub fn trait_definition_len(&self) -> usize { self.trait_definition.len() }
+    pub fn shrink(&mut self) {
+        self.meta.shrink_to_fit();
+        self.meta_contrains.shrink_to_fit();
+    }
 
-    pub fn memory_stats(&self) -> serde_json::Value {
+    pub fn memory_stats_with_cxt(&self, cxt: Option<&cxt::Cxt>) -> serde_json::Value {
         use serde_json::json;
+        use std::collections::HashSet as StdHashSet;
         let total = self.meta.len();
         let solved = self.meta.iter().filter(|m| matches!(m, MetaEntry::Solved(..))).count();
         let unsolved = self.meta.iter().filter(|m| matches!(m, MetaEntry::Unsolved(..))).count();
@@ -397,7 +669,226 @@ impl Infer {
         let hover_len = self.hover_table.len();
         let hover_cap = self.hover_table.capacity();
         let constraints_len = self.meta_contrains.len();
+        let constraints_cap = self.meta_contrains.capacity();
         let completions_len = self.completion_table.len();
+
+        // Pre-compute sizes for json! macro (avoids generic type parsing issues in json!)
+        type RcValPair = (Rc<Val>, Rc<Val>);
+        let meta_contrains_entry_sz = std::mem::size_of::<RcValPair>();
+        let meta_contrains_cap_bytes = constraints_cap * meta_contrains_entry_sz;
+        type HoverEntry = (Span<()>, Span<()>, cxt::Cxt, Rc<Val>);
+        let hover_entry_sz = std::mem::size_of::<HoverEntry>();
+        let hover_cap_bytes = hover_cap * hover_entry_sz;
+        type DeclEntry = (SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>));
+        let decl_entry_sz = std::mem::size_of::<DeclEntry>();
+
+        // ── Meta content analysis ──
+        // Categorize unsolved metas by their Cxt env length (= number of bound variables)
+        let mut unsolved_env_len_hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let mut unsolved_decl_len_hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        for entry in &self.meta {
+            if let MetaEntry::Unsolved(_, c, _) = entry {
+                *unsolved_env_len_hist.entry(c.env.len()).or_insert(0) += 1;
+                *unsolved_decl_len_hist.entry(c.decl.len()).or_insert(0) += 1;
+            }
+        }
+        // Categorize solved metas: what kind of Val are they?
+        let mut solved_val_kind_hist: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for entry in &self.meta {
+            if let MetaEntry::Solved(val, _vty) = entry {
+                let kind = match val.as_ref() {
+                    Val::Flex(_, _) => "Flex",
+                    Val::Rigid(_, _) => "Rigid",
+                    Val::Decl(_, _) => "Decl",
+                    Val::Lam(_, _, _) => "Lam",
+                    Val::Pi(_, _, _, _) => "Pi",
+                    Val::U(_) => "U",
+                    Val::LiteralType => "LiteralType",
+                    Val::LiteralIntro(_) => "LiteralIntro",
+                    Val::Prim(_, _) => "Prim",
+                    Val::Sum(_, _, _, _) => "Sum",
+                    Val::SumCase { .. } => "SumCase",
+                    Val::Match(_, _, _) => "Match",
+                    Val::Call(_, _, _) => "Call",
+                    Val::Obj(_, _, _) => "Obj",
+                };
+                *solved_val_kind_hist.entry(kind.to_string()).or_insert(0) += 1;
+            }
+        }
+        // Categorize unsolved metas: shape of the type
+        let mut unsolved_vty_kind_hist: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for entry in &self.meta {
+            if let MetaEntry::Unsolved(vty, _, _) = entry {
+                let kind = match vty.as_ref() {
+                    Val::Flex(_, _) => "Flex",
+                    Val::Rigid(_, _) => "Rigid",
+                    Val::Decl(_, _) => "Decl",
+                    Val::Lam(_, _, _) => "Lam",
+                    Val::Pi(_, _, _, _) => "Pi",
+                    Val::U(_) => "U",
+                    Val::LiteralType => "LiteralType",
+                    Val::LiteralIntro(_) => "LiteralIntro",
+                    Val::Prim(_, _) => "Prim",
+                    Val::Sum(_, _, _, _) => "Sum",
+                    Val::SumCase { .. } => "SumCase",
+                    Val::Match(_, _, _) => "Match",
+                    Val::Call(_, _, _) => "Call",
+                    Val::Obj(_, _, _) => "Obj",
+                };
+                *unsolved_vty_kind_hist.entry(kind.to_string()).or_insert(0) += 1;
+            }
+        }
+        // Check how many unsolved metas share the same Cxt decl (by pointer identity of the HashMap root)
+        // im::HashMap doesn't expose pointer, so we count unique (decl.len(), env.len()) combos
+        let mut unique_cxt_fingerprints: StdHashSet<(usize, usize)> = StdHashSet::new();
+        for entry in &self.meta {
+            if let MetaEntry::Unsolved(_, c, _) = entry {
+                unique_cxt_fingerprints.insert((c.decl.len(), c.env.len()));
+            }
+        }
+
+        // ── Per-sourcecategory breakdown ──
+        let mut visited_solved: StdHashSet<usize> = StdHashSet::new();
+        let mut visited_unsolved: StdHashSet<usize> = StdHashSet::new();
+        let mut visited_cxt_in_meta: StdHashSet<usize> = StdHashSet::new();
+        let mut visited_trait: StdHashSet<usize> = StdHashSet::new();
+        let mut visited_mutable: StdHashSet<usize> = StdHashSet::new();
+        let mut visited_top_cxt: StdHashSet<usize> = StdHashSet::new();
+
+        let mut detail_solved = DetailCounts::default();
+        let mut detail_unsolved = DetailCounts::default();
+        let mut detail_cxt_in_meta = DetailCounts::default();
+        let mut detail_trait = DetailCounts::default();
+        let mut detail_mutable = DetailCounts::default();
+        let mut detail_top_cxt = DetailCounts::default();
+
+        for entry in &self.meta {
+            match entry {
+                MetaEntry::Solved(val, vty) => {
+                    detail_solved.walk_val(val, &mut visited_solved);
+                    detail_solved.walk_val(vty, &mut visited_solved);
+                }
+                MetaEntry::Unsolved(vty1, cxt_m, vty2) => {
+                    detail_unsolved.walk_val(vty1, &mut visited_unsolved);
+                    detail_cxt_in_meta.walk_cxt(cxt_m, &mut visited_cxt_in_meta);
+                    detail_unsolved.walk_val(vty2, &mut visited_unsolved);
+                }
+            }
+        }
+        for (_, instances) in self.trait_solver.class_instances.iter() {
+            for inst in instances {
+                for arg in &inst.assertion.arguments {
+                    detail_trait.walk_val(arg, &mut visited_trait);
+                }
+                for dep in inst.dependencies.iter() {
+                    for arg in &dep.arguments {
+                        detail_trait.walk_val(arg, &mut visited_trait);
+                    }
+                }
+            }
+        }
+        for (assertion, entry) in &self.trait_solver.assertion_table {
+            for arg in &assertion.arguments {
+                detail_trait.walk_val(arg, &mut visited_trait);
+            }
+            for (ans_assertion, _) in &entry.answers {
+                for arg in &ans_assertion.arguments {
+                    detail_trait.walk_val(arg, &mut visited_trait);
+                }
+            }
+        }
+        if let Ok(map) = self.mutable_map.read() {
+            for val in map.values() {
+                detail_mutable.walk_val(val, &mut visited_mutable);
+            }
+        }
+        let cxt_decl_count;
+        if let Some(c) = cxt {
+            cxt_decl_count = c.decl.len();
+            detail_top_cxt.walk_cxt(c, &mut visited_top_cxt);
+        } else {
+            cxt_decl_count = 0;
+        }
+
+        let val_node_size = std::mem::size_of::<Val>();
+        let tm_node_size = std::mem::size_of::<Tm>();
+        let arc_val_alloc = (std::mem::size_of::<Val>() + 16 + 7) & !7;
+        let arc_tm_alloc = (std::mem::size_of::<Tm>() + 16 + 7) & !7;
+        let node_val_alloc = {
+            type N = crate::list::Node<Rc<Val>>;
+            (std::mem::size_of::<N>() + 16 + 7) & !7
+        };
+        let node_spine_alloc = {
+            type N = crate::list::Node<(Rc<Val>, parser::syntax::Icit)>;
+            (std::mem::size_of::<N>() + 16 + 7) & !7
+        };
+        let meta_alloc = (std::mem::size_of::<MetaEntry>() + 16 + 7) & !7;
+
+        fn detail_bytes(d: &DetailCounts, arc_val: usize, arc_tm: usize, node_val: usize, node_spine: usize) -> serde_json::Value {
+            let val_heap = d.val_unique * arc_val;
+            let tm_heap = d.tm_unique * arc_tm;
+            let env_bytes = d.env_nodes * node_val;
+            let spine_bytes = d.spine_nodes * node_spine;
+            serde_json::json!({
+                "unique_val_nodes": d.val_unique,
+                "val_heap_bytes": val_heap,
+                "unique_tm_nodes": d.tm_unique,
+                "tm_heap_bytes": tm_heap,
+                "env_spine_nodes": d.env_nodes,
+                "env_node_bytes": env_bytes,
+                "spine_nodes": d.spine_nodes,
+                "spine_node_bytes": spine_bytes,
+                "span_void_count": d.span_void_count,
+                "span_smolstr_count": d.span_smolstr_count,
+                "closure_count": d.closure_count,
+                "total_arc_bytes": val_heap + tm_heap + env_bytes + spine_bytes,
+            })
+        }
+
+        // measure_cxt_deep inlined above
+
+        let cxt_deep = if let Some(c) = cxt {
+            let decl_len = c.decl.len();
+            let decl_bytes = decl_len * (decl_entry_sz + 24);
+            let src_names_len = c.src_names.len();
+            let ns_bytes: usize = c.namespace.iter().map(|_| std::mem::size_of::<(Rc<Val>, im::HashSet<SmolStr>, Raw)>()).sum();
+            let ns_set_bytes: usize = c.namespace.iter().map(|(_, s, _)| s.len() * (std::mem::size_of::<SmolStr>() + 8)).sum();
+            let namespaces_bytes = c.namespaces.len() * (std::mem::size_of::<SmolStr>() + 8);
+            let env_len = c.env.len();
+            let pruning_len = c.pruning.len();
+
+            json!({
+                "cxt_struct_bytes": std::mem::size_of::<cxt::Cxt>(),
+                "decl_entries": decl_len,
+                "decl_approx_bytes": decl_bytes,
+                "decl_entry_size": decl_entry_sz,
+                "src_names_entries": src_names_len,
+                "env_len": env_len,
+                "pruning_len": pruning_len,
+                "namespace_len": c.namespace.len(),
+                "namespace_list_bytes": ns_bytes,
+                "namespace_set_bytes": ns_set_bytes,
+                "namespaces_len": c.namespaces.len(),
+                "namespaces_set_bytes": namespaces_bytes,
+                "lvl": c.lvl.0,
+                "estimated_total": std::mem::size_of::<cxt::Cxt>() + decl_bytes + ns_bytes + ns_set_bytes + namespaces_bytes,
+            })
+        } else {
+            json!(null)
+        };
+
+        // Measure unsolved meta Cxt sizes
+        let cxt_in_meta_count: usize = self.meta.iter().filter_map(|m| match m {
+            MetaEntry::Unsolved(_, c, _) => Some(c.decl.len()),
+            _ => None,
+        }).sum();
+        let cxt_in_meta_env_avg: usize = if unsolved > 0 {
+            self.meta.iter().filter_map(|m| match m {
+                MetaEntry::Unsolved(_, c, _) => Some(c.env.len()),
+                _ => None,
+            }).sum::<usize>() / unsolved
+        } else { 0 };
+
         json!({
             "meta_entries": {
                 "total": total,
@@ -406,21 +897,86 @@ impl Infer {
                 "capacity": meta_cap,
                 "entry_size": MetaEntry_sz,
                 "vec_allocation_bytes": meta_cap * MetaEntry_sz,
+                "est_inline_bytes": total * MetaEntry_sz,
             },
-            "hover_table": {
+"hover_table": {
                 "len": hover_len,
                 "capacity": hover_cap,
+                "entry_size": hover_entry_sz,
+                "capacity_bytes": hover_cap_bytes,
             },
-            "meta_contrains": {
+"meta_contrains": {
                 "len": constraints_len,
+                "capacity": constraints_cap,
+                "entry_size": meta_contrains_entry_sz,
+                "capacity_bytes": meta_contrains_cap_bytes,
             },
             "completion_table": {
                 "len": completions_len,
             },
+            "per_source_breakdown": {
+                "solved_meta_vals": detail_bytes(&detail_solved, arc_val_alloc, arc_tm_alloc, node_val_alloc, node_spine_alloc),
+                "unsolved_meta_vals": detail_bytes(&detail_unsolved, arc_val_alloc, arc_tm_alloc, node_val_alloc, node_spine_alloc),
+                "cxt_in_unsolved_meta": detail_bytes(&detail_cxt_in_meta, arc_val_alloc, arc_tm_alloc, node_val_alloc, node_spine_alloc),
+                "trait_solver_vals": detail_bytes(&detail_trait, arc_val_alloc, arc_tm_alloc, node_val_alloc, node_spine_alloc),
+                "mutable_map_vals": detail_bytes(&detail_mutable, arc_val_alloc, arc_tm_alloc, node_val_alloc, node_spine_alloc),
+                "top_level_cxt": detail_bytes(&detail_top_cxt, arc_val_alloc, arc_tm_alloc, node_val_alloc, node_spine_alloc),
+            },
+            "cxt_in_meta_stats": {
+                "total_cxt_in_meta": unsolved,
+                "sum_decl_entries_in_meta_cxts": cxt_in_meta_count,
+                "avg_decl_entries_per_meta_cxt": if unsolved > 0 { cxt_in_meta_count / unsolved } else { 0 },
+                "avg_env_len_per_meta_cxt": cxt_in_meta_env_avg,
+            },
+            "meta_content_analysis": {
+                "unsolved_env_len_histogram": unsolved_env_len_hist,
+                "unsolved_decl_len_histogram": unsolved_decl_len_hist,
+                "solved_val_kind_histogram": solved_val_kind_hist,
+                "unsolved_vty_kind_histogram": unsolved_vty_kind_hist,
+                "unique_cxt_fingerprint_count": unique_cxt_fingerprints.len(),
+            },
+            "cxt_deep": cxt_deep,
+            "trait_solver": {
+                "class_count": self.trait_solver.class_instances.len(),
+                "total_instances": self.trait_solver.class_instances.values().map(|v| v.len()).sum::<usize>(),
+                "assertion_table_size": self.trait_solver.assertion_table.len(),
+                "assertion_table_capacity": self.trait_solver.assertion_table.capacity(),
+                "generator_stack_len": self.trait_solver.generator_stack.len(),
+                "resume_stack_len": self.trait_solver.resume_stack.len(),
+            },
+            "cxt": {
+                "decl_entries": cxt_decl_count,
+            },
+            "type_sizes": {
+                "MetaEntry": MetaEntry_sz,
+                "Cxt": std::mem::size_of::<cxt::Cxt>(),
+                "Infer": std::mem::size_of::<Self>(),
+                "Val": val_node_size,
+                "Tm": tm_node_size,
+                "Closure": std::mem::size_of::<Closure>(),
+                "Env": std::mem::size_of::<Env>(),
+                "Spine": std::mem::size_of::<Spine>(),
+                "SmolStr": std::mem::size_of::<SmolStr>(),
+                "Span_void": std::mem::size_of::<Span<()>>(),
+                "Span_SmolStr": std::mem::size_of::<Span<SmolStr>>(),
+                "Locals": std::mem::size_of::<syntax::Locals>(),
+                "List_Rc_Val": std::mem::size_of::<List<Rc<Val>>>(),
+                "DeclTm": std::mem::size_of::<DeclTm>(),
+                "PatternDetail": std::mem::size_of::<PatternDetail>(),
+                "BiMap": std::mem::size_of::<crate::bimap::BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>>(),
+                "DeclEntry": decl_entry_sz,
+                "Rc_Val": std::mem::size_of::<Rc<Val>>(),
+                "Rc_Tm": std::mem::size_of::<Rc<Tm>>(),
+            },
         })
     }
+
+    pub fn memory_stats(&self) -> serde_json::Value {
+        self.memory_stats_with_cxt(None)
+    }
+
     fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
-        self.meta.push(MetaEntry::Unsolved(a, cxt, origin_typ));
+        self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ));
         self.meta.len() as u32 - 1
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {

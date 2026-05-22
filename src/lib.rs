@@ -131,6 +131,40 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.cxt.clone()
     }
 
+    pub fn backend_stats(&self) -> serde_json::Value {
+        use serde_json::json;
+        let doc_count = self.document_map.len();
+        let doc_bytes: usize = self.document_map.iter().map(|e| e.value().len_bytes()).sum();
+        let ast_count = self.ast_map.len();
+        let ast_entries: usize = self.ast_map.iter().map(|e| e.value().len()).sum();
+        let type_count = self.type_map.len();
+        let type_entries: usize = self.type_map.iter().map(|e| e.value().len()).sum();
+        let hover_count = self.hover_table.len();
+        let mac_count = self.exported_macros.len();
+        let mac_rules: usize = self.exported_macros.iter().map(|e| e.value().len()).sum();
+        json!({
+            "document_map": {
+                "files": doc_count,
+                "total_bytes": doc_bytes,
+            },
+            "ast_map": {
+                "files": ast_count,
+                "total_decls": ast_entries,
+            },
+            "type_map": {
+                "files": type_count,
+                "total_decls": type_entries,
+            },
+            "hover_table_map": {
+                "files": hover_count,
+            },
+            "exported_macros": {
+                "names": mac_count,
+                "total_rules": mac_rules,
+            },
+        })
+    }
+
     /// Look up the text content of a builtin:// URI from the document map.
     /// Prelude files are loaded into `document_map` during `load_prelude()`.
     pub fn get_builtin_content(&self, uri: &str) -> Option<String> {
@@ -152,6 +186,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// 在 LSP init 握手完成后加载 prelude 文件。
     /// 这时 connection 已经建立，diagnostics 会正确发送给客户端。
     pub fn load_prelude(self: &Arc<Self>) {
+        self.load_prelude_impl(false);
+    }
+
+    pub fn load_prelude_skip_hdl(self: &Arc<Self>) {
+        self.load_prelude_impl(true);
+    }
+
+    fn load_prelude_impl(self: &Arc<Self>, skip_hdl: bool) {
         use lsp_types::Url;
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///op.typort").unwrap(),
@@ -234,11 +276,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/nonempty.typort"),
             version: None,
         });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///hdl.typort").unwrap(),
-            text: include_str!("prelude/hdl.typort"),
-            version: None,
-        });
+        if !skip_hdl {
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl.typort").unwrap(),
+                text: include_str!("prelude/hdl.typort"),
+                version: None,
+            });
+        }
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///show.typort").unwrap(),
             text: include_str!("prelude/show.typort"),
@@ -261,7 +305,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         }
         self.infer.lock().unwrap().hover_table.clear();
+        self.infer.lock().unwrap().hover_table.shrink_to_fit();
         self.infer.lock().unwrap().completion_table.clear();
+        self.infer.lock().unwrap().completion_table.shrink_to_fit();
         self.infer.lock().unwrap().mutable_map.write().unwrap().clear();
     }
 
@@ -379,7 +425,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 self.hover_table.insert(params.uri.to_string(), infer.clone());
             }
             infer.hover_table.clear();
+            infer.hover_table.shrink_to_fit();
             infer.completion_table.clear();
+            infer.completion_table.shrink_to_fit();
+            infer.shrink();
             infer.mutable_map.write().unwrap().clear();
             let mut diags = Vec::new();
             let mut quickfixes_for_uri = HashMap::new();

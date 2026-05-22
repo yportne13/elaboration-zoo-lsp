@@ -11,6 +11,8 @@ path = "src/main.rs"
 name = "typort"
 path = "src/bin/cli.rs"
 
+
+
 [dependencies]
 lsp-types = { version = "0.95.1", features = ["proposed"] }
 lsp-server = "0.7.6"

@@ -47,4 +47,14 @@ where
     pub fn get_by_key2_mut(&mut self, key2: &K2) -> Option<&mut V> {
         self.map2.get_mut(key2)
     }
+
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.map2.values()
+    }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = (&K1, &K2, &V)> {
+        self.map1.iter().filter_map(move |(k1, k2)| {
+            self.map2.get(k2).map(|v| (k1, k2, v))
+        })
+    }
 }

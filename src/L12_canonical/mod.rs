@@ -29,7 +29,7 @@ pub struct MetaVar(u32);
 #[derive(Debug, Clone)]
 enum MetaEntry {
     Solved(Rc<Val>, Rc<VTy>),
-    Unsolved(Rc<VTy>, Cxt, Rc<VTy>),
+    Unsolved(Rc<VTy>, std::sync::Arc<Cxt>, Rc<VTy>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -111,7 +111,7 @@ impl Tm {
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.clone(), oty.clone())),
+                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.as_ref().clone(), oty.clone())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -366,7 +366,7 @@ impl Infer {
         }
     }
     fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
-        self.meta.push(MetaEntry::Unsolved(a, cxt, origin_typ));
+        self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ));
         self.meta.len() as u32 - 1
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {
