@@ -84,4 +84,7 @@ are unaffected.
 | `meta_entries.unsolved` | Count of unsolved meta variables |
 | `meta_entries.vec_allocation_bytes` | Vec backing store for meta entries |
 | `hover_table.capacity` | Residual capacity after clear |
+| `timings.total_secs` | Total loading time |
+| `timings.total_infer_secs` | Time spent in type inference |
+| `timings.files[].infer_secs` | Per-file inference time (find hotspots) |
 | dhat peak phases | Per-backtrace allocation breakdown |

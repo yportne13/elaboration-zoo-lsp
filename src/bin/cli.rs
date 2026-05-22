@@ -81,7 +81,11 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     backend.load_prelude();
 
     if args[1] == "--stats" {
-        // ─── Memory benchmark mode ───
+        // ─── Memory + timing benchmark mode ───
+        // Collect timings recorded during load_prelude
+        let timings_vec = backend.timings.lock().unwrap().clone();
+        // lock released after clone
+
         let infer_arc = backend.get_infer();
         let infer_lock = infer_arc.lock().unwrap();
         let stats = infer_lock.memory_stats();
@@ -92,6 +96,11 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         #[cfg(not(windows))]
         let (ws, peak_ws, pf) = (0, 0, 0);
 
+        // Aggregate timing totals
+        let total_parser: f64 = timings_vec.iter().map(|t| t.1).sum();
+        let total_infer: f64 = timings_vec.iter().map(|t| t.2).sum();
+        let total_change: f64 = timings_vec.iter().map(|t| t.3).sum();
+
         let result = serde_json::json!({
             "peak_working_set_bytes": peak_ws,
             "peak_working_set_mb": format!("{:.1}", peak_ws as f64 / 1_048_576.0),
@@ -100,6 +109,19 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             "pagefile_usage_bytes": pf,
             "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
             "infer_stats": stats,
+            "timings": {
+                "files": timings_vec.iter().map(|(uri, parser_s, infer_s, total_s)| {
+                    serde_json::json!({
+                        "uri": uri,
+                        "parser_secs": format!("{:.4}", parser_s),
+                        "infer_secs": format!("{:.4}", infer_s),
+                        "total_secs": format!("{:.4}", total_s),
+                    })
+                }).collect::<Vec<_>>(),
+                "total_parser_secs": format!("{:.4}", total_parser),
+                "total_infer_secs": format!("{:.4}", total_infer),
+                "total_secs": format!("{:.4}", total_change),
+            },
         });
 
         println!("{}", serde_json::to_string_pretty(&result).unwrap());

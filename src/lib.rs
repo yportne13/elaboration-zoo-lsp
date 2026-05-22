@@ -81,6 +81,9 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
 
     infer: Arc<Mutex<Infer>>,
     cxt: Arc<Mutex<Cxt>>,
+
+    /// Timing data: (uri, parser_secs, infer_secs, change_secs)
+    pub timings: Mutex<Vec<(String, f64, f64, f64)>>,
 }
 
 impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
@@ -94,6 +97,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let processed_signal = Arc::new((Mutex::new(HashMap::new()), Condvar::new()));
         let infer = Infer::new();
         let cxt = Cxt::new(&infer);
+        let timings = Mutex::new(Vec::new());
 
         let (tx, rx) = mpsc::channel::<AnalysisJob>();
 
@@ -112,6 +116,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             processed_signal,
             infer: Arc::new(Mutex::new(infer)),
             cxt: Arc::new(Mutex::new(cxt)),
+            timings,
         });
         ret
     }
@@ -319,6 +324,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .collect();
         if let Some((decls, parse_errs, new_exports)) = parser_with_macros(&preprocess(params.text), now_id, &global_macros) {
             eprintln!("parser {:?}", start.elapsed().as_secs_f32());
+            let parser_dur = start.elapsed().as_secs_f64();
             // Merge newly exported macros into the global table
             for (name, rules) in new_exports {
                 self.exported_macros.insert(name, rules);
@@ -359,6 +365,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
             }
             eprintln!("infer {:?}", start.elapsed().as_secs_f32());
+            let infer_dur = start.elapsed().as_secs_f64();
+            // Record timing for benchmark
+            self.timings.lock().unwrap().push((
+                params.uri.to_string(),
+                parser_dur,
+                infer_dur,
+                start_all.elapsed().as_secs_f64(),
+            ));
             let is_builtin = params.uri.scheme() == "builtin";
             if !is_builtin {
                 self.type_map.insert(params.uri.to_string(), terms);
@@ -410,6 +424,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         Position { line: 0, character: 0 },
                         Position { line: 0, character: 1 },
                     ), "parse error".to_owned())], params.version);
+            self.timings.lock().unwrap().push((
+                params.uri.to_string(),
+                start_all.elapsed().as_secs_f64(),
+                -1.0,
+                start_all.elapsed().as_secs_f64(),
+            ));
         }
         eprintln!("change {:?}", start_all.elapsed().as_secs_f32());
     }
