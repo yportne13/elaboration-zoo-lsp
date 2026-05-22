@@ -25,7 +25,7 @@ async function startLanguageServer(context: ExtensionContext, wasm: Wasm): Promi
 		const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
 		const bits = await workspace.fs.readFile(filename);
 		const module = await WebAssembly.compile(bits);
-		const process = await wasm.createProcess('lsp-server', module, { initial: 640, maximum: 32000, shared: true }, options);
+		const process = await wasm.createProcess('lsp-server', module, { initial: 640, maximum: 16000, shared: true }, options);
 
 		const decoder = new TextDecoder('utf-8');
 		process.stderr!.onData((data) => {

@@ -326,15 +326,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut err_collect = vec![];
             self.ast_map.insert(params.uri.to_string(), decls.clone());
             let mut i = self.infer.lock().unwrap();
-            let mut ic = i.clone();
             let mut c = self.cxt.lock().unwrap();
-            let mut cc = c.clone();
             let infer: &mut Infer;
             let cxt: &mut Cxt;
             if MUT {
                 infer = &mut i;
                 cxt = &mut c;
             } else {
+                let mut ic = i.clone();
+                let mut cc = c.clone();
                 infer = &mut ic;
                 cxt = &mut cc;
             };
@@ -358,8 +358,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
             }
             eprintln!("infer {:?}", start.elapsed().as_secs_f32());
-            self.type_map.insert(params.uri.to_string(), terms);
-            self.hover_table.insert(params.uri.to_string(), infer.clone());
+            let is_builtin = params.uri.scheme() == "builtin";
+            if !is_builtin {
+                self.type_map.insert(params.uri.to_string(), terms);
+                self.hover_table.insert(params.uri.to_string(), infer.clone());
+            }
             infer.hover_table.clear();
             infer.completion_table.clear();
             infer.mutable_map.write().unwrap().clear();

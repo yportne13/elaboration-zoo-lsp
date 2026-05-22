@@ -30,3 +30,9 @@ crossbeam-channel = "0.5.15"
 dashmap = "6.1.0"
 smol_str = "0.3.2"
 codespan-reporting = "0.13.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true
