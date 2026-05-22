@@ -163,6 +163,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/nat.typort"),
             version: None,
         });
+        // Register nat_to_dec builtin (required by hdl.typort for Verilog generation)
+        {
+            let infer = self.infer.lock().unwrap();
+            let mut cxt = self.cxt.lock().unwrap();
+            L13_namespace::cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
+        }
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///natarith.typort").unwrap(),
             text: include_str!("prelude/natarith.typort"),

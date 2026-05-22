@@ -305,6 +305,17 @@ impl Cxt {
         self.decl(empty_span(SmolStr::new(name)), val, vt, ty, va)
     }
 
+    /// Register nat_to_dec builtin (must be called AFTER nat.typort is loaded)
+    pub(crate) fn register_nat_to_dec(cxt: &mut Cxt, infer: &Infer) {
+        let f_nat_to_dec = PrimFunc(Rc::new(nat_to_dec));
+        let str_val = cxt.decl.get("String").map(|x| x.4.clone()).unwrap();
+        let old = std::mem::replace(cxt, Self::empty());
+        *cxt = old.add_builtin(infer, "nat_to_dec",
+            tm_lam(&["n"], Tm::Prim(str_val.clone(), f_nat_to_dec).into()),
+            tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
+        ).unwrap();
+    }
+
     pub fn empty() -> Self {
         Cxt {
             env: List::new(),
