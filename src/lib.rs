@@ -327,14 +327,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.ast_map.insert(params.uri.to_string(), decls.clone());
             let mut i = self.infer.lock().unwrap();
             let mut c = self.cxt.lock().unwrap();
+            let (mut ic, mut cc);
             let infer: &mut Infer;
             let cxt: &mut Cxt;
             if MUT {
                 infer = &mut i;
                 cxt = &mut c;
             } else {
-                let mut ic = i.clone();
-                let mut cc = c.clone();
+                ic = i.clone();
+                cc = c.clone();
                 infer = &mut ic;
                 cxt = &mut cc;
             };
