@@ -30,6 +30,10 @@ crossbeam-channel = "0.5.15"
 dashmap = "6.1.0"
 smol_str = "0.3.2"
 codespan-reporting = "0.13.1"
+dhat = { version = "0.3", optional = true }
+
+[features]
+dhat-heap = ["dhat"]
 
 [profile.release]
 lto = true
