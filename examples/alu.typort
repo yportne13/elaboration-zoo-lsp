@@ -26,19 +26,36 @@ module multiALU {
     input b = UInt[8]
     output result = UInt[8]
 
-    let add = UInt[8]
-    let sub = UInt[8]
-    add := a + b
-    sub := a - b
-    let w_push = whenBegin((op === UInt.mk(None, create("uint_lit"))).expr)
-    result := add
-    let w_pop = whenEnd(unit)
-    let w_opush = whenOtherwiseBegin(unit)
-    result := sub
-    let w_opop = whenEnd(unit)
+    // Nat literal assignment (via Into auto-conversion)
+    result := 0
+
+    // Using eqNat to compare with Nat literal (cleaner than UInt.mk(..., create("uint_lit")))
+    when(op.eqNat(0)) {
+        result := a + b
+    } elsewhen(op.eqNat(1)) {
+        result := a - b
+    } otherwise {
+        result := b
+    }
 }
 
 def multi_module_opt = get_global("module").data.head_option
 def multi_module_after = multi_module_opt.unwrap_or(Module.mk("multiALU", 0, nil))
 println("\n--- ALU Multi-Function Verilog ---")
 println(moduleVL(multi_module_after))
+
+// ---------- Counter with Nat initial value ----------
+
+module counter {
+    reg count = UInt[16]
+    output done = Bool
+
+    // Assign initial value (Nat literal auto-converted via Into)
+    count := 0
+    done := count.eqNat(65535)
+}
+
+def counter_module_opt = get_global("module").data.head_option
+def counter_module = counter_module_opt.unwrap_or(Module.mk("counter", 0, nil))
+println("\n--- Counter Verilog ---")
+println(moduleVL(counter_module))

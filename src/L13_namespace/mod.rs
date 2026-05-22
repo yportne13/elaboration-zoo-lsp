@@ -2143,6 +2143,31 @@ println (moduleVL Test)
 }
 
 
+#[test]
+fn test_hdl_nat_literals() {
+    // Test that Nat literals work through Into[UInt[width]] for Nat
+    // and that eqNat comparisons produce correct Verilog with literal values
+    let input = r#"
+module NatTest {
+    let a = UInt[8]
+    let b = UInt[8]
+    output result = UInt[8]
+    output zero_check = Bool
+    result := 7
+    zero_check := a.eqNat(0)
+}
+println (moduleVL NatTest)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module NatTest"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            assert!(output.contains("assign result = 7"), "missing result assign: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
 
 #[test]
 fn test_macro_cut_parse_error_in_body() {

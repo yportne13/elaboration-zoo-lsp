@@ -87,6 +87,7 @@ enum Expr {
     createOutWidth(name: String, width: Nat)
     createReg(name: String)
     createRegWidth(name: String, width: Nat)
+    literal(v: Nat)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
     regAssign(lhs: Expr, rhs: Expr)
@@ -213,6 +214,8 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case createRegWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
+        case literal(_) =>
+            e
         case _ =>
             let wrapped = addWhenContext(e);
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
@@ -250,11 +253,19 @@ impl Data for Bool {
     def expr: Expr = this.zz_expr
 }
 
+impl Into[Bool] for Bool {
+    def into: Bool = this
+}
+
 // ---------- Bits (raw bit vector) ----------
 
 struct Bits[width: Nat] {
     name: Option[String]
     zz_expr: Expr
+}
+
+impl[width: Nat] Into[Bits[width]] for Bits[width] {
+    def into: Bits[width] = this
 }
 
 impl[width: Nat] Data for Bits[width] {
@@ -276,8 +287,21 @@ struct UInt[width: Nat] {
     zz_expr: Expr
 }
 
+// Check if a Nat value fits in a given bit width
+def natFitsIn(width: Nat, value: Nat): Boolean = match value {
+    case zero => true
+    case succ(v) => match width {
+        case zero => false
+        case succ(w) => natFitsIn(w, v)
+    }
+}
+
 impl[width: Nat] Into[UInt[width]] for Nat {
-    def into: UInt[width] = UInt.mk(None, create("uint_lit"))
+    def into: UInt[width] = UInt.mk(None, literal(this))
+}
+
+impl[width: Nat] Into[UInt[width]] for UInt[width] {
+    def into: UInt[width] = this
 }
 
 impl[width: Nat] Data for UInt[width] {
@@ -297,6 +321,10 @@ impl[width: Nat] Data for UInt[width] {
 struct SInt[width: Nat] {
     name: Option[String]
     zz_expr: Expr
+}
+
+impl[width: Nat] Into[SInt[width]] for SInt[width] {
+    def into: SInt[width] = this
 }
 
 impl[width: Nat] Data for SInt[width] {
@@ -446,6 +474,11 @@ impl[width: Nat] UInt[width] {
         Bool.mk(None, binary(this.expr, "===", that.expr))
     def =/=(that: UInt[width]): Bool =
         Bool.mk(None, binary(this.expr, "=/=", that.expr))
+    // Nat comparison helpers
+    def eqNat(that: Nat): Bool =
+        Bool.mk(None, binary(this.expr, "===", literal(that)))
+    def neNat(that: Nat): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", literal(that)))
 }
 
 // --- SInt comparisons ---
@@ -904,8 +937,8 @@ macro_rules Expr {
            let w_epop = whenEnd(unit); )*
     };
 
-    // ---- assignment ----
-    ($lhs:ident := $rhs:raw) => {let uselessrr = $lhs := $rhs;};
+    // ---- assignment — auto-wrap RHS in .into to support both Self and Nat ----
+    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let uselessrr = $lhs := rhs_conv;};
 
     // ---- raw expression passthrough ----
     ($x: raw) => {let useless = $x;}
@@ -958,6 +991,7 @@ def exprVL(e: Expr): String = match e {
     case createOutWidth(name, _) => name
     case createReg(name) => name
     case createRegWidth(name, _) => name
+    case literal(v) => natToDec(v)
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
     case assign(lhs, rhs) =>
@@ -1000,6 +1034,7 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createReg(_) => collectAssignLines tail
         case createRegWidth(_, _) => collectAssignLines tail
         case regAssign(_, _) => collectAssignLines tail
+        case literal(_) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
         case _ => lcons (exprVL(e)) (collectAssignLines tail)
     }
