@@ -33,7 +33,7 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>,
-    pub decl: HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
+    pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>>,
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: HashSet<SmolStr>,
@@ -323,7 +323,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
-            decl: HashMap::new(),
+            decl: Rc::new(HashMap::new()),
             namespace: List::new(),
             namespace_prefix: None,
             namespaces: HashSet::new(),
@@ -377,7 +377,8 @@ impl Cxt {
     pub fn fake_bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut decl = self.decl.clone();
-        let t = decl.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
+        let decl_map = Rc::make_mut(&mut decl);
+        let t = decl_map.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
         if t.is_some() {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
@@ -432,7 +433,8 @@ impl Cxt {
     pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut decl = self.decl.clone();
-        let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+        let decl_map = Rc::make_mut(&mut decl);
+        let t = decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
         /*if let Some((span, _, _, _, _)) = t {
             return Err(Error(span.map(|_| format!("redefine {}", x.data))));
         }*/

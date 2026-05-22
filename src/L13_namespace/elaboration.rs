@@ -710,23 +710,25 @@ impl Infer {
                         .filter(|(k, _)| k.starts_with(&prefix_search))
                         .map(|(k, v)| (SmolStr::new(k.strip_prefix(&prefix_search).unwrap()), v.clone()))
                         .collect();
+                    let decl_map = Rc::make_mut(&mut cxt.decl);
                     for (stripped, v) in to_insert {
-                        cxt.decl.insert(stripped, v);
+                        decl_map.insert(stripped, v);
                     }
                     // Also bring the prefix itself if it's a decl
-                    if let Some(v) = cxt.decl.get(&SmolStr::new(&prefix_str)).cloned() {
+                    if let Some(v) = decl_map.get(&SmolStr::new(&prefix_str)).cloned() {
                         let last = prefix.last().unwrap().clone();
-                        cxt.decl.insert(last, v);
+                        decl_map.insert(last, v);
                     }
                 } else {
+                    let decl_map = Rc::make_mut(&mut cxt.decl);
                     for n in names {
                         let full_name = if prefix.is_empty() {
                             n.clone()
                         } else {
                             SmolStr::new(format!("{}.{}", prefix_str, n))
                         };
-                        if let Some(v) = cxt.decl.get(&full_name).cloned() {
-                            cxt.decl.insert(n, v);
+                        if let Some(v) = decl_map.get(&full_name).cloned() {
+                            decl_map.insert(n, v);
                         }
                     }
                 }

@@ -300,8 +300,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 .collect();
             drop(cxt_lock);
             let mut cxt_lock = self.cxt.lock().unwrap();
+            let decl_map = Arc::make_mut(&mut cxt_lock.decl);
             for (short, v) in aliases {
-                cxt_lock.decl.entry(short).or_insert(v);
+                decl_map.entry(short).or_insert(v);
             }
         }
         self.infer.lock().unwrap().hover_table.clear();

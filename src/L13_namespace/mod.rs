@@ -1447,8 +1447,9 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             (short, v.clone())
         })
         .collect();
+    let decl_map = Rc::make_mut(&mut cxt.decl);
     for (short, v) in prelude_aliases {
-        cxt.decl.entry(short).or_insert(v);
+        decl_map.entry(short).or_insert(v);
     }
     // Parse main file with accumulated macros from prelude
     let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
