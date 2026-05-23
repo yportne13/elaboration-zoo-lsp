@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         // ─── Memory benchmark mode ───
         let infer_arc = backend.get_infer();
         let infer_lock = infer_arc.lock().unwrap();
-        let stats = infer_lock.memory_stats();
+        let stats = (infer_lock.meta_len(), infer_lock.meta_capacity(), 0usize);
         drop(infer_lock);
 
         #[cfg(windows)]
