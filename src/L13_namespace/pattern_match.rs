@@ -142,6 +142,7 @@ impl Compiler {
         Error,
     > {
         let mut accessible = Vec::new();
+        let before_fac = infer.meta_len();
 
         let typ = infer.force(&cxt.decl, typ);
         let forced_type = match typ.as_ref() {
@@ -150,6 +151,7 @@ impl Compiler {
                 for constr_def in all_constrs {
                     accessible.push((constr_def, vec![], cxt.clone()));
                 }
+                infer.meta.truncate(before_fac);
                 return Ok(accessible)
             }
         };
@@ -200,6 +202,7 @@ impl Compiler {
             }
         }
 
+        infer.meta.truncate(before_fac);
         Ok(accessible)
     }
 
