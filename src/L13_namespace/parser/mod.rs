@@ -687,7 +687,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         kw(Eq),
         p_raw,
         kw(Semi),
-        kw(EndLine).option(),
+        kw(EndLine).many0(),
         p_raw,
     ))
         .map(|(_, binder, ann, _, val, _, _, body)| {
