@@ -2,7 +2,7 @@ use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, p_pi_binder, empty_span, ParserExt, kw, MacroState};
+use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, ParserExt, kw, MacroState};
 
 pub type OwnedToken = Span<(String, TokenKind)>;
 pub type OwnedTokenSlice = [Span<(String, TokenKind)>];
@@ -43,13 +43,13 @@ impl MacroMatcher {
                                     .parse(input.get(1..).unwrap(), state)
                             } else {
                                 Err(IError {
-                                    msg: token.map(|x| ErrMsg::Expect(*kind)),
+                                    msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
                                 })
                             }
                         }
                         None => {
                             Err(IError {
-                                msg: empty_span(ErrMsg::Expect(*kind)),
+                                msg: empty_span(ErrMsg::Base(BaseMsg::Expect(*kind))),
                             })
                         }
                     }
@@ -85,7 +85,7 @@ impl MacroMatcher {
                                         Ok((i, vec![(name.data.clone(), t)]))
                                     })
                             }).next()).ok_or(IError {
-                                msg: name.to_span().map(|_| ErrMsg::Expect(TokenKind::RParen)),//TODO: err msg
+                                msg: name.to_span().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::RParen))),//TODO: err msg
                             })
                     }
                 },
@@ -214,7 +214,7 @@ impl MacroTranscriber {
                         } else if x.1.len() == loop_num {
                             Ok(x.1[i].clone())
                         } else {
-                            Err(IError { msg: empty_span(ErrMsg::Expect(TokenKind::RParen)) })//TODO: err msg
+                            Err(IError { msg: empty_span(ErrMsg::Base(BaseMsg::Expect(TokenKind::RParen))) })//TODO: err msg
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     ret.extend(x.replace(tables)?)

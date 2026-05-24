@@ -16,12 +16,46 @@ use TokenKind::*;
 use super::empty_span;
 
 #[derive(Debug, Clone, Copy)]
-pub enum ErrMsg {
+pub enum BaseMsg {
     Expect(TokenKind),
     EmptyVec,
     ExpectRaw,
     ExpectAtom,
     ExpectDecl,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ErrMsg {
+    Base(BaseMsg),
+    In(Ctx, BaseMsg),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Ctx {
+    Declare,
+    FunctionDef,
+    Print,
+    EnumDef,
+    StructDef,
+    TraitDef,
+    ImplBlock,
+    ImplicitBinder,
+    ExplicitBinder,
+    Binder,
+    Expr,
+    Atom,
+    LetBind,
+    Lambda,
+    PiType,
+    MatchArm,
+    NewExpr,
+    PackageImport,
+}
+
+fn extract_base(m: ErrMsg) -> BaseMsg {
+    match m {
+        ErrMsg::Base(b) | ErrMsg::In(_, b) => b,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,7 +79,7 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                 msg: i.first()
                     .map(|x| x.to_span())
                     .unwrap_or(empty_span(()))
-                    .map(|_| ErrMsg::EmptyVec)
+                    .map(|_| ErrMsg::Base(BaseMsg::EmptyVec))
             }),
             x => x,
         }
@@ -59,7 +93,7 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                 msg: i.first()
                     .map(|x| x.to_span())
                     .unwrap_or(empty_span(()))
-                    .map(|_| ErrMsg::EmptyVec)
+                    .map(|_| ErrMsg::Base(BaseMsg::EmptyVec))
             }),
             x => x,
         }
@@ -102,7 +136,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .collect();
                     Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
                 } else {
-                    err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(EndLine)) });
+                    err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
                     let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.clone()))
@@ -150,15 +184,15 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, Ma
                 .get(1..)
                 .map(|i| (i, x.map(|_| ())))
                 .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Expect(p))
+                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
                 })
         } else {
             Err(IError {
-                msg: x.map(|_| ErrMsg::Expect(p))
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
             })
         },
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Expect(p))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
         }),
     }
 }
@@ -170,15 +204,15 @@ fn kw_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode<'a>
                 .get(1..)
                 .map(|i| (i, x.map(|_| ())))
                 .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Expect(p))
+                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
                 })
         } else {
             Err(IError {
-                msg: x.map(|_| ErrMsg::Expect(p))
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
             })
         },
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Expect(p))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
         }),
     }
 }
@@ -190,15 +224,15 @@ fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Str
                 .get(1..)
                 .map(|i| (i, x.map(|s| s.0.to_owned())))
                 .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Expect(p))
+                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
                 })
         } else {
             Err(IError {
-                msg: x.map(|_| ErrMsg::Expect(p))
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
             })
         },
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Expect(p))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
         }),
     }
 }
@@ -210,15 +244,15 @@ fn smolstr<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Sm
                 .get(1..)
                 .map(|i| (i, x.map(|s| SmolStr::new(s.0))))
                 .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Expect(p))
+                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
                 })
         } else {
             Err(IError {
-                msg: x.map(|_| ErrMsg::Expect(p))
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
             })
         },
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Expect(p))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
         }),
     }
 }
@@ -230,15 +264,15 @@ fn string_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode
                 .get(1..)
                 .map(|i| (i, x.map(|s| s.0.to_owned())))
                 .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Expect(p))
+                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
                 })
         } else {
             Err(IError {
-                msg: x.map(|_| ErrMsg::Expect(p))
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
             })
         },
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Expect(p))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
         }),
     }
 }
@@ -319,7 +353,7 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             Raw::Obj(Box::new(x), t.1)
         }))
         .parse(input, state)
-        .map_err(|e| IError { msg: e.msg.map(|_| ErrMsg::ExpectAtom) })
+        .map_err(|e| IError { msg: e.msg.map(|m| ErrMsg::In(Ctx::Atom, extract_base(m))) })
 }
 
 fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, MacroState, IError> {
@@ -330,7 +364,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                 let (input, rhs) = expr_bp(r_bp).parse(input, state)?;
                 Ok((input, Raw::Obj(Box::new(rhs), Some(op))))
             } else {
-                Err(IError { msg: op.map(|_| ErrMsg::ExpectAtom) })
+                Err(IError { msg: op.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)) })
             }
         }).or(p_atom).parse(input, state)?;
 
@@ -575,8 +609,11 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
             .map(|(xs, a)| (xs, a, Icit::Impl))
             .many0_sep((kw(T![,]), kw(EndLine).option())),
     )
-    .map(|x| x.unwrap_or_default())
     .parse(input, state)
+    .and_then(|(i, opt)| match opt {
+        Some(v) => Ok((i, v)),
+        None => Err(IError { msg: empty_span(ErrMsg::In(Ctx::ImplicitBinder, BaseMsg::Expect(TokenKind::LSquare))) }),
+    })
 }
 
 fn p_pi_impl_binder_option<'a: 'b, 'b>(
@@ -734,7 +771,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 let ret = p_raw(&t_borrowed, &mut temp_state)?;
                 state.0.extend(temp_state.0);
                 if !ret.0.is_empty() {
-                    state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(TokenKind::EndLine)) })
+                    state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) });
                 } else {
                     return Ok((i, ret.1))
                 }
@@ -749,7 +786,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         .or(p_new)
         .parse(input, state)
         .map_err(|e| IError {
-            msg: e.msg.map(|_| ErrMsg::ExpectRaw)
+            msg: e.msg.map(|m| ErrMsg::In(Ctx::Expr, extract_base(m)))
         })
 }
 
@@ -933,7 +970,7 @@ fn parse_fragment_kind<'a: 'b, 'b>(
             //"tt" => MacroFragment::Tt,
             _ => {
                 //state.0.push(IError {
-                //    msg: span.to_span().map(|_| ErrMsg::Expect(Ident))
+                //    msg: span.to_span().map(|_| ErrMsg::Base(BaseMsg::Expect(Ident))
                 //});
                 MacroFragment::Name(span)
             }
@@ -1424,7 +1461,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             let ret = p_decl(&t_borrowed, &mut temp_state)?;
             state.0.extend(temp_state.0);
             if !ret.0.is_empty() {
-                state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(TokenKind::EndLine)) })
+                state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) })
             } else {
                 return Ok((i, ret.1))
             }
@@ -1434,7 +1471,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
     let (input, derive_traits) = p_derive_attr.option().map(|x| x.unwrap_or_default()).parse(input, state)?;
     if !derive_traits.is_empty() {
         let (input, decl) = p_enum.or(p_struct).parse(input, state).map_err(|e| IError {
-            msg: e.msg.map(|_| ErrMsg::ExpectDecl)
+            msg: e.msg.map(|m| ErrMsg::In(Ctx::Declare, extract_base(m)))
         })?;
         return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))
     }
@@ -1442,7 +1479,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         .or(p_package).or(p_import)
         .parse(input, state)
         .map_err(|e| IError {
-            msg: e.msg.map(|_| ErrMsg::ExpectDecl)
+            msg: e.msg.map(|m| ErrMsg::In(Ctx::Declare, extract_base(m)))
         })
 }
 
@@ -1542,7 +1579,7 @@ pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
         Ok(ret) => if ret.0.is_empty() {
             Some((ret.1, err_collect.0))
         } else {
-            err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Expect(EndLine)) });
+            err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
             Some((ret.1, err_collect.0))
         }
         Err(e) => {

@@ -2701,7 +2701,7 @@ println (moduleVL Adder)
 }
 
 #[test]
-fn test_verilog_when_blocks() {
+fn test_verilog_when_elsewhen_blocks() {
     // Test that when/elsewhen/otherwise compiles and generates Verilog.
     // Note: due to macro conflict (Expr macro vs Expr.when constructor),
     // when nodes in pattern matching are not filtered by assignsVL,
@@ -2738,6 +2738,29 @@ println (moduleVL Test)
     }
 }
 
+#[test]
+fn test_verilog_when_blocks() {
+    // Test when without elsewhen/otherwise.
+    let input = r#"
+module Test {
+    let a = Bits[8]
+    let z = Bool
+    when(z) {
+        a := a
+    }
+}
+println (moduleVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            assert!(output.contains("if ("), "missing if: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
 
 #[test]
 fn test_hdl_nat_literals() {
