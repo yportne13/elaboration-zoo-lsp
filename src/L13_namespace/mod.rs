@@ -317,7 +317,7 @@ pub fn count_lams(tm: &Tm) -> u32 {
 }
 
 use std::ops::{Add, Sub};
-use im::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug)]
 pub enum UnifyError {
@@ -739,7 +739,7 @@ impl Infer {
             }
         }
         // Check how many unsolved metas share the same Cxt decl (by pointer identity of the HashMap root)
-        // im::HashMap doesn't expose pointer, so we count unique (decl.len(), env.len()) combos
+        // We count unique (decl.len(), env.len()) combos to estimate Cxt sharing
         let mut unique_cxt_fingerprints: StdHashSet<(usize, usize)> = StdHashSet::new();
         for entry in &self.meta {
             if let MetaEntry::Unsolved(_, c, _) = entry {
@@ -851,7 +851,7 @@ impl Infer {
             let decl_len = c.decl.len();
             let decl_bytes = decl_len * (decl_entry_sz + 24);
             let src_names_len = c.src_names.len();
-            let ns_bytes: usize = c.namespace.iter().map(|_| std::mem::size_of::<(Rc<Val>, im::HashSet<SmolStr>, Raw)>()).sum();
+            let ns_bytes: usize = c.namespace.iter().map(|_| std::mem::size_of::<(Rc<Val>, HashSet<SmolStr>, Raw)>()).sum();
             let ns_set_bytes: usize = c.namespace.iter().map(|(_, s, _)| s.len() * (std::mem::size_of::<SmolStr>() + 8)).sum();
             let namespaces_bytes = c.namespaces.len() * (std::mem::size_of::<SmolStr>() + 8);
             let env_len = c.env.len();

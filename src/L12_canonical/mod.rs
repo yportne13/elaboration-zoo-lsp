@@ -302,7 +302,7 @@ fn collect_app_args(tm: &Tm) -> Vec<Rc<Tm>> {
 }
 
 use std::ops::{Add, Sub};
-use im::HashMap;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum UnifyError {

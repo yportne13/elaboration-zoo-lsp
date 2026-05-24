@@ -8,7 +8,7 @@ use super::{
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
-use im::HashMap;
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]

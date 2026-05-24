@@ -1,4 +1,4 @@
-use im::HashMap;
+use std::collections::HashMap;
 
 #[derive(Clone, Default)]
 pub struct BiMap<K1, K2, V> {

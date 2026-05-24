@@ -24,8 +24,7 @@ chumsky = "0.9.3"
 rust-lapper = "1.1.0"
 thiserror = "2.0.3"
 ropey = "1.5.0"
-im-rc = "15.0.0"
-im = "15.0.0"
+
 log = "0.4.14"
 colored = "2.1.0"
 crossbeam-channel = "0.5.15"
@@ -40,5 +39,4 @@ dhat-heap = ["dhat"]
 [profile.release]
 lto = true
 codegen-units = 1
-opt-level = "z"
 strip = true
