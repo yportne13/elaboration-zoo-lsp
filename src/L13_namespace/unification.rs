@@ -475,8 +475,8 @@ impl Infer {
             } else {
                 return Ok(None)
             };
-            // Helper to re-collect forced non-out param values
-            let collect_params = |this: &mut Self| -> Vec<Rc<Val>> {
+            // Helper to re-collect forced non-out param values (used only by flex_defaulting)
+            let collect_non_out = |this: &mut Self| -> Vec<Rc<Val>> {
                 params
                     .iter()
                     .zip(&out_param)
@@ -485,15 +485,15 @@ impl Infer {
                     .map(|(_, val, _, _)| this.force(&cxt.decl, val))
                     .collect()
             };
-            let mut trait_params = collect_params(self);
-            if allow_flex_defaulting && trait_params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
-                let known: Vec<&Rc<Val>> = trait_params.iter()
+            let mut non_out_params = collect_non_out(self);
+            if allow_flex_defaulting && non_out_params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
+                let known: Vec<&Rc<Val>> = non_out_params.iter()
                     .filter(|v| !matches!(v.as_ref(), Val::Flex(..)))
                     .collect();
-                if known.len() == 1 && trait_params.len() > 1 {
+                if known.len() == 1 && non_out_params.len() > 1 {
                     let known_type = known[0].clone();
                     let mut ok = true;
-                    for v in &trait_params {
+                    for v in &non_out_params {
                         if matches!(v.as_ref(), Val::Flex(..)) {
                             if self.unify(cxt.lvl, cxt, v, &known_type, 100).is_err() {
                                 ok = false;
@@ -502,8 +502,8 @@ impl Infer {
                         }
                     }
                     if ok {
-                        trait_params = collect_params(self);
-                        if trait_params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
+                        non_out_params = collect_non_out(self);
+                        if non_out_params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
                             return Ok(None);
                         }
                     } else {
@@ -513,10 +513,16 @@ impl Infer {
                     return Ok(None);
                 }
             }
+            // Use ALL params (including outParam) so the solver can distinguish instances
+            // by their output type (e.g., Into[Nat, String] vs Into[Nat, Bool])
             self.trait_solver.clean();
+            let all_params: Vec<Rc<Val>> = params
+                .iter()
+                .map(|(_, val, _, _)| self.force(&cxt.decl, val))
+                .collect();
             if let Some(a) = self.trait_solver.synth(Assertion {
                 name: name.data.clone(),
-                arguments: trait_params.clone(),
+                arguments: all_params.clone(),
             }) {
                 let ret = self.infer_expr(cxt, Raw::Var(a));
                 let (tm, _) = self.insert(cxt, ret)
@@ -530,7 +536,7 @@ impl Infer {
                 Err(format!(
                     "solve trait failed: {}[{:?}]\n{}",
                     name.data,
-                    trait_params.iter().map(|v| format!("{:?}", v)).collect::<Vec<_>>().join(", "),
+                    all_params.iter().map(|v| format!("{:?}", v)).collect::<Vec<_>>().join(", "),
                     self.trait_solver.class_instances
                         .get(&name.data)
                         .unwrap_or(&vec![])

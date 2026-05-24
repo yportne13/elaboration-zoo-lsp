@@ -610,11 +610,8 @@ impl Infer {
                     }
                     let out_param = self.trait_out_param.get(&trait_name.data)
                         .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n)), vec![]))?;
-                    let trait_param: Vec<Rc<Val>> = trait_param.into_iter()
-                        .zip(out_param)
-                        .filter(|x| !x.1)
-                        .map(|x| x.0)
-                        .collect();
+                    // Keep ALL params (including outParam) so the solver can distinguish instances
+                    // that differ only in output params (e.g., Into[String] vs Into[Bool] for the same type)
                     let typ_name = SmolStr::new(format!("{:?}{:?}", trait_name.data, trait_param));
                     let inst = Instance {
                         assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
@@ -667,6 +664,7 @@ impl Infer {
                         Raw::App(t, ..) if matches!(t.as_ref(), Raw::Var(d) if d.data == "outParam") => true,
                         _ => false,
                     }).collect::<Vec<_>>();
+                self.trait_solver.set_trait_out_params(name.data.clone(), out_param.clone());
                 self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
                 let mut cxt = cxt.clone();
@@ -1080,9 +1078,9 @@ impl Infer {
             // Collect completions: find traits whose first non-out param could match typ_raw
             let completions: Vec<_> = self.trait_definition.iter()
                 .filter(|(x, (_, out_param, _))| {
-                    let len = out_param.iter().filter(|x| !**x).count();
+                    let total_len = out_param.len();
                     let mut args = vec![typ_raw.clone()];
-                    for _ in 1..len {
+                    for _ in 1..total_len {
                         args.push(wildcard_val.clone());
                     }
                     self.trait_solver.clean();
@@ -1140,9 +1138,9 @@ impl Infer {
                         .map(|x| (trait_name, trait_params, out_param, x))
                 })
                 .filter(|(x, _, out_param, _)| {
-                    let len = out_param.iter().filter(|x| !**x).count();
+                    let total_len = out_param.len();
                     let mut args = vec![typ_raw.clone()];
-                    for _ in 1..len {
+                    for _ in 1..total_len {
                         args.push(wildcard_val.clone());
                     }
                     self.trait_solver.clean();

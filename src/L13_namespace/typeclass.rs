@@ -73,7 +73,7 @@ pub struct TableEntry {
 }
 
 /// The state of the algorithm.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Synth {
     /// A stack of [`GeneratorNode`]s.
     ///
@@ -89,6 +89,21 @@ pub struct Synth {
     pub assertion_table: Vec<(Assertion, TableEntry)>,
     /// The "final" answer for the algorithm.
     pub root_answer: Option<Span<SmolStr>>,
+    /// Tracks which arguments of each trait are output params.
+    pub trait_out_params: HashMap<SmolStr, Vec<bool>>,
+}
+
+impl Default for Synth {
+    fn default() -> Self {
+        Self {
+            generator_stack: vec![],
+            resume_stack: vec![],
+            class_instances: HashMap::new(),
+            assertion_table: vec![],
+            root_answer: None,
+            trait_out_params: HashMap::new(),
+        }
+    }
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
@@ -102,6 +117,10 @@ impl Synth {
 
     pub fn new_trait(&mut self, name: SmolStr) {
         self.class_instances.insert(name, vec![]);
+    }
+
+    pub fn set_trait_out_params(&mut self, name: SmolStr, out_params: Vec<bool>) {
+        self.trait_out_params.insert(name, out_params);
     }
 
     pub fn impl_trait_for(&mut self, trait_name: SmolStr, instance: Instance) {
@@ -272,18 +291,23 @@ impl Synth {
             return None;
         }
 
-        // Match goal arguments (ground) against instance assertion arguments (may have Rigid vars)
+        // Determine which args are output params for this trait
+        let out_params = self.trait_out_params.get(&goal.name);
+
+        // Match goal arguments against instance assertion arguments.
+        // For output params, Flex metas in the goal match anything (they get resolved later via unification).
+        // For non-output params, use val_match as before.
         let mut subst = HashMap::new();
-        if !goal.arguments.iter()
-            .zip(&instance.assertion.arguments)
-            .all(|(g_arg, i_arg)| Self::val_match(g_arg, i_arg, &mut subst))
-        {
-            return None;
+        for (i, (g_arg, i_arg)) in goal.arguments.iter().zip(&instance.assertion.arguments).enumerate() {
+            let is_out = out_params.map(|op| op.get(i).copied().unwrap_or(false)).unwrap_or(false);
+            if is_out && matches!(g_arg.as_ref(), Val::Flex(..)) {
+                // Output param with flex meta in goal: accept any instance output
+                continue;
+            }
+            if !Self::val_match(g_arg, i_arg, &mut subst) {
+                return None;
+            }
         }
-        //println!("-----------------");
-        //println!("{:?}", goal.arguments);
-        //println!("<><><>");
-        //println!("{:?}", instance.assertion.arguments);
 
         // Collect subgoals (dependencies currently always empty)
         let concrete_deps = instance.dependencies.clone();

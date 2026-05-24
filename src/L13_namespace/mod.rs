@@ -2788,6 +2788,365 @@ println (moduleVL NatTest)
     }
 }
 
+// ============================================================
+// Tests for multiple Into implementations for the same type
+// ============================================================
+
+/// Helper to run a multi-Into test with basic prelude
+fn run_multi_into_test(input: &str) -> String {
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            output
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+/// Helper: test that multiple Into impls work for the same type
+fn mk_multi_into_test(extra: &str) -> String {
+    run_multi_into_test(extra)
+}
+
+/// Test 1: Into[Unit] for Nat — Unit is in prelude, no expected type ambiguity
+#[test]
+fn test_multi_into_unit_for_nat() {
+    let input = r#"
+impl Into[Unit] for Nat {
+    def into: Unit = unit
+}
+def u: Unit = zero.into
+println u
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("Unit"), "expected Unit, got: {}", output);
+}
+
+/// Test 2: Into for custom struct (no prelude conflict)
+#[test]
+fn test_multi_into_custom_struct() {
+    let input = r#"
+struct Wrapper {
+    val: Nat
+}
+impl Into[Wrapper] for Nat {
+    def into: Wrapper = Wrapper.mk this
+}
+def w: Wrapper = succ(zero).into
+println w.val
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 3: Two Into impls for custom structs (no prelude Into conflict)
+#[test]
+fn test_multi_into_two_custom_structs() {
+    let input = r#"
+struct WrapOne {
+    val: Nat
+}
+struct WrapTwo {
+    val: Nat
+}
+impl Into[WrapOne] for Nat {
+    def into: WrapOne = WrapOne.mk this
+}
+impl Into[WrapTwo] for Nat {
+    def into: WrapTwo = WrapTwo.mk this
+}
+def a: WrapOne = zero.into
+def b: WrapTwo = succ(zero).into
+println a.val
+println b.val
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("0"), "expected 0, got: {}", output);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 4: Into with match expression on Nat
+#[test]
+fn test_multi_into_match_on_unit() {
+    let input = r#"
+impl Into[Unit] for Nat {
+    def into: Unit = match this { case zero => unit case succ(_) => unit }
+}
+def to_unit(x: Nat): Unit = x.into
+println (to_unit zero)
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("Unit"), "expected Unit, got: {}", output);
+}
+
+/// Test 5: Into in function argument position (Unit type)
+#[test]
+fn test_multi_into_fn_arg_unit() {
+    let input = r#"
+impl Into[Unit] for Nat {
+    def into: Unit = unit
+}
+def expect_unit(x: Unit): Unit = x
+def test: Unit = expect_unit(zero.into)
+println test
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("Unit"), "expected Unit, got: {}", output);
+}
+
+/// Test 6: Identity Into for custom struct
+#[test]
+fn test_multi_into_identity_custom() {
+    let input = r#"
+struct MyBox {
+    val: Nat
+}
+impl[T] Into[T] for T {
+    def into: T = this
+}
+def m: MyBox = MyBox.mk(succ zero).into
+println m.val
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 7: Parametric struct Into
+#[test]
+fn test_multi_into_param_custom() {
+    let input = r#"
+struct Holder[A] {
+    val: A
+}
+impl[A] Into[Holder[A]] for A {
+    def into: Holder[A] = Holder.mk this
+}
+def h: Holder[Nat] = zero.into
+println h.val
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("0"), "expected 0, got: {}", output);
+}
+
+/// Test 8: Struct-to-struct conversion via Into
+#[test]
+fn test_multi_into_struct_convert() {
+    let input = r#"
+struct Celsius {
+    temp: Nat
+}
+struct Fahrenheit {
+    temp: Nat
+}
+impl Into[Celsius] for Fahrenheit {
+    def into: Celsius = Celsius.mk this.temp
+}
+def c: Celsius = Fahrenheit.mk(succ zero).into
+println c.temp
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 9: Nested struct Into
+#[test]
+fn test_multi_into_nested_struct() {
+    let input = r#"
+struct Inner {
+    x: Nat
+}
+struct Outer {
+    inner: Inner
+}
+impl Into[Inner] for Nat {
+    def into: Inner = Inner.mk this
+}
+def o: Outer = Outer.mk (succ(zero).into)
+println o.inner.x
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 10: Into[Unit] for Nat + Add trait coexistence
+#[test]
+fn test_multi_into_with_add_unit() {
+    let input = r#"
+impl Into[Unit] for Nat {
+    def into: Unit = unit
+}
+def nat_add_helper(x: Nat, y: Nat): Nat = match y {
+    case zero => x
+    case succ(n) => succ (nat_add_helper x n)
+}
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat = nat_add_helper this that
+}
+def two = succ (succ zero)
+def three = succ two
+def five = two + three
+def u: Unit = two.into
+println u
+println five
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("Unit"), "expected Unit, got: {}", output);
+    assert!(output.contains("succ(succ(succ(succ(succ("), "expected 5, got: {}", output);
+}
+
+/// Test 11: Chained Into with wrapper function
+#[test]
+fn test_multi_into_chain_custom() {
+    let input = r#"
+struct Wrap {
+    val: Nat
+}
+impl Into[Wrap] for Nat {
+    def into: Wrap = Wrap.mk this
+}
+def get_val(w: Wrap): Nat = w.val
+println (get_val (zero.into))
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("0"), "expected 0, got: {}", output);
+}
+
+/// Test 12: Identity Into polymorphic return
+#[test]
+fn test_multi_into_identity_poly() {
+    let input = r#"
+impl[T] Into[T] for T {
+    def into: T = this
+}
+def id[T](x: T): T = x.into
+println (id (succ zero))
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 13: Two structs with same field type, both Into from Nat
+#[test]
+fn test_multi_into_two_structs_same_field() {
+    let input = r#"
+struct PointA {
+    x: Nat
+}
+struct PointB {
+    x: Nat
+}
+impl Into[PointA] for Nat {
+    def into: PointA = PointA.mk this
+}
+impl Into[PointB] for Nat {
+    def into: PointB = PointB.mk this
+}
+def p: PointA = zero.into
+println p.x
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("0"), "expected 0, got: {}", output);
+}
+
+/// Test 14: HDL Nat literal via Into[UInt[w]] for Nat (prelude) still works
+#[test]
+fn test_multi_into_hdl_nat_uint() {
+    let input = r#"
+module Test[w: Nat] {
+    output sum = UInt[w]
+    sum := 42
+}
+println (moduleVL Test[8])
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("assign sum = 42"), "expected 42 assign, got: {}", output);
+}
+
+/// Test 15: String concat still works
+#[test]
+fn test_multi_into_string_concat() {
+    let input = r#"
+println "hello" + " " + "world"
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("hello world"), "expected hello world, got: {}", output);
+}
+
+/// Test 16: Two Into impls for same custom struct used in scope
+#[test]
+fn test_multi_into_two_custom_structs_scope() {
+    let input = r#"
+struct A {
+    x: Nat
+}
+struct B {
+    y: Nat
+}
+impl Into[A] for Nat {
+    def into: A = A.mk this
+}
+impl Into[B] for Nat {
+    def into: B = B.mk this
+}
+def a: A = zero.into
+def b: B = succ(zero).into
+println a.x
+println b.y
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("0"), "expected 0, got: {}", output);
+    assert!(output.contains("succ"), "expected succ, got: {}", output);
+}
+
+/// Test 17: Prelude Add[String, String] works
+#[test]
+fn test_multi_into_prelude_add_string() {
+    let input = r#"
+println "a" + "b"
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("ab"), "expected ab, got: {}", output);
+}
+
+/// Test 18: Into[UInt[w]] for Nat in verilog generation (prelude)
+#[test]
+fn test_multi_into_prelude_uint() {
+    let input = r#"
+module Test {
+    output x = UInt[8]
+    x := 42
+}
+println (moduleVL Test)
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("assign x = 42"), "expected assign, got: {}", output);
+}
+
+/// Test 19: String.typort Into[String] for Boolean still works
+#[test]
+fn test_multi_into_boolean_to_string() {
+    let input = r#"
+println (true.into)
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("true"), "expected true, got: {}", output);
+}
+
+/// Test 20: HDL assignment macro still works (uses .into for Nat → UInt)
+#[test]
+fn test_multi_into_assign_macro() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = UInt[w]
+    output b = UInt[w]
+    b := a
+}
+println (moduleVL Test[8])
+"#;
+    let output = mk_multi_into_test(input);
+    assert!(output.contains("endmodule"), "expected endmodule, got: {}", output);
+}
+
 #[test]
 fn test_macro_cut_parse_error_in_body() {
     // Test 1: Parse error INSIDE module body — verify error is at the
