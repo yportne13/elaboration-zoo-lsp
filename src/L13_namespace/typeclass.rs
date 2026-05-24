@@ -139,7 +139,7 @@ impl Synth {
 
     /// First-order structural matching: goal (ground) against instance pattern (may have Rigid vars).
     /// Rigid vars in the pattern are bound to the corresponding goal values via substitution.
-    fn val_match(a: &Val, b: &Val, subst: &mut HashMap<u32, Val>) -> bool {
+    pub fn val_match(a: &Val, b: &Val, subst: &mut HashMap<u32, Val>) -> bool {
         //println!("val_match: {:?} {:?}", a, b);
         //println!("------");
         //println!("{:?}", subst.get(&0));
@@ -210,7 +210,7 @@ impl Synth {
     }
 
     /// Structural equality check on two ground Val values (no substitution needed).
-    fn vals_eq_ground(a: &Val, b: &Val) -> bool {
+    pub fn vals_eq_ground(a: &Val, b: &Val) -> bool {
         Self::vals_eq_ground_impl(a, b, &mut HashMap::new())
     }
 
