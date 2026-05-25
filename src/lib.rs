@@ -25,7 +25,7 @@ mod L11_macro;
 pub mod L12_canonical;
 pub mod L13_namespace;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
 use client::{Client, ClientLike};
@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use serde_json::Value;
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification};
-use lsp_types::*;
+use lsp_types::{CancelParams, NumberOrString, *};
 use crate::ls::Result;
 
 use L13_namespace::pretty::pretty_tm;
@@ -78,6 +78,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     job_receiver: Mutex<Option<mpsc::Receiver<AnalysisJob>>>,
     // 处理完成的信号
     processed_signal: Arc<(Mutex<HashMap<String, bool>>, Condvar)>,
+    /// Track cancelled request IDs from $/cancelRequest
+    cancelled_requests: Mutex<HashSet<RequestId>>,
 
     infer: Arc<Mutex<Infer>>,
     cxt: Arc<Mutex<Cxt>>,
@@ -114,6 +116,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             job_sender: tx,
             job_receiver: Mutex::new(Some(rx)),
             processed_signal,
+            cancelled_requests: Mutex::new(HashSet::new()),
             infer: Arc::new(Mutex::new(infer)),
             cxt: Arc::new(Mutex::new(cxt)),
             timings,
@@ -748,25 +751,6 @@ impl LanguageServer for Backend<Client> {
     fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let uri = normalize_builtin_uri(&uri);
-        let uri_str = uri.to_string();
-
-        // 5. 等待当前URI处理完成（带超时）
-        let (lock, cvar) = &*self.processed_signal;
-        let mut processed = lock.lock().unwrap();
-
-        // 等待直到该URI已处理完成（或超时）
-        let start = std::time::Instant::now();
-        while self.processing_uris.contains_key(&uri_str) && start.elapsed() < Duration::from_millis(3500) {
-            // 检查是否已处理完成
-            if processed.get(&uri_str).is_some() {
-                break;
-            }
-            processed = cvar.wait_timeout(processed, Duration::from_millis(100)).unwrap().0;
-        }
-
-        // 清理已处理的标记
-        processed.remove(&uri_str);
-        drop(processed);
 
         eprintln!("on completion");
         let position = params.text_document_position.position;
@@ -936,8 +920,10 @@ impl Backend<Client> {
                         Ok((id, params)) => {
                             let result = self.completion(params)?;
                             let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
+                            if !self.cancelled_requests.lock().unwrap().remove(&id) {
+                                let resp = Response { id, result: Some(result), error: None };
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
                             continue;
                         }
                         Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -958,8 +944,10 @@ impl Backend<Client> {
                         Ok((id, params)) => {
                             let result = self.semantic_tokens_full(params)?;
                             let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
+                            if !self.cancelled_requests.lock().unwrap().remove(&id) {
+                                let resp = Response { id, result: Some(result), error: None };
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
                             continue;
                         }
                         Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -969,8 +957,10 @@ impl Backend<Client> {
                         Ok((id, params)) => {
                             let result = self.semantic_tokens_range(params)?;
                             let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
+                            if !self.cancelled_requests.lock().unwrap().remove(&id) {
+                                let resp = Response { id, result: Some(result), error: None };
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
                             continue;
                         }
                         Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -1013,33 +1003,45 @@ impl Backend<Client> {
                 Message::Response(resp) => {
                 }
                 Message::Notification(not) => {
-                    match on::<DidOpenTextDocument>(not.clone()) {
-                        Ok(params) => {
-                            self.did_open(params);
-                        },
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(not)) => (),
-                    }
-                    match on::<DidChangeTextDocument>(not.clone()) {
-                        Ok(params) => {
-                            self.did_change(params);
-                        },
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(not)) =>(),
-                    }
-                    match on::<DidCloseTextDocument>(not.clone()) {
-                        Ok(params) => {
-                            self.did_close(params);
-                        },
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(not)) => (),
-                    }
-                    match on::<DidSaveTextDocument>(not) {
-                        Ok(params) => {
-                            self.did_save(params);
-                        },
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(not)) => (),
+                    let is_cancel = not.method == "$/cancelRequest";
+                    if is_cancel {
+                        if let Ok(cancel) = serde_json::from_value::<CancelParams>(not.params) {
+                            let rid = match cancel.id {
+                                NumberOrString::Number(n) => RequestId::from(n as i32),
+                                NumberOrString::String(s) => RequestId::from(s),
+                            };
+                            eprintln!("cancelled request {:?}", rid);
+                            self.cancelled_requests.lock().unwrap().insert(rid);
+                        }
+                    } else {
+                        match on::<DidOpenTextDocument>(not.clone()) {
+                            Ok(params) => {
+                                self.did_open(params);
+                            },
+                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                            Err(ExtractError::MethodMismatch(not)) => (),
+                        }
+                        match on::<DidChangeTextDocument>(not.clone()) {
+                            Ok(params) => {
+                                self.did_change(params);
+                            },
+                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                            Err(ExtractError::MethodMismatch(not)) =>(),
+                        }
+                        match on::<DidCloseTextDocument>(not.clone()) {
+                            Ok(params) => {
+                                self.did_close(params);
+                            },
+                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                            Err(ExtractError::MethodMismatch(not)) => (),
+                        }
+                        match on::<DidSaveTextDocument>(not) {
+                            Ok(params) => {
+                                self.did_save(params);
+                            },
+                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                            Err(ExtractError::MethodMismatch(not)) => (),
+                        }
                     }
                 }
             }
