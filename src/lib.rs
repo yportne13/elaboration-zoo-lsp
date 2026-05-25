@@ -73,7 +73,7 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：mpsc 通道任务队列
-    job_sender: mpsc::Sender<AnalysisJob>,
+    job_sender: mpsc::SyncSender<AnalysisJob>,
     // Worker 线程的接收端（在 spawn_worker 时取出使用）
     job_receiver: Mutex<Option<mpsc::Receiver<AnalysisJob>>>,
     // 处理完成的信号
@@ -101,7 +101,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let cxt = Cxt::new(&infer);
         let timings = Mutex::new(Vec::new());
 
-        let (tx, rx) = mpsc::channel::<AnalysisJob>();
+        let (tx, rx) = mpsc::sync_channel::<AnalysisJob>(16);
 
         let ret = Arc::new(Backend {
             client,
@@ -1215,7 +1215,7 @@ fn create_debug_stdio_transport(
 ) -> (crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>, DebugIoThreads) {
     use crossbeam_channel::bounded;
 
-    let (writer_sender, writer_receiver) = bounded::<Message>(1);
+    let (writer_sender, writer_receiver) = bounded::<Message>(8);
     let writer = thread::Builder::new()
         .name("LspServerWriter".to_owned())
         .spawn(move || {
@@ -1225,7 +1225,7 @@ fn create_debug_stdio_transport(
         })
         .unwrap();
 
-    let (reader_sender, reader_receiver) = bounded::<Message>(1);
+    let (reader_sender, reader_receiver) = bounded::<Message>(8);
     let reader = thread::Builder::new()
         .name("LspServerReader".to_owned())
         .spawn(move || {
