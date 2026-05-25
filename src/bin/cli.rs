@@ -65,7 +65,9 @@ mod heap_walk {
         iRegionIndex: u8,
         wFlags: u16,
         // union: Block { hMem, dwReserved }, Region { dwCommittedSize, dwUnCommittedSize, ... }
-        _union: [u8; 16],
+        // On x64 the Region sub-struct is 24 bytes (4+4+8+8) vs 16 bytes on x86,
+        // so use 24 to be safe on both architectures.
+        _union: [u8; 24],
     }
 
     const PROCESS_HEAP_ENTRY_BUSY: u16 = 0x0004;

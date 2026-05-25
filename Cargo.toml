@@ -40,4 +40,4 @@ mem-profile = ["dep:dhat"]
 [profile.release]
 lto = true
 codegen-units = 1
-strip = true
+# strip = true  # disabled for profiling (need debug symbols)

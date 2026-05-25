@@ -1196,7 +1196,7 @@ fn create_debug_stdio_transport(
 ) -> (crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>, DebugIoThreads) {
     use crossbeam_channel::bounded;
 
-    let (writer_sender, writer_receiver) = bounded::<Message>(0);
+    let (writer_sender, writer_receiver) = bounded::<Message>(1);
     let writer = thread::Builder::new()
         .name("LspServerWriter".to_owned())
         .spawn(move || {
@@ -1206,7 +1206,7 @@ fn create_debug_stdio_transport(
         })
         .unwrap();
 
-    let (reader_sender, reader_receiver) = bounded::<Message>(0);
+    let (reader_sender, reader_receiver) = bounded::<Message>(1);
     let reader = thread::Builder::new()
         .name("LspServerReader".to_owned())
         .spawn(move || {
