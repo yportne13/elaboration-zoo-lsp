@@ -34,7 +34,8 @@ codespan-reporting = "0.13.1"
 dhat = { version = "0.3", optional = true }
 
 [features]
-dhat-heap = ["dhat"]
+dhat-heap = ["mem-profile"]
+mem-profile = ["dep:dhat"]
 
 [profile.release]
 lto = true

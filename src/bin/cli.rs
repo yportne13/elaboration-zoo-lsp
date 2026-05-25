@@ -7,12 +7,12 @@ use elaboration_zoo_lsp::client::CliClient;
 use elaboration_zoo_lsp::TextDocumentItem;
 use lsp_types::Url;
 
-#[cfg(feature = "dhat-heap")]
+#[cfg(feature = "mem-profile")]
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 /// Get Windows process memory counters via raw FFI (no crate dependency).
-#[cfg(windows)]
+#[cfg(all(windows, feature = "mem-profile"))]
 mod win_mem {
     #[repr(C)]
     pub struct ProcessMemoryCounters {
@@ -53,7 +53,7 @@ mod win_mem {
 }
 
 /// Walk all process heaps via GetProcessHeaps + HeapWalk, return size-class histogram + total.
-#[cfg(windows)]
+#[cfg(all(windows, feature = "mem-profile"))]
 mod heap_walk {
     use std::collections::BTreeMap;
 
@@ -168,7 +168,7 @@ mod heap_walk {
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
-    #[cfg(feature = "dhat-heap")]
+    #[cfg(feature = "mem-profile")]
     let _profiler = dhat::Profiler::new_heap();
 
     let args: Vec<String> = std::env::args().collect();
@@ -181,8 +181,11 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     if args.len() < 2 {
         eprintln!("Usage:");
         eprintln!("  typort <file.typort> [<file2.typort> ...]    Analyze files");
-        eprintln!("  typort --stats                                Print memory stats after prelude");
-        eprintln!("  typort --stats-no-hdl                         Print memory stats (skip hdl.typort)");
+        #[cfg(feature = "mem-profile")]
+        {
+            eprintln!("  typort --stats                                Print memory stats after prelude");
+            eprintln!("  typort --stats-no-hdl                         Print memory stats (skip hdl.typort)");
+        }
         eprintln!("  typort lsp                                    Start the language server");
         std::process::exit(1);
     }
@@ -205,56 +208,70 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     }
 
     if is_stats {
-        // ─── Memory + timing benchmark mode ───
-        // Collect timings recorded during load_prelude
-        let timings_vec = backend.timings.lock().unwrap().clone();
-        // lock released after clone
+        #[cfg(feature = "mem-profile")]
+        {
+            // ─── Memory + timing benchmark mode ───
+            // Collect timings recorded during load_prelude
+            let timings_vec = backend.timings.lock().unwrap().clone();
+            // lock released after clone
 
-        let infer_arc = backend.get_infer();
-        let cxt_arc = backend.get_cxt();
-        let infer_lock = infer_arc.lock().unwrap();
-        let cxt_lock = cxt_arc.lock().unwrap();
-        let stats = infer_lock.memory_stats_with_cxt(Some(&cxt_lock));
-        drop(cxt_lock);
-        drop(infer_lock);
+            let infer_arc = backend.get_infer();
+            let cxt_arc = backend.get_cxt();
+            let infer_lock = infer_arc.lock().unwrap();
+            let cxt_lock = cxt_arc.lock().unwrap();
+            let stats = infer_lock.memory_stats_with_cxt(Some(&cxt_lock));
+            drop(cxt_lock);
+            drop(infer_lock);
 
-        #[cfg(windows)]
-        let (ws, peak_ws, pf) = win_mem::get_memory_stats();
-        #[cfg(not(windows))]
-        let (ws, peak_ws, pf) = (0, 0, 0);
+            #[cfg(windows)]
+            let (ws, peak_ws, pf) = win_mem::get_memory_stats();
+            #[cfg(not(windows))]
+            let (ws, peak_ws, pf) = (0, 0, 0);
 
-        // Aggregate timing totals
-        let total_parser: f64 = timings_vec.iter().map(|t| t.1).sum();
-        let total_infer: f64 = timings_vec.iter().map(|t| t.2).sum();
-        let total_change: f64 = timings_vec.iter().map(|t| t.3).sum();
+            #[cfg(windows)]
+            let heap_histogram = heap_walk::heap_size_histogram();
+            #[cfg(not(windows))]
+            let heap_histogram = serde_json::json!(null);
 
-        let result = serde_json::json!({
-            "peak_working_set_bytes": peak_ws,
-            "peak_working_set_mb": format!("{:.1}", peak_ws as f64 / 1_048_576.0),
-            "working_set_bytes": ws,
-            "working_set_mb": format!("{:.1}", ws as f64 / 1_048_576.0),
-            "pagefile_usage_bytes": pf,
-            "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
-            "heap_histogram": heap_walk::heap_size_histogram(),
-            "backend_stats": backend.backend_stats(),
-            "infer_stats": stats,
-            "timings": {
-                "files": timings_vec.iter().map(|(uri, parser_s, infer_s, total_s)| {
-                    serde_json::json!({
-                        "uri": uri,
-                        "parser_secs": format!("{:.4}", parser_s),
-                        "infer_secs": format!("{:.4}", infer_s),
-                        "total_secs": format!("{:.4}", total_s),
-                    })
-                }).collect::<Vec<_>>(),
-                "total_parser_secs": format!("{:.4}", total_parser),
-                "total_infer_secs": format!("{:.4}", total_infer),
-                "total_secs": format!("{:.4}", total_change),
-            },
-        });
+            // Aggregate timing totals
+            let total_parser: f64 = timings_vec.iter().map(|t| t.1).sum();
+            let total_infer: f64 = timings_vec.iter().map(|t| t.2).sum();
+            let total_change: f64 = timings_vec.iter().map(|t| t.3).sum();
 
-        println!("{}", serde_json::to_string_pretty(&result).unwrap());
-        return Ok(());
+            let result = serde_json::json!({
+                "peak_working_set_bytes": peak_ws,
+                "peak_working_set_mb": format!("{:.1}", peak_ws as f64 / 1_048_576.0),
+                "working_set_bytes": ws,
+                "working_set_mb": format!("{:.1}", ws as f64 / 1_048_576.0),
+                "pagefile_usage_bytes": pf,
+                "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
+                "heap_histogram": heap_histogram,
+                "backend_stats": backend.backend_stats(),
+                "infer_stats": stats,
+                "timings": {
+                    "files": timings_vec.iter().map(|(uri, parser_s, infer_s, total_s)| {
+                        serde_json::json!({
+                            "uri": uri,
+                            "parser_secs": format!("{:.4}", parser_s),
+                            "infer_secs": format!("{:.4}", infer_s),
+                            "total_secs": format!("{:.4}", total_s),
+                        })
+                    }).collect::<Vec<_>>(),
+                    "total_parser_secs": format!("{:.4}", total_parser),
+                    "total_infer_secs": format!("{:.4}", total_infer),
+                    "total_secs": format!("{:.4}", total_change),
+                },
+            });
+
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            return Ok(());
+        }
+        #[cfg(not(feature = "mem-profile"))]
+        {
+            eprintln!("error: --stats requires building with --features mem-profile");
+            eprintln!("       cargo run --features mem-profile -- --stats");
+            std::process::exit(1);
+        }
     }
 
     for filepath in &args[1..] {
