@@ -1127,142 +1127,6 @@ where
 
 use std::fs;
 
-/// Debug-friendly IO threads with detailed parse error logging.
-struct DebugIoThreads {
-    reader: thread::JoinHandle<io::Result<()>>,
-    writer: thread::JoinHandle<io::Result<()>>,
-}
-
-impl DebugIoThreads {
-    fn join(self) -> io::Result<()> {
-        match self.reader.join() {
-            Ok(r) => r?,
-            Err(err) => std::panic::panic_any(err),
-        }
-        match self.writer.join() {
-            Ok(r) => r,
-            Err(err) => {
-                std::panic::panic_any(err);
-            }
-        }
-    }
-}
-
-/// Created a stdio LSP transport where parse errors log the raw body text.
-fn create_debug_stdio_transport(
-) -> (crossbeam_channel::Sender<Message>, crossbeam_channel::Receiver<Message>, DebugIoThreads) {
-    use crossbeam_channel::bounded;
-
-    let (writer_sender, writer_receiver) = bounded::<Message>(8);
-    let writer = thread::Builder::new()
-        .name("LspServerWriter".to_owned())
-        .spawn(move || {
-            let stdout = stdout();
-            let mut stdout = stdout.lock();
-            writer_receiver.into_iter().try_for_each(|it| it.write(&mut stdout))
-        })
-        .unwrap();
-
-    let (reader_sender, reader_receiver) = bounded::<Message>(8);
-    let reader = thread::Builder::new()
-        .name("LspServerReader".to_owned())
-        .spawn(move || {
-            let stdin = stdin();
-            let mut stdin = stdin.lock();
-            while let Some(msg) = debug_read_message(&mut stdin)? {
-                let is_exit = matches!(&msg, Message::Notification(n) if n.method == "exit");
-                if let Err(e) = reader_sender.send(msg) {
-                    return Err(io::Error::new(io::ErrorKind::Other, e));
-                }
-                if is_exit {
-                    break;
-                }
-            }
-            Ok(())
-        })
-        .unwrap();
-
-    (writer_sender, reader_receiver, DebugIoThreads { reader, writer })
-}
-
-/// Read a single LSP message (Content-Length framing) with detailed logging on error.
-fn debug_read_message(r: &mut dyn BufRead) -> io::Result<Option<Message>> {
-    let text = match debug_read_body(r)? {
-        None => return Ok(None),
-        Some(text) => text,
-    };
-
-    match serde_json::from_str(&text) {
-        Ok(msg) => Ok(Some(msg)),
-        Err(e) => {
-
-            let col = e.column() as usize;
-            let line = text.lines().next().unwrap_or(&text);
-            eprintln!("=== LSP PARSE ERROR ===");
-            eprintln!("serde_json error: {e}");
-            eprintln!("Column: {col}, Body length: {} bytes", text.len());
-            // Print context around the error position in raw form
-            let start = col.saturating_sub(30);
-            let end = (col + 30).min(line.len());
-            let snippet = &line[start..end];
-            let arrow = format!("{: >width$}", "^", width = col - start + 1);
-            eprintln!("Context:");
-            eprintln!("  {snippet}");
-            eprintln!("  {arrow}");
-            // Hex dump of the problematic area
-            let hex_start = col.saturating_sub(4);
-            let hex_end = (col + 4).min(text.len());
-            let bytes = &text.as_bytes()[hex_start..hex_end];
-            let hex: Vec<String> = bytes.iter().map(|b| format!("{b:02x}")).collect();
-            eprintln!("Hex [{hex_start}..{hex_end}]: {}", hex.join(" "));
-            eprintln!("Full body (first 1KB): {}", &text[..text.len().min(1024)]);
-            eprintln!("=== END LSP PARSE ERROR ===");
-
-            Err(io::Error::new(io::ErrorKind::InvalidData,
-                format!("malformed LSP payload: {e}")))
-        }
-    }
-}
-
-/// Read Content-Length headers and body, same as lsp-server's read_msg_text.
-fn debug_read_body(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
-    fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {
-        io::Error::new(io::ErrorKind::InvalidData, error)
-    }
-    macro_rules! invalid_data {
-        ($($tt:tt)*) => (invalid_data(format!($($tt)*)))
-    }
-
-    let mut size = None;
-    let mut buf = String::new();
-    loop {
-        buf.clear();
-        if inp.read_line(&mut buf)? == 0 {
-            return Ok(None);
-        }
-        if !buf.ends_with("\r\n") {
-            return Err(invalid_data!("malformed header: {:?}", buf));
-        }
-        let buf = &buf[..buf.len() - 2];
-        if buf.is_empty() {
-            break;
-        }
-        let mut parts = buf.splitn(2, ": ");
-        let header_name = parts.next().unwrap();
-        let header_value = parts.next()
-            .ok_or_else(|| invalid_data!("malformed header: {:?}", buf))?;
-        if header_name.eq_ignore_ascii_case("Content-Length") {
-            size = Some(header_value.parse::<usize>().map_err(invalid_data)?);
-        }
-    }
-    let size: usize = size.ok_or_else(|| invalid_data!("no Content-Length"))?;
-    let mut buf = buf.into_bytes();
-    buf.resize(size, 0);
-    inp.read_exact(&mut buf)?;
-    let buf = String::from_utf8(buf).map_err(invalid_data)?;
-    Ok(Some(buf))
-}
-
 pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
     // Note that we must have our logging only write out to stderr.
     eprintln!("starting generic LSP server");
@@ -1271,11 +1135,10 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     // See https://github.com/WebAssembly/wasi-libc/pull/491
     let _ = fs::metadata("/workspace");
 
-    // Create the transport with detailed debug logging on parse errors.
-    let (writer, reader, io_threads) = create_debug_stdio_transport();
-    let connection = Connection { sender: writer, receiver: reader };
+    // Create the transport. Includes the stdio (stdin and stdout) versions.
+    let (connection, io_threads) = Connection::stdio();
 
-    // Run the server and wait for the two threads to end (typically by trigger LSP Exit event).
+    // Run the server and wait for the two threads to end.
     let backend = Backend::new(Client { connection });
     let _initialization_params = match backend.init() {
         Ok(it) => it,
