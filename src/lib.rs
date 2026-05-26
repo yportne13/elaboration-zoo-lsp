@@ -73,7 +73,7 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：mpsc 通道任务队列
-    job_sender: mpsc::SyncSender<AnalysisJob>,
+    job_sender: mpsc::Sender<AnalysisJob>,
     // Worker 线程的接收端（在 spawn_worker 时取出使用）
     job_receiver: Mutex<Option<mpsc::Receiver<AnalysisJob>>>,
     // 处理完成的信号
@@ -101,7 +101,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let cxt = Cxt::new(&infer);
         let timings = Mutex::new(Vec::new());
 
-        let (tx, rx) = mpsc::sync_channel::<AnalysisJob>(16);
+        let (tx, rx) = mpsc::channel::<AnalysisJob>();
 
         let ret = Arc::new(Backend {
             client,
