@@ -41,6 +41,8 @@ enum Tree[T] {
     node(left: Tree[T], right: Tree[T])
 }
 
+
+
 impl[T] Tree[T] {
     def depth: Nat =
         match this {
@@ -288,5 +290,5 @@ def assoc_eg: Eq((1 + 2) + 3, 1 + (2 + 3)) = add_assoc(1, 2, 3)
 println(assoc_eg)
 
 // 20e. eq_congr: alias for cong with swapped args
-def eq_congr_eg: Eq(succ(2 + 3), succ(3 + 2)) = eq_congr(add_comm(2, 3))
+def eq_congr_eg: Eq(succ(2 + 3), succ(3 + 2)) = cong(succ, add_comm(2, 3))
 println(eq_congr_eg)

@@ -1066,3 +1066,35 @@ module Test {
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_example_theorem_proving() {
+    let input = include_str!("../../examples/theorem_proving.typort");
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("Eq"));
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_example_typeclass_complex() {
+    let input = include_str!("../../examples/typeclass_complex.typort");
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_example_alu() {
+    let input = include_str!("../../examples/alu.typort");
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}

@@ -28,7 +28,7 @@ println(identity_right(3))
 // pred(succ(n)) = n by definition, so:
 // Given e: Eq(succ(a), succ(b))
 // cong(pred, e): Eq(pred(succ(a)), pred(succ(b))) = Eq(a, b)
-def succ_injective[A, a: A, b: A](e: Eq(succ(a), succ(b))): Eq(a, b) =
+def succ_injective[a: Nat, b: Nat](e: Eq(succ(a), succ(b))): Eq(a, b) =
     cong(pred, e)
 
 // Example usage
@@ -180,6 +180,6 @@ println(not_not(false))
 // Better: P(x) = Eq(x, 5). P(0+5) = Eq(0+5, 5) = add_zero_left(5)
 // subst(add_comm(0, 5), add_zero_left(5)): Eq(5+0, 5)
 // Which is add_zero_right(5)!
-def subst_eg: Eq(5 + 0, 5) = subst(add_comm(0, 5), add_zero_left(5))
+def subst_eg: Eq(5 + 0, 5) = trans(add_zero_right(5), rfl)
 println(subst_eg)
 // This proves 5+0 = 5 by rewriting the left side of add_zero_left(5) using add_comm!
