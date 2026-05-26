@@ -90,8 +90,8 @@ println(chain_eg)
 
 def add_cong(a: Nat, a2: Nat, b: Nat, b2: Nat,
              e1: Eq(a, a2), e2: Eq(b, b2)): Eq(a + b, a2 + b2) =
-    let step1: Eq(a + b, a2 + b) = cong({x: Nat => x + b}, e1);
-    let step2: Eq(a2 + b, a2 + b2) = cong({x: Nat => a2 + x}, e2);
+    let step1: Eq(a + b, a2 + b) = cong(x => x + b, e1);
+    let step2: Eq(a2 + b, a2 + b2) = cong(x => a2 + x, e2);
     trans(step1, step2)
 
 // add_comm(1, 6): Eq(1+6, 6+1) = Eq(7, 7)  — just a proof of refl(7) via comm
@@ -144,7 +144,7 @@ println(add_succ_left_eg(2, 3))
 // Using add_assoc + add_comm(b, c) + add_assoc
 def add_permute(a: Nat, b: Nat, c: Nat): Eq((a + b) + c, (a + c) + b) =
     let lhs: Eq((a + b) + c, a + (b + c)) = add_assoc(a, b, c);
-    let mid: Eq(a + (b + c), a + (c + b)) = cong({x: Nat => a + x}, add_comm(b, c));
+    let mid: Eq(a + (b + c), a + (c + b)) = cong(x => a + x, add_comm(b, c));
     let rhs: Eq(a + (c + b), (a + c) + b) = symm(add_assoc(a, c, b));
     trans(trans(lhs, mid), rhs)
 
