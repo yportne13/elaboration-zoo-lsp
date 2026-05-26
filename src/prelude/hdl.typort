@@ -327,6 +327,10 @@ impl[width: Nat] Into[SInt[width]] for SInt[width] {
     def into: SInt[width] = this
 }
 
+impl[width: Nat] Into[SInt[width]] for Nat {
+    def into: SInt[width] = SInt.mk(None, literal(this))
+}
+
 impl[width: Nat] Data for SInt[width] {
     def :=(that: SInt[width]): Unit =
         let isReg = isRegExpr(this.zz_expr);
@@ -349,9 +353,19 @@ impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
         UInt.mk(None, binary(this.expr, "+", that.expr))
 }
 
+impl[width: Nat] Add[Nat, UInt[width]] for UInt[width] {
+    def +(that: Nat): UInt[width] =
+        this + that.into
+}
+
 impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
     def -(that: UInt[width]): UInt[width] =
         UInt.mk(None, binary(this.expr, "-", that.expr))
+}
+
+impl[width: Nat] Sub[Nat, UInt[width]] for UInt[width] {
+    def -(that: Nat): UInt[width] =
+        this - that.into
 }
 
 impl[width1: Nat, width2: Nat] Mul[UInt[width1], UInt[width1 + width2]] for UInt[width2] {
@@ -365,9 +379,19 @@ impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
         SInt.mk(None, binary(this.expr, "+", that.expr))
 }
 
+impl[width: Nat] Add[Nat, SInt[width]] for SInt[width] {
+    def +(that: Nat): SInt[width] =
+        this + that.into
+}
+
 impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
     def -(that: SInt[width]): SInt[width] =
         SInt.mk(None, binary(this.expr, "-", that.expr))
+}
+
+impl[width: Nat] Sub[Nat, SInt[width]] for SInt[width] {
+    def -(that: Nat): SInt[width] =
+        this - that.into
 }
 
 // ---- carry-generating operations (+^ -^) ----
@@ -606,6 +630,9 @@ impl[width: Nat] SInt[width] {
 impl[width: Nat] UInt[width] {
     def resize[newWidth: Nat]: UInt[newWidth] =
         UInt.mk(None, binary(this.expr, "resize", this.expr))
+    // Safe widening: requires proof that current width ≤ new width (no data loss)
+    def cast[newWidth: Nat](proof: Le(width, newWidth)): UInt[newWidth] =
+        UInt.mk(None, binary(this.expr, "resize", this.expr))
     def asBits: Bits[width] =
         Bits.mk(None, binary(this.expr, "asBits", this.expr))
     def asSInt: SInt[width] =
@@ -616,6 +643,9 @@ impl[width: Nat] UInt[width] {
 
 impl[width: Nat] SInt[width] {
     def resize[newWidth: Nat]: SInt[newWidth] =
+        SInt.mk(None, binary(this.expr, "resize", this.expr))
+    // Safe widening: requires proof that current width ≤ new width (no data loss)
+    def cast[newWidth: Nat](proof: Le(width, newWidth)): SInt[newWidth] =
         SInt.mk(None, binary(this.expr, "resize", this.expr))
     def asBits: Bits[width] =
         Bits.mk(None, binary(this.expr, "asBits", this.expr))
