@@ -10,3 +10,94 @@ impl Nat {
             case succ(n) => "succ"
         }
 }
+
+// === Int 类型 ===
+
+enum Int {
+    ofNat(n: Nat)
+    negSucc(n: Nat)
+}
+
+// === 基础运算 ===
+
+def int_neg(i: Int): Int =
+    match i {
+        case ofNat(n) =>
+            match n {
+                case zero => ofNat(zero)
+                case succ(m) => negSucc(m)
+            }
+        case negSucc(n) => ofNat(succ(n))
+    }
+
+def int_add(x: Int, y: Int): Int =
+    match x {
+        case ofNat(a) =>
+            match y {
+                case ofNat(b) => ofNat(a + b)
+                case negSucc(b) => ofNat(pred(nat_sub a b))
+            }
+        case negSucc(a) =>
+            match y {
+                case ofNat(b) => int_add (ofNat b) (negSucc a)
+                case negSucc(b) => negSucc(succ(a + b))
+            }
+    }
+
+def int_sub(x: Int, y: Int): Int =
+    let ny: Int = int_neg y;
+    int_add x ny
+
+def int_mul(x: Int, y: Int): Int =
+    match x {
+        case ofNat(n) =>
+            match n {
+                case zero => ofNat(zero)
+                case succ(a) =>
+                    let p: Int = int_mul (ofNat a) y;
+                    int_add y p
+            }
+        case negSucc(_) => ofNat(zero)
+    }
+
+// === 转换 ===
+
+def int_of_nat(n: Nat): Int = ofNat n
+
+def nat_of_int(i: Int): Nat =
+    match i {
+        case ofNat(n) => n
+        case negSucc(_) => zero
+    }
+
+// === Show ===
+
+def int_to_string(i: Int): String =
+    match i {
+        case ofNat(n) => nat_to_dec n
+        case negSucc(n) => "-" + nat_to_dec (succ n)
+    }
+
+impl Show for Int {
+    def show: String = int_to_string this
+}
+
+impl Neg for Int {
+    def - : Int = int_neg this
+}
+
+impl Add[Int, Int] for Int {
+    def +(that: Int): Int = int_add this that
+}
+
+impl Sub[Int, Int] for Int {
+    def -(that: Int): Int = int_sub this that
+}
+
+impl Into[Int] for Nat {
+    def into: Int = int_of_nat this
+}
+
+impl Into[Nat] for Int {
+    def into: Nat = nat_of_int this
+}
