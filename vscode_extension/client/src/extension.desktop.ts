@@ -11,7 +11,7 @@ export async function activate(context: ExtensionContext) {
 
 	if (mode === 'cli') {
 		const command = config.get<string>('cli-server.path', '') || 'typort';
-		const channel = window.createOutputChannel('TyportHDL Language Server');
+		const channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
 		channel.appendLine(`Starting CLI language server: ${command} lsp`);
 
 		const clientOptions: LanguageClientOptions = {

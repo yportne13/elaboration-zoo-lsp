@@ -14,7 +14,7 @@ let channel: LogOutputChannel;
 
 async function startLanguageServer(context: ExtensionContext, wasm: Wasm): Promise<LanguageClient> {
 	if (!channel) {
-		channel = window.createOutputChannel('TyportHDL Language Server');
+		channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
 	}
 	const serverOptions: ServerOptions = async () => {
 		const options: ProcessOptions = {
