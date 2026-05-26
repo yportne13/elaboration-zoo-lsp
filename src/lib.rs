@@ -33,7 +33,7 @@ use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
 use lsp_server::{Connection, ExtractError, Message, ProtocolError, Request, RequestId, Response};
-use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
+use lsp_types::request::{Completion, ExecuteCommand, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -529,11 +529,8 @@ impl LanguageServer for Backend<Client> {
                     all_commit_characters: None,
                     completion_item: None,
                 }),
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-                execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec!["typort.applyQuickFix".to_string()],
-                    work_done_progress_options: Default::default(),
-                }),
+                code_action_provider: None,
+                execute_command_provider: None,
 
                 workspace: Some(WorkspaceServerCapabilities {
                     workspace_folders: Some(WorkspaceFoldersServerCapabilities {
@@ -787,64 +784,13 @@ impl LanguageServer for Backend<Client> {
         debug!("watched files have changed!");
     }
 
-    fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        if params.command == "typort.applyQuickFix" {
-            let args = params.arguments;
-            let uri: String = serde_json::from_value(args[0].clone()).unwrap();
-            let id: String = serde_json::from_value(args[1].clone()).unwrap();
-
-            let result_text = if let Some(map) = self.quickfix_map.get(&uri) {
-                if let Some(code_actions) = map.get(&id) {
-                    eprintln!("searching...");
-                    code_actions.iter().flat_map(|x| {
-                        let ret = x();
-                        eprintln!("{:?}", ret);
-                        ret
-                    }).next()
-                        .unwrap_or("failed to find a solution".to_owned())
-                } else {
-                    "failed to find a solution".to_owned()
-                }
-            } else {
-                "failed to find a solution".to_owned()
-            };
-
-            self.client.show_message(MessageType::INFO, format!("find a possible solution: {}", result_text));
-        }
+    // execute_command commented out: was used for typort.applyQuickFix (code actions)
+    fn execute_command(&self, _params: ExecuteCommandParams) -> Result<Option<Value>> {
         Ok(None)
     }
 
-    fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-        let uri = normalize_builtin_uri(&params.text_document.uri).to_string();
-        if let Some(map) = self.quickfix_map.get(&uri) {
-            let mut actions = Vec::new();
-            for diagnostic in params.context.diagnostics {
-                if let Some(data) = diagnostic.data {
-                    if let Some(id) = data.as_str() {
-                        if map.get(id).is_some() {
-                            let command = Command {
-                                title: "Canonical Quick Fix".to_string(),
-                                command: "typort.applyQuickFix".to_string(),
-                                arguments: Some(vec![
-                                    serde_json::Value::String(uri.clone()),
-                                    serde_json::Value::String(id.to_string()),
-                                ]),
-                            };
-                            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                                title: "Search solution".to_string(),
-                                kind: Some(CodeActionKind::QUICKFIX),
-                                command: Some(command),
-                                edit: None,
-                                ..Default::default()
-                            }));
-                        }
-                    }
-                }
-            }
-            if !actions.is_empty() {
-                return Ok(Some(actions));
-            }
-        }
+    // code_action commented out: quick fix feature disabled
+    fn code_action(&self, _params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         Ok(None)
     }
 }
@@ -977,17 +923,18 @@ impl Backend<Client> {
                         Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
                         Err(ExtractError::MethodMismatch(req)) => req,
                     };
-                    match cast::<CodeActionRequest>(req.clone()) {
-                        Ok((id, params)) => {
-                            let result = self.code_action(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
-                        }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
+                    // CodeActionRequest disabled (code actions turned off)
+                    // match cast::<CodeActionRequest>(req.clone()) {
+                    //     Ok((id, params)) => {
+                    //         let result = self.code_action(params)?;
+                    //         let result = serde_json::to_value(&result).unwrap();
+                    //         let resp = Response { id, result: Some(result), error: None };
+                    //         self.client.connection.sender.send(Message::Response(resp))?;
+                    //         continue;
+                    //     }
+                    //     Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                    //     Err(ExtractError::MethodMismatch(req)) => req,
+                    // };
                     match cast::<ExecuteCommand>(req.clone()) {
                         Ok((id, params)) => {
                             let result = self.execute_command(params)?;

@@ -9,3 +9,9 @@ dhat-heap.json
 
 # Stats output
 stats_*.json
+
+# Analysis artifacts
+flame.folded
+dhat_*
+analyze_symbols.py
+wasm_crash_analysis_report.md
