@@ -1,5 +1,5 @@
 import 'vscode-languageclient/node';
-import { ExtensionContext, window, workspace } from 'vscode';
+import { ExtensionContext, window, workspace, LogOutputChannel } from 'vscode';
 import { LanguageClient, LanguageClientOptions } from 'vscode-languageclient/node';
 import { activate as activateWasm, deactivate as deactivateWasm } from './extension';
 

@@ -60,7 +60,8 @@
 		]
 	},
 	"dependencies": {
-		"@vscode/wasm-wasi-lsp": "0.1.0-pre.8"
+		"@vscode/wasm-wasi": "^1.0.2",
+		"@vscode/wasm-wasi-lsp": "0.1.0-pre.9"
 	},
 	"devDependencies": {
 		"@types/node": "^18.14.6",

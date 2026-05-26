@@ -3,13 +3,14 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
-import { ExtensionContext, Uri, window, workspace, commands, OutputChannel } from 'vscode';
+import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } from 'vscode-languageclient';
-import { Wasm, ProcessOptions } from '@vscode/wasm-wasi';
+import { Wasm } from '@vscode/wasm-wasi/v1';
+import type { ProcessOptions } from '@vscode/wasm-wasi/v1';
 import { createStdioOptions, createUriConverters, startServer } from '@vscode/wasm-wasi-lsp';
 
 let client: LanguageClient | undefined;
-let channel: OutputChannel;
+let channel: LogOutputChannel;
 
 async function startLanguageServer(context: ExtensionContext, wasm: Wasm): Promise<LanguageClient> {
 	if (!channel) {
