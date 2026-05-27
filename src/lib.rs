@@ -25,6 +25,8 @@ mod L11_macro;
 pub mod L12_canonical;
 pub mod L13_namespace;
 
+pub mod sampler;
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 
@@ -357,7 +359,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 self.processing_uris.insert(uri_str.clone(), true);
 
                 // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
-                eprintln!("Worker starting job for version {:?}", job.version);
+                self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
                 self.on_change::<false>(TextDocumentItem {
                     uri: job.uri,
                     text: &job.text,
@@ -375,7 +377,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     pub fn on_change<const MUT:bool>(&self, params: TextDocumentItem<'_>) {
         let start_all = std::time::Instant::now();
-        eprintln!("change: {}", params.uri.as_str());
+        self.client.log_message(MessageType::LOG, format!("change: {}", params.uri.as_str()));
         //dbg!(&params.version);
         let rope = ropey::Rope::from_str(params.text);
         self.document_map
@@ -390,7 +392,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
         if let Some((decls, parse_errs, new_exports)) = parser_with_macros(&preprocess(params.text), now_id, &global_macros) {
-            eprintln!("parser {:?}", start.elapsed().as_secs_f32());
+            self.client.log_message(MessageType::LOG, format!("parser {:?}", start.elapsed().as_secs_f32()));
             let parser_dur = start.elapsed().as_secs_f64();
             // Merge newly exported macros into the global table
             for (name, rules) in new_exports {
@@ -431,7 +433,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     }
                 }
             }
-            eprintln!("infer {:?}", start.elapsed().as_secs_f32());
+            self.client.log_message(MessageType::LOG, format!("infer {:?}", start.elapsed().as_secs_f32()));
             let infer_dur = start.elapsed().as_secs_f64();
             // Record timing for benchmark
             self.timings.lock().unwrap().push((
@@ -501,7 +503,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 start_all.elapsed().as_secs_f64(),
             ));
         }
-        eprintln!("change {:?}", start_all.elapsed().as_secs_f32());
+        self.client.log_message(MessageType::LOG, format!("change {:?}", start_all.elapsed().as_secs_f32()));
     }
 }
 
@@ -749,7 +751,7 @@ impl LanguageServer for Backend<Client> {
         let uri = params.text_document_position.text_document.uri;
         let uri = normalize_builtin_uri(&uri);
 
-        eprintln!("on completion");
+        self.client.log_message(MessageType::LOG, "on completion".to_string());
         let position = params.text_document_position.position;
         let completions = || -> Option<Vec<CompletionItem>> {
             let rope = self.document_map.get(&uri.to_string())?;
@@ -803,7 +805,7 @@ impl Backend<Client> {
         self.client.connection.initialize(server_capabilities)
     }
     pub fn main_loop(&self) -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
-        eprintln!("starting example main loop");
+        self.client.log_message(MessageType::INFO, "starting example main loop".to_string());
         for msg in self.client.connection.receiver.clone() {
             match msg {
                 Message::Request(req) => {
@@ -957,7 +959,7 @@ impl Backend<Client> {
                                 NumberOrString::Number(n) => RequestId::from(n as i32),
                                 NumberOrString::String(s) => RequestId::from(s),
                             };
-                            eprintln!("cancelled request {:?}", rid);
+                            self.client.log_message(MessageType::LOG, format!("cancelled request {:?}", rid));
                             self.cancelled_requests.lock().unwrap().insert(rid);
                         }
                     } else {
