@@ -200,6 +200,13 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let cli_client = CliClient::new();
     let source_map = cli_client.source_map.clone();
 
+    // Enable statistical sampling profiler if --sample flag is present
+    let do_sample = args.iter().any(|a| a == "--sample");
+    if do_sample {
+        eprintln!("Sampling profiler enabled (backtrace)...");
+        elaboration_zoo_lsp::sampler::enable();
+    }
+
     // Create backend with CLI client.
     let backend = Backend::new(cli_client);
     // Load builtin prelude (separated from Backend::new for LSP init timing).
@@ -277,6 +284,9 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     }
 
     for filepath in &args[1..] {
+        if filepath.starts_with("--") {
+            continue;
+        }
         let path = PathBuf::from(filepath);
         let contents = fs::read_to_string(&path)?;
         let uri = Url::from_file_path(path.canonicalize()?).unwrap();
@@ -292,6 +302,25 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             text: &contents,
             version: None,
         });
+    }
+
+    if do_sample {
+        eprintln!("Writing folded stacks...");
+        elaboration_zoo_lsp::sampler::write_folded("sampler.folded")
+            .expect("write folded");
+        eprintln!("Generating flamegraph SVG...");
+        let folded = std::fs::read_to_string("sampler.folded")
+            .expect("read folded");
+        let lines: Vec<&str> = folded.lines().collect();
+        let mut opts = inferno::flamegraph::Options::default();
+        opts.title = "elaboration-zoo-lsp CPU flame graph (backtrace sampler)".to_string();
+        let file = std::fs::File::create("flamegraph.svg")
+            .expect("create svg");
+        let mut writer = std::io::BufWriter::new(file);
+        if inferno::flamegraph::from_lines(&mut opts, lines.into_iter(), &mut writer).is_ok() {
+            let _ = std::fs::remove_file("sampler.folded");
+            eprintln!("Flame graph written to flamegraph.svg");
+        }
     }
 
     Ok(())

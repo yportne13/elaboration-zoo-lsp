@@ -32,6 +32,8 @@ dashmap = "6.1.0"
 smol_str = "0.3.2"
 codespan-reporting = "0.13.1"
 dhat = { version = "0.3", optional = true }
+backtrace = "0.3"
+inferno = "0.12"
 
 [features]
 dhat-heap = ["mem-profile"]
@@ -41,3 +43,4 @@ mem-profile = ["dep:dhat"]
 lto = true
 codegen-units = 1
 # strip = true  # disabled for profiling (need debug symbols)
+debug = 2

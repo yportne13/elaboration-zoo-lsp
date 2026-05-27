@@ -743,6 +743,7 @@ impl Infer {
             "infer".red(),
             t,
         );*/
+        crate::sampler::tick();
         let t_span = t.to_span();
         match t {
             // Infer variable types
