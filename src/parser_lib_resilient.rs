@@ -1,4 +1,4 @@
-use std::{fmt::Debug, ops::Add, str::pattern::Pattern, hash::Hash};
+use std::{fmt::Debug, ops::Add, str::pattern::Pattern, hash::Hash, marker::PhantomData};
 
 pub use crate::parser_lib::{Span, ToSpan, Severity, Diagnostic, unescape};
 
@@ -94,6 +94,61 @@ where
 {
     fn parse(&self, input: I, state: &mut S) -> Result<(I, A), E> {
         self(input, state)
+    }
+}
+
+/// Trait for types that can store parse errors (used by [`RecoverExt::recover_with`]).
+pub trait ErrorStore<E> {
+    fn push_error(&mut self, error: E);
+}
+
+impl<E, T> ErrorStore<E> for (Vec<E>, T) {
+    fn push_error(&mut self, error: E) {
+        self.0.push(error);
+    }
+}
+
+/// Extension trait adding error recovery combinators to all parsers.
+pub trait RecoverExt<I: Copy, A, S, E>: Parser<I, A, S, E> {
+    /// Attempt to parse `self`. If it fails:
+    ///
+    /// 1. Push the error into `state` via [`ErrorStore::push_error`].
+    /// 2. Advance the input by applying `skip` (typically skipping to a sync token
+    ///    such as `EndLine` so that the surrounding `many0` / `many0_sep` can continue).
+    /// 3. Return `Ok((skipped_input, fallback()))` with a placeholder value.
+    ///
+    /// Without this combinator, a failed parse causes `many0` to silently stop.
+    /// With it, the error is recorded and parsing continues from the sync point.
+    fn recover_with<Skip, Fallback>(
+        self,
+        skip: Skip,
+        fallback: Fallback,
+    ) -> impl Parser<I, A, S, E>
+    where
+        S: ErrorStore<E>,
+        Skip: Fn(I) -> I + Copy,
+        Fallback: Fn() -> A + Copy;
+}
+
+impl<I: Copy, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
+    fn recover_with<Skip, Fallback>(
+        self,
+        skip: Skip,
+        fallback: Fallback,
+    ) -> impl Parser<I, A, S, E>
+    where
+        S: ErrorStore<E>,
+        Skip: Fn(I) -> I + Copy,
+        Fallback: Fn() -> A + Copy,
+    {
+        move |input: I, state: &mut S| match self.parse(input, state) {
+            Ok((input, val)) => Ok((input, val)),
+            Err(err) => {
+                state.push_error(err);
+                let remaining = skip(input);
+                Ok((remaining, fallback()))
+            }
+        }
     }
 }
 

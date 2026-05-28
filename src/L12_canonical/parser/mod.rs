@@ -12,8 +12,6 @@ pub mod macros;
 
 use TokenKind::*;
 
-use super::empty_span;
-
 #[derive(Debug, Clone, Copy)]
 pub enum ErrMsg {
     Expect(TokenKind),
@@ -28,7 +26,20 @@ pub struct IError {
     pub msg: Span<ErrMsg>,
 }
 
+use super::empty_span;
+
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
+
+/// Skip input until a token of the given kind is found, returning the slice
+/// starting at that token (the sync token itself is NOT consumed).
+fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] + Copy {
+    move |input: &'b [TokenNode<'a>]| {
+        input.iter()
+            .position(|t| t.data.1 == kind)
+            .map(|i| &input[i..])
+            .unwrap_or(&[])
+    }
+}
 
 pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>);
 

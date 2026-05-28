@@ -15,6 +15,18 @@ use TokenKind::*;
 
 use super::empty_span;
 
+/// Skip input until a token of the given kind is found, returning the slice
+/// starting at that token (the sync token itself is NOT consumed).
+/// If the token is not found, the entire remaining input is skipped.
+fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] + Copy {
+    move |input: &'b [TokenNode<'a>]| {
+        input.iter()
+            .position(|t| t.data.1 == kind)
+            .map(|i| &input[i..])
+            .unwrap_or(&[])
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BaseMsg {
     Expect(TokenKind),
@@ -126,7 +138,12 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err))).many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
+                .recover_with(
+                    skip_until_inner(EndLine),
+                    || Ok(Decl::Package { path: vec![] }),
+                )
+                .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => if ret.0.is_empty() {
                     // Collect exported macros: those with a corresponding __exported__ sentinel key

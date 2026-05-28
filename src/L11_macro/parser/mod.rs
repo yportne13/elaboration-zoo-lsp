@@ -29,6 +29,17 @@ pub struct IError {
 
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
+/// Skip input until a token of the given kind is found, returning the slice
+/// starting at that token (the sync token itself is NOT consumed).
+fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] + Copy {
+    move |input: &'b [TokenNode<'a>]| {
+        input.iter()
+            .position(|t| t.data.1 == kind)
+            .map(|i| &input[i..])
+            .unwrap_or(&[])
+    }
+}
+
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
     fn many1_sep<P: Parser<I, X, S, IError>, X>(self, sep: P) -> impl Parser<I, Vec<A>, S, IError>;
