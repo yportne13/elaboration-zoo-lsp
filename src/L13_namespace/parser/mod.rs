@@ -151,14 +151,14 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
+                    Some((expand_derives(ret.1.into_iter().flatten().filter(|d| !matches!(d, Decl::Package { path } if path.is_empty())).collect()), err_collect.0, exported))
                 } else {
                     err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
                     let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
+                    Some((expand_derives(ret.1.into_iter().flatten().filter(|d| !matches!(d, Decl::Package { path } if path.is_empty())).collect()), err_collect.0, exported))
                 }
                 Err(e) => {
                     err_collect.0.push(e);
