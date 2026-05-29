@@ -399,7 +399,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 self.exported_macros.insert(name, rules);
             }
             let mut err_collect = vec![];
-            self.ast_map.insert(params.uri.to_string(), decls.clone());
+            // self.ast_map.insert(params.uri.to_string(), decls.clone());
             let mut i = self.infer.lock().unwrap();
             let mut c = self.cxt.lock().unwrap();
             let (mut ic, mut cc);
