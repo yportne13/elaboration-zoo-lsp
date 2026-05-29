@@ -138,12 +138,13 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
-                .recover_with(
-                    skip_until_inner(EndLine),
-                    || Ok(Decl::Package { path: vec![] }),
-                )
-                .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+            // let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
+            //     .recover_with(
+            //         skip_until_inner(EndLine),
+            //         || Ok(Decl::Package { path: vec![] }),
+            //     )
+            //     .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err))).many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => if ret.0.is_empty() {
                     // Collect exported macros: those with a corresponding __exported__ sentinel key
