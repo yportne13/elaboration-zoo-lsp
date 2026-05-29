@@ -266,7 +266,7 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check::<CANONICAL>(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                self.hover_table.push((x.to_span(), x.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, va.clone()));
                 let u_checked = self.check::<CANONICAL>(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone()),
                     *u,
@@ -403,7 +403,7 @@ impl Infer {
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
-                    self.hover_table.push((name.to_span(), name.to_span(), ret_cxt.clone_without_src_names(), vtyp.clone()));
+                    self.hover_table.push((name.to_span(), name.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vtyp.clone()));
                     (
                         ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone())?,
                         vtyp,
@@ -749,12 +749,12 @@ impl Infer {
             // Infer variable types
             Raw::Var(name) => match cxt.src_names.get(&name.data) {
                 Some((x, a)) => {
-                    self.hover_table.push((t_span, a.0, cxt.clone_without_src_names(), a.1.clone()));
+                    self.hover_table.push((t_span, a.0, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, a.1.clone()));
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
                     Some((def, _, _, _, vty)) => {
-                        self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
+                        self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {
@@ -762,7 +762,7 @@ impl Infer {
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let qualified = SmolStr::new(format!("{}.{}", prefix, name.data));
                             if let Some((def, _, _, _, vty)) = cxt.decl.get(&qualified) {
-                                self.hover_table.push((t_span, *def, cxt.clone_without_src_names(), vty.clone()));
+                                self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                                 return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
                             }
                         }
@@ -772,7 +772,7 @@ impl Infer {
                             .find(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
                             .map(|(k, v)| (k.clone(), v.clone()));
                         if let Some((full_key, (def_span, _, _, _, vty))) = match_entry {
-                            self.hover_table.push((t_span, def_span, cxt.clone_without_src_names(), vty.clone()));
+                            self.hover_table.push((t_span, def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(full_key)).into(), vty.clone()));
                         }
                         Err(Error(name.map(|x| format!("error name not in scope: {}", x)), vec![]))
@@ -793,14 +793,14 @@ impl Infer {
                     if let Some(qual) = full_path {
                         // Try the path as-is first
                         if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&qual) {
-                            self.hover_table.push((t_span, *def_span, cxt.clone_without_src_names(), vty.clone()));
+                            self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(qual)).into(), vty.clone()));
                         }
                         // If not found, try with namespace prefix (for access inside a package)
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let prefixed = SmolStr::new(format!("{prefix}.{qual}"));
                             if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&prefixed) {
-                                self.hover_table.push((t_span, *def_span, cxt.clone_without_src_names(), vty.clone()));
+                                self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                                 return Ok((Tm::Decl(empty_span(prefixed)).into(), vty.clone()));
                             }
                         }
@@ -861,7 +861,7 @@ impl Infer {
                                 .map(|(name, _, ty, _)| (name.to_span(), ty.clone()))
                             });
                         if let Some((def_span, val)) = field_info {
-                            self.hover_table.push((t.to_span(), def_span, cxt.clone_without_src_names(), val.clone()));
+                            self.hover_table.push((t.to_span(), def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, val.clone()));
                             Ok((
                                 Tm::Obj(tm, t).into(),
                                 val,
@@ -875,7 +875,7 @@ impl Infer {
                             .iter()
                             .find(|(fields_name, _, _)| fields_name == &t)
                             .map(|(name, ty, _)| (name.to_span(), ty)) {
-                                self.hover_table.push((t.to_span(), def_span, cxt.clone_without_src_names(), val.clone()));
+                                self.hover_table.push((t.to_span(), def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, val.clone()));
                                 Ok((
                                     Tm::Obj(tm, t).into(),
                                     val.clone(),
@@ -996,7 +996,7 @@ impl Infer {
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 let t_checked = self.check::<false>(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
-                self.hover_table.push((x.to_span(), x.to_span(), cxt.clone_without_src_names(), va.clone()));
+                self.hover_table.push((x.to_span(), x.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, va.clone()));
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),

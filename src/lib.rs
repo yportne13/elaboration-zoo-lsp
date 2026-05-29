@@ -631,7 +631,7 @@ impl LanguageServer for Backend<Client> {
                         .and_then(|x| x.hover_table.iter()
                             .filter(|x| x.0.path_id == *id)
                             .find(|x| x.0.contains(offset))
-                            .map(|(span, _, cxt, val)| (*span, pretty_tm(0, cxt.names(), &x.quote(&cxt.decl, cxt.lvl, val))))
+                            .map(|(span, _, hcxt, val)| (*span, pretty_tm(0, hcxt.names(), &x.quote(&hcxt.decl, hcxt.lvl, val))))
                         )
                         .and_then(|x| Some(Hover {
                             contents: HoverContents::Markup(MarkupContent {

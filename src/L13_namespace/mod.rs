@@ -363,7 +363,7 @@ pub struct Infer {
     trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<SmolStr, Vec<bool>>,
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
-    pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
+    pub hover_table: Vec<(Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
 }
 
@@ -676,7 +676,7 @@ impl Infer {
         type RcValPair = (Rc<Val>, Rc<Val>);
         let meta_contrains_entry_sz = std::mem::size_of::<RcValPair>();
         let meta_contrains_cap_bytes = constraints_cap * meta_contrains_entry_sz;
-        type HoverEntry = (Span<()>, Span<()>, cxt::Cxt, Rc<Val>);
+        type HoverEntry = (Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>);
         let hover_entry_sz = std::mem::size_of::<HoverEntry>();
         let hover_cap_bytes = hover_cap * hover_entry_sz;
         type DeclEntry = (SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>));

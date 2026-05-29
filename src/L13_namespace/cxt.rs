@@ -26,6 +26,27 @@ pub(super) fn nat_to_dec(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val
     Val::LiteralIntro(empty_span(count.to_string())).into()
 }
 
+/// Minimal context for hover display — only stores what pretty_tm/quote actually needs.
+#[derive(Debug, Clone)]
+pub struct HoverCxt {
+    pub lvl: Lvl,
+    pub locals: Locals,
+    pub decl: Rc<Decl>,
+}
+
+impl HoverCxt {
+    pub fn names(&self) -> List<SmolStr> {
+        fn go(locals: &Locals) -> List<SmolStr> {
+            match locals {
+                Locals::Here => List::new(),
+                Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
+                Locals::Bind(locals, name, _) => go(locals).prepend(name.data.clone()),
+            }
+        }
+        go(&self.locals)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Cxt {
     pub env: Env, // Used for evaluation
