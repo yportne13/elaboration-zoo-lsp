@@ -908,6 +908,9 @@ impl Infer {
             // Infer function applications
             Raw::App(t, u, i) => {
                 let t_span = t.to_span();
+                let t_raw = t.as_ref().clone();
+                let u_raw = u.as_ref().clone();
+                let is_expl = matches!(i, Either::Icit(Icit::Expl));
                 let (i, t, tty) = match i {
                     Either::Name(name) => {
                         let infered = self.infer_expr(cxt, *t);
@@ -935,6 +938,18 @@ impl Infer {
                         }
                     }
                     _ => {
+                        // Scala-style apply: if the expression's type is not a function type,
+                        // try desugaring `expr(args)` into `expr.apply(args)`
+                        if is_expl {
+                            let meta_before = self.meta.len();
+                            let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
+                            let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
+                            if let Ok(result) = self.infer_expr(cxt, apply_call) {
+                                return Ok(result);
+                            }
+                            self.meta.truncate(meta_before);
+                        }
+
                         let new_meta = self.fresh_meta(cxt, Val::U(0).into());
                         let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
                         let b_closure = Closure(

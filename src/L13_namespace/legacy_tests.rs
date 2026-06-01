@@ -1085,6 +1085,55 @@ fn test_example_typeclass_complex() {
     match run_with_prelude(input) {
         Ok(output) => {
             println!("{}", output);
+            assert!(output.contains("3"), "expected 3, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_apply_syntax() {
+    let input = r#"
+struct Wrapper {
+    val: Nat
+}
+
+impl Wrapper {
+    def apply(x: Nat): Nat = this.val + x
+}
+
+def w = new Wrapper(succ zero)
+println (w (succ (succ zero)))
+"#;
+    let result = run_with_prelude(input);
+    match result {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("3"), "expected 3, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_apply_multi_arg() {
+    let input = r#"
+struct Multi {
+    val: Nat
+}
+
+impl Multi {
+    def apply(x: Nat, y: Nat): Nat = this.val + x + y
+}
+
+def m = new Multi(succ (succ (succ zero)))
+println (m (succ (succ zero), succ (succ zero)))
+"#;
+    let result = run_with_prelude(input);
+    match result {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("7"), "expected 7, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
