@@ -3,7 +3,7 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
-import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel } from 'vscode';
+import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel, Position } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } from 'vscode-languageclient';
 import { Wasm } from '@vscode/wasm-wasi/v1';
 import type { ProcessOptions } from '@vscode/wasm-wasi/v1';
@@ -88,6 +88,33 @@ export async function activate(context: ExtensionContext) {
 		const folder = workspace.workspaceFolders![0].uri;
 		const result = await client!.sendRequest(CountFilesRequest, { folder: client!.code2ProtocolConverter.asUri(folder) });
 		window.showInformationMessage(`The workspace contains ${result} files.`);
+	}));
+
+	// Expand macro command: sends typort-hdl/expandMacro request and shows the result
+	type ExpandMacroParams = { uri: string; position: Position };
+	type ExpandMacroResult = { name: string; range: { start: Position; end: Position }; expanded_text: string };
+	const ExpandMacroRequest = new RequestType<ExpandMacroParams, ExpandMacroResult | null, void>('typort-hdl/expandMacro');
+	context.subscriptions.push(commands.registerCommand('typort-hdl.expandMacro', async () => {
+		const editor = window.activeTextEditor;
+		if (!editor || !client) {
+			return;
+		}
+		const uri = editor.document.uri.toString();
+		const position = editor.selection.active;
+		try {
+			const result = await client.sendRequest(ExpandMacroRequest, { uri, position });
+			if (result) {
+				const doc = await workspace.openTextDocument({
+					content: result.expanded_text,
+					language: 'typort',
+				});
+				await window.showTextDocument(doc, { preview: true });
+			} else {
+				window.showInformationMessage('No macro expansion found at cursor position.');
+			}
+		} catch (error) {
+			window.showErrorMessage(`Expand macro failed: ${error}`);
+		}
 	}));
 
 	context.subscriptions.push(commands.registerCommand('typort-hdl.restartLanguageServer', async () => {

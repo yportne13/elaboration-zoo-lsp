@@ -108,6 +108,12 @@ impl<E, T> ErrorStore<E> for (Vec<E>, T) {
     }
 }
 
+impl<E, T, U> ErrorStore<E> for (Vec<E>, T, U) {
+    fn push_error(&mut self, error: E) {
+        self.0.push(error);
+    }
+}
+
 /// Extension trait adding error recovery combinators to all parsers.
 pub trait RecoverExt<I: Copy, A, S, E>: Parser<I, A, S, E> {
     /// Attempt to parse `self`. If it fails:
@@ -470,3 +476,52 @@ tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4
 tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5);
 tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6);
 tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6, H | PH | 7);
+
+macro_rules! tuple_cut_parser_ext2 {
+    ($t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),*) => {
+        impl<
+            I: Copy,
+            Err,
+            T,
+            U,
+            $t0, $($t),*,
+            $p0, $($p),*
+        > Parser<I, ($t0, $(Option<$t>),*), (Vec<Err>, T, U), Err> for Cut<($p0, $($p),*)>
+        where
+            $p0: Parser<I, $t0, (Vec<Err>, T, U), Err>,
+            $($p: Parser<I, $t, (Vec<Err>, T, U), Err>),*
+        {
+            fn parse(&self, input: I, state: &mut (Vec<Err>, T, U)) -> Result<(I, ($t0, $(Option<$t>),*)), Err> {
+                let (input, val) = self.0.$idx0.parse(input, state)?;
+                tuple_cut_parser_ext2!(self => input => state => val => $($t | $p | $idx),*)
+            }
+        }
+    };
+    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),+) => ({
+        let (input, val) = match $self.0.$idx0.parse($input, $state) {
+            Ok((i, v)) => (i, Some(v)),
+            Err(e) => {
+                $state.0.push(e);
+                ($input, None)
+            }
+        };
+        tuple_cut_parser_ext2!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
+    });
+    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt) => ({
+        match $self.0.$idx0.parse($input, $state) {
+            Ok((input, val)) => Ok((input, ($($parsed),*, Some(val)))),
+            Err(e) => {
+                $state.0.push(e);
+                Ok(($input, ($($parsed),*, None)))
+            }
+        }
+    });
+}
+
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1);
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2);
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3);
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4);
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5);
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6);
+tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6, H | PH | 7);

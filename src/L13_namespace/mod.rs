@@ -1413,7 +1413,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
     let mut id = 0;
     for p in prelude {
-        if let Some((decls, parse_errs, new_exports)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
+        if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
             for ast_err in parse_errs {
                 println!("{:?}", ast_err)
             }
@@ -1453,7 +1453,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     }
     // Parse main file with accumulated macros from prelude
     let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
-        .map(|(d, e, _)| (d, e))
+        .map(|(d, e, _, _)| (d, e))
         .unwrap();
     println!("-----------------");
     //TODO: do not print err. return error
@@ -3190,7 +3190,7 @@ fn test_macro_cut_truncated_module() {
         include_str!("../prelude/hdl.typort"),
     ];
     for p in prelude_files {
-        if let Some((_, _, new_exports)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
+        if let Some((_, _, new_exports, _)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
             for (name, rules) in new_exports {
                 global_macros.insert(name, rules);
             }
@@ -3199,7 +3199,7 @@ fn test_macro_cut_truncated_module() {
     }
     let input = "module";
     let (_, errors) = parser::parser_with_macros(input, id, &global_macros)
-        .map(|(d, e, _)| (d, e)).unwrap();
+        .map(|(d, e, _, _)| (d, e)).unwrap();
     println!("Parse errors for truncated `module`: {:?}", errors);
     // With Cut: no ExpectDecl (the macro matcher error prevents fallthrough).
     // The error is EmptyVec from many1_sep catching p_decl's fault.

@@ -45,7 +45,7 @@ use lsp_types::{CancelParams, NumberOrString, *};
 use crate::ls::Result;
 
 use L13_namespace::pretty::pretty_tm;
-use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule};
+use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule, MacroExpansionInfo};
 use L13_namespace::parser::syntax::Decl;
 use L13_namespace::{DeclTm, Infer, preprocess};
 use L13_namespace::cxt::Cxt;
@@ -72,6 +72,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>>,
     /// Exported macros accumulated across all files (keyed by macro name)
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
+    /// Macro expansion data collected during parsing (keyed by URI)
+    pub macro_expansion_map: DashMap<String, Vec<MacroExpansionInfo>>,
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
     // 信号机制：mpsc 通道任务队列
@@ -114,6 +116,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             hover_table,
             quickfix_map: DashMap::new(),
             exported_macros: DashMap::new(),
+            macro_expansion_map: DashMap::new(),
             processing_uris: DashMap::new(),
             job_sender: tx,
             job_receiver: Mutex::new(Some(rx)),
@@ -391,13 +394,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        if let Some((decls, parse_errs, new_exports)) = parser_with_macros(&preprocess(params.text), now_id, &global_macros) {
+        if let Some((decls, parse_errs, new_exports, expansions)) = parser_with_macros(&preprocess(params.text), now_id, &global_macros) {
             self.client.log_message(MessageType::LOG, format!("parser {:?}", start.elapsed().as_secs_f32()));
             let parser_dur = start.elapsed().as_secs_f64();
             // Merge newly exported macros into the global table
             for (name, rules) in new_exports {
                 self.exported_macros.insert(name, rules);
             }
+            // Store macro expansions for the "expand macro" feature
+            self.macro_expansion_map.insert(params.uri.to_string(), expansions);
             let mut err_collect = vec![];
             // self.ast_map.insert(params.uri.to_string(), decls.clone());
             let mut i = self.infer.lock().unwrap();
@@ -826,6 +831,47 @@ impl Backend<Client> {
                             }
                             Err(_) => {
                                 let resp = Response::new_err(req.id, -32602, "Invalid params: expected { uri: string }".into());
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
+                        }
+                        continue;
+                    }
+                    // Custom request: expand macro at cursor position
+                    if req.method == "typort-hdl/expandMacro" {
+                        #[derive(Deserialize)]
+                        struct ExpandMacroParams {
+                            uri: String,
+                            position: lsp_types::Position,
+                        }
+                        #[derive(Serialize)]
+                        struct ExpandMacroResult {
+                            name: String,
+                            range: lsp_types::Range,
+                            expanded_text: String,
+                        }
+                        match serde_json::from_value::<ExpandMacroParams>(req.params) {
+                            Ok(params) => {
+                                let uri = params.uri;
+                                let result = self.macro_expansion_map.get(&uri).and_then(|expansions| {
+                                    let rope = self.document_map.get(&uri)?;
+                                    let offset = position_to_offset(params.position, &rope)?;
+                                    expansions.iter().find(|e| {
+                                        offset >= e.start_offset as usize && offset < e.end_offset as usize
+                                    }).map(|e| {
+                                        let start = offset_to_position(e.start_offset as usize, &rope)?;
+                                        let end = offset_to_position(e.end_offset as usize, &rope)?;
+                                        Some(ExpandMacroResult {
+                                            name: e.name.clone(),
+                                            range: lsp_types::Range::new(start, end),
+                                            expanded_text: e.expanded_text.clone(),
+                                        })
+                                    }).flatten()
+                                });
+                                let resp = Response { id: req.id, result: Some(serde_json::to_value(&result).unwrap()), error: None };
+                                self.client.connection.sender.send(Message::Response(resp))?;
+                            }
+                            Err(_) => {
+                                let resp = Response::new_err(req.id, -32602, "Invalid params: expected { uri: string, position: { line: u32, character: u32 } }".into());
                                 self.client.connection.sender.send(Message::Response(resp))?;
                             }
                         }

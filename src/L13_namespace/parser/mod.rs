@@ -3,6 +3,15 @@ use smol_str::SmolStr;
 use syntax::{Decl, Either, Icit, Pattern, Raw};
 use std::collections::HashMap;
 use macros::*;
+use serde::{Serialize, Deserialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MacroExpansionInfo {
+    pub name: String,
+    pub start_offset: u32,
+    pub end_offset: u32,
+    pub expanded_text: String,
+}
 
 use crate::parser_lib_resilient::*;
 
@@ -77,7 +86,18 @@ pub struct IError {
 
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
-pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>);
+pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>);
+
+fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
+    let mut result = String::new();
+    for (i, tok) in tokens.iter().enumerate() {
+        if i > 0 {
+            result.push(' ');
+        }
+        result.push_str(&tok.data.0);
+    }
+    result
+}
 
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
@@ -114,19 +134,19 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 
 /// Parse with no pre-existing macros (for tests). Returns (declarations, parse errors, accumulated macros).
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    parser_with_macros(input, id, &Default::default()).map(|(d, e, _)| (expand_derives(d), e))
+    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| (expand_derives(d), e))
 }
 
 /// Parse with a pre-populated macro table (from macros in other files).
-/// Returns (declarations, parse errors, macros to export to other files).
+/// Returns (declarations, parse errors, macros to export to other files, macro expansions).
 /// Only macros marked with #[macro_export] are included in the returned table.
-pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, Vec<MacroRule>>) -> Option<(Vec<Decl>, Vec<IError>, HashMap<String, Vec<MacroRule>>)> {
+pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, Vec<MacroRule>>) -> Option<(Vec<Decl>, Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>)> {
     // Strip __exported__ sentinel keys from global macros (they're only for internal tracking)
     let clean_global: HashMap<String, Vec<MacroRule>> = global_macros.iter()
         .filter(|(k, _)| !k.starts_with("__exported__"))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let mut err_collect: MacroState = (vec![], clean_global);
+    let mut err_collect: MacroState = (vec![], clean_global, vec![]);
     err_collect.1.entry("stringify".to_owned()).or_insert_with(|| vec![MacroRule {
         matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
         transcriber: MacroTranscriber::BuiltIn,
@@ -138,32 +158,28 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         path_id: id,
     }) {
         Some((_, ret)) => {
-            // let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
-            //     .recover_with(
-            //         skip_until_inner(EndLine),
-            //         || Ok(Decl::Package { path: vec![] }),
-            //     )
-            //     .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             let ret = (p_decl.map(Ok).or(p_macro_def.map(Err))).many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             match ret {
-                Ok(ret) => if ret.0.is_empty() {
-                    // Collect exported macros: those with a corresponding __exported__ sentinel key
-                    let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
-                        .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
-                } else {
-                    err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
-                    let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
-                        .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect();
-                    Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported))
+                Ok(ret) => {
+                    let expansions = std::mem::take(&mut err_collect.2);
+                    if ret.0.is_empty() {
+                        let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
+                            .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
+                    } else {
+                        err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
+                        let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
+                            .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
+                    }
                 }
                 Err(e) => {
                     err_collect.0.push(e);
-                    Some((vec![], err_collect.0, Default::default()))
+                    Some((vec![], err_collect.0, Default::default(), Default::default()))
                 }
             }
         }
@@ -779,15 +795,28 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         for m in macro_decl {
             if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
                 let t_owned = m.transcriber.replace(t)?;
+                // Record macro expansion info
+                {
+                    let consumed = input.len() - i.len();
+                    let start = input[0].start_offset;
+                    let end = if consumed > 0 { input[consumed - 1].end_offset } else { input[0].end_offset };
+                    state.2.push(MacroExpansionInfo {
+                        name: input[0].data.0.to_string(),
+                        start_offset: start,
+                        end_offset: end,
+                        expanded_text: owned_tokens_to_string(&t_owned),
+                    });
+                }
                 let t_borrowed: Vec<_> = t_owned.iter().map(|tok| Span {
                     data: (tok.data.0.as_str(), tok.data.1),
                     start_offset: tok.start_offset,
                     end_offset: tok.end_offset,
                     path_id: tok.path_id,
                 }).collect();
-                let mut temp_state = (vec![], state.1.clone());
+                let mut temp_state = (vec![], state.1.clone(), vec![]);
                 let ret = p_raw(&t_borrowed, &mut temp_state)?;
                 state.0.extend(temp_state.0);
+                state.2.extend(temp_state.2);
                 if !ret.0.is_empty() {
                     state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) });
                 } else {
@@ -1469,15 +1498,28 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 i
             };
             let t_owned = m.transcriber.replace(t)?;
+            // Record macro expansion info
+            {
+                let consumed = input.len() - i.len();
+                let start = input[0].start_offset;
+                let end = if consumed > 0 { input[consumed - 1].end_offset } else { input[0].end_offset };
+                state.2.push(MacroExpansionInfo {
+                    name: input[0].data.0.to_string(),
+                    start_offset: start,
+                    end_offset: end,
+                    expanded_text: owned_tokens_to_string(&t_owned),
+                });
+            }
             let t_borrowed: Vec<_> = t_owned.iter().map(|tok| Span {
                 data: (tok.data.0.as_str(), tok.data.1),
                 start_offset: tok.start_offset,
                 end_offset: tok.end_offset,
                 path_id: tok.path_id,
             }).collect();
-            let mut temp_state = (vec![], state.1.clone());
+            let mut temp_state = (vec![], state.1.clone(), vec![]);
             let ret = p_decl(&t_borrowed, &mut temp_state)?;
             state.0.extend(temp_state.0);
+            state.2.extend(temp_state.2);
             if !ret.0.is_empty() {
                 state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) })
             } else {
@@ -1585,7 +1627,7 @@ def t = match x {
 
 //pub fn parser_test<'a, T, P: Parser<&'a [TokenNode<'a>], T, Vec<IError>, IError>>(p: P, input: &'a str, id: u32) -> Option<(Vec<T>, Vec<IError>)> {
 pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
-    let mut err_collect = (vec![], Default::default());
+    let mut err_collect: MacroState = (vec![], Default::default(), vec![]);
     let ret = super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,

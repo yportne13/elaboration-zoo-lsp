@@ -32,6 +32,10 @@
 			{
 				"command": "typort-hdl.restartLanguageServer",
 				"title": "TyportHDL: Restart Language Server"
+			},
+			{
+				"command": "typort-hdl.expandMacro",
+				"title": "TyportHDL: Expand Macro"
 			}
 		],
 		"languages": [
