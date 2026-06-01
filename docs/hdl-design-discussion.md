@@ -478,3 +478,17 @@ L13 的 typeclass 系统已有：
 - 无 supertrait 语法
 
 状态：**待定** — 是否在 Typort 底座加 supertrait 语法，还是先在 HDL prelude 用手动模式验证概念。
+
+---
+
+## K. 待实现功能
+
+### K1. Scala 风格的 `apply`
+
+如 `MyStruct(args)` 替代 `MyStruct.mk(args)`。需要在类型上定义一个特殊的 `apply` 方法，使类型名可以直接作为函数调用。
+
+### K2. 宏展开功能（类似 Rust Analyzer）
+
+编辑器中可以展开宏（`#[macro_export]` / `macro_rules`），查看展开后的代码。需要：
+- LSP 端支持宏展开请求
+- 编辑器端展示展开结果
