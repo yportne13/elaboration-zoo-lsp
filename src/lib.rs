@@ -363,11 +363,23 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
                 // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
                 self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
-                self.on_change::<false>(TextDocumentItem {
-                    uri: job.uri,
-                    text: &job.text,
-                    version: job.version,
-                });
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.on_change::<false>(TextDocumentItem {
+                        uri: job.uri,
+                        text: &job.text,
+                        version: job.version,
+                    });
+                }));
+                if let Err(panic_err) = result {
+                    let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    self.client.log_message(MessageType::ERROR, format!("Worker panic while processing {}: {}", uri_str, msg));
+                }
 
                 self.processing_uris.remove(&uri_str);
                 let (lock, cvar) = &*self.processed_signal;
@@ -495,6 +507,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // 存储 Quick Fix 映射（覆盖旧的）
             self.quickfix_map.insert(params.uri.to_string(), quickfixes_for_uri);
         } else {
+            // Parser returned None — file has syntax errors.
+            // Clear any stale analysis results for this URI so the editor
+            // doesn't show outdated hovers / type info from the last good parse.
+            self.type_map.remove(params.uri.as_str());
+            self.hover_table.remove(params.uri.as_str());
+            self.quickfix_map.remove(params.uri.as_str());
+            self.macro_expansion_map.remove(params.uri.as_str());
             self.client
                 .publish_diagnostics(params.uri.clone(), vec![Diagnostic::new_simple(
                     Range::new(
@@ -765,7 +784,7 @@ impl LanguageServer for Backend<Client> {
             let offset = char + position.character as usize;
             let completions = infer.completion_table
                 .iter()
-                .filter(|x| x.0.contains(offset - 2))
+                .filter(|x| x.0.contains(offset.saturating_sub(2)))
                 .map(|x| CompletionItem {
                     label: x.1.to_string(),
                     insert_text: Some(x.1.to_string()),
