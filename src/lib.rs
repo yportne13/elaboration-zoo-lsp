@@ -68,6 +68,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub type_map: DashMap<String, Vec<DeclTm>>,
     pub document_map: DashMap<String, Rope>,
     pub document_id: DashMap<String, u32>,
+    /// Full document text for incremental sync (maintained on the LSP server thread)
+    pub document_buffers: Mutex<HashMap<String, String>>,
     pub hover_table: DashMap<String, Infer>,
     pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>>,
     /// Exported macros accumulated across all files (keyed by macro name)
@@ -113,6 +115,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             type_map,
             document_map,
             document_id,
+            document_buffers: Mutex::new(HashMap::new()),
             hover_table,
             quickfix_map: DashMap::new(),
             exported_macros: DashMap::new(),
@@ -528,7 +531,7 @@ impl LanguageServer for Backend<Client> {
                 text_document_sync: Some(TextDocumentSyncCapability::Options(
                     TextDocumentSyncOptions {
                         open_close: Some(true),
-                        change: Some(TextDocumentSyncKind::FULL),
+                        change: Some(TextDocumentSyncKind::INCREMENTAL),
                         save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
                             include_text: Some(true),
                         })),
@@ -572,6 +575,11 @@ impl LanguageServer for Backend<Client> {
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
+        // Store full text for incremental sync
+        self.document_buffers.lock().unwrap().insert(
+            params.text_document.uri.to_string(),
+            params.text_document.text.to_string(),
+        );
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
             text: params.text_document.text.to_string(),
@@ -585,9 +593,40 @@ impl LanguageServer for Backend<Client> {
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
+        // Apply incremental edits to the stored document buffer
+        let full_text = {
+            let mut buffers = self.document_buffers.lock().unwrap();
+            if let Some(buffer) = buffers.get_mut(params.text_document.uri.as_str()) {
+                for change in &params.content_changes {
+                    if let Some(range) = change.range {
+                        // Incremental edit: replace text at the specified range
+                        let rope = Rope::from_str(buffer);
+                        if let (Some(start), Some(end)) = (
+                            position_to_offset(range.start, &rope),
+                            position_to_offset(range.end, &rope),
+                        ) {
+                            let mut rope = rope;
+                            rope.remove(start..end);
+                            rope.insert(start, &change.text);
+                            *buffer = rope.to_string();
+                        } else {
+                            // Fallback: position conversion failed, replace whole text
+                            *buffer = change.text.clone();
+                        }
+                    } else {
+                        // No range = full text replacement
+                        *buffer = change.text.clone();
+                    }
+                }
+                buffer.clone()
+            } else {
+                // No existing buffer — fallback to first change's text
+                params.content_changes[0].text.clone()
+            }
+        };
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
-            text: params.content_changes[0].text.to_string(),
+            text: full_text,
             version: Some(params.text_document.version),
         };
         self.job_sender.send(job).ok();
@@ -608,8 +647,9 @@ impl LanguageServer for Backend<Client> {
         }
         debug!("file saved!");
     }
-    fn did_close(&self, _: DidCloseTextDocumentParams) {
+    fn did_close(&self, params: DidCloseTextDocumentParams) {
         debug!("file closed!");
+        self.document_buffers.lock().unwrap().remove(params.text_document.uri.as_str());
     }
 
     fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
