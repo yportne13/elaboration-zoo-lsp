@@ -1140,6 +1140,36 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     // Create the transport. Includes the stdio (stdin and stdout) versions.
     let (connection, io_threads) = Connection::stdio();
 
+    // Wrap the sender to monitor ALL outgoing LSP messages.
+    // Every message sent to the client is logged to stderr so you can
+    // see exactly what goes through the proper LSP channel.
+    // If the LSP connection breaks, check the output channel for unexpected data.
+    let (monitored_tx, monitored_rx) = crossbeam_channel::bounded::<lsp_server::Message>(64);
+    let orig_sender = connection.sender.clone();
+    std::thread::spawn(move || {
+        while let Ok(msg) = monitored_rx.recv() {
+            match &msg {
+                lsp_server::Message::Notification(n) => {
+                    eprintln!("[LSP→Client] notification: {}", n.method);
+                }
+                lsp_server::Message::Request(req) => {
+                    eprintln!("[LSP→Client] request: {} id={:?}", req.method, req.id);
+                }
+                lsp_server::Message::Response(resp) => {
+                    eprintln!("[LSP→Client] response id={:?} has_error={}", resp.id, resp.error.is_some());
+                }
+            }
+            if orig_sender.send(msg).is_err() {
+                eprintln!("[LSP→Client] channel closed, stopping monitor");
+                break;
+            }
+        }
+    });
+    let connection = lsp_server::Connection {
+        sender: monitored_tx,
+        receiver: connection.receiver,
+    };
+
     // Run the server and wait for the two threads to end.
     let backend = Backend::new(Client { connection });
     let _initialization_params = match backend.init() {
