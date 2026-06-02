@@ -1156,16 +1156,13 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     std::thread::spawn(move || {
         while let Ok(msg) = monitored_rx.recv() {
             let n = seq_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // Serialize to the exact wire format: Content-Length: N\r\n\r\n{json}
             let json = serde_json::to_string(&JsonRpcMsg { jsonrpc: "2.0", msg }).unwrap();
             let header = format!("Content-Length: {}\r\n\r\n", json.len());
-            // Log the COMPLETE output to stderr — every single byte
             eprintln!("[STDOUT #{:04}] {}", n, header);
             for line in json.lines() {
                 eprintln!("[STDOUT #{:04}] {}", n, line);
             }
             eprintln!("[STDOUT #{:04}] (end, {} bytes total)", n, header.len() + json.len());
-            // Re-create the message from JSON to forward it
             let reconstructed: lsp_server::Message = serde_json::from_str(&json).unwrap();
             if orig_sender.send(reconstructed).is_err() {
                 eprintln!("[STDOUT] channel closed, stopping monitor");
@@ -1173,9 +1170,28 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
             }
         }
     });
+    // Also wrap the receiver to monitor ALL incoming LSP messages (stdin).
+    let (stdin_tx, stdin_rx) = crossbeam_channel::bounded::<lsp_server::Message>(64);
+    let orig_receiver = connection.receiver.clone();
+    std::thread::spawn(move || {
+        while let Ok(msg) = orig_receiver.recv() {
+            let json = serde_json::to_string(&JsonRpcMsg { jsonrpc: "2.0", msg }).unwrap();
+            let header = format!("Content-Length: {}\r\n\r\n", json.len());
+            eprintln!("[STDIN ] {}", header);
+            for line in json.lines() {
+                eprintln!("[STDIN ] {}", line);
+            }
+            eprintln!("[STDIN ] (end, {} bytes total)", header.len() + json.len());
+            let reconstructed: lsp_server::Message = serde_json::from_str(&json).unwrap();
+            if stdin_tx.send(reconstructed).is_err() {
+                eprintln!("[STDIN] channel closed, stopping monitor");
+                break;
+            }
+        }
+    });
     let connection = lsp_server::Connection {
         sender: monitored_tx,
-        receiver: connection.receiver,
+        receiver: stdin_rx,
     };
 
     // Run the server and wait for the two threads to end.
