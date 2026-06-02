@@ -342,44 +342,38 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 Err(_) => break, // channel disconnected
             };
 
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                // Drain all remaining queued jobs, keeping only the latest per URI.
-                // If user types faster than we can analyze, intermediate versions
-                // are skipped — only the most recent content of each file matters.
-                let mut latest: HashMap<String, AnalysisJob> = HashMap::new();
-                latest.insert(first_job.uri.to_string(), first_job);
-                while let Ok(job) = rx.try_recv() {
-                    latest.insert(job.uri.to_string(), job);
-                }
+            // Drain all remaining queued jobs, keeping only the latest per URI.
+            // If user types faster than we can analyze, intermediate versions
+            // are skipped — only the most recent content of each file matters.
+            let mut latest: HashMap<String, AnalysisJob> = HashMap::new();
+            latest.insert(first_job.uri.to_string(), first_job);
+            while let Ok(job) = rx.try_recv() {
+                latest.insert(job.uri.to_string(), job);
+            }
 
-                for (_uri, job) in latest {
-                    let uri_str = job.uri.to_string();
-                    {
-                        let (lock, _) = &*self.processed_signal;
-                        let mut processed = lock.lock().unwrap();
-                        processed.remove(&uri_str);
-                        drop(processed);
-                    }
-                    self.processing_uris.insert(uri_str.clone(), true);
-
-                    // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
-                    self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
-                    self.on_change::<false>(TextDocumentItem {
-                        uri: job.uri,
-                        text: &job.text,
-                        version: job.version,
-                    });
+            for (_uri, job) in latest {
+                let uri_str = job.uri.to_string();
+                {
+                    let (lock, _) = &*self.processed_signal;
+                    let mut processed = lock.lock().unwrap();
+                    processed.remove(&uri_str);
+                    drop(processed);
                 }
-            }));
-            if let Err(panic_err) = result {
-                let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_err.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic".to_string()
-                };
-                self.client.log_message(MessageType::ERROR, format!("Worker panic: {}", msg));
+                self.processing_uris.insert(uri_str.clone(), true);
+
+                // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
+                self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
+                self.on_change::<false>(TextDocumentItem {
+                    uri: job.uri,
+                    text: &job.text,
+                    version: job.version,
+                });
+
+                self.processing_uris.remove(&uri_str);
+                let (lock, cvar) = &*self.processed_signal;
+                let mut processed = lock.lock().unwrap();
+                processed.insert(uri_str, true);
+                cvar.notify_all();
             }
         }
     }
@@ -1163,7 +1157,22 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     // 然后启动工作线程处理用户文件
     backend.spawn_worker();
 
-    backend.main_loop()?;
+    let main_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.main_loop()
+    }));
+    match main_result {
+        Ok(result) => { result?; }
+        Err(panic_err) => {
+            let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            eprintln!("main loop panicked: {}", msg);
+        }
+    }
     io_threads.join()?;
 
     // Shut down gracefully.
