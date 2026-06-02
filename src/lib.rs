@@ -1141,26 +1141,34 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     let (connection, io_threads) = Connection::stdio();
 
     // Wrap the sender to monitor ALL outgoing LSP messages.
-    // Every message sent to the client is logged to stderr so you can
-    // see exactly what goes through the proper LSP channel.
-    // If the LSP connection breaks, check the output channel for unexpected data.
+    // Every byte written to stdout is captured in full and logged to stderr,
+    // so you can inspect the EXACT wire format including Content-Length headers.
+    #[derive(serde::Serialize)]
+    struct JsonRpcMsg {
+        jsonrpc: &'static str,
+        #[serde(flatten)]
+        msg: lsp_server::Message,
+    }
     let (monitored_tx, monitored_rx) = crossbeam_channel::bounded::<lsp_server::Message>(64);
     let orig_sender = connection.sender.clone();
+    let seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let seq_clone = seq.clone();
     std::thread::spawn(move || {
         while let Ok(msg) = monitored_rx.recv() {
-            match &msg {
-                lsp_server::Message::Notification(n) => {
-                    eprintln!("[LSP→Client] notification: {}", n.method);
-                }
-                lsp_server::Message::Request(req) => {
-                    eprintln!("[LSP→Client] request: {} id={:?}", req.method, req.id);
-                }
-                lsp_server::Message::Response(resp) => {
-                    eprintln!("[LSP→Client] response id={:?} has_error={}", resp.id, resp.error.is_some());
-                }
+            let n = seq_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Serialize to the exact wire format: Content-Length: N\r\n\r\n{json}
+            let json = serde_json::to_string(&JsonRpcMsg { jsonrpc: "2.0", msg }).unwrap();
+            let header = format!("Content-Length: {}\r\n\r\n", json.len());
+            // Log the COMPLETE output to stderr — every single byte
+            eprintln!("[STDOUT #{:04}] {}", n, header);
+            for line in json.lines() {
+                eprintln!("[STDOUT #{:04}] {}", n, line);
             }
-            if orig_sender.send(msg).is_err() {
-                eprintln!("[LSP→Client] channel closed, stopping monitor");
+            eprintln!("[STDOUT #{:04}] (end, {} bytes total)", n, header.len() + json.len());
+            // Re-create the message from JSON to forward it
+            let reconstructed: lsp_server::Message = serde_json::from_str(&json).unwrap();
+            if orig_sender.send(reconstructed).is_err() {
+                eprintln!("[STDOUT] channel closed, stopping monitor");
                 break;
             }
         }
