@@ -38,6 +38,7 @@ inferno = "0.12"
 [features]
 dhat-heap = ["mem-profile"]
 mem-profile = ["dep:dhat"]
+stdio-monitor = []
 
 [profile.release]
 lto = true
