@@ -342,50 +342,44 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 Err(_) => break, // channel disconnected
             };
 
-            // Drain all remaining queued jobs, keeping only the latest per URI.
-            // If user types faster than we can analyze, intermediate versions
-            // are skipped — only the most recent content of each file matters.
-            let mut latest: HashMap<String, AnalysisJob> = HashMap::new();
-            latest.insert(first_job.uri.to_string(), first_job);
-            while let Ok(job) = rx.try_recv() {
-                latest.insert(job.uri.to_string(), job);
-            }
-
-            for (_uri, job) in latest {
-                let uri_str = job.uri.to_string();
-                {
-                    let (lock, _) = &*self.processed_signal;
-                    let mut processed = lock.lock().unwrap();
-                    processed.remove(&uri_str);
-                    drop(processed);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // Drain all remaining queued jobs, keeping only the latest per URI.
+                // If user types faster than we can analyze, intermediate versions
+                // are skipped — only the most recent content of each file matters.
+                let mut latest: HashMap<String, AnalysisJob> = HashMap::new();
+                latest.insert(first_job.uri.to_string(), first_job);
+                while let Ok(job) = rx.try_recv() {
+                    latest.insert(job.uri.to_string(), job);
                 }
-                self.processing_uris.insert(uri_str.clone(), true);
 
-                // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
-                self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                for (_uri, job) in latest {
+                    let uri_str = job.uri.to_string();
+                    {
+                        let (lock, _) = &*self.processed_signal;
+                        let mut processed = lock.lock().unwrap();
+                        processed.remove(&uri_str);
+                        drop(processed);
+                    }
+                    self.processing_uris.insert(uri_str.clone(), true);
+
+                    // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
+                    self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
                     self.on_change::<false>(TextDocumentItem {
                         uri: job.uri,
                         text: &job.text,
                         version: job.version,
                     });
-                }));
-                if let Err(panic_err) = result {
-                    let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
-                        s.to_string()
-                    } else if let Some(s) = panic_err.downcast_ref::<String>() {
-                        s.clone()
-                    } else {
-                        "unknown panic".to_string()
-                    };
-                    self.client.log_message(MessageType::ERROR, format!("Worker panic while processing {}: {}", uri_str, msg));
                 }
-
-                self.processing_uris.remove(&uri_str);
-                let (lock, cvar) = &*self.processed_signal;
-                let mut processed = lock.lock().unwrap();
-                processed.insert(uri_str, true);
-                cvar.notify_all();
+            }));
+            if let Err(panic_err) = result {
+                let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                self.client.log_message(MessageType::ERROR, format!("Worker panic: {}", msg));
             }
         }
     }
