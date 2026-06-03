@@ -1195,6 +1195,13 @@ fn normalize_builtin_uri(uri: &Url) -> Url {
             return normalized;
         }
     }
+    // VSCode may use memfs:// scheme for in-memory virtual files;
+    // normalize to file:// to match keys in document_map / macro_expansion_map.
+    if uri.scheme() == "memfs" {
+        let mut u = uri.clone();
+        let _ = u.set_scheme("file");
+        return u;
+    }
     uri.clone()
 }
 
