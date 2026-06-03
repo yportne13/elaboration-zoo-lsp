@@ -161,6 +161,23 @@ impl Compiler {
             Val::Sum(name, ..) => name.data.clone(),
             _ => SmolStr::new(""),
         };
+
+        // Fast path: sum types without explicit (index) parameters have all
+        // constructors always accessible (e.g. Expr, Option, Bool).
+        // Only Vec-like indexed types (e.g. Vec[A](len: Nat)) need the full
+        // GADT-style reachability check.
+        let has_indices = match forced_type.as_ref() {
+            Val::Sum(_, params, ..) => params.iter().any(|p| p.3 == Icit::Expl),
+            _ => false,
+        };
+        if !has_indices {
+            for constr_def in all_constrs {
+                accessible.push((constr_def, vec![], cxt.clone()));
+            }
+            infer.meta.truncate(before_fac);
+            return Ok(accessible);
+        }
+
         for constr_def @ constr_name in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
             // to avoid polluting the main inference state with temporary metavariables.
