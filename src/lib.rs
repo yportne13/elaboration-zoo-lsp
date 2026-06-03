@@ -995,7 +995,11 @@ impl Backend<Client> {
                                         Some(ExpandMacroResult {
                                             name: e.name.clone(),
                                             range: lsp_types::Range::new(start, end),
-                                            expanded_text: e.expanded_text.clone(),
+                                            expanded_text: if e.name == "stringify" {
+                                                format!("\"{}\"", e.expanded_text)
+                                            } else {
+                                                e.expanded_text.clone()
+                                            },
                                         })
                                     }).flatten()
                                 });
