@@ -957,12 +957,39 @@ impl Backend<Client> {
                                 let uri = Url::parse(&params.uri)
                                     .map(|u| normalize_builtin_uri(&u).to_string())
                                     .unwrap_or(params.uri);
+                                self.client.log_message(MessageType::LOG,
+                                    format!("expandMacro: uri={:?}, pos={}:{}",
+                                        uri, params.position.line, params.position.character));
+                                let has_expansions = self.macro_expansion_map.contains_key(&uri);
+                                let has_doc = self.document_map.contains_key(&uri);
+                                let expansions_count = self.macro_expansion_map.get(&uri).map(|e| e.len()).unwrap_or(0);
+                                self.client.log_message(MessageType::LOG,
+                                    format!("expandMacro: in map? {} ({} expansions), doc? {}",
+                                        has_expansions, expansions_count, has_doc));
+                                if !has_expansions {
+                                    self.client.log_message(MessageType::LOG,
+                                        format!("expandMacro: available uris in macro_expansion_map: {:?}",
+                                            self.macro_expansion_map.iter().map(|e| e.key().clone()).collect::<Vec<_>>()));
+                                }
                                 let result = self.macro_expansion_map.get(&uri).and_then(|expansions| {
                                     let rope = self.document_map.get(&uri)?;
                                     let offset = position_to_offset(params.position, &rope)?;
-                                    expansions.iter().find(|e| {
+                                    self.client.log_message(MessageType::LOG,
+                                        format!("expandMacro: cursor byte offset={}", offset));
+                                    let found = expansions.iter().find(|e| {
                                         offset >= e.start_offset as usize && offset < e.end_offset as usize
-                                    }).map(|e| {
+                                    });
+                                    if found.is_none() {
+                                        self.client.log_message(MessageType::LOG,
+                                            format!("expandMacro: no match among {} expansions at offset {}",
+                                                expansions.len(), offset));
+                                        for (i, e) in expansions.iter().enumerate() {
+                                            self.client.log_message(MessageType::LOG,
+                                                format!("  expansion[{}]: name={:?} range={}-{}",
+                                                    i, e.name, e.start_offset, e.end_offset));
+                                        }
+                                    }
+                                    found.map(|e| {
                                         let start = offset_to_position(e.start_offset as usize, &rope)?;
                                         let end = offset_to_position(e.end_offset as usize, &rope)?;
                                         Some(ExpandMacroResult {
@@ -972,6 +999,8 @@ impl Backend<Client> {
                                         })
                                     }).flatten()
                                 });
+                                self.client.log_message(MessageType::LOG,
+                                    format!("expandMacro: result={}", result.is_some()));
                                 let resp = Response { id: req.id, result: Some(serde_json::to_value(&result).unwrap()), error: None };
                                 self.client.connection.sender.send(Message::Response(resp))?;
                             }
