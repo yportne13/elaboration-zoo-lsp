@@ -1659,11 +1659,172 @@ fn test2() {
 }
 
 #[test]
-fn test3() {
+fn test_macro_expansion_info() {
+    // Test that parser_with_macros correctly produces MacroExpansionInfo
+    // with byte offsets matching the source text, and that the
+    // expand-macro find logic (offset >= start && offset < end) works.
     let input = r#"
-macro_rules stringify {
-    ($x: ident) => { $x }
+println stringify hello
+"#;
+    let (_decls, _errs, _exports, expansions) = parser_with_macros(input, 0, &Default::default()).unwrap();
+
+    // We expect exactly one expansion: `stringify hello`
+    assert_eq!(expansions.len(), 1, "expected exactly one macro expansion");
+    let exp = &expansions[0];
+    assert_eq!(exp.name, "stringify");
+
+    // Find the byte offset of "stringify" in the input
+    let str_off = input.find("stringify").expect("stringify should be in input");
+    let hello_off = input.find("hello").expect("hello should be in input");
+
+    // start_offset should point to the start of "stringify"
+    assert_eq!(exp.start_offset as usize, str_off,
+        "start_offset should be at the start of the macro name");
+
+    // end_offset should point to the end of "hello"
+    assert_eq!(exp.end_offset as usize, hello_off + "hello".len(),
+        "end_offset should be at the end of the last consumed token");
+
+    // ---- simulate the expand macro lookup logic ----
+    // Cursor on the macro name "stringify"
+    assert!(str_off >= exp.start_offset as usize && str_off < exp.end_offset as usize,
+        "cursor on macro name should find expansion");
+    // Cursor between "stringify" and "hello"
+    let between = str_off + "stringify".len();
+    assert!(between >= exp.start_offset as usize && between < exp.end_offset as usize,
+        "cursor between name and arg should find expansion");
+    // Cursor on the argument "hello"
+    assert!(hello_off >= exp.start_offset as usize && hello_off < exp.end_offset as usize,
+        "cursor on argument should find expansion");
+    // Cursor BEFORE the macro invocation
+    assert!(!(0usize >= exp.start_offset as usize && 0usize < exp.end_offset as usize),
+        "cursor before macro should NOT find expansion");
+}
+
+#[test]
+fn test_macro_expansion_info_nested_innermost() {
+    // Test that when macros are nested, the cursor should find
+    // the innermost (smallest span) expansion, not the outermost.
+    //
+    // Note: The current impl uses find() which returns the first match
+    // (outermost). This test documents that behavior as a known limitation.
+    let input = r#"
+macro_rules repeat {
+    ($x: raw) => { $x $x }
+}
+repeat stringify hello
+"#;
+    // First parse defines `repeat`, second parse uses it
+    let (_d1, _e1, exports, _) = parser_with_macros(input, 0, &Default::default()).unwrap();
+    // Now parse again with `repeat` available as a macro
+    let (_d2, _e2, _ex2, expansions) = parser_with_macros(input, 0, &exports).unwrap();
+
+    // We expect at least the `repeat` expansion
+    let repeat_exp = expansions.iter().find(|e| e.name == "repeat");
+    assert!(repeat_exp.is_some(), "repeat expansion should exist");
+
+    // Also check stringify expansion exists if repeat's expansion triggers it
+    let str_exp = expansions.iter().find(|e| e.name == "stringify");
+    assert!(str_exp.is_some(), "stringify expansion should exist");
+
+    // The original find() gives outermost, which is `repeat`
+    let first_by_find = expansions.iter().find(|e| {
+        let offset = 1usize; // somewhere inside
+        offset >= e.start_offset as usize && offset < e.end_offset as usize
+    });
+    // This documents current behavior
+    if let Some(found) = first_by_find {
+        eprintln!("Current find() picks: {} (span {}-{})",
+            found.name, found.start_offset, found.end_offset);
+    }
+}
+
+#[test]
+fn test_macro_expansion_info_missing_no_macro() {
+    // File without macros should produce empty expansions
+    let input = r#"
+def fortytwo: Type0 = Type0
+"#;
+    let (_decls, _errs, _exports, expansions) = parser_with_macros(input, 0, &Default::default()).unwrap();
+    assert!(expansions.is_empty(),
+        "file without macro invocations should have no expansions");
+}
+
+#[test]
+fn test_macro_expansion_expanded_text() {
+    // Verify expanded_text is populated correctly
+    let input = r#"println stringify hello"#;
+    let (_decls, _errs, _exports, expansions) = parser_with_macros(input, 0, &Default::default()).unwrap();
+
+    assert_eq!(expansions.len(), 1);
+    let exp = &expansions[0];
+    assert_eq!(exp.name, "stringify");
+
+    // expanded_text should contain the expanded form (a string literal for stringify)
+    assert!(!exp.expanded_text.is_empty(),
+        "expanded_text should not be empty for built-in stringify");
+    eprintln!("stringify hello expands to: {:?}", exp.expanded_text);
+}
+
+#[test]
+fn test_macro_expansion_derive_offsets() {
+    // Derive expansion doesn't produce MacroExpansionInfo (by current design)
+    let input = r#"
+enum Foo[A] {
+    bar(x: A)
+    baz(y: A, z: A)
 }
 "#;
-    println!("{:#?}", parser(input, 0).unwrap());
+    let (_decls, _errs, _exports, expansions) = parser_with_macros(input, 0, &Default::default()).unwrap();
+    assert!(expansions.is_empty(),
+        "derive expansion doesn't produce MacroExpansionInfo (by design)");
+}
+
+#[test]
+fn test_expand_macro_full_flow_alu() {
+    // Full flow: load hdl.typort macros, parse alu.typort content,
+    // verify module{} macro expansion with correct offsets.
+    let hdl_content = include_str!("../../prelude/hdl.typort");
+
+    // Step 1: Parse hdl.typort to extract exported macros
+    // parser_with_macros expects preprocessed text (comments stripped)
+    let (_hdl_decls, _hdl_errs, hdl_exports, _hdl_expansions) =
+        parser_with_macros(&super::preprocess(hdl_content), 0, &Default::default()).unwrap();
+
+    // Verify 'module' macro was exported from hdl.typort
+    assert!(hdl_exports.contains_key("module"),
+        "hdl.typort must export the 'module' macro");
+
+    // Step 2: Parse alu.typort content using the exported macros
+    let alu_content = include_str!("../../../examples/alu.typort");
+    eprintln!("alu.typort len: {}", alu_content.len());
+    let alu_preprocessed = super::preprocess(alu_content);
+    eprintln!("alu preprocessed len: {}", alu_preprocessed.len());
+    let (_alu_decls, _alu_errs, _alu_exports, expansions) =
+        parser_with_macros(&alu_preprocessed, 1, &hdl_exports).unwrap();
+    eprintln!("expansions count: {}", expansions.len());
+
+    // We expect at least one macro expansion for 'module'
+    let module_exps: Vec<_> = expansions.iter().filter(|e| e.name == "module").collect();
+    assert!(!module_exps.is_empty(),
+        "expected at least one 'module' macro expansion in alu.typort");
+    for (i, me) in module_exps.iter().enumerate() {
+        assert!(me.end_offset as usize <= alu_preprocessed.len(),
+            "module expansion {}: end_offset {} out of bounds (len {})",
+            i, me.end_offset, alu_preprocessed.len());
+    }
+
+    // Step 3: Verify cursor on 'module' finds the direct macro expansion
+    // Find the first 'module' keyword in the preprocessed text (which has
+    // byte positions matching the original)
+    let mod_off = alu_preprocessed.find("module")
+        .expect("alu.typort should contain 'module' keyword");
+    let found = expansions.iter().find(|e| {
+        mod_off >= e.start_offset as usize && mod_off < e.end_offset as usize
+    });
+    assert!(found.is_some(), "cursor on 'module' should find an expansion");
+    assert_eq!(found.unwrap().name, "module",
+        "cursor on 'module' should find module expansion, not {:?}", found.unwrap().name);
+    eprintln!("✓ cursor on 'module' (offset {}) -> {} expansion ({}-{})",
+        mod_off, found.unwrap().name, found.unwrap().start_offset, found.unwrap().end_offset);
 }
