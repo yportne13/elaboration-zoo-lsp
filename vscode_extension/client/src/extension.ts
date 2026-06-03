@@ -3,14 +3,46 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
-import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel, Position } from 'vscode';
-import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } from 'vscode-languageclient';
+import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel, Position, StatusBarItem, StatusBarAlignment } from 'vscode';
+import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType, State } from 'vscode-languageclient';
 import { Wasm } from '@vscode/wasm-wasi/v1';
 import type { ProcessOptions } from '@vscode/wasm-wasi/v1';
 import { createStdioOptions, createUriConverters, startServer } from '@vscode/wasm-wasi-lsp';
 
 let client: LanguageClient | undefined;
 let channel: LogOutputChannel;
+
+// ── Status Bar ──────────────────────────────────────────────────────────────
+
+let statusBarItem: StatusBarItem;
+
+function createStatusBarItem(): StatusBarItem {
+	const item = window.createStatusBarItem(StatusBarAlignment.Left, 0);
+	item.name = 'TyportHDL Language Server';
+	item.text = '$(sync~spin) TyPort';
+	item.tooltip = 'Starting TyportHDL Language Server...';
+	item.command = 'typort-hdl.showServerActions';
+	return item;
+}
+
+function updateStatusBar(state: State): void {
+	switch (state) {
+		case State.Starting:
+			statusBarItem.text = '$(sync~spin) TyPort';
+			statusBarItem.tooltip = 'Starting TyportHDL language server...';
+			break;
+		case State.Running:
+			statusBarItem.text = '$(check) TyPort';
+			statusBarItem.tooltip = 'TyportHDL language server running';
+			break;
+		case State.Stopped:
+			statusBarItem.text = '$(warning) TyPort';
+			statusBarItem.tooltip = 'TyportHDL language server stopped';
+			break;
+	}
+}
+
+// ── Server Start ────────────────────────────────────────────────────────────
 
 async function startLanguageServer(context: ExtensionContext, wasm: Wasm): Promise<LanguageClient> {
 	if (!channel) {
@@ -54,14 +86,29 @@ async function startLanguageServer(context: ExtensionContext, wasm: Wasm): Promi
 	return newClient;
 }
 
+// ── Activation ──────────────────────────────────────────────────────────────
+
 export async function activate(context: ExtensionContext) {
 	const wasm: Wasm = await Wasm.load();
 
+	// Status bar
+	statusBarItem = createStatusBarItem();
+	context.subscriptions.push(statusBarItem);
+	statusBarItem.show();
+	updateStatusBar(State.Starting);
+
 	client = await startLanguageServer(context, wasm);
 
-	// Register a text content provider for builtin:// URIs (e.g., prelude files).
-	// When the user navigates to a builtin:// URI via go-to-definition, VS Code
-	// calls this provider to get the file content instead of reading from disk.
+	// Track language client state changes → update status bar
+	client.onDidChangeState((e) => {
+		updateStatusBar(e.newState);
+	});
+
+	// After client is started, update to running state
+	updateStatusBar(State.Running);
+
+	// ── Builtin content provider ──────────────────────────────────────────
+
 	const BuiltinContentRequest = new RequestType<{ uri: string }, string | null, void>('typort-hdl/builtinContent');
 	context.subscriptions.push(
 		workspace.registerTextDocumentContentProvider('builtin', {
@@ -90,7 +137,8 @@ export async function activate(context: ExtensionContext) {
 		window.showInformationMessage(`The workspace contains ${result} files.`);
 	}));
 
-	// Expand macro command: sends typort-hdl/expandMacro request and shows the result
+	// ── Expand macro ──────────────────────────────────────────────────────
+
 	type ExpandMacroParams = { uri: string; position: Position };
 	type ExpandMacroResult = { name: string; range: { start: Position; end: Position }; expanded_text: string };
 	const ExpandMacroRequest = new RequestType<ExpandMacroParams, ExpandMacroResult | null, void>('typort-hdl/expandMacro');
@@ -117,12 +165,35 @@ export async function activate(context: ExtensionContext) {
 		}
 	}));
 
+	// ── Restart server ────────────────────────────────────────────────────
+
 	context.subscriptions.push(commands.registerCommand('typort-hdl.restartLanguageServer', async () => {
 		if (client) {
 			await client.stop();
 		}
+		updateStatusBar(State.Starting);
 		client = await startLanguageServer(context, wasm);
+		client.onDidChangeState((e) => {
+			updateStatusBar(e.newState);
+		});
+		updateStatusBar(State.Running);
 		window.showInformationMessage('TyportHDL Language Server restarted.');
+	}));
+
+	// ── Status bar actions ────────────────────────────────────────────────
+
+	context.subscriptions.push(commands.registerCommand('typort-hdl.showServerActions', async () => {
+		if (!client) return;
+		const pick = await window.showQuickPick([
+			{ label: '$(debug-restart) Restart Language Server', description: 'Restart the TyportHDL language server' },
+			{ label: '$(output) Show Log', description: 'Open the language server output channel' },
+		], { placeHolder: 'Language Server Actions' });
+		if (!pick) return;
+		if (pick.label.includes('Restart')) {
+			commands.executeCommand('typort-hdl.restartLanguageServer');
+		} else if (pick.label.includes('Log')) {
+			channel.show();
+		}
 	}));
 }
 
