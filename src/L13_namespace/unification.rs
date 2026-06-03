@@ -2,6 +2,7 @@ use colored::Colorize;
 use smol_str::SmolStr;
 
 use crate::list::List;
+use crate::parser_lib::Span;
 
 use super::{
     Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
@@ -518,71 +519,52 @@ impl Infer {
                 .iter()
                 .map(|(_, val, _, _)| self.force(&cxt.decl, val))
                 .collect();
-            // --- If any output param is Flex, defer resolution ---
-            // When the output param is unresolved (Flex meta), eagerly resolving
-            // picks an arbitrary instance. Defer to let context constrain the
-            // output param first, then solve_multi_trait will handle it.
+            // --- Phase 1: find all matching instances (lightweight, no elaboration) ---
+            // Collect lvls of instances whose assertion matches all_params via val_match.
+            // A match means: for each param, either it's a Flex out-param (skip), or val_match succeeds.
+            let matching_lvls: Vec<Span<SmolStr>> = {
+                let instances = match self.trait_solver.class_instances.get(&name.data) {
+                    Some(insts) => insts,
+                    None => return Ok(None),
+                };
+                instances.iter().filter_map(|inst| {
+                    if inst.assertion.name != name.data { return None; }
+                    if inst.assertion.arguments.len() != all_params.len() { return None; }
+                    let mut subst = std::collections::HashMap::new();
+                    let mut ok = true;
+                    for (i, (g_arg, i_arg)) in all_params.iter().zip(&inst.assertion.arguments).enumerate() {
+                        let is_out = out_param.get(i).copied().unwrap_or(false);
+                        if is_out && matches!(g_arg.as_ref(), Val::Flex(..)) {
+                            continue;
+                        }
+                        if !super::typeclass::Synth::val_match(g_arg, i_arg, &mut subst) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok { Some(inst.lvl.clone()) } else { None }
+                }).collect()
+            };
+            let candidate_count = matching_lvls.len();
+            if candidate_count == 0 {
+                // Already deferring — let solve_multi_trait handle it later
+                return Ok(None);
+            }
+            // If there are multiple matches and output params are still Flex, defer.
+            // When the output param is unresolved, eagerly resolving picks an arbitrary instance.
+            // Defer to let context constrain the output param first.
             let has_flex_out = params.iter().zip(&out_param).any(|((_, val, _, _), is_out)| {
                 *is_out && matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
             });
-            if has_flex_out {
-                // Check if there would be multiple matching instances if we deferred.
-                // If only one instance could match this trait+Self, resolve eagerly.
-                let non_out_params: Vec<Rc<Val>> = params.iter().zip(&out_param)
-                    .filter(|(_, x)| !**x)
-                    .map(|((_, val, _, _), _)| self.force(&cxt.decl, val))
-                    .collect();
-                let candidate_count = self.trait_solver.class_instances
-                    .get(&name.data)
-                    .map(|insts| {
-                        insts.iter().filter(|inst| {
-                            if inst.assertion.name != name.data { return false; }
-                            if inst.assertion.arguments.len() != all_params.len() { return false; }
-                            let mut subst = std::collections::HashMap::new();
-                            let inst_non_out: Vec<Rc<Val>> = inst.assertion.arguments.iter()
-                                .zip(&out_param)
-                                .filter(|(_, is_out)| !**is_out)
-                                .map(|(arg, _)| (*arg).clone())
-                                .collect();
-                            non_out_params.iter().zip(inst_non_out.iter())
-                                .all(|(g, i)| super::typeclass::Synth::val_match(g, i, &mut subst))
-                        }).count()
-                    })
-                    .unwrap_or(0);
-                if candidate_count > 1 {
-                    return Ok(None);
-                }
+            if has_flex_out && candidate_count > 1 {
+                return Ok(None);
             }
-            // --- Backtracking instance resolution ---
-            // Try each instance: match non-outParam args via val_match,
-            // then attempt unification of the full trait type.
-            // If unification fails, backtrack to the next instance.
-            let instances = self.trait_solver.class_instances
-                .get(&name.data)
-                .cloned()
-                .unwrap_or_default();
+            // --- Phase 2: elaborate the matching instance(s) ---
             let mut last_err = String::new();
-            for inst in &instances {
-                if inst.assertion.name != name.data { continue; }
-                if inst.assertion.arguments.len() != all_params.len() { continue; }
-                // Match non-outParam args; skip Flex outParam in the goal
-                let mut subst = std::collections::HashMap::new();
-                let mut ok = true;
-                for (i, (g_arg, i_arg)) in all_params.iter().zip(&inst.assertion.arguments).enumerate() {
-                    let is_out = out_param.get(i).copied().unwrap_or(false);
-                    if is_out && matches!(g_arg.as_ref(), Val::Flex(..)) {
-                        continue;
-                    }
-                    if !super::typeclass::Synth::val_match(g_arg, i_arg, &mut subst) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if !ok { continue; }
-                // Try this instance: look up the definition and attempt unification
+            for lvl in &matching_lvls {
                 let meta_before = self.meta.len();
                 let result = (|| -> Result<(Rc<Tm>, Rc<Val>), String> {
-                    let raw_var = Raw::Var(inst.lvl.clone());
+                    let raw_var = Raw::Var(lvl.clone());
                     let inferred = self.infer_expr(cxt, raw_var);
                     let (tm, _) = self.insert(cxt, inferred)
                         .map_err(|e| e.0.data)?;
@@ -601,14 +583,14 @@ impl Infer {
                     }
                 }
             }
-            // All instances failed
+            // All matching instances failed elaboration
             Err(format!(
                 "solve trait failed: {}[{:?}]\n  last error: {}\n  instances:\n{}",
                 name.data,
                 all_params.iter().map(|v| format!("{:?}", v)).collect::<Vec<_>>().join(", "),
                 last_err,
-                instances.iter()
-                    .map(|x| format!("{:?}", x))
+                matching_lvls.iter()
+                    .map(|x| format!("{:?}", x.data))
                     .reduce(|a, b| a + "\n" + &b)
                     .unwrap_or_default(),
             ))?
