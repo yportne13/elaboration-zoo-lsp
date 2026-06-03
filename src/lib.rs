@@ -952,7 +952,11 @@ impl Backend<Client> {
                         }
                         match serde_json::from_value::<ExpandMacroParams>(req.params) {
                             Ok(params) => {
-                                let uri = params.uri;
+                                // Normalize URI: parse into Url to handle builtin:/// vs builtin:/
+                                // and ensure consistent casing on Windows.
+                                let uri = Url::parse(&params.uri)
+                                    .map(|u| normalize_builtin_uri(&u).to_string())
+                                    .unwrap_or(params.uri);
                                 let result = self.macro_expansion_map.get(&uri).and_then(|expansions| {
                                     let rope = self.document_map.get(&uri)?;
                                     let offset = position_to_offset(params.position, &rope)?;
