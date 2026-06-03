@@ -31,6 +31,7 @@ pub struct GeneratorNode {
     goal: Assertion,
     instances: Vec<Instance>,
     index: usize,
+    assertion_idx: usize,
 }
 
 /// A node in the "search tree" that stores information about
@@ -40,6 +41,7 @@ pub struct ConsumerNode {
     goal: Assertion,
     subgoals: List<Assertion>,
     lvl: Span<SmolStr>,
+    assertion_idx: usize,
 }
 
 /// A "deferred" node in the "search tree" that represents a
@@ -351,6 +353,7 @@ impl Synth {
                                 goal: consumer_node.goal,
                                 subgoals: remaining,
                                 lvl: consumer_node.lvl,
+                                assertion_idx: consumer_node.assertion_idx,
                             });
                         } else {
                             continue;
@@ -365,8 +368,14 @@ impl Synth {
                     let goal = generator_node.goal.clone();
                     let instance = generator_node.instances[generator_node.index].clone();
                     generator_node.index += 1;
+                    let assertion_idx = generator_node.assertion_idx;
                     if let Some((subgoals, lvl)) = self.try_resolve(&goal, &instance) {
-                        self.consume(ConsumerNode { goal, subgoals, lvl });
+                        self.consume(ConsumerNode {
+                            goal,
+                            subgoals,
+                            lvl,
+                            assertion_idx,
+                        });
                     }
                 }
             } else {
@@ -376,7 +385,7 @@ impl Synth {
     }
 
     fn new_subgoal(&mut self, subgoal: &Assertion, waiter: &Waiter) {
-        // Create a table entry for this subgoal.
+        let assertion_idx = self.assertion_table.len();
         self.assertion_table.push((
             subgoal.clone(),
             TableEntry {
@@ -384,36 +393,30 @@ impl Synth {
                 answers: vec![],
             },
         ));
-        // Find instances to try for this subgoal.
         let instances = self.class_instances.get(&subgoal.name).unwrap().clone();
-        // Try instances from the beginning (more specific first).
         let index = 0usize;
-        // Always push a generator node.
         self.generator_stack.push(GeneratorNode {
             goal: subgoal.clone(),
             instances,
             index,
+            assertion_idx,
         });
     }
 
     fn consume(&mut self, consumer_node: ConsumerNode) {
         match uncons(&consumer_node.subgoals) {
             None => {
-                // Goal is solved - update the assertion table entry
                 let answer = consumer_node.goal.clone();
                 let answer_lvl = consumer_node.lvl.clone();
-                // Find the entry for this goal
-                if let Some(idx) = self.find_assertion_entry(&consumer_node.goal) {
-                    let entry = &mut self.assertion_table[idx].1;
-                    entry.answers.push((answer.clone(), answer_lvl.clone()));
-                    let waiters = std::mem::take(&mut entry.waiters);
-                    for waiter in &waiters {
-                        match waiter {
-                            Waiter::Root => self.root_answer = Some(answer_lvl.clone()),
-                            Waiter::ConsumerNode(node) => self
-                                .resume_stack
-                                .push((node.clone(), answer.clone())),
-                        }
+                let entry = &mut self.assertion_table[consumer_node.assertion_idx].1;
+                entry.answers.push((answer.clone(), answer_lvl.clone()));
+                let waiters = std::mem::take(&mut entry.waiters);
+                for waiter in &waiters {
+                    match waiter {
+                        Waiter::Root => self.root_answer = Some(answer_lvl.clone()),
+                        Waiter::ConsumerNode(node) => self
+                            .resume_stack
+                            .push((node.clone(), answer.clone())),
                     }
                 }
             }
