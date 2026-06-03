@@ -330,20 +330,37 @@ impl Compiler {
                     let decision_tree_branches = constrs
                         .iter()
                         .map(|constr| {
+                            // Lifting: compute accessibility once per constr,
+                            // not once per (constr, arm) pair.
+                            // Result depends only on typ (type indices), not on
+                            // per-arm context — same for all arms.
+                            let constr_accessible = if constr.data == "$any$" {
+                                true
+                            } else {
+                                arms.first()
+                                    .and_then(|(_, _, _, cxt_for_filter, _, _, _, _)| {
+                                        self.filter_accessible_constrs(
+                                            infer,
+                                            cxt_for_filter,
+                                            typ,
+                                            &constrs[..],
+                                        )
+                                        .ok()
+                                    })
+                                    .map(|accessible_constrs| {
+                                        accessible_constrs.into_iter().any(|x| x.0 == constr)
+                                    })
+                                    .unwrap_or(false)
+                            };
+
                             let remaining_arms = arms
                                 .iter()
                                 .filter_map(|(arm, idx, cxt, cxt_for_filter, raw, target_typ, ori, patcon)| {
                                     let mut new_heads = vec![];
-                                    if constr.data != "$any$" {
-                                    let accessible_constrs = self.filter_accessible_constrs(
-                                        infer,
-                                        cxt_for_filter,
-                                        typ,
-                                        &constrs[..],
-                                    ).ok()?;
-                                    if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
+                                    if !constr_accessible {
                                         return Some(None);
                                     }
+                                    if constr.data != "$any$" {
 
                                         // Use qualified name TypeName.constructor for lookup
                                         let sum_name = match typ.as_ref() {
