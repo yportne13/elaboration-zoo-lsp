@@ -1808,7 +1808,7 @@ fn test_expand_macro_full_flow_alu() {
     // Step 1: Parse hdl.typort to extract exported macros
     // parser_with_macros expects preprocessed text (comments stripped)
     let (_hdl_decls, _hdl_errs, hdl_exports, _hdl_expansions) =
-        parser_with_macros(&super::preprocess(hdl_content), 0, &Default::default()).unwrap();
+        parser_with_macros(&super::preprocess(&hdl_content), 0, &Default::default()).unwrap();
 
     // Verify 'module' macro was exported from hdl.typort
     assert!(hdl_exports.contains_key("module"),

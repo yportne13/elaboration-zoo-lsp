@@ -67,3 +67,32 @@ def newSIntReg(name: String, w: Nat): SInt[w] =
 def newBoolReg(name: String): Bool =
     let e = createSignalExpr(name, createReg(name));
     Bool.mk(Some(name), e)
+
+// ---- Direction annotation helpers (SpinalHDL style) ----
+// These are for use inside Bundle declarations.
+// For regular signal declarations, use the Expr macro:
+//   input a = UInt[8]    instead of   let a = in(UInt[8]())
+
+def in_u[width: Nat](t: UInt[width]): UInt[width] =
+    newUIntInput("", width)
+
+def out_u[width: Nat](t: UInt[width]): UInt[width] =
+    newUIntOutput("", width)
+
+def in_b[width: Nat](t: Bits[width]): Bits[width] =
+    newBitsInput("", width)
+
+def out_b[width: Nat](t: Bits[width]): Bits[width] =
+    newBitsOutput("", width)
+
+def in_s[width: Nat](t: SInt[width]): SInt[width] =
+    newSIntInput("", width)
+
+def out_s[width: Nat](t: SInt[width]): SInt[width] =
+    newSIntOutput("", width)
+
+def in_bool(t: Bool): Bool =
+    newBoolInput("")
+
+def out_bool(t: Bool): Bool =
+    newBoolOutput("")

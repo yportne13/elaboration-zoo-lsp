@@ -112,25 +112,25 @@ impl[width: Nat] SInt[width] {
 //  Shift Operations
 // ============================================================
 
-impl[width: Nat, shift: Nat] UInt[width] {
-    def <<(that: UInt[shift]): UInt[width] =
-        UInt.mk(None, binary(this.expr, "<<", that.expr))
-    def >>(that: UInt[shift]): UInt[width] =
-        UInt.mk(None, binary(this.expr, ">>", that.expr))
+impl[width: Nat] UInt[width] {
+    def <<(that: Nat): UInt[width] =
+        UInt.mk(None, binary(this.expr, "<<", literal(that)))
+    def >>(that: Nat): UInt[width] =
+        UInt.mk(None, binary(this.expr, ">>", literal(that)))
 }
 
-impl[width: Nat, shift: Nat] SInt[width] {
-    def <<(that: UInt[shift]): SInt[width] =
-        SInt.mk(None, binary(this.expr, "<<", that.expr))
-    def >>(that: UInt[shift]): SInt[width] =
-        SInt.mk(None, binary(this.expr, ">>", that.expr))
+impl[width: Nat] SInt[width] {
+    def <<(that: Nat): SInt[width] =
+        SInt.mk(None, binary(this.expr, "<<", literal(that)))
+    def >>(that: Nat): SInt[width] =
+        SInt.mk(None, binary(this.expr, ">>", literal(that)))
 }
 
-impl[width: Nat, shift: Nat] Bits[width] {
-    def <<(that: UInt[shift]): Bits[width] =
-        Bits.mk(None, binary(this.expr, "<<", that.expr))
-    def >>(that: UInt[shift]): Bits[width] =
-        Bits.mk(None, binary(this.expr, ">>", that.expr))
+impl[width: Nat] Bits[width] {
+    def <<(that: Nat): Bits[width] =
+        Bits.mk(None, binary(this.expr, "<<", literal(that)))
+    def >>(that: Nat): Bits[width] =
+        Bits.mk(None, binary(this.expr, ">>", literal(that)))
 }
 
 // ---- rotate ----
