@@ -94,7 +94,14 @@ fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
         if i > 0 {
             result.push(' ');
         }
-        result.push_str(&tok.data.0);
+        // Wrap Str tokens in double quotes (string literals)
+        if tok.data.1 == TokenKind::Str {
+            result.push('"');
+            result.push_str(&tok.data.0);
+            result.push('"');
+        } else {
+            result.push_str(&tok.data.0);
+        }
     }
     result
 }
