@@ -1,0 +1,102 @@
+// ============================================================
+// HDL Bus/Interface Types: Bundle, Stream, Flow, BlackBox, FSM
+// ============================================================
+
+// ============================================================
+//  Bundle (structured IO)
+// ============================================================
+
+// IO direction tags
+enum IODirection {
+    In
+    Out
+    InOut
+}
+
+// A bundle is just a struct with direction annotations
+// The macro system makes it ergonomic
+
+struct Bundle0 {}
+struct Bundle1[A] {
+    b0: A
+}
+struct Bundle2[A, B] {
+    b0: A
+    b1: B
+}
+struct Bundle3[A, B, C] {
+    b0: A
+    b1: B
+    b2: C
+}
+struct Bundle4[A, B, C, D] {
+    b0: A
+    b1: B
+    b2: C
+    b3: D
+}
+
+// ============================================================
+//  Stream / Flow Buses
+// ============================================================
+
+struct Stream[T] {
+    valid: Bool
+    ready: Bool
+    payload: T
+}
+
+struct Flow[T] {
+    payload: T
+    valid: Bool
+}
+
+impl[T] Stream[T] {
+    def fire: Bool = this.valid
+    def stage: Stream[T] = this
+}
+
+impl[T] Flow[T] {
+    def stage: Flow[T] = this
+}
+
+// ============================================================
+//  BlackBox (external module)
+// ============================================================
+
+struct BlackBox {
+    name: String
+}
+
+impl BlackBox {
+    def addGeneric(name: String, value: String): BlackBox = this
+    def setDefinitionName(name: String): BlackBox = this
+}
+
+// ============================================================
+//  FSM (Finite State Machine)
+// ============================================================
+
+enum StateAccess {
+    boot
+    entry
+    exit
+}
+
+struct State[T] {
+    name: String
+    stateEntry: Option[T]
+    stateExit: Option[T]
+}
+
+enum FSMEntryPoint {
+    entryPoint
+}
+
+// ============================================================
+//  Switch Statement DSL
+// ============================================================
+
+enum SwitchKey {
+    default
+}

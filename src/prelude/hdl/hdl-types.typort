@@ -1,0 +1,121 @@
+// ============================================================
+// HDL Types: Data trait, Bool/Bits/UInt/SInt structs
+// ============================================================
+
+// ---------- Data trait ----------
+
+trait Data {
+    def :=(that: Self): Unit
+    def expr: Expr
+}
+
+// ============================================================
+//  Hardware Bit Type (wire-level boolean)
+// ============================================================
+
+struct Bool {
+    name: Option[String]
+    zz_expr: Expr
+}
+
+impl Data for Bool {
+    def :=(that: Bool): Unit =
+        let ass = isRegExpr(this.expr);
+        let assignment = match ass {
+            case true => regAssign(this.expr, that.expr)
+            case false => assign(this.expr, that.expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
+        unit
+    def expr: Expr = this.zz_expr
+}
+
+impl Into[Bool] for Bool {
+    def into: Bool = this
+}
+
+// ---------- Bits (raw bit vector) ----------
+
+struct Bits[width: Nat] {
+    name: Option[String]
+    zz_expr: Expr
+}
+
+impl[width: Nat] Into[Bits[width]] for Bits[width] {
+    def into: Bits[width] = this
+}
+
+impl[width: Nat] Data for Bits[width] {
+    def :=(that: Bits[width]): Unit =
+        let isReg = isRegExpr(this.zz_expr);
+        let assignment = match isReg {
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
+        unit
+    def expr: Expr = this.zz_expr
+}
+
+// ---------- UInt (unsigned integer) ----------
+
+struct UInt[width: Nat] {
+    name: Option[String]
+    zz_expr: Expr
+}
+
+// Check if a Nat value fits in a given bit width
+def natFitsIn(width: Nat, value: Nat): Boolean = match value {
+    case zero => true
+    case succ(v) => match width {
+        case zero => false
+        case succ(w) => natFitsIn(w, v)
+    }
+}
+
+impl[width: Nat] Into[UInt[width]] for Nat {
+    def into: UInt[width] = UInt.mk(None, literal(this))
+}
+
+impl[width: Nat] Into[UInt[width]] for UInt[width] {
+    def into: UInt[width] = this
+}
+
+impl[width: Nat] Data for UInt[width] {
+    def :=(that: UInt[width]): Unit =
+        let isReg = isRegExpr(this.zz_expr);
+        let assignment = match isReg {
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
+        unit
+    def expr: Expr = this.zz_expr
+}
+
+// ---------- SInt (signed integer) ----------
+
+struct SInt[width: Nat] {
+    name: Option[String]
+    zz_expr: Expr
+}
+
+impl[width: Nat] Into[SInt[width]] for SInt[width] {
+    def into: SInt[width] = this
+}
+
+impl[width: Nat] Into[SInt[width]] for Nat {
+    def into: SInt[width] = SInt.mk(None, literal(this))
+}
+
+impl[width: Nat] Data for SInt[width] {
+    def :=(that: SInt[width]): Unit =
+        let isReg = isRegExpr(this.zz_expr);
+        let assignment = match isReg {
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
+        };
+        let dummy_expr = createSignalExpr("", assignment);
+        unit
+    def expr: Expr = this.zz_expr
+}

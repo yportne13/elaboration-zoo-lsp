@@ -208,20 +208,20 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         use lsp_types::Url;
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///op.typort").unwrap(),
-            text: include_str!("prelude/op.typort"),
+            text: include_str!("prelude/core/op.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///eq.typort").unwrap(),
-            text: include_str!("prelude/eq.typort"),
+            text: include_str!("prelude/core/eq.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///nat.typort").unwrap(),
-            text: include_str!("prelude/nat.typort"),
+            text: include_str!("prelude/core/nat.typort"),
             version: None,
         });
-        // Register nat_to_dec builtin (required by hdl.typort for Verilog generation)
+        // Register nat_to_dec builtin (required by hdl for Verilog generation)
         {
             let infer = self.infer.lock().unwrap();
             let mut cxt = self.cxt.lock().unwrap();
@@ -229,68 +229,103 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///natarith.typort").unwrap(),
-            text: include_str!("prelude/natarith.typort"),
+            text: include_str!("prelude/core/natarith.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///bool.typort").unwrap(),
-            text: include_str!("prelude/bool.typort"),
+            text: include_str!("prelude/core/bool.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///option.typort").unwrap(),
-            text: include_str!("prelude/option.typort"),
+            text: include_str!("prelude/data/option.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///result.typort").unwrap(),
-            text: include_str!("prelude/result.typort"),
+            text: include_str!("prelude/data/result.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///order.typort").unwrap(),
-            text: include_str!("prelude/order.typort"),
+            text: include_str!("prelude/data/order.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///void.typort").unwrap(),
-            text: include_str!("prelude/void.typort"),
+            text: include_str!("prelude/core/void.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///decidable.typort").unwrap(),
-            text: include_str!("prelude/decidable.typort"),
+            text: include_str!("prelude/data/decidable.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///vec.typort").unwrap(),
-            text: include_str!("prelude/vec.typort"),
+            text: include_str!("prelude/data/vec.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///either.typort").unwrap(),
-            text: include_str!("prelude/either.typort"),
+            text: include_str!("prelude/data/either.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///list.typort").unwrap(),
-            text: include_str!("prelude/list.typort"),
+            text: include_str!("prelude/data/list.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///string.typort").unwrap(),
-            text: include_str!("prelude/string.typort"),
+            text: include_str!("prelude/data/string.typort"),
             version: None,
         });
         self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///nonempty.typort").unwrap(),
-            text: include_str!("prelude/nonempty.typort"),
+            text: include_str!("prelude/data/nonempty.typort"),
             version: None,
         });
         if !skip_hdl {
             self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl.typort").unwrap(),
-                text: include_str!("prelude/hdl.typort"),
+                uri: Url::parse("builtin:///hdl-core.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-core.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-types.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-types.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-ops.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-ops.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-clock.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-clock.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-bus.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-bus.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-signals.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-signals.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-macros.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-macros.typort"),
+                version: None,
+            });
+            self.on_change::<true>(TextDocumentItem {
+                uri: Url::parse("builtin:///hdl-verilog.typort").unwrap(),
+                text: include_str!("prelude/hdl/hdl-verilog.typort"),
                 version: None,
             });
         }

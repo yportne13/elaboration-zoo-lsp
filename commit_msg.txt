@@ -1,0 +1,12 @@
+refactor: reorganize prelude into categorized subdirectories
+
+Prelude files are now organized under src/prelude/:
+  core/   — op, eq, nat, natarith, bool, void
+  data/   — option, result, order, decidable, vec, either,
+            list, string, nonempty
+  hdl/    — hdl-core, hdl-types, hdl-ops, hdl-clock, hdl-bus,
+            hdl-signals, hdl-macros, hdl-verilog
+  show.typort stays at top level
+
+Old hdl.typort (1226 lines) split into 8 focused files (60-250 lines each).
+All include_str!() paths updated across lib.rs, L12_canonical, and L13_namespace.

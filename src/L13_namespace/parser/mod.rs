@@ -1791,7 +1791,19 @@ enum Foo[A] {
 fn test_expand_macro_full_flow_alu() {
     // Full flow: load hdl.typort macros, parse alu.typort content,
     // verify module{} macro expansion with correct offsets.
-    let hdl_content = include_str!("../../prelude/hdl.typort");
+    let hdl_core = include_str!("../../prelude/hdl/hdl-core.typort");
+    let hdl_types = include_str!("../../prelude/hdl/hdl-types.typort");
+    let hdl_ops = include_str!("../../prelude/hdl/hdl-ops.typort");
+    let hdl_clock = include_str!("../../prelude/hdl/hdl-clock.typort");
+    let hdl_bus = include_str!("../../prelude/hdl/hdl-bus.typort");
+    let hdl_signals = include_str!("../../prelude/hdl/hdl-signals.typort");
+    let hdl_macros = include_str!("../../prelude/hdl/hdl-macros.typort");
+    let hdl_verilog = include_str!("../../prelude/hdl/hdl-verilog.typort");
+
+    // Combine all hdl parts into one content string for parsing
+    let hdl_content = hdl_core.to_owned() + "\n" + hdl_types + "\n" + hdl_ops
+        + "\n" + hdl_clock + "\n" + hdl_bus + "\n" + hdl_signals
+        + "\n" + hdl_macros + "\n" + hdl_verilog;
 
     // Step 1: Parse hdl.typort to extract exported macros
     // parser_with_macros expects preprocessed text (comments stripped)

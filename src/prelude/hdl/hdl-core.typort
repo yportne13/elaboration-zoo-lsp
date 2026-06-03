@@ -1,0 +1,213 @@
+// ============================================================
+// HDL Core: utility types, Expr AST, Module system,
+//           WhenStack tracking, createSignalExpr
+// ============================================================
+
+// ---------- utility types ----------
+
+enum Le(n: Nat, m: Nat) {
+    le_refl[n: Nat] -> Le n n
+    le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)
+}
+
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+
+def sub(x: Nat, y: Fin (x + 1)): Nat = match y {
+    case fzero => x
+    case fsucc(yy) => match x {
+        case succ(t) => sub t yy
+        case zero => match yy {}
+    }
+}
+
+struct Exists[A: Type 0, P: A -> Type 0] {
+    witness: A
+    proof: P witness
+}
+
+def exists_two: Exists[Nat][x => Eq x 2] = Exists.mk[Nat][x => Eq x 2] 2 rfl
+
+def div2Up(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 1
+    case succ(succ(t)) => (div2Up t) + 1
+}
+
+def log2Up(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 0
+    case succ(succ(tail)) => (log2Up (div2Up (tail + 2))) + 1
+}
+
+// ---------- width utilities ----------
+
+def maxNat(a: Nat, b: Nat): Nat = match a {
+    case zero => b
+    case succ(t) => match b {
+        case zero => a
+        case succ(u) => succ (maxNat t u)
+    }
+}
+
+def minNat(a: Nat, b: Nat): Nat = match a {
+    case zero => zero
+    case succ(t) => match b {
+        case zero => zero
+        case succ(u) => succ (minNat t u)
+    }
+}
+
+// ---------- Unit ----------
+
+enum Unit {
+    unit
+}
+
+// ---------- Module system (shared helpers) ----------
+
+enum Expr {
+    create(name: String)
+    createIn(name: String)
+    createOut(name: String)
+    createWidth(name: String, width: Nat)
+    createInWidth(name: String, width: Nat)
+    createOutWidth(name: String, width: Nat)
+    createReg(name: String)
+    createRegWidth(name: String, width: Nat)
+    literal(v: Nat)
+    binary(lhs: Expr, op: String, rhs: Expr)
+    assign(lhs: Expr, rhs: Expr)
+    regAssign(lhs: Expr, rhs: Expr)
+    when(cond: Expr, body: Expr, elseBody: Option[Expr])
+    switch(value: Expr, cases: Expr)
+    block(head: Expr, tail: Expr)
+    nop
+}
+
+// Check if an Expr is a register signal (createReg/createRegWidth)
+def isRegExpr(e: Expr): Boolean = match e {
+    case createReg(_) => true
+    case createRegWidth(_, _) => true
+    case _ => false
+}
+
+struct Module {
+    name: String
+    expr_num: Nat
+    expr: Vec[Expr] expr_num
+}
+
+struct module {
+    num: Nat
+    data: Vec[Module] num
+}
+
+impl module {
+    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
+}
+
+// Generic helper: add an expression to the first module (or create one if none exists)
+def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr): module = match data {
+    case nil => module.mk(0 + 1, Module.mk(name, 0 + 1, e :: nil) :: nil)
+    case cons(head, tail) =>
+        let new_module = Module.mk(head.name, head.expr_num + 1, e :: head.expr);
+        module.mk(num, new_module :: tail)
+}
+
+// ---------- When context tracking ----------
+// When blocks use a simple stack to track the current condition.
+// Each assignment inside a when/elsewhen/otherwise scope is wrapped
+// with the appropriate when(cond, e, None) by addWhenContext.
+
+enum WhenState {
+    whenActive(cond: Expr)
+    whenOtherwise
+}
+
+enum WhenStack {
+    whenStackEmpty
+    whenStackPush(top: WhenState, rest: WhenStack)
+}
+
+def initWhenStack(): Unit =
+    let dummy = create_global("WhenStack", whenStackEmpty);
+    unit
+
+def whenBegin(cond: Expr): Unit =
+    let state = whenActive(cond);
+    let dummy = change_mutable("WhenStack", x => whenStackPush(state, x));
+    unit
+
+def whenEnd(dummy: Unit): Unit =
+    let d = dummy;
+    let d2 = change_mutable("WhenStack", x => match x {
+        case whenStackEmpty => x
+        case whenStackPush(_, rest) => rest
+    });
+    unit
+
+def whenElseBegin(cond: Expr): Unit =
+    let state = whenActive(cond);
+    let d2 = change_mutable("WhenStack", x => match x {
+        case whenStackEmpty => whenStackPush(state, whenStackEmpty)
+        case whenStackPush(_, rest) => whenStackPush(state, rest)
+    });
+    unit
+
+def whenOtherwiseBegin(dummy: Unit): Unit =
+    let d = dummy;
+    let d2 = change_mutable("WhenStack", x => whenStackPush(whenOtherwise, x));
+    unit
+
+def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
+    case whenStackEmpty => e
+    case whenStackPush(state, _) => match state {
+        case whenOtherwise => e
+        case whenActive(cond) => when(cond, e, None)
+    }
+}
+
+def addWhenContext(e: Expr): Expr =
+    let ws_init = change_mutable_default("WhenStack", x => x, whenStackEmpty);
+    let ws = get_global("WhenStack");
+    wrapWithWhenContext(ws, e)
+
+// Helper used by signal creation and assignment to insert expr into module.
+// Signal declarations (create/createIn/createOut) are added directly without when context.
+// Only assignments (assign) are conditionally wrapped via addWhenContext.
+def createSignalExpr(name: String, e: Expr): Expr =
+    match e {
+        case create(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createIn(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOut(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOutWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createReg(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case literal(_) =>
+            e
+        case _ =>
+            let wrapped = addWhenContext(e);
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
+            e
+    }

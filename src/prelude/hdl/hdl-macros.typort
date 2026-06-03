@@ -1,0 +1,105 @@
+// ============================================================
+// HDL Macros: Expr (ergonomic hardware DSL) and module
+// ============================================================
+
+// The Expr macro provides convenient syntax for hardware expressions
+// Usage:
+//   let mySignal = UInt[8]           -- creates a UInt[8] named "mySignal"
+//   input myInput = UInt[4]          -- creates an input UInt[4] named "myInput"  
+//   output myOutput = Bits[16]       -- creates an output Bits[16] named "myOutput"
+//   when condition {                  -- conditional assignment block
+//     a := b
+//   } otherwise {
+//     a := c
+//   }
+//   switch x {                        -- switch statement
+//     is value1 { ... }
+//     is value2 { ... }
+//     default { ... }
+//   }
+
+#[macro_export]
+macro_rules Expr {
+    // ---- signal declarations ----
+    (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput(stringify $x, $width);};
+    (output $x:ident = Bits[$width:raw]) => {let $x = newBitsOutput(stringify $x, $width);};
+    (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+
+    (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput(stringify $x, $width);};
+    (output $x:ident = UInt[$width:raw]) => {let $x = newUIntOutput(stringify $x, $width);};
+    (let $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
+
+    (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput(stringify $x, $width);};
+    (output $x:ident = SInt[$width:raw]) => {let $x = newSIntOutput(stringify $x, $width);};
+    (let $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
+
+    (input $x:ident = Bool) => {let $x = newBoolInput(stringify $x);};
+    (output $x:ident = Bool) => {let $x = newBoolOutput(stringify $x);};
+    (let $x:ident = Bool) => {let $x = newBool(stringify $x);};
+
+    // ---- register declarations ----
+    (reg $x:ident = Bits[$width:raw]) => {let $x = newBitsReg(stringify $x, $width);};
+    (reg $x:ident = UInt[$width:raw]) => {let $x = newUIntReg(stringify $x, $width);};
+    (reg $x:ident = SInt[$width:raw]) => {let $x = newSIntReg(stringify $x, $width);};
+    (reg $x:ident = Bool) => {let $x = newBoolReg(stringify $x);};
+
+    // ---- generic let ----
+    (let $x:ident = $y:raw) => {let $x = $y;};
+
+    // ---- when/otherwise control flow ----
+    // Pushes condition scope, evaluates body, pops scope.
+    (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
+        $( let w_epush = whenElseBegin($cond2.expr);
+           $({$bodyelse})*
+           let w_epop = whenEnd(unit); )*
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
+    };
+    // when with otherwise (no elsewhen)
+    (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
+    };
+    // when without otherwise
+    (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
+        $( let w_epush = whenElseBegin($cond2.expr);
+           $({$bodyelse})*
+           let w_epop = whenEnd(unit); )*
+    };
+
+    // ---- assignment — auto-wrap RHS in .into to support both Self and Nat ----
+    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let uselessrr = $lhs := rhs_conv;};
+
+    // ---- raw expression passthrough ----
+    ($x: raw) => {let useless = $x;}
+}
+
+// The module macro provides convenient module definition syntax
+// Usage:
+//   module myAdder(a: UInt[8], b: UInt[8]) -> UInt[9] {
+//     let result = UInt[9]
+//     result := a +^ b
+//   }
+
+#[macro_export]
+macro_rules module {
+    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
+        def $name $({$args})* =
+            let new_module = Module.mk(stringify $name, 0, nil);
+            let creat_module = change_mutable_default("module", x => x.insert(new_module), module.mk(0 + 1, new_module :: nil));
+            $({$body})*
+            let ret = get_global("module").data.head_option;
+            ret.unwrap_or(new_module)
+        };
+}

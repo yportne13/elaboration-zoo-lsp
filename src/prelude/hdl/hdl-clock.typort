@@ -1,0 +1,61 @@
+// ============================================================
+// HDL Clock / Registers / Memory
+// ============================================================
+
+// ============================================================
+//  Clock Domain
+// ============================================================
+
+enum ClockDomainConfig {
+    Sync
+    Async
+}
+
+struct ClockDomain {
+    clock: Bool
+    reset: Bool
+    config: ClockDomainConfig
+}
+
+def defaultClockDomain: ClockDomain = ClockDomain.mk (Bool.mk (Some "clk") (create("clk"))) (Bool.mk (Some "reset") (create("reset"))) Sync
+
+// ============================================================
+//  Registers (sequential logic)
+// ============================================================
+
+struct Reg[T] {
+    initial_value: T
+    clockDomain: ClockDomain
+}
+
+def RegInit[T](initVal: T, cd: ClockDomain): Reg[T] =
+    Reg.mk initVal cd
+
+def RegNext[T](nextVal: T): Reg[T] =
+    Reg.mk nextVal defaultClockDomain
+
+impl[T] Reg[T] {
+    def value: T = this.initial_value
+}
+
+impl[T] T {
+    def init[T0: Type 0](initVal: T0): Reg[T0] =
+        Reg.mk initVal defaultClockDomain
+}
+
+// ============================================================
+//  Mem (Memory)
+// ============================================================
+
+struct Mem[T] {
+    wordCount: Nat
+    initialValue: T
+    clockDomain: ClockDomain
+}
+
+impl[T] Mem[T] {
+    def write(address: UInt[log2Up (maxNat this.wordCount 1)], data: T, enable: Bool): Unit = unit
+    def readAsync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
+    def readSync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
+    def readSyncCC(address: UInt[log2Up (maxNat this.wordCount 1)], crossClock: Bool): T = this.initialValue
+}

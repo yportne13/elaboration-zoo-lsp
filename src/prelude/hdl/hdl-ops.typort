@@ -1,0 +1,322 @@
+// ============================================================
+// HDL Operations: arithmetic, bitwise, shift, comparison,
+//                 reduction, mux, cat, bit extraction,
+//                 width utilities, type conversion
+// ============================================================
+
+// ============================================================
+//  Arithmetic Operations (with width tracking)
+// ============================================================
+
+// UInt arithmetic
+impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
+    def +(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "+", that.expr))
+}
+
+impl[width: Nat] Add[Nat, UInt[width]] for UInt[width] {
+    def +(that: Nat): UInt[width] =
+        this + that.into
+}
+
+impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
+    def -(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "-", that.expr))
+}
+
+impl[width: Nat] Sub[Nat, UInt[width]] for UInt[width] {
+    def -(that: Nat): UInt[width] =
+        this - that.into
+}
+
+impl[width1: Nat, width2: Nat] Mul[UInt[width1], UInt[width1 + width2]] for UInt[width2] {
+    def *(that: UInt[width1]): UInt[width1 + width2] =
+        UInt.mk(None, binary(this.expr, "*", that.expr))
+}
+
+// SInt arithmetic
+impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
+    def +(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "+", that.expr))
+}
+
+impl[width: Nat] Add[Nat, SInt[width]] for SInt[width] {
+    def +(that: Nat): SInt[width] =
+        this + that.into
+}
+
+impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
+    def -(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "-", that.expr))
+}
+
+impl[width: Nat] Sub[Nat, SInt[width]] for SInt[width] {
+    def -(that: Nat): SInt[width] =
+        this - that.into
+}
+
+// ---- carry-generating operations (+^ -^) ----
+
+impl[width: Nat] UInt[width] {
+    def +^(that: UInt[width]): UInt[width + 1] =
+        UInt.mk(None, binary(this.expr, "+^", that.expr))
+    def -^(that: UInt[width]): UInt[width + 1] =
+        UInt.mk(None, binary(this.expr, "-^", that.expr))
+}
+
+impl[width: Nat] SInt[width] {
+    def +^(that: SInt[width]): SInt[width + 1] =
+        SInt.mk(None, binary(this.expr, "+^", that.expr))
+    def -^(that: SInt[width]): SInt[width + 1] =
+        SInt.mk(None, binary(this.expr, "-^", that.expr))
+}
+
+// ============================================================
+//  Bitwise Logic Operations
+// ============================================================
+
+// --- Bits bitwise ---
+
+impl[width: Nat] Bits[width] {
+    def &(that: Bits[width]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "&", that.expr))
+    def |(that: Bits[width]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "|", that.expr))
+    def ^(that: Bits[width]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "^", that.expr))
+}
+
+// --- UInt bitwise ---
+
+impl[width: Nat] UInt[width] {
+    def &(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "&", that.expr))
+    def |(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "|", that.expr))
+    def ^(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "^", that.expr))
+}
+
+// --- SInt bitwise ---
+
+impl[width: Nat] SInt[width] {
+    def &(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "&", that.expr))
+    def |(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "|", that.expr))
+    def ^(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "^", that.expr))
+}
+
+// ============================================================
+//  Shift Operations
+// ============================================================
+
+impl[width: Nat, shift: Nat] UInt[width] {
+    def <<(that: UInt[shift]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "<<", that.expr))
+    def >>(that: UInt[shift]): UInt[width] =
+        UInt.mk(None, binary(this.expr, ">>", that.expr))
+}
+
+impl[width: Nat, shift: Nat] SInt[width] {
+    def <<(that: UInt[shift]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "<<", that.expr))
+    def >>(that: UInt[shift]): SInt[width] =
+        SInt.mk(None, binary(this.expr, ">>", that.expr))
+}
+
+impl[width: Nat, shift: Nat] Bits[width] {
+    def <<(that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "<<", that.expr))
+    def >>(that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, ">>", that.expr))
+}
+
+// ---- rotate ----
+impl[width: Nat] Bits[width] {
+    def rotateLeft[shift: Nat](that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "rotateLeft", that.expr))
+    def rotateRight[shift: Nat](that: UInt[shift]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "rotateRight", that.expr))
+}
+
+// ============================================================
+//  Comparison Operations
+// ============================================================
+
+// --- UInt comparisons ---
+impl[width: Nat] UInt[width] {
+    def <(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<", that.expr))
+    def <=(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<=", that.expr))
+    def >(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">", that.expr))
+    def >=(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">=", that.expr))
+    def ===(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "===", that.expr))
+    def =/=(that: UInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", that.expr))
+    // Nat comparison helpers
+    def eqNat(that: Nat): Bool =
+        Bool.mk(None, binary(this.expr, "===", literal(that)))
+    def neNat(that: Nat): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", literal(that)))
+}
+
+// --- SInt comparisons ---
+impl[width: Nat] SInt[width] {
+    def <(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<", that.expr))
+    def <=(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "<=", that.expr))
+    def >(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">", that.expr))
+    def >=(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, ">=", that.expr))
+    def ===(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "===", that.expr))
+    def =/=(that: SInt[width]): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", that.expr))
+}
+
+// --- Bool comparisons ---
+impl Bool {
+    def ===(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "===", that.expr))
+    def =/=(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", that.expr))
+}
+
+// ============================================================
+//  Reduction Operators
+// ============================================================
+
+impl[width: Nat] Bits[width] {
+    def andR: Bool =
+        Bool.mk(None, binary(this.expr, "andR", this.expr))
+    def orR: Bool =
+        Bool.mk(None, binary(this.expr, "orR", this.expr))
+    def xorR: Bool =
+        Bool.mk(None, binary(this.expr, "xorR", this.expr))
+}
+
+impl[width: Nat] UInt[width] {
+    def andR: Bool =
+        Bool.mk(None, binary(this.expr, "andR", this.expr))
+    def orR: Bool =
+        Bool.mk(None, binary(this.expr, "orR", this.expr))
+    def xorR: Bool =
+        Bool.mk(None, binary(this.expr, "xorR", this.expr))
+}
+
+impl[width: Nat] SInt[width] {
+    def andR: Bool =
+        Bool.mk(None, binary(this.expr, "andR", this.expr))
+    def orR: Bool =
+        Bool.mk(None, binary(this.expr, "orR", this.expr))
+    def xorR: Bool =
+        Bool.mk(None, binary(this.expr, "xorR", this.expr))
+}
+
+// ============================================================
+//  Mux (Multiplexer)
+// ============================================================
+
+// Helper to check if a type has expr (is a Data type)
+impl Bool {
+    def mux[T: Type 0](whenTrue: T, whenFalse: T): T = whenTrue
+}
+
+// ============================================================
+//  Cat (Bit Concatenation)
+// ============================================================
+
+trait Cat[T, O: outParam(Type 0)] {
+    def ##(that: T): O
+}
+
+impl[width: Nat] Cat[Bits[width], Bits[width + 1]] for Bool {
+    def ##(that: Bits[width]): Bits[width + 1] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[left: Nat, right: Nat] Cat[Bits[right], Bits[left + right]] for Bits[left] {
+    def ##(that: Bits[right]): Bits[left + right] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[left: Nat, right: Nat] Cat[UInt[right], Bits[left + right]] for Bits[left] {
+    def ##(that: UInt[right]): Bits[left + right] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
+}
+
+// ============================================================
+//  Bit Extraction & Slicing
+// ============================================================
+
+impl[width: Nat] Bits[width] {
+    def msb: Bool =
+        Bool.mk(None, binary(this.expr, "msb", this.expr))
+    def lsb: Bool =
+        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+    def take[high: Nat](low: Fin width): Bits[high + 1] =
+        Bits.mk(None, binary(this.expr, "take", this.expr))
+    def slice[hi_idx: Nat, lo_idx: Nat](hi_val: Fin width, lo_val: Fin width): Bits[hi_idx + 1] =
+        Bits.mk(None, binary(this.expr, "slice", this.expr))
+    def apply(idx: Fin width): Bool =
+        Bool.mk(None, binary(this.expr, "apply", this.expr))
+}
+
+impl[width: Nat] UInt[width] {
+    def msb: Bool =
+        Bool.mk(None, binary(this.expr, "msb", this.expr))
+    def lsb: Bool =
+        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+}
+
+impl[width: Nat] SInt[width] {
+    def msb: Bool =
+        Bool.mk(None, binary(this.expr, "msb", this.expr))
+    def lsb: Bool =
+        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+}
+
+// ============================================================
+//  Width Utilities
+// ============================================================
+
+impl[width: Nat] UInt[width] {
+    def resize[newWidth: Nat]: UInt[newWidth] =
+        UInt.mk(None, binary(this.expr, "resize", this.expr))
+    // Safe widening: requires proof that current width ≤ new width (no data loss)
+    def cast[newWidth: Nat](proof: Le(width, newWidth)): UInt[newWidth] =
+        UInt.mk(None, binary(this.expr, "resize", this.expr))
+    def asBits: Bits[width] =
+        Bits.mk(None, binary(this.expr, "asBits", this.expr))
+    def asSInt: SInt[width] =
+        SInt.mk(None, binary(this.expr, "asSInt", this.expr))
+    def asBool: Bool =
+        Bool.mk(None, binary(this.expr, "asBool", this.expr))
+}
+
+impl[width: Nat] SInt[width] {
+    def resize[newWidth: Nat]: SInt[newWidth] =
+        SInt.mk(None, binary(this.expr, "resize", this.expr))
+    // Safe widening: requires proof that current width ≤ new width (no data loss)
+    def cast[newWidth: Nat](proof: Le(width, newWidth)): SInt[newWidth] =
+        SInt.mk(None, binary(this.expr, "resize", this.expr))
+    def asBits: Bits[width] =
+        Bits.mk(None, binary(this.expr, "asBits", this.expr))
+    def asUInt: UInt[width] =
+        UInt.mk(None, binary(this.expr, "asUInt", this.expr))
+}
+
+impl[width: Nat] Bits[width] {
+    def asUInt: UInt[width] =
+        UInt.mk(None, binary(this.expr, "asUInt", this.expr))
+    def asSInt: SInt[width] =
+        SInt.mk(None, binary(this.expr, "asSInt", this.expr))
+}

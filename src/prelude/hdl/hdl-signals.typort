@@ -1,0 +1,69 @@
+// ============================================================
+// HDL Signal Creation Functions
+// ============================================================
+
+def newBits(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newUInt(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newSInt(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBool(name: String): Bool =
+    let e = createSignalExpr(name, create(name));
+    Bool.mk(Some(name), e)
+
+def newUIntInput(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createInWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newBitsInput(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createInWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newSIntInput(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createInWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolInput(name: String): Bool =
+    let e = createSignalExpr(name, createIn(name));
+    Bool.mk(Some(name), e)
+
+def newBitsOutput(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createOutWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newUIntOutput(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createOutWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newSIntOutput(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createOutWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolOutput(name: String): Bool =
+    let e = createSignalExpr(name, createOut(name));
+    Bool.mk(Some(name), e)
+
+// ---- Register signal creation ----
+
+def newUIntReg(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newBitsReg(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newSIntReg(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolReg(name: String): Bool =
+    let e = createSignalExpr(name, createReg(name));
+    Bool.mk(Some(name), e)
