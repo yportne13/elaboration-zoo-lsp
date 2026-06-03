@@ -4219,4 +4219,93 @@ println t.show
             Err(e) => eprintln!("derive enum with fields test failed (acceptable): {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
         }
     }
+
+    /// Benchmark: time the elaboration of hdl-verilog.typort per-declaration.
+    /// Run with: cargo test bench_hdl_verilog -- --nocapture
+    #[test]
+    fn bench_hdl_verilog_decls() {
+        use std::time::Instant;
+
+        let mut infer = Infer::new();
+        let mut cxt = Cxt::new(&infer);
+        let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
+
+        let prelude_files = &[
+            ("op", include_str!("../prelude/core/op.typort")),
+            ("eq", include_str!("../prelude/core/eq.typort")),
+            ("nat", include_str!("../prelude/core/nat.typort")),
+            ("natarith", include_str!("../prelude/core/natarith.typort")),
+            ("bool", include_str!("../prelude/core/bool.typort")),
+            ("option", include_str!("../prelude/data/option.typort")),
+            ("result", include_str!("../prelude/data/result.typort")),
+            ("order", include_str!("../prelude/data/order.typort")),
+            ("void", include_str!("../prelude/core/void.typort")),
+            ("decidable", include_str!("../prelude/data/decidable.typort")),
+            ("vec", include_str!("../prelude/data/vec.typort")),
+            ("either", include_str!("../prelude/data/either.typort")),
+            ("list", include_str!("../prelude/data/list.typort")),
+            ("string", include_str!("../prelude/data/string.typort")),
+            ("nonempty", include_str!("../prelude/data/nonempty.typort")),
+            ("hdl-core", include_str!("../prelude/hdl/hdl-core.typort")),
+            ("hdl-types", include_str!("../prelude/hdl/hdl-types.typort")),
+            ("hdl-ops", include_str!("../prelude/hdl/hdl-ops.typort")),
+            ("hdl-clock", include_str!("../prelude/hdl/hdl-clock.typort")),
+            ("hdl-bus", include_str!("../prelude/hdl/hdl-bus.typort")),
+            ("hdl-signals", include_str!("../prelude/hdl/hdl-signals.typort")),
+            ("hdl-macros", include_str!("../prelude/hdl/hdl-macros.typort")),
+        ];
+
+        for (name, content) in prelude_files {
+            let processed = preprocess(content);
+            if let Some((decls, _, new_exports, _)) = parser::parser_with_macros(&processed, 0, &global_macros) {
+                for (n, rules) in new_exports { global_macros.insert(n, rules); }
+                for tm in decls {
+                    let (_, _, new_cxt) = infer.infer(&cxt, tm.clone()).unwrap();
+                    cxt = new_cxt;
+                }
+            }
+            if *name == "nat" {
+                use cxt::tm_lam; use cxt::tm_pi; use cxt::tm_decl;
+                let f_nat_to_dec = PrimFunc(Rc::new(crate::L13_namespace::cxt::nat_to_dec));
+                let str_val = cxt.decl.get("String").map(|x| x.4.clone()).unwrap();
+                cxt = cxt.add_builtin(&infer, "nat_to_dec",
+                    tm_lam(&["n"], Tm::Prim(str_val.clone(), f_nat_to_dec).into()),
+                    tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
+                ).unwrap();
+            }
+        }
+
+        println!("\n========== HDL-VERILOG BENCHMARK ==========");
+        let verilog_content = preprocess(include_str!("../prelude/hdl/hdl-verilog.typort"));
+        let parse_start = Instant::now();
+        let (decls, _, _, _) = parser::parser_with_macros(&verilog_content, 0, &global_macros).unwrap();
+        let parse_time = parse_start.elapsed();
+        println!("  Parse: {}.{:03}s ({} decls)", parse_time.as_secs(), parse_time.subsec_millis(), decls.len());
+        println!("  Per-decl elaboration:");
+        let mut total_elab = std::time::Duration::ZERO;
+        for (i, tm) in decls.iter().enumerate() {
+            let name = match tm {
+                parser::syntax::Decl::Def { name, .. } => format!("def {}", name.data),
+                parser::syntax::Decl::Enum { name, .. } => format!("enum {}", name.data),
+                parser::syntax::Decl::TraitDecl { name, .. } => format!("trait {}", name.data),
+                parser::syntax::Decl::ImplDecl { .. } => format!("impl {}", i),
+                _ => format!("decl_{}", i),
+            };
+            let start = Instant::now();
+            let result = infer.infer(&cxt, tm.clone());
+            let elapsed = start.elapsed();
+            total_elab += elapsed;
+            match result {
+                Ok((_, _, new_cxt)) => { cxt = new_cxt; }
+                Err(e) => { println!("  ERROR {}: {} @ {}:{}", name, e.0.data, e.0.path_id, e.0.start_offset); }
+            }
+            if elapsed.as_millis() >= 10 {
+                println!("  {:>8}.{:03}s  {}", elapsed.as_secs(), elapsed.subsec_millis(), name);
+            } else {
+                println!("  {:>8}.{:03}s  {}", elapsed.as_secs(), elapsed.subsec_millis(), name);
+            }
+        }
+        println!("  Total: {}.{:03}s", total_elab.as_secs(), total_elab.subsec_millis());
+        println!("===========================================\n");
+    }
 }
