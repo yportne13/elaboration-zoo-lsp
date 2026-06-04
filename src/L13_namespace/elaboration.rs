@@ -236,9 +236,69 @@ impl Infer {
             _ => Err(Error(t_span.map(|_| format!("expected universe, got {:?}", inferred_type)), vec![])),
         }
     }
+    fn check_app_obj_direct<const CANONICAL: bool>(
+        &mut self, cxt: &Cxt,
+        lhs: &Raw, op: &Span<SmolStr>, rhs: &Raw, target: &Rc<Val>,
+    ) -> Option<Result<Rc<Tm>, Error>> {
+        let target_head = super::typeclass::head_key(target)?;
+        for ns_entry in cxt.namespace.iter() {
+            if !ns_entry.1.contains(&op.data) { continue; }
+            let key = SmolStr::new(format!("{}{}", ns_entry.2.to_string(), op.data));
+            let (_, _, _, _, vty) = cxt.decl.get(&key)?;
+            let vty = self.force(&cxt.decl, vty);
+            let self_ty = match vty.as_ref() {
+                Val::Pi(_, Icit::Impl, dom, _) => dom.clone(),
+                _ => continue,
+            };
+            let mut mty = vty.clone();
+            while let Val::Pi(_, Icit::Impl, _, cod) = mty.as_ref() {
+                mty = self.closure_apply(&cxt.decl, cod, Val::Rigid(Lvl(u32::MAX), List::new()).into());
+            }
+            let (param_ty, ret_ty) = match mty.as_ref() {
+                Val::Pi(_, _, p, cod) => {
+                    (p.clone(), self.closure_apply(&cxt.decl, cod, Val::Rigid(Lvl(u32::MAX), List::new()).into()))
+                }
+                _ => continue,
+            };
+            if super::typeclass::head_key(&ret_ty) != Some(target_head.clone()) {
+                continue;
+            }
+            let lhs_tm = match self.check::<CANONICAL>(cxt, lhs.clone(), &self_ty) {
+                Ok(tm) => tm,
+                Err(e) => return Some(Err(e)),
+            };
+            let rhs_tm = match self.check::<CANONICAL>(cxt, rhs.clone(), &param_ty) {
+                Ok(tm) => tm,
+                Err(e) => return Some(Err(e)),
+            };
+            return Some(Ok(Tm::App(
+                Tm::Obj(lhs_tm, op.clone()).into(),
+                rhs_tm,
+                super::parser::syntax::Icit::Expl,
+            ).into()));
+        }
+        None
+    }
     pub fn check<const CANONICAL: bool>(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         let a = self.force(&cxt.decl, a);
+        // Fast path: for App(Obj(lhs, op), rhs) with known target type,
+        // resolve method directly via decl table, bypassing trait_wrap
+        if CANONICAL {
+            match &t {
+                Raw::App(raw_obj, raw_rhs, _) => match raw_obj.as_ref() {
+                    Raw::Obj(raw_lhs, Some(raw_op)) => {
+                        if let Some(result) = self.check_app_obj_direct::<CANONICAL>(
+                            cxt, raw_lhs.as_ref(), raw_op, raw_rhs.as_ref(), &a
+                        ) {
+                            return result;
+                        }
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
         match (t, a.as_ref()) {
             // Check lambda expressions
             (Raw::Lam(x, i, t), Val::Pi(x_t, i_t, a, b_closure))
