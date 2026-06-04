@@ -993,6 +993,26 @@ module Test[w: Nat] {
     lt := a < b
     eq := a === b
 }
+
+println(moduleVL(Test[8]))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_simple() {
+    let input = r#"
+module Test[w: Nat] {
+    input a = UInt[w]
+    input b = UInt[w]
+    output result = UInt[w]
+    result := a + b
+}
+
+println(moduleVL(Test[8]))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
