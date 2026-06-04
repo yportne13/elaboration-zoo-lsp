@@ -1088,6 +1088,7 @@ impl Infer {
     }
     fn trait_wrap(&mut self, cxt: &Cxt, t: Span<SmolStr>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
+        let typ_raw_head = super::typeclass::head_key(&typ_raw);
 
         if t.data.is_empty() {
             // Collect completions: find traits whose first non-out param could match typ_raw
@@ -1108,6 +1109,16 @@ impl Infer {
         let ns_result = {
             let mut result = None;
             for ns_entry in &ns_entries {
+                // Pre-filter: skip entries whose trait has no instance for this Self type
+                if let Some(ref head) = typ_raw_head {
+                    if let Val::Pi(_, Icit::Impl, dom, _) = ns_entry.0.as_ref() {
+                        if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
+                            if !self.trait_solver.can_satisfy(&trait_name.data, &typ_raw) {
+                                continue;
+                            }
+                        }
+                    }
+                }
                 let meta_before = self.meta.len();
                 let mut check_typ = ns_entry.0.clone();
                 while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
