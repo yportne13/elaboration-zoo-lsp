@@ -36,6 +36,18 @@ trait Into[O: outParam(Type 0)] {
     def into: O
 }
 
+trait Equal[T, O: outParam(Type 0)] {
+    def ===(that: T): O
+    def =/=(that: T): O
+}
+
+trait Compare[T, O: outParam(Type 0)] {
+    def <(that: T): O
+    def <=(that: T): O
+    def >(that: T): O
+    def >=(that: T): O
+}
+
 trait Neg {
     def - : Self
 }
