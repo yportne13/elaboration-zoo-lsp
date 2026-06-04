@@ -25,6 +25,7 @@ mod L11_macro;
 pub mod L12_canonical;
 pub mod L13_namespace;
 
+#[cfg(feature = "sampler")]
 pub mod sampler;
 
 use std::collections::{HashMap, HashSet};

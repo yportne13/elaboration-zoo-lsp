@@ -201,7 +201,12 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let source_map = cli_client.source_map.clone();
 
     // Enable statistical sampling profiler if --sample flag is present
+    #[cfg(feature = "sampler")]
     let do_sample = args.iter().any(|a| a == "--sample");
+    #[cfg(not(feature = "sampler"))]
+    #[allow(unused_variables)]
+    let do_sample = false;
+    #[cfg(feature = "sampler")]
     if do_sample {
         eprintln!("Sampling profiler enabled (backtrace)...");
         elaboration_zoo_lsp::sampler::enable();
@@ -304,6 +309,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         });
     }
 
+    #[cfg(feature = "sampler")]
     if do_sample {
         eprintln!("Writing folded stacks...");
         elaboration_zoo_lsp::sampler::write_folded("sampler.folded")

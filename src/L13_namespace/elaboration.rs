@@ -743,6 +743,7 @@ impl Infer {
             "infer".red(),
             t,
         );*/
+        #[cfg(feature = "sampler")]
         crate::sampler::tick();
         let t_span = t.to_span();
         match t {

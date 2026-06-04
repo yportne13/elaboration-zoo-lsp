@@ -32,16 +32,20 @@ dashmap = "6.1.0"
 smol_str = "0.3.2"
 codespan-reporting = "0.13.1"
 dhat = { version = "0.3", optional = true }
-backtrace = "0.3"
-inferno = "0.12"
+backtrace = { version = "0.3", optional = true }
+inferno = { version = "0.12", optional = true }
 
 [features]
 dhat-heap = ["mem-profile"]
 mem-profile = ["dep:dhat"]
 stdio-monitor = []
+sampler = ["dep:backtrace", "dep:inferno"]
 
 [profile.release]
 lto = true
 codegen-units = 1
-# strip = true  # disabled for profiling (need debug symbols)
+# strip = true  # enabled for releases, disabled via release-profiling for profiling
+
+[profile.release-profiling]
+inherits = "release"
 debug = 2
