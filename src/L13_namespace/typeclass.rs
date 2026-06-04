@@ -162,6 +162,40 @@ impl Synth {
         instances.push(instance);
     }
 
+    /// Check if this trait has at least one instance whose Self-type head matches `self_type`.
+    /// Uses head_index for O(1) lookup; falls back to val_match scan when the index misses.
+    pub fn can_satisfy(&self, trait_name: &SmolStr, self_type: &Val) -> bool {
+        if let Some(head) = head_key(self_type) {
+            if let Some(indices) = self.head_index.get(&(trait_name.clone(), head)) {
+                return !indices.is_empty();
+            }
+        }
+        let instances = match self.class_instances.get(trait_name) {
+            Some(insts) => insts,
+            None => return false,
+        };
+        let out_params = self.trait_out_params.get(trait_name);
+        for inst in instances {
+            if inst.assertion.name != *trait_name {
+                continue;
+            }
+            if inst.assertion.arguments.is_empty() {
+                continue;
+            }
+            let first_is_out = out_params
+                .and_then(|op| op.first().copied())
+                .unwrap_or(false);
+            if first_is_out {
+                return true;
+            }
+            let mut subst = HashMap::new();
+            if Self::val_match(self_type, &inst.assertion.arguments[0], &mut subst) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn clean(&mut self) {
         self.generator_stack.clear();
         self.resume_stack.clear();

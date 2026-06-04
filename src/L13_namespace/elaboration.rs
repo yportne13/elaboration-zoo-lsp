@@ -1087,26 +1087,11 @@ impl Infer {
     }
     fn trait_wrap(&mut self, cxt: &Cxt, t: Span<SmolStr>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
-        // Wildcard Val: Flex metavariables match anything in val_eq
-        let wildcard_val: Rc<Val> = Val::Flex(MetaVar(u32::MAX), List::new()).into();
 
         if t.data.is_empty() {
             // Collect completions: find traits whose first non-out param could match typ_raw
             let completions: Vec<_> = self.trait_definition.iter()
-                .filter(|(x, (_, out_param, _))| {
-                    let total_len = out_param.len();
-                    let mut args = vec![typ_raw.clone()];
-                    for _ in 1..total_len {
-                        args.push(wildcard_val.clone());
-                    }
-                    self.trait_solver.clean();
-                    self.trait_solver
-                        .synth(Assertion {
-                            name: x.clone().clone(),
-                            arguments: args,
-                        })
-                        .is_some()
-                })
+                .filter(|(x, (_, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
                 .flat_map(|x| x.1.2.clone())
                 .collect();
             for method_decl in &completions {
@@ -1153,20 +1138,7 @@ impl Infer {
                         .find(|x| x.0.data == t.data)
                         .map(|x| (trait_name, trait_params, out_param, x))
                 })
-                .filter(|(x, _, out_param, _)| {
-                    let total_len = out_param.len();
-                    let mut args = vec![typ_raw.clone()];
-                    for _ in 1..total_len {
-                        args.push(wildcard_val.clone());
-                    }
-                    self.trait_solver.clean();
-                    self.trait_solver
-                        .synth(Assertion {
-                            name: x.clone().clone(),
-                            arguments: args,
-                        })
-                        .is_some()
-                })
+                .filter(|(x, _, _, _)| self.trait_solver.can_satisfy(x, &typ_raw))
                 .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type))| (
                     trait_name.clone(),
                     {
