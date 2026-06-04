@@ -19,6 +19,11 @@ impl[width: Nat] Add[Nat, UInt[width]] for UInt[width] {
         this + that.into
 }
 
+impl[width: Nat] Mul[Nat, UInt[width]] for UInt[width] {
+    def *(that: Nat): UInt[width] =
+        UInt.mk(None, binary(this.expr, "*", literal(that)))
+}
+
 impl[width: Nat] Sub[UInt[width], UInt[width]] for UInt[width] {
     def -(that: UInt[width]): UInt[width] =
         UInt.mk(None, binary(this.expr, "-", that.expr))
@@ -43,6 +48,11 @@ impl[width: Nat] Add[SInt[width], SInt[width]] for SInt[width] {
 impl[width: Nat] Add[Nat, SInt[width]] for SInt[width] {
     def +(that: Nat): SInt[width] =
         this + that.into
+}
+
+impl[width: Nat] Mul[Nat, SInt[width]] for SInt[width] {
+    def *(that: Nat): SInt[width] =
+        SInt.mk(None, binary(this.expr, "*", literal(that)))
 }
 
 impl[width: Nat] Sub[SInt[width], SInt[width]] for SInt[width] {
@@ -180,6 +190,11 @@ impl[width: Nat] SInt[width] {
         Bool.mk(None, binary(this.expr, "===", that.expr))
     def =/=(that: SInt[width]): Bool =
         Bool.mk(None, binary(this.expr, "=/=", that.expr))
+    // Nat comparison helpers
+    def eqNat(that: Nat): Bool =
+        Bool.mk(None, binary(this.expr, "===", literal(that)))
+    def neNat(that: Nat): Bool =
+        Bool.mk(None, binary(this.expr, "=/=", literal(that)))
 }
 
 // --- Bool comparisons ---
