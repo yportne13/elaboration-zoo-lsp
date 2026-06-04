@@ -93,6 +93,9 @@ pub struct Synth {
     pub root_answer: Option<Span<SmolStr>>,
     /// Tracks which arguments of each trait are output params.
     pub trait_out_params: HashMap<SmolStr, Vec<bool>>,
+    /// Index from (trait_name, head_constructor) to instance indices.
+    /// Uses the first non-out-param's head as the key for O(1) lookup.
+    pub head_index: HashMap<(SmolStr, SmolStr), Vec<usize>>,
 }
 
 impl Default for Synth {
@@ -104,12 +107,21 @@ impl Default for Synth {
             assertion_table: vec![],
             root_answer: None,
             trait_out_params: HashMap::new(),
+            head_index: HashMap::new(),
         }
     }
 }
 
 fn uncons<T: Clone>(xs: &List<T>) -> Option<(T, List<T>)> {
     xs.head().map(|x| (x.clone(), xs.tail()))
+}
+
+pub(crate) fn head_key(val: &Val) -> Option<SmolStr> {
+    match val {
+        Val::Decl(name, _) => Some(name.data.clone()),
+        Val::Sum(name, _, _, _) => Some(name.data.clone()),
+        _ => None,
+    }
 }
 
 impl Synth {
@@ -126,10 +138,28 @@ impl Synth {
     }
 
     pub fn impl_trait_for(&mut self, trait_name: SmolStr, instance: Instance) {
-        self.class_instances
-            .entry(trait_name)
-            .or_default()
-            .push(instance);
+        let instances = self.class_instances
+            .entry(trait_name.clone())
+            .or_default();
+        let idx = instances.len();
+
+        // Index by first non-out param's head constructor
+        if let Some(out_params) = self.trait_out_params.get(&trait_name) {
+            for (i, arg) in instance.assertion.arguments.iter().enumerate() {
+                if out_params.get(i).copied().unwrap_or(false) {
+                    continue;
+                }
+                if let Some(head) = head_key(arg) {
+                    self.head_index
+                        .entry((trait_name.clone(), head))
+                        .or_default()
+                        .push(idx);
+                }
+                break;
+            }
+        }
+
+        instances.push(instance);
     }
 
     pub fn clean(&mut self) {

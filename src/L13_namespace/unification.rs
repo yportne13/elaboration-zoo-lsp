@@ -6,7 +6,8 @@ use crate::parser_lib::Span;
 
 use super::{
     Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
-    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+    typeclass::{Assertion, Instance}, Raw, Rc, Decl,
 };
 
 use std::collections::HashMap;
@@ -520,14 +521,13 @@ impl Infer {
                 .map(|(_, val, _, _)| self.force(&cxt.decl, val))
                 .collect();
             // --- Phase 1: find all matching instances (lightweight, no elaboration) ---
-            // Collect lvls of instances whose assertion matches all_params via val_match.
-            // A match means: for each param, either it's a Flex out-param (skip), or val_match succeeds.
+            // Uses head_index for O(1) filtering when the Self-type head is known.
             let matching_lvls: Vec<Span<SmolStr>> = {
                 let instances = match self.trait_solver.class_instances.get(&name.data) {
                     Some(insts) => insts,
                     None => return Ok(None),
                 };
-                instances.iter().filter_map(|inst| {
+                let filter = |inst: &Instance| -> Option<Span<SmolStr>> {
                     if inst.assertion.name != name.data { return None; }
                     if inst.assertion.arguments.len() != all_params.len() { return None; }
                     let mut subst = std::collections::HashMap::new();
@@ -543,7 +543,23 @@ impl Infer {
                         }
                     }
                     if ok { Some(inst.lvl.clone()) } else { None }
-                }).collect()
+                };
+                // If the first non-out param has a known head, narrow via index
+                let self_head: Option<SmolStr> = (|| {
+                    for (i, arg) in all_params.iter().enumerate() {
+                        if !out_param.get(i).copied().unwrap_or(false) {
+                            return super::typeclass::head_key(arg);
+                        }
+                    }
+                    None
+                })();
+                match self_head {
+                    Some(head) => match self.trait_solver.head_index.get(&(name.data.clone(), head)) {
+                        Some(indices) if !indices.is_empty() => indices.iter().filter_map(|&i| filter(&instances[i])).collect(),
+                        _ => instances.iter().filter_map(filter).collect(),
+                    },
+                    None => instances.iter().filter_map(filter).collect(),
+                }
             };
             let candidate_count = matching_lvls.len();
             if candidate_count == 0 {
