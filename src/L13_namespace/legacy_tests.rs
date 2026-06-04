@@ -1013,6 +1013,15 @@ module Test[w: Nat] {
 }
 
 println(moduleVL(Test[8]))
+
+module adderNat {
+    input a = UInt[8]
+    output result = UInt[8]
+    result := a + 42
+}
+
+println(moduleVL(adderNat))
+
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
