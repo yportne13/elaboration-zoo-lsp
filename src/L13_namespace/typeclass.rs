@@ -484,17 +484,29 @@ impl Synth {
                     }
                 }
             }
-            Some((subgoal, _)) => {
-                // Look up the subgoal in the assertion table
+            Some((subgoal, remaining)) => {
                 if let Some(idx) = self.find_assertion_entry(&subgoal) {
-                    // Push existing answers to the resume stack
-                    let entry = &mut self.assertion_table[idx].1;
-                    let answers = entry.answers.clone();
+                    let answers = self.assertion_table[idx].1.answers.clone();
+                    let mut consumed = false;
                     for answer in &answers {
-                        self.resume_stack
-                            .push((consumer_node.clone(), answer.0.clone()));
+                        if self.try_answer(&subgoal, &answer.0) {
+                            if !consumed {
+                                // First matching answer: process depth-first
+                                self.consume(ConsumerNode {
+                                    goal: consumer_node.goal.clone(),
+                                    subgoals: remaining.clone(),
+                                    lvl: consumer_node.lvl.clone(),
+                                    assertion_idx: consumer_node.assertion_idx,
+                                });
+                                consumed = true;
+                            } else {
+                                // Remaining matches: push for backtracking
+                                self.resume_stack
+                                    .push((consumer_node.clone(), answer.0.clone()));
+                            }
+                        }
                     }
-                    entry.waiters.push(Waiter::ConsumerNode(consumer_node));
+                    self.assertion_table[idx].1.waiters.push(Waiter::ConsumerNode(consumer_node));
                 } else {
                     self.new_subgoal(&subgoal, &Waiter::ConsumerNode(consumer_node));
                 }
