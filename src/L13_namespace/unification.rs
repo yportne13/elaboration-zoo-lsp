@@ -453,19 +453,22 @@ impl Infer {
 
         Ok(())
     }
-    pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError>{
-        let prepare = self.meta.get(m.0 as usize ..)
-            .iter()
-            .flat_map(|x| x.iter())
-            .enumerate()
-            .flat_map(|x| if let MetaEntry::Unsolved(v, _, _) = x.1 { Some((x.0, v.clone())) } else { None })
-            .collect::<Vec<_>>();
-        for (idx, x) in prepare {
+    pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError> {
+        // Clean up entries pointing to truncated metas
+        self.trait_metas.retain(|mv| (mv.0 as usize) < self.meta.len());
+        // Iterate only trait-typed metas (not ALL metas)
+        for mv in self.trait_metas.clone() {
+            if mv.0 < m.0 { continue; }
+            let idx = mv.0 as usize;
+            if idx >= self.meta.len() { continue; }
+            let x = match &self.meta[idx] {
+                MetaEntry::Unsolved(v, _, _) => v.clone(),
+                _ => continue,
+            };
             let typ = self.solve_trait(cxt, &x, allow_flex_defaulting)
                 .map_err(UnifyError::Trait)?;
             if let Some((_, val)) = typ {
-                //println!("solve trait {:?}\nmeta: {}\n{:?}", val, idx, self.meta[idx + m.0 as usize]);
-                self.meta[idx + m.0 as usize] = MetaEntry::Solved(val, x);
+                self.meta[idx] = MetaEntry::Solved(val, x);
             }
         }
         Ok(())

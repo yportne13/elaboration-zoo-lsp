@@ -359,6 +359,7 @@ impl IError {
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
+    trait_metas: Vec<MetaVar>,
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<SmolStr, Vec<bool>>,
@@ -639,6 +640,7 @@ impl Infer {
         Self {
             meta: vec![],
             meta_contrains: vec![],
+            trait_metas: vec![],
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
@@ -984,6 +986,7 @@ impl Infer {
             a
         } else if let Val::Sum(_, _, _, true) = a.as_ref() {
             let m = self.new_meta(a.clone(), cxt.clone(), a);
+            self.trait_metas.push(MetaVar(m));
             Tm::Meta(MetaVar(m)).into()
         } else {
             //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
