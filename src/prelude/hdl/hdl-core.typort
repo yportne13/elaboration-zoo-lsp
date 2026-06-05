@@ -84,6 +84,7 @@ enum Expr {
     createSIntRegWidth(name: String, width: Nat)
     createSIntRegWidthInit(name: String, width: Nat, initVal: Expr)
     literal(v: Nat)
+    unary(op: String, e: Expr)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
     regAssign(lhs: Expr, rhs: Expr)

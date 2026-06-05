@@ -252,6 +252,34 @@ impl Equal[Bool, Bool] for Bool {
 }
 
 // ============================================================
+//  Bool Logic Operations
+// ============================================================
+
+impl Bool {
+    def &&(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "&&", that.expr))
+    def ||(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "||", that.expr))
+    def ! : Bool =
+        Bool.mk(None, unary("!", this.expr))
+}
+
+impl And[Bool, Bool] for Bool {
+    def &(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "&", that.expr))
+}
+
+impl Or[Bool, Bool] for Bool {
+    def |(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "|", that.expr))
+}
+
+impl Xor[Bool, Bool] for Bool {
+    def ^(that: Bool): Bool =
+        Bool.mk(None, binary(this.expr, "^", that.expr))
+}
+
+// ============================================================
 //  Reduction Operators
 // ============================================================
 

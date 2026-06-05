@@ -1487,3 +1487,33 @@ println(moduleVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_hdl_bool_operators() {
+    let input = r#"
+module Test {
+    let a = Bool
+    let b = Bool
+    let and = Bool
+    let or = Bool
+    let not = Bool
+    let xor = Bool
+    and := a && b
+    or := a || b
+    not := !a
+    xor := a ^ b
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("&&"), "&& operator in verilog");
+            assert!(output.contains("||"), "|| operator in verilog");
+            assert!(output.contains("!("), "! operator in verilog");
+            assert!(output.contains("^"), "xor operator in verilog");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
