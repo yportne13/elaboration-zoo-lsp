@@ -446,12 +446,55 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     input = input_t;
                     rhs.into_iter().fold(lhs, Raw::app)
                 } else if &op.data == "{" {
-                    let (input_t, rhs) = p_raw
-                        .many1_sep((kw(T![,]), kw(EndLine).option()))
-                        .parse(input, state)?;
+                    // Scala-style apply block: f { stmt1; stmt2; result }
+                    // All but last become "let _useless = stmt;" desugaring.
+                    let mut stmts: Vec<Raw> = Vec::new();
+                    let mut input_t = input;
+                    // consume newlines after {
+                    while let Ok((i, _)) = kw(EndLine).parse(input_t, state) {
+                        input_t = i;
+                    }
+                    // parse statements separated by newlines
+                    loop {
+                        match p_raw.parse(input_t, state) {
+                            Ok((i, expr)) => {
+                                stmts.push(expr);
+                                input_t = i;
+                            }
+                            Err(_) => break,
+                        }
+                        if kw(EndLine).parse(input_t, state).is_ok() {
+                            // consume any additional newlines (blank lines)
+                            while let Ok((i, _)) = kw(EndLine).parse(input_t, state) {
+                                input_t = i;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    // consume optional newline before }
+                    let _ = kw(EndLine).option().parse(input_t, state);
                     let (input_t, _) = kw(RCurly).parse(input_t, state)?;
                     input = input_t;
-                    rhs.into_iter().fold(lhs, Raw::app)
+                    if stmts.len() <= 1 {
+                        match stmts.into_iter().next() {
+                            Some(expr) => Raw::app(lhs, expr),
+                            None => Raw::app(lhs, Raw::Hole(empty_span(()))),
+                        }
+                    } else {
+                        let func = lhs.clone();
+                        let last = stmts.pop().unwrap();
+                        let mut result = last;
+                        for stmt in stmts.into_iter().rev() {
+                            result = Raw::Let(
+                                empty_span(SmolStr::new("_useless")),
+                                Box::new(Raw::Hole(empty_span(()))),
+                                Box::new(stmt),
+                                Box::new(result),
+                            );
+                        }
+                        Raw::app(func, result)
+                    }
                 } else {
                     Raw::app(lhs, Raw::Var(op))
                 };
