@@ -191,11 +191,24 @@ def regsVL[ne: Nat](es: Vec[Expr] ne): String =
     }
 
 // Generate clocked always @(posedge clk) block from regAssign entries
+def hasClockLines[ne: Nat](es: Vec[Expr] ne): Boolean =
+    match list_reverse(collectClockLines es) {
+        case lnil => false
+        case _ => true
+    }
+
 def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
     let ls = list_reverse(collectClockLines es);
-    match ls {
-        case lnil => ""
-        case _ => "  always @(posedge clk) begin\n" + joinLines(ls) + "\n" + "  end\n"
+    let has_clk = hasClockLines es;
+    match has_clk {
+        case false => ""
+        case true =>
+            let base = "  always @(posedge clk) begin\n" + joinLines(ls) + "\n" + "  end\n";
+            let need_reset = hasResetRegs;
+            match need_reset {
+                case false => base
+                case true => "  always @(posedge clk or posedge reset) begin\n    if (reset) begin\n    end else begin\n" + joinLines(ls) + "\n    end\n  end\n"
+            }
     }
 
 // Convert a Module to a Verilog string
@@ -214,7 +227,8 @@ def moduleVL(m: Module): String =
         case true => ",\n  input wire clk"
         case false => ""
     };
-    let reset_port = match has_regs {
+    let need_reset = hasResetRegs;
+    let reset_port = match need_reset {
         case true => ",\n  input wire reset"
         case false => ""
     };

@@ -1449,6 +1449,17 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                 ).unwrap();
             }
     }
+    // Initialize ResetMap global for HDL register reset support
+    let init_code = "println(initResetMap)\n";
+    if let Some((decls, parse_errs, _, _)) = parser::parser_with_macros(&preprocess(init_code), 999, &global_macros) {
+        for ast_err in parse_errs {
+            println!("{:?}", ast_err)
+        }
+        for tm in decls {
+            let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+            cxt = new_cxt;
+        }
+    }
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
     let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
         .filter(|(k, _)| k.contains('.'))

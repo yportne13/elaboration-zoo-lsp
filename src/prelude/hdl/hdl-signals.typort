@@ -68,6 +68,22 @@ def newBoolReg(name: String): Bool =
     let e = createSignalExpr(name, createReg(name));
     Bool.mk(Some(name), e)
 
+// Register with Nat literal reset value (for use in macros)
+def newUIntRegInitNat[width: Nat](name: String, w: Nat, initVal: Nat): UInt[width] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    let d = addResetEntry(name, literal(initVal));
+    UInt.mk(Some(name), e)
+
+def newSIntRegInitNat[width: Nat](name: String, w: Nat, initVal: Nat): SInt[width] =
+    let e = createSignalExpr(name, createSIntRegWidth(name, w));
+    let d = addResetEntry(name, literal(initVal));
+    SInt.mk(Some(name), e)
+
+def newBitsRegInitNat[width: Nat](name: String, w: Nat, initVal: Nat): Bits[width] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    let d = addResetEntry(name, literal(initVal));
+    Bits.mk(Some(name), e)
+
 // ---- Direction annotation helpers (SpinalHDL style) ----
 // These are for use inside Bundle declarations.
 // For regular signal declarations, use the Expr macro:

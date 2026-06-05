@@ -36,6 +36,7 @@ def RegNext[T](nextVal: T): Reg[T] =
 
 impl[T] Reg[T] {
     def value: T = this.initial_value
+    def withClockDomain(cd: ClockDomain): Reg[T] = Reg.mk this.initial_value cd
 }
 
 impl[T] T {

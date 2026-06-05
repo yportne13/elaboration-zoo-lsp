@@ -228,3 +228,33 @@ def createSignalExpr(name: String, e: Expr): Expr =
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
             e
     }
+
+// ---------- Reset value tracking (side-channel for reg init values) ----------
+
+struct ResetMap {
+    names: List[String]
+    values: List[Expr]
+}
+
+def initResetMap(): Unit =
+    let dummy = create_global("ResetMap", ResetMap.mk lnil lnil);
+    unit
+
+def addResetEntry(name: String, value: Expr): Unit =
+    let cur = change_mutable("ResetMap", x => ResetMap.mk (lcons (name, x.names)) (lcons (value, x.values)));
+    unit
+
+def hasResetRegs: Boolean =
+    let cur = get_global("ResetMap");
+    match cur.names {
+        case lnil => false
+        case _ => true
+    }
+
+def collectResetNames: List[String] =
+    let cur = get_global("ResetMap");
+    cur.names
+
+def collectResetValues: List[Expr] =
+    let cur = get_global("ResetMap");
+    cur.values
