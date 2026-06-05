@@ -1298,3 +1298,192 @@ fn test_example_alu() {
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_hdl_reg_init_sint() {
+    let input = r#"
+module Test {
+    let a = newSIntRegInitNat("myreg", 8, 0)
+    a := a + 1
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("reg signed"), "SInt reg should be 'reg signed'");
+            assert!(output.contains("myreg <= 0;"), "reset body should init to 0");
+            assert!(output.contains("posedge reset"), "should have async reset");
+            assert!(output.contains("input wire reset"), "should have reset port");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_reg_init_uint() {
+    let input = r#"
+module Test {
+    let a = newUIntRegInitNat("myreg", 16, 42)
+    a := a + 1
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(!output.contains("signed"), "UInt reg should NOT have 'signed'");
+            assert!(output.contains("myreg <= 42;"), "reset body should init to 42");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_reg_init_bits() {
+    let input = r#"
+module Test {
+    let a = newBitsRegInitNat("myreg", 8, 1)
+    let b = Bits[8]
+    a := a ^ b
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("myreg <= 1;"), "reset body should init to 1");
+            assert!(output.contains("posedge reset"), "should have async reset");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_reg_no_init() {
+    let input = r#"
+module Test {
+    let a = newSIntReg("myreg", 8)
+    a := a + 1
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("reg signed"), "SInt reg should be 'reg signed'");
+            assert!(output.contains("input wire clk"), "should have clk port");
+            assert!(!output.contains("input wire reset"), "should NOT have reset port");
+            assert!(!output.contains("posedge reset"), "should NOT have async reset");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_multiple_reg_inits() {
+    let input = r#"
+module Test {
+    let a = newSIntRegInitNat("reg_a", 8, 0)
+    let b = newUIntRegInitNat("reg_b", 16, 3)
+    let c = newBitsRegInitNat("reg_c", 32, 5)
+    a := a + 1
+    b := b - 1
+    let d = Bits[32]
+    c := c ^ d
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("reg_a <= 0;"), "reg_a init to 0");
+            assert!(output.contains("reg_b <= 3;"), "reg_b init to 3");
+            assert!(output.contains("reg_c <= 5;"), "reg_c init to 5");
+            assert!(output.contains("posedge reset"), "should have async reset");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_mixed_reg_inits() {
+    let input = r#"
+module Test {
+    let a = newSIntRegInitNat("reg_a", 8, 0)
+    let b = newSIntReg("reg_b", 8)
+    a := a + 1
+    b := b + 2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("reg_a <= 0;"), "init reg in reset body");
+            assert!(output.contains("reg_b <= (reg_b + 2);"), "plain reg in else branch");
+            assert!(output.contains("posedge reset"), "should have async reset");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_reg_init_with_ports_no_comma() {
+    let input = r#"
+module Test {
+    input clk = Bool
+    input rst = Bool
+    let a = newSIntRegInitNat("myreg", 8, 0)
+    a := a + 1
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(!output.contains("(,"), "should NOT have leading comma");
+            assert!(output.contains("input wire clk"), "should keep user clk");
+            assert!(output.contains("input wire rst"), "should keep user rst");
+            assert!(output.contains("myreg <= 0;"), "reset body present");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_reg_init_in_when() {
+    // Register inside when block — assignment is wrapped in when() expr,
+    // so the clocked block (and its reset assistant) don't apply here.
+    // The when generates combinational always @(*) with the regAssign inside.
+    let input = r#"
+module Test {
+    let cond = Bool
+    let a = newSIntRegInitNat("myreg", 8, 0)
+    when(cond) {
+        a := a + 1
+    }
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            // Reg declaration present
+            assert!(output.contains("reg signed"), "reg signed present");
+            // Reset port present (detected from init reg variant)
+            assert!(output.contains("input wire reset"), "reset port present");
+            // When block generated
+            assert!(output.contains("cond) begin"), "when condition in always block");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
