@@ -26,6 +26,10 @@ def exprVL(e: Expr): String = match e {
     case createOutWidth(name, _) => name
     case createReg(name) => name
     case createRegWidth(name, _) => name
+    case createSIntWidth(name, _) => name
+    case createSIntInWidth(name, _) => name
+    case createSIntOutWidth(name, _) => name
+    case createSIntRegWidth(name, _) => name
     case literal(v) => natToDec(v)
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
@@ -68,6 +72,10 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createOutWidth(_, _) => collectAssignLines tail
         case createReg(_) => collectAssignLines tail
         case createRegWidth(_, _) => collectAssignLines tail
+        case createSIntWidth(_, _) => collectAssignLines tail
+        case createSIntInWidth(_, _) => collectAssignLines tail
+        case createSIntOutWidth(_, _) => collectAssignLines tail
+        case createSIntRegWidth(_, _) => collectAssignLines tail
         case regAssign(_, _) => collectAssignLines tail
         case literal(_) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
@@ -90,6 +98,8 @@ def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
         case createOut(_) => true
         case createInWidth(_, _) => true
         case createOutWidth(_, _) => true
+        case createSIntInWidth(_, _) => true
+        case createSIntOutWidth(_, _) => true
         case _ => hasPorts tail
     }
 }
@@ -102,6 +112,8 @@ def collectPortLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createOut(name) => lcons ("  output wire " + name) (collectPortLines tail)
         case createInWidth(name, w) => lcons ("  input wire [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
         case createOutWidth(name, w) => lcons ("  output wire [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
+        case createSIntInWidth(name, w) => lcons ("  input wire signed [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
+        case createSIntOutWidth(name, w) => lcons ("  output wire signed [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
         case _ => collectPortLines tail
     }
 }
@@ -121,6 +133,7 @@ def collectWireLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case cons(e, tail) => match e {
         case create(name) => lcons ("  wire " + name + ";") (collectWireLines tail)
         case createWidth(name, w) => lcons ("  wire [" + natToDec(w - 1) + ":0] " + name + ";") (collectWireLines tail)
+        case createSIntWidth(name, w) => lcons ("  wire signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectWireLines tail)
         case _ => collectWireLines tail
     }
 }
@@ -131,6 +144,7 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case cons(e, tail) => match e {
         case createReg(name) => lcons ("  reg " + name + ";") (collectRegLines tail)
         case createRegWidth(name, w) => lcons ("  reg [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
+        case createSIntRegWidth(name, w) => lcons ("  reg signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
         case _ => collectRegLines tail
     }
 }

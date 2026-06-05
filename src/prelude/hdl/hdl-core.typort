@@ -77,6 +77,10 @@ enum Expr {
     createOutWidth(name: String, width: Nat)
     createReg(name: String)
     createRegWidth(name: String, width: Nat)
+    createSIntWidth(name: String, width: Nat)
+    createSIntInWidth(name: String, width: Nat)
+    createSIntOutWidth(name: String, width: Nat)
+    createSIntRegWidth(name: String, width: Nat)
     literal(v: Nat)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
@@ -91,6 +95,7 @@ enum Expr {
 def isRegExpr(e: Expr): Boolean = match e {
     case createReg(_) => true
     case createRegWidth(_, _) => true
+    case createSIntRegWidth(_, _) => true
     case _ => false
 }
 
@@ -202,6 +207,18 @@ def createSignalExpr(name: String, e: Expr): Expr =
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntOutWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntRegWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case literal(_) =>

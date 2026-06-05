@@ -1097,6 +1097,128 @@ module Test {
 }
 
 #[test]
+fn test_hdl_sint_ports() {
+    let input = r#"
+module Test {
+    input a = SInt[8]
+    input b = SInt[8]
+    output c = SInt[8]
+    let sum = SInt[8]
+    sum := a + b
+    c := sum
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("signed"), "SInt ports must have 'signed' keyword, got:\n{}", output);
+            assert!(output.contains("input wire signed"), "input SInt should be 'input wire signed', got:\n{}", output);
+            assert!(output.contains("output wire signed"), "output SInt should be 'output wire signed', got:\n{}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_sint_wires_and_regs() {
+    let input = r#"
+module Test {
+    let a = SInt[8]
+    let b = SInt[8]
+    reg c = SInt[16]
+    let sum = SInt[8]
+    sum := a + b
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("wire signed"), "wire SInt should have 'wire signed', got:\n{}", output);
+            assert!(output.contains("reg signed"), "reg SInt should have 'reg signed', got:\n{}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_sint_arithmetic() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = SInt[w]
+    let b = SInt[w]
+    let sum = SInt[w]
+    let diff = SInt[w]
+    let carry = SInt[w + 1]
+    sum := a + b
+    diff := a - b
+    carry := a +^ b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_sint_shift() {
+    let input = r#"
+module Test {
+    let a = SInt[8]
+    let shl = SInt[8]
+    let shr = SInt[8]
+    shl := a << 2
+    shr := a >> 2
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_sint_comparisons() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = SInt[w]
+    let b = SInt[w]
+    let lt = Bool
+    let eq = Bool
+    lt := a < b
+    eq := a === b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_sint_conversions() {
+    let input = r#"
+module Test[w: Nat] {
+    let a = SInt[w]
+    let as_bits = Bits[w]
+    let as_uint = UInt[w]
+    let resized = SInt[w + 1]
+    as_bits := a.asBits
+    as_uint := a.asUInt
+    resized := a.resize[w + 1]
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_example_theorem_proving() {
     let input = include_str!("../../examples/theorem_proving.typort");
     match run_with_prelude(input) {

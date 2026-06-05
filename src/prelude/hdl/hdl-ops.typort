@@ -133,7 +133,7 @@ impl[width: Nat] SInt[width] {
     def <<(that: Nat): SInt[width] =
         SInt.mk(None, binary(this.expr, "<<", literal(that)))
     def >>(that: Nat): SInt[width] =
-        SInt.mk(None, binary(this.expr, ">>", literal(that)))
+        SInt.mk(None, binary(this.expr, ">>>", literal(that)))
 }
 
 impl[width: Nat] Bits[width] {
