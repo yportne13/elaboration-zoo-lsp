@@ -7,17 +7,47 @@ use super::{
 };
 
 fn count_nat(val: &Rc<Val>) -> u64 {
-    match val.as_ref() {
-        Val::SumCase { case_name, datas, .. } if case_name.data == "zero" => 0,
-        Val::SumCase { case_name, datas, .. } if case_name.data == "succ" => {
-            if let Some((_, prev, _)) = datas.first() {
-                1 + count_nat(prev)
-            } else {
-                0
+    try_count_nat(val).unwrap_or(0)
+}
+
+pub(super) fn try_count_nat(val: &Rc<Val>) -> Option<u64> {
+    let mut count = 0u64;
+    let mut current = val.clone();
+    loop {
+        match current.as_ref() {
+            Val::SumCase { case_name, datas, .. } if case_name.data == "zero" => {
+                return Some(count);
             }
+            Val::SumCase { case_name, datas, .. } if case_name.data == "succ" => {
+                let (_, prev, _) = datas.first()?;
+                count = count.checked_add(1)?;
+                current = prev.clone();
+            }
+            _ => return None,
         }
-        _ => 0,
     }
+}
+
+pub(super) fn build_nat(count: u64, nat_type: &Rc<Val>) -> Rc<Val> {
+    let mut result = Rc::new(Val::SumCase {
+        is_trait: false,
+        typ: nat_type.clone(),
+        case_name: empty_span(SmolStr::new("zero")),
+        datas: Rc::new(vec![]),
+    });
+    for _ in 0..count {
+        result = Rc::new(Val::SumCase {
+            is_trait: false,
+            typ: nat_type.clone(),
+            case_name: empty_span(SmolStr::new("succ")),
+            datas: Rc::new(vec![(
+                empty_span(SmolStr::new("n")),
+                result,
+                Icit::Expl,
+            )]),
+        });
+    }
+    result
 }
 
 pub(super) fn nat_to_dec(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {

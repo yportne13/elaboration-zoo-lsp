@@ -93,6 +93,7 @@ pub enum Raw {
     Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
     Hole(Span<()>),
     LiteralIntro(Span<String>),
+    Nat(u64),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
     Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Icit, Raw)>, Vec<Span<SmolStr>>, u32, bool),
     SumCase {
@@ -127,6 +128,7 @@ impl Raw {
             Raw::Let(span, _, _, raw2) => span.to_span() + raw2.to_span(),
             Raw::Hole(span) => span.clone(),//TODO:
             Raw::LiteralIntro(span) => span.to_span(),
+            Raw::Nat(_) => empty_span(()),
             Raw::Match(raw, items) => items.last()
                 .map(|x| raw.to_span() + x.1.to_span())
                 .unwrap_or(raw.to_span()),
@@ -157,6 +159,7 @@ impl std::fmt::Display for Raw {
             Raw::Let(name, typ, expr, body) => write!(f, "(let {} : {} = {};\n{})", name.data, typ, expr, body),
             Raw::Hole(_) => write!(f, "_"),
             Raw::LiteralIntro(lit) => write!(f, "\"{}\"", lit.data),
+            Raw::Nat(n) => write!(f, "{}", n),
             Raw::Match(expr, cases) => {
                 write!(f, "(match {}", expr)?;
                 for (pattern, result) in cases {

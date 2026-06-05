@@ -375,14 +375,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .or(kw(Hole).map(Raw::Hole))
         .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(string(Num).map(|x| {
-            let num_span = x.map(|x| x.parse::<u64>().unwrap());
-            let mut ret = Raw::Var(num_span.to_span().map(|_| SmolStr::new("zero")));
-            let mut num = num_span.data;
-            while num > 0 {
-                ret = Raw::app(Raw::Var(num_span.to_span().map(|_| SmolStr::new("succ"))), ret);
-                num -= 1;
-            }
-            ret
+            Raw::Nat(x.map(|x| x.parse::<u64>().unwrap()).data)
         }))
         .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole(empty_span(())))))
         .parse(input, state)

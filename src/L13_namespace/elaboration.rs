@@ -6,7 +6,7 @@ use smol_str::SmolStr;
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
+    Closure, Cxt, DeclTm, Error, Infer, PrimFunc, Tm, VTy, Val,
     Lvl, Rc, MetaVar,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
@@ -1103,6 +1103,15 @@ impl Infer {
             }
 
             Raw::LiteralIntro(literal) => Ok((Tm::LiteralIntro(literal).into(), Val::LiteralType.into())),
+
+            Raw::Nat(n) => {
+                let nat_type = cxt.decl.get("Nat").map(|x| x.2.clone())
+                    .unwrap_or_else(|| Val::U(0).into());
+                let f = PrimFunc(Rc::new(move |_, _, _, typ| {
+                    super::cxt::build_nat(n, &typ)
+                }));
+                Ok((Tm::Prim(nat_type.clone(), f).into(), nat_type))
+            }
 
             Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()), vec![])),
 
