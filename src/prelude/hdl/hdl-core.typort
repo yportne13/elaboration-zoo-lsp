@@ -77,10 +77,12 @@ enum Expr {
     createOutWidth(name: String, width: Nat)
     createReg(name: String)
     createRegWidth(name: String, width: Nat)
+    createRegWidthInit(name: String, width: Nat, initVal: Expr)
     createSIntWidth(name: String, width: Nat)
     createSIntInWidth(name: String, width: Nat)
     createSIntOutWidth(name: String, width: Nat)
     createSIntRegWidth(name: String, width: Nat)
+    createSIntRegWidthInit(name: String, width: Nat, initVal: Expr)
     literal(v: Nat)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
@@ -91,11 +93,13 @@ enum Expr {
     nop
 }
 
-// Check if an Expr is a register signal (createReg/createRegWidth)
+// Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
 def isRegExpr(e: Expr): Boolean = match e {
     case createReg(_) => true
     case createRegWidth(_, _) => true
+    case createRegWidthInit(_, _, _) => true
     case createSIntRegWidth(_, _) => true
+    case createSIntRegWidthInit(_, _, _) => true
     case _ => false
 }
 
@@ -209,6 +213,9 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case createRegWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
+        case createRegWidthInit(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
         case createSIntWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
@@ -221,6 +228,9 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case createSIntRegWidth(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
+        case createSIntRegWidthInit(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
         case literal(_) =>
             e
         case _ =>
@@ -229,32 +239,35 @@ def createSignalExpr(name: String, e: Expr): Expr =
             e
     }
 
-// ---------- Reset value tracking (side-channel for reg init values) ----------
+// ---------- Reset value tracking (embedded in Expr via create*RegWidthInit variants) ----------
+// Reset init values are stored directly in Expr variants (createRegWidthInit,
+// createSIntRegWidthInit). This avoids global state pattern-matching issues.
+// The following functions query a module's expressions for regs-with-reset:
 
-struct ResetMap {
-    names: List[String]
-    values: List[Expr]
+def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
+    case nil => false
+    case cons(e, tail) => match e {
+        case createRegWidthInit(_, _, _) => true
+        case createSIntRegWidthInit(_, _, _) => true
+        case _ => hasInitRegs tail
+    }
 }
 
-def initResetMap(): Unit =
-    let dummy = create_global("ResetMap", ResetMap.mk lnil lnil);
-    unit
+// Convert reset init value to Verilog literal string.
+// Only literal(Nat) is supported; all other values default to "0".
+// Uses the Rust builtin nat_to_dec directly (the natToDec wrapper is in hdl-verilog.typort)
+def verilogLiteral(e: Expr): String = match e {
+    case literal(v) => nat_to_dec(v)
+    case _ => "0"
+}
 
-def addResetEntry(name: String, value: Expr): Unit =
-    let cur = change_mutable("ResetMap", x => ResetMap.mk (lcons (name, x.names)) (lcons (value, x.values)));
-    unit
-
-def hasResetRegs: Boolean =
-    let cur = get_global("ResetMap");
-    match cur.names {
-        case lnil => false
-        case _ => true
+def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case createRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case createSIntRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case _ => collectInitLines tail
     }
-
-def collectResetNames: List[String] =
-    let cur = get_global("ResetMap");
-    cur.names
-
-def collectResetValues: List[Expr] =
-    let cur = get_global("ResetMap");
-    cur.values
+}

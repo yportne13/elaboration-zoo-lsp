@@ -26,10 +26,12 @@ def exprVL(e: Expr): String = match e {
     case createOutWidth(name, _) => name
     case createReg(name) => name
     case createRegWidth(name, _) => name
+    case createRegWidthInit(name, _, _) => name
     case createSIntWidth(name, _) => name
     case createSIntInWidth(name, _) => name
     case createSIntOutWidth(name, _) => name
     case createSIntRegWidth(name, _) => name
+    case createSIntRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
     case binary(lhs, op, rhs) =>
         "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
@@ -72,10 +74,12 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createOutWidth(_, _) => collectAssignLines tail
         case createReg(_) => collectAssignLines tail
         case createRegWidth(_, _) => collectAssignLines tail
+        case createRegWidthInit(_, _, _) => collectAssignLines tail
         case createSIntWidth(_, _) => collectAssignLines tail
         case createSIntInWidth(_, _) => collectAssignLines tail
         case createSIntOutWidth(_, _) => collectAssignLines tail
         case createSIntRegWidth(_, _) => collectAssignLines tail
+        case createSIntRegWidthInit(_, _, _) => collectAssignLines tail
         case regAssign(_, _) => collectAssignLines tail
         case literal(_) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
@@ -144,7 +148,9 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case cons(e, tail) => match e {
         case createReg(name) => lcons ("  reg " + name + ";") (collectRegLines tail)
         case createRegWidth(name, w) => lcons ("  reg [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
+        case createRegWidthInit(name, w, _) => lcons ("  reg [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
         case createSIntRegWidth(name, w) => lcons ("  reg signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
+        case createSIntRegWidthInit(name, w, _) => lcons ("  reg signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
         case _ => collectRegLines tail
     }
 }
@@ -200,20 +206,25 @@ def hasClockLines[ne: Nat](es: Vec[Expr] ne): Boolean =
 def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
     let ls = list_reverse(collectClockLines es);
     let has_clk = hasClockLines es;
+    let init_lines = list_reverse(collectInitLines es);
+    let need_reset = match init_lines {
+        case lnil => false
+        case _ => true
+    };
     match has_clk {
         case false => ""
         case true =>
             let base = "  always @(posedge clk) begin\n" + joinLines(ls) + "\n" + "  end\n";
-            let need_reset = hasResetRegs;
             match need_reset {
                 case false => base
-                case true => "  always @(posedge clk or posedge reset) begin\n    if (reset) begin\n    end else begin\n" + joinLines(ls) + "\n    end\n  end\n"
+                case true => "  always @(posedge clk or posedge reset) begin\n    if (reset) begin\n" + joinLines(init_lines) + "\n    end else begin\n" + joinLines(ls) + "\n    end\n  end\n"
             }
     }
 
 // Convert a Module to a Verilog string
 def moduleVL(m: Module): String =
     let port_decls = portsVL(m.expr);
+    let port_lines = list_reverse(collectPortLines m.expr);
     let wire_decls = wiresVL(m.expr);
     let reg_decls = regsVL(m.expr);
     let assigns = assignsVL(m.expr);
@@ -223,13 +234,27 @@ def moduleVL(m: Module): String =
         case lnil => false
         case _ => true
     };
-    let clk_port = match has_regs {
-        case true => ",\n  input wire clk"
-        case false => ""
+    let has_ports = match port_lines {
+        case lnil => false
+        case _ => true
     };
-    let need_reset = hasResetRegs;
-    let reset_port = match need_reset {
-        case true => ",\n  input wire reset"
-        case false => ""
+    let has_init = hasInitRegs m.expr;
+    let p0 = port_decls;
+    let p1 = match has_regs {
+        case false => p0
+        case true => match has_ports {
+            case false => "  input wire clk"
+            case _ => p0 + ",\n  input wire clk"
+        }
     };
-    "module " + m.name + " (\n" + port_decls + clk_port + reset_port + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
+    let p2 = match has_init {
+        case false => p1
+        case true => match has_regs {
+            case false => match has_ports {
+                case false => "  input wire reset"
+                case true => port_decls + ",\n  input wire reset"
+            }
+            case true => p1 + ",\n  input wire reset"
+        }
+    };
+    "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
