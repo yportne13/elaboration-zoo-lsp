@@ -3,7 +3,7 @@
 // ============================================================
 
 // ============================================================
-//  Bundle (structured IO)
+//  Bundle (structured IO) — SpinalHDL-style trait-based Bundle
 // ============================================================
 
 // IO direction tags
@@ -13,27 +13,33 @@ enum IODirection {
     InOut
 }
 
-// A bundle is just a struct with direction annotations
-// The macro system makes it ergonomic
+// The Bundle trait — analogous to SpinalHDL's Bundle.
+// Any struct that groups multiple signals together can implement
+// this trait to enable bulk assignment (:=) and composition.
+//
+// Use #[derive(Bundle)] to auto-generate the impl.
+//
+// Example:
+//   #[derive(Bundle)]
+//   struct AxiLite {
+//       awaddr:  UInt[32]
+//       awvalid: Bool
+//       awready: Bool
+//       wdata:   UInt[32]
+//   }
+//
+// This generates:
+//   impl Bundle for AxiLite {
+//       def :=(that: AxiLite): Unit =
+//           let __b0 = this.awaddr  := that.awaddr;
+//           let __b1 = this.awvalid := that.awvalid;
+//           let __b2 = this.awready := that.awready;
+//           let __b3 = this.wdata   := that.wdata;
+//           unit
+//   }
 
-struct Bundle0 {}
-struct Bundle1[A] {
-    b0: A
-}
-struct Bundle2[A, B] {
-    b0: A
-    b1: B
-}
-struct Bundle3[A, B, C] {
-    b0: A
-    b1: B
-    b2: C
-}
-struct Bundle4[A, B, C, D] {
-    b0: A
-    b1: B
-    b2: C
-    b3: D
+trait Bundle {
+    def :=(that: Self): Unit
 }
 
 // ============================================================

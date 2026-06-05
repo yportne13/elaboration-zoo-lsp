@@ -12,6 +12,7 @@ pub type DeriveRegistry = HashMap<String, DeriveMacro>;
 pub fn default_derive_registry() -> DeriveRegistry {
     let mut registry: DeriveRegistry = HashMap::new();
     registry.insert("Show".to_string(), derive_show);
+    registry.insert("Bundle".to_string(), derive_bundle);
     registry
 }
 
@@ -120,6 +121,103 @@ fn build_enum_case(
     };
 
     (pattern, body)
+}
+
+/// Build a bundle `:=` body: sequences field assignments as nested let-bindings.
+/// For struct fields [f1: T1, f2: T2, ...], generates:
+///   let __b0 = this.f1 := that.f1;
+///   let __b1 = this.f2 := that.f2;
+///   unit
+fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+    if fields.is_empty() {
+        return Raw::Var(empty_span(SmolStr::new("unit")));
+    }
+
+    let mut result = Raw::Var(empty_span(SmolStr::new("unit")));
+
+    for (i, (field_name, _, _)) in fields.iter().enumerate().rev() {
+        let assign = Raw::App(
+            Box::new(Raw::Obj(
+                Box::new(Raw::Obj(
+                    Box::new(Raw::Var(empty_span(SmolStr::new("this")))),
+                    Some(field_name.clone()),
+                )),
+                Some(empty_span(SmolStr::new(":="))),
+            )),
+            Box::new(Raw::Obj(
+                Box::new(Raw::Var(empty_span(SmolStr::new("that")))),
+                Some(field_name.clone()),
+            )),
+            Either::Icit(Icit::Expl),
+        );
+
+        result = Raw::Let(
+            empty_span(SmolStr::new(format!("__b{}", i))),
+            Box::new(Raw::Hole(empty_span(()))),
+            Box::new(assign),
+            Box::new(result),
+        );
+    }
+
+    result
+}
+
+/// Derive Bundle: for a single-constructor enum (struct), generates:
+///   impl Bundle for StructName { def :=(that: StructName): Unit = ... }
+/// with sequenced field-by-field assignments.
+fn derive_bundle(decl: &Decl) -> Vec<Decl> {
+    match decl {
+        Decl::Enum { name, params, cases, .. } if cases.len() == 1 => {
+            let self_ty = build_self_ty(name, params);
+            let fields = &cases[0].1;
+
+            let impl_params: Vec<_> = params.iter()
+                .filter(|(_, _, icit)| *icit == Icit::Impl)
+                .cloned()
+                .collect();
+
+            let body = build_bundle_body(fields);
+
+            let that_param = (
+                empty_span(SmolStr::new("that")),
+                self_ty.clone(),
+                Icit::Expl,
+            );
+
+            let bundle_impl = Decl::ImplDecl {
+                name: self_ty.clone(),
+                params: impl_params.clone(),
+                trait_name: empty_span(SmolStr::new("Bundle")),
+                trait_params: vec![],
+                methods: vec![Decl::Def {
+                    name: empty_span(SmolStr::new(":=")),
+                    params: vec![that_param],
+                    ret_type: Raw::Var(empty_span(SmolStr::new("Unit"))),
+                    body,
+                }],
+                need_create: false,
+            };
+
+            // Generate Into[Self] for Self so that the Expr macro's
+            // `$lhs := $rhs` pattern (which wraps RHS in .into) works.
+            let into_impl = Decl::ImplDecl {
+                name: self_ty.clone(),
+                params: impl_params,
+                trait_name: empty_span(SmolStr::new("Into")),
+                trait_params: vec![self_ty.clone()],
+                methods: vec![Decl::Def {
+                    name: empty_span(SmolStr::new("into")),
+                    params: vec![],
+                    ret_type: self_ty.clone(),
+                    body: Raw::Var(empty_span(SmolStr::new("this"))),
+                }],
+                need_create: false,
+            };
+
+            vec![bundle_impl, into_impl]
+        }
+        _ => vec![],
+    }
 }
 
 /// Derive Show: generates a proper `impl Show for Type { def show = ... }` block.

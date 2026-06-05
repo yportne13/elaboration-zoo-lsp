@@ -36,6 +36,10 @@ trait Into[O: outParam(Type 0)] {
     def into: O
 }
 
+impl[T] Into[T] for T {
+    def into: T = this
+}
+
 trait Equal[T, O: outParam(Type 0)] {
     def ===(that: T): O
     def =/=(that: T): O

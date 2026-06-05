@@ -1542,6 +1542,183 @@ println(moduleVL(Test))
 }
 
 #[test]
+fn test_hdl_bundle_basic() {
+    // Basic Bundle: derive generates field-by-field := from Bundle trait,
+    // plus Into[Self] for Self so the Expr macro's `:=` can call .into on RHS.
+    let input = r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+    valid: Bool
+}
+
+module Test {
+    let data1 = UInt[8]
+    let valid1 = Bool
+    let data2 = UInt[8]
+    let valid2 = Bool
+    let bus1 = new MyBus(data1, valid1)
+    let bus2 = new MyBus(data2, valid2)
+    bus1 := bus2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_nested() {
+    // Nested Bundle: outer Bundle's := recursively calls inner Bundle's :=.
+    let input = r#"
+#[derive(Bundle)]
+struct InnerBus {
+    value: UInt[8]
+    strobe: Bool
+}
+
+#[derive(Bundle)]
+struct OuterBus {
+    inner: InnerBus
+    ready: Bool
+}
+
+module Test {
+    let value1 = UInt[8]
+    let strobe1 = Bool
+    let ready1 = Bool
+    let value2 = UInt[8]
+    let strobe2 = Bool
+    let ready2 = Bool
+    let inner1 = new InnerBus(value1, strobe1)
+    let inner2 = new InnerBus(value2, strobe2)
+    let outer1 = new OuterBus(inner1, ready1)
+    let outer2 = new OuterBus(inner2, ready2)
+    outer1 := outer2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_axi() {
+    // Larger Bundle with 6 fields, simulating an AxiLite-like interface.
+    let input = r#"
+#[derive(Bundle)]
+struct AxiLite {
+    awaddr:  UInt[16]
+    awvalid: Bool
+    awready: Bool
+    wdata:   UInt[16]
+    wvalid:  Bool
+    wready:  Bool
+}
+
+module Test {
+    let addr1 = UInt[16]
+    let av1 = Bool
+    let ar1 = Bool
+    let wd1 = UInt[16]
+    let wv1 = Bool
+    let wr1 = Bool
+    let addr2 = UInt[16]
+    let av2 = Bool
+    let ar2 = Bool
+    let wd2 = UInt[16]
+    let wv2 = Bool
+    let wr2 = Bool
+    let master = new AxiLite(addr1, av1, ar1, wd1, wv1, wr1)
+    let slave  = new AxiLite(addr2, av2, ar2, wd2, wv2, wr2)
+    master := slave
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_manual_impl() {
+    // Verify that a manually-written Bundle + Into impl works.
+    let input = r#"
+struct MyBus {
+    data: UInt[8]
+    valid: Bool
+}
+
+impl Bundle for MyBus {
+    def :=(that: MyBus): Unit =
+        let __b0 = this.data := that.data;
+        let __b1 = this.valid := that.valid;
+        unit
+}
+
+module Test {
+    let data1 = UInt[8]
+    let valid1 = Bool
+    let data2 = UInt[8]
+    let valid2 = Bool
+    let bus1 = new MyBus(data1, valid1)
+    let bus2 = new MyBus(data2, valid2)
+    bus1 := bus2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_empty() {
+    // Empty bundle should still compile and produce the Into+Bundle impls.
+    let input = r#"
+#[derive(Bundle)]
+struct EmptyBus {}
+
+module Test {
+    let bus1 = new EmptyBus()
+    let bus2 = new EmptyBus()
+    bus1 := bus2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module, got: {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_hdl_switch_case() {
     let input = r#"
 module Test {
