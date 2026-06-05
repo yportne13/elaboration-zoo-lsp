@@ -379,10 +379,10 @@ impl[width: Nat] SInt[width] {
 
 impl[width: Nat] UInt[width] {
     def resize[newWidth: Nat]: UInt[newWidth] =
-        UInt.mk(None, binary(this.expr, "resize", this.expr))
+        UInt.mk(None, this.expr)
     // Safe widening: requires proof that current width ≤ new width (no data loss)
     def cast[newWidth: Nat](proof: Le(width, newWidth)): UInt[newWidth] =
-        UInt.mk(None, binary(this.expr, "resize", this.expr))
+        UInt.mk(None, this.expr)
     def asBits: Bits[width] =
         Bits.mk(None, binary(this.expr, "asBits", this.expr))
     def asSInt: SInt[width] =
@@ -393,10 +393,10 @@ impl[width: Nat] UInt[width] {
 
 impl[width: Nat] SInt[width] {
     def resize[newWidth: Nat]: SInt[newWidth] =
-        SInt.mk(None, binary(this.expr, "resize", this.expr))
+        SInt.mk(None, this.expr)
     // Safe widening: requires proof that current width ≤ new width (no data loss)
     def cast[newWidth: Nat](proof: Le(width, newWidth)): SInt[newWidth] =
-        SInt.mk(None, binary(this.expr, "resize", this.expr))
+        SInt.mk(None, this.expr)
     def asBits: Bits[width] =
         Bits.mk(None, binary(this.expr, "asBits", this.expr))
     def asUInt: UInt[width] =

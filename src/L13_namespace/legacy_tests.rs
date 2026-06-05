@@ -1517,3 +1517,47 @@ println(moduleVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_hdl_sint_verilog_resize() {
+    let input = r#"
+module Test {
+    let a = SInt[4]
+    let b = SInt[8]
+    b := a.resize[8]
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            // resize should NOT generate "(a resize a)" — that's invalid Verilog.
+            // Instead it should just emit the expression directly.
+            assert!(output.contains("endmodule"), "should produce module");
+            assert!(!output.contains("resize"), "resize should NOT appear as a Verilog operator");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_switch_case() {
+    let input = r#"
+module Test {
+    let sel = UInt[4]
+    let a = UInt[4]
+    let c = UInt[4]
+    let result = UInt[4]
+    switch sel { is a { result := a } default { result := c } }
+}
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("OUTPUT:\n{}", output);
+            assert!(output.contains("always"), "switch should generate always block");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
