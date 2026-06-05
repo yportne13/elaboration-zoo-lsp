@@ -2798,6 +2798,38 @@ println (moduleVL NatTest)
     }
 }
 
+#[test]
+fn test_verilog_switch_case() {
+    // Test Expr! switch/is/default macro (desugars to when/elsewhen/otherwise)
+    let input = r#"
+module Test {
+    let sel = UInt[2]
+    let a = UInt[8]
+    let b = UInt[8]
+    let result = UInt[8]
+    Expr! {
+        switch sel {
+            is u"00" {
+                result := a
+            }
+            default {
+                result := b
+            }
+        }
+    }
+}
+println (moduleVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            // Just verify the macro expansion succeeds (no compile error)
+            assert!(true, "switch macro compiled successfully");
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
 // ============================================================
 // Tests for multiple Into implementations for the same type
 // ============================================================
