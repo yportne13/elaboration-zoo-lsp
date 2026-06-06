@@ -1543,8 +1543,8 @@ println(moduleVL(Test))
 
 #[test]
 fn test_hdl_bundle_basic() {
-    // Basic Bundle: derive generates field-by-field := from Bundle trait,
-    // plus Into[Self] for Self so the Expr macro's `:=` can call .into on RHS.
+    // Bundle with manual signal creation + bulk :=.
+    // (create_MyBus factory used for ergonomics)
     let input = r#"
 #[derive(Bundle)]
 struct MyBus {
@@ -1553,12 +1553,8 @@ struct MyBus {
 }
 
 module Test {
-    let data1 = UInt[8]
-    let valid1 = Bool
-    let data2 = UInt[8]
-    let valid2 = Bool
-    let bus1 = new MyBus(data1, valid1)
-    let bus2 = new MyBus(data2, valid2)
+    let bus1 = create_MyBus("bus1_")
+    let bus2 = create_MyBus("bus2_")
     bus1 := bus2
 }
 
@@ -1629,20 +1625,8 @@ struct AxiLite {
 }
 
 module Test {
-    let addr1 = UInt[16]
-    let av1 = Bool
-    let ar1 = Bool
-    let wd1 = UInt[16]
-    let wv1 = Bool
-    let wr1 = Bool
-    let addr2 = UInt[16]
-    let av2 = Bool
-    let ar2 = Bool
-    let wd2 = UInt[16]
-    let wv2 = Bool
-    let wr2 = Bool
-    let master = new AxiLite(addr1, av1, ar1, wd1, wv1, wr1)
-    let slave  = new AxiLite(addr2, av2, ar2, wd2, wv2, wr2)
+    let master = create_AxiLite("m_")
+    let slave  = create_AxiLite("s_")
     master := slave
 }
 
@@ -1720,8 +1704,7 @@ println(moduleVL(Test))
 
 #[test]
 fn test_hdl_bundle_create() {
-    // Use the auto-generated zz_create_<TypeName> factory to build a Bundle
-    // without manually creating each sub-signal.
+    // create_TypeName("prefix") factory inside a module.
     let input = r#"
 #[derive(Bundle)]
 struct MyBus {
@@ -1730,8 +1713,8 @@ struct MyBus {
 }
 
 module Test {
-    let bus1 = zz_create_MyBus("bus1_")
-    let bus2 = zz_create_MyBus("bus2_")
+    let bus1 = create_MyBus("bus1_")
+    let bus2 = create_MyBus("bus2_")
     bus1 := bus2
 }
 
@@ -1748,7 +1731,7 @@ println(moduleVL(Test))
 
 #[test]
 fn test_hdl_bundle_create_width_var() {
-    // Create factory should also work when widths are type parameters.
+    // create_TypeName[width]("prefix") for parametric bundles.
     let input = r#"
 #[derive(Bundle)]
 struct MyBus[w: Nat] {
@@ -1757,8 +1740,8 @@ struct MyBus[w: Nat] {
 }
 
 module Test {
-    let bus1 = zz_create_MyBus[8]("bus1_")
-    let bus2 = zz_create_MyBus[8]("bus2_")
+    let bus1 = create_MyBus[8]("bus1_")
+    let bus2 = create_MyBus[8]("bus2_")
     bus1 := bus2
 }
 

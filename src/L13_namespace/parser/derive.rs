@@ -294,7 +294,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
 
             // ── 3. Standalone create function (signal factory) ──
             // Generates:
-            //   def zz_create_<TypeName>$(typeParams)(prefix: String): TypeName$(typeParams) = …
+            //   def create_<TypeName>$(typeParams)(prefix: String): TypeName$(typeParams) = …
             // Only emitted when every field is a recognised primitive HDL type
             // (UInt, SInt, Bits, Bool) so we know how to auto-create signals.
             if fields.iter().all(|(_, ft, _)| is_primitive_type(ft)) {
@@ -308,7 +308,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     Icit::Expl,
                 ));
                 result.push(Decl::Def {
-                    name: empty_span(SmolStr::new(format!("zz_create_{}", name.data))),
+                    name: empty_span(SmolStr::new(format!("create_{}", name.data))),
                     params: create_params,
                     ret_type: self_ty,
                     body: create_body,

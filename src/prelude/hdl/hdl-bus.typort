@@ -24,7 +24,7 @@ enum IODirection {
 //      — field-by-field bulk assignment (like SpinalHDL's :=)
 //   2. impl Into[TypeName] for TypeName { def into = this }
 //      — identity conversion so the Expr macro's `:=` works with bundles
-//   3. def zz_create_TypeName(…)(prefix: String): TypeName = …
+//   3. def create_TypeName(…)(prefix: String): TypeName = …
 //      — automatic signal factory (all fields created as wires)
 //
 // Example:
@@ -40,10 +40,16 @@ enum IODirection {
 //
 //   // Usage inside a module:
 //   module Top {
-//     let master = zz_create_AxiLite("m_")   // auto-creates all signals
-//     let slave  = zz_create_AxiLite("s_")
-//     master := slave                          // bulk assignment
+//     let master = create_AxiLite("m_")   // auto-creates signals
+//     let slave  = create_AxiLite("s_")
+//     master := slave                      // bulk assignment
 //   }
+//
+//   // Parametric bundles:
+//   #[derive(Bundle)]
+//   struct MyBus[w: Nat] { data: UInt[w]; valid: Bool }
+//
+//   let bus = create_MyBus[8]("")         // auto-creates with width 8
 
 trait Bundle {
     def :=(that: Self): Unit
