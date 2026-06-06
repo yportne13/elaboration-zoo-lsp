@@ -19,6 +19,14 @@ enum IODirection {
 //
 // Use #[derive(Bundle)] to auto-generate the impl.
 //
+// The derive generates three things:
+//   1. impl Bundle for TypeName { def :=(that: TypeName): Unit = … }
+//      — field-by-field bulk assignment (like SpinalHDL's :=)
+//   2. impl Into[TypeName] for TypeName { def into = this }
+//      — identity conversion so the Expr macro's `:=` works with bundles
+//   3. def zz_create_TypeName(…)(prefix: String): TypeName = …
+//      — automatic signal factory (all fields created as wires)
+//
 // Example:
 //   #[derive(Bundle)]
 //   struct AxiLite {
@@ -26,16 +34,15 @@ enum IODirection {
 //       awvalid: Bool
 //       awready: Bool
 //       wdata:   UInt[32]
+//       wvalid:  Bool
+//       wready:  Bool
 //   }
 //
-// This generates:
-//   impl Bundle for AxiLite {
-//       def :=(that: AxiLite): Unit =
-//           let __b0 = this.awaddr  := that.awaddr;
-//           let __b1 = this.awvalid := that.awvalid;
-//           let __b2 = this.awready := that.awready;
-//           let __b3 = this.wdata   := that.wdata;
-//           unit
+//   // Usage inside a module:
+//   module Top {
+//     let master = zz_create_AxiLite("m_")   // auto-creates all signals
+//     let slave  = zz_create_AxiLite("s_")
+//     master := slave                          // bulk assignment
 //   }
 
 trait Bundle {

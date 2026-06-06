@@ -1719,6 +1719,61 @@ println(moduleVL(Test))
 }
 
 #[test]
+fn test_hdl_bundle_create() {
+    // Use the auto-generated zz_create_<TypeName> factory to build a Bundle
+    // without manually creating each sub-signal.
+    let input = r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+    valid: Bool
+}
+
+module Test {
+    let bus1 = zz_create_MyBus("bus1_")
+    let bus2 = zz_create_MyBus("bus2_")
+    bus1 := bus2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_create_width_var() {
+    // Create factory should also work when widths are type parameters.
+    let input = r#"
+#[derive(Bundle)]
+struct MyBus[w: Nat] {
+    data: UInt[w]
+    valid: Bool
+}
+
+module Test {
+    let bus1 = zz_create_MyBus[8]("bus1_")
+    let bus2 = zz_create_MyBus[8]("bus2_")
+    bus1 := bus2
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("endmodule"), "should produce a Verilog module {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_hdl_switch_case() {
     let input = r#"
 module Test {

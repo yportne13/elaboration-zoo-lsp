@@ -162,8 +162,86 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
     result
 }
 
+/// Check whether a Raw type expression is one of the recognised primitive HDL types.
+fn is_primitive_type(t: &Raw) -> bool {
+    match t {
+        Raw::Var(v) => v.data == "Bool",
+        Raw::App(inner, _, _) => match inner.as_ref() {
+            Raw::Var(v) => v.data == "UInt" || v.data == "SInt" || v.data == "Bits",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Build the signal creation expression for a single field.
+/// Recognizes: UInt[w], SInt[w], Bits[w], Bool.
+/// Returns `newUInt(prefix+"name", w)`, `newBool(prefix+"name")`, etc.
+fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw) -> Raw {
+    let name_expr = str_cat(
+        Raw::Var(empty_span(SmolStr::new("prefix"))),
+        Raw::LiteralIntro(empty_span(field_name.data.to_string())),
+    );
+
+    match field_type {
+        Raw::App(inner, width, _) => {
+            if let Raw::Var(v) = inner.as_ref() {
+                let create_fn = match v.data.as_str() {
+                    "UInt" => "newUInt",
+                    "SInt" => "newSInt",
+                    "Bits" => "newBits",
+                    _ => return Raw::Hole(empty_span(())),
+                };
+                Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new(create_fn))), name_expr), width.as_ref().clone())
+            } else {
+                Raw::Hole(empty_span(()))
+            }
+        }
+        Raw::Var(v) if v.data == "Bool" => {
+            Raw::app(Raw::Var(empty_span(SmolStr::new("newBool"))), name_expr)
+        }
+        _ => Raw::Hole(empty_span(())),
+    }
+}
+
+/// Build the body of `create(prefix: String): Self`.
+/// For fields [f1: T1, f2: T2, …]:
+///   let __f0 = createSignal("prefix_f1", …);
+///   let __f1 = createSignal("prefix_f2", …);
+///   new BundleType(__f0, __f1)
+fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+    let ctor = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
+
+    if fields.is_empty() {
+        return ctor;
+    }
+
+    // Wrap constructor with field variables (in forward order)
+    let mut body = ctor;
+    for (field_name, _, _) in fields.iter() {
+        let var = Raw::Var(empty_span(SmolStr::new(format!("__f{}", field_name.data))));
+        body = Raw::App(Box::new(body), Box::new(var), Either::Icit(Icit::Expl));
+    }
+
+    // Wrap each let around the body (in reverse order)
+    for (field_name, field_type, _) in fields.iter().rev() {
+        let var_name = SmolStr::new(format!("__f{}", field_name.data));
+        let create_expr = build_field_create_expr(field_name, field_type);
+        body = Raw::Let(
+            empty_span(var_name),
+            Box::new(Raw::Hole(empty_span(()))),
+            Box::new(create_expr),
+            Box::new(body),
+        );
+    }
+
+    body
+}
+
 /// Derive Bundle: for a single-constructor enum (struct), generates:
 ///   impl Bundle for StructName { def :=(that: StructName): Unit = ... }
+///   impl Into[Self] for Self { … }
+///   impl StructName { def create(prefix: String): Self = … }
 /// with sequenced field-by-field assignments.
 fn derive_bundle(decl: &Decl) -> Vec<Decl> {
     match decl {
@@ -176,14 +254,13 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                 .cloned()
                 .collect();
 
-            let body = build_bundle_body(fields);
-
+            // ── 1. Bundle trait impl (:= bulk assignment) ──
+            let bundle_body = build_bundle_body(fields);
             let that_param = (
                 empty_span(SmolStr::new("that")),
                 self_ty.clone(),
                 Icit::Expl,
             );
-
             let bundle_impl = Decl::ImplDecl {
                 name: self_ty.clone(),
                 params: impl_params.clone(),
@@ -193,16 +270,15 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     name: empty_span(SmolStr::new(":=")),
                     params: vec![that_param],
                     ret_type: Raw::Var(empty_span(SmolStr::new("Unit"))),
-                    body,
+                    body: bundle_body,
                 }],
                 need_create: false,
             };
 
-            // Generate Into[Self] for Self so that the Expr macro's
-            // `$lhs := $rhs` pattern (which wraps RHS in .into) works.
+            // ── 2. Into[Self] for Self (so Expr macro's lhs := rhs works) ──
             let into_impl = Decl::ImplDecl {
                 name: self_ty.clone(),
-                params: impl_params,
+                params: impl_params.clone(),
                 trait_name: empty_span(SmolStr::new("Into")),
                 trait_params: vec![self_ty.clone()],
                 methods: vec![Decl::Def {
@@ -214,7 +290,32 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                 need_create: false,
             };
 
-            vec![bundle_impl, into_impl]
+            let mut result = vec![bundle_impl, into_impl];
+
+            // ── 3. Standalone create function (signal factory) ──
+            // Generates:
+            //   def zz_create_<TypeName>$(typeParams)(prefix: String): TypeName$(typeParams) = …
+            // Only emitted when every field is a recognised primitive HDL type
+            // (UInt, SInt, Bits, Bool) so we know how to auto-create signals.
+            if fields.iter().all(|(_, ft, _)| is_primitive_type(ft)) {
+                let create_body = build_create_body(name, fields);
+                let mut create_params: Vec<(Span<SmolStr>, Raw, Icit)> = params.iter()
+                    .map(|(pn, pt, pi)| (pn.clone(), pt.clone(), *pi))
+                    .collect();
+                create_params.push((
+                    empty_span(SmolStr::new("prefix")),
+                    Raw::Var(empty_span(SmolStr::new("String"))),
+                    Icit::Expl,
+                ));
+                result.push(Decl::Def {
+                    name: empty_span(SmolStr::new(format!("zz_create_{}", name.data))),
+                    params: create_params,
+                    ret_type: self_ty,
+                    body: create_body,
+                });
+            }
+
+            result
         }
         _ => vec![],
     }
