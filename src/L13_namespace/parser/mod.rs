@@ -199,6 +199,7 @@ macro_rules! T {
     [let] => { $crate::L13_namespace::parser::TokenKind::LetKeyword };
     [Type] => { $crate::L13_namespace::parser::TokenKind::TypeKeyword };
     [this] => { $crate::L13_namespace::parser::TokenKind::ThisKeyword };
+    [static] => { $crate::L13_namespace::parser::TokenKind::StaticKeyword };
     [_] => { $crate::L13_namespace::parser::TokenKind::Hole };
     ['('] => { $crate::L13_namespace::parser::TokenKind::LParen };
     [')'] => { $crate::L13_namespace::parser::TokenKind::RParen };
@@ -1001,6 +1002,13 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
         .parse(input, state)
 }
 
+fn p_impl_method<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, (Decl, bool)> {
+    let (input, is_static) = kw(StaticKeyword).option().parse(input, state)?;
+    let is_static = is_static.is_some();
+    let (input, decl) = p_def.parse(input, state)?;
+    Ok((input, (decl, is_static)))
+}
+
 fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     Cut((
         kw(ImplKeyword),
@@ -1013,14 +1021,12 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 p_raw,
             )),
         ).map(Ok).or(p_raw.map(Err)),
-        //p_generic_params(),
-        brace(p_def.many0_sep(kw(EndLine))),
+        brace(p_impl_method.many0_sep(kw(EndLine))),
     )).map(|x| match x.2 {
         Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole(empty_span(()))), x.3, false),
         Some(Err(name)) => (
             x.1.clone(),
             x.0.map(|_| SmolStr::new(format!("$trait_name${}", name))),
-            //x.1.unwrap_or_default().into_iter().map(|x| Raw::Var(x.0)).collect(),
             vec![],
             name,
             x.3,

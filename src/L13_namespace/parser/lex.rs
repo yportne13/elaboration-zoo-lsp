@@ -15,6 +15,7 @@ pub enum TokenKind {
     ImplKeyword,
     ForKeyword,
     ThisKeyword,
+    StaticKeyword,
     MacroKeyword,
     PackageKeyword,
     ImportKeyword,
@@ -54,7 +55,7 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 16] = [
+const KEYWORD: [(&str, TokenKind); 17] = [
     ("package", PackageKeyword),
     ("import", ImportKeyword),
     ("def", DefKeyword),
@@ -70,6 +71,7 @@ const KEYWORD: [(&str, TokenKind); 16] = [
     ("impl", ImplKeyword),
     ("for", ForKeyword),
     ("this", ThisKeyword),
+    ("static", StaticKeyword),
     ("macro_rules", MacroKeyword),
 ];
 

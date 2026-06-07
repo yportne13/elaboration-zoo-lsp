@@ -4255,6 +4255,32 @@ println t.show
         }
     }
 
+    #[test]
+    fn test_static_method() {
+        let input = r#"
+struct Box[A] {
+    val: A
+}
+
+impl[A] Box[A] {
+    def get: A = this.val
+
+    static def pack(x: A): Box[A] = new Box(x)
+}
+
+def b: Box[Nat] = Box.pack(42)
+def v: Nat = b.get
+println(v)
+"#;
+        match run_with_prelude(input) {
+            Ok(output) => {
+                eprintln!("static method test output: {}", output);
+                assert_eq!(output.trim(), "42");
+            }
+            Err(e) => panic!("static method test failed: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+        }
+    }
+
     /// Benchmark: time the elaboration of hdl-verilog.typort per-declaration.
     /// Run with: cargo test bench_hdl_verilog -- --nocapture
     #[test]

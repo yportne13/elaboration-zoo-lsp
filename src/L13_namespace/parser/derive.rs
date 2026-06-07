@@ -266,12 +266,12 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                 params: impl_params.clone(),
                 trait_name: empty_span(SmolStr::new("Bundle")),
                 trait_params: vec![],
-                methods: vec![Decl::Def {
+                methods: vec![(Decl::Def {
                     name: empty_span(SmolStr::new(":=")),
                     params: vec![that_param],
                     ret_type: Raw::Var(empty_span(SmolStr::new("Unit"))),
                     body: bundle_body,
-                }],
+                }, false)],
                 need_create: false,
             };
 
@@ -281,12 +281,12 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                 params: impl_params.clone(),
                 trait_name: empty_span(SmolStr::new("Into")),
                 trait_params: vec![self_ty.clone()],
-                methods: vec![Decl::Def {
+                methods: vec![(Decl::Def {
                     name: empty_span(SmolStr::new("into")),
                     params: vec![],
                     ret_type: self_ty.clone(),
                     body: Raw::Var(empty_span(SmolStr::new("this"))),
-                }],
+                }, false)],
                 need_create: false,
             };
 
@@ -348,12 +348,12 @@ fn derive_show(decl: &Decl) -> Vec<Decl> {
                 params: impl_params,
                 trait_name: empty_span(SmolStr::new("")),
                 trait_params: vec![],
-                methods: vec![Decl::Def {
+                methods: vec![(Decl::Def {
                     name: empty_span(SmolStr::new("show")),
                     params: vec![],
                     ret_type: Raw::Var(empty_span(SmolStr::new("String"))),
                     body,
-                }],
+                }, false)],
                 need_create: true,
             }]
         }

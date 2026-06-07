@@ -252,7 +252,7 @@ pub enum Decl {
         params: Vec<(Span<SmolStr>, Raw, Icit)>,
         trait_name: Span<SmolStr>,
         trait_params: Vec<Raw>,
-        methods: Vec<Decl>,
+        methods: Vec<(Decl, bool)>,
         need_create: bool,
     },
     Derive {

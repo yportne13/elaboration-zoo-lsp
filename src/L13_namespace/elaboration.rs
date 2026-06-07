@@ -44,7 +44,7 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             params,
             trait_name,
             trait_params,
-            methods: methods.into_iter().map(|m| prefix_decl_name(m, prefix)).collect(),
+            methods: methods.into_iter().map(|(m, is_static)| (prefix_decl_name(m, prefix), is_static)).collect(),
             need_create,
         },
         Decl::Package { path } => Decl::Package {
@@ -624,29 +624,46 @@ impl Infer {
                     let (name_t, _) = self.infer_expr(&cxt, name_raw.clone())?;
                     let name_v = self.eval(&cxt.decl, &cxt.env, &name_t);
                     //cxt = new_cxt;
-                    cxt.namespace = cxt.namespace.prepend((name_v, methods.iter().flat_map(|x| match x {
+                    cxt.namespace = cxt.namespace.prepend((name_v, methods.iter().flat_map(|(x, _)| match x {
                         Decl::Def { name, .. } => Some(name.data.clone()),
                         _ => None
                     }).collect(), name_raw.clone()));
-                    for decl in methods.iter() {
+                    for (decl, is_static) in methods.iter() {
                         match decl {
                             Decl::Def { name: name_d, params: p, ret_type, body } => {
-                                let prefix_name = name_raw.to_string();
-                                let t = self.infer(&cxt, Decl::Def {
-                                    name: name_d.clone().map(|x| SmolStr::new(format!("{}{x}", prefix_name))),
-                                    params: params.iter()
-                                        .cloned()
-                                        .chain(std::iter::once((
-                                            name_d.to_span().map(|_| SmolStr::new("this")),
-                                            name.clone(),
-                                            Icit::Expl,
-                                        )))
-                                        .chain(p.iter().cloned())
-                                        .collect(),
-                                    ret_type: ret_type.clone(),
-                                    body: body.clone(),
-                                })?;
-                                cxt = t.2;
+                                if !is_static {
+                                    let prefix_name = name_raw.to_string();
+                                    let t = self.infer(&cxt, Decl::Def {
+                                        name: name_d.clone().map(|x| SmolStr::new(format!("{}{x}", prefix_name))),
+                                        params: params.iter()
+                                            .cloned()
+                                            .chain(std::iter::once((
+                                                name_d.to_span().map(|_| SmolStr::new("this")),
+                                                name.clone(),
+                                                Icit::Expl,
+                                            )))
+                                            .chain(p.iter().cloned())
+                                            .collect(),
+                                        ret_type: ret_type.clone(),
+                                        body: body.clone(),
+                                    })?;
+                                    cxt = t.2;
+                                } else {
+                                    let type_name = raw_ctor_name(&name).unwrap_or_else(|| {
+                                        SmolStr::new(format!("{}", name_raw.to_string().chars().filter(|c| c.is_alphanumeric() || *c == '.').collect::<String>()))
+                                    });
+                                    let static_name = format!("{}.{}", type_name, name_d.data);
+                                    let t = self.infer(&cxt, Decl::Def {
+                                        name: name_d.clone().map(|_| SmolStr::new(static_name.clone())),
+                                        params: params.iter()
+                                            .cloned()
+                                            .chain(p.iter().cloned())
+                                            .collect(),
+                                        ret_type: ret_type.clone(),
+                                        body: body.clone(),
+                                    })?;
+                                    cxt = t.2;
+                                }
                             },
                             _ => {
                                 todo!()
@@ -686,7 +703,7 @@ impl Infer {
                         .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
                             Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                         });
-                    for decl in methods {
+                    for (decl, _) in methods {
                         if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
                             ret = Raw::App(
                                 Box::new(ret),
@@ -1296,6 +1313,16 @@ fn qualified_path_str(x: &Raw, field: &str) -> Option<SmolStr> {
         Raw::Obj(inner, Some(seg)) => {
             qualified_path_str(inner.as_ref(), &seg.data).map(|p| SmolStr::new(format!("{p}.{field}")))
         }
+        _ => None,
+    }
+}
+
+/// Extract the head constructor name from a Raw type expression.
+/// e.g., `Product[A, B]` → `"Product"`, `Maybe[T]` → `"Maybe"`, `String` → `"String"`
+fn raw_ctor_name(raw: &Raw) -> Option<SmolStr> {
+    match raw {
+        Raw::Var(name) => Some(name.data.clone()),
+        Raw::App(head, _, _) => raw_ctor_name(head),
         _ => None,
     }
 }
