@@ -399,6 +399,8 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                 let (input, rhs) = expr_bp(r_bp).parse(input, state)?;
                 if op.data == "-" {
                     Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("neg"))))))
+                } else if op.data == "~" {
+                    Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("not"))))))
                 } else {
                     Ok((input, Raw::Obj(Box::new(rhs), Some(op))))
                 }

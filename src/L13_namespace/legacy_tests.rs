@@ -971,13 +971,20 @@ module Test[w: Nat] {
     let and_result = Bits[w]
     let or_result = Bits[w]
     let xor_result = Bits[w]
+    let not_result = Bits[w]
     and_result := a & b
     or_result := a | b
     xor_result := a ^ b
+    not_result := ~a
 }
+
+println(moduleVL(Test[8]))
 "#;
     match run_with_prelude(input) {
-        Ok(output) => println!("{}", output),
+        Ok(output) => {
+            eprintln!("VERILOG OUTPUT:\n{}", output);
+            assert!(output.contains("~("), "bitwise not should produce ~(...) in Verilog, got:\n{}", output);
+        }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }

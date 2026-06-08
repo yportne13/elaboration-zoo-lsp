@@ -88,6 +88,8 @@ impl[width: Nat] SInt[width] {
 // --- Bits bitwise ---
 
 impl[width: Nat] Bits[width] {
+    def not: Bits[width] =
+        Bits.mk(None, unary("~", this.expr))
     def &(that: Bits[width]): Bits[width] =
         Bits.mk(None, binary(this.expr, "&", that.expr))
     def |(that: Bits[width]): Bits[width] =
@@ -99,6 +101,8 @@ impl[width: Nat] Bits[width] {
 // --- UInt bitwise ---
 
 impl[width: Nat] UInt[width] {
+    def not: UInt[width] =
+        UInt.mk(None, unary("~", this.expr))
     def &(that: UInt[width]): UInt[width] =
         UInt.mk(None, binary(this.expr, "&", that.expr))
     def |(that: UInt[width]): UInt[width] =
@@ -110,6 +114,8 @@ impl[width: Nat] UInt[width] {
 // --- SInt bitwise ---
 
 impl[width: Nat] SInt[width] {
+    def not: SInt[width] =
+        SInt.mk(None, unary("~", this.expr))
     def &(that: SInt[width]): SInt[width] =
         SInt.mk(None, binary(this.expr, "&", that.expr))
     def |(that: SInt[width]): SInt[width] =
