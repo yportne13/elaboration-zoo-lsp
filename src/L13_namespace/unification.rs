@@ -17,20 +17,19 @@ use std::collections::HashSet;
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
-    pub dom: Lvl,               // size of Γ
-    pub cod: Lvl,               // size of Δ
-    pub ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    pub dom: Lvl,
+    pub cod: Lvl,
+    pub ren: Rc<HashMap<u32, Lvl>>,
 }
 
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
     let mut new_ren = pr.ren.clone();
-    new_ren.insert(pr.cod.0, pr.dom);
-
+    Rc::make_mut(&mut new_ren).insert(pr.cod.0, pr.dom);
     PartialRenaming {
         occ: pr.occ,
-        dom: pr.dom + 1, // increment dom
-        cod: pr.cod + 1, // increment cod
-        ren: new_ren,    // update ren with the new mapping
+        dom: pr.dom + 1,
+        cod: pr.cod + 1,
+        ren: new_ren,
     }
 }
 
@@ -93,7 +92,7 @@ impl Infer {
                 occ: None,
                 dom,
                 cod: gamma,
-                ren,
+                ren: Rc::new(ren),
             },
             if nlvars.is_empty() {
                 None
@@ -139,7 +138,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: Rc::new(HashMap::new()),
             },
             a,
         )

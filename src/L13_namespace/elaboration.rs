@@ -1230,7 +1230,6 @@ impl Infer {
         }
         {
             let traits = self.trait_definition
-                .clone()//TODO: can remove this clone?
                 .iter()
                 .flat_map(|(trait_name, (trait_params, out_param, methods))| {
                     methods.iter()

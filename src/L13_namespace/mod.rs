@@ -1045,15 +1045,12 @@ impl Infer {
         }
     }
 
-    fn v_app_sp(&self, decl: &Decl, t: Rc<Val>, spine: &Spine) -> Rc<Val> {
-        //spine.iter().rev().fold(t, |acc, (u, i)| self.v_app(acc, u.clone(), *i))
-        match spine {
-            List { head: None, .. } => t,
-            a => {
-                let (u, i) = a.head().unwrap();
-                self.v_app(decl, &self.v_app_sp(decl, t, &a.tail()), u.clone(), *i)
-            }
+    fn v_app_sp(&self, decl: &Decl, mut t: Rc<Val>, spine: &Spine) -> Rc<Val> {
+        let items: Vec<(&Rc<Val>, Icit)> = spine.iter().map(|(v, i)| (v, *i)).collect();
+        for (u, i) in items.into_iter().rev() {
+            t = self.v_app(decl, &t, u.clone(), i);
         }
+        t
     }
 
     fn v_app_pruning(&self, decl: &Decl, env: &Env, v: Rc<Val>, pr: &Pruning) -> Rc<Val> {

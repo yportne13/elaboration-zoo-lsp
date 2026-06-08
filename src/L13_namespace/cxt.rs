@@ -83,11 +83,11 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>,
+    pub src_names: Rc<BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>>,
     pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>>,
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
     pub namespace_prefix: Option<SmolStr>,
-    pub namespaces: HashSet<SmolStr>,
+    pub namespaces: Rc<HashSet<SmolStr>>,
     update_from: Option<usize>,
 }
 
@@ -373,11 +373,11 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: BiMap::new(),
+            src_names: Rc::new(BiMap::new()),
             decl: Rc::new(HashMap::new()),
             namespace: List::new(),
             namespace_prefix: None,
-            namespaces: HashSet::new(),
+            namespaces: Rc::new(HashSet::new()),
             update_from: None,
         }
     }
@@ -387,7 +387,7 @@ impl Cxt {
             lvl: self.lvl,
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
-            src_names: BiMap::new(),
+            src_names: Rc::new(BiMap::new()),
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
             namespace_prefix: self.namespace_prefix.clone(),
@@ -410,7 +410,7 @@ impl Cxt {
     pub fn bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), a)));
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, (x.to_span(), a)));
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
@@ -466,7 +466,7 @@ impl Cxt {
     pub fn define(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, (x.to_span(), va)));
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, (x.to_span(), va)));
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
@@ -536,7 +536,7 @@ impl Cxt {
                 //let locals = self.locals.update_at(x_prime, infer.quote(&self.decl, self.lvl, &v));
                 let env = self.env.change_n(x_prime, |_| v);
                 let mut new_src_names = self.src_names.clone();
-                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env, self.lvl.0 as usize - update_from);
+                let env_t = self.refresh(infer, &self.env, Rc::make_mut(&mut new_src_names), env, self.lvl.0 as usize - update_from);
                 let locals = self.locals.clone().update_by_cxt(infer, &self.decl, self.lvl, &env_t);
         
                 Cxt {
