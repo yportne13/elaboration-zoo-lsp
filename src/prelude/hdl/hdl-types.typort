@@ -34,6 +34,10 @@ impl Into[Bool] for Bool {
     def into: Bool = this
 }
 
+impl Into[Bool] for Boolean {
+    def into: Bool = Bool.mk(None, literal(bool_to_nat(this)))
+}
+
 // ---------- Bits (raw bit vector) ----------
 
 struct Bits[width: Nat] {
