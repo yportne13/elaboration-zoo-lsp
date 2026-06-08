@@ -8,6 +8,7 @@ use super::{
     Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
+    pattern_match::Compiler,
 };
 
 use std::collections::HashMap;
@@ -805,6 +806,7 @@ impl Infer {
                 self.solve_multi_trait(cxt, *m, false)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
+            (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
             (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, b, fuel),
             (Val::Prim(a, _), _) => self.unify(l, cxt, a, &u, fuel),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
@@ -826,15 +828,12 @@ impl Infer {
                 Ok(())
             }
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
-                // 1. 合一 scrutinees
                 self.unify(l, cxt, s1, s2, fuel)?;
 
-                // 2. 检查分支数量是否相同
                 if cases1.len() != cases2.len() {
                     return Err(UnifyError::Basic);
                 }
 
-                // 预计算 declb: 将所有声明包装为 Decl 形式的 map，用于分支体求值
                 let declb = cxt.decl.iter()
                     .map(|x| (x.0.clone(), (
                         x.1.0,
@@ -845,12 +844,7 @@ impl Infer {
                     )))
                     .collect();
 
-                // 3. 遍历并合一每一个对应的分支
                 for ((p1, clos1), (p2, clos2)) in cases1.iter().zip(cases2.iter()) {
-                    // 3a. 检查模式是否完全相同。
-                    // 这里我们假设 Pattern 可以通过 `PartialEq` 进行比较。
-                    // 如果模式的结构更复杂（例如包含类型信息），你可能需要一个递归的模式合一函数。
-                    // 对于你目前的定义，`PartialEq` 应该是足够的。
                     if p1 != p2 {
                         return Err(UnifyError::Basic);
                     }
@@ -868,32 +862,37 @@ impl Infer {
                     let body1_val = self.eval(&declb, &env1, clos1);
                     let body2_val = self.eval(&declb, &env2, clos2);
 
-                    /*println!(
-                        "-> {:?}\n== {:?}",
-                        pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
-                        pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
-                    );*/
                     self.unify(l + count, &p1.bind_cxt(cxt), &body1_val, &body2_val, fuel)?;
-
-                    // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
-                    // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。
-                    /*let body1_val = self.apply_match_closure(lvl, clos1.clone(), num_binders);
-                    let body2_val = self.apply_match_closure(lvl, clos2.clone(), num_binders);
-
-                    // 现在，我们在一个扩展了 num_binders 个变量的上下文中，对实例化后的 body进行合一。
-                    // 这个扩展的上下文是通过将 level 增加 num_binders 来表示的。
-                    self.unify(l + num_binders, cxt, body1_val, body2_val)?;*/
-                    //TODO:todo!()
                 }
 
-                // 如果所有检查都通过，则合一成功
                 Ok(())
+            }
+            (Val::Match(s, env_m, cases), _) | (_, Val::Match(s, env_m, cases)) => {
+                let other_val = if matches!(t.as_ref(), Val::Match(..)) {
+                    &u
+                } else {
+                    &t
+                };
+                let s_forced = self.force(&cxt.decl, s);
+                if let Val::SumCase { .. } = s_forced.as_ref() {
+                    if let Some((tm, eval_env)) = Compiler::eval_aux(self, &s_forced, &cxt.decl, env_m, cases) {
+                        let reduced = self.eval(&cxt.decl, &eval_env, &tm);
+                        if fuel > 0 {
+                            return self.unify(l, cxt, &reduced, other_val, fuel - 1);
+                        }
+                    }
+                }
+                match (s_forced.as_ref(), other_val.as_ref()) {
+                    (Val::Rigid(x, sp), Val::Rigid(y, sp2))
+                        if x == y && sp.is_empty() && sp2.is_empty() => Ok(()),
+                    _ => Err(UnifyError::Basic),
+                }
             }
             (Val::Obj(a1, b1, sp1), Val::Obj(a2, b2, sp2)) if b1.data == b2.data => {
                 self.unify(l, cxt, a1, a2, fuel)?;
                 self.unify_sp(l, cxt, sp1, sp2, fuel)
             }
-            _ => Err(UnifyError::Basic), // Rigid mismatch error
+            _ => Err(UnifyError::Basic),
         }
     }
 }

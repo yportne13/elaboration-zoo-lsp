@@ -1757,6 +1757,100 @@ println(moduleVL(Test))
 }
 
 #[test]
+fn test_succ_meta_unify() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def append[A, n: Nat, m: Nat](xs: Vec[A] n, ys: Vec[A] m): Vec[A] (add n m) =
+    match xs {
+        case nil => ys
+        case cons(x, xs) => cons(x, append xs ys)
+    }
+
+def test_append: Vec[Nat] (succ (succ zero)) =
+    append(cons(zero, nil), cons(zero, nil))
+
+def snoc[A, n: Nat](xs: Vec[A] n, x: A): Vec[A] (succ n) =
+    match xs {
+        case nil => cons(x, nil)
+        case cons(y, ys) => cons(y, snoc ys x)
+    }
+
+def test_snoc: Vec[Nat] (succ (succ zero)) =
+    snoc(cons(zero, nil), zero)
+
+def head[A, n: Nat](xs: Vec[A] (succ n)): A =
+    match xs {
+        case cons(x, _) => x
+    }
+
+def tail[A, n: Nat](xs: Vec[A] (succ n)): Vec[A] n =
+    match xs {
+        case cons(_, xs) => xs
+    }
+
+def test_head: Nat = head(cons(zero, cons(zero, nil)))
+def test_tail: Vec[Nat] (succ zero) = tail(cons(zero, cons(zero, nil)))
+
+def map_vec[A, B, n: Nat](f: A -> B, xs: Vec[A] n): Vec[B] n =
+    match xs {
+        case nil => nil
+        case cons(x, xs) => cons(f x, map_vec f xs)
+    }
+
+def test_map: Vec[Nat] (succ (succ zero)) =
+    map_vec[Nat, Nat](x => succ x, cons(zero, cons(zero, nil)))
+
+def concat[A, n: Nat, m: Nat](xs: Vec[A] n, ys: Vec[A] m): Vec[A] (add n m) =
+    match xs {
+        case nil => ys
+        case cons(x, xs) => cons(x, concat xs ys)
+    }
+
+def zip_with[A, B, C, n: Nat](f: A -> B -> C, xs: Vec[A] n, ys: Vec[B] n): Vec[C] n =
+    match xs {
+        case nil => nil
+        case cons(x, xs) => match ys {
+            case cons(y, ys) => cons(f x y, zip_with f xs ys)
+        }
+    }
+
+def test_zip: Vec[Nat] (succ (succ zero)) =
+    zip_with[Nat, Nat, Nat](a => b => add a b, cons(zero, cons(zero, nil)), cons(zero, cons(zero, nil)))
+
+def take[A, n: Nat](xs: Vec[A] (succ n)): A =
+    match xs {
+        case cons(x, _) => x
+    }
+
+def drop[A, n: Nat](xs: Vec[A] (succ n)): Vec[A] n =
+    match xs {
+        case cons(_, xs) => xs
+    }
+
+def test_take: Nat = take(cons(zero, cons(succ zero, nil)))
+def test_drop: Vec[Nat] (succ zero) = drop(cons(zero, cons(succ zero, nil)))
+
+"#;
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+}
+
+#[test]
 fn test_hdl_switch_case() {
     let input = r#"
 module Test {
