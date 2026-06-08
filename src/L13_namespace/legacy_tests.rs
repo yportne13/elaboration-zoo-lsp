@@ -1878,3 +1878,61 @@ println(moduleVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_hdl_apply_nat() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = Bits[16]
+    let s = SInt[16]
+    let bit0 = Bool
+    let bit7 = Bool
+    let bit15 = Bool
+    let low4 = UInt[4]
+    let hi8 = Bits[8]
+    let s_hi = SInt[8]
+    bit0 := a.apply[0]
+    bit7 := a.apply[7]
+    low4 := a.slice[3, 0]
+    bit15 := b.apply[15]
+    hi8 := b.slice[15, 8]
+    s_hi := s.slice[15, 8]
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("a[0]"), "single bit a[0]");
+            assert!(output.contains("a[7]"), "single bit a[7]");
+            assert!(output.contains("a[3:0]"), "range a[3:0]");
+            assert!(output.contains("b[15]"), "Bits single b[15]");
+            assert!(output.contains("b[15:8]"), "Bits range b[15:8]");
+            assert!(output.contains("s[15:8]"), "SInt range s[15:8]");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test that a[N] apply-desugaring works
+#[test]
+fn test_hdl_apply_sugar() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let bit = Bool
+    bit := a[7]
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("a[7]"), "a[7] should desugar to a.apply[7]");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}

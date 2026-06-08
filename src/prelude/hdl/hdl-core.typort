@@ -92,6 +92,8 @@ enum Expr {
     switch(value: Expr, cases: Expr)
     block(head: Expr, tail: Expr)
     nop
+    bitsel(e: Expr, idx: Expr)
+    partsel(e: Expr, hi: Expr, lo: Expr)
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)

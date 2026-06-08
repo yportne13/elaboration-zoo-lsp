@@ -1017,16 +1017,17 @@ impl Infer {
                     }
                     _ => {
                         // Scala-style apply: if the expression's type is not a function type,
-                        // try desugaring `expr(args)` into `expr.apply(args)`
-                        if is_expl {
-                            let meta_before = self.meta.len();
-                            let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
-                            let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
-                            if let Ok(result) = self.infer_expr(cxt, apply_call) {
-                                return Ok(result);
-                            }
-                            self.meta.truncate(meta_before);
+                        // try desugaring `expr(args)` into `expr.apply(args)`,
+                        // preserving the icit (explicit/implicit) of the original call.
+                        // `a[7]` (implicit) → `a.apply[7]`  works for type-parameter-based apply.
+                        // `a(7)` (explicit) → `a.apply(7)` only works if apply takes explicit args.
+                        let meta_before = self.meta.len();
+                        let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
+                        let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
+                        if let Ok(result) = self.infer_expr(cxt, apply_call) {
+                            return Ok(result);
                         }
+                        self.meta.truncate(meta_before);
 
                         let new_meta = self.fresh_meta(cxt, Val::U(0).into());
                         let a = self.eval(&cxt.decl, &cxt.env, &new_meta);

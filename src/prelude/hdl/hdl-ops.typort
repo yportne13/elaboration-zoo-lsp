@@ -357,12 +357,10 @@ impl[width: Nat] Bits[width] {
         Bool.mk(None, binary(this.expr, "msb", this.expr))
     def lsb: Bool =
         Bool.mk(None, binary(this.expr, "lsb", this.expr))
-    def take[high: Nat](low: Fin width): Bits[high + 1] =
-        Bits.mk(None, binary(this.expr, "take", this.expr))
-    def slice[hi_idx: Nat, lo_idx: Nat](hi_val: Fin width, lo_val: Fin width): Bits[hi_idx + 1] =
-        Bits.mk(None, binary(this.expr, "slice", this.expr))
-    def apply(idx: Fin width): Bool =
-        Bool.mk(None, binary(this.expr, "apply", this.expr))
+    def apply[idx: Nat]: Bool =
+        Bool.mk(None, bitsel(this.expr, literal(idx)))
+    def slice[hi: Nat, lo: Nat]: Bits[(hi - lo) + 1] =
+        Bits.mk(None, partsel(this.expr, literal(hi), literal(lo)))
 }
 
 impl[width: Nat] UInt[width] {
@@ -370,6 +368,10 @@ impl[width: Nat] UInt[width] {
         Bool.mk(None, binary(this.expr, "msb", this.expr))
     def lsb: Bool =
         Bool.mk(None, binary(this.expr, "lsb", this.expr))
+    def apply[idx: Nat]: Bool =
+        Bool.mk(None, bitsel(this.expr, literal(idx)))
+    def slice[hi: Nat, lo: Nat]: UInt[(hi - lo) + 1] =
+        UInt.mk(None, partsel(this.expr, literal(hi), literal(lo)))
 }
 
 impl[width: Nat] SInt[width] {
@@ -379,6 +381,10 @@ impl[width: Nat] SInt[width] {
         Bool.mk(None, binary(this.expr, "msb", this.expr))
     def lsb: Bool =
         Bool.mk(None, binary(this.expr, "lsb", this.expr))
+    def apply[idx: Nat]: Bool =
+        Bool.mk(None, bitsel(this.expr, literal(idx)))
+    def slice[hi: Nat, lo: Nat]: SInt[(hi - lo) + 1] =
+        SInt.mk(None, partsel(this.expr, literal(hi), literal(lo)))
 }
 
 // ============================================================

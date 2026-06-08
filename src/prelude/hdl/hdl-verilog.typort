@@ -61,6 +61,8 @@ def exprVL(e: Expr): String = match e {
         "  case (" + exprVL(value) + ") " + exprVL(cases) + " endcase"
     case block(head, tail) => exprVL(head) + exprVL(tail)
     case nop => ""
+    case bitsel(e, idx) => exprVL(e) + "[" + exprVL(idx) + "]"
+    case partsel(e, hi, lo) => exprVL(e) + "[" + exprVL(hi) + ":" + exprVL(lo) + "]"
 }
 
 // Walk Vec[Expr]: filter out declarations and when-blocks, join assignments
