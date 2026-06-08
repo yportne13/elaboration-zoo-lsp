@@ -317,12 +317,53 @@ impl[width: Nat] SInt[width] {
 }
 
 // ============================================================
-//  Mux (Multiplexer)
+//  Mux (Multiplexer) — uses MuxExpr[T] wrapper + Into[T] to
+//  work around Typort's lack of trait-bounded type params
 // ============================================================
 
-// Helper to check if a type has expr (is a Data type)
+// Wrapper that carries a pending mux operation.
+// Bool.mux returns MuxExpr[T]; the Expr macro calls .into on the RHS
+// of :=, which dispatches to Into[T] for MuxExpr[T] which constructs
+// the proper mux expression and wraps it in the target type.
+//
+// Usage (via Expr macro):  result := cond.mux(a, b)
+//   →  let rhs_conv = (cond.mux(a, b)).into;
+//   →  result := rhs_conv
+//   where rhs_conv is a T with the mux Expr inside.
+struct MuxExpr[T: Type 0] {
+    condExpr: Expr
+    trueVal: T
+    falseVal: T
+}
+
+// --- Into impls for each concrete HDL type ---
+
+impl Into[Bool] for MuxExpr[Bool] {
+    def into: Bool =
+        Bool.mk(None, Expr.mux(this.condExpr, this.trueVal.expr, this.falseVal.expr))
+}
+
+impl[width: Nat] Into[UInt[width]] for MuxExpr[UInt[width]] {
+    def into: UInt[width] =
+        UInt.mk(None, Expr.mux(this.condExpr, this.trueVal.expr, this.falseVal.expr))
+}
+
+impl[width: Nat] Into[SInt[width]] for MuxExpr[SInt[width]] {
+    def into: SInt[width] =
+        SInt.mk(None, Expr.mux(this.condExpr, this.trueVal.expr, this.falseVal.expr))
+}
+
+impl[width: Nat] Into[Bits[width]] for MuxExpr[Bits[width]] {
+    def into: Bits[width] =
+        Bits.mk(None, Expr.mux(this.condExpr, this.trueVal.expr, this.falseVal.expr))
+}
+
+// Updated Bool.mux: returns MuxExpr[T] instead of T directly.
+// The actual T with mux expression is produced by Into[T] conversion
+// in the assignment macro.
 impl Bool {
-    def mux[T: Type 0](whenTrue: T, whenFalse: T): T = whenTrue
+    def mux[T: Type 0](whenTrue: T, whenFalse: T): MuxExpr[T] =
+        MuxExpr.mk[T](this.expr, whenTrue, whenFalse)
 }
 
 // ============================================================

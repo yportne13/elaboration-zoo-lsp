@@ -92,6 +92,7 @@ enum Expr {
     switch(value: Expr, cases: Expr)
     block(head: Expr, tail: Expr)
     nop
+    mux(cond: Expr, whenTrue: Expr, whenFalse: Expr)
     bitsel(e: Expr, idx: Expr)
     partsel(e: Expr, hi: Expr, lo: Expr)
 }
@@ -103,6 +104,9 @@ def isRegExpr(e: Expr): Boolean = match e {
     case createRegWidthInit(_, _, _) => true
     case createSIntRegWidth(_, _) => true
     case createSIntRegWidthInit(_, _, _) => true
+    case mux(_, _, _) => false
+    case bitsel(e, _) => isRegExpr(e)
+    case partsel(e, _, _) => isRegExpr(e)
     case _ => false
 }
 
@@ -236,6 +240,12 @@ def createSignalExpr(name: String, e: Expr): Expr =
             e
         case literal(_) =>
             e
+        case mux(_, _, _) =>
+            e
+        case bitsel(_, _) =>
+            e
+        case partsel(_, _, _) =>
+            e
         case _ =>
             let wrapped = addWhenContext(e);
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
@@ -260,6 +270,9 @@ def hasRegAssign(e: Expr): Boolean = match e {
             case true => true
             case false => hasRegAssign(tail)
         }
+    case bitsel(_, _) => false
+    case partsel(_, _, _) => false
+    case mux(_, _, _) => false
     case _ => false
 }
 
