@@ -110,26 +110,30 @@ def isRegExpr(e: Expr): Boolean = match e {
     case _ => false
 }
 
-struct Module {
+struct ModuleDef {
     name: String
     expr_num: Nat
     expr: Vec[Expr] expr_num
 }
 
+trait Module {
+    def __module_def: ModuleDef
+}
+
 struct module {
     num: Nat
-    data: Vec[Module] num
+    data: Vec[ModuleDef] num
 }
 
 impl module {
-    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
+    def insert(m: ModuleDef): module = module.mk(this.num + 1, m :: this.data)
 }
 
 // Generic helper: add an expression to the first module (or create one if none exists)
-def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr): module = match data {
-    case nil => module.mk(0 + 1, Module.mk(name, 0 + 1, e :: nil) :: nil)
+def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): module = match data {
+    case nil => module.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
     case cons(head, tail) =>
-        let new_module = Module.mk(head.name, head.expr_num + 1, e :: head.expr);
+        let new_module = ModuleDef.mk(head.name, head.expr_num + 1, e :: head.expr);
         module.mk(num, new_module :: tail)
 }
 

@@ -12,7 +12,7 @@ module simpleALU {
 }
 
 def mod1_opt = get_global("module").data.head_option
-def mod1 = mod1_opt.unwrap_or(Module.mk("simpleALU", 0, nil))
+def mod1 = mod1_opt.unwrap_or(ModuleDef.mk("simpleALU", 0, nil))
 println("=== Simple ALU (UInt + UInt) ===")
 println(moduleVL(mod1))
 
@@ -26,6 +26,6 @@ module adderNat {
 }
 
 def mod2_opt = get_global("module").data.head_option
-def mod2 = mod2_opt.unwrap_or(Module.mk("adderNat", 0, nil))
+def mod2 = mod2_opt.unwrap_or(ModuleDef.mk("adderNat", 0, nil))
 println("=== UInt + Nat (via Into) ===")
 println(moduleVL(mod2))

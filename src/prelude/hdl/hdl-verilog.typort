@@ -242,7 +242,7 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
     }
 
 // Convert a Module to a Verilog string
-def moduleVL(m: Module): String =
+def moduleVL(m: ModuleDef): String =
     let port_decls = portsVL(m.expr);
     let port_lines = list_reverse(collectPortLines m.expr);
     let wire_decls = wiresVL(m.expr);
