@@ -1467,9 +1467,8 @@ println(moduleVL(Test))
 
 #[test]
 fn test_hdl_reg_init_in_when() {
-    // Register inside when block — assignment is wrapped in when() expr,
-    // so the clocked block (and its reset assistant) don't apply here.
-    // The when generates combinational always @(*) with the regAssign inside.
+    // Register inside when block — condition should be inside always @(posedge clk),
+    // NOT inside always @(*) block.
     let input = r#"
 module Test {
     let cond = Bool
@@ -1488,8 +1487,10 @@ println(moduleVL(Test))
             assert!(output.contains("reg signed"), "reg signed present");
             // Reset port present (detected from init reg variant)
             assert!(output.contains("input wire reset"), "reset port present");
-            // When block generated
-            assert!(output.contains("cond) begin"), "when condition in always block");
+            // When-generated if (cond) should be inside always @(posedge clk), NOT in always @(*)
+            assert!(output.contains("posedge clk"), "should be clocked block");
+            assert!(!output.contains("always @(*)"), "should NOT be in combinational always block");
+            assert!(output.contains("cond) begin"), "when condition preserved");
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

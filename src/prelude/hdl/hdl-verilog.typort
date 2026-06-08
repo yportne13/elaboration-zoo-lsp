@@ -157,10 +157,18 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
 }
 
 // Collect clocked assignments (regAssign) from Vec[Expr]
+// Also collects when nodes that wrap regAssign (e.g., when(cond, regAssign(...), None))
 def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case regAssign(_, _) => lcons (exprVL(e)) (collectClockLines tail)
+        case when(_, _, _) =>
+            // When nodes with regAssign inside go to the clocked block
+            let has_clk = hasRegAssign(e);
+            match has_clk {
+                case true => lcons (exprVL(e)) (collectClockLines tail)
+                case false => collectClockLines tail
+            }
         case _ => collectClockLines tail
     }
 }
@@ -177,7 +185,12 @@ def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case when(_, _, _) =>
-            lcons ("  always @(*) begin\n" + exprVL(e) + "\n" + "end") (collectAlwaysLines tail)
+            // Skip when nodes that contain regAssign — they go to the clocked block
+            let has_clk = hasRegAssign(e);
+            match has_clk {
+                case true => collectAlwaysLines tail
+                case false => lcons ("  always @(*) begin\n" + exprVL(e) + "\n" + "end") (collectAlwaysLines tail)
+            }
         case _ => collectAlwaysLines tail
     }
 }

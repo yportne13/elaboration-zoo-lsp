@@ -240,6 +240,27 @@ def createSignalExpr(name: String, e: Expr): Expr =
             e
     }
 
+// Check if an Expr tree contains any regAssign (for proper when/clocked codegen)
+def hasRegAssign(e: Expr): Boolean = match e {
+    case regAssign(_, _) => true
+    case when(_, body, elseBody) =>
+        let b = hasRegAssign(body);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasRegAssign(eb)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasRegAssign(head);
+        match h {
+            case true => true
+            case false => hasRegAssign(tail)
+        }
+    case _ => false
+}
+
 // ---------- Reset value tracking (embedded in Expr via create*RegWidthInit variants) ----------
 // Reset init values are stored directly in Expr variants (createRegWidthInit,
 // createSIntRegWidthInit). This avoids global state pattern-matching issues.
