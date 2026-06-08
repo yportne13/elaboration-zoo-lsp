@@ -397,7 +397,11 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
             let (input, op) = smolstr(Op).parse(input, state)?;
             if let Some(r_bp) = prefix_binding_power(&op) {
                 let (input, rhs) = expr_bp(r_bp).parse(input, state)?;
-                Ok((input, Raw::Obj(Box::new(rhs), Some(op))))
+                if op.data == "-" {
+                    Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("neg"))))))
+                } else {
+                    Ok((input, Raw::Obj(Box::new(rhs), Some(op))))
+                }
             } else {
                 Err(IError { msg: op.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)) })
             }
@@ -572,7 +576,7 @@ fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResu
 
 fn prefix_binding_power(op: &Span<SmolStr>) -> Option<u8> {
     match &op.data {
-        s if (s == "!") | (s == "~") => Some(30),
+        s if (s == "!") | (s == "~") | (s == "-") => Some(30),
         _ => None,
     }
 }

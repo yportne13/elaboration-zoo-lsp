@@ -367,6 +367,8 @@ impl[width: Nat] UInt[width] {
 }
 
 impl[width: Nat] SInt[width] {
+    def neg: SInt[width] =
+        SInt.mk(None, unary("-", this.expr))
     def msb: Bool =
         Bool.mk(None, binary(this.expr, "msb", this.expr))
     def lsb: Bool =
