@@ -119,26 +119,19 @@ macro_rules Expr {
 
 // The module macro provides convenient module definition syntax
 // Usage:
-//   module myAdder {
-//     input a = UInt[8]
-//     input b = UInt[8]
-//     output result = UInt[9]
+//   module myAdder(a: UInt[8], b: UInt[8]) -> UInt[9] {
+//     let result = UInt[9]
 //     result := a +^ b
 //   }
-//
-// Expands to a function returning ModuleTree:
-//   def myAdder(): ModuleTree =
-//     let _ = create_global("current_exprs", ExprList.mk(lnil));
-//     // body (signals & assignments via createSignalExpr → change_mutable)
-//     let raw = get_global("current_exprs");
-//     ModuleTree.mk("myAdder", list_reverse(raw.exprs), lnil)
 
 #[macro_export]
 macro_rules module {
     ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
-        def $name $({$args})* : ModuleTree =
-            let _ = create_global("module", lnil);
+        def $name $({$args})* =
+            let new_module = ModuleDef.mk(stringify $name, 0, nil);
+            let creat_module = create_global("module", module.mk(0 + 1, new_module :: nil));
             $({$body})*
-            ModuleTree.mk(stringify $name, list_reverse(get_global("module")), lnil)
+            let ret = get_global("module").data.head_option;
+            ret.unwrap_or(new_module)
         };
 }

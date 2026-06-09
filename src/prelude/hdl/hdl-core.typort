@@ -115,29 +115,32 @@ def isRegExpr(e: Expr): Boolean = match e {
     case _ => false
 }
 
-// ---------- ModuleTree (hierarchical module representation) ----------
-
-struct ModuleTree {
+struct ModuleDef {
     name: String
-    exprs: List[Expr]
-    children: List[ModuleTree]
+    expr_num: Nat
+    expr: Vec[Expr] expr_num
 }
 
 trait Module {
-    def __tree: ModuleTree
+    def __module_def: ModuleDef
 }
 
-// ---------- Simple per-module expression collector ----------
-// Each module function uses `"current_exprs"` global to collect
-// expressions (via createSignalExpr). At the end, the macro reads
-// them and assembles the ModuleTree.
-
-// Concrete wrapper type for expression list (used with mutable globals)
-struct ExprList {
-    exprs: List[Expr]
+struct module {
+    num: Nat
+    data: Vec[ModuleDef] num
 }
 
-def nilExprList: ExprList = ExprList.mk(lnil)
+impl module {
+    def insert(m: ModuleDef): module = module.mk(this.num + 1, m :: this.data)
+}
+
+// Generic helper: add an expression to the first module (or create one if none exists)
+def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): module = match data {
+    case nil => module.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
+    case cons(head, tail) =>
+        let new_module = ModuleDef.mk(head.name, head.expr_num + 1, e :: head.expr);
+        module.mk(num, new_module :: tail)
+}
 
 // ---------- When context tracking ----------
 // When blocks use a simple stack to track the current condition.
@@ -202,18 +205,63 @@ def addWhenContext(e: Expr): Expr =
 // Only assignments (assign) are conditionally wrapped via addWhenContext.
 def createSignalExpr(name: String, e: Expr): Expr =
     match e {
-        case create(_) | createIn(_) | createOut(_) | createWidth(_, _) |
-             createInWidth(_, _) | createOutWidth(_, _) | createReg(_) |
-             createRegWidth(_, _) | createRegWidthInit(_, _, _) |
-             createSIntWidth(_, _) | createSIntInWidth(_, _) | createSIntOutWidth(_, _) |
-             createSIntRegWidth(_, _) | createSIntRegWidthInit(_, _, _) =>
-            let d = change_mutable("module", x => lcons(e, x));
+        case create(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
-        case literal(_) | mux(_, _, _) | bitsel(_, _) | partsel(_, _) =>
+        case createIn(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOut(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOutWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createReg(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createRegWidthInit(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntOutWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntRegWidthInit(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case literal(_) =>
+            e
+        case mux(_, _, _) =>
+            e
+        case bitsel(_, _) =>
+            e
+        case partsel(_, _, _) =>
+            e
+        case instance(_, _) =>
+            e
+        case subSignal(_, _) =>
             e
         case _ =>
             let wrapped = addWhenContext(e);
-            let d = change_mutable("module", x => lcons(wrapped, x));
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
             e
     }
 
@@ -262,8 +310,6 @@ def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
 // Uses the Rust builtin nat_to_dec directly (the natToDec wrapper is in hdl-verilog.typort)
 def verilogLiteral(e: Expr): String = match e {
     case literal(v) => nat_to_dec(v)
-    case instance(_, _) => "0"
-    case subSignal(_, _) => "0"
     case _ => "0"
 }
 
@@ -274,8 +320,6 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
         case createSIntRegWidthInit(name, _, initVal) =>
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
-        case instance(_, _) => collectInitLines tail
-        case subSignal(_, _) => collectInitLines tail
         case _ => collectInitLines tail
     }
 }
