@@ -201,131 +201,6 @@ def addWhenContext(e: Expr): Expr =
     let ws = get_global("WhenStack");
     wrapWithWhenContext(ws, e)
 
-// Helper used by signal creation and assignment to insert expr into module.
-// Signal declarations (create/createIn/createOut) are added directly without when context.
-// Only assignments (assign) are conditionally wrapped via addWhenContext.
-def createSignalExpr(name: String, e: Expr): Expr =
-    match e {
-        case create(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createIn(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createOut(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createInWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createOutWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createReg(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createRegWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createRegWidthInit(_, _, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createSIntWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createSIntInWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createSIntOutWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createSIntRegWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case createSIntRegWidthInit(_, _, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
-            e
-        case literal(_) =>
-            e
-        case mux(_, _, _) =>
-            e
-        case bitsel(_, _) =>
-            e
-        case partsel(_, _, _) =>
-            e
-        case instance(_, _) =>
-            e
-        case subSignal(_, _) =>
-            e
-        case _ =>
-            let wrapped = addWhenContext(e);
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
-            e
-    }
-
-// Check if an Expr tree contains any regAssign (for proper when/clocked codegen)
-def hasRegAssign(e: Expr): Boolean = match e {
-    case regAssign(_, _) => true
-    case when(_, body, elseBody) =>
-        let b = hasRegAssign(body);
-        match b {
-            case true => true
-            case false => match elseBody {
-                case None => false
-                case Some(eb) => hasRegAssign(eb)
-            }
-        }
-    case block(head, tail) =>
-        let h = hasRegAssign(head);
-        match h {
-            case true => true
-            case false => hasRegAssign(tail)
-        }
-    case bitsel(_, _) => false
-    case partsel(_, _, _) => false
-    case instance(_, _) => false
-    case subSignal(_, _) => false
-    case mux(_, _, _) => false
-    case _ => false
-}
-
-// ---------- Reset value tracking (embedded in Expr via create*RegWidthInit variants) ----------
-// Reset init values are stored directly in Expr variants (createRegWidthInit,
-// createSIntRegWidthInit). This avoids global state pattern-matching issues.
-// The following functions query a module's expressions for regs-with-reset:
-
-def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
-    case nil => false
-    case cons(e, tail) => match e {
-        case createRegWidthInit(_, _, _) => true
-        case createSIntRegWidthInit(_, _, _) => true
-        case _ => hasInitRegs tail
-    }
-}
-
-// Convert reset init value to Verilog literal string.
-// Only literal(Nat) is supported; all other values default to "0".
-// Uses the Rust builtin nat_to_dec directly (the natToDec wrapper is in hdl-verilog.typort)
-def verilogLiteral(e: Expr): String = match e {
-    case literal(v) => nat_to_dec(v)
-    case _ => "0"
-}
-
-def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case createRegWidthInit(name, _, initVal) =>
-            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
-        case createSIntRegWidthInit(name, _, initVal) =>
-            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
-        case _ => collectInitLines tail
-    }
-}
-
-// ---- Hierarchical Module Tree (redesign) ----
 struct ModuleTree {
     name: String
     exprs_len: Nat
@@ -412,3 +287,143 @@ def registerGlobalModuleTree(tree: ModuleTree): Unit =
 def mkInstance(instName: String, moduleName: String): Unit =
     let _dummy = addExprToCurrentFrame(instance(instName, moduleName));
     unit
+// Helper used by signal creation and assignment to insert expr into module.
+// Signal declarations (create/createIn/createOut) are added directly without when context.
+// Only assignments (assign) are conditionally wrapped via addWhenContext.
+def createSignalExpr(name: String, e: Expr): Expr =
+    match e {
+        case create(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createIn(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createOut(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createOutWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createReg(_) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createRegWidthInit(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createSIntWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createSIntInWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createSIntOutWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createSIntRegWidth(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case createSIntRegWidthInit(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let _frame_e = addExprToCurrentFrame(e);
+            e
+        case literal(_) =>
+            e
+        case mux(_, _, _) =>
+            e
+        case bitsel(_, _) =>
+            e
+        case partsel(_, _, _) =>
+            e
+        case instance(_, _) =>
+            e
+        case subSignal(_, _) =>
+            e
+        case _ =>
+            let wrapped = addWhenContext(e);
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
+            let _frame_e = addExprToCurrentFrame(wrapped);
+            e
+    }
+
+// Check if an Expr tree contains any regAssign (for proper when/clocked codegen)
+def hasRegAssign(e: Expr): Boolean = match e {
+    case regAssign(_, _) => true
+    case when(_, body, elseBody) =>
+        let b = hasRegAssign(body);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasRegAssign(eb)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasRegAssign(head);
+        match h {
+            case true => true
+            case false => hasRegAssign(tail)
+        }
+    case bitsel(_, _) => false
+    case partsel(_, _, _) => false
+    case instance(_, _) => false
+    case subSignal(_, _) => false
+    case mux(_, _, _) => false
+    case _ => false
+}
+
+// ---------- Reset value tracking (embedded in Expr via create*RegWidthInit variants) ----------
+// Reset init values are stored directly in Expr variants (createRegWidthInit,
+// createSIntRegWidthInit). This avoids global state pattern-matching issues.
+// The following functions query a module's expressions for regs-with-reset:
+
+def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
+    case nil => false
+    case cons(e, tail) => match e {
+        case createRegWidthInit(_, _, _) => true
+        case createSIntRegWidthInit(_, _, _) => true
+        case _ => hasInitRegs tail
+    }
+}
+
+// Convert reset init value to Verilog literal string.
+// Only literal(Nat) is supported; all other values default to "0".
+// Uses the Rust builtin nat_to_dec directly (the natToDec wrapper is in hdl-verilog.typort)
+def verilogLiteral(e: Expr): String = match e {
+    case literal(v) => nat_to_dec(v)
+    case _ => "0"
+}
+
+def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case createRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case createSIntRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case _ => collectInitLines tail
+    }
+}
+
+// ---- Hierarchical Module Tree (redesign) ----
