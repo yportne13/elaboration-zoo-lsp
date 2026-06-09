@@ -286,3 +286,6 @@ def moduleVL(m: ModuleDef): String =
         }
     };
     "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
+
+// Alias: moduleTreeVL is the public API expected by test/legacy_tests
+def moduleTreeVL(m: ModuleDef): String = moduleVL(m)
