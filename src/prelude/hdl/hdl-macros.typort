@@ -128,10 +128,16 @@ macro_rules Expr {
 macro_rules module {
     ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
         def $name $({$args})* =
+            // Initialize old-style module global for backward compat
             let new_module = ModuleDef.mk(stringify $name, 0, nil);
             let creat_module = create_global("module", module.mk(0 + 1, new_module :: nil));
+            // Push new frame for hierarchical tree
+            let _push = pushFrame(stringify $name);
             $({$body})*
-            let ret = get_global("module").data.head_option;
-            ret.unwrap_or(new_module)
+            // Pop frame to get the completed ModuleTree
+            let tree = popFrame();
+            // Register as child of parent frame (if any)
+            let _reg = registerChildName(tree.name);
+            tree
         };
 }

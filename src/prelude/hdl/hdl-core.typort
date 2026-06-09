@@ -143,6 +143,7 @@ def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: E
 }
 
 // ---------- When context tracking ----------
+// ---------- When context tracking ----------
 // When blocks use a simple stack to track the current condition.
 // Each assignment inside a when/elsewhen/otherwise scope is wrapped
 // with the appropriate when(cond, e, None) by addWhenContext.
@@ -323,3 +324,67 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case _ => collectInitLines tail
     }
 }
+
+// ---- Hierarchical Module Tree (redesign) ----
+struct ModuleTree {
+    name: String
+    exprs_len: Nat
+    exprs: Vec[Expr] exprs_len
+    children_len: Nat
+    children_names: List[String]
+}
+
+// The frame stack -- each frame is a ModuleTree under construction.
+enum FrameStack {
+    frameStackEmpty
+    frameStackPush(top: ModuleTree, rest: FrameStack)
+}
+
+// Initialize the module stack if not already set.
+def initModuleStack(): Unit =
+    let _ = change_mutable_default("ModuleStack", x => x, frameStackEmpty);
+    unit
+
+// Push a new named frame (empty ModuleTree) onto the stack.
+def pushFrame(name: String): Unit =
+    let empty = ModuleTree.mk(name, 0, nil, 0, lnil);
+    let _ = change_mutable_default("ModuleStack",
+        stack => frameStackPush(empty, stack),
+        frameStackPush(empty, frameStackEmpty));
+    unit
+
+// Pop the top frame from the stack, returning its ModuleTree.
+def popFrame(): ModuleTree =
+    let _ = initModuleStack();
+    let stack = get_global("ModuleStack");
+    let result = match stack {
+        case frameStackPush(top, _) => top
+        case frameStackEmpty => ModuleTree.mk("", 0, nil, 0, lnil)
+    };
+    let _ = change_mutable("ModuleStack", s => match s {
+        case frameStackPush(_, rest) => rest
+        case frameStackEmpty => frameStackEmpty
+    });
+    result
+
+// Add an Expr to the current (top) frame's exprs.
+def addExprToCurrentFrame(e: Expr): Unit =
+    let _ = change_mutable_default("ModuleStack", stack => match stack {
+        case frameStackPush(top, rest) =>
+            let new_exprs = e :: top.exprs;
+            let new_top = ModuleTree.mk(top.name, top.exprs_len + 1, new_exprs, top.children_len, top.children_names);
+            frameStackPush(new_top, rest)
+        case frameStackEmpty => frameStackEmpty
+    }, frameStackEmpty);
+    unit
+
+// Register a child module name with the current (top) frame.
+def registerChildName(name: String): Unit =
+    let _ = change_mutable_default("ModuleStack", stack => match stack {
+        case frameStackPush(top, rest) =>
+            let new_names = lcons name top.children_names;
+            let new_top = ModuleTree.mk(top.name, top.exprs_len, top.exprs, top.children_len + 1, new_names);
+            frameStackPush(new_top, rest)
+        case frameStackEmpty => frameStackEmpty
+    }, frameStackEmpty);
+    unit
