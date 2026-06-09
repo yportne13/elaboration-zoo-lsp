@@ -1936,3 +1936,67 @@ println(moduleTreeVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_hdl_slice_assign() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = UInt[4]
+    b := 5
+    a.slice[3, 0] := b
+}
+
+println(moduleTreeVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("assign a[3:0] = b"), "slice assign should generate a[3:0] = b");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_slice_assign_literal() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    a.slice[3, 0] := 5.into
+}
+
+println(moduleTreeVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("assign a[3:0] = 5"), "slice literal assign, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_slice_assign_reg() {
+    let input = r#"
+module Test {
+    reg a = UInt[8]
+    reg b = UInt[4]
+    let cond = Bool
+    when cond {
+        a.slice[3, 0] := b
+    }
+}
+
+println(moduleTreeVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("a[3:0] <= b") || output.contains("a[3:0] = b"),
+                "reg slice assign should use <= in clocked block, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
