@@ -3167,7 +3167,7 @@ module Adder {
     output sum = UInt[8]
     sum := a + b
 }
-println (moduleVL Adder)
+println (moduleTreeVL Adder)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
