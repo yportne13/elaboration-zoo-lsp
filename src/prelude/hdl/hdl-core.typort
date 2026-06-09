@@ -342,26 +342,27 @@ enum FrameStack {
 
 // Initialize the module stack if not already set.
 def initModuleStack(): Unit =
-    let _ = change_mutable_default("ModuleStack", x => x, frameStackEmpty);
+    let _dummy = change_mutable_default("FrameStack", x => x, frameStackEmpty);
     unit
 
 // Push a new named frame (empty ModuleTree) onto the stack.
 def pushFrame(name: String): Unit =
-    let empty = ModuleTree.mk(name, 0, nil, 0, lnil);
-    let _ = change_mutable_default("ModuleStack",
-        stack => frameStackPush(empty, stack),
-        frameStackPush(empty, frameStackEmpty));
+    let empty_list: List[String] = lnil;
+    let empty = ModuleTree.mk(name, 0, nil, 0, empty_list);
+    let _dummy = initModuleStack;
+    let _dummy2 = change_mutable("FrameStack", x => frameStackPush(empty, x));
     unit
 
 // Pop the top frame from the stack, returning its ModuleTree.
 def popFrame(): ModuleTree =
-    let _ = initModuleStack();
-    let stack = get_global("ModuleStack");
+    let _dummy = initModuleStack;
+    let stack = get_global("FrameStack");
+    let empty_list: List[String] = lnil;
     let result = match stack {
         case frameStackPush(top, _) => top
-        case frameStackEmpty => ModuleTree.mk("", 0, nil, 0, lnil)
+        case frameStackEmpty => ModuleTree.mk("", 0, nil, 0, empty_list)
     };
-    let _ = change_mutable("ModuleStack", s => match s {
+    let _dummy2 = change_mutable("FrameStack", s => match s {
         case frameStackPush(_, rest) => rest
         case frameStackEmpty => frameStackEmpty
     });
@@ -369,22 +370,45 @@ def popFrame(): ModuleTree =
 
 // Add an Expr to the current (top) frame's exprs.
 def addExprToCurrentFrame(e: Expr): Unit =
-    let _ = change_mutable_default("ModuleStack", stack => match stack {
-        case frameStackPush(top, rest) =>
-            let new_exprs = e :: top.exprs;
-            let new_top = ModuleTree.mk(top.name, top.exprs_len + 1, new_exprs, top.children_len, top.children_names);
-            frameStackPush(new_top, rest)
-        case frameStackEmpty => frameStackEmpty
-    }, frameStackEmpty);
+    let _dummy = change_mutable_default("FrameStack",
+        stack => match stack {
+            case frameStackPush(top, rest) =>
+                let new_exprs = e :: top.exprs;
+                let new_top = ModuleTree.mk(top.name, top.exprs_len + 1, new_exprs, top.children_len, top.children_names);
+                frameStackPush(new_top, rest)
+            case frameStackEmpty => frameStackEmpty
+        },
+        frameStackEmpty);
     unit
 
 // Register a child module name with the current (top) frame.
 def registerChildName(name: String): Unit =
-    let _ = change_mutable_default("ModuleStack", stack => match stack {
+    let _dummy = change_mutable_default("FrameStack", stack => match stack {
         case frameStackPush(top, rest) =>
             let new_names = lcons name top.children_names;
             let new_top = ModuleTree.mk(top.name, top.exprs_len, top.exprs, top.children_len + 1, new_names);
             frameStackPush(new_top, rest)
         case frameStackEmpty => frameStackEmpty
     }, frameStackEmpty);
+    unit
+
+// ---- Global Module Registry ----
+// Stores ModuleTrees keyed by module type name for hierarchical Verilog gen.
+
+struct ModuleRegistry {
+    num: Nat
+    entries: Vec[ModuleTree] num
+}
+
+// Register a ModuleTree in the global registry (keyed by tree.name).
+def registerGlobalModuleTree(tree: ModuleTree): Unit =
+    let _dummy = change_mutable_default("ModuleRegistry",
+        reg => ModuleRegistry.mk(reg.num + 1, tree :: reg.entries),
+        ModuleRegistry.mk(0, nil));
+    unit
+
+// Create an instance expression in the current frame.
+// Called at the call-site of a sub-module mk() function.
+def mkInstance(instName: String, moduleName: String): Unit =
+    let _dummy = addExprToCurrentFrame(instance(instName, moduleName));
     unit

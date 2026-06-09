@@ -287,6 +287,23 @@ def moduleVL(m: ModuleDef): String =
     };
     "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
 
+// ============================================================
+//  Hierarchical Verilog Generation (ModuleTree-based)
+// ============================================================
+
+// Generate instance instantiation lines from the tree's expressions.
+// Returns lines like:  moduleName instName;
+def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = match exprs {
+    case nil => lnil
+    case cons(e, tail) =>
+        let rest = collectInstanceLinesTree tail;
+        match e {
+            case instance(instName, moduleName) =>
+                lcons ("  " + moduleName + " " + instName + ";") rest
+            case _ => rest
+        }
+}
+
 // Alias: moduleTreeVL is the public API expected by test/legacy_tests
 def moduleTreeVL(m: ModuleTree): String =
     let port_decls = portsVL(m.exprs);
@@ -296,11 +313,16 @@ def moduleTreeVL(m: ModuleTree): String =
     let assigns = assignsVL(m.exprs);
     let always = alwaysVL(m.exprs);
     let clocked = clockedVL(m.exprs);
+    let inst_lines = list_reverse(collectInstanceLinesTree m.exprs);
     let has_regs = match list_reverse(collectRegLines m.exprs) {
         case lnil => false
         case _ => true
     };
     let has_ports = match port_lines {
+        case lnil => false
+        case _ => true
+    };
+    let has_instances = match inst_lines {
         case lnil => false
         case _ => true
     };
@@ -323,19 +345,10 @@ def moduleTreeVL(m: ModuleTree): String =
             case true => p1 + ",\n  input wire reset"
         }
     };
-    "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
-
-// ============================================================
-//  Hierarchical Verilog Generation (ModuleTree-based)
-// ============================================================
-
-// Generate instance instantiation lines from the tree's expressions.
-// Returns lines like:  moduleName instName;
-def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = match exprs {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case instance(instName, moduleName) =>
-            lcons ("  " + moduleName + " " + instName + ";") (collectInstanceLinesTree tail)
-        case _ => collectInstanceLinesTree tail
-    }
-}
+    let header = "module " + m.name + " (\n" + p2 + "\n);\n";
+    let body = header + wire_decls + reg_decls + assigns + clocked + always;
+    let body_with_inst = match has_instances {
+        case false => body
+        case true => body + joinLines(inst_lines) + "\n"
+    };
+    body_with_inst + "endmodule"

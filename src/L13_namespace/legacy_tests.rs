@@ -2000,3 +2000,34 @@ println(moduleTreeVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_hdl_submodule_instance() {
+    let input = r#"
+module MyAdder[w: Nat] {
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w + 1]
+    sum := a +^ b
+}
+
+module Top {
+    input a = UInt[8]
+    input b = UInt[8]
+    let _adder = MyAdder[8]
+    let _ = mkInstance("myAdder", "MyAdder")
+}
+
+println(moduleTreeVL(Top))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Sub-module instance test ===\n{}", output);
+            assert!(output.contains("module Top"), "missing Top module: {}", output);
+            assert!(output.contains("myAdder"), "missing instance name 'myAdder': {}", output);
+            assert!(output.contains("MyAdder"), "missing module type 'MyAdder': {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}

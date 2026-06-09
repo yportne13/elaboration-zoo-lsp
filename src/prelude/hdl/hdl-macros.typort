@@ -132,12 +132,14 @@ macro_rules module {
             let new_module = ModuleDef.mk(stringify $name, 0, nil);
             let creat_module = create_global("module", module.mk(0 + 1, new_module :: nil));
             // Push new frame for hierarchical tree
-            let _push = pushFrame(stringify $name);
+            let _push_f = pushFrame(stringify $name);
             $({$body})*
             // Pop frame to get the completed ModuleTree
             let tree = popFrame();
             // Register as child of parent frame (if any)
-            let _reg = registerChildName(tree.name);
+            let _reg_c = registerChildName(tree.name);
+            // Register in global registry for hierarchical Verilog gen
+            let _gbl_r = registerGlobalModuleTree(tree);
             tree
         };
 }
