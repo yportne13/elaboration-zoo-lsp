@@ -978,7 +978,7 @@ module Test[w: Nat] {
     not_result := ~a
 }
 
-println(moduleVL(Test[8]))
+println(moduleTreeVL(Test[8]))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1001,7 +1001,7 @@ module Test[w: Nat] {
     eq := a === b
 }
 
-println(moduleVL(Test[8]))
+println(moduleTreeVL(Test[8]))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
@@ -1019,7 +1019,7 @@ module Test[w: Nat] {
     result := a + b
 }
 
-println(moduleVL(Test[8]))
+println(moduleTreeVL(Test[8]))
 
 module adderNat {
     input a = UInt[8]
@@ -1027,7 +1027,7 @@ module adderNat {
     result := a + 42
 }
 
-println(moduleVL(adderNat))
+println(moduleTreeVL(adderNat))
 
 "#;
     match run_with_prelude(input) {
@@ -1115,7 +1115,7 @@ module Test {
     c := sum
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1139,7 +1139,7 @@ module Test {
     sum := a + b
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1314,7 +1314,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1336,7 +1336,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1357,7 +1357,7 @@ module Test {
     a := a ^ b
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1377,7 +1377,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1404,7 +1404,7 @@ module Test {
     c := c ^ d
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1428,7 +1428,7 @@ module Test {
     b := b + 2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1451,7 +1451,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1478,7 +1478,7 @@ module Test {
     }
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1512,7 +1512,7 @@ module Test {
     xor := a ^ b
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1535,7 +1535,7 @@ module Test {
     b := a.resize[8]
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1566,7 +1566,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1607,7 +1607,7 @@ module Test {
     outer1 := outer2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1638,7 +1638,7 @@ module Test {
     master := slave
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1675,7 +1675,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1699,7 +1699,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1726,7 +1726,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1753,7 +1753,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1868,7 +1868,7 @@ module Test {
     let result = UInt[4]
     switch sel { is a { result := a } default { result := c } }
 }
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1900,7 +1900,7 @@ module Test {
     s_hi := s.slice[15, 8]
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1926,7 +1926,7 @@ module Test {
     bit := a[7]
 }
 
-println(moduleVL(Test))
+println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1949,4 +1949,67 @@ fn test_trait_system_comprehensive() {
     assert!(result.contains("4"), "Mul trait should compute 2*3=6 then double");
     assert!(result.contains("List[Nat]::cons"), "Generic inherent impl should work");
     assert!(result.contains("0"), "Basic value zero should print");
+}
+
+fn test_hdl_slice_assign() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = UInt[4]
+    b := 5
+    a.slice[3, 0] := b
+}
+
+println(moduleTreeVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("assign a[3:0] = b"), "slice assign should generate a[3:0] = b");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_slice_assign_literal() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    a.slice[3, 0] := 5.into
+}
+
+println(moduleTreeVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("assign a[3:0] = 5"), "slice literal assign, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_slice_assign_reg() {
+    let input = r#"
+module Test {
+    reg a = UInt[8]
+    reg b = UInt[4]
+    let cond = Bool
+    when cond {
+        a.slice[3, 0] := b
+    }
+}
+
+println(moduleTreeVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("a[3:0] <= b") || output.contains("a[3:0] = b"),
+                "reg slice assign should use <= in clocked block, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
 }

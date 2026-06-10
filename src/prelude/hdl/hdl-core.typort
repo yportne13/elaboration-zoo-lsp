@@ -95,6 +95,9 @@ enum Expr {
     mux(cond: Expr, whenTrue: Expr, whenFalse: Expr)
     bitsel(e: Expr, idx: Expr)
     partsel(e: Expr, hi: Expr, lo: Expr)
+    // ---- hierarchy: sub-module instantiation & cross-level signal references ----
+    instance(instName: String, moduleName: String)   // sub-module instantiation
+    subSignal(instName: String, signalName: String)   // cross-level signal reference
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
@@ -107,32 +110,39 @@ def isRegExpr(e: Expr): Boolean = match e {
     case mux(_, _, _) => false
     case bitsel(e, _) => isRegExpr(e)
     case partsel(e, _, _) => isRegExpr(e)
+    case instance(_, _) => false
+    case subSignal(_, _) => false
     case _ => false
 }
 
-struct Module {
+struct ModuleDef {
     name: String
     expr_num: Nat
     expr: Vec[Expr] expr_num
 }
 
+trait Module {
+    def __module_def: ModuleDef
+}
+
 struct module {
     num: Nat
-    data: Vec[Module] num
+    data: Vec[ModuleDef] num
 }
 
 impl module {
-    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
+    def insert(m: ModuleDef): module = module.mk(this.num + 1, m :: this.data)
 }
 
 // Generic helper: add an expression to the first module (or create one if none exists)
-def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr): module = match data {
-    case nil => module.mk(0 + 1, Module.mk(name, 0 + 1, e :: nil) :: nil)
+def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): module = match data {
+    case nil => module.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
     case cons(head, tail) =>
-        let new_module = Module.mk(head.name, head.expr_num + 1, e :: head.expr);
+        let new_module = ModuleDef.mk(head.name, head.expr_num + 1, e :: head.expr);
         module.mk(num, new_module :: tail)
 }
 
+// ---------- When context tracking ----------
 // ---------- When context tracking ----------
 // When blocks use a simple stack to track the current condition.
 // Each assignment inside a when/elsewhen/otherwise scope is wrapped
@@ -246,6 +256,10 @@ def createSignalExpr(name: String, e: Expr): Expr =
             e
         case partsel(_, _, _) =>
             e
+        case instance(_, _) =>
+            e
+        case subSignal(_, _) =>
+            e
         case _ =>
             let wrapped = addWhenContext(e);
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
@@ -272,6 +286,8 @@ def hasRegAssign(e: Expr): Boolean = match e {
         }
     case bitsel(_, _) => false
     case partsel(_, _, _) => false
+    case instance(_, _) => false
+    case subSignal(_, _) => false
     case mux(_, _, _) => false
     case _ => false
 }
@@ -308,3 +324,67 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case _ => collectInitLines tail
     }
 }
+
+// ---- Hierarchical Module Tree (redesign) ----
+struct ModuleTree {
+    name: String
+    exprs_len: Nat
+    exprs: Vec[Expr] exprs_len
+    children_len: Nat
+    children_names: List[String]
+}
+
+// The frame stack -- each frame is a ModuleTree under construction.
+enum FrameStack {
+    frameStackEmpty
+    frameStackPush(top: ModuleTree, rest: FrameStack)
+}
+
+// Initialize the module stack if not already set.
+def initModuleStack(): Unit =
+    let _ = change_mutable_default("ModuleStack", x => x, frameStackEmpty);
+    unit
+
+// Push a new named frame (empty ModuleTree) onto the stack.
+def pushFrame(name: String): Unit =
+    let empty = ModuleTree.mk(name, 0, nil, 0, lnil);
+    let _ = change_mutable_default("ModuleStack",
+        stack => frameStackPush(empty, stack),
+        frameStackPush(empty, frameStackEmpty));
+    unit
+
+// Pop the top frame from the stack, returning its ModuleTree.
+def popFrame(): ModuleTree =
+    let _ = initModuleStack();
+    let stack = get_global("ModuleStack");
+    let result = match stack {
+        case frameStackPush(top, _) => top
+        case frameStackEmpty => ModuleTree.mk("", 0, nil, 0, lnil)
+    };
+    let _ = change_mutable("ModuleStack", s => match s {
+        case frameStackPush(_, rest) => rest
+        case frameStackEmpty => frameStackEmpty
+    });
+    result
+
+// Add an Expr to the current (top) frame's exprs.
+def addExprToCurrentFrame(e: Expr): Unit =
+    let _ = change_mutable_default("ModuleStack", stack => match stack {
+        case frameStackPush(top, rest) =>
+            let new_exprs = e :: top.exprs;
+            let new_top = ModuleTree.mk(top.name, top.exprs_len + 1, new_exprs, top.children_len, top.children_names);
+            frameStackPush(new_top, rest)
+        case frameStackEmpty => frameStackEmpty
+    }, frameStackEmpty);
+    unit
+
+// Register a child module name with the current (top) frame.
+def registerChildName(name: String): Unit =
+    let _ = change_mutable_default("ModuleStack", stack => match stack {
+        case frameStackPush(top, rest) =>
+            let new_names = lcons name top.children_names;
+            let new_top = ModuleTree.mk(top.name, top.exprs_len, top.exprs, top.children_len + 1, new_names);
+            frameStackPush(new_top, rest)
+        case frameStackEmpty => frameStackEmpty
+    }, frameStackEmpty);
+    unit

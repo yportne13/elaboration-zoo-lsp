@@ -2698,7 +2698,7 @@ module Adder {
     output sum = UInt[8]
     sum := a + b
 }
-println (moduleVL Adder)
+println (moduleTreeVL Adder)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2736,7 +2736,7 @@ module Test[w: Nat] {
         c := a - b
     }
 }
-println (moduleVL Test)
+println (moduleTreeVL Test)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2765,7 +2765,7 @@ module Test {
         a := a
     }
 }
-println (moduleVL Test)
+println (moduleTreeVL Test)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2791,7 +2791,7 @@ module NatTest {
     result := 7
     zero_check := a.eqNat(0)
 }
-println (moduleVL NatTest)
+println (moduleTreeVL NatTest)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2824,7 +2824,7 @@ module Test {
         }
     }
 }
-println (moduleVL Test)
+println (moduleTreeVL Test)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -3054,7 +3054,7 @@ module Test[w: Nat] {
     output sum = UInt[w]
     sum := 42
 }
-println (moduleVL Test[8])
+println (moduleTreeVL Test[8])
 "#;
     let output = mk_multi_into_test(input);
     assert!(output.contains("assign sum = 42"), "expected 42 assign, got: {}", output);
@@ -3114,7 +3114,7 @@ module Test {
     output x = UInt[8]
     x := 42
 }
-println (moduleVL Test)
+println (moduleTreeVL Test)
 "#;
     let output = mk_multi_into_test(input);
     assert!(output.contains("assign x = 42"), "expected assign, got: {}", output);
@@ -3139,7 +3139,7 @@ module Test[w: Nat] {
     output b = UInt[w]
     b := a
 }
-println (moduleVL Test[8])
+println (moduleTreeVL Test[8])
 "#;
     let output = mk_multi_into_test(input);
     assert!(output.contains("endmodule"), "expected endmodule, got: {}", output);
@@ -3207,7 +3207,7 @@ module Adder {
     input a = UInt[8]
     sum := a + + b
 }
-println (moduleVL Adder)
+println (moduleTreeVL Adder)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {

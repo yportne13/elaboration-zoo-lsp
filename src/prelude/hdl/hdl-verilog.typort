@@ -67,6 +67,12 @@ def exprVL(e: Expr): String = match e {
         exprVL(e) + "[" + exprVL(idx) + "]"
     case partsel(e, hi, lo) =>
         exprVL(e) + "[" + exprVL(hi) + ":" + exprVL(lo) + "]"
+    case instance(instName, moduleName) =>
+        let instLine = "instance " + moduleName + " " + instName;
+        instLine
+    case subSignal(instName, signalName) =>
+        let sigLine = instName + "_" + signalName;
+        sigLine
 }
 
 // Walk Vec[Expr]: filter out declarations and when-blocks, join assignments
@@ -90,6 +96,8 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case regAssign(_, _) => collectAssignLines tail
         case literal(_) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
+        case instance(_, _) => collectAssignLines tail
+        case subSignal(_, _) => collectAssignLines tail
         case _ => lcons (exprVL(e)) (collectAssignLines tail)
     }
 }
@@ -242,7 +250,7 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
     }
 
 // Convert a Module to a Verilog string
-def moduleVL(m: Module): String =
+def moduleVL(m: ModuleDef): String =
     let port_decls = portsVL(m.expr);
     let port_lines = list_reverse(collectPortLines m.expr);
     let wire_decls = wiresVL(m.expr);
@@ -278,3 +286,56 @@ def moduleVL(m: Module): String =
         }
     };
     "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
+
+// Alias: moduleTreeVL is the public API expected by test/legacy_tests
+def moduleTreeVL(m: ModuleTree): String =
+    let port_decls = portsVL(m.exprs);
+    let port_lines = list_reverse(collectPortLines m.exprs);
+    let wire_decls = wiresVL(m.exprs);
+    let reg_decls = regsVL(m.exprs);
+    let assigns = assignsVL(m.exprs);
+    let always = alwaysVL(m.exprs);
+    let clocked = clockedVL(m.exprs);
+    let has_regs = match list_reverse(collectRegLines m.exprs) {
+        case lnil => false
+        case _ => true
+    };
+    let has_ports = match port_lines {
+        case lnil => false
+        case _ => true
+    };
+    let has_init = hasInitRegs m.exprs;
+    let p0 = port_decls;
+    let p1 = match has_regs {
+        case false => p0
+        case true => match has_ports {
+            case false => "  input wire clk"
+            case _ => p0 + ",\n  input wire clk"
+        }
+    };
+    let p2 = match has_init {
+        case false => p1
+        case true => match has_regs {
+            case false => match has_ports {
+                case false => "  input wire reset"
+                case true => port_decls + ",\n  input wire reset"
+            }
+            case true => p1 + ",\n  input wire reset"
+        }
+    };
+    "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
+
+// ============================================================
+//  Hierarchical Verilog Generation (ModuleTree-based)
+// ============================================================
+
+// Generate instance instantiation lines from the tree's expressions.
+// Returns lines like:  moduleName instName;
+def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = match exprs {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case instance(instName, moduleName) =>
+            lcons ("  " + moduleName + " " + instName + ";") (collectInstanceLinesTree tail)
+        case _ => collectInstanceLinesTree tail
+    }
+}

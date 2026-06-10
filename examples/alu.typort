@@ -11,10 +11,9 @@ module simpleALU {
     result := a + b
 }
 
-def mod1_opt = get_global("module").data.head_option
-def mod1 = mod1_opt.unwrap_or(Module.mk("simpleALU", 0, nil))
+let mod1 = simpleALU()
 println("=== Simple ALU (UInt + UInt) ===")
-println(moduleVL(mod1))
+println(moduleTreeVL(mod1))
 
 // --- Example 2: UInt + Nat (via Into trait) ---
 // UInt[8] + 42: Nat is auto-converted to UInt[8] via Into[UInt[8]]
@@ -25,7 +24,6 @@ module adderNat {
     result := a + 42
 }
 
-def mod2_opt = get_global("module").data.head_option
-def mod2 = mod2_opt.unwrap_or(Module.mk("adderNat", 0, nil))
+let mod2 = adderNat()
 println("=== UInt + Nat (via Into) ===")
-println(moduleVL(mod2))
+println(moduleTreeVL(mod2))
