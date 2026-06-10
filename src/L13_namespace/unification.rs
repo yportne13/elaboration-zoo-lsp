@@ -569,6 +569,16 @@ impl Infer {
                 // Already deferring — let solve_multi_trait handle it later
                 return Ok(None);
             }
+            // If any non-out param is still Flex, defer resolution.
+            // The Self type (or other non-out param) must be concrete to pick
+            // the correct instance; otherwise val_match(Flex, pattern) always
+            // succeeds and may pick the wrong instance.
+            let has_flex_non_out = params.iter().zip(&out_param).any(|((_, val, _, _), is_out)| {
+                !*is_out && matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
+            });
+            if has_flex_non_out {
+                return Ok(None);
+            }
             // If there are multiple matches and output params are still Flex, defer.
             // When the output param is unresolved, eagerly resolving picks an arbitrary instance.
             // Defer to let context constrain the output param first.

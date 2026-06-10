@@ -2013,3 +2013,105 @@ println(moduleTreeVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+// ============================================================
+// Regression tests for trait_wrap: zero-param trait dot-call
+// ============================================================
+
+#[test]
+fn test_trait_wrap_zero_param_dot_call() {
+    // Bug 1 was: 零参数 trait 方法通过点号调用时返回未解析的 {$$} => ... 而非期望值
+    // Fix: 将 $$ 移到 $this 前面，insert_go 填充两者；
+    //      solve_trait 在非 out param 为 Flex 时推迟解析，
+    //      等 $this 统一具体类型后由 solve_multi_trait 解析
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+println (true.to_string)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let trimmed = output.trim();
+            // Should print "true", not "{$$} => $$.to_string Bool::true"
+            assert_eq!(trimmed, "true",
+                "Bug 1 regression: expected 'true', got '{}'", trimmed);
+        }
+        Err(e) => panic!("Bug 1 test error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// ============================================================
+// Bug reproduction tests for known trait system issues
+// ============================================================
+
+#[test]
+fn test_bug3_trait_method_with_rigid_type_param() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "bool:true"
+            case false => "bool:false"
+        }
+}
+
+def two = succ (succ zero)
+
+impl Show for Nat {
+    def show: String = match this {
+        case zero => "nat:0"
+        case succ(n) => "nat:>0"
+    }
+}
+
+// Test via implicit param (should work)
+def print_it[T][s: Show[T]](x: T): String = s.show x
+
+println (print_it true)
+println (print_it two)
+
+// Bug 3: dot-call with generic type param that is Rigid
+// def foo[T](x: T): String = x.show  // This should use trait_wrap
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            println!("Bug 3 output: {}", output);
+            assert!(output.contains("bool:true"), "Bug 3: expected 'bool:true', got: {}", output);
+            assert!(output.contains("nat:>0"), "Bug 3: expected 'nat:>0', got: {}", output);
+        }
+        Err(e) => panic!("Bug 3 error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}

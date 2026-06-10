@@ -1241,11 +1241,11 @@ impl Infer {
                     {
                         let params = {
                             let mut params = trait_params.clone();
-                            params.push((
-                                methods_name.clone().map(|_| SmolStr::new("$this")),
-                                Raw::Var(methods_name.clone().map(|_| SmolStr::new("Self"))),
-                                Icit::Expl
-                            ));
+                            // $$ (trait instance) must come before $this (Expl) so that
+                            // insert_go fills both Self and $$ before reaching $this.
+                            // When Self is still Flex, solve_trait in fresh_meta defers
+                            // $$ resolution to trait_metas; solve_multi_trait fires after
+                            // $this unifies Self with the concrete receiver type.
                             params.push((
                                 methods_name.clone().map(|_| SmolStr::new("$$")),
                                 trait_params.iter()
@@ -1255,6 +1255,11 @@ impl Infer {
                                         |ret, x| Raw::App(Box::new(ret), Box::new(Raw::Var(x)), Either::Icit(Icit::Impl))
                                     ),
                                 Icit::Impl
+                            ));
+                            params.push((
+                                methods_name.clone().map(|_| SmolStr::new("$this")),
+                                Raw::Var(methods_name.clone().map(|_| SmolStr::new("Self"))),
+                                Icit::Expl
                             ));
                             params.append(&mut methods_params.clone());
                             params
