@@ -2058,11 +2058,14 @@ println (true.to_string)
 }
 
 // ============================================================
-// Bug reproduction tests for known trait system issues
+// Trait method field access — Span independence test
 // ============================================================
 
 #[test]
-fn test_bug3_trait_method_with_rigid_type_param() {
+fn test_trait_method_field_access_span_independence() {
+    // 验证字段名 Span 的 PartialEq 只比较 .data（不比较位置信息）
+    // 这确保不同来源的 .mk 构造器字段名也能正确匹配
+    // 验证 Rigid 类型参数的 trait 实例字段访问
     let input = r#"
 def outParam[A](a: A): A = a
 
@@ -2088,30 +2091,38 @@ impl Show for Bool {
         }
 }
 
-def two = succ (succ zero)
-
 impl Show for Nat {
-    def show: String = match this {
-        case zero => "nat:0"
-        case succ(n) => "nat:>0"
-    }
+    def show: String =
+        match this {
+            case zero => "nat:0"
+            case succ(n) => "nat:>0"
+        }
 }
 
-// Test via implicit param (should work)
+// 显式 trait 参数 + Rigid 类型
 def print_it[T][s: Show[T]](x: T): String = s.show x
-
 println (print_it true)
-println (print_it two)
+println (print_it (succ (succ zero)))
 
-// Bug 3: dot-call with generic type param that is Rigid
-// def foo[T](x: T): String = x.show  // This should use trait_wrap
+// 零参数 trait 方法点号调用
+println (true.show)
+
+// 不同 span 来源的字段访问：两次引用
+def a: String = true.show
+def b: String = true.show
+println a
+println b
 "#;
     match run(input, 0) {
         Ok(output) => {
-            println!("Bug 3 output: {}", output);
-            assert!(output.contains("bool:true"), "Bug 3: expected 'bool:true', got: {}", output);
-            assert!(output.contains("nat:>0"), "Bug 3: expected 'nat:>0', got: {}", output);
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Span test output: {:?}", lines);
+            assert_eq!(lines[0], "bool:true");
+            assert_eq!(lines[1], "nat:>0");
+            assert_eq!(lines[2], "bool:true");
+            assert_eq!(lines[3], "bool:true");
+            assert_eq!(lines[4], "bool:true");
         }
-        Err(e) => panic!("Bug 3 error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+        Err(e) => panic!("Span test error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
