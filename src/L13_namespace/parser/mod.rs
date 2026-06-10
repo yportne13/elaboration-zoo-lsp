@@ -992,8 +992,9 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         (kw(T![:]), p_raw).map(|(_, x)| x),
+        (kw(T![=]), p_raw).option().map(|x| x.map(|(_, v)| v)),
     )
-        .map(|(_, name, params, ret)| (name, params, ret));
+        .map(|(_, name, params, ret, body)| (name, params, ret, body));
     (
         kw(TraitKeyword),
         smolstr(Ident),

@@ -35,8 +35,8 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
         Decl::TraitDecl { name, params, methods } => Decl::TraitDecl {
             name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
             params,
-            methods: methods.into_iter().map(|(mn, mparams, mret)| {
-                (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret)
+            methods: methods.into_iter().map(|(mn, mparams, mret, mbody)| {
+                (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret, mbody)
             }).collect(),
         },
         Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => Decl::ImplDecl {
@@ -695,9 +695,35 @@ impl Infer {
                         dependencies: List::new(),
                         lvl: trait_name.to_span().map(|_| typ_name.clone()),
                     };
-                    // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
-                    // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
                     self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
+                    // Fill in missing methods with default bodies from the trait definition
+                    let mut methods = methods;
+                    if let Some((_, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
+                        for (tm_name, tm_params, tm_ret, tm_default_body) in trait_methods {
+                            let has_impl = methods.iter().any(|(decl, _)| match decl {
+                                Decl::Def { name, .. } => name.data == tm_name.data,
+                                _ => false,
+                            });
+                            if !has_impl {
+                                if let Some(default_body) = tm_default_body {
+                                    methods.push((
+                                        Decl::Def {
+                                            name: tm_name,
+                                            params: tm_params,
+                                            ret_type: tm_ret,
+                                            body: default_body,
+                                        },
+                                        false,
+                                    ));
+                                } else {
+                                    return Err(Error(
+                                        tm_name.map(|n| format!("method `{}` has no default implementation", n)),
+                                        vec![],
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.clone())
                         .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
@@ -753,12 +779,12 @@ impl Infer {
                         name.map(|x| SmolStr::new(format!("{x}.mk"))),
                         methods
                             .into_iter()
-                            .map(|x| (
-                                x.0.clone(),
-                                std::iter::once((x.0.clone().map(|_| SmolStr::new("this")), Raw::Var(x.0.map(|_| SmolStr::new("Self"))), Icit::Expl))
-                                    .chain(x.1.into_iter())
+                            .map(|(mn, mparams, mret, _mbody)| (
+                                mn.clone(),
+                                std::iter::once((mn.clone().map(|_| SmolStr::new("this")), Raw::Var(mn.map(|_| SmolStr::new("Self"))), Icit::Expl))
+                                    .chain(mparams.into_iter())
                                     .rev()
-                                    .fold(x.2, |a, b| {
+                                    .fold(mret, |a, b| {
                                         Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                                     }),
                                 Icit::Expl,
@@ -1236,7 +1262,7 @@ impl Infer {
                         .map(|x| (trait_name, trait_params, out_param, x))
                 })
                 .filter(|(x, _, _, _)| self.trait_solver.can_satisfy(x, &typ_raw))
-                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type))| (
+                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type, _default_body))| (
                     trait_name.clone(),
                     {
                         let params = {

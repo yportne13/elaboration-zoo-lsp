@@ -245,7 +245,7 @@ pub enum Decl {
     TraitDecl {
         name: Span<SmolStr>,
         params: Vec<(Span<SmolStr>, Raw, Icit)>,
-        methods: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw)>,
+        methods: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>,
     },
     ImplDecl {
         name: Raw,

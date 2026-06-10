@@ -2126,3 +2126,105 @@ println b
         Err(e) => panic!("Span test error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+// ============================================================
+// Default method implementation in traits
+// ============================================================
+
+#[test]
+fn test_trait_default_method() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String = "default"
+    def custom_show: String
+}
+
+impl Show for Bool {
+    def custom_show: String =
+        match this {
+            case true => "custom:true"
+            case false => "custom:false"
+        }
+    // show 使用默认实现
+}
+
+println (true.show)
+println (true.custom_show)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Default method output: {:?}", lines);
+            assert!(output.contains("default"), "should use default show");
+            assert!(output.contains("custom:true"), "should use custom custom_show");
+        }
+        Err(e) => panic!("Default method error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_trait_default_method_override() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String = "default"
+}
+
+impl Show for Bool {
+    def show: String = "override"
+}
+
+println (true.show)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Override output: {:?}", lines);
+            assert_eq!(lines[0], "override", "impl should override default");
+        }
+        Err(e) => panic!("Override error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_trait_default_method_missing_error() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+    def other: String
+}
+
+impl Show for Bool {
+    def show: String = "hello"
+    // 缺少 other 且没有默认实现
+}
+"#;
+    match run(input, 0) {
+        Ok(_) => panic!("Should have failed with missing method error"),
+        Err(e) => {
+            let msg = e.0.data;
+            println!("Expected error: {}", msg);
+            assert!(msg.contains("no default"), "Expected 'no default' error, got: {}", msg);
+        }
+    }
+}
