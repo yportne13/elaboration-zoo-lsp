@@ -1936,3 +1936,17 @@ println(moduleVL(Test))
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_trait_system_comprehensive() {
+    let input = include_str!("../../tests/trait_system_tests.typort");
+    let result = run(input, 0).unwrap();
+    println!("{}", result);
+    assert!(result.contains("ALL_TRAIT_TESTS_PASSED"), "Trait system comprehensive test should pass: got {}", result);
+    // Verify specific trait feature outputs
+    assert!(result.contains("Bool::true"), "Implicit param trait should work");
+    assert!(result.contains("5"), "Add trait should compute 2+3=5");
+    assert!(result.contains("4"), "Mul trait should compute 2*3=6 then double");
+    assert!(result.contains("List[Nat]::cons"), "Generic inherent impl should work");
+    assert!(result.contains("0"), "Basic value zero should print");
+}
