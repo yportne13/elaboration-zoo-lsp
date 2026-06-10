@@ -244,7 +244,7 @@ impl Infer {
         for ns_entry in cxt.namespace.iter() {
             if !ns_entry.1.contains(&op.data) { continue; }
             let key = SmolStr::new(format!("{}{}", ns_entry.2.to_string(), op.data));
-            let (_, _, _, _, vty) = cxt.decl.get(&key)?;
+            let (_, _, _, _, vty, _) = cxt.decl.get(&key)?;
             let vty = self.force(&cxt.decl, vty);
             let self_ty = match vty.as_ref() {
                 Val::Pi(_, Icit::Impl, dom, _) => dom.clone(),
@@ -465,7 +465,7 @@ impl Infer {
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
                     self.hover_table.push((name.to_span(), name.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vtyp.clone()));
                     (
-                        ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone())?,
+                        ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone(), None)?,
                         vtyp,
                         vt,
                         vtyp_pretty,
@@ -563,7 +563,7 @@ impl Infer {
                     let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check::<false>(&fake_cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.decl, &fake_cxt.env, &t_tm);
-                    cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp)?
+                    cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp, None)?
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
@@ -604,7 +604,7 @@ impl Infer {
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
                         // Store as EnumName.caseName only — no bare caseName alias
                         let case_key = c.0.clone().map(|n| SmolStr::new(format!("{}.{}", name.data, n)));
-                        cxt.decl(case_key, t_tm, vt, typ_tm, vtyp)?
+                        cxt.decl(case_key, t_tm, vt, typ_tm, vtyp, None)?
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
@@ -831,7 +831,7 @@ impl Infer {
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
-                    Some((def, _, _, _, vty)) => {
+                    Some((def, _, _, _, vty, _)) => {
                         self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
@@ -839,7 +839,7 @@ impl Infer {
                         // Try namespace prefix resolution
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let qualified = SmolStr::new(format!("{}.{}", prefix, name.data));
-                            if let Some((def, _, _, _, vty)) = cxt.decl.get(&qualified) {
+                            if let Some((def, _, _, _, vty, _)) = cxt.decl.get(&qualified) {
                                 self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                                 return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
                             }
@@ -849,7 +849,7 @@ impl Infer {
                         let match_entry: Option<(SmolStr, _)> = cxt.decl.iter()
                             .find(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
                             .map(|(k, v)| (k.clone(), v.clone()));
-                        if let Some((full_key, (def_span, _, _, _, vty))) = match_entry {
+                        if let Some((full_key, (def_span, _, _, _, vty, _))) = match_entry {
                             self.hover_table.push((t_span, def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(full_key)).into(), vty.clone()));
                         }
@@ -870,14 +870,14 @@ impl Infer {
                     let full_path = qualified_path_str(x.as_ref(), &t.data);
                     if let Some(qual) = full_path {
                         // Try the path as-is first
-                        if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&qual) {
+                        if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&qual) {
                             self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(qual)).into(), vty.clone()));
                         }
                         // If not found, try with namespace prefix (for access inside a package)
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let prefixed = SmolStr::new(format!("{prefix}.{qual}"));
-                            if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&prefixed) {
+                            if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&prefixed) {
                                 self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                                 return Ok((Tm::Decl(empty_span(prefixed)).into(), vty.clone()));
                             }
@@ -1125,10 +1125,9 @@ impl Infer {
             Raw::Nat(n) => {
                 let nat_type = cxt.decl.get("Nat").map(|x| x.2.clone())
                     .unwrap_or_else(|| Val::U(0).into());
-                let f = PrimFunc(Rc::new(move |_, _, _, typ| {
-                    super::cxt::build_nat(n, &typ)
-                }));
-                Ok((Tm::Prim(nat_type.clone(), f).into(), nat_type))
+                let nat_val = super::cxt::build_nat(n, &nat_type);
+                let nat_tm = self.quote(&cxt.decl, cxt.lvl, &nat_val);
+                Ok((nat_tm, nat_type))
             }
 
             Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()), vec![])),

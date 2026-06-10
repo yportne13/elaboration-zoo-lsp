@@ -300,7 +300,6 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(*x).into()),
             Val::LiteralType => Ok(Tm::LiteralType.into()),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
-            Val::Prim(typ, func) => Ok(Tm::Prim(typ.clone(), func.clone()).into()),
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = Rc::new(params
                     .iter()
@@ -343,6 +342,7 @@ impl Infer {
                         Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
                         x.1.3.clone(),
                         x.1.4.clone(),
+                        x.1.5.clone(),
                     )))
                     .collect();
                 let cases = cases
@@ -806,8 +806,6 @@ impl Infer {
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
-            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, b, fuel),
-            (Val::Prim(a, _), _) => self.unify(l, cxt, a, &u, fuel),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
@@ -840,6 +838,7 @@ impl Infer {
                         Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
                         x.1.3.clone(),
                         x.1.4.clone(),
+                        x.1.5.clone(),
                     )))
                     .collect();
 

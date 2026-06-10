@@ -179,7 +179,6 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
         Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr),
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Prim(_, _) => "Prim Func".to_owned(),
         Tm::Sum(span, tms, items, _) => {
             let impls: Vec<_> = tms.iter()
                 .filter(|tm| tm.3 == Icit::Impl)

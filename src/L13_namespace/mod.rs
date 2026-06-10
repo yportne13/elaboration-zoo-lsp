@@ -24,7 +24,7 @@ mod legacy_tests;
 
 type Rc<T> = std::sync::Arc<T>;
 
-type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>;
+type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -68,7 +68,7 @@ pub enum DeclTm {
 }
 
 #[derive(Clone)]
-pub struct PrimFunc(Rc<dyn Fn(&Infer, &Decl, &Env, Rc<Val>) -> Rc<Val> + Send + Sync>);
+pub struct PrimFunc(Rc<dyn Fn(&Infer, &Decl, &[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync>);
 
 impl std::fmt::Debug for PrimFunc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,7 +90,6 @@ pub enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim(Rc<Val>, PrimFunc),
     Sum(Span<SmolStr>, TmSumParams, TmSumCases, bool),
     SumCase {
         typ: Rc<Tm>,
@@ -106,7 +105,7 @@ pub enum Tm {
 impl Tm {
     pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>)> {
         match self {
-            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim(_, _) => None,
+            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
             Tm::Lam(_, _, t) => t.no_metas(infer, decl, l + 1),
             Tm::App(t, u, _) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l)),
@@ -233,7 +232,6 @@ pub enum Val {
     U(u32),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim(Rc<Val>, PrimFunc),
     Sum(
         Span<SmolStr>,
         SumParams,
@@ -422,9 +420,6 @@ impl DetailCounts {
             Val::LiteralIntro(s) => {
                 self.span_smolstr_count += 1; // Span<String> ~ Span<SmolStr>
             }
-            Val::Prim(vty, _) => {
-                self.walk_val_id(vty, visited);
-            }
             Val::Sum(name, params, cases, _) => {
                 self.span_smolstr_count += 1;
                 for (pname, pval, pvty, _) in params.iter() {
@@ -523,9 +518,6 @@ impl DetailCounts {
             Tm::LiteralIntro(_s) => {
                 self.span_smolstr_count += 1;
             }
-            Tm::Prim(vty, _) => {
-                self.walk_val_id(vty, visited);
-            }
             Tm::Sum(name, params, cases, _) => {
                 self.span_smolstr_count += 1;
                 for (pname, ptm, pty, _) in params.iter() {
@@ -564,7 +556,7 @@ impl DetailCounts {
         // Walk env
         self.walk_env(&cxt.env, visited);
         // Walk decls (both Tm and Val sides)
-        for (_, (span, rtm, rval, rty, rvty)) in cxt.decl.iter() {
+        for (_, (span, rtm, rval, rty, rvty, _)) in cxt.decl.iter() {
             self.span_void_count += 1;
             self.walk_tm_id(rtm, visited);
             self.walk_val_id(rval, visited);
@@ -707,7 +699,6 @@ impl Infer {
                     Val::U(_) => "U",
                     Val::LiteralType => "LiteralType",
                     Val::LiteralIntro(_) => "LiteralIntro",
-                    Val::Prim(_, _) => "Prim",
                     Val::Sum(_, _, _, _) => "Sum",
                     Val::SumCase { .. } => "SumCase",
                     Val::Match(_, _, _) => "Match",
@@ -730,7 +721,6 @@ impl Infer {
                     Val::U(_) => "U",
                     Val::LiteralType => "LiteralType",
                     Val::LiteralIntro(_) => "LiteralIntro",
-                    Val::Prim(_, _) => "Prim",
                     Val::Sum(_, _, _, _) => "Sum",
                     Val::SumCase { .. } => "SumCase",
                     Val::Match(_, _, _) => "Match",
@@ -1017,6 +1007,19 @@ impl Infer {
             Val::Call(name, args, body) => {
                 Val::Call(name.clone(), args.clone(), self.force(decl, body)).into()
             },
+            Val::Decl(x, sp) => {
+                if let Some((_, _, _, _, _, Some(prim_fn))) = decl.get(&x.data) {
+                    let args: Vec<Rc<Val>> = {
+                        let mut v: Vec<Rc<Val>> = sp.iter().map(|(v, _)| v.clone()).collect();
+                        v.reverse();
+                        v
+                    };
+                    if let Some(result) = prim_fn.0(self, decl, &args) {
+                        return self.force(decl, &result);
+                    }
+                }
+                Val::Decl(x.clone(), sp.clone()).into()
+            },
             _ => t.clone(),
         }
     }
@@ -1038,7 +1041,22 @@ impl Infer {
             Val::Lam(_, _, closure) => self.closure_apply(decl, closure, u),
             Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
-            Val::Decl(x, sp) => Val::Decl(x.clone(), sp.prepend((u, i))).into(),
+            Val::Decl(x, sp) => {
+                let acc = sp.prepend((u, i));
+                if let Some(entry) = decl.get(&x.data) {
+                    if let Some(ref prim_fn) = entry.5 {
+                        let args: Vec<Rc<Val>> = {
+                            let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
+                            v.reverse();
+                            v
+                        };
+                        if let Some(result) = prim_fn.0(self, decl, &args) {
+                            return result;
+                        }
+                    }
+                }
+                Val::Decl(x.clone(), acc).into()
+            },
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
             Val::Call(name, args, body) => Val::Call(name.clone(), args.prepend((u.clone(), i)), self.v_app(decl, body, u, i)).into(),
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
@@ -1117,7 +1135,6 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
-            Tm::Prim(typ, func) => func.0(self, decl, env, typ.clone()),
             Tm::Sum(name, params, cases, is_trait) => {
                 let new_params = Rc::new(params
                     .iter()
@@ -1206,7 +1223,6 @@ impl Infer {
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
             Val::LiteralType => Tm::LiteralType.into(),
-            Val::Prim(typ, func) => Tm::Prim(typ.clone(), func.clone()).into(),
             Val::Sum(name, params, cases, is_trait) => {
                 let new_params = Rc::new(params.iter()
                     .map(|x| {
@@ -1262,6 +1278,7 @@ impl Infer {
                                     Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
                                     x.1.3.clone(),
                                     x.1.4.clone(),
+                                    x.1.5.clone(),
                                 )))
                                 .collect();
                             let tm = self.eval(&declb, &env, &x.1);
@@ -1435,15 +1452,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         id += 1;
             // After nat.typort is loaded (index 2), register nat_to_dec builtin
             if id == 3 {
-                use cxt::tm_lam;
-                use cxt::tm_pi;
-                use cxt::tm_decl;
-                let f_nat_to_dec = PrimFunc(Rc::new(cxt::nat_to_dec));
-                let str_val = cxt.decl.get("String").map(|x| x.4.clone()).unwrap();
-                cxt = cxt.add_builtin(&infer, "nat_to_dec",
-                    tm_lam(&["n"], Tm::Prim(str_val.clone(), f_nat_to_dec).into()),
-                    tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
-                ).unwrap();
+                cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
             }
     }
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
@@ -4323,13 +4332,7 @@ println(v)
                 }
             }
             if *name == "nat" {
-                use cxt::tm_lam; use cxt::tm_pi; use cxt::tm_decl;
-                let f_nat_to_dec = PrimFunc(Rc::new(crate::L13_namespace::cxt::nat_to_dec));
-                let str_val = cxt.decl.get("String").map(|x| x.4.clone()).unwrap();
-                cxt = cxt.add_builtin(&infer, "nat_to_dec",
-                    tm_lam(&["n"], Tm::Prim(str_val.clone(), f_nat_to_dec).into()),
-                    tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
-                ).unwrap();
+                cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
             }
         }
 

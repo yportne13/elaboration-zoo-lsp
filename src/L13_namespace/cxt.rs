@@ -50,10 +50,11 @@ pub(super) fn build_nat(count: u64, nat_type: &Rc<Val>) -> Rc<Val> {
     result
 }
 
-pub(super) fn nat_to_dec(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    let nat_val = env.iter().next().unwrap().clone();
-    let count = count_nat(&nat_val);
-    Val::LiteralIntro(empty_span(count.to_string())).into()
+pub(super) fn nat_to_dec(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    let nat_val = &args[0];
+    let count = count_nat(nat_val);
+    Some(Val::LiteralIntro(empty_span(count.to_string())).into())
 }
 
 /// Minimal context for hover display — only stores what pretty_tm/quote actually needs.
@@ -61,7 +62,7 @@ pub(super) fn nat_to_dec(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val
 pub struct HoverCxt {
     pub lvl: Lvl,
     pub locals: Locals,
-    pub decl: Rc<Decl>,
+    pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>>,
 }
 
 impl HoverCxt {
@@ -84,116 +85,125 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: Rc<BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>>,
-    pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>>,
+    pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>>,
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: Rc<HashSet<SmolStr>>,
     update_from: Option<usize>,
 }
 
-fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
+fn string_concat(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-            Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
+            Some(Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into())
         },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(string_concat))).into(),
+        _ => None,
     }
 }
 
-fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            infer.eval(decl, env, &Tm::Decl(a.clone().map(|a| SmolStr::new(a))).into())
+            Some(infer.eval(decl, &List::new(), &Tm::Decl(a.clone().map(|a| SmolStr::new(a))).into()))
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(string_to_global_type))).into(),
+        _ => None,
     }
 }
 
-fn create_global(infer: &Infer, _decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(1).unwrap().as_ref() {
+fn create_global(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(a) => {
             if let Ok(mut x) = infer.mutable_map.write() {
-                x.insert(a.data.clone(), env.iter().next().unwrap().clone());
+                x.insert(a.data.clone(), args[1].clone());
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(create_global))).into(),
+        _ => None,
     }
 }
 
-fn change_mutable(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(1).unwrap().as_ref() {
+fn change_mutable(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(a) => {
             if let Ok(mut x) = infer.mutable_map.write() {
                 if let Some(x) = x.get_mut(&a.data) {
                     *x = infer.v_app(
                         decl,
-                        env.iter().next().unwrap(),
+                        &args[1],
                         x.clone(),
                         Icit::Expl
                     )
                 }
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable))).into(),
+        _ => None,
     }
 }
 
-fn get_global(infer: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone()
+            Some(infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(get_global))).into(),
+        _ => None,
     }
 }
 
-fn change_mutable_default(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(2).unwrap().as_ref() {
+fn change_mutable_default(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 3 { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(a) => {
             if let Ok(mut x) = infer.mutable_map.write() {
                 if let Some(x) = x.get_mut(&a.data) {
                     *x = infer.v_app(
                         decl,
-                        env.iter().nth(1).unwrap(),
+                        &args[1],
                         x.clone(),
                         Icit::Expl
                     )
                 } else {
-                    x.insert(a.data.clone(), env.iter().next().unwrap().clone());
+                    x.insert(a.data.clone(), args[2].clone());
                 }
             };
-            Val::U(0).into()
+            Some(Val::U(0).into())
         }
-        _ => Val::Prim(typ, PrimFunc(Rc::new(change_mutable_default))).into(),
+        _ => None,
     }
 }
 
-fn file_read_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+fn file_read_all_text(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(path) => {
             let content = std::fs::read_to_string(&path.data)
                 .unwrap_or_else(|e| panic!("file_read_all_text: failed to read '{}': {}", path.data, e));
-            Val::LiteralIntro(path.clone().map(|_| content.clone())).into()
+            Some(Val::LiteralIntro(path.clone().map(|_| content.clone())).into())
         },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(file_read_all_text))).into(),
+        _ => None,
     }
 }
 
-fn file_write_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
+fn file_write_all_text(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
             std::fs::write(&path.data, &content.data)
                 .unwrap_or_else(|e| panic!("file_write_all_text: failed to write '{}': {}", path.data, e));
-            Val::U(0).into()
+            Some(Val::U(0).into())
         },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(file_write_all_text))).into(),
+        _ => None,
     }
 }
 
-fn file_append_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match (env.iter().nth(1).unwrap().as_ref(), env.iter().next().unwrap().as_ref()) {
+fn file_append_all_text(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
             use std::io::Write;
             let mut file = std::fs::OpenOptions::new()
@@ -203,30 +213,32 @@ fn file_append_all_text(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val>
                 .unwrap_or_else(|e| panic!("file_append_all_text: failed to open '{}': {}", path.data, e));
             write!(file, "{}", content.data)
                 .unwrap_or_else(|e| panic!("file_append_all_text: failed to append to '{}': {}", path.data, e));
-            Val::U(0).into()
+            Some(Val::U(0).into())
         },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(file_append_all_text))).into(),
+        _ => None,
     }
 }
 
-fn file_exists(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+fn file_exists(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(path) => {
             let exists = std::path::Path::new(&path.data).exists();
-            Val::LiteralIntro(path.clone().map(|_| if exists { "true".to_string() } else { "false".to_string() })).into()
+            Some(Val::LiteralIntro(path.clone().map(|_| if exists { "true".to_string() } else { "false".to_string() })).into())
         },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(file_exists))).into(),
+        _ => None,
     }
 }
 
-fn file_delete(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+fn file_delete(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
         Val::LiteralIntro(path) => {
             std::fs::remove_file(&path.data)
                 .unwrap_or_else(|e| panic!("file_delete: failed to delete '{}': {}", path.data, e));
-            Val::U(0).into()
+            Some(Val::U(0).into())
         },
-        _ => Val::Prim(typ, PrimFunc(Rc::new(file_delete))).into(),
+        _ => None,
     }
 }
 
@@ -252,13 +264,6 @@ pub(super) fn tm_app(f: Rc<Tm>, arg: Rc<Tm>) -> Rc<Tm> {
 
 impl Cxt {
     pub fn new(infer: &Infer) -> Self {
-        let f_concat = PrimFunc(Rc::new(string_concat));
-        let f_to_global = PrimFunc(Rc::new(string_to_global_type));
-        let f_create = PrimFunc(Rc::new(create_global));
-        let f_change = PrimFunc(Rc::new(change_mutable));
-        let f_get = PrimFunc(Rc::new(get_global));
-        let f_change_def = PrimFunc(Rc::new(change_mutable_default));
-
         let mut cxt = Self::empty();
 
         cxt = cxt.decl(
@@ -267,46 +272,44 @@ impl Cxt {
             Val::LiteralType.into(),
             Tm::U(0).into(),
             Val::U(0).into(),
+            None,
         ).unwrap();
 
-        let str_val = infer.eval(&cxt.decl, &cxt.env, &tm_decl("String"));
-
         cxt = cxt.add_builtin(infer, "string_concat",
-            tm_lam(&["x", "y"], Tm::Prim(str_val.clone(), f_concat).into()),
             tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
+            PrimFunc(Rc::new(string_concat)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "string_to_global_type",
-            tm_lam(&["x"], Tm::Prim(str_val.clone(), f_to_global).into()),
             tm_pi(&[("x", tm_decl("String"))], Tm::U(0).into()),
+            PrimFunc(Rc::new(string_to_global_type)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "create_global",
-            tm_lam(&["x", "y"], Tm::Prim(Val::U(0).into(), f_create).into()),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("y", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
             ], Tm::U(0).into()),
+            PrimFunc(Rc::new(create_global)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "change_mutable",
-            tm_lam(&["x", "y"], Tm::Prim(Val::U(0).into(), f_change).into()),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("f", tm_pi(&[
                     ("_", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
                 ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
             ], Tm::U(0).into()),
+            PrimFunc(Rc::new(change_mutable)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "get_global",
-            tm_lam(&["x"], Tm::Prim(Val::U(0).into(), f_get).into()),
             tm_pi(&[("x", tm_decl("String"))],
                 tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
+            PrimFunc(Rc::new(get_global)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "change_mutable_default",
-            tm_lam(&["x", "y", "z"], Tm::Prim(Val::U(0).into(), f_change_def).into()),
             tm_pi(&[
                 ("x", tm_decl("String")),
                 ("f", tm_pi(&[
@@ -314,56 +317,52 @@ impl Cxt {
                 ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into()))),
                 ("z", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into())),
             ], Tm::U(0).into()),
+            PrimFunc(Rc::new(change_mutable_default)),
         ).unwrap();
 
-        let f_read_all = PrimFunc(Rc::new(file_read_all_text));
-        let f_write_all = PrimFunc(Rc::new(file_write_all_text));
-        let f_append_all = PrimFunc(Rc::new(file_append_all_text));
-        let f_exists = PrimFunc(Rc::new(file_exists));
-        let f_delete = PrimFunc(Rc::new(file_delete));
-
         cxt = cxt.add_builtin(infer, "file_read_all_text",
-            tm_lam(&["path"], Tm::Prim(str_val.clone(), f_read_all).into()),
             tm_pi(&[("path", tm_decl("String"))], tm_decl("String")),
+            PrimFunc(Rc::new(file_read_all_text)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "file_write_all_text",
-            tm_lam(&["path", "content"], Tm::Prim(Val::U(0).into(), f_write_all).into()),
             tm_pi(&[("path", tm_decl("String")), ("content", tm_decl("String"))], Tm::U(0).into()),
+            PrimFunc(Rc::new(file_write_all_text)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "file_append_all_text",
-            tm_lam(&["path", "content"], Tm::Prim(Val::U(0).into(), f_append_all).into()),
             tm_pi(&[("path", tm_decl("String")), ("content", tm_decl("String"))], Tm::U(0).into()),
+            PrimFunc(Rc::new(file_append_all_text)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "file_exists",
-            tm_lam(&["path"], Tm::Prim(str_val.clone(), f_exists).into()),
             tm_pi(&[("path", tm_decl("String"))], tm_decl("String")),
+            PrimFunc(Rc::new(file_exists)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "file_delete",
-            tm_lam(&["path"], Tm::Prim(Val::U(0).into(), f_delete).into()),
             tm_pi(&[("path", tm_decl("String"))], Tm::U(0).into()),
+            PrimFunc(Rc::new(file_delete)),
         ).unwrap();
 
         cxt
     }
 
-    pub fn add_builtin(self, infer: &Infer, name: &str, val: Rc<Tm>, ty: Rc<Tm>) -> Result<Self, Error> {
-        let vt = infer.eval(&self.decl, &self.env, &val);
+    pub fn add_builtin(self, infer: &Infer, name: &str, ty: Rc<Tm>, prim: PrimFunc) -> Result<Self, Error> {
         let va = infer.eval(&self.decl, &self.env, &ty);
-        self.decl(empty_span(SmolStr::new(name)), val, vt, ty, va)
+        let name_span = empty_span(SmolStr::new(name));
+        let val_tm = Tm::Decl(name_span.clone()).into();
+        let vt = Val::Decl(name_span.clone(), List::new()).into();
+        self.decl(name_span, val_tm, vt, ty, va, Some(prim))
     }
 
     /// Register nat_to_dec builtin (must be called AFTER nat.typort is loaded)
     pub(crate) fn register_nat_to_dec(cxt: &mut Cxt, infer: &Infer) {
         let f_nat_to_dec = PrimFunc(Rc::new(nat_to_dec));
-        let str_val = cxt.decl.get("String").map(|x| x.4.clone()).unwrap();
         let old = std::mem::replace(cxt, Self::empty());
         *cxt = old.add_builtin(infer, "nat_to_dec",
-            tm_lam(&["n"], Tm::Prim(str_val.clone(), f_nat_to_dec).into()),
             tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
+            f_nat_to_dec,
         ).unwrap();
     }
 
@@ -429,7 +428,7 @@ impl Cxt {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut decl = self.decl.clone();
         let decl_map = Rc::make_mut(&mut decl);
-        let t = decl_map.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
+        let t = decl_map.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a, None));
         if t.is_some() {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
@@ -481,14 +480,10 @@ impl Cxt {
         }
     }
 
-    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
-        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
+    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>, prim: Option<PrimFunc>) -> Result<Self, Error> {
         let mut decl = self.decl.clone();
         let decl_map = Rc::make_mut(&mut decl);
-        let t = decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
-        /*if let Some((span, _, _, _, _)) = t {
-            return Err(Error(span.map(|_| format!("redefine {}", x.data))));
-        }*/
+        decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim));
         Ok(Cxt {
             env: self.env.clone(),
             lvl: self.lvl,
