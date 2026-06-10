@@ -133,7 +133,7 @@ macro_rules module {
             let creat_module = create_global("module", module.mk(0 + 1, new_module :: nil));
             // Push new frame for hierarchical tree
             let _push_f = pushFrame(stringify $name);
-            $({$body})*
+            $($body)*
             // Pop frame to get the completed ModuleTree
             let tree = popFrame();
             // Register as child of parent frame (if any)

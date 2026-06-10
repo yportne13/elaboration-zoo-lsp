@@ -440,7 +440,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     ret
                 } else if &op.data == "(" {
                     let (input_t, rhs) = p_raw
-                        .many1_sep((kw(T![,]), kw(EndLine).option()))
+                        .many0_sep((kw(T![,]), kw(EndLine).option()))
                         .parse(input, state)?;
                     let (input_t, _) = kw(RParen).parse(input_t, state)?;
                     input = input_t;
@@ -766,7 +766,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     Cut((
         kw(LetKeyword),
-        smolstr(Ident),
+        smolstr(Ident).or(kw(Hole).map(|s| s.map(|_| SmolStr::new("_")))),
         (kw(Colon), p_raw).map(|(_, x)| x).option(),
         kw(Eq),
         p_raw,
@@ -1576,6 +1576,10 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             state.0.extend(temp_state.0);
             state.2.extend(temp_state.2);
             if !ret.0.is_empty() {
+                let only_endlines = ret.0.iter().all(|t| t.data.1 == TokenKind::EndLine);
+                if only_endlines {
+                    return Ok((i, ret.1))
+                }
                 state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) })
             } else {
                 return Ok((i, ret.1))

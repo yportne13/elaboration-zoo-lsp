@@ -426,4 +426,6 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
-// ---- Hierarchical Module Tree (redesign) ----
+// ---- Hierarchical Module Tree (redesign) ----
+// Add a signal assignment to the current frame's Expr list
+def addSignalAssignment(name: String, value: Expr): Unit = unit

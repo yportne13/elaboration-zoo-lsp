@@ -103,14 +103,22 @@ impl MacroMatcher {
                     }
                     Ok((input, ret))
                 },
-                MacroMatcher::Many0(m) => m.to_parser()
-                    .many0_sep(kw(TokenKind::EndLine).option())
-                    .map(|x| x.concat())
-                    .parse(input, state),
-                MacroMatcher::Many1(m) => m.to_parser()
-                    .many1_sep(kw(TokenKind::EndLine).option())
-                    .map(|x| x.concat())
-                    .parse(input, state),
+                MacroMatcher::Many0(m) => {
+                    // Skip leading EndLine tokens (e.g., newline after {)
+                    let (input, _) = kw(TokenKind::EndLine).many0().parse(input, state)?;
+                    m.to_parser()
+                        .many0_sep(kw(TokenKind::EndLine).option())
+                        .map(|x| x.concat())
+                        .parse(input, state)
+                },
+                MacroMatcher::Many1(m) => {
+                    // Skip leading EndLine tokens
+                    let (input, _) = kw(TokenKind::EndLine).many0().parse(input, state)?;
+                    m.to_parser()
+                        .many1_sep(kw(TokenKind::EndLine).option())
+                        .map(|x| x.concat())
+                        .parse(input, state)
+                },
             }
         }
     }
