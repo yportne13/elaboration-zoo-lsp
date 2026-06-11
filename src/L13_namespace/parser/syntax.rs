@@ -247,6 +247,7 @@ pub enum Decl {
         params: Vec<(Span<SmolStr>, Raw, Icit)>,
         supertraits: Vec<Span<SmolStr>>,
         methods: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>,
+        assoc_defaults: Vec<(SmolStr, Option<Raw>)>,
     },
     ImplDecl {
         name: Raw,

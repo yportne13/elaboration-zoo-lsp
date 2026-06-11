@@ -361,6 +361,8 @@ pub struct Infer {
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<Span<SmolStr>>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>)>,
     trait_out_param: HashMap<SmolStr, Vec<bool>>,
+    /// (trait_name, assoc_type_name) -> optional default type value (Raw)
+    assoc_defaults: HashMap<(SmolStr, SmolStr), Option<Raw>>,
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
@@ -636,6 +638,7 @@ impl Infer {
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
+            assoc_defaults: Default::default(),
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],

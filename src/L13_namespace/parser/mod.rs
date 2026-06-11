@@ -1049,17 +1049,18 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
         .map(|(_, name, supertraits, params, body)| {
             let mut methods = Vec::new();
             let mut extra_params = params;
+            let mut assoc_defaults = Vec::new();
             if let Some(items) = body {
                 for item in items {
                     match item {
-                    TraitBodyItem::TypeDecl { name: type_name, default_type: _ } => {
+                    TraitBodyItem::TypeDecl { name: type_name, default_type } => {
                         // Desugar `type Elem` to `[Elem: outParam(Type 0)]` trait param
-                        // (default_type is ignored for now — always uses Type 0)
                         let out_param_raw = Raw::App(
                             Box::new(Raw::Var(empty_span(SmolStr::new("outParam")))),
                             Box::new(Raw::U(0)),
                             super::parser::syntax::Either::Icit(Icit::Expl),
                         );
+                        assoc_defaults.push((type_name.data.clone(), default_type));
                         extra_params.push((type_name, out_param_raw, Icit::Impl));
                     }
                         TraitBodyItem::Method { name: mn, params: mparams, ret: mret, body: mbody } => {
@@ -1073,6 +1074,7 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                 params: extra_params,
                 supertraits,
                 methods,
+                assoc_defaults,
             }
         })
         .parse(input, state)

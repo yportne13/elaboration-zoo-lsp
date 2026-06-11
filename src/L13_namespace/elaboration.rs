@@ -32,13 +32,14 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             params,
             cases, // case names are NOT prefixed — they get prefixed by the enum elaboration
         },
-        Decl::TraitDecl { name, params, supertraits, methods } => Decl::TraitDecl {
+        Decl::TraitDecl { name, params, supertraits, methods, assoc_defaults } => Decl::TraitDecl {
             name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
             params,
             supertraits,
             methods: methods.into_iter().map(|(mn, mparams, mret, mbody)| {
                 (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret, mbody)
             }).collect(),
+            assoc_defaults,
         },
         Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => Decl::ImplDecl {
             name,
@@ -725,6 +726,42 @@ impl Infer {
                             }
                         }
                     }
+                    // Fill in missing associated type params with defaults
+                    let mut trait_params = trait_params;
+                    if let Some((trait_params_def, _, _, _)) = self.trait_definition.get(&trait_name.data) {
+                        // Collect associated type indices (params declared as `type ...`)
+                        let assoc_names: Vec<(usize, SmolStr)> = trait_params_def.iter()
+                            .enumerate()
+                            .filter_map(|(i, (name, _, _))| {
+                                if self.assoc_defaults.contains_key(&(trait_name.data.clone(), name.data.clone())) {
+                                    Some((i, name.data.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !assoc_names.is_empty() {
+                            // trait_params_def includes Self at index 0, then explicit params, then assoc types
+                            let expected_total = trait_params_def.len() - 1;  // exclude Self
+                            let expected_explicit = expected_total - assoc_names.len();
+                            let provided_total = trait_params.len();
+                            let provided_assoc = provided_total.saturating_sub(expected_explicit);
+                            let missing_count = assoc_names.len().saturating_sub(provided_assoc);
+                            if missing_count > 0 {
+                                // Missing assoc types are the trailing ones (provided in order)
+                                for (_, aname) in assoc_names.iter().skip(provided_assoc) {
+                                    if let Some(default_type) = self.assoc_defaults.get(&(trait_name.data.clone(), aname.clone())) {
+                                        trait_params.push(default_type.clone().unwrap_or(Raw::Hole(empty_span(()))));
+                                    } else {
+                                        return Err(Error(
+                                            empty_span(format!("associated type `{}` has no default value", aname)),
+                                            vec![],
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.clone())
                         .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
@@ -760,7 +797,7 @@ impl Infer {
                 }
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
-            Decl::TraitDecl { name, mut params, supertraits, methods } => {
+            Decl::TraitDecl { name, mut params, supertraits, methods, assoc_defaults } => {
                 // Transitive supertrait method resolution with cycle detection
                 let mut all_methods = methods.clone();
                 let mut visited = std::collections::HashSet::<SmolStr>::new();
@@ -798,6 +835,10 @@ impl Infer {
                 self.trait_solver.set_trait_out_params(name.data.clone(), out_param.clone());
                 self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), supertraits.clone(), all_methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
+                // Store associated type defaults
+                for (aname, adefault) in &assoc_defaults {
+                    self.assoc_defaults.insert((name.data.clone(), aname.clone()), adefault.clone());
+                }
                 let mut cxt = cxt.clone();
                 let (_, _, c) = self.infer(&cxt, Decl::Enum {
                     is_trait: true,
