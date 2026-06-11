@@ -17,20 +17,19 @@ use std::collections::HashSet;
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
-    pub dom: Lvl,               // size of Γ
-    pub cod: Lvl,               // size of Δ
-    pub ren: HashMap<u32, Lvl>, // mapping from Δ vars to Γ vars
+    pub dom: Lvl,
+    pub cod: Lvl,
+    pub ren: Rc<HashMap<u32, Lvl>>,
 }
 
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
     let mut new_ren = pr.ren.clone();
-    new_ren.insert(pr.cod.0, pr.dom);
-
+    Rc::make_mut(&mut new_ren).insert(pr.cod.0, pr.dom);
     PartialRenaming {
         occ: pr.occ,
-        dom: pr.dom + 1, // increment dom
-        cod: pr.cod + 1, // increment cod
-        ren: new_ren,    // update ren with the new mapping
+        dom: pr.dom + 1,
+        cod: pr.cod + 1,
+        ren: new_ren,
     }
 }
 
@@ -93,7 +92,7 @@ impl Infer {
                 occ: None,
                 dom,
                 cod: gamma,
-                ren,
+                ren: Rc::new(ren),
             },
             if nlvars.is_empty() {
                 None
@@ -139,7 +138,7 @@ impl Infer {
                 occ: None,
                 dom: Lvl(0),
                 cod: Lvl(0),
-                ren: HashMap::new(),
+                ren: Rc::new(HashMap::new()),
             },
             a,
         )
@@ -301,7 +300,6 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(*x).into()),
             Val::LiteralType => Ok(Tm::LiteralType.into()),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
-            Val::Prim(typ, func) => Ok(Tm::Prim(typ.clone(), func.clone()).into()),
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = Rc::new(params
                     .iter()
@@ -344,6 +342,7 @@ impl Infer {
                         Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
                         x.1.3.clone(),
                         x.1.4.clone(),
+                        x.1.5.clone(),
                     )))
                     .collect();
                 let cases = cases
@@ -568,6 +567,16 @@ impl Infer {
             let candidate_count = matching_lvls.len();
             if candidate_count == 0 {
                 // Already deferring — let solve_multi_trait handle it later
+                return Ok(None);
+            }
+            // If any non-out param is still Flex, defer resolution.
+            // The Self type (or other non-out param) must be concrete to pick
+            // the correct instance; otherwise val_match(Flex, pattern) always
+            // succeeds and may pick the wrong instance.
+            let has_flex_non_out = params.iter().zip(&out_param).any(|((_, val, _, _), is_out)| {
+                !*is_out && matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
+            });
+            if has_flex_non_out {
                 return Ok(None);
             }
             // If there are multiple matches and output params are still Flex, defer.
@@ -807,8 +816,6 @@ impl Infer {
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),
-            (_, Val::Prim(b, _)) => self.unify(l, cxt, &t, b, fuel),
-            (Val::Prim(a, _), _) => self.unify(l, cxt, a, &u, fuel),
             (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
@@ -841,6 +848,7 @@ impl Infer {
                         Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
                         x.1.3.clone(),
                         x.1.4.clone(),
+                        x.1.5.clone(),
                     )))
                     .collect();
 

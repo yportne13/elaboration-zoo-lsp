@@ -64,7 +64,7 @@ impl<T> List<T> {
     where
         F: Fn(&T) -> U,
     {
-        let mut buf = Vec::new();
+        let mut buf: Vec<U> = Vec::with_capacity(self.len());
         for elem in self.iter() {
             buf.push(f(elem));
         }
@@ -79,7 +79,7 @@ impl<T> List<T> {
     where
         F: Fn(&T) -> Option<U>,
     {
-        let mut buf = Vec::new();
+        let mut buf: Vec<U> = Vec::with_capacity(self.len());
         for elem in self.iter() {
             if let Some(mapped) = f(elem) {
                 buf.push(mapped);
@@ -96,7 +96,7 @@ impl<T> List<T> {
     where
         F: FnMut(&T) -> Result<U, E>,
     {
-        let mut buf = Vec::new();
+        let mut buf: Vec<U> = Vec::with_capacity(self.len());
         let mut f = f;
         for elem in self.iter() {
             buf.push(f(elem)?);
@@ -121,7 +121,7 @@ impl<T: Clone> List<T> {
     where
         F: Fn(&T) -> bool,
     {
-        let mut buf = Vec::new();
+        let mut buf: Vec<T> = Vec::with_capacity(self.len());
         for elem in self.iter() {
             if f(elem) {
                 buf.push(elem.clone());
@@ -136,7 +136,7 @@ impl<T: Clone> List<T> {
 
     pub fn change_n(&self, n: usize, f: impl FnOnce(&T) -> T) -> List<T> {
         let mut f = Some(f);
-        let mut buf = Vec::new();
+        let mut buf: Vec<T> = Vec::with_capacity(self.len());
         for (i, elem) in self.iter().enumerate() {
             if i == n {
                 buf.push(f.take().unwrap()(elem));
@@ -153,7 +153,7 @@ impl<T: Clone> List<T> {
 
     pub fn change_tail(self, new_tail: List<T>) -> List<T> {
         let head_len = self.len() - new_tail.len();
-        let mut buf = Vec::new();
+        let mut buf: Vec<T> = Vec::with_capacity(head_len);
         for elem in self.iter().take(head_len) {
             buf.push(elem.clone());
         }
@@ -165,7 +165,7 @@ impl<T: Clone> List<T> {
     }
 
     pub fn zip<U: Clone>(&self, other: &List<U>) -> List<(T, U)> {
-        let mut buf = Vec::new();
+        let mut buf: Vec<(T, U)> = Vec::with_capacity(self.len().min(other.len()));
         let mut other_iter = other.iter();
         for elem in self.iter() {
             match other_iter.next() {
@@ -181,8 +181,8 @@ impl<T: Clone> List<T> {
     }
 
     pub fn split_at(self, n: usize) -> (List<T>, List<T>) {
-        let mut left_buf = Vec::new();
-        let mut right_buf = Vec::new();
+        let mut left_buf: Vec<T> = Vec::with_capacity(n);
+        let mut right_buf: Vec<T> = Vec::with_capacity(self.len().saturating_sub(n));
         for (i, elem) in self.iter().enumerate() {
             if i < n {
                 left_buf.push(elem.clone());

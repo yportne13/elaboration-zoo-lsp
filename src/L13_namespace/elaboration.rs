@@ -32,12 +32,14 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             params,
             cases, // case names are NOT prefixed — they get prefixed by the enum elaboration
         },
-        Decl::TraitDecl { name, params, methods } => Decl::TraitDecl {
+        Decl::TraitDecl { name, params, supertraits, methods, assoc_defaults } => Decl::TraitDecl {
             name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
             params,
-            methods: methods.into_iter().map(|(mn, mparams, mret)| {
-                (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret)
+            supertraits,
+            methods: methods.into_iter().map(|(mn, mparams, mret, mbody)| {
+                (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret, mbody)
             }).collect(),
+            assoc_defaults,
         },
         Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => Decl::ImplDecl {
             name,
@@ -244,7 +246,7 @@ impl Infer {
         for ns_entry in cxt.namespace.iter() {
             if !ns_entry.1.contains(&op.data) { continue; }
             let key = SmolStr::new(format!("{}{}", ns_entry.2.to_string(), op.data));
-            let (_, _, _, _, vty) = cxt.decl.get(&key)?;
+            let (_, _, _, _, vty, _) = cxt.decl.get(&key)?;
             let vty = self.force(&cxt.decl, vty);
             let self_ty = match vty.as_ref() {
                 Val::Pi(_, Icit::Impl, dom, _) => dom.clone(),
@@ -465,7 +467,7 @@ impl Infer {
                     let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
                     self.hover_table.push((name.to_span(), name.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vtyp.clone()));
                     (
-                        ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone())?,
+                        ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone(), None)?,
                         vtyp,
                         vt,
                         vtyp_pretty,
@@ -563,7 +565,7 @@ impl Infer {
                     let fake_cxt = cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check::<false>(&fake_cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.decl, &fake_cxt.env, &t_tm);
-                    cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp)?
+                    cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp, None)?
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
@@ -604,7 +606,7 @@ impl Infer {
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
                         // Store as EnumName.caseName only — no bare caseName alias
                         let case_key = c.0.clone().map(|n| SmolStr::new(format!("{}.{}", name.data, n)));
-                        cxt.decl(case_key, t_tm, vt, typ_tm, vtyp)?
+                        cxt.decl(case_key, t_tm, vt, typ_tm, vtyp, None)?
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
@@ -695,9 +697,71 @@ impl Infer {
                         dependencies: List::new(),
                         lvl: trait_name.to_span().map(|_| typ_name.clone()),
                     };
-                    // HAdd.hAdd.{u, v, w} {α : Type u} {β : Type v} {γ : outParam (Type w)} [self : HAdd α β γ] : α → β → γ
-                    // HAdd.{u, v, w} (α : Type u) (β : Type v) (γ : outParam (Type w)) : Type (max (max u v) w)
                     self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
+                    // Fill in missing methods with default bodies from the trait definition
+                    let mut methods = methods;
+                    if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
+                        for (tm_name, tm_params, tm_ret, tm_default_body) in trait_methods {
+                            let has_impl = methods.iter().any(|(decl, _)| match decl {
+                                Decl::Def { name, .. } => name.data == tm_name.data,
+                                _ => false,
+                            });
+                            if !has_impl {
+                                if let Some(default_body) = tm_default_body {
+                                    methods.push((
+                                        Decl::Def {
+                                            name: tm_name,
+                                            params: tm_params,
+                                            ret_type: tm_ret,
+                                            body: default_body,
+                                        },
+                                        false,
+                                    ));
+                                } else {
+                                    return Err(Error(
+                                        tm_name.map(|n| format!("method `{}` has no default implementation", n)),
+                                        vec![],
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    // Fill in missing associated type params with defaults
+                    let mut trait_params = trait_params;
+                    if let Some((trait_params_def, _, _, _)) = self.trait_definition.get(&trait_name.data) {
+                        // Collect associated type indices (params declared as `type ...`)
+                        let assoc_names: Vec<(usize, SmolStr)> = trait_params_def.iter()
+                            .enumerate()
+                            .filter_map(|(i, (name, _, _))| {
+                                if self.assoc_defaults.contains_key(&(trait_name.data.clone(), name.data.clone())) {
+                                    Some((i, name.data.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        if !assoc_names.is_empty() {
+                            // trait_params_def includes Self at index 0, then explicit params, then assoc types
+                            let expected_total = trait_params_def.len() - 1;  // exclude Self
+                            let expected_explicit = expected_total - assoc_names.len();
+                            let provided_total = trait_params.len();
+                            let provided_assoc = provided_total.saturating_sub(expected_explicit);
+                            let missing_count = assoc_names.len().saturating_sub(provided_assoc);
+                            if missing_count > 0 {
+                                // Missing assoc types are the trailing ones (provided in order)
+                                for (_, aname) in assoc_names.iter().skip(provided_assoc) {
+                                    if let Some(default_type) = self.assoc_defaults.get(&(trait_name.data.clone(), aname.clone())) {
+                                        trait_params.push(default_type.clone().unwrap_or(Raw::Hole(empty_span(()))));
+                                    } else {
+                                        return Err(Error(
+                                            empty_span(format!("associated type `{}` has no default value", aname)),
+                                            vec![],
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.clone())
                         .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
@@ -733,7 +797,34 @@ impl Infer {
                 }
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
-            Decl::TraitDecl { name, mut params, methods } => {
+            Decl::TraitDecl { name, mut params, supertraits, methods, assoc_defaults } => {
+                // Transitive supertrait method resolution with cycle detection
+                let mut all_methods = methods.clone();
+                let mut visited = std::collections::HashSet::<SmolStr>::new();
+                visited.insert(name.data.clone());
+                let mut stack: Vec<SmolStr> = supertraits.iter().map(|s| s.data.clone()).collect();
+                while let Some(st_name) = stack.pop() {
+                    if visited.contains(&st_name) {
+                        return Err(Error(empty_span(format!("cyclic supertrait: `{}` appears twice in the chain", st_name)), vec![]));
+                    }
+                    visited.insert(st_name.clone());
+                    if let Some((_, _, st_sts, st_methods)) = self.trait_definition.get(&st_name) {
+                        // Add supertrait's supertraits to the stack (detect cycles)
+                        for st_st in st_sts {
+                            if visited.contains(&st_st.data) {
+                                return Err(Error(empty_span(format!("cyclic supertrait: `{}` appears twice in the chain", st_st.data)), vec![]));
+                            }
+                            stack.push(st_st.data.clone());
+                        }
+                        // Add supertrait's methods (avoiding duplicates)
+                        for st_m in st_methods {
+                            let name_exists = all_methods.iter().any(|(mn, _, _, _)| mn.data == st_m.0.data);
+                            if !name_exists {
+                                all_methods.push(st_m.clone());
+                            }
+                        }
+                    }
+                }
                 self.trait_solver.new_trait(name.data.clone());
                 let mut param = vec![(name.clone().map(|_| SmolStr::new("Self")), Raw::Hole(name.to_span()), Icit::Impl)];
                 param.append(&mut params);
@@ -742,8 +833,12 @@ impl Infer {
                         _ => false,
                     }).collect::<Vec<_>>();
                 self.trait_solver.set_trait_out_params(name.data.clone(), out_param.clone());
-                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), methods.clone()));
+                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), supertraits.clone(), all_methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
+                // Store associated type defaults
+                for (aname, adefault) in &assoc_defaults {
+                    self.assoc_defaults.insert((name.data.clone(), aname.clone()), adefault.clone());
+                }
                 let mut cxt = cxt.clone();
                 let (_, _, c) = self.infer(&cxt, Decl::Enum {
                     is_trait: true,
@@ -751,14 +846,14 @@ impl Infer {
                     params: param,
                     cases: vec![(
                         name.map(|x| SmolStr::new(format!("{x}.mk"))),
-                        methods
+                        all_methods
                             .into_iter()
-                            .map(|x| (
-                                x.0.clone(),
-                                std::iter::once((x.0.clone().map(|_| SmolStr::new("this")), Raw::Var(x.0.map(|_| SmolStr::new("Self"))), Icit::Expl))
-                                    .chain(x.1.into_iter())
+                            .map(|(mn, mparams, mret, _mbody)| (
+                                mn.clone(),
+                                std::iter::once((mn.clone().map(|_| SmolStr::new("this")), Raw::Var(mn.map(|_| SmolStr::new("Self"))), Icit::Expl))
+                                    .chain(mparams.into_iter())
                                     .rev()
-                                    .fold(x.2, |a, b| {
+                                    .fold(mret, |a, b| {
                                         Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                                     }),
                                 Icit::Expl,
@@ -831,7 +926,7 @@ impl Infer {
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
-                    Some((def, _, _, _, vty)) => {
+                    Some((def, _, _, _, vty, _)) => {
                         self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
@@ -839,7 +934,7 @@ impl Infer {
                         // Try namespace prefix resolution
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let qualified = SmolStr::new(format!("{}.{}", prefix, name.data));
-                            if let Some((def, _, _, _, vty)) = cxt.decl.get(&qualified) {
+                            if let Some((def, _, _, _, vty, _)) = cxt.decl.get(&qualified) {
                                 self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                                 return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
                             }
@@ -849,7 +944,7 @@ impl Infer {
                         let match_entry: Option<(SmolStr, _)> = cxt.decl.iter()
                             .find(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
                             .map(|(k, v)| (k.clone(), v.clone()));
-                        if let Some((full_key, (def_span, _, _, _, vty))) = match_entry {
+                        if let Some((full_key, (def_span, _, _, _, vty, _))) = match_entry {
                             self.hover_table.push((t_span, def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(full_key)).into(), vty.clone()));
                         }
@@ -870,14 +965,14 @@ impl Infer {
                     let full_path = qualified_path_str(x.as_ref(), &t.data);
                     if let Some(qual) = full_path {
                         // Try the path as-is first
-                        if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&qual) {
+                        if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&qual) {
                             self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(qual)).into(), vty.clone()));
                         }
                         // If not found, try with namespace prefix (for access inside a package)
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let prefixed = SmolStr::new(format!("{prefix}.{qual}"));
-                            if let Some((def_span, _, _, _, vty)) = cxt.decl.get(&prefixed) {
+                            if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&prefixed) {
                                 self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                                 return Ok((Tm::Decl(empty_span(prefixed)).into(), vty.clone()));
                             }
@@ -1125,10 +1220,9 @@ impl Infer {
             Raw::Nat(n) => {
                 let nat_type = cxt.decl.get("Nat").map(|x| x.2.clone())
                     .unwrap_or_else(|| Val::U(0).into());
-                let f = PrimFunc(Rc::new(move |_, _, _, typ| {
-                    super::cxt::build_nat(n, &typ)
-                }));
-                Ok((Tm::Prim(nat_type.clone(), f).into(), nat_type))
+                let nat_val = super::cxt::build_nat(n, &nat_type);
+                let nat_tm = self.quote(&cxt.decl, cxt.lvl, &nat_val);
+                Ok((nat_tm, nat_type))
             }
 
             Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()), vec![])),
@@ -1180,8 +1274,8 @@ impl Infer {
         if t.data.is_empty() {
             // Collect completions: find traits whose first non-out param could match typ_raw
             let completions: Vec<_> = self.trait_definition.iter()
-                .filter(|(x, (_, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
-                .flat_map(|x| x.1.2.clone())
+                .filter(|(x, (_, _, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
+                .flat_map(|x| x.1.3.clone())
                 .collect();
             for method_decl in &completions {
                 self.completion_table.push((t_span, method_decl.0.data.clone()));
@@ -1194,7 +1288,7 @@ impl Infer {
             .cloned()
             .collect();
         let ns_result = {
-            let mut result = None;
+            let mut result: Vec<_> = vec![];
             for ns_entry in &ns_entries {
                 // Pre-filter: skip entries whose trait has no instance for this Self type
                 if let Some(ref head) = typ_raw_head {
@@ -1214,15 +1308,31 @@ impl Infer {
                     check_typ = self.closure_apply(&cxt.decl, cod, u);
                 }
                 if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
-                    result = Some(ns_entry.clone());
-                    break;
+                    result.push(ns_entry.clone());
                 }
                 // Clean up metas created by this failed namespace entry
                 self.meta.truncate(meta_before);
             }
             result
         };
-        if let Some(ns_entry) = ns_result {
+        if ns_result.len() > 1 {
+            let names: Vec<SmolStr> = ns_result.iter()
+                .filter_map(|e| {
+                    if let Val::Pi(_, Icit::Impl, dom, _) = e.0.as_ref() {
+                        if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
+                            return Some(trait_name.data.clone());
+                        }
+                    }
+                    None
+                })
+                .collect();
+            return Err(Error(t.clone().map(|m| format!(
+                "ambiguous method `{}`: found in traits {}",
+                m,
+                names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
+            )), vec![]));
+        }
+        if let Some(ns_entry) = ns_result.into_iter().next() {
             return self.infer_expr(cxt, Raw::app(
                 Raw::Var(t_span.map(|_| SmolStr::new(format!("{}{}", ns_entry.2, t.data)))),
                 *x.clone(),
@@ -1230,24 +1340,23 @@ impl Infer {
         }
         {
             let traits = self.trait_definition
-                .clone()//TODO: can remove this clone?
                 .iter()
-                .flat_map(|(trait_name, (trait_params, out_param, methods))| {
+                .flat_map(|(trait_name, (trait_params, out_param, _st, methods))| {
                     methods.iter()
                         .find(|x| x.0.data == t.data)
                         .map(|x| (trait_name, trait_params, out_param, x))
                 })
                 .filter(|(x, _, _, _)| self.trait_solver.can_satisfy(x, &typ_raw))
-                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type))| (
+                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type, _default_body))| (
                     trait_name.clone(),
                     {
                         let params = {
                             let mut params = trait_params.clone();
-                            params.push((
-                                methods_name.clone().map(|_| SmolStr::new("$this")),
-                                Raw::Var(methods_name.clone().map(|_| SmolStr::new("Self"))),
-                                Icit::Expl
-                            ));
+                            // $$ (trait instance) must come before $this (Expl) so that
+                            // insert_go fills both Self and $$ before reaching $this.
+                            // When Self is still Flex, solve_trait in fresh_meta defers
+                            // $$ resolution to trait_metas; solve_multi_trait fires after
+                            // $this unifies Self with the concrete receiver type.
                             params.push((
                                 methods_name.clone().map(|_| SmolStr::new("$$")),
                                 trait_params.iter()
@@ -1257,6 +1366,11 @@ impl Infer {
                                         |ret, x| Raw::App(Box::new(ret), Box::new(Raw::Var(x)), Either::Icit(Icit::Impl))
                                     ),
                                 Icit::Impl
+                            ));
+                            params.push((
+                                methods_name.clone().map(|_| SmolStr::new("$this")),
+                                Raw::Var(methods_name.clone().map(|_| SmolStr::new("Self"))),
+                                Icit::Expl
                             ));
                             params.append(&mut methods_params.clone());
                             params
@@ -1287,13 +1401,16 @@ impl Infer {
                     }
                 ))
                 .collect::<Vec<_>>();
-            //TODO: if traits.len() > 1, return err
-            let traits = traits.first().and_then(|(_, decl)| {
-                    self.infer_expr(cxt, decl.clone()).ok()
-                });
-            if let Some(ret) = traits {
-                //println!("{}", super::pretty_tm(0, cxt.names(), &ret.0));
-                Ok(ret)
+            if traits.len() > 1 {
+                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _)| n).collect();
+                return Err(Error(t.clone().map(|m| format!(
+                    "ambiguous method `{}`: found in traits {}",
+                    m,
+                    trait_names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
+                )), vec![]));
+            }
+            if let Some((_, decl)) = traits.first() {
+                self.infer_expr(cxt, decl.clone())
             } else {
                 Err(Error(t.clone().map(|t| format!(
                     "`{}`: {} has no object `{}`",

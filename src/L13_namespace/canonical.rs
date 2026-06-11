@@ -65,12 +65,6 @@ impl Infer {
                         .map(|t| (t.0.clone(), &t.1.4, t.1.2.clone()))
                 )
                 .filter(|(t, _, _)| ![
-                    "create_global",
-                    "change_mutable",
-                    "change_mutable_default",
-                    "string_to_global_type",
-                    "string_concat",
-                    "get_global",
                     "outParam",
                     avoid_recurse].contains(&t.as_str()));
             for (t, v, mut vtm) in iterator {

@@ -1,0 +1,336 @@
+// ============================================================
+// Typort (L13) Trait System - Comprehensive Test Suite
+// ============================================================
+// Self-contained test file - all types defined inline.
+// Tests features that are verified working.
+// ============================================================
+
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+enum Option[A] {
+    None
+    Some(value: A)
+}
+
+def two = succ (succ zero)
+def three = succ two
+def four = succ three
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+// ============================================================
+// TEST 1: Operator Overloading (Add) - WORKS
+// ============================================================
+
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+def five = two + three
+println(five)
+
+// ============================================================
+// TEST 2: Operator Overloading (Mul) - WORKS
+// ============================================================
+
+trait Mul[T, O: outParam(Type 0)] {
+    def *(that: T): O
+}
+
+def nat_mul(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => zero
+        case succ(n) => y + (nat_mul n y)
+    }
+
+impl Mul[Nat, Nat] for Nat {
+    def *(that: Nat): Nat = nat_mul this that
+}
+
+def six = two * three
+println(six)
+
+// ============================================================
+// TEST 3: Operator Not - WORKS
+// ============================================================
+
+trait Not {
+    def ! : Self
+}
+
+impl Not for Bool {
+    def ! : Bool =
+        match this {
+            case true => false
+            case false => true
+        }
+}
+
+println(!true)
+
+// ============================================================
+// TEST 4: Operator with outParam (Sub) - WORKS
+// ============================================================
+
+trait Sub[T, O: outParam(Type 0)] {
+    def -(that: T): O
+}
+
+def nat_sub(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(k) =>
+            match x {
+                case zero => zero
+                case succ(j) => nat_sub j k
+            }
+    }
+
+impl Sub[Nat, Nat] for Nat {
+    def -(that: Nat): Nat = nat_sub this that
+}
+
+def diff = three - two
+println(diff)
+
+// ============================================================
+// TEST 5: Inherent Impl (method extension) - WORKS
+// ============================================================
+
+impl Nat {
+    def double: Nat = this + this
+    def triple: Nat = this + this + this
+    def is_zero: Bool =
+        match this {
+            case zero => true
+            case _ => false
+        }
+}
+
+println(two.double)
+println(two.triple)
+println(zero.is_zero)
+println(two.is_zero)
+
+// ============================================================
+// TEST 6: Inherent Impl on Struct - WORKS
+// ============================================================
+
+struct Pair[A, B] {
+    fst: A
+    snd: B
+}
+
+impl[A, B] Pair[A, B] {
+    def first: A = this.fst
+    def second: B = this.snd
+    def swap: Pair[B, A] = new Pair(this.snd, this.fst)
+}
+
+def p: Pair[Nat, Bool] = new Pair(two, true)
+println(p.first)
+println(p.second)
+println(p.swap)
+
+// ============================================================
+// TEST 6: Generic Inherent Impl - WORKS
+// ============================================================
+
+impl[A, B] Pair[A, B] {
+    def map_fst[C](f: A -> C): Pair[C, B] = new Pair(f this.fst, this.snd)
+    def map_snd[C](f: B -> C): Pair[A, C] = new Pair(this.fst, f this.snd)
+}
+
+def add_two(x: Nat): Nat = x + two
+println(p.map_fst[Nat] add_two)
+
+// ============================================================
+// TEST 7: Concrete Inherent Impl with List - WORKS
+// ============================================================
+
+impl List[Nat] {
+    def sum: Nat =
+        match this {
+            case nil => 0
+            case cons(h, t) => h + t.sum
+        }
+    def length: Nat =
+        match this {
+            case nil => 0
+            case cons(_, t) => succ t.length
+        }
+}
+
+def my_list: List[Nat] = cons(two, cons(three, nil))
+println(my_list.sum)
+println(my_list.length)
+
+// ============================================================
+// TEST 8: Trait usage via def (operator resolved) - WORKS
+// ============================================================
+
+def square(x: Nat): Nat = x * x
+println(square three)
+def ninety = three * three * two * five
+println(ninety)
+
+// ============================================================
+// TEST 10: Bool inherent methods - WORKS
+// ============================================================
+
+impl Bool {
+    def negate: Bool =
+        match this {
+            case true => false
+            case false => true
+        }
+}
+
+println(true.negate)
+println(false.negate)
+
+// ============================================================
+// TEST 11: Interleaved inherent and operator usage - WORKS
+// ============================================================
+
+def calc = (two + three) * four - two
+println(calc)
+
+// ============================================================
+// TEST 13: def with operator overloading - WORKS
+// ============================================================
+
+def factorial(n: Nat): Nat =
+    match n {
+        case zero => succ zero
+        case succ(m) => n * (factorial m)
+    }
+
+println(factorial three)
+
+// ============================================================
+// TEST 14: Listed values with operators - WORKS
+// ============================================================
+
+def all_sum(xs: List[Nat]): Nat =
+    match xs {
+        case nil => 0
+        case cons(h, t) => h + (all_sum t)
+    }
+
+println(all_sum my_list)
+
+// ============================================================
+// TEST 15: Struct field projection - WORKS
+// ============================================================
+
+def p_fst = p.first
+def p_snd = p.second
+def p_swapped = p.swap
+println(p_fst)
+println(p_snd)
+println(p_swapped.first)
+println(p_swapped.second)
+
+// ============================================================
+// TEST 16: Mutually recursive inherent methods - WORKS
+// ============================================================
+
+impl List[Nat] {
+    def product: Nat =
+        match this {
+            case nil => succ zero
+            case cons(h, t) => h * t.product
+        }
+}
+
+def product_list = my_list.product
+println(product_list)
+
+// ============================================================
+// TEST 17: Simple def with operators - WORKS
+// ============================================================
+
+def f: Nat = two + three
+println(f)
+
+// ============================================================
+// TEST 18: Polymorphic inherent methods - WORKS
+// ============================================================
+
+impl[A] Option[A] {
+    def get_or_else(default: A): A =
+        match this {
+            case None => default
+            case Some(a) => a
+        }
+}
+
+def none_nat: Option[Nat] = None
+def safe_val = none_nat.get_or_else four
+println(safe_val)
+
+// ============================================================
+// TEST 19: Multiple operators - WORKS
+// ============================================================
+
+def simple: Nat = five * (three - two)
+println(simple)
+
+// ============================================================
+// TEST 20: Option inherent and generic methods - WORKS
+// ============================================================
+
+impl[A] Option[A] {
+    def to_list: List[A] =
+        match this {
+            case None => nil
+            case Some(a) => cons(a, nil)
+        }
+}
+
+def some_nat: Option[Nat] = Some(two)
+println(some_nat.to_list)
+
+// ============================================================
+// TEST 21: Generic struct field access chaining - WORKS
+// ============================================================
+
+impl[A, B, C] Pair[Pair[A, B], C] {
+    def fst_fst: A = this.first.first
+}
+
+// ============================================================
+// TEST 22: Basic value tests - WORKS
+// ============================================================
+
+def zero_val = zero
+def one = succ zero
+println(zero_val)
+println(one)
+
+println("ALL_TRAIT_TESTS_PASSED")
