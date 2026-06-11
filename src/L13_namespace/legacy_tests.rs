@@ -2305,6 +2305,81 @@ println (true.sub_method)
     }
 }
 
+// ============================================================
+// Associated types in traits
+// ============================================================
+
+#[test]
+fn test_associated_type_basic() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Simple {
+    type Item
+    def get: Item
+}
+
+impl Simple for Bool {
+    type Item = Bool
+    def get: Bool = true
+}
+
+println (true.get)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Associated type output: {:?}", lines);
+            assert!(lines.iter().any(|l| l.contains("true")), "should contain 'true', got: {:?}", lines);
+        }
+        Err(e) => {
+            let msg = e.0.data;
+            println!("Associated type error: {}", msg);
+            panic!("Assoc type failed: {}", msg);
+        }
+    }
+}
+
+#[test]
+fn test_associated_type_with_default() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Unit {
+    unit
+}
+
+trait Container {
+    type Item
+    def get: Item
+}
+
+impl Container for Unit {
+    type Item = Nat
+    def get: Nat = zero
+}
+
+println (unit.get)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            println!("Assoc type default output: {:?}", output.trim().lines().collect::<Vec<_>>());
+            assert!(output.contains("0") || output.contains("zero"), "should return zero");
+        }
+        Err(e) => panic!("Assoc type default error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
 #[test]
 fn test_supertrait_missing_method_error() {
     let input = r#"

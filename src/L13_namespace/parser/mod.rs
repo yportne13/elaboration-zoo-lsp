@@ -985,39 +985,83 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
         .parse(input, state)
 }
 
+/// A single item in a trait body: either a type declaration or a method declaration
+enum TraitBodyItem {
+    TypeDecl { name: Span<SmolStr>, default_type: Option<Raw> },
+    Method { name: Span<SmolStr>, params: Vec<(Span<SmolStr>, Raw, Icit)>, ret: Raw, body: Option<Raw> },
+}
+
+fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, TraitBodyItem> {
+    // Try `type Name (= DefaultType)?` — `type` is lowercase ident, not the Type keyword
+    if let Ok((input, _)) = kw_is(TokenKind::Ident, "type").parse(input, state) {
+        let (input, type_name) = smolstr(Ident).parse(input, state)?;
+        let (input, default) = (kw(T![=]), p_raw).option().parse(input, state)?;
+        return Ok((input, TraitBodyItem::TypeDecl { name: type_name, default_type: default.map(|(_, v)| v) }));
+    }
+    // Try `def name(params): RetType (= body)?`
+    let (input, _) = kw(DefKeyword).parse(input, state)?;
+    let (input, name) = smolstr(Ident).or(smolstr(Op)).parse(input, state)?;
+    let (input, params) = p_pi_binder.many0().map(|x| x.into_iter().flatten().collect()).parse(input, state)?;
+    let (input, _) = kw(T![:]).parse(input, state)?;
+    let (input, ret) = p_raw.parse(input, state)?;
+    let (input, body) = (kw(T![=]), p_raw).option().parse(input, state)?;
+    Ok((input, TraitBodyItem::Method { name, params, ret, body: body.map(|(_, v)| v) }))
+}
+
 fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    let p_def_declare = (
-        kw(DefKeyword),
-        smolstr(Ident).or(smolstr(Op)),
-        p_pi_binder
-            .many0()
-            .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
-        (kw(T![:]), p_raw).map(|(_, x)| x),
-        (kw(T![=]), p_raw).option().map(|x| x.map(|(_, v)| v)),
-    )
-        .map(|(_, name, params, ret, body)| (name, params, ret, body));
     (
         kw(TraitKeyword),
         smolstr(Ident),
         (kw(T![:]), smolstr(Ident).many0_sep(kw_is(T![+], "+"))).option()
             .map(|x| x.map(|(_, v)| v).unwrap_or_default()),
         p_pi_impl_binder_option,
-        brace(p_def_declare.many0_sep(kw(EndLine))),
+        brace(p_trait_body_item.many0_sep(kw(EndLine))),
     )
-        .map(|(_, name, supertraits, params, body)| Decl::TraitDecl {
-            name,
-            params,
-            supertraits,
-            methods: body.unwrap_or_default(),
+        .map(|(_, name, supertraits, params, body)| {
+            let mut methods = Vec::new();
+            let mut extra_params = params;
+            if let Some(items) = body {
+                for item in items {
+                    match item {
+                    TraitBodyItem::TypeDecl { name: type_name, default_type: _ } => {
+                        // Desugar `type Elem` to `[Elem: outParam(Type 0)]` trait param
+                        // (default_type is ignored for now — always uses Type 0)
+                        let out_param_raw = Raw::App(
+                            Box::new(Raw::Var(empty_span(SmolStr::new("outParam")))),
+                            Box::new(Raw::U(0)),
+                            super::parser::syntax::Either::Icit(Icit::Expl),
+                        );
+                        extra_params.push((type_name, out_param_raw, Icit::Impl));
+                    }
+                        TraitBodyItem::Method { name: mn, params: mparams, ret: mret, body: mbody } => {
+                            methods.push((mn, mparams, mret, mbody));
+                        }
+                    }
+                }
+            }
+            Decl::TraitDecl {
+                name,
+                params: extra_params,
+                supertraits,
+                methods,
+            }
         })
         .parse(input, state)
 }
 
-fn p_impl_method<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, (Decl, bool)> {
+fn p_impl_body_item_def_or_type<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, (bool, Option<Raw>, Option<(Decl, bool)>)> {
+    // Check if first token is lowercase `type` ident — must be an associated type assignment
+    if input.first().map(|t| t.data.0 == "type" && t.data.1 == TokenKind::Ident).unwrap_or(false) {
+        let (input, _) = kw_is(TokenKind::Ident, "type").parse(input, state)?;
+        let (input, _) = smolstr(Ident).parse(input, state)?;
+        let (input, (_, typ)) = (kw(T![=]), p_raw).parse(input, state)?;
+        return Ok((input, (true, Some(typ), None)));
+    }
+    // `def name(...) = body` or `static def ...` — method
     let (input, is_static) = kw(StaticKeyword).option().parse(input, state)?;
     let is_static = is_static.is_some();
     let (input, decl) = p_def.parse(input, state)?;
-    Ok((input, (decl, is_static)))
+    Ok((input, (false, None, Some((decl, is_static)))))
 }
 
 fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
@@ -1032,7 +1076,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 p_raw,
             )),
         ).map(Ok).or(p_raw.map(Err)),
-        brace(p_impl_method.many0_sep(kw(EndLine))),
+        brace(p_impl_body_item_def_or_type.many0_sep(kw(EndLine))),
     )).map(|x| match x.2 {
         Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole(empty_span(()))), x.3, false),
         Some(Err(name)) => (
@@ -1045,13 +1089,31 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         ),
         None => (x.1, empty_span(SmolStr::new("")), vec![], Raw::Hole(empty_span(())), x.3, false)
     })
-        .map(|(params, trait_name, trait_params, name, body, need_create)| Decl::ImplDecl {
-            name,
-            params: params.unwrap_or_default(),
-            trait_name,
-            trait_params,
-            methods: body.flatten().unwrap_or_default(),
-            need_create,
+        .map(|(params, trait_name, trait_params, name, body, need_create)| {
+            // body is Option<Option<Vec<...>>> (brace wraps in Option, and the inner
+            // parser may also return Option). Flatten to get Vec<...>.
+            let mut methods: Vec<(Decl, bool)> = Vec::new();
+            let mut extra_params = trait_params;
+            // body is Option<Option<Vec<(bool, Option<Raw>, Option<(Decl, bool)>)>>>
+            if let Some(Some(items)) = body {
+                for item in items {
+                    if item.0 {
+                        if let Some(typ) = item.1 {
+                            extra_params.push(typ);
+                        }
+                    } else if let Some((decl, is_static)) = item.2 {
+                        methods.push((decl, is_static));
+                    }
+                }
+            }
+            Decl::ImplDecl {
+                name,
+                params: params.unwrap_or_default(),
+                trait_name,
+                trait_params: extra_params,
+                methods,
+                need_create,
+            }
         })
         .parse(input, state)
 }
