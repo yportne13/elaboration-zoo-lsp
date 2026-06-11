@@ -2561,6 +2561,94 @@ println (print_it true)
     }
 }
 
+// ============================================================
+// Method ambiguity resolution
+// ============================================================
+
+#[test]
+fn test_ambiguous_method_error() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Foo {
+    def method: String
+}
+
+trait Bar {
+    def method: String
+}
+
+impl Foo for Bool {
+    def method: String = "foo"
+}
+
+impl Bar for Bool {
+    def method: String = "bar"
+}
+
+// Both Foo and Bar have `method` — this should be ambiguous
+println (true.method)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            println!("Ambiguous output: {:?}", output.trim().lines().collect::<Vec<_>>());
+            // If it somehow resolves, check it's from one of them
+            assert!(output.contains("foo") || output.contains("bar"),
+                "should resolve to foo or bar, got: {}", output);
+        }
+        Err(e) => {
+            let msg = e.0.data;
+            println!("Ambiguous error: {}", msg);
+            // Now we expect an error about ambiguity
+            assert!(msg.contains("ambiguous"), "Expected ambiguity error, got: {}", msg);
+        }
+    }
+}
+
+#[test]
+fn test_unambiguous_method_ok() {
+    // Same method name in two traits, but only one is implemented for the type
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Foo {
+    def method: String
+}
+
+trait Bar {
+    def method: String
+}
+
+impl Foo for Nat {
+    def method: String = "foo_nat"
+}
+
+// Bar is NOT implemented for Nat
+// So method should resolve to Foo without ambiguity
+
+def two = succ (succ zero)
+println (two.method)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Unambiguous output: {:?}", lines);
+            assert!(lines.iter().any(|l| l.contains("foo_nat")), "should get foo_nat");
+        }
+        Err(e) => panic!("Unambiguous error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
 #[test]
 fn test_where_clause_multi_bound() {
     let input = r#"

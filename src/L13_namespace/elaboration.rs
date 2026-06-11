@@ -1288,7 +1288,7 @@ impl Infer {
             .cloned()
             .collect();
         let ns_result = {
-            let mut result = None;
+            let mut result: Vec<_> = vec![];
             for ns_entry in &ns_entries {
                 // Pre-filter: skip entries whose trait has no instance for this Self type
                 if let Some(ref head) = typ_raw_head {
@@ -1308,15 +1308,31 @@ impl Infer {
                     check_typ = self.closure_apply(&cxt.decl, cod, u);
                 }
                 if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
-                    result = Some(ns_entry.clone());
-                    break;
+                    result.push(ns_entry.clone());
                 }
                 // Clean up metas created by this failed namespace entry
                 self.meta.truncate(meta_before);
             }
             result
         };
-        if let Some(ns_entry) = ns_result {
+        if ns_result.len() > 1 {
+            let names: Vec<SmolStr> = ns_result.iter()
+                .filter_map(|e| {
+                    if let Val::Pi(_, Icit::Impl, dom, _) = e.0.as_ref() {
+                        if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
+                            return Some(trait_name.data.clone());
+                        }
+                    }
+                    None
+                })
+                .collect();
+            return Err(Error(t.clone().map(|m| format!(
+                "ambiguous method `{}`: found in traits {}",
+                m,
+                names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
+            )), vec![]));
+        }
+        if let Some(ns_entry) = ns_result.into_iter().next() {
             return self.infer_expr(cxt, Raw::app(
                 Raw::Var(t_span.map(|_| SmolStr::new(format!("{}{}", ns_entry.2, t.data)))),
                 *x.clone(),
@@ -1385,13 +1401,16 @@ impl Infer {
                     }
                 ))
                 .collect::<Vec<_>>();
-            //TODO: if traits.len() > 1, return err
-            let traits = traits.first().and_then(|(_, decl)| {
-                    self.infer_expr(cxt, decl.clone()).ok()
-                });
-            if let Some(ret) = traits {
-                //println!("{}", super::pretty_tm(0, cxt.names(), &ret.0));
-                Ok(ret)
+            if traits.len() > 1 {
+                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _)| n).collect();
+                return Err(Error(t.clone().map(|m| format!(
+                    "ambiguous method `{}`: found in traits {}",
+                    m,
+                    trait_names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
+                )), vec![]));
+            }
+            if let Some((_, decl)) = traits.first() {
+                self.infer_expr(cxt, decl.clone())
             } else {
                 Err(Error(t.clone().map(|t| format!(
                     "`{}`: {} has no object `{}`",
