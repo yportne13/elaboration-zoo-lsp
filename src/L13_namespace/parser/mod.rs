@@ -215,6 +215,7 @@ macro_rules! T {
     [->] => { $crate::L13_namespace::parser::TokenKind::Arrow };
     [=>] => { $crate::L13_namespace::parser::TokenKind::DoubleArrow };
     ['\\'] => { $crate::L13_namespace::parser::TokenKind::Lambda };
+    [+] => { $crate::L13_namespace::parser::TokenKind::Op };
     [package] => { $crate::L13_namespace::parser::TokenKind::PackageKeyword };
     [import] => { $crate::L13_namespace::parser::TokenKind::ImportKeyword };
 }
@@ -998,12 +999,15 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
     (
         kw(TraitKeyword),
         smolstr(Ident),
+        (kw(T![:]), smolstr(Ident).many0_sep(kw_is(T![+], "+"))).option()
+            .map(|x| x.map(|(_, v)| v).unwrap_or_default()),
         p_pi_impl_binder_option,
         brace(p_def_declare.many0_sep(kw(EndLine))),
     )
-        .map(|(_, name, params, body)| Decl::TraitDecl {
+        .map(|(_, name, supertraits, params, body)| Decl::TraitDecl {
             name,
             params,
+            supertraits,
             methods: body.unwrap_or_default(),
         })
         .parse(input, state)

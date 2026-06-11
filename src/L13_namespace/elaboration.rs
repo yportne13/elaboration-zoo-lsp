@@ -32,9 +32,10 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             params,
             cases, // case names are NOT prefixed — they get prefixed by the enum elaboration
         },
-        Decl::TraitDecl { name, params, methods } => Decl::TraitDecl {
+        Decl::TraitDecl { name, params, supertraits, methods } => Decl::TraitDecl {
             name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
             params,
+            supertraits,
             methods: methods.into_iter().map(|(mn, mparams, mret, mbody)| {
                 (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret, mbody)
             }).collect(),
@@ -759,7 +760,19 @@ impl Infer {
                 }
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
-            Decl::TraitDecl { name, mut params, methods } => {
+            Decl::TraitDecl { name, mut params, supertraits, methods } => {
+                // Merge supertrait methods into this trait's method list
+                let mut all_methods = methods.clone();
+                for st_name in &supertraits {
+                    if let Some((_, _, st_methods)) = self.trait_definition.get(&st_name.data) {
+                        for st_m in st_methods {
+                            let name_exists = all_methods.iter().any(|(mn, _, _, _)| mn.data == st_m.0.data);
+                            if !name_exists {
+                                all_methods.push(st_m.clone());
+                            }
+                        }
+                    }
+                }
                 self.trait_solver.new_trait(name.data.clone());
                 let mut param = vec![(name.clone().map(|_| SmolStr::new("Self")), Raw::Hole(name.to_span()), Icit::Impl)];
                 param.append(&mut params);
@@ -768,7 +781,7 @@ impl Infer {
                         _ => false,
                     }).collect::<Vec<_>>();
                 self.trait_solver.set_trait_out_params(name.data.clone(), out_param.clone());
-                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), methods.clone()));
+                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), all_methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
                 let mut cxt = cxt.clone();
                 let (_, _, c) = self.infer(&cxt, Decl::Enum {
@@ -777,7 +790,7 @@ impl Infer {
                     params: param,
                     cases: vec![(
                         name.map(|x| SmolStr::new(format!("{x}.mk"))),
-                        methods
+                        all_methods
                             .into_iter()
                             .map(|(mn, mparams, mret, _mbody)| (
                                 mn.clone(),

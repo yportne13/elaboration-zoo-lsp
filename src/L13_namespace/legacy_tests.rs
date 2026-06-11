@@ -2228,3 +2228,112 @@ impl Show for Bool {
         }
     }
 }
+
+// ============================================================
+// Supertrait (trait inheritance)
+// ============================================================
+
+#[test]
+fn test_supertrait_basic() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Base {
+    def base_method: String
+}
+
+trait Sub: Base {
+    def sub_method: String
+}
+
+impl Sub for Bool {
+    def base_method: String = "base_impl"
+    def sub_method: String = "sub_impl"
+}
+
+println (true.base_method)
+println (true.sub_method)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            println!("Supertrait output: {:?}", output.trim().lines().collect::<Vec<_>>());
+            assert!(output.contains("base_impl"), "should inherit base method");
+            assert!(output.contains("sub_impl"), "should have own method");
+        }
+        Err(e) => panic!("Supertrait error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_supertrait_default() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Base {
+    def base_method: String = "base_default"
+}
+
+trait Sub: Base {
+    def sub_method: String
+}
+
+impl Sub for Bool {
+    def sub_method: String = "sub_impl"
+    // base_method 使用默认实现
+}
+
+println (true.base_method)
+println (true.sub_method)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            println!("Supertrait default output: {:?}", output.trim().lines().collect::<Vec<_>>());
+            assert!(output.contains("base_default"), "should use default from supertrait");
+            assert!(output.contains("sub_impl"), "should have own method");
+        }
+        Err(e) => panic!("Supertrait default error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_supertrait_missing_method_error() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Base {
+    def base_method: String
+}
+
+trait Sub: Base {
+    def sub_method: String
+}
+
+impl Sub for Bool {
+    def sub_method: String = "sub_impl"
+    // 缺少 base_method 且没有默认
+}
+"#;
+    match run(input, 0) {
+        Ok(_) => panic!("Should have failed"),
+        Err(e) => {
+            let msg = e.0.data;
+            println!("Expected error: {}", msg);
+            assert!(msg.contains("no default"), "should require supertrait method");
+        }
+    }
+}
