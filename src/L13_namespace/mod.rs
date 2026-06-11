@@ -359,7 +359,7 @@ pub struct Infer {
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
     trait_metas: Vec<MetaVar>,
     trait_solver: typeclass::Synth,
-    trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>)>,
+    trait_definition: HashMap<SmolStr, (Vec<(Span<SmolStr>, Raw, Icit)>, Vec<bool>, Vec<Span<SmolStr>>, Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>)>,
     trait_out_param: HashMap<SmolStr, Vec<bool>>,
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>)>,

@@ -699,7 +699,7 @@ impl Infer {
                     self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
                     // Fill in missing methods with default bodies from the trait definition
                     let mut methods = methods;
-                    if let Some((_, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
+                    if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
                         for (tm_name, tm_params, tm_ret, tm_default_body) in trait_methods {
                             let has_impl = methods.iter().any(|(decl, _)| match decl {
                                 Decl::Def { name, .. } => name.data == tm_name.data,
@@ -761,10 +761,25 @@ impl Infer {
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
             Decl::TraitDecl { name, mut params, supertraits, methods } => {
-                // Merge supertrait methods into this trait's method list
+                // Transitive supertrait method resolution with cycle detection
                 let mut all_methods = methods.clone();
-                for st_name in &supertraits {
-                    if let Some((_, _, st_methods)) = self.trait_definition.get(&st_name.data) {
+                let mut visited = std::collections::HashSet::<SmolStr>::new();
+                visited.insert(name.data.clone());
+                let mut stack: Vec<SmolStr> = supertraits.iter().map(|s| s.data.clone()).collect();
+                while let Some(st_name) = stack.pop() {
+                    if visited.contains(&st_name) {
+                        return Err(Error(empty_span(format!("cyclic supertrait: `{}` appears twice in the chain", st_name)), vec![]));
+                    }
+                    visited.insert(st_name.clone());
+                    if let Some((_, _, st_sts, st_methods)) = self.trait_definition.get(&st_name) {
+                        // Add supertrait's supertraits to the stack (detect cycles)
+                        for st_st in st_sts {
+                            if visited.contains(&st_st.data) {
+                                return Err(Error(empty_span(format!("cyclic supertrait: `{}` appears twice in the chain", st_st.data)), vec![]));
+                            }
+                            stack.push(st_st.data.clone());
+                        }
+                        // Add supertrait's methods (avoiding duplicates)
                         for st_m in st_methods {
                             let name_exists = all_methods.iter().any(|(mn, _, _, _)| mn.data == st_m.0.data);
                             if !name_exists {
@@ -781,7 +796,7 @@ impl Infer {
                         _ => false,
                     }).collect::<Vec<_>>();
                 self.trait_solver.set_trait_out_params(name.data.clone(), out_param.clone());
-                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), all_methods.clone()));
+                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), supertraits.clone(), all_methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
                 let mut cxt = cxt.clone();
                 let (_, _, c) = self.infer(&cxt, Decl::Enum {
@@ -1218,8 +1233,8 @@ impl Infer {
         if t.data.is_empty() {
             // Collect completions: find traits whose first non-out param could match typ_raw
             let completions: Vec<_> = self.trait_definition.iter()
-                .filter(|(x, (_, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
-                .flat_map(|x| x.1.2.clone())
+                .filter(|(x, (_, _, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
+                .flat_map(|x| x.1.3.clone())
                 .collect();
             for method_decl in &completions {
                 self.completion_table.push((t_span, method_decl.0.data.clone()));
@@ -1269,7 +1284,7 @@ impl Infer {
         {
             let traits = self.trait_definition
                 .iter()
-                .flat_map(|(trait_name, (trait_params, out_param, methods))| {
+                .flat_map(|(trait_name, (trait_params, out_param, _st, methods))| {
                     methods.iter()
                         .find(|x| x.0.data == t.data)
                         .map(|x| (trait_name, trait_params, out_param, x))

@@ -2380,6 +2380,108 @@ println (unit.get)
     }
 }
 
+// ============================================================
+// Transitive supertrait resolution
+// ============================================================
+
+#[test]
+fn test_supertrait_transitive() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait A {
+    def method_a: String
+}
+
+trait B: A {
+    def method_b: String
+}
+
+trait C: B {
+    def method_c: String
+}
+
+impl C for Bool {
+    def method_a: String = "from_a"
+    def method_b: String = "from_b"
+    def method_c: String = "from_c"
+}
+
+println (true.method_a)
+println (true.method_b)
+println (true.method_c)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            println!("Transitive output: {:?}", output.trim().lines().collect::<Vec<_>>());
+            assert!(output.contains("from_a"), "should have A's method");
+            assert!(output.contains("from_b"), "should have B's method");
+            assert!(output.contains("from_c"), "should have C's method");
+        }
+        Err(e) => panic!("Transitive error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_supertrait_cycle_detection() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait A: B {
+    def ma: String
+}
+trait B: A {
+    def mb: String
+}
+
+impl A for Bool {
+    def ma: String = "a"
+}
+"#;
+    match run(input, 0) {
+        Ok(_) => panic!("Should have failed with cycle error"),
+        Err(e) => {
+            let msg = e.0.data;
+            println!("Cycle error: {}", msg);
+            assert!(msg.contains("cyclic"), "Expected cycle error, got: {}", msg);
+        }
+    }
+}
+
+#[test]
+fn test_supertrait_self_cycle() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait A: A {
+    def ma: String
+}
+"#;
+    match run(input, 0) {
+        Ok(_) => panic!("Should have failed with self-cycle error"),
+        Err(e) => {
+            let msg = e.0.data;
+            println!("Self-cycle error: {}", msg);
+            assert!(msg.contains("cyclic"), "Expected cycle error, got: {}", msg);
+        }
+    }
+}
+
 #[test]
 fn test_supertrait_missing_method_error() {
     let input = r#"
