@@ -2482,6 +2482,90 @@ trait A: A {
     }
 }
 
+// ============================================================
+// Where clause syntax
+// ============================================================
+
+#[test]
+fn test_where_clause_basic() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show {
+    def show: String
+}
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+def print_it[T](x: T): String where T: Show =
+    _show_T.show x
+
+println (print_it true)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Where clause output: {:?}", lines);
+            assert!(lines.iter().any(|l| l.contains("true")), "should print true");
+        }
+        Err(e) => panic!("Where clause error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_where_clause_multi_bound() {
+    let input = r#"
+def outParam[A](a: A): A = a
+
+enum Bool {
+    true
+    false
+}
+
+trait Show { def show: String }
+trait Get { def get: String }
+
+impl Show for Bool {
+    def show: String =
+        match this {
+            case true => "show:true"
+            case false => "show:false"
+        }
+}
+impl Get for Bool {
+    def get: String =
+        match this {
+            case true => "get:true"
+            case false => "get:false"
+        }
+}
+
+def test[T](x: T): String where T: Show + Get =
+    _show_T.show x
+
+println (test true)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            println!("Multi-bound where output: {:?}", lines);
+            assert!(lines.iter().any(|l| l.contains("show")), "should show");
+        }
+        Err(e) => panic!("Multi-bound error: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
 #[test]
 fn test_supertrait_missing_method_error() {
     let input = r#"

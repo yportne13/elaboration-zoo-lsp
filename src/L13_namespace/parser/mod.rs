@@ -216,6 +216,7 @@ macro_rules! T {
     [=>] => { $crate::L13_namespace::parser::TokenKind::DoubleArrow };
     ['\\'] => { $crate::L13_namespace::parser::TokenKind::Lambda };
     [+] => { $crate::L13_namespace::parser::TokenKind::Op };
+    [where] => { $crate::L13_namespace::parser::TokenKind::WhereKeyword };
     [package] => { $crate::L13_namespace::parser::TokenKind::PackageKeyword };
     [import] => { $crate::L13_namespace::parser::TokenKind::ImportKeyword };
 }
@@ -889,6 +890,13 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 }
 
 fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
+    // Parse a where clause: `where T: Show + Eq, U: Trait`
+    let p_where_clause = (
+        kw(T![where]),
+        (smolstr(Ident), kw(T![:]), smolstr(Ident).many0_sep(kw_is(T![+], "+")))
+            .map(|(name, _, bounds)| (name, bounds))
+            .many0_sep(kw(T![,])),
+    ).option().map(|x| x.map(|(_, v)| v));
     Cut((
         kw(DefKeyword),
         smolstr(Ident).or(smolstr(Op)),
@@ -896,15 +904,36 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
+        p_where_clause,
         kw(T![=]),
         kw(EndLine).option(),
         p_raw,
     ))
-        .map(|(_, name, params, ret, _, _, body)| Decl::Def {
-            name: name.unwrap_or(empty_span(SmolStr::new(""))),
-            params: params.unwrap_or_default(),
-            ret_type: ret.flatten().unwrap_or(Raw::Hole(empty_span(()))),
-            body: body.unwrap_or(Raw::Hole(empty_span(()))),
+        .map(|(_, name, params, ret, where_clause, _, _, body)| {
+            let mut all_params = params.unwrap_or_default();
+            // Desugar where clause to implicit parameters
+            if let Some(clause) = where_clause {
+                for items in clause {
+                    for (type_name, bounds) in items {
+                        for bound in bounds {
+                            // Generate instance name from trait name (lowercase)
+                            let inst_name = SmolStr::new(format!("_{}_{}", bound.data.to_lowercase(), type_name.data));
+                            let trait_app = Raw::App(
+                                Box::new(Raw::Var(bound)),
+                                Box::new(Raw::Var(type_name.clone())),
+                                super::parser::syntax::Either::Icit(Icit::Impl),
+                            );
+                            all_params.push((empty_span(inst_name), trait_app, Icit::Impl));
+                        }
+                    }
+                }
+            }
+            Decl::Def {
+                name: name.unwrap_or(empty_span(SmolStr::new(""))),
+                params: all_params,
+                ret_type: ret.flatten().unwrap_or(Raw::Hole(empty_span(()))),
+                body: body.unwrap_or(Raw::Hole(empty_span(()))),
+            }
         })
         .parse(input, state)
 }
