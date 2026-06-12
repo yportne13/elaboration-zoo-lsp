@@ -181,13 +181,17 @@ fn macro_ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 }
 
 fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
+    let dot = is('.').map(|x| x.map(|y| (y, Dot)));
+    let comma = is(',').map(|x| x.map(|y| (y, Comma)));
     let lparen = is('(').map(|x| x.map(|y| (y, LParen)));
     let rparen = is(')').map(|x| x.map(|y| (y, RParen)));
     let lsquare = is('[').map(|x| x.map(|y| (y, LSquare)));
     let rsquare = is(']').map(|x| x.map(|y| (y, RSquare)));
     let lcurly = is('{').map(|x| x.map(|y| (y, LCurly)));
     let rcurly = is('}').map(|x| x.map(|y| (y, RCurly)));
-    lparen
+    dot
+        .or(comma)
+        .or(lparen)
         .or(rparen)
         .or(lsquare)
         .or(rsquare)
@@ -197,64 +201,26 @@ fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 }
 
 fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    // First try multi-char operators from OP table (sorted longest first)
-    let mut best: Option<(u32, &'static str, TokenKind)> = None;
-    for (op_str, kind) in OP.iter() {
-        if input.data.starts_with(op_str) {
-            let len = op_str.len() as u32;
-            match best {
-                Some((best_len, _, _)) if len > best_len => best = Some((len, op_str, *kind)),
-                None => best = Some((len, op_str, *kind)),
-                _ => {}
-            }
-        }
-    }
-    if let Some((len, op_str, kind)) = best {
-        return Some((
-            Span {
-                data: &input.data[len as usize..],
-                start_offset: input.start_offset + len,
-                end_offset: input.end_offset,
-                path_id: input.path_id,
-            },
-            Span {
-                data: (op_str, kind),
-                start_offset: input.start_offset,
-                end_offset: input.start_offset + len,
-                path_id: input.path_id,
-            },
-        ));
-    }
-    // Fall back to single operator character
-    let c = input.data.chars().next()?;
-    if ('!'..='\'').contains(&c)
-        // '*'..='/' excludes '.' (0x2E) so that '.' is never consumed
-        // as part of an operator token — it's always lexed as a standalone Dot.
-        || (('*'..='-').contains(&c) || c == '/')
-        || ((':'..='@').contains(&c) && c != ';')
-        || c == '\\'
-        || (('^'..='`').contains(&c) && c != '_')
-        || c == '|'
-        || c == '~'
-    {
-        let len = c.len_utf8() as u32;
-        Some((
-            Span {
-                data: &input.data[len as usize..],
-                start_offset: input.start_offset + len,
-                end_offset: input.end_offset,
-                path_id: input.path_id,
-            },
-            Span {
-                data: (&input.data[..len as usize], Op),
-                start_offset: input.start_offset,
-                end_offset: input.start_offset + len,
-                path_id: input.path_id,
-            },
-        ))
-    } else {
-        None
-    }
+    // '.' is excluded from the operator character ranges so that it is never consumed
+    // as part of an operator token — it's always lexed as a standalone Dot.
+    pmatch(|c: char| {
+        ('!'..='\'').contains(&c)
+            || (('*'..='-').contains(&c) || c == '/')
+            || ((':'..='@').contains(&c) && c != ';')
+            || c == '\\'
+            || (('^'..='`').contains(&c) && c != '_')
+            || c == '|'
+            || c == '~'
+    })
+    .map(|x| {
+        let token = if let Some((_, k)) = OP.into_iter().find(|(k, _)| x.data == *k) {
+            k
+        } else {
+            Op
+        };
+        x.map(move |y| (y, token))
+    })
+    .parse(input)
 }
 
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
