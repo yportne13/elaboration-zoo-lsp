@@ -1931,7 +1931,30 @@ println(moduleTreeVL(Test))
     match run_with_prelude(input) {
         Ok(output) => {
             println!("{}", output);
-            assert!(output.contains("a[7]"), "a[7] should desugar to a.apply[7]");
+    assert!(output.contains("a[7]"), "a[7] should desugar to a.apply[7]");
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test LHS bit selection: t[0] := x should generate assign t[0] = x;
+#[test]
+fn test_hdl_lhs_bitsel() {
+    let input = r#"
+module Test {
+    let t = UInt[8]
+    let x = Bool
+    t[0] := x
+    t[7] := x
+}
+
+println(moduleVL(Test))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("t[0]"), "should have t[0] on LHS");
+            assert!(output.contains("t[7]"), "should have t[7] on LHS");
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

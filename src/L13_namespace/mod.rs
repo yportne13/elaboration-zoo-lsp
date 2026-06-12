@@ -2623,23 +2623,23 @@ def drop_vec[T, len: Nat](t: Vec[T](len), x: Fin(len + 1)): Vec[T](sub len x) = 
 
 def exists_two: Exists[Nat][x => Eq x 2] = Exists.mk[Nat][x => Eq x 2] 2 rfl
 
-struct Bits[width: Nat] {
+struct TestBits[width: Nat] {
     name: String
 }
 
-impl[width: Nat] Add[Bits[width], Bits[width]] for Bits[width] {
-    def +(that: Bits[width]): Bits[width] =
-        Bits.mk(this.name + " + " + that.name)
+impl[width: Nat] Add[TestBits[width], TestBits[width]] for TestBits[width] {
+    def +(that: TestBits[width]): TestBits[width] =
+        TestBits.mk(this.name + " + " + that.name)
 }
 
-impl[width: Nat] Sub[Bits[width], Bits[width]] for Bits[width] {
-    def -(that: Bits[width]): Bits[width] =
-        Bits.mk(this.name + " - " + that.name)
+impl[width: Nat] Sub[TestBits[width], TestBits[width]] for TestBits[width] {
+    def -(that: TestBits[width]): TestBits[width] =
+        TestBits.mk(this.name + " - " + that.name)
 }
 
-impl[width0: Nat, width1: Nat] Mul[Bits[width1], Bits[width0 + width1]] for Bits[width0] {
-    def *(that: Bits[width1]): Bits[width0 + width1] =
-        Bits.mk(this.name + " * " + that.name)
+impl[width0: Nat, width1: Nat] Mul[TestBits[width1], TestBits[width0 + width1]] for TestBits[width0] {
+    def *(that: TestBits[width1]): TestBits[width0 + width1] =
+        TestBits.mk(this.name + " * " + that.name)
 }
 "#;
     match run_with_prelude(input) {
