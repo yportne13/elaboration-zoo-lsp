@@ -380,7 +380,26 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .or(string(Num).map(|x| {
             Raw::Nat(x.map(|x| x.parse::<u64>().unwrap()).data)
         }))
-        .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole(empty_span(())))))
+        .or(
+            // Tuple literal: (a, b, ...) -> TupleN.mk a b ...
+            paren_cut(
+                p_raw.many1_sep((kw(T![,]), kw(EndLine).option()))
+            ).map(|opt_items| {
+                match opt_items {
+                    Some(items) if items.len() == 1 => items.into_iter().next().unwrap(),
+                    Some(items) => {
+                        let n = items.len();
+                        let mk_name = SmolStr::new(format!("Tuple{n}.mk"));
+                        items.into_iter().fold(
+                            Raw::Var(empty_span(mk_name)),
+                            |acc, item| Raw::App(Box::new(acc), Box::new(item), Either::Icit(Icit::Expl))
+                        )
+                    }
+                    None => Raw::Hole(empty_span(())),
+                }
+            })
+            .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole(empty_span(())))))
+        )
         .parse(input, state)
 }
 

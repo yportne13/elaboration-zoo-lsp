@@ -58,12 +58,6 @@ def minNat(a: Nat, b: Nat): Nat = match a {
     }
 }
 
-// ---------- Unit ----------
-
-enum Unit {
-    unit
-}
-
 // ---------- Module system (shared helpers) ----------
 
 enum Expr {

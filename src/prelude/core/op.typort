@@ -95,4 +95,69 @@ trait Clone {
     def clone: Self
 }
 
+// ---------- Unit ----------
 
+enum Unit {
+    unit
+}
+
+// ---------- Tuple types ----------
+// Syntactic sugar: (A, B) desugars to Tuple2[A, B]
+// Field access: t._1, t._2, ...
+// Supported up to Tuple8 for common use cases.
+
+struct Tuple2[A, B] {
+    _1: A
+    _2: B
+}
+
+struct Tuple3[A, B, C] {
+    _1: A
+    _2: B
+    _3: C
+}
+
+struct Tuple4[A, B, C, D] {
+    _1: A
+    _2: B
+    _3: C
+    _4: D
+}
+
+struct Tuple5[A, B, C, D, E] {
+    _1: A
+    _2: B
+    _3: C
+    _4: D
+    _5: E
+}
+
+struct Tuple6[A, B, C, D, E, F] {
+    _1: A
+    _2: B
+    _3: C
+    _4: D
+    _5: E
+    _6: F
+}
+
+struct Tuple7[A, B, C, D, E, F, G] {
+    _1: A
+    _2: B
+    _3: C
+    _4: D
+    _5: E
+    _6: F
+    _7: G
+}
+
+struct Tuple8[A, B, C, D, E, F, G, H] {
+    _1: A
+    _2: B
+    _3: C
+    _4: D
+    _5: E
+    _6: F
+    _7: G
+    _8: H
+}
