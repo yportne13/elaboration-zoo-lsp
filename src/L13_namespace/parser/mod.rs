@@ -823,11 +823,6 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
                 .map(|x| x.concat()),
         ).map(|(x, t)| Pattern::Con(x, t, Either::Icit(Icit::Expl))))
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
-        .or(paren(p_pattern.many1_sep(kw(T![,]))).map(|x| Pattern::Con(
-            empty_span(SmolStr::new(format!("Tuple{}.mk", x.len()))),
-            x,
-            Either::Icit(Icit::Expl),
-        )))
         .parse(input, state)
 }
 

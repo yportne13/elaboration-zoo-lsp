@@ -96,7 +96,7 @@ macro_rules Expr {
     };
 
     // ---- assignment — auto-wrap RHS in .into to support both Self and Nat ----
-    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let uselessrr = $lhs := rhs_conv;};
+    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let _ = addSignalAssignment(stringify $lhs, rhs_conv);};
 
     // ---- switch / is / default (desugars to when/otherwise chain) ----
     // switch — single is arm

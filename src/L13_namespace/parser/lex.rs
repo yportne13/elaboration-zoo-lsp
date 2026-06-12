@@ -228,7 +228,9 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     // Fall back to single operator character
     let c = input.data.chars().next()?;
     if ('!'..='\'').contains(&c)
-        || ('*'..='/').contains(&c)
+        // '*'..='/' excludes '.' (0x2E) so that '.' is never consumed
+        // as part of an operator token — it's always lexed as a standalone Dot.
+        || (('*'..='-').contains(&c) || c == '/')
         || ((':'..='@').contains(&c) && c != ';')
         || c == '\\'
         || (('^'..='`').contains(&c) && c != '_')

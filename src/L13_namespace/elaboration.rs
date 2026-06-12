@@ -426,40 +426,81 @@ impl Infer {
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some((meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
-                        let err_msg = format!(
-                            "find unsolved meta with type `{}`",//\n{:?}",
-                            super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
-                            //super::pretty::pretty_tm(0, cxt.names(), &t_tm),
+                        // --- Try Nat defaulting (Lean-style fallback) ---
+                        // When there are unsolved type metas, try defaulting them to Nat
+                        // and re-attempt trait resolution, before giving up.
+                        let saved_meta: Vec<_> = self.meta.clone();
+                        let nat_tm: Rc<Tm> = Tm::Decl(empty_span(SmolStr::new("Nat"))).into();
+                        let nat_val: Rc<Val> = self.eval(&cxt.decl, &cxt.env, &nat_tm);
+                        let nat_ok = matches!(
+                            self.force(&cxt.decl, &nat_val).as_ref(),
+                            Val::Sum(..) | Val::Decl(..)
                         );
-                        let infer = self.clone();
-                        /*println!("{:?}", meta_cxt.pruning);
-                        println!(
-                            "{}",
-                            super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &meta_ty)),
-                        );*/
-                        //let prune_ty = self.prune_ty(&meta_cxt.decl, &meta_cxt.pruning, &meta_ty).unwrap();//TODO:do not unwrap
-                        //let meta_ty = self.eval(&meta_cxt.decl, &List::new(), &prune_ty);
-                        let ret = move || {
-                            let mut infer = infer.clone();
-                            infer.iddfs(
-                                &meta_cxt,
-                                &[oty.clone()],
-                                &meta_cxt,
-                                &oty,
-                                Rc::new(|x| x.head().unwrap().clone()),
-                                5,
-                                6,
-                                &name.data,
-                            ).and_then(|x| if !infer.meta_contrains.is_empty() {
-                                infer.meta_contrains.clear();
-                                Err(super::UnifyError::Basic)
+                        let nat_solved = if nat_ok {
+                            // Phase 1: collect indices of type-valued unsolved metas (immutable borrow)
+                            let to_default: Vec<usize> = self.meta.iter().enumerate()
+                                .filter(|(_, entry)| matches!(entry, MetaEntry::Unsolved(ty, _, _)
+                                    if matches!(self.force(&cxt.decl, ty).as_ref(), Val::U(_))))
+                                .map(|(i, _)| i)
+                                .collect();
+                            if to_default.is_empty() {
+                                false
                             } else {
-                                Ok(x)
-                            }).ok()
+                                // Phase 2: mutate those metas (mutable borrow)
+                                for &idx in &to_default {
+                                    if let MetaEntry::Unsolved(ty, _, _) = &self.meta[idx] {
+                                        self.meta[idx] = MetaEntry::Solved(nat_val.clone(), ty.clone());
+                                    }
+                                }
+                                let _ = self.solve_multi_trait(&fake_cxt, MetaVar(this_meta as u32), false);
+                                if t_tm.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
+                                    true
+                                } else {
+                                    // Restore original meta state for proper error reporting
+                                    self.meta = saved_meta;
+                                    false
+                                }
+                            }
+                        } else {
+                            false
                         };
-                        return Err(Error(bod.to_span().map(|_|
-                            err_msg.clone()
-                        ), vec![Box::new(ret)]));
+
+                        if !nat_solved {
+                            let err_msg = format!(
+                                "find unsolved meta with type `{}`",//\n{:?}",
+                                super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
+                                //super::pretty::pretty_tm(0, cxt.names(), &t_tm),
+                            );
+                            let infer = self.clone();
+                            /*println!("{:?}", meta_cxt.pruning);
+                            println!(
+                                "{}",
+                                super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &meta_ty)),
+                            );*/
+                            //let prune_ty = self.prune_ty(&meta_cxt.decl, &meta_cxt.pruning, &meta_ty).unwrap();//TODO:do not unwrap
+                            //let meta_ty = self.eval(&meta_cxt.decl, &List::new(), &prune_ty);
+                            let ret = move || {
+                                let mut infer = infer.clone();
+                                infer.iddfs(
+                                    &meta_cxt,
+                                    &[oty.clone()],
+                                    &meta_cxt,
+                                    &oty,
+                                    Rc::new(|x| x.head().unwrap().clone()),
+                                    5,
+                                    6,
+                                    &name.data,
+                                ).and_then(|x| if !infer.meta_contrains.is_empty() {
+                                    infer.meta_contrains.clear();
+                                    Err(super::UnifyError::Basic)
+                                } else {
+                                    Ok(x)
+                                }).ok()
+                            };
+                            return Err(Error(bod.to_span().map(|_|
+                                err_msg.clone()
+                            ), vec![Box::new(ret)]));
+                        }
                     }
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
