@@ -461,11 +461,11 @@ impl Infer {
             if mv.0 < m.0 { continue; }
             let idx = mv.0 as usize;
             if idx >= self.meta.len() { continue; }
-            let x = match &self.meta[idx] {
-                MetaEntry::Unsolved(v, _, _) => v.clone(),
+            let (x, meta_cxt) = match &self.meta[idx] {
+                MetaEntry::Unsolved(v, arc_cxt, _) => (v.clone(), arc_cxt.as_ref().clone()),
                 _ => continue,
             };
-            let typ = self.solve_trait(cxt, &x, allow_flex_defaulting)
+            let typ = self.solve_trait(&meta_cxt, &x, allow_flex_defaulting)
                 .map_err(UnifyError::Trait)?;
             if let Some((_, val)) = typ {
                 self.meta[idx] = MetaEntry::Solved(val, x);
