@@ -87,6 +87,9 @@ enum Expr {
     mux(cond: Expr, whenTrue: Expr, whenFalse: Expr)
     bitsel(e: Expr, idx: Expr)
     partsel(e: Expr, hi: Expr, lo: Expr)
+    // ---- hierarchy: sub-module instantiation & cross-level signal references ----
+    instance(instName: String, moduleName: String)   // sub-module instantiation
+    subSignal(instName: String, signalName: String)   // cross-level signal reference
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
@@ -99,10 +102,12 @@ def isRegExpr(e: Expr): Boolean = match e {
     case mux(_, _, _) => false
     case bitsel(e, _) => isRegExpr(e)
     case partsel(e, _, _) => isRegExpr(e)
+    case instance(_, _) => false
+    case subSignal(_, _) => false
     case _ => false
 }
 
-struct Module {
+struct ModuleDef {
     name: String
     expr_num: Nat
     expr: Vec[Expr] expr_num
@@ -110,18 +115,18 @@ struct Module {
 
 struct module {
     num: Nat
-    data: Vec[Module] num
+    data: Vec[ModuleDef] num
 }
 
 impl module {
-    def insert(m: Module): module = module.mk(this.num + 1, m :: this.data)
+    def insert(m: ModuleDef): module = module.mk(this.num + 1, m :: this.data)
 }
 
 // Generic helper: add an expression to the first module (or create one if none exists)
-def addExprToModuleHelper(num: Nat, data: Vec[Module] num, name: String, e: Expr): module = match data {
-    case nil => module.mk(0 + 1, Module.mk(name, 0 + 1, e :: nil) :: nil)
+def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): module = match data {
+    case nil => module.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
     case cons(head, tail) =>
-        let new_module = Module.mk(head.name, head.expr_num + 1, e :: head.expr);
+        let new_module = ModuleDef.mk(head.name, head.expr_num + 1, e :: head.expr);
         module.mk(num, new_module :: tail)
 }
 
@@ -238,6 +243,10 @@ def createSignalExpr(name: String, e: Expr): Expr =
             e
         case partsel(_, _, _) =>
             e
+        case instance(_, _) =>
+            e
+        case subSignal(_, _) =>
+            e
         case _ =>
             let wrapped = addWhenContext(e);
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
@@ -264,6 +273,8 @@ def hasRegAssign(e: Expr): Boolean = match e {
         }
     case bitsel(_, _) => false
     case partsel(_, _, _) => false
+    case instance(_, _) => false
+    case subSignal(_, _) => false
     case mux(_, _, _) => false
     case _ => false
 }
@@ -299,4 +310,18 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
         case _ => collectInitLines tail
     }
+}
+
+// Add a signal assignment to the module.
+// Creates assign(lhs, rhs) and appends to the module global via addWhenContext.
+def addSignalAssignment(lhs: Expr, rhs: Expr): Unit =
+    let assignment = assign(lhs, rhs);
+    let wrapped = addWhenContext(assignment);
+    let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", wrapped));
+    unit
+
+// Extract the first ModuleDef from a module struct
+def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
+    case nil => ModuleDef.mk("", 0, nil)
+    case cons(first, _) => first
 }

@@ -249,72 +249,28 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
             }
     }
 
-// Convert a Module to a Verilog string
-def moduleVL(m: ModuleDef): String =
-    let port_decls = portsVL(m.expr);
-    let port_lines = list_reverse(collectPortLines m.expr);
-    let wire_decls = wiresVL(m.expr);
-    let reg_decls = regsVL(m.expr);
-    let assigns = assignsVL(m.expr);
-    let always = alwaysVL(m.expr);
-    let clocked = clockedVL(m.expr);
-    let has_regs = match list_reverse(collectRegLines m.expr) {
-        case lnil => false
-        case _ => true
-    };
-    let has_ports = match port_lines {
-        case lnil => false
-        case _ => true
-    };
-    let has_init = hasInitRegs m.expr;
-    let p0 = port_decls;
-    let p1 = match has_regs {
-        case false => p0
-        case true => match has_ports {
-            case false => "  input wire clk"
-            case _ => p0 + ",\n  input wire clk"
-        }
-    };
-    let p2 = match has_init {
-        case false => p1
-        case true => match has_regs {
-            case false => match has_ports {
-                case false => "  input wire reset"
-                case true => port_decls + ",\n  input wire reset"
-            }
-            case true => p1 + ",\n  input wire reset"
-        }
-    };
-    "module " + m.name + " (\n" + p2 + "\n);\n" + wire_decls + reg_decls + assigns + clocked + always + "endmodule\n"
-
 // ============================================================
 //  Hierarchical Verilog Generation (ModuleTree-based)
 // ============================================================
 
 // Generate instance instantiation lines from the tree's expressions.
-// Returns lines like:  moduleName instName;
-def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = match exprs {
-    case nil => lnil
-    case cons(e, tail) =>
-        let rest = collectInstanceLinesTree tail;
-        match e {
-            case instance(instName, moduleName) =>
-                lcons ("  " + moduleName + " " + instName + ";") rest
-            case _ => rest
-        }
-}
+// Note: instance/subSignal Expr variants were removed from the Expr type;
+// this function always returns lnil until hierarchical instance support is re-added.
+def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = lnil
 
 // Alias: moduleTreeVL is the public API expected by test/legacy_tests
-def moduleTreeVL(m: ModuleTree): String =
-    let port_decls = portsVL(m.exprs);
-    let port_lines = list_reverse(collectPortLines m.exprs);
-    let wire_decls = wiresVL(m.exprs);
-    let reg_decls = regsVL(m.exprs);
-    let assigns = assignsVL(m.exprs);
-    let always = alwaysVL(m.exprs);
-    let clocked = clockedVL(m.exprs);
-    let inst_lines = list_reverse(collectInstanceLinesTree m.exprs);
-    let has_regs = match list_reverse(collectRegLines m.exprs) {
+// Extracts the first ModuleDef from a module struct and generates Verilog.
+def moduleTreeVL(m: module): String =
+    let mod_def = headModuleDef(m.data);
+    let port_decls = portsVL(mod_def.expr);
+    let port_lines = list_reverse(collectPortLines mod_def.expr);
+    let wire_decls = wiresVL(mod_def.expr);
+    let reg_decls = regsVL(mod_def.expr);
+    let assigns = assignsVL(mod_def.expr);
+    let always = alwaysVL(mod_def.expr);
+    let clocked = clockedVL(mod_def.expr);
+    let inst_lines = list_reverse(collectInstanceLinesTree mod_def.expr);
+    let has_regs = match list_reverse(collectRegLines mod_def.expr) {
         case lnil => false
         case _ => true
     };
@@ -326,7 +282,7 @@ def moduleTreeVL(m: ModuleTree): String =
         case lnil => false
         case _ => true
     };
-    let has_init = hasInitRegs m.exprs;
+    let has_init = hasInitRegs mod_def.expr;
     let p0 = port_decls;
     let p1 = match has_regs {
         case false => p0
@@ -345,7 +301,7 @@ def moduleTreeVL(m: ModuleTree): String =
             case true => p1 + ",\n  input wire reset"
         }
     };
-    let header = "module " + m.name + " (\n" + p2 + "\n);\n";
+    let header = "module " + mod_def.name + " (\n" + p2 + "\n);\n";
     let body = header + wire_decls + reg_decls + assigns + clocked + always;
     let body_with_inst = match has_instances {
         case false => body

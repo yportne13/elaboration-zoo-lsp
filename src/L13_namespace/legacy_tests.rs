@@ -1948,7 +1948,7 @@ module Test {
     t[7] := x
 }
 
-println(moduleVL(Test))
+	println(moduleTreeVL(Test))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {

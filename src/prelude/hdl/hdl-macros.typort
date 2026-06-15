@@ -95,8 +95,9 @@ macro_rules Expr {
         let w1_pop = whenEnd(unit);
     };
 
-    // ---- assignment — auto-wrap RHS in .into to support both Self and Nat ----
-    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let _ = addSignalAssignment(stringify $lhs, rhs_conv);};
+    // ---- assignment — convert RHS via .into, then call lhs.:=(rhs) ----
+    // Uses method-call syntax to invoke Data:::= without macro recursion.
+    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let _ = $lhs.:=(rhs_conv);};
 
     // ---- switch / is / default (desugars to when/otherwise chain) ----
     // switch — single is arm
@@ -128,18 +129,10 @@ macro_rules Expr {
 macro_rules module {
     ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
         def $name $({$args})* =
-            // Initialize old-style module global for backward compat
             let new_module = ModuleDef.mk(stringify $name, 0, nil);
             let creat_module = create_global("module", module.mk(0 + 1, new_module :: nil));
-            // Push new frame for hierarchical tree
-            let _push_f = pushFrame(stringify $name);
             $($body)*
-            // Pop frame to get the completed ModuleTree
-            let tree = popFrame();
-            // Register as child of parent frame (if any)
-            let _reg_c = registerChildName(tree.name);
-            // Register in global registry for hierarchical Verilog gen
-            let _gbl_r = registerGlobalModuleTree(tree);
-            tree
+            let module_global = get_global("module");
+            module_global
         };
 }
