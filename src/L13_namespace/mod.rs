@@ -22,6 +22,9 @@ mod canonical;
 #[cfg(test)]
 mod legacy_tests;
 
+#[cfg(test)]
+mod debug_test;
+
 type Rc<T> = std::sync::Arc<T>;
 
 type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>;
