@@ -785,25 +785,40 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
 }
 
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    Cut((
-        kw(LetKeyword),
-        smolstr(Ident).or(kw(Hole).map(|s| s.map(|_| SmolStr::new("_")))),
-        (kw(Colon), p_raw).map(|(_, x)| x).option(),
-        kw(Eq),
-        p_raw,
-        kw(Semi),
-        kw(EndLine).many0(),
-        p_raw,
-    ))
-        .map(|(_, binder, ann, _, val, _, _, body)| {
-            Raw::Let(
-                binder.unwrap_or(empty_span(SmolStr::new(""))),
-                Box::new(ann.flatten().unwrap_or(Raw::Hole(empty_span(())))),
-                Box::new(val.unwrap_or(Raw::Hole(empty_span(())))),
-                Box::new(body.unwrap_or(Raw::Hole(empty_span(())))),
+    // Binder path: let ident [: type] = value ; body  (fast path, no match overhead)
+    (kw(LetKeyword),
+     smolstr(Ident).or(kw(Hole).map(|s| s.map(|_| SmolStr::new("_")))),
+     (kw(Colon), p_raw).map(|(_, x)| x).option(),
+     kw(Eq),
+     p_raw,
+     kw(Semi),
+     kw(EndLine).many0(),
+     p_raw,
+    ).map(|(_, binder, ann, _, val, _, _, body)| {
+        Raw::Let(
+            binder,
+            Box::new(ann.unwrap_or(Raw::Hole(empty_span(())))),
+            Box::new(val),
+            Box::new(body),
+        )
+    })
+    .or(
+        // Pattern path: let pattern = value ; body  (desugars to match)
+        (kw(LetKeyword),
+         p_pattern,
+         kw(Eq),
+         p_raw,
+         kw(Semi),
+         kw(EndLine).many0(),
+         p_raw,
+        ).map(|(_, pat, _, val, _, _, body)| {
+            Raw::Match(
+                Box::new(val),
+                vec![(pat, body)],
             )
         })
-        .parse(input, state)
+    )
+    .parse(input, state)
 }
 
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Pattern> {
@@ -822,6 +837,22 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
                 .many0()
                 .map(|x| x.concat()),
         ).map(|(x, t)| Pattern::Con(x, t, Either::Icit(Icit::Expl))))
+        .or(
+            // Tuple pattern: (a, b, ...)
+            paren_cut(p_pattern.many1_sep(kw(T![,])))
+                .map(|opt_pats| match opt_pats {
+                    Some(pats) if pats.len() >= 2 => {
+                        let n = pats.len();
+                        Pattern::Con(
+                            empty_span(SmolStr::new(format!("Tuple{n}.mk"))),
+                            pats,
+                            Either::Icit(Icit::Expl),
+                        )
+                    }
+                    Some(mut pats) => pats.pop().unwrap(), // (a) → a
+                    None => Pattern::Any(empty_span(true), Either::Icit(Icit::Expl)), // () → _
+                })
+        )
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
         .parse(input, state)
 }

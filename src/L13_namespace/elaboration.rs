@@ -1276,7 +1276,12 @@ impl Infer {
                 Ok((nat_tm, nat_type))
             }
 
-            Raw::Match(_, _) => Err(Error(t_span.map(|_| "try to infer match".to_owned()), vec![])),
+            Raw::Match(expr, clause) => {
+                let a_meta = self.fresh_meta(cxt, Val::U(0).into());
+                let a = self.eval(&cxt.decl, &cxt.env, &a_meta);
+                let tm = self.check::<false>(cxt, Raw::Match(expr, clause), &a)?;
+                Ok((tm, a))
+            }
 
             Raw::Sum(name, params, cases, universe, is_trait) => {
                 let new_params = Rc::new(params
