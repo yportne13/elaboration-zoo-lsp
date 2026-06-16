@@ -505,3 +505,32 @@ impl[width: Nat] Bits[width] {
     def asSInt: SInt[width] =
         SInt.mk(None, binary(this.expr, "asSInt", this.expr))
 }
+
+// ============================================================
+// Switch Builder - function-based switch, no macro needed
+// Usage:
+//   let _sb = switchOnExpr(sel.expr)
+//              .isValueExpr(value.expr, { body })
+//              .default({ body })
+// ============================================================
+
+struct SwitchBuilder {
+    selExpr: Expr
+}
+
+impl SwitchBuilder {
+    def isValueExpr(valueExpr: Expr, body: Unit): SwitchBuilder =
+        let _ = whenBegin(binary(this.selExpr, "===", valueExpr));
+        let _ = body;
+        let _ = whenEnd(unit);
+        SwitchBuilder.mk(this.selExpr)
+
+    def default(body: Unit): SwitchBuilder =
+        let _ = whenOtherwiseBegin(unit);
+        let _ = body;
+        let _ = whenEnd(unit);
+        SwitchBuilder.mk(this.selExpr)
+}
+
+def switchOnExpr(selExpr: Expr): SwitchBuilder =
+    SwitchBuilder.mk(selExpr)

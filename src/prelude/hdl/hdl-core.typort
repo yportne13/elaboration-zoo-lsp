@@ -151,7 +151,7 @@ def initWhenStack(): Unit =
 
 def whenBegin(cond: Expr): Unit =
     let state = whenActive(cond);
-    let dummy = change_mutable("WhenStack", x => whenStackPush(state, x));
+    let dummy = change_mutable_default("WhenStack", x => whenStackPush(state, x), whenStackPush(state, whenStackEmpty));
     unit
 
 def whenEnd(dummy: Unit): Unit =
