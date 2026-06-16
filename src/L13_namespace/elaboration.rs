@@ -349,14 +349,24 @@ impl Infer {
                 let expr_span = expr.to_span();
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
                 let mut compiler = Compiler::new(a);
-                let error = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.decl, &cxt.env, &tm))?;
-                if !error.is_empty() {
-                    let msg = error.iter().map(|w| w.to_string()).collect::<Vec<_>>().join("; ");
-                    Err(Error(expr_span.map(|_| msg.clone()), vec![]))
-                } else {
-                    Ok(
-                        Tm::Match(tm, compiler.pats).into()
-                    ) //if there is any posible that has no return type?
+                match compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.decl, &cxt.env, &tm)) {
+                    Ok(warnings) => {
+                        if !warnings.is_empty() {
+                            let msg = warnings.iter().map(|w| w.to_string()).collect::<Vec<_>>().join("; ");
+                            Err(Error(expr_span.map(|_| msg.clone()), vec![]))
+                        } else {
+                            Ok(
+                                Tm::Match(tm, compiler.pats).into()
+                            ) //if there is any posible that has no return type?
+                        }
+                    }
+                    Err(errors) => {
+                        // 把第一个错误通过 Err 正常传播，其余存入 accumulated_errors 变成独立诊断
+                        let mut errors_iter = errors.into_iter();
+                        let first = errors_iter.next().unwrap();
+                        self.accumulated_errors.extend(errors_iter);
+                        Err(first)
+                    }
                 }
             }
 

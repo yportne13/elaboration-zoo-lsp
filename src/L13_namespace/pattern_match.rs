@@ -581,7 +581,7 @@ impl Compiler {
 	        arms: &[(Pattern, Raw)],
 	        cxt: &Cxt,
 	        target_val: Rc<Val>,
-	    ) -> Result<Vec<Warning>, Error> {
+	    ) -> Result<Vec<Warning>, Vec<Error>> {
 	        self.warnings = Vec::new();
 	        self.reachable = HashMap::new();
 	        self.errors = Vec::new();
@@ -633,19 +633,7 @@ impl Compiler {
 	            .collect();
 
 	        if !self.errors.is_empty() {
-	            // 合并所有收集到的错误，一次性报告
-	            let mut combined_msg = String::new();
-	            let mut combined_diags = Vec::new();
-	            let first_span = self.errors[0].0.clone();
-	            let errors = std::mem::take(&mut self.errors);
-	            for Error(span, diags) in errors {
-	                if !combined_msg.is_empty() {
-	                    combined_msg.push_str("\n---\n");
-	                }
-	                combined_msg.push_str(&span.data);
-	                combined_diags.extend(diags);
-	            }
-	            Err(Error(first_span, combined_diags))
+	            Err(std::mem::take(&mut self.errors))
 	        } else {
 	            Ok(warnings)
 	        }

@@ -356,7 +356,6 @@ impl IError {
     }
 }
 
-#[derive(Clone)]
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
@@ -369,6 +368,29 @@ pub struct Infer {
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
+    /// Accumulated type errors from pattern match branches, reported as
+    /// separate LSP diagnostics so each branch error gets its own red squiggle.
+    pub accumulated_errors: Vec<Error>,
+}
+
+impl Clone for Infer {
+    fn clone(&self) -> Self {
+        Infer {
+            meta: self.meta.clone(),
+            meta_contrains: self.meta_contrains.clone(),
+            trait_metas: self.trait_metas.clone(),
+            trait_solver: self.trait_solver.clone(),
+            trait_definition: self.trait_definition.clone(),
+            trait_out_param: self.trait_out_param.clone(),
+            assoc_defaults: self.assoc_defaults.clone(),
+            mutable_map: self.mutable_map.clone(),
+            hover_table: self.hover_table.clone(),
+            completion_table: self.completion_table.clone(),
+            // accumulated_errors are ephemeral per-checking-pass;
+            // a clone (used for read-only analysis) starts fresh.
+            accumulated_errors: Vec::new(),
+        }
+    }
 }
 
 // ── Memory profiling helpers ──
@@ -645,6 +667,7 @@ impl Infer {
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
+            accumulated_errors: vec![],
         }
     }
 

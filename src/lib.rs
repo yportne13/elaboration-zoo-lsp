@@ -474,10 +474,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     },
                     Err(err) => {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
-                    }
-                }
-            }
-            self.client.log_message(MessageType::LOG, format!("infer {:?}", start.elapsed().as_secs_f32()));
+	                }
+	                }
+	                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
+	                for err in infer.accumulated_errors.drain(..) {
+	                    err_collect.push((err, DiagnosticSeverity::ERROR));
+	                }
+	            }
+	            self.client.log_message(MessageType::LOG, format!("infer {:?}", start.elapsed().as_secs_f32()));
             let infer_dur = start.elapsed().as_secs_f64();
             // Record timing for benchmark
             self.timings.lock().unwrap().push((
