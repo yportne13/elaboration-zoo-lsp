@@ -20,10 +20,10 @@ struct Bool {
 
 impl Data for Bool {
     def :=(that: Bool): Unit =
-        let ass = isRegExpr(this.expr);
+        let ass = isRegExpr(this.zz_expr);
         let assignment = match ass {
-            case true => regAssign(this.expr, that.expr)
-            case false => assign(this.expr, that.expr)
+            case true => regAssign(this.zz_expr, that.zz_expr)
+            case false => assign(this.zz_expr, that.zz_expr)
         };
         let dummy_expr = createSignalExpr("", assignment);
         unit
