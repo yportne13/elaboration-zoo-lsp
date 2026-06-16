@@ -389,6 +389,47 @@ impl[left: Nat, right: Nat] Cat[UInt[right], Bits[left + right]] for Bits[left] 
         Bits.mk(None, binary(this.expr, "##", that.expr))
 }
 
+// --- UInt concatenation ---
+
+impl[width: Nat] Cat[UInt[width], UInt[width + 1]] for Bool {
+    def ##(that: UInt[width]): UInt[width + 1] =
+        UInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[left: Nat, right: Nat] Cat[UInt[right], UInt[left + right]] for UInt[left] {
+    def ##(that: UInt[right]): UInt[left + right] =
+        UInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[left: Nat, right: Nat] Cat[Bits[right], UInt[left + right]] for UInt[left] {
+    def ##(that: Bits[right]): UInt[left + right] =
+        UInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
+// --- SInt concatenation ---
+
+impl[left: Nat, right: Nat] Cat[SInt[right], SInt[left + right]] for SInt[left] {
+    def ##(that: SInt[right]): SInt[left + right] =
+        SInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[left: Nat, right: Nat] Cat[Bits[right], SInt[left + right]] for SInt[left] {
+    def ##(that: Bits[right]): SInt[left + right] =
+        SInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
+// --- Bool concatenation ---
+
+impl Cat[Bool, Bits[2]] for Bool {
+    def ##(that: Bool): Bits[2] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[width: Nat] Cat[Bool, UInt[width + 1]] for UInt[width] {
+    def ##(that: Bool): UInt[width + 1] =
+        UInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
 // ============================================================
 //  Bit Extraction & Slicing
 // ============================================================

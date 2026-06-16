@@ -110,3 +110,24 @@ module topWithAdder {
 }
 println("=== Example 7: Sub-module instantiation ===")
 println(moduleTreeVL(topWithAdder))
+
+// ============================================================
+// Example 8: Bit concatenation (##) — SpinalHDL style
+// ============================================================
+module concatExample {
+    let a = Bits[4]
+    let b = Bits[4]
+    let cat_bb = Bits[8]
+    let flag = Bool
+    let cat_flag = Bits[5]
+    let x = UInt[8]
+    let y = UInt[8]
+    let cat_uu = UInt[16]
+    let cat_ub = UInt[12]
+    cat_bb := a ## b
+    cat_flag := flag ## a
+    cat_uu := x ## y
+    cat_ub := x ## b
+}
+println("=== Example 8: Bit concatenation (##) ===")
+println(moduleTreeVL(concatExample))
