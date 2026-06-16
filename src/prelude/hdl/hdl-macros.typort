@@ -129,10 +129,13 @@ macro_rules Expr {
 macro_rules module {
     ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
         def $name $({$args})* =
+            let _init = change_mutable_default("module", x => x, module.mk(0, nil));
+            let prev_module = get_global("module");
             let new_module = ModuleDef.mk(stringify $name, 0, nil);
-            let creat_module = create_global("module", module.mk(0 + 1, new_module :: nil));
+            let creat_module = change_mutable("module", x => module.mk(0 + 1, new_module :: nil));
             $($body)*
             let module_global = get_global("module");
+            let _restore = create_global("module", prev_module);
             module_global
         };
 }

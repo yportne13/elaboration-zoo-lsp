@@ -2051,7 +2051,7 @@ module Top {
     input a = UInt[8]
     input b = UInt[8]
     let _adder = MyAdder[8]
-    let _ = mkInstance("myAdder", "MyAdder")
+    let inst = mkInstance("myAdder", "MyAdder")
 }
 
 println(moduleTreeVL(Top))

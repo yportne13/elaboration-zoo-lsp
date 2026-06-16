@@ -244,6 +244,7 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case partsel(_, _, _) =>
             e
         case instance(_, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", e));
             e
         case subSignal(_, _) =>
             e
@@ -318,6 +319,12 @@ def addSignalAssignment(lhs: Expr, rhs: Expr): Unit =
     let assignment = assign(lhs, rhs);
     let wrapped = addWhenContext(assignment);
     let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", wrapped));
+    unit
+
+// Create a sub-module instance in the current module.
+// Called at the call-site of a sub-module mk() function.
+def mkInstance(instName: String, moduleName: String): Unit =
+    let dummy = createSignalExpr("", instance(instName, moduleName));
     unit
 
 // Extract the first ModuleDef from a module struct

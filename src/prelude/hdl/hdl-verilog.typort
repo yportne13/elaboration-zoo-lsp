@@ -254,9 +254,14 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
 // ============================================================
 
 // Generate instance instantiation lines from the tree's expressions.
-// Note: instance/subSignal Expr variants were removed from the Expr type;
-// this function always returns lnil until hierarchical instance support is re-added.
-def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = lnil
+def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = match exprs {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case instance(instName, moduleName) =>
+            lcons (exprVL(e)) (collectInstanceLinesTree tail)
+        case _ => collectInstanceLinesTree tail
+    }
+}
 
 // Alias: moduleTreeVL is the public API expected by test/legacy_tests
 // Extracts the first ModuleDef from a module struct and generates Verilog.
