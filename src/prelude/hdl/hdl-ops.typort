@@ -512,6 +512,8 @@ impl[width: Nat] Bits[width] {
 //   let _sb = switchOnExpr(sel.expr)
 //              .isValueExpr(value.expr, { body })
 //              .default({ body })
+//   // or with method syntax:
+//   let _sb = sel.switchOn.isValueExpr(v.expr, { body }).default({ body })
 // ============================================================
 
 struct SwitchBuilder {
@@ -519,15 +521,15 @@ struct SwitchBuilder {
 }
 
 impl SwitchBuilder {
-    def isValueExpr(valueExpr: Expr, body: Unit): SwitchBuilder =
+    def isValueExpr(valueExpr: Expr, body: Unit -> Unit): SwitchBuilder =
         let _ = whenBegin(binary(this.selExpr, "===", valueExpr));
-        let _ = body;
+        let _ = body(unit);
         let _ = whenEnd(unit);
         SwitchBuilder.mk(this.selExpr)
 
-    def default(body: Unit): SwitchBuilder =
+    def default(body: Unit -> Unit): SwitchBuilder =
         let _ = whenOtherwiseBegin(unit);
-        let _ = body;
+        let _ = body(unit);
         let _ = whenEnd(unit);
         SwitchBuilder.mk(this.selExpr)
 }

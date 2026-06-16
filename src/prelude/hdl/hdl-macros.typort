@@ -78,41 +78,12 @@ macro_rules Expr {
            let w_epop = whenEnd(unit); )*
     };
 
-    // ---- switch control flow ----
-    // single is arm with default — desugars to when/otherwise
-    (switch $sel:raw { is $v1:raw { $( $b1: Expr )* } default { $( $bd: Expr )* } }) => {
-        let w1_push = whenBegin(binary($sel.expr, "===", $v1.expr));
-        $({$b1})*
-        let w1_pop = whenEnd(unit);
-        let wd_push = whenOtherwiseBegin(unit);
-        $({$bd})*
-        let wd_pop = whenEnd(unit);
-    };
-    // single is arm without default
-    (switch $sel:raw { is $v1:raw { $( $b1: Expr )* } }) => {
-        let w1_push = whenBegin(binary($sel.expr, "===", $v1.expr));
-        $({$b1})*
-        let w1_pop = whenEnd(unit);
-    };
+    // ---- switch — use function-based switchOnExpr instead ----
+    // See hdl-ops.typort: switchOnExpr(sel.expr).isValueExpr(v.expr, { ... }).default({ ... })
 
     // ---- assignment — convert RHS via .into, then call lhs.:=(rhs) ----
     // Uses method-call syntax to invoke Data:::= without macro recursion.
     ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let _ = $lhs.:=(rhs_conv);};
-
-    // ---- switch / is / default (desugars to when/otherwise chain) ----
-    // switch — single is arm
-    (switch $sel:raw { is $firstval:raw { $firstbody:raw } }) => {
-        let _switch = $sel;
-    };
-    // switch — single is arm + default
-    (switch $sel:raw { is $firstval:raw { $firstbody:raw } default { $defbody:raw } }) => {
-        let w_push = whenBegin(($sel === $firstval).expr);
-        let _body = $firstbody;
-        let w_pop = whenEnd(unit);
-        let w_opush = whenOtherwiseBegin(unit);
-        let _def = $defbody;
-        let w_opop = whenEnd(unit);
-    };
 
     // ---- raw expression passthrough ----
     ($x: raw) => {let useless = $x;}

@@ -1,23 +1,16 @@
 use super::*;
 
 #[test]
-fn debug_trait_impl() {
-    let input = r#"
-def outParam[A](a: A): A = a
-trait Pls[T, O: outParam(Type 0)] { def +(that: T): O }
-trait Cvt[O: outParam(Type 0)] { def into: O }
-enum Nat {
-    z
-    s(x: Nat)
+fn debug_module_simple() {
+    let input = r#"module Test {
+    let sel = UInt[4]
 }
-struct U[w: Nat] {}
-struct S {}
-impl[w: Nat] Cvt[U[w]] for Nat { def into: U[w] = U.mk() }
-impl Cvt[S] for Nat { def into: S = S.mk() }
-impl[w: Nat] Pls[Nat, U[w]] for U[w] { def +(that: Nat): U[w] = this + that.into }
+println(moduleTreeVL(Test))
 "#;
-    match run(input, 0) {
-        Ok(output) => println!("OK:\n{output}"),
-        Err(e) => println!("ERR: {:?}", e.0.data),
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("OUTPUT_START\n{}OUTPUT_END", output);
+        }
+        Err(e) => println!("ERR: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }

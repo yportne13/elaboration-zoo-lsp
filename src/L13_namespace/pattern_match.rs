@@ -77,6 +77,9 @@ pub struct Compiler {
     checked_ret: HashSet<Raw>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     ret_type: Rc<Val>,
+    /// Collected type errors from branch bodies; all branches are checked
+    /// even if some fail, so we can report every error at once.
+    errors: Vec<Error>,
 }
 
 impl Compiler {
@@ -87,6 +90,7 @@ impl Compiler {
             checked_ret: HashSet::new(),
             pats: Vec::new(),
             ret_type,
+            errors: Vec::new(),
         }
     }
 
@@ -248,7 +252,8 @@ impl Compiler {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
                     let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
                         Ok(x) => x,
-                        Err(_) => {
+                        Err(e) => {
+                            self.errors.push(e);
                             return Ok(false);
                         }
                     };
@@ -265,7 +270,15 @@ impl Compiler {
                             &infer.eval(&cxt.decl, &cxt.env, &ret_type)
                         },
                     };
-                    let ret = infer.check::<false>(&cxt, arm.body.0.clone(), ret_type)?;
+                    let ret = match infer.check::<false>(&cxt, arm.body.0.clone(), ret_type) {
+                        Ok(ret) => ret,
+                        Err(e) => {
+                            // Collect the type error but continue checking other branches
+                            self.errors.push(e);
+                            self.checked_ret.insert(raw.clone());
+                            return Ok(false);
+                        }
+                    };
                     self.checked_ret.insert(raw.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
@@ -561,62 +574,82 @@ impl Compiler {
         }
     }
 
-    pub fn compile(
-        &mut self,
-        infer: &mut Infer,
-        typ: Rc<Val>,
-        arms: &[(Pattern, Raw)],
-        cxt: &Cxt,
-        target_val: Rc<Val>,
-    ) -> Result<Vec<Warning>, Error> {
-        self.warnings = Vec::new();
-        self.reachable = HashMap::new();
-        let typ = infer.force(&cxt.decl, &typ);
-        self.compile_aux(
-            infer,
-            &[(typ.clone(), empty_span(SmolStr::new("")), Icit::Expl)],
-            &arms
-                .iter()
-                .enumerate()
-                .map(|(idx, (pat, body))| {
-                    (
-                        MatchArm {
-                            pats: vec![pat.clone()],
-                            body: (body.clone(), idx),
-                        },
-                        idx,
-                        cxt.clone(),
-                        cxt.clone(),
-                        pat.to_raw(),
-                        typ.clone(),
-                        target_val.clone(),
-                        PatConstructor::new(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            &MatchContext::Outermost,
-        )?;
+	    pub fn compile(
+	        &mut self,
+	        infer: &mut Infer,
+	        typ: Rc<Val>,
+	        arms: &[(Pattern, Raw)],
+	        cxt: &Cxt,
+	        target_val: Rc<Val>,
+	    ) -> Result<Vec<Warning>, Error> {
+	        self.warnings = Vec::new();
+	        self.reachable = HashMap::new();
+	        self.errors = Vec::new();
+	        let typ = infer.force(&cxt.decl, &typ);
+	        // 收集所有编译阶段的错误，而不是遇到第一个就停止
+	        if let Err(e) = self.compile_aux(
+	            infer,
+	            &[(typ.clone(), empty_span(SmolStr::new("")), Icit::Expl)],
+	            &arms
+	                .iter()
+	                .enumerate()
+	                .map(|(idx, (pat, body))| {
+	                    (
+	                        MatchArm {
+	                            pats: vec![pat.clone()],
+	                            body: (body.clone(), idx),
+	                        },
+	                        idx,
+	                        cxt.clone(),
+	                        cxt.clone(),
+	                        pat.to_raw(),
+	                        typ.clone(),
+	                        target_val.clone(),
+	                        PatConstructor::new(),
+	                    )
+	                })
+	                .collect::<Vec<_>>(),
+	            &MatchContext::Outermost,
+	        ) {
+	            self.errors.push(e);
+	        }
 
-        // 检查是否有不可达分支
-        let unreachable = arms
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, (_, body))| {
-                if !self.reachable.contains_key(&idx) {
-                    Some(Warning::Unreachable(body.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+	        // 检查是否有不可达分支
+	        let unreachable = arms
+	            .iter()
+	            .enumerate()
+	            .filter_map(|(idx, (_, body))| {
+	                if !self.reachable.contains_key(&idx) {
+	                    Some(Warning::Unreachable(body.clone()))
+	                } else {
+	                    None
+	                }
+	            })
+	            .collect::<Vec<_>>();
 
-        Ok(
-            unreachable
-                .into_iter()
-                .chain(self.warnings.clone())
-                .collect()
-        )
-    }
+	        let warnings: Vec<Warning> = unreachable
+	            .into_iter()
+	            .chain(self.warnings.clone())
+	            .collect();
+
+	        if !self.errors.is_empty() {
+	            // 合并所有收集到的错误，一次性报告
+	            let mut combined_msg = String::new();
+	            let mut combined_diags = Vec::new();
+	            let first_span = self.errors[0].0.clone();
+	            let errors = std::mem::take(&mut self.errors);
+	            for Error(span, diags) in errors {
+	                if !combined_msg.is_empty() {
+	                    combined_msg.push_str("\n---\n");
+	                }
+	                combined_msg.push_str(&span.data);
+	                combined_diags.extend(diags);
+	            }
+	            Err(Error(first_span, combined_diags))
+	        } else {
+	            Ok(warnings)
+	        }
+	    }
 
     pub fn eval_aux(
         infer: &Infer,
