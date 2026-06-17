@@ -182,8 +182,6 @@ impl Compiler {
             return Ok(accessible);
         }
 
-        // Use Var("TypeName.constructor") directly, not Obj(Var("TypeName"), Some("constructor"))
-        // because Obj accesses FIELDS, not constructors
         for constr_def @ constr_name in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
             // to avoid polluting the main inference state with temporary metavariables.
@@ -194,7 +192,7 @@ impl Compiler {
             let mut to_check = if sum_name.is_empty() {
                 Raw::Var(constr_name.clone())
             } else {
-                Raw::Var(empty_span(SmolStr::new(format!("{}.{}", sum_name, constr_name.data))))
+                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
             };
             let mut params = vec![];
             let mut cxt = cxt.clone();
@@ -372,7 +370,7 @@ impl Compiler {
                                         let constr_raw = if sum_name.is_empty() {
                                             Raw::Var(constr.clone())
                                         } else {
-                                            Raw::Var(empty_span(SmolStr::new(format!("{}.{}", sum_name, constr.data))))
+                                            Raw::Obj(Box::new(Raw::Var(empty_span(sum_name))), Some(constr.clone()))
                                         };
                                         let (_, typ) = infer.infer_expr(cxt_for_filter, constr_raw).ok()?;
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();

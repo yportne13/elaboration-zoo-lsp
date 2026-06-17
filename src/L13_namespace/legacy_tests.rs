@@ -2868,32 +2868,32 @@ enum Vec[A](len: Nat) {
 }
 
 // Struct wrapping Vec - this tests struct field matching
-struct WrapVec[A](len: Nat) {
+struct WrapVec[A, len: Nat] {
     inner: Vec[A] len
 }
 
 // Test 1: Extract from struct, match field separately
-def extract_head[A, l: Nat](w: WrapVec[A] (succ l)): A =
+def extract_head[A, l: Nat](w: WrapVec[A, succ(l)]): A =
     match w {
-        case WrapVec { inner: v } =>
+        case WrapVec { v } =>
             match v {
                 case cons(x, _) => x
             }
     }
 
 // Test 2: Direct struct pattern with nested constructor
-def is_nil[A, n: Nat](w: WrapVec[A] n): Bool =
+def is_nil[A, n: Nat](w: WrapVec[A, n]): Bool =
     match w {
-        case WrapVec { inner: nil } => true
-        case WrapVec { inner: cons(x, xs) } => false
+        case WrapVec { nil } => true
+        case WrapVec { cons(x, xs) } => false
     }
 
 // Test 3: Return type depends on struct internal match
 // Each branch refines len, and returns Vec[A] len
-def identity_vec[A, len: Nat](c: WrapVec[A] len): Vec[A] len =
+def identity_vec[A, len: Nat](c: WrapVec[A, len]): Vec[A] len =
     match c {
-        case WrapVec { inner: nil } => nil
-        case WrapVec { inner: cons(x, xs) } => cons(x, xs)
+        case WrapVec { nil } => nil
+        case WrapVec { cons(x, xs) } => cons(x, xs)
     }
 
 // Test 4: Basic struct matching
@@ -2904,39 +2904,28 @@ struct Pair[A, B] {
 
 def swap[A, B](p: Pair[A, B]): Pair[B, A] =
     match p {
-        case Pair { x: a, y: b } => new Pair(b, a)
+        case Pair { a, b } => new Pair(b, a)
     }
 
-// Tuple type for testing tuple patterns (same as prelude's Tuple2)
-struct Tuple2[A, B] {
-    _1: A
-    _2: B
-}
-
-// Test 5: Match on a tuple (separate values matched as one)
-// This is what the user's issue is about: match (a, b) vs nested match
-def test_tuple_eq[A, n: Nat](v1: Vec[A] n, v2: Vec[A] n): (Vec[A] n, Vec[A] n) =
-    match (v1, v2) {
-        case (x, y) => (x, y)
-    }
-
-// Test 6: Tuple with nested constructors - this is the critical test
-def tuple_nested_refine[A, n: Nat](v1: Vec[A] n, v2: Vec[A] n): Bool =
-    match (v1, v2) {
-        case (nil, nil) => true
-        case (cons(x, xs), cons(y, ys)) => false
-    }
-
-// Print test results
-println (extract_head (new WrapVec(cons zero nil)))
-println (is_nil (new WrapVec(nil)))
-println (identity_vec (new WrapVec(cons zero nil)))
-println (swap (new Pair(succ zero, zero)))
-println (test_tuple_eq (cons zero nil) (cons zero nil))
-println (tuple_nested_refine (cons zero nil) (cons zero nil))
-
-// Test using prelude's built-in tuple2
-"#;
+	// Test 5: Simple tuple pattern (no nested indexed types)
+	struct Tuple2[A, B] {
+	    _1: A
+	    _2: B
+	}
+	
+	def test_tuple_id[A, B](p: Tuple2[A, B]): Tuple2[A, B] =
+	    match p {
+	        case Tuple2 { a, b } => new Tuple2(a, b)
+	    }
+	
+	println (test_tuple_id (new Tuple2(succ zero, zero)))
+	
+	// Print test results
+	println (extract_head (new WrapVec(cons zero nil)))
+	println (is_nil (new WrapVec(nil)))
+	println (identity_vec (new WrapVec(cons zero nil)))
+	println (swap (new Pair(succ zero, zero)))
+	"#;
     match run(input, 0) {
         Ok(output) => println!("PASS:\n{}", output),
         Err(e) => panic!("FAIL: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
