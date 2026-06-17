@@ -182,6 +182,8 @@ impl Compiler {
             return Ok(accessible);
         }
 
+        // Use Var("TypeName.constructor") directly, not Obj(Var("TypeName"), Some("constructor"))
+        // because Obj accesses FIELDS, not constructors
         for constr_def @ constr_name in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
             // to avoid polluting the main inference state with temporary metavariables.
@@ -192,7 +194,7 @@ impl Compiler {
             let mut to_check = if sum_name.is_empty() {
                 Raw::Var(constr_name.clone())
             } else {
-                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
+                Raw::Var(empty_span(SmolStr::new(format!("{}.{}", sum_name, constr_name.data))))
             };
             let mut params = vec![];
             let mut cxt = cxt.clone();
@@ -234,19 +236,6 @@ impl Compiler {
         arms: &[(MatchArm, usize, Cxt, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
         context: &MatchContext,
     ) -> Result<bool, Error> {
-        /*println!(
-            " arms: {}\nheads: {}",
-            arms
-                .iter()
-                .map(|x| format!("{:?}\n", x.0))
-                .reduce(|a, b| a + &b)
-                .unwrap_or("".to_owned()),
-            heads
-                .iter()
-                .map(|x| format!("{:?}\n", x))
-                .reduce(|a, b| a + &b)
-                .unwrap_or("".to_owned()),
-        );*/
         match heads {
             [] => match arms {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
@@ -383,7 +372,7 @@ impl Compiler {
                                         let constr_raw = if sum_name.is_empty() {
                                             Raw::Var(constr.clone())
                                         } else {
-                                            Raw::Obj(Box::new(Raw::Var(empty_span(sum_name))), Some(constr.clone()))
+                                            Raw::Var(empty_span(SmolStr::new(format!("{}.{}", sum_name, constr.data))))
                                         };
                                         let (_, typ) = infer.infer_expr(cxt_for_filter, constr_raw).ok()?;
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
