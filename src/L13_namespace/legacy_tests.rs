@@ -2932,4 +2932,44 @@ def swap[A, B](p: Pair[A, B]): Pair[B, A] =
     }
 }
 
+#[test]
+fn test_pm_struct_multi_field_gadt() {
+    // Struct with multiple indexed-type fields.
+    // Matching on the second field's constructor (fsucc) exercises the
+    // new_heads computation for implicit params NOT filled by Sum params.
+    //
+    // This test passes without prelude. With prelude (run_with_prelude),
+    // it currently fails due to a Rigid-vs-SumCase unification issue
+    // in unify(): the Impl param n of Fin.fsucc[n] becomes an unresolved
+    // Rigid(vvar) that body checking's unify cannot match against SumCase.
+    let input = r#"
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+enum Fin(len: Nat) {
+    fzero[n: Nat] -> Fin (succ n)
+    fsucc[n: Nat](i: Fin n) -> Fin (succ n)
+}
+struct VecHolder[A, len: Nat] {
+    vec: Vec[A] len
+    last: Fin (succ len)
+}
+
+def vec_last[A, len: Nat](vh: VecHolder[A, len]): A = match vh {
+    case VecHolder { cons(x, xs), fzero } => x
+    case VecHolder { cons(x, xs), fsucc(i) } => vec_last (new VecHolder(xs, i))
+}
+
+println (vec_last (new VecHolder(cons(zero, cons(succ zero, nil)), fzero)))
+"#;
+    match run(input, 0) {
+        Ok(output) => println!("PASS:\n{}", output),
+        Err(e) => panic!("FAIL: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
 
