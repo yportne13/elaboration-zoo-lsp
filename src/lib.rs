@@ -649,8 +649,11 @@ impl LanguageServer for Backend<Client> {
                             position_to_offset(range.end, &rope),
                         ) {
                             let mut rope = rope;
-                            rope.remove(start..end);
-                            rope.insert(start, &change.text);
+                            // Convert byte offsets to char offsets for ropey operations
+                            let start_char = rope.byte_to_char(start);
+                            let end_char = rope.byte_to_char(end);
+                            rope.remove(start_char..end_char);
+                            rope.insert(start_char, &change.text);
                             *buffer = rope.to_string();
                         } else {
                             // Fallback: position conversion failed, replace whole text
