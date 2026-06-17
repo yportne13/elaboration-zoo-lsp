@@ -41,19 +41,19 @@ def exprVL(e: Expr): String = match e {
     case regAssign(lhs, rhs) =>
         "    " + exprVL(lhs) + " <= " + exprVL(rhs) + ";"
     case when(cond, body, elseBody) =>
-        "  if (" + exprVL(cond) + ") begin\n" + exprVL(body) + "  end" + (
+        "    if (" + exprVL(cond) + ") begin\n" + exprVL(body) + "\n    end" + (
             match elseBody {
-                case None => "\n"
+                case None => ""
                 case Some(eb) => match eb {
                     case when(ec, eb2, eb3) =>
-                        " else if (" + exprVL(ec) + ") begin\n" + exprVL(eb2) + "  end" + (
+                        " else if (" + exprVL(ec) + ") begin\n" + exprVL(eb2) + "\n    end" + (
                             match eb3 {
-                                case None => "\n"
-                                case Some(eb4) => " else begin\n" + exprVL(eb4) + "  end\n"
+                                case None => ""
+                                case Some(eb4) => " else begin\n" + exprVL(eb4) + "\n    end"
                             }
                         )
                     case _ =>
-                        " else begin\n" + exprVL(eb) + "  end\n"
+                        " else begin\n" + exprVL(eb) + "\n    end"
                 }
             }
         )
@@ -203,7 +203,7 @@ def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
             let has_clk = hasRegAssign(e);
             match has_clk {
                 case true => collectAlwaysLines tail
-                case false => lcons ("  always @(*) begin\n" + exprVL(e) + "\n" + "end") (collectAlwaysLines tail)
+                case false => lcons ("  always @(*) begin\n" + exprVL(e) + "\n  end") (collectAlwaysLines tail)
             }
         case _ => collectAlwaysLines tail
     }
@@ -306,7 +306,20 @@ def moduleTreeVL(m: module): String =
             case true => p1 + ",\n  input wire reset"
         }
     };
-    let header = "module " + mod_def.name + " (\n" + p2 + "\n);\n";
+    let has_no_port_content = match has_ports {
+        case false => match has_regs {
+            case false => match has_init {
+                case false => true
+                case true => false
+            }
+            case true => false
+        }
+        case true => false
+    };
+    let header = match has_no_port_content {
+        case true => "module " + mod_def.name + " ();\n"
+        case false => "module " + mod_def.name + " (\n" + p2 + "\n);\n"
+    };
     let body = header + wire_decls + reg_decls + assigns + clocked + always;
     let body_with_inst = match has_instances {
         case false => body
