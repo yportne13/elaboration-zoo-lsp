@@ -25,6 +25,9 @@ mod legacy_tests;
 #[cfg(test)]
 mod debug_test;
 
+#[cfg(test)]
+mod struct_refine_probe;
+
 type Rc<T> = std::sync::Arc<T>;
 
 type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>;
