@@ -119,14 +119,42 @@ def vtail[A, len: Nat](v: Vec[A] len): Vec[A] len =
 | `weak04` | 同 weak01 | 嵌套 struct + 泛型 len |
 | `weak05` | `Fin(_l+2) vs Fin(_n+1)` | 两字段细化未交叉传播 |
 
-## 修复方向
+## 修复实现
 
-### 方案 A：惰性正规化（推荐）
+### 修改 1：`unify_pm` — 不同 Rigid 级别时优先更新未细化变量
 
-在 body 类型检查时，对绑定变量按当前 cxt 重新 eval/force。
+在 `unify_pm`（`elaboration.rs`）中新增处理：当两个不同级别的 Rigid 需要统一时，
+检查各自的 env 条目。如果其中一个的 env 条目仍是自我引用（即未被 `update_cxt` 细化过），
+而另一个已被细化，则更新未细化的那个，保留已存在的细化。
 
-**问题**：`cxt` 中 `put_local` 存储的变量类型是 `Rc<Val>`。`Val` 可能包含对 Rigid
-索引变量的引用。当 `update_cxt` 更新了索引变量后，已存储的 `Rc<Val>` 不会自动更新，
+```
+(Rigid(len_lvl), Rigid(n_lvl)) → 环境已有 len := succ l', n 是新鲜 Rigid
+→ 更新 n := len (保留 len 的细化)
+```
+
+### 修改 2：`infer_expr(Raw::Var)` — 在细化环境中重求值变量类型
+
+GADT 模式匹配经过 `check_pm_final` 后，`update_cxt` 可能会更新环境中的 Rigid 索引
+变量（如 `len := 0`）。但绑定变量的存储类型（`src_names` 中的 `Rc<Val>`）仍然引用
+原始的 Rigid 级别。当 `cxt` 已被细化时，`infer_expr(Raw::Var)` 会对存储的类型
+执行 `quote` + `eval`，让 Rigid 引用通过环境查找解析为当前细化值。
+
+```
+w : Fin (succ len)  →  env[len] = 0  → 重求值 → Fin (succ 0) = Fin 1
+```
+
+### 仍开放的薄弱点（需要更深层修复）
+
+跨字段索引依赖（weak03、weak05）仍然失败，因为：
+
+1. `check_pm_final` 的模式推断会创建独立的元变量（不同于 Pi 循环中的 Rigid）
+2. Pi 循环中 `unify_pm` 得到的细化会被 `check_pm_final` 覆盖
+3. 绑定的 Rigid（如 `i : Fin n`）与模式推断创建的元变量（如 `?n`）不联通
+
+深层修复需要在 `check_pm_final` 中复用 Pi 循环已经建立的 Rigid 绑定，或者
+改变 `new_heads` 计算中 Impl 参数的变量类型（用元变量代替自我引用 Rigid）。
+
+## 关键代码位置
 因为 `Rc<Val>` 指向的是不可变值。
 
 **可能的切入点**：
