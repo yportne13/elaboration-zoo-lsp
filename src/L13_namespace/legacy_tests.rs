@@ -2960,13 +2960,14 @@ struct VecHolder[A, len: Nat] {
     last: Fin (succ len)
 }
 
-def vec_last[A, len: Nat](vh: VecHolder[A, len]): A = match vh {
-    case VecHolder { cons(x, xs), fzero } => x
-    case VecHolder { cons(x, xs), fsucc(i) } => vec_last (new VecHolder(xs, i))
-}
-
-println (vec_last (new VecHolder(cons(zero, cons(succ zero, nil)), fzero)))
-"#;
+	def vec_last[len: Nat](vh: VecHolder[Nat, len]): Nat = match vh {
+	    case VecHolder { nil, _ } => zero
+	    case VecHolder { cons(x, xs), fzero } => x
+	    case VecHolder { cons(x, xs), fsucc(i) } => vec_last (new VecHolder(xs, i))
+	}
+	
+	println (vec_last (new VecHolder(cons(zero, cons(succ zero, nil)), fzero)))
+	"#;
     match run(input, 0) {
         Ok(output) => println!("PASS:\n{}", output),
         Err(e) => panic!("FAIL: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),

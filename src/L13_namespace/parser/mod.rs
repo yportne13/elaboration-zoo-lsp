@@ -853,7 +853,7 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
                     None => Pattern::Any(empty_span(true), Either::Icit(Icit::Expl)), // () → _
                 })
         )
-        .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
+        .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| false), Either::Icit(Icit::Expl))))
         .parse(input, state)
 }
 

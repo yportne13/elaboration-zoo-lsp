@@ -19,8 +19,8 @@
 		"LSP",
 		"Language Server"
 	],
-	"engines": {
-		"vscode": "^1.88.0"
+"engines": {
+		"vscode": "^1.91.0"
 	},
 	"main": "./client/dist/desktop/extension",
 	"browser": "./client/dist/web/extension",

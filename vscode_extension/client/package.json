@@ -20,7 +20,7 @@
     	"onLanguage:typort"
   	],
 	"engines": {
-		"vscode": "^1.89.0"
+		"vscode": "^1.91.0"
 	},
 	"main": "./dist/desktop/extension",
 	"browser": "./dist/web/extension",
@@ -60,12 +60,18 @@
 		]
 	},
 	"dependencies": {
+<<<<<<< Updated upstream
 		"@vscode/wasm-wasi": "^1.0.2",
 		"@vscode/wasm-wasi-lsp": "0.1.0-pre.9"
+=======
+		"@vscode/wasm-wasi-lsp": "0.1.0-pre.9",
+		"vscode-languageclient": "10.0.0-next.21",
+		"@vscode/wasm-wasi": "^1.0.2"
+>>>>>>> Stashed changes
 	},
 	"devDependencies": {
 		"@types/node": "^18.14.6",
-		"@types/vscode": "1.89.0"
+		"@types/vscode": "1.94.0"
 	},
 	"scripts": {
 		"compile": "tsc -b && node ./bin/esbuild",

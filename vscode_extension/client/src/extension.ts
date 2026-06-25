@@ -3,10 +3,16 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
+<<<<<<< Updated upstream
 import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel, Position, StatusBarItem, StatusBarAlignment } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType, State } from 'vscode-languageclient';
 import { Wasm } from '@vscode/wasm-wasi/v1';
 import type { ProcessOptions } from '@vscode/wasm-wasi/v1';
+=======
+import { ExtensionContext, Uri, window, workspace, commands, OutputChannel } from 'vscode';
+import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType } from 'vscode-languageclient';
+import { Wasm, ProcessOptions } from '@vscode/wasm-wasi/v1';
+>>>>>>> Stashed changes
 import { createStdioOptions, createUriConverters, startServer } from '@vscode/wasm-wasi-lsp';
 
 let client: LanguageClient | undefined;

@@ -122,10 +122,8 @@ impl Infer {
     }
     pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
-        let x = self.infer_expr(cxt, t);
-        let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
-        let new_cxt = self.unify_pm(&new_cxt, &ori, &self.eval(&new_cxt.decl, &new_cxt.env, &t_inferred), t_span).unwrap_or(new_cxt);
+        let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
+        let new_cxt = self.unify_pm(&cxt, &ori, &self.eval(&cxt.decl, &cxt.env, &t_inferred), t_span).unwrap_or(cxt);
         Ok((t_inferred, new_cxt))
     }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
@@ -599,26 +597,33 @@ impl Infer {
                     .collect();
                 let default_ret = params
                     .iter()
-                    .filter(|x| x.2 == Icit::Impl)
-                    //.rev()
                     .fold(Raw::Var(name.clone()), |ret, x| {
                         Raw::App(Box::new(ret), Box::new(Raw::Var(x.0.clone())), super::parser::syntax::Either::Icit(x.2))
                     });
                 let new_cases = cases
                     .clone()
                     .into_iter()
-                    .map(|(case_name, p, bind)| (
-                        case_name,
-                        params
-                            .iter()
-                            .filter(|x| x.2 == Icit::Impl)
-                            .cloned()
-                            .chain(p)
-                            .rev()
-                            .fold(bind.unwrap_or(default_ret.clone()), |ret, x| {
-                                Raw::Pi(x.0.clone(), x.2, Box::new(x.1.clone()), Box::new(ret))
-                            })
-                    ))//TODO: need to check the basic ret is this sum type or not
+                    .map(|(case_name, p, bind)| {
+                        let enum_param_binders: Vec<_> = if bind.is_some() {
+                            params.iter().filter(|x| x.2 == Icit::Impl).cloned().collect()
+                        } else {
+                            params.iter().map(|x| {
+                                if x.2 == Icit::Impl { x.clone() }
+                                else { (x.0.clone(), x.1.clone(), Icit::Impl) }
+                            }).collect()
+                        };
+                        let ret_ty = bind.clone().unwrap_or(default_ret.clone());
+                        (
+                            case_name,
+                            enum_param_binders.iter().cloned()
+                                .chain(p)
+                                .rev()
+                                .fold(ret_ty, |ret, x| {
+                                    Raw::Pi(x.0.clone(), x.2, Box::new(x.1.clone()), Box::new(ret))
+                                }),
+                            bind,
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let sum = Raw::Sum(
                     name.clone(),

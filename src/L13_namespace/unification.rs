@@ -5,7 +5,7 @@ use crate::list::List;
 use crate::parser_lib::Span;
 
 use super::{
-    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+    Infer, Ix, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
     pattern_match::Compiler,
@@ -264,7 +264,22 @@ impl Infer {
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
                 None => {
-                    Err(UnifyError::Basic)
+                    // Rigid not in the renaming: it's a free variable from the
+                    // current context (e.g. a pattern-bound Rigid appearing inside
+                    // a type being unified).  Keep it as a Tm::Var — the level
+                    // stays the same because both the meta and the Rigid share
+                    // the same outer context.
+                    if x.0 >= pren.cod.0 {
+                        // Rigid is from an outer scope that doesn't exist in
+                        // the current context.  This means it's a def-site Rigid
+                        // leaking into the usage context — keep it as Var with
+                        // index = 0 (first bound var).
+                        let t = Tm::Var(Ix(0));
+                        self.rename_sp(decl, pren, t.into(), sp)
+                    } else {
+                        let t = Tm::Var(lvl2ix(pren.cod, *x));
+                        self.rename_sp(decl, pren, t.into(), sp)
+                    }
                 }, // scope error
                 Some(x_prime) => {
                     let t = Tm::Var(lvl2ix(pren.dom, *x_prime));
