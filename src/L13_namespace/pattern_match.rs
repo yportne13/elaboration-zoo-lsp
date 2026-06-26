@@ -363,7 +363,9 @@ impl Compiler {
                     self.checked_ret.insert(raw.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
-                    self.pats.push((patcon.data[0].1[0].clone(), ret));
+                    if !patcon.data.is_empty() {
+                        self.pats.push((patcon.data[0].1[0].clone(), ret));
+                    }
                     Ok(true)
                 },
                 [arm, ..] => Err(Error(match &arm.0.pats[0] {

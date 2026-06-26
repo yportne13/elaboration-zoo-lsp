@@ -144,7 +144,7 @@ impl Infer {
     /// ```text
     /// check_pm → infer_expr_pm → (App) → check_pm → infer_expr_pm → …
     /// ```
-    pub fn infer_expr_pm(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
+    pub fn infer_expr_pm(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>, Cxt), Error> {
         match t {
             Raw::App(t, u, i) => {
                 let t_span = t.to_span();
@@ -180,7 +180,7 @@ impl Infer {
                         let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
                         let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
                         if let Ok(result) = self.infer_expr(cxt, apply_call) {
-                            return Ok(result);
+                            return Ok((result.0, result.1, cxt.clone()));
                         }
                         self.meta.truncate(meta_before);
 
@@ -212,21 +212,22 @@ impl Infer {
                     }
                 };
                 // KEY DIFFERENCE: use check_pm instead of check::<false>
-                let (u_checked, _) = self.check_pm(cxt, *u, a.clone())?;
+                let (u_checked, cxt) = self.check_pm(cxt, *u, a.clone())?;
                 let ret_type = self.closure_apply(&cxt.decl, &b_closure, self.eval(&cxt.decl, &cxt.env, &u_checked));
                 Ok((
                     Tm::App(t, u_checked, i).into(),
                     ret_type,
+                    cxt,
                 ))
             }
-            _ => self.infer_expr(cxt, t),
+            _ => self.infer_expr(cxt, t).map(|(tm, ty)| (tm, ty, cxt.clone())),
         }
     }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
-        let x = self.infer_expr_pm(cxt, t);
-        let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
+        let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
+        let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)))?;
+        let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
     pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
