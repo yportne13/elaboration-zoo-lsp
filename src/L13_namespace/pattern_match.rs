@@ -61,6 +61,9 @@ impl PatConstructor {
 
     fn push(self, detail: PatternDetail) -> Self {
         let mut ret = self.clean();
+        if matches!(&detail, PatternDetail::Any(name, _) if name.data.is_empty() && name.path_id == 0) {
+            eprintln!("  [DBG:PUSH_EMPTY] detail={:?} push_to_lvl={} stack={:?} data={:?}", detail, ret.data.len(), ret.data.iter().map(|(n,x)| format!("{}/{}", x.len(), n)).collect::<Vec<_>>(), ret.data);
+        }
         ret.data.last_mut().map(|(_, x)| x.push(detail));
         ret
     }
@@ -318,7 +321,7 @@ impl Compiler {
         match heads {
             [] => match arms {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
-                    let patcon_raw = patcon.clone().clean().to_raw();
+                    let patcon_raw = patcon.clone().to_raw();
                     eprintln!("  [DBG:PATCON] lvl={} is_refined={} pat_data={:?} patcon_raw={:?}", cxt.lvl.0, cxt.is_refined(), patcon.data, patcon_raw);
                     // Try patcon_raw first (includes GADT implicits);
                     // fall back to the original `raw` on failure.
@@ -373,6 +376,7 @@ impl Compiler {
                 let not_necessary = arms
                     .iter()
                     .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
+                eprintln!("  [DBG:HEAD] head_name={:?} icit={:?} not_necessary={} arms_pats0={:?}", head_name.data, icit, not_necessary, arms.iter().map(|a| format!("{:?}", a.0.pats.get(0))).collect::<Vec<_>>());
 
                 if not_necessary {
                     let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), Either::Icit(*icit)));
@@ -396,7 +400,11 @@ impl Compiler {
                                 arm.5.clone(),
                                 arm.6.clone(),
                                 if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
-                                    arm.7.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit))
+                                    if *icit == Icit::Impl {
+                                        arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
+                                    } else {
+                                        arm.7.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit))
+                                    }
                                 } else {
                                     arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
                                 },
@@ -537,7 +545,7 @@ impl Compiler {
                                                 raw.clone(),
                                                 target_typ.clone(),
                                                 ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit)),
+                                                patcon.clone().clean().push(PatternDetail::Bind(constr_.clone())),
                                                 false,
                                             )))
                                         }
