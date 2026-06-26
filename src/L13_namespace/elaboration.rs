@@ -122,8 +122,14 @@ impl Infer {
     }
     pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
+        let t_str = format!("{:?}", t).chars().take(200).collect::<String>();
+        eprintln!("  [DBG:check_pm_final] t={} is_refined={} lvl={}", t_str, cxt.is_refined(), cxt.lvl.0);
         let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
-        let new_cxt = self.unify_pm(&cxt, &ori, &self.eval(&cxt.decl, &cxt.env, &t_inferred), t_span).unwrap_or(cxt);
+        let ori_str = super::pretty::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &ori));
+        eprintln!("  [DBG:check_pm_final] after check_pm: is_refined={} ori={}", cxt.is_refined(), ori_str);
+        let tmv = self.eval(&cxt.decl, &cxt.env, &t_inferred);
+        let new_cxt = self.unify_pm(&cxt, &ori, &tmv, t_span).unwrap_or(cxt);
+        eprintln!("  [DBG:check_pm_final] after unify_pm: is_refined={}", new_cxt.is_refined());
         Ok((t_inferred, new_cxt))
     }
     /// Pattern-matching version of `infer_expr`.
@@ -225,11 +231,17 @@ impl Infer {
     }
     pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
-        //println!("{:?} == {:?}", t, t_prime);
+        //println!("unify_pm: {:?} {:?}", t, t_prime);
+        let t0 = t.clone();
+        let tp0 = t_prime.clone();
         let t = self.force(&cxt.decl, t);
         let t_prime = self.force(&cxt.decl, t_prime);
+        let t_str = super::pretty::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &t));
+        let tp_str = super::pretty::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &t_prime));
+        eprintln!("  [DBG:unify_pm] lvl={} {} ⋈ {} (is_refined={})", cxt.lvl.0, t_str, tp_str, cxt.is_refined());
         match (t.as_ref(), t_prime.as_ref()) {
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if sp1.is_empty() && sp2.is_empty() && x1 == x2 => {
+                eprintln!("  [DBG:unify_pm] → same Rigid branch");
                 Ok(cxt.update_cxt(self, *x1, t_prime, false))
             }
             // Two different Rigids with empty spines: one may have already been
@@ -292,6 +304,7 @@ impl Infer {
                 }
             }
             (_, _) => {
+                eprintln!("  [DBG:unify_pm] → fallback (unify_catch)");
                 self.unify_catch(cxt, &t, &t_prime, t_span)
                     .map(|_| cxt.clone())
             }
@@ -1098,6 +1111,12 @@ impl Infer {
                     } else {
                         a.1.clone()
                     };
+                    // DEBUG: print variable type info
+                    if name.data.starts_with('_') || name.data == "i" || name.data == "x" || name.data == "xs" || name.data == "n" || name.data == "len" || name.data == "vh" || name.data == "_l" || name.data == "_n" {
+                        let printed_stored = super::pretty::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &a.1));
+                        let printed_ty = super::pretty::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &ty));
+                        eprintln!("  [DBG:Var] name={:?} is_refined={} stored={} ty={} lvl={}", name.data, cxt.is_refined(), printed_stored, printed_ty, cxt.lvl.0);
+                    }
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), ty))
                 },
                 None => match cxt.decl.get(&name.data) {

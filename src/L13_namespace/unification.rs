@@ -725,11 +725,11 @@ impl Infer {
         //println!("unify: {t:?} {u:?}");
         let t = self.force(&cxt.decl, t);
         let u = self.force(&cxt.decl, u);
-        /*println!(
+        println!(
             "uni {}\n == {}",
             pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &t)),
             pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &u)),
-        );*/
+        );
 
         match (t.as_ref(), u.as_ref()) {
             (Val::Call(_, _, t_body), _) => self.unify(l, cxt, t_body, &u, fuel),
