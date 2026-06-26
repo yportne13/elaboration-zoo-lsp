@@ -61,9 +61,6 @@ impl PatConstructor {
 
     fn push(self, detail: PatternDetail) -> Self {
         let mut ret = self.clean();
-        if matches!(&detail, PatternDetail::Any(name, _) if name.data.is_empty() && name.path_id == 0) {
-            eprintln!("  [DBG:PUSH_EMPTY] detail={:?} push_to_lvl={} stack={:?} data={:?}", detail, ret.data.len(), ret.data.iter().map(|(n,x)| format!("{}/{}", x.len(), n)).collect::<Vec<_>>(), ret.data);
-        }
         ret.data.last_mut().map(|(_, x)| x.push(detail));
         ret
     }
@@ -322,7 +319,6 @@ impl Compiler {
             [] => match arms {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
                     let patcon_raw = patcon.clone().to_raw();
-                    eprintln!("  [DBG:PATCON] lvl={} is_refined={} pat_data={:?} patcon_raw={:?}", cxt.lvl.0, cxt.is_refined(), patcon.data, patcon_raw);
                     // Try patcon_raw first (includes GADT implicits);
                     // fall back to the original `raw` on failure.
                     let result = infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone());
@@ -349,8 +345,6 @@ impl Compiler {
                             &infer.eval(&cxt.decl, &cxt.env, &ret_type)
                         },
                     };
-                    let body_str = format!("{:?}", arm.body.0).chars().take(100).collect::<String>();
-                    eprintln!("  [DBG:BODYCHECK] lvl={} is_refined={} body={} tgt={}", cxt.lvl.0, cxt.is_refined(), body_str, super::pretty::pretty_tm(0, cxt.names(), &infer.quote(&cxt.decl, cxt.lvl, ret_type)));
                     let ret = match infer.check::<false>(&cxt, arm.body.0.clone(), ret_type) {
                         Ok(ret) => ret,
                         Err(e) => {
@@ -378,8 +372,6 @@ impl Compiler {
                 let not_necessary = arms
                     .iter()
                     .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
-                eprintln!("  [DBG:HEAD] head_name={:?} icit={:?} not_necessary={} arms_pats0={:?}", head_name.data, icit, not_necessary, arms.iter().map(|a| format!("{:?}", a.0.pats.get(0))).collect::<Vec<_>>());
-
                 if not_necessary {
                     let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), Either::Icit(*icit)));
                     let new_arms = arms
@@ -413,12 +405,6 @@ impl Compiler {
                             )
                         })
                         .collect::<Vec<_>>();
-                    // DEBUG: trace patcon after not_necessary
-                    if let Some(arm) = new_arms.first() {
-                        let snap = arm.7.clone().clean();
-                        let snap_raw = snap.clone().to_raw();
-                        eprintln!("  [DBG:PATCON_AFTER_NOTNEC] pat_data_len={} raw={:?}", snap.data.len(), snap_raw);
-                    }
                     self.compile_aux(infer, heads_rest, &new_arms, &new_context)
                 } else {
                     //println!(" -- {}", infer.meta.len());
