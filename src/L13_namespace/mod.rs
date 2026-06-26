@@ -137,7 +137,7 @@ impl Tm {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PatternDetail {
-    Any(Span<()>),
+    Any(Span<SmolStr>, Icit),
     Bind(Span<SmolStr>),
     Con(Span<SmolStr>, Vec<PatternDetail>),
 }
@@ -145,7 +145,7 @@ pub enum PatternDetail {
 impl PatternDetail {
     fn bind_count(&self) -> u32 {
         match self {
-            PatternDetail::Any(_) => 1,
+            PatternDetail::Any(_, _) => 1,
             PatternDetail::Bind(_) => 1,
             PatternDetail::Con(_, pattern_details) => {
                 pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()
@@ -154,7 +154,7 @@ impl PatternDetail {
     }
     fn bind_names(&self, ns: &List<SmolStr>) -> List<SmolStr> {
         match self {
-            PatternDetail::Any(_) => ns.prepend(SmolStr::new("_")),
+            PatternDetail::Any(_, _) => ns.prepend(SmolStr::new("_")),
             PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
             PatternDetail::Con(_, pattern_details) => {
                 pattern_details
@@ -165,7 +165,7 @@ impl PatternDetail {
     }
     fn bind_cxt(&self, cxt: &Cxt) -> Cxt {
         match self {
-            PatternDetail::Any(_) => cxt.clone(),
+            PatternDetail::Any(_, _) => cxt.clone(),
             PatternDetail::Bind(name) => cxt.bind(name.clone(), Tm::U(0).into(), Val::U(0).into()),
             PatternDetail::Con(_, pattern_details) => {
                 pattern_details
@@ -179,7 +179,7 @@ impl PatternDetail {
 impl std::fmt::Display for PatternDetail {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PatternDetail::Any(_) => write!(f, "_"),
+            PatternDetail::Any(_, _) => write!(f, "_"),
             PatternDetail::Bind(name) => write!(f, "{}", name.data),
             PatternDetail::Con(name, pattern_details) => {
                 let p = pattern_details

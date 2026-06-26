@@ -122,10 +122,8 @@ impl Infer {
     }
     pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
-        let x = self.infer_expr(cxt, t);
-        let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
-        let new_cxt = self.unify_pm(&new_cxt, &ori, &self.eval(&new_cxt.decl, &new_cxt.env, &t_inferred), t_span).unwrap_or(new_cxt);
+        let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
+        let new_cxt = self.unify_pm(&cxt, &ori, &self.eval(&cxt.decl, &cxt.env, &t_inferred), t_span).unwrap_or(cxt);
         Ok((t_inferred, new_cxt))
     }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {

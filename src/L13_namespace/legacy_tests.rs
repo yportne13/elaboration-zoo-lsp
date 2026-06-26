@@ -2960,7 +2960,8 @@ struct VecHolder[A, len: Nat] {
     last: Fin (succ len)
 }
 
-def vec_last[A, len: Nat](vh: VecHolder[A, len]): A = match vh {
+def vec_last[len: Nat](vh: VecHolder[Nat, len]): Nat = match vh {
+    case VecHolder { nil, _ } => zero
     case VecHolder { cons(x, xs), fzero } => x
     case VecHolder { cons(x, xs), fsucc(i) } => vec_last (new VecHolder(xs, i))
 }

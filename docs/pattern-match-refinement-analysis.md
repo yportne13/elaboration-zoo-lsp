@@ -175,6 +175,120 @@ w : Fin (succ len)  →  env[len] = 0  → 重求值 → Fin (succ 0) = Fin 1
 不在递归进入字段时绑定变量，而是记录绑定信息，在 `check_pm_final` 完成最终细化后
 再统一绑定。这需要较大重构。
 
+## 修复尝试
+
+### 尝试 1：`infer_expr_pm` — `check_pm` 递归做参数检查
+
+**思路**：在 `check_pm_final` 中使用专用版本的 `infer_expr`，该版本对 `Raw::App` 的参数
+检查改用 `check_pm`（→ `unify_pm`）而非 `check::<false>`（→ `unify_catch`），使得
+Rigid 模式变量得到细化。
+
+**实现**：
+```rust
+fn infer_expr_pm(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>, Cxt), Error> {
+    // 非 App 情况 → 委托给 infer_expr
+    // App 情况 → 用 check_pm 检查参数
+}
+```
+
+然后 `check_pm` 和 `check_pm_final` 都改用 `infer_expr_pm`，形成：
+```
+check_pm → infer_expr_pm → (App) → check_pm → infer_expr_pm → ...  (互递归)
+```
+
+**结果**：测试基线 29/49（不变），`test_pm_struct_multi_field_gadt` 的错误从
+`can't unify Fin(_l+1) vs Fin(_n)` 变为 `find unsolved meta with type Nat`。
+错误类型变了但测试仍然失败。unsolved meta 表明 `rename()` 在外层 Rigid 跨作用域赋值
+时无法处理 → 留下悬空 meta。
+
+### 尝试 2：`check_pm_final` 始终走手工 fallback
+
+**思路**：跳过 `infer_expr`，始终用 `collect_apps` 拆解 App 链 + `insert_t` 填充 Impl
+参数 + `unify_pm` 逐参数处理。
+
+**实现**：
+```rust
+fn check_pm_final(...) {
+    let (func, args_raw) = Self::collect_apps(&t);
+    let (mut t_acc, mut remaining_ty) = self.insert_t(cxt, ...)?;
+    for field_raw in args_raw.iter() {
+        // Val::Pi → infer_expr + insert + unify_pm
+    }
+    // 最后 unify_pm(a, inferred_type) + unify_pm(ori, eval(t_acc))
+}
+```
+
+**结果**：测试基线 25/53（退步 4 个），`collect_apps` 把 Impl 参数也收集进来了，
+导致 `insert_t` 已填充的 Impl 参数在循环中被重复处理。
+
+### 尝试 3：`check_pm` 直接替换 `infer_expr` + `insert` + `unify_pm`
+
+**思路**：`check_pm_final` 内部直接用 `check_pm`（它已经做了 `infer_expr` + `insert` +
+`unify_pm`），然后用 `unify_pm` 处理 ori。
+
+**实现**（最简洁）：
+```rust
+fn check_pm_final(...) {
+    let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
+    let new_cxt = self.unify_pm(&cxt, &ori, &eval(&cxt, &t_inferred), ...).unwrap_or(cxt);
+    Ok((t_inferred, new_cxt))
+}
+```
+
+同时配合 `default_ret` 修改（`elaboration.rs` 中 `Decl::Enum` handler 的 `default_ret`
+包含所有 params，struct 的 Expl 参数自动转为 Impl）。
+
+**结果**：测试基线 29/49（与原始持平），但 `check_pm` 本身在遇到 Rigid-vs-Flex 时
+仍然失败 → fall through 到 `unify_catch` → `unify` → `solve` → `rename` 外层 Rigid
+无法映射 → `UnifyError::Basic`。即使加了 `rename` 对 `dom=0` 时的修补，`dom>0` 时
+仍然失败。
+
+### 三个尝试的共同障碍：`rename()` 无法处理跨作用域 Rigid
+
+**根本原因**：当 `solve` 尝试把 `Flex(m, [])` （在 `insert_go`/`fresh_meta` 中创建，
+位于某个 level 以下的作用域）赋值为 `SumCase(succ, [Rigid(_n)])`（`_n` 是来自外层
+的上界变量）时，`rename()` 需要用 `PartialRenaming` 把 `SumCase(succ, [Rigid(_n)])`
+从 meta 的创建上下文重命名到当前上下文。但 `Rigid(_n)` 的 level 在 `pren.ren` 中
+不存在映射（因为 `_n` 是在 meta 的作用域外面定义的），且 `pren.dom > 0`（meta 的
+上下文中有约束变量），`rename` 只能报 `Err(UnifyError::Basic)`。
+
+**修补尝试**：在 `unification.rs:265` 处加了这个逻辑：
+
+```rust
+None => {
+    if x.0 >= pren.cod.0 {
+        // 外层 Rigid → 保持为 Var(Ix(0))
+        let t = Tm::Var(Ix(0));
+        self.rename_sp(decl, pren, t.into(), sp)
+    } else {
+        // 当前作用域内的 Rigid → 正常转换
+        let t = Tm::Var(lvl2ix(pren.cod, *x));
+        self.rename_sp(decl, pren, t.into(), sp)
+    }
+}
+```
+
+但这只能覆盖少数情况。更通用的修复需要让 `rename()` 能正确处理「逃逸 Rigid」——
+在 `pren` 中为 Rigid 创建新的应变量条目。
+
+**真正的修复方向**：在 `invert_go` 中，当遇到空 spine 时（`Flex(m, [])`），`dom = 0`，
+`ren = {}`。解决方案中的 Rigid 如果有 `x.0 >= cod.0`，需要作为「刚性参数」保留在
+求解后的项中（不进行重命名）。这会引入所谓「刚性 Skolem 常量」的概念，是一个较大的
+架构改动。
+
+## 当前 best state（2026-06-25）
+
+以下改动已在工作树中：
+
+1. **`elaboration.rs`**: `check_pm_final` 改用 `check_pm`（方案 3）
+2. **`elaboration.rs`**: `default_ret` 包含所有 params，struct 的 Expl 参数转为 Impl
+3. **`unification.rs`**: `rename` 对 `dom=0` 时不报错
+4. **`mod.rs`**: `PatternDetail::Any(Span<SmolStr>, Icit)`
+5. **`parser/mod.rs`**: `_` pattern 用 `data: false`
+6. **`legacy_tests.rs`**: backup/current-wip 版本的测试
+
+测试基线：29 passed / 49 failed（与 backup/current-wip 分支一致）
+
 ## 关键代码位置
 
 | 文件 | 行号 | 作用 |
@@ -185,3 +299,4 @@ w : Fin (succ len)  →  env[len] = 0  → 重求值 → Fin (succ 0) = Fin 1
 | `pattern_match.rs` | ~540 | `remaining_arms` 分支转发 |
 | `cxt.rs` | ~510 | `put_local` / `update_cxt` |
 | `elaboration.rs` | ~320 | `check_pm`：match 入口 |
+| **`unification.rs`** | **~265** | **`rename` 跨作用域 Rigid（修复瓶颈）** |
