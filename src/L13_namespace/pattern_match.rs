@@ -44,7 +44,8 @@ impl PatConstructor {
     }
 
     fn clean(mut self) -> Self {
-        while let Some(true) = self.data.last().map(|(num, x)| x.len() == *num) {
+        // Never pop the root level (data[0]), matching the guard in to_raw()
+        while self.data.len() > 1 && self.data.last().map(|(num, x)| x.len() == *num) == Some(true) {
             let (_, t) = self.data.pop().unwrap();
             self.data
                 .last_mut()
