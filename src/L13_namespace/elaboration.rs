@@ -126,9 +126,99 @@ impl Infer {
         let new_cxt = self.unify_pm(&cxt, &ori, &self.eval(&cxt.decl, &cxt.env, &t_inferred), t_span).unwrap_or(cxt);
         Ok((t_inferred, new_cxt))
     }
+    /// Pattern-matching version of `infer_expr`.
+    ///
+    /// For `Raw::App` arguments, uses `check_pm` (→ `unify_pm`) instead of
+    /// `check::<false>` (→ `unify_catch`), so that Rigid pattern variables
+    /// get refined rather than unified through the regular solver.
+    ///
+    /// Non-`App` forms delegate to the regular `infer_expr`.
+    ///
+    /// Forms a mutually-recursive cycle with `check_pm`:
+    /// ```text
+    /// check_pm → infer_expr_pm → (App) → check_pm → infer_expr_pm → …
+    /// ```
+    pub fn infer_expr_pm(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
+        match t {
+            Raw::App(t, u, i) => {
+                let t_span = t.to_span();
+                let t_raw = t.as_ref().clone();
+                let u_raw = u.as_ref().clone();
+                let (i, t, tty) = match i {
+                    Either::Name(name) => {
+                        let infered = self.infer_expr(cxt, *t);
+                        let (t, tty) = self.insert_until_name(cxt, name, infered)?;
+                        (Icit::Impl, t, tty)
+                    }
+                    Either::Icit(Icit::Impl) => {
+                        let (t, tty) = self.infer_expr(cxt, *t)?;
+                        (Icit::Impl, t, tty)
+                    }
+                    Either::Icit(Icit::Expl) => {
+                        let infered = self.infer_expr(cxt, *t);
+                        let (t, tty) = self.insert_t(cxt, infered)?;
+                        (Icit::Expl, t, tty)
+                    }
+                };
+                let tty = self.force(&cxt.decl, &tty);
+                let (a, b_closure) = match tty.as_ref() {
+                    Val::Pi(_, i_t, a, b_closure) => {
+                        if i == *i_t {
+                            (a.clone(), b_closure.clone())
+                        } else {
+                            return Err(Error(t_span.map(|_| format!("icit mismatch {:?} {:?}", i, i_t)), vec![]));
+                        }
+                    }
+                    _ => {
+                        let meta_before = self.meta.len();
+                        let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
+                        let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
+                        if let Ok(result) = self.infer_expr(cxt, apply_call) {
+                            return Ok(result);
+                        }
+                        self.meta.truncate(meta_before);
+
+                        let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                        let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
+                        let b_closure = Closure(
+                            cxt.env.clone(),
+                            self.fresh_meta(
+                                &cxt.bind(
+                                    empty_span(SmolStr::new("x")),
+                                    self.quote(&cxt.decl, cxt.lvl, &a),
+                                    a.clone(),
+                                ),
+                                Val::U(0).into(),
+                            ),
+                        );
+                        self.unify_catch(
+                            cxt,
+                            &Val::Pi(
+                                empty_span(SmolStr::new("x")),
+                                i,
+                                a.clone(),
+                                b_closure.clone(),
+                            ).into(),
+                            &tty,
+                            t_span,
+                        )?;
+                        (a, b_closure)
+                    }
+                };
+                // KEY DIFFERENCE: use check_pm instead of check::<false>
+                let (u_checked, _) = self.check_pm(cxt, *u, a.clone())?;
+                let ret_type = self.closure_apply(&cxt.decl, &b_closure, self.eval(&cxt.decl, &cxt.env, &u_checked));
+                Ok((
+                    Tm::App(t, u_checked, i).into(),
+                    ret_type,
+                ))
+            }
+            _ => self.infer_expr(cxt, t),
+        }
+    }
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
-        let x = self.infer_expr(cxt, t);
+        let x = self.infer_expr_pm(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
