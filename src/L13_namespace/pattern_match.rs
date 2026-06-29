@@ -44,7 +44,8 @@ impl PatConstructor {
     }
 
     fn clean(mut self) -> Self {
-        while let Some(true) = self.data.last().map(|(num, x)| x.len() == *num) {
+        // Never pop the root level (data[0]), matching the guard in to_raw()
+        while self.data.len() > 1 && self.data.last().map(|(num, x)| x.len() == *num) == Some(true) {
             let (_, t) = self.data.pop().unwrap();
             self.data
                 .last_mut()
@@ -68,6 +69,87 @@ impl PatConstructor {
     fn new_level(mut self, index: usize) -> Self {
         self.data.push((index, vec![]));
         self
+    }
+
+    /// Convert the accumulated pattern-constructor tree to a `Raw` expression.
+    ///
+    /// This differs from `Pattern::to_raw()` because it also includes the
+    /// **implicit** parameters that were discovered during matching (e.g. the
+    /// `l` in `cons[l](x, xs)` or the `n` in `fsucc[n](i)`).  Those were
+    /// pushed as `PatternDetail::Any` entries and get emitted as Implicit
+    /// `Raw::App` arguments, so that `check_pm_final`'s inference reuses the
+    /// already-bound Rigids instead of creating independent fresh metas.
+    fn to_raw(&self) -> Raw {
+        // Collapse inner levels to embed children into parent Con nodes,
+        // but NEVER pop the root level (data[0]) so we always have something
+        // to convert.
+        let mut pat = self.clone();
+        while pat.data.len() > 1 {
+            if let Some(true) = pat.data.last().map(|(num, x)| x.len() == *num) {
+                let (_, t) = pat.data.pop().unwrap();
+                pat.data.last_mut().map(|x| {
+                    x.1.last_mut().map(|x| match x {
+                        PatternDetail::Con(_, x) => { *x = t; },
+                        _ => {},
+                    })
+                });
+            } else {
+                break;
+            }
+        }
+        match pat.root_detail() {
+            Some(d) => Self::detail_to_raw(d),
+            None => Raw::Hole(empty_span(())),
+        }
+    }
+
+    /// Extract the root constructor detail from the fully-cleaned stack.
+    fn root_detail(&self) -> Option<&PatternDetail> {
+        // The stack bottoms out at index 0 with the root Con.
+        // If the stack is empty (all levels cleaned), the caller should not
+        // have called us — but if it does, return None.
+        if self.data.is_empty() || self.data[0].1.is_empty() {
+            return None;
+        }
+        Some(&self.data[0].1[0])
+    }
+
+    fn detail_to_raw(d: &PatternDetail) -> Raw {
+        match d {
+            PatternDetail::Con(name, subs) => {
+                // Each sub-detail becomes an argument to `name`.
+                //   Any(Impl) → named implicit [pi_param=var]
+                //   Any(Expl) → expl arg (handles the not-necessary case)
+                //   Bind → expl,  Con → expl
+                subs.iter()
+                    .fold(Raw::Var(name.clone()), |acc, sub| {
+                        let icit = match sub {
+                            PatternDetail::Any(name, Icit::Impl) => {
+                                if name.data.is_empty() {
+                                    // Unnamed implicit → let elaborator auto-fill.
+                                    Either::Icit(Icit::Impl)
+                                } else {
+                                    // Named implicit: [pi_param=var] so insert_go
+                                    // auto-fills preceding Impl params and only
+                                    // binds this one by name.
+                                    Either::Name(name.clone().map(|s| SmolStr::new(&s[1..])))
+                                }
+                            }
+                            PatternDetail::Any(_, Icit::Expl) => Either::Icit(Icit::Expl),
+                            PatternDetail::Bind(_) => Either::Icit(Icit::Expl),
+                            PatternDetail::Con(_, _) => Either::Icit(Icit::Expl),
+                        };
+                        Raw::App(Box::new(acc), Box::new(Self::detail_to_raw(sub)), icit)
+                    })
+            }
+            PatternDetail::Any(name, _) | PatternDetail::Bind(name) => {
+                if name.data.is_empty() {
+                    Raw::Hole(empty_span(()))
+                } else {
+                    Raw::Var(name.clone())
+                }
+            }
+        }
     }
 }
 
@@ -237,11 +319,18 @@ impl Compiler {
         match heads {
             [] => match arms {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
-                    let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
+                    let patcon_raw = patcon.clone().to_raw();
+                    // Try patcon_raw first (includes GADT implicits);
+                    // fall back to the original `raw` on failure.
+                    let result = infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone());
+                    let (_, cxt) = match result {
                         Ok(x) => x,
-                        Err(e) => {
-                            self.errors.push(e);
-                            return Ok(false);
+                        Err(_) => match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
+                            Ok(x) => x,
+                            Err(e) => {
+                                self.errors.push(e);
+                                return Ok(false);
+                            }
                         }
                     };
                     self.reachable.insert(*idx, ());
@@ -269,7 +358,9 @@ impl Compiler {
                     self.checked_ret.insert(raw.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
-                    self.pats.push((patcon.data[0].1[0].clone(), ret));
+                    if !patcon.data.is_empty() {
+                        self.pats.push((patcon.data[0].1[0].clone(), ret));
+                    }
                     Ok(true)
                 },
                 [arm, ..] => Err(Error(match &arm.0.pats[0] {
@@ -282,7 +373,6 @@ impl Compiler {
                 let not_necessary = arms
                     .iter()
                     .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
-
                 if not_necessary {
                     let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), Either::Icit(*icit)));
                     let new_arms = arms
@@ -305,9 +395,13 @@ impl Compiler {
                                 arm.5.clone(),
                                 arm.6.clone(),
                                 if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
-                                    arm.7.clone()
+                                    if *icit == Icit::Impl {
+                                        arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
+                                    } else {
+                                        arm.7.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit))
+                                    }
                                 } else {
-                                    arm.7.clone().clean().push(PatternDetail::Any(empty_span(())))
+                                    arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
                                 },
                             )
                         })
@@ -413,9 +507,9 @@ impl Compiler {
                                             target_typ.clone(),
                                             ori.clone(),
                                             if !x.data {
-                                                patcon.clone()
+                                                patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit))
                                             } else {
-                                                patcon.clone().clean().push(PatternDetail::Any(x.to_span()))
+                                                patcon.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
                                             },
                                             false,
                                         ))),
@@ -478,7 +572,7 @@ impl Compiler {
                                                 raw.clone(),
                                                 target_typ.clone(),
                                                 ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Any(empty_span(()))),
+                                                patcon.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), Icit::Impl)),
                                                 true,
                                             )))
                                         } else {None},
@@ -665,7 +759,7 @@ impl Compiler {
             .or_else(|| {
                 arms.iter()
                     .filter_map(|(pattern, body)| match pattern {
-                        PatternDetail::Any(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
+                        PatternDetail::Any(_, _) => Some((body.clone(), cxt.prepend(heads.clone()))),
                         PatternDetail::Bind(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
                         PatternDetail::Con(..) => None,
                     })

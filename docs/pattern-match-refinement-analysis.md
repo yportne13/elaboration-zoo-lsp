@@ -175,6 +175,149 @@ w : Fin (succ len)  →  env[len] = 0  → 重求值 → Fin (succ 0) = Fin 1
 不在递归进入字段时绑定变量，而是记录绑定信息，在 `check_pm_final` 完成最终细化后
 再统一绑定。这需要较大重构。
 
+## 修复尝试
+
+### 尝试 1：`infer_expr_pm` — `check_pm` 递归做参数检查
+
+**思路**：在 `check_pm_final` 中使用专用版本的 `infer_expr`，该版本对 `Raw::App` 的参数
+检查改用 `check_pm`（→ `unify_pm`）而非 `check::<false>`（→ `unify_catch`），使得
+Rigid 模式变量得到细化。
+
+**实现**：
+```rust
+fn infer_expr_pm(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>, Cxt), Error> {
+    // 非 App 情况 → 委托给 infer_expr
+    // App 情况 → 用 check_pm 检查参数
+}
+```
+
+然后 `check_pm` 和 `check_pm_final` 都改用 `infer_expr_pm`，形成：
+```
+check_pm → infer_expr_pm → (App) → check_pm → infer_expr_pm → ...  (互递归)
+```
+
+**结果**：测试基线 29/49（不变），`test_pm_struct_multi_field_gadt` 的错误从
+`can't unify Fin(_l+1) vs Fin(_n)` 变为 `find unsolved meta with type Nat`。
+错误类型变了但测试仍然失败。unsolved meta 表明 `rename()` 在外层 Rigid 跨作用域赋值
+时无法处理 → 留下悬空 meta。
+
+### 尝试 2：`check_pm_final` 始终走手工 fallback
+
+**思路**：跳过 `infer_expr`，始终用 `collect_apps` 拆解 App 链 + `insert_t` 填充 Impl
+参数 + `unify_pm` 逐参数处理。
+
+**实现**：
+```rust
+fn check_pm_final(...) {
+    let (func, args_raw) = Self::collect_apps(&t);
+    let (mut t_acc, mut remaining_ty) = self.insert_t(cxt, ...)?;
+    for field_raw in args_raw.iter() {
+        // Val::Pi → infer_expr + insert + unify_pm
+    }
+    // 最后 unify_pm(a, inferred_type) + unify_pm(ori, eval(t_acc))
+}
+```
+
+**结果**：测试基线 25/53（退步 4 个），`collect_apps` 把 Impl 参数也收集进来了，
+导致 `insert_t` 已填充的 Impl 参数在循环中被重复处理。
+
+### 尝试 3：`check_pm` 直接替换 `infer_expr` + `insert` + `unify_pm`
+
+**思路**：`check_pm_final` 内部直接用 `check_pm`（它已经做了 `infer_expr` + `insert` +
+`unify_pm`），然后用 `unify_pm` 处理 ori。
+
+**实现**（最简洁）：
+```rust
+fn check_pm_final(...) {
+    let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
+    let new_cxt = self.unify_pm(&cxt, &ori, &eval(&cxt, &t_inferred), ...).unwrap_or(cxt);
+    Ok((t_inferred, new_cxt))
+}
+```
+
+同时配合 `default_ret` 修改（`elaboration.rs` 中 `Decl::Enum` handler 的 `default_ret`
+包含所有 params，struct 的 Expl 参数自动转为 Impl）。
+
+**结果**：测试基线 29/49（与原始持平）。`check_pm` → `infer_expr_pm` → `check_pm` 互递归
+能正常处理 App 参数的 Rigid 细化，但对 body 检查无影响。
+
+### 三个尝试的共同障碍：`unify_pm` vs `unify` 对 Rigid 处理不一致
+
+**⚠️ 注意：以下分析已推翻最初的理解。** 问题不在 `rename()`，而在两条代码路径用了
+不同的 unification。
+
+#### 两条路径
+
+`compile_aux` 中 wildcard handler（`pattern_match.rs` ~240）对每一条臂做两件事：
+
+1. **类型检查臂的模式部分**（`check_pm_final`）：
+   ```
+   check_pm_final → check_pm → infer_expr_pm → (App) → check_pm → unify_pm
+   ```
+   `unify_pm` 认识 Rigid，遇到 `Rigid(_n) ≈ SumCase(succ, ...)` 就走
+   `(_, Val::Rigid(x, sp)) if sp.is_empty()` 分支 → `update_cxt` 把 env 里 `_n`
+   替换为细化后的值。**这步能过。**
+
+2. **检查臂的 body**（`check::<false>`）：
+   ```
+   check::<false> → infer_expr → (App) → check::<false> → unify_catch → unify
+   ```
+   `unify` **不**认识 Rigid（`unification.rs:903`：`_ => Err(UnifyError::Basic)`）。
+   当 body 中的表达式重新涉及 GADT 索引类型时（比如臂 3 的 `new VecHolder(xs, i)`
+   涉及 `Fin n`），`infer_expr` 的 `insert_t` 会为隐式参数创建**全新的 meta**，
+   这个 fresh meta 在 `unify_catch` → `unify` 中与包含 Rigid 的值相遇时，
+   `unify` 没有对应的处理分支 → `UnifyError::Basic`。
+
+#### 为什么 `check_pm_final` 的细化没有帮助
+
+`check_pm_final` 确实通过 `update_cxt` 修改了 env——`_n` 的 env 条目被替换成了
+`SumCase(succ, [Rigid(_l)])`。当后续 `infer_expr` 重新求值 `i` 的类型 `Fin n` 时：
+
+```rust
+// infer_expr, Var 分支中 is_refined() 为 true
+let quoted = self.quote(&cxt.decl, cxt.lvl, &a.1);
+self.eval(&cxt.decl, &cxt.env, &quoted)
+```
+
+`quote` 把 `Fin(Rigid(n))` 变成 `Tm::App(Tm::Decl("Fin"), Tm::Var(ix_n))`，
+`eval` 在 refined env 里查 `ix_n` 拿到 `SumCase(succ, [Rigid(_l)])`，得到
+`Fin(SumCase(succ, [Rigid(_l)]))` = `Fin (succ _l)`。**求值结果是正确的。**
+
+但问题在于：处理 `new VecHolder(xs, i)` 时，`infer_expr` 对 `VecHolder.mk` 做
+`insert_t`，为字段类型**新创建** meta（`?len`）。然后 `check::<false>` 逐个检查参数。
+对于 `fsucc(i)`：
+
+1. `infer_expr` 算出 `fsucc` 类型 `(n: Nat) → (i: Fin n) → Fin (succ n)`
+2. `insert_t` 为隐式 `n` 创建 **fresh meta** `?n`（不是 pattern 里的 Rigid `_n`）
+3. 参数 `i` 的类型在 refined cxt 里是 `Fin (succ _l)`
+4. `unify_catch(cxt, Fin(?n), Fin(succ _l))` → `unify`
+5. `unify` 里 `Flex(?n) ≈ SumCase(succ, [Rigid(_l)])` → `solve` → 如果 spine 非空
+   或 Rigid 层级对不上 → `UnifyError::Basic`
+
+所以**细化发生在 env 层面，但 body 检查的 `check::<false>` 走的 `unify` 不认识 Rigid**。
+
+#### 修复方向
+
+让 body 检查也使用 `check_pm`（→ `unify_pm`）来处理涉及 GADT 索引的类型约束，
+而不是 `check::<false>`（→ `unify`）。这已经在 wildcard handler 的 body 检查中
+尝试了 fallback（`check_pm` 兜底），但初始路径仍是 `check::<false>`。
+
+另一个方向是在 `unify` 中增加 `Rigid ≈ _` 的处理分支（类似 `unify_pm`），
+让常规 unification 也能细化 Rigid。这更通用，但需要确保不破坏非 pattern-match 场景。
+
+## 当前 best state（2026-06-26）
+
+以下改动已在工作树中：
+
+1. **`elaboration.rs`**: `check_pm_final` 改用 `check_pm`（方案 3）；新增 `infer_expr_pm`
+2. **`elaboration.rs`**: `unify_pm` 加入 debug trace
+3. **`mod.rs`**: `PatternDetail::Any(Span<SmolStr>, Icit)`
+4. **`pattern_match.rs`**: `to_raw`/`root_detail`/`detail_to_raw`；`patcon_raw`+`check_pm_final`
+   送入；`Any(_, _)` / `Any(name, icit)` 变体
+5. **`legacy_tests.rs`**: vec_last 测试
+
+测试基线：29 passed / 49 failed
+
 ## 关键代码位置
 
 | 文件 | 行号 | 作用 |
@@ -185,3 +328,4 @@ w : Fin (succ len)  →  env[len] = 0  → 重求值 → Fin (succ 0) = Fin 1
 | `pattern_match.rs` | ~540 | `remaining_arms` 分支转发 |
 | `cxt.rs` | ~510 | `put_local` / `update_cxt` |
 | `elaboration.rs` | ~320 | `check_pm`：match 入口 |
+| **`unification.rs`** | **~265** | **`rename` 跨作用域 Rigid（修复瓶颈）** |
