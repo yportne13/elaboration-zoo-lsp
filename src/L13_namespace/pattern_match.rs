@@ -473,7 +473,7 @@ impl Compiler {
                                         while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
                                             if !param.is_empty() {
                                                 let val = param.pop()
-                                                    .map(|x| x.1)
+                                                    .map(|x| infer.force(&cxt_for_filter.decl, &x.1))
                                                     .unwrap_or(Val::U(0).into());
                                                 typ = infer.closure_apply(&cxt_for_filter.decl, closure, val);
                                             } else {
