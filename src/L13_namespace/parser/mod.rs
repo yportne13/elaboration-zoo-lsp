@@ -36,30 +36,6 @@ fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>])
     }
 }
 
-/// Skip to the next EndLine that is immediately followed by a top-level declaration
-/// keyword (`def`, `struct`, `enum`, `trait`, `impl`, `macro_rules`, `package`,
-/// `import`, `println`).
-/// This is more robust than `skip_until_inner(EndLine)` for error recovery at top-level,
-/// because it skips past partial/malformed multi-line declarations rather than
-/// attempting recovery at every line boundary.
-fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] {
-    /// Tokens that can start a top-level declaration (as used by `p_decl` / `p_macro_def`).
-    fn is_decl_kw(kind: TokenKind) -> bool {
-        matches!(kind,
-            DefKeyword | StructKeyword | EnumKeyword | TraitKeyword | ImplKeyword
-            | PackageKeyword | ImportKeyword | PrintlnKeyword | MacroKeyword
-        )
-    }
-    input.iter()
-        .enumerate()
-        .find(|(i, t)| {
-            t.data.1 == EndLine
-                && input.get(i + 1).map(|next| is_decl_kw(next.data.1)).unwrap_or(false)
-        })
-        .map(|(i, _)| &input[i..])
-        .unwrap_or(&[])
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum BaseMsg {
     Expect(TokenKind),
@@ -189,12 +165,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
-                .recover_with(
-                    skip_until_decl,
-                    || Ok(Decl::Package { path: vec![] }),
-                )
-                .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err))).many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => {
                     let expansions = std::mem::take(&mut err_collect.2);
