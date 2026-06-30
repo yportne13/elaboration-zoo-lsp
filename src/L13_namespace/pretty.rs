@@ -216,7 +216,9 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                     .reduce(|a, b| a + ", " + &b)
                     .map(|x| format!("{}[{}]", name.data, x))
                     .unwrap_or(name.data.to_string()),
-                _ => panic!("Sum case must be applied to a sum"),
+                other => panic!(
+    "SumCase expected Tm::Sum, but got `{other:?}`\n  at pretty_tm(prec={prec}, indent={indent})"
+),
             },
             case_name.data,
             params
