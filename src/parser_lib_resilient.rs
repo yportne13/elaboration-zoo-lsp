@@ -123,8 +123,10 @@ pub trait RecoverExt<I: Copy, A, S, E>: Parser<I, A, S, E> {
     ///    such as `EndLine` so that the surrounding `many0` / `many0_sep` can continue).
     /// 3. Return `Ok((skipped_input, fallback()))` with a placeholder value.
     ///
-    /// Without this combinator, a failed parse causes `many0` to silently stop.
-    /// With it, the error is recorded and parsing continues from the sync point.
+    /// `skip` should return `Some(remaining)` when a sync point is found and the
+    /// parser can recover from there.  Return `None` to signal that no recovery
+    /// is possible — the original error is then propagated so the outer combinator
+    /// (e.g. `many0` / `many0_sep`) can stop normally.
     fn recover_with<Skip, Fallback>(
         self,
         skip: Skip,
@@ -132,12 +134,11 @@ pub trait RecoverExt<I: Copy, A, S, E>: Parser<I, A, S, E> {
     ) -> impl Parser<I, A, S, E>
     where
         S: ErrorStore<E>,
-        I: PartialEq,
-        Skip: Fn(I) -> I + Copy,
+        Skip: Fn(I) -> Option<I> + Copy,
         Fallback: Fn() -> A + Copy;
 }
 
-impl<I: Copy + PartialEq, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
+impl<I: Copy, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
     fn recover_with<Skip, Fallback>(
         self,
         skip: Skip,
@@ -145,21 +146,24 @@ impl<I: Copy + PartialEq, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E>
     ) -> impl Parser<I, A, S, E>
     where
         S: ErrorStore<E>,
-        I: PartialEq,
-        Skip: Fn(I) -> I + Copy,
+        Skip: Fn(I) -> Option<I> + Copy,
         Fallback: Fn() -> A + Copy,
     {
         move |input: I, state: &mut S| match self.parse(input, state) {
             Ok((input, val)) => Ok((input, val)),
             Err(err) => {
-                let remaining = skip(input);
-                if remaining == input {
-                    // No advance → nothing to recover, propagate error so the
-                    // outer combinator (many0_sep) can stop normally.
-                    return Err(err);
+                match skip(input) {
+                    Some(remaining) => {
+                        // Sync point found — record the error and continue.
+                        state.push_error(err);
+                        Ok((remaining, fallback()))
+                    }
+                    None => {
+                        // No sync point — propagate the error so the outer
+                        // combinator (many0/many0_sep) stops normally.
+                        Err(err)
+                    }
                 }
-                state.push_error(err);
-                Ok((remaining, fallback()))
             }
         }
     }

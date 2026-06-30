@@ -39,9 +39,11 @@ fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>])
 /// Skip to the next EndLine that is immediately followed by a top-level declaration
 /// keyword (`def`, `struct`, `enum`, `trait`, `impl`, `macro_rules`, `package`,
 /// `import`, `println`).
-/// If no sync point is found, returns the original input unchanged
-/// (so the caller can detect "nothing to skip" and stop rather than recovering).
-fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] {
+///
+/// Returns `Some(remaining)` when a sync point is found, or `None` when no sync
+/// point exists in the remaining input — allowing the caller to distinguish
+/// "found at position 0" (still recover) from "not found at all" (stop).
+fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<&'b [TokenNode<'a>]> {
     fn is_decl_kw(kind: TokenKind) -> bool {
         matches!(kind,
             DefKeyword | StructKeyword | EnumKeyword | TraitKeyword | ImplKeyword
@@ -55,7 +57,6 @@ fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> &'b [TokenNode<'a>
                 && input.get(i + 1).map(|next| is_decl_kw(next.data.1)).unwrap_or(false)
         })
         .map(|(i, _)| &input[i..])
-        .unwrap_or(input)
 }
 
 #[derive(Debug, Clone, Copy)]
