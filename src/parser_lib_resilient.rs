@@ -132,11 +132,12 @@ pub trait RecoverExt<I: Copy, A, S, E>: Parser<I, A, S, E> {
     ) -> impl Parser<I, A, S, E>
     where
         S: ErrorStore<E>,
+        I: PartialEq,
         Skip: Fn(I) -> I + Copy,
         Fallback: Fn() -> A + Copy;
 }
 
-impl<I: Copy, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
+impl<I: Copy + PartialEq, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
     fn recover_with<Skip, Fallback>(
         self,
         skip: Skip,
@@ -144,14 +145,20 @@ impl<I: Copy, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
     ) -> impl Parser<I, A, S, E>
     where
         S: ErrorStore<E>,
+        I: PartialEq,
         Skip: Fn(I) -> I + Copy,
         Fallback: Fn() -> A + Copy,
     {
         move |input: I, state: &mut S| match self.parse(input, state) {
             Ok((input, val)) => Ok((input, val)),
             Err(err) => {
-                state.push_error(err);
                 let remaining = skip(input);
+                if remaining == input {
+                    // No advance → nothing to recover, propagate error so the
+                    // outer combinator (many0_sep) can stop normally.
+                    return Err(err);
+                }
+                state.push_error(err);
                 Ok((remaining, fallback()))
             }
         }

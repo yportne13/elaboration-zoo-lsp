@@ -36,6 +36,28 @@ fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>])
     }
 }
 
+/// Skip to the next EndLine that is immediately followed by a top-level declaration
+/// keyword (`def`, `struct`, `enum`, `trait`, `impl`, `macro_rules`, `package`,
+/// `import`, `println`).
+/// If no sync point is found, returns the original input unchanged
+/// (so the caller can detect "nothing to skip" and stop rather than recovering).
+fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> &'b [TokenNode<'a>] {
+    fn is_decl_kw(kind: TokenKind) -> bool {
+        matches!(kind,
+            DefKeyword | StructKeyword | EnumKeyword | TraitKeyword | ImplKeyword
+            | PackageKeyword | ImportKeyword | PrintlnKeyword | MacroKeyword
+        )
+    }
+    input.iter()
+        .enumerate()
+        .find(|(i, t)| {
+            t.data.1 == EndLine
+                && input.get(i + 1).map(|next| is_decl_kw(next.data.1)).unwrap_or(false)
+        })
+        .map(|(i, _)| &input[i..])
+        .unwrap_or(input)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum BaseMsg {
     Expect(TokenKind),
@@ -165,22 +187,23 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err))).many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
+                .recover_with(
+                    skip_until_decl,
+                    || Ok(Decl::Package { path: vec![] }),
+                )
+                .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => {
                     let expansions = std::mem::take(&mut err_collect.2);
+                    let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
+                        .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
                     if ret.0.is_empty() {
-                        let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
-                            .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
                         Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
                     } else {
                         err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
-                        let exported: HashMap<String, Vec<MacroRule>> = err_collect.1.iter()
-                            .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
                         Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
                     }
                 }
