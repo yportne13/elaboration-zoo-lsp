@@ -3094,3 +3094,36 @@ println (test (cons zero nil))
     }
 }
 
+#[test]
+fn test_pm_tuple_vec_gadt_no_prelude() {
+    // Standalone version of test_pm_tuple_vec_gadt without prelude,
+    // to isolate pattern-match refinement for tuple of two indexed Vecs.
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+struct Tuple2[A, B] {
+    _1: A
+    _2: B
+}
+
+def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
+    case (nil, nil) => nil
+    case (cons(aa, at), cons(bb, bt)) => test(at, bt)
+}
+
+println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+"#;
+    match run(input, 0) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E8: '{}'", e.0.data),
+    }
+}
+
