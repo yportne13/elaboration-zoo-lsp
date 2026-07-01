@@ -225,6 +225,23 @@ impl Infer {
         let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
+    /// Resolve a value through the context env: if it's a bare `Rigid(lvl, [])`,
+    /// look up the env entry which may have been refined by earlier unify_pm calls.
+    fn resolve_rigid(cxt: &Cxt, v: &Rc<Val>) -> Rc<Val> {
+        if let Val::Rigid(x, sp) = v.as_ref() {
+            if sp.is_empty() {
+                let ix = super::lvl2ix(cxt.lvl, *x).0 as usize;
+                if let Some(env_val) = cxt.env.iter().nth(ix) {
+                    if !Rc::ptr_eq(env_val, v) {
+                        let resolved = Self::resolve_rigid(cxt, env_val);
+                        return resolved;
+                    }
+                }
+            }
+        }
+        v.clone()
+    }
+
     pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         let t = self.force(&cxt.decl, t);
@@ -256,10 +273,10 @@ impl Infer {
                     Ok(cxt.update_cxt(self, *x1, t_prime, true))
                 }
             }
-            (Val::Rigid(x, sp), _) if sp.is_empty() => { 
+            (Val::Rigid(x, sp), _) if sp.is_empty() => {
                 Ok(cxt.update_cxt(self, *x, t_prime, true))
             }
-            (_, Val::Rigid(x, sp)) if sp.is_empty() => { 
+            (_, Val::Rigid(x, sp)) if sp.is_empty() => {
                 Ok(cxt.update_cxt(self, *x, t, true))
             }
             (
@@ -276,16 +293,28 @@ impl Infer {
                     Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
+            // Rigid with non-empty spine on both sides, same head:
+            // decompose and unify spine elements recursively.
+            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if *x1 == *x2 && sp1.len() == sp2.len() => {
+                let mut cxt = cxt.clone();
+                for (s1, s2) in sp1.iter().zip(sp2.iter()) {
+                    cxt = self.unify_pm(&cxt, &s1.0, &s2.0, t_span)?;
+                }
+                Ok(cxt)
+            }
             (
-                //Val::SumCase { case_name: name1, datas: d1, .. },
-                //Val::SumCase { case_name: name2, datas: d2, .. },
                 Val::Sum(name1, d1, ..),
                 Val::Sum(name2, d2, ..),
             ) => {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
+                        // Resolve stale SumParam snapshots through env:
+                        // SumParams store the Rigid values at construction time,
+                        // but env may have refined them (e.g. n → succ _l0).
+                        let xv = Self::resolve_rigid(&cxt, &x.1);
+                        let yv = Self::resolve_rigid(&cxt, &y.1);
+                        cxt = self.unify_pm(&cxt, &xv, &yv, t_span)?;
                     }
                     Ok(cxt)
                 } else {

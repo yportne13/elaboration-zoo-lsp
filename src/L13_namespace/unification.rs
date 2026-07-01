@@ -748,6 +748,28 @@ impl Infer {
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime, fuel)
             }
+            // Two different Rigid vars with empty spines: resolve through env
+            // and retry. This handles the case where unify_pm refined one variable
+            // to reference the other (e.g. _l0 → _l37 after pattern match refinement).
+            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2))
+                if sp1.is_empty() && sp2.is_empty() && x1 != x2 =>
+            {
+                let ix1 = super::lvl2ix(l, *x1).0 as usize;
+                let ix2 = super::lvl2ix(l, *x2).0 as usize;
+                let env1 = cxt.env.iter().nth(ix1).cloned();
+                let env2 = cxt.env.iter().nth(ix2).cloned();
+                if let Some(ref ev) = env1 {
+                    if !Rc::ptr_eq(ev, &t) {
+                        return self.unify(l, cxt, ev, &u, fuel);
+                    }
+                }
+                if let Some(ref ev) = env2 {
+                    if !Rc::ptr_eq(ev, &u) {
+                        return self.unify(l, cxt, &t, ev, fuel);
+                    }
+                }
+                Err(UnifyError::Basic)
+            }
             (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime, fuel)
             }
