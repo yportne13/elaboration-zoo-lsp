@@ -2974,3 +2974,123 @@ println (vec_last (new VecHolder(cons(zero, cons(succ zero, nil)), fzero)))
     }
 }
 
+#[test]
+fn test_pm_tuple_vec_gadt() {
+    let input = r#"
+def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
+    case (nil, nil) => nil
+    case (cons(aa, at), cons(bb, bt)) => test(at, bt)
+}
+
+println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E1: '{}'", e.0.data),
+    }
+}
+
+#[test]
+fn test_pm_vec_gadt_single() {
+    // Single Vec match (no tuple) - verify basic Vec GADT refinement works
+    let input = r#"
+def test[n: Nat](a: Vec[Nat] n): Vec[Nat] 0 = match a {
+    case nil => nil
+    case cons(x, xs) => xs
+}
+
+println (test (cons zero (cons zero nil)))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E2: '{}'", e.0.data),
+    }
+}
+
+#[test]
+fn test_pm_tuple_product() {
+    // Tuple match without GADT - verify basic tuple matching works
+    let input = r#"
+def test(n: Nat, m: Nat): Nat = match (n, m) {
+    case (zero, zero) => zero
+    case (succ(a), succ(b)) => test a b
+}
+
+println (test (succ zero) (succ zero))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E3: '{}'", e.0.data),
+    }
+}
+
+#[test]
+fn test_pm_vec_tuple_cons_cons_only() {
+    // Only the cons-cons branch (no nil-nil) - isolate the nil branch issue
+    let input = r#"
+def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
+    case (cons(aa, at), cons(bb, bt)) => test(at, bt)
+}
+
+println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E4: '{}'", e.0.data),
+    }
+}
+
+#[test]
+fn test_pm_vec_tuple_nil_nil_only() {
+    // Only the nil-nil branch - isolate the nil branch issue
+    let input = r#"
+def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
+    case (nil, nil) => nil
+}
+
+println (test nil nil)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E5: '{}'", e.0.data),
+    }
+}
+
+#[test]
+fn test_pm_nested_match() {
+    // Nested match instead of tuple - does refinement propagate across nested matches?
+    let input = r#"
+def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match a {
+    case nil => match b {
+        case nil => nil
+    }
+    case cons(aa, at) => match b {
+        case cons(bb, bt) => test at bt
+    }
+}
+
+println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E6: '{}'", e.0.data),
+    }
+}
+
+#[test]
+fn test_pm_single_field_refine() {
+    // Match on one field only - does the single refinement work?
+    let input = r#"
+def test[n: Nat](a: Vec[Nat] n): Nat = match a {
+    case nil => zero
+    case cons(x, xs) => n
+}
+
+println (test (cons zero nil))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => eprintln!("E7: '{}'", e.0.data),
+    }
+}
+

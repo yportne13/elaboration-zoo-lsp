@@ -320,17 +320,13 @@ impl Compiler {
             [] => match arms {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
                     let patcon_raw = patcon.clone().to_raw();
-                    // Try patcon_raw first (includes GADT implicits);
-                    // fall back to the original `raw` on failure.
-                    let result = infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone());
-                    let (_, cxt) = match result {
+                    // Try patcon_raw only (includes GADT implicits);
+                    // NO fallback to raw — only patcon_raw is used.
+                    let (_, cxt) = match infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone()) {
                         Ok(x) => x,
-                        Err(_) => match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
-                            Ok(x) => x,
-                            Err(e) => {
-                                self.errors.push(e);
-                                return Ok(false);
-                            }
+                        Err(e) => {
+                            self.errors.push(e);
+                            return Ok(false);
                         }
                     };
                     self.reachable.insert(*idx, ());
