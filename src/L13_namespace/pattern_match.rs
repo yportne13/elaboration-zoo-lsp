@@ -123,26 +123,30 @@ impl PatConstructor {
                 //   Bind → expl,  Con → expl
                 subs.iter()
                     .fold(Raw::Var(name.clone()), |acc, sub| {
-                        let icit = match sub {
-                            PatternDetail::Any(name, Icit::Impl) => {
-                                if name.data.is_empty() {
-                                    // Unnamed implicit → let elaborator auto-fill.
-                                    Either::Icit(Icit::Impl)
-                                } else {
-                                    // Named implicit: [pi_param=var] so insert_go
-                                    // auto-fills preceding Impl params and only
-                                    // binds this one by name.
-                                    Either::Name(name.clone().map(|s| SmolStr::new(&s[1..])))
-                                }
-                            }
-                            PatternDetail::Any(_, Icit::Expl) => Either::Icit(Icit::Expl),
+                                let icit = match sub {
+                                    PatternDetail::Any(var_name, param_name, Icit::Impl) => {
+                                        if var_name.data.is_empty() {
+                                            // Unnamed implicit → let elaborator auto-fill.
+                                            Either::Icit(Icit::Impl)
+                                        } else if let Some(pname) = param_name {
+                                            // Named implicit with explicit param name:
+                                            // [pi_param=var] — the param_name is the original
+                                            // Pi parameter name (e.g. "l" for cons[l=lll]).
+                                            Either::Name(pname.clone())
+                                        } else {
+                                            // Named implicit, derive param name by stripping
+                                            // the leading '_' from the var name.
+                                            Either::Name(var_name.clone().map(|s| SmolStr::new(&s[1..])))
+                                        }
+                                    }
+                                    PatternDetail::Any(_, _, Icit::Expl) => Either::Icit(Icit::Expl),
                             PatternDetail::Bind(_) => Either::Icit(Icit::Expl),
                             PatternDetail::Con(_, _) => Either::Icit(Icit::Expl),
                         };
                         Raw::App(Box::new(acc), Box::new(Self::detail_to_raw(sub)), icit)
                     })
             }
-            PatternDetail::Any(name, _) | PatternDetail::Bind(name) => {
+            PatternDetail::Any(name, ..) | PatternDetail::Bind(name) => {
                 if name.data.is_empty() {
                     Raw::Hole(empty_span(()))
                 } else {
@@ -392,12 +396,12 @@ impl Compiler {
                                 arm.6.clone(),
                                 if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
                                     if *icit == Icit::Impl {
-                                        arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
+                                        arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), None, *icit))
                                     } else {
-                                        arm.7.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit))
+                                        arm.7.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
                                     }
                                 } else {
-                                    arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
+                                    arm.7.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), None, *icit))
                                 },
                             )
                         })
@@ -516,9 +520,9 @@ impl Compiler {
                                                 target_typ.clone(),
                                                 ori.clone(),
                                                 if !x.data {
-                                                    patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), *icit))
+                                                    patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
                                                 } else {
-                                                    patcon.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), *icit))
+                                                    patcon.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), None, *icit))
                                                 },
                                                 false,
                                             )))
@@ -561,9 +565,73 @@ impl Compiler {
                                             )))
                                         }
                                         [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
+                                            // Count user-written implicit binding patterns
+                                            // at the front of item_pats, e.g. [l=lll] in
+                                            // cons[l=lll](x, xs). These are Con patterns with
+                                            // Either::Name as their icit.
+                                            let mut implicit_count = 0;
+                                            for pat in item_pats.iter() {
+                                                if let Pattern::Con(_, _, Either::Name(_)) = pat {
+                                                    implicit_count += 1;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            // Derive implicit param names from the first
+                                            // `implicit_count` Implicit Pi entries in new_heads
+                                            // (the constructor's own implicit params, not the
+                                            // Sum type's index params).
+                                            let implicit_param_names: Vec<Span<SmolStr>> = new_heads
+                                                .iter()
+                                                .filter(|(_, _, icit)| *icit == Icit::Impl)
+                                                .take(implicit_count)
+                                                .map(|(_, name, _)| name.clone())
+                                                .collect();
+                                            let consumed_implicit_count = implicit_param_names.len();
+                                            let explicit_pats = &item_pats[implicit_count..];
+
+                                            let mut new_cxt = cxt.clone();
+                                            let mut new_cxt_ff = cxt_for_filter.clone();
+                                            let mut new_patcon = patcon.clone().clean()
+                                                .push(PatternDetail::Con(constr_.clone(), vec![]))
+                                                .new_level(new_heads_len);
+
+                                            // Bind each user-written implicit variable and
+                                            // push a named-implicit Any to the patcon.
+                                            for (k, ip_name) in implicit_param_names.iter().enumerate() {
+                                                if let Some(Pattern::Con(var_name, _, _)) = item_pats.get(k) {
+                                                    let (ty, ..) = &new_heads.iter()
+                                                        .filter(|(_, _, icit)| *icit == Icit::Impl)
+                                                        .nth(k)
+                                                        .unwrap();
+                                                    let imp = var_name.clone();
+                                                    new_cxt = new_cxt.bind(
+                                                        imp.clone(),
+                                                        infer.quote(&new_cxt.decl, new_cxt.lvl, ty),
+                                                        ty.clone(),
+                                                    );
+                                                    new_cxt_ff = new_cxt_ff.bind(
+                                                        imp.clone(),
+                                                        infer.quote(&new_cxt_ff.decl, new_cxt_ff.lvl, ty),
+                                                        ty.clone(),
+                                                    );
+                                                    new_patcon = new_patcon.clean().push(
+                                                        PatternDetail::Any(imp, Some(ip_name.clone()), Icit::Impl),
+                                                    );
+                                                }
+                                            }
+
+                                            // The consumed Implicit params have been bound;
+                                            // remove them from new_heads so the recursive
+                                            // call doesn't re-process them.
+                                            let remaining_new_heads: Vec<_> = new_heads[consumed_implicit_count..]
+                                                .iter()
+                                                .cloned()
+                                                .collect();
+
                                             Some(Some((
                                                 MatchArm {
-                                                    pats: item_pats
+                                                    pats: explicit_pats
                                                         .iter()
                                                         .chain(&arm.pats[1..])
                                                         .cloned()
@@ -571,13 +639,13 @@ impl Compiler {
                                                     body: arm.body.clone(),
                                                 },
                                                 *idx,
-                                                cxt.clone(),
-                                                cxt_for_filter.clone(),
-                                                new_heads,
+                                                new_cxt,
+                                                new_cxt_ff,
+                                                remaining_new_heads,
                                                 raw.clone(),
                                                 target_typ.clone(),
                                                 ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Con(constr_.clone(), vec![])).new_level(new_heads_len),
+                                                new_patcon,
                                                 false,
                                             )))
                                         }
@@ -594,7 +662,7 @@ impl Compiler {
                                                 raw.clone(),
                                                 target_typ.clone(),
                                                 ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), Icit::Impl)),
+                                                patcon.clone().clean().push(PatternDetail::Any(head_name.clone().map(|x| SmolStr::new(format!("_{}", x))), None, Icit::Impl)),
                                                 true,
                                             )))
                                         } else {None},
@@ -781,7 +849,7 @@ impl Compiler {
             .or_else(|| {
                 arms.iter()
                     .filter_map(|(pattern, body)| match pattern {
-                        PatternDetail::Any(_, _) => Some((body.clone(), cxt.prepend(heads.clone()))),
+                        PatternDetail::Any(..) => Some((body.clone(), cxt.prepend(heads.clone()))),
                         PatternDetail::Bind(_) => Some((body.clone(), cxt.prepend(heads.clone()))),
                         PatternDetail::Con(..) => None,
                     })
