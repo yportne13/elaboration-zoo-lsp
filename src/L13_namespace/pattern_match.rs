@@ -462,7 +462,14 @@ impl Compiler {
                             let remaining_arms = arms
                                 .iter()
                                 .filter_map(|(arm, idx, cxt, cxt_for_filter, raw, target_typ, ori, patcon)| {
+                                    // Save the head type before it gets shadowed
+                                    // below. Needed for GADT index refinement
+                                    // in the constr_ == constr branch.
+                                    let head_typ = typ.clone();
                                     let mut new_heads = vec![];
+                                    // Constructor return type (after Pi peeling),
+                                    // saved for GADT index refinement below.
+                                    let mut constr_ret_typ: Option<Rc<Val>> = None;
                                     if !constr_accessible {
                                         return Some(None);
                                     }
@@ -493,6 +500,11 @@ impl Compiler {
                                                 typ = infer.closure_apply(&cxt_for_filter.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
+                                        // Save the constructor's return type
+                                        // (after applying all Pi params) for
+                                        // GADT index refinement in the
+                                        // constr_ == constr branch below.
+                                        constr_ret_typ = Some(typ.clone());
                                     }
                                     let new_heads_len = new_heads.len();
                                     match &arm.pats[..] {
@@ -631,6 +643,53 @@ impl Compiler {
                                                     new_patcon = new_patcon.clean().push(
                                                         PatternDetail::Any(imp, Some(ip_name.clone()), Icit::Impl),
                                                     );
+                                                }
+                                            }
+
+                                            // Apply GADT index refinement:
+                                            // unify the constructor's return
+                                            // type with the head type so that
+                                            // subsequent filter_accessible_constrs
+                                            // calls see the constrained indices
+                                            // (e.g. matching nil refines n=0,
+                                            // so _2:Vec[Nat]0 correctly eliminates
+                                            // cons as a possibility).
+                                            if let Some(ref constr_ret) = constr_ret_typ {
+                                                // Pre-bind unconsumed implicit
+                                                // constructor params so their
+                                                // fresh Rigid levels are valid
+                                                // when unify_pm refines index
+                                                // variables (e.g. n=succ l where
+                                                // l is a cons implicit param).
+                                                let impl_heads: Vec<_> = new_heads
+                                                    .iter()
+                                                    .filter(|(_, _, i)| *i == Icit::Impl)
+                                                    .collect();
+                                                let mut fc_for_refine = new_cxt_ff.clone();
+                                                for (ty, name, _) in impl_heads.iter().skip(consumed_implicit_count) {
+                                                    let imp = self.make_implicit_name(name);
+                                                    fc_for_refine = fc_for_refine.bind(
+                                                        imp,
+                                                        infer.quote(&fc_for_refine.decl, fc_for_refine.lvl, ty),
+                                                        ty.clone(),
+                                                    );
+                                                }
+                                                // Best-effort: skip on failure
+                                                // (e.g. typeclass-heavy prelude
+                                                // types like l+1 may fail).
+                                                if let Ok(refined) = std::panic::catch_unwind(
+                                                    std::panic::AssertUnwindSafe(|| {
+                                                        infer.unify_pm(
+                                                            &fc_for_refine,
+                                                            &head_typ,
+                                                            constr_ret,
+                                                            empty_span(()),
+                                                        )
+                                                    }),
+                                                ) {
+                                                    if let Ok(r) = refined {
+                                                        new_cxt_ff = r;
+                                                    }
                                                 }
                                             }
 
