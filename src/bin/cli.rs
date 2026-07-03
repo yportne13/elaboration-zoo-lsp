@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
+use clap::{Parser, Subcommand};
 use elaboration_zoo_lsp::Backend;
 use elaboration_zoo_lsp::client::CliClient;
 use elaboration_zoo_lsp::TextDocumentItem;
@@ -169,129 +170,121 @@ mod heap_walk {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CLI definition using clap
+// ---------------------------------------------------------------------------
+
+#[derive(Parser)]
+#[command(
+    name = "typort",
+    version,
+    about = "TyportHDL type checker and language server",
+    long_about = "TyportHDL is a dependently-typed hardware description language. \
+                   This CLI provides type-checking, analysis, an LSP language server, \
+                   and memory profiling tools."
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Type-check and analyze one or more TyportHDL source files.
+    ///
+    /// Each file is parsed, type-checked, and reported with diagnostic messages
+    /// (errors, warnings, notes) printed to stderr with source-context snippets.
+    #[command(visible_alias = "c")]
+    Check {
+        /// Source files to analyze (.typort)
+        #[arg(required = true)]
+        files: Vec<String>,
+
+        /// Enable statistical CPU sampling profiler
+        ///
+        /// Records backtrace samples during type-checking and produces a
+        /// flamegraph SVG. Requires building with `--features sampler`.
+        #[arg(long, short)]
+        sample: bool,
+
+        /// Generate flamegraph SVG (implies --sample)
+        ///
+        /// Requires building with `--features sampler`.
+        #[arg(long, short)]
+        flamegraph: bool,
+    },
+
+    /// Start the LSP language server over stdio.
+    ///
+    /// Used by editor extensions (e.g. VS Code) to provide IDE features
+    /// such as diagnostics, hover information, go-to-definition, and
+    /// completion.
+    #[command(visible_alias = "l")]
+    Lsp,
+
+    /// Print memory statistics after loading the prelude.
+    ///
+    /// Outputs a JSON report with heap usage, allocation histograms,
+    /// and per-file timing breakdowns. Requires building with
+    /// `--features mem-profile`.
+    #[command(visible_alias = "s")]
+    Stats {
+        /// Skip loading HDL prelude files
+        #[arg(long, short)]
+        no_hdl: bool,
+    },
+}
+
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     #[cfg(feature = "mem-profile")]
     let _profiler = dhat::Profiler::new_heap();
 
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
 
-    // Check for subcommands.
-    if args.len() >= 2 && args[1] == "lsp" {
-        return elaboration_zoo_lsp::run_lsp_server();
-    }
-
-    if args.len() < 2 {
-        eprintln!("Usage:");
-        eprintln!("  typort <file.typort> [<file2.typort> ...]    Analyze files");
-        #[cfg(feature = "mem-profile")]
-        {
-            eprintln!("  typort --stats                                Print memory stats after prelude");
-            eprintln!("  typort --stats-no-hdl                         Print memory stats (skip hdl.typort)");
+    match cli.command {
+        Commands::Lsp => {
+            elaboration_zoo_lsp::run_lsp_server()?;
         }
-        eprintln!("  typort lsp                                    Start the language server");
-        std::process::exit(1);
+
+        Commands::Check { files, sample, flamegraph } => {
+            let do_sample = sample || flamegraph;
+            run_check(files, do_sample)?;
+        }
+
+        Commands::Stats { no_hdl } => {
+            run_stats(no_hdl)?;
+        }
     }
 
-    // Temporary: skip hdl for faster profiling
-    let skip_hdl = args[1] == "--stats-no-hdl";
-    let is_stats = args[1] == "--stats" || skip_hdl;
+    Ok(())
+}
 
-    // Create CLI client with source map for pretty-printed diagnostics.
-    let cli_client = CliClient::new();
-    let source_map = cli_client.source_map.clone();
+// ---------------------------------------------------------------------------
+// Subcommand implementations
+// ---------------------------------------------------------------------------
 
-    // Enable statistical sampling profiler if --sample flag is present
-    #[cfg(feature = "sampler")]
-    let do_sample = args.iter().any(|a| a == "--sample");
-    #[cfg(not(feature = "sampler"))]
-    #[allow(unused_variables)]
-    let do_sample = false;
+fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
     #[cfg(feature = "sampler")]
     if do_sample {
         eprintln!("Sampling profiler enabled (backtrace)...");
         elaboration_zoo_lsp::sampler::enable();
     }
+    #[cfg(not(feature = "sampler"))]
+    if do_sample {
+        eprintln!(
+            "warning: --sample / --flamegraph requires building with --features sampler"
+        );
+        eprintln!("         cargo run --features sampler -- check <files>");
+    }
 
-    // Create backend with CLI client.
+    let cli_client = CliClient::new();
+    let source_map = cli_client.source_map.clone();
     let backend = Backend::new(cli_client);
-    // Load builtin prelude (separated from Backend::new for LSP init timing).
-    if skip_hdl {
-        backend.load_prelude_skip_hdl();
-    } else {
-        backend.load_prelude();
-    }
 
-    if is_stats {
-        #[cfg(feature = "mem-profile")]
-        {
-            // ─── Memory + timing benchmark mode ───
-            // Collect timings recorded during load_prelude
-            let timings_vec = backend.timings.lock().unwrap().clone();
-            // lock released after clone
+    // Load builtin prelude (core types, data structures, HDL primitives).
+    backend.load_prelude();
 
-            let infer_arc = backend.get_infer();
-            let cxt_arc = backend.get_cxt();
-            let infer_lock = infer_arc.lock().unwrap();
-            let cxt_lock = cxt_arc.lock().unwrap();
-            let stats = infer_lock.memory_stats_with_cxt(Some(&cxt_lock));
-            drop(cxt_lock);
-            drop(infer_lock);
-
-            #[cfg(windows)]
-            let (ws, peak_ws, pf) = win_mem::get_memory_stats();
-            #[cfg(not(windows))]
-            let (ws, peak_ws, pf) = (0, 0, 0);
-
-            #[cfg(windows)]
-            let heap_histogram = heap_walk::heap_size_histogram();
-            #[cfg(not(windows))]
-            let heap_histogram = serde_json::json!(null);
-
-            // Aggregate timing totals
-            let total_parser: f64 = timings_vec.iter().map(|t| t.1).sum();
-            let total_infer: f64 = timings_vec.iter().map(|t| t.2).sum();
-            let total_change: f64 = timings_vec.iter().map(|t| t.3).sum();
-
-            let result = serde_json::json!({
-                "peak_working_set_bytes": peak_ws,
-                "peak_working_set_mb": format!("{:.1}", peak_ws as f64 / 1_048_576.0),
-                "working_set_bytes": ws,
-                "working_set_mb": format!("{:.1}", ws as f64 / 1_048_576.0),
-                "pagefile_usage_bytes": pf,
-                "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
-                "heap_histogram": heap_histogram,
-                "backend_stats": backend.backend_stats(),
-                "infer_stats": stats,
-                "timings": {
-                    "files": timings_vec.iter().map(|(uri, parser_s, infer_s, total_s)| {
-                        serde_json::json!({
-                            "uri": uri,
-                            "parser_secs": format!("{:.4}", parser_s),
-                            "infer_secs": format!("{:.4}", infer_s),
-                            "total_secs": format!("{:.4}", total_s),
-                        })
-                    }).collect::<Vec<_>>(),
-                    "total_parser_secs": format!("{:.4}", total_parser),
-                    "total_infer_secs": format!("{:.4}", total_infer),
-                    "total_secs": format!("{:.4}", total_change),
-                },
-            });
-
-            println!("{}", serde_json::to_string_pretty(&result).unwrap());
-            return Ok(());
-        }
-        #[cfg(not(feature = "mem-profile"))]
-        {
-            eprintln!("error: --stats requires building with --features mem-profile");
-            eprintln!("       cargo run --features mem-profile -- --stats");
-            std::process::exit(1);
-        }
-    }
-
-    for filepath in &args[1..] {
-        if filepath.starts_with("--") {
-            continue;
-        }
+    for filepath in &files {
         let path = PathBuf::from(filepath);
         let contents = fs::read_to_string(&path)?;
         let uri = Url::from_file_path(path.canonicalize()?).unwrap();
@@ -327,6 +320,84 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             let _ = std::fs::remove_file("sampler.folded");
             eprintln!("Flame graph written to flamegraph.svg");
         }
+    }
+
+    Ok(())
+}
+
+#[allow(unreachable_code)]
+fn run_stats(_no_hdl: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
+    #[cfg(feature = "mem-profile")]
+    {
+        let cli_client = CliClient::new();
+        let backend = Backend::new(cli_client);
+
+        // Load prelude (optional skip HDL for faster profiling).
+        if no_hdl {
+            backend.load_prelude_skip_hdl();
+        } else {
+            backend.load_prelude();
+        }
+
+        // Collect timings recorded during load_prelude.
+        let timings_vec = backend.timings.lock().unwrap().clone();
+
+        let infer_arc = backend.get_infer();
+        let cxt_arc = backend.get_cxt();
+        let infer_lock = infer_arc.lock().unwrap();
+        let cxt_lock = cxt_arc.lock().unwrap();
+        let stats = infer_lock.memory_stats_with_cxt(Some(&cxt_lock));
+        drop(cxt_lock);
+        drop(infer_lock);
+
+        #[cfg(windows)]
+        let (ws, peak_ws, pf) = win_mem::get_memory_stats();
+        #[cfg(not(windows))]
+        let (ws, peak_ws, pf) = (0, 0, 0);
+
+        #[cfg(windows)]
+        let heap_histogram = heap_walk::heap_size_histogram();
+        #[cfg(not(windows))]
+        let heap_histogram = serde_json::json!(null);
+
+        // Aggregate timing totals.
+        let total_parser: f64 = timings_vec.iter().map(|t| t.1).sum();
+        let total_infer: f64 = timings_vec.iter().map(|t| t.2).sum();
+        let total_change: f64 = timings_vec.iter().map(|t| t.3).sum();
+
+        let result = serde_json::json!({
+            "peak_working_set_bytes": peak_ws,
+            "peak_working_set_mb": format!("{:.1}", peak_ws as f64 / 1_048_576.0),
+            "working_set_bytes": ws,
+            "working_set_mb": format!("{:.1}", ws as f64 / 1_048_576.0),
+            "pagefile_usage_bytes": pf,
+            "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
+            "heap_histogram": heap_histogram,
+            "backend_stats": backend.backend_stats(),
+            "infer_stats": stats,
+            "timings": {
+                "files": timings_vec.iter().map(|(uri, parser_s, infer_s, total_s)| {
+                    serde_json::json!({
+                        "uri": uri,
+                        "parser_secs": format!("{:.4}", parser_s),
+                        "infer_secs": format!("{:.4}", infer_s),
+                        "total_secs": format!("{:.4}", total_s),
+                    })
+                }).collect::<Vec<_>>(),
+                "total_parser_secs": format!("{:.4}", total_parser),
+                "total_infer_secs": format!("{:.4}", total_infer),
+                "total_secs": format!("{:.4}", total_change),
+            },
+        });
+
+        println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    }
+
+    #[cfg(not(feature = "mem-profile"))]
+    {
+        eprintln!("error: `typort stats` requires building with --features mem-profile");
+        eprintln!("       cargo run --features mem-profile -- stats");
+        std::process::exit(1);
     }
 
     Ok(())
