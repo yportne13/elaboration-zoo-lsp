@@ -2986,7 +2986,7 @@ println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) ni
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E1: '{}'", e.0.data),
+        Err(e) => panic!("E1: '{}'", e.0.data),
     }
 }
 
@@ -3003,7 +3003,7 @@ println (test (cons zero (cons zero nil)))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E2: '{}'", e.0.data),
+        Err(e) => panic!("E2: '{}'", e.0.data),
     }
 }
 
@@ -3020,7 +3020,7 @@ println (test (succ zero) (succ zero))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E3: '{}'", e.0.data),
+        Err(e) => panic!("E3: '{}'", e.0.data),
     }
 }
 
@@ -3036,7 +3036,7 @@ println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) ni
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E4: '{}'", e.0.data),
+        Err(e) => panic!("E4: '{}'", e.0.data),
     }
 }
 
@@ -3052,7 +3052,7 @@ println (test nil nil)
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E5: '{}'", e.0.data),
+        Err(e) => panic!("E5: '{}'", e.0.data),
     }
 }
 
@@ -3073,7 +3073,7 @@ println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) ni
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E6: '{}'", e.0.data),
+        Err(e) => panic!("E6: '{}'", e.0.data),
     }
 }
 
@@ -3090,7 +3090,7 @@ println (test (cons zero nil))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E7: '{}'", e.0.data),
+        Err(e) => panic!("E7: '{}'", e.0.data),
     }
 }
 
@@ -3123,7 +3123,7 @@ println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) ni
 "#;
     match run(input, 0) {
         Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => eprintln!("E8: '{}'", e.0.data),
+        Err(e) => panic!("E8: '{}'", e.0.data),
     }
 }
 
