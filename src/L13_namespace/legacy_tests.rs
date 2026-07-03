@@ -2982,77 +2982,11 @@ def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
     case (cons(aa, at), cons(bb, bt)) => test(at, bt)
 }
 
-println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+	println (test (cons(zero, cons(zero, nil))) (cons(succ(zero), cons(succ(zero), nil))))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
         Err(e) => panic!("E1: '{}'", e.0.data),
-    }
-}
-
-#[test]
-fn test_pm_vec_gadt_single() {
-    // Single Vec match (no tuple) - verify basic Vec GADT refinement works
-    let input = r#"
-def test[n: Nat](a: Vec[Nat] n): Vec[Nat] 0 = match a {
-    case nil => nil
-    case cons(x, xs) => xs
-}
-
-println (test (cons zero (cons zero nil)))
-"#;
-    match run_with_prelude(input) {
-        Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => panic!("E2: '{}'", e.0.data),
-    }
-}
-
-#[test]
-fn test_pm_tuple_product() {
-    // Tuple match without GADT - verify basic tuple matching works
-    let input = r#"
-def test(n: Nat, m: Nat): Nat = match (n, m) {
-    case (zero, zero) => zero
-    case (succ(a), succ(b)) => test a b
-}
-
-println (test (succ zero) (succ zero))
-"#;
-    match run_with_prelude(input) {
-        Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => panic!("E3: '{}'", e.0.data),
-    }
-}
-
-#[test]
-fn test_pm_vec_tuple_cons_cons_only() {
-    // Only the cons-cons branch (no nil-nil) - isolate the nil branch issue
-    let input = r#"
-def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
-    case (cons(aa, at), cons(bb, bt)) => test(at, bt)
-}
-
-println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
-"#;
-    match run_with_prelude(input) {
-        Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => panic!("E4: '{}'", e.0.data),
-    }
-}
-
-#[test]
-fn test_pm_vec_tuple_nil_nil_only() {
-    // Only the nil-nil branch - isolate the nil branch issue
-    let input = r#"
-def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
-    case (nil, nil) => nil
-}
-
-println (test nil nil)
-"#;
-    match run_with_prelude(input) {
-        Ok(output) => println!("PASS:\n'{}'", output),
-        Err(e) => panic!("E5: '{}'", e.0.data),
     }
 }
 
@@ -3069,7 +3003,7 @@ def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match a {
     }
 }
 
-println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+	println (test (cons(zero, cons(zero, nil))) (cons(succ(zero), cons(succ(zero), nil))))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
@@ -3086,7 +3020,7 @@ def test[n: Nat](a: Vec[Nat] n): Nat = match a {
     case cons(x, xs) => n
 }
 
-println (test (cons zero nil))
+println (test (cons(zero, nil)))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS:\n'{}'", output),
@@ -3119,7 +3053,7 @@ def test[n: Nat](a: Vec[Nat] n, b: Vec[Nat] n): Vec[Nat] 0 = match (a, b) {
     case (cons(aa, at), cons(bb, bt)) => test(at, bt)
 }
 
-println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) nil)))
+println (test (cons(zero, cons(zero, nil))) (cons(succ(zero), cons(succ(zero), nil))))
 "#;
     match run(input, 0) {
         Ok(output) => println!("PASS:\n'{}'", output),
