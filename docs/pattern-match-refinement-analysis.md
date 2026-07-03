@@ -329,3 +329,149 @@ self.eval(&cxt.decl, &cxt.env, &quoted)
 | `cxt.rs` | ~510 | `put_local` / `update_cxt` |
 | `elaboration.rs` | ~320 | `check_pm`：match 入口 |
 | **`unification.rs`** | **~265** | **`rename` 跨作用域 Rigid（修复瓶颈）** |
+
+---
+
+## 值层面跨字段精化薄弱点（2026-07-03）
+
+### 问题描述
+
+`match (b, b)` 中 `b: Boolean` 是**同一个变量**出现在元组的两个字段中。理论上只有
+`(true, true)` 和 `(false, false)` 两种取值可能，`(true, false)` 和 `(false, true)`
+是**不可能的**。但当前模式编译器报告：
+
+```
+non-exhaustive pattern: `Tuple2.mk(true, false)` not covered;
+non-exhaustive pattern: `Tuple2.mk(false, true)` not covered
+```
+
+### 已有 GADT 类型索引精化的成功路径
+
+对于 GADT 类型（如 `Vec[A] len`），`filter_accessible_constrs` 通过 `check_pm` 做
+**类型统一**来判定构造器可达性：
+
+```
+filter_accessible_constrs
+  → check_pm(cxt, constr_with_holes, forced_type)  // 如 nil vs Vec[Nat] n
+  → unify_pm(Vec[Nat] n, Vec[Nat] 0)               // 绑定 n = 0
+  → 只有兼容的构造器（nil）标记为可达
+```
+
+这是**类型层面**的精化——索引**本身就是类型的一部分**（`Vec[Nat] n`），所以统一后
+`n = 0` 直接反映在类型上。
+
+### `(b, b)` 场景的区别
+
+| 维度 | GADT 索引精化 | 值层面相等精化 |
+|------|--------------|---------------|
+| 精化内容 | `len := 0` / `len := succ l` | `b := true` / `b := false` |
+| 影响范围 | **类型** `Vec[Nat] len` → `Vec[Nat] 0` | **值** `b` → `SumCase("true")` |
+| 对类型影响 | 类型参数变化，构造器可达性改变 | 类型 `Boolean` 不变 |
+| 检测机制 | `check_pm` 做类型统一 | 需要值层面一致性检查 |
+| 发生时机 | `check_pm`（决策树构建时） | `check_pm_final` 的 `unify_pm(ori, tmv)`（base case） |
+
+### 根因：两个层面的精化发生在不同阶段
+
+决策树构建流程：
+
+```
+for each head (逐字段):
+  1. filter_accessible_constrs → 只看类型，返回可达构造器
+  2. 对每个 arm，匹配构造器 → 生成剩余 arm 和剩余 heads
+  3. 递归 compile_aux 继续处理后续 heads
+
+base case (heads 为空):
+  4. check_pm_final(cxt, patcon_raw, target_typ, ori)
+     ├─ check_pm → 类型统一（GADT 索引精化）
+     └─ unify_pm(ori, tmv) → 值层面精化  ← b := true 发生在这里
+```
+
+值层面精化（第 4 步）发生在**所有 head 都处理完之后**，而 `filter_accessible_constrs`
+（第 1 步）在**每个 head 处理时**就需要知道哪些构造器可达。所以 `b := true` 的精化
+来不及影响第二个字段的可达性判断。
+
+### 为什么 e8ade22 的精化修复不适用
+
+e8ade22 的修复：
+
+1. **`unify_pm` 不同 Rigid 分支**：`Rigid(x1) vs Rigid(x2)` 时优先更新未细化变量
+2. **`infer_expr(Raw::Var)` 重求值**：在 `is_refined()` 环境中重新 `quote+eval` 变量类型
+
+这两个修复处理的是**类型索引精化在不同字段间的传播**。对 `(b, b)` 而言：
+- `Boolean` 是**无索引类型**（`has_indices = false`），`filter_accessible_constrs`
+  走快速路径无条件标记所有构造器可达
+- `b := true` 是值层面的精化，不影响 `Boolean` 类型的构造器集合
+- 即使 `cxt.env` 中有 `b = SumCase("true")`，`filter_accessible_constrs` 也从不检查 env
+
+### 修复思路
+
+#### 方案 A：值一致性检查（针对无索引类型）
+
+在 `filter_accessible_constrs` 的快速路径中（`:276-282`），不再无条件标记所有
+构造器可达，而是加上值一致性检查：
+
+```
+if !has_indices {
+    for constr_def in all_constrs {
+        // 检查环境中被匹配的变量是否已被 refine 到某个具体构造器
+        // + 备选构造器与该细化值兼容
+        if value_consistent(cxt, ori, constr_def) {
+            accessible.push(...)
+        }
+    }
+}
+```
+
+**难点**：
+- `filter_accessible_constrs` 当前没有 `ori` 参数，需要从 arm tuple 传入
+- `ori` 是完整的元组值 `(b, b)`，需要按字段投影得到当前字段的值 `b`
+- 投影逻辑：对 `SumCase("mk", [b, b])`，第 k 字段的值是 `datas[k].1`
+
+#### 方案 B：前置精化匹配
+
+在处理每个 head 的 `constr_ == constr` 分支中，**立即执行**一次 `check_pm_final`
+（不含 body 检查），将值精化提前应用到 `cxt`，然后传递给后续递归调用。
+
+```
+// 在 constr_ == constr 分支中：
+let refined_cxt = infer.check_pm_final(
+    &cxt,
+    constr_raw,      // 构造器原始表达式
+    typ.clone(),     // 当前字段类型
+    field_ori,       // 当前字段的投影值
+).ok().unwrap_or(cxt.clone());
+// 用 refined_cxt 替代 cxt.clone() 传入递归调用
+```
+
+**难点**：
+- `check_pm_final` 会创建临时 meta（对 `cons` 等有 Pi 参数的构造器）
+- 调用后需要 `truncate` meta，但精化后的 `cxt.env` 可能引用已回收的 meta ID
+- 对无索引类型（Boolean）不存在此问题（无 Pi 参数，无 meta 创建）
+
+#### 方案 C：在 `unify_pm` 中增加值层面分支
+
+在 `unify_pm` 中，匹配裸 `Rigid` 到 `SumCase` 时，若 `Rigid` 已被细化且细化值与
+`SumCase` 冲突，返回错误：
+
+```
+(Val::Rigid(x, sp), Val::SumCase { case_name, .. })
+    if sp.is_empty() && cxt.env[x] != self_ref  && cxt.env[x] != SumCase(case_name) =>
+{
+    Err("inconsistent refinement")
+}
+```
+
+这可以在 `filter_accessible_constrs` 的 GADT 检查路径（而非快速路径）中被触发——
+将无索引类型也放到 GADT 检查路径中，用统一的 `check_pm` 来检测值不一致。
+
+### 当前代码位置
+
+| 文件 | 行号 | 相关代码 |
+|------|------|---------|
+| `pattern_match.rs` | ~276-282 | `!has_indices` 快速路径 |
+| `pattern_match.rs` | ~448-462 | `filter_accessible_constrs` 调用处 |
+| `pattern_match.rs` | ~580-663 | `constr_ == constr` 分支 |
+| `pattern_match.rs` | ~237-320 | `filter_accessible_constrs` 实现 |
+| `elaboration.rs` | ~282-324 | `unify_pm` 的 Rigid/SumCase/Sum 处理 |
+| `elaboration.rs` | ~225 | `check_pm` 定义 |
+| `elaboration.rs` | ~233 | `check_pm_final` 定义 |

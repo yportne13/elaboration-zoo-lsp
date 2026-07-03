@@ -3127,3 +3127,23 @@ println (test (cons zero (cons zero nil)) (cons (succ zero) (cons (succ zero) ni
     }
 }
 
+#[test]
+fn test_pm_equal_var_constraint() {
+    // Test: match (b, b) where both fields are the SAME variable.
+    // Only (true,true) and (false,false) are possible. The arms
+    // (true,false) and (false,true) are statically impossible.
+    // The pattern compiler should ideally detect this and not warn.
+    let input = r#"
+def f(b: Boolean): Boolean = match (b, b) {
+    case (true, true) => true
+    case (false, false) => true
+}
+
+println(f(false))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => panic!("FAIL: {} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
