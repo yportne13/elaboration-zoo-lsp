@@ -122,6 +122,10 @@ impl Infer {
     }
     pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
+        let a = match ori.as_ref() {
+            Val::SumCase { typ, .. } => typ.clone(),
+            _ => a,
+        };
         let (t_inferred, cxt) = self.check_pm(cxt, t, a)?;
         let tmv = self.eval(&cxt.decl, &cxt.env, &t_inferred);
         let new_cxt = self.unify_pm(&cxt, &ori, &tmv, t_span).unwrap_or(cxt);
@@ -222,7 +226,7 @@ impl Infer {
         let t_span = t.to_span();
         let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)))?;
-        let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
+		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
     pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
@@ -256,11 +260,34 @@ impl Infer {
                     Ok(cxt.update_cxt(self, *x1, t_prime, true))
                 }
             }
-            (Val::Rigid(x, sp), _) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, *x, t_prime, true))
+            (Val::Rigid(x, sp), _) if sp.is_empty() => {
+                // If this Rigid has already been refined (env entry is no longer
+                // the self-reference), unify the old refinement with the new value
+                // instead of blindly overwriting.  This propagates constraints
+                // such as n = succ _l9 from an earlier field onto n = succ _l17
+                // from a later one, triggering _l9 = _l17.
+                let x_prime = lvl2ix(cxt.lvl, *x).0 as usize;
+                let already_refined = cxt.env.iter().nth(x_prime)
+                    .map(|cur| !matches!(cur.as_ref(), Val::Rigid(rx, _) if *rx == *x))
+                    .unwrap_or(false);
+                if already_refined {
+                    let cur = cxt.env.iter().nth(x_prime).unwrap().clone();
+                    self.unify_pm(cxt, &cur, &t_prime, t_span)
+                } else {
+                    Ok(cxt.update_cxt(self, *x, t_prime, true))
+                }
             }
-            (_, Val::Rigid(x, sp)) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, *x, t, true))
+            (_, Val::Rigid(x, sp)) if sp.is_empty() => {
+                let x_prime = lvl2ix(cxt.lvl, *x).0 as usize;
+                let already_refined = cxt.env.iter().nth(x_prime)
+                    .map(|cur| !matches!(cur.as_ref(), Val::Rigid(rx, _) if *rx == *x))
+                    .unwrap_or(false);
+                if already_refined {
+                    let cur = cxt.env.iter().nth(x_prime).unwrap().clone();
+                    self.unify_pm(cxt, &t, &cur, t_span)
+                } else {
+                    Ok(cxt.update_cxt(self, *x, t, true))
+                }
             }
             (
                 Val::SumCase { case_name: name1, datas: d1, .. },
