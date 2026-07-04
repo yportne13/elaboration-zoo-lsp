@@ -102,6 +102,54 @@ fn extract_base(m: ErrMsg) -> BaseMsg {
     }
 }
 
+use std::fmt;
+
+impl fmt::Display for Ctx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Ctx::Declare         => write!(f, "declaration"),
+            Ctx::FunctionDef     => write!(f, "function definition"),
+            Ctx::Print           => write!(f, "print"),
+            Ctx::EnumDef         => write!(f, "enum definition"),
+            Ctx::StructDef       => write!(f, "struct definition"),
+            Ctx::TraitDef        => write!(f, "trait definition"),
+            Ctx::ImplBlock       => write!(f, "impl block"),
+            Ctx::ImplicitBinder  => write!(f, "implicit binder"),
+            Ctx::ExplicitBinder  => write!(f, "explicit binder"),
+            Ctx::Binder          => write!(f, "binder"),
+            Ctx::Expr            => write!(f, "expression"),
+            Ctx::Atom            => write!(f, "atom"),
+            Ctx::LetBind         => write!(f, "let binding"),
+            Ctx::Lambda          => write!(f, "lambda"),
+            Ctx::PiType          => write!(f, "Pi type"),
+            Ctx::MatchArm        => write!(f, "match arm"),
+            Ctx::NewExpr         => write!(f, "`new` expression"),
+            Ctx::PackageImport   => write!(f, "package import"),
+        }
+    }
+}
+
+impl fmt::Display for BaseMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BaseMsg::Expect(tk) => write!(f, "expected {}", tk),
+            BaseMsg::EmptyVec   => write!(f, "expected at least one element"),
+            BaseMsg::ExpectRaw  => write!(f, "expected expression"),
+            BaseMsg::ExpectAtom => write!(f, "expected atom"),
+            BaseMsg::ExpectDecl => write!(f, "expected declaration"),
+        }
+    }
+}
+
+impl fmt::Display for ErrMsg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrMsg::Base(msg)       => fmt::Display::fmt(msg, f),
+            ErrMsg::In(ctx, msg)    => write!(f, "in {}: {}", ctx, msg),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct IError {
     pub msg: Span<ErrMsg>,

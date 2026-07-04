@@ -1,4 +1,5 @@
 use crate::parser_lib::*;
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TokenKind {
@@ -50,6 +51,54 @@ pub enum TokenKind {
     ErrToken,
 
     Eof,
+}
+
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKind::DefKeyword     => write!(f, "`def`"),
+            TokenKind::LetKeyword     => write!(f, "`let`"),
+            TokenKind::PrintlnKeyword => write!(f, "`println`"),
+            TokenKind::EnumKeyword    => write!(f, "`enum`"),
+            TokenKind::StructKeyword  => write!(f, "`struct`"),
+            TokenKind::TypeKeyword    => write!(f, "`Type`"),
+            TokenKind::MatchKeyword   => write!(f, "`match`"),
+            TokenKind::CaseKeyword    => write!(f, "`case`"),
+            TokenKind::NewKeyword     => write!(f, "`new`"),
+            TokenKind::TraitKeyword   => write!(f, "`trait`"),
+            TokenKind::ImplKeyword    => write!(f, "`impl`"),
+            TokenKind::ForKeyword     => write!(f, "`for`"),
+            TokenKind::ThisKeyword    => write!(f, "`this`"),
+            TokenKind::StaticKeyword  => write!(f, "`static`"),
+            TokenKind::MacroKeyword   => write!(f, "`macro_rules`"),
+            TokenKind::WhereKeyword   => write!(f, "`where`"),
+            TokenKind::PackageKeyword => write!(f, "`package`"),
+            TokenKind::ImportKeyword  => write!(f, "`import`"),
+            TokenKind::Hole           => write!(f, "`_`"),
+            TokenKind::LParen         => write!(f, "`(`"),
+            TokenKind::RParen         => write!(f, "`)`"),
+            TokenKind::LSquare        => write!(f, "`[`"),
+            TokenKind::RSquare        => write!(f, "`]`"),
+            TokenKind::LCurly         => write!(f, "`{{}}`"),
+            TokenKind::RCurly         => write!(f, "`}}`"),
+            TokenKind::Dot            => write!(f, "`.`"),
+            TokenKind::Eq             => write!(f, "`=`"),
+            TokenKind::Semi           => write!(f, "`;`"),
+            TokenKind::Colon          => write!(f, "`:`"),
+            TokenKind::Arrow          => write!(f, "`->`"),
+            TokenKind::DoubleArrow    => write!(f, "`=>`"),
+            TokenKind::Lambda         => write!(f, "`\\`"),
+            TokenKind::Comma          => write!(f, "`,`"),
+            TokenKind::Ident          => write!(f, "identifier"),
+            TokenKind::MacroIdent     => write!(f, "macro identifier"),
+            TokenKind::Num            => write!(f, "number"),
+            TokenKind::Op             => write!(f, "operator"),
+            TokenKind::Str            => write!(f, "string"),
+            TokenKind::EndLine        => write!(f, "newline"),
+            TokenKind::ErrToken       => write!(f, "unexpected token"),
+            TokenKind::Eof            => write!(f, "end of file"),
+        }
+    }
 }
 
 pub type Token<'a> = Span<(&'a str, TokenKind)>;

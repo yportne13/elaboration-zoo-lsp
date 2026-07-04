@@ -360,7 +360,7 @@ impl std::fmt::Debug for Error {
 
 impl IError {
     pub fn to_err(self) -> Error {
-        Error(self.msg.map(|x| format!("{:?}", x)), vec![])
+        Error(self.msg.map(|x| format!("{}", x)), vec![])
     }
 }
 
