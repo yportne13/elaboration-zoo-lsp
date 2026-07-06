@@ -406,7 +406,7 @@ fn paren_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((kw(LParen), kw(EndLine).option(), p, kw(EndLine).option(), kw(RParen))).map(|c| c.2)
+    Cut((kw(LParen), kw(EndLine).option(), p, (kw(EndLine).option(), kw(RParen)))).map(|c| c.2)
 }
 
 /// [ p ]
@@ -422,7 +422,7 @@ fn square_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((kw(LSquare), kw(EndLine).option(), p, kw(EndLine).option(), kw(RSquare))).map(|c| c.2)
+    Cut((kw(LSquare), kw(EndLine).option(), p, (kw(EndLine).option(), kw(RSquare)))).map(|c| c.2)
 }
 
 /// { p }
@@ -434,8 +434,7 @@ where
         kw(LCurly),
         kw(EndLine).option(),
         p,
-        kw(EndLine).option(),
-        kw(RCurly),
+        (kw(EndLine).option(), kw(RCurly)),
     ))
         .map(|c| c.2)
 }

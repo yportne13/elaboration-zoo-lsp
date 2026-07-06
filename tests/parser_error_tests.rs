@@ -904,10 +904,8 @@ def survivor: Nat = 42
 
     /// Error inside a `def` body should be recovered, and the rest of the file
     /// should still be parsed.
-    /// NOTE: current parser's `skip_until_decl` does not find a sync point
-    /// because the unclosed `(1 +` causes the rest of the file to be consumed
-    /// as part of the expression, so `def good` is never reached.
-    /// UPGRADE: should recover past unbalanced paren and parse `def good`.
+    /// After `opt_trail_nl` fix: the EndLine before `def good` is no longer eaten,
+    /// so `def good` survives.
     #[test]
     fn error_in_def_body() {
         let input = r#"
@@ -919,11 +917,11 @@ def good: Nat = 2
         assert!(result.is_some(), "should recover from bad def body");
         let (decls, errors) = result.unwrap();
         assert!(!errors.is_empty(), "unbalanced paren in body should error");
-        // UPGRADE: `def good` should survive the bad body
-        // let has_good = decls.iter().any(|d| {
-        //     matches!(d, Decl::Def { name, .. } if name.data == "good")
-        // });
-        // assert!(has_good, "should still parse `def good` after bad body");
+        // After opt_trail_nl: `def good` survives
+        let has_good = decls.iter().any(|d| {
+            matches!(d, Decl::Def { name, .. } if name.data == "good")
+        });
+        assert!(has_good, "should still parse `def good` after bad body");
     }
 
     /// Two errors in the same declaration (e.g., missing both `:` and `=`).
@@ -1104,9 +1102,9 @@ mod cascade_behaviour {
     use super::*;
 
     /// A single missing `(` should produce ONE primary error, not many.
-    /// NOTE: current parser fails to recover from the unclosed paren in
-    /// `(1 + 2`, consuming the rest of the file.  `def bar` is lost.
-    /// UPGRADE: should report the missing `)` and still parse `def bar`.
+    /// Now: `def bar` survives because `opt_trail_nl` no longer eats the
+    /// declaration separator.  Only 1 error (`expected ')'`) is produced.
+    /// UPGRADE: still want better span info and secondary note pointing to `(`.
     #[test]
     fn single_missing_paren() {
         let input = r#"
@@ -1117,21 +1115,43 @@ def bar: Nat = 3
         let result = parser(input, 0);
         assert!(result.is_some());
         let (decls, errors) = result.unwrap();
-        // UPGRADE: `bar` should survive; ideally 1–2 errors, not ≥ 2
-        let num_errors = errors.len();
-        assert!(num_errors >= 1, "expected at least 1 error for missing paren, got {}", num_errors);
+        // After opt_trail_nl fix: only 1 error (Expect(RParen)), and def bar survives.
+        // Verify def bar is actually parsed:
+        let names: Vec<&str> = decls.iter().filter_map(|d| {
+            if let Decl::Def { name, .. } = d { Some(name.data.as_str()) } else { None }
+        }).collect();
+        assert!(names.contains(&"foo"), "should parse def foo");
+        assert!(names.contains(&"bar"), "should parse def bar (was being eaten)");
+        assert_eq!(errors.len(), 1,
+            "expected exactly 1 error (missing `)`), got {}: {:?}",
+            errors.len(), errors.iter().map(|e| format!("{}", e.msg.data)).collect::<Vec<_>>());
     }
 
     /// One bad token in the middle of an expression — the error should be
     /// localised, not kill the whole sub-expression.
     #[test]
     fn bad_token_in_expr() {
+        // ROOT CAUSE of double error:
+        // 1. `@` is lexed as `Op` (see lex.rs line 258: `':' ..= '@'` includes @)
+        //    NOT as ErrToken as one might expect.
+        // 2. `prefix_binding_power` returns None for `@` → prefix fail
+        // 3. `p_atom` can't parse `@` as any atom → `In(Atom, Expect(LParen))` at `@`
+        // 4. `infix_binding_power` has a catch-all (line 741) → returns (7,8) for `@`
+        // 5. So `@` is treated as ANOTHER infix operator after the first RHS fails!
+        // 6. This advances the input past `@` to the next `+`, which ALSO atom-fails
+        // 7. Result: 2 identical errors at different positions (@ and next +)
+        //
+        // UPGRADE: `@` should NOT have infix binding power; or,
+        //          errors with the same type at adjacent positions should be merged.
         let input = r#"
 def foo: Nat = 1 + @ + 2
 "#;
         let result = parser(input, 0);
         assert!(result.is_some(), "bad token in expression should not crash");
         let (_decls, errors) = result.unwrap();
+        // Current: 2 errors because `@` is caught by the catch-all infix binding power
+        // UPGRADE: ideally 1 error about `@`
+        assert!(!errors.is_empty(), "bad token should produce at least one error");
         // UPGRADE: ideally 1 error about unexpected `@`, not cascading errors
         assert!(errors.len() <= 3,
             "expected ≤3 errors for one bad infix token, got {}",
