@@ -460,8 +460,9 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                     Some(items) => {
                         let n = items.len();
                         let mk_name = SmolStr::new(format!("Tuple{n}.mk"));
+                        let mk_span = (items[0].to_span() + items[n - 1].to_span()).map(|_| mk_name.clone());
                         items.into_iter().fold(
-                            Raw::Var(empty_span(mk_name)),
+                            Raw::Var(mk_span),
                             |acc, item| Raw::App(Box::new(acc), Box::new(item), Either::Icit(Icit::Expl))
                         )
                     }
@@ -635,7 +636,8 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            Raw::Hole(op.end_span())
 	                        }
 	                    };
-	                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new("mux"))), lhs), mhs), rhs)
+		                    let mux_span = lhs.to_span().map(|_| SmolStr::new("mux"));
+		                    Raw::app(Raw::app(Raw::app(Raw::Var(mux_span), lhs), mhs), rhs)
 	                } else if &op.data == "." {
 	                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
 	                        Ok((input_t, name)) => {
@@ -923,8 +925,9 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
                 .map(|opt_pats| match opt_pats {
                     Some(pats) if pats.len() >= 2 => {
                         let n = pats.len();
+                        let span = (pats[0].to_span() + pats[n - 1].to_span()).map(|_| SmolStr::new(format!("Tuple{n}.mk")));
                         Pattern::Con(
-                            empty_span(SmolStr::new(format!("Tuple{n}.mk"))),
+                            span,
                             pats,
                             Either::Icit(Icit::Expl),
                         )

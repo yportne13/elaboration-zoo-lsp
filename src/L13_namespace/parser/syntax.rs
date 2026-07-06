@@ -50,6 +50,12 @@ impl Pattern {
             Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => icit.clone(),
         }
     }
+    pub fn to_span(&self) -> Span<()> {
+        match self {
+            Pattern::Any(s, _) => s.to_span(),
+            Pattern::Con(s, _, _) => s.to_span(),
+        }
+    }
 }
 
 impl std::fmt::Display for Pattern {
