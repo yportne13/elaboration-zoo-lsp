@@ -522,9 +522,11 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                 input = input_t;
 
                 lhs = if &op.data == "[" {
+                    // Allow newline after [ before implicit args
+                    let (input_after_el, _) = kw(EndLine).option().parse(input, state)?;
                     let (input_t, ret) = if let Ok((input_t, (icit, raw))) = (smolstr(Ident), Cut((kw(Eq), p_raw)))
                         .map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
-                        .parse(input, state) {
+                        .parse(input_after_el, state) {
                             (
                                 input_t,
                                 Raw::App(Box::new(lhs), Box::new(raw), icit)
@@ -532,17 +534,19 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     } else {
                         let (input_t, rhs) = p_raw
                             .many1_sep((kw(T![,]), kw(EndLine).option()))
-                            .parse(input, state)?;
+                            .parse(input_after_el, state)?;
                         (input_t, rhs.into_iter().fold(lhs, Raw::app_impl))
                     };
-                    let (input_t, _) = kw(RSquare).parse(input_t, state)?;
+                    let (input_t, _) = (kw(EndLine).option(), kw(RSquare)).parse(input_t, state)?;
                     input = input_t;
                     ret
                 } else if &op.data == "(" {
+                    // Allow newline after ( before arguments, and before ) after them
+                    let (input_t, _) = kw(EndLine).option().parse(input, state)?;
                     let (input_t, rhs) = p_raw
                         .many0_sep((kw(T![,]), kw(EndLine).option()))
-                        .parse(input, state)?;
-                    let (input_t, _) = kw(RParen).parse(input_t, state)?;
+                        .parse(input_t, state)?;
+                    let (input_t, _) = (kw(EndLine).option(), kw(RParen)).parse(input_t, state)?;
                     input = input_t;
                     rhs.into_iter().fold(lhs, Raw::app)
                 } else if &op.data == "{" {
