@@ -769,8 +769,8 @@ fn p_lam_binder<'a: 'b, 'b>(
 
 fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (p_lam_binder.many1(), Cut((kw(T![=>]), p_raw)))
-        .map(|(binder, (_, body))| {
-            let ty = body.unwrap_or(Raw::Hole(empty_span(())));
+        .map(|(binder, (arrow, body))| {
+            let ty = body.unwrap_or(Raw::Hole(arrow.end_span()));
             binder
                 .into_iter()
                 .rev()
@@ -838,8 +838,8 @@ fn p_pi_binder<'a: 'b, 'b>(
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (p_pi_binder.many1(), Cut((kw(T![->]), p_raw)))
-        .map(|(binder, (_, ty))| {
-            let ty = ty.unwrap_or(Raw::Hole(empty_span(())));
+        .map(|(binder, (arrow, ty))| {
+            let ty = ty.unwrap_or(Raw::Hole(arrow.end_span()));
             binder
                 .into_iter()
                 .flat_map(|x| x.into_iter())
@@ -888,16 +888,19 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         kw(EndLine).many0(),
         p_raw,
     ))
-    .map(|(_, pattern, ann, _, val, _, _, body)| {
+    .map(|(let_kw, pattern, ann, eq_kw, val, semi_kw, _, body)| {
         let ann = ann.flatten();
-        let val = val.unwrap_or(Raw::Hole(empty_span(())));
-        let body = body.unwrap_or(Raw::Hole(empty_span(())));
+        // Place the caret right after the relevant keyword when an element is missing
+        let val_span = eq_kw.map(|s| s.end_span()).unwrap_or(let_kw.end_span());
+        let body_span = semi_kw.map(|s| s.end_span()).unwrap_or(val_span);
+        let val = val.unwrap_or(Raw::Hole(val_span));
+        let body = body.unwrap_or(Raw::Hole(body_span));
         match pattern {
             None => {
                 // Pattern is entirely missing — produce a let with holes
                 Raw::Let(
-                    empty_span(SmolStr::new("_")),
-                    Box::new(ann.unwrap_or(Raw::Hole(empty_span(())))),
+                    let_kw.end_span().map(|_| SmolStr::new("_")),
+                    Box::new(ann.unwrap_or(Raw::Hole(let_kw.end_span()))),
                     Box::new(val),
                     Box::new(body),
                 )
@@ -906,7 +909,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 // Simple identifier, no type annotation → binder (inferred type)
                 Raw::Let(
                     ident,
-                    Box::new(Raw::Hole(empty_span(()))),
+                    Box::new(Raw::Hole(let_kw.end_span())),
                     Box::new(val),
                     Box::new(body),
                 )
@@ -924,7 +927,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 // Wildcard `_` → binder named `_`
                 Raw::Let(
                     span.map(|_| SmolStr::new("_")),
-                    Box::new(ann.unwrap_or(Raw::Hole(empty_span(())))),
+                    Box::new(ann.unwrap_or(Raw::Hole(let_kw.end_span()))),
                     Box::new(val),
                     Box::new(body),
                 )
@@ -985,24 +988,25 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             // still collected and many0_sep continues to the next arm.
             Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), (kw(EndLine).option(), p_raw))))
             )
-                .map(|(_, pattern, body_outer)| {
+                .map(|(case_kw, pattern, body_outer)| {
                     let pattern = pattern.unwrap_or(Pattern::Any(
-                        empty_span(true),
+                        case_kw.end_span().map(|_| true),
                         Either::Icit(Icit::Expl),
                     ));
-                    // body_outer: Option<(inner_cut_result)>
-                    // inner_cut_result: (Option<Span<()>>, Option<(Option<Span<()>>, Raw)>)
-                    let body = body_outer
-                        .and_then(|inner| inner.1)  // Option<(Option<Span<()>>, Raw)>
-                        .map(|(_, raw)| raw)           // Option<Raw>
-                        .unwrap_or(Raw::Hole(empty_span(())));
+                    // body_outer: Option<(arrow_span, Option<(Option<EndLine>, Raw)>)>
+                    // arrow_span is the `=>` token, body is the parsed expression
+                    let body = body_outer.map_or(Raw::Hole(empty_span(())), |(arrow, inner)| {
+                        inner
+                            .map(|(_, raw)| raw)
+                            .unwrap_or(Raw::Hole(arrow.end_span()))
+                    });
                     (pattern, body)
                 })
                 .many0_sep(kw(EndLine)),
         ),
     ))
-        .map(|(_, scrutinee, body)| Raw::Match(
-            Box::new(scrutinee.unwrap_or(Raw::Hole(empty_span(())))),
+        .map(|(match_kw, scrutinee, body)| Raw::Match(
+            Box::new(scrutinee.unwrap_or(Raw::Hole(match_kw.end_span()))),
             body.flatten().unwrap_or_default()
         ))
         .parse(input, state)
@@ -1091,7 +1095,7 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         kw(EndLine).option(),
         p_raw,
     ))
-        .map(|(_, name, params, ret, where_clause, _, _, body)| {
+        .map(|(def_kw, name, params, ret, where_clause, eq_kw, _, body)| {
             let mut all_params = params.unwrap_or_default();
             // Desugar where clause to implicit parameters
             if let Some(clause) = where_clause {
@@ -1113,8 +1117,8 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
             Decl::Def {
                 name: name.unwrap_or(empty_span(SmolStr::new(""))),
                 params: all_params,
-                ret_type: ret.flatten().unwrap_or(Raw::Hole(empty_span(()))),
-                body: body.unwrap_or(Raw::Hole(empty_span(()))),
+                ret_type: ret.flatten().unwrap_or(Raw::Hole(def_kw.end_span())),
+                body: body.unwrap_or(Raw::Hole(eq_kw.unwrap_or(def_kw).end_span())),
             }
         })
         .parse(input, state)
@@ -1122,7 +1126,7 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 
 fn p_print<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     Cut((kw(PrintlnKeyword), p_raw))
-        .map(|(_, x)| Decl::Println(x.unwrap_or(Raw::Hole(empty_span(())))))
+        .map(|(println_kw, x)| Decl::Println(x.unwrap_or(Raw::Hole(println_kw.end_span()))))
         .parse(input, state)
 }
 
