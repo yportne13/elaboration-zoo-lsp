@@ -402,11 +402,15 @@ where
 }
 
 /// ( p )
-fn paren_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, MacroState, IError>
+fn paren_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Result<O, Span<()>>, MacroState, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((kw(LParen), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RParen)))).map(|c| c.1.map(|(_, result)| result))
+    Cut((kw(LParen), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RParen))))
+        .map(|c| match c.1 {
+            Some((_, result)) => Ok(result),
+            None => Err(c.0),
+        })
 }
 
 /// [ p ]
@@ -418,15 +422,19 @@ where
 }
 
 /// [ p ]
-fn square_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, MacroState, IError>
+fn square_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Result<O, Span<()>>, MacroState, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((kw(LSquare), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RSquare)))).map(|c| c.1.map(|(_, result)| result))
+    Cut((kw(LSquare), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RSquare))))
+        .map(|c| match c.1 {
+            Some((_, result)) => Ok(result),
+            None => Err(c.0),
+        })
 }
 
 /// { p }
-fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<O>, MacroState, IError>
+fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Result<O, Span<()>>, MacroState, IError>
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
@@ -435,7 +443,10 @@ where
         (kw(EndLine).option(), p),
         (kw(EndLine).option(), kw(RCurly)),
     ))
-        .map(|c| c.1.map(|(_, result)| result))
+        .map(|c| match c.1 {
+            Some((_, result)) => Ok(result),
+            None => Err(c.0),
+        })
 }
 
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
@@ -454,10 +465,10 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             // Tuple literal: (a, b, ...) -> TupleN.mk a b ...
             paren_cut(
                 p_raw.many1_sep((kw(T![,]), kw(EndLine).option()))
-            ).map(|opt_items| {
-                match opt_items {
-                    Some(items) if items.len() == 1 => items.into_iter().next().unwrap(),
-                    Some(items) => {
+            ).map(|result| {
+                match result {
+                    Ok(items) if items.len() == 1 => items.into_iter().next().unwrap(),
+                    Ok(items) => {
                         let n = items.len();
                         let mk_name = SmolStr::new(format!("Tuple{n}.mk"));
                         let mk_span = (items[0].to_span() + items[n - 1].to_span()).map(|_| mk_name.clone());
@@ -466,10 +477,10 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                             |acc, item| Raw::App(Box::new(acc), Box::new(item), Either::Icit(Icit::Expl))
                         )
                     }
-                    None => Raw::Hole(empty_span(())),
+                    Err(paren_span) => Raw::Hole(paren_span),
                 }
             })
-            .or(paren_cut(p_raw).map(|x| x.unwrap_or(Raw::Hole(empty_span(())))))
+            .or(paren_cut(p_raw).map(|x| x.unwrap_or_else(Raw::Hole)))
         )
         .parse(input, state)
 }
@@ -732,7 +743,7 @@ fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         (smolstr(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
             .many0_sep(kw(T![,]))
-    ).map(|x| x.unwrap_or_default());
+    ).map(|x| x.ok().unwrap_or_default());
 
     let explicit_arg = expr.map(|t| vec![(Either::Icit(Icit::Expl), t)]);
 
@@ -801,9 +812,9 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
             .many0_sep((kw(T![,]), kw(EndLine).option())),
     )
     .parse(input, state)
-    .and_then(|(i, opt)| match opt {
-        Some(v) => Ok((i, v)),
-        None => Err(IError { msg: empty_span(ErrMsg::In(Ctx::ImplicitBinder, BaseMsg::Expect(TokenKind::LSquare))) }),
+    .and_then(|(i, result)| match result {
+        Ok(v) => Ok((i, v)),
+        Err(square_span) => Err(IError { msg: square_span.map(|_| ErrMsg::In(Ctx::ImplicitBinder, BaseMsg::Expect(TokenKind::LSquare))) }),
     })
 }
 
@@ -953,24 +964,24 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Pattern> {
     (
         string(Ident),
-        brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
+        brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default())
     ).map(|x| Pattern::Con(x.0.map(|t| SmolStr::new(format!("{t}.mk"))), x.1, Either::Icit(Icit::Expl)))
         .or((
             smolstr(Ident),
-            paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.unwrap_or_default())
+            paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default())
                 .or(square_cut(
                     (smolstr(Ident), kw(Eq), p_pattern).map(|x| x.2.to_name(x.0))
                         .or(p_pattern.map(|x| x.to_impl()))
                     .many1_sep(kw(T![,]))
-                ).map(|x| x.unwrap_or_default()))
+                ).map(|x| x.ok().unwrap_or_default()))
                 .many0()
                 .map(|x| x.concat()),
         ).map(|(x, t)| Pattern::Con(x, t, Either::Icit(Icit::Expl))))
         .or(
             // Tuple pattern: (a, b, ...)
             paren_cut(p_pattern.many1_sep(kw(T![,])))
-                .map(|opt_pats| match opt_pats {
-                    Some(pats) if pats.len() >= 2 => {
+                .map(|result| match result {
+                    Ok(pats) if pats.len() >= 2 => {
                         let n = pats.len();
                         let span = (pats[0].to_span() + pats[n - 1].to_span()).map(|_| SmolStr::new(format!("Tuple{n}.mk")));
                         Pattern::Con(
@@ -979,8 +990,8 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
                             Either::Icit(Icit::Expl),
                         )
                     }
-                    Some(mut pats) => pats.pop().unwrap(), // (a) → a
-                    None => Pattern::Any(empty_span(true), Either::Icit(Icit::Expl)), // () → _
+                    Ok(mut pats) => pats.pop().unwrap(), // (a) → a
+                    Err(paren_span) => Pattern::Any(paren_span.map(|_| true), Either::Icit(Icit::Expl)), // () → _
                 })
         )
         .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
@@ -1016,7 +1027,7 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
     ))
         .map(|(match_kw, scrutinee, body)| Raw::Match(
             Box::new(scrutinee.unwrap_or(Raw::Hole(match_kw.end_span()))),
-            body.flatten().unwrap_or_default()
+            body.and_then(|r| r.ok()).unwrap_or_default()
         ))
         .parse(input, state)
 }
@@ -1027,7 +1038,7 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         string(Ident),
         paren_cut(p_raw.many1_sep(kw(T![,]))),
     ))
-        .map(|(_, scrutinee, args)| args.flatten().unwrap_or_default().into_iter()
+        .map(|(_, scrutinee, args)| args.and_then(|r| r.ok()).unwrap_or_default().into_iter()
             .fold(Raw::Var(scrutinee.map_or(empty_span(SmolStr::new("")), |x| x.map(|x| SmolStr::new(format!("{x}.mk"))))), |acc, x| 
                 Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
             ))
@@ -1169,7 +1180,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             is_trait: false,
             name: name.unwrap_or(empty_span(SmolStr::new(""))),
             params: params.unwrap_or_default(),
-            cases: fields.flatten().unwrap_or_default(),
+            cases: fields.and_then(|r| r.ok()).unwrap_or_default(),
         })
         .parse(input, state)
 }
@@ -1201,7 +1212,7 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
             cases: vec![
                 (
                     name.clone().map(|x| x.map(|x| SmolStr::new(format!("{x}.mk")))).unwrap_or(empty_span(SmolStr::new(""))),
-                    fields.clone().flatten().unwrap_or_default().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
+                    fields.clone().and_then(|r| r.ok()).unwrap_or_default().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
                     None,
                 ),
             ]
@@ -1245,7 +1256,7 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
             let mut methods = Vec::new();
             let mut extra_params = params;
             let mut assoc_defaults = Vec::new();
-            if let Some(items) = body {
+            if let Ok(items) = body {
                 for item in items {
                     match item {
                     TraitBodyItem::TypeDecl { name: type_name, default_type } => {
@@ -1296,7 +1307,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         p_pi_impl_binder_option,
         (
             smolstr(Ident),
-            square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.flatten().unwrap_or_default()),
+            square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.and_then(|r| r.ok()).unwrap_or_default()),
             Cut((
                 kw(ForKeyword),
                 p_raw,
@@ -1316,12 +1327,11 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         None => (x.1, empty_span(SmolStr::new("")), vec![], Raw::Hole(empty_span(())), x.3, false)
     })
         .map(|(params, trait_name, trait_params, name, body, need_create)| {
-            // body is Option<Option<Vec<...>>> (brace wraps in Option, and the inner
-            // parser may also return Option). Flatten to get Vec<...>.
+            // body is Option<Result<Vec<...>, Span<()>>> (brace's Result wrapped by Cut)
             let mut methods: Vec<(Decl, bool)> = Vec::new();
             let mut extra_params = trait_params;
-            // body is Option<Option<Vec<(bool, Option<Raw>, Option<(Decl, bool)>)>>>
-            if let Some(Some(items)) = body {
+            // body is Option<Result<Vec<(bool, Option<Raw>, Option<(Decl, bool)>)>, Span<()>>>
+            if let Some(Ok(items)) = body {
                 for item in items {
                     if item.0 {
                         if let Some(typ) = item.1 {
@@ -1734,7 +1744,7 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                 if is_exported {
                     state.1.insert(format!("__exported__{}", name.data), vec![]);
                 }
-                state.1.insert(name.data.clone(), rules.flatten().unwrap_or(vec![]));
+                state.1.insert(name.data.clone(), rules.and_then(|r| r.ok()).unwrap_or(vec![]));
             }
             Ok((input, ()))
         },
