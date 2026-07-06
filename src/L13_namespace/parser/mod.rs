@@ -867,39 +867,74 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
 }
 
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    // Binder path: let ident [: type] = value ; body  (fast path, no match overhead)
-    (kw(LetKeyword),
-     smolstr(Ident).or(kw(Hole).map(|s| s.map(|_| SmolStr::new("_")))),
-     (kw(Colon), p_raw).map(|(_, x)| x).option(),
-     kw(Eq),
-     p_raw,
-     kw(Semi),
-     kw(EndLine).many0(),
-     p_raw,
-    ).map(|(_, binder, ann, _, val, _, _, body)| {
-        Raw::Let(
-            binder,
-            Box::new(ann.unwrap_or(Raw::Hole(empty_span(())))),
-            Box::new(val),
-            Box::new(body),
-        )
+    // After `let` is matched, Cut commits the parser: any subsequent error
+    // is pushed to the error store (state.0) and the element becomes `None`,
+    // allowing the parser to continue and collect further errors.
+    //
+    // The LHS is parsed as a pattern (p_pattern), which covers both the
+    // simple-identifier binder path (`let x [: T] = ...; body`) and the
+    // complex-pattern match path (`let (a, b) = ...; body`).  The presence
+    // of `: type` distinguishes the two:
+    //
+    //   - ident [: type] = value ; body   →  Raw::Let    (binder path)
+    //   - pattern        = value ; body   →  Raw::Match  (pattern desugar)
+    Cut((
+        kw(LetKeyword),
+        p_pattern,
+        (kw(Colon), p_raw).map(|(_, x)| x).option(),
+        kw(Eq),
+        p_raw,
+        kw(Semi),
+        kw(EndLine).many0(),
+        p_raw,
+    ))
+    .map(|(_, pattern, ann, _, val, _, _, body)| {
+        let ann = ann.flatten();
+        let val = val.unwrap_or(Raw::Hole(empty_span(())));
+        let body = body.unwrap_or(Raw::Hole(empty_span(())));
+        match pattern {
+            None => {
+                // Pattern is entirely missing — produce a let with holes
+                Raw::Let(
+                    empty_span(SmolStr::new("_")),
+                    Box::new(ann.unwrap_or(Raw::Hole(empty_span(())))),
+                    Box::new(val),
+                    Box::new(body),
+                )
+            }
+            Some(Pattern::Con(ident, pats, _)) if pats.is_empty() && ann.is_none() => {
+                // Simple identifier, no type annotation → binder (inferred type)
+                Raw::Let(
+                    ident,
+                    Box::new(Raw::Hole(empty_span(()))),
+                    Box::new(val),
+                    Box::new(body),
+                )
+            }
+            Some(Pattern::Con(ident, _, _)) if ann.is_some() => {
+                // Simple identifier with `: type` → typed binder
+                Raw::Let(
+                    ident,
+                    Box::new(ann.unwrap()),
+                    Box::new(val),
+                    Box::new(body),
+                )
+            }
+            Some(Pattern::Any(span, _)) => {
+                // Wildcard `_` → binder named `_`
+                Raw::Let(
+                    span.map(|_| SmolStr::new("_")),
+                    Box::new(ann.unwrap_or(Raw::Hole(empty_span(())))),
+                    Box::new(val),
+                    Box::new(body),
+                )
+            }
+            Some(pat) => {
+                // Complex pattern → desugar to match expression
+                Raw::Match(Box::new(val), vec![(pat, body)])
+            }
+        }
     })
-    .or(
-        // Pattern path: let pattern = value ; body  (desugars to match)
-        (kw(LetKeyword),
-         p_pattern,
-         kw(Eq),
-         p_raw,
-         kw(Semi),
-         kw(EndLine).many0(),
-         p_raw,
-        ).map(|(_, pat, _, val, _, _, body)| {
-            Raw::Match(
-                Box::new(val),
-                vec![(pat, body)],
-            )
-        })
-    )
     .parse(input, state)
 }
 
