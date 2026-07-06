@@ -178,9 +178,11 @@ def foo(x: Nat): Nat x
 "#;
         let errors = assert_parse_errors(input);
         assert!(!errors.is_empty(), "def without `=` should error");
+        // Grouped (Eq, EndLine, p_raw) tuple: = fails → body never parsed.
+        // Single error Expect(Eq), no secondary error at 0-0.
     }
-
-    /// `def` with name but body is blank / ends prematurely.
+	
+	    /// `def` with name but body is blank / ends prematurely.
     #[test]
     fn def_missing_body() {
         let input = r#"
@@ -503,6 +505,11 @@ def t = match x {
 "#;
         let errors = assert_parse_errors(input);
         assert!(!errors.is_empty(), "match arm without `=>` should error");
+        // NOTE: errors point at `zero` not at `case`.
+        // The match arm tuple fails at kw(=>), error is SILENTLY DISCARDED
+        // by many0_sep's while let Ok(...). Visible errors are from
+        // remaining-input check / brace recovery, not from the actual problem.
+        // UPGRADE: error should say "expected '=>' after pattern" at `case`.
     }
 
     /// `match` arm with `=>` but no body expression.
@@ -515,6 +522,8 @@ def t = match x {
 "#;
         let errors = assert_parse_errors(input);
         assert!(!errors.is_empty(), "match arm without body should error");
+        // NOTE: same issue as missing_arrow — error is silently discarded.
+        // UPGRADE: error should say "expected expression after '=>'" at `case`.
     }
 
     /// Nested match with unbalanced delimiters.

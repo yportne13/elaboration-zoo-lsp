@@ -490,25 +490,6 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
     }
 }
 
-/// Replace an error's span with the operator's end offset (right after the operator).
-fn with_op_end(e: IError, op: &Span<SmolStr>) -> IError {
-    let pos = op.end_offset;
-    IError {
-        msg: Span {
-            data: e.msg.data,
-            start_offset: pos,
-            end_offset: pos,
-            path_id: e.msg.path_id,
-        }
-    }
-}
-
-/// Create an empty `Span<()>` at the operator's end offset.
-fn op_span(op: &Span<SmolStr>) -> Span<()> {
-    let pos = op.end_offset;
-    Span { data: (), start_offset: pos, end_offset: pos, path_id: op.path_id }
-}
-
 fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, MacroState, IError> {
     move |input: &'b [TokenNode<'a>], state: &mut MacroState| {
         let (mut input, mut lhs) = (|input: &'b [TokenNode<'a>], state: &mut MacroState| {
@@ -632,8 +613,8 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            mhs
 	                        }
 	                        Err(e) => {
-	                            state.0.push(with_op_end(e, &op));
-	                            Raw::Hole(op_span(&op))
+	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
+	                            Raw::Hole(op.end_span())
 	                        }
 	                    };
 	                    match kw(T![:]).parse(input, state) {
@@ -641,7 +622,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            input = input_t;
 	                        }
 	                        Err(e) => {
-	                            state.0.push(with_op_end(e, &op));
+	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
 	                        }
 	                    }
 	                    let rhs = match expr_bp(r_bp).parse(input, state) {
@@ -650,8 +631,8 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            rhs
 	                        },
 	                        Err(e) => {
-	                            state.0.push(with_op_end(e, &op));
-	                            Raw::Hole(op_span(&op))
+	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
+	                            Raw::Hole(op.end_span())
 	                        }
 	                    };
 	                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new("mux"))), lhs), mhs), rhs)
@@ -662,7 +643,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            name
 	                        },
 	                        Err(e) => {
-	                            state.0.push(with_op_end(e, &op));
+	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
 	                            empty_span(SmolStr::new(""))
 	                        }
 	                    };
@@ -674,8 +655,8 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            rhs
 	                        },
 	                        Err(e) => {
-	                            state.0.push(with_op_end(e, &op));
-	                            Raw::Hole(op_span(&op))
+	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
+	                            Raw::Hole(op.end_span())
                         }
                     };
                     Raw::app(Raw::Obj(Box::new(lhs), Some(op)), rhs)
@@ -961,8 +942,24 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         kw(MatchKeyword),
         p_raw,
         brace(
-            (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
-                .map(|(_, pattern, _, _, body)| (pattern, body))
+            // Like p_lam: Cut only after => so that once => is matched the
+            // parser commits. Body failure → Hole + error in state, arm is
+            // still collected and many0_sep continues to the next arm.
+            Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), (kw(EndLine).option(), p_raw))))
+            )
+                .map(|(_, pattern, body_outer)| {
+                    let pattern = pattern.unwrap_or(Pattern::Any(
+                        empty_span(true),
+                        Either::Icit(Icit::Expl),
+                    ));
+                    // body_outer: Option<(inner_cut_result)>
+                    // inner_cut_result: (Option<Span<()>>, Option<(Option<Span<()>>, Raw)>)
+                    let body = body_outer
+                        .and_then(|inner| inner.1)  // Option<(Option<Span<()>>, Raw)>
+                        .map(|(_, raw)| raw)           // Option<Raw>
+                        .unwrap_or(Raw::Hole(empty_span(())));
+                    (pattern, body)
+                })
                 .many0_sep(kw(EndLine)),
         ),
     ))
@@ -1029,8 +1026,6 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         .or(p_new)
         .parse(input, state)
         .map_err(|_e| IError {
-            // Discard the last alternative's specific error (e.g. `Expect(NewKeyword)`)
-            // and always say "expected expression" at the current input position.
             msg: input
                 .first()
                 .map(|x| x.map(|_| ErrMsg::In(Ctx::Expr, BaseMsg::ExpectRaw)))

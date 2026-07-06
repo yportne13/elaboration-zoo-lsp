@@ -52,6 +52,17 @@ impl<T> Span<T> {
     pub fn contains(&self, offset: usize) -> bool {
         offset >= self.start_offset as usize && offset < self.end_offset as usize
     }
+    /// Copy the span offsets & path from another span, keeping own data.
+    pub fn with_span(mut self, span: Span<()>) -> Self {
+        self.start_offset = span.start_offset;
+        self.end_offset = span.end_offset;
+        self.path_id = span.path_id;
+        self
+    }
+    /// Return a zero-width `Span<()>` at `self`'s end position.
+    pub fn end_span(&self) -> Span<()> {
+        Span { data: (), start_offset: self.end_offset, end_offset: self.end_offset, path_id: self.path_id }
+    }
     pub fn diagnostic<U: AsRef<str>>(&self, severity: Severity, msg: U) -> Diagnostic {
         Diagnostic {
             severity,
