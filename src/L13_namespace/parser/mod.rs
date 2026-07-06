@@ -768,9 +768,10 @@ fn p_lam_binder<'a: 'b, 'b>(
 }
 
 fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_lam_binder.many1(), Cut((kw(T![=>]), p_raw)))
+    (p_lam_binder.many1(), Cut((kw(T![=>]), (kw(EndLine).option(), p_raw))))
         .map(|(binder, (arrow, body))| {
-            let ty = body.unwrap_or(Raw::Hole(arrow.end_span()));
+            // body: Option<(Option<Span<()>>, Raw)>
+            let ty = body.map(|(_, raw)| raw).unwrap_or(Raw::Hole(arrow.end_span()));
             binder
                 .into_iter()
                 .rev()
@@ -837,9 +838,10 @@ fn p_pi_binder<'a: 'b, 'b>(
 }
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_pi_binder.many1(), Cut((kw(T![->]), p_raw)))
+    (p_pi_binder.many1(), Cut((kw(T![->]), (kw(EndLine).option(), p_raw))))
         .map(|(binder, (arrow, ty))| {
-            let ty = ty.unwrap_or(Raw::Hole(arrow.end_span()));
+            // ty: Option<(Option<Span<()>>, Raw)>
+            let ty = ty.map(|(_, raw)| raw).unwrap_or(Raw::Hole(arrow.end_span()));
             binder
                 .into_iter()
                 .flat_map(|x| x.into_iter())
@@ -881,9 +883,11 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     Cut((
         kw(LetKeyword),
         p_pattern,
-        (kw(Colon), p_raw).map(|(_, x)| x).option(),
+        // Allow newline after `:` before the type, like `def`
+        (kw(Colon), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
         kw(Eq),
-        p_raw,
+        // Allow newline after `=` before the value, like `def`
+        (kw(EndLine).option(), p_raw),
         kw(Semi),
         kw(EndLine).many0(),
         p_raw,
@@ -893,7 +897,8 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         // Place the caret right after the relevant keyword when an element is missing
         let val_span = eq_kw.map(|s| s.end_span()).unwrap_or(let_kw.end_span());
         let body_span = semi_kw.map(|s| s.end_span()).unwrap_or(val_span);
-        let val = val.unwrap_or(Raw::Hole(val_span));
+        // val is now Option<(Option<EndLine>, Raw)> due to the grouped tuple
+        let val = val.map(|(_, raw)| raw).unwrap_or(Raw::Hole(val_span));
         let body = body.unwrap_or(Raw::Hole(body_span));
         match pattern {
             None => {
