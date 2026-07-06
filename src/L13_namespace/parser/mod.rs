@@ -406,7 +406,7 @@ fn paren_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option<
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((kw(LParen), kw(EndLine).option(), p, (kw(EndLine).option(), kw(RParen)))).map(|c| c.2)
+    Cut((kw(LParen), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RParen)))).map(|c| c.1.map(|(_, result)| result))
 }
 
 /// [ p ]
@@ -422,7 +422,7 @@ fn square_cut<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], Option
 where
     P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
 {
-    Cut((kw(LSquare), kw(EndLine).option(), p, (kw(EndLine).option(), kw(RSquare)))).map(|c| c.2)
+    Cut((kw(LSquare), (kw(EndLine).option(), p), (kw(EndLine).option(), kw(RSquare)))).map(|c| c.1.map(|(_, result)| result))
 }
 
 /// { p }
@@ -432,11 +432,10 @@ where
 {
     Cut((
         kw(LCurly),
-        kw(EndLine).option(),
-        p,
+        (kw(EndLine).option(), p),
         (kw(EndLine).option(), kw(RCurly)),
     ))
-        .map(|c| c.2)
+        .map(|c| c.1.map(|(_, result)| result))
 }
 
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
@@ -759,8 +758,9 @@ fn p_lam_binder<'a: 'b, 'b>(
 }
 
 fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_lam_binder.many1(), kw(T![=>]), p_raw)
-        .map(|(binder, _, ty)| {
+    (p_lam_binder.many1(), Cut((kw(T![=>]), p_raw)))
+        .map(|(binder, (_, body))| {
+            let ty = body.unwrap_or(Raw::Hole(empty_span(())));
             binder
                 .into_iter()
                 .rev()
@@ -1000,8 +1000,13 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         .or(p_match)
         .or(p_new)
         .parse(input, state)
-        .map_err(|e| IError {
-            msg: e.msg.map(|m| ErrMsg::In(Ctx::Expr, extract_base(m)))
+        .map_err(|_e| IError {
+            // Discard the last alternative's specific error (e.g. `Expect(NewKeyword)`)
+            // and always say "expected expression" at the current input position.
+            msg: input
+                .first()
+                .map(|x| x.map(|_| ErrMsg::In(Ctx::Expr, BaseMsg::ExpectRaw)))
+                .unwrap_or(empty_span(ErrMsg::In(Ctx::Expr, BaseMsg::ExpectRaw)))
         })
 }
 

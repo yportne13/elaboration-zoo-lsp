@@ -155,6 +155,7 @@ impl<I: Copy, A, S, E, P: Parser<I, A, S, E>> RecoverExt<I, A, S, E> for P {
                 match skip(input) {
                     Some(remaining) => {
                         // Sync point found — record the error and continue.
+                        // Sync point found — record the error and continue.
                         state.push_error(err);
                         Ok((remaining, fallback()))
                     }

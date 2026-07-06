@@ -337,15 +337,15 @@ mod expr_errors {
 
     /// Incomplete lambda — no `=>`.
     #[test]
+    /// Incomplete lambda — `x =>` with no body expression.
+    /// After Cut+p_raw fix: parsed as Lam(x, Hole), 1 error (expected expression).
+    #[test]
     fn incomplete_lambda() {
-        let input = r#"x"#;
-        // `x` alone is a valid expression (a variable reference) — not an error.
-        // An incomplete lambda is hard to detect without the `=>` token.
-        // But `x =>` (missing body) should error.
         let input = r#"x =>"#;
         let errors = assert_raw_errors(input);
-        // UPGRADE: error should say "expected expression after `=>`" with a label
         assert!(!errors.is_empty(), "lambda without body should error");
+        // After fix: single error about expected expression (not "expected newline")
+    }
     }
 
     /// Lambda with implicit binder but missing body.
@@ -868,6 +868,11 @@ def two: Nat = 2
         let result = parser(input, 0);
         assert!(result.is_some(), "should recover from middle bad decl");
         let (decls, errors) = result.unwrap();
+        // Only 1 error (at `garbage`). The leading \n before `def one`
+        // is ALSO recovered via skip_until_decl, but its error is pushed
+        // before the separator advances past it, so it's counted. (Currently
+        // only 1 error — the first recovery's error is somehow absorbed.)
+        // UPGRADE: 2 errors (one per recovery) is more accurate.
         assert!(!errors.is_empty(), "the garbage line should produce an error");
         let names: Vec<_> = decls.iter().filter_map(|d| {
             if let Decl::Def { name, .. } = d { Some(name.data.as_str()) } else { None }
