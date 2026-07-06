@@ -474,12 +474,39 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_atom1, Cut((kw(T![.]), smolstr(Ident).or(smolstr(Op)))).many0())
+    let result = (p_atom1, Cut((kw(T![.]), smolstr(Ident).or(smolstr(Op)))).many0())
         .map(|(x, t)| t.into_iter().fold(x, |x, t| {
             Raw::Obj(Box::new(x), t.1)
         }))
-        .parse(input, state)
-        .map_err(|e| IError { msg: e.msg.map(|m| ErrMsg::In(Ctx::Atom, extract_base(m))) })
+        .parse(input, state);
+    match result {
+        Ok(ok) => Ok(ok),
+        Err(_e) => Err(IError {
+            msg: input
+                .first()
+                .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)))
+                .unwrap_or(empty_span(ErrMsg::Base(BaseMsg::ExpectAtom)))
+        })
+    }
+}
+
+/// Replace an error's span with the operator's end offset (right after the operator).
+fn with_op_end(e: IError, op: &Span<SmolStr>) -> IError {
+    let pos = op.end_offset;
+    IError {
+        msg: Span {
+            data: e.msg.data,
+            start_offset: pos,
+            end_offset: pos,
+            path_id: e.msg.path_id,
+        }
+    }
+}
+
+/// Create an empty `Span<()>` at the operator's end offset.
+fn op_span(op: &Span<SmolStr>) -> Span<()> {
+    let pos = op.end_offset;
+    Span { data: (), start_offset: pos, end_offset: pos, path_id: op.path_id }
 }
 
 fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, MacroState, IError> {
@@ -598,57 +625,57 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                 }
                 input = input_t;
 
-                lhs = if &op.data == "?" {
-                    let mhs = match expr_bp(0).parse(input, state) {
-                        Ok((input_t, mhs)) => {
-                            input = input_t;
-                            mhs
-                        }
-                        Err(e) => {
-                            state.0.push(e);
-                            Raw::Hole(empty_span(()))
-                        }
-                    };
-                    match kw(T![:]).parse(input, state) {
-                        Ok((input_t, _)) => {
-                            input = input_t;
-                        }
-                        Err(e) => {
-                            state.0.push(e);
-                        }
-                    }
-                    let rhs = match expr_bp(r_bp).parse(input, state) {
-                        Ok((input_t, rhs)) => {
-                            input = input_t;
-                            rhs
-                        },
-                        Err(e) => {
-                            state.0.push(e);
-                            Raw::Hole(empty_span(()))
-                        }
-                    };
-                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new("mux"))), lhs), mhs), rhs)
-                } else if &op.data == "." {
-                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
-                        Ok((input_t, name)) => {
-                            input = input_t;
-                            name
-                        },
-                        Err(e) => {
-                            state.0.push(e);
-                            empty_span(SmolStr::new(""))
-                        }
-                    };
-                    Raw::Obj(Box::new(lhs), Some(name))
-                } else {
-                    let rhs = match expr_bp(r_bp).parse(input, state) {
-                        Ok((input_t, rhs)) => {
-                            input = input_t;
-                            rhs
-                        },
-                        Err(e) => {
-                            state.0.push(e);
-                            Raw::Hole(empty_span(()))
+	                lhs = if &op.data == "?" {
+	                    let mhs = match expr_bp(0).parse(input, state) {
+	                        Ok((input_t, mhs)) => {
+	                            input = input_t;
+	                            mhs
+	                        }
+	                        Err(e) => {
+	                            state.0.push(with_op_end(e, &op));
+	                            Raw::Hole(op_span(&op))
+	                        }
+	                    };
+	                    match kw(T![:]).parse(input, state) {
+	                        Ok((input_t, _)) => {
+	                            input = input_t;
+	                        }
+	                        Err(e) => {
+	                            state.0.push(with_op_end(e, &op));
+	                        }
+	                    }
+	                    let rhs = match expr_bp(r_bp).parse(input, state) {
+	                        Ok((input_t, rhs)) => {
+	                            input = input_t;
+	                            rhs
+	                        },
+	                        Err(e) => {
+	                            state.0.push(with_op_end(e, &op));
+	                            Raw::Hole(op_span(&op))
+	                        }
+	                    };
+	                    Raw::app(Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new("mux"))), lhs), mhs), rhs)
+	                } else if &op.data == "." {
+	                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
+	                        Ok((input_t, name)) => {
+	                            input = input_t;
+	                            name
+	                        },
+	                        Err(e) => {
+	                            state.0.push(with_op_end(e, &op));
+	                            empty_span(SmolStr::new(""))
+	                        }
+	                    };
+	                    Raw::Obj(Box::new(lhs), Some(name))
+	                } else {
+	                    let rhs = match expr_bp(r_bp).parse(input, state) {
+	                        Ok((input_t, rhs)) => {
+	                            input = input_t;
+	                            rhs
+	                        },
+	                        Err(e) => {
+	                            state.0.push(with_op_end(e, &op));
+	                            Raw::Hole(op_span(&op))
                         }
                     };
                     Raw::app(Raw::Obj(Box::new(lhs), Some(op)), rhs)
@@ -827,8 +854,9 @@ fn p_pi_binder<'a: 'b, 'b>(
 }
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    (p_pi_binder.many1(), kw(T![->]), p_raw)
-        .map(|(binder, _, ty)| {
+    (p_pi_binder.many1(), Cut((kw(T![->]), p_raw)))
+        .map(|(binder, (_, ty))| {
+            let ty = ty.unwrap_or(Raw::Hole(empty_span(())));
             binder
                 .into_iter()
                 .flat_map(|x| x.into_iter())

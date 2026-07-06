@@ -344,11 +344,10 @@ mod expr_errors {
         let input = r#"x =>"#;
         let errors = assert_raw_errors(input);
         assert!(!errors.is_empty(), "lambda without body should error");
-        // After fix: single error about expected expression (not "expected newline")
-    }
-    }
-
-    /// Lambda with implicit binder but missing body.
+	        // After fix: single error about expected expression (not "expected newline")
+	    }
+	
+	    /// Lambda with implicit binder but missing body.
     #[test]
     fn incomplete_implicit_lambda() {
         let input = r#"[x] =>"#;
@@ -362,6 +361,7 @@ mod expr_errors {
         let input = r#"a +"#;
         let errors = assert_raw_errors(input);
         assert!(!errors.is_empty(), "trailing operator should error");
+        // After fixes: error is "expected atom" at op.end_offset (right after +)
     }
 
     /// Empty parentheses — `()` used as an expression.
@@ -419,6 +419,10 @@ mod type_errors {
         let input = r#"(x : Nat) ->"#;
         let errors = assert_raw_errors(input);
         assert!(!errors.is_empty(), "Pi type missing codomain should error");
+        // NOTE: p_pi has the same issue as p_lam had — no Cut around (kw(Arrow), p_raw).
+        // When p_raw fails after `->`, the tuple fails and .or() falls back to
+        // fun_or_spine, which may parse (x : Nat) differently.
+        // UPGRADE: same Cut fix as p_lam: wrap (kw(Arrow), p_raw)
         // UPGRADE: error should say "expected type after `->`"
     }
 
