@@ -225,7 +225,7 @@ impl Infer {
         let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
-    fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
+    pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         let t = self.force(&cxt.decl, t);
         let t_prime = self.force(&cxt.decl, t_prime);

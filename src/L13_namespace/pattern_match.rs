@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
 };
 
 use smol_str::SmolStr;
@@ -36,6 +36,18 @@ impl std::fmt::Display for Warning {
 #[derive(Debug, Clone)]
 struct PatConstructor {
     data: Vec<(usize, Vec<PatternDetail>)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArmState {
+    pub arm: MatchArm,
+    pub idx: usize,
+    pub cxt: Cxt,
+    pub new_heads: Vec<(Rc<Val>, Span<SmolStr>, Icit)>,
+    pub target_typ: Rc<Val>,
+    pub ori: Rc<Val>,
+    pub patcon: PatConstructor,
+    pub is_impl: bool,
 }
 
 impl PatConstructor {
@@ -159,7 +171,6 @@ impl PatConstructor {
 pub struct Compiler {
     warnings: Vec<Warning>,
     reachable: HashMap<usize, ()>,
-    checked_ret: HashSet<Raw>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     ret_type: Rc<Val>,
     /// Collected type errors from branch bodies; all branches are checked
@@ -177,7 +188,6 @@ impl Compiler {
         Compiler {
             warnings: Vec::new(),
             reachable: HashMap::new(),
-            checked_ret: HashSet::new(),
             pats: Vec::new(),
             ret_type,
             errors: Vec::new(),
@@ -330,53 +340,48 @@ impl Compiler {
         &mut self,
         infer: &mut Infer,
         heads: &[(Rc<Val>, Span<SmolStr>, Icit)],
-        arms: &[(MatchArm, usize, Cxt, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
+        arms: &[ArmState],
         context: &MatchContext,
     ) -> Result<bool, Error> {
         match heads {
             [] => match arms {
-                [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
-                    let patcon_raw = patcon.clone().to_raw();
-                    // Try patcon_raw only (includes GADT implicits);
-                    // NO fallback to raw — only patcon_raw is used.
-                    let (_, cxt) = match infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone()) {
-                        Ok(x) => x,
-                        Err(e) => {
-                            self.errors.push(e);
-                            return Ok(false);
-                        }
-                    };
-                    self.reachable.insert(*idx, ());
-                    if self.checked_ret.contains(raw) {
-                        return Ok(true)
-                    }
-                    //println!("prepare to check {:?}", arm.body);
-                    //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
-                    let ret_type = match self.ret_type.as_ref() {
-                        Val::Flex(_, _) => &self.ret_type,
-                        _ => {
-                            let ret_type = infer.quote(&cxt.decl, cxt.lvl, &self.ret_type);
-                            &infer.eval(&cxt.decl, &cxt.env, &ret_type)
-                        },
-                    };
-                    let ret = match infer.check::<false>(&cxt, arm.body.0.clone(), ret_type) {
-                        Ok(ret) => ret,
-                        Err(e) => {
-                            // Collect the type error but continue checking other branches
-                            self.errors.push(e);
-                            self.checked_ret.insert(raw.clone());
-                            return Ok(false);
-                        }
-                    };
-                    self.checked_ret.insert(raw.clone());
-                    let patcon = patcon.clone().clean();
-                    //TODO:check patcon is clean
-                    if !patcon.data.is_empty() {
-                        self.pats.push((patcon.data[0].1[0].clone(), ret));
-                    }
-                    Ok(true)
+	                [arm, ..] if arm.arm.pats.is_empty() || arm.arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
+	                    let patcon_raw = arm.patcon.clone().to_raw();
+	                    // Try patcon_raw only (includes GADT implicits);
+	                    // NO fallback to raw — only patcon_raw is used.
+	                    let (_, cxt) = match infer.check_pm_final(&arm.cxt, patcon_raw, arm.target_typ.clone(), arm.ori.clone()) {
+	                        Ok(x) => x,
+	                        Err(e) => {
+	                            self.errors.push(e);
+	                            return Ok(false);
+	                        }
+	                    };
+	                    self.reachable.insert(arm.idx, ());
+	                    //println!("prepare to check {:?}", arm.arm.body);
+	                    //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
+	                    let ret_type = match self.ret_type.as_ref() {
+	                        Val::Flex(_, _) => &self.ret_type,
+	                        _ => {
+	                            let ret_type = infer.quote(&cxt.decl, cxt.lvl, &self.ret_type);
+	                            &infer.eval(&cxt.decl, &cxt.env, &ret_type)
+	                        },
+	                    };
+	                    let ret = match infer.check::<false>(&cxt, arm.arm.body.0.clone(), ret_type) {
+	                        Ok(ret) => ret,
+	                        Err(e) => {
+	                            // Collect the type error but continue checking other branches
+	                            self.errors.push(e);
+	                            return Ok(false);
+	                        }
+	                    };
+	                    let patcon = arm.patcon.clone().clean();
+	                    //TODO:check patcon is clean
+	                    if !patcon.data.is_empty() {
+	                        self.pats.push((patcon.data[0].1[0].clone(), ret));
+	                    }
+	                    Ok(true)
                 },
-                [arm, ..] => Err(Error(match &arm.0.pats[0] {
+	                [arm, ..] => Err(Error(match &arm.arm.pats[0] {
                     Pattern::Any(span, _) => span.map(|_| "invalid pattern".to_owned()),
                     Pattern::Con(span, _, _) => span.clone().map(|x| format!("invalid pattern {}", x)),
                 }, vec![])),
@@ -385,37 +390,37 @@ impl Compiler {
             [(typ, head_name, icit), heads_rest @ ..] => {
                 let not_necessary = arms
                     .iter()
-                    .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
+                    .all(|arm| matches!(arm.arm.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
                 if not_necessary {
                     let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), Either::Icit(*icit)));
                     let new_arms = arms
                         .iter()
                         .map(|arm| {
-                            let cxt = &arm.2;
                             // Compute the unique implicit name ONCE per arm,
-                            // shared by cxt bind, arm.3 bind, and patcon.
+                            // shared by cxt bind and patcon.
                             let imp = self.make_implicit_name(&head_name);
-                            (
-                                MatchArm {
-                                    pats: arm.0.pats.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]),
-                                    body: arm.0.body.clone(),
+                            let new_arm = ArmState {
+                                arm: MatchArm {
+                                    pats: arm.arm.pats.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]),
+                                    body: arm.arm.body.clone(),
                                 },
-                                arm.1,
-                                if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
-                                    cxt.clone()
+                                idx: arm.idx,
+                                cxt: if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.arm.pats.first() {
+                                    arm.cxt.clone()
                                 } else {
-                                    cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
+                                    arm.cxt.bind(imp.clone(), infer.quote(&arm.cxt.decl, arm.cxt.lvl, typ), typ.clone())
                                 },
-                                arm.3.bind(imp.clone(), infer.quote(&arm.3.decl, arm.3.lvl, typ), typ.clone()),
-                                arm.4.clone(),
-                                arm.5.clone(),
-                                arm.6.clone(),
-                                if *icit == Icit::Impl {
-                                    arm.7.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
+                                new_heads: vec![],
+                                target_typ: arm.target_typ.clone(),
+                                ori: arm.ori.clone(),
+                                patcon: if *icit == Icit::Impl {
+                                    arm.patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
                                 } else {
-                                    arm.7.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
+                                    arm.patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
                                 },
-                            )
+                                is_impl: false,
+                            };
+                            new_arm
                         })
                         .collect::<Vec<_>>();
                     self.compile_aux(infer, heads_rest, &new_arms, &new_context)
@@ -444,10 +449,10 @@ impl Compiler {
                                 true
                             } else {
                                 arms.first()
-                                    .and_then(|(_, _, _, cxt_for_filter, _, _, _, _)| {
+                                    .and_then(|arm| {
                                         self.filter_accessible_constrs(
                                             infer,
-                                            cxt_for_filter,
+                                            &arm.cxt,
                                             typ,
                                             &constrs[..],
                                         )
@@ -461,7 +466,13 @@ impl Compiler {
 
                             let remaining_arms = arms
                                 .iter()
-                                .filter_map(|(arm, idx, cxt, cxt_for_filter, raw, target_typ, ori, patcon)| {
+                                .filter_map(|arm_state| {
+                                    let arm = &arm_state.arm;
+                                    let idx = arm_state.idx;
+                                    let cxt = &arm_state.cxt;
+                                    let target_typ = &arm_state.target_typ;
+                                    let ori = &arm_state.ori;
+                                    let patcon = &arm_state.patcon;
                                     // Save the head type before it gets shadowed
                                     // below. Needed for GADT index refinement
                                     // in the constr_ == constr branch.
@@ -485,19 +496,19 @@ impl Compiler {
                                         } else {
                                             Raw::Obj(Box::new(Raw::Var(empty_span(sum_name))), Some(constr.clone()))
                                         };
-                                        let (_, typ) = infer.infer_expr(cxt_for_filter, constr_raw).ok()?;
+                                        let (_, typ) = infer.infer_expr(cxt, constr_raw).ok()?;
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
                                         param.reverse();
                                         let mut typ = typ;
                                         while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
                                             if !param.is_empty() {
                                                 let val = param.pop()
-                                                    .map(|x| infer.force(&cxt_for_filter.decl, &x.1))
+                                                    .map(|x| infer.force(&cxt.decl, &x.1))
                                                     .unwrap_or(Val::U(0).into());
-                                                typ = infer.closure_apply(&cxt_for_filter.decl, closure, val);
+                                                typ = infer.closure_apply(&cxt.decl, closure, val);
                                             } else {
                                                 new_heads.push((ty.clone(), name.clone(), *icit));
-                                                typ = infer.closure_apply(&cxt_for_filter.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
+                                                typ = infer.closure_apply(&cxt.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
                                             }
                                         }
                                         // Save the constructor's return type
@@ -518,39 +529,37 @@ impl Compiler {
                                             // where a wildcard must cover all fields of the constructor.
                                             let need_new_head_expansion = arm.pats.len() == 1 && head_name.data.is_empty();
                                             let imp = self.make_implicit_name(&head_name);
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: if need_new_head_expansion {
-                                                        [
-                                                            new_heads
-                                                                .iter()
-                                                                .map(|n| Pattern::Any(x.to_span().map(|_| false), Either::Icit(n.2)))
-                                                                .collect::<Vec<_>>(),
-                                                            arm.pats[1..].to_vec(),
-                                                        ].concat()
-                                                    } else {
-                                                        arm.pats[1..].to_vec()
-                                                    },
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                if !x.data {
-                                                    cxt.clone()
-                                                } else {
-                                                    cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
-                                                },
-                                                cxt_for_filter.bind(imp.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
-                                                if need_new_head_expansion { new_heads } else { vec![] },
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                if !x.data {
-                                                    patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
-                                                } else {
-                                                    patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
-                                                },
-                                                false,
-                                            )))
+	                                            Some(Some(ArmState {
+	                                                arm: MatchArm {
+	                                                    pats: if need_new_head_expansion {
+	                                                        [
+	                                                            new_heads
+	                                                                .iter()
+	                                                                .map(|n| Pattern::Any(x.to_span().map(|_| false), Either::Icit(n.2)))
+	                                                                .collect::<Vec<_>>(),
+	                                                            arm.pats[1..].to_vec(),
+	                                                        ].concat()
+	                                                    } else {
+	                                                        arm.pats[1..].to_vec()
+	                                                    },
+	                                                    body: arm.body.clone(),
+	                                                },
+	                                                idx,
+	                                                cxt: if !x.data {
+	                                                    cxt.clone()
+	                                                } else {
+	                                                    cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
+	                                                },
+	                                                new_heads: if need_new_head_expansion { new_heads } else { vec![] },
+	                                                target_typ: target_typ.clone(),
+	                                                ori: ori.clone(),
+	                                                patcon: if !x.data {
+	                                                    patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
+	                                                } else {
+	                                                    patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
+	                                                },
+	                                                is_impl: false,
+                                            }))
                                         },
                                         [Pattern::Con(constr_, item_pats, i), ..]
                                             if &i.to_icit() == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
@@ -563,33 +572,31 @@ impl Compiler {
                                             // (head_name empty) where a single variable must cover
                                             // all constructor fields.
                                             let need_new_head_expansion = arm.pats.len() == 1 && head_name.data.is_empty();
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: if need_new_head_expansion {
-                                                        [
-                                                            new_heads
-                                                                .iter()
-                                                                .map(|n| Pattern::Any(constr_.to_span().map(|_| false), Either::Icit(n.2)))
-                                                                .collect::<Vec<_>>(),
-                                                            arm.pats[1..].to_vec(),
-                                                        ].concat()
-                                                    } else {
-                                                        arm.pats[1..].to_vec()
-                                                    },
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
-                                                cxt_for_filter.bind(constr_.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
-                                                if need_new_head_expansion { new_heads } else { vec![] },
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Bind(constr_.clone())),
-                                                false,
-                                            )))
-                                        }
-                                        [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
+	                                            Some(Some(ArmState {
+	                                                arm: MatchArm {
+	                                                    pats: if need_new_head_expansion {
+	                                                        [
+	                                                            new_heads
+	                                                                .iter()
+	                                                                .map(|n| Pattern::Any(constr_.to_span().map(|_| false), Either::Icit(n.2)))
+	                                                                .collect::<Vec<_>>(),
+	                                                            arm.pats[1..].to_vec(),
+	                                                        ].concat()
+	                                                    } else {
+	                                                        arm.pats[1..].to_vec()
+	                                                    },
+	                                                    body: arm.body.clone(),
+	                                                },
+	                                                idx,
+	                                                cxt: cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
+	                                                new_heads: if need_new_head_expansion { new_heads } else { vec![] },
+	                                                target_typ: target_typ.clone(),
+	                                                ori: ori.clone(),
+	                                                patcon: patcon.clone().clean().push(PatternDetail::Bind(constr_.clone())),
+	                                                is_impl: false,
+	                                            }))
+		                                        }
+		                                        [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
                                             // Count user-written implicit binding patterns
                                             // at the front of item_pats, e.g. [l=lll] in
                                             // cons[l=lll](x, xs). These are Con patterns with
@@ -615,36 +622,30 @@ impl Compiler {
                                             let consumed_implicit_count = implicit_param_names.len();
                                             let explicit_pats = &item_pats[implicit_count..];
 
-                                            let mut new_cxt = cxt.clone();
-                                            let mut new_cxt_ff = cxt_for_filter.clone();
-                                            let mut new_patcon = patcon.clone().clean()
-                                                .push(PatternDetail::Con(constr_.clone(), vec![]))
-                                                .new_level(new_heads_len);
+	                                            let mut new_cxt = cxt.clone();
+	                                            let mut new_patcon = patcon.clone().clean()
+	                                                .push(PatternDetail::Con(constr_.clone(), vec![]))
+	                                                .new_level(new_heads_len);
 
-                                            // Bind each user-written implicit variable and
-                                            // push a named-implicit Any to the patcon.
-                                            for (k, ip_name) in implicit_param_names.iter().enumerate() {
-                                                if let Some(Pattern::Con(var_name, _, _)) = item_pats.get(k) {
-                                                    let (ty, ..) = &new_heads.iter()
-                                                        .filter(|(_, _, icit)| *icit == Icit::Impl)
-                                                        .nth(k)
-                                                        .unwrap();
-                                                    let imp = var_name.clone();
-                                                    new_cxt = new_cxt.bind(
-                                                        imp.clone(),
-                                                        infer.quote(&new_cxt.decl, new_cxt.lvl, ty),
-                                                        ty.clone(),
-                                                    );
-                                                    new_cxt_ff = new_cxt_ff.bind(
-                                                        imp.clone(),
-                                                        infer.quote(&new_cxt_ff.decl, new_cxt_ff.lvl, ty),
-                                                        ty.clone(),
-                                                    );
-                                                    new_patcon = new_patcon.clean().push(
-                                                        PatternDetail::Any(imp, Some(ip_name.clone()), Icit::Impl),
-                                                    );
-                                                }
-                                            }
+	                                            // Bind each user-written implicit variable and
+	                                            // push a named-implicit Any to the patcon.
+	                                            for (k, ip_name) in implicit_param_names.iter().enumerate() {
+	                                                if let Some(Pattern::Con(var_name, _, _)) = item_pats.get(k) {
+	                                                    let (ty, ..) = &new_heads.iter()
+	                                                        .filter(|(_, _, icit)| *icit == Icit::Impl)
+	                                                        .nth(k)
+	                                                        .unwrap();
+	                                                    let imp = var_name.clone();
+	                                                    new_cxt = new_cxt.bind(
+	                                                        imp.clone(),
+	                                                        infer.quote(&new_cxt.decl, new_cxt.lvl, ty),
+	                                                        ty.clone(),
+	                                                    );
+	                                                    new_patcon = new_patcon.clean().push(
+	                                                        PatternDetail::Any(imp, Some(ip_name.clone()), Icit::Impl),
+	                                                    );
+	                                                }
+	                                            }
 
                                             // Apply GADT index refinement:
                                             // unify the constructor's return
@@ -665,21 +666,21 @@ impl Compiler {
                                                     .iter()
                                                     .filter(|(_, _, i)| *i == Icit::Impl)
                                                     .collect();
-                                                let mut fc_for_refine = new_cxt_ff.clone();
-                                                for (ty, name, _) in impl_heads.iter().skip(consumed_implicit_count) {
-                                                    let imp = self.make_implicit_name(name);
-                                                    fc_for_refine = fc_for_refine.bind(
-                                                        imp,
-                                                        infer.quote(&fc_for_refine.decl, fc_for_refine.lvl, ty),
-                                                        ty.clone(),
-                                                    );
-                                                }
-                                                new_cxt_ff = infer.unify_pm(
-                                                    &fc_for_refine,
-                                                    &head_typ,
-                                                    constr_ret,
-                                                    empty_span(()),
-                                                ).unwrap();
+	                                                let mut fc_for_refine = new_cxt.clone();
+	                                                for (ty, name, _) in impl_heads.iter().skip(consumed_implicit_count) {
+	                                                    let imp = self.make_implicit_name(name);
+	                                                    fc_for_refine = fc_for_refine.bind(
+	                                                        imp,
+	                                                        infer.quote(&fc_for_refine.decl, fc_for_refine.lvl, ty),
+	                                                        ty.clone(),
+	                                                    );
+	                                                }
+	                                                new_cxt = infer.unify_pm(
+	                                                    &fc_for_refine,
+	                                                    &head_typ,
+	                                                    constr_ret,
+	                                                    empty_span(()),
+	                                                ).unwrap();
                                             }
 
                                             // The consumed Implicit params have been bound;
@@ -690,44 +691,40 @@ impl Compiler {
                                                 .cloned()
                                                 .collect();
 
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: explicit_pats
-                                                        .iter()
-                                                        .chain(&arm.pats[1..])
-                                                        .cloned()
-                                                        .collect(),
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                new_cxt,
-                                                new_cxt_ff,
-                                                remaining_new_heads,
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                new_patcon,
-                                                false,
-                                            )))
-                                        }
-                                        _ => if *icit == Icit::Impl {
-                                            let imp = self.make_implicit_name(&head_name);
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: arm.pats.clone(),
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
-                                                cxt_for_filter.bind(imp.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
-                                                vec![],
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), Icit::Impl)),
-                                                true,
-                                            )))
-                                        } else {None},
+	                                            Some(Some(ArmState {
+	                                                arm: MatchArm {
+	                                                    pats: explicit_pats
+	                                                        .iter()
+	                                                        .chain(&arm.pats[1..])
+	                                                        .cloned()
+	                                                        .collect(),
+	                                                    body: arm.body.clone(),
+	                                                },
+	                                                idx,
+	                                                cxt: new_cxt,
+	                                                new_heads: remaining_new_heads,
+	                                                target_typ: target_typ.clone(),
+	                                                ori: ori.clone(),
+	                                                patcon: new_patcon,
+	                                                is_impl: false,
+	                                            }))
+	                                        }
+	                                        _ => if *icit == Icit::Impl {
+	                                            let imp = self.make_implicit_name(&head_name);
+	                                            Some(Some(ArmState {
+	                                                arm: MatchArm {
+	                                                    pats: arm.pats.clone(),
+	                                                    body: arm.body.clone(),
+	                                                },
+	                                                idx,
+	                                                cxt: cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
+	                                                new_heads: vec![],
+	                                                target_typ: target_typ.clone(),
+	                                                ori: ori.clone(),
+	                                                patcon: patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), Icit::Impl)),
+		                                                is_impl: true,
+		                                            }))
+		                                        } else {None},
                                     }
                                 })
                                 .collect::<Vec<_>>();
@@ -752,11 +749,11 @@ impl Compiler {
                             } else {
                                 let new_heads = remaining_arms
                                     .first()
-                                    .and_then(|x| x.as_ref().map(|y| y.4.clone()))
+                                    .and_then(|x| x.as_ref().map(|y| y.new_heads.clone()))
                                     .unwrap_or(vec![]);
                                 let is_impl = remaining_arms
                                     .first()
-                                    .and_then(|x| x.as_ref().map(|y| y.9))
+                                    .and_then(|x| x.as_ref().map(|y| y.is_impl))
                                     .unwrap_or(false);
                                 let context_ = if new_heads.is_empty() {
                                     if heads_rest.is_empty() || is_impl {
@@ -789,7 +786,6 @@ impl Compiler {
                                     &remaining_arms
                                         .into_iter()
                                         .flatten()
-                                        .map(|x| (x.0, x.1, x.2, x.3, x.5, x.6, x.7, x.8))
                                         .collect::<Vec<_>>(),
                                     &context_,
                                 )?
@@ -826,20 +822,20 @@ impl Compiler {
 	            &arms
 	                .iter()
 	                .enumerate()
-	                .map(|(idx, (pat, body))| {
-	                    (
-	                        MatchArm {
-	                            pats: vec![pat.clone()],
-	                            body: (body.clone(), idx),
-	                        },
-	                        idx,
-	                        cxt.clone(),
-	                        cxt.clone(),
-	                        pat.to_raw(),
-	                        typ.clone(),
-	                        target_val.clone(),
-	                        PatConstructor::new(),
-	                    )
+		                .map(|(idx, (pat, body))| {
+		                    ArmState {
+		                        arm: MatchArm {
+		                            pats: vec![pat.clone()],
+		                            body: (body.clone(), idx),
+		                        },
+		                        idx,
+		                        cxt: cxt.clone(),
+		                        new_heads: vec![],
+		                        target_typ: typ.clone(),
+		                        ori: target_val.clone(),
+		                        patcon: PatConstructor::new(),
+		                        is_impl: false,
+		                    }
 	                })
 	                .collect::<Vec<_>>(),
 	            &MatchContext::Outermost,
