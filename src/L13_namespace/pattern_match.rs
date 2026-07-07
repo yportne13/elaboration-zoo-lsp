@@ -335,17 +335,17 @@ impl Compiler {
     ) -> Result<bool, Error> {
         match heads {
             [] => match arms {
-	                [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
-	                    let patcon_raw = patcon.clone().to_raw();
-	                    // Try patcon_raw only (includes GADT implicits);
-	                    // NO fallback to raw — only patcon_raw is used.
-	                    let (_, cxt) = match infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone()) {
-	                        Ok(x) => x,
-	                        Err(e) => {
-	                            self.errors.push(e);
-	                            return Ok(false);
-	                        }
-	                    };
+                [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
+                    let patcon_raw = patcon.clone().to_raw();
+                    // Try patcon_raw only (includes GADT implicits);
+                    // NO fallback to raw — only patcon_raw is used.
+                    let (_, cxt) = match infer.check_pm_final(cxt, patcon_raw, target_typ.clone(), ori.clone()) {
+                        Ok(x) => x,
+                        Err(e) => {
+                            self.errors.push(e);
+                            return Ok(false);
+                        }
+                    };
                     self.reachable.insert(*idx, ());
                     if self.checked_ret.contains(raw) {
                         return Ok(true)
