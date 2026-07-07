@@ -1,0 +1,2056 @@
+   Compiling elaboration-zoo-lsp v0.1.0 (F:\projects\hermes\elaboration-zoo-lsp)
+warning: unused import: `std::time::Duration`
+ --> src\lib.rs:4:5
+  |
+4 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `hash::Hash`, `marker::PhantomData`, `ops::Add`, and `str::pattern::Pattern`
+ --> src\parser_lib_resilient.rs:1:23
+  |
+1 | use std::{fmt::Debug, ops::Add, str::pattern::Pattern, hash::Hash, marker::PhantomData};
+  |                       ^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Severity`
+ --> src\parser_lib_resilient.rs:3:43
+  |
+3 | pub use crate::parser_lib::{Span, ToSpan, Severity, Diagnostic, unescape};
+  |                                           ^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L03_holes\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L04_implicit\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Either` and `Raw`
+ --> src\L04_implicit\mod.rs:3:22
+  |
+3 | use parser::syntax::{Either, Icit, Raw};
+  |                      ^^^^^^        ^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L04_implicit\elaboration.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L04_implicit\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L05_pruning\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Either` and `Raw`
+ --> src\L05_pruning\mod.rs:3:22
+  |
+3 | use parser::syntax::{Either, Icit, Raw};
+  |                      ^^^^^^        ^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L05_pruning\elaboration.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Ix` and `cxt::NameOrigin`
+ --> src\L05_pruning\elaboration.rs:6:5
+  |
+6 |     cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Either, Icit, Raw}, Closure, Cxt, Error, Infer, Ix, Tm, VTy, Val
+  |     ^^^^^^^^^^^^^^^                                                                                       ^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L05_pruning\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Error`
+ --> src\L05_pruning\unification.rs:6:5
+  |
+6 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, lvl2ix,
+  |     ^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L06_string\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Either` and `Raw`
+ --> src\L06_string\mod.rs:3:22
+  |
+3 | use parser::syntax::{Either, Icit, Raw};
+  |                      ^^^^^^        ^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L06_string\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Ix` and `cxt::NameOrigin`
+ --> src\L06_string\elaboration.rs:8:5
+  |
+8 |     cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val
+  |     ^^^^^^^^^^^^^^^                                                                                                     ^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L06_string\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Error`
+ --> src\L06_string\unification.rs:6:5
+  |
+6 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, lvl2ix,
+  |     ^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L07_sum_type\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Either` and `Pattern`
+ --> src\L07_sum_type\mod.rs:3:22
+  |
+3 | use parser::syntax::{Either, Icit, Pattern, Raw};
+  |                      ^^^^^^        ^^^^^^^
+
+warning: unused import: `DecisionTree`
+ --> src\L07_sum_type\mod.rs:4:31
+  |
+4 | use pattern_match::{Compiler, DecisionTree};
+  |                               ^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L07_sum_type\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `list::List`
+ --> src\L07_sum_type\elaboration.rs:5:13
+  |
+5 | use crate::{list::List, parser_lib::Span, L07_sum_type::{parser::syntax::Pattern, pattern_match::Compiler, PatternDetail}};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `Ix` and `cxt::NameOrigin`
+ --> src\L07_sum_type\elaboration.rs:8:41
+  |
+8 |     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
+  |                                         ^^
+9 |     cxt::NameOrigin,
+  |     ^^^^^^^^^^^^^^^
+
+warning: unused import: `list::List`
+ --> src\L07_sum_type\parser\syntax.rs:1:13
+  |
+1 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L07_sum_type\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Error`
+ --> src\L07_sum_type\unification.rs:6:5
+  |
+6 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+  |     ^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L07a_depend_pm\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Pattern` and `Raw`
+ --> src\L07a_depend_pm\mod.rs:3:36
+  |
+3 | use parser::syntax::{Either, Icit, Pattern, Raw};
+  |                                    ^^^^^^^  ^^^
+
+warning: unused import: `DecisionTree`
+ --> src\L07a_depend_pm\mod.rs:4:31
+  |
+4 | use pattern_match::{Compiler, DecisionTree};
+  |                               ^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src\L07a_depend_pm\cxt.rs:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src\L07a_depend_pm\elaboration.rs:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L07a_depend_pm\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `list::List`
+ --> src\L07a_depend_pm\elaboration.rs:5:13
+  |
+5 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `Ix`, `PatternDetail`, `Pattern`, and `cxt::NameOrigin`
+  --> src\L07a_depend_pm\elaboration.rs:8:41
+   |
+8  |     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
+   |                                         ^^
+9  |     cxt::NameOrigin, Lvl,
+   |     ^^^^^^^^^^^^^^^
+10 |     empty_span, lvl2ix,
+11 |     parser::syntax::{Decl, Either, Icit, Raw, Pattern},
+   |                                               ^^^^^^^
+12 |     pattern_match::Compiler,
+13 |     PatternDetail,
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `list::List`
+ --> src\L07a_depend_pm\parser\syntax.rs:1:13
+  |
+1 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused import: `ToSpan`
+ --> src\L07a_depend_pm\pattern_match.rs:6:32
+  |
+6 | use crate::{parser_lib::{Span, ToSpan}, L07a_depend_pm::{parser::syntax::Icit}};
+  |                                ^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L07a_depend_pm\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Error` and `pretty::pretty_tm`
+ --> src\L07a_depend_pm\unification.rs:6:5
+  |
+6 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+  |     ^^^^^
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L08_product_type\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Pattern` and `Raw`
+ --> src\L08_product_type\mod.rs:3:36
+  |
+3 | use parser::syntax::{Either, Icit, Pattern, Raw};
+  |                                    ^^^^^^^  ^^^
+
+warning: unused import: `DecisionTree`
+ --> src\L08_product_type\mod.rs:4:31
+  |
+4 | use pattern_match::{Compiler, DecisionTree};
+  |                               ^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src\L08_product_type\cxt.rs:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src\L08_product_type\elaboration.rs:1:5
+  |
+1 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `list::List`
+ --> src\L08_product_type\elaboration.rs:5:13
+  |
+5 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused imports: `Ix`, `PatternDetail`, `Pattern`, and `cxt::NameOrigin`
+  --> src\L08_product_type\elaboration.rs:8:41
+   |
+8  |     Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val,
+   |                                         ^^
+9  |     cxt::NameOrigin, Lvl,
+   |     ^^^^^^^^^^^^^^^
+10 |     empty_span, lvl2ix,
+11 |     parser::syntax::{Decl, Either, Icit, Raw, Pattern},
+   |                                               ^^^^^^^
+12 |     pattern_match::Compiler,
+13 |     PatternDetail,
+   |     ^^^^^^^^^^^^^
+
+warning: variant `newKeyword` should have an upper camel case name
+  --> src\L08_product_type\parser\lex.rs:13:5
+   |
+13 |     newKeyword,
+   |     ^^^^^^^^^^ help: convert the identifier to upper camel case: `NewKeyword`
+   |
+   = note: `#[warn(non_camel_case_types)]` on by default
+
+warning: unused import: `list::List`
+ --> src\L08_product_type\parser\syntax.rs:1:13
+  |
+1 | use crate::{list::List, parser_lib::Span};
+  |             ^^^^^^^^^^
+
+warning: unused import: `super::empty_span`
+  --> src\L08_product_type\parser\mod.rs:11:5
+   |
+11 | use super::empty_span;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ToSpan`
+ --> src\L08_product_type\pattern_match.rs:6:31
+  |
+6 | use crate::parser_lib::{Span, ToSpan};
+  |                               ^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L08_product_type\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Error` and `pretty::pretty_tm`
+ --> src\L08_product_type\unification.rs:6:5
+  |
+6 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+  |     ^^^^^
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L09_mltt\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Pattern` and `Raw`
+ --> src\L09_mltt\mod.rs:3:36
+  |
+3 | use parser::syntax::{Either, Icit, Pattern, Raw};
+  |                                    ^^^^^^^  ^^^
+
+warning: unused import: `DecisionTree`
+ --> src\L09_mltt\mod.rs:4:31
+  |
+4 | use pattern_match::{Compiler, DecisionTree};
+  |                               ^^^^^^^^^^^^
+
+warning: unused import: `collections::HashMap`
+ --> src\L09_mltt\elaboration.rs:1:21
+  |
+1 | use std::{cmp::max, collections::HashMap};
+  |                     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `PatternDetail` and `Pattern`
+  --> src\L09_mltt\elaboration.rs:11:47
+   |
+11 |     parser::syntax::{Decl, Either, Icit, Raw, Pattern},
+   |                                               ^^^^^^^
+12 |     pattern_match::Compiler, MetaEntry,
+13 |     PatternDetail,
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `ToSpan`
+ --> src\L09_mltt\pattern_match.rs:6:31
+  |
+6 | use crate::parser_lib::{Span, ToSpan};
+  |                               ^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L09_mltt\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Error` and `pretty::pretty_tm`
+ --> src\L09_mltt\unification.rs:6:5
+  |
+6 |     Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+  |     ^^^^^
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L10_typeclass\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L10_typeclass\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `pretty::pretty_tm` and `typeclass::Typ`
+ --> src\L10_typeclass\unification.rs:6:88
+  |
+6 |     Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
+  |                                                                                        ^^^^^^^^^^^^^^
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L11_macro\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Lvl`
+ --> src\L11_macro\elaboration.rs:9:5
+  |
+9 |     Lvl, Rc,
+  |     ^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L11_macro\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `pretty::pretty_tm` and `typeclass::Typ`
+ --> src\L11_macro\unification.rs:6:88
+  |
+6 |     Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
+  |                                                                                        ^^^^^^^^^^^^^^
+7 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Lvl`
+  --> src\L12_canonical\elaboration.rs:10:5
+   |
+10 |     Lvl, Rc, MetaVar,
+   |     ^^^
+
+warning: unused import: `HashMap`
+ --> src\L12_canonical\parser\macros.rs:5:32
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, string, p_raw, p_pi_binder, empty_span, ParserExt, kw, MacroState};
+  |                                ^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L12_canonical\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `pretty::pretty_tm`
+ --> src\L12_canonical\unification.rs:8:56
+  |
+8 |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
+  |                                                        ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Closure`, `Ix`, `Lvl`, `MetaEntry`, `MetaVar`, `Span`, `Spine`, `Tm`, `Ty`, `VTy`, `close_ty`, and `syntax::Locals`
+ --> src\L12_canonical\canonical.rs:3:12
+  |
+3 |     Infer, MetaEntry, Cxt, Rc, Val, UnifyError, Ty, Span,
+  |            ^^^^^^^^^                            ^^  ^^^^
+4 |     MetaVar, Tm, Lvl, Ix, List, Closure, VTy, syntax::Locals,
+  |     ^^^^^^^  ^^  ^^^  ^^        ^^^^^^^  ^^^  ^^^^^^^^^^^^^^
+5 |     empty_span, Raw, Either, Spine, close_ty, Icit,
+  |                              ^^^^^  ^^^^^^^^
+
+warning: unused import: `PrimFunc`
+ --> src\L13_namespace\elaboration.rs:9:41
+  |
+9 |     Closure, Cxt, DeclTm, Error, Infer, PrimFunc, Tm, VTy, Val,
+  |                                         ^^^^^^^^
+
+warning: unused imports: `HashMap` and `extract_base`
+ --> src\L13_namespace\parser\macros.rs:5:32
+  |
+5 | use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, ParserExt, kw, MacroState};
+  |                                ^^^^^^^                   ^^^^^^^^^^^^
+
+warning: unused import: `ToSpan`
+ --> src\L13_namespace\parser\derive.rs:6:31
+  |
+6 | use crate::parser_lib::{Span, ToSpan};
+  |                               ^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L13_namespace\unification.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Assertion` and `pretty::pretty_tm`
+  --> src\L13_namespace\unification.rs:9:56
+   |
+9  |     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+   |                                                        ^^^^^^^^^^^^^^^^^
+10 |     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
+   |                 ^^^^^^^^^
+
+warning: unused imports: `Closure`, `Ix`, `Lvl`, `MetaEntry`, `MetaVar`, `Span`, `Spine`, `Tm`, `Ty`, `VTy`, `close_ty`, and `syntax::Locals`
+ --> src\L13_namespace\canonical.rs:3:12
+  |
+3 |     Infer, MetaEntry, Cxt, Rc, Val, UnifyError, Ty, Span,
+  |            ^^^^^^^^^                            ^^  ^^^^
+4 |     MetaVar, Tm, Lvl, Ix, List, Closure, VTy, syntax::Locals,
+  |     ^^^^^^^  ^^  ^^^  ^^        ^^^^^^^  ^^^  ^^^^^^^^^^^^^^
+5 |     empty_span, Raw, Either, Spine, close_ty, Icit,
+  |                              ^^^^^  ^^^^^^^^
+
+warning: unused import: `parser`
+  --> src\lib.rs:49:29
+   |
+49 | use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule, MacroExpansionInfo};
+   |                             ^^^^^^
+
+warning: unused imports: `self`, `stdin`, and `stdout`
+  --> src\lib.rs:55:15
+   |
+55 | use std::io::{self, BufRead, Write, stdin, stdout};
+   |               ^^^^                  ^^^^^  ^^^^^^
+
+warning: duplicated attribute
+    --> src\L13_namespace\legacy_tests.rs:1310:1
+     |
+1310 | #[test]
+     | ^^^^^^^
+     |
+     = note: `#[warn(duplicate_macro_attributes)]` on by default
+
+warning: unused doc comment
+  --> src\L13_namespace\struct_refine_probe.rs:95:1
+   |
+95 | /// identity_vec: 重建构造函数，非绑定变量，应通过。
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `#[warn(unused_doc_comments)]` on by default
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:108:1
+    |
+108 | /// 直接 Vec 匹配，重建构造函数，应通过。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:117:1
+    |
+117 | /// 非索引依赖的返回类型（A），预约束的类型 sucessor，通过。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:129:1
+    |
+129 | /// 嵌套结构体，预约束类型，通过。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:140:1
+    |
+140 | /// 不返回绑定变量，而是返回无类型依赖的值。
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:157:1
+    |
+157 | / /// 直接 Vec 匹配，返回绑定变量 xs。最简复现。
+158 | | /// 失败模式：expected: Vec[A](_l + 1), find: Vec[A](_l)
+159 | | /// 原因：绑定 xs 的类型为 Vec[A] l'，但返回类型被细化为 Vec[A] (succ l')，无法统一。
+    | |_------------------------------------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:168:1
+    |
+168 | / /// 单层 struct，泛型 len，返回绑定变量 xs。
+169 | | /// 失败模式：expected: Vec[A](_l + 1), find: Vec[A](_l)
+    | |_-------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:182:1
+    |
+182 | / /// 两个字段，第二个字段类型依赖第一个字段的索引细化。
+183 | | /// 失败模式：expected: Fin(len + 1), find: Fin(1) 或反向。
+184 | | /// 原因：绑定 w 的类型 Fin(succ len) 中的 len 是原始的、未经 cons/nil 细化的变量。
+    | |_----------------------------------------------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:198:1
+    |
+198 | / /// 嵌套 struct，泛型 len，返回绑定尾部变量。
+199 | | /// 失败模式同 weak02。
+    | |_----------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:211:1
+    |
+211 | / /// VecHolder: Vec[A] len + Fin(succ len)，递归重建。
+212 | | /// 失败模式：expected: Fin(_l + 2), find: Fin(_n + 1)
+213 | | /// 原因：第一个字段匹配 cons (len:=succ l') 与第二个字段匹配 fsucc (len:=n) 的细化
+214 | | /// 没有传播到对方，导致 n 和 succ l' 无法统一。
+    | |_-----------------------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused doc comment
+   --> src\L13_namespace\struct_refine_probe.rs:231:1
+    |
+231 | / /// 返回值是重建结构体，使用了从内部字段提取的变量。
+232 | | /// 成功/失败？
+    | |_--------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+
+warning: unused macro definition: `assert_expected_fail`
+  --> src\L13_namespace\struct_refine_probe.rs:58:14
+   |
+58 | macro_rules! assert_expected_fail {
+   |              ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_macros)]` on by default
+
+warning: use of deprecated function `codespan_reporting::term::emit`: Use `emit_to_write_style` instead or depending on the writer use `emit_to_io_write` or `emit_to_string`
+   --> src\client.rs:184:19
+    |
+184 |             term::emit(&mut writer, &config, &files, cs_diag).unwrap();
+    |                   ^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: unused variable: `e`
+  --> src\parser_lib_resilient.rs:22:71
+   |
+22 |         move |input, state: &mut S| self.parse(input, state).or_else(|e| rhs.parse(input, state))//TODO: err combine
+   |                                                                       ^ help: if this is intentional, prefix it with an underscore: `_e`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `x`
+  --> src\L11_macro\parser\macros.rs:43:53
+   |
+43 | ...                   msg: token.map(|x| ErrMsg::Expect(*kind)),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x`
+  --> src\L12_canonical\parser\macros.rs:46:53
+   |
+46 | ...                   msg: token.map(|x| ErrMsg::Expect(*kind)),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x`
+  --> src\L13_namespace\parser\macros.rs:46:53
+   |
+46 | ...                   msg: token.map(|x| ErrMsg::Base(BaseMsg::Expect(*kind))),
+   |                                       ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+error[E0308]: mismatched types
+   --> src\L13_namespace\pattern_match.rs:443:86
+    |
+443 | ...                   accessible_constrs.into_iter().any(|x| *x == constr)
+    |                                                              --    ^^^^^^ expected `Span<SmolStr>`, found `&Span<SmolStr>`
+    |                                                              |
+    |                                                              expected because this is `parser_lib::Span<smol_str::SmolStr>`
+    |
+    = note: expected struct `parser_lib::Span<_>`
+            found reference `&parser_lib::Span<_>`
+help: consider dereferencing the borrow
+    |
+443 |                                         accessible_constrs.into_iter().any(|x| *x == *constr)
+    |                                                                                      +
+
+warning: unused import: `colored::Colorize`
+ --> src\L12_canonical\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L11_macro\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Write`
+  --> src\lib.rs:55:30
+   |
+55 | use std::io::{self, BufRead, Write, stdin, stdout};
+   |                              ^^^^^
+
+warning: unused import: `BufRead`
+  --> src\lib.rs:55:21
+   |
+55 | use std::io::{self, BufRead, Write, stdin, stdout};
+   |                     ^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L13_namespace\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L13_namespace\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L12_canonical\mod.rs:1:5
+  |
+1 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L08_product_type\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L09_mltt\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `colored::Colorize`
+ --> src\L10_typeclass\elaboration.rs:3:5
+  |
+3 | use colored::Colorize;
+  |     ^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `version`
+   --> src\client.rs:113:75
+    |
+113 |     fn publish_diagnostics(&self, uri: Url, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
+    |                                                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_version`
+
+warning: unused variable: `sp`
+   --> src\L03_holes\mod.rs:338:32
+    |
+338 |             Val::Flex(m_prime, sp) if m == m_prime => Err(UnifyError), // occurs check
+    |                                ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `x`
+   --> src\L03_holes\mod.rs:492:22
+    |
+492 |             (Val::Pi(x, a, b_closure), Val::Pi(x_prime, a_prime, b_prime_closure)) => {
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x_prime`
+   --> src\L03_holes\mod.rs:492:48
+    |
+492 |             (Val::Pi(x, a, b_closure), Val::Pi(x_prime, a_prime, b_prime_closure)) => {
+    |                                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_x_prime`
+
+warning: unused variable: `a`
+   --> src\L03_holes\mod.rs:661:25
+    |
+661 |             (Raw::Hole, a) => Ok(self.fresh_meta(cxt)),
+    |                         ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `a`
+  --> src\L04_implicit\elaboration.rs:87:25
+   |
+87 |             (Raw::Hole, a) => Ok(self.fresh_meta(cxt)),
+   |                         ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `x`
+   --> src\L04_implicit\elaboration.rs:136:22
+    |
+136 |             Raw::Lam(x, Either::Name(_), t) => {
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L04_implicit\elaboration.rs:136:42
+    |
+136 |             Raw::Lam(x, Either::Name(_), t) => {
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `sp`
+  --> src\L04_implicit\unification.rs:89:32
+   |
+89 |             Val::Flex(m_prime, sp) if m == m_prime => Err(UnifyError), // occurs check
+   |                                ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `t_t`
+   --> src\L04_implicit\unification.rs:185:41
+    |
+185 |             (Val::Lam(_, i, t_closure), t_t) => self.unify(
+    |                                         ^^^ help: if this is intentional, prefix it with an underscore: `_t_t`
+
+warning: unused variable: `x`
+   --> src\L04_implicit\unification.rs:195:22
+    |
+195 |             (Val::Pi(x, i, a, b_closure), Val::Pi(x_prime, i_prime, a_prime, b_prime_closure))
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x_prime`
+   --> src\L04_implicit\unification.rs:195:51
+    |
+195 |             (Val::Pi(x, i, a, b_closure), Val::Pi(x_prime, i_prime, a_prime, b_prime_closure))
+    |                                                   ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_x_prime`
+
+warning: unused variable: `x`
+   --> src\L05_pruning\elaboration.rs:155:22
+    |
+155 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L05_pruning\elaboration.rs:155:42
+    |
+155 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src\L05_pruning\unification.rs:115:28
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L05_pruning\unification.rs:115:31
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L05_pruning\unification.rs:115:34
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L05_pruning\unification.rs:275:37
+    |
+275 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L05_pruning\unification.rs:288:37
+    |
+288 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `x`
+   --> src\L05_pruning\unification.rs:430:22
+    |
+430 |             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x_prime`
+   --> src\L05_pruning\unification.rs:430:43
+    |
+430 |             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+    |                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_x_prime`
+
+warning: unused variable: `x`
+   --> src\L06_string\elaboration.rs:222:22
+    |
+222 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L06_string\elaboration.rs:222:42
+    |
+222 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src\L06_string\unification.rs:116:28
+    |
+116 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L06_string\unification.rs:116:31
+    |
+116 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L06_string\unification.rs:116:34
+    |
+116 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L06_string\unification.rs:280:37
+    |
+280 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L06_string\unification.rs:293:37
+    |
+293 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `x`
+   --> src\L06_string\unification.rs:435:22
+    |
+435 |             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `x_prime`
+   --> src\L06_string\unification.rs:435:43
+    |
+435 |             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+    |                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_x_prime`
+
+warning: unused variable: `p`
+  --> src\L06_string\pretty.rs:51:19
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                   ^ help: if this is intentional, prefix it with an underscore: `_p`
+
+warning: unused variable: `top_ns`
+  --> src\L06_string\pretty.rs:51:27
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                           ^^^^^^ help: if this is intentional, prefix it with an underscore: `_top_ns`
+
+warning: unused variable: `ns`
+  --> src\L06_string\pretty.rs:51:49
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                 ^^ help: if this is intentional, prefix it with an underscore: `_ns`
+
+warning: unused variable: `t`
+  --> src\L06_string\pretty.rs:51:67
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `pr`
+  --> src\L06_string\pretty.rs:51:75
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                           ^^ help: if this is intentional, prefix it with an underscore: `_pr`
+
+warning: unused variable: `a_quote`
+   --> src\L07_sum_type\cxt.rs:119:46
+    |
+119 |     pub fn fake_bind(&self, x: Span<String>, a_quote: Tm, a: Val) -> Self {
+    |                                              ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_a_quote`
+
+warning: unused variable: `x`
+   --> src\L07_sum_type\elaboration.rs:368:22
+    |
+368 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L07_sum_type\elaboration.rs:368:42
+    |
+368 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `ret_bind`
+   --> src\L07_sum_type\pattern_match.rs:181:51
+    |
+181 |                         .map(|(constr, item_typs, ret_bind)| {
+    |                                                   ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ret_bind`
+
+warning: unused variable: `item_pats`
+   --> src\L07_sum_type\pattern_match.rs:208:60
+    |
+208 | ...                   [Pattern::Con(constr_, item_pats), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `sum_name`
+   --> src\L07_sum_type\pattern_match.rs:382:17
+    |
+382 |                 sum_name,
+    |                 ^^^^^^^^ help: try ignoring the field: `sum_name: _`
+
+warning: unused variable: `item_pats`
+   --> src\L07_sum_type\pattern_match.rs:397:45
+    |
+397 |                 PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
+    |                                             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `x`
+   --> src\L07_sum_type\unification.rs:115:28
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L07_sum_type\unification.rs:115:31
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L07_sum_type\unification.rs:115:34
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `env`
+   --> src\L07_sum_type\unification.rs:298:29
+    |
+298 |             Val::Match(val, env, cases) => {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `val`
+   --> src\L07_sum_type\unification.rs:321:37
+    |
+321 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L07_sum_type\unification.rs:334:37
+    |
+334 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `x_prime`
+   --> src\L07_sum_type\unification.rs:493:43
+    |
+493 |             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+    |                                           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_x_prime`
+
+warning: unused variable: `p`
+  --> src\L07_sum_type\pretty.rs:51:19
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                   ^ help: if this is intentional, prefix it with an underscore: `_p`
+
+warning: unused variable: `top_ns`
+  --> src\L07_sum_type\pretty.rs:51:27
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                           ^^^^^^ help: if this is intentional, prefix it with an underscore: `_top_ns`
+
+warning: unused variable: `ns`
+  --> src\L07_sum_type\pretty.rs:51:49
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                 ^^ help: if this is intentional, prefix it with an underscore: `_ns`
+
+warning: unused variable: `t`
+  --> src\L07_sum_type\pretty.rs:51:67
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `pr`
+  --> src\L07_sum_type\pretty.rs:51:75
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                           ^^ help: if this is intentional, prefix it with an underscore: `_pr`
+
+warning: unused variable: `items`
+   --> src\L07_sum_type\pretty.rs:141:28
+    |
+141 |         Tm::Sum(span, tms, items) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `env`
+   --> src\L07_sum_type\mod.rs:422:29
+    |
+422 |             Val::Match(val, env, cases) => {
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_env`
+
+warning: unused variable: `a_quote`
+   --> src\L07a_depend_pm\cxt.rs:121:46
+    |
+121 |     pub fn fake_bind(&self, x: Span<String>, a_quote: Tm, a: Val, global_idx: Lvl) -> Self {
+    |                                              ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_a_quote`
+
+warning: unused variable: `ret`
+   --> src\L07a_depend_pm\elaboration.rs:184:22
+    |
+184 |                 let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ret`
+
+warning: unused variable: `x`
+   --> src\L07a_depend_pm\elaboration.rs:422:22
+    |
+422 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L07a_depend_pm\elaboration.rs:422:42
+    |
+422 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `item_pats`
+   --> src\L07a_depend_pm\pattern_match.rs:356:64
+    |
+356 | ...                   [Pattern::Con(constr_, item_pats, i), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `item_pats`
+   --> src\L07a_depend_pm\pattern_match.rs:581:45
+    |
+581 |                 PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
+    |                                             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `x`
+   --> src\L07a_depend_pm\unification.rs:115:28
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L07a_depend_pm\unification.rs:115:31
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L07a_depend_pm\unification.rs:115:34
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L07a_depend_pm\unification.rs:352:37
+    |
+352 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L07a_depend_pm\unification.rs:365:37
+    |
+365 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `p`
+  --> src\L07a_depend_pm\pretty.rs:51:19
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                   ^ help: if this is intentional, prefix it with an underscore: `_p`
+
+warning: unused variable: `top_ns`
+  --> src\L07a_depend_pm\pretty.rs:51:27
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                           ^^^^^^ help: if this is intentional, prefix it with an underscore: `_top_ns`
+
+warning: unused variable: `ns`
+  --> src\L07a_depend_pm\pretty.rs:51:49
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                 ^^ help: if this is intentional, prefix it with an underscore: `_ns`
+
+warning: unused variable: `t`
+  --> src\L07a_depend_pm\pretty.rs:51:67
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `pr`
+  --> src\L07a_depend_pm\pretty.rs:51:75
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                           ^^ help: if this is intentional, prefix it with an underscore: `_pr`
+
+warning: unused variable: `items`
+   --> src\L07a_depend_pm\pretty.rs:141:28
+    |
+141 |         Tm::Sum(span, tms, items) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `a_quote`
+   --> src\L08_product_type\cxt.rs:121:46
+    |
+121 |     pub fn fake_bind(&self, x: Span<String>, a_quote: Tm, a: Val, global_idx: Lvl) -> Self {
+    |                                              ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_a_quote`
+
+warning: unused variable: `ret`
+   --> src\L08_product_type\elaboration.rs:183:22
+    |
+183 |                 let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ret`
+
+warning: unused variable: `x`
+   --> src\L08_product_type\elaboration.rs:470:22
+    |
+470 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                      ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `t`
+   --> src\L08_product_type\elaboration.rs:470:42
+    |
+470 |             Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `item_pats`
+   --> src\L08_product_type\pattern_match.rs:353:64
+    |
+353 | ...                   [Pattern::Con(constr_, item_pats, i), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `item_pats`
+   --> src\L08_product_type\pattern_match.rs:578:45
+    |
+578 |                 PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
+    |                                             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `x`
+   --> src\L08_product_type\unification.rs:115:28
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L08_product_type\unification.rs:115:31
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L08_product_type\unification.rs:115:34
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L08_product_type\unification.rs:352:37
+    |
+352 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L08_product_type\unification.rs:365:37
+    |
+365 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `p`
+  --> src\L08_product_type\pretty.rs:51:19
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                   ^ help: if this is intentional, prefix it with an underscore: `_p`
+
+warning: unused variable: `top_ns`
+  --> src\L08_product_type\pretty.rs:51:27
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                           ^^^^^^ help: if this is intentional, prefix it with an underscore: `_top_ns`
+
+warning: unused variable: `ns`
+  --> src\L08_product_type\pretty.rs:51:49
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                 ^^ help: if this is intentional, prefix it with an underscore: `_ns`
+
+warning: unused variable: `t`
+  --> src\L08_product_type\pretty.rs:51:67
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `pr`
+  --> src\L08_product_type\pretty.rs:51:75
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                           ^^ help: if this is intentional, prefix it with an underscore: `_pr`
+
+warning: unused variable: `items`
+   --> src\L08_product_type\pretty.rs:141:28
+    |
+141 |         Tm::Sum(span, tms, items) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `x`
+   --> src\L09_mltt\elaboration.rs:161:32
+    |
+161 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `ret`
+   --> src\L09_mltt\elaboration.rs:237:22
+    |
+237 |                 let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_ret`
+
+warning: unused variable: `t`
+   --> src\L09_mltt\elaboration.rs:537:42
+    |
+537 |             Raw::Lam(x, Either::Name(_), t) => Err(Error(x.map(|_| "infer named lambda".to_owned()))),
+    |                                          ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `typ`
+  --> src\L09_mltt\parser\syntax.rs:91:28
+   |
+91 |             Raw::SumCase { typ, case_name, datas } => datas.last()
+   |                            ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `item_pats`
+   --> src\L09_mltt\pattern_match.rs:353:64
+    |
+353 | ...                   [Pattern::Con(constr_, item_pats, i), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `item_pats`
+   --> src\L09_mltt\pattern_match.rs:578:45
+    |
+578 |                 PatternDetail::Con(constr_, item_pats) if !constrs_name.contains(&constr_) => {
+    |                                             ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `x`
+   --> src\L09_mltt\unification.rs:115:28
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L09_mltt\unification.rs:115:31
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L09_mltt\unification.rs:115:34
+    |
+115 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L09_mltt\unification.rs:342:37
+    |
+342 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L09_mltt\unification.rs:355:37
+    |
+355 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `p`
+  --> src\L09_mltt\pretty.rs:51:19
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                   ^ help: if this is intentional, prefix it with an underscore: `_p`
+
+warning: unused variable: `top_ns`
+  --> src\L09_mltt\pretty.rs:51:27
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                           ^^^^^^ help: if this is intentional, prefix it with an underscore: `_top_ns`
+
+warning: unused variable: `ns`
+  --> src\L09_mltt\pretty.rs:51:49
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                 ^^ help: if this is intentional, prefix it with an underscore: `_ns`
+
+warning: unused variable: `t`
+  --> src\L09_mltt\pretty.rs:51:67
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `pr`
+  --> src\L09_mltt\pretty.rs:51:75
+   |
+51 | fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+   |                                                                           ^^ help: if this is intentional, prefix it with an underscore: `_pr`
+
+warning: unused variable: `items`
+   --> src\L09_mltt\pretty.rs:141:28
+    |
+141 |         Tm::Sum(span, tms, items) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `x`
+   --> src\L10_typeclass\elaboration.rs:167:32
+    |
+167 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `typ`
+  --> src\L10_typeclass\parser\syntax.rs:94:41
+   |
+94 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+   |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `e`
+   --> src\L10_typeclass\pattern_match.rs:218:29
+    |
+218 |                         Err(e) => {
+    |                             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `var`
+   --> src\L10_typeclass\pattern_match.rs:248:15
+    |
+248 |             [(var, typ, head_name, icit), heads_rest @ ..] => {
+    |               ^^^ help: if this is intentional, prefix it with an underscore: `_var`
+
+warning: unused variable: `item_pats`
+   --> src\L10_typeclass\pattern_match.rs:363:64
+    |
+363 | ...                   [Pattern::Con(constr_, item_pats, i), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `x`
+   --> src\L10_typeclass\unification.rs:116:28
+    |
+116 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L10_typeclass\unification.rs:116:31
+    |
+116 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L10_typeclass\unification.rs:116:34
+    |
+116 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L10_typeclass\unification.rs:347:37
+    |
+347 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L10_typeclass\unification.rs:360:37
+    |
+360 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+  --> src\L10_typeclass\typeclass.rs:24:22
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `span`
+  --> src\L10_typeclass\typeclass.rs:24:27
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `sp`
+  --> src\L10_typeclass\typeclass.rs:24:33
+   |
+24 |             Val::Obj(val, span, sp) => None,
+   |                                 ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `span`
+  --> src\L10_typeclass\typeclass.rs:26:21
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `icit`
+  --> src\L10_typeclass\typeclass.rs:26:27
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `val`
+  --> src\L10_typeclass\typeclass.rs:26:33
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `closure`
+  --> src\L10_typeclass\typeclass.rs:26:38
+   |
+26 |             Val::Pi(span, icit, val, closure) => None,
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure`
+
+warning: unused variable: `span`
+  --> src\L10_typeclass\typeclass.rs:29:31
+   |
+29 |             Val::LiteralIntro(span) => todo!(),
+   |                               ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `items`
+   --> src\L10_typeclass\pretty.rs:179:28
+    |
+179 |         Tm::Sum(span, tms, items, _) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L10_typeclass\pretty.rs:188:23
+    |
+188 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `decl`
+  --> src\L11_macro\cxt.rs:40:33
+   |
+40 | fn create_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+   |                                 ^^^^ help: if this is intentional, prefix it with an underscore: `_decl`
+
+warning: unused variable: `span`
+   --> src\L11_macro\cxt.rs:385:22
+    |
+385 |         if let Some((span, _, _, _, _)) = t {
+    |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `t`
+   --> src\L11_macro\cxt.rs:433:13
+    |
+433 |         let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+    |             ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src\L11_macro\elaboration.rs:168:32
+    |
+168 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `typ`
+   --> src\L11_macro\parser\syntax.rs:103:41
+    |
+103 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `e`
+   --> src\L11_macro\pattern_match.rs:217:29
+    |
+217 |                         Err(e) => {
+    |                             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `item_pats`
+   --> src\L11_macro\pattern_match.rs:364:64
+    |
+364 | ...                   [Pattern::Con(constr_, item_pats, i), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `x`
+   --> src\L11_macro\unification.rs:119:28
+    |
+119 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                            ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `i`
+   --> src\L11_macro\unification.rs:119:31
+    |
+119 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `a`
+   --> src\L11_macro\unification.rs:119:34
+    |
+119 |             (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+    |                                  ^ help: if this is intentional, prefix it with an underscore: `_a`
+
+warning: unused variable: `val`
+   --> src\L11_macro\unification.rs:364:37
+    |
+364 |                 Val::Pi(span, icit, val, closure) if span.data == "_" => {
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+   --> src\L11_macro\unification.rs:378:37
+    |
+378 |                 Val::Pi(span, icit, val, closure) => Tm::Lam(
+    |                                     ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `val`
+  --> src\L11_macro\typeclass.rs:26:22
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                      ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `span`
+  --> src\L11_macro\typeclass.rs:26:27
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `sp`
+  --> src\L11_macro\typeclass.rs:26:33
+   |
+26 |             Val::Obj(val, span, sp) => None,
+   |                                 ^^ help: if this is intentional, prefix it with an underscore: `_sp`
+
+warning: unused variable: `span`
+  --> src\L11_macro\typeclass.rs:28:21
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `icit`
+  --> src\L11_macro\typeclass.rs:28:27
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `val`
+  --> src\L11_macro\typeclass.rs:28:33
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                                 ^^^ help: if this is intentional, prefix it with an underscore: `_val`
+
+warning: unused variable: `closure`
+  --> src\L11_macro\typeclass.rs:28:38
+   |
+28 |             Val::Pi(span, icit, val, closure) => None,
+   |                                      ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure`
+
+warning: unused variable: `span`
+  --> src\L11_macro\typeclass.rs:31:31
+   |
+31 |             Val::LiteralIntro(span) => todo!(),
+   |                               ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `items`
+   --> src\L11_macro\pretty.rs:180:28
+    |
+180 |         Tm::Sum(span, tms, items, _) => format!(
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L11_macro\pretty.rs:189:23
+    |
+189 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `t`
+   --> src\L11_macro\mod.rs:109:35
+    |
+109 |                 MetaEntry::Solved(t, _) => None,//TODO: this is error. this will be fixed in L12
+    |                                   ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `t`
+   --> src\L12_canonical\cxt.rs:300:13
+    |
+300 |         let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+    |             ^ help: if this is intentional, prefix it with an underscore: `_t`
+
+warning: unused variable: `x`
+   --> src\L12_canonical\elaboration.rs:169:32
+    |
+169 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `span`
+   --> src\L12_canonical\elaboration.rs:499:21
+    |
+499 |                 let span = name.to_span();
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `typ`
+   --> src\L12_canonical\parser\syntax.rs:120:41
+    |
+120 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `e`
+   --> src\L12_canonical\pattern_match.rs:212:29
+    |
+212 |                         Err(e) => {
+    |                             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `item_pats`
+   --> src\L12_canonical\pattern_match.rs:359:64
+    |
+359 | ...                   [Pattern::Con(constr_, item_pats, i), ..]
+    |                                              ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_item_pats`
+
+warning: unused variable: `c1`
+   --> src\L12_canonical\typeclass.rs:227:33
+    |
+227 |             (Val::Match(a1, b1, c1, _), Val::Match(a2, b2, c2, _)) => {
+    |                                 ^^ help: if this is intentional, prefix it with an underscore: `_c1`
+
+warning: unused variable: `c2`
+   --> src\L12_canonical\typeclass.rs:227:60
+    |
+227 |             (Val::Match(a1, b1, c1, _), Val::Match(a2, b2, c2, _)) => {
+    |                                                            ^^ help: if this is intentional, prefix it with an underscore: `_c2`
+
+warning: unused variable: `items`
+   --> src\L12_canonical\pretty.rs:183:28
+    |
+183 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L12_canonical\pretty.rs:205:23
+    |
+205 |         Tm::SumCase { is_trait, typ, case_name, datas: params } if matches!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `is_trait`
+   --> src\L12_canonical\pretty.rs:209:23
+    |
+209 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `is_trait`
+   --> src\L12_canonical\pretty.rs:263:28
+    |
+263 |         Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
+    |                            ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `span`
+  --> src\L12_canonical\canonical.rs:81:35
+   |
+81 |                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
+   |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `datas`
+  --> src\L13_namespace\cxt.rs:18:39
+   |
+18 |             Val::SumCase { case_name, datas, .. } if case_name.data == "zero" => {
+   |                                       ^^^^^-
+   |                                       |
+   |                                       help: try removing the field
+
+warning: unused variable: `x`
+   --> src\L13_namespace\elaboration.rs:302:32
+    |
+302 |                         Val::U(x) => {//TODO:x?
+    |                                ^ help: if this is intentional, prefix it with an underscore: `_x`
+
+warning: unused variable: `span`
+   --> src\L13_namespace\elaboration.rs:755:21
+    |
+755 |                 let span = name.to_span();
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `out_param`
+   --> src\L13_namespace\elaboration.rs:830:25
+    |
+830 |                     let out_param = self.trait_out_param.get(&trait_name.data)
+    |                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_out_param`
+
+warning: unused variable: `is_expl`
+    --> src\L13_namespace\elaboration.rs:1226:21
+     |
+1226 |                 let is_expl = matches!(i, Either::Icit(Icit::Expl));
+     |                     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_expl`
+
+warning: unused variable: `head`
+    --> src\L13_namespace\elaboration.rs:1439:33
+     |
+1439 |                 if let Some(ref head) = typ_raw_head {
+     |                                 ^^^^ help: if this is intentional, prefix it with an underscore: `_head`
+
+warning: unused variable: `typ`
+   --> src\L13_namespace\parser\syntax.rs:144:41
+    |
+144 |             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+    |                                         ^^^ help: try ignoring the field: `typ: _`
+
+warning: unused variable: `e`
+    --> src\L13_namespace\parser\mod.rs:1817:13
+     |
+1817 |         Err(e) => Ok((input, vec![])), // No attribute found, not an error
+     |             ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `icit`
+   --> src\L13_namespace\pattern_match.rs:304:40
+    |
+304 |                         while let Val::Pi(_, icit, ty, closure) = typ.as_ref() {
+    |                                              ^^^^ help: if this is intentional, prefix it with an underscore: `_icit`
+
+warning: unused variable: `ty`
+   --> src\L13_namespace\pattern_match.rs:304:46
+    |
+304 |                         while let Val::Pi(_, icit, ty, closure) = typ.as_ref() {
+    |                                                    ^^ help: if this is intentional, prefix it with an underscore: `_ty`
+
+warning: variable does not need to be mutable
+   --> src\L13_namespace\unification.rs:451:13
+    |
+451 |         let mut solution = self.eval(decl, &List::new(), &self.lams(pren.dom, decl, &mty, rhs));
+    |             ----^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: unused variable: `cxt`
+   --> src\L13_namespace\unification.rs:456:41
+    |
+456 |     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError> {
+    |                                         ^^^ help: if this is intentional, prefix it with an underscore: `_cxt`
+
+warning: unused variable: `c1`
+   --> src\L13_namespace\typeclass.rs:319:33
+    |
+319 |             (Val::Match(a1, b1, c1), Val::Match(a2, b2, c2)) => {
+    |                                 ^^ help: if this is intentional, prefix it with an underscore: `_c1`
+
+warning: unused variable: `c2`
+   --> src\L13_namespace\typeclass.rs:319:57
+    |
+319 |             (Val::Match(a1, b1, c1), Val::Match(a2, b2, c2)) => {
+    |                                                         ^^ help: if this is intentional, prefix it with an underscore: `_c2`
+
+warning: unused variable: `items`
+   --> src\L13_namespace\pretty.rs:182:28
+    |
+182 |         Tm::Sum(span, tms, items, _) => {
+    |                            ^^^^^ help: if this is intentional, prefix it with an underscore: `_items`
+
+warning: unused variable: `is_trait`
+   --> src\L13_namespace\pretty.rs:204:23
+    |
+204 |         Tm::SumCase { is_trait, typ, case_name, datas: params } if matches!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `is_trait`
+   --> src\L13_namespace\pretty.rs:208:23
+    |
+208 |         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
+    |                       ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `is_trait`
+   --> src\L13_namespace\pretty.rs:267:28
+    |
+267 |         Some(Tm::SumCase { is_trait, typ, case_name, datas: params }) if matches!(
+    |                            ^^^^^^^^ help: try ignoring the field: `is_trait: _`
+
+warning: unused variable: `span`
+  --> src\L13_namespace\canonical.rs:75:35
+   |
+75 |                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
+   |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:442:22
+    |
+442 |             Val::Lam(name, _, clos) => {
+    |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:447:21
+    |
+447 |             Val::Pi(name, _, vty, clos) => {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `s`
+   --> src\L13_namespace\mod.rs:455:31
+    |
+455 |             Val::LiteralIntro(s) => {
+    |                               ^ help: if this is intentional, prefix it with an underscore: `_s`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:458:22
+    |
+458 |             Val::Sum(name, params, cases, _) => {
+    |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `pname`
+   --> src\L13_namespace\mod.rs:460:22
+    |
+460 |                 for (pname, pval, pvty, _) in params.iter() {
+    |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_pname`
+
+warning: unused variable: `cname`
+   --> src\L13_namespace\mod.rs:465:21
+    |
+465 |                 for cname in cases.iter() {
+    |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_cname`
+
+warning: unused variable: `case_name`
+   --> src\L13_namespace\mod.rs:469:33
+    |
+469 |             Val::SumCase { typ, case_name, datas, .. } => {
+    |                                 ^^^^^^^^^-
+    |                                 |
+    |                                 help: try removing the field
+
+warning: unused variable: `dname`
+   --> src\L13_namespace\mod.rs:472:22
+    |
+472 |                 for (dname, dval, _) in datas.iter() {
+    |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_dname`
+
+warning: unused variable: `pat`
+   --> src\L13_namespace\mod.rs:480:22
+    |
+480 |                 for (pat, tm) in cases {
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_pat`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:521:22
+    |
+521 |             Tm::Decl(name) => {
+    |                      ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:524:28
+    |
+524 |             Tm::Obj(inner, name) => {
+    |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:528:21
+    |
+528 |             Tm::Lam(name, _, body) => {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:540:20
+    |
+540 |             Tm::Pi(name, _, ty_a, ty_b) => {
+    |                    ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:545:21
+    |
+545 |             Tm::Let(name, ty, val, body) => {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `name`
+   --> src\L13_namespace\mod.rs:556:21
+    |
+556 |             Tm::Sum(name, params, cases, _) => {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_name`
+
+warning: unused variable: `pname`
+   --> src\L13_namespace\mod.rs:558:22
+    |
+558 |                 for (pname, ptm, pty, _) in params.iter() {
+    |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_pname`
+
+warning: unused variable: `cname`
+   --> src\L13_namespace\mod.rs:563:21
+    |
+563 |                 for cname in cases.iter() {
+    |                     ^^^^^ help: if this is intentional, prefix it with an underscore: `_cname`
+
+warning: unused variable: `case_name`
+   --> src\L13_namespace\mod.rs:567:32
+    |
+567 |             Tm::SumCase { typ, case_name, datas, .. } => {
+    |                                ^^^^^^^^^-
+    |                                |
+    |                                help: try removing the field
+
+warning: unused variable: `dname`
+   --> src\L13_namespace\mod.rs:570:22
+    |
+570 |                 for (dname, dtm, _) in datas.iter() {
+    |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_dname`
+
+warning: unused variable: `pat`
+   --> src\L13_namespace\mod.rs:577:22
+    |
+577 |                 for (pat, branch) in cases {
+    |                      ^^^ help: if this is intentional, prefix it with an underscore: `_pat`
+
+warning: unused variable: `span`
+   --> src\L13_namespace\mod.rs:594:18
+    |
+594 |         for (_, (span, rtm, rval, rty, rvty, _)) in cxt.decl.iter() {
+    |                  ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `span`
+   --> src\L13_namespace\mod.rs:606:21
+    |
+606 |         for (_, _, (span, vty)) in cxt.src_names.iter_all() {
+    |                     ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+
+warning: unused variable: `meta_alloc`
+   --> src\L13_namespace\mod.rs:854:13
+    |
+854 |         let meta_alloc = (std::mem::size_of::<MetaEntry>() + 16 + 7) & !7;
+    |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_meta_alloc`
+
+warning: unused variable: `url`
+   --> src\lib.rs:526:29
+    |
+526 |                         let url = params.uri.clone();
+    |                             ^^^ help: if this is intentional, prefix it with an underscore: `_url`
+
+warning: unused variable: `resp`
+    --> src\lib.rs:1174:35
+     |
+1174 |                 Message::Response(resp) => {
+     |                                   ^^^^ help: if this is intentional, prefix it with an underscore: `_resp`
+
+warning: unused variable: `not`
+    --> src\lib.rs:1193:62
+     |
+1193 | ...                   Err(ExtractError::MethodMismatch(not)) => (),
+     |                                                        ^^^ help: if this is intentional, prefix it with an underscore: `_not`
+
+warning: unused variable: `not`
+    --> src\lib.rs:1200:62
+     |
+1200 | ...                   Err(ExtractError::MethodMismatch(not)) =>(),
+     |                                                        ^^^ help: if this is intentional, prefix it with an underscore: `_not`
+
+warning: unused variable: `not`
+    --> src\lib.rs:1207:62
+     |
+1207 | ...                   Err(ExtractError::MethodMismatch(not)) => (),
+     |                                                        ^^^ help: if this is intentional, prefix it with an underscore: `_not`
+
+warning: unused variable: `not`
+    --> src\lib.rs:1214:62
+     |
+1214 | ...                   Err(ExtractError::MethodMismatch(not)) => (),
+     |                                                        ^^^ help: if this is intentional, prefix it with an underscore: `_not`
+
+For more information about this error, try `rustc --explain E0308`.
+warning: `elaboration-zoo-lsp` (lib) generated 308 warnings
+error: could not compile `elaboration-zoo-lsp` (lib) due to 1 previous error; 308 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `elaboration-zoo-lsp` (lib test) generated 321 warnings (308 duplicates)
+error: could not compile `elaboration-zoo-lsp` (lib test) due to 1 previous error; 321 warnings emitted
