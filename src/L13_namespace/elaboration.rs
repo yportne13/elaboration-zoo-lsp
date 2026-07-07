@@ -225,36 +225,13 @@ impl Infer {
         let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
-    pub(super) fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
+    fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
         //println!("  {}", self.meta.len());
         let t = self.force(&cxt.decl, t);
         let t_prime = self.force(&cxt.decl, t_prime);
         match (t.as_ref(), t_prime.as_ref()) {
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if sp1.is_empty() && sp2.is_empty() && x1 == x2 => {
                 Ok(cxt.update_cxt(self, *x1, t_prime, false))
-            }
-            // Two different Rigids with empty spines: one may have already been
-            // refined by matching a previous field's constructor while the other
-            // is a freshly-created pattern variable (env is still a self-reference).
-            // Update the UNREFINED one so earlier refinements are preserved.
-            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2))
-                if sp1.is_empty() && sp2.is_empty() && x1 != x2 =>
-            {
-                let x1_ix = lvl2ix(cxt.lvl, *x1).0 as usize;
-                let x2_ix = lvl2ix(cxt.lvl, *x2).0 as usize;
-                let x1_is_self = cxt.env.iter().nth(x1_ix)
-                    .map(|ev| matches!(ev.as_ref(), Val::Rigid(rx, rs) if *rx == *x1 && rs.is_empty()))
-                    .unwrap_or(true);
-                let x2_is_self = cxt.env.iter().nth(x2_ix)
-                    .map(|ev| matches!(ev.as_ref(), Val::Rigid(rx, rs) if *rx == *x2 && rs.is_empty()))
-                    .unwrap_or(true);
-                if x1_is_self && !x2_is_self {
-                    Ok(cxt.update_cxt(self, *x1, t_prime, true))
-                } else if x2_is_self && !x1_is_self {
-                    Ok(cxt.update_cxt(self, *x2, t, true))
-                } else {
-                    Ok(cxt.update_cxt(self, *x1, t_prime, true))
-                }
             }
             (Val::Rigid(x, sp), _) if sp.is_empty() => { 
                 Ok(cxt.update_cxt(self, *x, t_prime, true))
@@ -1086,20 +1063,7 @@ impl Infer {
             Raw::Var(name) => match cxt.src_names.get(&name.data) {
                 Some((x, a)) => {
                     self.hover_table.push((t_span, a.0, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, a.1.clone()));
-                    // After GADT pattern matching, `update_cxt` may have refined Rigid index
-                    // variables in the environment.  The stored type `a.1` still references the
-                    // ORIGINAL Rigid levels, so we re-quote and re-eval in the current env to
-                    // pick up the refined values (e.g. `Fin (succ len)` → `Fin 1` when
-                    // `len := 0`).  This is critical for struct fields whose types depend on
-                    // an index that was refined by matching a *different* field's constructor.
-                    let ty = if cxt.is_refined() {
-                        // Re-evaluate in refined env to resolve GADT refinements
-                        let quoted = self.quote(&cxt.decl, cxt.lvl, &a.1);
-                        self.eval(&cxt.decl, &cxt.env, &quoted)
-                    } else {
-                        a.1.clone()
-                    };
-                    Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), ty))
+                    Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.1.clone()))
                 },
                 None => match cxt.decl.get(&name.data) {
                     Some((def, _, _, _, vty, _)) => {

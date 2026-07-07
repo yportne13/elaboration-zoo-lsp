@@ -580,13 +580,6 @@ impl Cxt {
 }
 
 impl Cxt {
-    /// Returns `true` if the environment has been refined via `update_cxt`
-    /// since the last snapshot point.  Used to decide whether variable types
-    /// need re-normalisation in the current environment.
-    pub fn is_refined(&self) -> bool {
-        self.update_from.is_some()
-    }
-
     #[allow(unused)]
     pub fn print_env(&self, infer: &Infer) {
         self.env
