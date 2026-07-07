@@ -654,7 +654,7 @@ impl Compiler {
                                             // (e.g. matching nil refines n=0,
                                             // so _2:Vec[Nat]0 correctly eliminates
                                             // cons as a possibility).
-                                            if let Some(ref constr_ret) = constr_ret_typ {
+                                                if let Some(ref constr_ret) = constr_ret_typ {
                                                 // Pre-bind unconsumed implicit
                                                 // constructor params so their
                                                 // fresh Rigid levels are valid
@@ -674,23 +674,12 @@ impl Compiler {
                                                         ty.clone(),
                                                     );
                                                 }
-                                                // Best-effort: skip on failure
-                                                // (e.g. typeclass-heavy prelude
-                                                // types like l+1 may fail).
-                                                if let Ok(refined) = std::panic::catch_unwind(
-                                                    std::panic::AssertUnwindSafe(|| {
-                                                        infer.unify_pm(
-                                                            &fc_for_refine,
-                                                            &head_typ,
-                                                            constr_ret,
-                                                            empty_span(()),
-                                                        )
-                                                    }),
-                                                ) {
-                                                    if let Ok(r) = refined {
-                                                        new_cxt_ff = r;
-                                                    }
-                                                }
+                                                new_cxt_ff = infer.unify_pm(
+                                                    &fc_for_refine,
+                                                    &head_typ,
+                                                    constr_ret,
+                                                    empty_span(()),
+                                                ).unwrap();
                                             }
 
                                             // The consumed Implicit params have been bound;
