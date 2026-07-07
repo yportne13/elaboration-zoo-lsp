@@ -47,7 +47,6 @@ pub struct ArmState {
     pub target_typ: Rc<Val>,
     pub ori: Rc<Val>,
     pub patcon: PatConstructor,
-    pub is_impl: bool,
 }
 
 impl PatConstructor {
@@ -399,9 +398,8 @@ impl Compiler {
                                 } else {
                                     arm.patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
                                 },
-                                is_impl: false,
-                            };
-                            new_arm
+		                            };
+		                            new_arm
                         })
                         .collect::<Vec<_>>();
                     self.compile_aux(infer, heads_rest, &new_arms, &new_context)
@@ -539,7 +537,6 @@ impl Compiler {
 	                                                } else {
 	                                                    patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
 	                                                },
-	                                                is_impl: false,
 	                                            })
 	                                        }
 	                                        [Pattern::Con(constr_, item_pats, i), ..]
@@ -572,7 +569,6 @@ impl Compiler {
 		                                                target_typ: target_typ.clone(),
 		                                                ori: ori.clone(),
 		                                                patcon: patcon.clone().clean().push(PatternDetail::Bind(constr_.clone())),
-		                                                is_impl: false,
 		                                            })
 		                                        }
 		                                        [Pattern::Con(constr_, item_pats, i), ..] if &i.to_icit() == icit && (constr_ == constr) => {
@@ -685,7 +681,6 @@ impl Compiler {
 		                                                target_typ: target_typ.clone(),
 		                                                ori: ori.clone(),
 		                                                patcon: new_patcon,
-		                                                is_impl: false,
 		                                            })
 	                                        }
 	                                        _ => if *icit == Icit::Impl {
@@ -701,7 +696,6 @@ impl Compiler {
 		                                                target_typ: target_typ.clone(),
 		                                                ori: ori.clone(),
 		                                                patcon: patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), Icit::Impl)),
-		                                                is_impl: true,
 		                                            })
 		                                        } else {None},
                                     }
@@ -726,12 +720,8 @@ impl Compiler {
                                     .first()
                                     .map(|y| y.new_heads.clone())
                                     .unwrap_or(vec![]);
-                                let is_impl = remaining_arms
-                                    .first()
-                                    .map(|y| y.is_impl)
-                                    .unwrap_or(false);
                                 let context_ = if new_heads.is_empty() {
-                                    if heads_rest.is_empty() || is_impl {
+                                    if heads_rest.is_empty() || *icit == Icit::Impl {
                                         context.clone()
                                     } else {
                                         self.next_hole(
@@ -806,7 +796,6 @@ impl Compiler {
 		                        target_typ: typ.clone(),
 		                        ori: target_val.clone(),
 		                        patcon: PatConstructor::new(),
-		                        is_impl: false,
 		                    }
 	                })
 	                .collect::<Vec<_>>(),
