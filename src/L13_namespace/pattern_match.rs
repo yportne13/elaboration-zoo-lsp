@@ -18,6 +18,10 @@ type Var = i32;
 
 type Constructor = Span<SmolStr>;
 
+/// Sentinel constructor name used when the matched type is not a Sum type.
+/// All arms match this sentinel, effectively treating everything as accessible.
+const ANY_CONSTR: &str = "$any$";
+
 #[derive(Debug, Clone)]
 pub enum Warning {
     Unreachable(Raw),
@@ -409,7 +413,7 @@ impl Compiler {
                     //let typ = infer.force(typ);
                     let (param, constrs) = match typ.as_ref() {
                         Val::Sum(_, param, cases, _) => (param.clone(), cases.clone()),
-                        _ => (Rc::new(vec![]), Rc::new(vec![empty_span(SmolStr::new("$any$"))])),
+                        _ => (Rc::new(vec![]), Rc::new(vec![empty_span(SmolStr::new(ANY_CONSTR))])),
                     };
 
                     let constrs_name = constrs
@@ -424,7 +428,7 @@ impl Compiler {
                             // not once per (constr, arm) pair.
                             // Result depends only on typ (type indices), not on
                             // per-arm context — same for all arms.
-                            let constr_accessible = if constr.data == "$any$" {
+                            let constr_accessible = if constr.data == ANY_CONSTR {
                                 true
                             } else {
                                 arms.first()
@@ -463,7 +467,7 @@ impl Compiler {
                                     if !constr_accessible {
 	                                        return None;
                                     }
-                                    if constr.data != "$any$" {
+                                    if constr.data != ANY_CONSTR {
 
                                         // Use qualified name TypeName.constructor for lookup
                                         let sum_name = match typ.as_ref() {
@@ -540,7 +544,7 @@ impl Compiler {
 	                                            })
 	                                        }
 	                                        [Pattern::Con(constr_, item_pats, i), ..]
-                                            if &i.to_icit() == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
+                                            if &i.to_icit() == icit && (constr.data == ANY_CONSTR || !constrs_name.contains(&constr_.data)) =>
 	                                        {
 	                                            // When this arm has more remaining patterns after the
 	                                            // current one, we are processing a sub-pattern (field of a
