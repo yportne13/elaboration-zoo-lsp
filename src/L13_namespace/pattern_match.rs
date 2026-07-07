@@ -244,96 +244,80 @@ impl Compiler {
         }
     }
 
-    fn filter_accessible_constrs<'a>(
-        &mut self,
-        infer: &mut Infer,
-        cxt: &Cxt,
-        typ: &Rc<Val>, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
-        all_constrs: &'a [Constructor],
-    ) -> Result<
-        Vec<(&'a Constructor, Vec<(Span<SmolStr>, Rc<Val>, Icit)>, Cxt)>,
-        Error,
-    > {
-        let mut accessible = Vec::new();
-        let before_fac = infer.meta_len();
+	    fn filter_accessible_constrs<'a>(
+	        &mut self,
+	        infer: &mut Infer,
+	        cxt: &Cxt,
+	        typ: &Rc<Val>, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
+	        all_constrs: &'a [Constructor],
+	    ) -> Result<
+	        Vec<(&'a Constructor, Vec<(Span<SmolStr>, Rc<Val>, Icit)>, Cxt)>,
+	        Error,
+	    > {
+	        let mut accessible = Vec::new();
+	        let before_fac = infer.meta_len();
 
-        let typ = infer.force(&cxt.decl, typ);
-        let forced_type = match typ.as_ref() {
-            Val::Sum(..) => typ,
-            _ => {
-                for constr_def in all_constrs {
-                    accessible.push((constr_def, vec![], cxt.clone()));
-                }
-                infer.meta.truncate(before_fac);
-                return Ok(accessible)
-            }
-        };
+	        let typ = infer.force(&cxt.decl, typ);
+	        let forced_type = match typ.as_ref() {
+	            Val::Sum(..) => typ,
+	            _ => {
+	                for constr_def in all_constrs {
+	                    accessible.push((constr_def, vec![], cxt.clone()));
+	                }
+	                infer.meta.truncate(before_fac);
+	                return Ok(accessible)
+	            }
+	        };
 
-        // Get the Sum type name for qualified constructor access
-        let sum_name = match forced_type.as_ref() {
-            Val::Sum(name, ..) => name.data.clone(),
-            _ => SmolStr::new(""),
-        };
+	        // Get the Sum type name for qualified constructor access
+	        let sum_name = match forced_type.as_ref() {
+	            Val::Sum(name, ..) => name.data.clone(),
+	            _ => SmolStr::new(""),
+	        };
 
-        // Fast path: sum types without explicit (index) parameters have all
-        // constructors always accessible (e.g. Expr, Option, Bool).
-        // Only Vec-like indexed types (e.g. Vec[A](len: Nat)) need the full
-        // GADT-style reachability check.
-        let has_indices = match forced_type.as_ref() {
-            Val::Sum(_, params, ..) => params.iter().any(|p| p.3 == Icit::Expl),
-            _ => false,
-        };
-        if !has_indices {
-            for constr_def in all_constrs {
-                accessible.push((constr_def, vec![], cxt.clone()));
-            }
-            infer.meta.truncate(before_fac);
-            return Ok(accessible);
-        }
+	        // Fast path: sum types without explicit (index) parameters have all
+	        // constructors always accessible (e.g. Expr, Option, Bool).
+	        // Only Vec-like indexed types (e.g. Vec[A](len: Nat)) need the full
+	        // GADT-style reachability check.
+	        let has_indices = match forced_type.as_ref() {
+	            Val::Sum(_, params, ..) => params.iter().any(|p| p.3 == Icit::Expl),
+	            _ => false,
+	        };
+	        if !has_indices {
+	            for constr_def in all_constrs {
+	                accessible.push((constr_def, vec![], cxt.clone()));
+	            }
+	            infer.meta.truncate(before_fac);
+	            return Ok(accessible);
+	        }
 
-        for constr_def @ constr_name in all_constrs {
-            // We create a temporary, throwaway inference state for the unification check
-            // to avoid polluting the main inference state with temporary metavariables.
+	        for constr_def @ constr_name in all_constrs {
+	            // Use the same approach as GADT index refinement:
+	            // infer the constructor's return type (applying all Pi params
+	            // with fresh vvars), then unify_pm with the head type.
+	            let constr_raw = if sum_name.is_empty() {
+	                Raw::Var(constr_name.clone())
+	            } else {
+	                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
+	            };
+	            if let Ok((_, mut typ)) = infer.infer_expr(cxt, constr_raw) {
+	                // Peel off all Pi params, creating fresh vvars for each
+	                // (same approach as GADT index refinement).
+	                let mut vvar_count = 0u32;
+	                while let Val::Pi(_, icit, ty, closure) = typ.as_ref() {
+	                    let val = Val::vvar(cxt.lvl + vvar_count).into();
+	                    vvar_count += 1;
+	                    typ = infer.closure_apply(&cxt.decl, closure, val);
+	                }
+	                // Try to unify the constructor's return type with the head type
+	                if infer.unify_pm(cxt, &forced_type, &typ, empty_span(())).is_ok() {
+	                    accessible.push((constr_def, vec![], cxt.clone()));
+	                }
+	            }
+	        }
 
-            // 1. Create fresh metavariables for the constructor's own arguments.
-            //    We need their types first, which are given as raw syntax.
-            // Use qualified name TypeName.constructor for lookup
-            let mut to_check = if sum_name.is_empty() {
-                Raw::Var(constr_name.clone())
-            } else {
-                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
-            };
-            let mut params = vec![];
-            let mut cxt = cxt.clone();
-            loop {
-                let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
-                match typ.as_ref() {
-                    Val::Pi(name, icit, ty, _) => {
-                        if *icit == Icit::Expl { // Only explicit args matter for the structure 
-                            params.push((name.clone(), ty.clone(), *icit));
-                        }
-                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole(name.to_span())), super::Either::Icit(*icit));
-                        cxt = cxt.bind(name.clone(), infer.quote(&cxt.decl, cxt.lvl, ty), ty.clone());
-                    },
-                    _ => {break;}
-                }
-            }
-            /*for (_, _, icit) in constr_arg_tys_raw {
-                if *icit == Icit::Expl { // Only explicit args matter for the structure 
-                    to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
-                }
-            }*/
-
-            //let mut temp_infer = infer.clone();
-            // 4. Try to unify it with the type of the matched term.
-            if let Ok((_, cxt)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
-                // If unification succeeds, the constructor is accessible.
-                accessible.push((constr_def, params, cxt));
-            }
-        }
-
-        infer.meta.truncate(before_fac);
-        Ok(accessible)
+	        infer.meta.truncate(before_fac);
+	        Ok(accessible)
     }
 
     fn compile_aux(
