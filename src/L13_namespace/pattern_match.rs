@@ -7,11 +7,10 @@ use smol_str::SmolStr;
 use crate::parser_lib::{Span, ToSpan};
 
 use super::{
-    Env, Error, Infer, Tm, Val,
-    cxt::Cxt, Rc, Decl,
-    empty_span, Either,
-    parser::syntax::{Pattern, Raw, Icit},
-    PatternDetail,
+    Decl, Either, Env, Error, Infer, PatternDetail, Rc, Tm, Val,
+    cxt::Cxt,
+    empty_span,
+    parser::syntax::{Icit, Pattern, Raw},
 };
 
 type Var = i32;
@@ -291,30 +290,43 @@ impl Compiler {
 		            return Ok(accessible);
 		        }
 
-		        for constr_def @ constr_name in all_constrs {
-		            // Use the same approach as GADT index refinement:
-		            // infer the constructor's return type (applying all Pi params
-		            // with fresh vvars), then unify_pm with the head type.
-		            let constr_raw = if sum_name.is_empty() {
-		                Raw::Var(constr_name.clone())
-		            } else {
-		                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
-		            };
-		            if let Ok((_, mut typ)) = infer.infer_expr(cxt, constr_raw) {
-		                // Peel off all Pi params, creating fresh vvars for each
-		                // (same approach as GADT index refinement).
-		                let mut vvar_count = 0u32;
-		                while let Val::Pi(_, _, ty, closure) = typ.as_ref() {
-		                    let val = Val::vvar(cxt.lvl + vvar_count).into();
-		                    vvar_count += 1;
-		                    typ = infer.closure_apply(&cxt.decl, closure, val);
-		                }
-		                // Try to unify the constructor's return type with the head type
-		                if infer.unify_pm(cxt, &forced_type, &typ, empty_span(())).is_ok() {
-		                    accessible.push(constr_def);
-		                }
-		            }
-		        }
+        for constr_def @ constr_name in all_constrs {
+            // Build `constr(hole1 ... holek)` (a fresh meta for every Pi
+            // parameter, implicit or explicit) and check whether it can be
+            // unified with the head type. The holes become fresh metas, so the
+            // constructor's indices are solved against the scrutinee type
+            // without ever binding real rigid variables — this keeps the
+            // GADT reachability check correct and avoids `lvl2ix` underflows
+            // that the `unify_pm`-with-fresh-vvars approach triggered.
+            let mut to_check = if sum_name.is_empty() {
+                Raw::Var(constr_name.clone())
+            } else {
+                Raw::Obj(Box::new(Raw::Var(empty_span(sum_name.clone()))), Some(constr_name.clone()))
+            };
+            let mut cxt = cxt.clone();
+            loop {
+                let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
+                match typ.as_ref() {
+                    Val::Pi(name, icit, ty, _) => {
+                        to_check = Raw::App(
+                            Box::new(to_check),
+                            Box::new(Raw::Hole(name.to_span())),
+                            super::Either::Icit(*icit),
+                        );
+                        cxt = cxt.bind(
+                            name.clone(),
+                            infer.quote(&cxt.decl, cxt.lvl, ty),
+                            ty.clone(),
+                        );
+                    }
+                    _ => break,
+                }
+            }
+
+            if infer.check_pm(&cxt, to_check.clone(), forced_type.clone()).is_ok() {
+                accessible.push(constr_def);
+            }
+        }
 
 		        infer.meta.truncate(before_fac);
 		        Ok(accessible)
@@ -645,21 +657,35 @@ impl Compiler {
                                                     .iter()
                                                     .filter(|(_, _, i)| *i == Icit::Impl)
                                                     .collect();
-	                                                let mut fc_for_refine = new_cxt.clone();
-	                                                for (ty, name, _) in impl_heads.iter().skip(consumed_implicit_count) {
-	                                                    let imp = self.make_implicit_name(name);
-	                                                    fc_for_refine = fc_for_refine.bind(
-	                                                        imp,
-	                                                        infer.quote(&fc_for_refine.decl, fc_for_refine.lvl, ty),
-	                                                        ty.clone(),
-	                                                    );
-	                                                }
-	                                                new_cxt = infer.unify_pm(
-	                                                    &fc_for_refine,
-	                                                    &head_typ,
-	                                                    constr_ret,
-	                                                    empty_span(()),
-	                                                ).unwrap();
+                                                let mut fc_for_refine = new_cxt.clone();
+                                                for (ty, name, _) in impl_heads.iter().skip(consumed_implicit_count) {
+                                                    let imp = self.make_implicit_name(name);
+                                                    fc_for_refine = fc_for_refine.bind(
+                                                        imp,
+                                                        infer.quote(&fc_for_refine.decl, fc_for_refine.lvl, ty),
+                                                        ty.clone(),
+                                                    );
+                                                }
+                                                // GADT index refinement is best-effort. If
+                                                // `unify_pm` cannot refine the indices (it may
+                                                // build an un-quotable rigid that overflows
+                                                // `lvl2ix` during `refresh`), we keep `new_cxt`
+                                                // unchanged instead of crashing. This restores
+                                                // the originally-correct behaviour that the
+                                                // `catch_unwind` guard provided before it was
+                                                // removed.
+                                                if let Ok(refined) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                                    infer.unify_pm(
+                                                        &fc_for_refine,
+                                                        &head_typ,
+                                                        constr_ret,
+                                                        empty_span(()),
+                                                    )
+                                                })) {
+                                                    if let Ok(r) = refined {
+                                                        new_cxt = r;
+                                                    }
+                                                }
                                             }
 
                                             // The consumed Implicit params have been bound;
@@ -707,18 +733,26 @@ impl Compiler {
                                 .collect::<Vec<_>>();
 
                             let valid_tree = if remaining_arms.is_empty() {
-                                let unmatched = Self::fill_context(
-                                    context,
-                                    &Pattern::Con(
-                                        constr.clone(),
-                                        vec![],
-                                        Either::Icit(*icit),
-                                    ),
-                                );
-                                self.warnings.push(Warning::Unmatched(unmatched));
+                                // Only report a genuine non-exhaustive match when
+                                // the constructor is actually reachable. If it is
+                                // inaccessible (e.g. `nil` under a `Vec[T] (succ L)`
+                                // scrutinee) every arm is legitimately absent, so we
+                                // must not emit a spurious `Unmatched` warning. This
+                                // mirrors the old `Some(None)` placeholder behaviour
+                                // that the `Option<Option<ArmState>>` -> `Option<ArmState>`
+                                // simplification accidentally dropped.
+                                if constr_accessible {
+                                    let unmatched = Self::fill_context(
+                                        context,
+                                        &Pattern::Con(
+                                            constr.clone(),
+                                            vec![],
+                                            Either::Icit(*icit),
+                                        ),
+                                    );
+                                    self.warnings.push(Warning::Unmatched(unmatched));
+                                }
                                 false
-                            } else if remaining_arms.is_empty() {
-                                return Ok(false)
                             } else {
                                 let new_heads = remaining_arms
                                     .first()
