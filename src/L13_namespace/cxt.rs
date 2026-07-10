@@ -28,20 +28,20 @@ pub(super) fn try_count_nat(val: &Rc<Val>) -> Option<u64> {
     }
 }
 
-pub(super) fn build_nat(count: u64, nat_type: &Rc<Val>) -> Rc<Val> {
+pub(super) fn build_nat(count: u64, span: Span<()>, nat_type: &Rc<Val>) -> Rc<Val> {
     let mut result = Rc::new(Val::SumCase {
         is_trait: false,
         typ: nat_type.clone(),
-        case_name: empty_span(SmolStr::new("zero")),
+        case_name: span.clone().map(|_| SmolStr::new("zero")),
         datas: Rc::new(vec![]),
     });
     for _ in 0..count {
         result = Rc::new(Val::SumCase {
             is_trait: false,
             typ: nat_type.clone(),
-            case_name: empty_span(SmolStr::new("succ")),
+            case_name: span.clone().map(|_| SmolStr::new("succ")),
             datas: Rc::new(vec![(
-                empty_span(SmolStr::new("n")),
+                span.clone().map(|_| SmolStr::new("n")),
                 result,
                 Icit::Expl,
             )]),

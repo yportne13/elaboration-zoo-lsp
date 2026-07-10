@@ -1423,7 +1423,7 @@ impl Infer {
             Raw::Nat(n) => {
                 let nat_type = cxt.decl.get("Nat").map(|x| x.2.clone())
                     .unwrap_or_else(|| Val::U(0).into());
-                let nat_val = super::cxt::build_nat(n, &nat_type);
+                let nat_val = super::cxt::build_nat(n.data, n.to_span(), &nat_type);
                 let nat_tm = self.quote(&cxt.decl, cxt.lvl, &nat_val);
                 Ok((nat_tm, nat_type))
             }

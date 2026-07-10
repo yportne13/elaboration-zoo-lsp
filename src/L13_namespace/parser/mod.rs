@@ -459,7 +459,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .or(kw(Hole).map(Raw::Hole))
         .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(string(Num).map(|x| {
-            Raw::Nat(x.map(|x| x.parse::<u64>().unwrap()).data)
+            Raw::Nat(x.map(|x| x.parse::<u64>().unwrap()))
         }))
         .or(
             // Tuple literal: (a, b, ...) -> TupleN.mk a b ...
