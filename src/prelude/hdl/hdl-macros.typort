@@ -119,7 +119,9 @@ macro_rules Expr {
 
     // ---- assignment — convert RHS via .into, then call lhs.:=(rhs) ----
     // Uses method-call syntax to invoke Data:::= without macro recursion.
-    ($lhs:ident := $rhs:raw) => {let rhs_conv = ($rhs).into; let _ = $lhs.:=(rhs_conv);};
+    // Inline ($rhs).into directly (no intermediate variable) so type errors
+    // retain the span of the user's RHS expression rather than (0,0).
+    ($lhs:ident := $rhs:raw) => {let _ = $lhs.:=(($rhs).into);};
 
     // ---- raw expression passthrough ----
     ($x: raw) => {let useless = $x;}
