@@ -1,6 +1,42 @@
 // ============================================================
-// HDL Macros: Expr (ergonomic hardware DSL) and module
+// HDL Macros: Expr (ergonomic hardware DSL), when, and module
 // ============================================================
+
+// Standalone when macro for direct use outside Expr.
+// Bodies use `Expr` fragment for consistency with Expr macro's when handlers.
+#[macro_export]
+macro_rules when {
+    // when + elsewhen* + otherwise
+    ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
+        let w_push = whenBegin($cond.expr);
+        $({$body})*
+        let w_pop = whenEnd(unit);
+        $( let w_epush = whenElseBegin($cond2.expr);
+           $({$bodyelse})*
+           let w_epop = whenEnd(unit); )*
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
+    };
+    // when + otherwise (no elsewhen)
+    ($cond:raw {$( $body: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
+        let w_push = whenBegin($cond.expr);
+        $({$body})*
+        let w_pop = whenEnd(unit);
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
+    };
+    // when without otherwise
+    ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
+        let w_push = whenBegin($cond.expr);
+        $({$body})*
+        let w_pop = whenEnd(unit);
+        $( let w_epush = whenElseBegin($cond2.expr);
+           $({$bodyelse})*
+           let w_epop = whenEnd(unit); )*
+    };
+}
 
 // The Expr macro provides convenient syntax for hardware expressions
 // Usage:
