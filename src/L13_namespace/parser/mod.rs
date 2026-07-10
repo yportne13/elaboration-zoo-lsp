@@ -652,7 +652,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                        }
 	                    };
 		                    let mux_span = lhs.to_span().map(|_| SmolStr::new("mux"));
-		                    Raw::app(Raw::app(Raw::app(Raw::Var(mux_span), lhs), mhs), rhs)
+		                    Raw::app(Raw::app(Raw::Obj(Box::new(lhs), Some(mux_span)), mhs), rhs)
 	                } else if &op.data == "." {
 	                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
 	                        Ok((input_t, name)) => {
