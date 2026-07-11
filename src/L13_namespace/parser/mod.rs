@@ -1095,11 +1095,24 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         })
 }
 
+// Parse a trait bound expression: `Ident` or `Ident[T, U, ...]`
+fn p_trait_bound<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+    let (input, name) = smolstr(Ident).parse(input, state)?;
+    let (input, args) = square_cut(p_raw.many0_sep(kw(T![,])))
+        .option()
+        .parse(input, state)?;
+    let raw = Raw::Var(name);
+    match args {
+        Some(Ok(args)) => Ok((input, args.into_iter().fold(raw, |acc, arg| Raw::app_impl(acc, arg)))),
+        _ => Ok((input, raw)),
+    }
+}
+
 fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    // Parse a where clause: `where T: Show + Eq, U: Trait`
+    // Parse a where clause: `where T: Show + Eq, U: Trait[U]`
     let p_where_clause = (
         kw(T![where]),
-        (smolstr(Ident), kw(T![:]), smolstr(Ident).many0_sep(kw_is(T![+], "+")))
+        (smolstr(Ident), kw(T![:]), p_trait_bound.many0_sep(kw_is(T![+], "+")))
             .map(|(name, _, bounds)| (name, bounds))
             .many0_sep(kw(T![,])),
     ).option().map(|x| x.map(|(_, v)| v));
@@ -1122,10 +1135,18 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 for items in clause {
                     for (type_name, bounds) in items {
                         for bound in bounds {
-                            // Generate instance name from trait name (lowercase)
-                            let inst_name = SmolStr::new(format!("_{}_{}", bound.data.to_lowercase(), type_name.data));
+                            // Extract trait name from bound expression for generated instance name
+                            let trait_name = match &bound {
+                                Raw::Var(n) => n.data.clone(),
+                                Raw::App(head, _, _) => match head.as_ref() {
+                                    Raw::Var(n) => n.data.clone(),
+                                    _ => SmolStr::new(""),
+                                },
+                                _ => SmolStr::new(""),
+                            };
+                            let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
                             let trait_app = Raw::App(
-                                Box::new(Raw::Var(bound)),
+                                Box::new(bound),
                                 Box::new(Raw::Var(type_name.clone())),
                                 super::parser::syntax::Either::Icit(Icit::Impl),
                             );
@@ -1233,12 +1254,41 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
         let (input, default) = (kw(T![=]), p_raw).option().parse(input, state)?;
         return Ok((input, TraitBodyItem::TypeDecl { name: type_name, default_type: default.map(|(_, v)| v) }));
     }
-    // Try `def name(params): RetType (= body)?`
+    // Try `def name(params): RetType where T: Into[Self] (= body)?`
     let (input, _) = kw(DefKeyword).parse(input, state)?;
     let (input, name) = smolstr(Ident).or(smolstr(Op)).parse(input, state)?;
-    let (input, params) = p_pi_binder.many0().map(|x| x.into_iter().flatten().collect()).parse(input, state)?;
+    let (input, mut params) = p_pi_binder.many0().map(|x| x.into_iter().flatten().collect::<Vec<_>>()).parse(input, state)?;
     let (input, _) = kw(T![:]).parse(input, state)?;
     let (input, ret) = p_raw.parse(input, state)?;
+    // Parse optional where clause
+    let (input, where_clause) = (
+        kw(T![where]),
+        (smolstr(Ident), kw(T![:]), p_trait_bound.many0_sep(kw_is(T![+], "+")))
+            .map(|(name, _, bounds)| (name, bounds))
+            .many0_sep(kw(T![,])),
+    ).option().map(|x| x.map(|(_, v)| v)).parse(input, state)?;
+    if let Some(clause) = where_clause {
+        for items in clause {
+            let (type_name, bounds) = items;
+            for bound in bounds {
+                    let trait_name = match &bound {
+                        Raw::Var(n) => n.data.clone(),
+                        Raw::App(head, _, _) => match head.as_ref() {
+                            Raw::Var(n) => n.data.clone(),
+                            _ => SmolStr::new(""),
+                        },
+                        _ => SmolStr::new(""),
+                    };
+                    let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
+                    let trait_app = Raw::App(
+                        Box::new(bound),
+                        Box::new(Raw::Var(type_name.clone())),
+                        super::parser::syntax::Either::Icit(Icit::Impl),
+                    );
+                    params.push((empty_span(inst_name), trait_app, Icit::Impl));
+            }
+        }
+    }
     let (input, body) = (kw(T![=]), p_raw).option().parse(input, state)?;
     Ok((input, TraitBodyItem::Method { name, params, ret, body: body.map(|(_, v)| v) }))
 }
