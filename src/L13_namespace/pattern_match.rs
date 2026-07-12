@@ -655,12 +655,6 @@ impl Compiler {
                                             // so _2:Vec[Nat]0 correctly eliminates
                                             // cons as a possibility).
                                             if let Some(ref constr_ret) = constr_ret_typ {
-                                                // Pre-bind unconsumed implicit
-                                                // constructor params so their
-                                                // fresh Rigid levels are valid
-                                                // when unify_pm refines index
-                                                // variables (e.g. n=succ l where
-                                                // l is a cons implicit param).
                                                 let impl_heads: Vec<_> = new_heads
                                                     .iter()
                                                     .filter(|(_, _, i)| *i == Icit::Impl)
@@ -674,9 +668,6 @@ impl Compiler {
                                                         ty.clone(),
                                                     );
                                                 }
-                                                // Best-effort: skip on failure
-                                                // (e.g. typeclass-heavy prelude
-                                                // types like l+1 may fail).
                                                 if let Ok(refined) = std::panic::catch_unwind(
                                                     std::panic::AssertUnwindSafe(|| {
                                                         infer.unify_pm(

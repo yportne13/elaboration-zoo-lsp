@@ -114,8 +114,17 @@ macro_rules Expr {
            let w_epop = whenEnd(unit); )*
     };
 
-    // ---- switch — use function-based switchOnExpr instead ----
-    // See hdl-ops.typort: switchOnExpr(sel.expr).isValueExpr(v.expr, { ... }).default({ ... })
+    // ---- switch — desugar to when-based pattern matching ----
+    // switch sel { is a { body } default { body2 } }
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
+        let _selExpr = $sel.expr;
+        let _wb = whenBegin(binary(_selExpr, "===", ($val).expr));
+        $({$body})*
+        let _we = whenEnd(unit);
+        let _wob = whenOtherwiseBegin(unit);
+        $({$default_body})*
+        let _we2 = whenEnd(unit)
+    };
 
     // ---- assignment — convert RHS via .into, then call lhs.:=(rhs) ----
     // Uses method-call syntax to invoke Data:::= without macro recursion.

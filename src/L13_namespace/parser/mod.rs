@@ -1130,12 +1130,11 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     ))
         .map(|(def_kw, name, params, ret, where_clause, eq_kw, _, body)| {
             let mut all_params = params.unwrap_or_default();
-            // Desugar where clause to implicit parameters
+            // Desugar where clause to implicit parameters (appended after all explicit params)
             if let Some(clause) = where_clause {
                 for items in clause {
                     for (type_name, bounds) in items {
                         for bound in bounds {
-                            // Extract trait name from bound expression for generated instance name
                             let trait_name = match &bound {
                                 Raw::Var(n) => n.data.clone(),
                                 Raw::App(head, _, _) => match head.as_ref() {
@@ -1271,21 +1270,21 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
         for items in clause {
             let (type_name, bounds) = items;
             for bound in bounds {
-                    let trait_name = match &bound {
+                let trait_name = match &bound {
+                    Raw::Var(n) => n.data.clone(),
+                    Raw::App(head, _, _) => match head.as_ref() {
                         Raw::Var(n) => n.data.clone(),
-                        Raw::App(head, _, _) => match head.as_ref() {
-                            Raw::Var(n) => n.data.clone(),
-                            _ => SmolStr::new(""),
-                        },
                         _ => SmolStr::new(""),
-                    };
-                    let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
-                    let trait_app = Raw::App(
-                        Box::new(bound),
-                        Box::new(Raw::Var(type_name.clone())),
-                        super::parser::syntax::Either::Icit(Icit::Impl),
-                    );
-                    params.push((empty_span(inst_name), trait_app, Icit::Impl));
+                    },
+                    _ => SmolStr::new(""),
+                };
+                let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
+                let trait_app = Raw::App(
+                    Box::new(bound),
+                    Box::new(Raw::Var(type_name.clone())),
+                    super::parser::syntax::Either::Icit(Icit::Impl),
+                );
+                params.push((empty_span(inst_name), trait_app, Icit::Impl));
             }
         }
     }
