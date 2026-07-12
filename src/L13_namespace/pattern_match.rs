@@ -737,11 +737,7 @@ impl Compiler {
                                 );
                                 self.warnings.push(Warning::Unmatched(unmatched));
                                 false
-                            } else if remaining_arms
-                                        .iter()
-                                        .flatten()
-                                        .map(|_| ())
-                                        .collect::<Vec<_>>().is_empty() {
+                            } else if remaining_arms.iter().flatten().next().is_none() {
                                 return Ok(false)
                             } else {
                                 let new_heads = remaining_arms
