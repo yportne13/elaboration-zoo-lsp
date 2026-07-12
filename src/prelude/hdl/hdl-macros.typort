@@ -126,11 +126,11 @@ macro_rules Expr {
         let _we2 = whenEnd(unit)
     };
 
-    // ---- assignment — convert RHS via .into, then call lhs.:=(rhs) ----
-    // Uses method-call syntax to invoke Data:::= without macro recursion.
-    // Inline ($rhs).into directly (no intermediate variable) so type errors
-    // retain the span of the user's RHS expression rather than (0,0).
-    ($lhs:ident := $rhs:raw) => {let _ = $lhs.:=(($rhs).into);};
+    // ---- assignment — call lhs.:=(rhs) directly ----
+    // Data trait's := now accepts any T where T: Into[Self],
+    // so .into is handled inside := via the where desugared
+    // implicit parameter, keeping the macro output span-free.
+    ($lhs:ident := $rhs:raw) => {let _ = $lhs.:=($rhs);};
 
     // ---- raw expression passthrough ----
     ($x: raw) => {let useless = $x;}
