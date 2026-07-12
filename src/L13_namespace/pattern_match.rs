@@ -505,61 +505,60 @@ impl Compiler {
                                         // constr_ == constr branch below.
                                         constr_ret_typ = Some(typ.clone());
                                     }
-                                    let new_heads_len = new_heads.len();
-                                    match &arm.pats[..] {
-                                        [Pattern::Any(x, i), ..] if &i.to_icit() == icit => {
-                                            // When this arm has more remaining patterns after the
-                                            // current one, we are processing a sub-pattern (field of a
-                                            // constructor). In that case, don't expand new_heads —
-                                            // the remaining arm patterns already cover the remaining
-                                            // constructor fields. Only expand when this is the sole
-                                            // remaining pattern at the top level (head_name empty),
-                                            // where a wildcard must cover all fields of the constructor.
-                                            let need_new_head_expansion = arm.pats.len() == 1 && head_name.data.is_empty();
-                                            let imp = self.make_implicit_name(&head_name);
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: if need_new_head_expansion {
-                                                        [
-                                                            new_heads
-                                                                .iter()
-                                                                .map(|n| Pattern::Any(x.to_span().map(|_| false), Either::Icit(n.2)))
-                                                                .collect::<Vec<_>>(),
-                                                            arm.pats[1..].to_vec(),
-                                                        ].concat()
-                                                    } else {
-                                                        arm.pats[1..].to_vec()
-                                                    },
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                if !x.data {
-                                                    cxt.clone()
-                                                } else {
-                                                    cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
-                                                },
-                                                cxt_for_filter.bind(imp.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
-                                                if need_new_head_expansion { new_heads } else { vec![] },
-                                                if !x.data {
-                                                    patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
-                                                } else {
-                                                    patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
-                                                },
-                                                false,
-                                            )))
-                                        },
-                                        [Pattern::Con(constr_, item_pats, i), ..]
-                                            if &i.to_icit() == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
-                                        {
-                                            // When this arm has more remaining patterns after the
-                                            // current one, we are processing a sub-pattern (field of a
-                                            // constructor). Like the Any branch above, don't expand
-                                            // new_heads — the remaining arm patterns cover the
-                                            // remaining heads. Expansion only needed at the top level
-                                            // (head_name empty) where a single variable must cover
-                                            // all constructor fields.
-                                            let need_new_head_expansion = arm.pats.len() == 1 && head_name.data.is_empty();
-                                            Some(Some((
+	                                    let new_heads_len = new_heads.len();
+	                                    let need_new_head_expansion = arm.pats.len() == 1 && head_name.data.is_empty();
+	                                    match &arm.pats[..] {
+	                                        [Pattern::Any(x, i), ..] if &i.to_icit() == icit => {
+	                                            // When this arm has more remaining patterns after the
+	                                            // current one, we are processing a sub-pattern (field of a
+	                                            // constructor). In that case, don't expand new_heads —
+	                                            // the remaining arm patterns already cover the remaining
+	                                            // constructor fields. Only expand when this is the sole
+	                                            // remaining pattern at the top level (head_name empty),
+	                                            // where a wildcard must cover all fields of the constructor.
+	                                            let imp = self.make_implicit_name(&head_name);
+	                                            Some(Some((
+	                                                MatchArm {
+	                                                    pats: if need_new_head_expansion {
+	                                                        [
+	                                                            new_heads
+	                                                                .iter()
+	                                                                .map(|n| Pattern::Any(x.to_span().map(|_| false), Either::Icit(n.2)))
+	                                                                .collect::<Vec<_>>(),
+	                                                            arm.pats[1..].to_vec(),
+	                                                        ].concat()
+	                                                    } else {
+	                                                        arm.pats[1..].to_vec()
+	                                                    },
+	                                                    body: arm.body.clone(),
+	                                                },
+	                                                *idx,
+	                                                if !x.data {
+	                                                    cxt.clone()
+	                                                } else {
+	                                                    cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
+	                                                },
+	                                                cxt_for_filter.bind(imp.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
+	                                                if need_new_head_expansion { new_heads } else { vec![] },
+	                                                if !x.data {
+	                                                    patcon.clone().clean().push(PatternDetail::Any(empty_span(SmolStr::new("")), None, *icit))
+	                                                } else {
+	                                                    patcon.clone().clean().push(PatternDetail::Any(imp, Some(head_name.clone()), *icit))
+	                                                },
+	                                                false,
+	                                            )))
+	                                        },
+	                                        [Pattern::Con(constr_, item_pats, i), ..]
+	                                            if &i.to_icit() == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
+	                                        {
+	                                            // When this arm has more remaining patterns after the
+	                                            // current one, we are processing a sub-pattern (field of a
+	                                            // constructor). Like the Any branch above, don't expand
+	                                            // new_heads — the remaining arm patterns cover the
+	                                            // remaining heads. Expansion only needed at the top level
+	                                            // (head_name empty) where a single variable must cover
+	                                            // all constructor fields.
+	                                            Some(Some((
                                                 MatchArm {
                                                     pats: if need_new_head_expansion {
                                                         [
