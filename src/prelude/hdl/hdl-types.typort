@@ -5,7 +5,7 @@
 // ---------- Data trait ----------
 
 trait Data {
-    def :=(that: Self): Unit
+    def :=[T](that: T): Unit where T: Into[Self]
     def expr: Expr
 }
 
@@ -19,11 +19,12 @@ struct Bool {
 }
 
 impl Data for Bool {
-    def :=(that: Bool): Unit =
+    def :=[T](that: T): Unit where T: Into[Bool] =
+        let converted: Bool = _into_T.into that;
         let ass = isRegExpr(this.zz_expr);
         let assignment = match ass {
-            case true => regAssign(this.zz_expr, that.zz_expr)
-            case false => assign(this.zz_expr, that.zz_expr)
+            case true => regAssign(this.zz_expr, converted.zz_expr)
+            case false => assign(this.zz_expr, converted.zz_expr)
         };
         let dummy_expr = createSignalExpr("", assignment);
         unit
@@ -50,11 +51,12 @@ impl[width: Nat] Into[Bits[width]] for Bits[width] {
 }
 
 impl[width: Nat] Data for Bits[width] {
-    def :=(that: Bits[width]): Unit =
+    def :=[T](that: T): Unit where T: Into[Bits[width]] =
+        let converted = _into_T.into that;
         let isReg = isRegExpr(this.zz_expr);
         let assignment = match isReg {
-            case true => regAssign(this.zz_expr, that.zz_expr)
-            case false => assign(this.zz_expr, that.zz_expr)
+            case true => regAssign(this.zz_expr, converted.zz_expr)
+            case false => assign(this.zz_expr, converted.zz_expr)
         };
         let dummy_expr = createSignalExpr("", assignment);
         unit
@@ -86,11 +88,12 @@ impl[width: Nat] Into[UInt[width]] for UInt[width] {
 }
 
 impl[width: Nat] Data for UInt[width] {
-    def :=(that: UInt[width]): Unit =
+    def :=[T](that: T): Unit where T: Into[UInt[width]] =
+        let converted = _into_T.into that;
         let isReg = isRegExpr(this.zz_expr);
         let assignment = match isReg {
-            case true => regAssign(this.zz_expr, that.zz_expr)
-            case false => assign(this.zz_expr, that.zz_expr)
+            case true => regAssign(this.zz_expr, converted.zz_expr)
+            case false => assign(this.zz_expr, converted.zz_expr)
         };
         let dummy_expr = createSignalExpr("", assignment);
         unit
@@ -113,11 +116,12 @@ impl[width: Nat] Into[SInt[width]] for Nat {
 }
 
 impl[width: Nat] Data for SInt[width] {
-    def :=(that: SInt[width]): Unit =
+    def :=[T](that: T): Unit where T: Into[SInt[width]] =
+        let converted = _into_T.into that;
         let isReg = isRegExpr(this.zz_expr);
         let assignment = match isReg {
-            case true => regAssign(this.zz_expr, that.zz_expr)
-            case false => assign(this.zz_expr, that.zz_expr)
+            case true => regAssign(this.zz_expr, converted.zz_expr)
+            case false => assign(this.zz_expr, converted.zz_expr)
         };
         let dummy_expr = createSignalExpr("", assignment);
         unit

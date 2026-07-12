@@ -2016,7 +2016,7 @@ fn test_hdl_slice_assign_literal() {
     let input = r#"
 module Test {
     let a = UInt[8]
-    a.slice[3, 0] := 5.into
+    a.slice[3, 0] := 5
 }
 
 println(moduleTreeVL(Test))

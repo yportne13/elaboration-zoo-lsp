@@ -1144,11 +1144,35 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                                 _ => SmolStr::new(""),
                             };
                             let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
-                            let trait_app = Raw::App(
-                                Box::new(bound),
-                                Box::new(Raw::Var(type_name.clone())),
-                                super::parser::syntax::Either::Icit(Icit::Impl),
-                            );
+                            // Build constraint: apply type_name (Self) first, then bound args (explicit params).
+                            let trait_app = {
+                                let mut app = Raw::Var(empty_span(trait_name.clone()));
+                                app = Raw::App(
+                                    Box::new(app),
+                                    Box::new(Raw::Var(type_name.clone())),
+                                    Either::Icit(Icit::Impl),
+                                );
+                                fn collect_app_args(expr: &Raw) -> (SmolStr, Vec<&Raw>) {
+                                    match expr {
+                                        Raw::App(head, arg, _) => {
+                                            let (name, mut args) = collect_app_args(head.as_ref());
+                                            args.push(arg.as_ref());
+                                            (name, args)
+                                        }
+                                        Raw::Var(n) => (n.data.clone(), vec![]),
+                                        _ => (SmolStr::new(""), vec![]),
+                                    }
+                                }
+                                let (_name, args) = collect_app_args(&bound);
+                                for arg in args {
+                                    app = Raw::App(
+                                        Box::new(app),
+                                        Box::new(arg.clone()),
+                                        Either::Icit(Icit::Impl),
+                                    );
+                                }
+                                app
+                            };
                             all_params.push((empty_span(inst_name), trait_app, Icit::Impl));
                         }
                     }
@@ -1279,11 +1303,35 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
                     _ => SmolStr::new(""),
                 };
                 let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
-                let trait_app = Raw::App(
-                    Box::new(bound),
-                    Box::new(Raw::Var(type_name.clone())),
-                    super::parser::syntax::Either::Icit(Icit::Impl),
-                );
+                // Build constraint: apply type_name (Self) first, then bound args.
+                let trait_app = {
+                    let mut app = Raw::Var(empty_span(trait_name.clone()));
+                    app = Raw::App(
+                        Box::new(app),
+                        Box::new(Raw::Var(type_name.clone())),
+                        super::parser::syntax::Either::Icit(Icit::Impl),
+                    );
+                    fn collect_app_args_trait(expr: &Raw) -> (SmolStr, Vec<&Raw>) {
+                        match expr {
+                            Raw::App(head, arg, _) => {
+                                let (name, mut args) = collect_app_args_trait(head.as_ref());
+                                args.push(arg.as_ref());
+                                (name, args)
+                            }
+                            Raw::Var(n) => (n.data.clone(), vec![]),
+                            _ => (SmolStr::new(""), vec![]),
+                        }
+                    }
+                    let (_name, args) = collect_app_args_trait(&bound);
+                    for arg in args {
+                        app = Raw::App(
+                            Box::new(app),
+                            Box::new(arg.clone()),
+                            super::parser::syntax::Either::Icit(Icit::Impl),
+                        );
+                    }
+                    app
+                };
                 params.push((empty_span(inst_name), trait_app, Icit::Impl));
             }
         }
