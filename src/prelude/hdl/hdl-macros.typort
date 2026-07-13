@@ -126,12 +126,6 @@ macro_rules Expr {
         let _we2 = whenEnd(unit)
     };
 
-    // ---- assignment — call lhs.:=(rhs) directly ----
-    // Data trait's := now accepts any T where T: Into[Self],
-    // so .into is handled inside := via the where desugared
-    // implicit parameter, keeping the macro output span-free.
-    ($lhs:ident := $rhs:raw) => {let _ = $lhs.:=($rhs);};
-
     // ---- raw expression passthrough ----
     ($x: raw) => {let useless = $x;}
 }
