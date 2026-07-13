@@ -820,17 +820,12 @@ impl Compiler {
                                             // so _2:Vec[Nat]0 correctly eliminates
                                             // cons as a possibility).
                                             if let Some(ref constr_ret) = constr_ret_typ {
-                                                let impl_heads: Vec<_> = new_heads
-                                                    .iter()
-                                                    .filter(|(_, _, i)| *i == Icit::Impl)
-                                                    .collect();
                                                 let mut fc_for_refine = new_cxt_ff.clone();
                                                 for (ty, name, _) in
-                                                    impl_heads.iter().skip(consumed_implicit_count)
+                                                    new_heads.iter().skip(consumed_implicit_count)
                                                 {
-                                                    let imp = self.make_implicit_name(name);
                                                     fc_for_refine = fc_for_refine.bind(
-                                                        imp,
+                                                        name.clone(),
                                                         infer.quote(
                                                             &fc_for_refine.decl,
                                                             fc_for_refine.lvl,
