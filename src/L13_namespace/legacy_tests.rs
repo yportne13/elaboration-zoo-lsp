@@ -3059,5 +3059,55 @@ println (test (cons(zero, cons(zero, nil))) (cons(succ(zero), cons(succ(zero), n
     }
 }
 
-
-
+#[test]
+fn test_user_provided() {
+    let input = r#"
+def g(n: Nat): Tuple2[Nat, Nat] =
+    match n {
+        case zero => (0, 0)
+        case succ(m) => (double(g(m)._1), g(m)._2)
+    }
+def are(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (a + c) (b + c) =
+    match c {
+        case zero => h
+        case succ(k) => cong_succ(are(a, b, k, h))
+    }
+def ale(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (c + a) (c + b) =
+    let h1 = add_comm(c, a);
+    let h2 = are(a, b, c, h);
+    let h3 = symm(add_comm(c, b));
+    trans(h1, trans(h2, h3))
+def aa(a: Nat, b: Nat): Eq ((a + b) + (a + b)) ((a + a) + (b + b)) =
+    let s1 = symm(add_assoc(a + b, a, b));
+    let s2 = are((a + b) + a, a + (b + a), b, add_assoc(a, b, a));
+    let s3 = are(a + (b + a), a + (a + b), b, ale(b + a, a + b, a, add_comm(b, a)));
+    let s4 = are(a + (a + b), (a + a) + b, b, symm(add_assoc(a, a, b)));
+    let s5 = add_assoc(a + a, b, b);
+    trans(s1, trans(s2, trans(s3, trans(s4, s5))))
+def dm(x: Nat, z: Nat): Eq(double(x)*z, double(x*z)) =
+    match z {
+        case zero => rfl
+        case succ(n) =>
+            let ih = dm(x, n);
+            let h1 = ale(double(x)*n, double(x*n), double(x), ih);
+            let h2 = symm(aa(x, x*n));
+            trans(rfl, trans(h1, h2))
+    }
+def t(n: Nat): Eq(double(g(n)._1) * g(n)._2, double(g(n)._1 * g(n)._2)) =
+    match n {
+        case zero => rfl
+        case succ(m) =>
+            let ret: Eq(double(g(succ(m))._1) * g(succ(m))._2, double(g(succ(m))._1 * g(succ(m))._2)) =
+                dm(g(succ(m))._1, g(succ(m))._2);
+            ret
+    }
+println("ok")
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("PASS: {}", output);
+            assert!(output.contains("ok"));
+        }
+        Err(e) => panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
