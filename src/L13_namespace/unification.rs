@@ -731,7 +731,18 @@ impl Infer {
             pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &u)),
         );*/
 
+        //TODO: a temp fix for test_user_provided, but I dont think this fix is correct
         match (t.as_ref(), u.as_ref()) {
+            (Val::Call(a, al, _), Val::Call(b, bl, _)) if a == b => {
+                if self.unify_sp(l, cxt, al, bl, fuel).is_ok() {
+                    return Ok(())
+                }
+            }
+            _ => {}
+        }
+
+        match (t.as_ref(), u.as_ref()) {
+            (Val::Call(_, _, t_body), Val::Call(_, _, u_body)) => self.unify(l, cxt, &t_body, &u_body, fuel),
             (Val::Call(_, _, t_body), _) => self.unify(l, cxt, t_body, &u, fuel),
             (_, Val::Call(_, _, u_body)) => self.unify(l, cxt, &t, u_body, fuel),
             (Val::U(x), Val::U(y)) if x == y => Ok(()),
