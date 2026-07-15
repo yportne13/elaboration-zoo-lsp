@@ -3111,3 +3111,25 @@ println("ok")
         Err(e) => panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+#[test]
+fn test_pm_vec_bool_exhaustive() {
+    let input = r#"
+def test[l: Nat](x: Vec[Boolean] l): Boolean = match (l, x) {
+    case (zero, nil) => true
+    case (succ(m), cons(_, _)) => false
+}
+
+println (test (succ(zero), cons(true, nil)))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS (no non-exhaustive error):\n'{}'", output),
+        Err(e) => {
+            if e.0.data.contains("non-exhaustive") || e.0.data.contains("not covered") {
+                println!("NON-EXHAUSTIVE ERROR: '{}'", e.0.data);
+            } else {
+                panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset);
+            }
+        }
+    }
+}
