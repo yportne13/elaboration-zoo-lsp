@@ -294,12 +294,47 @@ impl Infer {
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some(meta_ty) = t_tm.no_metas(self) {
-                        return Err(Error(bod.to_span().map(|_|
+                        let err_msg = if let Val::Sum(name, params, _, true) = meta_ty.as_ref() {
+                            let has_flex = params.iter().any(|(_, val, _, _)| {
+                                matches!(self.force(&ret_cxt.decl, val).as_ref(), Val::Flex(..))
+                            });
+                            let instances = self.trait_solver.class_instances.get(&name.data);
+                            if has_flex {
+                                format!(
+                                    "cannot infer typeclass `{}`: type parameter is unknown",
+                                    name.data,
+                                )
+                            } else {
+                                let params_str = params.iter()
+                                    .map(|(_, val, _, _)| format!("{:?}", self.force(&ret_cxt.decl, val)))
+                                    .collect::<Vec<_>>().join(", ");
+                                if let Some(insts) = instances {
+                                    if insts.is_empty() {
+                                        format!(
+                                            "no instance of typeclass `{}` for types [{}]",
+                                            name.data, params_str,
+                                        )
+                                    } else {
+                                        format!(
+                                            "no matching instance of typeclass `{}` for types [{}]\navailable instances: {}",
+                                            name.data, params_str,
+                                            insts.iter().map(|i| format!("{:?}", i.lvl.data)).collect::<Vec<_>>().join(", "),
+                                        )
+                                    }
+                                } else {
+                                    format!(
+                                        "no instance of typeclass `{}` for types [{}]",
+                                        name.data, params_str,
+                                    )
+                                }
+                            }
+                        } else {
                             format!(
                                 "find unsolved meta with type `{}`",
                                 super::pretty_tm(0, ret_cxt.names(), &self.quote(&ret_cxt.decl, ret_cxt.lvl, meta_ty))
                             )
-                        )));
+                        };
+                        return Err(Error(bod.to_span().map(|_| err_msg.clone())));
                     }
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);

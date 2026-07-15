@@ -615,11 +615,46 @@ impl Infer {
                         };
 
                         if !nat_solved {
-                            let err_msg = format!(
-                                "find unsolved meta with type `{}`",//\n{:?}",
-                                super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
-                                //super::pretty::pretty_tm(0, cxt.names(), &t_tm),
-                            );
+                            let err_msg = if let Val::Sum(name, params, _, true) = oty.as_ref() {
+                                let has_flex = params.iter().any(|(_, val, _, _)| {
+                                    matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
+                                });
+                                let instances = self.trait_solver.class_instances.get(&name.data);
+                                if has_flex {
+                                    format!(
+                                        "cannot infer typeclass `{}`: type parameter is unknown",
+                                        name.data,
+                                    )
+                                } else {
+                                    let params_str = params.iter()
+                                        .map(|(_, val, _, _)| format!("{:?}", self.force(&cxt.decl, val)))
+                                        .collect::<Vec<_>>().join(", ");
+                                    if let Some(insts) = instances {
+                                        if insts.is_empty() {
+                                            format!(
+                                                "no instance of typeclass `{}` for types [{}]",
+                                                name.data, params_str,
+                                            )
+                                        } else {
+                                            format!(
+                                                "no matching instance of typeclass `{}` for types [{}]\navailable instances: {}",
+                                                name.data, params_str,
+                                                insts.iter().map(|i| format!("{:?}", i.lvl.data)).collect::<Vec<_>>().join(", "),
+                                            )
+                                        }
+                                    } else {
+                                        format!(
+                                            "no instance of typeclass `{}` for types [{}]",
+                                            name.data, params_str,
+                                        )
+                                    }
+                                }
+                            } else {
+                                format!(
+                                    "find unsolved meta with type `{}`",
+                                    super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
+                                )
+                            };
                             let infer = self.clone();
                             /*println!("{:?}", meta_cxt.pruning);
                             println!(
