@@ -314,40 +314,42 @@ impl Infer {
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some((meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         let err_msg = if let Val::Sum(name, params, _, true) = oty.as_ref() {
-                            let has_flex = params.iter().any(|(_, val, _, _)| {
-                                matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
-                            });
-                            let instances = self.trait_solver.class_instances.get(&name.data);
-                            if has_flex {
-                                format!(
-                                    "cannot infer typeclass `{}`: type parameter is unknown",
-                                    name.data,
-                                )
-                            } else {
-                                let params_str = params.iter()
-                                    .map(|(_, val, _, _)| format!("{:?}", self.force(&cxt.decl, val)))
-                                    .collect::<Vec<_>>().join(", ");
-                                if let Some(insts) = instances {
-                                    if insts.is_empty() {
-                                        format!(
-                                            "no instance of typeclass `{}` for types [{}]",
-                                            name.data, params_str,
-                                        )
+                                let has_flex = params.iter().any(|(_, val, _, _)| {
+                                    matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
+                                });
+                                let instances = self.trait_solver.class_instances.get(&name.data);
+                                if has_flex {
+                                    format!(
+                                        "cannot infer typeclass `{}`: type parameter is unknown",
+                                        name.data,
+                                    )
+                                } else if params.is_empty() {
+                                    format!("no instance of typeclass `{}`", name.data)
+                                } else {
+                                    let pretty_val = |val: &Rc<Val>| {
+                                        super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, val))
+                                    };
+                                    let first = pretty_val(&params[0].1);
+                                    let rest: Vec<String> = params[1..].iter()
+                                        .map(|(_, v, _, _)| pretty_val(v))
+                                        .collect();
+                                    let trait_repr = if rest.is_empty() {
+                                        name.data.to_string()
                                     } else {
+                                        format!("{}[{}]", name.data, rest.join(", "))
+                                    };
+                                    if instances.map_or(true, |i| i.is_empty()) {
+                                        format!("no instance of typeclass `{}` for types `{}`", trait_repr, first)
+                                    } else {
+                                        let insts = instances.unwrap();
                                         format!(
-                                            "no matching instance of typeclass `{}` for types [{}]\navailable instances: {}",
-                                            name.data, params_str,
-                                            insts.iter().map(|i| format!("{:?}", i.lvl.data)).collect::<Vec<_>>().join(", "),
+                                            "no matching instance of typeclass `{}` for types `{}`\navailable instances: {}",
+                                            trait_repr, first,
+                                            insts.iter().map(|i| i.lvl.data.to_string()).collect::<Vec<_>>().join(", "),
                                         )
                                     }
-                                } else {
-                                    format!(
-                                        "no instance of typeclass `{}` for types [{}]",
-                                        name.data, params_str,
-                                    )
                                 }
-                            }
-                        } else {
+                            } else {
                             format!(
                                 "find unsolved meta with type `{}`",
                                 super::pretty_tm(0, meta_cxt.names(), &self.quote(&meta_cxt.decl, meta_cxt.lvl, &oty)),
