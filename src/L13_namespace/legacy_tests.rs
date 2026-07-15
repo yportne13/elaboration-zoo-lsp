@@ -3126,7 +3126,7 @@ println (test (succ(zero), cons(true, nil)))
         Ok(output) => println!("PASS (no non-exhaustive error):\n'{}'", output),
         Err(e) => {
             if e.0.data.contains("non-exhaustive") || e.0.data.contains("not covered") {
-                println!("NON-EXHAUSTIVE ERROR: '{}'", e.0.data);
+                panic!("BUG: non-exhaustive reported but GADT constraints make all cases covered: '{}'", e.0.data);
             } else {
                 panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset);
             }
