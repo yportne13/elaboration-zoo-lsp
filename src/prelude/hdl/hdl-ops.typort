@@ -291,29 +291,29 @@ impl Xor[Bool, Bool] for Bool {
 
 impl[width: Nat] Bits[width] {
     def andR: Bool =
-        Bool.mk(None, binary(this.expr, "andR", this.expr))
+        Bool.mk(None, unary("&", this.expr))
     def orR: Bool =
-        Bool.mk(None, binary(this.expr, "orR", this.expr))
+        Bool.mk(None, unary("|", this.expr))
     def xorR: Bool =
-        Bool.mk(None, binary(this.expr, "xorR", this.expr))
+        Bool.mk(None, unary("^", this.expr))
 }
 
 impl[width: Nat] UInt[width] {
     def andR: Bool =
-        Bool.mk(None, binary(this.expr, "andR", this.expr))
+        Bool.mk(None, unary("&", this.expr))
     def orR: Bool =
-        Bool.mk(None, binary(this.expr, "orR", this.expr))
+        Bool.mk(None, unary("|", this.expr))
     def xorR: Bool =
-        Bool.mk(None, binary(this.expr, "xorR", this.expr))
+        Bool.mk(None, unary("^", this.expr))
 }
 
 impl[width: Nat] SInt[width] {
     def andR: Bool =
-        Bool.mk(None, binary(this.expr, "andR", this.expr))
+        Bool.mk(None, unary("&", this.expr))
     def orR: Bool =
-        Bool.mk(None, binary(this.expr, "orR", this.expr))
+        Bool.mk(None, unary("|", this.expr))
     def xorR: Bool =
-        Bool.mk(None, binary(this.expr, "xorR", this.expr))
+        Bool.mk(None, unary("^", this.expr))
 }
 
 // ============================================================
@@ -436,9 +436,9 @@ impl[width: Nat] Cat[Bool, UInt[width + 1]] for UInt[width] {
 
 impl[width: Nat] Bits[width] {
     def msb: Bool =
-        Bool.mk(None, binary(this.expr, "msb", this.expr))
+        Bool.mk(None, bitsel(this.expr, literal(pred(width))))
     def lsb: Bool =
-        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+        Bool.mk(None, bitsel(this.expr, literal(0)))
     def apply[idx: Nat]: Bool =
         Bool.mk(None, bitsel(this.expr, literal(idx)))
     def slice[hi: Nat, lo: Nat]: Bits[(hi - lo) + 1] =
@@ -447,9 +447,9 @@ impl[width: Nat] Bits[width] {
 
 impl[width: Nat] UInt[width] {
     def msb: Bool =
-        Bool.mk(None, binary(this.expr, "msb", this.expr))
+        Bool.mk(None, bitsel(this.expr, literal(pred(width))))
     def lsb: Bool =
-        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+        Bool.mk(None, bitsel(this.expr, literal(0)))
     def apply[idx: Nat]: Bool =
         Bool.mk(None, bitsel(this.expr, literal(idx)))
     def slice[hi: Nat, lo: Nat]: UInt[(hi - lo) + 1] =
@@ -460,9 +460,9 @@ impl[width: Nat] SInt[width] {
     def neg: SInt[width] =
         SInt.mk(None, unary("-", this.expr))
     def msb: Bool =
-        Bool.mk(None, binary(this.expr, "msb", this.expr))
+        Bool.mk(None, bitsel(this.expr, literal(pred(width))))
     def lsb: Bool =
-        Bool.mk(None, binary(this.expr, "lsb", this.expr))
+        Bool.mk(None, bitsel(this.expr, literal(0)))
     def apply[idx: Nat]: Bool =
         Bool.mk(None, bitsel(this.expr, literal(idx)))
     def slice[hi: Nat, lo: Nat]: SInt[(hi - lo) + 1] =
@@ -480,11 +480,11 @@ impl[width: Nat] UInt[width] {
     def cast[newWidth: Nat](proof: Le(width, newWidth)): UInt[newWidth] =
         UInt.mk(None, this.expr)
     def asBits: Bits[width] =
-        Bits.mk(None, binary(this.expr, "asBits", this.expr))
+        Bits.mk(None, this.expr)
     def asSInt: SInt[width] =
-        SInt.mk(None, binary(this.expr, "asSInt", this.expr))
+        SInt.mk(None, this.expr)
     def asBool: Bool =
-        Bool.mk(None, binary(this.expr, "asBool", this.expr))
+        Bool.mk(None, this.expr)
 }
 
 impl[width: Nat] SInt[width] {
@@ -494,16 +494,16 @@ impl[width: Nat] SInt[width] {
     def cast[newWidth: Nat](proof: Le(width, newWidth)): SInt[newWidth] =
         SInt.mk(None, this.expr)
     def asBits: Bits[width] =
-        Bits.mk(None, binary(this.expr, "asBits", this.expr))
+        Bits.mk(None, this.expr)
     def asUInt: UInt[width] =
-        UInt.mk(None, binary(this.expr, "asUInt", this.expr))
+        UInt.mk(None, this.expr)
 }
 
 impl[width: Nat] Bits[width] {
     def asUInt: UInt[width] =
-        UInt.mk(None, binary(this.expr, "asUInt", this.expr))
+        UInt.mk(None, this.expr)
     def asSInt: SInt[width] =
-        SInt.mk(None, binary(this.expr, "asSInt", this.expr))
+        SInt.mk(None, this.expr)
 }
 
 // ============================================================
