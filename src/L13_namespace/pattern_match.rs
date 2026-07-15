@@ -834,19 +834,13 @@ impl Compiler {
                                                         ty.clone(),
                                                     );
                                                 }
-                                                if let Ok(refined) = std::panic::catch_unwind(
-                                                    std::panic::AssertUnwindSafe(|| {
-                                                        infer.unify_pm(
-                                                            &fc_for_refine,
-                                                            &head_typ,
-                                                            constr_ret,
-                                                            empty_span(()),
-                                                        )
-                                                    }),
+                                                if let Ok(r) = infer.unify_pm(
+                                                    &fc_for_refine,
+                                                    &head_typ,
+                                                    constr_ret,
+                                                    empty_span(()),
                                                 ) {
-                                                    if let Ok(r) = refined {
-                                                        new_cxt_ff = r;
-                                                    }
+                                                    new_cxt_ff = r;
                                                 }
                                             }
 
