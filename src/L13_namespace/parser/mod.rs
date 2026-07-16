@@ -536,7 +536,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     // Allow newline after [ before implicit args
                     let (input_after_el, _) = kw(EndLine).option().parse(input, state)?;
                     let (input_t, ret) = if let Ok((input_t, (icit, raw))) = (smolstr(Ident), Cut((kw(Eq), p_raw)))
-                        .map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
+                        .map(|(x, t)| (Either::Name(x.clone()), t.1.unwrap_or(Raw::Hole(x.end_span()))))
                         .parse(input_after_el, state) {
                             (
                                 input_t,
@@ -594,7 +594,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     if stmts.len() <= 1 {
                         match stmts.into_iter().next() {
                             Some(expr) => Raw::app(lhs, expr),
-                            None => Raw::app(lhs, Raw::Hole(empty_span(()))),
+                            None => Raw::app(lhs.clone(), Raw::Hole(lhs.to_span())),
                         }
                     } else {
                         let func = lhs.clone();
@@ -602,8 +602,8 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                         let mut result = last;
                         for stmt in stmts.into_iter().rev() {
                             result = Raw::Let(
-                                empty_span(SmolStr::new("_useless")),
-                                Box::new(Raw::Hole(empty_span(()))),
+                                stmt.to_span().map(|_| SmolStr::new("_useless")),
+                                Box::new(Raw::Hole(stmt.to_span())),
                                 Box::new(stmt),
                                 Box::new(result),
                             );
@@ -661,7 +661,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                        },
 	                        Err(e) => {
 	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
-	                            empty_span(SmolStr::new(""))
+	                            op.end_span().map(|_| SmolStr::new(""))
 	                        }
 	                    };
 	                    Raw::Obj(Box::new(lhs), Some(name))
@@ -740,7 +740,7 @@ fn infix_binding_power(op: &Span<SmolStr>) -> Option<(u8, u8)> {
 
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
     let named_impl_arg = square_cut(
-        (smolstr(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole(empty_span(())))))
+        (smolstr(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x.clone()), t.1.unwrap_or(Raw::Hole(x.end_span()))))
             .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
             .many0_sep(kw(T![,]))
     ).map(|x| x.ok().unwrap_or_default());
@@ -773,7 +773,7 @@ fn p_lam_binder<'a: 'b, 'b>(
 ) -> IResult<'a, 'b, (Span<SmolStr>, Either)> {
     let explicit_binder = p_bind.map(|x| (x, Either::Icit(Icit::Expl)));
     let implicit_name_binder = square(
-        (smolstr(Ident), Cut((kw(Eq), p_bind))).map(|(x, (_, y))| (y.unwrap_or(empty_span(SmolStr::new(""))), Either::Name(x)))
+        (smolstr(Ident), Cut((kw(Eq), p_bind))).map(|(x, (_, y))| (y.unwrap_or(x.to_span().map(|_| SmolStr::new(""))), Either::Name(x)))
             .or(p_bind.map(|x| (x, Either::Icit(Icit::Impl))))
     );
 
@@ -802,13 +802,16 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
 ) -> Result<(&'b [TokenNode<'a>], Vec<(Span<SmolStr>, Raw, Icit)>), IError> {
     square_cut(
         (
-            p_bind, // 解析一个或多个绑定变量 xs
-            (kw(Colon), p_raw).option().map(|x| match x {
-                Some((_, x)) => x,
-                None => Raw::Hole(empty_span(())),
-            }),
+            p_bind,
+            (kw(Colon), p_raw).option(),
         )
-            .map(|(xs, a)| (xs, a, Icit::Impl))
+            .map(|(xs, opt)| {
+                let a = match opt {
+                    Some((_, x)) => x,
+                    None => Raw::Hole(xs.end_span()),
+                };
+                (xs, a, Icit::Impl)
+            })
             .many0_sep((kw(T![,]), kw(EndLine).option())),
     )
     .parse(input, state)
@@ -1015,7 +1018,7 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                     ));
                     // body_outer: Option<(arrow_span, Option<(Option<EndLine>, Raw)>)>
                     // arrow_span is the `=>` token, body is the parsed expression
-                    let body = body_outer.map_or(Raw::Hole(empty_span(())), |(arrow, inner)| {
+                    let body = body_outer.map_or(Raw::Hole(case_kw.end_span()), |(arrow, inner)| {
                         inner
                             .map(|(_, raw)| raw)
                             .unwrap_or(Raw::Hole(arrow.end_span()))
@@ -1038,8 +1041,8 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         string(Ident),
         paren_cut(p_raw.many1_sep(kw(T![,]))),
     ))
-        .map(|(_, scrutinee, args)| args.and_then(|r| r.ok()).unwrap_or_default().into_iter()
-            .fold(Raw::Var(scrutinee.map_or(empty_span(SmolStr::new("")), |x| x.map(|x| SmolStr::new(format!("{x}.mk"))))), |acc, x| 
+        .map(|(new_kw, scrutinee, args)| args.and_then(|r| r.ok()).unwrap_or_default().into_iter()
+            .fold(Raw::Var(scrutinee.map_or(new_kw.to_span().map(|_| SmolStr::new("")), |x| x.map(|x| SmolStr::new(format!("{x}.mk"))))), |acc, x| 
                 Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
             ))
         .parse(input, state)
@@ -1146,7 +1149,7 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                             let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
                             // Build constraint: apply type_name (Self) first, then bound args (explicit params).
                             let trait_app = {
-                                let mut app = Raw::Var(empty_span(trait_name.clone()));
+                                let mut app = Raw::Var(bound.to_span().map(|_| trait_name.clone()));
                                 app = Raw::App(
                                     Box::new(app),
                                     Box::new(Raw::Var(type_name.clone())),
@@ -1173,13 +1176,13 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                                 }
                                 app
                             };
-                            all_params.push((empty_span(inst_name), trait_app, Icit::Impl));
+                            all_params.push((type_name.to_span().map(|_| inst_name.clone()), trait_app, Icit::Impl));
                         }
                     }
                 }
             }
             Decl::Def {
-                name: name.unwrap_or(empty_span(SmolStr::new(""))),
+                name: name.unwrap_or(def_kw.end_span().map(|_| SmolStr::new(""))),
                 params: all_params,
                 ret_type: ret.flatten().unwrap_or(Raw::Hole(def_kw.end_span())),
                 body: body.unwrap_or(Raw::Hole(eq_kw.unwrap_or(def_kw).end_span())),
@@ -1220,9 +1223,9 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 .many0_sep(kw(EndLine)),
         ),
     ))
-        .map(|(_, name, params, fields)| Decl::Enum {
+        .map(|(enum_kw, name, params, fields)| Decl::Enum {
             is_trait: false,
-            name: name.unwrap_or(empty_span(SmolStr::new(""))),
+            name: name.unwrap_or(enum_kw.end_span().map(|_| SmolStr::new(""))),
             params: params.unwrap_or_default(),
             cases: fields.and_then(|r| r.ok()).unwrap_or_default(),
         })
@@ -1249,13 +1252,13 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
                })
            )*/
     ))
-        .map(|(_, name, params, fields)| Decl::Enum {
+        .map(|(struct_kw, name, params, fields)| Decl::Enum {
             is_trait: false,
-            name: name.clone().unwrap_or(empty_span(SmolStr::new(""))),
+            name: name.clone().unwrap_or(struct_kw.end_span().map(|_| SmolStr::new(""))),
             params: params.clone().unwrap_or_default(),
             cases: vec![
                 (
-                    name.clone().map(|x| x.map(|x| SmolStr::new(format!("{x}.mk")))).unwrap_or(empty_span(SmolStr::new(""))),
+                    name.clone().map(|x| x.map(|x| SmolStr::new(format!("{x}.mk")))).unwrap_or(struct_kw.end_span().map(|_| SmolStr::new(""))),
                     fields.clone().and_then(|r| r.ok()).unwrap_or_default().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
                     None,
                 ),
@@ -1305,7 +1308,7 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
                 let inst_name = SmolStr::new(format!("_{}_{}", trait_name.to_lowercase(), type_name.data));
                 // Build constraint: apply type_name (Self) first, then bound args.
                 let trait_app = {
-                    let mut app = Raw::Var(empty_span(trait_name.clone()));
+                    let mut app = Raw::Var(bound.to_span().map(|_| trait_name.clone()));
                     app = Raw::App(
                         Box::new(app),
                         Box::new(Raw::Var(type_name.clone())),
@@ -1332,7 +1335,7 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
                     }
                     app
                 };
-                params.push((empty_span(inst_name), trait_app, Icit::Impl));
+                params.push((type_name.to_span().map(|_| inst_name.clone()), trait_app, Icit::Impl));
             }
         }
     }
@@ -1359,7 +1362,7 @@ fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                     TraitBodyItem::TypeDecl { name: type_name, default_type } => {
                         // Desugar `type Elem` to `[Elem: outParam(Type 0)]` trait param
                         let out_param_raw = Raw::App(
-                            Box::new(Raw::Var(empty_span(SmolStr::new("outParam")))),
+                            Box::new(Raw::Var(type_name.to_span().map(|_| SmolStr::new("outParam")))),
                             Box::new(Raw::U(0)),
                             super::parser::syntax::Either::Icit(Icit::Expl),
                         );
@@ -1412,7 +1415,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         ).map(Ok).or(p_raw.map(Err)),
         brace(p_impl_body_item_def_or_type.many0_sep(kw(EndLine))),
     )).map(|x| match x.2 {
-        Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name, trait_params, name.unwrap_or(Raw::Hole(empty_span(()))), x.3, false),
+        Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name.clone(), trait_params, name.unwrap_or(Raw::Hole(trait_name.end_span())), x.3, false),
         Some(Err(name)) => (
             x.1.clone(),
             x.0.map(|_| SmolStr::new(format!("$trait_name${}", name))),
@@ -1421,7 +1424,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             x.3,
             true,
         ),
-        None => (x.1, empty_span(SmolStr::new("")), vec![], Raw::Hole(empty_span(())), x.3, false)
+        None => (x.1, x.0.to_span().map(|_| SmolStr::new("")), vec![], Raw::Hole(x.0.to_span()), x.3, false)
     })
         .map(|(params, trait_name, trait_params, name, body, need_create)| {
             // body is Option<Result<Vec<...>, Span<()>>> (brace's Result wrapped by Cut)
@@ -1758,7 +1761,7 @@ fn p_macro_transcriber<'a: 'b, 'b>(
             inner: Box::new(MacroTranscriber::Sequence(transcribers)),
             separator: None,
             op,
-            metavar: empty_span("".to_owned()),  // 需要改进
+            metavar: op_token.to_span().map(|_| "".to_owned()),
         }
     });
     
