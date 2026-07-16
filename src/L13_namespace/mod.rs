@@ -1057,6 +1057,26 @@ impl Infer {
                 }
                 Val::Decl(x.clone(), sp.clone()).into()
             },
+            Val::Sum(name, params, cases, is_trait) => {
+                Val::Sum(
+                    name.clone(),
+                    Rc::new(params.iter().map(|(n, v, ty, i)| {
+                        (n.clone(), self.force(decl, v), self.force(decl, ty), *i)
+                    }).collect()),
+                    cases.clone(),
+                    *is_trait,
+                ).into()
+            },
+            Val::SumCase { is_trait, typ, case_name, datas } => {
+                Val::SumCase {
+                    is_trait: *is_trait,
+                    typ: self.force(decl, typ),
+                    case_name: case_name.clone(),
+                    datas: Rc::new(datas.iter().map(|(n, ty, i)| {
+                        (n.clone(), self.force(decl, ty), *i)
+                    }).collect()),
+                }.into()
+            },
             _ => t.clone(),
         }
     }
