@@ -1578,10 +1578,21 @@ impl Infer {
             )), vec![]));
         }
         if let Some(ns_entry) = ns_result.into_iter().next() {
-            return self.infer_expr(cxt, Raw::app(
-                Raw::Var(t_span.map(|_| SmolStr::new(format!("{}{}", ns_entry.2, t.data)))),
+            let qname = SmolStr::new(format!("{}{}", ns_entry.2, t.data));
+            let def_span = cxt.decl.get(&qname)
+                .map(|(def, _, _, _, _, _)| *def)
+                .unwrap_or(t.to_span());
+            let result = self.infer_expr(cxt, Raw::app(
+                Raw::Var(t_span.map(|_| qname.clone())),
                 *x.clone(),
+            ))?;
+            self.hover_table.push((
+                t.to_span(),
+                def_span,
+                crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() },
+                result.1.clone(),
             ));
+            return Ok(result);
         }
         {
             let traits = self.trait_definition
@@ -1592,7 +1603,9 @@ impl Infer {
                         .map(|x| (trait_name, trait_params, out_param, x))
                 })
                 .filter(|(x, _, _, _)| self.trait_solver.can_satisfy(x, &typ_raw))
-                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type, _default_body))| (
+                .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type, _default_body))| {
+                    let def_span = methods_name.to_span();
+                    (
                     trait_name.clone(),
                     {
                         let params = {
@@ -1643,19 +1656,28 @@ impl Infer {
                                 Either::Icit(Icit::Expl),
                             )),
                         )
-                    }
-                ))
+                    },
+                    def_span,
+                )
+                })
                 .collect::<Vec<_>>();
             if traits.len() > 1 {
-                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _)| n).collect();
+                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _, _)| n).collect();
                 return Err(Error(t.clone().map(|m| format!(
                     "ambiguous method `{}`: found in traits {}",
                     m,
                     trait_names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
                 )), vec![]));
             }
-            if let Some((_, decl)) = traits.first() {
-                self.infer_expr(cxt, decl.clone())
+            if let Some((_, decl, def_span)) = traits.first() {
+                let result = self.infer_expr(cxt, decl.clone())?;
+                self.hover_table.push((
+                    t.to_span(),
+                    *def_span,
+                    crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() },
+                    result.1.clone(),
+                ));
+                Ok(result)
             } else {
                 Err(Error(t.clone().map(|t| format!(
                     "`{}`: {} has no object `{}`",
