@@ -502,29 +502,30 @@ impl Compiler {
                         .map(|x| x.data.clone())
                         .collect::<BTreeSet<_>>();
 
+                    let accessible_set: Option<HashSet<&Constructor>> = match typ.as_ref() {
+                        Val::Sum(..) => arms.first().and_then(|entry| {
+                            self.filter_accessible_constrs(
+                                infer,
+                                &entry.cxt_for_filter,
+                                typ,
+                                &constrs[..],
+                            )
+                            .ok()
+                        }).map(|accessible_constrs| {
+                            accessible_constrs.into_iter().map(|x| x.0).collect()
+                        }),
+                        _ => None,
+                    };
+
                     let decision_tree_branches = constrs
                         .iter()
                         .map(|constr| {
-                            // Lifting: compute accessibility once per constr,
-                            // not once per (constr, arm) pair.
-                            // Result depends only on typ (type indices), not on
-                            // per-arm context — same for all arms.
                             let constr_accessible = if constr.data == "$any$" {
                                 true
                             } else {
-                                arms.first()
-                                    .and_then(|entry| {
-                                        self.filter_accessible_constrs(
-                                            infer,
-                                            &entry.cxt_for_filter,
-                                            typ,
-                                            &constrs[..],
-                                        )
-                                        .ok()
-                                    })
-                                    .map(|accessible_constrs| {
-                                        accessible_constrs.into_iter().any(|x| x.0 == constr)
-                                    })
+                                accessible_set
+                                    .as_ref()
+                                    .map(|set| set.contains(&constr))
                                     .unwrap_or(false)
                             };
 
