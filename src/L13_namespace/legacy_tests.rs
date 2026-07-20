@@ -3120,7 +3120,7 @@ def test[l: Nat](x: Vec[Boolean] l): Boolean = match (l, x) {
     case (succ(m), cons(_, _)) => false
 }
 
-println (test (succ(zero), cons(true, nil)))
+println (test (cons(true, nil)))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("PASS (no non-exhaustive error):\n'{}'", output),

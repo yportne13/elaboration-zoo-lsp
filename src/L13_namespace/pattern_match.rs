@@ -5,7 +5,7 @@ use smol_str::SmolStr;
 use crate::parser_lib::{Span, ToSpan};
 
 use super::{
-    Decl, Either, Env, Error, Infer, PatternDetail, Rc, Tm, Val,
+    Decl, Either, Env, Error, Infer, Lvl, PatternDetail, Rc, Tm, Val,
     cxt::Cxt,
     empty_span,
     parser::syntax::{Icit, Pattern, Raw},
@@ -348,7 +348,7 @@ impl Compiler {
     fn compile_aux(
         &mut self,
         infer: &mut Infer,
-        heads: &[(Rc<Val>, Span<SmolStr>, Icit)],
+        heads: &[(Rc<Val>, Span<SmolStr>, Icit, Option<Rc<Val>>)],
         arms: &[ArmEntry],
         context: &MatchContext,
         ori: Rc<Val>,
@@ -421,7 +421,7 @@ impl Compiler {
                     [] => Ok(false),
                 }
             }
-            [(typ, head_name, icit), heads_rest @ ..] => {
+            [(typ, head_name, icit, head_val), heads_rest @ ..] => {
                 let not_necessary = arms
                     .iter()
                     .all(|entry| matches!(entry.arm.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
@@ -536,6 +536,13 @@ impl Compiler {
                                     // below. Needed for GADT index refinement
                                     // in the constr_ == constr branch.
                                     let head_typ = typ.clone();
+                                    // Extract field values from the scrutinee for
+                                    // head-value tracking (used by Rigid constraint
+                                    // propagation in the constr_ == constr branch).
+                                    let ori_datas: Vec<Rc<Val>> = match ori.as_ref() {
+                                        Val::SumCase { datas, .. } => datas.iter().map(|d| d.1.clone()).collect(),
+                                        _ => vec![],
+                                    };
                                     let mut new_heads = vec![];
                                     let arm = &entry.arm;
                                     let idx = entry.idx;
@@ -585,7 +592,7 @@ impl Compiler {
                                                     val,
                                                 );
                                             } else {
-                                                new_heads.push((ty.clone(), name.clone(), *icit));
+                                                new_heads.push((ty.clone(), name.clone(), *icit, None::<Rc<Val>>));
                                                 typ = infer.closure_apply(
                                                     &cxt_for_filter.decl,
                                                     closure,
@@ -654,7 +661,9 @@ impl Compiler {
                                                     typ.clone(),
                                                 ),
                                                 new_heads: if need_new_head_expansion {
-                                                    new_heads
+                                                    new_heads.iter().enumerate().map(|(i, (ty, name, icit_h, _))| {
+                                                        (ty.clone(), name.clone(), *icit_h, ori_datas.get(i).cloned())
+                                                    }).collect()
                                                 } else {
                                                     vec![]
                                                 },
@@ -725,7 +734,9 @@ impl Compiler {
                                                     typ.clone(),
                                                 ),
                                                 new_heads: if need_new_head_expansion {
-                                                    new_heads
+                                                    new_heads.iter().enumerate().map(|(i, (ty, name, icit_h, _))| {
+                                                        (ty.clone(), name.clone(), *icit_h, ori_datas.get(i).cloned())
+                                                    }).collect()
                                                 } else {
                                                     vec![]
                                                 },
@@ -758,9 +769,9 @@ impl Compiler {
                                             let implicit_param_names: Vec<Span<SmolStr>> =
                                                 new_heads
                                                     .iter()
-                                                    .filter(|(_, _, icit)| *icit == Icit::Impl)
+                                                    .filter(|(_, _, icit, _)| *icit == Icit::Impl)
                                                     .take(implicit_count)
-                                                    .map(|(_, name, _)| name.clone())
+                                                    .map(|(_, name, _, _)| name.clone())
                                                     .collect();
                                             let consumed_implicit_count =
                                                 implicit_param_names.len();
@@ -784,7 +795,7 @@ impl Compiler {
                                                 {
                                                     let (ty, ..) = &new_heads
                                                         .iter()
-                                                        .filter(|(_, _, icit)| *icit == Icit::Impl)
+                                                        .filter(|(_, _, icit, _)| *icit == Icit::Impl)
                                                         .nth(k)
                                                         .unwrap();
                                                     let imp = var_name.clone();
@@ -822,7 +833,7 @@ impl Compiler {
                                             // cons as a possibility).
                                             if let Some(ref constr_ret) = constr_ret_typ {
                                                 let mut fc_for_refine = new_cxt_ff.clone();
-                                                for (ty, name, _) in
+                                                for (ty, name, _, _) in
                                                     new_heads.iter().skip(consumed_implicit_count)
                                                 {
                                                     fc_for_refine = fc_for_refine.bind(
@@ -845,13 +856,63 @@ impl Compiler {
                                                 }
                                             }
 
+                                            // Rigid head variable constraint propagation:
+                                            // When the head value is a Rigid variable (e.g.
+                                            // `l` from scrutinee `(l, x)`), the GADT
+                                            // refinement above only unifies the head type
+                                            // with the constructor's return type (e.g.
+                                            // `Nat = Nat`), which learns nothing about
+                                            // the variable itself.  We explicitly propagate
+                                            // `head_var := constructor_value` into
+                                            // cxt_for_filter so that subsequent
+                                            // filter_accessible_constrs calls on dependent
+                                            // heads (e.g. `Vec[Boolean] l`) can eliminate
+                                            // impossible constructors.
+                                            if let Val::Sum(_, _, _, is_trait_sum) = typ.as_ref() {
+                                                if let Some(hv) = head_val {
+                                                    if let Val::Rigid(head_lvl, sp) = hv.as_ref() {
+                                                        if sp.is_empty() {
+                                                            let mut cxt_for_constr = new_cxt_ff.clone();
+                                                            let mut datas_vec: Vec<(Span<SmolStr>, Rc<Val>, Icit)> = Vec::new();
+                                                            for (ty, name, icit_h, _) in new_heads.iter() {
+                                                                cxt_for_constr = cxt_for_constr.bind(
+                                                                    name.clone(),
+                                                                    infer.quote(&cxt_for_constr.decl, cxt_for_constr.lvl, ty),
+                                                                    ty.clone(),
+                                                                );
+                                                                let lvl = cxt_for_constr.lvl.0 - 1;
+                                                                datas_vec.push((name.clone(), Rc::new(Val::vvar(Lvl(lvl))), *icit_h));
+                                                            }
+                                                            let constr_val = Rc::new(Val::SumCase {
+                                                                is_trait: *is_trait_sum,
+                                                                typ: head_typ.clone(),
+                                                                case_name: constr.clone(),
+                                                                datas: Rc::new(datas_vec),
+                                                            });
+                                                            if let Ok(r) = infer.unify_pm(
+                                                                &cxt_for_constr,
+                                                                &Rc::new(Val::vvar(*head_lvl)),
+                                                                &constr_val,
+                                                                empty_span(()),
+                                                            ) {
+                                                                new_cxt_ff = r;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
                                             // The consumed Implicit params have been bound;
                                             // remove them from new_heads so the recursive
                                             // call doesn't re-process them.
+                                            // Attach field values from the scrutinee.
                                             let remaining_new_heads: Vec<_> = new_heads
                                                 [consumed_implicit_count..]
                                                 .iter()
-                                                .cloned()
+                                                .enumerate()
+                                                .map(|(i, (ty, name, icit_h, _))| {
+                                                    (ty.clone(), name.clone(), *icit_h, ori_datas.get(consumed_implicit_count + i).cloned())
+                                                })
                                                 .collect();
 
                                             Some(Some(FilterResult {
@@ -1009,7 +1070,7 @@ impl Compiler {
         // 收集所有编译阶段的错误，而不是遇到第一个就停止
         if let Err(e) = self.compile_aux(
             infer,
-            &[(typ.clone(), empty_span(SmolStr::new("")), Icit::Expl)],
+            &[(typ.clone(), empty_span(SmolStr::new("")), Icit::Expl, Some(target_val.clone()))],
             &arms
                 .iter()
                 .enumerate()
@@ -1143,7 +1204,7 @@ struct FilterResult {
     idx: usize,
     cxt: Cxt,
     cxt_for_filter: Cxt,
-    new_heads: Vec<(Rc<Val>, Span<SmolStr>, Icit)>,
+    new_heads: Vec<(Rc<Val>, Span<SmolStr>, Icit, Option<Rc<Val>>)>,
     patcon: PatConstructor,
     is_impl: bool,
 }
