@@ -180,6 +180,7 @@ fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
     fn many1_sep<P: Parser<I, X, S, IError>, X>(self, sep: P) -> impl Parser<I, Vec<A>, S, IError>;
+    fn many1_sep_skip<P: Parser<I, X, S, IError>, X, Skip: Fn(I) -> Option<I> + Copy>(self, sep: P, skip: Skip) -> impl Parser<I, Vec<A>, S, IError>;
 }
 
 impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> ParserExt<&'b [TokenNode<'a>], A, MacroState> for T {
@@ -206,6 +207,47 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                     .map(|_| ErrMsg::Base(BaseMsg::EmptyVec))
             }),
             x => x,
+        }
+    }
+    fn many1_sep_skip<P, X, Skip>(self, sep: P, skip: Skip) -> impl Parser<&'b [TokenNode<'a>], Vec<A>, MacroState, IError>
+    where
+        P: Parser<&'b [TokenNode<'a>], X, MacroState, IError>,
+        Skip: Fn(&'b [TokenNode<'a>]) -> Option<&'b [TokenNode<'a>]> + Copy,
+    {
+        move |input: &'b [TokenNode<'a>], state: &mut MacroState| {
+            let mut input = input;
+            let mut result = Vec::new();
+            loop {
+                match self.parse(input, state) {
+                    Ok((i, a)) => {
+                        input = i;
+                        result.push(a);
+                    }
+                    Err(_) if result.is_empty() => {
+                        return Err(IError {
+                            msg: input.first()
+                                .map(|x| x.to_span())
+                                .unwrap_or(empty_span(()))
+                                .map(|_| ErrMsg::Base(BaseMsg::EmptyVec)),
+                        });
+                    }
+                    Err(_) => break,
+                }
+                if let Ok((i, _)) = sep.parse(input, state) {
+                    input = i;
+                } else {
+                    match skip(input) {
+                        Some(at_sep) => {
+                            match sep.parse(at_sep, state) {
+                                Ok((i, _)) => input = i,
+                                Err(_) => break,
+                            }
+                        }
+                        None => break,
+                    }
+                }
+            }
+            Ok((input, result))
         }
     }
 }
@@ -241,7 +283,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                     skip_until_decl,
                     || Ok(Decl::Package { path: vec![] }),
                 )
-                .many1_sep(kw(EndLine)).parse(&ret, &mut err_collect);
+                .many1_sep_skip(kw(EndLine), skip_until_decl).parse(&ret, &mut err_collect);
             match ret {
                 Ok(ret) => {
                     let expansions = std::mem::take(&mut err_collect.2);
