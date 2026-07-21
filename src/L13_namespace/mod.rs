@@ -109,7 +109,7 @@ pub enum Tm {
 }
 
 impl Tm {
-    pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>)> {
+    pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => None,
             Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
@@ -121,7 +121,7 @@ impl Tm {
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(_, cxt, oty, _) => Some((cxt.as_ref().clone(), oty.clone())),
+                MetaEntry::Unsolved(_, cxt, oty, span) => Some((cxt.as_ref().clone(), oty.clone(), *span)),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }

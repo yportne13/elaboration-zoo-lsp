@@ -576,7 +576,7 @@ impl Infer {
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(this_meta as u32), true)
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if let Some((meta_cxt, oty)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
+                    if let Some((meta_cxt, oty, meta_span)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
                         // --- Try Nat defaulting (Lean-style fallback) ---
                         // When there are unsolved type metas, try defaulting them to Nat
                         // and re-attempt trait resolution, before giving up.
@@ -685,7 +685,7 @@ impl Infer {
                                     Ok(x)
                                 }).ok()
                             };
-                            return Err(Error(bod.to_span().map(|_|
+                            return Err(Error(meta_span.map(|_|
                                 err_msg.clone()
                             ), vec![Box::new(ret)]));
                         }
