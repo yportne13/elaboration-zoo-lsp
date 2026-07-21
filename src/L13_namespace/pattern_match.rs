@@ -536,11 +536,11 @@ impl Compiler {
                                     // below. Needed for GADT index refinement
                                     // in the constr_ == constr branch.
                                     let head_typ = typ.clone();
-                                    // Extract field values from the scrutinee for
+                                    // Extract field values from the head value for
                                     // head-value tracking (used by Rigid constraint
                                     // propagation in the constr_ == constr branch).
-                                    let ori_datas: Vec<Rc<Val>> = match ori.as_ref() {
-                                        Val::SumCase { datas, .. } => datas.iter().map(|d| d.1.clone()).collect(),
+                                    let head_val_datas: Vec<Rc<Val>> = match head_val.as_ref().and_then(|v| Some(v.as_ref())) {
+                                        Some(Val::SumCase { datas, .. }) => datas.iter().map(|d| d.1.clone()).collect(),
                                         _ => vec![],
                                     };
                                     let mut new_heads = vec![];
@@ -662,7 +662,7 @@ impl Compiler {
                                                 ),
                                                 new_heads: if need_new_head_expansion {
                                                     new_heads.iter().enumerate().map(|(i, (ty, name, icit_h, _))| {
-                                                        (ty.clone(), name.clone(), *icit_h, ori_datas.get(i).cloned())
+                                                        (ty.clone(), name.clone(), *icit_h, head_val_datas.get(i).cloned())
                                                     }).collect()
                                                 } else {
                                                     vec![]
@@ -735,7 +735,7 @@ impl Compiler {
                                                 ),
                                                 new_heads: if need_new_head_expansion {
                                                     new_heads.iter().enumerate().map(|(i, (ty, name, icit_h, _))| {
-                                                        (ty.clone(), name.clone(), *icit_h, ori_datas.get(i).cloned())
+                                                        (ty.clone(), name.clone(), *icit_h, head_val_datas.get(i).cloned())
                                                     }).collect()
                                                 } else {
                                                     vec![]
@@ -905,13 +905,13 @@ impl Compiler {
                                             // The consumed Implicit params have been bound;
                                             // remove them from new_heads so the recursive
                                             // call doesn't re-process them.
-                                            // Attach field values from the scrutinee.
+                                            // Attach field values from the head value.
                                             let remaining_new_heads: Vec<_> = new_heads
                                                 [consumed_implicit_count..]
                                                 .iter()
                                                 .enumerate()
                                                 .map(|(i, (ty, name, icit_h, _))| {
-                                                    (ty.clone(), name.clone(), *icit_h, ori_datas.get(consumed_implicit_count + i).cloned())
+                                                    (ty.clone(), name.clone(), *icit_h, head_val_datas.get(consumed_implicit_count + i).cloned())
                                                 })
                                                 .collect();
 
