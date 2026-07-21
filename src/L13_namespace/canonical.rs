@@ -74,7 +74,7 @@ impl Infer {
                 //println!("1. {t} target: {}, depth: {depth}", target.len());
                 while let Val::Pi(span, icit, dom, clos) = vt.as_ref() {
                     let icit = *icit;
-                    let new_meta = self.fresh_meta(&cxt, dom.clone());
+                    let new_meta = self.fresh_meta(&cxt, dom.clone(), empty_span(()));
                     let meta = self.eval(&cxt.decl, &cxt.env, &new_meta);
                     if icit == Icit::Expl {
                         new_list.push(dom.clone());

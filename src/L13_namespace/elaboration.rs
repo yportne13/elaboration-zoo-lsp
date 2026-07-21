@@ -61,30 +61,31 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
 }
 
 impl Infer {
-    fn insert_go(&mut self, cxt: &Cxt, t: Rc<Tm>, va: Rc<Val>) -> (Rc<Tm>, Rc<VTy>) {
+    fn insert_go(&mut self, cxt: &Cxt, t: Rc<Tm>, va: Rc<Val>, span: Span<()>) -> (Rc<Tm>, Rc<VTy>) {
         let va = self.force(&cxt.decl, &va);
         match va.as_ref() {
             Val::Pi(_, Icit::Impl, a, b) => {
                 //println!("insert {:?}", a);
-                let m = self.fresh_meta(cxt, a.clone());
+                let m = self.fresh_meta(cxt, a.clone(), span);
                 let mv = self.eval(&cxt.decl, &cxt.env, &m);
                 self.insert_go(
                     cxt,
                     Tm::App(t, m, Icit::Impl).into(),
                     self.closure_apply(&cxt.decl, b, mv),
+                    span,
                 )
             }
             _ => (t, va),
         }
     }
-    fn insert_t(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
-        act.map(|(t, va)| self.insert_go(cxt, t, va))
+    fn insert_t(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>, span: Span<()>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
+        act.map(|(t, va)| self.insert_go(cxt, t, va, span))
     }
-    pub fn insert(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
+    pub fn insert(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>, span: Span<()>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.and_then(|x| if let Tm::Lam(_, Icit::Impl, _) = x.0.as_ref() {
             Ok(x)
         } else {
-            self.insert_t(cxt, Ok(x))
+            self.insert_t(cxt, Ok(x), span)
         })
     }
     fn insert_until_go(
@@ -99,7 +100,7 @@ impl Infer {
                 if x.data == name.data {
                     Ok((t, Val::Pi(x.clone(), Icit::Impl, a.clone(), b.clone()).into()))
                 } else {
-                    let m = self.fresh_meta(cxt, a.clone());
+                    let m = self.fresh_meta(cxt, a.clone(), name.to_span());
                     let mv = self.eval(&cxt.decl, &cxt.env, &m);
                     self.insert_until_go(
                         cxt,
@@ -161,7 +162,7 @@ impl Infer {
                     }
                     Either::Icit(Icit::Expl) => {
                         let infered = self.infer_expr(cxt, *t);
-                        let (t, tty) = self.insert_t(cxt, infered)?;
+                        let (t, tty) = self.insert_t(cxt, infered, t_span)?;
                         (Icit::Expl, t, tty)
                     }
                 };
@@ -183,7 +184,7 @@ impl Infer {
                         }
                         self.meta.truncate(meta_before);
 
-                        let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                        let new_meta = self.fresh_meta(cxt, Val::U(0).into(), t_span);
                         let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
@@ -194,6 +195,7 @@ impl Infer {
                                     a.clone(),
                                 ),
                                 Val::U(0).into(),
+                                t_span,
                             ),
                         );
                         self.unify_catch(
@@ -225,7 +227,7 @@ impl Infer {
     pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
         let t_span = t.to_span();
         let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(cxt, t)?;
-        let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)))?;
+        let (t_inferred, inferred_type) = self.insert(&refined_cxt, Ok((t_inferred, inferred_type)), t_span)?;
 		let new_cxt = self.unify_pm(&refined_cxt, &a, &inferred_type, t_span)?;
         Ok((t_inferred, new_cxt))
     }
@@ -328,14 +330,14 @@ impl Infer {
     pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, u32), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
-        let (t_inferred, inferred_type) = self.insert(cxt, x)?;
+        let (t_inferred, inferred_type) = self.insert(cxt, x, t_span)?;
         match inferred_type.as_ref() {
             Val::U(u) => Ok((t_inferred, *u)),
             Val::Flex(m, sp) => {
                 let (pren, prune_non_linear) = self.invert(cxt.lvl, &cxt.decl, sp)
                     .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned()), vec![]))?;
                 let mty = match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(ref a, _, _) => a.clone(),
+                    MetaEntry::Unsolved(ref a, _, _, _) => a.clone(),
                     _ => unreachable!(),
                 };
 
@@ -482,7 +484,7 @@ impl Infer {
             }
 
             // Handle holes
-            (Raw::Hole(_), _) => Ok(self.fresh_meta(cxt, a)),
+            (Raw::Hole(span), _) => Ok(self.fresh_meta(cxt, a, span)),
 
             (Raw::Match(expr, clause), _) => {
                 let expr_span = expr.to_span();
@@ -513,7 +515,7 @@ impl Infer {
             (t, _) => {
                 let t_span = t.to_span();
                 let x = self.infer_expr(cxt, t);
-                let (t_inferred, inferred_type) = self.insert(cxt, x)?;
+        let (t_inferred, inferred_type) = self.insert(cxt, x, t_span)?;
                 if CANONICAL {
                     self.unify(cxt.lvl, cxt, &a, &inferred_type, 100).map_err(|e| {
                         let err = match e {
@@ -588,7 +590,7 @@ impl Infer {
                         let nat_solved = if nat_ok {
                             // Phase 1: collect indices of type-valued unsolved metas (immutable borrow)
                             let to_default: Vec<usize> = self.meta.iter().enumerate()
-                                .filter(|(_, entry)| matches!(entry, MetaEntry::Unsolved(ty, _, _)
+                                .filter(|(_, entry)| matches!(entry, MetaEntry::Unsolved(ty, _, _, _)
                                     if matches!(self.force(&cxt.decl, ty).as_ref(), Val::U(_))))
                                 .map(|(i, _)| i)
                                 .collect();
@@ -597,7 +599,7 @@ impl Infer {
                             } else {
                                 // Phase 2: mutate those metas (mutable borrow)
                                 for &idx in &to_default {
-                                    if let MetaEntry::Unsolved(ty, _, _) = &self.meta[idx] {
+                                    if let MetaEntry::Unsolved(ty, _, _, _) = &self.meta[idx] {
                                         self.meta[idx] = MetaEntry::Solved(nat_val.clone(), ty.clone());
                                     }
                                 }
@@ -1303,12 +1305,12 @@ impl Infer {
 
             // Infer lambda expressions
             Raw::Lam(x, Either::Icit(i), t) => {
-                let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                let new_meta = self.fresh_meta(cxt, Val::U(0).into(), x.to_span());
                 let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
                 //TODO:below may be wrong
                 let new_cxt = cxt.bind(x.clone(), self.quote(&cxt.decl, cxt.lvl, &a), a.clone());
                 let infered = self.infer_expr(&new_cxt, *t);
-                let (t_inferred, b) = self.insert(&new_cxt, infered)?;
+                let (t_inferred, b) = self.insert(&new_cxt, infered, x.to_span())?;
                 let b_closure = self.close_val(cxt, &b);
                 Ok((
                     Tm::Lam(x.clone(), i, t_inferred).into(),
@@ -1336,7 +1338,7 @@ impl Infer {
                     }
                     Either::Icit(Icit::Expl) => {
                         let infered = self.infer_expr(cxt, *t);
-                        let (t, tty) = self.insert_t(cxt, infered)?;
+                        let (t, tty) = self.insert_t(cxt, infered, t_span)?;
                         (Icit::Expl, t, tty)
                     }
                 };
@@ -1364,7 +1366,7 @@ impl Infer {
                         }
                         self.meta.truncate(meta_before);
 
-                        let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+                        let new_meta = self.fresh_meta(cxt, Val::U(0).into(), t_span);
                         let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
@@ -1375,6 +1377,7 @@ impl Infer {
                                     a.clone(),
                                 ),
                                 Val::U(0).into(),
+                                t_span,
                             ),
                         );
                         self.unify_catch(
@@ -1448,10 +1451,10 @@ impl Infer {
             }
 
             // Infer holes
-            Raw::Hole(_) => {
-                let new_meta = self.fresh_meta(cxt, Val::U(0).into());
+            Raw::Hole(span) => {
+                let new_meta = self.fresh_meta(cxt, Val::U(0).into(), span);
                 let a = self.eval(&cxt.decl, &cxt.env, &new_meta);
-                let t = self.fresh_meta(cxt, a.clone());
+                let t = self.fresh_meta(cxt, a.clone(), span);
                 Ok((t, a))
             }
 
@@ -1466,7 +1469,7 @@ impl Infer {
             }
 
             Raw::Match(expr, clause) => {
-                let a_meta = self.fresh_meta(cxt, Val::U(0).into());
+                let a_meta = self.fresh_meta(cxt, Val::U(0).into(), expr.to_span());
                 let a = self.eval(&cxt.decl, &cxt.env, &a_meta);
                 let tm = self.check::<false>(cxt, Raw::Match(expr, clause), &a)?;
                 Ok((tm, a))
@@ -1548,7 +1551,7 @@ impl Infer {
                 let meta_before = self.meta.len();
                 let mut check_typ = ns_entry.0.clone();
                 while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
-                    let u = self.fresh_meta(&cxt, dom.clone());
+                    let u = self.fresh_meta(&cxt, dom.clone(), t_span);
                     let u = self.eval(&cxt.decl, &cxt.env, &u);
                     check_typ = self.closure_apply(&cxt.decl, cod, u);
                 }

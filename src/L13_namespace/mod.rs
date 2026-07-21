@@ -1,4 +1,4 @@
-use colored::Colorize;
+﻿use colored::Colorize;
 use cxt::Cxt;
 use parser::{syntax::{Either, Icit, Raw}, IError};
 use pattern_match::Compiler;
@@ -38,7 +38,7 @@ pub struct MetaVar(u32);
 #[derive(Debug, Clone)]
 pub enum MetaEntry {
     Solved(Rc<Val>, Rc<VTy>),
-    Unsolved(Rc<VTy>, std::sync::Arc<Cxt>, Rc<VTy>),
+    Unsolved(Rc<VTy>, std::sync::Arc<Cxt>, Rc<VTy>, Span<()>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,7 +121,7 @@ impl Tm {
             Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
             Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
-                MetaEntry::Unsolved(_, cxt, oty) => Some((cxt.as_ref().clone(), oty.clone())),
+                MetaEntry::Unsolved(_, cxt, oty, _) => Some((cxt.as_ref().clone(), oty.clone())),
                 MetaEntry::Solved(v, _) => {
                     infer.quote(decl, l, v).no_metas(infer, decl, l)
                 }
@@ -140,7 +140,7 @@ pub enum PatternDetail {
     /// Implicit/explicit wildcard in a pattern.
     /// - `0`: variable name (unique, e.g. `_l0` for GADT implicit)
     /// - `1`: optional explicit param name for `[l=_l0]` syntax in Raw
-    ///        (`Some(l)` → `Either::Name("l")`, `None` → strip `_` prefix)
+    ///        (`Some(l)` �?`Either::Name("l")`, `None` �?strip `_` prefix)
     /// - `2`: icit
     Any(Span<SmolStr>, Option<Span<SmolStr>>, Icit),
     Bind(Span<SmolStr>),
@@ -650,7 +650,7 @@ impl DetailCounts {
         self.walk_tm_id(&clos.1, visited);
     }
 
-    // Count a SmolStr — track unique heap allocations
+    // Count a SmolStr �?track unique heap allocations
     fn count_smolstr(&mut self, s: &SmolStr, visited: &mut std::collections::HashSet<usize>) {
         if s.len() > 23 {
             let id = s.as_str().as_ptr() as usize;
@@ -718,7 +718,7 @@ impl Infer {
         let mut unsolved_env_len_hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
         let mut unsolved_decl_len_hist: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
         for entry in &self.meta {
-            if let MetaEntry::Unsolved(_, c, _) = entry {
+            if let MetaEntry::Unsolved(_, c, _, _) = entry {
                 *unsolved_env_len_hist.entry(c.env.len()).or_insert(0) += 1;
                 *unsolved_decl_len_hist.entry(c.decl.len()).or_insert(0) += 1;
             }
@@ -748,7 +748,7 @@ impl Infer {
         // Categorize unsolved metas: shape of the type
         let mut unsolved_vty_kind_hist: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
         for entry in &self.meta {
-            if let MetaEntry::Unsolved(vty, _, _) = entry {
+            if let MetaEntry::Unsolved(vty, _, _, _) = entry {
                 let kind = match vty.as_ref() {
                     Val::Flex(_, _) => "Flex",
                     Val::Rigid(_, _) => "Rigid",
@@ -771,7 +771,7 @@ impl Infer {
         // We count unique (decl.len(), env.len()) combos to estimate Cxt sharing
         let mut unique_cxt_fingerprints: StdHashSet<(usize, usize)> = StdHashSet::new();
         for entry in &self.meta {
-            if let MetaEntry::Unsolved(_, c, _) = entry {
+            if let MetaEntry::Unsolved(_, c, _, _) = entry {
                 unique_cxt_fingerprints.insert((c.decl.len(), c.env.len()));
             }
         }
@@ -797,7 +797,7 @@ impl Infer {
                     detail_solved.walk_val(val, &mut visited_solved);
                     detail_solved.walk_val(vty, &mut visited_solved);
                 }
-                MetaEntry::Unsolved(vty1, cxt_m, vty2) => {
+                MetaEntry::Unsolved(vty1, cxt_m, vty2, _) => {
                     detail_unsolved.walk_val(vty1, &mut visited_unsolved);
                     detail_cxt_in_meta.walk_cxt(cxt_m, &mut visited_cxt_in_meta);
                     detail_unsolved.walk_val(vty2, &mut visited_unsolved);
@@ -908,12 +908,12 @@ impl Infer {
 
         // Measure unsolved meta Cxt sizes
         let cxt_in_meta_count: usize = self.meta.iter().filter_map(|m| match m {
-            MetaEntry::Unsolved(_, c, _) => Some(c.decl.len()),
+            MetaEntry::Unsolved(_, c, _, _) => Some(c.decl.len()),
             _ => None,
         }).sum();
         let cxt_in_meta_env_avg: usize = if unsolved > 0 {
             self.meta.iter().filter_map(|m| match m {
-                MetaEntry::Unsolved(_, c, _) => Some(c.env.len()),
+                MetaEntry::Unsolved(_, c, _, _) => Some(c.env.len()),
                 _ => None,
             }).sum::<usize>() / unsolved
         } else { 0 };
@@ -1004,27 +1004,24 @@ impl Infer {
         self.memory_stats_with_cxt(None)
     }
 
-    fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
-        self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ));
+    fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>, span: Span<()>) -> u32 {
+        self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ, span));
         self.meta.len() as u32 - 1
     }
-    fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>) -> Rc<Tm> {
+    fn fresh_meta(&mut self, cxt: &Cxt, a: Rc<VTy>, span: Span<()>) -> Rc<Tm> {
         if let Ok(Some((a, _))) = self.solve_trait(cxt, &a, false) {
             a
         } else if let Val::Sum(_, _, _, true) = a.as_ref() {
-            let m = self.new_meta(a.clone(), cxt.clone(), a);
+            let m = self.new_meta(a.clone(), cxt.clone(), a, span);
             self.trait_metas.push(MetaVar(m));
             Tm::Meta(MetaVar(m)).into()
         } else {
-            //let temp = &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a));
-            //println!("{:?}: {}", a, pretty_tm(0, cxt.names(), temp));
-            //println!("{:?}: {:?}", a, temp);
             let closed = self.eval(
                 &cxt.decl,
                 &List::new(),
                 &close_ty(&cxt.locals, self.quote(&cxt.decl, cxt.lvl, &a)),
             );
-            let m = self.new_meta(closed, cxt.clone(), a);
+            let m = self.new_meta(closed, cxt.clone(), a, span);
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
         }
     }
@@ -1036,7 +1033,7 @@ impl Infer {
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
                 MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp)),
-                MetaEntry::Unsolved(_, _, _) => Val::Flex(*m, sp.clone()).into(),
+                MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
             },
             Val::Obj(x, a, b) => {
                 Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
@@ -1083,7 +1080,7 @@ impl Infer {
     fn v_meta(&self, m: MetaVar) -> Rc<Val> {
         match self.lookup_meta(m) {
             MetaEntry::Solved(v, _) => v.clone(),
-            MetaEntry::Unsolved(_, _, _) => Val::vmeta(m).into(),
+            MetaEntry::Unsolved(_, _, _, _) => Val::vmeta(m).into(),
         }
     }
 
@@ -1512,7 +1509,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                 cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
             }
     }
-    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
+    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero �?zero)
     let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
         .filter(|(k, _)| k.contains('.'))
         .map(|(k, v)| {
@@ -2916,7 +2913,7 @@ fn mk_multi_into_test(extra: &str) -> String {
 // All multi-Into tests use `run_with_prelude` which loads Bool, Nat, Unit, Into, Add etc.
 // These tests verify that multiple Into implementations for the same type resolve correctly.
 
-/// Test 1: Into[Unit] for Nat — unambiguous, no prelude conflict
+/// Test 1: Into[Unit] for Nat �?unambiguous, no prelude conflict
 #[test]
 fn test_multi_into_unit_for_nat() {
     let input = r#"
@@ -2930,7 +2927,7 @@ println u
     assert!(output.contains("Unit"), "expected Unit, got: {}", output);
 }
 
-/// Test 2: Into for custom struct — tests that user-defined Into resolves over prelude Into[UInt[w]]
+/// Test 2: Into for custom struct �?tests that user-defined Into resolves over prelude Into[UInt[w]]
 #[test]
 fn test_multi_into_custom_struct() {
     let input = r#"
@@ -3187,7 +3184,7 @@ println (true.into)
     assert!(output.contains("true"), "expected true, got: {}", output);
 }
 
-/// Test 17: HDL assignment macro still works (uses .into for Nat → UInt)
+/// Test 17: HDL assignment macro still works (uses .into for Nat �?UInt)
 #[test]
 fn test_multi_into_assign_macro() {
     let input = r#"
@@ -3257,7 +3254,7 @@ println w.val
 
 #[test]
 fn test_macro_cut_parse_error_in_body() {
-    // Test 1: Parse error INSIDE module body — verify error is at the
+    // Test 1: Parse error INSIDE module body �?verify error is at the
     // expression position (offset ~53: `+ +`), not backtracked to declaration.
     let input = r#"
 module Adder {
@@ -4427,3 +4424,4 @@ println(v)
         println!("===========================================\n");
     }
 }
+

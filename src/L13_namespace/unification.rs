@@ -144,8 +144,8 @@ impl Infer {
         )
     }
     fn prune_meta(&mut self, decl: &Decl, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
-        let (mty, origin_ty) = match self.meta[m.0 as usize] {
-            MetaEntry::Unsolved(ref a, _, ref o) => (a.clone(), o.clone()),
+        let (mty, origin_ty, span) = match self.meta[m.0 as usize] {
+            MetaEntry::Unsolved(ref a, _, ref o, s) => (a.clone(), o.clone(), s),
             _ => unreachable!(),
         };
 
@@ -153,7 +153,7 @@ impl Infer {
         let prunedty = self.eval(decl, &List::new(), &prune_ty); //TODO:revPruning
         let mut empty_cxt = Cxt::empty();
         empty_cxt.decl = Rc::new(decl.clone());
-        let m_prime = MetaVar(self.new_meta(prunedty, empty_cxt, origin_ty));
+        let m_prime = MetaVar(self.new_meta(prunedty, empty_cxt, origin_ty, span));
 
         let solution = self.eval(
             decl,
@@ -218,14 +218,14 @@ impl Infer {
         let m_prime = match status {
             SpinePruneStatus::OKRenaming => {
                 match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(_, _, _) => m,
+                    MetaEntry::Unsolved(_, _, _, _) => m,
                     //_ => return Err(Error::Impossible),
                     _ => unreachable!(),
                 }
             }
             SpinePruneStatus::OKNonRenaming => {
                 match self.meta[m.0 as usize] {
-                    MetaEntry::Unsolved(_, _, _) => m,
+                    MetaEntry::Unsolved(_, _, _, _) => m,
                     //_ => return Err(Error::Impossible),
                     _ => unreachable!(),
                 }
@@ -429,7 +429,7 @@ impl Infer {
         rhs: &Rc<Val>,
     ) -> Result<(), UnifyError> {
         let mty = match self.meta[m.0 as usize] {
-            MetaEntry::Unsolved(ref a, _, _) => a.clone(),
+            MetaEntry::Unsolved(ref a, _, _, _) => a.clone(),
             _ => unreachable!(),
         };
 
@@ -462,7 +462,7 @@ impl Infer {
             let idx = mv.0 as usize;
             if idx >= self.meta.len() { continue; }
             let (x, meta_cxt) = match &self.meta[idx] {
-                MetaEntry::Unsolved(v, arc_cxt, _) => (v.clone(), arc_cxt.as_ref().clone()),
+                MetaEntry::Unsolved(v, arc_cxt, _, _) => (v.clone(), arc_cxt.as_ref().clone()),
                 _ => continue,
             };
             let typ = self.solve_trait(&meta_cxt, &x, allow_flex_defaulting)
@@ -595,7 +595,7 @@ impl Infer {
                 let result = (|| -> Result<(Rc<Tm>, Rc<Val>), String> {
                     let raw_var = Raw::Var(lvl.clone());
                     let inferred = self.infer_expr(cxt, raw_var);
-                    let (tm, _) = self.insert(cxt, inferred)
+                    let (tm, _) = self.insert(cxt, inferred, empty_span(()))
                         .map_err(|e| e.0.data)?;
                     let val = self.eval(&cxt.decl, &cxt.env, &tm);
                     if let Val::SumCase { typ, .. } = val.as_ref() {
