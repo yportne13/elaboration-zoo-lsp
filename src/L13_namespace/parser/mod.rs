@@ -238,6 +238,12 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                 } else {
                     match skip(input) {
                         Some(at_sep) => {
+                            state.push_error(IError {
+                                msg: input.first()
+                                    .map(|x| x.to_span())
+                                    .unwrap_or(empty_span(()))
+                                    .map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine)))
+                            });
                             match sep.parse(at_sep, state) {
                                 Ok((i, _)) => input = i,
                                 Err(_) => break,
