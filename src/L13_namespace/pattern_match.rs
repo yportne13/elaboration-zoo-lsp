@@ -79,25 +79,7 @@ impl PatConstructor {
     /// `Raw::App` arguments, so that `check_pm_final`'s inference reuses the
     /// already-bound Rigids instead of creating independent fresh metas.
     fn to_raw(&self) -> Raw {
-        // Collapse inner levels to embed children into parent Con nodes,
-        // but NEVER pop the root level (data[0]) so we always have something
-        // to convert.
-        let mut pat = self.clone();
-        while pat.data.len() > 1 {
-            if let Some(true) = pat.data.last().map(|(num, x)| x.len() == *num) {
-                let (_, t) = pat.data.pop().unwrap();
-                pat.data.last_mut().map(|x| {
-                    x.1.last_mut().map(|x| match x {
-                        PatternDetail::Con(_, x) => {
-                            *x = t;
-                        }
-                        _ => {}
-                    })
-                });
-            } else {
-                break;
-            }
-        }
+        let pat = self.clone().clean();
         match pat.root_detail() {
             Some(d) => Self::detail_to_raw(d),
             None => Raw::Hole(empty_span(())),
