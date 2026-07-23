@@ -1989,7 +1989,13 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         let is_cut = macro_decl.len() == 1;
         for m in macro_decl {
             let (i, t) = if is_cut {
-                m.matcher.to_parser().parse(input.get(1..).unwrap(), state)?
+                match m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        state.0.push(e);
+                        return Ok((input.get(1..).unwrap_or(&[]), Decl::Package { path: vec![] }))
+                    }
+                }
             } else {
                 match m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
                     Ok(x) => x,
@@ -2023,7 +2029,19 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 path_id: tok.path_id,
             }).collect();
             let mut temp_state = (vec![], state.1.clone(), vec![]);
-            let ret = p_decl(&t_borrowed, &mut temp_state)?;
+            let ret = match p_decl(&t_borrowed, &mut temp_state) {
+                Ok(r) => r,
+                Err(e) => {
+                    state.0.extend(temp_state.0);
+                    state.2.extend(temp_state.2);
+                    state.0.push(e);
+                    if is_cut {
+                        return Ok((i, Decl::Package { path: vec![] }))
+                    } else {
+                        continue;
+                    }
+                }
+            };
             state.0.extend(temp_state.0);
             state.2.extend(temp_state.2);
             if !ret.0.is_empty() {
