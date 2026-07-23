@@ -2,6 +2,78 @@
 // HDL Signal Creation Functions
 // ============================================================
 
+// ---- Auto-named signal creation (SpinalHDL style) ----
+// These functions take an implicit BindingName parameter.
+// The compiler automatically fills it with the let-binding name.
+// Usage:  let mySignal = autoUInt(8)
+//         => mySignal gets name "mySignal" automatically
+
+def autoUInt[bn: BindingName](w: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createWidth(bn.name, w));
+    UInt.mk(Some(bn.name), e)
+
+def autoBits[bn: BindingName](w: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createWidth(bn.name, w));
+    Bits.mk(Some(bn.name), e)
+
+def autoSInt[bn: BindingName](w: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntWidth(bn.name, w));
+    SInt.mk(Some(bn.name), e)
+
+def autoBool[bn: BindingName]: Bool =
+    let e = createSignalExpr(bn.name, create(bn.name));
+    Bool.mk(Some(bn.name), e)
+
+def autoUIntInput[bn: BindingName](w: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createInWidth(bn.name, w));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsInput[bn: BindingName](w: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createInWidth(bn.name, w));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntInput[bn: BindingName](w: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntInWidth(bn.name, w));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolInput[bn: BindingName]: Bool =
+    let e = createSignalExpr(bn.name, createIn(bn.name));
+    Bool.mk(Some(bn.name), e)
+
+def autoUIntOutput[bn: BindingName](w: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createOutWidth(bn.name, w));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsOutput[bn: BindingName](w: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createOutWidth(bn.name, w));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntOutput[bn: BindingName](w: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntOutWidth(bn.name, w));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolOutput[bn: BindingName]: Bool =
+    let e = createSignalExpr(bn.name, createOut(bn.name));
+    Bool.mk(Some(bn.name), e)
+
+def autoUIntReg[bn: BindingName](w: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createRegWidth(bn.name, w));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsReg[bn: BindingName](w: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createRegWidth(bn.name, w));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntReg[bn: BindingName](w: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntRegWidth(bn.name, w));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolReg[bn: BindingName]: Bool =
+    let e = createSignalExpr(bn.name, createReg(bn.name));
+    Bool.mk(Some(bn.name), e)
+
+// ---- Explicit-name signal creation (legacy) ----
+
 def newBits(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createWidth(name, w));
     Bits.mk(Some(name), e)

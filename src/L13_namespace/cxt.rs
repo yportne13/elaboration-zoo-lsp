@@ -90,6 +90,9 @@ pub struct Cxt {
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: Rc<HashSet<SmolStr>>,
     update_from: Option<usize>,
+    /// The name of the current let-binding being elaborated.
+    /// Used to synthesize implicit `BindingName` arguments.
+    pub binding_name: Option<SmolStr>,
 }
 
 fn string_concat(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
@@ -378,6 +381,7 @@ impl Cxt {
             namespace_prefix: None,
             namespaces: Rc::new(HashSet::new()),
             update_from: None,
+            binding_name: None,
         }
     }
     pub fn clone_without_src_names(&self) -> Self {
@@ -392,6 +396,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            binding_name: self.binding_name.clone(),
         }
     }
 
@@ -421,6 +426,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            binding_name: None,
         }
     }
 
@@ -443,6 +449,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            binding_name: self.binding_name.clone(),
         })
     }
 
@@ -459,6 +466,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            binding_name: None,
         }
     }
 
@@ -477,6 +485,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            binding_name: None,
         }
     }
 
@@ -495,6 +504,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
+            binding_name: self.binding_name.clone(),
         })
     }
 
@@ -547,6 +557,7 @@ impl Cxt {
                     namespace_prefix: self.namespace_prefix.clone(),
                     namespaces: self.namespaces.clone(),
                     update_from: Some(update_from),
+                    binding_name: self.binding_name.clone(),
                 }
             }
         }
@@ -585,6 +596,25 @@ impl Cxt {
     /// need re-normalisation in the current environment.
     pub fn is_refined(&self) -> bool {
         self.update_from.is_some()
+    }
+
+    /// Create a copy of this context with the given binding name set.
+    /// Used when elaborating the RHS of a `let` binding so that implicit
+    /// `BindingName` parameters can be synthesized with the correct name.
+    pub fn with_binding_name(&self, name: SmolStr) -> Self {
+        Cxt {
+            env: self.env.clone(),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names: self.src_names.clone(),
+            decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
+            namespace_prefix: self.namespace_prefix.clone(),
+            namespaces: self.namespaces.clone(),
+            update_from: self.update_from,
+            binding_name: Some(name),
+        }
     }
 
     #[allow(unused)]

@@ -5,6 +5,13 @@
 
 // ---------- utility types ----------
 
+// Special struct recognized by the compiler. When a function has an implicit
+// parameter of type BindingName, the compiler automatically fills it with the
+// name of the enclosing `let` binding (SpinalHDL-style auto-naming).
+struct BindingName {
+    name: String
+}
+
 enum Le(n: Nat, m: Nat) {
     le_refl[n: Nat] -> Le n n
     le_step[n: Nat, m: Nat](h: Le n m) -> Le (n, succ m)

@@ -61,10 +61,48 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
 }
 
 impl Infer {
+    /// Check if a type is the special `BindingName` struct type.
+    /// When an implicit parameter has this type, the compiler synthesizes
+    /// the current let-binding name instead of creating a metavariable.
+    fn is_binding_name_type(&self, decl: &std::collections::HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Tm>, Rc<VTy>, Option<PrimFunc>)>, a: &Rc<Val>) -> bool {
+        let a_forced = self.force(decl, a);
+        match a_forced.as_ref() {
+            Val::Sum(name, _, _, _) if name.data == "BindingName" => true,
+            Val::Decl(name, sp) if name.data == "BindingName" && sp.is_empty() => true,
+            _ => false,
+        }
+    }
+
     fn insert_go(&mut self, cxt: &Cxt, t: Rc<Tm>, va: Rc<Val>, span: Span<()>) -> (Rc<Tm>, Rc<VTy>) {
         let va = self.force(&cxt.decl, &va);
         match va.as_ref() {
             Val::Pi(_, Icit::Impl, a, b) => {
+                // Special case: if the implicit parameter type is `BindingName`,
+                // synthesize the current let-binding name automatically.
+                if self.is_binding_name_type(&*cxt.decl, a) {
+                    let name_str = cxt.binding_name.clone().unwrap_or_else(|| SmolStr::new(""));
+                    // Find the correct decl key for BindingName.mk (may be double-qualified)
+                    let mk_key = if cxt.decl.contains_key("BindingName.mk") {
+                        SmolStr::new("BindingName.mk")
+                    } else {
+                        cxt.decl.keys()
+                            .find(|k| k.ends_with(".BindingName.mk"))
+                            .cloned()
+                            .unwrap_or_else(|| SmolStr::new("BindingName.mk"))
+                    };
+                    let bn_tm: Rc<Tm> = Tm::App(
+                        Tm::Decl(empty_span(mk_key)).into(),
+                        Tm::LiteralIntro(empty_span(name_str.to_string())).into(),
+                        Icit::Expl,
+                    ).into();
+                    let bn_val = self.eval(&cxt.decl, &cxt.env, &bn_tm);
+                    return self.insert_go(
+                        cxt,
+                        Tm::App(t, bn_tm, Icit::Impl).into(),
+                        self.closure_apply(&cxt.decl, b, bn_val),
+                        span,
+                    );
+                }
                 //println!("insert {:?}", a);
                 let m = self.fresh_meta(cxt, a.clone(), span);
                 let mv = self.eval(&cxt.decl, &cxt.env, &m);
@@ -467,7 +505,9 @@ impl Infer {
             (Raw::Let(x, ret_typ, t, u), _) => {
                 let (a_checked, _) = self.check_universe(cxt, *ret_typ)?;
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
-                let t_checked = self.check::<CANONICAL>(cxt, *t, &va)?;
+                // Set binding_name so implicit BindingName params get the let-binding's name
+                let cxt_named = cxt.with_binding_name(x.data.clone());
+                let t_checked = self.check::<CANONICAL>(&cxt_named, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
                 self.hover_table.push((x.to_span(), x.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, va.clone()));
                 let u_checked = self.check::<CANONICAL>(
@@ -1426,7 +1466,9 @@ impl Infer {
             Raw::Let(x, a, t, u) => {
                 let (a_checked, _) = self.check_universe(cxt, *a)?;
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
-                let t_checked = self.check::<false>(cxt, *t, &va)?;
+                // Set binding_name so implicit BindingName params get the let-binding's name
+                let cxt_named = cxt.with_binding_name(x.data.clone());
+                let t_checked = self.check::<false>(&cxt_named, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
                 self.hover_table.push((x.to_span(), x.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, va.clone()));
                 let (u_inferred, b) = self.infer_expr(
