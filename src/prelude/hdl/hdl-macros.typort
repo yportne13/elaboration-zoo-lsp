@@ -127,7 +127,7 @@ macro_rules Expr {
     };
 
     // ---- raw expression passthrough ----
-    ($x: raw) => {let useless = $x;}
+    ($x: raw) => {let _ = $x;}
 }
 
 // The module macro provides convenient module definition syntax

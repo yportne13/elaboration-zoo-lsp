@@ -610,7 +610,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     rhs.into_iter().fold(lhs, Raw::app)
                 } else if &op.data == "{" {
                     // Scala-style apply block: f { stmt1; stmt2; result }
-                    // All but last become "let _useless = stmt;" desugaring.
+                    // All but last become "let _ = stmt;" desugaring.
                     let mut stmts: Vec<Raw> = Vec::new();
                     let mut input_t = input;
                     // consume newlines after {
@@ -650,7 +650,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                         let mut result = last;
                         for stmt in stmts.into_iter().rev() {
                             result = Raw::Let(
-                                stmt.to_span().map(|_| SmolStr::new("_useless")),
+                                stmt.to_span().map(|_| SmolStr::new("_")),
                                 Box::new(Raw::Hole(stmt.to_span())),
                                 Box::new(stmt),
                                 Box::new(result),
