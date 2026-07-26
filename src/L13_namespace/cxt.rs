@@ -105,12 +105,13 @@ fn string_concat(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
-fn str_eq(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn str_eq(_: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 2 { return None; }
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
             let eq = a.data == b.data;
-            Some(Val::LiteralIntro(a.clone().map(|_| if eq { "true".to_string() } else { "false".to_string() })).into())
+            let name = if eq { "true" } else { "false" };
+            Some(decl.get(name).map(|x| x.2.clone()).unwrap_or(Val::Decl(empty_span(SmolStr::new(name)), List::new()).into()))
         },
         _ => None,
     }
@@ -295,7 +296,7 @@ impl Cxt {
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "str_eq",
-            tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
+            tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("Boolean")),
             PrimFunc(Rc::new(str_eq)),
         ).unwrap();
 

@@ -148,48 +148,6 @@ def isSubSigAssign(e: Expr): Boolean = match e {
     case _ => false
 }
 
-// Walk Vec[Expr]: filter out declarations and when-blocks, join assignments
-// Also filters out assign(regAssign) involving subSignal (those become port connections)
-def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case create(_) => collectAssignLines tail
-        case createIn(_) => collectAssignLines tail
-        case createOut(_) => collectAssignLines tail
-        case createWidth(_, _) => collectAssignLines tail
-        case createInWidth(_, _) => collectAssignLines tail
-        case createOutWidth(_, _) => collectAssignLines tail
-        case createReg(_) => collectAssignLines tail
-        case createRegWidth(_, _) => collectAssignLines tail
-        case createRegWidthInit(_, _, _) => collectAssignLines tail
-        case createSIntWidth(_, _) => collectAssignLines tail
-        case createSIntInWidth(_, _) => collectAssignLines tail
-        case createSIntOutWidth(_, _) => collectAssignLines tail
-        case createSIntRegWidth(_, _) => collectAssignLines tail
-        case createSIntRegWidthInit(_, _, _) => collectAssignLines tail
-        case regAssign(_, _) => collectAssignLines tail
-        case literal(_) => collectAssignLines tail
-        case when(_, _, _) => collectAssignLines tail
-        case instance(_, _) => collectAssignLines tail
-        case instanceWithPorts(_, _, _) => collectAssignLines tail
-        case subSignal(_, _) => collectAssignLines tail
-        case assign(_, _) =>
-            let isPort = isSubSigAssign(e);
-            match isPort {
-                case true => collectAssignLines tail
-                case false => lcons (exprVL(e)) (collectAssignLines tail)
-            }
-        case _ => lcons (exprVL(e)) (collectAssignLines tail)
-    }
-}
-
-def assignsVL[ne: Nat](es: Vec[Expr] ne): String =
-    let ls = list_reverse(collectAssignLines es);
-    match ls {
-        case lnil => ""
-        case _ => joinLines(ls) + "\n"
-    }
-
 // Helper: check if Vec[Expr] contains any port declarations
 def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
@@ -284,22 +242,151 @@ def hasWhenInList[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     }
 }
 
-def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+// Extract the driven signal name from a when block's body
+def getWhenDrivenSigName(e: Expr): String = match e {
+    case assign(lhs, _) => exprVL(lhs)
+    case block(h, _) => getWhenDrivenSigName(h)
+    case when(_, body, _) => getWhenDrivenSigName(body)
+    case _ => ""
+}
+
+// Helper: process a single when expression, return its driven sig as a list
+def whenExprToSigList(e: Expr): List[String] =
+    let has_clk = hasRegAssign(e);
+    match has_clk {
+        case true => lnil
+        case false => lcons (getWhenDrivenSigName e) lnil
+    }
+
+// Collect signal names driven by non-clocked when blocks
+def collectWhenDrivenSigs[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
-        case when(_, _, _) =>
-            let has_clk = hasRegAssign(e);
-            match has_clk {
-                case true => collectAlwaysLines tail
-                case false =>
-                    lcons ("  always @(*) begin\n" + exprVL(e) + "\n  end") (collectAlwaysLines tail)
+        case when(_, _, _) => list_append(whenExprToSigList(e), collectWhenDrivenSigs tail)
+        case _ => collectWhenDrivenSigs tail
+    }
+}
+
+// Check if a string is in a list
+def strInList(s: String, ls: List[String]): Boolean = match ls {
+    case lnil => false
+    case lcons(h, tail) =>
+        let eq = str_eq(h, s);
+        match eq {
+            case true => true
+            case false => strInList(s, tail)
+        }
+}
+
+// Helper: get LHS name from an assign expr
+def getAssignLhsName(e: Expr): String = match e {
+    case assign(lhs, _) => exprVL(lhs)
+    case _ => ""
+}
+
+// Helper: get RHS string from an assign expr
+def getAssignRhsStr(e: Expr): String = match e {
+    case assign(_, rhs) => exprVL(rhs)
+    case _ => ""
+}
+
+// Helper: check if a single assign expr should be emitted as a continuous assign
+def assignLineCheck(e: Expr, whenSigs: List[String]): List[String] =
+    let lhsName = getAssignLhsName(e);
+    let isWhen = strInList(lhsName, whenSigs);
+    match isWhen {
+        case true => lnil
+        case false =>
+            let isPort = isSubSigAssign(e);
+            match isPort {
+                case true => lnil
+                case false => lcons (exprVL(e)) lnil
             }
-        case _ => collectAlwaysLines tail
+    }
+
+// Collect assign lines, skipping assigns whose LHS is in the when-driven set
+def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case assign(_, _) => list_append(assignLineCheck(e, whenSigs), collectAssignLinesFiltered(tail, whenSigs))
+        case create(_) => collectAssignLinesFiltered(tail, whenSigs)
+        case createIn(_) => collectAssignLinesFiltered(tail, whenSigs)
+        case createOut(_) => collectAssignLinesFiltered(tail, whenSigs)
+        case createWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createInWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createOutWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createReg(_) => collectAssignLinesFiltered(tail, whenSigs)
+        case createRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntInWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntOutWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case regAssign(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case literal(_) => collectAssignLinesFiltered(tail, whenSigs)
+        case when(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case instance(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case instanceWithPorts(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case subSignal(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case _ => lcons (exprVL(e)) (collectAssignLinesFiltered(tail, whenSigs))
+    }
+}
+
+// Helper: check if a single assign is for a when-driven signal, return default line
+def defaultLineCheck(e: Expr, whenSigs: List[String]): List[String] =
+    let lhsName = getAssignLhsName(e);
+    let isWhen = strInList(lhsName, whenSigs);
+    match isWhen {
+        case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") lnil
+        case false => lnil
+    }
+
+// Collect default assign lines for when-driven signals (to put inside always block)
+def collectDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case assign(_, _) => list_append(defaultLineCheck(e, whenSigs), collectDefaultLines(tail, whenSigs))
+        case _ => collectDefaultLines(tail, whenSigs)
+    }
+}
+
+// Helper: build always block string for a single non-clocked when expr
+def buildAlwaysBlock[ne: Nat](e: Expr, es: Vec[Expr] ne, whenSigs: List[String]): String =
+    let defaults = list_reverse(collectDefaultLines(es, whenSigs));
+    let defaultStr = match defaults {
+        case lnil => ""
+        case _ => joinLines(defaults) + "\n"
+    };
+    "  always @(*) begin\n" + defaultStr + exprVL(e) + "\n  end"
+
+// Helper: process a single when expr for always lines
+def whenToAlwaysLine[ne: Nat](e: Expr, es: Vec[Expr] ne, whenSigs: List[String]): List[String] =
+    let has_clk = hasRegAssign(e);
+    match has_clk {
+        case true => lnil
+        case false => lcons (buildAlwaysBlock(e, es, whenSigs)) lnil
+    }
+
+def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case when(_, _, _) => list_append(whenToAlwaysLine(e, es, whenSigs), collectAlwaysLines(tail, whenSigs))
+        case _ => collectAlwaysLines(tail, whenSigs)
     }
 }
 
 def alwaysVL[ne: Nat](es: Vec[Expr] ne): String =
-    let ls = list_reverse(collectAlwaysLines es);
+    let whenSigs = list_reverse(collectWhenDrivenSigs es);
+    let ls = list_reverse(collectAlwaysLines(es, whenSigs));
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
+
+def assignsVL[ne: Nat](es: Vec[Expr] ne): String =
+    let whenSigs = list_reverse(collectWhenDrivenSigs es);
+    let ls = list_reverse(collectAssignLinesFiltered(es, whenSigs));
     match ls {
         case lnil => ""
         case _ => joinLines(ls) + "\n"
