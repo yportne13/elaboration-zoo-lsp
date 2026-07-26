@@ -118,7 +118,7 @@ macro_rules Expr {
     // switch sel { is a { body } default { body2 } }
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
         let _selExpr = $sel.expr;
-        let _wb = whenBegin(binary(_selExpr, "===", ($val).expr));
+        let _wb = whenBegin(binary(_selExpr, "==", ($val).expr));
         $({$body})*
         let _we = whenEnd(unit);
         let _wob = whenOtherwiseBegin(unit);
@@ -142,7 +142,9 @@ macro_rules Expr {
 
 #[macro_export]
 macro_rules module {
-    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
-        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
-    };
-}
+	    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
+	        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
+	    };
+	}
+
+	

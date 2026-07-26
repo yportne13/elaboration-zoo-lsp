@@ -2803,10 +2803,10 @@ println (moduleTreeVL Test)
             println!("=== Output ===\n{}", output);
             assert!(output.contains("module Test"), "missing module: {}", output);
             assert!(output.contains("endmodule"), "missing endmodule: {}", output);
-            // when body assignments should appear in Verilog output
-            assert!(output.contains("assign c = (a + b)"), "missing when body: {}", output);
-            assert!(output.contains("assign c = a"), "missing elsewhen body: {}", output);
-            assert!(output.contains("assign c = (a - b)"), "missing otherwise body: {}", output);
+            // when body assignments should appear as blocking assignments in always block
+            assert!(output.contains("c = (a + b)"), "missing when body: {}", output);
+            assert!(output.contains("c = a"), "missing elsewhen body: {}", output);
+            assert!(output.contains("c = (a - b)"), "missing otherwise body: {}", output);
             // each when/elsewhen produces an if-statement
             assert!(output.contains("if ("), "missing if: {}", output);
         },

@@ -105,6 +105,17 @@ fn string_concat(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
+fn str_eq(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match (args[0].as_ref(), args[1].as_ref()) {
+        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
+            let eq = a.data == b.data;
+            Some(Val::LiteralIntro(a.clone().map(|_| if eq { "true".to_string() } else { "false".to_string() })).into())
+        },
+        _ => None,
+    }
+}
+
 fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
@@ -281,6 +292,11 @@ impl Cxt {
         cxt = cxt.add_builtin(infer, "string_concat",
             tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
             PrimFunc(Rc::new(string_concat)),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "str_eq",
+            tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("String")),
+            PrimFunc(Rc::new(str_eq)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "string_to_global_type",
