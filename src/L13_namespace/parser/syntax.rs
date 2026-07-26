@@ -267,4 +267,17 @@ pub enum Decl {
         traits: Vec<Span<SmolStr>>,
         decl: Box<Decl>,
     },
+    Class {
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        items: Vec<ClassItem>,                     // ordered fields + statements
+        traits: Vec<Span<SmolStr>>,                // impl Trait1, Trait2
+    },
+}
+
+/// A single item in a class body: either a field (let binding) or a statement.
+#[derive(Debug, Clone)]
+pub enum ClassItem {
+    Field(Span<SmolStr>, Raw, Raw), // (name, type, value)
+    Stmt(Raw),
 }

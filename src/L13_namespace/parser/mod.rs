@@ -1,6 +1,6 @@
 use lex::{TokenKind, TokenNode};
 use smol_str::SmolStr;
-use syntax::{Decl, Either, Icit, Pattern, Raw};
+use syntax::{ClassItem, Decl, Either, Icit, Pattern, Raw};
 use std::collections::HashMap;
 use macros::*;
 use serde::{Serialize, Deserialize};
@@ -260,7 +260,7 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 
 /// Parse with no pre-existing macros (for tests). Returns (declarations, parse errors, accumulated macros).
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| (expand_derives(d), e))
+    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| (expand_classes(expand_derives(d)), e))
 }
 
 /// Parse with a pre-populated macro table (from macros in other files).
@@ -298,10 +298,10 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     if ret.0.is_empty() {
-                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
+                        Some((expand_classes(expand_derives(ret.1.into_iter().flatten().collect())), err_collect.0, exported, expansions))
                     } else {
                         err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
-                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
+                        Some((expand_classes(expand_derives(ret.1.into_iter().flatten().collect())), err_collect.0, exported, expansions))
                     }
                 }
                 Err(e) => {
@@ -1984,6 +1984,234 @@ fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
     result
 }
 
+// ============================================================
+//  class declaration: parsing + expansion
+// ============================================================
+
+/// Parse a class body item: try `let name [: Type] = expr` first, fall back to p_raw.
+fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, ClassItem> {
+    // Try field: let name [: Type] = expr  (no Cut → can fall back)
+    match (
+        kw(LetKeyword),
+        smolstr(Ident).or(smolstr(Hole)),
+        (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, t)| t).option(),
+        kw(T![=]),
+        kw(EndLine).option(),
+        p_raw,
+    ).parse(input, state) {
+        Ok((input, (_, name, ty_opt, _, _, val))) => {
+            let ty = ty_opt.unwrap_or(Raw::Hole(name.end_span()));
+            Ok((input, ClassItem::Field(name, ty, val)))
+        }
+        Err(_) => {
+            // Fall back to statement
+            p_raw(input, state).map(|(input, expr)| (input, ClassItem::Stmt(expr)))
+        }
+    }
+}
+
+/// Parse a class declaration:
+/// ```text
+/// class Name[params] impl Trait1, Trait2 {
+///     let x: T = expr   // field
+///     stmt               // body statement
+/// }
+/// ```
+fn p_class<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
+    Cut((
+        kw(ClassKeyword),
+        smolstr(Ident),
+        p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
+        (kw(ImplKeyword), smolstr(Ident).many0_sep(kw(T![,])))
+            .option()
+            .map(|x| x.map(|(_, v)| v).unwrap_or_default()),
+        brace(p_class_body_item.many0_sep((kw(T![;]).option(), kw(EndLine).many1()))),
+    ))
+    .map(|(class_kw, name, params, traits, body)| {
+        let items = body.and_then(|r| r.ok()).unwrap_or_default();
+        let name = name.unwrap_or(class_kw.end_span().map(|_| SmolStr::new("")));
+        Decl::Class { name, params: params.unwrap_or_default(), items, traits: traits.unwrap_or_default() }
+    })
+    .parse(input, state)
+}
+
+/// Build the self-type expression: `Name` applied to its implicit params.
+fn class_self_ty(name: &Span<SmolStr>, params: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+    params.iter()
+        .filter(|(_, _, icit)| *icit == Icit::Impl)
+        .fold(Raw::Var(name.clone()), |ret, (pname, _, _)| {
+            Raw::App(Box::new(ret), Box::new(Raw::Var(pname.clone())), Either::Icit(Icit::Impl))
+        })
+}
+
+/// Expand a single `Decl::Class`.
+/// - Non-parameterized: struct (enum) + constructor def (Name.create) + trait impls
+/// - Parameterized: single def with original name (so `Name[args]` is a function call, not type application)
+fn expand_one_class(
+    name: Span<SmolStr>,
+    params: Vec<(Span<SmolStr>, Raw, Icit)>,
+    items: Vec<ClassItem>,
+    traits: Vec<Span<SmolStr>>,
+) -> Vec<Decl> {
+    if params.is_empty() {
+        expand_class_as_struct(name, items, traits)
+    } else {
+        expand_class_as_fn(name, params, items)
+    }
+}
+
+/// Non-parameterized class → enum (struct) + def Name.create + trait impls
+fn expand_class_as_struct(
+    name: Span<SmolStr>,
+    items: Vec<ClassItem>,
+    traits: Vec<Span<SmolStr>>,
+) -> Vec<Decl> {
+    let mut result = vec![];
+
+    // Collect fields for struct definition
+    let fields: Vec<_> = items.iter().filter_map(|item| match item {
+        ClassItem::Field(n, t, _) => Some((n.clone(), t.clone())),
+        ClassItem::Stmt(_) => None,
+    }).collect();
+
+    // ── 1. struct (Decl::Enum with single constructor) ──
+    let struct_fields: Vec<_> = fields.iter()
+        .map(|(n, t)| (n.clone(), t.clone(), Icit::Expl))
+        .collect();
+    let mk_name = name.clone().map(|n| SmolStr::new(format!("{n}.mk")));
+    result.push(Decl::Enum {
+        is_trait: false,
+        name: name.clone(),
+        params: vec![],
+        cases: vec![(mk_name, struct_fields, None)],
+    });
+
+    // ── 2. constructor function ──
+    let mut mk_expr = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
+    for (field_name, _) in fields.iter() {
+        mk_expr = Raw::App(
+            Box::new(mk_expr),
+            Box::new(Raw::Var(field_name.clone())),
+            Either::Icit(Icit::Expl),
+        );
+    }
+    let mut ctor = mk_expr;
+    let mut stmt_idx = 0usize;
+    for item in items.iter().rev() {
+        match item {
+            ClassItem::Field(field_name, field_type, field_value) => {
+                ctor = Raw::Let(
+                    field_name.clone(),
+                    Box::new(field_type.clone()),
+                    Box::new(field_value.clone()),
+                    Box::new(ctor),
+                );
+            }
+            ClassItem::Stmt(expr) => {
+                ctor = Raw::Let(
+                    empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
+                    Box::new(Raw::Hole(empty_span(()))),
+                    Box::new(expr.clone()),
+                    Box::new(ctor),
+                );
+                stmt_idx += 1;
+            }
+        }
+    }
+    let ret_type = class_self_ty(&name, &[]);
+    let ctor_name = name.clone().map(|n| SmolStr::new(format!("{n}.create")));
+    result.push(Decl::Def {
+        name: ctor_name,
+        params: vec![],
+        ret_type,
+        body: ctor,
+    });
+
+    // ── 3. trait impls ──
+    for trait_name in traits {
+        result.push(Decl::ImplDecl {
+            name: class_self_ty(&name, &[]),
+            params: vec![],
+            trait_name,
+            trait_params: vec![],
+            methods: vec![],
+            need_create: false,
+        });
+    }
+
+    result
+}
+
+/// Parameterized class → def Name[params]: _ = body
+/// The body chains all items as let bindings; the last statement becomes the return value.
+/// This ensures `Name[args]` is a function call producing a value, not a type application.
+fn expand_class_as_fn(
+    name: Span<SmolStr>,
+    params: Vec<(Span<SmolStr>, Raw, Icit)>,
+    items: Vec<ClassItem>,
+) -> Vec<Decl> {
+    // The last Stmt is the return expression; everything before it becomes let bindings.
+    let last_stmt_idx = items.iter().rposition(|item| matches!(item, ClassItem::Stmt(_)));
+
+    let base = match last_stmt_idx {
+        Some(idx) => match &items[idx] {
+            ClassItem::Stmt(expr) => expr.clone(),
+            _ => unreachable!(),
+        },
+        None => match items.last() {
+            Some(ClassItem::Field(_, _, val)) => val.clone(),
+            _ => Raw::Hole(name.end_span()),
+        },
+    };
+
+    // Chain preceding items as let bindings (reverse to preserve order)
+    let mut body = base;
+    let mut stmt_idx = 0usize;
+    let end = last_stmt_idx.unwrap_or(items.len());
+    for item in items[..end].iter().rev() {
+        match item {
+            ClassItem::Field(field_name, field_type, field_value) => {
+                body = Raw::Let(
+                    field_name.clone(),
+                    Box::new(field_type.clone()),
+                    Box::new(field_value.clone()),
+                    Box::new(body),
+                );
+            }
+            ClassItem::Stmt(expr) => {
+                body = Raw::Let(
+                    empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
+                    Box::new(Raw::Hole(empty_span(()))),
+                    Box::new(expr.clone()),
+                    Box::new(body),
+                );
+                stmt_idx += 1;
+            }
+        }
+    }
+
+    vec![Decl::Def {
+        name,
+        params,
+        ret_type: Raw::Hole(empty_span(())),
+        body,
+    }]
+}
+
+/// Expand all `Decl::Class` items in the declaration list.
+fn expand_classes(decls: Vec<Decl>) -> Vec<Decl> {
+    let mut result = vec![];
+    for decl in decls {
+        match decl {
+            Decl::Class { name, params, items, traits } => {
+                result.extend(expand_one_class(name, params, items, traits));
+            }
+            other => result.push(other),
+        }
+    }
+    result
+}
+
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         let is_cut = macro_decl.len() == 1;
@@ -2063,7 +2291,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         })?;
         return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))
     }
-    p_def.or(p_print).or(p_enum).or(p_struct).or(p_trait_def).or(p_impl)
+    p_def.or(p_print).or(p_enum).or(p_struct).or(p_class).or(p_trait_def).or(p_impl)
         .or(p_package).or(p_import)
         .parse(input, state)
         .map_err(|e| IError {
@@ -2367,4 +2595,36 @@ fn test_expand_macro_full_flow_alu() {
         "cursor on 'module' should find module expansion, not {:?}", found.unwrap().name);
     eprintln!("✓ cursor on 'module' (offset {}) -> {} expansion ({}-{})",
         mod_off, found.unwrap().name, found.unwrap().start_offset, found.unwrap().end_offset);
+}
+
+#[test]
+fn test_debug_module_class_expansion() {
+    let hdl_core = include_str!("../../prelude/hdl/hdl-core.typort");
+    let hdl_types = include_str!("../../prelude/hdl/hdl-types.typort");
+    let hdl_ops = include_str!("../../prelude/hdl/hdl-ops.typort");
+    let hdl_clock = include_str!("../../prelude/hdl/hdl-clock.typort");
+    let hdl_bus = include_str!("../../prelude/hdl/hdl-bus.typort");
+    let hdl_signals = include_str!("../../prelude/hdl/hdl-signals.typort");
+    let hdl_macros = include_str!("../../prelude/hdl/hdl-macros.typort");
+    let hdl_verilog = include_str!("../../prelude/hdl/hdl-verilog.typort");
+    let hdl_content = hdl_core.to_owned() + "\n" + hdl_types + "\n" + hdl_ops
+        + "\n" + hdl_clock + "\n" + hdl_bus + "\n" + hdl_signals
+        + "\n" + hdl_macros + "\n" + hdl_verilog;
+    let (_hdl_decls, _hdl_errs, hdl_exports, _hdl_expansions) =
+        parser_with_macros(&super::preprocess(&hdl_content), 0, &Default::default()).unwrap();
+    assert!(hdl_exports.contains_key("module"), "module macro must be exported");
+
+    let input = "module adderNat {\n    input a = UInt[8]\n    output result = UInt[8]\n    result := a + 42\n}";
+    let (decls, errs, _exports, expansions) =
+        parser_with_macros(&super::preprocess(input), 1, &hdl_exports).unwrap();
+    for e in &errs {
+        eprintln!("PARSE ERROR: {:?}", e);
+    }
+    for exp in &expansions {
+        eprintln!("EXPANSION [{}]: [{}]", exp.name, &exp.expanded_text[..exp.expanded_text.len().min(2000)]);
+    }
+    eprintln!("DECLS count: {}", decls.len());
+    for d in &decls {
+        eprintln!("DECL: {:?}", d);
+    }
 }

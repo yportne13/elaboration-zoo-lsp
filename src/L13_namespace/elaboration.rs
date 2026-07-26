@@ -57,6 +57,12 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             traits,
             decl: Box::new(prefix_decl_name(*decl, prefix)),
         },
+        Decl::Class { name, params, items, traits } => Decl::Class {
+            name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
+            params,
+            items,
+            traits,
+        },
     }
 }
 
@@ -1175,6 +1181,9 @@ impl Infer {
             },
             Decl::Derive { .. } => {
                 panic!("Derive should have been expanded before elaboration")
+            },
+            Decl::Class { .. } => {
+                panic!("Class should have been expanded before elaboration")
             },
         }
     }

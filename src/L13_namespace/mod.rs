@@ -1436,6 +1436,9 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             parser::syntax::Decl::Derive { .. } => {
                 panic!("Derive should have been expanded before run")
             }
+            parser::syntax::Decl::Class { .. } => {
+                panic!("Class should have been expanded before run")
+            }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
@@ -1557,6 +1560,9 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             }
             parser::syntax::Decl::Derive { .. } => {
                 panic!("Derive should have been expanded before run")
+            }
+            parser::syntax::Decl::Class { .. } => {
+                panic!("Class should have been expanded before run")
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -4425,3 +4431,23 @@ println(v)
     }
 }
 
+#[test]
+fn test_class_basic() {
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+class Point {
+    let x: Nat = succ zero
+    let y: Nat = succ (succ zero)
+}
+
+def main: Point = Point.create
+"#;
+    match run(input, 0) {
+        Ok(output) => println!("{}", output),
+        Err(e) => panic!("ERROR: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}

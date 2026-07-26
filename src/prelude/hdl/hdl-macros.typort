@@ -130,24 +130,19 @@ macro_rules Expr {
     ($x: raw) => {let _ = $x;}
 }
 
-// The module macro provides convenient module definition syntax
+// The module macro provides convenient module definition syntax.
+// Expands to a `def` declaration: body items are chained via let-bindings (semicolon-separated),
+// and the final expression `module_result` (the constructed Module value) is returned.
 // Usage:
-//   module myAdder(a: UInt[8], b: UInt[8]) -> UInt[9] {
-//     let result = UInt[9]
-//     result := a +^ b
+//   module myAdder(a: UInt[8], b: UInt[8]) {
+//     input x = UInt[8]
+//     output result = UInt[9]
+//     result := x +^ b
 //   }
 
 #[macro_export]
 macro_rules module {
     ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
-        def $name $({$args})* =
-            let _init = change_mutable_default("module", x => x, module.mk(0, nil));
-            let prev_module = get_global("module");
-            let new_module = ModuleDef.mk(stringify $name, 0, nil);
-            let creat_module = change_mutable("module", x => module.mk(0 + 1, new_module :: nil));
-            $($body)*
-            let module_global = get_global("module");
-            let _restore = create_global("module", prev_module);
-            module_global
-        };
+        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
+    };
 }
