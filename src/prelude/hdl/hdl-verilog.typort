@@ -276,15 +276,23 @@ def wiresVL[ne: Nat](es: Vec[Expr] ne): String =
     }
 
 // Emit always @* blocks for when-nodes
+def hasWhenInList[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
+    case nil => false
+    case cons(e, tail) => match e {
+        case when(_, _, _) => true
+        case _ => hasWhenInList(tail)
+    }
+}
+
 def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case when(_, _, _) =>
-            // Skip when nodes that contain regAssign — they go to the clocked block
             let has_clk = hasRegAssign(e);
             match has_clk {
                 case true => collectAlwaysLines tail
-                case false => lcons ("  always @(*) begin\n" + exprVL(e) + "\n  end") (collectAlwaysLines tail)
+                case false =>
+                    lcons ("  always @(*) begin\n" + exprVL(e) + "\n  end") (collectAlwaysLines tail)
             }
         case _ => collectAlwaysLines tail
     }
