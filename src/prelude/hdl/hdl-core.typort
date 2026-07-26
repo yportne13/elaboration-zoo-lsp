@@ -96,6 +96,7 @@ enum Expr {
     partsel(e: Expr, hi: Expr, lo: Expr)
     // ---- hierarchy: sub-module instantiation & cross-level signal references ----
     instance(instName: String, moduleName: String)   // sub-module instantiation
+    instanceWithPorts(instName: String, moduleName: String, ports: String)  // with port connections
     subSignal(instName: String, signalName: String)   // cross-level signal reference
 }
 
@@ -253,6 +254,9 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case instance(_, _) =>
             let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", e));
             e
+        case instanceWithPorts(_, _, _) =>
+            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", e));
+            e
         case subSignal(_, _) =>
             e
         case _ =>
@@ -332,6 +336,12 @@ def addSignalAssignment(lhs: Expr, rhs: Expr): Unit =
 // Called at the call-site of a sub-module mk() function.
 def mkInstance(instName: String, moduleName: String): Unit =
     let dummy = createSignalExpr("", instance(instName, moduleName));
+    unit
+
+// Create a sub-module instance with explicit port connections.
+// ports format: ".portA(signalA), .portB(signalB)"
+def mkInstancePorts(instName: String, moduleName: String, ports: String): Unit =
+    let dummy = createSignalExpr("", instanceWithPorts(instName, moduleName, ports));
     unit
 
 // Extract the first ModuleDef from a module struct

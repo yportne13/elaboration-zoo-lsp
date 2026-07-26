@@ -1092,9 +1092,7 @@ fn test_hdl_registers() {
     let input = r#"
 module Test {
     let reg_val = UInt[8]
-    let init_reg = UInt[8]
-    init_reg := RegInit(init_reg, defaultClockDomain).value
-    reg_val := RegNext(reg_val).value
+    reg_val := regNextUInt(reg_val)
 }
 "#;
     match run_with_prelude(input) {
@@ -2068,7 +2066,7 @@ module Top {
     input a = UInt[8]
     input b = UInt[8]
     let _adder = MyAdder[8]
-    let inst = mkInstance("myAdder", "MyAdder")
+    let inst = mkInstancePorts("myAdder", "MyAdder", ".a(a), .b(b), .sum(adder_sum)")
 }
 
 println(moduleTreeVL(Top))
@@ -2079,6 +2077,9 @@ println(moduleTreeVL(Top))
             assert!(output.contains("module Top"), "missing Top module: {}", output);
             assert!(output.contains("myAdder"), "missing instance name 'myAdder': {}", output);
             assert!(output.contains("MyAdder"), "missing module type 'MyAdder': {}", output);
+            assert!(output.contains(".a(a)"), "missing port connection .a(a): {}", output);
+            assert!(output.contains(".b(b)"), "missing port connection .b(b): {}", output);
+            assert!(output.contains(".sum(adder_sum)"), "missing port connection .sum: {}", output);
             assert!(output.contains("endmodule"), "missing endmodule: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),

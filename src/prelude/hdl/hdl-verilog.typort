@@ -69,6 +69,8 @@ def exprVL_proc(e: Expr): String = match e {
         exprVL_proc(x) + "[" + exprVL_proc(hi) + ":" + exprVL_proc(lo) + "]"
     case instance(instName, moduleName) =>
         "  " + moduleName + " " + instName + " ();"
+    case instanceWithPorts(instName, moduleName, ports) =>
+        "  " + moduleName + " " + instName + " (" + ports + ");"
     case subSignal(instName, signalName) =>
         instName + "_" + signalName
 }
@@ -128,6 +130,8 @@ def exprVL(e: Expr): String = match e {
         exprVL(e) + "[" + exprVL(hi) + ":" + exprVL(lo) + "]"
     case instance(instName, moduleName) =>
         "  " + moduleName + " " + instName + " ();"
+    case instanceWithPorts(instName, moduleName, ports) =>
+        "  " + moduleName + " " + instName + " (" + ports + ");"
     case subSignal(instName, signalName) =>
         let sigLine = instName + "_" + signalName;
         sigLine
@@ -167,6 +171,7 @@ def collectAssignLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case literal(_) => collectAssignLines tail
         case when(_, _, _) => collectAssignLines tail
         case instance(_, _) => collectAssignLines tail
+        case instanceWithPorts(_, _, _) => collectAssignLines tail
         case subSignal(_, _) => collectAssignLines tail
         case assign(_, _) =>
             let isPort = isSubSigAssign(e);
@@ -345,6 +350,8 @@ def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = m
     case cons(e, tail) => match e {
         case instance(instName, moduleName) =>
             lcons ("  " + moduleName + " " + instName + " ();") (collectInstanceLinesTree tail)
+        case instanceWithPorts(instName, moduleName, ports) =>
+            lcons ("  " + moduleName + " " + instName + " (" + ports + ");") (collectInstanceLinesTree tail)
         case _ => collectInstanceLinesTree tail
     }
 }
