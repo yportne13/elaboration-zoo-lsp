@@ -72,6 +72,22 @@ def autoBoolReg[bn: BindingName]: Bool =
     let e = createSignalExpr(bn.name, createReg(bn.name));
     Bool.mk(Some(bn.name), e)
 
+def autoUIntRegInit[bn: BindingName](w: Nat, initVal: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createRegWidthInit(bn.name, w, literal(initVal)));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsRegInit[bn: BindingName](w: Nat, initVal: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createRegWidthInit(bn.name, w, literal(initVal)));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntRegInit[bn: BindingName](w: Nat, initVal: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntRegWidthInit(bn.name, w, literal(initVal)));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolRegInit[bn: BindingName](initVal: Nat): Bool =
+    let e = createSignalExpr(bn.name, createRegWidthInit(bn.name, 1, literal(initVal)));
+    Bool.mk(Some(bn.name), e)
+
 // ---- Explicit-name signal creation (legacy) ----
 
 def newBits(name: String, w: Nat): Bits[w] =
@@ -153,6 +169,10 @@ def newBitsRegInitNat(name: String, w: Nat, initVal: Nat): Bits[w] =
     let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
     Bits.mk(Some(name), e)
 
+def newBoolRegInitNat(name: String, initVal: Nat): Bool =
+    let e = createSignalExpr(name, createRegWidthInit(name, 1, literal(initVal)));
+    Bool.mk(Some(name), e)
+
 // ---- Direction annotation helpers (SpinalHDL style) ----
 // These are for use inside Bundle declarations.
 // For regular signal declarations, use the Expr macro:
@@ -181,3 +201,39 @@ def in_bool(t: Bool): Bool =
 
 def out_bool(t: Bool): Bool =
     newBoolOutput("")
+
+// ============================================================
+//  RegNext: delay register (SpinalHDL-style)
+//  Creates a register of the same type and connects the input.
+//  Usage: let r = regNextUInt(signal)   // r: UInt[w], r := signal
+// ============================================================
+
+def regNextUInt[bn: BindingName, w: Nat](value: UInt[w]): UInt[w] =
+    let r = autoUIntReg(w);
+    let _ = addSignalAssignment(r.expr, value.expr);
+    r
+
+def regNextBits[bn: BindingName, w: Nat](value: Bits[w]): Bits[w] =
+    let r = autoBitsReg(w);
+    let _ = addSignalAssignment(r.expr, value.expr);
+    r
+
+def regNextSInt[bn: BindingName, w: Nat](value: SInt[w]): SInt[w] =
+    let r = autoSIntReg(w);
+    let _ = addSignalAssignment(r.expr, value.expr);
+    r
+
+def regNextBool[bn: BindingName](value: Bool): Bool =
+    let r = autoBoolReg;
+    let _ = addSignalAssignment(r.expr, value.expr);
+    r
+
+// ============================================================
+//  RegNextWhen: conditional delay register
+//  Creates a register updated only when cond is true.
+//  Usage: let r = regNextWhenUInt(signal, cond)
+// ============================================================
+// NOTE: regNextWhen* functions use whenBegin/whenEnd from hdl-core.typort.
+// They cannot be defined here due to evaluation order.
+// Define them in user code when needed:
+//   when(cond) { r := value }

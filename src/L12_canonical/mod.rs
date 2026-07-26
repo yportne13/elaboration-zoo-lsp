@@ -3146,9 +3146,7 @@ fn test_hdl_registers() {
     let input = r#"
 module Test {
     let reg_val = UInt[8]
-    let init_reg = UInt[8]
-    init_reg := RegInit(init_reg, defaultClockDomain).value
-    reg_val := RegNext(reg_val).value
+    reg_val := regNextUInt(reg_val)
 }
 "#;
     match run_with_prelude(input) {

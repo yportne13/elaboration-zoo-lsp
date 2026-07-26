@@ -19,30 +19,8 @@ struct ClockDomain {
 
 def defaultClockDomain: ClockDomain = ClockDomain.mk (Bool.mk (Some "clk") (create("clk"))) (Bool.mk (Some "reset") (create("reset"))) Sync
 
-// ============================================================
-//  Registers (sequential logic)
-// ============================================================
-
-struct Reg[T] {
-    initial_value: T
-    clockDomain: ClockDomain
-}
-
-def RegInit[T](initVal: T, cd: ClockDomain): Reg[T] =
-    Reg.mk initVal cd
-
-def RegNext[T](nextVal: T): Reg[T] =
-    Reg.mk nextVal defaultClockDomain
-
-impl[T] Reg[T] {
-    def value: T = this.initial_value
-    def withClockDomain(cd: ClockDomain): Reg[T] = Reg.mk this.initial_value cd
-}
-
-impl[T] T {
-    def init[T0: Type 0](initVal: T0): Reg[T0] =
-        Reg.mk initVal defaultClockDomain
-}
+// Note: RegNext functions (regNextUInt, regNextBits, regNextSInt, regNextBool)
+// are in hdl-signals.typort (they depend on auto*Reg which is defined there).
 
 // ============================================================
 //  Mem (Memory)
