@@ -364,19 +364,17 @@ def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = m
     }
 }
 
-// Alias: moduleTreeVL is the public API expected by test/legacy_tests
-// Extracts the first ModuleDef from a module struct and generates Verilog.
-def moduleTreeVL(m: module): String =
-    let mod_def = headModuleDef(m.data);
-    let port_decls = portsVL(mod_def.expr);
-    let port_lines = list_reverse(collectPortLines mod_def.expr);
-    let wire_decls = wiresVL(mod_def.expr);
-    let reg_decls = regsVL(mod_def.expr);
-    let assigns = assignsVL(mod_def.expr);
-    let always = alwaysVL(mod_def.expr);
-    let clocked = clockedVL(mod_def.expr);
-    let inst_lines = list_reverse(collectInstanceLinesTree mod_def.expr);
-    let has_regs = match list_reverse(collectRegLines mod_def.expr) {
+// Generate Verilog for a single ModuleDef
+def moduleDefVL(md: ModuleDef): String =
+    let port_decls = portsVL(md.expr);
+    let port_lines = list_reverse(collectPortLines md.expr);
+    let wire_decls = wiresVL(md.expr);
+    let reg_decls = regsVL(md.expr);
+    let assigns = assignsVL(md.expr);
+    let always = alwaysVL(md.expr);
+    let clocked = clockedVL(md.expr);
+    let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
+    let has_regs = match list_reverse(collectRegLines md.expr) {
         case lnil => false
         case _ => true
     };
@@ -388,7 +386,7 @@ def moduleTreeVL(m: module): String =
         case lnil => false
         case _ => true
     };
-    let has_init = hasInitRegs mod_def.expr;
+    let has_init = hasInitRegs md.expr;
     let p0 = port_decls;
     let p1 = match has_regs {
         case false => p0
@@ -418,8 +416,8 @@ def moduleTreeVL(m: module): String =
         case true => false
     };
     let header = match has_no_port_content {
-        case true => "module " + mod_def.name + " ();\n"
-        case false => "module " + mod_def.name + " (\n" + p2 + "\n);\n"
+        case true => "module " + md.name + " ();\n"
+        case false => "module " + md.name + " (\n" + p2 + "\n);\n"
     };
     let body = header + wire_decls + reg_decls + assigns + clocked + always;
     let body_with_inst = match has_instances {
@@ -427,3 +425,23 @@ def moduleTreeVL(m: module): String =
         case true => body + joinLines(inst_lines) + "\n"
     };
     body_with_inst + "endmodule"
+
+// Generate Verilog for all ModuleDefs in a Vec
+def collectModuleVLs[n: Nat](data: Vec[ModuleDef] n): List[String] = match data {
+    case nil => lnil
+    case cons(md, tail) => lcons (moduleDefVL(md)) (collectModuleVLs tail)
+}
+
+// Generate Verilog for all modules in the design (multi-module hierarchical output)
+def allModulesVL(m: module): String =
+    let ls = list_reverse(collectModuleVLs m.data);
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
+
+// Alias: moduleTreeVL is the public API expected by test/legacy_tests
+// Extracts the first ModuleDef from a module struct and generates Verilog.
+def moduleTreeVL(m: module): String =
+    let mod_def = headModuleDef(m.data);
+    moduleDefVL(mod_def)
