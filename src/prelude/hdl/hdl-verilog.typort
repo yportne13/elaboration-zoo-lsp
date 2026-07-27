@@ -399,16 +399,14 @@ def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[
     }
 }
 
-def alwaysVL[ne: Nat](es: Vec[Expr] ne): String =
-    let whenSigs = list_reverse(collectWhenDrivenSigs es);
+def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let ls = list_reverse(collectAlwaysLines(es, whenSigs));
     match ls {
         case lnil => ""
         case _ => joinLines(ls) + "\n"
     }
 
-def assignsVL[ne: Nat](es: Vec[Expr] ne): String =
-    let whenSigs = list_reverse(collectWhenDrivenSigs es);
+def assignsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let ls = list_reverse(collectAssignLinesFiltered(es, whenSigs));
     match ls {
         case lnil => ""
@@ -490,8 +488,8 @@ def moduleDefVL(md: ModuleDef): String =
     let port_lines = list_reverse(collectPortLines(md.expr, whenSigs));
     let wire_decls = wiresVL(md.expr, whenSigs);
     let reg_decls = regsVL(md.expr);
-    let assigns = assignsVL(md.expr);
-    let always = alwaysVL(md.expr);
+    let assigns = assignsVL(md.expr, whenSigs);
+    let always = alwaysVL(md.expr, whenSigs);
     let clocked = clockedVL(md.expr);
     let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
     let has_regs = match list_reverse(collectRegLines md.expr) {

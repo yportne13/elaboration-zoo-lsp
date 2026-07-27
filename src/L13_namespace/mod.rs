@@ -2777,6 +2777,38 @@ println (moduleTreeVL Adder)
 }
 
 #[test]
+fn test_verilog_when_otherwise_merge() {
+    // Test when/otherwise merges into single always block with default
+    let input = r#"
+module Test {
+    let a = UInt[4]
+    let b = UInt[4]
+    let c = UInt[4]
+    let z = Bool
+    when(z) {
+        c := a + b
+    } otherwise {
+        c := a - b
+    }
+}
+println (moduleTreeVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("always @(*)"), "missing always: {}", output);
+            assert!(output.contains("c = (a - b);"), "missing default: {}", output);
+            assert!(output.contains("c = (a + b);"), "missing when body: {}", output);
+            assert!(output.contains("if (z)"), "missing if: {}", output);
+            // Should NOT have continuous assign for c
+            assert!(!output.contains("assign c"), "should not have continuous assign: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_verilog_when_elsewhen_blocks() {
     // Test that when/elsewhen/otherwise compiles and generates Verilog.
     // Note: due to macro conflict (Expr macro vs Expr.when constructor),

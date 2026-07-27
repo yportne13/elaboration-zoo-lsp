@@ -84,25 +84,27 @@ macro_rules Expr {
 
     // ---- when/otherwise control flow ----
     // Pushes condition scope, evaluates body, pops scope.
+    // Note: otherwise body is emitted FIRST so it appears as the default assign
+    // before the when node in the module (required for correct Verilog generation).
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
         let w_push = whenBegin($cond.expr);
         $({$bodywhen})*
         let w_pop = whenEnd(unit);
         $( let w_epush = whenElseBegin($cond2.expr);
            $({$bodyelse})*
            let w_epop = whenEnd(unit); )*
-        let w_opush = whenOtherwiseBegin(unit);
-        $({$bodyother})*
-        let w_opop = whenEnd(unit);
     };
     // when with otherwise (no elsewhen)
     (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
-        let w_push = whenBegin($cond.expr);
-        $({$bodywhen})*
-        let w_pop = whenEnd(unit);
         let w_opush = whenOtherwiseBegin(unit);
         $({$bodyother})*
         let w_opop = whenEnd(unit);
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
     };
     // when without otherwise
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
@@ -116,14 +118,15 @@ macro_rules Expr {
 
     // ---- switch — desugar to when-based pattern matching ----
     // switch sel { is a { body } default { body2 } }
+    // default body emitted first (becomes the default assign before the when node)
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
         let _selExpr = $sel.expr;
-        let _wb = whenBegin(binary(_selExpr, "==", ($val).expr));
-        $({$body})*
-        let _we = whenEnd(unit);
         let _wob = whenOtherwiseBegin(unit);
         $({$default_body})*
-        let _we2 = whenEnd(unit)
+        let _we2 = whenEnd(unit);
+        let _wb = whenBegin(binary(_selExpr, "==", ($val).expr));
+        $({$body})*
+        let _we = whenEnd(unit)
     };
 
     // ---- raw expression passthrough ----
