@@ -374,37 +374,43 @@ def collectDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List
     }
 }
 
-// Helper: build always block string for a single non-clocked when expr
-def buildAlwaysBlock[ne: Nat](e: Expr, es: Vec[Expr] ne, whenSigs: List[String]): String =
-    let defaults = list_reverse(collectDefaultLines(es, whenSigs));
-    let defaultStr = match defaults {
-        case lnil => ""
-        case _ => joinLines(defaults) + "\n"
-    };
-    "  always @(*) begin\n" + defaultStr + exprVL(e) + "\n  end"
-
-// Helper: process a single when expr for always lines
-def whenToAlwaysLine[ne: Nat](e: Expr, es: Vec[Expr] ne, whenSigs: List[String]): List[String] =
-    let has_clk = hasRegAssign(e);
-    match has_clk {
-        case true => lnil
-        case false => lcons (buildAlwaysBlock(e, es, whenSigs)) lnil
-    }
-
-def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+// Helper: collect all non-clocked when exprs from Vec
+def collectNonClockedWhens[ne: Nat](es: Vec[Expr] ne): List[Expr] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
-        case when(_, _, _) => list_append(whenToAlwaysLine(e, es, whenSigs), collectAlwaysLines(tail, whenSigs))
-        case _ => collectAlwaysLines(tail, whenSigs)
+        case when(_, _, _) =>
+            let has_clk = hasRegAssign(e);
+            match has_clk {
+                case true => collectNonClockedWhens(tail)
+                case false => lcons(e, collectNonClockedWhens(tail))
+            }
+        case _ => collectNonClockedWhens(tail)
     }
 }
 
-def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
-    let ls = list_reverse(collectAlwaysLines(es, whenSigs));
-    match ls {
+// Helper: join multiple when bodies with newlines (for merged always block)
+def joinWhenBodies(ls: List[Expr]): String = match ls {
+    case lnil => ""
+    case lcons(e, lnil) => exprVL(e)
+    case lcons(e, tail) => exprVL(e) + "\n" + joinWhenBodies(tail)
+}
+
+// Build a single merged always block from all non-clocked when nodes
+def buildMergedAlwaysBlock[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
+    let whens = list_reverse(collectNonClockedWhens(es));
+    match whens {
         case lnil => ""
-        case _ => joinLines(ls) + "\n"
+        case _ =>
+            let defaults = list_reverse(collectDefaultLines(es, whenSigs));
+            let defaultStr = match defaults {
+                case lnil => ""
+                case _ => joinLines(defaults) + "\n"
+            };
+            "  always @(*) begin\n" + defaultStr + joinWhenBodies(whens) + "\n  end\n"
     }
+
+def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
+    buildMergedAlwaysBlock(es, whenSigs)
 
 def assignsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let ls = list_reverse(collectAssignLinesFiltered(es, whenSigs));
