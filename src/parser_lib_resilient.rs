@@ -465,7 +465,7 @@ macro_rules! tuple_cut_parser_ext {
             Ok((i, v)) => (i, Some(v)),
             Err(e) => {
                 $state.0.push(e);
-                ($input, None)
+                return Ok(($input, ($($parsed,)* None $(, Option::<$t>::None)*)));
             }
         };
         tuple_cut_parser_ext!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
@@ -514,7 +514,7 @@ macro_rules! tuple_cut_parser_ext2 {
             Ok((i, v)) => (i, Some(v)),
             Err(e) => {
                 $state.0.push(e);
-                ($input, None)
+                return Ok(($input, ($($parsed,)* None $(, Option::<$t>::None)*)));
             }
         };
         tuple_cut_parser_ext2!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
