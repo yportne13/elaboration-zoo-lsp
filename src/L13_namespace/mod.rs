@@ -2963,6 +2963,47 @@ println (moduleTreeVL Test)
     }
 }
 
+#[test]
+fn test_verilog_switch_multi_case() {
+    // Test switch with multiple is cases
+    let input = r#"
+module Test {
+    let sel = UInt[2]
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = UInt[8]
+    let result = UInt[8]
+    switch sel {
+        is 0 {
+            result := a
+        }
+        is 1 {
+            result := b
+        }
+        default {
+            result := c
+        }
+    }
+}
+println (moduleTreeVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            assert!(output.contains("always @(*)"), "missing always: {}", output);
+            // Should have if/else-if chain
+            assert!(output.contains("if ("), "missing if: {}", output);
+            assert!(output.contains("else"), "missing else-if: {}", output);
+            assert!(output.contains("result = a"), "missing is 0 body: {}", output);
+            assert!(output.contains("result = b"), "missing is 1 body: {}", output);
+            assert!(output.contains("result = c"), "missing default body: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
 // ============================================================
 // Tests for multiple Into implementations for the same type
 // ============================================================

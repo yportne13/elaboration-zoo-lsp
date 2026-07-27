@@ -117,9 +117,22 @@ macro_rules Expr {
     };
 
     // ---- switch — desugar to when-based pattern matching ----
-    // switch sel { is 0 { body } default { body2 } }
+    // switch sel { is 0 { body } is 1 { body2 } default { body3 } }
     // default body emitted first (becomes the default assign before the when node)
     // Note: $val can be a Nat literal or a signal; uses === operator for comparison
+    // Multiple is cases: first uses whenBegin, rest use whenElseBegin
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* default {$( $default_body: Expr )*} }) => {
+        let _wob = whenOtherwiseBegin(unit);
+        $({$default_body})*
+        let _we2 = whenEnd(unit);
+        let _wb = whenBegin(($sel === $val).expr);
+        $({$body})*
+        let _we = whenEnd(unit);
+        $( let _web = whenElseBegin(($sel === $val2).expr);
+           $({$body2})*
+           let _we3 = whenEnd(unit); )*
+    };
+    // Single is + default (no elsewhen)
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
         let _wob = whenOtherwiseBegin(unit);
         $({$default_body})*
