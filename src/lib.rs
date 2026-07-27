@@ -78,7 +78,8 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     /// Macro expansion data collected during parsing (keyed by URI)
     pub macro_expansion_map: DashMap<String, Vec<MacroExpansionInfo>>,
     // 状态标记和条件变量
-    processing_uris: DashMap<String, bool>, // URI -> 是否正在处理
+    processing_uris: DashMap<String, bool>, // URI -> 正在被 worker 处理
+    pending_uris: DashMap<String, bool>,     // URI -> 已排队等待处理（在 worker 启动前就标记）
     // 信号机制：mpsc 通道任务队列
     job_sender: mpsc::Sender<AnalysisJob>,
     // Worker 线程的接收端（在 spawn_worker 时取出使用）
@@ -122,6 +123,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             exported_macros: DashMap::new(),
             macro_expansion_map: DashMap::new(),
             processing_uris: DashMap::new(),
+            pending_uris: DashMap::new(),
             job_sender: tx,
             job_receiver: Mutex::new(Some(rx)),
             processed_signal,
@@ -392,6 +394,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
             for (_uri, job) in latest {
                 let uri_str = job.uri.to_string();
+                self.pending_uris.remove(&uri_str);
                 {
                     let (lock, _) = &*self.processed_signal;
                     let mut processed = lock.lock().unwrap();
@@ -623,6 +626,8 @@ impl LanguageServer for Backend<Client> {
             params.text_document.uri.to_string(),
             params.text_document.text.to_string(),
         );
+        let uri = params.text_document.uri.to_string();
+        self.pending_uris.insert(uri.clone(), true);
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
             text: params.text_document.text.to_string(),
@@ -670,6 +675,8 @@ impl LanguageServer for Backend<Client> {
                 params.content_changes[0].text.clone()
             }
         };
+        let uri = params.text_document.uri.to_string();
+        self.pending_uris.insert(uri.clone(), true);
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
             text: full_text,
@@ -684,6 +691,8 @@ impl LanguageServer for Backend<Client> {
             return;
         }
         if let Some(text) = params.text {
+            let uri = params.text_document.uri.to_string();
+            self.pending_uris.insert(uri.clone(), true);
             let job = AnalysisJob {
                 uri: params.text_document.uri.clone(),
                 text,
@@ -848,6 +857,26 @@ impl LanguageServer for Backend<Client> {
     fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let uri = normalize_builtin_uri(&uri);
+        let uri_str = uri.to_string();
+
+        // Wait for any pending/ongoing analysis of this file to complete,
+        // so completion_table reflects the most recent edit.
+        {
+            let (lock, cvar) = &*self.processed_signal;
+            let mut processed = lock.lock().unwrap();
+            let start = std::time::Instant::now();
+            let timeout = Duration::from_millis(1500);
+            while start.elapsed() < timeout
+                && (self.pending_uris.contains_key(&uri_str)
+                    || self.processing_uris.contains_key(&uri_str))
+            {
+                if processed.contains_key(&uri_str) {
+                    break;
+                }
+                processed = cvar.wait_timeout(processed, Duration::from_millis(50)).unwrap().0;
+            }
+            processed.remove(&uri_str);
+        }
 
         self.client.log_message(MessageType::LOG, "on completion".to_string());
         let position = params.text_document_position.position;
