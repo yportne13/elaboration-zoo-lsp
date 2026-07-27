@@ -102,6 +102,12 @@ pub trait ErrorStore<E> {
     fn push_error(&mut self, error: E);
 }
 
+impl<E> ErrorStore<E> for Vec<E> {
+    fn push_error(&mut self, error: E) {
+        self.push(error);
+    }
+}
+
 impl<E, T> ErrorStore<E> for (Vec<E>, T) {
     fn push_error(&mut self, error: E) {
         self.0.push(error);
@@ -233,14 +239,15 @@ macro_rules! tuple_cut_parser {
         impl<
             I: Copy,
             Err,
+            S: ErrorStore<Err>,
             $t0, $($t),*,
             $p0, $($p),*
-        > Parser<I, ($t0, $(Option<$t>),*), Vec<Err>, Err> for Cut<($p0, $($p),*)>
+        > Parser<I, ($t0, $(Option<$t>),*), S, Err> for Cut<($p0, $($p),*)>
         where
-            $p0: Parser<I, $t0, Vec<Err>, Err>,
-            $($p: Parser<I, $t, Vec<Err>, Err>),*
+            $p0: Parser<I, $t0, S, Err>,
+            $($p: Parser<I, $t, S, Err>),*
         {
-            fn parse(&self, input: I, state: &mut Vec<Err>) -> Result<(I, ($t0, $(Option<$t>),*)), Err> {
+            fn parse(&self, input: I, state: &mut S) -> Result<(I, ($t0, $(Option<$t>),*)), Err> {
                 let (input, val) = self.0.$idx0.parse(input, state)?;
                 tuple_cut_parser!(self => input => state => val => $($t | $p | $idx),*)
             }
@@ -250,7 +257,7 @@ macro_rules! tuple_cut_parser {
         let (input, val) = match $self.0.$idx0.parse($input, $state) {
             Ok((i, v)) => (i, Some(v)),
             Err(e) => {
-                $state.push(e);
+                $state.push_error(e);
                 return Ok(($input, ($($parsed,)* None $(, Option::<$t>::None)*)));
             }
         };
@@ -260,7 +267,7 @@ macro_rules! tuple_cut_parser {
         match $self.0.$idx0.parse($input, $state) {
             Ok((input, val)) => Ok((input, ($($parsed),*, Some(val)))),
             Err(e) => {
-                $state.push(e);
+                $state.push_error(e);
                 Ok(($input, ($($parsed),*, None)))
             }
         }
@@ -441,99 +448,4 @@ impl<T: std::fmt::Display> AstDebug for Span<T> {
     }
 }
 
-macro_rules! tuple_cut_parser_ext {
-    ($t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),*) => {
-        impl<
-            I: Copy,
-            Err,
-            T,
-            $t0, $($t),*,
-            $p0, $($p),*
-        > Parser<I, ($t0, $(Option<$t>),*), (Vec<Err>, T), Err> for Cut<($p0, $($p),*)>
-        where
-            $p0: Parser<I, $t0, (Vec<Err>, T), Err>,
-            $($p: Parser<I, $t, (Vec<Err>, T), Err>),*
-        {
-            fn parse(&self, input: I, state: &mut (Vec<Err>, T)) -> Result<(I, ($t0, $(Option<$t>),*)), Err> {
-                let (input, val) = self.0.$idx0.parse(input, state)?;
-                tuple_cut_parser_ext!(self => input => state => val => $($t | $p | $idx),*)
-            }
-        }
-    };
-    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),+) => ({
-        let (input, val) = match $self.0.$idx0.parse($input, $state) {
-            Ok((i, v)) => (i, Some(v)),
-            Err(e) => {
-                $state.0.push(e);
-                return Ok(($input, ($($parsed,)* None $(, Option::<$t>::None)*)));
-            }
-        };
-        tuple_cut_parser_ext!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
-    });
-    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt) => ({
-        match $self.0.$idx0.parse($input, $state) {
-            Ok((input, val)) => Ok((input, ($($parsed),*, Some(val)))),
-            Err(e) => {
-                $state.0.push(e);
-                Ok(($input, ($($parsed),*, None)))
-            }
-        }
-    });
-}
 
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6);
-tuple_cut_parser_ext!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6, H | PH | 7);
-
-macro_rules! tuple_cut_parser_ext2 {
-    ($t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),*) => {
-        impl<
-            I: Copy,
-            Err,
-            T,
-            U,
-            $t0, $($t),*,
-            $p0, $($p),*
-        > Parser<I, ($t0, $(Option<$t>),*), (Vec<Err>, T, U), Err> for Cut<($p0, $($p),*)>
-        where
-            $p0: Parser<I, $t0, (Vec<Err>, T, U), Err>,
-            $($p: Parser<I, $t, (Vec<Err>, T, U), Err>),*
-        {
-            fn parse(&self, input: I, state: &mut (Vec<Err>, T, U)) -> Result<(I, ($t0, $(Option<$t>),*)), Err> {
-                let (input, val) = self.0.$idx0.parse(input, state)?;
-                tuple_cut_parser_ext2!(self => input => state => val => $($t | $p | $idx),*)
-            }
-        }
-    };
-    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt, $($t:tt | $p:tt | $idx:tt),+) => ({
-        let (input, val) = match $self.0.$idx0.parse($input, $state) {
-            Ok((i, v)) => (i, Some(v)),
-            Err(e) => {
-                $state.0.push(e);
-                return Ok(($input, ($($parsed,)* None $(, Option::<$t>::None)*)));
-            }
-        };
-        tuple_cut_parser_ext2!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
-    });
-    ($self:expr => $input:expr => $state:expr => $($parsed:expr)+ => $t0:tt | $p0:tt | $idx0:tt) => ({
-        match $self.0.$idx0.parse($input, $state) {
-            Ok((input, val)) => Ok((input, ($($parsed),*, Some(val)))),
-            Err(e) => {
-                $state.0.push(e);
-                Ok(($input, ($($parsed),*, None)))
-            }
-        }
-    });
-}
-
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1);
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2);
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3);
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4);
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5);
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6);
-tuple_cut_parser_ext2!(A | PA | 0, B | PB | 1, C | PC | 2, D | PD | 3, E | PE | 4, F | PF | 5, G | PG | 6, H | PH | 7);
