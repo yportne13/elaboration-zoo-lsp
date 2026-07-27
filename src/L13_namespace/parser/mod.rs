@@ -71,63 +71,15 @@ pub enum BaseMsg {
 #[derive(Debug, Clone, Copy)]
 pub enum ErrMsg {
     Base(BaseMsg),
-    In(Ctx, BaseMsg),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Ctx {
-    Declare,
-    FunctionDef,
-    Print,
-    EnumDef,
-    StructDef,
-    TraitDef,
-    ImplBlock,
-    ImplicitBinder,
-    ExplicitBinder,
-    Binder,
-    Expr,
-    Atom,
-    LetBind,
-    Lambda,
-    PiType,
-    MatchArm,
-    NewExpr,
-    PackageImport,
 }
 
 fn extract_base(m: ErrMsg) -> BaseMsg {
     match m {
-        ErrMsg::Base(b) | ErrMsg::In(_, b) => b,
+        ErrMsg::Base(b) => b,
     }
 }
 
 use std::fmt;
-
-impl fmt::Display for Ctx {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Ctx::Declare         => write!(f, "declaration"),
-            Ctx::FunctionDef     => write!(f, "function definition"),
-            Ctx::Print           => write!(f, "print"),
-            Ctx::EnumDef         => write!(f, "enum definition"),
-            Ctx::StructDef       => write!(f, "struct definition"),
-            Ctx::TraitDef        => write!(f, "trait definition"),
-            Ctx::ImplBlock       => write!(f, "impl block"),
-            Ctx::ImplicitBinder  => write!(f, "implicit binder"),
-            Ctx::ExplicitBinder  => write!(f, "explicit binder"),
-            Ctx::Binder          => write!(f, "binder"),
-            Ctx::Expr            => write!(f, "expression"),
-            Ctx::Atom            => write!(f, "atom"),
-            Ctx::LetBind         => write!(f, "let binding"),
-            Ctx::Lambda          => write!(f, "lambda"),
-            Ctx::PiType          => write!(f, "Pi type"),
-            Ctx::MatchArm        => write!(f, "match arm"),
-            Ctx::NewExpr         => write!(f, "`new` expression"),
-            Ctx::PackageImport   => write!(f, "package import"),
-        }
-    }
-}
 
 impl fmt::Display for BaseMsg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -144,8 +96,7 @@ impl fmt::Display for BaseMsg {
 impl fmt::Display for ErrMsg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ErrMsg::Base(msg)       => fmt::Display::fmt(msg, f),
-            ErrMsg::In(ctx, msg)    => write!(f, "in {}: {}", ctx, msg),
+            ErrMsg::Base(msg) => fmt::Display::fmt(msg, f),
         }
     }
 }
@@ -865,7 +816,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
     .parse(input, state)
     .and_then(|(i, result)| match result {
         Ok(v) => Ok((i, v)),
-        Err(square_span) => Err(IError { msg: square_span.map(|_| ErrMsg::In(Ctx::ImplicitBinder, BaseMsg::Expect(TokenKind::LSquare))) }),
+        Err(square_span) => Err(IError { msg: square_span.map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::LSquare))) }),
     })
 }
 
@@ -1141,8 +1092,8 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         .map_err(|_e| IError {
             msg: input
                 .first()
-                .map(|x| x.map(|_| ErrMsg::In(Ctx::Expr, BaseMsg::ExpectRaw)))
-                .unwrap_or(empty_span(ErrMsg::In(Ctx::Expr, BaseMsg::ExpectRaw)))
+                .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::ExpectRaw)))
+                .unwrap_or(empty_span(ErrMsg::Base(BaseMsg::ExpectRaw)))
         })
 }
 
@@ -2287,7 +2238,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
     let (input, derive_traits) = p_derive_attr.option().map(|x| x.unwrap_or_default()).parse(input, state)?;
     if !derive_traits.is_empty() {
         let (input, decl) = p_enum.or(p_struct).parse(input, state).map_err(|e| IError {
-            msg: e.msg.map(|m| ErrMsg::In(Ctx::Declare, extract_base(m)))
+            msg: e.msg.map(|m| ErrMsg::Base(extract_base(m)))
         })?;
         return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))
     }
@@ -2295,7 +2246,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         .or(p_package).or(p_import)
         .parse(input, state)
         .map_err(|e| IError {
-            msg: e.msg.map(|m| ErrMsg::In(Ctx::Declare, extract_base(m)))
+            msg: e.msg.map(|m| ErrMsg::Base(extract_base(m)))
         })
 }
 
