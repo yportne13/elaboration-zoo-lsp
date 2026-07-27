@@ -302,7 +302,16 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
                 .or(ws(err_token))
                 .many0(),
         )
-        .map(|(_, token)| token)
+        .map(|(_, token)| {
+            let mut token = token;
+            token.push(Span {
+                data: ("", Eof),
+                start_offset: input.end_offset,
+                end_offset: input.end_offset,
+                path_id: input.path_id,
+            });
+            token
+        })
         .parse(input)
 }
 

@@ -248,7 +248,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .filter(|(k, _)| !k.starts_with("__exported__") && err_collect.1.contains_key(&format!("__exported__{}", k)))
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
-                    if ret.0.is_empty() {
+                    if ret.0.is_empty() || ret.0.iter().all(|t| t.data.1 == TokenKind::Eof) {
                         Some((expand_classes(expand_derives(ret.1.into_iter().flatten().collect())), err_collect.0, exported, expansions))
                     } else {
                         err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
@@ -2343,7 +2343,7 @@ pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
     }).unwrap();
     let o = p_raw.many0().parse(&ret.1, &mut err_collect);
     match o {
-        Ok(ret) => if ret.0.is_empty() {
+        Ok(ret) => if ret.0.is_empty() || ret.0.iter().all(|t| t.data.1 == TokenKind::Eof) {
             Some((ret.1, err_collect.0))
         } else {
             err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
