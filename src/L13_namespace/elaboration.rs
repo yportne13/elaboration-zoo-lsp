@@ -1659,6 +1659,9 @@ impl Infer {
                 .filter(|(x, _, _, _)| self.trait_solver.can_satisfy(x, &typ_raw))
                 .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type, _default_body))| {
                     let def_span = methods_name.to_span();
+                    // Use the call-site method name span instead of the trait definition span
+                    // so that error locations point to the user's code, not the trait definition.
+                    let call_span: Span<SmolStr> = t.clone();
                     (
                     trait_name.clone(),
                     {
@@ -1670,34 +1673,34 @@ impl Infer {
                             // $$ resolution to trait_metas; solve_multi_trait fires after
                             // $this unifies Self with the concrete receiver type.
                             params.push((
-                                methods_name.clone().map(|_| SmolStr::new("$$")),
+                                call_span.clone().map(|_| SmolStr::new("$$")),
                                 trait_params.iter()
                                     .map(|x| x.0.clone())
                                     .fold(
-                                        Raw::Var(methods_name.clone().map(|_| trait_name.clone())),
+                                        Raw::Var(call_span.clone().map(|_| trait_name.clone())),
                                         |ret, x| Raw::App(Box::new(ret), Box::new(Raw::Var(x)), Either::Icit(Icit::Impl))
                                     ),
                                 Icit::Impl
                             ));
                             params.push((
-                                methods_name.clone().map(|_| SmolStr::new("$this")),
-                                Raw::Var(methods_name.clone().map(|_| SmolStr::new("Self"))),
+                                call_span.clone().map(|_| SmolStr::new("$this")),
+                                Raw::Var(call_span.clone().map(|_| SmolStr::new("Self"))),
                                 Icit::Expl
                             ));
                             params.append(&mut methods_params.clone());
                             params
                         };
-                        let body = std::iter::once((Raw::Var(methods_name.clone().map(|_| SmolStr::new("$this"))), Icit::Expl))
+                        let body = std::iter::once((Raw::Var(call_span.clone().map(|_| SmolStr::new("$this"))), Icit::Expl))
                             .chain(methods_params.iter().map(|x| (Raw::Var(x.0.clone()), x.2)))
                             .fold(
                                 Raw::Obj(
-                                    Box::new(Raw::Var(methods_name.clone().map(|_| SmolStr::new("$$")))),
-                                    Some(methods_name.clone()),
+                                    Box::new(Raw::Var(call_span.clone().map(|_| SmolStr::new("$$")))),
+                                    Some(call_span.clone()),
                                 ),
                                 |ret, (x, icit)| Raw::App(Box::new(ret), Box::new(x), Either::Icit(icit))
                             );
                         Raw::Let(
-                            methods_name.clone().map(|x| SmolStr::new(format!("${x}"))),
+                            call_span.clone().map(|x| SmolStr::new(format!("${x}"))),
                             Box::new(params.iter().rev().fold(ret_type.clone(), |a, b| {
                                 Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                             })),
@@ -1705,7 +1708,7 @@ impl Infer {
                                 Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                             })),
                             Box::new(Raw::App(
-                                Box::new(Raw::Var(methods_name.clone().map(|x| SmolStr::new(format!("${x}"))))),
+                                Box::new(Raw::Var(call_span.clone().map(|x| SmolStr::new(format!("${x}"))))),
                                 x.clone(),
                                 Either::Icit(Icit::Expl),
                             )),
