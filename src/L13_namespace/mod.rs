@@ -2930,21 +2930,19 @@ println (moduleTreeVL NatTest)
 
 #[test]
 fn test_verilog_switch_case() {
-    // Test Expr! switch/is/default macro (desugars to when/elsewhen/otherwise)
+    // Test switch/is/default macro (desugars to when/otherwise)
     let input = r#"
 module Test {
     let sel = UInt[2]
     let a = UInt[8]
     let b = UInt[8]
     let result = UInt[8]
-    Expr! {
-        switch sel {
-            is u"00" {
-                result := a
-            }
-            default {
-                result := b
-            }
+    switch sel {
+        is 0 {
+            result := a
+        }
+        default {
+            result := b
         }
     }
 }
@@ -2953,8 +2951,13 @@ println (moduleTreeVL Test)
     match run_with_prelude(input) {
         Ok(output) => {
             println!("=== Output ===\n{}", output);
-            // Just verify the macro expansion succeeds (no compile error)
-            assert!(true, "switch macro compiled successfully");
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            // switch desugars to when/otherwise, should produce always block
+            assert!(output.contains("always @(*)"), "missing always: {}", output);
+            assert!(output.contains("if ("), "missing if: {}", output);
+            assert!(output.contains("result = a"), "missing is body: {}", output);
+            assert!(output.contains("result = b"), "missing default body: {}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
