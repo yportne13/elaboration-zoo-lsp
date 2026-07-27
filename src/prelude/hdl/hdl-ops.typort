@@ -186,16 +186,16 @@ impl[width: Nat] Compare[Nat, Bool] for UInt[width] {
 
 impl[width: Nat] Equal[UInt[width], Bool] for UInt[width] {
     def ===(that: UInt[width]): Bool =
-        Bool.mk(None, binary(this.expr, "===", that.expr))
+        Bool.mk(None, binary(this.expr, "==", that.expr))
     def =/=(that: UInt[width]): Bool =
-        Bool.mk(None, binary(this.expr, "=/=", that.expr))
+        Bool.mk(None, binary(this.expr, "!=", that.expr))
 }
 
 impl[width: Nat] Equal[Nat, Bool] for UInt[width] {
     def ===(that: Nat): Bool =
-        Bool.mk(None, binary(this.expr, "===", literal(that)))
+        Bool.mk(None, binary(this.expr, "==", literal(that)))
     def =/=(that: Nat): Bool =
-        Bool.mk(None, binary(this.expr, "=/=", literal(that)))
+        Bool.mk(None, binary(this.expr, "!=", literal(that)))
 }
 
 impl[width: Nat] UInt[width] {
@@ -230,16 +230,16 @@ impl[width: Nat] Compare[Nat, Bool] for SInt[width] {
 
 impl[width: Nat] Equal[SInt[width], Bool] for SInt[width] {
     def ===(that: SInt[width]): Bool =
-        Bool.mk(None, binary(this.expr, "===", that.expr))
+        Bool.mk(None, binary(this.expr, "==", that.expr))
     def =/=(that: SInt[width]): Bool =
-        Bool.mk(None, binary(this.expr, "=/=", that.expr))
+        Bool.mk(None, binary(this.expr, "!=", that.expr))
 }
 
 impl[width: Nat] Equal[Nat, Bool] for SInt[width] {
     def ===(that: Nat): Bool =
-        Bool.mk(None, binary(this.expr, "===", literal(that)))
+        Bool.mk(None, binary(this.expr, "==", literal(that)))
     def =/=(that: Nat): Bool =
-        Bool.mk(None, binary(this.expr, "=/=", literal(that)))
+        Bool.mk(None, binary(this.expr, "!=", literal(that)))
 }
 
 impl[width: Nat] SInt[width] {
@@ -252,9 +252,9 @@ impl[width: Nat] SInt[width] {
 // --- Bool comparisons ---
 impl Equal[Bool, Bool] for Bool {
     def ===(that: Bool): Bool =
-        Bool.mk(None, binary(this.expr, "===", that.expr))
+        Bool.mk(None, binary(this.expr, "==", that.expr))
     def =/=(that: Bool): Bool =
-        Bool.mk(None, binary(this.expr, "=/=", that.expr))
+        Bool.mk(None, binary(this.expr, "!=", that.expr))
 }
 
 // ============================================================
@@ -522,7 +522,7 @@ struct SwitchBuilder {
 
 impl SwitchBuilder {
     def isValueExpr(valueExpr: Expr, body: Unit -> Unit): SwitchBuilder =
-        let _ = whenBegin(binary(this.selExpr, "===", valueExpr));
+        let _ = whenBegin(binary(this.selExpr, "==", valueExpr));
         let _ = body(unit);
         let _ = whenEnd(unit);
         SwitchBuilder.mk(this.selExpr)

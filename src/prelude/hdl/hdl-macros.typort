@@ -143,7 +143,7 @@ macro_rules Expr {
 #[macro_export]
 macro_rules module {
 	    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
-	        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
+	        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
 	    };
 	}
 
