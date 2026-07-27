@@ -251,7 +251,7 @@ macro_rules! tuple_cut_parser {
             Ok((i, v)) => (i, Some(v)),
             Err(e) => {
                 $state.push(e);
-                return Ok(($input, ($($parsed,)* None $(, Option::<$t>::None)*)));
+                ($input, None)
             }
         };
         tuple_cut_parser!($self => input => $state => $($parsed)+ val => $($t | $p | $idx),+)
