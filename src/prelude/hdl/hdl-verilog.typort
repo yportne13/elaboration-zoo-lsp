@@ -388,9 +388,16 @@ def collectNonClockedWhens[ne: Nat](es: Vec[Expr] ne): List[Expr] = match es {
     }
 }
 
+// Helper: emit condition string without redundant outer parens
+def emitCondStr(cond: Expr): String = match cond {
+    case binary(lhs, op, rhs) =>
+        exprVL(lhs) + " " + op + " " + exprVL(rhs)
+    case _ => exprVL(cond)
+}
+
 // Helper: emit a single when as if-block (no else)
 def emitIfBlock(cond: Expr, body: Expr): String =
-    "if (" + exprVL(cond) + ") begin\n" + exprVL_proc(body) + "\n    end"
+    "if (" + emitCondStr(cond) + ") begin\n" + exprVL_proc(body) + "\n    end"
 
 // Helper: get cond from a when expr
 def getWhenCond(e: Expr): Expr = match e {
