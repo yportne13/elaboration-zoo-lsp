@@ -1305,7 +1305,6 @@ fn test_example_alu() {
 }
 
 #[test]
-#[test]
 fn test_example_hdl_ops() {
     let input = include_str!("../../examples/hdl_ops.typort");
     match run_with_prelude(input) {
@@ -1315,7 +1314,7 @@ fn test_example_hdl_ops() {
             assert!(output.contains("a[7]"), "bracket sugar a[7]");
             assert!(output.contains("a[3:0]"), "slice range a[3:0]");
             assert!(output.contains("&&"), "bool operator &&");
-            assert!(output.contains("instance"), "sub-module instance");
+            assert!(output.contains("u_adder"), "sub-module instance");
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
