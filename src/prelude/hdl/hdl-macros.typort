@@ -123,7 +123,7 @@ macro_rules Expr {
         let _we = whenEnd(unit);
         let _wob = whenOtherwiseBegin(unit);
         $({$default_body})*
-        let _we2 = whenEnd(unit)
+        let _we2 = whenEnd(unit);
     };
 
     // ---- raw expression passthrough ----

@@ -1038,7 +1038,7 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     Cut((
         kw(NewKeyword),
         string(Ident),
-        paren_cut(p_raw.many1_sep(kw(T![,]))),
+        paren_cut(p_raw.many0_sep(kw(T![,]))),
     ))
         .map(|(new_kw, scrutinee, args)| args.and_then(|r| r.ok()).unwrap_or_default().into_iter()
             .fold(Raw::Var(scrutinee.map_or(new_kw.to_span().map(|_| SmolStr::new("")), |x| x.map(|x| SmolStr::new(format!("{x}.mk"))))), |acc, x| 
