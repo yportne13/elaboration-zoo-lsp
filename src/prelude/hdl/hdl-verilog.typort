@@ -388,11 +388,48 @@ def collectNonClockedWhens[ne: Nat](es: Vec[Expr] ne): List[Expr] = match es {
     }
 }
 
-// Helper: join multiple when bodies with newlines (for merged always block)
+// Helper: emit a single when as if-block (no else)
+def emitIfBlock(cond: Expr, body: Expr): String =
+    "if (" + exprVL(cond) + ") begin\n" + exprVL_proc(body) + "\n    end"
+
+// Helper: get cond from a when expr
+def getWhenCond(e: Expr): Expr = match e {
+    case when(c, _, _) => c
+    case _ => nop
+}
+
+// Helper: get body from a when expr
+def getWhenBody(e: Expr): Expr = match e {
+    case when(_, b, _) => b
+    case _ => nop
+}
+
+// Helper: check if expr is a when
+def isWhenExpr(e: Expr): Boolean = match e {
+    case when(_, _, _) => true
+    case _ => false
+}
+
+// Helper: emit else-if chain from a list of when nodes
+def emitElseIfChain(ls: List[Expr]): String = match ls {
+    case lnil => ""
+    case lcons(e, tail) =>
+        let is_w = isWhenExpr(e);
+        match is_w {
+            case true => " else " + emitIfBlock(getWhenCond(e), getWhenBody(e)) + emitElseIfChain(tail)
+            case false => "\n" + exprVL(e) + emitElseIfChain(tail)
+        }
+}
+
+// Helper: join multiple when bodies, chaining consecutive whens into if/else-if
 def joinWhenBodies(ls: List[Expr]): String = match ls {
     case lnil => ""
-    case lcons(e, lnil) => exprVL(e)
-    case lcons(e, tail) => exprVL(e) + "\n" + joinWhenBodies(tail)
+    case lcons(e, tail) =>
+        let is_w = isWhenExpr(e);
+        match is_w {
+            case true => "    " + emitIfBlock(getWhenCond(e), getWhenBody(e)) + emitElseIfChain(tail)
+            case false => exprVL(e) + "\n" + joinWhenBodies(tail)
+        }
 }
 
 // Build a single merged always block from all non-clocked when nodes
