@@ -2815,6 +2815,38 @@ println (moduleTreeVL Test)
 }
 
 #[test]
+fn test_verilog_when_default_merge() {
+    // Test that when block + default assign merge into single always block
+    let input = r#"
+module Test {
+    input sel = UInt[4]
+    input a = UInt[4]
+    input c = UInt[4]
+    output result = UInt[4]
+    result := c
+    when(sel === a) {
+        result := a
+    }
+}
+println (moduleTreeVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            // Should have always block with default assign inside
+            assert!(output.contains("always @(*)"), "missing always block: {}", output);
+            assert!(output.contains("result = c;"), "missing default assign in always: {}", output);
+            assert!(output.contains("if ("), "missing if: {}", output);
+            // Should NOT have continuous assign for result (it's in always block)
+            assert!(!output.contains("assign result"), "should not have continuous assign for result: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_verilog_when_blocks() {
     // Test when without elsewhen/otherwise.
     let input = r#"
