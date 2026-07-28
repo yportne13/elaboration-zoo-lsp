@@ -57,6 +57,18 @@ pub(super) fn nat_to_dec(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val
     Some(Val::LiteralIntro(empty_span(count.to_string())).into())
 }
 
+/// Generate Verilog width range string: "[N-1:0] " for N>1, "" for N<=1
+fn width_range(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    let w = count_nat(&args[0]);
+    let result = if w <= 1 {
+        String::new()
+    } else {
+        format!("[{}:0] ", w - 1)
+    };
+    Some(Val::LiteralIntro(empty_span(result)).into())
+}
+
 /// Minimal context for hover display — only stores what pretty_tm/quote actually needs.
 #[derive(Debug, Clone)]
 pub struct HoverCxt {
@@ -400,6 +412,12 @@ impl Cxt {
         *cxt = old.add_builtin(infer, "nat_to_dec",
             tm_pi(&[("n", tm_decl("Nat"))], tm_decl("String")),
             f_nat_to_dec,
+        ).unwrap();
+
+        let old2 = std::mem::replace(cxt, Self::empty());
+        *cxt = old2.add_builtin(infer, "width_range",
+            tm_pi(&[("w", tm_decl("Nat"))], tm_decl("String")),
+            PrimFunc(Rc::new(width_range)),
         ).unwrap();
     }
 

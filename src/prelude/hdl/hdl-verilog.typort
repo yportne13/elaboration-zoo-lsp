@@ -196,14 +196,18 @@ def outWireOrReg(name: String, whenSigs: List[String]): String =
         case false => "wire"
     }
 
+// Helper: generate width range string, omit for 1-bit signals
+// Uses Rust builtin width_range which can force Nat evaluation
+def widthRange(w: Nat): String = width_range(w)
+
 // Helper: process a single port expr
 def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
     case createIn(name) => lcons ("  input wire " + name) lnil
     case createOut(name) => lcons ("  output " + outWireOrReg(name, whenSigs) + " " + name) lnil
-    case createInWidth(name, w) => lcons ("  input wire [" + natToDec(w - 1) + ":0] " + name) lnil
-    case createOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " [" + natToDec(w - 1) + ":0] " + name) lnil
-    case createSIntInWidth(name, w) => lcons ("  input wire signed [" + natToDec(w - 1) + ":0] " + name) lnil
-    case createSIntOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " signed [" + natToDec(w - 1) + ":0] " + name) lnil
+    case createInWidth(name, w) => lcons ("  input wire " + widthRange(w) + name) lnil
+    case createOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " " + widthRange(w) + name) lnil
+    case createSIntInWidth(name, w) => lcons ("  input wire signed " + widthRange(w) + name) lnil
+    case createSIntOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " signed " + widthRange(w) + name) lnil
     case _ => lnil
 }
 
@@ -233,8 +237,8 @@ def wireOrRegLine(name: String, widthStr: String, whenSigs: List[String]): Strin
 // Helper: process a single expr for wire/reg declaration
 def wireLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
     case create(name) => lcons (wireOrRegLine(name, "", whenSigs)) lnil
-    case createWidth(name, w) => lcons (wireOrRegLine(name, "[" + natToDec(w - 1) + ":0] ", whenSigs)) lnil
-    case createSIntWidth(name, w) => lcons (wireOrRegLine(name, "signed [" + natToDec(w - 1) + ":0] ", whenSigs)) lnil
+    case createWidth(name, w) => lcons (wireOrRegLine(name, widthRange(w), whenSigs)) lnil
+    case createSIntWidth(name, w) => lcons (wireOrRegLine(name, "signed " + widthRange(w), whenSigs)) lnil
     case _ => lnil
 }
 
@@ -250,10 +254,10 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case createReg(name) => lcons ("  reg " + name + ";") (collectRegLines tail)
-        case createRegWidth(name, w) => lcons ("  reg [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
-        case createRegWidthInit(name, w, _) => lcons ("  reg [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
-        case createSIntRegWidth(name, w) => lcons ("  reg signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
-        case createSIntRegWidthInit(name, w, _) => lcons ("  reg signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectRegLines tail)
+        case createRegWidth(name, w) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createRegWidthInit(name, w, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createSIntRegWidth(name, w) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createSIntRegWidthInit(name, w, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
         case _ => collectRegLines tail
     }
 }
