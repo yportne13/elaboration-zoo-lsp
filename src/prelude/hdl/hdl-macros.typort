@@ -139,7 +139,7 @@ macro_rules Expr {
         let _we2 = whenEnd(unit);
         let _wb = whenBegin(($sel === $val).expr);
         $({$body})*
-        let _we = whenEnd(unit)
+        let _we = whenEnd(unit);
     };
 
     // ---- raw expression passthrough ----

@@ -35,7 +35,11 @@ def exprVL_proc(e: Expr): String = match e {
     case literal(v) => natToDec(v)
     case unary(op, x) => op + "(" + exprVL_proc(x) + ")"
     case binary(lhs, op, rhs) =>
-        "(" + exprVL_proc(lhs) + " " + op + " " + exprVL_proc(rhs) + ")"
+        let is_cat = str_eq(op, "##");
+        match is_cat {
+            case true => "{" + exprVL_proc(lhs) + ", " + exprVL_proc(rhs) + "}"
+            case false => "(" + exprVL_proc(lhs) + " " + op + " " + exprVL_proc(rhs) + ")"
+        }
     case assign(lhs, rhs) =>
         "      " + exprVL_proc(lhs) + " = " + exprVL_proc(rhs) + ";"
     case regAssign(lhs, rhs) =>
@@ -103,7 +107,11 @@ def exprVL(e: Expr): String = match e {
     case literal(v) => natToDec(v)
     case unary(op, e) => op + "(" + exprVL(e) + ")"
     case binary(lhs, op, rhs) =>
-        "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
+        let is_cat = str_eq(op, "##");
+        match is_cat {
+            case true => "{" + exprVL(lhs) + ", " + exprVL(rhs) + "}"
+            case false => "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
+        }
     case assign(lhs, rhs) =>
         "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
     case regAssign(lhs, rhs) =>
