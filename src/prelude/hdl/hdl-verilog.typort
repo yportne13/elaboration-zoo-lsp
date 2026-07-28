@@ -33,7 +33,7 @@ def exprVL_proc(e: Expr): String = match e {
     case createSIntRegWidth(name, _) => name
     case createSIntRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
-    case unary(op, x) => op + "(" + exprVL_proc(x) + ")"
+    case unary(op, x) => op + exprVL_proc(x)
     case binary(lhs, op, rhs) =>
         let is_cat = str_eq(op, "##");
         match is_cat {
@@ -105,7 +105,7 @@ def exprVL(e: Expr): String = match e {
     case createSIntRegWidth(name, _) => name
     case createSIntRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
-    case unary(op, e) => op + "(" + exprVL(e) + ")"
+    case unary(op, e) => op + exprVL(e)
     case binary(lhs, op, rhs) =>
         let is_cat = str_eq(op, "##");
         match is_cat {
