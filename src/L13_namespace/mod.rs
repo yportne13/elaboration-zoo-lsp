@@ -2777,6 +2777,38 @@ println (moduleTreeVL Adder)
 }
 
 #[test]
+fn test_verilog_when_otherwise_merge() {
+    // Test when/otherwise merges into single always block with default
+    let input = r#"
+module Test {
+    let a = UInt[4]
+    let b = UInt[4]
+    let c = UInt[4]
+    let z = Bool
+    when(z) {
+        c := a + b
+    } otherwise {
+        c := a - b
+    }
+}
+println (moduleTreeVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("always @(*)"), "missing always: {}", output);
+            assert!(output.contains("c = (a - b);"), "missing default: {}", output);
+            assert!(output.contains("c = (a + b);"), "missing when body: {}", output);
+            assert!(output.contains("if (z)"), "missing if: {}", output);
+            // Should NOT have continuous assign for c
+            assert!(!output.contains("assign c"), "should not have continuous assign: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_verilog_when_elsewhen_blocks() {
     // Test that when/elsewhen/otherwise compiles and generates Verilog.
     // Note: due to macro conflict (Expr macro vs Expr.when constructor),
@@ -2898,21 +2930,19 @@ println (moduleTreeVL NatTest)
 
 #[test]
 fn test_verilog_switch_case() {
-    // Test Expr! switch/is/default macro (desugars to when/elsewhen/otherwise)
+    // Test switch/is/default macro (desugars to when/otherwise)
     let input = r#"
 module Test {
     let sel = UInt[2]
     let a = UInt[8]
     let b = UInt[8]
     let result = UInt[8]
-    Expr! {
-        switch sel {
-            is u"00" {
-                result := a
-            }
-            default {
-                result := b
-            }
+    switch sel {
+        is 0 {
+            result := a
+        }
+        default {
+            result := b
         }
     }
 }
@@ -2921,8 +2951,54 @@ println (moduleTreeVL Test)
     match run_with_prelude(input) {
         Ok(output) => {
             println!("=== Output ===\n{}", output);
-            // Just verify the macro expansion succeeds (no compile error)
-            assert!(true, "switch macro compiled successfully");
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            // switch desugars to when/otherwise, should produce always block
+            assert!(output.contains("always @(*)"), "missing always: {}", output);
+            assert!(output.contains("if ("), "missing if: {}", output);
+            assert!(output.contains("result = a"), "missing is body: {}", output);
+            assert!(output.contains("result = b"), "missing default body: {}", output);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_verilog_switch_multi_case() {
+    // Test switch with multiple is cases
+    let input = r#"
+module Test {
+    let sel = UInt[2]
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = UInt[8]
+    let result = UInt[8]
+    switch sel {
+        is 0 {
+            result := a
+        }
+        is 1 {
+            result := b
+        }
+        default {
+            result := c
+        }
+    }
+}
+println (moduleTreeVL Test)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("=== Output ===\n{}", output);
+            assert!(output.contains("module Test"), "missing module: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            assert!(output.contains("always @(*)"), "missing always: {}", output);
+            // Should have if/else-if chain
+            assert!(output.contains("if ("), "missing if: {}", output);
+            assert!(output.contains("else"), "missing else-if: {}", output);
+            assert!(output.contains("result = a"), "missing is 0 body: {}", output);
+            assert!(output.contains("result = b"), "missing is 1 body: {}", output);
+            assert!(output.contains("result = c"), "missing default body: {}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -4252,9 +4328,12 @@ mod prelude_tests {
                             eprintln!("  {:?}", e);
                         }
                     }
-                    if decls.is_empty() {
+                    // Allow files with only macro definitions (no regular declarations)
+                    if decls.is_empty() && !name.contains("macros") {
                         all_ok = false;
                         eprintln!("[EMPTY] {}: parsed no declarations", name);
+                    } else if decls.is_empty() {
+                        eprintln!("[OK] {}: macro-only file", name);
                     } else {
                         eprintln!("[OK] {}: {} declarations", name, decls.len());
                     }

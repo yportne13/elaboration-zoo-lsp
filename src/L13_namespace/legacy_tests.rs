@@ -1305,7 +1305,6 @@ fn test_example_alu() {
 }
 
 #[test]
-#[test]
 fn test_example_hdl_ops() {
     let input = include_str!("../../examples/hdl_ops.typort");
     match run_with_prelude(input) {

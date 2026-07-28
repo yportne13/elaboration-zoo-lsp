@@ -162,18 +162,40 @@ def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     }
 }
 
-// Collect port declarations (input/output) from Vec[Expr]
-def collectPortLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case createIn(name) => lcons ("  input wire " + name) (collectPortLines tail)
-        case createOut(name) => lcons ("  output wire " + name) (collectPortLines tail)
-        case createInWidth(name, w) => lcons ("  input wire [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
-        case createOutWidth(name, w) => lcons ("  output wire [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
-        case createSIntInWidth(name, w) => lcons ("  input wire signed [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
-        case createSIntOutWidth(name, w) => lcons ("  output wire signed [" + natToDec(w - 1) + ":0] " + name) (collectPortLines tail)
-        case _ => collectPortLines tail
+// Check if a string is in a list
+def strInList(s: String, ls: List[String]): Boolean = match ls {
+    case lnil => false
+    case lcons(h, tail) =>
+        let eq = str_eq(h, s);
+        match eq {
+            case true => true
+            case false => strInList(s, tail)
+        }
+}
+
+// Helper: generate output port wire/reg keyword
+def outWireOrReg(name: String, whenSigs: List[String]): String =
+    let isWhen = strInList(name, whenSigs);
+    match isWhen {
+        case true => "reg"
+        case false => "wire"
     }
+
+// Helper: process a single port expr
+def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
+    case createIn(name) => lcons ("  input wire " + name) lnil
+    case createOut(name) => lcons ("  output " + outWireOrReg(name, whenSigs) + " " + name) lnil
+    case createInWidth(name, w) => lcons ("  input wire [" + natToDec(w - 1) + ":0] " + name) lnil
+    case createOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " [" + natToDec(w - 1) + ":0] " + name) lnil
+    case createSIntInWidth(name, w) => lcons ("  input wire signed [" + natToDec(w - 1) + ":0] " + name) lnil
+    case createSIntOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " signed [" + natToDec(w - 1) + ":0] " + name) lnil
+    case _ => lnil
+}
+
+// Collect port declarations (input/output) from Vec[Expr]
+def collectPortLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => list_append(portLineSingle(e, whenSigs), collectPortLines(tail, whenSigs))
 }
 
 def joinPortLines(ls: List[String]): String = match ls {
@@ -182,18 +204,30 @@ def joinPortLines(ls: List[String]): String = match ls {
     case lcons(s, tail) => s + ",\n" + joinPortLines(tail)
 }
 
-def portsVL[ne: Nat](es: Vec[Expr] ne): String =
-    joinPortLines(list_reverse(collectPortLines es))
+def portsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
+    joinPortLines(list_reverse(collectPortLines(es, whenSigs)))
+
+// Helper: generate wire or reg declaration based on when-driven status
+def wireOrRegLine(name: String, widthStr: String, whenSigs: List[String]): String =
+    let isWhen = strInList(name, whenSigs);
+    match isWhen {
+        case true => "  reg " + widthStr + name + ";"
+        case false => "  wire " + widthStr + name + ";"
+    }
+
+// Helper: process a single expr for wire/reg declaration
+def wireLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
+    case create(name) => lcons (wireOrRegLine(name, "", whenSigs)) lnil
+    case createWidth(name, w) => lcons (wireOrRegLine(name, "[" + natToDec(w - 1) + ":0] ", whenSigs)) lnil
+    case createSIntWidth(name, w) => lcons (wireOrRegLine(name, "signed [" + natToDec(w - 1) + ":0] ", whenSigs)) lnil
+    case _ => lnil
+}
 
 // Collect wire declarations (internal signals) from Vec[Expr]
-def collectWireLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+// When-driven signals are declared as reg instead of wire
+def collectWireLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
     case nil => lnil
-    case cons(e, tail) => match e {
-        case create(name) => lcons ("  wire " + name + ";") (collectWireLines tail)
-        case createWidth(name, w) => lcons ("  wire [" + natToDec(w - 1) + ":0] " + name + ";") (collectWireLines tail)
-        case createSIntWidth(name, w) => lcons ("  wire signed [" + natToDec(w - 1) + ":0] " + name + ";") (collectWireLines tail)
-        case _ => collectWireLines tail
-    }
+    case cons(e, tail) => list_append(wireLineSingle(e, whenSigs), collectWireLines(tail, whenSigs))
 }
 
 // Collect reg declarations from Vec[Expr]
@@ -226,8 +260,8 @@ def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     }
 }
 
-def wiresVL[ne: Nat](es: Vec[Expr] ne): String =
-    let ls = list_reverse(collectWireLines es);
+def wiresVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
+    let ls = list_reverse(collectWireLines(es, whenSigs));
     match ls {
         case lnil => ""
         case _ => joinLines(ls) + "\n"
@@ -265,17 +299,6 @@ def collectWhenDrivenSigs[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case when(_, _, _) => list_append(whenExprToSigList(e), collectWhenDrivenSigs tail)
         case _ => collectWhenDrivenSigs tail
     }
-}
-
-// Check if a string is in a list
-def strInList(s: String, ls: List[String]): Boolean = match ls {
-    case lnil => false
-    case lcons(h, tail) =>
-        let eq = str_eq(h, s);
-        match eq {
-            case true => true
-            case false => strInList(s, tail)
-        }
 }
 
 // Helper: get LHS name from an assign expr
@@ -351,41 +374,89 @@ def collectDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List
     }
 }
 
-// Helper: build always block string for a single non-clocked when expr
-def buildAlwaysBlock[ne: Nat](e: Expr, es: Vec[Expr] ne, whenSigs: List[String]): String =
-    let defaults = list_reverse(collectDefaultLines(es, whenSigs));
-    let defaultStr = match defaults {
-        case lnil => ""
-        case _ => joinLines(defaults) + "\n"
-    };
-    "  always @(*) begin\n" + defaultStr + exprVL(e) + "\n  end"
-
-// Helper: process a single when expr for always lines
-def whenToAlwaysLine[ne: Nat](e: Expr, es: Vec[Expr] ne, whenSigs: List[String]): List[String] =
-    let has_clk = hasRegAssign(e);
-    match has_clk {
-        case true => lnil
-        case false => lcons (buildAlwaysBlock(e, es, whenSigs)) lnil
-    }
-
-def collectAlwaysLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+// Helper: collect all non-clocked when exprs from Vec
+def collectNonClockedWhens[ne: Nat](es: Vec[Expr] ne): List[Expr] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
-        case when(_, _, _) => list_append(whenToAlwaysLine(e, es, whenSigs), collectAlwaysLines(tail, whenSigs))
-        case _ => collectAlwaysLines(tail, whenSigs)
+        case when(_, _, _) =>
+            let has_clk = hasRegAssign(e);
+            match has_clk {
+                case true => collectNonClockedWhens(tail)
+                case false => lcons(e, collectNonClockedWhens(tail))
+            }
+        case _ => collectNonClockedWhens(tail)
     }
 }
 
-def alwaysVL[ne: Nat](es: Vec[Expr] ne): String =
-    let whenSigs = list_reverse(collectWhenDrivenSigs es);
-    let ls = list_reverse(collectAlwaysLines(es, whenSigs));
-    match ls {
+// Helper: emit condition string without redundant outer parens
+def emitCondStr(cond: Expr): String = match cond {
+    case binary(lhs, op, rhs) =>
+        exprVL(lhs) + " " + op + " " + exprVL(rhs)
+    case _ => exprVL(cond)
+}
+
+// Helper: emit a single when as if-block (no else)
+def emitIfBlock(cond: Expr, body: Expr): String =
+    "if (" + emitCondStr(cond) + ") begin\n" + exprVL_proc(body) + "\n    end"
+
+// Helper: get cond from a when expr
+def getWhenCond(e: Expr): Expr = match e {
+    case when(c, _, _) => c
+    case _ => nop
+}
+
+// Helper: get body from a when expr
+def getWhenBody(e: Expr): Expr = match e {
+    case when(_, b, _) => b
+    case _ => nop
+}
+
+// Helper: check if expr is a when
+def isWhenExpr(e: Expr): Boolean = match e {
+    case when(_, _, _) => true
+    case _ => false
+}
+
+// Helper: emit else-if chain from a list of when nodes
+def emitElseIfChain(ls: List[Expr]): String = match ls {
+    case lnil => ""
+    case lcons(e, tail) =>
+        let is_w = isWhenExpr(e);
+        match is_w {
+            case true => " else " + emitIfBlock(getWhenCond(e), getWhenBody(e)) + emitElseIfChain(tail)
+            case false => "\n" + exprVL(e) + emitElseIfChain(tail)
+        }
+}
+
+// Helper: join multiple when bodies, chaining consecutive whens into if/else-if
+def joinWhenBodies(ls: List[Expr]): String = match ls {
+    case lnil => ""
+    case lcons(e, tail) =>
+        let is_w = isWhenExpr(e);
+        match is_w {
+            case true => "    " + emitIfBlock(getWhenCond(e), getWhenBody(e)) + emitElseIfChain(tail)
+            case false => exprVL(e) + "\n" + joinWhenBodies(tail)
+        }
+}
+
+// Build a single merged always block from all non-clocked when nodes
+def buildMergedAlwaysBlock[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
+    let whens = list_reverse(collectNonClockedWhens(es));
+    match whens {
         case lnil => ""
-        case _ => joinLines(ls) + "\n"
+        case _ =>
+            let defaults = list_reverse(collectDefaultLines(es, whenSigs));
+            let defaultStr = match defaults {
+                case lnil => ""
+                case _ => joinLines(defaults) + "\n"
+            };
+            "  always @(*) begin\n" + defaultStr + joinWhenBodies(whens) + "\n  end\n"
     }
 
-def assignsVL[ne: Nat](es: Vec[Expr] ne): String =
-    let whenSigs = list_reverse(collectWhenDrivenSigs es);
+def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
+    buildMergedAlwaysBlock(es, whenSigs)
+
+def assignsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let ls = list_reverse(collectAssignLinesFiltered(es, whenSigs));
     match ls {
         case lnil => ""
@@ -407,6 +478,12 @@ def hasClockLines[ne: Nat](es: Vec[Expr] ne): Boolean =
         case _ => true
     }
 
+// Helper: add 2-space indent to each line in a list
+def indentLines(ls: List[String]): List[String] = match ls {
+    case lnil => lnil
+    case lcons(s, tail) => lcons ("  " + s) (indentLines tail)
+}
+
 def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
     let ls = list_reverse(collectClockLines es);
     let has_clk = hasClockLines es;
@@ -421,7 +498,10 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
             let base = "  always @(posedge clk) begin\n" + joinLines(ls) + "\n" + "  end\n";
             match need_reset {
                 case false => base
-                case true => "  always @(posedge clk or posedge reset) begin\n    if (reset) begin\n" + joinLines(init_lines) + "\n    end else begin\n" + joinLines(ls) + "\n    end\n  end\n"
+                case true =>
+                    let indented_init = indentLines(init_lines);
+                    let indented_clk = indentLines(ls);
+                    "  always @(posedge clk or posedge reset) begin\n    if (reset) begin\n" + joinLines(indented_init) + "\n    end else begin\n" + joinLines(indented_clk) + "\n    end\n  end\n"
             }
     }
 
@@ -453,12 +533,13 @@ def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = m
 
 // Generate Verilog for a single ModuleDef
 def moduleDefVL(md: ModuleDef): String =
-    let port_decls = portsVL(md.expr);
-    let port_lines = list_reverse(collectPortLines md.expr);
-    let wire_decls = wiresVL(md.expr);
+    let whenSigs = list_reverse(collectWhenDrivenSigs md.expr);
+    let port_decls = portsVL(md.expr, whenSigs);
+    let port_lines = list_reverse(collectPortLines(md.expr, whenSigs));
+    let wire_decls = wiresVL(md.expr, whenSigs);
     let reg_decls = regsVL(md.expr);
-    let assigns = assignsVL(md.expr);
-    let always = alwaysVL(md.expr);
+    let assigns = assignsVL(md.expr, whenSigs);
+    let always = alwaysVL(md.expr, whenSigs);
     let clocked = clockedVL(md.expr);
     let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
     let has_regs = match list_reverse(collectRegLines md.expr) {

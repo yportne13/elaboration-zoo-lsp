@@ -84,25 +84,27 @@ macro_rules Expr {
 
     // ---- when/otherwise control flow ----
     // Pushes condition scope, evaluates body, pops scope.
+    // Note: otherwise body is emitted FIRST so it appears as the default assign
+    // before the when node in the module (required for correct Verilog generation).
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
         let w_push = whenBegin($cond.expr);
         $({$bodywhen})*
         let w_pop = whenEnd(unit);
         $( let w_epush = whenElseBegin($cond2.expr);
            $({$bodyelse})*
            let w_epop = whenEnd(unit); )*
-        let w_opush = whenOtherwiseBegin(unit);
-        $({$bodyother})*
-        let w_opop = whenEnd(unit);
     };
     // when with otherwise (no elsewhen)
     (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
-        let w_push = whenBegin($cond.expr);
-        $({$bodywhen})*
-        let w_pop = whenEnd(unit);
         let w_opush = whenOtherwiseBegin(unit);
         $({$bodyother})*
         let w_opop = whenEnd(unit);
+        let w_push = whenBegin($cond.expr);
+        $({$bodywhen})*
+        let w_pop = whenEnd(unit);
     };
     // when without otherwise
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
@@ -115,15 +117,29 @@ macro_rules Expr {
     };
 
     // ---- switch — desugar to when-based pattern matching ----
-    // switch sel { is a { body } default { body2 } }
-    (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
-        let _selExpr = $sel.expr;
-        let _wb = whenBegin(binary(_selExpr, "==", ($val).expr));
-        $({$body})*
-        let _we = whenEnd(unit);
+    // switch sel { is 0 { body } is 1 { body2 } default { body3 } }
+    // default body emitted first (becomes the default assign before the when node)
+    // Note: $val can be a Nat literal or a signal; uses === operator for comparison
+    // Multiple is cases: first uses whenBegin, rest use whenElseBegin
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* default {$( $default_body: Expr )*} }) => {
         let _wob = whenOtherwiseBegin(unit);
         $({$default_body})*
         let _we2 = whenEnd(unit);
+        let _wb = whenBegin(($sel === $val).expr);
+        $({$body})*
+        let _we = whenEnd(unit);
+        $( let _web = whenElseBegin(($sel === $val2).expr);
+           $({$body2})*
+           let _we3 = whenEnd(unit); )*
+    };
+    // Single is + default (no elsewhen)
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
+        let _wob = whenOtherwiseBegin(unit);
+        $({$default_body})*
+        let _we2 = whenEnd(unit);
+        let _wb = whenBegin(($sel === $val).expr);
+        $({$body})*
+        let _we = whenEnd(unit)
     };
 
     // ---- raw expression passthrough ----
@@ -143,7 +159,7 @@ macro_rules Expr {
 #[macro_export]
 macro_rules module {
 	    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
-	        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
+	        def $name $({$args})* = let _init = change_mutable_default("module", x => x, module.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("module"); let _creat = change_mutable("module", x => module.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("module"); let _restore = create_global("module", prev_module); module_result
 	    };
 	}
 
