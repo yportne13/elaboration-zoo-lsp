@@ -478,10 +478,10 @@ def hasClockLines[ne: Nat](es: Vec[Expr] ne): Boolean =
         case _ => true
     }
 
-// Helper: add 2-space indent to each line in a list
+// Helper: add 2-space indent to each line in a list (handles multi-line strings)
 def indentLines(ls: List[String]): List[String] = match ls {
     case lnil => lnil
-    case lcons(s, tail) => lcons ("  " + s) (indentLines tail)
+    case lcons(s, tail) => lcons ("  " + str_indent2(s)) (indentLines tail)
 }
 
 def clockedVL[ne: Nat](es: Vec[Expr] ne): String =

@@ -117,6 +117,18 @@ fn str_eq(_: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
+/// Indent each line in a string by 2 spaces (for multi-line Verilog strings)
+fn str_indent2(_: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(s) => {
+            let indented = s.data.replace('\n', "\n  ");
+            Some(Val::LiteralIntro(empty_span(indented)).into())
+        },
+        _ => None,
+    }
+}
+
 fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
@@ -298,6 +310,11 @@ impl Cxt {
         cxt = cxt.add_builtin(infer, "str_eq",
             tm_pi(&[("x", tm_decl("String")), ("y", tm_decl("String"))], tm_decl("Boolean")),
             PrimFunc(Rc::new(str_eq)),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "str_indent2",
+            tm_pi(&[("x", tm_decl("String"))], tm_decl("String")),
+            PrimFunc(Rc::new(str_indent2)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "string_to_global_type",
