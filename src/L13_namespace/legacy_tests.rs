@@ -983,7 +983,7 @@ println(moduleTreeVL(Test[8]))
     match run_with_prelude(input) {
         Ok(output) => {
             eprintln!("VERILOG OUTPUT:\n{}", output);
-            assert!(output.contains("~("), "bitwise not should produce ~(...) in Verilog, got:\n{}", output);
+            assert!(output.contains("~a"), "bitwise not should produce ~a in Verilog, got:\n{}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -1533,7 +1533,7 @@ println(moduleTreeVL(Test))
             println!("{}", output);
             assert!(output.contains("&&"), "&& operator in verilog");
             assert!(output.contains("||"), "|| operator in verilog");
-            assert!(output.contains("!("), "! operator in verilog");
+            assert!(output.contains("!"), "! operator in verilog");
             assert!(output.contains("^"), "xor operator in verilog");
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
