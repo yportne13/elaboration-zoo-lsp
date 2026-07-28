@@ -75,6 +75,13 @@ def exprVL_proc(e: Expr): String = match e {
         instName + "_" + signalName
 }
 
+// Helper: emit condition string without redundant outer parens
+def emitCondStr(cond: Expr): String = match cond {
+    case binary(lhs, op, rhs) =>
+        exprVL_proc(lhs) + " " + op + " " + exprVL_proc(rhs)
+    case _ => exprVL_proc(cond)
+}
+
 // Convert a single Expr to a Verilog expression string.
 // Handles one level of else-if nesting; deeper nesting may produce
 // nested if-statements (still functionally correct).
@@ -102,12 +109,12 @@ def exprVL(e: Expr): String = match e {
     case regAssign(lhs, rhs) =>
         "    " + exprVL(lhs) + " <= " + exprVL(rhs) + ";"
     case when(cond, body, elseBody) =>
-        "    if (" + exprVL(cond) + ") begin\n" + exprVL_proc(body) + "\n    end" + (
+        "    if (" + emitCondStr(cond) + ") begin\n" + exprVL_proc(body) + "\n    end" + (
             match elseBody {
                 case None => ""
                 case Some(eb) => match eb {
                     case when(ec, eb2, eb3) =>
-                        " else if (" + exprVL(ec) + ") begin\n" + exprVL_proc(eb2) + "\n    end" + (
+                        " else if (" + emitCondStr(ec) + ") begin\n" + exprVL_proc(eb2) + "\n    end" + (
                             match eb3 {
                                 case None => ""
                                 case Some(eb4) => " else begin\n" + exprVL_proc(eb4) + "\n    end"
@@ -386,13 +393,6 @@ def collectNonClockedWhens[ne: Nat](es: Vec[Expr] ne): List[Expr] = match es {
             }
         case _ => collectNonClockedWhens(tail)
     }
-}
-
-// Helper: emit condition string without redundant outer parens
-def emitCondStr(cond: Expr): String = match cond {
-    case binary(lhs, op, rhs) =>
-        exprVL(lhs) + " " + op + " " + exprVL(rhs)
-    case _ => exprVL(cond)
 }
 
 // Helper: emit a single when as if-block (no else)
