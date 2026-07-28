@@ -1127,10 +1127,9 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
         p_where_clause,
         kw(T![=]),
-        kw(EndLine).option(),
-        p_raw,
+        (kw(EndLine).option(), p_raw).map(|(_, x)| x),
     ))
-        .map(|(def_kw, name, params, ret, where_clause, eq_kw, _, body)| {
+        .map(|(def_kw, name, params, ret, where_clause, eq_kw, body)| {
             let mut all_params = params.unwrap_or_default();
             // Desugar where clause to implicit parameters (appended after all explicit params)
             if let Some(clause) = where_clause {
