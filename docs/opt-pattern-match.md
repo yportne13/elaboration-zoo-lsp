@@ -1,67 +1,53 @@
-# Pattern Match Optimization Notes
+# 模式匹配优化笔记
 
-## Current State (2026-06-03)
+## 当前状态（2026-06-03）
 
-`filter_accessible_constrs` fast-path added (e8bcbd9):
-- Non-indexed sum types (Expr, Bool, Option) → skip GADT reachability analysis
-- Indexed types (Vec[A](len: Nat)) → still do full unification-based check
-- Benchmark: 7.18s → 4.91s (-32%)
+`filter_accessible_constrs` 快速路径已添加（e8bcbd9）：
+- 非索引和类型（Expr、Bool、Option）→ 跳过 GADT 可达性分析
+- 索引类型（`Vec[A](len: Nat)`）→ 仍做完整的基于统一化的检查
+- 基准测试：7.18s → 4.91s（-32%）
 
-## Future Optimizations
+## 未来优化
 
-### ② Pre-compute constructor types at declaration time
+### ② 在声明时预计算构造器类型
 
-**Problem:** `filter_accessible_constrs` calls `infer_expr` for each constructor to
-re-derive its function signature (parameters, return type) every time the function
-is called. This is redundant — the constructor's type structure is fixed at
-declaration time.
+**问题：** `filter_accessible_constrs` 每次调用时都会为每个构造器调用 `infer_expr` 重新推导其函数签名（参数、返回类型）。这是冗余的——构造器的类型结构在声明时就已固定。
 
-**Idea:** Store a pre-computed signature for each constructor at declaration time:
-- The constructor's Pi-type (parameter types)
-- Which parameters are Expl vs Impl
-- The constructor's return type (the Sum type it belongs to)
+**思路：** 在声明时为每个构造器存储预计算的签名：
+- 构造器的 Pi 类型（参数类型）
+- 哪些参数是 Expl vs Impl
+- 构造器的返回类型（所属的和类型）
 
-Then `filter_accessible_constrs` can skip `infer_expr` entirely and work with
-pre-computed metadata directly.
+这样 `filter_accessible_constrs` 可以完全跳过 `infer_expr`，直接使用预计算的元数据。
 
-**Trade-off:** More memory per constructor declaration. Only helps for indexed
-types (non-indexed already fast-pathed). May be moderate benefit since `infer_expr`
-on constructors is relatively cheap (just type lookup).
+**权衡：** 每个构造器声明需要更多内存。仅对索引类型有帮助（非索引类型已有快速路径）。收益可能中等，因为对构造器做 `infer_expr` 相对廉价（仅类型查找）。
 
-### ③ Structural equality instead of full unification
+### ③ 用结构相等替换完整统一化
 
-**Problem:** `filter_accessible_constrs` uses `check_pm` (full unification) to
-determine if a constructor can inhabit the matched type. For GADT indices like
-`Vec[A](len: Nat)`, the check is essentially structural:
-- `nil` returns `Vec(A)(0)`, matched type is `Vec(A)(succ len)` → 0 ≠ succ len → NO
-- `cons` returns `Vec(A)(succ n')`, matched type is `Vec(A)(succ len)` → unify n' ≈ len → YES
+**问题：** `filter_accessible_constrs` 使用 `check_pm`（完整统一化）来判断一个构造器是否可以 inhabit 被匹配的类型。对于像 `Vec[A](len: Nat)` 这样的 GADT 索引，检查本质上是结构化的：
+- `nil` 返回 `Vec(A)(0)`，被匹配类型是 `Vec(A)(succ len)` → 0 ≠ succ len → 不可达
+- `cons` 返回 `Vec(A)(succ n')`，被匹配类型是 `Vec(A)(succ len)` → 统一 n' ≈ len → 可达
 
-Full unification is overkill — we just need a **structural equality check** on
-the index spine: does `0 === succ _`? No. Does `succ _ === succ _`? Yes, with
-fresh sub-metavariables.
+完整统一化过于重量级——我们只需要对索引脊做**结构相等检查**：`0 === succ _`？否。`succ _ === succ _`？是，用新鲜的子元变量。
 
-**Idea:** Replace `check_pm` with a lightweight structural comparison for the
-index-level terms:
-1. Extract the return type of the constructor (fully applied with holes)
-2. Extract the type indices of the match target
-3. Do a structural walk comparing corresponding indices:
-   - Same head constructor → recurse into subterms
-   - Different head constructors (0 vs succ) → unreachable
-   - Metavariable / neutral → reachable (could be anything)
+**思路：** 用轻量级结构比较替换 `check_pm` 来处理索引级项：
+1. 提取构造器的返回类型（完全应用，带 hole）
+2. 提取匹配目标的类型索引
+3. 对相应索引进行结构化遍历比较：
+   - 相同头部构造器 → 递归到子项
+   - 不同头部构造器（0 vs succ）→ 不可达
+   - 元变量 / 中性 → 可达（可以是任何值）
 
-This avoids creating full `Infer` state, saves unification overhead, and
-sidesteps side-effects on the meta store.
+这避免了创建完整的 `Infer` 状态，节省了统一化开销，并绕过了对元变量存储的副作用。
 
-**Trade-off:** Only applies to simple GADT-like indexing. Full unification is
-still needed for complex cases (type functions, overlapping indices). Would
-need a fallback to `check_pm` when structural check can't decide.
+**权衡：** 仅适用于简单的 GADT 风格索引。复杂情况（类型函数、重叠索引）仍需完整统一化。当结构检查无法决定时，需要回退到 `check_pm`。
 
 ---
 
-## Implementation Priority
+## 实现优先级
 
-① Already done — lift call out of arm loop (e8bcbd9 + current changes).
+① 已完成——将调用提升出臂循环（e8bcbd9 + 当前更改）。
 
-② After ① — moderate gain, more code complexity.
+② 在①之后——中等收益，更多代码复杂度。
 
-③ After ① — potentially large gain, need careful design to handle edge cases.
+③ 在①之后——潜在的大收益，需要仔细设计以处理边界情况。

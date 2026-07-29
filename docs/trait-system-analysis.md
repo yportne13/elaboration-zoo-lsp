@@ -1,4 +1,4 @@
-# Typort (L13) Trait System — 与 Rust Trait 系统的全面对比
+# Typort (L13) Trait 系统 — 与 Rust Trait 系统的全面对比
 
 > 本文档系统性列举 Rust trait 系统的所有特性点，并与 Typort (L13) 语言的 trait 系统逐一对比。
 > Typort 的 trait 系统是基于 Haskell typeclass 风格的设计，通过编译为枚举 + tabled resolution 引擎实现。
@@ -48,7 +48,7 @@
 | 1.1 | 基本 trait 声明 | `trait Trait { fn method(&self); }` | ✅ `trait Trait { def method(...): Ret }` | 核心语法一致 |
 | 1.2 | 带生命周期参数的 trait | `trait Foo<'a> { fn bar(&self, x: &'a str); }` | ❌ | Typort 无生命周期系统 |
 | 1.3 | 带泛型类型参数的 trait | `trait Converter<T> { fn convert(&self) -> T; }` | ✅ `trait Convert[T, O] { def convert: O }` | 通过隐式参数实现 |
-| 1.4 | 带泛型 const 参数的 trait | `trait Foo<const N: usize> { fn bar() -> [u8; N]; }` | ❌ | Typort 无比啦值泛型参数（与 Rust 相同方式） |
+| 1.4 | 带泛型 const 参数的 trait | `trait Foo<const N: usize> { fn bar() -> [u8; N]; }` | ❌ | Typort 无比啦值泛型参数 |
 | 1.5 | 带默认泛型参数的 trait | `trait Add<Rhs = Self> { type Output; }` | ❌ | 无默认值语法 |
 | 1.6 | Where 子句在 trait 定义上 | `trait Foo<T> where T: Debug { fn bar(&self, t: T); }` | ❌ | 无 where 子句语法 |
 | 1.7 | 可见性修饰符 | `pub trait PublicTrait {}` | ❌ | Typort 无可见性系统（所有声明在包内可见） |
@@ -587,9 +587,9 @@ Typort 的运算符重载是通过同名 trait 方法实现的，语法糖让 `a
 
 | # | 问题 | 影响 | 根因 |
 |---|------|------|------|
-| 1 | **零参数 trait 方法通过点号调用失败** `expr.method` (方法无除了 this 之外的参数) 会留下未解析的 `$$` (trait 实例) 隐式参数，导致结果类型为函数而不是期望的类型 | `true.show`, `two.double`（通过 trait）等方法调用失效 | `trait_wrap` 中参数顺序为 `[Self](Impl), [$this](Expl), [$$](Impl)`，`insert_go` 只能插入开头的隐式参数，遇到 `$this`(Expl) 后停止，导致 `$$` 未能解析 |
+| 1 | **零参数 trait 方法通过点号调用失败** `expr.method`（方法无除了 this 之外的参数）会留下未解析的 `$$`（trait 实例）隐式参数，导致结果类型为函数而不是期望的类型 | `true.show`, `two.double`（通过 trait）等方法调用失效 | `trait_wrap` 中参数顺序为 `[Self](Impl), [$this](Expl), [$$](Impl)`，`insert_go` 只能插入开头的隐式参数，遇到 `$this`(Expl) 后停止，导致 `$$` 未能解析 |
 | 2 | **运算符作为方法名时无法通过点号访问** `o.< x y` 会解析失败，因为 `<` 是运算符 token | 包含 `<`, `>`, `!` 等方法名的 trait 字段访问失败 | 解析器将 `<` 视为运算符而非标识符 |
-| 3 | **Trait 构造器字段访问在 Rigid 类型参数下失效** `i.method x` (其中 `i: TraitName[T]`, `T` 是 Rigid 变量) 会字段查找失败 | 通过泛型函数参数 trait instance 调用方法不可用 | `c` 中的字段名 `Span` 比较包含位置信息，与调用处的 `Span` 不匹配 |
+| 3 | **Trait 构造器字段访问在 Rigid 类型参数下失效** `i.method x`（其中 `i: TraitName[T]`, `T` 是 Rigid 变量）会字段查找失败 | 通过泛型函数参数 trait instance 调用方法不可用 | `c` 中的字段名 `Span` 比较包含位置信息，与调用处的 `Span` 不匹配 |
 | 4 | **`.mk` 构造器的 span 比较** 字段名使用 `Span` 的全量比较（包含位置），导致相同名称但不同来源的字段无法匹配 | Sum 类型的字段访问依赖于位置匹配 | `Span` 的 `PartialEq` 比较了 `start_offset`, `end_offset`, `path_id` 等字段 |
 
 ### Verified Working Features

@@ -1,70 +1,54 @@
-# LSP Server Architecture
+# LSP 服务器架构
 
-## Text Sync: Why Incremental
+## 文本同步：为什么选择增量同步
 
-**2026-06-02** — Switched from `TextDocumentSyncKind::FULL` to `INCREMENTAL`.
+**2026-06-02** — 从 `TextDocumentSyncKind::FULL`（全量同步）切换为 `INCREMENTAL`（增量同步）。
 
-### Problem
+### 问题
 
-The LSP server communicates with VS Code (or the web demo) over stdio. In the WASM
-(web demo) build, stdio is implemented via a `SharedArrayBuffer` ring buffer — the
-LSP wire format (Content-Length headers + JSON bodies) is serialized into this
-buffer and read by the client.
+LSP 服务器通过 stdio 与 VS Code（或 Web 演示版）通信。在 WASM（Web 演示版）构建中，stdio 通过 `SharedArrayBuffer` 环形缓冲区实现——LSP 线缆格式（Content-Length 头部 + JSON 主体）序列化到此缓冲区并由客户端读取。
 
-When the document is large (e.g. 1000+ lines), each `didChange` notification under
-**Full** sync sends the **entire document text** as a single message. The large
-message can overflow or misalign the shared buffer, causing **framing errors**
-(commonly called "粘包" — packet sticking/tearing). Consequence: multiple rapid
-edits cause the LSP connection to corrupt and the web demo hangs.
+当文档很大（例如 1000+ 行）时，**全量**同步下的每次 `didChange` 通知将**整个文档文本**作为单条消息发送。大消息可能会溢出或错位共享缓冲区，导致**组帧错误**（俗称"粘包"）。后果：多次快速编辑导致 LSP 连接损坏，Web 演示版挂起。
 
-### Solution
+### 解决方案
 
-Switch to **Incremental** sync:
-- Client sends only the changed `range` + `text` on each edit, not the whole file
-- Server maintains a `document_buffers: HashMap<String, String>` to store the
-  full document text per URI
-- On `didOpen`: store full text from the notification
-- On `didChange`: apply the incremental edit (using `Rope` for position/offset
-  conversion) to the stored buffer, then pass the reconstructed full text to the
-  analysis worker
-- On `didClose`: clean up the buffer
+切换到**增量**同步：
+- 客户端每次编辑只发送更改的 `range` + `text`，而非整个文件
+- 服务器维护 `document_buffers: HashMap<String, String>` 按 URI 存储完整文档文本
+- `didOpen` 时：从通知中存储完整文本
+- `didChange` 时：应用增量编辑（使用 `Rope` 进行位置/偏移转换）到存储的缓冲区，然后将重构的完整文本传递给分析工作线程
+- `didClose` 时：清理缓冲区
 
-This dramatically reduces per-edit message size (~100 bytes instead of ~100 KB
-for a large file), eliminating shared buffer overflows in the WASM transport.
+这大幅减少了每次编辑的消息大小（大文件约 100 字节而非约 100 KB），消除了 WASM 传输中的共享缓冲区溢出问题。
 
-### Trade-offs
-- Server must maintain its own document copy (one extra `String` per open file)
-- Position/offset conversion requires UTF-16 → byte offset mapping (already
-  handled by `position_to_offset` / `offset_to_position` in `lib.rs`)
+### 权衡
+- 服务器必须维护自己的文档副本（每个打开文件多一个 `String`）
+- 位置/偏移转换需要 UTF-16 → 字节偏移映射（已在 `lib.rs` 中由 `position_to_offset` / `offset_to_position` 处理）
 
 ---
 
-## Stdio Wire Monitor
+## Stdio 线缆监视器
 
-**2026-06-02** — Added debugging support for LSP wire format inspection.
+**2026-06-02** — 添加了 LSP 线缆格式检查的调试支持。
 
-When debugging LSP protocol issues (especially shared-buffer framing), enable
-the `stdio-monitor` feature:
+调试 LSP 协议问题（特别是共享缓冲区组帧）时，启用 `stdio-monitor` 特性：
 
 ```bash
 cargo build --features stdio-monitor
 ```
 
-This creates proxy threads that dump every LSP message (both directions) to
-stderr with full Content-Length headers and JSON bodies. Useful for diagnosing
-framing errors, malformed messages, or unexpected server responses.
+这会创建代理线程，将每条 LSP 消息（双向）连同完整的 Content-Length 头部和 JSON 主体转储到 stderr。用于诊断组帧错误、格式错误的消息或意外的服务器响应。
 
-See `create_monitored_connection()` in `lib.rs`.
+详见 `lib.rs` 中的 `create_monitored_connection()`。
 
 ---
 
-## Quick Fix (Code Actions)
+## Quick Fix（代码操作）
 
-The server supports code actions via the `typort.applyQuickFix` command.
+服务器通过 `typort.applyQuickFix` 命令支持代码操作。
 
-- Diagnostics with associated fixes store a unique ID in `diagnostic.data`
-- `codeAction` request returns a "Search solution" action linking to the fix
-- `workspace/executeCommand` with `typort.applyQuickFix` executes the fix
-  closure and displays the result via `window/showMessage`
+- 带有相关修复的诊断在 `diagnostic.data` 中存储唯一 ID
+- `codeAction` 请求返回一个链接到修复的"Search solution"操作
+- `workspace/executeCommand` 配合 `typort.applyQuickFix` 执行修复闭包并通过 `window/showMessage` 显示结果
 
-Disabled in commit `d003e52` (2026-05-26), restored in `33bea4c` (2026-06-02).
+在提交 `d003e52`（2026-05-26）中禁用，在 `33bea4c`（2026-06-02）中恢复。

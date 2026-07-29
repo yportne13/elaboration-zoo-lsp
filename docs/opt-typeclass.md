@@ -1,23 +1,21 @@
-# Typeclass Resolution Optimization Notes
+# Typeclass 求解优化笔记
 
-## Problem 1: Linear scan in assertion_table (SOLVED)
+## 问题 1：assertion_table 的线性扫描（已解决）
 
-`find_assertion_entry` scanned `assertion_table` (a `Vec`) linearly with
-`vals_eq_ground` structural comparison. Fixed by carrying `assertion_idx` through
-`GeneratorNode` and `ConsumerNode`, eliminating the lookups in the goal-solved path.
+`find_assertion_entry` 使用 `vals_eq_ground` 结构比较线性扫描 `assertion_table`（一个 `Vec`）。通过在 `GeneratorNode` 和 `ConsumerNode` 中携带 `assertion_idx` 来修复，消除了目标已解决路径中的查找。
 
-## Problem 2: `clean()` discards all cached work
+## 问题 2：`clean()` 丢弃所有缓存的工作
 
-### Current behavior
+### 当前行为
 
-`trait_wrap` in `elaboration.rs` calls `clean() + synth()` in two places:
+`elaboration.rs` 中的 `trait_wrap` 在两个位置调用 `clean() + synth()`：
 
 ```
-Line 1102: Code completion for `t.data.is_empty()`
-Line 1162: Method resolution filter per trait
+第 1102 行：代码补全的 `t.data.is_empty()`
+第 1162 行：按 trait 的方法解析过滤
 ```
 
-Both use the pattern:
+两者都使用以下模式：
 
 ```rust
 self.trait_solver.clean();
@@ -26,26 +24,19 @@ self.trait_solver
     .is_some()
 ```
 
-### Why it's wasteful
+### 为什么浪费
 
-`synth()` is a full tabled resolution engine with assertion tables, generator stacks,
-and a loop. But in these call sites, the wildcard `Flex(MetaVar(u32::MAX), [])`
-matches the FIRST instance's pattern instantly, so `synth()` always returns after
-one iteration. The entire table construction/teardown is purely overhead.
+`synth()` 是一个完整的 tabled resolution 引擎，带有 assertion 表、生成器栈和循环。但在这些调用点，通配符 `Flex(MetaVar(u32::MAX), [])` 瞬间匹配了第一个实例的模式，所以 `synth()` 总是在一次迭代后返回。整个表的构建/拆卸完全是开销。
 
-In effect, `synth()` is being used as a trivial membership test: "does this trait
-have ANY instance whose Self type matches `typ_raw`?"
+实际上，`synth()` 被用作一个简单的成员测试："这个 trait 是否有任何实例的 Self 类型匹配 `typ_raw`？"
 
-For `hdl-verilog.typort` with ~15 traits and ~40 instances, this means per method
-lookup:
-- ~15 × clone-all-instances per trait
-- ~15 × table construction + generator push + cleanup
+对于有约 15 个 trait 和约 40 个实例的 `hdl-verilog.typort`，这意味着每次方法查找：
+- 约 15 × 每个 trait 克隆所有实例
+- 约 15 × 表构建 + 生成器推送 + 清理
 
-### Proposed fix
+### 建议修复
 
-Add a lightweight `can_satisfy(&self, trait_name, typ_raw) -> bool` method to `Synth`
-that directly checks instance patterns against `typ_raw` without building the
-resolution table:
+给 `Synth` 添加一个轻量级 `can_satisfy(&self, trait_name, typ_raw) -> bool` 方法，直接检查实例模式与 `typ_raw` 的匹配，无需构建求解表：
 
 ```rust
 pub fn can_satisfy(&self, trait_name: &SmolStr, typ_raw: &Val) -> bool {
@@ -77,33 +68,26 @@ pub fn can_satisfy(&self, trait_name: &SmolStr, typ_raw: &Val) -> bool {
 }
 ```
 
-Replace `clean() + synth().is_some()` at both call sites with `can_satisfy()`.
+在两个调用点用 `can_satisfy()` 替换 `clean() + synth().is_some()`。
 
-### Not blocked by
+### 不受阻塞
 
-`synth()` and `clean()` remain in place — they are used by L10/L11/L12 code paths
-that still need the full resolution algorithm.
+`synth()` 和 `clean()` 保留不动——它们被 L10/L11/L12 代码路径使用，这些路径仍需完整求解算法。
 
-## Problem 3: No head-type index on instances
+## 问题 3：实例没有头部类型索引
 
-### Current state
+### 当前状态
 
-`class_instances: HashMap<SmolStr, Vec<Instance>>` — instances are grouped only by
-trait name. Finding instances for a specific Self type requires scanning all entries
-in the `Vec`.
+`class_instances: HashMap<SmolStr, Vec<Instance>>`——实例仅按 trait 名称分组。查找特定 Self 类型的实例需要扫描 `Vec` 中的所有条目。
 
-### Proposal
+### 建议
 
-Add a secondary index: `HashMap<(SmolStr, SmolStr), Vec<usize>>` mapping
-`(trait_name, self_type_head_constructor)` → indices into the instance Vec.
-Use this for O(1) filtering before fallthrough `val_match`.
+添加二级索引：`HashMap<(SmolStr, SmolStr), Vec<usize>>` 映射 `(trait_name, self_type_head_constructor)` → 实例 Vec 中的索引。在回退到 `val_match` 之前用于 O(1) 过滤。
 
-## Problem 4: `solve_trait` eagerly fully-elaborates every candidate instance
+## 问题 4：`solve_trait` 急切地完整展开每个候选实例
 
-See separate analysis in discussion.
+详见讨论中的单独分析。
 
-## Problem 5: `fresh_meta` eagerly calls `solve_trait`
+## 问题 5：`fresh_meta` 急切地调用 `solve_trait`
 
-When `fresh_meta` creates a meta with a trait type, it immediately attempts
-instance resolution. This should be deferred to `solve_multi_trait` for
-batched resolution after unification completes.
+当 `fresh_meta` 创建带有 trait 类型的 meta 时，它立即尝试实例求解。这应推迟到 `solve_multi_trait`，在统一化完成后进行批量求解。
