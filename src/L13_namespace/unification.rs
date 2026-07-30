@@ -315,7 +315,7 @@ impl Infer {
             Val::SumCase {
                 is_trait,
                 typ,
-                case_name,
+                index,
                 datas: params,
             } => {
                 let typ = self.rename(decl, pren, typ)?;
@@ -329,7 +329,7 @@ impl Infer {
                 Ok(Tm::SumCase {
                     is_trait: *is_trait,
                     typ,
-                    case_name: case_name.clone(),
+                    index: *index,
                     datas: params,
                 }.into())
             }
@@ -835,9 +835,9 @@ impl Infer {
                 Ok(())
             }
             (
-                Val::SumCase { is_trait: _, typ: a, case_name: ca, datas: params_a },
-                Val::SumCase { is_trait: _, typ: b, case_name: cb, datas: params_b },
-            ) if ca.data == cb.data => {
+                Val::SumCase { is_trait: _, typ: a, index: ca, datas: params_a },
+                Val::SumCase { is_trait: _, typ: b, index: cb, datas: params_b },
+            ) if ca == cb => {
                 // params_a.len() always equal to params_b.len()?
                 self.unify(l, cxt, a, b, 100)?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {

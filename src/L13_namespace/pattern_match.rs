@@ -49,7 +49,7 @@ impl PatConstructor {
             let (_, t) = self.data.pop().unwrap();
             self.data.last_mut().map(|x| {
                 x.1.last_mut().map(|x| match x {
-                    PatternDetail::Con(_, x) => {
+                    PatternDetail::Con(_, _, x) => {
                         *x = t;
                     }
                     _ => {}
@@ -99,11 +99,7 @@ impl PatConstructor {
 
     fn detail_to_raw(d: &PatternDetail) -> Raw {
         match d {
-            PatternDetail::Con(name, subs) => {
-                // Each sub-detail becomes an argument to `name`.
-                //   Any(Impl) → named implicit [pi_param=var]
-                //   Any(Expl) → expl arg (handles the not-necessary case)
-                //   Bind → expl,  Con → expl
+            PatternDetail::Con(_idx, name, subs) => {
                 subs.iter().fold(Raw::Var(name.clone()), |acc, sub| {
                     let icit = match sub {
                         PatternDetail::Any(var_name, param_name, Icit::Impl) => {
@@ -122,7 +118,7 @@ impl PatConstructor {
                         }
                         PatternDetail::Any(_, _, Icit::Expl) => Either::Icit(Icit::Expl),
                         PatternDetail::Bind(_) => Either::Icit(Icit::Expl),
-                        PatternDetail::Con(_, _) => Either::Icit(Icit::Expl),
+                        PatternDetail::Con(_, _, _) => Either::Icit(Icit::Expl),
                     };
                     Raw::App(Box::new(acc), Box::new(Self::detail_to_raw(sub)), icit)
                 })
@@ -501,7 +497,8 @@ impl Compiler {
 
                     let decision_tree_branches = constrs
                         .iter()
-                        .map(|constr| {
+                        .enumerate()
+                        .map(|(constr_idx, constr)| {
                             let constr_accessible = if constr.data == "$any$" {
                                 true
                             } else {
@@ -764,7 +761,7 @@ impl Compiler {
                                             let mut new_patcon = patcon
                                                 .clone()
                                                 .clean()
-                                                .push(PatternDetail::Con(constr_.clone(), vec![]))
+                                                .push(PatternDetail::Con(constr_idx as u32, constr.clone(), vec![]))
                                                 .new_level(new_heads_len);
 
                                             // Bind each user-written implicit variable and
@@ -868,7 +865,7 @@ impl Compiler {
                                                             let constr_val = Rc::new(Val::SumCase {
                                                                 is_trait: *is_trait_sum,
                                                                 typ: head_typ.clone(),
-                                                                case_name: constr.clone(),
+                                                                index: constr_idx as u32,
                                                                 datas: Rc::new(datas_vec),
                                                             });
                                                             if let Ok(r) = infer.unify_pm(
@@ -1107,20 +1104,20 @@ impl Compiler {
         arms: &[(PatternDetail, Rc<Tm>)],
     ) -> Option<(Rc<Tm>, Env)> {
         let head = infer.force(decl, heads);
-        let (case_name, params) = match head.as_ref() {
+        let (index, params) = match head.as_ref() {
             Val::SumCase {
                 is_trait: _,
                 typ: _,
-                case_name,
+                index,
                 datas,
-            } => (case_name, datas.clone()),
+            } => (*index, datas.clone()),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (&empty_span(SmolStr::new("$unknown$")), Rc::new(vec![])),
+            _ => (u32::MAX, Rc::new(vec![])),
         };
 
         arms.iter()
             .filter_map(|(pattern, body)| match pattern {
-                PatternDetail::Con(constr_, item_pats) if constr_ == case_name => {
+                PatternDetail::Con(constr_, _, item_pats) if *constr_ == index => {
                     params
                         .iter()
                         //.filter(|x| x.2 == Icit::Expl)

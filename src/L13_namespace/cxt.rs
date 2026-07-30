@@ -15,10 +15,10 @@ pub(super) fn try_count_nat(val: &Rc<Val>) -> Option<u64> {
     let mut current = val.clone();
     loop {
         match current.as_ref() {
-            Val::SumCase { case_name, datas, .. } if case_name.data == "zero" => {
+            Val::SumCase { index, datas, .. } if *index == 0 => {
                 return Some(count);
             }
-            Val::SumCase { case_name, datas, .. } if case_name.data == "succ" => {
+            Val::SumCase { index, datas, .. } if *index == 1 => {
                 let (_, prev, _) = datas.first()?;
                 count = count.checked_add(1)?;
                 current = prev.clone();
@@ -32,14 +32,14 @@ pub(super) fn build_nat(count: u64, span: Span<()>, nat_type: &Rc<Val>) -> Rc<Va
     let mut result = Rc::new(Val::SumCase {
         is_trait: false,
         typ: nat_type.clone(),
-        case_name: span.clone().map(|_| SmolStr::new("zero")),
+        index: 0,
         datas: Rc::new(vec![]),
     });
     for _ in 0..count {
         result = Rc::new(Val::SumCase {
             is_trait: false,
             typ: nat_type.clone(),
-            case_name: span.clone().map(|_| SmolStr::new("succ")),
+            index: 1,
             datas: Rc::new(vec![(
                 span.clone().map(|_| SmolStr::new("n")),
                 result,

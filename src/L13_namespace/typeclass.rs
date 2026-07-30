@@ -245,10 +245,10 @@ impl Synth {
             }
             // SumCase - same name, match params
             (
-                Val::SumCase { case_name: n1, datas: d1, .. },
-                Val::SumCase { case_name: n2, datas: d2, .. },
+                Val::SumCase { index: n1, datas: d1, .. },
+                Val::SumCase { index: n2, datas: d2, .. },
             ) => {
-                n1.data == n2.data
+                n1 == n2
                     && d1.len() == d2.len()
                     && d1.iter().zip(d2.iter()).all(|((_, v1, _), (_, v2, _))| {
                         Self::val_match(v1, v2, subst)
@@ -302,10 +302,10 @@ impl Synth {
                     })
             }
             (
-                Val::SumCase { case_name: n1, datas: d1, .. },
-                Val::SumCase { case_name: n2, datas: d2, .. },
+                Val::SumCase { index: n1, datas: d1, .. },
+                Val::SumCase { index: n2, datas: d2, .. },
             ) => {
-                n1.data == n2.data
+                n1 == n2
                     && d1.len() == d2.len()
                     && d1.iter().zip(d2.iter()).all(|((_, v1, _), (_, v2, _))| {
                         Self::vals_eq_ground_impl(v1, v2, visited)

@@ -336,8 +336,8 @@ impl Infer {
                 }
             }
             (
-                Val::SumCase { case_name: name1, datas: d1, .. },
-                Val::SumCase { case_name: name2, datas: d2, .. },
+                Val::SumCase { index: name1, datas: d1, .. },
+                Val::SumCase { index: name2, datas: d2, .. },
             ) => {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
@@ -1547,6 +1547,12 @@ impl Infer {
             } => {
                 let (typ_checked, _) = self.infer_expr(cxt, *typ)?;
                 let typ_val = self.eval(&cxt.decl, &cxt.env, &typ_checked);
+                let index = match typ_val.as_ref() {
+                    Val::Sum(_, _, cases, _) => cases.iter()
+                        .position(|c| c == &case_name)
+                        .unwrap_or(0) as u32,
+                    _ => 0,
+                };
                 let datas = Rc::new(datas
                     .into_iter()
                     .map(|x| {
@@ -1558,7 +1564,7 @@ impl Infer {
                     Tm::SumCase {
                         is_trait,
                         typ: typ_checked,
-                        case_name,
+                        index,
                         datas,
                     }.into(),
                     typ_val,

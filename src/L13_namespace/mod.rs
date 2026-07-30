@@ -99,7 +99,7 @@ pub enum Tm {
     Sum(Span<SmolStr>, TmSumParams, TmSumCases, bool),
     SumCase {
         typ: Rc<Tm>,
-        case_name: Span<SmolStr>,
+        index: u32,
         datas: TmSumCaseDatas,
         is_trait: bool,
     },
@@ -127,7 +127,7 @@ impl Tm {
                 }
             },
             Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer, decl, l).or_else(|| ty.no_metas(infer, decl, l))).next(),
-            Tm::SumCase { typ, case_name: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
+            Tm::SumCase { typ, index: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
                 .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
             Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
             Tm::Call(_, args, body) => args.iter().flat_map(|(a, _)| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
@@ -144,7 +144,7 @@ pub enum PatternDetail {
     /// - `2`: icit
     Any(Span<SmolStr>, Option<Span<SmolStr>>, Icit),
     Bind(Span<SmolStr>),
-    Con(Span<SmolStr>, Vec<PatternDetail>),
+    Con(u32, Span<SmolStr>, Vec<PatternDetail>),
 }
 
 impl PatternDetail {
@@ -152,7 +152,7 @@ impl PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => 1,
             PatternDetail::Bind(_) => 1,
-            PatternDetail::Con(_, pattern_details) => {
+            PatternDetail::Con(_, _, pattern_details) => {
                 pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()
             },
         }
@@ -161,7 +161,7 @@ impl PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => ns.prepend(SmolStr::new("_")),
             PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
-            PatternDetail::Con(_, pattern_details) => {
+            PatternDetail::Con(_, _, pattern_details) => {
                 pattern_details
                     .iter()
                     .fold(ns.clone(), |ns, pattern_detail| pattern_detail.bind_names(&ns))
@@ -172,7 +172,7 @@ impl PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => cxt.clone(),
             PatternDetail::Bind(name) => cxt.bind(name.clone(), Tm::U(0).into(), Val::U(0).into()),
-            PatternDetail::Con(_, pattern_details) => {
+            PatternDetail::Con(_, _, pattern_details) => {
                 pattern_details
                     .iter()
                     .fold(cxt.clone(), |cxt, pattern_detail| pattern_detail.bind_cxt(&cxt))
@@ -186,15 +186,15 @@ impl std::fmt::Display for PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => write!(f, "_"),
             PatternDetail::Bind(name) => write!(f, "{}", name.data),
-            PatternDetail::Con(name, pattern_details) => {
+            PatternDetail::Con(idx, name, pattern_details) => {
                 let p = pattern_details
                     .iter()
                     .map(|pattern_detail| pattern_detail.to_string())
                     .collect::<Vec<_>>();
                 if p.is_empty() {
-                    write!(f, "{}", name.data)
+                    write!(f, "{}({})", name.data, idx)
                 } else {
-                    write!(f, "{}({})", name.data, p.join(", "))
+                    write!(f, "{}({})({})", name.data, idx, p.join(", "))
                 }
             }
         }
@@ -252,7 +252,7 @@ pub enum Val {
     SumCase {
         is_trait: bool,
         typ: Rc<Val>,
-        case_name: Span<SmolStr>,
+        index: u32,
         datas: SumCaseDatas,
     },
     Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
@@ -466,9 +466,8 @@ impl DetailCounts {
                     self.span_smolstr_count += 1;
                 }
             }
-            Val::SumCase { typ, case_name, datas, .. } => {
+            Val::SumCase { typ, datas, .. } => {
                 self.walk_val_id(typ, visited);
-                self.span_smolstr_count += 1;
                 for (dname, dval, _) in datas.iter() {
                     self.span_smolstr_count += 1;
                     self.walk_val_id(dval, visited);
@@ -564,9 +563,8 @@ impl DetailCounts {
                     self.span_smolstr_count += 1;
                 }
             }
-            Tm::SumCase { typ, case_name, datas, .. } => {
+            Tm::SumCase { typ, datas, .. } => {
                 self.walk_tm_id(typ, visited);
-                self.span_smolstr_count += 1;
                 for (dname, dtm, _) in datas.iter() {
                     self.span_smolstr_count += 1;
                     self.walk_tm_id(dtm, visited);
@@ -1064,11 +1062,11 @@ impl Infer {
                     *is_trait,
                 ).into()
             },
-            Val::SumCase { is_trait, typ, case_name, datas } => {
+            Val::SumCase { is_trait, typ, index, datas } => {
                 Val::SumCase {
                     is_trait: *is_trait,
                     typ: self.force(decl, typ),
-                    case_name: case_name.clone(),
+                    index: *index,
                     datas: Rc::new(datas.iter().map(|(n, ty, i)| {
                         (n.clone(), self.force(decl, ty), *i)
                     }).collect()),
@@ -1199,7 +1197,7 @@ impl Infer {
             Tm::SumCase {
                 is_trait,
                 typ,
-                case_name,
+                index,
                 datas,
             } => {
                 let datas = Rc::new(datas
@@ -1210,7 +1208,7 @@ impl Infer {
                 Val::SumCase {
                     is_trait: *is_trait,
                     typ,
-                    case_name: case_name.clone(),
+                    index: *index,
                     datas,
                 }.into()
             }
@@ -1288,7 +1286,7 @@ impl Infer {
             Val::SumCase {
                 is_trait,
                 typ,
-                case_name,
+                index,
                 datas,
             } => {
                 let datas = Rc::new(datas
@@ -1300,7 +1298,7 @@ impl Infer {
                 Tm::SumCase {
                     is_trait: *is_trait,
                     typ: self.quote(decl, l, typ),
-                    case_name: case_name.clone(),
+                    index: *index,
                     datas,
                 }.into()
             }
