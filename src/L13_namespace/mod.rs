@@ -1382,14 +1382,21 @@ impl Infer {
                         (p, body_tm)
                     })
                     .collect();*/
-                let tm_cases = cases
-                    .iter()
-                    .map(|x| (
-                        x.0.clone(),
-                        {
-                            let env = (0..x.0.bind_count())
-                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
-                            let declb = decl.iter()
+                // The quoted scrutinee's `Val::Match` carries a full case list.
+                // Each case's body is evaluated against a *simplified* decl where
+                // every definition is replaced by a `Decl` reference (so recursive
+                // bodies don't re-expand).  Building that map is O(decl) and is
+                // identical for the same decl, so cache it per decl address.
+                let declb: Rc<Decl>;
+                {
+                    static DECLB_CACHE: std::sync::Mutex<Option<(usize, Rc<Decl>)>> =
+                        std::sync::Mutex::new(None);
+                    let key = decl as *const Decl as usize;
+                    let mut guard = DECLB_CACHE.lock().unwrap();
+                    match guard.as_ref() {
+                        Some((k, d)) if *k == key => declb = d.clone(),
+                        _ => {
+                            let d: Decl = decl.iter()
                                 .map(|x| (x.0.clone(), (
                                     x.1.0,
                                     Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
@@ -1399,7 +1406,19 @@ impl Infer {
                                     x.1.5.clone(),
                                 )))
                                 .collect();
-                            let tm = self.eval(&declb, &env, &x.1);
+                            declb = Rc::new(d);
+                            *guard = Some((key, declb.clone()));
+                        }
+                    }
+                }
+                let tm_cases = cases
+                    .iter()
+                    .map(|x| (
+                        x.0.clone(),
+                        {
+                            let env = (0..x.0.bind_count())
+                                .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
+                            let tm = self.eval(declb.as_ref(), &env, &x.1);
                             self.quote(decl, l+x.0.bind_count(), &tm)
                         }
                     ))
