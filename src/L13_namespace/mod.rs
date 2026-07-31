@@ -1030,14 +1030,25 @@ impl Infer {
         //println!("{} {:?}", "force".red(), t);
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
-                MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp)),
+                MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl,
+ t_solved.clone(), sp)),
                 MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
             },
             Val::Obj(x, a, b) => {
-                Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
+                let xf = self.force(decl, x);
+                if Rc::ptr_eq(&xf, x) {
+                    t.clone()
+                } else {
+                    Val::Obj(xf, a.clone(), b.clone()).into()
+                }
             },
             Val::Call(name, args, body) => {
-                Val::Call(name.clone(), args.clone(), self.force(decl, body)).into()
+                let bf = self.force(decl, body);
+                if Rc::ptr_eq(&bf, body) {
+                    t.clone()
+                } else {
+                    Val::Call(name.clone(), args.clone(), bf).into()
+                }
             },
             Val::Decl(x, sp) => {
                 if let Some((_, _, _, _, _, Some(prim_fn))) = decl.get(&x.data) {
@@ -1050,27 +1061,49 @@ impl Infer {
                         return self.force(decl, &result);
                     }
                 }
-                Val::Decl(x.clone(), sp.clone()).into()
+                t.clone()
             },
             Val::Sum(name, params, cases, is_trait) => {
-                Val::Sum(
-                    name.clone(),
-                    Rc::new(params.iter().map(|(n, v, ty, i)| {
-                        (n.clone(), self.force(decl, v), self.force(decl, ty), *i)
-                    }).collect()),
-                    cases.clone(),
-                    *is_trait,
-                ).into()
+                let mut changed = false;
+                let new_params: Vec<_> = params.iter().map(|(n, v, ty, i)| {
+                    let vf = self.force(decl, v);
+                    let tf = self.force(decl, ty);
+                    if !Rc::ptr_eq(&vf, v) || !Rc::ptr_eq(&tf, ty) {
+                        changed = true;
+                    }
+                    (n.clone(), vf, tf, *i)
+                }).collect();
+                if changed {
+                    Val::Sum(
+                        name.clone(),
+                        Rc::new(new_params),
+                        cases.clone(),
+                        *is_trait,
+                    ).into()
+                } else {
+                    t.clone()
+                }
             },
             Val::SumCase { is_trait, typ, index, datas } => {
-                Val::SumCase {
-                    is_trait: *is_trait,
-                    typ: self.force(decl, typ),
-                    index: *index,
-                    datas: Rc::new(datas.iter().map(|(n, ty, i)| {
-                        (n.clone(), self.force(decl, ty), *i)
-                    }).collect()),
-                }.into()
+                let tf = self.force(decl, typ);
+                let mut changed = !Rc::ptr_eq(&tf, typ);
+                let new_datas: Vec<_> = datas.iter().map(|(n, ty, i)| {
+                    let df = self.force(decl, ty);
+                    if !Rc::ptr_eq(&df, ty) {
+                        changed = true;
+                    }
+                    (n.clone(), df, *i)
+                }).collect();
+                if changed {
+                    Val::SumCase {
+                        is_trait: *is_trait,
+                        typ: tf,
+                        index: *index,
+                        datas: Rc::new(new_datas),
+                    }.into()
+                } else {
+                    t.clone()
+                }
             },
             _ => t.clone(),
         }
@@ -1456,8 +1489,23 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     Ok(ret)
 }
 
-#[allow(unused)]
-pub fn run_with_prelude(input: &str) -> Result<String, Error> {
+type PreludeMacros = std::collections::HashMap<String, Vec<parser::macros::MacroRule>>;
+
+/// Cached result of elaborating the builtin prelude.  Headless entry points
+/// (`run_with_prelude`, used by tests/CLI) re-elaborate the ~24 prelude files
+/// on every call, which dominates their runtime.  The prelude's elaborated
+/// `Infer`/`Cxt` state is cloned per call; the mutable global map is
+/// deep-copied so concurrent tests stay isolated.
+struct PreludeState {
+    infer: Infer,
+    cxt: Cxt,
+    global_macros: PreludeMacros,
+}
+
+static PRELUDE_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<PreludeState>>> =
+    std::sync::OnceLock::new();
+
+fn load_prelude_state() -> Result<PreludeState, Error> {
     let mut infer = Infer::new();
     let prelude = &[
         include_str!("../prelude/core/op.typort"),
@@ -1486,10 +1534,9 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         include_str!("../prelude/show.typort"),
     ];
     let mut cxt = Cxt::new(&infer);
-    let mut ret = String::new();
 
     // Accumulate exported macros from prelude files
-    let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
+    let mut global_macros: PreludeMacros = Default::default();
     let mut id = 0;
     for p in prelude {
         if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
@@ -1510,7 +1557,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                 cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
             }
     }
-    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero �?zero)
+    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
     let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
         .filter(|(k, _)| k.contains('.'))
         .map(|(k, v)| {
@@ -1522,8 +1569,38 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     for (short, v) in prelude_aliases {
         decl_map.entry(short).or_insert(v);
     }
+    // The cached state is never queried for hover/completion; drop the
+    // accumulated tables so per-call clones stay cheap.
+    infer.hover_table.clear();
+    infer.completion_table.clear();
+    Ok(PreludeState {
+        infer,
+        cxt,
+        global_macros,
+    })
+}
+
+#[allow(unused)]
+pub fn run_with_prelude(input: &str) -> Result<String, Error> {
+    let cache = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    let (mut infer, mut cxt, global_macros) = {
+        let mut guard = cache.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(load_prelude_state()?);
+        }
+        let state = guard.as_ref().unwrap();
+        // Clone the cached elaborator state.  The mutable global map is
+        // deep-copied so writes from one test never leak into another.
+        let mut infer = state.infer.clone();
+        infer.mutable_map = Rc::new(std::sync::RwLock::new(
+            state.infer.mutable_map.read().unwrap().clone(),
+        ));
+        (infer, state.cxt.clone(), state.global_macros.clone())
+    };
+    let mut ret = String::new();
+
     // Parse main file with accumulated macros from prelude
-    let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
+    let ast = parser::parser_with_macros(&preprocess(input), 24, &global_macros)
         .map(|(d, e, _, _)| (d, e))
         .unwrap();
     println!("-----------------");
