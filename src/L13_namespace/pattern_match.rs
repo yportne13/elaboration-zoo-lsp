@@ -341,6 +341,15 @@ impl Compiler {
                                 matches!(x, Pattern::Any(Span { data: false, .. }, _))
                             }) == Some(true) =>
                     {
+                        // If this arm has already been fully compiled (body checked
+                        // and pats recorded) in a previous constructor branch, we
+                        // must still mark it reachable, but there is no need to
+                        // re-elaborate the pattern or re-check the body: both are
+                        // identical for the same arm across branches.
+                        self.reachable.insert(entry.idx, ());
+                        if self.checked_ret.contains(&entry.idx) {
+                            return Ok(true);
+                        }
                         let patcon_raw = entry.patcon.clone().to_raw();
                         // Try patcon_raw only (includes GADT implicits);
                         // NO fallback to raw — only patcon_raw is used.
@@ -356,10 +365,6 @@ impl Compiler {
                                 return Ok(false);
                             }
                         };
-                        self.reachable.insert(entry.idx, ());
-                        if self.checked_ret.contains(&entry.idx) {
-                            return Ok(true);
-                        }
                         //println!("prepare to check {:?}", arm.body);
                         //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
                         let ret_type = match self.ret_type.as_ref() {
@@ -400,9 +405,30 @@ impl Compiler {
                 }
             }
             [(typ, head_name, icit, head_val), heads_rest @ ..] => {
-                let not_necessary = arms
-                    .iter()
-                    .all(|entry| matches!(entry.arm.pats[..], [Pattern::Any(_, ref i), ..] if &i.to_icit() == icit));
+                // Constructor-name set (empty for non-Sum `$any$` heads), used to
+                // distinguish real constructor patterns from bare-variable patterns.
+                // Bare variables parse as `Con(name, [], _)`; they must be treated as
+                // catch-alls (bind the head once) instead of being duplicated across
+                // every constructor branch of the head's Sum type.  Without this, a
+                // bare variable over a large enum (e.g. the 31-constructor `Expr`)
+                // is re-elaborated once per constructor, which is exponential.
+                let (is_sum, constrs_name): (bool, BTreeSet<SmolStr>) = match typ.as_ref() {
+                    Val::Sum(_, _, cases, _) => (true, cases.iter().map(|x| x.data.clone()).collect()),
+                    _ => (false, BTreeSet::new()),
+                };
+                let is_var_like = |pat: &Pattern, icit: &Icit| -> bool {
+                    match pat {
+                        Pattern::Any(_, i) => &i.to_icit() == icit,
+                        Pattern::Con(name, subs, i) => {
+                            subs.is_empty()
+                                && &i.to_icit() == icit
+                                && (!is_sum || !constrs_name.contains(&name.data))
+                        }
+                    }
+                };
+                let not_necessary = arms.iter().all(|entry| {
+                    entry.arm.pats.first().map(|p| is_var_like(p, icit)).unwrap_or(false)
+                });
                 if not_necessary {
                     let new_context = self.next_hole(
                         context,
@@ -412,53 +438,89 @@ impl Compiler {
                         .iter()
                         .map(|entry| {
                             let cxt = &entry.cxt;
-                            // Compute the unique implicit name ONCE per arm,
-                            // shared by cxt bind, entry.cxt_for_filter bind, and patcon.
-                            let imp = self.make_implicit_name(&head_name);
-                            ArmEntry {
-                                arm: MatchArm {
-                                    pats: entry
-                                        .arm
-                                        .pats
-                                        .get(1..)
-                                        .map(|x| x.to_vec())
-                                        .unwrap_or(vec![]),
-                                    body: entry.arm.body.clone(),
-                                },
-                                idx: entry.idx,
-                                cxt: if let Some(Pattern::Any(Span { data: false, .. }, _)) =
-                                    entry.arm.pats.first()
-                                {
-                                    cxt.clone()
-                                } else {
-                                    cxt.bind(
-                                        imp.clone(),
+                            // A bare-variable pattern (Con(name, [], _)) binds the
+                            // head under the variable's own name and emits a `Bind`
+                            // so that `check_pm_final` reuses the already-bound Rigid.
+                            if let Some(Pattern::Con(name, _, _)) = entry.arm.pats.first() {
+                                let name = name.clone();
+                                ArmEntry {
+                                    arm: MatchArm {
+                                        pats: entry
+                                            .arm
+                                            .pats
+                                            .get(1..)
+                                            .map(|x| x.to_vec())
+                                            .unwrap_or(vec![]),
+                                        body: entry.arm.body.clone(),
+                                    },
+                                    idx: entry.idx,
+                                    cxt: cxt.bind(
+                                        name.clone(),
                                         infer.quote(&cxt.decl, cxt.lvl, typ),
                                         typ.clone(),
-                                    )
-                                },
-                                cxt_for_filter: entry.cxt_for_filter.bind(
-                                    imp.clone(),
-                                    infer.quote(
-                                        &entry.cxt_for_filter.decl,
-                                        entry.cxt_for_filter.lvl,
-                                        typ,
                                     ),
-                                    typ.clone(),
-                                ),
-                                patcon: if *icit == Icit::Impl {
-                                    entry.patcon.clone().clean().push(PatternDetail::Any(
-                                        imp,
-                                        Some(head_name.clone()),
-                                        *icit,
-                                    ))
-                                } else {
-                                    entry.patcon.clone().clean().push(PatternDetail::Any(
-                                        empty_span(SmolStr::new("")),
-                                        None,
-                                        *icit,
-                                    ))
-                                },
+                                    cxt_for_filter: entry.cxt_for_filter.bind(
+                                        name.clone(),
+                                        infer.quote(
+                                            &entry.cxt_for_filter.decl,
+                                            entry.cxt_for_filter.lvl,
+                                            typ,
+                                        ),
+                                        typ.clone(),
+                                    ),
+                                    patcon: entry.patcon.clone().clean().push(
+                                        PatternDetail::Bind(name),
+                                    ),
+                                }
+                            } else {
+                                // Compute the unique implicit name ONCE per arm,
+                                // shared by cxt bind, entry.cxt_for_filter bind, and patcon.
+                                let imp = self.make_implicit_name(&head_name);
+                                ArmEntry {
+                                    arm: MatchArm {
+                                        pats: entry
+                                            .arm
+                                            .pats
+                                            .get(1..)
+                                            .map(|x| x.to_vec())
+                                            .unwrap_or(vec![]),
+                                        body: entry.arm.body.clone(),
+                                    },
+                                    idx: entry.idx,
+                                    cxt: if let Some(Pattern::Any(Span { data: false, .. }, _)) =
+                                        entry.arm.pats.first()
+                                    {
+                                        cxt.clone()
+                                    } else {
+                                        cxt.bind(
+                                            imp.clone(),
+                                            infer.quote(&cxt.decl, cxt.lvl, typ),
+                                            typ.clone(),
+                                        )
+                                    },
+                                    cxt_for_filter: entry.cxt_for_filter.bind(
+                                        imp.clone(),
+                                        infer.quote(
+                                            &entry.cxt_for_filter.decl,
+                                            entry.cxt_for_filter.lvl,
+                                            typ,
+                                        ),
+                                        typ.clone(),
+                                    ),
+                                    patcon: if *icit == Icit::Impl {
+                                        entry.patcon.clone().clean().push(PatternDetail::Any(
+                                            imp,
+                                            Some(head_name.clone()),
+                                            *icit,
+                                        ))
+                                    } else {
+                                        entry.patcon.clone().clean().push(PatternDetail::Any(
+                                            empty_span(SmolStr::new("")),
+                                            None,
+                                            *icit,
+                                        ))
+                                    },
+                                }
                             }
                         })
                         .collect::<Vec<_>>();
@@ -508,6 +570,36 @@ impl Compiler {
                                     .unwrap_or(false)
                             };
 
+                            // Constructor Pi type, inferred ONCE per constructor
+                            // instead of once per (constructor, arm).  The
+                            // constructor type is a global name; it does not
+                            // depend on which arm is being filtered.  Only the
+                            // later per-arm Pi-peeling (which instantiates fresh
+                            // rigid vars at the arm's level) is arm-dependent.
+                            let constr_pi: Option<Rc<Val>> = if constr.data == "$any$"
+                                || !constr_accessible
+                            {
+                                None
+                            } else {
+                                let sum_name = match typ.as_ref() {
+                                    Val::Sum(name, ..) => name.data.clone(),
+                                    _ => SmolStr::new(""),
+                                };
+                                let constr_raw = if sum_name.is_empty() {
+                                    Raw::Var(constr.clone())
+                                } else {
+                                    Raw::Obj(
+                                        Box::new(Raw::Var(empty_span(sum_name))),
+                                        Some(constr.clone()),
+                                    )
+                                };
+                                arms.first()
+                                    .and_then(|entry| {
+                                        infer.infer_expr(&entry.cxt_for_filter, constr_raw).ok()
+                                    })
+                                    .map(|(_, typ)| typ)
+                            };
+
                             let remaining_arms = arms
                                 .iter()
                                 .filter_map(|entry| {
@@ -535,56 +627,45 @@ impl Compiler {
                                         return Some(None);
                                     }
                                     if constr.data != "$any$" {
-                                        // Use qualified name TypeName.constructor for lookup
-                                        let sum_name = match typ.as_ref() {
-                                            Val::Sum(name, ..) => name.data.clone(),
-                                            _ => SmolStr::new(""),
-                                        };
-                                        let constr_raw = if sum_name.is_empty() {
-                                            Raw::Var(constr.clone())
-                                        } else {
-                                            Raw::Obj(
-                                                Box::new(Raw::Var(empty_span(sum_name))),
-                                                Some(constr.clone()),
-                                            )
-                                        };
-                                        let (_, typ) =
-                                            infer.infer_expr(cxt_for_filter, constr_raw).ok()?;
-                                        let mut param = param
-                                            .iter()
-                                            .filter(|x| x.3 == Icit::Impl)
-                                            .cloned()
-                                            .collect::<Vec<_>>();
-                                        param.reverse();
-                                        let mut typ = typ;
-                                        while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
-                                            if !param.is_empty() {
-                                                let val = param
-                                                    .pop()
-                                                    .map(|x| {
-                                                        infer.force(&cxt_for_filter.decl, &x.1)
-                                                    })
-                                                    .unwrap_or(Val::U(0).into());
-                                                typ = infer.closure_apply(
-                                                    &cxt_for_filter.decl,
-                                                    closure,
-                                                    val,
-                                                );
-                                            } else {
-                                                new_heads.push((ty.clone(), name.clone(), *icit, None::<Rc<Val>>));
-                                                typ = infer.closure_apply(
-                                                    &cxt_for_filter.decl,
-                                                    closure,
-                                                    Val::vvar(cxt.lvl + new_heads.len() as u32 - 1)
-                                                        .into(),
-                                                );
+                                        if let Some(ref typ0) = constr_pi {
+                                            let mut param = param
+                                                .iter()
+                                                .filter(|x| x.3 == Icit::Impl)
+                                                .cloned()
+                                                .collect::<Vec<_>>();
+                                            param.reverse();
+                                            let mut typ = typ0.clone();
+                                            while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
+                                                if !param.is_empty() {
+                                                    let val = param
+                                                        .pop()
+                                                        .map(|x| {
+                                                            infer.force(&cxt_for_filter.decl, &x.1)
+                                                        })
+                                                        .unwrap_or(Val::U(0).into());
+                                                    typ = infer.closure_apply(
+                                                        &cxt_for_filter.decl,
+                                                        closure,
+                                                        val,
+                                                    );
+                                                } else {
+                                                    new_heads.push((ty.clone(), name.clone(), *icit, None::<Rc<Val>>));
+                                                    typ = infer.closure_apply(
+                                                        &cxt_for_filter.decl,
+                                                        closure,
+                                                        Val::vvar(cxt.lvl + new_heads.len() as u32 - 1)
+                                                            .into(),
+                                                    );
+                                                }
                                             }
+                                            // Save the constructor's return type
+                                            // (after applying all Pi params) for
+                                            // GADT index refinement in the
+                                            // constr_ == constr branch below.
+                                            constr_ret_typ = Some(typ.clone());
+                                        } else {
+                                            return Some(None);
                                         }
-                                        // Save the constructor's return type
-                                        // (after applying all Pi params) for
-                                        // GADT index refinement in the
-                                        // constr_ == constr branch below.
-                                        constr_ret_typ = Some(typ.clone());
                                     }
                                     let new_heads_len = new_heads.len();
                                     let need_new_head_expansion =
