@@ -124,6 +124,12 @@ pub(crate) fn head_key(val: &Val) -> Option<SmolStr> {
     }
 }
 
+/// Head-index bucket key for instances whose Self is a generic (Rigid) variable.
+/// Such instances match any concrete Self head (e.g. `Into[Wrapper[A]] for A`
+/// matches a goal like `Into[Wrapper[Nat]] for Nat`), so they are stored under
+/// this wildcard key and must be consulted alongside the concrete head bucket.
+pub(crate) const GENERIC_SELF_HEAD: &str = "*";
+
 impl Synth {
     pub fn new() -> Self {
         Self::default()
@@ -143,18 +149,19 @@ impl Synth {
             .or_default();
         let idx = instances.len();
 
-        // Index by first non-out param's head constructor
+        // Index by first non-out param's head constructor.
+        // A Rigid (generic) Self has no concrete head key; stash it under the
+        // wildcard bucket so it still gets consulted for any concrete Self goal.
         if let Some(out_params) = self.trait_out_params.get(&trait_name) {
             for (i, arg) in instance.assertion.arguments.iter().enumerate() {
                 if out_params.get(i).copied().unwrap_or(false) {
                     continue;
                 }
-                if let Some(head) = head_key(arg) {
-                    self.head_index
-                        .entry((trait_name.clone(), head))
-                        .or_default()
-                        .push(idx);
-                }
+                let head = head_key(arg).unwrap_or_else(|| SmolStr::new(GENERIC_SELF_HEAD));
+                self.head_index
+                    .entry((trait_name.clone(), head))
+                    .or_default()
+                    .push(idx);
                 break;
             }
         }
@@ -166,8 +173,14 @@ impl Synth {
     /// Uses head_index for O(1) lookup; falls back to val_match scan when the index misses.
     pub fn can_satisfy(&self, trait_name: &SmolStr, self_type: &Val) -> bool {
         if let Some(head) = head_key(self_type) {
-            if let Some(indices) = self.head_index.get(&(trait_name.clone(), head)) {
-                return !indices.is_empty();
+            let specific = self.head_index.get(&(trait_name.clone(), head))
+                .map(|indices| !indices.is_empty())
+                .unwrap_or(false);
+            let generic = self.head_index.get(&(trait_name.clone(), SmolStr::new(GENERIC_SELF_HEAD)))
+                .map(|indices| !indices.is_empty())
+                .unwrap_or(false);
+            if specific || generic {
+                return true;
             }
         }
         let instances = match self.class_instances.get(trait_name) {

@@ -557,9 +557,23 @@ impl Infer {
                     None
                 })();
                 match self_head {
-                    Some(head) => match self.trait_solver.head_index.get(&(name.data.clone(), head)) {
-                        Some(indices) if !indices.is_empty() => indices.iter().filter_map(|&i| filter(&instances[i])).collect(),
-                        _ => instances.iter().filter_map(filter).collect(),
+                    Some(head) => {
+                        // Consult both the concrete-head bucket and the wildcard
+                        // bucket (instances with a generic Rigid Self). The latter
+                        // match any concrete Self, e.g. `Into[Wrapper[A]] for A`
+                        // should be tried for `Into[Wrapper[Nat]] for Nat`.
+                        let mut idxs: Vec<usize> = Vec::new();
+                        if let Some(indices) = self.trait_solver.head_index.get(&(name.data.clone(), head)) {
+                            idxs.extend(indices.iter().copied());
+                        }
+                        if let Some(indices) = self.trait_solver.head_index.get(&(name.data.clone(), SmolStr::new(super::typeclass::GENERIC_SELF_HEAD))) {
+                            idxs.extend(indices.iter().copied());
+                        }
+                        if idxs.is_empty() {
+                            instances.iter().filter_map(filter).collect()
+                        } else {
+                            idxs.iter().filter_map(|&i| filter(&instances[i])).collect()
+                        }
                     },
                     None => instances.iter().filter_map(filter).collect(),
                 }
