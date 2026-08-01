@@ -131,6 +131,15 @@ L13_namespace 是整个 elaboration-zoo 项目的**主入口模块**，实现了
 | `mod.rs:1556` | magic number：`if id == 3` 注册 `nat_to_dec`，依赖 prelude 数组顺序 |
 | `parser/mod.rs:457` | `//TODO:do not unwrap` — Type 级别数字解析 |
 
+### 3.5 已知逻辑缺陷（未修复）
+
+| 位置 | 严重度 | 问题 |
+|------|--------|------|
+| `elaboration.rs` `infer_expr` / `infer_expr_pm` 的 `Raw::App` 分支 | **高** | **Scala-style `.apply` 回退泄漏隐参元变量**：`meta_before` 在 `insert_t` 之后才记录，当函数带隐参且结果非函数（如 `f: {A} -> Nat`）被多应用一个实参时，`insert_t` 为隐参创建的 meta 在回退失败后成为孤儿 `Unsolved` meta，顶层报 `find unsolved meta` 假错误。复现：`def f{A}: Nat = 0; def bad = f 1` → `ERR: find unsolved meta with type ?N`。修复困难：`tty` 依赖该 meta，不能简单 `truncate`，需重新设计隐参插入与回退的顺序 |
+| `elaboration.rs` `check_app_obj_direct` | **中** | 用 `Lvl(u32::MAX)` 哨兵 `Rigid` 代替 Self 值构造 `param_ty`/`ret_ty`，进入 `quote` 时 `lvl2ix` 可能下溢 panic，且匹配失败不回落 `trait_wrap` 产生假错误。仅 `check::<true>`（canonical.rs 建议搜索）激活 |
+| `elaboration.rs` `check_pm_final` | **中** | `unify_pm(&cxt, &ori, &tmv)` 失败时 `.unwrap_or(cxt)` 静默沿用旧上下文，可能放行不可达分支 |
+| `mod.rs` `eval` 的 `Obj` 字段访问 | **中** | `params.iter().find(...).unwrap().1.clone()` — 字段名不匹配时直接 panic（依赖类型检查先行拦截） |
+
 ---
 
 ## 4. 代码重复分析

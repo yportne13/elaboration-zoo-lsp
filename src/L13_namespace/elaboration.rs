@@ -426,9 +426,10 @@ impl Infer {
                 if pren.dom.0 == 0 {
                     let mty = self.force(&cxt.decl, &mty);
                     match mty.as_ref() {
-                        Val::U(x) => {//TODO:x?
-                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(0).into(), mty);
-                            Ok((t_inferred, 0))
+                        Val::U(x) => {
+                            let x = *x;
+                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(x).into(), mty);
+                            Ok((t_inferred, x))
                         },
                         _ => {
                             let err_typ = self.force(&cxt.decl, &mty);
@@ -1121,23 +1122,32 @@ impl Infer {
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
             Decl::TraitDecl { name, mut params, supertraits, methods, assoc_defaults } => {
-                // Transitive supertrait method resolution with cycle detection
+                // Transitive supertrait method resolution with cycle detection.
+                // Cycle detection tracks the current DFS *path* (not the set of
+                // all visited traits) so that diamond inheritance (A: B, C;
+                // B: D; C: D) is not misreported as a cycle.
                 let mut all_methods = methods.clone();
-                let mut visited = std::collections::HashSet::<SmolStr>::new();
-                visited.insert(name.data.clone());
-                let mut stack: Vec<SmolStr> = supertraits.iter().map(|s| s.data.clone()).collect();
-                while let Some(st_name) = stack.pop() {
-                    if visited.contains(&st_name) {
+                let mut stack: Vec<(SmolStr, std::collections::HashSet<SmolStr>)> = supertraits
+                    .iter()
+                    .map(|s| {
+                        let mut path = std::collections::HashSet::new();
+                        path.insert(name.data.clone());
+                        (s.data.clone(), path)
+                    })
+                    .collect();
+                while let Some((st_name, path)) = stack.pop() {
+                    if path.contains(&st_name) {
                         return Err(Error(empty_span(format!("cyclic supertrait: `{}` appears twice in the chain", st_name)), vec![]));
                     }
-                    visited.insert(st_name.clone());
+                    let mut path = path;
+                    path.insert(st_name.clone());
                     if let Some((_, _, st_sts, st_methods)) = self.trait_definition.get(&st_name) {
                         // Add supertrait's supertraits to the stack (detect cycles)
                         for st_st in st_sts {
-                            if visited.contains(&st_st.data) {
+                            if path.contains(&st_st.data) {
                                 return Err(Error(empty_span(format!("cyclic supertrait: `{}` appears twice in the chain", st_st.data)), vec![]));
                             }
-                            stack.push(st_st.data.clone());
+                            stack.push((st_st.data.clone(), path.clone()));
                         }
                         // Add supertrait's methods (avoiding duplicates)
                         for st_m in st_methods {
@@ -1278,14 +1288,23 @@ impl Infer {
                                 return Ok((Tm::Decl(empty_span(qualified)).into(), vty.clone()));
                             }
                         }
-                        // Try qualified fallback: find a decl entry `TypeName.name`
+                        // Try qualified fallback: find decl entries `TypeName.name`.
+                        // Collect all matches and require exactly one — HashMap
+                        // iteration order is non-deterministic, so picking an
+                        // arbitrary match would silently resolve the wrong
+                        // constructor when several types share the name.
                         let fallback = format!(".{}", name.data);
-                        let match_entry: Option<(SmolStr, _)> = cxt.decl.iter()
-                            .find(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
-                            .map(|(k, v)| (k.clone(), v.clone()));
-                        if let Some((full_key, (def_span, _, _, _, vty, _))) = match_entry {
-                            self.hover_table.push((t_span, def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
-                            return Ok((Tm::Decl(empty_span(full_key)).into(), vty.clone()));
+                        let matches: Vec<(SmolStr, _)> = cxt.decl.iter()
+                            .filter(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        if matches.len() == 1 {
+                            let (full_key, (def_span, _, _, _, vty, _)) = &matches[0];
+                            self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
+                            return Ok((Tm::Decl(empty_span(full_key.clone())).into(), vty.clone()));
+                        } else if matches.len() > 1 {
+                            let names = matches.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ");
+                            return Err(Error(name.map(|x| format!("ambiguous name `{}`: could refer to {}", x, names)), vec![]));
                         }
                         Err(Error(name.map(|x| format!("error name not in scope: {}", x)), vec![]))
                     }
@@ -1628,8 +1647,16 @@ impl Infer {
                 let index = match typ_val.as_ref() {
                     Val::Sum(_, _, cases, _) => cases.iter()
                         .position(|c| c == &case_name)
-                        .unwrap_or(0) as u32,
-                    _ => 0,
+                        .ok_or_else(|| Error(
+                            case_name.map(|x| format!("no such constructor `{}`", x)),
+                            vec![],
+                        ))? as u32,
+                    _ => {
+                        return Err(Error(
+                            case_name.map(|_| format!("expected a sum type, got {:?}", typ_val)),
+                            vec![],
+                        ));
+                    }
                 };
                 let datas = Rc::new(datas
                     .into_iter()
