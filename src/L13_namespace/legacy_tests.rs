@@ -3697,3 +3697,172 @@ println(moduleTreeVL(Top.create.tree))
     }
 }
 
+#[test]
+fn test_prove_term_pure() {
+    let input = r#"
+// Full Adder & Fixed-Width Unsigned Addition — pure Agda-style proof.
+// Only match, rfl, trans, symm, cong. Adder chains via double_step/add1_step.
+def pow2(n: Nat): Nat =
+    match n { case zero => 1
+              case succ(m) => double(pow2(m)) }
+def full_adder(ci: Boolean, a: Boolean, b: Boolean): Tuple2[Boolean, Boolean] =
+    ((a ^ b) ^ ci, (a & b) | (a & ci) | (b & ci))
+def to_nat[len: Nat](v: Vec[Boolean] len): Nat =
+    match v { case nil => 0
+    case cons(b, rest) => double(to_nat(rest)) + bool_to_nat(b) }
+def vec_adder[len: Nat](ci: Boolean, a: Vec[Boolean] len, b: Vec[Boolean] len): Tuple2[Vec[Boolean] len, Boolean] =
+    match a { case nil => (nil, ci)
+    case cons(abit, arest) => match b { case cons(bbit, brest) =>
+        let (sum, co) = full_adder(ci, abit, bbit);
+        let inner = vec_adder(co, arest, brest);
+        (cons(sum, inner._1), inner._2) } }
+
+// Arithmetic lemmas (proved by pattern matching)
+def add_right_eq(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (a + c) (b + c) =
+    match c { case zero =>
+        trans(add_zero_right(a), trans(h, symm(add_zero_right(b))))
+    case succ(k) => let ih = add_right_eq(a, b, k, h);
+        trans(add_succ_right(a, k), trans(cong_succ(ih), symm(add_succ_right(b, k)))) }
+def add_left_eq(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (c + a) (c + b) =
+    trans(add_comm(c, a), trans(add_right_eq(a, b, c, h), symm(add_comm(c, b))))
+def double_distrib(x: Nat, y: Nat): Eq (double(x + y)) (double(x) + double(y)) =
+    trans(symm(add_assoc(x + y, x, y)),
+        trans(add_right_eq((x + y) + x, x + (y + x), y, add_assoc(x, y, x)),
+            trans(add_right_eq(x + (y + x), x + (x + y), y, add_left_eq(y + x, x + y, x, add_comm(y, x))),
+                trans(add_right_eq(x + (x + y), (x + x) + y, y, symm(add_assoc(x, x, y))),
+                    add_assoc(x + x, y, y)))))
+def double_mul(x: Nat, z: Nat): Eq(double(x)*z, double(x*z)) =
+    match z { case zero => rfl
+    case succ(n) => let ih = double_mul(x, n);
+        trans(add_left_eq(double(x)*n, double(x*n), double(x), ih), symm(double_distrib(x, x*n))) }
+def ps_mul(m: Nat, Z: Nat): Eq(double(pow2(m))*Z, double(pow2(m)*Z)) =
+    double_mul(pow2(m), Z)
+def add_succ_succ(A: Nat, B: Nat): Eq((A+1)+(B+1), A+B+2) = add_succ_left(A, B + 1)
+def double_add_one(x: Nat, y: Nat): Eq(double(x + y + 1), double(x) + double(y) + 2) =
+    trans(double_distrib(x + y, 1), add_right_eq(double(x + y), double(x) + double(y), 2, double_distrib(x, y)))
+// a + (b+1) + 1 = a + b + 2
+def rearrange2_r(a: Nat, b: Nat): Eq(a + (b + 1) + 1, a + b + 2) = rfl
+// (a+1) + b + 1 = a + b + 2
+def rearrange3_r(a: Nat, b: Nat): Eq((a + 1) + b + 1, a + b + 2) = cong_succ(add_succ_left(a, b))
+
+// Factored adder-step chains. ih: X + pow2(m)*S = R.
+// ((a + b) + 1) = (a + 1) + b
+def add1_left(a: Nat, b: Nat): Eq ((a + b) + 1) ((a + 1) + b) = symm(add_succ_left(a, b))
+
+// double(X) + double(pow2(m))*S = double(R)
+def double_step(m: Nat, X: Nat, S: Nat, R: Nat, h: Eq (X + pow2(m) * S) R):
+    Eq (double(X) + double(pow2(m)) * S) (double(R)) =
+    trans(add_left_eq(double(pow2(m)) * S, double(pow2(m) * S), double(X), ps_mul(m, S)),
+        trans(symm(double_distrib(X, pow2(m) * S)), cong(double, h)))
+
+// (double(X)+1) + double(pow2(m))*S = double(R) + 1
+def add1_step(m: Nat, X: Nat, S: Nat, R: Nat, h: Eq (X + pow2(m) * S) R):
+    Eq ((double(X) + 1) + double(pow2(m)) * S) (double(R) + 1) =
+    trans(symm(add1_left(double(X), double(pow2(m)) * S)),
+        add_right_eq(double(X) + double(pow2(m)) * S, double(R), 1, double_step(m, X, S, R, h)))
+
+// (double(X)+1) + double(pow2(m))*S = (double(NA)+double(NB)) + 1  (carry=F, sum=T)
+def add1_step2(m: Nat, X: Nat, S: Nat, NA: Nat, NB: Nat, ih: Eq (X + pow2(m) * S) (NA + NB)):
+    Eq ((double(X) + 1) + double(pow2(m)) * S) ((double(NA) + double(NB)) + 1) =
+    trans(add1_step(m, X, S, NA + NB, ih),
+        add_right_eq(double(NA + NB), double(NA) + double(NB), 1, double_distrib(NA, NB)))
+
+// snoc & vec_add
+def snoc[len: Nat](v: Vec[Boolean] len, x: Boolean): Vec[Boolean] (succ(len)) =
+    match v { case nil => cons(x, nil)
+    case cons(y, ys) => cons(y, snoc(ys, x)) }
+
+def vec_add[len: Nat](a: Vec[Boolean] len, b: Vec[Boolean] len): Vec[Boolean] (succ(len)) =
+    snoc(vec_adder(false, a, b)._1, vec_adder(false, a, b)._2)
+
+// vec_adder_correct
+def vec_adder_correct[n: Nat](ci: Boolean, a: Vec[Boolean] n, b: Vec[Boolean] n):
+    Eq(to_nat(vec_adder(ci, a, b)._1) + pow2(n) * bool_to_nat(vec_adder(ci, a, b)._2),
+       to_nat(a) + to_nat(b) + bool_to_nat(ci)) =
+    match n {
+        case zero => match (a, b) {case (nil, nil) => match ci {
+            case false => rfl
+            case true => rfl
+        }}
+        case succ(m) => match (a, b) {case (cons(abit, arest), cons(bbit, brest)) =>
+            let (NA, NB) = (to_nat(arest), to_nat(brest));
+            let R = NA + NB;
+            let (dA, dB) = (double(NA), double(NB));
+            let co = full_adder(ci, abit, bbit)._2;
+            let (X, S) = (to_nat(vec_adder(co, arest, brest)._1), bool_to_nat(vec_adder(co, arest, brest)._2));
+            let ih = vec_adder_correct(co, arest, brest);
+            let p = double(pow2(m)) * S;
+            let s1 = double(X) + p;
+            let s2 = (double(X) + 1) + p;
+            match (ci, abit, bbit) {
+                // (F,F,F)
+                case (false, false, false) =>
+                    let ret: Eq(s1, dA + dB) = trans(double_step(m, X, S, R, ih), double_distrib(NA, NB));
+                    ret
+                // (F,F,T)
+                case (false, false, true) =>
+                    let ret: Eq(s2, dA + (dB + 1)) = trans(add1_step2(m, X, S, NA, NB, ih), add_assoc(dA, dB, 1));
+                    ret
+                // (F,T,F)
+                case (false, true, false) =>
+                    let ret: Eq(s2, (dA + 1) + dB) = trans(add1_step2(m, X, S, NA, NB, ih), add1_left(dA, dB));
+                    ret
+                // (F,T,T)
+                case (false, true, true) =>
+                    let ret: Eq(s1, (dA + 1) + (dB + 1)) = trans(double_step(m, X, S, R + 1, ih),
+                        trans(double_add_one(NA, NB), symm(add_succ_succ(dA, dB))));
+                    ret
+                // (T,F,F)
+                case (true, false, false) => add1_step2(m, X, S, NA, NB, ih)
+                // (T,F,T)
+                case (true, false, true) =>
+                    let ret: Eq(s1, dA + (dB + 1) + 1) = trans(double_step(m, X, S, R + 1, ih),
+                        trans(double_add_one(NA, NB), symm(rearrange2_r(dA, dB))));
+                    ret
+                // (T,T,F)
+                case (true, true, false) =>
+                    let ret: Eq(s1, (dA + 1) + dB + 1) = trans(double_step(m, X, S, R + 1, ih),
+                        trans(double_add_one(NA, NB), symm(rearrange3_r(dA, dB))));
+                    ret
+                // (T,T,T)
+                case (true, true, true) =>
+                    let ret: Eq(s2, ((dA + 1) + (dB + 1)) + 1) = trans(add1_step(m, X, S, R + 1, ih),
+                        add_right_eq(double(NA + NB + 1), (dA + 1) + (dB + 1), 1,
+                            trans(double_add_one(NA, NB), symm(add_succ_succ(dA, dB)))));
+                    ret
+            }}
+    }
+
+// to_nat_snoc
+def to_nat_snoc[len: Nat](v: Vec[Boolean] len, x: Boolean):
+    Eq(to_nat(snoc(v, x)), to_nat(v) + pow2(len) * bool_to_nat(x)) =
+    match len {
+        case zero => match (v, x) {
+            case (nil, false) => rfl
+            case (nil, true) => rfl
+        }
+        case succ(k) => match (v, x) {
+            case (cons(false, ys), false) =>
+                cong(double, to_nat_snoc(ys, false))
+            case (cons(false, ys), true) =>
+                trans(cong(double, to_nat_snoc(ys, true)), double_distrib(to_nat(ys), pow2(k)))
+            case (cons(true, ys), false) =>
+                cong_succ(cong(double, to_nat_snoc(ys, false)))
+            case (cons(true, ys), true) =>
+                trans(cong_succ(cong(double, to_nat_snoc(ys, true))),
+                    symm(add1_step(k, to_nat(ys), 1, to_nat(ys) + pow2(k), rfl)))
+        }
+    }
+
+// vec_add_correct
+def vec_add_correct[len: Nat](a: Vec[Boolean] len, b: Vec[Boolean] len):
+    Eq(to_nat(vec_add(a, b)), to_nat(a) + to_nat(b)) =
+    trans(to_nat_snoc(vec_adder(false, a, b)._1, vec_adder(false, a, b)._2), vec_adder_correct(false, a, b))
+
+println("=== prove_term_pure.typort loaded! ===")
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("PASS:\n'{}'", output),
+        Err(e) => panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
