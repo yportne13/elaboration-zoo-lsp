@@ -1,0 +1,43 @@
+// ============================================================
+// HDL Example 10: Bundle（SpinalHDL 风格结构化 IO）
+//
+//   #[derive(Bundle)] struct ... — 自动生成：
+//     1. impl Bundle（字段级批量赋值 :=）
+//     2. impl Into[Self]（供 Expr 宏使用）
+//     3. create_TypeName(prefix) 信号工厂
+//
+//   master := slave  批量赋值（逐字段 assign）
+// ============================================================
+
+#[derive(Bundle)]
+struct AxiLite {
+    awaddr: UInt[32]
+    awvalid: Bool
+    awready: Bool
+    wdata: UInt[32]
+    wvalid: Bool
+    wready: Bool
+}
+
+module bundleTop {
+    let master = create_AxiLite("m_")
+    let slave = create_AxiLite("s_")
+    master := slave
+}
+println("=== 10a: bundleTop (derive(Bundle) 批量赋值) ===")
+println(moduleTreeVL(bundleTop.create.tree))
+
+// 参数化 Bundle：宽度来自类型参数
+#[derive(Bundle)]
+struct MyBus[w: Nat] {
+    data: UInt[w]
+    valid: Bool
+}
+
+module bundleParam {
+    let bus1 = create_MyBus[8]("bus1_")
+    let bus2 = create_MyBus[8]("bus2_")
+    bus1 := bus2
+}
+println("=== 10b: bundleParam (参数化 Bundle) ===")
+println(moduleTreeVL(bundleParam.create.tree))

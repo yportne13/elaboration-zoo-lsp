@@ -1,0 +1,56 @@
+// ============================================================
+// HDL Example 08: 控制流 (Control Flow)
+//
+//   when cond { ... } otherwise { ... }
+//   when ... elsewhen cond2 { ... } otherwise { ... }
+//   switch sel { is v { ... } is v2 { ... } default { ... } }
+//
+// 注意：when 的 otherwise 分支会先生成（作为默认赋值），
+// 再生成条件分支（保证 Verilog 生成正确）。
+// ============================================================
+
+module whenExample {
+    let a = UInt[8]
+    let b = UInt[8]
+    let sel = Bool
+    let out = UInt[8]
+    when sel {
+        out := a
+    } otherwise {
+        out := b
+    }
+}
+println("=== 08a: whenExample (when/otherwise) ===")
+println(moduleTreeVL(whenExample.create.tree))
+
+module whenElseWhen {
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = UInt[8]
+    let sel = UInt[2]
+    let out = UInt[8]
+    when sel === 0 {
+        out := a
+    } elsewhen sel === 1 {
+        out := b
+    } otherwise {
+        out := c
+    }
+}
+println("=== 08b: whenElseWhen (elsewhen 链) ===")
+println(moduleTreeVL(whenElseWhen.create.tree))
+
+module switchExample {
+    let sel = UInt[4]
+    let a = UInt[4]
+    let b = UInt[4]
+    let c = UInt[4]
+    let result = UInt[4]
+    switch sel {
+        is 0 { result := a }
+        is 1 { result := b }
+        default { result := c }
+    }
+}
+println("=== 08c: switchExample (switch 语句) ===")
+println(moduleTreeVL(switchExample.create.tree))

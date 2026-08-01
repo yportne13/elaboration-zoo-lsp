@@ -1,0 +1,43 @@
+// ============================================================
+// HDL Example 03: 位运算 (Bitwise)
+//
+//   &  |  ^  ~    按位与/或/异或/取反
+//   <<  >>        （编译期 Nat 常量移位）
+//   andR orR xorR 归约运算 -> Bool
+// ============================================================
+
+module bitwiseOps {
+    let a = Bits[8]
+    let b = Bits[8]
+    let and_r = Bits[8]
+    let or_r = Bits[8]
+    let xor_r = Bits[8]
+    let not_r = Bits[8]
+    let shl = Bits[8]
+    let shr = Bits[8]
+    let all_ones = Bool
+    let any_one = Bool
+    let parity = Bool
+    and_r := a & b
+    or_r := a | b
+    xor_r := a ^ b
+    not_r := ~a
+    shl := a << 2
+    shr := b >> 1
+    all_ones := a.andR
+    any_one := b.orR
+    parity := a.xorR
+}
+println("=== 03: bitwiseOps (按位 + 移位 + 归约) ===")
+println(moduleTreeVL(bitwiseOps.create.tree))
+
+module bitwiseUInt {
+    let a = UInt[8]
+    let b = UInt[8]
+    let and_r = UInt[8]
+    let not_r = UInt[8]
+    and_r := a & b
+    not_r := ~a
+}
+println("=== 03b: bitwiseUInt (UInt 按位运算) ===")
+println(moduleTreeVL(bitwiseUInt.create.tree))

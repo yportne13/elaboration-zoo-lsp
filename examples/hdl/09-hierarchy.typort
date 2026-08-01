@@ -1,0 +1,44 @@
+// ============================================================
+// HDL Example 09: 模块层次 (Module Hierarchy)
+//
+//   mkInstance(name, moduleName)        子模块实例化
+//   mkInstancePorts(name, module, ports) 带端口连接的实例化
+//   allModulesVL(tree)                  多模块 Verilog 输出
+// ============================================================
+
+module myAdder[w: Nat] {
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w + 1]
+    sum := a +^ b
+}
+
+module topWithAdder {
+    input a = UInt[8]
+    input b = UInt[8]
+    let _adder = myAdder.create[8]
+    let inst = mkInstance("u_adder", "myAdder")
+}
+println("=== 09a: topWithAdder (无端口连接实例化) ===")
+println(moduleTreeVL(topWithAdder.create.tree))
+
+module topWithPorts {
+    input a = UInt[8]
+    input b = UInt[8]
+    let _adder = myAdder.create[8]
+    let inst = mkInstancePorts("u_adder", "myAdder", ".a(a), .b(b), .sum(sum_w)")
+}
+println("=== 09b: topWithPorts (显式端口连接) ===")
+println(moduleTreeVL(topWithPorts.create.tree))
+
+// 多模块输出：把两个模块树合并成一颗 ModuleTree，
+// 再用 allModulesVL 生成全部模块的 Verilog。
+def buildMultiTree(): ModuleTree =
+    let tree_adder = myAdder.create[8].tree;
+    let tree_top = topWithAdder.create.tree;
+    let md_adder = headModuleDef(tree_adder.data);
+    let md_top = headModuleDef(tree_top.data);
+    ModuleTree.mk(2, md_top :: md_adder :: nil)
+
+println("=== 09c: allModulesVL (多模块 Verilog) ===")
+println(allModulesVL(buildMultiTree()))

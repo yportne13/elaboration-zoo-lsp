@@ -1,0 +1,50 @@
+// ============================================================
+// HDL Example 06: 位提取 / 切片 / 拼接 (Bit Select & Cat)
+//
+//   a.apply[N]   取单 bit -> Bool（a[N] 是语法糖）
+//   a.slice[hi, lo]  取范围 -> 宽度 (hi-lo+1) 的类型
+//   t[N] := x     LHS 位选赋值
+//   a ## b        拼接，结果宽度 = 左宽 + 右宽
+// ============================================================
+
+module bitSelect {
+    let a = UInt[8]
+    let bit0 = Bool
+    let bit7 = Bool
+    let low4 = UInt[4]
+    let hi4 = UInt[4]
+    bit0 := a.apply[0]
+    bit7 := a[7]
+    low4 := a.slice[3, 0]
+    hi4 := a.slice[7, 4]
+}
+println("=== 06a: bitSelect (apply / 方括号 / slice) ===")
+println(moduleTreeVL(bitSelect.create.tree))
+
+module lhsBitsel {
+    let t = UInt[8]
+    let x = Bool
+    t[0] := x
+    t[7] := x
+}
+println("=== 06b: lhsBitsel (LHS 位选赋值) ===")
+println(moduleTreeVL(lhsBitsel.create.tree))
+
+module concat {
+    let a = Bits[4]
+    let b = Bits[4]
+    let f = Bool
+    let x = UInt[8]
+    let r_bb = Bits[8]
+    let r_bf = Bits[5]
+    let r_fb = Bits[5]
+    let r_uu = UInt[16]
+    let r_xf = UInt[9]
+    r_bb := a ## b
+    r_bf := a ## f
+    r_fb := f ## a
+    r_uu := x ## x
+    r_xf := x ## f
+}
+println("=== 06c: concat (## 拼接, 含 Bool) ===")
+println(moduleTreeVL(concat.create.tree))

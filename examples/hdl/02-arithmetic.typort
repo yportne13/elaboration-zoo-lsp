@@ -1,0 +1,43 @@
+// ============================================================
+// HDL Example 02: 算术运算 (Arithmetic)
+//
+//   +   -   保持位宽，溢出截断
+//   +^  -^  结果宽度 +1（进位/借位）
+//   *   UInt[w1] * UInt[w2] -> UInt[w1+w2]（不丢精度）
+//   Nat 字面量可直接参与运算（自动转换）
+//   .neg  SInt 取负
+// ============================================================
+
+module arithmeticUInt {
+    let a = UInt[8]
+    let b = UInt[8]
+    let sum = UInt[8]
+    let diff = UInt[8]
+    let carry = UInt[9]
+    let borrow = UInt[9]
+    let prod = UInt[16]
+    let add_nat = UInt[8]
+    let mul_nat = UInt[8]
+    sum := a + b
+    diff := a - b
+    carry := a +^ b
+    borrow := a -^ b
+    prod := a * b
+    add_nat := a + 5
+    mul_nat := a * 3
+}
+println("=== 02a: arithmeticUInt (+ - +^ -^ * 与 Nat 字面量) ===")
+println(moduleTreeVL(arithmeticUInt.create.tree))
+
+module arithmeticSInt {
+    let a = SInt[8]
+    let b = SInt[8]
+    let sum = SInt[8]
+    let carry = SInt[9]
+    let neg = SInt[8]
+    sum := a + b
+    carry := a +^ b
+    neg := a.neg
+}
+println("=== 02b: arithmeticSInt (SInt 运算与取负) ===")
+println(moduleTreeVL(arithmeticSInt.create.tree))

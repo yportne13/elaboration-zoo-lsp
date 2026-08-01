@@ -1,0 +1,51 @@
+// ============================================================
+// HDL Example 07: 寄存器 (Registers)
+//
+//   reg x = UInt[8]         普通寄存器（自动加 clk 端口）
+//   reg x = UInt[8] init 42 带异步复位初值（自动加 reset 端口）
+//   regNext(value)          延迟一拍
+//   regNextWhen(v, cond)    条件延迟
+//   when 块内的 :=          条件寄存器赋值
+// ============================================================
+
+module regBasic {
+    reg r = UInt[8]
+    let a = UInt[8]
+    r := a
+}
+println("=== 07a: regBasic (普通寄存器) ===")
+println(moduleTreeVL(regBasic.create.tree))
+
+module regInit {
+    reg r = UInt[8] init 42
+    let a = UInt[8]
+    r := a + 1
+}
+println("=== 07b: regInit (复位初值 42) ===")
+println(moduleTreeVL(regInit.create.tree))
+
+module regNext {
+    let a = UInt[8]
+    let d = regNextUInt(a)
+}
+println("=== 07c: regNext (延迟一拍) ===")
+println(moduleTreeVL(regNext.create.tree))
+
+module regNextWhen {
+    let a = UInt[8]
+    let en = Bool
+    let d = regNextWhenUInt(a, en)
+}
+println("=== 07d: regNextWhen (条件延迟) ===")
+println(moduleTreeVL(regNextWhen.create.tree))
+
+module regInWhen {
+    reg r = UInt[8]
+    let a = UInt[8]
+    let en = Bool
+    when en {
+        r := a
+    }
+}
+println("=== 07e: regInWhen (when 内寄存器赋值) ===")
+println(moduleTreeVL(regInWhen.create.tree))

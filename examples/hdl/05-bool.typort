@@ -1,0 +1,44 @@
+// ============================================================
+// HDL Example 05: 布尔逻辑 (Bool Logic)
+//
+//   &&  ||  !  ^    逻辑与/或/非/异或
+//   .mux(a, b)      条件多路选择（SpinalHDL 风格）
+//   asBits/asUInt/asSInt  Bool -> Bits[1]/UInt[1]/SInt[1]
+// ============================================================
+
+module boolLogic {
+    let a = Bool
+    let b = Bool
+    let and_r = Bool
+    let or_r = Bool
+    let not_r = Bool
+    let xor_r = Bool
+    and_r := a && b
+    or_r := a || b
+    not_r := !a
+    xor_r := a ^ b
+}
+println("=== 05a: boolLogic (&& || ! ^) ===")
+println(moduleTreeVL(boolLogic.create.tree))
+
+module boolMux {
+    let sel = Bool
+    let a = UInt[8]
+    let b = UInt[8]
+    let out = UInt[8]
+    out := sel.mux(a, b)
+}
+println("=== 05b: boolMux (三目选择) ===")
+println(moduleTreeVL(boolMux.create.tree))
+
+module boolCast {
+    let c = Bool
+    let b = Bits[1]
+    let u = UInt[1]
+    let s = SInt[1]
+    b := c.asBits
+    u := c.asUInt
+    s := c.asSInt
+}
+println("=== 05c: boolCast (Bool 类型转换) ===")
+println(moduleTreeVL(boolCast.create.tree))

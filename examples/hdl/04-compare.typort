@@ -1,0 +1,50 @@
+// ============================================================
+// HDL Example 04: 比较运算 (Comparison)
+//
+//   <  <=  >  >=    大小比较，两侧位宽必须一致
+//   ===  =/=         相等/不等
+//   结果恒为 Bool
+//   Nat 字面量可直接参与比较
+// ============================================================
+
+module compareUInt {
+    let a = UInt[8]
+    let b = UInt[8]
+    let lt = Bool
+    let le = Bool
+    let gt = Bool
+    let ge = Bool
+    let eq = Bool
+    let ne = Bool
+    lt := a < b
+    le := a <= b
+    gt := a > b
+    ge := a >= b
+    eq := a === b
+    ne := a =/= b
+}
+println("=== 04a: compareUInt (UInt 比较) ===")
+println(moduleTreeVL(compareUInt.create.tree))
+
+module compareNat {
+    let a = UInt[8]
+    let eq42 = Bool
+    let lt100 = Bool
+    let ne0 = Bool
+    eq42 := a === 42
+    lt100 := a < 100
+    ne0 := a =/= 0
+}
+println("=== 04b: compareNat (与 Nat 字面量比较) ===")
+println(moduleTreeVL(compareNat.create.tree))
+
+module compareSInt {
+    let a = SInt[8]
+    let b = SInt[8]
+    let lt = Bool
+    let eq = Bool
+    lt := a < b
+    eq := a === b
+}
+println("=== 04c: compareSInt (SInt 比较) ===")
+println(moduleTreeVL(compareSInt.create.tree))

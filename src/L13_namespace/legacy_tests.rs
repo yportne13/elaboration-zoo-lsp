@@ -1320,6 +1320,91 @@ fn test_example_hdl_ops() {
     }
 }
 
+// ============================================================
+// examples/hdl/ — 每个文件演示一组 HDL 特性，同时作为回归测试。
+// 新增示例文件时，在 EXAMPLES 里登记文件与关键输出断言。
+// ============================================================
+#[test]
+fn test_examples_hdl_dir() {
+    // (文件名, 文件内容, 关键输出断言)
+    let examples: &[(&str, &str, &[&str])] = &[
+        ("01-basics.typort", include_str!("../../examples/hdl/01-basics.typort"), &[
+            "module basicDecls",      // 参数化模块
+            "wire [7:0] mywire",      // auto* 自动命名
+            "input wire [7:0] myinput",
+        ]),
+        ("02-arithmetic.typort", include_str!("../../examples/hdl/02-arithmetic.typort"), &[
+            "(a + b)",                // UInt 加法
+            "(a +^ b)",               // 进位加法
+            "(a * b)",                // 乘法（宽 16）
+            "wire [15:0] prod",       // 乘积保持 UInt[16]
+        ]),
+        ("03-bitwise.typort", include_str!("../../examples/hdl/03-bitwise.typort"), &[
+            "(a & b)",                // 按位与
+            "~a",                     // 按位取反
+            "(a << 2)",               // 左移
+            "&a",                     // 归约 andR
+            "^a",                     // 归约 xorR
+        ]),
+        ("04-compare.typort", include_str!("../../examples/hdl/04-compare.typort"), &[
+            "(a < b)",                // UInt 比较
+            "(a == 42)",              // 与 Nat 字面量比较（=== 生成 ==）
+            "(a != 0)",               // =/= 生成 !=
+        ]),
+        ("05-bool.typort", include_str!("../../examples/hdl/05-bool.typort"), &[
+            "(a && b)",               // 逻辑与
+            "!a",                     // 逻辑非
+            "(sel ? a : b)",          // mux
+            "assign b = c",           // Bool.asBits
+        ]),
+        ("06-select-cat.typort", include_str!("../../examples/hdl/06-select-cat.typort"), &[
+            "a[0]",                   // apply[0]
+            "a[3:0]",                 // slice[3, 0]
+            "assign t[0]",            // LHS 位选
+            "{a, b}",                 // ## 拼接
+            "{x, f}",                 // UInt ## Bool
+        ]),
+        ("07-registers.typort", include_str!("../../examples/hdl/07-registers.typort"), &[
+            "always @(posedge clk)",  // 寄存器时钟块
+            "posedge reset",          // reg init 异步复位
+            "r <= 42;",               // 复位初值
+            "if (en) begin",          // regNextWhen 条件
+        ]),
+        ("08-control-flow.typort", include_str!("../../examples/hdl/08-control-flow.typort"), &[
+            "always @(*) begin",      // when 组合逻辑
+            "else if",                // elsewhen 链
+            "if (sel == 0)",          // switch -> when 展开（=== 生成 ==）
+        ]),
+        ("09-hierarchy.typort", include_str!("../../examples/hdl/09-hierarchy.typort"), &[
+            "myAdder u_adder ();",    // mkInstance
+            ".a(a), .b(b)",           // mkInstancePorts
+            "module myAdder",         // allModulesVL 多模块
+            "module topWithAdder",
+        ]),
+        ("10-bundle.typort", include_str!("../../examples/hdl/10-bundle.typort"), &[
+            "module bundleTop",       // derive(Bundle)
+            "assign m_awaddr",        // 批量赋值逐字段展开
+            "assign m_awvalid",
+            "module bundleParam",     // 参数化 Bundle
+        ]),
+    ];
+
+    for (file, input, asserts) in examples {
+        match run_with_prelude(input) {
+            Ok(output) => {
+                for a in *asserts {
+                    assert!(
+                        output.contains(a),
+                        "examples/hdl/{} should contain {:?}, got:\n{}",
+                        file, a, output
+                    );
+                }
+            }
+            Err(e) => panic!("examples/hdl/{}: {} @ {}: {}", file, e.0.data, e.0.path_id, e.0.start_offset),
+        }
+    }
+}
+
 #[test]
 fn test_hdl_reg_init_sint() {
     let input = r#"
@@ -1988,6 +2073,8 @@ fn test_trait_system_comprehensive() {
     assert!(result.contains("0"), "Basic value zero should print");
 }
 
+// Test slice assignment on LHS: a.slice[3, 0] := b
+#[test]
 fn test_hdl_slice_assign() {
     let input = r#"
 module Test {
@@ -2022,6 +2109,171 @@ println(moduleTreeVL(Test.create.tree))
         Ok(output) => {
             println!("{}", output);
             assert!(output.contains("assign a[3:0] = 5"), "slice literal assign, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test Bool type conversions: asBits / asUInt / asSInt
+#[test]
+fn test_hdl_bool_conversions() {
+    let input = r#"
+module Test {
+    let c = Bool
+    let b = Bits[1]
+    let u = UInt[1]
+    let s = SInt[1]
+    b := c.asBits
+    u := c.asUInt
+    s := c.asSInt
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("assign b = c"), "Bool.asBits should keep same expr, got: {}", output);
+            assert!(output.contains("assign u = c"), "Bool.asUInt should keep same expr, got: {}", output);
+            assert!(output.contains("assign s = c"), "Bool.asSInt should keep same expr, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test Cat with Bool as right operand: Bits ## Bool, SInt ## Bool, Bool ## SInt
+#[test]
+fn test_hdl_cat_bool_rhs() {
+    let input = r#"
+module Test {
+    let b = Bits[7]
+    let s = SInt[15]
+    let c = Bool
+    let r1 = Bits[8]
+    let r2 = SInt[16]
+    let r3 = SInt[16]
+    r1 := b ## c
+    r2 := s ## c
+    r3 := c ## s
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("{b, c}"), "Bits ## Bool should emit {{b, c}}, got: {}", output);
+            assert!(output.contains("{s, c}"), "SInt ## Bool should emit {{s, c}}, got: {}", output);
+            assert!(output.contains("{c, s}"), "Bool ## SInt should emit {{c, s}}, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test auto-named signals (BindingName implicit): let name becomes the signal name
+#[test]
+fn test_hdl_auto_signals() {
+    let input = r#"
+module Test {
+    let mywire = autoUInt(8)
+    let myinput = autoUIntInput(8)
+    let myreg = autoUIntReg(8)
+    let myinit = autoUIntRegInit(8, 7)
+    let mybool = autoBool
+    let myoutput = autoUIntOutput(8)
+    myreg := mywire + myinput
+    myoutput := mybool.mux(myreg, myinit)
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("wire [7:0] mywire"), "autoUInt should use let name 'mywire', got: {}", output);
+            assert!(output.contains("input wire [7:0] myinput"), "autoUIntInput should use let name 'myinput', got: {}", output);
+            assert!(output.contains("output wire [7:0] myoutput"), "autoUIntOutput should use let name 'myoutput', got: {}", output);
+            assert!(output.contains("reg [7:0] myreg"), "autoUIntReg should use let name 'myreg', got: {}", output);
+            assert!(output.contains("myinit <= 7;"), "autoUIntRegInit should init to 7, got: {}", output);
+            assert!(output.contains("posedge reset"), "autoUIntRegInit should have async reset, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test regNextWhen* conditional registers
+#[test]
+fn test_hdl_reg_next_when() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let en = Bool
+    let r = regNextWhenUInt(a, en)
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("always @(posedge clk)"), "regNextWhen should be clocked, got: {}", output);
+            assert!(output.contains("if (en) begin"), "regNextWhen should wrap assign in if (en), got: {}", output);
+            assert!(output.contains("r <= a"), "regNextWhen should assign r <= a, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test reg-with-init syntax in the Expr macro: `reg x = UInt[8] init 42`
+#[test]
+fn test_hdl_reg_init_macro() {
+    let input = r#"
+module Test {
+    reg myreg = UInt[8] init 42
+    reg myregb = Bits[4] init 3
+    reg myregs = SInt[8] init 1
+    reg myregbool = Bool init 1
+    myreg := myreg + 1
+    myregb := myregb ^ myregb
+    myregs := myregs - 1
+    myregbool := !myregbool
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("myreg <= 42;"), "UInt reg init should emit 'myreg <= 42;', got: {}", output);
+            assert!(output.contains("myregb <= 3;"), "Bits reg init should emit 'myregb <= 3;', got: {}", output);
+            assert!(output.contains("myregs <= 1;"), "SInt reg init should emit 'myregs <= 1;', got: {}", output);
+            assert!(output.contains("myregbool <= 1;"), "Bool reg init should emit 'myregbool <= 1;', got: {}", output);
+            assert!(output.contains("reg signed [7:0] myregs"), "SInt reg should be signed, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test in_u/out_u direction helpers reuse the source signal's name
+#[test]
+fn test_hdl_dir_annotations() {
+    let input = r#"
+module Test {
+    let rawin = newUInt("data_in", 8)
+    let rawout = newUInt("data_out", 8)
+    let pin = in_u(rawin)
+    let pout = out_u(rawout)
+    pout := pin
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("input wire [7:0] data_in"), "in_u should create port named data_in, got: {}", output);
+            assert!(output.contains("output wire [7:0] data_out"), "out_u should create port named data_out, got: {}", output);
+            assert!(output.contains("assign data_out = data_in"), "out should be driven by in, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

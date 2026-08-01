@@ -430,6 +430,23 @@ impl[width: Nat] Cat[Bool, UInt[width + 1]] for UInt[width] {
         UInt.mk(None, binary(this.expr, "##", that.expr))
 }
 
+// --- Bool as right operand (symmetric to the Bool-as-left cases above) ---
+
+impl[left: Nat] Cat[Bool, Bits[left + 1]] for Bits[left] {
+    def ##(that: Bool): Bits[left + 1] =
+        Bits.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[left: Nat] Cat[Bool, SInt[left + 1]] for SInt[left] {
+    def ##(that: Bool): SInt[left + 1] =
+        SInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
+impl[width: Nat] Cat[SInt[width], SInt[width + 1]] for Bool {
+    def ##(that: SInt[width]): SInt[width + 1] =
+        SInt.mk(None, binary(this.expr, "##", that.expr))
+}
+
 // ============================================================
 //  Bit Extraction & Slicing
 // ============================================================
@@ -503,6 +520,18 @@ impl[width: Nat] Bits[width] {
     def asUInt: UInt[width] =
         UInt.mk(None, this.expr)
     def asSInt: SInt[width] =
+        SInt.mk(None, this.expr)
+}
+
+// --- Bool conversions ---
+// Bool is a single bit; widening to width-1 vectors keeps the same expr.
+
+impl Bool {
+    def asBits: Bits[1] =
+        Bits.mk(None, this.expr)
+    def asUInt: UInt[1] =
+        UInt.mk(None, this.expr)
+    def asSInt: SInt[1] =
         SInt.mk(None, this.expr)
 }
 

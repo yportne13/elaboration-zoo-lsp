@@ -34,6 +34,9 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Mux | `r := cond.mux(a, b)` | Conditional multiplexer |
 | Concatenation | `f := e ## d` | Bit concatenation |
 | Registers | `reg a = UInt[8]` | Sequential elements with clock/reset |
+| Reg with init | `reg a = UInt[8] init 42` | Register with async reset value |
+| Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers |
+| Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
 | Bundle | `#[derive(Bundle)]` | SpinalHDL-style bulk assignment |
 
@@ -49,6 +52,11 @@ module adder[w: Nat] {
 
 println(moduleTreeVL(adder.create[8].tree))
 ```
+
+More feature demos live in [`examples/hdl/`](examples/hdl/), one file per feature
+group (declarations, arithmetic, bitwise, comparison, bool, bit select & concat,
+registers, control flow, hierarchy, bundle). Each file prints its Verilog when
+run and doubles as a regression test (`test_examples_hdl_dir`).
 
 ### LSP Server
 - **Go to definition** – navigate to declarations
