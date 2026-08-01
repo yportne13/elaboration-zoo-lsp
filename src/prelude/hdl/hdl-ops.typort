@@ -150,11 +150,13 @@ impl[width: Nat] Bits[width] {
 }
 
 // ---- rotate ----
+// 展开为合法 Verilog: rotateLeft(s) = (a << s) | (a >> (width - s))
+// s 可以是信号（Verilog 支持变量移位），width - s 是编译期常量。
 impl[width: Nat] Bits[width] {
     def rotateLeft[shift: Nat](that: UInt[shift]): Bits[width] =
-        Bits.mk(None, binary(this.expr, "rotateLeft", that.expr))
+        Bits.mk(None, binary(binary(this.expr, "<<", that.expr), "|", binary(this.expr, ">>", literal(width - shift))))
     def rotateRight[shift: Nat](that: UInt[shift]): Bits[width] =
-        Bits.mk(None, binary(this.expr, "rotateRight", that.expr))
+        Bits.mk(None, binary(binary(this.expr, ">>", that.expr), "|", binary(this.expr, "<<", literal(width - shift))))
 }
 
 // ============================================================

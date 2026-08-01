@@ -1,26 +1,12 @@
 // ============================================================
-// HDL Clock / Registers / Memory
+//  HDL Clock / Registers / Memory
 // ============================================================
 
-// ============================================================
-//  Clock Domain
-// ============================================================
-
-enum ClockDomainConfig {
-    Sync
-    Async
-}
-
-struct ClockDomain {
-    clock: Bool
-    reset: Bool
-    config: ClockDomainConfig
-}
-
-def defaultClockDomain: ClockDomain = ClockDomain.mk (Bool.mk (Some "clk") (create("clk"))) (Bool.mk (Some "reset") (create("reset"))) Sync
-
-// Note: RegNext functions (regNextUInt, regNextBits, regNextSInt, regNextBool)
-// are in hdl-signals.typort (they depend on auto*Reg which is defined there).
+// ClockDomain, ClockEdge, ResetPolarity, ClockDomainConfig,
+// defaultClockDomain are defined in hdl-core.typort (ModuleDef bakes the
+// clock domain at record time, so the definition must precede the module
+// system). Pass a ClockDomain to the module macro to customize:
+//   module foo(cd: ClockDomain) { ... }   // let t = foo.create(myCd).tree
 
 // ============================================================
 //  Mem (Memory)

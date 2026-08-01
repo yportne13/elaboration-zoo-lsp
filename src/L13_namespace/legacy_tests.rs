@@ -2254,6 +2254,81 @@ println(moduleTreeVL(Test.create.tree))
     }
 }
 
+// Test rotateLeft/rotateRight: expand to (a << s) | (a >> (w - s)) instead of
+// emitting the invalid `(a rotateLeft b)` operator
+#[test]
+fn test_hdl_rotate() {
+    let input = r#"
+module Test {
+    let a = Bits[8]
+    let sh = UInt[3]
+    let rl = Bits[8]
+    let rr = Bits[8]
+    rl := a.rotateLeft(sh)
+    rr := a.rotateRight(sh)
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("(a << sh) | (a >> 5)"), "rotateLeft should expand to (a << sh) | (a >> 5), got: {}", output);
+            assert!(output.contains("(a >> sh) | (a << 5)"), "rotateRight should expand to (a >> sh) | (a << 5), got: {}", output);
+            assert!(!output.contains("rotateLeft"), "rotateLeft should not appear as a Verilog operator, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test Area: logic grouping scope, no extra hierarchy in generated Verilog
+#[test]
+fn test_hdl_area() {
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = UInt[8]
+    let out = UInt[8]
+    let _a = Area(_u => out := a + b)
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("assign out = (a + b)"), "Area body should execute inside module, got: {}", output);
+            assert!(!output.contains("module Area"), "Area should not create a module, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// Test custom clock domain passed to the module macro:
+// sync reset / active-low / custom clock name
+#[test]
+fn test_hdl_clock_domain() {
+    let input = r#"
+module Test[cd] {
+    reg r = UInt[8] init 5
+    let a = UInt[8]
+    r := a
+}
+println(moduleTreeVL(Test.create[ClockDomain.mk "clk_i" "rst_n" Sync RisingEdge ActiveLow].tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("input wire clk_i"), "clock port should use custom name clk_i, got: {}", output);
+            assert!(output.contains("input wire rst_n"), "reset port should use custom name rst_n, got: {}", output);
+            assert!(output.contains("always @(posedge clk_i)"), "sync reset: no posedge reset in header, got: {}", output);
+            assert!(!output.contains("posedge rst_n"), "sync reset should not have async reset edge, got: {}", output);
+            assert!(output.contains("if (!rst_n) begin"), "active-low reset should be if (!rst_n), got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
 // Test in_u/out_u direction helpers reuse the source signal's name
 #[test]
 fn test_hdl_dir_annotations() {

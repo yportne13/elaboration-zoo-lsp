@@ -115,8 +115,38 @@ def isRegExpr(e: Expr): Boolean = match e {
     case _ => false
 }
 
+// ---------- Clock domain (String-name variant, no Bool dependency) ----------
+// Defined here so ModuleDef can bake the clock domain at record time.
+// hdl-clock.typort keeps the SpinalHDL-style Mem type built on top.
+
+enum ClockEdge {
+    RisingEdge
+    FallingEdge
+}
+
+enum ResetPolarity {
+    ActiveHigh
+    ActiveLow
+}
+
+enum ClockDomainConfig {
+    Sync
+    Async
+}
+
+struct ClockDomain {
+    clockName: String
+    resetName: String
+    config: ClockDomainConfig
+    clockEdge: ClockEdge
+    resetPolarity: ResetPolarity
+}
+
+def defaultClockDomain: ClockDomain = ClockDomain.mk "clk" "reset" Async RisingEdge ActiveHigh
+
 struct ModuleDef {
     name: String
+    cd: ClockDomain
     expr_num: Nat
     expr: Vec[Expr] expr_num
 }
@@ -137,10 +167,11 @@ impl ModuleTree {
 }
 
 // Generic helper: add an expression to the first module (or create one if none exists)
+// All expressions of a module share the module's clock domain (head.cd).
 def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): ModuleTree = match data {
-    case nil => ModuleTree.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
+    case nil => ModuleTree.mk(0 + 1, ModuleDef.mk(name, defaultClockDomain, 0 + 1, e :: nil) :: nil)
     case cons(head, tail) =>
-        let new_module = ModuleDef.mk(head.name, head.expr_num + 1, e :: head.expr);
+        let new_module = ModuleDef.mk(head.name, head.cd, head.expr_num + 1, e :: head.expr);
         ModuleTree.mk(num, new_module :: tail)
 }
 
@@ -352,6 +383,13 @@ def mkInstancePorts(instName: String, moduleName: String, ports: String): Unit =
 
 // Extract the first ModuleDef from a module struct
 def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
-    case nil => ModuleDef.mk("", 0, nil)
+    case nil => ModuleDef.mk("", defaultClockDomain, 0, nil)
     case cons(first, _) => first
 }
+
+// ============================================================
+//  Area — SpinalHDL 语义：逻辑分组，不产生额外层次。
+//  模块内用于组织代码（信号声明/赋值），不影响 Verilog 结构。
+// ============================================================
+
+def Area[T: Type 0](body: Unit -> T): T = body(unit)

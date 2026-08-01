@@ -170,12 +170,24 @@ macro_rules Expr {
 
 #[macro_export]
 macro_rules module {
-	    ($name: ident $( $args: params )* {$( $body: Expr )*}) => {
-	        class $name $({$args})* impl Module {
-	            let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, 0, nil) :: nil)); $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", prev_module); module_result;
-	            def tree: ModuleTree = this.zz_tree
-	        }
-	    };
-	}
+	// With explicit clock domain: module foo[cd] { ... }
+	// The cd parameter is implicitly a ClockDomain; it is baked into the
+	// ModuleDef at record time so the Verilog generator can emit the
+	// configured clock/reset edges and names.
+	// Usage: let t = foo.create[myClockDomain].tree
+	($name: ident [$cd: ident] {$( $body: Expr )*}) => {
+		class $name [$cd: ClockDomain] impl Module {
+			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil)); $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", prev_module); module_result;
+			def tree: ModuleTree = this.zz_tree
+		}
+	};
+	// Without clock domain parameter: uses defaultClockDomain
+	($name: ident $( $args: params )* {$( $body: Expr )*}) => {
+		class $name $({$args})* impl Module {
+			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil)); $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", prev_module); module_result;
+			def tree: ModuleTree = this.zz_tree
+		}
+	};
+}
 
 	

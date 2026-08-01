@@ -496,7 +496,29 @@ def indentLines(ls: List[String]): List[String] = match ls {
     case lcons(s, tail) => lcons ("  " + str_indent2(s)) (indentLines tail)
 }
 
-def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
+// ---- Clock domain helpers (names / edge keywords from a ClockDomain) ----
+
+def clockName(cd: ClockDomain): String = cd.clockName
+
+def resetName(cd: ClockDomain): String = cd.resetName
+
+def clockEdgeStr(cd: ClockDomain): String = match cd.clockEdge {
+    case RisingEdge => "posedge"
+    case FallingEdge => "negedge"
+}
+
+def resetEdgeStr(cd: ClockDomain): String = match cd.resetPolarity {
+    case ActiveHigh => "posedge"
+    case ActiveLow => "negedge"
+}
+
+// Reset condition text: "reset" or "!reset" for ActiveLow
+def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
+    case ActiveHigh => resetName(cd)
+    case ActiveLow => "!" + resetName(cd)
+}
+
+def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
     let ls = list_reverse(collectClockLines es);
     let has_clk = hasClockLines es;
     let init_lines = list_reverse(collectInitLines es);
@@ -507,13 +529,27 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne): String =
     match has_clk {
         case false => ""
         case true =>
-            let base = "  always @(posedge clk) begin\n" + joinLines(ls) + "\n" + "  end\n";
+            let clk_edge = clockEdgeStr(cd);
+            let clk_nm = clockName(cd);
+            let reset_cond = resetCondStr(cd);
             match need_reset {
-                case false => base
+                // No reset values: plain clocked block
+                case false =>
+                    "  always @" + "(" + clk_edge + " " + clk_nm + ") begin\n" + joinLines(ls) + "\n" + "  end\n"
+                // Async:  always @(clk_edge clk or reset_edge reset) begin if (reset_cond) ...
+                // Sync:   always @(clk_edge clk) begin if (reset_cond) ...
                 case true =>
+                    let header = match cd.config {
+                        case Async =>
+                            let reset_edge = resetEdgeStr(cd);
+                            let reset_nm = resetName(cd);
+                            "  always @" + "(" + clk_edge + " " + clk_nm + " or " + reset_edge + " " + reset_nm + ") begin\n"
+                        case Sync =>
+                            "  always @" + "(" + clk_edge + " " + clk_nm + ") begin\n"
+                    };
                     let indented_init = indentLines(init_lines);
                     let indented_clk = indentLines(ls);
-                    "  always @(posedge clk or posedge reset) begin\n    if (reset) begin\n" + joinLines(indented_init) + "\n    end else begin\n" + joinLines(indented_clk) + "\n    end\n  end\n"
+                    header + "    if (" + reset_cond + ") begin\n" + joinLines(indented_init) + "\n    end else begin\n" + joinLines(indented_clk) + "\n    end\n  end\n"
             }
     }
 
@@ -552,7 +588,7 @@ def moduleDefVL(md: ModuleDef): String =
     let reg_decls = regsVL(md.expr);
     let assigns = assignsVL(md.expr, whenSigs);
     let always = alwaysVL(md.expr, whenSigs);
-    let clocked = clockedVL(md.expr);
+    let clocked = clockedVL(md.expr, md.cd);
     let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
     let has_regs = match list_reverse(collectRegLines md.expr) {
         case lnil => false
@@ -567,22 +603,24 @@ def moduleDefVL(md: ModuleDef): String =
         case _ => true
     };
     let has_init = hasInitRegs md.expr;
+    let clk_nm = clockName(md.cd);
+    let reset_nm = resetName(md.cd);
     let p0 = port_decls;
     let p1 = match has_regs {
         case false => p0
         case true => match has_ports {
-            case false => "  input wire clk"
-            case _ => p0 + ",\n  input wire clk"
+            case false => "  input wire " + clk_nm
+            case _ => p0 + ",\n  input wire " + clk_nm
         }
     };
     let p2 = match has_init {
         case false => p1
         case true => match has_regs {
             case false => match has_ports {
-                case false => "  input wire reset"
-                case true => port_decls + ",\n  input wire reset"
+                case false => "  input wire " + reset_nm
+                case true => port_decls + ",\n  input wire " + reset_nm
             }
-            case true => p1 + ",\n  input wire reset"
+            case true => p1 + ",\n  input wire " + reset_nm
         }
     };
     let has_no_port_content = match has_ports {
