@@ -3575,3 +3575,40 @@ println (moduleTreeVL(paramMod.create[4].tree))
         Err(e) => panic!("param module new type FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+// Test hierarchical signal access via the class instance:
+// let u = myAdder.create[8]; u.connect("a", sig) generates the port
+// connection (.a(sig)) on the instance line, and u.signal("x") yields a
+// subSignal Expr for cross-level references.
+#[test]
+fn test_hdl_instance_connect() {
+    let input = r#"
+module myAdder[w: Nat] {
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w + 1]
+    sum := a +^ b
+}
+
+module Top {
+    input a = UInt[8]
+    input b = UInt[8]
+    let u = myAdder.create[8]
+    let _inst = mkInstance("u", "myAdder")
+    let _c1 = u.connect("u", "a", a.expr)
+    let _c2 = u.connect("u", "b", b.expr)
+    let _c3 = u.connect("u", "sum", a.expr)
+}
+
+println(moduleTreeVL(Top.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("myAdder u (.a(a), .b(b), .sum(a));"),
+                "instance line should aggregate port connections, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+

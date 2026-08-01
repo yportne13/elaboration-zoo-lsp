@@ -179,6 +179,11 @@ macro_rules module {
 		class $name [$cd: ClockDomain] impl Module {
 			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil)); $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", prev_module); module_result;
 			def tree: ModuleTree = this.zz_tree
+			// Hierarchical port connection: u.connect("u", "a", sig) emits
+			// assign(subSignal("u","a"), sig); the generator aggregates these
+			// into the instance line as .a(sig). instName must match the name
+			// passed to mkInstance.
+			def connect(instName: String, port: String, sig: Expr): Unit = let _a = addSignalAssignment(subSignal(instName, port), sig); unit
 		}
 	};
 	// Without clock domain parameter: uses defaultClockDomain
@@ -186,6 +191,11 @@ macro_rules module {
 		class $name $({$args})* impl Module {
 			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws_init = create_global("WhenStack", whenStackEmpty); let prev_module = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil)); $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", prev_module); module_result;
 			def tree: ModuleTree = this.zz_tree
+			// Hierarchical port connection: u.connect("u", "a", sig) emits
+			// assign(subSignal("u","a"), sig); the generator aggregates these
+			// into the instance line as .a(sig). instName must match the name
+			// passed to mkInstance.
+			def connect(instName: String, port: String, sig: Expr): Unit = let _a = addSignalAssignment(subSignal(instName, port), sig); unit
 		}
 	};
 }

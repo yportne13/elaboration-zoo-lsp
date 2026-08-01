@@ -567,17 +567,78 @@ def joinPortConns(ls: List[String]): String = match ls {
     case lcons(s, tail) => s + ", " + joinPortConns(tail)
 }
 
+// Helpers to decompose assign(lhs, rhs) / subSignal(inst, port) without
+// nested constructor patterns (which the match compiler does not handle).
+def getAssignLhsExpr(e: Expr): Expr = match e {
+    case assign(lhs, _) => lhs
+    case _ => nop
+}
+
+def getAssignRhsExpr(e: Expr): Expr = match e {
+    case assign(_, rhs) => rhs
+    case _ => nop
+}
+
+def getSubSignalInst(e: Expr): String = match e {
+    case subSignal(inst, _) => inst
+    case _ => ""
+}
+
+def getSubSignalPort(e: Expr): String = match e {
+    case subSignal(_, port) => port
+    case _ => ""
+}
+
+// Collect ".port(sig)" connections for one instance from assign(subSignal(inst, port), rhs) exprs.
+// This lets instance port connections be expressed type-safely via the module
+// instance's connect method (u.connect("u", "a", sig)) instead of string ports.
+
+
 // Generate instance instantiation lines with port connections.
-def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = match exprs {
+// Filter connections belonging to one instance from parallel seen lists.
+// (pattern_match misbinds closure variables referenced inside match branches,
+// so everything here is threaded through pattern variables only.)
+def filterConns(instName: String, seenInsts: List[String], seenConns: List[String]): List[String] = match seenInsts {
+    case lnil => lnil
+    case lcons(i, restInsts) => match seenConns {
+        case lcons(c, restConns) =>
+            let is_inst = str_eq(i, instName);
+            match is_inst {
+                case true => lcons (c) (filterConns(instName, restInsts, restConns))
+                case false => filterConns(instName, restInsts, restConns)
+            }
+        case lnil => lnil
+    }
+}
+
+def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], seenConns: List[String]): List[String] = match exprs {
     case nil => lnil
     case cons(e, tail) => match e {
         case instance(instName, moduleName) =>
-            lcons ("  " + moduleName + " " + instName + " ();") (collectInstanceLinesTree tail)
+            let conns = filterConns(instName, seenInsts, seenConns);
+            let portStr = match conns {
+                case lnil => "()"
+                case _ => "(" + joinPortConns(conns) + ")"
+            };
+            lcons ("  " + moduleName + " " + instName + " " + portStr + ";") (collectInstHelp(tail, seenInsts, seenConns))
         case instanceWithPorts(instName, moduleName, ports) =>
-            lcons ("  " + moduleName + " " + instName + " (" + ports + ");") (collectInstanceLinesTree tail)
-        case _ => collectInstanceLinesTree tail
+            lcons ("  " + moduleName + " " + instName + " (" + ports + ");") (collectInstHelp(tail, seenInsts, seenConns))
+        case _ =>
+            let lhs = getAssignLhsExpr(e);
+            let is_ss = isSubSignal(lhs);
+            match is_ss {
+                case true =>
+                    let inst = getSubSignalInst(lhs);
+                    let port = getSubSignalPort(lhs);
+                    let rhs = getAssignRhsExpr(e);
+                    let conn = "." + port + "(" + exprVL(rhs) + ")";
+                    collectInstHelp(tail, lcons inst seenInsts, lcons conn seenConns)
+                case false => collectInstHelp(tail, seenInsts, seenConns)
+            }
     }
 }
+
+def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = collectInstHelp(exprs, lnil, lnil)
 
 // Generate Verilog for a single ModuleDef
 def moduleDefVL(md: ModuleDef): String =
