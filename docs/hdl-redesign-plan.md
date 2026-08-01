@@ -1,5 +1,15 @@
 # HDL Redesign Plan
 
+> **状态**: ✅ 已完成核心改造（2026-08）。
+> - `struct module` → `struct ModuleTree`（hdl-core.typort）
+> - 新建 `trait Module { def tree: ModuleTree }`
+> - `module` 宏改造成 scala-style `class`：`module Foo { ... }` 展开为
+>   `struct Foo { zz_tree: ModuleTree }` + `def Foo.create` + `impl Module for Foo`。
+>   不再返回 `ModuleTree` 类型，而是返回实现了 `Module` trait 的新类型。
+> - 使用方式：`moduleTreeVL(foo.create.tree)`
+> - 参数化模块：`module Foo[w: Nat] { ... }` → `Foo.create[8]`。
+> - 前置工作：class 功能补全（类体 `def` 方法、参数化类生成 struct + create）。
+
 ## 1. 类型改名
 
 ```

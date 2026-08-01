@@ -262,6 +262,10 @@ pub enum Decl {
         trait_params: Vec<Raw>,
         methods: Vec<(Decl, bool)>,
         need_create: bool,
+        /// Generated from a `class ... impl Trait` body: methods are filtered to
+        /// those declared by the trait during elaboration (extra methods are
+        /// inherited by the class's inherent impl instead).
+        from_class: bool,
     },
     Derive {
         traits: Vec<Span<SmolStr>>,
@@ -270,14 +274,15 @@ pub enum Decl {
     Class {
         name: Span<SmolStr>,
         params: Vec<(Span<SmolStr>, Raw, Icit)>,
-        items: Vec<ClassItem>,                     // ordered fields + statements
+        items: Vec<ClassItem>,                     // ordered fields + methods + statements
         traits: Vec<Span<SmolStr>>,                // impl Trait1, Trait2
     },
 }
 
-/// A single item in a class body: either a field (let binding) or a statement.
+/// A single item in a class body: a field (let binding), a method (def) or a statement.
 #[derive(Debug, Clone)]
 pub enum ClassItem {
     Field(Span<SmolStr>, Raw, Raw), // (name, type, value)
+    Method(Decl),                   // method definition (Decl::Def)
     Stmt(Raw),
 }

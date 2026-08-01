@@ -1447,6 +1447,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 trait_params: extra_params,
                 methods,
                 need_create,
+                from_class: false,
             }
         })
         .parse(input, state)
@@ -1938,7 +1939,8 @@ fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
 //  class declaration: parsing + expansion
 // ============================================================
 
-/// Parse a class body item: try `let name [: Type] = expr` first, fall back to p_raw.
+/// Parse a class body item: try `let name [: Type] = expr` (field), then
+/// `def` (method), and finally fall back to a raw statement.
 fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, ClassItem> {
     // Try field: let name [: Type] = expr  (no Cut → can fall back)
     match (
@@ -1954,8 +1956,16 @@ fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
             Ok((input, ClassItem::Field(name, ty, val)))
         }
         Err(_) => {
-            // Fall back to statement
-            p_raw(input, state).map(|(input, expr)| (input, ClassItem::Stmt(expr)))
+            // Try method: def name ... : Ret = body  (p_def consumes the `def` keyword)
+            match p_def.parse(input, state) {
+                Ok((input, decl)) => {
+                    Ok((input, ClassItem::Method(decl)))
+                }
+                Err(_) => {
+                    // Fall back to statement
+                    p_raw(input, state).map(|(input, expr)| (input, ClassItem::Stmt(expr)))
+                }
+            }
         }
     }
 }
@@ -1975,7 +1985,7 @@ fn p_class<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         (kw(ImplKeyword), smolstr(Ident).many0_sep(kw(T![,])))
             .option()
             .map(|x| x.map(|(_, v)| v).unwrap_or_default()),
-        brace(p_class_body_item.many0_sep((kw(T![;]).option(), kw(EndLine).many1()))),
+        brace(p_class_body_item.many0_sep((kw(T![;]).or(kw(EndLine))).many1())),
     ))
     .map(|(class_kw, name, params, traits, body)| {
         let items = body.and_then(|r| r.ok()).unwrap_or_default();
@@ -1995,33 +2005,38 @@ fn class_self_ty(name: &Span<SmolStr>, params: &[(Span<SmolStr>, Raw, Icit)]) ->
 }
 
 /// Expand a single `Decl::Class`.
-/// - Non-parameterized: struct (enum) + constructor def (Name.create) + trait impls
-/// - Parameterized: single def with original name (so `Name[args]` is a function call, not type application)
+/// Both parameterized and non-parameterized classes expand to:
+///   - a struct (enum) with the `let`-fields
+///   - a constructor def `Name.create[params]`
+///   - trait impls for each `impl Trait` in the header (class-body methods that
+///     match the trait's methods are attached; extras are kept in an inherent impl)
+///   - an inherent impl with the remaining class-body methods
 fn expand_one_class(
     name: Span<SmolStr>,
     params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
     traits: Vec<Span<SmolStr>>,
 ) -> Vec<Decl> {
-    if params.is_empty() {
-        expand_class_as_struct(name, items, traits)
-    } else {
-        expand_class_as_fn(name, params, items)
-    }
+    expand_class_as_struct(name, params, items, traits)
 }
 
-/// Non-parameterized class → enum (struct) + def Name.create + trait impls
+/// class → enum (struct) + def Name.create + trait impls + inherent impl
 fn expand_class_as_struct(
     name: Span<SmolStr>,
+    params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
     traits: Vec<Span<SmolStr>>,
 ) -> Vec<Decl> {
     let mut result = vec![];
 
-    // Collect fields for struct definition
+    // Collect fields and methods
     let fields: Vec<_> = items.iter().filter_map(|item| match item {
         ClassItem::Field(n, t, _) => Some((n.clone(), t.clone())),
-        ClassItem::Stmt(_) => None,
+        _ => None,
+    }).collect();
+    let methods: Vec<Decl> = items.iter().filter_map(|item| match item {
+        ClassItem::Method(d) => Some(d.clone()),
+        _ => None,
     }).collect();
 
     // ── 1. struct (Decl::Enum with single constructor) ──
@@ -2032,11 +2047,12 @@ fn expand_class_as_struct(
     result.push(Decl::Enum {
         is_trait: false,
         name: name.clone(),
-        params: vec![],
+        params: params.clone(),
         cases: vec![(mk_name, struct_fields, None)],
     });
 
     // ── 2. constructor function ──
+    let self_ty = class_self_ty(&name, &params);
     let mut mk_expr = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
     for (field_name, _) in fields.iter() {
         mk_expr = Raw::App(
@@ -2057,6 +2073,7 @@ fn expand_class_as_struct(
                     Box::new(ctor),
                 );
             }
+            ClassItem::Method(_) => {}
             ClassItem::Stmt(expr) => {
                 ctor = Raw::Let(
                     empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
@@ -2068,84 +2085,44 @@ fn expand_class_as_struct(
             }
         }
     }
-    let ret_type = class_self_ty(&name, &[]);
+    let ret_type = self_ty.clone();
     let ctor_name = name.clone().map(|n| SmolStr::new(format!("{n}.create")));
     result.push(Decl::Def {
         name: ctor_name,
-        params: vec![],
+        params: params.clone(),
         ret_type,
         body: ctor,
     });
 
-    // ── 3. trait impls ──
+    let class_methods: Vec<(Decl, bool)> = methods.iter().map(|d| (d.clone(), false)).collect();
+
+    // ── 3. trait impls (from the `impl Trait1, Trait2` header) ──
     for trait_name in traits {
         result.push(Decl::ImplDecl {
-            name: class_self_ty(&name, &[]),
-            params: vec![],
+            name: self_ty.clone(),
+            params: params.clone(),
             trait_name,
             trait_params: vec![],
-            methods: vec![],
+            methods: class_methods.clone(),
             need_create: false,
+            from_class: true,
+        });
+    }
+
+    // ── 4. inherent impl with the remaining methods (classes without a matching trait) ──
+    if !class_methods.is_empty() {
+        result.push(Decl::ImplDecl {
+            name: self_ty.clone(),
+            params: params.clone(),
+            trait_name: empty_span(SmolStr::new(format!("$trait_name${}", name.data))),
+            trait_params: vec![],
+            methods: class_methods,
+            need_create: true,
+            from_class: false,
         });
     }
 
     result
-}
-
-/// Parameterized class → def Name[params]: _ = body
-/// The body chains all items as let bindings; the last statement becomes the return value.
-/// This ensures `Name[args]` is a function call producing a value, not a type application.
-fn expand_class_as_fn(
-    name: Span<SmolStr>,
-    params: Vec<(Span<SmolStr>, Raw, Icit)>,
-    items: Vec<ClassItem>,
-) -> Vec<Decl> {
-    // The last Stmt is the return expression; everything before it becomes let bindings.
-    let last_stmt_idx = items.iter().rposition(|item| matches!(item, ClassItem::Stmt(_)));
-
-    let base = match last_stmt_idx {
-        Some(idx) => match &items[idx] {
-            ClassItem::Stmt(expr) => expr.clone(),
-            _ => unreachable!(),
-        },
-        None => match items.last() {
-            Some(ClassItem::Field(_, _, val)) => val.clone(),
-            _ => Raw::Hole(name.end_span()),
-        },
-    };
-
-    // Chain preceding items as let bindings (reverse to preserve order)
-    let mut body = base;
-    let mut stmt_idx = 0usize;
-    let end = last_stmt_idx.unwrap_or(items.len());
-    for item in items[..end].iter().rev() {
-        match item {
-            ClassItem::Field(field_name, field_type, field_value) => {
-                body = Raw::Let(
-                    field_name.clone(),
-                    Box::new(field_type.clone()),
-                    Box::new(field_value.clone()),
-                    Box::new(body),
-                );
-            }
-            ClassItem::Stmt(expr) => {
-                body = Raw::Let(
-                    empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
-                    Box::new(Raw::Hole(empty_span(()))),
-                    Box::new(expr.clone()),
-                    Box::new(body),
-                );
-                stmt_idx += 1;
-            }
-        }
-    }
-
-    vec![Decl::Def {
-        name,
-        params,
-        ret_type: Raw::Hole(empty_span(())),
-        body,
-    }]
 }
 
 /// Expand all `Decl::Class` items in the declaration list.

@@ -613,15 +613,17 @@ def collectModuleVLs[n: Nat](data: Vec[ModuleDef] n): List[String] = match data 
 }
 
 // Generate Verilog for all modules in the design (multi-module hierarchical output)
-def allModulesVL(m: module): String =
-    let ls = list_reverse(collectModuleVLs m.data);
+// Takes a ModuleTree (obtained via `m.tree` on a module value implementing `Module`).
+def allModulesVL(t: ModuleTree): String =
+    let ls = list_reverse(collectModuleVLs t.data);
     match ls {
         case lnil => ""
         case _ => joinLines(ls) + "\n"
     }
 
 // Alias: moduleTreeVL is the public API expected by test/legacy_tests
-// Extracts the first ModuleDef from a module struct and generates Verilog.
-def moduleTreeVL(m: module): String =
-    let mod_def = headModuleDef(m.data);
+// Extracts the first ModuleDef from a module tree and generates Verilog.
+// Usage: moduleTreeVL(myModule.create.tree)
+def moduleTreeVL(t: ModuleTree): String =
+    let mod_def = headModuleDef(t.data);
     moduleDefVL(mod_def)

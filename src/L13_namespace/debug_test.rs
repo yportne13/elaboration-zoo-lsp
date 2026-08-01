@@ -5,7 +5,7 @@ fn debug_module_simple() {
     let input = r#"module Test {
     let sel = UInt[4]
 }
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {

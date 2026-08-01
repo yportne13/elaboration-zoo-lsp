@@ -41,13 +41,14 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             }).collect(),
             assoc_defaults,
         },
-        Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => Decl::ImplDecl {
+        Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create, from_class } => Decl::ImplDecl {
             name,
             params,
             trait_name,
             trait_params,
             methods: methods.into_iter().map(|(m, is_static)| (prefix_decl_name(m, prefix), is_static)).collect(),
             need_create,
+            from_class,
         },
         Decl::Package { path } => Decl::Package {
             path: path.into_iter().map(|s| s.map(|n| SmolStr::new(format!("{prefix}.{n}")))).collect(),
@@ -886,7 +887,7 @@ impl Infer {
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
             }
-            Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create } => {
+            Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create, from_class } => {
                 let span = name.to_span();
                 let mut cxt = cxt.clone();
                 if need_create {
@@ -976,6 +977,14 @@ impl Infer {
                     // Fill in missing methods with default bodies from the trait definition
                     let mut methods = methods;
                     if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
+                        // For class-generated impls, drop methods the trait does not declare;
+                        // those are kept in the class's inherent impl instead.
+                        if from_class {
+                            methods.retain(|(decl, _)| match decl {
+                                Decl::Def { name, .. } => trait_methods.iter().any(|(tm, _, _, _)| tm.data == name.data),
+                                _ => false,
+                            });
+                        }
                         for (tm_name, tm_params, tm_ret, tm_default_body) in trait_methods {
                             let has_impl = methods.iter().any(|(decl, _)| match decl {
                                 Decl::Def { name, .. } => name.data == tm_name.data,

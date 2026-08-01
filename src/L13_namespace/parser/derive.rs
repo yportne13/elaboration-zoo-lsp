@@ -273,6 +273,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     body: bundle_body,
                 }, false)],
                 need_create: false,
+                from_class: false,
             };
 
             // ── 2. Into[Self] for Self (so Expr macro's lhs := rhs works) ──
@@ -288,6 +289,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     body: Raw::Var(empty_span(SmolStr::new("this"))),
                 }, false)],
                 need_create: false,
+                from_class: false,
             };
 
             let mut result = vec![bundle_impl, into_impl];
@@ -355,6 +357,7 @@ fn derive_show(decl: &Decl) -> Vec<Decl> {
                     body,
                 }, false)],
                 need_create: true,
+                from_class: false,
             }]
         }
         _ => vec![],

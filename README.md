@@ -47,7 +47,7 @@ module adder[w: Nat] {
     sum := a +^ b
 }
 
-println(moduleTreeVL(adder[8]))
+println(moduleTreeVL(adder.create[8].tree))
 ```
 
 ### LSP Server

@@ -978,7 +978,7 @@ module Test[w: Nat] {
     not_result := ~a
 }
 
-println(moduleTreeVL(Test[8]))
+println(moduleTreeVL(Test.create[8].tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1001,7 +1001,7 @@ module Test[w: Nat] {
     eq := a === b
 }
 
-println(moduleTreeVL(Test[8]))
+println(moduleTreeVL(Test.create[8].tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => println!("{}", output),
@@ -1019,7 +1019,7 @@ module Test[w: Nat] {
     result := a + b
 }
 
-println(moduleTreeVL(Test[8]))
+println(moduleTreeVL(Test.create[8].tree))
 
 module adderNat {
     input a = UInt[8]
@@ -1027,7 +1027,7 @@ module adderNat {
     result := a + 42
 }
 
-println(moduleTreeVL(adderNat))
+println(moduleTreeVL(adderNat.create.tree))
 
 "#;
     match run_with_prelude(input) {
@@ -1113,7 +1113,7 @@ module Test {
     c := sum
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1137,7 +1137,7 @@ module Test {
     sum := a + b
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1328,7 +1328,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1350,7 +1350,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1371,7 +1371,7 @@ module Test {
     a := a ^ b
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1391,7 +1391,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1418,7 +1418,7 @@ module Test {
     c := c ^ d
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1442,7 +1442,7 @@ module Test {
     b := b + 2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1465,7 +1465,7 @@ module Test {
     a := a + 1
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1492,7 +1492,7 @@ module Test {
     }
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1526,7 +1526,7 @@ module Test {
     xor := a ^ b
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1549,7 +1549,7 @@ module Test {
     b := a.resize[8]
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1580,7 +1580,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1621,7 +1621,7 @@ module Test {
     outer1 := outer2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1652,7 +1652,7 @@ module Test {
     master := slave
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1689,7 +1689,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1713,7 +1713,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1740,7 +1740,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1767,7 +1767,7 @@ module Test {
     bus1 := bus2
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1882,7 +1882,7 @@ module Test {
     let result = UInt[4]
     switch sel { is a { result := a } default { result := c } }
 }
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1914,7 +1914,7 @@ module Test {
     s_hi := s.slice[15, 8]
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1940,7 +1940,7 @@ module Test {
     bit := a[7]
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1962,7 +1962,7 @@ module Test {
     t[7] := x
 }
 
-	println(moduleTreeVL(Test))
+	println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -1997,7 +1997,7 @@ module Test {
     a.slice[3, 0] := b
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2016,7 +2016,7 @@ module Test {
     a.slice[3, 0] := 5
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2039,7 +2039,7 @@ module Test {
     }
 }
 
-println(moduleTreeVL(Test))
+println(moduleTreeVL(Test.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2068,7 +2068,7 @@ module Top {
     let inst = mkInstancePorts("myAdder", "MyAdder", ".a(a), .b(b), .sum(adder_sum)")
 }
 
-println(moduleTreeVL(Top))
+println(moduleTreeVL(Top.create.tree))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -3131,5 +3131,120 @@ println (test (cons(true, nil)))
                 panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset);
             }
         }
+    }
+}
+
+// ============================================================
+// Scala-style class: fields, methods, trait impls
+// ============================================================
+
+#[test]
+fn test_class_fields_and_methods() {
+    let input = r#"
+class Point {
+    let x: Nat = succ zero
+    let y: Nat = succ (succ zero)
+    def sum: Nat = this.x + this.y
+}
+
+println (Point.create.sum)
+println (Point.create.x)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            let lines: Vec<&str> = output.trim().lines().collect();
+            assert!(lines.iter().any(|l| l.trim() == "3"), "sum should be 3, got: {}", output);
+            assert!(lines.iter().any(|l| l.trim() == "1"), "x should be 1, got: {}", output);
+        }
+        Err(e) => panic!("class fields/methods FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_class_trait_impl_method() {
+    let input = r#"
+trait Named {
+    def name: String
+}
+
+class Foo impl Named {
+    let zz_name: String = "foo"
+    def name: String = this.zz_name
+}
+
+println (Foo.create.name)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            assert!(output.contains("foo"), "trait method should return field, got: {}", output);
+        }
+        Err(e) => panic!("class trait impl FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_param_class_trait_impl() {
+    let input = r#"
+trait Named {
+    def name: Nat
+}
+
+class Adder[w: Nat] impl Named {
+    let zz_name: Nat = w + 1
+    def name: Nat = this.zz_name
+}
+
+println (Adder.create[5].name)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            assert!(output.contains("6"), "name should be w+1 = 6, got: {}", output);
+        }
+        Err(e) => panic!("param class trait impl FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// ============================================================
+// module macro returns a new type implementing `Module`
+// ============================================================
+
+#[test]
+fn test_module_new_type_impl_module() {
+    let input = r#"
+module myModule {
+    input a = UInt[8]
+    output result = UInt[8]
+    result := a + 1
+}
+println (moduleTreeVL(myModule.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            assert!(output.contains("module myModule"), "missing module header: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            assert!(output.contains("input wire"), "missing port decl: {}", output);
+            assert!(output.contains("assign result"), "missing assign: {}", output);
+        }
+        Err(e) => panic!("module new type FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_module_param_new_type_impl_module() {
+    let input = r#"
+module paramMod[w: Nat] {
+    input a = UInt[w]
+    output result = UInt[w + 1]
+    result := a +^ a
+}
+println (moduleTreeVL(paramMod.create[4].tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            assert!(output.contains("module paramMod"), "missing module header: {}", output);
+            assert!(output.contains("endmodule"), "missing endmodule: {}", output);
+            assert!(output.contains("[4:0]"), "output width should be w+1=5: {}", output);
+        }
+        Err(e) => panic!("param module new type FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }

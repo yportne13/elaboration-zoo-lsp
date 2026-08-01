@@ -11,9 +11,9 @@ module simpleALU {
     result := a + b
 }
 
-def mod1 = simpleALU()
+def mod1 = simpleALU.create
 println("=== Simple ALU (UInt + UInt) ===")
-println(moduleTreeVL(mod1))
+println(moduleTreeVL(mod1.tree))
 
 // --- Example 2: UInt + Nat (via Into trait) ---
 // UInt[8] + 42: Nat is auto-converted to UInt[8] via Into[UInt[8]]
@@ -24,6 +24,6 @@ module adderNat {
     result := a + 42
 }
 
-def mod2 = adderNat()
+def mod2 = adderNat.create
 println("=== UInt + Nat (via Into) ===")
-println(moduleTreeVL(mod2))
+println(moduleTreeVL(mod2.tree))

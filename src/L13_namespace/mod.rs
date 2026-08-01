@@ -1,4 +1,4 @@
-﻿use colored::Colorize;
+use colored::Colorize;
 use cxt::Cxt;
 use parser::{syntax::{Either, Icit, Raw}, IError};
 use pattern_match::Compiler;
@@ -2833,7 +2833,7 @@ module Adder {
     output sum = UInt[8]
     sum := a + b
 }
-println (moduleTreeVL Adder)
+println (moduleTreeVL Adder.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2866,7 +2866,7 @@ module Test {
         c := a - b
     }
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2903,7 +2903,7 @@ module Test[w: Nat] {
         c := a - b
     }
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create[8].tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2935,7 +2935,7 @@ module Test {
         result := a
     }
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2964,7 +2964,7 @@ module Test {
         a := a
     }
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -2990,7 +2990,7 @@ module NatTest {
     result := 7
     zero_check := a.eqNat(0)
 }
-println (moduleTreeVL NatTest)
+println (moduleTreeVL NatTest.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -3021,7 +3021,7 @@ module Test {
         }
     }
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -3060,7 +3060,7 @@ module Test {
         }
     }
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -3297,7 +3297,7 @@ module Test[w: Nat] {
     output sum = UInt[w]
     sum := 42
 }
-println (moduleTreeVL Test[8])
+println (moduleTreeVL Test.create[8].tree)
 "#;
     let output = mk_multi_into_test(input);
     assert!(output.contains("assign sum = 42"), "expected 42 assign, got: {}", output);
@@ -3357,7 +3357,7 @@ module Test {
     output x = UInt[8]
     x := 42
 }
-println (moduleTreeVL Test)
+println (moduleTreeVL Test.create.tree)
 "#;
     let output = mk_multi_into_test(input);
     assert!(output.contains("assign x = 42"), "expected assign, got: {}", output);
@@ -3382,7 +3382,7 @@ module Test[w: Nat] {
     output b = UInt[w]
     b := a
 }
-println (moduleTreeVL Test[8])
+println (moduleTreeVL Test.create[8].tree)
 "#;
     let output = mk_multi_into_test(input);
     assert!(output.contains("endmodule"), "expected endmodule, got: {}", output);
@@ -3450,7 +3450,7 @@ module Adder {
     input a = UInt[8]
     sum := a + + b
 }
-println (moduleTreeVL Adder)
+println (moduleTreeVL Adder.create.tree)
 "#;
     match run_with_prelude(input) {
         Ok(output) => {

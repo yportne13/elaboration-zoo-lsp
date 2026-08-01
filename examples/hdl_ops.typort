@@ -15,7 +15,7 @@ module bitExtract {
     bit7 := a.apply[7]
 }
 println("=== Example 1: Bit extraction via apply[N] ===")
-println(moduleTreeVL(bitExtract))
+println(moduleTreeVL(bitExtract.create.tree))
 
 // ============================================================
 // Example 2: Bracket sugar a[N] (desugars to a.apply[N])
@@ -28,7 +28,7 @@ module bracketSugar {
     msb := a[7]
 }
 println("=== Example 2: Bracket sugar a[N] ===")
-println(moduleTreeVL(bracketSugar))
+println(moduleTreeVL(bracketSugar.create.tree))
 
 // ============================================================
 // Example 3: Range extraction via slice[hi, lo]
@@ -42,7 +42,7 @@ module sliceExample {
     high_nibble := a.slice[7, 4]
 }
 println("=== Example 3: Range extraction via slice[hi, lo] ===")
-println(moduleTreeVL(sliceExample))
+println(moduleTreeVL(sliceExample.create.tree))
 
 // ============================================================
 // Example 4: Bool logic operators (&&, ||, !, ^)
@@ -60,7 +60,7 @@ module boolOps {
     xor_result := a ^ b
 }
 println("=== Example 4: Bool operators (&&, ||, !, ^) ===")
-println(moduleTreeVL(boolOps))
+println(moduleTreeVL(boolOps.create.tree))
 
 // ============================================================
 // Example 5: LHS bit selection — assign to individual bits
@@ -73,7 +73,7 @@ module lhsBitsel {
     t[7] := x
 }
 println("=== Example 5: LHS bit selection t[N] := x ===")
-println(moduleTreeVL(lhsBitsel))
+println(moduleTreeVL(lhsBitsel.create.tree))
 
 // ============================================================
 // Example 6: Combining apply, slice, and comparisons
@@ -89,7 +89,7 @@ module comparator {
     eq := a === b
 }
 println("=== Example 6: Comparator with bit extraction ===")
-println(moduleTreeVL(comparator))
+println(moduleTreeVL(comparator.create.tree))
 
 // ============================================================
 // Example 7: Sub-module instantiation
@@ -105,11 +105,11 @@ module myAdder[w: Nat] {
 module topWithAdder {
     input a = UInt[8]
     input b = UInt[8]
-    let _adder = myAdder[8]
+    let _adder = myAdder.create[8]
     let inst = mkInstance("u_adder", "myAdder")
 }
 println("=== Example 7: Sub-module instantiation ===")
-println(moduleTreeVL(topWithAdder))
+println(moduleTreeVL(topWithAdder.create.tree))
 
 // ============================================================
 // Example 8: Bit concatenation (##) — SpinalHDL style
@@ -130,4 +130,4 @@ module concatExample {
     cat_ub := x ## b
 }
 println("=== Example 8: Bit concatenation (##) ===")
-println(moduleTreeVL(concatExample))
+println(moduleTreeVL(concatExample.create.tree))

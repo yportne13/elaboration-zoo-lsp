@@ -121,21 +121,27 @@ struct ModuleDef {
     expr: Vec[Expr] expr_num
 }
 
-struct module {
+struct ModuleTree {
     num: Nat
     data: Vec[ModuleDef] num
 }
 
-impl module {
-    def insert(m: ModuleDef): module = module.mk(this.num + 1, m :: this.data)
+// Trait implemented by every `module`-generated struct. The `tree` method is
+// provided by the module macro (a class body method reading the `zz_tree` field).
+trait Module {
+    def tree: ModuleTree
+}
+
+impl ModuleTree {
+    def insert(m: ModuleDef): ModuleTree = ModuleTree.mk(this.num + 1, m :: this.data)
 }
 
 // Generic helper: add an expression to the first module (or create one if none exists)
-def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): module = match data {
-    case nil => module.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
+def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): ModuleTree = match data {
+    case nil => ModuleTree.mk(0 + 1, ModuleDef.mk(name, 0 + 1, e :: nil) :: nil)
     case cons(head, tail) =>
         let new_module = ModuleDef.mk(head.name, head.expr_num + 1, e :: head.expr);
-        module.mk(num, new_module :: tail)
+        ModuleTree.mk(num, new_module :: tail)
 }
 
 // ---------- When context tracking ----------
@@ -202,46 +208,46 @@ def addWhenContext(e: Expr): Expr =
 def createSignalExpr(name: String, e: Expr): Expr =
     match e {
         case create(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createIn(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createOut(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createInWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createOutWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createReg(_) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createRegWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createRegWidthInit(_, _, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntInWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntOutWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntRegWidth(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntRegWidthInit(_, _, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case literal(_) =>
             e
@@ -252,16 +258,16 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case partsel(_, _, _) =>
             e
         case instance(_, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, "", e));
             e
         case instanceWithPorts(_, _, _) =>
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", e));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, "", e));
             e
         case subSignal(_, _) =>
             e
         case _ =>
             let wrapped = addWhenContext(e);
-            let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
             e
     }
 
@@ -329,7 +335,7 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
 def addSignalAssignment(lhs: Expr, rhs: Expr): Unit =
     let assignment = assign(lhs, rhs);
     let wrapped = addWhenContext(assignment);
-    let d = change_mutable("module", x => addExprToModuleHelper(x.num, x.data, "", wrapped));
+    let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, "", wrapped));
     unit
 
 // Create a sub-module instance in the current module.
