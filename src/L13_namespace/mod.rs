@@ -1044,10 +1044,18 @@ impl Infer {
             },
             Val::Call(name, args, body) => {
                 let bf = self.force(decl, body);
-                if Rc::ptr_eq(&bf, body) {
-                    t.clone()
+                // Also force the display args so comparisons (e.g. the unify
+                // fast path) and pretty-printing see normalized values.
+                let new_args = args.map(|(v, i)| (self.force(decl, v), *i));
+                let changed = !Rc::ptr_eq(&bf, body)
+                    || args
+                        .iter()
+                        .zip(new_args.iter())
+                        .any(|((v, _), (vf, _))| !Rc::ptr_eq(v, vf));
+                if changed {
+                    Val::Call(name.clone(), new_args, bf).into()
                 } else {
-                    Val::Call(name.clone(), args.clone(), bf).into()
+                    t.clone()
                 }
             },
             Val::Decl(x, sp) => {
