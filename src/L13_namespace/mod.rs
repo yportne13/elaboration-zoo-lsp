@@ -170,7 +170,12 @@ impl PatternDetail {
     }
     fn bind_cxt(&self, cxt: &Cxt) -> Cxt {
         match self {
-            PatternDetail::Any(_, _, _) => cxt.clone(),
+            // A wildcard also occupies a de Bruijn slot at runtime (see
+            // `bind_count`), so bind a dummy here to keep cxt.lvl consistent
+            // with the level used by `bind_count` at the call site.
+            PatternDetail::Any(_, _, _) => {
+                cxt.bind(empty_span(SmolStr::new("")), Tm::U(0).into(), Val::U(0).into())
+            }
             PatternDetail::Bind(name) => cxt.bind(name.clone(), Tm::U(0).into(), Val::U(0).into()),
             PatternDetail::Con(_, _, pattern_details) => {
                 pattern_details
