@@ -22,6 +22,22 @@ pub struct PartialRenaming {
     pub ren: Rc<HashMap<u32, Lvl>>,
 }
 
+/// Whether `v_app` can be called on this value without panicking.
+/// Match/Call are included: a stuck match applied to an argument stays stuck
+/// (see `Infer::v_app`), so eta-expansion against a lambda can proceed.
+fn is_appliable(v: &Val) -> bool {
+    matches!(
+        v,
+        Val::Lam(..)
+            | Val::Flex(..)
+            | Val::Rigid(..)
+            | Val::Decl(..)
+            | Val::Obj(..)
+            | Val::Call(..)
+            | Val::Match(..)
+    )
+}
+
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
     let mut new_ren = pr.ren.clone();
     Rc::make_mut(&mut new_ren).insert(pr.cod.0, pr.dom);
@@ -803,14 +819,16 @@ impl Infer {
                 &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
                 fuel,
             ),
-            (_, Val::Lam(_, i, t_prime)) => self.unify(
+            // Eta-expansion of the non-lambda side requires it to be a
+            // function-like value; otherwise `v_app` would panic on e.g. a Sum.
+            (_, Val::Lam(_, i, t_prime)) if is_appliable(t.as_ref()) => self.unify(
                 l + 1,
                 cxt,
                 &self.v_app(&cxt.decl, &t, Val::vvar(l).into(), *i),
                 &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
                 fuel,
             ),
-            (Val::Lam(_, i, t), _) => self.unify(
+            (Val::Lam(_, i, t), _) if is_appliable(u.as_ref()) => self.unify(
                 l + 1,
                 cxt,
                 &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),

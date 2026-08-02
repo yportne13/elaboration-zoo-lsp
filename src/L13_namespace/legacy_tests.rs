@@ -2013,6 +2013,36 @@ def bad(x: Nat): Eq (f x) x = rfl
 }
 
 #[test]
+fn test_stuck_match_application_does_not_panic() {
+    // Regression for `v_app` panicking on a stuck match:
+    // `(match x { ... }) arg` with a rigid `x` must stay stuck, not crash.
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def t(x: Nat): Nat =
+    (match x {
+        case zero => y => y
+        case succ(n) => y => y
+    }) 1
+
+println(t)
+"#;
+    match run(input, 0) {
+        Ok(output) => {
+            assert!(
+                output.contains("match"),
+                "expected a stuck match in the output, got: {:?}",
+                output
+            );
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_hdl_switch_case() {
     let input = r#"
 module Test {

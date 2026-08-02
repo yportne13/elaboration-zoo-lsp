@@ -1144,6 +1144,20 @@ impl Infer {
             },
             Val::Obj(x, name, sp) => Val::Obj(x.clone(), name.clone(), sp.prepend((u, i))).into(),
             Val::Call(name, args, body) => Val::Call(name.clone(), args.prepend((u.clone(), i)), self.v_app(decl, body, u, i)).into(),
+            // A stuck match applied to an argument stays stuck; once the
+            // scrutinee reduces, exactly one branch fires, so splicing the
+            // application into every branch body is semantics-preserving.
+            // (Previously this fell into `panic!("impossible apply")`, which
+            // was user-triggerable on `(match x { ... }) arg` with a rigid x.)
+            Val::Match(val, env, cases) => {
+                let l = Lvl(env.len() as u32);
+                let u_tm = self.quote(decl, l, &u);
+                let new_cases = cases
+                    .iter()
+                    .map(|(p, b)| (p.clone(), Tm::App(b.clone(), u_tm.clone(), i).into()))
+                    .collect();
+                Val::Match(val.clone(), env.clone(), new_cases).into()
+            },
             x => panic!("impossible apply\n  {:?}\nto\n  {:?}", x, u),
         }
     }
