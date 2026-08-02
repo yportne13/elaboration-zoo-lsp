@@ -1,20 +1,21 @@
 {
 	"name": "client",
-	"description": "The language client",
-	"author": "Microsoft Corporation",
+	"description": "The TyportHDL language client",
+	"author": "TyportHDL contributors",
 	"license": "MIT",
 	"version": "0.1.0",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/Microsoft/vscode-extension-samples"
+		"url": "https://github.com/yportne13/elaboration-zoo-lsp"
 	},
-	"publisher": "vscode-samples",
+	"publisher": "TyportHDL",
 	"categories": [],
 	"keywords": [
-		"WASM",
-		"Component Model",
 		"LSP",
-		"Language Server"
+		"Language Server",
+		"dependent types",
+		"HDL",
+		"Verilog"
 	],
 	"activationEvents": [
     	"onLanguage:typort"
@@ -25,19 +26,6 @@
 	"main": "./dist/desktop/extension",
 	"browser": "./dist/web/extension",
 	"contributes": {
-		"configuration": [
-			{
-				"title": "TyportHDL Language Server",
-				"properties": {
-					"typort-hdl.typort-lsp-Binary.path": {
-						"scope": "window",
-						"type": "string",
-						"default": "typort-lsp",
-						"markdownDescription": "Specify typort-lsp binary path."
-					}
-				}
-			}
-		],
 		"languages": [
 			{
 				"id": "typort",

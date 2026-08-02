@@ -1,7 +1,7 @@
 {
 	"name": "TyportHDL",
-	"description": "An example demonstrating how to implement a language server as a WebAssembly module.",
-	"author": "Microsoft Corporation",
+	"description": "VS Code extension for the Typort language: LSP-powered hover, completion, diagnostics and HDL code generation.",
+	"author": "TyportHDL contributors",
 	"license": "MIT",
 	"version": "1.0.0",
 	"repository": {
@@ -14,10 +14,11 @@
     	"onLanguage:typort"
   	],
 	"keywords": [
-		"WASM",
-		"Component Model",
 		"LSP",
-		"Language Server"
+		"Language Server",
+		"dependent types",
+		"HDL",
+		"Verilog"
 	],
 	"engines": {
 		"vscode": "^1.88.0"

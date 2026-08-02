@@ -71,9 +71,6 @@ async function startLanguageServer(context: ExtensionContext, wasm: Wasm): Promi
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [{ language: "typort" }],
 		outputChannel: channel,
-		synchronize: {
-			fileEvents: workspace.createFileSystemWatcher("**/.clientrc"),
-		},
 		uriConverters: createUriConverters(),
 	};
 
@@ -128,14 +125,6 @@ export async function activate(context: ExtensionContext) {
 			}
 		})
 	);
-
-	type CountFileParams = { folder: string };
-	const CountFilesRequest = new RequestType<CountFileParams, number, void>('wasm-language-server/countFiles');
-	context.subscriptions.push(commands.registerCommand('vscode-samples.wasm-language-server.countFiles', async () => {
-		const folder = workspace.workspaceFolders![0].uri;
-		const result = await client!.sendRequest(CountFilesRequest, { folder: client!.code2ProtocolConverter.asUri(folder) });
-		window.showInformationMessage(`The workspace contains ${result} files.`);
-	}));
 
 	// ── Expand macro ──────────────────────────────────────────────────────
 

@@ -1,10 +1,11 @@
 import 'vscode-languageclient/node';
-import { ExtensionContext, window, workspace, commands, StatusBarItem, StatusBarAlignment } from 'vscode';
+import { ExtensionContext, window, workspace, commands, StatusBarItem, StatusBarAlignment, LogOutputChannel } from 'vscode';
 import { LanguageClient, LanguageClientOptions, State } from 'vscode-languageclient/node';
 import { activate as activateWasm, deactivate as deactivateWasm } from './extension';
 
 let client: LanguageClient | undefined;
 let statusBarItem: StatusBarItem | undefined;
+let logChannel: LogOutputChannel | undefined;
 
 function updateStatusBar(state: State): void {
 	if (!statusBarItem) return;
@@ -45,8 +46,7 @@ export async function activate(context: ExtensionContext) {
 		if (pick.label.includes('Restart')) {
 			commands.executeCommand('typort-hdl.restartLanguageServer');
 		} else if (pick.label.includes('Log')) {
-			const channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
-			channel.show();
+			logChannel?.show();
 		}
 	}));
 
@@ -55,15 +55,12 @@ export async function activate(context: ExtensionContext) {
 
 	if (mode === 'cli') {
 		const command = config.get<string>('cli-server.path', '') || 'typort';
-		const channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
-		channel.appendLine(`Starting CLI language server: ${command} lsp`);
+		logChannel = window.createOutputChannel('TyportHDL Language Server', { log: true });
+		logChannel.appendLine(`Starting CLI language server: ${command} lsp`);
 
 		const clientOptions: LanguageClientOptions = {
 			documentSelector: [{ language: "typort" }],
-			outputChannel: channel,
-			synchronize: {
-				fileEvents: workspace.createFileSystemWatcher("**/.clientrc"),
-			},
+			outputChannel: logChannel,
 		};
 
 		updateStatusBar(State.Starting);
