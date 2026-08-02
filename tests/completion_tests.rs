@@ -14,8 +14,8 @@ use elaboration_zoo_lsp::L13_namespace::{
 // ---------------------------------------------------------------------------
 fn elaborate_with_prelude(input: &str) -> (Infer, String) {
     let mut infer = Infer::new();
-    // Omit natarith.typort + hdl-verilog.typort because they depend on
-    // `register_nat_to_dec` which is `pub(crate)` and inaccessible from tests.
+    // Omit hdl-verilog.typort because it depends on `register_nat_to_dec`
+    // which is `pub(crate)` and inaccessible from tests.
     let prelude_sources: &[(&str, &str)] = &[
         ("op.typort", include_str!("../src/prelude/core/op.typort")),
         ("eq.typort", include_str!("../src/prelude/core/eq.typort")),

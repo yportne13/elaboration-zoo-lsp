@@ -774,7 +774,6 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         include_str!("../prelude/core/op.typort"),
         include_str!("../prelude/core/eq.typort"),
         include_str!("../prelude/core/nat.typort"),
-        include_str!("../prelude/core/natarith.typort"),
         include_str!("../prelude/core/bool.typort"),
         include_str!("../prelude/data/option.typort"),
         include_str!("../prelude/data/result.typort"),

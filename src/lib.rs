@@ -231,11 +231,6 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             L13_namespace::cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
         }
         self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///natarith.typort").unwrap(),
-            text: include_str!("prelude/core/natarith.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
             uri: Url::parse("builtin:///bool.typort").unwrap(),
             text: include_str!("prelude/core/bool.typort"),
             version: None,
