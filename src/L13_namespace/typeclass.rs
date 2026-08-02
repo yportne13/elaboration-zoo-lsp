@@ -330,9 +330,18 @@ impl Synth {
             }
             (Val::LiteralType, Val::LiteralType) => true,
             (Val::Match(a1, b1, c1), Val::Match(a2, b2, c2)) => {
+                // The branch bodies must agree as well: comparing only the
+                // scrutinee and env length was unsound (two stuck matches of
+                // different functions on the same variable compared equal).
+                // Bodies of the same def occurrence share Rc pointers, so
+                // pointer equality is a sound "same source" test; patterns are
+                // compared structurally.
                 Self::vals_eq_ground_impl(a1, a2, visited)
                     && b1.len() == b2.len()
-                    //TODO:&& c1.iter().zip(c2.iter()).all(|()| )
+                    && c1.len() == c2.len()
+                    && c1.iter().zip(c2.iter()).all(|((p1, t1), (p2, t2))| {
+                        p1 == p2 && Rc::ptr_eq(t1, t2)
+                    })
             }
             (Val::Call(n1, args1, _), Val::Call(n2, args2, _)) => {
                 n1 == n2
