@@ -64,7 +64,9 @@ def int_mul(x: Int, y: Int): Int =
                     let p: Int = int_mul (ofNat a) y;
                     int_add y p
             }
-        case negSucc(_) => ofNat(zero)
+        case negSucc(a) =>
+            // -(a+1) * y = -((a+1) * y)
+            int_neg (int_mul (ofNat (succ a)) y)
     }
 
 // === 转换 ===
@@ -99,6 +101,10 @@ impl Add[Int, Int] for Int {
 
 impl Sub[Int, Int] for Int {
     def -(that: Int): Int = int_sub this that
+}
+
+impl Mul[Int, Int] for Int {
+    def *(that: Int): Int = int_mul this that
 }
 
 impl Into[Int] for Nat {
