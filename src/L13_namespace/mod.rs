@@ -381,6 +381,10 @@ pub struct Infer {
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
+    /// Inlay hints: (byte offset of insertion point, ": <type>" label).
+    /// Populated for `def` without explicit return type and `let` without type
+    /// annotation; consumed by the LSP `textDocument/inlayHint` request.
+    pub inlay_hint_table: Vec<(u32, String)>,
     /// Accumulated type errors from pattern match branches, reported as
     /// separate LSP diagnostics so each branch error gets its own red squiggle.
     pub accumulated_errors: Vec<Error>,
@@ -399,6 +403,7 @@ impl Clone for Infer {
             mutable_map: self.mutable_map.clone(),
             hover_table: self.hover_table.clone(),
             completion_table: self.completion_table.clone(),
+            inlay_hint_table: self.inlay_hint_table.clone(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -678,6 +683,7 @@ impl Infer {
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
+            inlay_hint_table: vec![],
             accumulated_errors: vec![],
         }
     }
@@ -4987,4 +4993,51 @@ println h.show
         }
         Err(e) => panic!("ERROR: {}", e.0.data),
     }
+}
+
+#[test]
+fn test_inlay_hint_table() {
+    // inlay hint：def 未写返回类型 → 显示推断返回类型；let 未写注解 → 显示值类型。
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let prelude = &[
+        include_str!("../prelude/core/op.typort"),
+        include_str!("../prelude/core/eq.typort"),
+        include_str!("../prelude/core/nat.typort"),
+    ];
+    let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
+    for p in prelude {
+        if let Some((decls, _, new_exports, _)) = parser::parser_with_macros(&preprocess(p), 0, &global_macros) {
+            for (name, rules) in new_exports {
+                global_macros.insert(name, rules);
+            }
+            for tm in decls {
+                let (_, _, new_cxt) = infer.infer(&cxt, tm.clone()).unwrap();
+                cxt = new_cxt;
+            }
+        }
+    }
+    let input = r#"
+def add_one(x: Nat): Nat = succ x
+def dbl(x: Nat) = x + x
+def g = succ zero
+def with_let(x: Nat) = let y = succ x; y
+"#;
+    if let Some((decls, _, _, _)) = parser::parser_with_macros(&preprocess(input), 1, &global_macros) {
+        for tm in decls {
+            let (_, _, new_cxt) = infer.infer(&cxt, tm.clone()).unwrap();
+            cxt = new_cxt;
+        }
+    }
+    println!("inlay hints: {:?}", infer.inlay_hint_table);
+    let labels: Vec<String> = infer.inlay_hint_table.iter().map(|(_, s)| s.clone()).collect();
+    // add_one 写了返回类型 → 不提示
+    assert!(!labels.iter().any(|l| l.starts_with(": (x: Nat)")),
+        "add_one 有显式返回类型，不应有 hint: {:?}", labels);
+    // dbl 与 g 未写返回类型 → 提示 : Nat
+    assert!(labels.iter().filter(|l| l.as_str() == ": Nat").count() >= 2,
+        "dbl 与 g 应各有一条 : Nat hint，实际 {:?}", labels);
+    // 无注解 let → 提示 : Nat
+    assert!(labels.iter().any(|l| l.as_str() == ": Nat"),
+        "with_let 的 let y 应有 : Nat hint，实际 {:?}", labels);
 }

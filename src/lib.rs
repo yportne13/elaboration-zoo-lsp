@@ -353,6 +353,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.infer.lock().unwrap().hover_table.shrink_to_fit();
         self.infer.lock().unwrap().completion_table.clear();
         self.infer.lock().unwrap().completion_table.shrink_to_fit();
+        self.infer.lock().unwrap().inlay_hint_table.clear();
+        self.infer.lock().unwrap().inlay_hint_table.shrink_to_fit();
         self.infer.lock().unwrap().mutable_map.write().unwrap().clear();
     }
 
@@ -497,6 +499,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             infer.hover_table.shrink_to_fit();
             infer.completion_table.clear();
             infer.completion_table.shrink_to_fit();
+            infer.inlay_hint_table.clear();
+            infer.inlay_hint_table.shrink_to_fit();
             infer.shrink();
             infer.mutable_map.write().unwrap().clear();
             let mut diags = Vec::new();
@@ -577,6 +581,7 @@ impl LanguageServer for Backend<Client> {
                     },
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                inlay_hint_provider: Some(OneOf::Left(true)),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(vec![".".to_string()]),
@@ -748,6 +753,30 @@ impl LanguageServer for Backend<Client> {
                 })
         };
          Ok(hover())
+    }
+
+    fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let uri = normalize_builtin_uri(&params.text_document.uri);
+        let hints = || -> Option<Vec<InlayHint>> {
+            let infer = self.hover_table.get(uri.as_str())?;
+            let rope = self.document_map.get(uri.as_str())?;
+            let mut ret = Vec::new();
+            for (offset, label) in &infer.inlay_hint_table {
+                let position = offset_to_position(*offset as usize, &rope)?;
+                ret.push(InlayHint {
+                    position,
+                    label: InlayHintLabel::String(label.clone()),
+                    kind: Some(InlayHintKind::TYPE),
+                    text_edits: None,
+                    tooltip: None,
+                    padding_left: Some(true),
+                    padding_right: None,
+                    data: None,
+                });
+            }
+            Some(ret)
+        }();
+        Ok(hints)
     }
 
     fn goto_definition(

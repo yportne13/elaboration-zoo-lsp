@@ -68,6 +68,36 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
 }
 
 impl Infer {
+    /// Peel the leading Π-layers of `vtyp`, returning the codomain (return type)
+    /// together with the quote level that resolves the fresh rigids introduced
+    /// for the peeled parameters (so dependent return types print as `Vec Nat n`).
+    fn peel_pi(&self, cxt: &Cxt, vtyp: &Rc<Val>) -> (Rc<Val>, Lvl) {
+        let mut t = vtyp.clone();
+        let mut lvl = cxt.lvl;
+        while let Val::Pi(_, _, _, cod) = self.force(&cxt.decl, &t).as_ref() {
+            t = self.closure_apply(&cxt.decl, cod, Val::vvar(lvl).into());
+            lvl = lvl + 1;
+        }
+        (t, lvl)
+    }
+
+    /// Record an inlay hint `: <type>` at `offset`, skipping types that still
+    /// contain unsolved metas and truncating over-long labels.
+    fn push_inlay_hint(&mut self, cxt: &Cxt, offset: u32, val: &Rc<Val>) {
+        let lvl = cxt.lvl;
+        let tm = self.quote(&cxt.decl, lvl, val);
+        if tm.no_metas(self, &cxt.decl, lvl).is_some() {
+            return; // skip hints whose type is not yet known
+        }
+        let mut label = format!(": {}", super::pretty_tm(0, cxt.names(), &tm));
+        const MAX_LEN: usize = 80;
+        if label.chars().count() > MAX_LEN {
+            let truncated: String = label.chars().take(MAX_LEN.saturating_sub(1)).collect();
+            label = format!("{}…", truncated);
+        }
+        self.inlay_hint_table.push((offset, label));
+    }
+
     /// Check if a type is the special `BindingName` struct type.
     /// When an implicit parameter has this type, the compiler synthesizes
     /// the current let-binding name instead of creating a metavariable.
@@ -750,6 +780,15 @@ impl Infer {
                         vt_pretty,
                     )
                 };
+                // Inlay hint: def without explicit return type → show inferred return type.
+                if matches!(ret_type, Raw::Hole(_)) {
+                    let (ret_val, ret_lvl) = self.peel_pi(&ret_cxt, &vty);
+                    let ret_tm = self.quote(&ret_cxt.decl, ret_lvl, &ret_val);
+                    if ret_tm.no_metas(self, &ret_cxt.decl, ret_lvl).is_none() {
+                        let label = format!(": {}", super::pretty_tm(0, ret_cxt.names(), &ret_tm));
+                        self.inlay_hint_table.push((name.to_span().end_offset, label));
+                    }
+                }
                 Ok((
                     DeclTm::Def {
                         name,
@@ -1507,12 +1546,17 @@ impl Infer {
 
             // Infer let bindings
             Raw::Let(x, a, t, u) => {
+                let a_is_hole = matches!(a.as_ref(), Raw::Hole(_));
                 let (a_checked, _) = self.check_universe(cxt, *a)?;
                 let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
                 // Set binding_name so implicit BindingName params get the let-binding's name
                 let cxt_named = cxt.with_binding_name(x.data.clone());
                 let t_checked = self.check::<false>(&cxt_named, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
+                // Inlay hint: let without type annotation → show inferred value type.
+                if a_is_hole {
+                    self.push_inlay_hint(cxt, x.to_span().end_offset, &vt);
+                }
                 self.hover_table.push((x.to_span(), x.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, va.clone()));
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
