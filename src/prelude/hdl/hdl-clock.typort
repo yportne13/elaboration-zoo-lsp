@@ -19,6 +19,7 @@ struct Mem[T] {
 }
 
 impl[T] Mem[T] {
+    // TODO(stub): 占位实现 —— 不产生真实内存行为，仅保证类型检查通过。
     def write(address: UInt[log2Up (maxNat this.wordCount 1)], data: T, enable: Bool): Unit = unit
     def readAsync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
     def readSync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue

@@ -1,4 +1,6 @@
 
+// List：不可变链表。
+// 构造器用 lnil/lcons 前缀 —— 因 Vec 的 GADT 构造器已占用 nil/cons 名。
 enum List[T] {
     lnil
     lcons(head: T, tail: List[T])

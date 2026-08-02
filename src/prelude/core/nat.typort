@@ -29,9 +29,11 @@ impl Mul[Nat, Nat] for Nat {
 def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
     cong succ e
 
+// a + 0 由 nat_add_helper（y=zero 分支直接返回 x）definitionally 化为 a，故 rfl 即可。
 def add_zero_right(a: Nat): Eq (a + 0) a =
     rfl
 
+// 0 + a 需对 a 归纳（nat_add_helper 首个分支匹配 y 而非 x）。
 def add_zero_left(a: Nat): Eq (0 + a) a =
     match a {
         case zero => refl 0

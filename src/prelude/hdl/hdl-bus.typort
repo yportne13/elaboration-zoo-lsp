@@ -50,6 +50,9 @@ enum IODirection {
 //   struct MyBus[w: Nat] { data: UInt[w]; valid: Bool }
 //
 //   let bus = create_MyBus[8]("")         // auto-creates with width 8
+//
+// `#[derive(Bundle)]` 的实现在 src/L13_namespace/parser/derive.rs，
+// 此处注释仅为使用文档；修改派生逻辑时请同步两处。
 
 trait Bundle {
     def :=(that: Self): Unit
@@ -89,6 +92,7 @@ struct BlackBox {
 }
 
 impl BlackBox {
+    // TODO(stub): 占位实现 —— 不存储任何信息，仅作语法占位。
     def addGeneric(name: String, value: String): BlackBox = this
     def setDefinitionName(name: String): BlackBox = this
 }

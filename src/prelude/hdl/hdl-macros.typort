@@ -4,6 +4,8 @@
 
 // Standalone when macro for direct use outside Expr.
 // Bodies use `Expr` fragment for consistency with Expr macro's when handlers.
+// NOTE: 与下方 `Expr` macro 内的 when arm 逻辑重复、独立维护，
+//       修改任一处必须同步另一处（same when-begin/else-begin/end 序列）。
 #[macro_export]
 macro_rules when {
     // when + elsewhen* + otherwise
@@ -177,6 +179,8 @@ macro_rules Expr {
 // `sum := a` with real signals, then after zz_tree as a subSignal handle so a
 // parent can write `u.a := sig` — SpinalHDL-style hierarchical access, where
 // the instance name comes from the implicit bn constructor parameter.
+// NOTE: 依赖"同名字段后者覆盖前者"的编译器行为；若解析器对字段重名报错
+//       或改变语义，此宏必须重写（不要再声明同名端口）。
 // The resulting value `myAdder.create` is a new type implementing `Module`; the
 // tree is accessed via the trait method, so `moduleTreeVL(myAdder.create.tree)`
 // produces the Verilog.

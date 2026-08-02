@@ -1,4 +1,7 @@
 
+// Boolean：归纳布尔类型（运行时真值）。
+// 与 HDL 的 `Bool`（hdl-types.typort 的硬件信号 struct {name, zz_expr}）不同。
+// 转换见 hdl-types.typort: `impl Into[Bool] for Boolean`（bool_to_nat）。
 enum Boolean {
     true
     false
@@ -121,11 +124,5 @@ def implies(a: Boolean, b: Boolean): Boolean =
         case true => b
         case false => true
     }
-
-
-
-
-
-
 
 

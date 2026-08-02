@@ -19,6 +19,8 @@ struct Bool {
 }
 
 impl Data for Bool {
+    // `_into_T` 是 `where T: Into[Bool]` 子句在 parser（mod.rs）自动生成的
+    // 隐式参数名：`_{trait_lowercased}_{TypeName}`（此处 Into → _into_T）。
     def :=[T](that: T): Unit where T: Into[Bool] =
         let converted: Bool = _into_T.into that;
         let ass = isRegExpr(this.zz_expr);

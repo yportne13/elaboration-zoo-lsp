@@ -1,3 +1,8 @@
+// 类型参数注解约定：
+// - 纯类型参数（如 List[T]、def vecmap[T, ...]）省略 `: Type 0`，依赖自动泛化。
+// - 需要具体 universe 下界的场景（关联类型 `outParam(Type 0)`、依赖类型
+//   `Exists[A: Type 0, ...]`）必须显式 `A: Type 0`。
+// 两者语义不同，并非纯风格差异。
 def outParam[A](a: A): A = a
 
 trait Add[T, O: outParam(Type 0)] {
@@ -105,6 +110,7 @@ enum Unit {
 // Syntactic sugar: (A, B) desugars to Tuple2[A, B]
 // Field access: t._1, t._2, ...
 // Supported up to Tuple8 for common use cases.
+// 手写展开，未用宏生成（宏系统无法按 arity 递归生成）；如需 Tuple9+ 请手工补。
 
 struct Tuple2[A, B] {
     _1: A
