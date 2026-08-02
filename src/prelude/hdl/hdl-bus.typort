@@ -71,7 +71,8 @@ struct Flow[T] {
 }
 
 impl[T] Stream[T] {
-    def fire: Bool = this.valid
+    // SpinalHDL 语义：fire = valid && ready（一次传输成功握手）
+    def fire: Bool = this.valid && this.ready
     def stage: Stream[T] = this
 }
 

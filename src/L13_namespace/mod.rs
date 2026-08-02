@@ -4931,3 +4931,23 @@ println (e.to_result(n => n).is_ok)
         Err(e) => panic!("ERROR: {}", e.0.data),
     }
 }
+
+#[test]
+fn test_prelude_stream_fire_needs_ready() {
+    // §15.2: Stream.fire 应为 valid && ready（SpinalHDL 语义）。
+    // 构造 Stream，取 fire 的 Expr 并用 exprVL 输出，验证含 &&。
+    let input = r#"
+def v: Bool = newBool "valid"
+def r: Bool = newBool "ready"
+def s: Stream[Bool] = Stream.mk v r v
+def f: Bool = s.fire
+println (exprVL f.expr)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("stream.fire output: {}", output);
+            assert!(output.contains("&&"), "Stream.fire 应生成 && 表达式，实际输出: {}", output);
+        }
+        Err(e) => panic!("ERROR: {}", e.0.data),
+    }
+}
