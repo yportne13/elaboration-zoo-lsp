@@ -1565,6 +1565,7 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
     // Accumulate exported macros from prelude files
     let mut global_macros: PreludeMacros = Default::default();
     let mut id = 0;
+    let nat_typort = include_str!("../prelude/core/nat.typort");
     for p in prelude {
         if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
             for ast_err in parse_errs {
@@ -1579,10 +1580,11 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
             }
         }
         id += 1;
-            // After nat.typort is loaded (index 2), register nat_to_dec builtin
-            if id == 3 {
-                cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
-            }
+        // After nat.typort is loaded, register nat_to_dec builtin.
+        // 基于内容判断而非索引 id：prelude 列表顺序变化（增删文件）时不会错位。
+        if *p == nat_typort {
+            cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
+        }
     }
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
     let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
