@@ -4730,3 +4730,204 @@ def main: Point = Point.create
         Err(e) => panic!("ERROR: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
+// ============================================================================
+// §14.2 N1-N11 复现测试（2026-08-02 实测）
+// 每个测试尝试触发对应问题；运行结果回写到 docs/L13-code-review.md §14.6。
+// 实测结论：
+//   - N6 未能复现：即便强制 per-constructor fork，类型检查仍能捕获 body
+//     不匹配，cache 看似安全。
+//   - N4/N5 probe 通过：未观察到 filter/refinement 副作用污染后续推理。
+// ============================================================================
+
+// N1: Tm::Call 注释字段名陈旧（写 4 字段，实际 3 字段）。
+//    纯文档问题，无运行时表现 —— 由 `cargo build` 即可确认注释与 enum 不符。
+#[test]
+fn test_n1_doc_field_count() {
+    // 与 src/L13_namespace/mod.rs:108 对照：
+    //   Call(SmolStr, List<(Rc<Tm>, Icit)>, Rc<Tm>)  ← 3 字段
+    // 注释 mod.rs:107 写 "Call(name, display_args, val_args, body)"  ← 4 字段，错的。
+    // 无运行时崩点，靠人工审阅修复。
+}
+
+// N2: Tm::Call 包装仅在 body eval 为 Val::Match 时保留，否则静默丢弃。
+//    不变量"Tm::Call 永远只包 Tm::Match"由 wrap_match_in_call 保证。
+//    试图用正常用户代码打破该不变量不可行（只能包住 Match），因此无运行时复现。
+//    这里仅断言 wrap_match_in_call 的输出形态。
+#[test]
+fn test_n2_call_wrapper_invariant() {
+    // wrap_match_in_call 应用到 Lam 包裹 Match 应产生 Tm::Call(_, args, Tm::Match(..))
+    let name = SmolStr::new("f");
+    // \x => match x { ... }
+    let inner_match = Tm::Match(
+        Rc::new(Tm::Var(Ix(0))),
+        vec![],
+    );
+    let lam = Tm::Lam(
+        empty_span(SmolStr::new("x")),
+        Icit::Expl,
+        Rc::new(inner_match),
+    );
+    let wrapped = wrap_match_in_call(name.clone(), &lam, 0);
+    match &wrapped {
+        Tm::Lam(_, _, body) => match body.as_ref() {
+            Tm::Call(n, _, inner) => {
+                assert_eq!(n, &name, "wrap_match_in_call 应使用给定 name");
+                assert!(matches!(inner.as_ref(), Tm::Match(..)),
+                    "Tm::Call 的 body 必须是 Tm::Match（不变量）");
+            }
+            other => panic!("内层应为 Tm::Call，实际: {:?}", other),
+        },
+        other => panic!("外层应保持 Lam，实际: {:?}", other),
+    }
+}
+
+// N3: vals_eq_ground 对 Val::Call 不比 body 只比 name+args，依赖
+//    "同 name 同 args ⇒ 同 body" 不变量。Typort 不允许同作用域 def 重名，
+//    故通过常规用户代码无法触发该不变量破坏。跳过运行时复现。
+#[test]
+fn test_n3_vals_eq_ground_doc_only() {
+    // 不做运行时触发 —— 实际触发需要 def 重名或 import 冲突，当前不允许。
+    // 这里仅作为文档锚点：typeclass.rs:346-352 的 vals_eq_ground_impl
+    // 对 Val::Call 分支"不比 body"的不变量未在注释中声明。
+}
+
+// N6: checked_ret 按 idx 缓存假设 → 同一 wildcard arm 在多个 GADT 分支中
+//    只首个分支做 body 类型检查、后续分支跳过 → 可能吞掉 cons 分支的
+//    body 不一致。实测：NOT REPRODUCED。
+//    即便用 `case nil => rfl` 强制 per-constructor fork，类型检查仍能
+//    捕获 `Eq(?n, 0) vs Eq(?n, ?n)` 不匹配，说明 cache 跳过的路径并非
+//    body 一致性检查的唯一兜底（leaf 处 check_pm_final 重新做 unify_pm
+//    细化 + body check 内部用细化后的 cxt 而非缓存命中即跳过类型检查）。
+#[test]
+fn test_n6_checked_ret_cache_unsoundness() {
+    let input = r#"
+def buggy[T, n: Nat](v: Vec[T] n): Eq n zero =
+    match v {
+        case nil => rfl
+        case _ => rfl
+    }
+println (buggy (cons zero nil))
+"#;
+    let result = run_with_prelude(input);
+    match &result {
+        Ok(output) => panic!(
+            "N6 REPRO: 期望 cons 分支 body 检查被 cache 跳过、整函数类型检查通过（unsound），got Ok:\n{}",
+            output
+        ),
+        Err(e) => println!("N6 NOT REPRODUCED (got expected error):\n  {}", e.0.data),
+    }
+}
+
+// N4/N5: filter_accessible_constrs 不回滚 meta_contrains + GADT refinement
+//    unify_pm 副作用泄漏到主 meta 池。
+//    实测：probe pass（NOT REPRODUCED）—— 复杂 GADT 匹配后紧跟独立类型检查
+//    未见 spurious 错误。说明副作用即便泄漏，量级/方式不至影响下游推理，
+//    或者主 meta 池有其它保护；代码层面"三类快照 vs 两类快照"的不一致仍
+//    是隐患，应在风险面扩大前修复。
+#[test]
+fn test_n4_n5_state_pollution_probe() {
+    let input = r#"
+def first_or_zero[T, n: Nat](v: Vec[T] n): Nat =
+    match v {
+        case nil => zero
+        case cons(x, _) => succ zero
+    }
+def two = succ (succ zero)
+def three = succ two
+println (first_or_zero (cons zero nil))
+println (first_or_zero nil)
+println (three)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => println!("N4/N5 probe pass (NOT REPRODUCED):\n{}", output),
+        Err(e) => panic!(
+            "N4/N5 可能 REPRO：GADT 路径后独立类型检查失败：\n{}",
+            e.0.data
+        ),
+    }
+}
+
+// N7: eval_aux 用 u32::MAX sentinel 表示非 SumCase head。
+//    要触发 sentinel 假阳需要 constr_idx 真的等于 u32::MAX，要求 ≥ 2^32-1
+//    个 constructor，不可构造。Skip —— 仅作文档锚点。
+#[test]
+fn test_n7_sentinel_unreachable() {}
+
+// N8/N9/N10/N11: 代码可读性/性能问题，无运行时崩点可构造。
+// N10 已由 `cargo build` warning 确认（pattern_match.rs:764 `item_pats` 未使用）。
+#[test]
+fn test_n8_n9_n10_n11_doc_only() {}
+
+// ============================================================================
+// §15 Prelude bug 复现测试（2026-08-02）
+// 每个测试先以"应输出 X"断言，修复前 fail（red），修复后 pass（green）。
+// ============================================================================
+
+#[test]
+fn test_prelude_int_add_negative() {
+    // §15.2 P1-1: int_add 负方向 bug。
+    // 1 + (-2) = -1；当前返回 ofNat(pred(nat_sub 1 1)) = ofNat 0 = 0。
+    let input = r#"
+def m: Int = (ofNat 1) + (negSucc 1)
+println m.show
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("int_add: {}", output);
+            assert!(output.contains("-1"), "1 + (-2) 应得 -1，实际输出: {}", output);
+        }
+        Err(e) => panic!("ERROR: {}", e.0.data),
+    }
+}
+
+#[test]
+fn test_prelude_int_mul_negative() {
+    // §15.2 P1-2: int_mul 负方向 bug。
+    // (-2) * 2 = -4；当前返回 ofNat zero = 0。
+    let input = r#"
+def m: Int = (negSucc 1) * (ofNat 2)
+println m.show
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("int_mul: {}", output);
+            assert!(output.contains("-4"), "(-2)*2 应得 -4，实际输出: {}", output);
+        }
+        Err(e) => panic!("ERROR: {}", e.0.data),
+    }
+}
+
+#[test]
+fn test_prelude_nat_show_decimal() {
+    // §15.2 D4: Nat.show stub，所有 succ 都返回 "succ"。
+    // 应打印十进制 "3"。
+    let input = r#"
+def three: Nat = succ (succ (succ zero))
+println three.show
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("nat.show: {}", output);
+            assert!(output.contains("3"), "three.show 应得 3，实际输出: {}", output);
+        }
+        Err(e) => panic!("ERROR: {}", e.0.data),
+    }
+}
+
+#[test]
+fn test_prelude_either_to_result_direction() {
+    // §15.2 P1-3: Either.to_result 与 either_to_result 方向矛盾。
+    // 函数版 left→err；方法版当前 left→ok（错误）。修复后 left→err → is_ok=false。
+    let input = r#"
+def e: Either[String, Nat] = left "err"
+println (e.to_result(n => n).is_ok)
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("to_result.is_ok: {}", output);
+            assert!(output.contains("false"), "to_result 应把 left 当 err（is_ok=false），实际输出: {}", output);
+        }
+        Err(e) => panic!("ERROR: {}", e.0.data),
+    }
+}
