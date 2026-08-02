@@ -590,8 +590,9 @@ def getSubSignalPort(e: Expr): String = match e {
 }
 
 // Collect ".port(sig)" connections for one instance from assign(subSignal(inst, port), rhs) exprs.
-// This lets instance port connections be expressed type-safely via the module
-// instance's connect method (u.connect("u", "a", sig)) instead of string ports.
+// This lets instance port connections be expressed type-safely: the module
+// macro's port fields are subSignal handles, so `u.a := sig` in the parent
+// records assign(subSignal(inst, port), sig) here.
 
 
 // Generate instance instantiation lines with port connections.

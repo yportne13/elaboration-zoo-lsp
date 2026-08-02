@@ -1,34 +1,43 @@
 // ============================================================
 // HDL Example 09: 模块层次 (Module Hierarchy)
 //
-//   mkInstance(name, moduleName)        子模块实例化
-//   mkInstancePorts(name, module, ports) 带端口连接的实例化
-//   allModulesVL(tree)                  多模块 Verilog 输出
+//   `let u = myAdder.create[8]`  在模块体内自动记录子模块实例
+//   `u.a := a`                   SpinalHDL 风格层次化端口连接
+//   allModulesVL(tree)           多模块 Verilog 输出
+//
+// 端口在模块头声明：`input a = UInt[w]`（Bool 端口放最后或最前）。
+// 实例的端口以字段形式暴露（u.a 是带类型的 subSignal 句柄），
+// 父模块通过 `u.port := sig` 连接，生成器自动聚合到实例行。
 // ============================================================
 
-module myAdder[w: Nat] {
+module myAdder[w: Nat]
     input a = UInt[w]
     input b = UInt[w]
-    output sum = UInt[w + 1]
-    sum := a +^ b
+    output sum = UInt[w]
+    input en = Bool
+{
+    sum := a + b
 }
 
 module topWithAdder {
     input a = UInt[8]
     input b = UInt[8]
-    let _adder = myAdder.create[8]
-    let inst = mkInstance("u_adder", "myAdder")
+    let u = myAdder.create[8]
 }
-println("=== 09a: topWithAdder (无端口连接实例化) ===")
+println("=== 09a: topWithAdder (自动实例化) ===")
 println(moduleTreeVL(topWithAdder.create.tree))
 
 module topWithPorts {
     input a = UInt[8]
     input b = UInt[8]
-    let _adder = myAdder.create[8]
-    let inst = mkInstancePorts("u_adder", "myAdder", ".a(a), .b(b), .sum(sum_w)")
+    input en = Bool
+    let u = myAdder.create[8]
+    u.a := a
+    u.b := b
+    u.en := en
+    u.sum := a + b
 }
-println("=== 09b: topWithPorts (显式端口连接) ===")
+println("=== 09b: topWithPorts (u.a := sig 层次化连接) ===")
 println(moduleTreeVL(topWithPorts.create.tree))
 
 // 多模块输出：把两个模块树合并成一颗 ModuleTree，

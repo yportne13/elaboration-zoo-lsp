@@ -1279,8 +1279,33 @@ impl Infer {
                         }
                     }
                 }
-                let (tm, a) = self.infer_expr(cxt, *x.clone())?;
-                let a = self.force(&cxt.decl, &a);
+                let (mut tm, mut a) = self.infer_expr(cxt, *x.clone())?;
+                a = self.force(&cxt.decl, &a);
+                // Unfold implicit `BindingName` params of the receiver so
+                // qualified access like `Test.create.tree` works even when the
+                // constructor takes the implicit `bn` (the module macro's class
+                // constructors all do). Non-BindingName implicits are left for
+                // the trait/field path below.
+                while let Val::Pi(_, Icit::Impl, dom, cod) = a.as_ref() {
+                    if !self.is_binding_name_type(&*cxt.decl, dom) { break; }
+                    let name_str = cxt.binding_name.clone().unwrap_or_else(|| SmolStr::new(""));
+                    let mk_key = if cxt.decl.contains_key("BindingName.mk") {
+                        SmolStr::new("BindingName.mk")
+                    } else {
+                        cxt.decl.keys()
+                            .find(|k| k.ends_with(".BindingName.mk"))
+                            .cloned()
+                            .unwrap_or_else(|| SmolStr::new("BindingName.mk"))
+                    };
+                    let bn_tm: Rc<Tm> = Tm::App(
+                        Tm::Decl(empty_span(mk_key)).into(),
+                        Tm::LiteralIntro(empty_span(name_str.to_string())).into(),
+                        Icit::Expl,
+                    ).into();
+                    let bn_val = self.eval(&cxt.decl, &cxt.env, &bn_tm);
+                    tm = Tm::App(tm, bn_tm, Icit::Impl).into();
+                    a = self.force(&cxt.decl, &self.closure_apply(&cxt.decl, cod, bn_val));
+                }
                 match (tm, a.as_ref()) {
                     (tm, Val::Sum(_, params, cases, _)) => {
                         let mut c = None;

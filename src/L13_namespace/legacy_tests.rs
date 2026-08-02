@@ -1248,6 +1248,20 @@ fn test_example_typeclass_complex() {
 }
 
 #[test]
+fn test_example_hdl_hierarchy() {
+    let input = include_str!("../../examples/hdl/09-hierarchy.typort");
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("myAdder u ()"), "missing auto instance line: {}", output);
+            assert!(output.contains(".a(a), .b(b), .en(en), .sum((a + b))"),
+                "instance line should aggregate u.a := sig connections, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_apply_syntax() {
     let input = r#"
 struct Wrapper {
@@ -1376,8 +1390,8 @@ fn test_examples_hdl_dir() {
             "if (sel == 0)",          // switch -> when 展开（=== 生成 ==）
         ]),
         ("09-hierarchy.typort", include_str!("../../examples/hdl/09-hierarchy.typort"), &[
-            "myAdder u_adder ();",    // mkInstance
-            ".a(a), .b(b)",           // mkInstancePorts
+            "myAdder u ();",          // let u = myAdder.create 自动实例化
+            ".a(a), .b(b), .en(en), .sum((a + b))",  // u.a := sig 层次化连接
             "module myAdder",         // allModulesVL 多模块
             "module topWithAdder",
         ]),
@@ -3577,27 +3591,27 @@ println (moduleTreeVL(paramMod.create[4].tree))
 }
 
 // Test hierarchical signal access via the class instance:
-// let u = myAdder.create[8]; u.connect("a", sig) generates the port
-// connection (.a(sig)) on the instance line, and u.signal("x") yields a
-// subSignal Expr for cross-level references.
+// let u = myAdder.create[8]; u.a := sig — the port fields are subSignal
+// handles, so `:=` generates the port connection (.a(sig)) on the instance
+// line. The instance itself is auto-recorded by the Expr macro's create rule.
 #[test]
 fn test_hdl_instance_connect() {
     let input = r#"
-module myAdder[w: Nat] {
+module myAdder[w: Nat]
     input a = UInt[w]
-    input b = UInt[w]
-    output sum = UInt[w + 1]
-    sum := a +^ b
+    output sum = UInt[w]
+    input en = Bool
+{
+    sum := a + a
 }
 
 module Top {
     input a = UInt[8]
-    input b = UInt[8]
+    input en = Bool
     let u = myAdder.create[8]
-    let _inst = mkInstance("u", "myAdder")
-    let _c1 = u.connect("u", "a", a.expr)
-    let _c2 = u.connect("u", "b", b.expr)
-    let _c3 = u.connect("u", "sum", a.expr)
+    u.a := a
+    u.en := en
+    u.sum := a
 }
 
 println(moduleTreeVL(Top.create.tree))
@@ -3605,8 +3619,8 @@ println(moduleTreeVL(Top.create.tree))
     match run_with_prelude(input) {
         Ok(output) => {
             println!("{}", output);
-            assert!(output.contains("myAdder u (.a(a), .b(b), .sum(a));"),
-                "instance line should aggregate port connections, got: {}", output);
+            assert!(output.contains("myAdder u (.a(a), .en(en), .sum(a));"),
+                "instance line should aggregate u.a := sig connections, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

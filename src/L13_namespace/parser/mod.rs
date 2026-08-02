@@ -1546,7 +1546,8 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
             MacroMatcher::Token(RCurly, span)
         }))
         .or(string(LetKeyword).map(|span| MacroMatcher::Token(LetKeyword, span)))
-        .or(string(Eq).map(|span| MacroMatcher::Token(Eq, span)));
+        .or(string(Eq).map(|span| MacroMatcher::Token(Eq, span)))
+        .or(string(Dot).map(|span| MacroMatcher::Token(Dot, span)));
     
     metavar_parser
         .or(group_parser)
@@ -2029,11 +2030,21 @@ fn expand_class_as_struct(
 ) -> Vec<Decl> {
     let mut result = vec![];
 
-    // Collect fields and methods
-    let fields: Vec<_> = items.iter().filter_map(|item| match item {
+    // Collect fields and methods. The module macro declares each port twice
+    // (an own-signal binding before zz_tree so the body sees real signals,
+    // and a subSignal handle field after zz_tree so `u.a` yields the
+    // cross-level handle); the struct keeps only the LAST declaration of
+    // each name, while the constructor still binds both (shadowing).
+    let mut fields: Vec<_> = items.iter().filter_map(|item| match item {
         ClassItem::Field(n, t, _) => Some((n.clone(), t.clone())),
         _ => None,
     }).collect();
+    {
+        let mut seen = std::collections::HashSet::new();
+        fields.reverse();
+        fields.retain(|(n, _)| seen.insert(n.data.clone()));
+        fields.reverse();
+    }
     let methods: Vec<Decl> = items.iter().filter_map(|item| match item {
         ClassItem::Method(d) => Some(d.clone()),
         _ => None,
@@ -2087,9 +2098,23 @@ fn expand_class_as_struct(
     }
     let ret_type = self_ty.clone();
     let ctor_name = name.clone().map(|n| SmolStr::new(format!("{n}.create")));
+    // Add an implicit `bn: BindingName` parameter to the constructor so the
+    // instance's let-binding name is available inside the class body (used by
+    // the module macro to bake the instance name for subSignal access, e.g.
+    // `let u = foo.create[8]` gives bn = "u"). Only classes implementing
+    // `Module` (the module macro's classes) get it, so plain classes don't
+    // require BindingName to be in scope.
+    let mut ctor_params = params.clone();
+    if traits.iter().any(|t| t.data == "Module") {
+        ctor_params.push((
+            empty_span(SmolStr::new("bn")),
+            Raw::Var(empty_span(SmolStr::new("BindingName"))),
+            Icit::Impl,
+        ));
+    }
     result.push(Decl::Def {
         name: ctor_name,
-        params: params.clone(),
+        params: ctor_params,
         ret_type,
         body: ctor,
     });
