@@ -761,12 +761,21 @@ impl Infer {
             pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &u)),
         );*/
 
-        //TODO: a temp fix for test_user_provided, but I dont think this fix is correct
+        // Fast path: two calls of the same function whose argument spines unify
+        // are equal (the inlined body is a pure function of name + args).
+        // If the spine unification fails midway it may have SOLVED some metas;
+        // roll those back so the body comparison below starts from a clean state.
         match (t.as_ref(), u.as_ref()) {
             (Val::Call(a, al, _), Val::Call(b, bl, _)) if a == b => {
+                let meta_snapshot = self.meta.clone();
+                let trait_metas_snapshot = self.trait_metas.clone();
+                let mc_snapshot = self.meta_contrains.clone();
                 if self.unify_sp(l, cxt, al, bl, fuel).is_ok() {
                     return Ok(())
                 }
+                self.meta = meta_snapshot;
+                self.trait_metas = trait_metas_snapshot;
+                self.meta_contrains = mc_snapshot;
             }
             _ => {}
         }
