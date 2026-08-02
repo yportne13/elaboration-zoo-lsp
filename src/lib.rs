@@ -914,21 +914,18 @@ impl LanguageServer for Backend<Client> {
             let uri: String = serde_json::from_value(args[0].clone()).unwrap();
             let id: String = serde_json::from_value(args[1].clone()).unwrap();
 
-            let result_text = if let Some(map) = self.quickfix_map.get(&uri) {
-                if let Some(code_actions) = map.get(&id) {
-                    eprintln!("searching...");
-                    code_actions.iter().flat_map(|x| {
-                        let ret = x();
-                        eprintln!("{:?}", ret);
-                        ret
-                    }).next()
-                        .unwrap_or("failed to find a solution".to_owned())
-                } else {
-                    "failed to find a solution".to_owned()
-                }
-            } else {
-                "failed to find a solution".to_owned()
-            };
+			let result_text = if let Some(map) = self.quickfix_map.get(&uri) {
+				if let Some(code_actions) = map.get(&id) {
+					code_actions.iter().flat_map(|x| {
+						x()
+					}).next()
+						.unwrap_or("failed to find a solution".to_owned())
+				} else {
+					"failed to find a solution".to_owned()
+				}
+			} else {
+				"failed to find a solution".to_owned()
+			};
 
             self.client.show_message(MessageType::INFO, format!("find a possible solution: {}", result_text));
         }
