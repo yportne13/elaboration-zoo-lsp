@@ -4955,14 +4955,14 @@ println (exprVL f.expr)
 #[test]
 fn test_prelude_int_arithmetic_cases() {
     // Int 加减乘跨正负多场景回归（show.typort 2026-08-02 修复后）。
-    // 注意：`-` 运算符因 Neg(一元)/Sub(二元) 同名歧义不可用（语言缺陷），
-    //       减法用 int_sub 函数验证。
+    // `-` 运算符：Neg(一元)/Sub(二元) 同名冲突已在 method resolution 层
+    // 按显式参数个数消歧（infix 调用选 1 参的 Sub）。
     let input = r#"
 def a: Int = (ofNat 3) + (negSucc 1)      // 3 + (-2) = 1
 def b: Int = (negSucc 1) + (ofNat 3)      // -2 + 3 = 1
 def c: Int = (negSucc 2) + (negSucc 1)    // -3 + -2 = -5
-def d: Int = int_sub (ofNat 5) (ofNat 2)  // 5 - 2 = 3
-def e: Int = int_sub (ofNat 2) (ofNat 5)  // 2 - 5 = -3
+def d: Int = (ofNat 5) - (ofNat 2)        // 5 - 2 = 3
+def e: Int = (ofNat 2) - (ofNat 5)        // 2 - 5 = -3
 def f: Int = (negSucc 1) * (ofNat 3)      // -2 * 3 = -6
 def g: Int = (ofNat 3) * (negSucc 1)      // 3 * -2 = -6
 def h: Int = (negSucc 1) * (negSucc 1)    // -2 * -2 = 4

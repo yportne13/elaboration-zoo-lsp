@@ -1695,7 +1695,7 @@ impl Infer {
             return Ok(result);
         }
         {
-            let traits = self.trait_definition
+            let mut traits = self.trait_definition
                 .iter()
                 .flat_map(|(trait_name, (trait_params, out_param, _st, methods))| {
                     methods.iter()
@@ -1704,6 +1704,9 @@ impl Infer {
                 })
                 .filter(|(x, _, _, _)| self.trait_solver.can_satisfy(x, &typ_raw))
                 .map(|(trait_name, trait_params, _, (methods_name, methods_params, ret_type, _default_body))| {
+                    // Count explicit parameters: used to disambiguate same-named
+                    // unary/binary operators (e.g. Neg.- (0 args) vs Sub.- (1 arg)).
+                    let argc = methods_params.iter().filter(|p| p.2 == Icit::Expl).count();
                     let def_span = methods_name.to_span();
                     // Use the call-site method name span instead of the trait definition span
                     // so that error locations point to the user's code, not the trait definition.
@@ -1761,18 +1764,31 @@ impl Infer {
                         )
                     },
                     def_span,
+                    argc,
                 )
                 })
                 .collect::<Vec<_>>();
             if traits.len() > 1 {
-                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _, _)| n).collect();
-                return Err(Error(t.clone().map(|m| format!(
-                    "ambiguous method `{}`: found in traits {}",
-                    m,
-                    trait_names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
-                )), vec![]));
+                // Disambiguate same-named operators by explicit-argument count:
+                // an infix call (e.g. `a - b`) always has ≥1 argument, so prefer
+                // the unique candidate that expects ≥1 explicit argument over the
+                // zero-argument ones (e.g. Neg.- vs Sub.-). If ambiguous even by
+                // arity, report the ambiguity.
+                let nonzero: Vec<_> = traits.iter()
+                    .filter(|(_, _, _, argc)| *argc > 0)
+                    .collect();
+                if nonzero.len() == 1 && nonzero.len() < traits.len() {
+                    traits = nonzero.into_iter().cloned().collect();
+                } else {
+                    let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _, _, _)| n).collect();
+                    return Err(Error(t.clone().map(|m| format!(
+                        "ambiguous method `{}`: found in traits {}",
+                        m,
+                        trait_names.iter().map(|n| format!("`{}`", n)).collect::<Vec<_>>().join(", "),
+                    )), vec![]));
+                }
             }
-            if let Some((_, decl, def_span)) = traits.first() {
+            if let Some((_, decl, def_span, _)) = traits.first() {
                 let result = self.infer_expr(cxt, decl.clone())?;
                 self.hover_table.push((
                     t.to_span(),
