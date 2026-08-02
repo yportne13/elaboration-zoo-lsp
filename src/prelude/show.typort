@@ -35,7 +35,14 @@ def int_add(x: Int, y: Int): Int =
         case ofNat(a) =>
             match y {
                 case ofNat(b) => ofNat(a + b)
-                case negSucc(b) => ofNat(pred(nat_sub a b))
+                case negSucc(b) =>
+                    // a - (b+1)
+                    // a > b: ofNat(a - b - 1) = ofNat(pred(nat_sub a b))
+                    // a <= b: -(b - a + 1) = negSucc(nat_sub b a)
+                    match nat_compare a b {
+                        case gt => ofNat (pred (nat_sub a b))
+                        case _ => negSucc (nat_sub b a)
+                    }
             }
         case negSucc(a) =>
             match y {
