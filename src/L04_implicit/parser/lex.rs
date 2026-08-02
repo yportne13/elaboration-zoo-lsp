@@ -59,8 +59,10 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
                 let tail_len = tail.map(|t| t.len()).unwrap_or(0);
+                // 从整个剩余输入切片（前缀即完整 ident），而非 head.data
+                // （head.data 只含首个字符，直接切会越界）。
                 let ident = unsafe {
-                    head.data
+                    input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)
                 };
                 let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
