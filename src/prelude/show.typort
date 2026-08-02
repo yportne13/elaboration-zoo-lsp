@@ -4,11 +4,7 @@ trait Show {
 }
 
 impl Nat {
-    def show: String =
-        match this {
-            case zero => "0"
-            case succ(n) => "succ"
-        }
+    def show: String = nat_to_dec this
 }
 
 // === Int 类型 ===
