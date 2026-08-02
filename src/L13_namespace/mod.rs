@@ -4951,3 +4951,40 @@ println (exprVL f.expr)
         Err(e) => panic!("ERROR: {}", e.0.data),
     }
 }
+
+#[test]
+fn test_prelude_int_arithmetic_cases() {
+    // Int 加减乘跨正负多场景回归（show.typort 2026-08-02 修复后）。
+    // 注意：`-` 运算符因 Neg(一元)/Sub(二元) 同名歧义不可用（语言缺陷），
+    //       减法用 int_sub 函数验证。
+    let input = r#"
+def a: Int = (ofNat 3) + (negSucc 1)      // 3 + (-2) = 1
+def b: Int = (negSucc 1) + (ofNat 3)      // -2 + 3 = 1
+def c: Int = (negSucc 2) + (negSucc 1)    // -3 + -2 = -5
+def d: Int = int_sub (ofNat 5) (ofNat 2)  // 5 - 2 = 3
+def e: Int = int_sub (ofNat 2) (ofNat 5)  // 2 - 5 = -3
+def f: Int = (negSucc 1) * (ofNat 3)      // -2 * 3 = -6
+def g: Int = (ofNat 3) * (negSucc 1)      // 3 * -2 = -6
+def h: Int = (negSucc 1) * (negSucc 1)    // -2 * -2 = 4
+println a.show
+println b.show
+println c.show
+println d.show
+println e.show
+println f.show
+println g.show
+println h.show
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("int cases output:\n{}", output);
+            let lines: Vec<&str> = output.trim().lines().collect();
+            assert_eq!(lines.len(), 8, "应输出 8 行，实际:\n{}", output);
+            let expected = ["1", "1", "-5", "3", "-3", "-6", "-6", "4"];
+            for (i, exp) in expected.iter().enumerate() {
+                assert_eq!(lines[i].trim(), *exp, "第 {} 行应得 {}，实际 {}（整体输出:\n{}）", i + 1, exp, lines[i], output);
+            }
+        }
+        Err(e) => panic!("ERROR: {}", e.0.data),
+    }
+}
