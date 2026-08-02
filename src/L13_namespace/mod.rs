@@ -4551,7 +4551,8 @@ println p.show
         match run_with_prelude(input) {
             Ok(output) => {
                 eprintln!("derive test output: {}", output);
-                assert!(output.contains("Point(succ"), "Expected Point(succ... in output, got: {}", output);
+                // Nat.show 自 2026-08-02 起打印十进制（nat_to_dec），不再是 "succ" stub
+                assert!(output.contains("Point(1, 0)"), "Expected Point(1, 0) in output, got: {}", output);
             }
             Err(e) => panic!("derive test failed: {} @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
         }
