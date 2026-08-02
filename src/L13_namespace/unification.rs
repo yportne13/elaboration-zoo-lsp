@@ -5,8 +5,8 @@ use crate::list::List;
 use crate::parser_lib::Span;
 
 use super::{
-    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
-    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+    Ix, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt,
+    lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
     pattern_match::Compiler,
 };
@@ -917,7 +917,28 @@ impl Infer {
                 }
                 match (s_forced.as_ref(), other_val.as_ref()) {
                     (Val::Rigid(x, sp), Val::Rigid(y, sp2))
-                        if x == y && sp.is_empty() && sp2.is_empty() => Ok(()),
+                        if x == y && sp.is_empty() && sp2.is_empty() =>
+                    {
+                        // A stuck match on a rigid variable is only equal to that
+                        // variable when it is a genuine eta-expansion: every branch
+                        // is a bare-variable pattern (Any/Bind) whose body is the
+                        // bound scrutinee itself (`Var(Ix(0))`).  Accepting it
+                        // unconditionally is unsound — it would let one prove
+                        // `Eq (f x) x` for an arbitrary non-identity `f`.
+                        let is_eta = !cases.is_empty()
+                            && cases.iter().all(|(pat, body)| {
+                                let binds_scrutinee = matches!(
+                                    pat,
+                                    PatternDetail::Any(..) | PatternDetail::Bind(_)
+                                );
+                                binds_scrutinee && matches!(body.as_ref(), Tm::Var(Ix(0)))
+                            });
+                        if is_eta {
+                            Ok(())
+                        } else {
+                            Err(UnifyError::Basic)
+                        }
+                    }
                     _ => Err(UnifyError::Basic),
                 }
             }

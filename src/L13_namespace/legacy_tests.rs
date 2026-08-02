@@ -1972,6 +1972,47 @@ def test_drop: Vec[Nat] (succ zero) = drop(cons(zero, cons(succ zero, nil)))
 }
 
 #[test]
+fn test_reject_stuck_match_eq_scrutinee() {
+    // Regression for the unsound `Match(x) ≡ x` unify special case:
+    // a stuck match on `x` must NOT unify with `x` itself, otherwise one
+    // could prove `Eq (f x) x` for an arbitrary non-identity `f`.
+    let input = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def f(x: Nat): Nat =
+    match x {
+        case zero => succ(zero)
+        case succ(n) => zero
+    }
+
+def bad(x: Nat): Eq (f x) x = rfl
+"#;
+    match run(input, 0) {
+        Ok(output) => panic!(
+            "BUG: unsound proof `Eq (f x) x` for a non-identity f typechecked: {:?}",
+            output
+        ),
+        Err(e) => {
+            assert!(
+                e.0.data.contains("can't unify"),
+                "expected a unify error, got: {}",
+                e.0.data
+            );
+        }
+    }
+}
+
+#[test]
 fn test_hdl_switch_case() {
     let input = r#"
 module Test {
