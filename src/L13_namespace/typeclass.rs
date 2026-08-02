@@ -169,6 +169,65 @@ impl Synth {
         instances.push(instance);
     }
 
+    /// Merge the persistent (cross-file) trait state of `other` into `self`:
+    /// out-param markers and instance lists (deduplicated by assertion equality).
+    /// Temporary search state (generator/resume stacks, assertion table) is not
+    /// merged.  `head_index` is rebuilt from scratch after merging.
+    pub fn merge_persistent(&mut self, other: &Synth) {
+        for (k, v) in &other.trait_out_params {
+            self.trait_out_params.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        let other_traits: Vec<SmolStr> = other.class_instances.keys().cloned().collect();
+        for trait_name in other_traits {
+            let insts = other.class_instances.get(&trait_name).cloned().unwrap_or_default();
+            let target = self.class_instances.entry(trait_name.clone()).or_default();
+            for inst in insts {
+                let dup = target.iter().any(|existing| Self::instance_equal(existing, &inst));
+                if !dup {
+                    target.push(inst);
+                }
+            }
+        }
+        self.rebuild_head_index();
+    }
+
+    /// Structural equality of two instances: same trait name and equal arguments.
+    fn instance_equal(a: &Instance, b: &Instance) -> bool {
+        if a.assertion.name != b.assertion.name {
+            return false;
+        }
+        if a.assertion.arguments.len() != b.assertion.arguments.len() {
+            return false;
+        }
+        a.assertion.arguments.iter().zip(b.assertion.arguments.iter())
+            .all(|(x, y)| Self::vals_eq_ground(x, y))
+    }
+
+    /// Rebuild `head_index` from `class_instances` + `trait_out_params`.
+    pub fn rebuild_head_index(&mut self) {
+        self.head_index.clear();
+        let traits: Vec<SmolStr> = self.class_instances.keys().cloned().collect();
+        for trait_name in traits {
+            let instances = self.class_instances.get(&trait_name).cloned().unwrap_or_default();
+            let out_params = self.trait_out_params.get(&trait_name).cloned();
+            for (idx, instance) in instances.iter().enumerate() {
+                if let Some(ref op) = out_params {
+                    for (i, arg) in instance.assertion.arguments.iter().enumerate() {
+                        if op.get(i).copied().unwrap_or(false) {
+                            continue;
+                        }
+                        let head = head_key(arg).unwrap_or_else(|| SmolStr::new(GENERIC_SELF_HEAD));
+                        self.head_index
+                            .entry((trait_name.clone(), head))
+                            .or_default()
+                            .push(idx);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     /// Check if this trait has at least one instance whose Self-type head matches `self_type`.
     /// Uses head_index for O(1) lookup; falls back to val_match scan when the index misses.
     pub fn can_satisfy(&self, trait_name: &SmolStr, self_type: &Val) -> bool {

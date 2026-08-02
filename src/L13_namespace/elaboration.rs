@@ -36,8 +36,9 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
             params,
             supertraits,
+            // 方法名不加前缀：trait_wrap 按裸方法名匹配 `obj.method` 调用。
             methods: methods.into_iter().map(|(mn, mparams, mret, mbody)| {
-                (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret, mbody)
+                (mn, mparams, mret, mbody)
             }).collect(),
             assoc_defaults,
         },
@@ -1026,7 +1027,12 @@ impl Infer {
                         }
                         for (tm_name, tm_params, tm_ret, tm_default_body) in trait_methods {
                             let has_impl = methods.iter().any(|(decl, _)| match decl {
-                                Decl::Def { name, .. } => name.data == tm_name.data,
+                                Decl::Def { name, .. } => {
+                                    // impl 方法名可能带 namespace 前缀（`mylib.describe`），
+                                    // trait 方法名为裸名（`describe`），比较时剥前缀。
+                                    name.data == tm_name.data
+                                        || name.data.ends_with(&format!(".{}", tm_name.data))
+                                }
                                 _ => false,
                             });
                             if !has_impl {
@@ -1163,7 +1169,12 @@ impl Infer {
                     self.assoc_defaults.insert((name.data.clone(), aname.clone()), adefault.clone());
                 }
                 let mut cxt = cxt.clone();
-                let (_, _, c) = self.infer(&cxt, Decl::Enum {
+                let mut enum_cxt = cxt.clone();
+                // `name` 已被 TraitDecl 前缀（如 mylib.Describe）；递归 Enum 时若保留
+                // namespace_prefix 会被 infer 入口二次前缀（mylib.mylib.Describe），
+                // 导致 trait 注册名不一致。清空后再递归，并在返回时恢复 prefix。
+                enum_cxt.namespace_prefix = None;
+                let (_, _, mut c) = self.infer(&enum_cxt, Decl::Enum {
                     is_trait: true,
                     name: name.clone(),
                     params: param,
@@ -1185,6 +1196,7 @@ impl Infer {
                         None,
                     )],
                 })?;
+                c.namespace_prefix = cxt.namespace_prefix.clone();
                 cxt = c;
                 Ok((DeclTm::Trait {}, Val::U(0).into(), cxt.clone()))
             },

@@ -690,6 +690,109 @@ impl Infer {
 
     pub fn meta_len(&self) -> usize { self.meta.len() }
     pub fn meta_capacity(&self) -> usize { self.meta.capacity() }
+
+    /// Merge the cross-file trait/typeclass state of `other` into `self`
+    /// (trait definitions, out-param markers, assoc defaults, instances).
+    /// Used by the LSP backend so files can use traits defined in other files.
+    pub fn merge_trait_state_from(&mut self, other: &Infer) {
+        for (k, v) in &other.trait_definition {
+            self.trait_definition.insert(k.clone(), v.clone());
+        }
+        for (k, v) in &other.trait_out_param {
+            self.trait_out_param.insert(k.clone(), v.clone());
+        }
+        for (k, v) in &other.assoc_defaults {
+            self.assoc_defaults.insert(k.clone(), v.clone());
+        }
+        self.trait_solver.merge_persistent(&other.trait_solver);
+    }
+
+    /// Whether `val` (or anything reachable through spines/closures/bodies)
+    /// references a metavariable at all.  Cross-file decl sharing is only safe
+    /// for fully-closed values: a meta's index lives in the producing file's
+    /// meta space and would be out-of-bounds in another file's clone, even when
+    /// the meta is already solved.
+    pub fn val_has_unsolved_flex(&self, decl: &Decl, val: &Val) -> bool {
+        match val {
+            Val::Flex(_, _) => true,
+            Val::Rigid(_, sp) | Val::Decl(_, sp) => {
+                sp.iter().any(|(v, _)| self.val_has_unsolved_flex(decl, v))
+            }
+            Val::Obj(x, _, sp) => {
+                self.val_has_unsolved_flex(decl, x)
+                    || sp.iter().any(|(v, _)| self.val_has_unsolved_flex(decl, v))
+            }
+            Val::Lam(_, _, clos) => self.closure_has_unsolved_flex(decl, clos),
+            Val::Pi(_, _, a, clos) => {
+                self.val_has_unsolved_flex(decl, a) || self.closure_has_unsolved_flex(decl, clos)
+            }
+            Val::Match(v, env, cases) => {
+                self.val_has_unsolved_flex(decl, v)
+                    || env.iter().any(|e| self.val_has_unsolved_flex(decl, e))
+                    || cases.iter().any(|(_, t)| self.tm_has_unsolved_flex(decl, t))
+            }
+            Val::Call(_, args, body) => {
+                args.iter().any(|(v, _)| self.val_has_unsolved_flex(decl, v))
+                    || self.val_has_unsolved_flex(decl, body)
+            }
+            Val::Sum(_, params, _, _) => params.iter()
+                .any(|(_, v, t, _)| self.val_has_unsolved_flex(decl, v) || self.val_has_unsolved_flex(decl, t)),
+            Val::SumCase { typ, datas, .. } => {
+                self.val_has_unsolved_flex(decl, typ)
+                    || datas.iter().any(|(_, t, _)| self.val_has_unsolved_flex(decl, t))
+            }
+            _ => false,
+        }
+    }
+
+    fn closure_has_unsolved_flex(&self, decl: &Decl, clos: &Closure) -> bool {
+        clos.0.iter().any(|e| self.val_has_unsolved_flex(decl, e))
+            || self.tm_has_unsolved_flex(decl, &clos.1)
+    }
+
+    pub fn tm_has_unsolved_flex(&self, decl: &Decl, tm: &Tm) -> bool {
+        match tm {
+            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => false,
+            Tm::Obj(t, _) => self.tm_has_unsolved_flex(decl, t),
+            Tm::Lam(_, _, t) => self.tm_has_unsolved_flex(decl, t),
+            Tm::App(f, a, _) => self.tm_has_unsolved_flex(decl, f) || self.tm_has_unsolved_flex(decl, a),
+            Tm::AppPruning(t, _) => self.tm_has_unsolved_flex(decl, t),
+            Tm::Pi(_, _, a, b) => self.tm_has_unsolved_flex(decl, a) || self.tm_has_unsolved_flex(decl, b),
+            Tm::Let(_, a, t, u) => {
+                self.tm_has_unsolved_flex(decl, a)
+                    || self.tm_has_unsolved_flex(decl, t)
+                    || self.tm_has_unsolved_flex(decl, u)
+            }
+            Tm::Meta(_) => true, // any meta index belongs to the producing file's space
+            Tm::Sum(_, params, _, _) => params.iter()
+                .any(|(_, t, ty, _)| self.tm_has_unsolved_flex(decl, t) || self.tm_has_unsolved_flex(decl, ty)),
+            Tm::SumCase { typ, datas, .. } => {
+                self.tm_has_unsolved_flex(decl, typ)
+                    || datas.iter().any(|(_, t, _)| self.tm_has_unsolved_flex(decl, t))
+            }
+            Tm::Match(v, cases) => {
+                self.tm_has_unsolved_flex(decl, v)
+                    || cases.iter().any(|(_, t)| self.tm_has_unsolved_flex(decl, t))
+            }
+            Tm::Call(_, args, body) => {
+                args.iter().any(|(t, _)| self.tm_has_unsolved_flex(decl, t))
+                    || self.tm_has_unsolved_flex(decl, body)
+            }
+        }
+    }
+
+    /// "Close" a value by quoting then re-evaluating it in an empty environment:
+    /// resolved metas are inlined into concrete values, so the result no longer
+    /// references this Infer's meta space (safe to share cross-file).
+    pub fn close_val_shared(&self, decl: &Decl, val: &Rc<Val>) -> Rc<Val> {
+        self.eval(decl, &List::new(), &self.quote(decl, Lvl(0), val))
+    }
+
+    /// "Close" a term the same way: eval to a value (inlining metas), then quote.
+    pub fn close_tm_shared(&self, decl: &Decl, tm: &Rc<Tm>) -> Rc<Tm> {
+        self.quote(decl, Lvl(0), &self.eval(decl, &List::new(), tm))
+    }
+
     pub fn meta_contrains_len(&self) -> usize { self.meta_contrains.len() }
     pub fn meta_contrains_capacity(&self) -> usize { self.meta_contrains.capacity() }
     pub fn trait_definition_len(&self) -> usize { self.trait_definition.len() }

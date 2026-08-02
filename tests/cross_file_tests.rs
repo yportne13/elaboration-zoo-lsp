@@ -103,3 +103,62 @@ fn closing_provider_removes_symbol() {
     let keys = global_decl_keys(&b);
     assert!(!keys.iter().any(|k| k == "mylib.foo"), "关闭 A 后 mylib.foo 应移除");
 }
+
+#[test]
+fn cross_file_trait_visible() {
+    let b = backend();
+
+    // A defines a trait + instance in namespace mylib.
+    // NOTE: 语言层要求 package 内 impl 用全限定 trait 名（`impl mylib.Describe`）。
+    b.process_file(
+        &Url::parse("file:///a.typort").unwrap(),
+        r#"package mylib
+
+trait Describe {
+    def describe: String
+}
+
+impl mylib.Describe for Nat {
+    def describe: String = "nat"
+}
+"#,
+        Some(1),
+    );
+    b.process_file(
+        &Url::parse("file:///b.typort").unwrap(),
+        r#"import mylib._
+
+def d: String = zero.describe
+"#,
+        Some(1),
+    );
+    // If B resolved zero.describe, its symbol `d` lands in the global cxt.
+    let keys = global_decl_keys(&b);
+    assert!(keys.iter().any(|k| k == "d"), "B 应能跨文件解析 trait 方法 zero.describe，全局应有 d。mylib.* keys: {:?}", keys.iter().filter(|k| k.contains("mylib")).collect::<Vec<_>>());
+}
+
+// Isolation check: does package-scoped trait method call work in a SINGLE file?
+// This isolates whether the trait_wrap panic is a pre-existing language-layer
+// issue vs. something introduced by the cross-file merge.
+#[test]
+fn pkg_trait_single_file() {
+    use elaboration_zoo_lsp::L13_namespace::run_with_prelude;
+    let input = r#"
+package mylib
+
+trait Describe {
+    def describe: String
+}
+
+impl mylib.Describe for Nat {
+    def describe: String = "nat"
+}
+
+def d: String = zero.describe
+println d
+"#;
+    match run_with_prelude(input) {
+        Ok(out) => println!("OK: {out}"),
+        Err(e) => panic!("ERR: {}", e.0.data),
+    }
+}
