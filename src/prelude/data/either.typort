@@ -58,9 +58,10 @@ def either_to_result[A, B](e: Either[A, B]): Result[B, A] =
     }
 
 impl[A, B] Either[A, B] {
-    def to_result[Err](f: B -> Err): Result[A, Err] =
+    // Err-first 约定，与 either_to_result 一致：left = err，right = ok。
+    def to_result[Err](f: A -> Err): Result[B, Err] =
         match this {
-            case left(a) => ok(a)
-            case right(b) => err(f b)
+            case left(a) => err(f a)
+            case right(b) => ok(b)
         }
 }
