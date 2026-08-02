@@ -77,6 +77,16 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
     /// Macro expansion data collected during parsing (keyed by URI)
     pub macro_expansion_map: DashMap<String, Vec<MacroExpansionInfo>>,
+    /// uri -> decl keys the file wrote into the global cxt (for incremental rebuild)
+    pub file_symbols: DashMap<String, HashSet<String>>,
+    /// uri -> namespaces the file imports (its dependencies)
+    pub file_deps: DashMap<String, HashSet<String>>,
+    /// uri -> the package namespace the file declares (if any)
+    pub file_namespace: DashMap<String, String>,
+    /// namespace -> files that provide it (declare `package ns`)
+    pub ns_providers: DashMap<String, HashSet<String>>,
+    /// namespace -> files that depend on it (import it)
+    pub ns_dependents: DashMap<String, HashSet<String>>,
     // 状态标记和条件变量
     processing_uris: DashMap<String, bool>, // URI -> 正在被 worker 处理
     pending_uris: DashMap<String, bool>,     // URI -> 已排队等待处理（在 worker 启动前就标记）
@@ -122,6 +132,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             quickfix_map: DashMap::new(),
             exported_macros: DashMap::new(),
             macro_expansion_map: DashMap::new(),
+            file_symbols: DashMap::new(),
+            file_deps: DashMap::new(),
+            file_namespace: DashMap::new(),
+            ns_providers: DashMap::new(),
+            ns_dependents: DashMap::new(),
             processing_uris: DashMap::new(),
             pending_uris: DashMap::new(),
             job_sender: tx,
@@ -143,6 +158,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     pub fn get_cxt(&self) -> Arc<Mutex<Cxt>> {
         self.cxt.clone()
+    }
+
+    /// All keys currently in the global cxt.decl (sorted), for tests/tools.
+    pub fn global_decl_keys(&self) -> Vec<String> {
+        let cxt = self.cxt.lock().unwrap();
+        let mut keys: Vec<String> = cxt.decl.keys().map(|k| k.to_string()).collect();
+        keys.sort();
+        keys
     }
 
     pub fn backend_stats(&self) -> serde_json::Value {
@@ -402,11 +425,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
                 // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
                 self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
-                self.on_change::<false>(TextDocumentItem {
-                    uri: job.uri,
-                    text: &job.text,
-                    version: job.version,
-                });
+                self.process_file(&job.uri, &job.text, job.version);
 
                 self.processing_uris.remove(&uri_str);
                 let (lock, cvar) = &*self.processed_signal;
@@ -562,6 +581,321 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         self.client.log_message(MessageType::LOG, format!("change {:?}", start_all.elapsed().as_secs_f32()));
     }
+
+    // ── Cross-file dependency tracking (incremental rebuild) ────────────────
+
+    /// Recompute the dependency records for `uri` from its import/package decls.
+    fn update_deps(&self, uri: &str, decls: &[Decl]) {
+        // Clear stale records.
+        if let Some(deps) = self.file_deps.get(uri) {
+            for ns in deps.value().clone() {
+                if let Some(mut d) = self.ns_dependents.get_mut(&ns) {
+                    d.remove(uri);
+                }
+            }
+        }
+        self.file_deps.remove(uri);
+        if let Some(ns) = self.file_namespace.get(uri) {
+            if let Some(mut p) = self.ns_providers.get_mut(ns.value()) {
+                p.remove(uri);
+            }
+        }
+        self.file_namespace.remove(uri);
+        // Re-scan decls.
+        let mut deps = HashSet::new();
+        let mut ns: Option<String> = None;
+        for d in decls {
+            match d {
+                Decl::Import { prefix, .. } if !prefix.is_empty() => {
+                    let ns_str = prefix.join(".");
+                    deps.insert(ns_str.clone());
+                    self.ns_dependents.entry(ns_str).or_default().insert(uri.to_string());
+                }
+                Decl::Package { path } => {
+                    ns = Some(path.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join("."));
+                }
+                _ => {}
+            }
+        }
+        if let Some(ns) = ns {
+            self.file_namespace.insert(uri.to_string(), ns.clone());
+            self.ns_providers.entry(ns).or_default().insert(uri.to_string());
+        }
+        if !deps.is_empty() {
+            self.file_deps.insert(uri.to_string(), deps);
+        }
+    }
+
+    /// Remove all dependency records involving `uri` (used on file close).
+    fn clear_file_deps(&self, uri: &str) {
+        if let Some(deps) = self.file_deps.get(uri) {
+            for ns in deps.value().clone() {
+                if let Some(mut d) = self.ns_dependents.get_mut(&ns) {
+                    d.remove(uri);
+                }
+            }
+        }
+        self.file_deps.remove(uri);
+        if let Some(ns) = self.file_namespace.get(uri) {
+            if let Some(mut p) = self.ns_providers.get_mut(ns.value()) {
+                p.remove(uri);
+            }
+        }
+        self.file_namespace.remove(uri);
+    }
+
+    /// DFS helper for `rebuild_set`: visit `f`, recursing into its namespace
+    /// providers that are part of the rebuild set, then push `f`.
+    fn visit_dep(&self, f: &str, set: &HashSet<String>, visited: &mut HashSet<String>, order: &mut Vec<String>) {
+        if !visited.insert(f.to_string()) {
+            return;
+        }
+        if let Some(deps) = self.file_deps.get(f) {
+            for ns in deps.value().clone() {
+                if let Some(providers) = self.ns_providers.get(&ns) {
+                    let mut ps: Vec<String> = providers.value().clone().into_iter().collect();
+                    ps.sort();
+                    for p in ps {
+                        if set.contains(&p) {
+                            self.visit_dep(&p, set, visited, order);
+                        }
+                    }
+                }
+            }
+        }
+        order.push(f.to_string());
+    }
+
+    /// Compute the set of files that must be rebuilt when `changed` changes:
+    /// `changed` plus, transitively, every file that imports the namespaces
+    /// provided by a file in the set.  Returned in topological order
+    /// (dependencies before dependents).
+    fn rebuild_set(&self, changed: &str) -> Vec<String> {
+        let mut set: HashSet<String> = HashSet::new();
+        let mut queue = vec![changed.to_string()];
+        set.insert(changed.to_string());
+        while let Some(f) = queue.pop() {
+            if let Some(ns) = self.file_namespace.get(&f) {
+                if let Some(deps) = self.ns_dependents.get(ns.value()) {
+                    for d in deps.value().clone() {
+                        if set.insert(d.clone()) {
+                            queue.push(d);
+                        }
+                    }
+                }
+            }
+        }
+        let set_ref = set.clone();
+        let mut order: Vec<String> = Vec::new();
+        let mut visited: HashSet<String> = HashSet::new();
+        let mut set_list: Vec<String> = set_ref.into_iter().collect();
+        set_list.sort();
+        for f in &set_list {
+            self.visit_dep(f, &set_list.iter().cloned().collect(), &mut visited, &mut order);
+        }
+        order
+    }
+
+    /// Analyze a single file and publish its diagnostics.  The file's symbols
+    /// are merged back into the *global* cxt.decl so other files can import
+    /// them; on a type error the previous successful symbols are kept.
+    fn elaborate(&self, uri: &Url, text: &str, version: Option<i32>) {
+        let uri_str = uri.to_string();
+        let rope = Rope::from_str(text);
+        let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        let now_id = self.document_id.get(&uri_str).map(|x| *x).unwrap_or(0);
+        if let Some((decls, parse_errs, new_exports, expansions)) = parser_with_macros(&preprocess(text), now_id, &global_macros) {
+            for (name, rules) in new_exports {
+                self.exported_macros.insert(name, rules);
+            }
+            self.macro_expansion_map.insert(uri_str.clone(), expansions);
+            let mut infer = self.infer.lock().unwrap();
+            let mut cxt = self.cxt.lock().unwrap();
+            // Local cxt = global copy minus this file's previous symbols.
+            let mut local_cxt = cxt.clone();
+            if let Some(keys) = self.file_symbols.get(&uri_str) {
+                let m = Arc::make_mut(&mut local_cxt.decl);
+                for k in keys.value().clone() {
+                    m.remove(k.as_str());
+                }
+            }
+            let before_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
+            let mut local_infer = infer.clone();
+            let mut err_collect = vec![];
+            let mut terms = vec![];
+            for tm in decls {
+                match local_infer.infer(&local_cxt, tm.clone()) {
+                    Ok((x, _, new_cxt)) => {
+                        if let DeclTm::Println(_, ref s, span) = x {
+                            err_collect.push((
+                                crate::L13_namespace::Error(span.map(|_| s.clone()), vec![]),
+                                DiagnosticSeverity::INFORMATION
+                            ));
+                        }
+                        terms.push(x);
+                        local_cxt = new_cxt;
+                    }
+                    Err(err) => {
+                        err_collect.push((err, DiagnosticSeverity::ERROR));
+                    }
+                }
+                for err in local_infer.accumulated_errors.drain(..) {
+                    err_collect.push((err, DiagnosticSeverity::ERROR));
+                }
+            }
+            let after_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
+            let new_keys: HashSet<String> = after_keys.difference(&before_keys).cloned().collect();
+            // Decision 1-a: on type error, keep the previous successful symbols.
+            let has_error = err_collect.iter().any(|(_, sev)| *sev == DiagnosticSeverity::ERROR);
+            if !has_error {
+                *Arc::make_mut(&mut cxt.decl) = (*local_cxt.decl).clone();
+                if new_keys.is_empty() {
+                    self.file_symbols.remove(&uri_str);
+                } else {
+                    self.file_symbols.insert(uri_str.clone(), new_keys);
+                }
+            }
+            let is_builtin = uri.scheme() == "builtin";
+            if !is_builtin {
+                self.type_map.insert(uri_str.clone(), terms);
+                self.hover_table.insert(uri_str.clone(), local_infer.clone());
+            }
+            local_infer.hover_table.clear();
+            local_infer.hover_table.shrink_to_fit();
+            local_infer.completion_table.clear();
+            local_infer.completion_table.shrink_to_fit();
+            local_infer.inlay_hint_table.clear();
+            local_infer.inlay_hint_table.shrink_to_fit();
+            local_infer.shrink();
+            local_infer.mutable_map.write().unwrap().clear();
+            drop(infer);
+            drop(cxt);
+            self.publish_diags(&uri, &rope, version, err_collect, parse_errs);
+        } else {
+            // Parse error: clear per-file analysis state, keep previous symbols.
+            self.type_map.remove(uri.as_str());
+            self.hover_table.remove(uri.as_str());
+            self.quickfix_map.remove(uri.as_str());
+            self.macro_expansion_map.remove(uri.as_str());
+            self.client.publish_diagnostics(
+                uri.clone(),
+                vec![Diagnostic::new_simple(
+                    Range::new(
+                        Position { line: 0, character: 0 },
+                        Position { line: 0, character: 1 },
+                    ),
+                    "parse error".to_owned(),
+                )],
+                version,
+            );
+        }
+    }
+
+    /// Convert collected errors into LSP diagnostics and publish them.
+    fn publish_diags(
+        &self,
+        uri: &Url,
+        rope: &Rope,
+        version: Option<i32>,
+        err_collect: Vec<(crate::L13_namespace::Error, DiagnosticSeverity)>,
+        parse_errs: Vec<crate::L13_namespace::parser::IError>,
+    ) {
+        let mut diags = Vec::new();
+        let mut quickfixes_for_uri = HashMap::new();
+        for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
+            let start_position = offset_to_position(e.0.start_offset as usize, rope).unwrap_or_default();
+            let end_position = offset_to_position(e.0.end_offset as usize, rope).unwrap_or_default();
+            let mut diagnostic = Diagnostic::new_simple(
+                Range::new(start_position, end_position),
+                e.0.data.clone(),
+            );
+            diagnostic.severity = Some(severity);
+            if !e.1.is_empty() {
+                static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+                let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
+                diagnostic.data = Some(serde_json::Value::String(id.clone()));
+                let mut code_actions: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = Vec::new();
+                for fix_fn in e.1.into_iter() {
+                    code_actions.push(fix_fn);
+                }
+                if !code_actions.is_empty() {
+                    quickfixes_for_uri.insert(id, code_actions);
+                }
+            }
+            diags.push(diagnostic);
+        }
+        self.client.publish_diagnostics(uri.clone(), diags, version);
+        self.quickfix_map.insert(uri.to_string(), quickfixes_for_uri);
+    }
+
+    /// Entry point for a changed file: update dependency records, compute the
+    /// incremental rebuild set, and re-elaborate each affected file in order.
+    pub fn process_file(&self, uri: &Url, text: &str, version: Option<i32>) {
+        let start_all = std::time::Instant::now();
+        self.client.log_message(MessageType::LOG, format!("change: {}", uri.as_str()));
+        let uri_str = uri.to_string();
+        self.document_map.insert(uri_str.clone(), Rope::from_str(text));
+        let now_id = self.document_id.get(&uri_str)
+            .map(|x| *x)
+            .unwrap_or(self.document_id.len() as u32);
+        self.document_id.insert(uri_str.clone(), now_id);
+        let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        if let Some((decls, _, _, _)) = parser_with_macros(&preprocess(text), now_id, &global_macros) {
+            self.update_deps(&uri_str, &decls);
+        }
+        let rebuild = self.rebuild_set(&uri_str);
+        for f in &rebuild {
+            let f_text = self.document_map.get(f).map(|r| r.to_string()).unwrap_or_default();
+            if let Ok(f_url) = Url::parse(f) {
+                let f_version = if f == &uri_str { version } else { None };
+                self.elaborate(&f_url, &f_text, f_version);
+            }
+        }
+        self.client.log_message(MessageType::LOG, format!("change {:?}", start_all.elapsed().as_secs_f32()));
+    }
+
+    /// Remove a closed file's symbols from the global cxt and rebuild its dependents.
+    pub fn remove_file(&self, uri: &Url) {
+        let uri_str = uri.to_string();
+        let dependents: Vec<String> = {
+            let mut deps = HashSet::new();
+            if let Some(ns) = self.file_namespace.get(&uri_str) {
+                if let Some(d) = self.ns_dependents.get(ns.value()) {
+                    deps.extend(d.value().clone());
+                }
+            }
+            deps.into_iter().collect()
+        };
+        {
+            let mut infer = self.infer.lock().unwrap();
+            let mut cxt = self.cxt.lock().unwrap();
+            if let Some(keys) = self.file_symbols.get(&uri_str) {
+                let m = Arc::make_mut(&mut cxt.decl);
+                for k in keys.value().clone() {
+                    m.remove(k.as_str());
+                }
+            }
+            self.file_symbols.remove(&uri_str);
+            drop(infer);
+            drop(cxt);
+        }
+        self.clear_file_deps(&uri_str);
+        self.type_map.remove(uri.as_str());
+        self.hover_table.remove(uri.as_str());
+        self.quickfix_map.remove(uri.as_str());
+        self.macro_expansion_map.remove(uri.as_str());
+        for f in dependents {
+            if let Some(text) = self.document_map.get(&f).map(|r| r.to_string()) {
+                if let Ok(f_url) = Url::parse(&f) {
+                    self.elaborate(&f_url, &text, None);
+                }
+            }
+        }
+    }
 }
 
 impl LanguageServer for Backend<Client> {
@@ -704,7 +1038,13 @@ impl LanguageServer for Backend<Client> {
     }
     fn did_close(&self, params: DidCloseTextDocumentParams) {
         debug!("file closed!");
-        self.document_buffers.lock().unwrap().remove(params.text_document.uri.as_str());
+        let uri = params.text_document.uri;
+        self.document_buffers.lock().unwrap().remove(uri.as_str());
+        // Remove the file's symbols from the global cxt and rebuild dependents.
+        if !self.file_symbols.contains_key(uri.as_str()) {
+            return;
+        }
+        self.remove_file(&uri);
     }
 
     fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

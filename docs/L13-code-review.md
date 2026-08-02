@@ -703,3 +703,83 @@ Reference 的 prelude 分析**整体高质、命中率高**，绝大多数声称
 尤其 `Either` 方向矛盾是最有价值的发现。存在**一处事实性错误**（int_add 修复公式，
 §B），以及**几处 precision/severity 偏差**（§C-§F）。修复公式错误最需关注——
 它给出的是"应如何修"的建议，错的建议比漏报危害更大（照做引入 off-by-one）。
+
+---
+
+## 16. 2026-08-02 插件 / LSP 集成审查与修复
+
+> 范围：`vscode_extension/`（VS Code 扩展）与 `src/lib.rs` / `src/ls.rs`（LSP 服务器）。
+> 本报告部分问题已修复（见 §16.3），部分留待决策（§16.4）。
+
+### 16.1 已发现并修复的问题（2026-08-02）
+
+| # | 位置 | 问题 | 修复 commit |
+|---|------|------|------------|
+| A1 | `extension.ts:132-138` | `CountFilesRequest`（`wasm-language-server/countFiles`）+ `vscode-samples.wasm-language-server.countFiles` 命令 —— Microsoft WASM-LSP 示例残留，服务器端未处理 | `0396ffc` |
+| A2 | `extension.ts:75`、`desktop.ts:65` | `synchronize.fileEvents: createFileSystemWatcher("**/.clientrc")` —— 示例模板残留，监听无关文件 | `0396ffc` |
+| A3 | `package.json:3-5`、`client/package.json:4,9` | `author: "Microsoft Corporation"`、示例模板 description、`repository` 指向 Microsoft 仓库 | `0396ffc` |
+| B1 | `client/package.json:32-37` | 死配置 `typort-hdl.typort-lsp-Binary.path`（实际用 `typort-hdl.cli-server.path`） | `0396ffc` |
+| B2 | `desktop.ts:48` | `showServerActions` Log 分支每次 `createOutputChannel` 新建 channel | `0396ffc` |
+| C1 | `typort.tmLanguage.json:41` | 关键字列表含 `if/while/for/return/extends`（Typort 无），缺 `println/package/where/class/Type` | `0396ffc` |
+| D2 | `lib.rs:execute_command` | `eprintln!("searching...")` / `eprintln!("{:?}", ret)` 调试残留 | `91f4a28` |
+
+### 16.2 已新增功能：inlay hint（2026-08-02）
+
+commit `b3e3ee4`。def 未写返回类型、let 未写类型注解时显示推断类型。
+
+- `Infer` 新增 `inlay_hint_table: Vec<(u32, String)>`（mod.rs struct/new/clone 三处）
+- `elaboration.rs` 辅助方法：`peel_pi`（剥 Π 提取 def 返回类型，返回提升后的 quote level 以正确打印依赖返回类型）、`push_inlay_hint`（quote + `no_metas` 检查，含未解 meta 跳过；>80 字符截断加 `…`）
+- 收集点：`Decl::Def` 分支（`ret_type` 为 `Raw::Hole` 时）与 `infer_expr` 的 `Raw::Let`（注解为 Hole 时）
+- LSP：`initialize` 声明 `inlay_hint_provider`；`inlay_hint` 从 per-uri Infer 读表转 `InlayHint { kind: TYPE, padding_left }`
+- on_change / load_prelude 两处清理表
+- 测试 `test_inlay_hint_table`：显式返回类型不提示，省略时提示 `: Nat`（def 与 let 均覆盖）
+
+### 16.3 待决策问题（D1 已通过 inlay hint 完成）
+
+| # | 位置 | 问题 | 建议 |
+|---|------|------|------|
+| **D3** | `lib.rs:completion` | **completion 过滤魔法数**：`offset.saturating_sub(2)` 硬编码 2 字节容差匹配 `completion_table`。问题：(1) 魔法数拍脑袋；(2) `offset = char + position.character` 中 character 是 UTF-16 列而 char 是字节，含多字节字符时错位；(3) 语义模糊——依赖 span 落在容差窗口而非精确匹配 `.` 后的成员。**2026-08-02 记录，暂不修复**。正确做法：用 `position_to_offset` 精确转换，找光标前一个 `.` 前的表达式 span，或匹配紧邻光标前（`span.end == offset`）的 span。 |
+| **D4** | worker 路径 `on_change::<false>` | **跨文件符号不可见**：worker 分析从全局 cxt 克隆（`i.clone()`），但用户文件的 def 不写回全局 cxt。因此**一个文件里定义的符号，其它文件看不到**（只有 prelude 可见），hover/goto/rename/completion 都无法跨文件。 | **已实现**（2026-08-02，方案 2 增量+依赖图，见 §16.5）。 |
+
+### 16.4 D4 跨文件符号问题分析
+
+**现象**：在 `a.typort` 定义 `def foo = ...`，在 `b.typort` 引用 `foo` → `foo not in scope`。
+
+**根因**（`src/lib.rs` `on_change`）：
+- `load_prelude_impl`（MUT=true）：把 prelude 文件写进**全局** `self.cxt`。
+- worker 分析用户文件（MUT=false）：`ic = i.clone()` / `cc = c.clone()` —— 从全局克隆一份 `Infer` + `Cxt`，只处理**当前文件**，结果存 `hover_table[uri]`，但**不写回全局 cxt**。
+- 于是每个文件的分析都基于"只有 prelude 的全局 cxt"，用户文件之间的符号互不可见。
+
+**影响**：
+- 同一 workspace 内多文件项目（import 其他文件）无法解析 —— 与 §L13 的 namespace/import 设计（parser 支持 `import`）脱节。
+- hover/goto/references/completion 都只对本文件有效。
+- 诊断会出现大量假的 "name not in scope"。
+
+**可能的方向**（需设计决策，未实现）：
+1. **全量重编译**：每次任一文件变化，把所有文件（含 prelude）按依赖顺序重新 infer 到**全局** cxt。简单正确，但 O(所有文件) 每次键入都重跑，性能差。
+2. **增量 + 依赖追踪**：维护 uri → 依赖列表，只重编译受影响文件，并正确回写全局。复杂度高，需设计 import 依赖图。
+3. **共享全局 cxt + 顺序处理**：所有文件共享一个全局 cxt（不克隆），worker 串行处理，每个文件的 def 回写全局。但并发 worker 会冲突，且文件顺序敏感。
+4. **当前折中**：保持现状（单文件可见），文档明确"跨文件需手动 import 到同一文件或依赖 prelude"。
+
+**结论**：D4 是功能缺口而非 bug，与语言层的 namespace/import 能力不匹配。修复涉及 LSP 架构决策（重编译策略、依赖图、并发模型），风险和工作量都较大。**建议**：若 Typort 实际使用以单文件为主，暂缓；若有多文件项目需求，先做方案 1（全量重编译）打底，再迭代到方案 2。
+
+### 16.5 D4 实现：跨文件增量重编译（2026-08-02，方案 2）
+
+**决策**：增量 + 依赖图；文件出错保留上次成功符号（1-a）；增量粒度 namespace 级（2）；关闭文件移除符号并重建依赖者（3-b）。
+
+**架构**（`src/lib.rs`）：
+- 全局 `self.cxt` 是所有打开文件的符号并集；每个文件 elaborate 后把其 decl 合并回全局 `cxt.decl`，使 `import` 能跨文件读取。
+- 依赖图字段：`file_symbols`（uri→写入的 decl key）、`file_deps`（uri→import 的 namespace）、`file_namespace`（uri→package）、`ns_providers`（namespace→提供者）、`ns_dependents`（namespace→依赖者）。
+- `update_deps`：从 import/package 声明重建依赖记录。
+- `rebuild_set` + `visit_dep`：从变更文件出发，闭包收集所有依赖其 namespace 的文件，DFS 拓扑排序（依赖先编译）。
+- `elaborate`：锁全局，克隆 cxt 并**移除该文件旧 key** → infer（import 从全局读）→ diff 新 key → **无类型错误才写回**全局 decl + 更新 `file_symbols`；失败保留旧符号。诊断/hover/type_map 照旧。
+- `process_file`：更新 document_map → 解析更新依赖 → rebuild_set → 逐个 elaborate。worker 改调它。
+- `remove_file`：关闭时移除该文件符号 + 重建依赖者。
+- `on_change::<true>` 保留给 prelude 加载；`on_change::<false>` 不再被 worker 使用。
+
+**已知限制**：
+- 跨文件同步的是 `cxt.decl`（符号表），**不同步 `Infer` 的 trait/typeclass 注册状态** —— trait/impl 跨文件暂不可见（与现状一致，无跨文件 trait 用例）。
+- import 是 namespace 粒度，依赖图的"增量"是文件级重编译；namespace 被多文件共享时收益有限。
+- examples/tests 原本零跨文件用例，功能由新测试 `tests/cross_file_tests.rs` 验证（3 个用例：跨文件 import 解析、编辑提供者重建依赖者、关闭移除符号）。
+
+**测试**：`cargo test --test cross_file_tests` 3 passed；L13 全量 206 passed；completion_tests 10 passed。
