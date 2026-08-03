@@ -98,6 +98,7 @@ The repo includes a VS Code extension in `vscode_extension/` for syntax highligh
 | `examples/typeclass_complex.typort` | Traits, instances, generic impls, Eq proofs |
 | `examples/alu.typort` | HDL module, UInt arithmetic, Into trait |
 | `examples/hdl_ops.typort` | apply, slice, bool ops, sub-modules, LHS bit-select |
+| `examples/adder_proof.typort` | Adder correctness proof, Agda-style, Eq/refl/trans/symm/cong |
 
 ## Architecture
 
