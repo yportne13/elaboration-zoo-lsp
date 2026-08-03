@@ -1,4 +1,4 @@
-﻿#![feature(pattern)]
+#![feature(pattern)]
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -55,14 +55,14 @@ use std::sync::{Arc, Mutex, Condvar, mpsc};
 use std::io::{self, BufRead, Write, stdin, stdout};
 use std::thread;
 
-// 2. 瀹氫箟浼犻€掔粰宸ヤ綔绾跨▼鐨勪换鍔″寘
+// 2. 定义传递给工作线程的任务包
 struct AnalysisJob {
     uri: Url,
     text: String,
     version: Option<i32>,
 }
 
-// 3. 淇敼 Backend 缁撴瀯
+// 3. 修改 Backend 结构
 pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub client: C,
     pub ast_map: DashMap<String, Vec<Decl>>,
@@ -87,14 +87,14 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub ns_providers: DashMap<String, HashSet<String>>,
     /// namespace -> files that depend on it (import it)
     pub ns_dependents: DashMap<String, HashSet<String>>,
-    // 鐘舵€佹爣璁板拰鏉′欢鍙橀噺
-    processing_uris: DashMap<String, bool>, // URI -> 姝ｅ湪琚?worker 澶勭悊
-    pending_uris: DashMap<String, bool>,     // URI -> 宸叉帓闃熺瓑寰呭鐞嗭紙鍦?worker 鍚姩鍓嶅氨鏍囪锛?
-    // 淇″彿鏈哄埗锛歮psc 閫氶亾浠诲姟闃熷垪
+    // 状态标记和条件变量
+    processing_uris: DashMap<String, bool>, // URI -> 正在被 worker 处理
+    pending_uris: DashMap<String, bool>,     // URI -> 已排队等待处理（在 worker 启动前就标记）
+    // 信号机制：mpsc 通道任务队列
     job_sender: mpsc::Sender<AnalysisJob>,
-    // Worker 绾跨▼鐨勬帴鏀剁锛堝湪 spawn_worker 鏃跺彇鍑轰娇鐢級
+    // Worker 线程的接收端（在 spawn_worker 时取出使用）
     job_receiver: Mutex<Option<mpsc::Receiver<AnalysisJob>>>,
-    // 澶勭悊瀹屾垚鐨勪俊鍙?
+    // 处理完成的信号
     processed_signal: Arc<(Mutex<HashMap<String, bool>>, Condvar)>,
     /// Track cancelled request IDs from $/cancelRequest
     cancelled_requests: Mutex<HashSet<RequestId>>,
@@ -209,7 +209,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         if let Some(content) = self.document_map.get(uri).map(|rope| rope.to_string()) {
             return Some(content);
         }
-        // VS Code normalizes builtin:/// 鈫?builtin:/ (empty authority 鈫?no //).
+        // VS Code normalizes builtin:/// → builtin:/ (empty authority → no //).
         // Normalize to match the keys in document_map.
         if uri.starts_with("builtin:/") && !uri.starts_with("builtin://") {
             let normalized = uri.replacen("builtin:/", "builtin:///", 1);
@@ -220,8 +220,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         None
     }
 
-    /// 鍦?LSP init 鎻℃墜瀹屾垚鍚庡姞杞?prelude 鏂囦欢銆?
-    /// 杩欐椂 connection 宸茬粡寤虹珛锛宒iagnostics 浼氭纭彂閫佺粰瀹㈡埛绔€?
+    /// 在 LSP init 握手完成后加载 prelude 文件。
+    /// 这时 connection 已经建立，diagnostics 会正确发送给客户端。
     pub fn load_prelude(self: &Arc<Self>) {
         self.load_prelude_impl(false);
     }
@@ -355,7 +355,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/show.typort"),
             version: None,
         });
-        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero 鈫?zero)
+        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
         {
             let cxt_lock = self.cxt.lock().unwrap();
             let aliases: Vec<(SmolStr, _)> = cxt_lock.decl.iter()
@@ -381,8 +381,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.infer.lock().unwrap().mutable_map.write().unwrap().clear();
     }
 
-    /// 鍚姩宸ヤ綔绾跨▼澶勭悊鍒嗘瀽浠诲姟銆?
-    /// 蹇呴』鍦?`load_prelude` 涔嬪悗璋冪敤锛岀‘淇?prelude 宸插氨缁€?
+    /// 启动工作线程处理分析任务。
+    /// 必须在 `load_prelude` 之后调用，确保 prelude 已就绪。
     pub fn spawn_worker(self: &Arc<Self>) {
         let rx = self.job_receiver.lock().unwrap().take()
             .expect("spawn_worker() called more than once");
@@ -405,7 +405,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
             // Drain all remaining queued jobs, keeping only the latest per URI.
             // If user types faster than we can analyze, intermediate versions
-            // are skipped 鈥?only the most recent content of each file matters.
+            // are skipped — only the most recent content of each file matters.
             let mut latest: HashMap<String, AnalysisJob> = HashMap::new();
             latest.insert(first_job.uri.to_string(), first_job);
             while let Ok(job) = rx.try_recv() {
@@ -423,7 +423,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
                 self.processing_uris.insert(uri_str.clone(), true);
 
-                // 姝ゆ椂閿佸凡閲婃斁锛屼富绾跨▼鍙互鏀惧叆鏂颁换鍔★紝鎴戜滑鍦ㄥ鐞嗗綋鍓嶆渶鏂扮殑浠诲姟
+                // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
                 self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
                 self.process_file(&job.uri, &job.text, job.version);
 
@@ -495,7 +495,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
 	                }
 	                }
-	                // 鍙栧嚭妯″紡鍖归厤鍒嗘敮涓疮绉殑棰濆绫诲瀷閿欒锛屾瘡涓彉鎴愮嫭绔嬭瘖鏂?
+	                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
 	                for err in infer.accumulated_errors.drain(..) {
 	                    err_collect.push((err, DiagnosticSeverity::ERROR));
 	                }
@@ -525,7 +525,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut diags = Vec::new();
             let mut quickfixes_for_uri = HashMap::new();
 
-            // 鐢熸垚璇婃柇锛堝師鏈夌殑 err_collect + parse errors锛?
+            // 生成诊断（原有的 err_collect + parse errors）
             for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
                 let start_position = offset_to_position(e.0.start_offset as usize, &rope).unwrap_or_default();
                 let end_position = offset_to_position(e.0.end_offset as usize, &rope).unwrap_or_default();
@@ -535,9 +535,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 );
                 diagnostic.severity = Some(severity);
 
-                // 濡傛灉鏈?Quick Fix 淇鍑芥暟
+                // 如果有 Quick Fix 修复函数
                 if !e.1.is_empty() {
-                    // 鐢熸垚鍞竴 ID锛堝彲鐢ㄥ師瀛愯鏁板櫒鎴?UUID锛?
+                    // 生成唯一 ID（可用原子计数器或 UUID）
                     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
                     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
                     diagnostic.data = Some(serde_json::Value::String(id.clone()));
@@ -554,12 +554,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 diags.push(diagnostic);
             }
 
-            // 鍙戝竷璇婃柇
+            // 发布诊断
             self.client.publish_diagnostics(params.uri.clone(), diags, params.version);
-            // 瀛樺偍 Quick Fix 鏄犲皠锛堣鐩栨棫鐨勶級
+            // 存储 Quick Fix 映射（覆盖旧的）
             self.quickfix_map.insert(params.uri.to_string(), quickfixes_for_uri);
         } else {
-            // Parser returned None 鈥?file has syntax errors.
+            // Parser returned None — file has syntax errors.
             // Clear any stale analysis results for this URI so the editor
             // doesn't show outdated hovers / type info from the last good parse.
             self.type_map.remove(params.uri.as_str());
@@ -582,7 +582,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.client.log_message(MessageType::LOG, format!("change {:?}", start_all.elapsed().as_secs_f32()));
     }
 
-    // 鈹€鈹€ Cross-file dependency tracking (incremental rebuild) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+    // ── Cross-file dependency tracking (incremental rebuild) ────────────────
 
     /// Recompute the dependency records for `uri` from its import/package decls.
     fn update_deps(&self, uri: &str, decls: &[Decl]) {
@@ -746,48 +746,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
             }
             let after_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
-            let a_added_keys: HashSet<String> = after_keys.difference(&before_keys).cloned().collect();
+            let new_keys: HashSet<String> = after_keys.difference(&before_keys).cloned().collect();
             // Decision 1-a: on type error, keep the previous successful symbols.
             let has_error = err_collect.iter().any(|(_, sev)| *sev == DiagnosticSeverity::ERROR);
             if !has_error {
-                // Close this file's newly-added decls (inline resolved metas) so
-                // their values are safe in another file's meta space. Prelude /
-                // other files' decls are left untouched.
-                let mut closed_decl: std::collections::HashMap<SmolStr, _> = std::collections::HashMap::new();
-                for (k, e) in local_cxt.decl.iter() {
-                    let kstr = k.to_string();
-                    if a_added_keys.contains(&kstr) {
-                        let (span, tm, vt, ty, vty, prim) = e.clone();
-                        let tm_c = local_infer.close_tm_shared(&local_cxt.decl, &tm);
-                        let vt_c = local_infer.close_val_shared(&local_cxt.decl, &vt);
-                        let ty_c = local_infer.close_tm_shared(&local_cxt.decl, &ty);
-                        let vty_c = local_infer.close_val_shared(&local_cxt.decl, &vty);
-                        closed_decl.insert(k.clone(), (span, tm_c, vt_c, ty_c, vty_c, prim));
-                    } else {
-                        closed_decl.insert(k.clone(), e.clone());
-                    }
-                }
-                let safe_decl: std::collections::HashMap<SmolStr, _> = closed_decl.iter()
-                    .filter(|(_, e)| {
-                        // Cross-file sharing requires a fully-closed decl: any meta
-                        // (in the value or the type term/vty) references the
-                        // producing file's meta space and breaks in a clone.
-                        !local_infer.val_has_unsolved_flex(&local_cxt.decl, &e.2)
-                            && !local_infer.tm_has_unsolved_flex(&local_cxt.decl, &e.1)
-                            && !local_infer.val_has_unsolved_flex(&local_cxt.decl, &e.4)
-                    })
-                    .map(|(k, e)| (k.clone(), e.clone()))
-                    .collect();
-                let safe_keys: HashSet<String> = safe_decl.keys().map(|k| k.to_string()).collect();
-                let new_safe_keys: HashSet<String> = safe_keys.difference(&before_keys).cloned().collect();
-                *Arc::make_mut(&mut cxt.decl) = safe_decl;
-                // Merge the file's trait/typeclass state so other files can use
-                // traits defined here (definitions, out params, instances).
-                infer.merge_trait_state_from(&local_infer);
-                if new_safe_keys.is_empty() {
+                *Arc::make_mut(&mut cxt.decl) = (*local_cxt.decl).clone();
+                if new_keys.is_empty() {
                     self.file_symbols.remove(&uri_str);
                 } else {
-                    self.file_symbols.insert(uri_str.clone(), new_safe_keys);
+                    self.file_symbols.insert(uri_str.clone(), new_keys);
                 }
             }
             let is_builtin = uri.scheme() == "builtin";
@@ -984,7 +951,7 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn did_open(&self, params: DidOpenTextDocumentParams) {
-        // Skip builtin:// prelude files 鈥?they are already loaded during load_prelude()
+        // Skip builtin:// prelude files — they are already loaded during load_prelude()
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
@@ -1004,7 +971,7 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn did_change(&self, params: DidChangeTextDocumentParams) {
-        // Skip builtin:// prelude files 鈥?they are read-only virtual documents
+        // Skip builtin:// prelude files — they are read-only virtual documents
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
@@ -1038,7 +1005,7 @@ impl LanguageServer for Backend<Client> {
                 }
                 buffer.clone()
             } else {
-                // No existing buffer 鈥?fallback to first change's text
+                // No existing buffer — fallback to first change's text
                 params.content_changes[0].text.clone()
             }
         };
@@ -1053,7 +1020,7 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn did_save(&self, params: DidSaveTextDocumentParams) {
-        // Skip builtin:// prelude files 鈥?they are read-only virtual documents
+        // Skip builtin:// prelude files — they are read-only virtual documents
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
@@ -1652,7 +1619,7 @@ impl Notification for CustomNotification {
 }
 
 /// Normalize a builtin:// URI for map lookups.
-/// VS Code serializes builtin:/// 鈫?builtin:/ (empty authority 鈫?no //),
+/// VS Code serializes builtin:/// → builtin:/ (empty authority → no //),
 /// but our maps store keys with builtin:///.
 fn normalize_builtin_uri(uri: &Url) -> Url {
     let s = uri.as_str();
@@ -1759,9 +1726,9 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
         }
     };
 
-    // 鍦?init 鎻℃墜瀹屾垚鍚庡姞杞?prelude锛岄伩鍏?diagnostics 鍙戦€佸湪鎻℃墜涔嬪墠
+    // 在 init 握手完成后加载 prelude，避免 diagnostics 发送在握手之前
     backend.load_prelude();
-    // 鐒跺悗鍚姩宸ヤ綔绾跨▼澶勭悊鐢ㄦ埛鏂囦欢
+    // 然后启动工作线程处理用户文件
     backend.spawn_worker();
 
     let main_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1839,4 +1806,3 @@ fn create_monitored_connection(connection: lsp_server::Connection) -> lsp_server
         receiver: stdin_rx,
     }
 }
-

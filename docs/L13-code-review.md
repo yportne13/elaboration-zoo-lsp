@@ -778,34 +778,8 @@ commit `b3e3ee4`。def 未写返回类型、let 未写类型注解时显示推�
 - `on_change::<true>` 保留给 prelude 加载；`on_change::<false>` 不再被 worker 使用。
 
 **已知限制**：
-- 跨文件只同步 `cxt.decl`（符号表），**不同步 `Infer` 的 trait/typeclass 注册状态** —— trait/impl 跨文件暂不可见（与现状一致，无跨文件 trait 用例）。
+- 跨文件同步的是 `cxt.decl`（符号表），**不同步 `Infer` 的 trait/typeclass 注册状态** —— trait/impl 跨文件暂不可见（与现状一致，无跨文件 trait 用例）。
 - import 是 namespace 粒度，依赖图的"增量"是文件级重编译；namespace 被多文件共享时收益有限。
 - examples/tests 原本零跨文件用例，功能由新测试 `tests/cross_file_tests.rs` 验证（3 个用例：跨文件 import 解析、编辑提供者重建依赖者、关闭移除符号）。
 
 **测试**：`cargo test --test cross_file_tests` 3 passed；L13 全量 206 passed；completion_tests 10 passed。
-
-### 16.6 D4 跨文件 trait/typeclass 支持（2026-08-02 追加）
-
-在 §16.5 基础上，将 trait/typeclass 状态纳入跨文件同步，并修复暴露出的语言层 namespace 缺陷。
-
-**1. trait 状态跨文件合并**
-- `Infer::merge_trait_state_from`（mod.rs）：合并 `trait_definition` / `trait_out_param` / `assoc_defaults` / `trait_solver`。
-- `Synth::merge_persistent` + `instance_equal` + `rebuild_head_index`（typeclass.rs）：合并 `class_instances`（按 assertion 去重）与 `trait_out_params`，重建 `head_index`。临时搜索状态不合并。
-- `elaborate` 成功时调用合并。
-
-**2. 语言层 namespace 缺陷修复**（跨文件 trait 暴露）
-- **parser `p_impl` 的 trait 名支持点号路径**（`impl mylib.Describe for Nat`），原先只接受裸标识符。
-- **`prefix_decl_name` 的 TraitDecl 分支不再前缀方法名**：`trait_wrap` 按裸方法名（`describe`）匹配 `obj.method`，方法名前缀（`mylib.describe`）导致找不到。
-- **impl 的 `has_impl` 匹配剥前缀**：impl 方法名带 namespace 前缀，trait 方法名为裸名，比较用 `ends_with(".{name}")`。
-- **TraitDecl 内部递归 Enum 前清空 `namespace_prefix`**：原先 `trait Describe` 在 package 下被 infer 入口二次前缀成 `mylib.mylib.Describe`，导致 trait 注册名不一致（报 "no instance of typeclass mylib.mylib.Describe"）。
-
-**3. 跨文件 decl 的 meta 空间安全**（关键）
-- 合并到全局 `cxt.decl` 的值若引用产生文件的 meta（`Flex`/`Tm::Meta` 的 index 属于该文件空间），B 文件的 clone 读取会 `lookup_meta` 越界 panic。
-- 新增 `Infer::val_has_unsolved_flex` / `tm_has_unsolved_flex`（遇到任何 meta 即 true，含 solved——index 仍属产生文件空间）+ `close_val_shared` / `close_tm_shared`（quote+eval 在产生文件空间内联解 meta）。
-- `elaborate` 合并前：只对**该文件新增**的 decl 做闭合化，再过滤仍含 meta 的项。prelude 的 decl 不动（其 meta 在全局空间，clone 可解析）。
-
-**新增测试**（`tests/cross_file_tests.rs`）：
-- `cross_file_trait_visible`：A `package mylib` 定义 trait + impl，B import 后用 `zero.describe`。
-- `pkg_trait_single_file`：隔离验证单文件 package trait 调用（语言层修复的回归保护）。
-
-**测试**：cross_file_tests 5 passed；L13 全量 206 passed；completion_tests 10 passed；全量 build 通过。

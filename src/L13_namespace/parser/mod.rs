@@ -1400,22 +1400,11 @@ fn p_impl_body_item_def_or_type<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &
 }
 
 fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    // Trait name may be a dotted namespace path: `impl mylib.Describe for Nat`.
-    let dotted_trait_name = (
-        smolstr(Ident),
-        (kw(T![.]), smolstr(Ident)).many0(),
-    ).map(|(first, rest)| {
-        let mut s = first.data.clone();
-        for (_, seg) in rest {
-            s = SmolStr::new(format!("{s}.{}", seg.data));
-        }
-        first.map(|_| s.clone())
-    });
     Cut((
         kw(ImplKeyword),
         p_pi_impl_binder_option,
         (
-            dotted_trait_name,
+            smolstr(Ident),
             square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.and_then(|r| r.ok()).unwrap_or_default()),
             Cut((
                 kw(ForKeyword),
