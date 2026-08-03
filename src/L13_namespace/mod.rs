@@ -386,6 +386,18 @@ impl IError {
     }
 }
 
+/// A `println` whose normalization was deferred so type errors can reach the
+/// client before the (potentially slow) `nf` runs.  Captures the exact
+/// context at the point of elaboration, so the deferred `nf`/`pretty_tm`
+/// produces the same result as computing inline.
+pub struct PrintlnJob {
+    pub tm: Rc<Tm>,
+    pub span: Span<()>,
+    pub decl: Rc<Decl>,
+    pub env: Env,
+    pub names: List<SmolStr>,
+}
+
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
@@ -412,6 +424,12 @@ pub struct Infer {
     /// inlined helper call (`nat_add_helper x y`).  User-defined operator
     /// symbols are supported automatically.
     pub symbol_table: HashMap<(SmolStr, usize), SmolStr>,
+    /// When true, `Decl::Println` skips the inline `nf` and records a
+    /// `println_jobs` entry instead, deferring normalization to a later
+    /// phase (used by the LSP worker so tyck diagnostics publish first).
+    pub defer_println: bool,
+    /// Deferred `println` jobs accumulated while `defer_println` is set.
+    pub println_jobs: Vec<PrintlnJob>,
 }
 
 impl Clone for Infer {
@@ -429,6 +447,8 @@ impl Clone for Infer {
             completion_table: self.completion_table.clone(),
             inlay_hint_table: self.inlay_hint_table.clone(),
             symbol_table: self.symbol_table.clone(),
+            defer_println: self.defer_println,
+            println_jobs: Vec::new(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -717,6 +737,8 @@ impl Infer {
             inlay_hint_table: vec![],
             symbol_table: HashMap::new(),
             accumulated_errors: vec![],
+            defer_println: false,
+            println_jobs: vec![],
         }
     }
 

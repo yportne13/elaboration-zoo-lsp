@@ -814,8 +814,19 @@ impl Infer {
                 {
                     let span = t.to_span();
                     let tm = self.infer_expr(cxt, t)?.0;
-                    let t_pretty = super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &tm));
-                    DeclTm::Println(tm, t_pretty, span)
+                    if self.defer_println {
+                        self.println_jobs.push(super::PrintlnJob {
+                            tm: tm.clone(),
+                            span,
+                            decl: cxt.decl.clone(),
+                            env: cxt.env.clone(),
+                            names: cxt.names(),
+                        });
+                        DeclTm::Println(tm, String::new(), span)
+                    } else {
+                        let t_pretty = super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &tm));
+                        DeclTm::Println(tm, t_pretty, span)
+                    }
                 },
                 Val::U(0).into(),
                 cxt.clone(),

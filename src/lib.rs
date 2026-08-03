@@ -725,17 +725,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
             let before_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
             let mut local_infer = infer.clone();
+            // Phase 1 (fast): type-check without normalizing `println` args, so
+            // tyck errors reach the client before the slow `nf` phase.
+            local_infer.defer_println = true;
             let mut err_collect = vec![];
             let mut terms = vec![];
             for tm in decls {
                 match local_infer.infer(&local_cxt, tm.clone()) {
                     Ok((x, _, new_cxt)) => {
-                        if let DeclTm::Println(_, ref s, span) = x {
-                            err_collect.push((
-                                crate::L13_namespace::Error(span.map(|_| s.clone()), vec![]),
-                                DiagnosticSeverity::INFORMATION
-                            ));
-                        }
                         terms.push(x);
                         local_cxt = new_cxt;
                     }
@@ -774,7 +771,20 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             local_infer.mutable_map.write().unwrap().clear();
             drop(infer);
             drop(cxt);
-            self.publish_diags(&uri, &rope, version, err_collect, parse_errs);
+            let (mut diags, quickfixes_for_uri) = self.build_diags(&uri, &rope, err_collect, parse_errs);
+            // Publish tyck errors first (fast path).
+            self.client.publish_diagnostics(uri.clone(), diags.clone(), version);
+            self.quickfix_map.insert(uri_str.clone(), quickfixes_for_uri);
+            // Phase 2: normalize deferred `println`s, then re-publish with the
+            // results still bundled alongside the current errors.
+            if !local_infer.println_jobs.is_empty() {
+                let start = std::time::Instant::now();
+                let print_diags = self.println_info_diags(&local_infer, &rope);
+                local_infer.println_jobs.clear();
+                self.client.log_message(MessageType::LOG, format!("println nf {:?}", start.elapsed().as_secs_f32()));
+                diags.extend(print_diags);
+                self.client.publish_diagnostics(uri.clone(), diags, version);
+            }
         } else {
             // Parse error: clear per-file analysis state, keep previous symbols.
             self.type_map.remove(uri.as_str());
@@ -795,15 +805,16 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
     }
 
-    /// Convert collected errors into LSP diagnostics and publish them.
-    fn publish_diags(
+    /// Convert collected errors into LSP diagnostics (and quick-fix mappings),
+    /// without publishing — the caller publishes them (possibly more than once
+    /// when deferred `println` results arrive in a second phase).
+    fn build_diags(
         &self,
         uri: &Url,
         rope: &Rope,
-        version: Option<i32>,
         err_collect: Vec<(crate::L13_namespace::Error, DiagnosticSeverity)>,
         parse_errs: Vec<crate::L13_namespace::parser::IError>,
-    ) {
+    ) -> (Vec<Diagnostic>, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>) {
         let mut diags = Vec::new();
         let mut quickfixes_for_uri = HashMap::new();
         for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
@@ -828,8 +839,30 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
             diags.push(diagnostic);
         }
-        self.client.publish_diagnostics(uri.clone(), diags, version);
-        self.quickfix_map.insert(uri.to_string(), quickfixes_for_uri);
+        (diags, quickfixes_for_uri)
+    }
+
+    /// Phase 2 of a file analysis: normalize deferred `println` terms and turn
+    /// the results into INFORMATION diagnostics (mirroring the pre-existing
+    /// inline behavior).
+    fn println_info_diags(
+        &self,
+        infer: &crate::L13_namespace::Infer,
+        rope: &Rope,
+    ) -> Vec<Diagnostic> {
+        let mut diags = Vec::new();
+        for job in &infer.println_jobs {
+            let s = pretty_tm(0, job.names.clone(), &infer.nf(&job.decl, &job.env, &job.tm));
+            let start_position = offset_to_position(job.span.start_offset as usize, rope).unwrap_or_default();
+            let end_position = offset_to_position(job.span.end_offset as usize, rope).unwrap_or_default();
+            let mut diagnostic = Diagnostic::new_simple(
+                Range::new(start_position, end_position),
+                s.to_string(),
+            );
+            diagnostic.severity = Some(DiagnosticSeverity::INFORMATION);
+            diags.push(diagnostic);
+        }
+        diags
     }
 
     /// Entry point for a changed file: update dependency records, compute the
