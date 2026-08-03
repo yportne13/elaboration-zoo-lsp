@@ -2,26 +2,30 @@
 // HDL Example 10: Bundle（SpinalHDL 风格结构化 IO）
 //
 //   #[derive(Bundle)] struct ... — 自动生成：
-//     1. impl Bundle（字段级批量赋值 :=）
+//     1. impl Bundle（字段级批量赋值 :=，自动跳过 input 端口 LHS）
 //     2. impl Into[Self]（供 Expr 宏使用）
-//     3. create_TypeName(prefix) 信号工厂
+//     3. create_TypeName[bn: BindingName] — 自动命名信号工厂
+//        （let 绑定名 + "_" + 字段名，如 master 的 awaddr → "master_awaddr"）
+//     4. master_TypeName / slave_TypeName — 方向化端口工厂
+//        （字段带 in()/out() 标记时生成；master 驱动字段为输出、接收字段
+//        为输入，slave 反之 —— SpinalHDL 语义）
 //
 //   master := slave  批量赋值（逐字段 assign）
 // ============================================================
 
 #[derive(Bundle)]
 struct AxiLite {
-    awaddr: UInt[32]
-    awvalid: Bool
-    awready: Bool
-    wdata: UInt[32]
-    wvalid: Bool
-    wready: Bool
+    awaddr: out(UInt[32])
+    awvalid: out(Bool)
+    awready: in(Bool)
+    wdata: out(UInt[32])
+    wvalid: out(Bool)
+    wready: in(Bool)
 }
 
 module bundleTop {
-    let master = create_AxiLite("m_")
-    let slave = create_AxiLite("s_")
+    let master = create_AxiLite
+    let slave = create_AxiLite
     master := slave
 }
 println("=== 10a: bundleTop (derive(Bundle) 批量赋值) ===")
@@ -35,9 +39,22 @@ struct MyBus[w: Nat] {
 }
 
 module bundleParam {
-    let bus1 = create_MyBus[8]("bus1_")
-    let bus2 = create_MyBus[8]("bus2_")
+    let bus1 = create_MyBus[8]
+    let bus2 = create_MyBus[8]
     bus1 := bus2
 }
 println("=== 10b: bundleParam (参数化 Bundle) ===")
 println(moduleTreeVL(bundleParam.create.tree))
+
+// master/slave 方向化：同一个 AxiLite，字段方向用 in()/out() 标记
+// （master 视角）。master_AxiLite 把驱动字段做成 output 端口、接收字段
+// 做成 input 端口；slave_AxiLite 反之。:= 只驱动可驱动字段（跳过 input
+// 端口），因此 master/slave 可以双向对连成一个 AXI pass-through。
+module bundleMasterSlave {
+    let master = master_AxiLite
+    let slave = slave_AxiLite
+    master := slave
+    slave := master
+}
+println("=== 10c: bundleMasterSlave (master/slave 方向化端口) ===")
+println(moduleTreeVL(bundleMasterSlave.create.tree))

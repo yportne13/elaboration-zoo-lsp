@@ -128,6 +128,9 @@ fn build_enum_case(
 ///   let __b0 = this.f1 := that.f1;
 ///   let __b1 = this.f2 := that.f2;
 ///   unit
+/// For primitive fields, the assignment is guarded by an isInputPort check so
+/// that driving an input port (illegal Verilog) is skipped — this lets a
+/// master/slave pair be connected with `:=` in both directions.
 fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
     if fields.is_empty() {
         return Raw::Var(empty_span(SmolStr::new("unit")));
@@ -135,7 +138,7 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
 
     let mut result = Raw::Var(empty_span(SmolStr::new("unit")));
 
-    for (i, (field_name, _, _)) in fields.iter().enumerate().rev() {
+    for (i, (field_name, field_type, _)) in fields.iter().enumerate().rev() {
         let assign = Raw::App(
             Box::new(Raw::Obj(
                 Box::new(Raw::Obj(
@@ -151,10 +154,38 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
             Either::Icit(Icit::Expl),
         );
 
+        // Guard primitive fields with `match isInputPort(this.<f>.zz_expr)`.
+        let step = if is_primitive_type(field_type) {
+            let lhs_expr = Raw::Obj(
+                Box::new(Raw::Obj(
+                    Box::new(Raw::Var(empty_span(SmolStr::new("this")))),
+                    Some(field_name.clone()),
+                )),
+                Some(empty_span(SmolStr::new("zz_expr"))),
+            );
+            let check = Raw::app(Raw::Var(empty_span(SmolStr::new("isInputPort"))), lhs_expr);
+            let skip = Raw::Var(empty_span(SmolStr::new("unit")));
+            Raw::Match(
+                Box::new(check),
+                vec![
+                    (
+                        Pattern::Con(empty_span(SmolStr::new("true")), vec![], Either::Icit(Icit::Expl)),
+                        skip,
+                    ),
+                    (
+                        Pattern::Con(empty_span(SmolStr::new("false")), vec![], Either::Icit(Icit::Expl)),
+                        assign,
+                    ),
+                ],
+            )
+        } else {
+            assign
+        };
+
         result = Raw::Let(
             empty_span(SmolStr::new(format!("__b{}", i))),
             Box::new(Raw::Hole(empty_span(()))),
-            Box::new(assign),
+            Box::new(step),
             Box::new(result),
         );
     }
@@ -162,9 +193,39 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
     result
 }
 
-/// Check whether a Raw type expression is one of the recognised primitive HDL types.
+/// Direction mode of a generated signal factory.
+#[derive(Clone, Copy, PartialEq)]
+enum CreateMode {
+    /// Plain wires (create_TypeName) — direction markers are ignored.
+    Wire,
+    /// Master-perspective directed ports (master_TypeName).
+    Master,
+    /// Slave-perspective directed ports (slave_TypeName).
+    Slave,
+}
+
+/// Unwrap a direction marker (`in(...)` / `out(...)` / `inout(...)`) applied to
+/// a field type. Returns the marker name (if any) and the wrapped type.
+/// The markers are type-level identity functions defined in hdl-bus.typort;
+/// the derive reads them before elaboration to learn each field's direction
+/// (from the master's point of view).
+fn unwrap_dir_marker(t: &Raw) -> (Option<&str>, &Raw) {
+    if let Raw::App(inner, arg, Either::Icit(Icit::Expl)) = t {
+        if let Raw::Var(v) = inner.as_ref() {
+            let name = v.data.as_str();
+            if name == "in" || name == "out" || name == "inout" {
+                return (Some(name), arg.as_ref());
+            }
+        }
+    }
+    (None, t)
+}
+
+/// Check whether a Raw type expression is one of the recognised primitive HDL
+/// types (possibly wrapped in a direction marker).
 fn is_primitive_type(t: &Raw) -> bool {
-    match t {
+    let (_, inner) = unwrap_dir_marker(t);
+    match inner {
         Raw::Var(v) => v.data == "Bool",
         Raw::App(inner, _, _) => match inner.as_ref() {
             Raw::Var(v) => v.data == "UInt" || v.data == "SInt" || v.data == "Bits",
@@ -174,42 +235,122 @@ fn is_primitive_type(t: &Raw) -> bool {
     }
 }
 
-/// Build the signal creation expression for a single field.
-/// Recognizes: UInt[w], SInt[w], Bits[w], Bool.
-/// Returns `newUInt(prefix+"name", w)`, `newBool(prefix+"name")`, etc.
-fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw) -> Raw {
-    let name_expr = str_cat(
-        Raw::Var(empty_span(SmolStr::new("prefix"))),
-        Raw::LiteralIntro(empty_span(field_name.data.to_string())),
+/// Build the auto-naming expression for a field inside a factory body:
+///   match str_eq(bn.name, "") {
+///     case true  => "field"
+///     case false => string_concat(string_concat(bn.name, "_"), "field")
+///   }
+/// `bn` is the factory's implicit BindingName parameter; the compiler fills it
+/// with the caller's let-binding name, so `let master = create_AxiLite` names
+/// the fields "master_awaddr", … (empty binding name ⇒ no prefix).
+fn build_field_name_expr(field_name: &str) -> Raw {
+    let bn_name = Raw::Obj(
+        Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
+        Some(empty_span(SmolStr::new("name"))),
     );
+    let is_empty = Raw::app(
+        Raw::app(
+            Raw::Var(empty_span(SmolStr::new("str_eq"))),
+            bn_name.clone(),
+        ),
+        Raw::LiteralIntro(empty_span(String::new())),
+    );
+    let plain = Raw::LiteralIntro(empty_span(field_name.to_string()));
+    let prefixed = str_cat(
+        str_cat(bn_name, Raw::LiteralIntro(empty_span("_".to_string()))),
+        Raw::LiteralIntro(empty_span(field_name.to_string())),
+    );
+    Raw::Match(
+        Box::new(is_empty),
+        vec![
+            (
+                Pattern::Con(empty_span(SmolStr::new("true")), vec![], Either::Icit(Icit::Expl)),
+                plain,
+            ),
+            (
+                Pattern::Con(empty_span(SmolStr::new("false")), vec![], Either::Icit(Icit::Expl)),
+                prefixed,
+            ),
+        ],
+    )
+}
 
-    match field_type {
+/// Resolve the signal creation function for a primitive type and a port
+/// direction: `dir == None` → plain wire, `Some("In")` → input port,
+/// `Some("Out")` → output port.
+fn create_fn_name(base: &str, dir: Option<&str>) -> &'static str {
+    match dir {
+        Some("In") => match base {
+            "UInt" => "newUIntInput",
+            "SInt" => "newSIntInput",
+            "Bits" => "newBitsInput",
+            _ => "newBoolInput",
+        },
+        Some("Out") => match base {
+            "UInt" => "newUIntOutput",
+            "SInt" => "newSIntOutput",
+            "Bits" => "newBitsOutput",
+            _ => "newBoolOutput",
+        },
+        _ => match base {
+            "UInt" => "newUInt",
+            "SInt" => "newSInt",
+            "Bits" => "newBits",
+            _ => "newBool",
+        },
+    }
+}
+
+/// Build the signal creation expression for a single field.
+/// Recognizes: UInt[w], SInt[w], Bits[w], Bool (optionally wrapped in a
+/// direction marker). Returns `newUInt(bn-prefixed name, w)`, etc. — for
+/// master/slave factories the directed port variants (newUIntInput/…).
+fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw, mode: CreateMode) -> Raw {
+    let name_expr = build_field_name_expr(&field_name.data);
+
+    // Port direction of this field from the factory's point of view.
+    // Master: declared direction applied (out → output port, in/inout → input
+    //   port); unmarked fields default to output.
+    // Slave:  declared direction flipped (out → input port, in/inout → output
+    //   port); unmarked fields default to input.
+    let dir = match mode {
+        CreateMode::Wire => None,
+        CreateMode::Master => match unwrap_dir_marker(field_type).0 {
+            Some("in") | Some("inout") => Some("In"),
+            _ => Some("Out"),
+        },
+        CreateMode::Slave => match unwrap_dir_marker(field_type).0 {
+            Some("out") => Some("In"),
+            Some("in") | Some("inout") => Some("Out"),
+            _ => Some("In"), // unmarked → received by the slave
+        },
+    };
+
+    let (_, inner) = unwrap_dir_marker(field_type);
+    match inner {
         Raw::App(inner, width, _) => {
             if let Raw::Var(v) = inner.as_ref() {
-                let create_fn = match v.data.as_str() {
-                    "UInt" => "newUInt",
-                    "SInt" => "newSInt",
-                    "Bits" => "newBits",
-                    _ => return Raw::Hole(empty_span(())),
-                };
+                let create_fn = create_fn_name(v.data.as_str(), dir);
                 Raw::app(Raw::app(Raw::Var(empty_span(SmolStr::new(create_fn))), name_expr), width.as_ref().clone())
             } else {
                 Raw::Hole(empty_span(()))
             }
         }
         Raw::Var(v) if v.data == "Bool" => {
-            Raw::app(Raw::Var(empty_span(SmolStr::new("newBool"))), name_expr)
+            let create_fn = create_fn_name("Bool", dir);
+            Raw::app(Raw::Var(empty_span(SmolStr::new(create_fn))), name_expr)
         }
         _ => Raw::Hole(empty_span(())),
     }
 }
 
-/// Build the body of `create(prefix: String): Self`.
+/// Build the body of a signal factory.
 /// For fields [f1: T1, f2: T2, …]:
-///   let __f0 = createSignal("prefix_f1", …);
-///   let __f1 = createSignal("prefix_f2", …);
+///   let __f0 = createSignal(bn-named "f1", …);
+///   let __f1 = createSignal(bn-named "f2", …);
 ///   new BundleType(__f0, __f1)
-fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+/// `mode` selects wire vs. directed-port creation (master/slave).
+fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)], mode: CreateMode) -> Raw {
     let ctor = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
 
     if fields.is_empty() {
@@ -226,7 +367,7 @@ fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]
     // Wrap each let around the body (in reverse order)
     for (field_name, field_type, _) in fields.iter().rev() {
         let var_name = SmolStr::new(format!("__f{}", field_name.data));
-        let create_expr = build_field_create_expr(field_name, field_type);
+        let create_expr = build_field_create_expr(field_name, field_type, mode);
         body = Raw::Let(
             empty_span(var_name),
             Box::new(Raw::Hole(empty_span(()))),
@@ -239,10 +380,15 @@ fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]
 }
 
 /// Derive Bundle: for a single-constructor enum (struct), generates:
-///   impl Bundle for StructName { def :=(that: StructName): Unit = ... }
+///   impl Bundle for StructName { def :=(that: StructName): Unit = … }
 ///   impl Into[Self] for Self { … }
-///   impl StructName { def create(prefix: String): Self = … }
-/// with sequenced field-by-field assignments.
+///   impl StructName { … }
+///   def create_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
+///   def master_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
+///   def slave_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
+/// with sequenced field-by-field assignments, auto-named signal factories
+/// (binding name + "_" + field name) and — when fields carry in()/out()
+/// direction markers — directed-port factories (master/slave).
 fn derive_bundle(decl: &Decl) -> Vec<Decl> {
     match decl {
         Decl::Enum { name, params, cases, .. } if cases.len() == 1 => {
@@ -294,27 +440,51 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
 
             let mut result = vec![bundle_impl, into_impl];
 
-            // ── 3. Standalone create function (signal factory) ──
+            // ── 3. Standalone signal factories ──
             // Generates:
-            //   def create_<TypeName>$(typeParams)(prefix: String): TypeName$(typeParams) = …
+            //   def create_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
+            //   def master_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
+            //   def slave_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
             // Only emitted when every field is a recognised primitive HDL type
             // (UInt, SInt, Bits, Bool) so we know how to auto-create signals.
+            // The implicit BindingName parameter is filled by the compiler with
+            // the caller's let-binding name, which prefixes every signal
+            // (SpinalHDL-style auto-naming).
             if fields.iter().all(|(_, ft, _)| is_primitive_type(ft)) {
-                let create_body = build_create_body(name, fields);
-                let mut create_params: Vec<(Span<SmolStr>, Raw, Icit)> = params.iter()
+                let has_dirs = fields.iter().any(|(_, ft, _)| unwrap_dir_marker(ft).0.is_some());
+
+                let factory_params: Vec<(Span<SmolStr>, Raw, Icit)> = params.iter()
                     .map(|(pn, pt, pi)| (pn.clone(), pt.clone(), *pi))
+                    .chain(std::iter::once((
+                        empty_span(SmolStr::new("bn")),
+                        Raw::Var(empty_span(SmolStr::new("BindingName"))),
+                        Icit::Impl,
+                    )))
                     .collect();
-                create_params.push((
-                    empty_span(SmolStr::new("prefix")),
-                    Raw::Var(empty_span(SmolStr::new("String"))),
-                    Icit::Expl,
-                ));
-                result.push(Decl::Def {
-                    name: empty_span(SmolStr::new(format!("create_{}", name.data))),
-                    params: create_params,
-                    ret_type: self_ty,
-                    body: create_body,
-                });
+
+                let mut push_factory = |fname: &str, body: Raw| {
+                    result.push(Decl::Def {
+                        name: empty_span(SmolStr::new(fname)),
+                        params: factory_params.clone(),
+                        ret_type: self_ty.clone(),
+                        body,
+                    });
+                };
+
+                push_factory(
+                    &format!("create_{}", name.data),
+                    build_create_body(name, fields, CreateMode::Wire),
+                );
+                if has_dirs {
+                    push_factory(
+                        &format!("master_{}", name.data),
+                        build_create_body(name, fields, CreateMode::Master),
+                    );
+                    push_factory(
+                        &format!("slave_{}", name.data),
+                        build_create_body(name, fields, CreateMode::Slave),
+                    );
+                }
             }
 
             result

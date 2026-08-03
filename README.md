@@ -39,7 +39,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers, works for any Data (UInt/SInt/Bits/Bool) |
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
-| Bundle | `#[derive(Bundle)]` | SpinalHDL-style bulk assignment |
+| Bundle | `#[derive(Bundle)]` | SpinalHDL-style bulk assignment; auto-named signal factory (`create_TypeName`, binding name prefix) and directed `master_TypeName` / `slave_TypeName` port factories (in()/out() markers) |
 
 HDL code is written inside a `module` block and compiles to Verilog:
 
