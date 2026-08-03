@@ -6,9 +6,9 @@
 //     2. impl Into[Self]（供 Expr 宏使用）
 //     3. create_TypeName[bn: BindingName] — 自动命名信号工厂
 //        （let 绑定名 + "_" + 字段名，如 master 的 awaddr → "master_awaddr"）
-//     4. master_TypeName / slave_TypeName — 方向化端口工厂
-//        （字段带 in()/out() 标记时生成；master 驱动字段为输出、接收字段
-//        为输入，slave 反之 —— SpinalHDL 语义）
+//     4. asMaster / asSlave — 方向化实例方法（SpinalHDL 语义）
+//        （字段带 in()/out() 标记时生成：asMaster 把驱动字段做成 output
+//        端口、接收字段做成 input 端口，asSlave 反之）
 //
 //   master := slave  批量赋值（逐字段 assign）
 // ============================================================
@@ -47,12 +47,13 @@ println("=== 10b: bundleParam (参数化 Bundle) ===")
 println(moduleTreeVL(bundleParam.create.tree))
 
 // master/slave 方向化：同一个 AxiLite，字段方向用 in()/out() 标记
-// （master 视角）。master_AxiLite 把驱动字段做成 output 端口、接收字段
-// 做成 input 端口；slave_AxiLite 反之。:= 只驱动可驱动字段（跳过 input
-// 端口），因此 master/slave 可以双向对连成一个 AXI pass-through。
+// （master 视角）。create_AxiLite.asMaster 把驱动字段做成 output 端口、
+// 接收字段做成 input 端口；asSlave 反之 —— 与 SpinalHDL 的
+// AxiLite4().asMaster() / .asSlave() 一致。:= 只驱动可驱动字段（跳过
+// input 端口），因此 master/slave 可以双向对连成一个 AXI pass-through。
 module bundleMasterSlave {
-    let master = master_AxiLite
-    let slave = slave_AxiLite
+    let master = create_AxiLite.asMaster
+    let slave = create_AxiLite.asSlave
     master := slave
     slave := master
 }

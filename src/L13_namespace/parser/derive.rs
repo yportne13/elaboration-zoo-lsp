@@ -198,9 +198,9 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
 enum CreateMode {
     /// Plain wires (create_TypeName) — direction markers are ignored.
     Wire,
-    /// Master-perspective directed ports (master_TypeName).
+    /// Master-perspective directed ports (the asMaster method body).
     Master,
-    /// Slave-perspective directed ports (slave_TypeName).
+    /// Slave-perspective directed ports (the asSlave method body).
     Slave,
 }
 
@@ -382,13 +382,13 @@ fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]
 /// Derive Bundle: for a single-constructor enum (struct), generates:
 ///   impl Bundle for StructName { def :=(that: StructName): Unit = … }
 ///   impl Into[Self] for Self { … }
-///   impl StructName { … }
+///   impl StructName { def asMaster[bn: BindingName]: StructName = …;
+///                     def asSlave[bn: BindingName]: StructName = … }
 ///   def create_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
-///   def master_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
-///   def slave_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
 /// with sequenced field-by-field assignments, auto-named signal factories
 /// (binding name + "_" + field name) and — when fields carry in()/out()
-/// direction markers — directed-port factories (master/slave).
+/// direction markers — asMaster/asSlave methods returning directed-port
+/// bundles (SpinalHDL style).
 fn derive_bundle(decl: &Decl) -> Vec<Decl> {
     match decl {
         Decl::Enum { name, params, cases, .. } if cases.len() == 1 => {
@@ -440,11 +440,9 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
 
             let mut result = vec![bundle_impl, into_impl];
 
-            // ── 3. Standalone signal factories ──
+            // ── 3. Standalone wire factory ──
             // Generates:
             //   def create_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
-            //   def master_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
-            //   def slave_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
             // Only emitted when every field is a recognised primitive HDL type
             // (UInt, SInt, Bits, Bool) so we know how to auto-create signals.
             // The implicit BindingName parameter is filled by the compiler with
@@ -475,15 +473,56 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     &format!("create_{}", name.data),
                     build_create_body(name, fields, CreateMode::Wire),
                 );
+
+                // ── 4. asMaster / asSlave direction methods (SpinalHDL style) ──
+                // When at least one field carries an in()/out() direction marker,
+                // generate a class impl (empty trait name + need_create — the same
+                // shape derive_show emits) so the methods resolve through
+                // `bundle.asMaster` / `bundle.asSlave` method calls:
+                //   impl StructName {
+                //     def asMaster[bn: BindingName]: StructName = …
+                //     def asSlave[bn: BindingName]: StructName = …
+                //   }
+                // Each method rebuilds the bundle with directed ports — master:
+                // out-marked fields become output ports, in-marked fields input
+                // ports; slave: exactly the opposite. `bn` picks up the caller's
+                // let-binding name, so `let master = create_AxiLite.asMaster` still
+                // names its ports "master_awaddr", …. The plain wires left behind
+                // by the inner create_TypeName call are dropped by the Verilog
+                // generator (a port declaration takes precedence over a
+                // same-named wire; see collectPortNames in hdl-verilog.typort).
                 if has_dirs {
-                    push_factory(
-                        &format!("master_{}", name.data),
-                        build_create_body(name, fields, CreateMode::Master),
-                    );
-                    push_factory(
-                        &format!("slave_{}", name.data),
-                        build_create_body(name, fields, CreateMode::Slave),
-                    );
+                    let bn_param = vec![(
+                        empty_span(SmolStr::new("bn")),
+                        Raw::Var(empty_span(SmolStr::new("BindingName"))),
+                        Icit::Impl,
+                    )];
+                    let dir_methods: Vec<(Decl, bool)> = [
+                        ("asMaster", CreateMode::Master),
+                        ("asSlave", CreateMode::Slave),
+                    ]
+                    .iter()
+                    .map(|(mname, mode)| {
+                        (
+                            Decl::Def {
+                                name: empty_span(SmolStr::new(*mname)),
+                                params: bn_param.clone(),
+                                ret_type: self_ty.clone(),
+                                body: build_create_body(name, fields, *mode),
+                            },
+                            false,
+                        )
+                    })
+                    .collect();
+                    result.push(Decl::ImplDecl {
+                        name: self_ty.clone(),
+                        params: impl_params,
+                        trait_name: empty_span(SmolStr::new("")),
+                        trait_params: vec![],
+                        methods: dir_methods,
+                        need_create: true,
+                        from_class: false,
+                    });
                 }
             }
 

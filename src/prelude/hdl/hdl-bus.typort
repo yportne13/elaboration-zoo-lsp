@@ -24,9 +24,9 @@ enum IODirection {
 //   }
 // The markers are identity functions, so a field's type is unchanged for
 // ordinary use (create_TypeName still creates plain wires); the derive
-// (src/L13_namespace/parser/derive.rs) reads them to generate the directed
-// master_TypeName / slave_TypeName port factories. Unmarked fields default to
-// out on master / in on slave. InOut is treated as in (no inout Expr support).
+// (src/L13_namespace/parser/derive.rs) reads them to generate the asMaster /
+// asSlave direction methods. Unmarked fields default to out on master / in on
+// slave. InOut is treated as in (no inout Expr support).
 def in[T](t: T): T = t
 def out[T](t: T): T = t
 def inout[T](t: T): T = t
@@ -57,12 +57,15 @@ def isInputPort(e: Expr): Boolean = match e {
 //      — automatic wire factory; every signal is named after the caller's
 //        let binding plus the field name (`bn.name + "_" + field`), e.g.
 //        `let master = create_AxiLite` creates "master_awaddr", …
-//      — when at least one field carries an in()/out() direction marker, two
-//        more port factories are generated:
-//          def master_TypeName$(typeParams)[bn: BindingName]: TypeName = …
-//          def slave_TypeName$(typeParams)[bn: BindingName]: TypeName = …
-//        master: out-marked fields become output ports, in-marked fields
-//        input ports; slave: exactly the opposite.
+//      — when at least one field carries an in()/out() direction marker, an
+//        inherent impl adds two direction methods (SpinalHDL style):
+//          def asMaster[bn: BindingName]: TypeName = …
+//          def asSlave[bn: BindingName]: TypeName = …
+//        asMaster: out-marked fields become output ports, in-marked fields
+//        input ports; asSlave: exactly the opposite. Both rebuild the bundle
+//        with directed ports; the plain wires from the inner create_TypeName
+//        call are dropped by the Verilog generator (ports take precedence
+//        over same-named wires, see collectPortNames in hdl-verilog.typort).
 //
 // Example:
 //   #[derive(Bundle)]
@@ -84,10 +87,10 @@ def isInputPort(e: Expr): Boolean = match e {
 //
 //   // Directed interfaces (SpinalHDL master/slave):
 //   module Bridge {
-//     let master = master_AxiLite    // ports: m_awaddr… output, m_awready… input
-//     let slave  = slave_AxiLite     // ports: s_awaddr… input, s_awready… output
-//     master := slave                // drives the master's outputs (skips inputs)
-//     slave := master                // drives the slave's outputs (skips inputs)
+//     let master = create_AxiLite.asMaster   // ports: awaddr… output, awready… input
+//     let slave  = create_AxiLite.asSlave    // ports: awaddr… input, awready… output
+//     master := slave                        // drives the master's outputs (skips inputs)
+//     slave := master                        // drives the slave's outputs (skips inputs)
 //   }
 //
 //   // Parametric bundles:

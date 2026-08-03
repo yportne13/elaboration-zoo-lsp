@@ -1410,7 +1410,7 @@ fn test_examples_hdl_dir() {
             "assign master_awaddr",   // 自动命名：绑定名 + "_" + 字段名
             "assign master_awvalid",
             "module bundleParam",     // 参数化 Bundle
-            "module bundleMasterSlave",  // master/slave 方向化端口
+            "module bundleMasterSlave",  // asMaster/asSlave 方向化端口
             "output wire [31:0] master_awaddr",  // master 驱动字段 → output 端口
             "input wire master_awready",         // master 接收字段 → input 端口
             "input wire [31:0] slave_awaddr",    // slave 驱动字段 → input 端口
@@ -1781,8 +1781,8 @@ println(moduleTreeVL(Test.create.tree))
 #[test]
 fn test_hdl_bundle_master_slave() {
     // SpinalHDL-style master/slave: fields marked with in()/out() become
-    // directed ports. master_TypeName: out→output port, in→input port;
-    // slave_TypeName flips. `:=` skips assignments whose LHS is an input port.
+    // directed ports. create_AxiLite.asMaster: out→output port, in→input
+    // port; asSlave flips. `:=` skips assignments whose LHS is an input port.
     let input = r#"
 #[derive(Bundle)]
 struct AxiLite {
@@ -1795,8 +1795,8 @@ struct AxiLite {
 }
 
 module Test {
-    let master = master_AxiLite
-    let slave  = slave_AxiLite
+    let master = create_AxiLite.asMaster
+    let slave  = create_AxiLite.asSlave
     master := slave
     slave := master
 }
@@ -1817,6 +1817,12 @@ println(moduleTreeVL(Test.create.tree))
             // No assignment to an input port may be generated
             assert!(!output.contains("assign master_awready"), "must not drive an input port, got: {}", output);
             assert!(!output.contains("assign slave_awaddr"), "must not drive an input port, got: {}", output);
+            // No duplicate declarations: the plain wires created by the inner
+            // create_AxiLite calls must be dropped in favour of the ports
+            assert!(!output.contains("wire [15:0] master_awaddr;"), "wire decl for a port must be dropped, got: {}", output);
+            assert!(!output.contains("wire master_awready;"), "wire decl for a port must be dropped, got: {}", output);
+            assert!(!output.contains("wire [15:0] slave_awaddr;"), "wire decl for a port must be dropped, got: {}", output);
+            assert!(!output.contains("wire slave_awready;"), "wire decl for a port must be dropped, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -3926,3 +3932,4 @@ println("=== prove_term_pure.typort loaded! ===")
         Err(e) => panic!("FAIL: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
     }
 }
+
