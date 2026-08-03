@@ -188,7 +188,7 @@ fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            infer.mutable_map.read().ok().and_then(|m| m.get(&a.data).cloned())
+            Some(infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone())
         }
         _ => None,
     }

@@ -349,21 +349,11 @@ impl Compiler {
                                 matches!(x, Pattern::Any(Span { data: false, .. }, _))
                             }) == Some(true) =>
                     {
-                        let patcon_raw = entry.patcon.clone().to_raw();
-                        // Try patcon_raw only (includes GADT implicits);
-                        // NO fallback to raw — only patcon_raw is used.
-                        let (_, cxt) = match infer.check_pm_final(
-                            &entry.cxt,
-                            patcon_raw,
-                            target_typ.clone(),
-                            ori.clone(),
-                        ) {
-                            Ok(x) => x,
-                            Err(e) => {
-                                self.errors.push(e);
-                                return Ok(false);
-                            }
-                        };
+                        // If this arm has already been fully compiled (body checked
+                        // and pats recorded) in a previous constructor branch, we
+                        // must still mark it reachable, but there is no need to
+                        // re-elaborate the pattern or re-check the body: both are
+                        // identical for the same arm across branches.
                         self.reachable.insert(entry.idx, ());
                         if self.checked_ret.contains(&entry.idx) {
                             return Ok(true);
@@ -423,106 +413,6 @@ impl Compiler {
                 }
             }
             [(typ, head_name, icit, head_val), heads_rest @ ..] => {
-                // Implicit heads (e.g. the `l` in `cons[l](x, xs)`) are never
-                // matched by constructor patterns — they are determined by
-                // unification.  Skipping them uniformly (instead of branching
-                // over the head's own constructors) avoids duplicating the
-                // whole subtree once per constructor of an implicit-typed head
-                // and prevents spurious "unreachable" warnings when a wildcard
-                // arm is combined with a specific-constructor arm.
-                if *icit == Icit::Impl {
-                    let new_context = self.next_hole(
-                        context,
-                        &Pattern::Any(empty_span(true), Either::Icit(*icit)),
-                    );
-                    let new_arms = arms
-                        .iter()
-                        .map(|entry| {
-                            let cxt = &entry.cxt;
-                            match entry.arm.pats.first() {
-                                // Explicit implicit binding `[l]` or `[l=lll]`:
-                                // consume it and bind the variable.
-                                Some(Pattern::Con(name, _, i))
-                                    if matches!(i, Either::Icit(Icit::Impl) | Either::Name(_)) =>
-                                {
-                                    let name = name.clone();
-                                    let pname = match i {
-                                        Either::Name(p) => p.clone(),
-                                        _ => head_name.clone(),
-                                    };
-                                    ArmEntry {
-                                        arm: MatchArm {
-                                            pats: entry.arm.pats.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]),
-                                            body: entry.arm.body.clone(),
-                                        },
-                                        idx: entry.idx,
-                                        cxt: cxt.bind(
-                                            name.clone(),
-                                            infer.quote(&cxt.decl, cxt.lvl, typ),
-                                            typ.clone(),
-                                        ),
-                                        cxt_for_filter: entry.cxt_for_filter.bind(
-                                            name.clone(),
-                                            infer.quote(&entry.cxt_for_filter.decl, entry.cxt_for_filter.lvl, typ),
-                                            typ.clone(),
-                                        ),
-                                        patcon: entry.patcon.clone().clean().push(
-                                            PatternDetail::Any(name, Some(pname), Icit::Impl),
-                                        ),
-                                    }
-                                }
-                                // Wildcard `_` placeholder for this implicit:
-                                // consume it.
-                                Some(Pattern::Any(x, i)) if i.to_icit() == Icit::Impl => {
-                                    let imp = self.make_implicit_name(&head_name);
-                                    let named = x.data;
-                                    ArmEntry {
-                                        arm: MatchArm {
-                                            pats: entry.arm.pats.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]),
-                                            body: entry.arm.body.clone(),
-                                        },
-                                        idx: entry.idx,
-                                        cxt: if named {
-                                            cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
-                                        } else {
-                                            cxt.clone()
-                                        },
-                                        cxt_for_filter: entry.cxt_for_filter.bind(
-                                            imp.clone(),
-                                            infer.quote(&entry.cxt_for_filter.decl, entry.cxt_for_filter.lvl, typ),
-                                            typ.clone(),
-                                        ),
-                                        patcon: entry.patcon.clone().clean().push(
-                                            PatternDetail::Any(
-                                                if named { imp } else { empty_span(SmolStr::new("")) },
-                                                if named { Some(head_name.clone()) } else { None },
-                                                Icit::Impl,
-                                            ),
-                                        ),
-                                    }
-                                }
-                                // The arm does not mention this implicit: skip it.
-                                _ => {
-                                    let imp = self.make_implicit_name(&head_name);
-                                    ArmEntry {
-                                        arm: entry.arm.clone(),
-                                        idx: entry.idx,
-                                        cxt: cxt.bind(imp.clone(), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone()),
-                                        cxt_for_filter: entry.cxt_for_filter.bind(
-                                            imp.clone(),
-                                            infer.quote(&entry.cxt_for_filter.decl, entry.cxt_for_filter.lvl, typ),
-                                            typ.clone(),
-                                        ),
-                                        patcon: entry.patcon.clone().clean().push(
-                                            PatternDetail::Any(imp, Some(head_name.clone()), Icit::Impl),
-                                        ),
-                                    }
-                                }
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    return self.compile_aux(infer, heads_rest, &new_arms, &new_context, ori, target_typ);
-                }
                 // Constructor-name set (empty for non-Sum `$any$` heads), used to
                 // distinguish real constructor patterns from bare-variable patterns.
                 // Bare variables parse as `Con(name, [], _)`; they must be treated as
@@ -559,24 +449,8 @@ impl Compiler {
                             // A bare-variable pattern (Con(name, [], _)) binds the
                             // head under the variable's own name and emits a `Bind`
                             // so that `check_pm_final` reuses the already-bound Rigid.
-                            if let Some(Pattern::Con(name, _, i)) = entry.arm.pats.first() {
+                            if let Some(Pattern::Con(name, _, _)) = entry.arm.pats.first() {
                                 let name = name.clone();
-                                // An implicit bare binding like `cons[l](x, xs)`
-                                // (parsed as Con(l, [], Impl)) or `cons[l=lll]`
-                                // (Con(lll, [], Name(l))) must be emitted as an
-                                // implicit argument, not a `Bind` (which renders
-                                // as an explicit argument and shifts fields).
-                                let patcon = match i {
-                                    Either::Icit(Icit::Impl) => entry.patcon.clone().clean().push(
-                                        PatternDetail::Any(name.clone(), Some(head_name.clone()), Icit::Impl),
-                                    ),
-                                    Either::Name(pname) => entry.patcon.clone().clean().push(
-                                        PatternDetail::Any(name.clone(), Some(pname.clone()), Icit::Impl),
-                                    ),
-                                    _ => entry.patcon.clone().clean().push(
-                                        PatternDetail::Bind(name.clone()),
-                                    ),
-                                };
                                 ArmEntry {
                                     arm: MatchArm {
                                         pats: entry
@@ -602,7 +476,9 @@ impl Compiler {
                                         ),
                                         typ.clone(),
                                     ),
-                                    patcon,
+                                    patcon: entry.patcon.clone().clean().push(
+                                        PatternDetail::Bind(name),
+                                    ),
                                 }
                             } else {
                                 // Compute the unique implicit name ONCE per arm,
