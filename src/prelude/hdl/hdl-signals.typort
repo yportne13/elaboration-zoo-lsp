@@ -274,7 +274,7 @@ trait RegNext[T] {
 impl[w: Nat] RegNext[UInt[w]] for UInt[w] {
     def mkReg(name: String): UInt[w] =
         let r = newUIntReg(name, w);
-        let _ = addSignalAssignment(r.expr, this.expr);
+        let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): UInt[w] =
         let r = newUIntReg(name, w);
@@ -287,7 +287,7 @@ impl[w: Nat] RegNext[UInt[w]] for UInt[w] {
 impl[w: Nat] RegNext[Bits[w]] for Bits[w] {
     def mkReg(name: String): Bits[w] =
         let r = newBitsReg(name, w);
-        let _ = addSignalAssignment(r.expr, this.expr);
+        let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): Bits[w] =
         let r = newBitsReg(name, w);
@@ -300,7 +300,7 @@ impl[w: Nat] RegNext[Bits[w]] for Bits[w] {
 impl[w: Nat] RegNext[SInt[w]] for SInt[w] {
     def mkReg(name: String): SInt[w] =
         let r = newSIntReg(name, w);
-        let _ = addSignalAssignment(r.expr, this.expr);
+        let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): SInt[w] =
         let r = newSIntReg(name, w);
@@ -313,7 +313,7 @@ impl[w: Nat] RegNext[SInt[w]] for SInt[w] {
 impl RegNext[Bool] for Bool {
     def mkReg(name: String): Bool =
         let r = newBoolReg(name);
-        let _ = addSignalAssignment(r.expr, this.expr);
+        let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): Bool =
         let r = newBoolReg(name);
