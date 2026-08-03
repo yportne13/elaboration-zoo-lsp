@@ -3,6 +3,7 @@
 //
 //   &&  ||  !  ^    逻辑与/或/非/异或
 //   .mux(a, b)      条件多路选择（SpinalHDL 风格）
+//   cond ? a : b    C 风格三目运算符（脱糖为 .mux）
 //   asBits/asUInt/asSInt  Bool -> Bits[1]/UInt[1]/SInt[1]
 // ============================================================
 
@@ -31,6 +32,16 @@ module boolMux {
 println("=== 05b: boolMux (三目选择) ===")
 println(moduleTreeVL(boolMux.create.tree))
 
+module boolTernary {
+    let cond = Bool
+    let x = UInt[8]
+    let y = UInt[8]
+    let out = UInt[8]
+    out := cond ? x : y
+}
+println("=== 05c: boolTernary (C 风格三目 ? :) ===")
+println(moduleTreeVL(boolTernary.create.tree))
+
 module boolCast {
     let c = Bool
     let b = Bits[1]
@@ -40,5 +51,5 @@ module boolCast {
     u := c.asUInt
     s := c.asSInt
 }
-println("=== 05c: boolCast (Bool 类型转换) ===")
+println("=== 05d: boolCast (Bool 类型转换) ===")
 println(moduleTreeVL(boolCast.create.tree))

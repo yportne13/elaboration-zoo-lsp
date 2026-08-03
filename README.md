@@ -31,11 +31,12 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Bit extraction | `b := a.apply[7]` | `a[N]` bracket sugar also works |
 | Range slice | `low := a.slice[3, 0]` | Extracts `(hi-lo+1)` bits |
 | LHS bit-select | `t[0] := x` | Assign to individual bits |
-| Mux | `r := cond.mux(a, b)` | Conditional multiplexer |
+| Mux | `r := cond.mux(a, b)` | Conditional multiplexer (SpinalHDL-style) |
+| Ternary | `r := cond ? a : b` | C-style ternary operator (desugars to `.mux`) |
 | Concatenation | `f := e ## d` | Bit concatenation |
 | Registers | `reg a = UInt[8]` | Sequential elements with clock/reset |
 | Reg with init | `reg a = UInt[8] init 42` | Register with async reset value |
-| Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers |
+| Delayed register | `regNextUInt(a)` / `regNextWhenUInt(a, cond)` | SpinalHDL-style delay registers |
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
 | Bundle | `#[derive(Bundle)]` | SpinalHDL-style bulk assignment |
@@ -76,25 +77,25 @@ run and doubles as a regression test (`test_examples_hdl_dir`).
 cargo build --release
 
 # Run a .typort file
-cargo run --release --bin typort -- examples/hdl_ops.typort
+cargo run --release --bin typort -- check examples/hdl_ops.typort
 
 # Start LSP server
 cargo run --release --bin typort -- lsp
 
 # Memory benchmark (requires mem-profile feature)
-cargo run --release --features mem-profile --bin typort -- --stats
+cargo run --release --features mem-profile --bin typort -- stats
 ```
 
 ### VS Code Extension
 
-The repo includes a VS Code extension in `vscode/` for syntax highlighting and LSP integration.
+The repo includes a VS Code extension in `vscode_extension/` for syntax highlighting and LSP integration.
 
 ## Examples
 
 | File | Topics |
 |------|--------|
 | `examples/theorem_proving.typort` | Eq, trans, symm, cong, add_comm, add_assoc |
-| `examples/typeclass_complex.zig` | Traits, instances, outParam |
+| `examples/typeclass_complex.typort` | Traits, instances, generic impls, Eq proofs |
 | `examples/alu.typort` | HDL module, UInt arithmetic, Into trait |
 | `examples/hdl_ops.typort` | apply, slice, bool ops, sub-modules, LHS bit-select |
 

@@ -1369,6 +1369,7 @@ fn test_examples_hdl_dir() {
             "(a && b)",               // 逻辑与
             "!a",                     // 逻辑非
             "(sel ? a : b)",          // mux
+            "(cond ? x : y)",         // C 风格三目 ? :
             "assign b = c",           // Bool.asBits
         ]),
         ("06-select-cat.typort", include_str!("../../examples/hdl/06-select-cat.typort"), &[

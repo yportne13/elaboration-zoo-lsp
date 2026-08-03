@@ -3,8 +3,8 @@
 //
 //   reg x = UInt[8]         普通寄存器（自动加 clk 端口）
 //   reg x = UInt[8] init 42 带异步复位初值（自动加 reset 端口）
-//   regNext(value)          延迟一拍
-//   regNextWhen(v, cond)    条件延迟
+//   regNextUInt(value)      延迟一拍
+//   regNextWhenUInt(v, c)   条件延迟
 //   when 块内的 :=          条件寄存器赋值
 // ============================================================
 

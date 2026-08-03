@@ -32,7 +32,8 @@
 | 单比特提取 | `b := a.apply[7]` | 也支持 `a[N]` 方括号语法 |
 | 范围切片 | `low := a.slice[3, 0]` | 提取 `(hi-lo+1)` 位 |
 | 左值位选 | `t[0] := x` | 赋值到特定位 |
-| 多路选择器 | `r := cond.mux(a, b)` | 条件多路复用 |
+| 多路选择器 | `r := cond.mux(a, b)` | 条件多路复用（SpinalHDL 风格） |
+| 三目运算符 | `r := cond ? a : b` | C 风格三目运算符（脱糖为 `.mux`） |
 | 位拼接 | `f := e ## d` | 位拼接 |
 | 寄存器 | `reg a = UInt[8]` | 带时钟/复位的时序元件 |
 | 子模块 | `mkInstance("u", "Adder")` | 模块例化 |
@@ -69,25 +70,25 @@ println(moduleTreeVL(adder.create[8].tree))
 cargo build --release
 
 # 运行 .typort 文件
-cargo run --release --bin typort -- examples/hdl_ops.typort
+cargo run --release --bin typort -- check examples/hdl_ops.typort
 
 # 启动 LSP 服务器
 cargo run --release --bin typort -- lsp
 
 # 内存基准测试（需要 mem-profile 特性）
-cargo run --release --features mem-profile --bin typort -- --stats
+cargo run --release --features mem-profile --bin typort -- stats
 ```
 
 ### VS Code 扩展
 
-仓库中的 `vscode/` 目录包含 VS Code 扩展，提供语法高亮和 LSP 集成支持。
+仓库中的 `vscode_extension/` 目录包含 VS Code 扩展，提供语法高亮和 LSP 集成支持。
 
 ## 示例
 
 | 文件 | 主题 |
 |------|------|
 | `examples/theorem_proving.typort` | Eq、trans、symm、cong、add_comm、add_assoc |
-| `examples/typeclass_complex.typort` | Traits、instances、outParam |
+| `examples/typeclass_complex.typort` | Traits、instances、泛型 impl、Eq 证明 |
 | `examples/alu.typort` | HDL 模块、UInt 算术、Into trait |
 | `examples/hdl_ops.typort` | apply、slice、布尔运算、子模块、左值位选 |
 
@@ -116,10 +117,10 @@ cargo run --release --features mem-profile --bin typort -- --stats
 
 ```bash
 # 预加载后的内存统计
-cargo run --release --features mem-profile --bin typort -- --stats
+cargo run --release --features mem-profile --bin typort -- stats
 
 # 深度 dhat 堆分析（约 3 分钟）
-cargo run --release --features dhat-heap --bin typort -- --stats
+cargo run --release --features dhat-heap --bin typort -- stats
 ```
 
 ### 关键指标
