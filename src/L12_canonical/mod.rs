@@ -3145,7 +3145,7 @@ fn test_hdl_registers() {
     let input = r#"
 module Test {
     let reg_val = UInt[8]
-    reg_val := regNextUInt(reg_val)
+    let reg_out = regNext(reg_val)
 }
 "#;
     match run_with_prelude(input) {

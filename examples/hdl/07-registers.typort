@@ -3,8 +3,8 @@
 //
 //   reg x = UInt[8]         普通寄存器（自动加 clk 端口）
 //   reg x = UInt[8] init 42 带异步复位初值（自动加 reset 端口）
-//   regNextUInt(value)      延迟一拍
-//   regNextWhenUInt(v, c)   条件延迟
+//   regNext(value)      延迟一拍（任意 Data，SpinalHDL 风格）
+//   regNextWhen(v, cond) 条件延迟
 //   when 块内的 :=          条件寄存器赋值
 // ============================================================
 
@@ -24,20 +24,33 @@ module regInit {
 println("=== 07b: regInit (复位初值 42) ===")
 println(moduleTreeVL(regInit.create.tree))
 
-module regNext {
+module regNextDemo {
     let a = UInt[8]
-    let d = regNextUInt(a)
+    let d = regNext(a)
 }
-println("=== 07c: regNext (延迟一拍) ===")
-println(moduleTreeVL(regNext.create.tree))
+println("=== 07c: regNextDemo (延迟一拍) ===")
+println(moduleTreeVL(regNextDemo.create.tree))
 
-module regNextWhen {
+module regNextAny {
+    let a = UInt[8]
+    let b = Bits[8]
+    let c = Bool
+    let e = SInt[4]
+    let da = regNext(a)
+    let db = regNext(b)
+    let dc = regNext(c)
+    let de = regNext(e)
+}
+println("=== 07d: regNextAny (任意 Data 类型) ===")
+println(moduleTreeVL(regNextAny.create.tree))
+
+module regNextWhenDemo {
     let a = UInt[8]
     let en = Bool
-    let d = regNextWhenUInt(a, en)
+    let d = regNextWhen(a, en)
 }
-println("=== 07d: regNextWhen (条件延迟) ===")
-println(moduleTreeVL(regNextWhen.create.tree))
+println("=== 07e: regNextWhenDemo (条件延迟) ===")
+println(moduleTreeVL(regNextWhenDemo.create.tree))
 
 module regInWhen {
     reg r = UInt[8]
@@ -47,5 +60,5 @@ module regInWhen {
         r := a
     }
 }
-println("=== 07e: regInWhen (when 内寄存器赋值) ===")
+println("=== 07f: regInWhen (when 内寄存器赋值) ===")
 println(moduleTreeVL(regInWhen.create.tree))

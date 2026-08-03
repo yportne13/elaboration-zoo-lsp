@@ -255,63 +255,73 @@ def out_bool(t: Bool): Bool =
 // ============================================================
 //  RegNext: delay register (SpinalHDL-style)
 //  Creates a register of the same type and connects the input.
-//  Usage: let r = regNextUInt(signal)   // r: UInt[w], r := signal
+//  Works for any Data (UInt / SInt / Bits / Bool) via the RegNext
+//  typeclass — no per-type function names needed.
+//  The register is named after the caller's let binding:
+//    let r = regNext(signal)         // r: same type as signal, named "r"
+//    let r = regNextWhen(sig, cond)  // conditional update
+//
+//  Trait methods take the value as the implicit receiver ($this):
+//  `r.mkReg(value, name)` desugars to the trait method with value as
+//  Self, and the impl methods read it via `this`.
 // ============================================================
 
-def regNextUInt[bn: BindingName, w: Nat](value: UInt[w]): UInt[w] =
-    let r = autoUIntReg(w);
-    let _ = addSignalAssignment(r.expr, value.expr);
-    r
+trait RegNext[T] {
+    def mkReg(name: String): T
+    def mkRegWhen(name: String, cond: Bool): T
+}
 
-def regNextBits[bn: BindingName, w: Nat](value: Bits[w]): Bits[w] =
-    let r = autoBitsReg(w);
-    let _ = addSignalAssignment(r.expr, value.expr);
-    r
+impl[w: Nat] RegNext[UInt[w]] for UInt[w] {
+    def mkReg(name: String): UInt[w] =
+        let r = newUIntReg(name, w);
+        let _ = addSignalAssignment(r.expr, this.expr);
+        r
+    def mkRegWhen(name: String, cond: Bool): UInt[w] =
+        let r = newUIntReg(name, w);
+        let _ = whenBegin(cond.expr);
+        let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
+        let _ = whenEnd(unit);
+        r
+}
 
-def regNextSInt[bn: BindingName, w: Nat](value: SInt[w]): SInt[w] =
-    let r = autoSIntReg(w);
-    let _ = addSignalAssignment(r.expr, value.expr);
-    r
+impl[w: Nat] RegNext[Bits[w]] for Bits[w] {
+    def mkReg(name: String): Bits[w] =
+        let r = newBitsReg(name, w);
+        let _ = addSignalAssignment(r.expr, this.expr);
+        r
+    def mkRegWhen(name: String, cond: Bool): Bits[w] =
+        let r = newBitsReg(name, w);
+        let _ = whenBegin(cond.expr);
+        let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
+        let _ = whenEnd(unit);
+        r
+}
 
-def regNextBool[bn: BindingName](value: Bool): Bool =
-    let r = autoBoolReg;
-    let _ = addSignalAssignment(r.expr, value.expr);
-    r
+impl[w: Nat] RegNext[SInt[w]] for SInt[w] {
+    def mkReg(name: String): SInt[w] =
+        let r = newSIntReg(name, w);
+        let _ = addSignalAssignment(r.expr, this.expr);
+        r
+    def mkRegWhen(name: String, cond: Bool): SInt[w] =
+        let r = newSIntReg(name, w);
+        let _ = whenBegin(cond.expr);
+        let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
+        let _ = whenEnd(unit);
+        r
+}
 
-// ============================================================
-//  RegNextWhen: conditional delay register
-//  Creates a register updated only when cond is true.
-//  Usage: let r = regNextWhenUInt(signal, cond)
-//  Emits: always @(posedge clk) begin if (cond) r <= value; end
-// ============================================================
-// Note: the assignment must be a regAssign (the target is always a reg),
-// so it is inserted via createSignalExpr (which applies when-context)
-// instead of addSignalAssignment (which would emit a blocking assign).
+impl RegNext[Bool] for Bool {
+    def mkReg(name: String): Bool =
+        let r = newBoolReg(name);
+        let _ = addSignalAssignment(r.expr, this.expr);
+        r
+    def mkRegWhen(name: String, cond: Bool): Bool =
+        let r = newBoolReg(name);
+        let _ = whenBegin(cond.expr);
+        let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
+        let _ = whenEnd(unit);
+        r
+}
 
-def regNextWhenUInt[bn: BindingName, w: Nat](value: UInt[w], cond: Bool): UInt[w] =
-    let r = autoUIntReg(w);
-    let _ = whenBegin(cond.expr);
-    let _assignment = createSignalExpr("", regAssign(r.expr, value.expr));
-    let _ = whenEnd(unit);
-    r
-
-def regNextWhenBits[bn: BindingName, w: Nat](value: Bits[w], cond: Bool): Bits[w] =
-    let r = autoBitsReg(w);
-    let _ = whenBegin(cond.expr);
-    let _assignment = createSignalExpr("", regAssign(r.expr, value.expr));
-    let _ = whenEnd(unit);
-    r
-
-def regNextWhenSInt[bn: BindingName, w: Nat](value: SInt[w], cond: Bool): SInt[w] =
-    let r = autoSIntReg(w);
-    let _ = whenBegin(cond.expr);
-    let _assignment = createSignalExpr("", regAssign(r.expr, value.expr));
-    let _ = whenEnd(unit);
-    r
-
-def regNextWhenBool[bn: BindingName](value: Bool, cond: Bool): Bool =
-    let r = autoBoolReg;
-    let _ = whenBegin(cond.expr);
-    let _assignment = createSignalExpr("", regAssign(r.expr, value.expr));
-    let _ = whenEnd(unit);
-    r
+def regNext[bn: BindingName, T][r: RegNext[T]](value: T): T = r.mkReg(value, bn.name)
+def regNextWhen[bn: BindingName, T][r: RegNext[T]](value: T, cond: Bool): T = r.mkRegWhen(value, bn.name, cond)

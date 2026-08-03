@@ -36,7 +36,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Concatenation | `f := e ## d` | Bit concatenation |
 | Registers | `reg a = UInt[8]` | Sequential elements with clock/reset |
 | Reg with init | `reg a = UInt[8] init 42` | Register with async reset value |
-| Delayed register | `regNextUInt(a)` / `regNextWhenUInt(a, cond)` | SpinalHDL-style delay registers |
+| Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers, works for any Data (UInt/SInt/Bits/Bool) |
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
 | Bundle | `#[derive(Bundle)]` | SpinalHDL-style bulk assignment |

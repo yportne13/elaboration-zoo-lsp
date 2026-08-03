@@ -1092,7 +1092,7 @@ fn test_hdl_registers() {
     let input = r#"
 module Test {
     let reg_val = UInt[8]
-    reg_val := regNextUInt(reg_val)
+    let reg_out = regNext(reg_val)
 }
 "#;
     match run_with_prelude(input) {
@@ -1384,6 +1384,9 @@ fn test_examples_hdl_dir() {
             "posedge reset",          // reg init 异步复位
             "r <= 42;",               // 复位初值
             "if (en) begin",          // regNextWhen 条件
+            "reg [7:0] da;",          // regNext 任意 Data（UInt）
+            "reg [7:0] db;",          // regNext 任意 Data（Bits）
+            "reg signed [3:0] de;",   // regNext 任意 Data（SInt）
         ]),
         ("08-control-flow.typort", include_str!("../../examples/hdl/08-control-flow.typort"), &[
             "always @(*) begin",      // when 组合逻辑
@@ -2294,7 +2297,7 @@ fn test_hdl_reg_next_when() {
 module Test {
     let a = UInt[8]
     let en = Bool
-    let r = regNextWhenUInt(a, en)
+    let r = regNextWhen(a, en)
 }
 
 println(moduleTreeVL(Test.create.tree))
