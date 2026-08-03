@@ -106,6 +106,12 @@ pub enum Tm {
     Match(Rc<Tm>, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, display_args, val_args, body) - body was inlined from function `name`
     Call(SmolStr, List<(Rc<Tm>, Icit)>, Rc<Tm>),
+    /// Display-only node produced by `quote` when an inlined helper call
+    /// backs an operator method (`nat_add_helper x y` for `x + y`).
+    /// `symbol` is the operator to display (`+`); `name`/`args`/`body`
+    /// mirror `Call` so that re-evaluating the node reproduces the original
+    /// `Val::Call` exactly (quote → eval round-trip identity).
+    OpCall { symbol: SmolStr, name: SmolStr, args: List<(Rc<Tm>, Icit)>, body: Rc<Tm> },
 }
 
 impl Tm {
@@ -131,6 +137,7 @@ impl Tm {
                 .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
             Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
             Tm::Call(_, args, body) => args.iter().flat_map(|(a, _)| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
+            Tm::OpCall { args, body, .. } => args.iter().flat_map(|(a, _)| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
         }
     }
 }
@@ -349,6 +356,16 @@ fn empty_span<T>(data: T) -> Span<T> {
     }
 }
 
+/// Operator characters that may start an operator method name (`+`, `*`,
+/// `-`, `<=`, `:=`, ...).  Declarations whose name starts with such a
+/// character are rendered in infix/prefix form by the pretty-printer.
+pub(crate) fn is_operator_char(c: char) -> bool {
+    matches!(
+        c,
+        '+' | '*' | '/' | '-' | '%' | '<' | '>' | '=' | '&' | '|' | '^' | '!' | '~' | '#' | ':'
+    )
+}
+
 pub struct Error(
     pub Span<String>,
     pub Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>
@@ -388,6 +405,13 @@ pub struct Infer {
     /// Accumulated type errors from pattern match branches, reported as
     /// separate LSP diagnostics so each branch error gets its own red squiggle.
     pub accumulated_errors: Vec<Error>,
+    /// Operator-symbol registry: (helper function name, argument count) →
+    /// operator symbol.  Populated when an impl's operator-named method
+    /// (e.g. `def +(that: Nat): Nat = nat_add_helper this that`) is
+    /// registered, so `quote` can restore the infix form (`x + y`) of an
+    /// inlined helper call (`nat_add_helper x y`).  User-defined operator
+    /// symbols are supported automatically.
+    pub symbol_table: HashMap<(SmolStr, usize), SmolStr>,
 }
 
 impl Clone for Infer {
@@ -404,6 +428,7 @@ impl Clone for Infer {
             hover_table: self.hover_table.clone(),
             completion_table: self.completion_table.clone(),
             inlay_hint_table: self.inlay_hint_table.clone(),
+            symbol_table: self.symbol_table.clone(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -592,6 +617,12 @@ impl DetailCounts {
                 }
                 self.walk_tm_id(body, visited);
             }
+            Tm::OpCall { args, body, .. } => {
+                for (arg_tm, _) in args.iter() {
+                    self.walk_tm_id(arg_tm, visited);
+                }
+                self.walk_tm_id(body, visited);
+            }
         }
     }
 
@@ -684,6 +715,7 @@ impl Infer {
             hover_table: vec![],
             completion_table: vec![],
             inlay_hint_table: vec![],
+            symbol_table: HashMap::new(),
             accumulated_errors: vec![],
         }
     }
@@ -1288,6 +1320,18 @@ impl Infer {
                     result
                 }
             },
+            Tm::OpCall { name, args, body, .. } => {
+                // Round-trip identity: re-evaluating a quoted operator call
+                // reproduces the original Val::Call (mirror of Tm::Call).
+                let result = self.eval(decl, env, body);
+                if let Val::Match(..) = result.as_ref() {
+                    let args = args
+                        .map(|(x, i)| (self.eval(decl, env, x), *i));
+                    Val::Call(name.clone(), args, result).into()
+                } else {
+                    result
+                }
+            },
             Tm::Match(tm, cases) => {
                 let val = self.eval(decl, env, tm);
                 let val = self.force(decl, &val);
@@ -1368,11 +1412,34 @@ impl Infer {
                     datas,
                 }.into()
             }
-            Val::Call(name, args, body) => Tm::Call(
-                name.clone(),
-                args.map(|(x, i)| (self.quote(decl, l, x), *i)),
-                self.quote(decl, l, body),
-            ).into(),
+            Val::Call(name, args, body) => {
+                // Operator-symbol recovery: an inlined helper call that backs
+                // an operator method (`nat_add_helper x y` for `x + y`) quotes
+                // to a display-only `Tm::OpCall` carrying the operator symbol,
+                // which the pretty-printer renders in infix/prefix form.  The
+                // helper→operator mapping is registered at impl elaboration
+                // time, so user-defined operator symbols work too.  Keeping
+                // the full call data (name/args/body) inside `OpCall` makes
+                // quote → eval round-trips reproduce the original `Val::Call`.
+                let sym = if args.iter().all(|(_, i)| *i == Icit::Expl) {
+                    self.symbol_table.get(&(name.clone(), args.len())).cloned()
+                } else {
+                    None
+                };
+                match sym {
+                    Some(sym) if args.len() == 1 || args.len() == 2 => Tm::OpCall {
+                        symbol: sym,
+                        name: name.clone(),
+                        args: args.map(|(x, i)| (self.quote(decl, l, x), *i)),
+                        body: self.quote(decl, l, body),
+                    }.into(),
+                    _ => Tm::Call(
+                        name.clone(),
+                        args.map(|(x, i)| (self.quote(decl, l, x), *i)),
+                        self.quote(decl, l, body),
+                    ).into(),
+                }
+            }
             Val::Match(val, env, cases) => {
                 /*TODO:let tm_cases = cases
                     .into_iter()
@@ -5084,4 +5151,161 @@ def with_let(x: Nat) = let y = succ x; y
     let g_end = input.find("def g").unwrap() + "def g".len();
     assert!(infer.inlay_hint_table.iter().any(|(off, lab)| lab.as_str() == ": Nat" && *off == g_end as u32),
         "g 的 : Nat hint 应锚定在 g 之后（offset == {}），实际: {:?}", g_end, infer.inlay_hint_table);
+}
+
+#[cfg(test)]
+mod symbol_recovery_tests {
+    use super::*;
+
+    fn rigid(l: u32) -> Rc<Val> {
+        Val::Rigid(Lvl(l), List::new()).into()
+    }
+
+    /// `quote` restores an inlined two-argument helper call as a display
+    /// `OpCall` carrying the registered operator symbol (`nat_add_helper
+    /// x y` → `OpCall("+", [x, y])`, pretty-printed as `x + y`).
+    #[test]
+    fn quote_restores_infix_operator_application() {
+        let mut infer = Infer::new();
+        infer.symbol_table.insert(
+            (SmolStr::new("nat_add_helper"), 2),
+            SmolStr::new("+"),
+        );
+        let decl: Decl = HashMap::new();
+        let x = rigid(0);
+        let y = rigid(1);
+        let call: Rc<Val> = Val::Call(
+            SmolStr::new("nat_add_helper"),
+            List::new()
+                .prepend((y.clone(), Icit::Expl))
+                .prepend((x.clone(), Icit::Expl)),
+            Val::Match(x.clone(), List::new(), Vec::new()).into(),
+        )
+        .into();
+        let q = infer.quote(&decl, Lvl(2), &call);
+        match q.as_ref() {
+            Tm::OpCall { symbol, name, args, .. } => {
+                assert_eq!(symbol, "+");
+                assert_eq!(name, "nat_add_helper");
+                assert_eq!(args.len(), 2);
+                // Args are quoted in display order: x = Var(1), y = Var(0).
+                let quoted: Vec<&Rc<Tm>> = args.iter().map(|(a, _)| a).collect();
+                assert!(matches!(quoted[0].as_ref(), Tm::Var(Ix(1))), "a1 should be x, got {quoted:?}");
+                assert!(matches!(quoted[1].as_ref(), Tm::Var(Ix(0))), "a2 should be y, got {quoted:?}");
+            }
+            other => panic!("expected OpCall, got {other:?}"),
+        }
+    }
+
+    /// A one-argument registered helper restores to a prefix `OpCall`.
+    #[test]
+    fn quote_restores_prefix_operator_application() {
+        let mut infer = Infer::new();
+        infer.symbol_table.insert(
+            (SmolStr::new("not_helper"), 1),
+            SmolStr::new("!"),
+        );
+        let decl: Decl = HashMap::new();
+        let x = rigid(0);
+        let call: Rc<Val> = Val::Call(
+            SmolStr::new("not_helper"),
+            List::new().prepend((x.clone(), Icit::Expl)),
+            Val::Match(x.clone(), List::new(), Vec::new()).into(),
+        )
+        .into();
+        let q = infer.quote(&decl, Lvl(1), &call);
+        match q.as_ref() {
+            Tm::OpCall { symbol, name, args, .. } => {
+                assert_eq!(symbol, "!");
+                assert_eq!(name, "not_helper");
+                assert_eq!(args.len(), 1);
+                let quoted: Vec<&Rc<Tm>> = args.iter().map(|(a, _)| a).collect();
+                assert!(matches!(quoted[0].as_ref(), Tm::Var(Ix(0))), "arg should be x, got {quoted:?}");
+            }
+            other => panic!("expected OpCall, got {other:?}"),
+        }
+    }
+
+    /// Unregistered helpers keep the plain `Tm::Call` form, as do calls
+    /// with implicit arguments or non-matching arity.
+    #[test]
+    fn quote_keeps_call_for_unregistered_or_implicit() {
+        let mut infer = Infer::new();
+        let decl: Decl = HashMap::new();
+        let x = rigid(0);
+        let y = rigid(1);
+
+        // Unregistered helper.
+        let call: Rc<Val> = Val::Call(
+            SmolStr::new("nat_max"),
+            List::new()
+                .prepend((y.clone(), Icit::Expl))
+                .prepend((x.clone(), Icit::Expl)),
+            Val::Match(x.clone(), List::new(), Vec::new()).into(),
+        )
+        .into();
+        assert!(matches!(infer.quote(&decl, Lvl(2), &call).as_ref(), Tm::Call(..)));
+
+        // Registered helper but arity mismatch (3 args).
+        infer.symbol_table.insert(
+            (SmolStr::new("nat_add_helper"), 2),
+            SmolStr::new("+"),
+        );
+        let z = rigid(2);
+        let call3: Rc<Val> = Val::Call(
+            SmolStr::new("nat_add_helper"),
+            List::new()
+                .prepend((z.clone(), Icit::Expl))
+                .prepend((y.clone(), Icit::Expl))
+                .prepend((x.clone(), Icit::Expl)),
+            Val::Match(x.clone(), List::new(), Vec::new()).into(),
+        )
+        .into();
+        assert!(matches!(infer.quote(&decl, Lvl(3), &call3).as_ref(), Tm::Call(..)));
+
+        // Registered helper but an implicit argument.
+        let call_impl: Rc<Val> = Val::Call(
+            SmolStr::new("nat_add_helper"),
+            List::new()
+                .prepend((y.clone(), Icit::Impl))
+                .prepend((x.clone(), Icit::Expl)),
+            Val::Match(x.clone(), List::new(), Vec::new()).into(),
+        )
+        .into();
+        assert!(matches!(infer.quote(&decl, Lvl(2), &call_impl).as_ref(), Tm::Call(..)));
+    }
+
+    /// Quote → eval round trip of a recovered operator call reproduces the
+    /// original `Val::Call` (definitional equality is unaffected).
+    #[test]
+    fn quote_eval_roundtrip_preserves_call() {
+        let mut infer = Infer::new();
+        infer.symbol_table.insert(
+            (SmolStr::new("nat_add_helper"), 2),
+            SmolStr::new("+"),
+        );
+        let decl: Decl = HashMap::new();
+        let x = rigid(0);
+        let y = rigid(1);
+        let call: Rc<Val> = Val::Call(
+            SmolStr::new("nat_add_helper"),
+            List::new()
+                .prepend((y.clone(), Icit::Expl))
+                .prepend((x.clone(), Icit::Expl)),
+            Val::Match(x.clone(), List::new(), Vec::new()).into(),
+        )
+        .into();
+        let q = infer.quote(&decl, Lvl(2), &call);
+        let env = List::new()
+            .prepend(rigid(1))
+            .prepend(rigid(0));
+        let back = infer.eval(&decl, &env, &q);
+        match back.as_ref() {
+            Val::Call(name, args, _) => {
+                assert_eq!(name, "nat_add_helper");
+                assert_eq!(args.len(), 2);
+            }
+            other => panic!("expected Val::Call after round trip, got {other:?}"),
+        }
+    }
 }

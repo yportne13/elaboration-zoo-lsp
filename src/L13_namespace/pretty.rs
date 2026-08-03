@@ -98,6 +98,32 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
         Tm::Decl(x) => x.data.to_string(),
         Tm::Obj(x, name) => format!("{}.{}", pretty_tm_indent(prec, indent, ns, x), name.data),
         Tm::App(t, u, i) => {
+            // Operator-symbol recovery: applications whose head is an
+            // operator declaration (restored from an inlined helper call by
+            // `quote`) render in infix (`x + y`) or prefix (`!x`) form.
+            // The head name determines the form, so user-defined operator
+            // symbols work automatically; ordinary applications fall through
+            // to the `{f_t} {f_u}` form below.
+            if *i == Icit::Expl {
+                if let Tm::App(t2, arg1, Icit::Expl) = t.as_ref() {
+                    if let Tm::Decl(name) = t2.as_ref() {
+                        if name.data.chars().next().map(super::is_operator_char).unwrap_or(false) {
+                            let ret = format!(
+                                "{} {} {}",
+                                pretty_tm_indent(ATP, indent, ns.clone(), arg1),
+                                name.data,
+                                pretty_tm_indent(ATP, indent, ns, u),
+                            );
+                            return if prec > APPP { bracket(ret) } else { ret };
+                        }
+                    }
+                } else if let Tm::Decl(name) = t.as_ref() {
+                    if name.data.chars().next().map(super::is_operator_char).unwrap_or(false) {
+                        let ret = format!("{}{}", name.data, pretty_tm_indent(ATP, indent, ns, u));
+                        return if prec > APPP { bracket(ret) } else { ret };
+                    }
+                }
+            }
             let need_paren = prec > APPP;
             let f_t = pretty_tm_indent(APPP, indent, ns.clone(), t);
             let f_u = match i {
@@ -248,6 +274,41 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                 pretty_tm_indent(prec, indent, ns, body)
             }
         },
+        Tm::OpCall { symbol, name, args, .. } => {
+            // Operator-symbol recovery: an inlined helper call backing an
+            // operator method (`nat_add_helper x y` for `x + y`) renders in
+            // infix (`x + y`) or prefix (`!x`) form.  Args are quoted in
+            // display order (head first).
+            match (args.len(), args.head()) {
+                (2, Some((a1, Icit::Expl))) => {
+                    let tail = args.tail();
+                    let a2 = tail.head().unwrap();
+                    let ret = format!(
+                        "{} {} {}",
+                        pretty_tm_indent(ATP, indent, ns.clone(), a1),
+                        symbol,
+                        pretty_tm_indent(ATP, indent, ns, &a2.0),
+                    );
+                    if prec > APPP { bracket(ret) } else { ret }
+                }
+                (1, Some((a1, Icit::Expl))) => {
+                    let ret = format!("{}{}", symbol, pretty_tm_indent(ATP, indent, ns, a1));
+                    if prec > APPP { bracket(ret) } else { ret }
+                }
+                _ => {
+                    // Unreachable in practice (quote only builds 1/2-arg
+                    // all-explicit OpCalls); fall back to the plain call form.
+                    let args_str = args.iter()
+                        .map(|(a, i)| match i {
+                            Icit::Expl => pretty_tm_indent(ATP, indent, ns.clone(), a),
+                            Icit::Impl => bracket(pretty_tm_indent(ATP, indent, ns.clone(), a)),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{name}({args_str})")
+                }
+            }
+        },
         Tm::Match(tm, cases) => {
             let need_paren = prec > LETP;
             let i = "  ".repeat(indent);
@@ -280,5 +341,117 @@ fn pretty_nat(prec: i32, indent: usize, ns: List<SmolStr>, param: Option<&Tm>, s
         },
         Some(tm) => format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
         None => format!("unknown + {}", sum),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::list::List;
+    use crate::parser_lib::Span;
+
+    fn decl(name: &str) -> std::sync::Arc<Tm> {
+        Tm::Decl(Span {
+            data: SmolStr::new(name),
+            start_offset: 0,
+            end_offset: 0,
+            path_id: 0,
+        })
+        .into()
+    }
+
+    fn app(f: std::sync::Arc<Tm>, u: std::sync::Arc<Tm>) -> std::sync::Arc<Tm> {
+        Tm::App(f, u, Icit::Expl).into()
+    }
+
+    fn pretty(tm: &Tm) -> String {
+        pretty_tm(0, List::new(), tm)
+    }
+
+    #[test]
+    fn infix_recovery_for_operator_declarations() {
+        // Full two-argument applications of an operator declaration
+        // (restored by `quote` from an inlined helper call) render in
+        // infix form.
+        assert_eq!(pretty(&app(app(decl("+"), decl("x")), decl("y"))), "x + y");
+        assert_eq!(pretty(&app(app(decl("*"), decl("a")), decl("b"))), "a * b");
+        assert_eq!(pretty(&app(app(decl("-"), decl("a")), decl("b"))), "a - b");
+        assert_eq!(pretty(&app(app(decl("/"), decl("a")), decl("b"))), "a / b");
+        assert_eq!(pretty(&app(app(decl("%"), decl("a")), decl("b"))), "a % b");
+        // Multi-character user-defined operators work automatically.
+        assert_eq!(pretty(&app(app(decl("+++"), decl("a")), decl("b"))), "a +++ b");
+        assert_eq!(pretty(&app(app(decl("<=>"), decl("a")), decl("b"))), "a <=> b");
+        // One-argument operator applications render in prefix form.
+        assert_eq!(pretty(&app(decl("!"), decl("x"))), "!x");
+        assert_eq!(pretty(&app(decl("~"), decl("x"))), "~x");
+    }
+
+    #[test]
+    fn no_recovery_for_plain_identifiers() {
+        // Non-operator declarations keep the ordinary application form,
+        // whether partial or fully applied.
+        assert_eq!(pretty(&app(decl("nat_add_helper"), decl("x"))), "nat_add_helper x");
+        assert_eq!(
+            pretty(&app(app(decl("nat_add_helper"), decl("x")), decl("y"))),
+            "nat_add_helper x y"
+        );
+        assert_eq!(pretty(&app(app(decl("nat_max"), decl("a")), decl("b"))), "nat_max a b");
+    }
+
+    #[test]
+    fn infix_recovery_requires_explicit_arguments() {
+        // An implicit second argument must not trigger infix recovery;
+        // the inner explicit one-argument app still renders prefix.
+        let implicit = Tm::App(
+            app(decl("+"), decl("x")).into(),
+            decl("y").into(),
+            Icit::Impl,
+        );
+        assert_eq!(pretty(&implicit), "+x {y}");
+        // An implicit first argument must not trigger infix recovery either.
+        let implicit_first = Tm::App(
+            Tm::App(decl("+").into(), decl("x").into(), Icit::Impl).into(),
+            decl("y").into(),
+            Icit::Expl,
+        );
+        assert_eq!(pretty(&implicit_first), "+ {x} y");
+    }
+
+    #[test]
+    fn infix_recovery_parens_match_application_style() {
+        // Inside an application, the infix result gets the same `{...}`
+        // brackets that a plain application would get at ATP precedence.
+        let nested = app(decl("f"), app(app(decl("+"), decl("x")), decl("y")));
+        assert_eq!(pretty(&nested), "f {x + y}");
+        // Nested operator applications: the left argument is bracketed.
+        let left_nested = app(app(decl("+"), app(app(decl("+"), decl("x")), decl("y"))), decl("z"));
+        assert_eq!(pretty(&left_nested), "{x + y} + z");
+        let right_nested = app(app(decl("+"), decl("x")), app(app(decl("+"), decl("y")), decl("z")));
+        assert_eq!(pretty(&right_nested), "x + {y + z}");
+    }
+
+    /// The `OpCall` shape produced by quote recovery (an inlined helper
+    /// call carrying the operator symbol) renders in infix/prefix form.
+    #[test]
+    fn infix_recovery_for_opcall() {
+        fn opcall(symbol: &str, args: &[&str]) -> std::sync::Arc<Tm> {
+            let mut list = List::new();
+            for arg in args.iter().rev() {
+                list = list.prepend((decl(arg), Icit::Expl));
+            }
+            Tm::OpCall {
+                symbol: SmolStr::new(symbol),
+                name: SmolStr::new("helper"),
+                args: list,
+                body: Tm::Match(decl("y").into(), Vec::new()).into(),
+            }
+            .into()
+        }
+        assert_eq!(pretty(&opcall("+", &["x", "y"])), "x + y");
+        assert_eq!(pretty(&opcall("+++", &["a", "b"])), "a +++ b");
+        assert_eq!(pretty(&opcall("!", &["x"])), "!x");
+        // Parens inside an application match the ATP bracket style.
+        let nested = app(decl("f"), opcall("+", &["x", "y"]));
+        assert_eq!(pretty(&nested), "f {x + y}");
     }
 }
