@@ -3933,3 +3933,79 @@ println("=== prove_term_pure.typort loaded! ===")
     }
 }
 
+/// Type errors on operator applications show the operator symbol (`x + y`)
+/// instead of the inlined helper function name (`nat_add_helper x y`).
+/// Each case runs a single failing def (the first error aborts the run).
+#[test]
+fn test_operator_symbol_recovery_in_errors() {
+    let cases: &[(&str, &str)] = &[
+        ("+", "nat_add_helper"),
+        ("*", "nat_mul_helper"),
+        ("-", "nat_sub"),
+        ("/", "nat_div_helper"),
+        ("%", "nat_rem_helper"),
+    ];
+    for (op, helper) in cases {
+        let input = format!(
+            "def bad(x: Nat, y: Nat): Eq (x {op} y) (y {op} x) = refl(x)\n"
+        );
+        let msg = match run_with_prelude(&input) {
+            Ok(_) => panic!("{op}: expected a type error"),
+            Err(e) => e.0.data,
+        };
+        assert!(
+            msg.contains(&format!("x {op} y")),
+            "{op}: expected infix `x {op} y` in error, got:\n{msg}"
+        );
+        assert!(
+            msg.contains(&format!("y {op} x")),
+            "{op}: expected infix `y {op} x` in error, got:\n{msg}"
+        );
+        assert!(
+            !msg.contains(helper),
+            "{op}: helper `{helper}` should be hidden, got:\n{msg}"
+        );
+    }
+}
+
+/// User-defined operator symbols are recovered too: a custom trait with an
+/// operator-named method (`+++`) whose impl body is a direct helper call
+/// renders in infix form in error messages.
+#[test]
+fn test_custom_operator_symbol_recovery() {
+    let input = r#"
+trait MyAdd[T, O: outParam(Type 0)] {
+    def +++(that: T): O
+}
+
+def my_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (my_add_helper x n)
+    }
+
+impl MyAdd[Nat, Nat] for Nat {
+    def +++(that: Nat): Nat =
+        my_add_helper this that
+}
+
+def bad_custom(x: Nat, y: Nat): Eq (x +++ y) (y +++ x) = refl(x)
+"#;
+    let msg = match run_with_prelude(input) {
+        Ok(_) => panic!("expected a type error"),
+        Err(e) => e.0.data,
+    };
+    assert!(
+        msg.contains("x +++ y"),
+        "expected infix `x +++ y` in error, got:\n{msg}"
+    );
+    assert!(
+        msg.contains("y +++ x"),
+        "expected infix `y +++ x` in error, got:\n{msg}"
+    );
+    assert!(
+        !msg.contains("my_add_helper"),
+        "helper `my_add_helper` should be hidden, got:\n{msg}"
+    );
+}
+

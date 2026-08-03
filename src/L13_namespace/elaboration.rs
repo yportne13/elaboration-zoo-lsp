@@ -958,6 +958,19 @@ impl Infer {
                             Decl::Def { name: name_d, params: p, ret_type, body } => {
                                 if !is_static {
                                     let prefix_name = name_raw.to_string();
+                                    // Operator-symbol registration (inherent impl):
+                                    // an operator-named method whose body is a direct
+                                    // helper application (`helper this that`) records
+                                    // (helper, arity) → operator so `quote` can restore
+                                    // the infix form of the inlined helper call.
+                                    if is_operator_method_name(&name_d.data) {
+                                        if let Some(head) = raw_ctor_name(&body) {
+                                            self.symbol_table.insert(
+                                                (head, params.len() + 1 + p.len()),
+                                                name_d.data.clone(),
+                                            );
+                                        }
+                                    }
                                     let t = self.infer(&cxt, Decl::Def {
                                         name: name_d.clone().map(|x| SmolStr::new(format!("{}{x}", prefix_name))),
                                         params: params.iter()
@@ -1100,6 +1113,19 @@ impl Infer {
                         });
                     for (decl, _) in methods {
                         if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
+                            // Operator-symbol registration (trait impl): an
+                            // operator-named method whose body is a direct helper
+                            // application (`helper this that`) records
+                            // (helper, arity) → operator so `quote` can restore the
+                            // infix form of the inlined helper call.
+                            if is_operator_method_name(&def_name.data) {
+                                if let Some(head) = raw_ctor_name(&body) {
+                                    self.symbol_table.insert(
+                                        (head, params.len() + 1),
+                                        def_name.data.clone(),
+                                    );
+                                }
+                            }
                             ret = Raw::App(
                                 Box::new(ret),
                                 Box::new(Raw::Lam(
@@ -1907,5 +1933,11 @@ fn raw_ctor_name(raw: &Raw) -> Option<SmolStr> {
         Raw::App(head, _, _) => raw_ctor_name(head),
         _ => None,
     }
+}
+
+/// True when `name` starts with an operator character, i.e. it is an
+/// operator method (`+`, `<=`, `:=`, ...) rather than an identifier method.
+fn is_operator_method_name(name: &str) -> bool {
+    name.chars().next().map(super::is_operator_char).unwrap_or(false)
 }
 
