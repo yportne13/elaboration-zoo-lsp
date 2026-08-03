@@ -787,7 +787,14 @@ impl Infer {
                     let ret_tm = self.quote(&ret_cxt.decl, ret_lvl, &ret_val);
                     if ret_tm.no_metas(self, &ret_cxt.decl, ret_lvl).is_none() {
                         let label = format!(": {}", super::pretty_tm(0, ret_cxt.names(), &ret_tm));
-                        self.inlay_hint_table.push((name.to_span().end_offset, label));
+                        // Anchor the hint after the parameter list (last param's end),
+                        // so `def foo[A](a: A)` gets `: T` between `)` and `=`.
+                        // For parameterless defs (`def g = ...`) keep it right after the name.
+                        let pos = params
+                            .last()
+                            .map(|p| p.1.to_span().end_offset + 1)
+                            .unwrap_or_else(|| name.to_span().end_offset);
+                        self.inlay_hint_table.push((pos, label));
                     }
                 }
                 Ok((
