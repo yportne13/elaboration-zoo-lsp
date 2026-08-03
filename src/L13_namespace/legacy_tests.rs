@@ -1384,9 +1384,14 @@ fn test_examples_hdl_dir() {
             "posedge reset",          // reg init 异步复位
             "r <= 42;",               // 复位初值
             "if (en) begin",          // regNextWhen 条件
+            "d <= a;",                // regNext 时钟赋值（UInt）
             "reg [7:0] da;",          // regNext 任意 Data（UInt）
+            "da <= a;",               // regNextAny UInt 时钟赋值
             "reg [7:0] db;",          // regNext 任意 Data（Bits）
+            "db <= b;",               // regNextAny Bits 时钟赋值
+            "dc <= c;",               // regNextAny Bool 时钟赋值
             "reg signed [3:0] de;",   // regNext 任意 Data（SInt）
+            "de <= e;",               // regNextAny SInt 时钟赋值
         ]),
         ("08-control-flow.typort", include_str!("../../examples/hdl/08-control-flow.typort"), &[
             "always @(*) begin",      // when 组合逻辑
