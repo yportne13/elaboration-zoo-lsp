@@ -1401,9 +1401,14 @@ fn test_examples_hdl_dir() {
         ]),
         ("10-bundle.typort", include_str!("../../examples/hdl/10-bundle.typort"), &[
             "module bundleTop",       // derive(Bundle)
-            "assign m_awaddr",        // 批量赋值逐字段展开
-            "assign m_awvalid",
+            "assign master_awaddr",   // 自动命名：绑定名 + "_" + 字段名
+            "assign master_awvalid",
             "module bundleParam",     // 参数化 Bundle
+            "module bundleMasterSlave",  // master/slave 方向化端口
+            "output wire [31:0] master_awaddr",  // master 驱动字段 → output 端口
+            "input wire master_awready",         // master 接收字段 → input 端口
+            "input wire [31:0] slave_awaddr",    // slave 驱动字段 → input 端口
+            "output wire slave_awready",         // slave 接收字段 → output 端口
         ]),
     ];
 
@@ -1669,7 +1674,8 @@ println(moduleTreeVL(Test.create.tree))
 #[test]
 fn test_hdl_bundle_basic() {
     // Bundle with manual signal creation + bulk :=.
-    // (create_MyBus factory used for ergonomics)
+    // (create_MyBus factory used for ergonomics; signals auto-named from the
+    // let binding: bus1_data, bus1_valid, …)
     let input = r#"
 #[derive(Bundle)]
 struct MyBus {
@@ -1678,8 +1684,8 @@ struct MyBus {
 }
 
 module Test {
-    let bus1 = create_MyBus("bus1_")
-    let bus2 = create_MyBus("bus2_")
+    let bus1 = create_MyBus
+    let bus2 = create_MyBus
     bus1 := bus2
 }
 
@@ -1750,8 +1756,8 @@ struct AxiLite {
 }
 
 module Test {
-    let master = create_AxiLite("m_")
-    let slave  = create_AxiLite("s_")
+    let master = create_AxiLite
+    let slave  = create_AxiLite
     master := slave
 }
 
@@ -1761,6 +1767,50 @@ println(moduleTreeVL(Test.create.tree))
         Ok(output) => {
             println!("{}", output);
             assert!(output.contains("endmodule"), "should produce a Verilog module {:?}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_master_slave() {
+    // SpinalHDL-style master/slave: fields marked with in()/out() become
+    // directed ports. master_TypeName: out→output port, in→input port;
+    // slave_TypeName flips. `:=` skips assignments whose LHS is an input port.
+    let input = r#"
+#[derive(Bundle)]
+struct AxiLite {
+    awaddr:  out(UInt[16])
+    awvalid: out(Bool)
+    awready: in(Bool)
+    wdata:   out(UInt[16])
+    wvalid:  out(Bool)
+    wready:  in(Bool)
+}
+
+module Test {
+    let master = master_AxiLite
+    let slave  = slave_AxiLite
+    master := slave
+    slave := master
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("output wire [15:0] master_awaddr"), "master out field should be an output port, got: {}", output);
+            assert!(output.contains("input wire master_awready"), "master in field should be an input port, got: {}", output);
+            assert!(output.contains("input wire [15:0] slave_awaddr"), "slave out-marked field should be an input port, got: {}", output);
+            assert!(output.contains("output wire slave_awready"), "slave in-marked field should be an output port, got: {}", output);
+            // master := slave drives master's outputs from slave's inputs
+            assert!(output.contains("assign master_awaddr = slave_awaddr"), "missing master→slave wiring, got: {}", output);
+            // slave := master drives slave's outputs from master's inputs
+            assert!(output.contains("assign slave_awready = master_awready"), "missing slave→master wiring, got: {}", output);
+            // No assignment to an input port may be generated
+            assert!(!output.contains("assign master_awready"), "must not drive an input port, got: {}", output);
+            assert!(!output.contains("assign slave_awaddr"), "must not drive an input port, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -1829,7 +1879,7 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_bundle_create() {
-    // create_TypeName("prefix") factory inside a module.
+    // create_TypeName factory (auto-named signals) inside a module.
     let input = r#"
 #[derive(Bundle)]
 struct MyBus {
@@ -1838,8 +1888,8 @@ struct MyBus {
 }
 
 module Test {
-    let bus1 = create_MyBus("bus1_")
-    let bus2 = create_MyBus("bus2_")
+    let bus1 = create_MyBus
+    let bus2 = create_MyBus
     bus1 := bus2
 }
 
@@ -1856,7 +1906,7 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_bundle_create_width_var() {
-    // create_TypeName[width]("prefix") for parametric bundles.
+    // create_TypeName[width] for parametric bundles.
     let input = r#"
 #[derive(Bundle)]
 struct MyBus[w: Nat] {
@@ -1865,8 +1915,8 @@ struct MyBus[w: Nat] {
 }
 
 module Test {
-    let bus1 = create_MyBus[8]("bus1_")
-    let bus2 = create_MyBus[8]("bus2_")
+    let bus1 = create_MyBus[8]
+    let bus2 = create_MyBus[8]
     bus1 := bus2
 }
 
