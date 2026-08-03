@@ -1,0 +1,310 @@
+// ============================================================
+// Adder Correctness Proof — Pure Agda-Style
+//
+// A fully formal, dependently-typed proof that a bit-wise ripple
+// carry adder computes the mathematical sum of two fixed-width
+// unsigned binary numbers.
+//
+// The proof is "pure Agda-style": it uses ONLY
+//     match   — pattern matching / induction on Nat and Vec
+//     rfl     — reflexivity (definitional equality)
+//     trans   — transitivity of equality
+//     symm    — symmetry of equality
+//     cong    — congruence (apply a function to both sides)
+// No tactic automation, no automation of any kind: every
+// arithmetic fact about Nat is either a prelude lemma or is
+// proved here by hand with pattern matching.
+//
+// What is proved:
+//   vec_adder_correct : to_nat(sum) + 2^n * carry = to_nat(a) + to_nat(b) + ci
+//                       (the ripple-carry adder is correct)
+//   to_nat_snoc       : to_nat(snoc(v,x)) = to_nat(v) + 2^len * bool_to_nat(x)
+//                       (appending the carry bit doubles the width)
+//   vec_add_correct   : to_nat(vec_add(a,b)) = to_nat(a) + to_nat(b)
+//                       (the full-width adder is correct)
+//
+// Bit ordering: the head of a Vec is the LEAST significant bit;
+// the final carry-out is the most significant bit (weight 2^n).
+// ============================================================
+
+// ============================================================
+// 1. Hardware semantics
+// ============================================================
+
+// pow2(n) = 2^n — the positional weight of bit n.
+def pow2(n: Nat): Nat =
+    match n {
+        case zero => 1
+        case succ(m) => double(pow2(m))
+    }
+
+// full_adder(ci, a, b) = (sum, carry_out), one full-adder bit slice:
+//   sum  = a xor b xor ci
+//   cout = (a & b) | (a & ci) | (b & ci)   (majority of the three inputs)
+def full_adder(ci: Boolean, a: Boolean, b: Boolean): Tuple2[Boolean, Boolean] =
+    ((a ^ b) ^ ci, (a & b) | (a & ci) | (b & ci))
+
+// to_nat(v) — the unsigned value of a bit vector (head = LSB):
+//   to_nat(nil)            = 0
+//   to_nat(cons(b, rest))  = 2 * to_nat(rest) + bool_to_nat(b)
+// i.e. each bit is weighted by its position, 2^position.
+def to_nat[len: Nat](v: Vec[Boolean] len): Nat =
+    match v {
+        case nil => 0
+        case cons(b, rest) => double(to_nat(rest)) + bool_to_nat(b)
+    }
+
+// vec_adder(ci, a, b) — ripple-carry adder over a and b, returning
+// (sum bits, final carry-out). The carry ripples from the LSB (head)
+// through full adders up to the MSB (tail).
+def vec_adder[len: Nat](ci: Boolean, a: Vec[Boolean] len, b: Vec[Boolean] len): Tuple2[Vec[Boolean] len, Boolean] =
+    match a {
+        case nil => (nil, ci)
+        case cons(abit, arest) =>
+            match b {
+                case cons(bbit, brest) =>
+                    let (sum, co) = full_adder(ci, abit, bbit);
+                    let inner = vec_adder(co, arest, brest);
+                    (cons(sum, inner._1), inner._2)
+            }
+    }
+
+// ============================================================
+// 2. Arithmetic lemmas (all proved by pattern matching)
+// ============================================================
+
+// add_right_eq: a = b → a + c = b + c (congruence on the right operand)
+def add_right_eq(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (a + c) (b + c) =
+    match c {
+        case zero =>
+            trans(add_zero_right(a), trans(h, symm(add_zero_right(b))))
+        case succ(k) => let ih = add_right_eq(a, b, k, h);
+            trans(add_succ_right(a, k), trans(cong_succ(ih), symm(add_succ_right(b, k))))
+    }
+
+// add_left_eq: a = b → c + a = c + b (congruence on the left operand, via add_comm)
+def add_left_eq(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (c + a) (c + b) =
+    trans(add_comm(c, a), trans(add_right_eq(a, b, c, h), symm(add_comm(c, b))))
+
+// double_distrib: double(x + y) = double(x) + double(y)
+// double(n) is defined as n + n, so this is a chain of assoc/comm rewrites.
+def double_distrib(x: Nat, y: Nat): Eq (double(x + y)) (double(x) + double(y)) =
+    trans(symm(add_assoc(x + y, x, y)),
+        trans(add_right_eq((x + y) + x, x + (y + x), y, add_assoc(x, y, x)),
+            trans(add_right_eq(x + (y + x), x + (x + y), y, add_left_eq(y + x, x + y, x, add_comm(y, x))),
+                trans(add_right_eq(x + (x + y), (x + x) + y, y, symm(add_assoc(x, x, y))),
+                    add_assoc(x + x, y, y)))))
+
+// double_mul: double(x) * z = double(x * z) — by induction on z
+def double_mul(x: Nat, z: Nat): Eq(double(x)*z, double(x*z)) =
+    match z {
+        case zero => rfl
+        case succ(n) => let ih = double_mul(x, n);
+            trans(add_left_eq(double(x)*n, double(x*n), double(x), ih), symm(double_distrib(x, x*n)))
+    }
+
+// ps_mul: double(pow2(m)) * z = double(pow2(m) * z) — instance of double_mul
+// ("ps" = pow2-scaled: shifts the carry bit into the next column)
+def ps_mul(m: Nat, z: Nat): Eq(double(pow2(m))*z, double(pow2(m)*z)) =
+    double_mul(pow2(m), z)
+
+// add_succ_succ: (a+1) + (b+1) = a + b + 2 (the "+2" of two incremented halves)
+def add_succ_succ(a: Nat, b: Nat): Eq((a+1)+(b+1), a+b+2) = add_succ_left(a, b + 1)
+
+// double_add_one: double(x + y + 1) = double(x) + double(y) + 2
+// (carrying a 1 through a doubled column produces a 2)
+def double_add_one(x: Nat, y: Nat): Eq(double(x + y + 1), double(x) + double(y) + 2) =
+    trans(double_distrib(x + y, 1), add_right_eq(double(x + y), double(x) + double(y), 2, double_distrib(x, y)))
+
+// rearrange2_r: a + (b+1) + 1 = a + b + 2 — the carried 2 sits on the right
+def rearrange2_r(a: Nat, b: Nat): Eq(a + (b + 1) + 1, a + b + 2) = rfl
+
+// rearrange3_r: (a+1) + b + 1 = a + b + 2 — the carried 2 sits in the middle
+def rearrange3_r(a: Nat, b: Nat): Eq((a + 1) + b + 1, a + b + 2) = cong_succ(add_succ_left(a, b))
+
+// -------------------------------------------------------------------
+// Factored adder-step lemmas
+//
+// In vec_adder_correct the induction hypothesis has the shape
+//     sum_x + pow2(m) * carry_s = result_r
+// ("the sub-adder's sum plus the shifted carry-out equals the sub-sums"),
+// and the head column either doubles the sum (bit 0) or doubles-and-
+// increments it (bit 1). The three lemmas below push this shape
+// through one doubling step, keeping the proofs of the 8 cases short.
+// -------------------------------------------------------------------
+
+// add1_left: (a + b) + 1 = (a + 1) + b — moving the "+1" onto the left operand
+def add1_left(a: Nat, b: Nat): Eq ((a + b) + 1) ((a + 1) + b) = symm(add_succ_left(a, b))
+
+// double_step: if sum_x + pow2(m)*carry_s = result_r
+//   then double(sum_x) + double(pow2(m))*carry_s = double(result_r)
+// (sum bit = 0 ⇒ the next column is simply twice the current one)
+def double_step(m: Nat, sum_x: Nat, carry_s: Nat, result_r: Nat, h: Eq (sum_x + pow2(m) * carry_s) result_r):
+    Eq (double(sum_x) + double(pow2(m)) * carry_s) (double(result_r)) =
+    trans(add_left_eq(double(pow2(m)) * carry_s, double(pow2(m) * carry_s), double(sum_x), ps_mul(m, carry_s)),
+        trans(symm(double_distrib(sum_x, pow2(m) * carry_s)), cong(double, h)))
+
+// add1_step: if sum_x + pow2(m)*carry_s = result_r
+//   then (double(sum_x)+1) + double(pow2(m))*carry_s = double(result_r) + 1
+// (sum bit = 1 ⇒ the next column is twice the current one, plus one)
+def add1_step(m: Nat, sum_x: Nat, carry_s: Nat, result_r: Nat, h: Eq (sum_x + pow2(m) * carry_s) result_r):
+    Eq ((double(sum_x) + 1) + double(pow2(m)) * carry_s) (double(result_r) + 1) =
+    trans(symm(add1_left(double(sum_x), double(pow2(m)) * carry_s)),
+        add_right_eq(double(sum_x) + double(pow2(m)) * carry_s, double(result_r), 1, double_step(m, sum_x, carry_s, result_r, h)))
+
+// add1_step2: like add1_step, but the target is written as the sum of
+// the two halves plus one — the "sum bit = 1, no extra carry" column shape.
+def add1_step2(m: Nat, sum_x: Nat, carry_s: Nat, nat_a: Nat, nat_b: Nat, ih: Eq (sum_x + pow2(m) * carry_s) (nat_a + nat_b)):
+    Eq ((double(sum_x) + 1) + double(pow2(m)) * carry_s) ((double(nat_a) + double(nat_b)) + 1) =
+    trans(add1_step(m, sum_x, carry_s, nat_a + nat_b, ih),
+        add_right_eq(double(nat_a + nat_b), double(nat_a) + double(nat_b), 1, double_distrib(nat_a, nat_b)))
+
+// ============================================================
+// 3. snoc & vec_add: appending the final carry bit
+// ============================================================
+
+// snoc(v, x) = v with x appended at the end (the MSB side).
+def snoc[len: Nat](v: Vec[Boolean] len, x: Boolean): Vec[Boolean] (succ(len)) =
+    match v {
+        case nil => cons(x, nil)
+        case cons(y, ys) => cons(y, snoc(ys, x))
+    }
+
+// vec_add(a, b) = full (len+1)-bit sum of two len-bit numbers:
+// the ripple-carry adder with no input carry, and the final carry-out
+// snoc'd as the most significant bit.
+def vec_add[len: Nat](a: Vec[Boolean] len, b: Vec[Boolean] len): Vec[Boolean] (succ(len)) =
+    snoc(vec_adder(false, a, b)._1, vec_adder(false, a, b)._2)
+
+// ============================================================
+// 4. Main theorems
+// ============================================================
+
+// vec_adder_correct: the ripple-carry adder computes the real sum:
+//   to_nat(sum) + pow2(n) * carry = to_nat(a) + to_nat(b) + bool_to_nat(ci)
+//
+// Proof strategy — induction on n, then case analysis on the
+// 2^3 = 8 combinations of (ci, abit, bbit) at the head column:
+//
+//   * The head full adder's sum bit chooses the column shape:
+//       sum = 0  ->  s1 = double(sum_x) + carry_weight       (double_step)
+//       sum = 1  ->  s2 = (double(sum_x) + 1) + carry_weight (add1_step)
+//     where carry_weight = double(pow2(m)) * carry_s, and the
+//     induction hypothesis ih : sum_x + pow2(m)*carry_s = nat_a + nat_b
+//     is plugged in as the result_r.
+//   * The head adder's carry-out co becomes the input carry of the
+//     sub-adder, i.e. it is already inside sum_x / carry_s — so the
+//     sub-adder correctness (ih) covers the tail automatically.
+//   * On the target side, double(nat_a) + double(nat_b) is rearranged
+//     with the "2 = 1 + 1" lemmas (double_add_one, add_succ_succ,
+//     rearrange2_r, rearrange3_r, add1_left) to match the column shape;
+//     a carry-out of 1 means the next column starts from result_r + 1.
+def vec_adder_correct[n: Nat](ci: Boolean, a: Vec[Boolean] n, b: Vec[Boolean] n):
+    Eq(to_nat(vec_adder(ci, a, b)._1) + pow2(n) * bool_to_nat(vec_adder(ci, a, b)._2),
+       to_nat(a) + to_nat(b) + bool_to_nat(ci)) =
+    match n {
+        case zero => match (a, b) {
+            case (nil, nil) => match ci {
+                case false => rfl
+                case true => rfl
+            }
+        }
+        case succ(m) => match (a, b) {
+            case (cons(abit, arest), cons(bbit, brest)) =>
+                let (nat_a, nat_b) = (to_nat(arest), to_nat(brest));
+                let result_r = nat_a + nat_b;
+                let (double_a, double_b) = (double(nat_a), double(nat_b));
+                let co = full_adder(ci, abit, bbit)._2;
+                let (sum_x, carry_s) = (to_nat(vec_adder(co, arest, brest)._1), bool_to_nat(vec_adder(co, arest, brest)._2));
+                let ih = vec_adder_correct(co, arest, brest);
+                let carry_weight = double(pow2(m)) * carry_s;
+                let s1 = double(sum_x) + carry_weight;
+                let s2 = (double(sum_x) + 1) + carry_weight;
+                match (ci, abit, bbit) {
+                    // (F,F,F): sum=0, co=0 — plain doubling, both halves unchanged
+                    case (false, false, false) =>
+                        let ret: Eq(s1, double_a + double_b) = trans(double_step(m, sum_x, carry_s, result_r, ih), double_distrib(nat_a, nat_b));
+                        ret
+                    // (F,F,T): sum=1, co=0 — the +1 lands on the right half
+                    case (false, false, true) =>
+                        let ret: Eq(s2, double_a + (double_b + 1)) = trans(add1_step2(m, sum_x, carry_s, nat_a, nat_b, ih), add_assoc(double_a, double_b, 1));
+                        ret
+                    // (F,T,F): sum=1, co=0 — the +1 lands on the left half
+                    case (false, true, false) =>
+                        let ret: Eq(s2, (double_a + 1) + double_b) = trans(add1_step2(m, sum_x, carry_s, nat_a, nat_b, ih), add1_left(double_a, double_b));
+                        ret
+                    // (F,T,T): sum=0, co=1 — both +1s merge into +2, carried one column up
+                    case (false, true, true) =>
+                        let ret: Eq(s1, (double_a + 1) + (double_b + 1)) = trans(double_step(m, sum_x, carry_s, result_r + 1, ih),
+                            trans(double_add_one(nat_a, nat_b), symm(add_succ_succ(double_a, double_b))));
+                        ret
+                    // (T,F,F): sum=1, co=0 — the input carry supplies the +1 directly
+                    case (true, false, false) => add1_step2(m, sum_x, carry_s, nat_a, nat_b, ih)
+                    // (T,F,T): sum=0, co=1 — the +1 of ci propagates into the carry
+                    case (true, false, true) =>
+                        let ret: Eq(s1, double_a + (double_b + 1) + 1) = trans(double_step(m, sum_x, carry_s, result_r + 1, ih),
+                            trans(double_add_one(nat_a, nat_b), symm(rearrange2_r(double_a, double_b))));
+                        ret
+                    // (T,T,F): sum=0, co=1 — same, with the carried 2 in the middle
+                    case (true, true, false) =>
+                        let ret: Eq(s1, (double_a + 1) + double_b + 1) = trans(double_step(m, sum_x, carry_s, result_r + 1, ih),
+                            trans(double_add_one(nat_a, nat_b), symm(rearrange3_r(double_a, double_b))));
+                        ret
+                    // (T,T,T): sum=1, co=1 — both +1s and the carry: +2 shifted up, +1 kept
+                    case (true, true, true) =>
+                        let ret: Eq(s2, ((double_a + 1) + (double_b + 1)) + 1) = trans(add1_step(m, sum_x, carry_s, result_r + 1, ih),
+                            add_right_eq(double(nat_a + nat_b + 1), (double_a + 1) + (double_b + 1), 1,
+                                trans(double_add_one(nat_a, nat_b), symm(add_succ_succ(double_a, double_b)))));
+                        ret
+                }
+        }
+    }
+
+// to_nat_snoc: appending a bit at the MSB side gives it weight 2^len:
+//   to_nat(snoc(v, x)) = to_nat(v) + pow2(len) * bool_to_nat(x)
+// Proved by induction on len, with the head bit deciding double vs double+1.
+def to_nat_snoc[len: Nat](v: Vec[Boolean] len, x: Boolean):
+    Eq(to_nat(snoc(v, x)), to_nat(v) + pow2(len) * bool_to_nat(x)) =
+    match len {
+        case zero => match (v, x) {
+            case (nil, false) => rfl
+            case (nil, true) => rfl
+        }
+        case succ(k) => match (v, x) {
+            // head bit 0: snoc stays inside the doubled tail
+            case (cons(false, ys), false) =>
+                cong(double, to_nat_snoc(ys, false))
+            // head bit 0, appended bit 1: the weight 2^(k+1) is the doubled tail
+            case (cons(false, ys), true) =>
+                trans(cong(double, to_nat_snoc(ys, true)), double_distrib(to_nat(ys), pow2(k)))
+            // head bit 1, appended bit 0: double + 1
+            case (cons(true, ys), false) =>
+                cong_succ(cong(double, to_nat_snoc(ys, false)))
+            // head bit 1, appended bit 1: (2*tail + 1) + 2^(k+1) = 2*(tail + 2^k) + 1
+            case (cons(true, ys), true) =>
+                trans(cong_succ(cong(double, to_nat_snoc(ys, true))),
+                    symm(add1_step(k, to_nat(ys), 1, to_nat(ys) + pow2(k), rfl)))
+        }
+    }
+
+// vec_add_correct: the full-width adder is correct:
+//   to_nat(vec_add(a, b)) = to_nat(a) + to_nat(b)
+// i.e. vec_add's (len+1)-bit result evaluates to the exact sum.
+// Proof: to_nat_snoc (the appended carry has weight 2^len) followed
+// by vec_adder_correct with ci = false.
+def vec_add_correct[len: Nat](a: Vec[Boolean] len, b: Vec[Boolean] len):
+    Eq(to_nat(vec_add(a, b)), to_nat(a) + to_nat(b)) =
+    trans(to_nat_snoc(vec_adder(false, a, b)._1, vec_adder(false, a, b)._2), vec_adder_correct(false, a, b))
+
+// ============================================================
+// 5. Demo: concrete instantiations (fully checked at compile time)
+// ============================================================
+
+// 0-bit addition: empty vectors — the theorem reduces to rfl.
+println(vec_adder_correct(true, nil, nil))
+
+// 2-bit addition (head = LSB): 0b01 + 0b11 = 0b100 (1 + 3 = 4).
+// Prints the Eq proof term for the concrete inputs (normalizes to refl(4)).
+println(vec_add_correct(cons(true, cons(false, nil)), cons(true, cons(true, nil))))
+
+println("=== adder_proof.typort loaded ===")

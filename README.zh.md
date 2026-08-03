@@ -91,6 +91,7 @@ cargo run --release --features mem-profile --bin typort -- stats
 | `examples/typeclass_complex.typort` | Traits、instances、泛型 impl、Eq 证明 |
 | `examples/alu.typort` | HDL 模块、UInt 算术、Into trait |
 | `examples/hdl_ops.typort` | apply、slice、布尔运算、子模块、左值位选 |
+| `examples/adder_proof.typort` | 加法器正确性证明，Agda 风格，Eq/refl/trans/symm/cong |
 
 ## 架构
 
