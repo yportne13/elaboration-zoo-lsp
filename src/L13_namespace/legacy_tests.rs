@@ -1390,6 +1390,7 @@ fn test_examples_hdl_dir() {
         ]),
         ("08-control-flow.typort", include_str!("../../examples/hdl/08-control-flow.typort"), &[
             "always @(*) begin",      // when 组合逻辑
+            "end else begin",         // otherwise 作为 else 分支（非默认赋值）
             "else if",                // elsewhen 链
             "if (sel == 0)",          // switch -> when 展开（=== 生成 ==）
         ]),

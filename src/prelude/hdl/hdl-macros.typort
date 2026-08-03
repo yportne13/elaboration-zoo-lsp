@@ -9,26 +9,28 @@
 #[macro_export]
 macro_rules when {
     // when + elsewhen* + otherwise
-    // Note: otherwise emitted FIRST (becomes default assign before when node)
+    // Note: when/elsewhen bodies are emitted FIRST, otherwise LAST, so the
+    // module records when(cond, body, None) nodes followed by the otherwise
+    // assignments; the generator turns this into if / else if / else.
     ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
-        let w_opush = whenOtherwiseBegin(unit);
-        $({$bodyother})*
-        let w_opop = whenEnd(unit);
         let w_push = whenBegin(($cond).expr);
         $({$body})*
         let w_pop = whenEnd(unit);
         $( let w_epush = whenElseBegin(($cond2).expr);
            $({$bodyelse})*
            let w_epop = whenEnd(unit); )*
-    };
-    // when + otherwise (no elsewhen)
-    ($cond:raw {$( $body: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
         let w_opush = whenOtherwiseBegin(unit);
         $({$bodyother})*
         let w_opop = whenEnd(unit);
+    };
+    // when + otherwise (no elsewhen)
+    ($cond:raw {$( $body: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
         let w_push = whenBegin(($cond).expr);
         $({$body})*
         let w_pop = whenEnd(unit);
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
     };
     // when without otherwise
     ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
@@ -99,27 +101,27 @@ macro_rules Expr {
 
     // ---- when/otherwise control flow ----
     // Pushes condition scope, evaluates body, pops scope.
-    // Note: otherwise body is emitted FIRST so it appears as the default assign
-    // before the when node in the module (required for correct Verilog generation).
+    // Note: when/elsewhen bodies are emitted FIRST, otherwise LAST, so the
+    // generator can emit if / else if / else instead of a default assign.
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
-        let w_opush = whenOtherwiseBegin(unit);
-        $({$bodyother})*
-        let w_opop = whenEnd(unit);
         let w_push = whenBegin(($cond).expr);
         $({$bodywhen})*
         let w_pop = whenEnd(unit);
         $( let w_epush = whenElseBegin(($cond2).expr);
            $({$bodyelse})*
            let w_epop = whenEnd(unit); )*
-    };
-    // when with otherwise (no elsewhen)
-    (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
         let w_opush = whenOtherwiseBegin(unit);
         $({$bodyother})*
         let w_opop = whenEnd(unit);
+    };
+    // when with otherwise (no elsewhen)
+    (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
         let w_push = whenBegin(($cond).expr);
         $({$bodywhen})*
         let w_pop = whenEnd(unit);
+        let w_opush = whenOtherwiseBegin(unit);
+        $({$bodyother})*
+        let w_opop = whenEnd(unit);
     };
     // when without otherwise
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
@@ -133,28 +135,28 @@ macro_rules Expr {
 
     // ---- switch — desugar to when-based pattern matching ----
     // switch sel { is 0 { body } is 1 { body2 } default { body3 } }
-    // default body emitted first (becomes the default assign before the when node)
+    // default body emitted LAST (becomes the else branch of the if/else-if chain)
     // Note: $val can be a Nat literal or a signal; uses === operator for comparison
     // Multiple is cases: first uses whenBegin, rest use whenElseBegin
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* default {$( $default_body: Expr )*} }) => {
-        let _wob = whenOtherwiseBegin(unit);
-        $({$default_body})*
-        let _we2 = whenEnd(unit);
         let _wb = whenBegin(($sel === $val).expr);
         $({$body})*
         let _we = whenEnd(unit);
         $( let _web = whenElseBegin(($sel === $val2).expr);
            $({$body2})*
            let _we3 = whenEnd(unit); )*
-    };
-    // Single is + default (no elsewhen)
-    (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
         let _wob = whenOtherwiseBegin(unit);
         $({$default_body})*
         let _we2 = whenEnd(unit);
+    };
+    // Single is + default (no elsewhen)
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
         let _wb = whenBegin(($sel === $val).expr);
         $({$body})*
         let _we = whenEnd(unit);
+        let _wob = whenOtherwiseBegin(unit);
+        $({$default_body})*
+        let _we2 = whenEnd(unit);
     };
 
     // ---- raw expression passthrough ----

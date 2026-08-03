@@ -375,21 +375,50 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
     }
 }
 
-// Helper: check if a single assign is for a when-driven signal, return default line
-def defaultLineCheck(e: Expr, whenSigs: List[String]): List[String] =
-    let lhsName = getAssignLhsName(e);
-    let isWhen = strInList(lhsName, whenSigs);
-    match isWhen {
-        case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") lnil
-        case false => lnil
-    }
-
-// Collect default assign lines for when-driven signals (to put inside always block)
-def collectDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+// Helper: collect default lines that appear AFTER the last non-clocked when in
+// insertion order — i.e. otherwise bodies, which become the else branch of the
+// if/else-if chain. `es` is the reverse-ordered module expr Vec, so these are
+// the default lines before the first when encountered walking it.
+def collectTailDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
-        case assign(_, _) => list_append(defaultLineCheck(e, whenSigs), collectDefaultLines(tail, whenSigs))
-        case _ => collectDefaultLines(tail, whenSigs)
+        case when(_, _, _) => lnil
+        case assign(_, _) =>
+            let lhsName = getAssignLhsName(e);
+            let isWhen = strInList(lhsName, whenSigs);
+            match isWhen {
+                case true => lcons ("      " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectTailDefaultLines(tail, whenSigs))
+                case false => collectTailDefaultLines(tail, whenSigs)
+            }
+        case _ => collectTailDefaultLines(tail, whenSigs)
+    }
+}
+
+// Helper: collect default lines after the first when seen while walking the
+// reverse-ordered Vec (i.e. defaults before the first when in insertion order).
+def collectHeadDefaultsAfter[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case assign(_, _) =>
+            let lhsName = getAssignLhsName(e);
+            let isWhen = strInList(lhsName, whenSigs);
+            match isWhen {
+                case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectHeadDefaultsAfter(tail, whenSigs))
+                case false => collectHeadDefaultsAfter(tail, whenSigs)
+            }
+        case _ => collectHeadDefaultsAfter(tail, whenSigs)
+    }
+}
+
+// Helper: collect default lines that appear BEFORE the first non-clocked when in
+// insertion order — standalone defaults written before a when (e.g. an explicit
+// default assign followed by a when without otherwise). These stay as plain
+// lines emitted before the if chain.
+def collectHeadDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case when(_, _, _) => collectHeadDefaultsAfter(tail, whenSigs)
+        case _ => collectHeadDefaultLines(tail, whenSigs)
     }
 }
 
@@ -451,18 +480,26 @@ def joinWhenBodies(ls: List[Expr]): String = match ls {
         }
 }
 
-// Build a single merged always block from all non-clocked when nodes
+// Build a single merged always block from all non-clocked when nodes.
+// Standalone defaults (written before the when) stay as plain lines before the
+// if chain; otherwise bodies (defaults after the last when) become the else
+// branch, yielding if / else if / else instead of "default assign + if override".
 def buildMergedAlwaysBlock[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     let whens = list_reverse(collectNonClockedWhens(es));
     match whens {
         case lnil => ""
         case _ =>
-            let defaults = list_reverse(collectDefaultLines(es, whenSigs));
-            let defaultStr = match defaults {
+            let head_defaults = list_reverse(collectHeadDefaultLines(es, whenSigs));
+            let tail_defaults = list_reverse(collectTailDefaultLines(es, whenSigs));
+            let headStr = match head_defaults {
                 case lnil => ""
-                case _ => joinLines(defaults) + "\n"
+                case _ => joinLines(head_defaults) + "\n"
             };
-            "  always @(*) begin\n" + defaultStr + joinWhenBodies(whens) + "\n  end\n"
+            let elseStr = match tail_defaults {
+                case lnil => ""
+                case _ => " else begin\n" + joinLines(tail_defaults) + "\n    end"
+            };
+            "  always @(*) begin\n" + headStr + joinWhenBodies(whens) + elseStr + "\n  end\n"
     }
 
 def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =

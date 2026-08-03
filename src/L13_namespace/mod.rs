@@ -2967,7 +2967,7 @@ println (moduleTreeVL Adder.create.tree)
 
 #[test]
 fn test_verilog_when_otherwise_merge() {
-    // Test when/otherwise merges into single always block with default
+    // Test when/otherwise merges into a single always block as if/else
     let input = r#"
 module Test {
     let a = UInt[4]
@@ -2987,9 +2987,15 @@ println (moduleTreeVL Test.create.tree)
             println!("=== Output ===\n{}", output);
             assert!(output.contains("module Test"), "missing module: {}", output);
             assert!(output.contains("always @(*)"), "missing always: {}", output);
-            assert!(output.contains("c = (a - b);"), "missing default: {}", output);
-            assert!(output.contains("c = (a + b);"), "missing when body: {}", output);
             assert!(output.contains("if (z)"), "missing if: {}", output);
+            assert!(output.contains("c = (a + b);"), "missing when body: {}", output);
+            assert!(output.contains("end else begin"), "missing else branch: {}", output);
+            assert!(output.contains("c = (a - b);"), "missing otherwise body: {}", output);
+            // otherwise body must appear AFTER the if (as else branch),
+            // not as a default assign before it
+            let if_pos = output.find("if (z)").expect("if (z) present");
+            let else_pos = output.find("c = (a - b);").expect("otherwise body present");
+            assert!(if_pos < else_pos, "otherwise body should be the else branch, got:\n{}", output);
             // Should NOT have continuous assign for c
             assert!(!output.contains("assign c"), "should not have continuous assign: {}", output);
         },
@@ -3000,9 +3006,7 @@ println (moduleTreeVL Test.create.tree)
 #[test]
 fn test_verilog_when_elsewhen_blocks() {
     // Test that when/elsewhen/otherwise compiles and generates Verilog.
-    // Note: due to macro conflict (Expr macro vs Expr.when constructor),
-    // when nodes in pattern matching are not filtered by assignsVL,
-    // so they appear inline rather than in always @(*) blocks.
+    // The chain should emit as if / else if / else inside the always block.
     let input = r#"
 module Test[w: Nat] {
     let a = UInt[w]
@@ -3028,8 +3032,14 @@ println (moduleTreeVL Test.create[8].tree)
             assert!(output.contains("c = (a + b)"), "missing when body: {}", output);
             assert!(output.contains("c = a"), "missing elsewhen body: {}", output);
             assert!(output.contains("c = (a - b)"), "missing otherwise body: {}", output);
-            // each when/elsewhen produces an if-statement
+            // when/elsewhen/otherwise should form an if / else if / else chain
             assert!(output.contains("if ("), "missing if: {}", output);
+            assert!(output.contains("else if"), "missing else if chain: {}", output);
+            assert!(output.contains("end else begin"), "missing final else branch: {}", output);
+            // otherwise body must come after the else-if chain, not before the if
+            let if_pos = output.find("if (").expect("if present");
+            let else_pos = output.find("c = (a - b)").expect("otherwise body present");
+            assert!(if_pos < else_pos, "otherwise body should be the else branch, got:\n{}", output);
         },
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
