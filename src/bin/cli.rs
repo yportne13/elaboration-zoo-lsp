@@ -326,7 +326,7 @@ fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + 
 }
 
 #[allow(unreachable_code)]
-fn run_stats(_no_hdl: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
+fn run_stats(no_hdl: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
     #[cfg(feature = "mem-profile")]
     {
         let cli_client = CliClient::new();
