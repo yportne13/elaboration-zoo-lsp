@@ -1,4 +1,5 @@
 #![feature(pattern)]
+#![feature(anonymous_pipe)] // std::io::pipe, used by the lsp_stdio chunked-roundtrip tests
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -9,6 +10,7 @@ mod list;
 mod bimap;
 pub mod ls;
 pub mod client;
+mod lsp_stdio;
 mod L01_eval;
 //mod L01a_fast;
 mod L02_tyck;
@@ -35,7 +37,7 @@ use client::{Client, ClientLike};
 use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
-use lsp_server::{Connection, ExtractError, Message, ProtocolError, Request, RequestId, Response};
+use lsp_server::{ExtractError, Message, ProtocolError, Request, RequestId, Response};
 use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
@@ -1704,7 +1706,10 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     let _ = fs::metadata("/workspace");
 
     // Create the transport. Includes the stdio (stdin and stdout) versions.
-    let (connection, io_threads) = Connection::stdio();
+    // Reads/writes are chunked to 64 KiB per call, so large JSON frames
+    // (didOpen payloads, big publishDiagnostics) survive WASI runtimes with
+    // per-call buffer limits; desktop behavior is unchanged.
+    let (connection, io_threads) = lsp_stdio::stdio();
 
     // When the "stdio-monitor" feature is enabled, wrap the connection with
     // proxy threads that dump the full wire format (Content-Length + JSON body)
