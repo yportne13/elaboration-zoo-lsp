@@ -5069,4 +5069,19 @@ def with_let(x: Nat) = let y = succ x; y
     // 无注解 let → 提示 : Nat
     assert!(labels.iter().any(|l| l.as_str() == ": Nat"),
         "with_let 的 let y 应有 : Nat hint，实际 {:?}", labels);
+    // —— 位置断言（preprocess 保持字节偏移，parser 的 offset 即原始 input 的偏移）——
+    // def dbl(x: Nat) = x + x 的 : Nat hint 应锚定在参数列表 `)` 与 `=` 之间。
+    let dbl_def = input.find("def dbl(x: Nat)").unwrap();
+    let dbl_close_paren = dbl_def + "def dbl(x: Nat)".len(); // 紧贴 `)` 之后
+    let dbl_eq = dbl_def + "def dbl(x: Nat) ".len();         // `=` 的偏移
+    let dbl_hint = infer.inlay_hint_table.iter().find(|(off, lab)| {
+        lab.as_str() == ": Nat" && *off > dbl_close_paren as u32 - 1 && *off < dbl_eq as u32
+    });
+    assert!(dbl_hint.is_some(),
+        "dbl 的 : Nat hint 应落在 `)` 与 `=` 之间（offset ∈ ({}..{})），实际: {:?}",
+        dbl_close_paren - 1, dbl_eq, infer.inlay_hint_table);
+    // 无参 def g = succ zero 的 : Nat hint 应锚定在 `g` 之后。
+    let g_end = input.find("def g").unwrap() + "def g".len();
+    assert!(infer.inlay_hint_table.iter().any(|(off, lab)| lab.as_str() == ": Nat" && *off == g_end as u32),
+        "g 的 : Nat hint 应锚定在 g 之后（offset == {}），实际: {:?}", g_end, infer.inlay_hint_table);
 }
