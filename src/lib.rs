@@ -1110,9 +1110,7 @@ impl LanguageServer for Backend<Client> {
                 .or_else(|| {
                     self.hover_table
                         .get(uri.as_str())
-                        .and_then(|x| x.hover_table.iter()
-                            .filter(|x| x.0.path_id == *id)
-                            .find(|x| x.0.contains(offset))
+                        .and_then(|x| x.hover_entry_at(*id, offset)
                             .map(|(span, _, hcxt, val)| (*span, pretty_tm(0, hcxt.names(), &x.quote(&hcxt.decl, hcxt.lvl, val))))
                         )
                         .and_then(|x| Some(Hover {
