@@ -91,10 +91,9 @@ macro_rules Expr {
     (reg $x:ident = Bool) => {let $x = newBoolReg(stringify $x);};
 
     // ---- sub-module instantiation ----
-    // `let u = myAdder.create[8]` also records the instance in the current
-    // module (mkInstance), so the generator emits the instance line and the
-    // `u.a := sig` port connections are aggregated into it.
-    (let $x:ident = $m:ident . create $( [$w: raw] )* ) => {let $x = $m.create $({[$w]})*; let _zz_inst = mkInstance(stringify $x, stringify $m);};
+    // `let u = myAdder.create[8]` needs no special branch: the class
+    // constructor's `create` records the instance itself (mkInstanceIfParent
+    // at the end of the module class body), so a plain generic let suffices.
 
     // ---- generic let ----
     (let $x:ident = $y:raw) => {let $x = $y;};
@@ -172,10 +171,16 @@ macro_rules Expr {
 //   module myAdder[w: Nat]
 //       input a = UInt[w]
 //       output sum = UInt[w + 1]
-//       input en = Bool          — Bool ports go after typed ports (or before)
+//       input en = Bool          — Bool ports mix freely with typed ports
 //   {
 //       sum := a +^ a
 //   }
+//   module foo[myClockDomain] ... { ... }   — explicit clock domain (optional)
+//
+// Ports must be declared BEFORE the body braces. Inside the braces,
+// `input x = T[w]` / `output x = T[w]` / `let x = T[w]` declare MODULE-INTERNAL
+// signals (no port handle), so a parent cannot connect to them via `u.x`.
+//
 // Each port is declared TWICE in the class body (both collapse into one struct
 // field; the last wins): first as the module's own signal so the body can use
 // `sum := a` with real signals, then after zz_tree as a subSignal handle so a
@@ -183,45 +188,41 @@ macro_rules Expr {
 // the instance name comes from the implicit bn constructor parameter.
 // NOTE: 依赖"同名字段后者覆盖前者"的编译器行为；若解析器对字段重名报错
 //       或改变语义，此宏必须重写（不要再声明同名端口）。
+//
 // The resulting value `myAdder.create` is a new type implementing `Module`; the
 // tree is accessed via the trait method, so `moduleTreeVL(myAdder.create.tree)`
 // produces the Verilog.
+//
+// Sub-module instantiation needs no call-site special case: the constructor
+// records `instance(bn.name, name)` itself via mkInstanceIfParent (dropped at
+// top level, where no parent module exists).
+//
+// WHY the whole body stays inside the single zz_tree field's let chain:
+// the checker evaluates let-bound values ~3x at def-check time; concentrating
+// all side effects in one field plus modulePush/modulePop restore keeps the
+// global ModuleTree clean. Spreading the side effects across independent
+// class fields re-introduces the 35x slowdown of the task2 attempt
+// (see docs/module-redesign-analysis.md §2).
 
 #[macro_export]
 macro_rules module {
-	// With explicit clock domain: module foo[cd] { ... }
+	// With explicit clock domain: module foo[myCd] ... { ... }
 	// The cd parameter is implicitly a ClockDomain; it is baked into the
 	// ModuleDef at record time so the Verilog generator can emit the
 	// configured clock/reset edges and names.
 	// Usage: let t = foo.create[myClockDomain].tree
-	($name: ident [$cd: ident] $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
-		class $name [$cd: ClockDomain] impl Module {
-			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); module_result;
+	($name: ident [$cd: ident] $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
+		class $name [$cd: ClockDomain] $({$args})* impl Module {
+			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let _res = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); let _inst = mkInstanceIfParent(bn.name, stringify $name); _res;
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
 			def tree: ModuleTree = this.zz_tree
 		}
 	};
-	($name: ident [$cd: ident] $( $db: ident $pb: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* {$( $body: Expr )*}) => {
-		class $name [$cd: ClockDomain] impl Module {
-			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); module_result;
-			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
-			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			def tree: ModuleTree = this.zz_tree
-		}
-	};
-	// Without clock domain parameter: uses defaultClockDomain
+	// Without clock domain: uses defaultClockDomain
 	($name: ident $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name $({$args})* impl Module {
-			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); module_result;
-			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
-			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			def tree: ModuleTree = this.zz_tree
-		}
-	};
-	($name: ident $( $args: params )* $( $db: ident $pb: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* {$( $body: Expr )*}) => {
-		class $name $({$args})* impl Module {
-			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let module_result = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); module_result;
+			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let _res = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); let _inst = mkInstanceIfParent(bn.name, stringify $name); _res;
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
 			def tree: ModuleTree = this.zz_tree

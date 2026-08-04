@@ -375,6 +375,42 @@ def mkInstance(instName: String, moduleName: String): Unit =
     let dummy = createSignalExpr("", instance(instName, moduleName));
     unit
 
+// ── Stack-style module scaffolding ──
+// Replace the module macro's six hand-written bindings
+// (_init/_ws/_prev/_creat/module_result/_restore) with named helpers.
+// Semantics preserved from the old scaffold:
+//   - ALL module-body side effects stay inside ONE class field's let chain
+//     (check-time evaluation evaluates let-bound values ~3x; concentrating the
+//     chain in a single field plus push/pop restore keeps the global tree
+//     clean — see docs/module-redesign-analysis.md §2).
+//   - The macro saves the pre-push tree (`_prev`), and restores it after the
+//     body (idempotent pair: check-time evaluations cancel out).
+//   - WhenStack is reset per module, like the old `_ws` binding.
+// NOTE: tree reads happen inside change_mutable lambdas — the lambda
+// parameter's type normalizes on field access, so `x.data` works there,
+// while a `get_global` result read directly would not type-check (its
+// inferred type stays `string_to_global_type "ModuleTree"`).
+// NOTE: the ModuleDef push (old `_creat` binding) is emitted INLINE by the
+// macro with constant `0 + 1` / `nil` — never re-derive it from the lambda
+// parameter (`x.num + 1` / `:: x.data`). GADT-indexed fields keep the
+// parameter reference STUCK in the tree's type indices, so every later
+// field access forces the growing stuck chain: O(n²) (measured 2s → 187s
+// on 02-arithmetic; see docs/module-redesign-analysis.md §perf).
+
+// Record a sub-module instance in the PARENT module, but only when one
+// exists (the tree after the module body's restore holds the parent's
+// ModuleDefs). Top-level creates (no parent) drop the instance — a bare
+// `M.create` at top level must not leave a phantom instance line in the
+// global tree.
+def addInstanceIfParent[num: Nat](data: Vec[ModuleDef] num, instName: String, moduleName: String): ModuleTree = match data {
+    case nil => ModuleTree.mk(num, nil)
+    case cons(_, _) => addExprToModuleHelper(num, data, "", instance(instName, moduleName))
+}
+
+def mkInstanceIfParent(instName: String, moduleName: String): Unit =
+    let d = change_mutable("ModuleTree", x => addInstanceIfParent(x.data, instName, moduleName));
+    unit
+
 // Create a sub-module instance with explicit port connections.
 // ports format: ".portA(signalA), .portB(signalB)"
 def mkInstancePorts(instName: String, moduleName: String, ports: String): Unit =

@@ -23,9 +23,13 @@ mod canonical;
 mod legacy_tests;
 
 #[cfg(test)]
+mod module_probe_tests;
+
+#[cfg(test)]
 mod class_tests;
 
 #[cfg(test)]
+mod module_tests;
 
 #[cfg(test)]
 mod debug_test;

@@ -145,15 +145,22 @@ def newBoolOutput(name: String): Bool =
 // the macro's subSignal field provides the hierarchical `u.a` handle.
 
 // Create a typed port signal (UInt/Bits share createInWidth/createOutWidth;
-// SInt uses the signed variants). ty is the stringified type name.
-def createPortExpr(dir: String, ty: String, name: String, w: Nat): Expr = match str_eq(ty, "SInt") {
+// SInt uses the signed variants, Bool the no-width variants). ty is the
+// stringified type name; w is ignored for Bool.
+def createPortExpr(dir: String, ty: String, name: String, w: Nat): Expr = match str_eq(ty, "Bool") {
     case true => match str_eq(dir, "input") {
-        case true => createSignalExpr(name, createSIntInWidth(name, w))
-        case false => createSignalExpr(name, createSIntOutWidth(name, w))
+        case true => createSignalExpr(name, createIn(name))
+        case false => createSignalExpr(name, createOut(name))
     }
-    case false => match str_eq(dir, "input") {
-        case true => createSignalExpr(name, createInWidth(name, w))
-        case false => createSignalExpr(name, createOutWidth(name, w))
+    case false => match str_eq(ty, "SInt") {
+        case true => match str_eq(dir, "input") {
+            case true => createSignalExpr(name, createSIntInWidth(name, w))
+            case false => createSignalExpr(name, createSIntOutWidth(name, w))
+        }
+        case false => match str_eq(dir, "input") {
+            case true => createSignalExpr(name, createInWidth(name, w))
+            case false => createSignalExpr(name, createOutWidth(name, w))
+        }
     }
 }
 
