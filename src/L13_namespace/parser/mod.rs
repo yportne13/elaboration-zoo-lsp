@@ -189,6 +189,28 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
                 } else {
                     match skip(input) {
                         Some(at_sep) => {
+                            // A macro expansion may have consumed the newline
+                            // between two declarations (the literal-Token
+                            // matcher skips one EndLine after a match, which
+                            // when/switch-style macros rely on). When the
+                            // remainder already starts with a declaration
+                            // keyword, the expansion ate the separator — treat
+                            // it as an implicit one and keep the current
+                            // position (skip_until_decl would scan past this
+                            // decl to the next EndLine+keyword and drop it).
+                            let is_decl_start = input.first().map(|t| matches!(t.data.1,
+                                TokenKind::DefKeyword
+                                | TokenKind::EnumKeyword
+                                | TokenKind::TraitKeyword
+                                | TokenKind::ImplKeyword
+                                | TokenKind::PackageKeyword
+                                | TokenKind::ImportKeyword
+                                | TokenKind::MacroKeyword
+                                | TokenKind::PrintlnKeyword
+                            )).unwrap_or(false);
+                            if is_decl_start {
+                                continue;
+                            }
                             state.push_error(IError {
                                 msg: input.first()
                                     .map(|x| x.to_span())
@@ -1064,12 +1086,27 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         expanded_text: owned_tokens_to_string(&t_owned),
                     });
                 }
-                let t_borrowed: Vec<_> = t_owned.iter().map(|tok| Span {
-                    data: (tok.data.0.as_str(), tok.data.1),
-                    start_offset: tok.start_offset,
-                    end_offset: tok.end_offset,
-                    path_id: tok.path_id,
-                }).collect();
+                // Re-lex the expanded text instead of splicing the owned tokens
+                // directly: owned tokens carry spans/path_ids from the macro
+                // definition, and mixing them with call-site tokens made the
+                // re-parse of the expansion fail (Expect(EndLine) at a literal
+                // token's definition-site span). The EOF token is filtered so
+                // the recursive p_raw sees a clean token stream.
+                let t_str = owned_tokens_to_string(&t_owned);
+                let t_borrowed: Vec<_> = match super::parser::lex::lex(Span {
+                    data: &t_str,
+                    start_offset: 0,
+                    end_offset: t_str.len() as u32,
+                    path_id: input[0].path_id,
+                }) {
+                    Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).collect(),
+                    None => t_owned.iter().map(|tok| Span {
+                        data: (tok.data.0.as_str(), tok.data.1),
+                        start_offset: tok.start_offset,
+                        end_offset: tok.end_offset,
+                        path_id: tok.path_id,
+                    }).collect(),
+                };
                 let mut temp_state = (vec![], state.1.clone(), vec![]);
                 let ret = p_raw(&t_borrowed, &mut temp_state)?;
                 state.0.extend(temp_state.0);

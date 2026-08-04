@@ -10,7 +10,9 @@
 
 ## 0. 结论摘要
 
-- **推荐方案**：纯宏方案（零 lexer/parser 改动，只加一个 prelude 文件 + mod.rs 一行）。
+- **实现方式**：宏方案（只加一个 prelude 文件 + 三处 prelude 列表登记；parser 有两处
+  小的兼容性改动，见 §9.3 —— 原设计“零 parser 改动”未兑现，但改动是通用的，
+  对 when/switch 等既有宏无回归）。
 - **语法形态**（受宏系统约束，Lean 的 `a = b := p` 目前**不可行**，原因见 §4.2）：
   ```typort
   def foo: Eq a d =
@@ -159,7 +161,8 @@ def neg_a: Eq (7 + 0) (0 + 7) =
     }
 ```
 
-展开后第二行是 `let _ : Eq _ (0 + 7) = (add_zero_right 7);`，核对失败。
+展开后（实现为 let 链，无每步检查 let，见 §9.2.1）第二行是
+`let _c = trans (_c) (add_zero_right 7);`，`trans` 统一 `7 ≡ 7 + 0` 失败。
 预期错误形态（`src/L13_namespace/elaboration.rs` 统一格式，形如）：
 
 ```
@@ -189,9 +192,10 @@ can't unify
       find: Eq 5 (0 + 7)
 ```
 
-> 设计限制说明：中间步骤的**右端**由转写中的检查 let 核对，**左端**（如负例 B 里写出的
-> `5`）只通过 `trans` 的类型统一间接核对（核对的是**证明的真实中间项**，不是写出的词）。
-> 若写出项与证明真实类型一致但词形不同（定义等价），两种检查都通过。
+> 设计限制说明：中间步骤的**左端**（如负例 B 里写出的 `5`）只通过 `trans` 的类型统一
+> 间接核对（核对的是**证明的真实中间项**，不是写出的词）。原设计的每步检查 let
+> 已放弃（洞注解留未解 meta，见 §9.2.1），因此写出的中间项越出证明真实类型时
+> 由 trans 兜底；若写出项与证明真实类型一致但词形不同（定义等价），检查通过。
 
 **负例 C —— 误用 Lean 的 `:=` 语法**：
 
@@ -217,17 +221,15 @@ def neg_c: Eq (7 + 0) (0 + 7) = calc
 #[macro_export]
 macro_rules calc {
     // 推荐主形式：{ ... } 块内换行分隔的链（首项可换行到 `{` 之后）
-    ({ $( $x: raw = [ $p: raw ] $y: raw $( = [ $q: raw ] $z: raw )* )+ }) => {
+    ( { $( $x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )* )+ } ) => {
         let _c : Eq ($x) ($y) = ($p);
-        $( let _ : Eq _ ($z) = ($q);
-           let _c = trans _c ($q); )*
+        $( let _c = trans (_c) ($q); )*
         _c
     };
     // 单行形式：calc a = [p1] b = [p2] c（首项必须与 calc 同行）
-    ($x: raw = [ $p: raw ] $y: raw $( = [ $q: raw ] $z: raw )*) => {
+    ($x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )*) => {
         let _c : Eq ($x) ($y) = ($p);
-        $( let _ : Eq _ ($z) = ($q);
-           let _c = trans _c ($q); )*
+        $( let _c = trans (_c) ($q); )*
         _c
     };
 }
@@ -257,31 +259,30 @@ macro_rules calc {
 - 宏系统的重复转写 `$(...)*` 只是**扁平拼接**，无法生成嵌套括号，
   所以 `trans (trans p1 p2) p3` 这种左/右折叠**写不出来**（`trans $p $(trans $q)*`
   会拼成 `trans p1 trans p2 trans p3`，即错误的多重应用）。
-  改用 let 链：每步一个检查 let + 一个累积 let，最后返回累积值。
-- 检查 let 的作用：
+  改用 let 链：首步一个带注解的 let + 每步一个累积 let，最后返回累积值。
+- let 的作用（与设计稿的差异见 §9.2.1 —— **每步检查 let 已放弃**）：
   - 第 1 步 `let _c : Eq ($x) ($y) = ($p);` —— 同时做两件事：核对写出的
     `x`/`y` 与证明类型一致，并把 `_c` 绑定为链的累积证明；
-  - 第 i≥2 步 `let _ : Eq _ ($z) = ($q);` —— 核对写出的右端 `z` 与证明的右端
-    一致（左端用洞 `_` 吸收，留给 `trans` 统一核对）；
-  - `let _c = trans _c ($q);` —— 用累积证明与当前证明组合（`trans` 隐式参数
-    自动求解中间项）。
+  - 第 i≥2 步 `let _c = trans (_c) ($q);` —— 用累积证明与当前证明组合
+    （`trans` 隐式参数自动求解中间项）；写出的左端/右端经 trans 的统一间接核对；
+  - 证明实参必须括号包裹：`trans (_c)` 而不是 `trans _c`（裸标识符实参精化失败，
+    见 §9.2.2）。
 - let 遮蔽：累积名 `_c` 每步重绑定。可行性依据：`Cxt::define`/`bind` 把名字
   映射到**当前最深 lvl**（`src_names` 是 BiMap，重复插入覆盖），而 let 的
   值在 `define` **之前**精化（`elaboration.rs` 的 `Raw::Let`：先 check 值、
-  再 define 进上下文），因此 `trans _c ($q)` 里引用的 `_c` 总是外层绑定。
-  （phase 2 第一步仍需用真实测试验证，见 §8。）
+  再 define 进上下文），因此 `trans (_c) ($q)` 里引用的 `_c` 总是外层绑定。
+  （phase 2 第一步仍需用真实测试验证，见 §8。已实测通过。）
 - 所有 metavar 在应用位置都加括号：`Eq ($x) ($y)`、`($p)`、`($q)` —— 防止
   片段内运算符与外围语法串读（如 `Eq (a+b) * c ...` 会把 `*` 读成中缀）。
 - 空链（零步）不可表示（内层 `*` 虽允许零次，但第 1 步是必须的 `$x = [$p] $y`）。
+- 多实参证明的实参要用逗号形式（§9.2.3）。
 
 **展开形态示例**（§3.2 的 add_permute_calc，缩写证明为 p1/p2/p3）：
 
 ```typort
 let _c : Eq ((a + b) + c) (a + (b + c)) = (p1);
-let _ : Eq _ (a + (c + b)) = (p2);
-let _c = trans _c (p2);
-let _ : Eq _ ((a + c) + b) = (p3);
-let _c = trans _c (p3);
+let _c = trans (_c) (p2);
+let _c = trans (_c) (p3);
 _c
 ```
 
@@ -384,6 +385,62 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
    添加 §3.1–3.3 正例与 §3.4 负例（负例断言错误消息出现 `can't unify`）。
 4. **回归**：`cargo test --lib L13` 基线 239 passed 不减少。
 5. （可选）文档更新：把 `calc` 写进语言参考。
+
+---
+
+## 9. 实施记录（已完成，task/calc-reasoning）
+
+### 9.1 实现结果
+
+- `src/prelude/core/calc.typort`：`#[macro_export] macro_rules calc`，两条规则
+  （花括号多行形式 + 单行形式），转写为 let 链（首步带注解，后续 `trans (_c) (q)`）。
+- 登记位置（共三处，漏任何一处都会表现为“宏未注册”）：
+  - `src/L13_namespace/mod.rs` `load_prelude_state` 的 prelude 数组（`run_with_prelude` 用）；
+  - `src/L13_namespace/mod.rs` `prelude_tests::PRELUDE_FILES`（prelude 测试覆盖）；
+  - `src/lib.rs` `load_prelude_impl`（LSP 内置文档加载）。
+- 测试：`src/L13_namespace/calc_tests.rs` 7 个（§3.1 二步 / §3.2 三步 / 五步 + 单行 +
+  let 内嵌 + 2 个负例）。`cargo test --lib L13`：246 passed，0 failed
+  （基线 239 → 246，纯增量）。
+
+### 9.2 与设计稿的偏差（都已实测，保留在实现中）
+
+1. **放弃每步检查 let**：`let _ : Eq _ _ ($z) = ($q);` 精化失败 —— 洞注解会留下
+   未解的 meta（`?x n n`），unifier 无法闭合（E-unify 限制）。改为只靠
+   `trans` 的统一做连续性检查：首步两端由注解 let 核对；后续步**写出的左端不核对**
+   （核对的是证明的真实中间项），右端与下一个证明的右端经 trans 统一核对，
+   末项由外围注解核对。负例 B 因此只能捕获“写出的左端与证明真实左端不一致”，
+   写错左端而证明类型恰好吻合的情形不报错（文档化限制，见 §3.4 注）。
+2. **`trans (_c)` 必须括号包裹**：裸 `trans _c`（标识符实参）精化失败；
+   括号包裹后走表达式路径通过。
+3. **多实参证明要用逗号形式**：`add_right_eq A B y (add_assoc x y x)`（裸实参 + 括号）
+   会被解析成对括号表达式的应用；必须写成 `add_right_eq(A, B, y, add_assoc(x, y, x))`。
+4. **词形要求**：裸应用 `double x + double y` 不行，需 `double(x) + double(y)`
+   （与现有语言一致，非 calc 特有）。
+
+### 9.3 parser 兼容性改动（两处，均有回归覆盖）
+
+1. **`many1_sep_skip` 的隐式分隔**（`src/L13_namespace/parser/mod.rs`）：literal
+   Token 匹配器会吞掉匹配后紧跟的一个 EndLine（when/switch 等宏依赖此行为）。
+   calc 的 matcher 以 literal `}` 结尾，会把 calc 块与下一个 decl 之间的换行吞掉，
+   导致下一个 `def` 紧贴前一个 decl 出现。此时 `skip_until_decl` 只能找到
+   “EndLine + decl 关键字”的位置，会**跳过当前紧贴的 decl** 造成丢失
+   （症状：后续 decl 报 `name not in scope`）。修复：sep 失败且当前位置已是
+   decl 关键字开头时，直接继续主循环（隐式分隔），不再报 `Expect(EndLine)`。
+2. **展开 token 重 lex**（`p_raw` 展开处）：owned token 携带宏定义处的
+   span/path_id，直接拼接会导致展开内容再解析失败（在定义处 span 上报
+   `Expect(EndLine)`）。改为 `owned_tokens_to_string` + `lex()` + 过滤 EOF
+   后得到干净的借用 token 流。
+3. **调试期间曾移除 Token 的 EndLine skip**（实验）导致 switch/when 回归；
+   **根因并非该 skip**，而是 calc.typort 漏登记 prelude（见 §9.1）。已恢复
+   skip 原状，本分支对 `macros.rs` 零改动。
+
+### 9.4 排障过程要点
+
+- `PRELUDE id=3 exports=[]` 的 `id=3` 是 **bool.typort**（数组下标），不是
+  calc.typort —— 用 `include_str!` 数组顺序对照，发现 calc.typort 根本不在列表里；
+  与 Token skip 实验无关，是登记遗漏。
+- 负例 B 的报错形态与设计稿略有出入：链断裂时是 `trans` 的 `can't unify`
+  （expected/find 为两个 Eq 类型），不是设计稿中标注的 `Eq 7 _` 形态。
 
 ---
 

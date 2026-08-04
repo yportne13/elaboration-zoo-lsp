@@ -26,6 +26,7 @@ mod legacy_tests;
 mod class_tests;
 
 #[cfg(test)]
+mod calc_tests;
 
 #[cfg(test)]
 mod debug_test;
@@ -1657,6 +1658,7 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
         include_str!("../prelude/core/op.typort"),
         include_str!("../prelude/core/eq.typort"),
         include_str!("../prelude/core/nat.typort"),
+        include_str!("../prelude/core/calc.typort"),
         include_str!("../prelude/core/bool.typort"),
         include_str!("../prelude/data/option.typort"),
         include_str!("../prelude/data/result.typort"),
@@ -4599,6 +4601,7 @@ mod prelude_tests {
         ("op.typort", include_str!("../prelude/core/op.typort")),
         ("eq.typort", include_str!("../prelude/core/eq.typort")),
         ("nat.typort", include_str!("../prelude/core/nat.typort")),
+        ("calc.typort", include_str!("../prelude/core/calc.typort")),
         ("bool.typort", include_str!("../prelude/core/bool.typort")),
         ("option.typort", include_str!("../prelude/data/option.typort")),
         ("result.typort", include_str!("../prelude/data/result.typort")),
@@ -4626,6 +4629,13 @@ mod prelude_tests {
         let mut all_ok = true;
         for (name, content) in PRELUDE_FILES {
             let processed = preprocess(content);
+            // A file may legitimately contain only macro definitions
+            // (e.g. hdl-macros.typort, calc.typort) — detect that via the
+            // parsed macro exports rather than the file name.
+            let macro_only = match super::parser::parser_with_macros(&processed, 0, &Default::default()) {
+                Some((_, _, exports, _)) => !exports.is_empty(),
+                None => false,
+            };
             match parse_file(&processed, 0) {
                 Some((decls, errors)) => {
                     if !errors.is_empty() {
@@ -4636,7 +4646,7 @@ mod prelude_tests {
                         }
                     }
                     // Allow files with only macro definitions (no regular declarations)
-                    if decls.is_empty() && !name.contains("macros") {
+                    if decls.is_empty() && !macro_only {
                         all_ok = false;
                         eprintln!("[EMPTY] {}: parsed no declarations", name);
                     } else if decls.is_empty() {
