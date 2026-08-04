@@ -418,7 +418,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     ret_type: Raw::Var(empty_span(SmolStr::new("Unit"))),
                     body: bundle_body,
                 }, false)],
-                need_create: false,
+                inherent: false,
                 from_class: false,
             };
 
@@ -434,7 +434,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     ret_type: self_ty.clone(),
                     body: Raw::Var(empty_span(SmolStr::new("this"))),
                 }, false)],
-                need_create: false,
+                inherent: false,
                 from_class: false,
             };
 
@@ -476,8 +476,8 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
 
                 // ── 4. asMaster / asSlave direction methods (SpinalHDL style) ──
                 // When at least one field carries an in()/out() direction marker,
-                // generate a class impl (empty trait name + need_create — the same
-                // shape derive_show emits) so the methods resolve through
+                // generate an inherent impl (empty trait name + inherent: true —
+                // the same shape derive_show emits) so the methods resolve through
                 // `bundle.asMaster` / `bundle.asSlave` method calls:
                 //   impl StructName {
                 //     def asMaster[bn: BindingName]: StructName = …
@@ -520,7 +520,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                         trait_name: empty_span(SmolStr::new("")),
                         trait_params: vec![],
                         methods: dir_methods,
-                        need_create: true,
+                        inherent: true,
                         from_class: false,
                     });
                 }
@@ -565,7 +565,7 @@ fn derive_show(decl: &Decl) -> Vec<Decl> {
                     ret_type: Raw::Var(empty_span(SmolStr::new("String"))),
                     body,
                 }, false)],
-                need_create: true,
+                inherent: true,
                 from_class: false,
             }]
         }

@@ -1446,7 +1446,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 trait_name,
                 trait_params: extra_params,
                 methods,
-                need_create,
+                inherent: need_create,
                 from_class: false,
             }
         })
@@ -1919,6 +1919,8 @@ fn p_derive_attr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState)
 }
 
 /// Expand `Decl::Derive` items into their inner declaration + generated impl blocks.
+/// A derived `class` is expanded to its struct first, so `#[derive(Show)] class Foo`
+/// derives on the class's struct exactly like a plain struct would.
 fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
     let registry = derive::default_derive_registry();
     let mut result = vec![];
@@ -1926,9 +1928,23 @@ fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
         match decl {
             Decl::Derive { traits, decl } => {
                 let inner = *decl;
-                let generated = derive::expand_derive(&registry, &traits, &inner);
-                result.push(inner);
-                result.extend(generated);
+                match inner {
+                    Decl::Class { .. } => {
+                        let expanded = expand_classes(vec![inner]);
+                        // Derive macros handle structs (and ignore defs/impls the
+                        // class expansion also produced), so apply them to each.
+                        let generated: Vec<Decl> = expanded.iter()
+                            .flat_map(|d| derive::expand_derive(&registry, &traits, d))
+                            .collect();
+                        result.extend(expanded);
+                        result.extend(generated);
+                    }
+                    other => {
+                        let generated = derive::expand_derive(&registry, &traits, &other);
+                        result.push(other);
+                        result.extend(generated);
+                    }
+                }
             }
             other => result.push(other),
         }
@@ -1940,9 +1956,14 @@ fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
 //  class declaration: parsing + expansion
 // ============================================================
 
-/// Parse a class body item: try `let name [: Type] = expr` (field), then
-/// `def` (method), and finally fall back to a raw statement.
+/// Parse a class body item: try `static def` (static method), then
+/// `let name [: Type] = expr` (field), then `def` (instance method), and
+/// finally fall back to a raw statement.
 fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, ClassItem> {
+    // Static method: `static def name ... = body`
+    if let Ok((input, (_, decl))) = (kw(StaticKeyword), p_def).parse(input, state) {
+        return Ok((input, ClassItem::Method(decl, true)));
+    }
     // Try field: let name [: Type] = expr  (no Cut → can fall back)
     match (
         kw(LetKeyword),
@@ -1960,7 +1981,7 @@ fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
             // Try method: def name ... : Ret = body  (p_def consumes the `def` keyword)
             match p_def.parse(input, state) {
                 Ok((input, decl)) => {
-                    Ok((input, ClassItem::Method(decl)))
+                    Ok((input, ClassItem::Method(decl, false)))
                 }
                 Err(_) => {
                     // Fall back to statement
@@ -1973,8 +1994,9 @@ fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
 
 /// Parse a class declaration:
 /// ```text
-/// class Name[params] impl Trait1, Trait2 {
+/// class Name[params] impl Trait1[T1], Trait2 {
 ///     let x: T = expr   // field
+///     def m(...) = ...  // method
 ///     stmt               // body statement
 /// }
 /// ```
@@ -1983,7 +2005,10 @@ fn p_class<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         kw(ClassKeyword),
         smolstr(Ident),
         p_pi_impl_binder.option().map(|x| x.unwrap_or_default()),
-        (kw(ImplKeyword), smolstr(Ident).many0_sep(kw(T![,])))
+        (kw(ImplKeyword), (
+            smolstr(Ident),
+            square_cut(p_raw.many0_sep(kw(T![,]))).option().map(|x| x.and_then(|r| r.ok()).unwrap_or_default()),
+        ).many0_sep(kw(T![,])))
             .option()
             .map(|x| x.map(|(_, v)| v).unwrap_or_default()),
         brace(p_class_body_item.many0_sep((kw(T![;]).or(kw(EndLine))).many1())),
@@ -2009,24 +2034,26 @@ fn class_self_ty(name: &Span<SmolStr>, params: &[(Span<SmolStr>, Raw, Icit)]) ->
 /// Both parameterized and non-parameterized classes expand to:
 ///   - a struct (enum) with the `let`-fields
 ///   - a constructor def `Name.create[params]`
-///   - trait impls for each `impl Trait` in the header (class-body methods that
-///     match the trait's methods are attached; extras are kept in an inherent impl)
-///   - an inherent impl with the remaining class-body methods
+///   - an inherent impl (`impl $trait_name$Name`) registering the class-body
+///     methods in the type's namespace (`Name.method`, first param `this`)
+///   - trait impls for each `impl Trait` in the header: the record fields
+///     *reference* the namespace defs above (single elaboration), so trait
+///     method bodies may call any sibling method through `this`
 fn expand_one_class(
     name: Span<SmolStr>,
     params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
-    traits: Vec<Span<SmolStr>>,
+    traits: Vec<(Span<SmolStr>, Vec<Raw>)>,
 ) -> Vec<Decl> {
     expand_class_as_struct(name, params, items, traits)
 }
 
-/// class → enum (struct) + def Name.create + trait impls + inherent impl
+/// class → enum (struct) + def Name.create + inherent impl + trait impls
 fn expand_class_as_struct(
     name: Span<SmolStr>,
     params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
-    traits: Vec<Span<SmolStr>>,
+    traits: Vec<(Span<SmolStr>, Vec<Raw>)>,
 ) -> Vec<Decl> {
     let mut result = vec![];
 
@@ -2035,6 +2062,8 @@ fn expand_class_as_struct(
     // and a subSignal handle field after zz_tree so `u.a` yields the
     // cross-level handle); the struct keeps only the LAST declaration of
     // each name, while the constructor still binds both (shadowing).
+    // NOTE: last-wins dedup exists to keep the (legacy) module macro working;
+    // a future module rewrite should drop it in favor of duplicate-field errors.
     let mut fields: Vec<_> = items.iter().filter_map(|item| match item {
         ClassItem::Field(n, t, _) => Some((n.clone(), t.clone())),
         _ => None,
@@ -2045,8 +2074,8 @@ fn expand_class_as_struct(
         fields.retain(|(n, _)| seen.insert(n.data.clone()));
         fields.reverse();
     }
-    let methods: Vec<Decl> = items.iter().filter_map(|item| match item {
-        ClassItem::Method(d) => Some(d.clone()),
+    let methods: Vec<(Decl, bool)> = items.iter().filter_map(|item| match item {
+        ClassItem::Method(d, is_static) => Some((d.clone(), *is_static)),
         _ => None,
     }).collect();
 
@@ -2084,7 +2113,7 @@ fn expand_class_as_struct(
                     Box::new(ctor),
                 );
             }
-            ClassItem::Method(_) => {}
+            ClassItem::Method(_, _) => {}
             ClassItem::Stmt(expr) => {
                 ctor = Raw::Let(
                     empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
@@ -2104,8 +2133,10 @@ fn expand_class_as_struct(
     // `let u = foo.create[8]` gives bn = "u"). Only classes implementing
     // `Module` (the module macro's classes) get it, so plain classes don't
     // require BindingName to be in scope.
+    // NOTE: module-macro compatibility legacy; drop when the module macro is
+    // rewritten on top of the (improved) class mechanism.
     let mut ctor_params = params.clone();
-    if traits.iter().any(|t| t.data == "Module") {
+    if traits.iter().any(|(t, _)| t.data == "Module") {
         ctor_params.push((
             empty_span(SmolStr::new("bn")),
             Raw::Var(empty_span(SmolStr::new("BindingName"))),
@@ -2119,31 +2150,32 @@ fn expand_class_as_struct(
         body: ctor,
     });
 
-    let class_methods: Vec<(Decl, bool)> = methods.iter().map(|d| (d.clone(), false)).collect();
-
-    // ── 3. trait impls (from the `impl Trait1, Trait2` header) ──
-    for trait_name in traits {
-        result.push(Decl::ImplDecl {
-            name: self_ty.clone(),
-            params: params.clone(),
-            trait_name,
-            trait_params: vec![],
-            methods: class_methods.clone(),
-            need_create: false,
-            from_class: true,
-        });
-    }
-
-    // ── 4. inherent impl with the remaining methods (classes without a matching trait) ──
-    if !class_methods.is_empty() {
+    // ── 3. inherent impl (need_create) ──
+    // Emitted BEFORE the trait impls so that `Foo.method` namespace defs exist
+    // when the trait records below reference them, and so trait-impl method
+    // bodies can call sibling methods through `this.m`.
+    if !methods.is_empty() {
         result.push(Decl::ImplDecl {
             name: self_ty.clone(),
             params: params.clone(),
             trait_name: empty_span(SmolStr::new(format!("$trait_name${}", name.data))),
             trait_params: vec![],
-            methods: class_methods,
-            need_create: true,
+            methods: methods.clone(),
+            inherent: true,
             from_class: false,
+        });
+    }
+
+    // ── 4. trait impls (from the `impl Trait1, Trait2` header) ──
+    for (trait_name, trait_params) in traits {
+        result.push(Decl::ImplDecl {
+            name: self_ty.clone(),
+            params: params.clone(),
+            trait_name,
+            trait_params,
+            methods: methods.clone(),
+            inherent: false,
+            from_class: true,
         });
     }
 
@@ -2235,10 +2267,10 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             }
         }
     }
-    // Check for #[derive(Trait1, Trait2, ...)] attribute before enum/struct
+    // Check for #[derive(Trait1, Trait2, ...)] attribute before enum/struct/class
     let (input, derive_traits) = p_derive_attr.option().map(|x| x.unwrap_or_default()).parse(input, state)?;
     if !derive_traits.is_empty() {
-        let (input, decl) = p_enum.or(p_struct).parse(input, state).map_err(|e| IError {
+        let (input, decl) = p_enum.or(p_struct).or(p_class).parse(input, state).map_err(|e| IError {
             msg: e.msg.map(|m| ErrMsg::Base(extract_base(m)))
         })?;
         return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))

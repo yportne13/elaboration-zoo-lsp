@@ -261,7 +261,13 @@ pub enum Decl {
         trait_name: Span<SmolStr>,
         trait_params: Vec<Raw>,
         methods: Vec<(Decl, bool)>,
-        need_create: bool,
+        /// `true` for an *inherent* impl (`impl Foo { ... }`, no `for Trait`):
+        /// methods are registered in the type's namespace (`Foo.method`, with a
+        /// `this` param) and dispatched through `x.method` member lookup.
+        /// `false` for a trait impl (`impl Trait for Foo`): methods build a
+        /// trait record instance (`Trait.mk [Foo] (lam this => ...)`), used for
+        /// generic trait-constrained dispatch.
+        inherent: bool,
         /// Generated from a `class ... impl Trait` body: methods are filtered to
         /// those declared by the trait during elaboration (extra methods are
         /// inherited by the class's inherent impl instead).
@@ -275,7 +281,7 @@ pub enum Decl {
         name: Span<SmolStr>,
         params: Vec<(Span<SmolStr>, Raw, Icit)>,
         items: Vec<ClassItem>,                     // ordered fields + methods + statements
-        traits: Vec<Span<SmolStr>>,                // impl Trait1, Trait2
+        traits: Vec<(Span<SmolStr>, Vec<Raw>)>,    // (impl Trait[, trait params])
     },
 }
 
@@ -283,6 +289,6 @@ pub enum Decl {
 #[derive(Debug, Clone)]
 pub enum ClassItem {
     Field(Span<SmolStr>, Raw, Raw), // (name, type, value)
-    Method(Decl),                   // method definition (Decl::Def)
+    Method(Decl, bool),             // method definition (Decl::Def) + is_static
     Stmt(Raw),
 }
