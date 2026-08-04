@@ -18,6 +18,8 @@ pub enum MacroMatcher {
     },
     Many0(Box<MacroMatcher>),
     Many1(Box<MacroMatcher>),
+    // 可选匹配：$(...)? — attempts the inner matcher; on failure consumes nothing.
+    Optional(Box<MacroMatcher>),
     // 重复匹配：$(...)* $(...)+ $(...)?
     /*Repetition {
         inner: Box<MacroMatcher>,
@@ -118,6 +120,15 @@ impl MacroMatcher {
                         .many1_sep(kw(TokenKind::EndLine).option())
                         .map(|x| x.concat())
                         .parse(input, state)
+                },
+                MacroMatcher::Optional(m) => {
+                    // Skip leading EndLine tokens, like Many0/Many1
+                    let (input, _) = kw(TokenKind::EndLine).many0().parse(input, state)?;
+                    match m.to_parser().parse(input, state) {
+                        Ok((rest, captures)) => Ok((rest, captures)),
+                        // Optional: on failure consume nothing.
+                        Err(_) => Ok((input, vec![])),
+                    }
                 },
             }
         }

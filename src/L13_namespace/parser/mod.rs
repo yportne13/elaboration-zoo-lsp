@@ -1509,11 +1509,13 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         kw(LParen),
         p_macro_matcher_sequence,
         kw(RParen),
-        string_is(Op, "*").or(string_is(Op, "+")),
+        string_is(Op, "*").or(string_is(Op, "+")).or(string_is(Op, "?")),
     ).map(|(_, _, m, _, s)| if &s.data == "*" {
         MacroMatcher::Many0(MacroMatcher::Sequence(m).into())
-    } else {
+    } else if &s.data == "+" {
         MacroMatcher::Many1(MacroMatcher::Sequence(m).into())
+    } else {
+        MacroMatcher::Optional(MacroMatcher::Sequence(m).into())
     });
     
     // 尝试解析普通 token
@@ -1662,7 +1664,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                 } else if let Ok((i, _)) = kw(LCurly).parse(input, state) {
                     lvl += 1;
                     input = i;
-                } else if input.is_empty() || (kw(RParen), kw_is(Op, "*")).parse(input, state).is_ok() || (kw(RParen), kw_is(Op, "+")).parse(input, state).is_ok() {
+                } else if input.is_empty() || (kw(RParen), kw_is(Op, "*")).parse(input, state).is_ok() || (kw(RParen), kw_is(Op, "+")).parse(input, state).is_ok() || (kw(RParen), kw_is(Op, "?")).parse(input, state).is_ok() {
                     break;
                 } else if let Ok((i, _)) = (kw_is(Op, "$"), kw(LParen)).parse(input, state) {
                     let len = i_back.len() - input.len();
@@ -1675,7 +1677,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                     ret.push(MacroTranscriber::Basic(owned));
                     let (i, o) = p_macro_transcriber_single.parse(i, state)?;
                     ret.push(MacroTranscriber::Group(o.into()));
-                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).parse(i, state)?;//TODO: 0 or 1?
+                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).or((kw(RParen), kw_is(Op, "?"))).parse(i, state)?;// op: * + ?
                     i_back = i;
                     input = i;
                 } else {
@@ -1701,6 +1703,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
             while !input.is_empty()
                 && (kw(RParen), kw_is(Op, "*")).parse(input, state).is_err()
                 && (kw(RParen), kw_is(Op, "+")).parse(input, state).is_err()
+                && (kw(RParen), kw_is(Op, "?")).parse(input, state).is_err()
                 && (kw(EndLine).option(), kw(RCurly)).parse(input, state).is_err()
             {
                 if let Ok((i, _)) = (kw_is(Op, "$"), kw(LParen)).parse(input, state) {
@@ -1714,7 +1717,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                     ret.push(MacroTranscriber::Basic(owned));
                     let (i, o) = p_macro_transcriber_single.parse(i, state)?;
                     ret.push(MacroTranscriber::Group(o.into()));
-                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).parse(i, state)?;
+                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).or((kw(RParen), kw_is(Op, "?"))).parse(i, state)?;
                     i_back = i;
                     input = i;
                 } else {
