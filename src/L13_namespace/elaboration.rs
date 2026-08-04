@@ -41,13 +41,13 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             }).collect(),
             assoc_defaults,
         },
-        Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create, from_class } => Decl::ImplDecl {
+        Decl::ImplDecl { name, params, trait_name, trait_params, methods, inherent, from_class } => Decl::ImplDecl {
             name,
             params,
             trait_name,
             trait_params,
             methods: methods.into_iter().map(|(m, is_static)| (prefix_decl_name(m, prefix), is_static)).collect(),
-            need_create,
+            inherent,
             from_class,
         },
         Decl::Package { path } => Decl::Package {
@@ -462,7 +462,9 @@ impl Infer {
         let target_head = super::typeclass::head_key(target)?;
         for ns_entry in cxt.namespace.iter() {
             if !ns_entry.1.contains(&op.data) { continue; }
-            let key = SmolStr::new(format!("{}{}", ns_entry.2.to_string(), op.data));
+            // Dotless method key (`Pointsum`), matching the inherent impl's
+            // registration; see trait_wrap for why keys stay dotless.
+            let key = SmolStr::new(format!("{}.{}", ns_entry.2, op.data));
             let (_, _, _, _, vty, _) = cxt.decl.get(&key)?;
             let vty = self.force(&cxt.decl, vty);
             let self_ty = match vty.as_ref() {
@@ -945,10 +947,16 @@ impl Infer {
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
             }
-            Decl::ImplDecl { name, params, trait_name, trait_params, methods, need_create, from_class } => {
+            Decl::ImplDecl { name, params, trait_name, trait_params, methods, inherent, from_class } => {
                 let span = name.to_span();
                 let mut cxt = cxt.clone();
-                if need_create {
+                if inherent {
+                    // ── Inherent impl (`impl Foo { ... }`) ──
+                    // Register `Foo.method` defs in the type's namespace so
+                    // `x.method` member lookup dispatches to them. Each instance
+                    // method takes `this: Foo` as its first explicit param;
+                    // static methods are registered as `Foo.method` (qualified
+                    // access only, excluded from instance dispatch).
                     let name_raw = params.iter()
                         .rev()
                         .fold(name.clone(), |a, b| Raw::Pi(
@@ -959,16 +967,24 @@ impl Infer {
                         ));
                     let (name_t, _) = self.infer_expr(&cxt, name_raw.clone())?;
                     let name_v = self.eval(&cxt.decl, &cxt.env, &name_t);
-                    //cxt = new_cxt;
-                    cxt.namespace = cxt.namespace.prepend((name_v, methods.iter().flat_map(|(x, _)| match x {
-                        Decl::Def { name, .. } => Some(name.data.clone()),
-                        _ => None
-                    }).collect(), name_raw.clone()));
+                    // Clean type-head prefix: `Adder.name` for `class Adder[w]`
+                    // (not the Display of the whole Pi chain).
+                    let type_name = raw_ctor_name(&name).unwrap_or_else(|| {
+                        SmolStr::new(format!("{}", name_raw.to_string().chars().filter(|c| c.is_alphanumeric() || *c == '.').collect::<String>()))
+                    });
+                    // Only instance methods participate in `x.method` dispatch.
+                    let method_names: std::collections::HashSet<SmolStr> = methods.iter()
+                        .filter(|(_, is_static)| !is_static)
+                        .flat_map(|(x, _)| match x {
+                            Decl::Def { name, .. } => Some(name.data.clone()),
+                            _ => None
+                        })
+                        .collect();
+                    cxt.namespace = cxt.namespace.prepend((name_v, method_names, type_name.clone()));
                     for (decl, is_static) in methods.iter() {
                         match decl {
                             Decl::Def { name: name_d, params: p, ret_type, body } => {
                                 if !is_static {
-                                    let prefix_name = name_raw.to_string();
                                     // Operator-symbol registration (inherent impl):
                                     // an operator-named method whose body is a direct
                                     // helper application (`helper this that`) records
@@ -983,7 +999,7 @@ impl Infer {
                                         }
                                     }
                                     let t = self.infer(&cxt, Decl::Def {
-                                        name: name_d.clone().map(|x| SmolStr::new(format!("{}{x}", prefix_name))),
+                                        name: name_d.clone().map(|x| SmolStr::new(format!("{}.{x}", type_name))),
                                         params: params.iter()
                                             .cloned()
                                             .chain(std::iter::once((
@@ -998,9 +1014,6 @@ impl Infer {
                                     })?;
                                     cxt = t.2;
                                 } else {
-                                    let type_name = raw_ctor_name(&name).unwrap_or_else(|| {
-                                        SmolStr::new(format!("{}", name_raw.to_string().chars().filter(|c| c.is_alphanumeric() || *c == '.').collect::<String>()))
-                                    });
                                     let static_name = format!("{}.{}", type_name, name_d.data);
                                     let t = self.infer(&cxt, Decl::Def {
                                         name: name_d.clone().map(|_| SmolStr::new(static_name.clone())),
@@ -1015,7 +1028,7 @@ impl Infer {
                                 }
                             },
                             _ => {
-                                todo!()
+                                return Err(Error(span.map(|_| "unsupported method declaration in inherent impl".to_string()), vec![]));
                             },
                         }
                     }
@@ -1047,15 +1060,23 @@ impl Infer {
                     self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
                     // Fill in missing methods with default bodies from the trait definition
                     let mut methods = methods;
+                    // Number of methods provided by the class itself (after the
+                    // from_class filter): those are referenced as `TypeName.method`
+                    // namespace defs below. Default bodies appended afterwards are
+                    // still elaborated as record lambdas.
+                    let mut class_method_count = methods.len();
                     if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
-                        // For class-generated impls, drop methods the trait does not declare;
-                        // those are kept in the class's inherent impl instead.
+                        // For class-generated impls, drop methods the trait does not declare
+                        // (those are kept in the class's inherent impl instead) and drop
+                        // static methods — a static class method does not implement a
+                        // trait method; the trait's default (if any) applies instead.
                         if from_class {
-                            methods.retain(|(decl, _)| match decl {
+                            methods.retain(|(decl, is_static)| !is_static && match decl {
                                 Decl::Def { name, .. } => trait_methods.iter().any(|(tm, _, _, _)| tm.data == name.data),
                                 _ => false,
                             });
                         }
+                        class_method_count = methods.len();
                         for (tm_name, tm_params, tm_ret, tm_default_body) in trait_methods {
                             let has_impl = methods.iter().any(|(decl, _)| match decl {
                                 Decl::Def { name, .. } => name.data == tm_name.data,
@@ -1122,30 +1143,48 @@ impl Infer {
                         .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
                             Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                         });
-                    for (decl, _) in methods {
+                    // For class-generated impls the methods were already elaborated
+                    // as `TypeName.method` defs by the class's inherent impl (which
+                    // is expanded first). Reference those defs instead of
+                    // re-elaborating the bodies as lambdas — a single elaboration
+                    // and a single semantic source, so trait method bodies may
+                    // also call sibling methods through `this`.
+                    let class_type_name = if from_class { raw_ctor_name(&name) } else { None };
+                    for (i, (decl, _)) in methods.into_iter().enumerate() {
                         if let Decl::Def { name: def_name, params, ret_type: _, body } = decl {
                             // Operator-symbol registration (trait impl): an
                             // operator-named method whose body is a direct helper
                             // application (`helper this that`) records
                             // (helper, arity) → operator so `quote` can restore the
-                            // infix form of the inlined helper call.
+                            // infix form of the inlined helper call. Class methods
+                            // were already registered by the inherent impl.
                             if is_operator_method_name(&def_name.data) {
                                 if let Some(head) = raw_ctor_name(&body) {
-                                    self.symbol_table.insert(
-                                        (head, params.len() + 1),
-                                        def_name.data.clone(),
-                                    );
+                                    if class_type_name.is_none() {
+                                        self.symbol_table.insert(
+                                            (head, params.len() + 1),
+                                            def_name.data.clone(),
+                                        );
+                                    }
                                 }
                             }
-                            ret = Raw::App(
-                                Box::new(ret),
-                                Box::new(Raw::Lam(
+                            // Only the class's own methods (i < class_method_count)
+                            // exist as namespace defs; trait default bodies must be
+                            // elaborated as record lambdas.
+                            let method_expr = match &class_type_name {
+                                Some(ty) if i < class_method_count =>
+                                    Raw::Var(def_name.map(|n| SmolStr::new(format!("{}.{}", ty, n)))),
+                                _ => Raw::Lam(
                                     def_name.map(|_| SmolStr::new("this")),
                                     Either::Icit(Icit::Expl),
                                     Box::new(params.into_iter().rev()
                                         .fold(body, |ret, x| Raw::Lam(x.0.clone(), Either::Icit(x.2), Box::new(ret)))
                                     )
-                                )),
+                                ),
+                            };
+                            ret = Raw::App(
+                                Box::new(ret),
+                                Box::new(method_expr),
                                 Either::Icit(Icit::Expl),
                             );
                         }
@@ -1337,9 +1376,19 @@ impl Infer {
                         // iteration order is non-deterministic, so picking an
                         // arbitrary match would silently resolve the wrong
                         // constructor when several types share the name.
+                        //
+                        // Namespace-registered instance methods (`TypeHead.method`,
+                        // e.g. `Bool.mux`) are excluded: this fallback exists for
+                        // constructors (bare `mux` in patterns must resolve to the
+                        // `Expr.mux` constructor), and instance methods are never
+                        // called by bare name — only through `x.method` dispatch.
                         let fallback = format!(".{}", name.data);
+                        let ns_method_keys: std::collections::HashSet<SmolStr> = cxt.namespace.iter()
+                            .flat_map(|ns| ns.1.iter().map(move |m| SmolStr::new(format!("{}.{}", ns.2, m))))
+                            .collect();
                         let matches: Vec<(SmolStr, _)> = cxt.decl.iter()
                             .filter(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
+                            .filter(|(k, _)| !ns_method_keys.contains(*k))
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();
                         if matches.len() == 1 {
@@ -1793,7 +1842,11 @@ impl Infer {
             )), vec![]));
         }
         if let Some(ns_entry) = ns_result.into_iter().next() {
-            let qname = SmolStr::new(format!("{}{}", ns_entry.2, t.data));
+            // Method key: `TypeHead.method` — the same dotted key the inherent
+            // impl registered. Dotted method keys are safe because the bare-name
+            // fallback in `infer_expr` excludes namespace-registered methods, so
+            // `case mux(...)` still resolves only constructor `Expr.mux`.
+            let qname = SmolStr::new(format!("{}.{}", ns_entry.2, t.data));
             let def_span = cxt.decl.get(&qname)
                 .map(|(def, _, _, _, _, _)| *def)
                 .unwrap_or(t.to_span());

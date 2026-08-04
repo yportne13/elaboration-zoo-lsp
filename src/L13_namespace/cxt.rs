@@ -98,7 +98,7 @@ pub struct Cxt {
     pub pruning: Pruning,
     pub src_names: Rc<BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>>,
     pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>>,
-    pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
+    pub namespace: List<(Rc<Val>, HashSet<SmolStr>, SmolStr)>,
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: Rc<HashSet<SmolStr>>,
     update_from: Option<usize>,
