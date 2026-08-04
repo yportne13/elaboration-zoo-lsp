@@ -23,6 +23,11 @@ mod canonical;
 mod legacy_tests;
 
 #[cfg(test)]
+mod class_tests;
+
+#[cfg(test)]
+
+#[cfg(test)]
 mod debug_test;
 
 #[cfg(test)]
@@ -1699,16 +1704,26 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
             cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
         }
     }
-    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
-    let prelude_aliases: Vec<(SmolStr, _)> = cxt.decl.iter()
-        .filter(|(k, _)| k.contains('.'))
+    // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero).
+    // Namespace-registered instance methods (`TypeHead.method`, e.g. `Bool.mux`)
+    // are excluded — methods are only reachable through `x.method` dispatch,
+    // never by bare name, so they must not shadow constructor aliases.
+    // Short-name collisions between constructors are resolved deterministically:
+    // iterating in sorted full-key order makes the `or_insert` (first wins)
+    // winner independent of HashMap iteration order.
+    let ns_method_keys: std::collections::HashSet<SmolStr> = cxt.namespace.iter()
+        .flat_map(|ns| ns.1.iter().map(move |m| SmolStr::new(format!("{}.{}", ns.2, m))))
+        .collect();
+    let mut prelude_aliases: Vec<(SmolStr, SmolStr, _)> = cxt.decl.iter()
+        .filter(|(k, _)| k.contains('.') && !ns_method_keys.contains(*k))
         .map(|(k, v)| {
             let short = SmolStr::new(k.split('.').last().unwrap());
-            (short, v.clone())
+            (short, k.clone(), v.clone())
         })
         .collect();
+    prelude_aliases.sort_by(|a, b| a.1.cmp(&b.1));
     let decl_map = Rc::make_mut(&mut cxt.decl);
-    for (short, v) in prelude_aliases {
+    for (short, _full_key, v) in prelude_aliases {
         decl_map.entry(short).or_insert(v);
     }
     // The cached state is never queried for hover/completion; drop the
