@@ -67,6 +67,49 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
     }
 }
 
+/// Tuple-arity of a name like `Tuple2` (sans `.mk` suffix); None if the name
+/// is not a builtin tuple type name.
+fn tuple_n_arity(name: &str) -> Option<usize> {
+    let digits = name.strip_prefix("Tuple")?;
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// True when `head` is the function part of a tuple literal construction
+/// `TupleN.mk e0 … en`: either the parser sugar `(e0, …)` — a `Raw::Var`
+/// named `TupleN.mk` whose span covers the whole parenthesized element list —
+/// or an explicit `TupleN.mk` member access (`Raw::Obj` with a `.mk` field).
+/// Used to give each tuple element its own hover-table entry so hovering an
+/// element shows the element's type instead of the whole tuple's.
+fn is_tuple_mk_head(head: &Raw) -> bool {
+    let mut cur = head;
+    loop {
+        match cur {
+            Raw::App(f, _, _) => cur = f.as_ref(),
+            _ => break,
+        }
+    }
+    match cur {
+        Raw::Var(n) => n.data
+            .strip_suffix(".mk")
+            .and_then(tuple_n_arity)
+            .is_some(),
+        Raw::Obj(base, Some(m)) if m.data == "mk" => {
+            let mut cur = base.as_ref();
+            loop {
+                match cur {
+                    Raw::App(f, _, _) => cur = f.as_ref(),
+                    _ => break,
+                }
+            }
+            matches!(cur, Raw::Var(n) if tuple_n_arity(&n.data).is_some())
+        }
+        _ => false,
+    }
+}
+
 impl Infer {
     /// Peel the leading Π-layers of `vtyp`, returning the codomain (return type)
     /// together with the quote level that resolves the fresh rigids introduced
@@ -1559,6 +1602,7 @@ impl Infer {
                 let t_span = t.to_span();
                 let t_raw = t.as_ref().clone();
                 let u_raw = u.as_ref().clone();
+                let u_span = u.to_span();
                 let is_expl = matches!(i, Either::Icit(Icit::Expl));
                 let (i, t, tty) = match i {
                     Either::Name(name) => {
@@ -1593,7 +1637,7 @@ impl Infer {
                         // `a[7]` (implicit) → `a.apply[7]`  works for type-parameter-based apply.
                         // `a(7)` (explicit) → `a.apply(7)` only works if apply takes explicit args.
                         let meta_before = self.meta.len();
-                        let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
+                        let apply_obj = Raw::Obj(Box::new(t_raw.clone()), Some(empty_span(SmolStr::new("apply"))));
                         let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
                         if let Ok(result) = self.infer_expr(cxt, apply_call) {
                             return Ok(result);
@@ -1629,6 +1673,17 @@ impl Infer {
                     }
                 };
                 let u_checked = self.check::<false>(cxt, *u, &a)?;
+                // Tuple literal `(e0, …, en)` desugars to `TupleN.mk e0 … en`;
+                // give each element its own hover entry (span = element span,
+                // type = element type) so hovering an element shows the
+                // element's type instead of the whole tuple's.  The LSP side
+                // prefers the most specific (smallest) span, so these entries
+                // win over the `TupleN.mk` entry whose span covers the whole
+                // element list.  Sub-expressions inside an element (e.g. a
+                // bare variable) keep their own narrower entries.
+                if is_tuple_mk_head(&t_raw) {
+                    self.hover_table.push((u_span, u_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, a.clone()));
+                }
                 let ret_type = self.closure_apply(&cxt.decl, &b_closure, self.eval(&cxt.decl, &cxt.env, &u_checked));
                 Ok((
                     Tm::App(t, u_checked, i).into(),

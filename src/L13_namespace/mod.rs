@@ -407,6 +407,11 @@ pub struct PrintlnJob {
     pub names: List<SmolStr>,
 }
 
+/// A hover-table entry: (source span, definition span, hover context, value).
+/// The value is quoted at LSP time with the captured context to render the
+/// type shown on hover.
+pub type HoverEntry = (Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>);
+
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
@@ -417,7 +422,7 @@ pub struct Infer {
     /// (trait_name, assoc_type_name) -> optional default type value (Raw)
     assoc_defaults: HashMap<(SmolStr, SmolStr), Option<Raw>>,
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
-    pub hover_table: Vec<(Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>)>,
+    pub hover_table: Vec<HoverEntry>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
     /// Inlay hints: (byte offset of insertion point, ": <type>" label).
     /// Populated for `def` without explicit return type and `let` without type
@@ -462,6 +467,22 @@ impl Clone for Infer {
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
         }
+    }
+}
+
+impl Infer {
+    /// The most specific hover entry for `offset` in the file identified by
+    /// `path_id`: among entries whose span contains the offset, pick the one
+    /// with the smallest span.  A tuple literal's `TupleN.mk` entry spans the
+    /// whole element list, so each element's own narrower entry (pushed by
+    /// elaboration) wins when the cursor is on an element, while positions
+    /// between elements still resolve to the whole-tuple entry.
+    pub fn hover_entry_at(&self, path_id: u32, offset: usize) -> Option<&HoverEntry> {
+        self.hover_table
+            .iter()
+            .filter(|x| x.0.path_id == path_id)
+            .filter(|x| x.0.contains(offset))
+            .min_by_key(|x| x.0.end_offset - x.0.start_offset)
     }
 }
 
@@ -779,7 +800,6 @@ impl Infer {
         type RcValPair = (Rc<Val>, Rc<Val>);
         let meta_contrains_entry_sz = std::mem::size_of::<RcValPair>();
         let meta_contrains_cap_bytes = constraints_cap * meta_contrains_entry_sz;
-        type HoverEntry = (Span<()>, Span<()>, cxt::HoverCxt, Rc<Val>);
         let hover_entry_sz = std::mem::size_of::<HoverEntry>();
         let hover_cap_bytes = hover_cap * hover_entry_sz;
         type DeclEntry = (SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>));
