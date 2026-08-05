@@ -177,7 +177,10 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
 
             let binder = match i {
                 Icit::Expl => x,
-                Icit::Impl => bracket(x),
+                // Implicit lambda binders use the parser's square-bracket
+                // syntax `[x] => ...` (curly braces stay reserved for
+                // precedence grouping at ATP level).
+                Icit::Impl => format!("[{x}]"),
             };
 
             let body_printer = format!(" => {}", pretty_tm_indent(LETP, indent, new_ns, body));
