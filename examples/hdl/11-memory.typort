@@ -1,0 +1,64 @@
+// ============================================================
+// HDL Example 11: 内存 (Memory)
+//
+//   let myRam = memUInt(8, 64)      64 × 8 位内存（自动命名）
+//   let myBits = memBits(4, 16)     16 × 4 位内存
+//   let myFlag = memBool(16)        16 个 1 位标志位
+//   myRam.write(addr, data, en)     同步写端口
+//   let rd = myRam.readSync(addr)   同步读（生成寄存器，按 bn 命名）
+//   let rd = myRam.readAsync(addr)  组合读（返回 mem[addr] 表达式）
+//   let rd = myRam.readSyncCC(addr, cd) 跨时钟域读
+//
+// NOTE: debug（cargo test）构建对 module 体内的大 Nat 字面量有栈深度限制
+// （与 Mem 无关，`createWidth("x", 256)` 同样触发）；发布构建无此问题。
+// ============================================================
+
+module memWriteRead {
+    let myRam = memUInt(8, 64)
+    let addr = UInt[8]
+    let d = UInt[8]
+    let en = Bool
+    myRam.write(addr, d, en)
+    let rd = myRam.readSync(addr)
+}
+println("=== 11a: memWriteRead (同步写 + 同步读) ===")
+println(moduleTreeVL(memWriteRead.create.tree))
+
+module memAsyncRead {
+    let myRam = memUInt(8, 32)
+    let addr = UInt[8]
+    let rd = myRam.readAsync(addr)
+    let out = UInt[8]
+    out := rd
+}
+println("=== 11b: memAsyncRead (组合读) ===")
+println(moduleTreeVL(memAsyncRead.create.tree))
+
+module memMixedTypes {
+    let myBits = memBits(4, 16)
+    let baddr = UInt[8]
+    let bd = Bits[4]
+    myBits.write(baddr, bd, Bool.mk(None, literal(1)))
+    let brd = myBits.readSync(baddr)
+
+    let myFlag = memBool(16)
+    let faddr = UInt[8]
+    let fd = Bool
+    let fen = Bool
+    myFlag.write(faddr, fd, fen)
+    let frd = myFlag.readSync(faddr)
+}
+println("=== 11c: memMixedTypes (Bits/Bool 内存) ===")
+println(moduleTreeVL(memMixedTypes.create.tree))
+
+module memReadInWhen {
+    let myRam = memUInt(8, 16)
+    let addr = UInt[8]
+    let d = UInt[8]
+    let en = Bool
+    when en {
+        myRam.write(addr, d, en)
+    }
+}
+println("=== 11d: memReadInWhen (when 内写内存) ===")
+println(moduleTreeVL(memReadInWhen.create.tree))

@@ -14,6 +14,32 @@ def joinLines(ls: List[String]): String = match ls {
     case lcons(s, tail) => s + "\n" + joinLines(tail)
 }
 
+// Is an Expr the always-true write enable?  If so the memory write statement is
+// emitted without the `if (enable)` guard.  Only a literal whose value is 1
+// (constructor form `literal(succ(zero))`) is recognized: numeric literal terms
+// may stay stuck through elaboration (see docs/l13-proof-candidates-notes.md
+// §2.3), so a stuck literal still falls through to the `if (...)` form, which is
+// valid (if redundant) Verilog.
+def isTrueLit(e: Expr): Boolean = match e {
+    case literal(v) => match v {
+        case succ(zero) => true
+        case _ => false
+    }
+    case _ => false
+}
+
+// Emit one memory write statement for the clocked always block:
+//   if (enable) mem[address] <= data;
+// An enable that evaluates to literal 1 (constructor form `literal(succ(zero))`)
+// collapses to the bare assignment; any other enable keeps the guard.
+// Operand strings are already emitted (avoids a forward ref to exprVL).
+def memWriteLineRaw(memStr: String, addrStr: String, dataStr: String, enableStr: String, enable: Expr): String =
+    let always_en = isTrueLit(enable);
+    match always_en {
+        case true => "    " + memStr + "[" + addrStr + "] <= " + dataStr + ";"
+        case false => "    if (" + enableStr + ") begin\n      " + memStr + "[" + addrStr + "] <= " + dataStr + ";\n    end"
+    }
+
 // Emit an expression in "procedural" context (inside always block):
 // assign becomes blocking assignment, block/when recurse procedurally.
 // Self-contained (no forward ref to exprVL).
@@ -77,6 +103,11 @@ def exprVL_proc(e: Expr): String = match e {
         "  " + moduleName + " " + instName + " (" + ports + ");"
     case subSignal(instName, signalName) =>
         instName + "_" + signalName
+    case createMem(name, _, _) => name
+    case memRead(mem, address) =>
+        exprVL_proc(mem) + "[" + exprVL_proc(address) + "]"
+    case memWrite(mem, address, data, enable) =>
+        memWriteLineRaw(exprVL_proc(mem), exprVL_proc(address), exprVL_proc(data), exprVL_proc(enable), enable)
 }
 
 // Helper: emit condition string without redundant outer parens
@@ -150,6 +181,11 @@ def exprVL(e: Expr): String = match e {
     case subSignal(instName, signalName) =>
         let sigLine = instName + "_" + signalName;
         sigLine
+    case createMem(name, _, _) => name
+    case memRead(mem, address) =>
+        exprVL(mem) + "[" + exprVL(address) + "]"
+    case memWrite(mem, address, data, enable) =>
+        memWriteLineRaw(exprVL(mem), exprVL(address), exprVL(data), exprVL(enable), enable)
 }
 
 def isSubSignal(e: Expr): Boolean = match e {
@@ -199,6 +235,31 @@ def outWireOrReg(name: String, whenSigs: List[String]): String =
 // Helper: generate width range string, omit for 1-bit signals
 // Uses Rust builtin width_range which can force Nat evaluation
 def widthRange(w: Nat): String = width_range(w)
+
+// ============================================================
+//  Memory (Mem) declarations
+// ============================================================
+
+// Emit one memory declaration:  reg [w-1:0] name [0:wordCount-1];
+// widthRange returns "" for 1-bit cells →  reg name [0:wordCount-1];
+def memDeclLine(name: String, wordCount: Nat, width: Nat): String =
+    "  reg " + widthRange(width) + name + " [0:" + natToDec(pred(wordCount)) + "];"
+
+// Collect memory declarations from Vec[Expr]
+def collectMemLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case createMem(name, wordCount, width) => lcons (memDeclLine(name, wordCount, width)) (collectMemLines tail)
+        case _ => collectMemLines tail
+    }
+}
+
+def memsVL[ne: Nat](es: Vec[Expr] ne): String =
+    let ls = list_reverse(collectMemLines es);
+    match ls {
+        case lnil => ""
+        case _ => joinLines(ls) + "\n"
+    }
 
 // Helper: process a single port expr
 def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
@@ -301,10 +362,12 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
 
 // Collect clocked assignments (regAssign) from Vec[Expr]
 // Also collects when nodes that wrap regAssign (e.g., when(cond, regAssign(...), None))
+// and memory writes (memWrite).
 def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case regAssign(_, _) => lcons (exprVL(e)) (collectClockLines tail)
+        case memWrite(_, _, _, _) => lcons (exprVL(e)) (collectClockLines tail)
         case when(_, _, _) =>
             // When nodes with regAssign inside go to the clocked block
             let has_clk = hasRegAssign(e);
@@ -408,6 +471,9 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
         case instance(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case instanceWithPorts(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case subSignal(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createMem(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case memRead(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case memWrite(_, _, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case _ => lcons (exprVL(e)) (collectAssignLinesFiltered(tail, whenSigs))
     }
 }
@@ -723,6 +789,7 @@ def moduleDefVL(md: ModuleDef): String =
     let port_lines = list_reverse(collectPortLines(md.expr, whenSigs));
     let wire_decls = wiresVL(md.expr, port_names, whenSigs);
     let reg_decls = regsVL(md.expr);
+    let mem_decls = memsVL(md.expr);
     let assigns = assignsVL(md.expr, whenSigs);
     let always = alwaysVL(md.expr, whenSigs);
     let clocked = clockedVL(md.expr, md.cd);
@@ -730,6 +797,15 @@ def moduleDefVL(md: ModuleDef): String =
     let has_regs = match list_reverse(collectRegLines md.expr) {
         case lnil => false
         case _ => true
+    };
+    let has_mem = match list_reverse(collectMemLines md.expr) {
+        case lnil => false
+        case _ => true
+    };
+    // Sequential elements (registers or memories) need the clock port.
+    let has_seq = match has_regs {
+        case false => has_mem
+        case true => true
     };
     let has_ports = match port_lines {
         case lnil => false
@@ -743,7 +819,7 @@ def moduleDefVL(md: ModuleDef): String =
     let clk_nm = clockName(md.cd);
     let reset_nm = resetName(md.cd);
     let p0 = port_decls;
-    let p1 = match has_regs {
+    let p1 = match has_seq {
         case false => p0
         case true => match has_ports {
             case false => "  input wire " + clk_nm
@@ -761,7 +837,7 @@ def moduleDefVL(md: ModuleDef): String =
         }
     };
     let has_no_port_content = match has_ports {
-        case false => match has_regs {
+        case false => match has_seq {
             case false => match has_init {
                 case false => true
                 case true => false
@@ -774,7 +850,7 @@ def moduleDefVL(md: ModuleDef): String =
         case true => "module " + md.name + " ();\n"
         case false => "module " + md.name + " (\n" + p2 + "\n);\n"
     };
-    let body = header + wire_decls + reg_decls + assigns + clocked + always;
+    let body = header + wire_decls + reg_decls + mem_decls + assigns + clocked + always;
     let body_with_inst = match has_instances {
         case false => body
         case true => body + joinLines(inst_lines) + "\n"

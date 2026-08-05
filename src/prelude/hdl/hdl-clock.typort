@@ -9,19 +9,136 @@
 //   module foo(cd: ClockDomain) { ... }   // let t = foo.create(myCd).tree
 
 // ============================================================
-//  Mem (Memory)
+//  Mem (Memory) — SpinalHDL 风格存储器
 // ============================================================
+//
+// 内存声明为一个寄存器数组（`reg [w-1:0] name [0:wordCount-1]`）：
+//   let myRam  = memUInt(8, 256)   // Mem[UInt[8]]，256 个字，自动命名为 "myRam"
+//   let myBits = memBits(4, 64)    // Mem[Bits[4]]
+//   let myFlag = memBool(16)       // Mem[Bool]
+//   myRam.write(addr, data, en)    // 同步写端口（en 为 0 时不写）
+//   let rd  = myRam.readAsync(addr) // 组合读：返回 mem[addr] 表达式
+//   let rd  = myRam.readSync(addr)  // 同步读：生成寄存器 + always 块，自动命名
+//   let rd  = myRam.readSyncCC(addr, cd) // 跨时钟域读（当前与 readSync 相同）
+//
+// 无条件写：`myRam.write(addr, data, Bool.mk(None, literal(1)))`（使能为 1 的
+// 字面量；Verilog 端能识别时省略 `if (enable)` 包裹，直接输出
+// `mem[addr] <= data;`，否则保留 `if (1)` 守卫，二者语义相同）。
+//
+// 每类数据的读写行为由 MemOps typeclass 提供：Self = Mem[T]（来自 `for`），
+// 数据信号类型 O 是 outParam —— 与 `Into[O] for MuxExpr[T]` 的 Self != 类型
+// 参数 模式一致。方法通过 `myRam.method(...)` 直接分发（receiver = Self）。
+// impl 每个数据各写一次，方法注册在 MemOps 名下，不会像多个 `impl Mem[T]`
+// 那样产生同名方法冲突。
+// 地址宽度用方法级类型参数 [a: Nat] 泛化（trait 方法签名无法引用
+// this.wordCount，故不在签名里做 log2Up 检查；生成 Verilog 时索引宽度由
+// 地址信号自身决定）。
 
 struct Mem[T] {
+    name: Option[String]
+    zz_expr: Expr
     wordCount: Nat
-    initialValue: T
+    dataWidth: Nat
     clockDomain: ClockDomain
 }
 
-impl[T] Mem[T] {
-    // TODO(stub): 占位实现 —— 不产生真实内存行为，仅保证类型检查通过。
-    def write(address: UInt[log2Up (maxNat this.wordCount 1)], data: T, enable: Bool): Unit = unit
-    def readAsync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
-    def readSync(address: UInt[log2Up (maxNat this.wordCount 1)]): T = this.initialValue
-    def readSyncCC(address: UInt[log2Up (maxNat this.wordCount 1)], crossClock: Bool): T = this.initialValue
+trait MemOps[O: outParam(Type 0)] {
+    // 同步写端口
+    def write[a: Nat](address: UInt[a], data: O, enable: Bool): Unit
+    // 组合读：返回 mem[address] 表达式包装的 O
+    def readAsync[a: Nat](address: UInt[a]): O
+    // 同步读：生成一个寄存器信号并记录 mem[address] 的时钟赋值（寄存器按 bn 命名）
+    def readSync[a: Nat][bn: BindingName](address: UInt[a]): O
+    // 跨时钟域读（当前与 readSync 相同）
+    def readSyncCC[a: Nat][bn: BindingName](address: UInt[a], crossClock: Bool): O
 }
+
+impl[w: Nat] MemOps[UInt[w]] for Mem[UInt[w]] {
+    def write[a: Nat](address: UInt[a], data: UInt[w], enable: Bool): Unit =
+        let _ = createSignalExpr("", memWrite(this.zz_expr, address.zz_expr, data.zz_expr, enable.zz_expr));
+        unit
+    def readAsync[a: Nat](address: UInt[a]): UInt[w] =
+        UInt.mk(None, memRead(this.zz_expr, address.zz_expr))
+    def readSync[a: Nat][bn: BindingName](address: UInt[a]): UInt[w] =
+        let re = createSignalExpr(bn.name, createRegWidth(bn.name, w));
+        let r = UInt.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+    def readSyncCC[a: Nat][bn: BindingName](address: UInt[a], crossClock: Bool): UInt[w] =
+        let re = createSignalExpr(bn.name, createRegWidth(bn.name, w));
+        let r = UInt.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+}
+
+impl[w: Nat] MemOps[Bits[w]] for Mem[Bits[w]] {
+    def write[a: Nat](address: UInt[a], data: Bits[w], enable: Bool): Unit =
+        let _ = createSignalExpr("", memWrite(this.zz_expr, address.zz_expr, data.zz_expr, enable.zz_expr));
+        unit
+    def readAsync[a: Nat](address: UInt[a]): Bits[w] =
+        Bits.mk(None, memRead(this.zz_expr, address.zz_expr))
+    def readSync[a: Nat][bn: BindingName](address: UInt[a]): Bits[w] =
+        let re = createSignalExpr(bn.name, createRegWidth(bn.name, w));
+        let r = Bits.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+    def readSyncCC[a: Nat][bn: BindingName](address: UInt[a], crossClock: Bool): Bits[w] =
+        let re = createSignalExpr(bn.name, createRegWidth(bn.name, w));
+        let r = Bits.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+}
+
+impl[w: Nat] MemOps[SInt[w]] for Mem[SInt[w]] {
+    def write[a: Nat](address: UInt[a], data: SInt[w], enable: Bool): Unit =
+        let _ = createSignalExpr("", memWrite(this.zz_expr, address.zz_expr, data.zz_expr, enable.zz_expr));
+        unit
+    def readAsync[a: Nat](address: UInt[a]): SInt[w] =
+        SInt.mk(None, memRead(this.zz_expr, address.zz_expr))
+    def readSync[a: Nat][bn: BindingName](address: UInt[a]): SInt[w] =
+        let re = createSignalExpr(bn.name, createSIntRegWidth(bn.name, w));
+        let r = SInt.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+    def readSyncCC[a: Nat][bn: BindingName](address: UInt[a], crossClock: Bool): SInt[w] =
+        let re = createSignalExpr(bn.name, createSIntRegWidth(bn.name, w));
+        let r = SInt.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+}
+
+impl MemOps[Bool] for Mem[Bool] {
+    def write[a: Nat](address: UInt[a], data: Bool, enable: Bool): Unit =
+        let _ = createSignalExpr("", memWrite(this.zz_expr, address.zz_expr, data.zz_expr, enable.zz_expr));
+        unit
+    def readAsync[a: Nat](address: UInt[a]): Bool =
+        Bool.mk(None, memRead(this.zz_expr, address.zz_expr))
+    def readSync[a: Nat][bn: BindingName](address: UInt[a]): Bool =
+        let re = createSignalExpr(bn.name, createReg(bn.name));
+        let r = Bool.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+    def readSyncCC[a: Nat][bn: BindingName](address: UInt[a], crossClock: Bool): Bool =
+        let re = createSignalExpr(bn.name, createReg(bn.name));
+        let r = Bool.mk(Some(bn.name), re);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, memRead(this.zz_expr, address.zz_expr)));
+        r
+}
+
+// 内存工厂：自动命名（bn = 外层 let 绑定名）。宽度参数先、字数参数后，
+// 与 SpinalHDL `Mem(UInt(8 bits), 256)` 的参数顺序一致。
+def memUInt[bn: BindingName](w: Nat, wordCount: Nat): Mem[UInt[w]] =
+    let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
+    Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
+
+def memBits[bn: BindingName](w: Nat, wordCount: Nat): Mem[Bits[w]] =
+    let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
+    Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
+
+def memSInt[bn: BindingName](w: Nat, wordCount: Nat): Mem[SInt[w]] =
+    let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
+    Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
+
+def memBool[bn: BindingName](wordCount: Nat): Mem[Bool] =
+    let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, 1));
+    Mem.mk(Some(bn.name), e, wordCount, 1, defaultClockDomain)

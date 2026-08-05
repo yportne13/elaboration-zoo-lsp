@@ -1416,6 +1416,15 @@ fn test_examples_hdl_dir() {
             "input wire [31:0] slave_awaddr",    // slave 驱动字段 → input 端口
             "output wire slave_awready",         // slave 接收字段 → output 端口
         ]),
+        ("11-memory.typort", include_str!("../../examples/hdl/11-memory.typort"), &[
+            "reg [7:0] myRam [0:63];",   // 内存声明：64 × 8 位
+            "reg [3:0] myBits [0:15];",  // Bits 内存
+            "reg myFlag [0:15];",        // Bool（1 位）内存
+            "reg [7:0] rd;",             // readSync 生成寄存器
+            "assign out = myRam[addr];", // readAsync 组合读
+            "rd <= myRam[addr];",        // readSync 时钟赋值
+            "if (en) begin",             // 同步写使能
+        ]),
     ];
 
     for (file, input, asserts) in examples {

@@ -98,6 +98,13 @@ enum Expr {
     instance(instName: String, moduleName: String)   // sub-module instantiation
     instanceWithPorts(instName: String, moduleName: String, ports: String)  // with port connections
     subSignal(instName: String, signalName: String)   // cross-level signal reference
+    // ---- memory: declaration / read / write ----
+    // createMem declares an array `reg [w-1:0] name [0:wordCount-1]`.
+    // memRead is a pure expression `name[address]`; memWrite is a clocked
+    // statement `if (enable) name[address] <= data;` recorded in the module.
+    createMem(name: String, wordCount: Nat, width: Nat)
+    memRead(mem: Expr, address: Expr)
+    memWrite(mem: Expr, address: Expr, data: Expr, enable: Expr)
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
@@ -112,6 +119,9 @@ def isRegExpr(e: Expr): Boolean = match e {
     case partsel(e, _, _) => isRegExpr(e)
     case instance(_, _) => false
     case subSignal(_, _) => false
+    case createMem(_, _, _) => false
+    case memRead(_, _) => false
+    case memWrite(_, _, _, _) => false
     case _ => false
 }
 
@@ -296,6 +306,11 @@ def createSignalExpr(name: String, e: Expr): Expr =
             e
         case subSignal(_, _) =>
             e
+        case createMem(_, _, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case memRead(_, _) =>
+            e
         case _ =>
             let wrapped = addWhenContext(e);
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, wrapped));
@@ -325,6 +340,9 @@ def hasRegAssign(e: Expr): Boolean = match e {
     case instance(_, _) => false
     case subSignal(_, _) => false
     case mux(_, _, _) => false
+    case createMem(_, _, _) => false
+    case memRead(_, _) => false
+    case memWrite(_, _, _, _) => true
     case _ => false
 }
 
