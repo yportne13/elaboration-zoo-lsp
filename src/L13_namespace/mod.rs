@@ -316,6 +316,42 @@ pub fn tm_contains_match(tm: &Tm) -> bool {
     }
 }
 
+/// Build a simplified copy of `decl` where every definition's body is
+/// replaced by a `Decl` reference, so evaluating match-case bodies does not
+/// re-expand recursive definitions.  O(decl) to build; cached per decl
+/// address — decl maps are persistent (`Rc<HashMap>`), so the pointer is a
+/// stable key.  Used by `quote`/`rename`/`unify` on `Val::Match` values.
+pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
+    static DECLB_CACHE: std::sync::Mutex<Option<(usize, Rc<Decl>)>> =
+        std::sync::Mutex::new(None);
+    let key = decl as *const Decl as usize;
+    let mut guard = DECLB_CACHE.lock().unwrap();
+    if let Some((k, d)) = guard.as_ref() {
+        if *k == key {
+            return d.clone();
+        }
+    }
+    let d: Decl = decl
+        .iter()
+        .map(|x| {
+            (
+                x.0.clone(),
+                (
+                    x.1.0,
+                    Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                    Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                    x.1.3.clone(),
+                    x.1.4.clone(),
+                    x.1.5.clone(),
+                ),
+            )
+        })
+        .collect();
+    let d = Rc::new(d);
+    *guard = Some((key, d.clone()));
+    d
+}
+
 pub fn wrap_match_in_call(name: SmolStr, tm: &Tm, _l: u32) -> Tm {
     fn go(name: SmolStr, tm: &Tm, l: u32, icits: &mut Vec<Icit>) -> Tm {
         match tm {
@@ -1507,31 +1543,9 @@ impl Infer {
                 // Each case's body is evaluated against a *simplified* decl where
                 // every definition is replaced by a `Decl` reference (so recursive
                 // bodies don't re-expand).  Building that map is O(decl) and is
-                // identical for the same decl, so cache it per decl address.
-                let declb: Rc<Decl>;
-                {
-                    static DECLB_CACHE: std::sync::Mutex<Option<(usize, Rc<Decl>)>> =
-                        std::sync::Mutex::new(None);
-                    let key = decl as *const Decl as usize;
-                    let mut guard = DECLB_CACHE.lock().unwrap();
-                    match guard.as_ref() {
-                        Some((k, d)) if *k == key => declb = d.clone(),
-                        _ => {
-                            let d: Decl = decl.iter()
-                                .map(|x| (x.0.clone(), (
-                                    x.1.0,
-                                    Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                                    Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                                    x.1.3.clone(),
-                                    x.1.4.clone(),
-                                    x.1.5.clone(),
-                                )))
-                                .collect();
-                            declb = Rc::new(d);
-                            *guard = Some((key, declb.clone()));
-                        }
-                    }
-                }
+                // identical for the same decl, so cache it per decl address
+                // (`simpl_decl`, shared with unify/rename).
+                let declb = simpl_decl(decl);
                 let tm_cases = cases
                     .iter()
                     .map(|x| (

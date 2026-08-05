@@ -227,49 +227,53 @@ impl Compiler {
         typ: &Rc<Val>, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
         all_constrs: &'a [Constructor],
     ) -> Result<Vec<(&'a Constructor, Vec<(Span<SmolStr>, Rc<Val>, Icit)>, Cxt)>, Error> {
-        // This is a pure probe: the per-constructor unification checks may solve
-        // metas (including pre-existing ones) whose solutions reference the fresh
-        // metas created below.  A plain `truncate` would leave those solutions
-        // dangling (index-out-of-bounds panic on later lookup), and the solutions
-        // themselves are throwaway.  Roll back the whole meta / trait_metas state
-        // on every exit, success or error.
-        let meta_snapshot = infer.meta.clone();
-        let trait_metas_snapshot = infer.trait_metas.clone();
-        let result = (|| -> Result<Vec<_>, Error> {
-            let mut accessible = Vec::new();
+        let mut accessible = Vec::new();
 
-            let typ = infer.force(&cxt.decl, typ);
-            let forced_type = match typ.as_ref() {
-                Val::Sum(..) => typ,
-                _ => {
-                    for constr_def in all_constrs {
-                        accessible.push((constr_def, vec![], cxt.clone()));
-                    }
-                    return Ok(accessible);
-                }
-            };
-
-            // Get the Sum type name for qualified constructor access
-            let sum_name = match forced_type.as_ref() {
-                Val::Sum(name, ..) => name.data.clone(),
-                _ => SmolStr::new(""),
-            };
-
-            // Fast path: sum types without explicit (index) parameters have all
-            // constructors always accessible (e.g. Expr, Option, Bool).
-            // Only Vec-like indexed types (e.g. Vec[A](len: Nat)) need the full
-            // GADT-style reachability check.
-            let has_indices = match forced_type.as_ref() {
-                Val::Sum(_, params, ..) => params.iter().any(|p| p.3 == Icit::Expl),
-                _ => false,
-            };
-            if !has_indices {
+        let typ = infer.force(&cxt.decl, typ);
+        let forced_type = match typ.as_ref() {
+            Val::Sum(..) => typ,
+            _ => {
+                // Not a sum type: every constructor is treated as accessible.
+                // Fast path: no inference state is touched, so no snapshot needed.
                 for constr_def in all_constrs {
                     accessible.push((constr_def, vec![], cxt.clone()));
                 }
                 return Ok(accessible);
             }
+        };
 
+        // Get the Sum type name for qualified constructor access
+        let sum_name = match forced_type.as_ref() {
+            Val::Sum(name, ..) => name.data.clone(),
+            _ => SmolStr::new(""),
+        };
+
+        // Fast path: sum types without explicit (index) parameters have all
+        // constructors always accessible (e.g. Expr, Option, Bool).
+        // Only Vec-like indexed types (e.g. Vec[A](len: Nat)) need the full
+        // GADT-style reachability check.
+        let has_indices = match forced_type.as_ref() {
+            Val::Sum(_, params, ..) => params.iter().any(|p| p.3 == Icit::Expl),
+            _ => false,
+        };
+        if !has_indices {
+            for constr_def in all_constrs {
+                accessible.push((constr_def, vec![], cxt.clone()));
+            }
+            return Ok(accessible);
+        }
+
+        // This is a pure probe: the per-constructor unification checks may solve
+        // metas (including pre-existing ones) whose solutions reference the fresh
+        // metas created below.  A plain `truncate` would leave those solutions
+        // dangling (index-out-of-bounds panic on later lookup), and the solutions
+        // themselves are throwaway.  Roll back the whole meta / trait_metas state
+        // on every exit, success or error.  (The fast paths above return before
+        // any state is touched, so the snapshot is only taken for the indexed
+        // probe loop.)
+        let meta_snapshot = infer.meta.clone();
+        let trait_metas_snapshot = infer.trait_metas.clone();
+        let result = (|| -> Result<Vec<_>, Error> {
             for constr_def @ constr_name in all_constrs {
                 // We create a temporary, throwaway inference state for the unification check
                 // to avoid polluting the main inference state with temporary metavariables.
