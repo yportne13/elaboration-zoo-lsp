@@ -249,6 +249,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/core/nat.typort"),
             version: None,
         });
+        self.on_change::<true>(TextDocumentItem {
+            uri: Url::parse("builtin:///calc.typort").unwrap(),
+            text: include_str!("prelude/core/calc.typort"),
+            version: None,
+        });
         // Register nat_to_dec builtin (required by hdl for Verilog generation)
         {
             let infer = self.infer.lock().unwrap();

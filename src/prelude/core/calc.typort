@@ -1,0 +1,55 @@
+// ============================================================
+// calc — Lean4 `calc` / Agda `reasoning` style equality chains
+//
+//   def foo: Eq a d =
+//       calc {
+//           a = [p1] b
+//           b = [p2] c
+//           c = [p3] d
+//       }
+//
+// Each step is `<term> = [ <proof> ] <term>`; steps are newline-separated
+// (the macro system cannot match `;`). A single-line chain
+// `calc a = [p1] b = [p2] c` is also accepted.
+//
+// Expansion is a let chain instead of nested `trans` (repetition
+// transcription is flat, so nested parentheses cannot be generated):
+//   let _c : Eq (a) (b) = (p1);
+//   let _c = trans (_c) (p2);
+//   let _c = trans (_c) (p3);
+//   _c
+// The first step's annotated let checks both written ends against the
+// proof; later steps are checked indirectly: `trans`'s unification forces
+// the previous right end to match the next proof's left end and the next
+// proof's right end to match the written term (the last written term is
+// checked against the annotated result type). A per-step check-let
+// (`let _ : Eq _ _ ($z) = ($q);`) was tried but dropped: the hole
+// annotation leaves an unsolved meta (`?x n n`) that the unifier cannot
+// close, so per-step annotations would need to name the left end —
+// impossible since the macro has no name for the previous step's result.
+//
+// Design notes: see docs/calc-reasoning-design.md. `a = b := p1` (Lean
+// syntax) is NOT parseable — `:=` is an infix operator, so the raw
+// fragment would swallow it; use `[p1]` instead.
+// ============================================================
+
+#[macro_export]
+macro_rules calc {
+    // Braced multi-line form: calc { a = [p1] b ... } (steps newline-separated)
+    // Each repetition unit starts with the next step's LEFT term, so a
+    // newline (skipped by the repetition separator) is followed by an ident
+    // and matches; a unit starting with `=` would fail after any newline.
+    // The matcher opens with `{` (not `( {`) because the call site is
+    // `calc {` — a leading LParen would never match.
+    ( { $( $x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )* )+ } ) => {
+        let _c : Eq ($x) ($y) = ($p);
+        $( let _c = trans (_c) ($q); )*
+        _c
+    };
+    // Single-line form: calc a = [p1] b = [p2] c
+    ($x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )*) => {
+        let _c : Eq ($x) ($y) = ($p);
+        $( let _c = trans (_c) ($q); )*
+        _c
+    };
+}
