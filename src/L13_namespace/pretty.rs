@@ -1,5 +1,7 @@
 use smol_str::SmolStr;
 
+use std::sync::Arc;
+
 use crate::list::List;
 use super::syntax::Pruning;
 
@@ -18,6 +20,35 @@ fn bracket(s: String) -> String {
 
 fn paren(f: String) -> String {
     format!("({})", f)
+}
+
+/// Renders `name` applied to a display-order argument list in call form:
+/// implicit arguments (`Icit::Impl`) are grouped in square brackets and
+/// explicit arguments in parens — `f[a, b](x, y)` — matching the parser's
+/// `f[x](y)` application syntax (same convention as `Sum`/`SumCase`, which
+/// also quote their args at the incoming `prec`).  A zero-width space keeps
+/// the `](` boundary from forming a markdown link.
+fn go_call(prec: i32, indent: usize, ns: &List<SmolStr>, name: &str, args: &List<(Arc<Tm>, Icit)>) -> String {
+    let impls: Vec<String> = args.iter()
+        .filter(|(_, i)| *i == Icit::Impl)
+        .map(|(a, _)| pretty_tm_indent(prec, indent, ns.clone(), a))
+        .collect();
+    let expls: Vec<String> = args.iter()
+        .filter(|(_, i)| *i == Icit::Expl)
+        .map(|(a, _)| pretty_tm_indent(prec, indent, ns.clone(), a))
+        .collect();
+    let impl_str = if impls.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", impls.join(", "))
+    };
+    let expl_str = if expls.is_empty() {
+        String::new()
+    } else {
+        format!("({})", expls.join(", "))
+    };
+    let zwsp = if !impls.is_empty() && !expls.is_empty() { "\u{200b}" } else { "" };
+    format!("{name}{impl_str}{zwsp}{expl_str}")
 }
 
 fn fresh(ns: List<SmolStr>, suggested: &str) -> String {
@@ -70,7 +101,7 @@ fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: 
                         };
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(arg_str),
+                            Icit::Impl => format!("[{arg_str}]"),
                         };
                         let inner = go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1);
                         let result = format!("{} {}", inner, arg_display);
@@ -128,7 +159,10 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
             let f_t = pretty_tm_indent(APPP, indent, ns.clone(), t);
             let f_u = match i {
                 Icit::Expl => pretty_tm_indent(ATP, indent, ns, u),
-                Icit::Impl => bracket(pretty_tm_indent(ATP, indent, ns, u)),
+                // Implicit application arguments use square brackets to
+                // match the parser's `f[x]` syntax (`{...}` stays reserved
+                // for precedence grouping at ATP level).
+                Icit::Impl => format!("[{}]", pretty_tm_indent(ATP, indent, ns, u)),
             };
             if need_paren {
                 format!("{{{f_t} {f_u}}}")
@@ -262,14 +296,7 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
         },
         Tm::Call(name, args, body) => {
             if matches!(body.as_ref(), Tm::Match(..)) {
-                let args_str = args.iter()
-                    .map(|(a, i)| match i {
-                        Icit::Expl => pretty_tm_indent(ATP, indent, ns.clone(), a),
-                        Icit::Impl => bracket(pretty_tm_indent(ATP, indent, ns.clone(), a)),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}({})", name, args_str)
+                go_call(prec, indent, &ns, name, args)
             } else {
                 pretty_tm_indent(prec, indent, ns, body)
             }
@@ -298,14 +325,7 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                 _ => {
                     // Unreachable in practice (quote only builds 1/2-arg
                     // all-explicit OpCalls); fall back to the plain call form.
-                    let args_str = args.iter()
-                        .map(|(a, i)| match i {
-                            Icit::Expl => pretty_tm_indent(ATP, indent, ns.clone(), a),
-                            Icit::Impl => bracket(pretty_tm_indent(ATP, indent, ns.clone(), a)),
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("{name}({args_str})")
+                    go_call(prec, indent, &ns, name, args)
                 }
             }
         },
@@ -407,14 +427,14 @@ mod tests {
             decl("y").into(),
             Icit::Impl,
         );
-        assert_eq!(pretty(&implicit), "+x {y}");
+        assert_eq!(pretty(&implicit), "+x [y]");
         // An implicit first argument must not trigger infix recovery either.
         let implicit_first = Tm::App(
             Tm::App(decl("+").into(), decl("x").into(), Icit::Impl).into(),
             decl("y").into(),
             Icit::Expl,
         );
-        assert_eq!(pretty(&implicit_first), "+ {x} y");
+        assert_eq!(pretty(&implicit_first), "+ [x] y");
     }
 
     #[test]
@@ -453,5 +473,66 @@ mod tests {
         // Parens inside an application match the ATP bracket style.
         let nested = app(decl("f"), opcall("+", &["x", "y"]));
         assert_eq!(pretty(&nested), "f {x + y}");
+    }
+
+    /// A `Tm::Call` with a `Match` body renders in call form: implicit
+    /// arguments grouped in square brackets, explicit arguments in parens.
+    #[test]
+    fn call_form_splits_implicit_and_explicit_args() {
+        fn call(args: &[(&str, Icit)]) -> std::sync::Arc<Tm> {
+            let mut list = List::new();
+            for (arg, icit) in args.iter().rev() {
+                list = list.prepend((decl(arg), *icit));
+            }
+            Tm::Call(
+                SmolStr::new("foo"),
+                list,
+                Tm::Match(decl("y").into(), Vec::new()).into(),
+            )
+            .into()
+        }
+
+        // Mixed implicit + explicit args: `foo[xxx](xx, xxx)` (a zero-width
+        // space keeps the `](` boundary from forming a markdown link, cf. `Sum`).
+        assert_eq!(
+            pretty(&call(&[
+                ("x", Icit::Impl),
+                ("y", Icit::Impl),
+                ("a", Icit::Expl),
+                ("b", Icit::Expl),
+            ])),
+            "foo[x, y]\u{200b}(a, b)"
+        );
+        // Implicit args only.
+        assert_eq!(
+            pretty(&call(&[("x", Icit::Impl), ("y", Icit::Impl)])),
+            "foo[x, y]"
+        );
+        // Explicit args only (unchanged plain call form).
+        assert_eq!(
+            pretty(&call(&[("a", Icit::Expl), ("b", Icit::Expl)])),
+            "foo(a, b)"
+        );
+        // Implicit args that are themselves applications stay quoted.
+        let mut nested_list = List::new();
+        nested_list = nested_list.prepend((decl("y"), Icit::Expl));
+        nested_list = nested_list.prepend((app(decl("g"), decl("x")), Icit::Impl));
+        let nested_call = Tm::Call(
+            SmolStr::new("foo"),
+            nested_list,
+            Tm::Match(decl("y").into(), Vec::new()).into(),
+        );
+        assert_eq!(pretty(&nested_call), "foo[g x]\u{200b}(y)");
+        // The `Tm::OpCall` fallback path uses the same call form.
+        let mut list = List::new();
+        list = list.prepend((decl("y"), Icit::Expl));
+        list = list.prepend((decl("x"), Icit::Impl));
+        let opcall = Tm::OpCall {
+            symbol: SmolStr::new("+"),
+            name: SmolStr::new("helper"),
+            args: list,
+            body: Tm::Match(decl("y").into(), Vec::new()).into(),
+        };
+        assert_eq!(pretty(&opcall), "helper[x]\u{200b}(y)");
     }
 }
