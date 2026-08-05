@@ -304,6 +304,71 @@ def depth(t: Tree): Nat =
 
 
 
+#[test]
+fn probe_completion_table_states() {
+    // Probe: completion entries at the `p.` (empty member) state vs the
+    // `p.z` (typed member) state — is the table empty once a prefix is typed?
+    let empty_state = r#"
+struct Point {
+    x: Nat
+    y: Nat
+}
+def f(p: Point): Nat = p.
+"#;
+    let cache0 = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    let (mut infer0, mut cxt0, global_macros0) = {
+        let mut guard = cache0.lock().unwrap();
+        let state = guard.as_ref().unwrap();
+        let mut infer = state.infer.clone();
+        infer.mutable_map = Rc::new(std::sync::RwLock::new(
+            state.infer.mutable_map.read().unwrap().clone(),
+        ));
+        (infer, state.cxt.clone(), state.global_macros.clone())
+    };
+    let ast0 = parser::parser_with_macros(&preprocess(empty_state), 24, &global_macros0)
+        .map(|(d, e, _, _)| (d, e)).unwrap();
+    for tm in ast0.0 {
+        let r = infer0.infer(&cxt0, tm.clone());
+        if let Err(ref e) = r { println!("ERR: {}", e.0.data); }
+        if let Ok((_, _, c)) = r { cxt0 = c; }
+    }
+    println!("=== empty state p. ===");
+    for (span, name) in &infer0.completion_table {
+        println!("COMPLETION [{}..{}] {}", span.start_offset, span.end_offset, name);
+    }
+
+    // Typed-prefix state: `p.z` (unknown member) — elaborated directly so
+    // the member-lookup error does not abort the probe.
+    let typed_state = r#"
+struct Point {
+    x: Nat
+    y: Nat
+}
+def f(p: Point): Nat = p.z
+"#;
+    let cache = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    let (mut infer2, mut cxt2, global_macros) = {
+        let mut guard = cache.lock().unwrap();
+        let state = guard.as_ref().unwrap();
+        let mut infer = state.infer.clone();
+        infer.mutable_map = Rc::new(std::sync::RwLock::new(
+            state.infer.mutable_map.read().unwrap().clone(),
+        ));
+        (infer, state.cxt.clone(), state.global_macros.clone())
+    };
+    let ast2 = parser::parser_with_macros(&preprocess(typed_state), 24, &global_macros)
+        .map(|(d, e, _, _)| (d, e)).unwrap();
+    for tm in ast2.0 {
+        let r = infer2.infer(&cxt2, tm.clone());
+        if let Err(ref e) = r { println!("ERR: {}", e.0.data); }
+        if let Ok((_, _, c)) = r { cxt2 = c; }
+    }
+    println!("=== typed state p.z ===");
+    for (span, name) in &infer2.completion_table {
+        println!("COMPLETION [{}..{}] {}", span.start_offset, span.end_offset, name);
+    }
+}
+
 /// Elaborate `input` (after the prelude) and return the Infer with its
 /// populated hover_table.
 fn elaborate_infer(input: &str) -> Infer {

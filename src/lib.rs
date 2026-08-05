@@ -1285,20 +1285,55 @@ impl LanguageServer for Backend<Client> {
         let completions = || -> Option<Vec<CompletionItem>> {
             let rope = self.document_map.get(&uri.to_string())?;
             let infer = self.hover_table.get(&uri.to_string())?;
-            let char = rope.try_line_to_char(position.line as usize).ok()?;
-            let offset = char + position.character as usize;
-            let completions = infer.completion_table
+            // Position -> byte offset, UTF-16 aware (same as hover/definition).
+            // The old `try_line_to_char + character` math mixed char and byte
+            // offsets, which drifted whenever a non-ASCII character appeared
+            // before the cursor.
+            let offset = position_to_offset(position, &rope)?;
+            let mut seen = HashSet::new();
+            let items: Vec<CompletionItem> = infer.completion_table
                 .iter()
-                .filter(|x| x.0.contains(offset.saturating_sub(2)))
-                .map(|x| CompletionItem {
-                    label: x.1.to_string(),
-                    insert_text: Some(x.1.to_string()),
-                    kind: Some(CompletionItemKind::VARIABLE),
-                    detail: Some(x.1.to_string()),
-                    ..Default::default()
+                // Member-access entries are keyed to the receiver's span:
+                // `x.<prefix>` for typed names, but only `x` for the empty
+                // `x.` state (the dangling dot is not part of the span).
+                // Match when the cursor is on that span (hover-style), or
+                // exactly at its end (cursor right after the typed member
+                // name), or one byte past it with a `.` in between (cursor
+                // right after the trigger dot).  The old `contains(offset -
+                // 2)` hack covered at most two of these cases and missed
+                // longer typed prefixes.
+                .filter(|(span, _)| {
+                    let end = span.end_offset as usize;
+                    span.contains(offset)
+                        || offset == end
+                        || (offset == end + 1
+                            && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
+                })
+                .filter_map(|(span, name)| {
+                    if !seen.insert(name.clone()) {
+                        return None;
+                    }
+                    // Replace the typed member prefix (`x.<le>` -> `x.<length>`)
+                    // instead of relying on client-side word replacement.
+                    let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
+                    let range = Range::new(
+                        offset_to_position(prefix_start, &rope)?,
+                        offset_to_position(offset, &rope)?,
+                    );
+                    Some(CompletionItem {
+                        label: name.to_string(),
+                        insert_text: Some(name.to_string()),
+                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                            range,
+                            new_text: name.to_string(),
+                        })),
+                        kind: Some(CompletionItemKind::VARIABLE),
+                        detail: Some(name.to_string()),
+                        ..Default::default()
+                    })
                 })
                 .collect();
-            Some(completions)
+            Some(items)
         }();
         Ok(completions.map(CompletionResponse::Array))
     }
@@ -1713,6 +1748,27 @@ pub fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
         utf16_count += ch.len_utf16() as u32;
     }
     Some(line_byte_start + col_byte_offset)
+}
+
+/// Byte offset of the start of the member name being completed at `offset`:
+/// one past the last `.` on the same line before the cursor.  The completion's
+/// text edit replaces exactly the typed member prefix (`x.<le>` -> `x.<len>`).
+/// Falls back to `offset` (pure insertion) when no dot precedes the cursor.
+pub fn member_prefix_start(rope: &Rope, offset: usize) -> Option<usize> {
+    let line = rope.try_byte_to_line(offset).ok()?;
+    let line_byte_start = rope.try_line_to_byte(line).ok()?;
+    let mut dot: Option<usize> = None;
+    let mut byte_i = line_byte_start;
+    for ch in rope.line(line).chars() {
+        if byte_i >= offset {
+            break;
+        }
+        if ch == '.' {
+            dot = Some(byte_i);
+        }
+        byte_i += ch.len_utf8();
+    }
+    dot.map(|d| d + 1)
 }
 
 pub fn cast<R>(req: Request) -> std::result::Result<(RequestId, R::Params), ExtractError<Request>>
