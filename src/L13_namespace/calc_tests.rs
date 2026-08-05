@@ -1,7 +1,7 @@
 // ============================================================
 // calc reasoning-chain tests
 //
-// `calc { a = [p1] b ... }` expands to a let chain of Eq-checked steps
+// `calc { a = b by p1 ... }` expands to a let chain of Eq-checked steps
 // composed with trans. Positive cases mirror the hand-written chains in
 // legacy_tests::test_prove_term_pure; negative cases pin the error shape
 // (see docs/calc-reasoning-design.md §3.4).
@@ -37,8 +37,8 @@ fn calc_two_step() {
     let output = assert_ok(r#"
 def zero_add_comm_calc(n: Nat): Eq (0 + n) (n + 0) =
     calc {
-        0 + n = [add_zero_left n] n
-        n = [symm (add_zero_right n)] n + 0
+        0 + n = n by add_zero_left n
+        n = n + 0 by symm (add_zero_right n)
     }
 def r = zero_add_comm_calc 5
 println (match r { case refl(a) => a })
@@ -53,9 +53,9 @@ fn calc_three_step() {
     let output = assert_ok(r#"
 def add_permute_calc(a: Nat, b: Nat, c: Nat): Eq ((a + b) + c) ((a + c) + b) =
     calc {
-        (a + b) + c = [add_assoc a b c] a + (b + c)
-        a + (b + c) = [cong (x => a + x) (add_comm b c)] a + (c + b)
-        a + (c + b) = [symm (add_assoc a c b)] (a + c) + b
+        (a + b) + c = a + (b + c) by add_assoc a b c
+        a + (b + c) = a + (c + b) by cong (x => a + x) (add_comm b c)
+        a + (c + b) = (a + c) + b by symm (add_assoc a c b)
     }
 def r = add_permute_calc 1 2 3
 println (match r { case refl(a) => a })
@@ -77,11 +77,11 @@ def add_left_eq(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (c + a) (c + b) =
     trans(add_comm(c, a), trans(add_right_eq(a, b, c, h), symm(add_comm(c, b))))
 def double_distrib_calc(x: Nat, y: Nat): Eq (double (x + y)) (double(x) + double(y)) =
     calc {
-        double (x + y) = [symm(add_assoc(x + y, x, y))] ((x + y) + x) + y
-        ((x + y) + x) + y = [add_right_eq((x + y) + x, x + (y + x), y, add_assoc(x, y, x))] (x + (y + x)) + y
-        (x + (y + x)) + y = [add_right_eq(x + (y + x), x + (x + y), y, add_left_eq(y + x, x + y, x, add_comm(y, x)))] (x + (x + y)) + y
-        (x + (x + y)) + y = [add_right_eq(x + (x + y), (x + x) + y, y, symm(add_assoc(x, x, y)))] ((x + x) + y) + y
-        ((x + x) + y) + y = [add_assoc(x + x, y, y)] (x + x) + (y + y)
+        double (x + y) = ((x + y) + x) + y by symm(add_assoc(x + y, x, y))
+        ((x + y) + x) + y = (x + (y + x)) + y by add_right_eq((x + y) + x, x + (y + x), y, add_assoc(x, y, x))
+        (x + (y + x)) + y = (x + (x + y)) + y by add_right_eq(x + (y + x), x + (x + y), y, add_left_eq(y + x, x + y, x, add_comm(y, x)))
+        (x + (x + y)) + y = ((x + x) + y) + y by add_right_eq(x + (x + y), (x + x) + y, y, symm(add_assoc(x, x, y)))
+        ((x + x) + y) + y = (x + x) + (y + y) by add_assoc(x + x, y, y)
     }
 def r = double_distrib_calc 3 4
 println (match r { case refl(a) => a })
@@ -94,7 +94,7 @@ println (match r { case refl(a) => a })
 #[test]
 fn calc_single_line() {
     let output = assert_ok(r#"
-def one_line(n: Nat): Eq (0 + n) (n + 0) = calc 0 + n = [add_zero_left n] n = [symm (add_zero_right n)] n + 0
+def one_line(n: Nat): Eq (0 + n) (n + 0) = calc 0 + n = n by add_zero_left n = n + 0 by symm (add_zero_right n)
 def r = one_line 7
 println (match r { case refl(a) => a })
 "#);
@@ -108,8 +108,8 @@ fn calc_in_let() {
     let output = assert_ok(r#"
 def via_let(n: Nat): Nat =
     let h : Eq (0 + n) (n + 0) = calc {
-        0 + n = [add_zero_left n] n
-        n = [symm (add_zero_right n)] n + 0
+        0 + n = n by add_zero_left n
+        n = n + 0 by symm (add_zero_right n)
     };
     n + 1
 def r = via_let 3
@@ -126,9 +126,9 @@ fn calc_three_step_symm_mid() {
     let output = assert_ok(r#"
 def three_symm_mid(n: Nat): Eq ((n + 0) + 0) (0 + n) =
     calc {
-        (n + 0) + 0 = [add_zero_right(n + 0)] n + 0
-        n + 0 = [symm(add_zero_right(n))] n
-        n = [symm(add_zero_left(n))] 0 + n
+        (n + 0) + 0 = n + 0 by add_zero_right(n + 0)
+        n + 0 = n by symm(add_zero_right(n))
+        n = 0 + n by symm(add_zero_left(n))
     }
 def r = three_symm_mid 5
 println (match r { case refl(a) => a })
@@ -144,8 +144,8 @@ fn calc_let_ret() {
     let output = assert_ok(r#"
 def via_let_ret(n: Nat): Eq (0 + n) (n + 0) =
     let ret: Eq (0 + n) (n + 0) = calc {
-        0 + n = [add_zero_left n] n
-        n = [symm (add_zero_right n)] n + 0
+        0 + n = n by add_zero_left n
+        n = n + 0 by symm (add_zero_right n)
     };
     ret
 def r = via_let_ret 5
@@ -163,8 +163,8 @@ fn calc_two_step_def_reduce() {
     let output = assert_ok(r#"
 def two_step_def(n: Nat): Eq ((n + 0) + 0) (n + 0) =
     calc {
-        (n + 0) + 0 = [add_zero_right(n + 0)] n + 0
-        n + 0 = [add_zero_right(n)] n
+        (n + 0) + 0 = n + 0 by add_zero_right(n + 0)
+        n + 0 = n by add_zero_right(n)
     }
 def r = two_step_def 5
 println (match r { case refl(a) => a })
@@ -184,13 +184,15 @@ fn calc_err_broken_chain() {
     assert_err_contains(r#"
 def neg_b: Eq (7 + 0) (0 + 7) =
     calc {
-        7 + 0 = [add_zero_right 7] 7
-        8 = [add_zero_right 8] 8
+        7 + 0 = 7 by add_zero_right 7
+        8 = 8 by add_zero_right 8
     }
 "#, "can't unify");
 }
 
-// ── negative: Lean `:=` syntax is not parseable (documented limitation) ──
+// ── negative: Lean `:=` syntax is still not parseable (documented
+// limitation) — `:=` lexes as an infix Op and is swallowed by the raw
+// fragment, so the macro never matches and `calc` degrades to an identifier.
 
 #[test]
 fn calc_err_lean_syntax() {
@@ -198,6 +200,47 @@ fn calc_err_lean_syntax() {
 def neg_c: Eq (7 + 0) (0 + 7) = calc
     7 + 0 = 7 := add_zero_right 7
     7 = 0 + 7 := symm (add_zero_left 7)
+"#, "calc");
+}
+
+// ── negative: a step missing its `by` proof does not match the macro
+// (the matcher expects `by` after the right-hand term, so the rule fails
+// and `calc` degrades to an ordinary identifier) ──
+
+#[test]
+fn calc_err_missing_by() {
+    assert_err_contains(r#"
+def neg_d: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 = 7
+        7 = 0 + 7
+    }
+"#, "calc");
+}
+
+// ── negative: `by` with no proof after it does not match the macro ──
+
+#[test]
+fn calc_err_by_no_proof() {
+    assert_err_contains(r#"
+def neg_e: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 = 7 by
+        7 = 0 + 7
+    }
+"#, "calc");
+}
+
+// ── negative: `by` before the `=` is not the calc step shape ──
+
+#[test]
+fn calc_err_by_wrong_position() {
+    assert_err_contains(r#"
+def neg_f: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 by add_zero_right 7 = 7
+        7 = 0 + 7
+    }
 "#, "calc");
 }
 
@@ -210,9 +253,9 @@ fn calc_err_broken_chain_span() {
     let input = r#"
 def broken(n: Nat): Eq (0 + n) (n + 0) =
     calc {
-        0 + n = [add_zero_left n] n
-        n = [symm (add_zero_right n)] n + 0
-        n + 0 = [add_zero_left n] n
+        0 + n = n by add_zero_left n
+        n = n + 0 by symm (add_zero_right n)
+        n + 0 = n by add_zero_left n
     }
 "#;
     match run_with_prelude(input) {

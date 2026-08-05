@@ -3,14 +3,14 @@
 //
 //   def foo: Eq a d =
 //       calc {
-//           a = [p1] b
-//           b = [p2] c
-//           c = [p3] d
+//           a = b by p1
+//           b = c by p2
+//           c = d by p3
 //       }
 //
-// Each step is `<term> = [ <proof> ] <term>`; steps are newline-separated
+// Each step is `<term> = <term> by <proof>`; steps are newline-separated
 // (the macro system cannot match `;`). A single-line chain
-// `calc a = [p1] b = [p2] c` is also accepted.
+// `calc a = b by p1 = c by p2` is also accepted.
 //
 // Expansion is a let chain instead of nested `trans` (repetition
 // transcription is flat, so nested parentheses cannot be generated):
@@ -28,26 +28,29 @@
 // close, so per-step annotations would need to name the left end —
 // impossible since the macro has no name for the previous step's result.
 //
-// Design notes: see docs/calc-reasoning-design.md. `a = b := p1` (Lean
-// syntax) is NOT parseable — `:=` is an infix operator, so the raw
-// fragment would swallow it; use `[p1]` instead.
+// Design notes: see docs/calc-reasoning-design.md. The `by` keyword is a
+// dedicated token (TokenKind::ByKeyword): it is not an Op and not an Ident,
+// so the expression parser never consumes it, and the `$y: raw` fragment
+// stops cleanly right before it. This is what makes the
+// `a = b by p1` shape parseable — a Lean-style `:=` would be lexed as an
+// infix Op and swallowed by the raw fragment (see docs §4.2).
 // ============================================================
 
 #[macro_export]
 macro_rules calc {
-    // Braced multi-line form: calc { a = [p1] b ... } (steps newline-separated)
+    // Braced multi-line form: calc { a = b by p1 ... } (steps newline-separated)
     // Each repetition unit starts with the next step's LEFT term, so a
     // newline (skipped by the repetition separator) is followed by an ident
     // and matches; a unit starting with `=` would fail after any newline.
     // The matcher opens with `{` (not `( {`) because the call site is
     // `calc {` — a leading LParen would never match.
-    ( { $( $x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )* )+ } ) => {
+    ( { $( $x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )* )+ } ) => {
         let _c : Eq ($x) ($y) = ($p);
         $( let _c = trans (_c) ($q); )*
         _c
     };
-    // Single-line form: calc a = [p1] b = [p2] c
-    ($x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )*) => {
+    // Single-line form: calc a = b by p1 = c by p2
+    ($x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )*) => {
         let _c : Eq ($x) ($y) = ($p);
         $( let _c = trans (_c) ($q); )*
         _c

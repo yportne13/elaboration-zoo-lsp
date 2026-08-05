@@ -22,6 +22,7 @@ pub enum TokenKind {
     PackageKeyword,
     ImportKeyword,
     ClassKeyword,
+    ByKeyword,
 
     Hole,
     LParen,
@@ -76,6 +77,7 @@ impl fmt::Display for TokenKind {
             TokenKind::PackageKeyword => write!(f, "`package`"),
             TokenKind::ImportKeyword  => write!(f, "`import`"),
             TokenKind::ClassKeyword   => write!(f, "`class`"),
+            TokenKind::ByKeyword      => write!(f, "`by`"),
             TokenKind::Hole           => write!(f, "`_`"),
             TokenKind::LParen         => write!(f, "`(`"),
             TokenKind::RParen         => write!(f, "`)`"),
@@ -107,7 +109,7 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 19] = [
+const KEYWORD: [(&str, TokenKind); 20] = [
     ("package", PackageKeyword),
     ("import", ImportKeyword),
     ("def", DefKeyword),
@@ -127,6 +129,7 @@ const KEYWORD: [(&str, TokenKind); 19] = [
     ("macro_rules", MacroKeyword),
     ("where", WhereKeyword),
     ("class", ClassKeyword),
+    ("by", ByKeyword),
 ];
 
 const OP: [(&str, TokenKind); 15] = [

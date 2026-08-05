@@ -1663,7 +1663,8 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         }))
         .or(string(LetKeyword).map(|span| MacroMatcher::Token(LetKeyword, span)))
         .or(string(Eq).map(|span| MacroMatcher::Token(Eq, span)))
-        .or(string(Dot).map(|span| MacroMatcher::Token(Dot, span)));
+        .or(string(Dot).map(|span| MacroMatcher::Token(Dot, span)))
+        .or(string(ByKeyword).map(|span| MacroMatcher::Token(ByKeyword, span)));
     
     metavar_parser
         .or(group_parser)

@@ -4,26 +4,34 @@
 > 把一串等号步骤组合成单个 `Eq a d` 的证明（用 `trans` 组合）。
 > 本文档是**第一阶段（纯设计）**的产出：只做语法与实现路线决策，不涉及代码改动。
 
-**当前状态（2026-08）**：设计已定，等待用户确认后进入实现阶段（phase 2）。
+**当前状态（2026-08）**：设计已定并实现。2026-08 的 `by` 语法迁移（task/calc-by-syntax）
+把每步从 `a = [p] b` 改为 Lean 风格的 `a = b by p`（详见 §9.5）。
 
 ---
 
 ## 0. 结论摘要
 
-- **实现方式**：宏方案（只加一个 prelude 文件 + 三处 prelude 列表登记；parser 有两处
+- **实现方式**：宏方案（一个 prelude 文件 + 三处 prelude 列表登记；parser 有两处
   小的兼容性改动，见 §9.3 —— 原设计“零 parser 改动”未兑现，但改动是通用的，
-  对 when/switch 等既有宏无回归）。
-- **语法形态**（受宏系统约束，Lean 的 `a = b := p` 目前**不可行**，原因见 §4.2）：
+  对 when/switch 等既有宏无回归）。`by` 语法迁移额外加了词法器一个关键字
+  （§9.5）。
+- **语法形态**（v2，`by` 关键字版）：
   ```typort
   def foo: Eq a d =
       calc {
-          a = [p1] b
-          b = [p2] c
-          c = [p3] d
+          a = b by p1
+          b = c by p2
+          c = d by p3
       }
   ```
-  每步是 `term = [ proof ] term`：`=` 分隔等式两端，`[ proof ]` 是证明（Agda
-  `⟨ p ⟩` 的 ASCII 版）。步骤以换行分隔；单行链 `calc a = [p1] b = [p2] c` 也可用。
+  每步是 `term = term by proof`：`=` 分隔等式两端，`by` 引导证明（Lean
+  `a = b := p` 的 Typort 版）。步骤以换行分隔；单行链 `calc a = b by p1 = c by p2`
+  也可用。
+  - **为什么 `by` 可行而 `:=` 不可行**：`by` 是新建的专用关键字 token
+    （`TokenKind::ByKeyword`），既不是 Op 也不是 Ident —— 表达式解析器
+    （`expr_bp` 只消费 Op/LParen/LSquare/Dot，`p_atom1` 只消费 Ident/数字/字符串/
+    括号）**永远不会消费它**，所以 `$y: raw` 片段在 `by` 前干净停止。
+    `:=` 则被 lex 成中缀 Op，`$y: raw` 会把 `b := (p1)` 整体吞掉（详见 §4.2）。
 - **转写目标**：展开为带类型注解的 let 链（见 §4.1），比直接嵌套 `trans` 更能
   检查用户写出的中间项，且不依赖宏系统的重复转写能力生成嵌套括号。
 - **目标类型**：不需要显式声明，链的结果类型 `Eq (首项) (末项)` 由证明自动综合；
@@ -39,7 +47,8 @@
 | Eq 与证明函数 | `src/prelude/core/eq.typort` | `rfl` / `cong` / `symm` / `trans` / `subst`；`def trans[A, x, y, z: A](e1: Eq x y, e2: Eq y z): Eq x z` |
 | Nat 算术引理 | `src/prelude/core/nat.typort` | `add_assoc` / `add_comm` / `add_zero_left` 等，全部以 `Eq` 为结论 |
 | 现有链式证明 | `examples/theorem_proving.typort` | `trans(trans(lhs, mid), rhs)`、`let step1: Eq ... = ...; trans(step1, step2)` 手工链 |
-| 宏系统 | `src/L13_namespace/parser/macros.rs` + `parser/mod.rs` | matcher 字面 token 仅限 Ident/Op/Num/`[]{}`/`let`/`=`/`.`；片段仅 `ident`/`raw`/`params`；重复 `$(...)*`/`$(...)+`；转写器按 token 原样输出 |
+| 宏系统 | `src/L13_namespace/parser/macros.rs` + `parser/mod.rs` | matcher 字面 token 支持 Ident/Op/Num/`[]{}`/`let`/`=`/`.`/**`by`（ByKeyword）**；片段仅 `ident`/`raw`/`params`；重复 `$(...)*`/`$(...)+`；转写器按 token 原样输出 |
+| 词法器 | `src/L13_namespace/parser/lex.rs` | `by` 是保留字（`TokenKind::ByKeyword`，KEYWORD 表），不是 Op、不是 Ident |
 | 宏范本 | `src/prelude/hdl/hdl-macros.typort` | `when`/`Expr`/`module` 宏：raw 片段 + `$(...)` 重复 + 换行分隔 |
 | 中缀运算符 | `src/prelude/core/op.typort` + `parser/mod.rs::expr_bp` | `a + b` 是方法调用 `a.+(b)`；绑定力表见 §4.2 |
 | 测试入口 | `src/L13_namespace/mod.rs::run_with_prelude`、`legacy_tests.rs::test_prove_term_pure` | prelude 文件按数组顺序加载、宏跨文件经 `#[macro_export]` 累积；测试 = `run_with_prelude(源码)` 后断言 println 输出 |
@@ -52,8 +61,8 @@
 
 ```typort
 calc {
-    <term> = [ <proof> ] <term>
-    <term> = [ <proof> ] <term>
+    <term> = <term> by <proof>
+    <term> = <term> by <proof>
     ...
 }
 ```
@@ -61,17 +70,23 @@ calc {
 - `calc`：宏名（普通 Ident，不是关键字，无 lexer 冲突）。
 - `{` … `}`：链的定界（LCurly/RCurly 是匹配器可用的字面 token），
   使 `calc` 后换行、`}` 前换行都允许（外层 `$(...)+` 的 Many1 会跳过前导 EndLine）。
-- 每一步：`<term> = [ <proof> ] <term>`：
+- 每一步：`<term> = <term> by <proof>`：
   - `<term>`：`raw` 片段（任意表达式，可含括号/运算符/隐式参数 `f[x = 1]`）；
   - `=`：字面 `Eq` token（lexer 将 `=` 固定映射为 `Eq`，且 `=` **不是**表达式
-    中缀运算符，所以 raw 片段在 `=` 处必然干净停止 —— 这是本语法可行的关键）；
-  - `[` … `]`：字面 LSquare/RSquare，中间是 `raw` 证明片段（`]` 不是表达式
-    后缀 token，raw 片段在 `]` 处停止）；
+    中缀运算符，所以 raw 片段在 `=` 处必然干净停止）；
+  - `by`：字面 **ByKeyword** token（专用关键字）。`by` 既不是 Op 也不是 Ident，
+    `expr_bp` 的中缀/后缀循环（只消费 Op/LParen/LSquare/Dot）与 `p_atom1`
+    （Ident/数字/字符串/括号/洞）都不消费它 —— 所以 `$y: raw` 在 `by` 前
+    干净停止，`$p: raw`（本步最后片段）停在换行（多行形式）或下一个 `=`
+    （单行形式）。**这是 `a = b by p` 语法可行的关键**；
   - 步骤之间用换行分隔（重复匹配器 `Many0`/`Many1` 的 EndLine 分隔机制）。
 - 单行链（第二条宏规则，无需大括号，首项必须与 `calc` 同行）：
   ```typort
-  calc a = [p1] b = [p2] c = [p3] d
+  calc a = b by p1 = c by p2 = d by p3
   ```
+- 历史：v1（task/calc-reasoning）用过 `a = [proof] b`（证明夹在两式之间），
+  v2（task/calc-by-syntax）改为 `by` 引导的 Lean 风格，`[ ... ]` 写法**已移除**、
+  无兼容 arm（§9.5）。
 
 ### 2.2 目标类型：不需要显式声明
 
@@ -95,13 +110,13 @@ calc {
 ### 2.4 步骤间的 let / 中间引理
 
 - 单个证明片段本身可以是任意表达式，包括 let 表达式：
-  `a = [let h = foo n m; trans h (bar n)] b` —— 中间引理写在证明片段里即可。
+  `a = b by let h = foo n m; trans h (bar n)` —— 中间引理写在证明片段里即可。
 - `calc` 本身是普通表达式，可出现在 let 值、match 分支、函数实参、`(calc ...)` 内
   的任何表达式位置（宏在 `p_raw` 起始处展开）。
 - 步骤之间**不能**插入独立 let 语句（宏匹配是连续的）；需要的话把引理放进
   某一步的证明片段，或在 calc 外用 `let` 先绑好。
 - 步骤分隔**必须是换行**：`;`（Semi）不是匹配器可用的字面 token，
-  `calc { a = [p] b; b = [q] c }` 不可行。
+  `calc { a = b by p; b = c by q }` 不可行。
 
 ---
 
@@ -112,8 +127,8 @@ calc {
 ```typort
 def zero_add_comm_calc(n: Nat): Eq (0 + n) (n + 0) =
     calc {
-        0 + n = [add_zero_left n] n
-        n = [symm (add_zero_right n)] n + 0
+        0 + n = n by add_zero_left n
+        n = n + 0 by symm (add_zero_right n)
     }
 ```
 
@@ -124,9 +139,9 @@ def zero_add_comm_calc(n: Nat): Eq (0 + n) (n + 0) =
 ```typort
 def add_permute_calc(a: Nat, b: Nat, c: Nat): Eq ((a + b) + c) ((a + c) + b) =
     calc {
-        (a + b) + c = [add_assoc a b c] a + (b + c)
-        a + (b + c) = [cong (x => a + x) (add_comm b c)] a + (c + b)
-        a + (c + b) = [symm (add_assoc a c b)] (a + c) + b
+        (a + b) + c = a + (b + c) by add_assoc a b c
+        a + (b + c) = a + (c + b) by cong (x => a + x) (add_comm b c)
+        a + (c + b) = (a + c) + b by symm (add_assoc a c b)
     }
 ```
 
@@ -137,11 +152,11 @@ def add_permute_calc(a: Nat, b: Nat, c: Nat): Eq ((a + b) + c) ((a + c) + b) =
 ```typort
 def double_distrib_calc(x: Nat, y: Nat): Eq (double (x + y)) (double x + double y) =
     calc {
-        double (x + y) = [symm (add_assoc (x + y) x y)] ((x + y) + x) + y
-        ((x + y) + x) + y = [add_right_eq ((x + y) + x) (x + (y + x)) y (add_assoc x y x)] (x + (y + x)) + y
-        (x + (y + x)) + y = [add_right_eq (x + (y + x)) (x + (x + y)) y (add_left_eq (y + x) (x + y) x (add_comm y x))] (x + (x + y)) + y
-        (x + (x + y)) + y = [add_right_eq (x + (x + y)) ((x + x) + y) y (symm (add_assoc x x y))] (x + x) + y
-        (x + x) + y = [add_assoc (x + x) y y] (x + x) + y
+        double (x + y) = ((x + y) + x) + y by symm (add_assoc (x + y) x y)
+        ((x + y) + x) + y = (x + (y + x)) + y by add_right_eq ((x + y) + x) (x + (y + x)) y (add_assoc x y x)
+        (x + (y + x)) + y = (x + (x + y)) + y by add_right_eq (x + (y + x)) (x + (x + y)) y (add_left_eq (y + x) (x + y) x (add_comm y x))
+        (x + (x + y)) + y = ((x + x) + y) + y by add_right_eq (x + (x + y)) ((x + x) + y) y (symm (add_assoc x x y))
+        ((x + x) + y) + y = (x + x) + (y + y) by add_assoc (x + x) y y
     }
 ```
 
@@ -156,8 +171,8 @@ def double_distrib_calc(x: Nat, y: Nat): Eq (double (x + y)) (double x + double 
 ```typort
 def neg_a: Eq (7 + 0) (0 + 7) =
     calc {
-        7 + 0 = [add_zero_right 7] 7
-        7 = [add_zero_right 7] 0 + 7        // add_zero_right 7 : Eq (7+0) 7，不是 Eq 7 (0+7)
+        7 + 0 = 7 by add_zero_right 7
+        7 = 0 + 7 by add_zero_right 7        // add_zero_right 7 : Eq (7+0) 7，不是 Eq 7 (0+7)
     }
 ```
 
@@ -178,8 +193,8 @@ can't unify
 ```typort
 def neg_b: Eq (7 + 0) (0 + 7) =
     calc {
-        7 + 0 = [add_zero_right 7] 7
-        5 = [symm (add_zero_left 7)] 0 + 7   // 上一行右端是 7，这一行写的是 5
+        7 + 0 = 7 by add_zero_right 7
+        5 = 0 + 7 by symm (add_zero_left 7)   // 上一行右端是 7，这一行左端写的是 5
     }
 ```
 
@@ -197,7 +212,23 @@ can't unify
 > 已放弃（洞注解留未解 meta，见 §9.2.1），因此写出的中间项越出证明真实类型时
 > 由 trans 兜底；若写出项与证明真实类型一致但词形不同（定义等价），检查通过。
 
-**负例 C —— 误用 Lean 的 `:=` 语法**：
+**负例 C —— 缺 `by` 或 `by` 放错位置**（宏整体不匹配，`calc` 退化为普通标识符）：
+
+```typort
+def neg_d: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 = 7            // 缺 `by 证明`
+        7 = 0 + 7
+    }
+```
+
+匹配器在字面 `by`（ByKeyword）处找不到 token → 规则失败 → 两条规则都失败 →
+`calc` 退化为标识符。预期：解析期 `expected EndLine` 类错误 + 精化期
+“name not in scope: calc”类错误（`calc_tests.rs` 的负例断言此形态）。
+`by` 后没有证明（`7 + 0 = 7 by` + 换行）、`by` 出现在 `=` 之前
+（`7 + 0 by p = 7`）同理。
+
+**负例 D —— 误用 Lean 的 `:=` 语法**：
 
 ```typort
 def neg_c: Eq (7 + 0) (0 + 7) = calc
@@ -207,7 +238,7 @@ def neg_c: Eq (7 + 0) (0 + 7) = calc
 
 宏匹配失败（`:=` 是 raw 片段会吞掉的中缀 token，见 §4.2），`calc` 退化为普通标识符。
 预期：解析期 `expected EndLine` 类错误 + 精化期“未知名称 calc”类错误。这是已知限制，
-文档与错误提示中应引导用户使用 `[ ... ]` 写法。
+文档与错误提示中应引导用户使用 `by` 写法。
 
 ---
 
@@ -215,19 +246,19 @@ def neg_c: Eq (7 + 0) (0 + 7) = calc
 
 ### 4.1 宏方案（推荐）：匹配器与转写
 
-**宏定义**（放在新文件 `src/prelude/core/calc.typort`，或并入 `eq.typort`）：
+**宏定义**（`src/prelude/core/calc.typort`）：
 
 ```typort
 #[macro_export]
 macro_rules calc {
     // 推荐主形式：{ ... } 块内换行分隔的链（首项可换行到 `{` 之后）
-    ( { $( $x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )* )+ } ) => {
+    ( { $( $x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )* )+ } ) => {
         let _c : Eq ($x) ($y) = ($p);
         $( let _c = trans (_c) ($q); )*
         _c
     };
-    // 单行形式：calc a = [p1] b = [p2] c（首项必须与 calc 同行）
-    ($x: raw = [ $p: raw ] $y: raw $( $x2: raw = [ $q: raw ] $z: raw )*) => {
+    // 单行形式：calc a = b by p1 = c by p2（首项必须与 calc 同行）
+    ($x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )*) => {
         let _c : Eq ($x) ($y) = ($p);
         $( let _c = trans (_c) ($q); )*
         _c
@@ -237,19 +268,22 @@ macro_rules calc {
 
 **匹配器要点**（为什么这个形状能工作）：
 
-- 字面 token 全部落在 matcher 支持集内：`=`（`Eq`）、`[`（LSquare）、`]`（RSquare）、
-  `{`/`}`（LCurly/RCurly）、`calc` 名称本身。
+- 字面 token 全部落在 matcher 支持集内：`=`（`Eq`）、`by`（ByKeyword，
+  `p_macro_matcher_single` 显式支持）、`{`/`}`（LCurly/RCurly）、`calc` 名称本身。
 - `raw` 片段 + 跟随 token 的安全性：
   - `$x:raw` 后面是 `=`（Eq token）—— `expr_bp` 的中缀循环只读 Op/LParen/LSquare/Dot，
     `=` 不在其中 → raw 在 `=` 处停止（**安全**）；
-  - `$p:raw` 后面是 `]`（RSquare）—— RSquare 不在上述循环集合 → 停止（**安全**）；
-  - `$y:raw` 后面是换行或 `=` → 停止（**安全**）。
+  - `$y:raw` 后面是 `by`（ByKeyword）—— 不在上述循环集合、也不是 atom →
+    停止（**安全**）；
+  - `$p:raw` 后面是换行（多行形式）或 `=`（单行形式）→ 停止（**安全**）。
 - 证明片段内部的 `[ ... ]`（隐式参数应用 `f [x = 1]`）会被 p_raw 作为表达式一部分
-  消费，不与 calc 的定界 `]` 冲突。
+  消费，不与任何 calc 定界冲突。
 - 换行分隔：外层 `$(...)+`（Many1）与内层 `$(...)*`（Many0）都先跳过前导 EndLine、
   用 `EndLine.option()` 分隔迭代 —— 与 `hdl-macros.typort` 的 `when`/`module` 宏同款机制。
-- 步数：`$( = [ $q:raw ] $z:raw )*` 捕获第 2..n 步（`$q`/`$z` 长度 n-1），
-  第 1 步由 `$x`/`$p`/`$y` 捕获（长度 1，转写中可整体复用）。
+- 步数：`$( $x2 = $z by $q )*` 捕获第 2..n 步（`$q`/`$z` 长度 n-1），
+  第 1 步由 `$x`/`$y`/`$p` 捕获（长度 1，转写中可整体复用）。
+- 每条重复单元以下一步的**左端**（`$x2: raw`）开头：换行（被重复分隔器跳过）后
+  跟的是 ident，可以匹配；若以 `=` 开头则换行后必然失败。
 - 两条规则的顺序无关紧要：花括号形式对无 `{` 输入、单行形式对 `{` 开头输入，
   都在第一个 raw 片段处干净失败（p_raw 无法以 `{` 起始），不会误匹配也不会产生
   伪错误（失败路径上的解析器在关键字检查处就退回，不经过 Cut 的错误注入）。
@@ -274,7 +308,7 @@ macro_rules calc {
   （phase 2 第一步仍需用真实测试验证，见 §8。已实测通过。）
 - 所有 metavar 在应用位置都加括号：`Eq ($x) ($y)`、`($p)`、`($q)` —— 防止
   片段内运算符与外围语法串读（如 `Eq (a+b) * c ...` 会把 `*` 读成中缀）。
-- 空链（零步）不可表示（内层 `*` 虽允许零次，但第 1 步是必须的 `$x = [$p] $y`）。
+- 空链（零步）不可表示（内层 `*` 虽允许零次，但第 1 步是必须的 `$x = $y by $p`）。
 - 多实参证明的实参要用逗号形式（§9.2.3）。
 
 **展开形态示例**（§3.2 的 add_permute_calc，缩写证明为 p1/p2/p3）：
@@ -288,32 +322,39 @@ _c
 
 （let 链由 `p_let` 的 `let x = e; body` 递归解析，`;` 在转写输出中是普通 token。）
 
-### 4.2 为什么 Lean 的 `a = b := p1` 形式不可行（token 结构分析）
+### 4.2 为什么 Lean 的 `a = b := p1` 不可行、而 `a = b by p1` 可行（token 结构分析）
 
-任务里问的 `x = y := p` 的 token 结构，逐 token 分析如下：
+任务里问的 `x = y by p` / `x = y := p` 的 token 结构，逐 token 分析如下：
 
 | token | lexer 归类 | 说明 |
 |---|---|---|
 | `x` | Ident | `$x:raw`，p_raw 在 `=` 处停止 |
 | `=` | **Eq** | 不是 Op → 不是表达式运算符 → raw 片段干净停止；matcher 可字面匹配 `=`（`string(Eq)`） |
-| `y` | Ident | `$y:raw` |
+| `y` | Ident | `$y:raw`，在 `by`（或 `:=`）处停止 |
+| `by` | **ByKeyword**（新建保留字） | 不是 Op、不是 Ident —— `expr_bp` 的中缀/后缀循环（Op/LParen/LSquare/Dot）与 `p_atom1`（Ident/数字/字符串/括号/洞）都不消费它 → `$y:raw` 干净停止；matcher 可字面匹配 `by`（`string(ByKeyword)`，`p_macro_matcher_single` 显式加了此分支） |
 | `:=` | **Op**（单 token） | `:` 与 `=` 都在操作符字符范围（`':'..='@'`），且 `:=` 不在 OP 关键字表 → 整个 lex 为一个 Op token |
-| `p1` | … | `$p:raw` |
+| `p1` | Ident | `$p:raw`，多行形式停在 EndLine、单行形式停在下一个 `=`（Eq 不是表达式延续） |
 
-致命点：**所有** Op token 在 `expr_bp` 里都是中缀运算符 —— `infix_binding_power`
-的兜底是 `Some((7,8))`，`:=` 因 `contains(':')` 得到 `(2,1)`。因此 `$y:raw` 解析
-`b := p1` 时会**贪心吞掉整个** `b := (p1)`（中缀应用），随后匹配器在字面 `:=` 处
-必然失败 → `calc` 宏整体不匹配。
+**`:=` 失败的原因**：**所有** Op token 在 `expr_bp` 里都是中缀运算符 ——
+`infix_binding_power` 的兜底是 `Some((7,8))`，`:=` 因 `contains(':')` 得到 `(2,1)`。
+因此 `$y:raw` 解析 `b := p1` 时会**贪心吞掉整个** `b := (p1)`（中缀应用），随后
+匹配器在字面 `:=` 处必然失败 → `calc` 宏整体不匹配。
 
 把 `:=` 从 `infix_binding_power` 里排除（让 raw 在 `:=` 处停止）需要改 parser，
 且会破坏 HDL：`examples/alu.typort` 的模块体 `result := a + b`、`hdl_ops.typort` 的
 `bit0 := a.apply[0]` 等**依赖 `:=` 中缀解析**（在 module 宏的 raw 兜底规则里被整体
-消费），移除后需要同步迁移 HDL 语法。因此第一版不做。
+消费），移除后需要同步迁移 HDL 语法。
+
+**`by` 可行的原因**：与其动 `:=`（会破坏 HDL），不如新建一个**专用关键字 token**
+`by`。关键字在词法层就不是 Op —— 表达式解析器对它没有任何消费路径，raw 片段
+必然在它前面停止；同时 `by` 作为保留字，`p_macro_matcher_single` 只需补一行
+`string(ByKeyword)` 就能在匹配器里字面匹配。代价是 `by` 成为全局保留字
+（全仓库 typort 代码无此标识符用法，安全）。这就是用户提出“新建一个 token”的
+依据，也是 v2 把 Lean 的 `a = b := p` 需求落实为 `a = b by p` 的方式。
 
 顺带说明其它不可行分隔符：`;`（Semi）、`:`（Colon）、`(`/`)` 都不是 matcher
-可用的字面 token（`p_macro_matcher_single` 的 token_parser 只有
-Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配。
-`[ proof ]` 是唯一同时满足“可字面匹配 + raw 片段不吞它 + 不破坏现有语法”的分隔。
+可用的字面 token；`=>` 是 DoubleArrow 同理不可匹配。`by` 关键字是
+“可字面匹配 + raw 片段不吞它 + 不破坏现有语法”的组合解。
 
 ### 4.3 中缀运算符方案（`a =⟨ p1 ⟩ b`）评估：不可行于当前 parser
 
@@ -326,8 +367,8 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
   `((a =< p1) > (b =< p2)) > c` 的错误分组，必须做绑定力工程（`=<` 高绑定、
   `>` 低于 `=<` 的右绑定……）—— 结论是“语法脆弱 + 双份修改”，不推荐。
 
-**结论**：v1 用宏方案；若后续 UX 强烈要求 Lean 式 `:=`，可行路线是
-“parser 排除 `:=` 中缀 + HDL 迁移到新写法”，作为独立任务，不阻塞 v1。
+**结论**：v1 用宏方案 + `[p]` 分隔；v2 用 `by` 关键字把 UX 提到 Lean 水准，
+`[p]` 旧写法移除、无兼容 arm。
 
 ---
 
@@ -335,14 +376,15 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
 
 | 方案 | 改动范围 | 语法 | 判定 |
 |---|---|---|---|
-| **A. 纯宏（推荐）** | 仅 prelude（新文件或 eq.typort 追加）+ mod.rs prelude 数组一行 | `calc { a = [p1] b ... }` | v1 采用。零解析器风险，错误定位靠 let 链的 span，检查充分 |
-| B. 宏 + parser 排除 `:=` 中缀 | parser 一行 + HDL 迁移 + prelude | `calc a = b := p1`（Lean 原味） | 备选/后续。UX 最好，但动 parser 且要迁移 `a := b` 语法 |
-| C. 中缀链（Agda 式） | lexer + parser 双改 | `a =⟨ p1 ⟩ b` | 不推荐 v1。脆弱、改动大 |
+| **A. 纯宏（推荐）** | prelude（calc.typort）+ mod.rs prelude 数组一行 + lexer 一个关键字（v2） | `calc { a = b by p1 ... }` | v1 采用；v2 升级为 `by` 语法。错误定位靠 let 链的 span，检查充分 |
+| B. 宏 + parser 排除 `:=` 中缀 | parser 一行 + HDL 迁移 + prelude | `calc a = b := p1`（Lean 原味） | 已被 v2 的 `by` 关键字取代（§4.2）：`by` 达到同等 UX 且不破坏 HDL |
+| C. 中缀链（Agda 式） | lexer + parser 双改 | `a =⟨ p1 ⟩ b` | 不推荐。脆弱、改动大 |
 | D. 泛化关系宏（typeclass） | prelude + 可能 typeclass 机制 | `calc Eq { ... }` | v2 候选，见 §6 |
 
-推荐 A 的理由：需求全部落在现有宏系统能力内（raw 片段、字面 token `=`/`[]`/`{}`、
-换行重复、let 链转写、let 遮蔽），不需要碰 lexer/parser，回归风险最小；
-语法与 Typort 现有块风格（match/when 的 `{}` + 换行）一致。
+推荐 A 的理由：需求全部落在现有宏系统能力内（raw 片段、字面 token `=`/`by`/`{}`、
+换行重复、let 链转写、let 遮蔽），lexer 只加一个保留字，parser 只加一个字面 token
+分支，回归风险最小；语法与 Lean 的 `calc` 对齐，与 Typort 现有块风格
+（match/when 的 `{}` + 换行）一致。
 
 ---
 
@@ -363,11 +405,12 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
 
 ## 7. 负例之外的已知限制（文档化）
 
-1. `a = b := p1`（Lean 原味）不解析，见 §4.2 —— 文档/错误提示引导用 `[p1]`。
+1. `a = b := p1`（Lean 原味 `:=`）不解析，见 §4.2 —— 用 `a = b by p1` 代替。
 2. 中间步骤的**左端**写出项不单独核对（只核对右端 + trans 统一），见 §3.4 说明。
 3. 步骤必须换行分隔，`;` 分隔不可行（matcher 无法匹配 `;`）。
-4. 单步链 `calc { a = [p] b }` 合法（重复部分为零次），结果就是 `p` 的带注解拷贝。
-5. `calc` 成为宏名后，用户无法再定义同名变量/函数（宏在 p_raw 入口优先于标识符）。
+4. 单步链 `calc { a = b by p }` 合法（重复部分为零次），结果就是 `p` 的带注解拷贝。
+5. `calc` 成为宏名后，用户无法再定义同名变量/函数（宏在 p_raw 入口优先于标识符）；
+   `by` 成为保留字后同理无法用作标识符（全仓库无此用法，v2 迁移时已确认）。
 6. 链的首项类型必须可推断（如 `Eq (_) (_)` 全是洞时结果也是洞，与手写 trans 一致）。
 
 ---
@@ -388,9 +431,9 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
 
 ---
 
-## 9. 实施记录（已完成，task/calc-reasoning）
+## 9. 实施记录（已完成）
 
-### 9.1 实现结果
+### 9.1 实现结果（v1，task/calc-reasoning）
 
 - `src/prelude/core/calc.typort`：`#[macro_export] macro_rules calc`，两条规则
   （花括号多行形式 + 单行形式），转写为 let 链（首步带注解，后续 `trans (_c) (q)`）。
@@ -442,6 +485,35 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
 - 负例 B 的报错形态与设计稿略有出入：链断裂时是 `trans` 的 `can't unify`
   （expected/find 为两个 Eq 类型），不是设计稿中标注的 `Eq 7 _` 形态。
 
+### 9.5 `by` 关键字语法迁移（v2，task/calc-by-syntax）
+
+把每步语法从 `a = [p] b` 改为 Lean 风格 `a = b by p`，`[p]` 旧写法完全移除、
+无兼容 arm：
+
+- **词法**（`src/L13_namespace/parser/lex.rs`）：
+  - `TokenKind` 枚举新增 `ByKeyword`（在 `ClassKeyword` 之后）；
+  - `Display` 实现新增 `TokenKind::ByKeyword => "`by`"`（`Expect(ByKeyword)` 报错可读）；
+  - `KEYWORD` 表新增 `("by", ByKeyword)`（数组长度 19 → 20），`by` 成为全局保留字。
+- **宏匹配器**（`src/L13_namespace/parser/mod.rs` `p_macro_matcher_single`）：
+  token_parser 新增 `string(ByKeyword)` → `MacroMatcher::Token(ByKeyword, span)`。
+  `by` 在宏定义里 lex 成 ByKeyword，因此不会误走 `string(Ident)` 分支。
+- **宏定义**（`src/prelude/core/calc.typort`）：两条规则的 matcher 改为
+  `$x: raw = $y: raw by $p: raw`（重复单元 `$x2: raw = $z: raw by $q: raw`），
+  转写体不变（`let _c : Eq ($x) ($y) = ($p);` + 每步 `trans (_c) ($q)`）。
+  停止行为：`$y` 停在 `by`（ByKeyword 非表达式 token）、`$p` 停在 EndLine
+  （多行）或 `=`（单行，Eq 非表达式延续）。
+- **测试**（`src/L13_namespace/calc_tests.rs`）：全部正例改为新语法；新增三个负例
+  —— 缺 `by`（断言退化 `calc` 标识符报错）、`by` 后无证明、`by` 位置错误；
+  `:=` 负例保留（仍不可解析）。L13 全量：275 passed，0 failed（基线 272 →
+  275，+3 个新负例）。
+- **示例**（`examples/adder_proof.typort`）：46 处 calc 步骤全部改写，经
+  `run_with_prelude` 实测通过。
+- **文档/高亮**：本文档全部示例与 §4.2 分析更新；vscode 语法高亮
+  （`vscode_extension/syntaxes/typort.tmLanguage.json`）关键字正则加入 `by`。
+- **影响面确认**：全仓库 typort 代码无 `by` 标识符用法（仅注释），保留字安全；
+  `calc` 本身仍是宏名（普通 Ident），`tests/trait_system_tests.typort` 的
+  `def calc = ...` 不受影响。
+
 ---
 
 ## 附：与 Lean/Agda 的对照
@@ -450,7 +522,7 @@ Ident/Op/Num/`[]{}`/`let`/`=`/`.`）；`=>` 是 DoubleArrow 同理不可匹配�
 |---|---|---|---|
 | Lean4 | `calc a = b := p1; b = c := p2` | 每步两端都核对 | 解析器内建（句法块 → trans 应用） |
 | Agda | `a ≡⟨ p1 ⟩ b ≡⟨ p2 ⟩ c` | 每步两端都核对 | 库内运算符（`_≡⟨_⟩_` step + 右结合） |
-| Typort（本设计） | `calc { a = [p1] b b = [p2] c }` | 首步两端 + 后续步右端（左端经 trans 间接核对） | 库内宏（let 链转写） |
+| Typort（本设计） | `calc { a = b by p1 b = c by p2 }` | 首步两端 + 后续步右端（左端经 trans 间接核对） | 库内宏（let 链转写）+ `by` 关键字 |
 
 Typort 的宏系统是纯 token 级的（无类型信息、无自引用重复），因此做不到
 Lean/Agda 那种“每步两端全核对”，但核对覆盖面足以捕获绝大多数书写错误；
