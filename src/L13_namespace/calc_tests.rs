@@ -118,6 +118,60 @@ println r
     assert!(output.trim() == "4", "expected 4, got: {}", output);
 }
 
+// ── positive: three-step chain with a `symm` proof in the middle step ──
+// (mirrors the symm-in-the-middle shapes in adder_proof.typort)
+
+#[test]
+fn calc_three_step_symm_mid() {
+    let output = assert_ok(r#"
+def three_symm_mid(n: Nat): Eq ((n + 0) + 0) (0 + n) =
+    calc {
+        (n + 0) + 0 = [add_zero_right(n + 0)] n + 0
+        n + 0 = [symm(add_zero_right(n))] n
+        n = [symm(add_zero_left(n))] 0 + n
+    }
+def r = three_symm_mid 5
+println (match r { case refl(a) => a })
+"#);
+    assert!(output.trim() == "5", "expected 5, got: {}", output);
+}
+
+// ── positive: chain result bound via `let ret: Eq(...) = calc {...}; ret` ──
+// (the let-ret pattern used by every vec_adder_correct case body)
+
+#[test]
+fn calc_let_ret() {
+    let output = assert_ok(r#"
+def via_let_ret(n: Nat): Eq (0 + n) (n + 0) =
+    let ret: Eq (0 + n) (n + 0) = calc {
+        0 + n = [add_zero_left n] n
+        n = [symm (add_zero_right n)] n + 0
+    };
+    ret
+def r = via_let_ret 5
+println (match r { case refl(a) => a })
+"#);
+    assert!(output.trim() == "5", "expected 5, got: {}", output);
+}
+
+// ── positive: two-step chain whose last written term is closed only by a
+// definitional reduction (n + 0 → n), like the double_mul / to_nat_snoc
+// branches in adder_proof.typort ──
+
+#[test]
+fn calc_two_step_def_reduce() {
+    let output = assert_ok(r#"
+def two_step_def(n: Nat): Eq ((n + 0) + 0) (n + 0) =
+    calc {
+        (n + 0) + 0 = [add_zero_right(n + 0)] n + 0
+        n + 0 = [add_zero_right(n)] n
+    }
+def r = two_step_def 5
+println (match r { case refl(a) => a })
+"#);
+    assert!(output.trim() == "5", "expected 5, got: {}", output);
+}
+
 // ── negative: chain broken (proofs don't connect — definitionally) ──
 // NOTE: only the PROOFS' types are checked (each step's written terms are
 // not separately verified — the let-chain check was dropped because hole
