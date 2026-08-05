@@ -26,3 +26,24 @@ fn probe_timing() {
     }
     std::fs::write("F:/projects/hermes/elaboration-zoo-lsp/probe-out.txt", out).unwrap();
 }
+
+// ── example 12: adder tree with width proof ──
+// The example file is elaborated as a whole (like the other hdl examples);
+// the proof chain inside adder_tree (calc + .cast) must type-check during
+// elaboration, and the runtime prints must show the expected widths.
+
+#[test]
+fn example_12_adder_tree() {
+    let input = include_str!("../../examples/hdl/12-adder-tree.typort");
+    let output = match run_with_prelude(input) {
+        Ok(o) => o,
+        Err(e) => panic!("expected OK, got error: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),
+    };
+    assert!(output.contains("module adderTree8"), "expected module header, got: {}", output);
+    assert!(output.contains("wire [10:0] sum"), "expected [10:0] sum (8 + log2Up 8 = 11), got: {}", output);
+    assert!(output.contains("wire [17:0] sum"), "expected [17:0] sum (16 + log2Up 4 = 18), got: {}", output);
+    assert!(output.contains("wire [9:0] sum"), "expected [9:0] sum (8 + log2Up 3 = 10), got: {}", output);
+    assert!(output.contains("\n11\n"), "expected log2Up print 11, got: {}", output);
+    assert!(output.contains("\n18\n"), "expected log2Up print 18, got: {}", output);
+    assert!(output.contains("\n10\n"), "expected log2Up print 10, got: {}", output);
+}
