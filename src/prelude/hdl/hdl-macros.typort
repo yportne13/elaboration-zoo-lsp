@@ -164,9 +164,9 @@ macro_rules Expr {
 
 // The module macro provides convenient module definition syntax.
 // It expands to a `class` (scala-style) whose struct implements the `Module` trait:
-//   struct $name { a: UInt[8], ..., zz_tree: ModuleTree }  — ports become fields
+//   struct $name { a: UInt[8], ..., tree_data: ModuleTree }  — ports become fields
 //   def $name.create[args]: $name[args] = ...              — runs the body, captures the tree
-//   impl Module for $name { def tree = this.zz_tree }
+//   impl Module for $name { def tree = this.tree_data }
 // Usage:
 //   module myAdder[w: Nat]
 //       input a = UInt[w]
@@ -183,7 +183,7 @@ macro_rules Expr {
 //
 // Each port is declared TWICE in the class body (both collapse into one struct
 // field; the last wins): first as the module's own signal so the body can use
-// `sum := a` with real signals, then after zz_tree as a subSignal handle so a
+// `sum := a` with real signals, then after tree_data as a subSignal handle so a
 // parent can write `u.a := sig` — SpinalHDL-style hierarchical access, where
 // the instance name comes from the implicit bn constructor parameter.
 // NOTE: 依赖"同名字段后者覆盖前者"的编译器行为；若解析器对字段重名报错
@@ -197,12 +197,24 @@ macro_rules Expr {
 // records `instance(bn.name, name)` itself via mkInstanceIfParent (dropped at
 // top level, where no parent module exists).
 //
-// WHY the whole body stays inside the single zz_tree field's let chain:
-// the checker evaluates let-bound values ~3x at def-check time; concentrating
-// all side effects in one field plus modulePush/modulePop restore keeps the
-// global ModuleTree clean. Spreading the side effects across independent
-// class fields re-introduces the 35x slowdown of the task2 attempt
-// (see docs/module-redesign-analysis.md §2).
+// WHY the whole body stays inside the single tree_data field's let chain:
+// the chain is the push/pop sandwich around the global ModuleTree and must run
+// EAGERLY when the constructor is evaluated — a nested `let u = child.create`
+// inside the body records its instance into the parent's in-progress tree
+// (the _inst line, after the restore), and the chain's captured `_res` tree is
+// stored in the field for the `Module` trait's `tree` method.
+// Flattening the chain into per-side-effect class fields was measured NOT to
+// slow the current compiler down (the old "35x" claim of the task2 attempt did
+// not reproduce; see docs/module-redesign-analysis.md §2), but it is still not
+// viable: (a) class fields WITHOUT type annotations leave unsolved struct metas
+// in parameterized classes, (b) the Expr-macro body statements are untyped
+// `let`s (and the generic `let $x = $y` arm cannot be annotated at all), and
+// (c) the scaffold prims return universe-typed values that cannot be used as
+// field types of a Module-trait class. So the chain stays in one field; it is
+// formatted multi-line for readability (the parser accepts newlines between
+// `;`-separated lets), and the discarded scaffold bindings use `let _ = ...`
+// (a binder named `_` that shadows on repetition — the parser itself desugars
+// scala-style apply blocks to `let _ = stmt`).
 
 #[macro_export]
 macro_rules module {
@@ -213,19 +225,46 @@ macro_rules module {
 	// Usage: let t = foo.create[myClockDomain].tree
 	($name: ident [$cd: ident] $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name [$cd: ClockDomain] $({$args})* impl Module {
-			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let _res = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); let _inst = mkInstanceIfParent(bn.name, stringify $name); _res;
+			// The whole module body is one field whose VALUE is the side-effect
+			// chain (see the WHY note above): it runs eagerly when the
+			// constructor is evaluated, inside the _prev/_restore sandwich that
+			// keeps the global ModuleTree clean across the ~2 def-check
+			// evaluations and any later create call.
+			let tree_data: ModuleTree =
+				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
+				let _ = create_global("WhenStack", whenStackEmpty);
+				let _prev = get_global("ModuleTree");
+				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
+				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )*
+				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )*
+				$($body)*
+				let _res = get_global("ModuleTree");
+				let _ = create_global("ModuleTree", _prev);
+				let _ = mkInstanceIfParent(bn.name, stringify $name);
+				_res
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			def tree: ModuleTree = this.zz_tree
+			def tree: ModuleTree = this.tree_data
 		}
 	};
 	// Without clock domain: uses defaultClockDomain
 	($name: ident $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name $({$args})* impl Module {
-			let zz_tree: ModuleTree = let _init = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil)); let _ws = create_global("WhenStack", whenStackEmpty); let _prev = get_global("ModuleTree"); let _creat = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil)); $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )* $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )* $($body)* let _res = get_global("ModuleTree"); let _restore = create_global("ModuleTree", _prev); let _inst = mkInstanceIfParent(bn.name, stringify $name); _res;
+			let tree_data: ModuleTree =
+				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
+				let _ = create_global("WhenStack", whenStackEmpty);
+				let _prev = get_global("ModuleTree");
+				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
+				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )*
+				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )*
+				$($body)*
+				let _res = get_global("ModuleTree");
+				let _ = create_global("ModuleTree", _prev);
+				let _ = mkInstanceIfParent(bn.name, stringify $name);
+				_res
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			def tree: ModuleTree = this.zz_tree
+			def tree: ModuleTree = this.tree_data
 		}
 	};
 }

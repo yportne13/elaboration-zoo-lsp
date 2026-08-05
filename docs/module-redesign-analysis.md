@@ -71,6 +71,21 @@ class M[w: Nat] impl Module {
   局部 → check 求值 ×N → 全局树被反复推进（prepend 的 ModuleDef 反复累积）→
   后续遍历 O(n) → **35x 性能退化**（实测 572s vs 16s）+ debug 栈溢出。
 
+> **2026-08-05 复核（task/hdl-module-macro-cleanup）**：在当前 L13 编译器下重测，
+> "扁平化 → 35x" 已**不复现**。同一模块（小模块 / 9 信号 + 7 赋值 + when /
+> 嵌套父子）分别用"单字段 let 链"与"每副作用一个 class 字段"实现，耗时与
+> Verilog 输出完全一致（如 medium 模块：1.36–1.50s vs 1.28–1.50s；嵌套：
+> 71–86ms vs 74–76ms）。此外实测每个 class 字段绑定值在 def-check 只被求值
+> 2 次（不随字段数增长：N 字段 → 2N 次），链内嵌套绑定为 5 次/绑定（单行与
+> 多行格式完全相同）。task2 的 35x 更可能是该分支自身的 O(n²) 索引缺陷
+> （见 §8 同类根因）而非"多字段"本身。**但**仍不能把副作用平铺为独立 class
+> 字段：带参数 class（如 `[w: Nat]`）中**无类型注解的字段**会留下未求解的
+> struct 元变量（实测 `class c[w: Nat] impl Module { let f = 5 }` 报
+> "can't unify for unsolved meta"）；Expr 宏输出的 body 语句都是无注解 let
+> （generic `let $x = $y` 无法标注类型）；脚手架 prim 返回值是宇宙类型
+> （`U 0`），不能作为 impl Module 类的字段类型。故模块宏保持单字段结构，
+> 只做可读性重构（多行格式化、`let _` 丢弃绑定、字段改名 tree_data）。
+
 ### 2.2 约束（方案设计红线）
 
 1. **副作用必须集中在单个字段的 let 链内**（不可扁平化为多个独立字段）。

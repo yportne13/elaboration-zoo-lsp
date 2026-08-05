@@ -2162,8 +2162,8 @@ fn expand_class_as_struct(
     let mut result = vec![];
 
     // Collect fields and methods. The module macro declares each port twice
-    // (an own-signal binding before zz_tree so the body sees real signals,
-    // and a subSignal handle field after zz_tree so `u.a` yields the
+    // (an own-signal binding before tree_data so the body sees real signals,
+    // and a subSignal handle field after tree_data so `u.a` yields the
     // cross-level handle); the struct keeps only the LAST declaration of
     // each name, while the constructor still binds both (shadowing).
     // NOTE: last-wins dedup exists to keep the (legacy) module macro working;
