@@ -160,6 +160,150 @@ fn tuple_hover_literal_elements() {
     }
 }
 
+#[test]
+fn pm_ctor_hover_prelude_boolean() {
+    // Constructor patterns (`case true`) must hover like constructor
+    // expressions: the nullary `Boolean.true` shows `Boolean::true` and
+    // goto-definition points into the prelude (path_id != input's 24) —
+    // NOT the bound-variable type (`Boolean`) that `case x` shows.
+    let input = r#"def f(b: Boolean): Nat =
+    match b {
+        case true => 1
+        case false => 0
+    }"#;
+    let infer = elaborate_infer(input);
+    let entries_at = |span: (usize, usize)| infer.hover_table.iter()
+        .filter(|(s, _, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
+        .collect::<Vec<_>>();
+    let true_base = input.find("case true").unwrap() + 5; // token `true`
+    let true_span = (true_base, true_base + 4);
+    let false_base = input.find("case false").unwrap() + 5; // token `false`
+    let false_span = (false_base, false_base + 5);
+
+    // Entries exist on the pattern tokens themselves, render as the
+    // constructor (`Boolean::true` / `Boolean::false`), and their
+    // definition span points at the prelude declaration, not the input.
+    let true_entries = entries_at(true_span);
+    assert!(!true_entries.is_empty(), "no hover entry for `true` pattern");
+    assert!(true_entries.iter().any(|(_, d, h, v)| {
+        d.path_id != 24
+            && pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v)) == "Boolean::true"
+    }), "expected a `Boolean::true` entry with prelude definition span for `true`");
+    let false_entries = entries_at(false_span);
+    assert!(!false_entries.is_empty(), "no hover entry for `false` pattern");
+    assert!(false_entries.iter().any(|(_, d, h, v)| {
+        d.path_id != 24
+            && pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v)) == "Boolean::false"
+    }), "expected a `Boolean::false` entry with prelude definition span for `false`");
+
+    // LSP hover selection picks the constructor entry at the token.
+    let pick = |off: usize| infer.hover_entry_at(24, off)
+        .map(|(_, _, h, v)| pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v)))
+        .unwrap();
+    assert_eq!(pick(true_span.0), "Boolean::true", "hover over pattern `true`");
+    assert_eq!(pick(false_span.0), "Boolean::false", "hover over pattern `false`");
+}
+
+#[test]
+fn pm_ctor_hover_goto_def_local_enum() {
+    // goto-definition for a user-defined enum: each pattern token's entry
+    // definition span must equal the case-name span in the enum declaration.
+    let input = r#"
+enum Color {
+    red
+    green
+    blue
+}
+def pick(c: Color): Nat =
+    match c {
+        case red => 1
+        case green => 2
+        case blue => 3
+    }
+"#;
+    let infer = elaborate_infer(input);
+    // Definition spans: first occurrence of each name is in the enum decl.
+    let def_span = |name: &str| {
+        let s = input.find(name).unwrap();
+        (s, s + name.len())
+    };
+    let entries_at = |span: (usize, usize)| infer.hover_table.iter()
+        .filter(|(s, _, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
+        .collect::<Vec<_>>();
+    for (name, case) in [("red", "case red"), ("green", "case green"), ("blue", "case blue")] {
+        let pat_base = input.find(case).unwrap() + 5;
+        let pat_span = (pat_base, pat_base + name.len());
+        let (def_s, def_e) = def_span(name);
+        let entries = entries_at(pat_span);
+        assert!(!entries.is_empty(), "no hover entry for pattern `{name}`");
+        assert!(entries.iter().any(|(_, d, h, v)| {
+            d.start_offset as usize == def_s
+                && d.end_offset as usize == def_e
+                && d.path_id == 24
+                && pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v)).contains("Color")
+        }), "pattern `{name}` entry must point at the enum declaration case span");
+    }
+}
+
+#[test]
+fn pm_ctor_hover_differs_from_bound_var() {
+    // `true` (constructor pattern) hovers as the constructor, while `x`
+    // (bare-variable pattern) keeps showing the bound variable's type.
+    let input = r#"def g(b: Boolean): Nat =
+    match b {
+        case true => 1
+        case x => 0
+    }"#;
+    let infer = elaborate_infer(input);
+    let pick = |off: usize| infer.hover_entry_at(24, off)
+        .map(|(_, _, h, v)| pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v)))
+        .unwrap();
+    let true_off = input.find("case true").unwrap() + 5;
+    let x_off = input.find("case x").unwrap() + 5;
+    let true_rendered = pick(true_off);
+    let x_rendered = pick(x_off);
+    assert_eq!(x_rendered, "Boolean", "bare-variable pattern `x` keeps its type hover");
+    assert_ne!(true_rendered, "Boolean", "constructor `true` must NOT render as the bound type");
+    assert_eq!(true_rendered, "Boolean::true");
+}
+
+#[test]
+fn pm_ctor_hover_param_constructor_pi_signature() {
+    // Parameterized constructor pattern: hover shows the constructor's Pi
+    // signature (not an unreadable lambda), and bound fields keep their
+    // type hover.  Nullary `leaf` renders as `Tree::leaf`.
+    let input = r#"
+enum Tree {
+    leaf
+    node(l: Tree, r: Tree)
+}
+def depth(t: Tree): Nat =
+    match t {
+        case leaf => 0
+        case node(l, r) => 1
+    }
+"#;
+    let infer = elaborate_infer(input);
+    let pick = |off: usize| infer.hover_entry_at(24, off)
+        .map(|(_, _, h, v)| pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v)))
+        .unwrap();
+    // `node` pattern token → Pi signature mentioning Tree.
+    let node_off = input.find("case node").unwrap() + 5;
+    let node_rendered = pick(node_off);
+    assert!(node_rendered.contains("Tree"), "node hover should mention Tree, got: {node_rendered}");
+    assert_ne!(node_rendered, "Tree", "node hover should be a Pi signature, not the bare type");
+    // `leaf` pattern token → constructor value `Tree::leaf`.
+    let leaf_off = input.find("case leaf").unwrap() + 5;
+    assert_eq!(pick(leaf_off), "Tree::leaf", "hover over pattern `leaf`");
+    // Bound fields `l`/`r` keep the binding-variable type hover.
+    // `node(l, r)` — `l` at +5, `r` at +8 (after `node(l, `).
+    let pats_base = input.find("node(l, r)").unwrap();
+    assert_eq!(pick(pats_base + 5), "Tree", "hover over field binding `l`");
+    assert_eq!(pick(pats_base + 8), "Tree", "hover over field binding `r`");
+}
+
+
+
 /// Elaborate `input` (after the prelude) and return the Infer with its
 /// populated hover_table.
 fn elaborate_infer(input: &str) -> Infer {
