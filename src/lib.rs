@@ -1285,8 +1285,11 @@ impl LanguageServer for Backend<Client> {
         let completions = || -> Option<Vec<CompletionItem>> {
             let rope = self.document_map.get(&uri.to_string())?;
             let infer = self.hover_table.get(&uri.to_string())?;
-            let char = rope.try_line_to_char(position.line as usize).ok()?;
-            let offset = char + position.character as usize;
+            // Position -> byte offset, UTF-16 aware (same as hover/definition).
+            // The old `try_line_to_char + character` math mixed char and byte
+            // offsets, which drifted whenever a non-ASCII character appeared
+            // before the cursor.
+            let offset = position_to_offset(position, &rope)?;
             let completions = infer.completion_table
                 .iter()
                 .filter(|x| x.0.contains(offset.saturating_sub(2)))

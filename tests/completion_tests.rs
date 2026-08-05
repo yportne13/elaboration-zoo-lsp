@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use elaboration_zoo_lsp::position_to_offset;
 use elaboration_zoo_lsp::L13_namespace::{
     self,
     cxt::Cxt,
@@ -476,4 +477,44 @@ def test = p.
                 "all 'x' completions should share the same span end_offset");
         }
     }
+}
+
+// =========================================================================
+// Test 11: LSP handler offset math — byte offset from Position, UTF-16 aware.
+// Regression: the old handler computed `try_line_to_char(line) + character`,
+// which mixes char and byte offsets and drifts whenever a non-ASCII
+// character appears before the cursor (e.g. a CJK comment + emoji).
+// =========================================================================
+#[test]
+fn test_handler_offset_is_byte_offset_utf16_aware() {
+    // A comment with a 4-byte emoji (1 char, 2 UTF-16 units) plus CJK on an
+    // earlier line shifts the char-index-vs-byte-offset relationship for
+    // every following position.
+    let code = "// \u{8BC4}\u{6CE8} emoji \u{1F600}\nstruct Point[T] {\n    x: T\n    y: T\n}\n\ndef p: Point[Nat] = new Point(1, 2)\ndef test = p.\n";
+
+    let (infer, _output) = elaborate_with_prelude(code);
+    let rope = ropey::Rope::from_str(code);
+    let dot_pos = code.rfind("p.").unwrap() + 1; // byte offset of `.` after p
+    let cursor = dot_pos + 1;                    // cursor just after the dot
+
+    // Convert the client cursor position (line + UTF-16 character) to a byte
+    // offset exactly as the LSP completion handler does.
+    let line = code[..dot_pos].matches('\n').count();
+    let char_in_line = code[..dot_pos].rfind('\n').map(|i| dot_pos - i - 1).unwrap_or(dot_pos);
+    let position = lsp_types::Position::new(line as u32, (char_in_line + 1) as u32);
+    let handler_offset = position_to_offset(position, &rope).expect("cursor offset");
+
+    assert_eq!(handler_offset, cursor, "handler offset must be the raw byte offset");
+
+    // The completion spans (receiver token `p`) must be hit by the handler's
+    // `span.contains(offset.saturating_sub(2))` filter.
+    let trigger = handler_offset.saturating_sub(2);
+    let hits: Vec<&str> = infer.completion_table.iter()
+        .filter(|(span, _)| {
+            trigger >= span.start_offset as usize && trigger < span.end_offset as usize
+        })
+        .map(|(_, label)| label.as_str())
+        .collect();
+    assert!(hits.contains(&"x"), "expected 'x' completion to match: {hits:?}");
+    assert!(hits.contains(&"y"), "expected 'y' completion to match: {hits:?}");
 }
