@@ -1438,6 +1438,15 @@ fn test_examples_hdl_dir() {
             "{sa[7], sa}",               // SInt expand 符号扩展
             "assign ue = sa;",           // UInt expand 零扩展（赋值上下文）
         ]),
+        ("13-inout.typort", include_str!("../../examples/hdl/13-inout.typort"), &[
+            "inout wire [7:0] io",       // UInt inout 端口
+            "inout wire flag",           // Bool inout 端口
+            "inout wire signed [7:0] sio", // SInt inout 端口
+            "inout wire [7:0] master_data", // Bundle inout 字段（master 侧）
+            "inout wire [7:0] slave_data",  // Bundle inout 字段（slave 侧）
+            "input wire master_dir",     // in 标记字段仍是 input
+            "output wire slave_dir",     // slave 侧 in 字段翻转为 output
+        ]),
     ];
 
     for (file, input, asserts) in examples {

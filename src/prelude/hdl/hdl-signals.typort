@@ -56,6 +56,22 @@ def autoBoolOutput[bn: BindingName]: Bool =
     let e = createSignalExpr(bn.name, createOut(bn.name));
     Bool.mk(Some(bn.name), e)
 
+def autoUIntInOut[bn: BindingName](w: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createInOutWidth(bn.name, w));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsInOut[bn: BindingName](w: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createInOutWidth(bn.name, w));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntInOut[bn: BindingName](w: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntInOutWidth(bn.name, w));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolInOut[bn: BindingName]: Bool =
+    let e = createSignalExpr(bn.name, createInOut(bn.name));
+    Bool.mk(Some(bn.name), e)
+
 def autoUIntReg[bn: BindingName](w: Nat): UInt[w] =
     let e = createSignalExpr(bn.name, createRegWidth(bn.name, w));
     UInt.mk(Some(bn.name), e)
@@ -138,28 +154,53 @@ def newBoolOutput(name: String): Bool =
     let e = createSignalExpr(name, createOut(name));
     Bool.mk(Some(name), e)
 
+def newUIntInOut(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createInOutWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newBitsInOut(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createInOutWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newSIntInOut(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createSIntInOutWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolInOut(name: String): Bool =
+    let e = createSignalExpr(name, createInOut(name));
+    Bool.mk(Some(name), e)
+
 // ---- Port creation helpers (used by the module macro's port list) ----
 // The module macro declares ports in its pattern (`input a = UInt[8]`) and
 // records them via these helpers; the returned Expr is the module's own
 // signal (createInWidth etc.) so the body wires against real signals while
 // the macro's subSignal field provides the hierarchical `u.a` handle.
 
-// Create a typed port signal (UInt/Bits share createInWidth/createOutWidth;
-// SInt uses the signed variants, Bool the no-width variants). ty is the
-// stringified type name; w is ignored for Bool.
+// Create a typed port signal (UInt/Bits share createInWidth/createOutWidth/
+// createInOutWidth; SInt uses the signed variants, Bool the no-width
+// variants). ty is the stringified type name; w is ignored for Bool.
 def createPortExpr(dir: String, ty: String, name: String, w: Nat): Expr = match str_eq(ty, "Bool") {
     case true => match str_eq(dir, "input") {
         case true => createSignalExpr(name, createIn(name))
-        case false => createSignalExpr(name, createOut(name))
+        case false => match str_eq(dir, "inout") {
+            case true => createSignalExpr(name, createInOut(name))
+            case false => createSignalExpr(name, createOut(name))
+        }
     }
     case false => match str_eq(ty, "SInt") {
         case true => match str_eq(dir, "input") {
             case true => createSignalExpr(name, createSIntInWidth(name, w))
-            case false => createSignalExpr(name, createSIntOutWidth(name, w))
+            case false => match str_eq(dir, "inout") {
+                case true => createSignalExpr(name, createSIntInOutWidth(name, w))
+                case false => createSignalExpr(name, createSIntOutWidth(name, w))
+            }
         }
         case false => match str_eq(dir, "input") {
             case true => createSignalExpr(name, createInWidth(name, w))
-            case false => createSignalExpr(name, createOutWidth(name, w))
+            case false => match str_eq(dir, "inout") {
+                case true => createSignalExpr(name, createInOutWidth(name, w))
+                case false => createSignalExpr(name, createOutWidth(name, w))
+            }
         }
     }
 }
@@ -167,7 +208,10 @@ def createPortExpr(dir: String, ty: String, name: String, w: Nat): Expr = match 
 // Create a Bool port signal (no width).
 def createBoolPortExpr(dir: String, name: String): Expr = match str_eq(dir, "input") {
     case true => createSignalExpr(name, createIn(name))
-    case false => createSignalExpr(name, createOut(name))
+    case false => match str_eq(dir, "inout") {
+        case true => createSignalExpr(name, createInOut(name))
+        case false => createSignalExpr(name, createOut(name))
+    }
 }
 
 // ---- Register signal creation ----
@@ -245,6 +289,30 @@ def out_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
         case Some(n) => newSIntOutput(n, width)
         case None => newSIntOutput("", width)
+    }
+
+def inout_u[width: Nat](t: UInt[width]): UInt[width] =
+    match t.name {
+        case Some(n) => newUIntInOut(n, width)
+        case None => newUIntInOut("", width)
+    }
+
+def inout_b[width: Nat](t: Bits[width]): Bits[width] =
+    match t.name {
+        case Some(n) => newBitsInOut(n, width)
+        case None => newBitsInOut("", width)
+    }
+
+def inout_s[width: Nat](t: SInt[width]): SInt[width] =
+    match t.name {
+        case Some(n) => newSIntInOut(n, width)
+        case None => newSIntInOut("", width)
+    }
+
+def inout_bool(t: Bool): Bool =
+    match t.name {
+        case Some(n) => newBoolInOut(n)
+        case None => newBoolInOut("")
     }
 
 def in_bool(t: Bool): Bool =

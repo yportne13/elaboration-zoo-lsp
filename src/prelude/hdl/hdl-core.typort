@@ -71,15 +71,18 @@ enum Expr {
     create(name: String)
     createIn(name: String)
     createOut(name: String)
+    createInOut(name: String)
     createWidth(name: String, width: Nat)
     createInWidth(name: String, width: Nat)
     createOutWidth(name: String, width: Nat)
+    createInOutWidth(name: String, width: Nat)
     createReg(name: String)
     createRegWidth(name: String, width: Nat)
     createRegWidthInit(name: String, width: Nat, initVal: Expr)
     createSIntWidth(name: String, width: Nat)
     createSIntInWidth(name: String, width: Nat)
     createSIntOutWidth(name: String, width: Nat)
+    createSIntInOutWidth(name: String, width: Nat)
     createSIntRegWidth(name: String, width: Nat)
     createSIntRegWidthInit(name: String, width: Nat, initVal: Expr)
     literal(v: Nat)
@@ -257,6 +260,9 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case createOut(_) =>
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
+        case createInOut(_) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
         case createWidth(_, _) =>
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
@@ -264,6 +270,9 @@ def createSignalExpr(name: String, e: Expr): Expr =
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createOutWidth(_, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createInOutWidth(_, _) =>
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createReg(_) =>
@@ -282,6 +291,9 @@ def createSignalExpr(name: String, e: Expr): Expr =
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntOutWidth(_, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntInOutWidth(_, _) =>
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case createSIntRegWidth(_, _) =>

@@ -292,6 +292,12 @@ fn create_fn_name(base: &str, dir: Option<&str>) -> &'static str {
             "Bits" => "newBitsOutput",
             _ => "newBoolOutput",
         },
+        Some("InOut") => match base {
+            "UInt" => "newUIntInOut",
+            "SInt" => "newSIntInOut",
+            "Bits" => "newBitsInOut",
+            _ => "newBoolInOut",
+        },
         _ => match base {
             "UInt" => "newUInt",
             "SInt" => "newSInt",
@@ -309,19 +315,21 @@ fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw, mode: C
     let name_expr = build_field_name_expr(&field_name.data);
 
     // Port direction of this field from the factory's point of view.
-    // Master: declared direction applied (out → output port, in/inout → input
-    //   port); unmarked fields default to output.
-    // Slave:  declared direction flipped (out → input port, in/inout → output
-    //   port); unmarked fields default to input.
+    // Master: declared direction applied (out → output port, in → input
+    //   port, inout → inout port); unmarked fields default to output.
+    // Slave:  declared direction flipped (out → input port, in → output
+    //   port, inout stays inout); unmarked fields default to input.
     let dir = match mode {
         CreateMode::Wire => None,
         CreateMode::Master => match unwrap_dir_marker(field_type).0 {
-            Some("in") | Some("inout") => Some("In"),
+            Some("in") => Some("In"),
+            Some("inout") => Some("InOut"),
             _ => Some("Out"),
         },
         CreateMode::Slave => match unwrap_dir_marker(field_type).0 {
             Some("out") => Some("In"),
-            Some("in") | Some("inout") => Some("Out"),
+            Some("in") => Some("Out"),
+            Some("inout") => Some("InOut"),
             _ => Some("In"), // unmarked → received by the slave
         },
     };

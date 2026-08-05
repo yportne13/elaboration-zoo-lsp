@@ -1,0 +1,50 @@
+// ============================================================
+// HDL Example 13: inout 双向端口 (tri-state)
+//
+//   inout io = UInt[8]          模块端口: inout wire [7:0] io
+//   inout flag = Bool           inout wire flag
+//   inout sio = SInt[8]         inout wire signed [7:0] sio
+//   autoUIntInOut(8)            自动命名 inout 信号
+//   inout_u(t)                  方向注解（Bundle 内部）
+//
+// Bundle 的 inout() 字段在 asMaster / asSlave 两侧都生成真正的 inout
+// 端口（不再按 input 处理）；`master := slave` 仍跳过 inout LHS
+// （模块不驱动自己的双向引脚 —— 三态驱动不在本模型内）。
+// ============================================================
+
+module inoutPorts {
+    input a = UInt[8]
+    output b = UInt[8]
+    inout io = UInt[8]
+    inout flag = Bool
+    inout sio = SInt[8]
+    let inside = UInt[8]
+    b := a + inside
+    inside := a
+}
+println("=== 13a: inoutPorts (inout 端口声明) ===")
+println(moduleTreeVL(inoutPorts.create.tree))
+
+module inoutAuto {
+    let myio = autoUIntInOut(8)
+    let myflag = autoBoolInOut
+    let readback = autoUInt(8)
+    readback := myio
+}
+println("=== 13b: inoutAuto (auto*InOut 自动命名) ===")
+println(moduleTreeVL(inoutAuto.create.tree))
+
+#[derive(Bundle)]
+struct TriBus {
+    data: inout(UInt[8])
+    valid: inout(Bool)
+    dir: in(Bool)
+}
+
+module bundleInOut {
+    let master = create_TriBus.asMaster
+    let slave = create_TriBus.asSlave
+    master := slave
+}
+println("=== 13c: bundleInOut (Bundle inout 字段) ===")
+println(moduleTreeVL(bundleInOut.create.tree))
