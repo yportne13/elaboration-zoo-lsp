@@ -128,6 +128,47 @@ fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
     result
 }
 
+/// Byte range in the expansion string -> the original owned token's source span.
+struct ExpansionSpan {
+    expansion_start: u32,
+    expansion_end: u32,
+    src_start: u32,
+    src_end: u32,
+    src_path_id: u32,
+}
+
+/// Like `owned_tokens_to_string`, but also records, for each token, the range it
+/// occupies in the expansion string and the token's original source span. Used
+/// to restore call-site spans after the expansion is re-lexed, so errors inside
+/// a macro expansion point back into the user's source (not the expansion).
+fn owned_tokens_to_string_mapped(tokens: &[OwnedToken]) -> (String, Vec<ExpansionSpan>) {
+    let mut result = String::new();
+    let mut map = Vec::with_capacity(tokens.len());
+    for (i, tok) in tokens.iter().enumerate() {
+        if i > 0 {
+            result.push(' ');
+        }
+        let expansion_start = result.len() as u32;
+        // Wrap Str tokens in double quotes (string literals)
+        if tok.data.1 == TokenKind::Str {
+            result.push('"');
+            result.push_str(&tok.data.0);
+            result.push('"');
+        } else {
+            result.push_str(&tok.data.0);
+        }
+        let expansion_end = result.len() as u32;
+        map.push(ExpansionSpan {
+            expansion_start,
+            expansion_end,
+            src_start: tok.start_offset,
+            src_end: tok.end_offset,
+            src_path_id: tok.path_id,
+        });
+    }
+    (result, map)
+}
+
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
     fn many1_sep<P: Parser<I, X, S, IError>, X>(self, sep: P) -> impl Parser<I, Vec<A>, S, IError>;
@@ -1092,14 +1133,37 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 // re-parse of the expansion fail (Expect(EndLine) at a literal
                 // token's definition-site span). The EOF token is filtered so
                 // the recursive p_raw sees a clean token stream.
-                let t_str = owned_tokens_to_string(&t_owned);
+                let (t_str, span_map) = owned_tokens_to_string_mapped(&t_owned);
+                let invocation_start = input[0].start_offset;
+                let invocation_end = if input.len() > i.len() { input[input.len() - i.len() - 1].end_offset } else { input[0].end_offset };
+                let call_site_path = input[0].path_id;
                 let t_borrowed: Vec<_> = match super::parser::lex::lex(Span {
                     data: &t_str,
                     start_offset: 0,
                     end_offset: t_str.len() as u32,
-                    path_id: input[0].path_id,
+                    path_id: call_site_path,
                 }) {
-                    Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).collect(),
+                    Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).map(|t| {
+                        // Restore the original source span for each re-lexed
+                        // token: metavar captures keep their call-site span;
+                        // transcriber literals (definition-site path) map to the
+                        // whole invocation so errors stay inside the macro call.
+                        let orig = span_map.iter().find(|m| m.expansion_start <= t.start_offset && t.start_offset < m.expansion_end);
+                        match orig {
+                            Some(m) if m.src_path_id == call_site_path => Span {
+                                data: (t.data.0, t.data.1),
+                                start_offset: m.src_start,
+                                end_offset: m.src_end,
+                                path_id: m.src_path_id,
+                            },
+                            _ => Span {
+                                data: (t.data.0, t.data.1),
+                                start_offset: invocation_start,
+                                end_offset: invocation_end,
+                                path_id: call_site_path,
+                            },
+                        }
+                    }).collect(),
                     None => t_owned.iter().map(|tok| Span {
                         data: (tok.data.0.as_str(), tok.data.1),
                         start_offset: tok.start_offset,
@@ -2479,6 +2543,62 @@ println stringify hello
     // Cursor BEFORE the macro invocation
     assert!(!(0usize >= exp.start_offset as usize && 0usize < exp.end_offset as usize),
         "cursor before macro should NOT find expansion");
+}
+
+#[test]
+fn test_macro_expansion_span_preservation() {
+    // A raw metavar captured at the call site must keep its source span after
+    // the expansion is re-lexed. Regression: expansion-relative offsets used
+    // to leak into the Raw AST, so elaboration errors floated to wrong places.
+    let input = r#"
+macro_rules mwrap {
+    ($x: raw) => { $x }
+}
+def f = mwrap 12345
+"#;
+    let processed = crate::L13_namespace::preprocess(input);
+    let (decls, _errs, _exports, _expansions) = parser_with_macros(&processed, 7, &Default::default()).unwrap();
+    let def = decls.iter()
+        .find(|d| matches!(d, Decl::Def { name, .. } if name.data == "f"))
+        .expect("expected def f");
+    let body = match def {
+        Decl::Def { body, .. } => body,
+        _ => unreachable!(),
+    };
+    let num_off = processed.find("12345").expect("12345 should be in input");
+    let span = body.to_span();
+    assert_eq!(span.start_offset as usize, num_off,
+        "expanded raw fragment must keep its call-site start offset");
+    assert_eq!(span.end_offset as usize, num_off + "12345".len(),
+        "expanded raw fragment must keep its call-site end offset");
+}
+
+#[test]
+fn test_macro_expansion_span_preservation_multitoken() {
+    // Multi-token raw capture: every token of the captured expression keeps
+    // its source span, so the whole expanded expression covers its source
+    // region instead of a 0-based slice of the expansion text.
+    let input = r#"
+macro_rules mwrap {
+    ($x: raw) => { $x }
+}
+def g = mwrap a + b * c
+"#;
+    let processed = crate::L13_namespace::preprocess(input);
+    let (decls, _errs, _exports, _expansions) = parser_with_macros(&processed, 7, &Default::default()).unwrap();
+    let def = decls.iter()
+        .find(|d| matches!(d, Decl::Def { name, .. } if name.data == "g"))
+        .expect("expected def g");
+    let body = match def {
+        Decl::Def { body, .. } => body,
+        _ => unreachable!(),
+    };
+    let a_off = processed.find("a + b * c").expect("expr should be in input");
+    let end = a_off + "a + b * c".len();
+    let span = body.to_span();
+    assert!(span.start_offset as usize <= a_off && span.end_offset as usize >= end,
+        "multitoken expanded raw must cover its source region, got {}..{} vs {}..{}",
+        span.start_offset, span.end_offset, a_off, end);
 }
 
 #[test]

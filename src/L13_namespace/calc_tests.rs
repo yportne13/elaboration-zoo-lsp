@@ -200,3 +200,31 @@ def neg_c: Eq (7 + 0) (0 + 7) = calc
     7 = 0 + 7 := symm (add_zero_left 7)
 "#, "calc");
 }
+
+// ── negative: the error for a broken step points AT the failing proof's
+// source span (regression: expansion re-lexing used to leak expansion-relative
+// offsets, so errors floated to unrelated source positions) ──
+
+#[test]
+fn calc_err_broken_chain_span() {
+    let input = r#"
+def broken(n: Nat): Eq (0 + n) (n + 0) =
+    calc {
+        0 + n = [add_zero_left n] n
+        n = [symm (add_zero_right n)] n + 0
+        n + 0 = [add_zero_left n] n
+    }
+"#;
+    match run_with_prelude(input) {
+        Ok(_) => panic!("expected error, got OK"),
+        Err(e) => {
+            let proof_off = input.rfind("add_zero_left n").expect("proof in input");
+            let proof_end = proof_off + "add_zero_left n".len();
+            assert!(
+                e.0.start_offset as usize <= proof_end && e.0.end_offset as usize >= proof_off,
+                "error span {}..{} should overlap the failing proof at {}..{}",
+                e.0.start_offset, e.0.end_offset, proof_off, proof_end
+            );
+        }
+    }
+}
