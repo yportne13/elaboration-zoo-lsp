@@ -1845,38 +1845,45 @@ impl Infer {
             .cloned()
             .collect();
         let ns_result = {
-            // Snapshot full inference state: the probe may solve metas in the
-            // receiver type whose solutions reference the temporary metas created
-            // below. truncate() would leave those solutions dangling, so roll
-            // back the entire meta / trait_metas state after the probe instead.
-            let meta_snapshot = self.meta.clone();
-            let trait_metas_snapshot = self.trait_metas.clone();
-            let mut result: Vec<_> = vec![];
-            for ns_entry in &ns_entries {
-                // Pre-filter: skip entries whose trait has no instance for this Self type
-                if let Some(ref head) = typ_raw_head {
-                    if let Val::Pi(_, Icit::Impl, dom, _) = ns_entry.0.as_ref() {
-                        if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
-                            if !self.trait_solver.can_satisfy(&trait_name.data, &typ_raw) {
-                                continue;
+            if ns_entries.is_empty() {
+                vec![]
+            } else {
+                // Snapshot full inference state: the probe may solve metas in the
+                // receiver type whose solutions reference the temporary metas created
+                // below. truncate() would leave those solutions dangling, so roll
+                // back the entire meta / trait_metas state after the probe instead.
+                // The snapshot is only taken when there are entries to probe — it
+                // costs O(meta_len) per call, and most member accesses have no
+                // namespace match at all.
+                let meta_snapshot = self.meta.clone();
+                let trait_metas_snapshot = self.trait_metas.clone();
+                let mut result: Vec<_> = vec![];
+                for ns_entry in &ns_entries {
+                    // Pre-filter: skip entries whose trait has no instance for this Self type
+                    if let Some(ref head) = typ_raw_head {
+                        if let Val::Pi(_, Icit::Impl, dom, _) = ns_entry.0.as_ref() {
+                            if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
+                                if !self.trait_solver.can_satisfy(&trait_name.data, &typ_raw) {
+                                    continue;
+                                }
                             }
                         }
                     }
+                    let mut check_typ = ns_entry.0.clone();
+                    while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
+                        let u = self.fresh_meta(&cxt, dom.clone(), t_span);
+                        let u = self.eval(&cxt.decl, &cxt.env, &u);
+                        check_typ = self.closure_apply(&cxt.decl, cod, u);
+                    }
+                    if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
+                        result.push(ns_entry.clone());
+                    }
+                    // Clean up metas created by this failed namespace entry
+                    self.meta = meta_snapshot.clone();
+                    self.trait_metas = trait_metas_snapshot.clone();
                 }
-                let mut check_typ = ns_entry.0.clone();
-                while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
-                    let u = self.fresh_meta(&cxt, dom.clone(), t_span);
-                    let u = self.eval(&cxt.decl, &cxt.env, &u);
-                    check_typ = self.closure_apply(&cxt.decl, cod, u);
-                }
-                if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
-                    result.push(ns_entry.clone());
-                }
-                // Clean up metas created by this failed namespace entry
-                self.meta = meta_snapshot.clone();
-                self.trait_metas = trait_metas_snapshot.clone();
+                result
             }
-            result
         };
         if ns_result.len() > 1 {
             let names: Vec<SmolStr> = ns_result.iter()
@@ -2039,8 +2046,10 @@ impl Infer {
                 // temporary metas created here, so roll back the whole meta /
                 // trait_metas state after each entry.
                 {
-                    let meta_snapshot = self.meta.clone();
-                    let trait_metas_snapshot = self.trait_metas.clone();
+                    // Lazy snapshot: only taken when at least one entry survives
+                    // the pre-filter and actually runs a probe.
+                    let mut meta_snapshot: Option<Vec<_>> = None;
+                    let mut trait_metas_snapshot: Option<Vec<_>> = None;
                     for ns_entry in cxt.namespace.iter() {
                         // Pre-filter: skip entries whose trait has no instance
                         // for this Self type (same rule as the resolution path).
@@ -2053,6 +2062,8 @@ impl Infer {
                                 }
                             }
                         }
+                        let meta_snapshot = meta_snapshot.get_or_insert_with(|| self.meta.clone());
+                        let trait_metas_snapshot = trait_metas_snapshot.get_or_insert_with(|| self.trait_metas.clone());
                         let mut check_typ = ns_entry.0.clone();
                         while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
                             let u = self.fresh_meta(&cxt, dom.clone(), t_span);

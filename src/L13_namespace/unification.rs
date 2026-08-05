@@ -38,6 +38,32 @@ fn is_appliable(v: &Val) -> bool {
     )
 }
 
+/// True if `v` contains no unsolved metavariable anywhere (conservative:
+/// Lam/Pi/Match/Call report "contains flex" because their bodies may embed
+/// `Tm::Meta`, even though the closure itself is inert until applied).
+fn val_has_no_flex(v: &Val) -> bool {
+    match v {
+        Val::Flex(..) => false,
+        Val::Rigid(_, sp) | Val::Decl(_, sp) | Val::Obj(_, _, sp) => {
+            sp.iter().all(|(a, _)| val_has_no_flex(a))
+        }
+        Val::Sum(_, params, _, _) => {
+            params.iter().all(|(_, p, ty, _)| val_has_no_flex(p) && val_has_no_flex(ty))
+        }
+        Val::SumCase { typ, datas, .. } => {
+            val_has_no_flex(typ) && datas.iter().all(|(_, d, _)| val_has_no_flex(d))
+        }
+        Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => true,
+        Val::Lam(..) | Val::Pi(..) | Val::Match(..) | Val::Call(..) => false,
+    }
+}
+
+/// True if either spine contains a value with an unsolved meta anywhere.
+fn spines_contain_flex(sp: &Spine, sp_prime: &Spine) -> bool {
+    sp.iter().any(|(v, _)| !val_has_no_flex(v))
+        || sp_prime.iter().any(|(v, _)| !val_has_no_flex(v))
+}
+
 fn lift(pr: &PartialRenaming) -> PartialRenaming {
     let mut new_ren = pr.ren.clone();
     Rc::make_mut(&mut new_ren).insert(pr.cod.0, pr.dom);
@@ -351,16 +377,7 @@ impl Infer {
             }
             Val::Match(val, env, cases) => {
                 let val = self.rename(decl, pren, val)?;
-                let declb = decl.iter()
-                    .map(|x| (x.0.clone(), (
-                        x.1.0,
-                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                        x.1.3.clone(),
-                        x.1.4.clone(),
-                        x.1.5.clone(),
-                    )))
-                    .collect();
+                let declb = super::simpl_decl(decl);
                 let cases = cases
                     .iter()
                     .map(|(pat, tm)| {
@@ -767,15 +784,29 @@ impl Infer {
         // roll those back so the body comparison below starts from a clean state.
         match (t.as_ref(), u.as_ref()) {
             (Val::Call(a, al, _), Val::Call(b, bl, _)) if a == b => {
-                let meta_snapshot = self.meta.clone();
-                let trait_metas_snapshot = self.trait_metas.clone();
-                let mc_snapshot = self.meta_contrains.clone();
-                if self.unify_sp(l, cxt, al, bl, fuel).is_ok() {
-                    return Ok(())
+                if !spines_contain_flex(al, bl) {
+                    // Neither spine contains an unsolved meta anywhere: unify_sp
+                    // can only compare ground values, so it cannot mutate the
+                    // solver state (no Flex solving, no Stuck constraints).
+                    // Skip the O(meta_len) snapshot entirely — this is the
+                    // common case for theorem-proving workloads, where the
+                    // same inlined helper call is compared with concrete args.
+                    if self.unify_sp(l, cxt, al, bl, fuel).is_ok() {
+                        return Ok(());
+                    }
+                    // Failure without side effects: fall through to the body
+                    // comparison below (no restore needed).
+                } else {
+                    let meta_snapshot = self.meta.clone();
+                    let trait_metas_snapshot = self.trait_metas.clone();
+                    let mc_snapshot = self.meta_contrains.clone();
+                    if self.unify_sp(l, cxt, al, bl, fuel).is_ok() {
+                        return Ok(())
+                    }
+                    self.meta = meta_snapshot;
+                    self.trait_metas = trait_metas_snapshot;
+                    self.meta_contrains = mc_snapshot;
                 }
-                self.meta = meta_snapshot;
-                self.trait_metas = trait_metas_snapshot;
-                self.meta_contrains = mc_snapshot;
             }
             _ => {}
         }
@@ -893,16 +924,7 @@ impl Infer {
                     return Err(UnifyError::Basic);
                 }
 
-                let declb = cxt.decl.iter()
-                    .map(|x| (x.0.clone(), (
-                        x.1.0,
-                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                        x.1.3.clone(),
-                        x.1.4.clone(),
-                        x.1.5.clone(),
-                    )))
-                    .collect();
+                let declb = super::simpl_decl(&cxt.decl);
 
                 for ((p1, clos1), (p2, clos2)) in cases1.iter().zip(cases2.iter()) {
                     if p1 != p2 {
