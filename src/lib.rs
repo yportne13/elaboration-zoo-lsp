@@ -936,6 +936,49 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         }
     }
+
+    /// Goto-definition for macro invocations. The cursor is matched against
+    /// the use-site spans recorded during parsing (`macro_expansion_map`):
+    /// first against the macro name token span, then against the full
+    /// invocation span. The matched expansion carries the definition span and
+    /// path_id of the rule that actually matched, so the target resolves
+    /// across files (e.g. the prelude's `hdl-macros.typort`).
+    pub fn goto_macro_definition(&self, uri: &Url, offset: usize) -> Option<GotoDefinitionResponse> {
+        let uri_str = uri.as_str();
+        let expansions = self.macro_expansion_map.get(uri_str)?;
+        // Prefer a cursor inside the macro name token; among several matches
+        // (a macro call nested inside another expansion) pick the innermost,
+        // i.e. the smallest span.
+        let exp = expansions.iter()
+            .filter(|e| offset >= e.start_offset as usize && offset < e.start_offset as usize + e.name.len())
+            .min_by_key(|e| e.end_offset - e.start_offset)
+            .or_else(|| expansions.iter()
+                .filter(|e| offset >= e.start_offset as usize && offset < e.end_offset as usize)
+                .min_by_key(|e| e.end_offset - e.start_offset))?;
+        // Definition location of the matched rule (None for built-ins such as
+        // `stringify`, which have no textual definition).
+        let (def_start, def_end, def_path_id) = (
+            exp.def_start_offset?,
+            exp.def_end_offset?,
+            exp.def_path_id?,
+        );
+        let def_uri = self.document_id.iter()
+            .find(|e| *e.value() == def_path_id)
+            .map(|e| Url::parse(e.key()).ok())
+            .flatten()
+            .unwrap_or_else(|| uri.clone());
+        let def_rope = if def_uri.as_str() == uri_str {
+            self.document_map.get(uri_str)?.clone()
+        } else {
+            self.document_map.get(def_uri.as_str())?.clone()
+        };
+        let start_position = offset_to_position(def_start as usize, &def_rope)?;
+        let end_position = offset_to_position(def_end as usize, &def_rope)?;
+        Some(GotoDefinitionResponse::Scalar(Location::new(
+            def_uri,
+            Range::new(start_position, end_position),
+        )))
+    }
 }
 
 impl LanguageServer for Backend<Client> {
@@ -1164,11 +1207,19 @@ impl LanguageServer for Backend<Client> {
         let definition = || -> Option<GotoDefinitionResponse> {
             let uri = params.text_document_position_params.text_document.uri;
             let uri = normalize_builtin_uri(&uri);
-            let semantic = self.hover_table.get(uri.as_str())?;
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position_params.position;
             let offset = position_to_offset(position, &rope)?;
 
+            // Macro invocation goto-definition: a click on a macro call name
+            // (e.g. `module foo`) jumps to the matching `macro_rules`
+            // declaration, which may live in another file (the prelude's
+            // hdl-macros.typort) or in the current file (local macros).
+            if let Some(def) = self.goto_macro_definition(&uri, offset) {
+                return Some(def);
+            }
+
+            let semantic = self.hover_table.get(uri.as_str())?;
             let interval = semantic.hover_table
                 .iter()
                 .find(|x| x.0.contains(offset))

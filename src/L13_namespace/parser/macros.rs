@@ -2,7 +2,7 @@ use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, ParserExt, kw, MacroState};
+use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo};
 
 pub type OwnedToken = Span<(String, TokenKind)>;
 pub type OwnedTokenSlice = [Span<(String, TokenKind)>];
@@ -84,6 +84,34 @@ impl MacroMatcher {
                                 m.matcher.to_parser().parse(input, state)
                                     .and_then(|(i, t)| {
                                         let t = m.transcriber.replace(t)?;
+                                        // Record the expansion for LSP
+                                        // goto-definition. A call like `when
+                                        // ...` inside a module body is handled
+                                        // by the `Expr` fragment (which
+                                        // expands through the Expr macro's
+                                        // rules), so prefer the definition of
+                                        // a macro whose name matches the
+                                        // call-site token (`when`), falling
+                                        // back to the rule that actually
+                                        // matched (`Expr`).
+                                        if let Some(first) = input.first() {
+                                            let (def_start, def_end, def_path) = state.1.get(first.data.0)
+                                                .and_then(|r| r.first())
+                                                .map(|r| (r.def_start_offset, r.def_end_offset, r.def_path_id))
+                                                .unwrap_or((m.def_start_offset, m.def_end_offset, m.def_path_id));
+                                            let consumed = input.len() - i.len();
+                                            let start = first.start_offset;
+                                            let end = if consumed > 0 { input[consumed - 1].end_offset } else { first.end_offset };
+                                            state.2.push(MacroExpansionInfo {
+                                                name: first.data.0.to_string(),
+                                                start_offset: start,
+                                                end_offset: end,
+                                                expanded_text: owned_tokens_to_string(&t),
+                                                def_start_offset: def_start,
+                                                def_end_offset: def_end,
+                                                def_path_id: def_path,
+                                            });
+                                        }
                                         Ok((i, vec![(name.data.clone(), t)]))
                                     })
                             }).next()).ok_or(IError {
@@ -278,4 +306,11 @@ impl MacroTranscriber {
 pub struct MacroRule {
     pub matcher: MacroMatcher,   // 匹配模式
     pub transcriber: MacroTranscriber,  // 展开模板
+    /// Source location of the macro definition: byte offsets of the macro
+    /// name token in the file where `macro_rules <name>` was declared, plus
+    /// that file's path_id. All `None` for rules without a textual
+    /// definition (built-in macros such as `stringify`).
+    pub def_start_offset: Option<u32>,
+    pub def_end_offset: Option<u32>,
+    pub def_path_id: Option<u32>,
 }

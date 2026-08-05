@@ -11,6 +11,13 @@ pub struct MacroExpansionInfo {
     pub start_offset: u32,
     pub end_offset: u32,
     pub expanded_text: String,
+    /// Definition location of the macro rule that matched at this use site:
+    /// byte offsets of the macro name token in the file that declared
+    /// `macro_rules <name>`, plus that file's path_id. All `None` for macros
+    /// without a textual definition (built-in `stringify`).
+    pub def_start_offset: Option<u32>,
+    pub def_end_offset: Option<u32>,
+    pub def_path_id: Option<u32>,
 }
 
 use crate::parser_lib_resilient::*;
@@ -290,6 +297,9 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
     err_collect.1.entry("stringify".to_owned()).or_insert_with(|| vec![MacroRule {
         matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
         transcriber: MacroTranscriber::BuiltIn,
+        def_start_offset: None,
+        def_end_offset: None,
+        def_path_id: None,
     }]);
     match super::parser::lex::lex(Span {
         data: input,
@@ -1125,6 +1135,9 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         start_offset: start,
                         end_offset: end,
                         expanded_text: owned_tokens_to_string(&t_owned),
+                        def_start_offset: m.def_start_offset,
+                        def_end_offset: m.def_end_offset,
+                        def_path_id: m.def_path_id,
                     });
                 }
                 // Re-lex the expanded text instead of splicing the owned tokens
@@ -1936,6 +1949,9 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
             )).map(|(matcher, _, transcriber)| MacroRule {
                 matcher,
                 transcriber: transcriber.unwrap_or(MacroTranscriber::Sequence(vec![])),
+                def_start_offset: None,
+                def_end_offset: None,
+                def_path_id: None,
             })
             .many1_sep((kw(T![;]), kw(EndLine).option()))  // 规则用 ; 分隔
         ),
@@ -1948,7 +1964,19 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                 if is_exported {
                     state.1.insert(format!("__exported__{}", name.data), vec![]);
                 }
-                state.1.insert(name.data.clone(), rules.and_then(|r| r.ok()).unwrap_or(vec![]));
+                // Stamp the definition span (the `macro_rules <name>` name
+                // token) onto every rule so use sites can resolve
+                // goto-definition back to this declaration.
+                let rules: Vec<MacroRule> = rules.and_then(|r| r.ok()).unwrap_or_default()
+                    .into_iter()
+                    .map(|rule| MacroRule {
+                        def_start_offset: Some(name.start_offset),
+                        def_end_offset: Some(name.end_offset),
+                        def_path_id: Some(name.path_id),
+                        ..rule
+                    })
+                    .collect();
+                state.1.insert(name.data.clone(), rules);
             }
             Ok((input, ()))
         },
@@ -2336,6 +2364,9 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                     start_offset: start,
                     end_offset: end,
                     expanded_text: owned_tokens_to_string(&t_owned),
+                    def_start_offset: m.def_start_offset,
+                    def_end_offset: m.def_end_offset,
+                    def_path_id: m.def_path_id,
                 });
             }
             let t_borrowed: Vec<_> = t_owned.iter().map(|tok| Span {
@@ -2599,6 +2630,93 @@ def g = mwrap a + b * c
     assert!(span.start_offset as usize <= a_off && span.end_offset as usize >= end,
         "multitoken expanded raw must cover its source region, got {}..{} vs {}..{}",
         span.start_offset, span.end_offset, a_off, end);
+}
+
+#[test]
+fn test_macro_expansion_info_def_span_local() {
+    // A macro defined and used in the same file: the expansion info must
+    // carry the definition span (the `macro_rules <name>` name token) and
+    // the defining file's path_id, so the LSP can resolve goto-definition.
+    let input = r#"
+macro_rules mym {
+    ($x: raw) => { $x $x }
+}
+mym stringify hello
+"#;
+    let id = 42u32;
+    let (_decls, _errs, _exports, expansions) = parser_with_macros(input, id, &Default::default()).unwrap();
+    let exp = expansions.iter().find(|e| e.name == "mym").expect("mym expansion should exist");
+
+    // Definition span = the `mym` name token in `macro_rules mym {`
+    let def_off = input.find("macro_rules mym").expect("def in input")
+        + "macro_rules ".len();
+    assert_eq!(exp.def_start_offset, Some(def_off as u32),
+        "def_start_offset should point at the macro name token");
+    assert_eq!(exp.def_end_offset, Some((def_off + "mym".len()) as u32),
+        "def_end_offset should end at the macro name token");
+    assert_eq!(exp.def_path_id, Some(id),
+        "def_path_id should be the defining file's id");
+
+    // The use-site span still covers the invocation in the source.
+    let use_off = input.find("mym stringify").expect("use in input");
+    assert_eq!(exp.start_offset as usize, use_off);
+    assert_eq!(exp.end_offset as usize, use_off + "mym stringify hello".len());
+
+    // Built-in `stringify` has no textual definition.
+    let str_exp = expansions.iter().find(|e| e.name == "stringify").expect("stringify expansion");
+    assert_eq!(str_exp.def_start_offset, None);
+    assert_eq!(str_exp.def_end_offset, None);
+    assert_eq!(str_exp.def_path_id, None);
+}
+
+#[test]
+fn test_macro_expansion_info_def_span_cross_file() {
+    // A macro exported from another file (id 7) and used in this file (id 42):
+    // the use-site expansion must point back at the defining file, so the LSP
+    // can resolve a cross-file goto (the prelude case).
+    let def_input = r#"
+#[macro_export]
+macro_rules mym {
+    ($x: raw) => { $x $x }
+}
+"#;
+    let (_d, _e, exports, _) = parser_with_macros(def_input, 7, &Default::default()).unwrap();
+    assert!(exports.contains_key("mym"), "macro should be exported");
+
+    // Note: a use-only single-line file would make the top-level
+    // many1_sep_skip fail with EmptyVec (pre-existing parser behavior), so
+    // the use file carries a leading successful declaration like real files.
+    let use_input = "println x
+mym stringify hello
+";
+    let (_d2, _e2, _ex2, expansions) = parser_with_macros(use_input, 42, &exports).unwrap();
+    let exp = expansions.iter().find(|e| e.name == "mym").expect("mym expansion should exist");
+    let def_off = def_input.find("macro_rules mym").expect("def in input")
+        + "macro_rules ".len();
+    assert_eq!(exp.def_path_id, Some(7), "def must point at the exporting file");
+    assert_eq!(exp.def_start_offset, Some(def_off as u32));
+    assert_eq!(exp.def_end_offset, Some((def_off + "mym".len()) as u32));
+}
+
+#[test]
+fn test_macro_expansion_info_def_span_multi_rule() {
+    // Multi-rule macro (like `when`): whichever rule matches, the expansion
+    // records the same definition span (the macro name token).
+    let input = r#"
+macro_rules pick {
+    (a) => { println first };
+    (b) => { println second }
+}
+pick b
+"#;
+    let (_decls, _errs, _exports, expansions) = parser_with_macros(input, 0, &Default::default()).unwrap();
+    let exp = expansions.iter().find(|e| e.name == "pick").expect("pick expansion should exist");
+    let def_off = input.find("macro_rules pick").expect("def in input")
+        + "macro_rules ".len();
+    assert_eq!(exp.def_start_offset, Some(def_off as u32),
+        "matched rule should carry the macro_rules name token span");
+    assert_eq!(exp.def_end_offset, Some((def_off + "pick".len()) as u32));
+    assert_eq!(exp.def_path_id, Some(0));
 }
 
 #[test]
