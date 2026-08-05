@@ -855,6 +855,62 @@ impl Compiler {
                                                 implicit_param_names.len();
                                             let explicit_pats = &item_pats[implicit_count..];
 
+                                            // Hover/goto-definition for constructor patterns:
+                                            // `case true => ...` previously had NO hover entry on
+                                            // the user's token — the pattern is re-elaborated via
+                                            // patcon_raw which carries the constructor's DEFINITION
+                                            // span (`constr`, see the PatternDetail::Con push
+                                            // below), so `infer_expr` entries landed at the enum
+                                            // declaration, never on the pattern token.  Push an
+                                            // entry keyed to the user's span (`constr_`) whose
+                                            // definition span (`constr`) points at the enum
+                                            // declaration, mirroring what `infer_expr` does for
+                                            // constructor expressions (`full_adder(false, ..)`).
+                                            // This branch runs exactly once per (arm, constructor)
+                                            // the user's pattern actually matches.
+                                            let hover_val: Rc<Val> = {
+                                                let sum_name = match typ.as_ref() {
+                                                    Val::Sum(name, ..) => name.data.clone(),
+                                                    _ => SmolStr::new(""),
+                                                };
+                                                let qualified = if sum_name.is_empty() {
+                                                    constr.data.clone()
+                                                } else {
+                                                    SmolStr::new(format!("{}.{}", sum_name, constr.data))
+                                                };
+                                                match cxt.decl
+                                                    .get(&qualified)
+                                                    .or_else(|| cxt.decl.get(&constr.data))
+                                                {
+                                                    // Decl entry: (def span, Tm, VALUE, Ty, VTy, prim).
+                                                    Some((_, _, v, _, _, _)) => match v.as_ref() {
+                                                        // Parameterized constructor: the value is a
+                                                        // Lam whose quote renders as an unreadable
+                                                        // lambda; show the constructor's Pi signature
+                                                        // (e.g. `(l: Tree) → (r: Tree) → Tree`) instead.
+                                                        Val::Lam(..) => constr_pi
+                                                            .clone()
+                                                            .unwrap_or_else(|| v.clone()),
+                                                        // Nullary constructor: the value is a closed
+                                                        // `Val::SumCase` → hover renders `Boolean::true`.
+                                                        _ => v.clone(),
+                                                    },
+                                                    None => constr_pi
+                                                        .clone()
+                                                        .unwrap_or_else(|| typ.clone()),
+                                                }
+                                            };
+                                            infer.hover_table.push((
+                                                constr_.to_span(),
+                                                constr.to_span(),
+                                                super::cxt::HoverCxt {
+                                                    lvl: cxt.lvl,
+                                                    locals: cxt.locals.clone(),
+                                                    decl: cxt.decl.clone(),
+                                                },
+                                                hover_val,
+                                            ));
+
                                             let mut new_cxt = cxt.clone();
                                             let mut new_cxt_ff = cxt_for_filter.clone();
                                             let mut new_patcon = patcon
