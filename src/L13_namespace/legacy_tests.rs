@@ -1425,6 +1425,19 @@ fn test_examples_hdl_dir() {
             "rd <= myRam[addr];",        // readSync 时钟赋值
             "if (en) begin",             // 同步写使能
         ]),
+        ("12-arithmetic2.typort", include_str!("../../examples/hdl/12-arithmetic2.typort"), &[
+            "(a / b)",                   // UInt 除法
+            "(a % b)",                   // UInt 取模
+            "(a / 3)",                   // Nat 字面量除数
+            "(sa / sb)",                 // SInt 除法
+            "(sa % sb)",                 // SInt 取模
+            "(a << sh)",                 // |<< 宽度保持变量左移
+            "(a >> sh)",                 // |>> 宽度保持变量右移
+            "(sa >>> sh)",               // SInt |>> 算术右移
+            "(sa[7] ? -sa : sa)",        // abs mux 展开
+            "{sa[7], sa}",               // SInt expand 符号扩展
+            "assign ue = sa;",           // UInt expand 零扩展（赋值上下文）
+        ]),
     ];
 
     for (file, input, asserts) in examples {

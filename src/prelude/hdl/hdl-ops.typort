@@ -82,6 +82,42 @@ impl[width: Nat] SInt[width] {
 }
 
 // ============================================================
+//  Division and Modulo (SpinalHDL width semantics:
+//  `/` keeps w(x); `%` = min(w(x), w(y)) — with equal-width
+//  operands both are w. Verilog `/` and `%` are synthesizable.)
+// ============================================================
+
+impl[width: Nat] Div[UInt[width], UInt[width]] for UInt[width] {
+    def /(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "/", that.expr))
+}
+
+impl[width: Nat] Div[Nat, UInt[width]] for UInt[width] {
+    def /(that: Nat): UInt[width] =
+        UInt.mk(None, binary(this.expr, "/", literal(that)))
+}
+
+impl[width: Nat] Div[SInt[width], SInt[width]] for SInt[width] {
+    def /(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "/", that.expr))
+}
+
+impl[width: Nat] Div[Nat, SInt[width]] for SInt[width] {
+    def /(that: Nat): SInt[width] =
+        SInt.mk(None, binary(this.expr, "/", literal(that)))
+}
+
+impl[width: Nat] UInt[width] {
+    def %(that: UInt[width]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "%", that.expr))
+}
+
+impl[width: Nat] SInt[width] {
+    def %(that: SInt[width]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "%", that.expr))
+}
+
+// ============================================================
 //  Bitwise Logic Operations
 // ============================================================
 
@@ -147,6 +183,35 @@ impl[width: Nat] Bits[width] {
         Bits.mk(None, binary(this.expr, "<<", literal(that)))
     def >>(that: Nat): Bits[width] =
         Bits.mk(None, binary(this.expr, ">>", literal(that)))
+}
+
+// ---- width-preserving variable shifts (SpinalHDL `|<<` / `|>>`) ----
+// The shift amount is a hardware signal (UInt); Verilog variable shifts
+// are synthesizable. The result keeps the operand width — unlike the
+// constant `<<`/`>>` (Nat literals) which also keep width in this
+// implementation (SpinalHDL's `<<(Int)` would widen; see
+// docs/spinalhdl-gap.md §2 for the recorded divergence).
+
+impl[width: Nat] UInt[width] {
+    def |<<[s: Nat](that: UInt[s]): UInt[width] =
+        UInt.mk(None, binary(this.expr, "<<", that.expr))
+    def |>>[s: Nat](that: UInt[s]): UInt[width] =
+        UInt.mk(None, binary(this.expr, ">>", that.expr))
+}
+
+impl[width: Nat] SInt[width] {
+    def |<<[s: Nat](that: UInt[s]): SInt[width] =
+        SInt.mk(None, binary(this.expr, "<<", that.expr))
+    // 算术右移（符号扩展）
+    def |>>[s: Nat](that: UInt[s]): SInt[width] =
+        SInt.mk(None, binary(this.expr, ">>>", that.expr))
+}
+
+impl[width: Nat] Bits[width] {
+    def |<<[s: Nat](that: UInt[s]): Bits[width] =
+        Bits.mk(None, binary(this.expr, "<<", that.expr))
+    def |>>[s: Nat](that: UInt[s]): Bits[width] =
+        Bits.mk(None, binary(this.expr, ">>", that.expr))
 }
 
 // ---- rotate ----
@@ -535,6 +600,26 @@ impl Bool {
         UInt.mk(None, this.expr)
     def asSInt: SInt[1] =
         SInt.mk(None, this.expr)
+}
+
+// ============================================================
+//  SInt abs / UInt-SInt expand (SpinalHDL `abs` / `expand`)
+// ============================================================
+
+impl[width: Nat] SInt[width] {
+    // 绝对值：符号位为 1 时取负，否则原值；结果是无符号 UInt[width]。
+    def abs: UInt[width] =
+        UInt.mk(None, Expr.mux(bitsel(this.expr, literal(pred(width))), unary("-", this.expr), this.expr))
+    // 符号扩展：`{msb, x}`，结果宽 +1。
+    def expand: SInt[width + 1] =
+        this.msb ## this
+}
+
+impl[width: Nat] UInt[width] {
+    // 零扩展：依赖 Verilog 赋值上下文把无符号 RHS 零扩展到目标宽度
+    // （与 resize 同一惯用法；`{1'b0, x}` 字面量拼接需要新的代码生成本地支持）。
+    def expand: UInt[width + 1] =
+        UInt.mk(None, this.expr)
 }
 
 // ============================================================

@@ -1,0 +1,63 @@
+// ============================================================
+// HDL Example 12: 除法/取模/宽度保持移位/abs/expand
+//
+//   a / b   UInt/SInt 除法（SpinalHDL: 结果宽 = w(x)）
+//   a % b   UInt/SInt 取模
+//   a / 3   Nat 字面量除数
+//   a |<< sh  a |>> sh   宽度保持变量移位（UInt 移位量，Verilog 原生）
+//   sa |>> sh            SInt 算术右移（>>>）
+//   sa.abs               绝对值 → UInt[width]（mux 展开）
+//   x.expand             扩展 1 位：UInt 零扩展 / SInt 符号扩展 {msb, x}
+// ============================================================
+
+module divMod {
+    let a = UInt[8]
+    let b = UInt[8]
+    let q = UInt[8]
+    let r = UInt[8]
+    let sa = SInt[8]
+    let sb = SInt[8]
+    let sq = SInt[8]
+    let srm = SInt[8]
+    let q3 = UInt[8]
+    q := a / b
+    r := a % b
+    sq := sa / sb
+    srm := sa % sb
+    q3 := a / 3
+}
+println("=== 12a: divMod (除法/取模) ===")
+println(moduleTreeVL(divMod.create.tree))
+
+module varShift {
+    let a = UInt[8]
+    let sh = UInt[4]
+    let b = Bits[8]
+    let sa = SInt[8]
+    let u1 = UInt[8]
+    let u2 = UInt[8]
+    let b1 = Bits[8]
+    let b2 = Bits[8]
+    let s1 = SInt[8]
+    let s2 = SInt[8]
+    u1 := a |<< sh
+    u2 := a |>> sh
+    b1 := b |<< sh
+    b2 := b |>> sh
+    s1 := sa |>> sh
+    s2 := sa |<< sh
+}
+println("=== 12b: varShift (|<< / |>> 宽度保持变量移位) ===")
+println(moduleTreeVL(varShift.create.tree))
+
+module absExpand {
+    let sa = SInt[8]
+    let a = UInt[8]
+    let ue = UInt[9]
+    let se = SInt[9]
+    a := sa.abs
+    ue := sa.asUInt.expand
+    se := sa.expand
+}
+println("=== 12c: absExpand (abs / expand) ===")
+println(moduleTreeVL(absExpand.create.tree))
