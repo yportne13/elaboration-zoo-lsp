@@ -38,7 +38,7 @@
 		"keywords": {
 			"patterns": [{
 				"name": "keyword.control.typort",
-				"match": "\\b(enum|struct|match|def|import|package|else|case|new|trait|impl|module|let|class|where|println)\\b"
+				"match": "\\b(calc|case|class|def|else|enum|impl|import|let|match|module|new|package|println|struct|trait|where)\\b"
 			},{
 				"name": "keyword.type.typort",
 				"match": "\\bType\\b"
