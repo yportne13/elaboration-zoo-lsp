@@ -66,6 +66,11 @@ fn elaborate_with_prelude(input: &str) -> (Infer, String) {
         decl_map.entry(short).or_insert(v);
     }
 
+    // Mirror the LSP lifecycle (lib.rs clears the prelude-pass completion
+    // table before per-file analysis): prelude-internal member accesses must
+    // not leak into the user file's completion candidates.
+    infer.completion_table.clear();
+
     // Parse and elaborate user input
     let processed_input = preprocess(input);
     let ast = parser::parser_with_macros(&processed_input, prelude_sources.len() as u32, &global_macros)
@@ -101,14 +106,23 @@ fn elaborate_with_prelude(input: &str) -> (Infer, String) {
 // ---------------------------------------------------------------------------
 fn completion_filter<'a>(
     completion_table: &'a [((u32, u32), &'a str)],
+    rope: &ropey::Rope,
     cursor_byte_offset: usize,
 ) -> Vec<&'a str> {
     completion_table
         .iter()
         .filter(|(span, _)| {
             let (start, end) = *span;
-            let trigger_offset = cursor_byte_offset.saturating_sub(2);
-            trigger_offset >= start as usize && trigger_offset < end as usize
+            let end = end as usize;
+            // Same predicate as the LSP handler: cursor on the span
+            // (hover-style), exactly at its end (right after the typed member
+            // name), or one byte past it with a `.` in between (right after
+            // the trigger dot — the empty-member span excludes the dot).
+            // The old `offset - 2` trigger point missed longer typed prefixes.
+            (cursor_byte_offset >= start as usize && cursor_byte_offset < end)
+                || cursor_byte_offset == end
+                || (cursor_byte_offset == end + 1
+                    && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
         })
         .map(|(_, label)| *label)
         .collect()
@@ -149,29 +163,55 @@ fn test_completion_filter_matches_correctly() {
         ((50, 50), "after_dot"),
         ((100, 105), "method_foo"),
     ];
+    // Synthetic document: byte 105 is a `.` (the trigger-dot shape), the
+    // rest are `x` — the filter's dot-past rule must see the real char.
+    let doc = "x".repeat(105) + ".xxx";
+    let rope = ropey::Rope::from_str(&doc);
 
-    // Cursor at byte 22 → trigger = 20, matches span [20,30)
-    let results = completion_filter(&table, 22);
+    // Cursor at byte 22 → inside span [20,30)
+    let results = completion_filter(&table, &rope, 22);
     assert_eq!(results, vec!["field_x"]);
 
-    // Cursor at byte 21 → trigger = 19, matches span [20,30) ❌ (19 < 20)
-    let results = completion_filter(&table, 21);
+    // Cursor at byte 21 → still inside [20,30) (the old -2 trigger missed this)
+    let results = completion_filter(&table, &rope, 21);
+    assert_eq!(results, vec!["field_x"]);
+
+    // Cursor at byte 19 → before the span
+    let results = completion_filter(&table, &rope, 19);
     assert!(results.is_empty());
 
-    // Cursor at byte 52 → trigger = 50, span [50,50): 50 >= 50 && 50 < 50 → false
-    let results = completion_filter(&table, 52);
+    // Cursor at byte 30 → exactly at the span end (cursor right after the
+    // typed member name / trigger dot) → matches
+    let results = completion_filter(&table, &rope, 30);
+    assert_eq!(results, vec!["field_x"]);
+
+    // Cursor at byte 31 → past the end, no `.` at the span end → no match
+    let results = completion_filter(&table, &rope, 31);
+    assert!(results.is_empty());
+
+    // Cursor at byte 52 → zero-width span [50,50): 52 not inside, 52 != 50
+    let results = completion_filter(&table, &rope, 52);
     assert!(results.is_empty(), "zero-width span should not match");
 
-    // Cursor at byte 102 → trigger = 100, matches [100,105)
-    let results = completion_filter(&table, 102);
+    // Cursor at byte 102 → inside [100,105)
+    let results = completion_filter(&table, &rope, 102);
+    assert_eq!(results, vec!["method_foo"]);
+
+    // Cursor at byte 105 → exactly at the span end → matches
+    let results = completion_filter(&table, &rope, 105);
+    assert_eq!(results, vec!["method_foo"]);
+
+    // Cursor at byte 106 → one past the end; the span [100,105) is followed
+    // by `...` (a dot), so this is the empty-member `x.|` shape → matches
+    let results = completion_filter(&table, &rope, 106);
     assert_eq!(results, vec!["method_foo"]);
 
     // Very early cursor (near start of file)
-    let results = completion_filter(&table, 1);
+    let results = completion_filter(&table, &rope, 1);
     assert!(results.is_empty());
 
-    // offset.saturating_sub(2) with offset = 0 → 0
-    let results = completion_filter(&table, 0);
+    // Cursor at offset 0
+    let results = completion_filter(&table, &rope, 0);
     assert!(results.is_empty());
 }
 
@@ -300,10 +340,15 @@ def p: Point[Nat] = new Point(1, 2)
 }
 
 // =========================================================================
-// Test 7: Completing a named field (not empty) does NOT populate table
+// Test 7: Completing a named field (typed prefix) DOES populate the table
 // =========================================================================
 #[test]
-fn test_no_completion_for_named_field() {
+fn test_completion_for_named_field_prefix() {
+    // `p.x` — a typed member prefix — must ALSO populate the completion
+    // table, with the span covering `p.x`, so Ctrl+Space at the end of a
+    // partially-typed member name works.  (Before: entries only existed for
+    // the empty-member state `p.`, so manual re-trigger after typing a
+    // prefix returned nothing.)
     let code = r#"
 struct Point[T] {
     x: T
@@ -316,11 +361,21 @@ def test = p.x
 
     let (infer, _output) = elaborate_with_prelude(code);
 
-    // `p.x` has a named field, not empty → no completions should be registered
-    // (completions only fire when t.data.is_empty() i.e. field name is "")
-    assert!(infer.completion_table.is_empty(),
-        "expected empty completion_table for named field access, got {:?}",
-        infer.completion_table.iter().map(|(_, l)| l.to_string()).collect::<Vec<_>>());
+    // The completion entries must be keyed to the `p.x` span so the LSP's
+    // `contains(offset) || end == offset` filter hits them at the cursor.
+    let p_x_off = code.rfind("p.x").unwrap();
+    let names: Vec<String> = infer.completion_table.iter()
+        .filter(|(span, _)| {
+            span.start_offset as usize == p_x_off && span.end_offset as usize == p_x_off + 3
+        })
+        .map(|(_, l)| l.to_string())
+        .collect();
+
+    assert!(!names.is_empty(),
+        "expected completions at the `p.x` span, got none: {:?}",
+        infer.completion_table.iter().map(|(s, l)| (s.start_offset, s.end_offset, l.as_str())).collect::<Vec<_>>());
+    assert!(names.contains(&"x".to_string()), "expected `x` in completions: {names:?}");
+    assert!(names.contains(&"y".to_string()), "expected `y` in completions: {names:?}");
 }
 
 // =========================================================================
@@ -507,14 +562,100 @@ fn test_handler_offset_is_byte_offset_utf16_aware() {
     assert_eq!(handler_offset, cursor, "handler offset must be the raw byte offset");
 
     // The completion spans (receiver token `p`) must be hit by the handler's
-    // `span.contains(offset.saturating_sub(2))` filter.
-    let trigger = handler_offset.saturating_sub(2);
+    // `contains(offset) || end == offset || end + 1 == offset (dot)` filter
+    // at the cursor: the empty-member span excludes the dangling dot.
     let hits: Vec<&str> = infer.completion_table.iter()
         .filter(|(span, _)| {
-            trigger >= span.start_offset as usize && trigger < span.end_offset as usize
+            let end = span.end_offset as usize;
+            (handler_offset >= span.start_offset as usize && handler_offset < end)
+                || handler_offset == end
+                || (handler_offset == end + 1
+                    && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
         })
         .map(|(_, label)| label.as_str())
         .collect();
     assert!(hits.contains(&"x"), "expected 'x' completion to match: {hits:?}");
     assert!(hits.contains(&"y"), "expected 'y' completion to match: {hits:?}");
+}
+
+// =========================================================================
+// Test 12: Inherent impl methods (namespace) appear in the candidates
+// =========================================================================
+#[test]
+fn test_namespace_method_completions() {
+    // `Boolean.not` is an inherent impl method (`impl Boolean { def not }`),
+    // registered in the type's namespace — it must be offered when completing
+    // `a.` on a Boolean.  (Before: only trait-satisfiable methods were
+    // collected, so inherent impl methods were missing from completions.)
+    let code = r#"
+def f(a: Boolean): Nat = a.
+"#;
+    let (infer, _output) = elaborate_with_prelude(code);
+
+    let names: Vec<String> = infer.completion_table.iter()
+        .map(|(_, l)| l.to_string())
+        .collect();
+    assert!(!names.is_empty(), "expected completions for `a.` on Boolean, got none");
+    assert!(names.contains(&"not".to_string()),
+        "expected inherent impl method `not` in completions: {names:?}");
+}
+
+// =========================================================================
+// Test 13: Typed member prefix survives a non-ASCII line before the cursor
+// =========================================================================
+#[test]
+fn test_typed_prefix_completion_utf16_aware() {
+    // A CJK comment before the cursor shifts char-vs-byte offsets; the
+    // handler's UTF-16-aware byte offset must still hit the `p.x` span.
+    let code = "// \u{8BC4}\u{6CE8}\nstruct Point[T] {\n    x: T\n    y: T\n}\n\ndef p: Point[Nat] = new Point(1, 2)\ndef test = p.x\n";
+    let (infer, _output) = elaborate_with_prelude(code);
+
+    let rope = ropey::Rope::from_str(code);
+    let p_x_off = code.rfind("p.x").unwrap();
+    let cursor = p_x_off + 3; // cursor at the end of the typed member name
+    let line = code[..cursor].matches('\n').count();
+    let char_in_line = code[..cursor].rfind('\n').map(|i| cursor - i - 1).unwrap_or(cursor);
+    let position = lsp_types::Position::new(line as u32, char_in_line as u32);
+    let handler_offset = elaboration_zoo_lsp::position_to_offset(position, &rope).expect("cursor offset");
+    assert_eq!(handler_offset, cursor, "handler offset must be the raw byte offset");
+
+    let hits: Vec<&str> = infer.completion_table.iter()
+        .filter(|(span, _)| {
+            span.start_offset as usize == p_x_off
+                && span.end_offset as usize == p_x_off + 3
+                && (handler_offset >= span.start_offset as usize && handler_offset < span.end_offset as usize
+                    || handler_offset == span.end_offset as usize)
+        })
+        .map(|(_, label)| label.as_str())
+        .collect();
+    assert!(hits.contains(&"x"), "expected 'x' to match at the `p.x` span: {hits:?}");
+    assert!(hits.contains(&"y"), "expected 'y' to match at the `p.x` span: {hits:?}");
+}
+
+// =========================================================================
+// Test 14: member_prefix_start — the text-edit replacement range
+// =========================================================================
+#[test]
+fn test_member_prefix_start() {
+    use ropey::Rope;
+
+    // `p.le` — the typed prefix starts right after the dot.
+    let rope = Rope::from_str("def f(p: Point): Nat = p.le");
+    let offset = "def f(p: Point): Nat = p.le".len();
+    assert_eq!(elaboration_zoo_lsp::member_prefix_start(&rope, offset), Some(offset - 2));
+
+    // `p.` — empty prefix: replace nothing (insertion at the cursor).
+    let rope2 = Rope::from_str("def f(p: Point): Nat = p.");
+    let offset2 = "def f(p: Point): Nat = p.".len();
+    assert_eq!(elaboration_zoo_lsp::member_prefix_start(&rope2, offset2), Some(offset2));
+
+    // No dot before the cursor on the line → fallback (handler inserts).
+    let rope3 = Rope::from_str("def f(p: Point): Nat = p");
+    let offset3 = "def f(p: Point): Nat = p".len();
+    assert_eq!(elaboration_zoo_lsp::member_prefix_start(&rope3, offset3), None);
+
+    // `foo.bar.le` — the last dot is the member-access dot.
+    let rope4 = Rope::from_str("def f(x: Outer): Nat = x.inner.le");
+    let offset4 = "def f(x: Outer): Nat = x.inner.le".len();
+    assert_eq!(elaboration_zoo_lsp::member_prefix_start(&rope4, offset4), Some(offset4 - 2));
 }

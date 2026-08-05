@@ -1531,22 +1531,27 @@ impl Infer {
                                 }
                             }
                         }
-                        if t.data.is_empty() {
-                            c.iter()
-                                .flatten()
-                                .map(|x| (t_span, x.0.data.clone()))
-                                .chain(
-                                    params
-                                        .iter()
-                                        .map(|x| (t_span, x.0.data.clone()))
-                                )
-                                .for_each(|x| self.completion_table.push(x));
-                        }
-                        let field_info = c.and_then(|params| {
-                                params.into_iter()
-                                    .find(|(fields_name, _)| fields_name == &t)
-                                    .map(|(name, ty)| (name.to_span(), ty))
-                            }).or_else(|| {
+        // Completion candidates for the receiver's fields and type params —
+        // pushed for BOTH the empty-member state (`p.`) and typed member
+        // names (`p.x`), so the LSP can answer completion requests with the
+        // cursor at the end of a partially-typed member name.  (This is a
+        // cheap pure iteration over already-computed data; the type-directed
+        // trait/namespace probes below are deferred to the failure path in
+        // trait_wrap so successful calls like `a + b` stay free.)
+        c.iter()
+            .flatten()
+            .map(|x| (t_span, x.0.data.clone()))
+            .chain(
+                params
+                    .iter()
+                    .map(|x| (t_span, x.0.data.clone()))
+            )
+            .for_each(|x| self.completion_table.push(x));
+        let field_info = c.as_ref().and_then(|params| {
+                params.iter()
+                    .find(|(fields_name, _)| fields_name == &t)
+                    .map(|(name, ty)| (name.to_span(), ty.clone()))
+            }).or_else(|| {
                             params
                                 .iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
@@ -1563,6 +1568,10 @@ impl Infer {
                             }
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
+                        // Completion candidates: this case's field names.
+                        for (fields_name, _, _) in params.iter() {
+                            self.completion_table.push((t_span, fields_name.data.clone()));
+                        }
                         if let Some((def_span, val)) = params
                             .iter()
                             .find(|(fields_name, _, _)| fields_name == &t)
@@ -1829,16 +1838,6 @@ impl Infer {
         let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
         let typ_raw_head = super::typeclass::head_key(&typ_raw);
 
-        if t.data.is_empty() {
-            // Collect completions: find traits whose first non-out param could match typ_raw
-            let completions: Vec<_> = self.trait_definition.iter()
-                .filter(|(x, (_, _, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
-                .flat_map(|x| x.1.3.clone())
-                .collect();
-            for method_decl in &completions {
-                self.completion_table.push((t_span, method_decl.0.data.clone()));
-            }
-        }
         // --- Namespace method lookup with meta cleanup ---
         // Collect matching namespaces entries (clone to avoid borrow conflicts)
         let ns_entries: Vec<_> = cxt.namespace.iter()
@@ -2021,6 +2020,54 @@ impl Infer {
                 ));
                 Ok(result)
             } else {
+                // The member did not resolve — this is a completion site: the
+                // `p.` empty-member state or a partially-typed prefix `p.z`.
+                // Collect trait methods satisfiable by typ_raw plus
+                // namespace-registered methods (inherent impls) whose receiver
+                // type matches.  Only the failure path collects, so successful
+                // calls like `a + b` or `x.not` pay no probing cost.
+                let completions: Vec<_> = self.trait_definition.iter()
+                    .filter(|(x, (_, _, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
+                    .flat_map(|x| x.1.3.clone())
+                    .collect();
+                for method_decl in &completions {
+                    self.completion_table.push((t_span, method_decl.0.data.clone()));
+                }
+                // Namespace methods: the same receiver-type probe as the
+                // resolution path above, but without the typed-name filter.
+                // The probe may solve metas whose solutions reference the
+                // temporary metas created here, so roll back the whole meta /
+                // trait_metas state after each entry.
+                {
+                    let meta_snapshot = self.meta.clone();
+                    let trait_metas_snapshot = self.trait_metas.clone();
+                    for ns_entry in cxt.namespace.iter() {
+                        // Pre-filter: skip entries whose trait has no instance
+                        // for this Self type (same rule as the resolution path).
+                        if let Some(ref head) = typ_raw_head {
+                            if let Val::Pi(_, Icit::Impl, dom, _) = ns_entry.0.as_ref() {
+                                if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
+                                    if !self.trait_solver.can_satisfy(&trait_name.data, &typ_raw) {
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                        let mut check_typ = ns_entry.0.clone();
+                        while let Val::Pi(_, Icit::Impl, dom, cod) = check_typ.as_ref() {
+                            let u = self.fresh_meta(&cxt, dom.clone(), t_span);
+                            let u = self.eval(&cxt.decl, &cxt.env, &u);
+                            check_typ = self.closure_apply(&cxt.decl, cod, u);
+                        }
+                        if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
+                            for method_name in ns_entry.1.iter() {
+                                self.completion_table.push((t_span, method_name.clone()));
+                            }
+                        }
+                        self.meta = meta_snapshot.clone();
+                        self.trait_metas = trait_metas_snapshot.clone();
+                    }
+                }
                 Err(Error(t.clone().map(|t| format!(
                     "`{}`: {} has no object `{}`",
                     super::pretty_tm(0, cxt.names(), &tm),
