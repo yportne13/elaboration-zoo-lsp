@@ -39,6 +39,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Registers | `reg a = UInt[8]` | Sequential elements with clock/reset |
 | Reg with init | `reg a = UInt[8] init 42` | Register with async reset value |
 | Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers, works for any Data (UInt/SInt/Bits/Bool) |
+| Counter | `let c = counter(8)` / `counterInc(8, en)` | SpinalHDL-style counters: free-running or enable-gated increment, `c.value` (reg) + `c.willOverflow` (combinational, `~value == 0`) |
 | Memory | `let m = memUInt(8, 256)` | SpinalHDL-style `Mem` as a `reg [w-1:0] name [0:wordCount-1]` array; `m.write(addr, data, en)` (sync write port), `m.readAsync(addr)` (combinational read), `m.readSync(addr)` (registered read), `m.readSyncCC(addr, cd)` (cross-clock read) |
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Inout ports | `inout io = UInt[8]` | Tri-state bidirectional ports (`inout wire [7:0] io`); Bundle `inout()` fields become inout ports on both master and slave |

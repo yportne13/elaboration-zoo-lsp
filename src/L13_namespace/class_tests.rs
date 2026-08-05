@@ -68,14 +68,14 @@ println (p.double)
 #[test]
 fn class_method_with_params_and_chain() {
     let output = assert_ok(r#"
-class Counter {
+class Tally {
     let n: Nat = 2
-    def add(dx: Nat): Counter = Counter.mk (this.n + dx)
+    def add(dx: Nat): Tally = Tally.mk (this.n + dx)
     def get: Nat = this.n
     def add2: Nat = this.add(2).get
 }
-println (Counter.create.add(3).get)
-println (Counter.create.add2)
+println (Tally.create.add(3).get)
+println (Tally.create.add2)
 "#);
     let lines: Vec<&str> = output.trim().lines().collect();
     assert!(lines.iter().any(|l| l.trim() == "5"), "add(3).get should be 5: {}", output);
@@ -105,17 +105,17 @@ println (Adder.create[5].name)
 fn class_trait_impl_sibling_method_call() {
     // Regression: trait-impl method bodies used to be elaborated before the
     // inherent impl registered the namespace methods, so `this.double` failed
-    // with "Counter has no object `double`".
+    // with "Tally has no object `double`".
     let output = assert_ok(r#"
 trait Named {
     def name: Nat
 }
-class Counter impl Named {
+class Tally impl Named {
     let base: Nat = 5
     def double: Nat = this.base + this.base
     def name: Nat = this.double + 1
 }
-println (Counter.create.name)
+println (Tally.create.name)
 "#);
     assert!(output.contains("11"), "name should call sibling double = 11, got: {}", output);
 }
@@ -241,12 +241,12 @@ fn class_ctor_statements() {
     // Bare expressions in the class body are constructor statements: they are
     // elaborated (type-checked) in order before the fields are assembled.
     let output = assert_ok(r#"
-class Counter {
+class Tally {
     let n: Nat = 1
     1 + 1
     def get: Nat = this.n
 }
-println (Counter.create.get)
+println (Tally.create.get)
 "#);
     assert!(output.contains("1"), "ctor statements should not disturb fields: {}", output);
 }
@@ -256,11 +256,11 @@ println (Counter.create.get)
 #[test]
 fn class_operator_method() {
     let output = assert_ok(r#"
-class Counter {
+class Tally {
     let n: Nat = 2
-    def + (that: Counter): Nat = this.n + that.n
+    def + (that: Tally): Nat = this.n + that.n
 }
-println (Counter.create + Counter.create)
+println (Tally.create + Tally.create)
 "#);
     assert!(output.contains("4"), "operator method should yield 4, got: {}", output);
 }

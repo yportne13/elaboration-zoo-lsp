@@ -1447,6 +1447,14 @@ fn test_examples_hdl_dir() {
             "input wire master_dir",     // in 标记字段仍是 input
             "output wire slave_dir",     // slave 侧 in 字段翻转为 output
         ]),
+        ("14-counter.typort", include_str!("../../examples/hdl/14-counter.typort"), &[
+            "reg [7:0] cnt;",            // counter(8) 寄存器（let 绑定名自动命名）
+            "cnt <= (cnt + 1);",         // 自增时钟赋值
+            "if (en) begin",             // counterInc 使能计数
+            "assign wrap = (~cnt == 0);", // willOverflow 组合信号
+            "always @(posedge clk)",     // 计数器时钟块
+            "input wire clk",            // 自动时钟端口
+        ]),
     ];
 
     for (file, input, asserts) in examples {

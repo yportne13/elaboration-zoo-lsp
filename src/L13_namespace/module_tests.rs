@@ -44,16 +44,16 @@ fn assert_err_contains(input: &str, needle: &str) {
 #[test]
 fn module_body_only() {
     let output = assert_ok(r#"
-module counter {
+module counterDemo {
     let a = UInt[8]
     let b = UInt[8]
     let sum = UInt[8]
     sum := a + b
 }
-println(moduleTreeVL(counter.create.tree))
+println(moduleTreeVL(counterDemo.create.tree))
 "#);
-    assert!(output.contains("counter"), "verilog should name the module, got: {}", output);
-    assert!(output.contains("module counter"), "expected module header, got: {}", output);
+    assert!(output.contains("counterDemo"), "verilog should name the module, got: {}", output);
+    assert!(output.contains("module counterDemo"), "expected module header, got: {}", output);
 }
 
 // ── parametric module [w: Nat] ──

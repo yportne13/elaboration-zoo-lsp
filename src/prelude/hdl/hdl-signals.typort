@@ -400,3 +400,28 @@ impl RegNext[Bool] for Bool {
 
 def regNext[bn: BindingName, T][r: RegNext[T]](value: T): T = r.mkReg(value, bn.name)
 def regNextWhen[bn: BindingName, T][r: RegNext[T]](value: T, cond: Bool): T = r.mkRegWhen(value, bn.name, cond)
+
+// ============================================================
+//  Counter — SpinalHDL 风格计数器
+//  counter(w)       自增计数器：每周期 value := value + 1
+//  counterInc(w, en) 使能计数：when(en) { value := value + 1 }
+//  value 寄存器按 let 绑定名自动命名；willOverflow 为组合信号
+//  （value 全 1，即 (~value == 0)，下一个周期回绕到 0）。
+// ============================================================
+
+struct Counter[w: Nat] {
+    value: UInt[w]
+    willOverflow: Bool
+}
+
+def counter[bn: BindingName](w: Nat): Counter[w] =
+    let v = newUIntReg(bn.name, w);
+    let _ = createSignalExpr("", regAssign(v.expr, binary(v.expr, "+", literal(1))));
+    Counter.mk(v, Bool.mk(None, binary(unary("~", v.expr), "==", literal(0))))
+
+def counterInc[bn: BindingName](w: Nat, enable: Bool): Counter[w] =
+    let v = newUIntReg(bn.name, w);
+    let _ = whenBegin(enable.expr);
+    let _ = createSignalExpr("", regAssign(v.expr, binary(v.expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    Counter.mk(v, Bool.mk(None, binary(unary("~", v.expr), "==", literal(0))))
