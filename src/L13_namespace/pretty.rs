@@ -119,6 +119,49 @@ fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: 
     go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0)
 }
 
+/// Returns true when `tm` references any of the `n` innermost context
+/// binders.  Used by arrow-chain folding: a subsequent Pi domain may only be
+/// merged into the current parameter group when it does not depend on any
+/// binder already in the group — otherwise the merged form would silently
+/// drop a dependency (e.g. `(x: A) → (y: B x) → C` must stay unfolded
+/// because `B x` references `x`).  Binders introduced *inside* `tm`
+/// (Pi/Lam/Let) shift variable indices and are counted by the `depth`
+/// argument.
+fn mentions_outer_n(tm: &Tm, n: u32) -> bool {
+    fn go(t: &Tm, depth: u32, n: u32) -> bool {
+        if depth >= n {
+            return false;
+        }
+        match t {
+            Tm::Var(ix) => ix.0 < n - depth,
+            Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => false,
+            Tm::Obj(x, _) => go(x, depth, n),
+            Tm::Lam(_, _, body) => go(body, depth + 1, n),
+            Tm::App(f, u, _) => go(f, depth, n) || go(u, depth, n),
+            // `AppPruning` consumes its context entries without binding
+            // anything for its inner term (which is printed under the full
+            // scope again), so it is transparent for the check.
+            Tm::AppPruning(t, _) => go(t, depth, n),
+            Tm::Pi(_, _, a, b) => go(a, depth, n) || go(b, depth + 1, n),
+            Tm::Let(_, a, t2, u) => go(a, depth, n) || go(t2, depth, n) || go(u, depth + 1, n),
+            Tm::Sum(_, tms, _, _) => tms.iter().any(|tm| go(&tm.1, depth, n)),
+            Tm::SumCase { typ, datas, .. } => {
+                go(typ, depth, n) || datas.iter().any(|d| go(&d.1, depth, n))
+            }
+            Tm::Call(_, args, body) => {
+                args.iter().any(|(a, _)| go(a, depth, n)) || go(body, depth, n)
+            }
+            Tm::OpCall { args, body, .. } => {
+                args.iter().any(|(a, _)| go(a, depth, n)) || go(body, depth, n)
+            }
+            Tm::Match(t, cases) => {
+                go(t, depth, n) || cases.iter().any(|(_, b)| go(b, depth, n))
+            }
+        }
+    }
+    go(tm, 0, n)
+}
+
 pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
     pretty_tm_indent(prec, 0, ns, tm)
 }
@@ -206,14 +249,62 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                     ret
                 }
             } else {
-                let x = fresh(ns.clone(), &name_span.data);
-                let new_ns = ns.prepend(SmolStr::new(&x));
-                let binder = match i {
-                    Icit::Expl => paren(format!("{x}: {}", pretty_tm_indent(LETP, indent, ns, a))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm_indent(LETP, indent, ns, a))),
-                };
-                let f_b = pretty_tm_indent(PIP, indent, new_ns, b);
-                let ret = format!("{binder} → {f_b}");
+                // Arrow-chain folding: consecutive Pi binders whose domain
+                // does not reference any binder already collected are merged
+                // into one parameter group — `(x: A, y: B) → C` instead of
+                // the nested `(x: A) → (y: B) → C` chain.  Merging is only
+                // safe when the later domain is independent of the earlier
+                // binders (a dependent type must keep its own `→` so the
+                // binder stays in scope).  Implicit binders group in square
+                // brackets `[T: Type]` (the parser's implicit syntax, same
+                // as `Sum`/`Call` args); explicit ones in parens.  Groups of
+                // different icities concatenate like the source form
+                // `def f[T](x: A)`, with a zero-width space at the `](`
+                // boundary to keep markdown links from forming.
+                let mut binders: Vec<(SmolStr, Icit, Arc<Tm>, List<SmolStr>)> = Vec::new();
+                let mut ns_cur = ns.clone();
+                let mut cur_name = name_span.clone();
+                let mut cur_i = *i;
+                let mut cur_a = a.clone();
+                let mut cur_b = b.clone();
+                loop {
+                    let x = fresh(ns_cur.clone(), &cur_name.data);
+                    binders.push((SmolStr::new(&x), cur_i, cur_a.clone(), ns_cur.clone()));
+                    ns_cur = ns_cur.prepend(SmolStr::new(&x));
+                    match cur_b.as_ref() {
+                        Tm::Pi(n2, i2, a2, b2)
+                            if n2.data != "_" && !mentions_outer_n(a2, binders.len() as u32) =>
+                        {
+                            cur_name = n2.clone();
+                            cur_i = *i2;
+                            cur_a = a2.clone();
+                            cur_b = b2.clone();
+                        }
+                        _ => break,
+                    }
+                }
+                let mut groups: Vec<(Icit, Vec<String>)> = Vec::new();
+                for (x, icit, a2, dom_ns) in &binders {
+                    let dom = pretty_tm_indent(LETP, indent, dom_ns.clone(), a2);
+                    let item = format!("{x}: {dom}");
+                    match groups.last_mut() {
+                        Some((i0, seg)) if i0 == icit => seg.push(item),
+                        _ => groups.push((*icit, vec![item])),
+                    }
+                }
+                let mut group_str = String::new();
+                for (idx, (icit, seg)) in groups.iter().enumerate() {
+                    if idx > 0 && group_str.ends_with(']') {
+                        group_str.push('\u{200b}');
+                    }
+                    let inner = seg.join(", ");
+                    match icit {
+                        Icit::Expl => group_str.push_str(&format!("({inner})")),
+                        Icit::Impl => group_str.push_str(&format!("[{inner}]")),
+                    }
+                }
+                let f_b = pretty_tm_indent(PIP, indent, ns_cur, &cur_b);
+                let ret = format!("{group_str} → {f_b}");
                 if need_paren {
                     paren(ret)
                 } else {
@@ -389,6 +480,126 @@ mod tests {
 
     fn pretty(tm: &Tm) -> String {
         pretty_tm(0, List::new(), tm)
+    }
+
+    fn pi(name: &str, icit: Icit, a: Arc<Tm>, b: Arc<Tm>) -> Arc<Tm> {
+        Tm::Pi(
+            Span { data: SmolStr::new(name), start_offset: 0, end_offset: 0, path_id: 0 },
+            icit,
+            a,
+            b,
+        ).into()
+    }
+
+    fn lam(name: &str, icit: Icit, body: Arc<Tm>) -> Arc<Tm> {
+        Tm::Lam(
+            Span { data: SmolStr::new(name), start_offset: 0, end_offset: 0, path_id: 0 },
+            icit,
+            body,
+        ).into()
+    }
+
+    #[test]
+    fn pi_chain_folds_independent_binders() {
+        // `(x: A) → (y: B) → C` folds to `(x: A, y: B) → C` when the second
+        // domain does not reference the first binder.
+        let chain = pi("x", Icit::Expl, decl("A"), pi("y", Icit::Expl, decl("B"), decl("C")));
+        assert_eq!(pretty(&chain), "(x: A, y: B) → C");
+    }
+
+    #[test]
+    fn pi_chain_keeps_dependent_binder_separate() {
+        // `(x: A) → (y: B x) → C`: y's domain references x, so the groups
+        // must stay separate — folding would silently drop the dependency.
+        let dep = pi(
+            "x",
+            Icit::Expl,
+            decl("A"),
+            pi("y", Icit::Expl, app(decl("B"), Tm::Var(crate::L13_namespace::Ix(0)).into()), decl("C")),
+        );
+        assert_eq!(pretty(&dep), "(x: A) → (y: B x) → C");
+    }
+
+    #[test]
+    fn pi_folds_deep_chain_with_dependent_head() {
+        // `(x: A) → (y: B x) → (z: C) → D`: y depends on x, but z is
+        // independent of y — each segment folds on its own.
+        let chain = pi(
+            "x",
+            Icit::Expl,
+            decl("A"),
+            pi(
+                "y",
+                Icit::Expl,
+                app(decl("B"), Tm::Var(crate::L13_namespace::Ix(0)).into()),
+                pi("z", Icit::Expl, decl("C"), decl("D")),
+            ),
+        );
+        assert_eq!(pretty(&chain), "(x: A) → (y: B x, z: C) → D");
+    }
+
+    #[test]
+    fn pi_implicit_binder_uses_square_brackets() {
+        // Implicit binders use the parser's `[x: A]` syntax, not `{x: A}`.
+        let impl_pi = pi("T", Icit::Impl, Tm::U(0).into(), Tm::U(0).into());
+        assert_eq!(pretty(&impl_pi), "[T: Type 0] → Type 0");
+    }
+
+    #[test]
+    fn lam_implicit_binder_uses_square_brackets() {
+        // Implicit lambda binders use `[x] => ...`, not `{x} => ...`.
+        let lam_impl = lam("T", Icit::Impl, lam("x", Icit::Expl, Tm::Var(crate::L13_namespace::Ix(0)).into()));
+        assert_eq!(pretty(&lam_impl), "[T] => x => x");
+    }
+
+    #[test]
+    fn pi_merges_independent_implicit_binders() {
+        // `[A: Type 0] → [B: Type 0] → C` folds to `[A: Type 0, B: Type 0] → C`.
+        let chain = pi("A", Icit::Impl, Tm::U(0).into(), pi("B", Icit::Impl, Tm::U(0).into(), decl("C")));
+        assert_eq!(pretty(&chain), "[A: Type 0, B: Type 0] → C");
+    }
+
+    #[test]
+    fn pi_groups_mix_implicit_and_explicit() {
+        // Independent mixed-icity binders concatenate like the source
+        // `def f[T](x: A)` form; a zero-width space keeps the `](` boundary
+        // from forming a markdown link (same convention as `Call`/`Sum`).
+        let mixed = pi("T", Icit::Impl, Tm::U(0).into(), pi("x", Icit::Expl, decl("Nat"), decl("Nat")));
+        assert_eq!(pretty(&mixed), "[T: Type 0]\u{200b}(x: Nat) → Nat");
+    }
+
+    #[test]
+    fn pi_folding_preserves_shadowing_renames() {
+        // Binder names are freshened in order; folding must not change names.
+        let chain = pi("x", Icit::Expl, decl("A"), pi("x", Icit::Expl, decl("B"), decl("C")));
+        assert_eq!(pretty(&chain), "(x: A, x': B) → C");
+    }
+
+    #[test]
+    fn pi_anonymous_codomain_keeps_arrow() {
+        // Anonymous binders (`A → B`) are not folded into named groups.
+        let chain = pi("x", Icit::Expl, decl("A"), pi("_", Icit::Expl, decl("B"), decl("C")));
+        assert_eq!(pretty(&chain), "(x: A) → B → C");
+    }
+
+    #[test]
+    fn mentions_outer_n_tracks_binder_depths() {
+        use crate::L13_namespace::Ix;
+        // Var(0) is the innermost of n=1 binders.
+        assert!(mentions_outer_n(&Tm::Var(Ix(0)), 1));
+        // Var(1) is beyond n=1, but inside n=2.
+        assert!(!mentions_outer_n(&Tm::Var(Ix(1)), 1));
+        assert!(mentions_outer_n(&Tm::Var(Ix(1)), 2));
+        assert!(!mentions_outer_n(&Tm::Var(Ix(2)), 2));
+        // A binder introduced inside the term shifts indices: a Pi's domain
+        // is still under the outer scope (Var(0) = outer binder), while its
+        // codomain's Var(0) refers to the internal binder only.
+        let dom_ref = pi("z", Icit::Expl, Tm::Var(Ix(0)).into(), decl("W"));
+        assert!(mentions_outer_n(&dom_ref, 1));
+        let codom_ref = pi("z", Icit::Expl, decl("W"), Tm::Var(Ix(0)).into());
+        assert!(!mentions_outer_n(&codom_ref, 1));
+        // Nested applications propagate the check to all subterms.
+        assert!(mentions_outer_n(&app(app(decl("F"), Tm::Var(Ix(0)).into()), decl("G")), 1));
     }
 
     #[test]

@@ -56,6 +56,42 @@ fn let_pattern_wildcard() {
     }
 }
 
+fn hover_type_of(input: &str, name: &str) -> String {
+    let infer = elaborate_infer(input);
+    let pos = input.find(name).unwrap();
+    let (_, _, h, v) = infer.hover_entry_at(24, pos).unwrap();
+    pretty_tm(0, h.names(), &infer.quote(&h.decl, h.lvl, v))
+}
+
+#[test]
+fn hover_type_folds_independent_params() {
+    // Multi-param function types fold into one group when later params do
+    // not depend on earlier ones (`(x: Nat, y: Bool) → Bool` instead of the
+    // `(x: Nat) → (y: Bool) → Bool` arrow chain), and implicit binders use
+    // the parser's square-bracket syntax (`[A: Type 0]`, not `{A: Type 0}`).
+    assert_eq!(
+        hover_type_of("def foo(x: Nat, y: Bool): Bool = y", "foo"),
+        "(x: Nat, y: Bool) → Bool"
+    );
+    // x and y both depend on A, so they stay behind A's own `→`, but they
+    // are independent of each other and fold together.
+    assert_eq!(
+        hover_type_of("def bar[A](x: A, y: A): A = x", "bar"),
+        "[A: Type 0] → (x: A, y: A) → A"
+    );
+    // f's domain `A → Nat` depends on A (outside the merged group) but not
+    // on x or y, so x, y, f fold into one explicit group.
+    assert_eq!(
+        hover_type_of("def dep4[A](x: A, y: Nat, f: A -> Nat): Nat = y", "dep4"),
+        "[A: Type 0] → (x: A, y: Nat, f: A → Nat) → Nat"
+    );
+    // Single-binder types are unchanged.
+    assert_eq!(
+        hover_type_of("def idd[A](x: A): A = x", "idd"),
+        "[A: Type 0] → (x: A) → A"
+    );
+}
+
 #[test]
 fn let_binder_simple() {
     // Old fast path: let x = 7; x  (no match desugaring)
