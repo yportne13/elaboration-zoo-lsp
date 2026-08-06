@@ -171,9 +171,9 @@ macro_rules Expr {
 
 // The module macro provides convenient module definition syntax.
 // It expands to a `class` (scala-style) whose struct implements the `Module` trait:
-//   struct $name { a: UInt[8], ..., tree_data: ModuleTree }  — ports become fields
-//   def $name.create[args]: $name[args] = ...              — runs the body, captures the tree
-//   impl Module for $name { def tree = this.tree_data }
+//   struct $name { a: UInt[8], ... }   — ports become fields (NO storage field)
+//   def $name.create[args]: $name[args] = ...   — runs the side-effect chain eagerly
+//   impl Module for $name { def tree = <chain without instance recording> }
 // Usage:
 //   module myAdder[w: Nat]
 //       input a = UInt[w]
@@ -189,10 +189,11 @@ macro_rules Expr {
 // signals (no port handle), so a parent cannot connect to them via `u.x`.
 //
 // Each port is declared TWICE in the class body (both collapse into one struct
-// field; the last wins): first as the module's own signal so the body can use
-// `sum := a` with real signals, then after tree_data as a subSignal handle so a
-// parent can write `u.a := sig` — SpinalHDL-style hierarchical access, where
-// the instance name comes from the implicit bn constructor parameter.
+// field; the last wins): first as the module's own signal inside the side-effect
+// chain so the body can use `sum := a` with real signals, then after the chain
+// as a subSignal handle so a parent can write `u.a := sig` — SpinalHDL-style
+// hierarchical access, where the instance name comes from the implicit bn
+// constructor parameter.
 // NOTE: 依赖"同名字段后者覆盖前者"的编译器行为；若解析器对字段重名报错
 //       或改变语义，此宏必须重写（不要再声明同名端口）。
 //
@@ -204,24 +205,31 @@ macro_rules Expr {
 // records `instance(bn.name, name)` itself via mkInstanceIfParent (dropped at
 // top level, where no parent module exists).
 //
-// WHY the whole body stays inside the single tree_data field's let chain:
-// the chain is the push/pop sandwich around the global ModuleTree and must run
-// EAGERLY when the constructor is evaluated — a nested `let u = child.create`
-// inside the body records its instance into the parent's in-progress tree
-// (the _inst line, after the restore), and the chain's captured `_res` tree is
-// stored in the field for the `Module` trait's `tree` method.
-// Flattening the chain into per-side-effect class fields was measured NOT to
-// slow the current compiler down (the old "35x" claim of the task2 attempt did
-// not reproduce; see docs/module-redesign-analysis.md §2), but it is still not
-// viable: (a) class fields WITHOUT type annotations leave unsolved struct metas
-// in parameterized classes, (b) the Expr-macro body statements are untyped
-// `let`s (and the generic `let $x = $y` arm cannot be annotated at all), and
-// (c) the scaffold prims return universe-typed values that cannot be used as
-// field types of a Module-trait class. So the chain stays in one field; it is
-// formatted multi-line for readability (the parser accepts newlines between
-// `;`-separated lets), and the discarded scaffold bindings use `let _ = ...`
-// (a binder named `_` that shadows on repetition — the parser itself desugars
-// scala-style apply blocks to `let _ = stmt`).
+// WHY the side-effect chain is transcribed TWICE (方案 C; 前置分析见
+// docs/module-redesign-analysis.md §8.3，摊平形态探针见
+// class_tests.rs::class_module_shape_flattened_chain):
+// the chain is the push/pop sandwich around the global ModuleTree, and both
+// copies below are byte-identical apart from the instance-recording line.
+//   1. create side — one bare parenthesized STATEMENT at the top of the class
+//      body. A bare statement is a create-local (ClassItem::Stmt), NOT a
+//      struct field, so the old `tree_data` storage field is gone and the
+//      struct keeps only the port handle fields. It runs EAGERLY when the
+//      constructor is evaluated — a nested `let u = child.create` inside the
+//      body records its instance into the parent's in-progress tree (the
+//      mkInstanceIfParent line runs after the restore, against the parent
+//      frame), so the instance lands in the tree exactly once. The chain's
+//      `_res` tree value is discarded here; the create-side side effects are
+//      what matter.
+//   2. `def tree` side — the same chain minus mkInstanceIfParent (the def has
+//      no `bn` and must not re-record instances) runs on EVERY `.tree`
+//      access, rebuilding the identical tree from a clean push. Idempotent:
+//      each run starts with change_mutable_default reset and ends by
+//      restoring the previous global tree, so repeated accesses print the
+//      same Verilog.
+// RED LINE (§8.3): both copies keep the ModuleDef push in constant form
+// `ModuleTree.mk(0 + 1, ... :: nil)` — deriving the head from the lambda
+// parameter (`x.num + 1` / `:: x.data`) leaves stuck GADT indices that make
+// every later tree access O(n²).
 
 #[macro_export]
 macro_rules module {
@@ -232,12 +240,23 @@ macro_rules module {
 	// Usage: let t = foo.create[myClockDomain].tree
 	($name: ident [$cd: ident] $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name [$cd: ClockDomain] $({$args})* impl Module {
-			// The whole module body is one field whose VALUE is the side-effect
-			// chain (see the WHY note above): it runs eagerly when the
-			// constructor is evaluated, inside the _prev/_restore sandwich that
-			// keeps the global ModuleTree clean across the ~2 def-check
-			// evaluations and any later create call.
-			let tree_data: ModuleTree =
+			// Create side (see the WHY note above): the side-effect chain as a
+			// bare class-body statement — a create-local, not a struct field.
+			(let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
+			let _ = create_global("WhenStack", whenStackEmpty);
+			let _prev = get_global("ModuleTree");
+			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
+			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
+			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
+			$($body)*
+			let _res = get_global("ModuleTree");
+			let _ = create_global("ModuleTree", _prev);
+			let _ = mkInstanceIfParent(bn.name, stringify $name);
+			_res)
+			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
+			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
+			// tree recomputes the chain on every access (minus instance recording).
+			def tree: ModuleTree =
 				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
 				let _ = create_global("WhenStack", whenStackEmpty);
 				let _prev = get_global("ModuleTree");
@@ -247,17 +266,29 @@ macro_rules module {
 				$($body)*
 				let _res = get_global("ModuleTree");
 				let _ = create_global("ModuleTree", _prev);
-				let _ = mkInstanceIfParent(bn.name, stringify $name);
 				_res
-			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
-			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			def tree: ModuleTree = this.tree_data
 		}
 	};
 	// Without clock domain: uses defaultClockDomain
 	($name: ident $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name $({$args})* impl Module {
-			let tree_data: ModuleTree =
+			// Create side (see the WHY note above): the side-effect chain as a
+			// bare class-body statement — a create-local, not a struct field.
+			(let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
+			let _ = create_global("WhenStack", whenStackEmpty);
+			let _prev = get_global("ModuleTree");
+			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
+			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
+			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
+			$($body)*
+			let _res = get_global("ModuleTree");
+			let _ = create_global("ModuleTree", _prev);
+			let _ = mkInstanceIfParent(bn.name, stringify $name);
+			_res)
+			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
+			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
+			// tree recomputes the chain on every access (minus instance recording).
+			def tree: ModuleTree =
 				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
 				let _ = create_global("WhenStack", whenStackEmpty);
 				let _prev = get_global("ModuleTree");
@@ -267,11 +298,7 @@ macro_rules module {
 				$($body)*
 				let _res = get_global("ModuleTree");
 				let _ = create_global("ModuleTree", _prev);
-				let _ = mkInstanceIfParent(bn.name, stringify $name);
 				_res
-			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
-			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			def tree: ModuleTree = this.tree_data
 		}
 	};
 }

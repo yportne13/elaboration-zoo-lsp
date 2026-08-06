@@ -156,6 +156,62 @@ println(moduleTreeVL(t))
     assert!(second > 0, "expected two identical top-level verilogs, got: {}", output);
 }
 
+// ── plan C: no `tree_data` storage field ──
+// The create-side side-effect chain is a bare class-body statement (a
+// create-local, NOT a struct field), so the struct has no storage field and
+// `m.tree_data` must fail to type-check. `def tree` recomputes the chain.
+
+#[test]
+fn module_no_tree_data_field() {
+    assert_err_contains(r#"
+module solo {
+    let a = UInt[8]
+}
+def t = solo.create.tree
+println(solo.create.tree_data)
+"#, "tree_data");
+}
+
+// ── plan C: def tree re-runs the chain — idempotent, instance exactly once ──
+
+#[test]
+fn module_def_tree_idempotent_instance_once() {
+    // Two `.tree` accesses of the same module print byte-identical Verilog
+    // (each access re-runs the chain from a clean push), and the nested
+    // instance line appears exactly once per printed module.
+    let output = assert_ok(r#"
+module myAdder[w: Nat]
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w + 1]
+{
+    sum := a +^ b
+}
+module topWithAdder {
+    let a = UInt[8]
+    let b = UInt[8]
+    let u = myAdder.create[8]
+    u.a := a
+    u.b := b
+}
+println(moduleTreeVL(topWithAdder.create.tree))
+println(moduleTreeVL(topWithAdder.create.tree))
+"#);
+    // one instance record per printed tree → 2 total, never duplicated
+    assert_eq!(output.matches("myAdder u (").count(), 2,
+        "instance should be recorded exactly once per tree, got: {}", output);
+    // hierarchy access still resolves: the instance line carries the ports
+    assert!(output.contains("myAdder u (.a(a), .b(b))"),
+        "expected aggregated port connections on the instance line, got: {}", output);
+    // both prints byte-identical (idempotent def tree)
+    let first = output.find("module topWithAdder").expect("first verilog missing");
+    let second = output[first + 1..].find("module topWithAdder").expect("second verilog missing");
+    assert!(second > 0, "expected two verilogs, got: {}", output);
+    let second_start = first + 1 + second;
+    assert_eq!(&output[first..second_start], &output[second_start..],
+        "two .tree accesses must print byte-identical verilog, got: {}", output);
+}
+
 // ── carry/borrow-generating +^ / -^ emit pad-concat + plain + / - ──
 // `+^` and `-^` are Typort-only tokens (result width +1). The prelude
 // builds them as "pad one bit by type + plain +/-" expressions so the

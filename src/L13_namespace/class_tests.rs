@@ -365,10 +365,16 @@ println (mkk[3].f)
 }
 
 // ── module-macro target shape: module body flattened into class items ──
-// The future module macro flattens its side-effect chain into class items:
-// unannotated scaffold bindings become create-locals, annotated port fields
-// stay struct fields (last-wins dedup picks the subSignal handle), and
-// `def tree` re-runs the chain on every access. This test pins the shape.
+// The module macro (hdl-macros.typort) expands each module to a class whose
+// side-effect chain runs TWICE: once as a bare parenthesized class-body
+// statement (create side — a create-local, NOT a struct field, so the struct
+// keeps only the port handle fields), and once inside `def tree`, which
+// re-runs the chain on every access (minus mkInstanceIfParent). This test
+// pins the flattened shape with the unannotated-let variant (each line a
+// create-local); the real macro uses the equivalent single parenthesized
+// statement form, pinned by module_tests::module_no_tree_data_field and
+// module_def_tree_idempotent_instance_once. The double-declared ports
+// collapse last-wins into the subSignal handle fields.
 
 #[test]
 fn class_module_shape_flattened_chain() {
