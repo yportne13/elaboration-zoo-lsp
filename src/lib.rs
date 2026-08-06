@@ -976,6 +976,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     ) -> Option<MacroExpansionInfo> {
         let expansions = self.macro_expansion_map.get(uri_str)?;
         let name_match = || expansions.iter()
+            // Only expansions whose recorded `name` is an actual macro name
+            // token at the call site participate in the name-token match.
+            // Fragment-driven expansions (Expr inside a module/when body) use
+            // the first call-site token as `name`; for a plain body statement
+            // (`sum := a +^ b`) that token is user code, and clicking it must
+            // NOT jump to the fragment macro's definition.
+            .filter(|e| e.name_token_is_macro)
             .filter(|e| offset >= e.start_offset as usize && offset < e.start_offset as usize + e.name.len())
             .min_by_key(|e| e.end_offset - e.start_offset)
             .cloned();

@@ -107,6 +107,12 @@ impl MacroMatcher {
                                                 start_offset: start,
                                                 end_offset: end,
                                                 expanded_text: owned_tokens_to_string(&t),
+                                                // The `name` is only the macro NAME token when the
+                                                // first call-site token itself starts a nested macro
+                                                // call (e.g. `when` inside a module body). For a plain
+                                                // Expr statement (`sum := a +^ b`) the first token is
+                                                // user code, not a macro name.
+                                                name_token_is_macro: state.1.contains_key(first.data.0),
                                                 def_start_offset: def_start,
                                                 def_end_offset: def_end,
                                                 def_path_id: def_path,
