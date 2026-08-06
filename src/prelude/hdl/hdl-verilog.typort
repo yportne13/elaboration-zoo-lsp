@@ -28,6 +28,37 @@ def isTrueLit(e: Expr): Boolean = match e {
     case _ => false
 }
 
+// Normalize a Typort-level binary operator to a legal Verilog operator.
+// `+^` / `-^` (carry/borrow-generating add/sub, result type width+1) are
+// NOT Verilog tokens; they are emitted as plain `+` / `-`. The extra top
+// bit comes from the declared [w:0] target wire/reg: Verilog's
+// context-determined expression width evaluates `a + b` / `a - b` at the
+// operand width and zero- (UInt) or sign- (SInt) extends the result to the
+// wider LHS, which is exactly the carry/borrow-out semantics of `+^`/`-^`.
+def verilogBinOp(op: String): String =
+    let is_plus_carry = str_eq(op, "+^");
+    match is_plus_carry {
+        case true => "+"
+        case false =>
+            let is_minus_borrow = str_eq(op, "-^");
+            match is_minus_borrow {
+                case true => "-"
+                case false => op
+            }
+    }
+
+// Sized literal for a concatenation operand.  IEEE 1364-2001 §4.1.14 forbids
+// unsized constants inside concatenations, so `{0, x}` is not legal Verilog.
+// A literal can only reach `##` as a Bool (value 0 or 1) — the Cat impls
+// (hdl-ops.typort) always concatenate a Bool or a named signal — so it is
+// emitted as a sized 1-bit literal; anything else keeps the plain decimal
+// form (defensive fallback, not reachable through the Cat impls).
+def catLitStr(v: Nat): String = match v {
+    case zero => "1'b0"
+    case succ(zero) => "1'b1"
+    case _ => natToDec(v)
+}
+
 // Emit one memory write statement for the clocked always block:
 //   if (enable) mem[address] <= data;
 // An enable that evaluates to literal 1 (constructor form `literal(succ(zero))`)
@@ -66,8 +97,19 @@ def exprVL_proc(e: Expr): String = match e {
     case binary(lhs, op, rhs) =>
         let is_cat = str_eq(op, "##");
         match is_cat {
-            case true => "{" + exprVL_proc(lhs) + ", " + exprVL_proc(rhs) + "}"
-            case false => "(" + exprVL_proc(lhs) + " " + op + " " + exprVL_proc(rhs) + ")"
+            case true =>
+                let lstr = match lhs {
+                    case literal(v) => catLitStr(v)
+                    case _ => exprVL_proc(lhs)
+                };
+                let rstr = match rhs {
+                    case literal(v) => catLitStr(v)
+                    case _ => exprVL_proc(rhs)
+                };
+                "{" + lstr + ", " + rstr + "}"
+            case false =>
+                let opv = verilogBinOp(op);
+                "(" + exprVL_proc(lhs) + " " + opv + " " + exprVL_proc(rhs) + ")"
         }
     case assign(lhs, rhs) =>
         "      " + exprVL_proc(lhs) + " = " + exprVL_proc(rhs) + ";"
@@ -116,7 +158,7 @@ def exprVL_proc(e: Expr): String = match e {
 // Helper: emit condition string without redundant outer parens
 def emitCondStr(cond: Expr): String = match cond {
     case binary(lhs, op, rhs) =>
-        exprVL_proc(lhs) + " " + op + " " + exprVL_proc(rhs)
+        exprVL_proc(lhs) + " " + verilogBinOp(op) + " " + exprVL_proc(rhs)
     case _ => exprVL_proc(cond)
 }
 
@@ -146,8 +188,19 @@ def exprVL(e: Expr): String = match e {
     case binary(lhs, op, rhs) =>
         let is_cat = str_eq(op, "##");
         match is_cat {
-            case true => "{" + exprVL(lhs) + ", " + exprVL(rhs) + "}"
-            case false => "(" + exprVL(lhs) + " " + op + " " + exprVL(rhs) + ")"
+            case true =>
+                let lstr = match lhs {
+                    case literal(v) => catLitStr(v)
+                    case _ => exprVL(lhs)
+                };
+                let rstr = match rhs {
+                    case literal(v) => catLitStr(v)
+                    case _ => exprVL(rhs)
+                };
+                "{" + lstr + ", " + rstr + "}"
+            case false =>
+                let opv = verilogBinOp(op);
+                "(" + exprVL(lhs) + " " + opv + " " + exprVL(rhs) + ")"
         }
     case assign(lhs, rhs) =>
         "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"

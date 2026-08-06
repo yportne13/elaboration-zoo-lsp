@@ -156,6 +156,55 @@ println(moduleTreeVL(t))
     assert!(second > 0, "expected two identical top-level verilogs, got: {}", output);
 }
 
+// ── carry/borrow-generating +^ / -^ must emit plain + / - ──
+// `+^` and `-^` are Typort-only tokens (result width +1); the Verilog
+// emitter must translate them to `+` / `-`, with the extra top bit coming
+// from the declared [w:0] wire/reg width (context-determined extension).
+// This pins all three emission paths: continuous assigns (exprVL),
+// clocked regAssigns (exprVL), and when conditions (emitCondStr + proc).
+
+#[test]
+fn module_carry_ops_emit_plain_plus_minus() {
+    let output = assert_ok(r#"
+module carryOps {
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = UInt[8]
+    let d = UInt[8]
+    let sum = UInt[9]
+    let diff = UInt[9]
+    let nest = UInt[10]
+    let sa = SInt[8]
+    let sb = SInt[8]
+    let ssum = SInt[9]
+    let out = UInt[8]
+    let w = UInt[9]
+    reg r = UInt[9]
+    sum := a +^ b
+    diff := a -^ b
+    nest := (a +^ b) +^ (c +^ d)
+    ssum := sa +^ sb
+    r := a +^ b
+    w := Bool.mk(None, literal(0)) ## c
+    when (a +^ b) === 0 {
+        out := c
+    }
+}
+println(moduleTreeVL(carryOps.create.tree))
+"#);
+    assert!(!output.contains("+^"), "generated Verilog must not contain the invalid '+^' token, got: {}", output);
+    assert!(!output.contains("-^"), "generated Verilog must not contain the invalid '-^' token, got: {}", output);
+    assert!(output.contains("assign sum = (a + b);"), "expected carry add as plain +, got: {}", output);
+    assert!(output.contains("assign diff = (a - b);"), "expected borrow sub as plain -, got: {}", output);
+    assert!(output.contains("assign nest = ((a + b) + (c + d));"), "expected nested +^ chain as nested +, got: {}", output);
+    assert!(output.contains("assign ssum = (sa + sb);"), "expected SInt carry add as plain +, got: {}", output);
+    assert!(output.contains("r <= (a + b);"), "expected clocked carry add as plain +, got: {}", output);
+    assert!(output.contains("if ((a + b) == 0) begin"), "expected when condition carry add as plain +, got: {}", output);
+    // IEEE 1364-2001 §4.1.14: unsized constants are illegal inside concats,
+    // so a literal Bool operand must be emitted as a sized 1-bit literal.
+    assert!(output.contains("assign w = {1'b0, c};"), "expected sized literal in concatenation, got: {}", output);
+}
+
 // ── errors: unknown signal / type misuse still reported ──
 
 #[test]
