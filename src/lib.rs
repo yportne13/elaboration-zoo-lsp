@@ -943,20 +943,57 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// invocation span. The matched expansion carries the definition span and
     /// path_id of the rule that actually matched, so the target resolves
     /// across files (e.g. the prelude's `hdl-macros.typort`).
+    ///
+    /// Note: the full `goto_definition` path uses `goto_macro_definition_name`
+    /// first and only falls back to this method (which also matches the whole
+    /// invocation span) when the semantic hover table has nothing for the
+    /// cursor position.
     pub fn goto_macro_definition(&self, uri: &Url, offset: usize) -> Option<GotoDefinitionResponse> {
         let uri_str = uri.as_str();
+        let exp = self.macro_expansion_at(&uri_str, offset, false)?;
+        self.macro_def_location(uri, &exp)
+    }
+
+    /// Name-token-only variant of `goto_macro_definition`: the cursor must be
+    /// inside the macro NAME token of an invocation. `goto_definition` uses
+    /// this before the semantic hover table, so a click on the `calc` keyword
+    /// jumps to `macro_rules calc` while a click on an identifier inside the
+    /// macro body resolves to that identifier's own definition.
+    pub fn goto_macro_definition_name(&self, uri: &Url, offset: usize) -> Option<GotoDefinitionResponse> {
+        let uri_str = uri.as_str();
+        let exp = self.macro_expansion_at(&uri_str, offset, true)?;
+        self.macro_def_location(uri, &exp)
+    }
+
+    /// The `MacroExpansionInfo` whose span covers `offset`, preferring the
+    /// innermost (smallest) match. With `name_only`, only the macro name token
+    /// span matches; otherwise the full invocation span is the fallback.
+    fn macro_expansion_at(
+        &self,
+        uri_str: &str,
+        offset: usize,
+        name_only: bool,
+    ) -> Option<MacroExpansionInfo> {
         let expansions = self.macro_expansion_map.get(uri_str)?;
-        // Prefer a cursor inside the macro name token; among several matches
-        // (a macro call nested inside another expansion) pick the innermost,
-        // i.e. the smallest span.
-        let exp = expansions.iter()
+        let name_match = || expansions.iter()
             .filter(|e| offset >= e.start_offset as usize && offset < e.start_offset as usize + e.name.len())
             .min_by_key(|e| e.end_offset - e.start_offset)
-            .or_else(|| expansions.iter()
+            .cloned();
+        if name_only {
+            name_match()
+        } else {
+            name_match().or_else(|| expansions.iter()
                 .filter(|e| offset >= e.start_offset as usize && offset < e.end_offset as usize)
-                .min_by_key(|e| e.end_offset - e.start_offset))?;
-        // Definition location of the matched rule (None for built-ins such as
-        // `stringify`, which have no textual definition).
+                .min_by_key(|e| e.end_offset - e.start_offset)
+                .cloned())
+        }
+    }
+
+    /// Resolve a matched expansion's definition location (macro_rules name
+    /// token + defining file) into an LSP Location. `None` for built-in macros
+    /// such as `stringify`, which have no textual definition.
+    fn macro_def_location(&self, uri: &Url, exp: &MacroExpansionInfo) -> Option<GotoDefinitionResponse> {
+        let uri_str = uri.as_str();
         let (def_start, def_end, def_path_id) = (
             exp.def_start_offset?,
             exp.def_end_offset?,
@@ -978,6 +1015,82 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             def_uri,
             Range::new(start_position, end_position),
         )))
+    }
+
+    /// Full goto-definition logic shared by the LSP `textDocument/definition`
+    /// handler and tests. Resolution order:
+    ///
+    /// 1. A click on a macro invocation's NAME token resolves to the matching
+    ///    `macro_rules` declaration (e.g. the `calc` keyword → the calc macro).
+    /// 2. Semantic resolution from the hover table. The most specific entry
+    ///    (smallest span containing the cursor) wins — macro expansion emits
+    ///    whole-invocation-span entries for its literal tokens, which are
+    ///    larger than the user's own tokens, so identifiers written inside a
+    ///    macro body (variables, functions, types) resolve to their own
+    ///    definitions, not to the macro's.
+    /// 3. Fallback: a cursor anywhere else inside a macro invocation with no
+    ///    semantic entry (e.g. a macro argument naming a declaration) resolves
+    ///    to the macro definition via the full invocation span.
+    pub fn goto_definition_at(&self, uri: &Url, offset: usize) -> Option<GotoDefinitionResponse> {
+        // 1. Macro name token → macro definition.
+        if let Some(def) = self.goto_macro_definition_name(uri, offset) {
+            return Some(def);
+        }
+        // 2. Semantic resolution (most specific entry wins, like hover).
+        let semantic = self.hover_table.get(uri.as_str())?;
+        let file_id = self.document_id.get(uri.as_str())?;
+        let interval = semantic.hover_table
+            .iter()
+            .filter(|x| x.0.path_id == *file_id)
+            .filter(|x| x.0.contains(offset))
+            .min_by_key(|x| x.0.end_offset - x.0.start_offset)
+            .and_then(|x| {
+                let def_span = &x.1;
+                // Look up the source file URI for the definition span's path_id
+                let def_uri = self.document_id.iter()
+                    .find(|e| *e.value() == def_span.path_id)
+                    .map(|e| Url::parse(e.key()).ok())
+                    .flatten()
+                    .unwrap_or_else(|| uri.clone());
+                let def_rope = if def_uri == *uri {
+                    self.document_map.get(uri.as_str())?.clone()
+                } else {
+                    self.document_map.get(def_uri.as_str())?.clone()
+                };
+                let start_position = offset_to_position(def_span.start_offset as usize, &def_rope)?;
+                let end_position = offset_to_position(def_span.end_offset as usize, &def_rope)?;
+                Some(GotoDefinitionResponse::Scalar(
+                    Location::new(
+                        def_uri,
+                        Range::new(start_position, end_position),
+                    )
+                ))
+            })
+            .or({
+                let rope = self.document_map.get(uri.as_str())?;
+                let ret: Vec<Location> = semantic.hover_table
+                    .iter()
+                    .filter(|x| x.1.contains(offset))
+                    .map(|x| x.0)
+                    .flat_map(|x| Some(Location::new(
+                        uri.clone(),
+                        Range::new(
+                            offset_to_position(x.start_offset as usize, &rope)?,
+                            offset_to_position(x.end_offset as usize, &rope)?,
+                        )
+                    )))
+                    .collect();
+                if ret.is_empty() {
+                    None
+                } else {
+                    Some(GotoDefinitionResponse::Array(ret))
+                }
+            });
+        if interval.is_some() {
+            return interval;
+        }
+        // 3. Full-invocation fallback → macro definition.
+        self.goto_macro_definition(uri, offset)
     }
 }
 
@@ -1210,63 +1323,9 @@ impl LanguageServer for Backend<Client> {
             let rope = self.document_map.get(uri.as_str())?;
             let position = params.text_document_position_params.position;
             let offset = position_to_offset(position, &rope)?;
-
-            // Macro invocation goto-definition: a click on a macro call name
-            // (e.g. `module foo`) jumps to the matching `macro_rules`
-            // declaration, which may live in another file (the prelude's
-            // hdl-macros.typort) or in the current file (local macros).
-            if let Some(def) = self.goto_macro_definition(&uri, offset) {
-                return Some(def);
-            }
-
-            let semantic = self.hover_table.get(uri.as_str())?;
-            let interval = semantic.hover_table
-                .iter()
-                .find(|x| x.0.contains(offset))
-                .and_then(|x| {
-                    let def_span = &x.1;
-                    // Look up the source file URI for the definition span's path_id
-                    let def_uri = self.document_id.iter()
-                        .find(|e| *e.value() == def_span.path_id)
-                        .map(|e| Url::parse(e.key()).ok())
-                        .flatten()
-                        .unwrap_or_else(|| uri.clone());
-                    let def_rope = if def_uri == uri {
-                        rope.clone()
-                    } else {
-                        self.document_map.get(def_uri.as_str())?.clone()
-                    };
-                    let start_position = offset_to_position(def_span.start_offset as usize, &def_rope)?;
-                    let end_position = offset_to_position(def_span.end_offset as usize, &def_rope)?;
-                    Some(GotoDefinitionResponse::Scalar(
-                        Location::new(
-                            def_uri,
-                            Range::new(start_position, end_position),
-                        )
-                    ))
-                })
-                .or({
-                    let ret: Vec<Location> = semantic.hover_table
-                        .iter()
-                        .filter(|x| x.1.contains(offset))
-                        .map(|x| x.0)
-                        .flat_map(|x| Some(Location::new(
-                            uri.clone(),
-                            Range::new(
-                                offset_to_position(x.start_offset as usize, &rope)?,
-                                offset_to_position(x.end_offset as usize, &rope)?,
-                            )
-                        )))
-                        .collect();
-                    if ret.is_empty() {
-                        None
-                    } else {
-                        Some(GotoDefinitionResponse::Array(ret))
-                    }
-                });
-            interval
-        }();
-        Ok(definition)
+            self.goto_definition_at(&uri, offset)
+        };
+        Ok(definition())
     }
 
     fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
