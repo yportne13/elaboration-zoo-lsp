@@ -31,13 +31,18 @@ def in[T](t: T): T = t
 def out[T](t: T): T = t
 def inout[T](t: T): T = t
 
-// Is an Expr an input port? Used by the derive-generated Bundle := to skip
-// assignments whose LHS is an input port (driving an input is illegal
+// Is an Expr an input/inout port? Used by the derive-generated Bundle := to
+// skip assignments whose LHS is an input port (driving an input is illegal
 // Verilog), so a master/slave pair can be connected with `:=` both ways.
+// Inout ports are treated like inputs here: the module does not drive its
+// own inout pins with a continuous assign (tri-state drive is not modeled).
 def isInputPort(e: Expr): Boolean = match e {
     case createIn(_) => true
     case createInWidth(_, _) => true
     case createSIntInWidth(_, _) => true
+    case createInOut(_) => true
+    case createInOutWidth(_, _) => true
+    case createSIntInOutWidth(_, _) => true
     case _ => false
 }
 

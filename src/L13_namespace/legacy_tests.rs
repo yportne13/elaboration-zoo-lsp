@@ -1425,6 +1425,36 @@ fn test_examples_hdl_dir() {
             "rd <= myRam[addr];",        // readSync 时钟赋值
             "if (en) begin",             // 同步写使能
         ]),
+        ("12-arithmetic2.typort", include_str!("../../examples/hdl/12-arithmetic2.typort"), &[
+            "(a / b)",                   // UInt 除法
+            "(a % b)",                   // UInt 取模
+            "(a / 3)",                   // Nat 字面量除数
+            "(sa / sb)",                 // SInt 除法
+            "(sa % sb)",                 // SInt 取模
+            "(a << sh)",                 // |<< 宽度保持变量左移
+            "(a >> sh)",                 // |>> 宽度保持变量右移
+            "(sa >>> sh)",               // SInt |>> 算术右移
+            "(sa[7] ? -sa : sa)",        // abs mux 展开
+            "{sa[7], sa}",               // SInt expand 符号扩展
+            "assign ue = sa;",           // UInt expand 零扩展（赋值上下文）
+        ]),
+        ("13-inout.typort", include_str!("../../examples/hdl/13-inout.typort"), &[
+            "inout wire [7:0] io",       // UInt inout 端口
+            "inout wire flag",           // Bool inout 端口
+            "inout wire signed [7:0] sio", // SInt inout 端口
+            "inout wire [7:0] master_data", // Bundle inout 字段（master 侧）
+            "inout wire [7:0] slave_data",  // Bundle inout 字段（slave 侧）
+            "input wire master_dir",     // in 标记字段仍是 input
+            "output wire slave_dir",     // slave 侧 in 字段翻转为 output
+        ]),
+        ("14-counter.typort", include_str!("../../examples/hdl/14-counter.typort"), &[
+            "reg [7:0] cnt;",            // counter(8) 寄存器（let 绑定名自动命名）
+            "cnt <= (cnt + 1);",         // 自增时钟赋值
+            "if (en) begin",             // counterInc 使能计数
+            "assign wrap = (~cnt == 0);", // willOverflow 组合信号
+            "always @(posedge clk)",     // 计数器时钟块
+            "input wire clk",            // 自动时钟端口
+        ]),
     ];
 
     for (file, input, asserts) in examples {

@@ -24,7 +24,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 |---------|---------|-------------|
 | UInt / SInt / Bits | `let a = UInt[8]` | Unsigned, signed, bit-vector types |
 | Bool signals | `let cond = Bool` | Boolean wire type |
-| Arithmetic | `sum := a + b` | `+`, `-`, `*`, `+^` (carry) |
+| Arithmetic | `sum := a + b` | `+`, `-`, `*`, `/`, `%`, `+^` (carry) |
 | Bitwise | `x := a & b` | `&`, `|`, `^`, `~` |
 | Comparators | `lt := a < b` | `<`, `<=`, `>`, `>=`, `===`, `=/=` |
 | Bool logic | `r := a && b` | `&&`, `||`, `!`, `^` |
@@ -34,11 +34,15 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Mux | `r := cond.mux(a, b)` | Conditional multiplexer (SpinalHDL-style) |
 | Ternary | `r := cond ? a : b` | C-style ternary operator (desugars to `.mux`) |
 | Concatenation | `f := e ## d` | Bit concatenation |
+| Variable shift | `r := a |<< sh` / `a |>> sh` | Width-preserving variable shifts (UInt shift amount; SInt `|>>` is arithmetic) |
+| SInt abs/expand | `a := sa.abs` / `sa.expand` | Absolute value (UInt) / sign-extend (+1 bit; UInt `expand` zero-extends) |
 | Registers | `reg a = UInt[8]` | Sequential elements with clock/reset |
 | Reg with init | `reg a = UInt[8] init 42` | Register with async reset value |
 | Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers, works for any Data (UInt/SInt/Bits/Bool) |
+| Counter | `let c = counter(8)` / `counterInc(8, en)` | SpinalHDL-style counters: free-running or enable-gated increment, `c.value` (reg) + `c.willOverflow` (combinational, `~value == 0`) |
 | Memory | `let m = memUInt(8, 256)` | SpinalHDL-style `Mem` as a `reg [w-1:0] name [0:wordCount-1]` array; `m.write(addr, data, en)` (sync write port), `m.readAsync(addr)` (combinational read), `m.readSync(addr)` (registered read), `m.readSyncCC(addr, cd)` (cross-clock read) |
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
+| Inout ports | `inout io = UInt[8]` | Tri-state bidirectional ports (`inout wire [7:0] io`); Bundle `inout()` fields become inout ports on both master and slave |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
 | Bundle | `#[derive(Bundle)]` | SpinalHDL-style bulk assignment; auto-named signal factory (`create_TypeName`, binding name prefix) and directed `asMaster` / `asSlave` methods (SpinalHDL style, in()/out() markers) |
 

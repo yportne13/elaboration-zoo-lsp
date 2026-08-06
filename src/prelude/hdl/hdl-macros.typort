@@ -64,18 +64,22 @@ macro_rules Expr {
     // ---- signal declarations ----
     (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput(stringify $x, $width);};
     (output $x:ident = Bits[$width:raw]) => {let $x = newBitsOutput(stringify $x, $width);};
+    (inout $x:ident = Bits[$width:raw]) => {let $x = newBitsInOut(stringify $x, $width);};
     (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
 
     (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput(stringify $x, $width);};
     (output $x:ident = UInt[$width:raw]) => {let $x = newUIntOutput(stringify $x, $width);};
+    (inout $x:ident = UInt[$width:raw]) => {let $x = newUIntInOut(stringify $x, $width);};
     (let $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
 
     (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput(stringify $x, $width);};
     (output $x:ident = SInt[$width:raw]) => {let $x = newSIntOutput(stringify $x, $width);};
+    (inout $x:ident = SInt[$width:raw]) => {let $x = newSIntInOut(stringify $x, $width);};
     (let $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
 
     (input $x:ident = Bool) => {let $x = newBoolInput(stringify $x);};
     (output $x:ident = Bool) => {let $x = newBoolOutput(stringify $x);};
+    (inout $x:ident = Bool) => {let $x = newBoolInOut(stringify $x);};
     (let $x:ident = Bool) => {let $x = newBool(stringify $x);};
 
     // ---- register declarations ----
