@@ -166,9 +166,10 @@ impl Infer {
                 if pren.dom.0 == 0 {
                     let mty = self.force(&cxt.decl, &mty);
                     match mty.as_ref() {
-                        Val::U(x) => {//TODO:x?
-                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(0).into(), mty);
-                            Ok((t_inferred, 0))
+                        Val::U(x) => {
+                            let x = *x;
+                            self.meta[m.0 as usize] = MetaEntry::Solved(Val::U(x).into(), mty);
+                            Ok((t_inferred, x))
                         },
                         _ => {
                             let err_typ = self.force(&cxt.decl, &mty);
