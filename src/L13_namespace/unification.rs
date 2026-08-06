@@ -450,7 +450,47 @@ impl Infer {
             sp,
             rhs
         );*/
-        let (pren, prune_non_linear) = self.invert(gamma, decl, &sp)?;
+        let (pren, prune_non_linear) = match self.invert(gamma, decl, &sp) {
+            Ok(x) => x,
+            Err(UnifyError::Stuck) => {
+                // Non-invertible spine: it contains unsolved metas (e.g. a
+                // constructor's fresh implicit-argument metas instantiating a
+                // field type of a parameterized struct). If the rhs is closed
+                // w.r.t. the spine variables we can still solve: the solution
+                // is a constant function over the meta's context.
+                // (rename with an empty renaming succeeds iff the rhs does not
+                // depend on any context variable or spine-scoped meta.)
+                let empty = PartialRenaming {
+                    occ: None,
+                    dom: Lvl(0),
+                    cod: gamma,
+                    ren: Rc::new(HashMap::new()),
+                };
+                let renamed = match self.rename(decl, &empty, rhs) {
+                    Ok(t) => t,
+                    Err(_) => return Err(UnifyError::Stuck),
+                };
+                let mty = match self.meta[m.0 as usize] {
+                    MetaEntry::Unsolved(ref a, _, _, _) => a.clone(),
+                    _ => unreachable!(),
+                };
+                // Clamp the number of lambdas to the meta type's leading Pi
+                // chain (the meta's context length); the spine may carry extra
+                // application args in ill-typed programs, and lams panics on
+                // overshoot.
+                let mut pi_len = 0u32;
+                let mut cur = self.force(decl, &mty);
+                while let Val::Pi(_, _, _, cod) = cur.as_ref() {
+                    pi_len += 1;
+                    cur = self.closure_apply(decl, cod, Val::Rigid(Lvl(pi_len), List::new()).into());
+                }
+                let dom = Lvl(sp.len().min(pi_len as usize) as u32);
+                let solution = self.eval(decl, &List::new(), &self.lams(dom, decl, &mty, renamed));
+                self.meta[m.0 as usize] = MetaEntry::Solved(solution, mty);
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
         self.solve_with_pren(decl, m, pren, prune_non_linear, rhs)
     }
     fn solve_with_pren(
