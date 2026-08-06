@@ -30,11 +30,12 @@ def isTrueLit(e: Expr): Boolean = match e {
 
 // Normalize a Typort-level binary operator to a legal Verilog operator.
 // `+^` / `-^` (carry/borrow-generating add/sub, result type width+1) are
-// NOT Verilog tokens; they are emitted as plain `+` / `-`. The extra top
-// bit comes from the declared [w:0] target wire/reg: Verilog's
-// context-determined expression width evaluates `a + b` / `a - b` at the
-// operand width and zero- (UInt) or sign- (SInt) extends the result to the
-// wider LHS, which is exactly the carry/borrow-out semantics of `+^`/`-^`.
+// NOT Verilog tokens. The prelude's `+^`/`-^` (hdl-ops.typort) no longer
+// emit these op strings: they build "pad-concat + plain +" expressions
+// directly (`{1'b0, a} + b` / `{a[w-1], a} + {b[w-1], b}`), so the extra
+// top bit is explicit and survives nesting/inlining. The branches below
+// are defensive fallbacks for hand-built Exprs that still carry `+^`/`-^`;
+// they map to plain `+` / `-` so the emitted Verilog stays legal.
 def verilogBinOp(op: String): String =
     let is_plus_carry = str_eq(op, "+^");
     match is_plus_carry {
