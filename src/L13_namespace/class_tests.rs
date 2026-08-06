@@ -378,9 +378,9 @@ class probeMod[w: Nat] impl Module {
     let _ = create_global("WhenStack", whenStackEmpty)
     let _prev = get_global("ModuleTree")
     let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk("probeMod", defaultClockDomain, 0, nil) :: nil))
-    let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", "a", w))
-    let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", "b", w))
-    let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", "sum", w + 1))
+    let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", w))
+    let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", w))
+    let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", w + 1))
     let _ = sum := a +^ b
     let _res = get_global("ModuleTree")
     let _ = create_global("ModuleTree", _prev)
@@ -394,9 +394,9 @@ class probeMod[w: Nat] impl Module {
         let _ = create_global("WhenStack", whenStackEmpty);
         let _prev = get_global("ModuleTree");
         let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk("probeMod", defaultClockDomain, 0, nil) :: nil));
-        let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", "a", w));
-        let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", "b", w));
-        let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", "sum", w + 1));
+        let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", w));
+        let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", w));
+        let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", w + 1));
         let _ = sum := a +^ b;
         let _res = get_global("ModuleTree");
         let _ = create_global("ModuleTree", _prev);
@@ -410,7 +410,7 @@ println(moduleTreeVL(probeMod.create[8].tree))
   input wire [7:0] b,
   output wire [8:0] sum
 );
-  assign sum = (a +^ b);
+  assign sum = ({1'b0, a} + b);
 endmodule"#;
     // Two identical prints: the def-tree chain re-runs cleanly each access
     // (idempotent, no leftover global tree state).
