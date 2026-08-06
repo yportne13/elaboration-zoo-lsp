@@ -1349,8 +1349,8 @@ fn test_examples_hdl_dir() {
         ]),
         ("02-arithmetic.typort", include_str!("../../examples/hdl/02-arithmetic.typort"), &[
             "(a + b)",                // UInt 加法
-            "assign carry = (a + b);", // +^ 进位加法 → 合法 Verilog 的 +（宽 [8:0] 由声明提供）
-            "assign borrow = (a - b);", // -^ 借位减法 → 合法 Verilog 的 -（宽 [8:0] 由声明提供）
+            "assign carry = ({1'b0, a} + b);", // +^ 进位加法 → 零扩展拼接 + 普通 +（进位位显式）
+            "assign borrow = ({1'b0, a} - b);", // -^ 借位减法 → 零扩展拼接 + 普通 -（借位位显式）
             "(a * b)",                // 乘法（宽 16）
             "wire [15:0] prod",       // 乘积保持 UInt[16]
         ]),

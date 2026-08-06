@@ -156,12 +156,17 @@ println(moduleTreeVL(t))
     assert!(second > 0, "expected two identical top-level verilogs, got: {}", output);
 }
 
-// ── carry/borrow-generating +^ / -^ must emit plain + / - ──
-// `+^` and `-^` are Typort-only tokens (result width +1); the Verilog
-// emitter must translate them to `+` / `-`, with the extra top bit coming
-// from the declared [w:0] wire/reg width (context-determined extension).
-// This pins all three emission paths: continuous assigns (exprVL),
-// clocked regAssigns (exprVL), and when conditions (emitCondStr + proc).
+// ── carry/borrow-generating +^ / -^ emit pad-concat + plain + / - ──
+// `+^` and `-^` are Typort-only tokens (result width +1). The prelude
+// builds them as "pad one bit by type + plain +/-" expressions so the
+// carry/borrow bit is explicit: UInt zero-extends `{1'b0, a}`, SInt
+// sign-extends `{a[w-1], a}` — and for SInt BOTH operands are extended
+// (the concat is unsigned in Verilog; extending only the lhs would
+// zero-extend the rhs and corrupt negative operands). Emitting a bare
+// `(a + b)` would rely on Verilog's context-determined width and silently
+// drop the carry when nested/inlined. This pins all three emission paths:
+// continuous assigns (exprVL), clocked regAssigns (exprVL), and when
+// conditions (emitCondStr + proc).
 
 #[test]
 fn module_carry_ops_emit_plain_plus_minus() {
@@ -177,6 +182,7 @@ module carryOps {
     let sa = SInt[8]
     let sb = SInt[8]
     let ssum = SInt[9]
+    let sdiff = SInt[9]
     let out = UInt[8]
     let w = UInt[9]
     reg r = UInt[9]
@@ -184,6 +190,7 @@ module carryOps {
     diff := a -^ b
     nest := (a +^ b) +^ (c +^ d)
     ssum := sa +^ sb
+    sdiff := sa -^ sb
     r := a +^ b
     w := Bool.mk(None, literal(0)) ## c
     when (a +^ b) === 0 {
@@ -194,12 +201,16 @@ println(moduleTreeVL(carryOps.create.tree))
 "#);
     assert!(!output.contains("+^"), "generated Verilog must not contain the invalid '+^' token, got: {}", output);
     assert!(!output.contains("-^"), "generated Verilog must not contain the invalid '-^' token, got: {}", output);
-    assert!(output.contains("assign sum = (a + b);"), "expected carry add as plain +, got: {}", output);
-    assert!(output.contains("assign diff = (a - b);"), "expected borrow sub as plain -, got: {}", output);
-    assert!(output.contains("assign nest = ((a + b) + (c + d));"), "expected nested +^ chain as nested +, got: {}", output);
-    assert!(output.contains("assign ssum = (sa + sb);"), "expected SInt carry add as plain +, got: {}", output);
-    assert!(output.contains("r <= (a + b);"), "expected clocked carry add as plain +, got: {}", output);
-    assert!(output.contains("if ((a + b) == 0) begin"), "expected when condition carry add as plain +, got: {}", output);
+    assert!(output.contains("assign sum = ({1'b0, a} + b);"), "expected UInt carry add as zero-extend + plus, got: {}", output);
+    assert!(output.contains("assign diff = ({1'b0, a} - b);"), "expected UInt borrow sub as zero-extend + minus, got: {}", output);
+    assert!(output.contains("assign nest = ({1'b0, ({1'b0, a} + b)} + ({1'b0, c} + d));"),
+        "expected nested +^ chain with explicit pad at every level, got: {}", output);
+    assert!(output.contains("assign ssum = ({sa[7], sa} + {sb[7], sb});"),
+        "expected SInt carry add with both operands sign-extended, got: {}", output);
+    assert!(output.contains("assign sdiff = ({sa[7], sa} - {sb[7], sb});"),
+        "expected SInt borrow sub with both operands sign-extended, got: {}", output);
+    assert!(output.contains("r <= ({1'b0, a} + b);"), "expected clocked carry add as zero-extend + plus, got: {}", output);
+    assert!(output.contains("if (({1'b0, a} + b) == 0) begin"), "expected when condition carry add as zero-extend + plus, got: {}", output);
     // IEEE 1364-2001 §4.1.14: unsized constants are illegal inside concats,
     // so a literal Bool operand must be emitted as a sized 1-bit literal.
     assert!(output.contains("assign w = {1'b0, c};"), "expected sized literal in concatenation, got: {}", output);

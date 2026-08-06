@@ -66,19 +66,33 @@ impl[width: Nat] Sub[Nat, SInt[width]] for SInt[width] {
 }
 
 // ---- carry-generating operations (+^ -^) ----
+// `+^`/`-^` 是 Typort 专用记号（结果宽 +1）。语言层直接生成
+// "按类型拼一个比特 + 普通加减" 的 Expr，而不是特殊 op 字符串：
+// 若发射成普通 `(a + b)` 依赖 Verilog 上下文宽度扩展保留进位，
+// 在嵌套/内联表达式（自决定宽度）里进位会被截断。
+// UInt 零扩展：`{1'b0, a} + b` —— 加法在 width+1 上下文中求值，
+// 第 width 位即进位/借位，嵌套时也正确。
+// 注意：`literal(0)` 的 Typort 类型是 Expr（不是 Bool），走 Cat
+// trait 的 `Bool ## UInt` 无法解析，故此处直接用 Expr 层 binary。
 
 impl[width: Nat] UInt[width] {
     def +^(that: UInt[width]): UInt[width + 1] =
-        UInt.mk(None, binary(this.expr, "+^", that.expr))
+        UInt.mk(None, binary(binary(literal(0), "##", this.expr), "+", that.expr))
     def -^(that: UInt[width]): UInt[width + 1] =
-        UInt.mk(None, binary(this.expr, "-^", that.expr))
+        UInt.mk(None, binary(binary(literal(0), "##", this.expr), "-", that.expr))
 }
 
 impl[width: Nat] SInt[width] {
+    // 符号扩展：`{a[w-1], a} + {b[w-1], b}`。两个操作数都要扩展：
+    // 拼接结果在 Verilog 里是无符号的，若只扩展 lhs，rhs 会被零扩展，
+    // 负操作数时结果错误（如 (-3) +^ (-5) 会得 2 而非 -8）。
+    // 双符号扩展 ≡ 9 位补码加法，第 width 位即进位/借位（符号位）。
+    // 注：`msb` 定义在本文件后部，此处不能用 `this.msb`（Typort
+    // 不支持前向方法解析），直接内联 bitsel。
     def +^(that: SInt[width]): SInt[width + 1] =
-        SInt.mk(None, binary(this.expr, "+^", that.expr))
+        SInt.mk(None, binary(binary(bitsel(this.expr, literal(pred(width))), "##", this.expr), "+", binary(bitsel(that.expr, literal(pred(width))), "##", that.expr)))
     def -^(that: SInt[width]): SInt[width + 1] =
-        SInt.mk(None, binary(this.expr, "-^", that.expr))
+        SInt.mk(None, binary(binary(bitsel(this.expr, literal(pred(width))), "##", this.expr), "-", binary(bitsel(that.expr, literal(pred(width))), "##", that.expr)))
 }
 
 // ============================================================
