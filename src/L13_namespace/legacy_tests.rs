@@ -4048,3 +4048,32 @@ def bad_custom(x: Nat, y: Nat): Eq (x +++ y) (y +++ x) = refl(x)
     );
 }
 
+
+// ── regression: big-Nat arithmetic must not overflow the stack ──
+// nat_add_helper recurses once per succ of its second argument, so 0 + n
+// on unary Peano Nat used to consume one native stack frame per succ —
+// both in the evaluator and in the derived Val/Tm drops (an Rc chain of n
+// nested SumCases).  The iterative evaluator, iterative force, and the
+// iterative Drop impls keep this O(1) in native stack; 0 + 100000
+// overflowed before the fix in the default test thread (2 MiB stack).
+// Sizes stay at 100k so the test finishes in seconds (1M takes minutes in
+// debug builds); 100k is deep enough to overflow all three pre-fix paths.
+#[test]
+fn bignat_large_add_no_stack_overflow() {
+    let cases: Vec<(&str, &str)> = vec![
+        ("println(0 + 100000)\n", "100000"),
+        ("println(50000 + 50000)\n", "100000"),
+        ("println(99999 + 1)\n", "100000"),
+        ("println(pred(100000))\n", "99999"),
+        ("println(double(50000))\n", "100000"),
+        ("println(100000 * 2)\n", "200000"),
+    ];
+    for (input, expect) in cases {
+        let r = run_with_prelude(input);
+        match r {
+            Ok(out) => assert_eq!(out.trim(), expect, "input {input:?}"),
+            Err(e) => panic!("input {input:?} failed: {}", e.0.data),
+        }
+    }
+}
+

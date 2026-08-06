@@ -16,6 +16,22 @@ use super::{
     typeclass::Assertion,
 };
 
+/// True when both values are the same sum type with identical (by pointer)
+/// parameters — used by the constructor-chain fast path to confirm a
+/// constructor's domain matches the type a term is checked against.
+/// Conservative: any doubt returns false and the caller falls back to the
+/// general (recursive) path.
+fn same_sum_name(a: &Rc<Val>, b: &Rc<Val>) -> bool {
+    match (a.as_ref(), b.as_ref()) {
+        (Val::Sum(n1, p1, _, _), Val::Sum(n2, p2, _, _)) => {
+            n1.data == n2.data
+                && p1.len() == p2.len()
+                && p1.iter().zip(p2.iter()).all(|((_, v1, _, _), (_, v2, _, _))| Rc::ptr_eq(v1, v2))
+        }
+        _ => false,
+    }
+}
+
 /// Prefix a declaration's names with the given package prefix.
 fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
     match d {
@@ -637,6 +653,14 @@ impl Infer {
             // General case: infer type and unify
             (t, _) => {
                 let t_span = t.to_span();
+                // Fast path: deep chains of unary constructor applications
+                // (e.g. big `Nat` literals like `succ (succ ... zero)`) are
+                // elaborated iteratively so the native stack is not consumed
+                // one frame per constructor.  Returns `None` for non-chains,
+                // which then take the general path below unchanged.
+                if let Some(result) = self.check_constructor_chain::<CANONICAL>(cxt, &t, &a, t_span) {
+                    return result;
+                }
                 let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x, t_span)?;
                 if CANONICAL {
@@ -659,6 +683,117 @@ impl Infer {
                 Ok(t_inferred)
             }
         }
+    }
+    /// Fast path for checking a deep chain of constructor applications (e.g.
+    /// big `Nat` literals like `succ (succ ... zero)`): the chain is
+    /// elaborated iteratively instead of consuming one native stack frame per
+    /// constructor.  Returns `None` when `t` is not such a chain so the
+    /// caller falls back to the general path (behaviour unchanged for all
+    /// existing programs).
+    fn check_constructor_chain<const CANONICAL: bool>(
+        &mut self,
+        cxt: &Cxt,
+        t: &Raw,
+        a: &Rc<Val>,
+        t_span: Span<()>,
+    ) -> Option<Result<Rc<Tm>, Error>> {
+        struct Node {
+            name: Span<SmolStr>,
+            def_span: Span<()>,
+            vty: Rc<Val>,
+            head_tm: Rc<Tm>,
+            head_val: Rc<Val>,
+            ret_closure: Closure,
+        }
+        // Walk the chain: `t` must be `App(Var(constr), arg)` with `constr`
+        // an unshadowed constructor declaration, and the chain continues in
+        // `arg`.  Each constructor's (forced) domain must be the same sum as
+        // the type the argument is being checked against.
+        let mut nodes: Vec<Node> = Vec::new();
+        let mut expected: Rc<Val> = a.clone();
+        let mut cur = t;
+        loop {
+            match cur {
+                Raw::App(f, u, Either::Icit(Icit::Expl)) => {
+                    let name = match f.as_ref() {
+                        Raw::Var(name) if cxt.src_names.get(&name.data).is_none() => name.clone(),
+                        _ => break,
+                    };
+                    let entry = cxt.decl.get(&name.data)?;
+                    let vty = self.force(&cxt.decl, &entry.4);
+                    let (dom, ret_closure) = match vty.as_ref() {
+                        Val::Pi(_, Icit::Expl, dom, ret_closure) => (dom.clone(), ret_closure.clone()),
+                        _ => break,
+                    };
+                    if !same_sum_name(&self.force(&cxt.decl, &dom), &self.force(&cxt.decl, &expected)) {
+                        break;
+                    }
+                    // The general path runs `insert` on the head's type to
+                    // solve metas; only take the fast path when the
+                    // constructor type is already meta-free.
+                    if entry.3.no_metas(self, &cxt.decl, cxt.lvl).is_some() {
+                        break;
+                    }
+                    nodes.push(Node {
+                        name: name.clone(),
+                        def_span: entry.0,
+                        vty: vty.clone(),
+                        head_tm: Tm::Decl(name).into(),
+                        head_val: entry.2.clone(),
+                        ret_closure,
+                    });
+                    expected = dom;
+                    cur = u.as_ref();
+                }
+                _ => break,
+            }
+        }
+        // Only deep chains take the fast path; short chains (all existing
+        // source code) keep the exact general-path behaviour.
+        if nodes.len() < 512 {
+            return None;
+        }
+        // Check the innermost leaf against the innermost constructor's domain.
+        let leaf_tm = match self.check::<CANONICAL>(cxt, cur.clone(), &expected) {
+            Ok(t) => t,
+            Err(e) => return Some(Err(e)),
+        };
+        // Build the chain from the inside out, tracking the value (needed for
+        // dependent return types) and the final return type.
+        let mut tm = leaf_tm;
+        let mut val = self.eval(&cxt.decl, &cxt.env, &tm);
+        let mut ret: Rc<Val> = expected;
+        for node in nodes.iter().rev() {
+            ret = self.closure_apply(&cxt.decl, &node.ret_closure, val.clone());
+            val = self.v_app(&cxt.decl, &node.head_val, val, Icit::Expl);
+            tm = Tm::App(node.head_tm.clone(), tm, Icit::Expl).into();
+        }
+        // Report hover entries for each constructor, mirroring `infer_expr`
+        // on `Raw::Var`.
+        for node in &nodes {
+            self.hover_table.push((
+                node.name.to_span(),
+                node.def_span,
+                crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() },
+                node.vty.clone(),
+            ));
+        }
+        let result = if CANONICAL {
+            self.unify(cxt.lvl, cxt, a, &ret, 100).map_err(|e| {
+                let err = match e {
+                    super::UnifyError::Basic | super::UnifyError::Stuck => format!(
+                        "can't unify\n  expected: {}\n      find: {}",
+                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, a)),
+                        super::pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, cxt.lvl, &ret)),
+                    ),
+                    super::UnifyError::Trait(e) => e,
+                };
+                Error(t_span.map(|_| err.clone()), vec![])
+            }).map(|_| tm)
+        } else {
+            self.unify_catch(cxt, a, &ret, t_span).map(|_| tm)
+        };
+        Some(result)
     }
     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
         // Apply package prefix if active (unless the declaration itself sets the prefix)
@@ -1511,20 +1646,20 @@ impl Infer {
                                     let mut typ = case_typ;
                                     let mut param: Vec<_> = params.iter().cloned().collect();
                                     param.reverse();
-                                    while let Val::Pi(name, icit, ty, closure) = typ.as_ref().clone() {
-                                        if icit == Icit::Expl {
+                                    while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
+                                        if *icit == Icit::Expl {
                                             ret.push((name.clone(), ty.clone()));
                                             typ = self.closure_apply(
                                                 &cxt.decl,
-                                                &closure,
-                                                Val::Obj(self.eval(&cxt.decl, &cxt.env, &tm), name, List::new()).into()
+                                                closure,
+                                                Val::Obj(self.eval(&cxt.decl, &cxt.env, &tm), name.clone(), List::new()).into()
                                             )
                                         } else {
                                             let val = param.pop()
                                                 .map(|x| x.1)
                                                 .unwrap_or(Val::Obj(self.eval(&cxt.decl, &cxt.env, &tm), name.clone(), List::new()).into());
-                                            ret.push((name, ty.clone()));
-                                            typ = self.closure_apply(&cxt.decl, &closure, val)
+                                            ret.push((name.clone(), ty.clone()));
+                                            typ = self.closure_apply(&cxt.decl, closure, val)
                                         }
                                     }
                                     c = Some(ret);

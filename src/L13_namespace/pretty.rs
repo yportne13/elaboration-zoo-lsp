@@ -444,17 +444,25 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
 }
 
 fn pretty_nat(prec: i32, indent: usize, ns: List<SmolStr>, param: Option<&Tm>, sum: u128) -> String {
-    match param {
-        Some(Tm::SumCase { is_trait, typ, index, datas: params }) if matches!(
-            typ.as_ref(),
-            Tm::Sum(name, _, _, _) if name.data == "Nat",
-        ) => if *index == 0 {
-            format!("{sum}")
-        } else {
-            pretty_nat(prec, indent, ns, params.first().map(|x| x.1.as_ref()), sum + 1)
-        },
-        Some(tm) => format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
-        None => format!("unknown + {}", sum),
+    // Iterative: big `Nat` literals are million-deep `succ` chains, and the
+    // recursive version consumed one native stack frame per `succ`.
+    let mut sum = sum;
+    let mut param = param;
+    loop {
+        match param {
+            Some(Tm::SumCase { is_trait, typ, index, datas: params }) if matches!(
+                typ.as_ref(),
+                Tm::Sum(name, _, _, _) if name.data == "Nat",
+            ) => {
+                if *index == 0 {
+                    return format!("{sum}");
+                }
+                sum += 1;
+                param = params.first().map(|x| x.1.as_ref());
+            }
+            Some(tm) => return format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
+            None => return format!("unknown + {}", sum),
+        }
     }
 }
 
