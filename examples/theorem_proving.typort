@@ -16,6 +16,25 @@ def zero_add_comm(n: Nat): Eq(0 + n, n + 0) =
 
 println(zero_add_comm(5))
 
+// -------------------------------------------------------
+// Calc variants: each `def <name>_calc ... = calc { ... }`
+// re-proves the same proposition as its non-calc original
+// using the calc chain syntax `lhs = rhs by proof`
+// (see docs/calc-reasoning-design.md). Each variant sits
+// directly below its original and prints the same value.
+// -------------------------------------------------------
+
+// 1a-calc: zero_add_comm via a two-step chain
+//   0 + n = n     by add_zero_left(n)
+//   n     = n + 0 by symm(add_zero_right(n))
+def zero_add_comm_calc(n: Nat): Eq(0 + n, n + 0) =
+    calc {
+        0 + n = n by add_zero_left(n)
+        n = n + 0 by symm(add_zero_right(n))
+    }
+
+println(zero_add_comm_calc(5))
+
 // 1b. Direct: n + 0 = n (already provided by prelude as add_zero_right)
 def identity_right(n: Nat): Eq(n + 0, n) = add_zero_right(n)
 println(identity_right(3))
@@ -49,6 +68,17 @@ def add_one_succ(n: Nat): Eq(n + 1, succ(n)) =
 
 println(add_one_succ(3))
 
+// 3-calc: add_one_succ via the same two trans steps as the original
+//   n + 1       = succ(n + 0) by add_succ_right(n, 0)
+//   succ(n + 0) = succ(n)     by cong(succ, add_zero_right(n))
+def add_one_succ_calc(n: Nat): Eq(n + 1, succ(n)) =
+    calc {
+        n + 1 = succ(n + 0) by add_succ_right(n, 0)
+        succ(n + 0) = succ(n) by cong(succ, add_zero_right(n))
+    }
+
+println(add_one_succ_calc(3))
+
 // -------------------------------------------------------
 // 4. double(n) = n + n
 //    double is defined as n + n, so this is rfl
@@ -77,6 +107,17 @@ def chain_eg: Eq(7 + 0, 0 + 7) =
     trans(add_zero_right(7), symm(add_zero_left(7)))
 
 println(chain_eg)
+
+// 5-calc: chain_eg via a two-step chain
+//   7 + 0 = 7     by add_zero_right(7)
+//   7     = 0 + 7 by symm(add_zero_left(7))
+def chain_eg_calc: Eq(7 + 0, 0 + 7) =
+    calc {
+        7 + 0 = 7 by add_zero_right(7)
+        7 = 0 + 7 by symm(add_zero_left(7))
+    }
+
+println(chain_eg_calc)
 
 // -------------------------------------------------------
 // 6. Congruence with binary functions via nested cong
@@ -114,6 +155,18 @@ def add_cong_complex: Eq((5 + 0) + (0 + 7), 5 + 7) =
 
 println(add_cong_complex)
 
+// 6-calc: add_cong_complex via a two-step chain (the two nested cong
+//   steps of add_cong, inlined)
+//   (5 + 0) + (0 + 7) = 5 + (0 + 7) by cong(x => x + (0 + 7), add_zero_right(5))
+//   5 + (0 + 7)       = 5 + 7       by cong(x => 5 + x, add_zero_left(7))
+def add_cong_complex_calc: Eq((5 + 0) + (0 + 7), 5 + 7) =
+    calc {
+        (5 + 0) + (0 + 7) = 5 + (0 + 7) by cong(x => x + (0 + 7), add_zero_right(5))
+        5 + (0 + 7) = 5 + 7 by cong(x => 5 + x, add_zero_left(7))
+    }
+
+println(add_cong_complex_calc)
+
 // -------------------------------------------------------
 // 7. Proof of add_succ_left via induction
 //    add_succ_left(n, m): Eq(succ(n) + m, succ(n + m))
@@ -150,6 +203,19 @@ def add_permute(a: Nat, b: Nat, c: Nat): Eq((a + b) + c, (a + c) + b) =
 
 println(add_permute(1, 2, 3))
 
+// 8-calc: add_permute via a three-step chain (mirrors calc_three_step)
+//   (a + b) + c = a + (b + c)     by add_assoc(a, b, c)
+//   a + (b + c) = a + (c + b)     by cong(x => a + x, add_comm(b, c))
+//   a + (c + b) = (a + c) + b     by symm(add_assoc(a, c, b))
+def add_permute_calc(a: Nat, b: Nat, c: Nat): Eq((a + b) + c, (a + c) + b) =
+    calc {
+        (a + b) + c = a + (b + c) by add_assoc(a, b, c)
+        a + (b + c) = a + (c + b) by cong(x => a + x, add_comm(b, c))
+        a + (c + b) = (a + c) + b by symm(add_assoc(a, c, b))
+    }
+
+println(add_permute_calc(1, 2, 3))
+
 // -------------------------------------------------------
 // 9. Proof by cases on Boolean
 // -------------------------------------------------------
@@ -184,73 +250,6 @@ def subst_eg: Eq(5 + 0, 5) = trans(add_zero_right(5), rfl)
 println(subst_eg)
 // This proves 5+0 = 5 by rewriting the left side of add_zero_left(5) using add_comm!
 
-// ============================================================
-// Calc-chain variants.
-// Each `def <name>_calc ... = calc { ... }` re-proves the same
-// proposition as its non-calc original using the calc chain
-// syntax `lhs = rhs by proof` (see docs/calc-reasoning-design.md).
-// The printlns below must print exactly the same values as the
-// originals above.
-// ============================================================
-
-// 1a-calc: zero_add_comm via a two-step chain
-//   0 + n = n     by add_zero_left(n)
-//   n     = n + 0 by symm(add_zero_right(n))
-def zero_add_comm_calc(n: Nat): Eq(0 + n, n + 0) =
-    calc {
-        0 + n = n by add_zero_left(n)
-        n = n + 0 by symm(add_zero_right(n))
-    }
-
-println(zero_add_comm_calc(5))
-
-// 3-calc: add_one_succ via the same two trans steps as the original
-//   n + 1       = succ(n + 0) by add_succ_right(n, 0)
-//   succ(n + 0) = succ(n)     by cong(succ, add_zero_right(n))
-def add_one_succ_calc(n: Nat): Eq(n + 1, succ(n)) =
-    calc {
-        n + 1 = succ(n + 0) by add_succ_right(n, 0)
-        succ(n + 0) = succ(n) by cong(succ, add_zero_right(n))
-    }
-
-println(add_one_succ_calc(3))
-
-// 5-calc: chain_eg via a two-step chain
-//   7 + 0 = 7     by add_zero_right(7)
-//   7     = 0 + 7 by symm(add_zero_left(7))
-def chain_eg_calc: Eq(7 + 0, 0 + 7) =
-    calc {
-        7 + 0 = 7 by add_zero_right(7)
-        7 = 0 + 7 by symm(add_zero_left(7))
-    }
-
-println(chain_eg_calc)
-
-// 6-calc: add_cong_complex via a two-step chain (the two nested cong
-//   steps of add_cong, inlined)
-//   (5 + 0) + (0 + 7) = 5 + (0 + 7) by cong(x => x + (0 + 7), add_zero_right(5))
-//   5 + (0 + 7)       = 5 + 7       by cong(x => 5 + x, add_zero_left(7))
-def add_cong_complex_calc: Eq((5 + 0) + (0 + 7), 5 + 7) =
-    calc {
-        (5 + 0) + (0 + 7) = 5 + (0 + 7) by cong(x => x + (0 + 7), add_zero_right(5))
-        5 + (0 + 7) = 5 + 7 by cong(x => 5 + x, add_zero_left(7))
-    }
-
-println(add_cong_complex_calc)
-
-// 8-calc: add_permute via a three-step chain (mirrors calc_three_step)
-//   (a + b) + c = a + (b + c)     by add_assoc(a, b, c)
-//   a + (b + c) = a + (c + b)     by cong(x => a + x, add_comm(b, c))
-//   a + (c + b) = (a + c) + b     by symm(add_assoc(a, c, b))
-def add_permute_calc(a: Nat, b: Nat, c: Nat): Eq((a + b) + c, (a + c) + b) =
-    calc {
-        (a + b) + c = a + (b + c) by add_assoc(a, b, c)
-        a + (b + c) = a + (c + b) by cong(x => a + x, add_comm(b, c))
-        a + (c + b) = (a + c) + b by symm(add_assoc(a, c, b))
-    }
-
-println(add_permute_calc(1, 2, 3))
-
 // 10-calc: subst_eg via the same trans(add_zero_right(5), rfl) chain
 //   5 + 0 = 5 by add_zero_right(5)
 //   5     = 5 by rfl
@@ -261,9 +260,12 @@ def subst_eg_calc: Eq(5 + 0, 5) =
     }
 
 println(subst_eg_calc)
+
 // The `calc` block swallows the newline after its closing `}` (the macro
 // literal-token matcher skips one EndLine, see docs/calc-reasoning-design.md
 // 9.3), so the declaration loop cannot sync on a trailing println at EOF.
-// Re-printing the original here gives the parser its final sync point and
-// verifies that the calc variant prints exactly the same value.
+// Re-printing the original (its println now sits directly above) here gives
+// the parser its final sync point and verifies that the calc variant
+// prints exactly the same value.
+
 println(subst_eg)
