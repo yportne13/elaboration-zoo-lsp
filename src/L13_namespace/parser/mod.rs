@@ -11,6 +11,14 @@ pub struct MacroExpansionInfo {
     pub start_offset: u32,
     pub end_offset: u32,
     pub expanded_text: String,
+    /// Whether the recorded `name` is an actual macro NAME token at the call
+    /// site. Direct invocations (p_raw/p_decl) always are. Fragment-driven
+    /// invocations (e.g. the `Expr` fragment used by `module`/`when` bodies)
+    /// record the first call-site token as `name`, which is only a macro name
+    /// when that token itself starts a nested macro call (like `when`); for a
+    /// plain body statement (`sum := a +^ b`) the first token is user code and
+    /// must not be treated as a macro name by goto-definition.
+    pub name_token_is_macro: bool,
     /// Definition location of the macro rule that matched at this use site:
     /// byte offsets of the macro name token in the file that declared
     /// `macro_rules <name>`, plus that file's path_id. All `None` for macros
@@ -1135,6 +1143,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         start_offset: start,
                         end_offset: end,
                         expanded_text: owned_tokens_to_string(&t_owned),
+                        name_token_is_macro: true,
                         def_start_offset: m.def_start_offset,
                         def_end_offset: m.def_end_offset,
                         def_path_id: m.def_path_id,
@@ -2365,6 +2374,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                     start_offset: start,
                     end_offset: end,
                     expanded_text: owned_tokens_to_string(&t_owned),
+                    name_token_is_macro: true,
                     def_start_offset: m.def_start_offset,
                     def_end_offset: m.def_end_offset,
                     def_path_id: m.def_path_id,

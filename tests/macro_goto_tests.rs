@@ -321,3 +321,57 @@ fn goto_when_keyword_full_path_jumps_to_prelude() {
     let (exp_start, exp_end) = prelude_macro_def_span(&hdl_macros, "when");
     assert_eq!((start, end), (exp_start, exp_end));
 }
+
+#[test]
+fn goto_module_body_stmt_first_token_resolves_to_signal_def() {
+    // Regression: the first token of an Expr statement in a module body
+    // (`sum` in `sum := a +^ b`) must NOT jump to `macro_rules Expr`. The
+    // module body is an Expr fragment, and the fragment records the first
+    // call-site token as the expansion's `name` — which used to make the
+    // level-1 macro-NAME-token match fire on plain user code. The token must
+    // resolve through the semantic table to the signal's own definition, like
+    // the other tokens of the same statement.
+    let (b, hdl_macros) = setup();
+    let uri = Url::parse("file:///adder.typort").unwrap();
+    let src = "\
+module arithmeticUInt {
+    let a = UInt[8]
+    let b = UInt[8]
+    let sum = UInt[8]
+    sum := a +^ b
+}
+";
+    b.process_file(&uri, src, Some(1));
+    let (expr_start, expr_end) = prelude_macro_def_span(&hdl_macros, "Expr");
+
+    // First token of the body statement: the assignment target `sum`.
+    let sum_off = byte_offset(src, "sum := a");
+    let (def_uri, start, end) = goto_full(&b, &uri, sum_off)
+        .expect("click on the statement's first token should resolve to a definition");
+    assert_eq!(def_uri, uri.to_string(), "the signal is defined in the same file");
+    let let_sum = byte_offset(src, "let sum") + "let ".len();
+    assert_eq!((start, end), (let_sum, let_sum + 3),
+        "must target the `sum` binder of `let sum`");
+    assert_ne!((start, end), (expr_start, expr_end),
+        "must not resolve to the Expr macro definition");
+
+    // A later token of the same statement still resolves to its own def.
+    let a_off = byte_offset(src, "sum := a") + "sum := ".len();
+    let (def_uri2, start2, end2) = goto_full(&b, &uri, a_off)
+        .expect("click on `a` should resolve to a definition");
+    assert_eq!(def_uri2, uri.to_string());
+    let let_a = byte_offset(src, "let a =") + "let ".len();
+    assert_eq!((start2, end2), (let_a, let_a + 1),
+        "must target the `a` binder of `let a`");
+
+    // The operator keeps resolving to its prelude definition.
+    let op_off = byte_offset(src, "a +^ b") + 2;
+    let (def_uri3, start3, end3) = goto_full(&b, &uri, op_off)
+        .expect("click on `+^` should resolve to a definition");
+    assert_eq!(def_uri3, "builtin:///hdl-ops.typort",
+        "`+^` is defined in the hdl-ops prelude");
+    let hdl_ops = include_str!("../src/prelude/hdl/hdl-ops.typort");
+    let (exp_op_start, exp_op_end) = prelude_def_span(hdl_ops, "def", "+^");
+    assert_eq!((start3, end3), (exp_op_start, exp_op_end),
+        "must target the `+^` name token of `def +^`");
+}
