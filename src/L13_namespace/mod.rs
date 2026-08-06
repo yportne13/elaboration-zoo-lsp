@@ -5126,8 +5126,8 @@ fn test_prelude_stream_fire_needs_ready() {
     // §15.2: Stream.fire 应为 valid && ready（SpinalHDL 语义）。
     // 构造 Stream，取 fire 的 Expr 并用 exprVL 输出，验证含 &&。
     let input = r#"
-def v: Bool = newBool "valid"
-def r: Bool = newBool "ready"
+def v: Bool = newBoolNamed "valid"
+def r: Bool = newBoolNamed "ready"
 def s: Stream[Bool] = Stream.mk v r v
 def f: Bool = s.fire
 println (exprVL f.expr)
