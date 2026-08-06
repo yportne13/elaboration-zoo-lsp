@@ -1,0 +1,8 @@
+# The MSVC linker gives the main thread a 1 MiB stack reserve by default on
+# Windows, which is far too small for this recursively-structured typechecker
+# and evaluator: `typort check` overflowed on every file (even the prelude's
+# hdl-verilog.typort infer).  Raise the main-thread stack reserve so the CLI
+# and LSP binaries have headroom comparable to the 8 MiB+ Linux default.
+# Scoped to the Windows MSVC target so other platforms are unaffected.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:67108864"]

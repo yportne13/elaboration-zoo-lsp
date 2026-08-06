@@ -126,6 +126,110 @@ pub enum Tm {
     OpCall { symbol: SmolStr, name: SmolStr, args: List<(Rc<Tm>, Icit)>, body: Rc<Tm> },
 }
 
+impl Drop for Tm {
+    fn drop(&mut self) {
+        fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
+            match t {
+                Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
+                    // Leaf: no nested references.  Return without touching
+                    // `t`; the caller forgets it, so this impl is not
+                    // re-entered (dropping the `Tm::U(0)` sentinel would
+                    // re-drain it forever).
+                    return;
+                }
+                Tm::Obj(x, _) => {
+                    let x = std::mem::replace(x, TM_PLACEHOLDER.clone());
+                    tms.push(x);
+                }
+                Tm::Lam(_, _, b) => {
+                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    tms.push(b);
+                }
+                Tm::App(f, u, _) => {
+                    let f = std::mem::replace(f, TM_PLACEHOLDER.clone());
+                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    tms.push(f);
+                    tms.push(u);
+                }
+                Tm::AppPruning(t, _) => {
+                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
+                    tms.push(t);
+                }
+                Tm::Pi(_, _, a, b) => {
+                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
+                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    tms.push(a);
+                    tms.push(b);
+                }
+                Tm::Let(_, a, t, u) => {
+                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
+                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
+                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    tms.push(a);
+                    tms.push(t);
+                    tms.push(u);
+                }
+                Tm::Sum(_, params, _, _) => {
+                    let params = std::mem::replace(params, EMPTY_TM_SUM_PARAMS.clone());
+                    for (_, t, ty, _) in params.iter() {
+                        tms.push(t.clone());
+                        tms.push(ty.clone());
+                    }
+                }
+                Tm::SumCase { typ, datas, .. } => {
+                    let typ = std::mem::replace(typ, TM_PLACEHOLDER.clone());
+                    tms.push(typ);
+                    let datas = std::mem::replace(datas, EMPTY_TM_SUM_CASE_DATAS.clone());
+                    for (_, d, _) in datas.iter() {
+                        tms.push(d.clone());
+                    }
+                }
+                Tm::Match(scru, cases) => {
+                    let scru = std::mem::replace(scru, TM_PLACEHOLDER.clone());
+                    tms.push(scru);
+                    let cases = std::mem::replace(cases, Vec::new());
+                    for (_, b) in cases.iter() {
+                        tms.push(b.clone());
+                    }
+                }
+                Tm::Call(_, args, body) => {
+                    let args = std::mem::replace(args, List::new());
+                    for (a, _) in args.iter() {
+                        tms.push(a.clone());
+                    }
+                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    tms.push(body);
+                }
+                Tm::OpCall { args, body, .. } => {
+                    let args = std::mem::replace(args, List::new());
+                    for (a, _) in args.iter() {
+                        tms.push(a.clone());
+                    }
+                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    tms.push(body);
+                }
+            }
+            // The drained shell now holds only shared static placeholder
+            // clones and empty collections; the caller forgets it, so its
+            // drop never re-enters this impl (a normal drop would recurse
+            // one frame per node) and nothing per-node is leaked.
+        }
+        let mut tms: Vec<Rc<Tm>> = Vec::new();
+        tms.push(Rc::new(std::mem::replace(self, Tm::U(0))));
+        while let Some(t) = tms.pop() {
+            match Rc::try_unwrap(t) {
+                Ok(mut t) => {
+                    drain_tm(&mut t, &mut tms);
+                    // `t` is now `Tm::U(0)` — no nested references, so it is
+                    // safe (and leak-free) to skip the drop entirely.
+                    std::mem::forget(t);
+                }
+                Err(_) => continue, // shared elsewhere; count decremented only
+            }
+        }
+    }
+}
+
 impl Tm {
     pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         match self {
@@ -282,6 +386,215 @@ pub enum Val {
     Match(Rc<Val>, Env, Vec<(PatternDetail, Rc<Tm>)>),
     /// Call(name, args, body) - value inlined from function `name`
     Call(SmolStr, List<(Rc<Val>, Icit)>, Rc<Val>),
+}
+
+#[allow(dead_code)]
+impl Drop for Val {
+    fn drop(&mut self) {
+        // The derived drop unwraps nested `Rc<Val>`/`Rc<Tm>`/`List` fields
+        // recursively — one native stack frame per node of a deep `Val`
+        // (e.g. a million-deep `Nat` literal is a chain of nested
+        // `Val::SumCase`s) — which overflows even the 64 MiB CLI stack at
+        // ~100k depth.  Drain the nested references iteratively: each
+        // node's `Rc`/`List`/`Vec` fields are moved into work lists and
+        // replaced with clones of shared static placeholders (so nothing
+        // per-node is allocated), then the drained shell is forgotten by
+        // the caller — a normal drop would re-enter this impl (any drop of
+        // a `Val` does) and recurse one frame per node.  Semantics are
+        // identical to the derived drop; the only per-node cost is a
+        // refcount increment on the placeholder statics, which is harmless.
+        fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
+            match t {
+                Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
+                    // Leaf: no nested references.  Return without touching
+                    // `t`; the caller forgets it, so this impl is not
+                    // re-entered (dropping the `Tm::U(0)` sentinel would
+                    // re-drain it forever).
+                    return;
+                }
+                Tm::Obj(x, _) => {
+                    let x = std::mem::replace(x, TM_PLACEHOLDER.clone());
+                    tms.push(x);
+                }
+                Tm::Lam(_, _, b) => {
+                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    tms.push(b);
+                }
+                Tm::App(f, u, _) => {
+                    let f = std::mem::replace(f, TM_PLACEHOLDER.clone());
+                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    tms.push(f);
+                    tms.push(u);
+                }
+                Tm::AppPruning(t, _) => {
+                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
+                    tms.push(t);
+                }
+                Tm::Pi(_, _, a, b) => {
+                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
+                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    tms.push(a);
+                    tms.push(b);
+                }
+                Tm::Let(_, a, t, u) => {
+                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
+                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
+                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    tms.push(a);
+                    tms.push(t);
+                    tms.push(u);
+                }
+                Tm::Sum(_, params, _, _) => {
+                    let params = std::mem::replace(params, EMPTY_TM_SUM_PARAMS.clone());
+                    for (_, t, ty, _) in params.iter() {
+                        tms.push(t.clone());
+                        tms.push(ty.clone());
+                    }
+                }
+                Tm::SumCase { typ, datas, .. } => {
+                    let typ = std::mem::replace(typ, TM_PLACEHOLDER.clone());
+                    tms.push(typ);
+                    let datas = std::mem::replace(datas, EMPTY_TM_SUM_CASE_DATAS.clone());
+                    for (_, d, _) in datas.iter() {
+                        tms.push(d.clone());
+                    }
+                }
+                Tm::Match(scru, cases) => {
+                    let scru = std::mem::replace(scru, TM_PLACEHOLDER.clone());
+                    tms.push(scru);
+                    let cases = std::mem::replace(cases, Vec::new());
+                    for (_, b) in cases.iter() {
+                        tms.push(b.clone());
+                    }
+                }
+                Tm::Call(_, args, body) => {
+                    let args = std::mem::replace(args, List::new());
+                    for (a, _) in args.iter() {
+                        tms.push(a.clone());
+                    }
+                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    tms.push(body);
+                }
+                Tm::OpCall { args, body, .. } => {
+                    let args = std::mem::replace(args, List::new());
+                    for (a, _) in args.iter() {
+                        tms.push(a.clone());
+                    }
+                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    tms.push(body);
+                }
+            }
+        }
+        fn drain_val(v: &mut Val, vals: &mut Vec<Rc<Val>>, tms: &mut Vec<Rc<Tm>>) {
+            match v {
+                Val::Flex(_, sp) | Val::Rigid(_, sp) | Val::Decl(_, sp) => {
+                    let sp = std::mem::replace(sp, List::new());
+                    for (x, _) in sp.iter() {
+                        vals.push(x.clone());
+                    }
+                }
+                Val::Obj(x, _, sp) => {
+                    let x = std::mem::replace(x, VAL_PLACEHOLDER.clone());
+                    vals.push(x);
+                    let sp = std::mem::replace(sp, List::new());
+                    for (a, _) in sp.iter() {
+                        vals.push(a.clone());
+                    }
+                }
+                Val::Lam(_, _, Closure(env, body)) => {
+                    let env = std::mem::replace(env, List::new());
+                    for x in env.iter() {
+                        vals.push(x.clone());
+                    }
+                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    tms.push(body);
+                }
+                Val::Pi(_, _, a, Closure(env, body)) => {
+                    let a = std::mem::replace(a, VAL_PLACEHOLDER.clone());
+                    vals.push(a);
+                    let env = std::mem::replace(env, List::new());
+                    for x in env.iter() {
+                        vals.push(x.clone());
+                    }
+                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    tms.push(body);
+                }
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => {
+                    // Leaf: no nested references.  Return without touching
+                    // `v`; the caller forgets it, so this impl is not
+                    // re-entered (dropping the `Val::U(0)` sentinel would
+                    // re-drain it forever).
+                    return;
+                }
+                Val::Sum(_, params, _, _) => {
+                    let params = std::mem::replace(params, EMPTY_SUM_PARAMS.clone());
+                    for (_, v, ty, _) in params.iter() {
+                        vals.push(v.clone());
+                        vals.push(ty.clone());
+                    }
+                }
+                Val::SumCase { typ, datas, .. } => {
+                    let typ = std::mem::replace(typ, VAL_PLACEHOLDER.clone());
+                    vals.push(typ);
+                    let datas = std::mem::replace(datas, EMPTY_SUM_CASE_DATAS.clone());
+                    for (_, d, _) in datas.iter() {
+                        vals.push(d.clone());
+                    }
+                }
+                Val::Match(scru, env, cases) => {
+                    let scru = std::mem::replace(scru, VAL_PLACEHOLDER.clone());
+                    vals.push(scru);
+                    let env = std::mem::replace(env, List::new());
+                    for x in env.iter() {
+                        vals.push(x.clone());
+                    }
+                    let cases = std::mem::replace(cases, Vec::new());
+                    for (_, b) in cases.iter() {
+                        tms.push(b.clone());
+                    }
+                }
+                Val::Call(_, args, body) => {
+                    let args = std::mem::replace(args, List::new());
+                    for (a, _) in args.iter() {
+                        vals.push(a.clone());
+                    }
+                    let body = std::mem::replace(body, VAL_PLACEHOLDER.clone());
+                    vals.push(body);
+                }
+            }
+            // The drained shell now holds only shared static placeholder
+            // clones and empty collections; the caller forgets it, so its
+            // drop never re-enters this impl (a normal drop would recurse
+            // one frame per node) and nothing per-node is leaked.
+        }
+        let mut vals: Vec<Rc<Val>> = Vec::new();
+        let mut tms: Vec<Rc<Tm>> = Vec::new();
+        vals.push(Rc::new(std::mem::replace(self, Val::U(0))));
+        loop {
+            match vals.pop() {
+                Some(v) => match Rc::try_unwrap(v) {
+                    Ok(mut v) => {
+                        drain_val(&mut v, &mut vals, &mut tms);
+                        // `v` is now a drained shell (placeholder clones only)
+                        // — no per-node allocations, so skipping its drop is
+                        // leak-free; dropping it would re-enter this impl.
+                        std::mem::forget(v);
+                    }
+                    Err(_) => continue, // shared elsewhere; count decremented only
+                },
+                None => match tms.pop() {
+                    Some(t) => match Rc::try_unwrap(t) {
+                        Ok(mut t) => {
+                            drain_tm(&mut t, &mut tms);
+                            std::mem::forget(t);
+                        }
+                        Err(_) => continue,
+                    },
+                    None => break,
+                },
+            }
+        }
+    }
 }
 
 type VTy = Val;
@@ -1160,7 +1473,16 @@ impl Infer {
         &self.meta[m.0 as usize]
     }
     fn force(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
-        //println!("{} {:?}", "force".red(), t);
+        self.force_inner(decl, t)
+    }
+    // Fast path for deep constructor chains (e.g. big `Nat` literals, which
+    // are nested `Val::SumCase`s): force the spine iteratively so a
+    // million-deep chain does not consume a million native stack frames.
+    fn force_inner(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
+        // `force_chain` returns `None` when `t` is not such a chain.
+        if let Some(v) = self.force_chain(decl, t) {
+            return v;
+        }
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
                 MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl,
@@ -1249,6 +1571,70 @@ impl Infer {
             _ => t.clone(),
         }
     }
+
+    /// Iterative force for deep unary-constructor chains (`Val::SumCase`
+    /// spines where every node has exactly one data that is itself a
+    /// `SumCase`, e.g. big `Nat` literals).  Returns `None` when `t` is not
+    /// such a chain so the caller falls back to the recursive `force`.
+    /// When nothing changed along the spine the original `t` is returned
+    /// unchanged (identical to the recursive behaviour); otherwise the chain
+    /// is rebuilt from the inside out.
+    fn force_chain(&self, decl: &Decl, t: &Rc<Val>) -> Option<Rc<Val>> {
+        struct Node {
+            typ: Rc<Val>,
+            forced_typ: Rc<Val>,
+            index: u32,
+            is_trait: bool,
+            datas: SumCaseDatas,
+        }
+        // Descend the spine iteratively.
+        let mut nodes: Vec<Node> = Vec::new();
+        let mut cur = t.clone();
+        loop {
+            match cur.as_ref() {
+                Val::SumCase { is_trait, typ, index, datas } if datas.len() == 1 => {
+                    let forced_typ = self.force(decl, typ);
+                    nodes.push(Node {
+                        typ: typ.clone(),
+                        forced_typ,
+                        index: *index,
+                        is_trait: *is_trait,
+                        datas: datas.clone(),
+                    });
+                    cur = datas[0].1.clone();
+                }
+                _ => break,
+            }
+        }
+        if nodes.is_empty() {
+            return None;
+        }
+        // Force the tail (the innermost value below the spine).
+        let tail_forced = self.force(decl, &cur);
+        let mut changed = !Rc::ptr_eq(&tail_forced, &cur);
+        for node in &nodes {
+            if !Rc::ptr_eq(&node.forced_typ, &node.typ) {
+                changed = true;
+            }
+        }
+        if !changed {
+            return Some(t.clone());
+        }
+        // Rebuild from the inside out.
+        let mut inner = tail_forced;
+        for node in nodes.into_iter().rev() {
+            let name = node.datas[0].0.clone();
+            let icit = node.datas[0].2;
+            let new_datas: SumCaseDatas = Rc::new(vec![(name, inner.clone(), icit)]);
+            inner = Val::SumCase {
+                is_trait: node.is_trait,
+                typ: node.forced_typ,
+                index: node.index,
+                datas: new_datas,
+            }.into();
+        }
+        Some(inner)
+    }
     fn v_meta(&self, m: MetaVar) -> Rc<Val> {
         match self.lookup_meta(m) {
             MetaEntry::Solved(v, _) => v.clone(),
@@ -1329,117 +1715,288 @@ impl Infer {
     }
 
     fn eval(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
-        //println!("{} {:?}", "eval".yellow(), tm);
-        match tm.as_ref() {
-            Tm::Var(x) => match env.iter().nth(x.0 as usize) {
-                Some(v) => v.clone(),
-                None => panic!("var {:?} not found", x.0),
+        self.eval_inner(decl, env, tm)
+    }
+    fn eval_inner(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
+        // Iterative evaluator.
+        //
+        // The original evaluator recursed through `self.eval` for every
+        // application (`Tm::App` → `v_app` → `closure_apply` → `eval`) and
+        // for every dispatched match branch (`Tm::Match` → `eval_aux` →
+        // `eval`), so evaluating e.g. `0 + 1000000` on unary Peano `Nat`
+        // (whose `nat_add_helper` recurses once per `succ`) consumed one
+        // native stack frame per `succ` and overflowed the stack.  This
+        // version runs the same evaluation steps as an explicit-stack loop:
+        // each `succ`/match level costs O(1) native stack.  Evaluation order
+        // within `Tm::App` matches the original (function part first).
+        enum Frame {
+            /// `Tm::App(t, u, i)`: after `t` evaluates, evaluate `u` next in
+            /// the application's own env (the function part's evaluation may
+            /// change the machine env, e.g. via `let`/`match` dispatch).
+            EvalArg { arg: Rc<Tm>, icit: Icit, env: Env },
+            /// The evaluated function; the current value (the evaluated
+            /// argument) is applied to it.
+            ApplyAfter { fun: Rc<Val>, icit: Icit },
+            /// `Tm::Obj(t, name)`: after `t` evaluates, build the Obj value.
+            Obj(Span<SmolStr>),
+            /// `Tm::Let(_, _, t, u)`: after `t` evaluates to v, eval `u` in env+v.
+            Let(Rc<Tm>, Env),
+            /// `Tm::AppPruning(t, pr)`: after `t` evaluates, apply pruning.
+            Prune(Pruning, Env),
+            /// `Tm::Pi(x, i, a, b)`: after `a` evaluates, build the Pi value.
+            Pi(Span<SmolStr>, Icit, Rc<Tm>, Env),
+            /// `Tm::Call`/`Tm::OpCall`: after the body evaluates, wrap it in
+            /// `Val::Call` if the body stuck at a match.
+            Call(SmolStr, List<(Rc<Tm>, Icit)>, Env),
+            /// `Tm::Match(t, cases)`: after the scrutinee evaluates, dispatch.
+            Match(Vec<(PatternDetail, Rc<Tm>)>, Env),
+            /// `Tm::SumCase`: after the current data term evaluates, collect it
+            /// and evaluate the next data / the type.
+            SumCase {
+                is_trait: bool,
+                typ: Rc<Tm>,
+                index: u32,
+                datas: TmSumCaseDatas,
+                /// Data fields collected so far (in order).
+                done: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
+                /// The data field whose term is currently being evaluated.
+                cur: (Span<SmolStr>, Icit),
             },
-            Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),
-            Tm::Obj(tm, name) => {
-                let a = self.eval(decl, env, tm);
-                let a = self.force(decl, &a);
-                match a.as_ref() {
-                    Val::Sum(_, params, _, _) => {
-                        params.iter()
-                            .find(|(f_name, _, _, _)| f_name == name)
-                            .unwrap().1.clone()
-                    },
-                    Val::SumCase { datas, typ, .. } => {
-                        (match typ.as_ref() {
-                            Val::Sum(_, params, _, _) => params,
-                            _ => panic!("impossible {typ:?}"),
-                        }).iter()
-                            .map(|x| (x.0.clone(), x.1.clone(), x.3))
-                            .chain(datas.iter().cloned())
-                        //datas.into_iter()
-                            .find(|(f_name, _, _)| f_name == name)
-                            .unwrap().1.clone()
-                    },
-                    _ => {
-                        Val::Obj(a, name.clone(), List::new()).into()
-                    },
-                }
-            }
-            Tm::App(t, u, i) => self.v_app(decl, &self.eval(decl, env, t), self.eval(decl, env, u), *i),
-            Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
-            Tm::Pi(x, i, a, b) => {
-                Val::Pi(x.clone(), *i, self.eval(decl, env, a), Closure(env.clone(), b.clone())).into()
-            }
-            Tm::Let(_, _, t, u) => {
-                let t_val = self.eval(decl, env, t);
-                self.eval(decl, &env.prepend(t_val), u)
-            }
-            Tm::U(x) => Val::U(*x).into(),
-            Tm::Meta(m) => self.v_meta(*m),
-            Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, t), pr),
-            Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
-            Tm::LiteralType => Val::LiteralType.into(),
-            Tm::Sum(name, params, cases, is_trait) => {
-                let new_params = Rc::new(params
-                    .iter()
-                    .map(|x| (x.0.clone(), self.eval(decl, env, &x.1), self.eval(decl, env, &x.2), x.3))
-                    .collect());
-                Val::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
-            }
-            Tm::SumCase {
-                is_trait,
-                typ,
-                index,
-                datas,
-            } => {
-                let datas = Rc::new(datas
-                    .iter()
-                    .map(|p| (p.0.clone(), self.eval(decl, env, &p.1), p.2))
-                    .collect());
-                let typ = self.eval(decl, env, typ);
-                Val::SumCase {
-                    is_trait: *is_trait,
-                    typ,
-                    index: *index,
-                    datas,
-                }.into()
-            }
-            Tm::Call(name, args, body) => {
-                let result = self.eval(decl, env, body);
-                if let Val::Match(..) = result.as_ref() {
-                    let args = args
-                        .map(|(x, i)| (self.eval(decl, env, x), *i));
-                    Val::Call(name.clone(), args, result).into()
-                } else {
-                    result
-                }
+            /// All `Tm::SumCase` data terms evaluated; `typ` just evaluated:
+            /// assemble the value.
+            SumCaseTyp {
+                is_trait: bool,
+                index: u32,
+                datas: Vec<(Span<SmolStr>, Rc<Val>, Icit)>,
             },
-            Tm::OpCall { name, args, body, .. } => {
-                // Round-trip identity: re-evaluating a quoted operator call
-                // reproduces the original Val::Call (mirror of Tm::Call).
-                let result = self.eval(decl, env, body);
-                if let Val::Match(..) = result.as_ref() {
-                    let args = args
-                        .map(|(x, i)| (self.eval(decl, env, x), *i));
-                    Val::Call(name.clone(), args, result).into()
-                } else {
-                    result
+        }
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut env = env.clone();
+        let mut tm = tm.clone();
+        loop {
+            // Evaluate the current term to a value.  Composite terms push a
+            // continuation frame and continue with their sub-term instead of
+            // recursing.
+            let mut v = match tm.as_ref() {
+                Tm::Var(x) => match env.iter().nth(x.0 as usize) {
+                    Some(v) => v.clone(),
+                    None => panic!("var {:?} not found", x.0),
+                },
+                Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),
+                Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
+                Tm::U(x) => Val::U(*x).into(),
+                Tm::Meta(m) => self.v_meta(*m),
+                Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
+                Tm::LiteralType => Val::LiteralType.into(),
+                Tm::App(t, u, i) => {
+                    stack.push(Frame::EvalArg { arg: u.clone(), icit: *i, env: env.clone() });
+                    tm = t.clone();
+                    continue;
                 }
-            },
-            Tm::Match(tm, cases) => {
-                let val = self.eval(decl, env, tm);
-                let val = self.force(decl, &val);
-                match val.as_ref() {
-                    Val::SumCase { .. } => {
-                        match Compiler::eval_aux(self, &val, decl, env, cases) {
-                            Some((tm, env)) => self.eval(decl, &env, &tm),
-                            None => Val::Match(val, env.clone(), cases.clone()).into(),
+                Tm::Obj(t, name) => {
+                    stack.push(Frame::Obj(name.clone()));
+                    tm = t.clone();
+                    continue;
+                }
+                Tm::Let(_, _, t, u) => {
+                    stack.push(Frame::Let(u.clone(), env.clone()));
+                    tm = t.clone();
+                    continue;
+                }
+                Tm::AppPruning(t, pr) => {
+                    stack.push(Frame::Prune(pr.clone(), env.clone()));
+                    tm = t.clone();
+                    continue;
+                }
+                Tm::Pi(x, i, a, b) => {
+                    stack.push(Frame::Pi(x.clone(), *i, b.clone(), env.clone()));
+                    tm = a.clone();
+                    continue;
+                }
+                Tm::Call(name, args, body) => {
+                    stack.push(Frame::Call(name.clone(), args.clone(), env.clone()));
+                    tm = body.clone();
+                    continue;
+                }
+                Tm::OpCall { symbol: _, name, args, body } => {
+                    stack.push(Frame::Call(name.clone(), args.clone(), env.clone()));
+                    tm = body.clone();
+                    continue;
+                }
+                Tm::Match(tm0, cases) => {
+                    stack.push(Frame::Match(cases.clone(), env.clone()));
+                    tm = tm0.clone();
+                    continue;
+                }
+                Tm::Sum(name, params, cases, is_trait) => {
+                    let new_params = Rc::new(params
+                        .iter()
+                        .map(|x| (x.0.clone(), self.eval(decl, &env, &x.1), self.eval(decl, &env, &x.2), x.3))
+                        .collect());
+                    Val::Sum(name.clone(), new_params, cases.clone(), *is_trait).into()
+                }
+                Tm::SumCase { is_trait, typ, index, datas } => {
+                    // Evaluate the data fields iteratively: deep constructor
+                    // chains (e.g. quoted big `Nat` literals) are nested
+                    // `Tm::SumCase` nodes, and recursive `self.eval` here
+                    // would consume one native stack frame per constructor.
+                    if datas.is_empty() {
+                        stack.push(Frame::SumCaseTyp { is_trait: *is_trait, index: *index, datas: vec![] });
+                        tm = typ.clone();
+                        continue;
+                    }
+                    let (name, tm0, icit) = &datas[0];
+                    stack.push(Frame::SumCase {
+                        is_trait: *is_trait,
+                        typ: typ.clone(),
+                        index: *index,
+                        datas: datas.clone(),
+                        done: vec![],
+                        cur: (name.clone(), *icit),
+                    });
+                    tm = tm0.clone();
+                    continue;
+                }
+            };
+            // Pop pending continuations, composing the value.
+            loop {
+                match stack.pop() {
+                    None => return v,
+                    Some(Frame::EvalArg { arg, icit, env: aenv }) => {
+                        stack.push(Frame::ApplyAfter { fun: v.clone(), icit });
+                        env = aenv;
+                        tm = arg;
+                        break;
+                    }
+                    Some(Frame::ApplyAfter { fun, icit }) => {
+                        if let Val::Lam(_, _, closure) = fun.as_ref() {
+                            // Inline lambda application into the machine loop
+                            // instead of recursing through `closure_apply`
+                            // (which would consume one native stack frame per
+                            // constructor while evaluating e.g. `nat_add_helper`
+                            // on a big literal).
+                            env = closure.0.prepend(v);
+                            tm = closure.1.clone();
+                            break;
+                        } else {
+                            v = self.v_app(decl, &fun, v, icit);
                         }
                     }
-                    _ => {
-                        Val::Match(val, env.clone(), cases.clone()).into()
+                    Some(Frame::Obj(name)) => {
+                        let a = self.force(decl, &v);
+                        v = match a.as_ref() {
+                            Val::Sum(_, params, _, _) => {
+                                params.iter()
+                                    .find(|(f_name, _, _, _)| f_name == &name)
+                                    .unwrap().1.clone()
+                            },
+                            Val::SumCase { datas, typ, .. } => {
+                                (match typ.as_ref() {
+                                    Val::Sum(_, params, _, _) => params,
+                                    _ => panic!("impossible {typ:?}"),
+                                }).iter()
+                                    .map(|x| (x.0.clone(), x.1.clone(), x.3))
+                                    .chain(datas.iter().cloned())
+                                    .find(|(f_name, _, _)| f_name == &name)
+                                    .unwrap().1.clone()
+                            },
+                            _ => {
+                                Val::Obj(a, name, List::new()).into()
+                            },
+                        };
+                    }
+                    Some(Frame::Let(u, lenv)) => {
+                        env = lenv.prepend(v);
+                        tm = u;
+                        break;
+                    }
+                    Some(Frame::Prune(pr, penv)) => {
+                        v = self.v_app_pruning(decl, &penv, v, &pr);
+                    }
+                    Some(Frame::Pi(x, i, b, penv)) => {
+                        v = Val::Pi(x, i, v, Closure(penv, b)).into();
+                    }
+                    Some(Frame::Call(name, args, cenv)) => {
+                        if let Val::Match(..) = v.as_ref() {
+                            let args = args
+                                .map(|(x, i)| (self.eval(decl, &cenv, x), *i));
+                            v = Val::Call(name, args, v).into();
+                        }
+                    }
+                    Some(Frame::SumCase { is_trait, typ, index, datas, mut done, cur }) => {
+                        done.push((cur.0, v.clone(), cur.1));
+                        let dlen = done.len();
+                        if dlen < datas.len() {
+                            let (name, tm0, icit) = datas[dlen].clone();
+                            stack.push(Frame::SumCase {
+                                is_trait,
+                                typ,
+                                index,
+                                datas,
+                                done,
+                                cur: (name, icit),
+                            });
+                            tm = tm0;
+                            break;
+                        } else {
+                            stack.push(Frame::SumCaseTyp { is_trait, index, datas: done });
+                            tm = typ;
+                            break;
+                        }
+                    }
+                    Some(Frame::SumCaseTyp { is_trait, index, datas }) => {
+                        v = Val::SumCase {
+                            is_trait,
+                            typ: v,
+                            index,
+                            datas: Rc::new(datas),
+                        }.into();
+                    }
+                    Some(Frame::Match(cases, menv)) => {
+                        // Dispatch on the head constructor directly: forcing
+                        // the whole scrutinee here would re-walk a deep
+                        // constructor chain at every match step (O(n^2) for
+                        // `nat_add_helper` on a big literal).  Only
+                        // non-constructor heads (e.g. metas) are forced.
+                        match v.as_ref() {
+                            Val::SumCase { .. } => {
+                                match Compiler::eval_aux(self, &v, decl, &menv, &cases) {
+                                    Some((tm_b, env_b)) => {
+                                        tm = tm_b;
+                                        env = env_b;
+                                        break;
+                                    }
+                                    None => {
+                                        v = Val::Match(v, menv, cases).into();
+                                    }
+                                }
+                            }
+                            _ => {
+                                let val = self.force(decl, &v);
+                                match val.as_ref() {
+                                    Val::SumCase { .. } => {
+                                        match Compiler::eval_aux(self, &val, decl, &menv, &cases) {
+                                            Some((tm_b, env_b)) => {
+                                                tm = tm_b;
+                                                env = env_b;
+                                                break;
+                                            }
+                                            None => {
+                                                v = Val::Match(val, menv, cases).into();
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        v = Val::Match(val, menv, cases).into();
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
-
     fn quote_sp(&self, decl: &Decl, l: Lvl, t: Rc<Tm>, spine: &Spine) -> Rc<Tm> {
         /*spine.iter().fold(t, |acc, u| {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
@@ -1454,6 +2011,9 @@ impl Infer {
     }
 
     pub fn quote(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
+        self.quote_inner(decl, l, t)
+    }
+    fn quote_inner(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
         //println!("{} {:?}", "quote".green(), t);
         let t = self.force(decl, t);
         match t.as_ref() {
@@ -1489,18 +2049,61 @@ impl Infer {
                 index,
                 datas,
             } => {
-                let datas = Rc::new(datas
-                    .iter()
-                    .map(|p| {
-                        (p.0.clone(), self.quote(decl, l, &p.1), p.2)
-                    })
-                    .collect());
-                Tm::SumCase {
-                    is_trait: *is_trait,
-                    typ: self.quote(decl, l, typ),
-                    index: *index,
-                    datas,
-                }.into()
+                // Fast path for deep unary-constructor chains (e.g. big `Nat`
+                // literals, which are nested `Val::SumCase`s): quote the spine
+                // iteratively so one native stack frame is not consumed per
+                // constructor.  Falls back to the original recursive quoting
+                // for short/irregular chains.
+                struct Node {
+                    typ: Rc<Val>,
+                    index: u32,
+                    is_trait: bool,
+                    name: Span<SmolStr>,
+                    icit: Icit,
+                }
+                let mut nodes: Vec<Node> = Vec::new();
+                let mut cur: Rc<Val> = t.clone();
+                loop {
+                    match cur.as_ref() {
+                        Val::SumCase { is_trait, typ, index, datas } if datas.len() == 1 => {
+                            nodes.push(Node {
+                                typ: typ.clone(),
+                                index: *index,
+                                is_trait: *is_trait,
+                                name: datas[0].0.clone(),
+                                icit: datas[0].2,
+                            });
+                            cur = datas[0].1.clone();
+                        }
+                        _ => break,
+                    }
+                }
+                if nodes.len() >= 2 {
+                    let mut inner = self.quote(decl, l, &cur);
+                    for node in nodes.into_iter().rev() {
+                        let datas: TmSumCaseDatas = Rc::new(vec![(node.name, inner.clone(), node.icit)]);
+                        inner = Tm::SumCase {
+                            is_trait: node.is_trait,
+                            typ: self.quote(decl, l, &node.typ),
+                            index: node.index,
+                            datas,
+                        }.into();
+                    }
+                    inner
+                } else {
+                    let datas = Rc::new(datas
+                        .iter()
+                        .map(|p| {
+                            (p.0.clone(), self.quote(decl, l, &p.1), p.2)
+                        })
+                        .collect());
+                    Tm::SumCase {
+                        is_trait: *is_trait,
+                        typ: self.quote(decl, l, typ),
+                        index: *index,
+                        datas,
+                    }.into()
+                }
             }
             Val::Call(name, args, body) => {
                 // Operator-symbol recovery: an inlined helper call that backs
@@ -5396,3 +5999,15 @@ mod symbol_recovery_tests {
         }
     }
 }
+
+// Shared placeholder Rc's used by the iterative Drop impls below: drained
+// shells hold clones of these instead of fresh per-node allocations, so
+// forgetting a drained shell never leaks heap (only the static's refcount
+// grows, which is harmless).
+use std::sync::LazyLock;
+static VAL_PLACEHOLDER: LazyLock<Rc<Val>> = LazyLock::new(|| Rc::new(Val::U(0)));
+static TM_PLACEHOLDER: LazyLock<Rc<Tm>> = LazyLock::new(|| Rc::new(Tm::U(0)));
+static EMPTY_SUM_PARAMS: LazyLock<SumParams> = LazyLock::new(|| Rc::new(vec![]));
+static EMPTY_SUM_CASE_DATAS: LazyLock<SumCaseDatas> = LazyLock::new(|| Rc::new(vec![]));
+static EMPTY_TM_SUM_PARAMS: LazyLock<TmSumParams> = LazyLock::new(|| Rc::new(vec![]));
+static EMPTY_TM_SUM_CASE_DATAS: LazyLock<TmSumCaseDatas> = LazyLock::new(|| Rc::new(vec![]));

@@ -1262,16 +1262,26 @@ impl Compiler {
         cxt: &Env,
         arms: &[(PatternDetail, Rc<Tm>)],
     ) -> Option<(Rc<Tm>, Env)> {
-        let head = infer.force(decl, heads);
-        let (index, params) = match head.as_ref() {
+        // Only the head constructor is needed for dispatch.  Forcing the
+        // whole scrutinee here would re-walk a deep constructor chain at
+        // every match step (O(n) per step, i.e. O(n^2) for `nat_add_helper`
+        // on a big literal).  Force only non-constructor heads (e.g. metas).
+        let (index, params) = match heads.as_ref() {
             Val::SumCase {
                 is_trait: _,
                 typ: _,
                 index,
                 datas,
             } => (*index, datas.clone()),
-            //_ => panic!("by now only can match a sum type, but get {:?}", heads),
-            _ => (u32::MAX, Rc::new(vec![])),
+            _ => match infer.force(decl, heads).as_ref() {
+                Val::SumCase {
+                    is_trait: _,
+                    typ: _,
+                    index,
+                    datas,
+                } => (*index, datas.clone()),
+                _ => (u32::MAX, Rc::new(vec![])),
+            },
         };
 
         arms.iter()

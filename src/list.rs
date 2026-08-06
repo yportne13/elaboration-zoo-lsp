@@ -7,6 +7,29 @@ pub struct List<T> {
     pub size: usize,
 }
 
+#[allow(dead_code)]
+impl<T> Drop for List<T> {
+    fn drop(&mut self) {
+        // The derived drop unwraps the Rc-linked node chain recursively —
+        // one native stack frame per node — which overflows the stack on
+        // long lists (e.g. the evaluator's environment while reducing a
+        // million-deep `Nat` literal).  Drain the chain iteratively instead.
+        // Semantics are identical to the derived drop: each node's `elem` is
+        // dropped (head first), and shared tails are released with a single
+        // reference-count decrement.
+        let mut cur = self.head.take();
+        while let Some(rc) = cur {
+            match Rc::try_unwrap(rc) {
+                Ok(node) => cur = node.next,
+                // The tail from here on is shared with another list; the
+                // last remaining reference will drain it later.
+                Err(_) => break,
+            }
+            // `node.elem` (and `node.size`) are dropped here.
+        }
+    }
+}
+
 impl<T: Debug> Debug for List<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_list().entries(self.iter()).finish()
