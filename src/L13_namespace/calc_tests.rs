@@ -272,11 +272,12 @@ def broken(n: Nat): Eq (0 + n) (n + 0) =
     }
 }
 
-// ── positive: the theorem_proving example, including its appended `_calc`
-// variants ──
+// ── positive: the theorem_proving example, with each `_calc` variant ──
+// placed directly below its non-calc original.
 // Each `_calc` variant re-proves the proposition of its original with a
 // `calc { lhs = rhs by proof ... }` chain and prints exactly the same
-// value as the original println (asserted by the exact output below).
+// value as the original println (asserted by the exact output below, where
+// every variant line immediately follows its original's line).
 
 #[test]
 fn calc_example_theorem_proving() {
@@ -284,23 +285,23 @@ fn calc_example_theorem_proving() {
     let output = assert_ok(input);
     let expected = "\
 Eq[Nat]::refl(5)
+Eq[Nat]::refl(5)
 Eq[Nat]::refl(3)
 Eq[Nat]::refl(3)
 Eq[Nat]::refl(4)
+Eq[Nat]::refl(4)
 Eq[Nat]::refl(8)
+Eq[Nat]::refl(7)
 Eq[Nat]::refl(7)
 Eq[Nat]::refl(8)
 Eq[Nat]::refl(12)
+Eq[Nat]::refl(12)
+Eq[Nat]::refl(6)
 Eq[Nat]::refl(6)
 Eq[Nat]::refl(6)
 Eq[Boolean]::refl(Boolean::true)
 Eq[Boolean]::refl(Boolean::false)
 Eq[Nat]::refl(5)
-Eq[Nat]::refl(5)
-Eq[Nat]::refl(4)
-Eq[Nat]::refl(7)
-Eq[Nat]::refl(12)
-Eq[Nat]::refl(6)
 Eq[Nat]::refl(5)
 Eq[Nat]::refl(5)
 ";
