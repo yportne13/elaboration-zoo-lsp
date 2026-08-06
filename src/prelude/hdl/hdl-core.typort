@@ -170,7 +170,8 @@ struct ModuleTree {
 }
 
 // Trait implemented by every `module`-generated struct. The `tree` method is
-// provided by the module macro (a class body method reading the `tree_data` field).
+// provided by the module macro (a class body method that RE-RUNS the module's
+// side-effect chain on every access — there is no stored tree field).
 trait Module {
     def tree: ModuleTree
 }
