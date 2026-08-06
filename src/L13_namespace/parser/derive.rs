@@ -278,39 +278,44 @@ fn build_field_name_expr(field_name: &str) -> Raw {
 /// Resolve the signal creation function for a primitive type and a port
 /// direction: `dir == None` → plain wire, `Some("In")` → input port,
 /// `Some("Out")` → output port.
+/// The `Named` variants take an explicit name string — the derive builds
+/// field names from the factory's BindingName (`bn.name + "_" + field`),
+/// which is NOT the name of the enclosing `let __f0 = ...` binding, so the
+/// bn-based new* family cannot be used here.
 fn create_fn_name(base: &str, dir: Option<&str>) -> &'static str {
     match dir {
         Some("In") => match base {
-            "UInt" => "newUIntInput",
-            "SInt" => "newSIntInput",
-            "Bits" => "newBitsInput",
-            _ => "newBoolInput",
+            "UInt" => "newUIntInputNamed",
+            "SInt" => "newSIntInputNamed",
+            "Bits" => "newBitsInputNamed",
+            _ => "newBoolInputNamed",
         },
         Some("Out") => match base {
-            "UInt" => "newUIntOutput",
-            "SInt" => "newSIntOutput",
-            "Bits" => "newBitsOutput",
-            _ => "newBoolOutput",
+            "UInt" => "newUIntOutputNamed",
+            "SInt" => "newSIntOutputNamed",
+            "Bits" => "newBitsOutputNamed",
+            _ => "newBoolOutputNamed",
         },
         Some("InOut") => match base {
-            "UInt" => "newUIntInOut",
-            "SInt" => "newSIntInOut",
-            "Bits" => "newBitsInOut",
-            _ => "newBoolInOut",
+            "UInt" => "newUIntInOutNamed",
+            "SInt" => "newSIntInOutNamed",
+            "Bits" => "newBitsInOutNamed",
+            _ => "newBoolInOutNamed",
         },
         _ => match base {
-            "UInt" => "newUInt",
-            "SInt" => "newSInt",
-            "Bits" => "newBits",
-            _ => "newBool",
+            "UInt" => "newUIntNamed",
+            "SInt" => "newSIntNamed",
+            "Bits" => "newBitsNamed",
+            _ => "newBoolNamed",
         },
     }
 }
 
 /// Build the signal creation expression for a single field.
 /// Recognizes: UInt[w], SInt[w], Bits[w], Bool (optionally wrapped in a
-/// direction marker). Returns `newUInt(bn-prefixed name, w)`, etc. — for
-/// master/slave factories the directed port variants (newUIntInput/…).
+/// direction marker). Returns `newUIntNamed(bn-prefixed name, w)`, etc. —
+/// for master/slave factories the directed port variants
+/// (newUIntInputNamed/…).
 fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw, mode: CreateMode) -> Raw {
     let name_expr = build_field_name_expr(&field_name.data);
 

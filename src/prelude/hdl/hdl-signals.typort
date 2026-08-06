@@ -104,150 +104,211 @@ def autoBoolRegInit[bn: BindingName](initVal: Nat): Bool =
     let e = createSignalExpr(bn.name, createRegWidthInit(bn.name, 1, literal(initVal)));
     Bool.mk(Some(bn.name), e)
 
-// ---- Explicit-name signal creation (legacy) ----
+// ---- Explicit-name signal creation (internal helpers) ----
+// The `Named` variants build signals with an explicit name string. They are
+// used where the signal's name does NOT come from a let binding: the Bundle
+// derive (create_TypeName / asMaster / asSlave prefix fields with the
+// factory's bn), the in_u/out_u direction helpers (reuse the source signal's
+// name), the RegNext impls and counter (register named after the caller's
+// binding), and explicit-name call sites. The public new* family below
+// delegates to these with bn.name, so `let mySignal = newUInt(8)` behaves
+// exactly like `let mySignal = autoUInt(8)`.
 
-def newBits(name: String, w: Nat): Bits[w] =
+def newBitsNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createWidth(name, w));
     Bits.mk(Some(name), e)
 
-def newUInt(name: String, w: Nat): UInt[w] =
+def newUIntNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createWidth(name, w));
     UInt.mk(Some(name), e)
 
-def newSInt(name: String, w: Nat): SInt[w] =
+def newSIntNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntWidth(name, w));
     SInt.mk(Some(name), e)
 
-def newBool(name: String): Bool =
+def newBoolNamed(name: String): Bool =
     let e = createSignalExpr(name, create(name));
     Bool.mk(Some(name), e)
 
-def newUIntInput(name: String, w: Nat): UInt[w] =
+def newUIntInputNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createInWidth(name, w));
     UInt.mk(Some(name), e)
 
-def newBitsInput(name: String, w: Nat): Bits[w] =
+def newBitsInputNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createInWidth(name, w));
     Bits.mk(Some(name), e)
 
-def newSIntInput(name: String, w: Nat): SInt[w] =
+def newSIntInputNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntInWidth(name, w));
     SInt.mk(Some(name), e)
 
-def newBoolInput(name: String): Bool =
+def newBoolInputNamed(name: String): Bool =
     let e = createSignalExpr(name, createIn(name));
     Bool.mk(Some(name), e)
 
-def newBitsOutput(name: String, w: Nat): Bits[w] =
+def newBitsOutputNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createOutWidth(name, w));
     Bits.mk(Some(name), e)
 
-def newUIntOutput(name: String, w: Nat): UInt[w] =
+def newUIntOutputNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createOutWidth(name, w));
     UInt.mk(Some(name), e)
 
-def newSIntOutput(name: String, w: Nat): SInt[w] =
+def newSIntOutputNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntOutWidth(name, w));
     SInt.mk(Some(name), e)
 
-def newBoolOutput(name: String): Bool =
+def newBoolOutputNamed(name: String): Bool =
     let e = createSignalExpr(name, createOut(name));
     Bool.mk(Some(name), e)
 
-def newUIntInOut(name: String, w: Nat): UInt[w] =
+def newUIntInOutNamed(name: String, w: Nat): UInt[w] =
     let e = createSignalExpr(name, createInOutWidth(name, w));
     UInt.mk(Some(name), e)
 
-def newBitsInOut(name: String, w: Nat): Bits[w] =
+def newBitsInOutNamed(name: String, w: Nat): Bits[w] =
     let e = createSignalExpr(name, createInOutWidth(name, w));
     Bits.mk(Some(name), e)
 
-def newSIntInOut(name: String, w: Nat): SInt[w] =
+def newSIntInOutNamed(name: String, w: Nat): SInt[w] =
     let e = createSignalExpr(name, createSIntInOutWidth(name, w));
     SInt.mk(Some(name), e)
 
-def newBoolInOut(name: String): Bool =
+def newBoolInOutNamed(name: String): Bool =
     let e = createSignalExpr(name, createInOut(name));
     Bool.mk(Some(name), e)
+
+def newUIntRegNamed(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newBitsRegNamed(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createRegWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newSIntRegNamed(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createSIntRegWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolRegNamed(name: String): Bool =
+    let e = createSignalExpr(name, createReg(name));
+    Bool.mk(Some(name), e)
+
+def newUIntRegInitNatNamed(name: String, w: Nat, initVal: Nat): UInt[w] =
+    let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
+    UInt.mk(Some(name), e)
+
+def newSIntRegInitNatNamed(name: String, w: Nat, initVal: Nat): SInt[w] =
+    let e = createSignalExpr(name, createSIntRegWidthInit(name, w, literal(initVal)));
+    SInt.mk(Some(name), e)
+
+def newBitsRegInitNatNamed(name: String, w: Nat, initVal: Nat): Bits[w] =
+    let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
+    Bits.mk(Some(name), e)
+
+def newBoolRegInitNatNamed(name: String, initVal: Nat): Bool =
+    let e = createSignalExpr(name, createRegWidthInit(name, 1, literal(initVal)));
+    Bool.mk(Some(name), e)
+
+// ---- Auto-named signal creation (BindingName) ----
+// Same semantics as the auto* family above; the legacy new* names now fill
+// the implicit BindingName from the call-site let binding:
+//   let mySignal = newUInt(8)      // mySignal gets name "mySignal"
+//   let myInput = newUIntInput(8)  // ... "myInput"
+
+def newBits[bn: BindingName](w: Nat): Bits[w] = newBitsNamed(bn.name, w)
+
+def newUInt[bn: BindingName](w: Nat): UInt[w] = newUIntNamed(bn.name, w)
+
+def newSInt[bn: BindingName](w: Nat): SInt[w] = newSIntNamed(bn.name, w)
+
+def newBool[bn: BindingName]: Bool = newBoolNamed(bn.name)
+
+def newUIntInput[bn: BindingName](w: Nat): UInt[w] = newUIntInputNamed(bn.name, w)
+
+def newBitsInput[bn: BindingName](w: Nat): Bits[w] = newBitsInputNamed(bn.name, w)
+
+def newSIntInput[bn: BindingName](w: Nat): SInt[w] = newSIntInputNamed(bn.name, w)
+
+def newBoolInput[bn: BindingName]: Bool = newBoolInputNamed(bn.name)
+
+def newBitsOutput[bn: BindingName](w: Nat): Bits[w] = newBitsOutputNamed(bn.name, w)
+
+def newUIntOutput[bn: BindingName](w: Nat): UInt[w] = newUIntOutputNamed(bn.name, w)
+
+def newSIntOutput[bn: BindingName](w: Nat): SInt[w] = newSIntOutputNamed(bn.name, w)
+
+def newBoolOutput[bn: BindingName]: Bool = newBoolOutputNamed(bn.name)
+
+def newUIntInOut[bn: BindingName](w: Nat): UInt[w] = newUIntInOutNamed(bn.name, w)
+
+def newBitsInOut[bn: BindingName](w: Nat): Bits[w] = newBitsInOutNamed(bn.name, w)
+
+def newSIntInOut[bn: BindingName](w: Nat): SInt[w] = newSIntInOutNamed(bn.name, w)
+
+def newBoolInOut[bn: BindingName]: Bool = newBoolInOutNamed(bn.name)
+
+def newUIntReg[bn: BindingName](w: Nat): UInt[w] = newUIntRegNamed(bn.name, w)
+
+def newBitsReg[bn: BindingName](w: Nat): Bits[w] = newBitsRegNamed(bn.name, w)
+
+def newSIntReg[bn: BindingName](w: Nat): SInt[w] = newSIntRegNamed(bn.name, w)
+
+def newBoolReg[bn: BindingName]: Bool = newBoolRegNamed(bn.name)
+
+def newUIntRegInitNat[bn: BindingName](w: Nat, initVal: Nat): UInt[w] = newUIntRegInitNatNamed(bn.name, w, initVal)
+
+def newSIntRegInitNat[bn: BindingName](w: Nat, initVal: Nat): SInt[w] = newSIntRegInitNatNamed(bn.name, w, initVal)
+
+def newBitsRegInitNat[bn: BindingName](w: Nat, initVal: Nat): Bits[w] = newBitsRegInitNatNamed(bn.name, w, initVal)
+
+def newBoolRegInitNat[bn: BindingName](initVal: Nat): Bool = newBoolRegInitNatNamed(bn.name, initVal)
 
 // ---- Port creation helpers (used by the module macro's port list) ----
 // The module macro declares ports in its pattern (`input a = UInt[8]`) and
 // records them via these helpers; the returned Expr is the module's own
 // signal (createInWidth etc.) so the body wires against real signals while
 // the macro's subSignal field provides the hierarchical `u.a` handle.
+// The port name comes from the module macro's let binding (`let $p = ...`),
+// so the implicit BindingName carries exactly the port name $p.
 
 // Create a typed port signal (UInt/Bits share createInWidth/createOutWidth/
 // createInOutWidth; SInt uses the signed variants, Bool the no-width
 // variants). ty is the stringified type name; w is ignored for Bool.
-def createPortExpr(dir: String, ty: String, name: String, w: Nat): Expr = match str_eq(ty, "Bool") {
+def createPortExpr[bn: BindingName](dir: String, ty: String, w: Nat): Expr = match str_eq(ty, "Bool") {
     case true => match str_eq(dir, "input") {
-        case true => createSignalExpr(name, createIn(name))
+        case true => createSignalExpr(bn.name, createIn(bn.name))
         case false => match str_eq(dir, "inout") {
-            case true => createSignalExpr(name, createInOut(name))
-            case false => createSignalExpr(name, createOut(name))
+            case true => createSignalExpr(bn.name, createInOut(bn.name))
+            case false => createSignalExpr(bn.name, createOut(bn.name))
         }
     }
     case false => match str_eq(ty, "SInt") {
         case true => match str_eq(dir, "input") {
-            case true => createSignalExpr(name, createSIntInWidth(name, w))
+            case true => createSignalExpr(bn.name, createSIntInWidth(bn.name, w))
             case false => match str_eq(dir, "inout") {
-                case true => createSignalExpr(name, createSIntInOutWidth(name, w))
-                case false => createSignalExpr(name, createSIntOutWidth(name, w))
+                case true => createSignalExpr(bn.name, createSIntInOutWidth(bn.name, w))
+                case false => createSignalExpr(bn.name, createSIntOutWidth(bn.name, w))
             }
         }
         case false => match str_eq(dir, "input") {
-            case true => createSignalExpr(name, createInWidth(name, w))
+            case true => createSignalExpr(bn.name, createInWidth(bn.name, w))
             case false => match str_eq(dir, "inout") {
-                case true => createSignalExpr(name, createInOutWidth(name, w))
-                case false => createSignalExpr(name, createOutWidth(name, w))
+                case true => createSignalExpr(bn.name, createInOutWidth(bn.name, w))
+                case false => createSignalExpr(bn.name, createOutWidth(bn.name, w))
             }
         }
     }
 }
 
 // Create a Bool port signal (no width).
-def createBoolPortExpr(dir: String, name: String): Expr = match str_eq(dir, "input") {
-    case true => createSignalExpr(name, createIn(name))
+def createBoolPortExpr[bn: BindingName](dir: String): Expr = match str_eq(dir, "input") {
+    case true => createSignalExpr(bn.name, createIn(bn.name))
     case false => match str_eq(dir, "inout") {
-        case true => createSignalExpr(name, createInOut(name))
-        case false => createSignalExpr(name, createOut(name))
+        case true => createSignalExpr(bn.name, createInOut(bn.name))
+        case false => createSignalExpr(bn.name, createOut(bn.name))
     }
 }
-
-// ---- Register signal creation ----
-
-def newUIntReg(name: String, w: Nat): UInt[w] =
-    let e = createSignalExpr(name, createRegWidth(name, w));
-    UInt.mk(Some(name), e)
-
-def newBitsReg(name: String, w: Nat): Bits[w] =
-    let e = createSignalExpr(name, createRegWidth(name, w));
-    Bits.mk(Some(name), e)
-
-def newSIntReg(name: String, w: Nat): SInt[w] =
-    let e = createSignalExpr(name, createSIntRegWidth(name, w));
-    SInt.mk(Some(name), e)
-
-def newBoolReg(name: String): Bool =
-    let e = createSignalExpr(name, createReg(name));
-    Bool.mk(Some(name), e)
-
-// Register with Nat literal reset value (for use in macros)
-def newUIntRegInitNat(name: String, w: Nat, initVal: Nat): UInt[w] =
-    let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
-    UInt.mk(Some(name), e)
-
-def newSIntRegInitNat(name: String, w: Nat, initVal: Nat): SInt[w] =
-    let e = createSignalExpr(name, createSIntRegWidthInit(name, w, literal(initVal)));
-    SInt.mk(Some(name), e)
-
-def newBitsRegInitNat(name: String, w: Nat, initVal: Nat): Bits[w] =
-    let e = createSignalExpr(name, createRegWidthInit(name, w, literal(initVal)));
-    Bits.mk(Some(name), e)
-
-def newBoolRegInitNat(name: String, initVal: Nat): Bool =
-    let e = createSignalExpr(name, createRegWidthInit(name, 1, literal(initVal)));
-    Bool.mk(Some(name), e)
 
 // ---- Direction annotation helpers (SpinalHDL style) ----
 // These are for use inside Bundle declarations.
@@ -257,74 +318,74 @@ def newBoolRegInitNat(name: String, initVal: Nat): Bool =
 
 def in_u[width: Nat](t: UInt[width]): UInt[width] =
     match t.name {
-        case Some(n) => newUIntInput(n, width)
-        case None => newUIntInput("", width)
+        case Some(n) => newUIntInputNamed(n, width)
+        case None => newUIntInputNamed("", width)
     }
 
 def out_u[width: Nat](t: UInt[width]): UInt[width] =
     match t.name {
-        case Some(n) => newUIntOutput(n, width)
-        case None => newUIntOutput("", width)
+        case Some(n) => newUIntOutputNamed(n, width)
+        case None => newUIntOutputNamed("", width)
     }
 
 def in_b[width: Nat](t: Bits[width]): Bits[width] =
     match t.name {
-        case Some(n) => newBitsInput(n, width)
-        case None => newBitsInput("", width)
+        case Some(n) => newBitsInputNamed(n, width)
+        case None => newBitsInputNamed("", width)
     }
 
 def out_b[width: Nat](t: Bits[width]): Bits[width] =
     match t.name {
-        case Some(n) => newBitsOutput(n, width)
-        case None => newBitsOutput("", width)
+        case Some(n) => newBitsOutputNamed(n, width)
+        case None => newBitsOutputNamed("", width)
     }
 
 def in_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
-        case Some(n) => newSIntInput(n, width)
-        case None => newSIntInput("", width)
+        case Some(n) => newSIntInputNamed(n, width)
+        case None => newSIntInputNamed("", width)
     }
 
 def out_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
-        case Some(n) => newSIntOutput(n, width)
-        case None => newSIntOutput("", width)
+        case Some(n) => newSIntOutputNamed(n, width)
+        case None => newSIntOutputNamed("", width)
     }
 
 def inout_u[width: Nat](t: UInt[width]): UInt[width] =
     match t.name {
-        case Some(n) => newUIntInOut(n, width)
-        case None => newUIntInOut("", width)
+        case Some(n) => newUIntInOutNamed(n, width)
+        case None => newUIntInOutNamed("", width)
     }
 
 def inout_b[width: Nat](t: Bits[width]): Bits[width] =
     match t.name {
-        case Some(n) => newBitsInOut(n, width)
-        case None => newBitsInOut("", width)
+        case Some(n) => newBitsInOutNamed(n, width)
+        case None => newBitsInOutNamed("", width)
     }
 
 def inout_s[width: Nat](t: SInt[width]): SInt[width] =
     match t.name {
-        case Some(n) => newSIntInOut(n, width)
-        case None => newSIntInOut("", width)
+        case Some(n) => newSIntInOutNamed(n, width)
+        case None => newSIntInOutNamed("", width)
     }
 
 def inout_bool(t: Bool): Bool =
     match t.name {
-        case Some(n) => newBoolInOut(n)
-        case None => newBoolInOut("")
+        case Some(n) => newBoolInOutNamed(n)
+        case None => newBoolInOutNamed("")
     }
 
 def in_bool(t: Bool): Bool =
     match t.name {
-        case Some(n) => newBoolInput(n)
-        case None => newBoolInput("")
+        case Some(n) => newBoolInputNamed(n)
+        case None => newBoolInputNamed("")
     }
 
 def out_bool(t: Bool): Bool =
     match t.name {
-        case Some(n) => newBoolOutput(n)
-        case None => newBoolOutput("")
+        case Some(n) => newBoolOutputNamed(n)
+        case None => newBoolOutputNamed("")
     }
 
 // ============================================================
@@ -348,11 +409,11 @@ trait RegNext[T] {
 
 impl[w: Nat] RegNext[UInt[w]] for UInt[w] {
     def mkReg(name: String): UInt[w] =
-        let r = newUIntReg(name, w);
+        let r = newUIntRegNamed(name, w);
         let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): UInt[w] =
-        let r = newUIntReg(name, w);
+        let r = newUIntRegNamed(name, w);
         let _ = whenBegin(cond.expr);
         let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
         let _ = whenEnd(unit);
@@ -361,11 +422,11 @@ impl[w: Nat] RegNext[UInt[w]] for UInt[w] {
 
 impl[w: Nat] RegNext[Bits[w]] for Bits[w] {
     def mkReg(name: String): Bits[w] =
-        let r = newBitsReg(name, w);
+        let r = newBitsRegNamed(name, w);
         let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): Bits[w] =
-        let r = newBitsReg(name, w);
+        let r = newBitsRegNamed(name, w);
         let _ = whenBegin(cond.expr);
         let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
         let _ = whenEnd(unit);
@@ -374,11 +435,11 @@ impl[w: Nat] RegNext[Bits[w]] for Bits[w] {
 
 impl[w: Nat] RegNext[SInt[w]] for SInt[w] {
     def mkReg(name: String): SInt[w] =
-        let r = newSIntReg(name, w);
+        let r = newSIntRegNamed(name, w);
         let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): SInt[w] =
-        let r = newSIntReg(name, w);
+        let r = newSIntRegNamed(name, w);
         let _ = whenBegin(cond.expr);
         let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
         let _ = whenEnd(unit);
@@ -387,11 +448,11 @@ impl[w: Nat] RegNext[SInt[w]] for SInt[w] {
 
 impl RegNext[Bool] for Bool {
     def mkReg(name: String): Bool =
-        let r = newBoolReg(name);
+        let r = newBoolRegNamed(name);
         let _ = createSignalExpr("", regAssign(r.expr, this.expr));
         r
     def mkRegWhen(name: String, cond: Bool): Bool =
-        let r = newBoolReg(name);
+        let r = newBoolRegNamed(name);
         let _ = whenBegin(cond.expr);
         let _assignment = createSignalExpr("", regAssign(r.expr, this.expr));
         let _ = whenEnd(unit);
@@ -415,12 +476,12 @@ struct Counter[w: Nat] {
 }
 
 def counter[bn: BindingName](w: Nat): Counter[w] =
-    let v = newUIntReg(bn.name, w);
+    let v = newUIntRegNamed(bn.name, w);
     let _ = createSignalExpr("", regAssign(v.expr, binary(v.expr, "+", literal(1))));
     Counter.mk(v, Bool.mk(None, binary(unary("~", v.expr), "==", literal(0))))
 
 def counterInc[bn: BindingName](w: Nat, enable: Bool): Counter[w] =
-    let v = newUIntReg(bn.name, w);
+    let v = newUIntRegNamed(bn.name, w);
     let _ = whenBegin(enable.expr);
     let _ = createSignalExpr("", regAssign(v.expr, binary(v.expr, "+", literal(1))));
     let _ = whenEnd(unit);

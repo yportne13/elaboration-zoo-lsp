@@ -1478,7 +1478,7 @@ fn test_examples_hdl_dir() {
 fn test_hdl_reg_init_sint() {
     let input = r#"
 module Test {
-    let a = newSIntRegInitNat("myreg", 8, 0)
+    let a = newSIntRegInitNatNamed("myreg", 8, 0)
     a := a + 1
 }
 
@@ -1500,7 +1500,7 @@ println(moduleTreeVL(Test.create.tree))
 fn test_hdl_reg_init_uint() {
     let input = r#"
 module Test {
-    let a = newUIntRegInitNat("myreg", 16, 42)
+    let a = newUIntRegInitNatNamed("myreg", 16, 42)
     a := a + 1
 }
 
@@ -1520,7 +1520,7 @@ println(moduleTreeVL(Test.create.tree))
 fn test_hdl_reg_init_bits() {
     let input = r#"
 module Test {
-    let a = newBitsRegInitNat("myreg", 8, 1)
+    let a = newBitsRegInitNatNamed("myreg", 8, 1)
     let b = Bits[8]
     a := a ^ b
 }
@@ -1541,7 +1541,7 @@ println(moduleTreeVL(Test.create.tree))
 fn test_hdl_reg_no_init() {
     let input = r#"
 module Test {
-    let a = newSIntReg("myreg", 8)
+    let a = newSIntRegNamed("myreg", 8)
     a := a + 1
 }
 
@@ -1563,9 +1563,9 @@ println(moduleTreeVL(Test.create.tree))
 fn test_hdl_multiple_reg_inits() {
     let input = r#"
 module Test {
-    let a = newSIntRegInitNat("reg_a", 8, 0)
-    let b = newUIntRegInitNat("reg_b", 16, 3)
-    let c = newBitsRegInitNat("reg_c", 32, 5)
+    let a = newSIntRegInitNatNamed("reg_a", 8, 0)
+    let b = newUIntRegInitNatNamed("reg_b", 16, 3)
+    let c = newBitsRegInitNatNamed("reg_c", 32, 5)
     a := a + 1
     b := b - 1
     let d = Bits[32]
@@ -1590,8 +1590,8 @@ println(moduleTreeVL(Test.create.tree))
 fn test_hdl_mixed_reg_inits() {
     let input = r#"
 module Test {
-    let a = newSIntRegInitNat("reg_a", 8, 0)
-    let b = newSIntReg("reg_b", 8)
+    let a = newSIntRegInitNatNamed("reg_a", 8, 0)
+    let b = newSIntRegNamed("reg_b", 8)
     a := a + 1
     b := b + 2
 }
@@ -1615,7 +1615,7 @@ fn test_hdl_reg_init_with_ports_no_comma() {
 module Test {
     input clk = Bool
     input rst = Bool
-    let a = newSIntRegInitNat("myreg", 8, 0)
+    let a = newSIntRegInitNatNamed("myreg", 8, 0)
     a := a + 1
 }
 
@@ -1640,7 +1640,7 @@ fn test_hdl_reg_init_in_when() {
     let input = r#"
 module Test {
     let cond = Bool
-    let a = newSIntRegInitNat("myreg", 8, 0)
+    let a = newSIntRegInitNatNamed("myreg", 8, 0)
     when(cond) {
         a := a + 1
     }
@@ -2525,8 +2525,8 @@ println(moduleTreeVL(Test.create[ClockDomain.mk "clk_i" "rst_n" Sync RisingEdge 
 fn test_hdl_dir_annotations() {
     let input = r#"
 module Test {
-    let rawin = newUInt("data_in", 8)
-    let rawout = newUInt("data_out", 8)
+    let rawin = newUIntNamed("data_in", 8)
+    let rawout = newUIntNamed("data_out", 8)
     let pin = in_u(rawin)
     let pout = out_u(rawout)
     pout := pin

@@ -62,37 +62,40 @@ macro_rules when {
 #[macro_export]
 macro_rules Expr {
     // ---- signal declarations ----
-    (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput(stringify $x, $width);};
-    (output $x:ident = Bits[$width:raw]) => {let $x = newBitsOutput(stringify $x, $width);};
-    (inout $x:ident = Bits[$width:raw]) => {let $x = newBitsInOut(stringify $x, $width);};
-    (let $x:ident = Bits[$width:raw]) => {let $x = newBits(stringify $x, $width);};
+    // new* factories take an implicit BindingName filled with the let
+    // binder's name, so `input myInput = UInt[4]` still names the port
+    // "myInput" (bn == stringify $x).
+    (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput($width);};
+    (output $x:ident = Bits[$width:raw]) => {let $x = newBitsOutput($width);};
+    (inout $x:ident = Bits[$width:raw]) => {let $x = newBitsInOut($width);};
+    (let $x:ident = Bits[$width:raw]) => {let $x = newBits($width);};
 
-    (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput(stringify $x, $width);};
-    (output $x:ident = UInt[$width:raw]) => {let $x = newUIntOutput(stringify $x, $width);};
-    (inout $x:ident = UInt[$width:raw]) => {let $x = newUIntInOut(stringify $x, $width);};
-    (let $x:ident = UInt[$width:raw]) => {let $x = newUInt(stringify $x, $width);};
+    (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput($width);};
+    (output $x:ident = UInt[$width:raw]) => {let $x = newUIntOutput($width);};
+    (inout $x:ident = UInt[$width:raw]) => {let $x = newUIntInOut($width);};
+    (let $x:ident = UInt[$width:raw]) => {let $x = newUInt($width);};
 
-    (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput(stringify $x, $width);};
-    (output $x:ident = SInt[$width:raw]) => {let $x = newSIntOutput(stringify $x, $width);};
-    (inout $x:ident = SInt[$width:raw]) => {let $x = newSIntInOut(stringify $x, $width);};
-    (let $x:ident = SInt[$width:raw]) => {let $x = newSInt(stringify $x, $width);};
+    (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput($width);};
+    (output $x:ident = SInt[$width:raw]) => {let $x = newSIntOutput($width);};
+    (inout $x:ident = SInt[$width:raw]) => {let $x = newSIntInOut($width);};
+    (let $x:ident = SInt[$width:raw]) => {let $x = newSInt($width);};
 
-    (input $x:ident = Bool) => {let $x = newBoolInput(stringify $x);};
-    (output $x:ident = Bool) => {let $x = newBoolOutput(stringify $x);};
-    (inout $x:ident = Bool) => {let $x = newBoolInOut(stringify $x);};
-    (let $x:ident = Bool) => {let $x = newBool(stringify $x);};
+    (input $x:ident = Bool) => {let $x = newBoolInput;};
+    (output $x:ident = Bool) => {let $x = newBoolOutput;};
+    (inout $x:ident = Bool) => {let $x = newBoolInOut;};
+    (let $x:ident = Bool) => {let $x = newBool;};
 
     // ---- register declarations ----
     // `reg x = T[w] init v` — register with reset value (async reset, verilog init)
-    (reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x = newBitsRegInitNat(stringify $x, $width, $init);};
-    (reg $x:ident = UInt[$width:raw] init $init:raw) => {let $x = newUIntRegInitNat(stringify $x, $width, $init);};
-    (reg $x:ident = SInt[$width:raw] init $init:raw) => {let $x = newSIntRegInitNat(stringify $x, $width, $init);};
-    (reg $x:ident = Bool init $init:raw) => {let $x = newBoolRegInitNat(stringify $x, $init);};
+    (reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x = newBitsRegInitNat($width, $init);};
+    (reg $x:ident = UInt[$width:raw] init $init:raw) => {let $x = newUIntRegInitNat($width, $init);};
+    (reg $x:ident = SInt[$width:raw] init $init:raw) => {let $x = newSIntRegInitNat($width, $init);};
+    (reg $x:ident = Bool init $init:raw) => {let $x = newBoolRegInitNat($init);};
 
-    (reg $x:ident = Bits[$width:raw]) => {let $x = newBitsReg(stringify $x, $width);};
-    (reg $x:ident = UInt[$width:raw]) => {let $x = newUIntReg(stringify $x, $width);};
-    (reg $x:ident = SInt[$width:raw]) => {let $x = newSIntReg(stringify $x, $width);};
-    (reg $x:ident = Bool) => {let $x = newBoolReg(stringify $x);};
+    (reg $x:ident = Bits[$width:raw]) => {let $x = newBitsReg($width);};
+    (reg $x:ident = UInt[$width:raw]) => {let $x = newUIntReg($width);};
+    (reg $x:ident = SInt[$width:raw]) => {let $x = newSIntReg($width);};
+    (reg $x:ident = Bool) => {let $x = newBoolReg;};
 
     // ---- sub-module instantiation ----
     // `let u = myAdder.create[8]` needs no special branch: the class
@@ -239,8 +242,8 @@ macro_rules module {
 				let _ = create_global("WhenStack", whenStackEmpty);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
-				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )*
-				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )*
+				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
+				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 				$($body)*
 				let _res = get_global("ModuleTree");
 				let _ = create_global("ModuleTree", _prev);
@@ -259,8 +262,8 @@ macro_rules module {
 				let _ = create_global("WhenStack", whenStackEmpty);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
-				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, stringify $p, $w)); )*
-				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db, stringify $pb)); )*
+				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
+				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 				$($body)*
 				let _res = get_global("ModuleTree");
 				let _ = create_global("ModuleTree", _prev);
