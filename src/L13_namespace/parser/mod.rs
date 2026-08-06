@@ -281,7 +281,7 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 
 /// Parse with no pre-existing macros (for tests). Returns (declarations, parse errors, accumulated macros).
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| (expand_classes(expand_derives(d)), e))
+    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| (expand_derives(d), e))
 }
 
 /// Parse with a pre-populated macro table (from macros in other files).
@@ -322,10 +322,10 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     if ret.0.is_empty() || ret.0.iter().all(|t| t.data.1 == TokenKind::Eof) {
-                        Some((expand_classes(expand_derives(ret.1.into_iter().flatten().collect())), err_collect.0, exported, expansions))
+                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
                     } else {
                         err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
-                        Some((expand_classes(expand_derives(ret.1.into_iter().flatten().collect())), err_collect.0, exported, expansions))
+                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
                     }
                 }
                 Err(e) => {
@@ -2054,6 +2054,9 @@ fn p_derive_attr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState)
 /// Expand `Decl::Derive` items into their inner declaration + generated impl blocks.
 /// A derived `class` is expanded to its struct first, so `#[derive(Show)] class Foo`
 /// derives on the class's struct exactly like a plain struct would.
+/// NOTE: this is the only remaining caller of the parse-time class expansion;
+/// plain classes are elaborated directly by `Infer::infer` (two-phase: field
+/// values are inferred first, then the struct is assembled).
 fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
     let registry = derive::default_derive_registry();
     let mut result = vec![];
@@ -2063,7 +2066,7 @@ fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
                 let inner = *decl;
                 match inner {
                     Decl::Class { .. } => {
-                        let expanded = expand_classes(vec![inner]);
+                        let expanded = expand_classes_legacy(vec![inner]);
                         // Derive macros handle structs (and ignore defs/impls the
                         // class expansion also produced), so apply them to each.
                         let generated: Vec<Decl> = expanded.iter()
@@ -2172,35 +2175,46 @@ fn class_self_ty(name: &Span<SmolStr>, params: &[(Span<SmolStr>, Raw, Icit)]) ->
 ///   - trait impls for each `impl Trait` in the header: the record fields
 ///     *reference* the namespace defs above (single elaboration), so trait
 ///     method bodies may call any sibling method through `this`
+///
+/// Elaboration is two-phase (see `Infer::infer`'s `Decl::Class` arm): the
+/// field values are type-checked in the create's parameter context FIRST and
+/// each unannotated field's type is inferred from its value; only then is the
+/// struct assembled with concrete field types and the create/methods/trait
+/// impls formally elaborated.  The expansion below is therefore the *phase B*
+/// builder — it takes the (deduplicated, last-wins) struct field types as
+/// `struct_field_types` in declaration order (duplicates allowed; the builder
+/// keeps the LAST declaration of each name, mirroring the constructor's
+/// shadowing so the module macro's double-declared ports keep working).
 fn expand_one_class(
     name: Span<SmolStr>,
     params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
     traits: Vec<(Span<SmolStr>, Vec<Raw>)>,
+    struct_field_types: Vec<(Span<SmolStr>, Raw)>,
 ) -> Vec<Decl> {
-    expand_class_as_struct(name, params, items, traits)
+    expand_class_decls(name, params, items, traits, struct_field_types)
 }
 
-/// class → enum (struct) + def Name.create + inherent impl + trait impls
-fn expand_class_as_struct(
+/// The shared phase-B builder: `class → enum (struct) + def Name.create
+/// + inherent impl + trait impls`, with the struct fields taken verbatim
+/// from `struct_field_types`.
+pub fn expand_class_decls(
     name: Span<SmolStr>,
     params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
     traits: Vec<(Span<SmolStr>, Vec<Raw>)>,
+    struct_field_types: Vec<(Span<SmolStr>, Raw)>,
 ) -> Vec<Decl> {
     let mut result = vec![];
 
-    // Collect fields and methods. The module macro declares each port twice
-    // (an own-signal binding before tree_data so the body sees real signals,
-    // and a subSignal handle field after tree_data so `u.a` yields the
+    // Last-wins dedup. The module macro declares each port twice (an
+    // own-signal binding before tree_data so the body sees real signals, and
+    // a subSignal handle field after tree_data so `u.a` yields the
     // cross-level handle); the struct keeps only the LAST declaration of
     // each name, while the constructor still binds both (shadowing).
     // NOTE: last-wins dedup exists to keep the (legacy) module macro working;
     // a future module rewrite should drop it in favor of duplicate-field errors.
-    let mut fields: Vec<_> = items.iter().filter_map(|item| match item {
-        ClassItem::Field(n, t, _) => Some((n.clone(), t.clone())),
-        _ => None,
-    }).collect();
+    let mut fields = struct_field_types;
     {
         let mut seen = std::collections::HashSet::new();
         fields.reverse();
@@ -2315,13 +2329,22 @@ fn expand_class_as_struct(
     result
 }
 
-/// Expand all `Decl::Class` items in the declaration list.
-fn expand_classes(decls: Vec<Decl>) -> Vec<Decl> {
+/// LEGACY parse-time class expansion: expands every `Decl::Class` into its
+/// four phase-B decls with the ORIGINAL field annotations (a `Raw::Hole` for
+/// unannotated fields).  Used only by `expand_derives` so that
+/// `#[derive(...)] class ...` keeps deriving on the class's struct exactly as
+/// before; plain classes are elaborated directly (two-phase) by
+/// `Infer::infer`, so the public parser no longer expands them.
+fn expand_classes_legacy(decls: Vec<Decl>) -> Vec<Decl> {
     let mut result = vec![];
     for decl in decls {
         match decl {
             Decl::Class { name, params, items, traits } => {
-                result.extend(expand_one_class(name, params, items, traits));
+                let struct_field_types: Vec<_> = items.iter().filter_map(|item| match item {
+                    ClassItem::Field(n, t, _) => Some((n.clone(), t.clone())),
+                    _ => None,
+                }).collect();
+                result.extend(expand_one_class(name, params, items, traits, struct_field_types));
             }
             other => result.push(other),
         }

@@ -234,6 +234,190 @@ println (Point.doubleX (Point.make))
     assert!(lines.iter().any(|l| l.trim() == "2"), "static with args: {}", output);
 }
 
+// ── unannotated lets in parameterized classes ──
+// `let x = e` WITHOUT a type annotation is still a struct field — its type
+// is inferred from the value. Class elaboration is two-phase: the field
+// values are checked in the create's parameter context first and each
+// unannotated field's type is inferred from its value; only then is the
+// struct assembled with concrete field types (never a pre-created Hole slot
+// whose meta would be instantiated with the constructor's fresh implicit
+// arguments — the old "can't unify for unsolved meta" failure).
+
+#[test]
+fn class_param_unannotated_field_inferred() {
+    // No annotation: `f` is a struct field with inferred type Nat, and it is
+    // reachable from outside via `c.create[3].f`.
+    let output = assert_ok(r#"
+class c[w: Nat] {
+    let f = 5
+    def get: Nat = w + this.f
+}
+println (c.create[3].get)
+println (c.create[3].f)
+"#);
+    assert!(output.contains("8"), "field visible to methods, got: {}", output);
+    assert!(output.contains("5"), "unannotated field reachable from outside: {}", output);
+}
+
+#[test]
+fn class_param_unannotated_field_type_depends_on_param() {
+    // The inferred field type itself references the class parameter
+    // (`u : other[w]`), so it is not a closed solution.  Regression: this
+    // used to fail with "can't unify for unsolved meta" (the struct's Hole
+    // field meta was instantiated with the constructor's fresh implicit
+    // metas and invert could not solve a non-closed rhs); the two-phase
+    // elaboration infers `u`'s type in the create's parameter context and
+    // puts the concrete `other[w]` into the struct.
+    let output = assert_ok(r#"
+class other[w: Nat] {
+    let x = w + 1
+}
+class c[w: Nat] {
+    let u = other.create[w]
+    def getx: Nat = this.u.x
+    def getu: Nat = w
+}
+println (c.create[3].getx)
+println (c.create[3].getu)
+"#);
+    assert!(output.contains("4"), "field of param-typed field: {}", output);
+    assert!(output.contains("3"), "class param still usable: {}", output);
+}
+
+#[test]
+fn class_param_unannotated_field_closed_value() {
+    // A closed value (`other.create[8]`) infers to the concrete applied type
+    // `other[8]`; the struct field carries the real type instead of relying
+    // on the unifier's closed-rhs fallback.
+    let output = assert_ok(r#"
+class other[w: Nat] {
+    let x = w + 1
+}
+class c[w: Nat] {
+    let u = other.create[8]
+    def getx: Nat = this.u.x
+}
+println (c.create[3].getx)
+"#);
+    assert!(output.contains("9"), "closed field value reachable: {}", output);
+}
+
+#[test]
+fn class_param_unannotated_field_visible_to_later_items() {
+    // Fields bind in the constructor's scope in declaration order, so later
+    // items can reference earlier unannotated fields.
+    let output = assert_ok(r#"
+class c[w: Nat] {
+    let n = w + 1
+    let m: Nat = n + 1
+    def get: Nat = this.m
+}
+println (c.create[3].get)
+"#);
+    assert!(output.contains("5"), "field should be visible to later items: {}", output);
+}
+
+#[test]
+fn class_param_bare_stmt_and_method_param_use() {
+    // Bare statements and methods referencing the class parameter work in
+    // parameterized classes.
+    let output = assert_ok(r#"
+class c[w: Nat] {
+    1 + 1
+    let n: Nat = w
+    def get: Nat = w + this.n
+}
+println (c.create[3].get)
+"#);
+    assert!(output.contains("6"), "method using param + field: {}", output);
+}
+
+// ── inferred (hole-typed) fields ──
+
+#[test]
+fn class_param_hole_field_annotation() {
+    // `let f: _ = e` — an explicit hole annotation still means "field with
+    // inferred type".  The two-phase class elaboration treats it exactly like
+    // an unannotated field: the fresh meta is solved (spine-free) by the
+    // value check in the create's parameter context, and the struct gets the
+    // inferred concrete type.
+    let output = assert_ok(r#"
+class c[w: Nat] {
+    let f: _ = 5
+    def get: Nat = this.f
+}
+println (c.create[3].get)
+"#);
+    assert!(output.contains("5"), "hole-annotated field under params: {}", output);
+}
+
+#[test]
+fn struct_param_hole_field() {
+    // A plain struct has no field values to infer from, so `struct S[w] { f: _ }`
+    // keeps a meta field type; solving its constructor application still relies
+    // on the unifier's closed-rhs fallback (see unification.rs `solve`).
+    let output = assert_ok(r#"
+struct S[w: Nat] { f: _ }
+def mkk[w: Nat]: S[w] = S.mk 5
+println (mkk[3].f)
+"#);
+    assert!(output.contains("5"), "hole-typed struct field under params: {}", output);
+}
+
+// ── module-macro target shape: module body flattened into class items ──
+// The future module macro flattens its side-effect chain into class items:
+// unannotated scaffold bindings become create-locals, annotated port fields
+// stay struct fields (last-wins dedup picks the subSignal handle), and
+// `def tree` re-runs the chain on every access. This test pins the shape.
+
+#[test]
+fn class_module_shape_flattened_chain() {
+    let output = assert_ok(r#"
+class probeMod[w: Nat] impl Module {
+    let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
+    let _ = create_global("WhenStack", whenStackEmpty)
+    let _prev = get_global("ModuleTree")
+    let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk("probeMod", defaultClockDomain, 0, nil) :: nil))
+    let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", "a", w))
+    let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", "b", w))
+    let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", "sum", w + 1))
+    let _ = sum := a +^ b
+    let _res = get_global("ModuleTree")
+    let _ = create_global("ModuleTree", _prev)
+    let _ = mkInstanceIfParent(bn.name, "probeMod")
+    _res
+    let a: UInt[w] = UInt.mk(None, subSignal(bn.name, "a"))
+    let b: UInt[w] = UInt.mk(None, subSignal(bn.name, "b"))
+    let sum: UInt[w + 1] = UInt.mk(None, subSignal(bn.name, "sum"))
+    def tree: ModuleTree =
+        let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
+        let _ = create_global("WhenStack", whenStackEmpty);
+        let _prev = get_global("ModuleTree");
+        let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk("probeMod", defaultClockDomain, 0, nil) :: nil));
+        let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", "a", w));
+        let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", "b", w));
+        let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", "sum", w + 1));
+        let _ = sum := a +^ b;
+        let _res = get_global("ModuleTree");
+        let _ = create_global("ModuleTree", _prev);
+        _res
+}
+println(moduleTreeVL(probeMod.create[8].tree))
+println(moduleTreeVL(probeMod.create[8].tree))
+"#);
+    let expected = r#"module probeMod (
+  input wire [7:0] a,
+  input wire [7:0] b,
+  output wire [8:0] sum
+);
+  assign sum = (a +^ b);
+endmodule"#;
+    // Two identical prints: the def-tree chain re-runs cleanly each access
+    // (idempotent, no leftover global tree state).
+    assert_eq!(output.matches(expected).count(), 2,
+        "flattened module class should print identical verilog twice, got: {}", output);
+}
+
 // ── constructor statements ──
 
 #[test]
