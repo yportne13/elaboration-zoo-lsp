@@ -236,11 +236,12 @@ println (Point.doubleX (Point.make))
 
 // ── unannotated lets in parameterized classes ──
 // `let x = e` WITHOUT a type annotation is still a struct field — its type
-// is inferred from the value. Regression: unannotated fields in
-// parameterized classes used to fail with "can't unify for unsolved meta"
-// (the Hole field type produced a meta whose spine contained the
-// constructor's fresh implicit-arg meta — not invertible even for closed
-// values).
+// is inferred from the value. Class elaboration is two-phase: the field
+// values are checked in the create's parameter context first and each
+// unannotated field's type is inferred from its value; only then is the
+// struct assembled with concrete field types (never a pre-created Hole slot
+// whose meta would be instantiated with the constructor's fresh implicit
+// arguments — the old "can't unify for unsolved meta" failure).
 
 #[test]
 fn class_param_unannotated_field_inferred() {
@@ -256,6 +257,49 @@ println (c.create[3].f)
 "#);
     assert!(output.contains("8"), "field visible to methods, got: {}", output);
     assert!(output.contains("5"), "unannotated field reachable from outside: {}", output);
+}
+
+#[test]
+fn class_param_unannotated_field_type_depends_on_param() {
+    // The inferred field type itself references the class parameter
+    // (`u : other[w]`), so it is not a closed solution.  Regression: this
+    // used to fail with "can't unify for unsolved meta" (the struct's Hole
+    // field meta was instantiated with the constructor's fresh implicit
+    // metas and invert could not solve a non-closed rhs); the two-phase
+    // elaboration infers `u`'s type in the create's parameter context and
+    // puts the concrete `other[w]` into the struct.
+    let output = assert_ok(r#"
+class other[w: Nat] {
+    let x = w + 1
+}
+class c[w: Nat] {
+    let u = other.create[w]
+    def getx: Nat = this.u.x
+    def getu: Nat = w
+}
+println (c.create[3].getx)
+println (c.create[3].getu)
+"#);
+    assert!(output.contains("4"), "field of param-typed field: {}", output);
+    assert!(output.contains("3"), "class param still usable: {}", output);
+}
+
+#[test]
+fn class_param_unannotated_field_closed_value() {
+    // A closed value (`other.create[8]`) infers to the concrete applied type
+    // `other[8]`; the struct field carries the real type instead of relying
+    // on the unifier's closed-rhs fallback.
+    let output = assert_ok(r#"
+class other[w: Nat] {
+    let x = w + 1
+}
+class c[w: Nat] {
+    let u = other.create[8]
+    def getx: Nat = this.u.x
+}
+println (c.create[3].getx)
+"#);
+    assert!(output.contains("9"), "closed field value reachable: {}", output);
 }
 
 #[test]
@@ -293,8 +337,10 @@ println (c.create[3].get)
 #[test]
 fn class_param_hole_field_annotation() {
     // `let f: _ = e` — an explicit hole annotation still means "field with
-    // inferred type"; regression: the field-type meta used to stay unsolved
-    // when the constructor's implicit args instantiated its spine.
+    // inferred type".  The two-phase class elaboration treats it exactly like
+    // an unannotated field: the fresh meta is solved (spine-free) by the
+    // value check in the create's parameter context, and the struct gets the
+    // inferred concrete type.
     let output = assert_ok(r#"
 class c[w: Nat] {
     let f: _ = 5
@@ -307,8 +353,9 @@ println (c.create[3].get)
 
 #[test]
 fn struct_param_hole_field() {
-    // Same underlying fix at the plain-struct level: a hole-typed field of a
-    // parameterized struct used to fail when the constructor was applied.
+    // A plain struct has no field values to infer from, so `struct S[w] { f: _ }`
+    // keeps a meta field type; solving its constructor application still relies
+    // on the unifier's closed-rhs fallback (see unification.rs `solve`).
     let output = assert_ok(r#"
 struct S[w: Nat] { f: _ }
 def mkk[w: Nat]: S[w] = S.mk 5

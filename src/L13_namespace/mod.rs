@@ -81,6 +81,9 @@ pub enum DeclTm {
     TraitImpl {
         //TODO:
     },
+    Class {
+        //TODO:
+    },
     Package,
     Import,
 }
@@ -1654,8 +1657,8 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
             parser::syntax::Decl::Derive { .. } => {
                 panic!("Derive should have been expanded before run")
             }
-            parser::syntax::Decl::Class { .. } => {
-                panic!("Class should have been expanded before run")
+            parser::syntax::Decl::Class { name, .. } => {
+                println!("> {}", name.data);
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -1835,8 +1838,8 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
             parser::syntax::Decl::Derive { .. } => {
                 panic!("Derive should have been expanded before run")
             }
-            parser::syntax::Decl::Class { .. } => {
-                panic!("Class should have been expanded before run")
+            parser::syntax::Decl::Class { name, .. } => {
+                println!("> {}", name.data);
             }
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;

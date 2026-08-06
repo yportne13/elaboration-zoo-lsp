@@ -9,7 +9,7 @@ use super::{
     Closure, Cxt, DeclTm, Error, Infer, PrimFunc, Tm, VTy, Val,
     Lvl, Rc, MetaVar,
     empty_span, lvl2ix,
-    parser::syntax::{Decl, Either, Icit, Raw},
+    parser::syntax::{ClassItem, Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
     typeclass::Instance,
     unification::PartialRenaming,
@@ -668,6 +668,13 @@ impl Infer {
                 prefix_decl_name(t, prefix)
             } else { t },
         };
+        self.infer_after_prefix(cxt, t)
+    }
+    /// The per-declaration elaboration, run on an already-prefixed decl.
+    /// Split out so the class elaboration (which expands a class into its
+    /// four phase-B decls with concrete field types) can recurse without
+    /// re-applying the namespace prefix.
+    fn infer_after_prefix(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
         match t {
             Decl::Def {
                 name,
@@ -1366,10 +1373,154 @@ impl Infer {
             Decl::Derive { .. } => {
                 panic!("Derive should have been expanded before elaboration")
             },
-            Decl::Class { .. } => {
-                panic!("Class should have been expanded before elaboration")
+            Decl::Class { name, params, items, traits } => {
+                // ══ Phase A: infer each field value's type in the create's
+                // parameter context — BEFORE the struct exists. ══
+                // Bind the create's parameters: class params first, then the
+                // implicit `bn: BindingName` for Module classes (mirrors the
+                // create's ctor params so inferred types quote to the same
+                // names/levels the create will use).
+                let mut a_cxt = cxt.clone();
+                for (pname, pty, _) in params.iter() {
+                    let (a_checked, _) = self.check_universe(&a_cxt, pty.clone())?;
+                    let a_eval = self.eval(&a_cxt.decl, &a_cxt.env, &a_checked);
+                    a_cxt = a_cxt.bind(pname.clone(), self.quote(&a_cxt.decl, a_cxt.lvl, &a_eval), a_eval);
+                }
+                if traits.iter().any(|(t, _)| t.data == "Module") {
+                    let (a_checked, _) = self.check_universe(&a_cxt, Raw::Var(empty_span(SmolStr::new("BindingName"))))?;
+                    let a_eval = self.eval(&a_cxt.decl, &a_cxt.env, &a_checked);
+                    a_cxt = a_cxt.bind(empty_span(SmolStr::new("bn")), self.quote(&a_cxt.decl, a_cxt.lvl, &a_eval), a_eval);
+                }
+                // Walk the items in declaration order: later fields may
+                // reference earlier ones (the create binds all of them, with
+                // shadowing).  Each field value is checked here — against the
+                // fresh meta for unannotated fields (which the check solves to
+                // the value's inferred type, closed or
+                // class-parameter-dependent) and against the annotation for
+                // annotated ones — and bound with its real value, exactly like
+                // the create body's own let chain.  The inferred type becomes
+                // the struct field type, so the struct never holds a Hole slot
+                // whose meta would later be instantiated with the create's
+                // fresh implicit arguments (the old "can't unify for unsolved
+                // meta" failure).  Annotated fields keep their annotation
+                // verbatim as the struct field type.
+                let mut struct_field_types: Vec<(Span<SmolStr>, Raw)> = Vec::new();
+                for item in items.iter() {
+                    let (n, ty, val) = match item {
+                        ClassItem::Field(n, t, v) => (n, t, v),
+                        _ => continue,
+                    };
+                    let (a_checked, _) = self.check_universe(&a_cxt, ty.clone())?;
+                    let va = self.eval(&a_cxt.decl, &a_cxt.env, &a_checked);
+                    // Check the value — against the fresh meta for unannotated
+                    // fields (which the check solves to the value's inferred
+                    // type), against the annotation for annotated ones — and
+                    // bind the real value so later fields referencing it (as a
+                    // value or through member access) elaborate identically to
+                    // the create body's own let chain.
+                    let cxt_named = a_cxt.with_binding_name(n.data.clone());
+                    let t_checked = self.check::<false>(&cxt_named, val.clone(), &va)?;
+                    let vt = self.eval(&a_cxt.decl, &a_cxt.env, &t_checked);
+                    let raw_ty = if matches!(ty, Raw::Hole(_)) {
+                        // Unannotated: the struct field type is the inferred
+                        // type.  Re-express it as a Raw annotation; fall back
+                        // to the original Hole when the type cannot be
+                        // expressed in Raw (e.g. a string literal's
+                        // `LiteralType`).
+                        let field_ty = self.force(&a_cxt.decl, &va);
+                        self.tm_to_raw_type(&a_cxt, &self.quote(&a_cxt.decl, a_cxt.lvl, &field_ty))
+                            .unwrap_or_else(|| Raw::Hole(n.to_span()))
+                    } else {
+                        // Annotated: keep the annotation verbatim.
+                        ty.clone()
+                    };
+                    struct_field_types.push((n.clone(), raw_ty));
+                    a_cxt = a_cxt.define(n.clone(), t_checked, vt, a_checked, va);
+                }
+
+                // ══ Phase B: assemble the struct from the inferred
+                // (name, type) pairs, then formally elaborate the create
+                // (whose let chain re-checks the field values against the now
+                // concrete struct field types), the methods' inherent impl and
+                // the trait impls — the exact decl sequence the parser-level
+                // expansion used to produce. ══
+                let decls = super::parser::expand_class_decls(name, params, items, traits, struct_field_types);
+                let mut cxt = cxt.clone();
+                for d in decls {
+                    let (_, _, c) = self.infer_after_prefix(&cxt, d)?;
+                    cxt = c;
+                }
+                Ok((DeclTm::Class {}, Val::U(0).into(), cxt))
             },
         }
+    }
+    /// Convert a quoted type term back to a `Raw` type expression, resolving
+    /// de Bruijn variables through the context's local names (the class params
+    /// and earlier fields, bound in declaration order).  Returns `None` when
+    /// the type cannot be re-expressed as `Raw` (unsolved metas, literal
+    /// types, calls, ...) — the caller falls back to the original annotation.
+    fn tm_to_raw_type(&self, cxt: &Cxt, tm: &Rc<Tm>) -> Option<Raw> {
+        let names = cxt.names();
+        fn go(tm: &Rc<Tm>, names: &List<SmolStr>) -> Option<Raw> {
+            match tm.as_ref() {
+                // Tm::Var(ix) sits at level (quote level − ix − 1); the local
+                // at that level is names[ix] (names[0] = most recent binding).
+                Tm::Var(ix) => {
+                    let name = names.iter().nth(ix.0 as usize)?;
+                    Some(Raw::Var(empty_span(name.clone())))
+                }
+                Tm::Decl(n) => Some(Raw::Var(n.clone())),
+                Tm::Obj(f, n) => Some(Raw::Obj(Box::new(go(f, names)?), Some(n.clone()))),
+                Tm::App(f, a, i) => Some(Raw::App(
+                    Box::new(go(f, names)?),
+                    Box::new(go(a, names)?),
+                    Either::Icit(*i),
+                )),
+                Tm::AppPruning(f, _) => go(f, names),
+                Tm::Lam(x, i, b) => Some(Raw::Lam(
+                    x.clone(),
+                    Either::Icit(*i),
+                    Box::new(go(b, &names.prepend(x.data.clone()))?),
+                )),
+                Tm::Pi(x, i, a, b) => Some(Raw::Pi(
+                    x.clone(),
+                    *i,
+                    Box::new(go(a, names)?),
+                    Box::new(go(b, &names.prepend(x.data.clone()))?),
+                )),
+                Tm::U(u) => Some(Raw::U(*u)),
+                // A (possibly partially applied) sum type: rebuild the
+                // application `Name[arg0][arg1]...` from the applied params.
+                Tm::Sum(name, params, _, _) => {
+                    let mut acc = Raw::Var(name.clone());
+                    for (_, v, _, i) in params.iter() {
+                        acc = Raw::App(Box::new(acc), Box::new(go(&v, names)?), Either::Icit(*i));
+                    }
+                    Some(acc)
+                }
+                // A constructor value inside a type index (`other[8]`): recover
+                // the case name from the quoted sum's case list by position.
+                Tm::SumCase { is_trait, typ, index, datas } => {
+                    let case_name = match typ.as_ref() {
+                        Tm::Sum(_, _, cases, _) => cases.iter().nth(*index as usize)?.clone(),
+                        _ => return None,
+                    };
+                    let datas = datas
+                        .iter()
+                        .map(|(n, d, i)| Some((n.clone(), go(d, names)?, *i)))
+                        .collect::<Option<Vec<_>>>()?;
+                    Some(Raw::SumCase {
+                        is_trait: *is_trait,
+                        typ: Box::new(go(typ, names)?),
+                        case_name,
+                        datas,
+                    })
+                }
+                // Term-only / non-expressible nodes: caller falls back to Hole.
+                _ => None,
+            }
+        }
+        go(tm, &names)
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         /*println!(
