@@ -15,18 +15,19 @@
 // Expansion is a let chain instead of nested `trans` (repetition
 // transcription is flat, so nested parentheses cannot be generated):
 //   let _c : Eq (a) (b) = (p1);
+//   let _ : Eq (b) (c) = (p2);     -- per-step check of the WRITTEN terms
 //   let _c = trans (_c) (p2);
+//   let _ : Eq (c) (d) = (p3);
 //   let _c = trans (_c) (p3);
 //   _c
 // The first step's annotated let checks both written ends against the
-// proof; later steps are checked indirectly: `trans`'s unification forces
-// the previous right end to match the next proof's left end and the next
-// proof's right end to match the written term (the last written term is
-// checked against the annotated result type). A per-step check-let
-// (`let _ : Eq _ _ ($z) = ($q);`) was tried but dropped: the hole
-// annotation leaves an unsolved meta (`?x n n`) that the unifier cannot
-// close, so per-step annotations would need to name the left end —
-// impossible since the macro has no name for the previous step's result.
+// proof; every later step gets an annotated check-let that verifies the
+// written `$x2 = $z` against the proof `$q` (BOTH ends written out — the
+// earlier hole-annotated `Eq _ _ ($z)` left unsolved metas `?x n n`, see
+// docs/calc-reasoning-design.md §9.2.1/§9.6), then the trans let composes
+// the running chain and forces step continuity (previous right end == next
+// left end). The final `_c : Eq a d` is checked against the enclosing
+// annotation.
 //
 // Design notes: see docs/calc-reasoning-design.md. The `by` keyword is a
 // dedicated token (TokenKind::ByKeyword): it is not an Op and not an Ident,
@@ -46,13 +47,19 @@ macro_rules calc {
     // `calc {` — a leading LParen would never match.
     ( { $( $x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )* )+ } ) => {
         let _c : Eq ($x) ($y) = ($p);
-        $( let _c = trans (_c) ($q); )*
+        $( let _ : Eq ($x2) ($z) = ($q);
+           let _c = trans (_c) ($q); )*
         _c
     };
-    // Single-line form: calc a = b by p1 = c by p2
-    ($x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )*) => {
+    // Single-line form: calc a = b by p1 = c = d by p2
+    // (steps chained by `=` — after a step's proof comes `=` then the next
+    // step's LEFT term, so the repetition unit must LEAD with `=`; a unit
+    // starting with `$x2` would fail on the chain's `=` separator, matching
+    // only the first step and dropping the rest)
+    ($x: raw = $y: raw by $p: raw $( = $x2: raw = $z: raw by $q: raw )*) => {
         let _c : Eq ($x) ($y) = ($p);
-        $( let _c = trans (_c) ($q); )*
+        $( let _ : Eq ($x2) ($z) = ($q);
+           let _c = trans (_c) ($q); )*
         _c
     };
 }

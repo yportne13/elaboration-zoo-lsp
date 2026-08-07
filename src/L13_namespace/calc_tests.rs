@@ -90,11 +90,16 @@ println (match r { case refl(a) => a })
 }
 
 // ── positive: single-line chain ──
+// NOTE: each step after the first is written `= <left> = <right> by <proof>`
+// (the chain's `=` separator then the step's own `=`); the pre-fix matcher
+// unit (`$( $x2 = $z by $q )*`, no leading `=`) could not match that shape,
+// so the old test input (`= n + 0 by ...`, missing the second `=`) only
+// matched ONE step and passed by luck.
 
 #[test]
 fn calc_single_line() {
     let output = assert_ok(r#"
-def one_line(n: Nat): Eq (0 + n) (n + 0) = calc 0 + n = n by add_zero_left n = n + 0 by symm (add_zero_right n)
+def one_line(n: Nat): Eq (0 + n) (n + 0) = calc 0 + n = n by add_zero_left n = n = n + 0 by symm (add_zero_right n)
 def r = one_line 7
 println (match r { case refl(a) => a })
 "#);
@@ -173,11 +178,11 @@ println (match r { case refl(a) => a })
 }
 
 // ── negative: chain broken (proofs don't connect — definitionally) ──
-// NOTE: only the PROOFS' types are checked (each step's written terms are
-// not separately verified — the let-chain check was dropped because hole
-// annotations on GADT-indexed types hit a unifier limitation; see
-// docs/calc-reasoning-design.md §8). A broken chain = adjacent proofs
-// whose endpoints disagree definitionally.
+// Each step's written terms ARE now verified by the per-step check-let
+// (`let _ : Eq ($x2) ($z) = ($q);`, see calc.typort header); this chain
+// fails at `trans` because the adjacent proofs' endpoints disagree (the
+// step-2 check-let itself passes: `8 = 8` matches `add_zero_right 8`'s
+// `Eq (8 + 0) 8` definitionally).
 
 #[test]
 fn calc_err_broken_chain() {
@@ -187,6 +192,59 @@ def neg_b: Eq (7 + 0) (0 + 7) =
         7 + 0 = 7 by add_zero_right 7
         8 = 8 by add_zero_right 8
     }
+"#, "can't unify");
+}
+
+// ── negative: a later step's WRITTEN terms are verified against its proof ──
+// Regression: the transcriber used to match `$x2 = $z by $q` but never
+// re-emit `$x2`/`$z`, so garbage written terms typechecked silently
+// (`garbage1 = garbage2 by <good proof>` passed with zero errors; only the
+// first step's written ends were checked). The per-step check-let now
+// verifies both written ends of every later step.
+
+#[test]
+fn calc_err_garbage_step2_terms() {
+    assert_err_contains(r#"
+def neg_g: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 = 7 by add_zero_right 7
+        garbage1 = garbage2 by symm (add_zero_left 7)
+    }
+"#, "not in scope");
+}
+
+// ── negative: step 2's written LEFT term disagrees with the proof ──
+
+#[test]
+fn calc_err_wrong_step2_left() {
+    assert_err_contains(r#"
+def neg_h: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 = 7 by add_zero_right 7
+        5 = 0 + 7 by symm (add_zero_left 7)
+    }
+"#, "can't unify");
+}
+
+// ── negative: step 2's written RIGHT term disagrees with the proof ──
+
+#[test]
+fn calc_err_wrong_step2_right() {
+    assert_err_contains(r#"
+def neg_i: Eq (7 + 0) (0 + 7) =
+    calc {
+        7 + 0 = 7 by add_zero_right 7
+        7 = 5 by symm (add_zero_left 7)
+    }
+"#, "can't unify");
+}
+
+// ── negative: single-line form — step 2's written terms are also checked ──
+
+#[test]
+fn calc_err_wrong_step2_single_line() {
+    assert_err_contains(r#"
+def neg_j: Eq (7 + 0) (0 + 7) = calc 7 + 0 = 7 by add_zero_right 7 = 7 = 5 by symm (add_zero_left 7)
 "#, "can't unify");
 }
 

@@ -207,10 +207,12 @@ can't unify
       find: Eq 5 (0 + 7)
 ```
 
-> 设计限制说明：中间步骤的**左端**（如负例 B 里写出的 `5`）只通过 `trans` 的类型统一
-> 间接核对（核对的是**证明的真实中间项**，不是写出的词）。原设计的每步检查 let
-> 已放弃（洞注解留未解 meta，见 §9.2.1），因此写出的中间项越出证明真实类型时
-> 由 trans 兜底；若写出项与证明真实类型一致但词形不同（定义等价），检查通过。
+> 设计限制说明：中间步骤的**左端**（如负例 B 里写出的 `5`）在 2026-08 的修复后
+> **已逐字核对**：每条后续步的转写都带一个显式检查 let
+> `let _ : Eq ($x2) ($z) = ($q);`（两端都写全，不再用洞注解；见 §9.6）。
+> 因此写出的左端/右端与证明真实端点不一致时直接报 `can't unify`，不再依赖
+> trans 兜底。本负例（B）当前在**第二步的检查 let** 处即报错（`5` 与证明左端
+> `7` 无法统一），错误信息形态见 §9.6。
 
 **负例 C —— 缺 `by` 或 `by` 放错位置**（宏整体不匹配，`calc` 退化为普通标识符）：
 
@@ -254,13 +256,16 @@ macro_rules calc {
     // 推荐主形式：{ ... } 块内换行分隔的链（首项可换行到 `{` 之后）
     ( { $( $x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )* )+ } ) => {
         let _c : Eq ($x) ($y) = ($p);
-        $( let _c = trans (_c) ($q); )*
+        $( let _ : Eq ($x2) ($z) = ($q);
+           let _c = trans (_c) ($q); )*
         _c
     };
-    // 单行形式：calc a = b by p1 = c by p2（首项必须与 calc 同行）
-    ($x: raw = $y: raw by $p: raw $( $x2: raw = $z: raw by $q: raw )*) => {
+    // 单行形式：calc a = b by p1 = c = d by p2（首项必须与 calc 同行；
+    // 链的 `=` 分隔符在每步 proof 之后，所以重复单元以 `=` 开头）
+    ($x: raw = $y: raw by $p: raw $( = $x2: raw = $z: raw by $q: raw )*) => {
         let _c : Eq ($x) ($y) = ($p);
-        $( let _c = trans (_c) ($q); )*
+        $( let _ : Eq ($x2) ($z) = ($q);
+           let _c = trans (_c) ($q); )*
         _c
     };
 }
@@ -294,11 +299,14 @@ macro_rules calc {
   所以 `trans (trans p1 p2) p3` 这种左/右折叠**写不出来**（`trans $p $(trans $q)*`
   会拼成 `trans p1 trans p2 trans p3`，即错误的多重应用）。
   改用 let 链：首步一个带注解的 let + 每步一个累积 let，最后返回累积值。
-- let 的作用（与设计稿的差异见 §9.2.1 —— **每步检查 let 已放弃**）：
+- let 的作用：
   - 第 1 步 `let _c : Eq ($x) ($y) = ($p);` —— 同时做两件事：核对写出的
     `x`/`y` 与证明类型一致，并把 `_c` 绑定为链的累积证明；
+  - 第 i≥2 步 `let _ : Eq ($x2) ($z) = ($q);` —— **逐字核对写出的两端**
+    （2026-08 恢复，见 §9.6；此前只靠 trans 间接核对）；
   - 第 i≥2 步 `let _c = trans (_c) ($q);` —— 用累积证明与当前证明组合
-    （`trans` 隐式参数自动求解中间项）；写出的左端/右端经 trans 的统一间接核对；
+    （`trans` 隐式参数自动求解中间项），并强制链连续性
+    （上一步右端 == 下一步左端，经证明端点统一）；
   - 证明实参必须括号包裹：`trans (_c)` 而不是 `trans _c`（裸标识符实参精化失败，
     见 §9.2.2）。
 - let 遮蔽：累积名 `_c` 每步重绑定。可行性依据：`Cxt::define`/`bind` 把名字
@@ -406,8 +414,9 @@ _c
 ## 7. 负例之外的已知限制（文档化）
 
 1. `a = b := p1`（Lean 原味 `:=`）不解析，见 §4.2 —— 用 `a = b by p1` 代替。
-2. 中间步骤的**左端**写出项不单独核对（只核对右端 + trans 统一），见 §3.4 说明。
-3. 步骤必须换行分隔，`;` 分隔不可行（matcher 无法匹配 `;`）。
+2. ~~中间步骤的左端写出项不单独核对~~（2026-08 已修复：每步显式检查 let，见 §9.6）。
+3. 步骤必须换行分隔（花括号形式），`;` 分隔不可行（matcher 无法匹配 `;`）。
+   单行形式以 `=` 分隔（`= $x2 = $z by $q`）。
 4. 单步链 `calc { a = b by p }` 合法（重复部分为零次），结果就是 `p` 的带注解拷贝。
 5. `calc` 成为宏名后，用户无法再定义同名变量/函数（宏在 p_raw 入口优先于标识符）；
    `by` 成为保留字后同理无法用作标识符（全仓库无此用法，v2 迁移时已确认）。
@@ -514,6 +523,53 @@ _c
   `calc` 本身仍是宏名（普通 Ident），`tests/trait_system_tests.typort` 的
   `def calc = ...` 不受影响。
 
+### 9.6 恢复每步检查 let + 修复单行形式重复匹配（2026-08）
+
+**背景**：§9.2.1 放弃的每步检查 let 用的洞注解 `Eq _ _ ($z)` 会留未解 meta
+（`?x n n`）。2026-08 的悬停探针发现**后续步的写出项（`$x2`/`$z`）从未被检查**：
+`garbage1 = garbage2 by <正确proof>` 零错误通过（连未定义名字都不报错）；
+同时这些 token 不在展开里 → LSP hover/goto 无条目。
+
+**修复 1 —— 恢复每步检查 let，两端写全**（`src/prelude/core/calc.typort`）：
+
+```typort
+let _c : Eq ($x) ($y) = ($p);
+$( let _ : Eq ($x2) ($z) = ($q);
+   let _c = trans (_c) ($q); )*
+_c
+```
+
+- 两端都写全（`Eq ($x2) ($z)`）不再产生洞 meta —— 实测精化通过
+  （§9.2.1 失败的根因是洞，不是检查 let 思路本身）；
+- 效果：`garbage1 = garbage2 by symm(add_zero_right(n))` → `error name not in scope:
+  garbage1`；`5 = 0 + 7 by symm (add_zero_left 7)`（左端写错）→ `can't unify
+  expected: Eq[Nat](5, 0 + 7) / find: Eq[Nat](7, 0 + 7)`；右端写错同理；
+- trans 链保留：仍负责链连续性（上步右端 == 下步左端）与结果类型合成
+  （`Eq $x $z_last`），与检查 let 相互独立；
+- 副产物：后续步 token 重新出现在展开里 → LSP hover/goto 恢复
+  （第二步的 `n` 悬停显示 `Nat`，`+` 显示运算符类型）。
+
+**修复 2 —— 单行形式的重复单元以 `=` 开头**：
+
+- 旧 matcher `$( $x2: raw = $z: raw by $q: raw )*` 对单行链**永远匹配零次**：
+  单行链步骤间以 `=` 分隔（`a = b by p1 = c = d by p2`），`$p` 之后紧跟 `=`，
+  而 `$x2: raw` 无法以 `=` 开头 → 规则只消费第一步，剩余 `= c = d by p2`
+  触发 `expected newline` 解析错误，第二项被静默丢弃；
+- 旧正例 `calc_single_line`（输入 `= n + 0 by ...`，缺第二步的 `=`）是靠
+  "1 步匹配 + 解析错误 + def 返回注解检查宽松" 侥幸通过的；
+- 修复：重复单元改为 `$( = $x2: raw = $z: raw by $q: raw )*`；
+  单行链的第二步正确写法为 `= n = n + 0 by symm (add_zero_right n)`
+  （链分隔 `=` + 步骤自身的 `=`）。
+
+**测试**（`src/L13_namespace/calc_tests.rs`）：
+- 新增 4 个负例：`calc_err_garbage_step2_terms`、`calc_err_wrong_step2_left`、
+  `calc_err_wrong_step2_right`、`calc_err_wrong_step2_single_line`；
+- `calc_single_line` 输入修正为完整两步语法；`calc_err_broken_chain` 注释更新
+  （现由检查 let + trans 双重核对）。
+- 回归：`cargo test --lib calc` 19 passed；`cargo test --test macro_goto_tests
+  --test hover_tests --test cross_file_tests` 9 passed；全量 `--lib` 失败数
+  与修复前基线相同（49 个预存失败，与本次改动无关）。
+
 ---
 
 ## 附：与 Lean/Agda 的对照
@@ -522,7 +578,7 @@ _c
 |---|---|---|---|
 | Lean4 | `calc a = b := p1; b = c := p2` | 每步两端都核对 | 解析器内建（句法块 → trans 应用） |
 | Agda | `a ≡⟨ p1 ⟩ b ≡⟨ p2 ⟩ c` | 每步两端都核对 | 库内运算符（`_≡⟨_⟩_` step + 右结合） |
-| Typort（本设计） | `calc { a = b by p1 b = c by p2 }` | 首步两端 + 后续步右端（左端经 trans 间接核对） | 库内宏（let 链转写）+ `by` 关键字 |
+| Typort（本设计） | `calc { a = b by p1 b = c by p2 }` | 每步两端都核对（2026-08 起；此前只核首步两端） | 库内宏（let 链转写 + 每步检查 let）+ `by` 关键字 |
 
 Typort 的宏系统是纯 token 级的（无类型信息、无自引用重复），因此做不到
 Lean/Agda 那种“每步两端全核对”，但核对覆盖面足以捕获绝大多数书写错误；
