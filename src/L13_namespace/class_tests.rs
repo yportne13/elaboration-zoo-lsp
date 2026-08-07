@@ -364,16 +364,17 @@ println (mkk[3].f)
     assert!(output.contains("5"), "hole-typed struct field under params: {}", output);
 }
 
-// ── module-macro target shape: module body flattened into class items ──
+// ── module-macro target shape: side-effect chain flattened into fields ──
 // The module macro (hdl-macros.typort) expands each module to a class whose
-// side-effect chain runs TWICE: once as a bare parenthesized class-body
-// statement (create side — a create-local, NOT a struct field, so the struct
-// keeps only the port handle fields), and once inside `def tree`, which
-// re-runs the chain on every access (minus mkInstanceIfParent). This test
-// pins the flattened shape with the unannotated-let variant (each line a
-// create-local); the real macro uses the equivalent single parenthesized
-// statement form, pinned by module_tests::module_no_tree_data_field and
-// module_def_tree_idempotent_instance_once. The double-declared ports
+// side-effect chain is FLATTENED into class-body fields (user semantics:
+// every class-body `let` is a struct field — no special cases, no
+// create-locals). The chain runs TWICE: once as the fields at the top of the
+// class body (create side — each chain binding becomes a struct field:
+// `_`/`_prev`/`_res` plus the ports and the body signals), and once inside
+// `def tree`, which re-runs the chain on every access (minus
+// mkInstanceIfParent). This test pins the flattened shape; the real macro
+// differs only in that its `_prev`/`_res` are annotated `ModuleTree` and it
+// omits the trailing bare `_res` statement. The double-declared ports
 // collapse last-wins into the subSignal handle fields.
 
 #[test]
@@ -382,16 +383,16 @@ fn class_module_shape_flattened_chain() {
 class probeMod[w: Nat] impl Module {
     let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
     let _ = create_global("WhenStack", whenStackEmpty)
-    let _prev = get_global("ModuleTree")
+    let _prev: ModuleTree = get_global("ModuleTree")
     let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk("probeMod", defaultClockDomain, 0, nil) :: nil))
     let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", w))
     let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", w))
     let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", w + 1))
+    let x: UInt[w] = newUInt(w)
     let _ = sum := a +^ b
-    let _res = get_global("ModuleTree")
+    let _res: ModuleTree = get_global("ModuleTree")
     let _ = create_global("ModuleTree", _prev)
     let _ = mkInstanceIfParent(bn.name, "probeMod")
-    _res
     let a: UInt[w] = UInt.mk(None, subSignal(bn.name, "a"))
     let b: UInt[w] = UInt.mk(None, subSignal(bn.name, "b"))
     let sum: UInt[w + 1] = UInt.mk(None, subSignal(bn.name, "sum"))
@@ -403,6 +404,7 @@ class probeMod[w: Nat] impl Module {
         let a: UInt[w] = UInt.mk(Some("a"), createPortExpr("input", "UInt", w));
         let b: UInt[w] = UInt.mk(Some("b"), createPortExpr("input", "UInt", w));
         let sum: UInt[w + 1] = UInt.mk(Some("sum"), createPortExpr("output", "UInt", w + 1));
+        let x: UInt[w] = newUInt(w);
         let _ = sum := a +^ b;
         let _res = get_global("ModuleTree");
         let _ = create_global("ModuleTree", _prev);
@@ -416,6 +418,7 @@ println(moduleTreeVL(probeMod.create[8].tree))
   input wire [7:0] b,
   output wire [8:0] sum
 );
+  wire [7:0] x;
   assign sum = ({1'b0, a} + b);
 endmodule"#;
     // Two identical prints: the def-tree chain re-runs cleanly each access

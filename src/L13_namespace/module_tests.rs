@@ -172,6 +172,128 @@ println(solo.create.tree_data)
 "#, "tree_data");
 }
 
+// ── plan C2: module body lets ARE struct members ──
+// User semantics: every class-body `let` is a struct field (no special
+// cases, no create-locals). The module macro FLATTENS its side-effect chain
+// into class-body fields, so every signal the user declares in the module —
+// body signals AND ports — is reachable on the instance (`u.a`, `u.sum`),
+// alongside the chain's `_`/`_prev`/`_res` bindings. Ports keep the
+// double-declaration (real signal + subSignal handle; the handle wins in the
+// struct), body signals keep their real signal value.
+
+#[test]
+fn module_body_signal_is_member() {
+    let output = assert_ok(r#"
+module counterDemo {
+    let a = UInt[8]
+    let b = UInt[8]
+    let sum = UInt[8]
+    sum := a + b
+}
+def u = counterDemo.create
+println(u.a)
+println(u.sum)
+println(moduleTreeVL(u.tree))
+"#);
+    // u.a is the module's own signal (named "a", real createWidth expr) —
+    // not a subSignal handle (the module has no ports).
+    assert!(output.contains("UInt.mk(Option[String]::Some(a), Expr::createWidth(a, 8))"),
+        "body signal member should be the real signal, got: {}", output);
+    assert!(output.contains("UInt.mk(Option[String]::Some(sum), Expr::createWidth(sum, 8))"),
+        "sum should be a member too, got: {}", output);
+    assert!(output.contains("assign sum = (a + b);"),
+        "verilog should still be generated from the tree, got: {}", output);
+}
+
+#[test]
+fn module_port_is_member() {
+    let output = assert_ok(r#"
+module portmod
+    input a = UInt[8]
+    output sum = UInt[9]
+{
+    sum := a +^ a
+}
+def u = portmod.create
+println(u.a)
+println(u.sum)
+"#);
+    // Port members are the subSignal handles (for `u.a := sig` in a parent).
+    assert!(output.contains("UInt.mk(Option[String]::None, Expr::subSignal(, a))"),
+        "port member should be the subSignal handle, got: {}", output);
+    assert!(output.contains("UInt.mk(Option[String]::None, Expr::subSignal(, sum))"),
+        "output port member missing, got: {}", output);
+}
+
+#[test]
+fn module_when_switch_no_scaffolding_members() {
+    // when/switch transcribe their begin/end scaffolding as `let _ = ...`
+    // discards, so the struct gains only the single `_` field — no
+    // w_push/w_pop/_wb/_we junk members.
+    let output = assert_ok(r#"
+module ctrl {
+    let a = UInt[8]
+    let b = UInt[8]
+    let out = UInt[8]
+    when a === 0 {
+        out := b
+    } otherwise {
+        out := a
+    }
+}
+def u = ctrl.create
+println(u.out)
+println(u.a)
+"#);
+    assert!(output.contains("UInt.mk(Option[String]::Some(out), Expr::createWidth(out, 8))"),
+        "body signal in when-module should be a member, got: {}", output);
+    assert!(output.contains("UInt.mk(Option[String]::Some(a), Expr::createWidth(a, 8))"),
+        "a should be a member too, got: {}", output);
+    // u.w_push must NOT exist (the when scaffolding is `let _ =` discarded).
+    assert_err_contains(r#"
+module ctrl {
+    let a = UInt[8]
+    let b = UInt[8]
+    let out = UInt[8]
+    when a === 0 {
+        out := b
+    } otherwise {
+        out := a
+    }
+}
+def u = ctrl.create
+println(u.w_push)
+"#, "w_push");
+}
+
+// ── plan C2: chain bindings are accessible struct fields ──
+// `_prev` is the ModuleTree captured before the module's push (the pre-push
+// global — the empty tree at top level), `_res` is the tree after the body
+// ran. Pinning them as struct fields keeps the "everything is in the struct"
+// semantics honest.
+
+#[test]
+fn module_struct_exposes_chain_bindings() {
+    let output = assert_ok(r#"
+module solo {
+    let a = UInt[8]
+    let b = UInt[8]
+    let s = UInt[8]
+    s := a + b
+}
+def pc = solo.create
+println(pc._prev)
+println(pc._res)
+"#);
+    // _prev: the tree before the module's push — the empty tree at top level.
+    assert!(output.contains("ModuleTree::ModuleTree.mk(0, Vec[ModuleDef]::nil)"),
+        "expected _prev to be the pre-push empty tree, got: {}", output);
+    // _res: the module's own tree after the body ran (solo with a, b, s and
+    // the assign).
+    assert!(output.contains("ModuleDef::ModuleDef.mk(solo"),
+        "expected _res to hold the built solo tree, got: {}", output);
+}
+
 // ── plan C: def tree re-runs the chain — idempotent, instance exactly once ──
 
 #[test]

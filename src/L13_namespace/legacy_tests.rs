@@ -2582,7 +2582,7 @@ module MyAdder[w: Nat] {
 module Top {
     input a = UInt[8]
     input b = UInt[8]
-    let _adder = MyAdder[8]
+    let _adder = MyAdder.create[8]
     let inst = mkInstancePorts("myAdder", "MyAdder", ".a(a), .b(b), .sum(adder_sum)")
 }
 

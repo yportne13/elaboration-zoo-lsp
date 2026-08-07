@@ -6,6 +6,10 @@
 // Bodies use `Expr` fragment for consistency with Expr macro's when handlers.
 // NOTE: 与下方 `Expr` macro 内的 when arm 逻辑重复、独立维护，
 //       修改任一处必须同步另一处（same when-begin/else-begin/end 序列）。
+// NOTE: 所有脚手架绑定都用 `let _ = ...` 丢弃：在 module 宏展开的 class
+//       体里每个 let 都是 struct 字段（用户语义：class body 的每个 let
+//       都是字段，无特例），丢弃名让它们折叠进同一个 `_` 字段（last-wins），
+//       而不是成为 w_push/w_pop 之类的额外成员。
 #[macro_export]
 macro_rules when {
     // when + elsewhen* + otherwise
@@ -13,33 +17,33 @@ macro_rules when {
     // module records when(cond, body, None) nodes followed by the otherwise
     // assignments; the generator turns this into if / else if / else.
     ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
-        let w_push = whenBegin(($cond).expr);
+        let _ = whenBegin(($cond).expr);
         $({$body})*
-        let w_pop = whenEnd(unit);
-        $( let w_epush = whenElseBegin(($cond2).expr);
+        let _ = whenEnd(unit);
+        $( let _ = whenElseBegin(($cond2).expr);
            $({$bodyelse})*
-           let w_epop = whenEnd(unit); )*
-        let w_opush = whenOtherwiseBegin(unit);
+           let _ = whenEnd(unit); )*
+        let _ = whenOtherwiseBegin(unit);
         $({$bodyother})*
-        let w_opop = whenEnd(unit);
+        let _ = whenEnd(unit);
     };
     // when + otherwise (no elsewhen)
     ($cond:raw {$( $body: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
-        let w_push = whenBegin(($cond).expr);
+        let _ = whenBegin(($cond).expr);
         $({$body})*
-        let w_pop = whenEnd(unit);
-        let w_opush = whenOtherwiseBegin(unit);
+        let _ = whenEnd(unit);
+        let _ = whenOtherwiseBegin(unit);
         $({$bodyother})*
-        let w_opop = whenEnd(unit);
+        let _ = whenEnd(unit);
     };
     // when without otherwise
     ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
-        let w_push = whenBegin(($cond).expr);
+        let _ = whenBegin(($cond).expr);
         $({$body})*
-        let w_pop = whenEnd(unit);
-        $( let w_epush = whenElseBegin(($cond2).expr);
+        let _ = whenEnd(unit);
+        $( let _ = whenElseBegin(($cond2).expr);
            $({$bodyelse})*
-           let w_epop = whenEnd(unit); )*
+           let _ = whenEnd(unit); )*
     };
 }
 
@@ -65,37 +69,45 @@ macro_rules Expr {
     // new* factories take an implicit BindingName filled with the let
     // binder's name, so `input myInput = UInt[4]` still names the port
     // "myInput" (bn == stringify $x).
-    (input $x:ident = Bits[$width:raw]) => {let $x = newBitsInput($width);};
-    (output $x:ident = Bits[$width:raw]) => {let $x = newBitsOutput($width);};
-    (inout $x:ident = Bits[$width:raw]) => {let $x = newBitsInOut($width);};
-    (let $x:ident = Bits[$width:raw]) => {let $x = newBits($width);};
+    // NOTE: every signal arm emits an ANNOTATED let. In a module macro body
+    // the statements become class fields (user semantics: every class-body
+    // let is a struct field), and an unannotated field whose type depends on
+    // the class's Nat params (e.g. `let x = Bits[left + right]`) leaves an
+    // unsolved meta ("can't unify for unsolved meta", see
+    // docs/module-redesign-analysis.md §2.1); the explicit annotation gives
+    // the field a concrete type up front. The factory return types match the
+    // annotations exactly (Bits[w]/UInt[w]/SInt[w]/Bool).
+    (input $x:ident = Bits[$width:raw]) => {let $x: Bits[$width] = newBitsInput($width);};
+    (output $x:ident = Bits[$width:raw]) => {let $x: Bits[$width] = newBitsOutput($width);};
+    (inout $x:ident = Bits[$width:raw]) => {let $x: Bits[$width] = newBitsInOut($width);};
+    (let $x:ident = Bits[$width:raw]) => {let $x: Bits[$width] = newBits($width);};
 
-    (input $x:ident = UInt[$width:raw]) => {let $x = newUIntInput($width);};
-    (output $x:ident = UInt[$width:raw]) => {let $x = newUIntOutput($width);};
-    (inout $x:ident = UInt[$width:raw]) => {let $x = newUIntInOut($width);};
-    (let $x:ident = UInt[$width:raw]) => {let $x = newUInt($width);};
+    (input $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUIntInput($width);};
+    (output $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUIntOutput($width);};
+    (inout $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUIntInOut($width);};
+    (let $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUInt($width);};
 
-    (input $x:ident = SInt[$width:raw]) => {let $x = newSIntInput($width);};
-    (output $x:ident = SInt[$width:raw]) => {let $x = newSIntOutput($width);};
-    (inout $x:ident = SInt[$width:raw]) => {let $x = newSIntInOut($width);};
-    (let $x:ident = SInt[$width:raw]) => {let $x = newSInt($width);};
+    (input $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntInput($width);};
+    (output $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntOutput($width);};
+    (inout $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntInOut($width);};
+    (let $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSInt($width);};
 
-    (input $x:ident = Bool) => {let $x = newBoolInput;};
-    (output $x:ident = Bool) => {let $x = newBoolOutput;};
-    (inout $x:ident = Bool) => {let $x = newBoolInOut;};
-    (let $x:ident = Bool) => {let $x = newBool;};
+    (input $x:ident = Bool) => {let $x: Bool = newBoolInput;};
+    (output $x:ident = Bool) => {let $x: Bool = newBoolOutput;};
+    (inout $x:ident = Bool) => {let $x: Bool = newBoolInOut;};
+    (let $x:ident = Bool) => {let $x: Bool = newBool;};
 
     // ---- register declarations ----
     // `reg x = T[w] init v` — register with reset value (async reset, verilog init)
-    (reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x = newBitsRegInitNat($width, $init);};
-    (reg $x:ident = UInt[$width:raw] init $init:raw) => {let $x = newUIntRegInitNat($width, $init);};
-    (reg $x:ident = SInt[$width:raw] init $init:raw) => {let $x = newSIntRegInitNat($width, $init);};
-    (reg $x:ident = Bool init $init:raw) => {let $x = newBoolRegInitNat($init);};
+    (reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x: Bits[$width] = newBitsRegInitNat($width, $init);};
+    (reg $x:ident = UInt[$width:raw] init $init:raw) => {let $x: UInt[$width] = newUIntRegInitNat($width, $init);};
+    (reg $x:ident = SInt[$width:raw] init $init:raw) => {let $x: SInt[$width] = newSIntRegInitNat($width, $init);};
+    (reg $x:ident = Bool init $init:raw) => {let $x: Bool = newBoolRegInitNat($init);};
 
-    (reg $x:ident = Bits[$width:raw]) => {let $x = newBitsReg($width);};
-    (reg $x:ident = UInt[$width:raw]) => {let $x = newUIntReg($width);};
-    (reg $x:ident = SInt[$width:raw]) => {let $x = newSIntReg($width);};
-    (reg $x:ident = Bool) => {let $x = newBoolReg;};
+    (reg $x:ident = Bits[$width:raw]) => {let $x: Bits[$width] = newBitsReg($width);};
+    (reg $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUIntReg($width);};
+    (reg $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntReg($width);};
+    (reg $x:ident = Bool) => {let $x: Bool = newBoolReg;};
 
     // ---- sub-module instantiation ----
     // `let u = myAdder.create[8]` needs no special branch: the class
@@ -109,34 +121,37 @@ macro_rules Expr {
     // Pushes condition scope, evaluates body, pops scope.
     // Note: when/elsewhen bodies are emitted FIRST, otherwise LAST, so the
     // generator can emit if / else if / else instead of a default assign.
+    // NOTE: all scaffolding bindings use `let _ = ...` discards (see the
+    // standalone `when` macro's note: they collapse into the module struct's
+    // single `_` field instead of becoming named members).
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})* otherwise {$( $bodyother: Expr )*}) => {
-        let w_push = whenBegin(($cond).expr);
+        let _ = whenBegin(($cond).expr);
         $({$bodywhen})*
-        let w_pop = whenEnd(unit);
-        $( let w_epush = whenElseBegin(($cond2).expr);
+        let _ = whenEnd(unit);
+        $( let _ = whenElseBegin(($cond2).expr);
            $({$bodyelse})*
-           let w_epop = whenEnd(unit); )*
-        let w_opush = whenOtherwiseBegin(unit);
+           let _ = whenEnd(unit); )*
+        let _ = whenOtherwiseBegin(unit);
         $({$bodyother})*
-        let w_opop = whenEnd(unit);
+        let _ = whenEnd(unit);
     };
     // when with otherwise (no elsewhen)
     (when $cond:raw {$( $bodywhen: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
-        let w_push = whenBegin(($cond).expr);
+        let _ = whenBegin(($cond).expr);
         $({$bodywhen})*
-        let w_pop = whenEnd(unit);
-        let w_opush = whenOtherwiseBegin(unit);
+        let _ = whenEnd(unit);
+        let _ = whenOtherwiseBegin(unit);
         $({$bodyother})*
-        let w_opop = whenEnd(unit);
+        let _ = whenEnd(unit);
     };
     // when without otherwise
     (when $cond:raw {$( $bodywhen: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
-        let w_push = whenBegin(($cond).expr);
+        let _ = whenBegin(($cond).expr);
         $({$bodywhen})*
-        let w_pop = whenEnd(unit);
-        $( let w_epush = whenElseBegin(($cond2).expr);
+        let _ = whenEnd(unit);
+        $( let _ = whenElseBegin(($cond2).expr);
            $({$bodyelse})*
-           let w_epop = whenEnd(unit); )*
+           let _ = whenEnd(unit); )*
     };
 
     // ---- switch — desugar to when-based pattern matching ----
@@ -145,24 +160,24 @@ macro_rules Expr {
     // Note: $val can be a Nat literal or a signal; uses === operator for comparison
     // Multiple is cases: first uses whenBegin, rest use whenElseBegin
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* default {$( $default_body: Expr )*} }) => {
-        let _wb = whenBegin(($sel === $val).expr);
+        let _ = whenBegin(($sel === $val).expr);
         $({$body})*
-        let _we = whenEnd(unit);
-        $( let _web = whenElseBegin(($sel === $val2).expr);
+        let _ = whenEnd(unit);
+        $( let _ = whenElseBegin(($sel === $val2).expr);
            $({$body2})*
-           let _we3 = whenEnd(unit); )*
-        let _wob = whenOtherwiseBegin(unit);
+           let _ = whenEnd(unit); )*
+        let _ = whenOtherwiseBegin(unit);
         $({$default_body})*
-        let _we2 = whenEnd(unit);
+        let _ = whenEnd(unit);
     };
     // Single is + default (no elsewhen)
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} default {$( $default_body: Expr )*} }) => {
-        let _wb = whenBegin(($sel === $val).expr);
+        let _ = whenBegin(($sel === $val).expr);
         $({$body})*
-        let _we = whenEnd(unit);
-        let _wob = whenOtherwiseBegin(unit);
+        let _ = whenEnd(unit);
+        let _ = whenOtherwiseBegin(unit);
         $({$default_body})*
-        let _we2 = whenEnd(unit);
+        let _ = whenEnd(unit);
     };
 
     // ---- raw expression passthrough ----
@@ -171,9 +186,12 @@ macro_rules Expr {
 
 // The module macro provides convenient module definition syntax.
 // It expands to a `class` (scala-style) whose struct implements the `Module` trait:
-//   struct $name { a: UInt[8], ... }   — ports become fields (NO storage field)
+//   struct $name { _, _prev, _res: ModuleTree-chain fields, a: UInt[8], ... }
+//     — ports become fields; the side-effect chain bindings become fields too
+//     (user semantics: every class-body `let` is a struct field, no special
+//     cases — see the WHY note below). NO storage field.
 //   def $name.create[args]: $name[args] = ...   — runs the side-effect chain eagerly
-//   impl Module for $name { def tree = <chain without instance recording> }
+//   impl Module for $name { def tree = <chain minus instance recording> }
 // Usage:
 //   module myAdder[w: Nat]
 //       input a = UInt[w]
@@ -189,11 +207,11 @@ macro_rules Expr {
 // signals (no port handle), so a parent cannot connect to them via `u.x`.
 //
 // Each port is declared TWICE in the class body (both collapse into one struct
-// field; the last wins): first as the module's own signal inside the side-effect
-// chain so the body can use `sum := a` with real signals, then after the chain
-// as a subSignal handle so a parent can write `u.a := sig` — SpinalHDL-style
-// hierarchical access, where the instance name comes from the implicit bn
-// constructor parameter.
+// field; the last wins): first as the module's own signal inside the flattened
+// side-effect chain so the body can use `sum := a` with real signals, then
+// after the chain as a subSignal handle so a parent can write `u.a := sig` —
+// SpinalHDL-style hierarchical access, where the instance name comes from the
+// implicit bn constructor parameter.
 // NOTE: 依赖"同名字段后者覆盖前者"的编译器行为；若解析器对字段重名报错
 //       或改变语义，此宏必须重写（不要再声明同名端口）。
 //
@@ -205,21 +223,28 @@ macro_rules Expr {
 // records `instance(bn.name, name)` itself via mkInstanceIfParent (dropped at
 // top level, where no parent module exists).
 //
-// WHY the side-effect chain is transcribed TWICE (方案 C; 前置分析见
-// docs/module-redesign-analysis.md §8.3，摊平形态探针见
+// WHY the side-effect chain is FLATTENED into class-body fields (方案 C2;
+// 前置分析见 docs/module-redesign-analysis.md §2/§8.3，摊平形态探针见
 // class_tests.rs::class_module_shape_flattened_chain):
-// the chain is the push/pop sandwich around the global ModuleTree, and both
-// copies below are byte-identical apart from the instance-recording line.
-//   1. create side — one bare parenthesized STATEMENT at the top of the class
-//      body. A bare statement is a create-local (ClassItem::Stmt), NOT a
-//      struct field, so the old `tree_data` storage field is gone and the
-//      struct keeps only the port handle fields. It runs EAGERLY when the
-//      constructor is evaluated — a nested `let u = child.create` inside the
-//      body records its instance into the parent's in-progress tree (the
-//      mkInstanceIfParent line runs after the restore, against the parent
-//      frame), so the instance lands in the tree exactly once. The chain's
-//      `_res` tree value is discarded here; the create-side side effects are
-//      what matter.
+// user semantics: EVERY `let` in a class body is a struct field — no special
+// cases, no create-locals. The module's side-effect chain is therefore
+// transcribed as plain class-body fields in execution order; the create's let
+// chain binds fields in declaration order, so FIELD ORDER == SIDE-EFFECT ORDER
+// (reset → push → ports → body → pop → instance record). The chain is
+// transcribed TWICE, byte-identical apart from the instance-recording line:
+//   1. create side — the chain fields at the top of the class body. Each
+//      binding is a struct field (no storage field): the repeated
+//      `let _ = ...` bindings collapse last-wins into a single `_ : Unit`
+//      field (the LAST `_` is mkInstanceIfParent's; the earlier ones still
+//      run in the constructor via shadowing), `_prev`/`_res` are the
+//      sandwich's ModuleTree values (exposed on the struct deliberately),
+//      and the ports are the real signals (overwritten below by the handle
+//      declarations). The constructor runs them EAGERLY — a nested
+//      `let u = child.create` inside the body records its instance into the
+//      parent's in-progress tree (the mkInstanceIfParent line runs after the
+//      restore, against the parent frame), so the instance lands in the tree
+//      exactly once per create run. The `_res` value is dead weight by
+//      design; the create-side side effects are what matter.
 //   2. `def tree` side — the same chain minus mkInstanceIfParent (the def has
 //      no `bn` and must not re-record instances) runs on EVERY `.tree`
 //      access, rebuilding the identical tree from a clean push. Idempotent:
@@ -240,19 +265,22 @@ macro_rules module {
 	// Usage: let t = foo.create[myClockDomain].tree
 	($name: ident [$cd: ident] $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name [$cd: ClockDomain] $({$args})* impl Module {
-			// Create side (see the WHY note above): the side-effect chain as a
-			// bare class-body statement — a create-local, not a struct field.
-			(let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
-			let _ = create_global("WhenStack", whenStackEmpty);
-			let _prev = get_global("ModuleTree");
-			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
+			// Create side (see the WHY note above): the side-effect chain
+			// FLATTENED into class-body fields — every `let` is a struct
+			// field (user semantics, no special cases). The constructor binds
+			// them in declaration order, so field order == side-effect order;
+			// the repeated `let _ = ...` bindings collapse last-wins into one
+			// `_ : Unit` field (mkInstanceIfParent's return).
+			let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
+			let _ = create_global("WhenStack", whenStackEmpty)
+			let _prev: ModuleTree = get_global("ModuleTree")
+			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil))
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
-			let _res = get_global("ModuleTree");
-			let _ = create_global("ModuleTree", _prev);
-			let _ = mkInstanceIfParent(bn.name, stringify $name);
-			_res)
+			let _res: ModuleTree = get_global("ModuleTree")
+			let _ = create_global("ModuleTree", _prev)
+			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
 			// tree recomputes the chain on every access (minus instance recording).
@@ -272,19 +300,22 @@ macro_rules module {
 	// Without clock domain: uses defaultClockDomain
 	($name: ident $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name $({$args})* impl Module {
-			// Create side (see the WHY note above): the side-effect chain as a
-			// bare class-body statement — a create-local, not a struct field.
-			(let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
-			let _ = create_global("WhenStack", whenStackEmpty);
-			let _prev = get_global("ModuleTree");
-			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
+			// Create side (see the WHY note above): the side-effect chain
+			// FLATTENED into class-body fields — every `let` is a struct
+			// field (user semantics, no special cases). The constructor binds
+			// them in declaration order, so field order == side-effect order;
+			// the repeated `let _ = ...` bindings collapse last-wins into one
+			// `_ : Unit` field (mkInstanceIfParent's return).
+			let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
+			let _ = create_global("WhenStack", whenStackEmpty)
+			let _prev: ModuleTree = get_global("ModuleTree")
+			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil))
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
-			let _res = get_global("ModuleTree");
-			let _ = create_global("ModuleTree", _prev);
-			let _ = mkInstanceIfParent(bn.name, stringify $name);
-			_res)
+			let _res: ModuleTree = get_global("ModuleTree")
+			let _ = create_global("ModuleTree", _prev)
+			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
 			// tree recomputes the chain on every access (minus instance recording).
@@ -302,5 +333,3 @@ macro_rules module {
 		}
 	};
 }
-
-	
