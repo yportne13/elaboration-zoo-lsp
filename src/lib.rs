@@ -242,135 +242,65 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     }
 
     fn load_prelude_impl(self: &Arc<Self>, skip_hdl: bool) {
-        use lsp_types::Url;
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///op.typort").unwrap(),
-            text: include_str!("prelude/core/op.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///eq.typort").unwrap(),
-            text: include_str!("prelude/core/eq.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///nat.typort").unwrap(),
-            text: include_str!("prelude/core/nat.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///calc.typort").unwrap(),
-            text: include_str!("prelude/core/calc.typort"),
-            version: None,
-        });
-        // Register nat_to_dec builtin (required by hdl for Verilog generation)
+        // Elaborate the builtin prelude once per process and clone the cached
+        // infer/cxt/macro state into this Backend, instead of re-elaborating
+        // ~24 files on every startup (LSP server, CLI check, tests).
+        let (mut infer, mut cxt, global_macros) =
+            match L13_namespace::clone_prelude_state(!skip_hdl) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("typort: prelude elaboration failed: {e:?}");
+                    return;
+                }
+            };
+        // Register the virtual builtin documents (same URIs/order as before)
+        // so goto/hover across the prelude boundary and builtinContent
+        // requests keep working.
         {
-            let infer = self.infer.lock().unwrap();
-            let mut cxt = self.cxt.lock().unwrap();
-            L13_namespace::cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
+            let mut docs: Vec<(&'static str, &'static str)> = vec![
+                ("builtin:///op.typort", include_str!("prelude/core/op.typort")),
+                ("builtin:///eq.typort", include_str!("prelude/core/eq.typort")),
+                ("builtin:///nat.typort", include_str!("prelude/core/nat.typort")),
+                ("builtin:///calc.typort", include_str!("prelude/core/calc.typort")),
+                ("builtin:///bool.typort", include_str!("prelude/core/bool.typort")),
+                ("builtin:///option.typort", include_str!("prelude/data/option.typort")),
+                ("builtin:///result.typort", include_str!("prelude/data/result.typort")),
+                ("builtin:///order.typort", include_str!("prelude/data/order.typort")),
+                ("builtin:///void.typort", include_str!("prelude/core/void.typort")),
+                ("builtin:///decidable.typort", include_str!("prelude/data/decidable.typort")),
+                ("builtin:///vec.typort", include_str!("prelude/data/vec.typort")),
+                ("builtin:///either.typort", include_str!("prelude/data/either.typort")),
+                ("builtin:///list.typort", include_str!("prelude/data/list.typort")),
+                ("builtin:///string.typort", include_str!("prelude/data/string.typort")),
+                ("builtin:///nonempty.typort", include_str!("prelude/data/nonempty.typort")),
+            ];
+            if !skip_hdl {
+                docs.extend([
+                    ("builtin:///hdl-core.typort", include_str!("prelude/hdl/hdl-core.typort")),
+                    ("builtin:///hdl-types.typort", include_str!("prelude/hdl/hdl-types.typort")),
+                    ("builtin:///hdl-ops.typort", include_str!("prelude/hdl/hdl-ops.typort")),
+                    ("builtin:///hdl-clock.typort", include_str!("prelude/hdl/hdl-clock.typort")),
+                    ("builtin:///hdl-bus.typort", include_str!("prelude/hdl/hdl-bus.typort")),
+                    ("builtin:///hdl-signals.typort", include_str!("prelude/hdl/hdl-signals.typort")),
+                    ("builtin:///hdl-macros.typort", include_str!("prelude/hdl/hdl-macros.typort")),
+                    ("builtin:///hdl-verilog.typort", include_str!("prelude/hdl/hdl-verilog.typort")),
+                ]);
+            }
+            docs.push(("builtin:///show.typort", include_str!("prelude/show.typort")));
+            let mut next_id = self.document_id.len() as u32;
+            for (uri, text) in docs {
+                let key = uri.to_string();
+                self.document_map.insert(key.clone(), Rope::from_str(text));
+                if !self.document_id.contains_key(&key) {
+                    self.document_id.insert(key, next_id);
+                    next_id += 1;
+                }
+            }
         }
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///bool.typort").unwrap(),
-            text: include_str!("prelude/core/bool.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///option.typort").unwrap(),
-            text: include_str!("prelude/data/option.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///result.typort").unwrap(),
-            text: include_str!("prelude/data/result.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///order.typort").unwrap(),
-            text: include_str!("prelude/data/order.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///void.typort").unwrap(),
-            text: include_str!("prelude/core/void.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///decidable.typort").unwrap(),
-            text: include_str!("prelude/data/decidable.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///vec.typort").unwrap(),
-            text: include_str!("prelude/data/vec.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///either.typort").unwrap(),
-            text: include_str!("prelude/data/either.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///list.typort").unwrap(),
-            text: include_str!("prelude/data/list.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///string.typort").unwrap(),
-            text: include_str!("prelude/data/string.typort"),
-            version: None,
-        });
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///nonempty.typort").unwrap(),
-            text: include_str!("prelude/data/nonempty.typort"),
-            version: None,
-        });
-        if !skip_hdl {
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-core.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-core.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-types.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-types.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-ops.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-ops.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-clock.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-clock.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-bus.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-bus.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-signals.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-signals.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-macros.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-macros.typort"),
-                version: None,
-            });
-            self.on_change::<true>(TextDocumentItem {
-                uri: Url::parse("builtin:///hdl-verilog.typort").unwrap(),
-                text: include_str!("prelude/hdl/hdl-verilog.typort"),
-                version: None,
-            });
+        // Merge prelude-exported macros into the global macro table.
+        for (name, rules) in global_macros {
+            self.exported_macros.insert(name, rules);
         }
-        self.on_change::<true>(TextDocumentItem {
-            uri: Url::parse("builtin:///show.typort").unwrap(),
-            text: include_str!("prelude/show.typort"),
-            version: None,
-        });
         // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero).
         // Namespace-registered instance methods (`TypeHead.method`, e.g. `Bool.mux`)
         // are excluded — methods are only reachable through `x.method` dispatch,
@@ -380,11 +310,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         // winner independent of HashMap iteration order.  Mirrors the test/cache
         // path in `L13_namespace::mod.rs::load_prelude_state`.
         {
-            let cxt_lock = self.cxt.lock().unwrap();
-            let ns_method_keys: std::collections::HashSet<SmolStr> = cxt_lock.namespace.iter()
+            let ns_method_keys: std::collections::HashSet<SmolStr> = cxt.namespace.iter()
                 .flat_map(|ns| ns.1.iter().map(move |m| SmolStr::new(format!("{}.{}", ns.2, m))))
                 .collect();
-            let mut aliases: Vec<(SmolStr, SmolStr, _)> = cxt_lock.decl.iter()
+            let mut aliases: Vec<(SmolStr, SmolStr, _)> = cxt.decl.iter()
                 .filter(|(k, _)| k.contains('.') && !ns_method_keys.contains(*k))
                 .map(|(k, v)| {
                     let short = SmolStr::new(k.split('.').last().unwrap());
@@ -392,20 +321,24 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 })
                 .collect();
             aliases.sort_by(|a, b| a.1.cmp(&b.1));
-            drop(cxt_lock);
-            let mut cxt_lock = self.cxt.lock().unwrap();
-            let decl_map = Arc::make_mut(&mut cxt_lock.decl);
+            let decl_map = Arc::make_mut(&mut cxt.decl);
             for (short, _full_key, v) in aliases {
                 decl_map.entry(short).or_insert(v);
             }
         }
-        self.infer.lock().unwrap().hover_table.clear();
-        self.infer.lock().unwrap().hover_table.shrink_to_fit();
-        self.infer.lock().unwrap().completion_table.clear();
-        self.infer.lock().unwrap().completion_table.shrink_to_fit();
-        self.infer.lock().unwrap().inlay_hint_table.clear();
-        self.infer.lock().unwrap().inlay_hint_table.shrink_to_fit();
-        self.infer.lock().unwrap().mutable_map.write().unwrap().clear();
+        // The cached state is never queried for hover/completion; drop the
+        // accumulated tables and the mutable global map so per-file clones
+        // stay cheap.
+        infer.hover_table.clear();
+        infer.hover_table.shrink_to_fit();
+        infer.completion_table.clear();
+        infer.completion_table.shrink_to_fit();
+        infer.inlay_hint_table.clear();
+        infer.inlay_hint_table.shrink_to_fit();
+        infer.shrink();
+        infer.mutable_map.write().unwrap().clear();
+        *self.infer.lock().unwrap() = infer;
+        *self.cxt.lock().unwrap() = cxt;
     }
 
     /// 启动工作线程处理分析任务。
@@ -537,15 +470,19 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let is_builtin = params.uri.scheme() == "builtin";
             if !is_builtin {
                 self.type_map.insert(params.uri.to_string(), terms);
-                self.hover_table.insert(params.uri.to_string(), infer.clone());
             }
-            infer.hover_table.clear();
-            infer.hover_table.shrink_to_fit();
-            infer.completion_table.clear();
-            infer.completion_table.shrink_to_fit();
-            infer.inlay_hint_table.clear();
-            infer.inlay_hint_table.shrink_to_fit();
-            infer.shrink();
+            if MUT {
+                // Prelude load path: drop the per-file tables accumulated in
+                // the global infer.  Hover/inlay/completion requests read the
+                // per-file snapshots stored below, never the global state.
+                infer.hover_table.clear();
+                infer.hover_table.shrink_to_fit();
+                infer.completion_table.clear();
+                infer.completion_table.shrink_to_fit();
+                infer.inlay_hint_table.clear();
+                infer.inlay_hint_table.shrink_to_fit();
+                infer.shrink();
+            }
             infer.mutable_map.write().unwrap().clear();
             let mut diags = Vec::new();
             let mut quickfixes_for_uri = HashMap::new();
@@ -583,6 +520,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.client.publish_diagnostics(params.uri.clone(), diags, params.version);
             // 存储 Quick Fix 映射（覆盖旧的）
             self.quickfix_map.insert(params.uri.to_string(), quickfixes_for_uri);
+            if !is_builtin {
+                if MUT {
+                    self.hover_table.insert(params.uri.to_string(), infer.clone());
+                } else {
+                    // Store the elaborated snapshot by MOVING it (no deep clone
+                    // of `meta`/trait tables); the local clone is replaced.
+                    self.hover_table.insert(params.uri.to_string(), std::mem::replace(infer, Infer::new()));
+                }
+            }
         } else {
             // Parser returned None — file has syntax errors.
             // Clear any stale analysis results for this URI so the editor
@@ -941,7 +887,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 local_cxt.namespace = keep.iter().rev()
                     .fold(crate::list::List::new(), |l, e| l.prepend(e.clone()));
             }
-            let before_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
+            let before_keys: HashSet<SmolStr> = local_cxt.decl.keys().cloned().collect();
             let mut local_infer = infer.clone();
             // Phase 1 (fast): type-check without normalizing `println` args, so
             // tyck errors reach the client before the slow `nf` phase.
@@ -962,16 +908,19 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     err_collect.push((err, DiagnosticSeverity::ERROR));
                 }
             }
-            let after_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
-            let new_keys: HashSet<String> = after_keys.difference(&before_keys).cloned().collect();
+            let after_keys: HashSet<SmolStr> = local_cxt.decl.keys().cloned().collect();
+            let new_keys: HashSet<SmolStr> = after_keys.difference(&before_keys).cloned().collect();
             // Decision 1-a: on type error, keep the previous successful symbols.
             let has_error = err_collect.iter().any(|(_, sev)| *sev == DiagnosticSeverity::ERROR);
             if !has_error {
-                *Arc::make_mut(&mut cxt.decl) = (*local_cxt.decl).clone();
+                // Publish the elaborated decl map by Arc hand-off: the map is
+                // immutable from here on (all writes go through make_mut
+                // copy-on-write), so a full-table deep clone is unnecessary.
+                cxt.decl = local_cxt.decl.clone();
                 if new_keys.is_empty() {
                     self.file_symbols.remove(&uri_str);
                 } else {
-                    self.file_symbols.insert(uri_str.clone(), new_keys);
+                    self.file_symbols.insert(uri_str.clone(), new_keys.into_iter().map(|k| k.to_string()).collect());
                 }
                 // I4-cross-file: sync inherent-impl namespace entries into the
                 // global cxt.namespace so files importing this file's package
@@ -1006,15 +955,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let is_builtin = uri.scheme() == "builtin";
             if !is_builtin {
                 self.type_map.insert(uri_str.clone(), terms);
-                self.hover_table.insert(uri_str.clone(), local_infer.clone());
             }
-            local_infer.hover_table.clear();
-            local_infer.hover_table.shrink_to_fit();
-            local_infer.completion_table.clear();
-            local_infer.completion_table.shrink_to_fit();
-            local_infer.inlay_hint_table.clear();
-            local_infer.inlay_hint_table.shrink_to_fit();
-            local_infer.shrink();
             local_infer.mutable_map.write().unwrap().clear();
             drop(infer);
             drop(cxt);
@@ -1031,6 +972,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 self.client.log_message(MessageType::LOG, format!("println nf {:?}", start.elapsed().as_secs_f32()));
                 diags.extend(print_diags);
                 self.client.publish_diagnostics(uri.clone(), diags, version);
+            }
+            // Store the elaborated snapshot for hover/inlay/completion requests
+            // by MOVING it (no deep clone of `meta`/trait tables); the local
+            // `local_infer` is replaced with a fresh instance.
+            if !is_builtin {
+                self.hover_table.insert(uri_str, std::mem::replace(&mut local_infer, Infer::new()));
             }
         } else {
             // Parse error: clear per-file analysis state, keep previous symbols.

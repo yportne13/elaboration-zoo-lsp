@@ -2309,10 +2309,17 @@ struct PreludeState {
 
 static PRELUDE_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<PreludeState>>> =
     std::sync::OnceLock::new();
+/// Cache of the prelude WITHOUT the hdl files, for `load_prelude_skip_hdl`.
+static PRELUDE_CACHE_NO_HDL: std::sync::OnceLock<std::sync::Mutex<Option<PreludeState>>> =
+    std::sync::OnceLock::new();
 
 fn load_prelude_state() -> Result<PreludeState, Error> {
+    load_prelude_state_impl(true)
+}
+
+fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     let mut infer = Infer::new();
-    let prelude = &[
+    let mut prelude: Vec<&str> = vec![
         include_str!("../prelude/core/op.typort"),
         include_str!("../prelude/core/eq.typort"),
         include_str!("../prelude/core/nat.typort"),
@@ -2328,16 +2335,20 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
         include_str!("../prelude/data/list.typort"),
         include_str!("../prelude/data/string.typort"),
         include_str!("../prelude/data/nonempty.typort"),
-        include_str!("../prelude/hdl/hdl-core.typort"),
-        include_str!("../prelude/hdl/hdl-types.typort"),
-        include_str!("../prelude/hdl/hdl-ops.typort"),
-        include_str!("../prelude/hdl/hdl-clock.typort"),
-        include_str!("../prelude/hdl/hdl-bus.typort"),
-        include_str!("../prelude/hdl/hdl-signals.typort"),
-        include_str!("../prelude/hdl/hdl-macros.typort"),
-        include_str!("../prelude/hdl/hdl-verilog.typort"),
-        include_str!("../prelude/show.typort"),
     ];
+    if include_hdl {
+        prelude.extend([
+            include_str!("../prelude/hdl/hdl-core.typort"),
+            include_str!("../prelude/hdl/hdl-types.typort"),
+            include_str!("../prelude/hdl/hdl-ops.typort"),
+            include_str!("../prelude/hdl/hdl-clock.typort"),
+            include_str!("../prelude/hdl/hdl-bus.typort"),
+            include_str!("../prelude/hdl/hdl-signals.typort"),
+            include_str!("../prelude/hdl/hdl-macros.typort"),
+            include_str!("../prelude/hdl/hdl-verilog.typort"),
+        ]);
+    }
+    prelude.push(include_str!("../prelude/show.typort"));
     let mut cxt = Cxt::new(&infer);
 
     // Accumulate exported macros from prelude files
@@ -2360,7 +2371,7 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
         id += 1;
         // After nat.typort is loaded, register nat_to_dec builtin.
         // 基于内容判断而非索引 id：prelude 列表顺序变化（增删文件）时不会错位。
-        if *p == nat_typort {
+        if p == nat_typort {
             cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
         }
     }
@@ -2397,23 +2408,36 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
     })
 }
 
+/// Clone the cached prelude elaborator state for use by a `Backend`
+/// (LSP/CLI).  The prelude is elaborated once per process; subsequent
+/// Backends reuse the cached `Infer`/`Cxt`/macro tables instead of
+/// re-elaborating ~24 files.  The mutable global map is deep-copied so
+/// writes never leak between users of the cache (mirrors `run_with_prelude`).
+pub fn clone_prelude_state(
+    include_hdl: bool,
+) -> Result<(Infer, Cxt, std::collections::HashMap<String, Vec<parser::macros::MacroRule>>), Error> {
+    let cache = if include_hdl {
+        PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None))
+    } else {
+        PRELUDE_CACHE_NO_HDL.get_or_init(|| std::sync::Mutex::new(None))
+    };
+    let mut guard = cache.lock().unwrap();
+    if guard.is_none() {
+        *guard = Some(load_prelude_state_impl(include_hdl)?);
+    }
+    let state = guard.as_ref().unwrap();
+    // Clone the cached elaborator state.  The mutable global map is
+    // deep-copied so writes from one user never leak into another.
+    let mut infer = state.infer.clone();
+    infer.mutable_map = Rc::new(std::sync::RwLock::new(
+        state.infer.mutable_map.read().unwrap().clone(),
+    ));
+    Ok((infer, state.cxt.clone(), state.global_macros.clone()))
+}
+
 #[allow(unused)]
 pub fn run_with_prelude(input: &str) -> Result<String, Error> {
-    let cache = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
-    let (mut infer, mut cxt, global_macros) = {
-        let mut guard = cache.lock().unwrap();
-        if guard.is_none() {
-            *guard = Some(load_prelude_state()?);
-        }
-        let state = guard.as_ref().unwrap();
-        // Clone the cached elaborator state.  The mutable global map is
-        // deep-copied so writes from one test never leak into another.
-        let mut infer = state.infer.clone();
-        infer.mutable_map = Rc::new(std::sync::RwLock::new(
-            state.infer.mutable_map.read().unwrap().clone(),
-        ));
-        (infer, state.cxt.clone(), state.global_macros.clone())
-    };
+    let (mut infer, mut cxt, global_macros) = clone_prelude_state(true)?;
     let mut ret = String::new();
 
     // Parse main file with accumulated macros from prelude
