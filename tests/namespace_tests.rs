@@ -19,6 +19,12 @@ fn backend() -> Arc<Backend<CliClient>> {
     b
 }
 
+fn backend_hdl() -> Arc<Backend<CliClient>> {
+    let b = Backend::new(CliClient::new());
+    b.load_prelude();
+    b
+}
+
 fn global_decl_keys(b: &Arc<Backend<CliClient>>) -> Vec<String> {
     b.global_decl_keys()
 }
@@ -617,6 +623,31 @@ fn cross_file_inherent_method_dispatches() {
     assert!(has_key(&b, "mylib.Foo"), "A 的类型应注册");
     assert!(has_key(&b, "use"),
         "跨文件 `f.double` 应可派发（namespace 同步后），keys: {:?}",
+        global_decl_keys(&b));
+}
+
+// Repro: after EDITING a file that defines a module, the Module trait's
+// `.tree` access must still resolve (the trait/namespace registration must
+// survive re-elaboration).  Reports "has no object tree" if broken.
+#[test]
+fn editing_module_file_keeps_tree_trait() {
+    let b = backend_hdl();
+    let a = Url::parse("file:///a.typort").unwrap();
+
+    let v1 = "module counterDemo {\n    let a = UInt[8]\n}\ndef check: ModuleTree = counterDemo.create.tree\n";
+    b.process_file(&a, v1, Some(1));
+    assert!(has_key(&b, "check"),
+        "初始 .tree 应解析，keys: {:?}",
+        global_decl_keys(&b));
+
+    // Edit the file: add a def.
+    let v2 = "module counterDemo {\n    let a = UInt[8]\n}\ndef check: ModuleTree = counterDemo.create.tree\ndef extra: Nat = zero\n";
+    b.process_file(&a, v2, Some(2));
+    assert!(has_key(&b, "extra"),
+        "编辑后 extra 应注册，keys: {:?}",
+        global_decl_keys(&b));
+    assert!(has_key(&b, "check"),
+        "编辑后 .tree 应仍可解析（trait/namespace 注册须在重展开后存活），keys: {:?}",
         global_decl_keys(&b));
 }
 

@@ -928,6 +928,19 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     m.remove(k.as_str());
                 }
             }
+            // Also drop this file's previous namespace entries from the local
+            // cxt (I4): the global still has them; if left in the local clone,
+            // the write-back merge would re-add them alongside the freshly
+            // re-registered ones → duplicate entries → ambiguous `x.method`.
+            if let Some(entry) = self.file_namespace_regs.get(&uri_str) {
+                let removed: std::collections::HashSet<usize> = entry.value().iter().map(|(p, _)| *p).collect();
+                let keep: Vec<_> = local_cxt.namespace.iter()
+                    .filter(|e| !removed.contains(&(std::sync::Arc::as_ptr(&e.0) as usize)))
+                    .cloned()
+                    .collect();
+                local_cxt.namespace = keep.iter().rev()
+                    .fold(crate::list::List::new(), |l, e| l.prepend(e.clone()));
+            }
             let before_keys: HashSet<String> = local_cxt.decl.keys().map(|k| k.to_string()).collect();
             let mut local_infer = infer.clone();
             // Phase 1 (fast): type-check without normalizing `println` args, so
