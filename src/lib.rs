@@ -77,14 +77,18 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>>,
     /// Exported macros accumulated across all files (keyed by macro name)
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
+    /// uri -> macro names the file exports, so `exported_macros` can be
+    /// cleaned up when a file closes or fails to parse (G5/G8).
+    pub file_macros: DashMap<String, HashSet<String>>,
     /// Macro expansion data collected during parsing (keyed by URI)
     pub macro_expansion_map: DashMap<String, Vec<MacroExpansionInfo>>,
     /// uri -> decl keys the file wrote into the global cxt (for incremental rebuild)
     pub file_symbols: DashMap<String, HashSet<String>>,
     /// uri -> namespaces the file imports (its dependencies)
     pub file_deps: DashMap<String, HashSet<String>>,
-    /// uri -> the package namespace the file declares (if any)
-    pub file_namespace: DashMap<String, String>,
+    /// uri -> the package namespaces the file declares (ALL `package` decls;
+    /// a file may declare several, G3)
+    pub file_namespaces: DashMap<String, HashSet<String>>,
     /// namespace -> files that provide it (declare `package ns`)
     pub ns_providers: DashMap<String, HashSet<String>>,
     /// namespace -> files that depend on it (import it)
@@ -133,10 +137,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             hover_table,
             quickfix_map: DashMap::new(),
             exported_macros: DashMap::new(),
+            file_macros: DashMap::new(),
             macro_expansion_map: DashMap::new(),
             file_symbols: DashMap::new(),
             file_deps: DashMap::new(),
-            file_namespace: DashMap::new(),
+            file_namespaces: DashMap::new(),
             ns_providers: DashMap::new(),
             ns_dependents: DashMap::new(),
             processing_uris: DashMap::new(),
@@ -362,20 +367,31 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             text: include_str!("prelude/show.typort"),
             version: None,
         });
-        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero)
+        // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero).
+        // Namespace-registered instance methods (`TypeHead.method`, e.g. `Bool.mux`)
+        // are excluded — methods are only reachable through `x.method` dispatch,
+        // never by bare name, so they must not shadow constructor aliases.
+        // Short-name collisions between constructors are resolved deterministically:
+        // iterating in sorted full-key order makes the `or_insert` (first wins)
+        // winner independent of HashMap iteration order.  Mirrors the test/cache
+        // path in `L13_namespace::mod.rs::load_prelude_state`.
         {
             let cxt_lock = self.cxt.lock().unwrap();
-            let aliases: Vec<(SmolStr, _)> = cxt_lock.decl.iter()
-                .filter(|(k, _)| k.contains('.'))
+            let ns_method_keys: std::collections::HashSet<SmolStr> = cxt_lock.namespace.iter()
+                .flat_map(|ns| ns.1.iter().map(move |m| SmolStr::new(format!("{}.{}", ns.2, m))))
+                .collect();
+            let mut aliases: Vec<(SmolStr, SmolStr, _)> = cxt_lock.decl.iter()
+                .filter(|(k, _)| k.contains('.') && !ns_method_keys.contains(*k))
                 .map(|(k, v)| {
                     let short = SmolStr::new(k.split('.').last().unwrap());
-                    (short, v.clone())
+                    (short, k.clone(), v.clone())
                 })
                 .collect();
+            aliases.sort_by(|a, b| a.1.cmp(&b.1));
             drop(cxt_lock);
             let mut cxt_lock = self.cxt.lock().unwrap();
             let decl_map = Arc::make_mut(&mut cxt_lock.decl);
-            for (short, v) in aliases {
+            for (short, _full_key, v) in aliases {
                 decl_map.entry(short).or_insert(v);
             }
         }
@@ -463,9 +479,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.client.log_message(MessageType::LOG, format!("parser {:?}", start.elapsed().as_secs_f32()));
             let parser_dur = start.elapsed().as_secs_f64();
             // Merge newly exported macros into the global table
-            for (name, rules) in new_exports {
-                self.exported_macros.insert(name, rules);
-            }
+            self.update_file_macros(params.uri.as_str(), &new_exports);
             // Store macro expansions for the "expand macro" feature
             self.macro_expansion_map.insert(params.uri.to_string(), expansions);
             let mut err_collect = vec![];
@@ -573,6 +587,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.hover_table.remove(params.uri.as_str());
             self.quickfix_map.remove(params.uri.as_str());
             self.macro_expansion_map.remove(params.uri.as_str());
+            self.remove_file_macros(params.uri.as_str());
             self.client
                 .publish_diagnostics(params.uri.clone(), vec![Diagnostic::new_simple(
                     Range::new(
@@ -591,6 +606,48 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     // ── Cross-file dependency tracking (incremental rebuild) ────────────────
 
+    /// Record `uri`'s freshly-parsed macro exports and rebuild `exported_macros`
+    /// accounting for removed names: a macro name is dropped from the global
+    /// table only when no other open file exports it (G5).
+    fn update_file_macros(&self, uri: &str, new_exports: &HashMap<String, Vec<MacroRule>>) {
+        let old: HashSet<String> = self.file_macros.get(uri)
+            .map(|e| e.value().clone())
+            .unwrap_or_default();
+        let new: HashSet<String> = new_exports.keys().cloned().collect();
+        // Insert/update this file's exports (last writer wins for name clashes).
+        for (name, rules) in new_exports {
+            self.exported_macros.insert(name.clone(), rules.clone());
+        }
+        // Drop names this file no longer exports, if no other file does.
+        for name in old.difference(&new) {
+            let others_export = self.file_macros.iter()
+                .any(|e| e.key() != uri && e.value().contains(name));
+            if !others_export {
+                self.exported_macros.remove(name);
+            }
+        }
+        if new.is_empty() {
+            self.file_macros.remove(uri);
+        } else {
+            self.file_macros.insert(uri.to_string(), new);
+        }
+    }
+
+    /// Remove a closed/failed file's macro exports from the global table
+    /// (only the names no other open file exports).  Called on file close and
+    /// on parse failure (G5/G8).
+    fn remove_file_macros(&self, uri: &str) {
+        if let Some((_, names)) = self.file_macros.remove(uri) {
+            for name in names.iter() {
+                let others_export = self.file_macros.iter()
+                    .any(|e| e.value().contains(name));
+                if !others_export {
+                    self.exported_macros.remove(name);
+                }
+            }
+        }
+    }
+
     /// Recompute the dependency records for `uri` from its import/package decls.
     fn update_deps(&self, uri: &str, decls: &[Decl]) {
         // Clear stale records.
@@ -602,15 +659,17 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         }
         self.file_deps.remove(uri);
-        if let Some(ns) = self.file_namespace.get(uri) {
-            if let Some(mut p) = self.ns_providers.get_mut(ns.value()) {
-                p.remove(uri);
+        if let Some(nss) = self.file_namespaces.get(uri) {
+            for ns in nss.value() {
+                if let Some(mut p) = self.ns_providers.get_mut(ns) {
+                    p.remove(uri);
+                }
             }
         }
-        self.file_namespace.remove(uri);
+        self.file_namespaces.remove(uri);
         // Re-scan decls.
         let mut deps = HashSet::new();
-        let mut ns: Option<String> = None;
+        let mut namespaces: HashSet<String> = HashSet::new();
         for d in decls {
             match d {
                 Decl::Import { prefix, .. } if !prefix.is_empty() => {
@@ -619,14 +678,17 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     self.ns_dependents.entry(ns_str).or_default().insert(uri.to_string());
                 }
                 Decl::Package { path } => {
-                    ns = Some(path.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join("."));
+                    // G3: a file may declare several packages; record them all.
+                    namespaces.insert(path.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join("."));
                 }
                 _ => {}
             }
         }
-        if let Some(ns) = ns {
-            self.file_namespace.insert(uri.to_string(), ns.clone());
-            self.ns_providers.entry(ns).or_default().insert(uri.to_string());
+        if !namespaces.is_empty() {
+            for ns in &namespaces {
+                self.ns_providers.entry(ns.clone()).or_default().insert(uri.to_string());
+            }
+            self.file_namespaces.insert(uri.to_string(), namespaces);
         }
         if !deps.is_empty() {
             self.file_deps.insert(uri.to_string(), deps);
@@ -643,12 +705,44 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         }
         self.file_deps.remove(uri);
-        if let Some(ns) = self.file_namespace.get(uri) {
-            if let Some(mut p) = self.ns_providers.get_mut(ns.value()) {
-                p.remove(uri);
+        if let Some(nss) = self.file_namespaces.get(uri) {
+            for ns in nss.value() {
+                if let Some(mut p) = self.ns_providers.get_mut(ns) {
+                    p.remove(uri);
+                }
             }
         }
-        self.file_namespace.remove(uri);
+        self.file_namespaces.remove(uri);
+    }
+
+    /// True when namespace `ns` is a segment-boundary prefix of path `p`
+    /// (`p == ns`, or `p` starts with `ns.`).  Used for G2: a provider's
+    /// namespace covers every import path under it, so `package a.b` provides
+    /// keys matched by `import a.b.C._` where `C` is a type in that package.
+    fn ns_prefix_of(&self, ns: &str, p: &str) -> bool {
+        p == ns || p.strip_prefix(ns).map_or(false, |rest| rest.starts_with('.'))
+    }
+
+    /// All dependents whose import path is under namespace `ns` (prefix match).
+    fn dependents_under(&self, ns: &str) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for e in self.ns_dependents.iter() {
+            if self.ns_prefix_of(ns, e.key()) {
+                out.extend(e.value().clone());
+            }
+        }
+        out
+    }
+
+    /// All providers whose namespace is a prefix of import path `p`.
+    fn providers_under(&self, p: &str) -> HashSet<String> {
+        let mut out = HashSet::new();
+        for e in self.ns_providers.iter() {
+            if self.ns_prefix_of(e.key(), p) {
+                out.extend(e.value().clone());
+            }
+        }
+        out
     }
 
     /// DFS helper for `rebuild_set`: visit `f`, recursing into its namespace
@@ -658,14 +752,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             return;
         }
         if let Some(deps) = self.file_deps.get(f) {
-            for ns in deps.value().clone() {
-                if let Some(providers) = self.ns_providers.get(&ns) {
-                    let mut ps: Vec<String> = providers.value().clone().into_iter().collect();
-                    ps.sort();
-                    for p in ps {
-                        if set.contains(&p) {
-                            self.visit_dep(&p, set, visited, order);
-                        }
+            for dep in deps.value().clone() {
+                // G2: providers whose namespace is a prefix of the import path.
+                let mut ps: Vec<String> = self.providers_under(&dep).into_iter().collect();
+                ps.sort();
+                for p in ps {
+                    if set.contains(&p) {
+                        self.visit_dep(&p, set, visited, order);
                     }
                 }
             }
@@ -682,9 +775,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let mut queue = vec![changed.to_string()];
         set.insert(changed.to_string());
         while let Some(f) = queue.pop() {
-            if let Some(ns) = self.file_namespace.get(&f) {
-                if let Some(deps) = self.ns_dependents.get(ns.value()) {
-                    for d in deps.value().clone() {
+            if let Some(nss) = self.file_namespaces.get(&f) {
+                for ns in nss.value().clone() {
+                    // G2: dependents whose import path is under this namespace.
+                    let deps: Vec<String> = self.dependents_under(&ns).into_iter().collect();
+                    for d in deps {
                         if set.insert(d.clone()) {
                             queue.push(d);
                         }
@@ -714,9 +809,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .collect();
         let now_id = self.document_id.get(&uri_str).map(|x| *x).unwrap_or(0);
         if let Some((decls, parse_errs, new_exports, expansions)) = parser_with_macros(&preprocess(text), now_id, &global_macros) {
-            for (name, rules) in new_exports {
-                self.exported_macros.insert(name, rules);
-            }
+            self.update_file_macros(&uri_str, &new_exports);
             self.macro_expansion_map.insert(uri_str.clone(), expansions);
             let mut infer = self.infer.lock().unwrap();
             let mut cxt = self.cxt.lock().unwrap();
@@ -796,6 +889,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.hover_table.remove(uri.as_str());
             self.quickfix_map.remove(uri.as_str());
             self.macro_expansion_map.remove(uri.as_str());
+            self.remove_file_macros(&uri_str);
             self.client.publish_diagnostics(
                 uri.clone(),
                 vec![Diagnostic::new_simple(
@@ -903,9 +997,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let uri_str = uri.to_string();
         let dependents: Vec<String> = {
             let mut deps = HashSet::new();
-            if let Some(ns) = self.file_namespace.get(&uri_str) {
-                if let Some(d) = self.ns_dependents.get(ns.value()) {
-                    deps.extend(d.value().clone());
+            if let Some(nss) = self.file_namespaces.get(&uri_str) {
+                for ns in nss.value().clone() {
+                    // G2: dependents whose import path is under this namespace.
+                    deps.extend(self.dependents_under(&ns));
                 }
             }
             deps.into_iter().collect()
@@ -928,6 +1023,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.hover_table.remove(uri.as_str());
         self.quickfix_map.remove(uri.as_str());
         self.macro_expansion_map.remove(uri.as_str());
+        self.remove_file_macros(&uri_str);
         for f in dependents {
             if let Some(text) = self.document_map.get(&f).map(|r| r.to_string()) {
                 if let Ok(f_url) = Url::parse(&f) {

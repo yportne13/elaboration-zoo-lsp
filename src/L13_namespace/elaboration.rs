@@ -52,8 +52,11 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             name: name.map(|n| SmolStr::new(format!("{prefix}.{n}"))),
             params,
             supertraits,
+            // Method names are kept as written — `trait_wrap` dispatches
+            // `x.method` by the written name and the trait-impl method matching
+            // compares written names; prefixing them would break both.
             methods: methods.into_iter().map(|(mn, mparams, mret, mbody)| {
-                (mn.map(|n| SmolStr::new(format!("{prefix}.{n}"))), mparams, mret, mbody)
+                (mn, mparams, mret, mbody)
             }).collect(),
             assoc_defaults,
         },
@@ -62,7 +65,10 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
             params,
             trait_name,
             trait_params,
-            methods: methods.into_iter().map(|(m, is_static)| (prefix_decl_name(m, prefix), is_static)).collect(),
+            // Method names are kept as written: inherent methods are wrapped as
+            // `TypeName.method` and dispatched by written name; trait impl
+            // methods are matched against the (also written) trait methods.
+            methods,
             inherent,
             from_class,
         },
@@ -1183,7 +1189,11 @@ impl Infer {
                                             );
                                         }
                                     }
-                                    let t = self.infer(&cxt, Decl::Def {
+                                    // `infer_after_prefix` (not `infer`): the
+                                    // method name `TypeName.method` is already
+                                    // fully qualified; re-running the package
+                                    // prefix would double-prefix it.
+                                    let t = self.infer_after_prefix(&cxt, Decl::Def {
                                         name: name_d.clone().map(|x| SmolStr::new(format!("{}.{x}", type_name))),
                                         params: params.iter()
                                             .cloned()
@@ -1200,7 +1210,7 @@ impl Infer {
                                     cxt = t.2;
                                 } else {
                                     let static_name = format!("{}.{}", type_name, name_d.data);
-                                    let t = self.infer(&cxt, Decl::Def {
+                                    let t = self.infer_after_prefix(&cxt, Decl::Def {
                                         name: name_d.clone().map(|_| SmolStr::new(static_name.clone())),
                                         params: params.iter()
                                             .cloned()
@@ -1218,6 +1228,24 @@ impl Infer {
                         }
                     }
                 } else {
+                    // I3b: resolve the trait name through the file's namespace
+                    // prefix — a trait declared in `package mylib` is registered
+                    // as `mylib.HasVal`, but the impl writes the bare `HasVal`.
+                    let trait_full: SmolStr = {
+                        let bare = trait_name.data.clone();
+                        if self.trait_out_param.contains_key(&bare) {
+                            bare
+                        } else if let Some(ref prefix) = cxt.namespace_prefix {
+                            let qualified = SmolStr::new(format!("{}.{}", prefix, bare));
+                            if self.trait_out_param.contains_key(&qualified) {
+                                qualified
+                            } else {
+                                bare
+                            }
+                        } else {
+                            bare
+                        }
+                    };
                     let mut temp_cxt = cxt.clone();
                     for (x, a, _) in params.clone() {
                         let (a_checked, _) = self.check_universe(&temp_cxt, a)?;
@@ -1232,17 +1260,17 @@ impl Infer {
                         let a_eval = self.eval(&temp_cxt.decl, &temp_cxt.env, &a_checked);
                         trait_param.push(self.force(&cxt.decl, &a_eval));
                     }
-                    let out_param = self.trait_out_param.get(&trait_name.data)
+                    let out_param = self.trait_out_param.get(&trait_full)
                         .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n)), vec![]))?;
                     // Keep ALL params (including outParam) so the solver can distinguish instances
                     // that differ only in output params (e.g., Into[String] vs Into[Bool] for the same type)
-                    let typ_name = SmolStr::new(format!("{:?}{:?}", trait_name.data, trait_param));
+                    let typ_name = SmolStr::new(format!("{:?}{:?}", trait_full, trait_param));
                     let inst = Instance {
-                        assertion: Assertion { name: trait_name.data.clone(), arguments: trait_param },
+                        assertion: Assertion { name: trait_full.clone(), arguments: trait_param },
                         dependencies: List::new(),
                         lvl: trait_name.to_span().map(|_| typ_name.clone()),
                     };
-                    self.trait_solver.impl_trait_for(trait_name.data.clone(), inst);
+                    self.trait_solver.impl_trait_for(trait_full.clone(), inst);
                     // Fill in missing methods with default bodies from the trait definition
                     let mut methods = methods;
                     // Number of methods provided by the class itself (after the
@@ -1250,7 +1278,7 @@ impl Infer {
                     // namespace defs below. Default bodies appended afterwards are
                     // still elaborated as record lambdas.
                     let mut class_method_count = methods.len();
-                    if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_name.data).cloned() {
+                    if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_full).cloned() {
                         // For class-generated impls, drop methods the trait does not declare
                         // (those are kept in the class's inherent impl instead) and drop
                         // static methods — a static class method does not implement a
@@ -1289,12 +1317,12 @@ impl Infer {
                     }
                     // Fill in missing associated type params with defaults
                     let mut trait_params = trait_params;
-                    if let Some((trait_params_def, _, _, _)) = self.trait_definition.get(&trait_name.data) {
+                    if let Some((trait_params_def, _, _, _)) = self.trait_definition.get(&trait_full) {
                         // Collect associated type indices (params declared as `type ...`)
                         let assoc_names: Vec<(usize, SmolStr)> = trait_params_def.iter()
                             .enumerate()
                             .filter_map(|(i, (name, _, _))| {
-                                if self.assoc_defaults.contains_key(&(trait_name.data.clone(), name.data.clone())) {
+                                if self.assoc_defaults.contains_key(&(trait_full.clone(), name.data.clone())) {
                                     Some((i, name.data.clone()))
                                 } else {
                                     None
@@ -1311,7 +1339,7 @@ impl Infer {
                             if missing_count > 0 {
                                 // Missing assoc types are the trailing ones (provided in order)
                                 for (_, aname) in assoc_names.iter().skip(provided_assoc) {
-                                    if let Some(default_type) = self.assoc_defaults.get(&(trait_name.data.clone(), aname.clone())) {
+                                    if let Some(default_type) = self.assoc_defaults.get(&(trait_full.clone(), aname.clone())) {
                                         trait_params.push(default_type.clone().unwrap_or(Raw::Hole(empty_span(()))));
                                     } else {
                                         return Err(Error(
@@ -1325,7 +1353,7 @@ impl Infer {
                     }
                     let mut ret = std::iter::once(name.clone())
                         .chain(trait_params.clone())
-                        .fold(Raw::Var(trait_name.clone().map(|x| SmolStr::new(format!("{x}.mk")))), |ret, x| {
+                        .fold(Raw::Var(empty_span(SmolStr::new(format!("{}.mk", trait_full)))), |ret, x| {
                             Raw::App(Box::new(ret), Box::new(x), Either::Icit(Icit::Impl))
                         });
                     // For class-generated impls the methods were already elaborated
@@ -1374,12 +1402,12 @@ impl Infer {
                             );
                         }
                     }
-                    let (_, _, c) = self.infer(&cxt, Decl::Def {
+                    let (_, _, c) = self.infer_after_prefix(&cxt, Decl::Def {
                         name: trait_name.to_span().map(|_| typ_name.clone()),
                         params,
                         ret_type: trait_params.into_iter()
                             .fold(Raw::App(
-                                Raw::Var(trait_name).into(),
+                                Raw::Var(empty_span(trait_full)).into(),
                                 name.into(),
                                 Either::Icit(Icit::Impl)
                             ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl))),
@@ -1390,12 +1418,28 @@ impl Infer {
                 Ok((DeclTm::TraitImpl {}, Val::U(0).into(), cxt.clone()))
             },
             Decl::TraitDecl { name, mut params, supertraits, methods, assoc_defaults } => {
+                // X3: resolve supertrait names through the file's namespace
+                // prefix — a supertrait declared in the same `package mylib`
+                // registers as `mylib.A` while `trait B: A` writes the bare `A`.
+                // Prelude traits keep their bare name (already registered).
+                let resolved_supertraits: Vec<Span<SmolStr>> = supertraits.iter().map(|s| {
+                    let bare = s.data.clone();
+                    let resolved = if self.trait_definition.contains_key(&bare) {
+                        bare
+                    } else if let Some(ref prefix) = cxt.namespace_prefix {
+                        let qualified = SmolStr::new(format!("{}.{}", prefix, bare));
+                        if self.trait_definition.contains_key(&qualified) { qualified } else { bare }
+                    } else {
+                        bare
+                    };
+                    s.clone().map(|_| resolved.clone())
+                }).collect();
                 // Transitive supertrait method resolution with cycle detection.
                 // Cycle detection tracks the current DFS *path* (not the set of
                 // all visited traits) so that diamond inheritance (A: B, C;
                 // B: D; C: D) is not misreported as a cycle.
                 let mut all_methods = methods.clone();
-                let mut stack: Vec<(SmolStr, std::collections::HashSet<SmolStr>)> = supertraits
+                let mut stack: Vec<(SmolStr, std::collections::HashSet<SmolStr>)> = resolved_supertraits
                     .iter()
                     .map(|s| {
                         let mut path = std::collections::HashSet::new();
@@ -1434,14 +1478,18 @@ impl Infer {
                         _ => false,
                     }).collect::<Vec<_>>();
                 self.trait_solver.set_trait_out_params(name.data.clone(), out_param.clone());
-                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), supertraits.clone(), all_methods.clone()));
+                self.trait_definition.insert(name.data.clone(), (param.clone(), out_param.clone(), resolved_supertraits.clone(), all_methods.clone()));
                 self.trait_out_param.insert(name.data.clone(), out_param);
                 // Store associated type defaults
                 for (aname, adefault) in &assoc_defaults {
                     self.assoc_defaults.insert((name.data.clone(), aname.clone()), adefault.clone());
                 }
                 let mut cxt = cxt.clone();
-                let (_, _, c) = self.infer(&cxt, Decl::Enum {
+                // Re-elaborate the trait as its record enum WITHOUT re-applying
+                // the package prefix: the trait name was already prefixed by
+                // `prefix_decl_name` at the `infer` entry, and going through
+                // `infer` again would double-prefix it (`mylib.mylib.HasVal`).
+                let (_, _, c) = self.infer_after_prefix(&cxt, Decl::Enum {
                     is_trait: true,
                     name: name.clone(),
                     params: param,
@@ -1475,32 +1523,74 @@ impl Infer {
             Decl::Import { prefix, names, wildcard } => {
                 let prefix_str = prefix.join(".");
                 let mut cxt = cxt.clone();
+                // G4: reject single-name imports (`import foo`) — a bare name
+                // is not unique and cannot be traced back to a provider file.
+                if prefix.is_empty() && !names.is_empty() {
+                    return Err(Error(empty_span(format!(
+                        "single-name import `{}` is not supported; import a package namespace instead (e.g. `import ns.{}`)",
+                        names.join(", "), names.join(", ")
+                    )), vec![]));
+                }
+                // Collect (alias, full-qualified-key) pairs WITHOUT touching
+                // `cxt.decl` — import aliases are file-local visibility, kept in
+                // `self.import_map` and resolved during variable lookup.
+                let mut aliases: Vec<(SmolStr, SmolStr)> = vec![];
                 if wildcard {
                     let prefix_search = format!("{}.", prefix_str);
-                    let to_insert: Vec<(SmolStr, _)> = cxt.decl.iter()
-                        .filter(|(k, _)| k.starts_with(&prefix_search))
-                        .map(|(k, v)| (SmolStr::new(k.strip_prefix(&prefix_search).unwrap()), v.clone()))
+                    let matched: Vec<SmolStr> = cxt.decl.keys()
+                        .filter(|k| k.starts_with(&prefix_search))
+                        .map(|k| k.clone())
                         .collect();
-                    let decl_map = Rc::make_mut(&mut cxt.decl);
-                    for (stripped, v) in to_insert {
-                        decl_map.insert(stripped, v);
+                    if matched.is_empty() {
+                        return Err(Error(empty_span(format!(
+                            "cannot import '{}': no such namespace in scope", prefix_str
+                        )), vec![]));
                     }
-                    // Also bring the prefix itself if it's a decl
-                    if let Some(v) = decl_map.get(&SmolStr::new(&prefix_str)).cloned() {
+                    for full in matched {
+                        let stripped = SmolStr::new(full.strip_prefix(&prefix_search).unwrap());
+                        aliases.push((stripped, full));
+                    }
+                    // Also bring the prefix itself if it's a decl (`import mylib.Tree`
+                    // where `mylib.Tree` is a type), so `Tree` resolves.
+                    if let Some((k, _)) = cxt.decl.iter().find(|(k, _)| k.as_str() == prefix_str) {
                         let last = prefix.last().unwrap().clone();
-                        decl_map.insert(last, v);
+                        aliases.push((last, k.clone()));
                     }
                 } else {
-                    let decl_map = Rc::make_mut(&mut cxt.decl);
                     for n in names {
-                        let full_name = if prefix.is_empty() {
-                            n.clone()
-                        } else {
-                            SmolStr::new(format!("{}.{}", prefix_str, n))
-                        };
-                        if let Some(v) = decl_map.get(&full_name).cloned() {
-                            decl_map.insert(n, v);
+                        let full_name = SmolStr::new(format!("{}.{}", prefix_str, n));
+                        if !cxt.decl.contains_key(&full_name) {
+                            return Err(Error(empty_span(format!(
+                                "cannot import '{}': not in scope", full_name
+                            )), vec![]));
                         }
+                        aliases.push((n.clone(), full_name.clone()));
+                        // Dotted aliases for the imported member's own members:
+                        // `import mylib.Tree` brings `Tree.mk`, `Tree.leaf`, ...
+                        // so the `.mk` shorthand (`Tree.mk` → Raw::Var("Tree.mk"))
+                        // and qualified member access keep working.
+                        let member_prefix = format!("{}.", full_name);
+                        let members: Vec<SmolStr> = cxt.decl.keys()
+                            .filter(|k| k.starts_with(&member_prefix))
+                            .map(|k| k.clone())
+                            .collect();
+                        for full in members {
+                            let stripped = full.strip_prefix(&member_prefix).unwrap();
+                            aliases.push((SmolStr::new(format!("{}.{}", n, stripped)), full));
+                        }
+                    }
+                }
+                // I1: insert into import_map, rejecting conflicting aliases.
+                for (alias, full) in aliases {
+                    if let Some(existing) = self.import_map.get(&alias) {
+                        if existing != &full {
+                            return Err(Error(empty_span(format!(
+                                "ambiguous import: '{}' refers to both '{}' and '{}'",
+                                alias, existing, full
+                            )), vec![]));
+                        }
+                    } else {
+                        self.import_map.insert(alias, full);
                     }
                 }
                 Ok((DeclTm::Import, Val::U(0).into(), cxt))
@@ -1692,6 +1782,16 @@ impl Infer {
                         Ok((Tm::Decl(name).into(), vty.clone()))
                     },
                     None => {
+                        // Try file-local import aliases (`import mylib.add` makes
+                        // bare `add` resolve to the full decl key `mylib.add`).
+                        // Priority: exact decl (incl. prelude aliases) > import_map
+                        // > namespace_prefix > suffix fallback.
+                        if let Some(full) = self.import_map.get(&name.data) {
+                            if let Some((def, _, _, _, vty, _)) = cxt.decl.get(full) {
+                                self.hover_table.push((t_span, *def, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
+                                return Ok((Tm::Decl(empty_span(full.clone())).into(), vty.clone()));
+                            }
+                        }
                         // Try namespace prefix resolution
                         if let Some(ref prefix) = cxt.namespace_prefix {
                             let qualified = SmolStr::new(format!("{}.{}", prefix, name.data));
@@ -1748,6 +1848,21 @@ impl Infer {
                         if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&qual) {
                             self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
                             return Ok((Tm::Decl(empty_span(qual)).into(), vty.clone()));
+                        }
+                        // Try resolving the first path segment through file-local
+                        // import aliases (`import mylib.Tree` makes `Tree.leaf`
+                        // resolve to `mylib.Tree.leaf`). Additive: only after the
+                        // full path fails as-is, so pattern-side fully-qualified
+                        // constructor paths (built from `Val::Sum` full names) and
+                        // `mylib.Tree.leaf` fully-qualified access are unaffected.
+                        if let Some((head, rest)) = split_first_segment(&qual) {
+                            if let Some(full_head) = self.import_map.get(&head) {
+                                let resolved = SmolStr::new(format!("{}.{}", full_head, rest));
+                                if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&resolved) {
+                                    self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
+                                    return Ok((Tm::Decl(empty_span(resolved)).into(), vty.clone()));
+                                }
+                            }
                         }
                         // If not found, try with namespace prefix (for access inside a package)
                         if let Some(ref prefix) = cxt.namespace_prefix {
@@ -2396,6 +2511,15 @@ fn raw_ctor_name(raw: &Raw) -> Option<SmolStr> {
         Raw::App(head, _, _) => raw_ctor_name(head),
         _ => None,
     }
+}
+
+/// Split a dotted path at its first segment: `"a.b.c"` → Some(("a", "b.c")).
+/// Used to resolve the head of a qualified access through `import_map`
+/// (`Tree.leaf` → `Tree` is an alias for `mylib.Tree`).
+fn split_first_segment(path: &SmolStr) -> Option<(SmolStr, SmolStr)> {
+    let s = path.as_str();
+    let dot = s.find('.')?;
+    Some((SmolStr::new(&s[..dot]), SmolStr::new(&s[dot + 1..])))
 }
 
 /// True when `name` starts with an operator character, i.e. it is an
