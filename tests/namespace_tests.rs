@@ -668,3 +668,146 @@ fn prelude_alias_excludes_instance_methods() {
     assert!(!has_key(&b, "not"),
         "实例方法别名 not（Boolean.not）不得出现为裸名，keys: {:?}", keys);
 }
+
+// I4-regression (similar-pattern probe #1): a file holding an inherent impl
+// with SEVERAL methods on the same type is edited repeatedly (add method, then
+// remove methods).  `file_namespace_regs` records one (type-ptr, name) per
+// entry — all of which share the same type pointer, so the edit-path removal
+// must drop the whole stale batch, and the fresh registrations must dispatch
+// without ambiguity.  A regression like the original bb03dfb bug makes the
+// whole file's write-back skip (Decision 1-a), so `markerN` defs below never
+// register — that is how ambiguity is detected.
+#[test]
+fn editing_inherent_impl_multi_method_stays_resolvable() {
+    let b = backend();
+    let a = Url::parse("file:///a.typort").unwrap();
+
+    let v1 = "struct Foo {\n    h: Nat\n}\n\nimpl Foo {\n    def double: Nat = this.h + this.h\n    def triple: Nat = this.h + this.h + this.h\n}\n\ndef useA(f: Foo): Nat = f.double\ndef useB(f: Foo): Nat = f.triple\n";
+    b.process_file(&a, v1, Some(1));
+    assert!(has_key(&b, "useA") && has_key(&b, "useB"),
+        "初始双方法都应派发，keys: {:?}", global_decl_keys(&b));
+
+    // Edit 1: add a third method to the same type + a marker def.
+    let v2 = "struct Foo {\n    h: Nat\n}\n\nimpl Foo {\n    def double: Nat = this.h + this.h\n    def triple: Nat = this.h + this.h + this.h\n    def quad: Nat = this.h + this.h + this.h + this.h\n}\n\ndef useA(f: Foo): Nat = f.double\ndef useB(f: Foo): Nat = f.triple\ndef useC(f: Foo): Nat = f.quad\ndef marker2: Nat = zero\n";
+    b.process_file(&a, v2, Some(2));
+    assert!(has_key(&b, "marker2") && has_key(&b, "useA") && has_key(&b, "useB") && has_key(&b, "useC"),
+        "编辑1后全部方法应可派发、marker2 应注册（若新旧 namespace 条目并存则 x.method 报 ambiguous，整文件写回跳过），keys: {:?}",
+        global_decl_keys(&b));
+
+    // Edit 2: drop double/triple (and their uses), keep quad.  The stale
+    // entries for the removed methods must not linger in cxt.namespace.
+    let v3 = "struct Foo {\n    h: Nat\n}\n\nimpl Foo {\n    def quad: Nat = this.h + this.h + this.h + this.h\n}\n\ndef useC(f: Foo): Nat = f.quad\ndef marker3: Nat = zero\n";
+    b.process_file(&a, v3, Some(3));
+    assert!(has_key(&b, "marker3") && has_key(&b, "useC"),
+        "编辑2后 quad 应可派发、marker3 应注册，keys: {:?}", global_decl_keys(&b));
+    assert!(!has_key(&b, "useA") && !has_key(&b, "useB"),
+        "编辑2后 double/triple 的方法 def 已移除，useA/useB 不应残留，keys: {:?}",
+        global_decl_keys(&b));
+
+    // Edit 3: restore double — a later edit must still rebuild cleanly.
+    let v4 = "struct Foo {\n    h: Nat\n}\n\nimpl Foo {\n    def double: Nat = this.h + this.h\n    def quad: Nat = this.h + this.h + this.h + this.h\n}\n\ndef useA(f: Foo): Nat = f.double\ndef useC(f: Foo): Nat = f.quad\ndef marker4: Nat = zero\n";
+    b.process_file(&a, v4, Some(4));
+    assert!(has_key(&b, "marker4") && has_key(&b, "useA") && has_key(&b, "useC"),
+        "编辑3（恢复 double）后仍应全部派发、marker4 应注册，keys: {:?}",
+        global_decl_keys(&b));
+}
+
+// G6-regression (similar-pattern probe #2): the per-file visible-namespace set
+// (`cxt.namespaces`) and the per-file `import_map` both start as fresh clones
+// from global state on EVERY elaboration.  Editing a file so that it REMOVES an
+// `import` must therefore take the imported namespace's bare members back out
+// of scope immediately — no residue from the previous version.
+#[test]
+fn editing_away_import_scopes_bare_name_back_out() {
+    let b = backend();
+    let a = Url::parse("file:///a.typort").unwrap();
+    let c = Url::parse("file:///c.typort").unwrap();
+
+    b.process_file(
+        &a,
+        "package mylib\n\ndef foo(x: Nat): Nat = succ x\n",
+        Some(1),
+    );
+    // v1: import present → bare `foo` resolves.
+    let v1 = "import mylib._\n\ndef usesFoo: Nat = foo zero\n";
+    b.process_file(&c, v1, Some(1));
+    assert!(has_key(&b, "usesFoo"),
+        "v1（含 import）裸 foo 应可解析，keys: {:?}", global_decl_keys(&b));
+
+    // v2: import removed → `usesFoo` must now fail (G6 scoping); the fresh
+    // marker def proves the whole-file write-back was skipped by the error.
+    let v2 = "def usesFoo: Nat = foo zero\ndef marker2: Nat = zero\n";
+    b.process_file(&c, v2, Some(2));
+    assert!(!has_key(&b, "marker2"),
+        "v2（无 import）裸 foo 应 not in scope（旧可见集/import_map 不得残留），marker2 不应注册，keys: {:?}",
+        global_decl_keys(&b));
+
+    // v3: import re-added → resolves again.
+    let v3 = "import mylib._\n\ndef usesFoo: Nat = foo zero\ndef marker3: Nat = zero\n";
+    b.process_file(&c, v3, Some(3));
+    assert!(has_key(&b, "marker3") && has_key(&b, "usesFoo"),
+        "v3（重新 import）裸 foo 应恢复解析、marker3 应注册，keys: {:?}",
+        global_decl_keys(&b));
+}
+
+// G6/D4 probe (similar-pattern probe #2b): the visible-namespace set on the
+// GLOBAL cxt must stay empty regardless of how many files declare `package`
+// or `import` and are edited — `Rc::make_mut` on the per-file clone must
+// clone-on-write (the global lock is held throughout elaborate, so the Rc
+// strong count is ≥ 2 and the global Rc is never mutated in place).  If some
+// edit path ever mutated the global set, stale namespaces would linger and
+// re-scope the suffix fallback for unrelated files.
+#[test]
+fn global_visible_namespaces_never_accumulate() {
+    let b = backend();
+    let a = Url::parse("file:///a.typort").unwrap();
+    let c = Url::parse("file:///c.typort").unwrap();
+
+    let assert_global_ns_empty = |b: &Arc<Backend<CliClient>>, msg: &str| {
+        let ns = b.get_cxt().lock().unwrap().namespaces.len();
+        assert_eq!(ns, 0, "{}: 全局 cxt.namespaces 应始终为空（per-file 可见集经 make_mut 克隆写），实际 len={}", msg, ns);
+    };
+
+    b.process_file(&a, "package mylib\n\ndef foo(x: Nat): Nat = succ x\n", Some(1));
+    assert_global_ns_empty(&b, "A 声明 package 后");
+
+    b.process_file(&c, "import mylib._\n\ndef usesFoo: Nat = foo zero\n", Some(1));
+    assert_global_ns_empty(&b, "C import 后");
+
+    // Re-edit both several times; the visible set must stay out of the global.
+    b.process_file(&a, "package mylib\n\ndef foo(x: Nat): Nat = succ x\ndef bar: Nat = zero\n", Some(2));
+    b.process_file(&c, "import mylib._\n\ndef usesFoo: Nat = foo zero\ndef usesBar: Nat = bar\n", Some(2));
+    assert_global_ns_empty(&b, "多轮编辑后");
+}
+
+// I4-regression (similar-pattern probe #3): closing the file that PROVIDES an
+// inherent impl must remove its namespace entries from the global
+// (`file_namespace_regs` removal in remove_file) so the dependent's `x.method`
+// stops resolving; re-opening it must re-sync and bring the dispatch back.
+#[test]
+fn closing_and_reopening_inherent_provider_keeps_dispatch() {
+    let b = backend();
+    let a = Url::parse("file:///a.typort").unwrap();
+    let bf = Url::parse("file:///b.typort").unwrap();
+
+    let a_text = "package mylib\n\nstruct Foo {\n    h: Nat\n}\n\nimpl Foo {\n    def double: Nat = this.h + this.h\n}\n";
+    b.process_file(&a, a_text, Some(1));
+    b.process_file(&bf, "import mylib._\n\ndef use(f: Foo): Nat = f.double\ndef marker: Nat = zero\n", Some(1));
+    assert!(has_key(&b, "mylib.Foo") && has_key(&b, "use"),
+        "跨文件 f.double 初始应可派发，keys: {:?}", global_decl_keys(&b));
+
+    // Close A: its namespace entries are dropped → B's dispatch breaks; the
+    // fresh marker in B proves B now errors (whole-file write-back skipped).
+    b.remove_file(&a);
+    b.process_file(&bf, "import mylib._\n\ndef use(f: Foo): Nat = f.double\ndef markerClosed: Nat = zero\n", Some(2));
+    assert!(!has_key(&b, "markerClosed"),
+        "关闭 provider 后 B 的 f.double 应断（namespace 条目已移除），markerClosed 不应注册，keys: {:?}",
+        global_decl_keys(&b));
+
+    // Re-open A: B is a dependent and must be rebuilt; dispatch works again.
+    b.process_file(&a, a_text, Some(1));
+    b.process_file(&bf, "import mylib._\n\ndef use(f: Foo): Nat = f.double\ndef markerReopened: Nat = zero\n", Some(3));
+    assert!(has_key(&b, "markerReopened") && has_key(&b, "use"),
+        "重开 provider 后 B 的 f.double 应恢复派发、markerReopened 应注册，keys: {:?}",
+        global_decl_keys(&b));
+}
