@@ -508,20 +508,16 @@ fn imported_type_in_type_position() {
         global_decl_keys(&b));
 }
 
-// L1: an ambiguous bare name should offer an import fix per candidate
-// (`add import liba.foo` / `add import libb.foo`) via the quick-fix table.
+// L1: a bare name that is not in scope but matches a unique `TypeName.name`
+// in the global decl offers an import fix (`add import liba.foo`).  Reachable
+// thanks to G6 (the fallback no longer resolves namespace-level bare names).
 #[test]
-fn ambiguous_name_offers_import_fixes() {
+fn not_in_scope_name_offers_import_fix() {
     let b = backend();
 
     b.process_file(
         &Url::parse("file:///a.typort").unwrap(),
         "package liba\n\ndef foo(x: Nat): Nat = succ x\n",
-        Some(1),
-    );
-    b.process_file(
-        &Url::parse("file:///c.typort").unwrap(),
-        "package libb\n\ndef foo(x: Nat): Nat = succ x\n",
         Some(1),
     );
     b.process_file(
@@ -535,8 +531,6 @@ fn ambiguous_name_offers_import_fixes() {
         .unwrap_or_default();
     assert!(fixes.iter().any(|f| f.contains("liba.foo")),
         "应建议 import liba.foo，fixes: {:?}", fixes);
-    assert!(fixes.iter().any(|f| f.contains("libb.foo")),
-        "应建议 import libb.foo，fixes: {:?}", fixes);
 }
 
 // L5: hovering an intermediate segment of a qualified access (`mylib.Tree.mk`)
@@ -566,6 +560,40 @@ fn qualified_access_hovers_intermediate_segments() {
         .unwrap_or_default();
     assert!(segments.iter().any(|s| s == "Tree"),
         "应 hover 中间段 Tree（类型），segments: {:?}", segments);
+}
+
+// G6: the suffix fallback must NOT resolve namespace-level bare names
+// (`foo` → `mylib.foo`) in a file that never imported/declared `mylib`.
+// The fallback only matches first-level type heads (`TypeName.name` where
+// `TypeName` is itself a decl key, e.g. `Expr.mux`).
+#[test]
+fn non_importing_file_does_not_leak_via_fallback() {
+    let b = backend();
+
+    b.process_file(
+        &Url::parse("file:///a.typort").unwrap(),
+        "package mylib\n\ndef foo(x: Nat): Nat = succ x\n",
+        Some(1),
+    );
+    // C does NOT import mylib — `foo` must be not-in-scope.
+    b.process_file(
+        &Url::parse("file:///c.typort").unwrap(),
+        "def usesFoo: Nat = foo zero\n",
+        Some(1),
+    );
+    assert!(!has_key(&b, "usesFoo"),
+        "G6: 不 import 的文件 C 不应经 fallback 解析 mylib.foo，usesFoo 不应编译，keys: {:?}",
+        global_decl_keys(&b));
+
+    // After importing mylib._ it resolves via import_map.
+    b.process_file(
+        &Url::parse("file:///c.typort").unwrap(),
+        "import mylib._\n\ndef usesFoo: Nat = foo zero\n",
+        Some(2),
+    );
+    assert!(has_key(&b, "usesFoo"),
+        "import mylib._ 后 foo 应可解析，keys: {:?}",
+        global_decl_keys(&b));
 }
 
 // G7: the LSP backend's prelude auto-import must exclude namespace-registered

@@ -57,7 +57,7 @@
 | G1b | **体内裸名**：真实符号体内引用别名的 Tm 是裸名 `Tm::Decl("foo")`（elaboration.rs:1692）——别名从全局移除后 Tm 级名字悬空 | `elaboration.rs:1689-1692` |
 | I1 | import 别名静默覆盖：`import a._` + `import b._` 同出 `add` 时后者覆盖，无冲突报错 | `elaboration.rs:1480-1505` |
 | I2 | import 不存在的 namespace/名字 = 静默 no-op，无诊断 | `elaboration.rs:1475` |
-| G6 | **后缀 fallback 是第二条泄漏通道**：`.name` fallback（elaboration.rs:1714-1732）作用全局 decl——不 import 的文件 C 裸写 `foo` 只要全局有唯一 `mylib.foo` 即被解析。fallback 服务构造子 bare-name——**pattern 头与普通表达式都依赖**（`class_tests.rs:551` `def t: Foo = bar`），不能删、不能只限"构造子上下文"；import 别名不依赖 fallback。**与 import_map 非完全解耦**：`import mylib.Tree` 后无带点别名时 `Tree.mk`/限定构造子靠 fallback 兜底，Phase 3 可见集必须计入 imported alias 的 member | `elaboration.rs:1714-1732` |
+| G6 | **后缀 fallback 限域 → 已实现**：`.name` fallback 只匹配"首段是 decl key 或可见命名空间"的候选（`Expr.mux`→`Expr`、`Add.Add.mk`→`Add`；`mylib.foo` 首段 `mylib` 非 decl key 且未 import 则排除）——不 import 的文件裸写 `foo` 不再经全局 fallback 解析。可见命名空间由 **`cxt.namespaces` 死字段**承载（Decl::Package/Import 记录，D4 顺带解决）。测试 `non_importing_file_does_not_leak_via_fallback`；L1 的 not-in-scope import 建议路径随之可达 | `elaboration.rs:1714-1732` |
 | S2 | 通配 import 插入带点别名（`Tree.leaf`），与显式限定访问混叠。**评审④转正为必需**：`Tree.mk` 特例（elaboration.rs:1738-1742）走精确查表不走 Raw::Obj 分支，import_map 至少存 `X.mk` 档带点别名，否则 `import mylib.Tree` 后 `Tree.mk` 断 | `elaboration.rs:1481-1482` |
 
 ### 根因 B 明细（依赖图形状）

@@ -1518,11 +1518,19 @@ impl Infer {
                 let pkg_path = path.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join(".");
                 let mut cxt = cxt.clone();
                 cxt.namespace_prefix = Some(SmolStr::new(&pkg_path));
+                // G6: record the declared package as a visible namespace for
+                // the suffix-fallback scoping.
+                Rc::make_mut(&mut cxt.namespaces).insert(SmolStr::new(&pkg_path));
                 Ok((DeclTm::Package, Val::U(0).into(), cxt))
             },
             Decl::Import { prefix, names, wildcard } => {
                 let prefix_str = prefix.join(".");
                 let mut cxt = cxt.clone();
+                // G6: record the imported namespace as visible for the
+                // suffix-fallback scoping (imports also resolve via import_map).
+                if !prefix_str.is_empty() {
+                    Rc::make_mut(&mut cxt.namespaces).insert(SmolStr::new(&prefix_str));
+                }
                 // G4: reject single-name imports (`import foo`) — a bare name
                 // is not unique and cannot be traced back to a provider file.
                 if prefix.is_empty() && !names.is_empty() {
@@ -1848,6 +1856,24 @@ impl Infer {
                             .collect();
                         let matches: Vec<(SmolStr, _)> = cxt.decl.iter()
                             .filter(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
+                            .filter(|(k, _)| {
+                                // G6: the candidate's head must hang off a
+                                // first-level type/namespace that is itself a
+                                // decl key (`Expr.mux` → `Expr`, `Add.Add.mk` →
+                                // `Add`) or a namespace this file can see
+                                // (declared `package mylib` / imported) —
+                                // `mylib.foo` must be imported to resolve by
+                                // bare name, never via the global fallback.
+                                match k.rfind('.') {
+                                    Some(dot) => {
+                                        let head = &k[..dot];
+                                        let first = head.split('.').next().unwrap_or(head);
+                                        cxt.decl.contains_key(first)
+                                            || cxt.namespaces.contains(first)
+                                    }
+                                    None => false,
+                                }
+                            })
                             .filter(|(k, _)| !ns_method_keys.contains(*k))
                             .map(|(k, v)| (k.clone(), v.clone()))
                             .collect();
