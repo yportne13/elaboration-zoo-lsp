@@ -684,6 +684,41 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         items
     }
 
+    /// L4: cross-file references.  The cursor is on a definition; find every
+    /// open file's use of that definition.  Def-span identity is compared by
+    /// path_id + offsets (`Span<()>` PartialEq only compares the payload).
+    fn cross_file_references(&self, uri: &Url, offset: usize) -> Option<Vec<Location>> {
+        let uri = normalize_builtin_uri(uri);
+        let semantic = self.hover_table.get(uri.as_str())?;
+        let targets: Vec<(u32, u32, u32)> = semantic.hover_table.iter()
+            .filter(|x| x.1.contains(offset))
+            .map(|x| (x.1.path_id, x.1.start_offset, x.1.end_offset))
+            .collect();
+        if targets.is_empty() {
+            return Some(vec![]);
+        }
+        let mut ret: Vec<Location> = Vec::new();
+        for entry in self.hover_table.iter() {
+            let file_uri = entry.key().clone();
+            let f_rope = self.document_map.get(&file_uri)?.clone();
+            for x in entry.value().hover_table.iter() {
+                if targets.iter().any(|(pid, so, eo)| {
+                    *pid == x.1.path_id && *so == x.1.start_offset && *eo == x.1.end_offset
+                }) {
+                    if let (Some(sp), Some(ep)) = (
+                        offset_to_position(x.0.start_offset as usize, &f_rope),
+                        offset_to_position(x.0.end_offset as usize, &f_rope),
+                    ) {
+                        if let Ok(u) = Url::parse(&file_uri) {
+                            ret.push(Location::new(u, Range::new(sp, ep)));
+                        }
+                    }
+                }
+            }
+        }
+        Some(ret)
+    }
+
     /// Recompute the dependency records for `uri` from its import/package decls.
     fn update_deps(&self, uri: &str, decls: &[Decl]) {
         // Clear stale records.
@@ -1469,38 +1504,10 @@ impl LanguageServer for Backend<Client> {
 
     fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let reference_list = || -> Option<Vec<Location>> {
-            let uri = params.text_document_position.text_document.uri;
-            let uri = normalize_builtin_uri(&uri);
-            let semantic = self.hover_table.get(uri.as_str())?;
+            let uri = normalize_builtin_uri(&params.text_document_position.text_document.uri);
             let rope = self.document_map.get(uri.as_str())?;
-            let position = params.text_document_position.position;
-            let offset = position_to_offset(position, &rope)?;
-
-            let ret: Vec<Location> = semantic.hover_table
-                .iter()
-                .filter(|x| x.1.contains(offset))
-                .map(|x| x.0)
-                .flat_map(|x| {
-                    let ref_uri = self.document_id.iter()
-                        .find(|e| *e.value() == x.path_id)
-                        .map(|e| Url::parse(e.key()).ok())
-                        .flatten()
-                        .unwrap_or_else(|| uri.clone());
-                    let ref_rope = if ref_uri == uri {
-                        rope.clone()
-                    } else {
-                        self.document_map.get(ref_uri.as_str())?.clone()
-                    };
-                    Some(Location::new(
-                        ref_uri,
-                        Range::new(
-                            offset_to_position(x.start_offset as usize, &ref_rope)?,
-                            offset_to_position(x.end_offset as usize, &ref_rope)?,
-                        )
-                    ))
-                })
-                .collect();
-            Some(ret)
+            let offset = position_to_offset(params.text_document_position.position, &rope)?;
+            self.cross_file_references(&uri, offset)
         }();
         Ok(reference_list)
     }
@@ -2233,5 +2240,34 @@ mod namespace_l2_tests {
         let items = b.import_context_completions(&rope, text.len(), text);
         let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
         assert_eq!(labels, vec!["foo".to_string()], "typed 前缀应过滤出 foo");
+    }
+
+    #[test]
+    fn cross_file_references_find_uses_in_other_files() {
+        let b = Arc::new(Backend::new(CliClient::new()));
+        b.load_prelude_skip_hdl();
+        let a_uri = Url::parse("file:///a.typort").unwrap();
+        let a_text = "package mylib\n\ndef foo(x: Nat): Nat = succ x\n";
+        b.process_file(&a_uri, a_text, Some(1));
+        b.process_file(
+            &Url::parse("file:///b.typort").unwrap(),
+            "import mylib._\n\ndef bar: Nat = foo zero\n",
+            Some(1),
+        );
+        b.process_file(
+            &Url::parse("file:///c.typort").unwrap(),
+            "import mylib._\n\ndef baz: Nat = foo zero\n",
+            Some(1),
+        );
+
+        // Cursor inside A's `foo` definition token.
+        let def_off = a_text.find("foo").unwrap() + 1;
+        let refs = b.cross_file_references(&a_uri, def_off).expect("references");
+        let refs: Vec<String> = refs.iter()
+            .map(|l| l.uri.to_string())
+            .collect();
+        assert!(refs.iter().any(|u| u.contains("a.typort")), "应含定义文件 A，refs: {:?}", refs);
+        assert!(refs.iter().any(|u| u.contains("b.typort")), "应含引用文件 B，refs: {:?}", refs);
+        assert!(refs.iter().any(|u| u.contains("c.typort")), "应含引用文件 C，refs: {:?}", refs);
     }
 }

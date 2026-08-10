@@ -95,7 +95,7 @@
 | L1 | auto-import quick-fix 缺失 → **已实现**：ambiguous bare name 报错时每候选附 `add import <full>` 修复（可达）；not-in-scope 唯一匹配也附（当前被 G6 fallback 泄漏掩盖，G6 落地后生效）。测试 `ambiguous_name_offers_import_fixes`。注：现有 quick-fix 机制只显示文本（show_message），非 text-edit | `elaboration.rs:1731` |
 | L2 | import 上下文补全缺失 → **已实现**：`import mylib.<prefix>` / `import mylib.{ <prefix>` 时按前缀过滤全局 decl 第一层成员；parse 中途也能工作（不走 hover_table）。lib.rs unit 测试 `namespace_l2_tests`（`import_completion_prefix_parses_forms` + `import_context_completion_offers_first_level_members`） | `lib.rs:1376-1456` |
 | L3 | rename 完全未实现（initialize 未声明 rename_provider） | `ls.rs:101` |
-| L4 | references 仅单文件（只搜本文件 hover_table） | `lib.rs:1338` |
+| L4 | references 仅单文件 → **已实现跨文件**：`cross_file_references` 按 def span（path_id+offsets，Span PartialEq 只比 payload 需手动比）遍历所有打开文件的 hover_table 收集引用。lib.rs unit 测试 `cross_file_references_find_uses_in_other_files` | `lib.rs:1338` |
 | L5 | qualified 路径 `a.b.c` 中间段 hover/goto 落到整表达式 | `elaboration.rs:1744-1761` |
 | V2 | **跨文件 `mutable_map` 必然丢失**：与全局共享 Rc 但每文件 `elaborate` 结束 `.clear()`（lib.rs:776）→ 跨文件模块可变状态（ModuleTree 副作用）不可用。探针后定修复 | `lib.rs:776` |
 | V3 | 类型级 import 无测试 → **已补**：`imported_type_in_type_position`（import 的类型在函数参数/返回类型位置可用，走同一 `infer_expr`） | — |
