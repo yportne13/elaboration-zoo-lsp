@@ -1456,6 +1456,22 @@ fn test_examples_hdl_dir() {
             "always @(posedge clk)",     // 计数器时钟块
             "input wire clk",            // 自动时钟端口
         ]),
+        ("15-output-reg.typort", include_str!("../../examples/hdl/15-output-reg.typort"), &[
+            "output reg [7:0] count",    // UInt output reg 端口（端口区 + init）
+            "output reg flag",           // Bool output reg 端口
+            "count <= 0;",               // init 异步复位初值
+            "count <= next;",            // when 内时钟驱动
+            "flag <= !flag;",            // Bool 时钟驱动
+            "output reg signed [7:0] s", // SInt output reg 端口
+            "output reg [7:0] b",        // Bits output reg 端口
+            "s <= 0;",                   // SInt init 复位
+            "output reg [7:0] r",        // 体内 output reg（Expr 宏）
+            "r <= 3;",                   // 体内 init 复位
+            "output reg [7:0] v",        // autoUIntOutReg 自动命名
+            "output reg w",              // autoBoolOutReg 自动命名
+            "input wire clk",            // 自动时钟端口
+            "input wire reset",          // 自动复位端口（有 init 时）
+        ]),
     ];
 
     for (file, input, asserts) in examples {

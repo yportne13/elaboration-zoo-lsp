@@ -104,6 +104,38 @@ def autoBoolRegInit[bn: BindingName](initVal: Nat): Bool =
     let e = createSignalExpr(bn.name, createRegWidthInit(bn.name, 1, literal(initVal)));
     Bool.mk(Some(bn.name), e)
 
+def autoUIntOutReg[bn: BindingName](w: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createOutRegWidth(bn.name, w));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsOutReg[bn: BindingName](w: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createOutRegWidth(bn.name, w));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntOutReg[bn: BindingName](w: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntOutRegWidth(bn.name, w));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolOutReg[bn: BindingName]: Bool =
+    let e = createSignalExpr(bn.name, createOutReg(bn.name));
+    Bool.mk(Some(bn.name), e)
+
+def autoUIntOutRegInit[bn: BindingName](w: Nat, initVal: Nat): UInt[w] =
+    let e = createSignalExpr(bn.name, createOutRegWidthInit(bn.name, w, literal(initVal)));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsOutRegInit[bn: BindingName](w: Nat, initVal: Nat): Bits[w] =
+    let e = createSignalExpr(bn.name, createOutRegWidthInit(bn.name, w, literal(initVal)));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntOutRegInit[bn: BindingName](w: Nat, initVal: Nat): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntOutRegWidthInit(bn.name, w, literal(initVal)));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolOutRegInit[bn: BindingName](initVal: Nat): Bool =
+    let e = createSignalExpr(bn.name, createOutRegWidthInit(bn.name, 1, literal(initVal)));
+    Bool.mk(Some(bn.name), e)
+
 // ---- Explicit-name signal creation (internal helpers) ----
 // The `Named` variants build signals with an explicit name string. They are
 // used where the signal's name does NOT come from a let binding: the Bundle
@@ -210,6 +242,38 @@ def newBoolRegInitNatNamed(name: String, initVal: Nat): Bool =
     let e = createSignalExpr(name, createRegWidthInit(name, 1, literal(initVal)));
     Bool.mk(Some(name), e)
 
+def newUIntOutRegNamed(name: String, w: Nat): UInt[w] =
+    let e = createSignalExpr(name, createOutRegWidth(name, w));
+    UInt.mk(Some(name), e)
+
+def newBitsOutRegNamed(name: String, w: Nat): Bits[w] =
+    let e = createSignalExpr(name, createOutRegWidth(name, w));
+    Bits.mk(Some(name), e)
+
+def newSIntOutRegNamed(name: String, w: Nat): SInt[w] =
+    let e = createSignalExpr(name, createSIntOutRegWidth(name, w));
+    SInt.mk(Some(name), e)
+
+def newBoolOutRegNamed(name: String): Bool =
+    let e = createSignalExpr(name, createOutReg(name));
+    Bool.mk(Some(name), e)
+
+def newUIntOutRegInitNatNamed(name: String, w: Nat, initVal: Nat): UInt[w] =
+    let e = createSignalExpr(name, createOutRegWidthInit(name, w, literal(initVal)));
+    UInt.mk(Some(name), e)
+
+def newBitsOutRegInitNatNamed(name: String, w: Nat, initVal: Nat): Bits[w] =
+    let e = createSignalExpr(name, createOutRegWidthInit(name, w, literal(initVal)));
+    Bits.mk(Some(name), e)
+
+def newSIntOutRegInitNatNamed(name: String, w: Nat, initVal: Nat): SInt[w] =
+    let e = createSignalExpr(name, createSIntOutRegWidthInit(name, w, literal(initVal)));
+    SInt.mk(Some(name), e)
+
+def newBoolOutRegInitNatNamed(name: String, initVal: Nat): Bool =
+    let e = createSignalExpr(name, createOutRegWidthInit(name, 1, literal(initVal)));
+    Bool.mk(Some(name), e)
+
 // ---- Auto-named signal creation (BindingName) ----
 // Same semantics as the auto* family above; the legacy new* names now fill
 // the implicit BindingName from the call-site let binding:
@@ -264,6 +328,22 @@ def newBitsRegInitNat[bn: BindingName](w: Nat, initVal: Nat): Bits[w] = newBitsR
 
 def newBoolRegInitNat[bn: BindingName](initVal: Nat): Bool = newBoolRegInitNatNamed(bn.name, initVal)
 
+def newUIntOutReg[bn: BindingName](w: Nat): UInt[w] = newUIntOutRegNamed(bn.name, w)
+
+def newBitsOutReg[bn: BindingName](w: Nat): Bits[w] = newBitsOutRegNamed(bn.name, w)
+
+def newSIntOutReg[bn: BindingName](w: Nat): SInt[w] = newSIntOutRegNamed(bn.name, w)
+
+def newBoolOutReg[bn: BindingName]: Bool = newBoolOutRegNamed(bn.name)
+
+def newUIntOutRegInitNat[bn: BindingName](w: Nat, initVal: Nat): UInt[w] = newUIntOutRegInitNatNamed(bn.name, w, initVal)
+
+def newSIntOutRegInitNat[bn: BindingName](w: Nat, initVal: Nat): SInt[w] = newSIntOutRegInitNatNamed(bn.name, w, initVal)
+
+def newBitsOutRegInitNat[bn: BindingName](w: Nat, initVal: Nat): Bits[w] = newBitsOutRegInitNatNamed(bn.name, w, initVal)
+
+def newBoolOutRegInitNat[bn: BindingName](initVal: Nat): Bool = newBoolOutRegInitNatNamed(bn.name, initVal)
+
 // ---- Port creation helpers (used by the module macro's port list) ----
 // The module macro declares ports in its pattern (`input a = UInt[8]`) and
 // records them via these helpers; the returned Expr is the module's own
@@ -309,6 +389,26 @@ def createBoolPortExpr[bn: BindingName](dir: String): Expr = match str_eq(dir, "
         case false => createSignalExpr(bn.name, createOut(bn.name))
     }
 }
+
+// Create an `output reg` port signal: an output port whose declaration is
+// forced to `output reg` (Verilog) and whose `:=` drives are clocked, with an
+// optional async-reset init value. ty is the stringified type name; UInt and
+// Bits share the createOutRegWidth(Init) variants, SInt the signed ones.
+// Bool ports use the no-width / width-1 init variants (via
+// createOutRegBoolPortExpr below).
+def createOutRegPortExpr[bn: BindingName](ty: String, w: Nat): Expr = match str_eq(ty, "SInt") {
+    case true => createSignalExpr(bn.name, createSIntOutRegWidth(bn.name, w))
+    case false => createSignalExpr(bn.name, createOutRegWidth(bn.name, w))
+}
+
+def createOutRegPortExprInit[bn: BindingName](ty: String, w: Nat, initVal: Nat): Expr = match str_eq(ty, "SInt") {
+    case true => createSignalExpr(bn.name, createSIntOutRegWidthInit(bn.name, w, literal(initVal)))
+    case false => createSignalExpr(bn.name, createOutRegWidthInit(bn.name, w, literal(initVal)))
+}
+
+def createOutRegBoolPortExpr[bn: BindingName]: Expr = createSignalExpr(bn.name, createOutReg(bn.name))
+
+def createOutRegBoolPortExprInit[bn: BindingName](initVal: Nat): Expr = createSignalExpr(bn.name, createOutRegWidthInit(bn.name, 1, literal(initVal)))
 
 // ---- Direction annotation helpers (SpinalHDL style) ----
 // These are for use inside Bundle declarations.

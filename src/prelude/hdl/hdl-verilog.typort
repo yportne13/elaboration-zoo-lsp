@@ -87,12 +87,17 @@ def exprVL_proc(e: Expr): String = match e {
     case createReg(name) => name
     case createRegWidth(name, _) => name
     case createRegWidthInit(name, _, _) => name
+    case createOutReg(name) => name
+    case createOutRegWidth(name, _) => name
+    case createOutRegWidthInit(name, _, _) => name
     case createSIntWidth(name, _) => name
     case createSIntInWidth(name, _) => name
     case createSIntOutWidth(name, _) => name
     case createSIntInOutWidth(name, _) => name
     case createSIntRegWidth(name, _) => name
     case createSIntRegWidthInit(name, _, _) => name
+    case createSIntOutRegWidth(name, _) => name
+    case createSIntOutRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
     case unary(op, x) => op + exprVL_proc(x)
     case binary(lhs, op, rhs) =>
@@ -178,12 +183,17 @@ def exprVL(e: Expr): String = match e {
     case createReg(name) => name
     case createRegWidth(name, _) => name
     case createRegWidthInit(name, _, _) => name
+    case createOutReg(name) => name
+    case createOutRegWidth(name, _) => name
+    case createOutRegWidthInit(name, _, _) => name
     case createSIntWidth(name, _) => name
     case createSIntInWidth(name, _) => name
     case createSIntOutWidth(name, _) => name
     case createSIntInOutWidth(name, _) => name
     case createSIntRegWidth(name, _) => name
     case createSIntRegWidthInit(name, _, _) => name
+    case createSIntOutRegWidth(name, _) => name
+    case createSIntOutRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
     case unary(op, e) => op + exprVL(e)
     case binary(lhs, op, rhs) =>
@@ -272,6 +282,11 @@ def hasPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
         case createSIntInWidth(_, _) => true
         case createSIntOutWidth(_, _) => true
         case createSIntInOutWidth(_, _) => true
+        case createOutReg(_) => true
+        case createOutRegWidth(_, _) => true
+        case createOutRegWidthInit(_, _, _) => true
+        case createSIntOutRegWidth(_, _) => true
+        case createSIntOutRegWidthInit(_, _, _) => true
         case _ => hasPorts tail
     }
 }
@@ -325,6 +340,9 @@ def memsVL[ne: Nat](es: Vec[Expr] ne): String =
     }
 
 // Helper: process a single port expr
+// output-reg ports are ALWAYS emitted `output reg` — no wire/reg inference
+// from the when-driven set (outWireOrReg), so a register output port stays a
+// reg even when its `:=` drive lives outside any non-clocked when.
 def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
     case createIn(name) => lcons ("  input wire " + name) lnil
     case createOut(name) => lcons ("  output " + outWireOrReg(name, whenSigs) + " " + name) lnil
@@ -335,6 +353,11 @@ def portLineSingle(e: Expr, whenSigs: List[String]): List[String] = match e {
     case createSIntInWidth(name, w) => lcons ("  input wire signed " + widthRange(w) + name) lnil
     case createSIntOutWidth(name, w) => lcons ("  output " + outWireOrReg(name, whenSigs) + " signed " + widthRange(w) + name) lnil
     case createSIntInOutWidth(name, w) => lcons ("  inout wire signed " + widthRange(w) + name) lnil
+    case createOutReg(name) => lcons ("  output reg " + name) lnil
+    case createOutRegWidth(name, w) => lcons ("  output reg " + widthRange(w) + name) lnil
+    case createOutRegWidthInit(name, w, _) => lcons ("  output reg " + widthRange(w) + name) lnil
+    case createSIntOutRegWidth(name, w) => lcons ("  output reg signed " + widthRange(w) + name) lnil
+    case createSIntOutRegWidthInit(name, w, _) => lcons ("  output reg signed " + widthRange(w) + name) lnil
     case _ => lnil
 }
 
@@ -361,6 +384,11 @@ def collectPortNames[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createSIntInWidth(name, _) => lcons (name) (collectPortNames tail)
         case createSIntOutWidth(name, _) => lcons (name) (collectPortNames tail)
         case createSIntInOutWidth(name, _) => lcons (name) (collectPortNames tail)
+        case createOutReg(name) => lcons (name) (collectPortNames tail)
+        case createOutRegWidth(name, _) => lcons (name) (collectPortNames tail)
+        case createOutRegWidthInit(name, _, _) => lcons (name) (collectPortNames tail)
+        case createSIntOutRegWidth(name, _) => lcons (name) (collectPortNames tail)
+        case createSIntOutRegWidthInit(name, _, _) => lcons (name) (collectPortNames tail)
         case _ => collectPortNames tail
     }
 }
@@ -426,6 +454,22 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createSIntRegWidth(name, w) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
         case createSIntRegWidthInit(name, w, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
         case _ => collectRegLines tail
+    }
+}
+
+// Does the module declare any output-reg PORT? Such ports are sequential
+// elements (clocked regAssign targets with optional init), so the module
+// header needs the clock (and reset) ports even though no standalone `reg`
+// declaration exists — the `output reg` port line itself declares the reg.
+def hasOutRegPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
+    case nil => false
+    case cons(e, tail) => match e {
+        case createOutReg(_) => true
+        case createOutRegWidth(_, _) => true
+        case createOutRegWidthInit(_, _, _) => true
+        case createSIntOutRegWidth(_, _) => true
+        case createSIntOutRegWidthInit(_, _, _) => true
+        case _ => hasOutRegPorts tail
     }
 }
 
@@ -531,12 +575,17 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
         case createReg(_) => collectAssignLinesFiltered(tail, whenSigs)
         case createRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createOutReg(_) => collectAssignLinesFiltered(tail, whenSigs)
+        case createOutRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createOutRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntInWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntOutWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntInOutWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntOutRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntOutRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case regAssign(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case literal(_) => collectAssignLinesFiltered(tail, whenSigs)
         case when(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
@@ -870,12 +919,20 @@ def moduleDefVL(md: ModuleDef): String =
         case lnil => false
         case _ => true
     };
+    let has_out_regs = hasOutRegPorts md.expr;
     let has_mem = match list_reverse(collectMemLines md.expr) {
         case lnil => false
         case _ => true
     };
+    // Sequential elements (registers, output-reg ports, or memories) need the
+    // clock port; output-reg ports count even though the port line itself
+    // declares the reg (no standalone `reg` declaration is emitted).
+    let has_reg_any = match has_regs {
+        case false => has_out_regs
+        case true => true
+    };
     // Sequential elements (registers or memories) need the clock port.
-    let has_seq = match has_regs {
+    let has_seq = match has_reg_any {
         case false => has_mem
         case true => true
     };
@@ -900,7 +957,7 @@ def moduleDefVL(md: ModuleDef): String =
     };
     let p2 = match has_init {
         case false => p1
-        case true => match has_regs {
+        case true => match has_reg_any {
             case false => match has_ports {
                 case false => "  input wire " + reset_nm
                 case true => port_decls + ",\n  input wire " + reset_nm

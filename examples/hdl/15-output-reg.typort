@@ -1,0 +1,61 @@
+// ============================================================
+// HDL Example 15: output reg 寄存器输出端口
+//
+//   output reg x = UInt[8]            模块端口: output reg [7:0] x
+//   output reg x = UInt[8] init 5     同上 + 异步复位初值 5
+//   output reg s = SInt[8]            output reg signed [7:0] s
+//   output reg b = Bits[8] init 1     Bits 输出寄存器（复位初值 1）
+//   output reg f = Bool               output reg f（1 位无范围）
+//
+// `output reg` = 输出端口 + 寄存器：
+//   - 端口声明强制 `output reg`（不像 `output` 那样按 when 赋值推断
+//     wire/reg —— 不依赖 when 也有 reg 声明，端口自文档化）
+//   - `x := next` 通过 isRegExpr 走 regAssign → always @(posedge clk)
+//   - `init v` → 异步复位块 `if (reset) x <= v;`
+//   - 自动补 clk / reset 输入端口
+// 注意（宏匹配顺序）：`output reg` 端口须声明在普通 typed 端口之前，
+// 普通 typed 端口在 Bool 端口之前；带 init 的端口须独占一行。
+// ============================================================
+
+module counterOut {
+    output reg count = UInt[8] init 0
+    output reg flag = Bool
+    input en = Bool
+    let next = UInt[8]
+    next := count + 1
+    when (en) {
+        count := next
+        flag := !flag
+    }
+}
+println("=== 15a: counterOut (端口区 output reg + init + when 驱动) ===")
+println(moduleTreeVL(counterOut.create.tree))
+
+module signedOut {
+    output reg s = SInt[8] init 0
+    output reg b = Bits[8]
+    let inc = SInt[8]
+    inc := s + 1
+    s := inc
+    b := s.asBits
+}
+println("=== 15b: signedOut (SInt / Bits output reg) ===")
+println(moduleTreeVL(signedOut.create.tree))
+
+module bodyOutReg {
+    input a = UInt[8]
+    output reg r = UInt[8] init 3
+    r := a
+}
+println("=== 15c: bodyOutReg (体内 output reg —— Expr 宏) ===")
+println(moduleTreeVL(bodyOutReg.create.tree))
+
+module autoOutRegDemo {
+    output reg c = UInt[8]
+    let v = autoUIntOutReg(8)
+    let w = autoBoolOutReg
+    c := v
+    w := true
+}
+println("=== 15d: autoOutRegDemo (auto*OutReg 自动命名) ===")
+println(moduleTreeVL(autoOutRegDemo.create.tree))

@@ -109,6 +109,20 @@ macro_rules Expr {
     (reg $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntReg($width);};
     (reg $x:ident = Bool) => {let $x: Bool = newBoolReg;};
 
+    // ---- output reg port declarations ----
+    // `output reg x = T[w]` — an output port forced to `output reg` in
+    // Verilog (with optional `init v` async-reset value). `:=` on it drives
+    // the register (clocked); isRegExpr treats the variant as a reg.
+    (output reg $x:ident = Bits[$width:raw] init $init:raw) => {let $x: Bits[$width] = newBitsOutRegInitNat($width, $init);};
+    (output reg $x:ident = UInt[$width:raw] init $init:raw) => {let $x: UInt[$width] = newUIntOutRegInitNat($width, $init);};
+    (output reg $x:ident = SInt[$width:raw] init $init:raw) => {let $x: SInt[$width] = newSIntOutRegInitNat($width, $init);};
+    (output reg $x:ident = Bool init $init:raw) => {let $x: Bool = newBoolOutRegInitNat($init);};
+
+    (output reg $x:ident = Bits[$width:raw]) => {let $x: Bits[$width] = newBitsOutReg($width);};
+    (output reg $x:ident = UInt[$width:raw]) => {let $x: UInt[$width] = newUIntOutReg($width);};
+    (output reg $x:ident = SInt[$width:raw]) => {let $x: SInt[$width] = newSIntOutReg($width);};
+    (output reg $x:ident = Bool) => {let $x: Bool = newBoolOutReg;};
+
     // ---- sub-module instantiation ----
     // `let u = myAdder.create[8]` needs no special branch: the class
     // constructor's `create` records the instance itself (mkInstanceIfParent
@@ -206,6 +220,15 @@ macro_rules Expr {
 // `input x = T[w]` / `output x = T[w]` / `let x = T[w]` declare MODULE-INTERNAL
 // signals (no port handle), so a parent cannot connect to them via `u.x`.
 //
+// `output reg x = T[w]` (optional `init v`) declares a register output port:
+// the Verilog port line is forced to `output reg` (no wire/reg inference),
+// `:=` drives are clocked (regAssign), and `init v` emits an async-reset
+// value. NOTE (matcher structure): `output reg` ports must be declared BEFORE
+// any regular typed ports, and regular typed ports before Bool ports — the
+// macro's port groups are matched as contiguous runs (same constraint as the
+// existing typed-then-Bool grouping); `init` ports must sit on their own line
+// (the init value is captured as a raw expression up to end-of-line).
+//
 // Each port is declared TWICE in the class body (both collapse into one struct
 // field; the last wins): first as the module's own signal inside the flattened
 // side-effect chain so the body can use `sum := a` with real signals, then
@@ -263,7 +286,7 @@ macro_rules module {
 	// ModuleDef at record time so the Verilog generator can emit the
 	// configured clock/reset edges and names.
 	// Usage: let t = foo.create[myClockDomain].tree
-	($name: ident [$cd: ident] $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
+	($name: ident [$cd: ident] $( $args: params )* $( output reg $rp: ident = $rt: ident [$rw: raw] init $rv: raw )* $( output reg $rp2: ident = $rt2: ident [$rw2: raw] )* $( output reg $rb: ident = Bool init $rbv: raw )* $( output reg $rb2: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name [$cd: ClockDomain] $({$args})* impl Module {
 			// Create side (see the WHY note above): the side-effect chain
 			// FLATTENED into class-body fields — every `let` is a struct
@@ -275,6 +298,10 @@ macro_rules module {
 			let _ = create_global("WhenStack", whenStackEmpty)
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil))
+			$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
+			$( let $rp2: $rt2[$rw2] = $rt2.mk(Some(stringify $rp2), createOutRegPortExpr(stringify $rt2, $rw2)); )*
+			$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExprInit($rbv)); )*
+			$( let $rb2: Bool = Bool.mk(Some(stringify $rb2), createOutRegBoolPortExpr); )*
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
@@ -289,6 +316,10 @@ macro_rules module {
 				let _ = create_global("WhenStack", whenStackEmpty);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
+				$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
+				$( let $rp2: $rt2[$rw2] = $rt2.mk(Some(stringify $rp2), createOutRegPortExpr(stringify $rt2, $rw2)); )*
+				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExprInit($rbv)); )*
+				$( let $rb2: Bool = Bool.mk(Some(stringify $rb2), createOutRegBoolPortExpr); )*
 				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 				$($body)*
@@ -298,7 +329,7 @@ macro_rules module {
 		}
 	};
 	// Without clock domain: uses defaultClockDomain
-	($name: ident $( $args: params )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
+	($name: ident $( $args: params )* $( output reg $rp: ident = $rt: ident [$rw: raw] init $rv: raw )* $( output reg $rp2: ident = $rt2: ident [$rw2: raw] )* $( output reg $rb: ident = Bool init $rbv: raw )* $( output reg $rb2: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db: ident $pb: ident = Bool )* {$( $body: Expr )*}) => {
 		class $name $({$args})* impl Module {
 			// Create side (see the WHY note above): the side-effect chain
 			// FLATTENED into class-body fields — every `let` is a struct
@@ -310,6 +341,10 @@ macro_rules module {
 			let _ = create_global("WhenStack", whenStackEmpty)
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil))
+			$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
+			$( let $rp2: $rt2[$rw2] = $rt2.mk(Some(stringify $rp2), createOutRegPortExpr(stringify $rt2, $rw2)); )*
+			$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExprInit($rbv)); )*
+			$( let $rb2: Bool = Bool.mk(Some(stringify $rb2), createOutRegBoolPortExpr); )*
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
@@ -324,6 +359,10 @@ macro_rules module {
 				let _ = create_global("WhenStack", whenStackEmpty);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
+				$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
+				$( let $rp2: $rt2[$rw2] = $rt2.mk(Some(stringify $rp2), createOutRegPortExpr(stringify $rt2, $rw2)); )*
+				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExprInit($rbv)); )*
+				$( let $rb2: Bool = Bool.mk(Some(stringify $rb2), createOutRegBoolPortExpr); )*
 				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 				$($body)*

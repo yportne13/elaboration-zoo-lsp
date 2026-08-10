@@ -52,6 +52,7 @@
 | API | 状态 | 说明 | 优先级 |
 |---|---|---|---|
 | `reg x = T[w]` / `init` | ✅ | 宏 + `auto*Reg(Init)` + `new*Reg(Init)` | — |
+| output reg 端口 | ✅ | `output reg x = T[w]`（端口区/体内均可，可 `init v`）：Verilog 强制 `output reg`、`:=` 走 regAssign（时钟）、init → 异步复位；`auto*OutReg(Init)` + `new*OutReg(Init)` 全套 | — |
 | RegNext / RegNextWhen | ✅ | 任意 Data 类型泛型（RegNext typeclass） | — |
 | RegInit (函数式) | 🟡 | 只有宏形式 `reg x = T[w] init v`，无 `RegInit(t)` 函数式 API | 可选 |
 | Counter | ❌ | 缺 `counter(w)` / 带使能计数、willOverflow | 必要 |
@@ -65,7 +66,7 @@
 | 特性 | 状态 | 说明 | 优先级 |
 |---|---|---|---|
 | Component/Module | ✅ | `module` 宏 → ModuleDef/ModuleTree；`create` 实例化；子模块 `let u = child.create` + `u.port := sig` 层次连接 | — |
-| in/out 端口 | ✅ | 宏、auto*、createPortExpr、Bundle 方向 | — |
+| in/out 端口 | ✅ | 宏、auto*、createPortExpr、Bundle 方向；`output reg`（寄存器输出端口）见 §4 | — |
 | inout 端口 | ❌ | `inout()` 标记在 derive 中按 input 处理；无 `inout wire` Verilog 代码生成、无 Expr 变体 | 必要 |
 | master/slave | ✅ | `asMaster`/`asSlave` + 端口方向翻转 | — |
 | `:=` | ✅ | Data trait + Bundle derive；自动跳过 input LHS | — |
