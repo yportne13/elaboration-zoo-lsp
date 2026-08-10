@@ -17,6 +17,7 @@ fn probe_timing() {
         ("12-arithmetic2", include_str!("../../examples/hdl/12-arithmetic2.typort")),
         ("13-inout", include_str!("../../examples/hdl/13-inout.typort")),
         ("14-counter", include_str!("../../examples/hdl/14-counter.typort")),
+        ("15-output-reg", include_str!("../../examples/hdl/15-output-reg.typort")),
     ];
     let _ = run_with_prelude("def warm: Nat = 0");
     let mut out = String::new();

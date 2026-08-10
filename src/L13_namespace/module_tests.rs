@@ -429,3 +429,66 @@ println (bar)
     assert!(lines.iter().filter(|l| l.trim() == "5").count() == 2,
         "both foo[1] and bar should print 5, got: {}", output);
 }
+
+// ── output reg ports: forced `output reg` + clocked drive + init reset ──
+
+#[test]
+fn module_output_reg_ports() {
+    // Port-area `output reg x = UInt[8] init 0` must:
+    //   - declare the port `output reg [7:0] x` (no wire/reg inference)
+    //   - drive clocked via `:=` (isRegExpr → regAssign) even inside `when`
+    //   - emit the async-reset init `x <= 0;`
+    //   - add the clk/reset ports automatically (the port line declares the
+    //     reg, so no standalone `reg` line exists)
+    let output = assert_ok(r#"
+module pulseGen {
+    output reg count = UInt[8] init 0
+    output reg flag = Bool
+    input en = Bool
+    when (en) {
+        count := count + 1
+        flag := !flag
+    }
+}
+println(moduleTreeVL(pulseGen.create.tree))
+"#);
+    assert!(output.contains("output reg [7:0] count"), "got: {}", output);
+    assert!(output.contains("output reg flag"), "got: {}", output);
+    assert!(output.contains("count <= 0;"), "init reset value, got: {}", output);
+    assert!(output.contains("count <= (count + 1);"), "clocked when drive, got: {}", output);
+    assert!(output.contains("flag <= !flag;"), "Bool clocked drive, got: {}", output);
+    assert!(output.contains("input wire clk"), "auto clock port, got: {}", output);
+    assert!(output.contains("input wire reset"), "auto reset port, got: {}", output);
+    assert!(output.contains("always @(posedge clk or posedge reset)"), "async reset block, got: {}", output);
+}
+
+#[test]
+fn module_output_reg_body_and_types() {
+    // Body-level `output reg` (Expr macro) and SInt/Bits variants; init on a
+    // Bool output-reg port (width-1 createOutRegWidthInit).
+    let output = assert_ok(r#"
+module mixedOut {
+    input a = UInt[8]
+    output reg s = SInt[8] init 0
+    output reg b = Bits[8]
+    s := a.asSInt
+    b := s.asBits
+}
+module bodyOutReg2 {
+    output reg r = UInt[8] init 3
+    output reg en = Bool init 1
+    r := 7
+    en := true
+}
+println(moduleTreeVL(mixedOut.create.tree))
+println(moduleTreeVL(bodyOutReg2.create.tree))
+"#);
+    assert!(output.contains("output reg signed [7:0] s"), "SInt output reg, got: {}", output);
+    assert!(output.contains("output reg [7:0] b"), "Bits output reg, got: {}", output);
+    assert!(output.contains("s <= 0;"), "SInt init, got: {}", output);
+    assert!(output.contains("output reg [7:0] r"), "body output reg, got: {}", output);
+    assert!(output.contains("r <= 3;"), "body init, got: {}", output);
+    assert!(output.contains("output reg en"), "Bool output reg with init, got: {}", output);
+    assert!(output.contains("en <= 1;"), "Bool init, got: {}", output);
+}
+

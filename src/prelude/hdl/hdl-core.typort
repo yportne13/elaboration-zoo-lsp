@@ -79,12 +79,17 @@ enum Expr {
     createReg(name: String)
     createRegWidth(name: String, width: Nat)
     createRegWidthInit(name: String, width: Nat, initVal: Expr)
+    createOutReg(name: String)
+    createOutRegWidth(name: String, width: Nat)
+    createOutRegWidthInit(name: String, width: Nat, initVal: Expr)
     createSIntWidth(name: String, width: Nat)
     createSIntInWidth(name: String, width: Nat)
     createSIntOutWidth(name: String, width: Nat)
     createSIntInOutWidth(name: String, width: Nat)
     createSIntRegWidth(name: String, width: Nat)
     createSIntRegWidthInit(name: String, width: Nat, initVal: Expr)
+    createSIntOutRegWidth(name: String, width: Nat)
+    createSIntOutRegWidthInit(name: String, width: Nat, initVal: Expr)
     literal(v: Nat)
     unary(op: String, e: Expr)
     binary(lhs: Expr, op: String, rhs: Expr)
@@ -111,12 +116,20 @@ enum Expr {
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
+// output-reg ports (createOutReg/createOutRegWidth/... ) count too: `x := v` on
+// them must produce a clocked regAssign, and the Verilog port line declares
+// them `output reg` (see hdl-verilog.typort).
 def isRegExpr(e: Expr): Boolean = match e {
     case createReg(_) => true
     case createRegWidth(_, _) => true
     case createRegWidthInit(_, _, _) => true
     case createSIntRegWidth(_, _) => true
     case createSIntRegWidthInit(_, _, _) => true
+    case createOutReg(_) => true
+    case createOutRegWidth(_, _) => true
+    case createOutRegWidthInit(_, _, _) => true
+    case createSIntOutRegWidth(_, _) => true
+    case createSIntOutRegWidthInit(_, _, _) => true
     case mux(_, _, _) => false
     case bitsel(e, _) => isRegExpr(e)
     case partsel(e, _, _) => isRegExpr(e)
@@ -285,6 +298,21 @@ def createSignalExpr(name: String, e: Expr): Expr =
         case createRegWidthInit(_, _, _) =>
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
+        case createOutReg(_) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOutRegWidth(_, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createOutRegWidthInit(_, _, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntOutRegWidth(_, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
+        case createSIntOutRegWidthInit(_, _, _) =>
+            let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
+            e
         case createSIntWidth(_, _) =>
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
@@ -369,6 +397,8 @@ def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case cons(e, tail) => match e {
         case createRegWidthInit(_, _, _) => true
         case createSIntRegWidthInit(_, _, _) => true
+        case createOutRegWidthInit(_, _, _) => true
+        case createSIntOutRegWidthInit(_, _, _) => true
         case _ => hasInitRegs tail
     }
 }
@@ -387,6 +417,10 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createRegWidthInit(name, _, initVal) =>
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
         case createSIntRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case createOutRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case createSIntOutRegWidthInit(name, _, initVal) =>
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
         case _ => collectInitLines tail
     }
