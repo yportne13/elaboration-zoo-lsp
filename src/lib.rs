@@ -719,6 +719,38 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         Some(ret)
     }
 
+    /// L3: rename the definition under the cursor (and every cross-file use)
+    /// to `new_name`.  For a qualified use (`mylib.foo`) only the last segment
+    /// is replaced (`mylib.<new>`); bare identifiers are replaced whole.
+    fn rename_at(&self, uri: &Url, offset: usize, new_name: &str) -> Option<WorkspaceEdit> {
+        let locations = self.cross_file_references(uri, offset)?;
+        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        for loc in locations {
+            let text = self.document_map.get(loc.uri.as_str())?;
+            let start = position_to_offset(loc.range.start, &text)?;
+            let end = position_to_offset(loc.range.end, &text)?;
+            let span_text = text.byte_slice(start..end).to_string();
+            let (edit_start, edit_end) = if let Some(dot) = span_text.rfind('.') {
+                (start + dot + 1, end)
+            } else {
+                (start, end)
+            };
+            let te = TextEdit {
+                range: Range::new(
+                    offset_to_position(edit_start, &text)?,
+                    offset_to_position(edit_end, &text)?,
+                ),
+                new_text: new_name.to_string(),
+            };
+            changes.entry(loc.uri.clone()).or_default().push(te);
+        }
+        Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        })
+    }
+
     /// Recompute the dependency records for `uri` from its import/package decls.
     fn update_deps(&self, uri: &str, decls: &[Decl]) {
         // Clear stale records.
@@ -1308,6 +1340,7 @@ impl LanguageServer for Backend<Client> {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -1510,6 +1543,16 @@ impl LanguageServer for Backend<Client> {
             self.cross_file_references(&uri, offset)
         }();
         Ok(reference_list)
+    }
+
+    fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let edit = || -> Option<WorkspaceEdit> {
+            let uri = normalize_builtin_uri(&params.text_document_position.text_document.uri);
+            let rope = self.document_map.get(uri.as_str())?;
+            let offset = position_to_offset(params.text_document_position.position, &rope)?;
+            self.rename_at(&uri, offset, &params.new_name)
+        }();
+        Ok(edit)
     }
 
     fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -2269,5 +2312,45 @@ mod namespace_l2_tests {
         assert!(refs.iter().any(|u| u.contains("a.typort")), "应含定义文件 A，refs: {:?}", refs);
         assert!(refs.iter().any(|u| u.contains("b.typort")), "应含引用文件 B，refs: {:?}", refs);
         assert!(refs.iter().any(|u| u.contains("c.typort")), "应含引用文件 C，refs: {:?}", refs);
+    }
+
+    #[test]
+    fn rename_edits_def_and_all_uses_across_files() {
+        let b = Arc::new(Backend::new(CliClient::new()));
+        b.load_prelude_skip_hdl();
+        let a_uri = Url::parse("file:///a.typort").unwrap();
+        let a_text = "package mylib\n\ndef foo(x: Nat): Nat = succ x\n";
+        b.process_file(&a_uri, a_text, Some(1));
+        b.process_file(
+            &Url::parse("file:///b.typort").unwrap(),
+            "import mylib._\n\ndef bar: Nat = foo zero\n",
+            Some(1),
+        );
+        let c_text = "import mylib._\n\ndef baz: Nat = mylib.foo zero\n";
+        b.process_file(&Url::parse("file:///c.typort").unwrap(), c_text, Some(1));
+
+        let def_off = a_text.find("foo").unwrap() + 1;
+        let edit = b.rename_at(&a_uri, def_off, "barfoo").expect("rename edit");
+
+        let changes = edit.changes.as_ref().expect("changes");
+        assert!(changes.contains_key(&a_uri), "应含定义文件 A");
+        let mut uris: Vec<&Url> = changes.keys().collect();
+        uris.sort_by_key(|u| u.to_string());
+        assert_eq!(uris.len(), 3, "应覆盖 A/B/C 三个文件，uris: {:?}", uris);
+
+        // Every edit must insert the new name.
+        for (u, edits) in changes.iter() {
+            for e in edits {
+                assert_eq!(e.new_text, "barfoo", "uri {} 的编辑应替换为 barfoo", u);
+            }
+        }
+
+        // C's qualified use `mylib.foo` keeps the `mylib.` prefix.
+        let c_uri = Url::parse("file:///c.typort").unwrap();
+        let c_rope = Rope::from_str(c_text);
+        let c_edit = &changes[&c_uri][0];
+        let start = position_to_offset(c_edit.range.start, &c_rope).unwrap();
+        assert_eq!(&c_rope.byte_slice(0..start).to_string(), "import mylib._\n\ndef baz: Nat = mylib.",
+            "qualified use 应保留前缀，只替换最后一段");
     }
 }
