@@ -164,10 +164,26 @@ package mylib.utils
 // 之后的声明会被自动加前缀 mylib.utils
 ```
 
+- `package` 是**绝对路径**（不嵌套叠加）：后续所有声明（def/enum/struct/class/trait/impl 的方法）自动带上完整前缀。
+- `package` 在包内只应出现一次；中途再次 `package x` 会**切换**前缀为 `x`（文件内可声明多个包，符号分别写入全局）。
+
+`import` 三种形态：
+
 ```
-import mylib.{ util1, util2 }    // 选择性导入
-import mylib.*                     // 通配导入
+import mylib.{ util1, util2 }    // 花括号：选择性导入（只带名字本身，不带 namespace/类型前缀）
+import mylib._                   // 通配：导入该命名空间全部成员
+import mylib.util1               // 单名：等同花括号单元素
+import mylib.MyType._            // 子命名空间：导入类型 MyType 的成员（含 `MyType.mk` 等）
 ```
+
+**实际语义（与字面直觉的差异）**：
+
+- **S1 — 单名/花括号只带名字本身**：`import mylib.MyType.member` 只导入 `member`，**不**导入 `MyType`（要导入类型需 `import mylib.MyType` 或 `import mylib.MyType._`）。通配 `import mylib._` 会把 `MyType` 本体也带入。
+- **S3 — 花括号不别名前缀本体**：`import mylib.{x, y}` 只带 `x`、`y`；`mylib` 本身不可用。通配则不同。
+- **D2 — 末段一律当成员**：`import a.b.c` 的 `c` 被当作 `a.b` 的成员；一个字面名为 `c` 的包无法通过该路径导入（需 `import a.b.c._` 或 `package` 引用处显式写全名）。
+- **变量查找顺序**（含 prelude 例外）：`局部变量 → 全局 decl 精确（含 prelude 裸别名）→ import 别名 → namespace_prefix 限定 → 后缀 fallback`。
+- **D1 — prelude 裸别名永久优先**：prelude 自动导入的裸名（`zero`、`succ`、`true` 等）永久占用；`import mylib._` 中与 prelude 同名的成员（如 `mylib.zero`）**裸用时永远解析到 prelude 别名**（除非限定访问 `mylib.zero`）。这是有意的"prelude 例外优先"，无警告。
+- **后缀 fallback 限域**：裸名只能解析到"首段是 decl key 或本文件可见命名空间"的候选（如 `mux` → `Expr.mux`）；`import` 一个命名空间后，其成员经 import 别名解析（不靠 fallback）。
 
 ### 2.7 Derive
 
@@ -427,9 +443,12 @@ a ## b + c        // 解析为 a ## (b + c)
 
 ## 8. 命名空间
 
-- `package` 声明设定当前命名空间前缀，之后的声明自动加前缀
-- `import` 导入其他命名空间的名称
-- 变量查找顺序：`局部变量 → 当前声明 → namespace_prefix 限定 → 后缀匹配 fallback`
+- `package` 声明设定当前命名空间前缀，之后的声明自动加前缀（绝对路径，不叠加；文件内可多次切换）。
+- `import` 导入其他命名空间的名称（见 §2.6 的三种形态与 S1/S3/D2 语义差异）。
+- 变量查找顺序：`局部变量 → 全局 decl 精确（含 prelude 裸别名）→ import 别名 → namespace_prefix 限定 → 后缀 fallback`。
+- 后缀 fallback 限域：仅匹配"首段是 decl key 或本文件可见命名空间"的候选（`Expr.mux`）；命名空间级裸名（`mylib.foo`）必须 `import` 才能解析。
+- **跨文件可见性**：文件分析基于全局符号并集；`import` 使 provider 的符号按依赖图（前缀匹配）重建依赖者。trait/固有方法等注册已随文件同步（见 namespace-completion-plan.md）；trait **实例**跨文件同步未实现（受核心检查器 meta 管理 bug 阻塞）。
+- **D5 — 磁盘文件发现未实现**：`import` 只对已打开的文件生效；未打开但存在于磁盘的文件不会被自动发现（`did_change_watched_files`/workspace folders 为空实现）。需打开 provider 文件或将来实现 workspace 扫描。
 
 ---
 

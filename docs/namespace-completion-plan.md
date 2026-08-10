@@ -7,7 +7,7 @@
 > 评审③：纠正 G8 方向（旧边残留实为保守正确）；提出"20+ 项 ≈ 6 根因"归并；提出 **import_map 替代方案**（import 别名不插 decl、lookup 时解析）为根因 A 首选；重排执行顺序（零纠缠快赢先行、G6 单独立项）
 > 评审④：import_map **代码验真有条件通过**（4/6 成立）——修正优先级矛盾（prelude 例外优先）、S2 带点别名转正为必需（mk 特例 elaboration.rs:1738-1742 走精确查表）、G1a' 升为独立 commit（值快照簿记）、Phase 4 排除 import_map 写回、G6 与 import_map 非完全解耦；确认 per-file clone 即 G6 可见集载体（Phase 3 自述错误，利好）
 > 终审⑤：**裁决 A 可以开工**——import_map 放 Infer 证实正确（Cxt 克隆无收益）、"约 45 行"实测 ~70-80 行、现有测试无一依赖别名进全局、`cargo build` 干净；补 2 个实现注意项（I2 wildcard 时序、类型位置走同一 infer_expr）；阶段 6/7 可移出主线、V2 降级文档化；三步高风险项均有回退策略
-> 实施记录（阶段 0-2 + I3/I4/X3 + L1/L2）：import_map 落地 24/24 测试绿 + 全量回归绿；**G7/G5/G8/G2/G3 已修**；**I4/I3b/X3 已修**；**L1 已实现**（ambiguous import 建议，测试 `ambiguous_name_offers_import_fixes`）；**L2 已实现**（import 上下文补全，lib.rs unit 测试）；**G1a' 实测降级**
+> 实施记录（阶段 0-7 + Phase 4 同文件）：全部完成（I5 除外，见下）。**已修**：import_map（G1/I1/I2/G4）、G2/G3、G5/G8、G6、G7、I4（同文件+跨文件固有派发）、I3b、X3、L1-L5、V3；G1a' 实测降级；S1/S3/D1-D5 P3 文档化（syntax.md）。namespace 25 + lib 310 + cross_file 3 + completion 14 全绿。**I5 跨文件 trait 实例同步未做**（核心检查器未定位的 meta 池缩减 bug，见 I5 行）
 > 范围：`src/L13_namespace/`（语言层）+ `src/lib.rs`（LSP 依赖图/增量重编译）
 > 验证基线：`cargo test --lib L13`、`cargo test --test cross_file_tests`、`cargo test --test completion_tests`
 
@@ -99,13 +99,13 @@
 | L5 | qualified 路径 `a.b.c` 中间段 hover → **已实现**：`push_qualified_hover` 为限定访问的每个前缀段压 hover 条目（`mylib.Tree.mk` 的 `Tree` token 可 hover 出类型）。测试 `qualified_access_hovers_intermediate_segments` | `elaboration.rs:1744-1761` |
 | V2 | **跨文件 `mutable_map` 必然丢失**：与全局共享 Rc 但每文件 `elaborate` 结束 `.clear()`（lib.rs:776）→ 跨文件模块可变状态（ModuleTree 副作用）不可用。探针后定修复 | `lib.rs:776` |
 | V3 | 类型级 import 无测试 → **已补**：`imported_type_in_type_position`（import 的类型在函数参数/返回类型位置可用，走同一 `infer_expr`） | — |
-| S1 | 非通配 import 不带入前缀段（`import mylib.MyType.member` 只插 `member`），与通配不对称 | `elaboration.rs:1494-1504` |
-| S3 | `import mylib.{x,y}` 的 prefix 本体不别名，与通配不一致 | `elaboration.rs:1494-1504` |
-| D1 | prelude 自动别名永久 shadowing：用户包 `mylib.zero` 裸用永远解析到 prelude 别名，无警告 | — |
-| D2 | `import a.b.c` 语法二义：c 一律当成员 | — |
-| D3 | 多文件同 `package`：合并靠写回顺序，半删除状态需定义语义 | — |
-| D4 | `cxt.namespaces`（cxt.rs:103）死字段：仅内存统计读取，从未填充 | — |
-| D5 | 磁盘文件发现：`did_change_watched_files`/workspace folders 空实现——单独立项 | — |
+| S1 | 非通配 import 不带入前缀段（`import mylib.MyType.member` 只插 `member`），与通配不对称 → **已文档化**（syntax.md §2.6，作为实际语义保留） | `elaboration.rs:1494-1504` |
+| S3 | `import mylib.{x,y}` 的 prefix 本体不别名，与通配不一致 → **已文档化**（syntax.md §2.6） | `elaboration.rs:1494-1504` |
+| D1 | prelude 自动别名永久 shadowing：用户包 `mylib.zero` 裸用永远解析到 prelude 别名，无警告 → **已文档化**（syntax.md §2.6，prelude 例外优先是有意设计） | — |
+| D2 | `import a.b.c` 语法二义：c 一律当成员 → **已文档化**（syntax.md §2.6） | — |
+| D3 | 多文件同 `package`：合并靠写回顺序（后写覆盖），半删除状态 → **已文档化**（syntax.md §8 跨文件可见性：当前为"全局符号并集、依赖图重建"语义；多 provider 合并顺序未定义，接受为已知限制） | — |
+| D4 | `cxt.namespaces`（cxt.rs:103）死字段 → **已解决**（G6 fallback 限域复用为"可见命名空间集"，Decl::Package/Import 记录） | — |
+| D5 | 磁盘文件发现：`did_change_watched_files`/workspace folders 空实现 → **已文档化**（syntax.md §8，import 仅对已打开文件生效），单独立项 | — |
 
 > V1（qualified 模式 `case mylib.Ctor(...)`）已改判移除：parse error（pattern 头只接受单 Ident，`parser/mod.rs:1047-1062`；`.` 独立 token `lex.rs:239`）。
 
@@ -199,11 +199,11 @@
 
 - L3 rename（至少声明 provider + 单文件）；L4 references 跨文件；L5 qualified 中间段 hover/goto；V3 类型级 import 测试；S1/S3 形态对齐或文档化。
 
-### 阶段 7【P3】清理与设计项（D1-D4）
+### 阶段 7【P3】清理与设计项（D1-D5）✅ 已完成
 
-- D4：实现为可见 namespace 集（阶段 3 复用）或删除。
-- D1/D2/D3 文档化 + 必要时报诊断。
-- D5 磁盘文件发现：单独立项。
+- **D4**：已解决——`cxt.namespaces` 复用为 G6 的"可见命名空间集"（Decl::Package/Import 记录）。
+- **D1/D2/D3/S1/S3 已文档化**（syntax.md §2.6/§8）：import 形态差异、prelude 例外优先、末段当成员、多文件同 package 的已知限制。
+- **D5 已文档化**（syntax.md §8）：import 仅对已打开文件生效；workspace 扫描单独立项。
 
 ## 5. 验证计划
 
