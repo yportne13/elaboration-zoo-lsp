@@ -1747,6 +1747,37 @@ impl Infer {
         }
         go(tm, &names)
     }
+
+    /// L5: push hover entries for the intermediate prefixes of a qualified
+    /// access (`mylib.Foo.mk` also hovers the type `mylib.Foo` on its `Foo`
+    /// token, and the constructor on `mk`).  Each entry is keyed to that
+    /// segment's own span; prefixes that do not resolve to a decl are skipped.
+    fn push_qualified_hover(&mut self, cxt: &Cxt, x: &Raw) {
+        let mut cur = x;
+        loop {
+            match cur {
+                Raw::Obj(inner, Some(seg)) => {
+                    if let Some(full) = qualified_path_str(inner.as_ref(), &seg.data) {
+                        if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&full) {
+                            self.hover_table.push((
+                                seg.to_span(),
+                                *def_span,
+                                crate::L13_namespace::cxt::HoverCxt {
+                                    lvl: cxt.lvl,
+                                    locals: cxt.locals.clone(),
+                                    decl: cxt.decl.clone(),
+                                },
+                                vty.clone(),
+                            ));
+                        }
+                    }
+                    cur = inner.as_ref();
+                }
+                _ => break,
+            }
+        }
+    }
+
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         /*println!(
             "{} {}",
@@ -1873,6 +1904,10 @@ impl Infer {
                 if !t.data.is_empty() {
                     let full_path = qualified_path_str(x.as_ref(), &t.data);
                     if let Some(qual) = full_path {
+                        // L5: hover entries for the intermediate prefixes of a
+                        // qualified access (`mylib.Foo.mk` also hovers the type
+                        // `mylib.Foo` on its `Foo` token).
+                        self.push_qualified_hover(cxt, x.as_ref());
                         // Try the path as-is first
                         if let Some((def_span, _, _, _, vty, _)) = cxt.decl.get(&qual) {
                             self.hover_table.push((t_span, *def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vty.clone()));
@@ -2550,7 +2585,6 @@ fn split_first_segment(path: &SmolStr) -> Option<(SmolStr, SmolStr)> {
     let dot = s.find('.')?;
     Some((SmolStr::new(&s[..dot]), SmolStr::new(&s[dot + 1..])))
 }
-
 /// True when `name` starts with an operator character, i.e. it is an
 /// operator method (`+`, `<=`, `:=`, ...) rather than an identifier method.
 fn is_operator_method_name(name: &str) -> bool {

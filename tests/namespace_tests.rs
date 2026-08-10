@@ -539,6 +539,35 @@ fn ambiguous_name_offers_import_fixes() {
         "应建议 import libb.foo，fixes: {:?}", fixes);
 }
 
+// L5: hovering an intermediate segment of a qualified access (`mylib.Tree.mk`)
+// should have a hover entry keyed to that segment's span (the `Tree` token),
+// not just the whole-expression entry.
+#[test]
+fn qualified_access_hovers_intermediate_segments() {
+    let b = backend();
+
+    b.process_file(
+        &Url::parse("file:///a.typort").unwrap(),
+        "package mylib\n\nstruct Tree {\n    h: Nat\n}\n",
+        Some(1),
+    );
+    let b_text = "import mylib._\n\ndef t: Tree = mylib.Tree.mk zero\n";
+    b.process_file(&Url::parse("file:///b.typort").unwrap(), b_text, Some(1));
+
+    let rope = ropey::Rope::from_str(b_text);
+    let segments: Vec<String> = b.hover_table.get("file:///b.typort")
+        .map(|infer| {
+            infer.value().hover_table.iter()
+                .map(|(span, _, _, _)| {
+                    rope.byte_slice(span.start_offset as usize..span.end_offset as usize).to_string()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(segments.iter().any(|s| s == "Tree"),
+        "应 hover 中间段 Tree（类型），segments: {:?}", segments);
+}
+
 // G7: the LSP backend's prelude auto-import must exclude namespace-registered
 // instance methods (e.g. `Boolean.not`) from the bare-name aliases — methods
 // are reachable only through `x.method` dispatch or qualified access.  This

@@ -96,7 +96,7 @@
 | L2 | import 上下文补全缺失 → **已实现**：`import mylib.<prefix>` / `import mylib.{ <prefix>` 时按前缀过滤全局 decl 第一层成员；parse 中途也能工作（不走 hover_table）。lib.rs unit 测试 `namespace_l2_tests`（`import_completion_prefix_parses_forms` + `import_context_completion_offers_first_level_members`） | `lib.rs:1376-1456` |
 | L3 | rename 完全未实现 → **已实现**：声明 rename_provider + `rename_at`（复用 L4 引用机制，覆盖定义 + 全部跨文件引用；qualified `mylib.foo` 只替换最后一段）。lib.rs unit 测试 `rename_edits_def_and_all_uses_across_files` | `ls.rs:101` |
 | L4 | references 仅单文件 → **已实现跨文件**：`cross_file_references` 按 def span（path_id+offsets，Span PartialEq 只比 payload 需手动比）遍历所有打开文件的 hover_table 收集引用。lib.rs unit 测试 `cross_file_references_find_uses_in_other_files` | `lib.rs:1338` |
-| L5 | qualified 路径 `a.b.c` 中间段 hover/goto 落到整表达式 | `elaboration.rs:1744-1761` |
+| L5 | qualified 路径 `a.b.c` 中间段 hover → **已实现**：`push_qualified_hover` 为限定访问的每个前缀段压 hover 条目（`mylib.Tree.mk` 的 `Tree` token 可 hover 出类型）。测试 `qualified_access_hovers_intermediate_segments` | `elaboration.rs:1744-1761` |
 | V2 | **跨文件 `mutable_map` 必然丢失**：与全局共享 Rc 但每文件 `elaborate` 结束 `.clear()`（lib.rs:776）→ 跨文件模块可变状态（ModuleTree 副作用）不可用。探针后定修复 | `lib.rs:776` |
 | V3 | 类型级 import 无测试 → **已补**：`imported_type_in_type_position`（import 的类型在函数参数/返回类型位置可用，走同一 `infer_expr`） | — |
 | S1 | 非通配 import 不带入前缀段（`import mylib.MyType.member` 只插 `member`），与通配不对称 | `elaboration.rs:1494-1504` |
