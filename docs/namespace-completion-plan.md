@@ -7,7 +7,7 @@
 > 评审③：纠正 G8 方向（旧边残留实为保守正确）；提出"20+ 项 ≈ 6 根因"归并；提出 **import_map 替代方案**（import 别名不插 decl、lookup 时解析）为根因 A 首选；重排执行顺序（零纠缠快赢先行、G6 单独立项）
 > 评审④：import_map **代码验真有条件通过**（4/6 成立）——修正优先级矛盾（prelude 例外优先）、S2 带点别名转正为必需（mk 特例 elaboration.rs:1738-1742 走精确查表）、G1a' 升为独立 commit（值快照簿记）、Phase 4 排除 import_map 写回、G6 与 import_map 非完全解耦；确认 per-file clone 即 G6 可见集载体（Phase 3 自述错误，利好）
 > 终审⑤：**裁决 A 可以开工**——import_map 放 Infer 证实正确（Cxt 克隆无收益）、"约 45 行"实测 ~70-80 行、现有测试无一依赖别名进全局、`cargo build` 干净；补 2 个实现注意项（I2 wildcard 时序、类型位置走同一 infer_expr）；阶段 6/7 可移出主线、V2 降级文档化；三步高风险项均有回退策略
-> 实施记录（阶段 0-2 + I3/I4/X3 + L2）：import_map 落地 23/23 测试绿 + 全量回归绿；**G7/G5/G8/G2/G3 已修**；**I4/I3b/X3 已修**；**L2 已实现**（import 上下文补全，lib.rs unit 测试 2 个）；**G1a' 实测降级**
+> 实施记录（阶段 0-2 + I3/I4/X3 + L1/L2）：import_map 落地 24/24 测试绿 + 全量回归绿；**G7/G5/G8/G2/G3 已修**；**I4/I3b/X3 已修**；**L1 已实现**（ambiguous import 建议，测试 `ambiguous_name_offers_import_fixes`）；**L2 已实现**（import 上下文补全，lib.rs unit 测试）；**G1a' 实测降级**
 > 范围：`src/L13_namespace/`（语言层）+ `src/lib.rs`（LSP 依赖图/增量重编译）
 > 验证基线：`cargo test --lib L13`、`cargo test --test cross_file_tests`、`cargo test --test completion_tests`
 
@@ -92,7 +92,7 @@
 
 | # | 问题 | 位置 |
 |---|------|------|
-| L1 | auto-import quick-fix 缺失：`name not in scope` 时无"添加 import" | `elaboration.rs:1731` |
+| L1 | auto-import quick-fix 缺失 → **已实现**：ambiguous bare name 报错时每候选附 `add import <full>` 修复（可达）；not-in-scope 唯一匹配也附（当前被 G6 fallback 泄漏掩盖，G6 落地后生效）。测试 `ambiguous_name_offers_import_fixes`。注：现有 quick-fix 机制只显示文本（show_message），非 text-edit | `elaboration.rs:1731` |
 | L2 | import 上下文补全缺失 → **已实现**：`import mylib.<prefix>` / `import mylib.{ <prefix>` 时按前缀过滤全局 decl 第一层成员；parse 中途也能工作（不走 hover_table）。lib.rs unit 测试 `namespace_l2_tests`（`import_completion_prefix_parses_forms` + `import_context_completion_offers_first_level_members`） | `lib.rs:1376-1456` |
 | L3 | rename 完全未实现（initialize 未声明 rename_provider） | `ls.rs:101` |
 | L4 | references 仅单文件（只搜本文件 hover_table） | `lib.rs:1338` |

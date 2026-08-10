@@ -1826,9 +1826,38 @@ impl Infer {
                             return Ok((Tm::Decl(empty_span(full_key.clone())).into(), vty.clone()));
                         } else if matches.len() > 1 {
                             let names = matches.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ");
-                            return Err(Error(name.map(|x| format!("ambiguous name `{}`: could refer to {}", x, names)), vec![]));
+                            // L1: offer an import fix per candidate to disambiguate.
+                            let fixes: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = matches.iter()
+                                .map(|(k, _)| {
+                                    let full = k.clone();
+                                    Box::new(move || Some(format!("add `import {}`", full)))
+                                        as Box<dyn Fn() -> Option<String> + Send + Sync>
+                                })
+                                .collect();
+                            return Err(Error(name.map(|x| format!("ambiguous name `{}`: could refer to {}", x, names)), fixes));
                         }
-                        Err(Error(name.map(|x| format!("error name not in scope: {}", x)), vec![]))
+                        // L1: when a unique `TypeName.name` exists in the global
+                        // decl, suggest an import to bring it into scope (mirrors
+                        // the suffix fallback, excluding instance methods).
+                        let fixes: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = {
+                            let fallback = format!(".{}", name.data);
+                            let ns_method_keys: std::collections::HashSet<SmolStr> = cxt.namespace.iter()
+                                .flat_map(|ns| ns.1.iter().map(move |m| SmolStr::new(format!("{}.{}", ns.2, m))))
+                                .collect();
+                            let matches: Vec<String> = cxt.decl.iter()
+                                .filter(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
+                                .filter(|(k, _)| !ns_method_keys.contains(*k))
+                                .map(|(k, _)| k.to_string())
+                                .collect();
+                            if matches.len() == 1 {
+                                let full = matches.into_iter().next().unwrap();
+                                let fix = move || Some(format!("add `import {}`", full));
+                                vec![Box::new(fix)]
+                            } else {
+                                vec![]
+                            }
+                        };
+                        Err(Error(name.map(|x| format!("error name not in scope: {}", x)), fixes))
                     }
                 },
             },

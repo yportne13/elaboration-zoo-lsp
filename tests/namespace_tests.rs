@@ -508,6 +508,37 @@ fn imported_type_in_type_position() {
         global_decl_keys(&b));
 }
 
+// L1: an ambiguous bare name should offer an import fix per candidate
+// (`add import liba.foo` / `add import libb.foo`) via the quick-fix table.
+#[test]
+fn ambiguous_name_offers_import_fixes() {
+    let b = backend();
+
+    b.process_file(
+        &Url::parse("file:///a.typort").unwrap(),
+        "package liba\n\ndef foo(x: Nat): Nat = succ x\n",
+        Some(1),
+    );
+    b.process_file(
+        &Url::parse("file:///c.typort").unwrap(),
+        "package libb\n\ndef foo(x: Nat): Nat = succ x\n",
+        Some(1),
+    );
+    b.process_file(
+        &Url::parse("file:///b.typort").unwrap(),
+        "def bar: Nat = foo zero\n",
+        Some(1),
+    );
+
+    let fixes: Vec<String> = b.quickfix_map.get("file:///b.typort")
+        .map(|m| m.value().values().flatten().filter_map(|f| f()).collect())
+        .unwrap_or_default();
+    assert!(fixes.iter().any(|f| f.contains("liba.foo")),
+        "应建议 import liba.foo，fixes: {:?}", fixes);
+    assert!(fixes.iter().any(|f| f.contains("libb.foo")),
+        "应建议 import libb.foo，fixes: {:?}", fixes);
+}
+
 // G7: the LSP backend's prelude auto-import must exclude namespace-registered
 // instance methods (e.g. `Boolean.not`) from the bare-name aliases — methods
 // are reachable only through `x.method` dispatch or qualified access.  This
