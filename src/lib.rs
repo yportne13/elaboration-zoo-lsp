@@ -648,6 +648,42 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
     }
 
+    /// L2: completion items for `import <prefix>.<typed>` / `import <prefix>.{ <typed>`.
+    /// Offers the first-level members of the namespace under `<prefix>` that
+    /// start with the typed text.  Reads the global decl (works mid-edit even
+    /// when the current file failed to parse).
+    fn import_context_completions(&self, rope: &Rope, offset: usize, line: &str) -> Vec<CompletionItem> {
+        let Some((prefix, typed)) = import_completion_prefix(line) else {
+            return vec![];
+        };
+        let search = format!("{}.", prefix);
+        let mut items = vec![];
+        let cxt = self.cxt.lock().unwrap();
+        for k in cxt.decl.keys() {
+            let Some(rest) = k.strip_prefix(&search) else { continue };
+            // Only first-level members (`Tree`, `foo` — not `Tree.mk`).
+            if rest.contains('.') || !rest.starts_with(&typed) {
+                continue;
+            }
+            let start = offset.checked_sub(typed.len()).unwrap_or(offset);
+            let (Some(sp), Some(ep)) = (offset_to_position(start, rope), offset_to_position(offset, rope))
+            else { continue };
+            items.push(CompletionItem {
+                label: rest.to_string(),
+                insert_text: Some(rest.to_string()),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: Range::new(sp, ep),
+                    new_text: rest.to_string(),
+                })),
+                kind: Some(CompletionItemKind::FIELD),
+                detail: Some(format!("{}.{}", prefix, rest)),
+                ..Default::default()
+            });
+        }
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        items
+    }
+
     /// Recompute the dependency records for `uri` from its import/package decls.
     fn update_deps(&self, uri: &str, decls: &[Decl]) {
         // Clear stale records.
@@ -1497,55 +1533,63 @@ impl LanguageServer for Backend<Client> {
         let position = params.text_document_position.position;
         let completions = || -> Option<Vec<CompletionItem>> {
             let rope = self.document_map.get(&uri.to_string())?;
-            let infer = self.hover_table.get(&uri.to_string())?;
             // Position -> byte offset, UTF-16 aware (same as hover/definition).
             // The old `try_line_to_char + character` math mixed char and byte
             // offsets, which drifted whenever a non-ASCII character appeared
             // before the cursor.
             let offset = position_to_offset(position, &rope)?;
-            let mut seen = HashSet::new();
-            let items: Vec<CompletionItem> = infer.completion_table
-                .iter()
-                // Member-access entries are keyed to the receiver's span:
-                // `x.<prefix>` for typed names, but only `x` for the empty
-                // `x.` state (the dangling dot is not part of the span).
-                // Match when the cursor is on that span (hover-style), or
-                // exactly at its end (cursor right after the typed member
-                // name), or one byte past it with a `.` in between (cursor
-                // right after the trigger dot).  The old `contains(offset -
-                // 2)` hack covered at most two of these cases and missed
-                // longer typed prefixes.
-                .filter(|(span, _)| {
-                    let end = span.end_offset as usize;
-                    span.contains(offset)
-                        || offset == end
-                        || (offset == end + 1
-                            && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
-                })
-                .filter_map(|(span, name)| {
-                    if !seen.insert(name.clone()) {
-                        return None;
-                    }
-                    // Replace the typed member prefix (`x.<le>` -> `x.<length>`)
-                    // instead of relying on client-side word replacement.
-                    let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
-                    let range = Range::new(
-                        offset_to_position(prefix_start, &rope)?,
-                        offset_to_position(offset, &rope)?,
-                    );
-                    Some(CompletionItem {
-                        label: name.to_string(),
-                        insert_text: Some(name.to_string()),
-                        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                            range,
-                            new_text: name.to_string(),
-                        })),
-                        kind: Some(CompletionItemKind::VARIABLE),
-                        detail: Some(name.to_string()),
-                        ..Default::default()
+            // L2: import-context completion — `import mylib.<prefix>` /
+            // `import mylib.{ <prefix>`.  Runs even when the file is mid-edit
+            // (incomplete import → parse error → hover_table absent).
+            let before = rope.byte_slice(0..offset).to_string();
+            let line = before.rsplit('\n').next().unwrap_or("");
+            let mut items = self.import_context_completions(&rope, offset, line);
+            let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
+            // Member-access completions need a successful analysis.
+            if let Some(infer) = self.hover_table.get(&uri.to_string()) {
+                infer.completion_table
+                    .iter()
+                    // Member-access entries are keyed to the receiver's span:
+                    // `x.<prefix>` for typed names, but only `x` for the empty
+                    // `x.` state (the dangling dot is not part of the span).
+                    // Match when the cursor is on that span (hover-style), or
+                    // exactly at its end (cursor right after the typed member
+                    // name), or one byte past it with a `.` in between (cursor
+                    // right after the trigger dot).  The old `contains(offset -
+                    // 2)` hack covered at most two of these cases and missed
+                    // longer typed prefixes.
+                    .filter(|(span, _)| {
+                        let end = span.end_offset as usize;
+                        span.contains(offset)
+                            || offset == end
+                            || (offset == end + 1
+                                && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
                     })
-                })
-                .collect();
+                    .filter_map(|(span, name)| {
+                        if !seen.insert(name.to_string()) {
+                            return None;
+                        }
+                        // Replace the typed member prefix (`x.<le>` -> `x.<length>`)
+                        // instead of relying on client-side word replacement.
+                        let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
+                        let range = Range::new(
+                            offset_to_position(prefix_start, &rope)?,
+                            offset_to_position(offset, &rope)?,
+                        );
+                        Some(CompletionItem {
+                            label: name.to_string(),
+                            insert_text: Some(name.to_string()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range,
+                                new_text: name.to_string(),
+                            })),
+                            kind: Some(CompletionItemKind::VARIABLE),
+                            detail: Some(name.to_string()),
+                            ..Default::default()
+                        })
+                    })
+                    .for_each(|i| items.push(i));
+            }
             Some(items)
         }();
         Ok(completions.map(CompletionResponse::Array))
@@ -1984,6 +2028,35 @@ pub fn member_prefix_start(rope: &Rope, offset: usize) -> Option<usize> {
     dot.map(|d| d + 1)
 }
 
+/// For a line like `import mylib.<typed>` or `import mylib.{ a, <typed>`,
+/// return the namespace prefix and the typed member prefix.  None when the
+/// cursor is not inside an import statement.
+fn import_completion_prefix(line: &str) -> Option<(String, String)> {
+    let rest = line.trim_start().strip_prefix("import")?.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let last_dot = rest.rfind('.');
+    let last_brace = rest.rfind('{');
+    let sep = match (last_dot, last_brace) {
+        (Some(d), Some(b)) => d.max(b),
+        (Some(d), None) => d,
+        (None, Some(b)) => b,
+        (None, None) => return None,
+    };
+    let prefix = rest[..sep]
+        .trim_end_matches(|c| c == '{' || c == ' ' || c == '\t')
+        .trim_end_matches('.');
+    if prefix.is_empty() {
+        return None;
+    }
+    let mut typed = rest[sep + 1..].trim_start();
+    if let Some(c) = typed.rfind(',') {
+        typed = typed[c + 1..].trim_start();
+    }
+    Some((prefix.to_string(), typed.to_string()))
+}
+
 pub fn cast<R>(req: Request) -> std::result::Result<(RequestId, R::Params), ExtractError<Request>>
 where
     R: lsp_types::request::Request,
@@ -2114,5 +2187,51 @@ fn create_monitored_connection(connection: lsp_server::Connection) -> lsp_server
     lsp_server::Connection {
         sender: monitored_tx,
         receiver: stdin_rx,
+    }
+}
+
+#[cfg(test)]
+mod namespace_l2_tests {
+    use super::*;
+    use crate::client::CliClient;
+
+    #[test]
+    fn import_completion_prefix_parses_forms() {
+        assert_eq!(import_completion_prefix("import mylib."), Some(("mylib".into(), "".into())));
+        assert_eq!(import_completion_prefix("import mylib.fo"), Some(("mylib".into(), "fo".into())));
+        assert_eq!(import_completion_prefix("import mylib.Tree."), Some(("mylib.Tree".into(), "".into())));
+        assert_eq!(import_completion_prefix("import mylib.{ "), Some(("mylib".into(), "".into())));
+        assert_eq!(import_completion_prefix("import mylib.{ a, fo"), Some(("mylib".into(), "fo".into())));
+        assert_eq!(import_completion_prefix("  import mylib.fo"), Some(("mylib".into(), "fo".into())));
+        assert_eq!(import_completion_prefix("import"), None);
+        assert_eq!(import_completion_prefix("import "), None);
+        assert_eq!(import_completion_prefix("def f = 1"), None);
+        assert_eq!(import_completion_prefix(""), None);
+    }
+
+    #[test]
+    fn import_context_completion_offers_first_level_members() {
+        let b = Arc::new(Backend::new(CliClient::new()));
+        b.load_prelude_skip_hdl();
+        b.process_file(
+            &Url::parse("file:///a.typort").unwrap(),
+            "package mylib\n\ndef foo(x: Nat): Nat = succ x\n\nstruct Tree {\n    h: Nat\n}\n",
+            Some(1),
+        );
+        // Cursor right after `import mylib.` → offer all first-level members.
+        let text = "import mylib.";
+        let rope = Rope::from_str(text);
+        let items = b.import_context_completions(&rope, text.len(), text);
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert!(labels.iter().any(|l| l == "foo"), "应建议 foo，labels: {:?}", labels);
+        assert!(labels.iter().any(|l| l == "Tree"), "应建议 Tree，labels: {:?}", labels);
+        assert!(!labels.iter().any(|l| l.contains('.')), "不应建议带点成员，labels: {:?}", labels);
+
+        // Typed prefix filters.
+        let text = "import mylib.fo";
+        let rope = Rope::from_str(text);
+        let items = b.import_context_completions(&rope, text.len(), text);
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert_eq!(labels, vec!["foo".to_string()], "typed 前缀应过滤出 foo");
     }
 }
