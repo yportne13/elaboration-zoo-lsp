@@ -596,6 +596,30 @@ fn non_importing_file_does_not_leak_via_fallback() {
         global_decl_keys(&b));
 }
 
+// I4-cross-file: an inherent impl defined in file A must dispatch in file B
+// that imports A's package — the namespace entry (inherent method registry)
+// is synced into the global cxt.namespace, so B's `f.double` resolves.
+#[test]
+fn cross_file_inherent_method_dispatches() {
+    let b = backend();
+
+    b.process_file(
+        &Url::parse("file:///a.typort").unwrap(),
+        "package mylib\n\nstruct Foo {\n    h: Nat\n}\n\nimpl Foo {\n    def double: Nat = this.h + this.h\n}\n",
+        Some(1),
+    );
+    b.process_file(
+        &Url::parse("file:///b.typort").unwrap(),
+        "import mylib._\n\ndef use(f: Foo): Nat = f.double\n",
+        Some(1),
+    );
+
+    assert!(has_key(&b, "mylib.Foo"), "A 的类型应注册");
+    assert!(has_key(&b, "use"),
+        "跨文件 `f.double` 应可派发（namespace 同步后），keys: {:?}",
+        global_decl_keys(&b));
+}
+
 // G7: the LSP backend's prelude auto-import must exclude namespace-registered
 // instance methods (e.g. `Boolean.not`) from the bare-name aliases — methods
 // are reachable only through `x.method` dispatch or qualified access.  This

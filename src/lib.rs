@@ -84,6 +84,9 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub macro_expansion_map: DashMap<String, Vec<MacroExpansionInfo>>,
     /// uri -> decl keys the file wrote into the global cxt (for incremental rebuild)
     pub file_symbols: DashMap<String, HashSet<String>>,
+    /// uri -> inherent-impl namespace entries (type Arc ptr, type name) the file
+    /// merged into the global cxt.namespace, for removal on close/edit.
+    pub file_namespace_regs: DashMap<String, Vec<(usize, SmolStr)>>,
     /// uri -> namespaces the file imports (its dependencies)
     pub file_deps: DashMap<String, HashSet<String>>,
     /// uri -> the package namespaces the file declares (ALL `package` decls;
@@ -140,6 +143,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             file_macros: DashMap::new(),
             macro_expansion_map: DashMap::new(),
             file_symbols: DashMap::new(),
+            file_namespace_regs: DashMap::new(),
             file_deps: DashMap::new(),
             file_namespaces: DashMap::new(),
             ns_providers: DashMap::new(),
@@ -956,6 +960,35 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 } else {
                     self.file_symbols.insert(uri_str.clone(), new_keys);
                 }
+                // I4-cross-file: sync inherent-impl namespace entries into the
+                // global cxt.namespace so files importing this file's package
+                // can dispatch `x.method`.  This file's previous entries are
+                // dropped first (edits may change the method set), then the
+                // fresh ones are merged (dedup by type-value pointer) and
+                // tracked for removal on close.
+                let old: std::collections::HashSet<usize> = self.file_namespace_regs.get(&uri_str)
+                    .map(|r| r.value().iter().map(|(p, _)| *p).collect())
+                    .unwrap_or_default();
+                let keep: Vec<_> = cxt.namespace.iter()
+                    .filter(|e| !old.contains(&(std::sync::Arc::as_ptr(&e.0) as usize)))
+                    .cloned()
+                    .collect();
+                cxt.namespace = keep.iter().rev()
+                    .fold(crate::list::List::new(), |l, e| l.prepend(e.clone()));
+                let mut regs: Vec<(usize, SmolStr)> = Vec::new();
+                for entry in local_cxt.namespace.iter() {
+                    let already = cxt.namespace.iter()
+                        .any(|e| std::sync::Arc::ptr_eq(&e.0, &entry.0));
+                    if !already {
+                        cxt.namespace = cxt.namespace.prepend(entry.clone());
+                        regs.push((std::sync::Arc::as_ptr(&entry.0) as usize, entry.2.clone()));
+                    }
+                }
+                if regs.is_empty() {
+                    self.file_namespace_regs.remove(&uri_str);
+                } else {
+                    self.file_namespace_regs.insert(uri_str.clone(), regs);
+                }
             }
             let is_builtin = uri.scheme() == "builtin";
             if !is_builtin {
@@ -1118,6 +1151,16 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
             }
             self.file_symbols.remove(&uri_str);
+            // I4-cross-file: drop this file's merged namespace entries.
+            if let Some((_, regs)) = self.file_namespace_regs.remove(&uri_str) {
+                let removed: std::collections::HashSet<usize> = regs.iter().map(|(p, _)| *p).collect();
+                let keep: Vec<_> = cxt.namespace.iter()
+                    .filter(|e| !removed.contains(&(std::sync::Arc::as_ptr(&e.0) as usize)))
+                    .cloned()
+                    .collect();
+                cxt.namespace = keep.iter().rev()
+                    .fold(crate::list::List::new(), |l, e| l.prepend(e.clone()));
+            }
             drop(infer);
             drop(cxt);
         }
