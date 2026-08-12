@@ -1893,6 +1893,10 @@ println(moduleTreeVL(Test.create.tree))
             assert!(!output.contains("wire master_awready;"), "wire decl for a port must be dropped, got: {}", output);
             assert!(!output.contains("wire [15:0] slave_awaddr;"), "wire decl for a port must be dropped, got: {}", output);
             assert!(!output.contains("wire slave_awready;"), "wire decl for a port must be dropped, got: {}", output);
+            // ... including the UNPREFIXED wires the asMaster dispatch used to
+            // leak (receiver `AxiLite.create` with a lost binding name)
+            assert!(!output.contains("wire [15:0] awaddr;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
+            assert!(!output.contains("wire awready;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -1931,6 +1935,9 @@ println(moduleTreeVL(Test.create.tree))
             assert!(output.contains("output wire [7:0] master_data"), "param bundle master out field, got: {}", output);
             assert!(output.contains("input wire [7:0] slave_data"), "param bundle slave in field, got: {}", output);
             assert!(output.contains("input wire slave_valid"), "param bundle slave side of an out field, got: {}", output);
+            // no unprefixed wires from the asMaster dispatch receiver
+            assert!(!output.contains("wire [7:0] data;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
+            assert!(!output.contains("wire valid;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -1996,9 +2003,222 @@ println(moduleTreeVL(Test.create.tree))
             assert!(output.contains("assign master_addr = slave_addr"), "master→slave wiring, got: {}", output);
             assert!(output.contains("assign master_valid = slave_valid"), "master→slave wiring, got: {}", output);
             assert!(output.contains("assign slave_ready = master_ready"), "slave→master wiring, got: {}", output);
+            // no unprefixed wires from the asMaster dispatch receiver
+            assert!(!output.contains("wire [15:0] addr;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
+            assert!(!output.contains("wire valid;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
             // no input-port drive
             assert!(!output.contains("assign master_ready"), "must not drive an input port, got: {}", output);
             assert!(!output.contains("assign slave_addr"), "must not drive an input port, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_connect() {
+    // `<>` — SpinalHDL-style bidirectional connection: `master <> slave`
+    // drives both sides in one statement (same wiring as the two `:=` calls,
+    // no input-port drive). Works for flat, parametric and nested bundles.
+    let input = r#"
+#[derive(Bundle)]
+struct InnerBus {
+    value: UInt[8]
+    strobe: Bool
+}
+
+#[derive(Bundle)]
+struct MyBus {
+    inner: InnerBus
+    ready: Bool
+}
+
+impl IMasterSlave for InnerBus {
+    def asMaster: InnerBus =
+        let _ = out(this.value);
+        let _ = out(this.strobe);
+        this
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.inner);
+        let _ = in(this.ready);
+        this
+}
+
+module Test {
+    let master = MyBus.create.asMaster
+    let slave  = MyBus.create.asSlave
+    master <> slave
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            // both directions driven by the single `<>` (recurse into nested)
+            assert!(output.contains("assign master_value = slave_value"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign master_strobe = slave_strobe"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign slave_ready = master_ready"), "slave→master wiring, got: {}", output);
+            // no input-port drive
+            assert!(!output.contains("assign master_ready"), "must not drive an input port, got: {}", output);
+            assert!(!output.contains("assign slave_value"), "must not drive an input port, got: {}", output);
+            // no leftover wires from the dispatch
+            assert!(!output.contains("wire [7:0] value;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_connect_equiv() {
+    // `master <> slave` must produce byte-identical module bodies to the two
+    // `:=` calls (flat, parametric and nested bundles).
+    let input = r#"
+#[derive(Bundle)]
+struct InnerBus {
+    value: UInt[8]
+    strobe: Bool
+}
+
+#[derive(Bundle)]
+struct OuterBus {
+    inner: InnerBus
+    ready: Bool
+}
+
+#[derive(Bundle)]
+struct MyBus[w: Nat] {
+    data: UInt[w]
+    valid: Bool
+}
+
+impl IMasterSlave for InnerBus {
+    def asMaster: InnerBus =
+        let _ = out(this.value);
+        let _ = in(this.strobe);
+        this
+}
+
+impl IMasterSlave for OuterBus {
+    def asMaster: OuterBus =
+        let _ = out(this.inner);
+        let _ = in(this.ready);
+        this
+}
+
+impl[w: Nat] IMasterSlave for MyBus[w] {
+    def asMaster: MyBus[w] =
+        let _ = out(this.data);
+        let _ = in(this.valid);
+        this
+}
+
+module FlatConn {
+    let master = OuterBus.create.asMaster
+    let slave = OuterBus.create.asSlave
+    master <> slave
+}
+
+module FlatTwoAssigns {
+    let master = OuterBus.create.asMaster
+    let slave = OuterBus.create.asSlave
+    master := slave
+    slave := master
+}
+
+module ParamConn {
+    let master = MyBus.create[8].asMaster
+    let slave = MyBus.create[8].asSlave
+    master <> slave
+}
+
+module ParamTwoAssigns {
+    let master = MyBus.create[8].asMaster
+    let slave = MyBus.create[8].asSlave
+    master := slave
+    slave := master
+}
+
+module NestedConn {
+    let master = OuterBus.create.asMaster
+    let slave = OuterBus.create.asSlave
+    master <> slave
+}
+
+module NestedTwoAssigns {
+    let master = OuterBus.create.asMaster
+    let slave = OuterBus.create.asSlave
+    master := slave
+    slave := master
+}
+
+println(moduleTreeVL(FlatConn.create.tree))
+println(moduleTreeVL(FlatTwoAssigns.create.tree))
+println(moduleTreeVL(ParamConn.create.tree))
+println(moduleTreeVL(ParamTwoAssigns.create.tree))
+println(moduleTreeVL(NestedConn.create.tree))
+println(moduleTreeVL(NestedTwoAssigns.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(out) => {
+            let mut blocks: Vec<String> = Vec::new();
+            let mut cur = String::new();
+            for line in out.lines() {
+                if line.starts_with("module ") && !cur.is_empty() {
+                    blocks.push(std::mem::take(&mut cur));
+                }
+                cur.push_str(line);
+                cur.push('\n');
+            }
+            if !cur.is_empty() { blocks.push(cur); }
+            assert_eq!(blocks.len(), 6, "expected 6 module blocks, got {}: {}", blocks.len(), out);
+            let strip_name = |b: &str| -> String {
+                b.lines().skip(1).collect::<Vec<_>>().join("\n")
+            };
+            for (conn, assigns) in [(0usize, 1usize), (2, 3), (4, 5)] {
+                assert_eq!(
+                    strip_name(&blocks[conn]), strip_name(&blocks[assigns]),
+                    "module pair ({} vs {}): <> != two :=\n--- <>\n{}\n--- :=\n{}",
+                    conn, assigns, blocks[conn], blocks[assigns]
+                );
+            }
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_connect_primitives_inout() {
+    // Primitive `<>` (Data default): drives both sides, reg LHS keeps clocked
+    // assignment, inout/in ports never driven on either side.
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = UInt[8]
+    reg r = UInt[8]
+    a <> b
+    r <> a
+    let c = UInt[8]
+    input p = UInt[8]
+    c <> p
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            // two undirected wires: driven both ways
+            assert!(output.contains("assign a = b;"), "wire-to-wire wiring, got: {}", output);
+            assert!(output.contains("assign b = a;"), "wire-to-wire wiring, got: {}", output);
+            // reg LHS keeps clocked assignment (regAssign), not a continuous assign
+            assert!(output.contains("reg [7:0] r;"), "reg declaration, got: {}", output);
+            assert!(output.contains("r <= a;"), "reg LHS clocked, got: {}", output);
+            assert!(!output.contains("assign r = a"), "reg must not be assign-driven, got: {}", output);
+            // input port on the other side: not driven
+            assert!(!output.contains("assign p = c"), "must not drive an input port, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -2121,7 +2341,9 @@ impl IMasterSlave for MyBus {
 
 #[test]
 fn test_hdl_bundle_manual_impl() {
-    // Verify that a manually-written Bundle + Into impl works.
+    // Verify that a manually-written Bundle + Into impl works. `<>` is
+    // abstract in the trait (a default body cannot dispatch `this := that`
+    // at fill time), so a manual impl must provide it explicitly.
     let input = r#"
 struct MyBus {
     data: UInt[8]
@@ -2133,6 +2355,12 @@ impl Bundle for MyBus {
         let __b0 = this.data := that.data;
         let __b1 = this.valid := that.valid;
         unit
+    def <>(that: MyBus): Unit =
+        let __b0 = this.data := that.data;
+        let __b1 = this.valid := that.valid;
+        let __c0 = that.data := this.data;
+        let __c1 = that.valid := this.valid;
+        unit
 }
 
 module Test {
@@ -2143,6 +2371,7 @@ module Test {
     let bus1 = new MyBus(data1, valid1)
     let bus2 = new MyBus(data2, valid2)
     bus1 := bus2
+    bus2 <> bus1
 }
 
 println(moduleTreeVL(Test.create.tree))
@@ -2151,6 +2380,8 @@ println(moduleTreeVL(Test.create.tree))
         Ok(output) => {
             println!("{}", output);
             assert!(output.contains("endmodule"), "should produce a Verilog module");
+            assert!(output.contains("assign data1 = data2"), ":= wiring, got: {}", output);
+            assert!(output.contains("assign data2 = data1"), "<> wiring (manual impl), got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }

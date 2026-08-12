@@ -58,21 +58,6 @@ trait IMasterSlave {
     def asSlave[bn: BindingName]: Self
 }
 
-// Is an Expr an input/inout port? Used by the derive-generated Bundle := to
-// skip assignments whose LHS is an input port (driving an input is illegal
-// Verilog), so a master/slave pair can be connected with `:=` both ways.
-// Inout ports are treated like inputs here: the module does not drive its
-// own inout pins with a continuous assign (tri-state drive is not modeled).
-def isInputPort(e: Expr): Boolean = match e {
-    case createIn(_) => true
-    case createInWidth(_, _) => true
-    case createSIntInWidth(_, _) => true
-    case createInOut(_) => true
-    case createInOutWidth(_, _) => true
-    case createSIntInOutWidth(_, _) => true
-    case _ => false
-}
-
 // The Bundle trait — analogous to SpinalHDL's Bundle.
 // Any struct that groups multiple signals together can implement
 // this trait to enable bulk assignment (:=) and composition.
@@ -142,8 +127,7 @@ def isInputPort(e: Expr): Boolean = match e {
 //   module Bridge {
 //     let master = AxiLite.create.asMaster   // ports: awaddr… output, awready… input
 //     let slave  = AxiLite.create.asSlave    // ports: awaddr… input, awready… output
-//     master := slave                        // drives the master's outputs (skips inputs)
-//     slave := master                        // drives the slave's outputs (skips inputs)
+//     master <> slave                        // bidirectional (drives both sides, skips inputs)
 //   }
 //
 //   // Parametric bundles:
@@ -152,11 +136,29 @@ def isInputPort(e: Expr): Boolean = match e {
 //
 //   let bus = MyBus.create[8]        // auto-creates with width 8
 //
+// NOTE — call sites: the factories (and `.asMaster` / `.asSlave`) must be
+// called inside a module body or a class field, where the implicit
+// BindingName picks up the caller's let-binding name. Inside a `def` body the
+// binding name is not available (signals get empty names / no ports), and
+// `.asMaster`/`.asSlave` must not be chained on an already-directed bundle
+// (a second direction pass would produce duplicate port declarations).
+//
 // `#[derive(Bundle)]` 的实现在 src/L13_namespace/parser/derive.rs，
 // 此处注释仅为使用文档；修改派生逻辑时请同步两处。
 
 trait Bundle {
     def :=(that: Self): Unit
+    // `<>` — SpinalHDL-style bidirectional connection. The derive generates
+    // it with a two-way body (drive both sides, each through its own `:=`
+    // which skips input-port LHS), so `master <> slave` connects a
+    // master/slave pair in one statement. The method is ABSTRACT here (no
+    // default body): a default that dispatches `this := that` does not
+    // elaborate inside a filled trait default (sibling-method dispatch via
+    // `this` is not supported there), so manual `impl Bundle` blocks must
+    // provide `<>` explicitly — a missing one is a loud impl-time error
+    // instead of a silent no-op. Inout fields are never driven (a module
+    // does not drive its own bidirectional pins).
+    def <>(that: Self): Unit
 }
 
 // ============================================================

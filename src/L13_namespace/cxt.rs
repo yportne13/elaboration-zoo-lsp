@@ -522,6 +522,14 @@ impl Cxt {
         }
     }
 
+    /// Bind a new local definition. The caller's `binding_name` is preserved:
+    /// a let's continuation (or a trait-dispatch wrapper's rest) is still in
+    /// the same binding context, so implicit `BindingName` parameters of
+    /// factories elaborated there keep the caller's let-binding name (e.g.
+    /// the receiver `AxiLite.create` inside an asMaster dispatch must produce
+    /// `master_awaddr`-named wires, not bare `awaddr` ones that escape the
+    /// port-shadowing in hdl-verilog.typort). Module/class body items set
+    /// their own name explicitly via `with_binding_name` before checking.
     pub fn define(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
@@ -537,7 +545,7 @@ impl Cxt {
             namespace_prefix: self.namespace_prefix.clone(),
             namespaces: self.namespaces.clone(),
             update_from: self.update_from,
-            binding_name: None,
+            binding_name: self.binding_name.clone(),
         }
     }
 

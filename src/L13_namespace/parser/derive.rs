@@ -132,42 +132,52 @@ fn build_enum_case(
     (pattern, body)
 }
 
-/// Build a bundle `:=` body: sequences field assignments as nested let-bindings.
+/// Build a bundle bulk-assignment body between `lhs` and `rhs` (normally
+/// `this` and `that`): sequences field assignments as nested let-bindings
+/// ending with `tail` (normally `unit`).
 /// For struct fields [f1: T1, f2: T2, ...], generates:
 ///   let __b0 = this.f1 := that.f1;
 ///   let __b1 = this.f2 := that.f2;
 ///   unit
-/// For primitive fields, the assignment is guarded by an isInputPort check so
-/// that driving an input port (illegal Verilog) is skipped — this lets a
-/// master/slave pair be connected with `:=` in both directions.
-fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+/// For primitive fields, the assignment is guarded by an isInputPort check on
+/// the LHS so that driving an input port (illegal Verilog) is skipped — this
+/// lets a master/slave pair be connected in both directions. The `let` names
+/// are prefixed so two chains can be nested without shadowing (the `<>` body
+/// is the forward chain with the backward chain as its tail).
+fn build_bundle_body_ex(
+    fields: &[(Span<SmolStr>, Raw, Icit)],
+    lhs: &str,
+    rhs: &str,
+    let_prefix: &str,
+    tail: Raw,
+) -> Raw {
     if fields.is_empty() {
-        return Raw::Var(empty_span(SmolStr::new("unit")));
+        return tail;
     }
 
-    let mut result = Raw::Var(empty_span(SmolStr::new("unit")));
+    let mut result = tail;
 
     for (i, (field_name, field_type, _)) in fields.iter().enumerate().rev() {
         let assign = Raw::App(
             Box::new(Raw::Obj(
                 Box::new(Raw::Obj(
-                    Box::new(Raw::Var(empty_span(SmolStr::new("this")))),
+                    Box::new(Raw::Var(empty_span(SmolStr::new(lhs)))),
                     Some(field_name.clone()),
                 )),
                 Some(empty_span(SmolStr::new(":="))),
             )),
             Box::new(Raw::Obj(
-                Box::new(Raw::Var(empty_span(SmolStr::new("that")))),
+                Box::new(Raw::Var(empty_span(SmolStr::new(rhs)))),
                 Some(field_name.clone()),
             )),
             Either::Icit(Icit::Expl),
         );
 
-        // Guard primitive fields with `match isInputPort(this.<f>.zz_expr)`.
+        // Guard primitive fields with `match isInputPort(<lhs>.<f>.zz_expr)`.
         let step = if is_primitive_type(field_type) {
             let lhs_expr = Raw::Obj(
                 Box::new(Raw::Obj(
-                    Box::new(Raw::Var(empty_span(SmolStr::new("this")))),
+                    Box::new(Raw::Var(empty_span(SmolStr::new(lhs)))),
                     Some(field_name.clone()),
                 )),
                 Some(empty_span(SmolStr::new("zz_expr"))),
@@ -192,7 +202,7 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
         };
 
         result = Raw::Let(
-            empty_span(SmolStr::new(format!("__b{}", i))),
+            empty_span(SmolStr::new(format!("__{}{}", let_prefix, i))),
             Box::new(Raw::Hole(empty_span(()))),
             Box::new(step),
             Box::new(result),
@@ -200,6 +210,38 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
     }
 
     result
+}
+
+/// The one-way `:=` bulk-assignment body (this := that).
+fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+    build_bundle_body_ex(
+        fields,
+        "this",
+        "that",
+        "b",
+        Raw::Var(empty_span(SmolStr::new("unit"))),
+    )
+}
+
+/// The `<>` bidirectional body: drive both sides, each through its own
+/// one-way bulk assignment (which skips input-port LHS):
+///   let __b0 = this.f1 := that.f1; ...;
+///   let __c0 = that.f1 := this.f1; ...;
+///   unit
+fn build_connect_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
+    build_bundle_body_ex(
+        fields,
+        "this",
+        "that",
+        "b",
+        build_bundle_body_ex(
+            fields,
+            "that",
+            "this",
+            "c",
+            Raw::Var(empty_span(SmolStr::new("unit"))),
+        ),
+    )
 }
 
 /// Direction mode of a generated signal factory.
@@ -501,24 +543,33 @@ fn derive_bundle(decl: &Decl, bundle_types: &BundleSet) -> Vec<Decl> {
                 .cloned()
                 .collect();
 
-            // ── 1. Bundle trait impl (:= bulk assignment) ──
+            // ── 1. Bundle trait impl (:= bulk assignment + <> connect) ──
+            // `<>` is generated alongside `:=` with the same body rather than
+            // relying on the trait's default method: the default's `:=` method
+            // dispatch leaves the solver with an unsolved meta for parametric
+            // bundles (`MyBus[w]` with `w` bound), while a generated method
+            // elaborates through the normal path (like a user's `a := b`).
             let bundle_body = build_bundle_body(fields);
             let that_param = (
                 empty_span(SmolStr::new("that")),
                 self_ty.clone(),
                 Icit::Expl,
             );
+            let bundle_method = |name: &str, body: Raw| (Decl::Def {
+                name: empty_span(SmolStr::new(name)),
+                params: vec![that_param.clone()],
+                ret_type: Raw::Var(empty_span(SmolStr::new("Unit"))),
+                body,
+            }, false);
             let bundle_impl = Decl::ImplDecl {
                 name: self_ty.clone(),
                 params: impl_params.clone(),
                 trait_name: empty_span(SmolStr::new("Bundle")),
                 trait_params: vec![],
-                methods: vec![(Decl::Def {
-                    name: empty_span(SmolStr::new(":=")),
-                    params: vec![that_param],
-                    ret_type: Raw::Var(empty_span(SmolStr::new("Unit"))),
-                    body: bundle_body,
-                }, false)],
+                methods: vec![
+                    bundle_method(":=", build_bundle_body(fields)),
+                    bundle_method("<>", build_connect_body(fields)),
+                ],
                 inherent: false,
                 from_class: false,
             };

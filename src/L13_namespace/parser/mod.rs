@@ -1472,8 +1472,13 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
             }
         }
     }
-    let (input, body) = (kw(T![=]), p_raw).option().parse(input, state)?;
-    Ok((input, TraitBodyItem::Method { name, params, ret, body: body.map(|(_, v)| v) }))
+    let (input, body) = (
+        kw(T![=]),
+        // Allow newline after `=` before the body, like `def`
+        kw(EndLine).option(),
+        p_raw,
+    ).map(|(_, _, x)| x).option().parse(input, state)?;
+    Ok((input, TraitBodyItem::Method { name, params, ret, body }))
 }
 
 fn p_trait_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {

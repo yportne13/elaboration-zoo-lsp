@@ -70,8 +70,7 @@ println(moduleTreeVL(bundleParam.create.tree))
 module bundleMasterSlave {
     let master = AxiLite.create.asMaster
     let slave = AxiLite.create.asSlave
-    master := slave
-    slave := master
+    master <> slave
 }
 println("=== 10c: bundleMasterSlave (master/slave 方向化端口) ===")
 println(moduleTreeVL(bundleMasterSlave.create.tree))
@@ -119,8 +118,7 @@ impl IMasterSlave for OuterBus {
 module bundleNestedMasterSlave {
     let master = OuterBus.create.asMaster
     let slave  = OuterBus.create.asSlave
-    master := slave
-    slave := master
+    master <> slave
 }
 println("=== 10e: bundleNestedMasterSlave (嵌套方向化) ===")
 println(moduleTreeVL(bundleNestedMasterSlave.create.tree))

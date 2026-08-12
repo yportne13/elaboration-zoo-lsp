@@ -70,7 +70,7 @@
 | inout 端口 | ✅ | `inout wire` 端口（宏、auto*、createPortExpr）；Bundle 的 `inout()` 方向在 `impl IMasterSlave` 的 `asMaster` 里声明，两侧都生成真 inout 端口 | — |
 | master/slave | ✅ | `asMaster`/`asSlave` + 端口方向翻转；嵌套 bundle 字段用 `out/in` 递归子 bundle 的方向（子类型自身实现 IMasterSlave） | — |
 | `:=` | ✅ | Data trait + Bundle derive；自动跳过 input LHS | — |
-| `<>` | ❌ | 无（SpinalHDL 双向连接） | 重要 |
+| `<>` | ✅ | Data + Bundle 双向连接：`master <> slave` 一次驱动两侧（各自跳过 input LHS；inout 不驱动）；Bundle 由 derive 生成，primitive 由 Data trait 默认方法提供 | — |
 | 实例化端口连接 | ✅ | `u.a := sig` → `.a(sig)` 端口映射 | — |
 | BlackBox | 🟡 | 语法占位 stub，无代码生成 | 可选 |
 | Stream/Flow | 🟡 | 有 fire/stage 占位；无 `<>`、无握手机制 | 可选 |
@@ -93,7 +93,7 @@
 3. **Counter**（必要）：`counter(w)` 自增、`counterInc(w, en)` 使能计数、`willOverflow`。
 4. **Vec**（重要）：`HVec`（避开内建 `Vec[A](len)` 名）— fill 工厂（UInt/Bits/SInt/Bool）、静态下标、UInt 动态下标（mux 链）、批量 `:=`。
 5. **assert 断言**（重要）：Expr 变体 + `always @(*)` 中 `$display` 仿真断言 + `def assert(cond, msg)`。
-6. **`<>` 连接**（重要）：Data 各类型 + Bundle derive 生成 `<>`（SpinalHDL 双向连接；本模型下与 `:=` 同语义——驱动本方输出、跳过 input LHS）。
+6. **`<>` 连接**（✅ 2026-08）：Data 各类型 + Bundle 生成 `<>`（SpinalHDL 双向连接；本模型下驱动两侧、各自跳过 input LHS、inout 不驱动）。
 
 ## 8. 未实现（记录在案，二期候选）
 

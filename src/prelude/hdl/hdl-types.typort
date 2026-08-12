@@ -4,9 +4,58 @@
 
 // ---------- Data trait ----------
 
+// Is an Expr an input/inout port? Used by the derive-generated Bundle `:=`
+// (and the Data `<>` default) to skip assignments whose LHS is an input port
+// (driving an input is illegal Verilog), so a master/slave pair can be
+// connected both ways. Inout ports are treated like inputs here: the module
+// does not drive its own inout pins with a continuous assign (tri-state
+// drive is not modeled). Defined before `trait Data` because Data's `<>`
+// default body references it (default bodies elaborate when an impl is
+// filled, i.e. within this same file).
+def isInputPort(e: Expr): Boolean = match e {
+    case createIn(_) => true
+    case createInWidth(_, _) => true
+    case createSIntInWidth(_, _) => true
+    case createInOut(_) => true
+    case createInOutWidth(_, _) => true
+    case createSIntInOutWidth(_, _) => true
+    case _ => false
+}
+
+// Drive `lhs` from `rhs`, respecting register semantics (a reg signal is
+// assigned inside the clocked always block). Shared by the Data `:=` impls
+// and the `<>` default; keep them in sync when changing assignment rules.
+def driveExpr(lhs: Expr, rhs: Expr): Unit =
+    let isReg = isRegExpr(lhs);
+    let assignment = match isReg {
+        case true => regAssign(lhs, rhs)
+        case false => assign(lhs, rhs)
+    };
+    let dummy_expr = createSignalExpr("", assignment);
+    unit
+
 trait Data {
     def :=[T](that: T): Unit where T: Into[Self]
     def expr: Expr
+    // `<>` — SpinalHDL-style bidirectional connection for plain signals:
+    // drives each side, skipping the side that is an input/inout port (the
+    // module never drives its own input or bidirectional pins). Both sides
+    // must have the same type; wiring two undirected wires both ways is
+    // legal Verilog but usually meaningless — use it for direction-complementary
+    // ports (e.g. `output` on one module ↔ `input` on the other).
+    // NOTE: implemented via driveExpr (not `:=`) because a `:=` method-call
+    // dispatch inside a trait default body leaves the where-clause's implicit
+    // solver unsolved; driveExpr keeps the same assignment semantics.
+    def <>(that: Self): Unit =
+        let _ = match isInputPort(this.zz_expr) {
+            case true => unit
+            case false => driveExpr(this.zz_expr, that.zz_expr)
+        };
+        let _ = match isInputPort(that.zz_expr) {
+            case true => unit
+            case false => driveExpr(that.zz_expr, this.zz_expr)
+        };
+        unit
 }
 
 // ============================================================
