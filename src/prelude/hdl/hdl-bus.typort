@@ -6,30 +6,46 @@
 //  Bundle (structured IO) — SpinalHDL-style trait-based Bundle
 // ============================================================
 
-// IO direction tags
-// Used as type-level markers on Bundle fields (see in/out/inout below).
-enum IODirection {
-    In
-    Out
-    InOut
-}
-
-// Type-level direction markers (SpinalHDL style). Wrap a field's type inside
-// a Bundle declaration to mark its direction from the master's point of view:
+// Direction spec functions (SpinalHDL style). Bundle fields carry NO
+// direction markers in the struct; directionality is introduced only when
+// implementing `IMasterSlave` — `def asMaster` declares each field's
+// direction from the master's point of view with `in(...)` / `out(...)` /
+// `inout(...)`:
 //   #[derive(Bundle)]
 //   struct AxiLite {
-//       awaddr:  out(UInt[32])   // driven by the master   → output port on master
-//       awready: in(Bool)        // received by the master → input port on master
+//       awaddr:  UInt[32]   // plain field types — no markers
+//       awready: Bool
 //       …
 //   }
-// The markers are identity functions, so a field's type is unchanged for
-// ordinary use (create_TypeName still creates plain wires); the derive
-// (src/L13_namespace/parser/derive.rs) reads them to generate the asMaster /
-// asSlave direction methods. Unmarked fields default to out on master / in on
-// slave. InOut is treated as in (no inout Expr support).
+//   impl IMasterSlave for AxiLite {
+//       def asMaster: AxiLite =
+//           let _ = out(this.awaddr);   // driven by the master → output port
+//           let _ = in(this.awready);   // received by the master → input port
+//           …
+//           this
+//   }
+// The functions are identities, so they can never change a value at runtime;
+// the parser (src/L13_namespace/parser/derive.rs) reads the asMaster body
+// syntactically to generate the asMaster / asSlave direction methods.
 def in[T](t: T): T = t
 def out[T](t: T): T = t
 def inout[T](t: T): T = t
+
+// IMasterSlave — SpinalHDL-style master/slave directionality.
+// A Bundle implementing this trait gains the direction methods used on
+// `create_TypeName` factories:
+//   let master = create_AxiLite.asMaster   // ports: awaddr… output, awready… input
+//   let slave  = create_AxiLite.asSlave    // ports: awaddr… input, awready… output
+// The user writes ONLY the asMaster direction spec (see in/out/inout above);
+// the derive fills both methods — asSlave is asMaster with every direction
+// flipped (In ↔ Out, InOut stays InOut). The `[bn: BindingName]` implicit
+// parameter picks up the caller's let-binding name, so
+// `let master = create_AxiLite.asMaster` still names its ports
+// "master_awaddr", …
+trait IMasterSlave {
+    def asMaster[bn: BindingName]: Self
+    def asSlave[bn: BindingName]: Self
+}
 
 // Is an Expr an input/inout port? Used by the derive-generated Bundle := to
 // skip assignments whose LHS is an input port (driving an input is illegal
@@ -62,25 +78,41 @@ def isInputPort(e: Expr): Boolean = match e {
 //      — automatic wire factory; every signal is named after the caller's
 //        let binding plus the field name (`bn.name + "_" + field`), e.g.
 //        `let master = create_AxiLite` creates "master_awaddr", …
-//      — when at least one field carries an in()/out() direction marker, an
-//        inherent impl adds two direction methods (SpinalHDL style):
-//          def asMaster[bn: BindingName]: TypeName = …
-//          def asSlave[bn: BindingName]: TypeName = …
+//
+// Directionality (SpinalHDL master/slave) is NOT part of the struct — fields
+// carry plain types. Implement `IMasterSlave` to introduce directions:
+//   4. impl IMasterSlave for TypeName { def asMaster … }
+//      — the derive reads the asMaster direction spec and generates both
+//        direction methods:
+//          def asMaster[bn: BindingName]: TypeName = …  (directed ports)
+//          def asSlave[bn: BindingName]: TypeName = …   (directions flipped)
 //        asMaster: out-marked fields become output ports, in-marked fields
-//        input ports; asSlave: exactly the opposite. Both rebuild the bundle
-//        with directed ports; the plain wires from the inner create_TypeName
-//        call are dropped by the Verilog generator (ports take precedence
-//        over same-named wires, see collectPortNames in hdl-verilog.typort).
+//        input ports; asSlave: exactly the opposite (InOut stays InOut).
+//        Both rebuild the bundle with directed ports; the plain wires from
+//        the inner create_TypeName call are dropped by the Verilog generator
+//        (ports take precedence over same-named wires, see collectPortNames
+//        in hdl-verilog.typort).
 //
 // Example:
 //   #[derive(Bundle)]
 //   struct AxiLite {
-//       awaddr:  out(UInt[32])
-//       awvalid: out(Bool)
-//       awready: in(Bool)
-//       wdata:   out(UInt[32])
-//       wvalid:  out(Bool)
-//       wready:  in(Bool)
+//       awaddr:  UInt[32]
+//       awvalid: Bool
+//       awready: Bool
+//       wdata:   UInt[32]
+//       wvalid:  Bool
+//       wready:  Bool
+//   }
+//
+//   impl IMasterSlave for AxiLite {
+//       def asMaster: AxiLite =
+//           let _ = out(this.awaddr);
+//           let _ = out(this.awvalid);
+//           let _ = in(this.awready);
+//           let _ = out(this.wdata);
+//           let _ = out(this.wvalid);
+//           let _ = in(this.wready);
+//           this
 //   }
 //
 //   // Usage inside a module:

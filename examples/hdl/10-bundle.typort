@@ -6,21 +6,36 @@
 //     2. impl Into[Self]（供 Expr 宏使用）
 //     3. create_TypeName[bn: BindingName] — 自动命名信号工厂
 //        （let 绑定名 + "_" + 字段名，如 master 的 awaddr → "master_awaddr"）
-//     4. asMaster / asSlave — 方向化实例方法（SpinalHDL 语义）
-//        （字段带 in()/out() 标记时生成：asMaster 把驱动字段做成 output
-//        端口、接收字段做成 input 端口，asSlave 反之）
+//
+//   字段不带方向标记（struct 里没有 in()/out()）；方向在
+//   impl IMasterSlave 时引入（SpinalHDL 语义）：
+//     4. impl IMasterSlave for X — asMaster 里用 in()/out()/inout()
+//        声明每个字段从 master 视角的方向；asSlave 由 asMaster 自动翻转。
 //
 //   master := slave  批量赋值（逐字段 assign）
 // ============================================================
 
 #[derive(Bundle)]
 struct AxiLite {
-    awaddr: out(UInt[32])
-    awvalid: out(Bool)
-    awready: in(Bool)
-    wdata: out(UInt[32])
-    wvalid: out(Bool)
-    wready: in(Bool)
+    awaddr: UInt[32]
+    awvalid: Bool
+    awready: Bool
+    wdata: UInt[32]
+    wvalid: Bool
+    wready: Bool
+}
+
+// 方向在此引入：awaddr/awvalid/wdata/wvalid 由 master 驱动（out），
+// awready/wready 由 master 接收（in）。asSlave 自动生成（方向翻转）。
+impl IMasterSlave for AxiLite {
+    def asMaster: AxiLite =
+        let _ = out(this.awaddr);
+        let _ = out(this.awvalid);
+        let _ = in(this.awready);
+        let _ = out(this.wdata);
+        let _ = out(this.wvalid);
+        let _ = in(this.wready);
+        this
 }
 
 module bundleTop {
@@ -46,9 +61,9 @@ module bundleParam {
 println("=== 10b: bundleParam (参数化 Bundle) ===")
 println(moduleTreeVL(bundleParam.create.tree))
 
-// master/slave 方向化：同一个 AxiLite，字段方向用 in()/out() 标记
-// （master 视角）。create_AxiLite.asMaster 把驱动字段做成 output 端口、
-// 接收字段做成 input 端口；asSlave 反之 —— 与 SpinalHDL 的
+// master/slave 方向化：同一个 AxiLite，方向来自 impl IMasterSlave 的
+// asMaster 规范（master 视角）。create_AxiLite.asMaster 把 out 字段做成
+// output 端口、in 字段做成 input 端口；asSlave 反之 —— 与 SpinalHDL 的
 // AxiLite4().asMaster() / .asSlave() 一致。:= 只驱动可驱动字段（跳过
 // input 端口），因此 master/slave 可以双向对连成一个 AXI pass-through。
 module bundleMasterSlave {

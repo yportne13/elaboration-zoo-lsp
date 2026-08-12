@@ -37,7 +37,7 @@
 | 位拼接 | `f := e ## d` | 位拼接 |
 | 寄存器 | `reg a = UInt[8]` | 带时钟/复位的时序元件 |
 | 子模块 | `mkInstance("u", "Adder")` | 模块例化 |
-| Bundle | `#[derive(Bundle)]` | SpinalHDL 风格批量赋值；自动命名信号工厂（`create_TypeName`，绑定名前缀）与方向化 `asMaster` / `asSlave` 实例方法（SpinalHDL 语义，in()/out() 标记） |
+| Bundle | `#[derive(Bundle)]` + `impl IMasterSlave` | SpinalHDL 风格批量赋值；自动命名信号工厂（`create_TypeName`，绑定名前缀）；方向在 `impl IMasterSlave` 的 `asMaster` 中声明（struct 不带 in()/out() 标记），`asSlave` 自动翻转 |
 
 HDL 代码写在 `module` 块中，编译输出 Verilog：
 

@@ -5,11 +5,12 @@
 //   inout flag = Bool           inout wire flag
 //   inout sio = SInt[8]         inout wire signed [7:0] sio
 //   autoUIntInOut(8)            自动命名 inout 信号
-//   inout_u(t)                  方向注解（Bundle 内部）
+//   inout_u(t)                  方向注解
 //
-// Bundle 的 inout() 字段在 asMaster / asSlave 两侧都生成真正的 inout
-// 端口（不再按 input 处理）；`master := slave` 仍跳过 inout LHS
-// （模块不驱动自己的双向引脚 —— 三态驱动不在本模型内）。
+//  Bundle 的 inout 方向在 impl IMasterSlave 的 asMaster 里用
+//  inout(this.<field>) 声明：asMaster / asSlave 两侧都生成真正的 inout
+//  端口（不再按 input 处理）；`master := slave` 仍跳过 inout LHS
+//  （模块不驱动自己的双向引脚 —— 三态驱动不在本模型内）。
 // ============================================================
 
 module inoutPorts {
@@ -36,9 +37,17 @@ println(moduleTreeVL(inoutAuto.create.tree))
 
 #[derive(Bundle)]
 struct TriBus {
-    data: inout(UInt[8])
-    valid: inout(Bool)
-    dir: in(Bool)
+    data: UInt[8]
+    valid: Bool
+    dir: Bool
+}
+
+impl IMasterSlave for TriBus {
+    def asMaster: TriBus =
+        let _ = inout(this.data);
+        let _ = inout(this.valid);
+        let _ = in(this.dir);
+        this
 }
 
 module bundleInOut {

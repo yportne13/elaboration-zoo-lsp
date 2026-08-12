@@ -14,7 +14,7 @@
 | UInt | ✅ | 算术 + - * +^ -^、位运算、比较、移位、位选/切片、resize/cast、asBits/asSInt/asBool、mux | — |
 | SInt | 🟡 | 基本完备；缺 `abs`、`expand`、除法/取模、`\|<<` `\|>>` | 必要 |
 | Enum (SpinalEnum) | ❌ | 语言有普通 enum，但无硬件 enum：无编码/位宽、无 `===` 硬件比较、switch 只支持 Nat 字面量、无 Verilog `reg [1:0] state` 代码生成 | 重要(二期) |
-| Bundle | ✅ | `#[derive(Bundle)]`：批量 `:=`、`create_TypeName` 自动命名、`asMaster`/`asSlave`、`in()/out()/inout()` 标记（inout 目前当 input 处理） | — |
+| Bundle | ✅ | `#[derive(Bundle)]`：批量 `:=`、`create_TypeName` 自动命名；方向由 `impl IMasterSlave` 引入（struct 不带 `in()/out()` 标记，`asMaster` 里用 `in()/out()/inout()` 声明，`asSlave` 自动翻转） | — |
 | Vec | ❌ | 语言内建 `Vec[A](len)` 是纯数据 GADT（nil/cons），无硬件向量：无 `Vec.fill` 信号工厂、无静态/动态下标、无批量赋值 | 必要 |
 | UFix/SFix | ❌ | 无定点数 | 可选(远期) |
 
@@ -67,7 +67,7 @@
 |---|---|---|---|
 | Component/Module | ✅ | `module` 宏 → ModuleDef/ModuleTree；`create` 实例化；子模块 `let u = child.create` + `u.port := sig` 层次连接 | — |
 | in/out 端口 | ✅ | 宏、auto*、createPortExpr、Bundle 方向；`output reg`（寄存器输出端口）见 §4 | — |
-| inout 端口 | ❌ | `inout()` 标记在 derive 中按 input 处理；无 `inout wire` Verilog 代码生成、无 Expr 变体 | 必要 |
+| inout 端口 | ✅ | `inout wire` 端口（宏、auto*、createPortExpr）；Bundle 的 `inout()` 方向在 `impl IMasterSlave` 的 `asMaster` 里声明，两侧都生成真 inout 端口 | — |
 | master/slave | ✅ | `asMaster`/`asSlave` + 端口方向翻转 | — |
 | `:=` | ✅ | Data trait + Bundle derive；自动跳过 input LHS | — |
 | `<>` | ❌ | 无（SpinalHDL 双向连接） | 重要 |

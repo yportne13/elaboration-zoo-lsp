@@ -1836,18 +1836,32 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_bundle_master_slave() {
-    // SpinalHDL-style master/slave: fields marked with in()/out() become
-    // directed ports. create_AxiLite.asMaster: out→output port, in→input
-    // port; asSlave flips. `:=` skips assignments whose LHS is an input port.
+    // SpinalHDL-style master/slave: struct fields carry plain types (no
+    // in()/out() markers); direction is introduced by `impl IMasterSlave` —
+    // asMaster declares each field's direction from the master's point of
+    // view, asSlave is derived by flipping. create_AxiLite.asMaster:
+    // out→output port, in→input port; asSlave flips. `:=` skips assignments
+    // whose LHS is an input port.
     let input = r#"
 #[derive(Bundle)]
 struct AxiLite {
-    awaddr:  out(UInt[16])
-    awvalid: out(Bool)
-    awready: in(Bool)
-    wdata:   out(UInt[16])
-    wvalid:  out(Bool)
-    wready:  in(Bool)
+    awaddr:  UInt[16]
+    awvalid: Bool
+    awready: Bool
+    wdata:   UInt[16]
+    wvalid:  Bool
+    wready:  Bool
+}
+
+impl IMasterSlave for AxiLite {
+    def asMaster: AxiLite =
+        let _ = out(this.awaddr);
+        let _ = out(this.awvalid);
+        let _ = in(this.awready);
+        let _ = out(this.wdata);
+        let _ = out(this.wvalid);
+        let _ = in(this.wready);
+        this
 }
 
 module Test {
@@ -1881,6 +1895,128 @@ println(moduleTreeVL(Test.create.tree))
             assert!(!output.contains("wire slave_awready;"), "wire decl for a port must be dropped, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_master_slave_param() {
+    // Parametric bundle with IMasterSlave: the impl binds the width param
+    // (`impl[w: Nat] IMasterSlave for MyBus[w]`), and asMaster creates
+    // directed ports of the right width.
+    let input = r#"
+#[derive(Bundle)]
+struct MyBus[w: Nat] {
+    data: UInt[w]
+    valid: Bool
+}
+
+impl[w: Nat] IMasterSlave for MyBus[w] {
+    def asMaster: MyBus[w] =
+        let _ = out(this.data);
+        let _ = out(this.valid);
+        this
+}
+
+module Test {
+    let master = create_MyBus[8].asMaster
+    let slave  = create_MyBus[8].asSlave
+    master := slave
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("output wire [7:0] master_data"), "param bundle master out field, got: {}", output);
+            assert!(output.contains("input wire [7:0] slave_data"), "param bundle slave in field, got: {}", output);
+            assert!(output.contains("input wire slave_valid"), "param bundle slave side of an out field, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_master_slave_errors() {
+    // Malformed `impl IMasterSlave` specs are rejected at parse time with a
+    // message naming the offending field: missing direction, unknown field,
+    // non-Bundle struct, missing asMaster.
+    let cases: &[(&str, &str)] = &[
+        // field `valid` never gets a direction
+        (r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+    valid: Bool
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.data);
+        this
+}
+"#, "have no direction"),
+        // typo'd field name
+        (r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.daat);
+        this
+}
+"#, "not a field"),
+        // IMasterSlave on a struct without #[derive(Bundle)]
+        (r#"
+struct MyBus {
+    data: UInt[8]
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.data);
+        this
+}
+"#, "requires `#[derive(Bundle)]`"),
+        // no asMaster at all
+        (r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+}
+
+impl IMasterSlave for MyBus {
+    def asSlave: MyBus =
+        let _ = in(this.data);
+        this
+}
+"#, "must define `asMaster`"),
+        // bad direction statement
+        (r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.data);
+        let _ = data;
+        this
+}
+"#, "bad direction statement"),
+    ];
+    for (input, expected) in cases {
+        let (_, errors) = parser::parser(input, 0).unwrap();
+        let msgs: Vec<String> = errors.iter().map(|e| e.msg.data.to_string()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains(expected)),
+            "expected parse error containing {:?}, got: {:?}",
+            expected, msgs
+        );
     }
 }
 

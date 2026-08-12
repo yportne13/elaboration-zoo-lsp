@@ -83,14 +83,18 @@ pub enum BaseMsg {
     ExpectDecl,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ErrMsg {
     Base(BaseMsg),
+    /// A derive/expansion error with a full user-facing message
+    /// (e.g. a malformed `impl IMasterSlave` direction spec).
+    Custom(String),
 }
 
-fn extract_base(m: ErrMsg) -> BaseMsg {
+fn extract_base(m: ErrMsg) -> ErrMsg {
     match m {
-        ErrMsg::Base(b) => b,
+        ErrMsg::Base(b) => ErrMsg::Base(b),
+        ErrMsg::Custom(_) => m,
     }
 }
 
@@ -112,11 +116,12 @@ impl fmt::Display for ErrMsg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ErrMsg::Base(msg) => fmt::Display::fmt(msg, f),
+            ErrMsg::Custom(msg) => write!(f, "{}", msg),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IError {
     pub msg: Span<ErrMsg>,
 }
@@ -289,7 +294,10 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 
 /// Parse with no pre-existing macros (for tests). Returns (declarations, parse errors, accumulated macros).
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
-    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| (expand_derives(d), e))
+    parser_with_macros(input, id, &Default::default()).map(|(d, e, _, _)| {
+        let (d, e2) = expand_derives(d);
+        (d, [e, e2].concat())
+    })
 }
 
 /// Parse with a pre-populated macro table (from macros in other files).
@@ -330,10 +338,14 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect();
                     if ret.0.is_empty() || ret.0.iter().all(|t| t.data.1 == TokenKind::Eof) {
-                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
+                        let (decls, d_errors) = expand_derives(ret.1.into_iter().flatten().collect());
+                        err_collect.0.extend(d_errors);
+                        Some((decls, err_collect.0, exported, expansions))
                     } else {
                         err_collect.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(EndLine))) });
-                        Some((expand_derives(ret.1.into_iter().flatten().collect()), err_collect.0, exported, expansions))
+                        let (decls, d_errors) = expand_derives(ret.1.into_iter().flatten().collect());
+                        err_collect.0.extend(d_errors);
+                        Some((decls, err_collect.0, exported, expansions))
                     }
                 }
                 Err(e) => {
@@ -2060,15 +2072,55 @@ fn p_derive_attr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState)
     }
 }
 
+/// Extract the head constructor name from a Raw type expression.
+/// e.g., `Product[A, B]` → `"Product"`, `MyBus[w]` → `"MyBus"`, `String` → `"String"`.
+fn raw_ctor_name(raw: &Raw) -> Option<SmolStr> {
+    match raw {
+        Raw::Var(name) => Some(name.data.clone()),
+        Raw::App(head, _, _) => raw_ctor_name(head),
+        _ => None,
+    }
+}
+
 /// Expand `Decl::Derive` items into their inner declaration + generated impl blocks.
 /// A derived `class` is expanded to its struct first, so `#[derive(Show)] class Foo`
 /// derives on the class's struct exactly like a plain struct would.
 /// NOTE: this is the only remaining caller of the parse-time class expansion;
 /// plain classes are elaborated directly by `Infer::infer` (two-phase: field
 /// values are inferred first, then the struct is assembled).
-fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
+///
+/// Runs a two-pass walk over the file's declarations so `impl IMasterSlave`
+/// blocks (which may precede the struct) can be rewritten: the user's
+/// asMaster direction spec is replaced by generated directed-port methods
+/// (see derive::derive_imasterslave). Expansion errors are returned as
+/// `ErrMsg::Custom` parse errors alongside the expanded declarations.
+fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
     let registry = derive::default_derive_registry();
     let mut result = vec![];
+    let mut errors = vec![];
+
+    // Pass 1: collect `#[derive(Bundle)]` structs (name → name span, params,
+    // fields) and every other struct name, so `impl IMasterSlave` blocks can
+    // be checked and expanded regardless of declaration order.
+    let mut bundle_structs: HashMap<SmolStr, (Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Vec<(Span<SmolStr>, Raw, Icit)>)> = HashMap::new();
+    let mut all_structs: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    for decl in &decls {
+        match decl {
+            Decl::Enum { name, .. } => {
+                all_structs.insert(name.data.clone());
+            }
+            Decl::Derive { traits, decl } => {
+                if let Decl::Enum { name, params, cases, .. } = decl.as_ref() {
+                    all_structs.insert(name.data.clone());
+                    if traits.iter().any(|t| t.data == "Bundle") && cases.len() == 1 {
+                        bundle_structs.insert(name.data.clone(), (name.clone(), params.clone(), cases[0].1.clone()));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     for decl in decls {
         match decl {
             Decl::Derive { traits, decl } => {
@@ -2091,10 +2143,37 @@ fn expand_derives(decls: Vec<Decl>) -> Vec<Decl> {
                     }
                 }
             }
+            Decl::ImplDecl { trait_name, name, params, trait_params, methods, inherent, from_class } => {
+                // `impl IMasterSlave for X` — the direction spec lives here
+                // (SpinalHDL style), not in the struct's fields. When X is a
+                // `#[derive(Bundle)]` struct of this file, replace the user's
+                // spec methods with the generated directed-port methods.
+                if !inherent && trait_name.data == "IMasterSlave" {
+                    if let Some(struct_name) = raw_ctor_name(&name) {
+                        if let Some((struct_span, struct_params, fields)) = bundle_structs.get(&struct_name) {
+                            match derive::derive_imasterslave(struct_span, struct_params, fields, &params, &methods) {
+                                Ok(methods) => {
+                                    result.push(Decl::ImplDecl { trait_name, name, params, trait_params, methods, inherent, from_class });
+                                    continue;
+                                }
+                                Err(msg) => {
+                                    errors.push(IError { msg: name.to_span().map(|_| ErrMsg::Custom(msg.clone())) });
+                                }
+                            }
+                        } else if all_structs.contains(&struct_name) {
+                            errors.push(IError { msg: name.to_span().map(|_| ErrMsg::Custom(format!(
+                                "impl IMasterSlave for `{}` requires `#[derive(Bundle)]` on the struct",
+                                struct_name
+                            ))) });
+                        }
+                    }
+                }
+                result.push(Decl::ImplDecl { trait_name, name, params, trait_params, methods, inherent, from_class });
+            }
             other => result.push(other),
         }
     }
-    result
+    (result, errors)
 }
 
 // ============================================================
@@ -2440,7 +2519,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
     let (input, derive_traits) = p_derive_attr.option().map(|x| x.unwrap_or_default()).parse(input, state)?;
     if !derive_traits.is_empty() {
         let (input, decl) = p_enum.or(p_struct).or(p_class).parse(input, state).map_err(|e| IError {
-            msg: e.msg.map(|m| ErrMsg::Base(extract_base(m)))
+            msg: e.msg.map(extract_base)
         })?;
         return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))
     }
@@ -2448,7 +2527,7 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
         .or(p_package).or(p_import)
         .parse(input, state)
         .map_err(|e| IError {
-            msg: e.msg.map(|m| ErrMsg::Base(extract_base(m)))
+            msg: e.msg.map(extract_base)
         })
 }
 

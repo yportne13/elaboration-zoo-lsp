@@ -196,7 +196,7 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
 /// Direction mode of a generated signal factory.
 #[derive(Clone, Copy, PartialEq)]
 enum CreateMode {
-    /// Plain wires (create_TypeName) — direction markers are ignored.
+    /// Plain wires (create_TypeName) — directions are ignored.
     Wire,
     /// Master-perspective directed ports (the asMaster method body).
     Master,
@@ -204,28 +204,27 @@ enum CreateMode {
     Slave,
 }
 
-/// Unwrap a direction marker (`in(...)` / `out(...)` / `inout(...)`) applied to
-/// a field type. Returns the marker name (if any) and the wrapped type.
-/// The markers are type-level identity functions defined in hdl-bus.typort;
-/// the derive reads them before elaboration to learn each field's direction
-/// (from the master's point of view).
-fn unwrap_dir_marker(t: &Raw) -> (Option<&str>, &Raw) {
-    if let Raw::App(inner, arg, Either::Icit(Icit::Expl)) = t {
-        if let Raw::Var(v) = inner.as_ref() {
-            let name = v.data.as_str();
-            if name == "in" || name == "out" || name == "inout" {
-                return (Some(name), arg.as_ref());
-            }
-        }
+/// Direction of a bundle field, as consumed by `create_fn_name`:
+/// `"In"`, `"Out"` or `"InOut"`. The spec is already in the perspective of
+/// the method being generated (master spec for asMaster, slave spec for
+/// asSlave); `derive_imasterslave` flips the master spec when no explicit
+/// asSlave is given.
+type DirSpec = Vec<(SmolStr, &'static str)>;
+
+/// Flip a master-perspective direction to the slave perspective
+/// (In ↔ Out; InOut stays InOut).
+fn flip_dir(dir: &str) -> &'static str {
+    match dir {
+        "In" => "Out",
+        "Out" => "In",
+        _ => "InOut",
     }
-    (None, t)
 }
 
 /// Check whether a Raw type expression is one of the recognised primitive HDL
-/// types (possibly wrapped in a direction marker).
+/// types (Bool, or UInt/SInt/Bits applied to a width).
 fn is_primitive_type(t: &Raw) -> bool {
-    let (_, inner) = unwrap_dir_marker(t);
-    match inner {
+    match t {
         Raw::Var(v) => v.data == "Bool",
         Raw::App(inner, _, _) => match inner.as_ref() {
             Raw::Var(v) => v.data == "UInt" || v.data == "SInt" || v.data == "Bits",
@@ -312,35 +311,30 @@ fn create_fn_name(base: &str, dir: Option<&str>) -> &'static str {
 }
 
 /// Build the signal creation expression for a single field.
-/// Recognizes: UInt[w], SInt[w], Bits[w], Bool (optionally wrapped in a
-/// direction marker). Returns `newUIntNamed(bn-prefixed name, w)`, etc. —
-/// for master/slave factories the directed port variants
-/// (newUIntInputNamed/…).
-fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw, mode: CreateMode) -> Raw {
+/// Recognizes: UInt[w], SInt[w], Bits[w], Bool. Returns
+/// `newUIntNamed(bn-prefixed name, w)`, etc. — for master/slave factories the
+/// directed port variants (newUIntInputNamed/…), with the field's direction
+/// taken from `dir_spec` (already in the factory's own perspective).
+fn build_field_create_expr(
+    field_name: &Span<SmolStr>,
+    field_type: &Raw,
+    mode: CreateMode,
+    dir_spec: &DirSpec,
+) -> Raw {
     let name_expr = build_field_name_expr(&field_name.data);
 
     // Port direction of this field from the factory's point of view.
-    // Master: declared direction applied (out → output port, in → input
-    //   port, inout → inout port); unmarked fields default to output.
-    // Slave:  declared direction flipped (out → input port, in → output
-    //   port, inout stays inout); unmarked fields default to input.
+    // Wire: plain wires. Master/Slave: looked up in the direction spec
+    // (master spec for asMaster, slave spec for asSlave).
     let dir = match mode {
         CreateMode::Wire => None,
-        CreateMode::Master => match unwrap_dir_marker(field_type).0 {
-            Some("in") => Some("In"),
-            Some("inout") => Some("InOut"),
-            _ => Some("Out"),
-        },
-        CreateMode::Slave => match unwrap_dir_marker(field_type).0 {
-            Some("out") => Some("In"),
-            Some("in") => Some("Out"),
-            Some("inout") => Some("InOut"),
-            _ => Some("In"), // unmarked → received by the slave
-        },
+        CreateMode::Master | CreateMode::Slave => dir_spec
+            .iter()
+            .find(|(n, _)| n == &field_name.data)
+            .map(|(_, d)| *d),
     };
 
-    let (_, inner) = unwrap_dir_marker(field_type);
-    match inner {
+    match field_type {
         Raw::App(inner, width, _) => {
             if let Raw::Var(v) = inner.as_ref() {
                 let create_fn = create_fn_name(v.data.as_str(), dir);
@@ -362,8 +356,14 @@ fn build_field_create_expr(field_name: &Span<SmolStr>, field_type: &Raw, mode: C
 ///   let __f0 = createSignal(bn-named "f1", …);
 ///   let __f1 = createSignal(bn-named "f2", …);
 ///   new BundleType(__f0, __f1)
-/// `mode` selects wire vs. directed-port creation (master/slave).
-fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)], mode: CreateMode) -> Raw {
+/// `mode` selects wire vs. directed-port creation (master/slave); `dir_spec`
+/// supplies the per-field port directions for the directed modes.
+fn build_create_body(
+    name: &Span<SmolStr>,
+    fields: &[(Span<SmolStr>, Raw, Icit)],
+    mode: CreateMode,
+    dir_spec: &DirSpec,
+) -> Raw {
     let ctor = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
 
     if fields.is_empty() {
@@ -380,7 +380,7 @@ fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]
     // Wrap each let around the body (in reverse order)
     for (field_name, field_type, _) in fields.iter().rev() {
         let var_name = SmolStr::new(format!("__f{}", field_name.data));
-        let create_expr = build_field_create_expr(field_name, field_type, mode);
+        let create_expr = build_field_create_expr(field_name, field_type, mode, dir_spec);
         body = Raw::Let(
             empty_span(var_name),
             Box::new(Raw::Hole(empty_span(()))),
@@ -395,13 +395,11 @@ fn build_create_body(name: &Span<SmolStr>, fields: &[(Span<SmolStr>, Raw, Icit)]
 /// Derive Bundle: for a single-constructor enum (struct), generates:
 ///   impl Bundle for StructName { def :=(that: StructName): Unit = … }
 ///   impl Into[Self] for Self { … }
-///   impl StructName { def asMaster[bn: BindingName]: StructName = …;
-///                     def asSlave[bn: BindingName]: StructName = … }
 ///   def create_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
-/// with sequenced field-by-field assignments, auto-named signal factories
-/// (binding name + "_" + field name) and — when fields carry in()/out()
-/// direction markers — asMaster/asSlave methods returning directed-port
-/// bundles (SpinalHDL style).
+/// with sequenced field-by-field assignments and auto-named signal factories
+/// (binding name + "_" + field name). Directionality is NOT derived here:
+/// a separate `impl IMasterSlave for StructName` (see derive_imasterslave)
+/// supplies the asMaster/asSlave directed-port methods.
 fn derive_bundle(decl: &Decl) -> Vec<Decl> {
     match decl {
         Decl::Enum { name, params, cases, .. } if cases.len() == 1 => {
@@ -462,8 +460,6 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
             // the caller's let-binding name, which prefixes every signal
             // (SpinalHDL-style auto-naming).
             if fields.iter().all(|(_, ft, _)| is_primitive_type(ft)) {
-                let has_dirs = fields.iter().any(|(_, ft, _)| unwrap_dir_marker(ft).0.is_some());
-
                 let factory_params: Vec<(Span<SmolStr>, Raw, Icit)> = params.iter()
                     .map(|(pn, pt, pi)| (pn.clone(), pt.clone(), *pi))
                     .chain(std::iter::once((
@@ -473,76 +469,225 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     )))
                     .collect();
 
-                let mut push_factory = |fname: &str, body: Raw| {
-                    result.push(Decl::Def {
-                        name: empty_span(SmolStr::new(fname)),
-                        params: factory_params.clone(),
-                        ret_type: self_ty.clone(),
-                        body,
-                    });
-                };
-
-                push_factory(
-                    &format!("create_{}", name.data),
-                    build_create_body(name, fields, CreateMode::Wire),
-                );
-
-                // ── 4. asMaster / asSlave direction methods (SpinalHDL style) ──
-                // When at least one field carries an in()/out() direction marker,
-                // generate an inherent impl (empty trait name + inherent: true —
-                // the same shape derive_show emits) so the methods resolve through
-                // `bundle.asMaster` / `bundle.asSlave` method calls:
-                //   impl StructName {
-                //     def asMaster[bn: BindingName]: StructName = …
-                //     def asSlave[bn: BindingName]: StructName = …
-                //   }
-                // Each method rebuilds the bundle with directed ports — master:
-                // out-marked fields become output ports, in-marked fields input
-                // ports; slave: exactly the opposite. `bn` picks up the caller's
-                // let-binding name, so `let master = create_AxiLite.asMaster` still
-                // names its ports "master_awaddr", …. The plain wires left behind
-                // by the inner create_TypeName call are dropped by the Verilog
-                // generator (a port declaration takes precedence over a
-                // same-named wire; see collectPortNames in hdl-verilog.typort).
-                if has_dirs {
-                    let bn_param = vec![(
-                        empty_span(SmolStr::new("bn")),
-                        Raw::Var(empty_span(SmolStr::new("BindingName"))),
-                        Icit::Impl,
-                    )];
-                    let dir_methods: Vec<(Decl, bool)> = [
-                        ("asMaster", CreateMode::Master),
-                        ("asSlave", CreateMode::Slave),
-                    ]
-                    .iter()
-                    .map(|(mname, mode)| {
-                        (
-                            Decl::Def {
-                                name: empty_span(SmolStr::new(*mname)),
-                                params: bn_param.clone(),
-                                ret_type: self_ty.clone(),
-                                body: build_create_body(name, fields, *mode),
-                            },
-                            false,
-                        )
-                    })
-                    .collect();
-                    result.push(Decl::ImplDecl {
-                        name: self_ty.clone(),
-                        params: impl_params,
-                        trait_name: empty_span(SmolStr::new("")),
-                        trait_params: vec![],
-                        methods: dir_methods,
-                        inherent: true,
-                        from_class: false,
-                    });
-                }
+                result.push(Decl::Def {
+                    name: empty_span(SmolStr::new(format!("create_{}", name.data))),
+                    params: factory_params,
+                    ret_type: self_ty,
+                    body: build_create_body(name, fields, CreateMode::Wire, &Vec::new()),
+                });
             }
 
             result
         }
         _ => vec![],
     }
+}
+
+/// Parse an asMaster/asSlave direction spec body — a nested-let chain
+///   let _ = out(this.awaddr);
+///   let _ = in(this.awready);
+///   …
+///   <terminator ignored>
+/// where each step's value is a direction function (`in`/`out`/`inout` from
+/// hdl-bus.typort) applied to a field projection `this.<field>`. The body is
+/// read syntactically before elaboration (the functions are identities and
+/// can never change a value), so the trailing expression may be anything.
+fn parse_dir_spec(body: &Raw) -> Result<DirSpec, String> {
+    let mut spec: DirSpec = Vec::new();
+    let mut cur = body;
+    loop {
+        match cur {
+            Raw::Let(_, _, val, rest) => {
+                let entry = match val.as_ref() {
+                    Raw::App(f, arg, Either::Icit(Icit::Expl)) => {
+                        let dir = match f.as_ref() {
+                            Raw::Var(v) => match v.data.as_str() {
+                                "in" => Some("In"),
+                                "out" => Some("Out"),
+                                "inout" => Some("InOut"),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        dir.and_then(|dir| match arg.as_ref() {
+                            Raw::Obj(receiver, Some(fname)) => match receiver.as_ref() {
+                                Raw::Var(v) if v.data == "this" => Some((fname.data.clone(), dir)),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
+                match entry {
+                    Some(entry) => {
+                        spec.push(entry);
+                        cur = rest;
+                    }
+                    None => {
+                        return Err(format!(
+                            "bad direction statement `{}` in impl IMasterSlave: expected `let _ = in(this.<field>)` / `out(this.<field>)` / `inout(this.<field>)`",
+                            val
+                        ));
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    Ok(spec)
+}
+
+/// Validate a parsed direction spec against the struct's fields: reject
+/// duplicates, unknown field names, and struct fields missing from the spec.
+fn validate_dir_spec(
+    spec: &DirSpec,
+    struct_name: &Span<SmolStr>,
+    fields: &[(Span<SmolStr>, Raw, Icit)],
+) -> Result<(), String> {
+    for (i, (fname, _)) in spec.iter().enumerate() {
+        if spec.iter().skip(i + 1).any(|(n, _)| n == fname) {
+            return Err(format!(
+                "field `{}` has a duplicate direction in impl IMasterSlave for `{}`",
+                fname, struct_name.data
+            ));
+        }
+        if !fields.iter().any(|(f, _, _)| &f.data == fname) {
+            return Err(format!(
+                "field `{}` in impl IMasterSlave for `{}` is not a field of the struct",
+                fname, struct_name.data
+            ));
+        }
+    }
+    let missing: Vec<&SmolStr> = fields.iter()
+        .filter(|(f, _, _)| !spec.iter().any(|(n, _)| n == &f.data))
+        .map(|(f, _, _)| &f.data)
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "fields [{}] of `{}` have no direction in impl IMasterSlave: every field must be declared in `asMaster` (`let _ = in(this.<field>)` / `out(...)` / `inout(...)`)",
+            missing.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", "),
+            struct_name.data
+        ));
+    }
+    Ok(())
+}
+
+/// Derive the asMaster/asSlave methods of an `impl IMasterSlave for TypeName`
+/// block (TypeName a `#[derive(Bundle)]` struct). The user writes only the
+/// direction specs (see parse_dir_spec); this generates both methods:
+///   def asMaster[bn: BindingName]: TypeName = …  // directions as declared
+///   def asSlave[bn: BindingName]: TypeName = …   // directions flipped
+/// An explicit user-written asSlave spec is used as-is (slave perspective);
+/// otherwise asSlave flips the asMaster spec (In ↔ Out, InOut stays InOut).
+/// The generated methods rebuild the bundle with directed ports; `bn` picks
+/// up the caller's let-binding name, so `let master = create_AxiLite.asMaster`
+/// names its ports "master_awaddr", …. The plain wires left behind by the
+/// inner create_TypeName call are dropped by the Verilog generator (a port
+/// declaration takes precedence over a same-named wire; see collectPortNames
+/// in hdl-verilog.typort).
+///
+/// Returns a user-facing error message when the spec is malformed: unknown
+/// method names, fields not declared in the struct, duplicate or missing
+/// directions, or non-primitive field types.
+pub fn derive_imasterslave(
+    struct_name: &Span<SmolStr>,
+    struct_params: &[(Span<SmolStr>, Raw, Icit)],
+    fields: &[(Span<SmolStr>, Raw, Icit)],
+    impl_params: &[(Span<SmolStr>, Raw, Icit)],
+    methods: &[(Decl, bool)],
+) -> Result<Vec<(Decl, bool)>, String> {
+    // Only asMaster / asSlave spec methods are recognised.
+    let mut master_spec: Option<DirSpec> = None;
+    let mut slave_spec: Option<DirSpec> = None;
+    for (decl, _) in methods {
+        if let Decl::Def { name, body, .. } = decl {
+            match name.data.as_str() {
+                "asMaster" => master_spec = Some(parse_dir_spec(body)?),
+                "asSlave" => slave_spec = Some(parse_dir_spec(body)?),
+                other => {
+                    return Err(format!(
+                        "unsupported method `{}` in impl IMasterSlave for `{}`: only `asMaster` (and optionally `asSlave`) are allowed",
+                        other, struct_name.data
+                    ));
+                }
+            }
+        } else {
+            return Err(format!(
+                "unsupported item in impl IMasterSlave for `{}`: only `asMaster` / `asSlave` defs are allowed",
+                struct_name.data
+            ));
+        }
+    }
+    let master_spec = master_spec.ok_or_else(|| {
+        format!(
+            "impl IMasterSlave for `{}` must define `asMaster` — a `let _ = in(this.<field>)` / `out(...)` / `inout(...)` direction spec",
+            struct_name.data
+        )
+    })?;
+    validate_dir_spec(&master_spec, struct_name, fields)?;
+
+    // Every field must be a recognised primitive so the directed-port
+    // factories can be generated (same requirement as create_TypeName).
+    for (fname, fty, _) in fields {
+        if !is_primitive_type(fty) {
+            return Err(format!(
+                "field `{}` of `{}` has a non-primitive type; impl IMasterSlave requires UInt/SInt/Bits/Bool fields",
+                fname.data, struct_name.data
+            ));
+        }
+    }
+
+    // A parametric bundle's impl must bind the struct's implicit params
+    // (`impl[w: Nat] IMasterSlave for MyBus[w]`), since the generated method
+    // bodies reference them (e.g. the width `w` of `UInt[w]`).
+    let struct_impl_params: Vec<SmolStr> = struct_params.iter()
+        .filter(|(_, _, icit)| *icit == Icit::Impl)
+        .map(|(n, _, _)| n.data.clone())
+        .collect();
+    for pname in &struct_impl_params {
+        if !impl_params.iter().any(|(n, _, _)| &n.data == pname) {
+            return Err(format!(
+                "impl IMasterSlave for the parametric bundle `{}` must bind its parameters: `impl[{}] IMasterSlave for {}({})`",
+                struct_name.data,
+                pname,
+                struct_name.data,
+                struct_impl_params.join(", "),
+            ));
+        }
+    }
+
+    // asSlave: an explicit spec is used as-is; otherwise flip the master spec.
+    let slave_spec = match slave_spec {
+        Some(spec) => {
+            validate_dir_spec(&spec, struct_name, fields)?;
+            spec
+        }
+        None => master_spec.iter().map(|(n, d)| (n.clone(), flip_dir(d))).collect(),
+    };
+
+    let self_ty = build_self_ty(struct_name, struct_params);
+    let bn_param = vec![(
+        empty_span(SmolStr::new("bn")),
+        Raw::Var(empty_span(SmolStr::new("BindingName"))),
+        Icit::Impl,
+    )];
+    let mk = |mname: &str, spec: DirSpec, mode: CreateMode| -> (Decl, bool) {
+        (
+            Decl::Def {
+                name: empty_span(SmolStr::new(mname)),
+                params: bn_param.clone(),
+                ret_type: self_ty.clone(),
+                body: build_create_body(struct_name, fields, mode, &spec),
+            },
+            false,
+        )
+    };
+
+    Ok(vec![
+        mk("asMaster", master_spec, CreateMode::Master),
+        mk("asSlave", slave_spec, CreateMode::Slave),
+    ])
 }
 
 /// Derive Show: generates a proper `impl Show for Type { def show = ... }` block.
