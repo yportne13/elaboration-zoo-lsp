@@ -2120,6 +2120,7 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
             _ => {}
         }
     }
+    let bundle_names: derive::BundleSet = bundle_structs.keys().cloned().collect();
 
     for decl in decls {
         match decl {
@@ -2131,13 +2132,13 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
                         // Derive macros handle structs (and ignore defs/impls the
                         // class expansion also produced), so apply them to each.
                         let generated: Vec<Decl> = expanded.iter()
-                            .flat_map(|d| derive::expand_derive(&registry, &traits, d))
+                            .flat_map(|d| derive::expand_derive(&registry, &traits, d, &bundle_names))
                             .collect();
                         result.extend(expanded);
                         result.extend(generated);
                     }
                     other => {
-                        let generated = derive::expand_derive(&registry, &traits, &other);
+                        let generated = derive::expand_derive(&registry, &traits, &other, &bundle_names);
                         result.push(other);
                         result.extend(generated);
                     }
@@ -2151,7 +2152,7 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
                 if !inherent && trait_name.data == "IMasterSlave" {
                     if let Some(struct_name) = raw_ctor_name(&name) {
                         if let Some((struct_span, struct_params, fields)) = bundle_structs.get(&struct_name) {
-                            match derive::derive_imasterslave(struct_span, struct_params, fields, &params, &methods) {
+                            match derive::derive_imasterslave(struct_span, struct_params, fields, &params, &methods, &bundle_names) {
                                 Ok(methods) => {
                                     result.push(Decl::ImplDecl { trait_name, name, params, trait_params, methods, inherent, from_class });
                                     continue;

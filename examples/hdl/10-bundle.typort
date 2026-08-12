@@ -74,3 +74,26 @@ module bundleMasterSlave {
 }
 println("=== 10c: bundleMasterSlave (master/slave 方向化端口) ===")
 println(moduleTreeVL(bundleMasterSlave.create.tree))
+
+// 嵌套 Bundle:create_OuterBus 递归创建 inner(create_InnerBus[bn] 显式传
+// 绑定名),命名链延续——let outer = create_OuterBus 得到
+// outer_value / outer_strobe / outer_ready;`:=` 同样递归逐字段赋值。
+#[derive(Bundle)]
+struct InnerBus {
+    value: UInt[8]
+    strobe: Bool
+}
+
+#[derive(Bundle)]
+struct OuterBus {
+    inner: InnerBus
+    ready: Bool
+}
+
+module bundleNested {
+    let outer1 = create_OuterBus
+    let outer2 = create_OuterBus
+    outer1 := outer2
+}
+println("=== 10d: bundleNested (嵌套 Bundle) ===")
+println(moduleTreeVL(bundleNested.create.tree))

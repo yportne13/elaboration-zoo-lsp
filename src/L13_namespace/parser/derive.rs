@@ -6,8 +6,14 @@ use super::syntax::{Decl, Either, Icit, Pattern, Raw};
 use crate::parser_lib::{Span, ToSpan};
 use super::empty_span;
 
-pub type DeriveMacro = fn(&Decl) -> Vec<Decl>;
+pub type DeriveMacro = fn(&Decl, &BundleSet) -> Vec<Decl>;
 pub type DeriveRegistry = HashMap<String, DeriveMacro>;
+
+/// The set of struct names in the current file that carry `#[derive(Bundle)]`.
+/// Used by derive_bundle to recognise nested-bundle fields (a field whose
+/// type is another Bundle struct declared in the same file), so
+/// create_TypeName can recursively create them.
+pub type BundleSet = std::collections::HashSet<SmolStr>;
 
 pub fn default_derive_registry() -> DeriveRegistry {
     let mut registry: DeriveRegistry = HashMap::new();
@@ -18,15 +24,18 @@ pub fn default_derive_registry() -> DeriveRegistry {
 
 /// Expand derive macros: for each trait in `traits`, generate the corresponding
 /// impl blocks and return them alongside the original declaration.
+/// `bundle_types` names the file's `#[derive(Bundle)]` structs (used by
+/// derive_bundle to create nested-bundle fields recursively).
 pub fn expand_derive(
     registry: &DeriveRegistry,
     traits: &[Span<SmolStr>],
     decl: &Decl,
+    bundle_types: &BundleSet,
 ) -> Vec<Decl> {
     let mut result = vec![];
     for trait_name in traits {
         if let Some(derive_fn) = registry.get(trait_name.data.as_str()) {
-            result.extend(derive_fn(decl));
+            result.extend(derive_fn(decl, bundle_types));
         }
     }
     result
@@ -310,17 +319,68 @@ fn create_fn_name(base: &str, dir: Option<&str>) -> &'static str {
     }
 }
 
+/// Is this field's type a nested bundle struct of the same file (one of
+/// `bundle_types`)? e.g. `inner: InnerBus` or `inner: InnerBus[w]`.
+/// Returns the head type name and its type arguments (in order, with their
+/// implicit/explicit icit) when it is one.
+fn bundle_field_type<'a>(t: &'a Raw, bundle_types: &BundleSet) -> Option<(&'a str, Vec<(Raw, Either)>)> {
+    fn collect<'a>(t: &'a Raw, head: &mut Option<&'a str>, args: &mut Vec<(Raw, Either)>) {
+        match t {
+            Raw::App(f, arg, either) => {
+                collect(f, head, args);
+                args.push((arg.as_ref().clone(), either.clone()));
+            }
+            Raw::Var(v) => *head = Some(v.data.as_str()),
+            _ => {}
+        }
+    }
+    let mut head = None;
+    let mut args = vec![];
+    collect(t, &mut head, &mut args);
+    let head = head?;
+    if !bundle_types.contains(head) {
+        return None;
+    }
+    Some((head, args))
+}
+
 /// Build the signal creation expression for a single field.
-/// Recognizes: UInt[w], SInt[w], Bits[w], Bool. Returns
-/// `newUIntNamed(bn-prefixed name, w)`, etc. — for master/slave factories the
-/// directed port variants (newUIntInputNamed/…), with the field's direction
-/// taken from `dir_spec` (already in the factory's own perspective).
+/// Recognizes: UInt[w], SInt[w], Bits[w], Bool, and nested bundle fields
+/// (a type named in `bundle_types`). Returns `newUIntNamed(bn-prefixed name,
+/// w)`, etc. — for master/slave factories the directed port variants
+/// (newUIntInputNamed/…), with the field's direction taken from `dir_spec`
+/// (already in the factory's own perspective). A nested bundle field becomes
+/// a recursive factory call `create_<TypeName>[<type args>][bn]` — `bn` is
+/// passed explicitly so the caller's binding name keeps prefixing the inner
+/// signals (`let outer = create_OuterBus` → "outer_value", …).
 fn build_field_create_expr(
     field_name: &Span<SmolStr>,
     field_type: &Raw,
     mode: CreateMode,
     dir_spec: &DirSpec,
+    bundle_types: &BundleSet,
 ) -> Raw {
+    // Nested bundle field: recurse into the child's own factory. Wire mode
+    // only — directed (Master/Slave) factories reject non-primitive fields
+    // before reaching here (see derive_imasterslave).
+    if mode == CreateMode::Wire {
+        if let Some((head, args)) = bundle_field_type(field_type, bundle_types) {
+            let create_fn = Raw::Var(empty_span(SmolStr::new(format!("create_{}", head))));
+            let mut app = create_fn;
+            for (arg, either) in args {
+                app = Raw::App(Box::new(app), Box::new(arg), either);
+            }
+            // Explicitly pass the factory's own implicit `bn: BindingName`:
+            // the child call elaborates at this def's definition site, where
+            // the caller's binding name is not available.
+            return Raw::App(
+                Box::new(app),
+                Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
+                Either::Icit(Icit::Impl),
+            );
+        }
+    }
+
     let name_expr = build_field_name_expr(&field_name.data);
 
     // Port direction of this field from the factory's point of view.
@@ -357,12 +417,15 @@ fn build_field_create_expr(
 ///   let __f1 = createSignal(bn-named "f2", …);
 ///   new BundleType(__f0, __f1)
 /// `mode` selects wire vs. directed-port creation (master/slave); `dir_spec`
-/// supplies the per-field port directions for the directed modes.
+/// supplies the per-field port directions for the directed modes; nested
+/// bundle fields recurse through their own create_TypeName factories
+/// (`bundle_types`).
 fn build_create_body(
     name: &Span<SmolStr>,
     fields: &[(Span<SmolStr>, Raw, Icit)],
     mode: CreateMode,
     dir_spec: &DirSpec,
+    bundle_types: &BundleSet,
 ) -> Raw {
     let ctor = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
 
@@ -380,7 +443,7 @@ fn build_create_body(
     // Wrap each let around the body (in reverse order)
     for (field_name, field_type, _) in fields.iter().rev() {
         let var_name = SmolStr::new(format!("__f{}", field_name.data));
-        let create_expr = build_field_create_expr(field_name, field_type, mode, dir_spec);
+        let create_expr = build_field_create_expr(field_name, field_type, mode, dir_spec, bundle_types);
         body = Raw::Let(
             empty_span(var_name),
             Box::new(Raw::Hole(empty_span(()))),
@@ -397,10 +460,12 @@ fn build_create_body(
 ///   impl Into[Self] for Self { … }
 ///   def create_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
 /// with sequenced field-by-field assignments and auto-named signal factories
-/// (binding name + "_" + field name). Directionality is NOT derived here:
-/// a separate `impl IMasterSlave for StructName` (see derive_imasterslave)
-/// supplies the asMaster/asSlave directed-port methods.
-fn derive_bundle(decl: &Decl) -> Vec<Decl> {
+/// (binding name + "_" + field name). Nested bundle fields (types named in
+/// `bundle_types`) are created recursively through their own factories.
+/// Directionality is NOT derived here: a separate `impl IMasterSlave for
+/// StructName` (see derive_imasterslave) supplies the asMaster/asSlave
+/// directed-port methods.
+fn derive_bundle(decl: &Decl, bundle_types: &BundleSet) -> Vec<Decl> {
     match decl {
         Decl::Enum { name, params, cases, .. } if cases.len() == 1 => {
             let self_ty = build_self_ty(name, params);
@@ -454,12 +519,16 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
             // ── 3. Standalone wire factory ──
             // Generates:
             //   def create_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
-            // Only emitted when every field is a recognised primitive HDL type
-            // (UInt, SInt, Bits, Bool) so we know how to auto-create signals.
-            // The implicit BindingName parameter is filled by the compiler with
-            // the caller's let-binding name, which prefixes every signal
+            // Emitted when every field is either a recognised primitive HDL
+            // type (UInt, SInt, Bits, Bool) or a nested bundle struct of this
+            // file (so we know how to auto-create the signals). The implicit
+            // BindingName parameter is filled by the compiler with the
+            // caller's let-binding name, which prefixes every signal
             // (SpinalHDL-style auto-naming).
-            if fields.iter().all(|(_, ft, _)| is_primitive_type(ft)) {
+            let can_factory = fields.iter().all(|(_, ft, _)| {
+                is_primitive_type(ft) || bundle_field_type(ft, bundle_types).is_some()
+            });
+            if can_factory {
                 let factory_params: Vec<(Span<SmolStr>, Raw, Icit)> = params.iter()
                     .map(|(pn, pt, pi)| (pn.clone(), pt.clone(), *pi))
                     .chain(std::iter::once((
@@ -473,7 +542,7 @@ fn derive_bundle(decl: &Decl) -> Vec<Decl> {
                     name: empty_span(SmolStr::new(format!("create_{}", name.data))),
                     params: factory_params,
                     ret_type: self_ty,
-                    body: build_create_body(name, fields, CreateMode::Wire, &Vec::new()),
+                    body: build_create_body(name, fields, CreateMode::Wire, &Vec::new(), bundle_types),
                 });
             }
 
@@ -596,6 +665,7 @@ pub fn derive_imasterslave(
     fields: &[(Span<SmolStr>, Raw, Icit)],
     impl_params: &[(Span<SmolStr>, Raw, Icit)],
     methods: &[(Decl, bool)],
+    bundle_types: &BundleSet,
 ) -> Result<Vec<(Decl, bool)>, String> {
     // Only asMaster / asSlave spec methods are recognised.
     let mut master_spec: Option<DirSpec> = None;
@@ -678,7 +748,7 @@ pub fn derive_imasterslave(
                 name: empty_span(SmolStr::new(mname)),
                 params: bn_param.clone(),
                 ret_type: self_ty.clone(),
-                body: build_create_body(struct_name, fields, mode, &spec),
+                body: build_create_body(struct_name, fields, mode, &spec, bundle_types),
             },
             false,
         )
@@ -691,7 +761,7 @@ pub fn derive_imasterslave(
 }
 
 /// Derive Show: generates a proper `impl Show for Type { def show = ... }` block.
-fn derive_show(decl: &Decl) -> Vec<Decl> {
+fn derive_show(decl: &Decl, _bundle_types: &BundleSet) -> Vec<Decl> {
     match decl {
         Decl::Enum { name, params, cases, .. } => {
             let self_ty = build_self_ty(name, params);

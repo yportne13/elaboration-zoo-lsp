@@ -2136,6 +2136,81 @@ println(moduleTreeVL(Test.create.tree))
 }
 
 #[test]
+fn test_hdl_bundle_create_nested() {
+    // Nested bundles: create_OuterBus recursively creates the inner bundle
+    // through its own factory, with the caller's binding name prefixing every
+    // signal (`outer1_value`, `outer1_strobe`, `outer1_ready`, …).
+    let input = r#"
+#[derive(Bundle)]
+struct InnerBus {
+    value: UInt[8]
+    strobe: Bool
+}
+
+#[derive(Bundle)]
+struct OuterBus {
+    inner: InnerBus
+    ready: Bool
+}
+
+module Test {
+    let outer1 = create_OuterBus
+    let outer2 = create_OuterBus
+    outer1 := outer2
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            // Nested signals named through the recursive factory + bn chain
+            assert!(output.contains("wire [7:0] outer1_value;"), "nested bundle field signal, got: {}", output);
+            assert!(output.contains("wire outer1_strobe;"), "nested bundle field signal, got: {}", output);
+            assert!(output.contains("wire outer1_ready;"), "outer primitive field signal, got: {}", output);
+            // `:=` recurses into the nested bundle
+            assert!(output.contains("assign outer1_value = outer2_value"), "nested wiring, got: {}", output);
+            assert!(output.contains("assign outer1_ready = outer2_ready"), "outer wiring, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_create_nested_param() {
+    // Parametric nested bundles: the width param flows through both
+    // factories (`create_OuterBus[8]` → `create_InnerBus[8]`).
+    let input = r#"
+#[derive(Bundle)]
+struct InnerBus[w: Nat] {
+    data: UInt[w]
+    valid: Bool
+}
+
+#[derive(Bundle)]
+struct OuterBus[w: Nat] {
+    inner: InnerBus[w]
+    ready: Bool
+}
+
+module Test {
+    let outer = create_OuterBus[8]
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            assert!(output.contains("wire [7:0] outer_data;"), "nested parametric field width, got: {}", output);
+            assert!(output.contains("wire outer_valid;"), "nested parametric field signal, got: {}", output);
+            assert!(output.contains("wire outer_ready;"), "outer field signal, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
 fn test_succ_meta_unify() {
     let input = r#"
 enum Nat {

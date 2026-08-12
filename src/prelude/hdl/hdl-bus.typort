@@ -78,6 +78,11 @@ def isInputPort(e: Expr): Boolean = match e {
 //      — automatic wire factory; every signal is named after the caller's
 //        let binding plus the field name (`bn.name + "_" + field`), e.g.
 //        `let master = create_AxiLite` creates "master_awaddr", …
+//      — nested bundle fields are created recursively through their own
+//        factories (`create_OuterBus` calls `create_InnerBus[bn]`, so the
+//        binding-name prefix flows down: `let outer = create_OuterBus` names
+//        the inner signals "outer_value", …). The nested type must be a
+//        `#[derive(Bundle)]` struct declared in the same file.
 //
 // Directionality (SpinalHDL master/slave) is NOT part of the struct — fields
 // carry plain types. Implement `IMasterSlave` to introduce directions:
