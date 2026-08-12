@@ -139,8 +139,8 @@ Verilog 生成器遍历父模块 exprs 中的 assign，检查 LHS/RHS 是否有 
 
 ## 7. Bundle 与其他信号类型
 
-- `#[derive(Bundle)]` 生成 `impl Bundle` 和 `def create_TypeName(prefix)` 保持不变
-- 后续改为 `TypeName.mk(prefix)` 风格，暂缓
+- `#[derive(Bundle)]` 生成 `impl Bundle`、`impl Into` 和 `def TypeName.create[bn: BindingName]`（2026-08：由 `create_TypeName` 改为 `TypeName.create`，与模块 `Name.create` 统一；支持嵌套 bundle 字段递归创建）
+- 方向由 `impl IMasterSlave` 引入（2026-08）：struct 字段不带 `in()/out()` 标记，`asMaster` 里用 `in()/out()/inout()` 声明每个字段方向，`asSlave` 自动翻转；嵌套 bundle 字段用 `out/in` 递归子 bundle 的 `asMaster`/`asSlave`
 - Bool/Bits/UInt/SInt 的工厂函数暂时保留 `newUInt`、`newBoolInput` 等不变
 - 所有信号创建函数都写入当前栈顶 frame
 
