@@ -51,8 +51,8 @@ impl IMasterSlave for TriBus {
 }
 
 module bundleInOut {
-    let master = create_TriBus.asMaster
-    let slave = create_TriBus.asSlave
+    let master = TriBus.create.asMaster
+    let slave = TriBus.create.asSlave
     master := slave
 }
 println("=== 13c: bundleInOut (Bundle inout 字段) ===")

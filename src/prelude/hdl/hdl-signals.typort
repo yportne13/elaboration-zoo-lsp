@@ -139,7 +139,7 @@ def autoBoolOutRegInit[bn: BindingName](initVal: Nat): Bool =
 // ---- Explicit-name signal creation (internal helpers) ----
 // The `Named` variants build signals with an explicit name string. They are
 // used where the signal's name does NOT come from a let binding: the Bundle
-// derive (create_TypeName / asMaster / asSlave prefix fields with the
+// derive (TypeName.create / asMaster / asSlave prefix fields with the
 // factory's bn), the in_u/out_u direction helpers (reuse the source signal's
 // name), the RegNext impls and counter (register named after the caller's
 // binding), and explicit-name call sites. The public new* family below

@@ -12,7 +12,7 @@ pub type DeriveRegistry = HashMap<String, DeriveMacro>;
 /// The set of struct names in the current file that carry `#[derive(Bundle)]`.
 /// Used by derive_bundle to recognise nested-bundle fields (a field whose
 /// type is another Bundle struct declared in the same file), so
-/// create_TypeName can recursively create them.
+/// TypeName.create can recursively create them.
 pub type BundleSet = std::collections::HashSet<SmolStr>;
 
 pub fn default_derive_registry() -> DeriveRegistry {
@@ -205,7 +205,7 @@ fn build_bundle_body(fields: &[(Span<SmolStr>, Raw, Icit)]) -> Raw {
 /// Direction mode of a generated signal factory.
 #[derive(Clone, Copy, PartialEq)]
 enum CreateMode {
-    /// Plain wires (create_TypeName) — directions are ignored.
+    /// Plain wires (TypeName.create) — directions are ignored.
     Wire,
     /// Master-perspective directed ports (the asMaster method body).
     Master,
@@ -249,7 +249,7 @@ fn is_primitive_type(t: &Raw) -> bool {
 ///     case false => string_concat(string_concat(bn.name, "_"), "field")
 ///   }
 /// `bn` is the factory's implicit BindingName parameter; the compiler fills it
-/// with the caller's let-binding name, so `let master = create_AxiLite` names
+/// with the caller's let-binding name, so `let master = AxiLite.create` names
 /// the fields "master_awaddr", … (empty binding name ⇒ no prefix).
 fn build_field_name_expr(field_name: &str) -> Raw {
     let bn_name = Raw::Obj(
@@ -350,9 +350,9 @@ fn bundle_field_type<'a>(t: &'a Raw, bundle_types: &BundleSet) -> Option<(&'a st
 /// w)`, etc. — for master/slave factories the directed port variants
 /// (newUIntInputNamed/…), with the field's direction taken from `dir_spec`
 /// (already in the factory's own perspective). A nested bundle field becomes
-/// a recursive factory call `create_<TypeName>[<type args>][bn]` — `bn` is
+/// a recursive factory call `<TypeName>.create[<type args>][bn]` — `bn` is
 /// passed explicitly so the caller's binding name keeps prefixing the inner
-/// signals (`let outer = create_OuterBus` → "outer_value", …).
+/// signals (`let outer = OuterBus.create` → "outer_value", …).
 fn build_field_create_expr(
     field_name: &Span<SmolStr>,
     field_type: &Raw,
@@ -360,25 +360,50 @@ fn build_field_create_expr(
     dir_spec: &DirSpec,
     bundle_types: &BundleSet,
 ) -> Raw {
-    // Nested bundle field: recurse into the child's own factory. Wire mode
-    // only — directed (Master/Slave) factories reject non-primitive fields
-    // before reaching here (see derive_imasterslave).
-    if mode == CreateMode::Wire {
-        if let Some((head, args)) = bundle_field_type(field_type, bundle_types) {
-            let create_fn = Raw::Var(empty_span(SmolStr::new(format!("create_{}", head))));
-            let mut app = create_fn;
-            for (arg, either) in args {
-                app = Raw::App(Box::new(app), Box::new(arg), either);
-            }
-            // Explicitly pass the factory's own implicit `bn: BindingName`:
-            // the child call elaborates at this def's definition site, where
-            // the caller's binding name is not available.
-            return Raw::App(
+    // Nested bundle field: recurse through the child's own factory
+    // (`<ChildType>.create`), with an optional direction method —
+    // `out(this.aw)` → <T>.create[...].asMaster, `in(this.aw)` →
+    // <T>.create[...].asSlave (the direction spec is already in this
+    // factory's own perspective). Both `bn`s are passed explicitly — the
+    // child factory's own implicit BindingName and the direction method's —
+    // because this expression elaborates at this def's definition site,
+    // where the caller's binding name is not available.
+    if let Some((head, args)) = bundle_field_type(field_type, bundle_types) {
+        let create_fn = Raw::Obj(
+            Box::new(Raw::Var(empty_span(SmolStr::new(head)))),
+            Some(empty_span(SmolStr::new("create"))),
+        );
+        let mut app = create_fn;
+        for (arg, either) in args {
+            app = Raw::App(Box::new(app), Box::new(arg), either);
+        }
+        // Explicitly pass the child factory's implicit `bn: BindingName` so
+        // the caller's binding name keeps prefixing the inner signals.
+        app = Raw::App(
+            Box::new(app),
+            Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
+            Either::Icit(Icit::Impl),
+        );
+        if mode != CreateMode::Wire {
+            // dir "Out" → the child is built as a master (its own asMaster),
+            // dir "In" → as a slave (its own asSlave).
+            let dir = dir_spec
+                .iter()
+                .find(|(n, _)| n == &field_name.data)
+                .map(|(_, d)| *d);
+            let method = match dir {
+                Some("In") => "asSlave",
+                _ => "asMaster", // "Out", or unreachable dirs (validation rejects "InOut")
+            };
+            app = Raw::Obj(Box::new(app), Some(empty_span(SmolStr::new(method))));
+            // ... and the direction method's own implicit `[bn]`.
+            app = Raw::App(
                 Box::new(app),
                 Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
                 Either::Icit(Icit::Impl),
             );
         }
+        return app;
     }
 
     let name_expr = build_field_name_expr(&field_name.data);
@@ -418,7 +443,7 @@ fn build_field_create_expr(
 ///   new BundleType(__f0, __f1)
 /// `mode` selects wire vs. directed-port creation (master/slave); `dir_spec`
 /// supplies the per-field port directions for the directed modes; nested
-/// bundle fields recurse through their own create_TypeName factories
+/// bundle fields recurse through their own <ChildType>.create factories
 /// (`bundle_types`).
 fn build_create_body(
     name: &Span<SmolStr>,
@@ -458,7 +483,7 @@ fn build_create_body(
 /// Derive Bundle: for a single-constructor enum (struct), generates:
 ///   impl Bundle for StructName { def :=(that: StructName): Unit = … }
 ///   impl Into[Self] for Self { … }
-///   def create_StructName$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
+///   def StructName.create$(typeParams)[bn: BindingName]: StructName$(typeParams) = …
 /// with sequenced field-by-field assignments and auto-named signal factories
 /// (binding name + "_" + field name). Nested bundle fields (types named in
 /// `bundle_types`) are created recursively through their own factories.
@@ -516,9 +541,9 @@ fn derive_bundle(decl: &Decl, bundle_types: &BundleSet) -> Vec<Decl> {
 
             let mut result = vec![bundle_impl, into_impl];
 
-            // ── 3. Standalone wire factory ──
-            // Generates:
-            //   def create_<TypeName>$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
+            // ── 3. Wire factory ──
+            // Generates (same shape as a module's `Name.create`):
+            //   def TypeName.create$(typeParams)[bn: BindingName]: TypeName$(typeParams) = …
             // Emitted when every field is either a recognised primitive HDL
             // type (UInt, SInt, Bits, Bool) or a nested bundle struct of this
             // file (so we know how to auto-create the signals). The implicit
@@ -539,7 +564,7 @@ fn derive_bundle(decl: &Decl, bundle_types: &BundleSet) -> Vec<Decl> {
                     .collect();
 
                 result.push(Decl::Def {
-                    name: empty_span(SmolStr::new(format!("create_{}", name.data))),
+                    name: empty_span(SmolStr::new(format!("{}.create", name.data))),
                     params: factory_params,
                     ret_type: self_ty,
                     body: build_create_body(name, fields, CreateMode::Wire, &Vec::new(), bundle_types),
@@ -650,15 +675,19 @@ fn validate_dir_spec(
 /// An explicit user-written asSlave spec is used as-is (slave perspective);
 /// otherwise asSlave flips the asMaster spec (In ↔ Out, InOut stays InOut).
 /// The generated methods rebuild the bundle with directed ports; `bn` picks
-/// up the caller's let-binding name, so `let master = create_AxiLite.asMaster`
-/// names its ports "master_awaddr", …. The plain wires left behind by the
-/// inner create_TypeName call are dropped by the Verilog generator (a port
+/// up the caller's let-binding name, so `let master = AxiLite.create.asMaster`
+/// names its ports "master_awaddr", …. Nested bundle fields (types named in
+/// `bundle_types`) are directed through their own factories:
+/// `out(this.aw)` → `<T>.create[...].asMaster[bn]`, `in(this.aw)` →
+/// `<T>.create[...].asSlave[bn]`. The plain wires left behind by the inner
+/// TypeName.create call are dropped by the Verilog generator (a port
 /// declaration takes precedence over a same-named wire; see collectPortNames
 /// in hdl-verilog.typort).
 ///
 /// Returns a user-facing error message when the spec is malformed: unknown
 /// method names, fields not declared in the struct, duplicate or missing
-/// directions, or non-primitive field types.
+/// directions, `inout` on a nested bundle field, or field types that are
+/// neither primitive HDL types nor Bundle structs of this file.
 pub fn derive_imasterslave(
     struct_name: &Span<SmolStr>,
     struct_params: &[(Span<SmolStr>, Raw, Icit)],
@@ -666,6 +695,7 @@ pub fn derive_imasterslave(
     impl_params: &[(Span<SmolStr>, Raw, Icit)],
     methods: &[(Decl, bool)],
     bundle_types: &BundleSet,
+    imasterslave_types: &BundleSet,
 ) -> Result<Vec<(Decl, bool)>, String> {
     // Only asMaster / asSlave spec methods are recognised.
     let mut master_spec: Option<DirSpec> = None;
@@ -697,15 +727,40 @@ pub fn derive_imasterslave(
     })?;
     validate_dir_spec(&master_spec, struct_name, fields)?;
 
-    // Every field must be a recognised primitive so the directed-port
-    // factories can be generated (same requirement as create_TypeName).
+    // Every field must be either a recognised primitive or a nested bundle
+    // struct of this file; the directed-port factories handle each kind
+    // accordingly (primitive → directed port constructors, nested bundle →
+    // recursive <T>.create[...].asMaster/asSlave).
     for (fname, fty, _) in fields {
-        if !is_primitive_type(fty) {
-            return Err(format!(
-                "field `{}` of `{}` has a non-primitive type; impl IMasterSlave requires UInt/SInt/Bits/Bool fields",
-                fname.data, struct_name.data
-            ));
+        if is_primitive_type(fty) {
+            continue;
         }
+        if let Some((head, _)) = bundle_field_type(fty, bundle_types) {
+            // A nested bundle takes only out/in (the whole child is directed
+            // through its own asMaster/asSlave); inout has no meaning for a
+            // bundle field.
+            let dir = master_spec.iter().find(|(n, _)| n == &fname.data).map(|(_, d)| *d);
+            if dir == Some("InOut") {
+                return Err(format!(
+                    "field `{}` of `{}`: `inout` direction is only valid for primitive fields (nested bundles use `out` / `in` to direct the whole child)",
+                    fname.data, struct_name.data
+                ));
+            }
+            // The generated code calls the child's own asMaster/asSlave, so
+            // the child must implement IMasterSlave itself (like SpinalHDL's
+            // Axi4AW extends Bundle with IMasterSlave).
+            if !imasterslave_types.contains(head) {
+                return Err(format!(
+                    "field `{}` of `{}`: nested bundle `{}` must itself implement IMasterSlave (its `asMaster` / `asSlave` direct the child's fields)",
+                    fname.data, struct_name.data, head
+                ));
+            }
+            continue;
+        }
+        return Err(format!(
+            "field `{}` of `{}` has type `{}` which is neither a primitive HDL type (UInt/SInt/Bits/Bool) nor a #[derive(Bundle)] struct of this file",
+            fname.data, struct_name.data, fty
+        ));
     }
 
     // A parametric bundle's impl must bind the struct's implicit params

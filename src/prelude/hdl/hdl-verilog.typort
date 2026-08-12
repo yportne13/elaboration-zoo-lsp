@@ -369,8 +369,8 @@ def collectPortLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[St
 
 // Collect the names of all signals declared as ports (input/output). Wire
 // declarations skip same-named signals: a port declaration takes precedence
-// over a wire — e.g. `create_AxiLite.asMaster` rebuilds its fields as ports
-// while the plain create_TypeName wires from the inner call still sit in the
+// over a wire — e.g. `AxiLite.create.asMaster` rebuilds its fields as ports
+// while the plain TypeName.create wires from the inner call still sit in the
 // module tree, and declaring both would emit illegal duplicate Verilog lines.
 def collectPortNames[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil

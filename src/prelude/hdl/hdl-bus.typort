@@ -33,15 +33,26 @@ def inout[T](t: T): T = t
 
 // IMasterSlave — SpinalHDL-style master/slave directionality.
 // A Bundle implementing this trait gains the direction methods used on
-// `create_TypeName` factories:
-//   let master = create_AxiLite.asMaster   // ports: awaddr… output, awready… input
-//   let slave  = create_AxiLite.asSlave    // ports: awaddr… input, awready… output
+// `TypeName.create` factories:
+//   let master = AxiLite.create.asMaster   // ports: awaddr… output, awready… input
+//   let slave  = AxiLite.create.asSlave    // ports: awaddr… input, awready… output
 // The user writes ONLY the asMaster direction spec (see in/out/inout above);
 // the derive fills both methods — asSlave is asMaster with every direction
 // flipped (In ↔ Out, InOut stays InOut). The `[bn: BindingName]` implicit
 // parameter picks up the caller's let-binding name, so
-// `let master = create_AxiLite.asMaster` still names its ports
+// `let master = AxiLite.create.asMaster` still names its ports
 // "master_awaddr", …
+//
+// Nested bundles (SpinalHDL's Axi4 ⊃ Axi4AW): a field whose type is itself a
+// `#[derive(Bundle)]` struct of the same file takes `out(...)` / `in(...)`
+// to direct the whole child through its own asMaster / asSlave:
+//   let _ = out(this.aw);   // aw: Axi4AW — the child is built as a master
+// The child type must itself implement IMasterSlave. `inout` is only valid
+// for primitive fields. The binding-name prefix flows down:
+// `let master = Axi4.create.asMaster` names the child's ports
+// "master_addr", …. The plain wires left behind by the child's factory are
+// dropped by the Verilog generator (ports take precedence over same-named
+// wires).
 trait IMasterSlave {
     def asMaster[bn: BindingName]: Self
     def asSlave[bn: BindingName]: Self
@@ -74,13 +85,13 @@ def isInputPort(e: Expr): Boolean = match e {
 //        whose LHS is an input port are skipped (see isInputPort)
 //   2. impl Into[TypeName] for TypeName { def into = this }
 //      — identity conversion so the Expr macro's `:=` works with bundles
-//   3. def create_TypeName$(typeParams)[bn: BindingName]: TypeName = …
+//   3. def TypeName.create$(typeParams)[bn: BindingName]: TypeName = …
 //      — automatic wire factory; every signal is named after the caller's
 //        let binding plus the field name (`bn.name + "_" + field`), e.g.
-//        `let master = create_AxiLite` creates "master_awaddr", …
+//        `let master = AxiLite.create` creates "master_awaddr", …
 //      — nested bundle fields are created recursively through their own
-//        factories (`create_OuterBus` calls `create_InnerBus[bn]`, so the
-//        binding-name prefix flows down: `let outer = create_OuterBus` names
+//        factories (`OuterBus.create` calls `InnerBus.create[bn]`, so the
+//        binding-name prefix flows down: `let outer = OuterBus.create` names
 //        the inner signals "outer_value", …). The nested type must be a
 //        `#[derive(Bundle)]` struct declared in the same file.
 //
@@ -94,7 +105,7 @@ def isInputPort(e: Expr): Boolean = match e {
 //        asMaster: out-marked fields become output ports, in-marked fields
 //        input ports; asSlave: exactly the opposite (InOut stays InOut).
 //        Both rebuild the bundle with directed ports; the plain wires from
-//        the inner create_TypeName call are dropped by the Verilog generator
+//        the inner TypeName.create call are dropped by the Verilog generator
 //        (ports take precedence over same-named wires, see collectPortNames
 //        in hdl-verilog.typort).
 //
@@ -122,15 +133,15 @@ def isInputPort(e: Expr): Boolean = match e {
 //
 //   // Usage inside a module:
 //   module Top {
-//     let master = create_AxiLite    // wires, auto-named "master_awaddr", …
-//     let slave  = create_AxiLite    // wires, auto-named "slave_awaddr", …
+//     let master = AxiLite.create    // wires, auto-named "master_awaddr", …
+//     let slave  = AxiLite.create    // wires, auto-named "slave_awaddr", …
 //     master := slave                // bulk assignment
 //   }
 //
 //   // Directed interfaces (SpinalHDL master/slave):
 //   module Bridge {
-//     let master = create_AxiLite.asMaster   // ports: awaddr… output, awready… input
-//     let slave  = create_AxiLite.asSlave    // ports: awaddr… input, awready… output
+//     let master = AxiLite.create.asMaster   // ports: awaddr… output, awready… input
+//     let slave  = AxiLite.create.asSlave    // ports: awaddr… input, awready… output
 //     master := slave                        // drives the master's outputs (skips inputs)
 //     slave := master                        // drives the slave's outputs (skips inputs)
 //   }
@@ -139,7 +150,7 @@ def isInputPort(e: Expr): Boolean = match e {
 //   #[derive(Bundle)]
 //   struct MyBus[w: Nat] { data: UInt[w]; valid: Bool }
 //
-//   let bus = create_MyBus[8]        // auto-creates with width 8
+//   let bus = MyBus.create[8]        // auto-creates with width 8
 //
 // `#[derive(Bundle)]` 的实现在 src/L13_namespace/parser/derive.rs，
 // 此处注释仅为使用文档；修改派生逻辑时请同步两处。

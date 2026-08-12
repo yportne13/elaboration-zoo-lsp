@@ -2104,6 +2104,9 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
     // be checked and expanded regardless of declaration order.
     let mut bundle_structs: HashMap<SmolStr, (Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Vec<(Span<SmolStr>, Raw, Icit)>)> = HashMap::new();
     let mut all_structs: std::collections::HashSet<SmolStr> = std::collections::HashSet::new();
+    // Types with an `impl IMasterSlave` block (needed by derive_imasterslave
+    // to check that nested bundle fields are themselves directional).
+    let mut imasterslave_types: derive::BundleSet = std::collections::HashSet::new();
     for decl in &decls {
         match decl {
             Decl::Enum { name, .. } => {
@@ -2114,6 +2117,13 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
                     all_structs.insert(name.data.clone());
                     if traits.iter().any(|t| t.data == "Bundle") && cases.len() == 1 {
                         bundle_structs.insert(name.data.clone(), (name.clone(), params.clone(), cases[0].1.clone()));
+                    }
+                }
+            }
+            Decl::ImplDecl { trait_name, name, inherent, .. } => {
+                if !inherent && trait_name.data == "IMasterSlave" {
+                    if let Some(struct_name) = raw_ctor_name(name) {
+                        imasterslave_types.insert(struct_name);
                     }
                 }
             }
@@ -2152,7 +2162,7 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
                 if !inherent && trait_name.data == "IMasterSlave" {
                     if let Some(struct_name) = raw_ctor_name(&name) {
                         if let Some((struct_span, struct_params, fields)) = bundle_structs.get(&struct_name) {
-                            match derive::derive_imasterslave(struct_span, struct_params, fields, &params, &methods, &bundle_names) {
+                            match derive::derive_imasterslave(struct_span, struct_params, fields, &params, &methods, &bundle_names, &imasterslave_types) {
                                 Ok(methods) => {
                                     result.push(Decl::ImplDecl { trait_name, name, params, trait_params, methods, inherent, from_class });
                                     continue;

@@ -45,7 +45,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Inout ports | `inout io = UInt[8]` | Tri-state bidirectional ports (`inout wire [7:0] io`); Bundle `inout()` directions (declared in `impl IMasterSlave`'s `asMaster`) become inout ports on both master and slave |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
-| Bundle | `#[derive(Bundle)]` + `impl IMasterSlave` | SpinalHDL-style bulk assignment; auto-named signal factory (`create_TypeName`, binding name prefix); direction introduced in `impl IMasterSlave`'s `asMaster` (struct fields carry no in()/out() markers), `asSlave` auto-flips |
+| Bundle | `#[derive(Bundle)]` + `impl IMasterSlave` | SpinalHDL-style bulk assignment; auto-named signal factory (`TypeName.create`, binding name prefix); direction introduced in `impl IMasterSlave`'s `asMaster` (struct fields carry no in()/out() markers), `asSlave` auto-flips |
 
 HDL code is written inside a `module` block and compiles to Verilog:
 

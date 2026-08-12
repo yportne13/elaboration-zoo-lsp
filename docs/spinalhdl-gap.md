@@ -14,7 +14,7 @@
 | UInt | ✅ | 算术 + - * +^ -^、位运算、比较、移位、位选/切片、resize/cast、asBits/asSInt/asBool、mux | — |
 | SInt | 🟡 | 基本完备；缺 `abs`、`expand`、除法/取模、`\|<<` `\|>>` | 必要 |
 | Enum (SpinalEnum) | ❌ | 语言有普通 enum，但无硬件 enum：无编码/位宽、无 `===` 硬件比较、switch 只支持 Nat 字面量、无 Verilog `reg [1:0] state` 代码生成 | 重要(二期) |
-| Bundle | ✅ | `#[derive(Bundle)]`：批量 `:=`、`create_TypeName` 自动命名；方向由 `impl IMasterSlave` 引入（struct 不带 `in()/out()` 标记，`asMaster` 里用 `in()/out()/inout()` 声明，`asSlave` 自动翻转） | — |
+| Bundle | ✅ | `#[derive(Bundle)]`：批量 `:=`、`TypeName.create` 自动命名；方向由 `impl IMasterSlave` 引入（struct 不带 `in()/out()` 标记，`asMaster` 里用 `in()/out()/inout()` 声明，`asSlave` 自动翻转） | — |
 | Vec | ❌ | 语言内建 `Vec[A](len)` 是纯数据 GADT（nil/cons），无硬件向量：无 `Vec.fill` 信号工厂、无静态/动态下标、无批量赋值 | 必要 |
 | UFix/SFix | ❌ | 无定点数 | 可选(远期) |
 

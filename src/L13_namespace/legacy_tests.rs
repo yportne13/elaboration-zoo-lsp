@@ -1736,7 +1736,7 @@ println(moduleTreeVL(Test.create.tree))
 #[test]
 fn test_hdl_bundle_basic() {
     // Bundle with manual signal creation + bulk :=.
-    // (create_MyBus factory used for ergonomics; signals auto-named from the
+    // (MyBus.create factory used for ergonomics; signals auto-named from the
     // let binding: bus1_data, bus1_valid, …)
     let input = r#"
 #[derive(Bundle)]
@@ -1746,8 +1746,8 @@ struct MyBus {
 }
 
 module Test {
-    let bus1 = create_MyBus
-    let bus2 = create_MyBus
+    let bus1 = MyBus.create
+    let bus2 = MyBus.create
     bus1 := bus2
 }
 
@@ -1818,8 +1818,8 @@ struct AxiLite {
 }
 
 module Test {
-    let master = create_AxiLite
-    let slave  = create_AxiLite
+    let master = AxiLite.create
+    let slave  = AxiLite.create
     master := slave
 }
 
@@ -1839,7 +1839,7 @@ fn test_hdl_bundle_master_slave() {
     // SpinalHDL-style master/slave: struct fields carry plain types (no
     // in()/out() markers); direction is introduced by `impl IMasterSlave` —
     // asMaster declares each field's direction from the master's point of
-    // view, asSlave is derived by flipping. create_AxiLite.asMaster:
+    // view, asSlave is derived by flipping. AxiLite.create.asMaster:
     // out→output port, in→input port; asSlave flips. `:=` skips assignments
     // whose LHS is an input port.
     let input = r#"
@@ -1865,8 +1865,8 @@ impl IMasterSlave for AxiLite {
 }
 
 module Test {
-    let master = create_AxiLite.asMaster
-    let slave  = create_AxiLite.asSlave
+    let master = AxiLite.create.asMaster
+    let slave  = AxiLite.create.asSlave
     master := slave
     slave := master
 }
@@ -1888,7 +1888,7 @@ println(moduleTreeVL(Test.create.tree))
             assert!(!output.contains("assign master_awready"), "must not drive an input port, got: {}", output);
             assert!(!output.contains("assign slave_awaddr"), "must not drive an input port, got: {}", output);
             // No duplicate declarations: the plain wires created by the inner
-            // create_AxiLite calls must be dropped in favour of the ports
+            // AxiLite.create calls must be dropped in favour of the ports
             assert!(!output.contains("wire [15:0] master_awaddr;"), "wire decl for a port must be dropped, got: {}", output);
             assert!(!output.contains("wire master_awready;"), "wire decl for a port must be dropped, got: {}", output);
             assert!(!output.contains("wire [15:0] slave_awaddr;"), "wire decl for a port must be dropped, got: {}", output);
@@ -1918,8 +1918,8 @@ impl[w: Nat] IMasterSlave for MyBus[w] {
 }
 
 module Test {
-    let master = create_MyBus[8].asMaster
-    let slave  = create_MyBus[8].asSlave
+    let master = MyBus.create[8].asMaster
+    let slave  = MyBus.create[8].asSlave
     master := slave
 }
 
@@ -1931,6 +1931,74 @@ println(moduleTreeVL(Test.create.tree))
             assert!(output.contains("output wire [7:0] master_data"), "param bundle master out field, got: {}", output);
             assert!(output.contains("input wire [7:0] slave_data"), "param bundle slave in field, got: {}", output);
             assert!(output.contains("input wire slave_valid"), "param bundle slave side of an out field, got: {}", output);
+        }
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_bundle_master_slave_nested() {
+    // Nested bundles in master/slave (SpinalHDL Axi4 ⊃ Axi4AW style):
+    // `out(this.aw)` directs the whole child bundle through its own
+    // asMaster, `in(this.b)` through its asSlave; the binding-name prefix
+    // flows down (`master_addr`, …). `:=` recurses and still skips
+    // input-port LHS.
+    let input = r#"
+#[derive(Bundle)]
+struct Axi4AW {
+    addr: UInt[16]
+    valid: Bool
+}
+
+// the child directs itself (like SpinalHDL's Axi4AW extends Bundle with
+// IMasterSlave); the parent's `out(this.aw)` then recurses into it
+impl IMasterSlave for Axi4AW {
+    def asMaster: Axi4AW =
+        let _ = out(this.addr);
+        let _ = out(this.valid);
+        this
+}
+
+#[derive(Bundle)]
+struct Axi4 {
+    aw: Axi4AW
+    ready: Bool
+}
+
+impl IMasterSlave for Axi4 {
+    def asMaster: Axi4 =
+        let _ = out(this.aw);
+        let _ = in(this.ready);
+        this
+}
+
+module Test {
+    let master = Axi4.create.asMaster
+    let slave  = Axi4.create.asSlave
+    master := slave
+    slave := master
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(output) => {
+            println!("{}", output);
+            // master side: aw is out → the child follows its own asMaster
+            assert!(output.contains("output wire [15:0] master_addr"), "master child out field, got: {}", output);
+            assert!(output.contains("output wire master_valid"), "master child out field, got: {}", output);
+            assert!(output.contains("input wire master_ready"), "master in field, got: {}", output);
+            // slave side: flipped
+            assert!(output.contains("input wire [15:0] slave_addr"), "slave child in field, got: {}", output);
+            assert!(output.contains("input wire slave_valid"), "slave child in field, got: {}", output);
+            assert!(output.contains("output wire slave_ready"), "slave out field, got: {}", output);
+            // wiring recurses into the nested bundle, both directions
+            assert!(output.contains("assign master_addr = slave_addr"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign master_valid = slave_valid"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign slave_ready = master_ready"), "slave→master wiring, got: {}", output);
+            // no input-port drive
+            assert!(!output.contains("assign master_ready"), "must not drive an input port, got: {}", output);
+            assert!(!output.contains("assign slave_addr"), "must not drive an input port, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -2008,6 +2076,37 @@ impl IMasterSlave for MyBus {
         this
 }
 "#, "bad direction statement"),
+        // inout on a nested bundle field (only primitive fields may be inout)
+        (r#"
+#[derive(Bundle)]
+struct InnerBus {
+    value: UInt[8]
+}
+
+#[derive(Bundle)]
+struct OuterBus {
+    inner: InnerBus
+}
+
+impl IMasterSlave for OuterBus {
+    def asMaster: OuterBus =
+        let _ = inout(this.inner);
+        this
+}
+"#, "`inout` direction is only valid for primitive fields"),
+        // field type that is neither primitive nor a Bundle struct
+        (r#"
+#[derive(Bundle)]
+struct MyBus {
+    name: String
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.name);
+        this
+}
+"#, "neither a primitive HDL type"),
     ];
     for (input, expected) in cases {
         let (_, errors) = parser::parser(input, 0).unwrap();
@@ -2083,7 +2182,7 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_bundle_create() {
-    // create_TypeName factory (auto-named signals) inside a module.
+    // TypeName.create factory (auto-named signals) inside a module.
     let input = r#"
 #[derive(Bundle)]
 struct MyBus {
@@ -2092,8 +2191,8 @@ struct MyBus {
 }
 
 module Test {
-    let bus1 = create_MyBus
-    let bus2 = create_MyBus
+    let bus1 = MyBus.create
+    let bus2 = MyBus.create
     bus1 := bus2
 }
 
@@ -2110,7 +2209,7 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_bundle_create_width_var() {
-    // create_TypeName[width] for parametric bundles.
+    // TypeName.create[width] for parametric bundles.
     let input = r#"
 #[derive(Bundle)]
 struct MyBus[w: Nat] {
@@ -2119,8 +2218,8 @@ struct MyBus[w: Nat] {
 }
 
 module Test {
-    let bus1 = create_MyBus[8]
-    let bus2 = create_MyBus[8]
+    let bus1 = MyBus.create[8]
+    let bus2 = MyBus.create[8]
     bus1 := bus2
 }
 
@@ -2137,7 +2236,7 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_bundle_create_nested() {
-    // Nested bundles: create_OuterBus recursively creates the inner bundle
+    // Nested bundles: OuterBus.create recursively creates the inner bundle
     // through its own factory, with the caller's binding name prefixing every
     // signal (`outer1_value`, `outer1_strobe`, `outer1_ready`, …).
     let input = r#"
@@ -2154,8 +2253,8 @@ struct OuterBus {
 }
 
 module Test {
-    let outer1 = create_OuterBus
-    let outer2 = create_OuterBus
+    let outer1 = OuterBus.create
+    let outer2 = OuterBus.create
     outer1 := outer2
 }
 
@@ -2179,7 +2278,7 @@ println(moduleTreeVL(Test.create.tree))
 #[test]
 fn test_hdl_bundle_create_nested_param() {
     // Parametric nested bundles: the width param flows through both
-    // factories (`create_OuterBus[8]` → `create_InnerBus[8]`).
+    // factories (`OuterBus.create[8]` → `InnerBus.create[8]`).
     let input = r#"
 #[derive(Bundle)]
 struct InnerBus[w: Nat] {
@@ -2194,7 +2293,7 @@ struct OuterBus[w: Nat] {
 }
 
 module Test {
-    let outer = create_OuterBus[8]
+    let outer = OuterBus.create[8]
 }
 
 println(moduleTreeVL(Test.create.tree))
