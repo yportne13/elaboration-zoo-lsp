@@ -68,7 +68,7 @@
 | Component/Module | ✅ | `module` 宏 → ModuleDef/ModuleTree；`create` 实例化；子模块 `let u = child.create` + `u.port := sig` 层次连接 | — |
 | in/out 端口 | ✅ | 宏、auto*、createPortExpr、Bundle 方向；`output reg`（寄存器输出端口）见 §4 | — |
 | inout 端口 | ✅ | `inout wire` 端口（宏、auto*、createPortExpr）；Bundle 的 `inout()` 方向在 `impl IMasterSlave` 的 `asMaster` 里声明，两侧都生成真 inout 端口 | — |
-| master/slave | ✅ | `asMaster`/`asSlave` + 端口方向翻转 | — |
+| master/slave | ✅ | `asMaster`/`asSlave` + 端口方向翻转；嵌套 bundle 字段用 `out/in` 递归子 bundle 的方向（子类型自身实现 IMasterSlave） | — |
 | `:=` | ✅ | Data trait + Bundle derive；自动跳过 input LHS | — |
 | `<>` | ❌ | 无（SpinalHDL 双向连接） | 重要 |
 | 实例化端口连接 | ✅ | `u.a := sig` → `.a(sig)` 端口映射 | — |
