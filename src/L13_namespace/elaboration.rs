@@ -1326,6 +1326,59 @@ impl Infer {
                     }
                     let out_param = self.trait_out_param.get(&trait_full)
                         .ok_or(Error(trait_name.clone().map(|n| format!("trait `{}` not declared", n)), vec![]))?;
+                    // ── Goto-definition / hover for the impl header ──
+                    // The typeclass name token (`XXX` in `impl XXX for xx`) is a
+                    // USE of the trait, not a defining occurrence: resolve it to
+                    // the trait declaration (`trait XXX`), whose def span lives in
+                    // the decl table under the (possibly package-prefixed) full
+                    // name — across files too (e.g. `IMasterSlave` declared in the
+                    // prelude's hdl-bus.typort). Without this entry the click
+                    // resolved to the impl instance def below, whose synthetic
+                    // name span was the trait-name token itself (jump-to-self).
+                    if let Some((trait_def_span, _, _, _, trait_vty, _)) = cxt.decl.get(&trait_full) {
+                        self.hover_table.push((
+                            trait_name.to_span(),
+                            *trait_def_span,
+                            crate::L13_namespace::cxt::HoverCxt {
+                                lvl: cxt.lvl,
+                                locals: cxt.locals.clone(),
+                                decl: cxt.decl.clone(),
+                            },
+                            trait_vty.clone(),
+                        ));
+                    }
+                    // Similarly, each method name token in the impl body
+                    // (`def m` implementing a trait method) resolves to the
+                    // method's declaration in the trait — its name span is
+                    // recorded in `trait_definition` (including methods
+                    // inherited from supertraits, whose spans point at the
+                    // supertrait's declaration). The hover value is the impl
+                    // method's own type (params → ret), evaluated in the
+                    // impl-parameter context.
+                    if let Some((_, _, _, trait_methods)) = self.trait_definition.get(&trait_full).cloned() {
+                        for (decl, _) in methods.iter() {
+                            if let Decl::Def { name: def_name, params: m_params, ret_type: m_ret, .. } = decl {
+                                if let Some((tm_name, _, _, _)) = trait_methods.iter().find(|(mn, _, _, _)| mn.data == def_name.data) {
+                                    let mty = m_params.iter().rev().fold(m_ret.clone(), |a, b| {
+                                        Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                                    });
+                                    let mty_val = self.infer_expr(&temp_cxt, mty)
+                                        .map(|(t, _)| self.eval(&temp_cxt.decl, &temp_cxt.env, &t))
+                                        .unwrap_or_else(|_| Val::U(0).into());
+                                    self.hover_table.push((
+                                        def_name.to_span(),
+                                        tm_name.to_span(),
+                                        crate::L13_namespace::cxt::HoverCxt {
+                                            lvl: temp_cxt.lvl,
+                                            locals: temp_cxt.locals.clone(),
+                                            decl: temp_cxt.decl.clone(),
+                                        },
+                                        mty_val,
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     // Keep ALL params (including outParam) so the solver can distinguish instances
                     // that differ only in output params (e.g., Into[String] vs Into[Bool] for the same type)
                     let typ_name = SmolStr::new(format!("{:?}{:?}", trait_full, trait_param));
@@ -1466,8 +1519,15 @@ impl Infer {
                             );
                         }
                     }
+                    // Register the impl instance (`trait_full(typ)`) under a
+                    // synthetic name with an EMPTY span: the name never appears
+                    // in source, so the def's self-hover entry must not claim
+                    // any real token — otherwise clicking the typeclass name
+                    // in the impl header would "goto" back into this impl
+                    // instead of the trait declaration (see the entry pushed
+                    // above for `trait_name`).
                     let (_, _, c) = self.infer_after_prefix(&cxt, Decl::Def {
-                        name: trait_name.to_span().map(|_| typ_name.clone()),
+                        name: empty_span(typ_name),
                         params,
                         ret_type: trait_params.into_iter()
                             .fold(Raw::App(

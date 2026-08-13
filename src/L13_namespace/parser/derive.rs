@@ -795,14 +795,19 @@ pub fn derive_imasterslave(
     bundle_types: &BundleSet,
     imasterslave_types: &BundleSet,
 ) -> Result<Vec<(Decl, bool)>, String> {
-    // Only asMaster / asSlave spec methods are recognised.
+    // Only asMaster / asSlave spec methods are recognised. The user's name
+    // spans are kept so the generated methods carry the user's `def asMaster`
+    // / `def asSlave` tokens — goto-definition / hover on those tokens then
+    // resolve through the impl elaboration to the trait's method declaration.
     let mut master_spec: Option<DirSpec> = None;
     let mut slave_spec: Option<DirSpec> = None;
+    let mut master_span: Option<Span<SmolStr>> = None;
+    let mut slave_span: Option<Span<SmolStr>> = None;
     for (decl, _) in methods {
         if let Decl::Def { name, body, .. } = decl {
             match name.data.as_str() {
-                "asMaster" => master_spec = Some(parse_dir_spec(body)?),
-                "asSlave" => slave_spec = Some(parse_dir_spec(body)?),
+                "asMaster" => { master_spec = Some(parse_dir_spec(body)?); master_span = Some(name.clone()); }
+                "asSlave" => { slave_spec = Some(parse_dir_spec(body)?); slave_span = Some(name.clone()); }
                 other => {
                     return Err(format!(
                         "unsupported method `{}` in impl IMasterSlave for `{}`: only `asMaster` (and optionally `asSlave`) are allowed",
@@ -895,10 +900,11 @@ pub fn derive_imasterslave(
         Raw::Var(empty_span(SmolStr::new("BindingName"))),
         Icit::Impl,
     )];
-    let mk = |mname: &str, spec: DirSpec, mode: CreateMode| -> (Decl, bool) {
+    let mk = |mname: &str, spec: DirSpec, mode: CreateMode, name_span: Option<Span<SmolStr>>| -> (Decl, bool) {
         (
             Decl::Def {
-                name: empty_span(SmolStr::new(mname)),
+                name: name_span.map(|s| s.map(|_| SmolStr::new(mname)))
+                    .unwrap_or_else(|| empty_span(SmolStr::new(mname))),
                 params: bn_param.clone(),
                 ret_type: self_ty.clone(),
                 body: build_create_body(struct_name, fields, mode, &spec, bundle_types),
@@ -908,8 +914,10 @@ pub fn derive_imasterslave(
     };
 
     Ok(vec![
-        mk("asMaster", master_spec, CreateMode::Master),
-        mk("asSlave", slave_spec, CreateMode::Slave),
+        mk("asMaster", master_spec, CreateMode::Master, master_span),
+        // An explicit user-written asSlave keeps its own token span; a
+        // flipped spec has no user token, so the name span stays empty.
+        mk("asSlave", slave_spec, CreateMode::Slave, slave_span),
     ])
 }
 
