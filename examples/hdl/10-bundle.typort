@@ -77,7 +77,9 @@ println(moduleTreeVL(bundleMasterSlave.create.tree))
 
 // 嵌套 Bundle:OuterBus.create 递归创建 inner(InnerBus.create[bn] 显式传
 // 绑定名),命名链延续——let outer = OuterBus.create 得到
-// outer_value / outer_strobe / outer_ready;`:=` 同样递归逐字段赋值。
+// outer_inner_value / outer_inner_strobe / outer_ready;`:=` 同样递归逐字段
+// 赋值。嵌套工厂会把绑定名前缀沿字段路径逐级下推(bn.name + "_" + 每级
+// 字段名),深层嵌套的每个叶子信号都有唯一全路径名(见 11-bundle-deep)。
 #[derive(Bundle)]
 struct InnerBus {
     value: UInt[8]

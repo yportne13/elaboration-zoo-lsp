@@ -386,6 +386,51 @@ fn bundle_field_type<'a>(t: &'a Raw, bundle_types: &BundleSet) -> Option<(&'a st
     Some((head, args))
 }
 
+/// Build the `BindingName` value passed to a nested bundle's factory so the
+/// caller's binding-name prefix flows down the field PATH (SpinalHDL-style):
+/// `let outer = OuterBus.create` names an inner signal `outer_inner_value`
+/// (bn.name + "_" + each level's field name). An empty bn.name (no enclosing
+/// `let`) falls back to the bare field path (`inner_value`, …). Without the
+/// path prefix, deep nesting collides — two sibling bundles with a shared leaf
+/// name would emit duplicate wires/ports.
+fn build_child_bn_expr(field_name: &str) -> Raw {
+    let bn_name = Raw::Obj(
+        Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
+        Some(empty_span(SmolStr::new("name"))),
+    );
+    let is_empty = Raw::app(
+        Raw::app(
+            Raw::Var(empty_span(SmolStr::new("str_eq"))),
+            bn_name.clone(),
+        ),
+        Raw::LiteralIntro(empty_span(String::new())),
+    );
+    let plain = Raw::LiteralIntro(empty_span(field_name.to_string()));
+    let prefixed = str_cat(
+        str_cat(bn_name, Raw::LiteralIntro(empty_span("_".to_string()))),
+        Raw::LiteralIntro(empty_span(field_name.to_string())),
+    );
+    let name = Raw::Match(
+        Box::new(is_empty),
+        vec![
+            (
+                Pattern::Con(empty_span(SmolStr::new("true")), vec![], Either::Icit(Icit::Expl)),
+                plain,
+            ),
+            (
+                Pattern::Con(empty_span(SmolStr::new("false")), vec![], Either::Icit(Icit::Expl)),
+                prefixed,
+            ),
+        ],
+    );
+    // BindingName.mk(name)
+    Raw::App(
+        Box::new(Raw::Var(empty_span(SmolStr::new("BindingName.mk")))),
+        Box::new(name),
+        Either::Icit(Icit::Expl),
+    )
+}
+
 /// Build the signal creation expression for a single field.
 /// Recognizes: UInt[w], SInt[w], Bits[w], Bool, and nested bundle fields
 /// (a type named in `bundle_types`). Returns `newUIntNamed(bn-prefixed name,
@@ -419,11 +464,12 @@ fn build_field_create_expr(
         for (arg, either) in args {
             app = Raw::App(Box::new(app), Box::new(arg), either);
         }
-        // Explicitly pass the child factory's implicit `bn: BindingName` so
-        // the caller's binding name keeps prefixing the inner signals.
+        // Explicitly pass the child factory's implicit `bn: BindingName`
+        // extended with this field's name, so the caller's binding-name
+        // prefix flows down the field path (`outer_inner_value`).
         app = Raw::App(
             Box::new(app),
-            Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
+            Box::new(build_child_bn_expr(&field_name.data)),
             Either::Icit(Icit::Impl),
         );
         if mode != CreateMode::Wire {
@@ -438,10 +484,11 @@ fn build_field_create_expr(
                 _ => "asMaster", // "Out", or unreachable dirs (validation rejects "InOut")
             };
             app = Raw::Obj(Box::new(app), Some(empty_span(SmolStr::new(method))));
-            // ... and the direction method's own implicit `[bn]`.
+            // ... and the direction method's own implicit `[bn]`, likewise
+            // path-extended.
             app = Raw::App(
                 Box::new(app),
-                Box::new(Raw::Var(empty_span(SmolStr::new("bn")))),
+                Box::new(build_child_bn_expr(&field_name.data)),
                 Either::Icit(Icit::Impl),
             );
         }

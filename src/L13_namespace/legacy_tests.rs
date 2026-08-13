@@ -1417,6 +1417,17 @@ fn test_examples_hdl_dir() {
             "input wire [31:0] slave_awaddr",    // slave 驱动字段 → input 端口
             "output wire slave_awready",         // slave 接收字段 → output 端口
         ]),
+        ("11-bundle-deep.typort", include_str!("../../examples/hdl/11-bundle-deep.typort"), &[
+            "module bundleDeep",      // 三层嵌套
+            "assign m_aw_lane_data = s_aw_lane_data",  // 全路径命名,aw/w 不冲突
+            "assign m_w_lane_data = s_w_lane_data",
+            "module bundleParamDeep", // 参数化三层嵌套,宽度沿链下传
+            "wire [31:0] m_aw_lane_data",
+            "module bundleDeepMS",    // 三层 master/slave 方向化
+            "output wire [7:0] master_aw_lane_data",
+            "input wire [7:0] slave_aw_lane_data",
+            "output wire slave_ready",
+        ]),
         ("11-memory.typort", include_str!("../../examples/hdl/11-memory.typort"), &[
             "reg [7:0] myRam [0:63];",   // 内存声明：64 × 8 位
             "reg [3:0] myBits [0:15];",  // Bits 内存
@@ -1992,16 +2003,16 @@ println(moduleTreeVL(Test.create.tree))
         Ok(output) => {
             println!("{}", output);
             // master side: aw is out → the child follows its own asMaster
-            assert!(output.contains("output wire [15:0] master_addr"), "master child out field, got: {}", output);
-            assert!(output.contains("output wire master_valid"), "master child out field, got: {}", output);
+            assert!(output.contains("output wire [15:0] master_aw_addr"), "master child out field, got: {}", output);
+            assert!(output.contains("output wire master_aw_valid"), "master child out field, got: {}", output);
             assert!(output.contains("input wire master_ready"), "master in field, got: {}", output);
             // slave side: flipped
-            assert!(output.contains("input wire [15:0] slave_addr"), "slave child in field, got: {}", output);
-            assert!(output.contains("input wire slave_valid"), "slave child in field, got: {}", output);
+            assert!(output.contains("input wire [15:0] slave_aw_addr"), "slave child in field, got: {}", output);
+            assert!(output.contains("input wire slave_aw_valid"), "slave child in field, got: {}", output);
             assert!(output.contains("output wire slave_ready"), "slave out field, got: {}", output);
             // wiring recurses into the nested bundle, both directions
-            assert!(output.contains("assign master_addr = slave_addr"), "master→slave wiring, got: {}", output);
-            assert!(output.contains("assign master_valid = slave_valid"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign master_aw_addr = slave_aw_addr"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign master_aw_valid = slave_aw_valid"), "master→slave wiring, got: {}", output);
             assert!(output.contains("assign slave_ready = master_ready"), "slave→master wiring, got: {}", output);
             // no unprefixed wires from the asMaster dispatch receiver
             assert!(!output.contains("wire [15:0] addr;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
@@ -2058,14 +2069,14 @@ println(moduleTreeVL(Test.create.tree))
         Ok(output) => {
             println!("{}", output);
             // both directions driven by the single `<>` (recurse into nested)
-            assert!(output.contains("assign master_value = slave_value"), "master→slave wiring, got: {}", output);
-            assert!(output.contains("assign master_strobe = slave_strobe"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign master_inner_value = slave_inner_value"), "master→slave wiring, got: {}", output);
+            assert!(output.contains("assign master_inner_strobe = slave_inner_strobe"), "master→slave wiring, got: {}", output);
             assert!(output.contains("assign slave_ready = master_ready"), "slave→master wiring, got: {}", output);
             // no input-port drive
             assert!(!output.contains("assign master_ready"), "must not drive an input port, got: {}", output);
-            assert!(!output.contains("assign slave_value"), "must not drive an input port, got: {}", output);
+            assert!(!output.contains("assign slave_inner_value"), "must not drive an input port, got: {}", output);
             // no leftover wires from the dispatch
-            assert!(!output.contains("wire [7:0] value;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
+            assert!(!output.contains("wire [7:0] inner_value;"), "unprefixed wire from the dispatch must be dropped, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -2617,11 +2628,12 @@ println(moduleTreeVL(Test.create.tree))
         Ok(output) => {
             println!("{}", output);
             // Nested signals named through the recursive factory + bn chain
-            assert!(output.contains("wire [7:0] outer1_value;"), "nested bundle field signal, got: {}", output);
-            assert!(output.contains("wire outer1_strobe;"), "nested bundle field signal, got: {}", output);
+            // (the bn prefix flows down the field path: outer1_inner_value)
+            assert!(output.contains("wire [7:0] outer1_inner_value;"), "nested bundle field signal, got: {}", output);
+            assert!(output.contains("wire outer1_inner_strobe;"), "nested bundle field signal, got: {}", output);
             assert!(output.contains("wire outer1_ready;"), "outer primitive field signal, got: {}", output);
             // `:=` recurses into the nested bundle
-            assert!(output.contains("assign outer1_value = outer2_value"), "nested wiring, got: {}", output);
+            assert!(output.contains("assign outer1_inner_value = outer2_inner_value"), "nested wiring, got: {}", output);
             assert!(output.contains("assign outer1_ready = outer2_ready"), "outer wiring, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
@@ -2654,8 +2666,8 @@ println(moduleTreeVL(Test.create.tree))
     match run_with_prelude(input) {
         Ok(output) => {
             println!("{}", output);
-            assert!(output.contains("wire [7:0] outer_data;"), "nested parametric field width, got: {}", output);
-            assert!(output.contains("wire outer_valid;"), "nested parametric field signal, got: {}", output);
+            assert!(output.contains("wire [7:0] outer_inner_data;"), "nested parametric field width, got: {}", output);
+            assert!(output.contains("wire outer_inner_valid;"), "nested parametric field signal, got: {}", output);
             assert!(output.contains("wire outer_ready;"), "outer field signal, got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),

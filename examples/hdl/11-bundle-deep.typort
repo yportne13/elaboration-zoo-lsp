@@ -1,0 +1,110 @@
+// ============================================================
+// HDL Example 11: 深层嵌套 Bundle（SpinalHDL Axi4 风格）
+//
+// 在三层嵌套下练习 Bundle 的三种能力（与 10-bundle 的 10d/10e 一层
+// 嵌套对应）：
+//   1. 命名全路径化：嵌套工厂把绑定名前缀沿字段路径逐级下推，
+//      `let m = Axi4.create` 得到 m_aw_lane_data / m_w_lane_data ——
+//      即便 aw/w 两个通道的叶子字段同名也不会冲突（3 层以上必须有
+//      全路径名，否则重复 wire/端口）。
+//   2. 参数沿链下传：Bus.create[32] → Channel[32] → Lane[32]。
+//   3. 方向化递归：子 bundle 各自实现 IMasterSlave，父级用
+//      out(this.aw) 把整个通道按自己的 asMaster 建；master <> slave
+//      单语句全链连通，且只驱动可驱动端口。
+//
+// 注：此文件独立于 10-bundle，因为多层嵌套的 elaboration 递归深度随
+// 文件累积状态增长（测试线程默认 2MiB 栈）；拆开后每个文件都在预算内。
+// ============================================================
+
+// 三层嵌套 (SpinalHDL Axi4 ⊃ AxiChannel ⊃ AxiLane 风格):工厂递归逐级创建,
+// 绑定名前缀沿字段路径下推,每个叶子得到唯一全路径名——m_aw_lane_data /
+// m_w_lane_data 不冲突(即便 aw/w 两个通道的叶子字段同名)。
+#[derive(Bundle)]
+struct AxiLane {
+    data: UInt[8]
+    last: Bool
+}
+
+#[derive(Bundle)]
+struct AxiChannel {
+    lane: AxiLane
+    valid: Bool
+}
+
+#[derive(Bundle)]
+struct Axi4 {
+    aw: AxiChannel
+    w: AxiChannel
+    ready: Bool
+}
+
+module bundleDeep {
+    let m = Axi4.create
+    let s = Axi4.create
+    m := s
+}
+println("=== 11a: bundleDeep (三层嵌套命名) ===")
+println(moduleTreeVL(bundleDeep.create.tree))
+
+// 参数化三层嵌套:宽度参数沿工厂链逐级下传(Bus.create[32] → Channel[32] →
+// Lane[32]),命名同样全路径。
+#[derive(Bundle)]
+struct Lane[w: Nat] {
+    data: UInt[w]
+    last: Bool
+}
+
+#[derive(Bundle)]
+struct Channel[w: Nat] {
+    lane: Lane[w]
+    valid: Bool
+}
+
+#[derive(Bundle)]
+struct Bus[w: Nat] {
+    aw: Channel[w]
+    ready: Bool
+}
+
+module bundleParamDeep {
+    let m = Bus.create[32]
+    let s = Bus.create[32]
+    m := s
+}
+println("=== 11b: bundleParamDeep (参数化三层嵌套) ===")
+println(moduleTreeVL(bundleParamDeep.create.tree))
+
+// 三层方向化 (完整 Axi4):子 bundle 各自实现 IMasterSlave,父级用
+// out(this.aw)/out(this.w) 把整个通道按自己的 asMaster 方向建、in(this.ready)
+// 反之;asSlave 全链翻转。`master <> slave` 单向一次连通全部叶子,且只驱动
+// 可驱动端口。端口名带全路径:master_aw_lane_data (output) vs slave_aw_lane_data
+// (input),互不冲突。
+impl IMasterSlave for AxiLane {
+    def asMaster: AxiLane =
+        let _ = out(this.data);
+        let _ = out(this.last);
+        this
+}
+
+impl IMasterSlave for AxiChannel {
+    def asMaster: AxiChannel =
+        let _ = out(this.lane);
+        let _ = out(this.valid);
+        this
+}
+
+impl IMasterSlave for Axi4 {
+    def asMaster: Axi4 =
+        let _ = out(this.aw);
+        let _ = out(this.w);
+        let _ = in(this.ready);
+        this
+}
+
+module bundleDeepMS {
+    let master = Axi4.create.asMaster
+    let slave  = Axi4.create.asSlave
+    master <> slave
+}
+println("=== 11c: bundleDeepMS (三层 master/slave 方向化) ===")
+println(moduleTreeVL(bundleDeepMS.create.tree))
