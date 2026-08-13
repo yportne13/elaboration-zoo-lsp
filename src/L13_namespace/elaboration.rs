@@ -6,7 +6,7 @@ use smol_str::SmolStr;
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, PrimFunc, Tm, VTy, Val,
+    Closure, Cxt, DeclTm, Error, Infer, Ix, PrimFunc, Tm, VTy, Val,
     Lvl, Rc, MetaVar,
     empty_span, lvl2ix,
     parser::syntax::{ClassItem, Decl, Either, Icit, Raw},
@@ -568,6 +568,37 @@ impl Infer {
     pub fn check<const CANONICAL: bool>(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         let a = self.force(&cxt.decl, a);
+        // Pre-checked value (class Phase-B reuse): the term was fully checked
+        // in Phase A against the same context layout (same binding order and
+        // levels).  Re-eval drives the chain's side effects (module-tree
+        // globals) and well-formedness, and the annotation check re-verifies
+        // the Phase-A type — while the inner values are not re-elaborated.
+        //
+        // The unannotated-field case (Hole annotation): the fresh meta is
+        // solved DIRECTLY with the Phase-A type instead of a full unify.  A
+        // full unify's flex_flex would rebuild the meta's CLOSED type (which
+        // closes over the let-bound field values — the whole create chain)
+        // as a lambda spine, producing phantom `(bn) => ...` solutions whose
+        // pruning (created inside the trait-wrapper lets) exceeds the eval
+        // environment and panics `v_app_pruning`.
+        if let Raw::Tm(tm, ty) = &t {
+            let _ = self.eval(&cxt.decl, &cxt.env, tm);
+            match a.as_ref() {
+                Val::Flex(m, sp)
+                    if sp.is_empty() && matches!(self.meta[m.0 as usize], MetaEntry::Unsolved(..)) =>
+                {
+                    let mty = match &self.meta[m.0 as usize] {
+                        MetaEntry::Unsolved(ty, _, _, _) => ty.clone(),
+                        _ => unreachable!(),
+                    };
+                    self.meta[m.0 as usize] = MetaEntry::Solved(ty.clone(), mty);
+                }
+                _ => {
+                    self.unify_catch(cxt, &a, ty, t.to_span())?;
+                }
+            }
+            return Ok(tm.clone());
+        }
         // Fast path: for App(Obj(lhs, op), rhs) with known target type,
         // resolve method directly via decl table, bypassing trait_wrap
         if CANONICAL {
@@ -1671,10 +1702,22 @@ impl Infer {
                 // meta" failure).  Annotated fields keep their annotation
                 // verbatim as the struct field type.
                 let mut struct_field_types: Vec<(Span<SmolStr>, Raw)> = Vec::new();
+                // Phase-A reuse data: (name, checked value, value type) per
+                // class item (fields + statements, declaration order), plus
+                // whether the value references the create-only `bn` binding.
+                let mut prechecked: Vec<(Span<SmolStr>, Rc<Tm>, Rc<Val>)> = Vec::new();
+                let mut bn_refs: Vec<bool> = Vec::new();
+                let mut stmt_idx = 0usize;
+                let mut bind_idx = 0usize;
                 for item in items.iter() {
                     let (n, ty, val) = match item {
-                        ClassItem::Field(n, t, v) => (n, t, v),
-                        _ => continue,
+                        ClassItem::Field(n, t, v) => (n.clone(), t.clone(), v.clone()),
+                        ClassItem::Stmt(expr) => {
+                            let n = empty_span(SmolStr::new(format!("_s{stmt_idx}")));
+                            stmt_idx += 1;
+                            (n.clone(), Raw::Hole(n.to_span()), expr.clone())
+                        }
+                        ClassItem::Method(_, _) => continue,
                     };
                     let (a_checked, _) = self.check_universe(&a_cxt, ty.clone())?;
                     let va = self.eval(&a_cxt.decl, &a_cxt.env, &a_checked);
@@ -1685,7 +1728,7 @@ impl Infer {
                     // value or through member access) elaborate identically to
                     // the create body's own let chain.
                     let cxt_named = a_cxt.with_binding_name(n.data.clone());
-                    let t_checked = self.check::<false>(&cxt_named, val.clone(), &va)?;
+                    let t_checked = self.check::<false>(&cxt_named, val, &va)?;
                     let vt = self.eval(&a_cxt.decl, &a_cxt.env, &t_checked);
                     let raw_ty = if matches!(ty, Raw::Hole(_)) {
                         // Unannotated: the struct field type is the inferred
@@ -1700,8 +1743,18 @@ impl Infer {
                         // Annotated: keep the annotation verbatim.
                         ty.clone()
                     };
-                    struct_field_types.push((n.clone(), raw_ty));
-                    a_cxt = a_cxt.define(n.clone(), t_checked, vt, a_checked, va);
+                    if matches!(item, ClassItem::Field(..)) {
+                        struct_field_types.push((n.clone(), raw_ty));
+                    }
+                    // `bn_refs` must use the ACTUAL binding index (non-method
+                    // items only, in binding order) — the same index that gives
+                    // the item's context level — not the raw enumerate index:
+                    // a class that declares a method BEFORE a field would
+                    // otherwise miscompute the bn-reference test.
+                    bn_refs.push(Self::tm_refs_bn(&t_checked, bind_idx));
+                    bind_idx += 1;
+                    a_cxt = a_cxt.define(n.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone());
+                    prechecked.push((n, t_checked, va));
                 }
 
                 // ══ Phase B: assemble the struct from the inferred
@@ -1709,8 +1762,15 @@ impl Infer {
                 // (whose let chain re-checks the field values against the now
                 // concrete struct field types), the methods' inherent impl and
                 // the trait impls — the exact decl sequence the parser-level
-                // expansion used to produce. ══
-                let decls = super::parser::expand_class_decls(name, params, items, traits, struct_field_types);
+                // expansion used to produce.  The create/tree bodies reuse the
+                // Phase-A checked terms (no re-elaboration). ══
+                let prechecked = super::parser::PrecheckedItems {
+                    items: prechecked,
+                    bn_refs,
+                };
+                let decls = super::parser::expand_class_decls(
+                    name, params, items, traits, struct_field_types, Some(&prechecked),
+                );
                 let mut cxt = cxt.clone();
                 for d in decls {
                     let (_, _, c) = self.infer_after_prefix(&cxt, d)?;
@@ -1720,6 +1780,47 @@ impl Infer {
             },
         }
     }
+    /// True when `tm` — the checked value of the `i`-th BOUND class item
+    /// (fields + statements, methods excluded, checked at level
+    /// params + `bn` + i) — references the implicit `bn: BindingName` binding
+    /// (level params + `bn`).  `bn` is in scope in the create (which declares
+    /// it) but NOT in method bodies such as `tree`; reusing such a value in a
+    /// method would silently shift the reference onto `this`, so the method
+    /// chain reuse must be skipped when any reused value references `bn`.
+    ///
+    /// The rule: a Var(ix) at binder-depth `d` inside the value references the
+    /// binding at level (check_level + d − ix − 1); `bn`'s level is
+    /// check_level − i − 1, so a `bn` reference is exactly `ix == i + d`.
+    fn tm_refs_bn(tm: &Tm, i: usize) -> bool {
+        fn go(tm: &Tm, i: u32, d: u32) -> bool {
+            match tm {
+                Tm::Var(ix) => *ix == Ix(i + d),
+                Tm::Obj(t, _) => go(t, i, d),
+                Tm::Lam(_, _, b) => go(b, i, d + 1),
+                Tm::App(f, a, _) => go(f, i, d) || go(a, i, d),
+                Tm::AppPruning(t, _) => go(t, i, d),
+                Tm::U(_) | Tm::Decl(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => false,
+                Tm::Pi(_, _, a, b) => go(a, i, d) || go(b, i, d + 1),
+                Tm::Let(_, ty, v, b) => go(ty, i, d) || go(v, i, d) || go(b, i, d + 1),
+                Tm::Sum(_, params, _, _) => params.iter().any(|(_, v, ty, _)| go(v, i, d) || go(ty, i, d)),
+                Tm::SumCase { typ, datas, .. } => {
+                    go(typ, i, d) || datas.iter().any(|(_, t, _)| go(t, i, d))
+                }
+                Tm::Match(s, cases) => go(s, i, d) || cases.iter().any(|(_, b)| go(b, i, d + 1)),
+                // Call/OpCall bodies are inlined def bodies; field values never
+                // contain them, so over-counting depth only costs the
+                // optimization (fallback), never a mis-fire.
+                Tm::Call(_, args, body) => {
+                    args.iter().any(|(a, _)| go(a, i, d)) || go(body, i, d + 1)
+                }
+                Tm::OpCall { args, body, .. } => {
+                    args.iter().any(|(a, _)| go(a, i, d)) || go(body, i, d + 1)
+                }
+            }
+        }
+        go(tm, i as u32, 0)
+    }
+
     /// Convert a quoted type term back to a `Raw` type expression, resolving
     /// de Bruijn variables through the context's local names (the class params
     /// and earlier fields, bound in declaration order).  Returns `None` when
@@ -1829,6 +1930,9 @@ impl Infer {
         crate::sampler::tick();
         let t_span = t.to_span();
         match t {
+            // A pre-checked term has no inferable Raw structure; `check`
+            // intercepts it before this point, so this is unreachable.
+            Raw::Tm(_, _) => Err(Error(empty_span("internal: cannot infer a pre-checked term".to_string()), vec![])),
             // Infer variable types
             Raw::Var(name) => match cxt.src_names.get(&name.data) {
                 Some((x, a)) => {
@@ -2405,6 +2509,26 @@ impl Infer {
                         if let Val::Pi(_, Icit::Impl, dom, _) = ns_entry.0.as_ref() {
                             if let Val::Sum(trait_name, _, _, true) = dom.as_ref() {
                                 if !self.trait_solver.can_satisfy(&trait_name.data, &typ_raw) {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    // Cheap head pre-filter: the candidate's first EXPLICIT
+                    // parameter (the receiver) must have the same type head as
+                    // the receiver's type — otherwise the unify probe below can
+                    // only fail.  Skips the whole meta snapshot + fresh_meta +
+                    // unify_catch cost for mismatched candidates (the common
+                    // case: many types share a method name).  A Flex/generic
+                    // parameter head keeps the candidate.
+                    if let Some(ref head) = typ_raw_head {
+                        let mut self_ty = ns_entry.0.clone();
+                        while let Val::Pi(_, Icit::Impl, _, cod) = self_ty.as_ref() {
+                            self_ty = self.closure_apply(&cxt.decl, cod, Val::Rigid(Lvl(u32::MAX), List::new()).into());
+                        }
+                        if let Val::Pi(_, Icit::Expl, dom, _) = self_ty.as_ref() {
+                            if let Some(param_head) = super::typeclass::head_key(&self.force(&cxt.decl, dom)) {
+                                if param_head != *head {
                                     continue;
                                 }
                             }

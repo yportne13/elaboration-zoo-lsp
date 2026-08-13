@@ -1,0 +1,205 @@
+# L13 性能审查第四轮（2026-08-11）—— HDL 文件慢的根因定位
+
+> 分支：`master`（`2dbf651`）。方法：release 实测 + 两次修正后的 git bisect + 逐 commit
+> 直接测量 + 用户文件窗口采样（sampler skip 20）+ 临时探针计数器（已全部移除，
+> 工作树与基线一致）。
+> 核心结论：**用户 HDL 文件较 perf1 时代（21f353e）一致变慢 ~3x，根因不是 elaborator
+> 回归，而是 task/module-tree-def 的两个提交：`647d1e9`（class 两阶段化，+52%）与
+> `67519ae`（模块宏摊平链，+88%）——两者叠加正好构成完整的 3x。机制：每个模块
+> 字段值被完整检查 3 遍（Phase A + create 体 + tree 体）。prelude 侧（hdl-verilog
+> ~1.09s/进程）是固定成本而非回退，最大单项是 clockedVL 0.42s（字符串 `+` 链的
+> trait_wrap 合成路径，perf1 §3.2 未落地）。
+
+---
+
+## 1. 测量基线（release，min-of-3，本机实测）
+
+### 1.1 用户文件 change 耗时（master）
+
+| 文件 | 耗时 | | 文件 | 耗时 |
+|---|---|---|---|---|
+| 01-basics | 0.253s | | 09-hierarchy | 0.505s |
+| 14-counter | 0.197s | | 08-control-flow | 0.561s |
+| 13-inout | 0.262s | | 11-memory | 0.641s |
+| 15-output-reg | 0.318s | | 10-bundle | 0.771s |
+| 05-bool | 0.383s | | 04-compare | 0.780s |
+| 07-registers | 0.381s | | 06-select-cat | 0.867s |
+| 12-adder-tree | 0.862s | | 12-arithmetic2 | 1.315s |
+| 02-arithmetic | 1.052s | | 03-bitwise | 1.108s |
+| hdl_ops | 1.194s | | adder_proof | 2.134s |
+
+### 1.2 CLI 总墙钟（prelude + 用户文件）
+
+| 文件 | 总墙钟 | 用户 change | prelude（差） |
+|---|---|---|---|
+| 01-basics | 1.66s | 0.28s | ~1.38s |
+| 02-arithmetic | 2.59s | 1.17s | ~1.42s |
+| 10-bundle | 2.19s | 0.84s | ~1.35s |
+| adder_proof | 3.74s | 2.29s | ~1.45s |
+
+小文件被 prelude 固定成本支配，大/运算符密集文件被用户 elaboration 支配。
+LSP 每键击 = 全量重推（用户 change 全量重算），HDL 文件 0.2-1.3s/键击。
+
+## 2. 核心发现：用户文件侧 ~3x 回退（perf1 时代以来）
+
+### 2.1 回退量级（同机同文件）
+
+| 文件 | 21f353e（perf1 优化后） | master | 倍率 |
+|---|---|---|---|
+| 01-basics | 0.080s | 0.253s | 3.2x |
+| 02-arithmetic | 0.347s | 1.052s | 3.0x |
+| 09-hierarchy | 0.158s | 0.505s | 3.2x |
+| 10-bundle | 0.484s | 0.771s | 1.6x |
+| adder_proof | 0.685s | 2.134s | 3.1x |
+
+### 2.2 定位过程（bisect 修正记录）
+
+- 第一次 bisect 失效：驱动脚本 `cd $(dirname $0)/..` 把构建/测量目录指到了**主仓库**
+  （恒在 master），6 步全部测得 master 值，误报 0ee24ca。已重写脚本（见
+  `tools/bisect_l13_perf.sh`，不 cd，阈值用 awk 几何均值，可复用）。
+- 第二次 bisect（修正后，`2dbf651..21f353e`）：首坏 = `ed334a3`（merge
+  task/module-tree-def）。
+- 第三次 bisect 阈值恰好卡在 647d1e9 的测量值上（gm 0.30 vs 阈值 0.29），结果落在
+  test-only commit —— 弃用，改为**逐 commit 直接测量**（最可靠）。
+
+### 2.3 逐 commit 直接测量（01-basics / 02-arithmetic）
+
+| commit | 01-basics | 02-arithmetic | 说明 |
+|---|---|---|---|
+| 0aeef80 / 21f353e / 0ee24ca | 0.080-0.088 | 0.35-0.37 | 回退前基线 |
+| **647d1e9** two-phase class elaboration | **0.134** | **0.669** | +52% |
+| **67519ae** flatten module chain (plan C2) | **0.252** | **1.037** | +88% |
+| aca9ef1 / 1332d90 / 1ad572e / b58cb6e / bb03dfb / 2dbf651 | 0.248-0.255 | 1.03-1.06 | ≈ master，无进一步变化 |
+
+结论：**全部回退来自 task/module-tree-def 的两个提交，两者叠加 = 完整 3x**。
+其后的 namespace / output-reg / perf2 改动对用户文件耗时几乎无影响（±2%）。
+
+### 2.4 机制
+
+**647d1e9（class 两阶段化）**：`Decl::Class` 不再在 parser 展开，elaborator 两阶段处理：
+- Phase A（elaboration.rs:1609-1672）：在 create 参数上下文（params + bn）里**前向**
+  逐个检查字段值（check_universe 注解 + check 值 + eval + quote + tm_to_raw_type）；
+- Phase B（elaboration.rs:1680-1686）：`expand_class_decls` 重新生成 struct + create +
+  impls，create 体的 let 链把字段值**再查一遍**；
+- 加上宏生成的 `tree` 方法体（与 create 几乎相同的链），每个字段值一共被
+  **完整检查 3 遍**。
+
+**67519ae（摊平链）**：模块宏展开从 ~25 个 let 增到 **41 个 let**（每个脚手架
+`let _ = ...`、每个端口双声明都成为 class 字段），字段数 ×1.6，叠加 ×3 遍检查。
+round 3 的逐 def 数据吻合：每个 module ≈ create 32ms + tree 37ms，全部在 check 体。
+
+**调用次数证据**（探针计数器，01-basics 用户窗口，0aeef80 vs 0ee24ca 一致）：
+trait_wrap=15、fresh_meta=186、ns_scan=655、meta_clone_calls=15 —— 两时代完全相同，
+即"同样的调用次数、每次贵 3 倍"是表象，真相是**字段检查次数 ×3**（check/infer_expr
+调用数相同是因为 Phase A/B/tree 走同一批函数，只是调用次数整体翻倍后被相同采样掩盖）。
+
+## 3. prelude 侧（固定成本，非回退）
+
+hdl-verilog.typort 逐 def 计时（release，`bench_hdl_verilog_decls`）：
+
+| def | 耗时 | 特征 |
+|---|---|---|
+| **clockedVL** | **0.416s** | 长字符串 `+` 链（~30 个 `+`） |
+| moduleDefVL | 0.139s | 大函数 + concat |
+| exprVL / exprVL_proc | 0.109 / 0.108s | 31 构造器 Expr 大 match |
+| memWriteLineRaw | 0.093s | **无大 match，纯 ~7 个 `+` → 每 `+` ≈ 13ms** |
+| collectInstHelp | 0.066s | — |
+| Total | 1.087s | — |
+
+机制：每个 `+`（String concat）→ trait_wrap → ns 候选探测（每候选一次整表
+meta 快照/恢复，meta ~28.5k）+ 合成 `Raw::Let` + 重新 infer —— perf1 §3.2
+"运算符调用解析成本 ≈ 一次小型 elaboration"的实测版。perf2 后进程内只算一次，
+但 CLI 每进程仍付 ~1.4s（其中 hdl-verilog ~1.09s）。
+
+## 4. 修复建议（优先级排序）
+
+### P0 —— 消除 3x 回退（预计用户 HDL 文件 0.25-1.1s → ~0.1-0.4s）
+
+**复用 Phase A 的检查结果**（两阶段 class 的语义化缓存）：
+- Phase A 已产生每个字段的 `(t_checked, vt, a_checked, va)`（elaboration.rs:1655-1656）。
+- 把 `expand_class_decls` 的 create 体改为**前向顺序**组装（与 Phase A 的上下文推进
+  顺序一致：params + bn → 字段 1..N → mk 应用），并在 Tm 层直接拼
+  `Tm::Let(x, a_checked, t_checked, ...)` 链 —— create def 不再对字段值做任何
+  Raw 重查，只保留 mk 应用的类型核对（字段类型已 concrete）。
+- `tree` 体（宏生成的第二份链）同样复用同一份 Tm 链（差异仅 mkInstanceIfParent
+  一行与结尾 `_res`）。
+- **风险**：create 体当前按 `items.iter().rev()` 反向绑定（parser/mod.rs:2262），
+  前向化需验证 shadowing / `_` last-wins 字段 / bn 解析语义不变；错误定位
+  （span）需保留。验证：`cargo test --lib L13` + 集成测试 +
+  `class_module_shape_flattened_chain`（moduleTreeVL 输出 pinned）。
+
+### P1 —— 运算符路径（perf1 §3.2 落地，用户与 prelude 双侧受益）
+
+- `check_app_obj_direct`（decl 表直查，elaboration.rs:523）目前只在
+  `CANONICAL=true`（定理证明路径）启用；推广到普通 `check::<false>`，运算符调用
+  绕过 trait_wrap 合成 AST。
+- ns 探测循环（elaboration.rs:2330-2370）加**廉价 head 预过滤**：候选方法首个显式
+  参数 head ≠ 接收者 head 时，在 meta 快照之前跳过（当前每候选都做整表快照 +
+  fresh_meta + unify_catch）。
+
+### P2 —— 观察项
+
+- hdl-verilog 的字符串拼接函数（clockedVL 等）在 P1 落地后自然下降；若仍需
+  立竿见影，可把 `+` 链改 `joinLines` 风格（list + 单次 join）。
+- LSP 每键击全量重建（P0 增量 elaboration，round 2 已立项）仍是输入延迟的根本
+  上限；P0 修复后模块文件每键击可望 0.25s → ~0.1s。
+
+## 5. 附注
+
+- `tools/bisect_l13_perf.sh`：修正后的 bisect 驱动（不 cd、awk 几何均值、阈值
+  sqrt(0.14×0.60)，可直接复用）。
+- `analysis/l13-perf` worktree：现成的 `TYPORT_PROBE=1` 调用计数器与 `bench.ps1`，
+  可作后续测量的基础（注意该 worktree 的 mod.rs 存在注释编码损坏，改动前先修）。
+- 全部临时探针已移除，master 与 perf1-verify worktree 均已恢复基线；
+  `cargo test --lib L13` 基线 310 passed（未跑，代码零改动，无需复验）。
+
+---
+
+## 6. 第五轮（2026-08-13）—— P0 落地：Phase A 结果复用，3x 回退基本消除
+
+> 分支：`master`。全部改动在 `L13_namespace`（elaboration.rs / parser/mod.rs /
+> parser/syntax.rs / mod.rs），方法：release 实测 min-of-3。
+
+### 6.1 实现
+
+- **`Raw::Tm(Rc<Tm>, Rc<Val>)`**（内部专用变体）：包装 Phase A 已检查的字段值
+  及其类型；`check` 首臂 eval（副作用/良构）+ 直接解 Hole 的 fresh meta（或
+  unify 复核注解），不再重新 infer 字段值。`infer_expr` 对 Raw::Tm 报内部错误
+  （不可达）。
+- **Phase A 收集** `PrecheckedItems`：每个 class item（字段 + 语句，声明序）的
+  `(name, t_checked, va)` + `bn_refs`（值是否引用 create 专用的 `bn`，用于
+  tree 复用安全门）。
+- **create 体**：保持 Raw::Let 链结构 + mk 应用（正常 infer，构造器应用正确
+  归约为 SumCase），仅字段值替换为 `Raw::Tm`。
+- **tree 方法体**：位置+名字配对检查通过后（macro 的 tree 链 = class items 除
+  最后一个外），同样复用；任一值引用 `bn` 或配对不符则回退原 Raw 体。
+- **`v_app_pruning` 容错**：剪枝比求值 env 多（trait wrapper `$+` 内创建的
+  meta 在其参数位求值）时跳过缺失参数，不再 panic。
+- **ns 探测 head 预过滤**（P1 低风险项）：候选方法首个显式参数 head 与接收者
+  head 不等时，在 meta 快照 + unify 探测之前跳过。
+
+### 6.2 结果（release，min-of-3，本机；prelude 基线 1.364s）
+
+| 文件 | 总墙钟 old | 总墙钟 new | 用户侧 old | 用户侧 new | 加速 |
+|---|---|---|---|---|---|
+| 01-basics | 1.66s | 1.55s | 0.30s | 0.19s | 1.6x |
+| 02-arithmetic | 2.59s | 1.85s | 1.23s | 0.49s | 2.5x |
+| 03-bitwise | 2.51s | 1.93s | 1.15s | 0.57s | 2.0x |
+| 12-arithmetic2 | 2.77s | 2.05s | 1.41s | 0.68s | 2.1x |
+| adder_proof | 3.74s | 3.52s | 2.38s | 2.15s | 1.1x |
+
+HDL 模块文件用户侧约 2-2.5x（3x 回退的 infer 部分已消除；每值 eval 仍 3 次，
+属固定成本）。adder_proof（定理文件，无模块类）约 1.1x（噪声）。
+
+### 6.3 验证
+
+- `cargo test --lib L13`：321 passed（基线 310 + 新增）。
+- 集成测试（hover/goto/namespace/completion/parser-error 等 8 个套件）：全过。
+- L12_canonical 49 个失败为**预先存在**（stash 验证），与本次改动无关。
+
+### 6.4 遗留
+
+- **P1 的 `check_app_obj_direct` 推广**（elaboration.rs:523，当前仅
+  CANONICAL=true）未做：运算符路径仍走 trait_wrap 合成，风险较高，留待
+  独立验证。
+- LSP 每键击全量重建（P0 增量 elaboration）仍是输入延迟的根本上限。

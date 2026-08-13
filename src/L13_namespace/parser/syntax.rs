@@ -1,5 +1,7 @@
 use smol_str::SmolStr;
 
+use super::super::{Rc, Tm, Val};
+
 use crate::{parser_lib::{Span, ToSpan}};
 
 use super::empty_span;
@@ -88,7 +90,7 @@ impl Pattern {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub enum Raw {
     Var(Span<SmolStr>),
     Obj(Box<Raw>, Option<Span<SmolStr>>),
@@ -108,6 +110,64 @@ pub enum Raw {
         case_name: Span<SmolStr>,
         datas: Vec<(Span<SmolStr>, Raw, Icit)>,
     },
+    /// A pre-checked value (internal only, never produced by the parser):
+    /// `class` Phase B reuses the field terms checked in Phase A by wrapping
+    /// them in `Raw::Tm`, so the create/tree bodies are not re-elaborated.
+    /// The second field is the value's checked type (Phase A's `va`), used to
+    /// solve the fresh meta / re-verify the annotation at reuse time.
+    Tm(Rc<Tm>, Rc<Val>),
+}
+
+// `Tm` has no structural equality (it carries `Arc` graphs); the pre-checked
+// wrapper compares by pointer identity, which is enough for the internal-only
+// `Raw::Tm` node (nothing outside the class Phase-B path compares Raw terms).
+impl PartialEq for Raw {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Raw::Var(a), Raw::Var(b)) => a == b,
+            (Raw::Obj(a, b), Raw::Obj(c, d)) => a == c && b == d,
+            (Raw::Lam(a, b, c), Raw::Lam(d, e, f)) => a == d && b == e && c == f,
+            (Raw::App(a, b, c), Raw::App(d, e, f)) => a == d && b == e && c == f,
+            (Raw::U(a), Raw::U(b)) => a == b,
+            (Raw::Pi(a, b, c, d), Raw::Pi(e, f, g, h)) => a == e && b == f && c == g && d == h,
+            (Raw::Let(a, b, c, d), Raw::Let(e, f, g, h)) => a == e && b == f && c == g && d == h,
+            (Raw::Hole(a), Raw::Hole(b)) => a == b,
+            (Raw::LiteralIntro(a), Raw::LiteralIntro(b)) => a == b,
+            (Raw::Nat(a), Raw::Nat(b)) => a == b,
+            (Raw::Match(a, b), Raw::Match(c, d)) => a == c && b == d,
+            (Raw::Sum(a, b, c, d, e), Raw::Sum(f, g, h, i, j)) => a == f && b == g && c == h && d == i && e == j,
+            (
+                Raw::SumCase { is_trait: a, typ: b, case_name: c, datas: d },
+                Raw::SumCase { is_trait: e, typ: f, case_name: g, datas: h },
+            ) => a == e && b == f && c == g && d == h,
+            (Raw::Tm(a, at), Raw::Tm(b, bt)) => Rc::ptr_eq(a, b) && Rc::ptr_eq(at, bt),
+            _ => false,
+        }
+    }
+}
+impl Eq for Raw {}
+impl std::hash::Hash for Raw {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Raw::Var(x) => x.hash(state),
+            Raw::Obj(x, y) => { x.hash(state); y.hash(state); }
+            Raw::Lam(x, y, z) => { x.hash(state); y.hash(state); z.hash(state); }
+            Raw::App(x, y, z) => { x.hash(state); y.hash(state); z.hash(state); }
+            Raw::U(x) => x.hash(state),
+            Raw::Pi(x, y, z, w) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); }
+            Raw::Let(x, y, z, w) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); }
+            Raw::Hole(x) => x.hash(state),
+            Raw::LiteralIntro(x) => x.hash(state),
+            Raw::Nat(x) => x.hash(state),
+            Raw::Match(x, y) => { x.hash(state); y.hash(state); }
+            Raw::Sum(x, y, z, w, v) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); v.hash(state); }
+            Raw::SumCase { is_trait, typ, case_name, datas } => {
+                is_trait.hash(state); typ.hash(state); case_name.hash(state); datas.hash(state);
+            }
+            Raw::Tm(x, _) => (Rc::as_ptr(x) as *const () as usize).hash(state),
+        }
+    }
 }
 
 impl Raw {
@@ -144,6 +204,7 @@ impl Raw {
             Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
                 .map(|x| case_name.to_span() + x.1.to_span())
                 .unwrap_or(case_name.to_span()),
+            Raw::Tm(_, _) => empty_span(()),
         }
     }
 }
@@ -220,7 +281,8 @@ impl std::fmt::Display for Raw {
                     }
                 }
                 write!(f, ")")
-            }
+            },
+            Raw::Tm(_, _) => write!(f, "<prechecked>"),
         }
     }
 }

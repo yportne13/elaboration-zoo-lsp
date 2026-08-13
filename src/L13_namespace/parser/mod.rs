@@ -37,7 +37,7 @@ pub mod derive;
 
 use TokenKind::*;
 
-use super::empty_span;
+use super::{empty_span, Ix, Rc, Tm, Val};
 
 /// Skip input until a token of the given kind is found, returning the slice
 /// starting at that token (the sync token itself is NOT consumed).
@@ -2120,6 +2120,7 @@ fn walk_raw<'a>(raw: &'a Raw, f: &mut impl FnMut(&'a Raw)) {
                 walk_raw(t, f);
             }
         }
+        Raw::Tm(_, _) => {}
     }
 }
 
@@ -2406,18 +2407,32 @@ fn expand_one_class(
     traits: Vec<(Span<SmolStr>, Vec<Raw>)>,
     struct_field_types: Vec<(Span<SmolStr>, Raw)>,
 ) -> Vec<Decl> {
-    expand_class_decls(name, params, items, traits, struct_field_types)
+    expand_class_decls(name, params, items, traits, struct_field_types, None)
+}
+
+/// Phase-A results reused to build the create/tree bodies without re-checking
+/// the field values: one entry per class item (fields + statements, in
+/// declaration order), holding the checked value and its type.  `bn_refs[i]`
+/// records whether item i's value references the create-only implicit `bn`
+/// binding (safe in the create, which declares it, but NOT in method bodies).
+pub struct PrecheckedItems {
+    pub items: Vec<(Span<SmolStr>, Rc<Tm>, Rc<Val>)>,
+    pub bn_refs: Vec<bool>,
 }
 
 /// The shared phase-B builder: `class → enum (struct) + def Name.create
 /// + inherent impl + trait impls`, with the struct fields taken verbatim
-/// from `struct_field_types`.
+/// from `struct_field_types`.  With `prechecked` (class two-phase path), the
+/// create body and any method body that is a positional let-chain copy of the
+/// class items are assembled from the Phase-A checked terms (`Raw::Tm`) so
+/// the values are not re-elaborated; the fallback Raw path is unchanged.
 pub fn expand_class_decls(
     name: Span<SmolStr>,
     params: Vec<(Span<SmolStr>, Raw, Icit)>,
     items: Vec<ClassItem>,
     traits: Vec<(Span<SmolStr>, Vec<Raw>)>,
     struct_field_types: Vec<(Span<SmolStr>, Raw)>,
+    prechecked: Option<&PrecheckedItems>,
 ) -> Vec<Decl> {
     let mut result = vec![];
 
@@ -2436,7 +2451,10 @@ pub fn expand_class_decls(
         fields.reverse();
     }
     let methods: Vec<(Decl, bool)> = items.iter().filter_map(|item| match item {
-        ClassItem::Method(d, is_static) => Some((d.clone(), *is_static)),
+        ClassItem::Method(d, is_static) => {
+            let d = maybe_prechecked_method_body(d, prechecked);
+            Some((d, *is_static))
+        }
         _ => None,
     }).collect();
 
@@ -2454,38 +2472,48 @@ pub fn expand_class_decls(
 
     // ── 2. constructor function ──
     let self_ty = class_self_ty(&name, &params);
-    let mut mk_expr = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
-    for (field_name, _) in fields.iter() {
-        mk_expr = Raw::App(
-            Box::new(mk_expr),
-            Box::new(Raw::Var(field_name.clone())),
-            Either::Icit(Icit::Expl),
-        );
-    }
-    let mut ctor = mk_expr;
-    let mut stmt_idx = 0usize;
-    for item in items.iter().rev() {
-        match item {
-            ClassItem::Field(field_name, field_type, field_value) => {
-                ctor = Raw::Let(
-                    field_name.clone(),
-                    Box::new(field_type.clone()),
-                    Box::new(field_value.clone()),
-                    Box::new(ctor),
+    // With pre-checked terms, keep the let-chain structure and the mk
+    // application as Raw (normal elaboration, so the constructor application
+    // reduces to a SumCase) but substitute each field value with its
+    // Phase-A checked term (`Raw::Tm`), skipping the value re-elaboration.
+    let ctor = match prechecked {
+        Some(pc) => build_class_chain_tm(&name, &fields, &items, pc),
+        None => {
+            let mut mk_expr = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
+            for (field_name, _) in fields.iter() {
+                mk_expr = Raw::App(
+                    Box::new(mk_expr),
+                    Box::new(Raw::Var(field_name.clone())),
+                    Either::Icit(Icit::Expl),
                 );
             }
-            ClassItem::Method(_, _) => {}
-            ClassItem::Stmt(expr) => {
-                ctor = Raw::Let(
-                    empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
-                    Box::new(Raw::Hole(empty_span(()))),
-                    Box::new(expr.clone()),
-                    Box::new(ctor),
-                );
-                stmt_idx += 1;
+            let mut ctor = mk_expr;
+            let mut stmt_idx = 0usize;
+            for item in items.iter().rev() {
+                match item {
+                    ClassItem::Field(field_name, field_type, field_value) => {
+                        ctor = Raw::Let(
+                            field_name.clone(),
+                            Box::new(field_type.clone()),
+                            Box::new(field_value.clone()),
+                            Box::new(ctor),
+                        );
+                    }
+                    ClassItem::Method(_, _) => {}
+                    ClassItem::Stmt(expr) => {
+                        ctor = Raw::Let(
+                            empty_span(SmolStr::new(format!("_s{stmt_idx}"))),
+                            Box::new(Raw::Hole(empty_span(()))),
+                            Box::new(expr.clone()),
+                            Box::new(ctor),
+                        );
+                        stmt_idx += 1;
+                    }
+                }
             }
+            ctor
         }
-    }
+    };
     let ret_type = self_ty.clone();
     let ctor_name = name.clone().map(|n| SmolStr::new(format!("{n}.create")));
     // Add an implicit `bn: BindingName` parameter to the constructor so the
@@ -2541,6 +2569,98 @@ pub fn expand_class_decls(
     }
 
     result
+}
+
+/// Assemble the create body with Phase-A reuse: the Raw let chain over every
+/// class item (declaration order, same layout the values were checked in),
+/// each value replaced by its checked term, ending in the `Name.mk`
+/// application over the deduped fields (by name — the lets bind them in the
+/// same order, so the last-wins shadowing matches the Raw path).
+fn build_class_chain_tm(
+    name: &Span<SmolStr>,
+    fields: &[(Span<SmolStr>, Raw)],
+    items: &[ClassItem],
+    pc: &PrecheckedItems,
+) -> Raw {
+    let mut mk_expr = Raw::Var(empty_span(SmolStr::new(format!("{}.mk", name.data))));
+    for (field_name, _) in fields.iter() {
+        mk_expr = Raw::App(
+            Box::new(mk_expr),
+            Box::new(Raw::Var(field_name.clone())),
+            Either::Icit(Icit::Expl),
+        );
+    }
+    let mut ctor = mk_expr;
+    // Pair by position with the pre-checked items: methods are NOT in
+    // `pc.items`, so filter them out here (keeping the relative order).
+    let item_chain = items.iter().filter(|i| !matches!(i, ClassItem::Method(..)));
+    for (item, (n, t, va)) in item_chain.rev().zip(pc.items.iter().rev()) {
+        let ann = match item {
+            ClassItem::Field(_, t, _) => t.clone(),
+            ClassItem::Stmt(_) => Raw::Hole(empty_span(())),
+            ClassItem::Method(_, _) => unreachable!(),
+        };
+        ctor = Raw::Let(
+            n.clone(),
+            Box::new(ann),
+            Box::new(Raw::Tm(t.clone(), va.clone())),
+            Box::new(ctor),
+        );
+    }
+    ctor
+}
+
+/// When the class is elaborated with pre-checked terms, rebuild a method body
+/// that is a positional let-chain copy of the class items (the module macro's
+/// `tree`) from the Phase-A terms instead of re-checking the Raw values.
+/// Falls back to the original body when the chain does not pair 1:1 with the
+/// items (name + position), when any reused value references the create-only
+/// `bn` binding (silently shifting onto `this` in a method), or for
+/// operator-named methods (symbol-table registration inspects the Raw body).
+fn maybe_prechecked_method_body(d: &Decl, pc: Option<&PrecheckedItems>) -> Decl {
+    let Decl::Def { name: mname, params, ret_type, body } = d else { return d.clone() };
+    let Some(pc) = pc else { return d.clone() };
+    // Operator-named methods: the symbol table inspects the Raw body head.
+    if mname.data.chars().next().map(super::is_operator_char).unwrap_or(false)
+        || pc.items.len() != pc.bn_refs.len() {
+        return d.clone();
+    }
+    // The body must be a nested let chain ending in a plain variable; keep
+    // the per-let (name, annotation) pairs for the rebuilt chain.
+    let mut lets: Vec<(Span<SmolStr>, Raw)> = Vec::new();
+    let mut cur = body;
+    let final_var = loop {
+        match cur {
+            Raw::Let(n, t, _, rest) => {
+                lets.push((n.clone(), t.as_ref().clone()));
+                cur = rest;
+            }
+            Raw::Var(n) => break Some(n.clone()),
+            _ => break None,
+        }
+    };
+    let Some(fv) = final_var else { return d.clone() };
+    if lets.len() > pc.items.len() { return d.clone(); }
+    // Positional name pairing with the class items.
+    for (k, (n, _)) in lets.iter().enumerate() {
+        if pc.items[k].0.data != n.data { return d.clone(); }
+    }
+    // None of the reused values may reference the create-only `bn`.
+    if pc.bn_refs.iter().take(lets.len()).any(|b| *b) { return d.clone(); }
+    // Rebuild the chain: Raw::Let over the cached values + the final Var.
+    // The tree chain covers the class items EXCEPT the trailing create-only
+    // ones (instance recording), so pair the lets with the FIRST `lets.len()`
+    // pre-checked items (a bare `.rev()` zip would shift onto the last ones).
+    let mut body_raw = Raw::Var(fv);
+    for (ann, (_, t, va)) in lets.iter().rev().zip(pc.items.iter().take(lets.len()).rev()) {
+        body_raw = Raw::Let(
+            ann.0.clone(),
+            Box::new(ann.1.clone()),
+            Box::new(Raw::Tm(t.clone(), va.clone())),
+            Box::new(body_raw),
+        );
+    }
+    Decl::Def { name: mname.clone(), params: params.clone(), ret_type: ret_type.clone(), body: body_raw }
 }
 
 /// LEGACY parse-time class expansion: expands every `Decl::Class` into its

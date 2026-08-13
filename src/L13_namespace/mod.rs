@@ -53,7 +53,7 @@ pub enum MetaEntry {
     Unsolved(Rc<VTy>, std::sync::Arc<Cxt>, Rc<VTy>, Span<()>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ix(u32);
 
 #[derive(Debug, Clone)]
@@ -1725,7 +1725,16 @@ impl Infer {
             (a, b) if a.head().is_some() && matches!(b.head(), Some(None)) => {
                 self.v_app_pruning(decl, &a.tail(), v, &b.tail())
             }
-            _ => panic!("impossible {v:?}"),
+            // The pruning was recorded in a deeper context than the eval
+            // environment: a fresh meta created inside a trait-wrapper let
+            // (an operator wrapper) whose binding is not in scope at the
+            // node's own eval position (the wrapper's application argument).
+            // The missing argument has no value — apply the rest of the
+            // spine only.
+            (a, b) if a.head().is_none() && matches!(b.head(), Some(Some(_))) => {
+                self.v_app_pruning(decl, a, v, &b.tail())
+            }
+            _ => panic!("impossible {v:?} with env={:?} pr={:?}", env, pr),
         }
     }
 
