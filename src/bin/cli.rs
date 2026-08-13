@@ -317,7 +317,10 @@ fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + 
             .expect("create svg");
         let mut writer = std::io::BufWriter::new(file);
         if inferno::flamegraph::from_lines(&mut opts, lines.into_iter(), &mut writer).is_ok() {
-            let _ = std::fs::remove_file("sampler.folded");
+            // Keep sampler.folded for offline analysis when TYPORT_PROFILE is set.
+            if std::env::var_os("TYPORT_PROFILE").is_none() {
+                let _ = std::fs::remove_file("sampler.folded");
+            }
             eprintln!("Flame graph written to flamegraph.svg");
         }
     }

@@ -57,6 +57,146 @@ use std::sync::{Arc, Mutex, Condvar, mpsc};
 use std::io::{self, BufRead, Write, stdin, stdout};
 use std::thread;
 
+// ---------------------------------------------------------------------------
+// Fine-grained stage timing probe (perf diagnostics).
+//
+// Enabled by setting the environment variable TYPORT_PROFILE (any value).
+// When enabled, `on_change` prints per-stage timings and the top-N slowest
+// declarations to stderr; the existing `change/parser/infer` LOG lines are
+// unchanged. When disabled, each `mark` costs one `Instant::now()` check
+// that returns immediately, so normal output and tests are unaffected.
+// ---------------------------------------------------------------------------
+pub struct Prof {
+    enabled: bool,
+    stages: Vec<(String, f64)>,
+    last: std::time::Instant,
+    decls: Vec<(String, f64, u64, u64, u64, u64, u64)>,
+}
+
+impl Prof {
+    pub fn new() -> Self {
+        let enabled = std::env::var_os("TYPORT_PROFILE").is_some();
+        if enabled {
+            L13_namespace::FUNC_PROF
+                .enabled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Prof {
+            enabled,
+            stages: Vec::new(),
+            last: std::time::Instant::now(),
+            decls: Vec::new(),
+        }
+    }
+
+    #[inline]
+    pub fn mark(&mut self, name: &str) {
+        if !self.enabled {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let d = now.duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.stages.push((name.to_string(), d));
+    }
+
+    /// Record the elapsed time of one declaration's elaboration, plus the
+    /// number of `force` / `eval` / `quote` / `unify` / `v_app` calls it made
+    /// (hot-loop evidence).
+    #[inline]
+    pub fn decl(&mut self, label: String, secs: f64, force_calls: u64, eval_calls: u64, quote_calls: u64, unify_calls: u64, vapp_calls: u64) {
+        if !self.enabled {
+            return;
+        }
+        self.decls.push((label, secs, force_calls, eval_calls, quote_calls, unify_calls, vapp_calls));
+    }
+
+    pub fn report(&self, uri: &str, top_n: usize) {
+        if !self.enabled {
+            return;
+        }
+        eprintln!("[PROF] == {} ==", uri);
+        for (name, d) in &self.stages {
+            eprintln!("[PROF]   {:<26} {:>9.4} s", name, d);
+        }
+        let total: f64 = self.decls.iter().map(|(_, d, _, _, _, _, _)| d).sum();
+        let mut sorted = self.decls.clone();
+        sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        eprintln!("[PROF]   {} decls, infer_loop total {:.4} s, top-{} slowest:", self.decls.len(), total, top_n);
+        for (label, d, fc, ec, qc, uc, vc) in sorted.iter().take(top_n) {
+            let pct = if total > 0.0 { 100.0 * d / total } else { 0.0 };
+            eprintln!("[PROF]     {:>8.4} s ({:>5.1}%)  force{:>11} eval{:>9} quote{:>8} unify{:>7} vapp{:>8}  {}",
+                d, pct, fc, ec, qc, uc, vc, label);
+        }
+        // Function-level breakdown (accumulated incl. nesting; read-and-reset).
+        let fp = &L13_namespace::FUNC_PROF;
+        eprintln!("[PROF]   -- function-level (accumulated, nesting included) --");
+        let mut rows: Vec<(String, u64, u64)> = vec![
+            ("check".into(), fp.check.0.swap(0, Ordering::Relaxed), fp.check.1.swap(0, Ordering::Relaxed)),
+            ("infer_expr".into(), fp.infer_expr.0.swap(0, Ordering::Relaxed), fp.infer_expr.1.swap(0, Ordering::Relaxed)),
+            ("check_universe".into(), fp.check_universe.0.swap(0, Ordering::Relaxed), fp.check_universe.1.swap(0, Ordering::Relaxed)),
+            ("eval".into(), fp.eval.0.swap(0, Ordering::Relaxed), fp.eval.1.swap(0, Ordering::Relaxed)),
+            ("force".into(), fp.force.0.swap(0, Ordering::Relaxed), fp.force.1.swap(0, Ordering::Relaxed)),
+            ("v_app".into(), fp.v_app.0.swap(0, Ordering::Relaxed), fp.v_app.1.swap(0, Ordering::Relaxed)),
+            ("quote".into(), fp.quote.0.swap(0, Ordering::Relaxed), fp.quote.1.swap(0, Ordering::Relaxed)),
+            ("nf".into(), fp.nf.0.swap(0, Ordering::Relaxed), fp.nf.1.swap(0, Ordering::Relaxed)),
+            ("unify".into(), fp.unify.0.swap(0, Ordering::Relaxed), fp.unify.1.swap(0, Ordering::Relaxed)),
+            ("solve_multi_trait".into(), fp.solve_trait.0.swap(0, Ordering::Relaxed), fp.solve_trait.1.swap(0, Ordering::Relaxed)),
+        ];
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        for (name, ns, n) in rows {
+            eprintln!("[PROF]     {:>8.4} s  {:>12} calls  {}", ns as f64 / 1e9, n, name);
+        }
+        // force() entry-value shape histogram.
+        let shapes = ["Flex", "Rigid", "Decl", "Obj", "Lam", "Pi", "U", "LiteralType", "LiteralIntro", "Sum", "SumCase", "Match", "Call"];
+        eprintln!("[PROF]   -- force() entry shapes --");
+        for (i, name) in shapes.iter().enumerate() {
+            let c = fp.force_shape[i].swap(0, Ordering::Relaxed);
+            if c > 0 {
+                eprintln!("[PROF]     {:>14} {:>12}", name, c);
+            }
+        }
+    }
+}
+
+/// Short human-readable label for a declaration (used by the per-decl timing).
+fn decl_label(t: &Decl) -> String {
+    match t {
+        Decl::Package { path } => format!(
+            "package {}",
+            path.iter().map(|p| p.data.as_str()).collect::<Vec<_>>().join(".")
+        ),
+        Decl::Import { prefix, names, wildcard } => {
+            let names = if *wildcard {
+                "*".to_string()
+            } else {
+                names.join(",")
+            };
+            format!("import {}.{{{}}}", prefix.join("."), names)
+        }
+        Decl::Def { name, .. } => format!("def {}", name.data),
+        Decl::Println(e) => {
+            let s: String = format!("{:?}", e).chars().take(60).collect();
+            format!("println {}", s)
+        }
+        Decl::Enum { name, is_trait, .. } => format!(
+            "{} {}",
+            if *is_trait { "trait" } else { "enum" },
+            name.data
+        ),
+        Decl::TraitDecl { name, .. } => format!("trait {}", name.data),
+        Decl::ImplDecl { name, trait_name, .. } => {
+            let n: String = format!("{:?}", name).chars().take(40).collect();
+            format!("impl {} for {}", trait_name.data, n)
+        }
+        Decl::Derive { traits, decl } => {
+            let t = traits.iter().map(|s| s.data.as_str()).collect::<Vec<_>>().join("+");
+            format!("derive({}) {:.40}", t, decl_label(decl))
+        }
+        Decl::Class { name, .. } => format!("class {}", name.data),
+    }
+}
+
 // 2. 定义传递给工作线程的任务包
 struct AnalysisJob {
     uri: Url,
@@ -398,6 +538,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
     pub fn on_change<const MUT:bool>(&self, params: TextDocumentItem<'_>) {
         let start_all = std::time::Instant::now();
+        let mut prof = Prof::new();
         self.client.log_message(MessageType::LOG, format!("change: {}", params.uri.as_str()));
         //dbg!(&params.version);
         let rope = ropey::Rope::from_str(params.text);
@@ -413,6 +554,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
         if let Some((decls, parse_errs, new_exports, expansions)) = parser_with_macros(&preprocess(params.text), now_id, &global_macros) {
+            prof.mark("parse+preprocess");
             self.client.log_message(MessageType::LOG, format!("parser {:?}", start.elapsed().as_secs_f32()));
             let parser_dur = start.elapsed().as_secs_f64();
             // Merge newly exported macros into the global table
@@ -435,9 +577,16 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 infer = &mut ic;
                 cxt = &mut cc;
             };
+            prof.mark("clone_infer_cxt");
             let mut terms = vec![];
             let start = std::time::Instant::now();
             for tm in decls {
+                let decl_start = std::time::Instant::now();
+                let f0 = L13_namespace::FUNC_PROF.force.1.load(Ordering::Relaxed);
+                let e0 = L13_namespace::FUNC_PROF.eval.1.load(Ordering::Relaxed);
+                let q0 = L13_namespace::FUNC_PROF.quote.1.load(Ordering::Relaxed);
+                let u0 = L13_namespace::FUNC_PROF.unify.1.load(Ordering::Relaxed);
+                let v0 = L13_namespace::FUNC_PROF.v_app.1.load(Ordering::Relaxed);
                 match infer.infer(cxt, tm.clone()) {
                     Ok((x, _, new_cxt)) => {
                         if let DeclTm::Println(_, ref s, span) = x {
@@ -453,11 +602,18 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
 	                }
 	                }
-	                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
-	                for err in infer.accumulated_errors.drain(..) {
-	                    err_collect.push((err, DiagnosticSeverity::ERROR));
-	                }
+		                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
+		                for err in infer.accumulated_errors.drain(..) {
+		                    err_collect.push((err, DiagnosticSeverity::ERROR));
+		                }
+		                let f1 = L13_namespace::FUNC_PROF.force.1.load(Ordering::Relaxed);
+		                let e1 = L13_namespace::FUNC_PROF.eval.1.load(Ordering::Relaxed);
+		                let q1 = L13_namespace::FUNC_PROF.quote.1.load(Ordering::Relaxed);
+		                let u1 = L13_namespace::FUNC_PROF.unify.1.load(Ordering::Relaxed);
+		                let v1 = L13_namespace::FUNC_PROF.v_app.1.load(Ordering::Relaxed);
+		                prof.decl(decl_label(&tm), decl_start.elapsed().as_secs_f64(), f1 - f0, e1 - e0, q1 - q0, u1 - u0, v1 - v0);
 	            }
+	            prof.mark("infer_loop");
 	            self.client.log_message(MessageType::LOG, format!("infer {:?}", start.elapsed().as_secs_f32()));
             let infer_dur = start.elapsed().as_secs_f64();
             // Record timing for benchmark
@@ -515,6 +671,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
                 diags.push(diagnostic);
             }
+            prof.mark("diagnostics");
 
             // 发布诊断
             self.client.publish_diagnostics(params.uri.clone(), diags, params.version);
@@ -529,6 +686,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     self.hover_table.insert(params.uri.to_string(), std::mem::replace(infer, Infer::new()));
                 }
             }
+            prof.mark("publish+snapshot");
         } else {
             // Parser returned None — file has syntax errors.
             // Clear any stale analysis results for this URI so the editor
@@ -551,6 +709,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 start_all.elapsed().as_secs_f64(),
             ));
         }
+        prof.report(params.uri.as_str(), 10);
         self.client.log_message(MessageType::LOG, format!("change {:?}", start_all.elapsed().as_secs_f32()));
     }
 

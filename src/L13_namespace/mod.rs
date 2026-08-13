@@ -19,6 +19,118 @@ mod typeclass;
 pub mod pretty;
 mod canonical;
 
+// ---------------------------------------------------------------------------
+// Function-level CPU probe for the elaborator (perf diagnostics).
+//
+// Active only when the env var TYPORT_PROFILE is set (same switch as the
+// per-stage probe in lib.rs).  Each instrumented entry point records the
+// accumulated self-ish time and call count into a global static; nesting is
+// NOT deduplicated (an `eval` called from `check` counts inside `check`'s
+// span too), so the numbers are a relative hotspot distribution, not a
+// strict self-time breakdown.  Zero overhead when disabled (one atomic load
+// per instrumented call).
+// ---------------------------------------------------------------------------
+pub struct FuncProf {
+    pub enabled: std::sync::atomic::AtomicBool,
+    pub check: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub infer_expr: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub check_universe: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub eval: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub force: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub v_app: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub quote: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub nf: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub unify: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub solve_trait: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    /// force() entry value shape histogram, indexed by `val_shape_index`.
+    pub force_shape: [std::sync::atomic::AtomicU64; 13],
+}
+
+pub static FUNC_PROF: FuncProf = FuncProf {
+    enabled: std::sync::atomic::AtomicBool::new(false),
+    check: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    infer_expr: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    check_universe: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    eval: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    force: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    v_app: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    quote: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    nf: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    unify: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    solve_trait: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    force_shape: [
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0),
+    ],
+};
+
+/// Index of a `Val` variant in `FUNC_PROF.force_shape`.
+#[inline]
+pub fn val_shape_index(v: &Val) -> usize {
+    match v {
+        Val::Flex(..) => 0,
+        Val::Rigid(..) => 1,
+        Val::Decl(..) => 2,
+        Val::Obj(..) => 3,
+        Val::Lam(..) => 4,
+        Val::Pi(..) => 5,
+        Val::U(_) => 6,
+        Val::LiteralType => 7,
+        Val::LiteralIntro(_) => 8,
+        Val::Sum(..) => 9,
+        Val::SumCase { .. } => 10,
+        Val::Match(..) => 11,
+        Val::Call(..) => 12,
+    }
+}
+
+pub fn prof_shape(v: &Val) {
+    if FUNC_PROF.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        FUNC_PROF.force_shape[val_shape_index(v)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// RAII guard that accumulates elapsed time into a (ns, count) pair on drop.
+pub struct ProfGuard {
+    ns: &'static std::sync::atomic::AtomicU64,
+    n: &'static std::sync::atomic::AtomicU64,
+    t: std::time::Instant,
+    active: bool,
+}
+
+impl Drop for ProfGuard {
+    fn drop(&mut self) {
+        if self.active {
+            self.ns.fetch_add(self.t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            self.n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// Enter a profiled function.  `Some(guard)` only when profiling is enabled.
+#[inline]
+pub fn prof_enter(ns: &'static std::sync::atomic::AtomicU64, n: &'static std::sync::atomic::AtomicU64) -> Option<ProfGuard> {
+    if FUNC_PROF.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        Some(ProfGuard { ns, n, t: std::time::Instant::now(), active: true })
+    } else {
+        None
+    }
+}
+
+/// Count-only probe for ultra-hot functions (e.g. `force`), where per-call
+/// `Instant::now()` would distort the run: just increments the call counter.
+#[inline]
+pub fn prof_count(n: &'static std::sync::atomic::AtomicU64) {
+    if FUNC_PROF.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod legacy_tests;
 
@@ -1488,12 +1600,14 @@ impl Infer {
         &self.meta[m.0 as usize]
     }
     fn force(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
+        prof_count(&FUNC_PROF.force.1);
         self.force_inner(decl, t)
     }
     // Fast path for deep constructor chains (e.g. big `Nat` literals, which
     // are nested `Val::SumCase`s): force the spine iteratively so a
     // million-deep chain does not consume a million native stack frames.
     fn force_inner(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
+        prof_shape(t);
         // `force_chain` returns `None` when `t` is not such a chain.
         if let Some(v) = self.force_chain(decl, t) {
             return v;
@@ -1663,6 +1777,7 @@ impl Infer {
     }
 
     fn v_app(&self, decl: &Decl, t: &Rc<Val>, u: Rc<Val>, i: Icit) -> Rc<Val> {
+        let _g = prof_enter(&FUNC_PROF.v_app.0, &FUNC_PROF.v_app.1);
         //println!("v_app {t:?} {u:?}");
         match t.as_ref() {
             Val::Lam(_, _, closure) => self.closure_apply(decl, closure, u),
@@ -1739,6 +1854,7 @@ impl Infer {
     }
 
     fn eval(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
+        let _g = prof_enter(&FUNC_PROF.eval.0, &FUNC_PROF.eval.1);
         self.eval_inner(decl, env, tm)
     }
     fn eval_inner(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
@@ -2035,6 +2151,7 @@ impl Infer {
     }
 
     pub fn quote(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
+        let _g = prof_enter(&FUNC_PROF.quote.0, &FUNC_PROF.quote.1);
         self.quote_inner(decl, l, t)
     }
     fn quote_inner(&self, decl: &Decl, l: Lvl, t: &Rc<Val>) -> Rc<Tm> {
@@ -2191,6 +2308,7 @@ impl Infer {
     }
 
     pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
+        let _g = prof_enter(&FUNC_PROF.nf.0, &FUNC_PROF.nf.1);
         let l = Lvl(env.len() as u32);
         self.quote(decl, l, &self.eval(decl, env, t))
     }
