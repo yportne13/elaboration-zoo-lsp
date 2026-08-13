@@ -468,6 +468,7 @@ impl Infer {
         }
     }
     pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, u32), Error> {
+        let _g = super::prof_enter(&super::FUNC_PROF.check_universe.0, &super::FUNC_PROF.check_universe.1);
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x, t_span)?;
@@ -566,6 +567,7 @@ impl Infer {
         None
     }
     pub fn check<const CANONICAL: bool>(&mut self, cxt: &Cxt, t: Raw, a: &Rc<Val>) -> Result<Rc<Tm>, Error> {
+        let _g = super::prof_enter(&super::FUNC_PROF.check.0, &super::FUNC_PROF.check.1);
         //println!("{} {:?} {} {:?}", "check".blue(), t, "==".blue(), a);
         let a = self.force(&cxt.decl, a);
         // Pre-checked value (class Phase-B reuse): the term was fully checked
@@ -1981,6 +1983,7 @@ impl Infer {
     }
 
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
+        let _g = super::prof_enter(&super::FUNC_PROF.infer_expr.0, &super::FUNC_PROF.infer_expr.1);
         /*println!(
             "{} {}",
             "infer".red(),

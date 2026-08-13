@@ -527,6 +527,7 @@ impl Infer {
         Ok(())
     }
     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError> {
+        let _g = super::prof_enter(&super::FUNC_PROF.solve_trait.0, &super::FUNC_PROF.solve_trait.1);
         // Clean up entries pointing to truncated metas
         self.trait_metas.retain(|mv| (mv.0 as usize) < self.meta.len());
         // Iterate only trait-typed metas (not ALL metas)
@@ -809,6 +810,7 @@ impl Infer {
         }
     }
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>, fuel: u32) -> Result<(), UnifyError> {
+        let _g = super::prof_enter(&super::FUNC_PROF.unify.0, &super::FUNC_PROF.unify.1);
         //println!("unify: {t:?} {u:?}");
         let t = self.force(&cxt.decl, t);
         let u = self.force(&cxt.decl, u);
