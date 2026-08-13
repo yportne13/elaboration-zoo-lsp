@@ -1655,27 +1655,17 @@ impl Infer {
                 }
                 t.clone()
             },
-            Val::Sum(name, params, cases, is_trait) => {
-                let mut changed = false;
-                let new_params: Vec<_> = params.iter().map(|(n, v, ty, i)| {
-                    let vf = self.force(decl, v);
-                    let tf = self.force(decl, ty);
-                    if !Rc::ptr_eq(&vf, v) || !Rc::ptr_eq(&tf, ty) {
-                        changed = true;
-                    }
-                    (n.clone(), vf, tf, *i)
-                }).collect();
-                if changed {
-                    Val::Sum(
-                        name.clone(),
-                        Rc::new(new_params),
-                        cases.clone(),
-                        *is_trait,
-                    ).into()
-                } else {
-                    t.clone()
-                }
-            },
+            // A `Sum` is already in WHNF (constructor-headed): its parameter
+            // values/types are arguments of the constructor, not the head, and
+            // normalizing them here (a) is wasted work — the result is
+            // virtually always `t.clone()` — and (b) recursively walks the
+            // whole type tree below the Sum on EVERY force call, which for
+            // fat bundle/struct types (many params, nested bundles) dominates
+            // elaboration time (measured: ~29M of ~33M force() calls in
+            // examples/hdl/10-bundle.typort entered on `Val::Sum`).
+            // Callers that need normalized params force them individually.
+            // Mirrors the `Val::Rigid` treatment (spine args not forced).
+            Val::Sum(..) => t.clone(),
             Val::SumCase { is_trait, typ, index, datas } => {
                 let tf = self.force(decl, typ);
                 let mut changed = !Rc::ptr_eq(&tf, typ);
