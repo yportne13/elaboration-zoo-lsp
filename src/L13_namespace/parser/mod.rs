@@ -2087,6 +2087,105 @@ fn raw_ctor_name(raw: &Raw) -> Option<SmolStr> {
     }
 }
 
+/// Recursively visit every node of a Raw expression tree.
+fn walk_raw<'a>(raw: &'a Raw, f: &mut impl FnMut(&'a Raw)) {
+    f(raw);
+    match raw {
+        Raw::Var(_) | Raw::U(_) | Raw::Hole(_) | Raw::LiteralIntro(_) | Raw::Nat(_) => {}
+        Raw::Obj(x, _) => walk_raw(x, f),
+        Raw::Lam(_, _, x) => walk_raw(x, f),
+        Raw::App(x, y, _) => {
+            walk_raw(x, f);
+            walk_raw(y, f);
+        }
+        Raw::Pi(_, _, x, y) => {
+            walk_raw(x, f);
+            walk_raw(y, f);
+        }
+        Raw::Let(_, x, y, z) => {
+            walk_raw(x, f);
+            walk_raw(y, f);
+            walk_raw(z, f);
+        }
+        Raw::Match(x, cases) => {
+            walk_raw(x, f);
+            for (_, b) in cases {
+                walk_raw(b, f);
+            }
+        }
+        Raw::Sum(_, _, _, _, _) => {}
+        Raw::SumCase { typ, datas, .. } => {
+            walk_raw(typ, f);
+            for (_, t, _) in datas {
+                walk_raw(t, f);
+            }
+        }
+    }
+}
+
+/// Prelude signal-creating factories that take an implicit `[bn: BindingName]`
+/// (`src/prelude/hdl/hdl-signals.typort` / `hdl-clock.typort`). Calling one
+/// inside a `def` body synthesizes an empty binding name, so the signals get
+/// empty names (invalid Verilog) or are silently dropped. Bundle factories
+/// (`TypeName.create`) are diagnosed separately via `bundle_names`.
+const BN_FACTORY_NAMES: &[&str] = &[
+    "autoBits", "autoBitsInOut", "autoBitsInput", "autoBitsOutReg", "autoBitsOutRegInit",
+    "autoBitsOutput", "autoBitsReg", "autoBitsRegInit", "autoBool", "autoBoolInOut",
+    "autoBoolInput", "autoBoolOutReg", "autoBoolOutRegInit", "autoBoolOutput", "autoBoolReg",
+    "autoBoolRegInit", "autoSInt", "autoSIntInOut", "autoSIntInput", "autoSIntOutReg",
+    "autoSIntOutRegInit", "autoSIntOutput", "autoSIntReg", "autoSIntRegInit", "autoUInt",
+    "autoUIntInOut", "autoUIntInput", "autoUIntOutReg", "autoUIntOutRegInit", "autoUIntOutput",
+    "autoUIntReg", "autoUIntRegInit", "memBits", "memBool", "memSInt", "memUInt", "newBits",
+    "newBitsInOut", "newBitsInput", "newBitsOutReg", "newBitsOutRegInitNat", "newBitsOutput",
+    "newBitsReg", "newBitsRegInitNat", "newBool", "newBoolInOut", "newBoolInput",
+    "newBoolOutReg", "newBoolOutRegInitNat", "newBoolOutput", "newBoolReg", "newBoolRegInitNat",
+    "newSInt", "newSIntInOut", "newSIntInput", "newSIntOutReg", "newSIntOutRegInitNat",
+    "newSIntOutput", "newSIntReg", "newSIntRegInitNat", "newUInt", "newUIntInOut",
+    "newUIntInput", "newUIntOutReg", "newUIntOutRegInitNat", "newUIntOutput", "newUIntReg",
+    "newUIntRegInitNat",
+];
+
+/// Diagnostic: signal-creating factories called inside a user top-level `def`
+/// body. A factory's implicit `bn: BindingName` is synthesized from the
+/// caller's let-binding name, which only exists in module bodies / class
+/// fields — inside a `def` it becomes empty, so the signals would get empty
+/// names (invalid Verilog `assign  = ;`) or be silently dropped (the wires
+/// are created outside any module tree). Only user-written top-level defs are
+/// scanned: module bodies become class fields (their factories are legal),
+/// and derive-generated methods call factories with explicit `bn` (legal).
+fn diagnose_def_body_factories(
+    name: &Span<SmolStr>,
+    body: &Raw,
+    bundle_names: &derive::BundleSet,
+) -> Option<String> {
+    let mut bad: Option<String> = None;
+    walk_raw(body, &mut |node| {
+        if bad.is_some() {
+            return;
+        }
+        match node {
+            Raw::Obj(recv, Some(m)) if m.data == "create" => {
+                if let Some(head) = raw_ctor_name(recv) {
+                    if bundle_names.contains(&head) {
+                        bad = Some(format!(
+                            "`{}` factory is called inside `def {}`: signal-creating factories have no binding name there (the caller's let-binding name is only available in a module body or class field), so the signals would get empty names or be silently dropped — call it inside a `module` body instead",
+                            head, name.data
+                        ));
+                    }
+                }
+            }
+            Raw::Var(v) if BN_FACTORY_NAMES.contains(&v.data.as_str()) => {
+                bad = Some(format!(
+                    "`{}` is called inside `def {}`: signal-creating factories have no binding name there (the caller's let-binding name is only available in a module body or class field), so the signals would get empty names or be silently dropped — call it inside a `module` body instead",
+                    v.data, name.data
+                ));
+            }
+            _ => {}
+        }
+    });
+    bad
+}
+
 /// Expand `Decl::Derive` items into their inner declaration + generated impl blocks.
 /// A derived `class` is expanded to its struct first, so `#[derive(Show)] class Foo`
 /// derives on the class's struct exactly like a plain struct would.
@@ -2185,6 +2284,17 @@ fn expand_derives(decls: Vec<Decl>) -> (Vec<Decl>, Vec<IError>) {
                     }
                 }
                 result.push(Decl::ImplDecl { trait_name, name, params, trait_params, methods, inherent, from_class });
+            }
+            decl @ Decl::Def { .. } => {
+                // Diagnostic: factories called inside a user `def` body (see
+                // diagnose_def_body_factories). The def still elaborates as
+                // before — the error is reported alongside, not instead.
+                if let Decl::Def { name, body, .. } = &decl {
+                    if let Some(msg) = diagnose_def_body_factories(name, body, &bundle_names) {
+                        errors.push(IError { msg: name.to_span().map(|_| ErrMsg::Custom(msg.clone())) });
+                    }
+                }
+                result.push(decl);
             }
             other => result.push(other),
         }

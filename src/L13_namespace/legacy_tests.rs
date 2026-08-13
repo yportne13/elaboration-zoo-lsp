@@ -2225,6 +2225,128 @@ println(moduleTreeVL(Test.create.tree))
 }
 
 #[test]
+fn test_hdl_diag_factory_in_def() {
+    // Signal-creating factories inside a user `def` body are diagnosed at
+    // parse time (they would synthesize an empty binding name: empty signal
+    // names / silently dropped wires).
+    let cases: &[(&str, &str)] = &[
+        // bundle factory
+        (r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+}
+
+def buildBus = MyBus.create
+
+module Test {
+    let m = buildBus
+}
+"#, "signal-creating factories"),
+        // autoUInt inside a nested let chain
+        (r#"
+def mkSig = let x = autoUInt(8);
+    x
+
+module Test {
+    let a = mkSig
+}
+"#, "signal-creating factories"),
+        // memUInt
+        (r#"
+def mkMem = memUInt(8, 64)
+
+module Test {
+    let m = mkMem
+}
+"#, "signal-creating factories"),
+    ];
+    for (input, expected) in cases {
+        let (_, errors) = parser::parser(input, 0).unwrap();
+        let msgs: Vec<String> = errors.iter().map(|e| e.msg.data.to_string()).collect();
+        assert!(
+            msgs.iter().any(|m| m.contains(expected)),
+            "expected parse error containing {:?}, got: {:?}",
+            expected, msgs
+        );
+    }
+}
+
+#[test]
+fn test_hdl_diag_double_direction() {
+    // Chained `.asMaster.asSlave` on a factory result is diagnosed at
+    // elaboration (a second direction pass would declare every port twice).
+    let input = r#"
+#[derive(Bundle)]
+struct MyBus {
+    data: UInt[8]
+}
+
+impl IMasterSlave for MyBus {
+    def asMaster: MyBus =
+        let _ = out(this.data);
+        this
+}
+
+module Test {
+    let master = MyBus.create.asMaster.asSlave
+}
+
+println(moduleTreeVL(Test.create.tree))
+"#;
+    match run_with_prelude(input) {
+        Ok(_) => panic!("expected error for chained asMaster.asSlave"),
+        Err(e) => {
+            assert!(
+                e.0.data.contains("already-directed"),
+                "expected already-directed diagnostic, got: {}", e.0.data
+            );
+        }
+    }
+}
+
+#[test]
+fn test_hdl_into_error_messages() {
+    // `a := b` / `a <> b` type mismatches report in user terms (source →
+    // target conversion) instead of the internal typeclass instance list,
+    // with a width hint for the classic UInt/Bits/SInt width slip.
+    // width mismatch
+    let input = r#"
+module Test {
+    let a = UInt[8]
+    let b = UInt[16]
+    a := b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(_) => panic!("expected Into error for width mismatch"),
+        Err(e) => {
+            let msg = &e.0.data;
+            assert!(msg.contains("cannot convert `UInt[16]` to `UInt[8]`"), "got: {}", msg);
+            assert!(msg.contains("widths differ (16 vs 8)"), "expected width hint, got: {}", msg);
+            assert!(msg.contains("resize"), "expected resize hint, got: {}", msg);
+            assert!(!msg.contains("available instances"), "internal instance list must not leak, got: {}", msg);
+        }
+    }
+    // type mismatch (no width to compare)
+    let input = r#"
+module Test {
+    let a = Bool
+    let b = UInt[8]
+    a := b
+}
+"#;
+    match run_with_prelude(input) {
+        Ok(_) => panic!("expected Into error for type mismatch"),
+        Err(e) => {
+            let msg = &e.0.data;
+            assert!(msg.contains("cannot convert `UInt[8]` to `Bool`"), "got: {}", msg);
+            assert!(!msg.contains("widths differ"), "no width hint expected, got: {}", msg);
+        }
+    }
+}
+
+#[test]
 fn test_hdl_bundle_master_slave_errors() {
     // Malformed `impl IMasterSlave` specs are rejected at parse time with a
     // message naming the offending field: missing direction, unknown field,

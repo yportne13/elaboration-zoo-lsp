@@ -913,7 +913,40 @@ impl Infer {
                                     } else {
                                         format!("{}[{}]", name.data, rest.join(", "))
                                     };
-                                    if instances.map_or(true, |i| i.is_empty()) {
+                                    // `Into` mismatch — the common `a := b` /
+                                    // `a <> b` type error. Report in user terms
+                                    // (source → target conversion) instead of
+                                    // the internal instance list, and point at
+                                    // width differences (the usual mistake).
+                                    if name.data == "Into" && params.len() >= 2 {
+                                        let source = pretty_val(&params[0].1);
+                                        let target = pretty_val(&params[1].1);
+                                        let mut msg = format!(
+                                            "cannot convert `{}` to `{}` (for `:=` / `<>`): no `Into[{}]` instance for `{}`",
+                                            source, target, target, source
+                                        );
+                                        // Width hint: UInt/Bits/SInt with
+                                        // different widths — the classic slip.
+                                        let width_of = |val: &Rc<Val>| -> Option<String> {
+                                            match self.force(&cxt.decl, val).as_ref() {
+                                                Val::Sum(n, ps, _, _)
+                                                    if n.data == "UInt" || n.data == "SInt" || n.data == "Bits" =>
+                                                {
+                                                    ps.iter().find_map(|(_, v, _, _)| Some(pretty_val(v)))
+                                                }
+                                                _ => None,
+                                            }
+                                        };
+                                        if let (Some(w1), Some(w2)) = (width_of(&params[0].1), width_of(&params[1].1)) {
+                                            if w1 != w2 {
+                                                msg += &format!(
+                                                    " — widths differ ({} vs {}); use `resize` to change the width explicitly",
+                                                    w1, w2
+                                                );
+                                            }
+                                        }
+                                        msg
+                                    } else if instances.map_or(true, |i| i.is_empty()) {
                                         format!("no instance of typeclass `{}` for types `{}`", trait_repr, first)
                                     } else {
                                         let insts = instances.unwrap();
@@ -1924,6 +1957,23 @@ impl Infer {
                 if t.data == "mk" {
                     if let Raw::Var(sum_name) = x.as_ref() {
                         return self.infer_expr(cxt, Raw::Var(sum_name.clone().map(|n| SmolStr::new(format!("{n}.mk")))))
+                    }
+                }
+                // Diagnostic: asMaster/asSlave chained on an already-directed
+                // bundle (`X.create.asMaster.asSlave`). Both methods REBUILD
+                // the bundle with directed ports; applying a second one to the
+                // result would declare every port twice (input + output of the
+                // same name) — invalid Verilog. The check covers direct
+                // chaining; an indirect chain through a `let` binding is
+                // equivalent nonsense but not statically visible here.
+                if t.data == "asMaster" || t.data == "asSlave" {
+                    if let Raw::Obj(inner, Some(prev)) = x.as_ref() {
+                        if prev.data == "asMaster" || prev.data == "asSlave" {
+                            return Err(Error(t_span.map(|_| format!(
+                                "`{}` on an already-directed bundle: `asMaster`/`asSlave` rebuild the bundle's ports, so chaining them (`...{}.{}`) would declare every port twice (input + output of the same name) — call them on a fresh `TypeName.create` result instead",
+                                t.data, prev.data, t.data
+                            )), vec![]));
+                        }
                     }
                 }
                 // Check namespace-qualified access: build full path and look up in decl table
