@@ -1608,9 +1608,14 @@ impl Infer {
     // million-deep chain does not consume a million native stack frames.
     fn force_inner(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
         prof_shape(t);
-        // `force_chain` returns `None` when `t` is not such a chain.
-        if let Some(v) = self.force_chain(decl, t) {
-            return v;
+        // `force_chain` only handles unary `SumCase` spines (big `Nat`
+        // literals).  Gate the call on that shape so the overwhelming common
+        // case (`Val::Sum`, plus flex/obj/call/etc.) skips `force_chain`'s
+        // `t.clone()` + match entirely instead of cloning and bailing out.
+        if matches!(t.as_ref(), Val::SumCase { datas, .. } if datas.len() == 1) {
+            if let Some(v) = self.force_chain(decl, t) {
+                return v;
+            }
         }
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
