@@ -2416,7 +2416,8 @@ fn expand_one_class(
 /// records whether item i's value references the create-only implicit `bn`
 /// binding (safe in the create, which declares it, but NOT in method bodies).
 pub struct PrecheckedItems {
-    pub items: Vec<(Span<SmolStr>, Rc<Tm>, Rc<Val>)>,
+    /// (name, checked value, value type, checked annotation) per class item.
+    pub items: Vec<(Span<SmolStr>, Rc<Tm>, Rc<Val>, Rc<Tm>)>,
     pub bn_refs: Vec<bool>,
 }
 
@@ -2594,11 +2595,23 @@ fn build_class_chain_tm(
     // Pair by position with the pre-checked items: methods are NOT in
     // `pc.items`, so filter them out here (keeping the relative order).
     let item_chain = items.iter().filter(|i| !matches!(i, ClassItem::Method(..)));
-    for (item, (n, t, va)) in item_chain.rev().zip(pc.items.iter().rev()) {
+    for (item, (n, t, va, a_checked)) in item_chain.rev().zip(pc.items.iter().rev()) {
         let ann = match item {
             ClassItem::Field(_, t, _) => t.clone(),
             ClassItem::Stmt(_) => Raw::Hole(empty_span(())),
             ClassItem::Method(_, _) => unreachable!(),
+        };
+        // Reuse the Phase-A-checked annotation for ANNOTATED fields whose type
+        // is closed (no free De Bruijn variables): the create context is
+        // layout-identical to Phase A, so the checked Tm elaborates to the
+        // same result without re-running check_universe.  Unannotated fields
+        // (Hole) and open types keep the Raw annotation.
+        let ann = if matches!(ann, Raw::Hole(_)) {
+            ann
+        } else if super::tm_is_closed(a_checked) {
+            Raw::Tm(a_checked.clone(), va.clone())
+        } else {
+            ann
         };
         ctor = Raw::Let(
             n.clone(),
@@ -2652,10 +2665,20 @@ fn maybe_prechecked_method_body(d: &Decl, pc: Option<&PrecheckedItems>) -> Decl 
     // ones (instance recording), so pair the lets with the FIRST `lets.len()`
     // pre-checked items (a bare `.rev()` zip would shift onto the last ones).
     let mut body_raw = Raw::Var(fv);
-    for (ann, (_, t, va)) in lets.iter().rev().zip(pc.items.iter().take(lets.len()).rev()) {
+    for (ann, (_, t, va, a_checked)) in lets.iter().rev().zip(pc.items.iter().take(lets.len()).rev()) {
+        // Reuse the Phase-A-checked annotation for annotated fields whose type
+        // is closed.  Unannotated fields / statements (Hole) and open types
+        // keep the Raw annotation.
+        let ann_raw = if matches!(ann.1, Raw::Hole(_)) {
+            ann.1.clone()
+        } else if super::tm_is_closed(a_checked) {
+            Raw::Tm(a_checked.clone(), va.clone())
+        } else {
+            ann.1.clone()
+        };
         body_raw = Raw::Let(
             ann.0.clone(),
-            Box::new(ann.1.clone()),
+            Box::new(ann_raw),
             Box::new(Raw::Tm(t.clone(), va.clone())),
             Box::new(body_raw),
         );

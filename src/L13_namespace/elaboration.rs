@@ -641,8 +641,18 @@ impl Infer {
             }
             // Check let bindings
             (Raw::Let(x, ret_typ, t, u), _) => {
-                let (a_checked, _) = self.check_universe(cxt, *ret_typ)?;
-                let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
+                // A `Raw::Tm` annotation is a Phase-A pre-checked type from a
+                // class create/tree body: its (checked type Tm, eval'd type)
+                // were already produced by check_universe in Phase A, and the
+                // context layout is identical, so reuse them instead of
+                // re-running check_universe + eval.
+                let (a_checked, va) = if let Raw::Tm(tm, ty) = ret_typ.as_ref() {
+                    (tm.clone(), ty.clone())
+                } else {
+                    let (a, _) = self.check_universe(cxt, *ret_typ)?;
+                    let v = self.eval(&cxt.decl, &cxt.env, &a);
+                    (a, v)
+                };
                 // Set binding_name so implicit BindingName params get the let-binding's name
                 let cxt_named = cxt.with_binding_name(x.data.clone());
                 let t_checked = self.check::<CANONICAL>(&cxt_named, *t, &va)?;
@@ -1764,10 +1774,11 @@ impl Infer {
                 // meta" failure).  Annotated fields keep their annotation
                 // verbatim as the struct field type.
                 let mut struct_field_types: Vec<(Span<SmolStr>, Raw)> = Vec::new();
-                // Phase-A reuse data: (name, checked value, value type) per
-                // class item (fields + statements, declaration order), plus
-                // whether the value references the create-only `bn` binding.
-                let mut prechecked: Vec<(Span<SmolStr>, Rc<Tm>, Rc<Val>)> = Vec::new();
+                // Phase-A reuse data: (name, checked value, value type,
+                // checked annotation) per class item (fields + statements,
+                // declaration order), plus whether the value references the
+                // create-only `bn` binding.
+                let mut prechecked: Vec<(Span<SmolStr>, Rc<Tm>, Rc<Val>, Rc<Tm>)> = Vec::new();
                 let mut bn_refs: Vec<bool> = Vec::new();
                 let mut stmt_idx = 0usize;
                 let mut bind_idx = 0usize;
@@ -1816,7 +1827,7 @@ impl Infer {
                     bn_refs.push(Self::tm_refs_bn(&t_checked, bind_idx));
                     bind_idx += 1;
                     a_cxt = a_cxt.define(n.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone());
-                    prechecked.push((n, t_checked, va));
+                    prechecked.push((n, t_checked, va, a_checked));
                 }
 
                 // ══ Phase B: assemble the struct from the inferred

@@ -744,6 +744,42 @@ pub fn tm_contains_match(tm: &Tm) -> bool {
     }
 }
 
+/// True when `tm` has no free De Bruijn variables (all `Tm::Var`s are bound
+/// by an enclosing `Lam`/`Pi`/`Let`/`Match`).  Used to gate the reuse of
+/// Phase-A-checked type annotations in create/tree bodies: a closed annotation
+/// is context-independent, so it elaborates identically in the (slightly
+/// different) method-body context.
+pub fn tm_is_closed(tm: &Tm) -> bool {
+    fn free_var(tm: &Tm, d: u32) -> bool {
+        match tm {
+            Tm::Var(ix) => ix.0 >= d,
+            Tm::Obj(t, _) => free_var(t, d),
+            Tm::Lam(_, _, b) => free_var(b, d + 1),
+            Tm::App(f, a, _) => free_var(f, d) || free_var(a, d),
+            Tm::AppPruning(t, _) => free_var(t, d),
+            Tm::U(_) | Tm::Decl(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => false,
+            Tm::Pi(_, _, a, b) => free_var(a, d) || free_var(b, d + 1),
+            Tm::Let(_, ty, v, b) => free_var(ty, d) || free_var(v, d) || free_var(b, d + 1),
+            Tm::Sum(_, params, _, _) => {
+                params.iter().any(|(_, v, ty, _)| free_var(v, d) || free_var(ty, d))
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                free_var(typ, d) || datas.iter().any(|(_, t, _)| free_var(t, d))
+            }
+            Tm::Match(s, cases) => {
+                free_var(s, d) || cases.iter().any(|(_, b)| free_var(b, d + 1))
+            }
+            Tm::Call(_, args, body) => {
+                args.iter().any(|(a, _)| free_var(a, d)) || free_var(body, d + 1)
+            }
+            Tm::OpCall { args, body, .. } => {
+                args.iter().any(|(a, _)| free_var(a, d)) || free_var(body, d + 1)
+            }
+        }
+    }
+    !free_var(tm, 0)
+}
+
 /// Build a simplified copy of `decl` where every definition's body is
 /// replaced by a `Decl` reference, so evaluating match-case bodies does not
 /// re-expand recursive definitions.  O(decl) to build; cached per decl
