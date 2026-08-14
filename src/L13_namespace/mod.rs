@@ -1669,19 +1669,35 @@ impl Infer {
             Val::SumCase { is_trait, typ, index, datas } => {
                 let tf = self.force(decl, typ);
                 let mut changed = !Rc::ptr_eq(&tf, typ);
-                let new_datas: Vec<_> = datas.iter().map(|(n, ty, i)| {
+                // Force every data (side effects must run regardless), but
+                // avoid allocating the rebuilt `datas` Vec in the common case
+                // where nothing changes — the previous `.map(...).collect()`
+                // allocated a fresh Vec (plus a `SmolStr` clone per field) on
+                // every call, then dropped it when `changed` was false.
+                let mut new_datas: Option<Vec<(Span<SmolStr>, Rc<Val>, Icit)>> = None;
+                for (i, (n, ty, ic)) in datas.iter().enumerate() {
                     let df = self.force(decl, ty);
                     if !Rc::ptr_eq(&df, ty) {
                         changed = true;
                     }
-                    (n.clone(), df, *i)
-                }).collect();
+                    if changed {
+                        let v = new_datas.get_or_insert_with(|| {
+                            // First change: back-fill the unchanged fields seen
+                            // so far (their forced value is ptr-identical).
+                            datas.iter()
+                                .take(i)
+                                .map(|(n, ty, ic)| (n.clone(), ty.clone(), *ic))
+                                .collect()
+                        });
+                        v.push((n.clone(), df, *ic));
+                    }
+                }
                 if changed {
                     Val::SumCase {
                         is_trait: *is_trait,
                         typ: tf,
                         index: *index,
-                        datas: Rc::new(new_datas),
+                        datas: Rc::new(new_datas.unwrap_or_default()),
                     }.into()
                 } else {
                     t.clone()
