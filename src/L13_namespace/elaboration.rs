@@ -2766,38 +2766,41 @@ impl Infer {
             }
             if let Some((_, decl, def_span, _)) = traits.first() {
                 // Trait-method Pi-chain cache: when the same operator is
-                // elaborated again on a pointer-identical receiver type, reuse
+                // elaborated again on a structurally-equal receiver type, reuse
                 // the already-checked Pi chain (via a Raw::Tm annotation) so
                 // infer_expr skips its check_universe.
-                let recv_key = (t.data.clone(), Rc::as_ptr(&a) as usize);
-                let result = match self.trait_method_cache.get(&recv_key).cloned() {
-                    Some((a_checked, va)) => {
-                        let new_decl = if let Raw::Let(n, _, t_body, u) = decl {
-                            Raw::Let(
-                                n.clone(),
-                                Box::new(Raw::Tm(a_checked.clone(), va.clone())),
-                                t_body.clone(),
-                                u.clone(),
-                            )
-                        } else {
-                            decl.clone()
-                        };
-                        self.infer_expr(cxt, new_decl)?
-                    }
-                    None => {
-                        let result = self.infer_expr(cxt, decl.clone())?;
-                        // Cache the checked Pi-chain type only when it is fully
-                        // meta-free: a cached type referencing per-call metas
-                        // would use stale indices on a later call with the same
-                        // receiver-type pointer.
-                        if let Tm::Let(_, a_checked, _, _) = result.0.as_ref() {
-                            if a_checked.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
-                                let va = self.eval(&cxt.decl, &cxt.env, a_checked);
-                                self.trait_method_cache.insert(recv_key, (a_checked.clone(), va));
-                            }
+                let cache_key = val_cache_key(&a, 0).map(|k| (t.data.clone(), k));
+                let result = match &cache_key {
+                    Some(key) => match self.trait_method_cache.get(key).cloned() {
+                        Some((a_checked, va)) => {
+                            let new_decl = if let Raw::Let(n, _, t_body, u) = decl {
+                                Raw::Let(
+                                    n.clone(),
+                                    Box::new(Raw::Tm(a_checked.clone(), va.clone())),
+                                    t_body.clone(),
+                                    u.clone(),
+                                )
+                            } else {
+                                decl.clone()
+                            };
+                            self.infer_expr(cxt, new_decl)?
                         }
-                        result
-                    }
+                        None => {
+                            let result = self.infer_expr(cxt, decl.clone())?;
+                            // Cache the checked Pi-chain type only when it is
+                            // fully meta-free: a cached type referencing
+                            // per-call metas would use stale indices on a later
+                            // call with the same receiver-type key.
+                            if let Tm::Let(_, a_checked, _, _) = result.0.as_ref() {
+                                if a_checked.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
+                                    let va = self.eval(&cxt.decl, &cxt.env, a_checked);
+                                    self.trait_method_cache.insert(key.clone(), (a_checked.clone(), va));
+                                }
+                            }
+                            result
+                        }
+                    },
+                    None => self.infer_expr(cxt, decl.clone())?,
                 };
                 self.hover_table.push((
                     t.to_span(),
@@ -2877,6 +2880,46 @@ fn qualified_path_str(x: &Raw, field: &str) -> Option<SmolStr> {
         Raw::Var(name) => Some(SmolStr::new(format!("{}.{}", name.data, field))),
         Raw::Obj(inner, Some(seg)) => {
             qualified_path_str(inner.as_ref(), &seg.data).map(|p| SmolStr::new(format!("{p}.{field}")))
+        }
+        _ => None,
+    }
+}
+
+/// Deterministic structural key for a type value, used to key the
+/// trait-method Pi-chain cache.  Returns `None` for types that are not
+/// cacheable: per-call metas (`Flex`), open/context-dependent types (`Rigid`,
+/// `Decl` spines, lambdas/functions), or structures deeper than `depth` (a
+/// runaway Nat literal).  Equal closed types (e.g. `UInt[8]` built at
+/// different sites) produce the same key, so the cache hits across separate
+/// elaborations — unlike a pointer key.
+fn val_cache_key(v: &Val, depth: u32) -> Option<SmolStr> {
+    if depth > 64 {
+        return None;
+    }
+    match v {
+        Val::U(n) => Some(SmolStr::new(format!("u{}", n))),
+        Val::LiteralType => Some(SmolStr::new("lt")),
+        Val::LiteralIntro(s) => Some(SmolStr::new(format!("l:{}", s.data))),
+        Val::Sum(name, params, _, _) => {
+            let mut s = String::from(name.data.as_str());
+            s.push('(');
+            for (i, (_, pv, _, _)) in params.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                s.push_str(&val_cache_key(pv, depth + 1)?);
+            }
+            s.push(')');
+            Some(SmolStr::new(s))
+        }
+        Val::SumCase { index, datas, .. } => {
+            let mut s = format!("sc{}({}", index, datas.len());
+            for (_, dv, _) in datas.iter() {
+                s.push(',');
+                s.push_str(&val_cache_key(dv, depth + 1)?);
+            }
+            s.push(')');
+            Some(SmolStr::new(s))
         }
         _ => None,
     }
