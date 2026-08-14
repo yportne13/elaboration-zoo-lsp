@@ -645,10 +645,14 @@ struct SwitchBuilder {
 }
 
 impl SwitchBuilder {
+    // Each is-case replaces the switch's WhenStack level (whenElseBegin on an
+    // empty stack pushes the level for the first case; subsequent calls
+    // accumulate the negation of earlier cases). No whenEnd between cases —
+    // the level stays alive so default() can negate ALL cases. When no
+    // default() is chained the level leaks (caller error).
     def isValueExpr(valueExpr: Expr, body: Unit -> Unit): SwitchBuilder =
-        let _ = whenBegin(binary(this.selExpr, "==", valueExpr));
+        let _ = whenElseBegin(binary(this.selExpr, "==", valueExpr));
         let _ = body(unit);
-        let _ = whenEnd(unit);
         SwitchBuilder.mk(this.selExpr)
 
     def default(body: Unit -> Unit): SwitchBuilder =

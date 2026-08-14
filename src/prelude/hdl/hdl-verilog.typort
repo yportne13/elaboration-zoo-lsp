@@ -263,6 +263,15 @@ def isSubSignal(e: Expr): Boolean = match e {
     case _ => false
 }
 
+// Check if an expression is an assign whose RHS is a subSignal (reading a
+// sub-module output: `sig := u.port`). Defined here (before assignLineCheck)
+// because Typort has no forward references; the expr decomposition helpers
+// used by collectInstHelp live further down.
+def isSubSignalRhs(e: Expr): Boolean = match e {
+    case assign(_, rhs) => isSubSignal(rhs)
+    case _ => false
+}
+
 // Check if an expression is an assign targeting a subSignal (port connection)
 def isSubSigAssign(e: Expr): Boolean = match e {
     case assign(lhs, _) => isSubSignal(lhs)
@@ -546,16 +555,25 @@ def getAssignRhsStr(e: Expr): String = match e {
 }
 
 // Helper: check if a single assign expr should be emitted as a continuous assign
+// Assigns touching a subSignal on EITHER side are port connections (collected
+// by collectInstHelp), never continuous assigns — `u.port := sig` drives an
+// instance input, `sig := u.port` reads an instance output; both become
+// `.port(other_side)` connections.
 def assignLineCheck(e: Expr, whenSigs: List[String]): List[String] =
     let lhsName = getAssignLhsName(e);
     let isWhen = strInList(lhsName, whenSigs);
     match isWhen {
         case true => lnil
         case false =>
-            let isPort = isSubSigAssign(e);
-            match isPort {
+            let lhsSub = isSubSigAssign(e);
+            match lhsSub {
                 case true => lnil
-                case false => lcons (exprVL(e)) lnil
+                case false =>
+                    let rhsSub = isSubSignalRhs(e);
+                    match rhsSub {
+                        case true => lnil
+                        case false => lcons (exprVL(e)) lnil
+                    }
             }
     }
 
@@ -599,71 +617,6 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
     }
 }
 
-// Helper: collect default lines that appear AFTER the last non-clocked when in
-// insertion order — i.e. otherwise bodies, which become the else branch of the
-// if/else-if chain. `es` is the reverse-ordered module expr Vec, so these are
-// the default lines before the first when encountered walking it.
-def collectTailDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case when(_, _, _) => lnil
-        case assign(_, _) =>
-            let lhsName = getAssignLhsName(e);
-            let isWhen = strInList(lhsName, whenSigs);
-            match isWhen {
-                case true => lcons ("      " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectTailDefaultLines(tail, whenSigs))
-                case false => collectTailDefaultLines(tail, whenSigs)
-            }
-        case _ => collectTailDefaultLines(tail, whenSigs)
-    }
-}
-
-// Helper: collect default lines after the first when seen while walking the
-// reverse-ordered Vec (i.e. defaults before the first when in insertion order).
-def collectHeadDefaultsAfter[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case assign(_, _) =>
-            let lhsName = getAssignLhsName(e);
-            let isWhen = strInList(lhsName, whenSigs);
-            match isWhen {
-                case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectHeadDefaultsAfter(tail, whenSigs))
-                case false => collectHeadDefaultsAfter(tail, whenSigs)
-            }
-        case _ => collectHeadDefaultsAfter(tail, whenSigs)
-    }
-}
-
-// Helper: collect default lines that appear BEFORE the first non-clocked when in
-// insertion order — standalone defaults written before a when (e.g. an explicit
-// default assign followed by a when without otherwise). These stay as plain
-// lines emitted before the if chain.
-def collectHeadDefaultLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case when(_, _, _) => collectHeadDefaultsAfter(tail, whenSigs)
-        case _ => collectHeadDefaultLines(tail, whenSigs)
-    }
-}
-
-// Helper: collect all non-clocked when exprs from Vec
-def collectNonClockedWhens[ne: Nat](es: Vec[Expr] ne): List[Expr] = match es {
-    case nil => lnil
-    case cons(e, tail) => match e {
-        case when(_, _, _) =>
-            let has_clk = hasRegAssign(e);
-            match has_clk {
-                case true => collectNonClockedWhens(tail)
-                case false => lcons(e, collectNonClockedWhens(tail))
-            }
-        case _ => collectNonClockedWhens(tail)
-    }
-}
-
-// Helper: emit a single when as if-block (no else)
-def emitIfBlock(cond: Expr, body: Expr): String =
-    "if (" + emitCondStr(cond) + ") begin\n" + exprVL_proc(body) + "\n    end"
-
 // Helper: get cond from a when expr
 def getWhenCond(e: Expr): Expr = match e {
     case when(c, _, _) => c
@@ -676,54 +629,54 @@ def getWhenBody(e: Expr): Expr = match e {
     case _ => nop
 }
 
-// Helper: check if expr is a when
-def isWhenExpr(e: Expr): Boolean = match e {
-    case when(_, _, _) => true
-    case _ => false
+// Emit one non-clocked when node as an independent if-block. The node body is
+// a single assignment (createSignalExpr wraps each statement separately), so
+// it emits `if (cond) begin lhs = rhs; end`.
+def emitWhenLine(e: Expr): String =
+    let has_clk = hasRegAssign(e);
+    match has_clk {
+        case true => ""
+        case false =>
+            let condStr = emitCondStr(getWhenCond(e));
+            "    if (" + condStr + ") begin\n" + exprVL_proc(getWhenBody(e)) + "\n    end"
+    }
+
+// Collect, in insertion order, the lines that belong in the single merged
+// combinational always block:
+//   - non-clocked when nodes → `if (cond) begin ... end`
+//   - plain assigns whose LHS is a when-driven signal → blocking default in
+//     source order (a bare `x := v` after a when is last-wins by insertion
+//     order; use `otherwise` for else semantics)
+// Each assignment carries its FULL enable condition (see hdl-core.typort
+// WhenStack), so independent whens stay independent, nested whens are folded
+// into the condition, and no else-if chain reconstruction is needed.
+def collectAlwaysBodyLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case when(_, _, _) =>
+            let has_clk = hasRegAssign(e);
+            match has_clk {
+                case true => collectAlwaysBodyLines(tail, whenSigs)
+                case false => lcons (emitWhenLine(e)) (collectAlwaysBodyLines(tail, whenSigs))
+            }
+        case assign(_, _) =>
+            let lhsName = getAssignLhsName(e);
+            let isWhen = strInList(lhsName, whenSigs);
+            match isWhen {
+                case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectAlwaysBodyLines(tail, whenSigs))
+                case false => collectAlwaysBodyLines(tail, whenSigs)
+            }
+        case _ => collectAlwaysBodyLines(tail, whenSigs)
+    }
 }
 
-// Helper: emit else-if chain from a list of when nodes
-def emitElseIfChain(ls: List[Expr]): String = match ls {
-    case lnil => ""
-    case lcons(e, tail) =>
-        let is_w = isWhenExpr(e);
-        match is_w {
-            case true => " else " + emitIfBlock(getWhenCond(e), getWhenBody(e)) + emitElseIfChain(tail)
-            case false => "\n" + exprVL(e) + emitElseIfChain(tail)
-        }
-}
-
-// Helper: join multiple when bodies, chaining consecutive whens into if/else-if
-def joinWhenBodies(ls: List[Expr]): String = match ls {
-    case lnil => ""
-    case lcons(e, tail) =>
-        let is_w = isWhenExpr(e);
-        match is_w {
-            case true => "    " + emitIfBlock(getWhenCond(e), getWhenBody(e)) + emitElseIfChain(tail)
-            case false => exprVL(e) + "\n" + joinWhenBodies(tail)
-        }
-}
-
-// Build a single merged always block from all non-clocked when nodes.
-// Standalone defaults (written before the when) stay as plain lines before the
-// if chain; otherwise bodies (defaults after the last when) become the else
-// branch, yielding if / else if / else instead of "default assign + if override".
+// Build a single merged always block: every when-driven combinational
+// assignment becomes an independent if (or blocking default) in source order.
 def buildMergedAlwaysBlock[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
-    let whens = list_reverse(collectNonClockedWhens(es));
-    match whens {
+    let lines = list_reverse(collectAlwaysBodyLines(es, whenSigs));
+    match lines {
         case lnil => ""
-        case _ =>
-            let head_defaults = list_reverse(collectHeadDefaultLines(es, whenSigs));
-            let tail_defaults = list_reverse(collectTailDefaultLines(es, whenSigs));
-            let headStr = match head_defaults {
-                case lnil => ""
-                case _ => joinLines(head_defaults) + "\n"
-            };
-            let elseStr = match tail_defaults {
-                case lnil => ""
-                case _ => " else begin\n" + joinLines(tail_defaults) + "\n    end"
-            };
-            "  always @(*) begin\n" + headStr + joinWhenBodies(whens) + elseStr + "\n  end\n"
+        case _ => "  always @(*) begin\n" + joinLines(lines) + "\n  end\n"
     }
 
 def alwaysVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
@@ -856,6 +809,21 @@ def getSubSignalPort(e: Expr): String = match e {
 // records assign(subSignal(inst, port), sig) here.
 
 
+// Collect ".port(sig)" connections for one instance from assigns touching a
+// subSignal on either side:
+//   u.port := sig    (subSignal LHS)  →  .port(sig)
+//   sig := u.port    (subSignal RHS)  →  .port(sig)   (read child output)
+// The connection name comes from the module macro's port fields, which are
+// subSignal handles, so `u.a := sig` in the parent records
+// assign(subSignal(inst, port), sig) here.
+//
+// NOTE (direction): the generator has no port-direction knowledge (the child
+// ModuleDef is not stored in the parent tree), so a complex RHS on
+// `u.port := expr` is emitted as `.port(expr)` verbatim — legal for input
+// ports, illegal for output ports. Driving a child's output port is not
+// supported: read it instead (`sig := u.port`).
+
+
 // Generate instance instantiation lines with port connections.
 // Filter connections belonging to one instance from parallel seen lists.
 // (pattern_match misbinds closure variables referenced inside match branches,
@@ -887,15 +855,25 @@ def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], s
             lcons ("  " + moduleName + " " + instName + " (" + ports + ");") (collectInstHelp(tail, seenInsts, seenConns))
         case _ =>
             let lhs = getAssignLhsExpr(e);
-            let is_ss = isSubSignal(lhs);
-            match is_ss {
+            let lhs_ss = isSubSignal(lhs);
+            match lhs_ss {
                 case true =>
                     let inst = getSubSignalInst(lhs);
                     let port = getSubSignalPort(lhs);
                     let rhs = getAssignRhsExpr(e);
                     let conn = "." + port + "(" + exprVL(rhs) + ")";
                     collectInstHelp(tail, lcons inst seenInsts, lcons conn seenConns)
-                case false => collectInstHelp(tail, seenInsts, seenConns)
+                case false =>
+                    let rhs = getAssignRhsExpr(e);
+                    let rhs_ss = isSubSignal(rhs);
+                    match rhs_ss {
+                        case true =>
+                            let inst = getSubSignalInst(rhs);
+                            let port = getSubSignalPort(rhs);
+                            let conn = "." + port + "(" + exprVL(lhs) + ")";
+                            collectInstHelp(tail, lcons inst seenInsts, lcons conn seenConns)
+                        case false => collectInstHelp(tail, seenInsts, seenConns)
+                    }
             }
     }
 }

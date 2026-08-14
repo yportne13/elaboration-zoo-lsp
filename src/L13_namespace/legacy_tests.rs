@@ -1254,8 +1254,8 @@ fn test_example_hdl_hierarchy() {
         Ok(output) => {
             println!("{}", output);
             assert!(output.contains("myAdder u ()"), "missing auto instance line: {}", output);
-            assert!(output.contains(".a(a), .b(b), .en(en), .sum((a + b))"),
-                "instance line should aggregate u.a := sig connections, got: {}", output);
+            assert!(output.contains(".a(a), .b(b), .en(en), .sum(sum)"),
+                "instance line should aggregate port connections (input drive + output read), got: {}", output);
         }
         Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
     }
@@ -1396,13 +1396,13 @@ fn test_examples_hdl_dir() {
         ]),
         ("08-control-flow.typort", include_str!("../../examples/hdl/08-control-flow.typort"), &[
             "always @(*) begin",      // when 组合逻辑
-            "end else begin",         // otherwise 作为 else 分支（非默认赋值）
-            "else if",                // elsewhen 链
             "if (sel == 0)",          // switch -> when 展开（=== 生成 ==）
+            "(sel == 1) && !(sel == 0)",  // elsewhen 分支否定累积
+            "!(sel == 0) && !(sel == 1)",  // otherwise 否定全部分支
         ]),
         ("09-hierarchy.typort", include_str!("../../examples/hdl/09-hierarchy.typort"), &[
             "myAdder u ();",          // let u = myAdder.create 自动实例化
-            ".a(a), .b(b), .en(en), .sum((a + b))",  // u.a := sig 层次化连接
+            ".a(a), .b(b), .en(en), .sum(sum)",  // 层次化连接（输入驱动 + 输出读取）
             "module myAdder",         // allModulesVL 多模块
             "module topWithAdder",
         ]),
