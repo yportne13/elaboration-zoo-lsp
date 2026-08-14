@@ -2442,8 +2442,16 @@ impl Infer {
             // Infer let bindings
             Raw::Let(x, a, t, u) => {
                 let a_is_hole = matches!(a.as_ref(), Raw::Hole(_));
-                let (a_checked, _) = self.check_universe(cxt, *a)?;
-                let va = self.eval(&cxt.decl, &cxt.env, &a_checked);
+                // A `Raw::Tm` annotation is a cached, already-checked type
+                // (trait-method Pi chain from a prior call with the same
+                // receiver type): reuse it instead of re-running check_universe.
+                let (a_checked, va) = if let Raw::Tm(tm, ty) = a.as_ref() {
+                    (tm.clone(), ty.clone())
+                } else {
+                    let (a, _) = self.check_universe(cxt, *a)?;
+                    let v = self.eval(&cxt.decl, &cxt.env, &a);
+                    (a, v)
+                };
                 // Set binding_name so implicit BindingName params get the let-binding's name
                 let cxt_named = cxt.with_binding_name(x.data.clone());
                 let t_checked = self.check::<false>(&cxt_named, *t, &va)?;
@@ -2757,7 +2765,40 @@ impl Infer {
                 }
             }
             if let Some((_, decl, def_span, _)) = traits.first() {
-                let result = self.infer_expr(cxt, decl.clone())?;
+                // Trait-method Pi-chain cache: when the same operator is
+                // elaborated again on a pointer-identical receiver type, reuse
+                // the already-checked Pi chain (via a Raw::Tm annotation) so
+                // infer_expr skips its check_universe.
+                let recv_key = (t.data.clone(), Rc::as_ptr(&a) as usize);
+                let result = match self.trait_method_cache.get(&recv_key).cloned() {
+                    Some((a_checked, va)) => {
+                        let new_decl = if let Raw::Let(n, _, t_body, u) = decl {
+                            Raw::Let(
+                                n.clone(),
+                                Box::new(Raw::Tm(a_checked.clone(), va.clone())),
+                                t_body.clone(),
+                                u.clone(),
+                            )
+                        } else {
+                            decl.clone()
+                        };
+                        self.infer_expr(cxt, new_decl)?
+                    }
+                    None => {
+                        let result = self.infer_expr(cxt, decl.clone())?;
+                        // Cache the checked Pi-chain type only when it is fully
+                        // meta-free: a cached type referencing per-call metas
+                        // would use stale indices on a later call with the same
+                        // receiver-type pointer.
+                        if let Tm::Let(_, a_checked, _, _) = result.0.as_ref() {
+                            if a_checked.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
+                                let va = self.eval(&cxt.decl, &cxt.env, a_checked);
+                                self.trait_method_cache.insert(recv_key, (a_checked.clone(), va));
+                            }
+                        }
+                        result
+                    }
+                };
                 self.hover_table.push((
                     t.to_span(),
                     *def_span,

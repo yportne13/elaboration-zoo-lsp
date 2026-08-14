@@ -951,6 +951,11 @@ pub struct Infer {
     /// segment through this map; the `.mk` shorthand is covered by the dotted
     /// aliases (`X.mk`) this map also holds.
     pub import_map: HashMap<SmolStr, SmolStr>,
+    /// Cache of resolved trait-method Pi types: (method name, receiver type
+    /// Rc pointer) → (checked Pi-chain Tm, its eval'd value).  When the same
+    /// operator is elaborated again on the same (pointer-identical) receiver
+    /// type, the check_universe of the synthesized Pi chain is skipped.
+    trait_method_cache: HashMap<(SmolStr, usize), (Rc<Tm>, Rc<Val>)>,
     /// When true, `Decl::Println` skips the inline `nf` and records a
     /// `println_jobs` entry instead, deferring normalization to a later
     /// phase (used by the LSP worker so tyck diagnostics publish first).
@@ -975,6 +980,7 @@ impl Clone for Infer {
             inlay_hint_table: self.inlay_hint_table.clone(),
             symbol_table: self.symbol_table.clone(),
             import_map: self.import_map.clone(),
+            trait_method_cache: HashMap::new(),
             defer_println: self.defer_println,
             println_jobs: Vec::new(),
             // accumulated_errors are ephemeral per-checking-pass;
@@ -1281,6 +1287,7 @@ impl Infer {
             inlay_hint_table: vec![],
             symbol_table: HashMap::new(),
             import_map: HashMap::new(),
+            trait_method_cache: HashMap::new(),
             accumulated_errors: vec![],
             defer_println: false,
             println_jobs: vec![],
