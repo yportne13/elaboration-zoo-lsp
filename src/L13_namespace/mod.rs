@@ -347,29 +347,52 @@ impl Drop for Tm {
 
 impl Tm {
     pub fn no_metas(&self, infer: &Infer, decl: &Decl, l: Lvl) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+        // Meta detection on a value graph: walk the `Val`s directly with a
+        // pointer-keyed visited set instead of `quote`-ing each solved meta's
+        // solution.  Quoting re-forced and re-materialized the whole solution
+        // graph at every meta occurrence — on flattened module/bundle chains
+        // (solutions embedding giant elaborated values) that dominated CPU
+        // (measured ~65% of samples in examples/hdl/11-bundle-deep.typort).
+        // Shared subgraphs are visited once, nothing is forced or quoted on
+        // the fast path.
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        self.no_metas_seen(infer, decl, l, &mut seen)
+    }
+
+    fn no_metas_seen(&self, infer: &Infer, decl: &Decl, l: Lvl, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => None,
-            Tm::Obj(tm, _) => tm.no_metas(infer, decl, l),
-            Tm::Lam(_, _, t) => t.no_metas(infer, decl, l + 1),
-            Tm::App(t, u, _) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l)),
+            Tm::Obj(tm, _) => Tm::no_metas_rc(tm, infer, decl, l, seen),
+            Tm::Lam(_, _, t) => Tm::no_metas_rc(t, infer, decl, l + 1, seen),
+            Tm::App(t, u, _) => Tm::no_metas_rc(t, infer, decl, l, seen).or_else(|| Tm::no_metas_rc(u, infer, decl, l, seen)),
             Tm::AppPruning(t, _) => {
-                t.no_metas(infer, decl, l)
+                Tm::no_metas_rc(t, infer, decl, l, seen)
             },
-            Tm::Pi(_, _, t, u) => t.no_metas(infer, decl, l).or_else(|| u.no_metas(infer, decl, l + 1)),
-            Tm::Let(_, a, t, u) => a.no_metas(infer, decl, l).or_else(|| t.no_metas(infer, decl, l)).or_else(|| u.no_metas(infer, decl, l)),
+            Tm::Pi(_, _, t, u) => Tm::no_metas_rc(t, infer, decl, l, seen).or_else(|| Tm::no_metas_rc(u, infer, decl, l + 1, seen)),
+            Tm::Let(_, a, t, u) => Tm::no_metas_rc(a, infer, decl, l, seen).or_else(|| Tm::no_metas_rc(t, infer, decl, l, seen)).or_else(|| Tm::no_metas_rc(u, infer, decl, l, seen)),
             Tm::Meta(m) => match infer.lookup_meta(*m) {
                 MetaEntry::Unsolved(_, cxt, oty, span) => Some((cxt.as_ref().clone(), oty.clone(), *span)),
                 MetaEntry::Solved(v, _) => {
-                    infer.quote(decl, l, v).no_metas(infer, decl, l)
+                    infer.val_no_metas(decl, l, v, seen)
                 }
             },
-            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| t.no_metas(infer, decl, l).or_else(|| ty.no_metas(infer, decl, l))).next(),
-            Tm::SumCase { typ, index: _, datas, is_trait: _ } => typ.no_metas(infer, decl, l)
-                .or_else(|| datas.iter().flat_map(|(_, t, _)| t.no_metas(infer, decl, l)).next()),
-            Tm::Match(tm, items) => tm.no_metas(infer, decl, l).or_else(|| items.iter().flat_map(|(_, t)| t.no_metas(infer, decl, l)).next()),
-            Tm::Call(_, args, body) => args.iter().flat_map(|(a, _)| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
-            Tm::OpCall { args, body, .. } => args.iter().flat_map(|(a, _)| a.no_metas(infer, decl, l)).next().or_else(|| body.no_metas(infer, decl, l)),
+            Tm::Sum(_, items, _, _) => items.iter().flat_map(|(_, t, ty, _)| Tm::no_metas_rc(t, infer, decl, l, seen).or_else(|| Tm::no_metas_rc(ty, infer, decl, l, seen))).next(),
+            Tm::SumCase { typ, index: _, datas, is_trait: _ } => Tm::no_metas_rc(typ, infer, decl, l, seen)
+                .or_else(|| datas.iter().flat_map(|(_, t, _)| Tm::no_metas_rc(t, infer, decl, l, seen)).next()),
+            Tm::Match(tm, items) => Tm::no_metas_rc(tm, infer, decl, l, seen).or_else(|| items.iter().flat_map(|(_, t)| Tm::no_metas_rc(t, infer, decl, l, seen)).next()),
+            Tm::Call(_, args, body) => args.iter().flat_map(|(a, _)| Tm::no_metas_rc(a, infer, decl, l, seen)).next().or_else(|| Tm::no_metas_rc(body, infer, decl, l, seen)),
+            Tm::OpCall { args, body, .. } => args.iter().flat_map(|(a, _)| Tm::no_metas_rc(a, infer, decl, l, seen)).next().or_else(|| Tm::no_metas_rc(body, infer, decl, l, seen)),
         }
+    }
+
+    /// `no_metas_seen` with pointer-keyed dedup: elaborated terms share
+    /// subtrees through `Rc` (Phase-A reuse embeds the same checked term in
+    /// create/tree bodies), and a plain recursive walk would re-visit them.
+    fn no_metas_rc(tm: &Rc<Tm>, infer: &Infer, decl: &Decl, l: Lvl, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+        if !seen.insert(Rc::as_ptr(tm) as usize) {
+            return None;
+        }
+        tm.no_metas_seen(infer, decl, l, seen)
     }
 }
 
@@ -1644,6 +1667,57 @@ impl Infer {
     }
     fn lookup_meta(&self, m: MetaVar) -> &MetaEntry {
         &self.meta[m.0 as usize]
+    }
+    /// Detect unsolved metas in a value graph WITHOUT quoting it (see
+    /// `Tm::no_metas`): walk the `Val`s directly with a pointer-keyed visited
+    /// set so shared subgraphs are visited once and nothing is forced.  All
+    /// nodes reachable here stay alive through the meta table for the
+    /// duration of the call, so pointer identity is stable.  The rare
+    /// solved-meta-with-spine shape falls back to the quote-based walk.
+    fn val_no_metas(&self, decl: &Decl, l: Lvl, v: &Rc<Val>, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+        if !seen.insert(Rc::as_ptr(v) as usize) {
+            return None;
+        }
+        match v.as_ref() {
+            Val::Flex(m, sp) => {
+                if sp.len() > 0 {
+                    // Solution applied to a spine: only evaluation can
+                    // produce the applied value; keep the quote-based walk.
+                    // The quote level is arbitrary-but-large: the result is
+                    // only walked for `Tm::Meta` nodes, so de Bruijn indices
+                    // never matter — but a too-small level would underflow
+                    // `lvl2ix` on solutions carrying deeper Rigid levels
+                    // than the current binder level.
+                    const NM_QUOTE_LVL: Lvl = Lvl(u32::MAX / 2);
+                    return self.quote(decl, NM_QUOTE_LVL, v).no_metas_seen(self, decl, NM_QUOTE_LVL, seen);
+                }
+                match self.lookup_meta(*m) {
+                    MetaEntry::Unsolved(_, cxt, oty, span) => Some((cxt.as_ref().clone(), oty.clone(), *span)),
+                    MetaEntry::Solved(sol, _) => self.val_no_metas(decl, l, sol, seen),
+                }
+            }
+            Val::Rigid(_, sp) | Val::Decl(_, sp) => sp.iter().find_map(|(a, _)| self.val_no_metas(decl, l, a, seen)),
+            Val::Obj(x, _, sp) => self.val_no_metas(decl, l, x, seen)
+                .or_else(|| sp.iter().find_map(|(a, _)| self.val_no_metas(decl, l, a, seen))),
+            Val::Lam(_, _, closure) => self.closure_no_metas(decl, l, closure, seen),
+            Val::Pi(_, _, dom, closure) => self.val_no_metas(decl, l, dom, seen)
+                .or_else(|| self.closure_no_metas(decl, l, closure, seen)),
+            Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => None,
+            Val::Sum(_, params, _, _) => params.iter().find_map(|(_, val, ty, _)| {
+                self.val_no_metas(decl, l, val, seen).or_else(|| self.val_no_metas(decl, l, ty, seen))
+            }),
+            Val::SumCase { typ, datas, .. } => self.val_no_metas(decl, l, typ, seen)
+                .or_else(|| datas.iter().find_map(|(_, d, _)| self.val_no_metas(decl, l, d, seen))),
+            Val::Match(scrut, env, cases) => self.val_no_metas(decl, l, scrut, seen)
+                .or_else(|| env.iter().find_map(|e| self.val_no_metas(decl, l, e, seen)))
+                .or_else(|| cases.iter().find_map(|(_, body)| Tm::no_metas_rc(body, self, decl, l, seen))),
+            Val::Call(_, args, body) => args.iter().find_map(|(a, _)| self.val_no_metas(decl, l, a, seen))
+                .or_else(|| self.val_no_metas(decl, l, body, seen)),
+        }
+    }
+    fn closure_no_metas(&self, decl: &Decl, l: Lvl, closure: &Closure, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+        closure.0.iter().find_map(|e| self.val_no_metas(decl, l, e, seen))
+            .or_else(|| Tm::no_metas_rc(&closure.1, self, decl, l, seen))
     }
     fn force(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
         prof_count(&FUNC_PROF.force.1);

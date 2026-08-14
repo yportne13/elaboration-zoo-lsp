@@ -203,3 +203,75 @@ HDL 模块文件用户侧约 2-2.5x（3x 回退的 infer 部分已消除；每�
   CANONICAL=true）未做：运算符路径仍走 trait_wrap 合成，风险较高，留待
   独立验证。
 - LSP 每键击全量重建（P0 增量 elaboration）仍是输入延迟的根本上限。
+
+---
+
+## 7. 第六轮（2026-08-14）—— `no_metas` 的 quote 风暴：11-bundle-deep 4.4s → 1.5s
+
+> 分支：`master`（`251118a`）。方法：TYPORT_PROFILE 逐声明归因 → trait_wrap
+> 插桩（证伪）→ release-profiling + force 入口采样（符号化修复后）→
+> no_metas 分点计时。全部探针已移除，最终改动仅 `L13_namespace/mod.rs`
+> （+87/−13）。
+
+### 7.1 现象与归因过程
+
+- 全套件唯一异常点 `11-bundle-deep.typort` 4.40s（其余 0.09-0.83s）；
+  60.8% 在 `class bundleDeepMS`，26.9% 在 `impl IMasterSlave for Axi4`。
+- **第一假设（trait_wrap 的 quote→eval 往返 + 整表 meta 克隆）被插桩证伪**：
+  trait_wrap 仅 2984 次调用，quote+eval 合计 0.001s、meta 快照 0.006s、
+  探测 73 次。
+- release-profiling（debug=2）+ force 入口采样（临时无锁 tick，skip 20000）
+  后符号化正常：**65% 样本（4525/6975）落在 `Tm::no_metas`**，叶子是
+  force_inner。
+- 分点计时实锤：`no_metas[def-body]`（elaboration.rs:912，def 体的未解
+  meta 检查）**30 次调用共 3.11s（均 101ms/次）**：每次调用 quote 388 个
+  已解 meta 的解，每个解图 ~7800 节点 → 每次调用 ~300 万次 force。
+
+### 7.2 根因
+
+`Tm::no_metas` 对已解 meta 走 `quote(解) + 递归 walk`（原 mod.rs:360-364）：
+
+- quote 会 **force + 物化整张解图**，而摊平模块/bundle 链的解内嵌巨型已求
+  值结构（模块树 / Expr AST 的 Val 图）；
+- 解图经 Rc **共享**，但 quote 在每个出现处都整图重走；
+- def 体检查（含 Nat defaulting 重试）+ create/tree 三遍检查重复付费。
+
+### 7.3 修复（`no_metas` 改为 visited-set 图遍历）
+
+- `Tm::no_metas_seen`：Tm 遍历所有递归点按 `Rc::as_ptr` 去重（Phase-A 复用
+  使 create/tree 体共享同一批已检查子树，普通递归会重访）。
+- `Tm::Meta` 已解分支不再 quote，改走新增的 `Infer::val_no_metas`：直接在
+  **Val 图**上检测未解 meta（Flex 未解命中；已解跳到解继续走；Rigid/Decl/
+  Obj/Sum/SumCase/Match/Call/Pi/Lam（闭包 env + 体）全覆盖），全程不
+  force、不 quote。
+- 指针稳定性：调用期间 meta 表不变（&self），所有可达节点经 Rc 链存活，
+  地址不会复用，指针即身份是安全的。
+- 罕见的"已解 meta 带骨架"（Flex+spine）回退 quote 路径；quote 层用
+  `NM_QUOTE_LVL = u32::MAX/2`（检测结果只看 Tm::Meta，de Bruijn 指数无关，
+  但过小的层会在解内含更深 Rigid 层级时使 lvl2ix 下溢——首个版本因此挂了
+  14 个测试，修复后 326 全过）。
+
+### 7.4 结果（release，min-of-3）
+
+| 文件 | 修复前 | 修复后 | 加速 |
+|---|---|---|---|
+| 11-bundle-deep | 4.400s | **1.461s** | 3.0x |
+| 10-bundle | 0.825s | **0.490s** | 1.7x（已优于 perf1 时代的 0.484s） |
+| 11-memory | 0.309s | 0.180s | 1.7x |
+| 07-registers | 0.197s | 0.138s | 1.4x |
+| 其余 HDL / 定理文件 | — | ±0-10% | 持平或小幅改善，无回归 |
+
+验证：`cargo test --lib L13` 326 全过（与基线一致）；8 个集成套件 157 全过；
+11-bundle-deep 的 Verilog 输出与修复前逐字节一致。
+
+### 7.5 遗留热点（下一轮候选）
+
+- 修复后 11-bundle-deep 剩余 1.46s 中 `impl IMasterSlave for Axi4` 占
+  0.84s（1.15 万次 quote × ~2100 节点/次）——**check/unify 路径上对嵌套
+  bundle 类型图的重复 quote**，方向：按 (Rc 指针, 层级) 的结构化 quote 缓存
+  或 unify 的 Val 直通路径。
+- `class bundleDeepMS` 0.37s（868 万次 force / 11.7 万次 eval）——摊平链
+  求值的固有成本。
+- 测量手段备忘：release 无 PDB 时 backtrace 最近符号归因会把大片 std 地址
+  误标（本轮曾误报 93% 在 `str::to_lowercase`，实际只有 parser 冷路径 2 个
+  调用点）；采样前用 `--profile release-profiling` 构建。
