@@ -2602,13 +2602,12 @@ fn build_class_chain_tm(
             ClassItem::Method(_, _) => unreachable!(),
         };
         // Reuse the Phase-A-checked annotation for ANNOTATED fields whose type
-        // is closed (no free De Bruijn variables): the create context is
-        // layout-identical to Phase A, so the checked Tm elaborates to the
-        // same result without re-running check_universe.  Unannotated fields
-        // (Hole) and open types keep the Raw annotation.
-        let ann = if matches!(ann, Raw::Hole(_)) {
-            ann
-        } else if super::tm_is_closed(a_checked) {
+        // is closed (no free De Bruijn variables), and for UNANNOTATED
+        // fields / statements whose checked annotation is a (closed) meta:
+        // the create context is layout-identical to Phase A, so the checked Tm
+        // elaborates to the same result without re-running check_universe.
+        // Open types keep the Raw annotation.
+        let ann = if super::tm_is_closed(a_checked) {
             Raw::Tm(a_checked.clone(), va.clone())
         } else {
             ann
