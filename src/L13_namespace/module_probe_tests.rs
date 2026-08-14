@@ -28,7 +28,7 @@ fn probe_timing() {
             Err(e) => out.push_str(&format!("T_{}_ERR: {}\n", name, e.0.data)),
         }
     }
-    std::fs::write("F:/projects/hermes/elaboration-zoo-lsp/probe-out.txt", out).unwrap();
+    std::fs::write("probe-out.txt", out).unwrap();
 }
 
 // ── example 12: adder tree with width proof ──
