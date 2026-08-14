@@ -951,12 +951,14 @@ pub struct Infer {
     /// segment through this map; the `.mk` shorthand is covered by the dotted
     /// aliases (`X.mk`) this map also holds.
     pub import_map: HashMap<SmolStr, SmolStr>,
-    /// Cache of resolved trait-method Pi types: (method name, deterministic
-    /// receiver-type key) → (checked Pi-chain Tm, its eval'd value).  When the
-    /// same operator is elaborated again on a structurally-equal receiver type
-    /// (e.g. `UInt[8]` built at different sites), the check_universe of the
-    /// synthesized Pi chain is skipped.
-    trait_method_cache: HashMap<(SmolStr, SmolStr), (Rc<Tm>, Rc<Val>)>,
+    /// Cache of resolved trait-method elaboration: (method name, deterministic
+    /// receiver-type key) → (checked Pi-chain Tm, its eval'd value, checked
+    /// method-body lambda).  When the same operator is elaborated again on a
+    /// structurally-equal receiver type (e.g. `UInt[8]` built at different
+    /// sites), both the check_universe of the Pi chain and the method-body
+    /// re-elaboration are skipped (the create/tree eval still drives side
+    /// effects through the applied result).
+    trait_method_cache: HashMap<(SmolStr, SmolStr), (Rc<Tm>, Rc<Val>, Rc<Tm>)>,
     /// When true, `Decl::Println` skips the inline `nf` and records a
     /// `println_jobs` entry instead, deferring normalization to a later
     /// phase (used by the LSP worker so tyck diagnostics publish first).

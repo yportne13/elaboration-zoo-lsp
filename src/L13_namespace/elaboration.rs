@@ -2765,19 +2765,20 @@ impl Infer {
                 }
             }
             if let Some((_, decl, def_span, _)) = traits.first() {
-                // Trait-method Pi-chain cache: when the same operator is
+                // Trait-method elaboration cache: when the same operator is
                 // elaborated again on a structurally-equal receiver type, reuse
-                // the already-checked Pi chain (via a Raw::Tm annotation) so
-                // infer_expr skips its check_universe.
+                // the already-checked Pi chain AND method-body lambda (via
+                // Raw::Tm annotations) so infer_expr skips both the
+                // check_universe of the Pi chain and the body re-elaboration.
                 let cache_key = val_cache_key(&a, 0).map(|k| (t.data.clone(), k));
                 let result = match &cache_key {
                     Some(key) => match self.trait_method_cache.get(key).cloned() {
-                        Some((a_checked, va)) => {
-                            let new_decl = if let Raw::Let(n, _, t_body, u) = decl {
+                        Some((a_checked, va, t_checked)) => {
+                            let new_decl = if let Raw::Let(n, _, _, u) = decl {
                                 Raw::Let(
                                     n.clone(),
                                     Box::new(Raw::Tm(a_checked.clone(), va.clone())),
-                                    t_body.clone(),
+                                    Box::new(Raw::Tm(t_checked.clone(), va.clone())),
                                     u.clone(),
                                 )
                             } else {
@@ -2787,14 +2788,16 @@ impl Infer {
                         }
                         None => {
                             let result = self.infer_expr(cxt, decl.clone())?;
-                            // Cache the checked Pi-chain type only when it is
-                            // fully meta-free: a cached type referencing
+                            // Cache the checked Pi chain + body only when both
+                            // are fully meta-free: a cached term referencing
                             // per-call metas would use stale indices on a later
                             // call with the same receiver-type key.
-                            if let Tm::Let(_, a_checked, _, _) = result.0.as_ref() {
-                                if a_checked.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
+                            if let Tm::Let(_, a_checked, t_checked, _) = result.0.as_ref() {
+                                let clean = a_checked.no_metas(self, &cxt.decl, cxt.lvl).is_none()
+                                    && t_checked.no_metas(self, &cxt.decl, cxt.lvl).is_none();
+                                if clean {
                                     let va = self.eval(&cxt.decl, &cxt.env, a_checked);
-                                    self.trait_method_cache.insert(key.clone(), (a_checked.clone(), va));
+                                    self.trait_method_cache.insert(key.clone(), (a_checked.clone(), va, t_checked.clone()));
                                 }
                             }
                             result
