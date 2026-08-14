@@ -7,7 +7,8 @@
 //
 // 端口在模块头声明：`input a = UInt[w]`（Bool 端口放最后或最前）。
 // 实例的端口以字段形式暴露（u.a 是带类型的 subSignal 句柄），
-// 父模块通过 `u.port := sig` 连接，生成器自动聚合到实例行。
+// 父模块通过 `u.port := sig` 连接（输入端口），或 `sig := u.port`
+// 读取子模块输出端口（生成 .port(sig) 连接）。
 // ============================================================
 
 module myAdder[w: Nat]
@@ -31,11 +32,12 @@ module topWithPorts {
     input a = UInt[8]
     input b = UInt[8]
     input en = Bool
+    output sum = UInt[8]
     let u = myAdder.create[8]
     u.a := a
     u.b := b
     u.en := en
-    u.sum := a + b
+    sum := u.sum
 }
 println("=== 09b: topWithPorts (u.a := sig 层次化连接) ===")
 println(moduleTreeVL(topWithPorts.create.tree))

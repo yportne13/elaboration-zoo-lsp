@@ -43,8 +43,8 @@
 
 | 结构 | 状态 | 说明 | 优先级 |
 |---|---|---|---|
-| when/elsewhen/otherwise | ✅ | 宏展开为 if/else-if/else；Verilog 合并 always @(*) | — |
-| switch/is/default | ✅ | 基于 `===` 展开为 when 链；is 值限 Nat 字面量或信号 | — |
+| when/elsewhen/otherwise | ✅ | 每个赋值记录完整使能条件（嵌套合取 + 分支否定）；生成器发射独立 if —— 独立 when 不耦合、嵌套条件不丢失（fix/hdl-when-context） | — |
+| switch/is/default | ✅ | 基于 `===` 展开为 when 链；default 否定全部 is 分支；is 值限 Nat 字面量或信号 | — |
 | mux | ✅ | 见上 | — |
 
 ## 4. 寄存器
@@ -71,7 +71,7 @@
 | master/slave | ✅ | `asMaster`/`asSlave` + 端口方向翻转；嵌套 bundle 字段用 `out/in` 递归子 bundle 的方向（子类型自身实现 IMasterSlave） | — |
 | `:=` | ✅ | Data trait + Bundle derive；自动跳过 input LHS | — |
 | `<>` | ✅ | Data + Bundle 双向连接：`master <> slave` 一次驱动两侧（各自跳过 input LHS；inout 不驱动）；Bundle 由 derive 生成，primitive 由 Data trait 默认方法提供 | — |
-| 实例化端口连接 | ✅ | `u.a := sig` → `.a(sig)` 端口映射 | — |
+| 实例化端口连接 | ✅ | `u.a := sig` → `.a(sig)`；`sig := u.sum`（读取子模块输出）→ `.sum(sig)`（fix/hdl-when-context） | — |
 | BlackBox | 🟡 | 语法占位 stub，无代码生成 | 可选 |
 | Stream/Flow | 🟡 | 有 fire/stage 占位；无 `<>`、无握手机制 | 可选 |
 | FSM | 🟡 | 占位 | 可选 |

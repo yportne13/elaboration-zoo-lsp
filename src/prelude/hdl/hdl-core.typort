@@ -203,13 +203,27 @@ def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: E
 }
 
 // ---------- When context tracking ----------
-// When blocks use a simple stack to track the current condition.
-// Each assignment inside a when/elsewhen/otherwise scope is wrapped
-// with the appropriate when(cond, e, None) by addWhenContext.
+// Each assignment inside a when/elsewhen/otherwise scope is wrapped with a
+// when(cond, e, None) node whose cond is the assignment's FULL enable
+// condition:
+//   - nesting   : conditions from ALL active levels are AND-ed together
+//                 (`when a { when b { x := v } }`  →  cond = a && b)
+//   - elsewhen  : the branch condition is negated against all earlier
+//                 branches of the same chain
+//                 (`when c1 {...} elsewhen c2 {...}` → c2 && !c1)
+//   - otherwise : the negation of all branches of the chain
+//                 (when c1 {...} otherwise {...} → !c1)
+// Because every assignment carries its complete enable condition, the
+// generator emits independent `if (cond)` statements — no else-if chain
+// reconstruction, no source-order heuristics. The `when`-node body is always
+// a single assignment (createSignalExpr wraps one statement at a time).
+//
+// Per level, `notPrev` is the accumulated negation of all earlier branches
+// of the chain at that level (identity literal(1) when there are none).
 
 enum WhenState {
-    whenActive(cond: Expr)
-    whenOtherwise
+    whenActive(cond: Expr, notPrev: Expr)
+    whenOtherwise(notAll: Expr)
 }
 
 enum WhenStack {
@@ -217,12 +231,32 @@ enum WhenStack {
     whenStackPush(top: WhenState, rest: WhenStack)
 }
 
+// Simplify `cond && extra` — literal 1 is the boolean identity, so a bare
+// first branch keeps a clean condition instead of `(c && 1)`.
+def andCond(cond: Expr, extra: Expr): Expr = match extra {
+    case literal(v) => match v {
+        case succ(zero) => cond
+        case _ => binary(cond, "&&", extra)
+    }
+    case _ => binary(cond, "&&", extra)
+}
+
+// `notPrev && !prev` — the accumulated negation of branches (literal-1
+// identity kept out of the emitted condition).
+def negatePrev(prev: Expr, notPrev: Expr): Expr = match notPrev {
+    case literal(v) => match v {
+        case succ(zero) => unary("!", prev)
+        case _ => binary(notPrev, "&&", unary("!", prev))
+    }
+    case _ => binary(notPrev, "&&", unary("!", prev))
+}
+
 def initWhenStack(): Unit =
     let dummy = create_global("WhenStack", whenStackEmpty);
     unit
 
 def whenBegin(cond: Expr): Unit =
-    let state = whenActive(cond);
+    let state = whenActive(cond, literal(1));
     let dummy = change_mutable_default("WhenStack", x => whenStackPush(state, x), whenStackPush(state, whenStackEmpty));
     unit
 
@@ -235,23 +269,52 @@ def whenEnd(dummy: Unit): Unit =
     unit
 
 def whenElseBegin(cond: Expr): Unit =
-    let state = whenActive(cond);
     let d2 = change_mutable("WhenStack", x => match x {
-        case whenStackEmpty => whenStackPush(state, whenStackEmpty)
-        case whenStackPush(_, rest) => whenStackPush(state, rest)
+        case whenStackEmpty => whenStackPush(whenActive(cond, literal(1)), whenStackEmpty)
+        case whenStackPush(top, rest) => match top {
+            case whenActive(prev, notPrev) =>
+                whenStackPush(whenActive(cond, negatePrev(prev, notPrev)), rest)
+            case whenOtherwise(_) =>
+                whenStackPush(whenActive(cond, literal(1)), rest)
+        }
     });
     unit
 
 def whenOtherwiseBegin(dummy: Unit): Unit =
     let d = dummy;
-    let d2 = change_mutable("WhenStack", x => whenStackPush(whenOtherwise, x));
+    let d2 = change_mutable("WhenStack", x => match x {
+        case whenStackEmpty => whenStackPush(whenOtherwise(literal(1)), whenStackEmpty)
+        case whenStackPush(top, rest) => match top {
+            case whenActive(prev, notPrev) =>
+                whenStackPush(whenOtherwise(negatePrev(prev, notPrev)), rest)
+            case whenOtherwise(_) => x
+        }
+    });
     unit
+
+// The effective enable condition of one stack level.
+def levelCond(state: WhenState): Expr = match state {
+    case whenActive(cond, notPrev) => andCond(cond, notPrev)
+    case whenOtherwise(notAll) => notAll
+}
+
+// AND together the effective conditions of ALL active levels (outer→inner).
+def wrapLevels(stack: WhenStack, acc: Option[Expr]): Option[Expr] = match stack {
+    case whenStackEmpty => acc
+    case whenStackPush(state, rest) =>
+        let c = levelCond(state);
+        let newAcc = match acc {
+            case None => Some(c)
+            case Some(a) => Some(andCond(a, c))
+        };
+        wrapLevels(rest, newAcc)
+}
 
 def wrapWithWhenContext(stack: WhenStack, e: Expr): Expr = match stack {
     case whenStackEmpty => e
-    case whenStackPush(state, _) => match state {
-        case whenOtherwise => e
-        case whenActive(cond) => when(cond, e, None)
+    case whenStackPush(_, _) => match wrapLevels(stack, None) {
+        case None => e
+        case Some(c) => when(c, e, None)
     }
 }
 

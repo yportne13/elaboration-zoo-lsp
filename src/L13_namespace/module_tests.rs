@@ -492,3 +492,141 @@ println(moduleTreeVL(bodyOutReg2.create.tree))
     assert!(output.contains("en <= 1;"), "Bool init, got: {}", output);
 }
 
+
+// ════════════════════════════════════════════════════════════════════════
+//  when 条件语义回归测试（fix/hdl-when-context）
+//
+// 每个赋值记录其完整使能条件（嵌套合取 + elsewhen/otherwise 分支否定），
+// 生成器发射独立 if —— 独立 when 不会耦合、嵌套 when 条件不丢失。
+// ════════════════════════════════════════════════════════════════════════
+
+// ── 独立 when 块必须保持独立（不得链成 else-if）──
+
+#[test]
+fn when_independent_blocks_stay_independent() {
+    let output = assert_ok(r#"
+module twoWhens {
+    let x = UInt[8]
+    let y = UInt[8]
+    let a = UInt[8]
+    let b = UInt[8]
+    let c1 = Bool
+    let c2 = Bool
+    when c1 { x := a }
+    when c2 { y := b }
+}
+println(moduleTreeVL(twoWhens.create.tree))
+"#);
+    // two separate ifs; y = b must NOT be conditional on !c1
+    assert!(output.contains("if (c1)"), "missing first if, got: {}", output);
+    assert!(output.contains("if (c2)"), "missing second if, got: {}", output);
+    assert!(output.contains("y = b;"), "missing second body, got: {}", output);
+    let c1_pos = output.find("if (c1)").expect("if (c1) present");
+    let c2_pos = output.find("if (c2)").expect("if (c2) present");
+    let y_pos = output.find("y = b;").expect("y = b present");
+    assert!(c2_pos < y_pos, "y = b must be inside the if (c2) block, got:\n{}", output);
+    assert!(!output.contains("else if"), "independent whens must not chain as else-if, got:\n{}", output);
+}
+
+// ── 嵌套 when：内层条件必须与外层合取 ──
+
+#[test]
+fn when_nested_conditions_conjoin() {
+    let output = assert_ok(r#"
+module nestedWhen {
+    let x = UInt[8]
+    let y = UInt[8]
+    let a = UInt[8]
+    let b = UInt[8]
+    let c1 = Bool
+    let c2 = Bool
+    when c1 {
+        when c2 { x := a }
+        y := b
+    }
+}
+println(moduleTreeVL(nestedWhen.create.tree))
+"#);
+    // x = a requires c1 && c2; y = b requires c1 only
+    assert!(output.contains("if (c2 && c1)"), "inner assignment must conjoin both conditions, got:\n{}", output);
+    assert!(output.contains("x = a;"), "missing inner body, got: {}", output);
+    assert!(output.contains("if (c1)"), "outer assignment keeps outer condition, got: {}", output);
+    assert!(output.contains("y = b;"), "missing outer body, got: {}", output);
+}
+
+// ── when/elsewhen/otherwise：分支否定累积 ──
+
+#[test]
+fn when_elsewhen_negation_accumulates() {
+    let output = assert_ok(r#"
+module whenElseWhen {
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = UInt[8]
+    let sel = UInt[2]
+    let out = UInt[8]
+    when sel === 0 { out := a } elsewhen sel === 1 { out := b } otherwise { out := c }
+}
+println(moduleTreeVL(whenElseWhen.create.tree))
+"#);
+    assert!(output.contains("if (sel == 0)"), "missing first branch, got: {}", output);
+    assert!(output.contains("(sel == 1) && !(sel == 0)"), "elsewhen must negate earlier branches, got:\n{}", output);
+    assert!(output.contains("!(sel == 0) && !(sel == 1)"), "otherwise must negate all branches, got:\n{}", output);
+    assert!(output.contains("out = a;"), "missing branch body, got: {}", output);
+    assert!(output.contains("out = b;"), "missing elsewhen body, got: {}", output);
+    assert!(output.contains("out = c;"), "missing otherwise body, got: {}", output);
+}
+
+// ── switch：default 分支否定全部 is 分支 ──
+
+#[test]
+fn switch_default_negates_all_cases() {
+    let output = assert_ok(r#"
+module switchExample {
+    let sel = UInt[4]
+    let a = UInt[4]
+    let b = UInt[4]
+    let c = UInt[4]
+    let result = UInt[4]
+    switch sel {
+        is 0 { result := a }
+        is 1 { result := b }
+        default { result := c }
+    }
+}
+println(moduleTreeVL(switchExample.create.tree))
+"#);
+    assert!(output.contains("if (sel == 0)"), "missing is 0, got: {}", output);
+    assert!(output.contains("!(sel == 0) && !(sel == 1)"), "default must negate all is cases, got:\n{}", output);
+    assert!(output.contains("result = a;"), "missing is 0 body, got: {}", output);
+    assert!(output.contains("result = c;"), "missing default body, got: {}", output);
+}
+
+// ── 子模块输出端口读取：sig := u.port 生成 .port(sig) 连接 ──
+
+#[test]
+fn submodule_output_read_generates_connection() {
+    let output = assert_ok(r#"
+module myAdder[w: Nat]
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w]
+{
+    sum := a + b
+}
+module topWithRead {
+    input a = UInt[8]
+    input b = UInt[8]
+    output sum = UInt[8]
+    let u = myAdder.create[8]
+    u.a := a
+    u.b := b
+    sum := u.sum
+}
+println(moduleTreeVL(topWithRead.create.tree))
+"#);
+    // reading a child output must become a port connection, not a stray
+    // `assign sum = u_sum;` referencing an undeclared net
+    assert!(output.contains(".a(a), .b(b), .sum(sum)"), "missing port connections, got:\n{}", output);
+    assert!(!output.contains("u_sum"), "no stray subSignal net reference allowed, got:\n{}", output);
+}
