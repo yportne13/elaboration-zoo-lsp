@@ -1,0 +1,79 @@
+// ============================================================
+// 时序逻辑验证用例（L3，由 verify.py 时钟驱动仿真）
+// 每个模块：input clk/reset 由模块宏自动生成（有 reg 时）。
+// ============================================================
+
+module vCounterMod {
+    input en = Bool
+    output value = UInt[4]
+    output willOverflow = Bool
+    let cm = counterMod(10)
+    value := cm.value
+    willOverflow := cm.willOverflow
+}
+
+module vCounterUpDown {
+    input inc = Bool
+    input dec = Bool
+    output value = UInt[4]
+    output willOverflowIfInc = Bool
+    output willUnderflowIfDec = Bool
+    output willOverflow = Bool
+    output willUnderflow = Bool
+    let ud = counterUpDown(10, inc, dec)
+    value := ud.value
+    willOverflowIfInc := ud.willOverflowIfInc
+    willUnderflowIfDec := ud.willUnderflowIfDec
+    willOverflow := ud.willOverflow
+    willUnderflow := ud.willUnderflow
+}
+
+module vDownCounter {
+    input en = Bool
+    output value = UInt[4]
+    output willOverflow = Bool
+    let dc = downCounter(10)
+    value := dc.value
+    willOverflow := dc.willOverflow
+}
+
+module vOneHotCounter {
+    input en = Bool
+    output value = Bits[4]
+    output willOverflow = Bool
+    let ohc = oneHotCounter(4)
+    value := ohc.value
+    willOverflow := ohc.willOverflow
+}
+
+module vJohnsonCounter {
+    input en = Bool
+    output value = Bits[4]
+    output willOverflow = Bool
+    let jc = johnsonCounter(4)
+    value := jc.value
+    willOverflow := jc.willOverflow
+}
+
+module vDelayEvent {
+    input ev = Bool
+    output de = Bool
+    let d = delayEvent(ev, 4)
+    de := d
+}
+
+module vTimeout {
+    input en = Bool
+    output ts = Bool
+    let t = timeout(8)
+    ts := t.state
+}
+
+// ===== 打印全部模块（供 verify.py 抓取）=====
+println(moduleTreeVL(vCounterMod.create.tree))
+println(moduleTreeVL(vCounterUpDown.create.tree))
+println(moduleTreeVL(vDownCounter.create.tree))
+println(moduleTreeVL(vOneHotCounter.create.tree))
+println(moduleTreeVL(vJohnsonCounter.create.tree))
+println(moduleTreeVL(vDelayEvent.create.tree))
+println(moduleTreeVL(vTimeout.create.tree))

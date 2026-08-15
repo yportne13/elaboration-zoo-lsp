@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vCounterMod -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod -o vCounterMod_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vCounterMod_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vCounterMod.v"
+T      5252 1407374886652702  1786821289    40417400  1786821289    40417400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod.cpp"
+T      3022 844424933231388  1786821289    39416500  1786821289    39416500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod.h"
+T      1963 1125899909942048  1786821289    41417600  1786821289    41417600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod.mk"
+T      2416 1125899909942045  1786821289    39416500  1786821289    39416500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod__Slow.cpp"
+T       569 1125899909942042  1786821289    38415200  1786821289    38415200 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod__Syms.cpp"
+T       823 844424933231387  1786821289    39416500  1786821289    39416500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod__Syms.h"
+T      1002 1125899909942049  1786821289    41417600  1786821289    41417600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod__ver.d"
+T         0        0  1786821289    54430000  1786821289    54430000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod__verFiles.dat"
+T      1570 1970324840074015  1786821289    40417400  1786821289    40417400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vCounterMod/VvCounterMod_classes.mk"
+S       444 1407374886652696  1786821288   924779500  1786821288   924779500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vCounterMod.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"
