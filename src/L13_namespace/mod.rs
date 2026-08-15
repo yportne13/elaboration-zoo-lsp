@@ -2616,6 +2616,10 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             include_str!("../prelude/hdl/hdl-signals.typort"),
             include_str!("../prelude/hdl/hdl-utils.typort"),
             include_str!("../prelude/hdl/hdl-stream.typort"),
+            include_str!("../prelude/hdl/hdl-crossclock.typort"),
+            include_str!("../prelude/hdl/hdl-bus-proto.typort"),
+            include_str!("../prelude/hdl/hdl-misc-io.typort"),
+            include_str!("../prelude/hdl/hdl-misc.typort"),
             include_str!("../prelude/hdl/hdl-macros.typort"),
             include_str!("../prelude/hdl/hdl-verilog.typort"),
         ]);

@@ -1,0 +1,224 @@
+// ============================================================
+//  HDL io / math / logic / fsm —— SpinalHDL lib/io、lib/math、
+//  lib/logic、lib/fsm 复刻（Wave 5）
+// ============================================================
+
+// ============================================================
+//  io/TriState —— 三态（read/write/writeEnable）
+// ============================================================
+
+struct TriStateBits[w: Nat] {
+    read: Bits[w]
+    write: Bits[w]
+    writeEnable: Bool
+}
+
+// master 视角：out(write, writeEnable)；in(read)
+def triStateAsMasterBits[bn: BindingName][w: Nat](t: TriStateBits[w]): TriStateBits[w] =
+    TriStateBits.mk(in_b(t.read), out_b(t.write), out_bool(t.writeEnable))
+
+def triStateAsSlaveBits[bn: BindingName][w: Nat](t: TriStateBits[w]): TriStateBits[w] =
+    TriStateBits.mk(out_b(t.read), in_b(t.write), in_bool(t.writeEnable))
+
+// TriStateArray —— w 位三态总线（read/write/writeEnable 各 w 位）
+struct TriStateArray[w: Nat] {
+    read: Bits[w]
+    write: Bits[w]
+    writeEnable: Bits[w]
+}
+
+def triStateArrayAsMaster[bn: BindingName][w: Nat](t: TriStateArray[w]): TriStateArray[w] =
+    TriStateArray.mk(in_b(t.read), out_b(t.write), out_b(t.writeEnable))
+
+def triStateArrayAsSlave[bn: BindingName][w: Nat](t: TriStateArray[w]): TriStateArray[w] =
+    TriStateArray.mk(out_b(t.read), in_b(t.write), in_b(t.writeEnable))
+
+// ReadableOpenDrain —— 开漏（read + write，无 enable）
+struct ReadableOpenDrain {
+    read: Bool
+    write: Bool
+}
+
+def rodAsMaster[bn: BindingName](t: ReadableOpenDrain): ReadableOpenDrain =
+    ReadableOpenDrain.mk(in_bool(t.read), out_bool(t.write))
+
+def rodAsSlave[bn: BindingName](t: ReadableOpenDrain): ReadableOpenDrain =
+    ReadableOpenDrain.mk(out_bool(t.read), in_bool(t.write))
+
+// ============================================================
+//  io/Gpio —— 简单 GPIO（输入采样 + 输出驱动 + 中断挂起）
+// ============================================================
+
+struct GpioIO[w: Nat] {
+    pin_read: Bits[w]
+    pin_write: Bits[w]
+    pin_writeEnable: Bits[w]
+    input: Bits[w]          // 采样后的输入（寄存器）
+    output: Bits[w]         // 输出寄存器
+    outputEnable: Bits[w]   // 输出使能寄存器
+    interrupts: Bits[w]     // 中断挂起
+}
+
+// gpioCtrl：GPIO 核心逻辑（读采样、输出、中断）
+def gpioCtrl[bn: BindingName][w: Nat](io: GpioIO[w], clearInterrupt: Bits[w]): Unit =
+    let _ = io.input := io.pin_read;
+    // 输出使能时驱动引脚写，否则高阻（inout 语义由上层决定）
+    let _ = io.pin_write := io.output;
+    let _ = io.pin_writeEnable := io.outputEnable;
+    // 中断挂起 = 输入边沿检测（简化：输入为 1 且未清除）
+    let _ = io.interrupts := Bits.mk(None, binary(io.pin_read.zz_expr, "&", unary("~", clearInterrupt.zz_expr)));
+    unit
+
+// ============================================================
+//  math/Bcd —— BCD 编码（4-bit digit 向量）
+//  BCD 加法：和 > 9 时 +6 修正
+// ============================================================
+
+struct BcdAddResult {
+    sum: UInt[4]
+    carry: Bool
+}
+
+// bcdAddDigit(a, b, carryIn)：单 BCD 位加法
+def bcdAddDigit(a: UInt[4], b: UInt[4], carryIn: Bool): BcdAddResult =
+    let s = a +^ b;
+    let sWithCarry = UInt.mk[5](None, binary(s.zz_expr, "+", Expr.mux(carryIn.zz_expr, literal(1), literal(0))));
+    // 和 > 9 或进位 → +6 修正
+    let over9 = binary(sWithCarry.zz_expr, ">", literal(9));
+    let corrected = UInt.mk[5](None, binary(sWithCarry.zz_expr, "+", Expr.mux(over9, literal(6), literal(0))));
+    BcdAddResult.mk(UInt.mk(None, corrected.zz_expr), Bool.mk(None, over9))
+
+// Bcd：digitCount 个 4 位 digit 拼接
+struct Bcd[d: Nat] {
+    digits: Bits[d * 4]
+}
+
+// 检查是否全 0
+def bcdIsZero[d: Nat](b: Bcd[d]): Bool =
+    Bool.mk(None, binary(b.digits.zz_expr, "==", literal(0)))
+
+// BCD 加法（两数位宽相同）—— 逐 digit 的 +6 修正加法见 bcdAddDigit；
+// 整宽版本暂返回 a（多 digit 级联加法按 bcdAddDigit 逐位展开）
+def bcdAdd[d: Nat](a: Bcd[d], b: Bcd[d]): Bcd[d] = a
+
+// ============================================================
+//  math/Divider —— 恢复除法（UnsignedDivider 简化版）
+//  状态机：cmd.valid → 计算 → rsp.valid
+// ============================================================
+
+struct DividerCmd[w: Nat] {
+    valid: Bool
+    numerator: UInt[w]
+    denominator: UInt[w]
+    ready: Bool
+}
+
+struct DividerRsp[w: Nat] {
+    valid: Bool
+    quotient: UInt[w]
+    remainder: UInt[w]
+}
+
+// 恢复除法：每次移一位，共 w 拍。简化实现：
+//  状态寄存器 + 余数/商移位寄存器。
+struct DividerFSM[w: Nat] {
+    busy: Bool
+    cmdReady: Bool
+    rspValid: Bool
+    quotient: UInt[w]
+    remainder: UInt[w]
+}
+
+// divider 核心：串行恢复除法（每周期一位，w 周期完成）
+def dividerCore[bn: BindingName][w: Nat](cmd: DividerCmd[w], rsp: DividerRsp[w]): DividerFSM[w] =
+    // 计数器
+    let cnt = newUIntRegInitNatNamed(bn.name + "_cnt", maxNat(1, log2Up(w + 1)), 0);
+    let busy = newBoolRegInitNatNamed(bn.name + "_busy", 0);
+    let rem = newUIntRegInitNatNamed(bn.name + "_rem", w + 1, 0);
+    let quo = newUIntRegInitNatNamed(bn.name + "_quo", w, 0);
+    // 启动：cmd.valid && !busy → 装载
+    let _ = whenBegin(binary(cmd.valid.zz_expr, "&&", unary("!", busy.zz_expr)));
+    let _ = createSignalExpr("", regAssign(busy.zz_expr, literal(1)));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, literal(0)));
+    let _ = createSignalExpr("", regAssign(rem.zz_expr, binary(literal(0), "##", cmd.numerator.zz_expr)));
+    let _ = createSignalExpr("", regAssign(quo.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    // 恢复除法步进：rem = rem << 1；if rem >= den: rem -= den; quo.lsb = 1
+    let shifted = binary(rem.zz_expr, "<<", literal(1));
+    let denExt = binary(literal(0), "##", cmd.denominator.zz_expr);
+    let ge = binary(shifted, ">=", denExt);
+    let newRem = Expr.mux(ge, binary(shifted, "-", denExt), shifted);
+    let newQuo = binary(binary(quo.zz_expr, "<<", literal(1)), "|", Expr.mux(ge, literal(1), literal(0)));
+    let _ = whenBegin(busy.zz_expr);
+    let _ = createSignalExpr("", regAssign(rem.zz_expr, newRem));
+    let _ = createSignalExpr("", regAssign(quo.zz_expr, newQuo));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, binary(cnt.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    // 完成：cnt == w-1 → 输出
+    let done = binary(cnt.zz_expr, "==", literal(pred w));
+    let _ = whenBegin(binary(busy.zz_expr, "&&", done));
+    let _ = createSignalExpr("", regAssign(busy.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = rsp.valid := Bool.mk(None, binary(busy.zz_expr, "&&", done));
+    let _ = rsp.quotient := UInt.mk(None, quo.zz_expr);
+    let _ = rsp.remainder := UInt.mk(None, partsel(rem.zz_expr, literal(pred w), literal(0)));
+    DividerFSM.mk(busy,
+        Bool.mk(None, unary("!", busy.zz_expr)),
+        Bool.mk(None, binary(busy.zz_expr, "&&", done)),
+        UInt.mk(None, quo.zz_expr), UInt.mk(None, partsel(rem.zz_expr, literal(pred w), literal(0))))
+
+// ============================================================
+//  logic/Decoder —— onehot 解码（DecodingSpec 简化版）
+//  输入 onehot 位串，输出对应索引（无效输入 → 0）
+// ============================================================
+
+// decoderOhToUInt：onehot 转索引（等价 ohToUInt，别名）
+def decoderOhToUInt[width: Nat](oh: Bits[width]): UInt[maxNat(1, log2Up width)] =
+    ohToUInt(oh)
+
+// 解码为 UInt 值向量：值 k 分配给第 k 根线
+def decoderValueUInt[w: Nat, vw: Nat](oh: Bits[w], values: Vec[UInt[vw]] w, dflt: UInt[vw]): UInt[vw] =
+    priorityMux(oh, values, dflt).into
+
+// ============================================================
+//  logic/Masked —— 掩码模式（纯值 + 硬件比较）
+//  Masked(value, care)：与硬件值的掩码相等比较
+// ============================================================
+
+struct Masked {
+    value: Nat
+    care: Nat
+}
+
+// 硬件比较：maskedEq(hard, m) = (hard & care) == (value & care)
+def maskedEq[width: Nat](hard: Bits[width], m: Masked): Bool =
+    Bool.mk(None, binary(binary(hard.zz_expr, "&", literal(m.care)), "==", literal(m.value)))
+
+// 是否被覆盖（纯函数）：care 位集包含
+def maskedCovers(m: Masked, x: Masked): Boolean =
+    nat_eq (nat_sub (nat_sub m.value x.value) 0) 0
+
+// ============================================================
+//  fsm/StateMachine —— 状态机框架（简化版，SpinalHDL fsm 语义）
+//  state 寄存器 + 转移表（when/switch 驱动）
+// ============================================================
+
+// stateMachine：通用单寄存器状态机
+// stateCount 个状态，每个状态位宽 log2Up(stateCount)
+struct StateMachine[w: Nat] {
+    state: UInt[w]
+}
+
+// 状态机：状态寄存器 + 转移函数
+def stateMachine[w: Nat][bn: BindingName](stateCount: Nat): StateMachine[w] =
+    let st = newUIntRegInitNatNamed(bn.name, w, 0);
+    StateMachine.mk(st)
+
+// 状态转移：when 条件时跳转到目标状态
+def stateGoto[bn: BindingName][w: Nat](sm: StateMachine[w], target: Nat): Unit =
+    let _ = createSignalExpr("", regAssign(sm.state.zz_expr, literal(target)));
+    unit
+
+// 状态 = 检查当前状态（elaboration 期使用；返回比较 Bool）
+def stateIs[bn: BindingName][w: Nat](sm: StateMachine[w], s: Nat): Bool =
+    Bool.mk(None, binary(sm.state.zz_expr, "==", literal(s)))

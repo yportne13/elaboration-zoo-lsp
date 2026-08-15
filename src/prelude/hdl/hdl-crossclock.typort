@@ -1,0 +1,66 @@
+// ============================================================
+//  HDL CrossClock —— SpinalHDL lib/CrossClock.scala 复刻（Wave 3）
+//
+//  覆盖：BufferCC —— 双触发器同步器（单时钟域内的结构等价：
+//  级联寄存器）。真跨时钟域（PulseCCByToggle/CCByToggle/
+//  StreamFifoCC/AsyncFifo）需要"每寄存器时钟域"语言扩展（每个
+//  always 块一个时钟），当前语言每模块单时钟，见
+//  docs/spinalhdl-lib-replication.md §5。
+// ============================================================
+
+// 级联寄存器链（内部助手，先定义）
+def bufferCCUIntChain[w: Nat](prefix: String, input: UInt[w], depth: Nat): UInt[w] = match depth {
+    case zero => input
+    case succ(zero) =>
+        let r = newUIntRegNamed(prefix + "_sync", w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, input.zz_expr));
+        r
+    case succ(t) =>
+        let r = newUIntRegNamed(prefix + "_sync" + nat_to_dec(depth), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, input.zz_expr));
+        bufferCCUIntChain(prefix, r, t)
+}
+
+def bufferCCBitsChain[w: Nat](prefix: String, input: Bits[w], depth: Nat): Bits[w] = match depth {
+    case zero => input
+    case succ(zero) =>
+        let r = newBitsRegNamed(prefix + "_sync", w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, input.zz_expr));
+        r
+    case succ(t) =>
+        let r = newBitsRegNamed(prefix + "_sync" + nat_to_dec(depth), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, input.zz_expr));
+        bufferCCBitsChain(prefix, r, t)
+}
+
+def bufferCCBoolChain(prefix: String, input: Bool, depth: Nat): Bool = match depth {
+    case zero => input
+    case succ(zero) =>
+        let r = newBoolRegNamed(prefix + "_sync");
+        let _ = createSignalExpr("", regAssign(r.zz_expr, input.zz_expr));
+        r
+    case succ(t) =>
+        let r = newBoolRegNamed(prefix + "_sync" + nat_to_dec(depth));
+        let _ = createSignalExpr("", regAssign(r.zz_expr, input.zz_expr));
+        bufferCCBoolChain(prefix, r, t)
+}
+
+// 公共接口：BufferCC(input, bufferDepth) —— 级联同步链
+def bufferCCUInt[bn: BindingName][w: Nat](input: UInt[w], bufferDepth: Nat): UInt[w] =
+    bufferCCUIntChain(bn.name, input, bufferDepth)
+
+def bufferCCBits[bn: BindingName][w: Nat](input: Bits[w], bufferDepth: Nat): Bits[w] =
+    bufferCCBitsChain(bn.name, input, bufferDepth)
+
+def bufferCCBool[bn: BindingName](input: Bool, bufferDepth: Nat): Bool =
+    bufferCCBoolChain(bn.name, input, bufferDepth)
+
+// BufferCC 默认深度 2（SpinalHDL 默认）
+def bufferCCUInt2[bn: BindingName][w: Nat](input: UInt[w]): UInt[w] =
+    bufferCCUInt[bn][w](input, 2)
+
+def bufferCCBits2[bn: BindingName][w: Nat](input: Bits[w]): Bits[w] =
+    bufferCCBits[bn][w](input, 2)
+
+def bufferCCBool2[bn: BindingName](input: Bool): Bool =
+    bufferCCBool[bn](input, 2)

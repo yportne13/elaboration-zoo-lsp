@@ -1524,6 +1524,18 @@ fn test_examples_hdl_dir() {
             "assign fragValid = inValid",      // Fragment：valid 直通
             "assign fragLast = 1",           // Fragment last 位
         ]),
+        ("18-misc.typort", include_str!("../../examples/hdl/18-misc.typort"), &[
+            "assign s = ",                      // bcdAddDigit 结果
+            "reg [1:0] sm;",                   // StateMachine 状态寄存器
+            "assign s0 = (sm == 0)",
+            "r0 <= PWDATA;",                   // APB3 寄存器写
+            "PRDATA = r0;",                    // APB3 寄存器读
+            "PRDATA = 0;",                     // readDefault
+            "reg [31:0] r0;",
+            "reg [7:0] synced_sync2;",         // BufferCC 级联
+            "reg [7:0] synced_sync;",
+            "reg [7:0] p_cnt;",                  // prescaler 计数器
+        ]),
     ];
 
     for (file, input, asserts) in examples {

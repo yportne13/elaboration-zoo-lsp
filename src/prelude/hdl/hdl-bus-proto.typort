@@ -1,0 +1,186 @@
+// ============================================================
+//  HDL Bus 协议 —— SpinalHDL lib/bus 复刻（Wave 4）
+//  APB3 / AxiLite4 / Axi4Stream / Wishbone / AvalonST bundle 定义
+//  + Apb3SlaveFactory-lite（寄存器组）
+//
+//  注：#[derive(Bundle)] 在 prelude 文件中与 Expr 枚举的 `create`
+//  构造器短名冲突（既有限制），故此处用普通 struct + 手工方向函数
+//  （apb3AsMaster 等，基于 in_u/out_u/in_b/out_b 助手重建 bundle 端口）。
+//  用户文件中的 derive(Bundle) 不受影响（见 examples/hdl/10-bundle.typort）。
+// ============================================================
+
+// ============================================================
+//  APB3 —— AMBA 3 APB（SpinalHDL bus/amba3/apb/APB3.scala）
+// ============================================================
+
+struct Apb3 {
+    PADDR: UInt[32]
+    PSEL: Bits[1]
+    PENABLE: Bool
+    PREADY: Bool
+    PWRITE: Bool
+    PWDATA: Bits[32]
+    PRDATA: Bits[32]
+    PSLVERROR: Bool
+}
+
+// master 视角方向：out(PADDR,PSEL,PENABLE,PWRITE,PWDATA)；in(PREADY,PRDATA,PSLVERROR)
+def apb3AsMaster[bn: BindingName](bus: Apb3): Apb3 =
+    Apb3.mk(out_u(bus.PADDR), out_b(bus.PSEL), out_bool(bus.PENABLE), in_bool(bus.PREADY),
+            out_bool(bus.PWRITE), out_b(bus.PWDATA), in_b(bus.PRDATA), in_bool(bus.PSLVERROR))
+
+// slave 视角方向：翻转
+def apb3AsSlave[bn: BindingName](bus: Apb3): Apb3 =
+    Apb3.mk(in_u(bus.PADDR), in_b(bus.PSEL), in_bool(bus.PENABLE), out_bool(bus.PREADY),
+            in_bool(bus.PWRITE), in_b(bus.PWDATA), out_b(bus.PRDATA), out_bool(bus.PSLVERROR))
+
+// ============================================================
+//  AxiLite4 —— AMBA AXI4-Lite（bus/amba4/axilite/AxiLite4.scala）
+//  五通道：aw（写地址）/ w（写数据）/ b（写响应）/ ar（读地址）/ r（读数据）
+//  通道为 Stream 字段（见 hdl-stream.typort）；方向在模块内手工接线。
+// ============================================================
+
+struct AxiLite4Ax {
+    addr: UInt[32]
+    prot: Bits[3]
+}
+
+struct AxiLite4W {
+    data: Bits[32]
+    strb: Bits[4]
+}
+
+struct AxiLite4B {
+    resp: Bits[2]
+}
+
+struct AxiLite4R {
+    data: Bits[32]
+    resp: Bits[2]
+}
+
+struct AxiLite4 {
+    aw: Stream[AxiLite4Ax]
+    w: Stream[AxiLite4W]
+    b: Stream[AxiLite4B]
+    ar: Stream[AxiLite4Ax]
+    r: Stream[AxiLite4R]
+}
+
+// AXI 响应码常量
+def axiRespOkay: Bits[2] = Bits.mk(None, literal(0))
+def axiRespSlvErr: Bits[2] = Bits.mk(None, literal(2))
+def axiRespDecErr: Bits[2] = Bits.mk(None, literal(3))
+
+// ============================================================
+//  Axi4Stream —— AMBA AXI4-Stream（bus/amba4/axis/Axi4Stream.scala）
+//  典型数据宽度 8 位（dataWidth=1 字节），可加 strb/keep/last/dest/user
+// ============================================================
+
+struct Axi4Stream {
+    data: Bits[8]
+    strb: Bits[1]
+    last: Bool
+}
+
+def axi4StreamAsMaster[bn: BindingName](b: Axi4Stream): Axi4Stream =
+    Axi4Stream.mk(out_b(b.data), out_b(b.strb), out_bool(b.last))
+
+def axi4StreamAsSlave[bn: BindingName](b: Axi4Stream): Axi4Stream =
+    Axi4Stream.mk(in_b(b.data), in_b(b.strb), in_bool(b.last))
+
+// ============================================================
+//  Wishbone —— classic（bus/wishbone/Wishbone.scala）
+// ============================================================
+
+struct Wishbone {
+    CYC: Bool
+    STB: Bool
+    ACK: Bool
+    WE: Bool
+    ADR: UInt[32]
+    DAT_MISO: Bits[32]
+    DAT_MOSI: Bits[32]
+    SEL: Bits[4]
+}
+
+def wishboneAsMaster[bn: BindingName](b: Wishbone): Wishbone =
+    Wishbone.mk(out_bool(b.CYC), out_bool(b.STB), in_bool(b.ACK), out_bool(b.WE),
+                out_u(b.ADR), in_b(b.DAT_MISO), out_b(b.DAT_MOSI), out_b(b.SEL))
+
+def wishboneAsSlave[bn: BindingName](b: Wishbone): Wishbone =
+    Wishbone.mk(in_bool(b.CYC), in_bool(b.STB), out_bool(b.ACK), in_bool(b.WE),
+                in_u(b.ADR), out_b(b.DAT_MISO), in_b(b.DAT_MOSI), in_b(b.SEL))
+
+// ============================================================
+//  AvalonST —— Avalon Streaming（bus/avalon/Avalon.scala）
+// ============================================================
+
+struct AvalonST {
+    data: Bits[8]
+    valid: Bool
+    ready: Bool
+    empty: Bits[1]
+    startOfPacket: Bool
+    endOfPacket: Bool
+}
+
+def avalonSTAsMaster[bn: BindingName](b: AvalonST): AvalonST =
+    AvalonST.mk(out_b(b.data), out_bool(b.valid), in_bool(b.ready), out_b(b.empty),
+                out_bool(b.startOfPacket), out_bool(b.endOfPacket))
+
+def avalonSTAsSlave[bn: BindingName](b: AvalonST): AvalonST =
+    AvalonST.mk(in_b(b.data), in_bool(b.valid), out_bool(b.ready), in_b(b.empty),
+                in_bool(b.startOfPacket), in_bool(b.endOfPacket))
+
+// ============================================================
+//  Apb3SlaveFactory-lite —— 寄存器组（bus/amba3/apb/Apb3SlaveFactory）
+//  用法：module 内 let bank = Apb3RegBank.mk(bus);
+//        bank.regReadWrite(0, r0); bank.regReadOnly(4, status) ...
+// ============================================================
+
+struct Apb3RegBank {
+    bus: Apb3
+}
+
+impl Apb3RegBank {
+    // 读写寄存器：bus 写时 reg := wdata；bus 读时 PRDATA := reg
+    def regReadWrite[aw: Nat](addr: Nat, reg: UInt[aw]): Unit =
+        let wr = binary(binary(this.bus.PENABLE.zz_expr, "&&", binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", this.bus.PWRITE.zz_expr)),
+                        "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
+        let _ = whenBegin(wr);
+        let _ = createSignalExpr("", regAssign(reg.zz_expr, this.bus.PWDATA.zz_expr));
+        let _ = whenEnd(unit);
+        let rd = binary(binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", unary("!", this.bus.PWRITE.zz_expr)),
+                        "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
+        let _ = whenBegin(rd);
+        let _ = createSignalExpr("", assign(this.bus.PRDATA.zz_expr, reg.zz_expr));
+        let _ = whenEnd(unit);
+        unit
+
+    // 只读寄存器（读时 PRDATA := sig）
+    def regReadOnly[aw: Nat](addr: Nat, sig: UInt[aw]): Unit =
+        let rd = binary(binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", unary("!", this.bus.PWRITE.zz_expr)),
+                        "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
+        let _ = whenBegin(rd);
+        let _ = createSignalExpr("", assign(this.bus.PRDATA.zz_expr, sig.zz_expr));
+        let _ = whenEnd(unit);
+        unit
+
+    // 只写寄存器
+    def regWriteOnly[aw: Nat](addr: Nat, reg: UInt[aw]): Unit =
+        let wr = binary(binary(this.bus.PENABLE.zz_expr, "&&", binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", this.bus.PWRITE.zz_expr)),
+                        "&&", binary(this.bus.PADDR.zz_expr, "==", literal(addr)));
+        let _ = whenBegin(wr);
+        let _ = createSignalExpr("", regAssign(reg.zz_expr, this.bus.PWDATA.zz_expr));
+        let _ = whenEnd(unit);
+        unit
+
+    // 未命中任何寄存器时读回 0
+    def readDefault(): Unit =
+        let rd = binary(bitsel(this.bus.PSEL.zz_expr, literal(0)), "&&", unary("!", this.bus.PWRITE.zz_expr));
+        let _ = whenBegin(rd);
+        let _ = createSignalExpr("", assign(this.bus.PRDATA.zz_expr, literal(0)));
+        let _ = whenEnd(unit);
+        unit
+}

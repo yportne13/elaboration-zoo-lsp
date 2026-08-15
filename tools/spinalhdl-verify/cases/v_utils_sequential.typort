@@ -77,3 +77,41 @@ println(moduleTreeVL(vOneHotCounter.create.tree))
 println(moduleTreeVL(vJohnsonCounter.create.tree))
 println(moduleTreeVL(vDelayEvent.create.tree))
 println(moduleTreeVL(vTimeout.create.tree))
+
+module vPrescaler {
+    input lim = UInt[8]
+    output ov = Bool
+    let p = prescaler(lim)
+    ov := p.overflow
+}
+
+module vTimer {
+    input tick = Bool
+    input clr = Bool
+    input lim = UInt[8]
+    output full = Bool
+    output value = UInt[8]
+    let t = timer(tick, clr, lim)
+    full := t.full
+    value := t.value
+}
+
+module vInterruptCtrl {
+    input inputs = Bits[4]
+    input clears = Bits[4]
+    input masks = Bits[4]
+    output pend = Bits[4]
+    pend := interruptCtrl(inputs, clears, masks)
+}
+
+module vWatchdog {
+    input feed = Bool
+    input lim = UInt[8]
+    output timeout = Bool
+    timeout := watchdog(feed, lim)
+}
+
+println(moduleTreeVL(vPrescaler.create.tree))
+println(moduleTreeVL(vTimer.create.tree))
+println(moduleTreeVL(vInterruptCtrl.create.tree))
+println(moduleTreeVL(vWatchdog.create.tree))

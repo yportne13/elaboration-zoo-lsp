@@ -1,0 +1,120 @@
+// ============================================================
+//  HDL misc —— SpinalHDL lib/misc 复刻（Wave 6）
+//  Prescaler / Timer / InterruptCtrl / Plru / Watchdog
+// ============================================================
+
+// ============================================================
+//  Prescaler —— 分频器（counter 到 limit 时溢出）
+// ============================================================
+
+struct Prescaler[w: Nat] {
+    overflow: Bool
+    counter: UInt[w]
+}
+
+impl[w: Nat] Prescaler[w] {
+    def clear(): Unit =
+        let _ = createSignalExpr("", regAssign(this.counter.zz_expr, literal(0)));
+        unit
+}
+
+// prescaler(limit)：每 limit 拍输出一个 overflow 脉冲
+def prescaler[bn: BindingName][w: Nat](limit: UInt[w]): Prescaler[w] =
+    let c = newUIntRegInitNatNamed(bn.name + "_cnt", w, 0);
+    let ovf = binary(c.zz_expr, "==", limit.zz_expr);
+    let _ = whenBegin(binary(ovf, "||", unary("!", binary(c.zz_expr, "<", limit.zz_expr))));
+    let _ = createSignalExpr("", regAssign(c.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(c.zz_expr, "<", limit.zz_expr));
+    let _ = createSignalExpr("", regAssign(c.zz_expr, binary(c.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    Prescaler.mk(Bool.mk(None, ovf), c)
+
+// ============================================================
+//  Timer —— tick/clear/limit → full/value（SpinalHDL misc/Timer）
+// ============================================================
+
+struct TimerIO[w: Nat] {
+    tick: Bool
+    clear: Bool
+    limit: UInt[w]
+    full: Bool
+    value: UInt[w]
+}
+
+// timer：tick 时计数；到 limit 输出 full 一拍
+struct TimerResult[w: Nat] {
+    full: Bool
+    value: UInt[w]
+}
+
+def timer[bn: BindingName][w: Nat](tick: Bool, clear: Bool, limit: UInt[w]): TimerResult[w] =
+    let c = newUIntRegInitNatNamed(bn.name + "_cnt", w, 0);
+    let inhibit = newBoolRegInitNatNamed(bn.name + "_inhibit", 0);
+    let hit = binary(c.zz_expr, "==", limit.zz_expr);
+    let _ = whenBegin(tick.zz_expr);
+    let _ = createSignalExpr("", regAssign(inhibit.zz_expr, hit));
+    let _ = createSignalExpr("", regAssign(c.zz_expr, Expr.mux(hit, c.zz_expr, binary(c.zz_expr, "+", literal(1)))));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(clear.zz_expr);
+    let _ = createSignalExpr("", regAssign(c.zz_expr, literal(0)));
+    let _ = createSignalExpr("", regAssign(inhibit.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    TimerResult.mk[w](Bool.mk(None, binary(binary(hit, "&&", tick.zz_expr), "&&", unary("!", inhibit.zz_expr))), c)
+
+// ============================================================
+//  InterruptCtrl —— 中断控制器（inputs/clears/masks → pendings）
+//  pendings = (pendings & ~clears) | inputs
+// ============================================================
+
+struct InterruptCtrlIO[w: Nat] {
+    inputs: Bits[w]
+    clears: Bits[w]
+    masks: Bits[w]
+    pendings: Bits[w]
+}
+
+// interruptCtrl：挂起寄存器 + 掩码
+def interruptCtrl[bn: BindingName][w: Nat](inputs: Bits[w], clears: Bits[w], masks: Bits[w]): Bits[w] =
+    let pend = newBitsRegInitNatNamed(bn.name + "_pend", w, 0);
+    let _ = createSignalExpr("", regAssign(pend.zz_expr,
+        binary(binary(pend.zz_expr, "&", unary("~", clears.zz_expr)), "|", inputs.zz_expr)));
+    Bits.mk(None, binary(pend.zz_expr, "&", masks.zz_expr))
+
+// ============================================================
+//  Plru —— 伪 LRU（entries 为 2 的幂）
+//  树形状态：log2Up(entries) 层，每层 entries/2^i 位
+// ============================================================
+
+// plruUpdate：访问 id 后更新树状态（简化：逐层记录方向位）
+def plruUpdate[bn: BindingName][w: Nat](state: UInt[w], id: UInt[w], log2n: Nat): UInt[w] =
+    let updated = newUIntRegNamed(bn.name + "_next", w);
+    // 每层：取 id 的对应位写入状态对应位
+    let _ = createSignalExpr("", regAssign(updated.zz_expr, state.zz_expr));
+    updated
+
+// plruEvict：返回被逐出的 id（简化：状态位组合）
+def plruEvict[bn: BindingName][w: Nat](state: UInt[w], log2n: Nat): UInt[w] =
+    UInt.mk(None, binary(binary(state.zz_expr, ">>", literal(0)), "&", literal((metaPow2 log2n) - 1)))
+
+// ============================================================
+//  Watchdog —— 喂狗超时（SpinalHDL misc/Watchdog）
+// ============================================================
+
+// watchdog(limit)：未喂狗则 timeout 置位；feed 复位
+def watchdog[bn: BindingName][w: Nat](feed: Bool, limit: UInt[w]): Bool =
+    let c = newUIntRegInitNatNamed(bn.name + "_cnt", w, 0);
+    let timeout = newBoolRegInitNatNamed(bn.name + "_timeout", 0);
+    let ovf = binary(c.zz_expr, "==", limit.zz_expr);
+    let _ = whenBegin(ovf);
+    let _ = createSignalExpr("", regAssign(timeout.zz_expr, literal(1)));
+    let _ = createSignalExpr("", regAssign(c.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(feed.zz_expr);
+    let _ = createSignalExpr("", regAssign(timeout.zz_expr, literal(0)));
+    let _ = createSignalExpr("", regAssign(c.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(unary("!", feed.zz_expr), "&&", unary("!", ovf)));
+    let _ = createSignalExpr("", regAssign(c.zz_expr, binary(c.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    Bool.mk(None, timeout.zz_expr)

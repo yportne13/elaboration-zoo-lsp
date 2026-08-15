@@ -459,7 +459,98 @@ STREAM_SEQ_CASES = {
                     [("in_ready", 1), ("o0_valid", 1), ("o0_payload", 8), ("o1_valid", 1), ("o1_payload", 8)], RefStreamFork, 60),
 }
 
-DEFAULT_CASES = ["v_utils_combinational.typort", "v_utils_sequential.typort", "v_stream_sequential.typort"]
+
+
+class RefPrescaler:
+    def reset_state(self):
+        self.c = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.c = 0
+        else:
+            limit = inputs["lim"]
+            if self.c >= limit:
+                self.c = 0
+            else:
+                self.c += 1
+        return {"ov": 1 if self.c >= inputs["lim"] else 0}
+
+class RefTimer:
+    def reset_state(self):
+        self.c = 0
+        self.inhibit = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.c = 0
+            self.inhibit = 0
+        else:
+            tick, clr = inputs["tick"], inputs["clr"]
+            limit = inputs["lim"]
+            hit = self.c == limit
+            if tick:
+                self.inhibit = 1 if hit else 0
+                if not hit:
+                    self.c += 1
+            if clr:
+                self.c = 0
+                self.inhibit = 0
+        return {"full": 1 if ((self.c == inputs["lim"]) and inputs["tick"] and not self.inhibit) else 0,
+                "value": self.c}
+
+class RefInterruptCtrl:
+    def reset_state(self):
+        self.p = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.p = 0
+        else:
+            self.p = (self.p & (~inputs["clears"] & 0xF)) | inputs["inputs"]
+        return {"pend": (self.p & inputs["masks"]) & 0xF}
+
+class RefWatchdog:
+    def reset_state(self):
+        self.c = 0
+        self.t = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.c = 0
+            self.t = 0
+        else:
+            limit = inputs["lim"]
+            ovf = self.c == limit
+            if ovf:
+                self.t = 1
+                self.c = 0
+            if inputs["feed"]:
+                self.t = 0
+                self.c = 0
+            if not inputs["feed"] and not ovf:
+                self.c += 1
+        return {"timeout": self.t}
+
+MISC_SEQ_CASES = {
+    "vPrescaler":      ([("lim", 8)], [("ov", 1)], RefPrescaler, 80),
+    "vTimer":          ([("tick", 1), ("clr", 1), ("lim", 8)], [("full", 1), ("value", 8)], RefTimer, 80),
+    "vInterruptCtrl":  ([("inputs", 4), ("clears", 4), ("masks", 4)], [("pend", 4)], RefInterruptCtrl, 60),
+    "vWatchdog":       ([("feed", 1), ("lim", 8)], [("timeout", 1)], RefWatchdog, 80),
+}
+
+MISC_CASES = {
+    "vBcdAdd":  ([("a", 4), ("b", 4), ("cin", 1)], [("s", 4), ("co", 1)],
+                 lambda d: bcd_add(d["a"], d["b"], d["cin"]), "full"),
+    "vMaskedEq": ([("hard", 4)], [("eq", 1)],
+                 lambda d: [1 if ((d["hard"] & 6) == 2) else 0], "full"),
+    "vDecoder": ([("oh", 4)], [("idx", 2)],
+                 lambda d: [ref_ohtouint(d["oh"], 4)], "full"),
+}
+
+def bcd_add(a, b, cin):
+    s = a + b + cin
+    if s > 9:
+        return (s + 6, 1) if s + 6 <= 15 else (((s + 6) & 0xF), 1)
+    return (s, 0)
+
+DEFAULT_CASES = ["v_utils_combinational.typort", "v_utils_sequential.typort", "v_stream_sequential.typort", "v_misc_combinational.typort"]
 
 
 def run_typort(case_file):
@@ -703,6 +794,25 @@ def main():
             total += 1
             res = run_seq_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules)
             if res is True:
+                passed += 1
+            else:
+                failed += 1
+        for name, (ports_in, ports_out, ref, n_cycles) in MISC_SEQ_CASES.items():
+            if name not in modules:
+                continue
+            total += 1
+            res = run_seq_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules)
+            if res is True:
+                passed += 1
+            else:
+                failed += 1
+        for name, (ports_in, ports_out, ref, strategy) in MISC_CASES.items():
+            if name not in modules:
+                continue
+            total += 1
+            res = run_comb_case(name, ports_in, ports_out, ref, strategy, workdir, modules)
+            if res is True:
+                print("  [OK] %s" % name)
                 passed += 1
             else:
                 failed += 1

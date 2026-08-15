@@ -1,0 +1,163 @@
+// ============================================================
+// HDL Example 18: misc — io/math/logic/fsm/bus/crossclock
+//   (Wave 3/4/5/6 复刻组件)
+// ============================================================
+
+module miscTriState {
+    let t = TriStateBits.mk(newBitsNamed("t_read", 8), newBitsNamed("t_write", 8), newBoolNamed("t_we"))
+    let m = triStateAsMasterBits(t)
+    let r = Bits[8]
+    r := m.read
+}
+println("=== 18a: TriState ===")
+println(moduleTreeVL(miscTriState.create.tree))
+
+module miscGpio {
+    let pinRead = Bits[4]
+    let pinWrite = Bits[4]
+    let pinWE = Bits[4]
+    let clr = Bits[4]
+    let io = GpioIO.mk(pinRead, pinWrite, pinWE, newBitsNamed("g_in", 4), newBitsNamed("g_out", 4), newBitsNamed("g_oe", 4), newBitsNamed("g_int", 4))
+    let _d = gpioCtrl(io, clr)
+    let sampled = Bits[4]
+    sampled := io.input
+    let irq = Bits[4]
+    irq := io.interrupts
+}
+println("=== 18b: Gpio ===")
+println(moduleTreeVL(miscGpio.create.tree))
+
+module miscBcd {
+    let a = UInt[4]
+    let b = UInt[4]
+    let cin = Bool
+    let r = bcdAddDigit(a, b, cin)
+    let s = UInt[4]
+    let co = Bool
+    s := r.sum
+    co := r.carry
+    let isz = Bool
+    isz := bcdIsZero(Bcd.mk[2](newBitsNamed("bcd_d", 8)))
+}
+println("=== 18c: Bcd ===")
+println(moduleTreeVL(miscBcd.create.tree))
+
+module miscDivider {
+    let cmdValid = Bool
+    let cmdReady = Bool
+    let num = UInt[8]
+    let den = UInt[8]
+    let rspValid = Bool
+    let quo = UInt[8]
+    let rem = UInt[8]
+    let cmd = DividerCmd.mk(cmdValid, num, den, cmdReady)
+    let rsp = DividerRsp.mk(rspValid, quo, rem)
+    let fsm = dividerCore(cmd, rsp)
+    let busy = Bool
+    busy := fsm.busy
+}
+println("=== 18d: Divider ===")
+println(moduleTreeVL(miscDivider.create.tree))
+
+module miscFsm {
+    let go = Bool
+    let sm = stateMachine[2](4)
+    let s0 = Bool
+    let s1 = Bool
+    s0 := stateIs(sm, 0)
+    s1 := stateIs(sm, 1)
+    when go {
+        let _d = stateGoto(sm, 1)
+    }
+}
+println("=== 18e: StateMachine ===")
+println(moduleTreeVL(miscFsm.create.tree))
+
+module miscPrescaler {
+    let lim = UInt[8]
+    let p = prescaler(lim)
+    let ov = Bool
+    ov := p.overflow
+    let t = timer(Bool.mk(None, literal(1)), Bool.mk(None, literal(0)), lim)
+    let tf = Bool
+    let tv = UInt[8]
+    tf := t.full
+    tv := t.value
+}
+println("=== 18f: Prescaler / Timer ===")
+println(moduleTreeVL(miscPrescaler.create.tree))
+
+module miscInterrupts {
+    let inputs = Bits[4]
+    let clears = Bits[4]
+    let masks = Bits[4]
+    let pend = Bits[4]
+    pend := interruptCtrl(inputs, clears, masks)
+    let wd = Bool
+    wd := watchdog(Bool.mk(None, literal(0)), UInt.mk[4](None, literal(7)))
+}
+println("=== 18g: InterruptCtrl / Watchdog ===")
+println(moduleTreeVL(miscInterrupts.create.tree))
+
+module busApb3 {
+    let bus = Apb3.mk(newUIntNamed("PADDR", 32), newBitsNamed("PSEL", 1), newBoolNamed("PENABLE"),
+                      newBoolNamed("PREADY"), newBoolNamed("PWRITE"), newBitsNamed("PWDATA", 32),
+                      newBitsNamed("PRDATA", 32), newBoolNamed("PSLVERROR"))
+    let mbus = apb3AsMaster(bus)
+    let sbus = apb3AsSlave(bus)
+    let r0 = newUIntRegNamed("r0", 32)
+    let bank = Apb3RegBank.mk(sbus)
+    let _d = bank.regReadWrite(0, r0)
+    let _d = bank.readDefault()
+    let r0v = UInt[32]
+    r0v := r0
+}
+println("=== 18h: APB3 + 寄存器组 ===")
+println(moduleTreeVL(busApb3.create.tree))
+
+module busAxiLite {
+    let ax = AxiLite4Ax.mk(newUIntNamed("ax_addr", 32), newBitsNamed("ax_prot", 3))
+    let w = AxiLite4W.mk(newBitsNamed("w_data", 32), newBitsNamed("w_strb", 4))
+    let b = AxiLite4B.mk(newBitsNamed("b_resp", 2))
+    let r = AxiLite4R.mk(newBitsNamed("r_data", 32), newBitsNamed("r_resp", 2))
+    let bus = AxiLite4.mk(Stream.mk(newBoolNamed("aw_v"), newBoolNamed("aw_r"), ax),
+                          Stream.mk(newBoolNamed("w_v"), newBoolNamed("w_r"), w),
+                          Stream.mk(newBoolNamed("b_v"), newBoolNamed("b_r"), b),
+                          Stream.mk(newBoolNamed("ar_v"), newBoolNamed("ar_r"), ax),
+                          Stream.mk(newBoolNamed("r_v"), newBoolNamed("r_r"), r))
+    let ok = Bits[2]
+    ok := axiRespOkay
+    let awReady = Bool
+    awReady := bus.aw.ready
+}
+println("=== 18i: AxiLite4 ===")
+println(moduleTreeVL(busAxiLite.create.tree))
+
+module busWb {
+    let wb = Wishbone.mk(newBoolNamed("CYC"), newBoolNamed("STB"), newBoolNamed("ACK"),
+                         newBoolNamed("WE"), newUIntNamed("ADR", 32), newBitsNamed("DAT_MISO", 32),
+                         newBitsNamed("DAT_MOSI", 32), newBitsNamed("SEL", 4))
+    let m = wishboneAsMaster(wb)
+    let cyc = Bool
+    cyc := m.CYC
+    let av = AvalonST.mk(newBitsNamed("av_data", 8), newBoolNamed("av_valid"), newBoolNamed("av_ready"),
+                         newBitsNamed("av_empty", 1), newBoolNamed("av_sop"), newBoolNamed("av_eop"))
+    let am = avalonSTAsMaster(av)
+    let sop = Bool
+    sop := am.startOfPacket
+    let st = Axi4Stream.mk(newBitsNamed("s_data", 8), newBitsNamed("s_strb", 1), newBoolNamed("s_last"))
+    let sm = axi4StreamAsMaster(st)
+    let last = Bool
+    last := sm.last
+}
+println("=== 18j: Wishbone / AvalonST / Axi4Stream ===")
+println(moduleTreeVL(busWb.create.tree))
+
+module ccBuffer {
+    let asyncIn = UInt[8]
+    let synced = bufferCCUInt2(asyncIn)
+    let asyncB = Bool
+    let syncB = bufferCCBool2(asyncB)
+}
+println("=== 18k: BufferCC ===")
+println(moduleTreeVL(ccBuffer.create.tree))

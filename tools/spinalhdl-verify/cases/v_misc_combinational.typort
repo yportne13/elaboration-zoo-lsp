@@ -1,0 +1,27 @@
+// Bcd / Masked / decoder 组合验证
+
+module vBcdAdd {
+    input a = UInt[4]
+    input b = UInt[4]
+    input cin = Bool
+    output s = UInt[4]
+    output co = Bool
+    s := bcdAddDigit(a, b, cin).sum
+    co := bcdAddDigit(a, b, cin).carry
+}
+
+module vMaskedEq {
+    input hard = Bits[4]
+    output eq = Bool
+    eq := maskedEq(hard, Masked.mk(2, 6))
+}
+
+module vDecoder {
+    input oh = Bits[4]
+    output idx = UInt[2]
+    idx := decoderOhToUInt(oh)
+}
+
+println(moduleTreeVL(vBcdAdd.create.tree))
+println(moduleTreeVL(vMaskedEq.create.tree))
+println(moduleTreeVL(vDecoder.create.tree))
