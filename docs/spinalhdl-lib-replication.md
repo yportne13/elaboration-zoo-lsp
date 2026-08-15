@@ -108,11 +108,77 @@
 
 | 波次 | 状态 | 验证 |
 |---|---|---|
-| 设计文档 | ✅ | — |
-| 1 Utils/Counter | 进行中 | L1/L2 + L3(verilator) |
-| 2 Stream/Fragment | 未开始 | L1/L2 + L3 |
-| 3 CrossClock | 未开始 | L1/L2 |
-| 4 Bus | 未开始 | L1/L2 + L3 |
-| 5 io/math/logic/fsm | 未开始 | L1/L2 + L3 |
-| 6 misc | 未开始 | L1/L2 + L3 |
-| 7 B 级扩展 | 依赖语言扩展 | — |
+| 1 Utils/Counter（hdl-utils.typort） | ✅ | L1/L2 通过；L3 30/30（verilator 真值表） |
+| 2 Stream/Flow/Fragment（hdl-stream.typort） | ✅ | L1/L2 通过；L3 12/12（m2s/fifo/mux/arb/fork + counter 家族） |
+| 3 CrossClock（hdl-crossclock.typort） | ✅ BufferCC；真跨时钟待语言扩展 | L1/L2 通过 |
+| 4 Bus（hdl-bus-proto.typort） | ✅ APB3/AxiLite4/Axi4Stream/Wishbone/AvalonST + 寄存器组 | L1/L2 通过（APB3 读写行为人工核验） |
+| 5 io/math/logic/fsm（hdl-misc-io.typort） | ✅ TriState/Gpio/Bcd/Divider/Decoder/Masked/StateMachine | L1/L2 通过；L3 7/7（bcd/maskedEq/decoder + prescaler/timer/intr/watchdog） |
+| 6 misc（hdl-misc.typort） | ✅ Prescaler/Timer/InterruptCtrl/Plru/Watchdog | 同上 |
+| 7 B 级扩展 | 依赖语言扩展：每寄存器时钟域、Vec 硬件索引（.typort 内可做）、BlackBox、ROM 初始化 | — |
+
+**最终验收**：examples/hdl/01-18 全部编译展开（L1）；关键 Verilog 结构断言通过（L2）；
+== cases: v_utils_combinational.typort ==
+  [OK] vReverse
+  [OK] vReverseU
+  [OK] vPropLsb
+  [OK] vPropMsb
+  [OK] vCountOne
+  [OK] vCountOneU
+  [OK] vClz
+  [OK] vCtz
+  [OK] vMajority
+  [OK] vUintToOh
+  [OK] vUintToOhM1
+  [OK] vOhToUInt
+  [OK] vOhLegal
+  [OK] vOhFirst
+  [OK] vOhLast
+  [OK] vOhRR
+  [OK] vPriorityMux
+  [OK] vMuxOH
+  [OK] vOhMuxOr
+  [OK] vMinMax
+  [OK] vClamp
+  [OK] vGray
+  [OK] vEndianSwap
+  [OK] vAddCarry
+  [OK] vLog2Floor
+  [OK] vLog2Ceil
+  [OK] vSetFromFirstOne
+  [OK] vNapot
+  [OK] vScrap
+  [OK] vCountOneOnEach
+== cases: v_utils_sequential.typort ==
+  [OK] vCounterMod
+  [OK] vCounterUpDown
+  [OK] vDownCounter
+  [OK] vOneHotCounter
+  [OK] vJohnsonCounter
+  [OK] vDelayEvent
+  [OK] vTimeout
+  [OK] vPrescaler
+  [OK] vTimer
+  [OK] vInterruptCtrl
+  [OK] vWatchdog
+== cases: v_stream_sequential.typort ==
+  [OK] vStreamM2s
+  [OK] vStreamFifo
+  [OK] vStreamMux
+  [OK] vStreamArb
+  [OK] vStreamFork
+== cases: v_misc_combinational.typort ==
+  [OK] vBcdAdd
+  [OK] vMaskedEq
+  [OK] vDecoder
+== 49 passed, 0 failed, 49 total ==（verilator + Python 参考）49/49 行为比对通过（L3）。
+全套测试 389 通过 / 49 失败，失败均为既有（L07/L10/L11/L12 早期模块，与本次改动无关，
+stash 对比验证为同一集合）。
+
+**已知语言限制（记录于本文档 §3/§5）**：
+1.  不能在 prelude 文件中用（ 枚举构造器短名冲突）→ 总线
+   bundle 用手工方向函数（ 等）。
+2. 每模块单时钟域 → 真跨时钟（PulseCCByToggle/StreamFifoCC）需 Rust 侧扩展。
+3. 泛型硬件值方法受限于 trait 方法签名规则（T 不能出现在参数类型）→ 用 MuxExpr 模式 /
+   按类型实现。
+4. 在 module 体内  会与模块宏的  字段冲突 → 用 。
+5. 刚性参数上的计算宽度（）不可归约 → 指针宽度等作为显式类型参数。
