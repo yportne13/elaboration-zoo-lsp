@@ -365,3 +365,53 @@ HDL 模块文件用户侧约 2-2.5x（3x 回退的 infer 部分已消除；每�
 - 剩余的 1.46s 归因不变（见 8.1）：真热点是摊平链三遍**重求值**的固有
   成本；值得投入的下一步仍是 8.3 末条的长期方向——create/tree 体求值
   按模块缓存或 lazy 化（3× → 1×），以及 LSP 每键击增量 elaboration。
+
+---
+
+## 10. 第九轮（2026-08-14）—— 最终归因：`change_mutable` 的 O(N²) 累加器（占剩余时间 99.5%）
+
+> 承接 round 7/8。本轮修正了 round 7 采样聚合的一个 awk 状态机错误（它把
+> `infer_expr`/`check` 帧从归因中丢掉了），看到原始栈后结论完全改写。
+> 无代码改动入库。
+
+### 10.1 原始栈（release-profiling + force 入口采样，1040 用户样本）
+
+```
+infer_after_prefix > infer_expr > check<false> > infer_expr > eval
+  > v_app > cxt::change_mutable > v_app > eval > force_inner × 深链(12-60帧)
+```
+
+- **1035/1040（99.5%）样本包含 `change_mutable`**。
+- round 7 所测位点（def 四处直接 eval、class Phase-A 三处、println-nf）
+  复测合计仅 ~0.1s——全部不是热点。8.1 的"eval 摊平链求值"需要修正为：
+  **eval 的成本几乎全部来自 `change_mutable` 内部的 v_app/force**。
+
+### 10.2 机制：端口注册的整树重放
+
+- HDL 的 `out(...)`/`in(...)`（asMaster/create/tree 体里每字段一次）通过
+  `change_mutable(name, f)` 更新 mutable_map 中的模块树值；
+- `change_mutable`（cxt.rs）对**当前累积值**执行 `v_app(f, 旧值)`——f 是
+  合并函数，其求值对旧值做深度 fold（Match 递归）；
+- N 个端口/字段 → N 次全树 apply+force → **O(N²)**，三遍检查再 ×3。
+- 这同时解释了：round 6 之前 no_metas 为何在巨型"解值"上爆炸（解值就是
+  这些累积树）；round 7 的 Sum 臂 (tm,env) 重复统计（重放的是**结构等价**
+  的链，几乎无指针复用）；round 8 的记忆化为何无效（每次 apply 产生全新
+  值，(tm,env) 指针级命中率远低于结构重复率）。
+
+### 10.3 修复方向（prelude/HDL 层设计，非 elaborator 补丁）
+
+1. **O(1) 追加 + 单次组装**（推荐）：`out`/`in` 只把端口描述追加进全局
+   pending 列表（mutable_map 存列表或新 prim），树读取（moduleTreeVL）时
+   一次性组装。嵌套 asMaster 分派期间继续产生的 out/in 按追加顺序保持
+   注册顺序；需与 hdl-redesign-plan.md 对齐。
+2. **不可变累积结构**：树值改 cons 风格，合并 O(1) 构造、不 force 旧值
+   （要求 + 对该结构 WHNF 即可构造）。
+3. 任何方案必须过：全部 hdl 示例 Verilog 输出逐字节对比 + L13/集成套件。
+
+### 10.4 方法学教训（记录以防再犯）
+
+- round 7 的"caller=eval / caller=infer_after_prefix"聚合是 awk 状态机
+  bug（`gsub` 先改写了 `$i`，后续匹配依赖原始文本）。**聚合前必须先肉眼
+  看原始栈**。
+- 位点插桩与采样结论矛盾时：先怀疑聚合脚本，再怀疑插桩覆盖面，最后才是
+  假设本身。
