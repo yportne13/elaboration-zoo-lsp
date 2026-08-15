@@ -91,3 +91,15 @@
 - 复现：把 `examples/hdl/11-bundle-deep.typort` 内容合并进 `examples/hdl/10-bundle.typort`，
   debug 下 `cargo test --lib test_examples_hdl_dir` 即栈溢出。
 - 验证绕开：`cargo test --lib test_examples_hdl_dir`（现拆分状态）应连续多次通过。
+
+---
+
+## 8. 更新（2026-08-14，round 11 之后）：脆弱性已消除
+
+性能 round 6（no_metas 图遍历）与 round 11（构造子头投影不 force，见
+`docs/l13-perf-review-4.md` §12）落地后，深嵌套 bundle 场景的 force 调用
+从数千万次/数千层递归崩塌到数千次浅层调用——**上述复现方法（10+11 合并
+文件，debug，2MiB 测试线程）现已连续 3 次通过**。`11-bundle-deep` 保持
+独立文件（拆分同时具有示例组织价值），但"往现有 example 文件加内容可能
+顶爆测试线程栈"的约束不再成立。`force` 本身的递归结构未改（§6.1 的
+迭代化方向仍可作为长期加固项），只是当前负载不再触达深递归。

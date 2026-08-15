@@ -497,6 +497,11 @@ infer_after_prefix > infer_expr > check<false> > infer_expr > eval
 
 - change_mutable O(N²) 线程至此关闭：计数器 succ 化（`412dd12`）+
   投影快速路径 + prim 消费点 force（`2916374`）。
-- 剩余观察项：11-bundle-deep 0.26s 中 println/moduleTreeVL 的最终组装
-  ~0.24s（一次性 O(N)，健康）；LSP 每键击全量重建仍是输入延迟上限
-  （老项，与本次无关）。
+- **附带消除的脆弱性**：深嵌套 bundle 的 debug 测试线程栈溢出（
+  `l13-force-recursion-stack-overflow.md` 的复现方法：10+11 合并文件）
+  现已连续 3 次通过——force 调用从数千万次崩塌到数千次，深递归不再
+  触达。
+- 剩余观察项：11-bundle-deep 0.29s 中 class bundleDeepMS 0.09s（摊平链
+  求值）+ println 组装 0.05s（一次性 O(N)，均健康）；LSP 每键击全量重建
+  仍是输入延迟上限（老项，与本次无关）——但用户文件侧重推成本现已降到
+  0.08-0.26s/键击，全量重推的实际体感已可接受。
