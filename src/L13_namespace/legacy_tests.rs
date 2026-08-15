@@ -1483,6 +1483,31 @@ fn test_examples_hdl_dir() {
             "input wire clk",            // 自动时钟端口
             "input wire reset",          // 自动复位端口（有 init 时）
         ]),
+        ("16-utils.typort", include_str!("../../examples/hdl/16-utils.typort"), &[
+            "assign r = {a[0], {a[1], ",      // reverse：位反转
+            "assign p = {a[7], {(a[6] | a[7]), ", // propagateOnes toLsb：前缀 OR（LSB 优先）
+            "assign p2 = {(a[0] | (a[1] | ",    // propagateOnes toMsb
+            "assign cl = (a[7] ? 0 : ",        // clz：优先链
+            "(a[0] ? 7 : 8)",                 // clz 默认值 = 宽度
+            "assign mv = (",                  // majorityVote：countOne >= 5
+            "assign oh = (1 << ",             // uintToOh：1 << value
+            "assign first = (oh & ~(oh - 1))", // ohMaskingFirst：x & ~(x-1)
+            "assign pm = (sel[0] ? a : (sel[1] ? b : ", // priorityMux 优先链
+            "assign o = ((sel[0] ? a : 0) | ", // ohMuxOr：掩码 OR
+            "assign mn = ((a < b) ? a : b)",   // min
+            "assign mx = ((a < b) ? b : a)",   // max
+            "assign g = ((x >> 1) ^ x)",       // toGray
+            "assign de = (__run && (__cnt == 3))", // delayEvent 输出
+            "reg [7:0] delay_2;",              // delayUInt 寄存器链
+            "delay_2 <= a;",
+            "delay_1 <= delay_2;",
+            "reg [2:0] tm_cnt;",               // timeout 计数器
+            "if (cm == 9) begin",              // counterMod 回绕
+            "cm <= (cm + 1);",
+            "dc <= 9;",                        // downCounter 回绕
+            "ohc <= 1;",                       // oneHotCounter 回绕
+            "jc <= 0;",                        // johnsonCounter 回绕
+        ]),
     ];
 
     for (file, input, asserts) in examples {

@@ -1,0 +1,248 @@
+// ============================================================
+// 组合逻辑验证用例（L3 真值表验收，由 tools/spinalhdl-verify/verify.py 驱动）
+// 每个模块：纯组合，input 扫描全空间，output 与 Python 参考比对。
+// 命名规则：v<组件名>，端口 spec 记录在 verify.py 的 CASES 表中。
+// ============================================================
+
+module vReverse {
+    input a = Bits[8]
+    output r = Bits[8]
+    r := reverse(a)
+}
+
+module vReverseU {
+    input a = UInt[8]
+    output r = UInt[8]
+    r := reverse(a)
+}
+
+module vPropLsb {
+    input a = Bits[8]
+    output r = Bits[8]
+    r := propagateOnes(a, false)
+}
+
+module vPropMsb {
+    input a = Bits[8]
+    output r = Bits[8]
+    r := propagateOnes(a, true)
+}
+
+module vCountOne {
+    input a = Bits[8]
+    output c = UInt[4]
+    c := countOne(a)
+}
+
+module vCountOneU {
+    input a = UInt[8]
+    output c = UInt[4]
+    c := countOneUInt(a)
+}
+
+module vClz {
+    input a = Bits[8]
+    output c = UInt[4]
+    c := countLeadingZeroes(a)
+}
+
+module vCtz {
+    input a = Bits[8]
+    output c = UInt[4]
+    c := countTrailingZeroes(a)
+}
+
+module vMajority {
+    input a = Bits[7]
+    output m = Bool
+    m := majorityVote(a)
+}
+
+module vUintToOh {
+    input a = UInt[3]
+    output oh = Bits[8]
+    oh := uintToOh(a)
+}
+
+module vUintToOhM1 {
+    input a = UInt[3]
+    output oh = Bits[8]
+    oh := uintToOhMinusOne(a)
+}
+
+module vOhToUInt {
+    input oh = Bits[8]
+    output idx = UInt[3]
+    idx := ohToUInt(oh)
+}
+
+module vOhLegal {
+    input oh = Bits[8]
+    output legal = Bool
+    legal := ohIsLegal(oh)
+}
+
+module vOhFirst {
+    input oh = Bits[8]
+    output f = Bits[8]
+    f := ohMaskingFirst(oh)
+}
+
+module vOhLast {
+    input oh = Bits[8]
+    output l = Bits[8]
+    l := ohMaskingLast(oh)
+}
+
+module vOhRR {
+    input req = Bits[4]
+    input pri = Bits[4]
+    output g = Bits[4]
+    g := ohMaskingRoundRobin(req, pri)
+}
+
+module vPriorityMux {
+    input sel = Bits[4]
+    input a = UInt[8]
+    input b = UInt[8]
+    input c = UInt[8]
+    input d = UInt[8]
+    input dflt = UInt[8]
+    output o = UInt[8]
+    o := priorityMux(sel, cons(a, cons(b, cons(c, cons(d, nil)))), dflt)
+}
+
+module vMuxOH {
+    input sel = Bits[4]
+    input a = UInt[8]
+    input b = UInt[8]
+    input c = UInt[8]
+    input d = UInt[8]
+    output o = UInt[8]
+    o := muxOH(sel, cons(a, cons(b, cons(c, cons(d, nil)))))
+}
+
+module vOhMuxOr {
+    input sel = Bits[4]
+    input a = UInt[8]
+    input b = UInt[8]
+    input c = UInt[8]
+    input d = UInt[8]
+    output o = UInt[8]
+    o := ohMuxOr(sel, cons(a, cons(b, cons(c, cons(d, nil)))))
+}
+
+module vMinMax {
+    input a = UInt[8]
+    input b = UInt[8]
+    output mn = UInt[8]
+    output mx = UInt[8]
+    mn := min(a, b)
+    mx := max(a, b)
+}
+
+module vClamp {
+    input a = UInt[8]
+    input lo = UInt[8]
+    input hi = UInt[8]
+    output cl = UInt[8]
+    cl := clamp(a, lo, hi)
+}
+
+module vGray {
+    input x = UInt[8]
+    output g = Bits[8]
+    output back = UInt[8]
+    g := toGray(x)
+    back := fromGray(g)
+}
+
+module vEndianSwap {
+    input a = Bits[16]
+    output s = Bits[16]
+    s := endiannessSwap(a, 8)
+}
+
+module vAddCarry {
+    input a = UInt[8]
+    input b = UInt[8]
+    output sum = UInt[8]
+    output carry = Bool
+    sum := addWithCarry(a, b).sum
+    carry := addWithCarry(a, b).carry
+}
+
+module vLog2Floor {
+    input a = UInt[8]
+    output lf = UInt[3]
+    lf := log2Floor(a)
+}
+
+module vLog2Ceil {
+    input a = UInt[8]
+    output lc = UInt[4]
+    lc := log2Ceil(a)
+}
+
+module vSetFromFirstOne {
+    input a = Bits[8]
+    output s = Bits[8]
+    s := setFromFirstOne(a)
+}
+
+module vNapot {
+    input a = Bits[4]
+    output n = Bits[5]
+    n := napot(a)
+}
+
+module vScrap {
+    input a = Bits[8]
+    input sh = UInt[3]
+    output s = Bits[8]
+    s := shiftRightWithScrap(a, sh)
+}
+
+module vCountOneOnEach {
+    input a = Bits[4]
+    output c1 = UInt[3]
+    output c2 = UInt[3]
+    output c3 = UInt[3]
+    output c4 = UInt[3]
+    c1 := countOneOnEach(a).at(0, UInt.mk(None, literal(0)))
+    c2 := countOneOnEach(a).at(1, UInt.mk(None, literal(0)))
+    c3 := countOneOnEach(a).at(2, UInt.mk(None, literal(0)))
+    c4 := countOneOnEach(a).at(3, UInt.mk(None, literal(0)))
+}
+
+// ===== 打印全部模块（供 verify.py 抓取）=====
+println(moduleTreeVL(vReverse.create.tree))
+println(moduleTreeVL(vReverseU.create.tree))
+println(moduleTreeVL(vPropLsb.create.tree))
+println(moduleTreeVL(vPropMsb.create.tree))
+println(moduleTreeVL(vCountOne.create.tree))
+println(moduleTreeVL(vCountOneU.create.tree))
+println(moduleTreeVL(vClz.create.tree))
+println(moduleTreeVL(vCtz.create.tree))
+println(moduleTreeVL(vMajority.create.tree))
+println(moduleTreeVL(vUintToOh.create.tree))
+println(moduleTreeVL(vUintToOhM1.create.tree))
+println(moduleTreeVL(vOhToUInt.create.tree))
+println(moduleTreeVL(vOhLegal.create.tree))
+println(moduleTreeVL(vOhFirst.create.tree))
+println(moduleTreeVL(vOhLast.create.tree))
+println(moduleTreeVL(vOhRR.create.tree))
+println(moduleTreeVL(vPriorityMux.create.tree))
+println(moduleTreeVL(vMuxOH.create.tree))
+println(moduleTreeVL(vOhMuxOr.create.tree))
+println(moduleTreeVL(vMinMax.create.tree))
+println(moduleTreeVL(vClamp.create.tree))
+println(moduleTreeVL(vGray.create.tree))
+println(moduleTreeVL(vEndianSwap.create.tree))
+println(moduleTreeVL(vAddCarry.create.tree))
+println(moduleTreeVL(vLog2Floor.create.tree))
+println(moduleTreeVL(vLog2Ceil.create.tree))
+println(moduleTreeVL(vSetFromFirstOne.create.tree))
+println(moduleTreeVL(vNapot.create.tree))
+println(moduleTreeVL(vScrap.create.tree))
+println(moduleTreeVL(vCountOneOnEach.create.tree))

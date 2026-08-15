@@ -1,0 +1,130 @@
+// ============================================================
+// HDL Example 16: utils — 组合逻辑工具（SpinalHDL lib/Utils 复刻）
+// ============================================================
+
+module utilsRev {
+    let a = Bits[8]
+    let r = Bits[8]
+    r := reverse(a)
+    let u = UInt[8]
+    let ru = UInt[8]
+    ru := reverse(u)
+    let p = Bits[8]
+    p := propagateOnes(a, false)
+    let p2 = Bits[8]
+    p2 := propagateOnes(a, true)
+}
+println("=== 16a: reverse / propagateOnes ===")
+println(moduleTreeVL(utilsRev.create.tree))
+
+module utilsCount {
+    let a = Bits[8]
+    let c = UInt[4]
+    c := countOne(a)
+    let u = UInt[8]
+    let cu = UInt[4]
+    cu := countOneUInt(u)
+    let bs = cons(Bool.mk(None, a.zz_expr), nil)
+    let v = UInt[4]
+    v := countOne(a)
+    let cl = UInt[4]
+    cl := countLeadingZeroes(a)
+    let ct = UInt[4]
+    ct := countTrailingZeroes(a)
+    let mv = Bool
+    mv := majorityVote(a)
+}
+println("=== 16b: countOne / clz / ctz / majorityVote ===")
+println(moduleTreeVL(utilsCount.create.tree))
+
+module utilsOh {
+    let a = Bits[8]
+    let oh = Bits[8]
+    oh := uintToOh(a.slice[2, 0].asUInt)
+    let idx = UInt[3]
+    idx := ohToUInt(oh)
+    let legal = Bool
+    legal := ohIsLegal(oh)
+    let first = Bits[8]
+    first := ohMaskingFirst(oh)
+    let last = Bits[8]
+    last := ohMaskingLast(oh)
+}
+println("=== 16c: uintToOh / ohToUInt / ohIsLegal / ohMasking ===")
+println(moduleTreeVL(utilsOh.create.tree))
+
+module utilsMux {
+    let sel = Bits[4]
+    let a = UInt[8]
+    let b = UInt[8]
+    let c = UInt[8]
+    let d = UInt[8]
+    let dflt = UInt[8]
+    let pm = UInt[8]
+    pm := priorityMux(sel, cons(a, cons(b, cons(c, cons(d, nil)))), dflt)
+    let m = UInt[8]
+    m := muxOH(sel, cons(a, cons(b, cons(c, cons(d, nil)))))
+    let o = UInt[8]
+    o := ohMuxOr(sel, cons(a, cons(b, cons(c, cons(d, nil)))))
+    let mn = UInt[8]
+    mn := min(a, b)
+    let mx = UInt[8]
+    mx := max(a, b)
+    let cl = UInt[8]
+    cl := clamp(a, b, c)
+}
+println("=== 16d: priorityMux / muxOH / ohMuxOr / min / max / clamp ===")
+println(moduleTreeVL(utilsMux.create.tree))
+
+module utilsGray {
+    let x = UInt[8]
+    let g = Bits[8]
+    g := toGray(x)
+    let back = UInt[8]
+    back := fromGray(g)
+    let es = Bits[16]
+    let sw = Bits[16]
+    sw := endiannessSwap(es, 8)
+    let swu = UInt[16]
+    swu := endiannessSwapUInt(es.asUInt, 8)
+}
+println("=== 16e: gray / endiannessSwap ===")
+println(moduleTreeVL(utilsGray.create.tree))
+
+module utilsReg {
+    let a = UInt[8]
+    let d1 = UInt[8]
+    d1 := delayUInt(a, 2)
+    let h = UInt[8]
+    h := historyUInt(a, 3).at(0, UInt.mk(None, literal(0)))
+    let ev = Bool
+    let de = Bool
+    de := delayEvent(ev, 4)
+    let tm = timeout(8)
+    let ts = Bool
+    ts := tm.state
+}
+println("=== 16f: delay / history / delayEvent / timeout ===")
+println(moduleTreeVL(utilsReg.create.tree))
+
+module utilsCounters {
+    let cm = counterMod(10)
+    let cmv = UInt[4]
+    cmv := cm.value
+    let cmo = Bool
+    cmo := cm.willOverflow
+    let en = Bool
+    let ci = counterIncMod(10, en)
+    let ud = counterUpDown(10, en, cmo)
+    let dc = downCounter(10)
+    let ohc = oneHotCounter(4)
+    let jc = johnsonCounter(4)
+    let jv = Bits[4]
+    jv := jc.value
+    let ohv = Bits[4]
+    ohv := ohc.value
+    let udv = UInt[4]
+    udv := ud.value
+}
+println("=== 16g: counter 家族 ===")
+println(moduleTreeVL(utilsCounters.create.tree))

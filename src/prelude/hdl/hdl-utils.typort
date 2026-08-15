@@ -1,0 +1,1075 @@
+// ============================================================
+//  HDL Utils — SpinalHDL lib/Utils.scala + lib/Counter.scala 复刻
+//
+//  覆盖（SpinalHDL 对应 API 见注释）：
+//    Reverse / PropagateOnes / CountOne / CountOneOnEach / SetCount /
+//    ClearCount / UIntToOh / UIntToOhMinusOne / OHToUInt / OH.isLegal /
+//    OHMasking.first/last/roundRobin / PriorityMux / MuxOH / OhMux /
+//    Min / Max / Clamp / toGray / fromGray / EndiannessSwap /
+//    AddWithCarry / CountLeadingZeroes / CountTrailingZeroes /
+//    MajorityVote / SetFromFirstOne / Napot / Shift.rightWithScrap /
+//    Log2.ceil / Log2.floor / Delay / DelayEvent / Timeout / History /
+//    whenIndexed / whenMasked
+//    Counter(stateCount/inc/clear) / CounterUpDown / DownCounter /
+//    OneHotCounter / JohnsonCounter
+//
+//  组合逻辑组件全部在 Expr 层构造（Expr 无类型约束，宽度由外层
+//  UInt.mk/Bits.mk 包装决定，Verilog 上下文推导）；泛型值操作（对
+//  UInt/Bits/SInt/Bool 通吃）采用 MuxExpr 模式：struct Wrapper[T] +
+//  每个具体类型的 Into[T] impl，在 impl 内 T 具体化、字段可直取。
+// ============================================================
+
+// ============================================================
+// 元级 Nat 工具（编译期纯函数）
+// ============================================================
+
+def metaPow2(n: Nat): Nat = match n {
+    case zero => 1
+    case succ(t) => metaPow2(t) + metaPow2(t)
+}
+
+def metaDiv2(x: Nat): Nat = match x {
+    case zero => 0
+    case succ(zero) => 0
+    case succ(succ(t)) => succ(metaDiv2 t)
+}
+
+// x >> n （编译期）
+def metaShiftR(x: Nat, n: Nat): Nat = match n {
+    case zero => x
+    case succ(t) => metaShiftR(metaDiv2 x, t)
+}
+
+// (x >> i) & 1 —— x 的第 i 位是否为 1
+def metaBitTest(x: Nat, i: Nat): Boolean = is_odd (metaShiftR(x, i))
+
+// metaDiv：正确的 Nat 除法（既有 nat_div_helper 在整除时少 1）
+def metaDiv(x: Nat, y: Nat): Nat = match x {
+    case zero => zero
+    case succ(_) =>
+        match y {
+            case zero => x
+            case succ(_) =>
+                let sub = nat_sub x y;
+                succ (metaDiv sub y)
+        }
+}
+
+// ============================================================
+// Expr 级构造辅助
+// ============================================================
+
+// catBits(idx, w, e) = {e[idx], e[idx+1], ..., e[w-1]}（MSB 在左）
+def catBits(idx: Nat, w: Nat, e: Expr): Expr = match w {
+    case zero => literal(0)
+    case succ(t) =>
+        let last = nat_eq(idx, t);
+        match last {
+            case true => bitsel(e, literal(idx))
+            case false => binary(bitsel(e, literal(idx)), "##", catBits(idx + 1, succ t, e))
+        }
+}
+
+// orFrom(idx, w, e) = e[idx] | e[idx+1] | ... | e[w-1]
+def orFrom(idx: Nat, w: Nat, e: Expr): Expr = match w {
+    case zero => unary("!", literal(1))
+    case succ(t) =>
+        let last = nat_eq(idx, t);
+        match last {
+            case true => bitsel(e, literal(idx))
+            case false => binary(bitsel(e, literal(idx)), "|", orFrom(idx + 1, succ t, e))
+        }
+}
+
+// catVecBools(v) = {v[0], v[1], ..., v[w-1]}（Vec[Bool] → Bits Expr）
+def catVecBools[width: Nat](v: Vec[Bool] width): Expr = match v {
+    case nil => literal(0)
+    case cons(h, t) =>
+        match t {
+            case nil => h.zz_expr
+            case _ => binary(h.zz_expr, "##", catVecBools t)
+        }
+}
+
+// nthExpr(vals, k)：Vec[Expr] 的第 k 个元素（越界返回 0）
+def nthExpr[width: Nat](vals: Vec[Expr] width, k: Nat): Expr = match vals {
+    case nil => literal(0)
+    case cons(h, t) => match k {
+        case zero => h
+        case succ(m) => nthExpr(t, m)
+    }
+}
+
+// clzFrom(p, w, e, acc)：位 p 起向下（p = w-1 .. 0）的优先链；
+// 位 p 为 1 → (w-1-p) 个前导 0。
+def clzFrom(p: Nat, w: Nat, e: Expr, acc: Expr): Expr = match p {
+    case zero => Expr.mux(bitsel(e, literal(0)), literal(w - 1), acc)
+    case succ(q) => Expr.mux(bitsel(e, literal(p)), literal((w - 1) - p), clzFrom(q, w, e, acc))
+}
+
+// floorFrom(p, e, acc)：e[p] 为 1 → p（索引优先链）
+def floorFrom(p: Nat, e: Expr, acc: Expr): Expr = match p {
+    case zero => Expr.mux(bitsel(e, literal(0)), literal(0), acc)
+    case succ(q) => Expr.mux(bitsel(e, literal(p)), literal(p), floorFrom(q, e, acc))
+}
+// ============================================================
+//  Reverse — SpinalHDL Reverse（位反转，位宽不变）
+// ============================================================
+
+// reverseBitsExpr(w, e) = {e[0], e[1], ..., e[w-1]}
+def reverseBitsExpr(w: Nat, e: Expr): Expr = match w {
+    case zero => literal(0)
+    case succ(t) => catBits(0, succ t, e)
+}
+
+struct ReverseExpr[T: Type 0, width: Nat] {
+    value: T
+}
+
+def reverse[T: Type 0, width: Nat](value: T): ReverseExpr[T, width] =
+    ReverseExpr.mk[T, width](value)
+
+impl[width: Nat] Into[UInt[width]] for ReverseExpr[UInt[width], width] {
+    def into: UInt[width] = UInt.mk(None, reverseBitsExpr(width, this.value.zz_expr))
+}
+
+impl[width: Nat] Into[Bits[width]] for ReverseExpr[Bits[width], width] {
+    def into: Bits[width] = Bits.mk(None, reverseBitsExpr(width, this.value.zz_expr))
+}
+
+impl[width: Nat] Into[SInt[width]] for ReverseExpr[SInt[width], width] {
+    def into: SInt[width] = SInt.mk(None, reverseBitsExpr(width, this.value.zz_expr))
+}
+
+impl Into[Bool] for ReverseExpr[Bool, 1] {
+    def into: Bool = this.value
+}
+
+// ============================================================
+//  PropagateOnes — SpinalHDL PropagateOnes
+//   toLsb: out[i] = OR(in[i..w-1])（从第一个 1 起向 LSB 全 1）
+//   toMsb: out[i] = OR(in[0..i])（从第一个 1 起向 MSB 全 1）
+// ============================================================
+
+// 注意：toLsb 的结果位序 —— out 第 i 位 = OR(in[i..w-1])，即
+// out 是 "从最高位往低位传播"，cat 时 MSB 先（out[0] 为 MSB）。
+// toLsb：out[i] = OR(in[i..w-1])；cat 从 MSB 起：{in[w-1], OR(in[w-2..w-1]), ..., OR(all)}
+def propLsbAt(i: Nat, w: Nat, e: Expr): Expr = match i {
+    case zero => orFrom(0, w, e)
+    case succ(q) => binary(orFrom(succ q, w, e), "##", propLsbAt(q, w, e))
+}
+
+def propagateOnesToLsbExpr(w: Nat, e: Expr): Expr =
+    propLsbAt(pred w, w, e)
+
+// toMsb：out[i] = OR(in[0..i])；cat 从 MSB 起：{OR(all), ..., OR(in[0..1]), in[0]}
+def propMsbAt(i: Nat, w: Nat, e: Expr): Expr = match i {
+    case zero => bitsel(e, literal(0))
+    case succ(q) => binary(orFrom(0, succ (succ q), e), "##", propMsbAt(q, w, e))
+}
+
+def propagateOnesToMsbExpr(w: Nat, e: Expr): Expr =
+    propMsbAt(pred w, w, e)
+
+struct PropagateOnesExpr[T: Type 0, width: Nat] {
+    value: T
+    toMsb: Boolean
+}
+
+def propagateOnes[T: Type 0, width: Nat](value: T, toMsb: Boolean): PropagateOnesExpr[T, width] =
+    PropagateOnesExpr.mk[T, width](value, toMsb)
+
+impl[width: Nat] Into[UInt[width]] for PropagateOnesExpr[UInt[width], width] {
+    def into: UInt[width] = match this.toMsb {
+        case true => UInt.mk(None, propagateOnesToMsbExpr(width, this.value.zz_expr))
+        case false => UInt.mk(None, propagateOnesToLsbExpr(width, this.value.zz_expr))
+    }
+}
+
+impl[width: Nat] Into[Bits[width]] for PropagateOnesExpr[Bits[width], width] {
+    def into: Bits[width] = match this.toMsb {
+        case true => Bits.mk(None, propagateOnesToMsbExpr(width, this.value.zz_expr))
+        case false => Bits.mk(None, propagateOnesToLsbExpr(width, this.value.zz_expr))
+    }
+}
+
+impl[width: Nat] Into[SInt[width]] for PropagateOnesExpr[SInt[width], width] {
+    def into: SInt[width] = match this.toMsb {
+        case true => SInt.mk(None, propagateOnesToMsbExpr(width, this.value.zz_expr))
+        case false => SInt.mk(None, propagateOnesToLsbExpr(width, this.value.zz_expr))
+    }
+}
+
+// ============================================================
+//  CountOne / SetCount / ClearCount / CountOneOnEach
+//  结果宽 = log2Up(w+1)。加法树每层用 {1'b0, lo} + hi 展宽（同 +^）。
+// ============================================================
+
+// countOnesExpr(w, e)：w 位输入的 1 计数表达式（结果宽 log2Up(w)+1）
+def countOnesExprAt(base: Expr, off: Nat, w: Nat): Expr = match w {
+    case zero => literal(0)
+    case succ(zero) => bitsel(base, literal(off))
+    case succ(succ(_)) =>
+        let lo_w = div2Up w;
+        let hi_w = w - lo_w;
+        binary(binary(literal(0), "##", countOnesExprAt(base, off, lo_w)), "+",
+               countOnesExprAt(base, off + lo_w, hi_w))
+}
+
+def countOnesExpr(w: Nat, e: Expr): Expr =
+    countOnesExprAt(e, 0, w)
+
+def countOne[width: Nat](in: Bits[width]): UInt[log2Up(width + 1)] =
+    UInt.mk(None, countOnesExpr(width, in.zz_expr))
+
+def countOneUInt[width: Nat](in: UInt[width]): UInt[log2Up(width + 1)] =
+    UInt.mk(None, countOnesExpr(width, in.zz_expr))
+
+def countOneSInt[width: Nat](in: SInt[width]): UInt[log2Up(width + 1)] =
+    UInt.mk(None, countOnesExpr(width, in.zz_expr))
+
+// SetCount —— 一组 Bool 中为 1 的个数
+def setCount[width: Nat](in: Vec[Bool] width): UInt[log2Up(width + 1)] =
+    UInt.mk(None, countOnesExpr(width, catVecBools in))
+
+// ClearCount —— 一组 Bool 中为 0 的个数
+// clearCountVec(v)：取反后按位拼接（定义先于 clearCount，见下）
+def clearCountVec[width: Nat](v: Vec[Bool] width): Expr = match v {
+    case nil => literal(0)
+    case cons(h, t) =>
+        match t {
+            case nil => unary("!", h.zz_expr)
+            case _ => binary(unary("!", h.zz_expr), "##", clearCountVec t)
+        }
+}
+
+def clearCount[width: Nat](in: Vec[Bool] width): UInt[log2Up(width + 1)] =
+    UInt.mk(None, countOnesExpr(width, clearCountVec in))
+
+
+// CountOneOnEach —— 前 k 位（k=1..w）各自 countOne 组成的 Vec（下标 0 为全长）
+// 下标 0 = 前 1 位计数；下标 w-1 = 全宽计数（SpinalHDL CountOneOnEach）
+def countOneOnEachVec[width: Nat](w: Nat, k: Nat, e: Expr): Vec[UInt[log2Up(width + 1)]] w = match w {
+    case zero => nil
+    case succ(t) =>
+        cons (UInt.mk[log2Up(width + 1)](None, countOnesExprAt(e, 0, succ k))) (countOneOnEachVec(t, succ k, e))
+}
+
+def countOneOnEach[width: Nat](in: Bits[width]): Vec[UInt[log2Up(width + 1)]] width =
+    match in {
+        case _ => countOneOnEachVec(width, 0, in.zz_expr)
+    }
+
+// ============================================================
+//  UIntToOh / UIntToOhMinusOne / OHToUInt / OH.isLegal
+// ============================================================
+
+// UIntToOh(value)：1 << value（宽 2^w，SpinalHDL 默认）
+def uintToOh[width: Nat](value: UInt[width]): Bits[metaPow2 width] =
+    Bits.mk(None, binary(literal(1), "<<", value.zz_expr))
+
+// UIntToOh(value, width)：指定输出宽度
+def uintToOhWidth[width: Nat, ow: Nat](value: UInt[width], ow: Nat): Bits[ow] =
+    Bits.mk(None, binary(literal(1), "<<", value.zz_expr))
+
+// UIntToOhMinusOne：value=2 给出 0011（(1<<value)-1）
+def uintToOhMinusOne[width: Nat](value: UInt[width]): Bits[metaPow2 width] =
+    Bits.mk(None, binary(binary(literal(1), "<<", value.zz_expr), "-", literal(1)))
+
+// ohBitOR(bitIdx, k, w, e)：输入线 k..w-1 中、其索引第 bitIdx 位为 1 的 OR 树
+def ohBitOR(bitIdx: Nat, k: Nat, w: Nat, e: Expr): Expr = match w {
+    case zero => unary("!", literal(1))
+    case succ(t) =>
+        let take = metaBitTest(k, bitIdx);
+        let acc = ohBitOR(bitIdx, k + 1, t, e);
+        match take {
+            case true => binary(bitsel(e, literal(k)), "|", acc)
+            case false => acc
+        }
+}
+
+// ohCat(bitIdx, e, w)：{ohBitOR(bitIdx), ..., ohBitOR(0)} —— 结果位按高→低拼接
+def ohCat(bitIdx: Nat, e: Expr, w: Nat): Expr = match bitIdx {
+    case zero => ohBitOR(0, 0, w, e)
+    case succ(t) => binary(ohBitOR(succ t, 0, w, e), "##", ohCat(t, e, w))
+}
+
+// OHToUInt(onehot)：onehot 编码 → 索引
+def ohToUInt[width: Nat](oneHot: Bits[width]): UInt[maxNat(1, log2Up width)] =
+    UInt.mk(None, ohCat(pred (maxNat(1, log2Up width)), oneHot.zz_expr, width))
+
+def ohMapBitOR(bitIdx: Nat, k: Nat, w: Nat, e: Expr, mapping: Vec[Nat] w): Expr = match w {
+    case zero => unary("!", literal(1))
+    case succ(t) =>
+        let acc = ohMapBitOR(bitIdx, k + 1, t, e, mapping.tail);
+        let m = mapping.head;
+        let take = metaBitTest(m, bitIdx);
+        match take {
+            case true => binary(bitsel(e, literal(k)), "|", acc)
+            case false => acc
+        }
+}
+
+def ohMapCat(bitIdx: Nat, e: Expr, w: Nat, mapping: Vec[Nat] w): Expr = match bitIdx {
+    case zero => ohMapBitOR(0, 0, w, e, mapping)
+    case succ(t) => binary(ohMapBitOR(succ t, 0, w, e, mapping), "##", ohMapCat(t, e, w, mapping))
+}
+
+// OHToUInt 带映射：输入线 k 编码为 mapping[k]
+def ohToUIntMapping[width: Nat, ow: Nat](oneHot: Bits[width], mapping: Vec[Nat] width): UInt[ow] =
+    UInt.mk(None, ohMapCat(pred ow, oneHot.zz_expr, width, mapping))
+
+// OH.isLegal：输入为合法 onehot（恰一位为 1）或全 0
+def ohEqAny(w: Nat, e: Expr): Expr = match w {
+    case zero => binary(e, "==", literal(0))
+    case succ(t) => binary(binary(e, "==", literal(metaPow2 t)), "|", ohEqAny(t, e))
+}
+
+def ohIsLegal[width: Nat](that: Bits[width]): Bool =
+    Bool.mk(None, ohEqAny(width, that.zz_expr))
+
+// ============================================================
+//  OHMasking — SpinalHDL OHMasking
+//  first(x) = x & ~(x-1)：保留最低位的 1
+//  last(x)  = reverse(first(reverse(x)))：保留最高位的 1
+//  roundRobin(requests, ohPriority)：环形优先级（纯组合）
+// ============================================================
+
+// first 的 Expr：x & ~(x-1)
+def ohFirstExpr(e: Expr): Expr =
+    binary(e, "&", unary("~", binary(e, "-", literal(1))))
+
+// last 的 Expr：x & (1 << log2Floor(x)) —— 保留最高位
+def ohLastExpr(w: Nat, e: Expr): Expr =
+    let pos = floorFrom(pred w, e, literal(0));
+    binary(e, "&", binary(literal(1), "<<", pos))
+
+struct OHMaskingExpr[T: Type 0, width: Nat] {
+    value: T
+    isLast: Boolean
+}
+
+def ohMaskingFirst[T: Type 0, width: Nat](value: T): OHMaskingExpr[T, width] =
+    OHMaskingExpr.mk[T, width](value, false)
+
+def ohMaskingLast[T: Type 0, width: Nat](value: T): OHMaskingExpr[T, width] =
+    OHMaskingExpr.mk[T, width](value, true)
+
+impl[width: Nat] Into[UInt[width]] for OHMaskingExpr[UInt[width], width] {
+    def into: UInt[width] = match this.isLast {
+        case true => UInt.mk(None, ohLastExpr(width, this.value.zz_expr))
+        case false => UInt.mk(None, ohFirstExpr(this.value.zz_expr))
+    }
+}
+
+impl[width: Nat] Into[Bits[width]] for OHMaskingExpr[Bits[width], width] {
+    def into: Bits[width] = match this.isLast {
+        case true => Bits.mk(None, ohLastExpr(width, this.value.zz_expr))
+        case false => Bits.mk(None, ohFirstExpr(this.value.zz_expr))
+    }
+}
+
+impl[width: Nat] Into[SInt[width]] for OHMaskingExpr[SInt[width], width] {
+    def into: SInt[width] = match this.isLast {
+        case true => SInt.mk(None, ohLastExpr(width, this.value.zz_expr))
+        case false => SInt.mk(None, ohFirstExpr(this.value.zz_expr))
+    }
+}
+
+// roundRobin(requests, ohPriority)：请求与优先级均为 onehot。
+//   double = req ## req; grant = double & ~(double - pri);
+//   result = grant[w-1:0] | grant[2w-1:w]
+def ohMaskingRoundRobinExpr(w: Nat, req: Expr, pri: Expr): Expr =
+    let dbl = binary(req, "##", req);
+    let grant = binary(dbl, "&", unary("~", binary(dbl, "-", pri)));
+    // (grant 低位) | (grant 高位)：掩码 + 移位，避免对表达式做 partsel
+    binary(binary(grant, "&", literal((metaPow2 w) - 1)), "|", binary(grant, ">>", literal(w)))
+
+def ohMaskingRoundRobin[width: Nat](requests: Bits[width], ohPriority: Bits[width]): Bits[width] =
+    Bits.mk(None, ohMaskingRoundRobinExpr(width, requests.zz_expr, ohPriority.zz_expr))
+
+def ohMaskingRoundRobinUInt[width: Nat](requests: UInt[width], ohPriority: UInt[width]): UInt[width] =
+    UInt.mk(None, ohMaskingRoundRobinExpr(width, requests.zz_expr, ohPriority.zz_expr))
+
+// ============================================================
+//  PriorityMux — SpinalHDL PriorityMux
+//  sel 的 LSB 优先级最高：sel(0) ? v0 : sel(1) ? v1 : ... : dflt
+// ============================================================
+
+struct PriorityMuxExpr[T: Type 0, width: Nat] {
+    sel: Bits[width]
+    vals: Vec[T] width
+    dflt: T
+}
+
+def priorityMux[T: Type 0, width: Nat](sel: Bits[width], vals: Vec[T] width, dflt: T): PriorityMuxExpr[T, width] =
+    PriorityMuxExpr.mk[T, width](sel, vals, dflt)
+
+// priorityMuxExprAt：优先链，第 k 个元素对应 sel 第 k 位
+// width = sel 位宽，w = vals 长度（两个独立隐式参数，递归时各自细化）
+def priorityMuxExprAt[width: Nat, w: Nat](k: Nat, sel: Bits[width], vals: Vec[Expr] w, dflt: Expr): Expr =
+    match vals {
+        case nil => dflt
+        case cons(v, rest) =>
+            Expr.mux(bitsel(sel.zz_expr, literal(k)), v, priorityMuxExprAt(k + 1, sel, rest, dflt))
+    }
+
+def priorityMuxExprImpl[width: Nat](sel: Bits[width], vals: Vec[Expr] width, dflt: Expr): Expr =
+    priorityMuxExprAt(0, sel, vals, dflt)
+
+impl[width: Nat, vw: Nat] Into[UInt[vw]] for PriorityMuxExpr[UInt[vw], width] {
+    def into: UInt[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        UInt.mk(None, priorityMuxExprImpl(this.sel, es, this.dflt.zz_expr))
+}
+
+impl[width: Nat, vw: Nat] Into[Bits[vw]] for PriorityMuxExpr[Bits[vw], width] {
+    def into: Bits[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        Bits.mk(None, priorityMuxExprImpl(this.sel, es, this.dflt.zz_expr))
+}
+
+impl[width: Nat, vw: Nat] Into[SInt[vw]] for PriorityMuxExpr[SInt[vw], width] {
+    def into: SInt[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        SInt.mk(None, priorityMuxExprImpl(this.sel, es, this.dflt.zz_expr))
+}
+
+impl[width: Nat] Into[Bool] for PriorityMuxExpr[Bool, width] {
+    def into: Bool =
+        let es = this.vals.map(x => x.zz_expr);
+        Bool.mk(None, priorityMuxExprImpl(this.sel, es, this.dflt.zz_expr))
+}
+
+// ============================================================
+//  MuxOH / OhMux — SpinalHDL MuxOH（onehot 选值）与
+//  OhMux.or（onehot 掩码 OR：sel_k ? v_k : 0 的 OR）
+//  对合法 onehot 输入，优先链 ≡ 索引 mux（仅一位为 1）。
+// ============================================================
+
+struct MuxOHExpr[T: Type 0, width: Nat] {
+    oneHot: Bits[width]
+    vals: Vec[T] width
+}
+
+def muxOH[T: Type 0, width: Nat](oneHot: Bits[width], vals: Vec[T] width): MuxOHExpr[T, width] =
+    MuxOHExpr.mk[T, width](oneHot, vals)
+
+impl[width: Nat, vw: Nat] Into[UInt[vw]] for MuxOHExpr[UInt[vw], width] {
+    def into: UInt[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        UInt.mk(None, priorityMuxExprImpl(this.oneHot, es, nthExpr(es, 0)))
+}
+
+impl[width: Nat, vw: Nat] Into[Bits[vw]] for MuxOHExpr[Bits[vw], width] {
+    def into: Bits[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        Bits.mk(None, priorityMuxExprImpl(this.oneHot, es, nthExpr(es, 0)))
+}
+
+// OhMux.or：掩码 OR（第 k 个元素对应 oneHot 第 k 位）
+def ohMuxOrExprAt[width: Nat](k: Nat, oneHot: Expr, vals: Vec[Expr] width): Expr =
+    match vals {
+        case nil => unary("!", literal(1))
+        case cons(v, rest) =>
+            binary(Expr.mux(bitsel(oneHot, literal(k)), v, literal(0)), "|", ohMuxOrExprAt(k + 1, oneHot, rest))
+    }
+
+def ohMuxOrExpr[width: Nat](oneHot: Expr, vals: Vec[Expr] width): Expr =
+    ohMuxOrExprAt(0, oneHot, vals)
+
+struct OhMuxOrExpr[T: Type 0, width: Nat] {
+    oneHot: Bits[width]
+    vals: Vec[T] width
+}
+
+def ohMuxOr[T: Type 0, width: Nat](oneHot: Bits[width], vals: Vec[T] width): OhMuxOrExpr[T, width] =
+    OhMuxOrExpr.mk[T, width](oneHot, vals)
+
+impl[width: Nat, vw: Nat] Into[UInt[vw]] for OhMuxOrExpr[UInt[vw], width] {
+    def into: UInt[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        UInt.mk(None, ohMuxOrExpr(this.oneHot.zz_expr, es))
+}
+
+impl[width: Nat, vw: Nat] Into[Bits[vw]] for OhMuxOrExpr[Bits[vw], width] {
+    def into: Bits[vw] =
+        let es = this.vals.map(x => x.zz_expr);
+        Bits.mk(None, ohMuxOrExpr(this.oneHot.zz_expr, es))
+}
+
+// ============================================================
+//  Min / Max / Clamp
+// ============================================================
+
+struct MinMaxExpr[T: Type 0] {
+    a: T
+    b: T
+    isMin: Boolean
+}
+
+def min[T: Type 0](a: T, b: T): MinMaxExpr[T] = MinMaxExpr.mk[T](a, b, true)
+
+def max[T: Type 0](a: T, b: T): MinMaxExpr[T] = MinMaxExpr.mk[T](a, b, false)
+
+// clamp(num, low, high) = max(low, min(num, high))
+struct ClampExpr[T: Type 0] {
+    num: T
+    low: T
+    high: T
+}
+
+def clamp[T: Type 0](num: T, low: T, high: T): ClampExpr[T] =
+    ClampExpr.mk[T](num, low, high)
+
+impl[width: Nat] Into[UInt[width]] for MinMaxExpr[UInt[width]] {
+    def into: UInt[width] =
+        let lt = binary(this.a.zz_expr, "<", this.b.zz_expr);
+        match this.isMin {
+            case true => UInt.mk(None, Expr.mux(lt, this.a.zz_expr, this.b.zz_expr))
+            case false => UInt.mk(None, Expr.mux(lt, this.b.zz_expr, this.a.zz_expr))
+        }
+}
+
+impl[width: Nat] Into[SInt[width]] for MinMaxExpr[SInt[width]] {
+    def into: SInt[width] =
+        let lt = binary(this.a.zz_expr, "<", this.b.zz_expr);
+        match this.isMin {
+            case true => SInt.mk(None, Expr.mux(lt, this.a.zz_expr, this.b.zz_expr))
+            case false => SInt.mk(None, Expr.mux(lt, this.b.zz_expr, this.a.zz_expr))
+        }
+}
+
+impl[width: Nat] Into[UInt[width]] for ClampExpr[UInt[width]] {
+    def into: UInt[width] =
+        // m = min(num, high) = num < high ? num : high
+        let mExpr = Expr.mux(binary(this.num.zz_expr, "<", this.high.zz_expr), this.num.zz_expr, this.high.zz_expr);
+        // max(low, m) = low < m ? m : low
+        UInt.mk(None, Expr.mux(binary(this.low.zz_expr, "<", mExpr), mExpr, this.low.zz_expr))
+}
+
+impl[width: Nat] Into[SInt[width]] for ClampExpr[SInt[width]] {
+    def into: SInt[width] =
+        let mExpr = Expr.mux(binary(this.num.zz_expr, "<", this.high.zz_expr), this.num.zz_expr, this.high.zz_expr);
+        SInt.mk(None, Expr.mux(binary(this.low.zz_expr, "<", mExpr), mExpr, this.low.zz_expr))
+}
+
+// ============================================================
+//  Gray 编码 — SpinalHDL toGray / fromGray
+// ============================================================
+
+def toGray[width: Nat](value: UInt[width]): Bits[width] =
+    Bits.mk(None, binary(binary(value.zz_expr, ">>", literal(1)), "^", value.zz_expr))
+
+def toGraySInt[width: Nat](value: SInt[width]): Bits[width] =
+    Bits.mk(None, binary(binary(value.zz_expr, ">>", literal(1)), "^", value.zz_expr))
+
+// fromGrayExpr：out[i] = XOR(gray[i..w-1])；out[msb] = gray[msb]
+// fromGrayExprAt(i, n, e)：XOR(gray[i], ..., gray[i+n-1])，n 为剩余位数
+def fromGrayExprAt(i: Nat, n: Nat, e: Expr): Expr = match n {
+    case zero => literal(0)
+    case succ(zero) => bitsel(e, literal(i))
+    case succ(succ(t)) => binary(bitsel(e, literal(i)), "^", fromGrayExprAt(i + 1, succ t, e))
+}
+
+// fromGrayCat(i, w, e)：{out[w-1], ..., out[0]}（MSB 在左）
+// out[i] = XOR(g[i..w-1])，共 (w - i) 个元素
+def fromGrayCat(i: Nat, w: Nat, e: Expr): Expr = match i {
+    case zero => fromGrayExprAt(0, w, e)
+    case succ(t) => binary(fromGrayExprAt(succ t, w - (succ t), e), "##", fromGrayCat(t, w, e))
+}
+
+def fromGrayExpr(w: Nat, e: Expr): Expr = match w {
+    case zero => literal(0)
+    case succ(_) => fromGrayCat(pred w, w, e)
+}
+
+def fromGray[width: Nat](gray: Bits[width]): UInt[width] =
+    UInt.mk(None, fromGrayExpr(width, gray.zz_expr))
+
+// ============================================================
+//  EndiannessSwap — SpinalHDL EndiannessSwap（按 base 位宽交换组序）
+// ============================================================
+
+// swapGroups(g, groups, base, e)：结果第 g 组（从低）取第 (groups-1-g) 组
+// 结果第 g 组（从低）取源第 (groups-1-g) 组
+def swapGroups(g: Nat, groups: Nat, base: Nat, e: Expr): Expr = match g {
+    case zero =>
+        let src_lo = (groups - 1) * base;
+        partsel(e, literal(src_lo + base - 1), literal(src_lo))
+    case succ(t) =>
+        let src_lo = (groups - 1 - (succ t)) * base;
+        binary(partsel(e, literal(src_lo + base - 1), literal(src_lo)), "##", swapGroups(t, groups, base, e))
+}
+
+def endiannessSwap[width: Nat](that: Bits[width], base: Nat): Bits[width] =
+    match that {
+        case _ =>
+            Bits.mk(None, swapGroups(pred (metaDiv width base), metaDiv width base, base, that.zz_expr))
+    }
+
+def endiannessSwapUInt[width: Nat](that: UInt[width], base: Nat): UInt[width] =
+    match that {
+        case _ =>
+            UInt.mk(None, swapGroups(pred (metaDiv width base), metaDiv width base, base, that.zz_expr))
+    }
+
+// ============================================================
+//  AddWithCarry — SpinalHDL AddWithCarry：返回 (和, 进位)
+// ============================================================
+
+struct AddCarryResult[width: Nat] {
+    sum: UInt[width]
+    carry: Bool
+}
+
+def addWithCarry[width: Nat](left: UInt[width], right: UInt[width]): AddCarryResult[width] =
+    // sum = {1'b0, left} + right（赋给 width 位 → 自动截断为模和）
+    let temp = binary(binary(literal(0), "##", left.zz_expr), "+", right.zz_expr);
+    // carry = left > (2^w - 1 - right)（等价于和 ≥ 2^w）
+    let carry = binary(left.zz_expr, ">", binary(literal((metaPow2 width) - 1), "-", right.zz_expr));
+    AddCarryResult.mk(UInt.mk(None, temp), Bool.mk(None, carry))
+
+// ============================================================
+//  CountLeadingZeroes / CountTrailingZeroes（优先链实现）
+//  clz：从 MSB 数连续 0（最高 1 位位置从顶部数）
+// ============================================================
+
+
+def countLeadingZeroes[width: Nat](in: Bits[width]): UInt[log2Up(width + 1)] =
+    match in {
+        case _ =>
+            let w = width;
+            UInt.mk(None, clzFrom(pred w, w, in.zz_expr, literal(w)))
+    }
+
+// ctzFrom(k, n, e, acc)：LSB 优先链 —— e[k] ? k : 下一位置；n 为剩余位置数
+def ctzFrom(k: Nat, n: Nat, e: Expr, acc: Expr): Expr = match n {
+    case zero => acc
+    case succ(t) => Expr.mux(bitsel(e, literal(k)), literal(k), ctzFrom(k + 1, t, e, acc))
+}
+
+def countTrailingZeroes[width: Nat](in: Bits[width]): UInt[log2Up(width + 1)] =
+    match in {
+        case _ =>
+            let w = width;
+            UInt.mk(None, ctzFrom(0, w, in.zz_expr, literal(w)))
+    }
+
+// ============================================================
+//  MajorityVote — SpinalHDL MajorityVote：多数表决
+//  (CountOne(in) >= w/2+1)
+// ============================================================
+
+def majorityVote[width: Nat](in: Bits[width]): Bool =
+    let c = countOne(in);
+    Bool.mk(None, binary(c.zz_expr, ">=", literal(div2Up(width + 1))))
+
+// ============================================================
+//  SetFromFirstOne / Napot
+//  SetFromFirstOne(x)[i] = OR(x[0..i])（从 LSB 第一个 1 起向上全 1）
+//  Napot(x) = SetFromFirstOne(~x) << 1
+// ============================================================
+
+def setFromFirstOneExpr(w: Nat, e: Expr): Expr =
+    propagateOnesToMsbExpr(w, e)
+
+struct SetFromFirstOneExpr[T: Type 0, width: Nat] {
+    value: T
+}
+
+def setFromFirstOne[T: Type 0, width: Nat](value: T): SetFromFirstOneExpr[T, width] =
+    SetFromFirstOneExpr.mk[T, width](value)
+
+impl[width: Nat] Into[UInt[width]] for SetFromFirstOneExpr[UInt[width], width] {
+    def into: UInt[width] = UInt.mk(None, setFromFirstOneExpr(width, this.value.zz_expr))
+}
+
+impl[width: Nat] Into[Bits[width]] for SetFromFirstOneExpr[Bits[width], width] {
+    def into: Bits[width] = Bits.mk(None, setFromFirstOneExpr(width, this.value.zz_expr))
+}
+
+def napot[width: Nat](that: Bits[width]): Bits[width + 1] =
+    Bits.mk(None, binary(setFromFirstOneExpr(width, unary("~", that.zz_expr)), "<<", literal(1)))
+
+// ============================================================
+//  Log2.ceil / Log2.floor —— UInt 的对数（结果 UInt）
+//  floor = 最高 1 位的位置；ceil = floor + (非 2 的幂 ? 1 : 0)
+// ============================================================
+
+// log2Floor：最高 1 位的位置（x=0 → 0）
+def log2Floor[width: Nat](x: UInt[width]): UInt[log2Up width] =
+    match x {
+        case _ =>
+            let w = width;
+            UInt.mk(None, floorFrom(pred w, x.zz_expr, literal(0)))
+    }
+
+def log2Ceil[width: Nat](x: UInt[width]): UInt[log2Up(width) + 1] =
+    let f = log2Floor(x);
+    let notPow2 = binary(binary(x.zz_expr, "&", binary(x.zz_expr, "-", literal(1))), "!=", literal(0));
+    UInt.mk(None, binary(f.zz_expr, "+", Expr.mux(notPow2, literal(1), literal(0))))
+
+// ============================================================
+//  Shift.rightWithScrap — SpinalHDL Shift.rightWithScrap
+//  变量右移，被移出的位累积到结果 LSB（忠实复刻 SpinalHDL 结构）
+// ============================================================
+
+def scrapCascade(s: Nat, sh: Expr, logic: Expr, scrapAcc: Expr): Expr = match s {
+    case zero => binary(logic, "|", scrapAcc)
+    case succ(t) =>
+        let shiftAmt = metaPow2 t;
+        // low = logic 的低 shiftAmt 位（掩码方式，避免对表达式 partsel）
+        let low = binary(logic, "&", literal((metaPow2 shiftAmt) - 1));
+        let scrapBit = binary(bitsel(sh, literal(t)), "&&", binary(low, "!=", literal(0)));
+        let newScrap = binary(scrapAcc, "|", scrapBit);
+        let logicNext = binary(Expr.mux(bitsel(sh, literal(t)), binary(logic, ">>", literal(shiftAmt)), logic), "|", logic);
+        scrapCascade(t, sh, logicNext, newScrap)
+}
+
+def shiftRightWithScrap[width: Nat, sw: Nat](that: Bits[width], sh: UInt[sw]): Bits[width] =
+    Bits.mk(None, scrapCascade(sw, sh.zz_expr, that.zz_expr, literal(0)))
+
+
+// ============================================================
+//  Delay — SpinalHDL Delay（周期延迟寄存器链）
+//  内部寄存器命名 "delay_<i>" / "history_<i>"
+// ============================================================
+
+// delayUInt / delayBits / delaySInt / delayBool：n 拍延迟（按类型）
+def delayUInt[w: Nat](that: UInt[w], n: Nat): UInt[w] = match n {
+    case zero => that
+    case succ(t) =>
+        let r = newUIntRegNamed("delay_" + nat_to_dec(n), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        delayUInt(r, t)
+}
+
+def delayBits[w: Nat](that: Bits[w], n: Nat): Bits[w] = match n {
+    case zero => that
+    case succ(t) =>
+        let r = newBitsRegNamed("delay_" + nat_to_dec(n), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        delayBits(r, t)
+}
+
+def delaySInt[w: Nat](that: SInt[w], n: Nat): SInt[w] = match n {
+    case zero => that
+    case succ(t) =>
+        let r = newSIntRegNamed("delay_" + nat_to_dec(n), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        delaySInt(r, t)
+}
+
+def delayBool(that: Bool, n: Nat): Bool = match n {
+    case zero => that
+    case succ(t) =>
+        let r = newBoolRegNamed("delay_" + nat_to_dec(n));
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        delayBool(r, t)
+}
+
+// History —— 0..n-1 拍延迟序列（Vec，下标 0 为最新）
+def historyUInt[w: Nat](that: UInt[w], n: Nat): Vec[UInt[w]] n = match n {
+    case zero => nil
+    case succ(t) =>
+        let r = newUIntRegNamed("history_" + nat_to_dec(n), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        cons(that, historyUInt(r, t))
+}
+
+def historyBits[w: Nat](that: Bits[w], n: Nat): Vec[Bits[w]] n = match n {
+    case zero => nil
+    case succ(t) =>
+        let r = newBitsRegNamed("history_" + nat_to_dec(n), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        cons(that, historyBits(r, t))
+}
+
+def historySInt[w: Nat](that: SInt[w], n: Nat): Vec[SInt[w]] n = match n {
+    case zero => nil
+    case succ(t) =>
+        let r = newSIntRegNamed("history_" + nat_to_dec(n), w);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        cons(that, historySInt(r, t))
+}
+
+def historyBool(that: Bool, n: Nat): Vec[Bool] n = match n {
+    case zero => nil
+    case succ(t) =>
+        let r = newBoolRegNamed("history_" + nat_to_dec(n));
+        let _ = createSignalExpr("", regAssign(r.zz_expr, that.zz_expr));
+        cons(that, historyBool(r, t))
+}
+
+// ============================================================
+//  DelayEvent — SpinalHDL DelayEvent（延迟 N 拍后输出一个脉冲）
+// ============================================================
+
+// 结果：event 拉高后第 cycle 拍输出一个脉冲（cycle >= 1）
+def delayEvent[bn: BindingName](event: Bool, cycle: Nat): Bool =
+    let cw = maxNat(1, log2Up cycle);
+    let run = newBoolRegInitNatNamed(bn.name + "_run", 0);
+    let cnt = newUIntRegInitNatNamed(bn.name + "_cnt", cw, 0);
+    let ovf = binary(cnt.zz_expr, "==", literal(pred cycle));
+    // 优先级：event > overflow > 递增（与 SpinalHDL clear 优先一致）
+    let _ = whenBegin(ovf);
+    let _ = createSignalExpr("", regAssign(run.zz_expr, literal(0)));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(event.zz_expr);
+    let _ = createSignalExpr("", regAssign(run.zz_expr, literal(1)));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(unary("!", event.zz_expr), "&&", unary("!", ovf)));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, binary(cnt.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    Bool.mk(None, binary(run.zz_expr, "&&", ovf))
+
+// ============================================================
+//  Timeout — SpinalHDL Timeout（limit 拍后 state 置 1；clearWhen 复位）
+// ============================================================
+
+struct TimeoutHandle[bn_name: String, cw: Nat] {
+    state: Bool
+    cnt: UInt[cw]
+    limit: Nat
+}
+
+impl[bn_name: String, cw: Nat] TimeoutHandle[bn_name, cw] {
+    // 复位计时器与状态
+    def clear(): Unit =
+        let _ = createSignalExpr("", regAssign(this.state.zz_expr, literal(0)));
+        let _ = createSignalExpr("", regAssign(this.cnt.zz_expr, literal(0)));
+        unit
+    def clearWhen(cond: Bool): TimeoutHandle[bn_name, cw] =
+        let _ = whenBegin(cond.zz_expr);
+        let _ = createSignalExpr("", regAssign(this.state.zz_expr, literal(0)));
+        let _ = createSignalExpr("", regAssign(this.cnt.zz_expr, literal(0)));
+        let _ = whenEnd(unit);
+        this
+}
+
+// timeout(limit)：limit 拍后 state 置 1（limit >= 1）；计数器 free-run
+def timeout[bn: BindingName](limit: Nat): TimeoutHandle[bn.name, maxNat(1, log2Up limit)] =
+    let cw = maxNat(1, log2Up limit);
+    let state = newBoolRegInitNatNamed(bn.name, 0);
+    let cnt = newUIntRegInitNatNamed(bn.name + "_cnt", cw, 0);
+    let ovf = binary(cnt.zz_expr, "==", literal(pred limit));
+    let _ = whenBegin(ovf);
+    let _ = createSignalExpr("", regAssign(state.zz_expr, literal(1)));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(unary("!", ovf));
+    let _ = createSignalExpr("", regAssign(cnt.zz_expr, binary(cnt.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    TimeoutHandle.mk[bn.name, maxNat(1, log2Up limit)](state, cnt, limit)
+
+// ============================================================
+//  whenIndexed / whenMasked — SpinalHDL whenIndexed / whenMasked
+//  对 Vec 的每个元素按索引/掩码条件执行 body（elaboration 期展开）
+// ============================================================
+
+def whenIndexedFrom[width: Nat, s: Nat, T: Type 0](k: Nat, things: Vec[T] width, sel: UInt[s], body: T -> Unit): Unit =
+    match things {
+        case nil => unit
+        case cons(h, t) =>
+            let _ = whenBegin(binary(sel.zz_expr, "==", literal(k)));
+            let _ = body(h);
+            let _ = whenEnd(unit);
+            whenIndexedFrom(k + 1, t, sel, body)
+    }
+
+def whenIndexed[width: Nat, s: Nat, T: Type 0](things: Vec[T] width, sel: UInt[s], body: T -> Unit): Unit =
+    whenIndexedFrom(0, things, sel, body)
+
+def whenMaskedFrom[width: Nat, w: Nat, T: Type 0](k: Nat, things: Vec[T] w, conds: Bits[width], body: T -> Unit): Unit =
+    match things {
+        case nil => unit
+        case cons(h, t) =>
+            let _ = whenBegin(bitsel(conds.zz_expr, literal(k)));
+            let _ = body(h);
+            let _ = whenEnd(unit);
+            whenMaskedFrom(k + 1, t, conds, body)
+    }
+
+def whenMasked[width: Nat, T: Type 0](things: Vec[T] width, conds: Bits[width], body: T -> Unit): Unit =
+    whenMaskedFrom(0, things, conds, body)
+
+// ============================================================
+//  Counter 家族 — SpinalHDL lib/Counter.scala
+//  counterMod(stateCount)        模 stateCount 自增（free-run）
+//  counterIncMod(stateCount, en) 使能自增
+//  counterUpDown(stateCount, inc, dec)  双向（同时时 dec 优先）
+//  downCounter(stateCount[, dec])      递减
+//  oneHotCounter(stateCount[, inc])    独热循环
+//  johnsonCounter(width[, inc])        Johnson（扭环）计数器
+// ============================================================
+
+struct CounterMod[w: Nat] {
+    value: UInt[w]
+    willOverflow: Bool
+}
+
+impl[w: Nat] CounterMod[w] {
+    def clear(): Unit =
+        let _ = createSignalExpr("", regAssign(this.value.zz_expr, literal(0)));
+        unit
+}
+
+// counterMod：0..stateCount-1 循环，每周期 +1；到顶回绕
+def counterMod[bn: BindingName](stateCount: Nat): CounterMod[maxNat(1, log2Up stateCount)] =
+    let w = maxNat(1, log2Up stateCount);
+    let v = newUIntRegInitNatNamed(bn.name, w, 0);
+    let ovf = binary(v.zz_expr, "==", literal(pred stateCount));
+    let _ = whenBegin(ovf);
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(unary("!", ovf));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    CounterMod.mk(v, Bool.mk(None, ovf))
+
+// counterIncMod：使能计数
+def counterIncMod[bn: BindingName](stateCount: Nat, enable: Bool): CounterMod[maxNat(1, log2Up stateCount)] =
+    let w = maxNat(1, log2Up stateCount);
+    let v = newUIntRegInitNatNamed(bn.name, w, 0);
+    let ovf = binary(v.zz_expr, "==", literal(pred stateCount));
+    let _ = whenBegin(binary(enable.zz_expr, "&&", ovf));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(enable.zz_expr, "&&", unary("!", ovf)));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    CounterMod.mk(v, Bool.mk(None, binary(enable.zz_expr, "&&", ovf)))
+
+// counterUpDown：0..stateCount-1 双向；willOverflowIfInc / willUnderflowIfDec
+// （新版 SpinalHDL 语义：willOverflowIfInc = value==end，不随 inc 门控；
+//   willOverflow = inc(非 dec) && value==end）
+struct CounterUpDown[w: Nat] {
+    value: UInt[w]
+    willOverflowIfInc: Bool
+    willUnderflowIfDec: Bool
+    willOverflow: Bool
+    willUnderflow: Bool
+}
+
+impl[w: Nat] CounterUpDown[w] {
+    def clear(): Unit =
+        let _ = createSignalExpr("", regAssign(this.value.zz_expr, literal(0)));
+        unit
+}
+
+def counterUpDown[bn: BindingName](stateCount: Nat, inc: Bool, dec: Bool): CounterUpDown[maxNat(1, log2Up stateCount)] =
+    let w = maxNat(1, log2Up stateCount);
+    let v = newUIntRegInitNatNamed(bn.name, w, 0);
+    let top = binary(v.zz_expr, "==", literal(pred stateCount));
+    let bot = binary(v.zz_expr, "==", literal(0));
+    let incOnly = binary(inc.zz_expr, "&&", unary("!", dec.zz_expr));
+    let decOnly = binary(dec.zz_expr, "&&", unary("!", inc.zz_expr));
+    let _ = whenBegin(binary(incOnly, "&&", top));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(incOnly, "&&", unary("!", top)));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(decOnly, "&&", bot));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(pred stateCount)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(decOnly, "&&", unary("!", bot)));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "-", literal(1))));
+    let _ = whenEnd(unit);
+    CounterUpDown.mk(v,
+        Bool.mk(None, top),
+        Bool.mk(None, bot),
+        Bool.mk(None, binary(incOnly, "&&", top)),
+        Bool.mk(None, binary(decOnly, "&&", bot)))
+
+// downCounter：从 stateCount-1 递减到 0 循环；willOverflow = value == 0
+def downCounter[bn: BindingName](stateCount: Nat): CounterMod[maxNat(1, log2Up stateCount)] =
+    let w = maxNat(1, log2Up stateCount);
+    let v = newUIntRegInitNatNamed(bn.name, w, pred stateCount);
+    let bot = binary(v.zz_expr, "==", literal(0));
+    let _ = whenBegin(bot);
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(pred stateCount)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(unary("!", bot));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "-", literal(1))));
+    let _ = whenEnd(unit);
+    CounterMod.mk(v, Bool.mk(None, bot))
+
+// downCounterInc：递减使能版
+def downCounterInc[bn: BindingName](stateCount: Nat, dec: Bool): CounterMod[maxNat(1, log2Up stateCount)] =
+    let w = maxNat(1, log2Up stateCount);
+    let v = newUIntRegInitNatNamed(bn.name, w, pred stateCount);
+    let bot = binary(v.zz_expr, "==", literal(0));
+    let _ = whenBegin(binary(dec.zz_expr, "&&", bot));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(pred stateCount)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(dec.zz_expr, "&&", unary("!", bot)));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "-", literal(1))));
+    let _ = whenEnd(unit);
+    CounterMod.mk(v, Bool.mk(None, binary(dec.zz_expr, "&&", bot)))
+
+// oneHotCounter：stateCount 位独热循环，init 位 0；willOverflow = msb
+struct OneHotCounter[w: Nat] {
+    value: Bits[w]
+    willOverflow: Bool
+}
+
+impl[w: Nat] OneHotCounter[w] {
+    def clear(): Unit =
+        let _ = createSignalExpr("", regAssign(this.value.zz_expr, literal(1)));
+        unit
+}
+
+def oneHotCounter[bn: BindingName](stateCount: Nat): OneHotCounter[stateCount] =
+    let v = newBitsRegInitNatNamed(bn.name, stateCount, 1);
+    let ovf = binary(bitsel(v.zz_expr, literal(pred stateCount)), "==", literal(1));
+    let _ = whenBegin(ovf);
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(1)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(unary("!", ovf));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "<<", literal(1))));
+    let _ = whenEnd(unit);
+    OneHotCounter.mk(v, Bool.mk(None, ovf))
+
+def oneHotCounterInc[bn: BindingName](stateCount: Nat, inc: Bool): OneHotCounter[stateCount] =
+    let v = newBitsRegInitNatNamed(bn.name, stateCount, 1);
+    let ovf = binary(bitsel(v.zz_expr, literal(pred stateCount)), "==", literal(1));
+    let _ = whenBegin(binary(inc.zz_expr, "&&", ovf));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(1)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(inc.zz_expr, "&&", unary("!", ovf)));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(v.zz_expr, "<<", literal(1))));
+    let _ = whenEnd(unit);
+    OneHotCounter.mk(v, Bool.mk(None, binary(inc.zz_expr, "&&", ovf)))
+
+// johnsonCounter：width 位扭环计数（2*width 状态，自恢复）；
+// next = {v[w-2:0], !v[w-1]}；在 v[msb]&&!v[msb-1]（10..0）状态回 0
+struct JohnsonCounter[w: Nat] {
+    value: Bits[w]
+    willOverflow: Bool
+}
+
+def johnsonCounter[bn: BindingName](width: Nat): JohnsonCounter[width] =
+    let v = newBitsRegInitNatNamed(bn.name, width, 0);
+    let top2 = binary(bitsel(v.zz_expr, literal(pred width)), "&&", unary("!", bitsel(v.zz_expr, literal(pred (pred width)))));
+    let _ = whenBegin(top2);
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(unary("!", top2));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(partsel(v.zz_expr, literal(pred (pred width)), literal(0)), "##", unary("!", bitsel(v.zz_expr, literal(pred width))))));
+    let _ = whenEnd(unit);
+    JohnsonCounter.mk(v, Bool.mk(None, top2))
+
+def johnsonCounterInc[bn: BindingName](width: Nat, inc: Bool): JohnsonCounter[width] =
+    let v = newBitsRegInitNatNamed(bn.name, width, 0);
+    let top2 = binary(bitsel(v.zz_expr, literal(pred width)), "&&", unary("!", bitsel(v.zz_expr, literal(pred (pred width)))));
+    let _ = whenBegin(binary(inc.zz_expr, "&&", top2));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(binary(inc.zz_expr, "&&", unary("!", top2)));
+    let _ = createSignalExpr("", regAssign(v.zz_expr, binary(partsel(v.zz_expr, literal(pred (pred width)), literal(0)), "##", unary("!", bitsel(v.zz_expr, literal(pred width))))));
+    let _ = whenEnd(unit);
+    JohnsonCounter.mk(v, Bool.mk(None, binary(inc.zz_expr, "&&", top2)))
