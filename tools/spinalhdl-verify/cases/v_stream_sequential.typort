@@ -1,0 +1,96 @@
+// ============================================================
+// Stream 时序验证（L3，verify.py 时钟驱动）
+// 握手协议：push/pop 流经管线/FIFO，参考状态机逐拍比对。
+// ============================================================
+
+module vStreamM2s {
+    input push_valid = Bool
+    input push_payload = UInt[8]
+    output push_ready = Bool
+    output pop_valid = Bool
+    input pop_ready = Bool
+    output pop_payload = UInt[8]
+    let push = Stream.mk(push_valid, push_ready, push_payload)
+    let piped = streamM2sPipeUInt(push)
+    piped.ready := pop_ready
+    pop_valid := piped.valid
+    pop_payload := piped.payload
+}
+
+module vStreamFifo {
+    input push_valid = Bool
+    input push_payload = UInt[8]
+    output push_ready = Bool
+    output pop_valid = Bool
+    input pop_ready = Bool
+    output pop_payload = UInt[8]
+    output occ = UInt[3]
+    let push = Stream.mk(push_valid, push_ready, push_payload)
+    let pop = Stream.mk(pop_valid, pop_ready, pop_payload)
+    let _occ = streamFifoConnect[8][3][3](4, push, pop)
+    occ := _occ
+}
+
+module vStreamMux {
+    input sel = UInt[1]
+    input a_valid = Bool
+    input a_payload = UInt[8]
+    output a_ready = Bool
+    input b_valid = Bool
+    input b_payload = UInt[8]
+    output b_ready = Bool
+    output m_valid = Bool
+    input m_ready = Bool
+    output m_payload = UInt[8]
+    let sa = Stream.mk(a_valid, a_ready, a_payload)
+    let sb = Stream.mk(b_valid, b_ready, b_payload)
+    let m = streamMuxUInt(sel, cons(sa, cons(sb, nil)))
+    m.ready := m_ready
+    m_valid := m.valid
+    m_payload := m.payload
+}
+
+module vStreamArb {
+    input a_valid = Bool
+    input a_payload = UInt[8]
+    output a_ready = Bool
+    input b_valid = Bool
+    input b_payload = UInt[8]
+    output b_ready = Bool
+    output m_valid = Bool
+    input m_ready = Bool
+    output m_payload = UInt[8]
+    let sa = Stream.mk(a_valid, a_ready, a_payload)
+    let sb = Stream.mk(b_valid, b_ready, b_payload)
+    let m = streamArbiterLowerPriorityUInt(cons(sa, cons(sb, nil)))
+    m.ready := m_ready
+    m_valid := m.valid
+    m_payload := m.payload
+}
+
+module vStreamFork {
+    input in_valid = Bool
+    input in_payload = UInt[8]
+    output in_ready = Bool
+    output o0_valid = Bool
+    input o0_ready = Bool
+    output o0_payload = UInt[8]
+    output o1_valid = Bool
+    input o1_ready = Bool
+    output o1_payload = UInt[8]
+    let si = Stream.mk(in_valid, in_ready, in_payload)
+    let outs = streamForkUInt[2](si)
+    outs.at(0, si).ready := o0_ready
+    outs.at(1, si).ready := o1_ready
+    o0_valid := outs.at(0, si).valid
+    o0_payload := outs.at(0, si).payload
+    o1_valid := outs.at(1, si).valid
+    o1_payload := outs.at(1, si).payload
+}
+
+// ===== 打印全部模块 =====
+println(moduleTreeVL(vStreamM2s.create.tree))
+println(moduleTreeVL(vStreamFifo.create.tree))
+println(moduleTreeVL(vStreamMux.create.tree))
+println(moduleTreeVL(vStreamArb.create.tree))
+println(moduleTreeVL(vStreamFork.create.tree))

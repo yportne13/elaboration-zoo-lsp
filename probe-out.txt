@@ -1,0 +1,15 @@
+T_01-basics: 110.1674ms
+T_02-arithmetic: 247.7564ms
+T_03-bitwise: 183.7561ms
+T_04-compare: 133.1038ms
+T_05-bool: 106.4432ms
+T_06-select-cat: 161.8529ms
+T_07-registers: 104.5468ms
+T_08-control-flow: 115.0717ms
+T_09-hierarchy: 116.3513ms
+T_10-bundle: 209.9223ms
+T_11-memory: 104.8877ms
+T_12-arithmetic2: 216.9985ms
+T_13-inout: 75.9098ms
+T_14-counter: 55.1392ms
+T_15-output-reg: 84.1654ms

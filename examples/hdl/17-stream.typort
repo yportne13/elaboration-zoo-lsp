@@ -1,0 +1,150 @@
+// ============================================================
+// HDL Example 17: Stream 框架（SpinalHDL lib/Stream 复刻）
+//   m2sPipe / s2mPipe / halfPipe / throwWhen / haltWhen
+//   StreamFifo / StreamMux / StreamDemux / StreamArbiter / StreamFork
+//   Fragment（last）/ Flow
+// ============================================================
+
+module streamPipe {
+    let push = Stream.mk(newBoolNamed("push_valid"), newBoolNamed("push_ready"), newUIntNamed("push_data", 8))
+    let p1 = streamM2sPipeUInt(push)
+    let p2 = streamS2mPipeUInt(p1)
+    let outValid = Bool
+    let outData = UInt[8]
+    outValid := p2.valid
+    outData := p2.payload
+    let h1 = streamHalfPipeUInt(push)
+    let hValid = Bool
+    hValid := h1.valid
+    let tw = streamThrowWhenUInt(push, hValid)
+    let twValid = Bool
+    twValid := tw.valid
+    let hw = streamHaltWhenUInt(push, hValid)
+    let hwValid = Bool
+    hwValid := hw.valid
+}
+println("=== 17a: 管线原语 ===")
+println(moduleTreeVL(streamPipe.create.tree))
+
+module streamFifoEx {
+    let pushValid = Bool
+    let pushReady = Bool
+    let pushData = UInt[8]
+    let popValid = Bool
+    let popReady = Bool
+    let popData = UInt[8]
+    let push = Stream.mk(pushValid, pushReady, pushData)
+    let pop = Stream.mk(popValid, popReady, popData)
+    let occ = UInt[3]
+    occ := streamFifoConnect[8][3][3](4, push, pop)
+}
+println("=== 17b: StreamFifo ===")
+println(moduleTreeVL(streamFifoEx.create.tree))
+
+module streamMuxEx {
+    let aValid = Bool
+    let aReady = Bool
+    let aData = UInt[8]
+    let bValid = Bool
+    let bReady = Bool
+    let bData = UInt[8]
+    let sel = UInt[1]
+    let sa = Stream.mk(aValid, aReady, aData)
+    let sb = Stream.mk(bValid, bReady, bData)
+    let m = streamMuxUInt(sel, cons(sa, cons(sb, nil)))
+    let mValid = Bool
+    let mData = UInt[8]
+    mValid := m.valid
+    mData := m.payload
+    let mReady = Bool
+    m.ready := mReady
+}
+println("=== 17c: StreamMux ===")
+println(moduleTreeVL(streamMuxEx.create.tree))
+
+module streamDemuxEx {
+    let inValid = Bool
+    let inReady = Bool
+    let inData = UInt[8]
+    let sel = UInt[1]
+    let si = Stream.mk(inValid, inReady, inData)
+    let outs = streamDemuxUInt(si, sel, 2)
+    let o0Valid = Bool
+    let o0Data = UInt[8]
+    o0Valid := outs.at(0, si).valid
+    o0Data := outs.at(0, si).payload
+    let o1Valid = Bool
+    o1Valid := outs.at(1, si).valid
+}
+println("=== 17d: StreamDemux ===")
+println(moduleTreeVL(streamDemuxEx.create.tree))
+
+module streamArbEx {
+    let aValid = Bool
+    let aReady = Bool
+    let aData = UInt[8]
+    let bValid = Bool
+    let bReady = Bool
+    let bData = UInt[8]
+    let sa = Stream.mk(aValid, aReady, aData)
+    let sb = Stream.mk(bValid, bReady, bData)
+    let m = streamArbiterLowerPriorityUInt(cons(sa, cons(sb, nil)))
+    let mValid = Bool
+    let mData = UInt[8]
+    mValid := m.valid
+    mData := m.payload
+    let mReady = Bool
+    m.ready := mReady
+}
+println("=== 17e: StreamArbiter ===")
+println(moduleTreeVL(streamArbEx.create.tree))
+
+module streamForkEx {
+    let inValid = Bool
+    let inReady = Bool
+    let inData = UInt[8]
+    let si = Stream.mk(inValid, inReady, inData)
+    let outs = streamForkUInt[2](si)
+    let o0Valid = Bool
+    let o1Valid = Bool
+    let o0Data = UInt[8]
+    o0Valid := outs.at(0, si).valid
+    o1Valid := outs.at(1, si).valid
+    o0Data := outs.at(0, si).payload
+}
+println("=== 17f: StreamFork ===")
+println(moduleTreeVL(streamForkEx.create.tree))
+
+module streamFragEx {
+    let inValid = Bool
+    let inReady = Bool
+    let inData = UInt[8]
+    let si = Stream.mk(inValid, inReady, inData)
+    let frag = streamToFragmentUInt(si)
+    let fragValid = Bool
+    let fragLast = Bool
+    fragValid := frag.valid
+    fragLast := frag.last
+    let back = fragmentToStreamUInt(frag)
+    let backValid = Bool
+    backValid := back.valid
+}
+println("=== 17g: Fragment ===")
+println(moduleTreeVL(streamFragEx.create.tree))
+
+module flowEx {
+    let fv = Bool
+    let fd = UInt[8]
+    let gv = Bool
+    let gd = UInt[8]
+    let sel = UInt[1]
+    let fa = Flow.mk(fd, fv)
+    let fb = Flow.mk(gd, gv)
+    let m = flowMuxUInt(sel, cons(fa, cons(fb, nil)))
+    let mValid = Bool
+    let mData = UInt[8]
+    mValid := m.valid
+    mData := m.payload
+}
+println("=== 17h: FlowMux ===")
+println(moduleTreeVL(flowEx.create.tree))

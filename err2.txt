@@ -1,0 +1,99 @@
+Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort (3442 bytes)
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort
+[LOG log] parser 0.0036693
+[LOG log] infer 4.422549
+note: === 11a: bundleDeep (三层嵌套命名) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort:46:10
+   │
+46 │ println("=== 11a: bundleDeep (三层嵌套命名) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module bundleDeep ();
+  wire [7:0] m_aw_lane_data;
+  wire m_aw_lane_last;
+  wire m_aw_valid;
+  wire [7:0] m_w_lane_data;
+  wire m_w_lane_last;
+  wire m_w_valid;
+  wire m_ready;
+  wire [7:0] s_aw_lane_data;
+  wire s_aw_lane_last;
+  wire s_aw_valid;
+  wire [7:0] s_w_lane_data;
+  wire s_w_lane_last;
+  wire s_w_valid;
+  wire s_ready;
+  assign m_aw_lane_data = s_aw_lane_data;
+  assign m_aw_lane_last = s_aw_lane_last;
+  assign m_aw_valid = s_aw_valid;
+  assign m_w_lane_data = s_w_lane_data;
+  assign m_w_lane_last = s_w_lane_last;
+  assign m_w_valid = s_w_valid;
+  assign m_ready = s_ready;
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort:47:9
+   │
+47 │ println(moduleTreeVL(bundleDeep.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === 11b: bundleParamDeep (参数化三层嵌套) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort:74:10
+   │
+74 │ println("=== 11b: bundleParamDeep (参数化三层嵌套) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module bundleParamDeep ();
+  wire [31:0] m_aw_lane_data;
+  wire m_aw_lane_last;
+  wire m_aw_valid;
+  wire m_ready;
+  wire [31:0] s_aw_lane_data;
+  wire s_aw_lane_last;
+  wire s_aw_valid;
+  wire s_ready;
+  assign m_aw_lane_data = s_aw_lane_data;
+  assign m_aw_lane_last = s_aw_lane_last;
+  assign m_aw_valid = s_aw_valid;
+  assign m_ready = s_ready;
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort:75:9
+   │
+75 │ println(moduleTreeVL(bundleParamDeep.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === 11c: bundleDeepMS (三层 master/slave 方向化) ===
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort:109:10
+    │
+109 │ println("=== 11c: bundleDeepMS (三层 master/slave 方向化) ===")
+    │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module bundleDeepMS (
+  output wire [7:0] master_aw_lane_data,
+  output wire master_aw_lane_last,
+  output wire master_aw_valid,
+  output wire [7:0] master_w_lane_data,
+  output wire master_w_lane_last,
+  output wire master_w_valid,
+  input wire master_ready,
+  input wire [7:0] slave_aw_lane_data,
+  input wire slave_aw_lane_last,
+  input wire slave_aw_valid,
+  input wire [7:0] slave_w_lane_data,
+  input wire slave_w_lane_last,
+  input wire slave_w_valid,
+  output wire slave_ready
+);
+  assign master_aw_lane_data = slave_aw_lane_data;
+  assign master_aw_lane_last = slave_aw_lane_last;
+  assign master_aw_valid = slave_aw_valid;
+  assign master_w_lane_data = slave_w_lane_data;
+  assign master_w_lane_last = slave_w_lane_last;
+  assign master_w_valid = slave_w_valid;
+  assign slave_ready = master_ready;
+endmodule
+    ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/11-bundle-deep.typort:110:9
+    │
+110 │ println(moduleTreeVL(bundleDeepMS.create.tree))
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 4.4320626

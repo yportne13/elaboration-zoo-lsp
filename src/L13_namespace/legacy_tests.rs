@@ -1508,6 +1508,22 @@ fn test_examples_hdl_dir() {
             "ohc <= 1;",                       // oneHotCounter 回绕
             "jc <= 0;",                        // johnsonCounter 回绕
         ]),
+        ("17-stream.typort", include_str!("../../examples/hdl/17-stream.typort"), &[
+            "reg p1_valid;",                   // m2sPipe valid 寄存器
+            "reg [7:0] p1_data;",             // m2sPipe payload 寄存器
+            "assign push_ready = (p1_valid || p1_ready)", // collapsBubble
+            "assign p1_ready = p2_ready_r;",  // s2mPipe ready 打拍
+            "assign push_ready = (h1_ready || !h1_valid)", // halfPipe 提前接受
+            "reg [2:0] fifo_ptrPush;",        // fifo 指针
+            "reg [7:0] fifo_mem [0:3];",      // fifo RAM
+            "assign fifo_push_ready = !((fifo_ptrPush ^ fifo_ptrPop) == 4)", // 满
+            "assign fifo_pop_valid = !(fifo_ptrPush == fifo_ptrPop)",       // 空
+            "assign aReady = ((aValid && !!", // arbiter LSB 优先
+            "assign bReady = ((bValid && !(!1 | aValid)) && arb_ready)",
+            "assign mData = ((aValid && !!",
+            "assign fragValid = inValid",      // Fragment：valid 直通
+            "assign fragLast = 1",           // Fragment last 位
+        ]),
     ];
 
     for (file, input, asserts) in examples {

@@ -341,7 +341,125 @@ SEQ_CASES = {
     "vTimeout":         ([("en", 1)], [("ts", 1)], RefTimeout, 60),
 }
 
-DEFAULT_CASES = ["v_utils_combinational.typort", "v_utils_sequential.typort"]
+
+
+# ---------------------------------------------------------------------------
+# Stream 时序参考状态机
+# ---------------------------------------------------------------------------
+class RefStreamM2s:
+    def reset_state(self):
+        self.rValid = 0
+        self.rData = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.rValid = 0
+            self.rData = 0
+        else:
+            in_ready = self.rValid or inputs["pop_ready"]
+            if in_ready:
+                self.rValid = 1 if inputs["push_valid"] else 0
+                self.rData = inputs["push_payload"]
+        return {"push_ready": 1 if (self.rValid or inputs["pop_ready"]) else 0,
+                "pop_valid": self.rValid,
+                "pop_payload": self.rData}
+
+class RefStreamFifo:
+    def reset_state(self):
+        self.pPush = 0
+        self.pPop = 0
+        self.mem = [0, 0, 0, 0]
+        self.depth = 4
+        self.pw = 3
+    def step(self, rst, inputs):
+        if rst:
+            self.pPush = 0
+            self.pPop = 0
+            self.mem = [0, 0, 0, 0]
+        else:
+            full = (self.pPush ^ self.pPop) == (1 << (self.pw - 1))
+            empty = self.pPush == self.pPop
+            push_ready = 0 if full else 1
+            pop_valid = 0 if empty else 1
+            push_fire = inputs["push_valid"] and push_ready
+            pop_fire = pop_valid and inputs["pop_ready"]
+            if push_fire:
+                self.mem[self.pPush & (self.depth - 1)] = inputs["push_payload"]
+                self.pPush = (self.pPush + 1) & 0x7
+            if pop_fire:
+                self.pPop = (self.pPop + 1) & 0x7
+            full = (self.pPush ^ self.pPop) == (1 << (self.pw - 1))
+            empty = self.pPush == self.pPop
+            return {"push_ready": 0 if full else 1,
+                    "pop_valid": 0 if empty else 1,
+                    "pop_payload": self.mem[self.pPop & (self.depth - 1)],
+                    "occ": (self.pPush - self.pPop) & 0x7}
+        full = (self.pPush ^ self.pPop) == (1 << (self.pw - 1))
+        empty = self.pPush == self.pPop
+        return {"push_ready": 0 if full else 1,
+                "pop_valid": 0 if empty else 1,
+                "pop_payload": self.mem[self.pPop & (self.depth - 1)],
+                "occ": (self.pPush - self.pPop) & 0x7}
+
+class RefStreamMux:
+    def reset_state(self):
+        pass
+    def step(self, rst, inputs):
+        sel = inputs["sel"]
+        av, bv = inputs["a_valid"], inputs["b_valid"]
+        ar = av and sel == 0
+        br = bv and sel == 1
+        # a_ready = (sel==0) && m_ready; b_ready = (sel==1) && m_ready
+        a_ready = 1 if (sel == 0 and inputs["m_ready"]) else 0
+        b_ready = 1 if (sel == 1 and inputs["m_ready"]) else 0
+        m_valid = av if sel == 0 else bv
+        m_payload = inputs["a_payload"] if sel == 0 else inputs["b_payload"]
+        return {"a_ready": a_ready, "b_ready": b_ready,
+                "m_valid": 1 if m_valid else 0, "m_payload": m_payload}
+
+class RefStreamArb:
+    def reset_state(self):
+        pass
+    def step(self, rst, inputs):
+        av, bv = inputs["a_valid"], inputs["b_valid"]
+        g_a = av
+        g_b = bv and not av
+        a_ready = 1 if (g_a and inputs["m_ready"]) else 0
+        b_ready = 1 if (g_b and inputs["m_ready"]) else 0
+        m_valid = av or bv
+        if g_a:
+            m_payload = inputs["a_payload"]
+        elif g_b:
+            m_payload = inputs["b_payload"]
+        else:
+            m_payload = 0
+        return {"a_ready": a_ready, "b_ready": b_ready,
+                "m_valid": 1 if m_valid else 0, "m_payload": m_payload}
+
+class RefStreamFork:
+    def reset_state(self):
+        pass
+    def step(self, rst, inputs):
+        in_ready = 1 if (inputs["o0_ready"] and inputs["o1_ready"]) else 0
+        return {"in_ready": in_ready,
+                "o0_valid": 1 if inputs["in_valid"] else 0,
+                "o0_payload": inputs["in_payload"],
+                "o1_valid": 1 if inputs["in_valid"] else 0,
+                "o1_payload": inputs["in_payload"]}
+
+STREAM_SEQ_CASES = {
+    "vStreamM2s":  ([("push_valid", 1), ("push_payload", 8), ("pop_ready", 1)],
+                    [("push_ready", 1), ("pop_valid", 1), ("pop_payload", 8)], RefStreamM2s, 60),
+    "vStreamFifo": ([("push_valid", 1), ("push_payload", 8), ("pop_ready", 1)],
+                    [("push_ready", 1), ("pop_valid", 1), ("pop_payload", 8), ("occ", 3)], RefStreamFifo, 80),
+    "vStreamMux":  ([("sel", 1), ("a_valid", 1), ("a_payload", 8), ("b_valid", 1), ("b_payload", 8), ("m_ready", 1)],
+                    [("a_ready", 1), ("b_ready", 1), ("m_valid", 1), ("m_payload", 8)], RefStreamMux, 60),
+    "vStreamArb":  ([("a_valid", 1), ("a_payload", 8), ("b_valid", 1), ("b_payload", 8), ("m_ready", 1)],
+                    [("a_ready", 1), ("b_ready", 1), ("m_valid", 1), ("m_payload", 8)], RefStreamArb, 60),
+    "vStreamFork": ([("in_valid", 1), ("in_payload", 8), ("o0_ready", 1), ("o1_ready", 1)],
+                    [("in_ready", 1), ("o0_valid", 1), ("o0_payload", 8), ("o1_valid", 1), ("o1_payload", 8)], RefStreamFork, 60),
+}
+
+DEFAULT_CASES = ["v_utils_combinational.typort", "v_utils_sequential.typort", "v_stream_sequential.typort"]
 
 
 def run_typort(case_file):
@@ -488,6 +606,13 @@ def run_seq_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules):
     scanf_fmt = " ".join(["%llu"] + ["%llx"] * (len(ports_in) + len(ports_out)))
     scanf_vars = ", ".join(["&rst"] + ["&" + n for n, _ in ports_in] + ["&" + n for n, _ in ports_out])
     nfields = 1 + len(ports_in) + len(ports_out)
+    has_clk = "clk" in modules[name][0]
+    if has_clk:
+        clk_lines = "        dut->clk = 0; dut->eval();\n        dut->clk = 1; dut->eval();"
+        rst_line = "        dut->reset = rst;"
+    else:
+        clk_lines = "        dut->eval();"
+        rst_line = ""
     tb = r'''
 #include "V%s.h"
 #include "verilated.h"
@@ -500,10 +625,9 @@ int main(int argc, char** argv) {
     uint64_t rst; uint64_t c = 0; int fail = 0;
     %s
     while (fscanf(f, "%s", %s) == %d) {
-        dut->reset = rst;
         %s
-        dut->clk = 0; dut->eval();
-        dut->clk = 1; dut->eval();
+        %s
+        %s
         %s
         c++;
     }
@@ -512,7 +636,7 @@ int main(int argc, char** argv) {
     printf(fail ? "\nFAIL\n" : "\nPASS\n");
     return fail;
 }
-''' % (name, name, name, stim_file, inputs_decl, scanf_fmt, scanf_vars, nfields, assigns, cmp_code)
+''' % (name, name, name, stim_file, inputs_decl, scanf_fmt, scanf_vars, nfields, rst_line, assigns, clk_lines, cmp_code)
     tb_file = os.path.join(workdir, name + "_tb.cpp")
     with open(tb_file, "w") as f:
         f.write(tb)
@@ -574,6 +698,15 @@ def main():
             else:
                 failed += 1
         for name, (ports_in, ports_out, ref, n_cycles) in SEQ_CASES.items():
+            if name not in modules:
+                continue
+            total += 1
+            res = run_seq_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules)
+            if res is True:
+                passed += 1
+            else:
+                failed += 1
+        for name, (ports_in, ports_out, ref, n_cycles) in STREAM_SEQ_CASES.items():
             if name not in modules:
                 continue
             total += 1

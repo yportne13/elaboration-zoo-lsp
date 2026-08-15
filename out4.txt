@@ -1,0 +1,61 @@
+Analyzing: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/01-basics.typort (1134 bytes)
+[LOG log] change: file:///F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/01-basics.typort
+[LOG log] parser 0.0037092
+[LOG log] infer 0.1193888
+note: === 01a: basicDecls (参数化宽度 + 各类声明) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/01-basics.typort:24:10
+   │
+24 │ println("=== 01a: basicDecls (参数化宽度 + 各类声明) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module basicDecls (
+  input wire [7:0] x,
+  output wire [7:0] y,
+  input wire clk
+);
+  wire [7:0] a;
+  wire [7:0] b;
+  wire signed [7:0] c;
+  wire d;
+  reg [7:0] r;
+  assign y = (a + x);
+  always @(posedge clk) begin
+    r <= y;
+  end
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/01-basics.typort:25:9
+   │
+25 │ println(moduleTreeVL(basicDecls.create[8].tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: === 01b: autoNames (auto* 自动命名) ===
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/01-basics.typort:37:10
+   │
+37 │ println("=== 01b: autoNames (auto* 自动命名) ===")
+   │          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: module autoNames (
+  input wire [7:0] myinput,
+  output wire [7:0] myoutput,
+  input wire clk,
+  input wire reset
+);
+  wire [7:0] mywire;
+  wire mybool;
+  reg [7:0] myreg;
+  reg [7:0] myinit;
+  assign myoutput = (mybool ? myreg : myinit);
+  always @(posedge clk or posedge reset) begin
+    if (reset) begin
+      myinit <= 5;
+    end else begin
+      myreg <= (mywire + myinput);
+    end
+  end
+endmodule
+   ┌─ /F:/projects/hermes/elaboration-zoo-lsp/examples/hdl/01-basics.typort:38:9
+   │
+38 │ println(moduleTreeVL(autoNames.create.tree))
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+[LOG log] change 0.127891
