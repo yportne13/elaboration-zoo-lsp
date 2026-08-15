@@ -6,24 +6,30 @@ use super::{
     *,
 };
 
-fn count_nat(val: &Rc<Val>) -> u64 {
-    try_count_nat(val).unwrap_or(0)
-}
-
-pub(super) fn try_count_nat(val: &Rc<Val>) -> Option<u64> {
+/// `try_count_nat` that forces each spine step: prim arguments may carry
+/// unnormalized values (e.g. widths embedded in Expr nodes projected without
+/// projection-time forcing), and a plain SumCase walk would misread them as
+/// 0.  Forcing per step keeps each step O(1) amortized under the current
+/// force; widths are small so the total is bounded.
+pub(super) fn count_nat_forced(infer: &Infer, decl: &Decl, val: &Rc<Val>) -> u64 {
     let mut count = 0u64;
-    let mut current = val.clone();
+    let mut current = infer.force(decl, val);
     loop {
         match current.as_ref() {
-            Val::SumCase { index, datas, .. } if *index == 0 => {
-                return Some(count);
+            Val::SumCase { index: 0, .. } => return count,
+            Val::SumCase { index: 1, datas, .. } => {
+                match datas.first() {
+                    Some((_, prev, _)) => {
+                        count = match count.checked_add(1) {
+                            Some(c) => c,
+                            None => return 0,
+                        };
+                        current = infer.force(decl, prev);
+                    }
+                    None => return 0,
+                }
             }
-            Val::SumCase { index, datas, .. } if *index == 1 => {
-                let (_, prev, _) = datas.first()?;
-                count = count.checked_add(1)?;
-                current = prev.clone();
-            }
-            _ => return None,
+            _ => return 0,
         }
     }
 }
@@ -50,17 +56,16 @@ pub(super) fn build_nat(count: u64, span: Span<()>, nat_type: &Rc<Val>) -> Rc<Va
     result
 }
 
-pub(super) fn nat_to_dec(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+pub(super) fn nat_to_dec(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
-    let nat_val = &args[0];
-    let count = count_nat(nat_val);
+    let count = count_nat_forced(infer, decl, &args[0]);
     Some(Val::LiteralIntro(empty_span(count.to_string())).into())
 }
 
 /// Generate Verilog width range string: "[N-1:0] " for N>1, "" for N<=1
-fn width_range(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn width_range(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
-    let w = count_nat(&args[0]);
+    let w = count_nat_forced(infer, decl, &args[0]);
     let result = if w <= 1 {
         String::new()
     } else {

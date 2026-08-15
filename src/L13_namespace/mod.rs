@@ -2154,7 +2154,19 @@ impl Infer {
                         }
                     }
                     Some(Frame::Obj(name)) => {
-                        let a = self.force(decl, &v);
+                        // Constructor-headed receivers project directly.
+                        // force(SumCase) forces EVERY data field, so forcing
+                        // before a projection re-walks the whole accumulated
+                        // value on every field read - the module-tree update
+                        // path was O(n^2) because of it.  Consumers that need
+                        // normalized fields force them (the prims do via
+                        // count_nat_forced; matches force their scrutinees).
+                        // Mirrors the Val::Sum WHNF-leaf treatment.
+                        let a = if matches!(v.as_ref(), Val::Sum(..) | Val::SumCase { .. }) {
+                            v.clone()
+                        } else {
+                            self.force(decl, &v)
+                        };
                         v = match a.as_ref() {
                             Val::Sum(_, params, _, _) => {
                                 params.iter()
