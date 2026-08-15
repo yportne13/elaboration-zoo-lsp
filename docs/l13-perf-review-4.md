@@ -457,3 +457,46 @@ infer_after_prefix > infer_expr > check<false> > infer_expr > eval
 2. 或评估 `force(SumCase)` 的 datas 递归本身是否可安全惰性化（注释声称
    "side effects must run"，需在严格求值器里核实该说法的年代）；
 3. 验证门槛照旧：完整块逐字节 + 326/157 测试。
+
+---
+
+## 12. 第十一轮（2026-08-14）—— 5.7× 拿下：投影快速路径 + Nat prim 消费点修复（`2916374`）
+
+> 按 11.3.1 执行：重新应用快速路径，修消费点而非放弃。全部验证通过。
+
+### 12.1 消费点定位与修复
+
+- 两个失败用例的共同根源不在 hdl-verilog 的 match（match 自身会 force
+  scrutinee），而在 **Rust 内建 Nat prim**：`try_count_nat` 只认纯
+  SumCase 链，未归一化值（Call/Flex 骨架）直接计 0——`width_range` 返回
+  空串（`reg d;` 丢宽度）、`nat_to_dec` 输出 0（连带方向逻辑错）。
+- 修复：新增 `count_nat_forced(infer, decl, val)` 逐级 force 计数；
+  `nat_to_dec`/`width_range` 改用它（二者本就接收 infer/decl，此前忽略）。
+  非强制版本无其他使用者，删除。
+
+### 12.2 结果（release，min-of-3）
+
+| 文件 | 会话起点 | round 10 后 | 本轮后 | 会话累计 |
+|---|---|---|---|---|
+| 11-bundle-deep | 4.400s | 1.45s | **0.261s** | **17×** |
+| 10-bundle | 0.825s | 0.47s | **0.254s** | 3.2× |
+| 02-arithmetic | — | 0.26s | 0.197s | — |
+| 12-arithmetic2 | — | 0.35s | 0.265s | — |
+| hdl_ops | — | 0.38s | 0.327s | — |
+| 01-basics | 0.253s* | 0.095s | 0.083s | 3.0× |
+
+（* round-4 表值。）定理文件（adder_proof 1.14s 等）不变——不走模块树
+路径。prelude 固定成本（wall_min ~0.75s）基本不变。
+
+### 12.3 验证
+
+- 22 个示例**完整 note 块**逐字节一致（含多行 Verilog 体）；
+- `cargo test --lib L13` 326 全过；8 个集成套件 157 全过。
+
+### 12.4 状态
+
+- change_mutable O(N²) 线程至此关闭：计数器 succ 化（`412dd12`）+
+  投影快速路径 + prim 消费点 force（`2916374`）。
+- 剩余观察项：11-bundle-deep 0.26s 中 println/moduleTreeVL 的最终组装
+  ~0.24s（一次性 O(N)，健康）；LSP 每键击全量重建仍是输入延迟上限
+  （老项，与本次无关）。
