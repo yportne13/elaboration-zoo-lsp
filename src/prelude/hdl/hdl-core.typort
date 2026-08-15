@@ -190,15 +190,25 @@ trait Module {
 }
 
 impl ModuleTree {
-    def insert(m: ModuleDef): ModuleTree = ModuleTree.mk(this.num + 1, m :: this.data)
+    // `succ(this.num)`, NOT `this.num + 1`: unary-Nat addition forces and
+    // rebuilds the whole counter chain per call, which made per-signal tree
+    // updates O(n^2) (docs/l13-perf-review-4.md §10).  The constructor wrap
+    // is O(1); consumers match the Vec structurally and never need the
+    // counter normalized.
+    def insert(m: ModuleDef): ModuleTree = ModuleTree.mk(succ(this.num), m :: this.data)
 }
 
 // Generic helper: add an expression to the first module (or create one if none exists)
 // All expressions of a module share the module's clock domain (head.cd).
+// The counters use `succ(...)` — the Vec length indices are only bookkeeping
+// (no consumer forces them), and `expr_num + 1` walked the whole unary chain
+// on EVERY signal registration: O(n) per signal, O(n^2) per module.  See
+// docs/l13-perf-review-4.md §10; the macro-side `0 + 1` constants are already
+// folded and stay as they are.
 def addExprToModuleHelper(num: Nat, data: Vec[ModuleDef] num, name: String, e: Expr): ModuleTree = match data {
-    case nil => ModuleTree.mk(0 + 1, ModuleDef.mk(name, defaultClockDomain, 0 + 1, e :: nil) :: nil)
+    case nil => ModuleTree.mk(succ(zero), ModuleDef.mk(name, defaultClockDomain, succ(zero), e :: nil) :: nil)
     case cons(head, tail) =>
-        let new_module = ModuleDef.mk(head.name, head.cd, head.expr_num + 1, e :: head.expr);
+        let new_module = ModuleDef.mk(head.name, head.cd, succ(head.expr_num), e :: head.expr);
         ModuleTree.mk(num, new_module :: tail)
 }
 
