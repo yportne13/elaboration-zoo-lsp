@@ -415,3 +415,45 @@ infer_after_prefix > infer_expr > check<false> > infer_expr > eval
   看原始栈**。
 - 位点插桩与采样结论矛盾时：先怀疑聚合脚本，再怀疑插桩覆盖面，最后才是
   假设本身。
+
+---
+
+## 11. 第十轮（2026-08-14）—— `succ` 计数器修复落地 + 5.7× 潜力的投影快速路径（未竟）
+
+> 代码提交 `412dd12`（prelude 计数器 succ 化，已验证）。另有一个 5.7×
+> 的 evaluator 快速路径实验，**验证失败已撤销**，失败用例即下一轮规范。
+
+### 11.1 已落地：计数器 succ 化（`412dd12`）
+
+- `addExprToModuleHelper` 的 `head.expr_num + 1` → `succ(head.expr_num)`、
+  `insert` 的 `this.num + 1` → `succ(this.num)`：一元 Nat 加法每次行走整条
+  计数链（每信号 O(N) → 每模块 O(N²)）；`succ` 是定义相等的 O(1) 构造子
+  包装。计数器无消费者（仅 Vec 长度索引；Verilog 生成结构匹配 Vec）。
+- 结果（release，min-of-3，22 示例**完整 note 块**逐字节一致 + 326/157
+  测试全过）：hdl_ops −10%、12-arithmetic2 −7%、01-basics −8%、
+  11-memory/09-hierarchy −6%、10-bundle −5%；11-bundle-deep 仅 −2%。
+
+### 11.2 未竟：`Frame::Obj` 构造子头快速路径（5.7×，撤销）
+
+- 修改：eval 的 Obj 投影对已是 `Sum`/`SumCase` 头的接收者跳过 `force`
+  （与 769962c 的 Sum 叶子化同族）。机制：`force(SumCase)` 递归 force
+  **所有** data 字段，投影 `x.num`/`x.data` 每次整树重走——这是 11.1
+  之后剩余 O(N²) 的真正来源（succ 化只是把链变成惰性，force 仍走它）。
+- 实测收益：11-bundle-deep **1.45→0.256s（5.7×）**、10-bundle 0.47→0.25、
+  01-basics 0.095→0.082。
+- **验证失败（撤销）**：2 个测试红——`test_hdl_bundle_master_slave_param`
+  （master 字段方向错）与 `test_examples_hdl_dir`（07-registers 丢失
+  `reg [7:0] da;` 声明）。投影返回未归一化字段破坏了依赖投影期归一化的
+  下游匹配（Verilog 生成器侧）。这两个用例就是下一轮的规范。
+- 另暴露本报告早前的方法学漏洞：`grep "^note:"` 只截取 note 块首行，
+  "输出一致"结论曾因此误报。现已改用完整块捕获
+  （`target/perf-probe/full_out.py` 的逻辑）重新验证过全部结论。
+
+### 11.3 下一轮（如果有）：把 5.7× 拿下
+
+1. 以 2 个失败用例为规范，找出依赖投影期归一化的消费点（大概率是
+   hdl-verilog 生成器的 match 处未 force 的位置），在那里显式 force——
+   修消费点而不是放弃快速路径；
+2. 或评估 `force(SumCase)` 的 datas 递归本身是否可安全惰性化（注释声称
+   "side effects must run"，需在严格求值器里核实该说法的年代）；
+3. 验证门槛照旧：完整块逐字节 + 326/157 测试。
