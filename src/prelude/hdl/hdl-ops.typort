@@ -666,3 +666,22 @@ def switchOnExpr(selExpr: Expr): SwitchBuilder =
     SwitchBuilder.mk(selExpr)
 
 
+
+// ============================================================
+// Vec 硬件索引（文档 §5.2：可在 .typort 完成，无需 Rust 改动）
+// vecAtUInt：硬件索引平衡 mux 树 —— 等价 SpinalHDL Vec.apply(UInt)
+// ============================================================
+
+// 递归线性 mux 链：idx==0 → v[0]，否则递归。idx 宽度独立于递归 n
+// （刚性参数上的计算宽度 log2Up n 不可归约，见 docs §5 已知限制 5）。
+def vecAtUIntHelp[w: Nat][n: Nat][iw: Nat](v: Vec[UInt[w]] n, idx: UInt[iw], depth: Nat, dflt: UInt[w]): UInt[w] = match v {
+    case nil => dflt
+    case cons(x, xs) =>
+        let isSel = binary(idx.zz_expr, "==", literal(depth));
+        let rest = vecAtUIntHelp(xs, idx, depth + 1, dflt);
+        UInt.mk(None, Expr.mux(isSel, x.zz_expr, rest.zz_expr))
+}
+
+// 公开接口：vec.atUInt(idx, default)
+def vecAtUInt[w: Nat][n: Nat][bn: BindingName](v: Vec[UInt[w]] n, idx: UInt[log2Up n], dflt: UInt[w]): UInt[w] =
+    vecAtUIntHelp(v, idx, 0, dflt)

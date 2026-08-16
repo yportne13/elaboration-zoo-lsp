@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vClamp -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp -o vClamp_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vClamp_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vClamp.v"
+T      4201 844424933232297  1786855871   187470800  1786855871   187470800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp.cpp"
+T      2543 1970324840074919  1786855871   186469600  1786855871   186469600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp.h"
+T      1918 844424933232299  1786855871   187470800  1786855871   187470800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp.mk"
+T      1722 844424933232296  1786855871   187470800  1786855871   187470800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp__Slow.cpp"
+T       544 844424933232293  1786855871   186469600  1786855871   186469600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp__Syms.cpp"
+T       788 1970324840074918  1786855871   186469600  1786855871   186469600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp__Syms.h"
+T       917 844424933232300  1786855871   188471700  1786855871   188471700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp__ver.d"
+T         0        0  1786855871   202484300  1786855871   202484300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp__verFiles.dat"
+T      1550 844424933232298  1786855871   187470800  1786855871   187470800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClamp/VvClamp_classes.mk"
+S       190 844424933232291  1786855871    63358500  1786855871    63358500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vClamp.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

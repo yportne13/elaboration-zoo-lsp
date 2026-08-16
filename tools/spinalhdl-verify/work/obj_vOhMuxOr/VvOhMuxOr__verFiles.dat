@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vOhMuxOr -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr -o vOhMuxOr_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vOhMuxOr_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vOhMuxOr.v"
+T      4590 844424933232253  1786855870    54694500  1786855870    54694500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr.cpp"
+T      2612 844424933232251  1786855870    54694500  1786855870    54694500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr.h"
+T      1936 844424933232255  1786855870    55695700  1786855870    55695700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr.mk"
+T      1827 844424933232252  1786855870    54694500  1786855870    54694500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr__Slow.cpp"
+T       554 844424933232249  1786855870    53694300  1786855870    53694300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr__Syms.cpp"
+T       802 844424933232250  1786855870    53694300  1786855870    53694300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr__Syms.h"
+T       951 844424933232256  1786855870    55695700  1786855870    55695700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr__ver.d"
+T         0        0  1786855870    56696400  1786855870    56696400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr__verFiles.dat"
+T      1558 844424933232254  1786855870    54694500  1786855870    54694500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vOhMuxOr/VvOhMuxOr_classes.mk"
+S       265 844424933232247  1786855869   933585000  1786855869   933585000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vOhMuxOr.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

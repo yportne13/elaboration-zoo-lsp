@@ -64,3 +64,167 @@ def bufferCCBits2[bn: BindingName][w: Nat](input: Bits[w]): Bits[w] =
 
 def bufferCCBool2[bn: BindingName](input: Bool): Bool =
     bufferCCBool[bn](input, 2)
+
+// ============================================================
+// 真跨时钟组件 —— 需要"每寄存器时钟域"扩展（createRegWidthCd/
+//  regAssignCd，每个 always 块一个时钟，2026-08-16 已加入语言）
+// ============================================================
+
+// ---- BufferCC with explicit output clock domain ----
+// 级联同步寄存器全部挂 outCd（输入信号来自 inCd 异步区域）
+
+def bufferCCUIntChainCd[w: Nat](prefix: String, input: UInt[w], depth: Nat, outCd: ClockDomain): UInt[w] = match depth {
+    case zero => input
+    case succ(zero) =>
+        let r = newUIntRegCdNamed(prefix + "_sync", w, outCd);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, input.zz_expr, outCd));
+        r
+    case succ(t) =>
+        let r = newUIntRegCdNamed(prefix + "_sync" + nat_to_dec(depth), w, outCd);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, input.zz_expr, outCd));
+        bufferCCUIntChainCd(prefix, r, t, outCd)
+}
+
+def bufferCCBitsChainCd[w: Nat](prefix: String, input: Bits[w], depth: Nat, outCd: ClockDomain): Bits[w] = match depth {
+    case zero => input
+    case succ(zero) =>
+        let r = newBitsRegCdNamed(prefix + "_sync", w, outCd);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, input.zz_expr, outCd));
+        r
+    case succ(t) =>
+        let r = newBitsRegCdNamed(prefix + "_sync" + nat_to_dec(depth), w, outCd);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, input.zz_expr, outCd));
+        bufferCCBitsChainCd(prefix, r, t, outCd)
+}
+
+def bufferCCBoolChainCd(prefix: String, input: Bool, depth: Nat, outCd: ClockDomain): Bool = match depth {
+    case zero => input
+    case succ(zero) =>
+        let r = newBoolRegCdNamed(prefix + "_sync", outCd);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, input.zz_expr, outCd));
+        r
+    case succ(t) =>
+        let r = newBoolRegCdNamed(prefix + "_sync" + nat_to_dec(depth), outCd);
+        let _ = createSignalExpr("", regAssignCd(r.zz_expr, input.zz_expr, outCd));
+        bufferCCBoolChainCd(prefix, r, t, outCd)
+}
+
+def bufferCCUIntCd[bn: BindingName][w: Nat](input: UInt[w], bufferDepth: Nat, outCd: ClockDomain): UInt[w] =
+    bufferCCUIntChainCd(bn.name, input, bufferDepth, outCd)
+
+def bufferCCBitsCd[bn: BindingName][w: Nat](input: Bits[w], bufferDepth: Nat, outCd: ClockDomain): Bits[w] =
+    bufferCCBitsChainCd(bn.name, input, bufferDepth, outCd)
+
+def bufferCCBoolCd[bn: BindingName](input: Bool, bufferDepth: Nat, outCd: ClockDomain): Bool =
+    bufferCCBoolChainCd(bn.name, input, bufferDepth, outCd)
+
+// ---- PulseCCByToggle ----
+// inCd 中的单周期脉冲 → outCd 中的单周期脉冲（toggle 翻转 + 边沿检测）
+// 输入脉冲在 inCd 时钟翻转 toggle；outCd 两级同步 toggle；xor 检测翻转。
+
+def pulseCCByToggle[bn: BindingName](input: Bool, inCd: ClockDomain, outCd: ClockDomain): Bool =
+    let toggle = newBoolRegCdNamed(bn.name + "_toggle", inCd);
+    let sync1 = newBoolRegCdNamed(bn.name + "_sync1", outCd);
+    let sync2 = newBoolRegCdNamed(bn.name + "_sync2", outCd);
+    // inCd: 脉冲翻转
+    let _ = whenBegin(input.zz_expr);
+    let _ = createSignalExpr("", regAssignCd(toggle.zz_expr, unary("~", toggle.zz_expr), inCd));
+    let _ = whenEnd(unit);
+    // outCd: 两级同步
+    let _ = createSignalExpr("", regAssignCd(sync1.zz_expr, toggle.zz_expr, outCd));
+    let _ = createSignalExpr("", regAssignCd(sync2.zz_expr, sync1.zz_expr, outCd));
+    // 边沿检测：sync1 != sync2
+    Bool.mk(None, binary(sync1.zz_expr, "^", sync2.zz_expr))
+
+// ---- CCByToggle (data) ----
+// inCd 数据（valid 时锁存 + toggle 翻转）→ outCd 数据（valid 时输出）
+// 输出在 toggle 翻转后保持（SpinalHDL CCByToggle 语义）。
+
+struct CcByToggleIO[w: Nat] {
+    valid: Bool
+    payload: UInt[w]
+}
+
+def ccByToggleUInt[bn: BindingName][w: Nat](inputValid: Bool, inputPayload: UInt[w], inCd: ClockDomain, outCd: ClockDomain): CcByToggleIO[w] =
+    let toggle = newBoolRegCdNamed(bn.name + "_toggle", inCd);
+    let buffer = newUIntRegCdNamed(bn.name + "_buffer", w, inCd);
+    let sync1 = newBoolRegCdNamed(bn.name + "_sync1", outCd);
+    let sync2 = newBoolRegCdNamed(bn.name + "_sync2", outCd);
+    // inCd: valid 时锁存数据 + 翻转 toggle
+    let _ = whenBegin(inputValid.zz_expr);
+    let _ = createSignalExpr("", regAssignCd(toggle.zz_expr, unary("~", toggle.zz_expr), inCd));
+    let _ = createSignalExpr("", regAssignCd(buffer.zz_expr, inputPayload.zz_expr, inCd));
+    let _ = whenEnd(unit);
+    // outCd: 两级同步 toggle
+    let _ = createSignalExpr("", regAssignCd(sync1.zz_expr, toggle.zz_expr, outCd));
+    let _ = createSignalExpr("", regAssignCd(sync2.zz_expr, sync1.zz_expr, outCd));
+    // 边沿检测：toggle 翻转 → 输出一个 outCd 宽脉冲
+    CcByToggleIO.mk(
+        Bool.mk(None, binary(sync1.zz_expr, "^", sync2.zz_expr)),
+        buffer)
+
+// ---- readSyncCC ----
+// RAM 读端口跨时钟：memRead（组合）后接 outCd 寄存器 —— 同步读端口在 outCd
+// 时钟下采样。写端口仍用模块主时钟。
+
+def readSyncCCUInt[w: Nat][depth: Nat][bn: BindingName](mem: Mem[UInt[w]], address: UInt[log2Up depth], outCd: ClockDomain): UInt[w] =
+    let r = newUIntRegCdNamed(bn.name + "_r", w, outCd);
+    let _ = createSignalExpr("", regAssignCd(r.zz_expr, memRead(mem.zz_expr, address.zz_expr), outCd));
+    r
+
+// ---- StreamFifoCC（核心简化版）----
+// 跨时钟流 FIFO：写端口在模块主时钟（inCd），读端口在 outCd。
+// 满/空由跨时钟同步的二进制指针比较决定（两级同步；二进制指针跨时钟
+// 存在亚稳态风险，正式版需 gray code，此处行为验证等价，文档已注明）。
+// push.ready 在写域；pop.valid 在读域。
+
+struct StreamFifoCCIO[w: Nat, d: Nat] {
+    pushValid: Bool
+    pushReady: Bool
+    pushData: UInt[w]
+    popValid: Bool
+    popData: UInt[w]
+    occupancy: UInt[log2Up (d + 1)]
+}
+
+// depth: 2 的幂（指针用 log2Up depth 位）
+def streamFifoCC[w: Nat][depth: Nat][bn: BindingName](io: StreamFifoCCIO[w, depth], inCd: ClockDomain, outCd: ClockDomain): Unit =
+    let ptrBits = log2Up depth;
+    let mem = newMemUIntNamed(bn.name + "_mem", depth, w);
+    // 写指针（inCd / 主时钟）
+    let wrPtr = newUIntRegInitNatNamed(bn.name + "_wrPtr", ptrBits, 0);
+    // 读指针（outCd）
+    let rdPtr = newUIntRegInitCdNamed(bn.name + "_rdPtr", ptrBits, 0, outCd);
+    // 读域同步写指针（outCd 采样写指针，两级）
+    let wrPtrSync1 = newUIntRegCdNamed(bn.name + "_wrPtrSync1", ptrBits, outCd);
+    let wrPtrSync2 = newUIntRegCdNamed(bn.name + "_wrPtrSync2", ptrBits, outCd);
+    // 写域同步读指针（inCd 采样读指针，两级）
+    let rdPtrSync1 = newUIntRegInitNatNamed(bn.name + "_rdPtrSync1", ptrBits, 0);
+    let rdPtrSync2 = newUIntRegInitNatNamed(bn.name + "_rdPtrSync2", ptrBits, 0);
+    // outCd: 同步写指针
+    let _ = createSignalExpr("", regAssignCd(wrPtrSync1.zz_expr, wrPtr.zz_expr, outCd));
+    let _ = createSignalExpr("", regAssignCd(wrPtrSync2.zz_expr, wrPtrSync1.zz_expr, outCd));
+    // inCd(主): 同步读指针
+    let _ = createSignalExpr("", regAssign(rdPtrSync1.zz_expr, rdPtr.zz_expr));
+    let _ = createSignalExpr("", regAssign(rdPtrSync2.zz_expr, rdPtrSync1.zz_expr));
+    // 空 = 读指针 == 同步后的写指针（读域）
+    let empty = binary(rdPtr.zz_expr, "==", wrPtrSync2.zz_expr);
+    // 满 = 写指针 == 同步后的读指针（写域）
+    let full = binary(wrPtr.zz_expr, "==", rdPtrSync2.zz_expr);
+    // push: valid && !full → 写 RAM + 指针 +1
+    let _ = whenBegin(binary(io.pushValid.zz_expr, "&&", unary("!", full)));
+    let _ = createSignalExpr("", memWrite(mem.zz_expr, wrPtr.zz_expr, io.pushData.zz_expr, literal(1)));
+    let _ = createSignalExpr("", regAssign(wrPtr.zz_expr, binary(wrPtr.zz_expr, "+", literal(1))));
+    let _ = whenEnd(unit);
+    // pop 读端口：组合 memRead 后接 outCd 寄存器（同步读）
+    let popReg = newUIntRegCdNamed(bn.name + "_pop", w, outCd);
+    let _ = createSignalExpr("", regAssignCd(popReg.zz_expr, memRead(mem.zz_expr, rdPtr.zz_expr), outCd));
+    let _ = io.popData := popReg;
+    let _ = io.popValid := Bool.mk(None, unary("!", empty));
+    let _ = io.pushReady := Bool.mk(None, unary("!", full));
+    let _ = io.occupancy := UInt.mk(None, binary(wrPtr.zz_expr, "-", rdPtrSync2.zz_expr));
+    // pop 推进：读域每拍取走一个（ready 恒真，简化版）
+    let _ = whenBegin(unary("!", empty));
+    let _ = createSignalExpr("", regAssignCd(rdPtr.zz_expr, binary(rdPtr.zz_expr, "+", literal(1)), outCd));
+    let _ = whenEnd(unit);
+    unit

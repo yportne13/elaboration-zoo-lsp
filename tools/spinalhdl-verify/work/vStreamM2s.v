@@ -8,21 +8,22 @@ module vStreamM2s (
   input wire clk,
   input wire reset
 );
-  reg pop_valid;
-  reg [7:0] pop_data;
-  assign push_ready = (pop_valid || pop_ready);
-  assign pop_ready = pop_ready;
-  assign pop_valid = pop_valid;
-  assign pop_payload = pop_data;
+  wire piped_ready;
+  reg piped_valid;
+  reg [7:0] piped_data;
+  assign push_ready = (piped_valid || piped_ready);
+  assign piped_ready = pop_ready;
+  assign pop_valid = piped_valid;
+  assign pop_payload = piped_data;
   always @(posedge clk or posedge reset) begin
     if (reset) begin
-      pop_valid <= 0;
+      piped_valid <= 0;
     end else begin
       if (push_ready) begin
-        pop_valid <= push_valid;
+        piped_valid <= push_valid;
       end
       if (push_ready) begin
-        pop_data <= push_payload;
+        piped_data <= push_payload;
       end
     end
   end

@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vMajority -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority -o vMajority_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vMajority_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vMajority.v"
+T      4689 1688849863364001  1786855864   591782600  1786855864   591782600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority.cpp"
+T      2550 1688849863363999  1786855864   591782600  1786855864   591782600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority.h"
+T      1945 1970324840074659  1786855864   591782600  1786855864   591782600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority.mk"
+T      1738 2251799816785312  1786855864   591782600  1786855864   591782600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority__Slow.cpp"
+T       559 1688849863363997  1786855864   590782300  1786855864   590782300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority__Syms.cpp"
+T       809 1688849863363998  1786855864   590782300  1786855864   590782300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority__Syms.h"
+T       968 1125899909942692  1786855864   592783400  1786855864   592783400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority__ver.d"
+T         0        0  1786855864   600791800  1786855864   600791800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority__verFiles.dat"
+T      1562 1125899909942690  1786855864   591782600  1786855864   591782600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMajority/VvMajority_classes.mk"
+S       197 1407374886653338  1786855864   475085700  1786855864   475085700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vMajority.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

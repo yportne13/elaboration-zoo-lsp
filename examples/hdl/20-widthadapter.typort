@@ -1,0 +1,41 @@
+// ============================================================
+// HDL Example 20: Vec 硬件索引 + StreamWidthAdapter（字节重排）
+// ============================================================
+
+module vecIndex {
+    let arr = cons (newUIntNamed("a0", 8)) (cons (newUIntNamed("a1", 8)) (cons (newUIntNamed("a2", 8)) (cons (newUIntNamed("a3", 8)) nil)))
+    let sel = UInt[2]
+    let picked = vecAtUInt(arr, sel, UInt.mk(None, literal(0)))
+    let out = UInt[8]
+    out := picked
+}
+println("=== 20a: vecAtUInt（Vec 硬件索引平衡 mux 树）===")
+println(moduleTreeVL(vecIndex.create.tree))
+
+// StreamWidthAdapter-lite：2 字节输入 → 3 字节输出（字节重排）
+// 输入 valid 时锁存两个字节；输出凑满 3 字节后 valid 一拍
+module streamWidth {
+    let inValid = Bool
+    let inData0 = UInt[8]
+    let inData1 = UInt[8]
+    let outValid = Bool
+    let outData = UInt[24]
+    // 字节缓冲寄存器（主时钟）
+    let b0 = newUIntRegNamed("b0", 8)
+    let b1 = newUIntRegNamed("b1", 8)
+    let b2 = newUIntRegNamed("b2", 8)
+    let cnt = newUIntRegInitNatNamed("cnt", 2, 0)
+    // 每拍锁存输入对；cnt 0->1->2 收集 3 字节后输出
+    let _d = createSignalExpr("", regAssign(b0.zz_expr, inData0.zz_expr))
+    let _e = createSignalExpr("", regAssign(b1.zz_expr, inData1.zz_expr))
+    // 拼接输出（b0 b1 b2）
+    let cat = binary(binary(b0.zz_expr, "##", b1.zz_expr), "##", b2.zz_expr)
+    let _f = outData := UInt.mk(None, cat)
+    // 每拍收集，满 3 字节后 valid
+    let full = binary(cnt.zz_expr, "==", literal(2))
+    let _g = outValid := Bool.mk(None, full)
+    let _h = createSignalExpr("", regAssign(b2.zz_expr, inData0.zz_expr))
+    let _i = createSignalExpr("", regAssign(cnt.zz_expr, Expr.mux(full, literal(0), binary(cnt.zz_expr, "+", literal(1)))))
+}
+println("=== 20b: StreamWidthAdapter-lite（字节收集 + 重排）===")
+println(moduleTreeVL(streamWidth.create.tree))

@@ -131,6 +131,10 @@ def memUInt[bn: BindingName](w: Nat, wordCount: Nat): Mem[UInt[w]] =
     let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
     Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)
 
+def newMemUIntNamed(name: String, wordCount: Nat, w: Nat): Mem[UInt[w]] =
+    let e = createSignalExpr(name, createMem(name, wordCount, w));
+    Mem.mk(Some(name), e, wordCount, w, defaultClockDomain)
+
 def memBits[bn: BindingName](w: Nat, wordCount: Nat): Mem[Bits[w]] =
     let e = createSignalExpr(bn.name, createMem(bn.name, wordCount, w));
     Mem.mk(Some(bn.name), e, wordCount, w, defaultClockDomain)

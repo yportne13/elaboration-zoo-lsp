@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vMinMax -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax -o vMinMax_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vMinMax_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vMinMax.v"
+T      3995 844424933232275  1786855870   615444700  1786855870   615444700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax.cpp"
+T      2559 844424933232273  1786855870   614443300  1786855870   614443300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax.h"
+T      1927 844424933232277  1786855870   615444700  1786855870   615444700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax.mk"
+T      1746 844424933232274  1786855870   614443300  1786855870   614443300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax__Slow.cpp"
+T       549 844424933232271  1786855870   613443100  1786855870   613443100 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax__Syms.cpp"
+T       795 844424933232272  1786855870   614443300  1786855870   614443300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax__Syms.h"
+T       934 844424933232278  1786855870   615444700  1786855870   615444700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax__ver.d"
+T         0        0  1786855870   629457600  1786855870   629457600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax__verFiles.dat"
+T      1554 844424933232276  1786855870   615444700  1786855870   615444700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vMinMax/VvMinMax_classes.mk"
+S       186 844424933232269  1786855870   495336000  1786855870   495336000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vMinMax.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

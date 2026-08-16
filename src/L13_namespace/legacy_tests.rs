@@ -1536,6 +1536,28 @@ fn test_examples_hdl_dir() {
             "reg [7:0] synced_sync;",
             "reg [7:0] p_cnt;",                  // prescaler 计数器
         ]),
+        ("19-crossclock.typort", include_str!("../../examples/hdl/19-crossclock.typort"), &[
+            "always @(posedge clkA) begin",     // PulseCCByToggle 双时钟
+            "always @(posedge clkB) begin",
+            "reg __toggle;",
+            "assign pulseOut = (__sync1 ^ __sync2)",  // 边沿检测
+            "reg [7:0] ccOut_buffer;",
+            "input wire clkA,",                 // StreamFifoCC 自动端口
+            "input wire rstA,",
+            "input wire clkB,",
+            "input wire rstB",
+            "always @(posedge clkA or posedge rstA) begin",
+            "always @(posedge clkB or posedge rstB) begin",
+            "reg [1:0] _d_wrPtr;",
+            "reg [7:0] _d_mem [0:3];",
+            "assign popValid = !(_d_rdPtr == _d_wrPtrSync2)",  // empty 检测
+        ]),
+        ("20-widthadapter.typort", include_str!("../../examples/hdl/20-widthadapter.typort"), &[
+            "assign out = ((sel == 0) ? a0 : ((sel == 1) ? a1 : ((sel == 2) ? a2 : ((sel == 3) ? a3 : 0))))",  // vecAtUInt mux 链
+            "assign outData = {{b0, b1}, b2}",     // 字节拼接
+            "assign outValid = (cnt == 2)",
+            "reg [1:0] cnt;",
+        ]),
     ];
 
     for (file, input, asserts) in examples {

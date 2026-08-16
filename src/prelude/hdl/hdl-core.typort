@@ -67,6 +67,31 @@ def minNat(a: Nat, b: Nat): Nat = match a {
 
 // ---------- Module system (shared helpers) ----------
 
+enum ClockEdge {
+    RisingEdge
+    FallingEdge
+}
+
+enum ResetPolarity {
+    ActiveHigh
+    ActiveLow
+}
+
+enum ClockDomainConfig {
+    Sync
+    Async
+}
+
+struct ClockDomain {
+    clockName: String
+    resetName: String
+    config: ClockDomainConfig
+    clockEdge: ClockEdge
+    resetPolarity: ResetPolarity
+}
+
+def defaultClockDomain: ClockDomain = ClockDomain.mk "clk" "reset" Async RisingEdge ActiveHigh
+
 enum Expr {
     create(name: String)
     createIn(name: String)
@@ -79,6 +104,10 @@ enum Expr {
     createReg(name: String)
     createRegWidth(name: String, width: Nat)
     createRegWidthInit(name: String, width: Nat, initVal: Expr)
+    createRegWidthCd(name: String, width: Nat, cd: ClockDomain)
+    createRegWidthInitCd(name: String, width: Nat, initVal: Expr, cd: ClockDomain)
+    createSIntRegWidthCd(name: String, width: Nat, cd: ClockDomain)
+    createSIntRegWidthInitCd(name: String, width: Nat, initVal: Expr, cd: ClockDomain)
     createOutReg(name: String)
     createOutRegWidth(name: String, width: Nat)
     createOutRegWidthInit(name: String, width: Nat, initVal: Expr)
@@ -95,6 +124,7 @@ enum Expr {
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
     regAssign(lhs: Expr, rhs: Expr)
+    regAssignCd(lhs: Expr, rhs: Expr, cd: ClockDomain)
     when(cond: Expr, body: Expr, elseBody: Option[Expr])
     switch(value: Expr, cases: Expr)
     block(head: Expr, tail: Expr)
@@ -144,31 +174,6 @@ def isRegExpr(e: Expr): Boolean = match e {
 // ---------- Clock domain (String-name variant, no Bool dependency) ----------
 // Defined here so ModuleDef can bake the clock domain at record time.
 // hdl-clock.typort keeps the SpinalHDL-style Mem type built on top.
-
-enum ClockEdge {
-    RisingEdge
-    FallingEdge
-}
-
-enum ResetPolarity {
-    ActiveHigh
-    ActiveLow
-}
-
-enum ClockDomainConfig {
-    Sync
-    Async
-}
-
-struct ClockDomain {
-    clockName: String
-    resetName: String
-    config: ClockDomainConfig
-    clockEdge: ClockEdge
-    resetPolarity: ResetPolarity
-}
-
-def defaultClockDomain: ClockDomain = ClockDomain.mk "clk" "reset" Async RisingEdge ActiveHigh
 
 struct ModuleDef {
     name: String
@@ -434,6 +439,7 @@ def createSignalExpr(name: String, e: Expr): Expr =
 // Check if an Expr tree contains any regAssign (for proper when/clocked codegen)
 def hasRegAssign(e: Expr): Boolean = match e {
     case regAssign(_, _) => true
+    case regAssignCd(_, _, _) => true
     case when(_, body, elseBody) =>
         let b = hasRegAssign(body);
         match b {
@@ -469,6 +475,7 @@ def hasInitRegs[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     case nil => false
     case cons(e, tail) => match e {
         case createRegWidthInit(_, _, _) => true
+        case createRegWidthInitCd(_, _, _, _) => true
         case createSIntRegWidthInit(_, _, _) => true
         case createOutRegWidthInit(_, _, _) => true
         case createSIntOutRegWidthInit(_, _, _) => true
@@ -488,6 +495,10 @@ def collectInitLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case createRegWidthInit(name, _, initVal) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case createRegWidthInitCd(name, _, initVal, _) =>
+            lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
+        case createSIntRegWidthInitCd(name, _, initVal, _) =>
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)
         case createSIntRegWidthInit(name, _, initVal) =>
             lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLines tail)

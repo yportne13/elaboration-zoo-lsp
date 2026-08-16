@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vTimer -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer -o vTimer_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vTimer_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vTimer.v"
+T      6150 844424933232649  1786855898   733620500  1786855898   733620500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer.cpp"
+T      3100 562949956521991  1786855898   733620500  1786855898   733620500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer.h"
+T      1918 844424933232651  1786855898   734621500  1786855898   734621500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer.mk"
+T      2496 562949956521992  1786855898   733620500  1786855898   733620500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer__Slow.cpp"
+T       544 844424933232645  1786855898   732619700  1786855898   732619700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer__Syms.cpp"
+T       788 844424933232646  1786855898   732619700  1786855898   732619700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer__Syms.h"
+T       917 562949956521996  1786855898   734621500  1786855898   734621500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer__ver.d"
+T         0        0  1786855898   742628800  1786855898   742628800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer__verFiles.dat"
+T      1550 562949956521994  1786855898   733620500  1786855898   733620500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vTimer/VvTimer_classes.mk"
+S       696 1407374886653955  1786855898   615512600  1786855898   615512600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vTimer.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

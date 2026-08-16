@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vDecoder -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder -o vDecoder_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vDecoder_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vDecoder.v"
+T      4298 562949956522122  1786855938   994131900  1786855938   994131900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder.cpp"
+T      2537 562949956522120  1786855938   994131900  1786855938   994131900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder.h"
+T      1936 562949956522124  1786855938   995132700  1786855938   995132700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder.mk"
+T      1716 562949956522121  1786855938   994131900  1786855938   994131900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder__Slow.cpp"
+T       554 562949956522118  1786855938   993130600  1786855938   993130600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder__Syms.cpp"
+T       802 562949956522119  1786855938   993130600  1786855938   993130600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder__Syms.h"
+T       951 562949956522125  1786855938   995132700  1786855938   995132700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder__ver.d"
+T         0        0  1786855939    13149300  1786855939    13149300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder__verFiles.dat"
+T      1558 562949956522123  1786855938   995132700  1786855938   995132700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vDecoder/VvDecoder_classes.mk"
+S       142 562949956522116  1786855938   869479700  1786855938   869479700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vDecoder.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

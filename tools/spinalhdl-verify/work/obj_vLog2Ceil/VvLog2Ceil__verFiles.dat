@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vLog2Ceil -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil -o vLog2Ceil_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vLog2Ceil_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vLog2Ceil.v"
+T      5278 3096224746917661  1786855874    83789700  1786855874    83789700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil.cpp"
+T      2551 2533274793496347  1786855874    83789700  1786855874    83789700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil.h"
+T      1945 1970324840075039  1786855874    84790300  1786855874    84790300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil.mk"
+T      1739 2533274793496348  1786855874    83789700  1786855874    83789700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil__Slow.cpp"
+T       559 844424933232409  1786855874    82788900  1786855874    82788900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil__Syms.cpp"
+T       809 1407374886653722  1786855874    83789700  1786855874    83789700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil__Syms.h"
+T       968 844424933232416  1786855874    84790300  1786855874    84790300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil__ver.d"
+T         0        0  1786855874   100804700  1786855874   100804700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil__verFiles.dat"
+T      1562 1688849863364382  1786855874    84790300  1786855874    84790300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vLog2Ceil/VvLog2Ceil_classes.mk"
+S       232 844424933232405  1786855873   960140800  1786855873   960140800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vLog2Ceil.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

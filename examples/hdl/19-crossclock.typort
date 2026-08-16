@@ -1,0 +1,42 @@
+// ============================================================
+// HDL Example 19: 真跨时钟域（每寄存器时钟域扩展）
+//   PulseCCByToggle / CCByToggle / BufferCC(cd) / StreamFifoCC
+// ============================================================
+
+// 两个时钟域：clkA（写域/主时钟）+ clkB（读域）
+def inCd: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
+def outCd: ClockDomain = ClockDomain.mk "clkB" "rstB" Async RisingEdge ActiveHigh
+
+module ccPulse[inCd] {
+    let pulseIn = Bool
+    let pulseOut = Bool
+    pulseOut := pulseCCByToggle(pulseIn, inCd, outCd)
+    let data = UInt[8]
+    let ccin = CcByToggleIO.mk(Bool.mk(None, literal(1)), data)
+    let ccOut = ccByToggleUInt(ccin.valid, ccin.payload, inCd, outCd)
+    let oValid = Bool
+    let oData = UInt[8]
+    oValid := ccOut.valid
+    oData := ccOut.payload
+    let synced = bufferCCUIntCd(data, 2, outCd)
+    let s2 = UInt[8]
+    s2 := synced
+}
+println("=== 19a: PulseCCByToggle / CCByToggle / BufferCC-cd ===")
+println(moduleTreeVL(ccPulse.create[inCd].tree))
+
+module ccFifo[inCd] {
+    // 写域（clkA 主时钟）推入，读域（clkB）弹出
+    let io = StreamFifoCCIO.mk[8, 4](
+        newBoolNamed("pushValid"), newBoolNamed("pushReady"),
+        newUIntNamed("pushData", 8),
+        newBoolNamed("popValid"), newUIntNamed("popData", 8),
+        newUIntNamed("occ", 3))
+    let _d = streamFifoCC[8][4](io, inCd, outCd)
+    let pv = Bool
+    pv := io.popValid
+    let pd = UInt[8]
+    pd := io.popData
+}
+println("=== 19b: StreamFifoCC ===")
+println(moduleTreeVL(ccFifo.create[inCd].tree))

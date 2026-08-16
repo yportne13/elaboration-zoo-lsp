@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vAddCarry -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry -o vAddCarry_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vAddCarry_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vAddCarry.v"
+T      4050 562949956521707  1786855872   978616900  1786855872   978616900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry.cpp"
+T      2595 562949956521705  1786855872   977615500  1786855872   977615500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry.h"
+T      1945 562949956521709  1786855872   978616900  1786855872   978616900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry.mk"
+T      1800 562949956521706  1786855872   977615500  1786855872   977615500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry__Slow.cpp"
+T       559 562949956521703  1786855872   976614700  1786855872   976614700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry__Syms.cpp"
+T       809 562949956521704  1786855872   977615500  1786855872   977615500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry__Syms.h"
+T       968 562949956521710  1786855872   978616900  1786855872   978616900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry__ver.d"
+T         0        0  1786855872   986624200  1786855872   986624200 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry__verFiles.dat"
+T      1562 562949956521708  1786855872   978616900  1786855872   978616900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vAddCarry/VvAddCarry_classes.mk"
+S       186 562949956521701  1786855872   857972300  1786855872   857972300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vAddCarry.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

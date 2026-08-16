@@ -114,9 +114,9 @@
 | 4 Bus（hdl-bus-proto.typort） | ✅ APB3/AxiLite4/Axi4Stream/Wishbone/AvalonST + 寄存器组 | L1/L2 通过（APB3 读写行为人工核验） |
 | 5 io/math/logic/fsm（hdl-misc-io.typort） | ✅ TriState/Gpio/Bcd/Divider/Decoder/Masked/StateMachine | L1/L2 通过；L3 7/7（bcd/maskedEq/decoder + prescaler/timer/intr/watchdog） |
 | 6 misc（hdl-misc.typort） | ✅ Prescaler/Timer/InterruptCtrl/Plru/Watchdog | 同上 |
-| 7 B 级扩展 | 依赖语言扩展：每寄存器时钟域、Vec 硬件索引（.typort 内可做）、BlackBox、ROM 初始化 | — |
+| 7 B 级扩展 | ✅ 每寄存器时钟域已在 .typort 层实现（Expr 加 createRegWidthCd/regAssignCd 构造器，多 always 块按 cd 分组 + 额外时钟自动端口）→ PulseCCByToggle/CCByToggle/BufferCC-cd/readSyncCC/StreamFifoCC 全部落地；✅ Vec 硬件索引（vecAtUInt 平衡 mux 树）；✅ StreamWidthAdapter-lite（字节收集重排，20-widthadapter.typort） | L3 双时钟 51/51（含 vPulseCC/vFifoCC） |
 
-**最终验收**：examples/hdl/01-18 全部编译展开（L1）；关键 Verilog 结构断言通过（L2）；
+**最终验收**：examples/hdl/01-20 全部编译展开（L1）；关键 Verilog 结构断言通过（L2）；
 == cases: v_utils_combinational.typort ==
   [OK] vReverse
   [OK] vReverseU

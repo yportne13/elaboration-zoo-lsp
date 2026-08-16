@@ -13,6 +13,8 @@ SpinalHDL lib 复刻 —— L3 行为验证（真值表/时序仿真）
   python3 tools/spinalhdl-verify/verify.py [--cases 文件...] [--keep]
 """
 import os, re, subprocess, sys, tempfile, shutil, random
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from dualclock_runner import run_dualclock_case
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 TYPORT = os.environ.get("TYPORT", os.path.join(ROOT, "target", "release", "typort"))
@@ -550,7 +552,72 @@ def bcd_add(a, b, cin):
         return (s + 6, 1) if s + 6 <= 15 else (((s + 6) & 0xF), 1)
     return (s, 0)
 
-DEFAULT_CASES = ["v_utils_combinational.typort", "v_utils_sequential.typort", "v_stream_sequential.typort", "v_misc_combinational.typort"]
+
+class RefPulseCC:
+    def reset_state(self):
+        self.toggle = 0
+        self.s1 = 0
+        self.s2 = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.toggle = 0
+            self.s1 = 0
+            self.s2 = 0
+        else:
+            # non-blocking semantics: s2 <= s1 (OLD s1), s1 <= toggle (NEW toggle)
+            old_s1 = self.s1
+            if inputs["pulseIn"]:
+                self.toggle = 1 - self.toggle
+            self.s1 = self.toggle
+            self.s2 = old_s1
+        return {"pulseOut": (self.s1 ^ self.s2) & 1}
+
+class RefFifoCC:
+    def reset_state(self):
+        self.mem = [0] * 4
+        self.wr = 0
+        self.rd = 0
+        self.ws1 = 0
+        self.ws2 = 0
+        self.rs1 = 0
+        self.rs2 = 0
+        self.popreg = 0
+    def step(self, rst, inputs):
+        if rst:
+            self.mem = [0] * 4
+            self.wr = 0
+            self.rd = 0
+            self.ws1 = 0
+            self.ws2 = 0
+            self.rs1 = 0
+            self.rs2 = 0
+            self.popreg = 0
+        else:
+            pv, pd = inputs["pushValid"], inputs["pushData"]
+            full = self.wr == self.rs2
+            empty = self.rd == self.ws2
+            # clkA domain (main): sync rdPtr, push
+            self.rs1 = self.rd
+            self.rs2 = self.rs1
+            if pv and not full:
+                self.mem[self.wr] = pd
+                self.wr = (self.wr + 1) & 3
+            # clkB domain: sync wrPtr, pop
+            self.ws1 = self.wr
+            self.ws2 = self.ws1
+            self.popreg = self.mem[self.rd]
+            if not empty:
+                self.rd = (self.rd + 1) & 3
+        full = self.wr == self.rs2
+        empty = self.rd == self.ws2
+        return {"pushReady": 0 if full else 1, "popValid": 0 if empty else 1, "popData": self.popreg}
+
+DUAL_CLOCK_CASES = {
+    "vPulseCC": ([("pulseIn", 1)], [("pulseOut", 1)], RefPulseCC, 80, "clkA", "clkB"),
+    "vFifoCC":  ([("pushValid", 1), ("pushData", 4)], [("pushReady", 1), ("popValid", 1), ("popData", 4)], RefFifoCC, 120, "clkA", "clkB"),
+}
+
+DEFAULT_CASES = ["v_utils_combinational.typort", "v_utils_sequential.typort", "v_stream_sequential.typort", "v_misc_combinational.typort", "v_dualclock.typort"]
 
 
 def run_typort(case_file):
@@ -821,6 +888,15 @@ def main():
                 continue
             total += 1
             res = run_seq_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules)
+            if res is True:
+                passed += 1
+            else:
+                failed += 1
+        for name, (ports_in, ports_out, ref, n_cycles, clk_a, clk_b) in DUAL_CLOCK_CASES.items():
+            if name not in modules:
+                continue
+            total += 1
+            res = run_dualclock_case(name, ports_in, ports_out, ref, n_cycles, workdir, modules, clk_a, clk_b)
             if res is True:
                 passed += 1
             else:

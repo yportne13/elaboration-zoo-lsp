@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vGray -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray -o vGray_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vGray_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vGray.v"
+T     10000 562949956521663  1786855871   721957400  1786855871   721957400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray.cpp"
+T      2509 562949956521661  1786855871   721957400  1786855871   721957400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray.h"
+T      1909 562949956521665  1786855871   722957600  1786855871   722957600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray.mk"
+T      1669 562949956521662  1786855871   721957400  1786855871   721957400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray__Slow.cpp"
+T       539 562949956521659  1786855871   720956600  1786855871   720956600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray__Syms.cpp"
+T       781 562949956521660  1786855871   721957400  1786855871   721957400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray__Syms.h"
+T       900 562949956521666  1786855871   722957600  1786855871   722957600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray__ver.d"
+T         0        0  1786855871   728963500  1786855871   728963500 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray__verFiles.dat"
+T      1546 562949956521664  1786855871   722957600  1786855871   722957600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vGray/VvGray_classes.mk"
+S       456 1125899909942969  1786855871   608853800  1786855871   608853800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vGray.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

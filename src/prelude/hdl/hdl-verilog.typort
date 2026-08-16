@@ -87,6 +87,10 @@ def exprVL_proc(e: Expr): String = match e {
     case createReg(name) => name
     case createRegWidth(name, _) => name
     case createRegWidthInit(name, _, _) => name
+    case createRegWidthCd(name, _, _) => name
+    case createRegWidthInitCd(name, _, _, _) => name
+    case createSIntRegWidthCd(name, _, _) => name
+    case createSIntRegWidthInitCd(name, _, _, _) => name
     case createOutReg(name) => name
     case createOutRegWidth(name, _) => name
     case createOutRegWidthInit(name, _, _) => name
@@ -120,6 +124,8 @@ def exprVL_proc(e: Expr): String = match e {
     case assign(lhs, rhs) =>
         "      " + exprVL_proc(lhs) + " = " + exprVL_proc(rhs) + ";"
     case regAssign(lhs, rhs) =>
+        "      " + exprVL_proc(lhs) + " <= " + exprVL_proc(rhs) + ";"
+    case regAssignCd(lhs, rhs, _) =>
         "      " + exprVL_proc(lhs) + " <= " + exprVL_proc(rhs) + ";"
     case when(cond, body, elseBody) =>
         "    if (" + exprVL_proc(cond) + ") begin\n" + exprVL_proc(body) + "\n    end" + (
@@ -183,6 +189,10 @@ def exprVL(e: Expr): String = match e {
     case createReg(name) => name
     case createRegWidth(name, _) => name
     case createRegWidthInit(name, _, _) => name
+    case createRegWidthCd(name, _, _) => name
+    case createRegWidthInitCd(name, _, _, _) => name
+    case createSIntRegWidthCd(name, _, _) => name
+    case createSIntRegWidthInitCd(name, _, _, _) => name
     case createOutReg(name) => name
     case createOutRegWidth(name, _) => name
     case createOutRegWidthInit(name, _, _) => name
@@ -216,6 +226,8 @@ def exprVL(e: Expr): String = match e {
     case assign(lhs, rhs) =>
         "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
     case regAssign(lhs, rhs) =>
+        "    " + exprVL(lhs) + " <= " + exprVL(rhs) + ";"
+    case regAssignCd(lhs, rhs, _) =>
         "    " + exprVL(lhs) + " <= " + exprVL(rhs) + ";"
     case when(cond, body, elseBody) =>
         "    if (" + emitCondStr(cond) + ") begin\n" + exprVL_proc(body) + "\n    end" + (
@@ -460,6 +472,10 @@ def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
         case createReg(name) => lcons ("  reg " + name + ";") (collectRegLines tail)
         case createRegWidth(name, w) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
         case createRegWidthInit(name, w, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createRegWidthCd(name, w, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createRegWidthInitCd(name, w, _, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createSIntRegWidthCd(name, w, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
+        case createSIntRegWidthInitCd(name, w, _, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
         case createSIntRegWidth(name, w) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
         case createSIntRegWidthInit(name, w, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
         case _ => collectRegLines tail
@@ -482,16 +498,120 @@ def hasOutRegPorts[ne: Nat](es: Vec[Expr] ne): Boolean = match es {
     }
 }
 
-// Collect clocked assignments (regAssign) from Vec[Expr]
-// Also collects when nodes that wrap regAssign (e.g., when(cond, regAssign(...), None))
-// and memory writes (memWrite).
+// Compare two clock domains by (clockName, resetName)
+def cdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName, b.clockName) {
+    case true => str_eq(a.resetName, b.resetName)
+    case false => false
+}
+
+// Does an Expr tree contain regAssignCd for THIS cd? (regAssign non-Cd forms do
+// NOT count here — they belong to the module default cd.)
+def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
+    case regAssignCd(_, _, c) =>
+        let same = cdEq(c, cd);
+        match same {
+            case true => true
+            case false => false
+        }
+    case when(_, body, elseBody) =>
+        let b = hasRegAssignCd(body, cd);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasRegAssignCd(eb, cd)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasRegAssignCd(head, cd);
+        match h {
+            case true => true
+            case false => hasRegAssignCd(tail, cd)
+        }
+    case _ => false
+}
+
+// Collect the set of extra clock domains referenced by regAssignCd (dedup by name)
+def collectClockCdsOne(e: Expr, seen: List[String]): List[ClockDomain] = match e {
+    case regAssignCd(_, _, c) =>
+        let nm = c.clockName;
+        let dup = strInList(nm, seen);
+        match dup {
+            case true => lnil
+            case false => lcons c lnil
+        }
+    case when(_, body, elseBody) =>
+        let fromBody = collectClockCdsOne(body, seen);
+        match elseBody {
+            case None => fromBody
+            case Some(eb) => list_append(fromBody, collectClockCdsOne(eb, seen))
+        }
+    case block(hd, tl) =>
+        list_append(collectClockCdsOne(hd, seen), collectClockCdsOne(tl, seen))
+    case _ => lnil
+}
+
+// Add clock names of a cd list to the seen-names list (accumulate in reverse)
+def cdNamesAdd(acc: List[String], cds: List[ClockDomain]): List[String] = match cds {
+    case lnil => acc
+    case lcons(c, tail) => cdNamesAdd(lcons c.clockName acc, tail)
+}
+
+def collectClockCdsHelp[ne: Nat](es: Vec[Expr] ne, seen: List[String]): List[ClockDomain] = match es {
+    case nil => lnil
+    case cons(e, tail) =>
+        let fromE = collectClockCdsOne(e, seen);
+        let newSeen = cdNamesAdd(seen, fromE);
+        list_append(fromE, collectClockCdsHelp(tail, newSeen))
+}
+
+def collectClockCds[ne: Nat](es: Vec[Expr] ne): List[ClockDomain] =
+    list_reverse(collectClockCdsHelp(es, lnil))
+
+// Collect clocked assignments (regAssign + regAssignCd + memWrite) for ONE clock
+// domain. regAssign / memWrite belong to the module default cd only (isMain);
+// regAssignCd(cd) belongs to that cd. when-nodes go to a cd only if they contain
+// its regAssign (main uses any regAssign; extra cds use Cd-matched only).
+def collectClockLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case regAssign(_, _) =>
+            match isMain {
+                case true => lcons (exprVL(e)) (collectClockLinesCd(tail, cd, isMain))
+                case false => collectClockLinesCd(tail, cd, isMain)
+            }
+        case regAssignCd(_, _, c) =>
+            let same = cdEq(c, cd);
+            match same {
+                case true => lcons (exprVL(e)) (collectClockLinesCd(tail, cd, isMain))
+                case false => collectClockLinesCd(tail, cd, isMain)
+            }
+        case memWrite(_, _, _, _) =>
+            match isMain {
+                case true => lcons (exprVL(e)) (collectClockLinesCd(tail, cd, isMain))
+                case false => collectClockLinesCd(tail, cd, isMain)
+            }
+        case when(_, _, _) =>
+            let has_clk = match isMain {
+                case true => hasRegAssign(e)
+                case false => hasRegAssignCd(e, cd)
+            };
+            match has_clk {
+                case true => lcons (exprVL(e)) (collectClockLinesCd(tail, cd, isMain))
+                case false => collectClockLinesCd(tail, cd, isMain)
+            }
+        case _ => collectClockLinesCd(tail, cd, isMain)
+    }
+}
+
+// Collect ALL clocked lines regardless of cd (for has-clock detection)
 def collectClockLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
         case regAssign(_, _) => lcons (exprVL(e)) (collectClockLines tail)
+        case regAssignCd(_, _, _) => lcons (exprVL(e)) (collectClockLines tail)
         case memWrite(_, _, _, _) => lcons (exprVL(e)) (collectClockLines tail)
         case when(_, _, _) =>
-            // When nodes with regAssign inside go to the clocked block
             let has_clk = hasRegAssign(e);
             match has_clk {
                 case true => lcons (exprVL(e)) (collectClockLines tail)
@@ -593,6 +713,10 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
         case createReg(_) => collectAssignLinesFiltered(tail, whenSigs)
         case createRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createRegWidthCd(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createRegWidthInitCd(_, _, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntRegWidthCd(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case createSIntRegWidthInitCd(_, _, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createOutReg(_) => collectAssignLinesFiltered(tail, whenSigs)
         case createOutRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createOutRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
@@ -605,6 +729,7 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
         case createSIntOutRegWidth(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case createSIntOutRegWidthInit(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case regAssign(_, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case regAssignCd(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case literal(_) => collectAssignLinesFiltered(tail, whenSigs)
         case when(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case instance(_, _) => collectAssignLinesFiltered(tail, whenSigs)
@@ -731,11 +856,56 @@ def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
     case ActiveHigh => resetName(cd)
     case ActiveLow => "!" + resetName(cd)
 }
+// Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
+// the module default cd only (isMain=true); createRegWidthInitCd belongs to
+// its own cd.
+def collectInitLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => match e {
+        case createRegWidthInit(name, _, initVal) =>
+            match isMain {
+                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case false => collectInitLinesCd(tail, cd, isMain)
+            }
+        case createSIntRegWidthInit(name, _, initVal) =>
+            match isMain {
+                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case false => collectInitLinesCd(tail, cd, isMain)
+            }
+        case createOutRegWidthInit(name, _, initVal) =>
+            match isMain {
+                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case false => collectInitLinesCd(tail, cd, isMain)
+            }
+        case createSIntOutRegWidthInit(name, _, initVal) =>
+            match isMain {
+                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case false => collectInitLinesCd(tail, cd, isMain)
+            }
+        case createRegWidthInitCd(name, _, initVal, c) =>
+            let same = cdEq(c, cd);
+            match same {
+                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case false => collectInitLinesCd(tail, cd, isMain)
+            }
+        case createSIntRegWidthInitCd(name, _, initVal, c) =>
+            let same = cdEq(c, cd);
+            match same {
+                case true => lcons ("    " + name + " <= " + verilogLiteral(initVal) + ";") (collectInitLinesCd(tail, cd, isMain))
+                case false => collectInitLinesCd(tail, cd, isMain)
+            }
+        case _ => collectInitLinesCd(tail, cd, isMain)
+    }
+}
 
-def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
-    let ls = list_reverse(collectClockLines es);
-    let has_clk = hasClockLines es;
-    let init_lines = list_reverse(collectInitLines es);
+// Emit ONE clocked always block for an EXTRA cd (non-main: only Cd-init)
+def clockedBlockExtraVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
+    let ls = list_reverse(collectClockLinesCd(es, cd, false));
+    let has_clk = match ls {
+        case lnil => false
+        case _ => true
+    };
+    let init_lines = list_reverse(collectInitLinesCd(es, cd, false));
     let need_reset = match init_lines {
         case lnil => false
         case _ => true
@@ -747,26 +917,103 @@ def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
             let clk_nm = clockName(cd);
             let reset_cond = resetCondStr(cd);
             match need_reset {
-                // No reset values: plain clocked block
                 case false =>
-                    "  always @" + "(" + clk_edge + " " + clk_nm + ") begin\n" + joinLines(ls) + "\n" + "  end\n"
-                // Async:  always @(clk_edge clk or reset_edge reset) begin if (reset_cond) ...
-                // Sync:   always @(clk_edge clk) begin if (reset_cond) ...
+                    "  always @" + "(" + clk_edge + " " + clk_nm + ") begin
+" + joinLines(ls) + "
+" + "  end
+"
                 case true =>
                     let header = match cd.config {
                         case Async =>
                             let reset_edge = resetEdgeStr(cd);
                             let reset_nm = resetName(cd);
-                            "  always @" + "(" + clk_edge + " " + clk_nm + " or " + reset_edge + " " + reset_nm + ") begin\n"
+                            "  always @" + "(" + clk_edge + " " + clk_nm + " or " + reset_edge + " " + reset_nm + ") begin
+"
                         case Sync =>
-                            "  always @" + "(" + clk_edge + " " + clk_nm + ") begin\n"
+                            "  always @" + "(" + clk_edge + " " + clk_nm + ") begin
+"
                     };
                     let indented_init = indentLines(init_lines);
                     let indented_clk = indentLines(ls);
-                    header + "    if (" + reset_cond + ") begin\n" + joinLines(indented_init) + "\n    end else begin\n" + joinLines(indented_clk) + "\n    end\n  end\n"
+                    header + "    if (" + reset_cond + ") begin
+" + joinLines(indented_init) + "
+    end else begin
+" + joinLines(indented_clk) + "
+    end
+  end
+"
             }
     }
 
+// Emit ONE clocked always block for the main cd (only if it has lines)
+def clockedBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
+    let ls = list_reverse(collectClockLinesCd(es, cd, true));
+    let has_clk = match ls {
+        case lnil => false
+        case _ => true
+    };
+    let init_lines = list_reverse(collectInitLinesCd(es, cd, true));
+    let need_reset = match init_lines {
+        case lnil => false
+        case _ => true
+    };
+    match has_clk {
+        case false => ""
+        case true =>
+            let clk_edge = clockEdgeStr(cd);
+            let clk_nm = clockName(cd);
+            let reset_cond = resetCondStr(cd);
+            match need_reset {
+                case false =>
+                    "  always @" + "(" + clk_edge + " " + clk_nm + ") begin
+" + joinLines(ls) + "
+" + "  end
+"
+                case true =>
+                    let header = match cd.config {
+                        case Async =>
+                            let reset_edge = resetEdgeStr(cd);
+                            let reset_nm = resetName(cd);
+                            "  always @" + "(" + clk_edge + " " + clk_nm + " or " + reset_edge + " " + reset_nm + ") begin
+"
+                        case Sync =>
+                            "  always @" + "(" + clk_edge + " " + clk_nm + ") begin
+"
+                    };
+                    let indented_init = indentLines(init_lines);
+                    let indented_clk = indentLines(ls);
+                    header + "    if (" + reset_cond + ") begin
+" + joinLines(indented_init) + "
+    end else begin
+" + joinLines(indented_clk) + "
+    end
+  end
+"
+            }
+    }
+
+
+def clockedExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[ClockDomain]): String = match cds {
+    case lnil => ""
+    case lcons(c, tail) =>
+        let sameAsMain = cdEq(c, mainCd);
+        match sameAsMain {
+            case true => clockedExtrasVL(es, mainCd, tail)
+            case false =>
+                let eb = clockedBlockExtraVL(es, c);
+                eb + clockedExtrasVL(es, mainCd, tail)
+        }
+}
+
+// Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
+// the module default cd; createRegWidthInitCd belongs to its own cd.
+def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
+    let main = clockedBlockVL(es, cd);
+    let extras = collectClockCds es;
+    let extraBlocks = clockedExtrasVL(es, cd, extras);
+    main + extraBlocks
+
+// Recursively emit extra-cd blocks, skipping the one equal to the default cd
 // ============================================================
 //  Hierarchical Verilog Generation (ModuleTree-based)
 // ============================================================
@@ -880,6 +1127,32 @@ def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], s
 
 def collectInstanceLinesTree[elen: Nat](exprs: Vec[Expr] elen): List[String] = collectInstHelp(exprs, lnil, lnil)
 
+// Append clk/reset ports for every extra clock domain referenced by
+// regAssignCd (dedup list from collectClockCds). Reset port only added when
+// that cd has init regs.
+def extraCdPortsVL[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], acc: String, mainCd: ClockDomain): String = match cds {
+    case lnil => acc
+    case lcons(c, tail) =>
+        let isMain = cdEq(c, mainCd);
+        match isMain {
+            case true => extraCdPortsVL(es, tail, acc, mainCd)
+            case false =>
+                let clk_nm = clockName(c);
+                let reset_nm = resetName(c);
+                let initLines = list_reverse(collectInitLinesCd(es, c, false));
+                let hasInit = match initLines {
+                    case lnil => false
+                    case _ => true
+                };
+                let acc1 = acc + "," + "\n" + "  input wire " + clk_nm;
+                let acc2 = match hasInit {
+                    case false => acc1
+                    case true => acc1 + "," + "\n" + "  input wire " + reset_nm
+                };
+                extraCdPortsVL(es, tail, acc2, mainCd)
+        }
+}
+
 // Generate Verilog for a single ModuleDef
 def moduleDefVL(md: ModuleDef): String =
     let whenSigs = list_reverse(collectWhenDrivenSigs md.expr);
@@ -922,7 +1195,11 @@ def moduleDefVL(md: ModuleDef): String =
         case lnil => false
         case _ => true
     };
-    let has_init = hasInitRegs md.expr;
+    let mainInitLines = list_reverse(collectInitLinesCd(md.expr, md.cd, true));
+    let has_init = match mainInitLines {
+        case lnil => false
+        case _ => true
+    };
     let clk_nm = clockName(md.cd);
     let reset_nm = resetName(md.cd);
     let p0 = port_decls;
@@ -953,9 +1230,18 @@ def moduleDefVL(md: ModuleDef): String =
         }
         case true => false
     };
+    let extras = collectClockCds md.expr;
+    let p3 = extraCdPortsVL(md.expr, extras, p2, md.cd);
+    let has_extra_ports = match extras {
+        case lnil => false
+        case _ => true
+    };
     let header = match has_no_port_content {
-        case true => "module " + md.name + " ();\n"
-        case false => "module " + md.name + " (\n" + p2 + "\n);\n"
+        case true => match has_extra_ports {
+            case true => "module " + md.name + " (\n" + p3 + "\n);\n"
+            case false => "module " + md.name + " ();\n"
+        }
+        case false => "module " + md.name + " (\n" + p3 + "\n);\n"
     };
     let body = header + wire_decls + reg_decls + mem_decls + assigns + clocked + always;
     let body_with_inst = match has_instances {

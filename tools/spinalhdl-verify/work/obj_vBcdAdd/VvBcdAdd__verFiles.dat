@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vBcdAdd -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd -o vBcdAdd_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vBcdAdd_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vBcdAdd.v"
+T      4703 562949956522078  1786855937   865491400  1786855937   865491400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd.cpp"
+T      2579 844424933232732  1786855937   865491400  1786855937   865491400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd.h"
+T      1927 562949956522080  1786855937   866492300  1786855937   866492300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd.mk"
+T      1775 562949956522077  1786855937   865491400  1786855937   865491400 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd__Slow.cpp"
+T       549 844424933232730  1786855937   864491100  1786855937   864491100 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd__Syms.cpp"
+T       795 844424933232731  1786855937   864491100  1786855937   864491100 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd__Syms.h"
+T       934 562949956522081  1786855937   866492300  1786855937   866492300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd__ver.d"
+T         0        0  1786855937   873499800  1786855937   873499800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd__verFiles.dat"
+T      1554 1125899909943391  1786855937   866492300  1786855937   866492300 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vBcdAdd/VvBcdAdd_classes.mk"
+S       288 844424933232728  1786855937   740377600  1786855937   740377600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vBcdAdd.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

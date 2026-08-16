@@ -1,0 +1,13 @@
+# DESCRIPTION: Verilator output: Timestamp data for --skip-identical.  Delete at will.
+C "--cc --exe -Wno-fatal --top-module vClz -Mdir /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz -o vClz_tb /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vClz_tb.cpp /mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vClz.v"
+T      4419 4785074607181104  1786855863   508971000  1786855863   508971000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz.cpp"
+T      2470 3377699723627797  1786855863   508971000  1786855863   508971000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz.h"
+T      1900 3659174700338497  1786855863   509971900  1786855863   509971900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz.mk"
+T      1613 5629499537313051  1786855863   508971000  1786855863   508971000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz__Slow.cpp"
+T       534 4503599630470419  1786855863   507970700  1786855863   507970700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz__Syms.cpp"
+T       774 3940649677049108  1786855863   507970700  1786855863   507970700 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz__Syms.h"
+T       883 5910974514023752  1786855863   509971900  1786855863   509971900 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz__ver.d"
+T         0        0  1786855863   519981600  1786855863   519981600 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz__verFiles.dat"
+T      1542 2814749770206526  1786855863   508971000  1786855863   508971000 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/obj_vClz/VvClz_classes.mk"
+S       190 1125899909942545  1786855863   393106800  1786855863   393106800 "/mnt/f/projects/hermes/elaboration-zoo-lsp/tools/spinalhdl-verify/work/vClz.v"
+S   8767680 22236523160150308  1627743426    36597000  1627743426    35595800 "/usr/local/bin/verilator_bin"

@@ -1,0 +1,26 @@
+def cdA: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
+def cdB: ClockDomain = ClockDomain.mk "clkB" "rstB" Async RisingEdge ActiveHigh
+
+module vPulseCC[cdA] {
+    input pulseIn = Bool
+    output pulseOut = Bool
+    pulseOut := pulseCCByToggle(pulseIn, cdA, cdB)
+}
+
+module vFifoCC[cdA] {
+    input pushValid = Bool
+    input pushData = UInt[4]
+    output pushReady = Bool
+    output popValid = Bool
+    output popData = UInt[4]
+    let io = StreamFifoCCIO.mk[4, 4](
+        pushValid, newBoolNamed("pushReady_i"), pushData,
+        newBoolNamed("pov_i"), newUIntNamed("pod_i", 4), newUIntNamed("occ", 3))
+    let _d = streamFifoCC[4][4](io, cdA, cdB)
+    pushReady := io.pushReady
+    popValid := io.popValid
+    popData := io.popData
+}
+
+println(moduleTreeVL(vPulseCC.create[cdA].tree))
+println(moduleTreeVL(vFifoCC.create[cdA].tree))

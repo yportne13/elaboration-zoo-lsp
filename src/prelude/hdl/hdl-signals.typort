@@ -88,6 +88,40 @@ def autoBoolReg[bn: BindingName]: Bool =
     let e = createSignalExpr(bn.name, createReg(bn.name));
     Bool.mk(Some(bn.name), e)
 
+// ---------- per-clock-domain registers (multi-clock support) ----------
+
+def autoUIntRegCd[bn: BindingName](w: Nat, cd: ClockDomain): UInt[w] =
+    let e = createSignalExpr(bn.name, createRegWidthCd(bn.name, w, cd));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsRegCd[bn: BindingName](w: Nat, cd: ClockDomain): Bits[w] =
+    let e = createSignalExpr(bn.name, createRegWidthCd(bn.name, w, cd));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntRegCd[bn: BindingName](w: Nat, cd: ClockDomain): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntRegWidthCd(bn.name, w, cd));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolRegCd[bn: BindingName](cd: ClockDomain): Bool =
+    let e = createSignalExpr(bn.name, createRegWidthCd(bn.name, 1, cd));
+    Bool.mk(Some(bn.name), e)
+
+def autoUIntRegInitCd[bn: BindingName](w: Nat, initVal: Nat, cd: ClockDomain): UInt[w] =
+    let e = createSignalExpr(bn.name, createRegWidthInitCd(bn.name, w, literal(initVal), cd));
+    UInt.mk(Some(bn.name), e)
+
+def autoBitsRegInitCd[bn: BindingName](w: Nat, initVal: Nat, cd: ClockDomain): Bits[w] =
+    let e = createSignalExpr(bn.name, createRegWidthInitCd(bn.name, w, literal(initVal), cd));
+    Bits.mk(Some(bn.name), e)
+
+def autoSIntRegInitCd[bn: BindingName](w: Nat, initVal: Nat, cd: ClockDomain): SInt[w] =
+    let e = createSignalExpr(bn.name, createSIntRegWidthInitCd(bn.name, w, literal(initVal), cd));
+    SInt.mk(Some(bn.name), e)
+
+def autoBoolRegInitCd[bn: BindingName](initVal: Nat, cd: ClockDomain): Bool =
+    let e = createSignalExpr(bn.name, createRegWidthInitCd(bn.name, 1, literal(initVal), cd));
+    Bool.mk(Some(bn.name), e)
+
 def autoUIntRegInit[bn: BindingName](w: Nat, initVal: Nat): UInt[w] =
     let e = createSignalExpr(bn.name, createRegWidthInit(bn.name, w, literal(initVal)));
     UInt.mk(Some(bn.name), e)
@@ -240,6 +274,40 @@ def newBitsRegInitNatNamed(name: String, w: Nat, initVal: Nat): Bits[w] =
 
 def newBoolRegInitNatNamed(name: String, initVal: Nat): Bool =
     let e = createSignalExpr(name, createRegWidthInit(name, 1, literal(initVal)));
+    Bool.mk(Some(name), e)
+
+// ---------- named per-clock-domain registers ----------
+
+def newUIntRegCdNamed(name: String, w: Nat, cd: ClockDomain): UInt[w] =
+    let e = createSignalExpr(name, createRegWidthCd(name, w, cd));
+    UInt.mk(Some(name), e)
+
+def newBitsRegCdNamed(name: String, w: Nat, cd: ClockDomain): Bits[w] =
+    let e = createSignalExpr(name, createRegWidthCd(name, w, cd));
+    Bits.mk(Some(name), e)
+
+def newSIntRegCdNamed(name: String, w: Nat, cd: ClockDomain): SInt[w] =
+    let e = createSignalExpr(name, createSIntRegWidthCd(name, w, cd));
+    SInt.mk(Some(name), e)
+
+def newBoolRegCdNamed(name: String, cd: ClockDomain): Bool =
+    let e = createSignalExpr(name, createRegWidthCd(name, 1, cd));
+    Bool.mk(Some(name), e)
+
+def newUIntRegInitCdNamed(name: String, w: Nat, initVal: Nat, cd: ClockDomain): UInt[w] =
+    let e = createSignalExpr(name, createRegWidthInitCd(name, w, literal(initVal), cd));
+    UInt.mk(Some(name), e)
+
+def newBitsRegInitCdNamed(name: String, w: Nat, initVal: Nat, cd: ClockDomain): Bits[w] =
+    let e = createSignalExpr(name, createRegWidthInitCd(name, w, literal(initVal), cd));
+    Bits.mk(Some(name), e)
+
+def newSIntRegInitCdNamed(name: String, w: Nat, initVal: Nat, cd: ClockDomain): SInt[w] =
+    let e = createSignalExpr(name, createSIntRegWidthInitCd(name, w, literal(initVal), cd));
+    SInt.mk(Some(name), e)
+
+def newBoolRegInitCdNamed(name: String, initVal: Nat, cd: ClockDomain): Bool =
+    let e = createSignalExpr(name, createRegWidthInitCd(name, 1, literal(initVal), cd));
     Bool.mk(Some(name), e)
 
 def newUIntOutRegNamed(name: String, w: Nat): UInt[w] =
