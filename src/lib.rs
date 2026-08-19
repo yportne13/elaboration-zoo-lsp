@@ -1497,6 +1497,99 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         // 3. Full-invocation fallback → macro definition.
         self.goto_macro_definition(uri, offset)
     }
+
+    /// Completion handler body, kept on the generic `Backend<C>` so the real
+    /// request path is directly exercised by integration tests (the concrete
+    /// `LanguageServer for Backend<Client>` impl forwards to it).
+    pub fn completion_at(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let uri = normalize_builtin_uri(&uri);
+        let uri_str = uri.to_string();
+
+        // Wait for any pending/ongoing analysis of this file to complete,
+        // so completion_table reflects the most recent edit.
+        {
+            let (lock, cvar) = &*self.processed_signal;
+            let mut processed = lock.lock().unwrap();
+            let start = std::time::Instant::now();
+            let timeout = Duration::from_millis(1500);
+            while start.elapsed() < timeout
+                && (self.pending_uris.contains_key(&uri_str)
+                    || self.processing_uris.contains_key(&uri_str))
+            {
+                if processed.contains_key(&uri_str) {
+                    break;
+                }
+                processed = cvar.wait_timeout(processed, Duration::from_millis(50)).unwrap().0;
+            }
+            processed.remove(&uri_str);
+        }
+
+        self.client.log_message(MessageType::LOG, "on completion".to_string());
+        let position = params.text_document_position.position;
+        let completions = || -> Option<Vec<CompletionItem>> {
+            let rope = self.document_map.get(&uri.to_string())?;
+            // Position -> byte offset, UTF-16 aware (same as hover/definition).
+            // The old `try_line_to_char + character` math mixed char and byte
+            // offsets, which drifted whenever a non-ASCII character appeared
+            // before the cursor.
+            let offset = position_to_offset(position, &rope)?;
+            // L2: import-context completion — `import mylib.<prefix>` /
+            // `import mylib.{ <prefix>`.  Runs even when the file is mid-edit
+            // (incomplete import → parse error → hover_table absent).
+            let before = rope.byte_slice(0..offset).to_string();
+            let line = before.rsplit('\n').next().unwrap_or("");
+            let mut items = self.import_context_completions(&rope, offset, line);
+            let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
+            // Member-access completions need a successful analysis.
+            if let Some(infer) = self.hover_table.get(&uri.to_string()) {
+                infer.completion_table
+                    .iter()
+                    // Member-access entries are keyed to the receiver's span:
+                    // `x.<prefix>` for typed names, but only `x` for the empty
+                    // `x.` state (the dangling dot is not part of the span).
+                    // Match when the cursor is on that span (hover-style), or
+                    // exactly at its end (cursor right after the typed member
+                    // name), or one byte past it with a `.` in between (cursor
+                    // right after the trigger dot).  The old `contains(offset -
+                    // 2)` hack covered at most two of these cases and missed
+                    // longer typed prefixes.
+                    .filter(|(span, _)| {
+                        let end = span.end_offset as usize;
+                        span.contains(offset)
+                            || offset == end
+                            || (offset == end + 1
+                                && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
+                    })
+                    .filter_map(|(span, name)| {
+                        if !seen.insert(name.to_string()) {
+                            return None;
+                        }
+                        // Replace the typed member prefix (`x.<le>` -> `x.<length>`)
+                        // instead of relying on client-side word replacement.
+                        let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
+                        let range = Range::new(
+                            offset_to_position(prefix_start, &rope)?,
+                            offset_to_position(offset, &rope)?,
+                        );
+                        Some(CompletionItem {
+                            label: name.to_string(),
+                            insert_text: Some(name.to_string()),
+                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                                range,
+                                new_text: name.to_string(),
+                            })),
+                            kind: Some(CompletionItemKind::VARIABLE),
+                            detail: Some(name.to_string()),
+                            ..Default::default()
+                        })
+                    })
+                    .for_each(|i| items.push(i));
+            }
+            Some(items)
+        }();
+        Ok(completions.map(CompletionResponse::Array))
+    }
 }
 
 impl LanguageServer for Backend<Client> {
@@ -1755,93 +1848,7 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri;
-        let uri = normalize_builtin_uri(&uri);
-        let uri_str = uri.to_string();
-
-        // Wait for any pending/ongoing analysis of this file to complete,
-        // so completion_table reflects the most recent edit.
-        {
-            let (lock, cvar) = &*self.processed_signal;
-            let mut processed = lock.lock().unwrap();
-            let start = std::time::Instant::now();
-            let timeout = Duration::from_millis(1500);
-            while start.elapsed() < timeout
-                && (self.pending_uris.contains_key(&uri_str)
-                    || self.processing_uris.contains_key(&uri_str))
-            {
-                if processed.contains_key(&uri_str) {
-                    break;
-                }
-                processed = cvar.wait_timeout(processed, Duration::from_millis(50)).unwrap().0;
-            }
-            processed.remove(&uri_str);
-        }
-
-        self.client.log_message(MessageType::LOG, "on completion".to_string());
-        let position = params.text_document_position.position;
-        let completions = || -> Option<Vec<CompletionItem>> {
-            let rope = self.document_map.get(&uri.to_string())?;
-            // Position -> byte offset, UTF-16 aware (same as hover/definition).
-            // The old `try_line_to_char + character` math mixed char and byte
-            // offsets, which drifted whenever a non-ASCII character appeared
-            // before the cursor.
-            let offset = position_to_offset(position, &rope)?;
-            // L2: import-context completion — `import mylib.<prefix>` /
-            // `import mylib.{ <prefix>`.  Runs even when the file is mid-edit
-            // (incomplete import → parse error → hover_table absent).
-            let before = rope.byte_slice(0..offset).to_string();
-            let line = before.rsplit('\n').next().unwrap_or("");
-            let mut items = self.import_context_completions(&rope, offset, line);
-            let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
-            // Member-access completions need a successful analysis.
-            if let Some(infer) = self.hover_table.get(&uri.to_string()) {
-                infer.completion_table
-                    .iter()
-                    // Member-access entries are keyed to the receiver's span:
-                    // `x.<prefix>` for typed names, but only `x` for the empty
-                    // `x.` state (the dangling dot is not part of the span).
-                    // Match when the cursor is on that span (hover-style), or
-                    // exactly at its end (cursor right after the typed member
-                    // name), or one byte past it with a `.` in between (cursor
-                    // right after the trigger dot).  The old `contains(offset -
-                    // 2)` hack covered at most two of these cases and missed
-                    // longer typed prefixes.
-                    .filter(|(span, _)| {
-                        let end = span.end_offset as usize;
-                        span.contains(offset)
-                            || offset == end
-                            || (offset == end + 1
-                                && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
-                    })
-                    .filter_map(|(span, name)| {
-                        if !seen.insert(name.to_string()) {
-                            return None;
-                        }
-                        // Replace the typed member prefix (`x.<le>` -> `x.<length>`)
-                        // instead of relying on client-side word replacement.
-                        let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
-                        let range = Range::new(
-                            offset_to_position(prefix_start, &rope)?,
-                            offset_to_position(offset, &rope)?,
-                        );
-                        Some(CompletionItem {
-                            label: name.to_string(),
-                            insert_text: Some(name.to_string()),
-                            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                                range,
-                                new_text: name.to_string(),
-                            })),
-                            kind: Some(CompletionItemKind::VARIABLE),
-                            detail: Some(name.to_string()),
-                            ..Default::default()
-                        })
-                    })
-                    .for_each(|i| items.push(i));
-            }
-            Some(items)
-        }();
-        Ok(completions.map(CompletionResponse::Array))
+        self.completion_at(params)
     }
 
     fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
