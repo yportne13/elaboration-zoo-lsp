@@ -422,6 +422,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     ("builtin:///hdl-clock.typort", include_str!("prelude/hdl/hdl-clock.typort")),
                     ("builtin:///hdl-bus.typort", include_str!("prelude/hdl/hdl-bus.typort")),
                     ("builtin:///hdl-signals.typort", include_str!("prelude/hdl/hdl-signals.typort")),
+                    ("builtin:///hdl-utils.typort", include_str!("prelude/hdl/hdl-utils.typort")),
+                    ("builtin:///hdl-stream.typort", include_str!("prelude/hdl/hdl-stream.typort")),
+                    ("builtin:///hdl-crossclock.typort", include_str!("prelude/hdl/hdl-crossclock.typort")),
+                    ("builtin:///hdl-bus-proto.typort", include_str!("prelude/hdl/hdl-bus-proto.typort")),
+                    ("builtin:///hdl-misc-io.typort", include_str!("prelude/hdl/hdl-misc-io.typort")),
+                    ("builtin:///hdl-misc.typort", include_str!("prelude/hdl/hdl-misc.typort")),
                     ("builtin:///hdl-macros.typort", include_str!("prelude/hdl/hdl-macros.typort")),
                     ("builtin:///hdl-verilog.typort", include_str!("prelude/hdl/hdl-verilog.typort")),
                 ]);
