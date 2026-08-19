@@ -298,7 +298,7 @@ macro_rules module {
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
-			let _res: ModuleTree = get_global("ModuleTree")
+			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
 			let _ = create_global("ModuleTree", _prev)
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
@@ -341,7 +341,7 @@ macro_rules module {
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
-			let _res: ModuleTree = get_global("ModuleTree")
+			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
 			let _ = create_global("ModuleTree", _prev)
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*

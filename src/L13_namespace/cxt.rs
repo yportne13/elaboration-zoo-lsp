@@ -146,6 +146,37 @@ fn str_indent2(_: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
+/// HDL self-check reporting (hdl-check.typort): append one
+/// "code|module|signal|message" line to the mutable global
+/// "CheckIssues", skipping lines already present (field re-evaluation
+/// replays each module's close-check ~3x, and re-instantiating a child
+/// module re-runs its constructor — line-level dedup keeps the report
+/// idempotent). Drained per decl by lib.rs / run_with_prelude.
+fn report_check_issue(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 4 { return None; }
+    let get = |i: usize| match args[i].as_ref() {
+        Val::LiteralIntro(s) => s.data.to_string(),
+        _ => String::new(),
+    };
+    let (code, module, signal, message) = (get(0), get(1), get(2), get(3));
+    if code.is_empty() || module.is_empty() { return Some(Val::U(0).into()); }
+    let line = format!("{}|{}|{}|{}", code, module, signal, message);
+    if let Ok(mut map) = infer.mutable_map.write() {
+        let existing = match map.get("CheckIssues") {
+            Some(v) => match v.as_ref() {
+                Val::LiteralIntro(s) => s.data.clone(),
+                _ => String::new(),
+            },
+            None => String::new(),
+        };
+        if !existing.split('\n').any(|l| l == line) {
+            let next = if existing.is_empty() { line } else { format!("{}\n{}", existing, line) };
+            map.insert("CheckIssues".to_string(), Rc::new(Val::LiteralIntro(empty_span(next))));
+        }
+    }
+    Some(Val::U(0).into())
+}
+
 fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
@@ -332,6 +363,16 @@ impl Cxt {
         cxt = cxt.add_builtin(infer, "str_indent2",
             tm_pi(&[("x", tm_decl("String"))], tm_decl("String")),
             PrimFunc(Rc::new(str_indent2)),
+        ).unwrap();
+
+        cxt = cxt.add_builtin(infer, "report_check_issue",
+            tm_pi(&[
+                ("code", tm_decl("String")),
+                ("module", tm_decl("String")),
+                ("signal", tm_decl("String")),
+                ("message", tm_decl("String")),
+            ], Tm::U(0).into()),
+            PrimFunc(Rc::new(report_check_issue)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "string_to_global_type",

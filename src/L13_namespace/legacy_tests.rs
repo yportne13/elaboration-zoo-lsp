@@ -1335,6 +1335,105 @@ fn test_example_hdl_ops() {
 }
 
 // ============================================================
+// HDL self-check（hdl-check.typort）— 设计见 docs/hdl-selfcheck-design.md
+// 检查在模块声明 tyck 期间触发（module 宏 create 侧 _res 钩子），
+// 无需 .tree 访问。警告经 run_with_prelude 逐 decl 排水进输出串。
+// ============================================================
+#[test]
+fn test_hdl_check_clean_module_silent() {
+    let src = r#"
+module good[w: Nat]
+    input a = UInt[w]
+    output y = UInt[w]
+{
+    y := a
+}
+"#;
+    match run_with_prelude(src) {
+        Ok(out) => assert!(!out.contains("[hdl][warning]"), "clean module must not warn: {}", out),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_check_multi_driver() {
+    // 注意：字面完全相同的两条赋值会被重放去重坍缩为一个驱动（见
+    // hdl-check.typort exprKey 注释）；用不同 RHS 构造真冲突。
+    let src = r#"
+module badDrive[w: Nat]
+    input a = UInt[w]
+    input b = UInt[w]
+    output y = UInt[w]
+{
+    y := a
+    y := b
+}
+"#;
+    match run_with_prelude(src) {
+        Ok(out) => assert!(out.contains("HDL010"), "HDL010 multi-driver expected: {}", out),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_check_dangling_read_and_unused() {
+    let src = r#"
+module dangling[w: Nat]
+    input a = UInt[w]
+    output y = UInt[w]
+{
+    let ghost = UInt[w]
+    let dead = UInt[w]
+    y := ghost
+}
+"#;
+    match run_with_prelude(src) {
+        Ok(out) => {
+            assert!(out.contains("HDL001"), "HDL001 dangling read expected: {}", out);
+            assert!(out.contains("HDL002"), "HDL002 unused declaration expected: {}", out);
+        },
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_check_out_undriven() {
+    let src = r#"
+module noDrive[w: Nat]
+    output z = UInt[w]
+{
+    let a = UInt[w]
+    a := 1
+}
+"#;
+    match run_with_prelude(src) {
+        Ok(out) => assert!(out.contains("HDL003"), "HDL003 undriven output expected: {}", out),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+#[test]
+fn test_hdl_check_port_direction() {
+    let src = r#"
+module srcMod[w: Nat]
+    output o = UInt[w]
+{
+    o := 1
+}
+module badConn
+    input x = UInt[8]
+{
+    let u = srcMod.create[8]
+    u.o := x
+}
+"#;
+    match run_with_prelude(src) {
+        Ok(out) => assert!(out.contains("HDL020"), "HDL020 driving child output expected: {}", out),
+        Err(e) => panic!("{} @ {}: {}", e.0.data, e.0.path_id, e.0.start_offset),
+    }
+}
+
+// ============================================================
 // examples/hdl/ — 每个文件演示一组 HDL 特性，同时作为回归测试。
 // 新增示例文件时，在 EXAMPLES 里登记文件与关键输出断言。
 // ============================================================
@@ -4843,4 +4942,5 @@ fn bignat_large_add_no_stack_overflow() {
         }
     }
 }
+
 

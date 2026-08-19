@@ -417,6 +417,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             if !skip_hdl {
                 docs.extend([
                     ("builtin:///hdl-core.typort", include_str!("prelude/hdl/hdl-core.typort")),
+                    ("builtin:///hdl-check.typort", include_str!("prelude/hdl/hdl-check.typort")),
                     ("builtin:///hdl-types.typort", include_str!("prelude/hdl/hdl-types.typort")),
                     ("builtin:///hdl-ops.typort", include_str!("prelude/hdl/hdl-ops.typort")),
                     ("builtin:///hdl-clock.typort", include_str!("prelude/hdl/hdl-clock.typort")),
@@ -1057,6 +1058,29 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // Phase 1 (fast): type-check without normalizing `println` args, so
             // tyck errors reach the client before the slow `nf` phase.
             local_infer.defer_println = true;
+            // HDL self-check support: purge the previous pass's phase-2
+            // leftovers — deferred-println normalization re-runs create-side
+            // constructors after the mutable_map clear, re-appending check
+            // lines that would otherwise land on this pass's first decl.
+            let _ = L13_namespace::take_check_issues(&local_infer);
+
+            fn decl_span(tm: &Decl) -> parser_lib::Span<()> {
+                use crate::parser_lib::ToSpan;
+                match tm {
+                    Decl::Def { name, .. }
+                    | Decl::Enum { name, .. }
+                    | Decl::TraitDecl { name, .. }
+                    | Decl::Class { name, .. } => name.to_span(),
+                    _ => parser_lib::Span { data: (), start_offset: 0, end_offset: 0, path_id: 0 },
+                }
+            }
+            fn check_issue_error(line: &str, tm: &Decl) -> L13_namespace::Error {
+                L13_namespace::Error(
+                    decl_span(tm).map(|_| L13_namespace::format_check_warning(line)),
+                    vec![],
+                )
+            }
+
             let mut err_collect = vec![];
             let mut terms = vec![];
             for tm in decls {
@@ -1071,6 +1095,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
                 for err in local_infer.accumulated_errors.drain(..) {
                     err_collect.push((err, DiagnosticSeverity::ERROR));
+                }
+                // HDL self-check warnings: attributed to the decl currently
+                // being checked (the module close-check runs during the
+                // module class decl's elaboration; replays are deduped in
+                // take_fresh_check_issues via the CheckIssuesSeen global).
+                for line in L13_namespace::take_fresh_check_issues(&local_infer) {
+                    err_collect.push((check_issue_error(&line, &tm), DiagnosticSeverity::WARNING));
                 }
             }
             let after_keys: HashSet<SmolStr> = local_cxt.decl.keys().cloned().collect();

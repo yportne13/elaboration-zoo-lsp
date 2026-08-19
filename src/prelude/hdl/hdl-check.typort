@@ -1,0 +1,813 @@
+// ============================================================
+// HDL Self-Check: tyck-stage lint pass (name-level, phase 1)
+// ============================================================
+// Design doc: docs/hdl-selfcheck-design.md
+//
+// checkModuleTree is called by the module macro's CREATE side at the
+// `_res` point (after the body, before the _prev restore), so every
+// module is checked WHILE its declaration is being type-checked —
+// Phase A of class elaboration evaluates the sandwich fields, replays
+// included (~3x, idempotent: the push at sandwich start replaces the
+// def, replays rebuild it). The tree side (`def tree`) is deliberately
+// NOT hooked: it re-runs on every `.tree` access and phase-2 println
+// normalization would re-trigger reports nobody drains.
+//
+// Reports flow through the Rust builtin report_check_issue into the
+// mutable global "CheckIssues" (one "code|module|signal|message" line
+// per issue, line-level dedup). lib.rs drains it after each decl's
+// infer (with a per-file seen-set, so replays and child-constructor
+// re-runs during parent elaboration don't duplicate or misattribute
+// diagnostics) and turns lines into WARNING diagnostics.
+//
+// All analysis is NAME-level (phase 1). Declaration vs reference is
+// structural: top-level create* nodes in the def's Vec[Expr] are
+// declarations; create* nodes nested inside assignment/condition
+// trees are reads (createSignalExpr's append discipline guarantees
+// this). Bit-level granularity, condition-awareness and source
+// locations (implicit Loc params) are later phases.
+
+// ---------- small utilities ----------
+
+def chkBnot(a: Boolean): Boolean = match a {
+    case true => false
+    case false => true
+}
+
+def chkBand(a: Boolean, b: Boolean): Boolean = match a {
+    case true => b
+    case false => false
+}
+
+def chkBor(a: Boolean, b: Boolean): Boolean = match a {
+    case true => true
+    case false => b
+}
+
+def chkStrIn(s: String, ls: List[String]): Boolean = match ls {
+    case lnil => false
+    case lcons(h, t) => match str_eq(h, s) {
+        case true => true
+        case false => chkStrIn(s, t)
+    }
+}
+
+def chkNatNonZero(n: Nat): Boolean = match n {
+    case zero => false
+    case succ(_) => true
+}
+
+// Local copy of cdEq (hdl-verilog.typort loads later; keep this file
+// loadable right after hdl-core). Compares by (clockName, resetName).
+def chkCdEq(a: ClockDomain, b: ClockDomain): Boolean = match str_eq(a.clockName, b.clockName) {
+    case true => str_eq(a.resetName, b.resetName)
+    case false => false
+}
+
+// ---------- declaration kinds ----------
+
+enum SigKind {
+    kWire
+    kIn
+    kOut
+    kInOut
+    kReg
+    kOutReg
+    kMem
+}
+
+struct SigDecl {
+    name: String
+    kind: SigKind
+}
+
+def kindEq(a: SigKind, b: SigKind): Boolean = match a {
+    case kWire => match b {
+        case kWire => true
+        case _ => false
+    }
+    case kIn => match b {
+        case kIn => true
+        case _ => false
+    }
+    case kOut => match b {
+        case kOut => true
+        case _ => false
+    }
+    case kInOut => match b {
+        case kInOut => true
+        case _ => false
+    }
+    case kReg => match b {
+        case kReg => true
+        case _ => false
+    }
+    case kOutReg => match b {
+        case kOutReg => true
+        case _ => false
+    }
+    case kMem => match b {
+        case kMem => true
+        case _ => false
+    }
+}
+
+// The signal name carried by a create or createMem node, "" otherwise.
+def exprName(e: Expr): String = match e {
+    case create(n) => n
+    case createIn(n) => n
+    case createOut(n) => n
+    case createInOut(n) => n
+    case createWidth(n, _) => n
+    case createInWidth(n, _) => n
+    case createOutWidth(n, _) => n
+    case createInOutWidth(n, _) => n
+    case createReg(n) => n
+    case createRegWidth(n, _) => n
+    case createRegWidthInit(n, _, _) => n
+    case createRegWidthCd(n, _, _) => n
+    case createRegWidthInitCd(n, _, _, _) => n
+    case createSIntRegWidthCd(n, _, _) => n
+    case createSIntRegWidthInitCd(n, _, _, _) => n
+    case createOutReg(n) => n
+    case createOutRegWidth(n, _) => n
+    case createOutRegWidthInit(n, _, _) => n
+    case createSIntWidth(n, _) => n
+    case createSIntInWidth(n, _) => n
+    case createSIntOutWidth(n, _) => n
+    case createSIntInOutWidth(n, _) => n
+    case createSIntRegWidth(n, _) => n
+    case createSIntRegWidthInit(n, _, _) => n
+    case createSIntOutRegWidth(n, _) => n
+    case createSIntOutRegWidthInit(n, _, _) => n
+    case createMem(n, _, _) => n
+    case _ => ""
+}
+
+// Statement-position declaration info, None for non-declaration nodes.
+def declOf(e: Expr): Option[SigDecl] = match e {
+    case create(n) => Some(SigDecl.mk(n, kWire))
+    case createWidth(n, _) => Some(SigDecl.mk(n, kWire))
+    case createSIntWidth(n, _) => Some(SigDecl.mk(n, kWire))
+    case createIn(n) => Some(SigDecl.mk(n, kIn))
+    case createInWidth(n, _) => Some(SigDecl.mk(n, kIn))
+    case createSIntInWidth(n, _) => Some(SigDecl.mk(n, kIn))
+    case createOut(n) => Some(SigDecl.mk(n, kOut))
+    case createOutWidth(n, _) => Some(SigDecl.mk(n, kOut))
+    case createSIntOutWidth(n, _) => Some(SigDecl.mk(n, kOut))
+    case createInOut(n) => Some(SigDecl.mk(n, kInOut))
+    case createInOutWidth(n, _) => Some(SigDecl.mk(n, kInOut))
+    case createSIntInOutWidth(n, _) => Some(SigDecl.mk(n, kInOut))
+    case createReg(n) => Some(SigDecl.mk(n, kReg))
+    case createRegWidth(n, _) => Some(SigDecl.mk(n, kReg))
+    case createRegWidthInit(n, _, _) => Some(SigDecl.mk(n, kReg))
+    case createRegWidthCd(n, _, _) => Some(SigDecl.mk(n, kReg))
+    case createRegWidthInitCd(n, _, _, _) => Some(SigDecl.mk(n, kReg))
+    case createSIntRegWidth(n, _) => Some(SigDecl.mk(n, kReg))
+    case createSIntRegWidthInit(n, _, _) => Some(SigDecl.mk(n, kReg))
+    case createSIntRegWidthCd(n, _, _) => Some(SigDecl.mk(n, kReg))
+    case createSIntRegWidthInitCd(n, _, _, _) => Some(SigDecl.mk(n, kReg))
+    case createOutReg(n) => Some(SigDecl.mk(n, kOutReg))
+    case createOutRegWidth(n, _) => Some(SigDecl.mk(n, kOutReg))
+    case createOutRegWidthInit(n, _, _) => Some(SigDecl.mk(n, kOutReg))
+    case createSIntOutRegWidth(n, _) => Some(SigDecl.mk(n, kOutReg))
+    case createSIntOutRegWidthInit(n, _, _) => Some(SigDecl.mk(n, kOutReg))
+    case createMem(n, _, _) => Some(SigDecl.mk(n, kMem))
+    case _ => None
+}
+
+// ---------- driver facts ----------
+
+struct DriveFacts {
+    name: String
+    uncondComb: Nat
+    uncondClk: Nat
+    condComb: Nat
+    condClk: Nat
+    defClk: Nat
+    cds: List[ClockDomain]
+}
+
+def chkCdInList(c: ClockDomain, ls: List[ClockDomain]): Boolean = match ls {
+    case lnil => false
+    case lcons(h, t) => match chkCdEq(h, c) {
+        case true => true
+        case false => chkCdInList(c, t)
+    }
+}
+
+def bumpCds(f: DriveFacts, cd: Option[ClockDomain]): List[ClockDomain] = match cd {
+    case None => f.cds
+    case Some(c) => match chkCdInList(c, f.cds) {
+        case true => f.cds
+        case false => lcons c f.cds
+    }
+}
+
+def bumpDefClk(f: DriveFacts, cd: Option[ClockDomain]): Nat = match cd {
+    case None => succ(f.defClk)
+    case Some(_) => f.defClk
+}
+
+def bumpFacts(f: DriveFacts, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): DriveFacts = match comb {
+    case true => match cond {
+        case true => DriveFacts.mk(f.name, f.uncondComb, f.uncondClk, succ(f.condComb), f.condClk, f.defClk, f.cds)
+        case false => DriveFacts.mk(f.name, succ(f.uncondComb), f.uncondClk, f.condComb, f.condClk, f.defClk, f.cds)
+    }
+    case false => match cond {
+        case true => DriveFacts.mk(f.name, f.uncondComb, f.uncondClk, f.condComb, succ(f.condClk), bumpDefClk(f, cd), bumpCds(f, cd))
+        case false => DriveFacts.mk(f.name, f.uncondComb, succ(f.uncondClk), f.condComb, f.condClk, bumpDefClk(f, cd), bumpCds(f, cd))
+    }
+}
+
+def mkFacts(name: String, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): DriveFacts =
+    bumpFacts(DriveFacts.mk(name, 0, 0, 0, 0, 0, lnil), comb, cond, cd)
+
+def updFacts(facts: List[DriveFacts], name: String, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): List[DriveFacts] = match facts {
+    case lnil => lcons(mkFacts(name, comb, cond, cd), lnil)
+    case lcons(f, t) => match str_eq(f.name, name) {
+        case true => lcons(bumpFacts(f, comb, cond, cd), t)
+        case false => lcons(f, updFacts(t, name, comb, cond, cd))
+    }
+}
+
+// Structural serialization key of an Expr node. The create-side def
+// accumulates REPLAYED statements: class fields are evaluated ~3x at
+// check time and each evaluation re-appends its statement into the
+// same def (the push only resets at whole-sandwich boundaries; codegen
+// never sees this because it reads the .tree rebuild). The scanner
+// dedups top-level statements by this key, collapsing replays. Two
+// literally-identical user statements therefore count as one driver —
+// an accepted blind spot (they are semantically the same driver).
+def exprKey(e: Expr): String = match e {
+    case create(n) => "c:" + n
+    case createIn(n) => "ci:" + n
+    case createOut(n) => "co:" + n
+    case createInOut(n) => "cio:" + n
+    case createWidth(n, w) => "cw:" + n + ":" + nat_to_dec(w)
+    case createInWidth(n, w) => "ciw:" + n + ":" + nat_to_dec(w)
+    case createOutWidth(n, w) => "cow:" + n + ":" + nat_to_dec(w)
+    case createInOutWidth(n, w) => "ciow:" + n + ":" + nat_to_dec(w)
+    case createReg(n) => "cr:" + n
+    case createRegWidth(n, w) => "crw:" + n + ":" + nat_to_dec(w)
+    case createRegWidthInit(n, w, i) => "crwi:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i)
+    case createRegWidthCd(n, w, cd) => "crwc:" + n + ":" + nat_to_dec(w) + ":" + cd.clockName + "/" + cd.resetName
+    case createRegWidthInitCd(n, w, i, cd) => "crwic:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i) + ":" + cd.clockName + "/" + cd.resetName
+    case createSIntRegWidthCd(n, w, cd) => "csrwc:" + n + ":" + nat_to_dec(w) + ":" + cd.clockName + "/" + cd.resetName
+    case createSIntRegWidthInitCd(n, w, i, cd) => "csrwic:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i) + ":" + cd.clockName + "/" + cd.resetName
+    case createOutReg(n) => "cor:" + n
+    case createOutRegWidth(n, w) => "corw:" + n + ":" + nat_to_dec(w)
+    case createOutRegWidthInit(n, w, i) => "corwi:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i)
+    case createSIntWidth(n, w) => "csw:" + n + ":" + nat_to_dec(w)
+    case createSIntInWidth(n, w) => "csiw:" + n + ":" + nat_to_dec(w)
+    case createSIntOutWidth(n, w) => "csow:" + n + ":" + nat_to_dec(w)
+    case createSIntInOutWidth(n, w) => "csiow:" + n + ":" + nat_to_dec(w)
+    case createSIntRegWidth(n, w) => "csrw:" + n + ":" + nat_to_dec(w)
+    case createSIntRegWidthInit(n, w, i) => "csrwi:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i)
+    case createSIntOutRegWidth(n, w) => "csorw:" + n + ":" + nat_to_dec(w)
+    case createSIntOutRegWidthInit(n, w, i) => "csorwi:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i)
+    case literal(v) => "l:" + nat_to_dec(v)
+    case unary(op, x) => "u:" + op + "(" + exprKey(x) + ")"
+    case binary(l, op, r) => "b:" + op + "(" + exprKey(l) + "," + exprKey(r) + ")"
+    case assign(l, r) => "a:(" + exprKey(l) + "," + exprKey(r) + ")"
+    case regAssign(l, r) => "r:(" + exprKey(l) + "," + exprKey(r) + ")"
+    case regAssignCd(l, r, cd) => "rc:(" + exprKey(l) + "," + exprKey(r) + "," + cd.clockName + "/" + cd.resetName + ")"
+    case when(c, b, eb) => match eb {
+        case None => "w:(" + exprKey(c) + "," + exprKey(b) + ",N)"
+        case Some(x) => "w:(" + exprKey(c) + "," + exprKey(b) + ",S" + exprKey(x) + ")"
+    }
+    case switch(v, cs) => "sw:(" + exprKey(v) + "," + exprKey(cs) + ")"
+    case block(h, t) => "k:(" + exprKey(h) + "," + exprKey(t) + ")"
+    case nop => "n"
+    case mux(c, tv, fv) => "m:(" + exprKey(c) + "," + exprKey(tv) + "," + exprKey(fv) + ")"
+    case bitsel(b, i) => "bs:(" + exprKey(b) + "," + exprKey(i) + ")"
+    case partsel(b, hi, lo) => "ps:(" + exprKey(b) + "," + exprKey(hi) + "," + exprKey(lo) + ")"
+    case instance(i, m) => "in:" + i + ":" + m
+    case instanceWithPorts(i, m, p) => "inw:" + i + ":" + m + ":" + p
+    case subSignal(i, s) => "ss:" + i + ":" + s
+    case createMem(n, wc, w) => "cm:" + n + ":" + nat_to_dec(wc) + ":" + nat_to_dec(w)
+    case memRead(m, a) => "mr:(" + exprKey(m) + "," + exprKey(a) + ")"
+    case memWrite(m, a, d, en) => "mw:(" + exprKey(m) + "," + exprKey(a) + "," + exprKey(d) + "," + exprKey(en) + ")"
+}
+
+// ---------- module facts accumulator ----------
+
+struct ConnInfo {
+    inst: String
+    port: String
+    isLhs: Boolean
+}
+
+struct InstInfo {
+    inst: String
+    mdl: String
+    raw: Boolean
+}
+
+struct ModFacts {
+    decls: List[SigDecl]
+    reads: List[String]
+    conns: List[ConnInfo]
+    insts: List[InstInfo]
+    facts: List[DriveFacts]
+    seen: List[String]
+}
+
+def mfAddRead(acc: ModFacts, nm: String): ModFacts =
+    ModFacts.mk(acc.decls, lcons nm acc.reads, acc.conns, acc.insts, acc.facts, acc.seen)
+
+def mfAddDecl(acc: ModFacts, d: SigDecl): ModFacts =
+    ModFacts.mk(lcons d acc.decls, acc.reads, acc.conns, acc.insts, acc.facts, acc.seen)
+
+def mfAddConn(acc: ModFacts, c: ConnInfo): ModFacts =
+    ModFacts.mk(acc.decls, acc.reads, lcons c acc.conns, acc.insts, acc.facts, acc.seen)
+
+def mfAddInst(acc: ModFacts, i: InstInfo): ModFacts =
+    ModFacts.mk(acc.decls, acc.reads, acc.conns, lcons i acc.insts, acc.facts, acc.seen)
+
+def mfAddDrive(acc: ModFacts, nm: String, comb: Boolean, cond: Boolean, cd: Option[ClockDomain]): ModFacts =
+    ModFacts.mk(acc.decls, acc.reads, acc.conns, acc.insts, updFacts(acc.facts, nm, comb, cond, cd), acc.seen)
+
+// ---------- scanners ----------
+// Dependency order is acyclic (typort defs elaborate in file order):
+// scanExpr -> {mfAddRead, mfAddConn, scanExpr}
+// scanLhsIdx -> scanExpr
+// scanStmt -> {scanExpr, scanLhsConn, scanLhsIdx, scanStmt, adders}
+// A when-node reached from scanExpr (defensive; generated trees put
+// when nodes at statement position only) scans its body with scanExpr,
+// which counts the assignment LHS root as a read — acceptable
+// imprecision for a shape that does not occur in generated trees.
+
+// Expression-position scan: collects reads (create* names) and
+// child-port reads (RHS subSignal -> connection with isLhs = false).
+def scanExpr(e: Expr, acc: ModFacts): ModFacts = match e {
+    case subSignal(inm, pnm) => mfAddConn(acc, ConnInfo.mk(inm, pnm, false))
+    case literal(_) => acc
+    case nop => acc
+    case unary(_, x) => scanExpr(x, acc)
+    case binary(l, _, r) =>
+        let a1 = scanExpr(l, acc);
+        scanExpr(r, a1)
+    case mux(c, tv, fv) =>
+        let a1 = scanExpr(c, acc);
+        let a2 = scanExpr(tv, a1);
+        scanExpr(fv, a2)
+    case bitsel(b, i) =>
+        let a1 = scanExpr(b, acc);
+        scanExpr(i, a1)
+    case partsel(b, hi, lo) =>
+        let a1 = scanExpr(b, acc);
+        let a2 = scanExpr(hi, a1);
+        scanExpr(lo, a2)
+    case memRead(m, a) =>
+        let a1 = scanExpr(m, acc);
+        scanExpr(a, a1)
+    case memWrite(m, a, d, en) =>
+        let a1 = scanExpr(m, acc);
+        let a2 = scanExpr(a, a1);
+        let a3 = scanExpr(d, a2);
+        scanExpr(en, a3)
+    case when(c, b, eb) =>
+        let a1 = scanExpr(c, acc);
+        let a2 = scanExpr(b, a1);
+        match eb {
+            case None => a2
+            case Some(e2) => scanExpr(e2, a2)
+        }
+    case block(h, t) =>
+        let a1 = scanExpr(h, acc);
+        scanExpr(t, a1)
+    case assign(l, r) =>
+        let a1 = scanExpr(l, acc);
+        scanExpr(r, a1)
+    case regAssign(l, r) =>
+        let a1 = scanExpr(l, acc);
+        scanExpr(r, a1)
+    case regAssignCd(l, r, _) =>
+        let a1 = scanExpr(l, acc);
+        scanExpr(r, a1)
+    case instance(_, _) => acc
+    case instanceWithPorts(_, _, _) => acc
+    case _ =>
+        let nm = exprName(e);
+        match str_eq(nm, "") {
+            case true => acc
+            case false => mfAddRead(acc, nm)
+        }
+}
+
+// Root signal name of an assignment LHS (through bitsel/partsel bases);
+// "" for subSignal LHS (recorded as a connection instead).
+def lhsRoot(e: Expr): String = match e {
+    case bitsel(b, _) => lhsRoot(b)
+    case partsel(b, _, _) => lhsRoot(b)
+    case _ => exprName(e)
+}
+
+// LHS-side extra reads: dynamic index expressions of bitsel/partsel LHS
+// (`t[i] := x` reads i). The base signal itself is a drive target, not
+// a read, so only the index sub-expressions are scanned.
+def scanLhsIdx(e: Expr, acc: ModFacts): ModFacts = match e {
+    case bitsel(b, i) =>
+        let a1 = scanLhsIdx(b, acc);
+        scanExpr(i, a1)
+    case partsel(b, hi, lo) =>
+        let a1 = scanLhsIdx(b, acc);
+        let a2 = scanExpr(hi, a1);
+        scanExpr(lo, a2)
+    case _ => acc
+}
+
+// LHS connection: `u.port := x` records parent-drives-child.
+def scanLhsConn(e: Expr, acc: ModFacts): ModFacts = match e {
+    case subSignal(inm, pnm) => mfAddConn(acc, ConnInfo.mk(inm, pnm, true))
+    case _ => acc
+}
+
+// Statement-position scan. underWhen marks assignments inside a when
+// (the tree records each such assignment as when(cond, assign, None)
+// with its FULL flattened condition — nesting need not be counted).
+def scanStmt(e: Expr, underWhen: Boolean, acc: ModFacts): ModFacts = match e {
+    case assign(lhs, rhs) =>
+        let a1 = scanExpr(rhs, acc);
+        let a2 = scanLhsConn(lhs, a1);
+        let a3 = scanLhsIdx(lhs, a2);
+        let nm = lhsRoot(lhs);
+        match str_eq(nm, "") {
+            case true => a3
+            case false => mfAddDrive(a3, nm, true, underWhen, None)
+        }
+    case regAssign(lhs, rhs) =>
+        let a1 = scanExpr(rhs, acc);
+        let a2 = scanLhsConn(lhs, a1);
+        let a3 = scanLhsIdx(lhs, a2);
+        let nm = lhsRoot(lhs);
+        match str_eq(nm, "") {
+            case true => a3
+            case false => mfAddDrive(a3, nm, false, underWhen, None)
+        }
+    case regAssignCd(lhs, rhs, cd) =>
+        let a1 = scanExpr(rhs, acc);
+        let a2 = scanLhsConn(lhs, a1);
+        let a3 = scanLhsIdx(lhs, a2);
+        let nm = lhsRoot(lhs);
+        match str_eq(nm, "") {
+            case true => a3
+            case false => mfAddDrive(a3, nm, false, underWhen, Some(cd))
+        }
+    case when(cond, body, elseBody) =>
+        let a1 = scanExpr(cond, acc);
+        let a2 = scanStmt(body, true, a1);
+        match elseBody {
+            case None => a2
+            case Some(eb) => scanStmt(eb, true, a2)
+        }
+    case block(head, tail) =>
+        let a1 = scanStmt(head, underWhen, acc);
+        scanStmt(tail, underWhen, a1)
+    case instance(inm, mnm) => mfAddInst(acc, InstInfo.mk(inm, mnm, false))
+    case instanceWithPorts(inm, mnm, _) => mfAddInst(acc, InstInfo.mk(inm, mnm, true))
+    case memWrite(mem, addr, data, en) =>
+        let _ = mem;
+        let a1 = scanExpr(addr, acc);
+        let a2 = scanExpr(data, a1);
+        scanExpr(en, a2)
+    case _ =>
+        let d = declOf(e);
+        match d {
+            case Some(sd) => mfAddDecl(acc, sd)
+            case None => scanExpr(e, acc)
+        }
+}
+
+def scanAll[ne: Nat](es: Vec[Expr] ne, acc: ModFacts): ModFacts = match es {
+    case nil => acc
+    case cons(h, t) =>
+        let k = exprKey(h);
+        let dup = chkStrIn(k, acc.seen);
+        let acc2 = match dup {
+            case true => acc
+            case false => scanStmt(h, false, ModFacts.mk(acc.decls, acc.reads, acc.conns, acc.insts, acc.facts, lcons k acc.seen))
+        };
+        scanAll(t, acc2)
+}
+
+// ---------- port table (global "ModulePortTable") ----------
+// Registered by every module's close-check (idempotent overwrite by
+// module name). Parent checks read it back: a child's constructor
+// re-runs during the parent's body elaboration, so the table is
+// rebuilt on demand even after mutable_map was cleared per file.
+
+struct PortEntry {
+    mdl: String
+    ins: List[String]
+    outs: List[String]
+    inouts: List[String]
+}
+
+struct ModulePortTable {
+    entries: List[PortEntry]
+}
+
+def namesOfKind(ds: List[SigDecl], k: SigKind): List[String] = match ds {
+    case lnil => lnil
+    case lcons(d, t) => match kindEq(d.kind, k) {
+        case true => lcons(d.name, namesOfKind(t, k))
+        case false => namesOfKind(t, k)
+    }
+}
+
+def portEntryFilter(es: List[PortEntry], mdl: String): List[PortEntry] = match es {
+    case lnil => lnil
+    case lcons(e, t) => match str_eq(e.mdl, mdl) {
+        case true => portEntryFilter(t, mdl)
+        case false => lcons(e, portEntryFilter(t, mdl))
+    }
+}
+
+def portTableAdd(tbl: ModulePortTable, e: PortEntry): ModulePortTable =
+    ModulePortTable.mk(lcons(e, portEntryFilter(tbl.entries, e.mdl)))
+
+def findPorts(es: List[PortEntry], mdl: String): Option[PortEntry] = match es {
+    case lnil => None
+    case lcons(e, t) => match str_eq(e.mdl, mdl) {
+        case true => Some(e)
+        case false => findPorts(t, mdl)
+    }
+}
+
+// A signal name may carry SEVERAL decl entries: bundle factories first
+// create plain wires (TypeName.create), then .asMaster/.asSlave rebuild
+// directed ports with the same names — the Verilog generator drops the
+// shadowed wires ("ports take precedence over same-named wires"). The
+// checker must apply the same precedence or port-kind lookups hit the
+// leftover wire entries.
+
+def hasPortEntry(ds: List[SigDecl], nm: String): Boolean = match ds {
+    case lnil => false
+    case lcons(d, t) => match str_eq(d.name, nm) {
+        case true => chkBor(chkBor(kindEq(d.kind, kIn), chkBor(kindEq(d.kind, kOut), chkBor(kindEq(d.kind, kInOut), kindEq(d.kind, kOutReg)))), hasPortEntry(t, nm))
+        case false => hasPortEntry(t, nm)
+    }
+}
+
+def dropShadowedWires(ds: List[SigDecl]): List[SigDecl] = match ds {
+    case lnil => lnil
+    case lcons(d, t) => match kindEq(d.kind, kWire) {
+        case true => match hasPortEntry(t, d.name) {
+            case true => dropShadowedWires(t)
+            case false => lcons(d, dropShadowedWires(t))
+        }
+        case false => lcons(d, dropShadowedWires(t))
+    }
+}
+
+// ---------- queries ----------
+
+def findFacts(facts: List[DriveFacts], nm: String): Option[DriveFacts] = match facts {
+    case lnil => None
+    case lcons(f, t) => match str_eq(f.name, nm) {
+        case true => Some(f)
+        case false => findFacts(t, nm)
+    }
+}
+
+// OR-continue over same-name entries: a name may legitimately carry a
+// wire entry AND a port entry (see dropShadowedWires) before normalize.
+def declIsKind(ds: List[SigDecl], nm: String, k: SigKind): Boolean = match ds {
+    case lnil => false
+    case lcons(d, t) => match str_eq(d.name, nm) {
+        case true => chkBor(kindEq(d.kind, k), declIsKind(t, nm, k))
+        case false => declIsKind(t, nm, k)
+    }
+}
+
+def instModule(insts: List[InstInfo], iname: String): Option[String] = match insts {
+    case lnil => None
+    case lcons(i, t) => match str_eq(i.inst, iname) {
+        case true => Some(i.mdl)
+        case false => instModule(t, iname)
+    }
+}
+
+// ---------- rules ----------
+
+def chkReport(code: String, mname: String, sig: String, msg: String): Unit =
+    let _ = report_check_issue(code, mname, sig, msg);
+    unit
+
+// HDL001: read but never driven (and not an input/inout port, mem, or
+// output port — undriven outputs are HDL003's business).
+def ruleDanglingRead(mname: String, reads: List[String], mf: ModFacts): Unit = match reads {
+    case lnil => unit
+    case lcons(r, t) =>
+        let driven = match findFacts(mf.facts, r) {
+            case None => false
+            case Some(_) => true
+        };
+        let isPortIn = declIsKind(mf.decls, r, kIn);
+        let isPortInOut = declIsKind(mf.decls, r, kInOut);
+        let isMem = declIsKind(mf.decls, r, kMem);
+        let isPortOut = chkBor(declIsKind(mf.decls, r, kOut), declIsKind(mf.decls, r, kOutReg));
+        let ok = chkBor(driven, chkBor(isPortIn, chkBor(isPortInOut, chkBor(isMem, isPortOut))));
+        let _ = match chkBnot(ok) {
+            case true => chkReport("HDL001", mname, r, "read but never driven (and not an input port)")
+            case false => unit
+        };
+        ruleDanglingRead(mname, t, mf)
+}
+
+// HDL002: declared but never read (dead signal / unused input / dead mem).
+def ruleUnusedDecl(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
+    case lnil => unit
+    case lcons(d, t) =>
+        let read = chkStrIn(d.name, mf.reads);
+        let checkable = chkBor(kindEq(d.kind, kWire), chkBor(kindEq(d.kind, kReg), chkBor(kindEq(d.kind, kIn), kindEq(d.kind, kMem))));
+        let _ = match chkBand(checkable, chkBnot(read)) {
+            case true => chkReport("HDL002", mname, d.name, "declared but never read")
+            case false => unit
+        };
+        ruleUnusedDecl(mname, t, mf)
+}
+
+// HDL003: output port never driven.
+def ruleOutUndriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
+    case lnil => unit
+    case lcons(d, t) =>
+        let isOut = chkBor(kindEq(d.kind, kOut), kindEq(d.kind, kOutReg));
+        let driven = match findFacts(mf.facts, d.name) {
+            case None => false
+            case Some(_) => true
+        };
+        let _ = match chkBand(isOut, chkBnot(driven)) {
+            case true => chkReport("HDL003", mname, d.name, "output port never driven")
+            case false => unit
+        };
+        ruleOutUndriven(mname, t, mf)
+}
+
+// HDL010/011/012/013: per-signal driver conflicts.
+def ruleDrivers(mname: String, facts: List[DriveFacts]): Unit = match facts {
+    case lnil => unit
+    case lcons(f, t) =>
+        let multi = match f.uncondComb {
+            case succ(succ(_)) => true
+            case _ => false
+        };
+        let mixed11 = chkBand(chkNatNonZero(f.uncondComb), chkNatNonZero(f.condComb));
+        let anyComb = chkBor(chkNatNonZero(f.uncondComb), chkNatNonZero(f.condComb));
+        let anyClk = chkBor(chkNatNonZero(f.uncondClk), chkNatNonZero(f.condClk));
+        let mixed12 = chkBand(anyComb, anyClk);
+        let twoCds = match f.cds {
+            case lcons(_, lcons(_, _)) => true
+            case _ => false
+        };
+        let hasExplicitCd = match f.cds {
+            case lnil => false
+            case lcons(_, _) => true
+        };
+        let multiCd = chkBor(twoCds, chkBand(chkNatNonZero(f.defClk), hasExplicitCd));
+        let _ = match multi {
+            case true => chkReport("HDL010", mname, f.name, "multiple unconditional assignments")
+            case false => unit
+        };
+        let _ = match mixed11 {
+            case true => chkReport("HDL011", mname, f.name, "unconditional and conditional assignments mixed (assign + always block conflict)")
+            case false => unit
+        };
+        let _ = match mixed12 {
+            case true => chkReport("HDL012", mname, f.name, "combinational and clocked assignments mixed on the same signal")
+            case false => unit
+        };
+        let _ = match multiCd {
+            case true => chkReport("HDL013", mname, f.name, "register driven from multiple clock domains")
+            case false => unit
+        };
+        ruleDrivers(mname, t)
+}
+
+// HDL023: the module drives its own input port.
+def ruleOwnInputDriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
+    case lnil => unit
+    case lcons(d, t) =>
+        let driven = match findFacts(mf.facts, d.name) {
+            case None => false
+            case Some(_) => true
+        };
+        let _ = match chkBand(kindEq(d.kind, kIn), driven) {
+            case true => chkReport("HDL023", mname, d.name, "module drives its own input port")
+            case false => unit
+        };
+        ruleOwnInputDriven(mname, t, mf)
+}
+
+// HDL020/021/025: parent-side port direction at each connection.
+def ruleConnDir(mname: String, conns: List[ConnInfo], insts: List[InstInfo], tbl: ModulePortTable): Unit = match conns {
+    case lnil => unit
+    case lcons(c, t) =>
+        let mnm = instModule(insts, c.inst);
+        let pe = match mnm {
+            case None => None
+            case Some(m) => findPorts(tbl.entries, m)
+        };
+        let _ = match pe {
+            case None => unit
+            case Some(e) =>
+                let isIn = chkStrIn(c.port, e.ins);
+                let isOut = chkStrIn(c.port, e.outs);
+                let isInout = chkStrIn(c.port, e.inouts);
+                let badDrive = chkBand(c.isLhs, chkBand(isOut, chkBnot(isInout)));
+                let badRead = chkBand(chkBnot(c.isLhs), chkBand(isIn, chkBnot(isInout)));
+                let known = chkBor(isIn, chkBor(isOut, isInout));
+                let _ = match badDrive {
+                    case true => chkReport("HDL020", mname, c.inst + "." + c.port, "parent drives child module's OUTPUT port")
+                    case false => unit
+                };
+                let _ = match badRead {
+                    case true => chkReport("HDL021", mname, c.inst + "." + c.port, "parent reads child module's INPUT port")
+                    case false => unit
+                };
+                let _ = match known {
+                    case true => unit
+                    case false => chkReport("HDL025", mname, c.inst + "." + c.port, "connected port does not exist on child module")
+                };
+                unit
+        };
+        ruleConnDir(mname, t, insts, tbl)
+}
+
+// HDL022: instance ports left unconnected (skipped for raw instances —
+// their port string is invisible to the checker).
+def connCovers(conns: List[ConnInfo], iname: String, port: String): Boolean = match conns {
+    case lnil => false
+    case lcons(c, t) => match str_eq(c.inst, iname) {
+        case true => match str_eq(c.port, port) {
+            case true => true
+            case false => connCovers(t, iname, port)
+        }
+        case false => connCovers(t, iname, port)
+    }
+}
+
+def ruleInstPorts(mname: String, ports: List[String], iname: String, conns: List[ConnInfo]): Unit = match ports {
+    case lnil => unit
+    case lcons(p, t) =>
+        let covered = connCovers(conns, iname, p);
+        let _ = match covered {
+            case false => chkReport("HDL022", mname, iname + "." + p, "instance port left unconnected")
+            case true => unit
+        };
+        ruleInstPorts(mname, t, iname, conns)
+}
+
+// HDL024: raw instance connections bypass all checking.
+def ruleInsts(mname: String, insts: List[InstInfo], conns: List[ConnInfo], tbl: ModulePortTable): Unit = match insts {
+    case lnil => unit
+    case lcons(i, t) =>
+        let _ = match i.raw {
+            case true => chkReport("HDL024", mname, i.inst, "instanceWithPorts bypasses HDL checking (raw port string)")
+            case false => unit
+        };
+        let _ = match i.raw {
+            case true => unit
+            case false =>
+                let pe = findPorts(tbl.entries, i.mdl);
+                match pe {
+                    case None => unit
+                    case Some(e) => ruleInstPorts(mname, list_append(e.ins, e.outs), i.inst, conns)
+                }
+        };
+        ruleInsts(mname, t, conns, tbl)
+}
+
+// ---------- entry ----------
+
+def runChecks(md: ModuleDef): Unit =
+    let mfRaw = scanAll(md.expr, ModFacts.mk(lnil, lnil, lnil, lnil, lnil, lnil));
+    let mf = ModFacts.mk(dropShadowedWires(mfRaw.decls), mfRaw.reads, mfRaw.conns, mfRaw.insts, mfRaw.facts, mfRaw.seen);
+    let entry = PortEntry.mk(
+        md.name,
+        namesOfKind(mf.decls, kIn),
+        list_append(namesOfKind(mf.decls, kOut), namesOfKind(mf.decls, kOutReg)),
+        namesOfKind(mf.decls, kInOut));
+    let _ = change_mutable_default("ModulePortTable", x => portTableAdd(x, entry), ModulePortTable.mk(lnil));
+    let tbl: ModulePortTable = get_global("ModulePortTable");
+    let _ = ruleDanglingRead(md.name, mf.reads, mf);
+    let _ = ruleUnusedDecl(md.name, mf.decls, mf);
+    let _ = ruleOutUndriven(md.name, mf.decls, mf);
+    let _ = ruleDrivers(md.name, mf.facts);
+    let _ = ruleOwnInputDriven(md.name, mf.decls, mf);
+    let _ = ruleConnDir(md.name, mf.conns, mf.insts, tbl);
+    let _ = ruleInsts(md.name, mf.insts, mf.conns, tbl);
+    unit
+
+// Module-macro CREATE-side hook: analyze the completed head def and
+// return the tree unchanged (checks are pure diagnostics). The empty
+// head (headModuleDef's fallback for an empty tree) is skipped.
+def checkModuleTree(t: ModuleTree): ModuleTree =
+    let md = headModuleDef(t.data);
+    let skip = str_eq(md.name, "");
+    let _ = match skip {
+        case true => unit
+        case false => runChecks(md)
+    };
+    t

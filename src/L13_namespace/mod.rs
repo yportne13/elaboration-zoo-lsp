@@ -2548,6 +2548,12 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
+        // HDL self-check warnings: drain per decl (the module close-check
+        // runs during the module class decl's own elaboration).
+        for line in take_fresh_check_issues(&infer) {
+            ret += &format_check_warning(&line);
+            ret += "\n";
+        }
         if let DeclTm::Println(_, s, _) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));
             ret += &s;
@@ -2609,6 +2615,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     if include_hdl {
         prelude.extend([
             include_str!("../prelude/hdl/hdl-core.typort"),
+            include_str!("../prelude/hdl/hdl-check.typort"),
             include_str!("../prelude/hdl/hdl-types.typort"),
             include_str!("../prelude/hdl/hdl-ops.typort"),
             include_str!("../prelude/hdl/hdl-clock.typort"),
@@ -2711,6 +2718,81 @@ pub fn clone_prelude_state(
     Ok((infer, state.cxt.clone(), state.global_macros.clone()))
 }
 
+/// Drain accumulated HDL self-check issues (the mutable global
+/// "CheckIssues" written by the report_check_issue builtin): returns
+/// the pending "code|module|signal|message" lines and resets the
+/// global. Callers dedup further with a per-file/per-run seen-set —
+/// the global only dedups within its own (never-drained) content.
+pub fn take_check_issues(infer: &Infer) -> Vec<String> {
+    let lines = {
+        let map = infer.mutable_map.read().unwrap();
+        match map.get("CheckIssues") {
+            Some(v) => match v.as_ref() {
+                Val::LiteralIntro(s) => s.data.clone(),
+                _ => String::new(),
+            },
+            None => String::new(),
+        }
+    };
+    if lines.is_empty() { return Vec::new(); }
+    infer.mutable_map.write().unwrap().insert(
+        "CheckIssues".to_string(),
+        Rc::new(Val::LiteralIntro(empty_span(String::new()))),
+    );
+    lines.split('\n').filter(|l| !l.is_empty()).map(|l| l.to_string()).collect()
+}
+
+/// "code|module|signal|message" -> human-readable warning line.
+pub fn format_check_warning(line: &str) -> String {
+    let parts: Vec<&str> = line.splitn(4, '|').collect();
+    match parts.as_slice() {
+        [code, module, signal, message] => {
+            if signal.is_empty() {
+                format!("[hdl][warning] {} [{}] {}", code, module, message)
+            } else {
+                format!("[hdl][warning] {} [{}] {}: {}", code, module, signal, message)
+            }
+        }
+        _ => format!("[hdl][warning] {}", line),
+    }
+}
+
+/// take_check_issues + cross-decl dedup: only lines not yet reported in
+/// this run/file. The seen-set lives in the mutable global
+/// "CheckIssuesSeen", which resets together with the rest of
+/// mutable_map (cleared per file by lib.rs; deep-copied fresh per
+/// run_with_prelude call). This is what keeps re-instantiated child
+/// constructors (which replay their close-check) from re-reporting,
+/// and pins each warning to the module's own declaration.
+pub fn take_fresh_check_issues(infer: &Infer) -> Vec<String> {
+    let pending = take_check_issues(infer);
+    if pending.is_empty() { return Vec::new(); }
+    let mut seen = {
+        let map = infer.mutable_map.read().unwrap();
+        match map.get("CheckIssuesSeen") {
+            Some(v) => match v.as_ref() {
+                Val::LiteralIntro(s) => s.data.clone(),
+                _ => String::new(),
+            },
+            None => String::new(),
+        }
+    };
+    let mut fresh = Vec::new();
+    for line in pending {
+        if !seen.split('\n').any(|l| l == line) {
+            seen = if seen.is_empty() { line.clone() } else { format!("{}\n{}", seen, line) };
+            fresh.push(line);
+        }
+    }
+    if !fresh.is_empty() {
+        infer.mutable_map.write().unwrap().insert(
+            "CheckIssuesSeen".to_string(),
+            Rc::new(Val::LiteralIntro(empty_span(seen))),
+        );
+    }
+    fresh
+}
+
 #[allow(unused)]
 pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     let (mut infer, mut cxt, global_macros) = clone_prelude_state(true)?;
@@ -2759,6 +2841,12 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
+        // HDL self-check warnings: drain per decl (the module close-check
+        // runs during the module class decl's own elaboration).
+        for line in take_fresh_check_issues(&infer) {
+            ret += &format_check_warning(&line);
+            ret += "\n";
+        }
         if let DeclTm::Println(_, s, _) = x {
             //ret += &format!("{:?}", infer.nf(&cxt.env, x));
             ret += &s;
