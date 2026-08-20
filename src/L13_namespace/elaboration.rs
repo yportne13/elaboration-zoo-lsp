@@ -2131,6 +2131,7 @@ impl Infer {
             },
 
             Raw::Obj(x, t) => {
+                let receiver_span = x.to_span();
                 let t = t.unwrap_or(empty_span(SmolStr::new("")));
                 if t.data == "mk" {
                     if let Raw::Var(sum_name) = x.as_ref() {
@@ -2250,22 +2251,14 @@ impl Infer {
                                 }
                             }
                         }
-        // Completion candidates for the receiver's fields and type params —
-        // pushed for BOTH the empty-member state (`p.`) and typed member
-        // names (`p.x`), so the LSP can answer completion requests with the
-        // cursor at the end of a partially-typed member name.  (This is a
-        // cheap pure iteration over already-computed data; the type-directed
-        // trait/namespace probes below are deferred to the failure path in
-        // trait_wrap so successful calls like `a + b` stay free.)
-        c.iter()
-            .flatten()
-            .map(|x| (t_span, x.0.data.clone()))
-            .chain(
-                params
-                    .iter()
-                    .map(|x| (t_span, x.0.data.clone()))
-            )
-            .for_each(|x| self.completion_table.push(x));
+        // Completion candidates for the receiver's fields and type params,
+        // keyed to the RECEIVER's span, not the whole access's span.  The
+        // filter matches a candidate when the receiver's span ends exactly at
+        // the `.` directly before the cursor's member prefix (`p.`, `p.x`,
+        // `outer.inner.`), so a shorter access inside a nested chain can never
+        // leak its receiver's fields into a sibling dot: in `outer.inner.` the
+        // inner `inner` access keys to `outer` (which ends before the outer
+        // dot) while the trailing empty member keys to `outer.inner`.
         let field_info = c.as_ref().and_then(|params| {
                 params.iter()
                     .find(|(fields_name, _)| fields_name == &t)
@@ -2278,19 +2271,34 @@ impl Infer {
                             });
                         if let Some((def_span, val)) = field_info {
                             self.hover_table.push((t.to_span(), def_span, crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, val.clone()));
+                            // Successful member access — a type-ahead completion
+                            // site (`p.x` with the cursor on/after the typed
+                            // name).  Keyed to the receiver's span so it stays
+                            // out of any enclosing empty-member completion.
+                            c.iter()
+                                .flatten()
+                                .map(|x| (receiver_span, x.0.data.clone()))
+                                .chain(params.iter().map(|x| (receiver_span, x.0.data.clone())))
+                                .for_each(|x| self.completion_table.push(x));
                             Ok((
                                 Tm::Obj(tm, t).into(),
                                 val,
                             ))
                         } else {
-                            self.trait_wrap(cxt, t, a, x, tm, t_span)
+                            // Completion site: empty member (`p.`) or an
+                            // unresolvable partial prefix (`p.x`).  Offer the
+                            // receiver's fields + type params keyed to the
+                            // receiver's span (same keying rule as the success
+                            // path above).
+                            c.iter()
+                                .flatten()
+                                .map(|x| (receiver_span, x.0.data.clone()))
+                                .chain(params.iter().map(|x| (receiver_span, x.0.data.clone())))
+                                .for_each(|x| self.completion_table.push(x));
+                            self.trait_wrap(cxt, t, a, x, tm, t_span, receiver_span)
                             }
                     }
                     (tm, Val::SumCase { datas: params, .. }) => {
-                        // Completion candidates: this case's field names.
-                        for (fields_name, _, _) in params.iter() {
-                            self.completion_table.push((t_span, fields_name.data.clone()));
-                        }
                         if let Some((def_span, val)) = params
                             .iter()
                             .find(|(fields_name, _, _)| fields_name == &t)
@@ -2301,10 +2309,17 @@ impl Infer {
                                     val.clone(),
                                 ))
                             } else {
-                                self.trait_wrap(cxt, t, a, x, tm, t_span)
+                                // Completion site: empty member (`p.`) or an
+                                // unresolvable partial prefix (`p.x`).  Offer
+                                // this case's field names on the failure path,
+                                // keyed to the receiver's span like the Sum arm.
+                                for (fields_name, _, _) in params.iter() {
+                                    self.completion_table.push((receiver_span, fields_name.data.clone()));
+                                }
+                                self.trait_wrap(cxt, t, a, x, tm, t_span, receiver_span)
                             }
                     }
-                    (tm, _) => self.trait_wrap(cxt, t, a, x, tm, t_span),
+                    (tm, _) => self.trait_wrap(cxt, t, a, x, tm, t_span, receiver_span),
                 }
             },
 
@@ -2561,7 +2576,7 @@ impl Infer {
             }
         }
     }
-    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<SmolStr>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
+    fn trait_wrap(&mut self, cxt: &Cxt, t: Span<SmolStr>, a: Rc<Val>, x: Box<Raw>, tm: Rc<Tm>, t_span: Span<()>, receiver_span: Span<()>) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         let typ_raw = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, cxt.lvl, &a));
         let typ_raw_head = super::typeclass::head_key(&typ_raw);
 
@@ -2821,10 +2836,10 @@ impl Infer {
                 // calls like `a + b` or `x.not` pay no probing cost.
                 let completions: Vec<_> = self.trait_definition.iter()
                     .filter(|(x, (_, _, _, _))| self.trait_solver.can_satisfy(x, &typ_raw))
-                    .flat_map(|x| x.1.3.clone())
+                    .flat_map(|x| x.1.3.clone().into_iter().map(move |m| (x.0.clone(), m)))
                     .collect();
-                for method_decl in &completions {
-                    self.completion_table.push((t_span, method_decl.0.data.clone()));
+                for (_, method_decl) in &completions {
+                    self.completion_table.push((receiver_span, method_decl.0.data.clone()));
                 }
                 // Namespace methods: the same receiver-type probe as the
                 // resolution path above, but without the typed-name filter.
@@ -2858,7 +2873,7 @@ impl Infer {
                         }
                         if self.unify_catch(cxt, &check_typ, &typ_raw, t_span).is_ok() {
                             for method_name in ns_entry.1.iter() {
-                                self.completion_table.push((t_span, method_name.clone()));
+                                self.completion_table.push((receiver_span, method_name.clone()));
                             }
                         }
                         self.meta = meta_snapshot.clone();

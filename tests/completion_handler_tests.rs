@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use elaboration_zoo_lsp::client::ClientLike;
 use elaboration_zoo_lsp::Backend;
 use lsp_types::{
-    CompletionItem, CompletionParams, CompletionResponse, Diagnostic, DiagnosticSeverity,
-    MessageType, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+    CompletionItem, CompletionParams, CompletionResponse, Diagnostic, MessageType, Position,
+    TextDocumentIdentifier, TextDocumentPositionParams, Url,
 };
 
 #[derive(Default)]
@@ -253,4 +253,135 @@ fn diagnostics_severity_unaffected_by_completion() {
     let before = b.client.diagnostics.lock().unwrap().len();
     let _ = completion_at(&b, &uri, src, src.len());
     assert_eq!(b.client.diagnostics.lock().unwrap().len(), before);
+}
+
+// =========================================================================
+// HDL module-body completion — the real editing flow: the user types
+// `outer1.` INSIDE a module body and stops; the file is mid-edit
+// (incomplete statement) while the completion request fires.
+// =========================================================================
+
+fn bundle_module_src(extra_body_line: &str) -> String {
+    format!(
+        "#[derive(Bundle)]\n\
+         struct InnerBus {{\n    value: UInt[8]\n    strobe: Bool\n}}\n\n\
+         module top {{\n    let outer1 = InnerBus.create\n    let outer2 = InnerBus.create\n    {extra_body_line}\n}}"
+    )
+}
+
+#[test]
+fn module_body_mid_edit_member_completion() {
+    let b = Backend::new(CapturingClient::default());
+    b.load_prelude();
+    let uri = Url::parse("file:///m.typort").unwrap();
+    // Mid-edit: the last module-body statement is a dangling `outer1.`.
+    let src = bundle_module_src("outer1.");
+    process(&b, &uri, &src);
+
+    // The member access must not blow up the whole-file analysis.
+    let dot_off = src.rfind("outer1.").unwrap() + "outer1".len();
+    let got = completion_at(&b, &uri, &src, dot_off + 1);
+    let mut names = labels(&got);
+    names.sort();
+    assert!(names.contains(&"value".to_string()), "expected bundle field `value`: {names:?}");
+    assert!(names.contains(&"strobe".to_string()), "expected bundle field `strobe`: {names:?}");
+}
+
+#[test]
+fn module_body_mid_edit_nested_bundle_completion() {
+    let b = Backend::new(CapturingClient::default());
+    b.load_prelude();
+    let uri = Url::parse("file:///mn.typort").unwrap();
+    let src = format!(
+        "#[derive(Bundle)]\n\
+         struct InnerBus {{\n    value: UInt[8]\n    strobe: Bool\n}}\n\n\
+         #[derive(Bundle)]\n\
+         struct OuterBus {{\n    inner: InnerBus\n    ready: Bool\n}}\n\n\
+         module top {{\n    let outer = OuterBus.create\n    outer.inner.\n}}"
+    );
+    process(&b, &uri, &src);
+
+    let dot_off = src.rfind("outer.inner.").unwrap() + "outer.inner".len();
+    let got = completion_at(&b, &uri, &src, dot_off + 1);
+    let mut names = labels(&got);
+    names.sort();
+    assert!(names.contains(&"value".to_string()), "expected inner bundle field `value`: {names:?}");
+    assert!(names.contains(&"strobe".to_string()), "expected inner bundle field `strobe`: {names:?}");
+}
+
+// =========================================================================
+// Nested-bundle completion isolation — the receiver-keyed span scheme.
+// Completion entries are keyed to the RECEIVER's span (not the whole access),
+// and the handler matches an entry only when that span ends exactly at the
+// dot before the cursor, so a nested access's receiver can never leak into an
+// enclosing trailing dot.
+// =========================================================================
+
+/// `outer.inner.` inside a module body must offer only InnerBus fields —
+/// NOT the sibling `ready`/`inner` (OuterBus fields) and NOT operators (`+`)
+/// that are inapplicable to a bundle.
+#[test]
+fn module_nested_completion_offers_no_sibling_or_operators() {
+    let b = Backend::new(CapturingClient::default());
+    b.load_prelude();
+    let uri = Url::parse("file:///mns.typort").unwrap();
+    let src = format!(
+        "#[derive(Bundle)]\n\
+         struct InnerBus {{\n    value: UInt[8]\n    strobe: Bool\n}}\n\n\
+         #[derive(Bundle)]\n\
+         struct OuterBus {{\n    inner: InnerBus\n    ready: Bool\n}}\n\n\
+         module top {{\n    let outer = OuterBus.create\n    outer.inner.\n}}"
+    );
+    process(&b, &uri, &src);
+    let dot_off = src.rfind("outer.inner.").unwrap() + "outer.inner".len();
+    let got = completion_at(&b, &uri, &src, dot_off + 1);
+    let mut names = labels(&got);
+    names.sort();
+    assert!(names.contains(&"value".to_string()), "expected `value`: {names:?}");
+    assert!(!names.contains(&"ready".to_string()), "must not offer sibling `ready`: {names:?}");
+    assert!(!names.contains(&"+".to_string()), "must not offer operator `+` on a bundle: {names:?}");
+}
+
+/// `o.inner.` OUTSIDE any module body (top-level `def probe = o.inner.`) must
+/// also offer the nested InnerBus fields.
+#[test]
+fn top_level_nested_completion_offers_inner_fields() {
+    let b = Backend::new(CapturingClient::default());
+    b.load_prelude();
+    let uri = Url::parse("file:///tln.typort").unwrap();
+    let src = "#[derive(Bundle)]\nstruct InnerBus {\n    value: UInt[8]\n    strobe: Bool\n}\n\n#[derive(Bundle)]\nstruct OuterBus {\n    inner: InnerBus\n    ready: Bool\n}\n\ndef o: OuterBus = OuterBus.create\ndef probe = o.inner.";
+    process(&b, &uri, &src);
+    let dot_off = src.rfind("o.inner.").unwrap() + "o.inner".len();
+    let got = completion_at(&b, &uri, &src, dot_off + 1);
+    let mut names = labels(&got);
+    names.sort();
+    assert!(names.contains(&"value".to_string()), "expected `value`: {names:?}");
+    assert!(names.contains(&"strobe".to_string()), "expected `strobe`: {names:?}");
+}
+
+#[test]
+fn module_body_mid_edit_typed_prefix_completion() {
+    let b = Backend::new(CapturingClient::default());
+    b.load_prelude();
+    let uri = Url::parse("file:///mt.typort").unwrap();
+    let src = bundle_module_src("outer1.val");
+    process(&b, &uri, &src);
+
+    // Cursor at the end of the typed prefix `val`.  `val` must not collide with
+    // a real field (only `value`/`strobe` exist) — completion still offered.
+    let prefix_off = src.rfind("outer1.val").unwrap() + "outer1.val".len();
+    let got = completion_at(&b, &uri, &src, prefix_off);
+    let mut names = labels(&got);
+    names.sort();
+    assert!(names.contains(&"value".to_string()), "expected `value` completion: {names:?}");
+
+    // The text edit must replace exactly the typed prefix.
+    let val_start = src.rfind("outer1.v").unwrap() + "outer1.".len();
+    let vs = byte_position(&src, val_start);
+    let ce = byte_position(&src, prefix_off);
+    for item in got.iter().filter(|i| i.label == "value") {
+        let (sl, sc, el, ec) = edit_range(item).expect("value should carry a text edit");
+        assert_eq!((sl, sc), (vs.line, vs.character), "edit must start at the typed prefix");
+        assert_eq!((el, ec), (ce.line, ce.character), "edit must end at the cursor");
+    }
 }

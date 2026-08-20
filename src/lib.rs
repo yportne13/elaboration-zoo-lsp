@@ -1543,31 +1543,41 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
             // Member-access completions need a successful analysis.
             if let Some(infer) = self.hover_table.get(&uri.to_string()) {
+                // Member-access entries are keyed to the RECEIVER's span (not
+                // the whole `x.y` access).  The cursor's member prefix starts
+                // one byte past the last `.` on the line; a candidate matches
+                // only when the receiver's span ends exactly at that `.` —
+                // covering the empty `p.` state, a typed prefix `p.xyz`, and a
+                // nested trailing dot `outer.inner.`.  Keying by receiver
+                // instead of the access span is what keeps the nested case
+                // clean: in `outer.inner.` the inner `inner` access keys to
+                // `outer` (which ends before the outer dot), so its fields can
+                // never leak into the trailing dot's completion — only the
+                // trailing empty member's receiver (`outer.inner`) touches that
+                // dot.
+                let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
+                // The dot directly before the cursor's member prefix, if any.
+                let dot_end = prefix_start.checked_sub(1);
+                let filter = |span: &parser_lib::Span<()>| {
+                    let end = span.end_offset as usize;
+                    match dot_end {
+                        // The receiver's span must end exactly at that dot,
+                        // i.e. it is the expression right before the cursor.
+                        Some(d) => {
+                            end == d && rope.byte_slice(end..end + 1).chars().next() == Some('.')
+                        }
+                        None => false,
+                    }
+                };
                 infer.completion_table
                     .iter()
-                    // Member-access entries are keyed to the receiver's span:
-                    // `x.<prefix>` for typed names, but only `x` for the empty
-                    // `x.` state (the dangling dot is not part of the span).
-                    // Match when the cursor is on that span (hover-style), or
-                    // exactly at its end (cursor right after the typed member
-                    // name), or one byte past it with a `.` in between (cursor
-                    // right after the trigger dot).  The old `contains(offset -
-                    // 2)` hack covered at most two of these cases and missed
-                    // longer typed prefixes.
-                    .filter(|(span, _)| {
-                        let end = span.end_offset as usize;
-                        span.contains(offset)
-                            || offset == end
-                            || (offset == end + 1
-                                && rope.byte_slice(end..end + 1).chars().next() == Some('.'))
-                    })
+                    .filter(|(span, _)| filter(span))
                     .filter_map(|(span, name)| {
                         if !seen.insert(name.to_string()) {
                             return None;
                         }
                         // Replace the typed member prefix (`x.<le>` -> `x.<length>`)
                         // instead of relying on client-side word replacement.
-                        let prefix_start = member_prefix_start(&rope, offset).unwrap_or(offset);
                         let range = Range::new(
                             offset_to_position(prefix_start, &rope)?,
                             offset_to_position(offset, &rope)?,

@@ -172,22 +172,45 @@ impl Synth {
     /// Check if this trait has at least one instance whose Self-type head matches `self_type`.
     /// Uses head_index for O(1) lookup; falls back to val_match scan when the index misses.
     pub fn can_satisfy(&self, trait_name: &SmolStr, self_type: &Val) -> bool {
-        if let Some(head) = head_key(self_type) {
-            let specific = self.head_index.get(&(trait_name.clone(), head))
-                .map(|indices| !indices.is_empty())
-                .unwrap_or(false);
-            let generic = self.head_index.get(&(trait_name.clone(), SmolStr::new(GENERIC_SELF_HEAD)))
-                .map(|indices| !indices.is_empty())
-                .unwrap_or(false);
-            if specific || generic {
-                return true;
-            }
-        }
         let instances = match self.class_instances.get(trait_name) {
             Some(insts) => insts,
             None => return false,
         };
         let out_params = self.trait_out_params.get(trait_name);
+        // Specific-head bucket: an instance whose Self's head constructor equals
+        // this goal's head is satisfiable by construction.
+        if let Some(head) = head_key(self_type) {
+            if let Some(indices) = self.head_index.get(&(trait_name.clone(), head)) {
+                if !indices.is_empty() {
+                    return true;
+                }
+            }
+        }
+        // Generic/wildcard bucket: instances whose Self is a type variable
+        // (`impl[A] Trait for A`) OR — problematically — the raw type sort
+        // (`Add[Type, Type, Type]` for type-level arithmetic).  A blanket
+        // "non-empty ⇒ satisfiable" here is wrong for the type-sort case: a
+        // concrete value type like `InnerBus` does NOT match `Type`.  So each
+        // generic instance is confirmed with val_match instead of assumed.
+        if let Some(indices) = self.head_index.get(&(trait_name.clone(), SmolStr::new(GENERIC_SELF_HEAD))) {
+            for &idx in indices {
+                let inst = &instances[idx];
+                if inst.assertion.name != *trait_name || inst.assertion.arguments.is_empty() {
+                    continue;
+                }
+                let first_is_out = out_params
+                    .and_then(|op| op.first().copied())
+                    .unwrap_or(false);
+                if first_is_out {
+                    return true;
+                }
+                let mut subst = HashMap::new();
+                if Self::val_match(self_type, &inst.assertion.arguments[0], &mut subst) {
+                    return true;
+                }
+            }
+        }
+        // Fallback: linear scan over all instances (covers unindexed cases).
         for inst in instances {
             if inst.assertion.name != *trait_name {
                 continue;
