@@ -505,3 +505,208 @@ infer_after_prefix > infer_expr > check<false> > infer_expr > eval
   求值）+ println 组装 0.05s（一次性 O(N)，均健康）；LSP 每键击全量重建
   仍是输入延迟上限（老项，与本次无关）——但用户文件侧重推成本现已降到
   0.08-0.26s/键击，全量重推的实际体感已可接受。
+
+---
+
+## 13. 第十二轮（2026-08-16）—— Wave 1-6 HDL 库复刻后 prelude 固定成本 0.75s → 24.7s（~30x）
+
+> 分支：`master`（`40c0341`，round 11 之后 9 个提交）。方法：release 实测 +
+> `load_prelude_state_impl` 临时逐声明探针（`TYPORT_PRELUDE_PROF`，含
+> FUNC_PROF 计数器快照 + force(Call name) 按名直方图）+ prelude 因果替换
+> 实验。全部探针与实验改动已还原（工作树与 HEAD 一致，326 测试复验通过）。
+> 采样器（sampler）本轮无效：tick 只挂在 infer_expr 入口 + LTO 内联吃掉
+> force/eval 帧，栈归因不可用，结论以探针 + 因果实验为准。
+
+### 13.1 现象
+
+- `typort check`（prelude-only 最小文件）总墙钟 **24.7s**（round 11 约
+  0.75s+0.08s），用户文件侧（on_change 窗口）**无回归**：01-basics 0.092s
+  （round 11 0.083s）、10-bundle 0.296s（0.254s）、新库示例 17-stream
+  0.722s / 19-crossclock 0.265s / 20-widthadapter 0.140s。
+- 影响面：**每进程一次**（OnceLock 缓存进程内复用）——CLI 每次调用 ~25s；
+  LSP 冷启动到首份诊断 ~25s；`cargo test --lib L13` 143s/326 全过（套件
+  基线时间此前未记录，其中至少含一次 prelude  elaboration + 每 Backend
+  克隆更大状态的开销）。
+- elaborator 核心（`L13_namespace/mod.rs` 等）自 `2916374` 以来仅 +6 行
+  （加载 6 个新 prelude 文件），回退全部来自 **prelude 内容本身**。
+
+### 13.2 逐文件归因（TYPORT_PRELUDE_PROF，release）
+
+| prelude 文件 | 耗时 | 热点 def（耗时 / force 次数） |
+|---|---|---|
+| hdl-crossclock | **9.03s** | streamFifoCC 6.9-7.2s / 1.96 亿；ccByToggleUInt 1.2s / 3260 万；pulseCCByToggle 0.64s / 1780 万 |
+| hdl-misc-io | **6.35s** | dividerCore 6.4-6.5s / 1.93 亿 |
+| hdl-stream | **5.36s** | streamFifoConnect 2.75s / 7630 万；streamFifo 1.31s / 3620 万 |
+| hdl-misc | **1.89s** | watchdog 1.0s / 2950 万；timer 0.57s / 1600 万 |
+| hdl-utils | **1.28s** | ccByToggleUInt 家族（见 crossclock） |
+| hdl-bus-proto | 0.28s | — |
+| hdl-verilog | 0.83s | （较 round 4 的 1.09s 已改善） |
+| 其余（core/data/hdl 前排） | 合计 ~0.3s | — |
+
+8 个热点 def 合计约占全部 **6.98 亿次 force 调用**的 86%；每次 force 均
+价 ~36ns，force 总量即全部墙钟。eval 453 万次 / unify 12.9 万次——
+都不是热点。
+
+### 13.3 机制
+
+- force 入口形状：**Match 4885 万 + Call 4885 万 + Decl 1064 万，Sum/SumCase
+  为零**——不是 round 9/10 的模块树 O(N²)（change_mutable 家族），是
+  **递归函数应用被反复 force**。
+- force(Call) 按名直方图：**pred 1767 万、log2Up 1176 万、maxNat 998 万、
+  andCond 936 万**——四个函数恰好构成全部 Match+Call 风暴。逐 def 相关性：
+  每个热点 def 的 top 名单都是这四个；用到 `maxNat(1, log2Up …)` 位宽惯用语
+  的 def 中两者计数**完全一致**（锁定同步 force）。
+- 这些函数全部活在**类型位宽表达式**（`UInt[log2Up (depth+1)]`、
+  `CounterMod[maxNat(1, log2Up stateCount)]`、`pred w` 等）与 when 条件
+  累积（andCond）里；`Val::Call` 的 force 会递归 force body + 全部参数且
+  无任何共享/记忆化，同一应用树在检查/回引的每次出现处被整棵重走。
+- **因果实验**（prelude 临时替换为恒等函数后还原）：
+  - `log2Up → x`：24.7 → 22.8s（−8%，递归体本身不是大头）；
+  - 再加 `maxNat → a`、`andCond → cond`、`pred → n`：**→ 4.02s（累计 −84%）**。
+  - 结论：风暴 = 这四个函数应用被反复求值/重走；恒等替换仍生成 Call 节点
+    而成本坍塌，说明"走 Call 节点"本身便宜，贵的是**走函数体展开的结果**。
+- 剩余 4.02s ≈ 旧 prelude 0.75-0.9s + 新库 2700 行的正当 elaboration 成本
+  ~3.1-3.3s（这部分是真实内容成本，非病理）。
+
+### 13.4 修复建议
+
+- **P0（预计 prelude 24.7 → ~4-5s）**：为 `pred`/`log2Up`/`div2Up`/
+  `maxNat`/`minNat` 添加 Rust prim 覆盖（cxt.rs add_builtin 基础设施现成，
+  参照 round 11 的 `count_nat_forced`）。具体 Nat 链上 O(n) 直走、Rigid
+  参数上原地卡住，均不再生成待重走的 Call/Match 展开树。语义不变（区别于
+  本轮的恒等实验），验证门槛：22+ 示例完整 note 块逐字节 + 326/157 测试。
+  用户侧同样受益：17-stream 0.72s 中实例化 streamFifo 的宽度计算属同族。
+- P1（若 prim 后仍有残余）：stuck 宽度表达式的结构化共享（按 (Rc 指针,
+  decl 版本) 的 Call-force 记忆化）。round 8 对 eval 记忆化的负结果教训
+  适用：prim 副作用（Val::Decl → change_mutable 等）必须门控，一次性
+  求值的记账开销可能吃掉收益——先测 P0 残余再决定。
+- P2（观察项）：测试套件每 Backend 克隆的 prelude 状态随库增长（~28.5k
+  meta → 更多），143s 套件时间中除 prelude 外可能含克隆放大，P0 落地后
+  复测再评估。
+- 顺带发现（功能非性能）：`lib.rs load_prelude_impl` 的 builtin 文档注册表
+  未随新文件扩展（缺 hdl-utils/stream/crossclock/bus-proto/misc-io/misc
+  六项），对这批库函数的 goto/hover 跳不进 builtin 源码。
+
+### 13.5 方法学记录
+
+- 每进程 ~25s 使 min-of-3 全量扫描不可行（27 文件 ×3 ×25s）；本轮以
+  单次墙钟 + 探针窗口为准，量级结论不受影响。
+- 采样器两处坑（再犯即第三轮）：tick 仅挂 infer_expr 入口（选择偏差）+
+  release-profiling 下 LTO 仍内联 force/eval（帧不可见）。归因应优先
+  FUNC_PROF 计数器 + 按名直方图 + 因果替换实验。
+
+---
+
+## 14. 第十三轮（2026-08-16）—— 系统性 Nat prim 层：完整实现后测得净收益为零，已撤销（负结果）
+
+> 按 round 12 §13.4 的"彻底版"方案执行：25 个 Nat 函数的 Rust prim 覆盖
+> （算术/比较/位宽/元级工具全套）+ 值槽中性化 + quote OpCall 显示对等 +
+> unify Decl/Flex 修复。实现-调试-测量全流程完成后**整体撤销**，工作树
+> 恢复 r12 基线（326 测试复验通过，prelude 24.3s）。**唯一落地项**：lib.rs
+> builtin 文档注册表补 6 个新文件（hover/goto 功能缺口，+6 行）。
+
+### 14.1 机制层面的发现（未来任何 prim 化尝试都会撞上的四类坑）
+
+1. **count_nat_forced 把 succ(卡住) 误读为 0**：它对链尾非构造子返回
+   0，而 succ len（Vec/GADT 索引的标准形状）恰恰是这种链。prim 用它读
+   参数会把符号索引"算"成 0，Vec[T](succ len) 的构造子可达性检查全线
+   崩溃（vec.typort 全部 unreachable pattern）。三态链走（zero 终止才
+   Some(k)，链尾卡住即 None）是必须的。
+2. **prim 必须是定义体的忠实 WHNF 镜像，不能只做"全具体才计算"的闭式
+   求值**：解释器对 add(x, succ m)（m 为 Rigid）会规约出 succ (add x m)
+   ——这是 rfl 可证的定义等价，证明文件（adder_proof）全靠它。闭式
+   prim 在参数部分卡住时拒绝，产生与解释器不同的卡住形态，unify 失败、
+   证明雪崩。正确写法是逐层 nat_step 镜像每一步 match，卡住处以中性
+   Val::Decl spine 为规范叶（op_spine）。
+3. **force(Val::Decl spine) 对 prim 结果递归 re-force 会死循环**：忠实
+   镜像的规范结果内嵌 spine 叶（succ^k(spine)），re-force 叶子再次触发
+   同一 prim、再造同形 spine——无限递归栈溢出（adder_proof/01-basics
+   实测）。prim 结果按契约已是规范 WHNF，force 应直接返回（v_app 路径
+   本就不 re-force）。
+4. **unify 的 (Decl, X) 燃料重试臂排在 Flex 吸收之前**：prim 拒绝产生
+   的 spine 与 meta 相遇时被卷进 quote→eval 重试直到燃料耗尽
+   （UInt[width2+width1] vs ?meta 失败）。需要 (Decl,Flex) 直通 Flex
+   臂 + 重试无进展即停。另：quote 的 spine→OpCall 显示对等必须限制在
+   attach 集合内（否则 string_concat 等老 prim 的显示被误改）、args
+   顺序是应用序（spine 是 newest-first）、body 不得二次求引
+   （hdl-verilog 曾因此 0.83→7.0s）。
+
+### 14.2 性能结论（全部坑修完后的实测）
+
+- **prelude 总量不变**（~25s）：Call/Match 风暴确实被消灭（force(Call)
+   计数归零），但同一批 def 的重走成本**原样转移**成 Sum 1.95 亿 +
+   SumCase 1.9 亿 + Rigid 8300 万的 re-force——总量仍 ~6.93 亿次。prim
+   把"卡住 Match 的重走"换成"具体值的重走"，而求值器对值图无任何共享/
+   记忆化，每次重走都是全价。
+- **指针键控的 prim 结果缓存无效**：重 force 打在 v_app 每次新建的
+   spine 节点上（指针不命中）；同一现象解释了 round 8 记忆化实验的失败。
+- **bignat 测试回归**：0 + 100000 等用例从毫秒级劣化到分钟级——解释器
+   的 Call 节点体即缓存（求值一次），prim 每次被 force 都重走 10 万步
+   链并重建 10 万节点。
+- round 12 的恒等替换实验（4.02s）因此被证实**高估了可达收益**：恒等
+   函数破坏了宽度语义，下游消费"错误宽度"做了更少的工作。
+
+### 14.3 结论与真正的下一步
+
+- 在当前求值器架构（不可变 Rc 值图、force/eval 无记忆化、quote↔eval
+   往返重建节点）下，**点级优化（prim / 点级缓存）已两次被证伪**
+   （round 8 的 eval 记忆化、本轮的 prim 层）。风暴的根源是结构性的：
+   检查路径对同一计算的大量重复强制。
+- 值得投入的方向（与 round 8 §9.4、round 10 §10.3 一致，本轮再添证据）：
+  1. **求值器层面的值图共享**（NbE 风格、值节点自带 memo）——让重
+     force 免费而不是让单次更快；
+  2. **LSP 增量 elaboration**（老项）：用户侧每键击全量重推的上限问题；
+  3. **加载期 def 体求值的懒化**（create/tree 体按模块缓存，round 8 末条）。
+- 本轮全部实验代码已撤销，git 历史之外无残留；14.1 的四类坑写成记录，
+  供未来重试时直接绕开。
+
+---
+
+## 15. 第十四轮（2026-08-20）—— 复测基线：prelude 固定成本现为 17.6s，热点与 round 12 一致
+
+> 分支 master（bbe350f，LSP 功能提交之后，未动本轮代码）。方法：
+> TYPORT_PRELUDE_PROF 逐文件/逐声明探针 + 加载期 FUNC_PROF 快照。
+> 探针保留为**常驻诊断工具**（env-gated，关闭时零开销；区别于 round 12/13
+> 的临时实验探针，这是给后续轮次复用的正式工具）。
+
+### 15.1 复测结果（release，单次墙钟）
+
+- prelude-only（tiny 文件 def warm: Nat = 0）总墙钟 **17.6s**（round 12
+  记录 24.7s；差异来自当时探针/机器开销，量级一致）。
+- 逐文件（parse+expand 均 ≤0.01s，成本 100% 在 infer 循环）：
+  hdl-crossclock 6.16s / hdl-misc-io 4.73s / hdl-stream 3.50s / hdl-misc
+  1.38s / hdl-utils 0.82s / hdl-verilog 0.58s / hdl-check 0.21s。
+- 逐声明（>5ms 门槛）：**streamFifoCC 4.73s / dividerCore 4.64s /
+  streamFifoConnect 1.81s / streamFifo 0.83s / ccByToggleUInt 0.77s /
+  watchdog 0.73s / pulseCCByToggle 0.43s / timer 0.39s** —— 与 round 12
+  热点完全一致，8 个声明占 prelude 总成本 ~81%。
+- 加载期函数级（accumulated）：**force 698,527,036 次**（round 12 同量级），
+  check 490s/42,433 次、infer_expr 75s/114k、unify 26.7s/199k、eval
+  23.3s/5.05M、check_universe 13.7s/10.8k。
+- force 入口形状（全量，TOTAL 与 force 计数逐位相等）：Sum 195.3M +
+  SumCase 190.5M + Rigid 78.6M + LiteralIntro 69.9M + Obj 54.8M +
+  Match 48.9M + Call 48.9M + Decl 10.7M。→ 当前代码**同时**具备 round 12
+  的 Match/Call 风暴（各 48.9M）与 round 13 prim 时代的 Sum/SumCase 具体
+  值重走（195M/190M）——round 13"成本转移到具体值重走"的结论在未加 prim
+  的当前代码里同样成立。
+
+### 15.2 本轮排查并排除的候选
+
+1. **unify 的 (Decl,_)/(_,Decl) 燃料重试**（round 13 §14.1-4 病理）：
+   counter 实测仅 8,080 次/加载期，且每次 quote→eval 的对象不变——不是
+   成本（预取计数后移除，未改代码）。
+2. **per-Backend 克隆放大**（round 12 §13.4 P2）：probe_timing 现
+   01-basics 156ms（round 11 110ms），克隆只多 ~45ms，非此前工作树 1.1s
+   所暗示的 10×——那 1.1s 是 round 13 实验代码的残留测量，已被当前数据
+   覆盖（probe-out.txt 已重采为 15 文件 131-450ms）。
+3. **解析/宏展开**：全部文件 parse ≤ 0.01s，非热点。
+
+### 15.3 结论
+
+- prelude 17.6s 的根源仍是 **~7 亿次 force 调用的固有成本**（点级优化两次
+  证伪后，本轮复测确认 round 12/13 分析不变）。用户文件侧重推成本仍健康
+  （131-450ms/文件）。
+- 下一步仍是 §14.3 的三条结构方向（NbE 值共享 / LSP 增量 / 加载期 def 体
+  懒化）。**新增证据**：cost 主体在 check（490s accumulated）而非 eval
+  （23s），故"加载期 def 体懒化"对 prelude 固定成本帮助有限——除非同时
+  缓存检查结果；LSP 用户侧增量与 NbE 值共享仍是最大杠杆。

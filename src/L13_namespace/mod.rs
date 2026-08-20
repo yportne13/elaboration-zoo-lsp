@@ -2593,7 +2593,23 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
     load_prelude_state_impl(true)
 }
 
+fn decl_name_of(tm: &parser::syntax::Decl) -> SmolStr {
+    match tm {
+        parser::syntax::Decl::Def { name, .. }
+        | parser::syntax::Decl::Enum { name, .. }
+        | parser::syntax::Decl::TraitDecl { name, .. } => name.data.clone(),
+        parser::syntax::Decl::Package { .. } => SmolStr::new("<package>"),
+        parser::syntax::Decl::Import { .. } => SmolStr::new("<import>"),
+        parser::syntax::Decl::Println(_) => SmolStr::new("<println>"),
+        _ => SmolStr::new("<other>"),
+    }
+}
+
 fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
+    let prelude_prof = std::env::var_os("TYPORT_PRELUDE_PROF").is_some();
+    if prelude_prof {
+        FUNC_PROF.enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     let mut infer = Infer::new();
     let mut prelude: Vec<&str> = vec![
         include_str!("../prelude/core/op.typort"),
@@ -2639,17 +2655,31 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     let mut id = 0;
     let nat_typort = include_str!("../prelude/core/nat.typort");
     for p in prelude {
-        if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
+        let _pfile_t0 = std::time::Instant::now();
+        let (_p_parse_t, _p_infer_t, n_decls) = if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
+            let _p_parse_t = _pfile_t0.elapsed();
             for ast_err in parse_errs {
                 println!("{:?}", ast_err)
             }
             for (name, rules) in new_exports {
                 global_macros.insert(name, rules);
             }
+            let nd = decls.len();
+            let _infer_t0 = std::time::Instant::now();
             for tm in decls {
+                let _d_t0 = std::time::Instant::now();
                 let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+                let _d_el = _d_t0.elapsed().as_secs_f64();
+                if prelude_prof && _d_el > 0.005 {
+                    eprintln!("[PPROF]   decl {:>8.3}s  {}", _d_el, decl_name_of(&tm));
+                }
                 cxt = new_cxt;
             }
+            (_p_parse_t, _infer_t0.elapsed(), nd)
+        } else { (_pfile_t0.elapsed(), std::time::Duration::ZERO, 0) };
+        let _p_el = _pfile_t0.elapsed().as_secs_f64();
+        if prelude_prof {
+            eprintln!("[PPROF] file[{}] {:>8.3}s (parse {:>6.3}s + infer {:>6.3}s)  {} decls", id, _p_el, _p_parse_t.as_secs_f64(), _p_infer_t.as_secs_f64(), n_decls);
         }
         id += 1;
         // After nat.typort is loaded, register nat_to_dec builtin.
@@ -2684,6 +2714,37 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     // accumulated tables so per-call clones stay cheap.
     infer.hover_table.clear();
     infer.completion_table.clear();
+    if prelude_prof {
+        let fp = &FUNC_PROF;
+        eprintln!("[PPROF] -- function-level during prelude load (accumulated) --");
+        let mut rows: Vec<(String, u64, u64)> = vec![
+            ("check".into(), fp.check.0.load(std::sync::atomic::Ordering::Relaxed), fp.check.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("infer_expr".into(), fp.infer_expr.0.load(std::sync::atomic::Ordering::Relaxed), fp.infer_expr.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("check_universe".into(), fp.check_universe.0.load(std::sync::atomic::Ordering::Relaxed), fp.check_universe.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("eval".into(), fp.eval.0.load(std::sync::atomic::Ordering::Relaxed), fp.eval.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("force".into(), fp.force.0.load(std::sync::atomic::Ordering::Relaxed), fp.force.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("v_app".into(), fp.v_app.0.load(std::sync::atomic::Ordering::Relaxed), fp.v_app.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("quote".into(), fp.quote.0.load(std::sync::atomic::Ordering::Relaxed), fp.quote.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("nf".into(), fp.nf.0.load(std::sync::atomic::Ordering::Relaxed), fp.nf.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("unify".into(), fp.unify.0.load(std::sync::atomic::Ordering::Relaxed), fp.unify.1.load(std::sync::atomic::Ordering::Relaxed)),
+            ("solve_multi_trait".into(), fp.solve_trait.0.load(std::sync::atomic::Ordering::Relaxed), fp.solve_trait.1.load(std::sync::atomic::Ordering::Relaxed)),
+        ];
+        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        for (name, ns, n) in rows {
+            eprintln!("[PPROF]     {:>8.3} s  {:>12} calls  {}", ns as f64 / 1e9, n, name);
+        }
+        let shapes = ["Flex", "Rigid", "Decl", "Obj", "Lam", "Pi", "U", "LiteralType", "LiteralIntro", "Sum", "SumCase", "Match", "Call"];
+        eprintln!("[PPROF]   -- force() entry shapes (force count {}) --", fp.force.1.load(std::sync::atomic::Ordering::Relaxed));
+        let mut shape_total = 0u64;
+        for (i, name) in shapes.iter().enumerate() {
+            let c = fp.force_shape[i].load(std::sync::atomic::Ordering::Relaxed);
+            shape_total += c;
+            if c > 0 {
+                eprintln!("[PPROF]     {:>14} {:>12}", name, c);
+            }
+        }
+        eprintln!("[PPROF]     {:>14} {:>12}  (shape total)", "TOTAL", shape_total);
+    }
     Ok(PreludeState {
         infer,
         cxt,
