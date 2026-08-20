@@ -9,7 +9,7 @@
 | 决策点 | 结论 |
 |---|---|
 | 实现宿主 | 纯 typort 库函数（与 `moduleTreeVL` 同层），仅"报告管道"是 Rust builtin |
-| 源定位 | 远期加隐式 `Loc` 参数（复用 `BindingName` 机制）；阶段 1 先报 module+信号名，警告挂在模块声明上 |
+| 源定位 | 阶段 1 名字级分析 + lib.rs 排水时按 signal 名回扫模块源码定位（声明/驱动/连接点 squiggle）；远期再加隐式 `Loc` 参数做全量精确覆盖 |
 | 首批规则 | 悬空 + 多驱动 + 端口方向（名字级 def-use 即可，不依赖 Loc） |
 | 严重度 | 全部先 warning，跑过回归语料校准误报率后逐条升级 error |
 | 运行时机 | **tyck 阶段**：模块声明 elaboration 的字段求值期间自动触发，不是用户调用 `check()` 才跑 |
@@ -114,7 +114,7 @@ Verilog 生成器靠"端口优先于同名 wire"去重。检查器必须做同�
 | `src/prelude/hdl/hdl-macros.typort` | create 侧 `_res` 包裹 `checkModuleTree`（两个 arm，tree 侧不动） |
 | `src/L13_namespace/mod.rs` | prelude 列表加 hdl-check（hdl-core 之后）；`take_check_issues()` 排水函数；`run_with_prelude` 逐 decl 排水到输出串 |
 | `src/L13_namespace/cxt.rs` | `report_check_issue` builtin（4×String→Unit，行级去重追加 "CheckIssues"） |
-| `src/lib.rs` | `elaborate()` 逐 decl 排水 → (Error, WARNING) 诊断，挂 decl span，seen-set 去重 |
+| `src/lib.rs` | `elaborate()` / `on_change()` 逐 decl 排水 → 按 signal 名回扫模块体解析 span（`check_issue_span`，失败回退 decl span），(Error, WARNING) 诊断，seen-set 去重 |
 | `src/L13_namespace/legacy_tests.rs` | 规则触发用例 + examples 回归不破 |
 
 数据形态（typort 侧，全部不可变 + 头部 cons，查询 O(n) 名字级足够）：
@@ -135,7 +135,11 @@ struct PortEntry { mod, ins/outs/inouts: List[String] }     // 全局 "ModulePor
 
 ## 5. 已知盲区与风险
 
-- 无 Loc：警告挂在模块 decl 的 span 上，报文里带信号名；阶段 5 前不做 squiggle。
+- 名字级回扫定位：警告由 lib.rs 按 signal 名在模块体内回扫（声明规则指向
+  `let/input/output/reg NAME`，驱动规则指向首个 `NAME :=`，连接规则指向
+  `inst.port` 字面，未连端口指向实例声明 `let u = ...create...`）；
+  自动生成名（`zz_` 等）找不到则回退到模块名 span。报文仍带信号名。
+  阶段 5 再上隐式 `Loc` 参数做逐节点精确 squiggle。
 - 同名信号：同模块内两个不同信号撞名（zz_ 自动名等）在名字级分析里合并，
   可能漏报/误报；模块重设计引入唯一 ID 时一并解决。
 - **字面相同的重复语句被坍缩为一个驱动**（exprKey 去重的代价）：用户把

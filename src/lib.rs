@@ -302,6 +302,272 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// HDL self-check diagnostic source resolution.
+//
+// hdl-check.typort reports each issue at NAME level ("code|module|signal|
+// message"; no source locations — see docs/hdl-selfcheck-design.md §5), and
+// the warnings were previously pinned to the module declaration's name token,
+// so a squiggle on `module top` told the user nothing about WHICH signal was
+// at fault. These helpers re-derive a precise source span for the offending
+// signal by scanning the module body: declaration rules point at the
+// `let/input/output/reg NAME` line, driver rules at the first `NAME :=`,
+// connection rules (`inst.port`) at the literal occurrence, and the dangling-
+// read rule at the first non-declaration occurrence. If resolution fails
+// (auto-generated `zz_` names, exotic shapes) the caller falls back to the
+// module-name span.
+// ---------------------------------------------------------------------------
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
+}
+
+/// Byte range of the module body: the `{` following the module name up to its
+/// matching `}`, skipping line/block comments and nested braces.
+fn module_body_bounds(text: &str, name_end: u32) -> Option<(usize, usize)> {
+    let base = name_end as usize;
+    let rest = text.get(base..)?;
+    let open = rest.find('{')?;
+    let bytes = rest.as_bytes();
+    let mut depth = 1usize;
+    let mut i = open + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((base + open + 1, base + i));
+                }
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// First whole-identifier occurrence of `name` inside text[start..end].
+fn find_ident(text: &str, start: usize, end: usize, name: &str) -> Option<usize> {
+    let mut search = start;
+    while search < end {
+        let rel = text.get(search..end)?.find(name)?;
+        let pos = search + rel;
+        let before_ok = pos == start || !text[..pos].chars().next_back().map_or(false, is_ident_char);
+        let after = pos + name.len();
+        let after_ok = after >= end || !text[after..].chars().next().map_or(false, is_ident_char);
+        if before_ok && after_ok {
+            return Some(pos);
+        }
+        search = pos + name.len().max(1);
+    }
+    None
+}
+
+/// Read the identifier immediately following a keyword token at `kw_end`
+/// (skipping whitespace), returning its byte range.
+fn kw_next_ident(text: &str, end: usize, kw_end: usize) -> Option<(usize, usize)> {
+    let mut i = kw_end;
+    while i < end {
+        let c = text[i..].chars().next()?;
+        if !c.is_whitespace() {
+            break;
+        }
+        i += c.len_utf8();
+    }
+    if i >= end {
+        return None;
+    }
+    let c = text[i..].chars().next()?;
+    if !(c.is_ascii_alphabetic() || c == '_') {
+        return None;
+    }
+    let start = i;
+    i += c.len_utf8();
+    while i < end {
+        let c = text[i..].chars().next()?;
+        if !is_ident_char(c) {
+            break;
+        }
+        i += c.len_utf8();
+    }
+    Some((start, i))
+}
+
+/// Locate the declaration of `name` in the body: a whole-word keyword
+/// (`let`/`input`/`output`/`inout`/`reg`) immediately followed by `name`.
+/// `output reg NAME` is found via the `reg` keyword; `TypeName.create`
+/// bundle ports appear in the source as plain `let`/`input`/`output` lines.
+fn find_declaration(text: &str, start: usize, end: usize, name: &str) -> Option<(usize, usize)> {
+    const KWS: &[&str] = &["let", "input", "output", "inout", "reg"];
+    for kw in KWS {
+        let mut search = start;
+        loop {
+            // A missing keyword must only end this keyword's scan, not the
+            // whole function (earlier keywords may have exhausted the range).
+            let rel = match text.get(search..end).and_then(|s| s.find(kw)) {
+                Some(r) => r,
+                None => break,
+            };
+            let pos = search + rel;
+            let before_ok = pos == start || !text[..pos].chars().next_back().map_or(false, is_ident_char);
+            let kw_end = pos + kw.len();
+            let kw_after_ok = kw_end >= end || !text[kw_end..].chars().next().map_or(false, is_ident_char);
+            if before_ok && kw_after_ok {
+                if let Some((ns, ne)) = kw_next_ident(text, end, kw_end) {
+                    if ne - ns == name.len() && &text[ns..ne] == name {
+                        return Some((ns, ne));
+                    }
+                }
+            }
+            search = pos + kw.len().max(1);
+        }
+    }
+    None
+}
+
+/// Locate the first assignment driving `name` - the `NAME :=` pattern with
+/// only whitespace between the name and the operator. Scanning each `NAME`
+/// occurrence (rather than the first word then a later `:=`) keeps a header
+/// port declaration like `output y = ...` from being mistaken for a driver.
+fn find_driver(text: &str, start: usize, end: usize, name: &str) -> Option<(usize, usize)> {
+    let mut search = start;
+    while search < end {
+        let rel = match text.get(search..end).and_then(|s| s.find(name)) {
+            Some(r) => r,
+            None => break,
+        };
+        let pos = search + rel;
+        let before_ok = pos == start || !text[..pos].chars().next_back().map_or(false, is_ident_char);
+        let after = pos + name.len();
+        let after_ok = after >= end || !text[after..].chars().next().map_or(false, is_ident_char);
+        if before_ok && after_ok {
+            if let Some(op) = text.get(after..end).and_then(|s| s.find(":=")).map(|r| after + r) {
+                if text.get(after..op).map_or(false, |g| g.trim().is_empty()) {
+                    return Some((pos, after));
+                }
+            }
+        }
+        search = pos + name.len().max(1);
+    }
+    None
+}
+
+/// First occurrence of `name` that is not its own declaration (a read site),
+/// falling back to the declaration when the name is only ever declared.
+fn find_read(text: &str, start: usize, end: usize, name: &str) -> Option<(usize, usize)> {
+    let decl = find_declaration(text, start, end, name);
+    let mut search = start;
+    while search < end {
+        let rel = text.get(search..end)?.find(name)?;
+        let pos = search + rel;
+        let before_ok = pos == start || !text[..pos].chars().next_back().map_or(false, is_ident_char);
+        let after = pos + name.len();
+        let after_ok = after >= end || !text[after..].chars().next().map_or(false, is_ident_char);
+        if before_ok && after_ok {
+            let is_decl = decl.map_or(false, |(ds, de)| ds == pos && de == after);
+            if !is_decl {
+                return Some((pos, after));
+            }
+        }
+        search = pos + name.len().max(1);
+    }
+    decl
+}
+
+/// Resolve an HDL self-check line to a source span within `text`, anchored on
+/// the module-name span. Falls back to the module-name span when the signal
+/// cannot be located (auto-generated names, exotic shapes).
+fn check_issue_span(text: &str, line: &str, module_span: parser_lib::Span<()>) -> parser_lib::Span<()> {
+    if module_span.end_offset == 0 {
+        return module_span;
+    }
+    let mut parts = line.splitn(4, '|');
+    let (code, sig) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(code), Some(_module), Some(sig), Some(_msg)) => (code, sig),
+        _ => return module_span,
+    };
+    if sig.is_empty() {
+        return module_span;
+    }
+    let Some((_, body_end)) = module_body_bounds(text, module_span.end_offset) else {
+        return module_span;
+    };
+    // Search the whole module region — from the module name (so ports declared
+    // in the header, before the body brace, are found) to the end of the body.
+    let (search_start, search_end) = (module_span.end_offset as usize, body_end);
+    let range = if sig.contains('.') && code != "HDL022" {
+        // connection "inst.port": locate the literal occurrence in the module.
+        let found = text.get(search_start..search_end).and_then(|s| s.find(sig));
+        match found {
+            Some(rel) => {
+                let pos = search_start + rel;
+                if pos == search_start || !text[..pos].chars().next_back().map_or(false, is_ident_char) {
+                    Some((pos, pos + sig.len()))
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    } else {
+        // HDL022/024: the unconnected port is never written in the source, so
+        // point at the instance declaration (`let u = child.create[...]`)
+        // instead of the missing `u.port` literal. The instance name is the
+        // part before the first dot (or the whole signal for raw instances).
+        let inst = sig.split('.').next().unwrap_or(sig);
+        let resolved = match code {
+            "HDL001" => find_read(text, search_start, search_end, inst),
+            "HDL010" | "HDL011" | "HDL012" | "HDL013" | "HDL023" => {
+                find_driver(text, search_start, search_end, inst)
+            }
+            "HDL022" | "HDL024" => {
+                find_declaration(text, search_start, search_end, inst)
+                    .or_else(|| find_ident(text, search_start, search_end, inst).map(|p| (p, p + inst.len())))
+            }
+            _ => find_declaration(text, search_start, search_end, inst),
+        };
+        resolved
+    };
+    match range {
+        Some((s, e)) => parser_lib::Span {
+            data: (),
+            start_offset: s as u32,
+            end_offset: e as u32,
+            path_id: module_span.path_id,
+        },
+        None => module_span,
+    }
+}
+
+/// Span of the name token of a top-level declaration. For `module` macro
+/// expansions this is the module name (`class` decl), used as the anchor to
+/// locate the module's body in the source text.
+fn decl_span(tm: &Decl) -> parser_lib::Span<()> {
+    use crate::parser_lib::ToSpan;
+    match tm {
+        Decl::Def { name, .. }
+        | Decl::Enum { name, .. }
+        | Decl::TraitDecl { name, .. }
+        | Decl::Class { name, .. } => name.to_span(),
+        _ => parser_lib::Span { data: (), start_offset: 0, end_offset: 0, path_id: 0 },
+    }
+}
+
 impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     pub fn get_infer(&self) -> Arc<Mutex<Infer>> {
         self.infer.clone()
@@ -609,9 +875,21 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         err_collect.push((err, DiagnosticSeverity::ERROR));
 	                }
 	                }
-		                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
+	                // 取出模式匹配分支中累积的额外类型错误，每个变成独立诊断
 		                for err in infer.accumulated_errors.drain(..) {
 		                    err_collect.push((err, DiagnosticSeverity::ERROR));
+		                }
+		                // HDL self-check warnings (hdl-check.typort close-check runs
+		                // during the module class decl's elaboration): drain per decl
+		                // and resolve each to the offending signal's source span.
+		                for line in L13_namespace::take_fresh_check_issues(infer) {
+		                    let anchor = decl_span(&tm);
+		                    let span = check_issue_span(params.text, &line, anchor);
+		                    let err = L13_namespace::Error(
+		                        span.map(|_| L13_namespace::format_check_warning(&line)),
+		                        vec![],
+		                    );
+		                    err_collect.push((err, DiagnosticSeverity::WARNING));
 		                }
 		                let f1 = L13_namespace::FUNC_PROF.force.1.load(Ordering::Relaxed);
 		                let e1 = L13_namespace::FUNC_PROF.eval.1.load(Ordering::Relaxed);
@@ -1064,22 +1342,6 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // lines that would otherwise land on this pass's first decl.
             let _ = L13_namespace::take_check_issues(&local_infer);
 
-            fn decl_span(tm: &Decl) -> parser_lib::Span<()> {
-                use crate::parser_lib::ToSpan;
-                match tm {
-                    Decl::Def { name, .. }
-                    | Decl::Enum { name, .. }
-                    | Decl::TraitDecl { name, .. }
-                    | Decl::Class { name, .. } => name.to_span(),
-                    _ => parser_lib::Span { data: (), start_offset: 0, end_offset: 0, path_id: 0 },
-                }
-            }
-            fn check_issue_error(line: &str, tm: &Decl) -> L13_namespace::Error {
-                L13_namespace::Error(
-                    decl_span(tm).map(|_| L13_namespace::format_check_warning(line)),
-                    vec![],
-                )
-            }
 
             let mut err_collect = vec![];
             let mut terms = vec![];
@@ -1100,8 +1362,16 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 // being checked (the module close-check runs during the
                 // module class decl's elaboration; replays are deduped in
                 // take_fresh_check_issues via the CheckIssuesSeen global).
+                // Each line is resolved to the offending signal's source span
+                // in the module body (falling back to the module name span).
                 for line in L13_namespace::take_fresh_check_issues(&local_infer) {
-                    err_collect.push((check_issue_error(&line, &tm), DiagnosticSeverity::WARNING));
+                    let anchor = decl_span(&tm);
+                    let span = check_issue_span(text, &line, anchor);
+                    let err = L13_namespace::Error(
+                        span.map(|_| L13_namespace::format_check_warning(&line)),
+                        vec![],
+                    );
+                    err_collect.push((err, DiagnosticSeverity::WARNING));
                 }
             }
             let after_keys: HashSet<SmolStr> = local_cxt.decl.keys().cloned().collect();
