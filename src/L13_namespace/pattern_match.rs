@@ -1273,6 +1273,15 @@ impl Compiler {
                 index,
                 datas,
             } => (*index, datas.clone()),
+            // Native Nat: dispatch on the constructor head without building
+            // a unary chain.  `Nat 0` is `zero`; `Nat k` (k>0) is `succ` of
+            // `Nat (k-1)` — the O(1) analogue of walking one `succ`.
+            Val::Nat(k) if *k == 0 => (0, Rc::new(vec![])),
+            Val::Nat(k) => (1, Rc::new(vec![(
+                empty_span(SmolStr::new("n")),
+                Val::Nat(k - 1).into(),
+                Icit::Expl,
+            )])),
             _ => match infer.force(decl, heads).as_ref() {
                 Val::SumCase {
                     is_trait: _,
@@ -1280,6 +1289,12 @@ impl Compiler {
                     index,
                     datas,
                 } => (*index, datas.clone()),
+                Val::Nat(k) if *k == 0 => (0, Rc::new(vec![])),
+                Val::Nat(k) => (1, Rc::new(vec![(
+                    empty_span(SmolStr::new("n")),
+                    Val::Nat(k - 1).into(),
+                    Icit::Expl,
+                )])),
                 _ => (u32::MAX, Rc::new(vec![])),
             },
         };

@@ -445,6 +445,43 @@ impl Infer {
                     Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
+            (Val::Nat(k), Val::Nat(j)) if k == j => Ok(cxt.clone()),
+            // Native Nat vs a unary chain (pattern refinement): descend one
+            // constructor at a time just like the SumCase/SumCase arm, so a
+            // concrete `1` still refines `succ _n0` to `_n0 = 0` exactly as
+            // it did when nats were `SumCase` chains.
+            (Val::Nat(k), Val::SumCase { index, datas, .. }) => {
+                match index {
+                    0 if datas.is_empty() => {
+                        if *k == 0 { Ok(cxt.clone()) } else { Err(Error(t_span.map(|_| "".to_string()), vec![])) }
+                    }
+                    1 if datas.len() == 1 => {
+                        if *k > 0 {
+                            let prev = Val::Nat(k - 1).into();
+                            self.unify_pm(cxt, &prev, &datas[0].1, t_span)
+                        } else {
+                            Err(Error(t_span.map(|_| "".to_string()), vec![]))
+                        }
+                    }
+                    _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
+                }
+            }
+            (Val::SumCase { index, datas, .. }, Val::Nat(k)) => {
+                match index {
+                    0 if datas.is_empty() => {
+                        if *k == 0 { Ok(cxt.clone()) } else { Err(Error(t_span.map(|_| "".to_string()), vec![])) }
+                    }
+                    1 if datas.len() == 1 => {
+                        if *k > 0 {
+                            let prev = Val::Nat(k - 1).into();
+                            self.unify_pm(cxt, &datas[0].1, &prev, t_span)
+                        } else {
+                            Err(Error(t_span.map(|_| "".to_string()), vec![]))
+                        }
+                    }
+                    _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
+                }
+            }
             (
                 //Val::SumCase { case_name: name1, datas: d1, .. },
                 //Val::SumCase { case_name: name2, datas: d2, .. },
@@ -2918,6 +2955,9 @@ fn val_cache_key(v: &Val, depth: u32) -> Option<SmolStr> {
         Val::U(n) => Some(SmolStr::new(format!("u{}", n))),
         Val::LiteralType => Some(SmolStr::new("lt")),
         Val::LiteralIntro(s) => Some(SmolStr::new(format!("l:{}", s.data))),
+        // Native Nat width parameters (`UInt[8]` etc.): keep the structural
+        // key stable so the trait-method Pi cache still hits across sites.
+        Val::Nat(k) => Some(SmolStr::new(format!("n{}", k))),
         Val::Sum(name, params, _, _) => {
             let mut s = String::from(name.data.as_str());
             s.push('(');

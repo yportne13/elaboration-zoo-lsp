@@ -5,7 +5,7 @@ use crate::list::List;
 use crate::parser_lib::Span;
 
 use super::{
-    Ix, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt,
+    Ix, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, SumCaseDatas, Tm, UnifyError, VTy, Val, cxt::Cxt,
     lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
     pattern_match::Compiler,
@@ -53,7 +53,7 @@ fn val_has_no_flex(v: &Val) -> bool {
         Val::SumCase { typ, datas, .. } => {
             val_has_no_flex(typ) && datas.iter().all(|(_, d, _)| val_has_no_flex(d))
         }
-        Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => true,
+        Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => true,
         Val::Lam(..) | Val::Pi(..) | Val::Match(..) | Val::Call(..) => false,
     }
 }
@@ -89,6 +89,41 @@ enum SpinePruneStatus {
     OKRenaming,
     OKNonRenaming,
     NeedsPruning,
+}
+
+/// Is `v` the `Nat` sum type (used to gate the native-Nat vs unary-chain
+/// definitional-equality rules in `unify`)?
+fn is_nat_sum(v: &Val) -> bool {
+    matches!(v, Val::Sum(name, _, _, false) if name.data == "Nat")
+}
+
+/// Unify a native `Nat(k)` with the fields of a `Nat` constructor whose
+/// head is `index`/`datas` (a possibly-stuck unary chain).  `succ d` equals
+/// `Nat(k)` iff `k > 0` and `d` equals `Nat(k-1)`; `zero` equals `Nat(0)`.
+fn unify_nat_chain(
+    infer: &mut Infer,
+    l: Lvl,
+    cxt: &Cxt,
+    k: u64,
+    index: u32,
+    datas: &SumCaseDatas,
+    fuel: u32,
+) -> Result<(), UnifyError> {
+    match index {
+        0 if datas.is_empty() => {
+            if k == 0 { Ok(()) } else { Err(UnifyError::Basic) }
+        }
+        1 if datas.len() == 1 => {
+            if k > 0 {
+                let (_, d, _) = &datas[0];
+                let prev = Val::Nat(k - 1).into();
+                infer.unify(l, cxt, &prev, d, fuel)
+            } else {
+                Err(UnifyError::Basic)
+            }
+        }
+        _ => Err(UnifyError::Basic),
+    }
 }
 
 impl Infer {
@@ -342,6 +377,11 @@ impl Infer {
             Val::U(x) => Ok(Tm::U(*x).into()),
             Val::LiteralType => Ok(Tm::LiteralType.into()),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone()).into()),
+            Val::Nat(k) => {
+                // Native Nat: no variables to rename; expand to the equivalent
+                // chain (renaming is a no-op on closed nats).
+                Ok(self.quote_nat(decl, pren.dom, *k))
+            }
             Val::Sum(x, params, cases, is_trait) => {
                 let new_params = Rc::new(params
                     .iter()
@@ -959,6 +999,24 @@ impl Infer {
                 }
                 Ok(())
             }
+            (Val::Nat(k), Val::Nat(j)) if k == j => Ok(()),
+            // Native Nat vs a (possibly stuck) unary chain: definitionally
+            // equal exactly when `k` equals the chain's length.  Only the
+            // `Nat` sum type matches; other succ-like types fail.
+            (Val::Nat(k), Val::SumCase { typ, index, datas, .. }) => {
+                if is_nat_sum(&self.force(&cxt.decl, typ)) {
+                    unify_nat_chain(self, l, cxt, *k, *index, datas, fuel)
+                } else {
+                    Err(UnifyError::Basic)
+                }
+            }
+            (Val::SumCase { typ, index, datas, .. }, Val::Nat(k)) => {
+                if is_nat_sum(&self.force(&cxt.decl, typ)) {
+                    unify_nat_chain(self, l, cxt, *k, *index, datas, fuel)
+                } else {
+                    Err(UnifyError::Basic)
+                }
+            }
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 self.unify(l, cxt, s1, s2, fuel)?;
 
@@ -998,7 +1056,7 @@ impl Infer {
                     &t
                 };
                 let s_forced = self.force(&cxt.decl, s);
-                if let Val::SumCase { .. } = s_forced.as_ref() {
+                if matches!(s_forced.as_ref(), Val::SumCase { .. } | Val::Nat(_)) {
                     if let Some((tm, eval_env)) = Compiler::eval_aux(self, &s_forced, &cxt.decl, env_m, cases) {
                         let reduced = self.eval(&cxt.decl, &eval_env, &tm);
                         if fuel > 0 {

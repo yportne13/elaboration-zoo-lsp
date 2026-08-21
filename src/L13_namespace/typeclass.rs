@@ -290,6 +290,8 @@ impl Synth {
                         Self::val_match(v1, v2, subst)
                     })
             }
+            // Native Nat: equal concrete values
+            (Val::Nat(k1), Val::Nat(k2)) => k1 == k2,
             // Universe level
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             // LiteralType (String) is equivalent to Decl("String")
@@ -347,6 +349,7 @@ impl Synth {
                         Self::vals_eq_ground_impl(v1, v2, visited)
                     })
             }
+            (Val::Nat(k1), Val::Nat(k2)) => k1 == k2,
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             (Val::LiteralType, Val::Decl(x, sp)) | (Val::Decl(x, sp), Val::LiteralType) => {
                 x.data == "String" && sp.is_empty()

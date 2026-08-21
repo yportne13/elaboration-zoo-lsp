@@ -16,6 +16,10 @@ pub(super) fn count_nat_forced(infer: &Infer, decl: &Decl, val: &Rc<Val>) -> u64
     let mut current = infer.force(decl, val);
     loop {
         match current.as_ref() {
+            // Native Nat: the whole concrete value in one u64 (Lean/Agda
+            // native representation).  `succ (stuck)` chains still walk
+            // below and keep the legacy behaviour (return 0 on a stuck tail).
+            Val::Nat(k) => return *k,
             Val::SumCase { index: 0, .. } => return count,
             Val::SumCase { index: 1, datas, .. } => {
                 match datas.first() {
@@ -34,26 +38,13 @@ pub(super) fn count_nat_forced(infer: &Infer, decl: &Decl, val: &Rc<Val>) -> u64
     }
 }
 
-pub(super) fn build_nat(count: u64, span: Span<()>, nat_type: &Rc<Val>) -> Rc<Val> {
-    let mut result = Rc::new(Val::SumCase {
-        is_trait: false,
-        typ: nat_type.clone(),
-        index: 0,
-        datas: Rc::new(vec![]),
-    });
-    for _ in 0..count {
-        result = Rc::new(Val::SumCase {
-            is_trait: false,
-            typ: nat_type.clone(),
-            index: 1,
-            datas: Rc::new(vec![(
-                span.clone().map(|_| SmolStr::new("n")),
-                result,
-                Icit::Expl,
-            )]),
-        });
-    }
-    result
+/// Build the value of a `Nat` literal.  Native form: a concrete `succ^n zero`
+/// is a single `Val::Nat(n)` (O(1)) instead of an n-deep unary chain.  The
+/// `span`/`nat_type` arguments are kept for call-site compatibility; the
+/// type is not needed because `quote` re-derives it from the declaration
+/// table when expanding the value back to a term.
+pub(super) fn build_nat(count: u64, _span: Span<()>, _nat_type: &Rc<Val>) -> Rc<Val> {
+    Val::Nat(count).into()
 }
 
 pub(super) fn nat_to_dec(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {

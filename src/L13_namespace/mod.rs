@@ -43,7 +43,7 @@ pub struct FuncProf {
     pub unify: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
     pub solve_trait: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
     /// force() entry value shape histogram, indexed by `val_shape_index`.
-    pub force_shape: [std::sync::atomic::AtomicU64; 13],
+    pub force_shape: [std::sync::atomic::AtomicU64; 14],
 }
 
 pub static FUNC_PROF: FuncProf = FuncProf {
@@ -65,7 +65,7 @@ pub static FUNC_PROF: FuncProf = FuncProf {
         std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
         std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
         std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
-        std::sync::atomic::AtomicU64::new(0),
+        std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
     ],
 };
 
@@ -86,12 +86,34 @@ pub fn val_shape_index(v: &Val) -> usize {
         Val::SumCase { .. } => 10,
         Val::Match(..) => 11,
         Val::Call(..) => 12,
+        Val::Nat(..) => 13,
     }
 }
 
 pub fn prof_shape(v: &Val) {
     if FUNC_PROF.enabled.load(std::sync::atomic::Ordering::Relaxed) {
         FUNC_PROF.force_shape[val_shape_index(v)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// If a `Tm::SumCase` step (with `typ` already evaluated to `v`) is a fully
+/// concrete `Nat` constructor, return its native value: `zero` -> 0 and
+/// `succ (Nat k)` -> k+1.  Anything else (a different sum type, a partially
+/// stuck chain like `succ x` with x a rigid/meta, a non-nullary constructor)
+/// returns `None` and the caller keeps the ordinary `Val::SumCase` shape.
+fn nat_step_value(v: &Val, index: u32, datas: &[(Span<SmolStr>, Rc<Val>, Icit)]) -> Option<u64> {
+    match v {
+        Val::Sum(name, _, _, false) if name.data == "Nat" => {
+            match index {
+                0 if datas.is_empty() => Some(0),
+                1 if datas.len() == 1 => match datas[0].1.as_ref() {
+                    Val::Nat(k) => Some(k + 1),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -509,6 +531,16 @@ pub enum Val {
     U(u32),
     LiteralType,
     LiteralIntro(Span<String>),
+    /// Native machine representation of a concrete `Nat` (Lean/Agda-style
+    /// optimization): a value that is definitionally `succ^n zero` is held
+    /// as a single `u64` instead of an n-deep unary `Val::SumCase` chain.
+    /// Created by `build_nat` (literals), by `eval` when a `Tm::SumCase`
+    /// chain is fully concrete (`succ (Nat k) -> Nat (k+1)`), and by the
+    /// pattern matcher when binding a `succ` argument (`n = Nat (k-1)`).
+    /// WHNF leaf: `force` returns it unchanged.  `quote` expands it back to
+    /// a `Tm::SumCase` chain so every existing downstream consumer (pretty,
+    /// nf, unify-vs-stuck, ...) sees exactly the term shape it saw before.
+    Nat(u64),
     Sum(
         Span<SmolStr>,
         SumParams,
@@ -657,7 +689,7 @@ impl Drop for Val {
                     let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
                     tms.push(body);
                 }
-                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => {
+                Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {
                     // Leaf: no nested references.  Return without touching
                     // `v`; the caller forgets it, so this impl is not
                     // re-entered (dropping the `Val::U(0)` sentinel would
@@ -1083,6 +1115,7 @@ impl DetailCounts {
             }
             Val::U(_) => {}
             Val::LiteralType => {}
+            Val::Nat(_) => {}
             Val::LiteralIntro(s) => {
                 self.span_smolstr_count += 1; // Span<String> ~ Span<SmolStr>
             }
@@ -1376,6 +1409,7 @@ impl Infer {
                     Val::U(_) => "U",
                     Val::LiteralType => "LiteralType",
                     Val::LiteralIntro(_) => "LiteralIntro",
+                    Val::Nat(_) => "Nat",
                     Val::Sum(_, _, _, _) => "Sum",
                     Val::SumCase { .. } => "SumCase",
                     Val::Match(_, _, _) => "Match",
@@ -1398,6 +1432,7 @@ impl Infer {
                     Val::U(_) => "U",
                     Val::LiteralType => "LiteralType",
                     Val::LiteralIntro(_) => "LiteralIntro",
+                    Val::Nat(_) => "Nat",
                     Val::Sum(_, _, _, _) => "Sum",
                     Val::SumCase { .. } => "SumCase",
                     Val::Match(_, _, _) => "Match",
@@ -1703,6 +1738,7 @@ impl Infer {
             Val::Pi(_, _, dom, closure) => self.val_no_metas(decl, l, dom, seen)
                 .or_else(|| self.closure_no_metas(decl, l, closure, seen)),
             Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) => None,
+            Val::Nat(_) => None,
             Val::Sum(_, params, _, _) => params.iter().find_map(|(_, val, ty, _)| {
                 self.val_no_metas(decl, l, val, seen).or_else(|| self.val_no_metas(decl, l, ty, seen))
             }),
@@ -1743,6 +1779,11 @@ impl Infer {
  t_solved.clone(), sp)),
                 MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
             },
+            // A native Nat is already WHNF (definitionally `succ^n zero`
+            // compressed to one u64).  Not forcing it here is exactly the
+            // Lean/Agda native-Nat win: re-forcing a concrete Nat used to
+            // re-walk (and possibly rebuild) the whole unary chain.
+            Val::Nat(_) => t.clone(),
             Val::Obj(x, a, b) => {
                 let xf = self.force(decl, x);
                 if Rc::ptr_eq(&xf, x) {
@@ -2228,12 +2269,22 @@ impl Infer {
                         }
                     }
                     Some(Frame::SumCaseTyp { is_trait, index, datas }) => {
-                        v = Val::SumCase {
-                            is_trait,
-                            typ: v,
-                            index,
-                            datas: Rc::new(datas),
-                        }.into();
+                        // Native-Nat compression (Lean/Agda-style): a fully
+                        // concrete `Nat` constructor step is built directly as
+                        // `Val::Nat` instead of a unary `Val::SumCase` chain.
+                        // `succ (Nat k)` -> `Nat (k+1)`, `zero` -> `Nat 0`.
+                        // Partially-stuck chains (`succ x` with x rigid/meta)
+                        // keep the `SumCase` shape exactly as before.
+                        if let Some(n) = nat_step_value(v.as_ref(), index, &datas) {
+                            v = Val::Nat(n).into();
+                        } else {
+                            v = Val::SumCase {
+                                is_trait,
+                                typ: v,
+                                index,
+                                datas: Rc::new(datas),
+                            }.into();
+                        }
                     }
                     Some(Frame::Match(cases, menv)) => {
                         // Dispatch on the head constructor directly: forcing
@@ -2241,8 +2292,9 @@ impl Infer {
                         // constructor chain at every match step (O(n^2) for
                         // `nat_add_helper` on a big literal).  Only
                         // non-constructor heads (e.g. metas) are forced.
+                        // `Val::Nat` (native Nat) is constructor-headed too.
                         match v.as_ref() {
-                            Val::SumCase { .. } => {
+                            Val::SumCase { .. } | Val::Nat(_) => {
                                 match Compiler::eval_aux(self, &v, decl, &menv, &cases) {
                                     Some((tm_b, env_b)) => {
                                         tm = tm_b;
@@ -2257,7 +2309,7 @@ impl Infer {
                             _ => {
                                 let val = self.force(decl, &v);
                                 match val.as_ref() {
-                                    Val::SumCase { .. } => {
+                                    Val::SumCase { .. } | Val::Nat(_) => {
                                         match Compiler::eval_aux(self, &val, decl, &menv, &cases) {
                                             Some((tm_b, env_b)) => {
                                                 tm = tm_b;
@@ -2319,6 +2371,12 @@ impl Infer {
             Val::U(x) => Tm::U(*x).into(),
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()).into(),
             Val::LiteralType => Tm::LiteralType.into(),
+            Val::Nat(k) => {
+                // Native Nat -> the equivalent `succ`/`zero` `Tm::SumCase`
+                // chain, so existing consumers (pretty/nf/unify round-trips)
+                // see exactly the term shape they saw with unary chains.
+                self.quote_nat(decl, l, *k)
+            }
             Val::Sum(name, params, cases, is_trait) => {
                 let new_params = Rc::new(params.iter()
                     .map(|x| {
@@ -2448,6 +2506,32 @@ impl Infer {
                 Tm::Match(self.quote(decl, l, val), tm_cases).into()
             }
         }
+    }
+
+    /// Quote a native `Val::Nat(k)` into the equivalent `Tm::SumCase` chain
+    /// (`succ^k zero`), built iteratively so a large `k` does not consume
+    /// one native stack frame per constructor.  The `Nat` type is taken from
+    /// the declaration table (`Raw::Nat` uses the same lookup).  This keeps
+    /// `Tm` unchanged: every downstream consumer of a quoted value sees the
+    /// exact term shape it saw when nats were unary chains.
+    fn quote_nat(&self, decl: &Decl, l: Lvl, k: u64) -> Rc<Tm> {
+        let nat_ty = decl.get("Nat").map(|e| e.2.clone()).unwrap_or_else(|| Val::U(0).into());
+        let nat_tm = self.quote(decl, l, &nat_ty);
+        let mut inner: Rc<Tm> = Tm::SumCase {
+            is_trait: false,
+            typ: nat_tm.clone(),
+            index: 0,
+            datas: Rc::new(vec![]),
+        }.into();
+        for _ in 0..k {
+            inner = Tm::SumCase {
+                is_trait: false,
+                typ: nat_tm.clone(),
+                index: 1,
+                datas: Rc::new(vec![(empty_span(SmolStr::new("n")), inner.clone(), Icit::Expl)]),
+            }.into();
+        }
+        inner
     }
 
     pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
