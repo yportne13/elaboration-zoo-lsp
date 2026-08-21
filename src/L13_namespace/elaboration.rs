@@ -449,37 +449,38 @@ impl Infer {
             // Native Nat vs a unary chain (pattern refinement): descend one
             // constructor at a time just like the SumCase/SumCase arm, so a
             // concrete `1` still refines `succ _n0` to `_n0 = 0` exactly as
-            // it did when nats were `SumCase` chains.
-            (Val::Nat(k), Val::SumCase { index, datas, .. }) => {
-                match index {
-                    0 if datas.is_empty() => {
-                        if *k == 0 { Ok(cxt.clone()) } else { Err(Error(t_span.map(|_| "".to_string()), vec![])) }
-                    }
-                    1 if datas.len() == 1 => {
-                        if *k > 0 {
+            // it did when nats were `SumCase` chains.  Only chains typed as
+            // the `Nat` sum participate — the same gate `unify` uses.
+            (Val::Nat(k), Val::SumCase { typ, index, datas, .. }) => {
+                if super::is_nat_sum(&self.force(&cxt.decl, typ)) {
+                    match index {
+                        0 if datas.is_empty() => {
+                            if *k == 0 { Ok(cxt.clone()) } else { Err(Error(t_span.map(|_| "".to_string()), vec![])) }
+                        }
+                        1 if datas.len() == 1 && *k > 0 => {
                             let prev = Val::Nat(k - 1).into();
                             self.unify_pm(cxt, &prev, &datas[0].1, t_span)
-                        } else {
-                            Err(Error(t_span.map(|_| "".to_string()), vec![]))
                         }
+                        _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
                     }
-                    _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
+                } else {
+                    Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
-            (Val::SumCase { index, datas, .. }, Val::Nat(k)) => {
-                match index {
-                    0 if datas.is_empty() => {
-                        if *k == 0 { Ok(cxt.clone()) } else { Err(Error(t_span.map(|_| "".to_string()), vec![])) }
-                    }
-                    1 if datas.len() == 1 => {
-                        if *k > 0 {
+            (Val::SumCase { typ, index, datas, .. }, Val::Nat(k)) => {
+                if super::is_nat_sum(&self.force(&cxt.decl, typ)) {
+                    match index {
+                        0 if datas.is_empty() => {
+                            if *k == 0 { Ok(cxt.clone()) } else { Err(Error(t_span.map(|_| "".to_string()), vec![])) }
+                        }
+                        1 if datas.len() == 1 && *k > 0 => {
                             let prev = Val::Nat(k - 1).into();
                             self.unify_pm(cxt, &datas[0].1, &prev, t_span)
-                        } else {
-                            Err(Error(t_span.map(|_| "".to_string()), vec![]))
                         }
+                        _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
                     }
-                    _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
+                } else {
+                    Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
             (
