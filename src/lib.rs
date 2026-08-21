@@ -388,6 +388,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// may duplicate a span, in which case the shortest (least qualified)
     /// key wins.  Locals have no global decl, so hovering them yields no
     /// panel (type-only hover).
+    ///
+    /// `///` doc-comment lines immediately above the declaration are
+    /// appended below the signature (rust-analyzer-style: docs after the
+    /// item, rendered as markdown — not inside the code block).
     pub fn hover_def_block(&self, def_span: &Span<()>) -> Option<String> {
         let cxt = self.cxt.lock().unwrap();
         let mut best: Option<(&SmolStr, &std::sync::Arc<L13_namespace::Tm>)> = None;
@@ -407,11 +411,48 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         }
         let (key, ty) = best?;
-        Some(Self::hover_code_block(&format!(
+        let mut out = Self::hover_code_block(&format!(
             "{} : {}",
             key,
             pretty_tm(0, crate::list::List::new(), ty)
-        )))
+        ));
+        if let Some(docs) = self.hover_doc_text(def_span) {
+            out.push_str("\n\n");
+            out.push_str(&docs);
+        }
+        Some(out)
+    }
+
+    /// Consecutive `///` doc-comment lines immediately above `def_span`
+    /// (a declaration's name token), extracted from the defining document's
+    /// text.  A blank or non-doc line stops the scan; the declaration's own
+    /// line (`def foo...`) is skipped so a bare `def` prefix cannot break
+    /// adjacency.  Works cross-file and into the prelude because both live
+    /// in `document_map`.  Returns the doc body with the `///` markers and
+    /// one leading space stripped, lines joined by `\n`.
+    fn hover_doc_text(&self, def_span: &Span<()>) -> Option<String> {
+        let uri = self.document_id.iter()
+            .find(|e| *e.value() == def_span.path_id)
+            .map(|e| e.key().clone())?;
+        let rope = self.document_map.get(uri.as_str())?;
+        let before = rope.byte_slice(0..def_span.start_offset as usize).to_string();
+        // Keep every COMPLETE line above the declaration (cut after the last
+        // newline, not before it): the declaration's own partial line
+        // (`def foo…`) must be skipped without discarding separating blank
+        // lines, which terminate the doc run.
+        let above = &before[..before.rfind('\n').map(|i| i + 1).unwrap_or(0)];
+        let mut docs: Vec<&str> = Vec::new();
+        for line in above.lines().rev() {
+            match line.trim_start().strip_prefix("///") {
+                Some(rest) => docs.push(rest.strip_prefix(' ').unwrap_or(rest)),
+                None => break,
+            }
+        }
+        if docs.is_empty() {
+            return None;
+        }
+        docs.reverse();
+        Some(docs.join("\n"))
     }
 }
 

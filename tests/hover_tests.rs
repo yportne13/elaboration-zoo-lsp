@@ -177,3 +177,71 @@ fn hover_on_local_variable_is_type_only() {
     let value = hover_markup_at(&b, &uri, 0, b_off);
     assert_eq!(value, "```typort\nBoolean\n```");
 }
+
+// ── Doc-comment (`///`) rendering ────────────────────────────────────────────
+
+#[test]
+fn hover_on_def_with_doc_comment_shows_docs() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///doc.typort").unwrap();
+    let src = "/// Adds one to `a`.\n///\n/// Uses the prelude successor.\ndef inc(a: Nat): Nat = succ a";
+    elaborate(&b, &uri, src);
+
+    let line4 = src.find("def inc").unwrap();
+    let name_off = src.find("inc").unwrap();
+    let value = hover_markup_at(&b, &uri, 3, (name_off - line4) as u32);
+    // Signature fence first …
+    assert!(
+        value.starts_with("```typort\ninc : (a: Nat) → Nat\n```"),
+        "missing signature panel, got:\n{value}"
+    );
+    // … then the doc body (markers stripped, blank /// line becomes a
+    // paragraph break), still before the type panel.
+    assert!(
+        value.contains(
+            "\n\nAdds one to `a`.\n\nUses the prelude successor.\n\n```typort\n"
+        ),
+        "missing doc body between panels, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_use_site_shows_docs_too() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///doc2.typort").unwrap();
+    let src = "/// Doubles `a` via addition.\ndef dbl(a: Nat): Nat = nat_add_helper a a\ndef four: Nat = dbl 2";
+    elaborate(&b, &uri, src);
+
+    let line3 = src.find("def four").unwrap();
+    let use_off = src.rfind("dbl").unwrap();
+    let value = hover_markup_at(&b, &uri, 2, (use_off - line3) as u32);
+    assert!(
+        value.starts_with("```typort\ndbl : "),
+        "definition panel must come first, got:\n{value}"
+    );
+    assert!(
+        value.contains("\n\nDoubles `a` via addition."),
+        "docs missing on use-site hover, got:\n{value}"
+    );
+}
+
+#[test]
+fn doc_scan_stops_at_blank_line() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///doc3.typort").unwrap();
+    // The `///` line is detached from the declaration by a blank line, so it
+    // must NOT be picked up as its documentation.
+    let src = "/// Some other note.\n\ndef dec(a: Nat): Nat = succ a";
+    elaborate(&b, &uri, src);
+
+    let line3 = src.find("def dec").unwrap();
+    let name_off = src.find("dec").unwrap();
+    let value = hover_markup_at(&b, &uri, 2, (name_off - line3) as u32);
+    assert!(
+        !value.contains("Some other note"),
+        "detached doc must not render, got:\n{value}"
+    );
+}
