@@ -104,3 +104,76 @@ fn hover_over_nested_tuple_element_is_most_specific() {
     assert_eq!(hover_type_at(&b, &uri, src, base + 1), "Nat");
     assert_eq!(hover_type_at(&b, &uri, src, base + 4), "Nat");
 }
+
+// ── Hover markup tests (rust-analyzer-style panels) ──────────────────────────
+
+use lsp_types::HoverContents;
+
+/// Full hover markup the LSP handler produces for `line`/`char`.
+fn hover_markup_at(b: &Arc<Backend<CapturingClient>>, uri: &Url, line: u32, char: u32) -> String {
+    let h = b.hover_at(uri, lsp_types::Position::new(line, char)).expect("no hover");
+    match h.contents {
+        HoverContents::Markup(m) => m.value,
+        _ => panic!("expected markdown hover"),
+    }
+}
+
+#[test]
+fn hover_on_def_name_shows_signature_and_type_panels() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///sig.typort").unwrap();
+    let src = "def foo(a: Nat, b: Boolean): Boolean = b";
+    elaborate(&b, &uri, src);
+
+    let name_off = src.find("foo").unwrap() as u32;
+    let value = hover_markup_at(&b, &uri, 0, name_off);
+    // Definition panel first: `<name> : <type>` in a typort code fence …
+    assert!(
+        value.starts_with("```typort\nfoo : (a: Nat, b: Boolean) → Boolean\n```"),
+        "missing definition panel, got:\n{value}"
+    );
+    // … then the hovered expression's own type panel.
+    assert!(
+        value.contains("\n\n```typort\n(a: Nat, b: Boolean) → Boolean\n```"),
+        "missing type panel, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_def_use_shows_definition_panel_first() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///use.typort").unwrap();
+    let src = "def foo(a: Nat, b: Boolean): Boolean = b\ndef bar: Boolean = foo(1, true)";
+    elaborate(&b, &uri, src);
+
+    let line2 = src.find("def bar").unwrap();
+    let use_off = src.rfind("foo").unwrap();
+    let value = hover_markup_at(&b, &uri, 1, (use_off - line2) as u32);
+    // The definition signature panel comes first, then the expression type.
+    assert!(
+        value.starts_with("```typort\nfoo : "),
+        "definition panel must come first, got:\n{value}"
+    );
+    assert_eq!(
+        value.matches("```typort").count(),
+        2,
+        "expected exactly two panels, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_local_variable_is_type_only() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///loc.typort").unwrap();
+    let src = "def foo(a: Nat, b: Boolean): Boolean = b";
+    elaborate(&b, &uri, src);
+
+    // The trailing `b` is a local reference: no global decl matches its
+    // definition span, so the hover is a single fenced type block.
+    let b_off = src.rfind("= b").unwrap() as u32 + 2;
+    let value = hover_markup_at(&b, &uri, 0, b_off);
+    assert_eq!(value, "```typort\nBoolean\n```");
+}

@@ -52,6 +52,7 @@ use L13_namespace::parser::{parser, parser_with_macros, macros::MacroRule, Macro
 use L13_namespace::parser::syntax::Decl;
 use L13_namespace::{DeclTm, Infer, preprocess};
 use L13_namespace::cxt::Cxt;
+use crate::parser_lib::{Span, ToSpan};
 
 use std::sync::{Arc, Mutex, Condvar, mpsc};
 use std::io::{self, BufRead, Write, stdin, stdout};
@@ -299,6 +300,118 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             timings,
         });
         ret
+    }
+
+    /// Core hover logic shared by the LSP trait handler and tests: resolve
+    /// `position` in `uri` to rust-analyzer-style markdown panels —
+    /// definition signature first, then the hovered expression's own type.
+    pub fn hover_at(&self, uri: &Url, position: Position) -> Option<Hover> {
+        let uri = normalize_builtin_uri(uri);
+        let semantic = self.type_map.get(uri.as_str())?;
+        let rope = self.document_map.get(uri.as_str())?;
+        let id = self.document_id.get(uri.as_str())?;
+        let offset = position_to_offset(position, &rope)?;
+        // rust-analyzer-style panels: definition signature first, then
+        // the hovered expression's own type, separated by a blank line.
+        let make_hover = |range_span: Span<()>, def_block: Option<String>, type_str: String| {
+            let mut value = String::new();
+            if let Some(d) = def_block {
+                value.push_str(&d);
+                value.push_str("\n\n");
+            }
+            value.push_str(&Self::hover_code_block(&type_str));
+            Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: Some(Range::new(
+                    offset_to_position(range_span.start_offset as usize, &rope)?,
+                    offset_to_position(range_span.end_offset as usize, &rope)?,
+                )),
+            })
+        };
+        semantic.iter()
+            .flat_map(|x| match x {
+                DeclTm::Def { name, typ_pretty, .. } => Some((name, typ_pretty)),
+                _ => None
+            })
+            .find(|x| x.0.contains(offset))
+            .and_then(|x| {
+                let def_span = x.0.to_span();
+                make_hover(def_span, self.hover_def_block(&def_span), x.1.clone())
+            })
+            .or_else(|| {
+                self.hover_table
+                    .get(uri.as_str())
+                    .and_then(|x| x.hover_entry_at(*id, offset)
+                        .map(|(span, def_span, hcxt, val)| {
+                            (*span, *def_span, pretty_tm(0, hcxt.names(), &x.quote(&hcxt.decl, hcxt.lvl, val)))
+                        })
+                    )
+                    .and_then(|(span, def_span, type_str)| {
+                        make_hover(span, self.hover_def_block(&def_span), type_str)
+                    })
+            })
+    }
+
+    /// One markdown code block for a hover panel.  Very long content is
+    /// truncated (rust-analyzer-style `…`) so a runaway normalized type
+    /// cannot flood the popup.
+    pub fn hover_code_block(body: &str) -> String {
+        const MAX_CHARS: usize = 600;
+        const MAX_LINES: usize = 12;
+        let over_chars = body.len() > MAX_CHARS;
+        let over_lines = body.lines().count() > MAX_LINES;
+        let mut text = if over_chars {
+            let mut end = MAX_CHARS;
+            while !body.is_char_boundary(end) {
+                end -= 1;
+            }
+            body[..end].to_string()
+        } else if over_lines {
+            body.lines().take(MAX_LINES).collect::<Vec<_>>().join("\n")
+        } else {
+            body.to_string()
+        };
+        if over_chars || over_lines {
+            text.push_str(" …");
+        }
+        format!("```typort\n{text}\n```")
+    }
+
+    /// Definition panel for a hover entry: resolve the entry's definition
+    /// span (the name token of the targeted declaration) against the global
+    /// decl table and render `<fq-name> : <pretty type>` as a typort code
+    /// block.  The decl table stores each declaration's name-token span, so
+    /// an exact span match identifies the declaration; auto-import aliases
+    /// may duplicate a span, in which case the shortest (least qualified)
+    /// key wins.  Locals have no global decl, so hovering them yields no
+    /// panel (type-only hover).
+    pub fn hover_def_block(&self, def_span: &Span<()>) -> Option<String> {
+        let cxt = self.cxt.lock().unwrap();
+        let mut best: Option<(&SmolStr, &std::sync::Arc<L13_namespace::Tm>)> = None;
+        for (k, e) in cxt.decl.iter() {
+            let s = &e.0;
+            if s.path_id == def_span.path_id
+                && s.start_offset == def_span.start_offset
+                && s.end_offset == def_span.end_offset
+            {
+                let better = match best {
+                    None => true,
+                    Some((bk, _)) => (k.len(), k.as_str()) < (bk.len(), bk.as_str()),
+                };
+                if better {
+                    best = Some((k, &e.3));
+                }
+            }
+        }
+        let (key, ty) = best?;
+        Some(Self::hover_code_block(&format!(
+            "{} : {}",
+            key,
+            pretty_tm(0, crate::list::List::new(), ty)
+        )))
     }
 }
 
@@ -2023,49 +2136,10 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
-        let hover = || -> Option<Hover> {
-            let uri = params.text_document_position_params.text_document.uri;
-            let uri = normalize_builtin_uri(&uri);
-            let semantic = self.type_map.get(uri.as_str())?;
-            let rope = self.document_map.get(uri.as_str())?;
-            let id = self.document_id.get(uri.as_str())?;
-            let position = params.text_document_position_params.position;
-            let offset = position_to_offset(position, &rope)?;
-            semantic.iter()
-                .flat_map(|x| match x {
-                    DeclTm::Def { name, typ_pretty, body_pretty, .. } => Some((name, typ_pretty, body_pretty)),
-                    _ => None
-                })
-                .find(|x| x.0.contains(offset))
-                .and_then(|x| Some(Hover {
-                    contents: HoverContents::Markup(MarkupContent {
-                        kind: MarkupKind::Markdown,
-                        value: format!("{}\n\n{}", x.1, x.2),
-                    }),
-                    range: Some(Range::new(
-                        offset_to_position(x.0.start_offset as usize, &rope)?,
-                        offset_to_position(x.0.end_offset as usize, &rope)?,
-                    )),
-                }))
-                .or_else(|| {
-                    self.hover_table
-                        .get(uri.as_str())
-                        .and_then(|x| x.hover_entry_at(*id, offset)
-                            .map(|(span, _, hcxt, val)| (*span, pretty_tm(0, hcxt.names(), &x.quote(&hcxt.decl, hcxt.lvl, val))))
-                        )
-                        .and_then(|x| Some(Hover {
-                            contents: HoverContents::Markup(MarkupContent {
-                                kind: MarkupKind::Markdown,
-                                value: x.1.to_string(),
-                            }),
-                            range: Some(Range::new(
-                                offset_to_position(x.0.start_offset as usize, &rope)?,
-                                offset_to_position(x.0.end_offset as usize, &rope)?,
-                            )),
-                        }))
-                })
-        };
-         Ok(hover())
+        Ok(self.hover_at(
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        ))
     }
 
     fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
