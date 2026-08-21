@@ -1,7 +1,7 @@
 # Nat 算术 primop 化 —— 设计分析与交接笔记
 
-> 状态:**未实施**(仅完成调研与设计,代码零改动)。
-> 前置工作:native u64 Nat 表示已落地(f02d975),其后续修复见下文「已完成」。
+> 状态:**已实施**(2026-08-21 落地,含 unifier 兼容修复)。
+> 前置工作:native u64 Nat 表示已落地(f02d975),其后续修复见「已完成」。
 
 ## 0. 背景与动机
 
@@ -25,7 +25,26 @@ native 表示只带来常数加速(每步 match O(1)、构建 O(1)、force 不�
 | `b91a072` | refactor(l13): 共享 `is_nat_sum`(mod.rs)+ `nat_step_value` checked_add |
 | `9968d9f` | fix(l13): unify_pm 交叉分支补 `is_nat_sum` 门控 |
 
-基线:L13 335/335 通过。L07–L12 有 49 个**历史遗留**失败(父提交同样红,与本线无关)。
+### 1.1 本次实施内容(2026-08-21)
+
+- `cxt.rs`:新增 `nat_add` / `nat_mul` / `nat_sub` / `nat_div` / `nat_rem` 五个
+  word-size primop + 辅助构造 `nat_succ_shape` / `stuck_decl` / `nat_concrete` /
+  `nat_succ_inner`;`register_nat_to_dec` 改名 `register_nat_builtins` 并追加注册
+  (两个挂点同步改名,mod.rs:2779 / 6024)。
+- `nat.typort`:`nat_add_helper`→`nat_add`、`nat_mul_helper`→`nat_mul`、
+  `nat_div_helper`→`nat_div`、`nat_rem_helper`→`nat_rem`;五个 impl 方法体改为
+  prim 调用。**保留递归 def 作为落位 fallback**(见 §2.4),未删除——prim 注册
+  会在 nat.typort 加载完成后覆盖同名 def。
+- `unification.rs`:`(Val::Decl, _)` / `(_, Val::Decl)` 两个 re-eval 分支修复:
+  卡住 prim 应用(None 回落)不再无限 re-eval 烧 fuel;对方是 Flex 时直接 solve。
+- `mod.rs`:`force` 的 `Val::Call` 分支对现在已是 prim 的旧 def-shape 缓存值
+  (如 `add_zero_left` 的类型里的 `Val::Call("nat_add",[0,a],Match)`)重新应用参数,
+  归一化为 prim 形状,否则旧缓存类型与新 prim 形状无法 unify。
+- `pretty.rs`:5 个 nat primop 在 pretty 层做展示级 infix 恢复(`nat_add x y`→`x + y`),
+  保持 quote→eval round-trip 不受影响(§2.2 的守门测试天然满足)。
+
+基线:L13 400/400 通过(含新增 `nat_primop_arithmetic` / `nat_primop_keeps_defeq_proofs`)。
+L07–L12 仍是 49 个**历史遗留**失败(父提交同样红,与本线无关)。
 性能基线:`probe-out.txt`(每次全量跑 examples 后自动刷新的耗时日志);
 prelude 固定成本约 16.1s(native-Nat 前 17.6s)。
 
@@ -62,7 +81,29 @@ prelude 固定成本约 16.1s(native-Nat 前 17.6s)。
   **pred 保持递归 def 不动**。
 - `nat_max`/`nat_min`:无运算符绑定,非热点,**保留递归 def 不动**(少动少错)。
 - calc_tests / legacy_tests / mod.rs 内嵌测试输入各自定义同名 helper,
-  与 prelude 改动无关(已核实)。
+  与 prelude 改动无关(已核实)。`legacy_tests::test_match_pretty` 与
+  `test_operator_symbol_recovery_in_errors` 已随换名更新为 prim 名。
+
+### 2.4 鸡生蛋问题:方法体引用 prim 名,注册却发生在文件后
+
+原方案要求 `impl +` 方法体写 `nat_add this that`,而注册(`register_nat_builtins`)
+在 nat.typort **整文件加载之后**才执行——方法体里的 `nat_add` 在当时尚不在 scope。
+解法:**保留递归 def**(改名 `nat_add` 等),方法体引用它们即可通过 elaboration;
+注册完成后 prim 覆盖同名 def,运行期全部走 prim,递归 def 变成纯 fallback(死代码)。
+这同时让 `add_zero_right` 等 rfl 证明在 prelude 加载期(注册前)按 def 语义检查,
+注册后用户代码按 prim 语义检查,二者可归约性必须一致——本方案已通过
+`nat_primop_keeps_defeq_proofs` 守住。
+
+### 2.5 旧 def-shape 缓存值与 prim 形状的兼容(unifier/force 修复)
+
+prelude 里 `add_zero_left` 等 def 的类型 `Eq (0 + a) a` 在 nat.typort 加载期
+(注册前)求值,`0 + a` 是旧 def 的 inlined 形状 `Val::Call("nat_add",[0,a],Match)`。
+注册后用户代码 `0 + a` 是 prim 形状 `Val::Decl("nat_add",[a,0])`,两者不 unify。
+修复分两处:
+1. `force` 的 `Val::Call` 分支:若 Call 的名字现在已是 prim,重新 v_app 参数,
+   归一化为 `Val::Decl`/具体值。
+2. `unify` 的 `(Val::Decl, _)` / `(_, Val::Decl)` 分支:对方是 Flex 时直接 solve
+   (卡住 prim 不能靠 re-eval 展开,否则烧 fuel)。
 
 ## 3. 计算规则表(核心资产,逐条对应旧递归定义的 unfold 行为)
 
@@ -140,19 +181,25 @@ fn nat_succ_shape(decl: &Decl, inner: Rc<Val>) -> Option<Rc<Val>> {
 
 ## 5. 验证清单(全部必须绿)
 
-- [ ] 全量 L13(prelude 加载本身即回归:add_zero_right / add_succ_right /
+- [x] 全量 L13(prelude 加载本身即回归:add_zero_right / add_succ_right /
       add_zero_left / add_succ_left / add_comm / add_assoc 都是 rfl 或归纳证明)
-- [ ] `legacy_tests::test_operator_symbol_recovery_in_errors`(§2.2)
-- [ ] `legacy_tests::test_custom_operator_symbol_recovery`(用户自定义运算符路径)
-- [ ] 新增正确性测试:println 断言 `17+25=42`、`7*6=42`、`10-3=7`、`10-20=0`、
-      `7/2=3`、`7%2=1`、`x/0=x`、`x%0=x`(x 具体)、`0-m=0`
-- [ ] show.typort 相关输出(Ordered 比较)不回归
-- [ ] hdl examples 输出字节一致(probe 流程既有断言)
+      —— L13 400/400(含新增 nat_primop 两测)
+- [x] `legacy_tests::test_operator_symbol_recovery_in_errors`(§2.2)
+- [x] `legacy_tests::test_custom_operator_symbol_recovery`(用户自定义运算符路径)
+- [x] 新增正确性测试 `nat_primop_arithmetic`:println 断言 `17+25=42`、`7*6=42`、
+      `10-3=7`、`10-20=0`、`7/2=3`、`7%2=1`、`9/0=9`、`9%0=9`、`0-5=0` 等
+- [x] show.typort 相关输出(Ordered 比较)不回归(prelude 加载 + hdl examples 验证)
+- [x] hdl examples 输出字节一致(probe 流程既有断言;已抽样 7 个 diff=0)
 
 ## 6. 明确不做 / 已知取舍
 
 - `pred` / `nat_max` / `nat_min` 保持递归定义(无热点证据,少动少错)。
-- mul/sub/div/rem 的部分展开(符号情形逐步重写)不做,理由见各表备注;
-  若做,须先补齐对应 rfl 级证明作为行为锚。
+- **mul 部分展开已实现**(与初版方案不同):`x * succ d ⇒ x + (x * d)` 以及
+  `x * Nat(k>0) ⇒ x + (x * (k-1))`。`legacy_tests::test_prove_term_pure` 的
+  `double_mul` / `double_step` 依赖该可归约性(初版方案误判“prelude 无 mul rfl
+  证明”——该测试不在 prelude 而在 legacy_tests)。
+- sub 的 `x ≡ succ⟨dx⟩, y ≡ Nat(b>0)` 做了单步推进(比初版表的 None 更忠实:
+  旧定义 `match y {succ l => sub k l}` 在 y 具体时也会展开)。
 - u64 溢出策略:一律 None 回落卡住,不 panic、不回绕(与 nat_step_value 的
   checked_add 一致)。
+- div/rem 保持“仅具体值 fast path”,无部分展开(与初版一致)。
