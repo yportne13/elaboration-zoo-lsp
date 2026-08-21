@@ -96,23 +96,29 @@ pub fn prof_shape(v: &Val) {
     }
 }
 
+/// Is this value the `Nat` sum type?  The name is matched literally — the
+/// same existing design assumption as `Raw::Nat`'s `decl.get("Nat")` lookup
+/// and the `Tm::Sum(... "Nat")` special cases in `pretty.rs`.
+pub(crate) fn is_nat_sum(v: &Val) -> bool {
+    matches!(v, Val::Sum(name, _, _, false) if name.data == "Nat")
+}
+
 /// If a `Tm::SumCase` step (with `typ` already evaluated to `v`) is a fully
 /// concrete `Nat` constructor, return its native value: `zero` -> 0 and
 /// `succ (Nat k)` -> k+1.  Anything else (a different sum type, a partially
-/// stuck chain like `succ x` with x a rigid/meta, a non-nullary constructor)
-/// returns `None` and the caller keeps the ordinary `Val::SumCase` shape.
+/// stuck chain like `succ x` with x a rigid/meta, a non-nullary constructor,
+/// or a value that would overflow u64) returns `None` and the caller keeps
+/// the ordinary `Val::SumCase` shape.
 fn nat_step_value(v: &Val, index: u32, datas: &[(Span<SmolStr>, Rc<Val>, Icit)]) -> Option<u64> {
-    match v {
-        Val::Sum(name, _, _, false) if name.data == "Nat" => {
-            match index {
-                0 if datas.is_empty() => Some(0),
-                1 if datas.len() == 1 => match datas[0].1.as_ref() {
-                    Val::Nat(k) => Some(k + 1),
-                    _ => None,
-                },
-                _ => None,
-            }
-        }
+    if !is_nat_sum(v) {
+        return None;
+    }
+    match index {
+        0 if datas.is_empty() => Some(0),
+        1 if datas.len() == 1 => match datas[0].1.as_ref() {
+            Val::Nat(k) => k.checked_add(1),
+            _ => None,
+        },
         _ => None,
     }
 }

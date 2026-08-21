@@ -6,7 +6,7 @@ use crate::parser_lib::Span;
 
 use super::{
     Ix, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, SumCaseDatas, Tm, UnifyError, VTy, Val, cxt::Cxt,
-    lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
+    is_nat_sum, lvl2ix, parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
     typeclass::{Assertion, Instance}, Raw, Rc, Decl,
     pattern_match::Compiler,
 };
@@ -89,12 +89,6 @@ enum SpinePruneStatus {
     OKRenaming,
     OKNonRenaming,
     NeedsPruning,
-}
-
-/// Is `v` the `Nat` sum type (used to gate the native-Nat vs unary-chain
-/// definitional-equality rules in `unify`)?
-fn is_nat_sum(v: &Val) -> bool {
-    matches!(v, Val::Sum(name, _, _, false) if name.data == "Nat")
 }
 
 /// Unify a native `Nat(k)` with the fields of a `Nat` constructor whose
