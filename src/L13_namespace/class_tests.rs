@@ -567,3 +567,116 @@ class Baz {
 def t: Nat = bar
 "#, "not in scope");
 }
+
+// ── native Nat vs unary-chain definitional equality in the trait solver ──
+
+/// Build `succ^k zero` as a legacy-style unary `Val::SumCase` chain (the
+/// shape a partially-stuck chain keeps after the native-Nat change).
+use super::typeclass::Synth;
+
+fn natv(k: u64) -> Rc<Val> {
+    Val::Nat(k).into()
+}
+
+fn nat_chain_val(k: u64) -> Rc<Val> {
+    let nat_ty: Rc<Val> = Val::Sum(
+        empty_span(SmolStr::new("Nat")),
+        Rc::new(vec![]),
+        Rc::new(vec![]),
+        false,
+    ).into();
+    let mut v: Rc<Val> = Val::SumCase {
+        is_trait: false,
+        typ: nat_ty.clone(),
+        index: 0,
+        datas: Rc::new(vec![]),
+    }.into();
+    for _ in 0..k {
+        v = Val::SumCase {
+            is_trait: false,
+            typ: nat_ty.clone(),
+            index: 1,
+            datas: Rc::new(vec![(empty_span(SmolStr::new("n")), v.clone(), Icit::Expl)]),
+        }.into();
+    }
+    v
+}
+
+// ── native Nat vs stuck succ-chain instance matching (end-to-end) ──
+
+#[test]
+fn trait_instance_nat_index_matches_stuck_succ_pattern() {
+    // Regression: since the native-Nat change a concrete literal index is
+    // held as `Val::Nat(k)` while an impl-head index like `(succ m)` stays a
+    // stuck unary `SumCase` chain.  Instance search (`val_match`) must still
+    // match the two representations — without the cross-representation arms
+    // this resolved to an unsolved meta (`?N.+ ...` instead of a value).
+    let output = assert_ok(r#"
+enum MyVec[A: Type 0](len: Nat) {
+    mvnil -> MyVec[A] zero
+    mvcons[l: Nat](x: A, xs: MyVec[A] l) -> MyVec[A] (succ l)
+}
+impl[A: Type 0, m: Nat] Add[MyVec[A] (succ m), MyVec[A] (succ m)] for MyVec[A] (succ m) {
+    def +(that: MyVec[A] (succ m)): MyVec[A] (succ m) = this
+}
+def v1: MyVec[Boolean] 1 = mvcons true mvnil
+println (v1 + v1)
+"#);
+    assert!(output.contains("MyVec[Boolean]::mvcons"), "instance should resolve, got: {}", output);
+    assert!(!output.contains('?'), "no unsolved metas expected, got: {}", output);
+}
+
+#[test]
+fn val_match_native_nat_vs_unary_chain() {
+    // Equal concrete values, both representations
+    let mut subst = HashMap::new();
+    assert!(Synth::val_match(natv(3).as_ref(), nat_chain_val(3).as_ref(), &mut subst));
+    assert!(subst.is_empty());
+    let mut subst = HashMap::new();
+    assert!(Synth::val_match(nat_chain_val(3).as_ref(), natv(3).as_ref(), &mut subst));
+    // Different lengths must not match
+    let mut subst = HashMap::new();
+    assert!(!Synth::val_match(natv(2).as_ref(), nat_chain_val(3).as_ref(), &mut subst));
+    let mut subst = HashMap::new();
+    assert!(!Synth::val_match(natv(4).as_ref(), nat_chain_val(3).as_ref(), &mut subst));
+    // zero edge cases
+    let mut subst = HashMap::new();
+    assert!(Synth::val_match(natv(0).as_ref(), nat_chain_val(0).as_ref(), &mut subst));
+    let mut subst = HashMap::new();
+    assert!(!Synth::val_match(natv(1).as_ref(), nat_chain_val(0).as_ref(), &mut subst));
+}
+
+#[test]
+fn val_match_native_nat_binds_rigid_in_stuck_chain() {
+    // Instance pattern `succ (succ m)` (stuck chain with a Rigid tail) must
+    // match goal value Nat(5), binding m := Nat(3).
+    let nat_ty: Rc<Val> = Val::Sum(
+        empty_span(SmolStr::new("Nat")),
+        Rc::new(vec![]),
+        Rc::new(vec![]),
+        false,
+    ).into();
+    let rigid: Rc<Val> = Val::Rigid(Lvl(0), List::new()).into();
+    let pattern: Rc<Val> = Val::SumCase {
+        is_trait: false,
+        typ: nat_ty.clone(),
+        index: 1,
+        datas: Rc::new(vec![(empty_span(SmolStr::new("n")), Val::SumCase {
+            is_trait: false,
+            typ: nat_ty.clone(),
+            index: 1,
+            datas: Rc::new(vec![(empty_span(SmolStr::new("n")), rigid, Icit::Expl)]),
+        }.into(), Icit::Expl)]),
+    }.into();
+    let mut subst = HashMap::new();
+    assert!(Synth::val_match(natv(5).as_ref(), pattern.as_ref(), &mut subst));
+    assert!(subst.get(&0).map(|b| Synth::vals_eq_ground(b, natv(3).as_ref())) == Some(true));
+}
+
+#[test]
+fn vals_eq_ground_native_nat_vs_unary_chain() {
+    assert!(Synth::vals_eq_ground(natv(7).as_ref(), nat_chain_val(7).as_ref()));
+    assert!(Synth::vals_eq_ground(nat_chain_val(7).as_ref(), natv(7).as_ref()));
+    assert!(!Synth::vals_eq_ground(natv(6).as_ref(), nat_chain_val(7).as_ref()));
+    assert!(Synth::vals_eq_ground(natv(0).as_ref(), nat_chain_val(0).as_ref()));
+}

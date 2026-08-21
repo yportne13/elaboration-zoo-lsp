@@ -239,6 +239,33 @@ impl Synth {
         self.root_answer = None;
     }
 
+    /// Native `Nat(k)` vs the fields of a `Nat` constructor head (`index`/
+    /// `datas`, a possibly-stuck unary chain): matches iff the chain is
+    /// `succ^k zero`, descending one constructor at a time so pattern Rigids
+    /// inside the chain still bind via `val_match` (mirrors unify/unify_pm).
+    fn nat_matches_chain(k: u64, index: u32, datas: &super::SumCaseDatas, subst: &mut HashMap<u32, Val>) -> bool {
+        match index {
+            0 if datas.is_empty() => k == 0,
+            1 if datas.len() == 1 && k > 0 => {
+                let prev: Rc<Val> = Val::Nat(k - 1).into();
+                Self::val_match(prev.as_ref(), datas[0].1.as_ref(), subst)
+            }
+            _ => false,
+        }
+    }
+
+    /// Ground-equality variant of [`Self::nat_matches_chain`] (no binding).
+    fn nat_matches_chain_ground(k: u64, index: u32, datas: &super::SumCaseDatas, visited: &mut HashMap<u32, u32>) -> bool {
+        match index {
+            0 if datas.is_empty() => k == 0,
+            1 if datas.len() == 1 && k > 0 => {
+                let prev: Rc<Val> = Val::Nat(k - 1).into();
+                Self::vals_eq_ground_impl(prev.as_ref(), datas[0].1.as_ref(), visited)
+            }
+            _ => false,
+        }
+    }
+
     /// First-order structural matching: goal (ground) against instance pattern (may have Rigid vars).
     /// Rigid vars in the pattern are bound to the corresponding goal values via substitution.
     pub fn val_match(a: &Val, b: &Val, subst: &mut HashMap<u32, Val>) -> bool {
@@ -292,6 +319,15 @@ impl Synth {
             }
             // Native Nat: equal concrete values
             (Val::Nat(k1), Val::Nat(k2)) => k1 == k2,
+            // Native Nat vs a (possibly stuck) unary chain: the chain matches
+            // iff it is `succ^k zero`, descending one constructor at a time so
+            // pattern Rigids inside still bind (mirrors unify/unify_pm).
+            (Val::Nat(k), Val::SumCase { index, datas, .. }) => {
+                Self::nat_matches_chain(*k, *index, datas, subst)
+            }
+            (Val::SumCase { index, datas, .. }, Val::Nat(k)) => {
+                Self::nat_matches_chain(*k, *index, datas, subst)
+            }
             // Universe level
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             // LiteralType (String) is equivalent to Decl("String")
@@ -350,6 +386,14 @@ impl Synth {
                     })
             }
             (Val::Nat(k1), Val::Nat(k2)) => k1 == k2,
+            // Native Nat vs a (possibly stuck) unary chain: equal iff the
+            // chain is `succ^k zero` (mirrors unify/unify_pm/val_match).
+            (Val::Nat(k), Val::SumCase { index, datas, .. }) => {
+                Self::nat_matches_chain_ground(*k, *index, datas, visited)
+            }
+            (Val::SumCase { index, datas, .. }, Val::Nat(k)) => {
+                Self::nat_matches_chain_ground(*k, *index, datas, visited)
+            }
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             (Val::LiteralType, Val::Decl(x, sp)) | (Val::Decl(x, sp), Val::LiteralType) => {
                 x.data == "String" && sp.is_empty()
