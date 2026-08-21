@@ -65,6 +65,201 @@ fn width_range(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> 
     Some(Val::LiteralIntro(empty_span(result)).into())
 }
 
+// === Nat arithmetic primops (Lean/Agda-style word-size primitives) ===
+//
+// The prelude defines `+ - * / %` on `Nat` by structural recursion, which is
+// O(m) / O(n·m) in the value magnitude.  These primops sink the arithmetic
+// into native u64 ops while *exactly* preserving the old definitions'
+// reducibility (definitional equality), so the rfl/induction proofs in
+// nat.typort keep checking.  See docs/nat-primops-plan.md for the rule tables.
+
+/// Build a `succ inner` value of the native `Nat` sum type (mirrors the
+/// `quote_nat` shape: `SumCase{ index:1, datas:[(n, inner)] }`).  Returns
+/// `None` if the `Nat` type is not registered (shouldn't happen after the
+/// prelude loads).
+fn nat_succ_shape(decl: &Decl, inner: Rc<Val>) -> Option<Rc<Val>> {
+    let typ = decl.get("Nat").map(|e| e.2.clone())?;
+    Some(Val::SumCase {
+        is_trait: false,
+        typ,
+        index: 1,
+        datas: Rc::new(vec![(empty_span(SmolStr::new("n")), inner, Icit::Expl)]),
+    }.into())
+}
+
+/// Build a stuck application `name args...` as `Val::Decl`, preserving the
+/// spine prepend convention used by `v_app`/`force` in mod.rs: the most
+/// recently applied argument sits at the list head, so for a call `f x y`
+/// the spine is `[y, x]`.  Prepend the args in *forward* order so `force`'s
+/// `collect().reverse()` recovers the natural order (a later `force`
+/// re-invokes the prim, which is how the iterative "step one constructor
+/// then leave the rest stuck" behaviour — e.g. `nat_sub` on two stuck
+/// chains — is achieved).
+fn stuck_decl(name: &str, args: &[Rc<Val>]) -> Rc<Val> {
+    let mut sp = List::new();
+    for a in args {
+        sp = sp.prepend((a.clone(), Icit::Expl));
+    }
+    Val::Decl(empty_span(SmolStr::new(name)), sp).into()
+}
+
+/// Extract the native u64 of a `Nat` argument that is *fully concrete*:
+/// `Val::Nat(k)` or a `zero` constructor (defensively: an uncompressed
+/// `SumCase{ index:0 }` of the `Nat` type — after a `force` a concrete zero
+/// is normally `Val::Nat(0)` already).  Any stuck value → `None`.
+fn nat_concrete(infer: &Infer, decl: &Decl, v: &Rc<Val>) -> Option<u64> {
+    let v = infer.force(decl, v);
+    match v.as_ref() {
+        Val::Nat(k) => Some(*k),
+        Val::SumCase { typ, index: 0, datas, .. }
+            if datas.is_empty() && is_nat_sum(&infer.force(decl, typ)) => Some(0),
+        _ => None,
+    }
+}
+
+/// The inner argument of a stuck (or merely forced) `succ d` chain of the
+/// `Nat` type; anything else (incl. concrete `Val::Nat`) → `None`.  `v` must
+/// already be forced (its `typ` field is then the forced `Nat` type).
+fn nat_succ_inner(v: &Val) -> Option<&Rc<Val>> {
+    match v {
+        Val::SumCase { typ, index: 1, datas, .. }
+            if datas.len() == 1 && is_nat_sum(typ) => Some(&datas[0].1),
+        _ => None,
+    }
+}
+
+/// `nat_add x y` — old `match y {0 => x; succ n => succ (add x n)}`:
+/// reducibility is driven entirely by `y`.
+fn nat_add(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    let x = args[0].clone();
+    let y = infer.force(decl, &args[1]);
+    // y ≡ 0 → x (unconditional: old `case zero => x` ignores x).  This is
+    // what makes `a + 0 = a` / `add_zero_right` reduce by rfl.
+    if nat_concrete(infer, decl, &y) == Some(0) {
+        return Some(x);
+    }
+    // both concrete → native u64 fast path.
+    if let (Some(a), Some(b)) = (nat_concrete(infer, decl, &x), nat_concrete(infer, decl, &y)) {
+        return a.checked_add(b).map(|k| Val::Nat(k).into());
+    }
+    // y ≡ succ⟨d⟩ (stuck chain) → succ (nat_add x d); inner left to force.
+    // This fires for e.g. `n + succ m` with rigid m, keeping
+    // `add_succ_right` / `add_succ_left` / `add_comm` rfl-decomposable.
+    if let Some(d) = nat_succ_inner(y.as_ref()) {
+        let inner = stuck_decl("nat_add", &[x.clone(), d.clone()]);
+        return nat_succ_shape(decl, inner);
+    }
+    // y ≡ Nat(k>0), x not concrete → unfold `succ^k x` (O(k)).  Preserves
+    // walkability for `len + 1`-style width expressions (count_nat_forced).
+    if let Val::Nat(k) = y.as_ref() {
+        let mut inner = x;
+        for _ in 0..*k {
+            inner = nat_succ_shape(decl, inner)?;
+        }
+        return Some(inner);
+    }
+    // y fully stuck (rigid/meta) → old `match y` stuck.
+    None
+}
+
+/// `nat_mul x y` — old `match y {0 => zero; succ n => add x (mul x n)}`.
+/// Concrete pairs use the native u64 fast path; a stuck `succ` chain of `y`
+/// unfolds one step (`x * succ d ⇒ x + (x * d)`) exactly like the old
+/// recursion — the `double_mul`-style proofs in test_prove_term_pure rely on
+/// this reducibility.
+fn nat_mul(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    let x = args[0].clone();
+    let y = infer.force(decl, &args[1]);
+    // y ≡ 0 → 0 (unconditional: old `case zero => zero` ignores x).
+    if nat_concrete(infer, decl, &y) == Some(0) {
+        return Some(Val::Nat(0).into());
+    }
+    // both concrete → native u64 fast path.
+    if let (Some(a), Some(b)) = (nat_concrete(infer, decl, &x), nat_concrete(infer, decl, &y)) {
+        return a.checked_mul(b).map(|k| Val::Nat(k).into());
+    }
+    // y ≡ succ⟨d⟩ (stuck chain) → x + (x * d); inner left to force.
+    if let Some(d) = nat_succ_inner(y.as_ref()) {
+        let inner = stuck_decl("nat_mul", &[x.clone(), d.clone()]);
+        return Some(stuck_decl("nat_add", &[x, inner]));
+    }
+    // y ≡ Nat(k > 0), x not concrete → unfold the k-fold add chain exactly
+    // like the old recursion (`x * 0 = 0`, `x * k = x + (x * (k-1))`).
+    // For k = 1 this is `x + 0`, which `nat_add` further reduces to `x`
+    // (so `pow2(m) * 1 = pow2(m)` — relied on by double_step in
+    // test_prove_term_pure).
+    if let Val::Nat(k) = y.as_ref() {
+        let mut acc: Rc<Val> = Val::Nat(0).into();
+        for _ in 0..*k {
+            acc = stuck_decl("nat_add", &[x.clone(), acc]);
+        }
+        return Some(acc);
+    }
+    // y fully stuck → old `match y` stuck.
+    None
+}
+
+/// `nat_sub x y` — old `match x {0 => 0; succ k => match y {0 => succ k;
+/// succ l => sub k l}}`.  Reducibility is driven by `x` first.
+fn nat_sub(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    let x = infer.force(decl, &args[0]);
+    let y = infer.force(decl, &args[1]);
+    let xc = nat_concrete(infer, decl, &x);
+    let yc = nat_concrete(infer, decl, &y);
+    // x ≡ 0 → 0 regardless of y (old outer `match x` takes the zero branch
+    // without inspecting y — `0 - m = 0` holds even for stuck m).
+    if xc == Some(0) {
+        return Some(Val::Nat(0).into());
+    }
+    // both concrete → truncated subtraction (n exhausts to 0).
+    if let (Some(a), Some(b)) = (xc, yc) {
+        return Some(Val::Nat(a.saturating_sub(b)).into());
+    }
+    // x ≡ succ⟨dx⟩: outer match fired.
+    if let Some(dx) = nat_succ_inner(x.as_ref()) {
+        return match yc {
+            // y ≡ 0 → x (`succ k - 0 = succ k`).
+            Some(0) => Some(x),
+            // y concrete > 0 → step once: `nat_sub dx (y-1)`; force iterates.
+            Some(b) => Some(stuck_decl("nat_sub", &[dx.clone(), Val::Nat(b - 1).into()])),
+            // y ≡ succ⟨dy⟩ → step both: `nat_sub dx dy`; force iterates.
+            _ => nat_succ_inner(y.as_ref())
+                .map(|dy| stuck_decl("nat_sub", &[dx.clone(), dy.clone()])),
+        };
+    }
+    // x rigid (incl. `x - 0`): old outer `match x` stuck — must NOT return x.
+    None
+}
+
+/// `nat_div x y` / `nat_rem x y` — old definitions: `x=0 → 0`, else
+/// `y=0 → x`, else structural recursion.  Only the fully-concrete fast path
+/// is implemented; both return `x` when `y == 0` (covers `0/0=0` and
+/// `x>0/0=x` uniformly) and the truncated `x/y` / `x%y` otherwise.
+fn nat_div(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    let x = nat_concrete(infer, decl, &args[0]);
+    let y = nat_concrete(infer, decl, &args[1]);
+    match (x, y) {
+        (Some(a), Some(0)) => Some(Val::Nat(a).into()),
+        (Some(a), Some(b)) => Some(Val::Nat(a / b).into()),
+        _ => None,
+    }
+}
+
+fn nat_rem(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    let x = nat_concrete(infer, decl, &args[0]);
+    let y = nat_concrete(infer, decl, &args[1]);
+    match (x, y) {
+        (Some(a), Some(0)) => Some(Val::Nat(a).into()),
+        (Some(a), Some(b)) => Some(Val::Nat(a % b).into()),
+        _ => None,
+    }
+}
+
 /// Minimal context for hover display — only stores what pretty_tm/quote actually needs.
 #[derive(Debug, Clone)]
 pub struct HoverCxt {
@@ -442,8 +637,9 @@ impl Cxt {
         self.decl(name_span, val_tm, vt, ty, va, Some(prim))
     }
 
-    /// Register nat_to_dec builtin (must be called AFTER nat.typort is loaded)
-    pub(crate) fn register_nat_to_dec(cxt: &mut Cxt, infer: &Infer) {
+    /// Register nat builtins (nat_to_dec + word-size nat arithmetic primops).
+    /// Must be called AFTER nat.typort is loaded.
+    pub(crate) fn register_nat_builtins(cxt: &mut Cxt, infer: &Infer) {
         let f_nat_to_dec = PrimFunc(Rc::new(nat_to_dec));
         let old = std::mem::replace(cxt, Self::empty());
         *cxt = old.add_builtin(infer, "nat_to_dec",
@@ -456,6 +652,23 @@ impl Cxt {
             tm_pi(&[("w", tm_decl("Nat"))], tm_decl("String")),
             PrimFunc(Rc::new(width_range)),
         ).unwrap();
+
+        // Nat arithmetic primops (replacing the structural recursion in
+        // prelude/core/nat.typort).  nat_sub replaces the old `def nat_sub`;
+        // the other four replace `nat_*_helper`.  nat_max / nat_min / pred
+        // stay as recursive defs (cold, and nat_max/min have no operator
+        // binding to restore).
+        let nat_binop = tm_pi(&[("x", tm_decl("Nat")), ("y", tm_decl("Nat"))], tm_decl("Nat"));
+        for (name, prim) in [
+            ("nat_add", nat_add as fn(&Infer, &Decl, &[Rc<Val>]) -> Option<Rc<Val>>),
+            ("nat_mul", nat_mul),
+            ("nat_sub", nat_sub),
+            ("nat_div", nat_div),
+            ("nat_rem", nat_rem),
+        ] {
+            let old = std::mem::replace(cxt, Self::empty());
+            *cxt = old.add_builtin(infer, name, nat_binop.clone(), PrimFunc(Rc::new(prim))).unwrap();
+        }
     }
 
     pub fn empty() -> Self {

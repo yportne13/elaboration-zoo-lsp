@@ -166,6 +166,22 @@ pub fn pretty_tm(prec: i32, ns: List<SmolStr>, tm: &Tm) -> String {
     pretty_tm_indent(prec, 0, ns, tm)
 }
 
+/// Display-only operator symbol for the prelude Nat arithmetic primops.
+/// These are prim-backed (not inlined defs), so `quote` renders a stuck
+/// application as `App(App(Decl("nat_add"), x), y)` — the pretty layer
+/// restores the infix operator here instead (mirrors the operator-char
+/// recovery below, which only fires for operator-named heads).
+fn nat_primop_symbol(name: &str) -> Option<&'static str> {
+    match name {
+        "nat_add" => Some("+"),
+        "nat_mul" => Some("*"),
+        "nat_sub" => Some("-"),
+        "nat_div" => Some("/"),
+        "nat_rem" => Some("%"),
+        _ => None,
+    }
+}
+
 fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
@@ -174,26 +190,43 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
         Tm::App(t, u, i) => {
             // Operator-symbol recovery: applications whose head is an
             // operator declaration (restored from an inlined helper call by
-            // `quote`) render in infix (`x + y`) or prefix (`!x`) form.
-            // The head name determines the form, so user-defined operator
-            // symbols work automatically; ordinary applications fall through
-            // to the `{f_t} {f_u}` form below.
+            // `quote`, or a Nat primop rendered directly here) display in
+            // infix (`x + y`) or prefix (`!x`) form.  The head name
+            // determines the form, so user-defined operator symbols work
+            // automatically; ordinary applications fall through to the
+            // `{f_t} {f_u}` form below.
             if *i == Icit::Expl {
                 if let Tm::App(t2, arg1, Icit::Expl) = t.as_ref() {
                     if let Tm::Decl(name) = t2.as_ref() {
-                        if name.data.chars().next().map(super::is_operator_char).unwrap_or(false) {
+                        let sym = nat_primop_symbol(&name.data)
+                            .or_else(|| {
+                                if name.data.chars().next().map(super::is_operator_char).unwrap_or(false) {
+                                    Some(name.data.as_str())
+                                } else {
+                                    None
+                                }
+                            });
+                        if let Some(sym) = sym {
                             let ret = format!(
                                 "{} {} {}",
                                 pretty_tm_indent(ATP, indent, ns.clone(), arg1),
-                                name.data,
+                                sym,
                                 pretty_tm_indent(ATP, indent, ns, u),
                             );
                             return if prec > APPP { bracket(ret) } else { ret };
                         }
                     }
                 } else if let Tm::Decl(name) = t.as_ref() {
-                    if name.data.chars().next().map(super::is_operator_char).unwrap_or(false) {
-                        let ret = format!("{}{}", name.data, pretty_tm_indent(ATP, indent, ns, u));
+                    let sym = nat_primop_symbol(&name.data)
+                        .or_else(|| {
+                            if name.data.chars().next().map(super::is_operator_char).unwrap_or(false) {
+                                Some(name.data.as_str())
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some(sym) = sym {
+                        let ret = format!("{}{}", sym, pretty_tm_indent(ATP, indent, ns, u));
                         return if prec > APPP { bracket(ret) } else { ret };
                     }
                 }

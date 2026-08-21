@@ -4,36 +4,44 @@ enum Nat {
     succ(n: Nat)
 }
 
-def nat_add_helper(x: Nat, y: Nat): Nat =
+// ── word-size nat arithmetic primops ─────────────────────────────────────
+// These are the *recursive fallback* definitions.  After nat.typort loads,
+// cxt::Cxt::register_nat_builtins overwrites nat_add / nat_mul / nat_sub /
+// nat_div / nat_rem with native u64 primops that replicate exactly the same
+// reduction behaviour (see docs/nat-primops-plan.md).  The defs must stay so
+// the impl method bodies below have these names in scope while this file
+// elaborates (registration happens after the whole file).
+
+def nat_add(x: Nat, y: Nat): Nat =
     match y {
         case zero => x
-        case succ(n) => succ (nat_add_helper x n)
+        case succ(n) => succ (nat_add x n)
     }
 
 impl Add[Nat, Nat] for Nat {
     def +(that: Nat): Nat =
-        nat_add_helper this that
+        nat_add this that
 }
 
-def nat_mul_helper(x: Nat, y: Nat): Nat =
+def nat_mul(x: Nat, y: Nat): Nat =
     match y {
         case zero => zero
-        case succ(n) => nat_add_helper(x, nat_mul_helper x n)
+        case succ(n) => nat_add(x, nat_mul x n)
     }
 
 impl Mul[Nat, Nat] for Nat {
     def *(that: Nat): Nat =
-        nat_mul_helper this that
+        nat_mul this that
 }
 
 def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
     cong succ e
 
-// a + 0 由 nat_add_helper（y=zero 分支直接返回 x）definitionally 化为 a，故 rfl 即可。
+// a + 0 由 nat_add（y=zero 分支直接返回 x，word-size primop）definitionally 化为 a，故 rfl 即可。
 def add_zero_right(a: Nat): Eq (a + 0) a =
     rfl
 
-// 0 + a 需对 a 归纳（nat_add_helper 首个分支匹配 y 而非 x）。
+// 0 + a 需对 a 归纳（nat_add 对 y 为具体 0 直接返回 x，a 非具体时卡住）。
 def add_zero_left(a: Nat): Eq (0 + a) a =
     match a {
         case zero => refl 0
@@ -77,13 +85,11 @@ def nat_sub(n: Nat, m: Nat): Nat =
             }
     }
 
-def double(n: Nat): Nat = n + n
-
 impl Sub[Nat, Nat] for Nat {
     def -(that: Nat): Nat = nat_sub this that
 }
 
-def nat_div_helper(x: Nat, y: Nat): Nat =
+def nat_div(x: Nat, y: Nat): Nat =
     match x {
         case zero => zero
         case succ(_) =>
@@ -93,16 +99,16 @@ def nat_div_helper(x: Nat, y: Nat): Nat =
                     let sub = nat_sub x y;
                     match sub {
                         case zero => zero
-                        case succ(_) => succ (nat_div_helper sub y)
+                        case succ(_) => succ (nat_div sub y)
                     }
             }
     }
 
 impl Div[Nat, Nat] for Nat {
-    def /(that: Nat): Nat = nat_div_helper this that
+    def /(that: Nat): Nat = nat_div this that
 }
 
-def nat_rem_helper(x: Nat, y: Nat): Nat =
+def nat_rem(x: Nat, y: Nat): Nat =
     match x {
         case zero => zero
         case succ(_) =>
@@ -112,14 +118,16 @@ def nat_rem_helper(x: Nat, y: Nat): Nat =
                     let sub = nat_sub x y;
                     match sub {
                         case zero => x
-                        case succ(_) => nat_rem_helper sub y
+                        case succ(_) => nat_rem sub y
                     }
             }
     }
 
 impl Rem[Nat, Nat] for Nat {
-    def %(that: Nat): Nat = nat_rem_helper this that
+    def %(that: Nat): Nat = nat_rem this that
 }
+
+def double(n: Nat): Nat = n + n
 
 impl Default for Nat {
     def default: Nat = zero
@@ -144,5 +152,4 @@ def nat_min(a: Nat, b: Nat): Nat =
                 case succ(bs) => succ (nat_min as bs)
             }
     }
-
 

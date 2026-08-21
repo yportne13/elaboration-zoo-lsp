@@ -4844,11 +4844,11 @@ println("=== prove_term_pure.typort loaded! ===")
 #[test]
 fn test_operator_symbol_recovery_in_errors() {
     let cases: &[(&str, &str)] = &[
-        ("+", "nat_add_helper"),
-        ("*", "nat_mul_helper"),
+        ("+", "nat_add"),
+        ("*", "nat_mul"),
         ("-", "nat_sub"),
-        ("/", "nat_div_helper"),
-        ("%", "nat_rem_helper"),
+        ("/", "nat_div"),
+        ("%", "nat_rem"),
     ];
     for (op, helper) in cases {
         let input = format!(
@@ -4940,6 +4940,57 @@ fn bignat_large_add_no_stack_overflow() {
             Ok(out) => assert_eq!(out.trim(), expect, "input {input:?}"),
             Err(e) => panic!("input {input:?} failed: {}", e.0.data),
         }
+    }
+}
+
+/// Word-size Nat primop correctness (docs/nat-primops-plan.md §5): the
+/// prelude's `+ - * / %` are native u64 ops with the same truncated/partial
+/// semantics as the old structural recursion.  Concrete `x/0 = x` and
+/// `x%0 = x` (old defs return the numerator when the divisor is zero),
+/// and `0 - m = 0` even when `m` is a concrete value.
+#[test]
+fn nat_primop_arithmetic() {
+    let cases: Vec<(&str, &str)> = vec![
+        ("println(17 + 25)\n", "42"),
+        ("println(7 * 6)\n", "42"),
+        ("println(10 - 3)\n", "7"),
+        ("println(10 - 20)\n", "0"),
+        ("println(7 / 2)\n", "3"),
+        ("println(7 % 2)\n", "1"),
+        ("println(9 / 0)\n", "9"),
+        ("println(9 % 0)\n", "9"),
+        ("println(0 - 5)\n", "0"),
+        ("println(0 + 100000)\n", "100000"),
+        ("println(99999 + 1)\n", "100000"),
+        ("println(100000 * 2)\n", "200000"),
+        ("println(100000 / 2)\n", "50000"),
+        ("println(100000 % 7)\n", "5"),
+    ];
+    for (input, expect) in cases {
+        let r = run_with_prelude(input);
+        match r {
+            Ok(out) => assert_eq!(out.trim(), expect, "input {input:?}"),
+            Err(e) => panic!("input {input:?} failed: {}", e.0.data),
+        }
+    }
+}
+
+/// The primop must preserve definitional equality for the nat.typort
+/// proofs when used from *user* code (post-registration): a stuck `succ`
+/// of `+` unfolds to `succ (n + m)` exactly like the recursive def, so
+/// `rfl`-style proofs still hold.  (During prelude load itself these are
+/// checked against the recursive fallback def; this pins the prim case.)
+#[test]
+fn nat_primop_keeps_defeq_proofs() {
+    let input = r#"
+def add_succ_right_test(n: Nat, m: Nat): Eq (n + (succ m)) (succ (n + m)) = rfl
+def add_zero_left_test(n: Nat): Eq (0 + n) n = add_zero_left n
+def mul_one_test(x: Nat): Eq (x * 1) x = rfl
+def mul_succ_test(x: Nat, n: Nat): Eq (x * (succ n)) (x + (x * n)) = rfl
+"#;
+    match run_with_prelude(input) {
+        Ok(_) => {},
+        Err(e) => panic!("expected OK, got: '{}'", e.0.data),
     }
 }
 

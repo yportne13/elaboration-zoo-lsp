@@ -14,6 +14,25 @@ use super::{
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+/// True when re-evaluating a stuck `Val::Decl` made no progress: the result
+/// is the same name applied to the exact same argument `Rc`s.  This is the
+/// signature of a *prim* application whose prim returned `None` (a def
+/// application unfolds to a `Val::Call`/`Val::Match`, which is progress).
+/// A non-progressing re-eval must not be retried until `fuel` runs out — the
+/// `(Val::Decl(..), _)` / `(_, Val::Decl(..))` unify arms use this to treat
+/// such a value as an opaque leaf (unifiable with an equal Decl or solvable
+/// against a Flex, never by unfolding).
+fn decl_reeval_no_progress(a: &Val, b: &Val) -> bool {
+    match (a, b) {
+        (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) if x1.data == x2.data => {
+            sp1.len() == sp2.len()
+                && sp1.iter().zip(sp2.iter())
+                    .all(|((v1, i1), (v2, i2))| i1 == i2 && Rc::ptr_eq(v1, v2))
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
@@ -909,17 +928,61 @@ impl Infer {
                 self.unify_sp(l, cxt, sp, sp_prime, fuel)
             }
             (Val::Decl(..), _) => {
+                // A stuck prim application is a leaf: if the other side is a
+                // Flex, solve it against this value directly (re-evaluating a
+                // None-returning prim only rebuilds the same stuck Decl and
+                // would spin to fuel exhaustion).
+                if let Val::Flex(m, sp) = u.as_ref() {
+                    match self.solve(l, &cxt.decl, *m, sp.clone(), &t) {
+                        Ok(()) => Ok(()),
+                        Err(UnifyError::Stuck) => {
+                            self.meta_contrains.push((t.clone(), u.clone()));
+                            Ok(())
+                        },
+                        Err(e) => Err(e),
+                    }?;
+                    return self.solve_multi_trait(cxt, *m, false);
+                }
                 if fuel == 0 {
                     Err(UnifyError::Basic)
                 } else {
-                    self.unify(l, cxt, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t)), &u, fuel - 1)
+                    let t2 = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t));
+                    if decl_reeval_no_progress(t2.as_ref(), t.as_ref()) {
+                        // Stuck *prim* application: re-evaluating the decl
+                        // cannot reduce it (the prim returned None), so the
+                        // old re-eval-till-fuel-0 path would spin.  Treat the
+                        // value as an opaque leaf (unifiable with an equal
+                        // Decl via the earlier same-name arm, never by
+                        // unfolding).
+                        Err(UnifyError::Basic)
+                    } else {
+                        self.unify(l, cxt, &t2, &u, fuel - 1)
+                    }
                 }
             }
             (_, Val::Decl(..)) => {
+                // Symmetric to the arm above: stuck prim application as a
+                // leaf, solve a Flex on the other side directly.
+                if let Val::Flex(m, sp) = t.as_ref() {
+                    match self.solve(l, &cxt.decl, *m, sp.clone(), &u) {
+                        Ok(()) => Ok(()),
+                        Err(UnifyError::Stuck) => {
+                            self.meta_contrains.push((t.clone(), u.clone()));
+                            Ok(())
+                        },
+                        Err(e) => Err(e),
+                    }?;
+                    return self.solve_multi_trait(cxt, *m, false);
+                }
                 if fuel == 0 {
                     Err(UnifyError::Basic)
                 } else {
-                    self.unify(l, cxt, &t, &self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u)), fuel - 1)
+                    let u2 = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u));
+                    if decl_reeval_no_progress(u2.as_ref(), u.as_ref()) {
+                        Err(UnifyError::Basic)
+                    } else {
+                        self.unify(l, cxt, &t, &u2, fuel - 1)
+                    }
                 }
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {

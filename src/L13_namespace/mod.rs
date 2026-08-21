@@ -1799,6 +1799,28 @@ impl Infer {
                 }
             },
             Val::Call(name, args, body) => {
+                // Stale def-shape normalization: prelude defs elaborated while
+                // a helper was still a recursive `def` (e.g. `add_zero_left`'s
+                // type `Eq (0 + a) a`) cache the inlined `Val::Call("nat_add",
+                // [0, a], Match(a, ..))` shape.  After `register_nat_builtins`
+                // overwrites `nat_add` with a prim, user code computes `0 + a`
+                // as a `Val::Decl` (prim None), so the two shapes would not
+                // unify.  When the call's name is now prim-backed, re-apply the
+                // args through `v_app` so the value normalizes to the same
+                // `Val::Decl`/concrete form the prim produces.
+                if let Some((_, _, _, _, _, Some(_prim_fn))) = decl.get(name) {
+                    let mut acc: Rc<Val> = Val::Decl(empty_span(name.clone()), List::new()).into();
+                    for (a, i) in args.iter() {
+                        acc = self.v_app(decl, &acc, a.clone(), *i);
+                    }
+                    // If the prim returned a concrete result, force it; if it
+                    // left a stuck `Val::Decl`, return it directly.  (The prim
+                    // cannot return another `Val::Call`, so no re-entry loop.)
+                    return match acc.as_ref() {
+                        Val::Call(..) => self.force(decl, &acc),
+                        _ => acc,
+                    };
+                }
                 let bf = self.force(decl, body);
                 // Also force the display args so comparisons (e.g. the unify
                 // fast path) and pretty-printing see normalized values.
@@ -2772,10 +2794,11 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             eprintln!("[PPROF] file[{}] {:>8.3}s (parse {:>6.3}s + infer {:>6.3}s)  {} decls", id, _p_el, _p_parse_t.as_secs_f64(), _p_infer_t.as_secs_f64(), n_decls);
         }
         id += 1;
-        // After nat.typort is loaded, register nat_to_dec builtin.
+        // After nat.typort is loaded, register nat builtins (nat_to_dec +
+        // word-size nat arithmetic primops).
         // 基于内容判断而非索引 id：prelude 列表顺序变化（增删文件）时不会错位。
         if p == nat_typort {
-            cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
+            cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
         }
     }
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero).
@@ -4946,7 +4969,7 @@ println "a" + "b" + "c"
 #[test]
 fn test_match_pretty() {
     let input = r#"
-println (a => Eq[Nat](nat_add_helper(1, a), nat_add_helper(2, a)))
+println (a => Eq[Nat](nat_add(1, a), nat_add(2, a)))
 "#;
     match run_with_prelude(input) {
         Ok(output) => {
@@ -6020,7 +6043,7 @@ println(v)
                 }
             }
             if *name == "nat" {
-                cxt::Cxt::register_nat_to_dec(&mut cxt, &infer);
+                cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
             }
         }
 
