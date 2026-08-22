@@ -35,6 +35,8 @@ clap = { version = "4", features = ["derive"] }
 dhat = { version = "0.3", optional = true }
 backtrace = { version = "0.3", optional = true }
 inferno = { version = "0.12", optional = true }
+mimalloc = "0.1.52"
+rustc-hash = "2.1.3"
 
 [features]
 dhat-heap = ["mem-profile"]

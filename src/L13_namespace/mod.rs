@@ -133,8 +133,8 @@ fn prim_is_pure(name: &str) -> bool {
 }
 
 thread_local! {
-    static FORCE_MEMO: std::cell::RefCell<std::collections::HashMap<usize, (Rc<Val>, Rc<Val>, u64)>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static FORCE_MEMO: std::cell::RefCell<rustc_hash::FxHashMap<usize, (Rc<Val>, Rc<Val>, u64)>> =
+        std::cell::RefCell::new(rustc_hash::FxHashMap::default());
     static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -288,7 +288,10 @@ mod struct_refine_probe;
 
 type Rc<T> = std::sync::Arc<T>;
 
-type Decl = HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>;
+// `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,
+// `force`); FxHash keys on the string bytes directly instead of SipHashing
+// them (~4M lookups during prelude load alone).
+pub(crate) type Decl = rustc_hash::FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -377,64 +380,69 @@ pub enum Tm {
 
 impl Drop for Tm {
     fn drop(&mut self) {
+        // Leaf fast path: most drops are leaf-shaped terms; skip the
+        // worklist machinery entirely for them.
+        if matches!(self, Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)) {
+            return;
+        }
+        // SAFETY contract for `drain_tm`: it moves every nested `Rc<Tm>` out
+        // of the shell with `ptr::read` (nested collections are replaced
+        // with empty ones); the caller must `forget` the shell, never drop
+        // it normally.  Leaves are left untouched.
         fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
             match t {
                 Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
-                    // Leaf: no nested references.  Return without touching
-                    // `t`; the caller forgets it, so this impl is not
-                    // re-entered (dropping the `Tm::U(0)` sentinel would
-                    // re-drain it forever).
                     return;
                 }
                 Tm::Obj(x, _) => {
-                    let x = std::mem::replace(x, TM_PLACEHOLDER.clone());
+                    let x = unsafe { std::ptr::read(x) };
                     tms.push(x);
                 }
                 Tm::Lam(_, _, b) => {
-                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    let b = unsafe { std::ptr::read(b) };
                     tms.push(b);
                 }
                 Tm::App(f, u, _) => {
-                    let f = std::mem::replace(f, TM_PLACEHOLDER.clone());
-                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    let f = unsafe { std::ptr::read(f) };
+                    let u = unsafe { std::ptr::read(u) };
                     tms.push(f);
                     tms.push(u);
                 }
                 Tm::AppPruning(t, _) => {
-                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
+                    let t = unsafe { std::ptr::read(t) };
                     tms.push(t);
                 }
                 Tm::Pi(_, _, a, b) => {
-                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
-                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    let a = unsafe { std::ptr::read(a) };
+                    let b = unsafe { std::ptr::read(b) };
                     tms.push(a);
                     tms.push(b);
                 }
                 Tm::Let(_, a, t, u) => {
-                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
-                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
-                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    let a = unsafe { std::ptr::read(a) };
+                    let t = unsafe { std::ptr::read(t) };
+                    let u = unsafe { std::ptr::read(u) };
                     tms.push(a);
                     tms.push(t);
                     tms.push(u);
                 }
                 Tm::Sum(_, params, _, _) => {
-                    let params = std::mem::replace(params, EMPTY_TM_SUM_PARAMS.clone());
+                    let params = unsafe { std::ptr::read(params) };
                     for (_, t, ty, _) in params.iter() {
                         tms.push(t.clone());
                         tms.push(ty.clone());
                     }
                 }
                 Tm::SumCase { typ, datas, .. } => {
-                    let typ = std::mem::replace(typ, TM_PLACEHOLDER.clone());
+                    let typ = unsafe { std::ptr::read(typ) };
                     tms.push(typ);
-                    let datas = std::mem::replace(datas, EMPTY_TM_SUM_CASE_DATAS.clone());
+                    let datas = unsafe { std::ptr::read(datas) };
                     for (_, d, _) in datas.iter() {
                         tms.push(d.clone());
                     }
                 }
                 Tm::Match(scru, cases) => {
-                    let scru = std::mem::replace(scru, TM_PLACEHOLDER.clone());
+                    let scru = unsafe { std::ptr::read(scru) };
                     tms.push(scru);
                     let cases = std::mem::replace(cases, Vec::new());
                     for (_, b) in cases.iter() {
@@ -446,7 +454,7 @@ impl Drop for Tm {
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
-                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
                 }
                 Tm::OpCall { args, body, .. } => {
@@ -454,23 +462,23 @@ impl Drop for Tm {
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
-                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
                 }
             }
-            // The drained shell now holds only shared static placeholder
-            // clones and empty collections; the caller forgets it, so its
-            // drop never re-enters this impl (a normal drop would recurse
-            // one frame per node) and nothing per-node is leaked.
+            // The drained shell's fields were moved out; the caller
+            // forgets it (a normal drop would double-release them).
         }
         let mut tms: Vec<Rc<Tm>> = Vec::new();
-        tms.push(Rc::new(std::mem::replace(self, Tm::U(0))));
+        let mut root = std::mem::replace(self, Tm::U(0));
+        drain_tm(&mut root, &mut tms);
+        std::mem::forget(root);
         while let Some(t) = tms.pop() {
             match Rc::try_unwrap(t) {
                 Ok(mut t) => {
                     drain_tm(&mut t, &mut tms);
-                    // `t` is now `Tm::U(0)` — no nested references, so it is
-                    // safe (and leak-free) to skip the drop entirely.
+                    // The shell's fields were moved out by `drain_tm`;
+                    // forgetting it (instead of dropping) releases nothing twice.
                     std::mem::forget(t);
                 }
                 Err(_) => continue, // shared elsewhere; count decremented only
@@ -489,11 +497,11 @@ impl Tm {
         // (measured ~65% of samples in examples/hdl/11-bundle-deep.typort).
         // Shared subgraphs are visited once, nothing is forced or quoted on
         // the fast path.
-        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut seen: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
         self.no_metas_seen(infer, decl, l, &mut seen)
     }
 
-    fn no_metas_seen(&self, infer: &Infer, decl: &Decl, l: Lvl, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+    fn no_metas_seen(&self, infer: &Infer, decl: &Decl, l: Lvl, seen: &mut rustc_hash::FxHashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         match self {
             Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => None,
             Tm::Obj(tm, _) => Tm::no_metas_rc(tm, infer, decl, l, seen),
@@ -522,7 +530,7 @@ impl Tm {
     /// `no_metas_seen` with pointer-keyed dedup: elaborated terms share
     /// subtrees through `Rc` (Phase-A reuse embeds the same checked term in
     /// create/tree bodies), and a plain recursive walk would re-visit them.
-    fn no_metas_rc(tm: &Rc<Tm>, infer: &Infer, decl: &Decl, l: Lvl, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+    fn no_metas_rc(tm: &Rc<Tm>, infer: &Infer, decl: &Decl, l: Lvl, seen: &mut rustc_hash::FxHashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         if !seen.insert(Rc::as_ptr(tm) as usize) {
             return None;
         }
@@ -678,71 +686,64 @@ impl Drop for Val {
         // (e.g. a million-deep `Nat` literal is a chain of nested
         // `Val::SumCase`s) — which overflows even the 64 MiB CLI stack at
         // ~100k depth.  Drain the nested references iteratively: each
-        // node's `Rc`/`List`/`Vec` fields are moved into work lists and
-        // replaced with clones of shared static placeholders (so nothing
-        // per-node is allocated), then the drained shell is forgotten by
-        // the caller — a normal drop would re-enter this impl (any drop of
-        // a `Val` does) and recurse one frame per node.  Semantics are
-        // identical to the derived drop; the only per-node cost is a
-        // refcount increment on the placeholder statics, which is harmless.
+        // node's `Rc` fields are moved out with `ptr::read` (collections are
+        // replaced with empty ones), then the drained shell is forgotten
+        // by the caller — a normal drop would double-release the moved-from
+        // fields.  Semantics are identical to the derived drop.
         fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
             match t {
                 Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
-                    // Leaf: no nested references.  Return without touching
-                    // `t`; the caller forgets it, so this impl is not
-                    // re-entered (dropping the `Tm::U(0)` sentinel would
-                    // re-drain it forever).
                     return;
                 }
                 Tm::Obj(x, _) => {
-                    let x = std::mem::replace(x, TM_PLACEHOLDER.clone());
+                    let x = unsafe { std::ptr::read(x) };
                     tms.push(x);
                 }
                 Tm::Lam(_, _, b) => {
-                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    let b = unsafe { std::ptr::read(b) };
                     tms.push(b);
                 }
                 Tm::App(f, u, _) => {
-                    let f = std::mem::replace(f, TM_PLACEHOLDER.clone());
-                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    let f = unsafe { std::ptr::read(f) };
+                    let u = unsafe { std::ptr::read(u) };
                     tms.push(f);
                     tms.push(u);
                 }
                 Tm::AppPruning(t, _) => {
-                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
+                    let t = unsafe { std::ptr::read(t) };
                     tms.push(t);
                 }
                 Tm::Pi(_, _, a, b) => {
-                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
-                    let b = std::mem::replace(b, TM_PLACEHOLDER.clone());
+                    let a = unsafe { std::ptr::read(a) };
+                    let b = unsafe { std::ptr::read(b) };
                     tms.push(a);
                     tms.push(b);
                 }
                 Tm::Let(_, a, t, u) => {
-                    let a = std::mem::replace(a, TM_PLACEHOLDER.clone());
-                    let t = std::mem::replace(t, TM_PLACEHOLDER.clone());
-                    let u = std::mem::replace(u, TM_PLACEHOLDER.clone());
+                    let a = unsafe { std::ptr::read(a) };
+                    let t = unsafe { std::ptr::read(t) };
+                    let u = unsafe { std::ptr::read(u) };
                     tms.push(a);
                     tms.push(t);
                     tms.push(u);
                 }
                 Tm::Sum(_, params, _, _) => {
-                    let params = std::mem::replace(params, EMPTY_TM_SUM_PARAMS.clone());
+                    let params = unsafe { std::ptr::read(params) };
                     for (_, t, ty, _) in params.iter() {
                         tms.push(t.clone());
                         tms.push(ty.clone());
                     }
                 }
                 Tm::SumCase { typ, datas, .. } => {
-                    let typ = std::mem::replace(typ, TM_PLACEHOLDER.clone());
+                    let typ = unsafe { std::ptr::read(typ) };
                     tms.push(typ);
-                    let datas = std::mem::replace(datas, EMPTY_TM_SUM_CASE_DATAS.clone());
+                    let datas = unsafe { std::ptr::read(datas) };
                     for (_, d, _) in datas.iter() {
                         tms.push(d.clone());
                     }
                 }
                 Tm::Match(scru, cases) => {
-                    let scru = std::mem::replace(scru, TM_PLACEHOLDER.clone());
+                    let scru = unsafe { std::ptr::read(scru) };
                     tms.push(scru);
                     let cases = std::mem::replace(cases, Vec::new());
                     for (_, b) in cases.iter() {
@@ -754,7 +755,7 @@ impl Drop for Val {
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
-                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
                 }
                 Tm::OpCall { args, body, .. } => {
@@ -762,7 +763,7 @@ impl Drop for Val {
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
-                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
                 }
             }
@@ -776,7 +777,7 @@ impl Drop for Val {
                     }
                 }
                 Val::Obj(x, _, sp) => {
-                    let x = std::mem::replace(x, VAL_PLACEHOLDER.clone());
+                    let x = unsafe { std::ptr::read(x) };
                     vals.push(x);
                     let sp = std::mem::replace(sp, List::new());
                     for (a, _) in sp.iter() {
@@ -788,43 +789,39 @@ impl Drop for Val {
                     for x in env.iter() {
                         vals.push(x.clone());
                     }
-                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
                 }
                 Val::Pi(_, _, a, Closure(env, body)) => {
-                    let a = std::mem::replace(a, VAL_PLACEHOLDER.clone());
+                    let a = unsafe { std::ptr::read(a) };
                     vals.push(a);
                     let env = std::mem::replace(env, List::new());
                     for x in env.iter() {
                         vals.push(x.clone());
                     }
-                    let body = std::mem::replace(body, TM_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
                 }
                 Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {
-                    // Leaf: no nested references.  Return without touching
-                    // `v`; the caller forgets it, so this impl is not
-                    // re-entered (dropping the `Val::U(0)` sentinel would
-                    // re-drain it forever).
                     return;
                 }
                 Val::Sum(_, params, _, _) => {
-                    let params = std::mem::replace(params, EMPTY_SUM_PARAMS.clone());
+                    let params = unsafe { std::ptr::read(params) };
                     for (_, v, ty, _) in params.iter() {
                         vals.push(v.clone());
                         vals.push(ty.clone());
                     }
                 }
                 Val::SumCase { typ, datas, .. } => {
-                    let typ = std::mem::replace(typ, VAL_PLACEHOLDER.clone());
+                    let typ = unsafe { std::ptr::read(typ) };
                     vals.push(typ);
-                    let datas = std::mem::replace(datas, EMPTY_SUM_CASE_DATAS.clone());
+                    let datas = unsafe { std::ptr::read(datas) };
                     for (_, d, _) in datas.iter() {
                         vals.push(d.clone());
                     }
                 }
                 Val::Match(scru, env, cases) => {
-                    let scru = std::mem::replace(scru, VAL_PLACEHOLDER.clone());
+                    let scru = unsafe { std::ptr::read(scru) };
                     vals.push(scru);
                     let env = std::mem::replace(env, List::new());
                     for x in env.iter() {
@@ -840,26 +837,28 @@ impl Drop for Val {
                     for (a, _) in args.iter() {
                         vals.push(a.clone());
                     }
-                    let body = std::mem::replace(body, VAL_PLACEHOLDER.clone());
+                    let body = unsafe { std::ptr::read(body) };
                     vals.push(body);
                 }
             }
-            // The drained shell now holds only shared static placeholder
-            // clones and empty collections; the caller forgets it, so its
-            // drop never re-enters this impl (a normal drop would recurse
-            // one frame per node) and nothing per-node is leaked.
+            // The drained shell's fields were moved out; the caller
+            // forgets it (a normal drop would double-release them).
+        }
+        if matches!(self, Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_)) {
+            return;
         }
         let mut vals: Vec<Rc<Val>> = Vec::new();
         let mut tms: Vec<Rc<Tm>> = Vec::new();
-        vals.push(Rc::new(std::mem::replace(self, Val::U(0))));
+        let mut root = std::mem::replace(self, Val::U(0));
+        drain_val(&mut root, &mut vals, &mut tms);
+        std::mem::forget(root);
         loop {
             match vals.pop() {
                 Some(v) => match Rc::try_unwrap(v) {
                     Ok(mut v) => {
                         drain_val(&mut v, &mut vals, &mut tms);
-                        // `v` is now a drained shell (placeholder clones only)
-                        // — no per-node allocations, so skipping its drop is
-                        // leak-free; dropping it would re-enter this impl.
+                        // The shell's fields were moved out by `drain_val`;
+                        // dropping it would double-release them.
                         std::mem::forget(v);
                     }
                     Err(_) => continue, // shared elsewhere; count decremented only
@@ -878,6 +877,7 @@ impl Drop for Val {
         }
     }
 }
+
 
 type VTy = Val;
 
@@ -1821,7 +1821,7 @@ impl Infer {
     /// nodes reachable here stay alive through the meta table for the
     /// duration of the call, so pointer identity is stable.  The rare
     /// solved-meta-with-spine shape falls back to the quote-based walk.
-    fn val_no_metas(&self, decl: &Decl, l: Lvl, v: &Rc<Val>, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+    fn val_no_metas(&self, decl: &Decl, l: Lvl, v: &Rc<Val>, seen: &mut rustc_hash::FxHashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         if !seen.insert(Rc::as_ptr(v) as usize) {
             return None;
         }
@@ -1863,7 +1863,7 @@ impl Infer {
                 .or_else(|| self.val_no_metas(decl, l, body, seen)),
         }
     }
-    fn closure_no_metas(&self, decl: &Decl, l: Lvl, closure: &Closure, seen: &mut std::collections::HashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
+    fn closure_no_metas(&self, decl: &Decl, l: Lvl, closure: &Closure, seen: &mut rustc_hash::FxHashSet<usize>) -> Option<(Cxt, Rc<Val>, Span<()>)> {
         closure.0.iter().find_map(|e| self.val_no_metas(decl, l, e, seen))
             .or_else(|| Tm::no_metas_rc(&closure.1, self, decl, l, seen))
     }
@@ -6611,7 +6611,7 @@ mod symbol_recovery_tests {
             (SmolStr::new("nat_add_helper"), 2),
             SmolStr::new("+"),
         );
-        let decl: Decl = HashMap::new();
+        let decl: Decl = Decl::default();
         let x = rigid(0);
         let y = rigid(1);
         let call: Rc<Val> = Val::Call(
@@ -6645,7 +6645,7 @@ mod symbol_recovery_tests {
             (SmolStr::new("not_helper"), 1),
             SmolStr::new("!"),
         );
-        let decl: Decl = HashMap::new();
+        let decl: Decl = Decl::default();
         let x = rigid(0);
         let call: Rc<Val> = Val::Call(
             SmolStr::new("not_helper"),
@@ -6671,7 +6671,7 @@ mod symbol_recovery_tests {
     #[test]
     fn quote_keeps_call_for_unregistered_or_implicit() {
         let mut infer = Infer::new();
-        let decl: Decl = HashMap::new();
+        let decl: Decl = Decl::default();
         let x = rigid(0);
         let y = rigid(1);
 
@@ -6724,7 +6724,7 @@ mod symbol_recovery_tests {
             (SmolStr::new("nat_add_helper"), 2),
             SmolStr::new("+"),
         );
-        let decl: Decl = HashMap::new();
+        let decl: Decl = Decl::default();
         let x = rigid(0);
         let y = rigid(1);
         let call: Rc<Val> = Val::Call(
@@ -6749,15 +6749,3 @@ mod symbol_recovery_tests {
         }
     }
 }
-
-// Shared placeholder Rc's used by the iterative Drop impls below: drained
-// shells hold clones of these instead of fresh per-node allocations, so
-// forgetting a drained shell never leaks heap (only the static's refcount
-// grows, which is harmless).
-use std::sync::LazyLock;
-static VAL_PLACEHOLDER: LazyLock<Rc<Val>> = LazyLock::new(|| Rc::new(Val::U(0)));
-static TM_PLACEHOLDER: LazyLock<Rc<Tm>> = LazyLock::new(|| Rc::new(Tm::U(0)));
-static EMPTY_SUM_PARAMS: LazyLock<SumParams> = LazyLock::new(|| Rc::new(vec![]));
-static EMPTY_SUM_CASE_DATAS: LazyLock<SumCaseDatas> = LazyLock::new(|| Rc::new(vec![]));
-static EMPTY_TM_SUM_PARAMS: LazyLock<TmSumParams> = LazyLock::new(|| Rc::new(vec![]));
-static EMPTY_TM_SUM_CASE_DATAS: LazyLock<TmSumCaseDatas> = LazyLock::new(|| Rc::new(vec![]));

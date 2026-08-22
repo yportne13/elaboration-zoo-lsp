@@ -882,3 +882,84 @@ Let 1.24M。Lam 构造 4.9M 次与闭包应用量自洽（v_app 283 万）。语
 - 干净构建（探针全移除）prelude 5.97-6.03s（min-of-3），与 round 15
   提交基线一致；用户文件 spot-check（10-bundle 0.52-0.53s）持平。
 - `cargo test --lib L13`：338 全过。probe-out.txt 已刷新。
+
+---
+
+## 18. 第十七轮（2026-08-22）—— 常数因子三板斧：mimalloc + FxHash + Drop 析构优化，prelude 5.90s → 3.34s（1.77×）
+
+> 承接 round 16 的结论（无风暴，剩余 = ~4000 万步求值 × ~118ns/步 的常数
+> 开销）。本轮把"每步常数"拆开打：分配、哈希、析构三处各落地一项。
+> 全部交错 A/B（interleaved，同机同期）+ HEAD worktree 锚定验证。
+
+### 18.1 落地项（按贡献排序）
+
+1. **mimalloc 全局分配器**（Cargo.toml + 两个 bin 注册
+   `#[global_allocator]`；`mem-profile` 构建保留 dhat）。
+   求值器每步分配 1-3 个 32-100B 节点，Windows 默认堆显著慢于
+   mimalloc。**prelude 5.90 → 3.73s（1.58×）**；adder_proof 用户侧
+   0.68 → 0.44s。这是 round 16 §17.3 没有列出的独立杠杆——当时只
+   归因到 Arc 原子与每步 clone，漏了分配器本身。
+2. **Drop 析构机制重写**（mod.rs 两个 `impl Drop`）：原实现对每个
+   独占节点做 `Rc::new(replace(self, U(0)))` 包装（每 Drop 调用一对
+   alloc/free）+ 每个复合子字段 clone 一个静态占位符（2 次原子）。
+   新实现：叶子形状入口快速返回；子字段用 `unsafe ptr::read` 移出
+   （shell 由调用方 forget，SAFETY 契约注释在位）；占位符静态量全部
+   删除。**交错 A/B：3.73 → 3.34s（再 +12%）**。
+3. **FxHash**（Decl 表 / FORCE_MEMO / no_metas seen-set，
+   `rustc-hash` crate）：`decl.get` 在 `Tm::Decl` 求值臂 / v_app /
+   force 热路径上（加载期 ~400 万次）。实测贡献小（~1%，噪声边缘），
+   但严格更优且改动极小，保留。
+
+**合计（交错 A/B，min-of-6）**：prelude 固定成本 5.90 → **3.34s
+（1.77×）**；用户文件 probe（release，15 文件）176-597ms →
+**141-479ms（~20%）**；adder_proof 用户侧 0.68 → 0.38s；
+`cargo test --lib` 套件墙钟 95.5 → 83.7s。峰值工作集 351 → 356MB
+（持平）。
+
+### 18.2 验证
+
+- 27 个示例（examples/ + hdl/）完整输出与 HEAD **逐字节一致**
+  （仅计时日志行不同）。
+- `cargo test --lib`：401 过 / 49 败——失败集与 HEAD **完全一致**
+  （L07/L07a/L10/L11/L12 旧课程存量，逐名 diff 确认）。
+- 集成 11 套件：completion_tests 2 败 + hover_tests 1 败，HEAD
+  worktree 同败（round 15 §16.5 已记录的存量），其余全过。
+- probe-out.txt 已用 `cargo test --release --lib probe_timing` 重采。
+
+### 18.3 未落地但有数据的方向：`rc::Rc`（+12%）
+
+- 完整实验（别名换 `std::rc::Rc` + 编译错误面修补）测得：在
+  mimalloc + Drop 优化之上 prelude 3.34 → ~2.95s（+12%），与
+  round 16 的 20-25% 估计方向一致但偏小（分配器已吃掉一部分共享
+  成本）。
+- **代价**：`Infer` 变 !Send，需要 (a) `PRELUDE_CACHE`/`DECLB_CACHE`
+  转 thread_local（LSP 双线程会各载一份 prelude，6s×2，不可接受，
+  除非 elaboration 全部收敛到 worker 线程）；(b) `Error` thunk 去
+  Send+Sync；(c) `spawn_worker` 的 `Arc<Backend>` 共享改消息传递。
+  即 round 16 §17.3 说的"线程模型重构"，本轮按风险收益比推迟，
+  数据留此供决策。
+- 实验副产物（重要）：给 Drop 占位符上 thread_local 会让每节点
+  走一次 TLS，prelude 直接 +2s——**凡是 per-node 的路径都碰不得
+  thread_local**。
+
+### 18.4 方法学事故记录（比数据更有价值的部分）
+
+- 实验回滚时把 `simpl_decl` 的 **DECLB_CACHE 写回语句弄丢了**
+  （`*guard = Some((key, d.clone()))` 没恢复），导致每次调用重建
+  整张简化 decl 表：adder_proof 0.68 → 11.3s、prelude +1.8s。期间
+  产生的"mimalloc 让 adder_proof 回退 7×"等中间结论全部是被污染
+  的伪影。
+- 暴露方式：交错 A/B 的两个方向互相矛盾，强制做 HEAD 锚定 + 干净树
+  复测才发现。**教训：多因素实验中途发生指标跳变时，第一反应应该
+  是 diff 工作树与预期状态的差异，而不是解释性能**；回滚脚本必须
+  逐 hunk 核对，尤其是"删了又加回"的缓存写回类语句。
+- 二进制拷贝陷阱：构建失败时 `cp target/release/typort.exe` 拷到的
+  是**上一次成功构建的陈旧产物**（cargo 失败不重链接），曾据此得出
+  错误归因。A/B 前必须确认 `cargo build` 退出码为 0。
+
+### 18.5 遗留
+
+- `rc::Rc` 线程模型重构（§18.3）：+12% 的实测收益摆在那里，何时
+  做取决于是否接受 LSP actor 化的工作量。
+- LSP 用户侧增量 elaboration（老项）：probe 141-479ms/键击仍是
+  输入延迟上限，与 round 16 结论相同。

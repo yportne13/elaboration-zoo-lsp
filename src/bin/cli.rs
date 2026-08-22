@@ -12,6 +12,13 @@ use lsp_types::Url;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+// Small-node allocation churn dominates the evaluator's per-step cost;
+// mimalloc beats the Windows default heap there (mem-profile builds keep
+// dhat for heap profiling instead).
+#[cfg(not(feature = "mem-profile"))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Get Windows process memory counters via raw FFI (no crate dependency).
 #[cfg(all(windows, feature = "mem-profile"))]
 mod win_mem {

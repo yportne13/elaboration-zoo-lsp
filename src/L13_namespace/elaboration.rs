@@ -166,7 +166,7 @@ impl Infer {
     /// Check if a type is the special `BindingName` struct type.
     /// When an implicit parameter has this type, the compiler synthesizes
     /// the current let-binding name instead of creating a metavariable.
-    fn is_binding_name_type(&self, decl: &std::collections::HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Tm>, Rc<VTy>, Option<PrimFunc>)>, a: &Rc<Val>) -> bool {
+    fn is_binding_name_type(&self, decl: &super::Decl, a: &Rc<Val>) -> bool {
         let a_forced = self.force(decl, a);
         match a_forced.as_ref() {
             Val::Sum(name, _, _, _) if name.data == "BindingName" => true,

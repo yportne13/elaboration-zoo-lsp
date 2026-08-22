@@ -268,7 +268,7 @@ fn nat_rem(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
 pub struct HoverCxt {
     pub lvl: Lvl,
     pub locals: Locals,
-    pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>>,
+    pub decl: Rc<Decl>,
 }
 
 impl HoverCxt {
@@ -291,7 +291,7 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: Rc<BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>>,
-    pub decl: Rc<HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>>,
+    pub decl: Rc<Decl>,
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, SmolStr)>,
     pub namespace_prefix: Option<SmolStr>,
     pub namespaces: Rc<HashSet<SmolStr>>,
@@ -681,7 +681,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: Rc::new(BiMap::new()),
-            decl: Rc::new(HashMap::new()),
+            decl: Rc::new(Decl::default()),
             namespace: List::new(),
             namespace_prefix: None,
             namespaces: Rc::new(HashSet::new()),
