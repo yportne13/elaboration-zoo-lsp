@@ -22,13 +22,12 @@ mod canonical;
 // ---------------------------------------------------------------------------
 // Function-level CPU probe for the elaborator (perf diagnostics).
 //
-// Active only when the env var TYPORT_PROFILE is set (same switch as the
-// per-stage probe in lib.rs).  Each instrumented entry point records the
-// accumulated self-ish time and call count into a global static; nesting is
-// NOT deduplicated (an `eval` called from `check` counts inside `check`'s
-// span too), so the numbers are a relative hotspot distribution, not a
-// strict self-time breakdown.  Zero overhead when disabled (one atomic load
-// per instrumented call).
+// Active only when the env var TYPORT_PRELUDE_PROF is set.  Each
+// instrumented entry point records EXCLUSIVE time and call count into a
+// global static (nested profiled calls are charged to the inner counter
+// via a thread-local child-time stack), so the rows sum to approximately
+// the wall clock.  Zero overhead when disabled (one atomic load per
+// instrumented call).
 // ---------------------------------------------------------------------------
 pub struct FuncProf {
     pub enabled: std::sync::atomic::AtomicBool,
@@ -211,6 +210,10 @@ fn nat_step_value(v: &Val, index: u32, datas: &[(Span<SmolStr>, Rc<Val>, Icit)])
 }
 
 /// RAII guard that accumulates elapsed time into a (ns, count) pair on drop.
+/// Times are EXCLUSIVE: time spent inside nested profiled calls is charged
+/// to the nested counter (via a thread-local child-time stack), so the
+/// printed rows sum to approximately the wall clock instead of
+/// double-counting recursion.
 pub struct ProfGuard {
     ns: &'static std::sync::atomic::AtomicU64,
     n: &'static std::sync::atomic::AtomicU64,
@@ -218,10 +221,25 @@ pub struct ProfGuard {
     active: bool,
 }
 
+thread_local! {
+    /// Stack of (accumulated child elapsed) for active ProfGuards.
+    static PROF_STACK: std::cell::RefCell<Vec<u64>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
 impl Drop for ProfGuard {
     fn drop(&mut self) {
         if self.active {
-            self.ns.fetch_add(self.t.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            let elapsed = self.t.elapsed().as_nanos() as u64;
+            let exclusive = PROF_STACK.with(|s| {
+                let mut s = s.borrow_mut();
+                let child = s.pop().expect("prof stack underflow");
+                if let Some(top) = s.last_mut() {
+                    *top += elapsed;
+                }
+                elapsed.saturating_sub(child)
+            });
+            self.ns.fetch_add(exclusive, std::sync::atomic::Ordering::Relaxed);
             self.n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
@@ -231,6 +249,7 @@ impl Drop for ProfGuard {
 #[inline]
 pub fn prof_enter(ns: &'static std::sync::atomic::AtomicU64, n: &'static std::sync::atomic::AtomicU64) -> Option<ProfGuard> {
     if FUNC_PROF.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        PROF_STACK.with(|s| s.borrow_mut().push(0));
         Some(ProfGuard { ns, n, t: std::time::Instant::now(), active: true })
     } else {
         None
@@ -2926,10 +2945,12 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             let _infer_t0 = std::time::Instant::now();
             for tm in decls {
                 let _d_t0 = std::time::Instant::now();
+                let _e0 = FUNC_PROF.eval.0.load(std::sync::atomic::Ordering::Relaxed);
                 let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
                 let _d_el = _d_t0.elapsed().as_secs_f64();
                 if prelude_prof && _d_el > 0.005 {
-                    eprintln!("[PPROF]   decl {:>8.3}s  {}", _d_el, decl_name_of(&tm));
+                    let _e1 = FUNC_PROF.eval.0.load(std::sync::atomic::Ordering::Relaxed);
+                    eprintln!("[PPROF]   decl {:>8.3}s  eval {:>7.3}s  {}", _d_el, (_e1 - _e0) as f64 / 1e9, decl_name_of(&tm));
                 }
                 cxt = new_cxt;
             }
@@ -2975,7 +2996,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     infer.completion_table.clear();
     if prelude_prof {
         let fp = &FUNC_PROF;
-        eprintln!("[PPROF] -- function-level during prelude load (accumulated) --");
+        eprintln!("[PPROF] -- function-level during prelude load (exclusive, sums to ~wall) --");
         let mut rows: Vec<(String, u64, u64)> = vec![
             ("check".into(), fp.check.0.load(std::sync::atomic::Ordering::Relaxed), fp.check.1.load(std::sync::atomic::Ordering::Relaxed)),
             ("infer_expr".into(), fp.infer_expr.0.load(std::sync::atomic::Ordering::Relaxed), fp.infer_expr.1.load(std::sync::atomic::Ordering::Relaxed)),

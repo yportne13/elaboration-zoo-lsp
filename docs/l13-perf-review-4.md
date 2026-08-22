@@ -801,3 +801,84 @@ prelude 加载期间的中间垃圾值被 memo keepalive 钉住，直到下一�
   增量 elaboration。
 - FORCE_MEMO 为 thread-local：若未来 LSP 真正多线程并行 elaboration，
   各线程独立建缓存（正确性无关，内存 ×线程数）。
+
+---
+
+## 17. 第十六轮（2026-08-22）—— 剩余 6.0s 的彻底归因：无冗余线性工作（负结果）+ FUNC_PROF 升级为 exclusive 计时
+
+> 承接 round 15（`1334cba`）。目标：prelude 6.0s 里还藏着什么风暴。
+> 方法：FUNC_PROF 升级 exclusive + 十余个临时探针逐一验证/排除
+> （全部已移除，仅保留 exclusive 计时与逐 def eval 列两个诊断改进）。
+> **结论：无风暴。剩余成本是 HDL prelude 库检查期"真实线性求值量"
+> 的常数开销，进一步优化需要架构级改动**（详见 17.3 路线）。
+
+### 17.1 exclusive 计时升级（本轮唯一落地代码）
+
+`ProfGuard` 改为**独占时间**：thread-local 子时间栈，嵌套 profiled 调用
+的时间记入内层计数器，打印的各行相加 ≈ 墙钟（原 inclusive 版本
+check 490s 这类数字不再出现）。prelude 加载循环的逐 def 行同时新增
+`eval` 时间列（该 def 检查期间的 eval 独占增量）。用法不变
+（`TYPORT_PRELUDE_PROF=1`）。
+
+### 17.2 归因过程（排除法，全部带数据）
+
+exclusive 计时下 prelude ~5.9s 的分布：**eval 4.76s（自时间，503 万次
+调用）**，其余全部 <0.4s。于是问题变为"eval 的 4.76s 是重复浪费还是
+真实工作"，对每个候选假设做了测量：
+
+| 假设 | 测量 | 结论 |
+|---|---|---|
+| class 三遍检查的 Raw::Tm 重求值 | 6476 次 / 0.003s | 排除（round 5 已消） |
+| eval (tm,env) 指针冗余 | 105 万外部入口 / **86.1 万不同 (tm,env)** | 排除（~1.2× 冗余，不可 memo） |
+| unify (Decl,_) 燃料重试的 quote→eval | 1000 次 | 排除（round 15 的 is_prim_application 门控后已近乎消失） |
+| meta 风暴（fresh_meta 331 万？） | fresh_meta 仅 3.41 万次 | 排除 |
+| trait_wrap 运算符重推理 | 6752 次 | 排除（量级不足） |
+| mutable 重执行（round 9 复发？） | change_mutable("ModuleTree") 5563 次 / WhenStack 4100 次 | 排除（静态调用点同量级） |
+| when 栈深遍历（andCond/wrapLevels/levelCond 占 Tm::Call 求值 97%：104 万/52 万/52 万次机器遇见） | WhenStack 深度 max=2 avg=0.6；wrapWithWhenContext 仅被遇见 2476 次 | **机器步计数是内联展开的遇见数，非执行放大**；栈浅、无重执行 |
+| quote 产物爆炸（往返重放） | 全部 quote 输出合计仅 6399 个 Call 节点 | 排除 |
+| def 体重复求值 | per-let 计时：最慢单 let 0.138s（hdl-verilog 字符串拼接 header），streamFifoCC 的 ~35 个 let 全部 <20ms | 成本均摊在每个 let 的检查递归里，无单点 |
+
+**机器步分布**（39.6M 步 × ~127ns/步 ≈ 5.0s）：Var 11.8M、App 6.8M、
+Lam 4.9M、Decl 4.1M、Match 3.2M、Call/Sum 各 2.15M、Meta 1.33M、
+Let 1.24M。Lam 构造 4.9M 次与闭包应用量自洽（v_app 283 万）。语法
+节点比例正常——**这是 ~2700 行 HDL DSL 库在检查期执行构造子应用
+（每个赋值/信号/when 语句在 let 值求值时真实运行）的线性总量**。
+
+### 17.3 每步 ~127ns 的构成与真正的下一步
+
+单步成本偏高（理想 20-50ns）的主因：
+
+1. **全局 `use std::sync::Arc as Rc`**（list.rs 等）：所有值/项节点的
+   clone/drop 走原子 refcount（x86 LOCK 前缀 ~20 cycles）。40M 步
+   × 每步 2-4 次原子操作 ≈ 1-1.5s。改真 Rc 要求 Infer/Cxt 摆脱
+   Send+Sync（LSP 的 hover_table 跨线程共享 Infer）——线程模型重构。
+2. 机器循环每步的 `tm.clone()`/`env.clone()`（Arc inc）+ Frame
+   push/pop。
+3. `Tm::Var` 的 `env.iter().nth(i)`：cons 链走 i 步（11.8M 次 × 平均
+   索引深度）。
+
+结构性方向（按杠杆排序，均超出"补丁"量级）：
+- **LSP 用户侧增量 elaboration**（老项）：每键击全量重推 0.17-0.53s，
+  是输入延迟的根本上限；
+- **Arc→Rc + 单线程 elaborator + 跨线程快照**：预计 prelude/用户侧
+  再 ~20-25%；
+- **检查结果缓存**（def 粒度签名→已检查 Tm/Val）：跨键击复用，配合
+  增量 elaboration 才有意义。
+
+### 17.4 方法学教训（继 round 9 §10.4、round 13 §13.5）
+
+- **探针改变语义**：给 `change_mutable_default("WhenStack")` 加深度
+  观察时提前 `return Some(r)`，跳过了 mutable_map 写回——后续一轮
+  测量（eval 从 503 万骤降到 198 万）全部作废才发现。**侵入 prim 内部
+  的探针必须走完原路径**；测量数据突变应第一时间怀疑探针而非被测
+  系统。
+- 机器步按 Tm 变体/Call 名的"遇见计数"会高估执行语义：内联体
+  （Tm::Call 的 body）在每次外层求值时整体重走，遇见数 ≈ 调用点数 ×
+  内联链深，不代表独立执行。归因时应配合**外部入口计数 + 副作用
+  prim 执行计数**（如 change_mutable 次数）交叉验证。
+
+### 17.5 验证
+
+- 干净构建（探针全移除）prelude 5.97-6.03s（min-of-3），与 round 15
+  提交基线一致；用户文件 spot-check（10-bundle 0.52-0.53s）持平。
+- `cargo test --lib L13`：338 全过。probe-out.txt 已刷新。
