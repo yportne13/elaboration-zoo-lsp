@@ -96,6 +96,72 @@ pub fn prof_shape(v: &Val) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// force() result memo.
+//
+// The dominant elaboration cost is re-forcing structurally shared, already
+// normal `Val` graphs: the same ~200k distinct value nodes account for
+// hundreds of millions of `force` calls during prelude load (measured
+// 636M calls over 188k distinct pointers, ~3400x redundancy).  The memo
+// keys on the input node's address; correctness rests on three pillars:
+//
+// 1. Keepalive: each entry holds the input `Rc`, so a freed address can
+//    never be reused by a different `Val` while the entry lives.
+// 2. Taint: a walk that consults state the memo cannot abstract over —
+//    a meta variable (solutions change, and the ns-probe machinery even
+//    rolls them back) or an impure prim (mutable globals / file IO /
+//    diagnostics whose re-execution on re-force is observable) — bumps a
+//    thread-local counter, and entries whose counter moved during their
+//    walk are simply not inserted.
+// 3. Version: the only decl-table state `force` reads is a name's
+//    prim-ness (the `Val::Decl` / prim-name `Val::Call` arms).  Every
+//    transition of an entry's prim-ness bumps a global version; entries
+//    record the version they were computed under and lookups treat a
+//    mismatch as a miss, so stale entries can never be served.
+//
+// The memo is thread-local: `force` results are per-thread recomputed on
+// other threads, and no lock is taken on the hot path.
+// ---------------------------------------------------------------------------
+
+/// Prims whose result depends only on their arguments.  Walks that consult
+/// them are memoizable; every other prim taints the enclosing walk (see
+/// `FORCE_MEMO`).
+fn prim_is_pure(name: &str) -> bool {
+    matches!(name,
+        "nat_add" | "nat_mul" | "nat_sub" | "nat_div" | "nat_rem"
+        | "nat_to_dec" | "width_range"
+        | "string_concat" | "str_eq" | "str_indent2")
+}
+
+thread_local! {
+    static FORCE_MEMO: std::cell::RefCell<std::collections::HashMap<usize, (Rc<Val>, Rc<Val>, u64)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+static PRIM_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Upper bound on memo entries; overflow clears the whole table (bounded
+/// memory for garbage-pin scenarios, at the price of re-walking once).
+const FORCE_MEMO_CAP: usize = 1 << 20;
+
+/// Start a fresh memo epoch (per user file change / prelude load).  Not
+/// required for correctness — purely bounds the memory pinned by
+/// keepalives of values that are no longer otherwise reachable.
+pub fn force_memo_clear() {
+    FORCE_MEMO.with(|m| m.borrow_mut().clear());
+}
+
+#[inline]
+fn force_taint_bump() {
+    FORCE_TAINT.with(|t| t.set(t.get() + 1));
+}
+
+/// Record that some decl entry's prim-ness changed (see `PRIM_VERSION`).
+pub fn prim_version_bump() {
+    PRIM_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Is this value the `Nat` sum type?  The name is matched literally — the
 /// same existing design assumption as `Raw::Nat`'s `decl.get("Nat")` lookup
 /// and the `Tm::Sum(... "Nat")` special cases in `pretty.rs`.
@@ -1784,7 +1850,34 @@ impl Infer {
     }
     fn force(&self, decl: &Decl, t: &Rc<Val>) -> Rc<Val> {
         prof_count(&FUNC_PROF.force.1);
-        self.force_inner(decl, t)
+        match t.as_ref() {
+            // Only the compound shapes whose forcing recursively walks
+            // sub-values benefit from the memo; every other shape is an
+            // O(1) arm in `force_inner`.
+            Val::SumCase { .. } | Val::Call(..) | Val::Obj(..) => {}
+            _ => return self.force_inner(decl, t),
+        }
+        let key = Rc::as_ptr(t) as usize;
+        let ver = PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed);
+        if let Some(r) = FORCE_MEMO.with(|m| {
+            m.borrow().get(&key).filter(|(_, _, v)| *v == ver).map(|(_, r, _)| r.clone())
+        }) {
+            return r;
+        }
+        let taint0 = FORCE_TAINT.with(|t| t.get());
+        let r = self.force_inner(decl, t);
+        if FORCE_TAINT.with(|t| t.get()) == taint0
+            && PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed) == ver
+        {
+            FORCE_MEMO.with(|m| {
+                let mut m = m.borrow_mut();
+                if m.len() >= FORCE_MEMO_CAP {
+                    m.clear();
+                }
+                m.insert(key, (t.clone(), r.clone(), ver));
+            });
+        }
+        r
     }
     // Fast path for deep constructor chains (e.g. big `Nat` literals, which
     // are nested `Val::SumCase`s): force the spine iteratively so a
@@ -1801,11 +1894,17 @@ impl Infer {
             }
         }
         match t.as_ref() {
-            Val::Flex(m, sp) => match self.lookup_meta(*m) {
-                MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl,
- t_solved.clone(), sp)),
-                MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
-            },
+            Val::Flex(m, sp) => {
+                // Meta state is memo-tainting (see FORCE_MEMO): solutions
+                // change over time (and the ns-probe machinery rolls them
+                // back), so walks through this arm are never cached.
+                force_taint_bump();
+                match self.lookup_meta(*m) {
+                    MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl,
+                 t_solved.clone(), sp)),
+                    MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
+                }
+            }
             // A native Nat is already WHNF (definitionally `succ^n zero`
             // compressed to one u64).  Not forcing it here is exactly the
             // Lean/Agda native-Nat win: re-forcing a concrete Nat used to
@@ -1865,6 +1964,13 @@ impl Infer {
             },
             Val::Decl(x, sp) => {
                 if let Some((_, _, _, _, _, Some(prim_fn))) = decl.get(&x.data) {
+                    // Impure prims (mutable globals / IO / diagnostics) are
+                    // memo-tainting: skipping their re-execution on a cache
+                    // hit would be observable.  The prim-ness lookup itself
+                    // is covered by the entry's PRIM_VERSION tag.
+                    if !prim_is_pure(&x.data) {
+                        force_taint_bump();
+                    }
                     let args: Vec<Rc<Val>> = {
                         let mut v: Vec<Rc<Val>> = sp.iter().map(|(v, _)| v.clone()).collect();
                         v.reverse();
@@ -2014,6 +2120,12 @@ impl Infer {
                 let acc = sp.prepend((u, i));
                 if let Some(entry) = decl.get(&x.data) {
                     if let Some(ref prim_fn) = entry.5 {
+                        // Impure prims taint any enclosing force-memo walk
+                        // (their application is observable; pure prims'
+                        // results are a function of their arguments).
+                        if !prim_is_pure(&x.data) {
+                            force_taint_bump();
+                        }
                         let args: Vec<Rc<Val>> = {
                             let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
                             v.reverse();
@@ -2749,6 +2861,8 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     if prelude_prof {
         FUNC_PROF.enabled.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    // Fresh force-memo epoch for the load (see `force_memo_clear`).
+    force_memo_clear();
     let mut infer = Infer::new();
     let mut prelude: Vec<&str> = vec![
         include_str!("../prelude/core/op.typort"),
@@ -2794,6 +2908,11 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     let mut id = 0;
     let nat_typort = include_str!("../prelude/core/nat.typort");
     for p in prelude {
+        // Per-file memo epoch: memoized force pins intermediate values of
+        // the file's elaboration; clearing at the boundary returns that
+        // garbage promptly instead of batching one large drop later
+        // (measured 0.35s of cascaded Val drops on the first clear).
+        force_memo_clear();
         let _pfile_t0 = std::time::Instant::now();
         let (_p_parse_t, _p_infer_t, n_decls) = if let Some((decls, parse_errs, new_exports, _expansions)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
             let _p_parse_t = _pfile_t0.elapsed();
@@ -2885,6 +3004,9 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
         }
         eprintln!("[PPROF]     {:>14} {:>12}  (shape total)", "TOTAL", shape_total);
     }
+    // End-of-load epoch boundary: release the load's pinned intermediates
+    // so they are not dropped in one batch inside the first user request.
+    force_memo_clear();
     Ok(PreludeState {
         infer,
         cxt,

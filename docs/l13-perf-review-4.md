@@ -710,3 +710,94 @@ infer_after_prefix > infer_expr > check<false> > infer_expr > eval
   懒化）。**新增证据**：cost 主体在 check（490s accumulated）而非 eval
   （23s），故"加载期 def 体懒化"对 prelude 固定成本帮助有限——除非同时
   缓存检查结果；LSP 用户侧增量与 NbE 值共享仍是最大杠杆。
+
+---
+
+## 16. 第十五轮（2026-08-22）—— force 指针备忘：prelude 22.4s → 6.0s（3.7×），round 14 的"NbE 值共享"方向落地
+
+> 分支 master（c00712d + 本轮改动）。方法：FUNC_PROF force 深度分拆 +
+> 指针冗余度探针（临时，已移除）→ 因果明确后实现。改动集中在
+> `L13_namespace/mod.rs`（+134）、`cxt.rs`（+9）、`lib.rs`（+14）。
+
+### 16.1 归因（实现前的两个决定性测量）
+
+1. **深度分拆**：636,627,783 次 force 调用中 **99.7%（634.45M）是 force
+   自身的递归重入**（force(SumCase) 走 typ+全部 datas、force(Call) 走
+   body+args、force(Obj) 走 x），外部入口只有 2.18M 次。风暴不是"很多
+   地方调 force"，而是"每次外部 force 把整棵卡住值深走一遍"。
+2. **指针冗余度**：全部 636M 次调用的输入里只有 **188,292 个不同
+   `Rc<Val>` 指针**（~3400× 冗余）。外部入口多为叶子形状，真正的放大器
+   是 Obj/Call/Flex 复合入口 × 平均 ~600 节点的树（模块树值、卡住的
+   宽度/类型树）。
+   → 结论：按输入指针缓存 force 结果即可消掉几乎全部风暴；这正是
+   round 8/13/14 反复指向的"让重 force 免费"，只是做在 force() 这一层，
+   不需要改 Val 表示。
+
+### 16.2 实现（`FORCE_MEMO`）
+
+- **键/值**：`HashMap<usize, (Rc<Val> 输入 keepalive, Rc<Val> 结果, u64 版本)>`，
+  thread-local（无锁、天然绕开 Infer 的 Send+Sync 约束）。只对
+  `SumCase | Call | Obj` 三种复合形状走 memo；其余形状是 O(1) 叶子臂，
+  直接进 force_inner（连哈希查找都省）。
+- **正确性三支柱**（round 8 记忆化失败的教训逐条对应）：
+  1. **keepalive**：条目持有输入 Rc，地址不可能被新值复用（round 8
+     明确过的坑）；
+  2. **taint 传播**：walk 途中 consult 了不可抽象状态——meta 表
+     （解会变，ns 探测还会快照回滚）或有副作用 prim（mutable 全局/
+     文件 IO/诊断）——就 bump 线程局部计数器；计数器在 walk 中动过的
+     条目一律不插入。与 round 8 的"子树安全预扫描"不同，taint 在
+     本来就要做的同一次遍历里传播，零额外遍历；
+  3. **prim-ness 版本**：force 读的唯一 decl 表状态是名字的 prim-ness
+     （Decl/prim-Call 两臂）。`Cxt::decl` 的 prim-ness 变更（注册
+     nat prim、shadow）与 lib.rs 两处移除 prim 条目的地方 bump 全局
+     `PRIM_VERSION`；条目记录版本，lookup 不匹配即 miss（惰性失效，
+     跨线程安全）。纯 prim 名单 `prim_is_pure`（nat 五则运算 +
+     nat_to_dec/width_range + string 三件），其余全部按 impure 处理。
+- **epoch 清理**：prelude 每文件边界 + 加载结束 + 每次 on_change 开始
+  `force_memo_clear()`；另有 1M 条目 CAP 兜底。这不是正确性要求，
+  是内存卫生（见 16.3 的教训）。
+
+### 16.3 途中踩的坑：批量 drop 回归（已修复）
+
+首版只在 on_change 开头清 memo，用户文件 change 从 0.17s 恶化到 0.53s：
+prelude 加载期间的中间垃圾值被 memo keepalive 钉住，直到下一次 clear
+才**一次性**级联释放（自定义迭代 Drop 走数百万节点，0.35s）。相位计时
+定位后改为 per-file epoch，垃圾死亡摊回加载期内，用户侧恢复 0.172s。
+教训：memo 的 keepalive 会把"随用随丢"变成"批量丢弃"，epoch 边界必须
+跟垃圾产生节奏对齐。
+
+### 16.4 结果（release，min-of-3，本机）
+
+| 指标 | 前 | 后 | 加速 |
+|---|---|---|---|
+| prelude 固定成本（总墙钟） | 22.4s | **6.0s** | 3.7× |
+| force 调用次数 | 636.6M | **4.41M** | 144× |
+| check（accumulated） | 509s | 113s | 4.5× |
+| eval / unify（accumulated） | 23.6s / 22.9s | 5.2s / 5.7s | ~4.5× |
+| hdl-crossclock / misc-io / misc（逐文件） | 5.73 / 8.34 / 5.84s | 1.05 / 1.68 / 1.11s | 4.5-5.5× |
+| 用户文件 probe（15 文件） | 177-597ms | 175-584ms | 持平略好 |
+| 峰值内存（tiny 文件进程） | 7MB | 7MB | 持平 |
+
+用户文件侧无变化的原因：单次 elaboration 内的值几乎全是新节点（指针
+不重复），冗余主要存在于 prelude 的跨 def 共享图里。
+
+### 16.5 验证
+
+- `cargo test --lib L13`：338 全过；集成 12 套件全过（hover 1 +
+  completion 2 失败为 HEAD 存量，stash 复验确认）。
+- 27 个示例（examples/ + examples/hdl/）完整输出与 HEAD 基线**逐字节
+  一致**（仅计时日志行不同）。
+- 边界手动用例：用户 shadow `nat_add`（被语言 redefine 拒绝，版本机制
+  作为纵深防御保留）；`10000+10000`/`300*300` 大数算术正确。
+- `cargo test --lib L13` 套件墙钟 95.4s。
+
+### 16.6 遗留观察项
+
+- 剩余 6.0s 的构成（accumulated）：check 113s（inclusive 嵌套主导）、
+  unify 5.7s/191k 次（~30µs/次）、eval 5.2s/5.0M、quote 1.2s/389k、
+  check_universe 2.96s/10.8k。热点 def 不变（streamFifoCC 1.25s /
+  dividerCore 1.07s / streamFifoConnect 0.49s），但已无单一"风暴"形状
+  ——force 入口直方图回到叶子为主。下一杠杆按 §14.3 仍是 LSP 用户侧
+  增量 elaboration。
+- FORCE_MEMO 为 thread-local：若未来 LSP 真正多线程并行 elaboration，
+  各线程独立建缓存（正确性无关，内存 ×线程数）。

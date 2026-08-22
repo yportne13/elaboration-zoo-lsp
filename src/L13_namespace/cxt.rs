@@ -805,7 +805,16 @@ impl Cxt {
     pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>, prim: Option<PrimFunc>) -> Result<Self, Error> {
         let mut decl = self.decl.clone();
         let decl_map = Rc::make_mut(&mut decl);
+        // prim-ness transitions invalidate the force memo (see
+        // `PRIM_VERSION`): registering a prim (`register_nat_builtins`,
+        // startup builtins) or shadowing one with a plain def both change
+        // what `force` computes for spines of that name.
+        let had_prim = decl_map.get(&x.data).map_or(false, |e| e.5.is_some());
+        let now_prim = prim.is_some();
         decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim));
+        if had_prim != now_prim {
+            super::prim_version_bump();
+        }
         Ok(Cxt {
             env: self.env.clone(),
             lvl: self.lvl,

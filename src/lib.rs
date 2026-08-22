@@ -966,6 +966,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     pub fn on_change<const MUT:bool>(&self, params: TextDocumentItem<'_>) {
         let start_all = std::time::Instant::now();
         let mut prof = Prof::new();
+        // Fresh force-memo epoch: bounds the memory pinned by memo
+        // keepalives of values that die with the previous elaboration.
+        L13_namespace::force_memo_clear();
         self.client.log_message(MessageType::LOG, format!("change: {}", params.uri.as_str()));
         //dbg!(&params.version);
         let rope = ropey::Rope::from_str(params.text);
@@ -1469,7 +1472,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             if let Some(keys) = self.file_symbols.get(&uri_str) {
                 let m = Arc::make_mut(&mut local_cxt.decl);
                 for k in keys.value().clone() {
-                    m.remove(k.as_str());
+                    // Removing a prim-backed entry (a user shadow of a
+                    // builtin name) restores the prelude prim on merge:
+                    // a prim-ness transition for the force memo.
+                    if m.remove(k.as_str()).map_or(false, |e| e.5.is_some()) {
+                        L13_namespace::prim_version_bump();
+                    }
                 }
             }
             // Also drop this file's previous namespace entries from the local
@@ -1727,7 +1735,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             if let Some(keys) = self.file_symbols.get(&uri_str) {
                 let m = Arc::make_mut(&mut cxt.decl);
                 for k in keys.value().clone() {
-                    m.remove(k.as_str());
+                    if m.remove(k.as_str()).map_or(false, |e| e.5.is_some()) {
+                        L13_namespace::prim_version_bump();
+                    }
                 }
             }
             self.file_symbols.remove(&uri_str);
