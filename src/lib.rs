@@ -6,6 +6,7 @@ use std::time::Duration;
 
 mod parser_lib;
 mod parser_lib_resilient;
+use std::rc::Rc;
 mod list;
 mod bimap;
 pub mod ls;
@@ -215,7 +216,7 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     /// Full document text for incremental sync (maintained on the LSP server thread)
     pub document_buffers: Mutex<HashMap<String, String>>,
     pub hover_table: DashMap<String, Infer>,
-    pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>>,
+    pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String>>>>>,
     /// Exported macros accumulated across all files (keyed by macro name)
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
     /// uri -> macro names the file exports, so `exported_macros` can be
@@ -394,7 +395,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// item, rendered as markdown — not inside the code block).
     pub fn hover_def_block(&self, def_span: &Span<()>) -> Option<String> {
         let cxt = self.cxt.lock().unwrap();
-        let mut best: Option<(&SmolStr, &std::sync::Arc<L13_namespace::Tm>)> = None;
+        let mut best: Option<(&SmolStr, &Rc<L13_namespace::Tm>)> = None;
         for (k, e) in cxt.decl.iter() {
             let s = &e.0;
             if s.path_id == def_span.path_id
@@ -888,7 +889,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 })
                 .collect();
             aliases.sort_by(|a, b| a.1.cmp(&b.1));
-            let decl_map = Arc::make_mut(&mut cxt.decl);
+            let decl_map = Rc::make_mut(&mut cxt.decl);
             for (short, _full_key, v) in aliases {
                 decl_map.entry(short).or_insert(v);
             }
@@ -908,58 +909,51 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         *self.cxt.lock().unwrap() = cxt;
     }
 
-    /// 启动工作线程处理分析任务。
-    /// 必须在 `load_prelude` 之后调用，确保 prelude 已就绪。
-    pub fn spawn_worker(self: &Arc<Self>) {
-        let rx = self.job_receiver.lock().unwrap().take()
-            .expect("spawn_worker() called more than once");
-        let for_thread = self.clone();
-        thread::spawn(move || {
-            for_thread.worker_loop(rx);
-        });
-    }
-
-    fn worker_loop(
-        &self,
-        rx: mpsc::Receiver<AnalysisJob>,
-    ) {
-        loop {
-            // Block until at least one job is available
-            let first_job = match rx.recv() {
-                Ok(job) => job,
-                Err(_) => break, // channel disconnected
-            };
-
-            // Drain all remaining queued jobs, keeping only the latest per URI.
-            // If user types faster than we can analyze, intermediate versions
-            // are skipped — only the most recent content of each file matters.
+    /// Process queued analysis jobs inline (latest-per-URI wins).
+    ///
+    /// Previously a dedicated worker thread drained this queue; running it
+    /// on the main-loop thread after every dispatched message is
+    /// equivalent: the coalescing window is the analysis itself (messages
+    /// arriving during an analysis are queued by the connection channel and
+    /// latest-wins-skipped on the next drain), and requests now always see
+    /// the state produced by every message dispatched before them.
+    /// `pending/processing/processed_signal` bookkeeping is kept so
+    /// `completion_at`'s wait (a no-op now that draining is synchronous)
+    /// still compiles unchanged.
+    pub fn drain_analysis_jobs(&self) {
+        // Drain all queued jobs, keeping only the latest per URI.
+        // If user types faster than we can analyze, intermediate versions
+        // are skipped — only the most recent content of each file matters.
+        let latest: Vec<AnalysisJob> = {
             let mut latest: HashMap<String, AnalysisJob> = HashMap::new();
-            latest.insert(first_job.uri.to_string(), first_job);
-            while let Ok(job) = rx.try_recv() {
-                latest.insert(job.uri.to_string(), job);
-            }
-
-            for (_uri, job) in latest {
-                let uri_str = job.uri.to_string();
-                self.pending_uris.remove(&uri_str);
-                {
-                    let (lock, _) = &*self.processed_signal;
-                    let mut processed = lock.lock().unwrap();
-                    processed.remove(&uri_str);
-                    drop(processed);
+            let rx = self.job_receiver.lock().unwrap();
+            if let Some(rx) = rx.as_ref() {
+                while let Ok(job) = rx.try_recv() {
+                    latest.insert(job.uri.to_string(), job);
                 }
-                self.processing_uris.insert(uri_str.clone(), true);
-
-                // 此时锁已释放，主线程可以放入新任务，我们在处理当前最新的任务
-                self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
-                self.process_file(&job.uri, &job.text, job.version);
-
-                self.processing_uris.remove(&uri_str);
-                let (lock, cvar) = &*self.processed_signal;
-                let mut processed = lock.lock().unwrap();
-                processed.insert(uri_str, true);
-                cvar.notify_all();
             }
+            latest.into_iter().map(|(_, job)| job).collect()
+        };
+
+        for job in latest {
+            let uri_str = job.uri.to_string();
+            self.pending_uris.remove(&uri_str);
+            {
+                let (lock, _) = &*self.processed_signal;
+                let mut processed = lock.lock().unwrap();
+                processed.remove(&uri_str);
+                drop(processed);
+            }
+            self.processing_uris.insert(uri_str.clone(), true);
+
+            self.client.log_message(MessageType::LOG, format!("Worker starting job for version {:?}", job.version));
+            self.process_file(&job.uri, &job.text, job.version);
+
+            self.processing_uris.remove(&uri_str);
+            let (lock, cvar) = &*self.processed_signal;
+            let mut processed = lock.lock().unwrap();
+            processed.insert(uri_str, true);
+            cvar.notify_all();
         }
     }
 
@@ -1102,7 +1096,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
                     diagnostic.data = Some(serde_json::Value::String(id.clone()));
 
-                    let mut code_actions: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = Vec::new();
+                    let mut code_actions: Vec<Box<dyn Fn() -> Option<String>>> = Vec::new();
                     for fix_fn in e.1.into_iter() {
                         let url = params.uri.clone();
                         code_actions.push(fix_fn);
@@ -1470,7 +1464,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // Local cxt = global copy minus this file's previous symbols.
             let mut local_cxt = cxt.clone();
             if let Some(keys) = self.file_symbols.get(&uri_str) {
-                let m = Arc::make_mut(&mut local_cxt.decl);
+                let m = Rc::make_mut(&mut local_cxt.decl);
                 for k in keys.value().clone() {
                     // Removing a prim-backed entry (a user shadow of a
                     // builtin name) restores the prelude prim on merge:
@@ -1487,7 +1481,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             if let Some(entry) = self.file_namespace_regs.get(&uri_str) {
                 let removed: std::collections::HashSet<usize> = entry.value().iter().map(|(p, _)| *p).collect();
                 let keep: Vec<_> = local_cxt.namespace.iter()
-                    .filter(|e| !removed.contains(&(std::sync::Arc::as_ptr(&e.0) as usize)))
+                    .filter(|e| !removed.contains(&(Rc::as_ptr(&e.0) as usize)))
                     .cloned()
                     .collect();
                 local_cxt.namespace = keep.iter().rev()
@@ -1560,7 +1554,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     .map(|r| r.value().iter().map(|(p, _)| *p).collect())
                     .unwrap_or_default();
                 let keep: Vec<_> = cxt.namespace.iter()
-                    .filter(|e| !old.contains(&(std::sync::Arc::as_ptr(&e.0) as usize)))
+                    .filter(|e| !old.contains(&(Rc::as_ptr(&e.0) as usize)))
                     .cloned()
                     .collect();
                 cxt.namespace = keep.iter().rev()
@@ -1568,10 +1562,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 let mut regs: Vec<(usize, SmolStr)> = Vec::new();
                 for entry in local_cxt.namespace.iter() {
                     let already = cxt.namespace.iter()
-                        .any(|e| std::sync::Arc::ptr_eq(&e.0, &entry.0));
+                        .any(|e| Rc::ptr_eq(&e.0, &entry.0));
                     if !already {
                         cxt.namespace = cxt.namespace.prepend(entry.clone());
-                        regs.push((std::sync::Arc::as_ptr(&entry.0) as usize, entry.2.clone()));
+                        regs.push((Rc::as_ptr(&entry.0) as usize, entry.2.clone()));
                     }
                 }
                 if regs.is_empty() {
@@ -1637,7 +1631,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         rope: &Rope,
         err_collect: Vec<(crate::L13_namespace::Error, DiagnosticSeverity)>,
         parse_errs: Vec<crate::L13_namespace::parser::IError>,
-    ) -> (Vec<Diagnostic>, HashMap<String, Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>>) {
+    ) -> (Vec<Diagnostic>, HashMap<String, Vec<Box<dyn Fn() -> Option<String>>>>) {
         let mut diags = Vec::new();
         let mut quickfixes_for_uri = HashMap::new();
         for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
@@ -1652,7 +1646,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
                 let id = NEXT_ID.fetch_add(1, Ordering::SeqCst).to_string();
                 diagnostic.data = Some(serde_json::Value::String(id.clone()));
-                let mut code_actions: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = Vec::new();
+                let mut code_actions: Vec<Box<dyn Fn() -> Option<String>>> = Vec::new();
                 for fix_fn in e.1.into_iter() {
                     code_actions.push(fix_fn);
                 }
@@ -1733,7 +1727,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut infer = self.infer.lock().unwrap();
             let mut cxt = self.cxt.lock().unwrap();
             if let Some(keys) = self.file_symbols.get(&uri_str) {
-                let m = Arc::make_mut(&mut cxt.decl);
+                let m = Rc::make_mut(&mut cxt.decl);
                 for k in keys.value().clone() {
                     if m.remove(k.as_str()).map_or(false, |e| e.5.is_some()) {
                         L13_namespace::prim_version_bump();
@@ -1745,7 +1739,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             if let Some((_, regs)) = self.file_namespace_regs.remove(&uri_str) {
                 let removed: std::collections::HashSet<usize> = regs.iter().map(|(p, _)| *p).collect();
                 let keep: Vec<_> = cxt.namespace.iter()
-                    .filter(|e| !removed.contains(&(std::sync::Arc::as_ptr(&e.0) as usize)))
+                    .filter(|e| !removed.contains(&(Rc::as_ptr(&e.0) as usize)))
                     .cloned()
                     .collect();
                 cxt.namespace = keep.iter().rev()
@@ -2342,6 +2336,13 @@ impl Backend<Client> {
                     if self.client.connection.handle_shutdown(&req)? {
                         return Ok(());
                     }
+                    // Requests must observe the state produced by every
+                    // notification dispatched before them: process any
+                    // pending analysis jobs first (the worker thread that
+                    // used to do this concurrently is gone; draining here
+                    // preserves the previous Mutex-blocking behavior with
+                    // a bound of one analysis per request).
+                    self.drain_analysis_jobs();
                     // Custom request: fetch prelude/builtin file content for virtual documents
                     if req.method == "typort-hdl/builtinContent" {
                         #[derive(Deserialize)]
@@ -2597,6 +2598,14 @@ impl Backend<Client> {
                     }
                 }
             }
+            // After a notification (did* handlers enqueue analysis jobs):
+            // when more messages are already waiting, defer processing so a
+            // typing burst coalesces to its latest version; otherwise run
+            // the pending analysis now so diagnostics track the last edit
+            // immediately.
+            if self.client.connection.receiver.is_empty() {
+                self.drain_analysis_jobs();
+            }
         }
         Ok(())
     }
@@ -2772,8 +2781,8 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
 
     // 在 init 握手完成后加载 prelude，避免 diagnostics 发送在握手之前
     backend.load_prelude();
-    // 然后启动工作线程处理用户文件
-    backend.spawn_worker();
+    // 分析任务由 main_loop 内联排水处理（原 worker 线程已合并，见
+    // `drain_analysis_jobs`），不再需要单独的工作线程。
 
     let main_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         backend.main_loop()

@@ -286,7 +286,7 @@ mod debug_test;
 #[cfg(test)]
 mod struct_refine_probe;
 
-type Rc<T> = std::sync::Arc<T>;
+type Rc<T> = std::rc::Rc<T>;
 
 // `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,
 // `force`); FxHash keys on the string bytes directly instead of SipHashing
@@ -953,14 +953,20 @@ pub fn tm_is_closed(tm: &Tm) -> bool {
 /// address — decl maps are persistent (`Rc<HashMap>`), so the pointer is a
 /// stable key.  Used by `quote`/`rename`/`unify` on `Val::Match` values.
 pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
-    static DECLB_CACHE: std::sync::Mutex<Option<(usize, Rc<Decl>)>> =
-        std::sync::Mutex::new(None);
+    thread_local! {
+        static DECLB_CACHE: std::cell::RefCell<Option<(usize, Rc<Decl>)>> =
+            const { std::cell::RefCell::new(None) };
+    }
     let key = decl as *const Decl as usize;
-    let mut guard = DECLB_CACHE.lock().unwrap();
-    if let Some((k, d)) = guard.as_ref() {
-        if *k == key {
-            return d.clone();
+    let cached = DECLB_CACHE.with(|c| {
+        let b = c.borrow();
+        match b.as_ref() {
+            Some((k, d)) if *k == key => Some(d.clone()),
+            _ => None,
         }
+    });
+    if let Some(d) = cached {
+        return d;
     }
     let d: Decl = decl
         .iter()
@@ -979,7 +985,7 @@ pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
         })
         .collect();
     let d = Rc::new(d);
-    *guard = Some((key, d.clone()));
+    DECLB_CACHE.with(|c| *c.borrow_mut() = Some((key, d.clone())));
     d
 }
 
@@ -1047,7 +1053,7 @@ pub(crate) fn is_operator_char(c: char) -> bool {
 
 pub struct Error(
     pub Span<String>,
-    pub Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>
+    pub Vec<Box<dyn Fn() -> Option<String>>>
 );
 
 impl std::fmt::Debug for Error {
@@ -2853,11 +2859,66 @@ struct PreludeState {
     global_macros: PreludeMacros,
 }
 
-static PRELUDE_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<PreludeState>>> =
-    std::sync::OnceLock::new();
-/// Cache of the prelude WITHOUT the hdl files, for `load_prelude_skip_hdl`.
-static PRELUDE_CACHE_NO_HDL: std::sync::OnceLock<std::sync::Mutex<Option<PreludeState>>> =
-    std::sync::OnceLock::new();
+thread_local! {
+    static PRELUDE_CACHE: PreludeSlot = PreludeSlot::new(&PRELUDE_POOL);
+    /// Cache of the prelude WITHOUT the hdl files, for `load_prelude_skip_hdl`.
+    static PRELUDE_CACHE_NO_HDL: PreludeSlot = PreludeSlot::new(&PRELUDE_POOL_NO_HDL);
+}
+
+/// A prelude state handed across thread boundaries by exclusive ownership.
+///
+/// SAFETY: the state's `Rc` graphs are `!Send` because their reference
+/// counts are non-atomic.  A pool entry is only ever touched by its owning
+/// thread: the dying thread pushes it while holding the last remaining
+/// references (the pool Mutex unlock/lock provides the happens-before
+/// edge), and the taking thread becomes the sole owner before any of its
+/// code can reach the graph.  No two threads ever mutate the same
+/// refcount concurrently, which is exactly the discipline `Send` requires
+/// of this wrapper.  The same argument covers the `RwLock`/`HashMap`
+/// reachable from the state: access is strictly sequential across the
+/// handoff.
+struct PoolState(PreludeState);
+// SAFETY: see the block comment above `PoolState` — the state crosses
+// threads only by exclusive-ownership handoff through the pool Mutex, so
+// no refcount (or RwLock) is ever touched by two threads concurrently.
+unsafe impl Send for PoolState {}
+
+type PreludePool = std::sync::Mutex<Vec<PoolState>>;
+
+static PRELUDE_POOL: PreludePool = std::sync::Mutex::new(Vec::new());
+static PRELUDE_POOL_NO_HDL: PreludePool = std::sync::Mutex::new(Vec::new());
+
+/// Thread-local prelude cache that recycles its state through a
+/// process-wide pool on thread exit.  The cache itself must be
+/// thread-local (the elaborated state is not `Sync`), but without
+/// recycling, workloads that spawn a thread per unit of work — the libtest
+/// harness runs every test on a fresh thread — would re-elaborate the
+/// whole prelude per test (~1.5s each).  With the pool, one elaboration
+/// per concurrently-alive thread is recycled across all of them.
+struct PreludeSlot {
+    cell: std::cell::RefCell<Option<PreludeState>>,
+    pool: &'static PreludePool,
+}
+
+impl PreludeSlot {
+    fn new(pool: &'static PreludePool) -> Self {
+        Self {
+            cell: std::cell::RefCell::new(pool.lock().unwrap().pop().map(|p| p.0)),
+            pool,
+        }
+    }
+}
+
+impl Drop for PreludeSlot {
+    fn drop(&mut self) {
+        if let Some(state) = self.cell.get_mut().take() {
+            let mut pool = self.pool.lock().unwrap();
+            if pool.len() < 64 {
+                pool.push(PoolState(state));
+            }
+        }
+    }
+}
 
 fn load_prelude_state() -> Result<PreludeState, Error> {
     load_prelude_state_impl(true)
@@ -3043,23 +3104,41 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
 pub fn clone_prelude_state(
     include_hdl: bool,
 ) -> Result<(Infer, Cxt, std::collections::HashMap<String, Vec<parser::macros::MacroRule>>), Error> {
-    let cache = if include_hdl {
-        PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None))
-    } else {
-        PRELUDE_CACHE_NO_HDL.get_or_init(|| std::sync::Mutex::new(None))
-    };
-    let mut guard = cache.lock().unwrap();
-    if guard.is_none() {
-        *guard = Some(load_prelude_state_impl(include_hdl)?);
+    fn cloned_state(
+        cache: &'static std::thread::LocalKey<PreludeSlot>,
+        include_hdl: bool,
+    ) -> Result<(Infer, Cxt, std::collections::HashMap<String, Vec<parser::macros::MacroRule>>), Error> {
+        let mut loaded: Option<Error> = None;
+        let out = cache.with(|c| {
+            let mut guard = c.cell.borrow_mut();
+            if guard.is_none() {
+                match load_prelude_state_impl(include_hdl) {
+                    Ok(state) => *guard = Some(state),
+                    Err(e) => { loaded = Some(e); return None; }
+                }
+            }
+            let state = guard.as_ref().unwrap();
+            Some((
+                state.infer.clone(),
+                state.cxt.clone(),
+                state.global_macros.clone(),
+            ))
+        });
+        match out {
+            Some(parts) => Ok(parts),
+            None => Err(loaded.take().expect("error must be set when output is None")),
+        }
     }
-    let state = guard.as_ref().unwrap();
+    let (mut infer, cxt, global_macros) = if include_hdl {
+        cloned_state(&PRELUDE_CACHE, include_hdl)?
+    } else {
+        cloned_state(&PRELUDE_CACHE_NO_HDL, include_hdl)?
+    };
     // Clone the cached elaborator state.  The mutable global map is
     // deep-copied so writes from one user never leak into another.
-    let mut infer = state.infer.clone();
-    infer.mutable_map = Rc::new(std::sync::RwLock::new(
-        state.infer.mutable_map.read().unwrap().clone(),
-    ));
-    Ok((infer, state.cxt.clone(), state.global_macros.clone()))
+    let mutable = infer.mutable_map.read().unwrap().clone();
+    infer.mutable_map = Rc::new(std::sync::RwLock::new(mutable));
+    Ok((infer, cxt, global_macros))
 }
 
 /// Drain accumulated HDL self-check issues (the mutable global

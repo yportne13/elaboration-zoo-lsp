@@ -1,6 +1,6 @@
 use smol_str::SmolStr;
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use crate::list::List;
 use super::syntax::Pruning;
@@ -29,7 +29,7 @@ fn paren(f: String) -> String {
 /// `f[x](y)` application syntax (same convention as `Sum`/`SumCase`, which
 /// also quote their args at the incoming `prec`).  A zero-width space keeps
 /// the `](` boundary from forming a markdown link.
-fn go_call(prec: i32, indent: usize, ns: &List<SmolStr>, name: &str, args: &List<(Arc<Tm>, Icit)>) -> String {
+fn go_call(prec: i32, indent: usize, ns: &List<SmolStr>, name: &str, args: &List<(Rc<Tm>, Icit)>) -> String {
     let impls: Vec<String> = args.iter()
         .filter(|(_, i)| *i == Icit::Impl)
         .map(|(a, _)| pretty_tm_indent(prec, indent, ns.clone(), a))
@@ -276,7 +276,7 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                 // different icities concatenate like the source form
                 // `def f[T](x: A)`, with a zero-width space at the `](`
                 // boundary to keep markdown links from forming.
-                let mut binders: Vec<(SmolStr, Icit, Arc<Tm>, List<SmolStr>)> = Vec::new();
+                let mut binders: Vec<(SmolStr, Icit, Rc<Tm>, List<SmolStr>)> = Vec::new();
                 let mut ns_cur = ns.clone();
                 let mut cur_name = name_span.clone();
                 let mut cur_i = *i;
@@ -487,7 +487,7 @@ mod tests {
     use crate::list::List;
     use crate::parser_lib::Span;
 
-    fn decl(name: &str) -> std::sync::Arc<Tm> {
+    fn decl(name: &str) -> Rc<Tm> {
         Tm::Decl(Span {
             data: SmolStr::new(name),
             start_offset: 0,
@@ -497,7 +497,7 @@ mod tests {
         .into()
     }
 
-    fn app(f: std::sync::Arc<Tm>, u: std::sync::Arc<Tm>) -> std::sync::Arc<Tm> {
+    fn app(f: Rc<Tm>, u: Rc<Tm>) -> Rc<Tm> {
         Tm::App(f, u, Icit::Expl).into()
     }
 
@@ -505,7 +505,7 @@ mod tests {
         pretty_tm(0, List::new(), tm)
     }
 
-    fn pi(name: &str, icit: Icit, a: Arc<Tm>, b: Arc<Tm>) -> Arc<Tm> {
+    fn pi(name: &str, icit: Icit, a: Rc<Tm>, b: Rc<Tm>) -> Rc<Tm> {
         Tm::Pi(
             Span { data: SmolStr::new(name), start_offset: 0, end_offset: 0, path_id: 0 },
             icit,
@@ -514,7 +514,7 @@ mod tests {
         ).into()
     }
 
-    fn lam(name: &str, icit: Icit, body: Arc<Tm>) -> Arc<Tm> {
+    fn lam(name: &str, icit: Icit, body: Rc<Tm>) -> Rc<Tm> {
         Tm::Lam(
             Span { data: SmolStr::new(name), start_offset: 0, end_offset: 0, path_id: 0 },
             icit,
@@ -691,7 +691,7 @@ mod tests {
     /// call carrying the operator symbol) renders in infix/prefix form.
     #[test]
     fn infix_recovery_for_opcall() {
-        fn opcall(symbol: &str, args: &[&str]) -> std::sync::Arc<Tm> {
+        fn opcall(symbol: &str, args: &[&str]) -> Rc<Tm> {
             let mut list = List::new();
             for arg in args.iter().rev() {
                 list = list.prepend((decl(arg), Icit::Expl));
@@ -716,7 +716,7 @@ mod tests {
     /// arguments grouped in square brackets, explicit arguments in parens.
     #[test]
     fn call_form_splits_implicit_and_explicit_args() {
-        fn call(args: &[(&str, Icit)]) -> std::sync::Arc<Tm> {
+        fn call(args: &[(&str, Icit)]) -> Rc<Tm> {
             let mut list = List::new();
             for (arg, icit) in args.iter().rev() {
                 list = list.prepend((decl(arg), *icit));

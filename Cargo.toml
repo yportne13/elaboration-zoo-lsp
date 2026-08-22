@@ -44,6 +44,13 @@ mem-profile = ["dep:dhat"]
 stdio-monitor = []
 sampler = ["dep:backtrace", "dep:inferno"]
 
+# The lib tests elaborate the prelude on every test thread (the prelude
+# cache is thread-local since the Arc->Rc migration).  Unoptimized debug
+# elaboration makes that cost dominate the suite; opt-level=1 (the
+# rust-analyzer approach) keeps the suite fast.
+[profile.test]
+opt-level = 2
+
 [profile.release]
 lto = true
 codegen-units = 1

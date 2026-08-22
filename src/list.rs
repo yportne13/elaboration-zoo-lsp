@@ -1,4 +1,4 @@
-use std::sync::Arc as Rc;
+use std::rc::Rc;
 use std::fmt::{Debug, Formatter};
 
 #[derive(Default, Clone)]

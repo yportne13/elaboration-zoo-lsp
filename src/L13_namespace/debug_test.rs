@@ -351,15 +351,19 @@ struct Point {
 }
 def f(p: Point): Nat = p.
 "#;
-    let cache0 = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
     let (mut infer0, mut cxt0, global_macros0) = {
-        let mut guard = cache0.lock().unwrap();
-        let state = guard.as_ref().unwrap();
-        let mut infer = state.infer.clone();
-        infer.mutable_map = Rc::new(std::sync::RwLock::new(
-            state.infer.mutable_map.read().unwrap().clone(),
-        ));
-        (infer, state.cxt.clone(), state.global_macros.clone())
+        PRELUDE_CACHE.with(|c: &super::PreludeSlot| {
+            let mut guard = c.cell.borrow_mut();
+            if guard.is_none() {
+                *guard = Some(load_prelude_state().unwrap());
+            }
+            let state = guard.as_ref().unwrap();
+            let mut infer = state.infer.clone();
+            infer.mutable_map = Rc::new(std::sync::RwLock::new(
+                state.infer.mutable_map.read().unwrap().clone(),
+            ));
+            (infer, state.cxt.clone(), state.global_macros.clone())
+        })
     };
     let ast0 = parser::parser_with_macros(&preprocess(empty_state), 24, &global_macros0)
         .map(|(d, e, _, _)| (d, e)).unwrap();
@@ -382,15 +386,19 @@ struct Point {
 }
 def f(p: Point): Nat = p.z
 "#;
-    let cache = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
     let (mut infer2, mut cxt2, global_macros) = {
-        let mut guard = cache.lock().unwrap();
-        let state = guard.as_ref().unwrap();
-        let mut infer = state.infer.clone();
-        infer.mutable_map = Rc::new(std::sync::RwLock::new(
-            state.infer.mutable_map.read().unwrap().clone(),
-        ));
-        (infer, state.cxt.clone(), state.global_macros.clone())
+        PRELUDE_CACHE.with(|c: &super::PreludeSlot| {
+            let mut guard = c.cell.borrow_mut();
+            if guard.is_none() {
+                *guard = Some(load_prelude_state().unwrap());
+            }
+            let state = guard.as_ref().unwrap();
+            let mut infer = state.infer.clone();
+            infer.mutable_map = Rc::new(std::sync::RwLock::new(
+                state.infer.mutable_map.read().unwrap().clone(),
+            ));
+            (infer, state.cxt.clone(), state.global_macros.clone())
+        })
     };
     let ast2 = parser::parser_with_macros(&preprocess(typed_state), 24, &global_macros)
         .map(|(d, e, _, _)| (d, e)).unwrap();
@@ -408,18 +416,19 @@ def f(p: Point): Nat = p.z
 /// Elaborate `input` (after the prelude) and return the Infer with its
 /// populated hover_table.
 fn elaborate_infer(input: &str) -> Infer {
-    let cache = PRELUDE_CACHE.get_or_init(|| std::sync::Mutex::new(None));
     let (mut infer, mut cxt, global_macros) = {
-        let mut guard = cache.lock().unwrap();
-        if guard.is_none() {
-            *guard = Some(load_prelude_state().unwrap());
-        }
-        let state = guard.as_ref().unwrap();
-        let mut infer = state.infer.clone();
-        infer.mutable_map = Rc::new(std::sync::RwLock::new(
-            state.infer.mutable_map.read().unwrap().clone(),
-        ));
-        (infer, state.cxt.clone(), state.global_macros.clone())
+        PRELUDE_CACHE.with(|c: &super::PreludeSlot| {
+            let mut guard = c.cell.borrow_mut();
+            if guard.is_none() {
+                *guard = Some(load_prelude_state().unwrap());
+            }
+            let state = guard.as_ref().unwrap();
+            let mut infer = state.infer.clone();
+            infer.mutable_map = Rc::new(std::sync::RwLock::new(
+                state.infer.mutable_map.read().unwrap().clone(),
+            ));
+            (infer, state.cxt.clone(), state.global_macros.clone())
+        })
     };
     let ast = parser::parser_with_macros(&preprocess(input), 24, &global_macros)
         .map(|(d, e, _, _)| (d, e)).unwrap();

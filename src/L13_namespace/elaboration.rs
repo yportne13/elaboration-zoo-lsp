@@ -2133,11 +2133,11 @@ impl Infer {
                         } else if matches.len() > 1 {
                             let names = matches.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>().join(", ");
                             // L1: offer an import fix per candidate to disambiguate.
-                            let fixes: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = matches.iter()
+                            let fixes: Vec<Box<dyn Fn() -> Option<String>>> = matches.iter()
                                 .map(|(k, _)| {
                                     let full = k.clone();
                                     Box::new(move || Some(format!("add `import {}`", full)))
-                                        as Box<dyn Fn() -> Option<String> + Send + Sync>
+                                        as Box<dyn Fn() -> Option<String>>
                                 })
                                 .collect();
                             return Err(Error(name.map(|x| format!("ambiguous name `{}`: could refer to {}", x, names)), fixes));
@@ -2145,7 +2145,7 @@ impl Infer {
                         // L1: when a unique `TypeName.name` exists in the global
                         // decl, suggest an import to bring it into scope (mirrors
                         // the suffix fallback, excluding instance methods).
-                        let fixes: Vec<Box<dyn Fn() -> Option<String> + Send + Sync>> = {
+                        let fixes: Vec<Box<dyn Fn() -> Option<String>>> = {
                             let fallback = format!(".{}", name.data);
                             let ns_method_keys: std::collections::HashSet<SmolStr> = cxt.namespace.iter()
                                 .flat_map(|ns| ns.1.iter().map(move |m| SmolStr::new(format!("{}.{}", ns.2, m))))

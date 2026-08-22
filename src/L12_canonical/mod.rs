@@ -322,7 +322,7 @@ fn empty_span<T>(data: T) -> Span<T> {
 
 pub struct Error(
     pub Span<String>,
-    pub Vec<Box<dyn Fn() -> Option<String> + Send + Sync>>
+    pub Vec<Box<dyn Fn() -> Option<String>>>
 );
 
 impl std::fmt::Debug for Error {

@@ -963,3 +963,68 @@ Let 1.24M。Lam 构造 4.9M 次与闭包应用量自洽（v_app 283 万）。语
   做取决于是否接受 LSP actor 化的工作量。
 - LSP 用户侧增量 elaboration（老项）：probe 141-479ms/键击仍是
   输入延迟上限，与 round 16 结论相同。
+
+---
+
+## 19. 第十八轮（2026-08-23）—— `rc::Rc` 落地：worker 线程合并 + prelude 池，prelude 3.34 → 3.01s，全套件 84 → 31s
+
+> 承接 round 17 §18.3 的 +12% 实测数据。原以为需要"LSP actor 化"，
+> 实际发现更小的路径：**去掉 worker 线程而非路由请求**。
+
+### 19.1 Phase A：worker 线程合并进 main_loop（语义等价）
+
+- 原 worker 只做一件事：didChange 任务队列的 latest-wins 去抖。
+  关键认识：**去抖窗口 = 分析时长本身**——单线程下，分析期间到达的
+  didChange 会堆积在 connection channel 里，下一次排水自然
+  latest-wins 跳过中间版本，与 worker 行为等价。
+- 实现（lib.rs）：`drain_analysis_jobs()`（原 worker_loop 主体）在
+  (a) 每条 Request 处理前排水（请求总看到新状态，等价于原来
+  Mutex 阻塞至多一个分析的时延），(b) 每条 Notification 处理后、
+  且 `receiver.is_empty()` 时排水（空闲即分析，连击即合并）。
+  `spawn_worker`/`thread::spawn(Arc<Backend>)` 删除。
+- 语义差异：无（hover/completion 等所有集成套件同名结果）。
+
+### 19.2 Phase B：`Arc` → `rc::Rc`
+
+- `type Rc<T>` 与 list.rs 别名换 `std::rc::Rc`。Phase A 之后
+  `Infer` 不再跨线程，Send/Sync 约束只剩声明处强制的三个点：
+  `PRELUDE_CACHE`×2 / `DECLB_CACHE` 转 thread_local；
+  L13+L12 `Error` thunk 去 Send+Sync；lib.rs 五处显式
+  `std::sync::Arc` 注释/调用改 Rc。`Mutex<Infer>`/`DashMap<String, Infer>`
+  等**声明不要求 Send**，全部保持原样（DashMap 方法无静态 Send 约束）。
+- **交错 A/B（vs round 17）**：prelude 3.34 → **3.01s（+11%）**；
+  adder_proof 0.68 → 0.34s（会话累计 2×）。
+  会话总计（round 16 基线 5.90s）：**1.96×**。
+
+### 19.3 测试套件的坑与 prelude 池
+
+- thread_local 缓存 × libtest"每测试一线程"= **223 次独立 prelude
+  elaboration**（每次 ~1.5s），全套件 84s → 1075s（不可接受）。
+  `--test-threads=1` 更糟（24 分钟，测试本质并行）。
+- `[profile.test] opt-level = 2`（rust-analyzer 同款）把单次加载压到
+  ~1.5s、probe_timing 41→10s，但 223 次仍要 324s。
+- **解：prelude 池**——TLS 析构时把整份 prelude 状态推回进程级
+  `Mutex<Vec<PoolState>>`，新线程的 TLS 初始化直接从池里弹出。
+  每并发线程一次 elaboration 被全部后续线程复用。
+  `PoolState` 的 `unsafe impl Send` 有严格论证：状态仅以独占所有权
+  经 Mutex 手递手跨线程（happens-before 由锁保证），任何引用计数/
+  RwLock 从不被两个线程并发触碰——正是 Send 所要求的纪律。
+- 结果：全套件 **31.3s**（比 round 17 之前的 84s 还快 2.7×：
+  opt-level=2 + ~12 次加载）。
+
+### 19.4 验证与最终数字
+
+- 27 示例完整输出逐字节一致；lib 401 过/49 败失败集与基线逐名相同；
+  集成 11 套件除 hover 1 + completion 2（HEAD 存量）全过；
+  lsp_stdio 端到端 4 测全过（单线程 main_loop 语义无回归）。
+- prelude 5.90 → **3.01s**（1.96×，两轮合计）；用户文件 probe
+  176-597 → **135-453ms**；adder_proof 0.68 → **0.34s**；
+  峰值内存 356MB 持平；probe-out.txt 已重采。
+
+### 19.5 遗留
+
+- LSP 用户侧增量 elaboration（老项）：probe 135-453ms/键击仍是
+  输入延迟上限。
+- FORCE_MEMO / DECLB_CACHE 仍为 thread_local（单线程下即进程级）；
+  若未来 LSP 恢复多线程 elaboration，prelude 池的 Send 论证需要
+  重新审视。

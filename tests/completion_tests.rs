@@ -61,7 +61,7 @@ fn elaborate_with_prelude(input: &str) -> (Infer, String) {
             (short, v.clone())
         })
         .collect();
-    let decl_map = std::sync::Arc::make_mut(&mut cxt.decl);
+    let decl_map = std::rc::Rc::make_mut(&mut cxt.decl);
     for (short, v) in prelude_aliases {
         decl_map.entry(short).or_insert(v);
     }
