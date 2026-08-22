@@ -103,6 +103,27 @@ pub(crate) fn is_nat_sum(v: &Val) -> bool {
     matches!(v, Val::Sum(name, _, _, false) if name.data == "Nat")
 }
 
+/// Display-only operator symbol for the prelude Nat arithmetic primops.
+/// These are prim-backed (not inlined defs), so `quote` renders a stuck
+/// application as `App(App(Decl("nat_add"), x), y)` — the pretty layer
+/// restores the infix operator (mirrors the operator-char recovery, which
+/// only fires for operator-named heads).  Also used as a name pre-filter
+/// for the prim-backed `Val::Call` branch in `force`: only defs that
+/// `register_nat_builtins` *overwrote* can appear there, so checking the
+/// five names first keeps the common Call force free of the decl-table
+/// hash lookup.  If a future prim replaces another body-carrying def, add
+/// its name here.
+pub(crate) fn nat_primop_symbol(name: &str) -> Option<&'static str> {
+    match name {
+        "nat_add" => Some("+"),
+        "nat_mul" => Some("*"),
+        "nat_sub" => Some("-"),
+        "nat_div" => Some("/"),
+        "nat_rem" => Some("%"),
+        _ => None,
+    }
+}
+
 /// If a `Tm::SumCase` step (with `typ` already evaluated to `v`) is a fully
 /// concrete `Nat` constructor, return its native value: `zero` -> 0 and
 /// `succ (Nat k)` -> k+1.  Anything else (a different sum type, a partially
@@ -1808,7 +1829,13 @@ impl Infer {
                 // unify.  When the call's name is now prim-backed, re-apply the
                 // args through `v_app` so the value normalizes to the same
                 // `Val::Decl`/concrete form the prim produces.
-                if let Some((_, _, _, _, _, Some(_prim_fn))) = decl.get(name) {
+                // The name pre-filter avoids the decl-table hash lookup on
+                // every Call force (the hottest value shape after Sum); the
+                // decl-table check below stays authoritative, so a later user
+                // redefinition of the name as a plain def disables the branch.
+                if nat_primop_symbol(name).is_some()
+                    && decl.get(name).map_or(false, |e| e.5.is_some())
+                {
                     let mut acc: Rc<Val> = Val::Decl(empty_span(name.clone()), List::new()).into();
                     for (a, i) in args.iter() {
                         acc = self.v_app(decl, &acc, a.clone(), *i);

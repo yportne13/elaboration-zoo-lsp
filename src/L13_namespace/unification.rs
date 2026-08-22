@@ -14,21 +14,18 @@ use super::{
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-/// True when re-evaluating a stuck `Val::Decl` made no progress: the result
-/// is the same name applied to the exact same argument `Rc`s.  This is the
-/// signature of a *prim* application whose prim returned `None` (a def
-/// application unfolds to a `Val::Call`/`Val::Match`, which is progress).
-/// A non-progressing re-eval must not be retried until `fuel` runs out — the
-/// `(Val::Decl(..), _)` / `(_, Val::Decl(..))` unify arms use this to treat
-/// such a value as an opaque leaf (unifiable with an equal Decl or solvable
-/// against a Flex, never by unfolding).
-fn decl_reeval_no_progress(a: &Val, b: &Val) -> bool {
-    match (a, b) {
-        (Val::Decl(x1, sp1), Val::Decl(x2, sp2)) if x1.data == x2.data => {
-            sp1.len() == sp2.len()
-                && sp1.iter().zip(sp2.iter())
-                    .all(|((v1, i1), (v2, i2))| i1 == i2 && Rc::ptr_eq(v1, v2))
-        }
+/// True when `v` is an application of a *prim-backed* declaration.  Such a
+/// value only reaches the re-eval branches below after `unify`'s entry
+/// `force` already re-ran the prim (force's `Val::Decl` arm retries it) and
+/// got `None`; a quote→eval round trip merely re-applies the same prim to
+/// semantically identical arguments, so re-evaluating can never make
+/// progress.  Checking the decl table directly (instead of comparing the
+/// re-evaled value for `Rc` identity, which breaks whenever eval rebuilds an
+/// argument — e.g. any concrete `Nat`) lets the arms treat these as opaque
+/// leaves without paying the quote+eval or burning fuel.
+fn is_prim_application(decl: &Decl, v: &Val) -> bool {
+    match v {
+        Val::Decl(x, _) => decl.get(&x.data).map_or(false, |e| e.5.is_some()),
         _ => false,
     }
 }
@@ -862,6 +859,33 @@ impl Infer {
             Some(_) => Ok(()),
         }
     }
+    /// Solve the (unsolved) meta `m` with spine `sp` against `other`, the
+    /// non-Flex side of the unification `t = u`.  Shared by the generic Flex
+    /// arms and the stuck-prim `Val::Decl` arms below — the latter must
+    /// intercept before their re-eval path because a None-returning prim
+    /// never unfolds, so the Flex arms would otherwise only be reached after
+    /// burning all the fuel.
+    fn solve_flex_side(
+        &mut self,
+        l: Lvl,
+        cxt: &Cxt,
+        t: &Rc<Val>,
+        u: &Rc<Val>,
+        m: MetaVar,
+        sp: Spine,
+        other: &Rc<Val>,
+    ) -> Result<(), UnifyError> {
+        match self.solve(l, &cxt.decl, m, sp, other) {
+            Ok(()) => Ok(()),
+            Err(UnifyError::Stuck) => {
+                self.meta_contrains.push((t.clone(), u.clone()));
+                Ok(())
+            },
+            Err(e) => Err(e),
+        }?;
+        self.solve_multi_trait(cxt, m, false)
+    }
+
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>, fuel: u32) -> Result<(), UnifyError> {
         let _g = super::prof_enter(&super::FUNC_PROF.unify.0, &super::FUNC_PROF.unify.1);
         //println!("unify: {t:?} {u:?}");
@@ -933,56 +957,35 @@ impl Infer {
                 // None-returning prim only rebuilds the same stuck Decl and
                 // would spin to fuel exhaustion).
                 if let Val::Flex(m, sp) = u.as_ref() {
-                    match self.solve(l, &cxt.decl, *m, sp.clone(), &t) {
-                        Ok(()) => Ok(()),
-                        Err(UnifyError::Stuck) => {
-                            self.meta_contrains.push((t.clone(), u.clone()));
-                            Ok(())
-                        },
-                        Err(e) => Err(e),
-                    }?;
-                    return self.solve_multi_trait(cxt, *m, false);
+                    return self.solve_flex_side(l, cxt, &t, &u, *m, sp.clone(), &t);
+                }
+                // Prim-backed applications never unfold on re-eval (see
+                // `is_prim_application`): treat as an opaque leaf instead of
+                // quote→eval-ing down to fuel 0.
+                if is_prim_application(&cxt.decl, t.as_ref()) {
+                    return Err(UnifyError::Basic);
                 }
                 if fuel == 0 {
                     Err(UnifyError::Basic)
                 } else {
                     let t2 = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t));
-                    if decl_reeval_no_progress(t2.as_ref(), t.as_ref()) {
-                        // Stuck *prim* application: re-evaluating the decl
-                        // cannot reduce it (the prim returned None), so the
-                        // old re-eval-till-fuel-0 path would spin.  Treat the
-                        // value as an opaque leaf (unifiable with an equal
-                        // Decl via the earlier same-name arm, never by
-                        // unfolding).
-                        Err(UnifyError::Basic)
-                    } else {
-                        self.unify(l, cxt, &t2, &u, fuel - 1)
-                    }
+                    self.unify(l, cxt, &t2, &u, fuel - 1)
                 }
             }
             (_, Val::Decl(..)) => {
                 // Symmetric to the arm above: stuck prim application as a
                 // leaf, solve a Flex on the other side directly.
                 if let Val::Flex(m, sp) = t.as_ref() {
-                    match self.solve(l, &cxt.decl, *m, sp.clone(), &u) {
-                        Ok(()) => Ok(()),
-                        Err(UnifyError::Stuck) => {
-                            self.meta_contrains.push((t.clone(), u.clone()));
-                            Ok(())
-                        },
-                        Err(e) => Err(e),
-                    }?;
-                    return self.solve_multi_trait(cxt, *m, false);
+                    return self.solve_flex_side(l, cxt, &u, &t, *m, sp.clone(), &u);
+                }
+                if is_prim_application(&cxt.decl, u.as_ref()) {
+                    return Err(UnifyError::Basic);
                 }
                 if fuel == 0 {
                     Err(UnifyError::Basic)
                 } else {
                     let u2 = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u));
-                    if decl_reeval_no_progress(u2.as_ref(), u.as_ref()) {
-                        Err(UnifyError::Basic)
-                    } else {
-                        self.unify(l, cxt, &t, &u2, fuel - 1)
-                    }
+                    self.unify(l, cxt, &t, &u2, fuel - 1)
                 }
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
@@ -1015,26 +1018,10 @@ impl Infer {
                 fuel,
             ),
             (Val::Flex(m, sp), _) => {
-                match self.solve(l, &cxt.decl, *m, sp.clone(), &u) {
-                    Ok(()) => Ok(()),
-                    Err(UnifyError::Stuck) => {
-                        self.meta_contrains.push((t.clone(), u.clone()));
-                        Ok(())
-                    },
-                    Err(e) => Err(e),
-                }?;
-                self.solve_multi_trait(cxt, *m, false)
+                self.solve_flex_side(l, cxt, &t, &u, *m, sp.clone(), &u)
             },
             (_, Val::Flex(m, sp)) => {
-                match self.solve(l, &cxt.decl, *m, sp.clone(), &t) {
-                    Ok(()) => Ok(()),
-                    Err(UnifyError::Stuck) => {
-                        self.meta_contrains.push((t.clone(), u.clone()));
-                        Ok(())
-                    },
-                    Err(e) => Err(e),
-                }?;
-                self.solve_multi_trait(cxt, *m, false)
+                self.solve_flex_side(l, cxt, &t, &u, *m, sp.clone(), &t)
             },
             (Val::LiteralType, Val::LiteralType) => Ok(()),
             (Val::LiteralIntro(a), Val::LiteralIntro(b)) if a.data == b.data => Ok(()),

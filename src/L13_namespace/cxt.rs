@@ -18,8 +18,11 @@ pub(super) fn count_nat_forced(infer: &Infer, decl: &Decl, val: &Rc<Val>) -> u64
         match current.as_ref() {
             // Native Nat: the whole concrete value in one u64 (Lean/Agda
             // native representation).  `succ (stuck)` chains still walk
-            // below and keep the legacy behaviour (return 0 on a stuck tail).
-            Val::Nat(k) => return *k,
+            // below and keep the legacy behaviour (return 0 on a stuck
+            // tail).  A mixed `succ^c (Nat k)` tail (only buildable via
+            // nat_add's overflow fallback) totals c + k, so the walked
+            // count must be added, not dropped.
+            Val::Nat(k) => return count.checked_add(*k).unwrap_or(0),
             Val::SumCase { index: 0, .. } => return count,
             Val::SumCase { index: 1, datas, .. } => {
                 match datas.first() {

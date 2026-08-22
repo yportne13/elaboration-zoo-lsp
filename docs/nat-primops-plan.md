@@ -203,3 +203,29 @@ fn nat_succ_shape(decl: &Decl, inner: Rc<Val>) -> Option<Rc<Val>> {
 - u64 溢出策略:一律 None 回落卡住,不 panic、不回绕(与 nat_step_value 的
   checked_add 一致)。
 - div/rem 保持“仅具体值 fast path”,无部分展开(与初版一致)。
+
+## 7. 复查后续完善(2026-08-22)
+
+落地后复查发现并修复四处(行为不变, 健壮性/性能改善):
+
+- **unifier 卡住 prim 判定改为查 decl 表**: 原实现 `decl_reeval_no_progress`
+  用 `Rc::ptr_eq` 对比 re-eval 前后参数, 但 quote→eval 会重建参数 Rc(尤其
+  具体 `Nat` 参数), 判定失配时退化为烧 fuel 直到耗尽。由于 `unify` 入口
+  本来就先 force(force 的 Decl 分支已重试 prim 并得 None), 对 prim-backed
+  的 Decl 直接查 decl 表第 6 位即可判定“re-eval 永无进展”, 连 quote/eval
+  都省了。函数更名 `is_prim_application`。
+- **`count_nat_forced` 混合链计数**: `succ^c (Nat k)` 形态(仅 nat_add 溢出
+  回落可构造)原先走到 `Val::Nat(k)` 分支返回 `k`、丢掉走过的 `c`; 现为
+  `count.checked_add(k)`, 溢出保持返回 0 的约定。
+- **force 的 `Val::Call` 分支加名字预过滤**: `force` 是最热路径, 原先每次
+  Call force 都做 decl 表哈希查询。先用 `nat_primop_symbol`(提升到 mod.rs
+  共享, pretty 同用)匹配五个名字, 再查 decl 表做权威判定(用户后续把
+  `nat_add` 重定义为普通 def 时分支自动失效)。
+- **去重**: unification.rs 四处相同的 solve/Stuck/meta_contrains/multi_trait
+  逻辑抽成 `solve_flex_side`; pretty.rs 两处重复的符号恢复闭包抽成
+  `head_symbol`。
+
+新增测试 `nat_primop_stuck_reducibility`: `a + 2` 的 `y≡Nat(k)` 展开、
+`x * 0`、`(succ a) - 0`、`0 - m` 无条件分支、`a + b` 同名卡住统一; 负例
+`2 + a` 与 `a - 0`(rigid 操作数必须卡住, rfl 拒绝)。注意 `-` 比函数应用
+绑定更紧, `succ a - 0` 解析为 `succ (a - 0)`。

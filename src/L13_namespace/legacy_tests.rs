@@ -4994,4 +4994,42 @@ def mul_succ_test(x: Nat, n: Nat): Eq (x * (succ n)) (x + (x * n)) = rfl
     }
 }
 
+/// Further primop reducibility coverage beyond
+/// `nat_primop_keeps_defeq_proofs`: the `y ≡ Nat(k)` unfold arm (`a + 2`
+/// must build `succ (succ a)`), the unconditional `x * 0 = 0` and
+/// `0 - m = 0` branches, and `succ a - 0 = succ a` (sub inspects x first).
+/// The negative cases pin the *stuck* shapes of the old recursive defs:
+/// `2 + a` (add matches on y) and `a - 0` with rigid a (sub matches on x,
+/// so it must NOT reduce to a) stay stuck, and `rfl` must be rejected.
+#[test]
+fn nat_primop_stuck_reducibility() {
+    let ok_cases = [
+        "def t1(a: Nat): Eq (a + 2) (succ (succ a)) = rfl",
+        "def t2(x: Nat): Eq (x * 0) 0 = rfl",
+        // NB: `-` binds tighter than application, so the LHS needs the
+        // explicit parens (`succ a - 0` would parse as `succ (a - 0)`).
+        "def t3(a: Nat): Eq ((succ a) - 0) (succ a) = rfl",
+        "def t4(m: Nat): Eq (0 - m) 0 = rfl",
+        "def t5(a: Nat, b: Nat): Eq (a + b) (a + b) = rfl",
+    ];
+    for input in ok_cases {
+        match run_with_prelude(input) {
+            Ok(_) => {},
+            Err(e) => panic!("expected OK for {input:?}, got: '{}'", e.0.data),
+        }
+    }
+    let stuck_cases = [
+        "def b1(a: Nat): Eq (2 + a) (succ (succ a)) = rfl",
+        "def b2(a: Nat): Eq (a - 0) a = rfl",
+    ];
+    for input in stuck_cases {
+        match run_with_prelude(input) {
+            Ok(_) => panic!(
+                "expected error for {input:?}: arithmetic on a rigid operand must stay stuck"
+            ),
+            Err(_) => {},
+        }
+    }
+}
+
 
