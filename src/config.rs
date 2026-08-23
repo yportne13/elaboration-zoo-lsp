@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::sim::Simulator;
+
 pub const CONFIG_FILE: &str = "Typort.toml";
 
 #[derive(Debug)]
@@ -81,10 +83,9 @@ fn default_target() -> String {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Test {
-    /// Only "verilator" is supported today; the field exists so projects
-    /// can state it and future simulators slot in.
+    /// Simulation backend: verilator (default), icarus, vcs, vivado.
     #[serde(default = "default_simulator")]
-    pub simulator: String,
+    pub simulator: Simulator,
     /// Compile the model with VCD tracing.
     #[serde(default)]
     pub trace: bool,
@@ -102,8 +103,8 @@ impl Default for Test {
     }
 }
 
-fn default_simulator() -> String {
-    "verilator".to_string()
+fn default_simulator() -> Simulator {
+    Simulator::Verilator
 }
 
 #[derive(Debug, Default, Deserialize)]

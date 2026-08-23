@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use elaboration_zoo_lsp::sim::{find_verilator, Dut, SimConfig};
+use elaboration_zoo_lsp::sim::{find_iverilog, find_verilator, Dut, SimConfig, Simulator};
 
 fn example_path(name: &str) -> PathBuf {
     PathBuf::from(format!("{}/examples/hdl/{name}", env!("CARGO_MANIFEST_DIR")))
@@ -79,6 +79,7 @@ fn compile_and_drive_hierarchy_model() {
         top: "topWithPorts".to_string(),
         sources: vec![example_path("09-hierarchy.typort")],
         workdir: workdir("hierarchy"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -106,6 +107,7 @@ fn compile_param_top_bakes_width() {
         top: "basicDecls[8]".to_string(),
         sources: vec![example_path("01-basics.typort")],
         workdir: workdir("param"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -132,6 +134,7 @@ fn dut_validates_ports_and_widths() {
         top: "topWithPorts".to_string(),
         sources: vec![example_path("09-hierarchy.typort")],
         workdir: workdir("dut-validate"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -168,6 +171,7 @@ fn dut_counter_with_reset_sequence() {
         top: "counterOut".to_string(),
         sources: vec![example_path("15-output-reg.typort")],
         workdir: workdir("counter"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -214,6 +218,7 @@ fn dut_flag_toggles_manual_clock() {
         top: "counterOut".to_string(),
         sources: vec![example_path("15-output-reg.typort")],
         workdir: workdir("flag"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -250,6 +255,7 @@ fn dut_golden_reverse() {
         top: "vReverse".to_string(),
         sources: vec![case_path("v_utils_combinational.typort")],
         workdir: workdir("golden-reverse"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -276,6 +282,7 @@ fn dut_golden_popcount() {
         top: "vCountOne".to_string(),
         sources: vec![case_path("v_utils_combinational.typort")],
         workdir: workdir("golden-popcount"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: false,
     };
@@ -300,6 +307,7 @@ fn dut_wave_trace_produces_vcd() {
         top: "counterOut".to_string(),
         sources: vec![example_path("15-output-reg.typort")],
         workdir: workdir("trace"),
+        simulator: Simulator::Verilator,
         verilator_args: vec![],
         trace: true,
     };
@@ -315,4 +323,164 @@ fn dut_wave_trace_produces_vcd() {
     let text = std::fs::read_to_string(&wave).unwrap();
     assert!(text.contains("$enddefinitions"), "not a VCD file");
     assert!(text.contains("clk"), "clock signal missing from trace");
+}
+
+// ---------------------------------------------------------------------------
+// Icarus Verilog backend — same design, same Dut API, different simulator.
+// The golden vectors match the verilator runs above, cross-checking both
+// the backend and the emitted Verilog itself.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn icarus_compiles_and_drives_hierarchy_model() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let cfg = SimConfig {
+        top: "topWithPorts".to_string(),
+        sources: vec![example_path("09-hierarchy.typort")],
+        workdir: workdir("icarus-hierarchy"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    assert_eq!(
+        dut.set("a", 3).unwrap().set("b", 5).unwrap().set("en", 1).unwrap().eval().unwrap().get("sum").unwrap(),
+        8
+    );
+    dut.finish().unwrap();
+}
+
+#[test]
+fn icarus_golden_popcount_cross_checks_verilator() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let cfg = SimConfig {
+        top: "vCountOne".to_string(),
+        sources: vec![case_path("v_utils_combinational.typort")],
+        workdir: workdir("icarus-popcount"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    for a in [0u64, 1, 3, 0x0f, 0x81, 0xff, 0x55, 0xa7] {
+        let want = a.count_ones() as u64;
+        dut.set("a", a).unwrap().eval().unwrap();
+        assert_eq!(dut.get("c").unwrap(), want, "icarus popcount({a:#04x})");
+    }
+    dut.finish().unwrap();
+}
+
+/// Sequential design through the event-driven harness: manual clocking via
+/// the same set/eval protocol (the #1 inside the harness's eval/get settles
+/// nonblocking assignments before the response).
+#[test]
+fn icarus_counter_manual_clock() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let cfg = SimConfig {
+        top: "counterOut".to_string(),
+        sources: vec![example_path("15-output-reg.typort")],
+        workdir: workdir("icarus-counter"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    // async reset holds the count, then release and count 5 enabled edges
+    dut.set("reset", 1).unwrap().set("en", 1).unwrap().set("clk", 0).unwrap().eval().unwrap();
+    for _ in 0..2 {
+        dut.set("clk", 1).unwrap().eval().unwrap();
+        dut.set("clk", 0).unwrap().eval().unwrap();
+    }
+    assert_eq!(dut.get("count").unwrap(), 0, "count held under async reset (icarus)");
+    dut.set("reset", 0).unwrap();
+    for _ in 0..5 {
+        dut.set("clk", 1).unwrap().eval().unwrap();
+        dut.set("clk", 0).unwrap().eval().unwrap();
+    }
+    assert_eq!(dut.get("count").unwrap(), 5);
+    dut.finish().unwrap();
+}
+
+/// VCD via $dumpvars in the generated Verilog harness.
+#[test]
+fn icarus_wave_trace_produces_vcd() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let cfg = SimConfig {
+        top: "counterOut".to_string(),
+        sources: vec![example_path("15-output-reg.typort")],
+        workdir: workdir("icarus-trace"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: true,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    dut.set("en", 1).unwrap();
+    for _ in 0..3 {
+        dut.set("clk", 1).unwrap().eval().unwrap();
+        dut.set("clk", 0).unwrap().eval().unwrap();
+    }
+    dut.finish().unwrap();
+    let wave = model.workdir.join("wave.vcd");
+    assert!(wave.is_file(), "no wave.vcd at {}", wave.display());
+    let text = std::fs::read_to_string(&wave).unwrap();
+    assert!(text.contains("$enddefinitions"), "not a VCD file");
+    assert!(text.contains("clk"), "clock missing from trace");
+}
+
+// ---------------------------------------------------------------------------
+// VCS / Vivado backends — command shapes follow veryl's runners; both are
+// UNTESTED here (no license/install on this machine) and skip when the
+// tools are missing. Same Dut API and golden vector as the other backends.
+// ---------------------------------------------------------------------------
+
+fn untested_backend_golden(sim: Simulator, tag: &str) {
+    let cfg = SimConfig {
+        top: "topWithPorts".to_string(),
+        sources: vec![example_path("09-hierarchy.typort")],
+        workdir: workdir(tag),
+        simulator: sim,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    assert_eq!(
+        dut.set("a", 3).unwrap().set("b", 5).unwrap().set("en", 1).unwrap().eval().unwrap().get("sum").unwrap(),
+        8
+    );
+    dut.finish().unwrap();
+}
+
+#[test]
+fn vcs_backend_smoke() {
+    if elaboration_zoo_lsp::sim::find_vcs().is_none() {
+        eprintln!("[SKIP] vcs not found — backend untested on this machine");
+        return;
+    }
+    untested_backend_golden(Simulator::Vcs, "vcs-smoke");
+}
+
+#[test]
+fn vivado_backend_smoke() {
+    if elaboration_zoo_lsp::sim::find_vivado().is_none() {
+        eprintln!("[SKIP] vivado (xsim) not found — backend untested on this machine");
+        return;
+    }
+    untested_backend_golden(Simulator::Vivado, "vivado-smoke");
 }

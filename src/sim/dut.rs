@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use super::{ClockDef, CompiledModel, PortDef, SimError};
+use super::runner::CompiledModel;
+use super::{ClockDef, PortDef, SimError};
 
 /// The model process's stdin/stdout pair. Every protocol round trip
 /// (request line + response line) happens under one lock, which keeps the
@@ -46,7 +47,10 @@ fn channel_poisoned() -> SimError {
 }
 
 impl Shared {
-    /// Send one protocol line and read its one-line response.
+    /// Send one protocol line and read its one-line response. Simulator
+    /// chatter on stdout (vvp's "VCD info: ..." banner, and similar
+    /// notices from other backends) is skipped so it cannot desynchronize
+    /// the protocol.
     fn roundtrip(&self, line: &str) -> Result<String, SimError> {
         let mut ch = self.ch.lock().map_err(|_| channel_poisoned())?;
         ch.stdin
@@ -55,8 +59,21 @@ impl Shared {
             .and_then(|_| ch.stdin.flush())
             .map_err(SimError::Io)?;
         let mut out = String::new();
-        ch.stdout.read_line(&mut out).map_err(SimError::Io)?;
-        Ok(out.trim_end().to_string())
+        loop {
+            out.clear();
+            let n = ch.stdout.read_line(&mut out).map_err(SimError::Io)?;
+            if n == 0 {
+                return Err(SimError::CommandFailed {
+                    tool: "model".into(),
+                    output: "model closed stdout".into(),
+                });
+            }
+            let trimmed = out.trim_end();
+            if trimmed.starts_with("VCD ") {
+                continue; // e.g. "VCD info: dumpfile wave.vcd opened..."
+            }
+            return Ok(trimmed.to_string());
+        }
     }
 }
 
@@ -71,19 +88,32 @@ pub struct Dut {
 }
 
 impl Dut {
-    /// Spawn the compiled model. The process runs with the workdir as its
-    /// cwd (wave files land there).
+    /// Spawn the compiled model (exe + exe_args: vvp/xsim carry the design
+    /// file as an argument). The process runs with the workdir as its cwd
+    /// (wave files land there) and the exe's directory prepended to PATH
+    /// (runners like vvp load runtime modules needing toolchain DLLs).
     pub fn spawn(model: &CompiledModel) -> Result<Dut, SimError> {
         let top = model
             .manifest
             .top_module()
             .ok_or_else(|| SimError::BadManifest("top module missing from manifest".into()))?;
-        let mut child = Command::new(&model.exe)
+        let mut child = Command::new(&model.exe);
+        child
+            .args(&model.exe_args)
             .current_dir(&model.workdir)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(SimError::Io)?;
+            .stdout(Stdio::piped());
+        if let Some(bin) = model.exe.parent() {
+            if let Some(path) = std::env::var_os("PATH").and_then(|old| {
+                std::env::join_paths(
+                    std::iter::once(bin.to_path_buf()).chain(std::env::split_paths(&old)),
+                )
+                .ok()
+            }) {
+                child.env("PATH", path);
+            }
+        }
+        let mut child = child.spawn().map_err(SimError::Io)?;
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let shared = Arc::new(Shared {

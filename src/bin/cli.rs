@@ -274,6 +274,11 @@ enum Commands {
         #[arg(long, short)]
         top: Option<String>,
 
+        /// Simulator override: verilator | icarus | vcs | vivado
+        /// (defaults to [test] simulator in Typort.toml)
+        #[arg(long)]
+        sim: Option<String>,
+
         /// Override [test] trace (compile with VCD tracing)
         #[arg(long)]
         trace: bool,
@@ -316,8 +321,8 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             run_build(top)?;
         }
 
-        Commands::Test { top, trace } => {
-            run_test(top, trace)?;
+        Commands::Test { top, sim, trace } => {
+            run_test(top, sim, trace)?;
         }
 
         Commands::Stats { no_hdl } => {
@@ -408,26 +413,41 @@ fn run_build(top_override: Option<String>) -> Result<(), Box<dyn Error + Sync + 
     Ok(())
 }
 
-fn run_test(top_override: Option<String>, trace: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
-    use elaboration_zoo_lsp::sim::{Dut, SimConfig};
+fn run_test(
+    top_override: Option<String>,
+    sim_override: Option<String>,
+    trace: bool,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    use elaboration_zoo_lsp::sim::{Dut, SimConfig, Simulator};
 
     let (project, top) = resolve_project(top_override)?;
     let sources = project.collect_sources()?;
-    if project.config.test.simulator != "verilator" {
-        return Err(format!(
-            "unsupported simulator '{}' (only verilator)",
-            project.config.test.simulator
-        )
-        .into());
-    }
+    let simulator = match sim_override.as_deref().map(Simulator::parse) {
+        Some(Some(sim)) => sim,
+        Some(None) => {
+            return Err(format!(
+                "unknown simulator '{}' (expected verilator | icarus | vcs | vivado)",
+                sim_override.unwrap()
+            )
+            .into());
+        }
+        None => project.config.test.simulator,
+    };
     let top_name = elaboration_zoo_lsp::emit::top_module_name(&top)?.to_string();
     let workdir = project.target_dir().join(format!("sim_{top_name}"));
 
+    // [test.verilator].compile_args are verilator-specific; other backends
+    // take no extra arguments for now.
+    let extra_args = match simulator {
+        Simulator::Verilator => project.config.test.verilator.compile_args.clone(),
+        _ => vec![],
+    };
     let cfg = SimConfig {
         top,
         sources,
         workdir,
-        verilator_args: project.config.test.verilator.compile_args.clone(),
+        simulator,
+        verilator_args: extra_args,
         trace: trace || project.config.test.trace,
     };
     let model = cfg.compile()?;
@@ -439,8 +459,9 @@ fn run_test(top_override: Option<String>, trace: bool) -> Result<(), Box<dyn Err
     dut.finish()?;
 
     println!(
-        "ok: {} model compiled and ran (smoke eval); binary {}{}",
+        "ok: {} model compiled and ran on {} (smoke eval); binary {}{}",
         top_name,
+        simulator.name(),
         model.exe.display(),
         if cfg.trace { ", trace: wave.vcd in workdir" } else { "" }
     );

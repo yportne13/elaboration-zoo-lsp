@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use elaboration_zoo_lsp::config::Config;
+use elaboration_zoo_lsp::sim::Simulator;
 
 fn temp_project(tag: &str, files: &[(&str, &str)]) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("typort-config-tests-{}-{tag}", std::process::id()));
@@ -49,9 +50,32 @@ compile_args = ["-Wno-lint"]
     assert_eq!(cfg.project.sources, vec!["src", "lib/extra.typort"]);
     assert_eq!(cfg.project.top.as_deref(), Some("adder[8]"));
     assert_eq!(cfg.build.target, "out");
-    assert_eq!(cfg.test.simulator, "verilator");
+    assert_eq!(cfg.test.simulator, Simulator::Verilator);
     assert!(cfg.test.trace);
     assert_eq!(cfg.test.verilator.compile_args, vec!["-Wno-lint"]);
+}
+
+#[test]
+fn simulator_field_parses_and_rejects() {
+    let ok = temp_project(
+        "sim-parse",
+        &[(
+            "Typort.toml",
+            "[project]\nname = \"demo\"\n\n[test]\nsimulator = \"icarus\"\n",
+        )],
+    );
+    let cfg = Config::load_from(&ok.join("Typort.toml")).unwrap();
+    assert_eq!(cfg.test.simulator, Simulator::Icarus);
+
+    let bad = temp_project(
+        "sim-typo",
+        &[(
+            "Typort.toml",
+            "[project]\nname = \"demo\"\n\n[test]\nsimulator = \"vera\"\n",
+        )],
+    );
+    let err = Config::load_from(&bad.join("Typort.toml")).unwrap_err();
+    assert!(err.to_string().contains("invalid Typort.toml"), "got: {err}");
 }
 
 #[test]
@@ -70,7 +94,7 @@ name = "demo"
     assert!(cfg.project.sources.is_empty());
     assert!(cfg.project.top.is_none());
     assert_eq!(cfg.build.target, "target_typort");
-    assert_eq!(cfg.test.simulator, "verilator");
+    assert_eq!(cfg.test.simulator, Simulator::Verilator);
     assert!(!cfg.test.trace);
 
     let dir = temp_project(
