@@ -572,6 +572,46 @@ def headModuleDef[v: Nat](data: Vec[ModuleDef] v): ModuleDef = match data {
     case cons(first, _) => first
 }
 
+// ---------- Design-wide module registry ----------
+// Every completed module body registers its head ModuleDef here (hooked in
+// checkModuleTree at create-side pop), deduped by name — first registration
+// wins. A single ModuleTree does NOT carry submodule definitions (each
+// module builds its own tree under the stack-style global; the manual
+// multi-module workaround is buildMultiTree in examples/hdl/09-hierarchy.typort),
+// so tools walk this registry to emit a self-contained design: designVL in
+// hdl-verilog.typort starts from a top tree and pulls transitively
+// instantiated defs from here. Known limitation: two instantiations of one
+// parametric module with different arguments (myAdder[8] / myAdder[16])
+// collide on the module name; the first registration is kept.
+
+struct ModuleRegistry {
+    num: Nat
+    defs: Vec[ModuleDef] num
+}
+
+def registryContains[n: Nat](defs: Vec[ModuleDef] n, name: String): Boolean = match defs {
+    case nil => false
+    case cons(md, rest) => match str_eq(md.name, name) {
+        case true => true
+        case false => registryContains(rest, name)
+    }
+}
+
+// Register a completed module tree's head def (no-op for empty trees).
+def registerModuleTree(t: ModuleTree): Unit =
+    let md = headModuleDef(t.data);
+    match str_eq(md.name, "") {
+        case true => unit
+        case false =>
+            let _ = change_mutable_default("ModuleRegistry",
+                x => match registryContains(x.defs, md.name) {
+                    case true => x
+                    case false => ModuleRegistry.mk(succ(x.num), md :: x.defs)
+                },
+                ModuleRegistry.mk(succ(zero), md :: nil));
+            unit
+    }
+
 // ============================================================
 //  Area — SpinalHDL 语义：逻辑分组，不产生额外层次。
 //  模块内用于组织代码（信号声明/赋值），不影响 Verilog 结构。

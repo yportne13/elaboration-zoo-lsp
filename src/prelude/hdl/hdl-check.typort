@@ -803,6 +803,9 @@ def runChecks(md: ModuleDef): Unit =
 // Module-macro CREATE-side hook: analyze the completed head def and
 // return the tree unchanged (checks are pure diagnostics). The empty
 // head (headModuleDef's fallback for an empty tree) is skipped.
+// Also registers the def in the design-wide ModuleRegistry (see
+// hdl-core.typort) — this is the single choke point every completed
+// module body passes through.
 def checkModuleTree(t: ModuleTree): ModuleTree =
     let md = headModuleDef(t.data);
     let skip = str_eq(md.name, "");
@@ -810,4 +813,5 @@ def checkModuleTree(t: ModuleTree): ModuleTree =
         case true => unit
         case false => runChecks(md)
     };
+    let _ = registerModuleTree(t);
     t

@@ -229,6 +229,27 @@ enum Commands {
     #[command(visible_alias = "l")]
     Lsp,
 
+    /// Elaborate HDL sources and emit generated Verilog.
+    ///
+    /// Compiles the given files, runs the Verilog generator on the requested
+    /// top module (including all instantiated submodules), and writes the
+    /// result to `<out>/<top>.v` or, without `--out`, to stdout.
+    #[command(visible_alias = "e")]
+    Emit {
+        /// Source files to compile (.typort)
+        #[arg(required = true)]
+        files: Vec<String>,
+
+        /// Top module instantiation: a module name, or name with create
+        /// arguments such as 'adder[8]'
+        #[arg(long, short)]
+        top: String,
+
+        /// Output directory (emits to stdout when omitted)
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+    },
+
     /// Print memory statistics after loading the prelude.
     ///
     /// Outputs a JSON report with heap usage, allocation histograms,
@@ -258,6 +279,10 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             run_check(files, do_sample)?;
         }
 
+        Commands::Emit { files, top, out } => {
+            run_emit(files, top, out)?;
+        }
+
         Commands::Stats { no_hdl } => {
             run_stats(no_hdl)?;
         }
@@ -269,6 +294,37 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 // ---------------------------------------------------------------------------
 // Subcommand implementations
 // ---------------------------------------------------------------------------
+
+fn run_emit(
+    files: Vec<String>,
+    top: String,
+    out: Option<PathBuf>,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut sources = Vec::with_capacity(files.len());
+    for filepath in &files {
+        let path = PathBuf::from(filepath);
+        let contents = fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let uri = Url::from_file_path(path.canonicalize().map_err(|e| {
+            format!("resolving {}: {e}", path.display())
+        })?)
+        .map_err(|()| format!("invalid path: {}", path.display()))?;
+        sources.push((uri, contents));
+    }
+
+    let verilog = elaboration_zoo_lsp::emit::emit_verilog(&sources, &top)?;
+    match out {
+        Some(dir) => {
+            fs::create_dir_all(&dir)?;
+            let name = elaboration_zoo_lsp::emit::top_module_name(&top)?;
+            let path = dir.join(format!("{name}.v"));
+            fs::write(&path, &verilog)?;
+            eprintln!("Emitted {} ({} bytes)", path.display(), verilog.len());
+        }
+        None => print!("{verilog}"),
+    }
+    Ok(())
+}
 
 fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
     #[cfg(feature = "sampler")]

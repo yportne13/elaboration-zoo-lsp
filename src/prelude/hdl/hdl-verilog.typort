@@ -1271,3 +1271,61 @@ def allModulesVL(t: ModuleTree): String =
 def moduleTreeVL(t: ModuleTree): String =
     let mod_def = headModuleDef(t.data);
     moduleDefVL(mod_def)
+
+// ── Design emission (self-contained output) ──────────────────────────────
+// A single ModuleTree does not carry submodule definitions (each module
+// builds its own tree; see ModuleRegistry in hdl-core.typort). designVL
+// takes the TOP module's tree and pulls every transitively instantiated def
+// from the registry, so the output is self-contained — every instantiated
+// name has its `module ... endmodule` definition, as verilator requires.
+
+// Instance records sit flat in a ModuleDef's expr list (mkInstance /
+// mkInstancePorts add them directly, not under when-wrappers).
+def instNamesOfDef[n: Nat](exprs: Vec[Expr] n): List[String] = match exprs {
+    case nil => lnil
+    case cons(e, rest) => match e {
+        case instance(_, m) => lcons(m, instNamesOfDef rest)
+        case instanceWithPorts(_, m, _) => lcons(m, instNamesOfDef rest)
+        case _ => instNamesOfDef rest
+    }
+}
+
+def lookupModuleDef[n: Nat](defs: Vec[ModuleDef] n, name: String): ModuleDef = match defs {
+    case nil => ModuleDef.mk("", defaultClockDomain, 0, nil)
+    case cons(md, rest) => match str_eq(md.name, name) {
+        case true => md
+        case false => lookupModuleDef(rest, name)
+    }
+}
+
+// Worklist walk from the top over instance edges; returns visited names
+// (top first, children deduped by name).
+def designVisit[n: Nat](defs: Vec[ModuleDef] n, seen: List[String], queue: List[String], acc: List[String]): List[String] = match queue {
+    case lnil => acc
+    case lcons(name, rest) => match chkStrIn(name, seen) {
+        case true => designVisit(defs, seen, rest, acc)
+        case false =>
+            let md = lookupModuleDef(defs, name);
+            let seen2 = lcons(name, seen);
+            let queue2 = rest.append(instNamesOfDef(md.expr));
+            designVisit(defs, seen2, queue2, lcons(name, acc))
+    }
+}
+
+def renderDesignNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): List[String] = match names {
+    case lnil => lnil
+    case lcons(name, rest) => lcons(moduleDefVL(lookupModuleDef(defs, name)), renderDesignNames(defs, rest))
+}
+
+// Public API: Verilog for the top module plus every registered module it
+// transitively instantiates. Usage: designVL(myTop.create.tree)
+def designVL(t: ModuleTree): String =
+    let top = headModuleDef(t.data);
+    match str_eq(top.name, "") {
+        case true => ""
+        case false =>
+            let _ = change_mutable_default("ModuleRegistry", x => x, ModuleRegistry.mk(0, nil));
+            let reg: ModuleRegistry = get_global("ModuleRegistry");
+            let names = list_reverse(designVisit(reg.defs, lnil, lcons(top.name, lnil), lnil));
+            joinLines(renderDesignNames(reg.defs, names)) + "\n"
+    }

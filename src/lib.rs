@@ -11,6 +11,7 @@ mod list;
 mod bimap;
 pub mod ls;
 pub mod client;
+pub mod emit;
 mod lsp_stdio;
 mod L01_eval;
 //mod L01a_fast;
