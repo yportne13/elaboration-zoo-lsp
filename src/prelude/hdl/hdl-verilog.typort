@@ -1411,8 +1411,42 @@ def joinJsonLines(ls: List[String]): String = match ls {
     case lcons(s, tail) => s + ",\n" + joinJsonLines(tail)
 }
 
-def moduleJson(md: ModuleDef): String =
-    let ports = collectPortJson(md.expr);
+// The clk/reset ports are SYNTHESIZED by moduleDefVL (p1/p2 there), not
+// recorded as Exprs in the module tree — mirror those conditions so the
+// manifest lists every port the emitted Verilog declares. (Extra
+// clock-domain ports from collectClockCds are not mirrored yet.)
+def manifestSynthPorts(md: ModuleDef): List[String] =
+    let has_regs = match list_reverse(collectRegLines md.expr) {
+        case lnil => false
+        case _ => true
+    };
+    let has_reg_any = match has_regs {
+        case false => hasOutRegPorts md.expr
+        case true => true
+    };
+    let has_mem = match list_reverse(collectMemLines md.expr) {
+        case lnil => false
+        case _ => true
+    };
+    let has_seq = match has_reg_any {
+        case false => has_mem
+        case true => true
+    };
+    let has_init = match list_reverse(collectInitLinesCd(md.expr, md.cd, true)) {
+        case lnil => false
+        case _ => true
+    };
+    let with_clk = match has_seq {
+        case false => lnil
+        case true => lcons(portJsonLine(clockName(md.cd), "input", 1, false, false), lnil)
+    };
+    match has_init {
+        case false => with_clk
+        case true => with_clk.append(lcons(portJsonLine(resetName(md.cd), "input", 1, false, false), lnil))
+    }
+
+def moduleJsonFull(md: ModuleDef): String =
+    let ports = collectPortJson(md.expr).append(manifestSynthPorts(md));
     let insts = collectInstJson(md.expr);
     let head = "    {\n      \"name\": \"" + md.name + "\",\n      \"clock\": " + clockJson(md.cd);
     let tail = "],\n      \"instances\": [" + joinJsonList(insts) + "]\n    }";
@@ -1420,7 +1454,7 @@ def moduleJson(md: ModuleDef): String =
 
 def renderManifestNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): List[String] = match names {
     case lnil => lnil
-    case lcons(name, rest) => lcons(moduleJson(lookupModuleDef(defs, name)), renderManifestNames(defs, rest))
+    case lcons(name, rest) => lcons(moduleJsonFull(lookupModuleDef(defs, name)), renderManifestNames(defs, rest))
 }
 
 // Public API: design manifest for the top module's design closure.
