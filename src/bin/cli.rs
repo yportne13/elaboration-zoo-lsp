@@ -255,6 +255,30 @@ enum Commands {
         manifest: bool,
     },
 
+    /// Build a Typort.toml project: emit Verilog + manifest + filelist into
+    /// the target directory.
+    #[command(visible_alias = "b")]
+    Build {
+        /// Top module override ("top" or "adder[8]"); defaults to
+        /// [project] top in Typort.toml
+        #[arg(long, short)]
+        top: Option<String>,
+    },
+
+    /// Build and smoke-test a Typort.toml project's simulation model
+    /// (compile with the configured simulator, run one eval).
+    #[command(visible_alias = "t")]
+    Test {
+        /// Top module override ("top" or "adder[8]"); defaults to
+        /// [project] top in Typort.toml
+        #[arg(long, short)]
+        top: Option<String>,
+
+        /// Override [test] trace (compile with VCD tracing)
+        #[arg(long)]
+        trace: bool,
+    },
+
     /// Print memory statistics after loading the prelude.
     ///
     /// Outputs a JSON report with heap usage, allocation histograms,
@@ -288,6 +312,14 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             run_emit(files, top, out, manifest)?;
         }
 
+        Commands::Build { top } => {
+            run_build(top)?;
+        }
+
+        Commands::Test { top, trace } => {
+            run_test(top, trace)?;
+        }
+
         Commands::Stats { no_hdl } => {
             run_stats(no_hdl)?;
         }
@@ -306,17 +338,8 @@ fn run_emit(
     out: Option<PathBuf>,
     manifest: bool,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let mut sources = Vec::with_capacity(files.len());
-    for filepath in &files {
-        let path = PathBuf::from(filepath);
-        let contents = fs::read_to_string(&path)
-            .map_err(|e| format!("reading {}: {e}", path.display()))?;
-        let uri = Url::from_file_path(path.canonicalize().map_err(|e| {
-            format!("resolving {}: {e}", path.display())
-        })?)
-        .map_err(|()| format!("invalid path: {}", path.display()))?;
-        sources.push((uri, contents));
-    }
+    let paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+    let sources = elaboration_zoo_lsp::emit::load_source_files(&paths)?;
 
     let result = elaboration_zoo_lsp::emit::emit_design(&sources, &top, manifest)?;
     match out {
@@ -336,6 +359,94 @@ fn run_emit(
     }
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Project commands (Typort.toml)
+// ---------------------------------------------------------------------------
+
+/// Resolve (project config, top) for build/test; `--top` beats [project] top.
+fn resolve_project(
+    top_override: Option<String>,
+) -> Result<(elaboration_zoo_lsp::config::ProjectConfig, String), Box<dyn Error + Sync + Send>> {
+    let cwd = std::env::current_dir()?;
+    let project = elaboration_zoo_lsp::config::Config::discover(&cwd)?;
+    let top = top_override
+        .or_else(|| project.config.project.top.clone())
+        .ok_or_else(|| {
+            format!(
+                "no top module: set `top` under [project] in {} or pass --top",
+                elaboration_zoo_lsp::config::CONFIG_FILE
+            )
+        })?;
+    Ok((project, top))
+}
+
+fn run_build(top_override: Option<String>) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let (project, top) = resolve_project(top_override)?;
+    let sources = elaboration_zoo_lsp::emit::load_source_files(&project.collect_sources()?)?;
+    let target = project.target_dir();
+    fs::create_dir_all(&target)?;
+
+    let emitted = elaboration_zoo_lsp::emit::emit_design(&sources, &top, true)?;
+    let top_name = elaboration_zoo_lsp::emit::top_module_name(&top)?;
+    let verilog_path = target.join(format!("{top_name}.v"));
+    fs::write(&verilog_path, &emitted.verilog)?;
+    let manifest_path = target.join(format!("{top_name}.manifest.json"));
+    fs::write(&manifest_path, emitted.manifest.as_deref().unwrap_or("{}"))?;
+    // Filelist (verilator -f compatible): decouples downstream tools from
+    // the layout of the target dir (veryl's build pattern).
+    let filelist_path = target.join(format!("{}.f", project.config.project.name));
+    fs::write(&filelist_path, format!("{top_name}.v\n"))?;
+
+    println!(
+        "built {} ({} bytes), manifest {}, filelist {}",
+        verilog_path.display(),
+        emitted.verilog.len(),
+        manifest_path.display(),
+        filelist_path.display(),
+    );
+    Ok(())
+}
+
+fn run_test(top_override: Option<String>, trace: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
+    use elaboration_zoo_lsp::sim::{Dut, SimConfig};
+
+    let (project, top) = resolve_project(top_override)?;
+    let sources = project.collect_sources()?;
+    if project.config.test.simulator != "verilator" {
+        return Err(format!(
+            "unsupported simulator '{}' (only verilator)",
+            project.config.test.simulator
+        )
+        .into());
+    }
+    let top_name = elaboration_zoo_lsp::emit::top_module_name(&top)?.to_string();
+    let workdir = project.target_dir().join(format!("sim_{top_name}"));
+
+    let cfg = SimConfig {
+        top,
+        sources,
+        workdir,
+        verilator_args: project.config.test.verilator.compile_args.clone(),
+        trace: trace || project.config.test.trace,
+    };
+    let model = cfg.compile()?;
+
+    // Smoke session: the model must spawn, settle one eval, and exit
+    // cleanly. Behavioral testbenches live in cargo test (tests/sim_tests).
+    let mut dut = Dut::spawn(&model)?;
+    dut.eval()?;
+    dut.finish()?;
+
+    println!(
+        "ok: {} model compiled and ran (smoke eval); binary {}{}",
+        top_name,
+        model.exe.display(),
+        if cfg.trace { ", trace: wave.vcd in workdir" } else { "" }
+    );
+    Ok(())
+}
+
 
 fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
     #[cfg(feature = "sampler")]

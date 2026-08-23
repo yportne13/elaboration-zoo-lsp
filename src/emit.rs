@@ -9,12 +9,29 @@
 //! file, and pull the emitted text back out through the diagnostics pipeline.
 
 use std::fmt;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use lsp_types::{Diagnostic, DiagnosticSeverity, MessageType, Url};
 
 use crate::client::ClientLike;
 use crate::Backend;
+
+/// Read source files into (canonical Url, text) pairs for elaboration.
+pub fn load_source_files(paths: &[PathBuf]) -> Result<Vec<(Url, String)>, EmitError> {
+    let mut sources = Vec::with_capacity(paths.len());
+    for path in paths {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+        let text = fs::read_to_string(path).map_err(|e| {
+            EmitError::Elaboration(vec![format!("reading {}: {e}", path.display())])
+        })?;
+        let uri = Url::from_file_path(&canonical)
+            .map_err(|()| EmitError::BadTop(path.display().to_string()))?;
+        sources.push((uri, text));
+    }
+    Ok(sources)
+}
 
 /// Diagnostics captured from a throwaway backend, shared so the data
 /// outlives the backend that produced it.

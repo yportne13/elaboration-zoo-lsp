@@ -13,6 +13,7 @@ pub mod ls;
 pub mod client;
 pub mod emit;
 pub mod sim;
+pub mod config;
 mod lsp_stdio;
 mod L01_eval;
 //mod L01a_fast;
