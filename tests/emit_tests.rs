@@ -4,7 +4,7 @@
 
 use std::fs;
 
-use elaboration_zoo_lsp::emit::{emit_verilog, top_module_name, EmitError};
+use elaboration_zoo_lsp::emit::{emit_design, emit_verilog, top_module_name, EmitError};
 use lsp_types::Url;
 
 fn example(name: &str) -> (Url, String) {
@@ -73,4 +73,66 @@ fn top_module_name_strips_args() {
     assert_eq!(top_module_name("adder").unwrap(), "adder");
     assert!(top_module_name("bad name").is_err());
     assert!(top_module_name("").is_err());
+}
+
+#[test]
+fn manifest_describes_ports_clock_and_instances() {
+    let out = emit_design(&[example("09-hierarchy.typort")], "topWithPorts", true).unwrap();
+    let manifest = out.manifest.expect("manifest requested");
+    let m: serde_json::Value = serde_json::from_str(&manifest)
+        .unwrap_or_else(|e| panic!("manifest is not valid JSON ({e}):\n{manifest}"));
+
+    assert_eq!(m["top"], "topWithPorts");
+    let modules = m["modules"].as_array().expect("modules array");
+    assert_eq!(modules.len(), 2, "top + myAdder, got: {manifest}");
+
+    let top = modules
+        .iter()
+        .find(|x| x["name"] == "topWithPorts")
+        .expect("topWithPorts entry");
+    // topWithPorts ports: a, b (input 8), en (input 1), sum (output 8)
+    let ports = top["ports"].as_array().unwrap();
+    let find_port = |name: &str| {
+        ports
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("no port {name} in {manifest}"))
+            .clone()
+    };
+    assert_eq!(find_port("a")["dir"], "input");
+    assert_eq!(find_port("a")["width"], 8);
+    assert_eq!(find_port("en")["width"], 1);
+    assert_eq!(find_port("sum")["dir"], "output");
+    assert_eq!(find_port("sum")["width"], 8);
+
+    // defaultClockDomain: clk/reset, async, posedge, active-high
+    assert_eq!(top["clock"]["clk"], "clk");
+    assert_eq!(top["clock"]["reset"], "reset");
+    assert_eq!(top["clock"]["kind"], "async");
+    assert_eq!(top["clock"]["edge"], "posedge");
+    assert_eq!(top["clock"]["resetActive"], "high");
+
+    // top instantiates myAdder as u
+    let insts = top["instances"].as_array().unwrap();
+    assert_eq!(insts.len(), 1);
+    assert_eq!(insts[0]["inst"], "u");
+    assert_eq!(insts[0]["module"], "myAdder");
+
+    // the child module is itself described
+    assert!(
+        modules.iter().any(|x| x["name"] == "myAdder"),
+        "myAdder entry missing: {manifest}"
+    );
+}
+
+#[test]
+fn manifest_matches_verilog_module_set() {
+    let out = emit_design(&[example("09-hierarchy.typort")], "topWithAdder", true).unwrap();
+    let m: serde_json::Value = serde_json::from_str(&out.manifest.unwrap()).unwrap();
+    let n_manifest = m["modules"].as_array().unwrap().len();
+    let n_verilog = out.verilog.matches("endmodule").count();
+    assert_eq!(
+        n_manifest, n_verilog,
+        "manifest and Verilog must describe the same module set"
+    );
 }

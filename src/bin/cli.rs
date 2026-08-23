@@ -248,6 +248,11 @@ enum Commands {
         /// Output directory (emits to stdout when omitted)
         #[arg(long, short)]
         out: Option<PathBuf>,
+
+        /// Also emit <top>.manifest.json (ports/clock-domain/instance
+        /// metadata consumed by tooling); requires --out
+        #[arg(long, requires = "out")]
+        manifest: bool,
     },
 
     /// Print memory statistics after loading the prelude.
@@ -279,8 +284,8 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             run_check(files, do_sample)?;
         }
 
-        Commands::Emit { files, top, out } => {
-            run_emit(files, top, out)?;
+        Commands::Emit { files, top, out, manifest } => {
+            run_emit(files, top, out, manifest)?;
         }
 
         Commands::Stats { no_hdl } => {
@@ -299,6 +304,7 @@ fn run_emit(
     files: Vec<String>,
     top: String,
     out: Option<PathBuf>,
+    manifest: bool,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut sources = Vec::with_capacity(files.len());
     for filepath in &files {
@@ -312,16 +318,21 @@ fn run_emit(
         sources.push((uri, contents));
     }
 
-    let verilog = elaboration_zoo_lsp::emit::emit_verilog(&sources, &top)?;
+    let result = elaboration_zoo_lsp::emit::emit_design(&sources, &top, manifest)?;
     match out {
         Some(dir) => {
             fs::create_dir_all(&dir)?;
             let name = elaboration_zoo_lsp::emit::top_module_name(&top)?;
             let path = dir.join(format!("{name}.v"));
-            fs::write(&path, &verilog)?;
-            eprintln!("Emitted {} ({} bytes)", path.display(), verilog.len());
+            fs::write(&path, &result.verilog)?;
+            eprintln!("Emitted {} ({} bytes)", path.display(), result.verilog.len());
+            if let Some(manifest) = &result.manifest {
+                let path = dir.join(format!("{name}.manifest.json"));
+                fs::write(&path, manifest)?;
+                eprintln!("Emitted {} ({} bytes)", path.display(), manifest.len());
+            }
         }
-        None => print!("{verilog}"),
+        None => print!("{}", result.verilog),
     }
     Ok(())
 }

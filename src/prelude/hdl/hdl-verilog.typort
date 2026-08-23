@@ -1329,3 +1329,109 @@ def designVL(t: ModuleTree): String =
             let names = list_reverse(designVisit(reg.defs, lnil, lcons(top.name, lnil), lnil));
             joinLines(renderDesignNames(reg.defs, names)) + "\n"
     }
+
+// ── Design manifest (structured metadata for tools) ──────────────────────
+// The same design closure as designVL, rendered as JSON: per module the
+// ports (name/direction/width/signed/reg-ness), the clock domain, and the
+// instance records. Consumed by the simulation harness (src/sim) instead of
+// parsing the emitted Verilog. Port variants mirror portLineSingle.
+
+def boolJson(b: Boolean): String = match b {
+    case true => "true"
+    case false => "false"
+}
+
+def cdKindJson(c: ClockDomainConfig): String = match c {
+    case Sync => "sync"
+    case Async => "async"
+}
+
+def cdEdgeJson(e: ClockEdge): String = match e {
+    case RisingEdge => "posedge"
+    case FallingEdge => "negedge"
+}
+
+def cdPolJson(p: ResetPolarity): String = match p {
+    case ActiveHigh => "high"
+    case ActiveLow => "low"
+}
+
+def clockJson(cd: ClockDomain): String =
+    let head = "{\"clk\": \"" + cd.clockName + "\", \"reset\": \"" + cd.resetName + "\", ";
+    let kind = "\"kind\": \"" + cdKindJson(cd.config) + "\", \"edge\": \"" + cdEdgeJson(cd.clockEdge) + "\", ";
+    head + kind + "\"resetActive\": \"" + cdPolJson(cd.resetPolarity) + "\"}"
+
+def portJsonLine(name: String, dir: String, width: Nat, signed: Boolean, reg: Boolean): String =
+    let front = "{\"name\": \"" + name + "\", \"dir\": \"" + dir + "\", \"width\": " + nat_to_dec(width);
+    front + ", \"signed\": " + boolJson(signed) + ", \"reg\": " + boolJson(reg) + "}"
+
+def portJsonSingle(e: Expr): List[String] = match e {
+    case createIn(name) => lcons(portJsonLine(name, "input", 1, false, false), lnil)
+    case createOut(name) => lcons(portJsonLine(name, "output", 1, false, false), lnil)
+    case createInOut(name) => lcons(portJsonLine(name, "inout", 1, false, false), lnil)
+    case createInWidth(name, w) => lcons(portJsonLine(name, "input", w, false, false), lnil)
+    case createOutWidth(name, w) => lcons(portJsonLine(name, "output", w, false, false), lnil)
+    case createInOutWidth(name, w) => lcons(portJsonLine(name, "inout", w, false, false), lnil)
+    case createSIntInWidth(name, w) => lcons(portJsonLine(name, "input", w, true, false), lnil)
+    case createSIntOutWidth(name, w) => lcons(portJsonLine(name, "output", w, true, false), lnil)
+    case createSIntInOutWidth(name, w) => lcons(portJsonLine(name, "inout", w, true, false), lnil)
+    case createOutReg(name) => lcons(portJsonLine(name, "output", 1, false, true), lnil)
+    case createOutRegWidth(name, w) => lcons(portJsonLine(name, "output", w, false, true), lnil)
+    case createOutRegWidthInit(name, w, _) => lcons(portJsonLine(name, "output", w, false, true), lnil)
+    case createSIntOutRegWidth(name, w) => lcons(portJsonLine(name, "output", w, true, true), lnil)
+    case createSIntOutRegWidthInit(name, w, _) => lcons(portJsonLine(name, "output", w, true, true), lnil)
+    case _ => lnil
+}
+
+def instJsonSingle(e: Expr): List[String] = match e {
+    case instance(i, m) => lcons("{\"inst\": \"" + i + "\", \"module\": \"" + m + "\"}", lnil)
+    case instanceWithPorts(i, m, _) => lcons("{\"inst\": \"" + i + "\", \"module\": \"" + m + "\"}", lnil)
+    case _ => lnil
+}
+
+def collectPortJson[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => list_append(portJsonSingle(e), collectPortJson(tail))
+}
+
+def collectInstJson[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) => list_append(instJsonSingle(e), collectInstJson(tail))
+}
+
+def joinJsonList(ls: List[String]): String = match ls {
+    case lnil => ""
+    case lcons(s, lnil) => s
+    case lcons(s, tail) => s + ", " + joinJsonList(tail)
+}
+
+def joinJsonLines(ls: List[String]): String = match ls {
+    case lnil => ""
+    case lcons(s, lnil) => s
+    case lcons(s, tail) => s + ",\n" + joinJsonLines(tail)
+}
+
+def moduleJson(md: ModuleDef): String =
+    let ports = collectPortJson(md.expr);
+    let insts = collectInstJson(md.expr);
+    let head = "    {\n      \"name\": \"" + md.name + "\",\n      \"clock\": " + clockJson(md.cd);
+    let tail = "],\n      \"instances\": [" + joinJsonList(insts) + "]\n    }";
+    head + ",\n      \"ports\": [" + joinJsonList(ports) + tail
+
+def renderManifestNames[n: Nat](defs: Vec[ModuleDef] n, names: List[String]): List[String] = match names {
+    case lnil => lnil
+    case lcons(name, rest) => lcons(moduleJson(lookupModuleDef(defs, name)), renderManifestNames(defs, rest))
+}
+
+// Public API: design manifest for the top module's design closure.
+// Usage: designManifestVL(myTop.create.tree)
+def designManifestVL(t: ModuleTree): String =
+    let top = headModuleDef(t.data);
+    match str_eq(top.name, "") {
+        case true => "{\"top\": \"\", \"modules\": []}"
+        case false =>
+            let _ = change_mutable_default("ModuleRegistry", x => x, ModuleRegistry.mk(0, nil));
+            let reg: ModuleRegistry = get_global("ModuleRegistry");
+            let names = list_reverse(designVisit(reg.defs, lnil, lcons(top.name, lnil), lnil));
+            "{\"top\": \"" + top.name + "\", \"modules\": [\n" + joinJsonLines(renderManifestNames(reg.defs, names)) + "\n  ]}"
+    }

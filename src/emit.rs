@@ -97,22 +97,40 @@ pub fn top_module_name(top: &str) -> Result<&str, EmitError> {
     }
 }
 
-/// Elaborate `files` (in order) and return the Verilog that `designVL`
-/// produces for the `top` instantiation (the top module plus every
-/// registered module it transitively instantiates).
+/// What one emit run produced. `manifest` is the design metadata JSON
+/// (ports / clock domains / instances) when requested.
+pub struct EmitOutput {
+    pub verilog: String,
+    pub manifest: Option<String>,
+}
+
+/// Elaborate `files` (in order) and return the Verilog (and optionally the
+/// design manifest) for the `top` instantiation. The Verilog covers the top
+/// module plus every registered module it transitively instantiates.
 ///
-/// The emit request is appended to the LAST file, not a separate unit:
+/// The emit requests are appended to the LAST file, not a separate unit:
 /// elaboration state (meta variables, the ModuleTree side-effect chain) is
 /// per-file, so `designVL` must run in the same file as the module
 /// definitions — the same shape as the examples' trailing
 /// `println(moduleTreeVL(...))`. Among that file's INFORMATION diagnostics
-/// the appended println is the last one (println jobs run in decl order).
-pub fn emit_verilog(files: &[(Url, String)], top: &str) -> Result<String, EmitError> {
+/// the appended printlns are the last ones (println jobs run in decl order).
+pub fn emit_design(
+    files: &[(Url, String)],
+    top: &str,
+    want_manifest: bool,
+) -> Result<EmitOutput, EmitError> {
     if files.is_empty() {
         return Err(EmitError::Elaboration(vec!["no input files".to_string()]));
     }
+    let expr = top_create_expr(top)?;
     // Leading newline terminates a trailing `//` comment in the source file.
-    let request = format!("\nprintln(designVL({}.tree))\n", top_create_expr(top)?);
+    let mut request = format!("\nprintln(designVL({expr}.tree))\n");
+    let expected = if want_manifest {
+        request.push_str(&format!("println(designManifestVL({expr}.tree))\n"));
+        2
+    } else {
+        1
+    };
     let last_uri = files.last().unwrap().0.clone();
 
     let captured = Capture::default();
@@ -151,8 +169,16 @@ pub fn emit_verilog(files: &[(Url, String)], top: &str) -> Result<String, EmitEr
     if !errors.is_empty() {
         return Err(EmitError::Elaboration(errors));
     }
-    match outputs.pop() {
-        Some(verilog) => Ok(verilog),
-        None => Err(EmitError::NoOutput),
+    if outputs.len() < expected {
+        return Err(EmitError::NoOutput);
     }
+    let ours: Vec<String> = outputs[outputs.len() - expected..].to_vec();
+    let verilog = ours[0].clone();
+    let manifest = if expected == 2 { Some(ours[1].clone()) } else { None };
+    Ok(EmitOutput { verilog, manifest })
+}
+
+/// Verilog-only convenience wrapper.
+pub fn emit_verilog(files: &[(Url, String)], top: &str) -> Result<String, EmitError> {
+    emit_design(files, top, false).map(|out| out.verilog)
 }
