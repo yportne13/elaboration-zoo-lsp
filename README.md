@@ -98,6 +98,11 @@ cargo run --release --bin typort -- tutorial
 cargo run --release --bin typort -- tutorial --list
 cargo run --release --bin typort -- tutorial --lesson 3
 cargo run --release --bin typort -- tutorial --reset
+
+# Dense cheat-sheet for Verilog+SpinalHDL+Lean engineers (or AI)
+cargo run --release --bin typort -- quick        # whole reference
+cargo run --release --bin typort -- quick hdl    # one topic
+cargo run --release --bin typort -- quick --list
 ```
 
 ### VS Code Extension

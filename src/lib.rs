@@ -15,6 +15,7 @@ pub mod emit;
 pub mod sim;
 pub mod config;
 pub mod tutorial;
+pub mod quick;
 mod lsp_stdio;
 mod L01_eval;
 //mod L01a_fast;

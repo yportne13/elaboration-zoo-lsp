@@ -315,6 +315,19 @@ enum Commands {
         #[arg(long)]
         reset: bool,
     },
+
+    /// Dense language cheat-sheet for engineers who already know
+    /// Verilog + SpinalHDL + Lean (or an AI assistant). Prints the whole
+    /// reference or one section by topic key.
+    #[command(visible_alias = "q")]
+    Quick {
+        /// Topic key to print (e.g. hdl, match, proof); omit to print all
+        topic: Option<String>,
+
+        /// List all topic keys, then exit
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -356,6 +369,12 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     list,
                     reset,
                 },
+            )?;
+        }
+
+        Commands::Quick { topic, list } => {
+            elaboration_zoo_lsp::quick::run(
+                elaboration_zoo_lsp::quick::QuickOptions { topic, list },
             )?;
         }
     }

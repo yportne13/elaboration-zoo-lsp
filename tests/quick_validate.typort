@@ -1,0 +1,145 @@
+// quick-cheatsheet validation (v2)
+// --- adt: struct ---
+struct Point {
+    x: Nat
+    y: Nat
+}
+def origin: Point = new Point(0, 0)
+
+// --- adt: enum with fields + match + let-chain ---
+enum Tree[T] {
+    leaf(v: T)
+    node(left: Tree[T], right: Tree[T])
+}
+def depth[T](t: Tree[T]): Nat =
+    match t {
+        case leaf(_) => 0
+        case node(l, r) =>
+            let dl = depth(l);
+            let dr = depth(r);
+            match nat_compare(dl, dr) {
+                case lt => dr + 1
+                case eq => dl + 1
+                case gt => dl + 1
+            }
+    }
+
+// --- tc: typeclass trait (Describable, from examples/typeclass_complex) ---
+trait Describable {
+    def describe: String
+}
+impl Describable for Boolean {
+    def describe: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+def describe_val[T][d: Describable[T]](x: T): String = d.describe(x)
+
+// --- hdl: module + param + hierarchy ---
+module half_adder {
+    input  a = Bool
+    input  b = Bool
+    output sum   = Bool
+    output carry = Bool
+    sum   := a ^ b
+    carry := a && b
+}
+
+module myAdder[w: Nat]
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w]
+{
+    sum := a + b
+}
+
+module top {
+    input a = UInt[8]
+    input b = UInt[8]
+    output sum = UInt[8]
+    let u = myAdder.create[8]
+    u.a := a
+    u.b := b
+    sum := u.sum
+}
+
+// --- hdlsig: reg / when / switch / mux / counter / slice/cat ---
+module sigDemo {
+    reg r = UInt[8] init 42
+    let a = UInt[8]
+    let b = UInt[8]
+    let en = Bool
+    let sel = Bool
+    let out = UInt[8]
+    when en {
+        r := a
+    } otherwise {
+        r := r + 1
+    }
+    let d = regNext(a)
+    let m = sel.mux(a, b)
+    let cnt = counter(8)
+    let wr = Bool
+    wr := cnt.willOverflow
+    let lo = UInt[8]
+    lo := a.slice[7, 4] ## a.slice[3, 0]
+    let bit7 = Bool
+    bit7 := a[7]
+}
+
+println(moduleTreeVL(top.create.tree))
+
+// --- tc: where-clause / implicit-passing forms ---
+trait Pretty {
+    def pretty: String
+}
+impl Pretty for Nat {
+    def pretty: String = nat_to_dec this
+}
+def p1[T][p: Pretty[T]](x: T): String = p.pretty x
+def p2[T](x: T): String where T: Pretty = _pretty_T.pretty x
+
+// --- proof: rfl / trans / symm / calc ---
+def two_plus_three: Eq (2 + 3) 5 = rfl
+def zero_add_comm(n: Nat): Eq (0 + n) (n + 0) =
+    trans (add_zero_left n) (symm (add_zero_right n))
+def zac_calc(n: Nat): Eq (0 + n) (n + 0) =
+    calc {
+        0 + n = n by add_zero_left n
+        n = n + 0 by symm (add_zero_right n)
+    }
+
+// --- dep: Vec indexed type ---
+def zeros[n: Nat]: Vec[Nat] n =
+    match n {
+        case zero => nil
+        case succ(m) => cons(0, zeros[m])
+    }
+
+println(p1(7))
+println(p2(7))
+
+// --- def: pattern-based definition (multi-line match) ---
+def neg(b: Boolean): Boolean =
+    match b {
+        case true => false
+        case false => true
+    }
+
+// --- hdlsig: one-line when/elsewhen/switch control flow ---
+module whenOneLine {
+    let a = UInt[8]
+    let b = UInt[8]
+    let sel = Bool
+    let out = UInt[8]
+    when sel { out := a } otherwise { out := b }
+}
+module switchOneLine {
+    let sel = UInt[4]
+    let a = UInt[4]
+    let b = UInt[4]
+    let result = UInt[4]
+    switch sel { is 0 { result := a } default { result := b } }
+}
