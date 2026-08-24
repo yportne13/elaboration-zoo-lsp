@@ -15,7 +15,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 // Small-node allocation churn dominates the evaluator's per-step cost;
 // mimalloc beats the Windows default heap there (mem-profile builds keep
 // dhat for heap profiling instead).
-#[cfg(not(feature = "mem-profile"))]
+#[cfg(all(not(feature = "mem-profile"), not(target_arch = "wasm32")))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

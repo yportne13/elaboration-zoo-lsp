@@ -4,6 +4,7 @@ use std::error::Error;
 // machine step (~40M steps during prelude load).  The Windows default heap
 // is measurably slower than mimalloc on this pattern; see
 // docs/l13-perf-review-4.md round 17 for the measurement.
+#[cfg(not(target_arch = "wasm32"))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
