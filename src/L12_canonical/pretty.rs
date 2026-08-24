@@ -80,7 +80,28 @@ fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: 
                         pr = rest_pr;
                     }
                 }
-                _ => panic!("Mismatch between names and pruning list"),
+                // A pruning longer than the display name list (e.g. a decl
+                // type printed under a shallower context than the meta's
+                // elaboration depth) degrades to positional placeholders
+                // instead of panicking.
+                ((None, _), (Some(prune), rest_pr)) => {
+                    if let Some(i) = prune {
+                        let need_paren = p > APPP;
+                        let arg_str = format!("@{}", arg_index);
+                        let arg_display = match i {
+                            Icit::Expl => arg_str,
+                            Icit::Impl => bracket(arg_str),
+                        };
+                        let inner = go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1);
+                        let result = format!("{} {}", inner, arg_display);
+                        return if need_paren { paren(result) } else { result };
+                    } else {
+                        pr = rest_pr;
+                    }
+                }
+                ((Some(_), rest_ns), (None, _)) => {
+                    ns = rest_ns;
+                }
             }
         }
     }

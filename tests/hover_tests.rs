@@ -211,7 +211,7 @@ fn hover_on_use_site_shows_docs_too() {
     let client = CapturingClient::default();
     let b = Backend::new(client);
     let uri = Url::parse("file:///doc2.typort").unwrap();
-    let src = "/// Doubles `a` via addition.\ndef dbl(a: Nat): Nat = nat_add_helper a a\ndef four: Nat = dbl 2";
+    let src = "/// Doubles `a` via addition.\ndef dbl(a: Nat): Nat = a + a\ndef four: Nat = dbl 2";
     elaborate(&b, &uri, src);
 
     let line3 = src.find("def four").unwrap();

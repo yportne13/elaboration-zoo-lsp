@@ -112,7 +112,31 @@ fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: 
                         pr = rest_pr;
                     }
                 }
-                _ => panic!("Mismatch between names and pruning list"),
+                // A stored decl type can carry an AppPruning whose pruning is
+                // longer than the name context it is displayed under (e.g.
+                // hover_def_block pretty-prints raw decl Tms with an empty
+                // name list while the embedded meta was created deeper inside
+                // the signature's binders).  Degrade to positional
+                // placeholders instead of panicking so a hover request can
+                // never crash the server.
+                ((None, _), (Some(prune), rest_pr)) => {
+                    if let Some(i) = prune {
+                        let need_paren = p > APPP;
+                        let arg_str = format!("@{}", arg_index);
+                        let arg_display = match i {
+                            Icit::Expl => arg_str,
+                            Icit::Impl => format!("[{arg_str}]"),
+                        };
+                        let inner = go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1);
+                        let result = format!("{} {}", inner, arg_display);
+                        return if need_paren { paren(result) } else { result };
+                    } else {
+                        pr = rest_pr;
+                    }
+                }
+                ((Some(_), rest_ns), (None, _)) => {
+                    ns = rest_ns;
+                }
             }
         }
     }

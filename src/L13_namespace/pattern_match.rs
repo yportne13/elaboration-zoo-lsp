@@ -886,8 +886,8 @@ impl Compiler {
                                                     .get(&qualified)
                                                     .or_else(|| cxt.decl.get(&constr.data))
                                                 {
-                                                    // Decl entry: (def span, Tm, VALUE, Ty, VTy, prim).
-                                                    Some((_, _, v, _, _, _)) => match v.as_ref() {
+                                                    // Decl entry: (def span, Tm, VALUE, Ty, VTy, prim, typ_pretty).
+                                                    Some((_, _, v, _, _, _, _)) => match v.as_ref() {
                                                         // Parameterized constructor: the value is a
                                                         // Lam whose quote renders as an unreadable
                                                         // lambda; show the constructor's Pi signature

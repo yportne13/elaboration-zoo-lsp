@@ -291,7 +291,7 @@ type Rc<T> = std::rc::Rc<T>;
 // `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,
 // `force`); FxHash keys on the string bytes directly instead of SipHashing
 // them (~4M lookups during prelude load alone).
-pub(crate) type Decl = rustc_hash::FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>)>;
+pub(crate) type Decl = rustc_hash::FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>, String)>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -980,6 +980,7 @@ pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
                     x.1.3.clone(),
                     x.1.4.clone(),
                     x.1.5.clone(),
+                    x.1.6.clone(),
                 ),
             )
         })
@@ -1377,7 +1378,7 @@ impl DetailCounts {
         // Walk env
         self.walk_env(&cxt.env, visited);
         // Walk decls (both Tm and Val sides)
-        for (_, (span, rtm, rval, rty, rvty, _)) in cxt.decl.iter() {
+        for (_, (span, rtm, rval, rty, rvty, _, _)) in cxt.decl.iter() {
             self.span_void_count += 1;
             self.walk_tm_id(rtm, visited);
             self.walk_val_id(rval, visited);
@@ -1988,7 +1989,7 @@ impl Infer {
                 }
             },
             Val::Decl(x, sp) => {
-                if let Some((_, _, _, _, _, Some(prim_fn))) = decl.get(&x.data) {
+                if let Some((_, _, _, _, _, Some(prim_fn), _)) = decl.get(&x.data) {
                     // Impure prims (mutable globals / IO / diagnostics) are
                     // memo-tainting: skipping their re-execution on a cache
                     // hit would be observable.  The prim-ness lookup itself

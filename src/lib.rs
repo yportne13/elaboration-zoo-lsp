@@ -398,7 +398,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// item, rendered as markdown — not inside the code block).
     pub fn hover_def_block(&self, def_span: &Span<()>) -> Option<String> {
         let cxt = self.cxt.lock().unwrap();
-        let mut best: Option<(&SmolStr, &Rc<L13_namespace::Tm>)> = None;
+        let mut best: Option<(&SmolStr, &Rc<L13_namespace::Tm>, &str)> = None;
         for (k, e) in cxt.decl.iter() {
             let s = &e.0;
             if s.path_id == def_span.path_id
@@ -407,18 +407,29 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             {
                 let better = match best {
                     None => true,
-                    Some((bk, _)) => (k.len(), k.as_str()) < (bk.len(), bk.as_str()),
+                    Some((bk, _, _)) => (k.len(), k.as_str()) < (bk.len(), bk.as_str()),
                 };
                 if better {
-                    best = Some((k, &e.3));
+                    // e.6 is the def-site `typ_pretty` rendering: computed with
+                    // the elaboration context's own names at declaration time.
+                    // The raw Tm (e.3) can embed AppPruning(Meta, pr) whose
+                    // pruning is deeper than any display-side name list, so it
+                    // is only a fallback for entries without a stored rendering
+                    // (builtin prims, forward decls).
+                    best = Some((k, &e.3, e.6.as_str()));
                 }
             }
         }
-        let (key, ty) = best?;
+        let (key, ty, ty_pretty) = best?;
+        let rendered = if ty_pretty.is_empty() {
+            pretty_tm(0, crate::list::List::new(), ty)
+        } else {
+            ty_pretty.to_string()
+        };
         let mut out = Self::hover_code_block(&format!(
             "{} : {}",
             key,
-            pretty_tm(0, crate::list::List::new(), ty)
+            rendered
         ));
         if let Some(docs) = self.hover_doc_text(def_span) {
             out.push_str("\n\n");

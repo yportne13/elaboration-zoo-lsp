@@ -5033,3 +5033,37 @@ fn nat_primop_stuck_reducibility() {
 }
 
 
+
+/// Regression: decl-table types carrying `AppPruning(Meta, pr)` (operator /
+/// typeclass insertion metas inside signatures, e.g. `UInt[w + 1]`) must
+/// survive pretty-printing under an empty name list.  `hover_def_block` used
+/// to hit them via its raw-Tm fallback and 37 prelude/HDL decls panicked with
+/// "Mismatch between names and pruning list" on every hover.
+#[test]
+fn decl_types_pretty_ok_under_empty_names() {
+    let input = r#"
+def are(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (a + c) (b + c) =
+    match c {
+        case zero => h
+        case succ(k) => cong_succ(are(a, b, k, h))
+    }
+"#;
+    let (mut infer, mut cxt, global_macros) = clone_prelude_state(true).unwrap();
+    let ast = parser::parser_with_macros(&preprocess(input), 24, &global_macros)
+        .map(|(d, e, _, _)| (d, e))
+        .unwrap();
+    for tm in ast.0 {
+        let (_, _, new_cxt) = infer.infer(&cxt, tm.clone()).unwrap();
+        cxt = new_cxt;
+    }
+    let mut panics = Vec::new();
+    for (k, e) in cxt.decl.iter() {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::pretty::pretty_tm(0, List::new(), &e.3)
+        }));
+        if r.is_err() {
+            panics.push(k.clone());
+        }
+    }
+    assert!(panics.is_empty(), "{} decl types panic on empty-ns pretty: {panics:?}", panics.len());
+}

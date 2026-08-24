@@ -537,6 +537,7 @@ impl Cxt {
             Tm::U(0).into(),
             Val::U(0).into(),
             None,
+            String::new(),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "string_concat",
@@ -637,7 +638,7 @@ impl Cxt {
         let name_span = empty_span(SmolStr::new(name));
         let val_tm = Tm::Decl(name_span.clone()).into();
         let vt = Val::Decl(name_span.clone(), List::new()).into();
-        self.decl(name_span, val_tm, vt, ty, va, Some(prim))
+        self.decl(name_span, val_tm, vt, ty, va, Some(prim), String::new())
     }
 
     /// Register nat builtins (nat_to_dec + word-size nat arithmetic primops).
@@ -739,7 +740,7 @@ impl Cxt {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut decl = self.decl.clone();
         let decl_map = Rc::make_mut(&mut decl);
-        let t = decl_map.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a, None));
+        let t = decl_map.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a, None, String::new()));
         if t.is_some() {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
@@ -802,7 +803,12 @@ impl Cxt {
         }
     }
 
-    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>, prim: Option<PrimFunc>) -> Result<Self, Error> {
+    /// `typ_pretty` is the def-site rendering of the declared type (computed
+    /// with the elaboration context's own names).  Stored alongside the raw
+    /// `Tm` because the raw term can embed `AppPruning(Meta, pr)` whose
+    /// pruning is deeper than any display-side name list — hover must show
+    /// the precomputed string instead of re-pretty-printing without context.
+    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>, prim: Option<PrimFunc>, typ_pretty: String) -> Result<Self, Error> {
         let mut decl = self.decl.clone();
         let decl_map = Rc::make_mut(&mut decl);
         // prim-ness transitions invalidate the force memo (see
@@ -811,7 +817,7 @@ impl Cxt {
         // what `force` computes for spines of that name.
         let had_prim = decl_map.get(&x.data).map_or(false, |e| e.5.is_some());
         let now_prim = prim.is_some();
-        decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim));
+        decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim, typ_pretty));
         if had_prim != now_prim {
             super::prim_version_bump();
         }
