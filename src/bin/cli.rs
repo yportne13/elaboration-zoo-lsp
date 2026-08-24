@@ -295,6 +295,26 @@ enum Commands {
         #[arg(long, short)]
         no_hdl: bool,
     },
+
+    /// Interactive tutorial: learn the Typort language step by step.
+    ///
+    /// Each lesson opens your $EDITOR on a small exercise file and
+    /// type-checks your solution with the real elaborator; passing a
+    /// lesson unlocks the next one. Progress is saved locally.
+    #[command(visible_alias = "tu")]
+    Tutorial {
+        /// Start at a specific lesson number (1-based)
+        #[arg(long, short)]
+        lesson: Option<usize>,
+
+        /// List all lessons and completion status, then exit
+        #[arg(long)]
+        list: bool,
+
+        /// Clear saved tutorial progress
+        #[arg(long)]
+        reset: bool,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -327,6 +347,16 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
         Commands::Stats { no_hdl } => {
             run_stats(no_hdl)?;
+        }
+
+        Commands::Tutorial { lesson, list, reset } => {
+            elaboration_zoo_lsp::tutorial::run(
+                elaboration_zoo_lsp::tutorial::TutorialOptions {
+                    start_lesson: lesson,
+                    list,
+                    reset,
+                },
+            )?;
         }
     }
 

@@ -35,6 +35,63 @@ fn position_to_byte_offset(text: &str, position: Position) -> Option<usize> {
     }
 }
 
+/// Render diagnostics with source context to stderr, Rust-compiler-style.
+/// Shared by the CLI client and the interactive tutorial.
+pub fn render_diagnostics_stderr(file_label: &str, source_text: &str, diagnostics: &[Diagnostic]) {
+    let mut files = SimpleFiles::new();
+    let file_id = files.add(file_label, source_text);
+
+    let cs_diags: Vec<CsDiagnostic<usize>> = diagnostics
+        .iter()
+        .filter_map(|d| {
+            let severity = match d.severity {
+                Some(DiagnosticSeverity::ERROR) => CsSeverity::Error,
+                Some(DiagnosticSeverity::WARNING) => CsSeverity::Warning,
+                Some(DiagnosticSeverity::INFORMATION) => CsSeverity::Note,
+                Some(DiagnosticSeverity::HINT) => CsSeverity::Help,
+                _ => CsSeverity::Error,
+            };
+
+            let start_offset = position_to_byte_offset(source_text, d.range.start)?;
+            let end_offset = position_to_byte_offset(source_text, d.range.end)?;
+
+            Some(
+                CsDiagnostic::new(severity)
+                    .with_message(d.message.clone())
+                    .with_labels(vec![Label::primary(file_id, start_offset..end_offset)])
+                    .with_notes(
+                        d.related_information
+                            .as_ref()
+                            .map(|info| {
+                                info.iter()
+                                    .map(|ri| {
+                                        format!(
+                                            "note: {} {}:{}:{}",
+                                            ri.message,
+                                            ri.location.uri.as_str(),
+                                            ri.location.range.start.line,
+                                            ri.location.range.start.character,
+                                        )
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    ),
+            )
+        })
+        .collect();
+
+    if cs_diags.is_empty() {
+        return;
+    }
+
+    let config = term::Config::default();
+    let mut writer = StandardStream::stderr(ColorChoice::Auto);
+    for cs_diag in &cs_diags {
+        term::emit(&mut writer, &config, &files, cs_diag).unwrap();
+    }
+}
+
 /// Trait that abstracts the client-side operations.
 /// LSP client and CLI client both implement this trait.
 pub trait ClientLike: Send + Sync {
@@ -126,63 +183,9 @@ impl ClientLike for CliClient {
         }
 
         let source_text_ref = source_text.unwrap();
-        let mut files = SimpleFiles::new();
-
         // Use the file path from the URI for display
         let file_path = uri.path();
-        let file_id = files.add(file_path, source_text_ref.value().as_str());
-
-        let cs_diags: Vec<CsDiagnostic<usize>> = diagnostics
-            .iter()
-            .filter_map(|d| {
-                let severity = match d.severity {
-                    Some(DiagnosticSeverity::ERROR) => CsSeverity::Error,
-                    Some(DiagnosticSeverity::WARNING) => CsSeverity::Warning,
-                    Some(DiagnosticSeverity::INFORMATION) => CsSeverity::Note,
-                    Some(DiagnosticSeverity::HINT) => CsSeverity::Help,
-                    _ => CsSeverity::Error,
-                };
-
-                let start_offset =
-                    position_to_byte_offset(source_text_ref.value(), d.range.start)?;
-                let end_offset =
-                    position_to_byte_offset(source_text_ref.value(), d.range.end)?;
-
-                Some(
-                    CsDiagnostic::new(severity)
-                        .with_message(d.message.clone())
-                        .with_labels(vec![Label::primary(file_id, start_offset..end_offset)])
-                        .with_notes(
-                            d.related_information
-                                .as_ref()
-                                .map(|info| {
-                                    info.iter()
-                                        .map(|ri| {
-                                            format!(
-                                                "note: {} {}:{}:{}",
-                                                ri.message,
-                                                ri.location.uri.as_str(),
-                                                ri.location.range.start.line,
-                                                ri.location.range.start.character,
-                                            )
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                        ),
-                )
-            })
-            .collect();
-
-        if cs_diags.is_empty() {
-            return;
-        }
-
-        let config = term::Config::default();
-        let mut writer = StandardStream::stderr(ColorChoice::Auto);
-        for cs_diag in &cs_diags {
-            term::emit(&mut writer, &config, &files, cs_diag).unwrap();
-        }
+        render_diagnostics_stderr(file_path, source_text_ref.value(), &diagnostics);
     }
 
     fn show_message(&self, typ: MessageType, message: String) {

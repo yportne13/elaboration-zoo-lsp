@@ -90,6 +90,14 @@ cargo run --release --bin typort -- lsp
 
 # Memory benchmark (requires mem-profile feature)
 cargo run --release --features mem-profile --bin typort -- stats
+
+# Interactive tutorial: learn the language step by step
+cargo run --release --bin typort -- tutorial
+
+# List lessons / start at lesson 3 / clear progress
+cargo run --release --bin typort -- tutorial --list
+cargo run --release --bin typort -- tutorial --lesson 3
+cargo run --release --bin typort -- tutorial --reset
 ```
 
 ### VS Code Extension
