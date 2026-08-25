@@ -317,15 +317,23 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let rope = self.document_map.get(uri.as_str())?;
         let id = self.document_id.get(uri.as_str())?;
         let offset = position_to_offset(position, &rope)?;
-        // rust-analyzer-style panels: definition signature first, then
-        // the hovered expression's own type, separated by a blank line.
+        // rust-analyzer-style panels: definition signature first, then the
+        // hovered expression's own type.  When the hover resolves to a
+        // declaration the definition panel already carries the type (and for
+        // enum/struct the full member list), so a separate type panel would
+        // just repeat it (and can even re-render binder names with the
+        // use-site context) — only bare expressions/locals get the type-only
+        // panel.
         let make_hover = |range_span: Span<()>, def_block: Option<String>, type_str: String| {
-            let mut value = String::new();
-            if let Some(d) = def_block {
-                value.push_str(&d);
-                value.push_str("\n\n");
-            }
-            value.push_str(&Self::hover_code_block(&type_str));
+            // A declaration hover carries its own panel (signature, and for
+            // enum/struct/trait the full member list); an expression/local
+            // hover has no def panel and gets a bare type panel instead —
+            // the two never stack, so no blank-line separator is needed.
+            let mut value = if let Some(d) = def_block {
+                d
+            } else {
+                Self::hover_code_block(&type_str)
+            };
             Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
@@ -395,11 +403,27 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// key wins.  Locals have no global decl, so hovering them yields no
     /// panel (type-only hover).
     ///
+    /// A sum type's name span is also shared by its synthesized `.mk`
+    /// constructor(s) (struct/trait `mk` reuses the type's name token, and a
+    /// trait may even register a bare `mk` alias), so the tie-break prefers
+    /// the key whose term is a `Tm::Sum` — the type itself — over a
+    /// constructor key.  Otherwise a plain `Name : Type 0` panel wins and
+    /// the member list would never render.
+    ///
     /// `///` doc-comment lines immediately above the declaration are
     /// appended below the signature (rust-analyzer-style: docs after the
     /// item, rendered as markdown — not inside the code block).
     pub fn hover_def_block(&self, def_span: &Span<()>) -> Option<String> {
         let cxt = self.cxt.lock().unwrap();
+        // A key names a sum type when its term (λ-chain unwrapped) is a
+        // `Tm::Sum`.  Constructors (`Name.Name.mk`, bare `mk`) are Pi chains.
+        let is_sum = |tm: &Rc<L13_namespace::Tm>| -> bool {
+            let mut cur = tm.clone();
+            while let L13_namespace::Tm::Lam(_, _, b) = cur.as_ref() {
+                cur = b.clone();
+            }
+            matches!(cur.as_ref(), L13_namespace::Tm::Sum(..))
+        };
         let mut best: Option<(&SmolStr, &Rc<L13_namespace::Tm>, &str)> = None;
         for (k, e) in cxt.decl.iter() {
             let s = &e.0;
@@ -409,7 +433,17 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             {
                 let better = match best {
                     None => true,
-                    Some((bk, _, _)) => (k.len(), k.as_str()) < (bk.len(), bk.as_str()),
+                    Some((bk, btm, _)) => {
+                        let k_sum = is_sum(&e.1);
+                        let b_sum = is_sum(btm);
+                        match (b_sum, k_sum) {
+                            // A constructor key loses to the type itself.
+                            (false, true) => true,
+                            (true, false) => false,
+                            // Same kind: shortest (least qualified) key wins.
+                            _ => (k.len(), k.as_str()) < (bk.len(), bk.as_str()),
+                        }
+                    }
                 };
                 if better {
                     // e.6 is the def-site `typ_pretty` rendering: computed with
@@ -418,21 +452,25 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     // pruning is deeper than any display-side name list, so it
                     // is only a fallback for entries without a stored rendering
                     // (builtin prims, forward decls).
-                    best = Some((k, &e.3, e.6.as_str()));
+                    best = Some((k, &e.1, e.6.as_str()));
                 }
             }
         }
-        let (key, ty, ty_pretty) = best?;
-        let rendered = if ty_pretty.is_empty() {
-            pretty_tm(0, crate::list::List::new(), ty)
+        let (key, tm, ty_pretty) = best?;
+        // Sum types (enum/struct/trait): render the members, rust-analyzer
+        // style, instead of a bare `Name : Type 0`.
+        let mut out = if let Some(def) =
+            L13_namespace::pretty_sum_definition(key, tm, &cxt.decl)
+        {
+            Self::hover_code_block(&def)
         } else {
-            ty_pretty.to_string()
+            let rendered = if ty_pretty.is_empty() {
+                pretty_tm(0, crate::list::List::new(), tm)
+            } else {
+                ty_pretty.to_string()
+            };
+            Self::hover_code_block(&format!("{} : {}", key, rendered))
         };
-        let mut out = Self::hover_code_block(&format!(
-            "{} : {}",
-            key,
-            rendered
-        ));
         if let Some(docs) = self.hover_doc_text(def_span) {
             out.push_str("\n\n");
             out.push_str(&Self::render_doc_text(&docs));

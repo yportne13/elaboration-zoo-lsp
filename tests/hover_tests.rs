@@ -119,7 +119,7 @@ fn hover_markup_at(b: &Arc<Backend<CapturingClient>>, uri: &Url, line: u32, char
 }
 
 #[test]
-fn hover_on_def_name_shows_signature_and_type_panels() {
+fn hover_on_def_name_shows_signature_panel() {
     let client = CapturingClient::default();
     let b = Backend::new(client);
     let uri = Url::parse("file:///sig.typort").unwrap();
@@ -128,20 +128,18 @@ fn hover_on_def_name_shows_signature_and_type_panels() {
 
     let name_off = src.find("foo").unwrap() as u32;
     let value = hover_markup_at(&b, &uri, 0, name_off);
-    // Definition panel first: `<name> : <type>` in a typort code fence …
-    assert!(
-        value.starts_with("```typort\nfoo : (a: Nat, b: Boolean) → Boolean\n```"),
+    // The definition panel carries the full signature; the definition already
+    // contains the type, so no separate expression-type panel is appended
+    // (rust-analyzer shows just the item signature).
+    assert_eq!(
+        value,
+        "```typort\nfoo : (a: Nat, b: Boolean) → Boolean\n```",
         "missing definition panel, got:\n{value}"
-    );
-    // … then the hovered expression's own type panel.
-    assert!(
-        value.contains("\n\n```typort\n(a: Nat, b: Boolean) → Boolean\n```"),
-        "missing type panel, got:\n{value}"
     );
 }
 
 #[test]
-fn hover_on_def_use_shows_definition_panel_first() {
+fn hover_on_def_use_shows_definition_panel() {
     let client = CapturingClient::default();
     let b = Backend::new(client);
     let uri = Url::parse("file:///use.typort").unwrap();
@@ -151,15 +149,16 @@ fn hover_on_def_use_shows_definition_panel_first() {
     let line2 = src.find("def bar").unwrap();
     let use_off = src.rfind("foo").unwrap();
     let value = hover_markup_at(&b, &uri, 1, (use_off - line2) as u32);
-    // The definition signature panel comes first, then the expression type.
+    // The definition signature panel comes first (and only — the resolved
+    // declaration already carries the type).
     assert!(
         value.starts_with("```typort\nfoo : "),
         "definition panel must come first, got:\n{value}"
     );
     assert_eq!(
         value.matches("```typort").count(),
-        2,
-        "expected exactly two panels, got:\n{value}"
+        1,
+        "expected a single panel, got:\n{value}"
     );
 }
 
@@ -197,13 +196,17 @@ fn hover_on_def_with_doc_comment_shows_docs() {
         "missing signature panel, got:\n{value}"
     );
     // … then the doc body (markers stripped; each `///` line kept a visible
-    // line via hard break, blank `///` line becomes a paragraph break), still
-    // before the type panel.
+    // line via hard break, blank `///` line becomes a paragraph break).  The
+    // resolved declaration already carries the type, so no separate type
+    // panel is appended after the docs.
     assert!(
-        value.contains(
-            "\n\nAdds one to `a`.  \n\nUses the prelude successor.  \n\n```typort\n"
-        ),
+        value.contains("\n\nAdds one to `a`.  \n\nUses the prelude successor.  "),
         "missing doc body between panels, got:\n{value}"
+    );
+    assert_eq!(
+        value.matches("```typort").count(),
+        1,
+        "signature + docs only, no redundant type panel, got:\n{value}"
     );
 }
 
@@ -222,7 +225,7 @@ fn hover_doc_downscales_headings() {
     let name_off = src[line..].find("inc").unwrap() + line;
     let value = hover_markup_at(&b, &uri, src[..line].matches('\n').count() as u32, (name_off - line) as u32);
     assert!(
-        value.contains("\n\n#### 示例\n计算 `n` 的后继。  \n##### 参数\n#inline  \n\n"),
+        value.contains("\n\n#### 示例\n计算 `n` 的后继。  \n##### 参数\n#inline  "),
         "headings must be downscaled, got:\n{value}"
     );
 }
@@ -242,14 +245,15 @@ fn hover_doc_keeps_code_fence_and_balances_unclosed() {
     let name_off = src[line..].find("inc").unwrap() + line;
     let value = hover_markup_at(&b, &uri, src[..line].matches('\n').count() as u32, (name_off - line) as u32);
     // The fence keeps its code verbatim (no hard-break spaces inside) and the
-    // prose after it still closes properly before the type panel.
+    // prose after it still closes properly before the end of the hover (no
+    // trailing type panel, so the fence is the last block).
     assert!(
-        value.contains("\n\n示例：  \n```typort\ninc 0\n```\n后续说明。  \n\n```typort\n"),
+        value.contains("\n\n示例：  \n```typort\ninc 0\n```\n后续说明。  "),
         "fenced doc must survive intact, got:\n{value}"
     );
 
     // Unclosed fence: the missing closer is appended by render_doc_text, so
-    // the type panel still shows (the trailing ``` closes the block).
+    // the doc block stays balanced even without a following type panel.
     let src2 = "/// 用法：\n/// ```typort\n/// inc 0\ndef inc(a: Nat): Nat = succ a";
     elaborate(&b, &uri, src2);
     let line2 = src2.find("def inc").unwrap();
@@ -257,8 +261,8 @@ fn hover_doc_keeps_code_fence_and_balances_unclosed() {
     let value2 = hover_markup_at(&b, &uri, src2[..line2].matches('\n').count() as u32, (name_off2 - line2) as u32);
     assert_eq!(
         value2.matches("```typort").count(),
-        3,
-        "unclosed fence must be balanced, got:\n{value2}"
+        2,
+        "unclosed fence must be balanced (signature + doc fence), got:\n{value2}"
     );
 }
 
@@ -278,8 +282,13 @@ fn hover_on_use_site_shows_docs_too() {
         "definition panel must come first, got:\n{value}"
     );
     assert!(
-        value.contains("\n\nDoubles `a` via addition.  \n\n```typort\n"),
+        value.contains("\n\nDoubles `a` via addition.  "),
         "docs missing on use-site hover, got:\n{value}"
+    );
+    assert_eq!(
+        value.matches("```typort").count(),
+        1,
+        "use-site hover = definition + docs only, got:\n{value}"
     );
 }
 
@@ -299,5 +308,207 @@ fn doc_scan_stops_at_blank_line() {
     assert!(
         !value.contains("Some other note"),
         "detached doc must not render, got:\n{value}"
+    );
+}
+
+// ── Sum-type member rendering (enum / struct / trait) ────────────────────────
+// Hovering a type reference shows the full definition — constructors/fields/
+// methods — rust-analyzer style, instead of a bare `Name : Type 0`.
+
+#[test]
+fn hover_on_enum_type_shows_members() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///enum1.typort").unwrap();
+    let src = "def use_nat(n: Nat): Nat = succ n";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def use_nat").unwrap();
+    let nat_off = src.find("Nat").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (nat_off - line) as u32);
+    assert_eq!(
+        value,
+        "```typort\nenum Nat {\n    zero\n    succ(n: Nat)\n}\n```",
+        "enum hover must show members, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_local_enum_def_and_use_shows_members() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///enum2.typort").unwrap();
+    let src = "/// 颜色。\nenum Color {\n    red\n    green(weight: Nat)\n}\n\ndef pick(c: Color): Nat = match c {\n    case red => 0\n    case green(w) => w\n}";
+    elaborate(&b, &uri, src);
+
+    // On the enum's own definition name: members + docs.
+    let line0 = src.find("enum Color").unwrap();
+    let name_off = src.find("Color").unwrap();
+    let value = hover_markup_at(&b, &uri, 1, (name_off - line0) as u32);
+    assert!(
+        value.starts_with("```typort\nenum Color {\n    red\n    green(weight: Nat)\n}\n```"),
+        "enum def hover must show members, got:\n{value}"
+    );
+    assert!(
+        value.contains("\n\n颜色。  "),
+        "docs must follow the member list, got:\n{value}"
+    );
+
+    // On the `Color` type annotation in `def pick`: same definition panel
+    // (members + the definition's doc comment).
+    let line6 = src.find("def pick").unwrap();
+    let c_off = src.find("c: Color").unwrap() + 3;
+    let value = hover_markup_at(&b, &uri, 6, (c_off - line6) as u32);
+    assert!(
+        value.starts_with("```typort\nenum Color {\n    red\n    green(weight: Nat)\n}\n```"),
+        "annotation hover must show the enum definition, got:\n{value}"
+    );
+    assert!(
+        value.contains("颜色。  "),
+        "annotation hover must carry the definition docs, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_struct_shows_fields() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///struct1.typort").unwrap();
+    let src = "struct Point {\n    x: Nat\n    y: Nat\n}\n\ndef origin: Point = new Point(0, 0)";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("struct Point").unwrap();
+    let name_off = src.find("Point").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (name_off - line) as u32);
+    assert_eq!(
+        value,
+        "```typort\nstruct Point(x: Nat, y: Nat)\n```",
+        "struct hover must show fields inline, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_parameterized_enum_shows_members() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///enum3.typort").unwrap();
+    let src = "def foo[T](xs: List[T]): Nat = xs.length";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def foo").unwrap();
+    let l_off = src.find("List[T]").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (l_off - line) as u32);
+    assert!(
+        value.starts_with("```typort\nenum List[T] {\n    lnil\n    lcons(head: T, tail: "),
+        "parameterized enum hover must show members, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_gadt_enum_shows_members() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///enum4.typort").unwrap();
+    let src = "def vlen[A](v: Vec[A] 3): Nat = 3";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def vlen").unwrap();
+    let v_off = src.find("Vec[A] 3").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (v_off - line) as u32);
+    assert!(
+        value.contains("enum Vec[A](len: Nat) {"),
+        "GADT header must keep explicit params, got:\n{value}"
+    );
+    assert!(
+        value.contains("cons[l: Nat](x: A, xs: Vec [A] l)"),
+        "GADT constructor params must render, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_trait_shows_methods() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///trait1.typort").unwrap();
+    let src = "trait MyShow {\n    def show: String\n}\n\ndef describe(s: MyShow): String = \"\"";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("trait MyShow").unwrap();
+    let name_off = src.find("MyShow").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (name_off - line) as u32);
+    assert_eq!(
+        value,
+        "```typort\ntrait MyShow {\n    show(this: Self) → String\n}\n```",
+        "trait hover must show methods, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_namespaced_trait_shows_methods() {
+    // A prelude trait's name span is shared by its synthesized `.mk`
+    // constructor (even a bare `mk` alias).  The def-panel key selection must
+    // prefer the trait's own (Sum-typed) key over the constructor key, or the
+    // hover degrades to a raw `mk : […]` constructor type.
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///trait2.typort").unwrap();
+    let src = "def keep(x: Add[Nat, Nat]): Add[Nat, Nat] = x";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def keep").unwrap();
+    let a_off = src.find("Add").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (a_off - line) as u32);
+    assert_eq!(
+        value,
+        "```typort\ntrait Add[T, O] {\n    +(this: Self, that: T) → O\n}\n```",
+        "namespaced trait hover must show methods, not the `mk` constructor, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_gadt_index_params_render() {
+    // `Eq[A](x: A, y: A)` — the stored index-param types were quoted inside
+    // the full λ-chain, so they must be rendered against the complete param
+    // context (a partial context used to emit `y: <out of bounds>`).
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///gadt2.typort").unwrap();
+    let src = "def e: Eq[Nat] 3 3 = refl[Nat] 3";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def e").unwrap();
+    let e_off = src.find("Eq").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (e_off - line) as u32);
+    assert!(
+        value.contains("enum Eq[A](x: A, y: A) {"),
+        "GADT index params must reference the type param, got:\n{value}"
+    );
+    assert!(
+        !value.contains("out of bounds"),
+        "GADT header must not mis-resolve de Bruijn indices, got:\n{value}"
+    );
+    assert!(
+        value.contains("refl(a: A)"),
+        "GADT constructor must render, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_on_namespaced_struct_shows_fields() {
+    // Tuple2 is a prelude struct with implicit type params; the header must
+    // splice its fields and keep `[A, B]`.
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///struct2.typort").unwrap();
+    let src = "def swap[A, B](t: Tuple2[A, B]): Tuple2[B, A] = (t._2, t._1)";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def swap").unwrap();
+    let t_off = src.find("Tuple2").unwrap();
+    let value = hover_markup_at(&b, &uri, 0, (t_off - line) as u32);
+    assert_eq!(
+        value,
+        "```typort\nstruct Tuple2[A, B](_1: A, _2: B)\n```",
+        "namespaced struct hover must show fields, got:\n{value}"
     );
 }

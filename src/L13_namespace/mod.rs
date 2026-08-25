@@ -1183,6 +1183,341 @@ impl Infer {
     }
 }
 
+// ── Sum-type definition rendering (hover) ──────────────────────────────────
+// Reconstruct a source-like `enum`/`struct`/`trait` declaration from the
+// stored elaboration data, so a hover popup shows the members (constructors /
+// fields / methods) instead of just `Name : Type 0` — rust-analyzer style.
+
+/// Fresh binder name: append `'` until it does not appear in `ns` (mirrors
+/// `pretty::fresh` so nested binders never render the wrong de Bruijn slot).
+fn sum_fresh(ns: &List<SmolStr>, suggested: &str) -> String {
+    if suggested == "_" {
+        return "_".to_string();
+    }
+    let mut candidate = suggested.to_string();
+    while ns.iter().any(|x| x == &candidate) {
+        candidate = format!("{}'", candidate);
+    }
+    candidate
+}
+
+/// When `t` is the head `Tm::Decl(enum_name)` applied to `args` (empty for
+/// the bare name), return `Some(args)`; `None` when the head is something
+/// else.  Used to recognise a constructor's codomain as the enum itself.
+fn sum_self_spine<'a>(t: &'a Tm, enum_name: &str) -> Option<Vec<&'a Tm>> {
+    let mut args: Vec<&Tm> = Vec::new();
+    let mut cur = t;
+    loop {
+        match cur {
+            Tm::App(f, u, _) => {
+                args.push(u.as_ref());
+                cur = f.as_ref();
+            }
+            other => {
+                if let Tm::Decl(s) = other {
+                    if s.data == enum_name {
+                        return Some(args);
+                    }
+                }
+                return None;
+            }
+        }
+    }
+}
+
+/// A constructor's codomain is "the enum itself" when its head is the enum
+/// name (bare `Nat` or applied, e.g. `List[T]`, `Vec[A] l`).  The trailing
+/// ` → ret` is omitted in that case — for simple enums it is pure repetition,
+/// and for GADTs the computed index (`Vec[A] (l + 1)`) is stored as an
+/// inlined helper call that renders as noise in a hover popup.
+fn is_trivial_self(t: &Tm, enum_name: &str) -> bool {
+    sum_self_spine(t, enum_name).is_some()
+}
+
+/// Render one constructor from its Pi-chain type, e.g. `succ(n: Nat)` or
+/// `cons[l: Nat](x: A, xs: Vec[A] l)`.  `elide_impls` leading implicit binders
+/// (the enum's own type params, already shown in the header) are hidden.  The
+/// trailing ` → ret` is omitted when the codomain is the enum itself.
+fn render_pi_member(
+    member_name: &str,
+    ty: &Rc<Tm>,
+    enum_name: &str,
+    elide_impls: usize,
+) -> String {
+    // Walk the Pi chain collecting binders (name, icity, domain) + codomain.
+    let mut binders: Vec<(SmolStr, Icit, Rc<Tm>)> = Vec::new();
+    let mut codomain: Rc<Tm> = ty.clone();
+    loop {
+        match codomain.as_ref() {
+            Tm::Pi(x, i, a, b) => {
+                binders.push((x.data.clone(), *i, a.clone()));
+                codomain = b.clone();
+            }
+            _ => break,
+        }
+    }
+    // Names are accumulated outer→inner (prepend each fresh binder name) so
+    // de Bruijn indices in later domains / the codomain resolve to the right
+    // binder.  A `Tm::Var` at de Bruijn `ix` names the `ix`-th element of the
+    // list from its head (head = innermost binder).
+    let mut ns: List<SmolStr> = List::new();
+    let mut rendered: Vec<(bool, Icit, String)> = Vec::new();
+    for (i, (x, icit, a)) in binders.iter().enumerate() {
+        let x_str = sum_fresh(&ns, x.as_str());
+        let dom = pretty_tm(0, ns.clone(), a);
+        rendered.push((i < elide_impls, *icit, format!("{x_str}: {dom}")));
+        ns = ns.prepend(SmolStr::new(&x_str));
+    }
+    let ret = pretty_tm(0, ns, &codomain);
+
+    // Group the visible binders by icity: `[impl](expl)`, like the parser's
+    // `f[x](y)` form.
+    let mut impls: Vec<&str> = Vec::new();
+    let mut expls: Vec<&str> = Vec::new();
+    for (elided, icit, s) in &rendered {
+        if *elided {
+            continue;
+        }
+        match icit {
+            Icit::Impl => impls.push(s),
+            Icit::Expl => expls.push(s),
+        }
+    }
+    let impl_str = if impls.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", impls.join(", "))
+    };
+    let expl_str = if expls.is_empty() {
+        String::new()
+    } else {
+        format!("({})", expls.join(", "))
+    };
+
+    let mut out = format!("{member_name}{impl_str}{expl_str}");
+    if !is_trivial_self(&codomain, enum_name) {
+        out.push_str(" → ");
+        out.push_str(&ret);
+    }
+    out
+}
+
+/// Render a trait method as a signature from its Pi-chain type, e.g.
+/// `+(this: Self, that: T) → O`.  `ns_start` carries the names of the trait's
+/// own params (including `Self`), which the method body references by de
+/// Bruijn index.
+fn render_pi_signature(name: &str, pi_ty: &Rc<Tm>, ns_start: &List<SmolStr>) -> String {
+    let mut binders: Vec<(SmolStr, Icit, Rc<Tm>)> = Vec::new();
+    let mut codomain: Rc<Tm> = pi_ty.clone();
+    loop {
+        match codomain.as_ref() {
+            Tm::Pi(x, i, a, b) => {
+                binders.push((x.data.clone(), *i, a.clone()));
+                codomain = b.clone();
+            }
+            _ => break,
+        }
+    }
+    let mut ns = ns_start.clone();
+    let mut impls: Vec<String> = Vec::new();
+    let mut expls: Vec<String> = Vec::new();
+    for (x, icit, a) in &binders {
+        let x_str = sum_fresh(&ns, x.as_str());
+        let dom = pretty_tm(0, ns.clone(), a);
+        let item = format!("{x_str}: {dom}");
+        match icit {
+            Icit::Impl => impls.push(item),
+            Icit::Expl => expls.push(item),
+        }
+        ns = ns.prepend(SmolStr::new(&x_str));
+    }
+    let ret = pretty_tm(0, ns, &codomain);
+    let impl_str = if impls.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", impls.join(", "))
+    };
+    let expl_str = if expls.is_empty() {
+        String::new()
+    } else {
+        format!("({})", expls.join(", "))
+    };
+    format!("{name}{impl_str}{expl_str} → {ret}")
+}
+
+/// Render a sum type (enum / struct / trait) declaration in source-like form
+/// for the hover panel — `enum Nat { zero, succ(n: Nat) }` — so the popup
+/// shows the members instead of just `Name : Type 0`.  The header comes from
+/// the type's `Tm::Sum` params (implicit as `[T]`, explicit as `(len: Nat)`);
+/// each constructor's signature comes from its own decl-table type.  Returns
+/// None when the term is not a sum type (a plain def / builtin).
+pub fn pretty_sum_definition(key: &str, tm: &Rc<Tm>, decl: &Decl) -> Option<String> {
+    // The checked enum term is `λ type-params … (Tm::Sum …)`; unwrap the
+    // lambdas to reach the `Tm::Sum` that carries the type params and the
+    // case names.
+    let mut cur: Rc<Tm> = tm.clone();
+    while let Tm::Lam(_, _, b) = cur.as_ref() {
+        cur = b.clone();
+    }
+    let Tm::Sum(name, params, cases, is_trait) = cur.as_ref() else {
+        return None;
+    };
+
+    // ── Header params from the `Tm::Sum` params ──
+    // `TmSumParams` = (name, value-tm, type-tm, icity).  Implicit params render
+    // as bare names (`[T]`); explicit ones as `(name: type)`.
+    //
+    // The enum term is `λ p₀ → … → λ pₙ₋₁ → Sum`, so the Sum node sits inside
+    // the FULL λ-chain and every stored param type (`type-tm`) was quoted at
+    // that depth: its de Bruijn indices address the whole binder stack
+    // (innermost = last param).  We therefore fresh-ify every param name up
+    // front, build the complete context once, and render each explicit param's
+    // type against that complete context — an incremental `ns` (only the
+    // params seen so far) would mis-resolve params referencing earlier ones
+    // (e.g. `Eq[A](x: A, y: A)` rendered `y: <out of bounds>`).  The same
+    // complete context then feeds trait method signatures.
+    let mut ns: List<SmolStr> = List::new();
+    let mut fresh_names: Vec<SmolStr> = Vec::with_capacity(params.len());
+    for (x, _, _, _) in params.iter() {
+        let x_str = SmolStr::new(&sum_fresh(&ns, &x.data));
+        fresh_names.push(x_str.clone());
+        ns = ns.prepend(x_str);
+    }
+    let mut header_impl: Vec<String> = Vec::new();
+    let mut header_expl: Vec<String> = Vec::new();
+    let mut n_impl = 0usize;
+    for (idx, (_x, _val, typ, icit)) in params.iter().enumerate() {
+        let x_str = &fresh_names[idx];
+        if *icit == Icit::Impl {
+            n_impl += 1;
+        }
+        // A trait's first implicit param is `Self`: it stays in scope for the
+        // methods' de Bruijn indices but is elided from the header.
+        if !(*is_trait && idx == 0) {
+            match icit {
+                Icit::Impl => header_impl.push(x_str.to_string()),
+                Icit::Expl => {
+                    let dom = pretty_tm(0, ns.clone(), typ);
+                    header_expl.push(format!("{x_str}: {dom}"));
+                }
+            }
+        }
+    }
+
+    let is_struct = !*is_trait && cases.len() == 1 && cases[0].data.ends_with(".mk");
+    let keyword = if *is_trait {
+        "trait"
+    } else if is_struct {
+        "struct"
+    } else {
+        "enum"
+    };
+    let impl_str = if header_impl.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", header_impl.join(", "))
+    };
+    let expl_str = if header_expl.is_empty() {
+        String::new()
+    } else {
+        format!("({})", header_expl.join(", "))
+    };
+    let header = format!("{keyword} {}{}{}", name.data, impl_str, expl_str);
+
+    // ── Members ──
+    if *is_trait {
+        // A trait stores a single `Name.mk` case whose parameters are the
+        // methods, each itself a Pi chain (`this: Self`) → … → ret.  The
+        // registered constructor key repeats the type name (`Add.Add.mk`).
+        let mk_key = SmolStr::new(format!("{}.{}.mk", name.data, name.data));
+        let mut lines: Vec<String> = Vec::new();
+        if let Some((_, _, _, cty, _, _, _)) = decl.get(&mk_key) {
+            // Walk the mk Pi chain, skipping the trait's own params (Self +
+            // type params, `n_impl` of them), then render each method binder
+            // whose domain is a Pi signature.
+            let mut codomain: Rc<Tm> = cty.clone();
+            let mut binders: Vec<(SmolStr, Icit, Rc<Tm>)> = Vec::new();
+            loop {
+                match codomain.as_ref() {
+                    Tm::Pi(x, i, a, b) => {
+                        binders.push((x.data.clone(), *i, a.clone()));
+                        codomain = b.clone();
+                    }
+                    _ => break,
+                }
+            }
+            let mut ns_cur = ns.clone();
+            for (i, (x, icit, a)) in binders.iter().enumerate() {
+                if i < n_impl {
+                    // The trait's own params (Self, type params) already have
+                    // names in `ns` from the header; do not re-add them.
+                    continue;
+                }
+                let x_str = sum_fresh(&ns_cur, x.as_str());
+                let _ = icit;
+                if let Tm::Pi(..) = a.as_ref() {
+                    lines.push(render_pi_signature(&x_str, a, &ns_cur));
+                } else {
+                    lines.push(format!("{x_str}: {}", pretty_tm(0, ns_cur.clone(), a)));
+                }
+                ns_cur = ns_cur.prepend(SmolStr::new(&x_str));
+            }
+        }
+        let mut out = header;
+        if lines.is_empty() {
+            out.push_str(" { }");
+        } else {
+            out.push_str(" {");
+            for line in &lines {
+                out.push_str(&format!("\n    {line}"));
+            }
+            out.push_str("\n}");
+        }
+        return Some(out);
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    for case in cases.iter() {
+        // Struct/trait constructors are registered under a doubled key
+        // (`Point.Point.mk`); regular enum cases under `Name.case`.
+        let display = if case.data.ends_with(".mk") {
+            case.data.rsplit('.').next().unwrap_or(&case.data)
+        } else {
+            &case.data
+        };
+        let mut cty: Option<Rc<Tm>> = None;
+        let k1 = SmolStr::new(format!("{}.{}", name.data, case.data));
+        let k2 = SmolStr::new(format!("{key}.{}", case.data));
+        if let Some((_, _, _, t, _, _, _)) = decl.get(&k1) {
+            cty = Some(t.clone());
+        } else if let Some((_, _, _, t, _, _, _)) = decl.get(&k2) {
+            cty = Some(t.clone());
+        }
+        match cty {
+            Some(t) => lines.push(render_pi_member(display, &t, &name.data, n_impl)),
+            None => lines.push(display.to_string()),
+        }
+    }
+
+    // ── Assemble ──
+    if is_struct {
+        // A struct's fields are its single `.mk` constructor's explicit
+        // params, already rendered as `mk(x: Nat, y: Nat)`; splice them into
+        // the header: `struct Point(x: Nat, y: Nat)`.
+        let mk = &lines[0];
+        let fields = mk.strip_prefix("mk").unwrap_or(mk);
+        return Some(format!("{header}{fields}"));
+    }
+
+    let mut out = header;
+    out.push_str(" {");
+    for line in &lines {
+        out.push_str(&format!("\n    {line}"));
+    }
+    out.push_str("\n}");
+    Some(out)
+}
+
 // ── Memory profiling helpers ──
 
 fn arc_id<T>(rc: &Rc<T>) -> usize {
