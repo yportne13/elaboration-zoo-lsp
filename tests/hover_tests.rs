@@ -196,13 +196,69 @@ fn hover_on_def_with_doc_comment_shows_docs() {
         value.starts_with("```typort\ninc : (a: Nat) → Nat\n```"),
         "missing signature panel, got:\n{value}"
     );
-    // … then the doc body (markers stripped, blank /// line becomes a
-    // paragraph break), still before the type panel.
+    // … then the doc body (markers stripped; each `///` line kept a visible
+    // line via hard break, blank `///` line becomes a paragraph break), still
+    // before the type panel.
     assert!(
         value.contains(
-            "\n\nAdds one to `a`.\n\nUses the prelude successor.\n\n```typort\n"
+            "\n\nAdds one to `a`.  \n\nUses the prelude successor.  \n\n```typort\n"
         ),
         "missing doc body between panels, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_doc_downscales_headings() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///doch.typort").unwrap();
+    // `#` headings must not blow up to screen-filling size in the tiny hover
+    // panel: they are downscaled to `####`. `#inline` (no space) is plain
+    // text in CommonMark and must stay untouched.
+    let src = "/// # 示例\n/// 计算 `n` 的后继。\n/// ## 参数\n/// #inline\ndef inc(a: Nat): Nat = succ a";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def inc").unwrap();
+    let name_off = src[line..].find("inc").unwrap() + line;
+    let value = hover_markup_at(&b, &uri, src[..line].matches('\n').count() as u32, (name_off - line) as u32);
+    assert!(
+        value.contains("\n\n#### 示例\n计算 `n` 的后继。  \n##### 参数\n#inline  \n\n"),
+        "headings must be downscaled, got:\n{value}"
+    );
+}
+
+#[test]
+fn hover_doc_keeps_code_fence_and_balances_unclosed() {
+    let client = CapturingClient::default();
+    let b = Backend::new(client);
+    let uri = Url::parse("file:///docf.typort").unwrap();
+    // Fenced code inside a doc is preserved verbatim; a doc that opens a
+    // fence but never closes it gets a closer appended so the rest of the
+    // hover (incl. the type panel) is not swallowed into the code block.
+    let src = "/// 示例：\n/// ```typort\n/// inc 0\n/// ```\n/// 后续说明。\ndef inc(a: Nat): Nat = succ a";
+    elaborate(&b, &uri, src);
+
+    let line = src.find("def inc").unwrap();
+    let name_off = src[line..].find("inc").unwrap() + line;
+    let value = hover_markup_at(&b, &uri, src[..line].matches('\n').count() as u32, (name_off - line) as u32);
+    // The fence keeps its code verbatim (no hard-break spaces inside) and the
+    // prose after it still closes properly before the type panel.
+    assert!(
+        value.contains("\n\n示例：  \n```typort\ninc 0\n```\n后续说明。  \n\n```typort\n"),
+        "fenced doc must survive intact, got:\n{value}"
+    );
+
+    // Unclosed fence: the missing closer is appended by render_doc_text, so
+    // the type panel still shows (the trailing ``` closes the block).
+    let src2 = "/// 用法：\n/// ```typort\n/// inc 0\ndef inc(a: Nat): Nat = succ a";
+    elaborate(&b, &uri, src2);
+    let line2 = src2.find("def inc").unwrap();
+    let name_off2 = src2[line2..].find("inc").unwrap() + line2;
+    let value2 = hover_markup_at(&b, &uri, src2[..line2].matches('\n').count() as u32, (name_off2 - line2) as u32);
+    assert_eq!(
+        value2.matches("```typort").count(),
+        3,
+        "unclosed fence must be balanced, got:\n{value2}"
     );
 }
 
@@ -222,7 +278,7 @@ fn hover_on_use_site_shows_docs_too() {
         "definition panel must come first, got:\n{value}"
     );
     assert!(
-        value.contains("\n\nDoubles `a` via addition."),
+        value.contains("\n\nDoubles `a` via addition.  \n\n```typort\n"),
         "docs missing on use-site hover, got:\n{value}"
     );
 }

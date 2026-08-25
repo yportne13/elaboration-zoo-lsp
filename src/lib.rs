@@ -435,7 +435,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         ));
         if let Some(docs) = self.hover_doc_text(def_span) {
             out.push_str("\n\n");
-            out.push_str(&docs);
+            out.push_str(&Self::render_doc_text(&docs));
         }
         Some(out)
     }
@@ -470,6 +470,78 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         docs.reverse();
         Some(docs.join("\n"))
+    }
+
+    /// Post-process an extracted doc body into hover-friendly markdown.
+    /// The raw body is a series of prose lines; straight from the source it
+    /// renders badly in a hover popup: consecutive `///` lines soft-wrap into
+    /// one cramped line (worse for Chinese prose, which has no spaces), a
+    /// `#` heading blows up to screen-filling size, and a stray unclosed
+    /// `` ``` `` fence swallows the rest of the panel.  This pass makes each
+    /// source line a visible line, keeps fenced code intact, downscales
+    /// headings, and normalizes whitespace:
+    ///
+    /// 1. trailing whitespace is trimmed,
+    /// 2. `` ``` `` fences are balanced (an unclosed fence gets a closer),
+    /// 3. headings are downscaled `#`→`####`, `##`→`#####`, `###`+→`######`
+    ///    so the small hover panel stays readable,
+    /// 4. outside fences every line gets a trailing hard break so the doc
+    ///    mirrors the source layout instead of merging into one paragraph,
+    /// 5. runs of blank lines collapse to a single paragraph break.
+    fn render_doc_text(body: &str) -> String {
+        let mut out: Vec<String> = Vec::new();
+        let mut in_fence = false;
+        for raw in body.lines() {
+            let line = raw.trim_end();
+            // Toggle on any `` ``` ``/`~~~` fence line (language tags like
+            // `` ```typort `` are kept verbatim).  Inside the fence the code
+            // is preserved byte-for-byte: no hard breaks, no trims.
+            if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+                in_fence = !in_fence;
+                out.push(line.to_string());
+                continue;
+            }
+            if in_fence {
+                out.push(line.to_string());
+                continue;
+            }
+            if line.is_empty() {
+                out.push(String::new());
+                continue;
+            }
+            // Downscale a real ATX heading (`#`, `##`, … followed by a space)
+            // so it cannot dominate the tiny hover panel; `#foo` is plain text
+            // in CommonMark and stays untouched.
+            let hashes = line.chars().take_while(|&c| c == '#').count();
+            if hashes > 0
+                && hashes < line.len()
+                && line.as_bytes()[hashes].is_ascii_whitespace()
+            {
+                let level = (hashes + 3).min(6);
+                out.push(format!("{} {}", "#".repeat(level), line[hashes..].trim_start()));
+                continue;
+            }
+            // Prose: trailing hard break keeps each `///` line a visible line.
+            out.push(format!("{line}  "));
+        }
+        if in_fence {
+            out.push("```".to_string());
+        }
+        // Collapse blank runs to a single paragraph break.
+        let mut result: Vec<String> = Vec::new();
+        let mut prev_blank = false;
+        for l in out {
+            if l.is_empty() {
+                if !prev_blank {
+                    result.push(String::new());
+                }
+                prev_blank = true;
+            } else {
+                result.push(l);
+                prev_blank = false;
+            }
+        }
+        result.join("\n")
     }
 }
 
