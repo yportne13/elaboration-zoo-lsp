@@ -70,3 +70,12 @@ usize 行为随机。实测案例：加法树例子在 match 分支深处（5 �
   （根因在 `solve_trait`/goal 处理时上下文视图不完整）；
 - (b) 防御：`no_metas`/quote 对悬空 meta 报普通错误而非 panic；`lvl2ix` 改用 checked/
   saturating 运算把 panic 变成可诊断错误。
+
+---
+
+## 后续发现（2026-08-26 追记）
+
+同族第三例：trait 实例的 **Nat 类型参数**未在调用点实例化（实例引用残留声明期
+`Rigid(Lvl(0))`）——顶层报 `can't unify`，参数化 module 内**静默**生成无位宽的
+`wire x;` / `reg d;`（`regNext` 同样中招），方法调用路径再叠加上述 `lvl2ix` 下溢。
+复现矩阵与机制链详见 **`l13-typeclass-instance-nat-param-bug.md`**。
