@@ -68,6 +68,31 @@ fn width_range(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> 
     Some(Val::LiteralIntro(empty_span(result)).into())
 }
 
+/// Is the Nat argument a fully evaluated (ground) number? True for native
+/// `Val::Nat` and for `succ`-chains whose tail forces to ground; false for
+/// anything stuck (dangling Rigid/Flex — elaboration-time variables that
+/// will never resolve at runtime; see the typeclass instance Nat param bug,
+/// docs/l13-typeclass-instance-nat-param-bug.md).
+fn nat_is_ground(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    let mut current = infer.force(decl, &args[0]);
+    let ground = loop {
+        match current.as_ref() {
+            Val::Nat(_) => break true,
+            Val::SumCase { index: 0, .. } => break true,   // zero
+            Val::SumCase { index: 1, datas, .. } => {
+                match datas.first() {
+                    Some((_, prev, _)) => current = infer.force(decl, prev),
+                    None => break false,
+                }
+            }
+            _ => break false,
+        }
+    };
+    let name = if ground { "true" } else { "false" };
+    Some(decl.get(name).map(|x| x.2.clone()).unwrap_or(Val::Decl(empty_span(SmolStr::new(name)), List::new()).into()))
+}
+
 // === Nat arithmetic primops (Lean/Agda-style word-size primitives) ===
 //
 // The prelude defines `+ - * / %` on `Nat` by structural recursion, which is
@@ -655,6 +680,18 @@ impl Cxt {
         *cxt = old2.add_builtin(infer, "width_range",
             tm_pi(&[("w", tm_decl("Nat"))], tm_decl("String")),
             PrimFunc(Rc::new(width_range)),
+        ).unwrap();
+
+        // Is the Nat a ground (fully evaluated) number? Distinguishes widths
+        // that reached the module tree as real numbers from widths frozen as
+        // unevaluated elaboration-time variables (the typeclass instance Nat
+        // param bug freezes class-parameterized widths as dangling Rigid
+        // values — see docs/l13-typeclass-instance-nat-param-bug.md). The
+        // HDL self-check uses it to report the silent 1-bit degradation.
+        let old3 = std::mem::replace(cxt, Self::empty());
+        *cxt = old3.add_builtin(infer, "nat_is_ground",
+            tm_pi(&[("w", tm_decl("Nat"))], tm_decl("Boolean")),
+            PrimFunc(Rc::new(nat_is_ground)),
         ).unwrap();
 
         // Nat arithmetic primops (replacing the structural recursion in

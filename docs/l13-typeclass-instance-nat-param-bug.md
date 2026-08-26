@@ -1,9 +1,22 @@
 # Bug：trait 实例的 Nat 类型参数未在调用点实例化（typeclass elaboration）
 
-> 2026-08-26，由"表达式 let 物化命名 wire"任务（commit bcad744）实测发现、
-> 已定位现象与边界但**未修复**。与 `l13-known-bugs-2026-08.md` Bug 2 同族
-> （悬空/越界元变量 → `lvl2ix` 下溢），但触发面与机制链不同。
-> 记录复现矩阵、一手证据（错误消息原文）、机制链（区分实测与推断）与修复方向。
+> 2026-08-26，由"表达式 let 物化命名 wire"任务（commit bcad744）实测发现。
+> **修复状态（同日晚些，commit 见 git log）**：
+> - **复现 A（顶层 + 固定宽度）已修**——根因是 `solve_trait` Phase 2 在 unify 解出
+>   实例参数**之前**就 `eval` 了实例引用，方法闭包捕获了未解 meta 的冻结环境；
+>   修复 = unify 成功后**重新 eval**（`unification.rs` Phase 2）。回归测试
+>   `tests/trait_nat_param_tests.rs`。
+> - **复现 B（class 参数化）仍存，但已从静默错误变为显式警告**——HDL004
+>   （`hdl-check.typort` 的 `ruleWidthGround` + Rust native `nat_is_ground`）：
+>   宽度冻结的信号在生成 Verilog 里退化为 1 位时报告。剩余根治需要 meta 解
+>   支持 Tm/延迟求值（消费点上下文才能提供正确 spine），见"修复方向"更新。
+> - **复现 C（lvl2ix panic）**：`mod.rs::lvl2ix` 改 checked 运算，panic 消息
+>   现在指名"悬空 elaboration 变量泄漏进 quote"并链接本文档（不再是裸的
+>   subtract overflow）。
+>
+> 与 `l13-known-bugs-2026-08.md` Bug 2 同族（悬空/越界元变量 → `lvl2ix` 下溢），
+> 但触发面与机制链不同。以下为发现时的原始记录 + 修正后的机制链
+> （§机制链中标注了哪些推断后来被调试实据推翻）。
 
 ---
 
@@ -13,11 +26,11 @@ trait 实例（`impl[w: Nat] Foo[UInt[w]] for UInt[w] { ... 方法体里把 `w` 
 的 `w` 在实例求解时**不会被调用点的实际宽度实例化**：实例的引用里残留
 **实例声明上下文的级别变量 `Rigid(Lvl(0))`**。后果按上下文分三种：
 
-| 上下文 | 后果 | 实测 |
-|---|---|---|
-| 顶层 def、固定宽度 goal | 直接报错 `can't unify ... Rigid(Lvl(0)) ... Nat(8)` | §复现 A |
-| module class 字段、参数化宽度 goal | **不报错**，运行期 `w` 求值成垃圾 → `width_range` 数出 0/1 → 生成无位宽的 `wire x;` / `reg d;` | §复现 B |
-| 方法调用语法分发（`x.method(...)` 直呼 trait 方法） | 同上，且在方法体对 `w` 做 `match` 时 `lvl2ix` 减法下溢 panic（known-bugs Bug 2 同族） | §复现 C |
+| 上下文 | 后果 | 实测 | 状态 |
+|---|---|---|---|
+| 顶层 def、固定宽度 goal | 直接报错 `can't unify` | §复现 A | **已修**（re-eval 修复） |
+| module class 字段、参数化宽度 goal | **不报错**，运行期 `w` 求值成垃圾 → `width_range` 数出 0/1 → 生成无位宽的 `wire x;` / `reg d;` | §复现 B | 仍存，**HDL004 显式警告** |
+| 方法调用语法分发（`x.method(...)` 直呼 trait 方法） | 同上，且在方法体对 `w` 做 `match` 时 `lvl2ix` 减法下溢 panic（known-bugs Bug 2 同族） | §复现 C | panic 消息已可诊断 |
 
 **注意**：这不是"表达式 let"功能的 bug——**既有的 `regNext` 在参数化模块下同样中招**
 （生成 1 位 `reg d;`，见 §复现 B），只是此前整个代码库没有任何"impl 方法体里
@@ -147,60 +160,58 @@ unify 直接绑定到调用点实参，运行期取值正确。**问题只出在
 
 ---
 
-## 机制链
+## 机制链（调试实据修订版）
 
-### 实测部分（有错误消息/输出直接支撑）
+发现当晚加了临时 debug 输出（`solve_trait` Phase 2 / `solve` / `solve_with_pren` /
+`width_range` / `count_nat_forced`）逐层观测后，**推翻了初版报告的两个推断**，
+修订如下（初版推断以 ~~删除线~~ 标注）：
 
-1. **实例注册形态**：`impl[w: Nat] Foo[UInt[w]] for UInt[w]` 被 elaborate 成一个
-   合成名 def（`src/L13_namespace/elaboration.rs:1586-1596`，
-   `def typ_name[params](方法lambda...): Foo[...]`），同时以**声明时刻的 Val**
-   注册进 `trait_solver.class_instances`（`elaboration.rs:1441-1447`）——
-   注册的 assertion 参数里 `w` 是**实例声明上下文的 `Rigid(Lvl(0))`**。
+### 实测部分（debug 输出直接支撑）
 
-2. **Phase 1（实例筛选）**：`solve_trait` 用 `val_match(goal_arg, inst_arg)`
-   匹配（`src/L13_namespace/unification.rs:657-704`）。`val_match` 的
-   "Rigid 空 spine 绑定任意目标"臂（`typeclass.rs:283-292`）会把实例的
-   `Rigid(w)` 当模式变量绑定 goal 值——**这一步的 subst 结果随后被丢弃**
-   （Phase 2 不消费 `subst`，只拿 `inst.lvl` 即合成 def 名）。
+1. ~~"insert 没有为实例参数造 fresh meta"~~ **错**：Phase 2 的
+   `infer_expr(Raw::Var(实例def))` 返回 `Pi(w: Nat, Impl, ...)`，`insert` 正确造出
+   fresh meta（日志：`after insert tm: App(Decl(实例def), AppPruning(Meta(?w)), Impl)`），
+   eval 出的 `SumCase.typ` 里 w 是 **Flex**。~~"错误消息里的 w 是 Rigid(Lvl(0))"~~
+   **错**：那是 Flex meta 的 pretty 名（以实例参数名 w 命名）。
 
-3. **Phase 2（实例 elaborate + unify）**（`unification.rs:729-752`）：
-   `infer_expr(Raw::Var(合成def名))` → `insert` 补隐式参数 → `eval` →
-   `if let Val::SumCase { typ, .. }` 时 `unify_catch(typ, goal)`。
-   **复现 A 的错误消息证明走到这一步时实例侧的 w 仍是 `Rigid(Lvl(0))`
-   而非待解 Flex**——即"为实例参数造 fresh meta 再 unify 回 goal"的预期
-   管道没有生效（`expected: WProbe[UInt[w], UInt[w]]` 的 w = Rigid(Lvl(0))，
-   `find: WProbe[UInt[w], UInt[8]]` 的 w = Nat(8)，rigid-vs-concrete 直接
-   `can't unify`）。
+2. **真正的根因（复现 A）**：Phase 2 的求值顺序——
+   ```rust
+   let val = self.eval(&cxt.decl, &cxt.env, &tm);   // ← eval 在先
+   if let Val::SumCase { typ, .. } = val {
+       self.unify_catch(cxt, typ, x, ...)?;          // ← unify（解出 ?w）在后
+   }
+   ```
+   `val`（trait 字典 SumCase，方法闭包）在 **?w 未解时**求值固化——方法闭包捕获的
+   环境里 w 是**未解 meta**。unify 虽然随后解了 meta 表里的 ?w（日志确认
+   `solve_with_pren renamed OK`），但 `solve_multi_trait` 存进约束 meta 解的正是
+   这份**旧 val**（`MetaEntry::Solved(val, ...)`）——运行期 force 得到冻结字典，
+   方法体执行时 w 是悬空引用。顶层固定宽度场景下 unify 直接报
+   `can't unify expected WProbe[UInt[?w], UInt[?w]] / find WProbe[...]`——
+   实为 unify 内部 flex-flex 约束求解对该冻结环境的连锁失败。
+   **修复**：unify 成功后重新 eval（闭包捕获已解 meta）。
 
-4. **顶层固定宽度场景**（复现 A）：第 3 步 unify 失败被 `?` 记为 last_err，
-   所有候选耗尽后报 `solve trait failed`（`unification.rs:754-763`）。
-   同时留下 `find unsolved meta with type Nat`——实例参数对应的元变量悬空。
+3. **复现 B（class 参数化）的剩余机制**：unify 解为 `?w := λspine.Var(Ix(1))`
+   （"取 spine 第 2 个参数"——因 rhs `Rigid(class_w)` 恰好出现在 spine 中）。
+   运行期 force 时 spine 是**冻结的 elaboration 期 Rigid 列表**
+   （`Flex(?w, [Rigid(Lvl(1)), Rigid(Lvl(0))])` → force → `Rigid(Lvl(0))`，
+   `count_nat_forced` 数出 0 → `width_range` 返回 "" → 1 位信号）。
+   **Val 层的 `Rigid` 是绝对级别符号，永不查求值环境**——只有 quote→`Var(Ix)`→
+   eval 才能跨上下文解析。固定宽度之所以一直正确：解是常量函数
+   `λspine.Nat(8)`，不依赖冻结的 spine。**根治需要 meta 解能表达"消费点
+   参数化"**（Tm/延迟形态），当前 `MetaEntry::Solved(Rc<Val>)` 接口不支持。
 
-5. **class 参数化场景**（复现 B）：goal 侧是 `UInt[Rigid(class_w)]`——与实例侧
-   残留的 `Rigid(Lvl(0))` **形态同类**（都是级别变量），匹配/统一不再当场失败
-   （推断：class 两阶段的延迟批量求解 `solve_multi_trait` + Nat defaulting
-   兜底把悬空元变量以某种方式消解，见下"推断"）。**求值不报错但级别错位**：
-   运行期 `w` 取到错误上下文的值 → `count_nat_forced`（`cxt.rs`，`width_range`
-   的底层）对垃圾值数出 0 → `width_range` 返回 `""` → 生成无位宽的
-   `wire x;` / `reg d;`。
+4. **HDL004 的 Phase-A 误报问题与门控**：class 两阶段的 Phase A（字段值类型
+   检查）也会 eval 出一棵一次性树，其中**所有**宽度（含宏转录端口）都是
+   class 参数的 Rigid——直接检查会把整个模块报一遍。门控：同一模块存在
+   至少一个 ground 宽度（运行期那轮的端口必然 ground）才报告非 ground 信号。
 
-6. **方法调用路径**（复现 C）：实例引用里的越界级别变量在方法体内被强制求值
-   （`match width`）时 quote/求值走到 `lvl2ix`（`src/L13_namespace/mod.rs:903`，
-   `l.0 - x.0 - 1`）→ `x > l` → debug 构建减法下溢 panic。与 known-bugs Bug 2
-   的崩溃点相同。
+### 推断部分（未逐一验证）
 
-### 推断部分（未逐一验证，修复时先证实/证伪）
-
-- **Phase 2 为何没有 fresh meta**：两个候选解释，需要加断言/日志分辨：
-  - (a) `insert`（`elaboration.rs:178-230`）对 `infer_expr(Raw::Var(def))`
-    的返回没有插入隐式参数——可能 decl 表中该合成 def 的类型已被求值成
-    非 `Pi(Impl)` 形态（例如两阶段处理中 whnf 固化），`insert_go` 直接原样返回；
-  - (b) `eval` 出的 `SumCase.typ` 来自**声明时刻的闭包**（`typ_name` 的
-    `format!("{:?}{:?}", trait_full, trait_param)` 把声明期 Val 烧进了名字/引用），
-    应用时不携带调用点的 subst。
-- **class 场景为何不报错**：怀疑 `solve_multi_trait`（`unification.rs:579-599`）
-  延迟批量求解 + elaboration.rs:932-966 的 Nat defaulting 兜底把悬空元变量
-  解成了错误值（而非报错）——这能同时解释"不报错"和"运行期是垃圾"。
+- class 场景 goal 参数（`UInt[Rigid(class_w)]`）在 Phase 1 `val_match` 的
+  Rigid-绑定臂与实例模式匹配成功、Phase 2 unify 也成功（无报错），解链条正常
+  传导到 `?w := λspine.Var(Ix(1))`——与 2/3 的实测一致。
+- `Rigid(Lvl(2))`~`Rigid(Lvl(7))` 等出现在 prelude 加载期 `width_range` 调用中
+  的值来自其他 elaboration 上下文（与本 bug 无关的正常 stuck）。
 
 ---
 
@@ -215,19 +226,21 @@ unify 直接绑定到调用点实参，运行期取值正确。**问题只出在
 - **用户自定义类型**：任何"带 Nat 类型参数的 trait 实例 + 方法体运行期使用该参数"
   的用户代码都会踩；顶层场景至少有显式报错，class 场景静默产出错误硬件。
 
-## 修复方向（未修）
+## 修复方向
 
-1. **根治（推荐）**：`solve_trait` Phase 2 不应寄望 insert+unify 兜底，应把
-   Phase 1 `val_match` 已经算出的 `subst`（goal 值 → 实例参数绑定）用于构造
-   实例引用——即实例 def 应用**调用点求出的实际参数**（类似 Lean 的
-   `instFOo.{w}` 显式实例化）。同时排查 decl 表中合成 def 的类型形态，
-   确保 `insert` 能为 `w` 造出 Flex meta。
-2. **防御（低成本，先做）**：
-   - `lvl2ix` 改 checked/saturating，把 panic 变成可诊断错误
-     （known-bugs Bug 2 修复方向 (b) 同款，一处修两家受益）；
-   - hdl-check 给 `createWidth`/`createRegWidth` 等加"宽度为 0"诊断——
-     0 宽信号本就非法，能把 class 场景的**静默错宽度**变成显式报错，
-     同时兜住本 bug 的可见性。
+1. ~~"以 Phase 1 subst 实例化实例引用"~~ —— 调试实据显示 Phase 2 的
+   insert+unify 管道本身正常，无需替换；真正的修复点见下。
+2. **已实施（2026-08-26）**：
+   - `solve_trait` Phase 2 unify 成功后**重新 eval** `tm`——方法闭包捕获已解
+     实例参数（修复复现 A，全部 ground 宽度场景）；
+   - `nat_is_ground` native + hdl-check `ruleWidthGround`（HDL004）——把
+     复现 B 的静默 1 位退化变成显式警告（门控避开 Phase A 一次性树的误报）；
+   - `lvl2ix` checked 运算 + 指名根因的 panic 消息（复现 C 的可诊断性）。
+3. **剩余（复现 B 根治，未做）**：让约束 meta 的解能表达**消费点参数化**——
+   例如 `MetaEntry::Solved` 支持 Tm/延迟形态，或 class Phase B 组装字段 Tm 时
+   对 `Tm::Meta(约束)` 做 Tm 展开（消费点 eval 时以自己的 env 构造实例应用
+   的 spine）。这是 elaborator 架构级改动，影响 quote/eval/meta 全链路，
+   需单独立项。
 
 ## 相关文件
 

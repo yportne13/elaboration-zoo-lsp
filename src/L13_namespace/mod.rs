@@ -900,7 +900,19 @@ impl Val {
 }
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
-    Ix(l.0 - x.0 - 1)
+    // Checked: a bare `l.0 - x.0 - 1` underflows as a cryptic "attempt to
+    // subtract with overflow". An out-of-scope level means a dangling
+    // elaboration-time variable leaked into a quote (typeclass instance Nat
+    // param bug — docs/l13-typeclass-instance-nat-param-bug.md — and
+    // l13-known-bugs-2026-08.md Bug 2); name it so the panic is diagnosable.
+    Ix(l.0.checked_sub(x.0).and_then(|v| v.checked_sub(1)).unwrap_or_else(|| {
+        panic!(
+            "lvl2ix: level {} is out of scope for a context of level {} — a dangling \
+             elaboration-time variable leaked into a quote (see \
+             docs/l13-typeclass-instance-nat-param-bug.md)",
+            x.0, l.0
+        )
+    }))
 }
 
 pub fn tm_contains_match(tm: &Tm) -> bool {

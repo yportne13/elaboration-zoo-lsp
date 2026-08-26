@@ -595,6 +595,78 @@ def chkReport(code: String, mname: String, sig: String, msg: String): Unit =
     let _ = report_check_issue(code, mname, sig, msg);
     unit
 
+// HDL004: width is not a ground number. The width reached the module tree
+// frozen as an unevaluated elaboration-time variable (the visible symptom of
+// the typeclass instance Nat param bug on width-parameterized modules —
+// docs/l13-typeclass-instance-nat-param-bug.md: impl Nat parameters used at
+// runtime freeze as dangling level variables); the Verilog generator's
+// width_range then counts 0 and the signal silently degrades to 1 bit.
+// This rule makes the degradation visible instead of silent.
+//
+// GATING: the class two-phase elaboration ALSO builds a throwaway tree while
+// type-checking the fields (Phase A), where EVERY width — including the
+// macro-transcribed ports — is the class parameter as a Rigid variable, so
+// nothing is ground there. A round with zero ground widths is that Phase-A
+// artifact, not a real design: only report when the same module also has at
+// least one ground width (the runtime round's ports are always ground).
+def widthProbe(e: Expr): Option[Tuple2[String, Boolean]] = match e {
+    case createWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createInWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createOutWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createInOutWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntInWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntOutWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntInOutWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createRegWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createRegWidthInit(n, w, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createRegWidthCd(n, w, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createRegWidthInitCd(n, w, _, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntRegWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntRegWidthInit(n, w, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntRegWidthCd(n, w, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntRegWidthInitCd(n, w, _, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createOutRegWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createOutRegWidthInit(n, w, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntOutRegWidth(n, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createSIntOutRegWidthInit(n, w, _) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case createMem(n, _, w) => Some(Tuple2.mk(n, nat_is_ground(w)))
+    case _ => None
+}
+
+struct WidthScan {
+    groundCount: Nat
+    bad: List[String]
+}
+
+def widthScanStep(e: Expr, acc: WidthScan): WidthScan = match widthProbe(e) {
+    case None => acc
+    case Some(p) => match p._2 {
+        case true => WidthScan.mk(succ(acc.groundCount), acc.bad)
+        case false => WidthScan.mk(acc.groundCount, lcons(p._1, acc.bad))
+    }
+}
+
+def widthScanAll[ne: Nat](es: Vec[Expr] ne, acc: WidthScan): WidthScan = match es {
+    case nil => acc
+    case cons(h, t) => widthScanAll(t, widthScanStep(h, acc))
+}
+
+def reportBadWidths(mname: String, bad: List[String]): Unit = match bad {
+    case lnil => unit
+    case lcons(n, t) =>
+        let _ = chkReport("HDL004", mname, n, "width is not a ground number — the signal degrades to 1 bit in the generated Verilog (frozen width, see docs/l13-typeclass-instance-nat-param-bug.md)");
+        reportBadWidths(mname, t)
+}
+
+def ruleWidthGround[ne: Nat](mname: String, es: Vec[Expr] ne): Unit =
+    let scan = widthScanAll(es, WidthScan.mk(0, lnil));
+    let _ = match scan.groundCount {
+        case zero => unit
+        case succ(_) => reportBadWidths(mname, scan.bad)
+    };
+    unit
+
 // HDL001: read but never driven (and not an input/inout port, mem, or
 // output port — undriven outputs are HDL003's business).
 def ruleDanglingRead(mname: String, reads: List[String], mf: ModFacts): Unit = match reads {
@@ -794,6 +866,7 @@ def runChecks(md: ModuleDef): Unit =
     let _ = ruleDanglingRead(md.name, mf.reads, mf);
     let _ = ruleUnusedDecl(md.name, mf.decls, mf);
     let _ = ruleOutUndriven(md.name, mf.decls, mf);
+    let _ = ruleWidthGround(md.name, md.expr);
     let _ = ruleDrivers(md.name, mf.facts);
     let _ = ruleOwnInputDriven(md.name, mf.decls, mf);
     let _ = ruleConnDir(md.name, mf.conns, mf.insts, tbl);

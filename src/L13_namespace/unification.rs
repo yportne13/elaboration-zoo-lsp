@@ -739,8 +739,19 @@ impl Infer {
                     if let Val::SumCase { typ, .. } = val.as_ref() {
                         self.unify_catch(cxt, typ, x, empty_span(()))
                             .map_err(|e| e.0.data)?;
+                        // RE-EVAL after the unify: the first eval ran BEFORE the
+                        // instance's implicit parameters (fresh metas) were
+                        // solved, so the method closures captured the frozen
+                        // unsolved-meta environment — a width parameter would
+                        // stay a dangling Flex forever (typeclass instance Nat
+                        // param bug, docs/l13-typeclass-instance-nat-param-bug.md).
+                        // Re-evaluating with the now-solved metas makes the
+                        // closures capture the unified values.
+                        let val = self.eval(&cxt.decl, &cxt.env, &tm);
+                        Ok((tm, val))
+                    } else {
+                        Ok((tm, val))
                     }
-                    Ok((tm, val))
                 })();
                 match result {
                     Ok((tm, val)) => return Ok(Some((tm, val))),

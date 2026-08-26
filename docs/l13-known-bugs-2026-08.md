@@ -75,7 +75,12 @@ usize 行为随机。实测案例：加法树例子在 match 分支深处（5 �
 
 ## 后续发现（2026-08-26 追记）
 
-同族第三例：trait 实例的 **Nat 类型参数**未在调用点实例化（实例引用残留声明期
-`Rigid(Lvl(0))`）——顶层报 `can't unify`，参数化 module 内**静默**生成无位宽的
-`wire x;` / `reg d;`（`regNext` 同样中招），方法调用路径再叠加上述 `lvl2ix` 下溢。
-复现矩阵与机制链详见 **`l13-typeclass-instance-nat-param-bug.md`**。
+同族第三例：trait 实例的 **Nat 类型参数**未在调用点实例化——顶层报 `can't unify`，
+参数化 module 内**静默**生成无位宽的 `wire x;` / `reg d;`（`regNext` 同样中招），
+方法调用路径再叠加上述 `lvl2ix` 下溢。复现矩阵与机制链详见
+**`l13-typeclass-instance-nat-param-bug.md`**。
+
+**状态（同日）**：顶层固定宽度已修（`solve_trait` Phase 2 unify 后重新 eval，
+方法闭包捕获已解实例参数）；参数化 module 场景已加 HDL004 显式警告（原静默）；
+`lvl2ix` 改 checked 运算、panic 消息指名根因。参数化场景的根治需 meta 解支持
+消费点参数化（架构级，见该文档"修复方向"3）。

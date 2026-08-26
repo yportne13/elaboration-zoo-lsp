@@ -198,11 +198,14 @@ impl[width: Nat] Data for SInt[width] {
 // (the method-call path misbinds an impl Nat parameter on parameterized
 // modules).
 // KNOWN LIMIT: in a width-parameterized module (`module m[w: Nat]`), the
-// impl's `w` evaluates to a wrong value at materialization time — the SAME
-// pre-existing typeclass gap that gives `regNext` a 1-bit `reg d;` there
-// (no runtime width has ever flown through an impl type parameter; the
-// working widths all come from explicit value arguments like memUInt(64, 8)
-// or macro-transcribed port expressions). Fixed-width modules are exact.
+// impl's `w` freezes as a dangling elaboration-time variable at
+// materialization time — the SAME pre-existing typeclass gap that gives
+// `regNext` a 1-bit `reg d;` there (no runtime width has ever flown through
+// an impl type parameter; the working widths all come from explicit value
+// arguments like memUInt(64, 8) or macro-transcribed port expressions).
+// Fixed-width modules are exact. The HDL004 self-check (hdl-check.typort)
+// reports the degraded signal instead of letting it pass silently — see
+// docs/l13-typeclass-instance-nat-param-bug.md.
 trait LetNamed[T] {
     def mkNamed(name: String): T
 }
