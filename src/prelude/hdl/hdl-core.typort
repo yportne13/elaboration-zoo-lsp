@@ -654,3 +654,75 @@ def registerModuleTree(t: ModuleTree): Unit =
 // ============================================================
 
 def Area[T: Type 0](body: Unit -> T): T = body(unit)
+
+// ============================================================
+//  HDL for 循环（编译期展开，方案 A）
+//  for i in 0 until 4 { ... }  →  rangeFor(0 until 4, i => { ... })，
+//  在 module 实例化（elaboration）时逐迭代调用 body；i 是具体 Nat 值，
+//  可驱动位宽参数化（UInt[i + 1]）与静态索引。
+// ============================================================
+
+// `0 until 4` 的产物：半开区间 [lo, hi)。
+struct Range {
+    lo: Nat
+    hi: Nat
+}
+
+trait RangeSyntax {
+    def until(hi: Nat): Range
+}
+
+impl RangeSyntax for Nat {
+    def until(hi: Nat): Range = Range.mk(this, hi)
+}
+
+// ---------- 循环索引栈（全局，支持嵌套） ----------
+// 每迭代 push 当前索引、迭代尾 pop；loopName 用栈内索引拼 `x_i_j` 后缀
+// （嵌套时外层在前、内层在后）。全局单元格类型取自键名对应的 decl
+// （string_to_global_type），所以必须是一个真实类型（enum/struct）。
+// 注：这里用 create_global 兜底初始化 —— get_global 缺键会 panic。
+
+enum HdlLoopIdx {
+    hdlLoopIdxEmpty
+    hdlLoopIdxCons(idx: Nat, rest: HdlLoopIdx)
+}
+
+def loopStackTail(xs: HdlLoopIdx): HdlLoopIdx = match xs {
+    case hdlLoopIdxEmpty => hdlLoopIdxEmpty
+    case hdlLoopIdxCons(_, t) => t
+}
+
+def loopStackReverse(xs: HdlLoopIdx, acc: HdlLoopIdx): HdlLoopIdx = match xs {
+    case hdlLoopIdxEmpty => acc
+    case hdlLoopIdxCons(n, rest) => loopStackReverse(rest, hdlLoopIdxCons(n, acc))
+}
+
+def loopStackName(xs: HdlLoopIdx): String = match xs {
+    case hdlLoopIdxEmpty => ""
+    case hdlLoopIdxCons(n, hdlLoopIdxEmpty) => nat_to_dec(n)
+    case hdlLoopIdxCons(n, rest) => string_concat(nat_to_dec(n), string_concat("_", loopStackName(rest)))
+}
+
+def loopName(name: String): String =
+    let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
+    let xs = get_global("HdlLoopIdx");
+    match xs {
+        case hdlLoopIdxEmpty => name
+        case hdlLoopIdxCons(_, _) => string_concat(name, string_concat("_", loopStackName(loopStackReverse(xs, hdlLoopIdxEmpty))))
+    }
+
+// 从 cur 起迭代 k 次（升序：f cur, f (cur+1), ..., f (cur+k-1)）。
+def genFrom(cur: Nat, k: Nat, f: Nat -> Unit): Unit = match k {
+    case zero => unit
+    case succ(m) =>
+        let _ = change_mutable_default("HdlLoopIdx", xs => hdlLoopIdxCons(cur, xs), hdlLoopIdxCons(cur, hdlLoopIdxEmpty));
+        let _ = f cur;
+        let _ = change_mutable_default("HdlLoopIdx", xs => loopStackTail(xs), hdlLoopIdxEmpty);
+        genFrom(nat_add(cur, 1), m, f)
+}
+
+def rangeFor2(lo: Nat, hi: Nat, f: Nat -> Unit): Unit =
+    genFrom(lo, nat_sub(hi, lo), f)
+
+def rangeFor(r: Range, f: Nat -> Unit): Unit =
+    genFrom(r.lo, nat_sub(r.hi, r.lo), f)

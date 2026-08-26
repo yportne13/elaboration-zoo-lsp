@@ -630,3 +630,94 @@ println(moduleTreeVL(topWithRead.create.tree))
     assert!(output.contains(".a(a), .b(b), .sum(sum)"), "missing port connections, got:\n{}", output);
     assert!(!output.contains("u_sum"), "no stray subSignal net reference allowed, got:\n{}", output);
 }
+
+// ── for 循环：编译期展开（方案 A：宏转写 + term 级 Nat 递归）──
+
+#[test]
+fn module_for_loop_unroll_naming() {
+    let output = assert_ok(r#"
+module forDemo {
+    let a = UInt[8]
+    for i in 0 until 4 {
+        let x = UInt[8]
+        x := a
+    }
+}
+println(moduleTreeVL(forDemo.create.tree))
+"#);
+    // 4 iterations unrolled: per-iteration signals get x_0..x_3 suffixes
+    for n in 0..4 {
+        assert!(
+            output.contains(&format!("wire [7:0] x_{n}")),
+            "missing x_{n} (iteration not unrolled with indexed name), got:\n{}",
+            output
+        );
+    }
+    assert_eq!(
+        output.matches("assign x_").count(),
+        4,
+        "expected 4 assignments (one per iteration), got:\n{}",
+        output
+    );
+}
+
+#[test]
+fn module_for_loop_width_param() {
+    let output = assert_ok(r#"
+module forWidthDemo {
+    let a = UInt[8]
+    for i in 0 until 3 {
+        let x = UInt[i + 2]
+        x := a
+    }
+}
+println(moduleTreeVL(forWidthDemo.create.tree))
+"#);
+    // i must be a ground Nat per iteration: widths 2,3,4
+    assert!(output.contains("wire [1:0] x_0"), "missing [1:0] x_0, got:\n{}", output);
+    assert!(output.contains("wire [2:0] x_1"), "missing [2:0] x_1, got:\n{}", output);
+    assert!(output.contains("wire [3:0] x_2"), "missing [3:0] x_2, got:\n{}", output);
+}
+
+#[test]
+fn module_for_loop_nested() {
+    let output = assert_ok(r#"
+module forNested {
+    let a = UInt[8]
+    for i in 0 until 2 {
+        for j in 0 until 2 {
+            let x = UInt[8]
+            x := a
+        }
+    }
+}
+println(moduleTreeVL(forNested.create.tree))
+"#);
+    // nested naming: outer index first, then inner (x_i_j)
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                output.contains(&format!("wire [7:0] x_{i}_{j}")),
+                "missing x_{i}_{j}, got:\n{}",
+                output
+            );
+        }
+    }
+    assert_eq!(output.matches("assign x_").count(), 4, "got:\n{}", output);
+}
+
+#[test]
+fn module_for_loop_empty_range() {
+    let output = assert_ok(r#"
+module forEmpty {
+    let a = UInt[8]
+    for i in 2 until 2 {
+        let x = UInt[8]
+        x := a
+    }
+}
+println(moduleTreeVL(forEmpty.create.tree))
+"#);
+    // empty half-open range: no signal, no assignment
+    assert!(!output.contains("x_"), "empty range must not unroll anything, got:\n{}", output);
+}
