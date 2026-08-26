@@ -330,6 +330,8 @@ impl Synth {
             }
             // Universe level
             (Val::U(x1), Val::U(x2)) => x1 == x2,
+            // String literals (type params like `TimeoutHandle["tm", 3]`)
+            (Val::LiteralIntro(s1), Val::LiteralIntro(s2)) => s1.data == s2.data,
             // LiteralType (String) is equivalent to Decl("String")
             (Val::LiteralType, Val::Decl(x, sp)) | (Val::Decl(x, sp), Val::LiteralType) => {
                 x.data == "String" && sp.is_empty()
@@ -395,6 +397,11 @@ impl Synth {
                 Self::nat_matches_chain_ground(*k, *index, datas, visited)
             }
             (Val::U(x1), Val::U(x2)) => x1 == x2,
+            // String literals — must compare like val_match does, or a
+            // String-parameterized type never equals itself in instance
+            // matching (e.g. the reflexive LetNamed fallback on
+            // `TimeoutHandle["tm", 3]`).
+            (Val::LiteralIntro(s1), Val::LiteralIntro(s2)) => s1.data == s2.data,
             (Val::LiteralType, Val::Decl(x, sp)) | (Val::Decl(x, sp), Val::LiteralType) => {
                 x.data == "String" && sp.is_empty()
             }

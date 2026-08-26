@@ -178,3 +178,86 @@ impl[width: Nat] Data for SInt[width] {
         unit
     def expr: Expr = this.zz_expr
 }
+
+// ============================================================
+// LetNamed — expression lets become named wires (SpinalHDL semantics)
+// ============================================================
+// `let x = a + b` in a module body emits a real Verilog wire:
+//     wire [7:0] x;
+//     assign x = (a + b);
+// instead of inlining at every use site. The Expr macro's generic let arm
+// (hdl-macros.typort) wraps the RHS as nameWire($y): the def's implicit
+// `bn: BindingName` is synthesized from the let binder's name, and the
+// LetNamed instance for the value's type materializes the wire — a create
+// node plus an assign recorded through createSignalExpr — returning a
+// signal whose zz_expr READS the wire, so later uses reference `x`.
+// Already-declared signals (factory products, ports, regs —
+// isDeclaredSignal) pass through unchanged: their let is plain aliasing.
+// SHAPE: dispatched like regNext (hdl-signals.typort) — a top-level def
+// with a `[ln: LetNamed[T]]` implicit constraint, NOT method-call syntax
+// (the method-call path misbinds an impl Nat parameter on parameterized
+// modules).
+// KNOWN LIMIT: in a width-parameterized module (`module m[w: Nat]`), the
+// impl's `w` evaluates to a wrong value at materialization time — the SAME
+// pre-existing typeclass gap that gives `regNext` a 1-bit `reg d;` there
+// (no runtime width has ever flown through an impl type parameter; the
+// working widths all come from explicit value arguments like memUInt(64, 8)
+// or macro-transcribed port expressions). Fixed-width modules are exact.
+trait LetNamed[T] {
+    def mkNamed(name: String): T
+}
+
+impl[w: Nat] LetNamed[UInt[w]] for UInt[w] {
+    def mkNamed(name: String): UInt[w] =
+        match isDeclaredSignal(this.zz_expr) {
+            case true => this
+            case false =>
+                let wire = createSignalExpr(name, createWidth(name, w));
+                let d = createSignalExpr("", assign(wire, this.zz_expr));
+                UInt.mk(Some(name), wire)
+        }
+}
+
+impl[w: Nat] LetNamed[Bits[w]] for Bits[w] {
+    def mkNamed(name: String): Bits[w] =
+        match isDeclaredSignal(this.zz_expr) {
+            case true => this
+            case false =>
+                let wire = createSignalExpr(name, createWidth(name, w));
+                let d = createSignalExpr("", assign(wire, this.zz_expr));
+                Bits.mk(Some(name), wire)
+        }
+}
+
+impl[w: Nat] LetNamed[SInt[w]] for SInt[w] {
+    def mkNamed(name: String): SInt[w] =
+        match isDeclaredSignal(this.zz_expr) {
+            case true => this
+            case false =>
+                let wire = createSignalExpr(name, createSIntWidth(name, w));
+                let d = createSignalExpr("", assign(wire, this.zz_expr));
+                SInt.mk(Some(name), wire)
+        }
+}
+
+impl LetNamed[Bool] for Bool {
+    def mkNamed(name: String): Bool =
+        match isDeclaredSignal(this.zz_expr) {
+            case true => this
+            case false =>
+                let wire = createSignalExpr(name, create(name));
+                let d = createSignalExpr("", assign(wire, this.zz_expr));
+                Bool.mk(Some(name), wire)
+        }
+}
+
+// Reflexive no-op fallback — MUST stay last (the trait solver takes the
+// first registered matching instance). Covers every other receiver type:
+// bundles, sub-module instances, Nat/String locals.
+impl[T] LetNamed[T] for T {
+    def mkNamed(name: String): T = this
+}
+
+// The let-RHS wrapper: bn is synthesized from the let binder name by the
+// compiler, exactly like the new- and auto- factories.
+def nameWire[bn: BindingName, T][ln: LetNamed[T]](value: T): T = ln.mkNamed(value, bn.name)

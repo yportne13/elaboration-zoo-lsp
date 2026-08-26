@@ -136,3 +136,55 @@ fn manifest_matches_verilog_module_set() {
         "manifest and Verilog must describe the same module set"
     );
 }
+
+// `let x = a + b` in a module body materializes a named wire instead of
+// inlining the expression at every use site (SpinalHDL semantics, LetNamed
+// instances in the prelude's hdl-types.typort).
+#[test]
+fn emit_expression_let_becomes_named_wire() {
+    let (uri, _) = example("01-basics.typort");
+    let src = "module exprLet {\n\
+               \x20   input a = UInt[8]\n\
+               \x20   input b = UInt[8]\n\
+               \x20   output y = UInt[8]\n\
+               \x20   let x = a + b\n\
+               \x20   y := x\n\
+               }\n";
+    let v = emit_verilog(&[(uri, src.to_string())], "exprLet").unwrap();
+    assert!(
+        v.contains("wire [7:0] x;"),
+        "expected a named wire for the expression let, got:\n{v}"
+    );
+    assert!(
+        v.contains("assign x = (a + b);"),
+        "expected the wire to be driven by the let expression, got:\n{v}"
+    );
+    assert!(
+        v.contains("assign y = x;"),
+        "later uses must reference the wire, not re-inline the expression, got:\n{v}"
+    );
+}
+
+// A let that aliases an already-declared signal (factory product, port) is
+// plain aliasing — no extra wire may be created for it.
+#[test]
+fn emit_aliasing_let_adds_no_extra_wire() {
+    let (uri, _) = example("01-basics.typort");
+    let src = "module aliasLet {\n\
+               \x20   input a = UInt[8]\n\
+               \x20   output y = UInt[8]\n\
+               \x20   let s = UInt[8]\n\
+               \x20   let alias = s\n\
+               \x20   s := a\n\
+               \x20   y := alias\n\
+               }\n";
+    let v = emit_verilog(&[(uri, src.to_string())], "aliasLet").unwrap();
+    assert!(
+        !v.contains("wire [7:0] alias;"),
+        "aliasing let must not create a wire, got:\n{v}"
+    );
+    assert!(
+        v.contains("assign y = s;"),
+        "the alias must keep referencing the original signal, got:\n{v}"
+    );
+}

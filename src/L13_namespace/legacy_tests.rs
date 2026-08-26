@@ -1532,7 +1532,9 @@ fn test_examples_hdl_dir() {
             "reg [3:0] myBits [0:15];",  // Bits 内存
             "reg myFlag [0:15];",        // Bool（1 位）内存
             "reg [7:0] rd;",             // readSync 生成寄存器
-            "assign out = myRam[addr];", // readAsync 组合读
+            "wire [7:0] rd;",            // readAsync 表达式 let 的命名 wire
+            "assign rd = myRam[addr];",  // readAsync 组合读（wire 由表达式 let 生成）
+            "assign out = rd;",          // 后续使用引用 wire 而非内联
             "rd <= myRam[addr];",        // readSync 时钟赋值
             "if (en) begin",             // 同步写使能
         ]),
@@ -1652,7 +1654,9 @@ fn test_examples_hdl_dir() {
             "assign popValid = !(_d_rdPtr == _d_wrPtrSync2)",  // empty 检测
         ]),
         ("20-widthadapter.typort", include_str!("../../examples/hdl/20-widthadapter.typort"), &[
-            "assign out = ((sel == 0) ? a0 : ((sel == 1) ? a1 : ((sel == 2) ? a2 : ((sel == 3) ? a3 : 0))))",  // vecAtUInt mux 链
+            "wire [7:0] picked;",               // vecAtUInt 表达式 let 的命名 wire
+            "assign picked = ((sel == 0) ? a0 : ((sel == 1) ? a1 : ((sel == 2) ? a2 : ((sel == 3) ? a3 : 0))))",  // vecAtUInt mux 链
+            "assign out = picked;",             // 后续使用引用 wire
             "assign outData = {{b0, b1}, b2}",     // 字节拼接
             "assign outValid = (cnt == 2)",
             "reg [1:0] cnt;",

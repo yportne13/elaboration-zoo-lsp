@@ -7,6 +7,11 @@
 //   reg     — 寄存器
 //   auto*   — BindingName 自动命名（信号名 = let 绑定名）
 //
+//   let x = a + b — 表达式 let 也生成命名 wire（LetNamed）：
+//                   wire [7:0] x; assign x = (a + b);
+//                   后续使用引用 x，不再内联表达式。
+//                   已声明信号（工厂产物/端口）的 let 是纯别名，不额外建 wire。
+//
 // 模块可参数化宽度：module name[w: Nat]
 // ============================================================
 
@@ -23,6 +28,18 @@ module basicDecls[w: Nat] {
 }
 println("=== 01a: basicDecls (参数化宽度 + 各类声明) ===")
 println(moduleTreeVL(basicDecls.create[8].tree))
+
+module exprLet {
+    input a = UInt[8]
+    input b = UInt[8]
+    output y = UInt[8]
+    let x = a + b
+    let sel = x > b
+    let picked = sel.mux(x, a)
+    y := picked
+}
+println("=== 01a2: exprLet (表达式 let → 命名 wire) ===")
+println(moduleTreeVL(exprLet.create.tree))
 
 module autoNames {
     let mywire = autoUInt(8)

@@ -129,7 +129,16 @@ macro_rules Expr {
     // at the end of the module class body), so a plain generic let suffices.
 
     // ---- generic let ----
-    (let $x:ident = $y:raw) => {let $x = $y;};
+    // `let u = myAdder.create[8]` needs no special branch: the class
+    // constructor's `create` records the instance itself (mkInstanceIfParent
+    // at the end of the module class body), so a plain generic let suffices.
+    // Expression lets become named wires: `letNamed` (LetNamed instances in
+    // hdl-types.typort, dispatched regNext-style) materializes
+    // `wire x; assign x = <expr>;` for signal arithmetic results and passes
+    // every other value (declared signals, bundles, sub-module instances,
+    // plain locals) through unchanged. Its `bn: BindingName` implicit is
+    // synthesized from the let binder's name.
+    (let $x:ident = $y:raw) => {let $x = nameWire($y);};
 
     // ---- when/otherwise control flow ----
     // Pushes one WhenStack level per chain (see the standalone `when` macro's

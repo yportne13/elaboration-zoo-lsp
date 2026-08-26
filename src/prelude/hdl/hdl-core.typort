@@ -171,6 +171,42 @@ def isRegExpr(e: Expr): Boolean = match e {
     case _ => false
 }
 
+// Is the Expr a declared signal (factory-created wire/port/reg/mem, or a
+// sub-module instance)? Binding such a value with a let is plain aliasing —
+// no extra wire. Everything else an operator/mux/bitsel/memRead chain can
+// produce is a bare expression; the LetNamed instances (hdl-types.typort)
+// turn a let of those into a named wire instead.
+def isDeclaredSignal(e: Expr): Boolean = match e {
+    case create(_) => true
+    case createIn(_) => true
+    case createOut(_) => true
+    case createInOut(_) => true
+    case createWidth(_, _) => true
+    case createInWidth(_, _) => true
+    case createOutWidth(_, _) => true
+    case createInOutWidth(_, _) => true
+    case createSIntWidth(_, _) => true
+    case createSIntInWidth(_, _) => true
+    case createSIntOutWidth(_, _) => true
+    case createSIntInOutWidth(_, _) => true
+    case createReg(_) => true
+    case createRegWidth(_, _) => true
+    case createRegWidthInit(_, _, _) => true
+    case createRegWidthCd(_, _, _) => true
+    case createRegWidthInitCd(_, _, _, _) => true
+    case createSIntRegWidthCd(_, _, _) => true
+    case createSIntRegWidthInitCd(_, _, _, _) => true
+    case createOutReg(_) => true
+    case createOutRegWidth(_, _) => true
+    case createOutRegWidthInit(_, _, _) => true
+    case createSIntOutRegWidth(_, _) => true
+    case createSIntOutRegWidthInit(_, _, _) => true
+    case createSIntRegWidth(_, _) => true
+    case createSIntRegWidthInit(_, _, _) => true
+    case createMem(_, _, _) => true
+    case _ => false
+}
+
 // ---------- Clock domain (String-name variant, no Bool dependency) ----------
 // Defined here so ModuleDef can bake the clock domain at record time.
 // hdl-clock.typort keeps the SpinalHDL-style Mem type built on top.
