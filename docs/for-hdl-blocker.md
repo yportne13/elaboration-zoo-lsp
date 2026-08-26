@@ -75,3 +75,22 @@ lambda 类型，不可用）。
   宽度参数化 / 嵌套命名 / 空区间），当前全部失败于上述泄漏。
 - 顶层机制探针（可在任何非 class 位置直接跑）：
   `let _ = rangeFor(0 until 3, i => let _ = nat_add(i, 0); unit)` → 正常。
+
+## 二次排查（2026-08-26 深挖续）
+
+在 Phase A/let 分支为**无注解 Hole 推断 meta** 增加显式闭合（推断类型即该
+meta 的答案：`MetaEntry::Solved(vt, mty)`）——语义正确、module 回归 22 项
+全绿；它对 for 的 meta 报错**没有直接消除**（根因不在 Hole meta）。随后试过
+「Nat defaulting 失败后把 oty 完全确定的余留 meta 自解」——能把
+`find unsolved meta` 推过检查期，**但**暴露更深一层：`string_to_global_type`
+的隐式参数 meta 被错误求解成 `U(0)`（unit 值）挂在 spine 上，`val_no_metas`
+里对该 spine 的 quote/force（`NM_QUOTE_LVL` 分支）触发
+`v_app: impossible apply U(0)`。**该自解兜底因此回退**（把明确诊断变成运行期
+panic 是净退化），只保留两个 pin 化简。
+
+新增（待修）事实：`v_app` 的 `Val::Match` 分支已存在（stuck match 应用
+语义正确），**新的 panic 是「错解值 U(0) 被 apply」**——即**隐式参数 meta
+的求解目标错误**（求解器把类型级/值级 meta 混解），根源仍在
+`string_to_global_type` 依赖路径的 meta 处理，与
+`l13-typeclass-instance-nat-param-bug.md` 的「实例化时隐式参数 meta 悬挂」
+是同一个病灶的两个表象。

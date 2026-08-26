@@ -684,6 +684,7 @@ impl Infer {
                 // were already produced by check_universe in Phase A, and the
                 // context layout is identical, so reuse them instead of
                 // re-running check_universe + eval.
+                let hole_anno = matches!(ret_typ.as_ref(), Raw::Hole(_));
                 let (a_checked, va) = if let Raw::Tm(tm, ty) = ret_typ.as_ref() {
                     (tm.clone(), ty.clone())
                 } else {
@@ -695,6 +696,24 @@ impl Infer {
                 let cxt_named = cxt.with_binding_name(x.data.clone());
                 let t_checked = self.check::<CANONICAL>(&cxt_named, *t, &va)?;
                 let vt = self.eval(&cxt.decl, &cxt.env, &t_checked);
+                // Close the Hole-annotation inference meta.  Checking a value
+                // whose type comes from a dependent application
+                // (e.g. `get_global` / `change_mutable()` through
+                // `string_to_global_type`) against the fresh meta does NOT
+                // unify the meta itself, leaving it Unsolved; an unannotated
+                // `let` later visited by `no_metas` (class create/tree raw
+                // bodies, Phase-A-reused `Raw::Tm` items) then reports a
+                // dangling meta.  The checked value type IS the let's type,
+                // so pin it directly.
+                if hole_anno {
+                    if let Val::Flex(mv, sp) = va.as_ref() {
+                        if sp.is_empty() {
+                            if let MetaEntry::Unsolved(mty, _, _, _) = &self.meta[mv.0 as usize] {
+                                self.meta[mv.0 as usize] = MetaEntry::Solved(vt.clone(), mty.clone());
+                            }
+                        }
+                    }
+                }
                 self.hover_table.push((x.to_span(), x.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, va.clone()));
                 let u_checked = self.check::<CANONICAL>(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va.clone()),
@@ -1848,6 +1867,26 @@ impl Infer {
                     let cxt_named = a_cxt.with_binding_name(n.data.clone());
                     let t_checked = self.check::<false>(&cxt_named, val, &va)?;
                     let vt = self.eval(&a_cxt.decl, &a_cxt.env, &t_checked);
+                    // Close the inferred meta for UNANNOTATED items.  The
+                    // check above solves the deduction goal against `va` but
+                    // NOT the fresh meta itself when the value's type is a
+                    // dependent application result (e.g.
+                    // `change_mutable_default` / `get_global` returning through
+                    // `string_to_global_type`): the meta stays Unsolved, and
+                    // Phase B's create/tree bodies reuse it via `Raw::Tm`
+                    // (annotation + value), where the final `no_metas` pass
+                    // reports it as an unsolved/dangling meta (the
+                    // lvl2ix/`find unsolved meta` family).  The inferred type
+                    // IS the unannotated let's type, so pin it directly.
+                    if matches!(ty, Raw::Hole(_)) {
+                        if let Val::Flex(mv, sp) = va.as_ref() {
+                            if sp.is_empty() {
+                                if let MetaEntry::Unsolved(mty, _, _, _) = &self.meta[mv.0 as usize] {
+                                    self.meta[mv.0 as usize] = MetaEntry::Solved(vt.clone(), mty.clone());
+                                }
+                            }
+                        }
+                    }
                     let raw_ty = if matches!(ty, Raw::Hole(_)) {
                         // Unannotated: the struct field type is the inferred
                         // type.  Re-express it as a Raw annotation; fall back
