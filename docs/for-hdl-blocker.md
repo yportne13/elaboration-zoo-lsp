@@ -94,3 +94,12 @@ panic 是净退化），只保留两个 pin 化简。
 `string_to_global_type` 依赖路径的 meta 处理，与
 `l13-typeclass-instance-nat-param-bug.md` 的「实例化时隐式参数 meta 悬挂」
 是同一个病灶的两个表象。
+
+### 三次排查（2026-08-26 续 2）：item-local 闭合实验（验证后回退）
+
+把「Nat defaulting 失败后对 oty 确定的余留 meta 自解」**下沉到 Phase A 逐
+item**（item 检查后先 `solve_multi_trait` 再局部自解，语义上「已检查完的类
+条目是无后约束的不动点」）：**无效**——这批 meta 的目标类型相互依赖（目标
+类型内仍含未解 meta），单点闭合条件全部不满足；证明它们是**相互引用的一簇
+约束**，只能由整体求解器（或 bug 报告 §修复方向 3 的「约束 meta 延迟解」）
+处理。**已回退**，主线保持 `14c0805` 状态：两个 pin 化简 + 文档记录。
