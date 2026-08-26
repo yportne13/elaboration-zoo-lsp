@@ -197,11 +197,18 @@ macro_rules Expr {
     };
 
     // ---- for 循环 — 编译期展开（term 级 Nat 递归）----
-    // NOTE: 绑定名不能用 `let _ =` —— class 体内 `let _ = <调用>` 在现有
-    // elaborator 下会卡 meta（pre-existing，master 可复现：`let _ = whenEnd(unit)`）。
-    // 命名绑定会产生一个 Unit 字段，与 module 宏的 `_res` 同理，无副作用面。
+    // for i in 0 until 4 { ... }  →  let __hloop: Unit = rangeFor(0 until 4, i => ...)
+    // BLOCKED: class 展开期 dependent-meta 泄漏（docs/for-hdl-blocker.md），
+    // create/tree 检查悬挂 meta（AppPruning/Meta 记录越界），待 elaborator
+    // 修复。形态选择记录（三变体各踩一类失败，修复后按此路径收口）：
+    //   - `let _ = rangeFor(...)`: `let _ = <调用>` 的 pre-existing 挂
+    //   - `let __hloop = rangeFor(...)`（无注解）: Hole 推断 meta 链挂
+    //   - `let __hloop: Unit = rangeFor(...)`（当前）: 仅剩 dependent-meta
+    //     泄漏一个阻塞点（meta 33971 记录 Pi(bn) 类型，quote 越界 1 层）
+    // body 用裸 let 链（$($body)*，各 Expr 片段自带 `;` 结尾）——不能用
+    // $({$body})*：花括号在 lambda 体内是裸块，尾值会污染 lambda 类型。
     (for $i:ident in $it:raw {$( $body: Expr )*}) => {
-        let __hloop = rangeFor($it, $i => $({$body})* unit)
+        let __hloop: Unit = rangeFor($it, $i => $($body)* unit)
     };
 
     // ---- raw expression passthrough ----
