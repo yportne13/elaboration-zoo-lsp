@@ -196,6 +196,14 @@ macro_rules Expr {
         let _ = whenEnd(unit);
     };
 
+    // ---- for 循环 — 编译期展开（term 级 Nat 递归）----
+    // NOTE: 绑定名不能用 `let _ =` —— class 体内 `let _ = <调用>` 在现有
+    // elaborator 下会卡 meta（pre-existing，master 可复现：`let _ = whenEnd(unit)`）。
+    // 命名绑定会产生一个 Unit 字段，与 module 宏的 `_res` 同理，无副作用面。
+    (for $i:ident in $it:raw {$( $body: Expr )*}) => {
+        let __hloop = rangeFor($it, $i => $({$body})* unit)
+    };
+
     // ---- raw expression passthrough ----
     ($x: raw) => {let _ = $x;}
 }

@@ -263,4 +263,4 @@ impl[T] LetNamed[T] for T {
 
 // The let-RHS wrapper: bn is synthesized from the let binder name by the
 // compiler, exactly like the new- and auto- factories.
-def nameWire[bn: BindingName, T][ln: LetNamed[T]](value: T): T = ln.mkNamed(value, bn.name)
+def nameWire[bn: BindingName, T][ln: LetNamed[T]](value: T): T = ln.mkNamed(value, loopName(bn.name))

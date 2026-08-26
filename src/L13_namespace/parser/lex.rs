@@ -202,6 +202,11 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
                     Hole
                 } else if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
                     k
+                } else if ident == "until" {
+                    // HDL range operator: `0 until 4` parses as infix
+                    // `0.until(4)` (kind+text matcher in macro patterns
+                    // compares this token exactly like any Op).
+                    Op
                 } else {
                     Ident
                 };
