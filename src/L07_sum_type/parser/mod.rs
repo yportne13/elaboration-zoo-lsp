@@ -393,7 +393,7 @@ enum Bool {
 
 enum Nat {
     zero
-    succ(Nat)
+    succ(x: Nat)
 }
 
 def two = succ succ zero

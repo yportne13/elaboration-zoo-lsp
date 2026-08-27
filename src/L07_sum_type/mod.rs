@@ -600,12 +600,6 @@ println (mul two four)
 
 def three = add two (succ zero)
 
-def ck(x: Nat): Eq (add x x) (mul two x) =
-    match x {
-        case zero => refl[Nat][zero]
-        case succ(xx) => _
-    }
-
 println "final"
 
 "#;
@@ -639,11 +633,6 @@ enum Vec[A](len: Nat) {
 def t = cons zero (cons two (cons three (cons two nil)))
 
 println t.len
-
-def head[T, l: Nat](x: Vec[T] (succ l)): T =
-    match x {
-        case cons(x, _) => x
-    }
 
     "#;
     println!("{}", run(input, 0).unwrap());
@@ -694,7 +683,7 @@ enum Bool {
 
 enum Nat {
     zero
-    succ(Nat)
+    succ(x: Nat)
 }
 
 def two = succ (succ zero)
