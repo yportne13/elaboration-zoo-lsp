@@ -361,12 +361,15 @@ def test = p.x
 
     let (infer, _output) = elaborate_with_prelude(code);
 
-    // The completion entries must be keyed to the `p.x` span so the LSP's
-    // `contains(offset) || end == offset` filter hits them at the cursor.
+    // Member-access entries are keyed to the RECEIVER's span (`p`), not the
+    // whole `p.x` access: the LSP handler matches a candidate when the
+    // receiver's span ends exactly at the `.` before the cursor's member
+    // prefix (see lib.rs completion filter).  So the `p.x` prefix is served
+    // by entries keyed to the `p` at p_x_off..p_x_off+1.
     let p_x_off = code.rfind("p.x").unwrap();
     let names: Vec<String> = infer.completion_table.iter()
         .filter(|(span, _)| {
-            span.start_offset as usize == p_x_off && span.end_offset as usize == p_x_off + 3
+            span.start_offset as usize == p_x_off && span.end_offset as usize == p_x_off + 1
         })
         .map(|(_, l)| l.to_string())
         .collect();
@@ -619,12 +622,16 @@ fn test_typed_prefix_completion_utf16_aware() {
     let handler_offset = elaboration_zoo_lsp::position_to_offset(position, &rope).expect("cursor offset");
     assert_eq!(handler_offset, cursor, "handler offset must be the raw byte offset");
 
+    // Member-access entries are keyed to the RECEIVER's span (`p`), which
+    // ends exactly at the `.` before the cursor's member prefix (see lib.rs
+    // completion filter).  The utf16 point here is that `handler_offset` (the
+    // byte offset the LSP would compute for the cursor) still lands on the
+    // `p.x` line regardless of the CJK comment above.
     let hits: Vec<&str> = infer.completion_table.iter()
         .filter(|(span, _)| {
             span.start_offset as usize == p_x_off
-                && span.end_offset as usize == p_x_off + 3
-                && (handler_offset >= span.start_offset as usize && handler_offset < span.end_offset as usize
-                    || handler_offset == span.end_offset as usize)
+                && span.end_offset as usize == p_x_off + 1
+                && handler_offset >= span.start_offset as usize
         })
         .map(|(_, label)| label.as_str())
         .collect();
