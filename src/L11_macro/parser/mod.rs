@@ -293,7 +293,11 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, (Vec
 
         while let Ok((input_t, op)) = string(Op)
             .or(kw(LParen).map(|x| x.map(|_| "(".to_owned())))
-            .or(kw(LCurly).map(|x| x.map(|_| "{".to_owned())))
+            // `{` as an application operator conflicts with `match x { ... }`
+            // (the match scrutinee is parsed by expr_bp, which would steal the
+            // `{` as an application argument list). L13 keeps this disabled
+            // for the same reason; the `else if "{"` branch below is dead code.
+            //.or(kw(LCurly).map(|x| x.map(|_| "{".to_owned())))
             .or(kw(LSquare).map(|x| x.map(|_| "[".to_owned())))
             .or(kw(Dot).map(|x| x.map(|_| ".".to_owned())))
             .parse(input, state) {
