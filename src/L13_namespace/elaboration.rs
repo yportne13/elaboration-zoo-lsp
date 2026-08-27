@@ -89,6 +89,31 @@ fn prefix_decl_name(d: Decl, prefix: &SmolStr) -> Decl {
     }
 }
 
+/// Length of a fully concrete `succ^k zero` chain of the `Nat` sum
+/// (`typ` the expanded `Tm::Sum("Nat")`), or `None` for anything else
+/// (a stuck tail, another sum, a partially-applied form).  Mirrors the
+/// value-level `count_nat` walk.
+fn nat_chain_len(tm: &Tm) -> Option<u64> {
+    fn is_nat_sum_tm(t: &Tm) -> bool {
+        matches!(t, Tm::Sum(n, _, _, false) if n.data == "Nat")
+    }
+    let mut k = 0u64;
+    let mut cur = tm;
+    loop {
+        match cur {
+            Tm::SumCase { typ, index: 0, datas, is_trait: false }
+                if datas.is_empty() && is_nat_sum_tm(typ) => return Some(k),
+            Tm::SumCase { typ, index: 1, datas, is_trait: false }
+                if datas.len() == 1 && is_nat_sum_tm(typ) =>
+            {
+                k = k.checked_add(1)?;
+                cur = datas[0].1.as_ref();
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Tuple-arity of a name like `Tuple2` (sans `.mk` suffix); None if the name
 /// is not a builtin tuple type name.
 fn tuple_n_arity(name: &str) -> Option<usize> {
@@ -2025,6 +2050,19 @@ impl Infer {
                 // A constructor value inside a type index (`other[8]`): recover
                 // the case name from the quoted sum's case list by position.
                 Tm::SumCase { is_trait, typ, index, datas } => {
+                    // A concrete Nat width (`succ^k zero`) recovers as the
+                    // literal `Raw::Nat(k)` instead of a per-node
+                    // `Raw::SumCase` chain: re-elaborating the chain would
+                    // rebuild k nodes per field and (before the expanded-typ
+                    // fix in the `Raw::SumCase` arm) stored the reference
+                    // form `typ: Tm::Decl("Nat")`, which panicked pretty on
+                    // the hover member list
+                    // (docs/l13-sumcase-decl-typ-pretty-panic.md).
+                    if !*is_trait {
+                        if let Some(k) = nat_chain_len(tm) {
+                            return Some(Raw::Nat(empty_span(k)));
+                        }
+                    }
                     let case_name = match typ.as_ref() {
                         Tm::Sum(_, _, cases, _) => cases.iter().nth(*index as usize)?.clone(),
                         _ => return None,
@@ -2648,10 +2686,20 @@ impl Infer {
                         Ok((x.0, tm, x.2))
                     })
                     .collect::<Result<Vec<_>, _>>()?);
+                // Store `typ` in the *expanded* form (the evaluated type's
+                // quote, always a `Tm::Sum` here because the index lookup
+                // above already required `typ_val` to be one).  Every
+                // `SumCase.typ` consumer — pretty's Nat-literal and
+                // case-name paths, `Frame::Obj` projection after eval —
+                // assumes the expanded form; storing the elaborated
+                // *reference* (`Tm::Decl("Nat")`) leaked into decl-table
+                // types via recovered annotations and panicked pretty
+                // (docs/l13-sumcase-decl-typ-pretty-panic.md).
+                let typ_expanded = self.quote(&cxt.decl, cxt.lvl, &typ_val);
                 Ok((
                     Tm::SumCase {
                         is_trait,
-                        typ: typ_checked,
+                        typ: typ_expanded,
                         index,
                         datas,
                     }.into(),

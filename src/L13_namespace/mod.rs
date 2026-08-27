@@ -988,7 +988,19 @@ pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
                 (
                     x.1.0,
                     Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                    Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                    // Sum-type definition values stay: a `Val::Sum` is a
+                    // WHNF leaf that never re-expands, but evaluating under
+                    // the simplified decl needs it — primops
+                    // (`nat_succ_shape`) and constructor bodies build
+                    // `Val::SumCase`s whose `typ` must stay a `Val::Sum`;
+                    // replacing it with `Val::Decl` produced SumCase values
+                    // that quoted back with `typ: Tm::Decl` and panicked
+                    // pretty (docs/l13-sumcase-decl-typ-pretty-panic.md §4.3).
+                    if matches!(x.1.2.as_ref(), Val::Sum(..)) {
+                        x.1.2.clone()
+                    } else {
+                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into()
+                    },
                     x.1.3.clone(),
                     x.1.4.clone(),
                     x.1.5.clone(),
@@ -2755,14 +2767,20 @@ impl Infer {
                                     .unwrap().1.clone()
                             },
                             Val::SumCase { datas, typ, .. } => {
-                                (match typ.as_ref() {
-                                    Val::Sum(_, params, _, _) => params,
-                                    _ => panic!("impossible {typ:?}"),
-                                }).iter()
-                                    .map(|x| (x.0.clone(), x.1.clone(), x.3))
-                                    .chain(datas.iter().cloned())
-                                    .find(|(f_name, _, _)| f_name == &name)
-                                    .unwrap().1.clone()
+                                match typ.as_ref() {
+                                    Val::Sum(_, params, _, _) => params
+                                        .iter()
+                                        .map(|x| (x.0.clone(), x.1.clone(), x.3))
+                                        .chain(datas.iter().cloned())
+                                        .find(|(f_name, _, _)| f_name == &name)
+                                        .unwrap().1.clone(),
+                                    // A stuck typ (meta/rigid head) has no
+                                    // field table to project from: degrade to
+                                    // the generic stuck projection instead of
+                                    // panicking — eval must never crash the
+                                    // server on a stuck value.
+                                    _ => Val::Obj(a, name, List::new()).into(),
+                                }
                             },
                             _ => {
                                 Val::Obj(a, name, List::new()).into()

@@ -206,6 +206,18 @@ fn head_symbol(name: &str) -> Option<&str> {
     })
 }
 
+/// The `typ` of a `Tm::SumCase` naming the `Nat` sum: the expanded
+/// `Tm::Sum("Nat")` (the form `quote`/`quote_nat` and the elaboration
+/// `Raw::SumCase` arm store) or a `Tm::Decl("Nat")` reference form that
+/// older producers leaked into stored terms.  Both display as a Nat
+/// literal chain (`succ^k zero` → the number).
+fn is_nat_typ(typ: &Tm) -> bool {
+    match typ {
+        Tm::Sum(n, _, _, false) | Tm::Decl(n) => n.data == "Nat",
+        _ => false,
+    }
+}
+
 fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
@@ -394,38 +406,40 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
             let zwsp = if !impls.is_empty() && !expls.is_empty() { "\u{200b}" } else { "" };
             format!("{}{}{}{}", span.data, impl_str, zwsp, expl_str)
         },
-        Tm::SumCase { is_trait, typ, index, datas: params } if matches!(
-            typ.as_ref(),
-            Tm::Sum(name, _, _, _) if name.data == "Nat",
-        ) => if *index == 0 {"0".to_owned()} else {pretty_nat(prec, indent, ns, params.first().map(|x| x.1.as_ref()), 1)},
-        Tm::SumCase { is_trait, typ, index, datas: params } => {
-            let case_name = match typ.as_ref() {
-                Tm::Sum(_, _, cases, _) => cases.get(*index as usize).map(|c| c.data.as_str()).unwrap_or("?"),
-                _ => "?",
-            };
-            format!(
-                "{}::{}{}",
-                match typ.as_ref() {
-                    Tm::Sum(name, params, _, _) => params
+        Tm::SumCase { typ, index, datas: params, .. } if is_nat_typ(typ.as_ref()) => {
+            if *index == 0 {"0".to_owned()} else {pretty_nat(prec, indent, ns, params.first().map(|x| x.1.as_ref()), 1)}
+        },
+        Tm::SumCase { typ, index, datas: params, .. } => {
+            // `typ` should be the expanded `Tm::Sum` (the invariant the
+            // `Raw::SumCase` elaboration arm and `quote` maintain).  A stuck
+            // head (meta/rigid) has no case table to name the constructor
+            // by — degrade to the positional index instead of panicking:
+            // a display path must never crash the server
+            // (docs/l13-sumcase-decl-typ-pretty-panic.md).
+            let (head, case_name): (String, String) = match typ.as_ref() {
+                Tm::Sum(name, sum_params, cases, _) => (
+                    sum_params
                         .iter()
                         .filter(|x| x.3 == Icit::Impl)
                         .map(|x| &x.1)
                         .map(|x| pretty_tm_indent(prec, indent, ns.clone(), x).to_string())
                         .reduce(|a, b| a + ", " + &b)
                         .map(|x| format!("{}[{}]", name.data, x))
-                        .unwrap_or(name.data.to_string()),
-                    other => panic!(
-    "SumCase expected Tm::Sum, but got `{other:?}`\n  at pretty_tm(prec={prec}, indent={indent})"
-),
-                },
-                case_name,
-                params
-                    .iter()
-                    .map(|tm| pretty_tm_indent(prec, indent, ns.clone(), &tm.1))
-                    .reduce(|acc, x| acc + ", " + &x)
-                    .map(|x| format!("({x})"))
-                    .unwrap_or("".to_owned()),
-            )
+                        .unwrap_or_else(|| name.data.to_string()),
+                    cases.get(*index as usize).map(|c| c.data.to_string()).unwrap_or_else(|| "?".to_string()),
+                ),
+                other => (
+                    pretty_tm_indent(prec, indent, ns.clone(), other),
+                    format!("#{index}"),
+                ),
+            };
+            let datas = params
+                .iter()
+                .map(|tm| pretty_tm_indent(prec, indent, ns.clone(), &tm.1))
+                .reduce(|acc, x| acc + ", " + &x)
+                .map(|x| format!("({x})"))
+                .unwrap_or_default();
+            format!("{head}::{case_name}{datas}")
         },
         Tm::Call(name, args, body) => {
             if matches!(body.as_ref(), Tm::Match(..)) {
@@ -489,10 +503,7 @@ fn pretty_nat(prec: i32, indent: usize, ns: List<SmolStr>, param: Option<&Tm>, s
     let mut param = param;
     loop {
         match param {
-            Some(Tm::SumCase { is_trait, typ, index, datas: params }) if matches!(
-                typ.as_ref(),
-                Tm::Sum(name, _, _, _) if name.data == "Nat",
-            ) => {
+            Some(Tm::SumCase { typ, index, datas: params, .. }) if is_nat_typ(typ.as_ref()) => {
                 if *index == 0 {
                     return format!("{sum}");
                 }
@@ -544,6 +555,48 @@ mod tests {
             icit,
             body,
         ).into()
+    }
+
+    fn sumcase(typ: Rc<Tm>, index: u32, datas: &[(&str, Rc<Tm>)]) -> Rc<Tm> {
+        Tm::SumCase {
+            typ,
+            index,
+            datas: Rc::new(datas
+                .iter()
+                .map(|(n, t)| (
+                    Span { data: SmolStr::new(*n), start_offset: 0, end_offset: 0, path_id: 0 },
+                    t.clone(),
+                    Icit::Expl,
+                ))
+                .collect()),
+            is_trait: false,
+        }.into()
+    }
+
+    /// A Nat literal chain over the *reference* form `typ: Decl("Nat")` (the
+    /// shape older producers leaked into stored terms) still prints as the
+    /// number — the Nat-literal path accepts both typ forms.
+    #[test]
+    fn nat_sumcase_accepts_decl_reference_typ() {
+        let zero = sumcase(decl("Nat"), 0, &[]);
+        let one = sumcase(decl("Nat"), 1, &[("n", zero)]);
+        let two = sumcase(decl("Nat"), 1, &[("n", one)]);
+        assert_eq!(pretty(two.as_ref()), "2");
+    }
+
+    /// A `SumCase` whose typ is not a `Tm::Sum` (a stuck head, e.g. a rigid
+    /// type variable) has no case table to name the constructor by: degrade
+    /// to the positional index instead of panicking — a display path must
+    /// never crash the server (docs/l13-sumcase-decl-typ-pretty-panic.md).
+    #[test]
+    fn sumcase_with_non_sum_typ_degrades_instead_of_panicking() {
+        let ns = List::new().prepend(SmolStr::new("T"));
+        let sc = sumcase(
+            Tm::Var(crate::L13_namespace::Ix(0)).into(),
+            1,
+            &[("x", decl("Nat"))],
+        );
+        assert_eq!(pretty_tm(0, ns, sc.as_ref()), "T::#1(Nat)");
     }
 
     #[test]
