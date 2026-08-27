@@ -703,8 +703,17 @@ def loopStackName(xs: HdlLoopIdx): String = match xs {
     case hdlLoopIdxCons(n, rest) => string_concat(nat_to_dec(n), string_concat("_", loopStackName(rest)))
 }
 
+// 循环索引全局键的加载期建立（hdl-core 早于 hdl-signals/hdl-check 加载，
+// 而 def 检查会求值应用 → 本 def 在 prelude 加载时即完成 create_global
+// 副作用）。loopName 因此可以纯读，不必兜底写全局（见其注释）。
+def hdlLoopIdxGlobalInit = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
+
 def loopName(name: String): String =
-    let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
+    // 纯读：键由上方 hdlLoopIdxGlobalInit 在加载期建立；加载结束与每次
+    // module 运行开始时都会重置（Rust 侧 / 宏 prologue）。genFrom 的
+    // succ 分支体在 prelude 加载期的类型检查中就会被求值（检查器对应用
+    // 逐个求值），留下 Rigid 索引的脏栈帧——nat_to_dec 把 Rigid 渲染成 0，
+    // 旧版「读前先 create_global 清空」只是恰好掩盖了这一点。
     let xs = get_global("HdlLoopIdx");
     match xs {
         case hdlLoopIdxEmpty => name

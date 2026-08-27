@@ -632,13 +632,45 @@ println(moduleTreeVL(topWithRead.create.tree))
 }
 
 // ── for 循环：编译期展开（方案 A：宏转写 + term 级 Nat 递归）──
+// 曾因 Expr 宏兜底臂嵌套 let 链 + for 臂缺尾分号被整体 #[ignore]
+// （阻塞记录见 docs/for-hdl-blocker.md，已解决）。
+
+// §3-A（docs/l13-constraint-meta-fix-plan.md）：class 体内 `let _ = <调用>`。
+// 旧缺陷：Expr 宏兜底臂把 let 表达式包成嵌套 let 链，链尾 recovery Hole 使
+// 注解 meta 悬挂（find unsolved meta / lvl2ix / v_app 三表象）。
+#[test]
+fn module_let_unit_repro() {
+    let output = assert_ok(r#"
+module uM {
+    let a = UInt[8]
+    let _ = unit
+    a := a
+}
+println(moduleTreeVL(uM.create.tree))
+"#);
+    assert!(output.contains("module uM"), "expected module header, got: {}", output);
+}
+
+// §3-A 变体：丢弃绑定持有对含 match 的 prelude def 调用（whenEnd 内部走
+// WhenStack 全局 + match 分支），曾是同一 meta 簇的最强触发器。
+#[test]
+fn module_let_when_end_call() {
+    let output = assert_ok(r#"
+module uW {
+    let a = UInt[8]
+    let _ = whenEnd(unit)
+    a := a
+}
+println(moduleTreeVL(uW.create.tree))
+"#);
+    assert!(output.contains("module uW"), "expected module header, got: {}", output);
+}
 
 // BLOCKED (master pre-existing class-expansion meta leak):
 // class 体内 `let <bind> = <对含 match 的 def 调用>` 在 create/tree 检查时因
 // dependent 隐式参数（string_to_global_type）产生悬挂 meta 而失败。机制链见
 // docs/for-hdl-blocker.md。修好前整体 #[ignore]，不破 CI。
 #[test]
-#[ignore = "class-expansion dependent-meta leak (docs/for-hdl-blocker.md)"]
 fn module_for_loop_unroll_naming() {
     let output = assert_ok(r#"
 module forDemo {
@@ -667,7 +699,6 @@ println(moduleTreeVL(forDemo.create.tree))
 }
 
 #[test]
-#[ignore = "class-expansion dependent-meta leak (docs/for-hdl-blocker.md)"]
 fn module_for_loop_width_param() {
     let output = assert_ok(r#"
 module forWidthDemo {
@@ -684,7 +715,6 @@ println(moduleTreeVL(forWidthDemo.create.tree))
 }
 
 #[test]
-#[ignore = "class-expansion dependent-meta leak (docs/for-hdl-blocker.md)"]
 fn module_for_loop_nested() {
     let output = assert_ok(r#"
 module forNested {
@@ -712,7 +742,6 @@ println(moduleTreeVL(forNested.create.tree))
 }
 
 #[test]
-#[ignore = "class-expansion dependent-meta leak (docs/for-hdl-blocker.md)"]
 fn module_for_loop_empty_range() {
     let output = assert_ok(r#"
 module forEmpty {

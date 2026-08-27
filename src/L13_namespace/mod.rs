@@ -3403,6 +3403,23 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     // accumulated tables so per-call clones stay cheap.
     infer.hover_table.clear();
     infer.completion_table.clear();
+    // Reset the HDL loop-index global to a clean empty at the end of the
+    // load: checking `genFrom`'s succ-case body evaluates its side-effecting
+    // lets (the checker evaluates applications), leaving Rigid-indexed
+    // stack frames behind; the cache snapshot would hand that dirty stack to
+    // every later run (nat_to_dec renders the Rigids as 0s — the
+    // `a_0_0_0_0` port-name corruption). The key itself is created earlier
+    // by `hdlLoopIdxGlobalInit` (hdl-core.typort), which keeps mid-load
+    // `loopName` evaluations from panicking in `get_global`.
+    {
+        let empty_val = infer.eval(
+            &cxt.decl,
+            &cxt.env,
+            &Tm::Decl(empty_span(SmolStr::new("hdlLoopIdxEmpty"))).into(),
+        );
+        infer.mutable_map.write().unwrap()
+            .insert("HdlLoopIdx".to_string(), empty_val);
+    }
     if prelude_prof {
         let fp = &FUNC_PROF;
         eprintln!("[PPROF] -- function-level during prelude load (exclusive, sums to ~wall) --");

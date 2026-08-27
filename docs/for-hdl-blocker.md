@@ -1,9 +1,10 @@
 # HDL for 循环阻塞：class 展开期 dependent-meta 泄漏
 
-> 状态：阻塞记录（2026-08-26，master `529368b` 合并后）。
+> 状态：**已解决**（2026-08-27，详见文末「解决记录」）。
 > 特性本身：`for i in 0 until N` 编译期展开，宏转写 + term 级 Nat 递归
 > （`docs/hdl-syntax.md` §10；实现见 `prelude/hdl/hdl-core.typort` 尾部
 > Range/rangeFor/HdlLoopIdx 段与 `hdl-macros.typort` 的 `Expr` 宏 for arm）。
+> 验收：`cargo test module_for_loop` 4/4、`L13_namespace::module_tests` 28/28。
 
 ## 现象
 
@@ -103,3 +104,44 @@ item**（item 检查后先 `solve_multi_trait` 再局部自解，语义上「已
 类型内仍含未解 meta），单点闭合条件全部不满足；证明它们是**相互引用的一簇
 约束**，只能由整体求解器（或 bug 报告 §修复方向 3 的「约束 meta 延迟解」）
 处理。**已回退**，主线保持 `14c0805` 状态：两个 pin 化简 + 文档记录。
+
+## 解决记录（2026-08-27）：根因不在 elaborator，在宏转写形状
+
+用插桩（`new_meta` 创建点 backtrace、失败期 term pretty dump、宏展开文本
+dump、全局原语写路径 trace）逐层定位后，三次排查赖以推断的「dependent 隐式
+参数 meta 簇」其实是**下游表象**。真实缺陷链有三层，全部修在 prelude 宏 +
+两处小 Rust 改动上，`MetaEntry` 架构（原修复方向 3 / 5.2）无需动：
+
+1. **`Expr` 宏兜底臂包裹 let 表达式**（`hdl-macros.typort` 的
+   `($x: raw) => {let _ = $x;}`）：`_` 不是 ident，用户的 `let _ = unit`
+   匹配不到通用 let 臂，落入兜底被包成 `let _ = (let _ = unit; ...)` 嵌套
+   链——链经 `;` 吞并后续语句、链尾由解析器补 recovery Hole。外层注解
+   Hole meta（spine 含 bn）在整个 Phase A/B 中无求解者（值检查只统一内层
+   链自己的 meta），Phase B 复用后 `no_metas` 报
+   `find unsolved meta with type Type 0`——即本文档的「母版场景」。
+   **修复**：新增丢弃名透传臂 `(let _ = $y:raw) => {let _ = $y;}`（含
+   带注解变体）；为此给宏匹配器模式解析器补 `Hole`/`Colon` 字面量
+   （`parser/mod.rs` `p_macro_matcher_single`）。
+2. **for 臂输出缺尾分号**：`let __hloop: Unit = rangeFor(...)`（无 `;`）
+   在 `def tree` 的单条 let-expr 链里接不到下一条模板 let，链尾补
+   recovery Hole，`_res` 链丢失——tree 检查报
+   `find unsolved meta with type ModuleTree`（meta 34024 一类）。
+   **修复**：for 臂输出补 `;`。
+3. **`loopName` 的全局栈生命周期**：`loopName` 旧版「读前
+   `create_global` 清空」使循环索引命名永远不可能生效（cons 分支死代码）；
+   但直接改成 `change_mutable_default`+恒等 或纯读都暴露两个更深的问题——
+   (a) `genFrom` 的 succ 分支体在 **prelude 加载期的类型检查中就被求值**
+   （检查器对应用逐个求值），把 `Rigid(Lvl(0))` 索引的帧推了 5 次、只弹
+   1 次，脏栈被快照进 prelude 缓存，`nat_to_dec` 把 Rigid 渲染成 0，于是
+   手写 class 的端口名出现 `a_0_0_0_0`（class_tests::
+   class_module_shape_flattened_chain 曾因此回归）；(b) 早期（stuck）eval
+   跳过 pop、留下未配对帧。
+   **修复**：`hdl-core.typort` 中 `def hdlLoopIdxGlobalInit = create_global(...)`
+   在加载期建立键（def 检查求值应用，恰好在 hdl-signals 之前）；`loopName`
+   改纯读；Rust 侧在 prelude 加载**结束**时把键重置为 empty
+   （`mod.rs` `load_prelude_state_impl` 尾部）；module 宏 prologue（create
+   与 tree 两侧）各加一行运行期重置，与既有 `WhenStack` 重置同款。
+
+附带：`l13-typeclass-instance-nat-param-bug.md` 的复现 B（参数化宽度静默
+退化）不在本次范围（那是 trait 实例 Nat 参数冻结问题，见该文档），但 HDL004
+警告路径未回归。原 §修复方向 1/2 的「已排除路径」结论仍然有效。

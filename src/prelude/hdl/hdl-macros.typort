@@ -139,6 +139,18 @@ macro_rules Expr {
     // plain locals) through unchanged. Its `bn: BindingName` implicit is
     // synthesized from the let binder's name.
     (let $x:ident = $y:raw) => {let $x = nameWire($y);};
+    // ---- discard-named generic let: pass the binding through unchanged ----
+    // `_` is a Hole token, not an ident, so without these arms a user
+    // `let _ = <expr>` falls into the raw-passthrough catch-all below, which
+    // wraps it as `let _ = (let _ = <expr>; ...)`: the captured let-expression
+    // then chains through the wrapper's `;`, swallowing the sibling statements
+    // and ending in a recovery Hole. The wrapper's own annotation meta (spine
+    // includes bn inside a class body) has no solver left, and the class
+    // create/tree checks fail with `find unsolved meta`
+    // (docs/l13-constraint-meta-fix-plan.md). No nameWire either: a discarded
+    // binding names no wire.
+    (let _ = $y:raw) => {let _ = $y;};
+    (let _ : $t:raw = $y:raw) => {let _ : $t = $y;};
 
     // ---- when/otherwise control flow ----
     // Pushes one WhenStack level per chain (see the standalone `when` macro's
@@ -198,17 +210,14 @@ macro_rules Expr {
 
     // ---- for 循环 — 编译期展开（term 级 Nat 递归）----
     // for i in 0 until 4 { ... }  →  let __hloop: Unit = rangeFor(0 until 4, i => ...)
-    // BLOCKED: class 展开期 dependent-meta 泄漏（docs/for-hdl-blocker.md），
-    // create/tree 检查悬挂 meta（AppPruning/Meta 记录越界），待 elaborator
-    // 修复。形态选择记录（三变体各踩一类失败，修复后按此路径收口）：
-    //   - `let _ = rangeFor(...)`: `let _ = <调用>` 的 pre-existing 挂
-    //   - `let __hloop = rangeFor(...)`（无注解）: Hole 推断 meta 链挂
-    //   - `let __hloop: Unit = rangeFor(...)`（当前）: 仅剩 dependent-meta
-    //     泄漏一个阻塞点（meta 33971 记录 Pi(bn) 类型，quote 越界 1 层）
+    // 修复记录（2026-08-27）：输出必须带尾分号。module 宏把本臂的输出作为
+    // class 体/`def tree` 体的 let 链片段转写；tree 侧是一条完整 let-expr 链，
+    // 链接靠 `;` —— 缺分号时 __hloop 链接不到下一条模板 let，解析器给链尾补
+    // recovery Hole，tree 检查即报 unsolved meta（typed ModuleTree）。
     // body 用裸 let 链（$($body)*，各 Expr 片段自带 `;` 结尾）——不能用
     // $({$body})*：花括号在 lambda 体内是裸块，尾值会污染 lambda 类型。
     (for $i:ident in $it:raw {$( $body: Expr )*}) => {
-        let __hloop: Unit = rangeFor($it, $i => $($body)* unit)
+        let __hloop: Unit = rangeFor($it, $i => $($body)* unit);
     };
 
     // ---- raw expression passthrough ----
@@ -313,6 +322,8 @@ macro_rules module {
 			// `_ : Unit` field (mkInstanceIfParent's return).
 			let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
 			let _ = create_global("WhenStack", whenStackEmpty)
+			// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
+			let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil))
 			$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
@@ -331,6 +342,8 @@ macro_rules module {
 			def tree: ModuleTree =
 				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
 				let _ = create_global("WhenStack", whenStackEmpty);
+				// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
+				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
 				$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
@@ -356,6 +369,8 @@ macro_rules module {
 			// `_ : Unit` field (mkInstanceIfParent's return).
 			let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
 			let _ = create_global("WhenStack", whenStackEmpty)
+			// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
+			let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil))
 			$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
@@ -374,6 +389,8 @@ macro_rules module {
 			def tree: ModuleTree =
 				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
 				let _ = create_global("WhenStack", whenStackEmpty);
+				// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
+				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
 				$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*

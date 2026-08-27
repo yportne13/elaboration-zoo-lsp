@@ -1,11 +1,13 @@
 # 立项前置分析：约束 meta 的消费点参数化（方向 3）
 
-> 状态：立项前置分析（2026-08-26）。
+> 状态：**已结案（2026-08-27）——根因证伪，未走 5.1/5.2，见文末「结案记录」**。
 > 关联：`docs/l13-typeclass-instance-nat-param-bug.md` §修复方向 3、
-> `docs/for-hdl-blocker.md`（for 循环阻塞，三次排查记录）。
-> 结论先行：for 循环转绿没有第二个修复面——唯一路径是方向 3 的
+> `docs/for-hdl-blocker.md`（for 循环阻塞，三次排查记录，已解决）。
+> ~~结论先行：for 循环转绿没有第二个修复面——唯一路径是方向 3 的
 > 「约束 meta 延迟解 / 消费点参数化」。本文件给出最小验证用例、
-> 改动面清单、分步建议与风险。
+> 改动面清单、分步建议与风险。~~（该结论被 2026-08-27 的插桩定位证伪：
+> 「相互依赖的约束 meta 簇」是宏转写形状缺陷的下游表象，不是 elaborator
+> 的架构缺口。）
 
 ## 1. 背景
 
@@ -135,7 +137,45 @@ cargo test L13_namespace::module_tests            # 期望：22 passed（回归�
 
 ## 7. 完成定义（DoD）
 
-- [ ] `cargo test module_for_loop -- --ignored` 4/4 通过；
-- [ ] `cargo test L13_namespace::module_tests` 22/22（不回归）；
-- [ ] §3-A 手写用例不再报 meta/lvl2ix/v_app 三类错误；
-- [ ] 相关文档撤回「阻塞」表述（for-hdl-blocker.md 改「已解决」）。
+- [x] `cargo test module_for_loop -- --ignored` 4/4 通过（已摘 ignore，常跑）；
+- [x] `cargo test L13_namespace::module_tests` 通过（28 项 = 原 22 回归 +
+      4 for + 新增 §3-A 两例），不回归；
+- [x] §3-A 手写用例不再报 meta/lvl2ix/v_app 三类错误
+      （`module_let_unit_repro` / `module_let_when_end_call`）；
+- [x] 相关文档撤回「阻塞」表述（for-hdl-blocker.md 改「已解决」）。
+
+## 8. 结案记录（2026-08-27）：方向 3 立项撤回
+
+按 §4 验收门复现 + 插桩（`new_meta` 创建点 backtrace、失败期
+`t_tm.no_metas` 现场 pretty dump、`owned_tokens_to_string` 展开文本 dump、
+全局原语写路径 trace）逐层定位，结论与 §3 的机制推断不同：
+
+**meta[33971] 一簇「相互依赖的约束 meta」不是 `string_to_global_type`
+dependent 隐式参数的求解缺口，而是 mangled 转写形状的必然产物。**
+
+- `let _ = unit` 的 item 值是一个 `Raw::Let` 链（span 从用户文件一路伸到
+  宏模板的 `checkModuleTree`）：`Expr` 宏兜底臂 `($x: raw) => {let _ = $x;}`
+  把 let 表达式（`_` 非 ident，匹配不到通用 let 臂）包成嵌套链，内层链经
+  `;` 吞并后续语句、链尾补 recovery Hole（span 即 checkModuleTree 应用处，
+  正是旧诊断里 33985 的 `(bn) → ?33971 bn` 类型——Hole 以外层未解注解
+  meta 为期望类型创建）。外层注解 Hole meta 的 spine 含 bn、值检查只统一
+  内层链自己的 meta，故永无求解者。Phase B 复用（`tm_is_closed` 只查自由
+  变量，不查未解 meta）把尸体运进 create/tree，`no_metas` 才报案。
+- for 用例是第二变体：for 臂输出缺尾分号，`def tree` 的 let-expr 链断链，
+  链尾 Hole 直接以 `ModuleTree`（tree 返回类型）为期望——
+  「`find unsolved meta with type ModuleTree`」。
+- 实际修复（全部落地、全量回归零新增失败）：
+  1. `parser/mod.rs` `p_macro_matcher_single` 补 `Hole`/`Colon` 字面量；
+  2. `Expr` 宏新增丢弃名 let 透传臂（`let _ = $y:raw`、`let _ : $t:raw = $y:raw`）；
+  3. for 臂输出补 `;`；
+  4. `hdl-core.typort`：`hdlLoopIdxGlobalInit`（加载期建键）、`loopName`
+     改纯读；Rust 侧 `load_prelude_state_impl` 尾部重置
+     `HdlLoopIdx`（加载期检查 `genFrom` succ 分支会推脏帧进缓存快照）；
+     module 宏 prologue（create/tree 两侧）运行期重置——
+     索引命名（`x_0`/`x_i_j`）由此首次真正生效。
+- §5.1（Phase B 组装展开）与 §5.2（`MetaEntry` 延迟解）**均无需实施**：
+  Phase A 产出干净 term 后，Phase B 复用机制本身没有缺陷。
+  §5.3 的「内建 dependent 类型注册」维持后置不动。
+- `l13-typeclass-instance-nat-param-bug.md` 的复现 B（参数化宽度静默退化
+  为 1 位）是独立的 trait 实例 Nat 参数冻结问题，仍待该文档的方向 3
+  （真正的消费点参数化）；本次修复未触及该路径，HDL004 警告无回归。

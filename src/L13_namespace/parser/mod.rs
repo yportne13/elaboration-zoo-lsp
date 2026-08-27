@@ -1691,7 +1691,9 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         .or(string(ForKeyword).map(|span| MacroMatcher::Token(ForKeyword, span)))
         .or(string(Eq).map(|span| MacroMatcher::Token(Eq, span)))
         .or(string(Dot).map(|span| MacroMatcher::Token(Dot, span)))
-        .or(string(ByKeyword).map(|span| MacroMatcher::Token(ByKeyword, span)));
+        .or(string(ByKeyword).map(|span| MacroMatcher::Token(ByKeyword, span)))
+        .or(string(Hole).map(|span| MacroMatcher::Token(Hole, span)))
+        .or(string(Colon).map(|span| MacroMatcher::Token(Colon, span)));
     
     metavar_parser
         .or(group_parser)

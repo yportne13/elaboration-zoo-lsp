@@ -78,7 +78,7 @@ fn hover_never_panics_and_never_degrades() {
     // Recursive enum + struct, match patterns, `new` construction, field access.
     {
         let uri = Url::parse("file:///robust1.typort").unwrap();
-        let src = "enum Tree {\n    leaf(value: Nat)\n    node(left: Tree, right: Tree)\n}\n\nstruct Point {\n    x: Nat\n    y: Nat\n}\n\ndef depth(t: Tree): Nat = match t {\n    case leaf(_) => 1\n    case node(l, r) => depth l + depth r\n}\n\ndef origin: Point = new Point(0, 0)\n\ndef dist(p: Point): Nat = p.x + p.y";
+        let src = "enum Tree {\n    leaf(value: Nat)\n    node(left: Tree, right: Tree)\n}\n\nstruct Point {\n    x: Nat\n    y: Nat\n}\n\ndef depth(t: Tree): Nat = match t {\n    case leaf(_) => 1\n    case node(l, r) => (depth l) + (depth r)\n}\n\ndef origin: Point = new Point(0, 0)\n\ndef dist(p: Point): Nat = p.x + p.y";
         elaborate(&b, &uri, src);
         hover_every_identifier(&b, &uri, src, "tree+point");
     }
