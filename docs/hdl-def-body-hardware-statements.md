@@ -197,3 +197,61 @@ WHNF 缓存，每次 `Tm::Decl` 引用都重放体（含其中的纯计算部分
 正确性要求；但若将来某个纯计算 def 只是顺手读了全局（如配置），会退化为每次
 重算。当前 prelude 无受害者；**L13 出现性能回归时先查这里**（配合
 `docs/l13-perf-review*` 的既有基线）。
+
+---
+
+## 第三批（2026-08-27 深夜）：match case 体接入语句块 + 两个底层修复
+
+### 语法：`case p => { <Expr statements> }`
+
+braced def 体落地后，case 臂是最后一个没有语句能力的表达式位置。实现极小：
+`p_match` 的臂体从 `(EndLine?, p_raw)` 换成 `p_block_body`（原 `p_def_body`
+更名泛化：`{` 开头走 `p_def_stmt_block` 语句块，否则裸表达式）。块值规则与
+def 体完全一致（末条语句为臂值：声明臂取 binder、控制链取 `unit`、裸表达式取
+自身），所有臂类型仍需一致。`p_raw` 解析不了前导 `{`，两种形态无歧义。
+
+语义边界（与 SpinalHDL 一致）：match 的 scrutinee 是 **elaboration 期数据**
+（enum/Nat/Vec 值，payload 可以是信号），只有**命中臂**的声明落树（测试
+`match_case_body_braced_reg` 断言未命中臂的信号不存在）；匹配信号的运行时值
+仍是 `switch`/`when` 的领域。
+
+### 修复 1：standalone `when` 宏补 `unit` 值尾
+
+`macro_rules when`（hdl-macros.typort）此前只在两个位置"存在"：
+1. **goto-definition 锚点**——module 体内 `when` 语句的 MacroExpansionInfo
+   优先记录它的定义位置（`tests/macro_goto_tests.rs` 两处断言），**不能删**；
+2. **p_raw 按名触发展开**——但它转写以 `let _ = whenEnd(unit);` 结尾（悬空
+   分号、无值尾），重解析永远失败，即**没有任何可用调用点**。
+
+修复：三个臂末尾各补 `unit` 值尾，转写成为完整表达式（类型 `Unit`），def 体
+（`def f(): Unit = when c { ... }`）与裸 case 臂
+（`case p => when c { ... }`，臂值 `Unit`）均可直接使用。与 `Expr` 宏内 when
+臂的双份维护关系不变（区别仅尾部分号/值尾），文件头 NOTE 已更新。
+
+### 修复 2：`p_raw` 宏展开的尾换行回退（根因修复）
+
+**现象**：`def f(...): Unit = when c { ... }` 后跟任何声明都报
+`expected newline`；裸 case 臂 `case p => when ... } otherwise { ... }` 后跟
+下一臂报 `expected }`。
+
+**机制链**：`MacroMatcher::Token`（macros.rs）在每匹配一个字面 token 后吞掉
+**一个** EndLine（`}` 后的换行即被吃）。decl 级宏分发（`p_decl`）有回退补偿
+（remainder 不以 EndLine 开头时退回一个 token）；decl 列表的分隔符补偿
+（`many1_sep_skip`）也能兜住"下一 token 是声明关键字"的场景——但仅当
+`skip_until_decl` 在后方还能找到 EndLine+声明关键字（`println` 若是文件最后
+一个声明则返回 None），且 `module` 这类**宏名声明**根本不在关键字白名单里。
+`p_raw` 的表达式级宏分发则完全没有回退——被吃的换行就是语句/臂/声明的分隔符。
+
+**修复**（`parser/mod.rs` `p_raw` 宏分支）：展开成功后，若**最后消费的 token
+是 EndLine** 且 remainder 不以 EndLine 开头，把该换行还回去（只还换行；
+`twice 3` 的 `3` 之类真语句 token 不退）。case 臂分隔、let 链、decl 分隔全部
+恢复正常；calc 在 def 体的场景也不再依赖 decl 列表补偿。
+
+### 测试
+
+`module_tests.rs` 新增 5 例：`match_case_body_braced_reg`（命中臂 reg 落树、
+未命中臂不落）、`match_case_body_braced_when`（臂内 when + 混用裸表达式臂）、
+`match_case_body_unbraced_when_chain`（裸臂 = standalone when）、
+`match_case_body_inside_def_body`（def 花括号体 × match × braced 臂组合）、
+`standalone_when_in_plain_def_body`（裸 def 体 when + 后跟 module 声明的分隔
+回归）。

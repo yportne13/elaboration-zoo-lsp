@@ -897,3 +897,154 @@ println(moduleTreeVL(top.create.tree))
     // reg still lands in the module tree on first call.
     assert!(output.contains("reg [7:0] r2;"), "replay still works after decl-time skip, got:\n{}", output);
 }
+
+// ============================================================
+// Match case bodies with hardware statements
+//
+// `case p => { <Expr statements> }` — a braced case arm is parsed through
+// the same statement-block machinery as braced def bodies (the LAST
+// statement is the arm's value; all arms of one match must agree on a
+// type). The scrutinee is elaboration-time data (enum/Nat/Vec values), so
+// only the TAKEN arm's declarations are recorded — matching a signal's
+// runtime value stays with when/switch. A plain (unbraced) arm keeps its
+// raw-expression meaning; a `when` chain there expands through the
+// standalone when macro (Unit-typed value).
+// ============================================================
+
+#[test]
+fn match_case_body_braced_reg() {
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    let o = Opt.some(sel)
+    match o {
+        case some(v) => {
+            reg r = UInt[8]
+            r := v
+            r
+        }
+        case none => {
+            let z = UInt[8]
+            z := 0
+            z
+        }
+    }
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] r;"), "reg declared in the taken arm, got:\n{}", output);
+    assert!(output.contains("r <= sel;"), "clocked drive through the pattern binder, got:\n{}", output);
+    // only the taken arm elaborates: the none-arm's signal must not exist
+    assert!(!output.contains("wire [7:0] z;"), "untaken arm must not be elaborated, got:\n{}", output);
+}
+
+#[test]
+fn match_case_body_braced_when() {
+    // A when chain inside a braced case arm (control chain as the last
+    // statement → the arm value is unit); the sibling arm stays a plain
+    // unbraced expression.
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    let o = Opt.some(sel)
+    match o {
+        case some(v) => {
+            when v === 0 {
+                out := v
+            } otherwise {
+                out := 1
+            }
+        }
+        case none => out := 0
+    }
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("if (sel == 0) begin"), "when condition inside case arm, got:\n{}", output);
+    assert!(output.contains("out = sel;"), "when body drive, got:\n{}", output);
+    assert!(output.contains("out = 1;"), "otherwise drive, got:\n{}", output);
+}
+
+#[test]
+fn match_case_body_unbraced_when_chain() {
+    // A plain (unbraced) case arm may itself be a `when` invocation: the
+    // standalone when macro's expansion is a complete expression (value
+    // `unit`), so both arms are Unit-typed.
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    let o = Opt.some(sel)
+    match o {
+        case some(v) => when v === 0 { out := v } otherwise { out := 1 }
+        case none => out := 0
+    }
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("if (sel == 0) begin"), "standalone when in case arm, got:\n{}", output);
+    assert!(output.contains("out = 1;"), "otherwise drive, got:\n{}", output);
+}
+
+#[test]
+fn match_case_body_inside_def_body() {
+    // Composition: a braced def body whose last statement is a match with
+    // braced hardware case arms — the match is the def's value.
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+def route(o: Opt): UInt[8] = {
+    match o {
+        case some(v) => { reg r = UInt[8]; r := v; r }
+        case none => { let z = UInt[8]; z := 0; z }
+    }
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    out := route(Opt.some(sel))
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] r;"), "reg from case arm inside def body, got:\n{}", output);
+    assert!(output.contains("r <= sel;"), "clocked drive, got:\n{}", output);
+    assert!(output.contains("assign out = r;"), "def result routed out, got:\n{}", output);
+}
+
+#[test]
+fn standalone_when_in_plain_def_body() {
+    // `when` at a raw-expression position (unbraced def body) expands
+    // through the standalone when macro with a `unit` value tail. The
+    // trailing-newline backoff in p_raw's macro dispatch keeps the next
+    // declaration separable — `module` is a macro name, not a decl
+    // keyword, so the decl-list separator compensation alone could not
+    // handle this (it used to leave "expected newline" leftovers).
+    let output = assert_ok(r#"
+def drive(en: Bool): Unit = when en { }
+module top {
+    input en = Bool
+    output out = UInt[8]
+    let u = drive(en)
+    out := 0
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("module top"), "def-when followed by a module decl parses, got:\n{}", output);
+    assert!(output.contains("assign out = 0;"), "body after the def-when call, got:\n{}", output);
+}

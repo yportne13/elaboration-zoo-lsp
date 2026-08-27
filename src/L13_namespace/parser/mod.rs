@@ -1101,19 +1101,19 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             // Like p_lam: Cut only after => so that once => is matched the
             // parser commits. Body failure → Hole + error in state, arm is
             // still collected and many0_sep continues to the next arm.
-            Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), (kw(EndLine).option(), p_raw))))
-            )
+            // Body: `{ <Expr statements> }` braced statement block (same
+            // machinery as braced def bodies — the LAST statement is the
+            // arm's value) or a plain raw expression (p_block_body).
+            Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), p_block_body))))
                 .map(|(case_kw, pattern, body_outer)| {
                     let pattern = pattern.unwrap_or(Pattern::Any(
                         case_kw.end_span().map(|_| true),
                         Either::Icit(Icit::Expl),
                     ));
-                    // body_outer: Option<(arrow_span, Option<(Option<EndLine>, Raw)>)>
+                    // body_outer: Option<(arrow_span, Option<Raw>)>
                     // arrow_span is the `=>` token, body is the parsed expression
-                    let body = body_outer.map_or(Raw::Hole(case_kw.end_span()), |(arrow, inner)| {
-                        inner
-                            .map(|(_, raw)| raw)
-                            .unwrap_or(Raw::Hole(arrow.end_span()))
+                    let body = body_outer.map_or(Raw::Hole(case_kw.end_span()), |(arrow, body)| {
+                        body.unwrap_or(Raw::Hole(arrow.end_span()))
                     });
                     (pattern, body)
                 })
@@ -1212,6 +1212,27 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 if !ret.0.is_empty() {
                     state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) });
                 } else {
+                    // The literal-Token matcher eats one EndLine after each
+                    // matched token (see MacroMatcher::Token), so a rule
+                    // ending in `}` consumes the newline that separates this
+                    // invocation from the NEXT statement/declaration/match
+                    // arm. Callers use that newline as a separator (p_let
+                    // chains, the decl list, match-arm lists), and losing it
+                    // surfaced as "expected newline"/"expected `}`" leftover
+                    // errors — e.g. `def f(...): Unit = when c { ... }` as
+                    // the second-to-last declaration. Give exactly one eaten
+                    // trailing EndLine back (mirrors the decl-level macro
+                    // dispatch's backoff in p_decl); a real last statement
+                    // token (e.g. the `3` in `twice 3`) stays consumed.
+                    let consumed = input.len() - i.len();
+                    let i = if consumed > 0
+                        && input[consumed - 1].data.1 == TokenKind::EndLine
+                        && !matches!(i.first().map(|t| t.data.1), Some(TokenKind::EndLine))
+                    {
+                        input.get(consumed - 1..).unwrap()
+                    } else {
+                        i
+                    };
                     return Ok((i, ret.1))
                 }
             }
@@ -1266,7 +1287,7 @@ p_where_clause,
         // style, hardware statements allowed) or a plain raw expression.
         // NOTE: no `.option()` — the Cut tuple already wraps elements 2+
         // in Option (the parser recovers on failure).
-        p_def_body,
+        p_block_body,
     ))
         .map(|(def_kw, name, params, ret, where_clause, eq_kw, body)| {
             let mut all_params = params.unwrap_or_default();
@@ -1329,13 +1350,15 @@ p_where_clause,
 }
 
 // ============================================================
-//  Braced def bodies: `def f(): T = { <Expr statements> }`
+//  Braced statement blocks: `def f(): T = { <Expr statements> }`
+//  and `match x { case p => { <Expr statements> } }`
 // ============================================================
 // SpinalHDL-style hardware statements (`reg x = UInt[8]`, `input/output`,
 // `when`/`switch`/`for`, `x := v`, `let ...`) become legal inside plain
-// `def` bodies. The block is parsed statement-by-statement through the
-// `Expr` macro's named fragment — the SAME machinery a `module` macro body
-// uses — and the transcriptions are spliced into one let-chain expression:
+// `def` bodies AND match case arms. The block is parsed statement-by-statement
+// through the `Expr` macro's named fragment — the SAME machinery a `module`
+// macro body uses — and the transcriptions are spliced into one let-chain
+// expression:
 //   - statements before the last are transcribed as-is (they are all
 //     `let ...;`-shaped, so the chain continues across `;`)
 //   - the LAST statement is the block's value:
@@ -1346,10 +1369,11 @@ p_where_clause,
 //         value (`def mk(): UInt[8] = { reg x = UInt[8] }`  →  returns x)
 //       - a control chain (`when`/`switch` — `_`-bound transcription) is
 //         transcribed with `unit` as the value
-// A def called inside a `module` body records its signals into the current
-// module's tree (SpinalHDL component-scope semantics); called at top level
-// the records are dropped, exactly like the module macro's own top-level
-// creates.
+// For a case arm the block value is the ARM's value (all arms of one match
+// must still agree on a type). A def called inside a `module` body records
+// its signals into the current module's tree (SpinalHDL component-scope
+// semantics); called at top level the records are dropped, exactly like the
+// module macro's own top-level creates.
 
 /// Match one block statement against the `Expr` macro rules (first match
 /// wins, like the `$body: Expr` fragment in the `module` macro). Returns
@@ -1408,7 +1432,8 @@ fn p_expr_block_stmt<'a: 'b, 'b>(
     Err(err())
 }
 
-/// `{ <stmt>* }` — parse the braced def body (input starts AFTER the `{`).
+/// `{ <stmt>* }` — parse one braced statement block (input starts AFTER the
+/// `{`); shared by def bodies and match case arms via p_block_body.
 fn p_def_stmt_block<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState,
@@ -1528,10 +1553,13 @@ fn p_def_stmt_block<'a: 'b, 'b>(
     Ok((input, ret.1))
 }
 
-/// Def body: `{ <Expr statements> }` braced block when it starts with `{`
-/// (p_raw cannot parse a leading `{`, so the two body forms never overlap),
-/// otherwise the plain raw expression.
-fn p_def_body<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+/// Body of a braced-statement-block context: `{ <Expr statements> }` when it
+/// starts with `{` (p_raw cannot parse a leading `{`, so the two body forms
+/// never overlap), otherwise the plain raw expression. Used by def bodies
+/// (`def f(): T = { ... }` / `def f(): T = expr`) and match case arms
+/// (`case p => { ... }` / `case p => expr`) — the LAST statement of a block
+/// is the body's value (see p_def_stmt_block).
+fn p_block_body<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     if let Ok((after_lcurly, (_, lcurly))) = (kw(EndLine).option(), kw(LCurly)).parse(input, state) {
         return p_def_stmt_block(after_lcurly, state, lcurly);
     }
