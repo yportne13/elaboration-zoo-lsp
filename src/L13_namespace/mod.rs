@@ -2705,6 +2705,19 @@ impl Infer {
                 }
                 self.tm_scan_global_ops(decl, body, visiting, found);
             }
+            Tm::Sum(_, params, _, _) => {
+                // Dependent-index param values can embed calls (case names
+                // in `TmSumCases` are plain strings, nothing to scan).
+                for (_, val, _, _) in params.iter() {
+                    self.tm_scan_global_ops(decl, val, visiting, found);
+                }
+            }
+            // Remaining variants (Var/U/Meta/LiteralType/LiteralIntro) carry
+            // no sub-terms.  When adding a `Tm` variant that embeds `Rc<Tm>`
+            // payloads, add an arm above: a missed arm makes an
+            // effect-performing def look cacheable, its side effects are
+            // silently dropped, and (since the decl-time eval skip in
+            // elaboration.rs trusts this scan) its body never runs at all.
             _ => {}
         }
     }

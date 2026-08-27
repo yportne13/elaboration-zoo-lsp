@@ -152,3 +152,48 @@ xs => xs, hdlLoopIdxEmpty)` 兜底——缺键置空栈（与 prologue 语义一
 `L12_canonical`（31 个）。用 `git stash` 完全还原本批改动后重跑，同样的用例
 同样失败——与本批改动无关（本机环境/既有问题）。`L13_namespace` 全量 353 个
 测试（含 examples 回归 `test_examples_hdl_dir`）与其余层全部通过。
+
+---
+
+## 后续维护注记（2026-08-27 晚，同日第二批）
+
+### 声明期存储求值：无参 replay def 已跳过
+
+问题 1 的修复只改了 `Tm::Decl` 求值路径；`elaboration.rs` Def 分支在声明时仍会
+对体做一次完整求值（`decl.2` 的缓存来源）。这次把这最后一次求值也收掉了：
+
+- **只对无参 def 且扫描命中全局操作**（`tm_scan_global_ops` 与 `def_needs_replay`
+  同一判据）的体跳过声明期求值，`decl.2` 改存 `Val::Decl(name)` 中性占位——与
+  `cxt.rs` 缺名回退同款值，replay 路径永远不读它。
+- **有参 def 不能跳**：其 `decl.2` 缓存的是闭包（求值无副作用），但下游
+  elaboration（quote/force/投影链）会读回并应用这个闭包；换成中性占位会让整条
+  依赖链卡死——16-utils 的 `historyUInt(a, 3).at(...)` 曾整段渲染成 stuck term
+  （`assign de = (__run && (__cnt == 3))` 丢失），按参数有无收窄后恢复。
+- 回归测试：`module_tests.rs` `def_body_global_ops_not_evaluated_at_declaration`
+  ——文件首个声明 `def neverCalled = get_global("ModuleTree")`（裸表达式体、永不
+  调用）在旧代码于声明期 panic（`cxt.rs:441` 缺键 unwrap），新代码干净通过，
+  且后续 mkReg 调用仍正常落树。
+
+**边界澄清（不要误修）**：def 体里 `let` 绑定值的 check 期求值
+（`elaboration.rs` Raw::Let 分支，每 let 约三次）是依赖类型的既定设计——后续
+类型要引用 let 的值。这类求值的副作用靠 prelude 既有模式兜底（module 宏的
+push/pop 对消、`change_mutable_default` 缺键兜底），本修复**不覆盖**也不应覆盖。
+裸 `get_global` 的其余调用点（hdl-macros/hdl-check/hdl-verilog）都在 module
+运行期路径上（键由 prologue 建立），无需逐个加兜底。
+
+### `tm_scan_global_ops` 补 `Tm::Sum` 扫描臂
+
+原实现的 `_ => {}` 通配把 `Tm::Sum`（enum 声明）落掉了——其参数元组
+`(name, value-tm, type-tm, icit)` 的 value 位可内嵌项。已补扫描臂；通配处加注：
+**新增带 `Rc<Tm>` 载荷的 `Tm` 变体必须同步加臂**，漏臂会让副作用 def 被判为
+可缓存（副作用静默丢失），且声明期跳过求值后该 def 的体一次都不会运行。
+（`Tm::Match` 的 `PatternDetail` 只含名字/子模式，无需扫描；`SumCase` 的
+`typ`/`datas` 原本已覆盖。）
+
+### 性能嫌疑点备忘
+
+`get_global` 列入 `REPLAY_GLOBAL_OPS` 意味着：体里读全局的无参 def 永久失去
+WHNF 缓存，每次 `Tm::Decl` 引用都重放体（含其中的纯计算部分）。对硬件 def 是
+正确性要求；但若将来某个纯计算 def 只是顺手读了全局（如配置），会退化为每次
+重算。当前 prelude 无受害者；**L13 出现性能回归时先查这里**（配合
+`docs/l13-perf-review*` 的既有基线）。

@@ -872,3 +872,28 @@ println(g(5))
     assert!(output.contains("42"), "got:\n{}", output);
     assert!(output.contains("12"), "got:\n{}", output);
 }
+
+#[test]
+fn def_body_global_ops_not_evaluated_at_declaration() {
+    // A parameterless def whose body is a bare global-state expression is
+    // replay-only: its stored value is never served (`Tm::Decl` re-runs the
+    // body), so the declaration-time storage eval used to execute the read
+    // against pre-module mutable state — `get_global` on a key nothing has
+    // created yet panics (the `loopName` bug class). Declaring such a def
+    // first in the file and never calling it must check cleanly.
+    // (let-bound values in the body are different: they evaluate at check
+    // time by design for dependent types, so the probe uses a bare call.)
+    let output = assert_ok(r#"
+def neverCalled = get_global("ModuleTree")
+def mkReg(): UInt[8] = { reg r2 = UInt[8] }
+module top {
+    output out = UInt[8]
+    let u = mkReg()
+    out := u
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    // The skipped declaration must not break replay for called defs: the
+    // reg still lands in the module tree on first call.
+    assert!(output.contains("reg [7:0] r2;"), "replay still works after decl-time skip, got:\n{}", output);
+}

@@ -1122,7 +1122,34 @@ impl Infer {
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.decl, &ret_cxt.env, &typ_tm));
                     let vt_pretty = String::new();//super::pretty_tm(0, fake_cxt.names(), &t_tm_nf);
                     //println!("begin vt {}", "------".green());
-                    let vt = self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm);
+                    let vt = {
+                        // Parameterless replay defs (see `def_needs_replay`)
+                        // are served by re-running the body in the caller's
+                        // context, never from this cached value — so
+                        // evaluating the body here would only execute its
+                        // side effects against whatever mutable state exists
+                        // at declaration time: with no module pushed yet,
+                        // `change_mutable` silently no-ops and `get_global`
+                        // on a key the module prologue has not created panics
+                        // (the `loopName` bug class). Skip the run and store
+                        // the unevaluated neutral — the same value a missing
+                        // decl serves — which the replay path never reads.
+                        // Parameterized defs keep the eager eval: their WHNF
+                        // is a closure (no side effects), and downstream
+                        // elaboration reads it back (16-utils regression).
+                        if params.is_empty() {
+                            let mut visiting = std::collections::HashSet::new();
+                            let mut found = false;
+                            self.tm_scan_global_ops(&fake_cxt.decl, &t_tm, &mut visiting, &mut found);
+                            if found {
+                                Rc::new(Val::Decl(name.clone(), List::new()))
+                            } else {
+                                self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm)
+                            }
+                        } else {
+                            self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm)
+                        }
+                    };
                     self.hover_table.push((name.to_span(), name.to_span(), crate::L13_namespace::cxt::HoverCxt { lvl: cxt.lvl, locals: cxt.locals.clone(), decl: cxt.decl.clone() }, vtyp.clone()));
                     (
                         ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone(), None, vtyp_pretty.clone())?,
