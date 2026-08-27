@@ -1498,6 +1498,12 @@ fn test_examples_hdl_dir() {
             "if (sel == 0)",          // switch -> when 展开（=== 生成 ==）
             "(sel == 1) && !(sel == 0)",  // elsewhen 分支否定累积
             "!(sel == 0) && !(sel == 1)",  // otherwise 否定全部分支
+            "wire [7:0] x_0",         // for 编译期展开：迭代信号带索引后缀
+            "wire [7:0] x_3",
+            "assign x_0 = a",         // 每次迭代一份赋值
+            "wire [3:0] v_2",         // 循环索引参与位宽（w + 2）
+            "wire [7:0] cell_0_1",    // 嵌套展开命名 名_i_j
+            "wire [7:0] cell_1_1",
         ]),
         ("09-hierarchy.typort", include_str!("../../examples/hdl/09-hierarchy.typort"), &[
             "myAdder u ();",          // let u = myAdder.create 自动实例化
