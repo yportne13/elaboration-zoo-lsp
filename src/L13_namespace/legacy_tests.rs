@@ -2421,9 +2421,12 @@ println(moduleTreeVL(Test.create.tree))
 
 #[test]
 fn test_hdl_diag_factory_in_def() {
-    // Signal-creating factories inside a user `def` body are diagnosed at
-    // parse time (they would synthesize an empty binding name: empty signal
-    // names / silently dropped wires).
+    // Signal-creating factories inside a user `def` body WITHOUT an
+    // enclosing let binding are diagnosed at parse time: no binder → the
+    // implicit BindingName is empty, so the signals would get empty names
+    // (invalid Verilog) or be silently dropped. Factories bound by a
+    // `let x = <factory>(...)` get the binder's name and are legal — that
+    // is what makes SpinalHDL-style hardware `def` bodies work.
     let cases: &[(&str, &str)] = &[
         // bundle factory
         (r#"
@@ -2438,16 +2441,15 @@ module Test {
     let m = buildBus
 }
 "#, "signal-creating factories"),
-        // autoUInt inside a nested let chain
+        // autoUInt WITHOUT an enclosing let binder
         (r#"
-def mkSig = let x = autoUInt(8);
-    x
+def mkSig = autoUInt(8)
 
 module Test {
     let a = mkSig
 }
 "#, "signal-creating factories"),
-        // memUInt
+        // memUInt (bare call)
         (r#"
 def mkMem = memUInt(8, 64)
 
@@ -2465,6 +2467,27 @@ module Test {
             expected, msgs
         );
     }
+}
+
+#[test]
+fn test_hdl_factory_in_def_with_binder_ok() {
+    // A factory bound by a let binder inside a def gets the binder's name
+    // (elaboration sets binding_name for EVERY let), so it must NOT be
+    // diagnosed — this is the SpinalHDL-style hardware def pattern.
+    let input = r#"
+def mkSig = let x = autoUInt(8);
+    x
+
+def mkReg = let r = newUIntReg(8);
+    r
+"#;
+    let (_, errors) = parser::parser(input, 0).unwrap();
+    let msgs: Vec<String> = errors.iter().map(|e| e.msg.data.to_string()).collect();
+    assert!(
+        !msgs.iter().any(|m| m.contains("signal-creating factories")),
+        "defs with binder-named factories must not be diagnosed, got: {:?}",
+        msgs
+    );
 }
 
 #[test]

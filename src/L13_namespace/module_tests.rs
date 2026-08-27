@@ -756,3 +756,119 @@ println(moduleTreeVL(forEmpty.create.tree))
     // empty half-open range: no signal, no assignment
     assert!(!output.contains("x_"), "empty range must not unroll anything, got:\n{}", output);
 }
+
+// ============================================================
+// Braced def bodies with hardware statements (SpinalHDL style)
+//
+// `def f(): T = { <Expr statements> }` — the statements are transcribed
+// through the `Expr` macro fragment (same machinery as a module body), so
+// `reg x = UInt[8]`, `let ...`, `when`/`switch`/`for`, `x := v` and
+// declarations are legal inside plain defs. A def called inside a module
+// body records its signals into that module (component-scope semantics);
+// the block's last statement is the def's value.
+// ============================================================
+
+#[test]
+fn def_body_reg_declared_in_module_scope() {
+    let output = assert_ok(r#"
+def delay(x: UInt[8]): UInt[8] = {
+    reg d = UInt[8]
+    d := x
+    d
+}
+module top {
+    input a = UInt[8]
+    output out = UInt[8]
+    out := delay(a)
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] d;"), "reg from def body, got:\n{}", output);
+    assert!(output.contains("d <= a;"), "clocked reg drive, got:\n{}", output);
+    assert!(output.contains("assign out = d;"), "def result routed out, got:\n{}", output);
+}
+
+#[test]
+fn def_body_single_reg_statement_returns_it() {
+    // A single hardware-declaration statement: the block value is the
+    // declared binder, so `{ reg x = UInt[8] }` returns x.
+    let output = assert_ok(r#"
+def mkReg(): UInt[8] = { reg r = UInt[8] }
+module top {
+    output out = UInt[8]
+    let u = mkReg()
+    out := u
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] r;"), "reg from single-statement def, got:\n{}", output);
+    assert!(output.contains("assign out = r;"), "returned reg routed out, got:\n{}", output);
+}
+
+#[test]
+fn def_body_when_and_init() {
+    let output = assert_ok(r#"
+def gated(a: Bool, d: UInt[8]): UInt[8] = {
+    reg q = UInt[8] init 7
+    when a {
+        q := d
+    }
+    q
+}
+module top {
+    input en = Bool
+    input din = UInt[8]
+    output o = UInt[8]
+    o := gated(en, din)
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] q;"), "got:\n{}", output);
+    assert!(output.contains("q <= 7;"), "async reset init, got:\n{}", output);
+    assert!(output.contains("if (en) begin"), "when condition, got:\n{}", output);
+    assert!(output.contains("q <= din;"), "clocked conditional drive, got:\n{}", output);
+}
+
+#[test]
+fn def_body_let_wire_and_for_loop() {
+    // A let of an EXPRESSION becomes a named wire (SpinalHDL semantics); a
+    // let of a signal is a plain alias (no extra wire). The for loop
+    // unrolls inside the def body.
+    let output = assert_ok(r#"
+def shift3(v: UInt[8]): UInt[8] = {
+    let t = v + 1
+    for i in 0 until 3 {
+        t := t + 1
+    }
+    t
+}
+module top {
+    input din = UInt[8]
+    output o = UInt[8]
+    o := shift3(din)
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("wire [7:0] t;"), "named wire from let-expr, got:\n{}", output);
+    assert!(output.contains("assign t = (din + 1);"), "got:\n{}", output);
+    // three unrolled iterations, each driving the accumulated wire
+    assert_eq!(output.matches("assign t = (t + 1);").count(), 3, "got:\n{}", output);
+    assert!(output.contains("assign o = t;"), "got:\n{}", output);
+}
+
+#[test]
+fn def_body_plain_expressions() {
+    // Non-hardware blocks keep plain expression semantics: the last
+    // statement is the value, statements before it are let bindings.
+    let output = assert_ok(r#"
+def f(): Nat = { 42 }
+def g(x: Nat): Nat = {
+    let a = x + 1
+    a * 2
+}
+println(f)
+println(g(5))
+"#);
+    assert!(output.contains("42"), "got:\n{}", output);
+    assert!(output.contains("12"), "got:\n{}", output);
+}

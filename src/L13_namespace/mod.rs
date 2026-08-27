@@ -1163,6 +1163,15 @@ pub struct Infer {
     pub defer_println: bool,
     /// Deferred `println` jobs accumulated while `defer_println` is set.
     pub println_jobs: Vec<PrintlnJob>,
+    /// Memoized "does this def's body perform global-mutable side effects"
+    /// table (see `def_needs_replay`): parameterless defs whose bodies call
+    /// `create_global`/`change_mutable`/`change_mutable_default`/`get_global`
+    /// — directly or through other defs — are re-evaluated (body replayed)
+    /// on EVERY `Tm::Decl` lookup instead of returning the declaration-time
+    /// cached WHNF.  The cached value would otherwise be produced once at
+    /// declaration (outside any module tree) and never re-run, silently
+    /// dropping HDL statements in parameterless hardware `def` bodies.
+    pub def_replay_memo: Rc<std::sync::RwLock<HashMap<SmolStr, bool>>>,
 }
 
 impl Clone for Infer {
@@ -1184,6 +1193,7 @@ impl Clone for Infer {
             trait_method_cache: HashMap::new(),
             defer_println: self.defer_println,
             println_jobs: Vec::new(),
+            def_replay_memo: self.def_replay_memo.clone(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -1828,6 +1838,7 @@ impl Infer {
             accumulated_errors: vec![],
             defer_println: false,
             println_jobs: vec![],
+            def_replay_memo: Default::default(),
         }
     }
 
@@ -2581,6 +2592,122 @@ impl Infer {
         let _g = prof_enter(&FUNC_PROF.eval.0, &FUNC_PROF.eval.1);
         self.eval_inner(decl, env, tm)
     }
+
+    /// Global-mutable names whose presence in a def body makes the def's
+    /// `Tm::Decl` lookup side-effecting: the body must be replayed (re-run in
+    /// the caller's context) instead of handing back the declaration-time
+    /// cached WHNF.  `get_global` is included for the same reason a hardware
+    /// def reads the current module tree — a cached read would observe a
+    /// stale tree.
+    const REPLAY_GLOBAL_OPS: &'static [&'static str] = &[
+        "create_global", "change_mutable", "change_mutable_default", "get_global",
+    ];
+
+    /// Does evaluating `name` (a parameterless def) have global side effects?
+    /// Memoized: the body term is scanned for `REPLAY_GLOBAL_OPS` calls,
+    /// following referenced defs recursively (cycle-safe).  Parameterless
+    /// hardware defs (SpinalHDL-style `def f() = { reg r = UInt[8]; ... }`)
+    /// and the module macro's own `def tree` hit this path, so their
+    /// `createSignalExpr`/`change_mutable` effects run against the CURRENT
+    /// module tree every time the def is called.
+    fn def_needs_replay(&self, decl: &Decl, name: &SmolStr) -> bool {
+        if let Ok(memo) = self.def_replay_memo.read() {
+            if let Some(m) = memo.get(name) {
+                return *m;
+            }
+        }
+        let mut visiting = std::collections::HashSet::new();
+        let result = self.scan_def_replay(decl, name, &mut visiting);
+        if let Ok(mut memo) = self.def_replay_memo.write() {
+            memo.insert(name.clone(), result);
+        }
+        result
+    }
+
+    fn scan_def_replay(&self, decl: &Decl, name: &SmolStr, visiting: &mut std::collections::HashSet<SmolStr>) -> bool {
+        if !visiting.insert(name.clone()) {
+            return false; // cycle: nothing new to learn
+        }
+        match decl.get(name) {
+            // Builtins (prim) are never replayed: their stored body term is a
+            // self-referential `Tm::Decl(name)` placeholder, and the actual
+            // behavior runs through the prim function at application time.
+            Some(e) if e.5.is_some() => {
+                visiting.remove(name);
+                return false;
+            }
+            Some(e) => {
+                let body = e.1.clone();
+                let mut found = false;
+                self.tm_scan_global_ops(decl, &body, visiting, &mut found);
+                visiting.remove(name);
+                found
+            }
+            None => false,
+        }
+    }
+
+    /// Depth-first scan of a closed term for `REPLAY_GLOBAL_OPS` calls (as
+    /// `Tm::Decl` heads) or references to other defs that need replay.
+    fn tm_scan_global_ops(&self, decl: &Decl, tm: &Tm, visiting: &mut std::collections::HashSet<SmolStr>, found: &mut bool) {
+        if *found {
+            return;
+        }
+        match tm {
+            Tm::Decl(x) => {
+                if Self::REPLAY_GLOBAL_OPS.contains(&x.data.as_str()) {
+                    *found = true;
+                } else {
+                    // A reference to another def: if that def needs replay,
+                    // this one does too (the effect happens through it).
+                    let entry = decl.get(&x.data).map(|e| e.1.clone());
+                    if entry.is_some() && self.scan_def_replay(decl, &x.data, visiting) {
+                        *found = true;
+                    }
+                }
+            }
+            Tm::Obj(t, _) => self.tm_scan_global_ops(decl, t, visiting, found),
+            Tm::Lam(_, _, b) => self.tm_scan_global_ops(decl, b, visiting, found),
+            Tm::App(f, u, _) => {
+                self.tm_scan_global_ops(decl, f, visiting, found);
+                self.tm_scan_global_ops(decl, u, visiting, found);
+            }
+            Tm::AppPruning(t, _) => self.tm_scan_global_ops(decl, t, visiting, found),
+            Tm::Pi(_, _, a, b) => {
+                self.tm_scan_global_ops(decl, a, visiting, found);
+                self.tm_scan_global_ops(decl, b, visiting, found);
+            }
+            Tm::Let(_, _, t, u) => {
+                self.tm_scan_global_ops(decl, t, visiting, found);
+                self.tm_scan_global_ops(decl, u, visiting, found);
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                self.tm_scan_global_ops(decl, typ, visiting, found);
+                for (_, t, _) in datas.iter() {
+                    self.tm_scan_global_ops(decl, t, visiting, found);
+                }
+            }
+            Tm::Match(t, cases) => {
+                self.tm_scan_global_ops(decl, t, visiting, found);
+                for (_, b) in cases {
+                    self.tm_scan_global_ops(decl, b, visiting, found);
+                }
+            }
+            Tm::Call(_, args, body) => {
+                for (t, _) in args.iter() {
+                    self.tm_scan_global_ops(decl, t, visiting, found);
+                }
+                self.tm_scan_global_ops(decl, body, visiting, found);
+            }
+            Tm::OpCall { args, body, .. } => {
+                for (t, _) in args.iter() {
+                    self.tm_scan_global_ops(decl, t, visiting, found);
+                }
+                self.tm_scan_global_ops(decl, body, visiting, found);
+            }
+            _ => {}
+        }
+    }
     fn eval_inner(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
         // Iterative evaluator.
         //
@@ -2646,7 +2773,26 @@ impl Infer {
                     Some(v) => v.clone(),
                     None => panic!("var {:?} not found", x.0),
                 },
-                Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),
+                Tm::Decl(x) => {
+                    let e = decl.get(&x.data);
+                    match e {
+                        Some(e) => {
+                            // Parameterless defs whose body performs global
+                            // side effects are replayed on EVERY lookup (the
+                            // body re-evaluated in the CURRENT context, e.g.
+                            // inside a module's tree push) instead of
+                            // returning the declaration-time cached WHNF —
+                            // see `def_needs_replay`.
+                            if self.def_needs_replay(decl, &x.data) {
+                                env = List::new();
+                                tm = e.1.clone();
+                                continue;
+                            }
+                            e.2.clone()
+                        }
+                        None => Val::Decl(x.clone(), List::new()).into(),
+                    }
+                }
                 Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
                 Tm::U(x) => Val::U(*x).into(),
                 Tm::Meta(m) => self.v_meta(*m),

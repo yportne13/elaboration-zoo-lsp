@@ -709,11 +709,14 @@ def loopStackName(xs: HdlLoopIdx): String = match xs {
 def hdlLoopIdxGlobalInit = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
 
 def loopName(name: String): String =
-    // 纯读：键由上方 hdlLoopIdxGlobalInit 在加载期建立；加载结束与每次
-    // module 运行开始时都会重置（Rust 侧 / 宏 prologue）。genFrom 的
-    // succ 分支体在 prelude 加载期的类型检查中就会被求值（检查器对应用
-    // 逐个求值），留下 Rigid 索引的脏栈帧——nat_to_dec 把 Rigid 渲染成 0，
-    // 旧版「读前先 create_global 清空」只是恰好掩盖了这一点。
+    // 纯读为主：键由 hdlLoopIdxGlobalInit 在加载期建立，module 宏 prologue
+    // 也会重置。但 lib.rs 在 prelude 加载后清空 mutable_map，普通 def 的
+    // 检查期求值（def 体在声明时就被求值）会走到这里——缺键时 get_global
+    // 会 panic。change_mutable_default 兜底：缺键则置空栈（与 prologue
+    // 语义一致），有键则原样保留；genFrom 的 succ 分支体在 prelude 加载
+    // 期类型检查中就被求值，留下 Rigid 索引的脏栈帧——nat_to_dec 把
+    // Rigid 渲染成 0，旧版「读前先 create_global 清空」只是恰好掩盖了这一点。
+    let _ = change_mutable_default("HdlLoopIdx", xs => xs, hdlLoopIdxEmpty);
     let xs = get_global("HdlLoopIdx");
     match xs {
         case hdlLoopIdxEmpty => name
