@@ -1,10 +1,16 @@
+//! 值也压成**扁平字节**的变体：`Value(Vec<u8>)`，tag + 负载，与项的字节码
+//! 同一套布局。彻底去掉 enum 判分派和 `Rc`，`apply_val`/`quote` 直接按
+//! 字节前缀匹配；环境用 `ListArena`（`Lam` 的 env 与体长都内联在值里）。
+//!
+//! 代价：每次把值塞进环境都要整段 memcpy，`App` 值也是两个子值的字节
+//! 拼接——空间换掉了引用的间接性。
+
 use std::num::NonZeroUsize;
 
-use super::list_arena::ListArena;
-
+use super::persistent_list::ListArena;
 
 #[derive(Debug, Clone, Default)]
-pub struct Value(Vec<u8>);
+pub(crate) struct Value(Vec<u8>);
 
 impl Value {
     fn lvl(l: usize) -> Self {
@@ -17,24 +23,12 @@ impl Value {
     }
 }
 
-//enum Value {
-//    Lvl(usize),
-//    Lam(List<Value>, Vec<u8>),
-//    App(Box<Value>, Box<Value>),
-//}
-
 /// eval env tm =
 ///      match tm with
 ///      | Idx idx   -> List.nth env idx
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
 fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (Value, &'a [u8]) {
-    /*println!(
-        "eval: [{}] {:?}",
-        env.iter().map(|x| format!("{:?}", x)).reduce(|a, b| a + ", " + &b).unwrap_or(String::new()),
-        tm,
-    );*/
-    //let tag = unsafe { *tm.get_unchecked(tm.len() - 1) };
     match tm {
         [0, a0, a1, a2, a3, a4, a5, a6, a7, tail @ ..] => {
             let idx = usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7]);
@@ -52,10 +46,7 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
             (Value(value), tail)
         },
         [2, tail @ ..] => {
-            // App case: this is tricky, we need to parse two terms from the combined bytes
-            // This requires more context about how the terms were combined
-            // For now, let's use a simplified approach
-            // In practice, you'd want to parse this more carefully
+            // App 是前缀编码里的连续两项，函数在前、实参在后
             let (value1, remaining_tm) = eval(env, tail, arena);
             let (value2, final_tm) = eval(env, remaining_tm, arena);
             let result = apply_val(value1, value2, arena);
@@ -73,11 +64,12 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
     match &vf.0[..] {
         [
             1, a0, a1, a2, a3, a4, a5, a6, a7,
-            b0, b1, b2, b3, b4, b5, b6, b7,
+            // 长度字节在此处冗余：体就是其后整段（构造值时就地切好）
+            _b0, _b1, _b2, _b3, _b4, _b5, _b6, _b7,
             tail @ ..
         ] => eval(
             arena.prepend(unsafe { NonZeroUsize::new_unchecked(usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7])) }, va),
-            tail,//TODO:no need to get tail length and split right?
+            tail,
             arena
         ).0,
         [1, ..] => unsafe { std::hint::unreachable_unchecked() },
@@ -137,6 +129,6 @@ fn quote_append<'a>(level: usize, value: &'a [u8], ret: &mut Vec<u8>, arena: &mu
     }
 }
 
-pub fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    quote(0, &eval(unsafe {NonZeroUsize::new_unchecked(1)}, &t, arena).0.0, arena).0
+pub(crate) fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
+    quote(0, &eval(unsafe { NonZeroUsize::new_unchecked(1) }, &t, arena).0.0, arena).0
 }

@@ -1101,19 +1101,19 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             // Like p_lam: Cut only after => so that once => is matched the
             // parser commits. Body failure → Hole + error in state, arm is
             // still collected and many0_sep continues to the next arm.
-            Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), (kw(EndLine).option(), p_raw))))
-            )
+            // Body: `{ <Expr statements> }` braced statement block (same
+            // machinery as braced def bodies — the LAST statement is the
+            // arm's value) or a plain raw expression (p_block_body).
+            Cut((kw(CaseKeyword), p_pattern, Cut((kw(T![=>]), p_block_body))))
                 .map(|(case_kw, pattern, body_outer)| {
                     let pattern = pattern.unwrap_or(Pattern::Any(
                         case_kw.end_span().map(|_| true),
                         Either::Icit(Icit::Expl),
                     ));
-                    // body_outer: Option<(arrow_span, Option<(Option<EndLine>, Raw)>)>
+                    // body_outer: Option<(arrow_span, Option<Raw>)>
                     // arrow_span is the `=>` token, body is the parsed expression
-                    let body = body_outer.map_or(Raw::Hole(case_kw.end_span()), |(arrow, inner)| {
-                        inner
-                            .map(|(_, raw)| raw)
-                            .unwrap_or(Raw::Hole(arrow.end_span()))
+                    let body = body_outer.map_or(Raw::Hole(case_kw.end_span()), |(arrow, body)| {
+                        body.unwrap_or(Raw::Hole(arrow.end_span()))
                     });
                     (pattern, body)
                 })
@@ -1212,6 +1212,27 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                 if !ret.0.is_empty() {
                     state.0.push(IError { msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))) });
                 } else {
+                    // The literal-Token matcher eats one EndLine after each
+                    // matched token (see MacroMatcher::Token), so a rule
+                    // ending in `}` consumes the newline that separates this
+                    // invocation from the NEXT statement/declaration/match
+                    // arm. Callers use that newline as a separator (p_let
+                    // chains, the decl list, match-arm lists), and losing it
+                    // surfaced as "expected newline"/"expected `}`" leftover
+                    // errors — e.g. `def f(...): Unit = when c { ... }` as
+                    // the second-to-last declaration. Give exactly one eaten
+                    // trailing EndLine back (mirrors the decl-level macro
+                    // dispatch's backoff in p_decl); a real last statement
+                    // token (e.g. the `3` in `twice 3`) stays consumed.
+                    let consumed = input.len() - i.len();
+                    let i = if consumed > 0
+                        && input[consumed - 1].data.1 == TokenKind::EndLine
+                        && !matches!(i.first().map(|t| t.data.1), Some(TokenKind::EndLine))
+                    {
+                        input.get(consumed - 1..).unwrap()
+                    } else {
+                        i
+                    };
                     return Ok((i, ret.1))
                 }
             }
@@ -1260,9 +1281,13 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
         (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, x)| x).option(),
-        p_where_clause,
+p_where_clause,
         kw(T![=]),
-        (kw(EndLine).option(), p_raw).map(|(_, x)| x),
+        // Body: `{ <Expr statements> }` braced statement block (SpinalHDL
+        // style, hardware statements allowed) or a plain raw expression.
+        // NOTE: no `.option()` — the Cut tuple already wraps elements 2+
+        // in Option (the parser recovers on failure).
+        p_block_body,
     ))
         .map(|(def_kw, name, params, ret, where_clause, eq_kw, body)| {
             let mut all_params = params.unwrap_or_default();
@@ -1322,6 +1347,225 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
             }
         })
         .parse(input, state)
+}
+
+// ============================================================
+//  Braced statement blocks: `def f(): T = { <Expr statements> }`
+//  and `match x { case p => { <Expr statements> } }`
+// ============================================================
+// SpinalHDL-style hardware statements (`reg x = UInt[8]`, `input/output`,
+// `when`/`switch`/`for`, `x := v`, `let ...`) become legal inside plain
+// `def` bodies AND match case arms. The block is parsed statement-by-statement
+// through the `Expr` macro's named fragment — the SAME machinery a `module`
+// macro body uses — and the transcriptions are spliced into one let-chain
+// expression:
+//   - statements before the last are transcribed as-is (they are all
+//     `let ...;`-shaped, so the chain continues across `;`)
+//   - the LAST statement is the block's value:
+//       - a plain expression keeps its original tokens
+//         (def f(): Nat = { 1 + 1 }  →  body is `1 + 1`)
+//       - a hardware declaration arm (`reg x = ...`, `let x = ...`, a port
+//         declaration) is transcribed and the declared binder becomes the
+//         value (`def mk(): UInt[8] = { reg x = UInt[8] }`  →  returns x)
+//       - a control chain (`when`/`switch` — `_`-bound transcription) is
+//         transcribed with `unit` as the value
+// For a case arm the block value is the ARM's value (all arms of one match
+// must still agree on a type). A def called inside a `module` body records
+// its signals into the current module's tree (SpinalHDL component-scope
+// semantics); called at top level the records are dropped, exactly like the
+// module macro's own top-level creates.
+
+/// Match one block statement against the `Expr` macro rules (first match
+/// wins, like the `$body: Expr` fragment in the `module` macro). Returns
+/// the transcription tokens, the statement's original tokens, and which
+/// rule matched (the LAST rule is the raw-expression catch-all).
+fn p_expr_block_stmt<'a: 'b, 'b>(
+    input: &'b [TokenNode<'a>],
+    state: &mut MacroState,
+) -> IResult<'a, 'b, (Vec<OwnedToken>, Vec<OwnedToken>, usize, usize)> {
+    let err = || IError {
+        msg: input
+            .first()
+            .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine))))
+            .unwrap_or(empty_span(ErrMsg::Base(BaseMsg::Expect(TokenKind::EndLine)))),
+    };
+    let rules = match state.1.get("Expr") {
+        Some(r) => r.clone(),
+        None => return Err(err()),
+    };
+    for (idx, m) in rules.iter().enumerate() {
+        if let Ok((i, t)) = m.matcher.to_parser().parse(input, state) {
+            let t_owned = m.transcriber.replace(t)?;
+            let consumed = input.len() - i.len();
+            let original: Vec<OwnedToken> = input[..consumed].iter().map(|tok| Span {
+                data: (tok.data.0.to_owned(), tok.data.1),
+                start_offset: tok.start_offset,
+                end_offset: tok.end_offset,
+                path_id: tok.path_id,
+            }).collect();
+            // Record the expansion for LSP hover/goto-definition (same as
+            // the fragment-driven invocation path in macros.rs).
+            if let Some(first) = input.first() {
+                let (def_start, def_end, def_path) = state.1.get(first.data.0)
+                    .and_then(|r| r.first())
+                    .map(|r| (r.def_start_offset, r.def_end_offset, r.def_path_id))
+                    .unwrap_or((m.def_start_offset, m.def_end_offset, m.def_path_id));
+                let start = first.start_offset;
+                let end = if consumed > 0 { input[consumed - 1].end_offset } else { first.end_offset };
+                state.2.push(MacroExpansionInfo {
+                    name: first.data.0.to_string(),
+                    start_offset: start,
+                    end_offset: end,
+                    expanded_text: owned_tokens_to_string(&t_owned),
+                    // The first call-site token starts a nested macro call
+                    // (when/switch) or is user code (a declaration) — same
+                    // rule as the module-body fragment.
+                    name_token_is_macro: state.1.contains_key(first.data.0),
+                    def_start_offset: def_start,
+                    def_end_offset: def_end,
+                    def_path_id: def_path,
+                });
+            }
+            return Ok((i, (t_owned, original, idx, rules.len())));
+        }
+    }
+    Err(err())
+}
+
+/// `{ <stmt>* }` — parse one braced statement block (input starts AFTER the
+/// `{`); shared by def bodies and match case arms via p_block_body.
+fn p_def_stmt_block<'a: 'b, 'b>(
+    input: &'b [TokenNode<'a>],
+    state: &mut MacroState,
+    lcurly: Span<()>,
+) -> IResult<'a, 'b, Raw> {
+    let mut body_tokens: Vec<OwnedToken> = vec![];
+    let mut input = input;
+    let mut rcurly_span: Option<Span<()>> = None;
+    loop {
+        let (i, _) = kw(EndLine).many0().parse(input, state)?;
+        input = i;
+        if let Ok((i, rc)) = kw(RCurly).parse(input, state) {
+            rcurly_span = Some(rc);
+            input = i;
+            break;
+        }
+        // One statement, transcribed through the `Expr` fragment.
+        let (rest, (transcription, mut original, rule_idx, num_rules)) = p_expr_block_stmt.parse(input, state)?;
+        // Optional `;` / EndLine between statements (the transcription ends
+        // with its own `;`, so a user-written one just needs skipping).
+        let (rest, _) = kw(Semi).option().parse(rest, state)?;
+        // Peek whether this is the last statement (end of block).
+        let (rest2, _) = kw(EndLine).many0().parse(rest, state)?;
+        if let Ok((rest3, rc)) = kw(RCurly).parse(rest2, state) {
+            // Last statement → the block value (see the block header note).
+            if rule_idx + 1 == num_rules {
+                // Raw-expression catch-all: the statement IS the value.
+                // Trim a trailing `;`/EndLine the user may have written.
+                while matches!(original.last().map(|t| t.data.1), Some(TokenKind::Semi) | Some(TokenKind::EndLine)) {
+                    original.pop();
+                }
+                body_tokens.extend(original);
+            } else if transcription.len() >= 2
+                && transcription[0].data.1 == TokenKind::LetKeyword
+                && transcription[1].data.1 == TokenKind::Ident
+            {
+                // Hardware declaration arm: `let <binder> ...;` — the value
+                // is the declared binder.
+                if transcription[1].data.0 == "_" {
+                    body_tokens.extend(transcription);
+                    body_tokens.push(Span {
+                        data: ("unit".to_string(), TokenKind::Ident),
+                        start_offset: rc.start_offset,
+                        end_offset: rc.end_offset,
+                        path_id: rc.path_id,
+                    });
+                } else {
+                    let binder = transcription[1].clone();
+                    body_tokens.extend(transcription);
+                    body_tokens.push(binder);
+                }
+            } else {
+                // Control chain (`_`-bound transcription) → Unit value.
+                body_tokens.extend(transcription);
+                body_tokens.push(Span {
+                    data: ("unit".to_string(), TokenKind::Ident),
+                    start_offset: rc.start_offset,
+                    end_offset: rc.end_offset,
+                    path_id: rc.path_id,
+                });
+            }
+            rcurly_span = Some(rc);
+            input = rest3;
+            break;
+        }
+        // Middle statement: splice the transcription into the let chain.
+        body_tokens.extend(transcription);
+        input = rest;
+    }
+    let rcurly = rcurly_span.unwrap_or(lcurly.end_span());
+    if body_tokens.is_empty() {
+        return Ok((input, Raw::Hole(lcurly)));
+    }
+    // Re-lex the spliced body and parse it as ONE expression (the let-chain
+    // with the value tail) — mirroring p_raw's macro-expansion path so token
+    // spans map back to the block / source.
+    let (t_str, span_map) = owned_tokens_to_string_mapped(&body_tokens);
+    let invocation_start = lcurly.start_offset;
+    let invocation_end = rcurly.end_offset;
+    let call_site_path = lcurly.path_id;
+    let t_borrowed: Vec<TokenNode> = match lex::lex(Span {
+        data: &t_str,
+        start_offset: 0,
+        end_offset: t_str.len() as u32,
+        path_id: call_site_path,
+    }) {
+        Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).map(|t| {
+            let orig = span_map.iter().find(|m| m.expansion_start <= t.start_offset && t.start_offset < m.expansion_end);
+            match orig {
+                Some(m) if m.src_path_id == call_site_path => Span {
+                    data: (t.data.0, t.data.1),
+                    start_offset: m.src_start,
+                    end_offset: m.src_end,
+                    path_id: m.src_path_id,
+                },
+                _ => Span {
+                    data: (t.data.0, t.data.1),
+                    start_offset: invocation_start,
+                    end_offset: invocation_end,
+                    path_id: call_site_path,
+                },
+            }
+        }).collect(),
+        None => {
+            return Err(IError { msg: lcurly.map(|_| ErrMsg::Base(BaseMsg::ExpectRaw)) });
+        }
+    };
+    let mut temp_state = (vec![], state.1.clone(), vec![]);
+    let ret = p_raw(&t_borrowed, &mut temp_state)?;
+    state.0.extend(temp_state.0);
+    state.2.extend(temp_state.2);
+    if !ret.0.is_empty() {
+        return Err(IError {
+            msg: ret.0.first().unwrap().map(|_| ErrMsg::Base(BaseMsg::ExpectRaw)),
+        });
+    }
+    Ok((input, ret.1))
+}
+
+/// Body of a braced-statement-block context: `{ <Expr statements> }` when it
+/// starts with `{` (p_raw cannot parse a leading `{`, so the two body forms
+/// never overlap), otherwise the plain raw expression. Used by def bodies
+/// (`def f(): T = { ... }` / `def f(): T = expr`) and match case arms
+/// (`case p => { ... }` / `case p => expr`) — the LAST statement of a block
+/// is the body's value (see p_def_stmt_block).
+fn p_block_body<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+    if let Ok((after_lcurly, (_, lcurly))) = (kw(EndLine).option(), kw(LCurly)).parse(input, state) {
+        return p_def_stmt_block(after_lcurly, state, lcurly);
+    }
+    (kw(EndLine).option(), p_raw)
+        .parse(input, state)
+        .map(|(i, (_, x))| (i, x))
 }
 
 fn p_print<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
@@ -2090,43 +2334,6 @@ fn raw_ctor_name(raw: &Raw) -> Option<SmolStr> {
     }
 }
 
-/// Recursively visit every node of a Raw expression tree.
-fn walk_raw<'a>(raw: &'a Raw, f: &mut impl FnMut(&'a Raw)) {
-    f(raw);
-    match raw {
-        Raw::Var(_) | Raw::U(_) | Raw::Hole(_) | Raw::LiteralIntro(_) | Raw::Nat(_) => {}
-        Raw::Obj(x, _) => walk_raw(x, f),
-        Raw::Lam(_, _, x) => walk_raw(x, f),
-        Raw::App(x, y, _) => {
-            walk_raw(x, f);
-            walk_raw(y, f);
-        }
-        Raw::Pi(_, _, x, y) => {
-            walk_raw(x, f);
-            walk_raw(y, f);
-        }
-        Raw::Let(_, x, y, z) => {
-            walk_raw(x, f);
-            walk_raw(y, f);
-            walk_raw(z, f);
-        }
-        Raw::Match(x, cases) => {
-            walk_raw(x, f);
-            for (_, b) in cases {
-                walk_raw(b, f);
-            }
-        }
-        Raw::Sum(_, _, _, _, _) => {}
-        Raw::SumCase { typ, datas, .. } => {
-            walk_raw(typ, f);
-            for (_, t, _) in datas {
-                walk_raw(t, f);
-            }
-        }
-        Raw::Tm(_, _) => {}
-    }
-}
-
 /// Prelude signal-creating factories that take an implicit `[bn: BindingName]`
 /// (`src/prelude/hdl/hdl-signals.typort` / `hdl-clock.typort`). Calling one
 /// inside a `def` body synthesizes an empty binding name, so the signals get
@@ -2150,43 +2357,97 @@ const BN_FACTORY_NAMES: &[&str] = &[
 ];
 
 /// Diagnostic: signal-creating factories called inside a user top-level `def`
-/// body. A factory's implicit `bn: BindingName` is synthesized from the
-/// caller's let-binding name, which only exists in module bodies / class
-/// fields — inside a `def` it becomes empty, so the signals would get empty
-/// names (invalid Verilog `assign  = ;`) or be silently dropped (the wires
-/// are created outside any module tree). Only user-written top-level defs are
-/// scanned: module bodies become class fields (their factories are legal),
-/// and derive-generated methods call factories with explicit `bn` (legal).
+/// body WITHOUT an enclosing let binding. A factory's implicit
+/// `bn: BindingName` is synthesized from the caller's let-binding name:
+///   - inside a `let x = <factory>(...)` (module body OR def body), the
+///     binder's name is available, so the signal gets a real name — legal
+///     (the braced statement-block def body relies on this)
+///   - bare calls (`def f() = newUIntReg(8)`) have no binder to name them —
+///     the signal gets an empty name (invalid Verilog `assign  = ;`) or is
+///     silently dropped (created outside any module tree)
+/// Only user-written top-level defs are scanned: module bodies become class
+/// fields (their factories are legal), and derive-generated methods call
+/// factories with explicit `bn` (legal).
 fn diagnose_def_body_factories(
     name: &Span<SmolStr>,
     body: &Raw,
     bundle_names: &derive::BundleSet,
 ) -> Option<String> {
     let mut bad: Option<String> = None;
-    walk_raw(body, &mut |node| {
+    // Walk with binder awareness: a non-`_` let binder covers its value and
+    // body subtrees (elaboration keeps the binding name for both), so
+    // factories under it are named. Factories outside any binder are the
+    // broken case.
+    fn walk(raw: &Raw, in_binder: &mut bool, bundle_names: &derive::BundleSet, bad: &mut Option<String>, def_name: &SmolStr) {
         if bad.is_some() {
             return;
         }
-        match node {
+        match raw {
             Raw::Obj(recv, Some(m)) if m.data == "create" => {
-                if let Some(head) = raw_ctor_name(recv) {
-                    if bundle_names.contains(&head) {
-                        bad = Some(format!(
-                            "`{}` factory is called inside `def {}`: signal-creating factories have no binding name there (the caller's let-binding name is only available in a module body or class field), so the signals would get empty names or be silently dropped — call it inside a `module` body instead",
-                            head, name.data
-                        ));
+                if !*in_binder {
+                    if let Some(head) = raw_ctor_name(recv) {
+                        if bundle_names.contains(&head) {
+                            *bad = Some(format!(
+                                "`{}` factory is called inside `def {}`: signal-creating factories have no binding name there (the caller's let-binding name is only available in a module body or class field), so the signals would get empty names or be silently dropped — call it inside a `module` body instead",
+                                head, def_name
+                            ));
+                            return;
+                        }
                     }
                 }
+                walk(recv, in_binder, bundle_names, bad, def_name);
             }
-            Raw::Var(v) if BN_FACTORY_NAMES.contains(&v.data.as_str()) => {
-                bad = Some(format!(
+            Raw::Var(v) if BN_FACTORY_NAMES.contains(&v.data.as_str()) && !*in_binder => {
+                *bad = Some(format!(
                     "`{}` is called inside `def {}`: signal-creating factories have no binding name there (the caller's let-binding name is only available in a module body or class field), so the signals would get empty names or be silently dropped — call it inside a `module` body instead",
-                    v.data, name.data
+                    v.data, def_name
                 ));
+            }
+            Raw::Let(x, ann, val, body) => {
+                // The binder names its value AND its body (the name persists
+                // until the next binder, exactly like elaboration's
+                // `binding_name` context).
+                let was = *in_binder;
+                if x.data != "_" {
+                    *in_binder = true;
+                }
+                walk(ann, in_binder, bundle_names, bad, def_name);
+                walk(val, in_binder, bundle_names, bad, def_name);
+                walk(body, in_binder, bundle_names, bad, def_name);
+                *in_binder = was;
+            }
+            _ => walk_children(raw, in_binder, bundle_names, bad, def_name),
+        }
+    }
+    fn walk_children(raw: &Raw, in_binder: &mut bool, bundle_names: &derive::BundleSet, bad: &mut Option<String>, def_name: &SmolStr) {
+        match raw {
+            Raw::Obj(x, _) => walk(x, in_binder, bundle_names, bad, def_name),
+            Raw::Lam(_, _, x) => walk(x, in_binder, bundle_names, bad, def_name),
+            Raw::App(x, y, _) => {
+                walk(x, in_binder, bundle_names, bad, def_name);
+                walk(y, in_binder, bundle_names, bad, def_name);
+            }
+            Raw::Pi(_, _, x, y) => {
+                walk(x, in_binder, bundle_names, bad, def_name);
+                walk(y, in_binder, bundle_names, bad, def_name);
+            }
+            Raw::Match(x, cases) => {
+                walk(x, in_binder, bundle_names, bad, def_name);
+                for (_, b) in cases {
+                    walk(b, in_binder, bundle_names, bad, def_name);
+                }
+            }
+            Raw::SumCase { typ, datas, .. } => {
+                walk(typ, in_binder, bundle_names, bad, def_name);
+                for (_, t, _) in datas {
+                    walk(t, in_binder, bundle_names, bad, def_name);
+                }
             }
             _ => {}
         }
-    });
+    }
+    let mut in_binder = false;
+    walk(body, &mut in_binder, bundle_names, &mut bad, &name.data);
     bad
 }
 

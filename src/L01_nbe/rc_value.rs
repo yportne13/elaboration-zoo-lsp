@@ -1,12 +1,18 @@
+//! `naive` 的变体：值改为 `Rc` 骨架。
+//!
+//! 只有 `App(Rc<Value>, Rc<Value>)` 换成了引用计数——quote 递归走
+//! `Rc` 时不再深拷贝整棵值树，代价是每次构造/克隆都多一次原子计数。
+
+use std::rc::Rc;
+
 use crate::list::List;
 use super::Term;
-
 
 #[derive(Debug, Clone)]
 enum Value {
     Lvl(usize),
     Lam(List<Value>, Term),
-    App(Box<Value>, Box<Value>),
+    App(Rc<Value>, Rc<Value>),
 }
 
 /// eval env tm =
@@ -15,11 +21,6 @@ enum Value {
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
 fn eval(env: List<Value>, tm: Term) -> Value {
-    /*println!(
-        "eval: [{}] {:?}",
-        env.iter().map(|x| format!("{:?}", x)).reduce(|a, b| a + ", " + &b).unwrap_or(String::new()),
-        tm,
-    );*/
     match tm {
         Term::Idx(idx) => env.iter().nth(idx).unwrap().clone(),
         Term::Lam(tm) => Value::Lam(env, *tm),
@@ -34,7 +35,7 @@ fn eval(env: List<Value>, tm: Term) -> Value {
 fn apply_val(vf: Value, va: Value) -> Value {
     match vf {
         Value::Lam(env, body) => eval(env.prepend(va), body),
-        _ => Value::App(Box::new(vf), Box::new(va)),
+        _ => Value::App(Rc::new(vf), Rc::new(va)),
     }
 }
 
@@ -43,24 +44,24 @@ fn apply_val(vf: Value, va: Value) -> Value {
 ///      | VLvl lvl        -> Idx(level - lvl - 1)
 ///      | VLam(env, body) -> Lam(quote (level + 1) @@ eval (VLvl level :: env) body)
 ///      | VApp(vf, va)    -> App(quote level vf, quote level va)
-fn quote(level: usize, value: Value) -> Term {
-    match value {
+fn quote(level: usize, value: Rc<Value>) -> Term {
+    match value.as_ref() {
         Value::Lvl(lvl) => Term::Idx(level - lvl - 1),
         Value::Lam(env, body) => Term::Lam(
             Box::new(
                 quote(
                     level + 1,
-                    eval(env.prepend(Value::Lvl(level)), body)
+                    eval(env.prepend(Value::Lvl(level)), body.clone()).into()
                 )
             )
         ),
         Value::App(vf, va) => Term::App(
-            Box::new(quote(level, *vf)),
-            Box::new(quote(level, *va))
+            Box::new(quote(level, vf.clone())),
+            Box::new(quote(level, va.clone()))
         ),
     }
 }
 
-pub fn normalize(t: Term) -> Term {
-    quote(0, eval(List::new(), t))
+pub(crate) fn normalize(t: Term) -> Term {
+    quote(0, eval(List::new(), t).into())
 }

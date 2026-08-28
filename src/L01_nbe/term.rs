@@ -1,16 +1,21 @@
-use std::{rc::Rc, time::Duration};
+//! 项（de Bruijn 索引的纯 lambda 演算）与三种字节编码。
+//!
+//! `Term` 是各 AST 变体（`naive`/`rc_value`/`rc_term`）直接使用的表示；
+//! 字节码变体（`bytes_*`/`rpn_owned`）先经 `to_vec`/`to_vec2`/`to_vec3`
+//! 编码后再求值。三种编码的差异：
+//!
+//! * `to_vec`/`from_vec` — 后缀（RPN）编码，tag 在末尾，解析从右往左
+//!   （`rpn_owned` 用）。
+//! * `to_vec2`/`from_vec2` — 前缀编码，tag 在开头，解析从左往右
+//!   （`bytes_env_list`/`bytes_env_arena`/`bytes_flat_value` 用）。
+//! * `to_vec3`/`from_vec3` — 前缀编码，但 `Lam` 的体不再内联，而是存入
+//!   共享的 `arena_tm: Vec<Rc<Vec<u8>>>`，字节流里只存下标
+//!   （`bytes_env_arena_tm` 用）。
+//!
+//! 编码本身带长度字段（`Lam` 体用小端 u64 记长），解码时可直接切出子串；
+//! 所有 `from_*` 都用 `get_unchecked` 假定输入由对应的 `to_*` 产生。
 
-use crate::L01a_fast::list_arena::ListArena;
-
-mod nbe_closure;
-mod nbe_closure_rc;
-mod nbe_closure_rc2;
-mod nbe_closure1;
-mod nbe_closure2;
-mod nbe_closure22;
-mod nbe_closure3;
-mod nbe_closure4;
-mod list_arena;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term {
@@ -46,7 +51,7 @@ impl Term {
     pub fn from_vec(mut bytes: Vec<u8>) -> (Term, Vec<u8>) {
         let tag = unsafe { *bytes.get_unchecked(bytes.len() - 1) };
         bytes.pop();
-        
+
         match tag {
             0 => {
                 // Idx case: read 8 bytes as usize
@@ -71,10 +76,8 @@ impl Term {
                 (Term::Lam(Box::new(term)), bytes)
             },
             2 => {
-                // App case: need to parse from right to left
-                // First parse the second argument
+                // App case: parse from right to left (the argument comes first)
                 let (arg2, remaining) = Term::from_vec(bytes);
-                // Then parse the first argument
                 let (arg1, final_remaining) = Term::from_vec(remaining);
                 (Term::App(Box::new(arg1), Box::new(arg2)), final_remaining)
             },
@@ -110,7 +113,7 @@ impl Term {
     pub fn from_vec2(mut bytes: Vec<u8>) -> (Term, Vec<u8>) {
         let tag = unsafe { *bytes.get_unchecked(0) };
         bytes.drain(0..1);
-        
+
         match tag {
             0 => {
                 // Idx case: read 8 bytes as usize
@@ -169,7 +172,7 @@ impl Term {
     pub fn from_vec3(mut bytes: Vec<u8>, arena_tm: &Vec<Rc<Vec<u8>>>) -> (Term, Vec<u8>) {
         let tag = unsafe { *bytes.get_unchecked(0) };
         bytes.drain(0..1);
-        
+
         match tag {
             0 => {
                 // Idx case: read 8 bytes as usize
@@ -180,7 +183,7 @@ impl Term {
                 (Term::Idx(idx), bytes)
             },
             1 => {
-                // Lam case: read length (8 bytes) then the term
+                // Lam case: the body lives in arena_tm at the stored index
                 let mut len_bytes = [0u8; 8];
                 len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
                 bytes.drain(0..8);
@@ -232,7 +235,7 @@ fn church_aux(n: usize) -> Term {
     }
 }
 
-fn church(n: usize) -> Term {
+pub(crate) fn church(n: usize) -> Term {
     Term::Lam(Box::new(Term::Lam(Box::new(church_aux(n)))))
 }
 
@@ -250,138 +253,8 @@ fn church_add() -> Term {
     )
 }
 
-pub fn main() -> Duration {
-    //println!("Hello, world!");
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    //let add = add.to_vec();
-    let start = std::time::Instant::now();
-    let result = nbe_closure::normalize(add);
-    let end = start.elapsed();
-    //let result = Term::from_vec(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main1() -> Duration {
-    //println!("Hello, world!");
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    //let add = add.to_vec();
-    let start = std::time::Instant::now();
-    let result = nbe_closure_rc::normalize(add);
-    let end = start.elapsed();
-    //let result = Term::from_vec(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main11() -> Duration {
-    //println!("Hello, world!");
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    let add = add.into_rc();
-    let start = std::time::Instant::now();
-    let result = nbe_closure_rc2::normalize(add);
-    let end = start.elapsed();
-    //let result = Term::from_vec(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main2() -> Duration {
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    let add = add.to_vec2();
-    let start = std::time::Instant::now();
-    let result = nbe_closure1::normalize(add);
-    let end = start.elapsed();
-    let result = Term::from_vec2(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main3() -> Duration {
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    let add = add.to_vec2();
-    let start = std::time::Instant::now();
-    let mut arena = ListArena::new();
-    let result = nbe_closure2::normalize(add, &mut arena);
-    let end = start.elapsed();
-    let result = Term::from_vec2(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main32() -> Duration {
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    let mut arena_tm = Vec::new();
-    let add = add.to_vec3(&mut arena_tm);
-    let start = std::time::Instant::now();
-    let mut arena = ListArena::new();
-    let result = nbe_closure22::normalize(add, &mut arena, &mut arena_tm);
-    let end = start.elapsed();
-    let result = Term::from_vec3(result, &arena_tm).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main4() -> Duration {
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    let add = add.to_vec2();
-    let start = std::time::Instant::now();
-    let mut arena = ListArena::new();
-    let result = nbe_closure3::normalize(add, &mut arena);
-    let end = start.elapsed();
-    let result = Term::from_vec2(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
-}
-
-pub fn main5() -> Duration {
-    //println!("Hello, world!");
-    let i = 1000;
-    let a = church(i);
-    let b = church(i);
-    let add = apply(church_add(), vec![a, b]);
-    let add = add.to_vec();
-    let start = std::time::Instant::now();
-    let result = nbe_closure4::normalize(add);
-    let end = start.elapsed();
-    let result = Term::from_vec(result).0;
-    //println!("{:?}", result);
-    let check = church(i + i);
-    assert!(result == check);
-    end
+/// 基准工作负载：`(λa.λb. a 1 (b 1 0)) · church n · church n`，规范化结果应为
+/// `church(2n)`。所有变体共用，输入构造在计时之外。
+pub(crate) fn church_pair(n: usize) -> Term {
+    apply(church_add(), vec![church(n), church(n)])
 }

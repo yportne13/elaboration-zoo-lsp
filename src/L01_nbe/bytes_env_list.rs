@@ -1,7 +1,12 @@
+//! 第一代字节码变体：项序列化为前缀编码（`to_vec2`），求值只切 `&[u8]`。
+//!
+//! 遍历时不再为每个子项分配 `Term` 节点——tag 在前 8 字节跟着索引或长度，
+//! `Lam` 体用长度字段 `split_at` 直接切出；环境仍是 `crate::list::List`，
+//! 闭包体以 `Vec<u8>` 形式随值拷贝。
+
 use std::rc::Rc;
 
-use crate::{list::List};
-
+use crate::list::List;
 
 #[derive(Debug, Clone)]
 enum Value {
@@ -16,12 +21,6 @@ enum Value {
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
 fn eval(env: List<Value>, tm: &[u8]) -> (Value, &[u8]) {
-    /*println!(
-        "eval: [{}] {:?}",
-        env.iter().map(|x| format!("{:?}", x)).reduce(|a, b| a + ", " + &b).unwrap_or(String::new()),
-        tm,
-    );*/
-    //let tag = unsafe { *tm.get_unchecked(tm.len() - 1) };
     match tm {
         [0, a0, a1, a2, a3, a4, a5, a6, a7, tail @ ..] => {
             let idx = usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7]);
@@ -35,10 +34,7 @@ fn eval(env: List<Value>, tm: &[u8]) -> (Value, &[u8]) {
             (value, tail)
         },
         [2, tail @ ..] => {
-            // App case: this is tricky, we need to parse two terms from the combined bytes
-            // This requires more context about how the terms were combined
-            // For now, let's use a simplified approach
-            // In practice, you'd want to parse this more carefully
+            // App 是前缀编码里的连续两项，函数在前、实参在后
             let (value1, remaining_tm) = eval(env.clone(), tail);
             let (value2, final_tm) = eval(env, remaining_tm);
             let result = apply_val(value1, value2);
@@ -94,6 +90,6 @@ fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>) {
     }
 }
 
-pub fn normalize(t: Vec<u8>) -> Vec<u8> {
+pub(crate) fn normalize(t: Vec<u8>) -> Vec<u8> {
     quote(0, eval(List::new(), &t).0.into())
 }

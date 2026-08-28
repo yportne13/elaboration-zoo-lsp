@@ -1,8 +1,12 @@
+//! `rc_value` 的变体：**项本身**也换成 `Rc<TermRc>` 共享树。
+//!
+//! 输入经 `Term::into_rc` 转换后，eval 只顺着 `Rc` 走、克隆只增计数，
+//! 树的所有权随 `Rc` 共享；环境仍是 `crate::list::List`。
+
 use std::rc::Rc;
 
 use crate::list::List;
 use super::{Term, TermRc};
-
 
 #[derive(Debug, Clone)]
 enum Value {
@@ -17,11 +21,6 @@ enum Value {
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
 fn eval(env: List<Value>, tm: Rc<TermRc>) -> Value {
-    /*println!(
-        "eval: [{}] {:?}",
-        env.iter().map(|x| format!("{:?}", x)).reduce(|a, b| a + ", " + &b).unwrap_or(String::new()),
-        tm,
-    );*/
     match tm.as_ref() {
         TermRc::Idx(idx) => env.iter().nth(*idx).unwrap().clone(),
         TermRc::Lam(tm) => Value::Lam(env, tm.clone()),
@@ -63,6 +62,6 @@ fn quote(level: usize, value: Rc<Value>) -> Term {
     }
 }
 
-pub fn normalize(t: TermRc) -> Term {
+pub(crate) fn normalize(t: TermRc) -> Term {
     quote(0, eval(List::new(), t.into()).into())
 }

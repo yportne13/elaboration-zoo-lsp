@@ -133,8 +133,9 @@ fn prim_is_pure(name: &str) -> bool {
 }
 
 thread_local! {
-    static FORCE_MEMO: std::cell::RefCell<rustc_hash::FxHashMap<usize, (Rc<Val>, Rc<Val>, u64)>> =
+    static FORCE_MEMO: std::cell::RefCell<rustc_hash::FxHashMap<usize, (Rc<Val>, Rc<Val>, u64, u64)>> =
         std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    static FORCE_MEMO_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -147,8 +148,16 @@ const FORCE_MEMO_CAP: usize = 1 << 20;
 /// Start a fresh memo epoch (per user file change / prelude load).  Not
 /// required for correctness — purely bounds the memory pinned by
 /// keepalives of values that are no longer otherwise reachable.
+///
+/// Clearing DROPS the pinned `Rc<Val>` inputs, so a later allocation CAN
+/// reuse one of those addresses — and the memo is keyed by address alone
+/// (`Rc::as_ptr`).  An epoch guards lookups: entries from a previous epoch
+/// are ignored even on an address collision (stale forced value otherwise
+/// leaks into unrelated elaboration — e.g. a later test reusing the freed
+/// address of an old forced term).
 pub fn force_memo_clear() {
     FORCE_MEMO.with(|m| m.borrow_mut().clear());
+    FORCE_MEMO_EPOCH.with(|e| e.set(e.get() + 1));
 }
 
 #[inline]
@@ -270,6 +279,9 @@ mod legacy_tests;
 
 #[cfg(test)]
 mod module_probe_tests;
+
+#[cfg(test)]
+mod verilog_compat_tests;
 
 #[cfg(test)]
 mod class_tests;
@@ -988,7 +1000,19 @@ pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
                 (
                     x.1.0,
                     Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                    Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                    // Sum-type definition values stay: a `Val::Sum` is a
+                    // WHNF leaf that never re-expands, but evaluating under
+                    // the simplified decl needs it — primops
+                    // (`nat_succ_shape`) and constructor bodies build
+                    // `Val::SumCase`s whose `typ` must stay a `Val::Sum`;
+                    // replacing it with `Val::Decl` produced SumCase values
+                    // that quoted back with `typ: Tm::Decl` and panicked
+                    // pretty (docs/l13-sumcase-decl-typ-pretty-panic.md §4.3).
+                    if matches!(x.1.2.as_ref(), Val::Sum(..)) {
+                        x.1.2.clone()
+                    } else {
+                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into()
+                    },
                     x.1.3.clone(),
                     x.1.4.clone(),
                     x.1.5.clone(),
@@ -1151,6 +1175,15 @@ pub struct Infer {
     pub defer_println: bool,
     /// Deferred `println` jobs accumulated while `defer_println` is set.
     pub println_jobs: Vec<PrintlnJob>,
+    /// Memoized "does this def's body perform global-mutable side effects"
+    /// table (see `def_needs_replay`): parameterless defs whose bodies call
+    /// `create_global`/`change_mutable`/`change_mutable_default`/`get_global`
+    /// — directly or through other defs — are re-evaluated (body replayed)
+    /// on EVERY `Tm::Decl` lookup instead of returning the declaration-time
+    /// cached WHNF.  The cached value would otherwise be produced once at
+    /// declaration (outside any module tree) and never re-run, silently
+    /// dropping HDL statements in parameterless hardware `def` bodies.
+    pub def_replay_memo: Rc<std::sync::RwLock<HashMap<SmolStr, bool>>>,
 }
 
 impl Clone for Infer {
@@ -1172,6 +1205,7 @@ impl Clone for Infer {
             trait_method_cache: HashMap::new(),
             defer_println: self.defer_println,
             println_jobs: Vec::new(),
+            def_replay_memo: self.def_replay_memo.clone(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -1816,6 +1850,7 @@ impl Infer {
             accumulated_errors: vec![],
             defer_println: false,
             println_jobs: vec![],
+            def_replay_memo: Default::default(),
         }
     }
 
@@ -2232,8 +2267,11 @@ impl Infer {
         }
         let key = Rc::as_ptr(t) as usize;
         let ver = PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed);
+        let epoch = FORCE_MEMO_EPOCH.with(|e| e.get());
         if let Some(r) = FORCE_MEMO.with(|m| {
-            m.borrow().get(&key).filter(|(_, _, v)| *v == ver).map(|(_, r, _)| r.clone())
+            m.borrow().get(&key)
+                .filter(|(_, _, v, e)| *v == ver && *e == epoch)
+                .map(|(_, r, _, _)| r.clone())
         }) {
             return r;
         }
@@ -2247,7 +2285,7 @@ impl Infer {
                 if m.len() >= FORCE_MEMO_CAP {
                     m.clear();
                 }
-                m.insert(key, (t.clone(), r.clone(), ver));
+                m.insert(key, (t.clone(), r.clone(), ver, epoch));
             });
         }
         r
@@ -2569,6 +2607,135 @@ impl Infer {
         let _g = prof_enter(&FUNC_PROF.eval.0, &FUNC_PROF.eval.1);
         self.eval_inner(decl, env, tm)
     }
+
+    /// Global-mutable names whose presence in a def body makes the def's
+    /// `Tm::Decl` lookup side-effecting: the body must be replayed (re-run in
+    /// the caller's context) instead of handing back the declaration-time
+    /// cached WHNF.  `get_global` is included for the same reason a hardware
+    /// def reads the current module tree — a cached read would observe a
+    /// stale tree.
+    const REPLAY_GLOBAL_OPS: &'static [&'static str] = &[
+        "create_global", "change_mutable", "change_mutable_default", "get_global",
+    ];
+
+    /// Does evaluating `name` (a parameterless def) have global side effects?
+    /// Memoized: the body term is scanned for `REPLAY_GLOBAL_OPS` calls,
+    /// following referenced defs recursively (cycle-safe).  Parameterless
+    /// hardware defs (SpinalHDL-style `def f() = { reg r = UInt[8]; ... }`)
+    /// and the module macro's own `def tree` hit this path, so their
+    /// `createSignalExpr`/`change_mutable` effects run against the CURRENT
+    /// module tree every time the def is called.
+    fn def_needs_replay(&self, decl: &Decl, name: &SmolStr) -> bool {
+        if let Ok(memo) = self.def_replay_memo.read() {
+            if let Some(m) = memo.get(name) {
+                return *m;
+            }
+        }
+        let mut visiting = std::collections::HashSet::new();
+        let result = self.scan_def_replay(decl, name, &mut visiting);
+        if let Ok(mut memo) = self.def_replay_memo.write() {
+            memo.insert(name.clone(), result);
+        }
+        result
+    }
+
+    fn scan_def_replay(&self, decl: &Decl, name: &SmolStr, visiting: &mut std::collections::HashSet<SmolStr>) -> bool {
+        if !visiting.insert(name.clone()) {
+            return false; // cycle: nothing new to learn
+        }
+        match decl.get(name) {
+            // Builtins (prim) are never replayed: their stored body term is a
+            // self-referential `Tm::Decl(name)` placeholder, and the actual
+            // behavior runs through the prim function at application time.
+            Some(e) if e.5.is_some() => {
+                visiting.remove(name);
+                return false;
+            }
+            Some(e) => {
+                let body = e.1.clone();
+                let mut found = false;
+                self.tm_scan_global_ops(decl, &body, visiting, &mut found);
+                visiting.remove(name);
+                found
+            }
+            None => false,
+        }
+    }
+
+    /// Depth-first scan of a closed term for `REPLAY_GLOBAL_OPS` calls (as
+    /// `Tm::Decl` heads) or references to other defs that need replay.
+    fn tm_scan_global_ops(&self, decl: &Decl, tm: &Tm, visiting: &mut std::collections::HashSet<SmolStr>, found: &mut bool) {
+        if *found {
+            return;
+        }
+        match tm {
+            Tm::Decl(x) => {
+                if Self::REPLAY_GLOBAL_OPS.contains(&x.data.as_str()) {
+                    *found = true;
+                } else {
+                    // A reference to another def: if that def needs replay,
+                    // this one does too (the effect happens through it).
+                    let entry = decl.get(&x.data).map(|e| e.1.clone());
+                    if entry.is_some() && self.scan_def_replay(decl, &x.data, visiting) {
+                        *found = true;
+                    }
+                }
+            }
+            Tm::Obj(t, _) => self.tm_scan_global_ops(decl, t, visiting, found),
+            Tm::Lam(_, _, b) => self.tm_scan_global_ops(decl, b, visiting, found),
+            Tm::App(f, u, _) => {
+                self.tm_scan_global_ops(decl, f, visiting, found);
+                self.tm_scan_global_ops(decl, u, visiting, found);
+            }
+            Tm::AppPruning(t, _) => self.tm_scan_global_ops(decl, t, visiting, found),
+            Tm::Pi(_, _, a, b) => {
+                self.tm_scan_global_ops(decl, a, visiting, found);
+                self.tm_scan_global_ops(decl, b, visiting, found);
+            }
+            Tm::Let(_, _, t, u) => {
+                self.tm_scan_global_ops(decl, t, visiting, found);
+                self.tm_scan_global_ops(decl, u, visiting, found);
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                self.tm_scan_global_ops(decl, typ, visiting, found);
+                for (_, t, _) in datas.iter() {
+                    self.tm_scan_global_ops(decl, t, visiting, found);
+                }
+            }
+            Tm::Match(t, cases) => {
+                self.tm_scan_global_ops(decl, t, visiting, found);
+                for (_, b) in cases {
+                    self.tm_scan_global_ops(decl, b, visiting, found);
+                }
+            }
+            Tm::Call(_, args, body) => {
+                for (t, _) in args.iter() {
+                    self.tm_scan_global_ops(decl, t, visiting, found);
+                }
+                self.tm_scan_global_ops(decl, body, visiting, found);
+            }
+            Tm::OpCall { args, body, .. } => {
+                for (t, _) in args.iter() {
+                    self.tm_scan_global_ops(decl, t, visiting, found);
+                }
+                self.tm_scan_global_ops(decl, body, visiting, found);
+            }
+            Tm::Sum(_, params, _, _) => {
+                // Dependent-index param values can embed calls (case names
+                // in `TmSumCases` are plain strings, nothing to scan).
+                for (_, val, _, _) in params.iter() {
+                    self.tm_scan_global_ops(decl, val, visiting, found);
+                }
+            }
+            // Remaining variants (Var/U/Meta/LiteralType/LiteralIntro) carry
+            // no sub-terms.  When adding a `Tm` variant that embeds `Rc<Tm>`
+            // payloads, add an arm above: a missed arm makes an
+            // effect-performing def look cacheable, its side effects are
+            // silently dropped, and (since the decl-time eval skip in
+            // elaboration.rs trusts this scan) its body never runs at all.
+            _ => {}
+        }
+    }
     fn eval_inner(&self, decl: &Decl, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
         // Iterative evaluator.
         //
@@ -2634,7 +2801,26 @@ impl Infer {
                     Some(v) => v.clone(),
                     None => panic!("var {:?} not found", x.0),
                 },
-                Tm::Decl(x) => decl.get(&x.data).map(|x| x.2.clone()).unwrap_or(Val::Decl(x.clone(), List::new()).into()),
+                Tm::Decl(x) => {
+                    let e = decl.get(&x.data);
+                    match e {
+                        Some(e) => {
+                            // Parameterless defs whose body performs global
+                            // side effects are replayed on EVERY lookup (the
+                            // body re-evaluated in the CURRENT context, e.g.
+                            // inside a module's tree push) instead of
+                            // returning the declaration-time cached WHNF —
+                            // see `def_needs_replay`.
+                            if self.def_needs_replay(decl, &x.data) {
+                                env = List::new();
+                                tm = e.1.clone();
+                                continue;
+                            }
+                            e.2.clone()
+                        }
+                        None => Val::Decl(x.clone(), List::new()).into(),
+                    }
+                }
                 Tm::Lam(x, i, t) => Val::Lam(x.clone(), *i, Closure(env.clone(), t.clone())).into(),
                 Tm::U(x) => Val::U(*x).into(),
                 Tm::Meta(m) => self.v_meta(*m),
@@ -2755,14 +2941,20 @@ impl Infer {
                                     .unwrap().1.clone()
                             },
                             Val::SumCase { datas, typ, .. } => {
-                                (match typ.as_ref() {
-                                    Val::Sum(_, params, _, _) => params,
-                                    _ => panic!("impossible {typ:?}"),
-                                }).iter()
-                                    .map(|x| (x.0.clone(), x.1.clone(), x.3))
-                                    .chain(datas.iter().cloned())
-                                    .find(|(f_name, _, _)| f_name == &name)
-                                    .unwrap().1.clone()
+                                match typ.as_ref() {
+                                    Val::Sum(_, params, _, _) => params
+                                        .iter()
+                                        .map(|x| (x.0.clone(), x.1.clone(), x.3))
+                                        .chain(datas.iter().cloned())
+                                        .find(|(f_name, _, _)| f_name == &name)
+                                        .unwrap().1.clone(),
+                                    // A stuck typ (meta/rigid head) has no
+                                    // field table to project from: degrade to
+                                    // the generic stuck projection instead of
+                                    // panicking — eval must never crash the
+                                    // server on a stuck value.
+                                    _ => Val::Obj(a, name, List::new()).into(),
+                                }
                             },
                             _ => {
                                 Val::Obj(a, name, List::new()).into()
@@ -3325,6 +3517,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             include_str!("../prelude/hdl/hdl-misc-io.typort"),
             include_str!("../prelude/hdl/hdl-misc.typort"),
             include_str!("../prelude/hdl/hdl-macros.typort"),
+            include_str!("../prelude/hdl/hdl-verilog-compat.typort"),
             include_str!("../prelude/hdl/hdl-verilog.typort"),
         ]);
     }
@@ -3377,6 +3570,10 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
         }
     }
+    // Verilog-compat vconnT builtin: its signature needs the prelude's
+    // ModuleTree/Expr types, so it registers only after they exist.
+    cxt::Cxt::register_vconn_builtin(&mut cxt, &infer);
+
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero).
     // Namespace-registered instance methods (`TypeHead.method`, e.g. `Bool.mux`)
     // are excluded — methods are only reachable through `x.method` dispatch,
@@ -3499,10 +3696,39 @@ pub fn clone_prelude_state(
     } else {
         cloned_state(&PRELUDE_CACHE_NO_HDL, include_hdl)?
     };
+    // Fresh force-memo epoch per run: the memo is keyed by `Rc::as_ptr`
+    // and holds strong refs, so entries from a previous run only die when
+    // the previous run's Infer drops — after which their addresses CAN be
+    // reused by this run's fresh allocations.  Without a per-run clear, a
+    // lookup can then hit a stale entry from the previous run (same epoch,
+    // same address, different value) and return the WRONG forced result —
+    // order-dependent elaboration bugs like `f.zz_expr` staying stuck.
+    force_memo_clear();
     // Clone the cached elaborator state.  The mutable global map is
     // deep-copied so writes from one user never leak into another.
-    let mutable = infer.mutable_map.read().unwrap().clone();
+    let mut mutable = infer.mutable_map.read().unwrap().clone();
+    // Session-scoped globals are RESET per run: the cached copies were
+    // written by declaration-time check evaluation during the prelude load
+    // (e.g. the WhenStack accumulates leaked pushes when checked `when`
+    // bodies evaluate their let chains), and their VALUES are shared Rc
+    // nodes whose internal meta/level references belong to the load's
+    // Infer.  Reusing them in a fresh run forces through the wrong meta
+    // table and produces stuck `Val::Match` results (order-dependent test
+    // failures — a heavy earlier run shifts the address/meta layout).
+    // Each run re-seeds these through the preludes' own
+    // `change_mutable_default` calls, so the empty state is the correct
+    // baseline.
+    for k in ["WhenStack", "ModuleTree", "HdlLoopIdx", "CombCtx", "ModulePortTable"] {
+        mutable.remove(k);
+    }
     infer.mutable_map = Rc::new(std::sync::RwLock::new(mutable));
+    // The replay memo is keyed by DEF NAME ONLY and shared across every
+    // clone of the cached Infer.  Two runs that both define a `def f` (one
+    // pure, one with side effects — e.g. an Int helper vs `s.fire`) collide:
+    // the first run's decision sticks, the second def is not replayed and
+    // its stored WHNF (stuck outside a module tree) leaks into the output.
+    // Per-run reset restores isolation (names may legitimately repeat).
+    infer.def_replay_memo = Rc::new(std::sync::RwLock::new(HashMap::new()));
     Ok((infer, cxt, global_macros))
 }
 
@@ -7193,3 +7419,4 @@ mod symbol_recovery_tests {
         }
     }
 }
+

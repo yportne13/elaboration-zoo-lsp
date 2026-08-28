@@ -17,8 +17,6 @@ pub mod config;
 pub mod tutorial;
 pub mod quick;
 mod lsp_stdio;
-mod L01_eval;
-//mod L01a_fast;
 mod L02_tyck;
 mod L03_holes;
 mod L04_implicit;
@@ -490,6 +488,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .find(|e| *e.value() == def_span.path_id)
             .map(|e| e.key().clone())?;
         let rope = self.document_map.get(uri.as_str())?;
+        // A def span that points outside this document (e.g. a macro
+        // transcription token whose span lives in the macro RULE source)
+        // must not be sliced against the document rope — bail out.
+        if def_span.start_offset as usize > rope.len_bytes() {
+            return None;
+        }
         let before = rope.byte_slice(0..def_span.start_offset as usize).to_string();
         // Keep every COMPLETE line above the declaration (cut after the last
         // newline, not before it): the declaration's own partial line
@@ -1376,6 +1380,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 if targets.iter().any(|(pid, so, eo)| {
                     *pid == x.1.path_id && *so == x.1.start_offset && *eo == x.1.end_offset
                 }) {
+                    // Macro-expansion splices rule-source tokens (their spans
+                    // point into the macro DEFINITION file, e.g. hdl-macros)
+                    // into the user document's hover table.  Such spans can
+                    // exceed the current rope and must not be turned into
+                    // locations against it — skip them (defensive; a doc's
+                    // own tokens are always within bounds).
+                    if x.0.end_offset as usize > f_rope.len_bytes() {
+                        continue;
+                    }
                     if let (Some(sp), Some(ep)) = (
                         offset_to_position(x.0.start_offset as usize, &f_rope),
                         offset_to_position(x.0.end_offset as usize, &f_rope),

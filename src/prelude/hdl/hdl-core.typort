@@ -648,6 +648,61 @@ def registerModuleTree(t: ModuleTree): Unit =
             unit
     }
 
+// ---------- Verilog-compat: combinational-always context ----------
+// `always @(*)` in a Verilog-compat module wraps its statements in
+// combBegin()/combEnd() (a depth counter in a mutable global, WhenStack
+// style). While the depth is nonzero, `:=` on a REG picks a plain assign
+// instead of a clocked regAssign (pickAssign below) — Verilog's
+// "reg driven combinationally" idiom. Outside a compat module the global
+// never exists and combDepth() reads as zero, so behavior is unchanged.
+// NOTE: a mutable global's name must be an existing TYPE name
+// (string_to_global_type resolves it by name), hence the wrapper structs;
+// and change_mutable_default returns Unit — reads go through get_global
+// after an ensure-exists call.
+// Lives in hdl-core (the first HDL prelude file) because hdl-types' `:=`
+// implementations call pickAssign.
+
+struct CombCtx {
+    depth: Nat
+}
+
+def combDepth(): Nat =
+    let _ = change_mutable_default("CombCtx", x => x, CombCtx.mk(zero));
+    (get_global("CombCtx")).depth
+
+def combBegin(): Unit =
+    let _ = change_mutable("CombCtx", x => CombCtx.mk(succ(x.depth)));
+    unit
+
+def combEnd(): Unit =
+    let _ = change_mutable("CombCtx", x => match x.depth {
+        case zero => CombCtx.mk(zero)
+        case succ(n) => CombCtx.mk(n)
+    });
+    unit
+
+// `:=` dispatch shared by every Data implementation: a reg LHS becomes a
+// clocked regAssign — EXCEPT inside an always @(*) context (Verilog compat),
+// where the reg is driven combinationally and an HDV002 check issue is
+// reported. Non-reg LHS is always a plain assign.
+def pickAssign(lhs: Expr, rhs: Expr): Expr = match isRegExpr(lhs) {
+    case true => match combDepth() {
+        case zero => regAssign(lhs, rhs)
+        case succ(_) =>
+            // Pure read with fallback: declaration-time check evaluates this
+            // arm's lets for their types, and `change_mutable_default` here
+            // would WRITE the design-level ModuleTree global during the
+            // prelude load (L13's match/let check evaluates let values),
+            // corrupting every later module chain's _prev/_res.  The
+            // read-only variant degrades to the empty tree (module name "")
+            // when no module is in progress, exactly like the old comment said.
+            let mname = headModuleDef((get_global_default("ModuleTree", ModuleTree.mk(0, nil))).data).name;
+            let _ = report_check_issue("HDV002", mname, "reg", "reg assigned inside always @(*) - driven combinationally (Verilog-compat)");
+            assign(lhs, rhs)
+    }
+    case false => assign(lhs, rhs)
+}
+
 // ============================================================
 //  Area — SpinalHDL 语义：逻辑分组，不产生额外层次。
 //  模块内用于组织代码（信号声明/赋值），不影响 Verilog 结构。
@@ -709,11 +764,14 @@ def loopStackName(xs: HdlLoopIdx): String = match xs {
 def hdlLoopIdxGlobalInit = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
 
 def loopName(name: String): String =
-    // 纯读：键由上方 hdlLoopIdxGlobalInit 在加载期建立；加载结束与每次
-    // module 运行开始时都会重置（Rust 侧 / 宏 prologue）。genFrom 的
-    // succ 分支体在 prelude 加载期的类型检查中就会被求值（检查器对应用
-    // 逐个求值），留下 Rigid 索引的脏栈帧——nat_to_dec 把 Rigid 渲染成 0，
-    // 旧版「读前先 create_global 清空」只是恰好掩盖了这一点。
+    // 纯读为主：键由 hdlLoopIdxGlobalInit 在加载期建立，module 宏 prologue
+    // 也会重置。但 lib.rs 在 prelude 加载后清空 mutable_map，普通 def 的
+    // 检查期求值（def 体在声明时就被求值）会走到这里——缺键时 get_global
+    // 会 panic。change_mutable_default 兜底：缺键则置空栈（与 prologue
+    // 语义一致），有键则原样保留；genFrom 的 succ 分支体在 prelude 加载
+    // 期类型检查中就被求值，留下 Rigid 索引的脏栈帧——nat_to_dec 把
+    // Rigid 渲染成 0，旧版「读前先 create_global 清空」只是恰好掩盖了这一点。
+    let _ = change_mutable_default("HdlLoopIdx", xs => xs, hdlLoopIdxEmpty);
     let xs = get_global("HdlLoopIdx");
     match xs {
         case hdlLoopIdxEmpty => name

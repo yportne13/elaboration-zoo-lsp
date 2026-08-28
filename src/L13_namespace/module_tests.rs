@@ -756,3 +756,295 @@ println(moduleTreeVL(forEmpty.create.tree))
     // empty half-open range: no signal, no assignment
     assert!(!output.contains("x_"), "empty range must not unroll anything, got:\n{}", output);
 }
+
+// ============================================================
+// Braced def bodies with hardware statements (SpinalHDL style)
+//
+// `def f(): T = { <Expr statements> }` — the statements are transcribed
+// through the `Expr` macro fragment (same machinery as a module body), so
+// `reg x = UInt[8]`, `let ...`, `when`/`switch`/`for`, `x := v` and
+// declarations are legal inside plain defs. A def called inside a module
+// body records its signals into that module (component-scope semantics);
+// the block's last statement is the def's value.
+// ============================================================
+
+#[test]
+fn def_body_reg_declared_in_module_scope() {
+    let output = assert_ok(r#"
+def delay(x: UInt[8]): UInt[8] = {
+    reg d = UInt[8]
+    d := x
+    d
+}
+module top {
+    input a = UInt[8]
+    output out = UInt[8]
+    out := delay(a)
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] d;"), "reg from def body, got:\n{}", output);
+    assert!(output.contains("d <= a;"), "clocked reg drive, got:\n{}", output);
+    assert!(output.contains("assign out = d;"), "def result routed out, got:\n{}", output);
+}
+
+#[test]
+fn def_body_single_reg_statement_returns_it() {
+    // A single hardware-declaration statement: the block value is the
+    // declared binder, so `{ reg x = UInt[8] }` returns x.
+    let output = assert_ok(r#"
+def mkReg(): UInt[8] = { reg r = UInt[8] }
+module top {
+    output out = UInt[8]
+    let u = mkReg()
+    out := u
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] r;"), "reg from single-statement def, got:\n{}", output);
+    assert!(output.contains("assign out = r;"), "returned reg routed out, got:\n{}", output);
+}
+
+#[test]
+fn def_body_when_and_init() {
+    let output = assert_ok(r#"
+def gated(a: Bool, d: UInt[8]): UInt[8] = {
+    reg q = UInt[8] init 7
+    when a {
+        q := d
+    }
+    q
+}
+module top {
+    input en = Bool
+    input din = UInt[8]
+    output o = UInt[8]
+    o := gated(en, din)
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] q;"), "got:\n{}", output);
+    assert!(output.contains("q <= 7;"), "async reset init, got:\n{}", output);
+    assert!(output.contains("if (en) begin"), "when condition, got:\n{}", output);
+    assert!(output.contains("q <= din;"), "clocked conditional drive, got:\n{}", output);
+}
+
+#[test]
+fn def_body_let_wire_and_for_loop() {
+    // A let of an EXPRESSION becomes a named wire (SpinalHDL semantics); a
+    // let of a signal is a plain alias (no extra wire). The for loop
+    // unrolls inside the def body.
+    let output = assert_ok(r#"
+def shift3(v: UInt[8]): UInt[8] = {
+    let t = v + 1
+    for i in 0 until 3 {
+        t := t + 1
+    }
+    t
+}
+module top {
+    input din = UInt[8]
+    output o = UInt[8]
+    o := shift3(din)
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("wire [7:0] t;"), "named wire from let-expr, got:\n{}", output);
+    assert!(output.contains("assign t = (din + 1);"), "got:\n{}", output);
+    // three unrolled iterations, each driving the accumulated wire
+    assert_eq!(output.matches("assign t = (t + 1);").count(), 3, "got:\n{}", output);
+    assert!(output.contains("assign o = t;"), "got:\n{}", output);
+}
+
+#[test]
+fn def_body_plain_expressions() {
+    // Non-hardware blocks keep plain expression semantics: the last
+    // statement is the value, statements before it are let bindings.
+    let output = assert_ok(r#"
+def f(): Nat = { 42 }
+def g(x: Nat): Nat = {
+    let a = x + 1
+    a * 2
+}
+println(f)
+println(g(5))
+"#);
+    assert!(output.contains("42"), "got:\n{}", output);
+    assert!(output.contains("12"), "got:\n{}", output);
+}
+
+#[test]
+fn def_body_global_ops_not_evaluated_at_declaration() {
+    // A parameterless def whose body is a bare global-state expression is
+    // replay-only: its stored value is never served (`Tm::Decl` re-runs the
+    // body), so the declaration-time storage eval used to execute the read
+    // against pre-module mutable state — `get_global` on a key nothing has
+    // created yet panics (the `loopName` bug class). Declaring such a def
+    // first in the file and never calling it must check cleanly.
+    // (let-bound values in the body are different: they evaluate at check
+    // time by design for dependent types, so the probe uses a bare call.)
+    let output = assert_ok(r#"
+def neverCalled = get_global("ModuleTree")
+def mkReg(): UInt[8] = { reg r2 = UInt[8] }
+module top {
+    output out = UInt[8]
+    let u = mkReg()
+    out := u
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    // The skipped declaration must not break replay for called defs: the
+    // reg still lands in the module tree on first call.
+    assert!(output.contains("reg [7:0] r2;"), "replay still works after decl-time skip, got:\n{}", output);
+}
+
+// ============================================================
+// Match case bodies with hardware statements
+//
+// `case p => { <Expr statements> }` — a braced case arm is parsed through
+// the same statement-block machinery as braced def bodies (the LAST
+// statement is the arm's value; all arms of one match must agree on a
+// type). The scrutinee is elaboration-time data (enum/Nat/Vec values), so
+// only the TAKEN arm's declarations are recorded — matching a signal's
+// runtime value stays with when/switch. A plain (unbraced) arm keeps its
+// raw-expression meaning; a `when` chain there expands through the
+// standalone when macro (Unit-typed value).
+// ============================================================
+
+#[test]
+fn match_case_body_braced_reg() {
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    let o = Opt.some(sel)
+    match o {
+        case some(v) => {
+            reg r = UInt[8]
+            r := v
+            r
+        }
+        case none => {
+            let z = UInt[8]
+            z := 0
+            z
+        }
+    }
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] r;"), "reg declared in the taken arm, got:\n{}", output);
+    assert!(output.contains("r <= sel;"), "clocked drive through the pattern binder, got:\n{}", output);
+    // only the taken arm elaborates: the none-arm's signal must not exist
+    assert!(!output.contains("wire [7:0] z;"), "untaken arm must not be elaborated, got:\n{}", output);
+}
+
+#[test]
+fn match_case_body_braced_when() {
+    // A when chain inside a braced case arm (control chain as the last
+    // statement → the arm value is unit); the sibling arm stays a plain
+    // unbraced expression.
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    let o = Opt.some(sel)
+    match o {
+        case some(v) => {
+            when v === 0 {
+                out := v
+            } otherwise {
+                out := 1
+            }
+        }
+        case none => out := 0
+    }
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("if (sel == 0) begin"), "when condition inside case arm, got:\n{}", output);
+    assert!(output.contains("out = sel;"), "when body drive, got:\n{}", output);
+    assert!(output.contains("out = 1;"), "otherwise drive, got:\n{}", output);
+}
+
+#[test]
+fn match_case_body_unbraced_when_chain() {
+    // A plain (unbraced) case arm may itself be a `when` invocation: the
+    // standalone when macro's expansion is a complete expression (value
+    // `unit`), so both arms are Unit-typed.
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    let o = Opt.some(sel)
+    match o {
+        case some(v) => when v === 0 { out := v } otherwise { out := 1 }
+        case none => out := 0
+    }
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("if (sel == 0) begin"), "standalone when in case arm, got:\n{}", output);
+    assert!(output.contains("out = 1;"), "otherwise drive, got:\n{}", output);
+}
+
+#[test]
+fn match_case_body_inside_def_body() {
+    // Composition: a braced def body whose last statement is a match with
+    // braced hardware case arms — the match is the def's value.
+    let output = assert_ok(r#"
+enum Opt {
+    none
+    some(v: UInt[8])
+}
+def route(o: Opt): UInt[8] = {
+    match o {
+        case some(v) => { reg r = UInt[8]; r := v; r }
+        case none => { let z = UInt[8]; z := 0; z }
+    }
+}
+module top {
+    input sel = UInt[8]
+    output out = UInt[8]
+    out := route(Opt.some(sel))
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("reg [7:0] r;"), "reg from case arm inside def body, got:\n{}", output);
+    assert!(output.contains("r <= sel;"), "clocked drive, got:\n{}", output);
+    assert!(output.contains("assign out = r;"), "def result routed out, got:\n{}", output);
+}
+
+#[test]
+fn standalone_when_in_plain_def_body() {
+    // `when` at a raw-expression position (unbraced def body) expands
+    // through the standalone when macro with a `unit` value tail. The
+    // trailing-newline backoff in p_raw's macro dispatch keeps the next
+    // declaration separable — `module` is a macro name, not a decl
+    // keyword, so the decl-list separator compensation alone could not
+    // handle this (it used to leave "expected newline" leftovers).
+    let output = assert_ok(r#"
+def drive(en: Bool): Unit = when en { }
+module top {
+    input en = Bool
+    output out = UInt[8]
+    let u = drive(en)
+    out := 0
+}
+println(moduleTreeVL(top.create.tree))
+"#);
+    assert!(output.contains("module top"), "def-when followed by a module decl parses, got:\n{}", output);
+    assert!(output.contains("assign out = 0;"), "body after the def-when call, got:\n{}", output);
+}

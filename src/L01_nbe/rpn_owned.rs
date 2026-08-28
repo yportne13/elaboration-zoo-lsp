@@ -1,7 +1,15 @@
+//! 后缀（RPN）编码 + 自持 `Vec<u8>` 项的变体：tag 在**末尾**（`to_vec`）。
+//!
+//! 求值从尾部 `pop` tag，与 `bytes_env_list` 的前缀解码正好镜像——
+//! `Lam` 的长度和体都从尾部读/切。输入是自持 `Vec`，eval 就地消费；
+//! 环境仍是 `crate::list::List`，闭包体以 `Vec<u8>` 随值拷贝。
+//!
+//! 这是唯一在**尾部**增删 tag 的编码：quote 时先写子值再回填长度、
+//! 最后补 tag，输出无需预知体长。
+
 use std::rc::Rc;
 
-use crate::{list::List};
-
+use crate::list::List;
 
 #[derive(Debug, Clone)]
 enum Value {
@@ -16,14 +24,8 @@ enum Value {
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
 fn eval(env: List<Value>, mut tm: Vec<u8>) -> (Value, Vec<u8>) {
-    /*println!(
-        "eval: [{}] {:?}",
-        env.iter().map(|x| format!("{:?}", x)).reduce(|a, b| a + ", " + &b).unwrap_or(String::new()),
-        tm,
-    );*/
-    //let tag = unsafe { *tm.get_unchecked(tm.len() - 1) };
-    let tag = unsafe {tm.pop().unwrap_unchecked()};
-    
+    let tag = unsafe { tm.pop().unwrap_unchecked() };
+
     match tag {
         0 => {
             // Idx case: read 8 bytes as usize
@@ -48,10 +50,7 @@ fn eval(env: List<Value>, mut tm: Vec<u8>) -> (Value, Vec<u8>) {
             (value, tm)
         },
         2 => {
-            // App case: this is tricky, we need to parse two terms from the combined bytes
-            // This requires more context about how the terms were combined
-            // For now, let's use a simplified approach
-            // In practice, you'd want to parse this more carefully
+            // App case: parse from right to left (the argument comes first)
             let (value2, remaining_tm) = eval(env.clone(), tm);
             let (value1, final_tm) = eval(env, remaining_tm);
             let result = apply_val(value1, value2);
@@ -107,6 +106,6 @@ fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>) {
     }
 }
 
-pub fn normalize(t: Vec<u8>) -> Vec<u8> {
+pub(crate) fn normalize(t: Vec<u8>) -> Vec<u8> {
     quote(0, eval(List::new(), t).0.into())
 }

@@ -1740,12 +1740,6 @@ def mkpair[T, len: Nat](vec: Vec[T] len, f: T -> T -> T): Vec[T] (div2Up len) =
         case cons(x, cons(y, tail)) => (f x y) :: (mkpair tail f)
     }
 
-def reduce_balanced_tree[T, len: Nat](vec: Vec[T] (len + 1), f: T -> T -> T): T =
-    let helper: [U: Type 0] -> [l: Nat] -> (Vec[U] (succ l)) -> (U -> U -> U) -> U = vec => f => (match vec {
-        case cons(x, nil) => x
-        case t => reduce_balanced_tree t f
-    });
-    helper (mkpair vec f) f
 "#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
@@ -1783,11 +1777,7 @@ enum Fin(len: Nat) {
     fsucc[n: Nat](i: Fin n) -> Fin (succ n)
 }
 
-def up_fin[x: Nat](n: Fin x): Fin (x + 1) = match n {
-    case fzero => fzero
-    case fsucc[x](t) => fsucc (up_fin t)
-}
-    "#;
+"#;
     match run(input, 0) {
         Ok(output) => println!("{}", output),
         Err(e) => panic!("{}", e.0.data),

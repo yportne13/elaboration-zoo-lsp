@@ -1,10 +1,16 @@
+//! 环境换成 `ListArena`（见 [`super::persistent_list`]）：`prepend` 变成
+//! 追加式下标，求值不再分配 `Rc` 节点，多次求值可复用同一 arena。
+//!
+//! 项仍是 `to_vec2` 前缀字节码；闭包体以 `Rc<Vec<u8>>` 存进值（`Lam` 的
+//! 第二字段是环境链头）。L01a 时代的 readme 判定本变体最快——该结论
+//! 现在由 `typort bench` 复核（见模块 readme）。
+
 use std::{num::NonZeroUsize, rc::Rc};
 
-use crate::{L01a_fast::list_arena::ListArena};
-
+use super::persistent_list::ListArena;
 
 #[derive(Debug, Clone)]
-pub enum Value {
+pub(crate) enum Value {
     Lvl(usize),
     Lam(NonZeroUsize, Rc<Vec<u8>>),
     App(Rc<Value>, Rc<Value>),
@@ -22,12 +28,6 @@ impl Default for Value {
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
 fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (Value, &'a [u8]) {
-    /*println!(
-        "eval: [{}] {:?}",
-        env.iter().map(|x| format!("{:?}", x)).reduce(|a, b| a + ", " + &b).unwrap_or(String::new()),
-        tm,
-    );*/
-    //let tag = unsafe { *tm.get_unchecked(tm.len() - 1) };
     match tm {
         [0, a0, a1, a2, a3, a4, a5, a6, a7, tail @ ..] => {
             let idx = usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7]);
@@ -41,10 +41,7 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
             (value, tail)
         },
         [2, tail @ ..] => {
-            // App case: this is tricky, we need to parse two terms from the combined bytes
-            // This requires more context about how the terms were combined
-            // For now, let's use a simplified approach
-            // In practice, you'd want to parse this more carefully
+            // App 是前缀编码里的连续两项，函数在前、实参在后
             let (value1, remaining_tm) = eval(env, tail, arena);
             let (value2, final_tm) = eval(env, remaining_tm, arena);
             let result = apply_val(value1, value2, arena);
@@ -62,7 +59,7 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
     match vf {
         Value::Lam(env, body) => eval(
             arena.prepend(env, va),
-            &body,//TODO:no need to get tail length and split right?
+            &body,
             arena
         ).0,
         _ => Value::App(Rc::new(vf), Rc::new(va)),
@@ -75,7 +72,7 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
 ///      | VLam(env, body) -> Lam(quote (level + 1) @@ eval (VLvl level :: env) body)
 ///      | VApp(vf, va)    -> App(quote level vf, quote level va)
 fn quote(level: usize, value: Rc<Value>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    let mut ret = Vec::new();//Vec::with_capacity(200);
+    let mut ret = Vec::new();
     quote_append(level, value, &mut ret, arena);
     ret
 }
@@ -100,7 +97,6 @@ fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>, arena: &mut L
 
             // 回填长度
             let len = (ret.len() - pos - 9) as u64;
-            //ret[pos + 1..pos + 9].copy_from_slice(&len.to_le_bytes());
             unsafe {
                 (ret.as_mut_ptr().add(pos + 1) as *mut u64).write_unaligned(len.to_le());
             }
@@ -113,6 +109,6 @@ fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>, arena: &mut L
     }
 }
 
-pub fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    quote(0, eval(unsafe {NonZeroUsize::new_unchecked(1)}, &t, arena).0.into(), arena)
+pub(crate) fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
+    quote(0, eval(unsafe { NonZeroUsize::new_unchecked(1) }, &t, arena).0.into(), arena)
 }

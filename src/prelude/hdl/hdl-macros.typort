@@ -2,10 +2,16 @@
 // HDL Macros: Expr (ergonomic hardware DSL), when, and module
 // ============================================================
 
-// Standalone when macro for direct use outside Expr.
-// Bodies use `Expr` fragment for consistency with Expr macro's when handlers.
-// NOTE: 与下方 `Expr` macro 内的 when arm 逻辑重复、独立维护，
-//       修改任一处必须同步另一处（same when-begin/else-begin/end 序列）。
+// Standalone when macro: expands at raw-expression positions where the first
+// token is a macro name (p_raw dispatch) — unbraced def bodies
+// (`def f(): Unit = when ...`), plain match case arms
+// (`case p => when ...`), etc. Module/when/switch/for bodies dispatch their
+// statements through the `Expr` macro's own when arms instead (statement
+// position, `;`-terminated); this standalone form must be a COMPLETE
+// expression, so every arm ends with a `unit` value tail after the final `;`.
+// NOTE: 与下方 `Expr` macro 内的 when 臂逻辑重复、独立维护，
+//       修改任一处必须同步另一处（same when-begin/else-begin/end 序列，
+//       区别仅在于末尾：此处 `; unit`（表达式），彼处 `;`（语句））。
 // NOTE: 所有脚手架绑定都用 `let _ = ...` 丢弃：在 module 宏展开的 class
 //       体里每个 let 都是 struct 字段（用户语义：class body 的每个 let
 //       都是字段，无特例），丢弃名让它们折叠进同一个 `_` 字段（last-wins），
@@ -28,6 +34,7 @@ macro_rules when {
         let _ = whenOtherwiseBegin(unit);
         $({$bodyother})*
         let _ = whenEnd(unit);
+        unit
     };
     // when + otherwise (no elsewhen)
     ($cond:raw {$( $body: Expr )*} otherwise {$( $bodyother: Expr )*}) => {
@@ -36,6 +43,7 @@ macro_rules when {
         let _ = whenOtherwiseBegin(unit);
         $({$bodyother})*
         let _ = whenEnd(unit);
+        unit
     };
     // when without otherwise (optional elsewhen)
     ($cond:raw {$( $body: Expr )*} $( elsewhen $cond2:raw {$( $bodyelse: Expr )*})*) => {
@@ -44,13 +52,20 @@ macro_rules when {
         $( let _ = whenElseBegin(($cond2).expr);
            $({$bodyelse})* )*
         let _ = whenEnd(unit);
+        unit
     };
 }
 
-// The Expr macro provides convenient syntax for hardware expressions
+// The Expr macro provides convenient syntax for hardware expressions.
+// Its rules are dispatched from every statement-block context via the
+// `$x: Expr` named fragment: module bodies, when/elsewhen/otherwise/switch/
+// for bodies, braced def bodies (def f(): T = { ... }) and braced match
+// case arms (case p => { ... }) — plus p_expr_block_stmt (the shared
+// statement-block parser). A leading `{` never reaches p_raw, so a block
+// body and a plain expression body never overlap.
 // Usage:
 //   let mySignal = UInt[8]           -- creates a UInt[8] named "mySignal"
-//   input myInput = UInt[4]          -- creates an input UInt[4] named "myInput"  
+//   input myInput = UInt[4]          -- creates an input UInt[4] named "myInput"
 //   output myOutput = Bits[16]       -- creates an output Bits[16] named "myOutput"
 //   when condition {                  -- conditional assignment block
 //     a := b
