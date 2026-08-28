@@ -1,4 +1,4 @@
-//! 16 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
+//! 17 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
 //! 规范化结果必须等于 `church(2n)`。流程：
@@ -24,8 +24,8 @@ use super::term::{self, Term};
 use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, bump_iter, bump_tree, cek, cek_bump, compiled, env_slice, naive, rc_term,
-    rc_value, rpn_owned,
+    bump_arena, bump_iter, bump_spine, bump_tree, cek, cek_bump, compiled, env_slice, naive,
+    rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -361,6 +361,31 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             assert_eq!(bump_arena::export(res), check);
         }
         rows.push(("bump_iter", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // bump_spine — bump_tree 的值打包(8B) + 中性扁平 spine 栈 + 流式右链 quote
+    if want("bump_spine") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(bump_spine::normalize_imported(&bump, tm))
+        };
+        assert_eq!(got, check, "bump_spine 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_spine::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
     // env_slice — bump_tree 的环境换 bump 数组切片（nth O(1)，prepend 复制）
