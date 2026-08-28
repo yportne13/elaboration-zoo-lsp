@@ -1,4 +1,4 @@
-//! 12 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
+//! 13 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
 //! 规范化结果必须等于 `church(2n)`。流程：
@@ -22,7 +22,7 @@ use super::persistent_list::ListArena;
 use super::term::{self, Term};
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, cek, naive, rc_term, rc_value, rpn_owned,
+    bump_arena, cek, compiled, naive, rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -285,6 +285,31 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             assert_eq!(bump_arena::export(res), check);
         }
         rows.push(("bump_tree", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // compiled — 项编译为定长指令数组（连续 &[Ins]），值/env/结果仍在 bump。
+    // 与 bump_tree 的唯一差异是"项访问"层：指针树 vs 数组+下标。
+    if want("compiled") {
+        let prog = compiled::compile(&term::church_pair(n));
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            compiled::export(compiled::normalize_imported(&bump, &prog))
+        };
+        assert_eq!(got, check, "compiled 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            compiled::normalize_imported(&bump, &prog);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let prog = compiled::compile(&term::church_pair(n)); // 编译在计时外
+            let bump = Bump::with_capacity(1 << 20);
+            let start = Instant::now();
+            let res = compiled::normalize_imported(&bump, &prog);
+            ts.push(start.elapsed());
+            assert_eq!(compiled::export(res), check);
+        }
+        rows.push(("compiled", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
     print_table(n, &rows);
