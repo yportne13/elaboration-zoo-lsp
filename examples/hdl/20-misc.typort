@@ -1,6 +1,11 @@
 // ============================================================
-// HDL Example 18: misc — io/math/logic/fsm/bus/crossclock
-//   (Wave 3/4/5/6 复刻组件)
+// HDL Example 20: misc — io/math/logic/fsm/bus/crossclock
+//   （Wave 3/4/5/6 复刻组件）
+//
+//   TriState / Gpio / Bcd / Divider           IO 与数学组件
+//   StateMachine / Prescaler / Timer / InterruptCtrl / Watchdog
+//   Apb3 / AxiLite4 / Wishbone / AvalonST / Axi4Stream   总线
+//   BufferCC                                  单拍采样跨时钟
 // ============================================================
 
 module miscTriState {
@@ -9,7 +14,7 @@ module miscTriState {
     let r = Bits[8]
     r := m.read
 }
-println("=== 18a: TriState ===")
+println("=== 20a: TriState ===")
 println(moduleTreeVL(miscTriState.create.tree))
 
 module miscGpio {
@@ -24,7 +29,7 @@ module miscGpio {
     let irq = Bits[4]
     irq := io.interrupts
 }
-println("=== 18b: Gpio ===")
+println("=== 20b: Gpio ===")
 println(moduleTreeVL(miscGpio.create.tree))
 
 module miscBcd {
@@ -39,7 +44,7 @@ module miscBcd {
     let isz = Bool
     isz := bcdIsZero(Bcd.mk[2](newBitsNamed("bcd_d", 8)))
 }
-println("=== 18c: Bcd ===")
+println("=== 20c: Bcd ===")
 println(moduleTreeVL(miscBcd.create.tree))
 
 module miscDivider {
@@ -56,7 +61,7 @@ module miscDivider {
     let busy = Bool
     busy := fsm.busy
 }
-println("=== 18d: Divider ===")
+println("=== 20d: Divider ===")
 println(moduleTreeVL(miscDivider.create.tree))
 
 module miscFsm {
@@ -70,7 +75,7 @@ module miscFsm {
         let _d = stateGoto(sm, 1)
     }
 }
-println("=== 18e: StateMachine ===")
+println("=== 20e: StateMachine ===")
 println(moduleTreeVL(miscFsm.create.tree))
 
 module miscPrescaler {
@@ -84,7 +89,7 @@ module miscPrescaler {
     tf := t.full
     tv := t.value
 }
-println("=== 18f: Prescaler / Timer ===")
+println("=== 20f: Prescaler / Timer ===")
 println(moduleTreeVL(miscPrescaler.create.tree))
 
 module miscInterrupts {
@@ -96,7 +101,7 @@ module miscInterrupts {
     let wd = Bool
     wd := watchdog(Bool.mk(None, literal(0)), UInt.mk[4](None, literal(7)))
 }
-println("=== 18g: InterruptCtrl / Watchdog ===")
+println("=== 20g: InterruptCtrl / Watchdog ===")
 println(moduleTreeVL(miscInterrupts.create.tree))
 
 module busApb3 {
@@ -112,7 +117,7 @@ module busApb3 {
     let r0v = UInt[32]
     r0v := r0
 }
-println("=== 18h: APB3 + 寄存器组 ===")
+println("=== 20h: APB3 + 寄存器组 ===")
 println(moduleTreeVL(busApb3.create.tree))
 
 module busAxiLite {
@@ -130,7 +135,7 @@ module busAxiLite {
     let awReady = Bool
     awReady := bus.aw.ready
 }
-println("=== 18i: AxiLite4 ===")
+println("=== 20i: AxiLite4 ===")
 println(moduleTreeVL(busAxiLite.create.tree))
 
 module busWb {
@@ -150,7 +155,7 @@ module busWb {
     let last = Bool
     last := sm.last
 }
-println("=== 18j: Wishbone / AvalonST / Axi4Stream ===")
+println("=== 20j: Wishbone / AvalonST / Axi4Stream ===")
 println(moduleTreeVL(busWb.create.tree))
 
 module ccBuffer {
@@ -159,5 +164,5 @@ module ccBuffer {
     let asyncB = Bool
     let syncB = bufferCCBool2(asyncB)
 }
-println("=== 18k: BufferCC ===")
+println("=== 20k: BufferCC ===")
 println(moduleTreeVL(ccBuffer.create.tree))

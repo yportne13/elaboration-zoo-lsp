@@ -1,0 +1,46 @@
+// ============================================================
+// HDL Example 22: Vec 硬件索引 + StreamWidthAdapter（字节重排）
+//
+//   vecAtUInt(vec, sel, default)   Vec 硬件索引 → 平衡 mux 树
+//   streamWidth                    2→3 字节收集/重排（寄存器缓冲）
+// ============================================================
+
+module vecIndex {
+    let arr = cons (newUIntNamed("a0", 8)) (cons (newUIntNamed("a1", 8)) (cons (newUIntNamed("a2", 8)) (cons (newUIntNamed("a3", 8)) nil)))
+    let sel = UInt[2]
+    let picked = vecAtUInt(arr, sel, UInt.mk(None, literal(0)))
+    let out = UInt[8]
+    out := picked
+}
+println("=== 22a: vecAtUInt（Vec 硬件索引平衡 mux 树）===")
+println(moduleTreeVL(vecIndex.create.tree))
+
+// StreamWidthAdapter-lite：2 字节输入 → 3 字节输出（字节重排）
+// 每拍锁存输入对；cnt 0->1->2 收集 3 字节后 valid 一拍并回绕
+module streamWidth {
+    let inValid = Bool
+    let inData0 = UInt[8]
+    let inData1 = UInt[8]
+    let outValid = Bool
+    let outData = UInt[24]
+    // 字节缓冲寄存器（主时钟）
+    reg b0 = UInt[8]
+    reg b1 = UInt[8]
+    reg b2 = UInt[8]
+    reg cnt = UInt[2] init 0
+    // 每拍锁存输入对
+    b0 := inData0
+    b1 := inData1
+    b2 := inData0
+    // 拼接输出（b0 b1 b2）
+    outData := b0 ## b1 ## b2
+    // 满 3 字节后回绕
+    outValid := cnt === 2
+    when cnt === 2 {
+        cnt := 0
+    } otherwise {
+        cnt := cnt + 1
+    }
+}
+println("=== 22b: StreamWidthAdapter-lite（字节收集 + 重排）===")
+println(moduleTreeVL(streamWidth.create.tree))

@@ -28,7 +28,7 @@ module bitwiseOps {
     any_one := b.orR
     parity := a.xorR
 }
-println("=== 03: bitwiseOps (按位 + 移位 + 归约) ===")
+println("=== 03a: bitwiseOps (按位 + 移位 + 归约) ===")
 println(moduleTreeVL(bitwiseOps.create.tree))
 
 module bitwiseUInt {

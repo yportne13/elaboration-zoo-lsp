@@ -13,11 +13,11 @@ fn probe_timing() {
         ("08-control-flow", include_str!("../../examples/hdl/08-control-flow.typort")),
         ("09-hierarchy", include_str!("../../examples/hdl/09-hierarchy.typort")),
         ("10-bundle", include_str!("../../examples/hdl/10-bundle.typort")),
-        ("11-memory", include_str!("../../examples/hdl/11-memory.typort")),
-        ("12-arithmetic2", include_str!("../../examples/hdl/12-arithmetic2.typort")),
-        ("13-inout", include_str!("../../examples/hdl/13-inout.typort")),
-        ("14-counter", include_str!("../../examples/hdl/14-counter.typort")),
-        ("15-output-reg", include_str!("../../examples/hdl/15-output-reg.typort")),
+        ("12-memory", include_str!("../../examples/hdl/12-memory.typort")),
+        ("14-arithmetic-extra", include_str!("../../examples/hdl/14-arithmetic-extra.typort")),
+        ("15-inout", include_str!("../../examples/hdl/15-inout.typort")),
+        ("16-counter", include_str!("../../examples/hdl/16-counter.typort")),
+        ("17-output-reg", include_str!("../../examples/hdl/17-output-reg.typort")),
     ];
     let _ = run_with_prelude("def warm: Nat = 0");
     let mut out = String::new();
@@ -31,14 +31,14 @@ fn probe_timing() {
     std::fs::write("probe-out.txt", out).unwrap();
 }
 
-// ── example 12: adder tree with width proof ──
+// ── example 13: adder tree with width proof ──
 // The example file is elaborated as a whole (like the other hdl examples);
 // the proof chain inside adder_tree (calc + .cast) must type-check during
 // elaboration, and the runtime prints must show the expected widths.
 
 #[test]
-fn example_12_adder_tree() {
-    let input = include_str!("../../examples/hdl/12-adder-tree.typort");
+fn example_13_adder_tree() {
+    let input = include_str!("../../examples/hdl/13-adder-tree.typort");
     let output = match run_with_prelude(input) {
         Ok(o) => o,
         Err(e) => panic!("expected OK, got error: '{}' @ {}:{}", e.0.data, e.0.path_id, e.0.start_offset),

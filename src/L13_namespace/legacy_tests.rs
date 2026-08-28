@@ -1533,7 +1533,7 @@ fn test_examples_hdl_dir() {
             "input wire [7:0] slave_aw_lane_data",
             "output wire slave_ready",
         ]),
-        ("11-memory.typort", include_str!("../../examples/hdl/11-memory.typort"), &[
+        ("12-memory.typort", include_str!("../../examples/hdl/12-memory.typort"), &[
             "reg [7:0] myRam [0:63];",   // 内存声明：64 × 8 位
             "reg [3:0] myBits [0:15];",  // Bits 内存
             "reg myFlag [0:15];",        // Bool（1 位）内存
@@ -1544,7 +1544,7 @@ fn test_examples_hdl_dir() {
             "rd <= myRam[addr];",        // readSync 时钟赋值
             "if (en) begin",             // 同步写使能
         ]),
-        ("12-arithmetic2.typort", include_str!("../../examples/hdl/12-arithmetic2.typort"), &[
+        ("14-arithmetic-extra.typort", include_str!("../../examples/hdl/14-arithmetic-extra.typort"), &[
             "(a / b)",                   // UInt 除法
             "(a % b)",                   // UInt 取模
             "(a / 3)",                   // Nat 字面量除数
@@ -1557,7 +1557,7 @@ fn test_examples_hdl_dir() {
             "{sa[7], sa}",               // SInt expand 符号扩展
             "assign ue = sa;",           // UInt expand 零扩展（赋值上下文）
         ]),
-        ("13-inout.typort", include_str!("../../examples/hdl/13-inout.typort"), &[
+        ("15-inout.typort", include_str!("../../examples/hdl/15-inout.typort"), &[
             "inout wire [7:0] io",       // UInt inout 端口
             "inout wire flag",           // Bool inout 端口
             "inout wire signed [7:0] sio", // SInt inout 端口
@@ -1566,7 +1566,7 @@ fn test_examples_hdl_dir() {
             "input wire master_dir",     // in 标记字段仍是 input
             "output wire slave_dir",     // slave 侧 in 字段翻转为 output
         ]),
-        ("14-counter.typort", include_str!("../../examples/hdl/14-counter.typort"), &[
+        ("16-counter.typort", include_str!("../../examples/hdl/16-counter.typort"), &[
             "reg [7:0] cnt;",            // counter(8) 寄存器（let 绑定名自动命名）
             "cnt <= (cnt + 1);",         // 自增时钟赋值
             "if (en) begin",             // counterInc 使能计数
@@ -1574,7 +1574,7 @@ fn test_examples_hdl_dir() {
             "always @(posedge clk)",     // 计数器时钟块
             "input wire clk",            // 自动时钟端口
         ]),
-        ("15-output-reg.typort", include_str!("../../examples/hdl/15-output-reg.typort"), &[
+        ("17-output-reg.typort", include_str!("../../examples/hdl/17-output-reg.typort"), &[
             "output reg [7:0] count",    // UInt output reg 端口（端口区 + init）
             "output reg flag",           // Bool output reg 端口
             "count <= 0;",               // init 异步复位初值
@@ -1590,7 +1590,7 @@ fn test_examples_hdl_dir() {
             "input wire clk",            // 自动时钟端口
             "input wire reset",          // 自动复位端口（有 init 时）
         ]),
-        ("16-utils.typort", include_str!("../../examples/hdl/16-utils.typort"), &[
+        ("18-utils.typort", include_str!("../../examples/hdl/18-utils.typort"), &[
             "assign r = {a[0], {a[1], ",      // reverse：位反转
             "assign p = {a[7], {(a[6] | a[7]), ", // propagateOnes toLsb：前缀 OR（LSB 优先）
             "assign p2 = {(a[0] | (a[1] | ",    // propagateOnes toMsb
@@ -1615,7 +1615,7 @@ fn test_examples_hdl_dir() {
             "ohc <= 1;",                       // oneHotCounter 回绕
             "jc <= 0;",                        // johnsonCounter 回绕
         ]),
-        ("17-stream.typort", include_str!("../../examples/hdl/17-stream.typort"), &[
+        ("19-stream.typort", include_str!("../../examples/hdl/19-stream.typort"), &[
             "reg p1_valid;",                   // m2sPipe valid 寄存器
             "reg [7:0] p1_data;",             // m2sPipe payload 寄存器
             "assign push_ready = (p1_valid || p1_ready)", // collapsBubble
@@ -1631,7 +1631,7 @@ fn test_examples_hdl_dir() {
             "assign fragValid = inValid",      // Fragment：valid 直通
             "assign fragLast = 1",           // Fragment last 位
         ]),
-        ("18-misc.typort", include_str!("../../examples/hdl/18-misc.typort"), &[
+        ("20-misc.typort", include_str!("../../examples/hdl/20-misc.typort"), &[
             "assign s = ",                      // bcdAddDigit 结果
             "reg [1:0] sm;",                   // StateMachine 状态寄存器
             "assign s0 = (sm == 0)",
@@ -1643,7 +1643,7 @@ fn test_examples_hdl_dir() {
             "reg [7:0] synced_sync;",
             "reg [7:0] p_cnt;",                  // prescaler 计数器
         ]),
-        ("19-crossclock.typort", include_str!("../../examples/hdl/19-crossclock.typort"), &[
+        ("21-crossclock.typort", include_str!("../../examples/hdl/21-crossclock.typort"), &[
             "always @(posedge clkA) begin",     // PulseCCByToggle 双时钟
             "always @(posedge clkB) begin",
             "reg __toggle;",
@@ -1659,7 +1659,7 @@ fn test_examples_hdl_dir() {
             "reg [7:0] _d_mem [0:3];",
             "assign popValid = !(_d_rdPtr == _d_wrPtrSync2)",  // empty 检测
         ]),
-        ("20-widthadapter.typort", include_str!("../../examples/hdl/20-widthadapter.typort"), &[
+        ("22-widthadapter.typort", include_str!("../../examples/hdl/22-widthadapter.typort"), &[
             "wire [7:0] picked;",               // vecAtUInt 表达式 let 的命名 wire
             "assign picked = ((sel == 0) ? a0 : ((sel == 1) ? a1 : ((sel == 2) ? a2 : ((sel == 3) ? a3 : 0))))",  // vecAtUInt mux 链
             "assign out = picked;",             // 后续使用引用 wire

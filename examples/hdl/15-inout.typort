@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 13: inout 双向端口 (tri-state)
+// HDL Example 15: inout 双向端口 (tri-state)
 //
 //   inout io = UInt[8]          模块端口: inout wire [7:0] io
 //   inout flag = Bool           inout wire flag
@@ -23,7 +23,7 @@ module inoutPorts {
     b := a + inside
     inside := a
 }
-println("=== 13a: inoutPorts (inout 端口声明) ===")
+println("=== 15a: inoutPorts (inout 端口声明) ===")
 println(moduleTreeVL(inoutPorts.create.tree))
 
 module inoutAuto {
@@ -32,7 +32,7 @@ module inoutAuto {
     let readback = autoUInt(8)
     readback := myio
 }
-println("=== 13b: inoutAuto (auto*InOut 自动命名) ===")
+println("=== 15b: inoutAuto (auto*InOut 自动命名) ===")
 println(moduleTreeVL(inoutAuto.create.tree))
 
 #[derive(Bundle)]
@@ -55,5 +55,5 @@ module bundleInOut {
     let slave = TriBus.create.asSlave
     master := slave
 }
-println("=== 13c: bundleInOut (Bundle inout 字段) ===")
+println("=== 15c: bundleInOut (Bundle inout 字段) ===")
 println(moduleTreeVL(bundleInOut.create.tree))

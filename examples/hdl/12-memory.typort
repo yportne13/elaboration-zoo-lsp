@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 11: 内存 (Memory)
+// HDL Example 12: 内存 (Memory)
 //
 //   let myRam = memUInt(8, 64)      64 × 8 位内存（自动命名）
 //   let myBits = memBits(4, 16)     16 × 4 位内存
@@ -21,7 +21,7 @@ module memWriteRead {
     myRam.write(addr, d, en)
     let rd = myRam.readSync(addr)
 }
-println("=== 11a: memWriteRead (同步写 + 同步读) ===")
+println("=== 12a: memWriteRead (同步写 + 同步读) ===")
 println(moduleTreeVL(memWriteRead.create.tree))
 
 module memAsyncRead {
@@ -31,7 +31,7 @@ module memAsyncRead {
     let out = UInt[8]
     out := rd
 }
-println("=== 11b: memAsyncRead (组合读) ===")
+println("=== 12b: memAsyncRead (组合读) ===")
 println(moduleTreeVL(memAsyncRead.create.tree))
 
 module memMixedTypes {
@@ -48,7 +48,7 @@ module memMixedTypes {
     myFlag.write(faddr, fd, fen)
     let frd = myFlag.readSync(faddr)
 }
-println("=== 11c: memMixedTypes (Bits/Bool 内存) ===")
+println("=== 12c: memMixedTypes (Bits/Bool 内存) ===")
 println(moduleTreeVL(memMixedTypes.create.tree))
 
 module memReadInWhen {
@@ -60,5 +60,5 @@ module memReadInWhen {
         myRam.write(addr, d, en)
     }
 }
-println("=== 11d: memReadInWhen (when 内写内存) ===")
+println("=== 12d: memReadInWhen (when 内写内存) ===")
 println(moduleTreeVL(memReadInWhen.create.tree))

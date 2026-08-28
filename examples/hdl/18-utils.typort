@@ -1,5 +1,14 @@
 // ============================================================
-// HDL Example 16: utils — 组合逻辑工具（SpinalHDL lib/Utils 复刻）
+// HDL Example 18: utils — 组合逻辑工具（SpinalHDL lib/Utils 复刻）
+//
+//   reverse / propagateOnes            位反转、前缀传播
+//   countOne / countOneUInt / clz / ctz / majorityVote
+//   uintToOh / ohToUInt / ohIsLegal / ohMaskingFirst / ohMaskingLast
+//   priorityMux / muxOH / ohMuxOr / min / max / clamp
+//   toGray / fromGray / endiannessSwap
+//   delay / history / delayEvent / timeout
+//   counterMod / counterIncMod / counterUpDown / downCounter /
+//   oneHotCounter / johnsonCounter
 // ============================================================
 
 module utilsRev {
@@ -14,7 +23,7 @@ module utilsRev {
     let p2 = Bits[8]
     p2 := propagateOnes(a, true)
 }
-println("=== 16a: reverse / propagateOnes ===")
+println("=== 18a: reverse / propagateOnes ===")
 println(moduleTreeVL(utilsRev.create.tree))
 
 module utilsCount {
@@ -24,7 +33,6 @@ module utilsCount {
     let u = UInt[8]
     let cu = UInt[4]
     cu := countOneUInt(u)
-    let bs = cons(Bool.mk(None, a.zz_expr), nil)
     let v = UInt[4]
     v := countOne(a)
     let cl = UInt[4]
@@ -34,7 +42,7 @@ module utilsCount {
     let mv = Bool
     mv := majorityVote(a)
 }
-println("=== 16b: countOne / clz / ctz / majorityVote ===")
+println("=== 18b: countOne / clz / ctz / majorityVote ===")
 println(moduleTreeVL(utilsCount.create.tree))
 
 module utilsOh {
@@ -50,7 +58,7 @@ module utilsOh {
     let last = Bits[8]
     last := ohMaskingLast(oh)
 }
-println("=== 16c: uintToOh / ohToUInt / ohIsLegal / ohMasking ===")
+println("=== 18c: uintToOh / ohToUInt / ohIsLegal / ohMasking ===")
 println(moduleTreeVL(utilsOh.create.tree))
 
 module utilsMux {
@@ -73,7 +81,7 @@ module utilsMux {
     let cl = UInt[8]
     cl := clamp(a, b, c)
 }
-println("=== 16d: priorityMux / muxOH / ohMuxOr / min / max / clamp ===")
+println("=== 18d: priorityMux / muxOH / ohMuxOr / min / max / clamp ===")
 println(moduleTreeVL(utilsMux.create.tree))
 
 module utilsGray {
@@ -88,7 +96,7 @@ module utilsGray {
     let swu = UInt[16]
     swu := endiannessSwapUInt(es.asUInt, 8)
 }
-println("=== 16e: gray / endiannessSwap ===")
+println("=== 18e: gray / endiannessSwap ===")
 println(moduleTreeVL(utilsGray.create.tree))
 
 module utilsReg {
@@ -104,7 +112,7 @@ module utilsReg {
     let ts = Bool
     ts := tm.state
 }
-println("=== 16f: delay / history / delayEvent / timeout ===")
+println("=== 18f: delay / history / delayEvent / timeout ===")
 println(moduleTreeVL(utilsReg.create.tree))
 
 module utilsCounters {
@@ -126,5 +134,5 @@ module utilsCounters {
     let udv = UInt[4]
     udv := ud.value
 }
-println("=== 16g: counter 家族 ===")
+println("=== 18g: counter 家族 ===")
 println(moduleTreeVL(utilsCounters.create.tree))

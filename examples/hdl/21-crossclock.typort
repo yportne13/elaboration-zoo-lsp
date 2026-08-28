@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 19: 真跨时钟域（每寄存器时钟域扩展）
+// HDL Example 21: 真跨时钟域（每寄存器时钟域扩展）
 //   PulseCCByToggle / CCByToggle / BufferCC(cd) / StreamFifoCC
 // ============================================================
 
@@ -22,7 +22,7 @@ module ccPulse[inCd] {
     let s2 = UInt[8]
     s2 := synced
 }
-println("=== 19a: PulseCCByToggle / CCByToggle / BufferCC-cd ===")
+println("=== 21a: PulseCCByToggle / CCByToggle / BufferCC-cd ===")
 println(moduleTreeVL(ccPulse.create[inCd].tree))
 
 module ccFifo[inCd] {
@@ -38,5 +38,5 @@ module ccFifo[inCd] {
     let pd = UInt[8]
     pd := io.popData
 }
-println("=== 19b: StreamFifoCC ===")
+println("=== 21b: StreamFifoCC ===")
 println(moduleTreeVL(ccFifo.create[inCd].tree))

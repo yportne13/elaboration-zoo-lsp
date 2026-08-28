@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 14: Counter（SpinalHDL 风格计数器）
+// HDL Example 16: Counter（SpinalHDL 风格计数器）
 //
 //   let cnt = counter(8)         自增计数器：每周期 cnt := cnt + 1
 //   let cnt = counterInc(8, en)  使能计数：when(en) { cnt := cnt + 1 }
@@ -14,7 +14,7 @@ module counterFree {
     wrap := cnt.willOverflow
     doubled := cnt.value +^ cnt.value
 }
-println("=== 14a: counterFree (自增计数器) ===")
+println("=== 16a: counterFree (自增计数器) ===")
 println(moduleTreeVL(counterFree.create.tree))
 
 module counterGated {
@@ -23,7 +23,7 @@ module counterGated {
     let wrap = Bool
     wrap := cnt.willOverflow
 }
-println("=== 14b: counterGated (使能计数) ===")
+println("=== 16b: counterGated (使能计数) ===")
 println(moduleTreeVL(counterGated.create.tree))
 
 module counterChain {
@@ -33,5 +33,5 @@ module counterChain {
     let count = UInt[16]
     count := hi.value ## lo.value
 }
-println("=== 14c: counterChain (计数器串接) ===")
+println("=== 16c: counterChain (计数器串接) ===")
 println(moduleTreeVL(counterChain.create.tree))

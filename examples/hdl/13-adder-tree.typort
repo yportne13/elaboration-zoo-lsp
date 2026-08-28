@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 12: 加法树 (Adder Tree) — 位宽随深度增长
+// HDL Example 13: 加法树 (Adder Tree) — 位宽随深度增长
 //
 //   对 Vec[UInt[w]] 构造加法树：
 //     adder_tree_step  一层：相邻元素两两 (a +^ b)，奇数个时末元素
@@ -82,7 +82,7 @@ module adderTree8 {
     let sum = UInt[11]
     sum := adder_tree (a0 :: a1 :: a2 :: a3 :: a4 :: a5 :: a6 :: a7 :: nil)
 }
-println("=== 12a: adderTree8 (8 x UInt[8] -> UInt[11]) ===")
+println("=== 13a: adderTree8 (8 x UInt[8] -> UInt[11]) ===")
 println(moduleTreeVL(adderTree8.create.tree))
 
 // 4 个 UInt[16] 输入 → UInt[16 + log2Up 4] = UInt[18]
@@ -94,7 +94,7 @@ module adderTree4 {
     let sum = UInt[18]
     sum := adder_tree (b0 :: b1 :: b2 :: b3 :: nil)
 }
-println("=== 12b: adderTree4 (4 x UInt[16] -> UInt[18]) ===")
+println("=== 13b: adderTree4 (4 x UInt[16] -> UInt[18]) ===")
 println(moduleTreeVL(adderTree4.create.tree))
 
 // 3 个 UInt[8] 输入（奇数个，触发 widenOne 路径）→ UInt[8 + log2Up 3] = UInt[10]
@@ -105,7 +105,7 @@ module adderTree3 {
     let sum = UInt[10]
     sum := adder_tree (c0 :: c1 :: c2 :: nil)
 }
-println("=== 12c: adderTree3 (3 x UInt[8] -> UInt[10], 奇数个元素) ===")
+println("=== 13c: adderTree3 (3 x UInt[8] -> UInt[10], 奇数个元素) ===")
 println(moduleTreeVL(adderTree3.create.tree))
 
 // 运行时验证：log2Up 求值

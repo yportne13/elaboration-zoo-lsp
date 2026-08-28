@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 17: Stream 框架（SpinalHDL lib/Stream 复刻）
+// HDL Example 19: Stream 框架（SpinalHDL lib/Stream 复刻）
 //   m2sPipe / s2mPipe / halfPipe / throwWhen / haltWhen
 //   StreamFifo / StreamMux / StreamDemux / StreamArbiter / StreamFork
 //   Fragment（last）/ Flow
@@ -23,7 +23,7 @@ module streamPipe {
     let hwValid = Bool
     hwValid := hw.valid
 }
-println("=== 17a: 管线原语 ===")
+println("=== 19a: 管线原语 ===")
 println(moduleTreeVL(streamPipe.create.tree))
 
 module streamFifoEx {
@@ -38,7 +38,7 @@ module streamFifoEx {
     let occ = UInt[3]
     occ := streamFifoConnect[8][3][3](4, push, pop)
 }
-println("=== 17b: StreamFifo ===")
+println("=== 19b: StreamFifo ===")
 println(moduleTreeVL(streamFifoEx.create.tree))
 
 module streamMuxEx {
@@ -59,7 +59,7 @@ module streamMuxEx {
     let mReady = Bool
     m.ready := mReady
 }
-println("=== 17c: StreamMux ===")
+println("=== 19c: StreamMux ===")
 println(moduleTreeVL(streamMuxEx.create.tree))
 
 module streamDemuxEx {
@@ -76,7 +76,7 @@ module streamDemuxEx {
     let o1Valid = Bool
     o1Valid := outs.at(1, si).valid
 }
-println("=== 17d: StreamDemux ===")
+println("=== 19d: StreamDemux ===")
 println(moduleTreeVL(streamDemuxEx.create.tree))
 
 module streamArbEx {
@@ -96,7 +96,7 @@ module streamArbEx {
     let mReady = Bool
     m.ready := mReady
 }
-println("=== 17e: StreamArbiter ===")
+println("=== 19e: StreamArbiter ===")
 println(moduleTreeVL(streamArbEx.create.tree))
 
 module streamForkEx {
@@ -112,7 +112,7 @@ module streamForkEx {
     o1Valid := outs.at(1, si).valid
     o0Data := outs.at(0, si).payload
 }
-println("=== 17f: StreamFork ===")
+println("=== 19f: StreamFork ===")
 println(moduleTreeVL(streamForkEx.create.tree))
 
 module streamFragEx {
@@ -129,7 +129,7 @@ module streamFragEx {
     let backValid = Bool
     backValid := back.valid
 }
-println("=== 17g: Fragment ===")
+println("=== 19g: Fragment ===")
 println(moduleTreeVL(streamFragEx.create.tree))
 
 module flowEx {
@@ -146,5 +146,5 @@ module flowEx {
     mValid := m.valid
     mData := m.payload
 }
-println("=== 17h: FlowMux ===")
+println("=== 19h: FlowMux ===")
 println(moduleTreeVL(flowEx.create.tree))

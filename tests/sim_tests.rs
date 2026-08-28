@@ -157,7 +157,7 @@ fn dut_validates_ports_and_widths() {
     dut.finish().unwrap();
 }
 
-/// counterOut (examples/hdl/15-output-reg): `output reg count = UInt[8] init 0`
+/// counterOut (examples/hdl/17-output-reg): `output reg count = UInt[8] init 0`
 /// plus `input en`, auto clk/reset ports, async active-high reset. Exercises
 /// the full SpinalSim-style sequence: fork clock → reset → release → count
 /// edges → assert register state.
@@ -169,7 +169,7 @@ fn dut_counter_with_reset_sequence() {
     }
     let cfg = SimConfig {
         top: "counterOut".to_string(),
-        sources: vec![example_path("15-output-reg.typort")],
+        sources: vec![example_path("17-output-reg.typort")],
         workdir: workdir("counter"),
         simulator: Simulator::Verilator,
         verilator_args: vec![],
@@ -216,7 +216,7 @@ fn dut_flag_toggles_manual_clock() {
     }
     let cfg = SimConfig {
         top: "counterOut".to_string(),
-        sources: vec![example_path("15-output-reg.typort")],
+        sources: vec![example_path("17-output-reg.typort")],
         workdir: workdir("flag"),
         simulator: Simulator::Verilator,
         verilator_args: vec![],
@@ -305,7 +305,7 @@ fn dut_wave_trace_produces_vcd() {
     }
     let cfg = SimConfig {
         top: "counterOut".to_string(),
-        sources: vec![example_path("15-output-reg.typort")],
+        sources: vec![example_path("17-output-reg.typort")],
         workdir: workdir("trace"),
         simulator: Simulator::Verilator,
         verilator_args: vec![],
@@ -389,7 +389,7 @@ fn icarus_counter_manual_clock() {
     }
     let cfg = SimConfig {
         top: "counterOut".to_string(),
-        sources: vec![example_path("15-output-reg.typort")],
+        sources: vec![example_path("17-output-reg.typort")],
         workdir: workdir("icarus-counter"),
         simulator: Simulator::Icarus,
         verilator_args: vec![],
@@ -422,7 +422,7 @@ fn icarus_wave_trace_produces_vcd() {
     }
     let cfg = SimConfig {
         top: "counterOut".to_string(),
-        sources: vec![example_path("15-output-reg.typort")],
+        sources: vec![example_path("17-output-reg.typort")],
         workdir: workdir("icarus-trace"),
         simulator: Simulator::Icarus,
         verilator_args: vec![],

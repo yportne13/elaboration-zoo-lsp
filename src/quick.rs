@@ -353,7 +353,7 @@ Stream / Flow / Fragment（SpinalHDL lib 移植, prelude 提供）:
    hdl_ops.typort 位选/切片/布尔/子模块
    alu.typort     UInt 算术 + Into
    hdl/07-registers.typort 寄存器;  hdl/08-control-flow.typort when/switch + for 编译期展开
-   hdl/09-hierarchy.typort 层次例化;  hdl/17-stream.typort Stream 全家族
+   hdl/09-hierarchy.typort 层次例化;  hdl/19-stream.typort Stream 全家族
    theorem_proving.typort 证明;  adder_proof.typort 硬件正确性证明
 "#
     ),

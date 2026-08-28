@@ -1,5 +1,5 @@
 // ============================================================
-// HDL Example 15: output reg 寄存器输出端口
+// HDL Example 17: output reg 寄存器输出端口
 //
 //   output reg x = UInt[8]            模块端口: output reg [7:0] x
 //   output reg x = UInt[8] init 5     同上 + 异步复位初值 5
@@ -28,7 +28,7 @@ module counterOut {
         flag := !flag
     }
 }
-println("=== 15a: counterOut (端口区 output reg + init + when 驱动) ===")
+println("=== 17a: counterOut (端口区 output reg + init + when 驱动) ===")
 println(moduleTreeVL(counterOut.create.tree))
 
 module signedOut {
@@ -39,7 +39,7 @@ module signedOut {
     s := inc
     b := s.asBits
 }
-println("=== 15b: signedOut (SInt / Bits output reg) ===")
+println("=== 17b: signedOut (SInt / Bits output reg) ===")
 println(moduleTreeVL(signedOut.create.tree))
 
 module bodyOutReg {
@@ -47,7 +47,7 @@ module bodyOutReg {
     output reg r = UInt[8] init 3
     r := a
 }
-println("=== 15c: bodyOutReg (体内 output reg —— Expr 宏) ===")
+println("=== 17c: bodyOutReg (体内 output reg —— Expr 宏) ===")
 println(moduleTreeVL(bodyOutReg.create.tree))
 
 module autoOutRegDemo {
@@ -57,5 +57,5 @@ module autoOutRegDemo {
     c := v
     w := true
 }
-println("=== 15d: autoOutRegDemo (auto*OutReg 自动命名) ===")
+println("=== 17d: autoOutRegDemo (auto*OutReg 自动命名) ===")
 println(moduleTreeVL(autoOutRegDemo.create.tree))
