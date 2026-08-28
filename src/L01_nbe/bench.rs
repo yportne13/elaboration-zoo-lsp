@@ -16,11 +16,13 @@
 
 use std::time::{Duration, Instant};
 
+use bumpalo::Bump;
+
 use super::persistent_list::ListArena;
 use super::term::{self, Term};
 use super::{
-    bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value, cek,
-    naive, rc_term, rc_value, rpn_owned,
+    ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
+    bump_arena, cek, naive, rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -211,6 +213,49 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             assert_eq!(got, check);
         }
         rows.push(("cek", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // ast_env_arena — Box<Term> AST + ListArena 环境（naive 的 arena 演进）
+    if want("ast_env_arena") {
+        let input = term::church_pair(n);
+        let mut arena = ListArena::new(); // 跨轮次复用：追加式下标永不过期
+        let got = ast_env_arena::normalize(input.clone(), &mut arena);
+        assert_eq!(got, check, "ast_env_arena 结果不正确");
+        ast_env_arena::normalize(input, &mut arena);
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = term::church_pair(n);
+            let start = Instant::now();
+            let out = ast_env_arena::normalize(input, &mut arena);
+            ts.push(start.elapsed());
+            assert_eq!(out, check);
+        }
+        rows.push(("ast_env_arena", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // bump_arena — bumpalo 全 arena：项/值/环境全 bump 分配，引用式结构
+    if want("bump_arena") {
+        let got = {
+            let bump = Bump::new();
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::normalize_imported(&bump, tm)
+        };
+        assert_eq!(got, check, "bump_arena 结果不正确");
+        {
+            let bump = Bump::new();
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::new();
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let got = bump_arena::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(got, check);
+        }
+        rows.push(("bump_arena", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
     print_table(n, &rows);
