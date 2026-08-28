@@ -24,14 +24,14 @@ pub(crate) enum Bt<'a> {
 }
 
 /// bump 内分配的环境节点（持久链表）。
-struct Env<'a> {
-    val: Bv<'a>,
-    next: Option<&'a Env<'a>>,
+pub(crate) struct Env<'a> {
+    pub(crate) val: Bv<'a>,
+    pub(crate) next: Option<&'a Env<'a>>,
 }
 
 /// bump 内分配的值。
 #[derive(Clone)]
-enum Bv<'a> {
+pub(crate) enum Bv<'a> {
     Lvl(usize),
     Clo(Option<&'a Env<'a>>, &'a Bt<'a>),
     App(&'a Bv<'a>, &'a Bv<'a>),
@@ -46,7 +46,43 @@ pub(crate) fn import<'a>(bump: &'a Bump, t: &Term) -> &'a Bt<'a> {
     }
 }
 
-fn nth<'a>(env: Option<&'a Env<'a>>, idx: usize) -> &'a Bv<'a> {
+/// 迭代版 import：任务栈 + 已完成节点栈（与 `quote_bump_iter` 镜像）。
+/// 递归版在树深百万级（大 n 的 cek_bump 场景）会爆栈，这里只走自己的栈。
+pub(crate) fn import_iter<'a>(bump: &'a Bump, t: &Term) -> &'a Bt<'a> {
+    enum J<'a> {
+        Do(&'a Term),
+        Lam2,
+        App2,
+    }
+    let mut tasks: Vec<J<'_>> = vec![J::Do(t)];
+    let mut done: Vec<&'a Bt<'a>> = Vec::new();
+    while let Some(j) = tasks.pop() {
+        match j {
+            J::Do(Term::Idx(i)) => done.push(bump.alloc(Bt::Idx(*i))),
+            J::Do(Term::Lam(b)) => {
+                tasks.push(J::Lam2);
+                tasks.push(J::Do(b));
+            },
+            J::Do(Term::App(f, a)) => {
+                tasks.push(J::App2);
+                tasks.push(J::Do(a));
+                tasks.push(J::Do(f));
+            },
+            J::Lam2 => {
+                let b = done.pop().expect("import 栈：Lam 缺体");
+                done.push(bump.alloc(Bt::Lam(b)));
+            },
+            J::App2 => {
+                let a = done.pop().expect("import 栈：App 缺实参");
+                let f = done.pop().expect("import 栈：App 缺函数");
+                done.push(bump.alloc(Bt::App(f, a)));
+            },
+        }
+    }
+    done.pop().expect("import 必须恰有一个根")
+}
+
+pub(crate) fn nth<'a>(env: Option<&'a Env<'a>>, idx: usize) -> &'a Bv<'a> {
     let mut e = env.expect("de Bruijn 越界：闭项不应查空环境");
     for _ in 0..idx {
         e = e.next.expect("de Bruijn 越界：闭项不应查越深");
@@ -122,7 +158,8 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> Term {
 /// （基准把它放在计时外）。
 ///
 /// quote 保持递归：实测迭代版（显式任务栈）反而慢 30%——Vec 栈的边界
-/// 检查与容量管理比机器栈帧贵（与 `cek` 的 kont 栈同一条教训）。
+/// 检查与容量管理比机器栈帧贵（与 `cek` 的 kont 栈同一条教训）。深度
+/// 无上限的场景（`cek_bump`）用下面的 `quote_bump_iter`。
 pub(crate) fn normalize_imported_bump<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
     // eval 只做 O(λ) 步（church_pair 直接出闭包），重活全在 quote 的 Clo 重入
     quote_bump(bump, 0, eval(bump, None, tm))
@@ -142,6 +179,51 @@ fn quote_bump<'a>(bump: &'a Bump, level: usize, value: Bv<'a>) -> &'a Bt<'a> {
             bump.alloc(Bt::App(f, a))
         },
     }
+}
+
+/// 迭代 quote：任务栈 + 已完成节点栈，后续遍历。App spine 两万层深也只走
+/// 自己的栈，不占硬件栈——`bump_tree` 用不上（递归更快），`cek_bump` 的
+/// 深度无上限场景需要它。
+pub(crate) fn quote_bump_iter<'a>(bump: &'a Bump, v0: Bv<'a>) -> &'a Bt<'a> {
+    enum QJob<'a> {
+        Q(Bv<'a>, usize),
+        Lam1,
+        App1,
+        EvalThenQ(&'a Bt<'a>, Option<&'a Env<'a>>, usize),
+    }
+    let mut tasks: Vec<QJob<'a>> = vec![QJob::Q(v0, 0)];
+    let mut done: Vec<&'a Bt<'a>> = Vec::new();
+    while let Some(job) = tasks.pop() {
+        match job {
+            QJob::Q(Bv::Lvl(lvl), level) => {
+                done.push(bump.alloc(Bt::Idx(level - lvl - 1)));
+            },
+            QJob::Q(Bv::Clo(env, body), level) => {
+                let node = bump.alloc(Env { val: Bv::Lvl(level), next: env });
+                tasks.push(QJob::Lam1);
+                tasks.push(QJob::EvalThenQ(body, Some(node), level + 1));
+            },
+            QJob::Q(Bv::App(vf, va), level) => {
+                tasks.push(QJob::App1);
+                tasks.push(QJob::Q(va.clone(), level));
+                tasks.push(QJob::Q(vf.clone(), level));
+            },
+            QJob::Lam1 => {
+                let body = done.pop().expect("quote 栈：Lam 缺体");
+                done.push(bump.alloc(Bt::Lam(body)));
+            },
+            QJob::App1 => {
+                let a = done.pop().expect("quote 栈：App 缺实参");
+                let f = done.pop().expect("quote 栈：App 缺函数");
+                done.push(bump.alloc(Bt::App(f, a)));
+            },
+            QJob::EvalThenQ(body, env, level) => {
+                let v = eval(bump, env, body);
+                tasks.push(QJob::Q(v, level));
+            },
+        }
+    }
+    done.pop().expect("quote 必须恰有一个根")
 }
 
 /// 把 bump 内结果树转回 `Box<Term>`（递归；仅用于断言/消费侧，不计时）。

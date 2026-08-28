@@ -99,7 +99,7 @@ cargo run --release --features mem-profile --bin typort -- stats
 
 | 模块 | 特性 |
 |------|------|
-| `L01_nbe` | 求值（NBE）— 13 个表示变体，独立 `l01bench` 基准 |
+| `L01_nbe` | 求值（NBE）— 14 个表示变体，独立 `l01bench` 基准 |
 | `L02_tyck` | 类型检查基础 |
 | `L03_holes` | 元变量（holes） |
 | `L04_implicit` | 隐式参数推导 |

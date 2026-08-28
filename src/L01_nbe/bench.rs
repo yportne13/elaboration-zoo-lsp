@@ -1,4 +1,4 @@
-//! 13 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
+//! 14 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
 //! 规范化结果必须等于 `church(2n)`。流程：
@@ -20,9 +20,10 @@ use bumpalo::Bump;
 
 use super::persistent_list::ListArena;
 use super::term::{self, Term};
+use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, cek, compiled, naive, rc_term, rc_value, rpn_owned,
+    bump_arena, cek, cek_bump, compiled, naive, rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -53,9 +54,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
     };
 
     if n > RECURSION_SAFE_MAX {
-        if want("cek") {
-            bench_cek_deep(n, rounds);
-        }
+        bench_cek_deep(n, rounds, only);
         return;
     }
 
@@ -312,40 +311,121 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         rows.push(("compiled", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
+    // cek_bump — CEK 迭代 eval + bump 全分配/结果 bump（栈安全方向）
+    if want("cek_bump") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(cek_bump::normalize_imported(&bump, tm))
+        };
+        assert_eq!(got, check, "cek_bump 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            cek_bump::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = cek_bump::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("cek_bump", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
     print_table(n, &rows);
 }
 
-/// n > 8000 的 cek 独占段：构造/比较全部迭代化，展示 CEK 机的栈安全。
-fn bench_cek_deep(n: usize, rounds: usize) {
+/// n > 8000 的迭代变体段：构造/比较全部迭代化，展示深度无上限。
+/// `cek`（Rc 链表 + 字节码）与 `cek_bump`（bump 全分配）在此出赛；
+/// 其余变体递归链在此规模栈溢出。
+fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
+    let want = |name: &'static str| match only {
+        None => true,
+        Some(list) => list.split(',').any(|x| x == name),
+    };
     let check = church_iter(n + n);
-    let got = cek::normalize(church_pair_iter(n));
-    assert!(iter_eq(&got, &check), "cek 大 n 结果不正确");
+    // check 与每轮 input 都是百万层深的 Box 树：派生 drop 会逐层递归爆栈
+    // （term.rs 保持派生析构），这里用 mem::forget 泄漏，由进程退出回收。
+    let mut rows: Vec<(&'static str, Duration, Duration)> = Vec::new();
 
-    cek::normalize(church_pair_iter(n)); // 预热
-    let mut ts = Vec::with_capacity(rounds);
-    for _ in 0..rounds {
-        let input = church_pair_iter(n); // 迭代构造，计时外（与其余变体口径一致）
-        let start = Instant::now();
-        let got = cek::normalize(input);
-        ts.push(start.elapsed());
+    if want("cek") {
+        let got = cek::normalize(church_pair_iter(n));
         assert!(iter_eq(&got, &check), "cek 大 n 结果不正确");
+        std::mem::forget(got); // 结果也是百万层 Box 树，泄漏（见函数头注释）
+
+        let _warm = cek::normalize(church_pair_iter(n)); // 预热
+        std::mem::forget(_warm);
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = church_pair_iter(n); // 迭代构造，计时外（与其余变体口径一致）
+            let start = Instant::now();
+            let got = cek::normalize(input);
+            ts.push(start.elapsed());
+            assert!(iter_eq(&got, &check), "cek 大 n 结果不正确");
+            std::mem::forget(got); // 循环内结果统一泄漏
+        }
+        rows.push(("cek", *ts.iter().min().unwrap(), median(&mut ts)));
     }
-    let min = *ts.iter().min().unwrap();
-    let med = median(&mut ts);
-    println!("== church_pair({n}) — 大 n：仅 cek（其余变体递归链在此规模栈溢出）==");
+
+    if want("cek_bump") {
+        {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 28);
+            let tm = bump_arena::import_iter(&bump, &input);
+            let res = cek_bump::normalize_imported(&bump, tm); // 临时改为 eval_only 排查
+            assert!(iter_eq_bump(res, &check), "cek_bump 大 n 结果不正确");
+            std::mem::forget(input); // 百万层树泄漏，见上方注释
+        }
+        {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 28);
+            let tm = bump_arena::import_iter(&bump, &input);
+            cek_bump::normalize_imported(&bump, tm);
+            std::mem::forget(input);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 28);
+            let tm = bump_arena::import_iter(&bump, &input); // import 在计时外
+            let start = Instant::now();
+            let res = cek_bump::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert!(iter_eq_bump(res, &check), "cek_bump 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        rows.push(("cek_bump", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    if rows.is_empty() {
+        println!("（此规模没有选中的变体）
+");
+        return;
+    }
+    std::mem::forget(check); // 泄漏 check 树（见函数头注释）
+
+    println!("== church_pair({n}) — 大 n：仅迭代变体（其余变体递归链在此规模栈溢出）==");
     println!("  {:<18} {:>10} {:>10}", "variant", "min_ms", "med_ms");
-    println!(
-        "  {:<18} {:>10.3} {:>10.3} *",
-        "cek",
-        min.as_secs_f64() * 1000.0,
-        med.as_secs_f64() * 1000.0,
-    );
+    let best = rows.iter().map(|r| r.1).min().unwrap();
+    for (name, min, med) in &rows {
+        let mark = if *min == best { " *" } else { "" };
+        println!(
+            "  {name:<18} {:>10.3} {:>10.3}{mark}",
+            min.as_secs_f64() * 1000.0,
+            med.as_secs_f64() * 1000.0,
+        );
+    }
     println!();
 }
 
 fn print_table(n: usize, rows: &[(&'static str, Duration, Duration)]) {
     if rows.is_empty() {
-        println!("（此规模没有选中的变体）\n");
+        println!("（此规模没有选中的变体）
+");
         return;
     }
     println!("== church_pair({n}) ==");
@@ -392,6 +472,23 @@ fn church_pair_iter(n: usize) -> Term {
     let body = Term::App(Box::new(Term::App(Box::new(Term::Idx(3)), Box::new(Term::Idx(1)))), Box::new(b_f_x));
     let add = lam(lam(lam(lam(body))));
     Term::App(Box::new(Term::App(Box::new(add), Box::new(a))), Box::new(b))
+}
+
+/// 迭代比较 bump 结果树与 `Box<Term>`（`export` 是递归的，大 n 会爆栈）。
+fn iter_eq_bump(a: &Bt, b: &Term) -> bool {
+    let mut stack = vec![(a, b)];
+    while let Some((x, y)) = stack.pop() {
+        match (x, y) {
+            (Bt::Idx(i), Term::Idx(j)) if i == j => {},
+            (Bt::Lam(x), Term::Lam(y)) => stack.push((x, y)),
+            (Bt::App(f1, a1), Term::App(f2, a2)) => {
+                stack.push((f1, f2));
+                stack.push((a1, a2));
+            },
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// 迭代树比较（递归 `==` 在此规模爆栈）。

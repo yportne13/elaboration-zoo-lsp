@@ -46,5 +46,12 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    L01_nbe::bench::run(cli.max_church, cli.rounds, cli.only.as_deref());
+    // 大栈线程：深度无上限演示（cek/cek_bump 到 51 万+）需要线性增长的
+    // 栈（未定位的消耗点，不在 quote 主循环——栈指针采样恒定）。
+    std::thread::Builder::new()
+        .stack_size(128 << 20)
+        .spawn(move || L01_nbe::bench::run(cli.max_church, cli.rounds, cli.only.as_deref()))
+        .unwrap()
+        .join()
+        .unwrap();
 }
