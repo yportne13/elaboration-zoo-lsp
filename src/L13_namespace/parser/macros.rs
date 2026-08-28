@@ -142,18 +142,54 @@ impl MacroMatcher {
                 MacroMatcher::Many0(m) => {
                     // Skip leading EndLine tokens (e.g., newline after {)
                     let (input, _) = kw(TokenKind::EndLine).many0().parse(input, state)?;
-                    m.to_parser()
-                        .many0_sep(kw(TokenKind::EndLine).option())
-                        .map(|x| x.concat())
-                        .parse(input, state)
+                    // Zero-consumption guard: a repetition unit that matches
+                    // without consuming tokens (e.g. an all-optional binder
+                    // on unexpected input) would loop forever in many0_sep.
+                    let mut rest = input;
+                    let mut acc = vec![];
+                    loop {
+                        match m.to_parser().parse(rest, state) {
+                            Ok((i, t)) if i.len() < rest.len() => {
+                                acc.extend(t);
+                                if let Ok((i2, _)) = kw(TokenKind::EndLine).option().parse(i, state) {
+                                    rest = i2;
+                                } else {
+                                    break;
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                    Ok((rest, acc))
                 },
                 MacroMatcher::Many1(m) => {
                     // Skip leading EndLine tokens
                     let (input, _) = kw(TokenKind::EndLine).many0().parse(input, state)?;
-                    m.to_parser()
-                        .many1_sep(kw(TokenKind::EndLine).option())
-                        .map(|x| x.concat())
-                        .parse(input, state)
+                    let first = m.to_parser().parse(input, state);
+                    match first {
+                        Err(e) => Err(e),
+                        Ok((i, t)) if i.len() == input.len() => Err(IError {
+                            // zero-consumption first unit cannot satisfy many1
+                            msg: input.first().map(|x| x.map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::Ident)))).unwrap_or_else(|| empty_span(ErrMsg::Base(BaseMsg::Expect(TokenKind::Ident)))),
+                        }),
+                        Ok((i, mut t)) => {
+                            let mut rest = i;
+                            loop {
+                                match m.to_parser().parse(rest, state) {
+                                    Ok((i2, t2)) if i2.len() < rest.len() => {
+                                        t.extend(t2);
+                                        if let Ok((i3, _)) = kw(TokenKind::EndLine).option().parse(i2, state) {
+                                            rest = i3;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            Ok((rest, t))
+                        }
+                    }
                 },
                 MacroMatcher::Optional(m) => {
                     // Skip leading EndLine tokens, like Many0/Many1

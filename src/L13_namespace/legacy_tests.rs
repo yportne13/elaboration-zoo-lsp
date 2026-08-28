@@ -1667,6 +1667,16 @@ fn test_examples_hdl_dir() {
             "assign outValid = (cnt == 2)",
             "reg [1:0] cnt;",
         ]),
+        ("23-verilog-compat.typort", include_str!("../../examples/hdl/23-verilog-compat.typort"), &[
+            "module vAdd8",                     // Verilog 写法 module 臂
+            "assign s = (a + b);",              // vAdd8 与 tAdd8 逐字节一致
+            "output reg [7:0] q",               // vCounter output reg
+            "always @(posedge clk) begin",      // always 块（rst_n 折叠进时钟域）
+            "q <= 0;",                          // 条件寄存器赋值
+            "wire [7:0] w;",                    // vTop wire 声明
+            "assign b = (w & 15);",             // sized 字面量 8'h0F → 15
+            "vSub u1 (.x(a), .y(w));",          // 实例化方向自动判定
+        ]),
     ];
 
     for (file, input, asserts) in examples {

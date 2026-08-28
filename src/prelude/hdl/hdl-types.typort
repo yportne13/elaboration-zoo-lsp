@@ -72,11 +72,7 @@ impl Data for Bool {
     // 隐式参数名：`_{trait_lowercased}_{TypeName}`（此处 Into → _into_T）。
     def :=[T](that: T): Unit where T: Into[Bool] =
         let converted: Bool = _into_T.into that;
-        let ass = isRegExpr(this.zz_expr);
-        let assignment = match ass {
-            case true => regAssign(this.zz_expr, converted.zz_expr)
-            case false => assign(this.zz_expr, converted.zz_expr)
-        };
+        let assignment = pickAssign(this.zz_expr, converted.zz_expr);
         let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
@@ -104,11 +100,7 @@ impl[width: Nat] Into[Bits[width]] for Bits[width] {
 impl[width: Nat] Data for Bits[width] {
     def :=[T](that: T): Unit where T: Into[Bits[width]] =
         let converted = _into_T.into that;
-        let isReg = isRegExpr(this.zz_expr);
-        let assignment = match isReg {
-            case true => regAssign(this.zz_expr, converted.zz_expr)
-            case false => assign(this.zz_expr, converted.zz_expr)
-        };
+        let assignment = pickAssign(this.zz_expr, converted.zz_expr);
         let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
@@ -141,11 +133,7 @@ impl[width: Nat] Into[UInt[width]] for UInt[width] {
 impl[width: Nat] Data for UInt[width] {
     def :=[T](that: T): Unit where T: Into[UInt[width]] =
         let converted = _into_T.into that;
-        let isReg = isRegExpr(this.zz_expr);
-        let assignment = match isReg {
-            case true => regAssign(this.zz_expr, converted.zz_expr)
-            case false => assign(this.zz_expr, converted.zz_expr)
-        };
+        let assignment = pickAssign(this.zz_expr, converted.zz_expr);
         let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr
@@ -169,11 +157,7 @@ impl[width: Nat] Into[SInt[width]] for Nat {
 impl[width: Nat] Data for SInt[width] {
     def :=[T](that: T): Unit where T: Into[SInt[width]] =
         let converted = _into_T.into that;
-        let isReg = isRegExpr(this.zz_expr);
-        let assignment = match isReg {
-            case true => regAssign(this.zz_expr, converted.zz_expr)
-            case false => assign(this.zz_expr, converted.zz_expr)
-        };
+        let assignment = pickAssign(this.zz_expr, converted.zz_expr);
         let dummy_expr = createSignalExpr("", assignment);
         unit
     def expr: Expr = this.zz_expr

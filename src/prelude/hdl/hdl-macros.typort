@@ -322,6 +322,69 @@ macro_rules Expr {
 
 #[macro_export]
 macro_rules module {
+	// ---- Verilog-compat arm (M1): ANSI header + endmodule -------------
+	// `module top(input clk, input rst_n, input [7:0] a, output reg [7:0] q,
+	//             output [7:0] s, input en); <Verilog statements> endmodule`
+	// Tried FIRST: it requires a literal `(` right after the module name, so
+	// typort-shaped modules (`[` / port keyword / `{` next) fail it in one
+	// token comparison and fall through to the arms below, and vice versa.
+	// Body statements dispatch through the VExpr table (hdl-verilog-compat).
+	// Port grouping is positional (the transcriber cannot branch on an
+	// optional marker, so differently-transcribed shapes are separate
+	// contiguous runs, mirroring the typort arms): folded clock ports first
+	// (clk / reset / rst_n — folded into the ClockDomain, rst_n => ActiveLow,
+	// no separate port), then plain `[w]` ports, then `output reg [w]`,
+	// then scalar ports (Bool). This matches the dominant Verilog
+	// convention (typed inputs, then output regs, then scalars); Width is
+	// msb-lsb+1.
+	($name: ident ( $( input clk $(,)? )* $( input reset $(,)? )* $( input rst_n $(,)? )* $( $dir: ident [ $hi: raw : $lo: raw ] $p: ident $(,)? )* $( output reg [ $rhi: raw : $rlo: raw ] $rp: ident $(,)? )* $( output reg $rb: ident $(,)? )* $( $db: ident $pb: ident $(,)? )* ) ; $( $body: VExpr )* endmodule) => {
+		class $name impl Module {
+			let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
+			let _ = create_global("WhenStack", whenStackEmpty)
+			let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
+			let _ = create_global("CombCtx", CombCtx.mk(zero))
+			let _ = create_global("CompatCD", CompatCD.mk("", "", true))
+			$( let _ = compatSetClk("clk"); )*
+			$( let _ = compatSetRst("reset", true); )*
+			$( let _ = compatSetRst("rst_n", false); )*
+			let __vcd: ClockDomain = compatCD(stringify $name)
+			let _prev: ModuleTree = get_global("ModuleTree")
+			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, __vcd, 0, nil) :: nil))
+			$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(Some(stringify $p), createPortExpr(compatDir(stringify $dir), "UInt", 1 + ($hi) - ($lo))); )*
+			$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(Some(stringify $rp), createOutRegPortExpr("UInt", 1 + ($rhi) - ($rlo))); )*
+			$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExpr); )*
+			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(compatDir(stringify $db))); )*
+			$($body)*
+			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
+			let _ = create_global("ModuleTree", _prev)
+			let _ = mkInstanceIfParent(bn.name, stringify $name)
+			$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(None, subSignal(bn.name, stringify $p)); )*
+			$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(None, subSignal(bn.name, stringify $rp)); )*
+			$( let $rb: Bool = Bool.mk(None, subSignal(bn.name, stringify $rb)); )*
+			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
+			// tree recomputes the chain on every access (minus instance recording).
+			def tree: ModuleTree =
+				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
+				let _ = create_global("WhenStack", whenStackEmpty);
+				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
+				let _ = create_global("CombCtx", CombCtx.mk(zero));
+				let _ = create_global("CompatCD", CompatCD.mk("", "", true));
+				$( let _ = compatSetClk("clk"); )*
+				$( let _ = compatSetRst("reset", true); )*
+				$( let _ = compatSetRst("rst_n", false); )*
+				let __vcd: ClockDomain = compatCD(stringify $name);
+				let _prev = get_global("ModuleTree");
+				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, __vcd, 0, nil) :: nil));
+				$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(Some(stringify $p), createPortExpr(compatDir(stringify $dir), "UInt", 1 + ($hi) - ($lo))); )*
+				$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(Some(stringify $rp), createOutRegPortExpr("UInt", 1 + ($rhi) - ($rlo))); )*
+				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExpr); )*
+				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(compatDir(stringify $db))); )*
+				$($body)*
+				let _res = get_global("ModuleTree");
+				let _ = create_global("ModuleTree", _prev);
+				_res
+		}
+	};
 	// With explicit clock domain: module foo[myCd] ... { ... }
 	// The cd parameter is implicitly a ClockDomain; it is baked into the
 	// ModuleDef at record time so the Verilog generator can emit the

@@ -743,8 +743,48 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
 	                            Raw::Hole(op.end_span())
 	                        }
 	                    };
-		                    let mux_span = lhs.to_span().map(|_| SmolStr::new("mux"));
-		                    Raw::app(Raw::app(Raw::Obj(Box::new(lhs), Some(mux_span)), mhs), rhs)
+	                    let mux_span = lhs.to_span().map(|_| SmolStr::new("mux"));
+	                    Raw::app(Raw::app(Raw::Obj(Box::new(lhs), Some(mux_span)), mhs), rhs)
+	                } else if &op.data == "'" {
+	                    // Verilog sized literal: `8'h2A` lexes as Num("8") Op("'")
+	                    // Ident("h2A"). Peek the Ident BEFORE parsing a rhs with
+	                    // expr_bp — `'` binds loosely (7,8), so a full rhs parse
+	                    // would swallow trailing operators (`8'h2A + x`). No
+	                    // method named `'` can exist, so the reuse is unambiguous.
+	                    if let (Raw::Nat(w), Some(tk)) = (&lhs, input.first()) {
+	                        if tk.data.1 == TokenKind::Ident {
+	                            if let Some(v) = sized_lit_value(&tk.data.0) {
+	                                if w.data < 64 && v >= (1u64 << w.data) {
+	                                    state.0.push(IError {
+	                                        msg: tk.map(|_| ErrMsg::Custom(format!(
+	                                            "sized literal {}'{} does not fit in {} bits", w.data, tk.data.0, w.data))),
+	                                    });
+	                                    lhs = Raw::Hole((w.to_span() + tk.to_span()));
+	                                } else {
+	                                    let span = (w.to_span() + tk.to_span())
+	                                        .map(|_| SmolStr::new("sizedLit"));
+	                                    let call = Raw::Var(span.clone());
+	                                    let call = Raw::app(call, Raw::Nat(w.clone()));
+	                                    let call = Raw::app(call, Raw::Nat(tk.map(|_| v)));
+	                                    lhs = call;
+	                                }
+	                                input = input.get(1..).unwrap();
+	                                continue;
+	                            }
+	                        }
+	                    }
+	                    // Not a sized-literal shape — keep the generic method call.
+	                    let rhs = match expr_bp(r_bp).parse(input, state) {
+	                        Ok((input_t, rhs)) => {
+	                            input = input_t;
+	                            rhs
+	                        },
+	                        Err(e) => {
+	                            state.0.push(IError { msg: e.msg.with_span(op.end_span()) });
+	                            Raw::Hole(op.end_span())
+	                        }
+                    };
+	                    Raw::app(Raw::Obj(Box::new(lhs), Some(op)), rhs)
 	                } else if &op.data == "." {
 	                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
 	                        Ok((input_t, name)) => {
@@ -784,6 +824,20 @@ fn expr<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResu
     expr_bp(0).parse(input, state)
 }
 
+/// Verilog sized-literal tail: the Ident following `'` in `8'h2A` — the first
+/// char is the base (h/d/b/o), the rest the digits. Returns the value.
+fn sized_lit_value(s: &str) -> Option<u64> {
+    let mut chars = s.chars();
+    let radix = match chars.next()? {
+        'h' | 'H' => 16,
+        'd' | 'D' => 10,
+        'b' | 'B' => 2,
+        'o' | 'O' => 8,
+        _ => return None,
+    };
+    u64::from_str_radix(chars.as_str(), radix).ok()
+}
+
 fn prefix_binding_power(op: &Span<SmolStr>) -> Option<u8> {
     match &op.data {
         s if (s == "!") | (s == "~") | (s == "-") => Some(30),
@@ -806,6 +860,10 @@ fn infix_binding_power(op: &Span<SmolStr>) -> Option<(u8, u8)> {
     let res = match &op.data {
         s if s == "=" => (2, 1),
         s if s == "?" => (4, 3),
+        // Verilog sized literal (`8'h2A`): binds tighter than arithmetic so
+        // the Num stays a bare LHS for the desugar in ANY operand position
+        // (`d + 8'h01` — see the `'` arm in expr_bp).
+        s if s == "'" => (19, 20),
         s if (s == "+") | (s == "-") => (15, 16),
         s if (s == "*") | (s == "/") | (s == "%") => (17, 18),
         s if s == "." => (25, 26),
@@ -1840,6 +1898,66 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 
 
 // 在 mod.rs 中添加这些函数
+/// Token index where the paren depth first returns to zero, counting from the
+/// start of `input`. For `input[0] == '('` this is the matching `)`. The
+/// macro-definition parser needs this to find where a matcher pattern (or a
+/// `$(...)* ` group body) ends when the pattern itself contains literal
+/// `(` `)` tokens — the Verilog-compat arms (`always @ ( posedge $clk )`,
+/// `module top ( input a )`) are the first users.
+fn paren_close_index(input: &[TokenNode]) -> Option<usize> {
+    let mut depth = 0usize;
+    for (i, t) in input.iter().enumerate() {
+        match t.data.1 {
+            TokenKind::LParen => depth += 1,
+            TokenKind::RParen => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn err_expect(input: &[TokenNode], kind: TokenKind) -> IError {
+    IError {
+        msg: input
+            .first()
+            .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::Expect(kind))))
+            .unwrap_or_else(|| empty_span(ErrMsg::Base(BaseMsg::Expect(kind)))),
+    }
+}
+
+/// `$( matcher-sequence ) op` — balanced-paren aware: the sequence ends at
+/// the RParen matching the group's LParen, so the sequence may itself contain
+/// literal `(` `)` tokens.
+fn p_macro_group_matcher<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, MacroMatcher> {
+    (kw_is(Op, "$"), kw(LParen)).parse(input, state)?;
+    let close = paren_close_index(input).ok_or_else(|| err_expect(input, TokenKind::RParen))?;
+    // input[0] is `$`, input[1] is the group's `(` — content starts at 2.
+    let inner = &input[2..close];
+    // Trim surrounding EndLine tokens (a pattern may wrap lines).
+    let start = inner.iter().position(|t| t.data.1 != TokenKind::EndLine).unwrap_or(inner.len());
+    let end = inner[start..].iter().rposition(|t| t.data.1 != TokenKind::EndLine).map(|p| start + p + 1).unwrap_or(start);
+    let (rest, matchers) = p_macro_matcher_sequence.parse(&inner[start..end], state)?;
+    if !rest.is_empty() {
+        return Err(err_expect(rest, TokenKind::RParen));
+    }
+    let (after, (_, s)) = (kw(RParen), string_is(Op, "*").or(string_is(Op, "+")).or(string_is(Op, "?")))
+        .parse(&input[close..], state)?;
+    let seq: Box<MacroMatcher> = MacroMatcher::Sequence(matchers).into();
+    let m = if s.data == "*" {
+        MacroMatcher::Many0(seq)
+    } else if s.data == "+" {
+        MacroMatcher::Many1(seq)
+    } else {
+        MacroMatcher::Optional(seq)
+    };
+    Ok((after, m))
+}
+
 fn parse_fragment_kind<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
     state: &mut MacroState
@@ -1880,28 +1998,9 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         MacroMatcher::Metavar { name, fragment }
     });
     
-    // 尝试解析分组 (...) [...] {...}
-    /*let group_parser = paren(p_macro_matcher_sequence.map(MacroMatcher::Sequence))
-        .map(|m| MacroMatcher::Group(Delimiter::Parenthesis, vec![m]))
-        .or(square(p_macro_matcher_sequence.map(MacroMatcher::Sequence))
-            .map(|m| MacroMatcher::Group(Delimiter::Bracket, vec![m])))
-        .or(brace(p_macro_matcher_sequence.map(|opt| {
-            MacroMatcher::Group(Delimiter::Brace, opt.map(|m| vec![m]).unwrap_or_default())
-        })));*/
-    let group_parser = (
-        kw_is(Op, "$"),
-        kw(LParen),
-        p_macro_matcher_sequence,
-        kw(RParen),
-        string_is(Op, "*").or(string_is(Op, "+")).or(string_is(Op, "?")),
-    ).map(|(_, _, m, _, s)| if &s.data == "*" {
-        MacroMatcher::Many0(MacroMatcher::Sequence(m).into())
-    } else if &s.data == "+" {
-        MacroMatcher::Many1(MacroMatcher::Sequence(m).into())
-    } else {
-        MacroMatcher::Optional(MacroMatcher::Sequence(m).into())
-    });
-    
+    // 尝试解析分组 $(...)* / $(...)+ / $(...)? — balanced-paren aware
+    // (p_macro_group_matcher)，序列内可含字面 ( ) token。
+
     // 尝试解析普通 token
     let token_parser = string(Ident)
         .map(|span| {
@@ -1937,10 +2036,21 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         .or(string(Dot).map(|span| MacroMatcher::Token(Dot, span)))
         .or(string(ByKeyword).map(|span| MacroMatcher::Token(ByKeyword, span)))
         .or(string(Hole).map(|span| MacroMatcher::Token(Hole, span)))
-        .or(string(Colon).map(|span| MacroMatcher::Token(Colon, span)));
+        .or(string(Colon).map(|span| MacroMatcher::Token(Colon, span)))
+        // Verilog-compat layer: patterns for `module (...)`, `always @(...)`,
+        // `q <= d ;`, `.a(x), .b(y)` need these as literal tokens. The
+        // matcher itself (MacroMatcher::Token) has always been generic over
+        // (kind, text); only the pattern-side parser was limited. Additive —
+        // existing macro patterns never contain these tokens.
+        .or(string(LParen).map(|span| MacroMatcher::Token(LParen, span)))
+        .or(string(RParen).map(|span| MacroMatcher::Token(RParen, span)))
+        .or(string(Semi).map(|span| MacroMatcher::Token(Semi, span)))
+        .or(string(Comma).map(|span| MacroMatcher::Token(Comma, span)))
+        .or(string(CaseKeyword).map(|span| MacroMatcher::Token(CaseKeyword, span)))
+        .or(string(MatchKeyword).map(|span| MacroMatcher::Token(MatchKeyword, span)));
     
     metavar_parser
-        .or(group_parser)
+        .or(p_macro_group_matcher)
         .or(token_parser)
         .parse(input, state)
 }
@@ -1992,6 +2102,23 @@ fn p_macro_matcher<'a: 'b, 'b>(
         }
     })
     .parse(input, state)
+}
+
+/// `( matcher-sequence )` for one macro arm — balanced-paren aware so the
+/// sequence may contain literal `(` `)` tokens (Verilog-compat patterns).
+fn p_macro_matcher_paren<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, MacroMatcher> {
+    kw(LParen).parse(input, state)?;
+    let close = paren_close_index(input).ok_or_else(|| err_expect(input, TokenKind::RParen))?;
+    let inner = &input[1..close];
+    // Trim surrounding EndLine tokens (the old `paren` wrapper allowed one
+    // optional EndLine on each side; trimming all is a superset).
+    let start = inner.iter().position(|t| t.data.1 != TokenKind::EndLine).unwrap_or(inner.len());
+    let end = inner[start..].iter().rposition(|t| t.data.1 != TokenKind::EndLine).map(|p| start + p + 1).unwrap_or(start);
+    let (rest, m) = p_macro_matcher.parse(&inner[start..end], state)?;
+    if !rest.is_empty() {
+        return Err(err_expect(rest, TokenKind::RParen));
+    }
+    Ok((&input[close + 1..], m))
 }
 
 fn p_macro_transcriber_single<'a: 'b, 'b>(
@@ -2217,7 +2344,7 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
         brace(
             // 解析多条规则: (matcher => transcriber);
             Cut((
-                paren(p_macro_matcher),  // 匹配器在 (...) 中
+                p_macro_matcher_paren,  // 匹配器在平衡括号 (...) 中
                 kw(T![=>]),
                 p_macro_transcriber_single,  // 转写器在 (...) 中
             )).map(|(matcher, _, transcriber)| MacroRule {
