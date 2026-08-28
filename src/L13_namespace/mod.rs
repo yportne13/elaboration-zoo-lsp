@@ -133,8 +133,9 @@ fn prim_is_pure(name: &str) -> bool {
 }
 
 thread_local! {
-    static FORCE_MEMO: std::cell::RefCell<rustc_hash::FxHashMap<usize, (Rc<Val>, Rc<Val>, u64)>> =
+    static FORCE_MEMO: std::cell::RefCell<rustc_hash::FxHashMap<usize, (Rc<Val>, Rc<Val>, u64, u64)>> =
         std::cell::RefCell::new(rustc_hash::FxHashMap::default());
+    static FORCE_MEMO_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -147,8 +148,16 @@ const FORCE_MEMO_CAP: usize = 1 << 20;
 /// Start a fresh memo epoch (per user file change / prelude load).  Not
 /// required for correctness — purely bounds the memory pinned by
 /// keepalives of values that are no longer otherwise reachable.
+///
+/// Clearing DROPS the pinned `Rc<Val>` inputs, so a later allocation CAN
+/// reuse one of those addresses — and the memo is keyed by address alone
+/// (`Rc::as_ptr`).  An epoch guards lookups: entries from a previous epoch
+/// are ignored even on an address collision (stale forced value otherwise
+/// leaks into unrelated elaboration — e.g. a later test reusing the freed
+/// address of an old forced term).
 pub fn force_memo_clear() {
     FORCE_MEMO.with(|m| m.borrow_mut().clear());
+    FORCE_MEMO_EPOCH.with(|e| e.set(e.get() + 1));
 }
 
 #[inline]
@@ -2255,8 +2264,11 @@ impl Infer {
         }
         let key = Rc::as_ptr(t) as usize;
         let ver = PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed);
+        let epoch = FORCE_MEMO_EPOCH.with(|e| e.get());
         if let Some(r) = FORCE_MEMO.with(|m| {
-            m.borrow().get(&key).filter(|(_, _, v)| *v == ver).map(|(_, r, _)| r.clone())
+            m.borrow().get(&key)
+                .filter(|(_, _, v, e)| *v == ver && *e == epoch)
+                .map(|(_, r, _, _)| r.clone())
         }) {
             return r;
         }
@@ -2270,7 +2282,7 @@ impl Infer {
                 if m.len() >= FORCE_MEMO_CAP {
                     m.clear();
                 }
-                m.insert(key, (t.clone(), r.clone(), ver));
+                m.insert(key, (t.clone(), r.clone(), ver, epoch));
             });
         }
         r
@@ -3502,6 +3514,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             include_str!("../prelude/hdl/hdl-misc-io.typort"),
             include_str!("../prelude/hdl/hdl-misc.typort"),
             include_str!("../prelude/hdl/hdl-macros.typort"),
+            include_str!("../prelude/hdl/hdl-verilog-compat.typort"),
             include_str!("../prelude/hdl/hdl-verilog.typort"),
         ]);
     }
@@ -3554,6 +3567,10 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
         }
     }
+    // Verilog-compat vconnT builtin: its signature needs the prelude's
+    // ModuleTree/Expr types, so it registers only after they exist.
+    cxt::Cxt::register_vconn_builtin(&mut cxt, &infer);
+
     // Auto-import prelude: create short aliases for enum cases (e.g., Nat.zero → zero).
     // Namespace-registered instance methods (`TypeHead.method`, e.g. `Bool.mux`)
     // are excluded — methods are only reachable through `x.method` dispatch,
@@ -3676,10 +3693,39 @@ pub fn clone_prelude_state(
     } else {
         cloned_state(&PRELUDE_CACHE_NO_HDL, include_hdl)?
     };
+    // Fresh force-memo epoch per run: the memo is keyed by `Rc::as_ptr`
+    // and holds strong refs, so entries from a previous run only die when
+    // the previous run's Infer drops — after which their addresses CAN be
+    // reused by this run's fresh allocations.  Without a per-run clear, a
+    // lookup can then hit a stale entry from the previous run (same epoch,
+    // same address, different value) and return the WRONG forced result —
+    // order-dependent elaboration bugs like `f.zz_expr` staying stuck.
+    force_memo_clear();
     // Clone the cached elaborator state.  The mutable global map is
     // deep-copied so writes from one user never leak into another.
-    let mutable = infer.mutable_map.read().unwrap().clone();
+    let mut mutable = infer.mutable_map.read().unwrap().clone();
+    // Session-scoped globals are RESET per run: the cached copies were
+    // written by declaration-time check evaluation during the prelude load
+    // (e.g. the WhenStack accumulates leaked pushes when checked `when`
+    // bodies evaluate their let chains), and their VALUES are shared Rc
+    // nodes whose internal meta/level references belong to the load's
+    // Infer.  Reusing them in a fresh run forces through the wrong meta
+    // table and produces stuck `Val::Match` results (order-dependent test
+    // failures — a heavy earlier run shifts the address/meta layout).
+    // Each run re-seeds these through the preludes' own
+    // `change_mutable_default` calls, so the empty state is the correct
+    // baseline.
+    for k in ["WhenStack", "ModuleTree", "HdlLoopIdx", "CombCtx", "ModulePortTable"] {
+        mutable.remove(k);
+    }
     infer.mutable_map = Rc::new(std::sync::RwLock::new(mutable));
+    // The replay memo is keyed by DEF NAME ONLY and shared across every
+    // clone of the cached Infer.  Two runs that both define a `def f` (one
+    // pure, one with side effects — e.g. an Int helper vs `s.fire`) collide:
+    // the first run's decision sticks, the second def is not replayed and
+    // its stored WHNF (stuck outside a module tree) leaks into the output.
+    // Per-run reset restores isolation (names may legitimately repeat).
+    infer.def_replay_memo = Rc::new(std::sync::RwLock::new(HashMap::new()));
     Ok((infer, cxt, global_macros))
 }
 
@@ -7370,3 +7416,4 @@ mod symbol_recovery_tests {
         }
     }
 }
+

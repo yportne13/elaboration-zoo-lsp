@@ -648,6 +648,61 @@ def registerModuleTree(t: ModuleTree): Unit =
             unit
     }
 
+// ---------- Verilog-compat: combinational-always context ----------
+// `always @(*)` in a Verilog-compat module wraps its statements in
+// combBegin()/combEnd() (a depth counter in a mutable global, WhenStack
+// style). While the depth is nonzero, `:=` on a REG picks a plain assign
+// instead of a clocked regAssign (pickAssign below) — Verilog's
+// "reg driven combinationally" idiom. Outside a compat module the global
+// never exists and combDepth() reads as zero, so behavior is unchanged.
+// NOTE: a mutable global's name must be an existing TYPE name
+// (string_to_global_type resolves it by name), hence the wrapper structs;
+// and change_mutable_default returns Unit — reads go through get_global
+// after an ensure-exists call.
+// Lives in hdl-core (the first HDL prelude file) because hdl-types' `:=`
+// implementations call pickAssign.
+
+struct CombCtx {
+    depth: Nat
+}
+
+def combDepth(): Nat =
+    let _ = change_mutable_default("CombCtx", x => x, CombCtx.mk(zero));
+    (get_global("CombCtx")).depth
+
+def combBegin(): Unit =
+    let _ = change_mutable("CombCtx", x => CombCtx.mk(succ(x.depth)));
+    unit
+
+def combEnd(): Unit =
+    let _ = change_mutable("CombCtx", x => match x.depth {
+        case zero => CombCtx.mk(zero)
+        case succ(n) => CombCtx.mk(n)
+    });
+    unit
+
+// `:=` dispatch shared by every Data implementation: a reg LHS becomes a
+// clocked regAssign — EXCEPT inside an always @(*) context (Verilog compat),
+// where the reg is driven combinationally and an HDV002 check issue is
+// reported. Non-reg LHS is always a plain assign.
+def pickAssign(lhs: Expr, rhs: Expr): Expr = match isRegExpr(lhs) {
+    case true => match combDepth() {
+        case zero => regAssign(lhs, rhs)
+        case succ(_) =>
+            // Pure read with fallback: declaration-time check evaluates this
+            // arm's lets for their types, and `change_mutable_default` here
+            // would WRITE the design-level ModuleTree global during the
+            // prelude load (L13's match/let check evaluates let values),
+            // corrupting every later module chain's _prev/_res.  The
+            // read-only variant degrades to the empty tree (module name "")
+            // when no module is in progress, exactly like the old comment said.
+            let mname = headModuleDef((get_global_default("ModuleTree", ModuleTree.mk(0, nil))).data).name;
+            let _ = report_check_issue("HDV002", mname, "reg", "reg assigned inside always @(*) - driven combinationally (Verilog-compat)");
+            assign(lhs, rhs)
+    }
+    case false => assign(lhs, rhs)
+}
+
 // ============================================================
 //  Area — SpinalHDL 语义：逻辑分组，不产生额外层次。
 //  模块内用于组织代码（信号声明/赋值），不影响 Verilog 结构。

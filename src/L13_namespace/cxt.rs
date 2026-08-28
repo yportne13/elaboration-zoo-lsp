@@ -444,6 +444,93 @@ fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
+/// Pure read of a mutable global with a fallback default — unlike
+/// `change_mutable_default` it never WRITES the map, so calling it during
+/// declaration-time check evaluation (L13's match/let check evaluates let
+/// values for their types) cannot pollute design-level globals like
+/// `ModuleTree`.  Missing key → `args[1]` (the default), same shape as
+/// `change_mutable_default`'s `z` argument.
+fn get_global_default(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => {
+            let map = infer.mutable_map.read().unwrap();
+            Some(map.get(&a.data).cloned().unwrap_or_else(|| args[1].clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Verilog-compat named-port connection (`child u1 (.a(x), .y(w))`): the
+/// prelude's VExpr instance arm passes the child's OWN `tree` (fresh
+/// values — the design-wide ModuleRegistry can hold stuck Match values
+/// built through registerModuleTree's lambda, so it is not consulted), the
+/// child-port Expr (`subSignal` constructor value) and the connected
+/// signal's Expr. This builtin classifies the port direction by walking the
+/// child tree (per-step force) and emits the assign through the prelude
+/// helper `vconnEmit` (pickAssign-shaped) via v_app. All-typort versions of
+/// this dispatch looped declaration-time elaboration; see
+/// hdl-verilog-compat.typort.
+fn vconn_builtin(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    let noop = || Some(Rc::new(Val::U(0)));
+    if args.len() < 3 { return None; }
+    let child_tree = args[0].clone();
+    let port = args[1].clone();
+    let sig = args[2].clone();
+    // The applied-ctor name of a SumCase value, resolved through its type's
+    // constructor table (index-stable without hardcoding enum order).
+    let ctor_name = |v: &Val| -> Option<String> {
+        match v {
+            Val::SumCase { typ, index, .. } => match typ.as_ref() {
+                Val::Sum(_, _, cases, _) => cases.get(*index as usize).map(|n| n.data.to_string()),
+                _ => None,
+            },
+            _ => None,
+        }
+    };
+    if ctor_name(&port).as_deref() != Some("subSignal") { return noop(); }
+    let pdata = match port.as_ref() { Val::SumCase { datas, .. } => datas, _ => return noop() };
+    let lit_str = |v: &Rc<Val>| -> Option<String> {
+        match v.as_ref() { Val::LiteralIntro(s) => Some(s.data.clone()), _ => None }
+    };
+    let pname = match pdata.get(1).and_then(|d| lit_str(&d.1)) { Some(s) => s, None => return noop() };
+    let force = |v: &Rc<Val>| infer.force(decl, v);
+    let field = |v: &Rc<Val>, name: &str| -> Option<Rc<Val>> {
+        match v.as_ref() {
+            Val::SumCase { datas, .. } => datas.iter().find(|d| d.0.data == name).map(|d| d.1.clone()),
+            _ => None,
+        }
+    };
+    let field_str = |v: &Rc<Val>, name: &str| -> Option<String> {
+        field(v, name).and_then(|x| match x.as_ref() { Val::LiteralIntro(s) => Some(s.data.clone()), _ => None })
+    };
+    // child tree is a ModuleTree STRUCT — take `data`, then the head
+    // ModuleDef's `expr` list, and scan the port declarations for `pname`.
+    let data = match field(&force(&child_tree), "data") { Some(v) => force(&v), None => return noop() };
+    let head_def = match field(&data, "x") { Some(v) => force(&v), None => return noop() };
+    let mut is_input = false;
+    let mut cur = match field(&head_def, "expr") { Some(v) => force(&v), None => return noop() };
+    while let Some("cons") = ctor_name(&cur).as_deref() {
+        let (x, xs) = match (field(&cur, "x"), field(&cur, "xs")) { (Some(x), Some(xs)) => (x, xs), _ => break };
+        let xf = force(&x);
+        let cn = ctor_name(&xf).unwrap_or_default();
+        if matches!(cn.as_str(), "createIn" | "createInWidth" | "createSIntInWidth")
+            && field_str(&xf, "name").as_deref() == Some(pname.as_str()) {
+            is_input = true;
+            break;
+        }
+        cur = force(&xs);
+    }
+    let bool_name = if is_input { "Boolean.true" } else { "Boolean.false" };
+    let b = match decl.get(&SmolStr::new(bool_name)).map(|e| e.2.clone()) { Some(v) => v, None => return noop() };
+    if let Some(emit) = decl.get(&SmolStr::new("vconnEmit")).map(|e| e.2.clone()) {
+        let e = infer.v_app(decl, &emit, b, Icit::Expl);
+        let e = infer.v_app(decl, &e, port, Icit::Expl);
+        let _ = infer.v_app(decl, &e, sig, Icit::Expl);
+    }
+    noop()
+}
+
 fn change_mutable_default(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 3 { return None; }
     match args[0].as_ref() {
@@ -619,6 +706,14 @@ impl Cxt {
             PrimFunc(Rc::new(get_global)),
         ).unwrap();
 
+        cxt = cxt.add_builtin(infer, "get_global_default",
+            tm_pi(&[
+                ("x", tm_decl("String")),
+                ("z", tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(0)).into())),
+            ], tm_app(tm_decl("string_to_global_type"), Tm::Var(Ix(1)).into())),
+            PrimFunc(Rc::new(get_global_default)),
+        ).unwrap();
+
         cxt = cxt.add_builtin(infer, "change_mutable_default",
             tm_pi(&[
                 ("x", tm_decl("String")),
@@ -668,6 +763,23 @@ impl Cxt {
 
     /// Register nat builtins (nat_to_dec + word-size nat arithmetic primops).
     /// Must be called AFTER nat.typort is loaded.
+    /// Verilog-compat named-port connection builtin. Registered AFTER the
+    /// prelude loads (like register_nat_builtins): its signature mentions
+    /// prelude types (ModuleTree / Expr) that do not exist at Cxt::new
+    /// time — an eagerly-registered tm_decl("ModuleTree") stays a dangling
+    /// neutral that loops later unifications.
+    pub(crate) fn register_vconn_builtin(cxt: &mut Cxt, infer: &Infer) {
+        let old = std::mem::replace(cxt, Self::empty());
+        *cxt = old.add_builtin(infer, "vconnT",
+            tm_pi(&[
+                ("childTree", tm_decl("ModuleTree")),
+                ("port", tm_decl("Expr")),
+                ("sig", tm_decl("Expr")),
+            ], Tm::U(0).into()),
+            PrimFunc(Rc::new(vconn_builtin)),
+        ).unwrap();
+    }
+
     pub(crate) fn register_nat_builtins(cxt: &mut Cxt, infer: &Infer) {
         let f_nat_to_dec = PrimFunc(Rc::new(nat_to_dec));
         let old = std::mem::replace(cxt, Self::empty());
