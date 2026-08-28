@@ -17,7 +17,6 @@ pub mod config;
 pub mod tutorial;
 pub mod quick;
 mod lsp_stdio;
-pub mod L01_nbe;
 mod L02_tyck;
 mod L03_holes;
 mod L04_implicit;

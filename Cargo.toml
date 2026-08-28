@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "typort"
 path = "src/bin/cli.rs"
 
+[[bin]]
+name = "l01bench"
+path = "src/bin/l01bench.rs"
+
 
 
 [dependencies]
