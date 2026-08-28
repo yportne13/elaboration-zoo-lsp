@@ -125,7 +125,7 @@ The project is structured as an **elaboration zoo** — each module (`L01_*` …
 
 | Module | Feature |
 |--------|---------|
-| `L01_eval` | Evaluation (NBE) |
+| `L01_nbe` | Evaluation (NBE) — 8 representation variants, benchmarked via `typort bench` |
 | `L02_tyck` | Type checking basics |
 | `L03_holes` | Meta variables (holes) |
 | `L04_implicit` | Implicit argument inference |

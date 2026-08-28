@@ -328,6 +328,23 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
+
+    /// Benchmark the L01 NBE variants (church-numeral addition).
+    ///
+    /// Verifies every variant against church(2n) and reports min/median
+    /// normalize times, doubling the numeral size from 1000. This is a
+    /// representation-tuning microbench; pipeline-level timing lives in
+    /// tools/measure_loop.sh and the probe_timing test.
+    #[command(visible_alias = "bench")]
+    BenchL01 {
+        /// Largest church numeral size n (sizes double from 1000)
+        #[arg(long, default_value_t = 4000)]
+        max_church: usize,
+
+        /// Timed rounds per variant per size
+        #[arg(long, default_value_t = 5)]
+        rounds: usize,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -376,6 +393,10 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             elaboration_zoo_lsp::quick::run(
                 elaboration_zoo_lsp::quick::QuickOptions { topic, list },
             )?;
+        }
+
+        Commands::BenchL01 { max_church, rounds } => {
+            elaboration_zoo_lsp::L01_nbe::bench::run(max_church, rounds);
         }
     }
 
