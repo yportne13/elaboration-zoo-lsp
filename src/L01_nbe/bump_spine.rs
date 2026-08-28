@@ -115,7 +115,7 @@ pub(crate) fn nth<'a>(mut env: Option<&'a EnvCons<'a>>, idx: usize) -> V {
 }
 
 /// eval（与 `bump_arena::eval` 同语义：先函数后实参）。
-fn eval<'a>(
+pub(crate) fn eval<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     env: Option<&'a EnvCons<'a>>,

@@ -1,7 +1,7 @@
-//! L01 — 归一化求值（NBE）：同一算法在 18 种实现下的对比与基准。
+//! L01 — 归一化求值（NBE）：同一算法在 19 种实现下的对比与基准。
 //!
 //! 用纯 lambda 演算（[`Term`]，de Bruijn 索引）演示正常化（eval + quote），
-//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响**。18 个
+//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响**。19 个
 //! 变体沿五条轴展开，全部用同一个工作负载（丘奇数加法 `church_pair(n)`）
 //! 先断言正确（结果 = `church(2n)`）再计时（`l01bench` 独立二进制）：
 //!
@@ -14,7 +14,9 @@
 //!   bump 数组切片（`env_slice`，nth O(1)）
 //! * **求值策略**：递归（调用栈即控制栈）→ CEK 显式 kont 栈（`cek` /
 //!   `cek_bump`）→ 双栈推土机（`bump_iter`）；中性项的表示从逐节点二叉
-//!   单元 → 扁平 spine 栈 + 流式右链 quote（`bump_spine`）
+//!   单元 → 扁平 spine 栈 + 流式右链 quote（`bump_spine` 系）
+//! * **输出编码**：结果树 `&Bt`（`bump_spine`/`bump_spine_iter`）→
+//!   RPN 字节流（`bump_spine_rpn`，实测速度中性、体积 ~2.4× 小）
 //! * **分配器**：系统堆 → mimalloc → 自研下标 arena → bumpalo
 //!
 //! 变体一览（**变体名即文件名**，见 `src/L01_nbe/`；公共设施 `term.rs` /
@@ -40,6 +42,7 @@
 //! | `bump_iter` | bump 引用树 | bump 引用链表 | 双栈迭代 | 速度+深度（迭代基线） |
 //! | `bump_spine` | bump 引用树 | bump 引用链表 + spine 栈 | 递归+流式 quote | 值打包、中性扁平化 |
 //! | `bump_spine_iter` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈+流式 quote | 推荐：速度+深度 |
+//! | `bump_spine_rpn` | bump 引用树 | bump 引用链表 + spine 栈 | 递归+流式写字节 | quote 直出 RPN（输出 ~2.4x 小） |
 //!
 //! 运行基准与选型结论见 [`bench`] 与模块内 `readme.md`。
 
@@ -56,6 +59,7 @@ pub(crate) mod bump_arena;
 pub(crate) mod bump_iter;
 pub(crate) mod bump_spine;
 pub(crate) mod bump_spine_iter;
+pub(crate) mod bump_spine_rpn;
 pub(crate) mod bump_tree;
 pub(crate) mod cek;
 pub(crate) mod cek_bump;
