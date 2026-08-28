@@ -1,7 +1,7 @@
-//! L01 — 归一化求值（NBE）：同一算法在 17 种实现下的对比与基准。
+//! L01 — 归一化求值（NBE）：同一算法在 18 种实现下的对比与基准。
 //!
 //! 用纯 lambda 演算（[`Term`]，de Bruijn 索引）演示正常化（eval + quote），
-//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响**。17 个
+//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响**。18 个
 //! 变体沿五条轴展开，全部用同一个工作负载（丘奇数加法 `church_pair(n)`）
 //! 先断言正确（结果 = `church(2n)`）再计时（`l01bench` 独立二进制）：
 //!
@@ -37,8 +37,9 @@
 //! | `compiled` | 指令数组 `&[Ins]` | bump 引用链表 | 递归解释 | 项编译为指令 |
 //! | `cek` | `Box<Term>` | Rc 链表 | CEK kont 栈 | 最简栈安全 |
 //! | `cek_bump` | bump 引用树 | bump 引用链表 | CEK kont 栈 | 栈安全 + bump |
-//! | `bump_iter` | bump 引用树 | bump 引用链表 | 双栈迭代 | 推荐：速度+深度 |
-//! | `bump_spine` | bump 引用树 | bump 引用链表 + spine 栈 | 递归+流式 quote | 速度之王：值打包、中性扁平化 |
+//! | `bump_iter` | bump 引用树 | bump 引用链表 | 双栈迭代 | 速度+深度（迭代基线） |
+//! | `bump_spine` | bump 引用树 | bump 引用链表 + spine 栈 | 递归+流式 quote | 值打包、中性扁平化 |
+//! | `bump_spine_iter` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈+流式 quote | 推荐：速度+深度 |
 //!
 //! 运行基准与选型结论见 [`bench`] 与模块内 `readme.md`。
 
@@ -54,6 +55,7 @@ pub(crate) mod bytes_flat_value;
 pub(crate) mod bump_arena;
 pub(crate) mod bump_iter;
 pub(crate) mod bump_spine;
+pub(crate) mod bump_spine_iter;
 pub(crate) mod bump_tree;
 pub(crate) mod cek;
 pub(crate) mod cek_bump;

@@ -32,66 +32,66 @@ use super::term::Term;
 
 /// 打包值：tag 在低 2 位（bump 指针 8 字节对齐，低位空闲）。
 #[derive(Clone, Copy)]
-pub(crate) struct V(u64);
+pub(crate) struct V(pub(crate) u64);
 
 #[inline]
-fn v_lvl(level: usize) -> V {
+pub(crate) fn v_lvl(level: usize) -> V {
     V(((level as u64) << 2) | 0)
 }
 #[inline]
-fn v_clo<'a>(p: &'a CloCell<'a>) -> V {
+pub(crate) fn v_clo<'a>(p: &'a CloCell<'a>) -> V {
     V((p as *const _ as u64) | 1)
 }
 #[inline]
-fn v_spine(idx: usize) -> V {
+pub(crate) fn v_spine(idx: usize) -> V {
     V(((idx as u64) << 2) | 2)
 }
 #[inline]
-fn v_tag(v: V) -> u64 {
+pub(crate) fn v_tag(v: V) -> u64 {
     v.0 & 3
 }
 #[inline]
-fn v_lvl_of(v: V) -> usize {
+pub(crate) fn v_lvl_of(v: V) -> usize {
     (v.0 >> 2) as usize
 }
 #[inline]
-fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
     unsafe { &*((v.0 & !3) as *const CloCell) }
 }
 #[inline]
-fn v_spine_of(v: V) -> usize {
+pub(crate) fn v_spine_of(v: V) -> usize {
     (v.0 >> 2) as usize
 }
 
 /// 闭包单元：env + 体。
-struct CloCell<'a> {
-    env: Option<&'a EnvCons<'a>>,
-    body: &'a Bt<'a>,
+pub(crate) struct CloCell<'a> {
+    pub(crate) env: Option<&'a EnvCons<'a>>,
+    pub(crate) body: &'a Bt<'a>,
 }
 
 /// 环境节点（持久链表）。
-struct EnvCons<'a> {
-    val: V,
-    next: Option<&'a EnvCons<'a>>,
+pub(crate) struct EnvCons<'a> {
+    pub(crate) val: V,
+    pub(crate) next: Option<&'a EnvCons<'a>>,
 }
 
 /// spine 栈槽：一次中性应用。`len`/`base` 支撑流式右链 quote。
-struct Entry {
-    f: V,
-    a: V,
-    len: u32,
-    base: u32,
+pub(crate) struct Entry {
+    pub(crate) f: V,
+    pub(crate) a: V,
+    pub(crate) len: u32,
+    pub(crate) base: u32,
 }
 
 /// 求值机持有的扁平中性栈（只增不减，槽位下标即句柄）。
-struct Spine {
-    stack: Vec<Entry>,
+pub(crate) struct Spine {
+    pub(crate) stack: Vec<Entry>,
 }
 
 impl Spine {
     /// 中性应用 `f a` 压栈，返回句柄值。
     #[inline]
-    fn push(&mut self, f: V, a: V) -> V {
+    pub(crate) fn push(&mut self, f: V, a: V) -> V {
         let idx = self.stack.len();
         // a 若是 spine 句柄，则本条目延续它的右链（len+1、base 继承）；
         // 否则自成新链（len=1、base=自己）。
@@ -107,7 +107,7 @@ impl Spine {
 }
 
 #[inline]
-fn nth<'a>(mut env: Option<&'a EnvCons<'a>>, idx: usize) -> V {
+pub(crate) fn nth<'a>(mut env: Option<&'a EnvCons<'a>>, idx: usize) -> V {
     for _ in 0..idx {
         env = env.expect("de Bruijn 越界：闭项不应查空环境").next;
     }

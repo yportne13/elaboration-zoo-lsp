@@ -1,4 +1,4 @@
-//! 17 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
+//! 18 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
 //! 规范化结果必须等于 `church(2n)`。流程：
@@ -10,9 +10,9 @@
 //! 在计时前完成，断言在计时窗口外；arena 变体跨轮次复用 `ListArena`（追加式，
 //! 下标永不过期，见 `persistent_list` 的说明），测的是稳态。
 //!
-//! n > 8000 时只有迭代变体（`cek`/`cek_bump`/`bump_iter`）能跑：其余变体
-//! 的构造/求值/比较全链路都是递归，在此规模直接栈溢出。大 n 段改用迭代
-//! 构造 + 迭代比较（`church_iter`/
+//! n > 8000 时只有迭代变体（`cek`/`cek_bump`/`bump_iter`/`bump_spine_iter`）
+//! 能跑：其余变体的构造/求值/比较全链路都是递归，在此规模直接栈溢出。
+//! 大 n 段改用迭代构造 + 迭代比较（`church_iter`/
 //! `iter_eq`），同样先断言再计时。
 
 use std::time::{Duration, Instant};
@@ -24,8 +24,8 @@ use super::term::{self, Term};
 use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, bump_iter, bump_spine, bump_tree, cek, cek_bump, compiled, env_slice, naive,
-    rc_term, rc_value, rpn_owned,
+    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_tree, cek, cek_bump, compiled,
+    env_slice, naive, rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -388,6 +388,31 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         rows.push(("bump_spine", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
+    // bump_spine_iter — bump_spine 的迭代改造：速度 + 深度兼得
+    if want("bump_spine_iter") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(bump_spine_iter::normalize_imported(&bump, tm))
+        };
+        assert_eq!(got, check, "bump_spine_iter 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_spine_iter::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine_iter::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine_iter", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
     // env_slice — bump_tree 的环境换 bump 数组切片（nth O(1)，prepend 复制）
     if want("env_slice") {
         let got = {
@@ -417,7 +442,8 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
 }
 
 /// n > 8000 的迭代变体段：构造/比较全部迭代化，展示深度无上限。
-/// `cek`（Rc 链表 + 字节码）与 `cek_bump`（bump 全分配）在此出赛；
+/// `cek`（Rc 链表）、`cek_bump`/`bump_iter`（迭代双雄）与
+/// `bump_spine_iter`（spine 系迭代版）在此出赛；
 /// 其余变体递归链在此规模栈溢出。
 fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
     let want = |name: &'static str| match only {
@@ -506,6 +532,36 @@ fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
             std::mem::forget(input);
         }
         rows.push(("bump_iter", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    if want("bump_spine_iter") {
+        {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 26);
+            let tm = bump_arena::import_iter(&bump, &input);
+            let res = bump_spine_iter::normalize_imported(&bump, tm);
+            assert!(iter_eq_bump(res, &check), "bump_spine_iter 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 26);
+            let tm = bump_arena::import_iter(&bump, &input);
+            bump_spine_iter::normalize_imported(&bump, tm);
+            std::mem::forget(input);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 26);
+            let tm = bump_arena::import_iter(&bump, &input); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine_iter::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert!(iter_eq_bump(res, &check), "bump_spine_iter 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        rows.push(("bump_spine_iter", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
     if rows.is_empty() {
