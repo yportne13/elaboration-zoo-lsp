@@ -8,6 +8,7 @@
 //! 用法：
 //! ```text
 //! cargo run --release --bin l01bench [--max-church 8000] [--rounds 5] [--only cek]
+//!                                     [--workload church|dup|all]
 //! ```
 
 use clap::Parser;
@@ -42,6 +43,10 @@ struct Cli {
     /// 只跑指定变体（逗号分隔多值，如 cek 或 bump_arena,bump_tree）
     #[arg(long)]
     only: Option<String>,
+
+    /// 负载族：church（church_pair，默认）| dup（复制强制，开记忆化轴）| all
+    #[arg(long, default_value = "church")]
+    workload: String,
 }
 
 fn main() {
@@ -56,7 +61,9 @@ fn main() {
         .unwrap_or(128);
     std::thread::Builder::new()
         .stack_size(stack_mb << 20)
-        .spawn(move || L01_nbe::bench::run(cli.max_church, cli.rounds, cli.only.as_deref()))
+        .spawn(move || {
+            L01_nbe::bench::run(cli.max_church, cli.rounds, cli.only.as_deref(), &cli.workload)
+        })
         .unwrap()
         .join()
         .unwrap();

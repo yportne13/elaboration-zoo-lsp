@@ -1,9 +1,10 @@
-# L01_nbe — 归一化求值（NBE）：21 种实现的对比与基准
+# L01_nbe — 归一化求值（NBE）：22 种实现的对比与基准
 
-纯 lambda 演算（`Term`，de Bruijn 索引）的正常化（eval + quote），在 21 种
+纯 lambda 演算（`Term`，de Bruijn 索引）的正常化（eval + quote），在 22 种
 表示/策略变体下实现，回答：**项和值的表示方式对求值性能有多大影响？**
-基准工作负载固定（丘奇数加法 `church_pair(n)`），每个变体先断言结果等于
-`church(2n)`，再计时（`l01bench`）。
+基准负载两族（`--workload`）：丘奇数加法 `church_pair(n)`（默认，线性）
+与复制强制 `dup_pair`/`dup_deep`（开记忆化轴），每个变体先断言结果正确
+再计时（`l01bench`）。
 
 ## 变体一览（变体名即文件名，见 `src/L01_nbe/`）
 
@@ -31,6 +32,7 @@
 | `bump_spine` | bump 引用树 | bump 引用链表 + spine 栈 | 递归 + 流式 quote | 值打包 8B、中性扁平化、右链自底向上 |
 | `bump_spine_iter` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote | 速度 + 深度（一次性口径的推荐） |
 | `bump_spine_slim` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote | 条目 16B + quote 期连续性推断（实测否决） |
+| `bump_spine_memo` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote + memo | quote 记忆化：值×level → 共享子树（dup 轴） |
 | `bump_spine_rpn` | bump 引用树 | bump 引用链表 + spine 栈 | 递归 + 流式写字节 | quote 直出 RPN 字节流（输出体积 ~2.4× 小） |
 | `native_clo` | 原生闭包树（bump `&dyn Fn`） | bump 引用链表 + spine 栈 | 原生调用 + 流式 quote | β=间接调用（封轴实验，实测否决） |
 
@@ -46,6 +48,7 @@ cargo build --release --bin l01bench
 ./target/release/l01bench                   # 默认 1000→4000，每变体 5 轮
 ./target/release/l01bench --max-church 8000 --rounds 7
 ./target/release/l01bench --only bump_iter,cek --max-church 512000   # 深度无上限演示
+./target/release/l01bench --workload dup --only bump_spine_iter,bump_spine_memo  # 复制强制轴
 ```
 
 - 规模从 1000 起翻倍到 `--max-church`；`--only` 逗号分隔多值过滤变体。
@@ -71,6 +74,7 @@ n = 4000（min ms / med ms / 相对 bump_spine_iter_ss）：
 |---|---|---|---|
 | `bump_spine_iter_ss` | 0.030 | 0.030 | 1.00× |
 | `bump_spine_iter` | 0.036 | 0.038 | 1.20× |
+| `bump_spine_memo` | 0.039 | 0.039 | 1.30× |
 | `bump_spine_slim_ss` | 0.040 | 0.041 | 1.33× |
 | `bump_spine_slim` | 0.044 | 0.045 | 1.47× |
 | `bump_spine_rpn` | 0.083 | 0.086 | 2.77× |
@@ -100,6 +104,7 @@ n = 8000（min ms / 相对 bump_spine_iter_ss）：
 | `bump_spine_iter_ss` | 0.059 | 1.00× |
 | `bump_spine_iter` | 0.076 | 1.29× |
 | `bump_spine_slim_ss` | 0.077 | 1.31× |
+| `bump_spine_memo` | 0.079 | 1.34× |
 | `bump_spine_slim` | 0.089 | 1.51× |
 | `native_clo` | 0.184 | 3.12× |
 | `bump_spine_rpn` | 0.200 | 3.39× |
@@ -174,6 +179,51 @@ base 求值后 `ChainWrap` 一次收拢，整条链不占 work 栈。表示打�
   省的是每轮 24MB spine 的分配/倍增/缺页）。这是**口径**而非算法
   改进——但 LSP 一类长驻进程本来就该这么用。
 
+## 重复求值轴（`--workload dup`，第十三轮）
+
+`church_pair` 是刻意选的线性负载：每个闭包恰好被 quote 强制一次，
+共享/记忆化无从收益。**为什么 call-by-need 在 NbE 里几乎无处可用**：
+NbE 的 CBV 只急切到 WHNF——`Lam` 求值是 O(1) 闭包创建，经典"丢弃
+参数"浪费（`(λx. y) BIG`）几乎免费；真正的重复在 **readback**：同一个
+闭包/中性值经 λ-binder 复制（`(λx. pair x x) BIG`）后，quote 会对它
+**多次完整强制**（每次都是 body 重走 + 结果树重建）。
+
+负载族（`term.rs` 的 `dup_pair`/`dup_deep`）：
+
+```text
+dup_pair(n) = (λx. pair x x) (add (ch n) (ch n))     正态形 λf. f C C
+             —— C = church(2n) 被强制 2 次
+dup_deep(n) = (λx. pair x x) ((λy. pair y y) (add …))  λf. f (λf. f C C) (λf. f C C)
+             —— C 被强制 4 次
+```
+
+`bump_spine_memo` 用 **quote 记忆化**对付它（readback 侧的 call-by-need
+对偶，Lean 式 whnf 缓存的 quote 版）：memo 键 = 值的打包字 × quote
+level（闭包指针与 spine 句柄全局唯一；spine 只增不改，同一值在同一
+level 的 quote 结果只依赖该键）。实现是任务栈里一个 LIFO 屏障任务
+（`MemoStore`）：`Q(v, level)` 未命中时把屏障压到最深处，栈纪律保证
+v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——入表放回；
+命中则直接复用**共享子树**（结果从树变 DAG，与 ChainRun 的 Idx 共享
+同性质）。
+
+实测（n = 4000 / 8000，min ms）：
+
+| 负载 | `bump_spine_iter` | `bump_spine_memo` | 分离度 |
+|---|---|---|---|
+| church_pair 4000（线性，中性验证） | 0.036 | 0.039 | 哈希税 +8% |
+| church_pair 8000（线性） | 0.073 | 0.079 | 哈希税 +8% |
+| dup_pair 4000（强制 ×2） | 0.072 | 0.040 | **1.8×** |
+| dup_deep 4000（强制 ×4） | 0.145 | 0.040 | **3.6×** |
+| dup_pair 8000（强制 ×2） | 0.146 | 0.079 | **1.8×** |
+| dup_deep 8000（强制 ×4） | 0.289 | 0.079 | **3.7×** |
+
+两个要点：**复制被完全塌缩**——memo 后 `dup_pair` ≈ `dup_deep` ≈ 单次
+强制的成本（0.040/0.079，与 church_pair 同阶），收益随复制层数指数
+增长（2^k，受哈希税恒定）；**线性负载的代价只有 3-8%**（`Q` 的调用
+次数是 O(λ 层)，链节点走 ChainRun 不经过 memo）。何时开：负载里同一
+值被多次 quote（elaborator 的 conversion checking、let-共享展开）就该
+开；纯线性负载付小税。
+
 深度无上限（大 n，min ms，同一轮实测；递归变体在此规模已栈溢出；
 `cek` 列为 128MB 大栈线程跑出——bump 系各列 4MB 栈即可复验，
 `L01_STACK_MB=4`）：
@@ -211,6 +261,10 @@ base 求值后 `ChainWrap` 一次收拢，整条链不占 work 栈。表示打�
 - `native_clo` / `bump_spine_slim` / `compiled`：三条被实测否决的轴
   （原生闭包编译 / 条目瘦身 / 指令数组），为对照保留——否决理由见
   上方"第十二轮的三个实测"。
+- **`bump_spine_memo`：负载含重复强制时开**（同一值被多次 quote——
+  elaborator 的 conversion checking、let-共享展开的常态）。线性负载付
+  3-8% 哈希税；复制强制负载收益 1.8×（×2）/3.6×（×4），随复制层数
+  指数增长，复制被塌缩为单次强制（见"重复求值轴"）。
 - `cek_bump` / `bump_iter`：spine 系出现前的迭代答案（CEK kont 栈 vs
   双栈推土机，等价），现为对照保留。
 - `cek`：最简的栈安全实现（慢 ~50×），适合教学/对照。
@@ -240,5 +294,6 @@ base 求值后 `ChainWrap` 一次收拢，整条链不占 work 栈。表示打�
 - bump 生命周期贯穿单个 `Bump`：求值期间的值/结果不能跨调用保存（对 NBE
   即用即弃的形态够用）。
 - 结果树的可比较形式（`Term`）在 bump 之外（`export` 转回时才分配）；
-  spine 系的流式 quote 会把链上重复的变量 `Idx` 节点共享成同一节点
-  （结果从树变 DAG）——结构比较与 `export` 逐出现访问，语义不变。
+  spine 系的流式 quote 会把链上重复的变量 `Idx` 节点共享成同一节点，
+  `bump_spine_memo` 进一步把重复 quote 的整棵子树共享（结果从树变
+  DAG）——结构比较与 `export` 逐出现访问，语义不变。

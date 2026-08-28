@@ -1,9 +1,11 @@
-//! L01 — 归一化求值（NBE）：同一算法在 21 种实现下的对比与基准。
+//! L01 — 归一化求值（NBE）：同一算法在 22 种实现下的对比与基准。
 //!
 //! 用纯 lambda 演算（[`Term`]，de Bruijn 索引）演示正常化（eval + quote），
-//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响**。21 个
-//! 变体沿五条轴展开，全部用同一个工作负载（丘奇数加法 `church_pair(n)`）
-//! 先断言正确（结果 = `church(2n)`）再计时（`l01bench` 独立二进制）：
+//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响？** 22 个
+//! 变体沿五条轴展开，基准负载两族（`--workload`）：丘奇数加法
+//! `church_pair(n)`（默认，线性）与复制强制 `dup_pair`/`dup_deep`
+//! （同一闭包被 quote 强制 2×/4×，开记忆化轴）。每个负载下各变体都
+//! 先断言结果正确再计时（`l01bench` 独立二进制）：
 //!
 //! * **项表示**：Box AST（`naive` 族）→ Rc 共享树（`rc_term`）→ 字节码
 //!   （`bytes_*` / `rpn_owned`）→ bump 引用树（`bump_*`）→ 指令数组
@@ -43,6 +45,7 @@
 //! | `bump_spine` | bump 引用树 | bump 引用链表 + spine 栈 | 递归+流式 quote | 值打包、中性扁平化 |
 //! | `bump_spine_iter` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈+流式 quote | 速度+深度 |
 //! | `bump_spine_slim` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈+流式 quote | 条目 16B，连续性 quote 期推断 |
+//! | `bump_spine_memo` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈+流式 quote+memo | quote 记忆化：值×level → 共享子树 |
 //! | `bump_spine_rpn` | bump 引用树 | bump 引用链表 + spine 栈 | 递归+流式写字节 | quote 直出 RPN（输出 ~2.4x 小） |
 //! | `native_clo` | 原生闭包树（bump boxed） | bump 引用链表 + spine 栈 | 原生调用 + 流式 quote | β=间接调用，封轴实验 |
 //!
@@ -61,6 +64,7 @@ pub(crate) mod bump_arena;
 pub(crate) mod bump_iter;
 pub(crate) mod bump_spine;
 pub(crate) mod bump_spine_iter;
+pub(crate) mod bump_spine_memo;
 pub(crate) mod bump_spine_rpn;
 pub(crate) mod bump_spine_slim;
 pub(crate) mod bump_tree;

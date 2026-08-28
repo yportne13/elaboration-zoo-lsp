@@ -258,3 +258,36 @@ fn church_add() -> Term {
 pub(crate) fn church_pair(n: usize) -> Term {
     apply(church_add(), vec![church(n), church(n)])
 }
+
+/// church pair：`pair = λa.λb.λf. f a b`。
+pub(crate) fn pair_term() -> Term {
+    lam(lam(lam(apply(Term::Idx(0), vec![Term::Idx(2), Term::Idx(1)]))))
+}
+
+/// `λx. pair x x`：经 λ-binder 复制实参值（同一闭包/句柄在 quote 时被引两次）。
+fn dup_lam() -> Term {
+    lam(apply(pair_term(), vec![Term::Idx(0), Term::Idx(0)]))
+}
+
+/// 复制强制负载：`(λx. pair x x) · church_pair(n)`。
+/// 正态形 `λf. f C C`（C = church(2n)）——quote 把同一个闭包 x **强制两次**。
+pub(crate) fn dup_pair(n: usize) -> Term {
+    apply(dup_lam(), vec![church_pair(n)])
+}
+
+pub(crate) fn dup_pair_expect(n: usize) -> Term {
+    let c = church(n + n);
+    lam(apply(Term::Idx(0), vec![c.clone(), c]))
+}
+
+/// 两层复制：`(λx. pair x x) ((λy. pair y y) · church_pair(n))`。
+/// 正态形 `λf. f (λf. f C C) (λf. f C C)`——C 被强制 **4 次**（无记忆化时）。
+pub(crate) fn dup_deep(n: usize) -> Term {
+    apply(dup_lam(), vec![apply(dup_lam(), vec![church_pair(n)])])
+}
+
+pub(crate) fn dup_deep_expect(n: usize) -> Term {
+    let c = church(n + n);
+    let inner = lam(apply(Term::Idx(0), vec![c.clone(), c]));
+    lam(apply(Term::Idx(0), vec![inner.clone(), inner]))
+}

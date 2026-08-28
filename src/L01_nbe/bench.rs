@@ -25,23 +25,31 @@ use super::term::{self, Term};
 use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_spine_rpn, bump_spine_slim,
-    bump_tree, cek, cek_bump, compiled, env_slice, naive, native_clo, rc_term, rc_value, rpn_owned,
+    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_spine_memo, bump_spine_rpn,
+    bump_spine_slim, bump_tree, cek, cek_bump, compiled, env_slice, naive, native_clo, rc_term,
+    rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
 const RECURSION_SAFE_MAX: usize = 8000;
 
-pub fn run(max_church: usize, rounds: usize, only: Option<&str>) {
+pub fn run(max_church: usize, rounds: usize, only: Option<&str>, workload: &str) {
     println!("L01 NBE bench: church_pair(n) = add (church n) (church n) -> church(2n)");
     match only {
         Some(names) => println!("rounds per variant = {rounds}, only variants = {names}\n"),
         None => println!("rounds per variant = {rounds}, sizes double from 1000\n"),
     }
+    let do_church = matches!(workload, "church" | "all");
+    let do_dup = matches!(workload, "dup" | "all");
 
     let mut n = 1000;
     loop {
-        bench_size(n, rounds, only);
+        if do_church {
+            bench_size(n, rounds, only);
+        }
+        if do_dup {
+            bench_dup(n, rounds, only);
+        }
         if n >= max_church {
             break;
         }
@@ -523,6 +531,33 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         rows.push(("native_clo", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
+    // bump_spine_memo — quote 记忆化（值×level → 共享子树）：线性负载下
+    // Q(Clo/中性) 调用仅 O(λ 层)，预期与 iter 持平（中性验证）；
+    // 收益在 dup 负载（--workload dup）。
+    if want("bump_spine_memo") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(bump_spine_memo::normalize_imported(&bump, tm))
+        };
+        assert_eq!(got, check, "bump_spine_memo 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_spine_memo::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine_memo::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine_memo", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
     // bump_spine_rpn — spine 系 + RPN 扁平输出：quote 不建结果树，直接写字节流
     if want("bump_spine_rpn") {
         {
@@ -574,6 +609,91 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
     }
 
     print_table(n, &rows);
+}
+
+/// 复制强制负载族（`--workload dup`）：经 λ-binder 复制同一个值，quote 对
+/// 同一闭包强制 2×（`dup_pair`）/4×（`dup_deep`）次——打开记忆化/共享轴。
+/// NbE 的 CBV 只急切到 WHNF（丢弃参数几乎免费），重复集中在 readback，
+/// 故此处只比 quote 侧：冠军 `bump_spine_iter` vs 记忆化 `bump_spine_memo`。
+fn bench_dup(n: usize, rounds: usize, only: Option<&str>) {
+    let want = move |name: &'static str| match only {
+        None => true,
+        Some(list) => list.split(',').any(|x| x == name),
+    };
+    if !(want("bump_spine_iter") || want("bump_spine_memo")) {
+        return;
+    }
+
+    for (name, input, expect) in [
+        ("dup_pair", term::dup_pair as fn(usize) -> Term, term::dup_pair_expect as fn(usize) -> Term),
+        ("dup_deep", term::dup_deep as fn(usize) -> Term, term::dup_deep_expect as fn(usize) -> Term),
+    ] {
+        let check = expect(n);
+        let mut rows: Vec<(&'static str, Duration, Duration)> = Vec::new();
+
+        if want("bump_spine_iter") {
+            let got = {
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &input(n));
+                bump_arena::export(bump_spine_iter::normalize_imported(&bump, tm))
+            };
+            assert_eq!(got, check, "bump_spine_iter {name} 结果不正确");
+            {
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &input(n));
+                bump_spine_iter::normalize_imported(&bump, tm);
+            }
+            let mut ts = Vec::with_capacity(rounds);
+            for _ in 0..rounds {
+                let t = input(n);
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &t); // import 在计时外
+                let start = Instant::now();
+                let res = bump_spine_iter::normalize_imported(&bump, tm);
+                ts.push(start.elapsed());
+                assert_eq!(bump_arena::export(res), check);
+            }
+            rows.push(("bump_spine_iter", *ts.iter().min().unwrap(), median(&mut ts)));
+        }
+
+        if want("bump_spine_memo") {
+            let got = {
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &input(n));
+                bump_arena::export(bump_spine_memo::normalize_imported(&bump, tm))
+            };
+            assert_eq!(got, check, "bump_spine_memo {name} 结果不正确");
+            {
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &input(n));
+                bump_spine_memo::normalize_imported(&bump, tm);
+            }
+            let mut ts = Vec::with_capacity(rounds);
+            for _ in 0..rounds {
+                let t = input(n);
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &t); // import 在计时外
+                let start = Instant::now();
+                let res = bump_spine_memo::normalize_imported(&bump, tm);
+                ts.push(start.elapsed());
+                assert_eq!(bump_arena::export(res), check);
+            }
+            rows.push(("bump_spine_memo", *ts.iter().min().unwrap(), median(&mut ts)));
+        }
+
+        println!("== {name}({n}) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==");
+        println!("  {:<18} {:>10} {:>10}", "variant", "min_ms", "med_ms");
+        let best = rows.iter().map(|r| r.1).min().unwrap();
+        for (vname, min, med) in &rows {
+            let mark = if *min == best { " *" } else { "" };
+            println!(
+                "  {vname:<18} {:>10.3} {:>10.3}{mark}",
+                min.as_secs_f64() * 1000.0,
+                med.as_secs_f64() * 1000.0,
+            );
+        }
+        println!();
+    }
 }
 
 /// n > 8000 的迭代变体段：构造/比较全部迭代化，展示深度无上限。
