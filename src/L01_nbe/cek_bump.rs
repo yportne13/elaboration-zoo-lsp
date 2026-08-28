@@ -56,11 +56,10 @@ fn eval<'a>(bump: &'a Bump, env0: Option<&'a Env<'a>>, tm0: &'a Bt<'a>) -> Bv<'a
                     env = Some(node);
                     tm = Some(body);
                 },
-                // 中立项的两个子值也要进 bump 才能被引用
+                // 中立项：一次分配 [Bv; 2]（相邻存放），拆引用
                 f => {
-                    let vf = bump.alloc(f);
-                    let va = bump.alloc(v);
-                    val = Some(Bv::App(vf, va));
+                    let arr = bump.alloc([f, v]);
+                    val = Some(Bv::App(&arr[0], &arr[1]));
                 },
             },
             None => return v,

@@ -46,11 +46,10 @@ fn eval<'a>(bump: &'a Bump, env0: Option<&'a Env<'a>>, tm0: &'a Bt<'a>) -> Bv<'a
                         let node = bump.alloc(Env { val: va, next: e });
                         work.push(W::Tm(body, Some(node)));
                     },
-                    // 中立项：两个子值进 bump 后作为 App 值回到值栈
+                    // 中立项：一次分配 [Bv; 2]（相邻存放），拆引用后回值栈
                     f => {
-                        let vf = bump.alloc(f);
-                        let va = bump.alloc(va);
-                        vals.push(Bv::App(vf, va));
+                        let arr = bump.alloc([f, va]);
+                        vals.push(Bv::App(&arr[0], &arr[1]));
                     },
                 }
             },

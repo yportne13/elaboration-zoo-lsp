@@ -29,8 +29,9 @@ pub(crate) struct Env<'a> {
     pub(crate) next: Option<&'a Env<'a>>,
 }
 
-/// bump 内分配的值。
-#[derive(Clone)]
+/// bump 内分配的值。全指针字段——位拷贝即安全，`Copy` 让数组化环境
+/// （`env_slice`）的切片操作免去 `clone()` 调用点。
+#[derive(Clone, Copy)]
 pub(crate) enum Bv<'a> {
     Lvl(usize),
     Clo(Option<&'a Env<'a>>, &'a Bt<'a>),
@@ -118,11 +119,11 @@ fn apply_val<'a>(bump: &'a Bump, vf: Bv<'a>, va: Bv<'a>) -> Bv<'a> {
             let node = bump.alloc(Env { val: va, next: env });
             eval(bump, Some(node), body)
         },
-        // 中立项的两个子值也要进 bump 才能被引用
+        // 中立项的两个子值也要进 bump 才能被引用；一次分配 [Bv; 2]
+        // （相邻存放，单次对齐/检查/推进）再拆引用
         _ => {
-            let vf = bump.alloc(vf);
-            let va = bump.alloc(va);
-            Bv::App(vf, va)
+            let arr = bump.alloc([vf, va]);
+            Bv::App(&arr[0], &arr[1])
         },
     }
 }

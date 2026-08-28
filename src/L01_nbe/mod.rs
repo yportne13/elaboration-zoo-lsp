@@ -1,9 +1,9 @@
-//! L01 — 归一化求值：同一份 NBE 算法在 15 种实现下的对比与基准。
+//! L01 — 归一化求值：同一份 NBE 算法在 16 种实现下的对比与基准。
 //!
 //! 这一层是 elaboration zoo 的第一课：用纯 lambda 演算（`Term`，de Bruijn 索引）
 //! 演示正常化（eval + quote），并回答一个工程问题——**项和值的表示方式对求值
 //! 性能有多大影响**。`L01a_fast` 时代的实验（字节码、arena 环境、扁平值…）按
-//! 表示轴整理为 8 个变体，加 3 个求值策略变体（`cek`、`cek_bump`、`bump_iter`），再补 4 个
+//! 表示轴整理为 8 个变体，加 3 个求值策略变体（`cek`、`cek_bump`、`bump_iter`），再补 5 个
 //! arena 演进（`ast_env_arena`、`bump_arena`），全部用同一个工作负载
 //! （丘奇数加法）验证正确性并计时：
 //!
@@ -24,6 +24,7 @@
 //! | `compiled` | 定长指令数组 `&[Ins]` | bump 持久链表 | 引用式 enum | 新写：项编译为指令 + bump 值/结果 |
 //! | `cek_bump` | bump 引用式 AST | bump 持久链表 | 引用式 enum | 新写：CEK 迭代 eval + bump 全分配 |
 //! | `bump_iter` | bump 引用式 AST | bump 持久链表 | 引用式 enum | 新写：bump_tree 的双栈迭代改造 |
+//! | `env_slice` | bump 引用式 AST | bump 数组切片（nth O(1)） | 引用式 enum | 新写：bump_tree + 切片环境 |
 //!
 //! `cek` 不在表示轴上，而在**求值策略**上：其余变体都是递归 eval（调用栈即
 //! 控制栈），`cek` 把控制栈显式搬进堆（continuation 栈），求值深度不再受进程
@@ -49,6 +50,7 @@ pub(crate) mod bump_iter;
 pub(crate) mod cek;
 pub(crate) mod cek_bump;
 pub(crate) mod compiled;
+pub(crate) mod env_slice;
 pub(crate) mod naive;
 pub(crate) mod rc_term;
 pub(crate) mod rc_value;
