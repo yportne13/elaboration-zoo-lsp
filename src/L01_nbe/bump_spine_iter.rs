@@ -21,6 +21,13 @@ use super::bump_spine::{
 use super::term::Term;
 
 /// 双栈迭代 eval：与 `bump_spine::eval` 语义相同（先函数后实参）。
+///
+/// **右链快速路径**：`App(变量头, ·)` 连续嵌套（church 链的形状）不走
+/// 通用三推（Apply + Tm(a) + Tm(f)）——头值在下降时直接 `nth` 出来压
+/// vals，base 交给通用机器，随后 [`W::ChainWrap`] 把 n 个链头按内层优先
+/// 一次 `spine.push` 收拢。整条链不占 work 栈、vals 弹压减半。头若是
+/// 闭包（β 岔路）则该层退回通用三推，已收的头仍由 ChainWrap 收拢——
+/// 语义与逐层 Apply 等价（spine 入栈次序逐一对齐）。
 fn eval_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -30,6 +37,8 @@ fn eval_iter<'a>(
     enum W<'a> {
         Tm(&'a Bt<'a>, Option<&'a EnvCons<'a>>),
         Apply,
+        /// vals 顶上是 base 值，其下 `n` 个是待应用的链头（内层最上）。
+        ChainWrap(u32),
     }
     let mut work: Vec<W<'a>> = vec![W::Tm(tm0, env0)];
     let mut vals: Vec<V> = Vec::new();
@@ -40,10 +49,44 @@ fn eval_iter<'a>(
                 let c = bump.alloc(CloCell { env, body });
                 vals.push(v_clo(c))
             },
-            W::Tm(Bt::App(f, a), env) => {
-                work.push(W::Apply);
-                work.push(W::Tm(a, env));
-                work.push(W::Tm(f, env));
+            W::Tm(app @ Bt::App(..), env) => {
+                // 右链下钻：头为非闭包变量时头值直接进 vals
+                let mut tm = app;
+                let mut heads: u32 = 0;
+                loop {
+                    let (f, a) = match tm {
+                        Bt::App(f, a) => (f, a),
+                        base => {
+                            work.push(W::ChainWrap(heads));
+                            work.push(W::Tm(base, env));
+                            break;
+                        },
+                    };
+                    match f {
+                        Bt::Idx(i) => {
+                            let vf = nth(env, *i);
+                            if v_tag(vf) == 1 {
+                                // β 岔路：本层退回通用三推（ChainWrap 收拢已收的头）
+                                work.push(W::ChainWrap(heads));
+                                work.push(W::Apply);
+                                work.push(W::Tm(a, env));
+                                work.push(W::Tm(f, env));
+                                break;
+                            }
+                            vals.push(vf);
+                            heads += 1;
+                            tm = a;
+                        },
+                        _ => {
+                            // 复合函数头：通用三推（同样先收已收的头）
+                            work.push(W::ChainWrap(heads));
+                            work.push(W::Apply);
+                            work.push(W::Tm(a, env));
+                            work.push(W::Tm(f, env));
+                            break;
+                        },
+                    }
+                }
             },
             W::Apply => {
                 let va = vals.pop().expect("eval 栈：Apply 缺实参");
@@ -56,6 +99,14 @@ fn eval_iter<'a>(
                 } else {
                     vals.push(spine.push(vf, va));
                 }
+            },
+            W::ChainWrap(k) => {
+                let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
+                for _ in 0..k {
+                    let vf = vals.pop().expect("eval 栈：ChainWrap 缺链头");
+                    v = spine.push(vf, v);
+                }
+                vals.push(v);
             },
         }
     }
@@ -245,5 +296,29 @@ mod tests {
             app(idx(1), app(idx(2), idx(0))),
         ))));
         assert_eq!(normalize(input), expect);
+    }
+
+    #[test]
+    fn chain_beta_fork() {
+        // (λf.λx. f (f x)) (λu.u) → λx. x：右链下钻中头指向闭包 → β 岔路
+        // （ChainWrap(0) + 通用三推），岔路后又续上链
+        let idx = |i: usize| Term::Idx(i);
+        let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
+        let lam = |b: Term| Term::Lam(Box::new(b));
+        let id = lam(idx(0));
+        let church2 = lam(lam(app(idx(1), app(idx(1), idx(0)))));
+        let input = app(church2, id.clone());
+        assert_eq!(normalize(input), id);
+    }
+
+    #[test]
+    fn chain_mixed_heads() {
+        // λf.λg.λx. f (g x)：连续右链但链头不同（f、g 都不是闭包）——
+        // eval 快速路径收 2 头，quote 流式但 f 不共享
+        let idx = |i: usize| Term::Idx(i);
+        let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
+        let lam = |b: Term| Term::Lam(Box::new(b));
+        let input = lam(lam(lam(app(idx(2), app(idx(1), idx(0))))));
+        assert_eq!(normalize(input.clone()), input);
     }
 }
