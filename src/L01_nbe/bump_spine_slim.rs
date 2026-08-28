@@ -1,29 +1,48 @@
-//! `bump_spine` 的迭代改造（`bump_spine_iter`）：**速度 + 深度兼得**。
+//! `bump_spine_iter` 的瘦身改造（`bump_spine_slim`）：spine 条目 24B→16B，
+//! **连续性判定从 push 期记账挪到 quote 期推断**。
 //!
-//! - **eval**：`bump_spine` 递归 eval 的双栈压平（`bump_iter` 之于
-//!   `bump_tree` 的同一改造：work/vals 双栈，β 归约是尾循环）。
-//! - **quote**：任务栈迭代（`bump_iter` 之于 `quote_bump` 的同一改造），
-//!   但保留 `bump_spine` 的核心赢点——**流式右链**：连续右嵌套链的
-//!   readback 在 [`QJob::ChainRun`] 里按下标顺序自底向上分配，不逐节点
-//!   递归；链头变量相同时 `Idx` 节点共享。
-//!
-//! 语义与 `bump_spine` 完全一致（同一 spine 机制、同一连续性引理、同一
-//! 穿插 fallback）；代价是任务栈的固定开销（对照 `bump_iter` ≈
-//! `bump_tree` 的 1.2×）。求值/quote 深度均不受进程栈限——大 n 段
-//! （`bench_cek_deep`）出赛。
+//! - 旧 [`Entry`]（`bump_spine`）带 `len`/`base` 两个记账字段：每次 `push`
+//!   都要 load 前驱条目的 `len`/`base` 并继承（+1/透传）——纯为 quote 的
+//!   流式右链检测服务。
+//! - 事实：**`entry[i].a == v_spine(i-1)` 当且仅当链在 i 处连续**（`a` 指向
+//!   紧前条目）。于是 quote 沿 `a` 下行一步即可判定，push 变纯双 store，
+//!   条目从 24B 瘦到 16B（每缓存行 4 条 vs 2.67 条，eval/quote 两条遍历
+//!   的缓存密度同步提高）。
+//! - 语义与 `bump_spine_iter` 完全一致（同一右链快速路径、同一 fallback
+//!   形状）；差别只在记账的位置。下行推断只多一次顺序向下 load（硬件
+//!   预取友好），换 push 期每次 -1 load -1 store -加法。
 //!
 //! 另提供 [`Machine`]：spine 与 vals 两个无生命周期的大栈跨调用复用
-//! （配合同一 `Bump` 的 `reset()`），即稳态近零分配口径（bench 的 `_ss`
-//! 行）。对照变体 [`super::bump_spine_slim`] 实测：条目瘦到 16B、把连续性
-//! 判定挪到 quote 期推断**反而慢 ~20%**——push 期记账是更优的交易。
+//! （配合同一 `Bump` 的 `reset()`），即稳态近零分配口径（bench 的 `_ss` 行）。
 
 use bumpalo::Bump;
 
 use super::bump_arena::{self, Bt};
 use super::bump_spine::{
-    nth, v_clo, v_clo_of, v_lvl, v_lvl_of, v_spine_of, v_tag, CloCell, EnvCons, Spine, V,
+    nth, v_clo, v_clo_of, v_lvl, v_lvl_of, v_spine, v_spine_of, v_tag, CloCell, EnvCons, V,
 };
 use super::term::Term;
+
+/// spine 栈槽：一次中性应用。无记账字段——连续性由 `a` 指向推断。
+pub(crate) struct Entry {
+    pub(crate) f: V,
+    pub(crate) a: V,
+}
+
+/// 求值机持有的扁平中性栈（只增不减，槽位下标即句柄）。
+pub(crate) struct Spine {
+    pub(crate) stack: Vec<Entry>,
+}
+
+impl Spine {
+    /// 中性应用 `f a` 压栈，返回句柄值。纯双 store，无前驱读取。
+    #[inline]
+    pub(crate) fn push(&mut self, f: V, a: V) -> V {
+        let idx = self.stack.len();
+        self.stack.push(Entry { f, a });
+        v_spine(idx)
+    }
+}
 
 /// eval 的 work 栈条目。
 enum W<'a> {
@@ -33,16 +52,10 @@ enum W<'a> {
     ChainWrap(u32),
 }
 
-/// 双栈迭代 eval：与 `bump_spine::eval` 语义相同（先函数后实参）。
+/// 双栈迭代 eval：与 `bump_spine_iter` 同语义（先函数后实参），含同一
+/// 右链快速路径（链头直进 vals、`ChainWrap` 一次收拢）。
 /// 栈由调用方提供（一次性口径传新建 Vec，稳态口径传 [`Machine`] 的）。
-///
-/// **右链快速路径**：`App(变量头, ·)` 连续嵌套（church 链的形状）不走
-/// 通用三推（Apply + Tm(a) + Tm(f)）——头值在下降时直接 `nth` 出来压
-/// vals，base 交给通用机器，随后 [`W::ChainWrap`] 把 n 个链头按内层优先
-/// 一次 `spine.push` 收拢。整条链不占 work 栈、vals 弹压减半。头若是
-/// 闭包（β 岔路）则该层退回通用三推，已收的头仍由 ChainWrap 收拢——
-/// 语义与逐层 Apply 等价（spine 入栈次序逐一对齐）。
-fn eval_iter<'a>(
+fn eval_with<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
@@ -124,9 +137,7 @@ fn eval_iter<'a>(
     vals.pop().expect("eval 必须恰有一个根值")
 }
 
-/// quote 任务。`ChainRun` 是流式右链的"断点续跑"：prev=None 表示 base
-/// 刚在 done 栈顶（链从 next 起的 f 全走共享 Idx）；prev=Some 表示某个
-/// 非平凡 f 刚引完在 done 栈顶，合掉一层后继续。
+/// quote 任务。`ChainRun` 是流式右链的"断点续跑"（与 `bump_spine_iter` 同）。
 pub(crate) enum QJob<'a> {
     /// 引一个值。
     Q(V, usize),
@@ -134,7 +145,7 @@ pub(crate) enum QJob<'a> {
     Lam1,
     /// 先 eval（引出 Clo 的体）再引——对应递归版 quote 的 Clo 分支。
     EvalQ(&'a Bt<'a>, Option<&'a EnvCons<'a>>, usize),
-    /// done 栈顶两个（先 f 后 a），合一个 App——二叉 fallback 用。
+    /// done 栈顶两个（先 f 后 a），合一个 App——单条目 fallback 用。
     App1,
     /// 流式右链：next..=end 逐层 App 自底向上；f 与 f0 同为同一变量时
     /// 用共享 idx_node，否则挂起（Q 引 f）后续跑。
@@ -148,9 +159,9 @@ pub(crate) enum QJob<'a> {
     },
 }
 
-/// 任务栈 quote。EvalQ 强制闭包体时**复用调用方的 work/vals 栈**
-/// （一次性口径为新建 Vec，稳态口径为 [`Machine`] 的）。
-fn quote_iter<'a>(
+/// 任务栈 quote：流式右链 + 穿插 fallback。EvalQ 强制闭包体时**复用调用方
+/// 的 work/vals 栈**（一次性口径为新建 Vec，稳态口径为 [`Machine`] 的）。
+fn quote_with<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     tasks: &mut Vec<QJob<'a>>,
@@ -175,22 +186,33 @@ fn quote_iter<'a>(
                 _ => {
                     // 先拷出标量再继续（后续任务会 push spine，Vec 可能扩容）
                     let h = v_spine_of(v);
-                    let (ef, ea, len, base) = {
+                    let (ef, ea) = {
                         let e = &spine.stack[h];
-                        (e.f, e.a, e.len, e.base)
+                        (e.f, e.a)
                     };
-                    if len > 1 && base as usize + len as usize - 1 == h {
+                    // 连续性推断：沿 a 下行，entry[i].a 指向 i-1 即链连续。
+                    // 同步进行（无重入），读栈安全；下行是顺序访存，预取友好。
+                    let mut base = h;
+                    while base > 0 {
+                        let a = spine.stack[base].a;
+                        if v_tag(a) == 2 && v_spine_of(a) == base - 1 {
+                            base -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if h > base {
                         // 连续右链：先引 base，再 ChainRun 自底向上扫
-                        let f0 = spine.stack[base as usize].f;
+                        let f0 = spine.stack[base].f;
                         let idx_node = if v_tag(f0) == 0 {
                             Some(&*bump.alloc(Bt::Idx(level - v_lvl_of(f0) - 1)))
                         } else {
                             None
                         };
-                        let base_v = spine.stack[base as usize].a;
+                        let base_v = spine.stack[base].a;
                         tasks.push(QJob::ChainRun {
                             level,
-                            next: base as usize,
+                            next: base,
                             end: h,
                             f0,
                             idx_node,
@@ -198,6 +220,7 @@ fn quote_iter<'a>(
                         });
                         tasks.push(QJob::Q(base_v, level));
                     } else {
+                        // 单条目：二叉 fallback
                         tasks.push(QJob::App1);
                         tasks.push(QJob::Q(ea, level));
                         tasks.push(QJob::Q(ef, level));
@@ -209,7 +232,7 @@ fn quote_iter<'a>(
                 done.push(bump.alloc(Bt::Lam(body)));
             },
             QJob::EvalQ(body, env, level) => {
-                let v = eval_iter(bump, spine, work, vals, env, body);
+                let v = eval_with(bump, spine, work, vals, env, body);
                 tasks.push(QJob::Q(v, level));
             },
             QJob::App1 => {
@@ -259,9 +282,9 @@ fn quote_iter<'a>(
     done.pop().expect("quote 必须恰有一个根")
 }
 
-/// 稳态复用机：跨调用复用**无生命周期**的两个大栈——spine（每输出 App 一
-/// 条，本负载 ~2n 条）与 vals（右链快速路径收链头，~n 个）。带生命周期的
-/// 小栈（work/tasks/done，本负载恒浅）每调用新建，避免 struct 持 `'a` 跨
+/// 稳态复用机：跨调用复用**无生命周期**的两个大栈——spine（每输出 App 一条，
+/// 本负载 ~2n 条）与 vals（右链快速路径收链头，~n 个）。带生命周期的小栈
+/// （work/tasks/done，本负载恒浅）每调用新建，避免 struct 持 `'a` 跨
 /// `Bump::reset` 的借用冲突。配合同一 `Bump` 的 `reset()` 即稳态近零分配。
 pub(crate) struct Machine {
     spine: Spine,
@@ -280,8 +303,8 @@ impl Machine {
     /// 调用复用（clear 保容量）。调用方保证 `bump`/`tm` 同源（reset 后重 import）。
     pub(crate) fn normalize<'a>(&mut self, bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
         self.spine.stack.clear();
-        let v = eval_iter(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, None, tm);
-        quote_iter(
+        let v = eval_with(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, None, tm);
+        quote_with(
             bump,
             &mut self.spine,
             &mut Vec::new(),
@@ -293,12 +316,11 @@ impl Machine {
     }
 }
 
-/// 对已导入 bump 的项做 NBE（基准计时对象；import 在计时外）。
-/// eval（双栈）与 quote（任务栈 + 流式链）都深度无上限。
+/// 对已导入 bump 的项做 NBE（一次性口径：全部栈每次新建）。
 pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
     let mut spine = Spine { stack: Vec::with_capacity(4096) };
-    let v = eval_iter(bump, &mut spine, &mut Vec::new(), &mut Vec::new(), None, tm);
-    quote_iter(
+    let v = eval_with(bump, &mut spine, &mut Vec::new(), &mut Vec::new(), None, tm);
+    quote_with(
         bump,
         &mut spine,
         &mut Vec::new(),
@@ -366,7 +388,6 @@ mod tests {
     #[test]
     fn chain_beta_fork() {
         // (λf.λx. f (f x)) (λu.u) → λx. x：右链下钻中头指向闭包 → β 岔路
-        // （ChainWrap(0) + 通用三推），岔路后又续上链
         let idx = |i: usize| Term::Idx(i);
         let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
         let lam = |b: Term| Term::Lam(Box::new(b));
@@ -378,8 +399,7 @@ mod tests {
 
     #[test]
     fn chain_mixed_heads() {
-        // λf.λg.λx. f (g x)：连续右链但链头不同（f、g 都不是闭包）——
-        // eval 快速路径收 2 头，quote 流式但 f 不共享
+        // λf.λg.λx. f (g x)：连续右链但链头不同（f、g 都不是闭包）
         let idx = |i: usize| Term::Idx(i);
         let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
         let lam = |b: Term| Term::Lam(Box::new(b));

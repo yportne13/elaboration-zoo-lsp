@@ -10,8 +10,9 @@
 //! 在计时前完成，断言在计时窗口外；arena 变体跨轮次复用 `ListArena`（追加式，
 //! 下标永不过期，见 `persistent_list` 的说明），测的是稳态。
 //!
-//! n > 8000 时只有迭代变体（`cek`/`cek_bump`/`bump_iter`/`bump_spine_iter`）
-//! 能跑：其余变体的构造/求值/比较全链路都是递归，在此规模直接栈溢出。
+//! n > 8000 时只有迭代变体（`cek`/`cek_bump`/`bump_iter`/`bump_spine_iter`/
+//! `bump_spine_slim`）能跑：其余变体的构造/求值/比较全链路都是递归，
+//! 在此规模直接栈溢出。
 //! 大 n 段改用迭代构造 + 迭代比较（`church_iter`/
 //! `iter_eq`），同样先断言再计时。
 
@@ -24,8 +25,8 @@ use super::term::{self, Term};
 use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_spine_rpn, bump_tree, cek,
-    cek_bump, compiled, env_slice, naive, rc_term, rc_value, rpn_owned,
+    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_spine_rpn, bump_spine_slim,
+    bump_tree, cek, cek_bump, compiled, env_slice, naive, native_clo, rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -413,6 +414,115 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         rows.push(("bump_spine_iter", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
+    // bump_spine_iter_ss — 冠军的稳态口径：Machine（spine/vals 跨轮复用）
+    // + 同一 Bump 的 reset()（保池）。与 bytes_* 变体跨轮复用 ListArena 同口径。
+    if want("bump_spine_iter_ss") {
+        let mut bump = Bump::with_capacity(1 << 21);
+        let mut m = bump_spine_iter::Machine::new();
+        {
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            let got = bump_arena::export(m.normalize(&bump, tm));
+            assert_eq!(got, check, "bump_spine_iter_ss 结果不正确");
+        }
+        {
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            m.normalize(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = term::church_pair(n); // 构造在计时外（与其他变体同口径）
+            bump.reset(); // 保池回收，旧引用全部作废
+            let tm = bump_arena::import(&bump, &input);
+            let start = Instant::now();
+            let res = m.normalize(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine_iter_ss", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // bump_spine_slim — bump_spine_iter 瘦身：条目 16B（去掉 len/base 记账），
+    // 连续性改由 quote 期沿 a 下行推断（entry[i].a 指向 i-1 即连续）
+    if want("bump_spine_slim") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(bump_spine_slim::normalize_imported(&bump, tm))
+        };
+        assert_eq!(got, check, "bump_spine_slim 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_spine_slim::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine_slim::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine_slim", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // bump_spine_slim_ss — slim 的稳态口径：Machine（spine/vals 跨轮复用）
+    // + 同一 Bump 的 reset()（保池）。与 bytes_* 变体跨轮复用 ListArena 同口径。
+    if want("bump_spine_slim_ss") {
+        let mut bump = Bump::with_capacity(1 << 21);
+        let mut m = bump_spine_slim::Machine::new();
+        {
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            let got = bump_arena::export(m.normalize(&bump, tm));
+            assert_eq!(got, check, "bump_spine_slim_ss 结果不正确");
+        }
+        {
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            m.normalize(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = term::church_pair(n); // 构造在计时外（与其他变体同口径）
+            bump.reset(); // 保池回收，旧引用全部作废
+            let tm = bump_arena::import(&bump, &input);
+            let start = Instant::now();
+            let res = m.normalize(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine_slim_ss", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // native_clo — 项编译为原生闭包树（compile 在计时外，与 import 同口径），
+    // β = 一次间接原生调用；封轴实验：原生调用 vs 机器解释
+    if want("native_clo") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            let code = native_clo::compile(&bump, tm);
+            bump_arena::export(native_clo::normalize_compiled(&bump, code))
+        };
+        assert_eq!(got, check, "native_clo 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            let code = native_clo::compile(&bump, tm);
+            native_clo::normalize_compiled(&bump, code);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import+compile 在计时外
+            let code = native_clo::compile(&bump, tm);
+            let start = Instant::now();
+            let res = native_clo::normalize_compiled(&bump, code);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("native_clo", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
     // bump_spine_rpn — spine 系 + RPN 扁平输出：quote 不建结果树，直接写字节流
     if want("bump_spine_rpn") {
         {
@@ -467,8 +577,8 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
 }
 
 /// n > 8000 的迭代变体段：构造/比较全部迭代化，展示深度无上限。
-/// `cek`（Rc 链表）、`cek_bump`/`bump_iter`（迭代双雄）与
-/// `bump_spine_iter`（spine 系迭代版）在此出赛；
+/// `cek`（Rc 链表）、`cek_bump`/`bump_iter`（迭代双雄）、
+/// `bump_spine_iter`/`bump_spine_slim`（spine 系迭代版）在此出赛；
 /// 其余变体递归链在此规模栈溢出。
 fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
     let want = |name: &'static str| match only {
@@ -587,6 +697,67 @@ fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
             std::mem::forget(input);
         }
         rows.push(("bump_spine_iter", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    if want("bump_spine_slim") {
+        {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 26);
+            let tm = bump_arena::import_iter(&bump, &input);
+            let res = bump_spine_slim::normalize_imported(&bump, tm);
+            assert!(iter_eq_bump(res, &check), "bump_spine_slim 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 26);
+            let tm = bump_arena::import_iter(&bump, &input);
+            bump_spine_slim::normalize_imported(&bump, tm);
+            std::mem::forget(input);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = church_pair_iter(n);
+            let bump = Bump::with_capacity(1 << 26);
+            let tm = bump_arena::import_iter(&bump, &input); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine_slim::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert!(iter_eq_bump(res, &check), "bump_spine_slim 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        rows.push(("bump_spine_slim", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    if want("bump_spine_iter_ss") {
+        // 稳态口径：同一 Bump（reset 保池）+ Machine 跨轮复用 spine/vals
+        let mut bump = Bump::with_capacity(1 << 26);
+        let mut m = bump_spine_iter::Machine::new();
+        {
+            let input = church_pair_iter(n);
+            let tm = bump_arena::import_iter(&bump, &input);
+            let res = m.normalize(&bump, tm);
+            assert!(iter_eq_bump(res, &check), "bump_spine_iter_ss 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        {
+            let input = church_pair_iter(n);
+            let tm = bump_arena::import_iter(&bump, &input);
+            m.normalize(&bump, tm);
+            std::mem::forget(input);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let input = church_pair_iter(n); // 迭代构造，计时外
+            bump.reset(); // 保池回收，旧引用全部作废
+            let tm = bump_arena::import_iter(&bump, &input);
+            let start = Instant::now();
+            let res = m.normalize(&bump, tm);
+            ts.push(start.elapsed());
+            assert!(iter_eq_bump(res, &check), "bump_spine_iter_ss 大 n 结果不正确");
+            std::mem::forget(input);
+        }
+        rows.push(("bump_spine_iter_ss", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
     if rows.is_empty() {
