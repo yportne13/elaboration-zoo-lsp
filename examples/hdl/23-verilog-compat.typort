@@ -1,0 +1,76 @@
+// ============================================================
+// HDL Example 23: Verilog 语法兼容层 (Verilog Syntax Compat)
+//
+//   常用 Verilog 语法可以直接写在 .typort 文件里：module 宏有一条
+//   Verilog 臂匹配 `module top(input clk, ...); <语句> endmodule`，
+//   体内语句经 VExpr 语句表转写为与 typort HDL 完全相同的工厂调用
+//   （newUInt / newUIntReg / whenBegin / ...），elaboration、Verilog
+//   代码生成、LSP 全部复用。
+//
+//   - module top(ANSI 端口头); ... endmodule
+//   - input clk / reset / rst_n 折叠进时钟域（rst_n → ActiveLow）
+//   - wire/reg [msb:lsb] 声明、assign、if/else、begin/end
+//   - always @(posedge clk [or negedge rst_n]) begin q <= d; end
+//   - always @(*) 组合块（reg 被组合驱动 → HDV002 提示）
+//   - 子模块实例化 add8 u1 (.a(x), .sum(s));（方向自动判定）
+//   - 8'hFF / 5'd10 / 4'b1010 sized 字面量、a == b / a != b
+//
+//   M1 限制：拼接用 ##（{a,b} 为 M2）、不支持 parameter/case/for/
+//   initial/generate/$display/延迟；always 体必须用 begin/end。
+//   完整映射表见 docs/verilog-compat.md。
+// ============================================================
+
+// ---- 加法器：Verilog 写法 ----
+module vAdd8(input [7:0] a, input [7:0] b, output [7:0] s);
+    assign s = a + b;
+endmodule
+
+// ---- 加法器：typort 写法（同一语义）----
+module tAdd8 {
+    input a = UInt[8]
+    input b = UInt[8]
+    output s = UInt[8]
+    s := a + b
+}
+
+// ---- 计数器：Verilog 写法（rst_n 折叠为 ActiveLow 复位）----
+module vCounter(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk or negedge rst_n) begin
+        if (d == 8'hFF)
+            q <= 8'h00;
+        else
+            q <= d + 8'h01;
+    end
+endmodule
+
+// ---- 计数器：typort 写法 ----
+module tCounter {
+    input d = UInt[8]
+    output reg q = UInt[8] init 0
+    when d === 255 {
+        q := 0
+    } otherwise {
+        q := d + 1
+    }
+}
+
+// ---- 组合逻辑 + 实例化：Verilog 写法 ----
+module vSub(input [7:0] x, output [7:0] y);
+    assign y = ~x;
+endmodule
+module vTop(input [7:0] a, output [7:0] b);
+    wire [7:0] w;
+    vSub u1 (.x(a), .y(w));
+    assign b = w & 8'h0F;
+endmodule
+
+println("=== 23a: vAdd8 (Verilog 写法) ===")
+println(moduleTreeVL(vAdd8.create.tree))
+println("=== 23b: tAdd8 (typort 写法，输出应与 23a 逐字节一致) ===")
+println(moduleTreeVL(tAdd8.create.tree))
+println("=== 23c: vCounter (negedge rst_n → ActiveLow) ===")
+println(moduleTreeVL(vCounter.create.tree))
+println("=== 23d: tCounter (typort 写法) ===")
+println(moduleTreeVL(tCounter.create.tree))
+println("=== 23e: vTop (实例化 .x(a)/.y(w) 方向自动判定) ===")
+println(moduleTreeVL(vTop.create.tree))

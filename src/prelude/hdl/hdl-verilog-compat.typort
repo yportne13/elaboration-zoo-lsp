@@ -1,0 +1,408 @@
+// ============================================================
+// Verilog syntax compatibility layer (M1)
+// ============================================================
+// Lets common Verilog syntax be written directly inside .typort files.
+// A Verilog-shaped `module top(input clk, input [7:0] a, ...); ...
+// endmodule` is matched by a dedicated arm of the `module` macro
+// (hdl-macros.typort) whose body statements dispatch through THIS file's
+// `VExpr` statement macro — a Verilog statement table kept strictly
+// separate from typort's `Expr` table, so the two syntaxes never pollute
+// each other. Every arm transcribes to the same factories the typort HDL
+// uses (newUInt / newUIntReg / whenBegin / ...); elaboration, Verilog
+// codegen and LSP span mapping are fully reused.
+//
+// M1 mapping summary (full table in docs/verilog-compat.md):
+//   input clk / reset / rst_n (leading ports)   -> folded into the module
+//       ClockDomain (rst_n => ActiveLow), no separate port
+//   wire/reg [msb:lsb] x;  (= init)             -> newUInt / newUIntReg(InitNat)
+//   assign y = e;                               -> y := e
+//   always @(posedge clk [or posedge/negedge rst]) begin ... end
+//                                               -> body verbatim + clock check
+//   always @(*) / @* begin ... end              -> combBegin/combEnd context
+//   q <= d;  q = d;                             -> q := d (reg-ness decides
+//       clocked vs combinational; inside @(*) a reg is forced combinational)
+//   if (c) ... else ...                         -> when/otherwise chain
+//   child u1 (.a(x), .sum(s));                  -> u1 = child.create; vconn(...)
+//   8'h2A / 5'd10 / 4'b1010                     -> sizedLit (parser desugar)
+//   a == b / a != b                             -> === / =/=
+//
+// Constraints (M1): one clock per module, folded clock/reset ports must
+// come first in the port list and use the exact names clk / reset / rst_n;
+// plain `[w]` ports before `output reg [w]` ports before scalar ports
+// (the dominant Verilog declaration order); concatenation uses typort's
+// ## operator ({a,b} sugar is M2); every statement ends with `;` (or
+// begin/end). Unsupported: parameter headers, case/endcase, for, initial,
+// generate, delays, $display, explicit reset conditions inside always
+// (reset goes through `init` values — SpinalHDL semantics).
+
+// ---------- sized literals ----------
+// The parser rewrites `8'h2A` (Num "8", Op "'", Ident "h2A") to
+// sizedLit(8, 42) with the value computed on the Rust side; overflow past
+// the width is rejected there. The width lives in the TYPE, so size
+// arithmetic (##, +^, resize) behaves exactly as for any UInt.
+
+def sizedLit(w: Nat, v: Nat): UInt[w] = UInt.mk(None, literal(v))
+
+// ---------- Verilog comparison aliases ----------
+// `a == b` / `a != b` desugar to method calls. Inherent impl blocks allow
+// only one method per name and their where-clause implicits don't get
+// inserted at call sites, so follow the Equal pattern instead: a small
+// trait with per-argument-type instances (UInt vs UInt, UInt vs Nat, ...),
+// exactly how === overloads in hdl-ops.
+
+trait VEq[A] {
+    def ==(that: A): Bool
+    def !=(that: A): Bool
+}
+
+impl[width: Nat] VEq[UInt[width]] for UInt[width] {
+    def ==(that: UInt[width]): Bool = this === that
+    def !=(that: UInt[width]): Bool = this =/=(that)
+}
+
+impl[width: Nat] VEq[Nat] for UInt[width] {
+    def ==(that: Nat): Bool = this === that
+    def !=(that: Nat): Bool = this =/=(that)
+}
+
+impl[width: Nat] VEq[SInt[width]] for SInt[width] {
+    def ==(that: SInt[width]): Bool = this === that
+    def !=(that: SInt[width]): Bool = this =/=(that)
+}
+
+impl VEq[Bool] for Bool {
+    def ==(that: Bool): Bool = this === that
+    def !=(that: Bool): Bool = this =/=(that)
+}
+
+// ---------- folded clock-domain state ----------
+// The Verilog module arm's prologue creates this global fresh on every
+// create/tree run, then the per-port `compatSetClk/compatSetRst` markers
+// fire for each folded port; compatCD() reads it when the ModuleDef is
+// recorded. The struct wrapper exists because a mutable global's name
+// must be an existing type name (see hdl-core's CombCtx note).
+
+struct CompatCD {
+    clk: String
+    rst: String
+    rstHigh: Boolean
+}
+
+def compatSetClk(n: String): Unit =
+    // A folded clock with no explicit reset keeps the canonical reset name
+    // (compatCD then needs no empty-reset special case).
+    let _ = change_mutable("CompatCD", x => match str_eq(x.rst, "") {
+        case true => CompatCD.mk(n, "reset", true)
+        case false => x
+    });
+    unit
+
+def compatSetRst(n: String, activeHigh: Boolean): Unit =
+    let _ = change_mutable("CompatCD", x => CompatCD.mk(x.clk, n, activeHigh));
+    unit
+
+// NOTE: keep this match NESTING SHALLOW (one str_eq level) — a three-level
+// nested str_eq match here made declaration-time elaboration loop.
+def compatCD(mname: String): ClockDomain =
+    let _ = change_mutable_default("CompatCD", x => x, CompatCD.mk("", "", true));
+    let cd = get_global("CompatCD");
+    match str_eq(cd.clk, "") {
+        case true => defaultClockDomain
+        case false => match cd.rstHigh {
+            case true => ClockDomain.mk cd.clk cd.rst Async RisingEdge ActiveHigh
+            case false => ClockDomain.mk cd.clk cd.rst Async RisingEdge ActiveLow
+        }
+    }
+
+// Report module names come from the FOLDED state (cd.clk / cd.rst), never
+// literals or the checked def's parameters: at class-decl check time the
+// fold state is still empty, so report_check_issue skips the line (empty
+// module — the same protection hdl-check gets from parameter-passed module
+// names); at module-run time a folded clock exists and mismatches report
+// for real.
+
+def compatCheckClk(clkArg: String): Unit =
+    let _ = change_mutable_default("CompatCD", x => x, CompatCD.mk("", "", true));
+    let cd = get_global("CompatCD");
+    match str_eq(clkArg, cd.clk) {
+        case true => unit
+        case false =>
+            let _ = report_check_issue("HDV001", cd.clk, clkArg, "always @(posedge ...) clock must match the module's folded `input clk` port");
+            unit
+    }
+
+def compatCheckRst(rstArg: String): Unit =
+    let _ = change_mutable_default("CompatCD", x => x, CompatCD.mk("", "", true));
+    let cd = get_global("CompatCD");
+    match str_eq(rstArg, cd.rst) {
+        case true => unit
+        case false =>
+            let _ = report_check_issue("HDV001", cd.rst, rstArg, "always @(posedge clk or ...) reset must match the module's folded `input reset` / `input rst_n` port");
+            unit
+    }
+
+// ---------- port direction validation ----------
+
+// NOTE: like compatCD above — keep str_eq OUT of nested scrutinee positions
+// (let-bind the comparisons first); three nested str_eq scrutinees made
+// declaration-time elaboration loop.
+def compatDir(d: String): String =
+    let isInput = str_eq(d, "input");
+    let isInout = str_eq(d, "inout");
+    let isOutput = str_eq(d, "output");
+    match isInput {
+        case true => d
+        case false => match isInout {
+            case true => d
+            case false => match isOutput {
+                case true => d
+                case false =>
+                    let _ = report_check_issue("HDV003", d, d, "unknown port direction (expected input / output / inout)");
+                    "input"
+            }
+        }
+    }
+
+// ---------- direction-aware named-port connection ----------
+// `child u1 (.a(x), .sum(s));` — Verilog's `.p(x)` looks the same for
+// inputs and outputs; typort needs `u.a := x` vs `x := u.a`. vconn looks
+// the child ModuleDef up in the design-wide registry (registered when the
+// child's create ran, earlier in the same body) and emits the assign node
+// with the subSignal on the correct side — the Verilog generator already
+// renders assign-to/from-subSignal as port connections.
+
+def isInputPortExpr(e: Expr, pname: String): Boolean = match e {
+    case createIn(n) => str_eq(n, pname)
+    case createInWidth(n, _) => str_eq(n, pname)
+    case createSIntInWidth(n, _) => str_eq(n, pname)
+    case _ => false
+}
+
+def anyInputPort[n: Nat](exprs: Vec[Expr] n, pname: String): Boolean = match exprs {
+    case nil => false
+    case cons(e, rest) => match isInputPortExpr(e, pname) {
+        case true => true
+        case false => anyInputPort(rest, pname)
+    }
+}
+
+def instModuleOf[n: Nat](exprs: Vec[Expr] n, iname: String): Option[String] = match exprs {
+    case nil => None
+    case cons(e, rest) => match e {
+        case instance(n, mdl) => match str_eq(n, iname) {
+            case true => Some(mdl)
+            case false => instModuleOf(rest, iname)
+        }
+        case _ => instModuleOf(rest, iname)
+    }
+}
+
+def findModuleDef[n: Nat](defs: Vec[ModuleDef] n, name: String): Option[ModuleDef] = match defs {
+    case nil => None
+    case cons(md, rest) => match str_eq(md.name, name) {
+        case true => Some(md)
+        case false => findModuleDef(rest, name)
+    }
+}
+
+// Entry: dispatch a `.port(sig)` connection. Reads go through ensure-exists
+// + get_global (the mkInstanceIfParent pattern); the assign side effect is
+// created OUTSIDE any change_mutable lambda — a change_mutable on ModuleTree
+// from inside a ModuleTree lambda (vconnInTree's earlier shape) made
+// declaration-time elaboration loop.
+// Verilog-compat named-port connection (`.a(x)`): direction dispatch is
+// split so every piece keeps a shape the elaborator handles at declaration
+// time (see def_needs_replay / the bisection notes):
+//   - vconnLookup: PURE navigation (the instModuleOf class — binder arms,
+//     no global ops).
+//   - vconnEmit: Boolean-match arms + createSignalExpr (the pickAssign
+//     class).
+//   - the `vconn` BUILTIN (cxt.rs) glues them: reads ModuleTree /
+//     ModuleRegistry from the mutable map, applies vconnLookup, then
+//     vconnEmit — or the HDV003 lint when the child module is not in the
+//     registry. All-typort versions of this dispatch looped declaration-
+//     time elaboration on infinite Sum normalization (Expr-typed ctor
+//     payloads + global reads under binder-pattern arms).
+def vconnEmit(isIn: Boolean, port: Expr, sig: Expr): Unit =
+    match isIn {
+        case true =>
+            let dummy = createSignalExpr("", assign(port, sig));
+            unit
+        case false =>
+            let dummy = createSignalExpr("", assign(sig, port));
+            unit
+    }
+
+// ============================================================
+// VExpr — the Verilog statement table
+// ============================================================
+// Dispatched ONLY from the Verilog arm of the `module` macro via
+// `$( $body: VExpr )*` fragments (nested statement bodies below also use
+// `$x: VExpr`, expanded at match time exactly like typort's `Expr`
+// fragments). Arms are ordered most-specific-first: rule order is the only
+// backtracking. `raw` fragments are greedy and non-backtracking, so they
+// only appear at end-of-statement (bounded by the literal `;`) or inside
+// bracket/paren delimiters. The final catch-all also requires a `;`, so
+// the closing `end` / `endmodule` tokens are never swallowed as
+// expression statements.
+
+#[macro_export]
+macro_rules VExpr {
+    // ---- wire declarations (width = msb - lsb + 1, written `1 + hi - lo`
+    //      so a `)` never directly precedes `+` inside group transcriptions) ----
+    (wire [ $hi: raw : $lo: raw ] $w: ident = $v: raw ;) => {
+        let $w: UInt[1 + ($hi) - ($lo)] = newUInt(1 + ($hi) - ($lo));
+        let _ = ($w := ($v));
+    };
+    (wire [ $hi: raw : $lo: raw ] $w: ident ;) => {
+        let $w: UInt[1 + ($hi) - ($lo)] = newUInt(1 + ($hi) - ($lo));
+    };
+    (wire $w: ident = $v: raw ;) => {
+        let $w: UInt[1] = newUInt(1);
+        let _ = ($w := ($v));
+    };
+    (wire $w: ident ;) => {
+        let $w: UInt[1] = newUInt(1);
+    };
+
+    // ---- reg declarations (init value: plain decimal only — the Nat-typed
+    //      factory; sized literals as init are M2) ----
+    (reg [ $hi: raw : $lo: raw ] $q: ident = $v: raw ;) => {
+        let $q: UInt[1 + ($hi) - ($lo)] = newUIntRegInitNat(1 + ($hi) - ($lo), ($v));
+    };
+    (reg [ $hi: raw : $lo: raw ] $q: ident ;) => {
+        let $q: UInt[1 + ($hi) - ($lo)] = newUIntReg(1 + ($hi) - ($lo));
+    };
+    (reg $q: ident = $v: raw ;) => {
+        let $q: UInt[1] = newUIntRegInitNat(1, ($v));
+    };
+    (reg $q: ident ;) => {
+        let $q: UInt[1] = newUIntReg(1);
+    };
+
+    // ---- continuous assignment (LHS: bit-select, part-select, plain) ----
+    (assign $l: ident [ $i: raw ] = $r: raw ;) => {
+        let _ = ($l[$i] := ($r));
+    };
+    (assign $l: ident [ $hi: raw : $lo: raw ] = $r: raw ;) => {
+        let _ = ($l.slice[$hi, $lo] := ($r));
+    };
+    (assign $l: ident = $r: raw ;) => {
+        let _ = ($l := ($r));
+    };
+
+    // ---- always @(posedge clk [or posedge/negedge rst]) begin ... end ----
+    // Sequential block: the statements are transcribed verbatim — `q <= d`
+    // already becomes a clocked regAssign via the module's folded clock
+    // domain; only the clock/reset names are validated.
+    (always @ ( posedge $clk: ident or posedge $rst: ident ) begin $( $s: VExpr )* end) => {
+        let _ = compatCheckClk(stringify $clk);
+        let _ = compatCheckRst(stringify $rst);
+        $($s)*
+    };
+    (always @ ( posedge $clk: ident or negedge $rst: ident ) begin $( $s: VExpr )* end) => {
+        let _ = compatCheckClk(stringify $clk);
+        let _ = compatCheckRst(stringify $rst);
+        $($s)*
+    };
+    (always @ ( posedge $clk: ident ) begin $( $s: VExpr )* end) => {
+        let _ = compatCheckClk(stringify $clk);
+        $($s)*
+    };
+
+    // ---- always @(*) / @* begin ... end (combinational) ----
+    // combBegin/combEnd mark the context: a reg assigned here is driven
+    // combinationally (pickAssign in hdl-core + HDV002 lint).
+    (always @ ( * ) begin $( $s: VExpr )* end) => {
+        let _ = combBegin();
+        $($s)*
+        let _ = combEnd();
+    };
+    (always @ * begin $( $s: VExpr )* end) => {
+        let _ = combBegin();
+        $($s)*
+        let _ = combEnd();
+    };
+
+    // ---- if / else (begin-forms before single-statement forms; the else
+    //      branch is a VExpr fragment so `else if` chains recurse) ----
+    (if ( $c: raw ) begin $( $t: VExpr )* end else begin $( $e: VExpr )* end) => {
+        let _ = whenBegin(($c).expr);
+        $({$t})*
+        let _ = whenOtherwiseBegin(unit);
+        $({$e})*
+        let _ = whenEnd(unit);
+    };
+    (if ( $c: raw ) begin $( $t: VExpr )* end else $f: VExpr) => {
+        let _ = whenBegin(($c).expr);
+        $({$t})*
+        let _ = whenOtherwiseBegin(unit);
+        $f
+        let _ = whenEnd(unit);
+    };
+    (if ( $c: raw ) begin $( $t: VExpr )* end) => {
+        let _ = whenBegin(($c).expr);
+        $({$t})*
+        let _ = whenEnd(unit);
+    };
+    (if ( $c: raw ) $t: VExpr else begin $( $e: VExpr )* end) => {
+        let _ = whenBegin(($c).expr);
+        $t
+        let _ = whenOtherwiseBegin(unit);
+        $({$e})*
+        let _ = whenEnd(unit);
+    };
+    (if ( $c: raw ) $t: VExpr else $f: VExpr) => {
+        let _ = whenBegin(($c).expr);
+        $t
+        let _ = whenOtherwiseBegin(unit);
+        $f
+        let _ = whenEnd(unit);
+    };
+    (if ( $c: raw ) $t: VExpr) => {
+        let _ = whenBegin(($c).expr);
+        $t
+        let _ = whenEnd(unit);
+    };
+
+    // ---- bare begin/end block (pure grouping, spliced flat) ----
+    (begin $( $s: VExpr )* end) => {
+        $($s)*
+    };
+
+    // ---- sub-module instantiation with named ports ----
+    // The child's OWN `.tree` carries its port directions (fresh values, no
+    // laziness) — the design-wide ModuleRegistry is built through
+    // registerModuleTree's change_mutable lambda and can hold stuck Match
+    // values there, so it is deliberately NOT consulted here.
+    ( $m: ident $u: ident ( $( . $p: ident ( $x: raw ) $(,)? )* ) ;) => {
+        let $u = $m.create;
+        let __vct = $u.tree;
+        $( let _ = vconnT(__vct, $u . $p . zz_expr, ($x) . zz_expr); )*
+    };
+
+    // ---- procedural nonblocking/blocking assignment (LHS variants) ----
+    ( $l: ident [ $i: raw ] <= $r: raw ;) => {
+        let _ = ($l[$i] := ($r));
+    };
+    ( $l: ident [ $hi: raw : $lo: raw ] <= $r: raw ;) => {
+        let _ = ($l.slice[$hi, $lo] := ($r));
+    };
+    ( $l: ident <= $r: raw ;) => {
+        let _ = ($l := ($r));
+    };
+    ( $l: ident [ $i: raw ] = $r: raw ;) => {
+        let _ = ($l[$i] := ($r));
+    };
+    ( $l: ident [ $hi: raw : $lo: raw ] = $r: raw ;) => {
+        let _ = ($l.slice[$hi, $lo] := ($r));
+    };
+    ( $l: ident = $r: raw ;) => {
+        let _ = ($l := ($r));
+    };
+
+    // ---- expression statement (requires `;` so end/endmodule survive) ----
+    ( $x: raw ;) => {
+        let _ = ($x);
+    };
+}
