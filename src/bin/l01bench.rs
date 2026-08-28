@@ -46,10 +46,16 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
-    // 大栈线程：深度无上限演示（cek/cek_bump 到 51 万+）需要线性增长的
-    // 栈（未定位的消耗点，不在 quote 主循环——栈指针采样恒定）。
+    // 大栈线程：bump 系迭代变体（cek_bump/bump_iter/bump_spine_iter）全链路
+    // 迭代化后 4MB 栈即可跑到 51 万+（L01_STACK_MB=4 可复验）；仍需大栈的
+    // 只有 `cek`（Value 派生 Clone/Drop 对深 Box 树递归，见 cek.rs 头注释）
+    // 和小 n 段的递归 import/export 接线。默认 128MB 留足余量。
+    let stack_mb: usize = std::env::var("L01_STACK_MB")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(128);
     std::thread::Builder::new()
-        .stack_size(128 << 20)
+        .stack_size(stack_mb << 20)
         .spawn(move || L01_nbe::bench::run(cli.max_church, cli.rounds, cli.only.as_deref()))
         .unwrap()
         .join()

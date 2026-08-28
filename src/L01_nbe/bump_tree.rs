@@ -43,7 +43,9 @@ fn quote_bump<'a>(bump: &'a Bump, level: usize, value: Bv<'a>) -> &'a Bt<'a> {
 
 /// 迭代 quote：任务栈 + 已完成节点栈，后续遍历。App spine 两万层深也只走
 /// 自己的栈，不占硬件栈——递归版（`quote_bump`）更快，深度无上限的场景
-/// （`cek_bump`/`bump_iter`）用本函数。
+/// （`cek_bump`/`bump_iter`）用本函数。`EvalThenQ` 强制闭包体时用
+/// [`super::bump_iter::eval`]（迭代）——用递归 `bump_arena::eval` 的话深
+/// 右链每次强制都吃线性机器栈（旧"51 万+ 栈消耗"悬案的元凶，已修）。
 pub(crate) fn quote_bump_iter<'a>(bump: &'a Bump, v0: Bv<'a>) -> &'a Bt<'a> {
     enum QJob<'a> {
         Q(Bv<'a>, usize),
@@ -78,7 +80,9 @@ pub(crate) fn quote_bump_iter<'a>(bump: &'a Bump, v0: Bv<'a>) -> &'a Bt<'a> {
                 done.push(bump.alloc(Bt::App(f, a)));
             },
             QJob::EvalThenQ(body, env, level) => {
-                let v = bump_arena::eval(bump, env, body);
+                // 必须用迭代 eval：递归版（bump_arena::eval）在深右链上
+                // 每次强制闭包都吃线性机器栈（旧"51 万+ 栈消耗"悬案的元凶）
+                let v = super::bump_iter::eval(bump, env, body);
                 tasks.push(QJob::Q(v, level));
             },
         }

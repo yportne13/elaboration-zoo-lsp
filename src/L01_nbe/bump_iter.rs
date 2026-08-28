@@ -20,7 +20,13 @@ use super::bump_arena::{self, Bt, Bv, Env};
 use super::term::Term;
 
 /// 双栈迭代 eval：与 `bump_arena::eval` 语义相同（先函数后实参）。
-fn eval<'a>(bump: &'a Bump, env0: Option<&'a Env<'a>>, tm0: &'a Bt<'a>) -> Bv<'a> {
+/// 公开给 [`super::bump_tree::quote_bump_iter`]——quote 强制闭包体时必须用
+/// 迭代版（递归版在深链上吃线性机器栈，是旧"51 万+ 栈消耗"悬案的元凶）。
+pub(crate) fn eval<'a>(
+    bump: &'a Bump,
+    env0: Option<&'a Env<'a>>,
+    tm0: &'a Bt<'a>,
+) -> Bv<'a> {
     enum W<'a> {
         Tm(&'a Bt<'a>, Option<&'a Env<'a>>),
         Apply,
