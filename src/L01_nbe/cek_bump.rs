@@ -1,13 +1,10 @@
-//! CEK 机 + bump 全分配：栈安全方向的结合实验。
+//! CEK 机 + bump 全分配：求值深度无上限，同时保留 bump 的速度。
 //!
-//! `cek`（Rc 链表 + 字节码 + 全迭代）是唯一不爆栈的变体但慢 ~11×；
-//! `bump_tree`（bump 全分配 + 递归）是速度王但深度受进程栈限。这里把
-//! 两者的长处拼起来：**求值 = 显式 kont 栈的 CEK 机（深度不受限），
-//! 值/环境/结果 = bump 引用式（零 malloc）**。
-//!
-//! quote 用任务栈迭代（`bump_arena::quote_bump_iter`）——递归版在这个
-//! 场景会以结果树深度爆栈。实测在第 5 轮 readme：速度贴近 `bump_tree`，
-//! 深度与 `cek` 同级（n = 26 万不爆栈）。
+//! 求值 = 显式 kont 栈的 CEK 机（深度不受进程栈限），值/环境/结果 =
+//! bump 引用式（零 malloc）。quote 用任务栈迭代
+//! （`super::bump_tree::quote_bump_iter`）——递归版会以结果树深度爆栈。
+//! 实测：速度 ≈ 递归版 `bump_tree` 的 1.2×，深度与 `cek` 同级（n = 51 万
+//! 线性可跑，见 readme）。
 
 use bumpalo::Bump;
 
@@ -70,7 +67,7 @@ fn eval<'a>(bump: &'a Bump, env0: Option<&'a Env<'a>>, tm0: &'a Bt<'a>) -> Bv<'a
 /// 对已导入 bump 的项做 NBE（基准计时对象；import 在计时外）。
 /// eval（CEK 迭代）+ quote（任务栈迭代）都深度无上限。
 pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
-    bump_arena::quote_bump_iter(bump, eval(bump, None, tm))
+    super::bump_tree::quote_bump_iter(bump, eval(bump, None, tm))
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。

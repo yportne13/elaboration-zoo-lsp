@@ -10,8 +10,9 @@
 //! 在计时前完成，断言在计时窗口外；arena 变体跨轮次复用 `ListArena`（追加式，
 //! 下标永不过期，见 `persistent_list` 的说明），测的是稳态。
 //!
-//! n > 8000 时只有 `cek` 能跑：其余变体的构造/求值/比较全链路都是递归，
-//! 在此规模直接栈溢出。大 n 的 cek 段改用迭代构造 + 迭代比较（`church_iter`/
+//! n > 8000 时只有迭代变体（`cek`/`cek_bump`/`bump_iter`）能跑：其余变体
+//! 的构造/求值/比较全链路都是递归，在此规模直接栈溢出。大 n 段改用迭代
+//! 构造 + 迭代比较（`church_iter`/
 //! `iter_eq`），同样先断言再计时。
 
 use std::time::{Duration, Instant};
@@ -23,7 +24,8 @@ use super::term::{self, Term};
 use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, bump_iter, cek, cek_bump, compiled, env_slice, naive, rc_term, rc_value, rpn_owned,
+    bump_arena, bump_iter, bump_tree, cek, cek_bump, compiled, env_slice, naive, rc_term,
+    rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -266,20 +268,20 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         let got = {
             let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
             let tm = bump_arena::import(&bump, &term::church_pair(n));
-            bump_arena::export(bump_arena::normalize_imported_bump(&bump, tm)) // 转回只在断言前
+            bump_arena::export(bump_tree::normalize_imported(&bump, tm)) // 转回只在断言前
         };
         assert_eq!(got, check, "bump_tree 结果不正确");
         {
             let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
             let tm = bump_arena::import(&bump, &term::church_pair(n));
-            bump_arena::normalize_imported_bump(&bump, tm);
+            bump_tree::normalize_imported(&bump, tm);
         }
         let mut ts = Vec::with_capacity(rounds);
         for _ in 0..rounds {
             let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
             let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
             let start = Instant::now();
-            let res = bump_arena::normalize_imported_bump(&bump, tm);
+            let res = bump_tree::normalize_imported(&bump, tm);
             ts.push(start.elapsed());
             assert_eq!(bump_arena::export(res), check);
         }

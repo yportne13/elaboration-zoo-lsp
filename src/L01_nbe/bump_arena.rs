@@ -11,6 +11,10 @@
 //! 生命周期 `'a` 贯穿同一个 `Bump`；闭包捕获的环境就是 `&'a Env` 链表头。
 //! 与下标式 `ListArena` 的取舍：引用省掉 `nth` 的查表间接，代价是闭包/值
 //! 的 `Clone` 只是浅拷引用（这点和 `Rc` 一致）。
+//!
+//! 本文件同时是 bump 系变体的公共内核：`bump_tree`（结果也 bump）、
+//! `cek_bump`（CEK 迭代）、`bump_iter`（双栈迭代）、`env_slice`（切片
+//! 环境）都复用这里的 `Bt`/`Env`/`Bv`/`eval`/`import`/`export`。
 
 use bumpalo::Bump;
 
@@ -96,7 +100,7 @@ pub(crate) fn nth<'a>(env: Option<&'a Env<'a>>, idx: usize) -> &'a Bv<'a> {
 ///      | Idx idx   -> List.nth env idx
 ///      | Lam tm'   -> VLam(env, tm')
 ///      | App(f, a) -> apply_val (eval env f) (eval env a)
-fn eval<'a>(bump: &'a Bump, env: Option<&'a Env<'a>>, tm: &'a Bt<'a>) -> Bv<'a> {
+pub(crate) fn eval<'a>(bump: &'a Bump, env: Option<&'a Env<'a>>, tm: &'a Bt<'a>) -> Bv<'a> {
     match tm {
         Bt::Idx(idx) => nth(env, *idx).clone(),
         Bt::Lam(body) => Bv::Clo(env, body),
@@ -152,79 +156,6 @@ fn quote<'a>(bump: &'a Bump, level: usize, value: Bv<'a>) -> Term {
 /// `bump` 与 `tm` 必须同源（`import` 的产物）。
 pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> Term {
     quote(bump, 0, eval(bump, None, tm))
-}
-
-/// 结果树也留在 bump 里（`bump_tree` 变体）：quote 不再 `Box::new`，
-/// 求值 + 结果生成全程零 Rust 堆分配；需要 `Box<Term>` 时再 `export`
-/// （基准把它放在计时外）。
-///
-/// quote 保持递归：实测迭代版（显式任务栈）反而慢 30%——Vec 栈的边界
-/// 检查与容量管理比机器栈帧贵（与 `cek` 的 kont 栈同一条教训）。深度
-/// 无上限的场景（`cek_bump`）用下面的 `quote_bump_iter`。
-pub(crate) fn normalize_imported_bump<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
-    // eval 只做 O(λ) 步（church_pair 直接出闭包），重活全在 quote 的 Clo 重入
-    quote_bump(bump, 0, eval(bump, None, tm))
-}
-
-fn quote_bump<'a>(bump: &'a Bump, level: usize, value: Bv<'a>) -> &'a Bt<'a> {
-    match value {
-        Bv::Lvl(lvl) => bump.alloc(Bt::Idx(level - lvl - 1)),
-        Bv::Clo(env, body) => {
-            let node = bump.alloc(Env { val: Bv::Lvl(level), next: env });
-            let body = quote_bump(bump, level + 1, eval(bump, Some(node), body));
-            bump.alloc(Bt::Lam(body))
-        },
-        Bv::App(vf, va) => {
-            let f = quote_bump(bump, level, vf.clone());
-            let a = quote_bump(bump, level, va.clone());
-            bump.alloc(Bt::App(f, a))
-        },
-    }
-}
-
-/// 迭代 quote：任务栈 + 已完成节点栈，后续遍历。App spine 两万层深也只走
-/// 自己的栈，不占硬件栈——`bump_tree` 用不上（递归更快），`cek_bump` 的
-/// 深度无上限场景需要它。
-pub(crate) fn quote_bump_iter<'a>(bump: &'a Bump, v0: Bv<'a>) -> &'a Bt<'a> {
-    enum QJob<'a> {
-        Q(Bv<'a>, usize),
-        Lam1,
-        App1,
-        EvalThenQ(&'a Bt<'a>, Option<&'a Env<'a>>, usize),
-    }
-    let mut tasks: Vec<QJob<'a>> = vec![QJob::Q(v0, 0)];
-    let mut done: Vec<&'a Bt<'a>> = Vec::new();
-    while let Some(job) = tasks.pop() {
-        match job {
-            QJob::Q(Bv::Lvl(lvl), level) => {
-                done.push(bump.alloc(Bt::Idx(level - lvl - 1)));
-            },
-            QJob::Q(Bv::Clo(env, body), level) => {
-                let node = bump.alloc(Env { val: Bv::Lvl(level), next: env });
-                tasks.push(QJob::Lam1);
-                tasks.push(QJob::EvalThenQ(body, Some(node), level + 1));
-            },
-            QJob::Q(Bv::App(vf, va), level) => {
-                tasks.push(QJob::App1);
-                tasks.push(QJob::Q(va.clone(), level));
-                tasks.push(QJob::Q(vf.clone(), level));
-            },
-            QJob::Lam1 => {
-                let body = done.pop().expect("quote 栈：Lam 缺体");
-                done.push(bump.alloc(Bt::Lam(body)));
-            },
-            QJob::App1 => {
-                let a = done.pop().expect("quote 栈：App 缺实参");
-                let f = done.pop().expect("quote 栈：App 缺函数");
-                done.push(bump.alloc(Bt::App(f, a)));
-            },
-            QJob::EvalThenQ(body, env, level) => {
-                let v = eval(bump, env, body);
-                tasks.push(QJob::Q(v, level));
-            },
-        }
-    }
-    done.pop().expect("quote 必须恰有一个根")
 }
 
 /// 把 bump 内结果树转回 `Box<Term>`（递归；仅用于断言/消费侧，不计时）。

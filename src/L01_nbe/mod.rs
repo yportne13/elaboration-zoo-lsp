@@ -1,40 +1,42 @@
-//! L01 — 归一化求值：同一份 NBE 算法在 16 种实现下的对比与基准。
+//! L01 — 归一化求值（NBE）：同一算法在 16 种实现下的对比与基准。
 //!
-//! 这一层是 elaboration zoo 的第一课：用纯 lambda 演算（`Term`，de Bruijn 索引）
-//! 演示正常化（eval + quote），并回答一个工程问题——**项和值的表示方式对求值
-//! 性能有多大影响**。`L01a_fast` 时代的实验（字节码、arena 环境、扁平值…）按
-//! 表示轴整理为 8 个变体，加 3 个求值策略变体（`cek`、`cek_bump`、`bump_iter`），再补 5 个
-//! arena 演进（`ast_env_arena`、`bump_arena`），全部用同一个工作负载
-//! （丘奇数加法）验证正确性并计时：
+//! 用纯 lambda 演算（[`Term`]，de Bruijn 索引）演示正常化（eval + quote），
+//! 并量化一个工程问题：**项和值的表示方式对求值性能有多大影响**。16 个
+//! 变体沿四条轴展开，全部用同一个工作负载（丘奇数加法 `church_pair(n)`）
+//! 先断言正确（结果 = `church(2n)`）再计时（`l01bench` 独立二进制）：
 //!
-//! | 变体 | 项表示 | 环境 | 值表示 | 旧文件名 |
+//! * **项表示**：Box AST（`naive` 族）→ Rc 共享树（`rc_term`）→ 字节码
+//!   （`bytes_*` / `rpn_owned`）→ bump 引用树（`bump_*`）→ 指令数组
+//!   （`compiled`）
+//! * **环境表示**：Rc 持久链表 → `ListArena` 下标链表 → bump 引用链表 →
+//!   bump 数组切片（`env_slice`，nth O(1)）
+//! * **求值策略**：递归（调用栈即控制栈）→ CEK 显式 kont 栈（`cek` /
+//!   `cek_bump`）→ 双栈推土机（`bump_iter`）
+//! * **分配器**：系统堆 → mimalloc → 自研下标 arena → bumpalo
+//!
+//! 变体一览（**变体名即文件名**，见 `src/L01_nbe/`；公共设施 `term.rs` /
+//! `persistent_list.rs` / `bench.rs` 不是变体）：
+//!
+//! | 变体 | 项表示 | 环境 | 求值策略 | 备注 |
 //! |---|---|---|---|---|
-//! | `naive` | `Box<Term>` | `crate::list::List` | enum + `Box` | nbe_closure.rs |
-//! | `rc_value` | `Box<Term>` | `crate::list::List` | enum + `Rc` | nbe_closure_rc.rs |
-//! | `rc_term` | `Rc<TermRc>` | `crate::list::List` | enum + `Rc` | nbe_closure_rc2.rs |
-//! | `bytes_env_list` | 字节码（前缀） | `crate::list::List` | enum + `Rc` | nbe_closure1.rs |
-//! | `bytes_env_arena` | 字节码（前缀） | `ListArena` | enum + `Rc` | nbe_closure2.rs |
-//! | `bytes_env_arena_tm` | 字节码 + 项体共享 arena | `ListArena` | enum + `Rc` | nbe_closure22.rs |
-//! | `bytes_flat_value` | 字节码（前缀） | `ListArena` | 扁平字节 `Vec<u8>` | nbe_closure3.rs |
-//! | `rpn_owned` | 字节码（后缀/RPN，自持） | `crate::list::List` | enum + `Rc` | nbe_closure4.rs |
-//! | `cek` | `Box<Term>` AST | `crate::list::List` | enum + `Box` | 新写：CEK 机 |
-//! | `ast_env_arena` | `Box<Term>` AST | `ListArena` | enum + `Box` | 新写：naive 的 arena 演进 |
-//! | `bump_arena` | bump 内引用式 AST | bump 持久链表 | 引用式 enum | 新写：bumpalo 全 arena |
-//! | `bump_tree` | bump 引用式 AST（含结果） | bump 持久链表 | 引用式 enum | 新写：bump_arena + 结果 bump 化 |
-//! | `compiled` | 定长指令数组 `&[Ins]` | bump 持久链表 | 引用式 enum | 新写：项编译为指令 + bump 值/结果 |
-//! | `cek_bump` | bump 引用式 AST | bump 持久链表 | 引用式 enum | 新写：CEK 迭代 eval + bump 全分配 |
-//! | `bump_iter` | bump 引用式 AST | bump 持久链表 | 引用式 enum | 新写：bump_tree 的双栈迭代改造 |
-//! | `env_slice` | bump 引用式 AST | bump 数组切片（nth O(1)） | 引用式 enum | 新写：bump_tree + 切片环境 |
+//! | `naive` | `Box<Term>` | Rc 链表 | 递归 | 基线 |
+//! | `rc_value` | `Box<Term>` | Rc 链表 | 递归 | 值带 Rc 骨架 |
+//! | `rc_term` | `Rc<TermRc>` | Rc 链表 | 递归 | 项也共享 |
+//! | `bytes_env_list` | 前缀字节码 | Rc 链表 | 递归 | 项扁平化 |
+//! | `bytes_env_arena` | 前缀字节码 | `ListArena` | 递归 | 环境免分配 |
+//! | `bytes_env_arena_tm` | 字节码 + 体共享 arena | `ListArena` | 递归 | 闭包体免拷贝 |
+//! | `bytes_flat_value` | 前缀字节码 | `ListArena` | 递归 | 值也扁平（O(n²)，别用） |
+//! | `rpn_owned` | 后缀字节码（自持） | Rc 链表 | 递归 | RPN 镜像 |
+//! | `ast_env_arena` | `Box<Term>` | `ListArena` | 递归 | AST + 免分配环境 |
+//! | `bump_arena` | bump 引用树 | bump 引用链表 | 递归 | 结果 Box 输出 |
+//! | `bump_tree` | bump 引用树 | bump 引用链表 | 递归 | 结果也 bump，零 malloc |
+//! | `env_slice` | bump 引用树 | bump 数组切片 | 递归 | nth O(1)，深索引友好 |
+//! | `compiled` | 指令数组 `&[Ins]` | bump 引用链表 | 递归解释 | 项编译为指令 |
+//! | `cek` | `Box<Term>` | Rc 链表 | CEK kont 栈 | 最简栈安全 |
+//! | `cek_bump` | bump 引用树 | bump 引用链表 | CEK kont 栈 | 栈安全 + bump |
+//! | `bump_iter` | bump 引用树 | bump 引用链表 | 双栈迭代 | 推荐：速度+深度 |
 //!
-//! `cek` 不在表示轴上，而在**求值策略**上：其余变体都是递归 eval（调用栈即
-//! 控制栈），`cek` 把控制栈显式搬进堆（continuation 栈），求值深度不再受进程
-//! 栈限。`ast_env_arena` 与 `bump_arena` 是 Rc 家族的 arena 演进：前者把环境
-//! 换成下标式 `ListArena`，后者连项带值全部 bump 分配、引用式结构（无计数、
-//! 无析构）。
-//!
-//! 运行基准：独立的 `l01bench` 二进制（不依赖 typort/lib 其余各层，详见
-//! [`bench`] 与模块内 `readme.md` 的实测结果）。正确性：每种表示都会先
-//! 断言结果等于 `church(2n)`，再开始计时。
+//! 运行基准与选型结论见 [`bench`] 与模块内 `readme.md`。
 
 pub mod bench;
 pub mod persistent_list;
@@ -47,6 +49,7 @@ pub(crate) mod bytes_env_list;
 pub(crate) mod bytes_flat_value;
 pub(crate) mod bump_arena;
 pub(crate) mod bump_iter;
+pub(crate) mod bump_tree;
 pub(crate) mod cek;
 pub(crate) mod cek_bump;
 pub(crate) mod compiled;

@@ -1,7 +1,8 @@
-//! `bump_tree` 递归的直接改造（回答"栈安全只有 cek 一种做法吗"——不是）。
+//! `bump_tree` 的迭代改造（双栈推土机）：递归 eval 压平为显式双栈，
+//! 求值深度不受进程栈限，代码结构与 `bump_tree` 一一对应。
 //!
 //! bump_tree 的 eval 递归结构是"求 f → 求 a → apply"，β 归约是纯尾调用。
-//! 把这条链压平为**双栈**：
+//! 压平为**双栈**：
 //!
 //! ```text
 //! work 栈：Tm(&Bt, env)     待求值的项
@@ -11,7 +12,7 @@
 //!
 //! 与 `cek_bump` 的通用 CEK kont 栈（`Fun`/`Arg` 两条）相比：栈条目种类
 //! 更少、β 归约不再产生额外条目（归约 = 直接推入体的 `Tm`，天然循环）。
-//! quote 复用 `bump_arena::quote_bump_iter`（任务栈）。
+//! quote 复用 `super::bump_tree::quote_bump_iter`（任务栈）。
 
 use bumpalo::Bump;
 
@@ -61,7 +62,7 @@ fn eval<'a>(bump: &'a Bump, env0: Option<&'a Env<'a>>, tm0: &'a Bt<'a>) -> Bv<'a
 /// 对已导入 bump 的项做 NBE（基准计时对象；import 在计时外）。
 /// eval（双栈迭代）+ quote（任务栈迭代）都深度无上限。
 pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
-    bump_arena::quote_bump_iter(bump, eval(bump, None, tm))
+    super::bump_tree::quote_bump_iter(bump, eval(bump, None, tm))
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
