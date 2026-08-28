@@ -281,6 +281,9 @@ mod legacy_tests;
 mod module_probe_tests;
 
 #[cfg(test)]
+mod verilog_compat_tests;
+
+#[cfg(test)]
 mod class_tests;
 
 #[cfg(test)]
