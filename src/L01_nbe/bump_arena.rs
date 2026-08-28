@@ -117,6 +117,42 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> Term {
     quote(bump, 0, eval(bump, None, tm))
 }
 
+/// 结果树也留在 bump 里（`bump_tree` 变体）：quote 不再 `Box::new`，
+/// 求值 + 结果生成全程零 Rust 堆分配；需要 `Box<Term>` 时再 `export`
+/// （基准把它放在计时外）。
+///
+/// quote 保持递归：实测迭代版（显式任务栈）反而慢 30%——Vec 栈的边界
+/// 检查与容量管理比机器栈帧贵（与 `cek` 的 kont 栈同一条教训）。
+pub(crate) fn normalize_imported_bump<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
+    // eval 只做 O(λ) 步（church_pair 直接出闭包），重活全在 quote 的 Clo 重入
+    quote_bump(bump, 0, eval(bump, None, tm))
+}
+
+fn quote_bump<'a>(bump: &'a Bump, level: usize, value: Bv<'a>) -> &'a Bt<'a> {
+    match value {
+        Bv::Lvl(lvl) => bump.alloc(Bt::Idx(level - lvl - 1)),
+        Bv::Clo(env, body) => {
+            let node = bump.alloc(Env { val: Bv::Lvl(level), next: env });
+            let body = quote_bump(bump, level + 1, eval(bump, Some(node), body));
+            bump.alloc(Bt::Lam(body))
+        },
+        Bv::App(vf, va) => {
+            let f = quote_bump(bump, level, vf.clone());
+            let a = quote_bump(bump, level, va.clone());
+            bump.alloc(Bt::App(f, a))
+        },
+    }
+}
+
+/// 把 bump 内结果树转回 `Box<Term>`（递归；仅用于断言/消费侧，不计时）。
+pub(crate) fn export(t: &Bt) -> Term {
+    match t {
+        Bt::Idx(i) => Term::Idx(*i),
+        Bt::Lam(b) => Term::Lam(Box::new(export(b))),
+        Bt::App(f, a) => Term::App(Box::new(export(f)), Box::new(export(a))),
+    }
+}
+
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();

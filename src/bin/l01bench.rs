@@ -39,8 +39,7 @@ struct Cli {
     #[arg(long, default_value_t = 5)]
     rounds: usize,
 
-    /// 只跑指定变体（cek/naive/rc_value/rc_term/bytes_env_list/
-    /// bytes_env_arena/bytes_env_arena_tm/bytes_flat_value/rpn_owned）
+    /// 只跑指定变体（逗号分隔多值，如 cek 或 bump_arena,bump_tree）
     #[arg(long)]
     only: Option<String>,
 }

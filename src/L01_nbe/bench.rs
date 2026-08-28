@@ -1,4 +1,4 @@
-//! 9 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
+//! 12 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
 //! 规范化结果必须等于 `church(2n)`。流程：
@@ -31,7 +31,7 @@ const RECURSION_SAFE_MAX: usize = 8000;
 pub fn run(max_church: usize, rounds: usize, only: Option<&str>) {
     println!("L01 NBE bench: church_pair(n) = add (church n) (church n) -> church(2n)");
     match only {
-        Some(name) => println!("rounds per variant = {rounds}, only variant = {name}\n"),
+        Some(names) => println!("rounds per variant = {rounds}, only variants = {names}\n"),
         None => println!("rounds per variant = {rounds}, sizes double from 1000\n"),
     }
 
@@ -46,7 +46,11 @@ pub fn run(max_church: usize, rounds: usize, only: Option<&str>) {
 }
 
 fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
-    let want = |name: &'static str| only.is_none() || only == Some(name);
+    // 逗号分隔多值，如 --only bump_arena,bump_tree
+    let want = move |name: &'static str| match only {
+        None => true,
+        Some(list) => list.split(',').any(|x| x == name),
+    };
 
     if n > RECURSION_SAFE_MAX {
         if want("cek") {
@@ -236,19 +240,19 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
     // bump_arena — bumpalo 全 arena：项/值/环境全 bump 分配，引用式结构
     if want("bump_arena") {
         let got = {
-            let bump = Bump::new();
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
             let tm = bump_arena::import(&bump, &term::church_pair(n));
             bump_arena::normalize_imported(&bump, tm)
         };
         assert_eq!(got, check, "bump_arena 结果不正确");
         {
-            let bump = Bump::new();
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
             let tm = bump_arena::import(&bump, &term::church_pair(n));
             bump_arena::normalize_imported(&bump, tm);
         }
         let mut ts = Vec::with_capacity(rounds);
         for _ in 0..rounds {
-            let bump = Bump::new();
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
             let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
             let start = Instant::now();
             let got = bump_arena::normalize_imported(&bump, tm);
@@ -256,6 +260,31 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             assert_eq!(got, check);
         }
         rows.push(("bump_arena", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
+    // bump_tree — bump_arena 的结果树也 bump 化：求值+结果生成全程零 Rust 堆分配
+    if want("bump_tree") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(bump_arena::normalize_imported_bump(&bump, tm)) // 转回只在断言前
+        };
+        assert_eq!(got, check, "bump_tree 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::normalize_imported_bump(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20); // 预分配 1MB chunk，避免中途再申请
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = bump_arena::normalize_imported_bump(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_tree", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
     print_table(n, &rows);
