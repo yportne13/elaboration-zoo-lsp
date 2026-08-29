@@ -11,11 +11,20 @@
 //!   （quote 强制整条 s-链，L01 church_pair 的 L02 对应物）。
 //! - `conv`：同一 church 数之上的 `Eq Nat (add big zero) big = refl Nat big`
 //!   ——check 内 beta-eta conv 强制两侧完整展开后结构比较。
+//! - `dup`：church 2^(k+1) 之上 `D p_k`（`D = \x f. f x x`），nf =
+//!   `λf. f C C`——λ-binder 复制同一闭包值，quote 对它强制 **2 次**
+//!   （L01 dup_pair 的 L02 对应物；call-by-need / quote 记忆化轴）。
+//! - `dup_deep`：`D1 (D0 p_k)`，nf = `λf. f (λf'. f' C C) (λf'. f' C C)`
+//!   ——C 被强制 **4 次**（复制层数翻倍，收益随层数指数增长）。
+//!
+//! 实现行：`basic`（参考版）、`fast` / `fast_ss`（bump_spine_iter 一次性 /
+//! 稳态）、`fast_memo`（quote 记忆化口径；线性负载付哈希税，复制负载把
+//! 2×/4× 重复强制塌缩回 1×；conv 无 quote 故不出赛）。
 //!
 //! 用法：
 //! ```text
 //! cargo run --release --bin l02bench [--max-k 15] [--rounds 5] [--only basic,fast]
-//!                                     [--workload church|conv|all]
+//!                                     [--workload church|conv|dup|dup_deep|all]
 //! ```
 
 #![feature(pattern)]
@@ -39,7 +48,7 @@ use clap::Parser;
 use mimalloc::MiMalloc;
 use std::time::Instant;
 
-use L02_tyck::bump_spine_iter::{church_src, conv_src, Tycker};
+use L02_tyck::bump_spine_iter::{church_src, conv_src, dup_deep_src, dup_src, Tycker};
 use L02_tyck::parser::parser;
 
 #[derive(Parser)]
@@ -60,7 +69,7 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（check+nf，默认）| conv（check 内转换检查）| all
+    /// 负载族：church（check+nf，默认）| conv | dup | dup_deep | all
     #[arg(long, default_value = "church")]
     workload: String,
 }
@@ -94,28 +103,40 @@ fn run(cli: Cli) {
     let workloads: &[&str] = match cli.workload.as_str() {
         "church" => &["church"],
         "conv" => &["conv"],
-        _ => &["church", "conv"],
+        "dup" => &["dup"],
+        "dup_deep" => &["dup_deep"],
+        _ => &["church", "conv", "dup", "dup_deep"],
     };
 
     for workload in workloads {
         println!("== workload: {workload} ==");
+        // conv 只走 check（无 quote）；church/dup/dup_deep 走 check + nf
+        let nf_workload = *workload != "conv";
         for k in 9..=cli.max_k {
             let n = 1u64 << (k + 1);
-            let src = if *workload == "church" {
-                church_src(k)
-            } else {
-                conv_src(k)
+            let src = match *workload {
+                "church" => church_src(k),
+                "conv" => conv_src(k),
+                "dup" => dup_src(k),
+                _ => dup_deep_src(k),
             };
             // 计时外：解析 + 正确性断言
             let Some(raw) = parser(&src, 0) else {
                 eprintln!("parse failed at k={k}");
                 continue;
             };
-            let expect_nodes = 2 * n + 4; // λ N s z. s^n z：3 Lam + n App + (n+1) Var
-            if *workload == "church" {
+            // church：λ N s z. s^n z = 3 Lam + n App + (n+1) Var；
+            // dup / dup_deep 的推导见 bump_spine_iter 的生成器注释
+            let expect_nodes = match *workload {
+                "church" => 2 * n + 4,
+                "dup" => 4 * n + 12,
+                "dup_deep" => 8 * n + 28,
+                _ => 0,
+            };
+            if nf_workload {
                 let mut t = Tycker::new();
                 let nodes = t.bench_check_nf(&raw);
-                assert_eq!(nodes, expect_nodes, "fast nf 节点数不符 k={k}");
+                assert_eq!(nodes, expect_nodes, "fast nf 节点数不符 k={k} ({workload})");
                 let mut t2 = Tycker::new();
                 assert!(t2.bench_check(&raw));
             } else {
@@ -129,14 +150,14 @@ fn run(cli: Cli) {
                 let mut ts = Vec::new();
                 let mut tycker = Tycker::new();
                 // 预热 1 次
-                if *workload == "church" {
+                if nf_workload {
                     assert_eq!(tycker.bench_check_nf(&raw), expect_nodes);
                 } else {
                     assert!(tycker.bench_check(&raw));
                 }
                 for _ in 0..cli.rounds {
                     let start = Instant::now();
-                    if *workload == "church" {
+                    if nf_workload {
                         tycker.bench_check_nf(&raw);
                     } else {
                         tycker.bench_check(&raw);
@@ -151,7 +172,7 @@ fn run(cli: Cli) {
                 for _ in 0..cli.rounds {
                     let mut tycker = Tycker::new(); // 一次性口径：每轮新建
                     let start = Instant::now();
-                    if *workload == "church" {
+                    if nf_workload {
                         tycker.bench_check_nf(&raw);
                     } else {
                         tycker.bench_check(&raw);
@@ -161,13 +182,32 @@ fn run(cli: Cli) {
                 rows.push(("fast", *ts.iter().min().unwrap(), median(&mut ts)));
             }
 
+            // quote 记忆化口径（dup 负载的主对比行；conv 无 quote 不出赛）
+            if want("fast_memo") && nf_workload {
+                // 计时外正确性：memo 口径节点数与普通口径一致（DAG 共享不改逐出现计数）
+                let mut t = Tycker::new();
+                assert_eq!(
+                    t.bench_check_nf_memo(&raw),
+                    expect_nodes,
+                    "fast_memo nf 节点数不符 k={k} ({workload})"
+                );
+                let mut ts = Vec::new();
+                for _ in 0..cli.rounds {
+                    let mut tycker = Tycker::new(); // 一次性口径：每轮新建
+                    let start = Instant::now();
+                    tycker.bench_check_nf_memo(&raw);
+                    ts.push(start.elapsed().as_micros());
+                }
+                rows.push(("fast_memo", *ts.iter().min().unwrap(), median(&mut ts)));
+            }
+
             if want("basic") {
                 let mut ts = Vec::new();
                 // 预热 1 次（同时验证通过）
                 L02_tyck::bench_check(&raw);
                 for _ in 0..cli.rounds {
                     let start = Instant::now();
-                    if *workload == "church" {
+                    if nf_workload {
                         L02_tyck::bench_check_nf(&raw);
                     } else {
                         L02_tyck::bench_check(&raw);
@@ -178,7 +218,7 @@ fn run(cli: Cli) {
             }
 
             let fastest = rows.iter().map(|r| r.1).min().unwrap();
-            print!("k={k:<3} church={n:<8}");
+            print!("k={k:<3} n={n:<8}");
             for (name, min, med) in &rows {
                 let star = if *min == fastest { "*" } else { " " };
                 print!(" {name}={:>6}.{:03}ms{:>1}/{:>6}.{:03}", min / 1000, min % 1000, star, med / 1000, med % 1000);

@@ -19,6 +19,16 @@
 //!    （L01 没有 conv；同一「栈即数据」改造），外加**位相等快速路径**：
 //!    同一打包字 = 同一分配或同一立即数 → 直接判等；连续中性链再走内联
 //!    环（`L02_NO_BITEQ` 消融开关同时关闭两处剪枝，结构路径独立成立）。
+//! 7. **quote 记忆化（call-by-need 的 readback 对偶，L01 `bump_spine_memo`
+//!    的移植）**：NbE 的 CBV 只急切到 WHNF，真正的重复在 readback——同一
+//!    闭包/中性句柄经 λ-binder 复制（`\x f. f x x`）后 quote 会对它多次
+//!    强制。`quote_memo` 口径下 `Q` 先查 memo（键 = 打包字 × level；闭包
+//!    指针与 spine 句柄单轮内全局唯一，spine 栈只增不改，缓存可靠），未
+//!    命中则把 `MemoStore` 屏障压到任务栈最深处，弹出时回填；命中直接
+//!    `done.push` 共享子树（结果从树变 DAG）。表随每次 quote 调用新建——
+//!    `Bump::reset` 后旧键全部作废，无跨轮悬垂。线性负载（church/conv）
+//!    的 `Q` 次数只有 O(λ 层)，哈希税趋近零；复制负载（l02bench
+//!    `--workload dup`/`dup_deep`）把 2×/4× 的重复强制塌缩回 1×。
 //!
 //! 与参考版（`super`，L03 风格）共用 parser / pretty / 错误显示，输出逐
 //! 字节一致（互检测试）。elaboration 直接在本表示上进行：
@@ -27,6 +37,7 @@
 //! `Bump::reset`——LSP 一类长驻进程的真实成本口径。
 
 use bumpalo::Bump;
+use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
 use super::parser::Raw;
@@ -306,6 +317,10 @@ enum QJob<'a> {
     EvalQ(&'a Tm<'a>, Option<&'a EnvCons<'a>>, u32),
     /// done 栈顶两个（先 f 后 a），合一个 App——二叉 fallback 用。
     App1,
+    /// 记忆化屏障：done 栈顶是刚完成的 `Q(key, level)` 结果，入表后放回。
+    /// 派发带 memo 的 `Q` 时压在任务栈最深处，LIFO 保证该值的整棵子任务
+    /// 先跑完（机制见 L01 `bump_spine_memo.rs`）。
+    MemoStore(u64, u32),
     /// 流式右链：next..=end 逐层 App 自底向上；f 与 f0 同为同一变量时
     /// 用共享 idx 节点，否则挂起（Q 引 f）后续跑。
     ChainRun {
@@ -318,9 +333,16 @@ enum QJob<'a> {
     },
 }
 
+/// (值打包字, quote level) → 已引结果子树。同一打包字在同一 level 的
+/// quote 结果只依赖 `(v, level)`：闭包/spine 句柄单轮内全局唯一，spine
+/// 栈只增不改、条目压栈后不变——缓存可靠（论证同 L01 `bump_spine_memo`）。
+type QuoteMemo<'a> = FxHashMap<(u64, u32), &'a Tm<'a>>;
+
 /// 任务栈 quote。`level0` 是起始 quote level（`show_val` 在 `cxt.lvl` 下
 /// 引用含自由变量的值时非 0）。EvalQ 强制闭包体时复用调用方的 work/vals
 /// 栈（稳态口径为 [`Machine`] 的，一次性口径为新建 Vec）。
+/// `memo = Some` 时开启 quote 记忆化：Clo/Pi/spine 的 `Q` 先查表命中即
+/// 共享子树，未命中以 `MemoStore` 屏障回填（Lvl/U 的 `Q` 是 O(1)，不走表）。
 #[allow(clippy::too_many_arguments)]
 fn quote_iter<'a>(
     bump: &'a Bump,
@@ -331,6 +353,7 @@ fn quote_iter<'a>(
     vals: &mut Vec<V>,
     level0: u32,
     v0: V,
+    mut memo: Option<&mut QuoteMemo<'a>>,
 ) -> &'a Tm<'a> {
     tasks.clear();
     done.clear();
@@ -340,14 +363,29 @@ fn quote_iter<'a>(
             QJob::Q(v, level) => match v_tag(v) {
                 0 => done.push(bump.alloc(Tm::Var(level - v_lvl_of(v) - 1))),
                 1 => {
+                    if let Some(t) = memo.as_deref_mut().and_then(|m| m.get(&(v.0, level))) {
+                        done.push(*t);
+                        continue;
+                    }
                     let c = v_clo_of(v);
+                    if memo.is_some() {
+                        // 屏障压在最深处：v 的子任务全部跑完后它弹出并回填
+                        tasks.push(QJob::MemoStore(v.0, level));
+                    }
                     let node = bump.alloc(EnvCons { val: v_lvl(level), next: c.env });
                     tasks.push(QJob::Lam1(c.name));
                     tasks.push(QJob::EvalQ(c.body, Some(node), level + 1));
                 }
                 3 => done.push(bump.alloc(Tm::U)),
                 4 => {
+                    if let Some(t) = memo.as_deref_mut().and_then(|m| m.get(&(v.0, level))) {
+                        done.push(*t);
+                        continue;
+                    }
                     let cell = v_pi_of(v);
+                    if memo.is_some() {
+                        tasks.push(QJob::MemoStore(v.0, level));
+                    }
                     tasks.push(QJob::Pi1(cell));
                     tasks.push(QJob::EvalQ(
                         cell.body,
@@ -357,6 +395,13 @@ fn quote_iter<'a>(
                     tasks.push(QJob::Q(cell.dom, level));
                 }
                 _ => {
+                    if let Some(t) = memo.as_deref_mut().and_then(|m| m.get(&(v.0, level))) {
+                        done.push(*t);
+                        continue;
+                    }
+                    if memo.is_some() {
+                        tasks.push(QJob::MemoStore(v.0, level));
+                    }
                     // 先拷出标量再继续（后续任务会 push spine，Vec 可能扩容）
                     let h = v_spine_of(v);
                     let (ef, ea, len, base) = {
@@ -405,6 +450,12 @@ fn quote_iter<'a>(
                 let a = done.pop().expect("quote 栈：App 缺实参");
                 let f = done.pop().expect("quote 栈：App 缺函数");
                 done.push(bump.alloc(Tm::App(f, a)));
+            }
+            QJob::MemoStore(key, level) => {
+                let m = memo.as_deref_mut().expect("quote 栈：MemoStore 缺 memo 表");
+                let t = done.pop().expect("quote 栈：MemoStore 缺结果");
+                m.insert((key, level), t);
+                done.push(t);
             }
             QJob::ChainRun { level, next, end, f0, idx_node, prev } => {
                 let mut prev = match prev {
@@ -653,6 +704,25 @@ impl Machine {
             &mut self.vals,
             level,
             v,
+            None,
+        )
+    }
+
+    /// quote 的记忆化口径：同一 (值, level) 只强制一次，重复 `Q` 共享子树
+    /// （结果 DAG 化）。表随本次调用新建——`Bump::reset` 后句柄作废，
+    /// 绝不跨调用持有。
+    fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
+        let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        quote_iter(
+            bump,
+            &mut self.spine,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut self.vals,
+            level,
+            v,
+            Some(&mut memo),
         )
     }
 
@@ -969,6 +1039,15 @@ impl Tycker {
 
     /// Main.hs 的 `mainWith` 等价物（`nf` / `type`；`--help` 由参考版处理）。
     pub(crate) fn run(&mut self, mode: &str, file: &str, raw: &Raw) -> String {
+        self.run_impl(mode, file, raw, false)
+    }
+
+    /// [`Tycker::run`] 的 quote 记忆化口径（输出逐字节一致，见 dup 负载）。
+    pub(crate) fn run_memo(&mut self, mode: &str, file: &str, raw: &Raw) -> String {
+        self.run_impl(mode, file, raw, true)
+    }
+
+    fn run_impl(&mut self, mode: &str, file: &str, raw: &Raw, use_memo: bool) -> String {
         self.bump.reset();
         let bump = &self.bump;
         let cxt = Cxt::empty(super::initial_pos());
@@ -977,8 +1056,8 @@ impl Tycker {
             Ok((t, a)) => match mode {
                 "nf" => {
                     let v = self.machine.eval(bump, None, t);
-                    let n = self.machine.quote(bump, 0, v);
-                    let ty = self.machine.quote(bump, 0, a);
+                    let n = quote_maybe(&mut self.machine, bump, 0, v, use_memo);
+                    let ty = quote_maybe(&mut self.machine, bump, 0, a, use_memo);
                     format!(
                         "{}\n  :\n{}\n",
                         super::pretty_tm(0, &[], &export(n)),
@@ -987,7 +1066,7 @@ impl Tycker {
                 }
                 _ => format!(
                     "{}\n",
-                    super::pretty_tm(0, &[], &export(self.machine.quote(bump, 0, a)))
+                    super::pretty_tm(0, &[], &export(quote_maybe(&mut self.machine, bump, 0, a, use_memo)))
                 ),
             },
         }
@@ -1014,6 +1093,35 @@ impl Tycker {
                 tm_size(n)
             }
         }
+    }
+
+    /// [`Tycker::bench_check_nf`] 的 quote 记忆化口径（dup 负载的主对比行）。
+    pub(crate) fn bench_check_nf_memo(&mut self, raw: &Raw) -> u64 {
+        self.bump.reset();
+        let bump = &self.bump;
+        match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
+            Err(_) => 0,
+            Ok((t, _)) => {
+                let v = self.machine.eval(bump, None, t);
+                let n = self.machine.quote_memo(bump, 0, v);
+                tm_size(n)
+            }
+        }
+    }
+}
+
+/// `use_memo` 分派：memo 口径共享重复子树，普通口径独立重建（ablation 对照）。
+fn quote_maybe<'a>(
+    m: &mut Machine,
+    bump: &'a Bump,
+    level: u32,
+    v: V,
+    use_memo: bool,
+) -> &'a Tm<'a> {
+    if use_memo {
+        m.quote_memo(bump, level, v)
+    } else {
+        m.quote(bump, level, v)
     }
 }
 
@@ -1065,6 +1173,45 @@ pub(crate) fn conv_src(k: u32) -> String {
     }
     s += &format!("let eqTest : Eq Nat (add p{k} zero) p{k} = refl Nat p{k};\n");
     s += "eqTest\n";
+    s
+}
+
+/// dup 2×（复制强制负载，L01 `dup_pair` 的 L02 对应物）：church 2^(k+1)
+/// 之上 `D p_k`（`D = \x f. f x x`），nf = `λf. f C C`——λ-binder 把同一
+/// 闭包值 C 复制进两个实参槽，quote 对它**强制 2 次**（无记忆化时），
+/// 打开 call-by-need / quote 记忆化轴。nf 节点数 = 4n + 12（n = 2^(k+1)）。
+pub(crate) fn dup_src(k: u32) -> String {
+    let mut s = String::from(
+        "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n\
+         let add : Nat -> Nat -> Nat = \\a b N s z. a N s (b N s z);\n\
+         let p0 : Nat = \\N s z. s (s z);\n",
+    );
+    for i in 1..=k {
+        s += &format!("let p{i} : Nat = add p{} p{};\n", i - 1, i - 1);
+    }
+    s += "let D : Nat -> (Nat -> Nat -> Nat) -> Nat = \\x f. f x x;\n";
+    s += &format!("D p{k}\n");
+    s
+}
+
+/// dup 4×（两层复制，L01 `dup_deep` 的 L02 对应物）：`D1 (D0 p_k)`，nf =
+/// `λf. f (λf'. f' C C) (λf'. f' C C)`——C 被强制 **4 次**（无记忆化时：
+/// 外层 f 的两个实参各引一遍内层，内层再各强制 C 两遍），复制层数每加一层
+/// 收益翻倍。nf 节点数 = 8n + 28。
+pub(crate) fn dup_deep_src(k: u32) -> String {
+    let mut s = String::from(
+        "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n\
+         let add : Nat -> Nat -> Nat = \\a b N s z. a N s (b N s z);\n\
+         let p0 : Nat = \\N s z. s (s z);\n",
+    );
+    for i in 1..=k {
+        s += &format!("let p{i} : Nat = add p{} p{};\n", i - 1, i - 1);
+    }
+    s += "let D0 : Nat -> (Nat -> Nat -> Nat) -> Nat = \\x f. f x x;\n";
+    s += "let D1 : ((Nat -> Nat -> Nat) -> Nat) -> \
+          (((Nat -> Nat -> Nat) -> Nat) -> ((Nat -> Nat -> Nat) -> Nat) -> Nat) -> Nat \
+          = \\y f. f y y;\n";
+    s += &format!("D1 (D0 p{k})\n");
     s
 }
 
@@ -1153,5 +1300,92 @@ mod tests {
         let out = main_with("nf", mismatch);
         assert!(out.contains("type mismatch"), "{out}");
         assert_eq!(out, super::super::main_with("nf", mismatch));
+    }
+
+    // dup 复制强制负载（call-by-need / quote 记忆化轴）
+    // --------------------------------------------------------------------------------
+
+    /// dup 负载的 nf 输出与参考版逐字节一致（普通 quote 与记忆化 quote 双口径）。
+    #[test]
+    fn dup_nf_matches_basic() {
+        for src in [dup_src(4), dup_deep_src(4)] {
+            let Some(raw) = super::super::parser::parser(&src, 0) else {
+                panic!("parse failed");
+            };
+            let basic = super::super::main_with("nf", &src);
+            let mut t = Tycker::new();
+            assert_eq!(t.run("nf", &src, &raw), basic, "无 memo 口径不一致");
+            let mut t = Tycker::new();
+            assert_eq!(t.run_memo("nf", &src, &raw), basic, "memo 口径不一致");
+        }
+    }
+
+    /// dup 负载的 nf 节点数：`λf. f C C` = 4n+12、`λf. f X X`（X = `λf'. f' C C`）
+    /// = 8n+28；memo 口径 DAG 共享不改变逐出现计数。
+    #[test]
+    fn dup_node_counts() {
+        let n = 1u64 << 11; // k=10 → church 2048
+        for (src, expect) in [
+            (dup_src(10), 4 * n + 12),
+            (dup_deep_src(10), 8 * n + 28),
+        ] {
+            let Some(raw) = super::super::parser::parser(&src, 0) else {
+                panic!("parse failed");
+            };
+            let mut t = Tycker::new();
+            assert_eq!(t.bench_check_nf(&raw), expect, "无 memo 节点数不符");
+            let mut t = Tycker::new();
+            assert_eq!(t.bench_check_nf_memo(&raw), expect, "memo 节点数不符");
+        }
+    }
+
+    /// memo 命中的直接证据：`λf. f C C` 的两处 C 共享同一子树指针（DAG）；
+    /// 无 memo 对照应是两份独立副本。
+    #[test]
+    fn dup_memo_shares_forced_subtree() {
+        let src = dup_src(3);
+        let Some(raw) = super::super::parser::parser(&src, 0) else {
+            panic!("parse failed");
+        };
+        let mut tycker = Tycker::new();
+        tycker.bump.reset();
+        let bump = &tycker.bump;
+        let Ok((t, _)) = tycker.machine.infer(bump, Cxt::empty(super::super::initial_pos()), &raw)
+        else {
+            panic!("infer failed");
+        };
+        let v = tycker.machine.eval(bump, None, t);
+        let Tm::Lam(_, Tm::App(Tm::App(_, c1), c2)) = tycker.machine.quote_memo(bump, 0, v)
+        else {
+            panic!("形状应为 λf. f C C");
+        };
+        // 在 &Tm 上模式匹配，绑定是指向父节点字段槽位的引用，比较子节点须再解一层
+        assert!(
+            std::ptr::eq(*c1, *c2),
+            "复制分量未共享子树：memo 未命中或键不命中"
+        );
+        let Tm::Lam(_, Tm::App(Tm::App(_, c1), c2)) = tycker.machine.quote(bump, 0, v) else {
+            panic!("形状应为 λf. f C C");
+        };
+        assert!(
+            !std::ptr::eq(*c1, *c2),
+            "无 memo 时两处 C 应是独立副本"
+        );
+    }
+
+    /// memo 表随每次 quote 调用新建：同一 Tycker 反复 reset+quote，memo 口径
+    /// 输出始终与每轮新建的 Tycker 一致（跨轮悬垂键回归测试）。
+    #[test]
+    fn steady_state_memo_reuse() {
+        let Some(raw) = super::super::parser::parser(&dup_src(6), 0) else {
+            panic!("parse failed");
+        };
+        let mut steady = Tycker::new();
+        let r1 = steady.run_memo("nf", "", &raw);
+        let r2 = steady.run_memo("nf", "", &raw);
+        let mut fresh = Tycker::new();
+        assert_eq!(r1, r2);
+        assert_eq!(r1, fresh.run_memo("nf", "", &raw));
+        assert_eq!(r1, main_with("nf", &dup_src(6)));
     }
 }
