@@ -1,6 +1,7 @@
 use lex::{TokenKind, TokenNode};
 
 use crate::parser_lib::*;
+use smol_str::SmolStr;
 
 mod lex;
 
@@ -16,15 +17,20 @@ pub fn parser(input: &str, id: u32) -> Option<Raw> {
     .and_then(|(_, ret)| p_raw(&ret).map(|x| x.1))
 }
 
+/// L03（holes）的表面语法（上游 03-holes `Main.hs` 的 `Raw`）。与 L02 的差别：
+/// - 多了 [`Raw::Hole`]——`_` 作为原子项（也兼任 binder 位置的匿名 binder）；
+/// - [`Raw::SrcPos`] 同 L02：`withPos` 给每个产生式包上源位置，check/infer
+///   下降时更新 cxt 的 pos，报错时取最内层位置。
 #[derive(Clone, Debug)]
 pub enum Raw {
-    Var(Span<String>),
-    Lam(Span<String>, Box<Raw>),
+    Var(Span<SmolStr>),
+    Lam(Span<SmolStr>, Box<Raw>),
     App(Box<Raw>, Box<Raw>),
     U,
-    Pi(Span<String>, Box<Raw>, Box<Raw>),
-    Let(Span<String>, Box<Raw>, Box<Raw>, Box<Raw>),
+    Pi(Span<SmolStr>, Box<Raw>, Box<Raw>),
+    Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
     Hole,
+    SrcPos(Span<()>, Box<Raw>),
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
@@ -34,9 +40,9 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
     }
 }
 
-fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<String>> {
+fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>> {
     move |input: &'b [TokenNode<'a>]| match input.first() {
-        Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|s| s.0.to_owned()))),
+        Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|s| SmolStr::new(s.0)))),
         _ => None,
     }
 }
@@ -48,16 +54,38 @@ where
     (kw(LParen), p, kw(RParen)).map(|c| c.1)
 }
 
-fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
-    string(Ident)
-        .map(Raw::Var)
-        .or(kw(UKeyword).map(|_| Raw::U))
-        .or(kw(Hole).map(|_| Raw::Hole))
-        .or(paren(p_raw))
-        .parse(input)
+/// main.hs 的 `withPos`：包一层 `Raw::SrcPos`，位置取产生式第一个 token 的起点
+/// （lex 已跳过前导空白，与 megaparsec `getSourcePos` 在 `ws` 之后取位置的语义一致）。
+fn with_pos<'a: 'b, 'b, P>(p: P) -> impl Parser<&'b [TokenNode<'a>], Raw>
+where
+    P: Parser<&'b [TokenNode<'a>], Raw>,
+{
+    move |input: &'b [TokenNode<'a>]| {
+        let first = input.first()?;
+        let pos = Span {
+            data: (),
+            start_offset: first.start_offset,
+            end_offset: first.end_offset,
+            path_id: first.path_id,
+        };
+        let (rest, r) = p.parse(input)?;
+        Some((rest, Raw::SrcPos(pos, Box::new(r))))
+    }
 }
 
-fn p_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Span<String>)> {
+fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+    with_pos(
+        string(Ident)
+            .map(Raw::Var)
+            .or(kw(UKeyword).map(|_| Raw::U))
+            .or(kw(Hole).map(|_| Raw::Hole)),
+    )
+    .or(paren(p_raw))
+    .parse(input)
+}
+
+/// binder 位置：普通标识符或匿名 binder `_`（`pBinder = pIdent <|> symbol "_"`）。
+fn p_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Span<SmolStr>)> {
     string(Ident).or(string(Hole)).parse(input)
 }
 
@@ -108,7 +136,7 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], 
 fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
-            Some((kw, cod)) => Raw::Pi(kw.map(|_| "_".to_owned()), Box::new(sp), Box::new(cod)),
+            Some((kw, cod)) => Raw::Pi(kw.map(|_| SmolStr::new("_")), Box::new(sp), Box::new(cod)),
             None => sp,
         })
         .parse(input)
@@ -131,8 +159,11 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         .parse(input)
 }
 
+/// main.hs：`pRaw = withPos (pLam <|> pLet <|> try pPi <|> funOrSpine)`。
+/// 组合子版 `or` 在纯函数 token 切片上天然带回溯（失败不消费输入），
+/// `try` 的语义由尝试顺序实现。
 fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
-    p_lam.or(p_let).or(p_pi).or(fun_or_spine).parse(input)
+    with_pos(p_lam.or(p_let).or(p_pi).or(fun_or_spine)).parse(input)
 }
 
 #[test]
@@ -140,52 +171,8 @@ fn test() {
     let input = r#"
 let id : (A : _) -> A -> A
   = \A x. x;
-
-let List : U -> U
-  = \A. (L : _) -> (A -> L -> L) -> L -> L;
-
-let nil : (A : _) -> List A
-  = \A L cons nil. nil;
-
-let cons : (A : _) -> A -> List A -> List A
-  = \A x xs L cons nil. cons x (xs _ cons nil);
-
-let Bool : U
-  = (B : _) -> B -> B -> B;
-
-let true : Bool
-  = \B t f. t;
-
-let false : Bool
-  = \B t f. f;
-
-let not : Bool -> Bool
-  = \b B t f. b B f t;
-
-let list1 : List Bool
-  = cons _ (id _ true) (nil _);
-
-let Eq : (A : _) -> A -> A -> U
-  = \A x y. (P : A -> U) -> P x -> P y;
-
-let refl : (A : _)(x : A) -> Eq A x x
-  = \A x P px. px;
-
-let list1 : List Bool
-  = cons _ true (cons _ false (nil _));
-
-let Nat  : U = (N : U) -> (N -> N) -> N -> N;
-let five : Nat = \N s z. s (s (s (s (s z))));
-let add  : Nat -> Nat -> Nat = \a b N s z. a N s (b N s z);
-let mul  : Nat -> Nat -> Nat = \a b N s z. a N (b N s) z;
-
-let ten      : Nat = add five five;
-let hundred  : Nat = mul ten ten;
-let thousand : Nat = mul ten hundred;
-
-let eqTest : Eq _ hundred hundred = refl _ _;
-
-U
-"#;
+let foo : U = _;
+let bar : U -> U = \x. id _ x;
+bar _"#;
     println!("{:#?}", parser(input, 0).unwrap());
 }
