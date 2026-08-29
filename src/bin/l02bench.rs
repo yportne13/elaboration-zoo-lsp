@@ -11,6 +11,10 @@
 //!   （quote 强制整条 s-链，L01 church_pair 的 L02 对应物）。
 //! - `conv`：同一 church 数之上的 `Eq Nat (add big zero) big = refl Nat big`
 //!   ——check 内 beta-eta conv 强制两侧完整展开后结构比较。
+//! - `conv_dup`：同一昂贵子对在类型多处重现——`Rel = \a b. (P : a -> U) ->
+//!   P b -> P b -> P b`，`relRefl Nat p_k` 对 `Rel Nat (add p_k zero)` 的
+//!   check 把 (p_k, add p_k zero) 这对比较 3 次（conv 判等记忆化的命中
+//!   场景；`L02_NO_CONV_MEMO=1` 可消融）。
 //! - `dup`：church 2^(k+1) 之上 `D p_k`（`D = \x f. f x x`），nf =
 //!   `λf. f C C`——λ-binder 复制同一闭包值，quote 对它强制 **2 次**
 //!   （L01 dup_pair 的 L02 对应物；call-by-need / quote 记忆化轴）。
@@ -24,7 +28,7 @@
 //! 用法：
 //! ```text
 //! cargo run --release --bin l02bench [--max-k 15] [--rounds 5] [--only basic,fast]
-//!                                     [--workload church|conv|dup|dup_deep|all]
+//!                                     [--workload church|conv|conv_dup|dup|dup_deep|all]
 //! ```
 
 #![feature(pattern)]
@@ -48,7 +52,7 @@ use clap::Parser;
 use mimalloc::MiMalloc;
 use std::time::Instant;
 
-use L02_tyck::bump_spine_iter::{church_src, conv_src, dup_deep_src, dup_src, Tycker};
+use L02_tyck::bump_spine_iter::{conv_dup_src, church_src, conv_src, dup_deep_src, dup_src, Tycker};
 use L02_tyck::parser::parser;
 
 #[derive(Parser)]
@@ -69,7 +73,7 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（check+nf，默认）| conv | dup | dup_deep | all
+    /// 负载族：church（check+nf，默认）| conv | conv_dup | dup | dup_deep | all
     #[arg(long, default_value = "church")]
     workload: String,
 }
@@ -103,20 +107,22 @@ fn run(cli: Cli) {
     let workloads: &[&str] = match cli.workload.as_str() {
         "church" => &["church"],
         "conv" => &["conv"],
+        "conv_dup" => &["conv_dup"],
         "dup" => &["dup"],
         "dup_deep" => &["dup_deep"],
-        _ => &["church", "conv", "dup", "dup_deep"],
+        _ => &["church", "conv", "conv_dup", "dup", "dup_deep"],
     };
 
     for workload in workloads {
         println!("== workload: {workload} ==");
-        // conv 只走 check（无 quote）；church/dup/dup_deep 走 check + nf
-        let nf_workload = *workload != "conv";
+        // conv/conv_dup 只走 check（无 quote）；church/dup/dup_deep 走 check + nf
+        let nf_workload = matches!(*workload, "church" | "dup" | "dup_deep");
         for k in 9..=cli.max_k {
             let n = 1u64 << (k + 1);
             let src = match *workload {
                 "church" => church_src(k),
                 "conv" => conv_src(k),
+                "conv_dup" => conv_dup_src(k),
                 "dup" => dup_src(k),
                 _ => dup_deep_src(k),
             };

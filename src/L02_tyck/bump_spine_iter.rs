@@ -29,6 +29,13 @@
 //!    `Bump::reset` 后旧键全部作废，无跨轮悬垂。线性负载（church/conv）
 //!    的 `Q` 次数只有 O(λ 层)，哈希税趋近零；复制负载（l02bench
 //!    `--workload dup`/`dup_deep`）把 2×/4× 的重复强制塌缩回 1×。
+//! 8. **conv 判等记忆化**：工作表同一 `(t.0, u.0)` 子对只结构比较一次
+//!    （依赖类型里同一昂贵索引对在 dom/cod 多处重现的常态，l02bench
+//!    `conv_dup` 负载 1.4-1.6×）。判等结果与 level 无关（fresh 变量两侧
+//!    对称插入、恒异于自由变量），键无需带 level；「已判等」靠工作表
+//!    LIFO 屏障 `WItem::Store`（纯合取：屏障弹出时其上方子比较全部完成，
+//!    任何失败早已 return）。表随本次 conv 调用新建；线性负载零税
+//!    （`L02_NO_CONV_MEMO=1` 消融）。
 //!
 //! 与参考版（`super`，L03 风格）共用 parser / pretty / 错误显示，输出逐
 //! 字节一致（互检测试）。elaboration 直接在本表示上进行：
@@ -509,11 +516,32 @@ static NO_BITEQ: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
         std::sync::atomic::AtomicBool::new(std::env::var("L02_NO_BITEQ").is_ok())
     });
 
+/// A/B 实验开关（conv 工作表的判等记忆化消融）：置 `L02_NO_CONV_MEMO=1`
+/// 关闭——工作表同一 (t.0, u.0) 子对只结构比较一次。
+static NO_CONV_MEMO: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(std::env::var("L02_NO_CONV_MEMO").is_ok())
+    });
+
+/// conv 工作表条目：待比较子对，或判等记忆化屏障。
+enum WItem {
+    /// 待比较子对（level 相同的一对值）。
+    Pair(u32, V, V),
+    /// 屏障：派发子对前压入；其弹出时上方整棵子比较已全部完成（工作表是
+    /// 纯合取，任何失败早已 `return false`）——该对必已判等，入表。
+    /// 机制同 quote 的 `MemoStore`（LIFO 屏障，见 L01 `bump_spine_memo`）。
+    Store((u64, u64)),
+}
+
 /// Beta-eta 转换检查。前提：两个值的类型相同。与 Main.hs 的递归 `conv`
 /// 同语义，改成 `(level, V, V)` 工作表——合取式比较天然迭代化，深度不受
 /// 进程栈限；**位相等快速路径**：同一打包字 ⇒ 同一分配（闭包/spine 句柄
 /// 全局唯一）或同一立即数（Lvl/U）⇒ 同一值， church 链里大量子比较被
-/// 一次整数比较剪掉。
+/// 一次整数比较剪掉；**判等记忆化**：同一 (t.0, u.0) 子对只结构比较一次
+/// （依赖类型里同一昂贵索引对在 dom/cod 多处重现的常态——l02bench
+/// `conv_dup` 负载）。判等结果与 level 无关（fresh 变量两侧对称插入、
+/// 恒异于自由变量，比较树在任意 level 同构），键无需带 level；表随本次
+/// conv 调用新建，`Bump::reset` 后无跨轮悬垂。
 fn conv_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -523,13 +551,25 @@ fn conv_iter<'a>(
     t0: V,
     u0: V,
 ) -> bool {
-    let mut stack: Vec<(u32, V, V)> = Vec::new();
-    stack.push((l0, t0, u0));
-    // 位相等开关入口读一次（消融模式同时关掉链内环里的剪枝）
+    // 位相等/记忆化开关入口各读一次（消融模式同时关掉链内环里的剪枝）
     let biteq = !NO_BITEQ.load(std::sync::atomic::Ordering::Relaxed);
-    while let Some((l, t, u)) = stack.pop() {
+    let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
+    let mut memo: rustc_hash::FxHashSet<(u64, u64)> = rustc_hash::FxHashSet::default();
+    let mut stack: Vec<WItem> = Vec::new();
+    stack.push(WItem::Pair(l0, t0, u0));
+    while let Some(item) = stack.pop() {
+        let (l, t, u) = match item {
+            WItem::Store(key) => {
+                memo.insert(key);
+                continue;
+            }
+            WItem::Pair(l, t, u) => (l, t, u),
+        };
         if biteq && t.0 == u.0 {
             continue; // 位相等：同一值
+        }
+        if memo_on && memo.contains(&(t.0, u.0)) {
+            continue; // 本轮已判等过的子对
         }
         match (v_tag(t), v_tag(u)) {
             // eta：λ 与任意值比较，两边都应用到同一个新变量
@@ -552,7 +592,10 @@ fn conv_iter<'a>(
                     Some(bump.alloc(EnvCons { val: v_lvl(l), next: c2.env })),
                     c2.body,
                 );
-                stack.push((l + 1, vt, vu));
+                if memo_on {
+                    stack.push(WItem::Store((t.0, u.0)));
+                }
+                stack.push(WItem::Pair(l + 1, vt, vu));
             }
             (1, _) => {
                 let c = v_clo_of(t);
@@ -565,7 +608,10 @@ fn conv_iter<'a>(
                     c.body,
                 );
                 let vu = spine.push(u, v_lvl(l));
-                stack.push((l + 1, vt, vu));
+                if memo_on {
+                    stack.push(WItem::Store((t.0, u.0)));
+                }
+                stack.push(WItem::Pair(l + 1, vt, vu));
             }
             (_, 1) => {
                 let c = v_clo_of(u);
@@ -578,14 +624,20 @@ fn conv_iter<'a>(
                     c.body,
                 );
                 let vt = spine.push(t, v_lvl(l));
-                stack.push((l + 1, vt, vu));
+                if memo_on {
+                    stack.push(WItem::Store((t.0, u.0)));
+                }
+                stack.push(WItem::Pair(l + 1, vt, vu));
             }
 
             // Π：比较定义域，再在 binder 实例化下比较余定义域
             (4, 4) => {
                 let p = v_pi_of(t);
                 let q = v_pi_of(u);
-                stack.push((l, p.dom, q.dom));
+                if memo_on {
+                    stack.push(WItem::Store((t.0, u.0)));
+                }
+                stack.push(WItem::Pair(l, p.dom, q.dom));
                 let vt = eval_iter(
                     bump,
                     spine,
@@ -602,7 +654,7 @@ fn conv_iter<'a>(
                     Some(bump.alloc(EnvCons { val: v_lvl(l), next: q.env })),
                     q.body,
                 );
-                stack.push((l + 1, vt, vu));
+                stack.push(WItem::Pair(l + 1, vt, vu));
             }
 
             // 中性：头相同则逐对比较 spine。连续右链（church 数一类的
@@ -627,6 +679,9 @@ fn conv_iter<'a>(
                         return false;
                     }
                 }
+                if memo_on {
+                    stack.push(WItem::Store((t.0, u.0)));
+                }
                 loop {
                     let (f1, a1) = {
                         let e = &spine.stack[i1];
@@ -637,14 +692,14 @@ fn conv_iter<'a>(
                         (e.f, e.a)
                     };
                     if !biteq || f1.0 != f2.0 {
-                        stack.push((l, f1, f2));
+                        stack.push(WItem::Pair(l, f1, f2));
                     }
                     if v_tag(a1) == 2 && v_tag(a2) == 2 {
                         i1 = v_spine_of(a1);
                         i2 = v_spine_of(a2);
                     } else {
                         if !biteq || a1.0 != a2.0 {
-                            stack.push((l, a1, a2));
+                            stack.push(WItem::Pair(l, a1, a2));
                         }
                         break;
                     }
@@ -1215,6 +1270,30 @@ pub(crate) fn dup_deep_src(k: u32) -> String {
     s
 }
 
+/// conv 重复子对负载（conv 判等记忆化的命中场景）：`relRefl Nat p_k` 对
+/// 注解 `Rel Nat (add p_k zero) (add p_k zero)` 的 check 在 conv 里对同一
+/// 昂贵子对 (C_p, C_add) 结构比较 3 次——`Rel = \A x y. (P : A -> U) ->
+/// P x -> P y -> P y` 的三个 cod 槽位 x/y/y，inferred 侧全是 C_p 同一句柄，
+/// expected 侧全是 C_add。无 memo：3 × O(n) 链游走；memo：1 次游走 +
+/// 2 次哈希命中。建模依赖类型里「同一索引在类型多处重现」的常态
+/// （check-only，无 nf）。
+pub(crate) fn conv_dup_src(k: u32) -> String {
+    let mut s = String::from(
+        "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n\
+         let zero : Nat = \\N s z. z;\n\
+         let add : Nat -> Nat -> Nat = \\a b N s z. a N s (b N s z);\n\
+         let p0 : Nat = \\N s z. s (s z);\n",
+    );
+    for i in 1..=k {
+        s += &format!("let p{i} : Nat = add p{} p{};\n", i - 1, i - 1);
+    }
+    s += "let Rel : (A : U) -> A -> A -> U = \\A x y. (P : A -> U) -> P x -> P y -> P y;\n";
+    s += "let relRefl : (A : U) -> (x : A) -> Rel A x x = \\A x P p1 p2. p1;\n";
+    s += &format!("let relTest : Rel Nat (add p{k} zero) (add p{k} zero) = relRefl Nat p{k};\n");
+    s += "relTest\n";
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{church_nf, EX0_SRC, EX1_SRC, EX2_SRC};
@@ -1302,7 +1381,26 @@ mod tests {
         assert_eq!(out, super::super::main_with("nf", mismatch));
     }
 
-    // dup 复制强制负载（call-by-need / quote 记忆化轴）
+    /// conv_dup 负载：check 通过（p_k ≡ add p_k zero 经 3 次同一子对比较），
+    /// 且与参考版判定一致。
+    #[test]
+    fn conv_dup_check_passes() {
+        let src = conv_dup_src(10);
+        let Some(raw) = super::super::parser::parser(&src, 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert!(t.bench_check(&raw), "conv_dup 未通过（memo 屏障有误？）");
+        // 判定与参考版一致（type-mode 输出互检）
+        let mut t = Tycker::new();
+        assert_eq!(
+            t.run("type", &src, &raw),
+            super::super::main_with("type", &src),
+            "conv_dup 判定与参考版不一致"
+        );
+    }
+
+    /// dup 复制强制负载（call-by-need / quote 记忆化轴）
     // --------------------------------------------------------------------------------
 
     /// dup 负载的 nf 输出与参考版逐字节一致（普通 quote 与记忆化 quote 双口径）。
