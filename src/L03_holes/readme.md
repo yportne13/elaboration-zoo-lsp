@@ -117,7 +117,11 @@ dup / dup_deep（min ms）：
   只在形态上（长驻进程），不期待数字。
 - **quote 记忆化（`fast_memo`）在 dup 族 1.9×/3.6×**（L02 同款）：复制
   被塌缩为单次强制。L03 的 meta 不影响 memo 键：quote 期间 metacontext
-  冻结（无 solve），同一打包字在同一 level 的 force 结果确定。
+  冻结（无 solve），同一打包字在同一 level 的 force 结果确定。**现已
+  成为生产默认**：`Tycker::run` 的 nf/type 引读走 `quote_memo`（`elab`
+  模式的 `display_metas` 仍走普通 quote），`run_no_memo` 为消融对照；
+  bench 的 `fast`/`fast_memo` 双口径（`bench_check_nf`/`_memo`）保留作
+  该轴的消融。
 
 ## 提速第二轮：热路径 scratch 复用 + conv 内联环 + unify 判等记忆化
 

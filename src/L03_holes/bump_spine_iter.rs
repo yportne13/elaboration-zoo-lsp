@@ -1713,14 +1713,16 @@ impl Tycker {
     }
 
     /// Main.hs 的 `mainWith` 等价物（`nf` / `type` / `elab`；`--help` 由
-    /// 参考版处理）。
+    /// 参考版处理）。nf/type 的引读默认走 **quote 记忆化**（输出逐字节
+    /// 一致；复制强制负载 1.9-3.6×，其余负载持平——见 dup 负载与 readme
+    /// 「实测结果」）。
     pub(crate) fn run(&mut self, mode: &str, file: &str, raw: &Raw) -> String {
-        self.run_impl(mode, file, raw, false)
+        self.run_impl(mode, file, raw, true)
     }
 
-    /// [`Tycker::run`] 的 quote 记忆化口径（输出逐字节一致，见 dup 负载）。
-    pub(crate) fn run_memo(&mut self, mode: &str, file: &str, raw: &Raw) -> String {
-        self.run_impl(mode, file, raw, true)
+    /// [`Tycker::run`] 的非记忆化对照口径（ablation 用；输出一致）。
+    pub(crate) fn run_no_memo(&mut self, mode: &str, file: &str, raw: &Raw) -> String {
+        self.run_impl(mode, file, raw, false)
     }
 
     fn run_impl(&mut self, mode: &str, file: &str, raw: &Raw, use_memo: bool) -> String {
@@ -2068,9 +2070,13 @@ mod tests {
             };
             let basic = super::super::main_with("nf", &src);
             let mut t = Tycker::new();
-            assert_eq!(t.run("nf", &src, &raw), basic, "无 memo 口径不一致");
+            assert_eq!(t.run("nf", &src, &raw), basic, "memo 默认口径不一致");
             let mut t = Tycker::new();
-            assert_eq!(t.run_memo("nf", &src, &raw), basic, "memo 口径不一致");
+            assert_eq!(
+                t.run_no_memo("nf", &src, &raw),
+                basic,
+                "非 memo 对照口径不一致"
+            );
         }
     }
 
@@ -2127,19 +2133,19 @@ mod tests {
         );
     }
 
-    /// memo 表随每次 quote 调用新建：同一 Tycker 反复 reset+quote，memo 口径
-    /// 输出始终与每轮新建的 Tycker 一致（跨轮悬垂键回归测试）。
+    /// memo 表随每次 quote 调用新建：同一 Tycker 反复 reset+quote，memo
+    /// 默认口径输出始终与每轮新建的 Tycker 一致（跨轮悬垂键回归测试）。
     #[test]
     fn steady_state_memo_reuse() {
         let Some(raw) = super::super::parser::parser(&dup_src(6), 0) else {
             panic!("parse failed");
         };
         let mut steady = Tycker::new();
-        let r1 = steady.run_memo("nf", "", &raw);
-        let r2 = steady.run_memo("nf", "", &raw);
+        let r1 = steady.run("nf", "", &raw);
+        let r2 = steady.run("nf", "", &raw);
         let mut fresh = Tycker::new();
         assert_eq!(r1, r2);
-        assert_eq!(r1, fresh.run_memo("nf", "", &raw));
+        assert_eq!(r1, fresh.run("nf", "", &raw));
         assert_eq!(r1, main_with("nf", &dup_src(6)));
     }
 }
