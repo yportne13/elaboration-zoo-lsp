@@ -262,6 +262,15 @@ impl Compiler {
         let entry = cxt
             .decl_get(&format!("{}.{}", sum_name.data, name.data))
             .ok_or_else(|| Error(format!("找不到构造子 {}.{}", sum_name.data, name.data)))?;
+        // head 槽：Con 模式自身占一槽。运行时 eval_aux 的 Con 路径把被匹配值
+        // prepend 进 env，quote/rename 按 bind_count（= 1 + Σ子模式）重建分支体
+        // ——三方必须同序同数：编译期先绑 head 槽再绑各字段槽（prepend 顺序
+        // 一致），嵌套解构不再由父级代绑哑槽，统一由本入口绑定。
+        let cxt = cxt.bind(
+            empty_span(format!("_{}", name.data)),
+            infer.quote(cxt.decl(), cxt.lvl, head_ty.clone()),
+            head_ty.clone(),
+        );
         let mut ty = entry.ty.clone();
         let impl_vals: Vec<Val> = sum_params
             .iter()
@@ -270,7 +279,7 @@ impl Compiler {
             .collect();
         let mut impl_idx = 0;
         let mut sub_queue: Vec<Pattern> = subs;
-        let mut cxt = cxt.clone();
+        let mut cxt = cxt;
         let mut details: Vec<PatternDetail> = Vec::new();
         // 构造子形态（把被匹配变量精化成它的值时需要）
         let mut ctor_datas: Vec<(Span<String>, Val, Icit)> = Vec::new();
@@ -342,19 +351,15 @@ impl Compiler {
                                 Val::Sum(_, _, cases) if cases.iter().any(|c| c.data == cn.data)
                             );
                             if is_ctor {
-                                // 解构：槽用哑名（绑定器的值本身也可通过 Ix 引用），
-                                // 子绑定器由子 walk 在更深层级引入
-                                let c = cxt.bind(
-                                    empty_span("_".to_owned()),
-                                    infer.quote(cxt.decl(), cxt.lvl, dom.clone()),
-                                    dom.clone(),
-                                );
+                                // 解构：不再由父级代绑哑槽——子 walk_con 入口会
+                                // 绑定它自己的 head 槽（槽值即本字段的实例化 rigid u），
+                                // 槽数与运行时 prepend、bind_count 保持一致
                                 match self.walk_con(
                                     cn,
                                     csubs,
                                     dom.clone(),
                                     u.clone(),
-                                    &c,
+                                    &cxt,
                                     infer,
                                 )? {
                                     Walk::Matched(d, c) => (d, c),
@@ -467,9 +472,10 @@ impl Compiler {
                         if subs.len() != datas.len() {
                             continue;
                         }
-                        // datas 与子模式按声明序 zip，逐个下钻；每个子模式把它的
-                        // 槽值 prepend 进 env（第一个子模式最深，与编译期一致）
-                        let mut cur = (body.clone(), env.clone());
+                        // datas 与子模式按声明序 zip，逐个下钻；先 prepend 被
+                        // 匹配值本身（head 槽，编译期 walk_con 入口同序绑定），
+                        // 再逐字段 prepend 子模式槽值（编译期字段槽在后）
+                        let mut cur = (body.clone(), env.prepend(head.clone()));
                         let mut ok = true;
                         for ((_, v, _), sub) in datas.iter().zip(subs.iter()) {
                             match Compiler::eval_aux(

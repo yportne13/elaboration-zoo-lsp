@@ -201,21 +201,44 @@ intersect）。在此之上：
 
 ## 6. 已知限制（诚实清单）
 
-1. **依赖递归函数的索引族等式推理**（`add_zero_right` / `add_succ_right` /
-   `add_comm` / `add_assoc` 这类 L07a 测试）：期望类型里出现"递归函数应用于
-   模式绑定器"的 stuck match 组合时，unify 会在"索引槽 ↔ 构造子值"的互相
-   引用上不收敛（fuel 拦下后报 `can't unify (fuel exhausted)`）。
-   这是把运行时换成"全 stuck 中性值 + 简化 decl 表"体系后的已知差距；
-   L07a 的原始实现依赖其特定的合一顺序侥幸通过。`test_eq_reasoning` 目前
-   覆盖到 cong / symm / trans 这一档。**最小复现**（用 `mul_zero_right`：
-   `trans (refl …) (mul_zero_right k)` 里 `add zero (mul k zero)` 的
-   归约与 stuck 形态的协同）确认问题在合一器而非个别测试；
-   L13_namespace/legacy_tests.rs 的 test4 完整版（`double` / `double_pow` /
-   `double_add` / `prove`）与 test8 的 `mul_zero_right` / `mul_one_right`
-   引理同样触发，因此未迁入本层。
-2. **嵌套构造子模式**（`case cons(succ(m), t)` 等）经过多层解构时，
-   绑定器类型若引用了更早的显式绑定器，可能与深层槽位产生偏差
-   （L07a/L13 同样存在，未修是刻意保留简单性）。
+1. **依赖递归函数的索引族等式推理——大部分已修复，剩 `add_assoc` 一族**。
+   该限制的主要根源已定位并移除：**force 对中性自引用条目的无限自旋**。
+   `simpl_decl`（quote/rename 卡住 match 分支体时用的简化 decl 表）把每个
+   全局值换成 `Decl(自身名, [])`；`force` 遇到 `Decl(f, spine)` 会查表展开，
+   而中性占位展开后仍是 `Decl(f, spine)`——unfold 永无进展却每轮烧 1 格
+   fuel，一次 force 就把整个 fuel 池（4096）烧光，随后任何真正的 unify 都
+   误报 `can't unify (fuel exhausted)`。修复：unfold 前识别"条目值是指向
+   自身的空 spine Decl"，按中性直接返回。此修复后
+   `add_zero_right` / `add_succ_right` / `add_comm` / `mul_zero_right` /
+   `mul_one_right` 全部通过——先前它们被误诊为"合一器不收敛"。
+
+   仍开放的是 `add_assoc`（及依赖它的 `double_add` / `prove` 一族），其
+   失败机制已定位：`cong_succ` 的隐式 meta 被解为卡住 match 值，该解的
+   捕获 env（含 λ 封装的 spine 槽）比使用现场（arm 上下文）**多一个槽位**
+   （被精化的 scrutinee 槽经 prune 从解中移除，但期望重实例化一侧仍持有
+   它），分支体的固定 de Bruijn 索引在统一双方各自重求值时读偏。已做缓解：
+   `unify(Match, Match)` 新增**按值对齐的槽位重映射**比较（`struct_eq.rs`
+   的 `bodies_eq_aligned`）——两侧 env 是同一组变量的不同上下文副本时，
+   按值建立槽位对应，把一侧分支体重映射到另一侧布局后字面比较（值相同则
+   可互换，贪婪首匹配不影响健全性）；外层比较（7 槽 vs 6 槽）由此解决。
+   剩余发散下沉到内层 match：meta 解里的**内层 match Tm** 是按 meta 完整
+   上下文（5 槽）rename 的，而解的 λ 只绑定 prune 后的 4 槽——内层分支体
+   索引超出解实例化环境长度 1，读出越界垃圾后结构逐层再生。**根治方向**：
+   (a) `rename(Match)` 需把 match 捕获 env 一并按 pren 重命名/裁剪（内层
+   解的 env 与分支体同步对齐到解的实际 λ 深度），或 (b) 采用 L13 的值表示
+   （分支体闭包随值携带 + 全局引用惰性中性化，卡住 match 不再 stranded 在
+   类型值里）。后者属求值器核心重构。
+
+   次要根源（已修）：quote/rename 分支体若用真实 decl 表，中性
+   `Decl(f, spine)` 会被入口 force 再展开，每层 quote 多展开一层；
+   `unify(Match, Match)` 对"scrutinee / 捕获 env / 模式 / 分支体全部结构
+   相同"的自比较短路（`struct_eq.rs`）。
+
+2. ~~嵌套构造子模式槽位偏差~~ **已修复**：原先嵌套 Con 模式由父级绑定
+   "哑槽"、运行时不前置对应槽，bind_count 又按 `1 + Σ子模式` 计数——
+   三方不一致导致嵌套解构引用外层变量时索引错位。现在 head 槽统一由
+   `walk_con` 入口绑定（编译、运行时 `eval_aux`、`bind_count` 三方同序
+   同数），回归测试 `test_nested_pattern_outer_ref` 覆盖。
 3. 被匹配变量精化（§3.2）是"有条件的"：期望类型不含 stuck match 时不做，
    某些依赖该变量的类型（不经过 match 的表达式）无法归约——这是与完整
    GADT 系统的差距。
@@ -225,16 +248,18 @@ intersect）。在此之上：
 
 ## 7. 测试
 
-`cargo test --lib L07_sum_type`（20 个测试）：
+`cargo test --lib L07_sum_type`（24 个测试）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心 / Church 编码与字符串；
 - 迁移自 L13_namespace/legacy_tests.rs 的 test7：`bits_adder`——Vec[Bool]
-  上的递归全加器（嵌套模式、多参数索引族、递归结果继续被匹配），
+  上的递归全加器（嵌套模式、多参数索引族、递归调用的结果继续被匹配），
   在旧 L07/L07a 上无法通过；
 - 回归（针对旧 bug）：泛型类型上的 match、通配臂混合、GADT 可达性与
   不可达报错、覆盖缺失报错、索引等式负例、投影类型标注、stuck match
-  的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义。
+  的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义；
+- 回归（head 槽对齐）：`test_nested_pattern_outer_ref`——嵌套解构同时
+  引用嵌套绑定器与外层 def 参数。
 
 测试在 64 MB 栈线程里跑（§2.4）。
 

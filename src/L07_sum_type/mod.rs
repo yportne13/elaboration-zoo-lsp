@@ -18,6 +18,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 mod cxt;
+mod struct_eq;
 mod elaboration;
 mod parser;
 mod pattern_match;
@@ -34,7 +35,7 @@ pub enum MetaEntry {
     Unsolved(VTy),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ix(u32);
 
 #[derive(Debug, Clone)]
@@ -270,7 +271,13 @@ impl Infer {
                 _ => Val::Flex(m, sp),
             },
             Val::Decl(name, sp) => match decl.get(&name) {
-                Some(e) if burn(&self.unify_fuel) => {
+                // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
+                // 的中性条目都是 `Decl(自身名, [])`）：v_app_sp 后仍是原值，
+                // unfold 永无进展，只会自旋烧光 fuel 池。直接按中性返回。
+                Some(e)
+                    if !matches!(&e.val, Val::Decl(n2, s2) if *n2 == *name && s2.is_empty())
+                        && burn(&self.unify_fuel) =>
+                {
                     self.force(decl, self.v_app_sp(decl, e.val.clone(), sp))
                 }
                 None => Val::Decl(name, sp),
@@ -494,7 +501,11 @@ impl Infer {
                         let count = p.bind_count();
                         let env = (0..count).fold(env.clone(), |env, i| env.prepend(Val::vvar(l + i)));
                         let tm = self.eval(&declb, &env, b);
-                        (p, self.quote(decl, l + count, tm))
+                        // 分支体的 quote 也要用简化表：eval 产生的中性
+                        // Decl(f, spine)（递归调用占位）若用真实表 quote，
+                        // 入口 force 会再展开一层——每层 quote 多展开一层，
+                        // 递归函数的卡住 match 直接发散。
+                        (p, self.quote(&declb, l + count, tm))
                     })
                     .collect();
                 Tm::Match(Box::new(self.quote(decl, l, *val)), tm_cases)
