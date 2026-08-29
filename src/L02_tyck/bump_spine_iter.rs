@@ -11,11 +11,14 @@
 //!    支撑流式右链），配 Machine 跨调用复用（L01 的 `_ss` 稳态口径）。
 //! 4. **流式右链 quote**：连续右链按下标自底向上重建，链头同为同一变量时
 //!    `Idx` 节点共享。
-//! 5. **迭代化**：eval 双栈（work/vals + `App(变量头, ·)` 右链快速路径）、
-//!    quote 任务栈（`ChainRun` 断点续跑）——求值/quote 深度不受进程栈限。
+//! 5. **迭代化**：eval 双栈（work/vals + `App(变量头, ·)` 右链快速路径，
+//!    β 岔路的闭包头以 [`W::ApplyKnown`] 直接送 β、不再压回 work 栈重查
+//!    环境）、quote 任务栈（`ChainRun` 断点续跑）——求值/quote 深度不受
+//!    进程栈限。
 //! 6. **conv 工作表**：beta-eta 转换检查改为 `(level, V, V)` 工作表迭代
 //!    （L01 没有 conv；同一「栈即数据」改造），外加**位相等快速路径**：
-//!    同一打包字 = 同一分配或同一立即数 → 直接判等。
+//!    同一打包字 = 同一分配或同一立即数 → 直接判等；连续中性链再走内联
+//!    环（`L02_NO_BITEQ` 消融开关同时关闭两处剪枝，结构路径独立成立）。
 //!
 //! 与参考版（`super`，L03 风格）共用 parser / pretty / 错误显示，输出逐
 //! 字节一致（互检测试）。elaboration 直接在本表示上进行：
@@ -158,6 +161,9 @@ impl Spine {
 enum W<'a> {
     Tm(&'a Tm<'a>, Option<&'a EnvCons<'a>>),
     Apply,
+    /// vals 顶上是实参；函数值已知是闭包（β 岔路下降时已 `nth` 出来），
+    /// 直接 β——不再经 `Tm(Var)` 重查一遍环境。
+    ApplyKnown(V),
     /// vals 顶上是 base 值，其下 `k` 个是待应用的链头（内层最上）。
     ChainWrap(u32),
     /// vals 顶是 let 绑定的值：弹出压进环境，继续求值体。
@@ -206,7 +212,9 @@ fn eval_iter<'a>(
                     let (f, a) = match tm {
                         Tm::App(f, a) => (f, a),
                         base => {
-                            work.push(W::ChainWrap(heads));
+                            if heads > 0 {
+                                work.push(W::ChainWrap(heads));
+                            }
                             work.push(W::Tm(base, env));
                             break;
                         }
@@ -215,11 +223,13 @@ fn eval_iter<'a>(
                         Tm::Var(i) => {
                             let vf = nth(env, *i as usize);
                             if v_tag(vf) == 1 {
-                                // β 岔路：本层退回通用三推（ChainWrap 收拢已收的头）
-                                work.push(W::ChainWrap(heads));
-                                work.push(W::Apply);
+                                // β 岔路：函数值已在手上（闭包），ApplyKnown
+                                // 直接管 β；heads>0 时 ChainWrap 照旧收拢
+                                if heads > 0 {
+                                    work.push(W::ChainWrap(heads));
+                                }
+                                work.push(W::ApplyKnown(vf));
                                 work.push(W::Tm(a, env));
-                                work.push(W::Tm(f, env));
                                 break;
                             }
                             vals.push(vf);
@@ -228,7 +238,9 @@ fn eval_iter<'a>(
                         }
                         _ => {
                             // 复合函数头：通用三推（同样先收已收的头）
-                            work.push(W::ChainWrap(heads));
+                            if heads > 0 {
+                                work.push(W::ChainWrap(heads));
+                            }
                             work.push(W::Apply);
                             work.push(W::Tm(a, env));
                             work.push(W::Tm(f, env));
@@ -248,6 +260,12 @@ fn eval_iter<'a>(
                 } else {
                     vals.push(spine.push(vf, va));
                 }
+            }
+            W::ApplyKnown(vf) => {
+                let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
+                let c = v_clo_of(vf);
+                let node = bump.alloc(EnvCons { val: va, next: c.env });
+                work.push(W::Tm(c.body, Some(node)));
             }
             W::ChainWrap(k) => {
                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
@@ -455,8 +473,10 @@ fn conv_iter<'a>(
 ) -> bool {
     let mut stack: Vec<(u32, V, V)> = Vec::new();
     stack.push((l0, t0, u0));
+    // 位相等开关入口读一次（消融模式同时关掉链内环里的剪枝）
+    let biteq = !NO_BITEQ.load(std::sync::atomic::Ordering::Relaxed);
     while let Some((l, t, u)) = stack.pop() {
-        if !NO_BITEQ.load(std::sync::atomic::Ordering::Relaxed) && t.0 == u.0 {
+        if biteq && t.0 == u.0 {
             continue; // 位相等：同一值
         }
         match (v_tag(t), v_tag(u)) {
@@ -533,20 +553,50 @@ fn conv_iter<'a>(
                 stack.push((l + 1, vt, vu));
             }
 
-            // 中性：头相同则逐对比较 spine（二叉拆分，位相等剪枝）
+            // 中性：头相同则逐对比较 spine。连续右链（church 数一类的
+            // s (s (… z)) 形状）走内联环：沿 `.a` 逐元素前进，f 位相等
+            // 直接跳过（不入 worksheet），只有真正待比较的子对才入栈——
+            // 每个 spine 条目从「2 次弹压 + 2 次入栈」降到 2 次顺序读。
             (2, 2) => {
-                let i1 = v_spine_of(t);
-                let i2 = v_spine_of(u);
-                let (f1, a1) = {
-                    let e = &spine.stack[i1];
-                    (e.f, e.a)
-                };
-                let (f2, a2) = {
-                    let e = &spine.stack[i2];
-                    (e.f, e.a)
-                };
-                stack.push((l, f1, f2));
-                stack.push((l, a1, a2));
+                let mut i1 = v_spine_of(t);
+                let mut i2 = v_spine_of(u);
+                // 两侧都是连续链时先比长度：条目数不同 ⇒ 归一化后应用
+                // 个数不同 ⇒ 必不等，fail-fast 省掉整趟游走。依据：spine
+                // 的 f 分量永不可能是闭包（Apply/ChainWrap 的 β 岔路即时
+                // 归约；eta push 处也已排除），中性链无 β 可发，条目数
+                // 就是归一化后的应用个数。
+                {
+                    let e1 = &spine.stack[i1];
+                    let e2 = &spine.stack[i2];
+                    if e1.base as usize + e1.len as usize - 1 == i1
+                        && e2.base as usize + e2.len as usize - 1 == i2
+                        && e1.len != e2.len
+                    {
+                        return false;
+                    }
+                }
+                loop {
+                    let (f1, a1) = {
+                        let e = &spine.stack[i1];
+                        (e.f, e.a)
+                    };
+                    let (f2, a2) = {
+                        let e = &spine.stack[i2];
+                        (e.f, e.a)
+                    };
+                    if !biteq || f1.0 != f2.0 {
+                        stack.push((l, f1, f2));
+                    }
+                    if v_tag(a1) == 2 && v_tag(a2) == 2 {
+                        i1 = v_spine_of(a1);
+                        i2 = v_spine_of(a2);
+                    } else {
+                        if !biteq || a1.0 != a2.0 {
+                            stack.push((l, a1, a2));
+                        }
+                        break;
+                    }
+                }
             }
 
             // U == U（位相等通常已覆盖；防御性保留，避免依赖快速路径）
