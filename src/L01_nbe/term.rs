@@ -17,6 +17,12 @@
 
 use std::rc::Rc;
 
+/// 小端 u64 直读（编码必 8 字节对齐，越界即输入损坏）。
+#[inline]
+fn u64_at(bytes: &[u8], pos: usize) -> u64 {
+    u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term {
     Idx(usize),
@@ -110,38 +116,43 @@ impl Term {
         }
     }
 
-    pub fn from_vec2(mut bytes: Vec<u8>) -> (Term, Vec<u8>) {
-        let tag = unsafe { *bytes.get_unchecked(0) };
-        bytes.drain(0..1);
-
-        match tag {
-            0 => {
-                // Idx case: read 8 bytes as usize
-                let mut idx_bytes = [0u8; 8];
-                idx_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
-                bytes.drain(0..8);
-                let idx = usize::from_le_bytes(idx_bytes);
-                (Term::Idx(idx), bytes)
-            },
-            1 => {
-                // Lam case: read length (8 bytes) then the term
-                let mut len_bytes = [0u8; 8];
-                len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
-                bytes.drain(0..8);
-                let len = u64::from_le_bytes(len_bytes) as usize;
-                let term_bytes = bytes[..len].to_vec();
-                bytes.drain(0..len);
-                let (term, _) = Term::from_vec2(term_bytes);
-                (Term::Lam(Box::new(term)), bytes)
-            },
-            2 => {
-                // App case: parse two consecutive terms
-                let (term1, remaining) = Term::from_vec2(bytes);
-                let (term2, final_remaining) = Term::from_vec2(remaining);
-                (Term::App(Box::new(term1), Box::new(term2)), final_remaining)
-            },
-            _ => unsafe { std::hint::unreachable_unchecked() },
+    /// 解码 `to_vec2` 前缀编码（单根，消费全部字节）。
+    /// 光标版：旧实现每层 `drain(0..)` 把剩余 Vec 整体前移，深链解码退化
+    /// O(n²)；光标只推进不搬移，O(n)。
+    pub fn from_vec2(bytes: &[u8]) -> Term {
+        fn parse_at(bytes: &[u8], pos: &mut usize) -> Term {
+            let tag = bytes[*pos];
+            *pos += 1;
+            match tag {
+                0 => {
+                    let start = *pos;
+                    let idx = u64_at(bytes, start) as usize;
+                    *pos += 8;
+                    Term::Idx(idx)
+                },
+                1 => {
+                    let start = *pos;
+                    let len = u64_at(bytes, start) as usize;
+                    *pos += 8;
+                    // 体自带长度：在子切片上用独立光标解析（等长消费）
+                    let mut body_pos = 0;
+                    let body = parse_at(&bytes[*pos..*pos + len], &mut body_pos);
+                    debug_assert_eq!(body_pos, len);
+                    *pos += len;
+                    Term::Lam(Box::new(body))
+                },
+                2 => {
+                    let f = parse_at(bytes, pos);
+                    let a = parse_at(bytes, pos);
+                    Term::App(Box::new(f), Box::new(a))
+                },
+                _ => unsafe { std::hint::unreachable_unchecked() },
+            }
         }
+        let mut pos = 0;
+        let t = parse_at(bytes, &mut pos);
+        debug_assert_eq!(pos, bytes.len());
+        t
     }
 
     pub fn to_vec3(self, arena_tm: &mut Vec<Rc<Vec<u8>>>) -> Vec<u8> {
@@ -169,36 +180,40 @@ impl Term {
         }
     }
 
-    pub fn from_vec3(mut bytes: Vec<u8>, arena_tm: &Vec<Rc<Vec<u8>>>) -> (Term, Vec<u8>) {
-        let tag = unsafe { *bytes.get_unchecked(0) };
-        bytes.drain(0..1);
-
-        match tag {
-            0 => {
-                // Idx case: read 8 bytes as usize
-                let mut idx_bytes = [0u8; 8];
-                idx_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
-                bytes.drain(0..8);
-                let idx = usize::from_le_bytes(idx_bytes);
-                (Term::Idx(idx), bytes)
-            },
-            1 => {
-                // Lam case: the body lives in arena_tm at the stored index
-                let mut len_bytes = [0u8; 8];
-                len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(0..8) });
-                bytes.drain(0..8);
-                let len = u64::from_le_bytes(len_bytes) as usize;
-                let (term, _) = Term::from_vec3(arena_tm.get(len).unwrap().to_vec(), arena_tm);
-                (Term::Lam(Box::new(term)), bytes)
-            },
-            2 => {
-                // App case: parse two consecutive terms
-                let (term1, remaining) = Term::from_vec3(bytes, arena_tm);
-                let (term2, final_remaining) = Term::from_vec3(remaining, arena_tm);
-                (Term::App(Box::new(term1), Box::new(term2)), final_remaining)
-            },
-            _ => unsafe { std::hint::unreachable_unchecked() },
+    /// 解码 `to_vec3` 前缀编码（单根，消费全部字节；`Lam` 体取 arena 下标）。
+    /// 同 `from_vec2`：光标版 O(n)，旧 `drain(0..)` 是 O(n²)。
+    pub fn from_vec3(bytes: &[u8], arena_tm: &[Rc<Vec<u8>>]) -> Term {
+        fn parse_at(bytes: &[u8], arena_tm: &[Rc<Vec<u8>>], pos: &mut usize) -> Term {
+            let tag = bytes[*pos];
+            *pos += 1;
+            match tag {
+                0 => {
+                    let start = *pos;
+                    let idx = u64_at(bytes, start) as usize;
+                    *pos += 8;
+                    Term::Idx(idx)
+                },
+                1 => {
+                    let idx = u64_at(bytes, *pos) as usize;
+                    *pos += 8;
+                    // 体在 arena 里（编码期入表，见 to_vec3）
+                    let mut body_pos = 0;
+                    let body = parse_at(arena_tm.get(idx).unwrap(), arena_tm, &mut body_pos);
+                    debug_assert_eq!(body_pos, arena_tm[idx].len());
+                    Term::Lam(Box::new(body))
+                },
+                2 => {
+                    let f = parse_at(bytes, arena_tm, pos);
+                    let a = parse_at(bytes, arena_tm, pos);
+                    Term::App(Box::new(f), Box::new(a))
+                },
+                _ => unsafe { std::hint::unreachable_unchecked() },
+            }
         }
+        let mut pos = 0;
+        let t = parse_at(bytes, arena_tm, &mut pos);
+        debug_assert_eq!(pos, bytes.len());
+        t
     }
 
     pub fn into_rc(self) -> TermRc {

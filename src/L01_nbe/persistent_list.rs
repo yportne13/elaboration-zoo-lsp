@@ -37,7 +37,16 @@ impl<T> ListArena<T> {
     pub fn nth(&self, list: NonZeroUsize, idx: usize) -> &T {
         let mut list = list;
         for _ in 0..idx {
-            list = unsafe { self.0.get_unchecked(list.get()).1.unwrap_unchecked() };
+            let node = unsafe { self.0.get_unchecked(list.get()) };
+            // 越界防护（debug 构建）：合法闭项的查找步数 < 环境深度，绝不会
+            // 从链尾哨兵（自环，下标 1）再步进——这里提前炸出误用；release
+            // 零成本。残余缺口：arena 跨轮复用后恰好多一步（idx == 深度）
+            // 会落在哨兵槽读到轮 1 的旧值，只此一档静默（结构上不可区分）。
+            debug_assert!(
+                node.1 != Some(list),
+                "ListArena::nth 越界：闭项不应从链尾哨兵（自环）再步进"
+            );
+            list = unsafe { node.1.unwrap_unchecked() };
         }
         unsafe { &self.0.get_unchecked(list.get()).0 }
     }

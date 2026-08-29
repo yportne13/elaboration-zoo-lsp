@@ -29,7 +29,7 @@ pub mod L01_nbe;
 #[command(
     name = "l01bench",
     about = "L01 NBE 变体基准：church_pair(n) 归一化，正确性断言 + 多轮计时",
-    after_help = "n > 8000 时只有 cek 能跑（其余变体递归链栈溢出）。"
+    after_help = "n > 8000 时只有迭代变体出赛（cek/cek_bump/bump_iter/bump_spine_iter/bump_spine_slim 及 _ss 稳态行）；其余变体递归链栈溢出。"
 )]
 struct Cli {
     /// 最大教堂数规模 n（从 1000 起翻倍）

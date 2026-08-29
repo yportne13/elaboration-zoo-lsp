@@ -279,14 +279,16 @@ impl Machine {
     /// eval（双栈）与 quote（任务栈 + 流式链）都深度无上限；spine/vals 跨
     /// 调用复用（clear 保容量）。调用方保证 `bump`/`tm` 同源（reset 后重 import）。
     pub(crate) fn normalize<'a>(&mut self, bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
+        // 带生命周期的小栈每调用新建（避免持 'a 跨 Bump::reset）；容量 64
+        // 省掉稳态口径下首轮 push 的分配（本负载恒浅，不会扩容）
         self.spine.stack.clear();
-        let v = eval_iter(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, None, tm);
+        let v = eval_iter(bump, &mut self.spine, &mut Vec::with_capacity(64), &mut self.vals, None, tm);
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            &mut Vec::with_capacity(64),
+            &mut Vec::with_capacity(64),
+            &mut Vec::with_capacity(64),
             &mut self.vals,
             v,
         )
@@ -297,13 +299,13 @@ impl Machine {
 /// eval（双栈）与 quote（任务栈 + 流式链）都深度无上限。
 pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
     let mut spine = Spine { stack: Vec::with_capacity(4096) };
-    let v = eval_iter(bump, &mut spine, &mut Vec::new(), &mut Vec::new(), None, tm);
+    let v = eval_iter(bump, &mut spine, &mut Vec::with_capacity(64), &mut Vec::new(), None, tm);
     quote_iter(
         bump,
         &mut spine,
-        &mut Vec::new(),
-        &mut Vec::new(),
-        &mut Vec::new(),
+        &mut Vec::with_capacity(64),
+        &mut Vec::with_capacity(64),
+        &mut Vec::with_capacity(64),
         &mut Vec::new(),
         v,
     )

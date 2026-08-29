@@ -1,4 +1,5 @@
-//! 19 个 NBE 变体的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
+//! 22 个 NBE 变体（加 2 条稳态口径行 `bump_spine_iter_ss`/`bump_spine_slim_ss`）
+//! 的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
 //! 规范化结果必须等于 `church(2n)`。流程：
@@ -123,7 +124,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
     // bytes_env_list — 前缀字节码 + List 环境
     if want("bytes_env_list") {
         let input = term::church_pair(n).to_vec2();
-        let got = Term::from_vec2(bytes_env_list::normalize(input.clone())).0;
+        let got = Term::from_vec2(&bytes_env_list::normalize(input.clone()));
         assert_eq!(got, check, "bytes_env_list 结果不正确");
         bytes_env_list::normalize(input);
         let mut ts = Vec::with_capacity(rounds);
@@ -132,7 +133,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             let start = Instant::now();
             let out = bytes_env_list::normalize(input);
             ts.push(start.elapsed());
-            assert_eq!(Term::from_vec2(out).0, check);
+            assert_eq!(Term::from_vec2(&out), check);
         }
         rows.push(("bytes_env_list", *ts.iter().min().unwrap(), median(&mut ts)));
     }
@@ -141,7 +142,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
     if want("bytes_env_arena") {
         let input = term::church_pair(n).to_vec2();
         let mut arena = ListArena::new(); // 跨轮次复用：追加式下标永不过期
-        let got = Term::from_vec2(bytes_env_arena::normalize(input.clone(), &mut arena)).0;
+        let got = Term::from_vec2(&bytes_env_arena::normalize(input.clone(), &mut arena));
         assert_eq!(got, check, "bytes_env_arena 结果不正确");
         bytes_env_arena::normalize(input, &mut arena);
         let mut ts = Vec::with_capacity(rounds);
@@ -150,7 +151,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             let start = Instant::now();
             let out = bytes_env_arena::normalize(input, &mut arena);
             ts.push(start.elapsed());
-            assert_eq!(Term::from_vec2(out).0, check);
+            assert_eq!(Term::from_vec2(&out), check);
         }
         rows.push(("bytes_env_arena", *ts.iter().min().unwrap(), median(&mut ts)));
     }
@@ -161,9 +162,9 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         let input = term::church_pair(n).to_vec3(&mut arena_tm);
         let mut arena = ListArena::new();
         let got = Term::from_vec3(
-            bytes_env_arena_tm::normalize(input.clone(), &mut arena, &mut arena_tm),
+            &bytes_env_arena_tm::normalize(input.clone(), &mut arena, &mut arena_tm),
             &arena_tm,
-        ).0;
+        );
         assert_eq!(got, check, "bytes_env_arena_tm 结果不正确");
         bytes_env_arena_tm::normalize(input, &mut arena, &mut arena_tm);
         let mut ts = Vec::with_capacity(rounds);
@@ -173,7 +174,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             let start = Instant::now();
             let out = bytes_env_arena_tm::normalize(input, &mut arena, &mut arena_tm_in);
             ts.push(start.elapsed());
-            assert_eq!(Term::from_vec3(out, &arena_tm_in).0, check);
+            assert_eq!(Term::from_vec3(&out, &arena_tm_in), check);
         }
         rows.push(("bytes_env_arena_tm", *ts.iter().min().unwrap(), median(&mut ts)));
     }
@@ -182,7 +183,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
     if want("bytes_flat_value") {
         let input = term::church_pair(n).to_vec2();
         let mut arena = ListArena::new();
-        let got = Term::from_vec2(bytes_flat_value::normalize(input.clone(), &mut arena)).0;
+        let got = Term::from_vec2(&bytes_flat_value::normalize(input.clone(), &mut arena));
         assert_eq!(got, check, "bytes_flat_value 结果不正确");
         bytes_flat_value::normalize(input, &mut arena);
         let mut ts = Vec::with_capacity(rounds);
@@ -191,7 +192,7 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
             let start = Instant::now();
             let out = bytes_flat_value::normalize(input, &mut arena);
             ts.push(start.elapsed());
-            assert_eq!(Term::from_vec2(out).0, check);
+            assert_eq!(Term::from_vec2(&out), check);
         }
         rows.push(("bytes_flat_value", *ts.iter().min().unwrap(), median(&mut ts)));
     }
