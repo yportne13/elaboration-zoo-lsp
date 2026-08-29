@@ -513,23 +513,39 @@ fn quote_iter<'a>(
 // --------------------------------------------------------------------------------
 
 /// A/B 实验开关（l02bench 的位相等消融用）：置 `L02_NO_BITEQ=1` 关掉
-/// 位相等快速路径，走纯结构比较。
+/// 位相等快速路径，走纯结构比较（`=0` 不关闭，避免 `set` 语义误伤）。
 static NO_BITEQ: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
     std::sync::LazyLock::new(|| {
-        std::sync::atomic::AtomicBool::new(std::env::var("L02_NO_BITEQ").is_ok())
+        std::sync::atomic::AtomicBool::new(
+            std::env::var("L02_NO_BITEQ").is_ok_and(|v| v != "0"),
+        )
     });
 
 /// A/B 实验开关（conv 工作表的判等记忆化消融）：置 `L02_NO_CONV_MEMO=1`
-/// 关闭——工作表同一 (t.0, u.0) 子对只结构比较一次。
+/// 关闭——工作表同一 (t.0, u.0) 子对只结构比较一次（`=0` 不关闭）。
 static NO_CONV_MEMO: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
     std::sync::LazyLock::new(|| {
-        std::sync::atomic::AtomicBool::new(std::env::var("L02_NO_CONV_MEMO").is_ok())
+        std::sync::atomic::AtomicBool::new(
+            std::env::var("L02_NO_CONV_MEMO").is_ok_and(|v| v != "0"),
+        )
     });
 
 /// conv 工作表条目：待比较子对，或判等记忆化屏障。
-enum WItem {
+enum WItem<'a> {
     /// 待比较子对（level 相同的一对值）。
     Pair(u32, V, V),
+    /// Π 余定义域的惰性比较：弹出时两侧 cod 闭包体各 eval 一次（各自绑定
+    /// 同一 fresh `v_lvl(l)`），结果入 Pair(l+1, ·, ·)。排在 dom 对之下——
+    /// dom 不等即 `return false`，cod 的 eval 整个省掉（参考版
+    /// `conv(l, a, a2) && conv(l+1, …)` 短路的对应物；旧实现把两侧 cod
+    /// 先 eval 出来再比 dom，dom 不等时白付 O(n)）。
+    EvalCod2(
+        &'a Tm<'a>,
+        Option<&'a EnvCons<'a>>,
+        &'a Tm<'a>,
+        Option<&'a EnvCons<'a>>,
+        u32,
+    ),
     /// 屏障：派发子对前压入；其弹出时上方整棵子比较已全部完成（工作表是
     /// 纯合取，任何失败早已 `return false`）——该对必已判等，入表。
     /// 机制同 quote 的 `MemoStore`（LIFO 屏障，见 L01 `bump_spine_memo`）。
@@ -558,12 +574,35 @@ fn conv_iter<'a>(
     let biteq = !NO_BITEQ.load(std::sync::atomic::Ordering::Relaxed);
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
     let mut memo: rustc_hash::FxHashSet<(u64, u64)> = rustc_hash::FxHashSet::default();
-    let mut stack: Vec<WItem> = Vec::new();
+    let mut stack: Vec<WItem<'a>> = Vec::new();
     stack.push(WItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
             WItem::Store(key) => {
                 memo.insert(key);
+                continue;
+            }
+            WItem::EvalCod2(b1, e1, b2, e2, l) => {
+                // dom 已判等：两侧 cod 各 eval 一次（fresh 绑定同一 level），
+                // 组合成子对继续（两个 eval 顺序执行，复用的 work/vals 各自
+                // clear，无跨 eval 残留）。
+                let vt = eval_iter(
+                    bump,
+                    spine,
+                    work,
+                    vals,
+                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: e1 })),
+                    b1,
+                );
+                let vu = eval_iter(
+                    bump,
+                    spine,
+                    work,
+                    vals,
+                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: e2 })),
+                    b2,
+                );
+                stack.push(WItem::Pair(l + 1, vt, vu));
                 continue;
             }
             WItem::Pair(l, t, u) => (l, t, u),
@@ -633,31 +672,16 @@ fn conv_iter<'a>(
                 stack.push(WItem::Pair(l + 1, vt, vu));
             }
 
-            // Π：比较定义域，再在 binder 实例化下比较余定义域
+            // Π：先比定义域（其上），再惰性 eval 两侧余定义域（EvalCod2
+            // 排在 dom 之下——dom 不等时短路，cod 的 eval 整个省掉）。
             (4, 4) => {
                 let p = v_pi_of(t);
                 let q = v_pi_of(u);
                 if memo_on {
                     stack.push(WItem::Store((t.0, u.0)));
                 }
+                stack.push(WItem::EvalCod2(p.body, p.env, q.body, q.env, l));
                 stack.push(WItem::Pair(l, p.dom, q.dom));
-                let vt = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: p.env })),
-                    p.body,
-                );
-                let vu = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: q.env })),
-                    q.body,
-                );
-                stack.push(WItem::Pair(l + 1, vt, vu));
             }
 
             // 中性：头相同则逐对比较 spine。连续右链（church 数一类的
@@ -698,6 +722,10 @@ fn conv_iter<'a>(
                         stack.push(WItem::Pair(l, f1, f2));
                     }
                     if v_tag(a1) == 2 && v_tag(a2) == 2 {
+                        // 两侧剩余 spine 是同一句柄：位相等即全等，直接收尾
+                        if biteq && a1.0 == a2.0 {
+                            break;
+                        }
                         i1 = v_spine_of(a1);
                         i2 = v_spine_of(a2);
                     } else {
@@ -1419,6 +1447,19 @@ mod tests {
             let mut t = Tycker::new();
             assert_eq!(t.run_memo("nf", &src, &raw), basic, "memo 口径不一致");
         }
+    }
+
+    /// church（线性）负载的 memo 口径与参考版逐字节一致——memo 不是 dup
+    /// 专属：线性负载上它只付哈希税，输出必须不差分毫。
+    #[test]
+    fn church_memo_matches_basic() {
+        let src = church_src(8); // n = 512：参考版递归 quote 深度可控
+        let Some(raw) = super::super::parser::parser(&src, 0) else {
+            panic!("parse failed");
+        };
+        let basic = super::super::main_with("nf", &src);
+        let mut t = Tycker::new();
+        assert_eq!(t.run_memo("nf", &src, &raw), basic);
     }
 
     /// dup 负载的 nf 节点数：`λf. f C C` = 4n+12、`λf. f X X`（X = `λf'. f' C C`）
