@@ -20,17 +20,18 @@
 //! 7. **quote 记忆化（`quote_memo`）**：复制强制负载（dup 族）把重复
 //!    quote 塌缩为单次（L02 `quote_memo` 的移植；键 = 打包字 × level，
 //!    quote 期间 metacontext 冻结，flex 键稳定）。
+//! 8. **unify 判等记忆化（`UItem::Store` 轴，L02 conv memo 的移植）**：
+//!    同一 (t.0, u.0) 子对只结构比较一次（`Rel` 型重复谓词 / solve 后的
+//!    二次重走是命中场景）。与 L02 纯 conv 的差异在健壮性论证：solve
+//!    是唯一副作用——meta 写一次、force 只会 flex→rigid、算法成功对
+//!    metacontext 单调（见 `unify_iter` 注释），故**只缓存成功结果**仍
+//!    与逐对重比观测等价。`L03_NO_CONV_MEMO=1` 消融。
 //!
 //! 与参考版（`super`）共用 parser / pretty / 错误显示，输出逐字节一致
 //! （互检测试）。稳态形态是 [`Tycker`]：`Machine`（spine/vals/metacontxt）
 //! 跨调用复用 + 每轮 `Bump::reset`。
 //!
 //! 与 L02 的 conv 相比，本层统一改称 **unify**：结构比较 + 模式求解。
-//! **不做 conv 判等记忆化**（L02 的 `WItem::Store` 轴）：L03 的比较带求解
-//! 副作用，"判等结果与状态无关"的缓存论证不再自动成立，且尚无命中场景
-//! 的负载（conv_dup 族的效果在 L02 已验证过机制，不值得在副作用版本里
-//! 承担风险）。后续若要开，需先造出「同一子对在多次求解之间重现」的
-//! 负载并论证缓存单调性。
 
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
@@ -690,10 +691,20 @@ fn quote_iter<'a>(
         }
     }
     done.pop().expect("quote 必须恰有一个根")
-}// unify（工作表迭代 + force 前置 + 模式求解）
+}// unify（工作表迭代 + force 前置 + 模式求解 + 判等记忆化）
 // --------------------------------------------------------------------------------
 
-/// unify 工作表条目：待比较子对，或 Π 余定义域的惰性比较屏障。
+/// A/B 实验开关（unify 工作表的判等记忆化消融）：置 `L03_NO_CONV_MEMO=1`
+/// 关闭——工作表同一 (t.0, u.0) 子对只结构比较一次（`=0` 不关闭）。
+static NO_CONV_MEMO: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(
+            std::env::var("L03_NO_CONV_MEMO").is_ok_and(|v| v != "0"),
+        )
+    });
+
+/// unify 工作表条目：待比较子对，或 Π 余定义域的惰性比较屏障，或判等
+/// 记忆化屏障。
 enum UItem<'a> {
     /// 待比较子对（level 相同的一对值；弹出时先 force 双方再分派）。
     Pair(u32, V, V),
@@ -708,6 +719,10 @@ enum UItem<'a> {
         Option<&'a EnvCons<'a>>,
         u32,
     ),
+    /// 判等记忆化屏障：派发子对前压入；其弹出时上方整棵子比较已全部完成
+    /// （工作表是纯合取，任何失败早已 `return false`）——该对必已判等，
+    /// 入表。机制同 L02 conv 的 `WItem::Store`（LIFO 屏障）。
+    Store((u64, u64)),
 }
 
 /// unification：结构比较 + 模式求解，工作表迭代（深度不受进程栈限）。
@@ -715,6 +730,27 @@ enum UItem<'a> {
 /// 路径在 force 前后各查一次（同一打包字 ⇒ 同一分配或同一立即数 ⇒ 同值）。
 /// 求解是唯一副作用：只发生在比较成功路径（工作表纯合取，失败早已
 /// return），无回滚问题。
+///
+/// **判等记忆化**（`L03_NO_CONV_MEMO=1` 消融）：同一 (t.0, u.0) 子对只
+/// 结构比较一次，`Store` LIFO 屏障保证只在整棵子比较成功后入表（失败
+/// 直接 `return false`，无失败缓存）。相对 L02 纯 conv 多出的健壮性论证
+/// ——solve 改变 metacontext，同一打包字对的 force 结果随时间变化：
+///
+/// 1. meta **写一次**（`Unsolved → Solved` 不回退），force 只会把
+///    flex 变刚性（解链展开），刚性永不回退成 flex；
+/// 2. **成功单调**：M 时刻子对判等成功 ⇒ M′ ⊇ M 时刻再比较仍成功。
+///    归纳：M′ 的比较树是 M 的比较树把「solve 成功的节点」替换成求解后
+///    的结构比较子树（该子树在 M 时刻同样成功——解按应用序摔上去后
+///    比的就是它的展开形）；基例（位相等、刚性同头逐实参）不受 expansion
+///    影响，flex 集合单调收缩只会把 solve 分支变成已展开的结构分支；
+/// 3. **跳过不影响 metacontext 终态**：M′ 时刻想解的 meta 在 M 时刻同样
+///    未解（写一次 ⇒ 未解集单调收缩），M 时刻的成功要么已解它（⇒ M′
+///    force 直接展开，无 solve 分支）要么无需解它——缓存命中跳过的
+///    重比不欠任何求解；
+/// 4. 判等布尔与 level 无关（fresh 变量两侧对称插入、恒异于自由变量，
+///    比较树在任意 level 同构）——键无需带 level，同 L02。
+///
+/// 表随本次 unify 调用新建，`Bump::reset` 后无跨轮悬垂。
 fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -725,10 +761,19 @@ fn unify_iter<'a>(
     t0: V,
     u0: V,
 ) -> bool {
+    let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
+    let mut memo: rustc_hash::FxHashSet<(u64, u64)> = rustc_hash::FxHashSet::default();
     let mut stack: Vec<UItem<'a>> = Vec::new();
+    // 实参收集草稿：跨 Pair 复用（clear 保容量），热路径上零分配
+    let mut scratch1: Vec<V> = Vec::new();
+    let mut scratch2: Vec<V> = Vec::new();
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
+            UItem::Store(key) => {
+                memo.insert(key);
+                continue;
+            }
             UItem::EvalCod2(b1, e1, b2, e2, l) => {
                 // dom 已判等：两侧 cod 各 eval 一次（fresh 绑定同一 level），
                 // 组合成子对继续（两个 eval 顺序执行，复用的 work/vals 各自
@@ -759,6 +804,9 @@ fn unify_iter<'a>(
         if t.0 == u.0 {
             continue; // 位相等：同一值
         }
+        if memo_on && memo.contains(&(t.0, u.0)) {
+            continue; // 本轮已判等过的子对（命中连 force 都省——成功单调）
+        }
         let t = force(bump, spine, work, vals, metas, t);
         let u = force(bump, spine, work, vals, metas, u);
         if t.0 == u.0 {
@@ -787,6 +835,9 @@ fn unify_iter<'a>(
                     Some(bump.alloc(EnvCons { val: v_lvl(l), next: c2.env })),
                     c2.body,
                 );
+                if memo_on {
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
             (_, 1) => {
@@ -801,6 +852,9 @@ fn unify_iter<'a>(
                     c.body,
                 );
                 let vt = spine.push(t, v_lvl(l));
+                if memo_on {
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
             (1, _) => {
@@ -815,6 +869,9 @@ fn unify_iter<'a>(
                     c.body,
                 );
                 let vu = spine.push(u, v_lvl(l));
+                if memo_on {
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
 
@@ -825,6 +882,9 @@ fn unify_iter<'a>(
             (4, 4) => {
                 let p = v_pi_of(t);
                 let q = v_pi_of(u);
+                if memo_on {
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
                 stack.push(UItem::EvalCod2(p.body, p.env, q.body, q.env, l));
                 stack.push(UItem::Pair(l, p.dom, q.dom));
             }
@@ -845,55 +905,109 @@ fn unify_iter<'a>(
                 let hd1 = spine.spine_head(h1);
                 let hd2 = spine.spine_head(h2);
                 if v_tag(hd1) == 5 || v_tag(hd2) == 5 {
-                    // 含未解 flex：与 `_` 分支同款求解路径
-                    let mut args: Vec<V> = Vec::new();
-                    if let Some(m) = spine.flex_of(t, &mut args) {
-                        if solve(bump, spine, work, vals, metas, l, m, &args, u) {
-                            continue;
+                    // 含未解 flex：与 `_` 分支同款求解路径。solve 成功即该对
+                    // 判等完成（解按构造使两侧相等，无子比较需要屏障）——
+                    // 直接入表：solve 负载里 (p_k, ?x) 型子对会因 `Eq A x x`
+                    // 型的重复出现二次，命中省掉解展开后的整趟重走。
+                    let mut args = std::mem::take(&mut scratch1);
+                    args.clear();
+                    let solved = if let Some(m) = spine.flex_of(t, &mut args) {
+                        solve(bump, spine, work, vals, metas, l, m, &args, u)
+                    } else {
+                        let mut args = std::mem::take(&mut scratch2);
+                        args.clear();
+                        match spine.flex_of(u, &mut args) {
+                            Some(m) => solve(bump, spine, work, vals, metas, l, m, &args, t),
+                            None => false,
                         }
-                        return false;
-                    }
-                    let mut args: Vec<V> = Vec::new();
-                    if let Some(m) = spine.flex_of(u, &mut args) {
-                        if solve(bump, spine, work, vals, metas, l, m, &args, t) {
-                            continue;
+                    };
+                    scratch1 = args;
+                    if solved {
+                        if memo_on {
+                            memo.insert((t.0, u.0));
                         }
-                        return false;
+                        continue;
                     }
                     return false;
                 }
                 if hd1.0 != hd2.0 {
                     return false;
                 }
-                let mut a1: Vec<V> = Vec::new();
-                let mut a2: Vec<V> = Vec::new();
-                spine.collect_args(h1, &mut a1);
-                spine.collect_args(h2, &mut a2);
-                if a1.len() != a2.len() {
-                    return false;
+                // 连续链长度 fail-fast（L02 conv 内联环同款）：两侧都是连续
+                // 链（base+len-1 == idx，即逐条 push 相邻构建）而条目数不同
+                // ⇒ 归一化后应用个数不同 ⇒ 必不等。非连续链（共享后缀句柄、
+                // 跨期构建）len 不再等于应用个数，由连续性守卫排除。
+                {
+                    let e1 = &spine.stack[h1];
+                    let e2 = &spine.stack[h2];
+                    if e1.base as usize + e1.len as usize - 1 == h1
+                        && e2.base as usize + e2.len as usize - 1 == h2
+                        && e1.len != e2.len
+                    {
+                        return false;
+                    }
                 }
-                // 逐对入栈（逆序压：第一个实参对最先弹出比较）
-                for i in (0..a1.len()).rev() {
-                    stack.push(UItem::Pair(l, a1[i], a2[i]));
+                if memo_on {
+                    // 屏障先压（LIFO：其上内联环压入的子对先跑完）
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
+                // 内联环（L02 conv 冠军配方的移植）：两侧各自按本侧惯例分解
+                // value(e) = App(f, v(a))，沿 `.a` 同步下走——f 位相等直接
+                // 跳过（ChainWrap 链每层同头字）、剩余 spine 同句柄即位相等
+                // 收尾，只有真正待比的子对才入工作表。church 链的刚性比较
+                // 整条链零往返；混合惯例链自动退化为逐层派发（仍正确）。
+                // 到达此处的链头必为刚性（未解 flex 已走上方求解路径、已解
+                // flex 已被 force 展开），f 分量恒非闭包（Apply/ChainWrap 的
+                // β 岔路即时归约；unify 的 eta push 只推非闭包）。
+                let mut i1 = h1;
+                let mut i2 = h2;
+                loop {
+                    let (f1, a1) = {
+                        let e = &spine.stack[i1];
+                        (e.f, e.a)
+                    };
+                    let (f2, a2) = {
+                        let e = &spine.stack[i2];
+                        (e.f, e.a)
+                    };
+                    if f1.0 != f2.0 {
+                        stack.push(UItem::Pair(l, f1, f2));
+                    }
+                    if v_tag(a1) == 2 && v_tag(a2) == 2 {
+                        if a1.0 == a2.0 {
+                            break; // 剩余 spine 同句柄：位相等，整段后缀相等
+                        }
+                        i1 = v_spine_of(a1);
+                        i2 = v_spine_of(a2);
+                    } else {
+                        if a1.0 != a2.0 {
+                            stack.push(UItem::Pair(l, a1, a2));
+                        }
+                        break;
+                    }
                 }
             }
 
             // 求解：一侧是未解 flex（tag5 或 spine 头 Meta——force 后仍未
-            // 解才是 flex）；异 m 情形按参考版次序先解 t 侧
+            // 解才是 flex）；异 m 情形按参考版次序先解 t 侧。solve 成功即
+            // 判等完成，直接入表（同 (2,2) flex 分支的理由）。
             _ => {
-                let mut args: Vec<V> = Vec::new();
-                if let Some(m) = spine.flex_of(t, &mut args) {
-                    if solve(bump, spine, work, vals, metas, l, m, &args, u) {
-                        continue;
+                let mut args = std::mem::take(&mut scratch1);
+                args.clear();
+                let solved = if let Some(m) = spine.flex_of(t, &mut args) {
+                    solve(bump, spine, work, vals, metas, l, m, &args, u)
+                } else {
+                    match spine.flex_of(u, &mut args) {
+                        Some(m) => solve(bump, spine, work, vals, metas, l, m, &args, t),
+                        None => false,
                     }
-                    return false;
-                }
-                let mut args: Vec<V> = Vec::new();
-                if let Some(m) = spine.flex_of(u, &mut args) {
-                    if solve(bump, spine, work, vals, metas, l, m, &args, t) {
-                        continue;
+                };
+                scratch1 = args;
+                if solved {
+                    if memo_on {
+                        memo.insert((t.0, u.0));
                     }
-                    return false;
+                    continue;
                 }
                 return false; // 刚性失配 / 病态混杂
             }
@@ -950,7 +1064,7 @@ enum RJob<'a> {
     /// 引一个值到解域（产生一个 Tm 到 done）。
     Ren { dom: u32, cod: u32, v: V },
     /// 实参（逆应用序）已由其上任务引完，头是 head_tm，折叠 App。
-    SpineFold { head_tm: &'a Tm<'a>, args: Vec<V> },
+    SpineFold { head_tm: &'a Tm<'a>, n: u32 },
     /// done 栈顶是体，包 Lam。
     Lam1(&'a str),
     /// done 栈顶两个（先 cod 后 dom），合 Pi。
@@ -975,15 +1089,18 @@ fn rename_iter<'a>(
 ) -> Option<&'a Tm<'a>> {
     let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren { dom: dom0, cod: cod0, v: v0 }];
     let mut done: Vec<&'a Tm<'a>> = Vec::new();
+    // 实参收集 / 折叠草稿：跨任务复用（clear 保容量），热路径零分配
+    let mut args: Vec<V> = Vec::new();
+    let mut popped: Vec<&'a Tm<'a>> = Vec::new();
     // 派发辅助：spine 头分派（head_tm 就绪后按实参数压子任务；SpineFold
     // 先压——LIFO 保证实参任务先跑完，组合器最后执行）
     macro_rules! spine_case {
         ($dom:expr, $cod:expr, $h:expr, $head_tm:expr, $tasks:expr) => {{
-            let mut args: Vec<V> = Vec::new();
+            args.clear();
             spine.collect_args($h, &mut args);
             // 先压组合器（后执行）；args 逆应用序（h.a 先）→ 正序压，
             // 则 a1 的 Ren 最后压、最先弹（应用序先执行）
-            $tasks.push(RJob::SpineFold { head_tm: $head_tm, args: args.clone() });
+            $tasks.push(RJob::SpineFold { head_tm: $head_tm, n: args.len() as u32 });
             for &a in args.iter() {
                 $tasks.push(RJob::Ren { dom: $dom, cod: $cod, v: a });
             }
@@ -1076,11 +1193,10 @@ fn rename_iter<'a>(
                     _ => return None, // 病态（Π/U 被应用等）
                 }
             }
-            RJob::SpineFold { head_tm, args } => {
+            RJob::SpineFold { head_tm, n } => {
                 // 实参任务已完成：done 栈顶是最后一个完成的实参
                 // （应用序最后一位）——全部弹出后反序折叠成左嵌套 App
-                let n = args.len();
-                let mut popped: Vec<&'a Tm<'a>> = Vec::with_capacity(n);
+                popped.clear();
                 for _ in 0..n {
                     popped.push(done.pop()?);
                 }
@@ -1747,6 +1863,28 @@ pub(crate) fn conv_src(k: u32) -> String {
     s
 }
 
+/// conv_dup（判等记忆化的命中负载，L02 conv_dup 同款源）：`Rel` 的余定义域
+/// 重复谓词 `P x -> P y -> P y` 让 check 把 `(add p_k zero, p_k)` 这对比较
+/// **3 次**（x、y、y 各一次）——记忆化把第 2/3 次塌缩为查表。
+pub(crate) fn conv_dup_src(k: u32) -> String {
+    let mut s = String::from(
+        "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n\
+         let zero : Nat = \\N s z. z;\n\
+         let add : Nat -> Nat -> Nat = \\a b N s z. a N s (b N s z);\n\
+         let Rel : (A : U) -> A -> A -> U = \\A x y. (P : A -> U) -> P x -> P y -> P y;\n\
+         let relRefl : (A : U) -> (x : A) -> Rel A x x = \\A x P p1 p2. p1;\n\
+         let p0 : Nat = \\N s z. s (s z);\n",
+    );
+    for i in 1..=k {
+        s += &format!("let p{i} : Nat = add p{} p{};\n", i - 1, i - 1);
+    }
+    s += &format!(
+        "let relTest : Rel Nat (add p{k} zero) (add p{k} zero) = relRefl Nat p{k};\n"
+    );
+    s += "relTest\n";
+    s
+}
+
 /// solve 2^(k+1)（L03 的特色负载）：`Eq _ p_k p_k = refl _ _`——期望侧
 /// 的两个 `_` 挂洞，`refl` 的实参侧也挂洞，check 的 unify 触发三个求解：
 /// 两个小解 + 一个 `? := p_k` 的大解——rename 沿 church 展开的整条 neutral
@@ -1872,6 +2010,25 @@ mod tests {
             t.run("type", &src, &raw),
             super::super::main_with("type", &src),
             "solve 判定与参考版不一致"
+        );
+    }
+
+    /// conv_dup 判等记忆化负载：判定通过，且与参考版 type-mode 输出逐字节
+    /// 一致（Store 屏障入表时机的回归测试——屏障弹早了会出现"未比完先
+    /// 入表"的假命中）。
+    #[test]
+    fn conv_dup_check_passes() {
+        let src = conv_dup_src(10);
+        let Some(raw) = super::super::parser::parser(&src, 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert!(t.bench_check(&raw), "conv_dup 未通过（memo 屏障有误？）");
+        let mut t = Tycker::new();
+        assert_eq!(
+            t.run("type", &src, &raw),
+            super::super::main_with("type", &src),
+            "conv_dup 判定与参考版不一致"
         );
     }
 

@@ -46,13 +46,15 @@ L03 相对 L02 新增的语义（元变量机制）：
 ## 怎么跑
 
 ```text
-cargo test --lib L03_holes                 # 23 个测试：三示例、错误路径、
+cargo test --lib L03_holes                 # 24 个测试：三示例、错误路径、
                                            # 基础/性能互检、深度/稳态/求解压力、
-                                           # dup 双口径、memo 指针共享
-cargo run --release --bin l03bench         # 基准：k=9..15，五负载族 × 四口径
+                                           # dup 双口径、memo 指针共享、conv_dup 互检
+cargo run --release --bin l03bench         # 基准：k=9..15，六负载族 × 四口径
 ./target/release/l03bench --max-k 21 --only fast,fast_ss   # 大 n 段
 ./target/release/l03bench --workload solve --only fast      # L03 特色：求解负载
 ./target/release/l03bench --workload dup --only fast_memo   # call-by-need 轴
+./target/release/l03bench --workload conv_dup --only fast   # 判等记忆化轴
+L03_NO_CONV_MEMO=1 ./target/release/l03bench --workload conv_dup  # memo 消融
 ```
 
 ## 实测结果
@@ -61,12 +63,13 @@ cargo run --release --bin l03bench         # 基准：k=9..15，五负载族 × 
 负载族：`church` = church 2^(k+1)（k 次 ×2 翻倍 let 链）的 **check + nf**；
 `conv` = 同 church 数上 `Eq Nat (add big zero) big = refl Nat big` 的
 **check**（unify 在 check 内强制两侧完整展开后结构比较，无洞）；
-`solve` = `Eq _ p_k p_k = refl _ _` 的 **check**（L03 特色：期望侧两个
-`_` 挂洞，unify 触发三个求解，其中 `? := p_k` 的大解沿 church 展开的
-整条 neutral 链 rename）；`dup`/`dup_deep` = 复制强制族（call-by-need
-轴，同 L02）。口径：预热 1 次 + N 轮取 min；`basic`/`fast`（每轮新建
-Tycker）/`fast_ss`（Machine + metacontext 常住 + `Bump::reset` 跨轮复用）
-/`fast_memo`（quote 记忆化口径）。
+`conv_dup` = `Rel` 型重复谓词（`P x -> P y -> P y`）让 `(add p_k zero, p_k)`
+这对比较 3 次——**判等记忆化命中负载**；`solve` = `Eq _ p_k p_k = refl _ _`
+的 **check**（L03 特色：期望侧两个 `_` 挂洞，unify 触发三个求解，其中
+`? := p_k` 的大解沿 church 展开的整条 neutral 链 rename）；
+`dup`/`dup_deep` = 复制强制族（call-by-need 轴，同 L02）。口径：预热 1 次
++ N 轮取 min；`basic`/`fast`（每轮新建 Tycker）/`fast_ss`（Machine +
+metacontext 常住 + `Bump::reset` 跨轮复用）/`fast_memo`（quote 记忆化口径）。
 
 church（min ms / 相对 fast）：
 
@@ -104,10 +107,8 @@ dup / dup_deep（min ms）：
 | dup（强制 ×2） | 116 | 7.77 | 4.03 | 1.93× |
 | dup_deep（强制 ×4） | 219 | 15.8 | 4.43 | 3.56× |
 
-- 各负载族两版都严格线性（每翻倍 ×2）；倍率 church ~12×、conv ~25×、
-  solve ~10×——solve 的倍率最低：大解的 rename 在参考版是递归（沿
-  spine 每层一帧），快版本是任务栈，但解本身的结构（church 链）两边
-  都要完整走——差距更多来自常数而非算法形状。
+- 各负载族两版都严格线性（每翻倍 ×2）；对参考版的倍率 church ~13×、
+  conv ~30×、solve ~35×、conv_dup ~21×（提速第二轮后的数字，见下节）。
 - **深度无上限**：solve k=17（262144 链 rename）默认栈跑通（51 ms）；
   `basic` 的递归 rename/unify 受栈限（128 MB 栈 ≈ 26 万层，见已知限制）。
 - **稳态复用（`fast_ss`）在 L03 未复现 L01 式的大幅收益**——与 L02 的
@@ -117,6 +118,32 @@ dup / dup_deep（min ms）：
 - **quote 记忆化（`fast_memo`）在 dup 族 1.9×/3.6×**（L02 同款）：复制
   被塌缩为单次强制。L03 的 meta 不影响 memo 键：quote 期间 metacontext
   冻结（无 solve），同一打包字在同一 level 的 force 结果确定。
+
+## 提速第二轮：热路径 scratch 复用 + conv 内联环 + unify 判等记忆化
+
+三项叠加（k=15 min，交替 A/B；消融开关 `L03_NO_CONV_MEMO=1`）：
+
+| 负载 | 改前 | 改后 | 提升 | 归因 |
+|---|---|---|---|---|
+| conv | 8.8 ms | 6.2 ms | **1.4×** | 内联环（`(2,2)` 沿 `.a` 同步下走，65k 层零工作表往返） |
+| conv_dup | 19.9 ms | 13.6 ms | **1.46×** | 内联环 + 判等记忆化（第 2/3 次比较塌缩为查表） |
+| solve | 8.0 ms | 4.5 ms | **1.7×** | 判等记忆化：`(p_k, ?x)` 因 `Eq A x x` 型重复出现二次，命中省掉解展开后的整趟重走 |
+| church / dup / dup_deep | — | — | 持平 | memo 查表在同二进制消融下零开销 |
+
+配套两处小改：unify/rename 热路径的临时 `Vec`（`(2,2)` 实参收集、
+`RJob::SpineFold` 的 `args.clone()`）改为跨迭代复用 scratch。
+
+健壮性论证（相对 L02 纯 conv memo 多出的部分，全文见 `unify_iter`
+注释）：meta **写一次**、force 只会 flex→rigid、算法成功对 metacontext
+**单调**——故只缓存成功结果（`Store` LIFO 屏障保证整棵子比较成功后才
+入表，失败直接 `return false` 无失败缓存）与逐对重比观测等价，且跳过
+重比不欠任何求解（M′ 时刻想解的 meta 在 M 时刻同样可见）。solve 分支
+的成功也直接入表（无子比较，无需屏障）。互检测试 + 全 k bench 断言
+兜底。
+
+移植过程中的一个坑：`std::mem::take` 拿回的 scratch 残留旧数据，而
+`collect_args` 是**追加**语义——复用前必须 `clear`，否则 solve 拿到脏
+args 直接判失败（首版漏掉后 ex2/solve 全挂，互检测试当场暴露）。
 
 ## 打包值上的元变量机制（性能版）
 
@@ -197,7 +224,8 @@ L02 的扁平 spine 栈一个 entry 是「一次中性应用」，但 `f`/`a` �
 | ——（L02 无 meta） | `fresh_meta`（bump 外 `InsertedMeta` + 常住 `Vec<MetaEntry>`，每轮清空） |
 | `Machine`/`Tycker` 稳态 | 同款；`display_metas` 引读解值（quote 0） |
 | quote 记忆化 `quote_memo` | 同款移植（dup 族 1.9×/3.6×；quote 期间 metacontext 冻结，键稳定） |
-| ——（L02 conv memo） | **未移植**：L03 的比较带求解副作用，「判等结果与状态无关」的缓存论证不再自动成立，且尚无命中场景负载——列为后续轴 |
+| ——（L02 conv memo） | **unify 判等记忆化已移植**（提速第二轮）：只缓存成功 + 单调性论证（见 `unify_iter` 注释与 readme「提速第二轮」节）；solve 分支成功亦入表，`(p_k, ?x)` 型二次重走被命中剪掉 |
+| ——（L02 conv 连续链内联环） | **已移植**（提速第二轮）：`(2,2)` 刚性分支沿 `.a` 同步下走 + 连续链长度 fail-fast；conv 的 65k 层比较零工作表往返 |
 
 ## 已知限制
 

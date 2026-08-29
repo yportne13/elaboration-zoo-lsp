@@ -11,7 +11,10 @@
 //! - `church`：church 2^(k+1)（k 次 ×2 翻倍的 let 链）的 check + nf
 //!   （quote 强制整条 s-链；L02 同款，L03 无洞也走 unify）。
 //! - `conv`：同一 church 数之上的 `Eq Nat (add big zero) big = refl Nat big`
-//!   ——check 内 unify 强制两侧完整展开后结构比较（无洞）。
+//!   ——check 内 unify 强制两侧完整展开后结构比较（无洞，L02 conv 的同款源）。
+//! - `conv_dup`：**判等记忆化命中负载**——`Rel = \A x y. (P : A -> U) ->
+//!   P x -> P y -> P y` 的重复谓词让 check 把 `(add p_k zero, p_k)` 这对
+//!   比较 3 次，memo 把第 2/3 次塌缩为查表（`L03_NO_CONV_MEMO=1` 可消融）。
 //! - `solve`：**L03 特色**——`Eq _ p_k p_k = refl _ _`：两个 `_` 挂洞，
 //!   check 的 unify 触发三个求解，其中 `? := p_k` 的大解沿 church 展开的
 //!   整条 neutral 链 rename（参考版递归 rename 的深度压力、性能版 ren
@@ -29,7 +32,7 @@
 //! 用法：
 //! ```text
 //! cargo run --release --bin l03bench [--max-k 15] [--rounds 5] [--only basic,fast]
-//!                                     [--workload church|conv|solve|dup|dup_deep|all]
+//!                                     [--workload church|conv|conv_dup|solve|dup|dup_deep|all]
 //! ```
 
 // parser_lib 的 `pmatch`/`is` 泛型约束 `Pattern` 是 nightly API（lib 同款
@@ -56,7 +59,7 @@ use mimalloc::MiMalloc;
 use std::time::Instant;
 
 use L03_holes::bump_spine_iter::{
-    church_src, conv_src, dup_deep_src, dup_src, solve_src, Tycker,
+    church_src, conv_dup_src, conv_src, dup_deep_src, dup_src, solve_src, Tycker,
 };
 use L03_holes::parser::parser;
 
@@ -78,7 +81,7 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（check+nf，默认）| conv | solve | dup | dup_deep | all
+    /// 负载族：church（check+nf，默认）| conv | conv_dup | solve | dup | dup_deep | all
     #[arg(long, default_value = "church")]
     workload: String,
 }
@@ -112,21 +115,23 @@ fn run(cli: Cli) {
     let workloads: &[&str] = match cli.workload.as_str() {
         "church" => &["church"],
         "conv" => &["conv"],
+        "conv_dup" => &["conv_dup"],
         "solve" => &["solve"],
         "dup" => &["dup"],
         "dup_deep" => &["dup_deep"],
-        _ => &["church", "conv", "solve", "dup", "dup_deep"],
+        _ => &["church", "conv", "conv_dup", "solve", "dup", "dup_deep"],
     };
 
     for workload in workloads {
         println!("== workload: {workload} ==");
-        // conv/solve 只走 check（无 quote）；church/dup/dup_deep 走 check + nf
+        // conv/conv_dup/solve 只走 check（无 quote）；church/dup/dup_deep 走 check + nf
         let nf_workload = matches!(*workload, "church" | "dup" | "dup_deep");
         for k in 9..=cli.max_k {
             let n = 1u64 << (k + 1);
             let src = match *workload {
                 "church" => church_src(k),
                 "conv" => conv_src(k),
+                "conv_dup" => conv_dup_src(k),
                 "solve" => solve_src(k),
                 "dup" => dup_src(k),
                 _ => dup_deep_src(k),
