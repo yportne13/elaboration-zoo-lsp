@@ -46,15 +46,18 @@ L03 相对 L02 新增的语义（元变量机制）：
 ## 怎么跑
 
 ```text
-cargo test --lib L03_holes                 # 24 个测试：三示例、错误路径、
+cargo test --lib L03_holes                 # 26 个测试：三示例、错误路径、
                                            # 基础/性能互检、深度/稳态/求解压力、
-                                           # dup 双口径、memo 指针共享、conv_dup 互检
-cargo run --release --bin l03bench         # 基准：k=9..15，六负载族 × 四口径
+                                           # dup 双口径、memo 指针共享、conv_dup/
+                                           # chain 互检、shadowing 还原
+cargo run --release --bin l03bench         # 基准：k=9..15，七负载族 × 四口径
 ./target/release/l03bench --max-k 21 --only fast,fast_ss   # 大 n 段
 ./target/release/l03bench --workload solve --only fast      # L03 特色：求解负载
 ./target/release/l03bench --workload dup --only fast_memo   # call-by-need 轴
 ./target/release/l03bench --workload conv_dup --only fast   # 判等记忆化轴
+./target/release/l03bench --workload chain --only fast,fast_ss  # 名字解析轴
 L03_NO_CONV_MEMO=1 ./target/release/l03bench --workload conv_dup  # memo 消融
+L03_NO_NAME_MAP=1 ./target/release/l03bench --workload chain      # 名字 map 消融
 ```
 
 ## 实测结果
@@ -64,8 +67,10 @@ L03_NO_CONV_MEMO=1 ./target/release/l03bench --workload conv_dup  # memo 消融
 `conv` = 同 church 数上 `Eq Nat (add big zero) big = refl Nat big` 的
 **check**（unify 在 check 内强制两侧完整展开后结构比较，无洞）；
 `conv_dup` = `Rel` 型重复谓词（`P x -> P y -> P y`）让 `(add p_k zero, p_k)`
-这对比较 3 次——**判等记忆化命中负载**；`solve` = `Eq _ p_k p_k = refl _ _`
-的 **check**（L03 特色：期望侧两个 `_` 挂洞，unify 触发三个求解，其中
+这对比较 3 次——**判等记忆化命中负载**；`chain` = 长 let 链引用最老名字
+——**名字解析负载**（详见「名字解析 O(1)」节）；`solve` =
+`Eq _ p_k p_k = refl _ _` 的 **check**（L03 特色：期望侧两个 `_` 挂洞，
+unify 触发三个求解，其中
 `? := p_k` 的大解沿 church 展开的整条 neutral 链 rename）；
 `dup`/`dup_deep` = 复制强制族（call-by-need 轴，同 L02）。口径：预热 1 次
 + N 轮取 min；`basic`/`fast`（每轮新建 Tycker）/`fast_ss`（Machine +
@@ -148,6 +153,38 @@ dup / dup_deep（min ms）：
 移植过程中的一个坑：`std::mem::take` 拿回的 scratch 残留旧数据，而
 `collect_args` 是**追加**语义——复用前必须 `clear`，否则 solve 拿到脏
 args 直接判失败（首版漏掉后 ex2/solve 全挂，互检测试当场暴露）。
+
+## 名字解析 O(1)（`name_map`）
+
+`Raw::Var` 原本沿 `types` 持久链线性找名——深度 = scope 大小，长 let 链
+每层引用老名字时整个 elaboration 是 O(n²)。性能版 Machine 现持
+`名字 → (绑定 lvl, 类型值)` 哈希表，`Cxt` 带 `mark`（撤销轨迹基线）：
+
+- **bind/define** 推表 + 轨迹；**binder 递归返回**按父 mark 截断恢复
+  （shadowing 还原旧绑定、新名字移除）——兄弟子树不泄漏。正确性由
+  `name_map_shadowing_matches_basic`（`apply (\x. x) x` 的第二实参必须
+  解析回 def）与全量互检兜底。
+- **错误路径**（`?` 早退）跳过恢复，轨迹残留到轮末由每轮 reset 清空——
+  L03 无错误恢复，中途不再有 Var 查找。
+- **消融** `L03_NO_NAME_MAP=1`：查找回落线性 walk（表的维护照常）。
+
+chain 负载（`p_i = add p_{i-1} p0`，n = 2^(k+1) 条 def）实测：
+
+| k | defs | map OFF（walk） | map ON | 提升 |
+|---|---|---|---|---|
+| 12 | 8192 | 383 ms | 205 ms | 1.9× |
+| 14 | 32768 | 7674 ms | 3430 ms | **2.2×** |
+
+其余六负载同二进制消融持平（church/conv/solve/conv_dup ±2% 噪声内）
+——表维护（每 binder 一次 insert + trail push）不在热路径。
+
+### chain 暴露的下一个二次方：eval 环境走链
+
+map 开启后 chain 仍二次方（每 def ~O(i)）：**eval 的 `nth` 沿 EnvCons
+持久链取 de Bruijn 槽位**，老名字（`add`/`p0`）的值在链底。这与名字
+解析同源不同轴——解析查的是 elaborator 的 types 链（现已 O(1)），`nth`
+查的是 eval 时的值环境。根治要换环境表示（分块/平坦 env，见 L01
+`env_slice`/`ast_env_arena` 变体的探索），列为本层后续轴。
 
 ## 打包值上的元变量机制（性能版）
 

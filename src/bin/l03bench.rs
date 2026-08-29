@@ -15,6 +15,10 @@
 //! - `conv_dup`：**判等记忆化命中负载**——`Rel = \A x y. (P : A -> U) ->
 //!   P x -> P y -> P y` 的重复谓词让 check 把 `(add p_k zero, p_k)` 这对
 //!   比较 3 次，memo 把第 2/3 次塌缩为查表（`L03_NO_CONV_MEMO=1` 可消融）。
+//! - `chain`：**名字解析负载**——n = 2^(k+1) 条顶层 let 链 `p_i = add
+//!   p_{i-1} p0`，每层引用 scope 深处最老的名字：线性走链解析 O(n²)，
+//!   名字 map O(n)（`L03_NO_NAME_MAP=1` 消融；参考版同款线性找名，
+//!   大 k 段建议 `--only fast`）。
 //! - `solve`：**L03 特色**——`Eq _ p_k p_k = refl _ _`：两个 `_` 挂洞，
 //!   check 的 unify 触发三个求解，其中 `? := p_k` 的大解沿 church 展开的
 //!   整条 neutral 链 rename（参考版递归 rename 的深度压力、性能版 ren
@@ -32,7 +36,7 @@
 //! 用法：
 //! ```text
 //! cargo run --release --bin l03bench [--max-k 15] [--rounds 5] [--only basic,fast]
-//!                                     [--workload church|conv|conv_dup|solve|dup|dup_deep|all]
+//!                                     [--workload church|conv|conv_dup|chain|solve|dup|dup_deep|all]
 //! ```
 
 // parser_lib 的 `pmatch`/`is` 泛型约束 `Pattern` 是 nightly API（lib 同款
@@ -59,7 +63,7 @@ use mimalloc::MiMalloc;
 use std::time::Instant;
 
 use L03_holes::bump_spine_iter::{
-    church_src, conv_dup_src, conv_src, dup_deep_src, dup_src, solve_src, Tycker,
+    church_src, chain_src, conv_dup_src, conv_src, dup_deep_src, dup_src, solve_src, Tycker,
 };
 use L03_holes::parser::parser;
 
@@ -81,7 +85,7 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（check+nf，默认）| conv | conv_dup | solve | dup | dup_deep | all
+    /// 负载族：church（check+nf，默认）| conv | conv_dup | chain | solve | dup | dup_deep | all
     #[arg(long, default_value = "church")]
     workload: String,
 }
@@ -116,10 +120,11 @@ fn run(cli: Cli) {
         "church" => &["church"],
         "conv" => &["conv"],
         "conv_dup" => &["conv_dup"],
+        "chain" => &["chain"],
         "solve" => &["solve"],
         "dup" => &["dup"],
         "dup_deep" => &["dup_deep"],
-        _ => &["church", "conv", "conv_dup", "solve", "dup", "dup_deep"],
+        _ => &["church", "conv", "conv_dup", "chain", "solve", "dup", "dup_deep"],
     };
 
     for workload in workloads {
@@ -132,6 +137,7 @@ fn run(cli: Cli) {
                 "church" => church_src(k),
                 "conv" => conv_src(k),
                 "conv_dup" => conv_dup_src(k),
+                "chain" => chain_src(k),
                 "solve" => solve_src(k),
                 "dup" => dup_src(k),
                 _ => dup_deep_src(k),

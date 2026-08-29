@@ -26,6 +26,12 @@
 //!    是唯一副作用——meta 写一次、force 只会 flex→rigid、算法成功对
 //!    metacontext 单调（见 `unify_iter` 注释），故**只缓存成功结果**仍
 //!    与逐对重比观测等价。`L03_NO_CONV_MEMO=1` 消融。
+//! 9. **O(1) 名字解析（`name_map`）**：`Raw::Var` 不再沿 `types` 链线性
+//!    找名（深度 = scope 大小，长 let 链每层引用老名字时 O(n²)）。Machine
+//!    持 `名字 → (绑定 lvl, 类型)` 哈希表，bind/define 推表 + trail，
+//!    binder 作用域退出（递归返回）按 `Cxt.mark` 截断恢复——兄弟子树不
+//!    泄漏、shadowing 退出还原旧绑定；错误路径跳出整轮，每轮 reset 清空。
+//!    `L03_NO_NAME_MAP=1` 消融（回落线性 walk）。
 //!
 //! 与参考版（`super`）共用 parser / pretty / 错误显示，输出逐字节一致
 //! （互检测试）。稳态形态是 [`Tycker`]：`Machine`（spine/vals/metacontxt）
@@ -35,6 +41,7 @@
 
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
+use smol_str::SmolStr;
 
 use super::parser::Raw;
 use crate::parser_lib::Span;
@@ -1241,6 +1248,14 @@ pub(crate) struct Machine {
     spine: Spine,
     vals: Vec<V>,
     pub(crate) metas: Vec<MetaEntry>,
+    /// 名字 → (绑定 lvl, 类型值)：`Raw::Var` 的 O(1) 解析。与 `types` 链
+    /// 同步——每个 scope 条目经 [`Machine::bind_name`]/[`Machine::define_name`]
+    /// 入表，binder 退出按 [`Machine::unwind_names`] 还原（shadowing 恢复
+    /// 旧值）。每轮 reset 清空（表里存着指向 bump 的 V 字）。
+    name_map: FxHashMap<SmolStr, (u32, V)>,
+    /// bind/define 的撤销轨迹：(名字, 旧值)。`Cxt.mark` 记各上下文的
+    /// trail 长度，退出即截断。
+    name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
 }
 
 const PI_NAME: &str = "x"; // infer App 非 Π 分支合成的闭包名（只服务 pretty）
@@ -1251,11 +1266,61 @@ impl Machine {
             spine: Spine { stack: Vec::with_capacity(4096) },
             vals: Vec::with_capacity(4096),
             metas: Vec::new(),
+            name_map: FxHashMap::default(),
+            name_trail: Vec::new(),
         }
     }
 
-    fn clear_metas(&mut self) {
+    /// 每轮 reset：metacontext 清空 + 名字表/轨迹清空（表里存有指向上一轮
+    /// bump 的 V 字，必须随 `Bump::reset` 一同作废）。
+    fn clear_round(&mut self) {
         self.metas.clear();
+        self.name_map.clear();
+        self.name_trail.clear();
+    }
+
+    /// Extend Cxt with a bound variable（名字解析版）：types 链 + 名字表 +
+    /// 撤销轨迹三同步。调用方在 binder 的递归返回后按父 `cxt.mark`
+    /// [`Machine::unwind_names`]。
+    fn bind_name<'a>(&mut self, bump: &'a Bump, cxt: Cxt<'a>, x: &str, ty: V) -> Cxt<'a> {
+        debug_assert_eq!(self.name_trail.len(), cxt.mark as usize);
+        let key = SmolStr::new(x);
+        let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
+        self.name_trail.push((key, prev));
+        cxt.bind(bump, bump.alloc_str(x), ty)
+    }
+
+    /// Extend Cxt with a definition（名字解析版，同 [`Machine::bind_name`]）。
+    fn define_name<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: Cxt<'a>,
+        x: &str,
+        val: V,
+        ty: V,
+    ) -> Cxt<'a> {
+        debug_assert_eq!(self.name_trail.len(), cxt.mark as usize);
+        let key = SmolStr::new(x);
+        let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
+        self.name_trail.push((key, prev));
+        cxt.define(bump, bump.alloc_str(x), val, ty)
+    }
+
+    /// 截断撤销轨迹到 `mark`（binder 作用域退出）：shadowing 的名字还原旧
+    /// 绑定，新名字移除。错误路径（`?` 早退）会跳过本调用——轨迹残留到
+    /// 轮末由 [`Machine::clear_round`] 清空，中途不再有 Var 查找。
+    fn unwind_names(&mut self, mark: u32) {
+        while self.name_trail.len() > mark as usize {
+            let (key, prev) = self.name_trail.pop().expect("unwind_names: 轨迹为空");
+            match prev {
+                Some(entry) => {
+                    self.name_map.insert(key, entry);
+                }
+                None => {
+                    self.name_map.remove(&key);
+                }
+            }
+        }
     }
 
     /// 挂新洞：metacontext 追加未解条目，产出 `InsertedMeta m bds`。
@@ -1368,7 +1433,10 @@ impl Machine {
                     Some(bump.alloc(EnvCons { val: v_lvl(cxt.lvl), next: p.env })),
                     p.body,
                 );
-                let body = self.check(bump, cxt.bind(bump, name, p.dom), t, body_a)?;
+                let mark = cxt.mark;
+                let cxt2 = self.bind_name(bump, cxt, &x.data, p.dom);
+                let body = self.check(bump, cxt2, t, body_a)?;
+                self.unwind_names(mark);
                 Ok(bump.alloc(Tm::Lam(name, body)))
             }
 
@@ -1378,7 +1446,10 @@ impl Machine {
                 let t_tm = self.check(bump, cxt, t, va)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
                 let name: &'a str = bump.alloc_str(&x.data);
-                let u_tm = self.check(bump, cxt.define(bump, name, vt, va), u, a)?;
+                let mark = cxt.mark;
+                let cxt2 = self.define_name(bump, cxt, &x.data, vt, va);
+                let u_tm = self.check(bump, cxt2, u, a)?;
+                self.unwind_names(mark);
                 Ok(bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)))
             }
 
@@ -1408,14 +1479,23 @@ impl Machine {
             }
 
             Raw::Var(x) => {
-                let mut i = 0u32;
-                let mut tys = cxt.types;
-                while let Some(tc) = tys {
-                    if tc.name == x.data {
-                        return Ok((bump.alloc(Tm::Var(i)), tc.ty));
+                if !NO_NAME_MAP.load(std::sync::atomic::Ordering::Relaxed) {
+                    // O(1)：表与 types 链由 bind/define + trail 同步维护，
+                    // 在表里即在 scope 里。index = 当前 lvl - 绑定 lvl - 1。
+                    if let Some(&(blvl, ty)) = self.name_map.get(&x.data) {
+                        return Ok((bump.alloc(Tm::Var(cxt.lvl - blvl - 1)), ty));
                     }
-                    i += 1;
-                    tys = tc.next;
+                } else {
+                    // 消融口径：沿 types 链线性找名（深度 = scope 大小）
+                    let mut i = 0u32;
+                    let mut tys = cxt.types;
+                    while let Some(tc) = tys {
+                        if tc.name == x.data {
+                            return Ok((bump.alloc(Tm::Var(i)), tc.ty));
+                        }
+                        i += 1;
+                        tys = tc.next;
+                    }
                 }
                 Err(report_at(cxt.pos, format!("Name not in scope: {}", x.data)))
             }
@@ -1427,7 +1507,10 @@ impl Machine {
                 let name: &'a str = bump.alloc_str(&x.data);
                 let new_meta = self.fresh_meta(bump, cxt.bds);
                 let a = self.eval(bump, cxt.env, new_meta);
-                let (t, b) = self.infer(bump, cxt.bind(bump, name, a), t)?;
+                let mark = cxt.mark;
+                let cxt2 = self.bind_name(bump, cxt, &x.data, a);
+                let (t, b) = self.infer(bump, cxt2, t)?;
+                self.unwind_names(mark);
                 // closeVal：quote 在 lvl+1——给即将到来的 binder 留第 0 槽
                 let body = self.quote(bump, cxt.lvl + 1, b);
                 let cell = bump.alloc(PiCell { name, dom: a, env: cxt.env, body });
@@ -1445,8 +1528,12 @@ impl Machine {
                 } else {
                     let new_meta = self.fresh_meta(bump, cxt.bds);
                     let a = self.eval(bump, cxt.env, new_meta);
-                    let cxt2 = cxt.bind(bump, PI_NAME, a);
-                    let cod_meta = self.fresh_meta(bump, cxt2.bds);
+                    // 合成 Π 的 binder（PI_NAME）不进名字表：cxt2 只用于
+                    // 取 bds（无 Raw 在其下 elaborat），表里留痕反而会
+                    // 遮蔽用户名字且无人还原——这里只延伸 bds。
+                    let bds2: Option<&'a BdCons<'a>> =
+                        Some(bump.alloc(BdCons { bound: true, next: cxt.bds }));
+                    let cod_meta = self.fresh_meta(bump, bds2);
                     let cell = bump.alloc(PiCell {
                         name: PI_NAME,
                         dom: a,
@@ -1471,7 +1558,10 @@ impl Machine {
                 let a_tm = self.check(bump, cxt, a, v_u())?;
                 let va = self.eval(bump, cxt.env, a_tm);
                 let name: &'a str = bump.alloc_str(&x.data);
-                let b_tm = self.check(bump, cxt.bind(bump, name, va), b, v_u())?;
+                let mark = cxt.mark;
+                let cxt2 = self.bind_name(bump, cxt, &x.data, va);
+                let b_tm = self.check(bump, cxt2, b, v_u())?;
+                self.unwind_names(mark);
                 Ok((bump.alloc(Tm::Pi(name, a_tm, b_tm)), v_u()))
             }
 
@@ -1481,7 +1571,10 @@ impl Machine {
                 let t_tm = self.check(bump, cxt, t, va)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
                 let name: &'a str = bump.alloc_str(&x.data);
-                let (u_tm, uty) = self.infer(bump, cxt.define(bump, name, vt, va), u)?;
+                let mark = cxt.mark;
+                let cxt2 = self.define_name(bump, cxt, &x.data, vt, va);
+                let (u_tm, uty) = self.infer(bump, cxt2, u)?;
+                self.unwind_names(mark);
                 Ok((bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)), uty))
             }
 
@@ -1525,6 +1618,9 @@ struct Cxt<'a> {
     /// fresh meta 抽象的槽位掩码（与 env 平行；`bound = true` 槽位是实参）
     bds: Option<&'a BdCons<'a>>,
     lvl: u32,
+    /// 名字撤销轨迹的本上下文基线：不变量 `trail.len() == cxt.mark` 在
+    /// 上下文"现役"时恒成立。binder 递归返回后按父 mark 截断恢复。
+    mark: u32,
     pos: Span<()>,
 }
 
@@ -1537,7 +1633,7 @@ struct TCons<'a> {
 
 impl<'a> Cxt<'a> {
     fn empty(pos: Span<()>) -> Self {
-        Cxt { env: None, types: None, bds: None, lvl: 0, pos }
+        Cxt { env: None, types: None, bds: None, lvl: 0, mark: 0, pos }
     }
 
     /// Extend Cxt with a bound variable.
@@ -1547,6 +1643,7 @@ impl<'a> Cxt<'a> {
             types: Some(bump.alloc(TCons { name: x, ty: a, next: self.types })),
             bds: Some(bump.alloc(BdCons { bound: true, next: self.bds })),
             lvl: self.lvl + 1,
+            mark: self.mark + 1,
             pos: self.pos,
         }
     }
@@ -1558,6 +1655,7 @@ impl<'a> Cxt<'a> {
             types: Some(bump.alloc(TCons { name: x, ty: a, next: self.types })),
             bds: Some(bump.alloc(BdCons { bound: false, next: self.bds })),
             lvl: self.lvl + 1,
+            mark: self.mark + 1,
             pos: self.pos,
         }
     }
@@ -1695,6 +1793,16 @@ fn tm_size(t: &Tm<'_>) -> u64 {
     n
 }
 
+/// A/B 实验开关（Raw::Var 名字解析消融）：置 `L03_NO_NAME_MAP=1` 回落为
+/// 沿 `types` 链的线性找名（`=0` 不关闭；map 的维护照常，trail 语义不受
+/// 开关影响）。
+static NO_NAME_MAP: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
+    std::sync::LazyLock::new(|| {
+        std::sync::atomic::AtomicBool::new(
+            std::env::var("L03_NO_NAME_MAP").is_ok_and(|v| v != "0"),
+        )
+    });
+
 /// 稳态类型检查器：owns 一个反复 `reset` 的 `Bump` 与跨调用复用的
 /// [`Machine`]（spine/vals/metacontext）。`bump.reset` 不跑析构（bumpalo
 /// 语义），spine/vals 里的旧指针字在下轮 eval/quote 开头即被 clear，
@@ -1727,7 +1835,7 @@ impl Tycker {
 
     fn run_impl(&mut self, mode: &str, file: &str, raw: &Raw, use_memo: bool) -> String {
         self.bump.reset();
-        self.machine.clear_metas();
+        self.machine.clear_round();
         let bump = &self.bump;
         let cxt = Cxt::empty(super::initial_pos());
         match self.machine.infer(bump, cxt, raw) {
@@ -1763,7 +1871,7 @@ impl Tycker {
     /// check 里）。
     pub(crate) fn bench_check(&mut self, raw: &Raw) -> bool {
         self.bump.reset();
-        self.machine.clear_metas();
+        self.machine.clear_round();
         let bump = &self.bump;
         self.machine
             .infer(bump, Cxt::empty(super::initial_pos()), raw)
@@ -1773,7 +1881,7 @@ impl Tycker {
     /// 基准口径：check + nf（quote），返回结果树节点数（工作量佐证）。
     pub(crate) fn bench_check_nf(&mut self, raw: &Raw) -> u64 {
         self.bump.reset();
-        self.machine.clear_metas();
+        self.machine.clear_round();
         let bump = &self.bump;
         match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
             Err(_) => 0,
@@ -1788,7 +1896,7 @@ impl Tycker {
     /// [`Tycker::bench_check_nf`] 的 quote 记忆化口径（dup 负载的主对比行）。
     pub(crate) fn bench_check_nf_memo(&mut self, raw: &Raw) -> u64 {
         self.bump.reset();
-        self.machine.clear_metas();
+        self.machine.clear_round();
         let bump = &self.bump;
         match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
             Err(_) => 0,
@@ -1884,6 +1992,25 @@ pub(crate) fn conv_dup_src(k: u32) -> String {
         "let relTest : Rel Nat (add p{k} zero) (add p{k} zero) = relRefl Nat p{k};\n"
     );
     s += "relTest\n";
+    s
+}
+
+/// chain（名字解析负载）：n = 2^(k+1) 条顶层 let 链 `p_i = add p_{i-1} p0`
+/// ——每层都引用 scope 深处最老的名字（`add`/`p0`），线性走链解析是
+/// O(n²)；名字 map 下 O(n)。check-only（无 quote），每层推导本身 O(1)，
+/// 工作量几乎全部来自名字解析。参考版在此负载同样 O(n²)（同款线性找名
+/// ——上游逐函数对应），大 k 段用 `--only fast` 跑。
+pub(crate) fn chain_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from(
+        "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n\
+         let add : Nat -> Nat -> Nat = \\a b N s z. a N s (b N s z);\n\
+         let p0 : Nat = \\N s z. s (s z);\n",
+    );
+    for i in 1..n {
+        s += &format!("let p{i} : Nat = add p{} p0;\n", i - 1);
+    }
+    s += "p0\n";
     s
 }
 
@@ -2034,6 +2161,51 @@ mod tests {
         );
     }
 
+    /// chain 名字解析负载：判定通过，且与参考版 type-mode 输出逐字节一致
+    /// （map 路径 vs 参考版线性 walk 的解析一致性；shadowing/恢复语义由
+    /// 全量互检兜底）。
+    #[test]
+    fn chain_check_passes() {
+        let src = chain_src(8);
+        let Some(raw) = super::super::parser::parser(&src, 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert!(t.bench_check(&raw), "chain 未通过（名字 map 有误？）");
+        let mut t = Tycker::new();
+        assert_eq!(
+            t.run("type", &src, &raw),
+            super::super::main_with("type", &src),
+            "chain 判定与参考版不一致"
+        );
+    }
+
+    /// 名字 map 的 shadowing 语义：`\x. x` 的 binder 遮蔽外层同名 def，
+    /// 该 binder 作用域退出后 x 必须还原为 def（`apply (\x. x) x` 的第二
+    /// 实参解析到 def）——map 路径的解析结果与参考版（线性 walk）逐字节
+    /// 一致。unwind 漏掉时第二实参会解析到已退出的 binder（错位索引）。
+    #[test]
+    fn name_map_shadowing_matches_basic() {
+        let src = "\
+         let Nat : U = (N : U) -> (N -> N) -> N -> N;\n\
+         let two : Nat = \\N s z. s (s z);\n\
+         let x : Nat = two;\n\
+         let apply : (Nat -> Nat) -> Nat -> Nat = \\f a. f a;\n\
+         let test : Nat = apply (\\x. x) x;\n\
+         test\n";
+        let Some(raw) = super::super::parser::parser(src, 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert_eq!(
+            t.run("nf", src, &raw),
+            super::super::main_with("nf", src),
+            "shadowing 解析与参考版不一致"
+        );
+        // 结果佐证：apply id two ≡ two（church 2）
+        assert!(t.run("nf", src, &raw).contains("s (s z)"), "{:?}", t.run("nf", src, &raw));
+    }
+
     /// 稳态复用正确性：同一 Tycker 连续多轮（Bump::reset + Machine 复用 +
     /// metacontext 清空），输出与每轮新建的 Tycker 一致。
     #[test]
@@ -2109,7 +2281,7 @@ mod tests {
         };
         let mut tycker = Tycker::new();
         tycker.bump.reset();
-        tycker.machine.clear_metas();
+        tycker.machine.clear_round();
         let bump = &tycker.bump;
         let Ok((t, _)) = tycker.machine.infer(bump, Cxt::empty(super::super::initial_pos()), &raw)
         else {
