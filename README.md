@@ -133,8 +133,7 @@ The project is structured as an **elaboration zoo** — each module (`L01_*` …
 | `L04_implicit` | Implicit argument inference |
 | `L05_pruning` | Pruning (occurs check) |
 | `L06_string` | String literals |
-| `L07_sum_type` | Sum types (enums) |
-| `L07a_depend_pm` | Dependent pattern matching |
+| `L07_sum_type` | Sum types (enums) + dependent pattern matching (design notes in `src/L07_sum_type/README.md`) |
 | `L08_product_type` | Product types (structs) |
 | `L09_mltt` | MLTT-style universes |
 | `L10_typeclass` | Typeclass / trait system |

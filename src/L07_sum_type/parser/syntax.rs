@@ -1,24 +1,53 @@
 use crate::{list::List, parser_lib::Span};
 
-#[derive(Clone, Debug, Copy, PartialEq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Icit {
     Impl,
     Expl,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Either {
     Name(Span<String>),
     Icit(Icit),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pattern {
-    Any(Span<()>),
-    Con(Span<String>, Vec<Pattern>),
+    Any(Span<()>, Icit),
+    Con(Span<String>, Vec<Pattern>, Icit),
 }
 
-#[derive(Clone, Debug)]
+impl Pattern {
+    pub fn to_impl(self) -> Self {
+        match self {
+            Pattern::Any(span, _) => Pattern::Any(span, Icit::Impl),
+            Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Icit::Impl),
+        }
+    }
+
+    pub fn get_icit(&self) -> Icit {
+        match self {
+            Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => *icit,
+        }
+    }
+}
+
+impl Pattern {
+    pub fn to_raw(&self) -> Raw {
+        match self {
+            Pattern::Any(_, _) => Raw::Hole,
+            Pattern::Con(name, pats, _) => pats.iter()
+                .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
+                    Box::new(ret),
+                    Box::new(p.to_raw()),
+                    Either::Icit(p.get_icit()),
+                )),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Raw {
     Var(Span<String>),
     Obj(Box<Raw>, Span<String>),
@@ -30,13 +59,11 @@ pub enum Raw {
     Hole,
     LiteralIntro(Span<String>),
     Match(Box<Raw>, Vec<(Pattern, Raw)>),
-    Sum(Span<String>, Vec<(Span<String>, Raw)>, Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>),
+    Sum(Span<String>, Vec<(Span<String>, Icit, Raw)>, Vec<Span<String>>),
     SumCase {
-        sum_name: Span<String>,
-        params: Vec<(Span<String>, Raw)>,
-        cases: Vec<(Span<String>, Vec<Raw>, Vec<(Span<String>, Raw)>)>,
+        typ: Box<Raw>,
         case_name: Span<String>,
-        datas: Vec<(Span<String>, Raw)>,
+        datas: Vec<(Span<String>, Raw, Icit)>,
     },
 }
 
@@ -52,6 +79,16 @@ pub enum Decl {
     Enum {
         name: Span<String>,
         params: Vec<(Span<String>, Raw, Icit)>,
-        cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Vec<(Span<String>, Raw)>)>,
+        cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
     },
+}
+
+impl Decl {
+    /// 声明名（调试用）
+    pub fn name(&self) -> String {
+        match self {
+            Decl::Def { name, .. } | Decl::Enum { name, .. } => name.data.clone(),
+            Decl::Println(_) => "<println>".to_owned(),
+        }
+    }
 }
