@@ -15,6 +15,10 @@ path = "src/bin/cli.rs"
 name = "l01bench"
 path = "src/bin/l01bench.rs"
 
+[[bin]]
+name = "l02bench"
+path = "src/bin/l02bench.rs"
+
 
 
 [dependencies]

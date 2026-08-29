@@ -3,12 +3,17 @@ use crate::parser_lib::*;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TokenKind {
     LetKeyword,
-    UKeyword,//Universe
+    UKeyword, //Universe
 
+    /// `_`：只允许出现在 binder 位置（L02 没有 hole，`_` 就是一个名为 "_" 的 binder）
+    Underscore,
     LParen,
     RParen,
+    Dot,
     Eq,
+    /// ;
     Semi,
+    /// :
     Colon,
     Arrow,
     Lambda,
@@ -27,60 +32,81 @@ pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 2] = [
-    ("let", LetKeyword),
-    ("U", UKeyword),
-];
+const KEYWORD: [(&str, TokenKind); 2] = [("let", LetKeyword), ("U", UKeyword)];
 
-const OP: [(&str, TokenKind); 7] = [
+const OP: [(&str, TokenKind); 9] = [
+    ("_", Underscore),
     ("(", LParen),
     (")", RParen),
+    (".", Dot),
     ("=", Eq),
     (";", Semi),
     (":", Colon),
     ("->", Arrow),
-    ("\\\\", Lambda),
+    ("\\", Lambda),
 ];
 
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    pmatch(|c: char| c.is_alphabetic() || c == '_')
-        .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
-        .map(|(head, tail)| {
-            let tail_len = tail.map(|t| t.len()).unwrap_or(0);
-            let ident = unsafe {
-                input.data
-                    .get_unchecked(..head.len() as usize + tail_len as usize)
-            };
-            let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
-                k
-            } else {
-                Ident
-            };
-            Span {
-                data: (ident, kind),
-                start_offset: head.start_offset,
-                end_offset: head.start_offset + head.len() + tail_len,
-                path_id: head.path_id,
-            }
-        })
-        .parse(input)
+    // `;` 单独成 token（L03 同款：op 的字符区间盖住 ';'，须先切出来）
+    if let Some((rest, semi)) = is(';').parse(input) {
+        return Some((rest, semi.map(|t| (t, Semi))));
+    }
+    let (after_head, head) = pmatch(|c: char| c.is_alphabetic() || c == '_').parse(input)?;
+    let (rest, ident_len) = match pmatch(|c: char| c.is_alphanumeric() || c == '_').parse(after_head) {
+        Some((rest, tail)) => (rest, head.data.len() + tail.data.len()),
+        None => (after_head, head.data.len()),
+    };
+    let ident = unsafe { input.data.get_unchecked(..ident_len) };
+
+    // main.hs 的关键字表：let / in / λ / U。
+    // `λ` 在 main.hs 里是字符级匹配（pLam 的 `char 'λ'`），所以 `λx` 要拆成
+    // Lambda + Ident("x")——ident 贪婪吞掉的 "λx" 在这里重新切分。
+    if ident.starts_with('λ') {
+        let n = 'λ'.len_utf8();
+        let token = Span {
+            data: (&input.data[..n], Lambda),
+            start_offset: input.start_offset,
+            end_offset: input.start_offset + n as u32,
+            path_id: input.path_id,
+        };
+        let rest = Span {
+            data: &input.data[n..],
+            start_offset: input.start_offset + n as u32,
+            end_offset: input.end_offset,
+            path_id: input.path_id,
+        };
+        return Some((rest, token));
+    }
+
+    let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
+        k
+    } else {
+        Ident
+    };
+    Some((
+        rest,
+        Span {
+            data: (ident, kind),
+            start_offset: input.start_offset,
+            end_offset: input.start_offset + ident_len as u32,
+            path_id: input.path_id,
+        },
+    ))
 }
 
 fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     let lparen = is('(').map(|x| x.map(|y| (y, LParen)));
     let rparen = is(')').map(|x| x.map(|y| (y, RParen)));
-    lparen
-        .or(rparen)
-        .parse(input)
+    lparen.or(rparen).parse(input)
 }
 
 fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     pmatch(|c: char| {
         ('!'..='\'').contains(&c)
             || ('*'..='/').contains(&c)
-            || (':'..='@').contains(&c)
+            || ((':'..='@').contains(&c) && c != ';')
             || c == '\\'
             || ('^'..='`').contains(&c)
             || c == '|'
@@ -97,36 +123,70 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     .parse(input)
 }
 
+/// 在 Span 前进 n 个字节（调用方保证 n ≤ data.len()）。
+fn advance(input: Span<&str>, n: usize) -> Span<&str> {
+    Span {
+        data: &input.data[n..],
+        start_offset: input.start_offset + n as u32,
+        end_offset: input.end_offset,
+        path_id: input.path_id,
+    }
+}
+
+/// 空白与注释（main.hs 的 `ws = L.space C.space1 (L.skipLineComment "--")
+/// (L.skipBlockComment "{-" "-}")`）。ex0 的示例源码带 `--` 行注释。
+fn skip_trivia(mut input: Span<&str>) -> Span<&str> {
+    loop {
+        let start_len = input.data.len();
+        let rest = input.data.trim_start_matches(|c: char| c.is_whitespace());
+        input = advance(input, start_len - rest.len());
+        if let Some(after) = input.data.strip_prefix("--") {
+            input = advance(input, input.data.len() - after.len());
+            let nl = input.data.find('\n').unwrap_or(input.data.len());
+            input = advance(input, nl);
+        } else if let Some(after) = input.data.strip_prefix("{-") {
+            input = advance(input, input.data.len() - after.len());
+            match input.data.find("-}") {
+                Some(end) => input = advance(input, end + 2),
+                None => input = advance(input, input.data.len()),
+            }
+        }
+        if input.data.len() == start_len {
+            break; // 本轮无进展：trivia 结束
+        }
+    }
+    input
+}
+
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     let num = pmatch(|c: char| c.is_ascii_digit()).map(|x| x.map(|y| (y, Num)));
-    //let endline = pmatch("\n").map(|x| x.map(|y| (y, EndLine)));
     let err_token = pmatch(|c: char| !c.is_ascii_whitespace()).map(|x| x.map(|y| (y, ErrToken)));
     fn ws<'a, A, P: Parser<Span<&'a str>, A>>(p: P) -> impl Parser<Span<&'a str>, A> {
-        //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
-        let whitespace = pmatch(|c: char| c.is_whitespace()).option();
-        p.with(whitespace).map(|(a, _)| a)
+        move |input: Span<&'a str>| {
+            let input = skip_trivia(input);
+            let (rest, a) = p.parse(input)?;
+            Some((skip_trivia(rest), a))
+        }
     }
-    //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
-    let whitespace = pmatch(|c: char| c.is_whitespace()).option();
-    whitespace
-        .with(
-            ws(brace.or(ident).or(num).or(op))
-                //.or(ws(endline))
-                .or(ws(err_token))
-                .many0(),
-        )
-        .map(|(_, token)| token)
+    let input = skip_trivia(input);
+    // `_` 与 `\` 单独成 token，且放在 op 之前：op 的字符类贪婪匹配会把
+    // `\_.`（`\_. x` 整段都在 op 类里）或 `_.`（`\x _. x` 的 `_.` 相邻）
+    // 吃成一个 Op token，而 main.hs 是字符级解析、不存在这个问题。
+    let underscore = is('_').map(|x| x.map(|y| (y, Underscore)));
+    let lambda = is('\\').map(|x| x.map(|y| (y, Lambda)));
+    ws(brace.or(underscore).or(lambda).or(op).or(num).or(ident))
+        .or(ws(err_token))
+        .many0()
         .parse(input)
 }
 
 #[test]
 fn test() {
     let input = r#"
-  let id : (A : U) -> A -> A
-       = \\A x. x;
-  let foo : U = U;
-  let bar : U = id id;
-  id"#;
+let id : (A : U) -> A -> A
+      = \A x. x;
+let foo : U = U;
+id"#;
     let ret = lex(Span {
         data: input,
         start_offset: 0,
@@ -135,6 +195,6 @@ fn test() {
     })
     .unwrap();
     for x in ret.1 {
-        println!("{}", x.data.0)
+        println!("{} @ {} {:?}", x.data.0, x.start_offset, x.data.1)
     }
 }
