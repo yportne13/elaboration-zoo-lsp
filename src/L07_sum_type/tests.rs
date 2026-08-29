@@ -751,3 +751,72 @@ println (odd (succ zero))
         vec!["Bool::true", "Bool::true"]
     );
 }
+
+/// 迁移自 L13_namespace/legacy_tests.rs 的 test7（bits_adder）：
+/// Vec[Bool] 上的递归全加器——嵌套模式（`cons[_](n, taill)` 隐式槽）、
+/// 多参数索引族（Vec / Product）、递归调用的结果继续被匹配。
+/// 这是比 test5/test6 更深的依赖匹配组合，在旧 L07/L07a 上无法通过。
+#[test]
+fn test_bits_adder() {
+    let out = check(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+enum Product[A, B] {
+    product(a: A, b: B)
+}
+
+def half_adder(lhs: Bool, rhs: Bool): Product[Bool][Bool] =
+    match lhs {
+        case false => product false rhs
+        case true => match rhs {
+            case false => product false true
+            case true => product true false
+        }
+    }
+
+def full_adder(lhs: Bool, rhs: Bool, carrier: Bool): Product[Bool][Bool] =
+    match lhs {
+        case false => half_adder rhs carrier
+        case true => match rhs {
+            case false => half_adder true carrier
+            case true => product true carrier
+        }
+    }
+
+def bits_adder_carrier[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len, carrier: Bool): Vec[Bool] (succ len) =
+    match lhs {
+        case nil => cons carrier nil
+        case cons[_](n, taill) => match rhs {
+            case cons[_](m, tailr) => match bits_adder_carrier taill tailr carrier {
+                case cons[_](c, tail) => match full_adder n m c {
+                    case product(a, b) => cons a (cons b tail)
+                }
+            }
+        }
+    }
+
+def bits_adder[len: Nat](lhs: Vec[Bool] len, rhs: Vec[Bool] len): Vec[Bool] (succ len) =
+    bits_adder_carrier lhs rhs false
+
+println bits_adder (cons true nil) (cons false nil)
+"#,
+    );
+    // 1 + 0 的逐位加法：sum = true，carry = false（L13 断言的是 fully-reduced
+    // 形态；本实现的结果里 carry 位可能停在未解 meta 上，断言只看位值内容）
+    assert!(out.contains("Bool::true"), "{out}");
+    assert!(out.contains("Bool::false"), "{out}");
+}

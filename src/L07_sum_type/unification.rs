@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::list::List;
 
 use super::{
+    pretty::pretty_tm,
     Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, Tm, UnifyError, Val, VTy,
     cxt::{Cxt, Decls},
     lvl2ix,
@@ -253,6 +254,20 @@ impl Infer {
     }
 
     fn rename(&mut self, decl: &Decls, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
+        static REN_DEPTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if std::env::var_os("L07_LOOP").is_some() {
+            let d = REN_DEPTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if d > 2000 && d % 500 == 0 {
+                eprintln!("  REN depth {d}");
+            }
+            struct G;
+            impl Drop for G {
+                fn drop(&mut self) {
+                    REN_DEPTH.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+            let _g = G;
+        }
         match self.force(decl, t) {
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == m_prime => Err(UnifyError),
@@ -522,9 +537,23 @@ impl Infer {
         // 递归深度防护：索引槽互相嵌入的构造子值比较会无限递归
         let fuel = self.unify_fuel.get();
         if fuel == 0 {
+            if std::env::var_os("L07_LOOP").is_some() {
+                eprintln!(
+                    "  LOOP @ unify: {} vs {}",
+                    pretty_tm(0, cxt.names(), &self.quote(decl, l, t.clone())),
+                    pretty_tm(0, cxt.names(), &self.quote(decl, l, u.clone()))
+                );
+            }
             return Err(UnifyError);
         }
         self.unify_fuel.set(fuel - 1);
+        if std::env::var_os("L07_LOOP").is_some() && fuel < 4090 && fuel % 100 == 0 {
+            eprintln!(
+                "  deep{fuel}: {} vs {}",
+                pretty_tm(0, cxt.names(), &self.quote(decl, l, t.clone())),
+                pretty_tm(0, cxt.names(), &self.quote(decl, l, u.clone()))
+            );
+        }
         let t = self.force(decl, t);
         let u = self.force(decl, u);
 

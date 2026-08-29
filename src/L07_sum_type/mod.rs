@@ -262,6 +262,9 @@ impl Infer {
         match t {
             Val::Flex(m, sp) => match self.lookup_meta(m) {
                 MetaEntry::Solved(t_solved, _) if burn(&self.unify_fuel) => {
+                    if std::env::var_os("L07_LOOP").is_some() && self.unify_fuel.get() < 2200 {
+                        eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
+                    }
                     self.force(decl, self.v_app_sp(decl, t_solved.clone(), sp))
                 }
                 _ => Val::Flex(m, sp),

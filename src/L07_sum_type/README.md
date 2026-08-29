@@ -207,7 +207,12 @@ intersect）。在此之上：
    引用上不收敛（fuel 拦下后报 `can't unify (fuel exhausted)`）。
    这是把运行时换成"全 stuck 中性值 + 简化 decl 表"体系后的已知差距；
    L07a 的原始实现依赖其特定的合一顺序侥幸通过。`test_eq_reasoning` 目前
-   覆盖到 cong / symm / trans 这一档。
+   覆盖到 cong / symm / trans 这一档。**最小复现**（用 `mul_zero_right`：
+   `trans (refl …) (mul_zero_right k)` 里 `add zero (mul k zero)` 的
+   归约与 stuck 形态的协同）确认问题在合一器而非个别测试；
+   L13_namespace/legacy_tests.rs 的 test4 完整版（`double` / `double_pow` /
+   `double_add` / `prove`）与 test8 的 `mul_zero_right` / `mul_one_right`
+   引理同样触发，因此未迁入本层。
 2. **嵌套构造子模式**（`case cons(succ(m), t)` 等）经过多层解构时，
    绑定器类型若引用了更早的显式绑定器，可能与深层槽位产生偏差
    （L07a/L13 同样存在，未修是刻意保留简单性）。
@@ -220,10 +225,13 @@ intersect）。在此之上：
 
 ## 7. 测试
 
-`cargo test --lib L07_sum_type`（19 个测试）：
+`cargo test --lib L07_sum_type`（20 个测试）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心 / Church 编码与字符串；
+- 迁移自 L13_namespace/legacy_tests.rs 的 test7：`bits_adder`——Vec[Bool]
+  上的递归全加器（嵌套模式、多参数索引族、递归结果继续被匹配），
+  在旧 L07/L07a 上无法通过；
 - 回归（针对旧 bug）：泛型类型上的 match、通配臂混合、GADT 可达性与
   不可达报错、覆盖缺失报错、索引等式负例、投影类型标注、stuck match
   的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义。
