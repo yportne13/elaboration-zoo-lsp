@@ -656,6 +656,22 @@ impl Infer {
                 {
                     return Ok(());
                 }
+                // 按值对齐的槽位重映射比较：两侧捕获 env 常是同一组变量的不同
+                // 上下文副本（meta 解经 prune/rename 后比使用现场少/多槽位）。
+                // 字面 tm_eq 失败但按值建立槽位对应后分支体一致 ⇒ 语义相等，
+                // 直接判等；否则回落到逐分支求值路径。
+                if cases1.len() == cases2.len() {
+                    if let Some(true) = super::struct_eq::bodies_eq_aligned(
+                        s1,
+                        s2,
+                        env1,
+                        env2,
+                        cases1,
+                        cases2,
+                    ) {
+                        return Ok(());
+                    }
+                }
                 self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone())?;
                 if cases1.len() != cases2.len() {
                     return Err(UnifyError);

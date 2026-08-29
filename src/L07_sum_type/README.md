@@ -214,14 +214,20 @@ intersect）。在此之上：
 
    仍开放的是 `add_assoc`（及依赖它的 `double_add` / `prove` 一族），其
    失败机制已定位：`cong_succ` 的隐式 meta 被解为卡住 match 值，该解的
-   捕获 env（含 λ 封装的 spine 槽）比使用现场（arm 上下文）**多一个槽位**，
-   分支体的固定 de Bruijn 索引在统一双方（解 vs 期望重实例化）各自重求值
-   时读偏——两侧分支体引用都落在共同 env 前缀内（诊断标记 COMMON-PREFIX），
-   但 env 深度差使结构逐层再生，`unify(Match, Match)` 不收敛。**根治方向**：
-   (a) meta 解的 prune/rename 需把 match 捕获 env 一并对齐到使用现场（按值
-   对应重映射槽位），或 (b) 采用 L13 的值表示（分支体闭包随值携带 + 全局
-   引用惰性中性化，卡住 match 不再 stranded 在类型值里）。后者属求值器核心
-   重构。
+   捕获 env（含 λ 封装的 spine 槽）比使用现场（arm 上下文）**多一个槽位**
+   （被精化的 scrutinee 槽经 prune 从解中移除，但期望重实例化一侧仍持有
+   它），分支体的固定 de Bruijn 索引在统一双方各自重求值时读偏。已做缓解：
+   `unify(Match, Match)` 新增**按值对齐的槽位重映射**比较（`struct_eq.rs`
+   的 `bodies_eq_aligned`）——两侧 env 是同一组变量的不同上下文副本时，
+   按值建立槽位对应，把一侧分支体重映射到另一侧布局后字面比较（值相同则
+   可互换，贪婪首匹配不影响健全性）；外层比较（7 槽 vs 6 槽）由此解决。
+   剩余发散下沉到内层 match：meta 解里的**内层 match Tm** 是按 meta 完整
+   上下文（5 槽）rename 的，而解的 λ 只绑定 prune 后的 4 槽——内层分支体
+   索引超出解实例化环境长度 1，读出越界垃圾后结构逐层再生。**根治方向**：
+   (a) `rename(Match)` 需把 match 捕获 env 一并按 pren 重命名/裁剪（内层
+   解的 env 与分支体同步对齐到解的实际 λ 深度），或 (b) 采用 L13 的值表示
+   （分支体闭包随值携带 + 全局引用惰性中性化，卡住 match 不再 stranded 在
+   类型值里）。后者属求值器核心重构。
 
    次要根源（已修）：quote/rename 分支体若用真实 decl 表，中性
    `Decl(f, spine)` 会被入口 force 再展开，每层 quote 多展开一层；
