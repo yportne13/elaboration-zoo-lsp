@@ -66,20 +66,30 @@ fn quote_rpn<'a>(
                 let base_v = spine.stack[base as usize].a;
                 let f0 = spine.stack[base as usize].f;
                 if v_tag(f0) == 0 {
-                    // church 链形状：全同变量头——模式打成一摞（32 层/摞），
-                    // 一次 memcpy 32 层，调用次数 32×↓
-                    let enc = idx_bytes(level, v_lvl_of(f0));
-                    let mut block = [0u8; 9 * 32];
-                    for k in 0..32 {
-                        block[k * 9..k * 9 + 9].copy_from_slice(&enc);
-                    }
-                    let mut left = n_app;
-                    while left >= 32 {
-                        out.extend_from_slice(&block);
-                        left -= 32;
-                    }
-                    for _ in 0..left {
-                        out.extend_from_slice(&enc);
+                    // 链头全是同一变量时才打模式摞（32 层/摞一次 memcpy）。
+                    // 链头各异（如 f (g x)）必须逐层引——与 bump_spine 树版
+                    // 的 per-entry `fi.0 == f0.0` 对照一致；曾漏掉此检查，
+                    // 把 f (g x) 错编码成 g (g x)（外层头丢失、内层头重复）。
+                    let all_same = (base as usize..=h).all(|i| spine.stack[i].f.0 == f0.0);
+                    if all_same {
+                        let enc = idx_bytes(level, v_lvl_of(f0));
+                        let mut block = [0u8; 9 * 32];
+                        for k in 0..32 {
+                            block[k * 9..k * 9 + 9].copy_from_slice(&enc);
+                        }
+                        let mut left = n_app;
+                        while left >= 32 {
+                            out.extend_from_slice(&block);
+                            left -= 32;
+                        }
+                        for _ in 0..left {
+                            out.extend_from_slice(&enc);
+                        }
+                    } else {
+                        for i in (base as usize..=h).rev() {
+                            let fi = spine.stack[i].f;
+                            quote_rpn(bump, spine, level, fi, out);
+                        }
                     }
                 } else {
                     for i in (base as usize..=h).rev() {
@@ -136,6 +146,17 @@ mod tests {
             }
             Term::Lam(Box::new(Term::Lam(Box::new(t))))
         };
+        assert_eq!(normalize(input.clone()), input);
+    }
+
+    #[test]
+    fn chain_mixed_heads() {
+        // λf.λg.λx. f (g x)：连续右链但链头各异（f、g 都是 level 且不同）——
+        // 曾误走全同头模式摞，把外层 f 丢掉、内层 g 重复（g (g x)）
+        let idx = |i: usize| Term::Idx(i);
+        let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
+        let lam = |b: Term| Term::Lam(Box::new(b));
+        let input = lam(lam(lam(app(idx(2), app(idx(1), idx(0))))));
         assert_eq!(normalize(input.clone()), input);
     }
 
