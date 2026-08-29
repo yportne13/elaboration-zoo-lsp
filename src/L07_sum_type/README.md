@@ -213,9 +213,26 @@ intersect）。在此之上：
    L13_namespace/legacy_tests.rs 的 test4 完整版（`double` / `double_pow` /
    `double_add` / `prove`）与 test8 的 `mul_zero_right` / `mul_one_right`
    引理同样触发，因此未迁入本层。
-2. **嵌套构造子模式**（`case cons(succ(m), t)` 等）经过多层解构时，
-   绑定器类型若引用了更早的显式绑定器，可能与深层槽位产生偏差
-   （L07a/L13 同样存在，未修是刻意保留简单性）。
+
+   根因链（已定位到机制层面）：`Val::Match` 的 quote/rename 往返产出的是
+   **绑定 quote 站点环境布局**的 `Tm::Match`，分支体的自由索引依赖
+   "重求值现场的环境长度 = quote 现场长度"这一隐含假设；类型值经
+   Π 闭包实例化（`close_val` 的 quote → `closure_apply` 的 eval）把
+   同一个 `Tm::Match` 带到布局不同的环境里重求值，分支体槽位错乱，
+   产生结构相同的垃圾 stuck match；`unify` 入口的 force 又把两侧中性
+   `Decl("f", spine)` 展开成卡住 match，`unify(Match, Match)` 逐分支
+   重求值每层再造更深一层的卡住 match（fresh rigid 层级递增），永不收敛。
+   已做的缓解：quote/rename 的分支体用简化 decl 表（防止每层 quote 重展开
+   递归定义）；`unify(Match, Match)` 对"scrutinee / 捕获 env / 模式 /
+   分支体全部结构相同"的自比较短路（`struct_eq.rs`）。
+   **要根治需要 L13 的值表示**：分支体以闭包形式随值携带（env 烘焙进
+   `Val::Match`，往返天然保形）+ 全局引用惰性中性化（`Val::Call`），
+   属于求值器核心重构，未纳入本层。
+2. ~~嵌套构造子模式槽位偏差~~ **已修复**：原先嵌套 Con 模式由父级绑定
+   "哑槽"、运行时不前置对应槽，bind_count 又按 `1 + Σ子模式` 计数——
+   三方不一致导致嵌套解构引用外层变量时索引错位。现在 head 槽统一由
+   `walk_con` 入口绑定（编译、运行时 `eval_aux`、`bind_count` 三方同序
+   同数），回归测试 `test_nested_pattern_outer_ref` 覆盖。
 3. 被匹配变量精化（§3.2）是"有条件的"：期望类型不含 stuck match 时不做，
    某些依赖该变量的类型（不经过 match 的表达式）无法归约——这是与完整
    GADT 系统的差距。
@@ -225,16 +242,18 @@ intersect）。在此之上：
 
 ## 7. 测试
 
-`cargo test --lib L07_sum_type`（20 个测试）：
+`cargo test --lib L07_sum_type`（21 个测试）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心 / Church 编码与字符串；
 - 迁移自 L13_namespace/legacy_tests.rs 的 test7：`bits_adder`——Vec[Bool]
-  上的递归全加器（嵌套模式、多参数索引族、递归结果继续被匹配），
+  上的递归全加器（嵌套模式、多参数索引族、递归调用的结果继续被匹配），
   在旧 L07/L07a 上无法通过；
 - 回归（针对旧 bug）：泛型类型上的 match、通配臂混合、GADT 可达性与
   不可达报错、覆盖缺失报错、索引等式负例、投影类型标注、stuck match
-  的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义。
+  的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义；
+- 回归（head 槽对齐）：`test_nested_pattern_outer_ref`——嵌套解构同时
+  引用嵌套绑定器与外层 def 参数。
 
 测试在 64 MB 栈线程里跑（§2.4）。
 

@@ -18,6 +18,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 mod cxt;
+mod struct_eq;
 mod elaboration;
 mod parser;
 mod pattern_match;
@@ -34,7 +35,7 @@ pub enum MetaEntry {
     Unsolved(VTy),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ix(u32);
 
 #[derive(Debug, Clone)]
@@ -494,7 +495,11 @@ impl Infer {
                         let count = p.bind_count();
                         let env = (0..count).fold(env.clone(), |env, i| env.prepend(Val::vvar(l + i)));
                         let tm = self.eval(&declb, &env, b);
-                        (p, self.quote(decl, l + count, tm))
+                        // 分支体的 quote 也要用简化表：eval 产生的中性
+                        // Decl(f, spine)（递归调用占位）若用真实表 quote，
+                        // 入口 force 会再展开一层——每层 quote 多展开一层，
+                        // 递归函数的卡住 match 直接发散。
+                        (p, self.quote(&declb, l + count, tm))
                     })
                     .collect();
                 Tm::Match(Box::new(self.quote(decl, l, *val)), tm_cases)

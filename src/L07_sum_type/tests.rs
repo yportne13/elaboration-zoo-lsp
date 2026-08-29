@@ -752,6 +752,50 @@ println (odd (succ zero))
     );
 }
 
+/// 嵌套解构 + 外层绑定器引用：嵌套 Con 模式不再产生"编译期哑槽"与运行时
+/// prepend 不对齐的偏差（head 槽统一由 walk_con 入口绑定，eval_aux 同序前置）。
+#[test]
+fn test_nested_pattern_outer_ref() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def second_or(x: List[Nat], d: Nat): Nat =
+    match x {
+        case nil => d
+        case cons(h, nil) => add h d
+        case cons(h, cons(h2, t)) => add h2 d
+    }
+
+println (second_or nil (succ zero))
+println (second_or (cons (succ (succ zero)) nil) (succ zero))
+println (second_or (cons zero (cons (succ (succ (succ zero))) nil)) (succ zero))
+"#,
+    );
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        vec![
+            "Nat::succ(Nat::zero)",
+            "Nat::succ(Nat::succ(Nat::succ(Nat::zero)))",
+            "Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))",
+        ]
+    );
+}
+
 /// 迁移自 L13_namespace/legacy_tests.rs 的 test7（bits_adder）：
 /// Vec[Bool] 上的递归全加器——嵌套模式（`cons[_](n, taill)` 隐式槽）、
 /// 多参数索引族（Vec / Product）、递归调用的结果继续被匹配。

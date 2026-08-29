@@ -344,7 +344,9 @@ impl Infer {
                             (env.clone(), pren.clone()),
                             |(env, pren), _| (env.prepend(Val::vvar(pren.cod)), lift(&pren)),
                         );
-                        let body = self.rename(decl, &pren, self.eval(&declb, &env, tm.clone()))?;
+                        // 同 quote(Match)：rename 用简化表，防止中性递归引用
+                        // 被入口 force 再展开（解里带卡住 match 时发散）
+                        let body = self.rename(&declb, &pren, self.eval(&declb, &env, tm.clone()))?;
                         Ok((pat.clone(), body))
                     })
                     .collect::<Result<_, UnifyError>>()?;
@@ -639,6 +641,21 @@ impl Infer {
             }
             // 卡住的 match vs 卡住的 match：scrutinee 合一 + 分支一一对应
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
+                // 快路径：scrutinee、捕获 env、模式与分支体全部结构相同 ⇒ 两个
+                // match 值在所有实例化下行为一致，直接判等。逐分支重求值会把
+                // 递归函数的分支体再展开一层卡住 match（fresh rigid 层级随深度
+                // 递增，永不收敛）——同一 decl 值在合一两侧各展开一份时正是
+                // 这种自比较，必须短路。
+                if super::struct_eq::val_eq(s1, s2)
+                    && super::struct_eq::env_eq(env1, env2)
+                    && cases1.len() == cases2.len()
+                    && cases1
+                        .iter()
+                        .zip(cases2.iter())
+                        .all(|((p1, b1), (p2, b2))| p1 == p2 && super::struct_eq::tm_eq(b1, b2))
+                {
+                    return Ok(());
+                }
                 self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone())?;
                 if cases1.len() != cases2.len() {
                     return Err(UnifyError);
