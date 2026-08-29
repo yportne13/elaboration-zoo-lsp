@@ -30,9 +30,13 @@
 //! cargo run --release --bin l02bench [--max-k 15] [--rounds 5] [--only basic,fast]
 //!                                     [--workload church|conv|conv_dup|dup|dup_deep|all]
 //! ```
+//!
+//! 测量注意：口径间对比请用 `--only` 隔离跑——全量跑同进程内存足迹大，
+//! `fast_ss` 的大 bump 池页被淘汰，大 k 段 min 被高估（见 readme「测量
+//! 方法论」）。
 
 // parser_lib 的 `pmatch`/`is` 泛型约束 `Pattern` 是 nightly API（lib 同款
-// feature；仓库依赖 nightly 工具链）。
+// feature；仓库依赖 nightly 工具链，见仓库根 rust-toolchain.toml）。
 #![feature(pattern)]
 #![allow(dead_code)]
 

@@ -27,6 +27,9 @@ beta-eta `conv`）→ 核心语法（de Bruijn 索引）→ `nf`/`type` 两种�
 
 ## 怎么跑
 
+工具链：nightly（`parser_lib` 的 `Pattern` 泛型约束；仓库根
+`rust-toolchain.toml` 已固化，rustup 自动切换）。
+
 ```text
 cargo test --lib L02_tyck                 # 24 个测试：三示例、报错路径、
                                           # 基础/性能互检、深度/稳态/conv 压力、
@@ -35,6 +38,13 @@ cargo run --release --bin l02bench        # 基准：k=9..15，五负载族 × �
 ./target/release/l02bench --max-k 21 --only fast,fast_ss   # 大 n 段
 ./target/release/l02bench --workload dup --only fast,fast_memo   # call-by-need 轴
 ```
+
+**测量方法论**：默认全量跑（不加 `--only`）在同一进程内按
+`fast_ss → fast → fast_memo → basic` 顺序逐口径计时，内存足迹大——`fast_ss`
+跨轮持有的大 bump 池（数 MB 至数十 MB）在足迹压力下页被淘汰，大 k 段
+conv/conv_dup 的 min 被高估（实测 conv_dup k=15 全量 21 ms vs `--only
+fast_ss` 隔离 12 ms；`fast` 因每轮新建 Tycker，受影响小）。**口径间的
+数字对比请用 `--only` 隔离跑**；全量跑只作相对排序参考。
 
 ## 实测结果
 

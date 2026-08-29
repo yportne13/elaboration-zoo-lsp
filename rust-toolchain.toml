@@ -1,0 +1,7 @@
+# 仓库依赖 nightly：lib 与 l02bench 的 parser_lib 用 `str::pattern::Pattern`
+# 泛型约束（`#![feature(pattern)]`），stable 无法编译（见 src/lib.rs 顶部
+# 与 src/bin/l02bench.rs 的 feature 注释）。跟随最新 nightly；若某天
+# nightly 破坏构建，可把 channel 固定到开发所用构建的日期，
+# 如 `nightly-2025-02-28`。
+[toolchain]
+channel = "nightly"
