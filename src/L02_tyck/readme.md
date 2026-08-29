@@ -128,6 +128,26 @@ worksheet 往返）。
   （~14ns），净收益太薄。L01 的 quote 侧 memo（1.8–3.6×）不迁移的原因
   同此：那边 memo 挂在少量 Q 任务上，这边挂在海量 β 上。
 
+## 名字表示换 SmolStr（2026-08-29）
+
+`Name = Span<String>` → `Span<SmolStr>`（parser 与参考版一起换；性能版
+热路径名字是 bump `&str` 指针，不受影响）。交错 A/B（String/SmolStr 各
+两轮，k=9..17 双负载族）+ parse 分相位探针 + 名字构造/clone 微基准：
+
+- **fast/fast_ss 不动**：性能版 eval/quote/conv 全程零字符串操作——名字
+  表示轴对性能版无肉（这条结论对以后所有名字类优化同样适用）。
+- **参考版 conv 快 ~3–6%（church ~3–4%）**：参考版 `eval` 每次求值
+  `Tm::Lam` 都 clone 名字（church 展开下 O(n) 次），SmolStr clone 1ns
+  vs String clone 7ns（≤23 B 内联存储免堆分配）。
+- **parse 慢 15–29%**（2 万行标识符密集源 29.4 → 34.2 ms；church/conv
+  小源 +25–30%）：`SmolStr::new` 构造 13–18 ns vs `String::from` 5 ns
+  ——mimalloc 小分配太便宜，smol_str 0.3 的内联路径（23 B 零填充拷贝 +
+  `Option<Repr>` 中转）反而更贵，换 `new_inline`（13 ns）也修不掉。
+- **取舍**：parse 在 l02bench 计时外，且在整体负载里占比小（后续扩展新
+  功能后更是小头），参考版 eval 的收益是纯赚，**采纳**。未实测的备选：
+  `Rc<str>`（clone ≈ 引用计数、构造同 `String::from`）理论上「clone
+  便宜且构造不贵」两全，若 parse 成本将来要紧可以再比。
+
 ## 优化过程中的三个教训
 
 1. **值的共享性是带类型 elaborator 的一级效应**（L01 的纯 NBE 没有暴露）。
@@ -164,6 +184,7 @@ worksheet 往返）。
 | ——（L01 无 elaboration） | check/infer 直接在打包值上工作（Cxt 全 Copy） |
 | ——（L02 后续提速） | eval β 岔路 `ApplyKnown` 直送（免 `Tm(f)` 重查环境）+ `ChainWrap(0)` 消除 |
 | ——（L02 后续提速） | conv 连续链内联环（沿 `.a` 前进免 worksheet 往返）+ 入口长度 fail-fast |
+| ——（L02 名字表示） | `Name = Span<SmolStr>`（≤23 B 内联，clone 免堆分配；性能版热路径是 bump `&str`，零字符串操作） |
 
 ## 已知限制
 

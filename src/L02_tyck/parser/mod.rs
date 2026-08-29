@@ -1,6 +1,7 @@
 use lex::{TokenKind, TokenNode};
 
 use crate::parser_lib::*;
+use smol_str::SmolStr;
 
 mod lex;
 
@@ -22,12 +23,12 @@ pub fn parser(input: &str, id: u32) -> Option<Raw> {
 ///   check/infer 下降时更新 cxt 的 pos，报错时取最内层位置。
 #[derive(Clone, Debug)]
 pub enum Raw {
-    Var(Span<String>),
-    Lam(Span<String>, Box<Raw>),
+    Var(Span<SmolStr>),
+    Lam(Span<SmolStr>, Box<Raw>),
     App(Box<Raw>, Box<Raw>),
     U,
-    Pi(Span<String>, Box<Raw>, Box<Raw>),
-    Let(Span<String>, Box<Raw>, Box<Raw>, Box<Raw>),
+    Pi(Span<SmolStr>, Box<Raw>, Box<Raw>),
+    Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
     SrcPos(Span<()>, Box<Raw>),
 }
 
@@ -38,9 +39,9 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
     }
 }
 
-fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<String>> {
+fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>> {
     move |input: &'b [TokenNode<'a>]| match input.first() {
-        Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|s| s.0.to_owned()))),
+        Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|s| SmolStr::new(s.0)))),
         _ => None,
     }
 }
@@ -77,7 +78,7 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
         .parse(input)
 }
 
-fn p_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Span<String>)> {
+fn p_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Span<SmolStr>)> {
     string(Ident).or(string(Underscore)).parse(input)
 }
 
@@ -127,7 +128,7 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], 
 fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
-            Some((kw, cod)) => Raw::Pi(kw.map(|_| "_".to_owned()), Box::new(sp), Box::new(cod)),
+            Some((kw, cod)) => Raw::Pi(kw.map(|_| SmolStr::new("_")), Box::new(sp), Box::new(cod)),
             None => sp,
         })
         .parse(input)

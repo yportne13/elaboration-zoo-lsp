@@ -27,6 +27,7 @@
 //! `Bump::reset`——LSP 一类长驻进程的真实成本口径。
 
 use bumpalo::Bump;
+use smol_str::SmolStr;
 
 use super::parser::Raw;
 use crate::parser_lib::Span;
@@ -867,7 +868,7 @@ fn export(t: &Tm<'_>) -> CTm {
     }
     fn name(x: &str) -> Name {
         Name {
-            data: x.to_owned(),
+            data: SmolStr::new(x),
             start_offset: 0,
             end_offset: 0,
             path_id: 0,

@@ -16,6 +16,7 @@ use parser::Raw;
 
 use crate::list::List;
 use crate::parser_lib::Span;
+use smol_str::SmolStr;
 
 // syntax
 // --------------------------------------------------------------------------------
@@ -35,7 +36,11 @@ impl std::ops::Add<u32> for Lvl {
     }
 }
 
-type Name = Span<String>;
+/// binder 名。`SmolStr`：≤23 字节内联存储，`clone` 免堆分配（参考版的
+/// `eval` 每次 `Tm::Lam` 求值都 clone 名字，church 展开下是 O(n) 次分配；
+/// 实测 clone 1ns vs String 7ns，见 readme「名字表示换 SmolStr」）。构造
+/// 比 `String::from` 贵（13–18 ns vs 5 ns），落在 parse——负载占比小，可接受。
+type Name = Span<SmolStr>;
 
 /// 表面语法经 elaboration 产出的核心语法。
 #[derive(Debug, Clone)]
@@ -229,7 +234,7 @@ fn report(cxt: &Cxt, msg: String) -> Error {
 }
 
 fn show_val(cxt: &Cxt, v: &Val) -> String {
-    let ns: Vec<String> = cxt.types.iter().map(|(x, _)| x.data.clone()).collect();
+    let ns: Vec<String> = cxt.types.iter().map(|(x, _)| x.data.to_string()).collect();
     pretty_tm(0, &ns, &quote(cxt.lvl, v))
 }
 
