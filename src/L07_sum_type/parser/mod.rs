@@ -169,7 +169,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
 ) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
     square(
         (
-            p_bind, // 解析一个或多个绑定变量 xs
+            p_bind,
             (kw(Colon), p_raw).option().map(|x| match x {
                 Some((_, x)) => x,
                 None => Raw::Hole,
@@ -187,14 +187,13 @@ fn p_pi_binder<'a: 'b, 'b>(
     // 解析显式参数 (x : A)
     let explicit_binder = paren(
         (
-            p_bind,                // 解析一个或多个绑定变量 xs
-            kw(Colon).with(p_raw), // 解析类型 A
+            p_bind,
+            kw(Colon).with(p_raw),
         )
             .map(|(xs, a)| (xs, a.1, Icit::Expl))
             .many0_sep(kw(T![,])),
-    ); // 返回 (xs, a, Expl)
+    );
 
-    // 组合所有可能的解析器
     p_pi_impl_binder.or(explicit_binder).parse(input)
 }
 
@@ -212,7 +211,6 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], 
         .parse(input)
 }
 
-//TODO:fun_or_spine
 fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
@@ -235,9 +233,10 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         kw(Eq),
         p_raw,
         kw(Semi),
+        kw(EndLine).option(),
         p_raw,
     )
-        .map(|(_, binder, ann, _, val, _, body)| {
+        .map(|(_, binder, ann, _, val, _, _, body)| {
             Raw::Let(
                 binder,
                 Box::new(ann.unwrap_or(Raw::Hole)),
@@ -252,11 +251,12 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'
     (
         string(Ident),
         paren(p_pattern.many0_sep(kw(T![,])))
-            .option()
-            .map(|x| x.unwrap_or_default()),
+            .or(square(p_pattern.map(|x| x.to_impl()).many0_sep(kw(T![,]))))
+            .many0()
+            .map(|x| x.concat()),
     )
-        .map(|(x, t)| Pattern::Con(x, t))
-        .or(kw(T![_]).map(Pattern::Any))
+        .map(|(x, t)| Pattern::Con(x, t, Icit::Expl))
+        .or(kw(T![_]).map(|x| Pattern::Any(x, Icit::Expl)))
         .parse(input)
 }
 
@@ -265,8 +265,8 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         kw(MatchKeyword),
         p_raw,
         brace(
-            (kw(CaseKeyword), p_pattern, kw(T![=>]), p_raw)
-                .map(|(_, pattern, _, body)| (pattern, body))
+            (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
+                .map(|(_, pattern, _, _, body)| (pattern, body))
                 .many0_sep(kw(EndLine)),
         ),
     )
@@ -323,16 +323,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
                 p_pi_binder
                     .many0()
                     .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
-                /*paren(p_raw.many0_sep(kw(T![,])))
-                    .option()
-                    .map(|x| x.unwrap_or_default()),*/
-                paren(
-                    (string(Ident), kw(T![:=]), p_raw)
-                    .map(|x| (x.0, x.2))
-                    .many1_sep(kw(T![,]))
-                )
-                    .option()
-                    .map(|x| x.unwrap_or(vec![]))
+                (kw(T![->]), p_raw).option().map(|x| x.map(|y| y.1)),
             )
                 .many1_sep(kw(EndLine)),
         ),
@@ -347,67 +338,4 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
     p_def.or(p_print).or(p_enum).parse(input)
-}
-
-#[test]
-fn test() {
-    let input = r#"
-def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def refl[A : U, x: A]: Eq[A] x x = _ => px => px
-
-def the(A : U)(x: A): A = x
-
-def m(A : U)(B : U): U -> U -> U = _
-def test = a => b => the (Eq (m a a) (x => y => y)) refl
-
-def m : U -> U -> U -> U = _
-def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
-
-
-def pr1 = f => x => f x
-def pr2 = f => x => y => f x y
-def pr3 = f => f U
-
-def Nat : U =
-    (N : U) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat =
-    a => b => N => s => z => a _ (b _ s) z
-def ten : Nat =
-    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
-def hundred = mul ten ten
-
-println hundred
-
-def mystr = "hello world"
-
-def add_tail(x: String): String = string_concat x "!"
-
-def mystr2 = add_tail mystr
-
-println mystr2
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(x: Nat)
-}
-
-def two = succ succ zero
-
-def add(x: Nat, y: Nat): Nat =
-    match x {
-        case zero => y
-        case succ(n) => succ add n y
-    }
-
-def four = add two two
-
-println four
-
-"#;
-    println!("{:#?}", parser(input, 0).unwrap());
 }
