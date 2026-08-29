@@ -32,6 +32,15 @@
 //!    binder 作用域退出（递归返回）按 `Cxt.mark` 截断恢复——兄弟子树不
 //!    泄漏、shadowing 退出还原旧绑定；错误路径跳出整轮，每轮 reset 清空。
 //!    `L03_NO_NAME_MAP=1` 消融（回落线性 walk）。
+//! 10. **复合环境（复合 Env）**：eval 的 de Bruijn 取值原沿 EnvCons 链走
+//!    O(深度)（chain 负载二次方的另一半）。改为**平坦 def 区域**（elaborator
+//!    的 define 链：逐 define tip 原地追加、恒 O(1)，`nth` 直接下标）+**
+//!    持久 binder 链表**（bind 与全部 β/瞬时求值扩展 = O(1) bump 分配，
+//!    运行时回到 EnvCons 世界）。教训（L01 `env_slice` 的 2x 验证）：给
+//!    运行时 β 的扩展引入 O(捕获深度) 拷贝要么全量回归（单 Vec 版实测
+//!    church/conv 全线 ~2x），要么 bind/define/β 同域混用破坏 def 链的
+//!    tip（两域版实测 define 全量拷贝 O(n²)）——职责必须按「定义域平坦、
+//!    绑定域持久链」切分。
 //!
 //! 与参考版（`super`）共用 parser / pretty / 错误显示，输出逐字节一致
 //! （互检测试）。稳态形态是 [`Tycker`]：`Machine`（spine/vals/metacontxt）
@@ -129,10 +138,67 @@ pub(crate) fn v_meta_of(v: V) -> u32 {
     (v.0 >> 3) as u32
 }
 
+/// 复合环境：**平坦 def 区域**（elaborator 的 define 链，指入每轮
+/// [`Machine::defs`]；只经 define 追加、恒 tip，`nth` O(1)——chain 负载
+/// 的长 let 链不再沿链路走 O(深度)）+ **持久 binder 链表**（bind 与全部
+/// β/瞬时求值扩展 O(1) 一个 bump 分配——运行时回到 EnvCons 世界，无拷贝
+/// 税；L01 `env_slice` 教训：给运行时 β 加拷贝就是 2x 回归）。
+/// 平坦区域只读已写入槽位、Vec 只增不减，任何捕获都安全。
+#[derive(Clone, Copy)]
+pub(crate) struct Env<'a> {
+    flat_base: u32,
+    flat_len: u32,
+    binds: Option<&'a EnvCons<'a>>,
+}
+
+const EMPTY_ENV: Env<'static> = Env { flat_base: 0, flat_len: 0, binds: None };
+
+/// 环境链表节点（bump 内持久链表，头 = 最内层绑定）。
+pub(crate) struct EnvCons<'a> {
+    val: V,
+    next: Option<&'a EnvCons<'a>>,
+}
+
+/// `i < binds 深度` → 走链；否则读平坦 def 区域（`i - 链深` 为区域内的
+/// de Bruijn 位置）。类型系统保证 i < 环境总长（越界是闭项 bug，panic）。
+#[inline]
+pub(crate) fn env_nth(defs: &[V], env: Env<'_>, i: u32) -> V {
+    let mut nb = env.binds;
+    let mut j = 0u32;
+    while let Some(e) = nb {
+        if j == i {
+            return e.val;
+        }
+        j += 1;
+        nb = e.next;
+    }
+    defs[(env.flat_base + env.flat_len - 1 - (i - j)) as usize]
+}
+
+/// 环境扩展（**binder 链**：bind / β / 瞬时求值扩展）——O(1) 一个 bump
+/// 分配，不碰平坦区域（其 tip 因此恒不被顶离，define 保持 O(1)）。
+#[inline]
+pub(crate) fn env_ext<'a>(bump: &'a Bump, env: Env<'a>, v: V) -> Env<'a> {
+    Env {
+        flat_base: env.flat_base,
+        flat_len: env.flat_len,
+        binds: Some(bump.alloc(EnvCons { val: v, next: env.binds })),
+    }
+}
+
+/// 环境扩展（**平坦 def 区域**：elaborator 的 define）——tip 原地追加。
+/// 不变量：defs 只在 define 时增长（bind/β 全走链），flat 区域恒 tip。
+#[inline]
+pub(crate) fn env_ext_defs<'a>(defs: &mut Vec<V>, env: Env<'a>, v: V) -> Env<'a> {
+    debug_assert_eq!(env.flat_base + env.flat_len, defs.len() as u32);
+    defs.push(v);
+    Env { flat_base: env.flat_base, flat_len: env.flat_len + 1, binds: env.binds }
+}
+
 /// 闭包单元：λ 的名字（只服务 quote 产出的 pretty）+ env + 体。
 pub(crate) struct CloCell<'a> {
     name: &'a str,
-    env: Option<&'a EnvCons<'a>>,
+    env: Env<'a>,
     body: &'a Tm<'a>,
 }
 
@@ -140,22 +206,8 @@ pub(crate) struct CloCell<'a> {
 pub(crate) struct PiCell<'a> {
     name: &'a str,
     dom: V,
-    env: Option<&'a EnvCons<'a>>,
+    env: Env<'a>,
     body: &'a Tm<'a>,
-}
-
-/// 环境节点（bump 内持久链表，头 = 最内层绑定）。
-pub(crate) struct EnvCons<'a> {
-    val: V,
-    next: Option<&'a EnvCons<'a>>,
-}
-
-#[inline]
-fn nth<'a>(mut env: Option<&'a EnvCons<'a>>, idx: usize) -> V {
-    for _ in 0..idx {
-        env = env.expect("de Bruijn 越界：闭项不应查空环境").next;
-    }
-    env.expect("de Bruijn 越界：闭项不应查越深").val
 }
 
 /// spine 栈槽：一次中性应用。`len`/`base` 支撑流式右链 quote（连续性引理
@@ -273,6 +325,7 @@ fn force<'a>(
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
+    defs: &mut Vec<V>,
     metas: &[MetaEntry],
     v0: V,
 ) -> V {
@@ -301,8 +354,8 @@ fn force<'a>(
                         for &a in args.iter().rev() {
                             if v_tag(t) == 1 {
                                 let c = v_clo_of(t);
-                                let node = bump.alloc(EnvCons { val: a, next: c.env });
-                                t = eval_iter(bump, spine, work, vals, metas, Some(node), c.body);
+                                let env = env_ext(bump, c.env, a);
+                                t = eval_iter(bump, spine, work, vals, defs, metas, env, c.body);
                             } else {
                                 t = spine.push(t, a);
                             }
@@ -321,20 +374,20 @@ fn force<'a>(
 
 /// eval 的 work 栈条目。
 enum W<'a> {
-    Tm(&'a Tm<'a>, Option<&'a EnvCons<'a>>),
+    Tm(&'a Tm<'a>, Env<'a>),
     Apply,
-    /// vals 顶上是实参；函数值已知是闭包（β 岔路下降时已 `nth` 出来），
+    /// vals 顶上是实参；函数值已知是闭包（β 岔路下降时已 `env_nth` 出来），
     /// 直接 β——不再经 `Tm(Var)` 重查一遍环境。
     ApplyKnown(V),
     /// vals 顶上是 base 值，其下 `k` 个是待应用的链头（内层最上）。
     ChainWrap(u32),
     /// vals 顶是 let 绑定的值：弹出压进环境，继续求值体。
-    LetBody(&'a Tm<'a>, Option<&'a EnvCons<'a>>),
+    LetBody(&'a Tm<'a>, Env<'a>),
     /// vals 顶是 Π 定义域值：弹出配余定义域闭包，压 Π 值。
-    PiBody(&'a str, &'a Tm<'a>, Option<&'a EnvCons<'a>>),
+    PiBody(&'a str, &'a Tm<'a>, Env<'a>),
     /// vals 顶是 `vAppBDs` 的当前值；沿 (env, bds) 平行走完剩余槽位
     /// （外层先应用——递归版先走尾再回头应用头，这里用栈翻转顺序）。
-    AppBds(Option<&'a EnvCons<'a>>, Option<&'a BdCons<'a>>),
+    AppBds(Env<'a>, Option<&'a BdCons<'a>>),
     /// vals 顶两个（先 base 后实参）：把实参应用上去（Clo → β；
     /// 其它 → spine.push）。`AppBds` 的单个实参应用步。
     AppBdsOne(V),
@@ -349,8 +402,9 @@ fn eval_iter<'a>(
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
+    defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    env0: Option<&'a EnvCons<'a>>,
+    env0: Env<'a>,
     tm0: &'a Tm<'a>,
 ) -> V {
     work.clear();
@@ -358,7 +412,7 @@ fn eval_iter<'a>(
     work.push(W::Tm(tm0, env0));
     while let Some(w) = work.pop() {
         match w {
-            W::Tm(Tm::Var(i), env) => vals.push(nth(env, *i as usize)),
+            W::Tm(Tm::Var(i), env) => vals.push(env_nth(defs, env, *i)),
             W::Tm(Tm::Lam(name, body), env) => {
                 let c = bump.alloc(CloCell { name, env, body });
                 vals.push(v_clo(c));
@@ -394,7 +448,7 @@ fn eval_iter<'a>(
                     };
                     match f {
                         Tm::Var(i) => {
-                            let vf = nth(env, *i as usize);
+                            let vf = env_nth(defs, env, *i);
                             if v_tag(vf) == 1 {
                                 // β 岔路：函数值已在手上（闭包），ApplyKnown
                                 // 直接管 β；heads>0 时 ChainWrap 照旧收拢
@@ -428,8 +482,8 @@ fn eval_iter<'a>(
                 if v_tag(vf) == 1 {
                     // β 归约是尾调用：直接推入体，继续循环
                     let c = v_clo_of(vf);
-                    let node = bump.alloc(EnvCons { val: va, next: c.env });
-                    work.push(W::Tm(c.body, Some(node)));
+                    let env = env_ext(bump, c.env, va);
+                    work.push(W::Tm(c.body, env));
                 } else {
                     vals.push(spine.push(vf, va));
                 }
@@ -437,8 +491,8 @@ fn eval_iter<'a>(
             W::ApplyKnown(vf) => {
                 let va = vals.pop().expect("eval 栈：ApplyKnown 缺实参");
                 let c = v_clo_of(vf);
-                let node = bump.alloc(EnvCons { val: va, next: c.env });
-                work.push(W::Tm(c.body, Some(node)));
+                let env = env_ext(bump, c.env, va);
+                work.push(W::Tm(c.body, env));
             }
             W::ChainWrap(k) => {
                 let mut v = vals.pop().expect("eval 栈：ChainWrap 缺 base");
@@ -450,30 +504,47 @@ fn eval_iter<'a>(
             }
             W::LetBody(u, env) => {
                 let vt = vals.pop().expect("eval 栈：LetBody 缺绑定值");
-                let node = bump.alloc(EnvCons { val: vt, next: env });
-                work.push(W::Tm(u, Some(node)));
+                work.push(W::Tm(u, env_ext(bump, env, vt)));
             }
             W::PiBody(name, cod, env) => {
                 let dom = vals.pop().expect("eval 栈：PiBody 缺定义域");
                 let cell = bump.alloc(PiCell { name, dom, env, body: cod });
                 vals.push(v_pi(cell));
             }
-            W::AppBds(env, bds) => match (env, bds) {
-                (None, None) => {}
-                (Some(e), Some(b)) if b.bound => {
-                    // 先跑余下槽位（外层），再应用本槽（内层最后应用）
-                    work.push(W::AppBdsOne(e.val));
-                    work.push(W::AppBds(e.next, b.next));
+            W::AppBds(env, bds) => match bds {
+                None => {
+                    // 与 reference 的 (None, None) 对齐：bds 先行耗尽
+                    debug_assert!(env.binds.is_none() && env.flat_len == 0);
                 }
-                (Some(e), Some(b)) => work.push(W::AppBds(e.next, b.next)),
-                _ => panic!("impossible"), // env 与 bds 错位（空环境引带 binder 的 hole）
+                Some(b) => {
+                    // 内层绑定 = 链头；链耗尽后走平坦 def 区域末端。先跑
+                    // 余下槽位（外层），再应用本槽（内层最后应用）
+                    let (arg, rest) = if let Some(e) = env.binds {
+                        (
+                            if b.bound { Some(e.val) } else { None },
+                            Env { binds: e.next, ..env },
+                        )
+                    } else if env.flat_len > 0 {
+                        let v = defs[(env.flat_base + env.flat_len - 1) as usize];
+                        (
+                            if b.bound { Some(v) } else { None },
+                            Env { flat_len: env.flat_len - 1, ..env },
+                        )
+                    } else {
+                        panic!("impossible") // env 与 bds 错位（空环境引带 binder 的 hole）
+                    };
+                    if let Some(a) = arg {
+                        work.push(W::AppBdsOne(a));
+                    }
+                    work.push(W::AppBds(rest, b.next));
+                }
             },
             W::AppBdsOne(arg) => {
                 let v = vals.pop().expect("eval 栈：AppBdsOne 缺值");
                 if v_tag(v) == 1 {
                     let c = v_clo_of(v);
-                    let node = bump.alloc(EnvCons { val: arg, next: c.env });
-                    work.push(W::Tm(c.body, Some(node)));
+                    let env = env_ext(bump, c.env, arg);
+                    work.push(W::Tm(c.body, env));
                 } else {
                     vals.push(spine.push(v, arg));
                 }
@@ -495,7 +566,7 @@ enum QJob<'a> {
     /// done 栈顶两个（先 cod 后 dom），合一个 Pi。
     Pi1(&'a PiCell<'a>),
     /// 先 eval（引出闭包/余定义域的体）再引。
-    EvalQ(&'a Tm<'a>, Option<&'a EnvCons<'a>>, u32),
+    EvalQ(&'a Tm<'a>, Env<'a>, u32),
     /// done 栈顶两个（先 f 后 a），合一个 App——二叉 fallback 用。
     App1,
     /// 记忆化屏障：done 栈顶是刚完成的 `Q(key, level)` 结果，入表后放回。
@@ -530,6 +601,7 @@ fn quote_iter<'a>(
     done: &mut Vec<&'a Tm<'a>>,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
+    defs: &mut Vec<V>,
     metas: &[MetaEntry],
     level0: u32,
     v0: V,
@@ -543,7 +615,7 @@ fn quote_iter<'a>(
             QJob::Q(v0, level) => {
                 // 先 force：已解 meta 立即数展开成解、已解 flex spine
                 // 重建（metacontext 在 quote 期间冻结，同键同结果）
-                let v = force(bump, spine, work, vals, metas, v0);
+                let v = force(bump, spine, work, vals, defs, metas, v0);
                 match v_tag(v) {
                     0 => done.push(bump.alloc(Tm::Var(level - v_lvl_of(v) - 1))),
                     1 => {
@@ -558,10 +630,9 @@ fn quote_iter<'a>(
                             // 屏障压在最深处：v 的子任务全部跑完后它弹出并回填
                             tasks.push(QJob::MemoStore(v.0, level));
                         }
-                        let node =
-                            bump.alloc(EnvCons { val: v_lvl(level), next: c.env });
+                        let env = env_ext(bump, c.env, v_lvl(level));
                         tasks.push(QJob::Lam1(c.name));
-                        tasks.push(QJob::EvalQ(c.body, Some(node), level + 1));
+                        tasks.push(QJob::EvalQ(c.body, env, level + 1));
                     }
                     5 => done.push(bump.alloc(Tm::Meta(v_meta_of(v)))),
                     3 => done.push(bump.alloc(Tm::U)),
@@ -576,15 +647,9 @@ fn quote_iter<'a>(
                         if memo.is_some() {
                             tasks.push(QJob::MemoStore(v.0, level));
                         }
+                        let env = env_ext(bump, cell.env, v_lvl(level));
                         tasks.push(QJob::Pi1(cell));
-                        tasks.push(QJob::EvalQ(
-                            cell.body,
-                            Some(bump.alloc(EnvCons {
-                                val: v_lvl(level),
-                                next: cell.env,
-                            })),
-                            level + 1,
-                        ));
+                        tasks.push(QJob::EvalQ(cell.body, env, level + 1));
                         tasks.push(QJob::Q(cell.dom, level));
                     }
                     _ => {
@@ -644,7 +709,7 @@ fn quote_iter<'a>(
                 done.push(bump.alloc(Tm::Pi(cell.name, dom, cod)));
             }
             QJob::EvalQ(body, env, level) => {
-                let v = eval_iter(bump, spine, work, vals, metas, env, body);
+                let v = eval_iter(bump, spine, work, vals, defs, metas, env, body);
                 tasks.push(QJob::Q(v, level));
             }
             QJob::App1 => {
@@ -719,13 +784,7 @@ enum UItem<'a> {
     /// 同一 fresh `v_lvl(l)`），结果入 Pair(l+1, ·, ·)。排在 dom 对之下——
     /// dom 不等即 `return false`，cod 的 eval 整个省掉（参考版
     /// `unify(l, a, a')?` 短路的对应物）。
-    EvalCod2(
-        &'a Tm<'a>,
-        Option<&'a EnvCons<'a>>,
-        &'a Tm<'a>,
-        Option<&'a EnvCons<'a>>,
-        u32,
-    ),
+    EvalCod2(&'a Tm<'a>, Env<'a>, &'a Tm<'a>, Env<'a>, u32),
     /// 判等记忆化屏障：派发子对前压入；其弹出时上方整棵子比较已全部完成
     /// （工作表是纯合取，任何失败早已 `return false`）——该对必已判等，
     /// 入表。机制同 L02 conv 的 `WItem::Store`（LIFO 屏障）。
@@ -763,6 +822,7 @@ fn unify_iter<'a>(
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
+    defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     l0: u32,
     t0: V,
@@ -785,24 +845,14 @@ fn unify_iter<'a>(
                 // dom 已判等：两侧 cod 各 eval 一次（fresh 绑定同一 level），
                 // 组合成子对继续（两个 eval 顺序执行，复用的 work/vals 各自
                 // clear，无跨 eval 残留）。
-                let vt = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    metas,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: e1 })),
-                    b1,
-                );
-                let vu = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    metas,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: e2 })),
-                    b2,
-                );
+                let vt = {
+                    let env = env_ext(bump, e1, v_lvl(l));
+                    eval_iter(bump, spine, work, vals, defs, metas, env, b1)
+                };
+                let vu = {
+                    let env = env_ext(bump, e2, v_lvl(l));
+                    eval_iter(bump, spine, work, vals, defs, metas, env, b2)
+                };
                 stack.push(UItem::Pair(l + 1, vt, vu));
                 continue;
             }
@@ -814,8 +864,8 @@ fn unify_iter<'a>(
         if memo_on && memo.contains(&(t.0, u.0)) {
             continue; // 本轮已判等过的子对（命中连 force 都省——成功单调）
         }
-        let t = force(bump, spine, work, vals, metas, t);
-        let u = force(bump, spine, work, vals, metas, u);
+        let t = force(bump, spine, work, vals, defs, metas, t);
+        let u = force(bump, spine, work, vals, defs, metas, u);
         if t.0 == u.0 {
             continue; // force 展开后同值（同一解的两处引用）
         }
@@ -824,24 +874,14 @@ fn unify_iter<'a>(
             (1, 1) => {
                 let c1 = v_clo_of(t);
                 let c2 = v_clo_of(u);
-                let vt = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    metas,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: c1.env })),
-                    c1.body,
-                );
-                let vu = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    metas,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: c2.env })),
-                    c2.body,
-                );
+                let vt = {
+                    let env = env_ext(bump, c1.env, v_lvl(l));
+                    eval_iter(bump, spine, work, vals, defs, metas, env, c1.body)
+                };
+                let vu = {
+                    let env = env_ext(bump, c2.env, v_lvl(l));
+                    eval_iter(bump, spine, work, vals, defs, metas, env, c2.body)
+                };
                 if memo_on {
                     stack.push(UItem::Store((t.0, u.0)));
                 }
@@ -849,15 +889,10 @@ fn unify_iter<'a>(
             }
             (_, 1) => {
                 let c = v_clo_of(u);
-                let vu = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    metas,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: c.env })),
-                    c.body,
-                );
+                let vu = {
+                    let env = env_ext(bump, c.env, v_lvl(l));
+                    eval_iter(bump, spine, work, vals, defs, metas, env, c.body)
+                };
                 let vt = spine.push(t, v_lvl(l));
                 if memo_on {
                     stack.push(UItem::Store((t.0, u.0)));
@@ -866,15 +901,10 @@ fn unify_iter<'a>(
             }
             (1, _) => {
                 let c = v_clo_of(t);
-                let vt = eval_iter(
-                    bump,
-                    spine,
-                    work,
-                    vals,
-                    metas,
-                    Some(bump.alloc(EnvCons { val: v_lvl(l), next: c.env })),
-                    c.body,
-                );
+                let vt = {
+                    let env = env_ext(bump, c.env, v_lvl(l));
+                    eval_iter(bump, spine, work, vals, defs, metas, env, c.body)
+                };
                 let vu = spine.push(u, v_lvl(l));
                 if memo_on {
                     stack.push(UItem::Store((t.0, u.0)));
@@ -925,12 +955,12 @@ fn unify_iter<'a>(
                     let mut args = std::mem::take(&mut scratch1);
                     args.clear();
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                        solve(bump, spine, work, vals, metas, l, m, &args, u)
+                        solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
                     } else {
                         let mut args = std::mem::take(&mut scratch2);
                         args.clear();
                         match spine.flex_of(u, &mut args) {
-                            Some(m) => solve(bump, spine, work, vals, metas, l, m, &args, t),
+                            Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args, t),
                             None => false,
                         }
                     };
@@ -1009,10 +1039,10 @@ fn unify_iter<'a>(
                 let mut args = std::mem::take(&mut scratch1);
                 args.clear();
                 let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                    solve(bump, spine, work, vals, metas, l, m, &args, u)
+                    solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
                 } else {
                     match spine.flex_of(u, &mut args) {
-                        Some(m) => solve(bump, spine, work, vals, metas, l, m, &args, t),
+                        Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args, t),
                         None => false,
                     }
                 };
@@ -1040,6 +1070,7 @@ fn solve<'a>(
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
+    defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     gamma: u32,
     m: u32,
@@ -1051,7 +1082,7 @@ fn solve<'a>(
     let dom = args.len() as u32;
     let mut ren: Vec<Option<u32>> = vec![None; gamma as usize];
     for (i, &a) in args.iter().rev().enumerate() {
-        let f = force(bump, spine, work, vals, metas, a);
+        let f = force(bump, spine, work, vals, defs, metas, a);
         if v_tag(f) != 0 {
             return false;
         }
@@ -1062,13 +1093,13 @@ fn solve<'a>(
         ren[x] = Some(i as u32);
     }
     // rename（任务栈；occurs/scope check 在这里）
-    let Some(tm) = rename_iter(bump, spine, work, vals, &mut ren, metas, m, dom, gamma, rhs)
+    let Some(tm) = rename_iter(bump, spine, work, vals, defs, &mut ren, metas, m, dom, gamma, rhs)
     else {
         return false;
     };
     // 包 λ 后空环境求值，写表
     let lams_tm = lams(bump, dom, tm);
-    let sol = eval_iter(bump, spine, work, vals, metas, None, lams_tm);
+    let sol = eval_iter(bump, spine, work, vals, defs, metas, EMPTY_ENV, lams_tm);
     metas[m as usize] = MetaEntry::Solved(sol);
     true
 }
@@ -1094,6 +1125,7 @@ fn rename_iter<'a>(
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
+    defs: &mut Vec<V>,
     ren: &mut Vec<Option<u32>>,
     metas: &[MetaEntry],
     target_m: u32,
@@ -1123,7 +1155,7 @@ fn rename_iter<'a>(
     while let Some(job) = tasks.pop() {
         match job {
             RJob::Ren { dom, cod, v } => {
-                let v = force(bump, spine, work, vals, metas, v);
+                let v = force(bump, spine, work, vals, defs, metas, v);
                 match v_tag(v) {
                     5 => {
                         let m = v_meta_of(v);
@@ -1164,15 +1196,10 @@ fn rename_iter<'a>(
                     }
                     1 => {
                         let c = v_clo_of(v);
-                        let bv = eval_iter(
-                            bump,
-                            spine,
-                            work,
-                            vals,
-                            metas,
-                            Some(bump.alloc(EnvCons { val: v_lvl(cod), next: c.env })),
-                            c.body,
-                        );
+                        let bv = {
+                            let env = env_ext(bump, c.env, v_lvl(cod));
+                            eval_iter(bump, spine, work, vals, defs, metas, env, c.body)
+                        };
                         // lift：binder 槽 (cod → dom)，单调插入
                         let idx = cod as usize;
                         if idx >= ren.len() {
@@ -1184,15 +1211,10 @@ fn rename_iter<'a>(
                     }
                     4 => {
                         let cell = v_pi_of(v);
-                        let bv = eval_iter(
-                            bump,
-                            spine,
-                            work,
-                            vals,
-                            metas,
-                            Some(bump.alloc(EnvCons { val: v_lvl(cod), next: cell.env })),
-                            cell.body,
-                        );
+                        let bv = {
+                            let env = env_ext(bump, cell.env, v_lvl(cod));
+                            eval_iter(bump, spine, work, vals, defs, metas, env, cell.body)
+                        };
                         // lift（同 Lam）
                         let idx = cod as usize;
                         if idx >= ren.len() {
@@ -1254,6 +1276,10 @@ fn lams<'a>(bump: &'a Bump, dom: u32, body: &'a Tm<'a>) -> &'a Tm<'a> {
 pub(crate) struct Machine {
     spine: Spine,
     vals: Vec<V>,
+    /// 平坦环境区域（每轮 append-only，只增不减——binder 退出**不**截断：
+    /// 区域只读已写入槽位，任何 (base,len) 捕获可安全存活；死条目由每轮
+    /// clear 回收）。env 句柄见 [`Env`]。
+    defs: Vec<V>,
     pub(crate) metas: Vec<MetaEntry>,
     /// 名字 → (绑定 lvl, 类型值)：`Raw::Var` 的 O(1) 解析。与 `types` 链
     /// 同步——每个 scope 条目经 [`Machine::bind_name`]/[`Machine::define_name`]
@@ -1272,29 +1298,39 @@ impl Machine {
         Machine {
             spine: Spine { stack: Vec::with_capacity(4096) },
             vals: Vec::with_capacity(4096),
+            defs: Vec::with_capacity(4096),
             metas: Vec::new(),
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
         }
     }
 
-    /// 每轮 reset：metacontext 清空 + 名字表/轨迹清空（表里存有指向上一轮
-    /// bump 的 V 字，必须随 `Bump::reset` 一同作废）。
+    /// 每轮 reset：metacontext 清空 + 名字表/轨迹/环境区域清空（表里存有
+    /// 指向上一轮 bump 的 V 字，必须随 `Bump::reset` 一同作废）。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
         self.name_trail.clear();
+        self.defs.clear();
     }
 
-    /// Extend Cxt with a bound variable（名字解析版）：types 链 + 名字表 +
-    /// 撤销轨迹三同步。调用方在 binder 的递归返回后按父 `cxt.mark`
-    /// [`Machine::unwind_names`]。
+    /// Extend Cxt with a bound variable（名字解析版）：环境 + types 链 +
+    /// 名字表 + 撤销轨迹四同步。调用方在 binder 的递归返回后按父
+    /// `cxt.mark` [`Machine::unwind_names`]。
     fn bind_name<'a>(&mut self, bump: &'a Bump, cxt: Cxt<'a>, x: &str, ty: V) -> Cxt<'a> {
         debug_assert_eq!(self.name_trail.len(), cxt.mark as usize);
         let key = SmolStr::new(x);
         let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
         self.name_trail.push((key, prev));
-        cxt.bind(bump, bump.alloc_str(x), ty)
+        let env = env_ext(bump, cxt.env, v_lvl(cxt.lvl));
+        Cxt {
+            env,
+            types: Some(bump.alloc(TCons { name: bump.alloc_str(x), ty, next: cxt.types })),
+            bds: Some(bump.alloc(BdCons { bound: true, next: cxt.bds })),
+            lvl: cxt.lvl + 1,
+            mark: cxt.mark + 1,
+            pos: cxt.pos,
+        }
     }
 
     /// Extend Cxt with a definition（名字解析版，同 [`Machine::bind_name`]）。
@@ -1310,7 +1346,15 @@ impl Machine {
         let key = SmolStr::new(x);
         let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
         self.name_trail.push((key, prev));
-        cxt.define(bump, bump.alloc_str(x), val, ty)
+        let env = env_ext_defs(&mut self.defs, cxt.env, val);
+        Cxt {
+            env,
+            types: Some(bump.alloc(TCons { name: bump.alloc_str(x), ty, next: cxt.types })),
+            bds: Some(bump.alloc(BdCons { bound: false, next: cxt.bds })),
+            lvl: cxt.lvl + 1,
+            mark: cxt.mark + 1,
+            pos: cxt.pos,
+        }
     }
 
     /// 截断撤销轨迹到 `mark`（binder 作用域退出）：shadowing 的名字还原旧
@@ -1337,13 +1381,17 @@ impl Machine {
         bump.alloc(Tm::InsertedMeta(m, bds))
     }
 
-    fn eval<'a>(
-        &mut self,
-        bump: &'a Bump,
-        env: Option<&'a EnvCons<'a>>,
-        tm: &'a Tm<'a>,
-    ) -> V {
-        eval_iter(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &self.metas, env, tm)
+    fn eval<'a>(&mut self, bump: &'a Bump, env: Env, tm: &'a Tm<'a>) -> V {
+        eval_iter(
+            bump,
+            &mut self.spine,
+            &mut Vec::new(),
+            &mut self.vals,
+            &mut self.defs,
+            &self.metas,
+            env,
+            tm,
+        )
     }
 
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
@@ -1354,6 +1402,7 @@ impl Machine {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut self.vals,
+            &mut self.defs,
             &self.metas,
             level,
             v,
@@ -1373,6 +1422,7 @@ impl Machine {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut self.vals,
+            &mut self.defs,
             &self.metas,
             level,
             v,
@@ -1386,6 +1436,7 @@ impl Machine {
             &mut self.spine,
             &mut Vec::new(),
             &mut self.vals,
+            &mut self.defs,
             &mut self.metas,
             l,
             t,
@@ -1424,7 +1475,7 @@ impl Machine {
         a: V,
     ) -> Result<&'a Tm<'a>, Error> {
         // force 期望类型后分派（已解 meta 可能展开成 Pi）
-        let a = force(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &self.metas, a);
+        let a = force(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &mut self.defs, &self.metas, a);
         match t {
             Raw::SrcPos(pos, t) => {
                 let mut cxt = cxt;
@@ -1435,11 +1486,10 @@ impl Machine {
             Raw::Lam(x, t) if v_tag(a) == 4 => {
                 let p = v_pi_of(a);
                 let name: &'a str = bump.alloc_str(&x.data);
-                let body_a = self.eval(
-                    bump,
-                    Some(bump.alloc(EnvCons { val: v_lvl(cxt.lvl), next: p.env })),
-                    p.body,
-                );
+                let body_a = {
+                    let env = env_ext(bump, p.env, v_lvl(cxt.lvl));
+                    self.eval(bump, env, p.body)
+                };
                 let mark = cxt.mark;
                 let cxt2 = self.bind_name(bump, cxt, &x.data, p.dom);
                 let body = self.check(bump, cxt2, t, body_a)?;
@@ -1528,7 +1578,7 @@ impl Machine {
                 let (t, tty) = self.infer(bump, cxt, t)?;
                 // 确保 tty 是 Π：不是则挂一对洞（定义域 + 余定义域），
                 // 用合成的 Π 与 tty 做 unification（可能求解出它们的值）
-                let tty = force(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &self.metas, tty);
+                let tty = force(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &mut self.defs, &self.metas, tty);
                 let (a, bcell) = if v_tag(tty) == 4 {
                     let p = v_pi_of(tty);
                     (p.dom, p)
@@ -1553,11 +1603,10 @@ impl Machine {
                 let u = self.check(bump, cxt, u, a)?;
                 let arg = self.eval(bump, cxt.env, u);
                 // t u : B[x |-> u]
-                let ty = self.eval(
-                    bump,
-                    Some(bump.alloc(EnvCons { val: arg, next: bcell.env })),
-                    bcell.body,
-                );
+                let ty = {
+                    let env = env_ext(bump, bcell.env, arg);
+                    self.eval(bump, env, bcell.body)
+                };
                 Ok((bump.alloc(Tm::App(t, u)), ty))
             }
 
@@ -1619,7 +1668,7 @@ impl Machine {
 /// Elaboration 上下文（全 Copy，绑定量在 bump 里）。
 #[derive(Clone, Copy)]
 struct Cxt<'a> {
-    env: Option<&'a EnvCons<'a>>,
+    env: Env<'a>,
     /// type of every variable in scope（头 = 最内层，服务名字查找与报错）
     types: Option<&'a TCons<'a>>,
     /// fresh meta 抽象的槽位掩码（与 env 平行；`bound = true` 槽位是实参）
@@ -1640,31 +1689,7 @@ struct TCons<'a> {
 
 impl<'a> Cxt<'a> {
     fn empty(pos: Span<()>) -> Self {
-        Cxt { env: None, types: None, bds: None, lvl: 0, mark: 0, pos }
-    }
-
-    /// Extend Cxt with a bound variable.
-    fn bind(self, bump: &'a Bump, x: &'a str, a: V) -> Cxt<'a> {
-        Cxt {
-            env: Some(bump.alloc(EnvCons { val: v_lvl(self.lvl), next: self.env })),
-            types: Some(bump.alloc(TCons { name: x, ty: a, next: self.types })),
-            bds: Some(bump.alloc(BdCons { bound: true, next: self.bds })),
-            lvl: self.lvl + 1,
-            mark: self.mark + 1,
-            pos: self.pos,
-        }
-    }
-
-    /// Extend Cxt with a definition.
-    fn define(self, bump: &'a Bump, x: &'a str, t: V, a: V) -> Cxt<'a> {
-        Cxt {
-            env: Some(bump.alloc(EnvCons { val: t, next: self.env })),
-            types: Some(bump.alloc(TCons { name: x, ty: a, next: self.types })),
-            bds: Some(bump.alloc(BdCons { bound: false, next: self.bds })),
-            lvl: self.lvl + 1,
-            mark: self.mark + 1,
-            pos: self.pos,
-        }
+        Cxt { env: EMPTY_ENV, types: None, bds: None, lvl: 0, mark: 0, pos }
     }
 }
 
@@ -1849,7 +1874,7 @@ impl Tycker {
             Err(err) => super::display_error(file, &err),
             Ok((t, a)) => match mode {
                 "nf" => {
-                    let v = self.machine.eval(bump, None, t);
+                    let v = self.machine.eval(bump, EMPTY_ENV, t);
                     let n = quote_maybe(&mut self.machine, bump, 0, v, use_memo);
                     let ty = quote_maybe(&mut self.machine, bump, 0, a, use_memo);
                     format!(
@@ -1893,7 +1918,7 @@ impl Tycker {
         match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
             Err(_) => 0,
             Ok((t, _)) => {
-                let v = self.machine.eval(bump, None, t);
+                let v = self.machine.eval(bump, EMPTY_ENV, t);
                 let n = self.machine.quote(bump, 0, v);
                 tm_size(n)
             }
@@ -1908,7 +1933,7 @@ impl Tycker {
         match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
             Err(_) => 0,
             Ok((t, _)) => {
-                let v = self.machine.eval(bump, None, t);
+                let v = self.machine.eval(bump, EMPTY_ENV, t);
                 let n = self.machine.quote_memo(bump, 0, v);
                 tm_size(n)
             }
@@ -2294,7 +2319,7 @@ mod tests {
         else {
             panic!("infer failed");
         };
-        let v = tycker.machine.eval(bump, None, t);
+        let v = tycker.machine.eval(bump, EMPTY_ENV, t);
         let Tm::Lam(_, Tm::App(Tm::App(_, c1), c2)) = tycker.machine.quote_memo(bump, 0, v) else {
             panic!("形状应为 λf. f C C");
         };

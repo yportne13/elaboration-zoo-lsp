@@ -55,7 +55,7 @@ cargo run --release --bin l03bench         # 基准：k=9..15，七负载族 × 
 ./target/release/l03bench --workload solve --only fast      # L03 特色：求解负载
 ./target/release/l03bench --workload dup --only fast_memo   # call-by-need 轴
 ./target/release/l03bench --workload conv_dup --only fast   # 判等记忆化轴
-./target/release/l03bench --workload chain --only fast,fast_ss  # 名字解析轴
+./target/release/l03bench --workload chain --only fast,fast_ss  # 名字解析 + 环境轴
 L03_NO_CONV_MEMO=1 ./target/release/l03bench --workload conv_dup  # memo 消融
 L03_NO_NAME_MAP=1 ./target/release/l03bench --workload chain      # 名字 map 消融
 ```
@@ -68,7 +68,7 @@ L03_NO_NAME_MAP=1 ./target/release/l03bench --workload chain      # 名字 map �
 **check**（unify 在 check 内强制两侧完整展开后结构比较，无洞）；
 `conv_dup` = `Rel` 型重复谓词（`P x -> P y -> P y`）让 `(add p_k zero, p_k)`
 这对比较 3 次——**判等记忆化命中负载**；`chain` = 长 let 链引用最老名字
-——**名字解析负载**（详见「名字解析 O(1)」节）；`solve` =
+——**名字解析 + 环境取值负载**（详见「名字解析 O(1)」节）；`solve` =
 `Eq _ p_k p_k = refl _ _` 的 **check**（L03 特色：期望侧两个 `_` 挂洞，
 unify 触发三个求解，其中
 `? := p_k` 的大解沿 church 展开的整条 neutral 链 rename）；
@@ -170,21 +170,35 @@ args 直接判失败（首版漏掉后 ex2/solve 全挂，互检测试当场暴�
 
 chain 负载（`p_i = add p_{i-1} p0`，n = 2^(k+1) 条 def）实测：
 
-| k | defs | map OFF（walk） | map ON | 提升 |
+| k | defs | 线性 walk | + name_map | **+ 复合环境** |
 |---|---|---|---|---|
-| 12 | 8192 | 383 ms | 205 ms | 1.9× |
-| 14 | 32768 | 7674 ms | 3430 ms | **2.2×** |
+| 12 | 8192 | 383 ms | 205 ms | 5.93 ms |
+| 14 | 32768 | ~7.7 s | 3430 ms | 30.0 ms |
+| 15 | 65536 | — | — | **66.5 ms（纯线性）** |
 
-其余六负载同二进制消融持平（church/conv/solve/conv_dup ±2% 噪声内）
-——表维护（每 binder 一次 insert + trail push）不在热路径。
+其余六负载跨版本持平（church 3.44 / conv 6.54 / solve 4.40 / conv_dup 13.7 /
+dup 7.7 / dup_deep 15.7，k=15，与平坦化前逐位一致）——名字表维护
+（每 binder 一次 insert + trail push）与复合环境都不在热路径。
 
-### chain 暴露的下一个二次方：eval 环境走链
+### chain 暴露的第二个二次方：eval 环境取值（已根治：复合环境）
 
-map 开启后 chain 仍二次方（每 def ~O(i)）：**eval 的 `nth` 沿 EnvCons
-持久链取 de Bruijn 槽位**，老名字（`add`/`p0`）的值在链底。这与名字
-解析同源不同轴——解析查的是 elaborator 的 types 链（现已 O(1)），`nth`
-查的是 eval 时的值环境。根治要换环境表示（分块/平坦 env，见 L01
-`env_slice`/`ast_env_arena` 变体的探索），列为本层后续轴。
+name_map 后 chain 仍二次方（map 版 k=14 3.4s）：**eval 的 `nth` 沿
+EnvCons 持久链取 de Bruijn 槽位**，老名字（`add`/`p0`）的值在链底。
+根治 = **复合环境**：elaborator 的 define 链改为**平坦区域**（每轮
+`Vec<V>`，逐 define tip 原地追加 O(1)、`nth` 直接下标）；bind 与 β/
+瞬时求值扩展留在**持久 EnvCons 链**（O(1) 一个 bump 分配，运行时回
+EnvCons 世界）。职责按「定义域平坦、绑定域持久链」切分，两者互不干扰。
+
+迭代中的两个教训（L01 `env_slice` 教训的实测确认）：
+
+1. **单 Vec 平坦版（β 拷贝）全线 ~2x**：把运行时 β 的扩展也做成平坦
+   区域后，捕获环境几乎从不处于 Vec tip——每次 β 拷 O(捕获深度) 单词
+   （church 58 万次拷贝，插桩实测回归全在 quote 阶段），church/conv/
+   dup 全线 ~2x；L01 的 `env_slice`（拷贝式平坦）当年 7.3x 与此同源。
+2. **两域分别追加版（define 拷贝）反线性**：def 链与 binder/β 碎片
+   混域后，每层 define 之间的一次瞬时扩展就把 def 区域顶离 tip，
+   define 退化为整条拷贝 O(深度)——只有 bind/β 全走链、defs 只长 define
+   时 tip 才恒成立（当时还顺带暴露了同域 tip 测试的跨域误判）。
 
 ## 打包值上的元变量机制（性能版）
 
@@ -276,8 +290,8 @@ L02 的扁平 spine 栈一个 entry 是「一次中性应用」，但 `f`/`a` �
 - 两版共用 `parser::parser(..) -> Option<Raw>`：解析失败只有 `parse
   error`，没有带位置报错（L02 同款；后续层 L13 有完整的诊断设施）。
 - `basic` 的递归 eval/quote/unify/rename/solve 深度受线程栈限（solve
-  负载 k ≥ 17 的 rename 需要 >256 MB 栈；`L03_STACK_MB` 可调，再深用
-  全迭代的 `fast`）。
+  负载 k ≥ 17 的 rename 需要 >256 MB 栈；chain 负载 k ≥ 15 的整链嵌套
+  Let 同理——`L03_STACK_MB` 可调，再深用全迭代的 `fast`）。
 - `basic` 的基准口径对 nf 结果 `mem::forget`（深 Box 树的递归析构会爆
   栈；bench 进程一次性，退出即回收——L01/L02 readme「已知限制」同款）。
 - 性能版的错误消息路径（`show_val`）会 quote + export 回参考版的
