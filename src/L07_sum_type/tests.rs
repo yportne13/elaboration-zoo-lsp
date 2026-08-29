@@ -752,6 +752,151 @@ println (odd (succ zero))
     );
 }
 
+/// 依赖递归函数的索引族等式推理（原 README 已知限制 #1 的主体，迁移自
+/// L13 legacy test4/test8）：`add_zero_right` 的 succ 分支要求"期望类型里的
+/// stuck match 经卡住 match 的 meta 解与重实例化后仍能正确归约"。
+/// 曾被 force 对 simpl_decl 中性占位的无限自旋（烧光 fuel 池）误判为不收敛。
+#[test]
+fn test_eq_add_zero_right() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+"#,
+    );
+}
+
+/// 同族的 `mul_zero_right`：trans 的第一个参数显式给出
+/// `refl (add zero (mul k zero))`，要求 `add zero x` 归约与卡住 match 协同。
+#[test]
+fn test_eq_mul_zero_right() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def mul_zero_right(n: Nat): Eq[Nat] (mul n zero) zero =
+    match n {
+        case zero => rfl
+        case succ(k) => trans (refl (add zero (mul k zero))) (mul_zero_right k)
+    }
+"#,
+    );
+}
+
+/// 同族的 `mul_one_right`：let 绑定的中间引理 + 显式隐式参数的 cong 组合
+/// （`cong[Nat][Nat][add (succ zero)][mul k (succ zero)][k] ih`）。
+#[test]
+fn test_eq_mul_one_right() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+
+def add_zero_left(m: Nat): Eq[Nat] (add zero m) m =
+    rfl
+
+def mul_one_right(n: Nat): Eq[Nat] (mul n (succ zero)) n =
+    match n {
+        case zero => rfl[Nat][zero]
+        case succ(k) =>
+            let ih = mul_one_right k;
+            let lemma: Eq[Nat] (add (succ zero) k) (succ k) = cong_succ (add_zero_left k);
+            trans (cong[Nat][Nat][add (succ zero)][mul k (succ zero)][k] ih) lemma
+    }
+"#,
+    );
+}
+
 /// 嵌套解构 + 外层绑定器引用：嵌套 Con 模式不再产生"编译期哑槽"与运行时
 /// prepend 不对齐的偏差（head 槽统一由 walk_con 入口绑定，eval_aux 同序前置）。
 #[test]

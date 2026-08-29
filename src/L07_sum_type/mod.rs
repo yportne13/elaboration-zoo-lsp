@@ -271,7 +271,13 @@ impl Infer {
                 _ => Val::Flex(m, sp),
             },
             Val::Decl(name, sp) => match decl.get(&name) {
-                Some(e) if burn(&self.unify_fuel) => {
+                // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
+                // 的中性条目都是 `Decl(自身名, [])`）：v_app_sp 后仍是原值，
+                // unfold 永无进展，只会自旋烧光 fuel 池。直接按中性返回。
+                Some(e)
+                    if !matches!(&e.val, Val::Decl(n2, s2) if *n2 == *name && s2.is_empty())
+                        && burn(&self.unify_fuel) =>
+                {
                     self.force(decl, self.v_app_sp(decl, e.val.clone(), sp))
                 }
                 None => Val::Decl(name, sp),

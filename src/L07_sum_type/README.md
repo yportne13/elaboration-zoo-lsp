@@ -201,33 +201,33 @@ intersect）。在此之上：
 
 ## 6. 已知限制（诚实清单）
 
-1. **依赖递归函数的索引族等式推理**（`add_zero_right` / `add_succ_right` /
-   `add_comm` / `add_assoc` 这类 L07a 测试）：期望类型里出现"递归函数应用于
-   模式绑定器"的 stuck match 组合时，unify 会在"索引槽 ↔ 构造子值"的互相
-   引用上不收敛（fuel 拦下后报 `can't unify (fuel exhausted)`）。
-   这是把运行时换成"全 stuck 中性值 + 简化 decl 表"体系后的已知差距；
-   L07a 的原始实现依赖其特定的合一顺序侥幸通过。`test_eq_reasoning` 目前
-   覆盖到 cong / symm / trans 这一档。**最小复现**（用 `mul_zero_right`：
-   `trans (refl …) (mul_zero_right k)` 里 `add zero (mul k zero)` 的
-   归约与 stuck 形态的协同）确认问题在合一器而非个别测试；
-   L13_namespace/legacy_tests.rs 的 test4 完整版（`double` / `double_pow` /
-   `double_add` / `prove`）与 test8 的 `mul_zero_right` / `mul_one_right`
-   引理同样触发，因此未迁入本层。
+1. **依赖递归函数的索引族等式推理——大部分已修复，剩 `add_assoc` 一族**。
+   该限制的主要根源已定位并移除：**force 对中性自引用条目的无限自旋**。
+   `simpl_decl`（quote/rename 卡住 match 分支体时用的简化 decl 表）把每个
+   全局值换成 `Decl(自身名, [])`；`force` 遇到 `Decl(f, spine)` 会查表展开，
+   而中性占位展开后仍是 `Decl(f, spine)`——unfold 永无进展却每轮烧 1 格
+   fuel，一次 force 就把整个 fuel 池（4096）烧光，随后任何真正的 unify 都
+   误报 `can't unify (fuel exhausted)`。修复：unfold 前识别"条目值是指向
+   自身的空 spine Decl"，按中性直接返回。此修复后
+   `add_zero_right` / `add_succ_right` / `add_comm` / `mul_zero_right` /
+   `mul_one_right` 全部通过——先前它们被误诊为"合一器不收敛"。
 
-   根因链（已定位到机制层面）：`Val::Match` 的 quote/rename 往返产出的是
-   **绑定 quote 站点环境布局**的 `Tm::Match`，分支体的自由索引依赖
-   "重求值现场的环境长度 = quote 现场长度"这一隐含假设；类型值经
-   Π 闭包实例化（`close_val` 的 quote → `closure_apply` 的 eval）把
-   同一个 `Tm::Match` 带到布局不同的环境里重求值，分支体槽位错乱，
-   产生结构相同的垃圾 stuck match；`unify` 入口的 force 又把两侧中性
-   `Decl("f", spine)` 展开成卡住 match，`unify(Match, Match)` 逐分支
-   重求值每层再造更深一层的卡住 match（fresh rigid 层级递增），永不收敛。
-   已做的缓解：quote/rename 的分支体用简化 decl 表（防止每层 quote 重展开
-   递归定义）；`unify(Match, Match)` 对"scrutinee / 捕获 env / 模式 /
-   分支体全部结构相同"的自比较短路（`struct_eq.rs`）。
-   **要根治需要 L13 的值表示**：分支体以闭包形式随值携带（env 烘焙进
-   `Val::Match`，往返天然保形）+ 全局引用惰性中性化（`Val::Call`），
-   属于求值器核心重构，未纳入本层。
+   仍开放的是 `add_assoc`（及依赖它的 `double_add` / `prove` 一族），其
+   失败机制已定位：`cong_succ` 的隐式 meta 被解为卡住 match 值，该解的
+   捕获 env（含 λ 封装的 spine 槽）比使用现场（arm 上下文）**多一个槽位**，
+   分支体的固定 de Bruijn 索引在统一双方（解 vs 期望重实例化）各自重求值
+   时读偏——两侧分支体引用都落在共同 env 前缀内（诊断标记 COMMON-PREFIX），
+   但 env 深度差使结构逐层再生，`unify(Match, Match)` 不收敛。**根治方向**：
+   (a) meta 解的 prune/rename 需把 match 捕获 env 一并对齐到使用现场（按值
+   对应重映射槽位），或 (b) 采用 L13 的值表示（分支体闭包随值携带 + 全局
+   引用惰性中性化，卡住 match 不再 stranded 在类型值里）。后者属求值器核心
+   重构。
+
+   次要根源（已修）：quote/rename 分支体若用真实 decl 表，中性
+   `Decl(f, spine)` 会被入口 force 再展开，每层 quote 多展开一层；
+   `unify(Match, Match)` 对"scrutinee / 捕获 env / 模式 / 分支体全部结构
+   相同"的自比较短路（`struct_eq.rs`）。
+
 2. ~~嵌套构造子模式槽位偏差~~ **已修复**：原先嵌套 Con 模式由父级绑定
    "哑槽"、运行时不前置对应槽，bind_count 又按 `1 + Σ子模式` 计数——
    三方不一致导致嵌套解构引用外层变量时索引错位。现在 head 槽统一由
@@ -242,7 +242,7 @@ intersect）。在此之上：
 
 ## 7. 测试
 
-`cargo test --lib L07_sum_type`（21 个测试）：
+`cargo test --lib L07_sum_type`（24 个测试）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心 / Church 编码与字符串；
