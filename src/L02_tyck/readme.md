@@ -28,20 +28,24 @@ beta-eta `conv`）→ 核心语法（de Bruijn 索引）→ `nf`/`type` 两种�
 ## 怎么跑
 
 ```text
-cargo test --lib L02_tyck                 # 19 个测试：三示例、报错路径、
-                                          # 基础/性能互检、深度/稳态/conv 压力
-cargo run --release --bin l02bench        # 基准：k=9..15，两负载族 × 三口径
+cargo test --lib L02_tyck                 # 24 个测试：三示例、报错路径、
+                                          # 基础/性能互检、深度/稳态/conv 压力、
+                                          # dup/conv_dup 负载、memo 指针共享
+cargo run --release --bin l02bench        # 基准：k=9..15，五负载族 × 四口径
 ./target/release/l02bench --max-k 21 --only fast,fast_ss   # 大 n 段
+./target/release/l02bench --workload dup --only fast,fast_memo   # call-by-need 轴
 ```
 
 ## 实测结果
 
 机器：Windows x64，release（LTO + codegen-units=1 + mimalloc）。
-负载：`church` = church 2^(k+1)（k 次 ×2 翻倍 let 链）的 **check + nf**；
+负载族：`church` = church 2^(k+1)（k 次 ×2 翻倍 let 链）的 **check + nf**；
 `conv` = 同 church 数之上加 `Eq Nat (add big zero) big = refl Nat big` 的
-**check**（beta-eta conv 在 check 内强制两侧完整展开后结构比较）。
-口径：预热 1 次 + 5 轮取 min；`basic`/`fast`（每轮新建 Tycker）/`fast_ss`
-（Machine + `Bump::reset` 跨轮复用）。
+**check**（beta-eta conv 在 check 内强制两侧完整展开后结构比较）；
+`conv_dup`/`dup`/`dup_deep` = 复制/重复强制族（call-by-need 轴，见下文
+第三、四轮小节）。口径：预热 1 次 + N 轮取 min；`basic`/`fast`（每轮新建
+Tycker）/`fast_ss`（Machine + `Bump::reset` 跨轮复用）/`fast_memo`
+（quote 记忆化口径）。
 
 church（min ms / 相对 fast）：
 
@@ -126,7 +130,10 @@ worksheet 往返）。
   展开）的键从不重复（每次的 Z 是新链），可复用的只有 `(vt_j, N)` 一类
   便宜的闭包创建 β；每次 β 换一次哈希查找（~8–10ns）对标 β 连带成本
   （~14ns），净收益太薄。L01 的 quote 侧 memo（1.8–3.6×）不迁移的原因
-  同此：那边 memo 挂在少量 Q 任务上，这边挂在海量 β 上。
+  同此：那边 memo 挂在少量 Q 任务上，这边挂在海量 β 上。**[后文修正]**
+  quote 侧的「不迁移」被第三轮的 dup 负载推翻——「键从不重复」只是
+  当时两个负载的属性，不是机制的属性；β 侧的否决（键真不重复）经住了
+  复验，见「优化过程中的教训」第 4 条。
 
 ## 名字表示换 SmolStr（2026-08-29）
 
@@ -148,7 +155,83 @@ worksheet 往返）。
   `Rc<str>`（clone ≈ 引用计数、构造同 `String::from`）理论上「clone
   便宜且构造不贵」两全，若 parse 成本将来要紧可以再比。
 
-## 优化过程中的三个教训
+## 后续提速（2026-08-29）：dup 复制强制负载 + quote 记忆化（call-by-need 轴）
+
+- **新负载族 `--workload dup|dup_deep`**：`dup = D p_k`（`D = \x f. f x x`），
+  nf = `λf. f C C`——λ-binder 把同一闭包值复制进两个实参槽，quote 对它
+  **强制 2 次**；`dup_deep = D1 (D0 p_k)`，nf =
+  `λf. f (λf'. f' C C) (λf'. f' C C)`，C 强制 **4 次**。L01
+  `dup_pair`/`dup_deep` 的 L02 对应物，nf 节点数 4n+12 / 8n+28
+  （`tm_size` 逐出现计数，DAG 共享不改断言）。定位（承接 L01 readme）：
+  NbE 的 CBV 只急切到 WHNF、丢弃实参几乎免费，**真正的重复在
+  readback**——这两族负载专门造出「同一句柄被多次 quote」的场景。
+- **quote 记忆化口径 `quote_memo`**（L01 `bump_spine_memo` 的移植）：
+  `Q` 先查 memo（键 = 值打包字 × quote level；闭包/spine 句柄单轮内全局
+  唯一、spine 栈只增不改，缓存可靠），未命中则以 `MemoStore` 屏障压到
+  任务栈最深处（LIFO 保证该值的整棵子任务先跑完，弹出时回填），命中
+  直接共享子树（结果从树变 DAG）。表随每次 quote 调用新建——
+  `Bump::reset` 后无跨轮悬垂键；Lvl/U 的 `Q` 是 O(1) 不走表。
+- **实测**（k=15，n=65536）：dup 1.9×（fast 7.42→3.91ms）、dup_deep 3.4×
+  （14.47→4.24ms），对 basic 22×/41×；**复制被完全塌缩为单次强制**
+  （memo 后两负载同价，收益随复制层数指数增长）；church 线性负载零回归
+  （fast_memo ≈ fast：`Q` 次数只有 O(λ 层)，链节点走 ChainRun 不过 memo）。
+
+## 后续提速（2026-08-29）：conv 判等记忆化 + conv_dup 重复子对负载
+
+- **conv 工作表记忆化**：同一 `(t.0, u.0)` 子对只结构比较一次。与 quote
+  侧的键设计差异：**判等结果与 level 无关**（eta/Π 的 fresh 变量两侧对称
+  插入、恒异于自由变量，比较树在任意 level 同构），键无需带 level；
+  「已判等」靠工作表 LIFO 屏障 `WItem::Store`（机制同 quote 的
+  `MemoStore`：纯合取下屏障弹出时其上方子比较全部完成——任何失败早已
+  return false——弹出即入表）。表随本次 conv 调用新建，无跨轮悬垂。
+- **新负载 `--workload conv_dup`**：`Rel = \A x y. (P : A -> U) -> P x ->
+  P y -> P y` 的三个 cod 槽位让同一昂贵子对 `(p_k, add p_k zero)` 在一次
+  check 里比较 3 次（建模依赖类型里「同一索引在类型多处重现」的常态；
+  现有 conv 负载无命中场景——`P y` 两侧是同一句柄，被位相等剪掉）。
+  无 memo：3 × O(n) 闭包展开 + 链游走；memo：1 次游走 + 2 次哈希命中
+  （连同其下挂的展开整段跳过）。check-only，与 conv 同走 bench_check。
+- **实测**（7 轮 min）：conv_dup 1.4-1.6×（k=13：5.12→3.27ms、k=12：
+  2.38→1.71ms）；conv/church 零税（k=12 conv 0.833 vs 消融 0.807ms，
+  噪声内）。`L02_NO_CONV_MEMO=1` 消融开关（NO_BITEQ 同款风格）。
+- 负载构造的两个坑：初版 `Rel : U -> U -> U` 的 b 槽要求 `U` 但实参
+  `x : A`，签名本身类型即错（改 Eq 同构的 `(A : U) -> A -> A -> U`）；
+  λ binder 数须对齐展开后的箭头数（`Rel A x x` = `(P : A -> U) -> P x ->
+  P x -> P x` 需 5 个 binder，多一个则 body 顶到非 Pi 值上报
+  "Can't infer lambda"）。
+
+## call-by-need 与 WHNF（概念注记）
+
+常被问：call-by-need 是不是要专门做 WHNF？对教科书惰性图归约（Haskell
+式）成立：call-by-need = **按需强制到 WHNF** + **thunk 原地更新共享**。
+拆到本模块的 NbE 架构上，两个成分各有对应物——一个结构内建，一个是
+第三/四轮补的：
+
+- **WHNF 粒度 = 结构内建**。eval 遇 `Lam` 只做 O(1) `CloCell` 创建（体不
+  运行），β 只是挂 env 继续创建闭包——「未强制的 thunk」就是闭包本身；
+  真正做功的强制只发生在 quote/conv，quote 的每个 `EvalQ` 只剥一层
+  binder，即一次 WHNF 步。这就是 L01 readme「NbE 的 CBV 只急切到
+  WHNF」的含义——不需要再造一台「返回 WHNF 并更新 thunk」的求值机。
+- **共享（同一值至多强制一次）= memo 表**。惰性机改写堆里的 thunk 格子
+  （原地更新）；这里值是不可变 64 位打包字、env 节点跨闭包共享不可改写，
+  以 (句柄, level) 表实现同等的「第二次 O(1)」——quote memo 管 readback
+  强制（键含 level），conv memo 管 conv 内的强制（键 = 句柄对）。
+- **demand-avoidance（未用实参不求值）= 免费**：核心无构造器/模式匹配，
+  CBV 白求一个被丢弃的实参也只是 O(1) 闭包创建（L01 readme「丢弃参数
+  几乎免费」），惰性的这第三半买不到东西。
+
+两个容易误判的点：
+
+1. **quote memo 键带 level 不是「漏掉的共享机会」**：同一值在不同 level
+   强制时 fresh 变量不同，产出树索引平移本就不是同一棵树——惰性机的
+   原地更新在此无对应物可省，属固有成本而非实现缺陷。
+2. **eval 顺序是 CBV**：未类型化/不终止的输入上行为与惰性不同（惰性能
+   返回处我们会发散）。类型检查只跑良构子项（强规范化保终止），实际
+   无影响；做部分求值或非终止项推理时才需重估。
+
+这句话何时才构成行动项：给惰性语言写运行时（必须造 WHNF 机）；核心
+引入构造器/模式匹配后（L07+）重估强制粒度与求值策略的成本结构。
+
+## 优化过程中的四个教训
 
 1. **值的共享性是带类型 elaborator 的一级效应**（L01 的纯 NBE 没有暴露）。
    参考版最初把中性应用写成 `VApp(Box<Val>, Box<Val>)`：eval 每次查变量
@@ -168,6 +251,12 @@ worksheet 往返）。
    `(0,0)`（变量==变量）最初依赖位相等分支兜底，结构 match 里没有显式
    分支。做位相等消融时 `conv(U, U)` 直接判假。现在显式分支与位相等
    并存：前者保证语义自完备，后者只做加速（消融可测）。
+4. **否定一个轴前先确认负载覆盖了它的触发条件**：第二轮暂缓 quote 侧
+   memo 的理由是「键从不重复」——那是当时两个负载（church/conv）的
+   属性，不是机制的属性。补一个造命中场景的负载（dup 族）后 1.9×/3.4×
+   立即兑现。反过来，β(clo,arg) eval 侧记忆化的否决经住了复验：NbE 的
+   CBV 只强制到 WHNF，昂贵的整链展开 β 键在任意负载下都不重复（见上节
+   call-by-need 注记）。
 
 ## 性能版移植清单（L01 → L02）
 
@@ -185,6 +274,8 @@ worksheet 往返）。
 | ——（L02 后续提速） | eval β 岔路 `ApplyKnown` 直送（免 `Tm(f)` 重查环境）+ `ChainWrap(0)` 消除 |
 | ——（L02 后续提速） | conv 连续链内联环（沿 `.a` 前进免 worksheet 往返）+ 入口长度 fail-fast |
 | ——（L02 名字表示） | `Name = Span<SmolStr>`（≤23 B 内联，clone 免堆分配；性能版热路径是 bump `&str`，零字符串操作） |
+| ——（L01 `bump_spine_memo`） | quote 记忆化 `quote_memo`：`MemoStore` LIFO 屏障 + (句柄, level) 表，重复 quote 共享子树（DAG） |
+| ——（L01 无 conv） | conv 判等记忆化：`WItem::Store` LIFO 屏障 + (t.0, u.0) 成功集（判等结果与 level 无关，键无需 level） |
 
 ## 已知限制
 

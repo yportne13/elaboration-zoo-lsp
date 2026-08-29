@@ -37,6 +37,9 @@
 //!    任何失败早已 return）。表随本次 conv 调用新建；线性负载零税
 //!    （`L02_NO_CONV_MEMO=1` 消融）。
 //!
+//! 机制与数据的完整叙述（四轮提速史、负载族、call-by-need/WHNF 概念
+//! 注记、否决轴的教训）见 `L02_tyck/readme.md`。
+//!
 //! 与参考版（`super`，L03 风格）共用 parser / pretty / 错误显示，输出逐
 //! 字节一致（互检测试）。elaboration 直接在本表示上进行：
 //! `Raw → check/infer（产出 bump 核心项）→ quote → export → pretty`。
