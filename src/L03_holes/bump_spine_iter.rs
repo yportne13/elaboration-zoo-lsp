@@ -911,7 +911,13 @@ fn unify_iter<'a>(
                 let h2 = v_spine_of(u);
                 let hd1 = spine.spine_head(h1);
                 let hd2 = spine.spine_head(h2);
-                if v_tag(hd1) == 5 || v_tag(hd2) == 5 {
+                // 求解仅限**异头**且一侧头是未解 flex（eta 积参形态）。同号
+                // flex-flex（同一 meta 的两个独立 spine，同实参不同句柄——
+                // cod 位置两次独立求值的形态）必须落到底下逐实参比较：参考
+                // 版 `(VFlex m, VFlex m') | m == m'` 走 unifySpine 可成功，
+                // 而 solve 的 rename 对 rhs 含目标 meta occurs check 必然
+                // 失败（曾在此误报 Cannot unify，互检回归 `cod 双求值`）。
+                if hd1.0 != hd2.0 && (v_tag(hd1) == 5 || v_tag(hd2) == 5) {
                     // 含未解 flex：与 `_` 分支同款求解路径。solve 成功即该对
                     // 判等完成（解按构造使两侧相等，无子比较需要屏障）——
                     // 直接入表：solve 负载里 (p_k, ?x) 型子对会因 `Eq A x x`
@@ -963,9 +969,10 @@ fn unify_iter<'a>(
                 // 跳过（ChainWrap 链每层同头字）、剩余 spine 同句柄即位相等
                 // 收尾，只有真正待比的子对才入工作表。church 链的刚性比较
                 // 整条链零往返；混合惯例链自动退化为逐层派发（仍正确）。
-                // 到达此处的链头必为刚性（未解 flex 已走上方求解路径、已解
-                // flex 已被 force 展开），f 分量恒非闭包（Apply/ChainWrap 的
-                // β 岔路即时归约；unify 的 eta push 只推非闭包）。
+                // 到达此处的链头为刚性或**同号**未解 flex（异头未解 flex 已
+                // 走上方求解路径、已解 flex 已被 force 展开），f 分量恒非闭
+                // 包（Apply/ChainWrap 的 β 岔路即时归约；unify 的 eta push
+                // 只推非闭包）。
                 let mut i1 = h1;
                 let mut i2 = h2;
                 loop {

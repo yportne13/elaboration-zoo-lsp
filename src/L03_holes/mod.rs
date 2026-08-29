@@ -1223,6 +1223,14 @@ Name not in scope: id
                        let p1 : Nat = add p0 p0;\n\
                        let eqTest : Eq _ p1 p1 = refl _ _;\n\
                        eqTest\n"),
+            // 同号 flex-flex 回归：`g w` 在 cod 位置被两处独立求值，同一未解
+            // meta 以两个 spine 句柄（同实参）在 check fallthrough 的 unify
+            // 相遇——必须逐实参比较（参考版 unifySpine）；曾误入 solve，
+            // occurs check 必败而误报 Cannot unify ?m w ≡ ?m w。
+            ("cod 双求值同号 flex-flex", "let g : (w : U) -> _ = \\w. _;\n\
+                                          let f : (w : U) -> U -> g w = \\w x. _;\n\
+                                          let test : (w : U) -> U -> g w = \\w x. f w x;\n\
+                                          test\n"),
         ] {
             for mode in ["nf", "type", "elab"] {
                 let basic = main_with(mode, src);

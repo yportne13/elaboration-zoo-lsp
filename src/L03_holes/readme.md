@@ -212,7 +212,10 @@ L02 的打包值有 5 个 tag；L03 增加 **tag 5 = `Meta`（立即数，`m<<3|
    同步。
 4. **unify 工作表带求解副作用**：L02 的 conv 工作表 + 求解分支。`Pair`
    弹出先 force 双方、位相等快速路径 force 前后各查一次；`(2,2)` 同头
-   中性逐对压实参比较；任一侧头是未解 flex → `solve`（`invert`+`rename`
+   中性逐对压实参比较（含**同号 flex-flex**——同一 meta 的两个独立
+   spine，同实参不同句柄，如 cod 位置两次独立求值所得；solve 的 occurs
+   check 对同号必败，参考版 `unifySpine` 同款走逐实参比较）；**异头**且
+   任一侧头是未解 flex → `solve`（`invert`+`rename`
    +`lams`+空环境 eval，完成前不写表——失败不污染 metacontext）。
    求解只发生在比较成功路径（工作表纯合取，失败早已 return），无回滚
    问题。
@@ -259,7 +262,7 @@ L02 的扁平 spine 栈一个 entry 是「一次中性应用」，但 `f`/`a` �
 | 流式右链 quote（ChainRun） | 同款 + flex 链头共享单一 `?m` 节点（tag-5 f0 与变量同款特化） |
 | eval 双栈 + 右链快速路径 | 同款 + `Meta`/`InsertedMeta` 臂；`vAppBDs` 拆成 `AppBds`/`AppBdsOne` 工作项（外层实参先应用） |
 | quote 任务栈 | 同款（Q 入口先 force——已解 meta 展开成解再引） |
-| conv 工作表 + 位相等 | → **unify 工作表**：Pair 弹出 force 双方；`(2,2)` 含 flex 头时转求解；求解 = `solve`（全迭代） |
+| conv 工作表 + 位相等 | → **unify 工作表**：Pair 弹出 force 双方；`(2,2)` **异头**含未解 flex 头时转求解（同号 flex-flex 走逐实参比较——occurs 对同号必败）；求解 = `solve`（全迭代） |
 | ——（L02 无 meta） | force 循环：解链展开 + spine 重建（应用可 β，经 eval_iter） |
 | ——（L02 无 meta） | invert 循环 + rename 任务栈（`RJob`）；ren 表单调无需回溯 |
 | ——（L02 无 meta） | `fresh_meta`（bump 外 `InsertedMeta` + 常住 `Vec<MetaEntry>`，每轮清空） |
