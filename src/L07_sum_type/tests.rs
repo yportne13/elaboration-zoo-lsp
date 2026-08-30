@@ -941,6 +941,155 @@ println (second_or (cons zero (cons (succ (succ (succ zero))) nil)) (succ zero))
     );
 }
 
+/// 同族的 `add_succ_right`：`add a (succ b) ≡ succ (add a b)` 的归纳证明。
+/// 旧实现已知限制 #1 的最后一块：succ 臂期望类型两侧都是"递归函数应用于
+/// 模式绑定器"的卡住 match 组合（`add t (succ b)` 与 `succ (add t b)`）。
+#[test]
+fn test_eq_add_succ_right() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def add_succ_right(a: Nat, b: Nat): Eq (add a (succ b)) (succ (add a b)) =
+    match a {
+        case zero => rfl[Nat][succ b]
+        case succ(t) => cong_succ (add_succ_right t b)
+    }
+"#,
+    );
+}
+
+/// `add_comm`：零臂用 `add zero b ≡ b` 的归约 + symm/trans 组合；
+/// succ 臂把 `add b (succ t)`（b 侧卡住）经 add_succ_right 搬运到
+/// `succ (add b t)`——卡住 match 与精化的组合推理。
+#[test]
+fn test_eq_add_comm() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }
+
+def add_succ_right(a: Nat, b: Nat): Eq (add a (succ b)) (succ (add a b)) =
+    match a {
+        case zero => rfl[Nat][succ b]
+        case succ(t) => cong_succ (add_succ_right t b)
+    }
+
+def add_comm(a: Nat, b: Nat): Eq (add a b) (add b a) =
+    match a {
+        case zero => trans (refl b) (symm (add_zero_right b))
+        case succ(t) => trans (cong_succ (add_comm t b)) (symm (add_succ_right b t))
+    }
+"#,
+    );
+}
+
+/// `add_assoc`：旧实现的已知限制 #1（README）。失败机制是"精化改写上下文后，
+/// meta 解里捕获的卡住 match 与使用现场槽位错位"——本架构（层级/槽位永不
+/// 改写，精化只是事实表 + force 惰性展开）按构造排除该 bug 族。succ 臂的
+/// 期望类型两侧都是嵌套的卡住 match：`add (add t b) c` 与 `add t (add b c)`。
+#[test]
+fn test_eq_add_assoc() {
+    check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def add_assoc(a: Nat, b: Nat, c: Nat): Eq (add (add a b) c) (add a (add b c)) =
+    match a {
+        case zero => rfl
+        case succ(t) => cong_succ (add_assoc t b c)
+    }
+"#,
+    );
+}
+
 /// 迁移自 L13_namespace/legacy_tests.rs 的 test7（bits_adder）：
 /// Vec[Bool] 上的递归全加器——嵌套模式（`cons[_](n, taill)` 隐式槽）、
 /// 多参数索引族（Vec / Product）、递归调用的结果继续被匹配。

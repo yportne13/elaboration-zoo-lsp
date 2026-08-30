@@ -4,7 +4,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
+    Closure, Env, Ix, Lvl, Tm, Ty, Val, VTy,
     empty_span,
     parser::syntax::Icit,
     syntax::{Locals, Pruning},
@@ -160,43 +160,18 @@ impl Cxt {
         }
     }
 
-    /// 依赖模式匹配的索引精化：把 rigid `x` 的 env 槽位改写为 `v`，并把所有
-    /// 依赖它的 env 槽与 src_names 类型按"旧环境 quote → 新环境 eval"重算。
-    ///
-    /// 每次只改一个槽，因此对每个旧值做一次 quote/eval 往返就是精确重写；
-    /// pruning 对应槽置为 None：x 已成常量，之后生成的元变量无需再以它为参数。
-    /// `locals` 保持不变——它只记绑定器的**类型**，精化只改**值**。
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Val) -> Cxt {
-        // 精化成未解 meta 没有信息量（等于没精化），跳过
-        if matches!(v, Val::Flex(..)) {
-            return self.clone();
-        }
-        let pos = (self.lvl.0 - x.0 - 1) as usize;
-        let env1 = self.env.change_n(pos, |_| v.clone());
-        let old_len = Lvl(self.env.len() as u32);
-        let refreshed: Vec<Val> = env1
+    /// 当前上下文里"真变量"（bind 槽，env 槽仍指向自身 vvar）的层级集合：
+    /// 这些是模式特化方程可以求解的对象。let 定义槽（槽里是值不是
+    /// vvar）天然不在其中。
+    pub fn bind_slots(&self) -> Vec<Lvl> {
+        let n = self.lvl.0;
+        self.env
             .iter()
-            .map(|val| {
-                let tm = infer.quote(&self.decl, old_len, val.clone());
-                infer.eval(&self.decl, &env1, tm)
+            .enumerate()
+            .filter_map(|(i, v)| match v {
+                Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
+                _ => None,
             })
-            .collect();
-        let mut new_env = List::new();
-        for val in refreshed.into_iter().rev() {
-            new_env = new_env.prepend(val);
-        }
-        let mut src_names = self.src_names.clone();
-        for (_, entry) in src_names.iter_mut() {
-            let tm = infer.quote(&self.decl, old_len, entry.1.clone());
-            entry.1 = infer.eval(&self.decl, &env1, tm);
-        }
-        Cxt {
-            env: new_env,
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.change_n(pos, |_| None),
-            src_names,
-            decl: self.decl.clone(),
-        }
+            .collect()
     }
 }

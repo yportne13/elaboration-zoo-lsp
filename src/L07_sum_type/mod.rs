@@ -98,7 +98,7 @@ impl PatternDetail {
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
-pub struct Lvl(u32);
+pub struct Lvl(pub u32);
 
 impl Add<u32> for Lvl {
     type Output = Lvl;
@@ -168,8 +168,9 @@ impl Val {
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     if x.0 >= l.0 {
-        // 宽松处理：越界的 rigid 映射到 0（调用方多是显示/临时路径）。
-        // 严格断言在依赖匹配的某些未收敛路径上会 panic；这里保守降级。
+        // 语义上不可达：值里出现了超出 quote 层级的 rigid。debug 构建下断言
+        // 捕捉，release 保守降级到 0（只出现在显示路径上时会可见）。
+        debug_assert!(false, "lvl2ix: {x:?} out of range at {l:?}");
         Ix(0)
     } else {
         Ix(l.0 - x.0 - 1)
@@ -177,7 +178,7 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 }
 
 #[derive(Debug)]
-struct UnifyError;
+pub(crate) struct UnifyError;
 
 fn empty_span<T>(data: T) -> Span<T> {
     Span {
@@ -194,9 +195,17 @@ pub struct Error(String);
 pub struct Infer {
     meta: Vec<MetaEntry>,
     /// unify 递归深度防护（L13 同款做法）。每次外部配置（unify_catch /
-    /// unify_pm 入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
+    /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
+    /// 模式特化方程的解：子句变量 := 值。这是**分支局部的事实表**——
+    /// 变量的层级、env 槽、运行时布局都不动，`force` 在读点惰性展开。
+    /// 臂边界 / 可达性探测做快照回滚（`pm_mark` / `pm_restore`）。
+    pm_defs: Vec<(Lvl, Val)>,
+    /// 当前可被特化方程求解的 rigid 层级（= 当前子句的 bind 槽）。
+    /// 只在模式走查与探测期间非空；分支体检查期间必须为空（常规转换
+    /// 不得解假设——否则 `Eq x y` 会被"证成" `Eq y y`）。
+    pm_solvable: Vec<Lvl>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -206,6 +215,8 @@ impl Infer {
         Self {
             meta: vec![],
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            pm_defs: Vec::new(),
+            pm_solvable: Vec::new(),
         }
     }
 
@@ -244,12 +255,72 @@ impl Infer {
         self.unify_fuel.set(UNIFY_FUEL);
     }
 
+    /// 模式精化状态的快照点（长度即可，回滚 = 截断）。
+    pub(crate) fn pm_mark(&self) -> (usize, usize) {
+        (self.pm_defs.len(), self.pm_solvable.len())
+    }
+
+    /// 回滚到快照点：臂边界 / 探测边界调用。本臂解出的 meta 不回滚
+    /// （分支体 Tm 引用着它们；解在 rename 时已把精化"烘焙"为无 def 形式）。
+    /// solvable 只在走查期间单调增长，截断即可回到快照长度。
+    pub(crate) fn pm_restore(&mut self, mark: (usize, usize)) {
+        self.pm_defs.truncate(mark.0);
+        self.pm_solvable.truncate(mark.1);
+    }
+
+    pub(crate) fn pm_solvable_push(&mut self, l: Lvl) {
+        self.pm_solvable.push(l);
+    }
+
+    /// 分支体检查前摘走可解集（体检查走常规转换语义，不得解假设），
+    /// 检查完由调用侧 `pm_solvable_set` 原样放回。
+    pub(crate) fn pm_solvable_take(&mut self) -> Vec<Lvl> {
+        std::mem::take(&mut self.pm_solvable)
+    }
+
+    pub(crate) fn pm_solvable_set(&mut self, v: Vec<Lvl>) {
+        self.pm_solvable = v;
+    }
+
+    pub(crate) fn pm_def(&self, x: Lvl) -> Option<&Val> {
+        self.pm_defs
+            .iter()
+            .rev()
+            .find(|(l, _)| *l == x)
+            .map(|(_, v)| v)
+    }
+
+    pub(crate) fn pm_solvable_contains(&self, x: Lvl) -> bool {
+        self.pm_solvable.contains(&x)
+    }
+
+    /// 记录一条特化解 `x := v`。环守卫：v 不得（结构上）提及 x——
+    /// 闭包内部不探查，那里的环由 force 的 fuel 兜底。
+    pub(crate) fn pm_solve(&mut self, x: Lvl, v: &Val) -> bool {
+        if val_mentions_lvl(v, x) {
+            return false;
+        }
+        self.pm_defs.push((x, v.clone()));
+        true
+    }
+
     /// 当前 fuel 余量（调试）
-    #[allow(unused)]
-    /// 元变量探测 + decl 表展开 + 卡住投影的再投影。
+    /// 元变量探测 + decl 表展开 + 卡住投影的再投影 + 模式精化展开。
     /// 深度防护：meta 解链可能形成间接环（solve 无跨 meta occurs check），
     /// 展开会无限递归——只在**展开递归**时消耗 fuel（高频直通路径不消耗），
     /// fuel 耗尽时停止展开，把值当作未解处理。
+    /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不展开 pm_defs 精化、
+    /// 不做 Match 重选。`invert` / `prune_vflex` 关心的是"元变量被应用在
+    /// 哪些槽位上"——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的
+    /// 精化等式（x := zero）不改变槽位的存在；在它们身上展开反而会把
+    /// 可逆 spine 变成含构造子值的不可逆 spine。
+    pub(crate) fn force_arg(&self, decl: &Decls, t: Val) -> Val {
+        match &t {
+            Val::Rigid(..) | Val::Match(..) => t,
+            _ => self.force(decl, t),
+        }
+    }
+
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
         /// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。
         fn burn(cell: &std::cell::Cell<u32>) -> bool {
@@ -270,6 +341,29 @@ impl Infer {
                 }
                 _ => Val::Flex(m, sp),
             },
+            // 模式精化：被特化的子句变量在**读点**展开。这是"惰性精化"的
+            // 核心——层级、env 槽、既有值一概不动，所有消费者（unify/quote/
+            // rename）经过 force 自动看到精化后的世界。
+            Val::Rigid(x, List { head: None, .. }) => match self.pm_def(x) {
+                Some(v) if burn(&self.unify_fuel) => self.force(decl, v.clone()),
+                _ => Val::Rigid(x, List::new()),
+            },
+            // 卡住的 match：scrutinee 是在 match 创建之后才被特化/解出时，
+            // 这里重新尝试选分支。没有这一步，精化无法传播进"卡住 match
+            // 里面"（期望类型 `Eq (add a zero) a` 的 `add a zero` 就是它）。
+            Val::Match(s, env, cases) => {
+                let s2 = self.force(decl, (*s).clone());
+                if let Val::SumCase { .. } = &s2 {
+                    if burn(&self.unify_fuel) {
+                        if let Some((tm, env2)) =
+                            Compiler::eval_aux(self, decl, s2, &env, &cases)
+                        {
+                            return self.force(decl, self.eval(decl, &env2, tm));
+                        }
+                    }
+                }
+                Val::Match(s, env, cases)
+            }
             Val::Decl(name, sp) => match decl.get(&name) {
                 // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
                 // 的中性条目都是 `Decl(自身名, [])`）：v_app_sp 后仍是原值，
@@ -543,6 +637,32 @@ impl Infer {
     }
 }
 
+/// 值树里是否出现某层级（浅层结构扫描；闭包跳过——那里的环由 force 的
+/// fuel 兜底）。特化解的环守卫（`pm_solve`）用。
+fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
+    fn spine(sp: &Spine, x: Lvl) -> bool {
+        sp.iter().any(|(v, _)| val_mentions_lvl(v, x))
+    }
+    match v {
+        Val::Rigid(y, sp) => *y == x || spine(sp, x),
+        Val::Flex(_, sp) | Val::Decl(_, sp) => spine(sp, x),
+        Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x),
+        Val::Sum(_, params, _) => {
+            params
+                .iter()
+                .any(|(_, v, t, _)| val_mentions_lvl(v, x) || val_mentions_lvl(t, x))
+        }
+        Val::SumCase { typ, datas, .. } => {
+            val_mentions_lvl(typ, x) || datas.iter().any(|(_, v, _)| val_mentions_lvl(v, x))
+        }
+        Val::Match(s, env, _) => {
+            val_mentions_lvl(s, x) || env.iter().any(|v| val_mentions_lvl(v, x))
+        }
+        Val::Lam(..) | Val::Pi(..) | Val::U | Val::LiteralType | Val::LiteralIntro(_)
+        | Val::Prim => false,
+    }
+}
+
 /// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）再查构造子字段。
 /// 其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回 None → 卡住成 `Val::Obj`。
 fn project(v: &Val, name: &Span<String>) -> Option<Val> {
@@ -624,32 +744,6 @@ pub fn preprocess(s: &str) -> String {
 use pattern_match::Compiler;
 
 use parser::syntax::Icit;
-
-/// 值树里是否包含卡住的 match（含 spine / Sum 参数 / SumCase 的 typ 与 datas）。
-/// 闭包（Lam/Pi）内部不探查——那需要 eval 展开，且"期望类型依赖被匹配变量
-/// 的形态"的场景（`Eq (add a zero) a`）在值树表层就可见。
-pub(crate) fn val_contains_match(v: &Val) -> bool {
-    fn spine(sp: &Spine) -> bool {
-        sp.iter().any(|(v, _)| val_contains_match(v))
-    }
-    match v {
-        Val::Match(..) => true,
-        Val::Flex(_, sp) | Val::Rigid(_, sp) | Val::Decl(_, sp) => spine(sp),
-        Val::Obj(x, _, sp) => val_contains_match(x) || spine(sp),
-        Val::Sum(_, params, _) => params
-            .iter()
-            .any(|(_, v, t, _)| val_contains_match(v) || val_contains_match(t)),
-        Val::SumCase { typ, datas, .. } => {
-            val_contains_match(typ) || datas.iter().any(|(_, v, _)| val_contains_match(v))
-        }
-        Val::Lam(..)
-        | Val::Pi(..)
-        | Val::U
-        | Val::LiteralType
-        | Val::LiteralIntro(_)
-        | Val::Prim => false,
-    }
-}
 
 #[cfg(test)]
 mod tests;

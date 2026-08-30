@@ -1,12 +1,17 @@
 //! Unification。骨架 = elaboration-zoo 07 的 meta 求解器（invert / prune /
 //! rename / solve / intersect），在此基础上：
 //! - 全局引用 `Val::Decl` 作为中性头参与（与 Rigid 同型处理）；
+//! - **模式特化与常规转换共用本合一器**：差别只在 `pm_solvable`（当前子句
+//!   的 bind 槽）非空时，rigid 头是可解的——解记入 `pm_defs` 事实表，
+//!   由 `force` 在读点惰性展开；
 //! - Sum / SumCase 按参数逐槽合一（索引等式在此生效）；
-//! - 卡住的 `Val::Match`：先尝试归约（scrutinee 是构造子值时用 `eval_aux`
-//!   消掉 match），再接受严格的 eta（每个分支都是通配且分支体就是
-//!   scrutinee 本身），其余失败——防止把任意 `f x` 证成 `x`；
+//! - 卡住的 `Val::Match`：`Match vs Match` 先比 scrutinee、再逐分支在 fresh
+//!   变量槽下比体；`Match vs 其它` 只接受严格 eta（每个分支都是通配且
+//!   分支体就是 scrutinee 本身）——能归约的 match 在入口 `force` 时已
+//!   消掉，防止把任意 `f x` 证成 `x`；
 //! - `rename` 对 Match 的分支体做"fresh rigid 槽 + 简化 decl 表求值再
-//!   rename"（L07 在这里是 TODO/透传，是正确的关键）。
+//!   rename"。槽位布局在新架构下永不漂移（精化不改写槽、不剪枝已解
+//!   变量），rename 产物的 λ 深度与使用现场天然一致。
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +24,7 @@ use super::{
     lvl2ix,
     parser::syntax::Icit,
     syntax::Pruning,
-    Compiler, Ix,
+    Ix,
 };
 
 #[derive(Debug, Clone)]
@@ -67,7 +72,7 @@ impl Infer {
             List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, a.tail())?;
-                match self.force(decl, a.head().unwrap().0.clone()) {
+                match self.force_arg(decl, a.head().unwrap().0.clone()) {
                     Val::Rigid(x, List { head: None, .. }) => {
                         if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
                             ren.remove(&x.0);
@@ -184,7 +189,7 @@ impl Infer {
             Ok((List::new(), SpinePruneStatus::OKRenaming))
         } else {
             let (sp_rest, status) = self.prune_vflex_go(decl, pren, sp.tail())?;
-            match self.force(decl, sp.head().unwrap().0.clone()) {
+            match self.force_arg(decl, sp.head().unwrap().0.clone()) {
                 Val::Rigid(x, List { head: None, .. }) => match (pren.ren.get(&x.0), status) {
                     (Some(x), _) => Ok((
                         sp_rest.prepend((Some(Tm::Var(lvl2ix(pren.dom, *x))), sp.head().unwrap().1)),
@@ -574,6 +579,32 @@ impl Infer {
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(decl, l, cxt, sp, sp_prime)
             }
+            // 模式特化：可解 rigid（当前子句的 bind 槽）与非 Flex 值相遇 →
+            // 记入 pm_defs 事实表（惰性精化，层级与槽位一概不动）。Flex
+            // 除外——交给 Flex 规则（meta := var）。调用侧"头部一侧在前"，
+            // 双侧都可解时解的方向是"头部变量 := 构造子侧值"。
+            (Val::Rigid(x, sp), v)
+                if sp.is_empty()
+                    && self.pm_solvable_contains(*x)
+                    && !matches!(v, Val::Flex(..)) =>
+            {
+                if self.pm_solve(*x, v) {
+                    Ok(())
+                } else {
+                    Err(UnifyError)
+                }
+            }
+            (v, Val::Rigid(x, sp))
+                if sp.is_empty()
+                    && self.pm_solvable_contains(*x)
+                    && !matches!(v, Val::Flex(..)) =>
+            {
+                if self.pm_solve(*x, v) {
+                    Ok(())
+                } else {
+                    Err(UnifyError)
+                }
+            }
             // 全局引用：同名比 spine，不同名失败（force 已展开可展开的）
             (Val::Decl(a, sp), Val::Decl(b, sp_prime)) if a == b => {
                 self.unify_sp(decl, l, cxt, sp, sp_prime)
@@ -645,7 +676,8 @@ impl Infer {
                 // match 值在所有实例化下行为一致，直接判等。逐分支重求值会把
                 // 递归函数的分支体再展开一层卡住 match（fresh rigid 层级随深度
                 // 递增，永不收敛）——同一 decl 值在合一两侧各展开一份时正是
-                // 这种自比较，必须短路。
+                // 这种自比较，必须短路。新架构下层级永不漂移，"同一组变量"
+                // 的两份捕获 env 字面相等，这条快路径即覆盖绝大多数情形。
                 if super::struct_eq::val_eq(s1, s2)
                     && super::struct_eq::env_eq(env1, env2)
                     && cases1.len() == cases2.len()
@@ -655,22 +687,6 @@ impl Infer {
                         .all(|((p1, b1), (p2, b2))| p1 == p2 && super::struct_eq::tm_eq(b1, b2))
                 {
                     return Ok(());
-                }
-                // 按值对齐的槽位重映射比较：两侧捕获 env 常是同一组变量的不同
-                // 上下文副本（meta 解经 prune/rename 后比使用现场少/多槽位）。
-                // 字面 tm_eq 失败但按值建立槽位对应后分支体一致 ⇒ 语义相等，
-                // 直接判等；否则回落到逐分支求值路径。
-                if cases1.len() == cases2.len() {
-                    if let Some(true) = super::struct_eq::bodies_eq_aligned(
-                        s1,
-                        s2,
-                        env1,
-                        env2,
-                        cases1,
-                        cases2,
-                    ) {
-                        return Ok(());
-                    }
                 }
                 self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone())?;
                 if cases1.len() != cases2.len() {
@@ -692,20 +708,11 @@ impl Infer {
                 }
                 Ok(())
             }
-            // 卡住的 match vs 其它：先尝试归约，再接受严格 eta
-            (Val::Match(s, env_m, cases), other) | (other, Val::Match(s, env_m, cases)) => {
-                let s_forced = self.force(decl, (**s).clone());
-                if matches!(s_forced, Val::SumCase { .. }) {
-                    if let Some((tm, env)) =
-                        Compiler::eval_aux(self, decl, s_forced.clone(), env_m, cases)
-                    {
-                        let reduced = self.eval(decl, &env, tm);
-                        return self.unify(decl, l, cxt, reduced, other.clone());
-                    }
-                }
-                match (s_forced, other) {
-                    // 只接受真 eta：每个分支都是通配且分支体就是 scrutinee 本身。
-                    // 无条件接受会把 `f x` 证成 `x`。
+            // 卡住的 match vs 其它：能归约的已在入口 force 消掉（force 会在
+            // scrutinee 上重试选分支），这里只接受严格 eta——每个分支都是
+            // 通配且分支体就是 scrutinee 本身。无条件接受会把 `f x` 证成 `x`。
+            (Val::Match(s, _, cases), other) | (other, Val::Match(s, _, cases)) => {
+                match (self.force(decl, (**s).clone()), other) {
                     (Val::Rigid(x, sp), Val::Rigid(y, sp2))
                         if x == *y && sp.is_empty() && sp2.is_empty() =>
                     {

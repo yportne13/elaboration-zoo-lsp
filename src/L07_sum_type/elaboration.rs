@@ -2,13 +2,12 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Lvl, Tm, Val,
+    Closure, Cxt, DeclTm, Error, Infer, Tm, Val,
     cxt::DeclEntry,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler,
 };
-
 impl Infer {
     fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> Result<(Tm, Val), Error> {
         match self.force(cxt.decl(), va) {
@@ -555,98 +554,5 @@ impl Infer {
                 ))
             }
         }
-    }
-
-    /// 模式编译专用的精化合一：与 `unify` 的区别在于 rigid 侧不解 meta，
-    /// 而是把"当前上下文里还未精化的 rigid 变量"的 env 槽改写为对侧的值
-    /// （`Cxt::update_cxt`）。调用顺序约定：**先传被匹配类型（头部），再传
-    /// 构造子返回类型**——这样精化方向总是"头部变量 := 模式引入的新变量"。
-    pub fn unify_pm(&mut self, cxt: &Cxt, t: Val, u: Val) -> Result<Cxt, Error> {
-        let decl = cxt.decl();
-        // 与 unify 相同：递归深度防护（fuel 由外层调用充值，这里递减）。
-        // SumCase 的 typ 索引槽互相嵌入时，Sum/SumCase 的递归会无限进行，
-        // 必须在这里耗尽即返回错误。
-        let f = self.unify_fuel.get();
-        if f == 0 {
-            return Err(Error("unify_pm: fuel exhausted".to_owned()));
-        }
-        self.unify_fuel.set(f - 1);
-        match (self.force(decl, t), self.force(decl, u)) {
-            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2))
-                if sp1.is_empty() && sp2.is_empty() && x1 == x2 =>
-            {
-                Ok(cxt.clone())
-            }
-            (Val::Rigid(x, sp), v) if sp.is_empty() => self.refine_pm(cxt, x, v),
-            (v, Val::Rigid(x, sp)) if sp.is_empty() => self.refine_pm(cxt, x, v),
-            (Val::Sum(n1, p1, _), Val::Sum(n2, p2, _)) if n1.data == n2.data => {
-                let mut cxt = cxt.clone();
-                for (a, b) in p1.iter().zip(p2.iter()) {
-                    cxt = self.unify_pm(&cxt, a.1.clone(), b.1.clone())?;
-                }
-                Ok(cxt)
-            }
-            (
-                Val::SumCase {
-                    typ: t1,
-                    case_name: c1,
-                    datas: d1,
-                },
-                Val::SumCase {
-                    typ: t2,
-                    case_name: c2,
-                    datas: d2,
-                },
-            ) if c1.data == c2.data => {
-                let mut cxt = cxt.clone();
-                // **先比 datas 再比 typ**：datas 里的 meta 在此合一中被 solve，
-                // 随后 typ 的比较（索引槽引用同样的 meta）才能快速终止；
-                // 反之 typ 优先会在"索引槽 ↔ 构造子值"的互相引用上深递归。
-                for (a, b) in d1.iter().zip(d2.iter()) {
-                    cxt = self.unify_pm(&cxt, a.1.clone(), b.1.clone())?;
-                }
-                // typ 只查**名字**：两个构造子值在模式编译里必然来自同一个
-                // 头部类型（其参数已在调用侧的 Sum-Sum 比较中逐槽精化过），
-                // 递归比较 typ 的索引槽只会陷入"索引槽 ↔ 构造子值"的环
-                // （双方的 typ 各自嵌着对方的构造子形态）。
-                let n1 = sum_name_of(t1.as_ref());
-                let n2 = sum_name_of(t2.as_ref());
-                if n1 != n2 {
-                    return Err(Error("SumCase 类型不一致".to_owned()));
-                }
-                Ok(cxt)
-            }
-            (t, u) => {
-                self.unify_catch(decl, cxt, t, u)?;
-                Ok(cxt.clone())
-            }
-        }
-    }
-
-    /// 把 rigid `x` 精化为 `v`。只精化当前上下文里还未精化的变量
-    /// （env 槽仍是自身的 vvar）；已精化过则要求两次精化一致；
-    /// 不属于本上下文的 rigid（探测替身等）回落普通合一。
-    fn refine_pm(&mut self, cxt: &Cxt, x: Lvl, v: Val) -> Result<Cxt, Error> {
-        if x.0 >= cxt.lvl.0 {
-            let decl = cxt.decl();
-            self.unify_catch(decl, cxt, Val::Rigid(x, List::new()), v)?;
-            return Ok(cxt.clone());
-        }
-        let pos = (cxt.lvl.0 - x.0 - 1) as usize;
-        let cur = cxt.env.iter().nth(pos).unwrap().clone();
-        let unrefined = matches!(&cur, Val::Rigid(y, sp) if *y == x && sp.is_empty());
-        if unrefined {
-            Ok(cxt.update_cxt(self, x, v))
-        } else {
-            self.unify_pm(cxt, cur, v)
-        }
-    }
-}
-
-/// `Val::Sum` 的名字（用于 SumCase typ 的浅层比较）
-fn sum_name_of(v: &Val) -> Option<String> {
-    match v {
-        Val::Sum(name, _, _) => Some(name.data.clone()),
-        _ => None,
     }
 }
