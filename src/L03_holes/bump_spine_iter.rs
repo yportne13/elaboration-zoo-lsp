@@ -1912,21 +1912,16 @@ impl Tycker {
 
     /// 基准口径：check + nf（quote），返回结果树节点数（工作量佐证）。
     pub(crate) fn bench_check_nf(&mut self, raw: &Raw) -> u64 {
-        self.bump.reset();
-        self.machine.clear_round();
-        let bump = &self.bump;
-        match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
-            Err(_) => 0,
-            Ok((t, _)) => {
-                let v = self.machine.eval(bump, EMPTY_ENV, t);
-                let n = self.machine.quote(bump, 0, v);
-                tm_size(n)
-            }
-        }
+        self.bench_nf_impl(raw, false)
     }
 
     /// [`Tycker::bench_check_nf`] 的 quote 记忆化口径（dup 负载的主对比行）。
     pub(crate) fn bench_check_nf_memo(&mut self, raw: &Raw) -> u64 {
+        self.bench_nf_impl(raw, true)
+    }
+
+    /// 两个 bench nf 口径的公共实现，`use_memo` 分派同 [`quote_maybe`]。
+    fn bench_nf_impl(&mut self, raw: &Raw, use_memo: bool) -> u64 {
         self.bump.reset();
         self.machine.clear_round();
         let bump = &self.bump;
@@ -1934,7 +1929,7 @@ impl Tycker {
             Err(_) => 0,
             Ok((t, _)) => {
                 let v = self.machine.eval(bump, EMPTY_ENV, t);
-                let n = self.machine.quote_memo(bump, 0, v);
+                let n = quote_maybe(&mut self.machine, bump, 0, v, use_memo);
                 tm_size(n)
             }
         }
