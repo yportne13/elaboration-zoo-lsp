@@ -7,7 +7,7 @@ mod lex;
 
 use TokenKind::*;
 
-pub fn parser(input: &str, id: u32) -> Option<Raw> {
+pub(crate) fn parser(input: &str, id: u32) -> Option<Raw> {
     crate::L02_tyck::parser::lex::lex(Span {
         data: input,
         start_offset: 0,

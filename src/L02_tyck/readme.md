@@ -31,7 +31,7 @@ beta-eta `conv`）→ 核心语法（de Bruijn 索引）→ `nf`/`type` 两种�
 `rust-toolchain.toml` 已固化，rustup 自动切换）。
 
 ```text
-cargo test --lib L02_tyck                 # 24 个测试：三示例、报错路径、
+cargo test --lib L02_tyck                 # 25 个测试：三示例、报错路径、
                                           # 基础/性能互检、深度/稳态/conv 压力、
                                           # dup/conv_dup 负载、memo 指针共享
 cargo run --release --bin l02bench        # 基准：k=9..15，五负载族 × 四口径

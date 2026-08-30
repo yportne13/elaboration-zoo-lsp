@@ -218,14 +218,14 @@ impl Cxt {
 
 /// 类型检查错误：消息 + 当前源位置。
 #[derive(Debug)]
-pub struct Error {
-    pub msg: String,
-    pub pos: Span<()>,
+struct Error {
+    msg: String,
+    pos: Span<()>,
 }
 
 type M<A> = Result<A, Error>;
 
-pub(crate) fn report_at(pos: Span<()>, msg: String) -> Error {
+fn report_at(pos: Span<()>, msg: String) -> Error {
     Error { msg, pos }
 }
 
@@ -372,7 +372,7 @@ const LETP: usize = 0; // let, lambda
 
 /// ns 按 Main.hs 的约定：**最内层 binder 在头部**（`x:ns` 前插），
 /// `Var (Ix x) -> ns !! x`。
-pub fn pretty_tm(prec: usize, ns: &[String], t: &Tm) -> String {
+fn pretty_tm(prec: usize, ns: &[String], t: &Tm) -> String {
     let mut out = String::new();
     go(prec, ns, t, &mut out);
     out
@@ -529,7 +529,7 @@ fn line_col(file: &str, offset: usize) -> (usize, usize) {
 
 /// Main.hs 的 `displayError`（megaparsec 风格的源码摘录 + caret）。
 /// 位置来自 elaboration 时记录的最内层 `SrcPos`。
-pub fn display_error(file: &str, err: &Error) -> String {
+fn display_error(file: &str, err: &Error) -> String {
     let (linum, colnum) = line_col(file, err.pos.start_offset as usize);
     let lnum = linum.to_string();
     let lpad = " ".repeat(lnum.len());
@@ -567,25 +567,22 @@ fn initial_pos() -> Span<()> {
 
 /// Main.hs 的 `mainWith`：`--help` / `nf` / `type` 三种模式，返回本应打印
 /// 到 stdout 的全部文本（供测试断言）。
-pub fn main_with(mode: &str, file: &str) -> String {
+pub(crate) fn main_with(mode: &str, file: &str) -> String {
     match mode {
         "--help" => HELP_MSG.to_string(),
-        "nf" => match parser::parser(file, 0) {
+        // nf / type 共享 parse + infer，只有输出形态不同
+        m @ ("nf" | "type") => match parser::parser(file, 0) {
             None => "parse error\n".to_string(),
             Some(t) => match infer(&Cxt::empty(initial_pos()), &t) {
                 Err(err) => display_error(file, &err),
-                Ok((t, a)) => format!(
-                    "{}\n  :\n{}\n",
-                    pretty_tm(0, &[], &nf(&List::new(), &t)),
-                    pretty_tm(0, &[], &quote(Lvl(0), &a))
-                ),
-            },
-        },
-        "type" => match parser::parser(file, 0) {
-            None => "parse error\n".to_string(),
-            Some(t) => match infer(&Cxt::empty(initial_pos()), &t) {
-                Err(err) => display_error(file, &err),
-                Ok((_, a)) => format!("{}\n", pretty_tm(0, &[], &quote(Lvl(0), &a))),
+                Ok((t, a)) => {
+                    let ty = pretty_tm(0, &[], &quote(Lvl(0), &a));
+                    if m == "nf" {
+                        format!("{}\n  :\n{}\n", pretty_tm(0, &[], &nf(&List::new(), &t)), ty)
+                    } else {
+                        format!("{ty}\n")
+                    }
+                }
             },
         },
         _ => HELP_MSG.to_string(),
@@ -595,7 +592,7 @@ pub fn main_with(mode: &str, file: &str) -> String {
 // examples
 // --------------------------------------------------------------------------------
 
-pub const EX0_SRC: &str = "\
+pub(crate) const EX0_SRC: &str = "\
 let id : (A : U) -> A -> A
      = \\A x. x;
 let foo : U = U;
@@ -603,7 +600,7 @@ let bar : U = id id;     -- we cannot apply any function to itself (already true
 id
 ";
 
-pub const EX1_SRC: &str = "\
+pub(crate) const EX1_SRC: &str = "\
 let id : (A : U) -> A -> A
       = \\A x. x;
 let const : (A B : U) -> A -> B -> A
@@ -612,7 +609,7 @@ id ((A B : U) -> A -> B -> A) const
 ";
 
 /// Church-coded natural numbers (standard test for finding eval bugs)
-pub const EX2_SRC: &str = "\
+pub(crate) const EX2_SRC: &str = "\
 let Nat  : U = (N : U) -> (N -> N) -> N -> N;
 let five : Nat = \\N s z. s (s (s (s (s z))));
 let add  : Nat -> Nat -> Nat = \\a b N s z. a N s (b N s z);
@@ -624,17 +621,17 @@ thousand
 ";
 
 #[allow(non_snake_case)]
-pub fn ex0() -> String {
+pub(crate) fn ex0() -> String {
     main_with("nf", EX0_SRC)
 }
 
 #[allow(non_snake_case)]
-pub fn ex1() -> String {
+pub(crate) fn ex1() -> String {
     main_with("nf", EX1_SRC)
 }
 
 #[allow(non_snake_case)]
-pub fn ex2() -> String {
+pub(crate) fn ex2() -> String {
     main_with("nf", EX2_SRC)
 }
 

@@ -46,19 +46,18 @@
 //! 稳态形态是 [`Tycker`]：`Machine` 的 spine/vals 跨调用复用，配每轮
 //! `Bump::reset`——LSP 一类长驻进程的真实成本口径。
 
+use super::parser::Raw;
+use super::{Error, Ix, Name, Tm as CTm};
+use crate::parser_lib::Span;
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
-
-use super::parser::Raw;
-use crate::parser_lib::Span;
-use super::{Error, Name, Tm as CTm, Ix};
 
 // syntax（bump 内的项表示）
 // --------------------------------------------------------------------------------
 
 /// bump 内分配的核心项。名字只服务 pretty（`Var` 无名，索引寻址）。
-pub(crate) enum Tm<'a> {
+enum Tm<'a> {
     Var(u32),
     Lam(&'a str, &'a Tm<'a>),
     App(&'a Tm<'a>, &'a Tm<'a>),
@@ -74,58 +73,58 @@ pub(crate) enum Tm<'a> {
 /// `2=Spine(idx<<3|2)`、`3=U`（立即数）、`4=Pi(ptr|4)`。
 /// bump 分配 8 字节对齐，指针低 3 位空闲。
 #[derive(Clone, Copy)]
-pub(crate) struct V(pub(crate) u64);
+struct V(u64);
 
 #[inline]
-pub(crate) fn v_lvl(level: u32) -> V {
+fn v_lvl(level: u32) -> V {
     V(((level as u64) << 3) | 0)
 }
 #[inline]
-pub(crate) fn v_clo<'a>(p: &'a CloCell<'a>) -> V {
+fn v_clo<'a>(p: &'a CloCell<'a>) -> V {
     V((p as *const _ as u64) | 1)
 }
 #[inline]
-pub(crate) fn v_spine(idx: usize) -> V {
+fn v_spine(idx: usize) -> V {
     V(((idx as u64) << 3) | 2)
 }
 #[inline]
-pub(crate) fn v_u() -> V {
+fn v_u() -> V {
     V(3)
 }
 #[inline]
-pub(crate) fn v_pi<'a>(p: &'a PiCell<'a>) -> V {
+fn v_pi<'a>(p: &'a PiCell<'a>) -> V {
     V((p as *const _ as u64) | 4)
 }
 #[inline]
-pub(crate) fn v_tag(v: V) -> u64 {
+fn v_tag(v: V) -> u64 {
     v.0 & 7
 }
 #[inline]
-pub(crate) fn v_lvl_of(v: V) -> u32 {
+fn v_lvl_of(v: V) -> u32 {
     (v.0 >> 3) as u32
 }
 #[inline]
-pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
-pub(crate) fn v_spine_of(v: V) -> usize {
+fn v_spine_of(v: V) -> usize {
     (v.0 >> 3) as usize
 }
 #[inline]
-pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 
 /// 闭包单元：λ 的名字（只服务 quote 产出的 pretty）+ env + 体。
-pub(crate) struct CloCell<'a> {
+struct CloCell<'a> {
     name: &'a str,
     env: Option<&'a EnvCons<'a>>,
     body: &'a Tm<'a>,
 }
 
 /// Π 值单元：名字 + 定义域值 + 余定义域闭包（内联，一次分配）。
-pub(crate) struct PiCell<'a> {
+struct PiCell<'a> {
     name: &'a str,
     dom: V,
     env: Option<&'a EnvCons<'a>>,
@@ -133,7 +132,7 @@ pub(crate) struct PiCell<'a> {
 }
 
 /// 环境节点（bump 内持久链表，头 = 最内层绑定）。
-pub(crate) struct EnvCons<'a> {
+struct EnvCons<'a> {
     val: V,
     next: Option<&'a EnvCons<'a>>,
 }
@@ -156,7 +155,7 @@ struct Entry {
 }
 
 /// 求值机持有的扁平中性栈（只增不减，槽位下标即句柄）。
-pub(crate) struct Spine {
+struct Spine {
     stack: Vec<Entry>,
 }
 
@@ -763,13 +762,13 @@ fn conv_iter<'a>(
 /// 容量），配 [`Tycker`] 每轮 `Bump::reset` 即稳态近零分配（L01 `_ss` 口径）。
 /// 带生命周期的小栈（work/tasks/done）每调用新建，避免 struct 持 `'a`
 /// 跨 `Bump::reset` 的借用冲突。
-pub(crate) struct Machine {
+struct Machine {
     spine: Spine,
     vals: Vec<V>,
 }
 
 impl Machine {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Machine {
             spine: Spine { stack: Vec::with_capacity(4096) },
             vals: Vec::with_capacity(4096),
@@ -1142,18 +1141,13 @@ impl Tycker {
             Ok((t, a)) => match mode {
                 "nf" => {
                     let v = self.machine.eval(bump, None, t);
-                    let n = quote_maybe(&mut self.machine, bump, 0, v, use_memo);
-                    let ty = quote_maybe(&mut self.machine, bump, 0, a, use_memo);
                     format!(
                         "{}\n  :\n{}\n",
-                        super::pretty_tm(0, &[], &export(n)),
-                        super::pretty_tm(0, &[], &export(ty))
+                        quote_str(&mut self.machine, bump, v, use_memo),
+                        quote_str(&mut self.machine, bump, a, use_memo)
                     )
                 }
-                _ => format!(
-                    "{}\n",
-                    super::pretty_tm(0, &[], &export(quote_maybe(&mut self.machine, bump, 0, a, use_memo)))
-                ),
+                _ => format!("{}\n", quote_str(&mut self.machine, bump, a, use_memo)),
             },
         }
     }
@@ -1209,6 +1203,14 @@ fn quote_maybe<'a>(
     } else {
         m.quote(bump, level, v)
     }
+}
+
+/// quote + export + pretty 一步到位：`Tycker::run_impl` 的 nf/type 输出形态共用。
+/// 做成自由函数而非 `&mut self` 方法：`run_impl` 里 `&self.bump` 的借用与
+/// `&mut self.machine` 的字段拆分借用在方法调用下会冲突。
+fn quote_str<'a>(m: &mut Machine, bump: &'a Bump, v: V, use_memo: bool) -> String {
+    let t = quote_maybe(m, bump, 0, v, use_memo);
+    super::pretty_tm(0, &[], &export(t))
 }
 
 /// 一次性口径入口（与参考版 `main_with` 同签名同输出）。
