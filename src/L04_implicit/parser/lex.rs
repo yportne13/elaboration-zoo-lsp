@@ -5,10 +5,13 @@ pub enum TokenKind {
     LetKeyword,
     UKeyword, //Universe
 
+    /// `_`：hole（atom 位置）或匿名 binder（binder 位置）
     Hole,
     LParen,
     RParen,
+    /// `{`：隐式语法——`{x}`、`{x : A}`、`{x = e}`（binder/实参皆可）
     LCurly,
+    /// `}`
     RCurly,
     Dot,
     Eq,
@@ -52,32 +55,50 @@ const OP: [(&str, TokenKind); 11] = [
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    is(';')
-        .map(|x| x.map(|t| (t, Semi)))
-        .or(is('_').map(|x| x.map(|t| (t, Hole))))
-        .or(pmatch(|c: char| c.is_alphabetic() || c == '_')
-            .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
-            .map(|(head, tail)| {
-                let tail_len = tail.map(|t| t.len()).unwrap_or(0);
-                // 从整个剩余输入切片（前缀即完整 ident），而非 head.data
-                // （head.data 只含首个字符，直接切会越界）。
-                let ident = unsafe {
-                    input.data
-                        .get_unchecked(..head.len() as usize + tail_len as usize)
-                };
-                let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
-                    k
-                } else {
-                    Ident
-                };
-                Span {
-                    data: (ident, kind),
-                    start_offset: head.start_offset,
-                    end_offset: head.start_offset + head.len() + tail_len,
-                    path_id: head.path_id,
-                }
-            }))
-        .parse(input)
+    // `;` 单独成 token（op 的字符区间盖住 ';'，须先切出来）
+    if let Some((rest, semi)) = is(';').parse(input) {
+        return Some((rest, semi.map(|t| (t, Semi))));
+    }
+    let (after_head, head) = pmatch(|c: char| c.is_alphabetic() || c == '_').parse(input)?;
+    let (rest, ident_len) = match pmatch(|c: char| c.is_alphanumeric() || c == '_').parse(after_head) {
+        Some((rest, tail)) => (rest, head.data.len() + tail.data.len()),
+        None => (after_head, head.data.len()),
+    };
+    let ident = unsafe { input.data.get_unchecked(..ident_len) };
+
+    // `λ` 在 main.hs 里是字符级匹配（pLam 的 `char 'λ'`），所以 `λx` 要拆成
+    // Lambda + Ident("x")——ident 贪婪吞掉的 "λx" 在这里重新切分。
+    if ident.starts_with('λ') {
+        let n = 'λ'.len_utf8();
+        let token = Span {
+            data: (&input.data[..n], Lambda),
+            start_offset: input.start_offset,
+            end_offset: input.start_offset + n as u32,
+            path_id: input.path_id,
+        };
+        let rest = Span {
+            data: &input.data[n..],
+            start_offset: input.start_offset + n as u32,
+            end_offset: input.end_offset,
+            path_id: input.path_id,
+        };
+        return Some((rest, token));
+    }
+
+    let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
+        k
+    } else {
+        Ident
+    };
+    Some((
+        rest,
+        Span {
+            data: (ident, kind),
+            start_offset: input.start_offset,
+            end_offset: input.start_offset + ident_len as u32,
+            path_id: input.path_id,
+        },
+    ))
 }
 
 fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
@@ -94,7 +115,7 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             || ('*'..='/').contains(&c)
             || ((':'..='@').contains(&c) && c != ';')
             || c == '\\'
-            || (('^'..='`').contains(&c) && c != '_')
+            || ('^'..='`').contains(&c)
             || c == '|'
             || c == '~'
     })
@@ -109,107 +130,67 @@ fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     .parse(input)
 }
 
+/// 在 Span 前进 n 个字节（调用方保证 n ≤ data.len()）。
+fn advance(input: Span<&str>, n: usize) -> Span<&str> {
+    Span {
+        data: &input.data[n..],
+        start_offset: input.start_offset + n as u32,
+        end_offset: input.end_offset,
+        path_id: input.path_id,
+    }
+}
+
+/// 空白与注释（同 L03 的 `ws`：行注释 `--`、块注释 `{- -}`）。
+fn skip_trivia(mut input: Span<&str>) -> Span<&str> {
+    loop {
+        let start_len = input.data.len();
+        let rest = input.data.trim_start_matches(|c: char| c.is_whitespace());
+        input = advance(input, start_len - rest.len());
+        if let Some(after) = input.data.strip_prefix("--") {
+            input = advance(input, input.data.len() - after.len());
+            let nl = input.data.find('\n').unwrap_or(input.data.len());
+            input = advance(input, nl);
+        } else if let Some(after) = input.data.strip_prefix("{-") {
+            input = advance(input, input.data.len() - after.len());
+            match input.data.find("-}") {
+                Some(end) => input = advance(input, end + 2),
+                None => input = advance(input, input.data.len()),
+            }
+        }
+        if input.data.len() == start_len {
+            break; // 本轮无进展：trivia 结束
+        }
+    }
+    input
+}
+
 pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
     let num = pmatch(|c: char| c.is_ascii_digit()).map(|x| x.map(|y| (y, Num)));
-    //let endline = pmatch("\n").map(|x| x.map(|y| (y, EndLine)));
     let err_token = pmatch(|c: char| !c.is_ascii_whitespace()).map(|x| x.map(|y| (y, ErrToken)));
     fn ws<'a, A, P: Parser<Span<&'a str>, A>>(p: P) -> impl Parser<Span<&'a str>, A> {
-        //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
-        let whitespace = pmatch(|c: char| c.is_whitespace()).option();
-        p.with(whitespace).map(|(a, _)| a)
+        move |input: Span<&'a str>| {
+            let input = skip_trivia(input);
+            let (rest, a) = p.parse(input)?;
+            Some((skip_trivia(rest), a))
+        }
     }
-    //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
-    let whitespace = pmatch(|c: char| c.is_whitespace()).option();
-    whitespace
-        .with(
-            //ws(brace.or(ident).or(num).or(op))
-            ws(brace.or(op).or(num).or(ident))
-                //.or(ws(endline))
-                .or(ws(err_token))
-                .many0(),
-        )
-        .map(|(_, token)| token)
+    let input = skip_trivia(input);
+    // `_` 与 `\` 单独成 token，且放在 op 之前（同 L03）：op 的字符类贪婪匹配
+    // 会把 `\_.`、`_.` 吃成一个 Op token。
+    let hole = is('_').map(|x| x.map(|y| (y, Hole)));
+    let lambda = is('\\').map(|x| x.map(|y| (y, Lambda)));
+    ws(brace.or(hole).or(lambda).or(op).or(num).or(ident))
+        .or(ws(err_token))
+        .many0()
         .parse(input)
 }
 
 #[test]
 fn test() {
     let input = r#"
-let id : {A : U} -> A -> A = \x. x;
-
-let const : {A B} -> A -> B -> A = \x y. x;
-
-let group1 : {A B : U}(x y z : A) -> B -> B = \x y z b. b;
-let group2 : {A B}(x y z : A) -> B -> B = \x y z b. b;
-
-let the : (A : _) -> A -> A = \_ x. x;
-
-let argTest1 = const {U}{U} U;
-
+let id : {A : U} -> A -> A = \{A} x. x;
 let argTest2 = const {B = U} U;
-
-let id2 : {A} -> A -> A = \{A} x. x;
-
-let namedLam  : {A B C} -> A -> B -> C -> A = \{B = B} a b c. a;
-let namedLam2 : {A B C} -> A -> B -> C -> A = \{B = X} a b c. a;
-let namedLam2 : {A B C} -> A -> B -> C -> A = \{C = X} a b c. a;
-
-
-let insert : {A} -> A -> A = id;
-
-let noinsert = \{A} x. the A x;
-
-let insert2 = (\{A} x. the A x) U;
-
-
-let Bool : U
-    = (B : _) -> B -> B -> B;
-let true : Bool
-    = \B t f. t;
-let false : Bool
-    = \B t f. f;
-let not : Bool -> Bool
-    = \b B t f. b B f t;
-
-let List : U -> U
-    = \A. (L : _) -> (A -> L -> L) -> L -> L;
-let nil : {A} -> List A
-    = \L cons nil. nil;
-let cons : {A} -> A -> List A -> List A
-    = \x xs L cons nil. cons x (xs L cons nil);
-let map : {A B} -> (A -> B) -> List A -> List B
-    = \{A}{B} f xs L c n. xs L (\a. c (f a)) n;
-let list1 : List Bool
-    = cons true (cons false (cons true nil));
-
-let comp : {A}{B : A -> U}{C : {a} -> B a -> U}
-           (f : {a}(b : B a) -> C b)
-           (g : (a : A) -> B a)
-           (a : A)
-           -> C (g a)
-    = \f g a. f (g a);
-
-let compExample = comp (cons true) (cons false) nil;
-
-let Nat : U
-    = (N : U) -> (N -> N) -> N -> N;
-let mul : Nat -> Nat -> Nat
-    = \a b N s z. a _ (b _ s) z;
-let ten : Nat
-    = \N s z. s (s (s (s (s (s (s (s (s (s z)))))))));
-let hundred = mul ten ten;
-
-let Eq : {A} -> A -> A -> U
-    = \{A} x y. (P : A -> U) -> P x -> P y;
-let refl : {A}{x : A} -> Eq x x
-    = \_ px. px;
-
-let sym : {A x y} -> Eq {A} x y -> Eq y x
-  = \ {A}{x}{y} p. p (\ y. Eq y x) refl;
-
-the (Eq (mul ten ten) hundred) refl
-
-"#;
+id _"#;
     let ret = lex(Span {
         data: input,
         start_offset: 0,
@@ -218,6 +199,6 @@ the (Eq (mul ten ten) hundred) refl
     })
     .unwrap();
     for x in ret.1 {
-        println!("{} @ {}", x.data.0, x.start_offset)
+        println!("{} @ {} {:?}", x.data.0, x.start_offset, x.data.1)
     }
 }
