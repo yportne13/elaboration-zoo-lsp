@@ -25,9 +25,9 @@
 //!   （[`Machine::new_binder`]——**不入 name_map**，对源码名不可见，等价于
 //!   参考版线性扫描跳过 `NameOrigin::Inserted`；`TCons::source` 供消融
 //!   回落）。
-//! - **solve 的 lams**：icit 取自 spine 收集序（= 参考版 `sp.iter()` 头序 =
-//!   上游 `reverse $ map snd sp`），最外层 λ 拿最后应用槽位的 icit——
-//!   β 不看 icit，仅影响解的显示。
+//! - **solve 的 lams**：icit 取收集序反转（应用序），最外层 λ 拿**最先
+//!   应用**槽位的 icit——与上游 `reverse $ map snd sp` 一致；β 不看
+//!   icit，仅影响解的显示。
 //!
 //! 与参考版（`super`）共用 parser / pretty / 错误显示，输出逐字节一致
 //! （互检测试）。
@@ -1035,7 +1035,8 @@ fn solve<'a>(
     else {
         return false;
     };
-    // 包 λ 后空环境求值，写表（icit 取收集序 = 上游 reverse 后的次序）
+    // 包 λ 后空环境求值，写表（lams 的 icit 取应用序——上游 reverse 后的
+    // 次序：最外层 λ 配最先应用的实参）
     let lams_tm = lams(bump, args, tm);
     let sol = eval_iter(bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, lams_tm);
     metas[m as usize] = MetaEntry::Solved(sol);
@@ -1043,8 +1044,9 @@ fn solve<'a>(
 }
 
 /// rename 任务。icit 记账：**只有 `spine_case` 预装载** `done_icits`（按
-/// 实参完成序），组合器与 Ren 的直接情形都不碰它——合并结果压 `done`
-/// 时不带 icit，配对只发生在 `SpineFold` 弹出时（LIFO 对齐）。
+/// 收集序入栈），组合器与 Ren 的直接情形都不碰它——合并结果压 `done`
+/// 时不带 icit，配对只发生在 `SpineFold` 弹出时（弹出序 = 应用序，与
+/// popped 数组的对齐见 `spine_case`）。
 enum RJob<'a> {
     /// 引一个值到解域（产生一个 Tm 到 done）。
     Ren { dom: u32, cod: u32, v: V },
@@ -1075,8 +1077,9 @@ fn rename_iter<'a>(
 ) -> Option<&'a Tm<'a>> {
     let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren { dom: dom0, cod: cod0, v: v0 }];
     let mut done: Vec<&'a Tm<'a>> = Vec::new();
-    // SpineFold 的实参 icit 预装载栈：spine_case 按实参完成序压入
-    //（首个应用的实参最先进栈底），SpineFold 成对弹出。组合器不触碰。
+    // SpineFold 的实参 icit 预装载栈：spine_case 按收集序压入（最后应用
+    // 的实参在栈底），SpineFold 弹出序 = 应用序（最先应用的实参先弹）。
+    // 组合器不触碰。
     let mut done_icits: Vec<Icit> = Vec::new();
     // 实参收集 / 折叠草稿：跨任务复用（clear 保容量），热路径零分配
     let mut args: Vec<(V, Icit)> = Vec::new();
@@ -1091,9 +1094,10 @@ fn rename_iter<'a>(
             // 先压组合器（后执行）；args 逆应用序（h.a 先）→ 正序压，
             // 则 a1 的 Ren 最后压、最先弹（应用序先执行）
             $tasks.push(RJob::SpineFold { head_tm: $head_tm, n: args.len() as u32 });
-            // icit 预装载：完成序 = 应用序 = args 逆序（收集序的头是
-            // 最后应用的实参，最后完成）
-            for &(_, i) in args.iter().rev() {
+            // icit 预装载：按收集序入栈（头 = 最后应用的实参）——弹出序即
+            // 应用序，与 popped（Ren 按应用序完成）LIFO 对齐：第 k 次弹出
+            // 的 icit 配应用序第 k+1 个实参的 icit（位置配对）
+            for &(_, i) in args.iter() {
                 done_icits.push(i);
             }
             for &(a, _) in args.iter() {
@@ -1210,14 +1214,17 @@ fn rename_iter<'a>(
     done.pop()
 }
 
-/// `λ x1 x2. … body`（icit 取 args 收集序——头 = 最后应用的实参，与参考版
-/// `sp.iter()` 及上游 `reverse $ map snd sp` 一致；bump 分配，名字只服务
-/// pretty）。
+/// `λ x1 x2. … body`：最外层 λ 取**最先应用**槽位的 icit（与上游
+/// `lams (reverse $ map snd sp)` 一致——`args` 收集序的头是最后应用的
+/// 实参，反转后头 = 最先应用；bump 分配，名字只服务 pretty）。
 fn lams<'a>(bump: &'a Bump, args: &[(V, Icit)], body: &'a Tm<'a>) -> &'a Tm<'a> {
+    let n = args.len();
     let mut t = body;
-    for i in (0..args.len()).rev() {
-        let name = bump.alloc_str(&format!("x{}", i + 1));
-        t = bump.alloc(Tm::Lam(name, args[i].1, t));
+    for (j, &(_, i)) in args.iter().enumerate() {
+        // args[j]：j = 0 是最后应用的实参（λ 链最内层），j = n-1 是最先
+        // 应用的实参（最外层 λ x1）
+        let name = bump.alloc_str(&format!("x{}", n - j));
+        t = bump.alloc(Tm::Lam(name, i, t));
     }
     t
 }
@@ -2270,6 +2277,38 @@ pub(crate) fn dup_deep_src(k: u32) -> String {
 mod tests {
     use super::super::{EX0_SRC, EX1_SRC};
     use super::*;
+
+    /// 混合 icit 的 solve 与参考版一致：spine（收集序）=
+    /// [(v0, Expl), (v1, Impl)]（v0 最后应用）、rhs = ((v1 {v0}) v0)。
+    /// 回归：SpineFold 的 App 重建须位置配对（内层 App 拿 Impl），lams
+    /// 的 λ 标签取应用序（最外层 λ {x1} 拿最先应用槽位的 Impl）。
+    #[test]
+    fn solve_mixed_icit_matches_basic() {
+        let bump = Bump::new();
+        let mut spine = Spine { stack: Vec::new() };
+        let mut work: Vec<W> = Vec::new();
+        let mut vals: Vec<V> = Vec::new();
+        let mut icits: Vec<Icit> = Vec::new();
+        let mut defs: Vec<V> = Vec::new();
+        let mut metas: Vec<MetaEntry> = vec![MetaEntry::Unsolved];
+        // rhs = ((v1) {v0}) v0：内层 Impl、外层 Expl
+        let rhs1 = spine.push(v_lvl(1), v_lvl(0), Icit::Impl);
+        let rhs = spine.push(rhs1, v_lvl(0), Icit::Expl);
+        // 被解 meta 的 spine（收集序头 = 最后应用）：[(v0, Expl), (v1, Impl)]
+        let args = [(v_lvl(0), Icit::Expl), (v_lvl(1), Icit::Impl)];
+        assert!(
+            solve(
+                &bump, &mut spine, &mut work, &mut vals, &mut icits, &mut defs, &mut metas,
+                2, 0, &args, rhs,
+            ),
+            "solve 应成功"
+        );
+        let q = quote_iter(
+            &bump, &mut spine, &mut Vec::new(), &mut Vec::new(), &mut work, &mut vals,
+            &mut icits, &mut defs, &metas, 0, meta_val_of(&metas, 0), None,
+        );
+        assert_eq!(super::pretty_tm(0, &[], &export(q)), "λ {x1} x2. x1 {x2} x2");
+    }
 
     /// EX1（上游 readme 示例套件）：type 模式与参考版逐字节一致
     /// （nf 的 church-100 展开太长，type 即可覆盖判定路径）。

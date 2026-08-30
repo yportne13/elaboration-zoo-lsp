@@ -15,7 +15,8 @@
 //! - **Inserted binder**：检查非 lambda 项到隐式 Pi 时补的 binder 对源码
 //!   名字不可见（`NameOrigin`：insert 处 `new_binder`，源码处 `bind`）；
 //! - solve 的解体 λ 包裹的 icit 取自 meta spine（上游 `reverse $ map snd sp`：
-//!   最外层 λ 拿最后应用槽位的 icit——β 应用不看 icit，仅影响显示）。
+//!   反转成应用序，最外层 λ 拿最先应用槽位的 icit——β 应用不看 icit，
+//!   仅影响显示）。
 
 pub(crate) mod bump_spine_iter;
 pub(crate) mod parser;
@@ -292,8 +293,10 @@ impl Infer {
     // Pattern unification
     // --------------------------------------------------------------------------------
 
-    /// `λ x1 x2. … body`：icit 取自 meta spine（上游 `lams (reverse $ map snd
-    /// sp)`——头 = 最后应用的实参；β 不看 icit，仅影响解的显示）。
+    /// `λ x1 x2. … body`：icit 取 meta spine **收集序反转**（应用序——
+    /// 上游 `lams (reverse $ map snd sp)`：spine 头 = 最后应用的实参，
+    /// 反转后最外层 λ 取最先应用槽位的 icit；β 不看 icit，仅影响解的
+    /// 显示）。
     fn lams(&self, icits: &[Icit], t: Tm) -> Tm {
         fn go(x: u32, icits: &[Icit], t: Tm) -> Tm {
             match icits.split_first() {
@@ -388,8 +391,10 @@ impl Infer {
     fn solve(&mut self, gamma: Lvl, m: MetaVar, sp: &Spine, rhs: &Val) -> Result<(), UnifyError> {
         let pren = self.invert(gamma, sp)?;
         let rhs = self.rename(m, &pren, rhs)?;
-        // spine 头 = 最后应用的实参；icit 按上游 reverse 后的次序取用
-        let icits: Vec<Icit> = sp.iter().map(|(_, i)| *i).collect();
+        // spine 头 = 最后应用的实参；反转成应用序——最外层 λ 取最先应用
+        // 槽位的 icit（上游 `lams (reverse $ map snd sp)` 同款）
+        let mut icits: Vec<Icit> = sp.iter().map(|(_, i)| *i).collect();
+        icits.reverse();
         let solution = self.eval(&List::new(), &self.lams(&icits, rhs));
         self.metas[m.0 as usize] = MetaEntry::Solved(solution);
         Ok(())
@@ -1311,6 +1316,29 @@ Name not in scope: id
             out.contains("Function icitness mismatch: expected implicit, got explicit."),
             "{out}"
         );
+    }
+
+    /// 混合 icit 的 solve：spine = [(v0, Expl), (v1, Impl)]（v0 最后应用）、
+    /// rhs = ((v1 {v0}) v0)（内层 Impl、外层 Expl）。App 重建须位置配对
+    /// （内层 App 拿内层槽位的 Impl），λ 标签取应用序（最外层 λ {x1} 配
+    /// 最先应用槽位的 Impl）——上游 `renameGoSp` 的 `pure i` 与
+    /// `lams (reverse $ map snd sp)` 同款。
+    #[test]
+    fn solve_mixed_icit_order() {
+        let mut inf = Infer::new();
+        inf.metas.push(MetaEntry::Unsolved);
+        let sp_inner = List::new().prepend((Val::vvar(Lvl(0)), Icit::Impl));
+        let app_inner = Val::Rigid(Lvl(1), sp_inner);
+        let sp_outer = List::new()
+            .prepend((Val::vvar(Lvl(0)), Icit::Impl))
+            .prepend((Val::vvar(Lvl(0)), Icit::Expl));
+        let rhs = Val::Rigid(Lvl(1), sp_outer);
+        let msp = List::new()
+            .prepend((Val::vvar(Lvl(1)), Icit::Impl))
+            .prepend((Val::vvar(Lvl(0)), Icit::Expl));
+        inf.solve(Lvl(2), MetaVar(0), &msp, &rhs).expect("solve 失败");
+        let q = inf.quote(Lvl(0), &inf.v_meta(MetaVar(0)));
+        assert_eq!(pretty_tm(0, &[], &q), "λ {x1} x2. x1 {x2} x2");
     }
 
     /// 命名隐式实参找不到同名 Pi binder。
