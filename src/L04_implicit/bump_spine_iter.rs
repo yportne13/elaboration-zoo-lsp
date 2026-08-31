@@ -832,16 +832,18 @@ fn unify_iter<'a>(
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
+    conv: &mut ConvScratch,
     l0: u32,
     t0: V,
     u0: V,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
-    let mut memo: rustc_hash::FxHashSet<(u64, u64)> = rustc_hash::FxHashSet::default();
+    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配
+    conv.memo.clear();
+    conv.scratch1.clear();
+    conv.scratch2.clear();
+    let memo = &mut conv.memo;
     let mut stack: Vec<UItem<'a>> = Vec::new();
-    // 实参收集草稿：跨 Pair 复用（clear 保容量），热路径上零分配
-    let mut scratch1: Vec<(V, Icit)> = Vec::new();
-    let mut scratch2: Vec<(V, Icit)> = Vec::new();
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
@@ -951,12 +953,12 @@ fn unify_iter<'a>(
                 // flex-flex 必须落到底下逐实参比较（solve 的 occurs check
                 // 对同号必败——L03 e541de0 同款修复，理由见其注释）。
                 if hd1.0 != hd2.0 && (v_tag(hd1) == 5 || v_tag(hd2) == 5) {
-                    let mut args = std::mem::take(&mut scratch1);
+                    let mut args = std::mem::take(&mut conv.scratch1);
                     args.clear();
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
                         solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
                     } else {
-                        let mut args = std::mem::take(&mut scratch2);
+                        let mut args = std::mem::take(&mut conv.scratch2);
                         args.clear();
                         match spine.flex_of(u, &mut args) {
                             Some(m) => {
@@ -965,7 +967,7 @@ fn unify_iter<'a>(
                             None => false,
                         }
                     };
-                    scratch1 = args;
+                    conv.scratch1 = args;
                     if solved {
                         if memo_on {
                             memo.insert((t.0, u.0));
@@ -1021,7 +1023,7 @@ fn unify_iter<'a>(
 
             // 求解：一侧是未解 flex；solve 成功即判等完成，直接入表。
             _ => {
-                let mut args = std::mem::take(&mut scratch1);
+                let mut args = std::mem::take(&mut conv.scratch1);
                 args.clear();
                 let solved = if let Some(m) = spine.flex_of(t, &mut args) {
                     solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
@@ -1031,7 +1033,7 @@ fn unify_iter<'a>(
                         None => false,
                     }
                 };
-                scratch1 = args;
+                conv.scratch1 = args;
                 if solved {
                     if memo_on {
                         memo.insert((t.0, u.0));
@@ -1317,6 +1319,10 @@ fn lams<'a>(bump: &'a Bump, args: &[(V, Icit)], body: &'a Tm<'a>) -> &'a Tm<'a> 
 pub(crate) struct Machine {
     spine: Spine,
     vals: Vec<V>,
+    /// icit 侧栈（eval 右链下降用；跨调用复用容量，进核前 clear）。
+    icits: Vec<Icit>,
+    /// unify 的判等记忆化 + 实参收集草稿（跨调用复用容量，进核前 clear）。
+    conv: ConvScratch,
     /// 平坦环境区域（每轮 append-only，只增不减）。
     defs: Vec<V>,
     pub(crate) metas: Vec<MetaEntry>,
@@ -1331,6 +1337,15 @@ pub(crate) struct Machine {
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
 }
 
+/// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都
+/// 是 `'static` 类型，可常驻 Machine 复用容量——热路径零分配）。
+#[derive(Default)]
+struct ConvScratch {
+    memo: rustc_hash::FxHashSet<(u64, u64)>,
+    scratch1: Vec<(V, Icit)>,
+    scratch2: Vec<(V, Icit)>,
+}
+
 const PI_NAME: &str = "x"; // infer App 非 Π 分支合成的闭包名（只服务 pretty）
 
 impl Machine {
@@ -1338,6 +1353,8 @@ impl Machine {
         Machine {
             spine: Spine { stack: Vec::with_capacity(4096) },
             vals: Vec::with_capacity(4096),
+            icits: Vec::new(),
+            conv: ConvScratch::default(),
             defs: Vec::with_capacity(4096),
             metas: Vec::new(),
             ren: RenBuf::default(),
@@ -1439,13 +1456,26 @@ impl Machine {
         bump.alloc(Tm::InsertedMeta(m, bds))
     }
 
+    /// fresh meta 的求值快捷路径：bds 全为 define 槽（或空）时 AppBds
+    /// 走空转（跳段后无实参可应用），结果恒为裸 meta 立即数——免一次
+    /// eval（implicit 负载每层一次插入，链全 false）。bds 含 bound 槽时
+    /// 照常求值（产生 pattern spine）。
+    fn eval_fresh(&mut self, bump: &Bump, env: Env, m: &Tm<'_>) -> V {
+        if let Tm::InsertedMeta(mm, bds) = m {
+            if bds.map_or(true, |b| !b.bound && b.after_run.is_none()) {
+                return v_meta(*mm);
+            }
+        }
+        self.eval(bump, env, m)
+    }
+
     fn eval<'a>(&mut self, bump: &'a Bump, env: Env, tm: &'a Tm<'a>) -> V {
         eval_iter(
             bump,
             &mut self.spine,
             &mut Vec::new(),
             &mut self.vals,
-            &mut Vec::new(),
+            &mut self.icits,
             &mut self.defs,
             &self.metas,
             env,
@@ -1461,7 +1491,7 @@ impl Machine {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut self.vals,
-            &mut Vec::new(),
+            &mut self.icits,
             &mut self.defs,
             &self.metas,
             level,
@@ -1480,7 +1510,7 @@ impl Machine {
             &mut Vec::new(),
             &mut Vec::new(),
             &mut self.vals,
-            &mut Vec::new(),
+            &mut self.icits,
             &mut self.defs,
             &self.metas,
             level,
@@ -1495,10 +1525,11 @@ impl Machine {
             &mut self.spine,
             &mut Vec::new(),
             &mut self.vals,
-            &mut Vec::new(),
+            &mut self.icits,
             &mut self.defs,
             &mut self.metas,
             &mut self.ren,
+            &mut self.conv,
             l,
             t,
             u,
@@ -1536,7 +1567,7 @@ impl Machine {
             &mut self.spine,
             &mut Vec::new(),
             &mut self.vals,
-            &mut Vec::new(),
+            &mut self.icits,
             &mut self.defs,
             &self.metas,
             va,
@@ -1544,7 +1575,7 @@ impl Machine {
         if v_tag(va) == 4 && v_pi_of(va).icit == Icit::Impl {
             let p = v_pi_of(va);
             let m = self.fresh_meta(bump, cxt.bds);
-            let mv = self.eval(bump, cxt.env, m);
+            let mv = self.eval_fresh(bump, cxt.env, m);
             let b = {
                 let env = env_ext(bump, p.env, mv);
                 self.eval(bump, env, p.body)
@@ -1611,7 +1642,7 @@ impl Machine {
                     return Ok((t, va));
                 }
                 let m = self.fresh_meta(bump, cxt.bds);
-                let mv = self.eval(bump, cxt.env, m);
+                let mv = self.eval_fresh(bump, cxt.env, m);
                 let b = {
                     let env = env_ext(bump, p.env, mv);
                     self.eval(bump, env, p.body)
@@ -1644,7 +1675,7 @@ impl Machine {
             &mut self.spine,
             &mut Vec::new(),
             &mut self.vals,
-            &mut Vec::new(),
+            &mut self.icits,
             &mut self.defs,
             &self.metas,
             a,
@@ -1779,7 +1810,7 @@ impl Machine {
             Raw::Lam(x, Either::Icit(i), t) => {
                 let name: &'a str = bump.alloc_str(&x.data);
                 let new_meta = self.fresh_meta(bump, cxt.bds);
-                let a = self.eval(bump, cxt.env, new_meta);
+                let a = self.eval_fresh(bump, cxt.env, new_meta);
                 let mark = cxt.mark;
                 let cxt2 = self.bind_name(bump, cxt, &x.data, a);
                 let (t, b) = self.infer(bump, cxt2, t)?;
@@ -1843,7 +1874,7 @@ impl Machine {
                     // 合成 binder（PI_NAME）不进名字表：只延伸 bds（L03 同款
                     // 理由——无 Raw 在其下 elaborate，留痕反而遮蔽用户名字）。
                     let new_meta = self.fresh_meta(bump, cxt.bds);
-                    let a = self.eval(bump, cxt.env, new_meta);
+                    let a = self.eval_fresh(bump, cxt.env, new_meta);
                     let bds2: Option<&'a BdCons<'a>> =
                         Some(bump.alloc(BdCons::new(true, cxt.bds)));
                     let cod_meta = self.fresh_meta(bump, bds2);
@@ -1895,7 +1926,7 @@ impl Machine {
 
             Raw::Hole => {
                 let new_meta = self.fresh_meta(bump, cxt.bds);
-                let a = self.eval(bump, cxt.env, new_meta);
+                let a = self.eval_fresh(bump, cxt.env, new_meta);
                 let t = self.fresh_meta(bump, cxt.bds);
                 Ok((t, a))
             }

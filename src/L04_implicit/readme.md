@@ -84,6 +84,13 @@ cargo run --release --bin l04bench -- --workload all --max-k 15
 6. **solve 的换代缓冲**（`RenBuf`）：偏置换按 level 存 `val`、`stamp` 记
    生效代数，`reset` 只推进 epoch——`vec![None; γ]` 的 O(γ) 清零与逐次
    分配降为 O(1)（implicit 负载 γ = 层深，二次项之二）。
+7. **热路径草稿常驻化**：`icits` 侧栈与 unify 的判等记忆化/实参收集草稿
+   （`ConvScratch`）从每次调用的 `Vec::new()` 提升为 `Machine` 字段——
+   进核前 clear 保容量，跨调用零分配（`W`/`QJob`/`UItem` 借 bump 生命
+   周期，仍按调用新建）。
+8. **fresh meta 免 eval 快捷路径**（`eval_fresh`）：bds 全为 define 槽
+   （或空）时 AppBds 走空转、结果恒为裸 meta 立即数——直接取 `v_meta`，
+   免一次 eval；bds 含 bound 槽时照常求值（产生 pattern spine）。
 
 ## 实测结果（Windows 10，release build，rounds=3 取 min）
 
