@@ -115,8 +115,10 @@ Defined 槽位逐一走过（`vAppBDs` 只应用 Bound 槽，但**遍历**整条
   栈（l04bench 默认 128MB 线程；`L04_STACK_MB` 可调）。实测 ~5 万层
   溢栈（chain/implicit k=15，n=65536）。
 - 参考版的深层 Box 项析构会爆栈，bench 里 `mem::forget`（L03 同款处理）。
-- **λ 体内的 `let` 会弄坏平坦 def 区域**（L03 同款潜伏缺陷，非本层引入）：
-  define 在全局 `defs` 追加，外层 env 的平坦切片随之失配——debug 断言
-  炸、release 静默解析错（参考版无此问题：上下文是持久链，内层 define
-  不外泄）。现有负载/测试未触达该形态（let 都在顶层链）。修法需把
-  define 与平坦区域解耦，牵动 chain 负载的线性保证，留待后续。
+- **λ 体内的 `let`**（L03 潜伏缺陷的 L04 同款，已修）：define 原本无条件
+  追加到全局 `defs`，λ 体内的 define 占位后、外层再 define 会与全局
+  位置冲突（debug 断言炸 / release 静默解析错）。修复：`env_ext_defs`
+  改 tip 条件分支——define 时 env 在全局末端（模块链/λ 体内）照常入平坦
+  区（chain 负载的 O(1) 线性保证不动）；非 tip 环境（λ 体退出后的外层
+  define）回落到 binder 链，索引语义不变、仅查链 O(链深)。互检测试
+  `define_inside_lambda_matches_basic`（type + nf 双模式）。

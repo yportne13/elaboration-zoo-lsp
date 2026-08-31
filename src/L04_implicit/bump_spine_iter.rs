@@ -149,7 +149,9 @@ pub(crate) fn v_meta_of(v: V) -> u32 {
 }
 
 /// 复合环境：**平坦 def 区域**（elaborator 的 define 链，指入每轮
-/// [`Machine::defs`]；只经 define 追加、恒 tip，`nth` O(1)）+ **持久 binder
+/// [`Machine::defs`]；tip 环境（define 时 env 就在全局末端）原地追加，
+/// `nth` O(1)；**非 tip 环境**（λ 体内的 define 先占位后、外层再 define）
+/// 回落到 binder 链——索引语义一致，仅查链 O(链深)）+ **持久 binder
 /// 链表**（bind 与全部 β/瞬时求值扩展 O(1) 一个 bump 分配）。机制与论证
 /// 同 L03（`env_slice` 教训：运行时 β 的扩展禁止引入拷贝）。
 #[derive(Clone, Copy)]
@@ -192,12 +194,23 @@ pub(crate) fn env_ext<'a>(bump: &'a Bump, env: Env<'a>, v: V) -> Env<'a> {
     }
 }
 
-/// 环境扩展（**平坦 def 区域**：elaborator 的 define）——tip 原地追加。
+/// 环境扩展（**平坦 def 区域**：elaborator 的 define）。tip 环境
+/// （`flat_base + flat_len == defs.len()`，define 在全局末端）原地追加，
+/// 保持 O(1) 索引；非 tip 环境（λ 体的 define 已把全局末端占走、外层
+/// 再 define——位置冲突）回落到 binder 链，索引语义不变（新 define 是
+/// 最内层条目，`env_nth(0)` 命中链头）。
 #[inline]
-pub(crate) fn env_ext_defs<'a>(defs: &mut Vec<V>, env: Env<'a>, v: V) -> Env<'a> {
-    debug_assert_eq!(env.flat_base + env.flat_len, defs.len() as u32);
-    defs.push(v);
-    Env { flat_base: env.flat_base, flat_len: env.flat_len + 1, binds: env.binds }
+pub(crate) fn env_ext_defs<'a>(bump: &'a Bump, defs: &mut Vec<V>, env: Env<'a>, v: V) -> Env<'a> {
+    if env.flat_base + env.flat_len == defs.len() as u32 {
+        defs.push(v);
+        Env { flat_base: env.flat_base, flat_len: env.flat_len + 1, binds: env.binds }
+    } else {
+        Env {
+            flat_base: env.flat_base,
+            flat_len: env.flat_len,
+            binds: Some(bump.alloc(EnvCons { val: v, next: env.binds })),
+        }
+    }
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
@@ -1393,7 +1406,7 @@ impl Machine {
         let key = SmolStr::new(x);
         let prev = self.name_map.insert(key.clone(), (cxt.lvl, ty));
         self.name_trail.push((key, prev));
-        let env = env_ext_defs(&mut self.defs, cxt.env, val);
+        let env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
         Cxt {
             env,
             types: Some(bump.alloc(TCons { name: bump.alloc_str(x), ty, source: true, next: cxt.types })),
@@ -2446,6 +2459,36 @@ mod tests {
             super::super::main_with("type", &src),
             "implicit 判定与参考版不一致"
         );
+    }
+
+    /// λ 体内的 `let`（define 落在平坦区占位后、外层再 define 的非 tip
+    /// 路径）：回归 env_ext_defs 的 tip 条件分支——体内 define 照常入平坦
+    /// 区，体外的 define 回落到 binder 链（索引语义不变，仅查链 O(链深)）。
+    /// 原实现全局 defs 位置冲突（debug 断言炸 / release 静默解析错），
+    /// 参考版不受影响。比对 type 与 nf 双模式。
+    #[test]
+    fn define_inside_lambda_matches_basic() {
+        let src = concat!(
+            "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n",
+            "let id : {A : U} -> A -> A = \\x. x;\n",
+            "let p0 : Nat = \\N s z. s (s z);\n",
+            "let f : (u : Nat) -> Nat = \\u. let q0 : Nat = id u; let q1 : Nat = id q0; q1;\n",
+            "let h : Nat = f p0;\n",
+            "h\n"
+        );
+        let Some(raw) = super::super::parser::parser(src, 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert!(t.bench_check(&raw), "λ 内 let 未通过");
+        for mode in ["type", "nf"] {
+            let mut t = Tycker::new();
+            assert_eq!(
+                t.run(mode, src, &raw),
+                super::super::main_with(mode, src),
+                "λ 内 let 与参考版不一致 ({mode})"
+            );
+        }
     }
 
     /// AppBds 跳段的混合形态：binder 槽夹在 define 槽之间的链（非连续
