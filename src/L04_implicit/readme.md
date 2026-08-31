@@ -77,6 +77,13 @@ cargo run --release --bin l04bench -- --workload all --max-k 15
 4. **quote/unify 记忆化、复合环境、稳态复用、迭代内核**全部继承 L03，
    icits 不进记忆化键（随 `V` 指向的单元/槽位携带，同一 `V` 同 level 的
    quote 产出唯一）。
+5. **AppBds 跳段**：`BdCons` 入链时维护「向外连续 `bound: false` 槽数」
+   （`false_run`）与该 run 的落点（`after_run`）；AppBds 在 binds 耗尽后
+   整段 O(1) 跳过——define 槽只递减 `flat_len`、从不产生实参，跳过与逐步
+   走**逐字节等价**（implicit 负载整条链全 false：注入评估 O(层深) → O(1)）。
+6. **solve 的换代缓冲**（`RenBuf`）：偏置换按 level 存 `val`、`stamp` 记
+   生效代数，`reset` 只推进 epoch——`vec![None; γ]` 的 O(γ) 清零与逐次
+   分配降为 O(1)（implicit 负载 γ = 层深，二次项之二）。
 
 ## 实测结果（Windows 10，release build，rounds=3 取 min）
 
@@ -86,19 +93,30 @@ k=11  n=4096    fast=0.262ms*  basic=2.982ms      (≈11×)
 == workload: solve ==
 k=11  n=4096    fast_ss=0.546ms / fast=0.525ms*
 == workload: implicit ==
-k=9   n=1024    fast_ss=8.877ms*
-k=10  n=2048    fast_ss=33.151ms*
-k=11  n=4096    fast_ss=126.597ms*
+k=9   n=1024    fast_ss=1.413ms*
+k=10  n=2048    fast_ss=3.523ms*
+k=11  n=4096    fast_ss=6.182ms*
+k=12  n=8192    fast_ss=13.142ms*
+k=13  n=16384   fast_ss=28.459ms*
+k=14  n=32768   fast_ss=71.636ms*
 ```
 
-implicit 负载（n 层 `p_i = id p_{i-1}`，每层一次插入 + 一次求解）呈二次方
-增长：每层 fresh meta 捕获的 bds 持久链沿 Defined 槽位逐一走过（
-`vAppBDs` 只应用 Bound 槽，但**遍历**整条链）——参考版同款（两边同
-复杂度，常数差即真实差距）。根治方向（未做）：平坦 def 区域的 bds 跳段
-（Bound 槽都在 binder 链段、Defined 槽都在平坦段，可 O(1) 定位下一 Bound）。
+implicit 负载（n 层 `p_i = id p_{i-1}`，每层一次插入 + 一次求解）原本
+呈二次方（k=13 曾为 1913ms）：每层 fresh meta 捕获的 bds 持久链沿
+Defined 槽位逐一走过（`vAppBDs` 只应用 Bound 槽，但**遍历**整条链——
+实测插桩 2.68 亿步中 bound 槽为零，纯空转），且 solve 每次 `vec![None;
+γ]` 逐槽清零（γ = 层深）。两项均已根治（见下节机制 7/8）：改后近线性
+（k=13 → 28.5ms ≈ 67×，k=14 → 71.6ms，改前外推 ~7.6s ≈ 107×），剩余
+每层常数大致与 chain 负载同量级。
 
 ## 已知限制
 
 - check/infer 与 parser 在 let 链上仍是递归（L03 同款），深度负载需要深
-  栈（l04bench 默认 128MB 线程；`L04_STACK_MB` 可调）。
+  栈（l04bench 默认 128MB 线程；`L04_STACK_MB` 可调）。实测 ~5 万层
+  溢栈（chain/implicit k=15，n=65536）。
 - 参考版的深层 Box 项析构会爆栈，bench 里 `mem::forget`（L03 同款处理）。
+- **λ 体内的 `let` 会弄坏平坦 def 区域**（L03 同款潜伏缺陷，非本层引入）：
+  define 在全局 `defs` 追加，外层 env 的平坦切片随之失配——debug 断言
+  炸、release 静默解析错（参考版无此问题：上下文是持久链，内层 define
+  不外泄）。现有负载/测试未触达该形态（let 都在顶层链）。修法需把
+  define 与平坦区域解耦，牵动 chain 负载的线性保证，留待后续。

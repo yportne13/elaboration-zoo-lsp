@@ -28,6 +28,10 @@
 //! - **solve 的 lams**：icit 取收集序反转（应用序），最外层 λ 拿**最先
 //!   应用**槽位的 icit——与上游 `reverse $ map snd sp` 一致；β 不看
 //!   icit，仅影响解的显示。
+//! - **两处 O(层深) 定式化**（implicit 负载二次方 → 近线性）：`BdCons`
+//!   入链维护 false-run（`false_run`/`after_run`），AppBds 在 binds 耗尽
+//!   后整段 O(1) 跳过 define 槽（注入评估不再沿链空转）；solve 的偏置换
+//!   换代缓冲（[`RenBuf`]）以 epoch 换代代替 `vec![None; γ]` 逐槽清零。
 //!
 //! 与参考版（`super`）共用 parser / pretty / 错误显示，输出逐字节一致
 //! （互检测试）。
@@ -62,7 +66,27 @@ pub(crate) enum Tm<'a> {
 /// 上游 `BD` 本就不带 icit（`vAppBDs` 硬编码 Expl），同款。
 pub(crate) struct BdCons<'a> {
     bound: bool,
+    /// 本节点向外（next 方向）连续 `bound: false`（define 槽）的个数；
+    /// bound 槽为 0。AppBds 在 binds 耗尽后用它在 O(1) 内整段跳过
+    /// false-run（implicit 负载的整条链全是 define 槽，注入评估从
+    /// O(层深) 变 O(1)）。
+    false_run: u32,
+    /// 本 false-run 之后的第一个槽（bound 槽或链尾）——跳段的落点。
+    after_run: Option<&'a BdCons<'a>>,
     next: Option<&'a BdCons<'a>>,
+}
+
+impl<'a> BdCons<'a> {
+    /// 入链构造（新槽恒为链头，最内层）。run 统计只读既有节点——bump
+    /// 持久链无需回写，入链即确定。
+    fn new(bound: bool, next: Option<&'a BdCons<'a>>) -> Self {
+        let (false_run, after_run) = match (bound, next) {
+            (true, _) => (0, next),
+            (false, Some(n)) if !n.bound => (n.false_run + 1, n.after_run),
+            (false, _) => (1, next),
+        };
+        BdCons { bound, false_run, after_run, next }
+    }
 }
 
 // values（打包值）
@@ -503,6 +527,18 @@ fn eval_iter<'a>(
                     // 与 reference 的 (None, None) 对齐：bds 先行耗尽
                     debug_assert!(env.binds.is_none() && env.flat_len == 0);
                 }
+                Some(b) if env.binds.is_none() && !b.bound => {
+                    // O(1) 跳段：binds 耗尽后剩余链只剩 define 槽（bound 槽
+                    // 与 binds 链平行入链，binds 空则链上不再有 bound 节点）。
+                    // false-run 整段只递减 flat_len、从不产生实参——按入链时
+                    // 维护的 run 长度一次跳完，落点 = run 后第一个槽。
+                    // （implicit 负载整条链全 false：注入评估 O(层深) → O(1)。）
+                    debug_assert!(env.flat_len >= b.false_run); // 链与 env 平行
+                    work.push(W::AppBds(
+                        Env { flat_len: env.flat_len - b.false_run, ..env },
+                        b.after_run,
+                    ));
+                }
                 Some(b) => {
                     // 内层绑定 = 链头；链耗尽后走平坦 def 区域末端。先跑
                     // 余下槽位（外层），再应用本槽（内层最后应用）
@@ -782,6 +818,7 @@ fn unify_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    ren: &mut RenBuf,
     l0: u32,
     t0: V,
     u0: V,
@@ -904,13 +941,13 @@ fn unify_iter<'a>(
                     let mut args = std::mem::take(&mut scratch1);
                     args.clear();
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                        solve(bump, spine, work, vals, icits, defs, metas, l, m, &args, u)
+                        solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
                     } else {
                         let mut args = std::mem::take(&mut scratch2);
                         args.clear();
                         match spine.flex_of(u, &mut args) {
                             Some(m) => {
-                                solve(bump, spine, work, vals, icits, defs, metas, l, m, &args, t)
+                                solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, t)
                             }
                             None => false,
                         }
@@ -974,10 +1011,10 @@ fn unify_iter<'a>(
                 let mut args = std::mem::take(&mut scratch1);
                 args.clear();
                 let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                    solve(bump, spine, work, vals, icits, defs, metas, l, m, &args, u)
+                    solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
                 } else {
                     match spine.flex_of(u, &mut args) {
-                        Some(m) => solve(bump, spine, work, vals, icits, defs, metas, l, m, &args, t),
+                        Some(m) => solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, t),
                         None => false,
                     }
                 };
@@ -998,6 +1035,44 @@ fn unify_iter<'a>(
 // solve（invert + rename + lams，全迭代）
 // --------------------------------------------------------------------------------
 
+/// solve 的偏置换缓冲（generational）：`val[x]` 在第 `epoch` 代里给出
+/// level x → 新下标；`stamp[x] == epoch` 表示条目有效。`reset` 只推进
+/// epoch（O(1) 换代，免逐槽清零）——把 solve 的 `vec![None; γ]` 初始化
+/// 从 O(上下文深度) 降为常数（implicit 负载 γ = 层深，二次项来源之一）。
+/// 缓存跨 solve 持久（Machine 持有），按需扩容、旧代条目自然失效。
+#[derive(Default)]
+struct RenBuf {
+    val: Vec<u32>,
+    /// 各 level 槽位的生效代数（与 `val` 平行）；`== epoch` 才有效。
+    stamp: Vec<u64>,
+    epoch: u64,
+}
+
+impl RenBuf {
+    /// 换代即「清空」：旧条目的 gen 不等于新 epoch，全部失效。
+    #[inline]
+    fn reset(&mut self) {
+        self.epoch += 1;
+    }
+    #[inline]
+    fn get(&self, x: usize) -> Option<u32> {
+        if self.stamp.get(x).copied() == Some(self.epoch) {
+            Some(self.val[x])
+        } else {
+            None
+        }
+    }
+    #[inline]
+    fn set(&mut self, x: usize, v: u32) {
+        if x >= self.val.len() {
+            self.val.resize(x + 1, 0);
+            self.stamp.resize(x + 1, 0); // 0 != epoch（epoch 从 1 起），新槽全部无效
+        }
+        self.val[x] = v;
+        self.stamp[x] = self.epoch;
+    }
+}
+
 /// 求解：`Γ ⊢ ?m args ≡ rhs` → `?m := λ x1…xn. rhs[args⁻¹]`。
 /// 失败即不改 metacontext（invert/rename 完成前不写表）。实参带 icit
 /// （lams 用）。
@@ -1009,6 +1084,7 @@ fn solve<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    ren: &mut RenBuf,
     gamma: u32,
     m: u32,
     args: &[(V, Icit)], // 逆应用序（spine 收集器的输出）
@@ -1017,21 +1093,21 @@ fn solve<'a>(
     // invert：实参（应用序）逐个 force 成刚性变量，赋解域下标；
     // 重复/非变量即非模式，失败（icit 不参与——上游 invert 丢弃之）
     let dom = args.len() as u32;
-    let mut ren: Vec<Option<u32>> = vec![None; gamma as usize];
+    ren.reset(); // 换代：本解的映射从空开始，O(1) 免逐槽清零
     for (i, &(a, _)) in args.iter().rev().enumerate() {
         let f = force(bump, spine, work, vals, icits, defs, metas, a);
         if v_tag(f) != 0 {
             return false;
         }
         let x = v_lvl_of(f) as usize;
-        if x >= gamma as usize || ren[x].is_some() {
+        if x >= gamma as usize || ren.get(x).is_some() {
             return false;
         }
-        ren[x] = Some(i as u32);
+        ren.set(x, i as u32);
     }
     // rename（任务栈；occurs/scope check 在这里）
     let Some(tm) =
-        rename_iter(bump, spine, work, vals, icits, defs, &mut ren, metas, m, dom, gamma, rhs)
+        rename_iter(bump, spine, work, vals, icits, defs, ren, metas, m, dom, gamma, rhs)
     else {
         return false;
     };
@@ -1068,7 +1144,7 @@ fn rename_iter<'a>(
     vals: &mut Vec<V>,
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
-    ren: &mut Vec<Option<u32>>,
+    ren: &mut RenBuf,
     metas: &[MetaEntry],
     target_m: u32,
     dom0: u32,
@@ -1120,7 +1196,7 @@ fn rename_iter<'a>(
                     0 => {
                         let x = v_lvl_of(v) as usize;
                         // scope check（x 不在 spine 映射里）
-                        let Some(xp) = ren.get(x).and_then(|o| *o) else {
+                        let Some(xp) = ren.get(x) else {
                             return None;
                         };
                         done.push(bump.alloc(Tm::Var(dom - xp - 1)));
@@ -1139,7 +1215,7 @@ fn rename_iter<'a>(
                             }
                             _ => {
                                 let x = v_lvl_of(hd) as usize;
-                                let Some(xp) = ren.get(x).and_then(|o| *o) else {
+                                let Some(xp) = ren.get(x) else {
                                     return None; // scope check
                                 };
                                 let head_tm = bump.alloc(Tm::Var(dom - xp - 1));
@@ -1153,12 +1229,8 @@ fn rename_iter<'a>(
                             let env = env_ext(bump, c.env, v_lvl(cod));
                             eval_iter(bump, spine, work, vals, icits, defs, metas, env, c.body)
                         };
-                        // lift：binder 槽 (cod → dom)，单调插入
-                        let idx = cod as usize;
-                        if idx >= ren.len() {
-                            ren.resize(idx + 1, None);
-                        }
-                        ren[idx] = Some(dom);
+                        // lift：binder 槽 (cod → dom)（换代缓冲，插写即可）
+                        ren.set(cod as usize, dom);
                         tasks.push(RJob::Lam1(c.name, c.icit));
                         tasks.push(RJob::Ren { dom: dom + 1, cod: cod + 1, v: bv });
                     }
@@ -1169,11 +1241,7 @@ fn rename_iter<'a>(
                             eval_iter(bump, spine, work, vals, icits, defs, metas, env, cell.body)
                         };
                         // lift（同 Lam）
-                        let idx = cod as usize;
-                        if idx >= ren.len() {
-                            ren.resize(idx + 1, None);
-                        }
-                        ren[idx] = Some(dom);
+                        ren.set(cod as usize, dom);
                         tasks.push(RJob::Pi2(cell));
                         tasks.push(RJob::Ren { dom: dom + 1, cod: cod + 1, v: bv });
                         tasks.push(RJob::Ren { dom, cod, v: cell.dom });
@@ -1239,6 +1307,8 @@ pub(crate) struct Machine {
     /// 平坦环境区域（每轮 append-only，只增不减）。
     defs: Vec<V>,
     pub(crate) metas: Vec<MetaEntry>,
+    /// solve 的偏置换换代缓冲（跨求解持久，epoch 换代免逐槽清零）。
+    ren: RenBuf,
     /// 名字 → (绑定 lvl, 类型值)：`Raw::Var` 的 O(1) 解析。**只收源码
     /// binder**（bind/define）——inserted binder 不入表（对源码名不可见，
     /// 等价于参考版线性扫描跳过 `NameOrigin::Inserted`）。
@@ -1257,6 +1327,7 @@ impl Machine {
             vals: Vec::with_capacity(4096),
             defs: Vec::with_capacity(4096),
             metas: Vec::new(),
+            ren: RenBuf::default(),
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
         }
@@ -1281,7 +1352,7 @@ impl Machine {
         Cxt {
             env,
             types: Some(bump.alloc(TCons { name: bump.alloc_str(x), ty, source: true, next: cxt.types })),
-            bds: Some(bump.alloc(BdCons { bound: true, next: cxt.bds })),
+            bds: Some(bump.alloc(BdCons::new(true, cxt.bds))),
             lvl: cxt.lvl + 1,
             mark: cxt.mark + 1,
             pos: cxt.pos,
@@ -1302,7 +1373,7 @@ impl Machine {
                 source: false,
                 next: cxt.types,
             })),
-            bds: Some(bump.alloc(BdCons { bound: true, next: cxt.bds })),
+            bds: Some(bump.alloc(BdCons::new(true, cxt.bds))),
             lvl: cxt.lvl + 1,
             mark: cxt.mark,
             pos: cxt.pos,
@@ -1326,7 +1397,7 @@ impl Machine {
         Cxt {
             env,
             types: Some(bump.alloc(TCons { name: bump.alloc_str(x), ty, source: true, next: cxt.types })),
-            bds: Some(bump.alloc(BdCons { bound: false, next: cxt.bds })),
+            bds: Some(bump.alloc(BdCons::new(false, cxt.bds))),
             lvl: cxt.lvl + 1,
             mark: cxt.mark + 1,
             pos: cxt.pos,
@@ -1414,6 +1485,7 @@ impl Machine {
             &mut Vec::new(),
             &mut self.defs,
             &mut self.metas,
+            &mut self.ren,
             l,
             t,
             u,
@@ -1760,7 +1832,7 @@ impl Machine {
                     let new_meta = self.fresh_meta(bump, cxt.bds);
                     let a = self.eval(bump, cxt.env, new_meta);
                     let bds2: Option<&'a BdCons<'a>> =
-                        Some(bump.alloc(BdCons { bound: true, next: cxt.bds }));
+                        Some(bump.alloc(BdCons::new(true, cxt.bds)));
                     let cod_meta = self.fresh_meta(bump, bds2);
                     let cell = bump.alloc(PiCell {
                         name: PI_NAME,
@@ -2291,6 +2363,7 @@ mod tests {
         let mut icits: Vec<Icit> = Vec::new();
         let mut defs: Vec<V> = Vec::new();
         let mut metas: Vec<MetaEntry> = vec![MetaEntry::Unsolved];
+        let mut ren = RenBuf::default();
         // rhs = ((v1) {v0}) v0：内层 Impl、外层 Expl
         let rhs1 = spine.push(v_lvl(1), v_lvl(0), Icit::Impl);
         let rhs = spine.push(rhs1, v_lvl(0), Icit::Expl);
@@ -2299,7 +2372,7 @@ mod tests {
         assert!(
             solve(
                 &bump, &mut spine, &mut work, &mut vals, &mut icits, &mut defs, &mut metas,
-                2, 0, &args, rhs,
+                &mut ren, 2, 0, &args, rhs,
             ),
             "solve 应成功"
         );
@@ -2372,6 +2445,31 @@ mod tests {
             t.run("type", &src, &raw),
             super::super::main_with("type", &src),
             "implicit 判定与参考版不一致"
+        );
+    }
+
+    /// AppBds 跳段的混合形态：binder 槽夹在 define 槽之间的链（非连续
+    /// false-run，跳段中途停靠 bound 槽），逐字节一致。
+    #[test]
+    fn appbds_skip_mixed_chain_matches_basic() {
+        let src = concat!(
+            "let Nat : U = (N : U) -> (N -> N) -> N -> N;\n",
+            "let id : {A : U} -> A -> A = \\x. x;\n",
+            "let p0 : Nat = \\N s z. s (s z);\n",
+            "let p1 : Nat = id p0;\n",
+            "let f : (u : Nat) -> Nat = \\u. id u;\n",
+            "f p1\n"
+        );
+        let Some(raw) = super::super::parser::parser(src, 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert!(t.bench_check(&raw), "mixed 形态未通过");
+        let mut t = Tycker::new();
+        assert_eq!(
+            t.run("type", src, &raw),
+            super::super::main_with("type", src),
+            "mixed 形态与参考版不一致"
         );
     }
 
