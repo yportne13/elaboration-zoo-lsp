@@ -22,9 +22,10 @@
 //!   时 icit 取自掩码（L04 硬编码 Expl 的 `AppBdsOne` 在这里变成
 //!   `AppPrunOne` 带 icit）；none-run 跳段/`eval_fresh` 快捷路径原样继承。
 //! - **unify 的分派升级**：同头 flex-flex 走 [`intersect_bump`]（变量对
-//!   逐槽取交，差异槽剪枝；上游 `impossible` 的长度失配落地为
-//!   「共同前缀照常比较 + 必败哨兵」，不炸栈、结论同为失败）；异头
-//!   flex-flex 走 [`flex_flex_bump`]（较长 spine 一侧优先反演，失败落另一侧）。
+//!   逐槽取交，差异槽剪枝；上游 `impossible` 的长度失配落地为**直接失败**
+//!   ——与参考版 unify_sp 的「失配即败、零比较」同语义，不炸栈，且不会在
+//!   失败前求解共同前缀里的 flex 而污染 metacontext）；异头 flex-flex 走
+//!   [`flex_flex_bump`]（较长 spine 一侧优先反演，失败落另一侧）。
 //! - **rename 的 flex 分支 = [`prune_vflex_bump`]**：spine 槽位是 ren 里的
 //!   变量→改名保留；越界变量→记 `None` 进 NeedsPruning；非变量→嵌套
 //!   rename（共享 ren/不共享任务栈）。NeedsPruning 时 [`prune_meta_bump`]
@@ -585,7 +586,7 @@ fn eval_iter<'a>(
                     // 与 binds 链平行入链，binds 空则链上不再有绑定槽）。
                     // none-run 整段只递减 flat_len、从不产生实参——按入链时
                     // 维护的 run 长度一次跳完，落点 = run 后第一个槽。
-                    debug_assert!(env.flat_len >= b.none_run); // 链与 env 平行
+                    assert!(env.flat_len >= b.none_run); // 链与 env 平行（release 也查：错位时 u32 减会 wrap 成静默越界）
                     work.push(W::AppPrun(
                         Env {
                             flat_len: env.flat_len - b.none_run,
@@ -876,10 +877,11 @@ enum UItem<'a> {
 
 /// `?m args ≡ ?m args'`（同头 flex）：上游 `intersect`。逐槽（内→外，
 /// 对应 Haskell `go` 的剥序）都取到裸变量则产出掩码（槽位相等 → 其 icit、
-/// 不等 → None）；有 None 即剪枝（`pruneMeta`），全相等即成立。任一对含
-/// 非变量、或长度不等 → 回落 `unify_sp` 逐实参比较（长度不等在共同前缀
-/// 比较完后由**必败哨兵**收尾——上游此分支是 `impossible`，本层落地为
-/// 同为失败的不炸栈版本）。
+/// 不等 → None）；有 None 即剪枝（`pruneMeta`），全相等即成立。长度不等
+/// 直接失败（上游 `impossible` 分支 → unify_sp 的长度失配）：与参考版的
+/// 「失配即败、零比较」同语义——不比较共同前缀，避免前缀里的 flex 在
+/// 失败前被提前求解（污染 metacontext、改变失败路径的错误渲染）。任一对
+/// 含非变量 → 回落 `unify_sp` 逐实参比较（长度相等，逐对一致）。
 #[allow(clippy::too_many_arguments)]
 fn intersect_bump<'a>(
     bump: &'a Bump,
@@ -897,9 +899,12 @@ fn intersect_bump<'a>(
 ) -> bool {
     let n1 = args1.len();
     let n2 = args2.len();
-    let common = n1.min(n2);
+    if n1 != n2 {
+        return false; // 长度失配：直败零比较（连 force/压栈都省）
+    }
+    let common = n1;
     let mut pr: Vec<Option<Icit>> = Vec::with_capacity(common);
-    let mut fallback = n1 != n2;
+    let mut fallback = false;
     for k in 0..common {
         let f1 = force(bump, spine, work, vals, icits, defs, metas, args1[k].0);
         let f2 = force(bump, spine, work, vals, icits, defs, metas, args2[k].0);
@@ -921,11 +926,7 @@ fn intersect_bump<'a>(
         }
         return true; // 两 spine 逐槽相等
     }
-    // unify_sp 回落：哨兵先压（最后弹）——长度不等时共同前缀照常比较后必败
-    if n1 != n2 {
-        stack.push(UItem::Pair(l, v_lvl(0), v_lvl(1)));
-    }
-    // 前缀对压栈（内先压 → 弹出外先，对齐 unify_sp 的递归序）
+    // unify_sp 回落：前缀对压栈（内先压 → 弹出外先，对齐 unify_sp 的递归序）
     for k in 0..common {
         let (a1, _) = args1[k];
         let (a2, _) = args2[k];
@@ -1143,31 +1144,31 @@ fn unify_iter<'a>(
                     // 同头刚性：逐实参比较（应用序；收集是逆序，压栈倒回）。
                     // 实参 icit 不比（类型已定，上游同款）。注：L03 的
                     // 「连续链长度 fail-fast」在 L04 已移除，此处同无。
-                if memo_on {
-                    stack.push(UItem::Store((t.0, u.0)));
-                }
-                // 同头中性逐层比较：函数部分（f）与最外层实参（a）各自作为
-                // 一对入栈，交给完整 unify 分派（同头继续下钻、异头 flex 走
-                // flex_flex、同头 flex 走 intersect）。**不能**在此直接下钻
-                // 进实参链——实参可能是异头 flex（如非线性的 `?6 a b` vs
-                // `?0 a a`），下钻会误比其内层变量。
-                let (f1, a1) = {
-                    let e = &spine.stack[h1];
-                    (e.f, e.a)
-                };
-                let (f2, a2) = {
-                    let e = &spine.stack[h2];
-                    (e.f, e.a)
-                };
-                // 对齐 unify_sp：先比函数部分（tail）再比最外层实参（head）。
-                // LIFO → 先 push 实参、后 push 函数部分（函数部分在栈顶先弹出）。
-                // 函数部分作为一整对交给 unify（同头则再逐层下钻、异头走 flex）。
-                if a1.0 != a2.0 {
-                    stack.push(UItem::Pair(l, a1, a2));
-                }
-                if f1.0 != f2.0 {
-                    stack.push(UItem::Pair(l, f1, f2));
-                }
+                    if memo_on {
+                        stack.push(UItem::Store((t.0, u.0)));
+                    }
+                    // 同头中性逐层比较：函数部分（f）与最外层实参（a）各自作为
+                    // 一对入栈，交给完整 unify 分派（同头继续下钻、异头 flex 走
+                    // flex_flex、同头 flex 走 intersect）。**不能**在此直接下钻
+                    // 进实参链——实参可能是异头 flex（如非线性的 `?6 a b` vs
+                    // `?0 a a`），下钻会误比其内层变量。
+                    let (f1, a1) = {
+                        let e = &spine.stack[h1];
+                        (e.f, e.a)
+                    };
+                    let (f2, a2) = {
+                        let e = &spine.stack[h2];
+                        (e.f, e.a)
+                    };
+                    // 对齐 unify_sp：先比函数部分（tail）再比最外层实参（head）。
+                    // LIFO → 先 push 实参、后 push 函数部分（函数部分在栈顶先弹出）。
+                    // 函数部分作为一整对交给 unify（同头则再逐层下钻、异头走 flex）。
+                    if a1.0 != a2.0 {
+                        stack.push(UItem::Pair(l, a1, a2));
+                    }
+                    if f1.0 != f2.0 {
+                        stack.push(UItem::Pair(l, f1, f2));
+                    }
                     continue;
                 }
                 // 异头：一侧 flex 头（f1/f2 已排除双 flex）→ 该侧 solve；
