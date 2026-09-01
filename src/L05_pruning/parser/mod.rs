@@ -1,10 +1,9 @@
 use lex::{TokenKind, TokenNode};
-use syntax::{Either, Icit, Raw};
 
 use crate::parser_lib::*;
+use smol_str::SmolStr;
 
 mod lex;
-pub mod syntax;
 
 use TokenKind::*;
 
@@ -18,6 +17,40 @@ pub fn parser(input: &str, id: u32) -> Option<Raw> {
     .and_then(|(_, ret)| p_raw(&ret).map(|x| x.1))
 }
 
+/// 隐式/显式标记（上游 04 `Icit`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Icit {
+    Impl,
+    Expl,
+}
+
+/// lambda binder / 应用实参的命名引用（上游 `Either Name Icit`）：
+/// `Name` = 命名隐式（`\{x = y}` binder、`t {x = u}` 实参——按 Pi binder
+/// 名字定位插入点）；`Icit` = 位置隐式/显式。
+#[derive(Clone, Debug, PartialEq)]
+pub enum Either {
+    Name(Span<SmolStr>),
+    Icit(Icit),
+}
+
+/// L05（pruning）的表面语法（上游 05-pruning `Presyntax.hs` 的 `Raw`，
+/// 与 L04 同一套 presyntax）。与 L03 的差别：
+/// - `Lam` binder / `App` 实参携带 [`Either`]，`Pi` 携带 [`Icit`]；
+/// - 多了 `{x}`、`{x : A}`、`{x = e}` 形态（Pi binder 可省类型注解 → 洞）；
+/// - `let` 的类型注解可省（→ 洞）；
+/// - [`Raw::SrcPos`] 同 L03：`withPos` 给每个产生式包上源位置。
+#[derive(Clone, Debug)]
+pub enum Raw {
+    Var(Span<SmolStr>),
+    Lam(Span<SmolStr>, Either, Box<Raw>),
+    App(Box<Raw>, Box<Raw>, Either),
+    U,
+    Pi(Span<SmolStr>, Icit, Box<Raw>, Box<Raw>),
+    Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
+    Hole,
+    SrcPos(Span<()>, Box<Raw>),
+}
+
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
     move |input: &'b [TokenNode<'a>]| match input.first() {
         Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|_| ()))),
@@ -25,9 +58,9 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
     }
 }
 
-fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<String>> {
+fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>> {
     move |input: &'b [TokenNode<'a>]| match input.first() {
-        Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|s| s.0.to_owned()))),
+        Some(x) if x.data.1 == p => input.get(1..).map(|i| (i, x.map(|s| SmolStr::new(s.0)))),
         _ => None,
     }
 }
@@ -46,31 +79,46 @@ where
     (kw(LCurly), p, kw(RCurly)).map(|c| c.1)
 }
 
-fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
-    string(Ident)
-        .map(Raw::Var)
-        .or(kw(UKeyword).map(|_| Raw::U))
-        .or(kw(Hole).map(|_| Raw::Hole))
-        .or(paren(p_raw))
-        .parse(input)
+/// main.hs 的 `withPos`：包一层 `Raw::SrcPos`，位置取产生式第一个 token 的
+/// 起点。
+fn with_pos<'a: 'b, 'b, P>(p: P) -> impl Parser<&'b [TokenNode<'a>], Raw>
+where
+    P: Parser<&'b [TokenNode<'a>], Raw>,
+{
+    move |input: &'b [TokenNode<'a>]| {
+        let first = input.first()?;
+        let pos = Span {
+            data: (),
+            start_offset: first.start_offset,
+            end_offset: first.end_offset,
+            path_id: first.path_id,
+        };
+        let (rest, r) = p.parse(input)?;
+        Some((rest, Raw::SrcPos(pos, Box::new(r))))
+    }
 }
 
-fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], (Either, Raw))> {
-    let named_arg = brace((
-        string(Ident),
-        kw(Eq),
-        p_raw,
-    ))
-    .map(|(x, _, t)| (Either::Name(x), t));
+fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
+    with_pos(
+        string(Ident)
+            .map(Raw::Var)
+            .or(kw(UKeyword).map(|_| Raw::U))
+            .or(kw(Hole).map(|_| Raw::Hole)),
+    )
+    .or(paren(p_raw))
+    .parse(input)
+}
 
-    let implicit_arg = brace(p_raw)
-        .map(|t| (Either::Icit(Icit::Impl), t));
+/// 实参（上游 `pArg`）：`{x = t}` 命名隐式 | `{t}` 隐式 | atom 显式。
+/// 命名形态须先于隐式形态尝试（`{x = t}` 的 `x` 会先吃掉 `{`）。
+fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], (Either, Raw))> {
+    let named_arg = brace((string(Ident), kw(Eq), p_raw)).map(|(x, _, t)| (Either::Name(x), t));
+
+    let implicit_arg = brace(p_raw).map(|t| (Either::Icit(Icit::Impl), t));
 
     let explicit_arg = p_atom.map(|t| (Either::Icit(Icit::Expl), t));
 
-    let arg_parser = named_arg.or(implicit_arg).or(explicit_arg);
-
-    arg_parser.parse(input)
+    named_arg.or(implicit_arg).or(explicit_arg).parse(input)
 }
 
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
@@ -80,23 +128,23 @@ fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
     let result = args.into_iter().fold(head, |acc, (icit, arg)| {
         Raw::App(Box::new(acc), Box::new(arg), icit)
     });
-
     Some((input, result))
 }
 
-fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Span<String>)> {
+/// binder 位置：普通标识符或匿名 binder `_`。
+fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Span<SmolStr>)> {
     string(Ident).or(string(Hole)).parse(input)
 }
 
-fn p_lam_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], (Span<String>, Either))> {
+/// lambda binder（上游 `pLamBinder`）：`x` | `{x}` | `{x = y}`
+/// （`y` 是体内可见的本地名，`x` 是按名定位的引用）。
+fn p_lam_binder<'a: 'b, 'b>(
+    input: &'b [TokenNode<'a>],
+) -> Option<(&'b [TokenNode<'a>], (Span<SmolStr>, Either))> {
     let explicit_binder = p_bind.map(|x| (x, Either::Icit(Icit::Expl)));
     let implicit_binder = brace(p_bind).map(|x| (x, Either::Icit(Icit::Impl)));
-    let named_binder = brace((
-        string(Ident),
-        kw(Eq),
-        p_bind,
-    ))
-    .map(|(x, _, y)| (y, Either::Name(x)));
+    let named_binder =
+        brace((string(Ident), kw(Eq), p_bind)).map(|(x, _, y)| (y, Either::Name(x)));
 
     explicit_binder.or(implicit_binder).or(named_binder).parse(input)
 }
@@ -112,25 +160,25 @@ fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>],
         .parse(input)
 }
 
-fn p_pi_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], (Vec<Span<String>>, Raw, Icit))> {
-    // 解析隐式参数 {x : A} 或 {x}
+/// Pi binder（上游 `pPiBinder`）：`{xs}` / `{xs : A}`（类型可省 → 洞，隐式）
+/// | `(xs : A)`（显式）。
+fn p_pi_binder<'a: 'b, 'b>(
+    input: &'b [TokenNode<'a>],
+) -> Option<(&'b [TokenNode<'a>], (Vec<Span<SmolStr>>, Raw, Icit))> {
     let implicit_binder = brace((
-        p_bind.many1(),               // 解析一个或多个绑定变量 xs
-        (kw(Colon),p_raw).option().map(|x| match x {
-            Some((_, x)) => x,
-            None => Raw::Hole,
-        })
+        p_bind.many1(),
+        (kw(Colon), p_raw)
+            .option()
+            .map(|x| match x {
+                Some((_, x)) => x,
+                None => Raw::Hole,
+            }),
     ))
-    .map(|(xs, a)| (xs, a, Icit::Impl)); // 返回 (xs, a, Impl)
+    .map(|(xs, a)| (xs, a, Icit::Impl));
 
-    // 解析显式参数 (x : A)
-    let explicit_binder = paren((
-        p_bind.many1(),               // 解析一个或多个绑定变量 xs
-        kw(Colon).with(p_raw)       // 解析类型 A
-    ))
-    .map(|(xs, a)| (xs, a.1, Icit::Expl)); // 返回 (xs, a, Expl)
+    let explicit_binder = paren((p_bind.many1(), kw(Colon).with(p_raw)))
+        .map(|(xs, a)| (xs, a.1, Icit::Expl));
 
-    // 组合所有可能的解析器
     implicit_binder.or(explicit_binder).parse(input)
 }
 
@@ -138,7 +186,7 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], 
     let param = p_pi_binder.map(|(binder, ty, icit)| {
         binder
             .into_iter()
-            .map(|b| (b, ty.clone(), icit.clone()))
+            .map(|b| (b, ty.clone(), icit))
             .collect::<Vec<_>>()
     });
     (param.many1(), kw(Arrow), p_raw)
@@ -154,59 +202,48 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], 
         .parse(input)
 }
 
-//TODO:fun_or_spine
 fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
-            Some((kw, cod)) => Raw::Pi(kw.map(|_| "_".to_owned()), Icit::Expl, Box::new(sp), Box::new(cod)),
+            Some((kw, cod)) => {
+                Raw::Pi(kw.map(|_| SmolStr::new("_")), Icit::Expl, Box::new(sp), Box::new(cod))
+            }
             None => sp,
         })
         .parse(input)
 }
 
+/// `let x [: A]? = t; u`（注解可省 → 洞；上游 04 的 readme 示例用到省略态）。
 fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (
         kw(LetKeyword),
-        string(Ident),
-        (kw(Colon),p_raw).map(|(_, x)| x).option(),
+        p_bind,
+        (kw(Colon), p_raw).map(|(_, x)| x).option(),
         kw(Eq),
         p_raw,
         kw(Semi),
         p_raw,
     )
-        .map(|(_, binder, ann, _, val, _, body)| {
-            Raw::Let(binder, Box::new(ann.unwrap_or(Raw::Hole)), Box::new(val), Box::new(body))
-        })
-        .parse(input)
+    .map(|(_, binder, ann, _, val, _, body)| {
+        Raw::Let(binder, Box::new(ann.unwrap_or(Raw::Hole)), Box::new(val), Box::new(body))
+    })
+    .parse(input)
 }
 
+/// `pRaw = withPos (pLam <|> pLet <|> try pPi <|> funOrSpine)`。
 fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
-    p_lam.or(p_let).or(p_pi).or(fun_or_spine).parse(input)
+    with_pos(p_lam.or(p_let).or(p_pi).or(fun_or_spine)).parse(input)
 }
 
 #[test]
 fn test() {
     let input = r#"
-let Eq : {A : U} -> A -> A -> U
-    = \ {A} x y. (P : A -> U) -> P x -> P y;
-let refl : {A : U}{x : A} -> Eq {A} x x
-    = \ _ px. px;
-
-let the : (A : U) -> A -> A = \ _ x. x;
-
-let m : (A : U)(B : U) -> U -> U -> U = _;
-let test = \ a b. the (Eq (m a a) (\ x y. y)) refl;
-
-let m : U -> U -> U -> U = _;
-let test = \ a b c. the (Eq (m a b c) (m c b a)) refl;
-
-
-let pr1 = \ f x. f x;
-let pr2 = \ f x y. f x y;
-let pr3 = \ f. f U;
-
-U
-
+let id : {A : U} -> A -> A = \x. x;
+let argTest1 = const {U}{U} U;
+let argTest2 = const {B = U} U;
+let namedLam : {A B C} -> A -> B -> C -> A = \{B = B} a b c. a;
+let insert2 = (\{A} x. the A x) U;
+the (Eq (mul ten ten) hundred) refl
 "#;
     println!("{:#?}", parser(input, 0).unwrap());
 }
