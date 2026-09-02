@@ -69,9 +69,11 @@ cargo run --release --bin l05bench -- --workload all --max-k 13
 3. **同头刚性逐实参环的修正**：L04 的内联环在实参本身是**异头 flex 链**时会
    错误地"下钻"进实参链逐层比较（把 `?6 a b` 与 `?0 a a` 的内层 `b`、`a`
    当成要比较的对，误判 `(0,0)` 不等）。L05 的插入/剪枝大量制造该形态，故
-   把每层只比较「函数部分入栈递归 + 最外层实参入栈」，实参整体交给 flex-flex
-   / intersect——与参考版 `unify_sp` 的「先 tail 后 head」严格同序。
-   （2026-09-02：L03/L04 已同款移植本形态并移除各自的链长 fail-fast，
+   改为**受控内联环**（2026-09-02 统一口径）：沿 `.a` 仅在纯 ChainWrap 同头
+   延续处（实参链顶层 `f` 与本层 `f` 同字）下钻，否则停钻把「函数部分对 +
+   最外层实参对」交回完整分派（实参整体交给 flex-flex / intersect）——与
+   参考版 `unify_sp` 的「先 tail 后 head」严格同序，church 链零往返保留。
+   （L03/L04 已同款移植本形态并移除各自的链长 fail-fast，
    误杀形态见黑盒 `unify_eta_absorption_and_meta_shorter_side`。）
 4. **`RenBuf` 加非线性哨兵** `NONE_MARK`：`invert` 把重复变量整级标为该哨兵，
    `get` 视其缺项（rename 的 scope check 自然失败、掩码记 `None`），无需第三
@@ -107,6 +109,11 @@ k=9   n=1024    fast=8739ms / basic=80076ms   (≈9×，见「已知限制」)
 implicit 负载（顶层 `id p_{i-1}`，插入 meta 类型恒 `U`）走 `binds==0`+tag3/5
 快路径保持近线性（每层 ×2 递增，与 L04 同量级）。church/solve 上快版稳定领先
 参考版 12~26×。
+
+（2026-09-02 复测，受控内联环 + force 缓冲 + invert 哨兵修复后，fast 口径：
+solve k=14 2.68ms / k=15 5.02ms；fast_ss 口径 implicit k=13 28.3ms / k=14
+62.1ms——与下表量级一致，哨兵修复只作用于 ≥3 次重复变量的非线性路径，
+conv 内联环在刚性同头链上恢复零往返。）
 
 ## 已知限制
 

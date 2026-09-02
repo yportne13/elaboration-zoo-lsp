@@ -283,7 +283,7 @@ L02 的扁平 spine 栈一个 entry 是「一次中性应用」，但 `f`/`a` �
 | `Machine`/`Tycker` 稳态 | 同款；`display_metas` 引读解值（quote 0） |
 | quote 记忆化 `quote_memo` | 同款移植（dup 族 1.9×/3.6×；quote 期间 metacontext 冻结，键稳定） |
 | ——（L02 conv memo） | **unify 判等记忆化已移植**（提速第二轮）：只缓存成功 + 单调性论证（见 `unify_iter` 注释与 readme「提速第二轮」节）；solve 分支成功亦入表，`(p_k, ?x)` 型二次重走被命中剪掉 |
-| ——（L02 conv 连续链内联环） | ~~沿 `.a` 同步下走 + 连续链长度 fail-fast~~ **修订（2026-09-02）**：fail-fast 不健全（η 吸收 `P (h y)` vs `P (\x. h y x)`、meta 实参 `P _` vs `P (h y)` 两类误杀均实测）；且内联下钻会跳过内层头分派（实参恰是另一条中性链时被逐层 pairwise 误比，产错误解）。两者均已改：`(2,2)` 同头臂换成 L05 同款**单步派发**（每层只拆「函数部分 + 最外层实参」两对交给完整分派），派发序与参考版 `unify_sp` 严格同序；conv 负载每层多一次 worksheet 往返。黑盒 `unify_eta_absorption_matches_basic`/`unify_meta_shorter_side_solvable` 钉住。 |
+| ——（L02 conv 连续链内联环） | ~~沿 `.a` 同步下走 + 连续链长度 fail-fast~~ **修订（2026-09-02）**：fail-fast 不健全（η 吸收 `P (h y)` vs `P (\x. h y x)`、meta 实参 `P _` vs `P (h y)` 两类误杀均实测），移除；且无门控的 `.a` 下钻对带求解副作用的 unify 不健全——「实参恰是另一条中性链」被逐层 pairwise 误比会产出错误解（实测）。`(2,2)` 同头臂改为**受控内联环**：仅在纯 ChainWrap 同头延续处（实参链顶层 `f` 与本层 `f` 同字）下钻，否则停钻把子对交回完整分派；派发序与参考版 `unify_sp` 同序。church 链零往返保留（conv k=15 6.75ms），黑盒 `unify_eta_absorption_matches_basic`/`unify_meta_shorter_side_solvable` 钉住。 |
 
 ## 已知限制
 

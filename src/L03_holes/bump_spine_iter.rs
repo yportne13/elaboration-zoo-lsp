@@ -994,27 +994,54 @@ fn unify_iter<'a>(
                     // 屏障先压（LIFO：其上压入的子对先跑完）
                     stack.push(UItem::Store((t.0, u.0)));
                 }
-                // 同头中性逐层比较（L05 同款形态，见其 readme「性能版要点
-                // 3」）：每层只拆「函数部分 + 最外层实参」两对交给完整分派
-                // （同头再逐层、异头含 flex 走求解），**不**沿 `.a` 内联下钻
-                // ——下钻会跳过内层的头分派：`P (h y)` vs `P (?m …)` 这类
-                // 「实参恰是另一条中性链」的形态被逐层 pairwise 误比会产出
-                // 错误解（实测，曾靠链长 fail-fast 遮掩、守卫移除后暴露）。
-                // 派发序与参考版 `unify_sp` 严格同序：先 push 实参对、后 push
-                // 函数部分对（栈顶先弹 → 先递归进 tail＝最先应用的实参）。
-                let (f1, a1) = {
-                    let e = &spine.stack[h1];
-                    (e.f, e.a)
-                };
-                let (f2, a2) = {
-                    let e = &spine.stack[h2];
-                    (e.f, e.a)
-                };
-                if a1.0 != a2.0 {
+                // 受控内联环：沿 `.a` 同步下走，但**仅在纯 ChainWrap 同头
+                // 延续处下钻**——两侧实参链的顶层 `f` 与本层 `f` 同字
+                // （= 同一条中性链的下一层，App 同余 `App(f,·)` 直传），
+                // 零往返比较整条 church 链。实参若是**另一条**中性链
+                // （Apply 惯例的 partial 句柄 ≠ 头字；`P (h y)` vs `P (?m …)`
+                // 即此类），必须停下把子对交回完整分派——盲下钻会跳过内层
+                // 头分派，把该走求解的形态逐层 pairwise 误比（实测产错误解，
+                // 旧版 fail-fast 只遮掩了其中的不等情形）。
+                // 派发序与参考版 `unify_sp` 同序（先 tail＝最先应用的实参）：
+                // 停钻时先压本层实参对、后压函数部分对（栈顶先弹）。
+                let mut i1 = h1;
+                let mut i2 = h2;
+                loop {
+                    let (f1, a1) = {
+                        let e = &spine.stack[i1];
+                        (e.f, e.a)
+                    };
+                    let (f2, a2) = {
+                        let e = &spine.stack[i2];
+                        (e.f, e.a)
+                    };
+                    // 位相等后缀：本层实参对免比，但函数部分对仍须入栈
+                    // （`App(f1, S)` vs `App(f2, S)`：f1 ≠ f2 时漏压即漏比，
+                    // 原 L02 环先压 f 再查句柄即为此）
+                    if a1.0 == a2.0 {
+                        if f1.0 != f2.0 {
+                            stack.push(UItem::Pair(l, f1, f2));
+                        }
+                        break;
+                    }
+                    if v_tag(a1) == 2 && v_tag(a2) == 2 {
+                        // 下钻门控：两侧的实参链顶层 f 与本层 f 同字
+                        let cont = spine.stack[v_spine_of(a1)].f.0 == f1.0
+                            && spine.stack[v_spine_of(a2)].f.0 == f2.0;
+                        if cont {
+                            if f1.0 != f2.0 {
+                                stack.push(UItem::Pair(l, f1, f2));
+                            }
+                            i1 = v_spine_of(a1);
+                            i2 = v_spine_of(a2);
+                            continue;
+                        }
+                    }
                     stack.push(UItem::Pair(l, a1, a2));
-                }
-                if f1.0 != f2.0 {
-                    stack.push(UItem::Pair(l, f1, f2));
+                    if f1.0 != f2.0 {
+                        stack.push(UItem::Pair(l, f1, f2));
+                    }
+                    break;
                 }
                 continue;
             }
