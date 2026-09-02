@@ -958,14 +958,16 @@ fn unify_iter<'a>(
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
                         solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
                     } else {
-                        let mut args = std::mem::take(&mut conv.scratch2);
-                        args.clear();
-                        match spine.flex_of(u, &mut args) {
+                        let mut args2 = std::mem::take(&mut conv.scratch2);
+                        args2.clear();
+                        let r = match spine.flex_of(u, &mut args2) {
                             Some(m) => {
-                                solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, t)
+                                solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args2, t)
                             }
                             None => false,
-                        }
+                        };
+                        conv.scratch2 = args2;
+                        r
                     };
                     conv.scratch1 = args;
                     if solved {
@@ -980,45 +982,42 @@ fn unify_iter<'a>(
                     return false;
                 }
                 // 注：L03 此处有「连续链长度 fail-fast」（len 不同即不等）。
-                // L04 移除：`push` 的 len 延展启发式（实参是 spine 句柄 ⇒ 链
-                // 延长）无法区分「实参是本链的 partial（ChainWrap 惯例）」与
+                // L04 移除，两条独立的误杀机制（L02/L03 现已同款移除）：
+                // ① `push` 的 len 延展启发式（实参是 spine 句柄 ⇒ 链延长）
+                // 无法区分「实参是本链的 partial（ChainWrap 惯例）」与
                 // 「实参恰好是另一个中性应用」——`B (?m …)` 这类**中性头应用
                 // 到中性实参**的形态（隐式插入大量制造它）会让 len 虚增，
-                // fail-fast 在两链真实应用数相同时误判不等（comp 用例实测）。
-                // 真实的长度失配由下方内联环兜底：partial-头 对 经工作表
+                // 短侧含未解 meta 时（`B z` vs `B (?m a b)` 可解）误判不等；
+                // ② η 吸收：链 base 的 `a` 是闭包时应用可被收进 λ 体
+                // （`P (h y)` vs `P (\x. h y x)`）。comp 用例实测①，
+                // `conv_eta_absorption`/`unify_meta_shorter_side` 钉住两类。
+                // 真实的长度失配由下方逐层派发兜底：partial-头 对 经工作表
                 // 派发后必败，结论不变。
                 if memo_on {
                     stack.push(UItem::Store((t.0, u.0)));
                 }
-                // 内联环（L02 conv 冠军配方）：沿 `.a` 同步下走，f 位相等
-                // 直接跳过（icit 不参与），只有真正待比的子对才入工作表。
-                let mut i1 = h1;
-                let mut i2 = h2;
-                loop {
-                    let (f1, a1) = {
-                        let e = &spine.stack[i1];
-                        (e.f, e.a)
-                    };
-                    let (f2, a2) = {
-                        let e = &spine.stack[i2];
-                        (e.f, e.a)
-                    };
-                    if f1.0 != f2.0 {
-                        stack.push(UItem::Pair(l, f1, f2));
-                    }
-                    if v_tag(a1) == 2 && v_tag(a2) == 2 {
-                        if a1.0 == a2.0 {
-                            break; // 剩余 spine 同句柄：位相等，整段后缀相等
-                        }
-                        i1 = v_spine_of(a1);
-                        i2 = v_spine_of(a2);
-                    } else {
-                        if a1.0 != a2.0 {
-                            stack.push(UItem::Pair(l, a1, a2));
-                        }
-                        break;
-                    }
+                // 同头中性逐层比较（L05 同款形态）：每层只拆「函数部分 +
+                // 最外层实参」两对交给完整分派（icit 不参与，同头再逐层、
+                // 异头含 flex 走求解），**不**沿 `.a` 内联下钻——下钻会跳过
+                // 内层的头分派，`B (h y)` vs `B (?m …)` 这类「实参恰是另一
+                // 条中性链」的形态（隐式插入大量制造）会被逐层 pairwise 误比
+                // 而产出错误解。派发序与参考版 `unify_sp` 严格同序：先 push
+                // 实参对、后 push 函数部分对（栈顶先弹 → 先递归进 tail）。
+                let (f1, a1) = {
+                    let e = &spine.stack[h1];
+                    (e.f, e.a)
+                };
+                let (f2, a2) = {
+                    let e = &spine.stack[h2];
+                    (e.f, e.a)
+                };
+                if a1.0 != a2.0 {
+                    stack.push(UItem::Pair(l, a1, a2));
                 }
+                if f1.0 != f2.0 {
+                    stack.push(UItem::Pair(l, f1, f2));
+                }
+                continue;
             }
 
             // 求解：一侧是未解 flex；solve 成功即判等完成，直接入表。

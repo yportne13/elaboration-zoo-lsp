@@ -1203,3 +1203,40 @@ fn cross_l02_vs_l03_hole_divergence() {
     assert!(nf("let x : U = U; \\A. A").contains("?0"));
     assert!(L02_tyck::main_with("nf", "let x : U = U; \\A. A").contains("Can't infer"));
 }
+
+// ---- 评审回归：unify「连续链长度 fail-fast」的两类误杀（守卫已移除） ----
+
+/// η 吸收：`P (h y)`（len=2 连续链）vs `P (\x. h y x)`（len=1，base 实参
+/// 是闭包）βη 等价；原守卫误判不等（fast Cannot unify、basic 正常通过）。
+const ETA_ABSORB_CONV_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P (\\x. h y x) -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+/// meta 实参短侧：`P _`（len=1，实参是未解 meta）vs `P (h y)`（len=2，实参
+/// 是中性链）本可解（?m := h y）；原守卫的 len 延展启发式同样误判。L04
+/// readme 记录的「L03 潜伏缺陷」实测是活的，守卫移除后双版一致接受。
+const META_SHORTER_SIDE_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P _ -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+#[test]
+fn unify_eta_absorption_matches_basic() {
+    let b = ty(ETA_ABSORB_CONV_SRC);
+    assert!(!b.contains("Cannot unify"), "basic 不应拒绝良型 η 等价程序：\n{b}");
+    assert_parity(ETA_ABSORB_CONV_SRC);
+}
+
+#[test]
+fn unify_meta_shorter_side_solvable() {
+    let out = ty(META_SHORTER_SIDE_SRC);
+    assert!(!out.contains("Cannot unify"), "{out}");
+    // 短侧的 `_` 解为 (h y)：f 的类型显示实例化后的形态
+    assert!(out.contains("(f : P (h y) → U) → U"), "{out}");
+    assert_parity(META_SHORTER_SIDE_SRC);
+}

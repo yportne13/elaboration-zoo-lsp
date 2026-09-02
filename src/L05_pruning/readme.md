@@ -71,9 +71,17 @@ cargo run --release --bin l05bench -- --workload all --max-k 13
    当成要比较的对，误判 `(0,0)` 不等）。L05 的插入/剪枝大量制造该形态，故
    把每层只比较「函数部分入栈递归 + 最外层实参入栈」，实参整体交给 flex-flex
    / intersect——与参考版 `unify_sp` 的「先 tail 后 head」严格同序。
+   （2026-09-02：L03/L04 已同款移植本形态并移除各自的链长 fail-fast，
+   误杀形态见黑盒 `unify_eta_absorption_and_meta_shorter_side`。）
 4. **`RenBuf` 加非线性哨兵** `NONE_MARK`：`invert` 把重复变量整级标为该哨兵，
    `get` 视其缺项（rename 的 scope check 自然失败、掩码记 `None`），无需第三
    集合；换代缓冲不互踩（`prune_ty` 的嵌套 rename 自带 RenBuf）。
+   **修订（2026-09-02）**：`invert` 原 `None => set(x, i)` 臂在重复变量第 3
+   次出现时把哨兵覆盖成真实下标（`get` 把哨兵也报缺项，奇数次出现必坏），
+   掩码污染为全 `Some` → 快版错误接受并写出类型不合声明的解（参考版正确
+   Cannot unify）。修复：加 `RenBuf::has_mark` 区分「已标哨兵」与「从未
+   出现」，已标者保持哨兵。黑盒 `nonlinear_triple_occurrence_rejected_by_both`
+   钉住（`(m a a a)` 三次出现形态；既有两次出现用例不覆盖本缺陷）。
 5. **quote/unify 记忆化、复合环境、稳态复用、迭代内核**全部继承 L04；
    `AppPruning` 是项层的洞形态（值层无此构造），quote/unify 主体不增分支，
    pruning 只活在 `fresh_meta` / `solve` / `rename` 的 flex 分支 / `intersect`。
@@ -102,15 +110,20 @@ implicit 负载（顶层 `id p_{i-1}`，插入 meta 类型恒 `U`）走 `binds==
 
 ## 已知限制
 
-- **prune 负载的 telescope 物化代价**（L05 相对 L04 新增的固有开销）：typed
+- **prune 负载的 telescope 物化代价**（L05 相对 L04 新增）：typed
   meta 的闭类型 `eval [] (close_ty locals q)` 沿增长的 define 链构造，绑定层
   下的每次 `fresh_meta` 是 O(上下文深)——`prune_src` 每层在 `\a b.`（2 binder）
   下插入数个 meta、且链上有大量 define，`close_tm`+eval 使快版与参考版都超
-  线性（快版 n=1024 约 8.7s，参考版 80s）。这是上游 05 用惰性/持久结构隐藏、
-  本层显式物化后暴露的成本；`binds==0`（顶层）的插入仍走快路径 O(1)。
+  线性（快版 n=1024 约 8.7s，参考版 80s）。上游 05 用惰性/持久结构隐藏此
+  成本，本层显式物化后暴露；但**并非不可优化**：locals 是持久链表，在 LCons
+  节点缓存「已闭 telescope 前缀」、fresh_meta 只增量补新层，即可把每次构造
+  摊还 O(1)（未做）。`binds==0`（顶层）的插入仍走快路径 O(1)。
 - check/infer 与 parser 在 let 链上仍是递归（L03/L04 同款），参考版的深层
   rename/prune 在深负载需大栈（l05bench 默认 128MB 线程，`L05_STACK_MB` 可调；
   互检/黑盒里深负载用 `with_big_stack` 线程跑参考版）。
 - 参考版深层 Box 项析构会爆栈，bench 里 `mem::forget`（L03/L04 同款处理）。
-- `intersect` 的长度失配分支（上游 `impossible`）在本层落地为「共同前缀照常
-  比较 + 必败哨兵」，双实现一致，不炸栈、结论同为失败。
+- `intersect` 的长度失配分支（上游 `impossible`）：双实现均**立即失败、零
+  比较**——性能版 `if n1 != n2 { return false }`（刻意不比较共同前缀，避免
+  前缀里的 flex 被提前求解，见 `intersect_bump` 文档注释）；参考版
+  `intersect_go` 返回 `None` 回落 `unify_sp`，长度失配即 `Err`。结论同为
+  不可解，不炸栈。（旧版此条误写为「共同前缀照常比较 + 必败哨兵」。）

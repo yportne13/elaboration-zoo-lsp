@@ -1280,6 +1280,13 @@ impl RenBuf {
             _ => None,
         }
     }
+    /// 本代里 `x` 是否已标非线性哨兵（`get` 把哨兵视同缺项，invert 需要
+    /// 用它区分「已标 NONE_MARK」与「从未出现」——否则重复变量的第 3+ 次
+    /// 出现会把哨兵覆盖成真实映射，掩码被污染为全 Some）。
+    #[inline]
+    fn has_mark(&self, x: usize) -> bool {
+        self.stamp.get(x).copied() == Some(self.epoch) && self.val[x] == NONE_MARK
+    }
     #[inline]
     fn set(&mut self, x: usize, v: u32) {
         if x >= self.val.len() {
@@ -1292,7 +1299,8 @@ impl RenBuf {
 }
 
 /// 上游 `invert`：实参（应用序）逐个 force 成**裸刚性变量**。非线性
-/// （重复变量）不再失败：移出 renaming、记 `NONE_MARK`，产出把重复变量的
+/// （重复变量）不再失败：移出 renaming、记 `NONE_MARK`（后续出现保持哨兵
+/// 不覆盖），产出把重复变量的
 /// **全部出现**记为 `None` 的掩码（内先序 = args 序）；线性时返回空 vec
 /// （参考版的 `None` 掩码）。非变量实参即失败（`None`）。`ren` 换代缓冲
 /// 就地填充（后续 rename 直接消费），dom = `args.len()`。
@@ -1325,6 +1333,10 @@ fn invert_bump<'a>(
         let i = lvs.len() as u32;
         lvs.push(x);
         match ren.get(x as usize) {
+            // 已标非线性哨兵：保持 NONE_MARK 不动。`get` 视哨兵为缺项，
+            // 若走 `None` 臂会在第 3 次出现时把哨兵覆盖成真实下标（奇数次
+            // 出现必坏），掩码构造随之把重复变量的槽位全标 Some。
+            None if ren.has_mark(x as usize) => {}
             None => ren.set(x as usize, i),
             Some(_) => {
                 ren.set(x as usize, NONE_MARK);

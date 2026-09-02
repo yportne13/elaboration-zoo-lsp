@@ -967,12 +967,14 @@ fn unify_iter<'a>(
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
                         solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
                     } else {
-                        let mut args = std::mem::take(&mut scratch2);
-                        args.clear();
-                        match spine.flex_of(u, &mut args) {
-                            Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args, t),
+                        let mut args2 = std::mem::take(&mut scratch2);
+                        args2.clear();
+                        let r = match spine.flex_of(u, &mut args2) {
+                            Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args2, t),
                             None => false,
-                        }
+                        };
+                        scratch2 = args2;
+                        r
                     };
                     scratch1 = args;
                     if solved {
@@ -986,60 +988,33 @@ fn unify_iter<'a>(
                 if hd1.0 != hd2.0 {
                     return false;
                 }
-                // 连续链长度 fail-fast（L02 conv 内联环同款）：两侧都是连续
-                // 链（base+len-1 == idx，即逐条 push 相邻构建）而条目数不同
-                // ⇒ 归一化后应用个数不同 ⇒ 必不等。非连续链（共享后缀句柄、
-                // 跨期构建）len 不再等于应用个数，由连续性守卫排除。
-                {
-                    let e1 = &spine.stack[h1];
-                    let e2 = &spine.stack[h2];
-                    if e1.base as usize + e1.len as usize - 1 == h1
-                        && e2.base as usize + e2.len as usize - 1 == h2
-                        && e1.len != e2.len
-                    {
-                        return false;
-                    }
-                }
                 if memo_on {
-                    // 屏障先压（LIFO：其上内联环压入的子对先跑完）
+                    // 屏障先压（LIFO：其上压入的子对先跑完）
                     stack.push(UItem::Store((t.0, u.0)));
                 }
-                // 内联环（L02 conv 冠军配方的移植）：两侧各自按本侧惯例分解
-                // value(e) = App(f, v(a))，沿 `.a` 同步下走——f 位相等直接
-                // 跳过（ChainWrap 链每层同头字）、剩余 spine 同句柄即位相等
-                // 收尾，只有真正待比的子对才入工作表。church 链的刚性比较
-                // 整条链零往返；混合惯例链自动退化为逐层派发（仍正确）。
-                // 到达此处的链头为刚性或**同号**未解 flex（异头未解 flex 已
-                // 走上方求解路径、已解 flex 已被 force 展开），f 分量恒非闭
-                // 包（Apply/ChainWrap 的 β 岔路即时归约；unify 的 eta push
-                // 只推非闭包）。
-                let mut i1 = h1;
-                let mut i2 = h2;
-                loop {
-                    let (f1, a1) = {
-                        let e = &spine.stack[i1];
-                        (e.f, e.a)
-                    };
-                    let (f2, a2) = {
-                        let e = &spine.stack[i2];
-                        (e.f, e.a)
-                    };
-                    if f1.0 != f2.0 {
-                        stack.push(UItem::Pair(l, f1, f2));
-                    }
-                    if v_tag(a1) == 2 && v_tag(a2) == 2 {
-                        if a1.0 == a2.0 {
-                            break; // 剩余 spine 同句柄：位相等，整段后缀相等
-                        }
-                        i1 = v_spine_of(a1);
-                        i2 = v_spine_of(a2);
-                    } else {
-                        if a1.0 != a2.0 {
-                            stack.push(UItem::Pair(l, a1, a2));
-                        }
-                        break;
-                    }
+                // 同头中性逐层比较（L05 同款形态，见其 readme「性能版要点
+                // 3」）：每层只拆「函数部分 + 最外层实参」两对交给完整分派
+                // （同头再逐层、异头含 flex 走求解），**不**沿 `.a` 内联下钻
+                // ——下钻会跳过内层的头分派：`P (h y)` vs `P (?m …)` 这类
+                // 「实参恰是另一条中性链」的形态被逐层 pairwise 误比会产出
+                // 错误解（实测，曾靠链长 fail-fast 遮掩、守卫移除后暴露）。
+                // 派发序与参考版 `unify_sp` 严格同序：先 push 实参对、后 push
+                // 函数部分对（栈顶先弹 → 先递归进 tail＝最先应用的实参）。
+                let (f1, a1) = {
+                    let e = &spine.stack[h1];
+                    (e.f, e.a)
+                };
+                let (f2, a2) = {
+                    let e = &spine.stack[h2];
+                    (e.f, e.a)
+                };
+                if a1.0 != a2.0 {
+                    stack.push(UItem::Pair(l, a1, a2));
                 }
+                if f1.0 != f2.0 {
+                    stack.push(UItem::Pair(l, f1, f2));
+                }
+                continue;
             }
 
             // 求解：一侧是未解 flex（tag5 或 spine 头 Meta——force 后仍未

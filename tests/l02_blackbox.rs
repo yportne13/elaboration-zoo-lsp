@@ -823,3 +823,27 @@ fn cross_l03_well_typed_battery() {
         assert_eq!(b, fast3::main_with("type", src));
     }
 }
+
+// ---- 评审回归：conv「连续链长度 fail-fast」的 η 吸收误杀（守卫已移除） ----
+
+/// `P (h y)` 是 len=2 连续链、`P (\x. h y x)` 是 len=1（base 实参是闭包），
+/// 两者 βη 等价。原守卫「两侧连续而 len 不等 ⇒ 归一化应用数不同 ⇒ 必不等」
+/// 只论证了 f 分量非闭包，漏了 a 分量可以是闭包（η 把应用吸收进 λ 体）：
+/// 守卫生效时 fast 报 type mismatch、basic 正常通过。移除后双版一致接受
+/// （内联环对长度不等的链逐层派发，闭包实参走 eta 臂，结论不变）。
+const ETA_ABSORB_CONV_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P (\\x. h y x) -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+#[test]
+fn conv_eta_absorption_accepted_by_both() {
+    let b = ty(ETA_ABSORB_CONV_SRC);
+    assert!(
+        b.starts_with("(P : (U → U) → U)(h : U → U → U)(y : U)(v : P (h y))(f : P (λ x. h y x) → U)"),
+        "basic 不应拒绝良型 η 等价程序：\n{b}"
+    );
+    assert_parity(ETA_ABSORB_CONV_SRC);
+}

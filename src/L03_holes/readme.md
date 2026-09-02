@@ -283,7 +283,7 @@ L02 的扁平 spine 栈一个 entry 是「一次中性应用」，但 `f`/`a` �
 | `Machine`/`Tycker` 稳态 | 同款；`display_metas` 引读解值（quote 0） |
 | quote 记忆化 `quote_memo` | 同款移植（dup 族 1.9×/3.6×；quote 期间 metacontext 冻结，键稳定） |
 | ——（L02 conv memo） | **unify 判等记忆化已移植**（提速第二轮）：只缓存成功 + 单调性论证（见 `unify_iter` 注释与 readme「提速第二轮」节）；solve 分支成功亦入表，`(p_k, ?x)` 型二次重走被命中剪掉 |
-| ——（L02 conv 连续链内联环） | **已移植**（提速第二轮）：`(2,2)` 刚性分支沿 `.a` 同步下走 + 连续链长度 fail-fast；conv 的 65k 层比较零工作表往返 |
+| ——（L02 conv 连续链内联环） | ~~沿 `.a` 同步下走 + 连续链长度 fail-fast~~ **修订（2026-09-02）**：fail-fast 不健全（η 吸收 `P (h y)` vs `P (\x. h y x)`、meta 实参 `P _` vs `P (h y)` 两类误杀均实测）；且内联下钻会跳过内层头分派（实参恰是另一条中性链时被逐层 pairwise 误比，产错误解）。两者均已改：`(2,2)` 同头臂换成 L05 同款**单步派发**（每层只拆「函数部分 + 最外层实参」两对交给完整分派），派发序与参考版 `unify_sp` 严格同序；conv 负载每层多一次 worksheet 往返。黑盒 `unify_eta_absorption_matches_basic`/`unify_meta_shorter_side_solvable` 钉住。 |
 
 ## 已知限制
 
@@ -299,6 +299,9 @@ L02 的扁平 spine 栈一个 entry 是「一次中性应用」，但 `f`/`a` �
 - 解必须是"模式解"（spine 由互不相同的 rigid 变量构成）；非模式情形
   （如 `?m a a` 与 rhs 的合一、scope check 失败）报 Cannot unify——
   与上游一致（L05 才引入完整剪枝）。
-- `nf`/`type` 模式对**带 binder 的未解 hole**（`\x. _` 一类）会 panic
-  （`vAppBDs` env/bds 错位）——上游 Haskell 同款（`nf [] t` 空环境求值
-  越界）；顶层 hole 无碍。`elab` 模式可正常展示。
+- `nf`/`type` 模式对**带 binder 的未解 hole**（`\x. _` 一类）**不 panic**
+  （旧版此条声明已过时，黑盒 `hole_under_binder_reads_back_as_spine` 钉住
+  现行为）：未解 meta 一律以 spine 应用形态引读——`λ x. ?2 x`，
+  类型 `(x : ?0) → ?1 x`。上游 Haskell 的 `nf [] t` 空环境越界在本移植的
+  引用语义下不可达（`InsertedMeta` 只在 elaboration 内求值，quote 产出的是
+  `Meta`+`App` 形态）。

@@ -306,5 +306,52 @@ fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
         .unwrap()
 }
 
+// ---- 评审回归：fail-fast 两类误杀 + invert 非线性哨兵三次覆盖 ----
+
+/// η 吸收与 meta 实参短侧（L05 继承 L04 的「无守卫」形态，钉住防回归）。
+const ETA_ABSORB_CONV_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P (\\x. h y x) -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+const META_SHORTER_SIDE_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P _ -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+#[test]
+fn unify_eta_absorption_and_meta_shorter_side() {
+    for src in [ETA_ABSORB_CONV_SRC, META_SHORTER_SIDE_SRC] {
+        let out = ty(src);
+        assert!(!out.contains("Cannot unify"), "{out}");
+        assert_parity(src);
+    }
+}
+
+/// invert 对重复变量**第 3 次出现**的处理：性能版 RenBuf::get 把 NONE_MARK
+/// 视同缺项，原代码的 `None => set(x, i)` 臂会在第 3 次出现时把哨兵覆盖成
+/// 真实下标（奇数次出现必坏）→ 掩码污染为全 Some → 快版错误接受并写出
+/// 类型不合声明的解 `?0 := λ x y z. ?z`；参考版（独立 nlvars 集）正确
+/// 在 prune_ty 处失败。修复后双版一致拒绝。现有两次出现用例（`m a a`、
+/// `m a b c =? m c b a`）均不能暴露本缺陷。
+const TRIPLE_NONLINEAR_SRC: &str = "\
+let Eq : {A : U} -> A -> A -> U = \\{A} x y. (P : A -> U) -> P x -> P y;
+let refl : {A : U}{x : A} -> Eq {A} x x = \\ _ px. px;
+let the : (A : U) -> A -> A = \\ _ x. x;
+let m : (x : U)(y : U)(z : U) -> x = _;
+\\ a. the (Eq (m a a a) _) refl
+";
+
+#[test]
+fn nonlinear_triple_occurrence_rejected_by_both() {
+    let out = ty(TRIPLE_NONLINEAR_SRC);
+    assert!(out.contains("Cannot unify expected type"), "{out}");
+    assert_parity(TRIPLE_NONLINEAR_SRC);
+}
+
 // 注：消融开关（L05_NO_CONV_MEMO / L05_NO_NAME_MAP）的「只影响性能、不影响
 // 输出」契约由性能版内嵌互检测试覆盖；env 经 LazyLock 每进程只读一次。

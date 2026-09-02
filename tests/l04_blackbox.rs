@@ -765,6 +765,31 @@ fn implicit_chain_workload_parity_and_elab() {
     }
 }
 
+// 「连续链长度 fail-fast」回归（L04 本就无此守卫）：钉住 η 吸收与 meta 实参
+// 短侧两类误杀形态，防止将来从 L03 重新移植冠军配方时把守卫带回来。
+const ETA_ABSORB_CONV_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P (\\x. h y x) -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+const META_SHORTER_SIDE_SRC: &str = "\
+let big : (P : (U -> U) -> U) -> (h : U -> U -> U) -> (y : U)
+       -> (v : P (h y)) -> (f : P _ -> U) -> U
+      = \\P h y v f. f v;
+big
+";
+
+#[test]
+fn unify_eta_absorption_and_meta_shorter_side() {
+    for src in [ETA_ABSORB_CONV_SRC, META_SHORTER_SIDE_SRC] {
+        let out = ty(src);
+        assert!(!out.contains("Cannot unify"), "{out}");
+        assert_parity(src);
+    }
+}
+
 // 注：消融开关（L04_NO_CONV_MEMO / L04_NO_NAME_MAP）的「只影响性能、
 // 不影响输出」契约由性能版内嵌互检测试覆盖（开关下输出与参考版仍逐字节
 // 一致）；env 经 LazyLock 每进程只读一次，跨进程断言交由 measure 脚本。

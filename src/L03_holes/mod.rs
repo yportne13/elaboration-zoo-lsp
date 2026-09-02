@@ -1091,8 +1091,9 @@ pub(crate) fn bench_check(raw: &Raw) {
 /// 基准口径：check + nf，产出丢弃。深 Box 树的递归析构会爆栈，基准里
 /// mem::forget（进程退出统一回收；L01/L02 readme「已知限制」同款处理）。
 pub(crate) fn bench_check_nf(raw: &Raw) {
-    if let Ok((t, _)) = Infer::new().infer(&Cxt::empty(initial_pos()), raw) {
-        let n = Infer::new().nf(&List::new(), &t);
+    let mut inf = Infer::new();
+    if let Ok((t, _)) = inf.infer(&Cxt::empty(initial_pos()), raw) {
+        let n = inf.nf(&List::new(), &t);
         std::mem::forget(n);
     }
 }

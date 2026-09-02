@@ -67,13 +67,21 @@ cargo run --release --bin l04bench -- --workload all --max-k 15
      `done` 时不带 icit，配对只发生在 `SpineFold` 弹出时（LIFO 对齐）。
 2. **name_map 策略**：inserted binder 不入表、不留轨迹、`mark` 不动——
    对源码名的遮蔽语义与参考版一致（源码 binder 才 push trail）。
-3. **unify 长度 fail-fast 已移除**（与 L03 的差异！）：`push` 的 len 延展
-   启发式（实参是 spine 句柄 ⇒ 链延长）无法区分「实参是本链的 partial
-   （ChainWrap 惯例）」与「实参恰好是另一个中性应用」——`B (?m …)` 这类
-   **中性头应用到中性实参**的形态（隐式插入大量制造）会让 len 虚增，
-   fail-fast 在两链真实应用数相同时误判不等（comp 用例实测回归；L03 的
-   负载未触达该形态，属 L03 潜伏缺陷——本层不带走）。真实长度失配由内联
-   环兜底（partial-头 对 经工作表派发后必败，结论不变）。
+3. **unify 长度 fail-fast 已移除，(2,2) 同头臂为 L05 同款单步派发**
+   （2026-09-02 修订，L02/L03 现已同步跟进）：fail-fast 的两条独立误杀
+   机制——① `push` 的 len 延展启发式（实参是 spine 句柄 ⇒ 链延长）无法
+   区分「实参是本链的 partial（ChainWrap 惯例）」与「实参恰好是另一个中性
+   应用」，`B (?m …)` 这类**中性头应用到中性实参**的形态（隐式插入大量
+   制造）让 len 虚增，短侧含未解 meta 时（`B z` vs `B (?m a b)` 可解）误判
+   不等（comp 用例实测）；② η 吸收：链 base 的 `a` 是闭包时应用可被收进
+   λ 体（`P (h y)` vs `P (\x. h y x)`，L02 黑盒实测）。且 L02 冠军配方的
+   内联环沿 `.a` 下钻对**带求解副作用的 unify** 不健全：跳过内层头分派，
+   「实参恰是另一条中性链」的形态被逐层 pairwise 误比会产出错误解——
+   本层与 L03 均已改为每层只拆「函数部分 + 最外层实参」两对交给完整分派
+   （派发序与参考版 `unify_sp` 同序）。真实长度失配由逐层派发兜底，结论
+   不变。黑盒 `unify_eta_absorption_and_meta_shorter_side` 钉住两类形态。
+   注意：本层「实测结果」一节的数字系内联环时代所测，单步派发后 conv/
+   unify 热路径每层多一次 worksheet 往返，待重测。
 4. **quote/unify 记忆化、复合环境、稳态复用、迭代内核**全部继承 L03，
    icits 不进记忆化键（随 `V` 指向的单元/槽位携带，同一 `V` 同 level 的
    quote 产出唯一）。

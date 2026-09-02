@@ -686,24 +686,14 @@ fn conv_iter<'a>(
             // s (s (… z)) 形状）走内联环：沿 `.a` 逐元素前进，f 位相等
             // 直接跳过（不入 worksheet），只有真正待比较的子对才入栈——
             // 每个 spine 条目从「2 次弹压 + 2 次入栈」降到 2 次顺序读。
+            // 注：曾有「连续链长度 fail-fast」（两侧连续而 len 不等即判
+            // 不等），不健全：链 base 的 `a` 可以是闭包，η 展开把应用
+            // 吸收进 λ 体——`P (h y)`（len 2）vs `P (\x. h y x)`（len 1）
+            // 实测误杀良型程序。内联环自身对长度不等的链逐层派发（闭包
+            // 实参走 eta 臂），结论不变，故直接移除。
             (2, 2) => {
                 let mut i1 = v_spine_of(t);
                 let mut i2 = v_spine_of(u);
-                // 两侧都是连续链时先比长度：条目数不同 ⇒ 归一化后应用
-                // 个数不同 ⇒ 必不等，fail-fast 省掉整趟游走。依据：spine
-                // 的 f 分量永不可能是闭包（Apply/ChainWrap 的 β 岔路即时
-                // 归约；eta push 处也已排除），中性链无 β 可发，条目数
-                // 就是归一化后的应用个数。
-                {
-                    let e1 = &spine.stack[i1];
-                    let e2 = &spine.stack[i2];
-                    if e1.base as usize + e1.len as usize - 1 == i1
-                        && e2.base as usize + e2.len as usize - 1 == i2
-                        && e1.len != e2.len
-                    {
-                        return false;
-                    }
-                }
                 if memo_on {
                     stack.push(WItem::Store((t.0, u.0)));
                 }
