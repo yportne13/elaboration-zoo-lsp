@@ -376,6 +376,8 @@ fn force<'a>(
     v0: V,
 ) -> V {
     let mut v = v0;
+    // 实参缓冲跨 force 轮复用（已解 flex 链每轮收集一次；clear 保容量）
+    let mut args: Vec<(V, Icit)> = Vec::new();
     loop {
         match v_tag(v) {
             5 => match &metas[v_meta_of(v) as usize] {
@@ -394,7 +396,7 @@ fn force<'a>(
                     MetaEntry::Solved(sol, _) => {
                         // 把解应用到全部实参（应用序 = 收集序的逆序）；
                         // 应用可能 β（解是闭包）——cl 式 eval
-                        let mut args: Vec<(V, Icit)> = Vec::new();
+                        args.clear();
                         spine.collect_args(h, &mut args);
                         let mut t = *sol;
                         for &(a, i) in args.iter().rev() {
@@ -1862,7 +1864,9 @@ pub(crate) struct Machine {
 }
 
 /// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都是
-/// `'static` 类型，可常驻 Machine 复用容量——热路径零分配）。
+/// `'static` 类型，可常驻 Machine 复用容量——unify 的收集/判等路径零分配；
+/// 带 `'a` 的 work/tasks 小栈因借过 bump 生命周期，仍按调用新建，首个 push
+/// 各一次堆分配——同 L02-L04 的稳态设计）。
 #[derive(Default)]
 struct ConvScratch {
     memo: FxHashSet<(u64, u64)>,

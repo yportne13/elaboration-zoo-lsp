@@ -340,6 +340,8 @@ fn force<'a>(
     v0: V,
 ) -> V {
     let mut v = v0;
+    // 实参缓冲跨 force 轮复用（已解 flex 链每轮收集一次；clear 保容量）
+    let mut args: Vec<V> = Vec::new();
     loop {
         match v_tag(v) {
             5 => match &metas[v_meta_of(v) as usize] {
@@ -358,7 +360,7 @@ fn force<'a>(
                     MetaEntry::Solved(sol) => {
                         // 把解应用到全部实参（应用序 = 收集序的逆序）；
                         // 应用可能 β（解是闭包）——cl 式 eval
-                        let mut args: Vec<V> = Vec::new();
+                        args.clear();
                         spine.collect_args(h, &mut args);
                         let mut t = *sol;
                         for &a in args.iter().rev() {
