@@ -54,7 +54,7 @@ enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    Prim(Span<String>),
 }
 
 type Ty = Tm;
@@ -84,7 +84,7 @@ enum Val {
     U,
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    Prim(Span<String>, Spine),
 }
 
 type VTy = Val;
@@ -105,6 +105,7 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 
 use std::ops::Add;
 use std::rc::Rc;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 struct UnifyError;
@@ -121,13 +122,33 @@ fn empty_span<T>(data: T) -> Span<T> {
 #[derive(Debug)]
 pub struct Error(String);
 
+/// Native implementation of a builtin function, registered by name via
+/// `Cxt::add_builtin` (ported from L13's `PrimFunc`).  Invoked at application
+/// time (`Infer::v_app`) with the accumulated arguments in natural order;
+/// returning `None` keeps the application stuck (`Val::Prim(name, spine)`),
+/// e.g. on partial application or non-literal arguments.
+pub struct PrimFunc(Rc<dyn Fn(&[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync>);
+
+impl std::fmt::Debug for PrimFunc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PrimFunc")
+    }
+}
+
 pub struct Infer {
     meta: Vec<MetaEntry>,
+    /// Builtin registry: name -> native implementation (`Tm::Prim`/`Val::Prim`
+    /// carry the name; the function lives here, mirroring the prim slot of
+    /// L13's `Decl` table, which L06 has no equivalent of).
+    prims: HashMap<String, PrimFunc>,
 }
 
 impl Infer {
     pub fn new() -> Self {
-        Self { meta: vec![] }
+        Self { meta: vec![], prims: HashMap::new() }
+    }
+    pub(crate) fn register_builtin(&mut self, name: &str, prim: PrimFunc) {
+        self.prims.insert(name.to_owned(), prim);
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
@@ -168,6 +189,25 @@ impl Infer {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
             Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
+            // Builtin head (ported from L13's `v_app` Decl arm): fire the
+            // registered prim on the accumulated arguments in natural order.
+            // None (partial application / stuck non-literal args) keeps the
+            // application stuck, carrying the name so it quotes/prints as
+            // `name args...` instead of the old opaque "Prim Func".
+            Val::Prim(name, sp) => {
+                let acc = sp.prepend((u, i));
+                if let Some(prim) = self.prims.get(&name.data) {
+                    let args: Vec<Rc<Val>> = {
+                        let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
+                        v.reverse();
+                        v
+                    };
+                    if let Some(result) = prim.0(&args) {
+                        return result;
+                    }
+                }
+                Val::Prim(name.clone(), acc).into()
+            },
             _ => panic!("impossible"),
         }
     }
@@ -215,12 +255,9 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, t), &pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
-            Tm::Prim => match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
-                (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-                    Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
-                },
-                _ => Val::Prim.into(),
-            },
+            // Builtins evaluate to their registered value; the actual native
+            // call happens in `v_app` once enough arguments are applied.
+            Tm::Prim(name) => Val::Prim(name.clone(), List::new()).into(),
         }
     }
 
@@ -257,7 +294,7 @@ impl Infer {
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()),
             Val::LiteralType => Tm::LiteralType,
-            Val::Prim => Tm::Prim,
+            Val::Prim(name, sp) => self.quote_sp(l, Tm::Prim(name.clone()), sp.clone()),
         }
     }
 
@@ -287,7 +324,7 @@ impl Infer {
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
-    let mut cxt = Cxt::new();
+    let mut cxt = Cxt::new(&mut infer);
     let mut ret = String::new();
     for tm in ast {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
@@ -364,6 +401,31 @@ multi line comment
 //final
 println mystr2
 
+/*
+builtin registry demos (ported from L13): str_eq / str_indent2 / file IO
+*/
+def eq1 = str_eq "foo" "foo"
+println eq1
+
+def eq2 = str_eq "foo" "bar"
+println eq2
+
+def ind = str_indent2 "line1\nline2"
+println ind
+
+def demo_path = "l06_builtin_demo.txt"
+def demo_write : U = file_write_all_text demo_path "hello file"
+def demo_append : U = file_append_all_text demo_path "!"
+def read_back : String = file_read_all_text demo_path
+println read_back
+
+def exists1 : String = file_exists demo_path
+println exists1
+
+def demo_delete : U = file_delete demo_path
+def exists2 : String = file_exists demo_path
+println exists2
+
 "#;
     println!("{}", run(input, 0).unwrap());
     println!("success");
@@ -373,7 +435,7 @@ println mystr2
 pub fn run1(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     let ast = parser::parser(input, path_id).unwrap();
-    let mut cxt = Cxt::new();
+    let mut cxt = Cxt::new(&mut infer);
     let mut ret = String::new();
     for tm in ast {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;

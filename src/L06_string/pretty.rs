@@ -136,6 +136,6 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr),
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Prim => "Prim Func".to_owned(),
+        Tm::Prim(span) => span.data.clone(),
     }
 }
