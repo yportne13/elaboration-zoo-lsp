@@ -5,7 +5,7 @@ use colored::Colorize;
 use crate::parser_lib::Span;
 
 use super::{
-    cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclTm, Error, Infer, Ix, Tm, VTy, Val
+    cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclEntry, DeclTm, Error, Infer, Ix, Tm, VTy, Val
 };
 
 impl Infer {
@@ -161,6 +161,14 @@ impl Infer {
                     let t_tm = self.check(ret_cxt, bod, &vtyp)?;
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&ret_cxt.env, &t_tm);
+                    // Decl-table entry: top-level defs become runtime
+                    // name-lookups (`string_to_global_type`), mirroring
+                    // L13's `cxt.decl(...)` at Def elaboration.
+                    self.decls.insert(name.data.clone(), DeclEntry {
+                        vt: vt.clone(),
+                        va: vtyp.clone(),
+                        prim: None,
+                    });
                     ret_cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 Ok((

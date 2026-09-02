@@ -19,7 +19,7 @@ type Types = List<(Span<String>, NameOrigin, Val)>;
 // application stuck (`Val::Prim(name, spine)`), e.g. on partial application
 // or non-literal arguments.
 
-fn string_concat(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn string_concat(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 2 { return None; }
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
@@ -32,7 +32,7 @@ fn string_concat(args: &[Rc<Val>]) -> Option<Rc<Val>> {
 /// String equality.  L13's version returns the prelude's `Boolean`; L06 has
 /// no Boolean, so the result is the `"true"`/`"false"` STRING literal (same
 /// shape as `file_exists`'s result in L13).
-fn str_eq(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn str_eq(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 2 { return None; }
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
@@ -45,7 +45,7 @@ fn str_eq(args: &[Rc<Val>]) -> Option<Rc<Val>> {
 }
 
 /// Indent each line in a string by 2 spaces (for multi-line strings)
-fn str_indent2(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn str_indent2(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(s) => {
@@ -56,7 +56,114 @@ fn str_indent2(args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
-fn file_read_all_text(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+/// HDL self-check reporting (ported from L13): append one
+/// "code|module|signal|message" line to the mutable global "CheckIssues",
+/// skipping lines already present (line-level dedup keeps the report
+/// idempotent).
+fn report_check_issue(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 4 { return None; }
+    let get = |i: usize| match args[i].as_ref() {
+        Val::LiteralIntro(s) => s.data.to_string(),
+        _ => String::new(),
+    };
+    let (code, module, signal, message) = (get(0), get(1), get(2), get(3));
+    if code.is_empty() || module.is_empty() { return Some(Val::U.into()); }
+    let line = format!("{}|{}|{}|{}", code, module, signal, message);
+    let mut map = infer.mutable_map.borrow_mut();
+    let existing = match map.get("CheckIssues") {
+        Some(v) => match v.as_ref() {
+            Val::LiteralIntro(s) => s.data.clone(),
+            _ => String::new(),
+        },
+        None => String::new(),
+    };
+    if !existing.split('\n').any(|l| l == line) {
+        let next = if existing.is_empty() { line } else { format!("{}\n{}", existing, line) };
+        map.insert("CheckIssues".to_string(), Rc::new(Val::LiteralIntro(empty_span(next))));
+    }
+    Some(Val::U.into())
+}
+
+/// Look a name up in the decl table and return its VALUE as a "dynamic type"
+/// (types are values here): `string_to_global_type "String"` reduces to the
+/// String type, `"Nat"` to the Nat type, ...  A missing name stays a stuck
+/// `Val::Decl`, which a `get_global`/`create_global` call then constrains
+/// (e.g. against `String`) via the loose LiteralType arm in unify.  Ported
+/// from L13 (there it evals `Tm::Decl(name)` through the decl table).
+fn string_to_global_type(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => Some(
+            infer.decls.get(&a.data)
+                .map(|e| e.vt.clone())
+                .unwrap_or_else(|| Val::Decl(empty_span(a.data.clone()), List::new()).into())
+        ),
+        _ => None,
+    }
+}
+
+fn create_global(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => {
+            infer.mutable_map.borrow_mut().insert(a.data.clone(), args[1].clone());
+            Some(Val::U.into())
+        },
+        _ => None,
+    }
+}
+
+fn change_mutable(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => {
+            if let Some(x) = infer.mutable_map.borrow_mut().get_mut(&a.data) {
+                *x = infer.v_app(args[1].clone(), x.clone(), Icit::Expl)
+            };
+            Some(Val::U.into())
+        },
+        _ => None,
+    }
+}
+
+fn get_global(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.is_empty() { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => Some(infer.mutable_map.borrow().get(&a.data).unwrap().clone()),
+        _ => None,
+    }
+}
+
+/// Pure read of a mutable global with a fallback default — never WRITES the
+/// map, so calling it during declaration-time check evaluation cannot
+/// pollute design-level globals.  Missing key -> `args[1]` (the default).
+fn get_global_default(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => {
+            Some(infer.mutable_map.borrow().get(&a.data).cloned().unwrap_or_else(|| args[1].clone()))
+        },
+        _ => None,
+    }
+}
+
+fn change_mutable_default(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 3 { return None; }
+    match args[0].as_ref() {
+        Val::LiteralIntro(a) => {
+            let mut map = infer.mutable_map.borrow_mut();
+            if let Some(x) = map.get_mut(&a.data) {
+                *x = infer.v_app(args[1].clone(), x.clone(), Icit::Expl)
+            } else {
+                map.insert(a.data.clone(), args[2].clone());
+            };
+            Some(Val::U.into())
+        },
+        _ => None,
+    }
+}
+
+fn file_read_all_text(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(path) => {
@@ -68,7 +175,7 @@ fn file_read_all_text(args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
-fn file_write_all_text(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn file_write_all_text(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 2 { return None; }
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
@@ -80,7 +187,7 @@ fn file_write_all_text(args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
-fn file_append_all_text(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn file_append_all_text(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 2 { return None; }
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
@@ -98,7 +205,7 @@ fn file_append_all_text(args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
-fn file_exists(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn file_exists(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(path) => {
@@ -109,7 +216,7 @@ fn file_exists(args: &[Rc<Val>]) -> Option<Rc<Val>> {
     }
 }
 
-fn file_delete(args: &[Rc<Val>]) -> Option<Rc<Val>> {
+fn file_delete(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(path) => {
@@ -126,6 +233,22 @@ fn str_pi(params: &[&str], ret: Tm) -> Tm {
     params.iter().rev().fold(ret, |acc, name| {
         Tm::Pi(empty_span((*name).to_owned()), Icit::Expl, Box::new(Tm::LiteralType), Box::new(acc))
     })
+}
+
+/// `(name : dom) -> cod` — local Pi builder for builtin signatures.
+fn tm_pi(name: &str, dom: Tm, cod: Tm) -> Tm {
+    Tm::Pi(empty_span(name.to_owned()), Icit::Expl, Box::new(dom), Box::new(cod))
+}
+
+/// `string_to_global_type Var(ix)` — the de Bruijn ref resolves at eval time
+/// to the corresponding preceding parameter (L13 builds these with
+/// tm_app/tm_decl; the domains evaluate under the env at their position).
+fn st2g_app(ix: u32) -> Tm {
+    Tm::App(
+        Box::new(Tm::Decl(empty_span("string_to_global_type".to_owned()))),
+        Box::new(Tm::Var(Ix(ix))),
+        Icit::Expl,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -146,16 +269,42 @@ impl Cxt {
             Tm::U,
             Val::U.into(),
         );
-        // Builtin registration, ported from L13's startup builtins (cxt.rs).
-        // The `String`-typed builtins (concat/eq/indent/file head group) are
-        // pure ports; str_eq returns the `"true"`/`"false"` STRING literals
-        // because L06 has no Boolean type (L13 returns the prelude's
-        // Boolean).  The L13 globals/nat/vconn builtins are not ported: they
-        // need L13-only infrastructure (a decl table for
-        // string_to_global_type, mutable globals on Infer, native Nat).
+        // Builtin registration, ported from L13's startup builtins (cxt.rs):
+        // the whole string / file / global group.  str_eq returns the
+        // `"true"`/`"false"` STRING literals because L06 has no Boolean type
+        // (L13 returns the prelude's Boolean).  The nat/vconn builtins are
+        // not ported: they need L13-only infra (native Nat / prelude types).
+        infer.decls.insert("String".to_owned(), DeclEntry {
+            vt: Val::LiteralType.into(),
+            va: Val::U.into(),
+            prim: None,
+        });
         cxt = cxt.add_builtin(infer, "string_concat", str_pi(&["x", "y"], Tm::LiteralType), PrimFunc(Rc::new(string_concat)));
         cxt = cxt.add_builtin(infer, "str_eq", str_pi(&["x", "y"], Tm::LiteralType), PrimFunc(Rc::new(str_eq)));
         cxt = cxt.add_builtin(infer, "str_indent2", str_pi(&["x"], Tm::LiteralType), PrimFunc(Rc::new(str_indent2)));
+        cxt = cxt.add_builtin(infer, "report_check_issue",
+            str_pi(&["code", "module", "signal", "message"], Tm::U),
+            PrimFunc(Rc::new(report_check_issue)));
+        cxt = cxt.add_builtin(infer, "string_to_global_type",
+            str_pi(&["x"], Tm::U),
+            PrimFunc(Rc::new(string_to_global_type)));
+        cxt = cxt.add_builtin(infer, "create_global",
+            tm_pi("x", Tm::LiteralType, tm_pi("y", st2g_app(0), Tm::U)),
+            PrimFunc(Rc::new(create_global)));
+        cxt = cxt.add_builtin(infer, "change_mutable",
+            tm_pi("x", Tm::LiteralType,
+                tm_pi("f", tm_pi("_", st2g_app(0), st2g_app(1)), Tm::U)),
+            PrimFunc(Rc::new(change_mutable)));
+        cxt = cxt.add_builtin(infer, "get_global",
+            tm_pi("x", Tm::LiteralType, st2g_app(0)),
+            PrimFunc(Rc::new(get_global)));
+        cxt = cxt.add_builtin(infer, "get_global_default",
+            tm_pi("x", Tm::LiteralType, tm_pi("z", st2g_app(0), st2g_app(1))),
+            PrimFunc(Rc::new(get_global_default)));
+        cxt = cxt.add_builtin(infer, "change_mutable_default",
+            tm_pi("x", Tm::LiteralType,
+                tm_pi("f", tm_pi("_", st2g_app(0), st2g_app(1)), tm_pi("z", st2g_app(1), Tm::U))),
+            PrimFunc(Rc::new(change_mutable_default)));
         cxt = cxt.add_builtin(infer, "file_read_all_text", str_pi(&["path"], Tm::LiteralType), PrimFunc(Rc::new(file_read_all_text)));
         cxt = cxt.add_builtin(infer, "file_write_all_text", str_pi(&["path", "content"], Tm::U), PrimFunc(Rc::new(file_write_all_text)));
         cxt = cxt.add_builtin(infer, "file_append_all_text", str_pi(&["path", "content"], Tm::U), PrimFunc(Rc::new(file_append_all_text)));
@@ -164,19 +313,25 @@ impl Cxt {
         cxt
     }
 
-    /// Register a builtin: name -> native impl (registry on `Infer`, mirroring
-    /// the prim slot of L13's `Decl` table) plus a named definition whose
-    /// value is the (stuck) head `Val::Prim(name, [])`.  The declared type is
-    /// evaluated against the empty env, so it must be closed (all our builtin
-    /// types are); L13 evaluates with its decl/env analogously.
+    /// Register a builtin in the decl table: value = stuck head
+    /// `Val::Decl(name, [])` (the prim fires on application), type = `ty`
+    /// evaluated against the empty env (all our builtin types are closed),
+    /// plus a positional definition so the name is usable in code — L13's
+    /// `add_builtin` analog (there the table lives on `Cxt.decl`, here on
+    /// `Infer.decls`).
     pub fn add_builtin(self, infer: &mut Infer, name: &str, ty: Tm, prim: PrimFunc) -> Self {
         let va = infer.eval(&List::new(), &ty);
         let name_span = empty_span(name.to_owned());
-        infer.register_builtin(name, prim);
+        infer.register_builtin(
+            name,
+            Val::Decl(name_span.clone(), List::new()).into(),
+            va.clone(),
+            prim,
+        );
         self.define(
             name_span.clone(),
-            Tm::Prim(name_span.clone()),
-            Val::Prim(name_span, List::new()).into(),
+            Tm::Decl(name_span.clone()),
+            Val::Decl(name_span, List::new()).into(),
             ty,
             va,
         )

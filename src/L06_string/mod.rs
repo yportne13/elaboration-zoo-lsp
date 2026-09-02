@@ -54,7 +54,7 @@ enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim(Span<String>),
+    Decl(Span<String>),
 }
 
 type Ty = Tm;
@@ -84,7 +84,7 @@ enum Val {
     U,
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim(Span<String>, Spine),
+    Decl(Span<String>, Spine),
 }
 
 type VTy = Val;
@@ -105,6 +105,7 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 
 use std::ops::Add;
 use std::rc::Rc;
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -122,12 +123,13 @@ fn empty_span<T>(data: T) -> Span<T> {
 #[derive(Debug)]
 pub struct Error(String);
 
-/// Native implementation of a builtin function, registered by name via
-/// `Cxt::add_builtin` (ported from L13's `PrimFunc`).  Invoked at application
-/// time (`Infer::v_app`) with the accumulated arguments in natural order;
-/// returning `None` keeps the application stuck (`Val::Prim(name, spine)`),
-/// e.g. on partial application or non-literal arguments.
-pub struct PrimFunc(Rc<dyn Fn(&[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync>);
+/// Native implementation of a builtin function, registered by name in the
+/// decl table (`Cxt::add_builtin`; ported from L13's `PrimFunc`).  Invoked
+/// at application time (`Infer::v_app`) with the accumulated arguments in
+/// natural order; returning `None` keeps the application stuck
+/// (`Val::Decl(name, spine)`), e.g. on partial application or non-literal
+/// arguments.
+pub struct PrimFunc(Rc<dyn Fn(&Infer, &[Rc<Val>]) -> Option<Rc<Val>> + Send + Sync>);
 
 impl std::fmt::Debug for PrimFunc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -135,20 +137,37 @@ impl std::fmt::Debug for PrimFunc {
     }
 }
 
+/// One decl-table entry (L06's stand-in for the L13 `Decl` map value):
+/// the definition's value and type, plus the optional native implementation
+/// that makes it a builtin.  Top-level `def`s are inserted by the elaborator
+/// (runtime name lookup, e.g. `string_to_global_type`), builtins by
+/// `Cxt::add_builtin`.
+#[derive(Debug)]
+pub(crate) struct DeclEntry {
+    pub(crate) vt: Rc<Val>,
+    pub(crate) va: Rc<VTy>,
+    pub(crate) prim: Option<PrimFunc>,
+}
+
 pub struct Infer {
     meta: Vec<MetaEntry>,
-    /// Builtin registry: name -> native implementation (`Tm::Prim`/`Val::Prim`
-    /// carry the name; the function lives here, mirroring the prim slot of
-    /// L13's `Decl` table, which L06 has no equivalent of).
-    prims: HashMap<String, PrimFunc>,
+    /// Decl table: name -> (value, type, optional native impl).  Held on
+    /// `Infer` because L06's eval / v_app / quote only receive `&Infer`
+    /// (L13 threads `&Decl` through them instead).
+    pub(crate) decls: HashMap<String, DeclEntry>,
+    /// Runtime-global store for the create_global / get_global / ... builtins
+    /// (L13 uses a RwLock; single-threaded here, so RefCell).
+    pub(crate) mutable_map: RefCell<HashMap<String, Rc<Val>>>,
 }
 
 impl Infer {
     pub fn new() -> Self {
-        Self { meta: vec![], prims: HashMap::new() }
+        Self { meta: vec![], decls: HashMap::new(), mutable_map: RefCell::new(HashMap::new()) }
     }
-    pub(crate) fn register_builtin(&mut self, name: &str, prim: PrimFunc) {
-        self.prims.insert(name.to_owned(), prim);
+    /// Insert a builtin entry: head value `Val::Decl(name, [])` (prim fires
+    /// on application), declared type, native implementation.
+    pub(crate) fn register_builtin(&mut self, name: &str, vt: Rc<Val>, va: Rc<VTy>, prim: PrimFunc) {
+        self.decls.insert(name.to_owned(), DeclEntry { vt, va, prim: Some(prim) });
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
@@ -189,24 +208,26 @@ impl Infer {
             Val::Lam(_, _, closure) => self.closure_apply(&closure, u),
             Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
             Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
-            // Builtin head (ported from L13's `v_app` Decl arm): fire the
-            // registered prim on the accumulated arguments in natural order.
-            // None (partial application / stuck non-literal args) keeps the
-            // application stuck, carrying the name so it quotes/prints as
-            // `name args...` instead of the old opaque "Prim Func".
-            Val::Prim(name, sp) => {
+            // Decl-headed application (ported from L13's `v_app` Decl arm):
+            // if the head is a builtin, fire its prim on the accumulated
+            // arguments in natural order.  None (partial application / stuck
+            // non-literal args) keeps the application stuck, carrying the
+            // name so it quotes/prints as `name args...`.
+            Val::Decl(name, sp) => {
                 let acc = sp.prepend((u, i));
-                if let Some(prim) = self.prims.get(&name.data) {
-                    let args: Vec<Rc<Val>> = {
-                        let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
-                        v.reverse();
-                        v
-                    };
-                    if let Some(result) = prim.0(&args) {
-                        return result;
+                if let Some(entry) = self.decls.get(&name.data) {
+                    if let Some(prim) = &entry.prim {
+                        let args: Vec<Rc<Val>> = {
+                            let mut v: Vec<Rc<Val>> = acc.iter().map(|(v, _)| v.clone()).collect();
+                            v.reverse();
+                            v
+                        };
+                        if let Some(result) = prim.0(self, &args) {
+                            return result;
+                        }
                     }
                 }
-                Val::Prim(name.clone(), acc).into()
+                Val::Decl(name.clone(), acc).into()
             },
             _ => panic!("impossible"),
         }
@@ -255,9 +276,13 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(env, self.eval(env, t), &pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x.clone()).into(),
             Tm::LiteralType => Val::LiteralType.into(),
-            // Builtins evaluate to their registered value; the actual native
-            // call happens in `v_app` once enough arguments are applied.
-            Tm::Prim(name) => Val::Prim(name.clone(), List::new()).into(),
+            // Name lookup: a decl-table hit evaluates to the stored value
+            // (a builtin hits its stuck head; calling fires the prim in
+            // `v_app`), a miss stays a stuck `Val::Decl` head.
+            Tm::Decl(name) => match self.decls.get(&name.data) {
+                Some(entry) => entry.vt.clone(),
+                None => Val::Decl(name.clone(), List::new()).into(),
+            },
         }
     }
 
@@ -294,7 +319,7 @@ impl Infer {
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x.clone()),
             Val::LiteralType => Tm::LiteralType,
-            Val::Prim(name, sp) => self.quote_sp(l, Tm::Prim(name.clone()), sp.clone()),
+            Val::Decl(name, sp) => self.quote_sp(l, Tm::Decl(name.clone()), sp.clone()),
         }
     }
 
@@ -425,6 +450,40 @@ println exists1
 def demo_delete : U = file_delete demo_path
 def exists2 : String = file_exists demo_path
 println exists2
+
+/*
+decl-table by-name lookup (L13 port): defs go into the table at elaboration,
+string_to_global_type fetches their VALUE (= "dynamic type"); globals store
+runtime values in Infer's mutable map.
+*/
+def st : U = string_to_global_type "String"
+println st
+
+def st_nat : U = string_to_global_type "Nat"
+println st_nat
+
+def store1 : U = create_global "greeting" "hi"
+def upd1 : U = change_mutable "greeting" (s => string_concat s "!")
+def g1 : String = get_global "greeting"
+println g1
+
+def g2 : String = get_global_default "greeting" "fallback"
+println g2
+
+def g3 : String = get_global_default "missing_name" "fallback"
+println g3
+
+def upd2 : U = change_mutable_default "greeting" (s => string_concat s "?") "x"
+def g4 : String = get_global "greeting"
+println g4
+
+def upd3 : U = change_mutable_default "created_now" (s => s) "fresh"
+def g5 : String = get_global "created_now"
+println g5
+
+def rep1 : U = report_check_issue "E1" "demo_mod" "sig" "message"
+def issues : String = get_global "CheckIssues"
+println issues
 
 "#;
     println!("{}", run(input, 0).unwrap());

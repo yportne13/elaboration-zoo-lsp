@@ -269,7 +269,7 @@ impl Infer {
             Val::U => Ok(Tm::U),
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x.clone())),
-            Val::Prim(name, sp) => self.rename_sp(pren, Tm::Prim(name.clone()), &sp),
+            Val::Decl(name, sp) => self.rename_sp(pren, Tm::Decl(name.clone()), &sp),
         }
     }
     fn lams_go(&self, l: Lvl, t: Tm, a: &Rc<VTy>, l_prime: Lvl) -> Tm {
@@ -469,12 +469,12 @@ impl Infer {
                 self.solve(l, *m_prime, sp_prime.clone(), &t)
             }
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            // A stuck builtin still denotes a String-typed (or U-typed)
-            // value, so it unifies with the literal type; same-name stuck
-            // prims unify rigid-style by their application spines.
-            (Val::LiteralType, Val::Prim(..)) => Ok(()),
-            (Val::Prim(..), Val::LiteralType) => Ok(()),
-            (Val::Prim(x, sp), Val::Prim(x_prime, sp_prime)) if x == x_prime => {
+            // A stuck decl still denotes a String-typed (or U-typed) value,
+            // so it unifies with the literal type; same-name stuck decls
+            // unify rigid-style by their application spines.
+            (Val::LiteralType, Val::Decl(..)) => Ok(()),
+            (Val::Decl(..), Val::LiteralType) => Ok(()),
+            (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, sp, sp_prime)
             }
             _ => Err(UnifyError), // Rigid mismatch error
