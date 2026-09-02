@@ -673,6 +673,9 @@ impl Infer {
                         let a = self.eval(&cxt.env, &new_meta);
                         let cod_meta = self.fresh_meta(&cxt.bind(empty_span("x".into()), a.clone()));
                         let b = Closure(cxt.env.clone(), Box::new(cod_meta));
+                        // 实参序 (tty, 合成Π) 系上游 04 的 unifyCatch 次序；
+                        // 上游 03 是 (合成Π, tty)——各层各自忠实，只影响
+                        // 报错文案里 expected/inferred 的方向。
                         self.unify_catch(
                             cxt,
                             &tty,
@@ -1414,6 +1417,13 @@ Name not in scope: id
              let f : {w : U} -> U -> g {w} = \\w x. _;\n\
              let test : {w : U} -> U -> g {w} = \\w x. f {w} x;\n\
              test\n"),
+            // λ 体内 define 错位回归：性能版 env_ext_defs 的 tip 追加曾漏
+            // binds 非空判定，define 与 binder 的 de Bruijn 次序互换——
+            // eval_fresh 的 AppBds 配对把类型洞 ?0 应用到 q0 的值（U）而非
+            // u，错位值流进 solve 后 invert 遇非变量实参必败 → 误报
+            // Cannot unify（参考版正确解出 ?0 := λx1. U）。
+            ("λ 体内 define 错位回归",
+             "let f : (u : U) -> U = \\u. let q0 : U = U; let h : _ = q0; h;\nf\n"),
         ] {
             for mode in ["nf", "type", "elab"] {
                 let basic = main_with(mode, src);

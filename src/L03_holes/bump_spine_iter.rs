@@ -188,12 +188,16 @@ pub(crate) fn env_ext<'a>(bump: &'a Bump, env: Env<'a>, v: V) -> Env<'a> {
 
 /// 环境扩展（**平坦 def 区域**：elaborator 的 define）。tip 环境
 /// （`flat_base + flat_len == defs.len()`，define 在全局末端）原地追加，
-/// 保持 O(1) 索引；非 tip 环境（λ 体的 define 已把全局末端占走、外层
-/// 再 define——位置冲突）回落到 binder 链，索引语义不变（新 define 是
-/// 最内层条目，`env_nth(0)` 命中链头）。
+/// 保持 O(1) 索引；其余回落到 binder 链，索引语义不变（新 define 是
+/// 最内层条目，`env_nth(0)` 命中链头）。回落有两种情形：
+/// - 非 tip（λ 体的 define 已把全局末端占走、外层再 define——位置冲突）；
+/// - **binds 非空**（λ 体内 define）：define 比链上 binder 更新，必须
+///   落在链头——若仍追加平坦区，`env_nth`/`AppBds` 的链优先序会把
+///   define 与 binder 的 de Bruijn 次序互换（错位值流进 solve 即错解/
+///   误报，互检用例「λ 体内 define 错位回归」钉住）。
 #[inline]
 pub(crate) fn env_ext_defs<'a>(bump: &'a Bump, defs: &mut Vec<V>, env: Env<'a>, v: V) -> Env<'a> {
-    if env.flat_base + env.flat_len == defs.len() as u32 {
+    if env.binds.is_none() && env.flat_base + env.flat_len == defs.len() as u32 {
         defs.push(v);
         Env { flat_base: env.flat_base, flat_len: env.flat_len + 1, binds: env.binds }
     } else {
@@ -340,7 +344,9 @@ fn force<'a>(
     v0: V,
 ) -> V {
     let mut v = v0;
-    // 实参缓冲跨 force 轮复用（已解 flex 链每轮收集一次；clear 保容量）
+    // 实参缓冲在本次 force 调用内的已解链轮间复用（每次 force 调用新建；
+    // clear 保容量。非跨 Machine 轮——Machine 复用的是 spine/vals，此处
+    // args 是调用级草稿）
     let mut args: Vec<V> = Vec::new();
     loop {
         match v_tag(v) {
@@ -1851,8 +1857,10 @@ static NO_NAME_MAP: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
 
 /// 稳态类型检查器：owns 一个反复 `reset` 的 `Bump` 与跨调用复用的
 /// [`Machine`]（spine/vals/metacontext）。`bump.reset` 不跑析构（bumpalo
-/// 语义），spine/vals 里的旧指针字在下轮 eval/quote 开头即被 clear，
-/// 悬垂无碍。
+/// 语义），跨轮悬垂的两处来源均无碍：`vals` 在每次 eval 开头 clear；
+/// `spine.stack` 条目虽不清理（下标跨轮单调递增），但本轮句柄恒指向
+/// 本轮压入的槽位，旧条目不可达——代价是长驻 Machine 的内存随历史
+/// 最大 spine 深度滞留。metas/defs/name_map 由 `clear_round` 清。
 pub(crate) struct Tycker {
     bump: Bump,
     machine: Machine,

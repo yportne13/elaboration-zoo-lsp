@@ -1096,8 +1096,10 @@ fn tm_size(t: &Tm<'_>) -> u64 {
 }
 
 /// 稳态类型检查器：owns 一个反复 `reset` 的 `Bump` 与跨调用复用的
-/// [`Machine`]。`bump.reset` 不跑析构（bumpalo 语义），spine/vals 里的
-/// 旧指针字在下轮 eval/quote 开头即被 clear，悬垂无碍。
+/// [`Machine`]。`bump.reset` 不跑析构（bumpalo 语义），跨轮悬垂的两处
+/// 来源均无碍：`vals` 在每次 eval 开头 clear；`spine.stack` 条目虽不清理
+/// （下标跨轮单调递增、容量只增），但本轮句柄恒指向本轮压入的槽位，
+/// 旧条目不可达——代价是长驻 Machine 的内存随历史最大 spine 深度滞留。
 pub(crate) struct Tycker {
     bump: Bump,
     machine: Machine,

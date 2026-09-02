@@ -1157,6 +1157,9 @@ impl Infer {
                             Val::U,
                         );
                         let b = Closure(cxt.env.clone(), Box::new(cod_meta));
+                        // 实参序 (tty, 合成Π) 系上游 04/05 的 unifyCatch 次序；
+                        // 上游 03 是 (合成Π, tty)——各层各自忠实，只影响
+                        // 报错文案里 expected/inferred 的方向。
                         self.unify_catch(
                             cxt,
                             &tty,

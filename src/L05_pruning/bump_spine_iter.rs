@@ -215,7 +215,10 @@ pub(crate) fn env_ext<'a>(bump: &'a Bump, env: Env<'a>, v: V) -> Env<'a> {
 }
 
 /// 环境扩展（**平坦 def 区域**：elaborator 的 define）。tip 环境原地追加
-/// （chain 负载的 O(1) 线性保证）；非 tip 环境回落 binder 链（L04 同款）。
+/// （chain 负载的 O(1) 线性保证）；其余回落 binder 链（L04 同款）。
+/// tip 判定要求 binds 为空：λ 体内 define 比链上 binder 更新，必须落在
+/// 链头——追加平坦区会被 env_nth/AppBds 的链优先序排到 binder 之后
+/// （de Bruijn 次序互换，错位值流进 solve 即错解/误报）。
 #[inline]
 pub(crate) fn env_ext_defs<'a>(
     bump: &'a Bump,
@@ -223,7 +226,7 @@ pub(crate) fn env_ext_defs<'a>(
     env: Env<'a>,
     v: V,
 ) -> Env<'a> {
-    if env.flat_base + env.flat_len == defs.len() as u32 {
+    if env.binds.is_none() && env.flat_base + env.flat_len == defs.len() as u32 {
         defs.push(v);
         Env {
             flat_base: env.flat_base,
@@ -376,7 +379,9 @@ fn force<'a>(
     v0: V,
 ) -> V {
     let mut v = v0;
-    // 实参缓冲跨 force 轮复用（已解 flex 链每轮收集一次；clear 保容量）
+    // 实参缓冲在本次 force 调用内的已解链轮间复用（每次 force 调用新建；
+    // clear 保容量。非跨 Machine 轮——Machine 复用的是 spine/vals，此处
+    // args 是调用级草稿）
     let mut args: Vec<(V, Icit)> = Vec::new();
     loop {
         match v_tag(v) {

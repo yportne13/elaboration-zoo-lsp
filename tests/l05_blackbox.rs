@@ -355,3 +355,15 @@ fn nonlinear_triple_occurrence_rejected_by_both() {
 
 // 注：消融开关（L05_NO_CONV_MEMO / L05_NO_NAME_MAP）的「只影响性能、不影响
 // 输出」契约由性能版内嵌互检测试覆盖；env 经 LazyLock 每进程只读一次。
+
+// λ 体内 define 错位回归：性能版 env_ext_defs 的 tip 追加曾漏 binds 非空
+// 判定，define 与 binder 的 de Bruijn 次序互换——类型洞的 AppBds 配对把
+// ?0 应用到 q0 的值（U）而非 u，错位值流进 solve 后 invert 遇非变量实参
+// 必败 → 误报 Cannot unify（参考版正确解出 ?0 := λx1. U）。修复前三模式
+// 全分歧。
+#[test]
+fn define_inside_lambda_env_order_regression() {
+    let src = "let f : (u : U) -> U = \\u. let q0 : U = U; let h : _ = q0; h;\nf\n";
+    assert_eq!(ty(src), "(u : U) → U\n");
+    assert_parity(src);
+}
