@@ -15,7 +15,13 @@ pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
         end_offset: input.len() as u32,
         path_id: id,
     })
-    .and_then(|(_, ret)| p_decl.many1().parse(&ret).map(|x| x.1))
+    .and_then(|(_, ret)| {
+        // decl 流必须吃完全部 token:`;` / 垃圾 token 曾把后续 decl 静默
+        // 截断(测试因此空转过)——现在一律解析失败,由 run 报 Err
+        p_decl.many1().parse(&ret).and_then(|(rest, decls)| {
+            if rest.is_empty() { Some(decls) } else { None }
+        })
+    })
 }
 
 macro_rules! T {

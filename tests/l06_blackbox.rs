@@ -128,7 +128,9 @@ fn let_in_body_and_define_inside_lambda() {
         "def Nat : U = (N : U) -> (N -> N) -> N -> N\n",
         "def id [A : U] : A -> A = x => x\n",
         "def p0 : Nat = N => s => z => s (s z)\n",
-        "def f : Nat -> Nat = u => let q : Nat = id u in let r : Nat = id q in r\n",
+        // let 体以分号接续（p_let 语法，`in` 不是关键字）；let 在 λ 体内
+        // 即 define-inside-lambda 路径（平坦 def 区域 tip 判定）
+        "def f : Nat -> Nat = u => let q : Nat = id u; id q\n",
         "println (f p0)\n",
     );
     assert_parity(src);
@@ -237,6 +239,67 @@ fn decl_table_and_globals() {
         run_basic("def s : U = create_global \"x\" \"v\"\ndef g : String = get_global \"x\"\nprintln g").unwrap(),
         "v\n"
     );
+}
+
+// 修复/行为变更回归（review 探针转正）
+// --------------------------------------------------------------------------------
+
+/// preprocess 的注释剥离感知字符串字面量：`//` / `/* */` 在字符串内不生效
+/// （旧版纯文本剥离会把字面量截成未闭合字符串，解析失败）。
+#[test]
+fn string_with_comment_markers() {
+    let src = concat!(
+        "def url = \"http://example.com/a/*b*/c\"\n",
+        "println url\n",
+    );
+    assert_eq!(run_basic(src).unwrap(), "http://example.com/a/*b*/c\n");
+    assert_parity(src);
+}
+
+/// change_mutable 的 f 求值可再触发 prim（get_global）：旧版持有
+/// borrow_mut 求值，重入即 BorrowError panic。
+#[test]
+fn change_mutable_reentrant_prim() {
+    let src = concat!(
+        "def g0 : U = create_global \"k\" \"v\"\n",
+        "def upd : U = change_mutable \"k\" (s => string_concat s (get_global \"k\"))\n",
+        "def v : String = get_global \"k\"\n",
+        "println v\n",
+    );
+    assert_eq!(run_basic(src).unwrap(), "vv\n");
+    assert_parity(src);
+}
+
+/// get_global 缺名不再 panic：保持卡住的 Decl 头（println 打卡住名）。
+#[test]
+fn get_global_missing_stays_stuck() {
+    let src = "def v : String = get_global \"missing\"\nprintln v\n";
+    assert_eq!(run_basic(src).unwrap(), "get_global missing\n");
+    assert_parity(src);
+}
+
+/// String 与卡住 Decl 的宽松合一只对 decl 表**未登记**名放行；已登记名按
+/// 登记类型把关（U 型 builtin 的卡住值不再冒充 String 型）。
+#[test]
+fn registered_decl_not_loosely_string() {
+    // file_delete 已登记且类型 String -> U：其值作类型与 String 不再合一
+    assert_error_parity(
+        "def bad : String = get_global \"file_delete\"\nprintln bad\n",
+        "can't unify",
+    );
+    // 动态名（变量实参）同样收紧：get_global x 的类型不可静态得知
+    assert_error_parity(
+        "def dyn(x : String) : String = get_global x\nprintln (dyn \"a\")\n",
+        "can't unify",
+    );
+}
+
+/// parser 要求 decl 流吃完全部 token：`;` / 垃圾 token 的静默截断改为
+/// 解析报错（run 返回 Err，不再 panic/空转）。
+#[test]
+fn parse_error_on_trailing_tokens() {
+    assert_error_parity("def pr1 = f => x => f x;\nprintln pr1\n", "parse error");
+    assert_error_parity("println U\nGARBAGE!!!\n", "parse error");
 }
 
 #[test]

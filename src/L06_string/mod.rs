@@ -349,7 +349,10 @@ impl Infer {
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).unwrap();
+    let ast = match parser::parser(&preprocess(input), path_id) {
+        Some(ast) => ast,
+        None => return Err(Error("parse error".to_owned())),
+    };
     let mut cxt = Cxt::new(&mut infer);
     let mut ret = String::new();
     for tm in ast {
@@ -364,23 +367,61 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     Ok(ret)
 }
 
+/// 注释剥离(行 `//` 与块 `/* */`),**字符串字面量内不生效**——旧版对
+/// `//` / `/*` 做纯文本剥离,会把 `"http://…"` 之类的字面量截成未闭合
+/// 字符串导致解析失败。现按词法规则跳过字符串区间(含 `\` 转义);注释
+/// 内容只替换为空白,保持 span 偏移稳定。块注释不嵌套(与旧版一致)。
 pub fn preprocess(s: &str) -> String {
-    let s = s.split("/*")
-        .map(|x| {
-            x.split_once("*/")
-                .map(|(a, b)| a.replace(|c: char| !c.is_whitespace(), " ") + "  " + b)
-                .unwrap_or(x.to_owned())
-        })
-        .reduce(|a, b| a + "  " + &b)
-        .unwrap_or(s.to_owned());
-    s.lines()
-        .map(|x| {
-            x.split_once("//")
-                .map(|(a, b)| a.to_owned() + "  " + &b.replace(|c: char| !c.is_whitespace(), " "))
-                .unwrap_or(x.to_owned())
-        })
-        .reduce(|a, b| a + "\n" + &b)
-        .unwrap_or(s.to_owned())
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                out.push_str("  ");
+                // 行注释:换行前的内容替换为空白(保留换行符)
+                for rc in chars.by_ref() {
+                    if rc == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                out.push_str("  ");
+                // 块注释:到 `*/` 为止的内容替换为空白
+                while let Some(rc) = chars.next() {
+                    if rc == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        out.push_str("  ");
+                        break;
+                    }
+                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// 内嵌 `test` 与性能版（`bump_spine_iter`）互检共用的演示源：pruning 全套

@@ -117,9 +117,13 @@ fn change_mutable(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 2 { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            if let Some(x) = infer.mutable_map.borrow_mut().get_mut(&a.data) {
-                *x = infer.v_app(args[1].clone(), x.clone(), Icit::Expl)
-            };
+            // 先取旧值并结束借用,再求值 f:f 的求值可能再触发任何 prim
+            // (get_global 等)——持有 borrow_mut 求值会 BorrowError panic
+            let old = infer.mutable_map.borrow().get(&a.data).cloned();
+            if let Some(old) = old {
+                let new = infer.v_app(args[1].clone(), old, Icit::Expl);
+                infer.mutable_map.borrow_mut().insert(a.data.clone(), new);
+            }
             Some(Val::U.into())
         },
         _ => None,
@@ -129,7 +133,9 @@ fn change_mutable(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
 fn get_global(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
-        Val::LiteralIntro(a) => Some(infer.mutable_map.borrow().get(&a.data).unwrap().clone()),
+        // 缺名不再 panic:返回 None 保持卡住的 Decl 头(与按名 miss 同款,
+        // 会在后续 unify 里按宽松臂处理),`get_global_default` 仍走兜底
+        Val::LiteralIntro(a) => infer.mutable_map.borrow().get(&a.data).cloned(),
         _ => None,
     }
 }
@@ -151,12 +157,19 @@ fn change_mutable_default(infer: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.len() < 3 { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            let mut map = infer.mutable_map.borrow_mut();
-            if let Some(x) = map.get_mut(&a.data) {
-                *x = infer.v_app(args[1].clone(), x.clone(), Icit::Expl)
-            } else {
-                map.insert(a.data.clone(), args[2].clone());
-            };
+            // 同 change_mutable:先取旧值并结束借用,再求值 f(重入安全)
+            let existing = infer.mutable_map.borrow().get(&a.data).cloned();
+            match existing {
+                Some(old) => {
+                    let new = infer.v_app(args[1].clone(), old, Icit::Expl);
+                    infer.mutable_map.borrow_mut().insert(a.data.clone(), new);
+                }
+                None => {
+                    infer.mutable_map
+                        .borrow_mut()
+                        .insert(a.data.clone(), args[2].clone());
+                }
+            }
             Some(Val::U.into())
         },
         _ => None,

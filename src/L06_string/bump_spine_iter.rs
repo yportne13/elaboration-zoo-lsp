@@ -585,11 +585,16 @@ fn prim_fire<'a>(
             }
             match lit_of(args[0]) {
                 Some(a) => {
-                    if let Some(x) = mmap.borrow_mut().get_mut(a) {
-                        let f = args[1];
-                        let old = *x;
-                        *x = vapp1(bump, spine, work, vals, icits, defs, metas, decls, mmap, f, old, Icit::Expl);
-                    };
+                    // 同参考版:先取旧值并结束借用,再求值 f——f 的求值可能
+                    // 再触发任何 prim,持有 borrow_mut 会 BorrowError panic
+                    let old = mmap.borrow().get(a).copied();
+                    if let Some(old) = old {
+                        let new = vapp1(
+                            bump, spine, work, vals, icits, defs, metas, decls, mmap, args[1],
+                            old, Icit::Expl,
+                        );
+                        mmap.borrow_mut().insert(a.to_string(), new);
+                    }
                     Some(v_u())
                 }
                 _ => None,
@@ -600,7 +605,8 @@ fn prim_fire<'a>(
                 return None;
             }
             match lit_of(args[0]) {
-                Some(a) => Some(*mmap.borrow().get(a).unwrap()),
+                // 缺名不再 panic:None 保持卡住的 Decl 头(参考版同款修改)
+                Some(a) => mmap.borrow().get(a).copied(),
                 _ => None,
             }
         }
@@ -624,14 +630,20 @@ fn prim_fire<'a>(
             }
             match lit_of(args[0]) {
                 Some(a) => {
-                    let mut map = mmap.borrow_mut();
-                    if let Some(x) = map.get_mut(a) {
-                        let f = args[1];
-                        let old = *x;
-                        *x = vapp1(bump, spine, work, vals, icits, defs, metas, decls, mmap, f, old, Icit::Expl);
-                    } else {
-                        map.insert(a.to_string(), args[2]);
-                    };
+                    // 同 change_mutable:先取旧值并结束借用,再求值 f(重入安全)
+                    let existing = mmap.borrow().get(a).copied();
+                    match existing {
+                        Some(old) => {
+                            let new = vapp1(
+                                bump, spine, work, vals, icits, defs, metas, decls, mmap,
+                                args[1], old, Icit::Expl,
+                            );
+                            mmap.borrow_mut().insert(a.to_string(), new);
+                        }
+                        None => {
+                            mmap.borrow_mut().insert(a.to_string(), args[2]);
+                        }
+                    }
                     Some(v_u())
                 }
                 _ => None,
@@ -1742,10 +1754,19 @@ fn unify_iter<'a>(
                     (6, 6) => continue,
                     (6, 7) | (7, 6) => {
                         let other = if v_tag(t) == 7 { t } else { u };
-                        if matches!(v_xcell_of(other), XCell::Decl(_)) {
-                            continue;
+                        match v_xcell_of(other) {
+                            // 字面量值与 String 类型:刚性失配(参考版同)
+                            XCell::Lit(_) => return false,
+                            XCell::Decl(n) => match decls.get(*n) {
+                                // 未登记名(可变全局等动态名):宽松放行——
+                                // get_global 族动态余定义域的逃逸舱口
+                                None => continue,
+                                // 已登记名按登记类型把关:非 String 型(如
+                                // U 型 builtin 的卡住值)不再与 String 混过
+                                // (与参考版一致)
+                                Some(e) => stack.push(UItem::Pair(l, v_lit_ty(), e.va)),
+                            },
                         }
-                        return false; // LiteralType vs 字面量：刚性失配
                     }
                     // 裸单元对（带实参的 Decl 是 tag 2 链，在 (2,2) 的同名
                     // 分支走 lockstep 逐实参）：同名 Decl 空 spine 自反成立
@@ -3728,7 +3749,10 @@ impl Tycker {
 
     /// 参考版 `run` 的全流程等价物（含 preprocess/parse）。
     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
-        let ast = super::parser::parser(&super::preprocess(input), path_id).unwrap();
+        let ast = match super::parser::parser(&super::preprocess(input), path_id) {
+            Some(ast) => ast,
+            None => return Err(Error("parse error".to_owned())),
+        };
         self.run_decls(&ast)
     }
 
@@ -3896,21 +3920,33 @@ mod tests {
         assert_parity(super::super::DEMO_SRC);
     }
 
-    /// 剪枝样例束（L05 EX1 的 L06 语法版）。
+    /// 剪枝样例束（L05 EX1 的 L06 语法版）。源码无分号（Eof 检查下 `;`
+    /// 会截断 decl 流导致解析失败），多 def 用例带全 Eq/refl 前置——
+    /// 历史 `;` 版只解析出第一条，剪枝路径实际没跑到。
     #[test]
     fn parity_on_pruning_examples() {
         for src in [
-            "def pr1 = f => x => f x;\nprintln pr1\n",
-            "def pr2 = f => x => y => f x y;\nprintln pr2\n",
-            "def pr3 = f => f U;\nprintln pr3\n",
-            "def m : (A : U)(B : U) -> U -> U -> U = _;\n\
-             def the (A : U)(x : A) : A = x;\n\
-             def test = a => b => the (Eq (m a a) (x => y => y)) refl;\n\
-             println test\n",
-            "def m : U -> U -> U -> U = _;\n\
-             def the (A : U)(x : A) : A = x;\n\
-             def test = a => b => c => the (Eq (m a b c) (m c b a)) refl;\n\
-             println test\n",
+            "def pr1 = f => x => f x\nprintln pr1\n",
+            "def pr2 = f => x => y => f x y\nprintln pr2\n",
+            "def pr3 = f => f U\nprintln pr3\n",
+            // 非线性 spine 可解（m 的类型不依赖非线性实参）
+            concat!(
+                "def Eq [A : U] (x : A, y : A) : U = (P : A -> U) -> P x -> P y\n",
+                "def refl [A : U, x : A] : Eq[A] x x = P => px => px\n",
+                "def the (A : U)(x : A) : A = x\n",
+                "def m (A : U)(B : U) : U -> U -> U = _\n",
+                "def test = a => b => the (Eq (m a a) (x => y => y)) refl\n",
+                "println test\n",
+            ),
+            // 交集剪枝：m a b c =? m c b a 剪 a/c 取 b
+            concat!(
+                "def Eq [A : U] (x : A, y : A) : U = (P : A -> U) -> P x -> P y\n",
+                "def refl [A : U, x : A] : Eq[A] x x = P => px => px\n",
+                "def the (A : U)(x : A) : A = x\n",
+                "def m : U -> U -> U -> U = _\n",
+                "def test = a => b => c => the (Eq (m a b c) (m c b a)) refl\n",
+                "println test\n",
+            ),
         ] {
             assert_parity(src);
         }

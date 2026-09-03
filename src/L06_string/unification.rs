@@ -469,11 +469,20 @@ impl Infer {
                 self.solve(l, *m_prime, sp_prime.clone(), &t)
             }
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            // A stuck decl still denotes a String-typed (or U-typed) value,
-            // so it unifies with the literal type; same-name stuck decls
-            // unify rigid-style by their application spines.
-            (Val::LiteralType, Val::Decl(..)) => Ok(()),
-            (Val::Decl(..), Val::LiteralType) => Ok(()),
+            // 卡住的按名头与 String 宽松合一——get_global 族动态余定义域
+            // (string_to_global_type 对未登记名卡住)的逃逸舱口;但只对
+            // decl 表**未登记**的名字放行,已登记名按登记类型把关(U 型
+            // builtin 的卡住值不再冒充 String 型)
+            (Val::LiteralType, Val::Decl(x, _)) | (Val::Decl(x, _), Val::LiteralType) => {
+                match self.decls.get(&x.data) {
+                    None => Ok(()),
+                    Some(entry) => {
+                        let va = entry.va.clone();
+                        self.unify(l, &Val::LiteralType.into(), &va)
+                    }
+                }
+            }
+            // 同名卡住 decl 按刚性风格逐实参合一
             (Val::Decl(x, sp), Val::Decl(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, sp, sp_prime)
             }
