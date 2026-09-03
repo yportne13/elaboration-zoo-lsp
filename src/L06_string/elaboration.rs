@@ -129,21 +129,6 @@ impl Infer {
                 ret_type,
                 body
             } => {
-                let ret_cxt = cxt;
-                /*let mut cxt = cxt.clone();
-                let param: Vec<Param<usize>> = params
-                    .iter()
-                    .map(|x| {
-                        let (typ, _) = self.infer_expr(&cxt, &x.1)?;
-                        let vtyp = self.eval(cxt.env.clone(), typ.clone());
-                        cxt = cxt.bind(x.0.clone(), vtyp); //TODO: last param may not vtyp
-                        Ok(Param(x.0.clone(), Box::new(typ)))
-                    })
-                    .collect::<Result<_, _>>()?;
-                let result_u = check(&cxt, &result, &Value::U)?;
-                let ret_val = eval(cxt.env.clone(), result_u.clone());
-                let body_u = check(&cxt, body, &ret_val)?;
-                let vt = eval(cxt.env.clone(), body_u.clone());*/
                 //tele.iter().for_each(|x| cxt = cxt.bind(x.0, x.1));
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -153,14 +138,14 @@ impl Infer {
                     .rev()
                     .fold(body.clone(), |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
                 let ret_cxt = {
-                    let typ_tm = self.check(ret_cxt, typ, &Val::U.into())?;
-                    let vtyp = self.eval(&ret_cxt.env, &typ_tm);
+                    let typ_tm = self.check(cxt, typ, &Val::U.into())?;
+                    let vtyp = self.eval(&cxt.env, &typ_tm);
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let t_tm = self.check(ret_cxt, bod, &vtyp)?;
+                    let t_tm = self.check(cxt, bod, &vtyp)?;
                     //println!("begin vt {}", "------".green());
-                    let vt = self.eval(&ret_cxt.env, &t_tm);
+                    let vt = self.eval(&cxt.env, &t_tm);
                     // Decl-table entry: top-level defs become runtime
                     // name-lookups (`string_to_global_type`), mirroring
                     // L13's `cxt.decl(...)` at Def elaboration.
@@ -169,19 +154,10 @@ impl Infer {
                         va: vtyp.clone(),
                         prim: None,
                     });
-                    ret_cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
+                    cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
-                Ok((
-                    DeclTm::Def {
-                        /*name: name.clone(),
-                        params: param,
-                        ret_type: result_u,
-                        body: body_u,*/
-                    },
-                    //vt,
-                    Val::U,
-                    ret_cxt,
-                )) //TODO:vt may be wrong
+                // 首个元素是 decl 层"类型"占位（run/bench 均不消费）
+                Ok((DeclTm::Def, Val::U, ret_cxt))
             },
             Decl::Println(t) => {
                 Ok((

@@ -1884,7 +1884,8 @@ impl RenBuf {
 
 /// 上游 `invert`：实参（应用序）逐个 force 成**裸刚性变量**。非线性
 /// （重复变量）移出 renaming、记 `NONE_MARK`，产出把重复变量的全部出现
-/// 记为 `None` 的掩码（内先序 = args 序）；线性时返回空 vec。非变量实参
+/// 记为 `None` 的掩码（**与 args 逆序 = 应用序**：最外层实参的槽在前；
+/// 消费端 [`prune_ty_bump`] rev 迭代配对 Π 层）；线性时返回空 vec。非变量实参
 /// （字面量 / Decl / 带链变量）即失败（`None`）。
 #[allow(clippy::too_many_arguments)]
 fn invert_bump<'a>(
@@ -1931,7 +1932,7 @@ fn invert_bump<'a>(
     if !nonlinear {
         return Some(Vec::new());
     }
-    // 掩码（内先序 = args 原序；重复变量整级剪除）
+    // 掩码（应用序 = args 逆序，最外层槽在前；重复变量整级剪除）
     let mut mask: Vec<Option<Icit>> = Vec::with_capacity(args.len());
     for k in (0..args.len()).rev() {
         // lvs 按应用序填：lvs[0] = 最先应用（外）；args[k] 内先 ↔ 应用序 n-1-k

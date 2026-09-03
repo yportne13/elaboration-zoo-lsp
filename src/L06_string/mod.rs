@@ -34,12 +34,7 @@ enum BD {
 
 #[derive(Clone, Debug)]
 pub enum DeclTm {
-    Def {
-        /*name: Span<String>,
-        params: Vec<(Span<String>, Tm, Icit)>,
-        ret_type: Tm,
-        body: Tm,*/
-    },
+    Def,
     Println(Tm),
 }
 

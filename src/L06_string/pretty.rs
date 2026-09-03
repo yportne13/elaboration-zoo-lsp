@@ -48,8 +48,11 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
     panic!("Variable index out of bounds");
 }
 
-fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
-    todo!()
+/// `AppPruning` 是项层的洞形态（`fresh_meta` 产出），只存在于
+/// elaboration 中间；pretty 只吃 quote 出的 nf 项，而 quote 不产
+/// `AppPruning`——本分支不可达。
+fn go_app_pruning(_p: i32, _top_ns: List<String>, _ns: List<String>, _t: &Tm, _pr: &Pruning) -> String {
+    unreachable!("AppPruning 不进 pretty：quote 不产该形态")
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
