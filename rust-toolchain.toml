@@ -1,7 +1,12 @@
 # 仓库依赖 nightly：lib 与 l02bench 的 parser_lib 用 `str::pattern::Pattern`
 # 泛型约束（`#![feature(pattern)]`），stable 无法编译（见 src/lib.rs 顶部
-# 与 src/bin/l02bench.rs 的 feature 注释）。跟随最新 nightly；若某天
-# nightly 破坏构建，可把 channel 固定到开发所用构建的日期，
-# 如 `nightly-2025-02-28`。
+# 与 src/bin/l02bench.rs 的 feature 注释）。
+#
+# 固定到 nightly-2025-02-28（与 .github/workflows/ci.yml 各 job 的 dtolnay
+# toolchain 一致，本机默认 nightly 亦为该构建）。不要改回 `channel = "nightly"`：
+# dtolnay/rust-toolchain 只设 rustup default、不设 RUSTUP_TOOLCHAIN，本文件
+# 会覆盖它；CI/新机器上没有名为 nightly 的已装工具链时，rustup 就地自动
+# 下载当前最新 nightly，与开发所用编译器漂移即编不过（CI run 327 起全红
+# 与"新拉仓库编不了"皆此因）。
 [toolchain]
-channel = "nightly"
+channel = "nightly-2025-02-28"
