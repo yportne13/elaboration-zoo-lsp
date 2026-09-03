@@ -120,30 +120,37 @@ impl Infer {
     fn prune_ty_go(
         &mut self,
         decl: &Decls,
-        pr: &Pruning,
+        rev: &[Option<Icit>],
         pren: &PartialRenaming,
         a: Val,
     ) -> Result<Tm, UnifyError> {
-        match (pr, self.force(decl, a)) {
-            (List { head: None, .. }, a) => self.rename(decl, pren, a),
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
+        // 掩码按"外→内"配对 Π 层：`rev` 头 = 最外层槽位（`prune_ty` 已把
+        // Pruning 反转——List 头是最内层）。旧实现直接按链头配对外层 Π，
+        // 多层 telescope + 混合掩码时掩码与 Π 层错位（L05 已修的同款）。
+        match (rev.split_first(), self.force(decl, a)) {
+            (None, a) => self.rename(decl, pren, a),
+            (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
                 let a = self.rename(decl, pren, *a)?;
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
-                let b = self.prune_ty_go(decl, &list.tail(), &lift(pren), b)?;
+                let b = self.prune_ty_go(decl, rest, &lift(pren), b)?;
                 Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
             }
-            (list, Val::Pi(x, i, _, b)) if list.head().unwrap().is_none() => {
+            (Some((None, rest)), Val::Pi(x, i, _, b)) => {
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod));
-                self.prune_ty_go(decl, &list.tail(), &skip(pren), b)
+                self.prune_ty_go(decl, rest, &skip(pren), b)
             }
             _ => Err(UnifyError),
         }
     }
 
     fn prune_ty(&mut self, decl: &Decls, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
+        // Pruning 头 = 最内层槽位；meta 类型的 Π 层从最外层剥起——先反转
+        // 成"外→内"（RevPruning，上游 05 的 pruneTy 同款）。
+        let mut rev: Vec<Option<Icit>> = pr.iter().copied().collect();
+        rev.reverse();
         self.prune_ty_go(
             decl,
-            pr,
+            &rev,
             &PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
@@ -236,9 +243,14 @@ impl Infer {
             }
         };
 
-        let t = sp.iter().fold(Tm::Meta(m_prime), |t, (mu, i)| {
+        // 应用序重建：spine 头 = 最后应用的实参，先反转成"最先应用在前"
+        // 再折叠——旧实现直接从头折叠把最后应用的实参包到最内层，多实参
+        // 剪枝的解应用序倒置（L05 已修的同款）。
+        let mut slots: Vec<(Option<Tm>, Icit)> = sp.iter().cloned().collect();
+        slots.reverse();
+        let t = slots.into_iter().fold(Tm::Meta(m_prime), |t, (mu, i)| {
             if let Some(u) = mu {
-                Tm::App(Box::new(t), Box::new(u.clone()), *i)
+                Tm::App(Box::new(t), Box::new(u), i)
             } else {
                 t
             }
@@ -260,7 +272,7 @@ impl Infer {
 
     fn rename(&mut self, decl: &Decls, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
         static REN_DEPTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        if std::env::var_os("L07_LOOP").is_some() {
+        if super::LOOP_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             let d = REN_DEPTH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if d > 2000 && d % 500 == 0 {
                 eprintln!("  REN depth {d}");
@@ -310,7 +322,7 @@ impl Infer {
             Val::U => Ok(Tm::U),
             Val::LiteralType => Ok(Tm::LiteralType),
             Val::LiteralIntro(x) => Ok(Tm::LiteralIntro(x)),
-            Val::Prim => Ok(Tm::Prim),
+            Val::Prim(name, sp) => self.rename_sp(decl, pren, Tm::Prim(name), &sp),
             Val::Sum(name, params, cases) => {
                 let new_params = params
                     .into_iter()
@@ -336,7 +348,7 @@ impl Infer {
                     datas,
                 })
             }
-            Val::Match(val, env, cases) => {
+            Val::Match(val, env, cases, pending) => {
                 // 分支体是裸 Tm：先在"捕获 env + fresh rigid 槽"下重新求值
                 // （简化 decl 表防重展开），再在 lift 过的 renaming 下 rename
                 let val = self.rename(decl, pren, *val)?;
@@ -355,7 +367,12 @@ impl Infer {
                         Ok((pat.clone(), body))
                     })
                     .collect::<Result<_, UnifyError>>()?;
-                Ok(Tm::Match(Box::new(val), cases))
+                // 卡住期累积的实参：同 quote，包在 Match 外的 App 链里
+                let m = Tm::Match(Box::new(val), cases);
+                pending.into_iter().fold(Ok(m), |acc: Result<Tm, UnifyError>, (u, i)| {
+                    let u = self.rename(decl, pren, u)?;
+                    Ok(Tm::App(Box::new(acc?), Box::new(u), i))
+                })
             }
         }
     }
@@ -510,7 +527,8 @@ impl Infer {
                     _ => None,
                 }
             }
-            _ => unreachable!(),
+            // 长度失配：不 panic，回落 unify_sp 的长度失配失败（L05 同款）
+            _ => None,
         }
     }
 
@@ -544,7 +562,7 @@ impl Infer {
         // 递归深度防护：索引槽互相嵌入的构造子值比较会无限递归
         let fuel = self.unify_fuel.get();
         if fuel == 0 {
-            if std::env::var_os("L07_LOOP").is_some() {
+            if super::LOOP_DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
                 eprintln!(
                     "  LOOP @ unify: {} vs {}",
                     pretty_tm(0, cxt.names(), &self.quote(decl, l, t.clone())),
@@ -554,7 +572,7 @@ impl Infer {
             return Err(UnifyError);
         }
         self.unify_fuel.set(fuel - 1);
-        if std::env::var_os("L07_LOOP").is_some() && fuel < 4090 && fuel % 100 == 0 {
+        if super::LOOP_DEBUG.load(std::sync::atomic::Ordering::Relaxed) && fuel < 4090 && fuel % 100 == 0 {
             eprintln!(
                 "  deep{fuel}: {} vs {}",
                 pretty_tm(0, cxt.names(), &self.quote(decl, l, t.clone())),
@@ -639,9 +657,15 @@ impl Infer {
             (Val::Flex(m, sp), _) => self.solve(decl, l, *m, sp.clone(), u.clone()),
             (_, Val::Flex(m_prime, sp_prime)) => self.solve(decl, l, *m_prime, sp_prime.clone(), t.clone()),
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            // 字符串字面量与内建 Prim 的宽松比较（保持 L07 时代行为）
-            (Val::LiteralType, Val::Prim) | (Val::Prim, Val::LiteralType) => Ok(()),
-            (Val::Prim, Val::Prim) => Ok(()),
+            // 字符串字面量与内建 Prim 的宽松比较（保持 L07 时代行为）：
+            // 卡住的 string_concat 的值类型就是 String
+            (Val::LiteralType, Val::Prim(..)) | (Val::Prim(..), Val::LiteralType) => Ok(()),
+            // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
+            // Prim 会把 `x ++ y ≡ x ++ z` 判成相等
+            (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {
+                self.unify_sp(decl, l, cxt, sp, sp_prime)
+            }
+            (Val::Prim(..), Val::Prim(..)) => Err(UnifyError),
             // Sum：同名即逐参数（含索引）合一
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
@@ -671,7 +695,8 @@ impl Infer {
                 Ok(())
             }
             // 卡住的 match vs 卡住的 match：scrutinee 合一 + 分支一一对应
-            (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
+            // + 卡住期累积的实参逐一比较
+            (Val::Match(s1, env1, cases1, pending1), Val::Match(s2, env2, cases2, pending2)) => {
                 // 快路径：scrutinee、捕获 env、模式与分支体全部结构相同 ⇒ 两个
                 // match 值在所有实例化下行为一致，直接判等。逐分支重求值会把
                 // 递归函数的分支体再展开一层卡住 match（fresh rigid 层级随深度
@@ -685,6 +710,11 @@ impl Infer {
                         .iter()
                         .zip(cases2.iter())
                         .all(|((p1, b1), (p2, b2))| p1 == p2 && super::struct_eq::tm_eq(b1, b2))
+                    && pending1.len() == pending2.len()
+                    && pending1
+                        .iter()
+                        .zip(pending2.iter())
+                        .all(|((a, i), (b, j))| i == j && super::struct_eq::val_eq(a, b))
                 {
                     return Ok(());
                 }
@@ -706,12 +736,26 @@ impl Infer {
                     let v2 = self.eval(&declb, &env2, b2.clone());
                     self.unify(decl, l + count, cxt, v1, v2)?;
                 }
+                if pending1.len() != pending2.len() {
+                    return Err(UnifyError);
+                }
+                for ((u1, i1), (u2, i2)) in pending1.iter().zip(pending2.iter()) {
+                    if i1 != i2 {
+                        return Err(UnifyError);
+                    }
+                    self.unify(decl, l, cxt, u1.clone(), u2.clone())?;
+                }
                 Ok(())
             }
             // 卡住的 match vs 其它：能归约的已在入口 force 消掉（force 会在
             // scrutinee 上重试选分支），这里只接受严格 eta——每个分支都是
             // 通配且分支体就是 scrutinee 本身。无条件接受会把 `f x` 证成 `x`。
-            (Val::Match(s, _, cases), other) | (other, Val::Match(s, _, cases)) => {
+            (Val::Match(s, _, cases, pending), other) | (other, Val::Match(s, _, cases, pending)) => {
+                // 带 pending 实参的卡住 match 不是 eta 形态（分支体经实参
+                // 应用后不再等于 scrutinee）
+                if !pending.is_empty() {
+                    return Err(UnifyError);
+                }
                 match (self.force(decl, (**s).clone()), other) {
                     (Val::Rigid(x, sp), Val::Rigid(y, sp2))
                         if x == *y && sp.is_empty() && sp2.is_empty() =>

@@ -7,7 +7,18 @@
 //!
 //! 设计说明见本目录 README.md。
 
-use std::{ops::{Add, Sub}, rc::Rc};
+use std::{
+    ops::{Add, Sub},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        LazyLock,
+    },
+};
+
+/// `L07_LOOP` 调试开关（进程级，只读一次；热路径零 env 访问）。
+pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
+    LazyLock::new(|| AtomicBool::new(std::env::var("L07_LOOP").is_ok()));
 
 
 use cxt::{Cxt, DeclEntry, Decls};
@@ -61,7 +72,8 @@ pub enum Tm {
     Meta(MetaVar),
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    /// 内建函数体标记（携带名字：求值时卡成 `Val::Prim(name, env_spine)`）。
+    Prim(SmolStr),
     /// enum 类型本体（enum 声明 λ 链的体）。params = (参数名, 值项, 值的类型, icit)，
     /// 声明处值项即参数自身；实例化（`Vec[Nat] 3`）后值槽携带当前实参。
     Sum(Span<String>, Vec<(Span<String>, Tm, Ty, Icit)>, Vec<Span<String>>),
@@ -139,7 +151,11 @@ pub enum Val {
     U,
     LiteralType,
     LiteralIntro(Span<String>),
-    Prim,
+    /// 卡住的内建应用：名字 + 已收实参 spine（头 = 最后应用的实参）。
+    /// 全部实参字面量时在 `force` 归约（目前仅 string_concat），否则保持
+    /// 中性参与 unify / quote / rename（名字 + 实参不可丢——丢实参的单元
+    /// `Prim` 会把 `x ++ y ≡ x ++ z` 判成相等）。
+    Prim(SmolStr, Spine),
     Sum(
         Span<String>,
         Vec<(Span<String>, Val, VTy, Icit)>, // (参数名, 实参值, 实参的类型, icit)
@@ -151,7 +167,10 @@ pub enum Val {
         datas: Vec<(Span<String>, Val, Icit)>,
     },
     /// 卡住的 match：scrutinee 不是构造子值，等待 scrutinee 归约后再选分支。
-    Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
+    /// `pending` = 卡住期间累积的应用实参（值层保存，分支选中后在值层应用
+    /// ——项层 splice 把实参 quote 进分支体时，实参的自由变量会引用到
+    /// 错误的上下文，见 `v_app` 的 Match 臂）。
+    Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>, Vec<(Val, Icit)>),
 }
 
 type VTy = Val;
@@ -334,7 +353,7 @@ impl Infer {
         match t {
             Val::Flex(m, sp) => match self.lookup_meta(m) {
                 MetaEntry::Solved(t_solved, _) if burn(&self.unify_fuel) => {
-                    if std::env::var_os("L07_LOOP").is_some() && self.unify_fuel.get() < 2200 {
+                    if LOOP_DEBUG.load(Ordering::Relaxed) && self.unify_fuel.get() < 2200 {
                         eprintln!("  force-expand meta {} (fuel {})", m.0, self.unify_fuel.get());
                     }
                     self.force(decl, self.v_app_sp(decl, t_solved.clone(), sp))
@@ -351,18 +370,25 @@ impl Infer {
             // 卡住的 match：scrutinee 是在 match 创建之后才被特化/解出时，
             // 这里重新尝试选分支。没有这一步，精化无法传播进"卡住 match
             // 里面"（期望类型 `Eq (add a zero) a` 的 `add a zero` 就是它）。
-            Val::Match(s, env, cases) => {
+            Val::Match(s, env, cases, pending) => {
                 let s2 = self.force(decl, (*s).clone());
                 if let Val::SumCase { .. } = &s2 {
                     if burn(&self.unify_fuel) {
                         if let Some((tm, env2)) =
                             Compiler::eval_aux(self, decl, s2, &env, &cases)
                         {
-                            return self.force(decl, self.eval(decl, &env2, tm));
+                            // 分支选中：先在值层应用卡住期累积的实参（值无需
+                            // quote，作用域天然正确；项层 splice 会把实参的
+                            // 自由变量引到错误上下文）。
+                            let mut v = self.eval(decl, &env2, tm);
+                            for (u, i) in pending.iter().cloned() {
+                                v = self.v_app(decl, v, u, i);
+                            }
+                            return self.force(decl, v);
                         }
                     }
                 }
-                Val::Match(s, env, cases)
+                Val::Match(s, env, cases, pending)
             }
             Val::Decl(name, sp) => match decl.get(&name) {
                 // unfold 前先检查自引用占位（递归 def 的占位值与 simpl_decl
@@ -377,6 +403,22 @@ impl Infer {
                 None => Val::Decl(name, sp),
                 _ => Val::Decl(name, sp),
             },
+            // 卡住的内建：全部实参字面量时归约（目前仅 string_concat），
+            // 否则保持卡住。名字 + 实参 spine 由 eval(Tm::Prim) 构造。
+            Val::Prim(name, sp) => {
+                let args: Vec<Val> = sp.iter().map(|(v, _)| v.clone()).collect();
+                if name == "string_concat" && args.len() >= 2 && burn(&self.unify_fuel) {
+                    match (&args[args.len() - 1], &args[args.len() - 2]) {
+                        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
+                            return Val::LiteralIntro(
+                                a.clone().map(|x| format!("{x}{}", b.data)),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                Val::Prim(name, sp)
+            }
             Val::Obj(v, name, sp) => {
                 let v = self.force(decl, *v);
                 match project(&v, &name) {
@@ -401,8 +443,10 @@ impl Infer {
         self.eval(decl, &closure.0.prepend(u), *closure.1.clone())
     }
 
-    /// 把 `u` 应用到 `t`。卡住的 match 吸收参数：把应用拼进每个分支体——
-    /// scrutinee 归约后恰好命中一个分支，语义保持（否则卡住 match 无法被应用）。
+    /// 把 `u` 应用到 `t`。卡住的 match 把实参收进 `pending`（值层保存）——
+    /// scrutinee 归约选中分支后，由 `force` / `eval` 在**值层**逐个应用：
+    /// 项层 splice 需要把实参 quote 成项，而实参的自由变量层级可能超出
+    /// 捕获 env，无法引到正确上下文。
     fn v_app(&self, decl: &Decls, t: Val, u: Val, i: Icit) -> Val {
         match t {
             Val::Lam(_, _, closure) => self.closure_apply(decl, &closure, u),
@@ -410,14 +454,10 @@ impl Infer {
             Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
             Val::Decl(name, sp) => Val::Decl(name, sp.prepend((u, i))),
             Val::Obj(v, name, sp) => Val::Obj(v, name, sp.prepend((u, i))),
-            Val::Match(val, env, cases) => {
-                let l = Lvl(env.len() as u32);
-                let u_tm = self.quote(decl, l, u);
-                let cases = cases
-                    .into_iter()
-                    .map(|(p, b)| (p, Tm::App(Box::new(b), Box::new(u_tm.clone()), i)))
-                    .collect();
-                Val::Match(val, env, cases)
+            Val::Prim(name, sp) => Val::Prim(name, sp.prepend((u, i))),
+            Val::Match(val, env, cases, mut pending) => {
+                pending.push((u, i));
+                Val::Match(val, env, cases, pending)
             }
             x => panic!("impossible apply\n  {x:?}\nto\n  {u:?}"),
         }
@@ -481,12 +521,19 @@ impl Infer {
             Tm::AppPruning(t, pr) => self.v_app_pruning(decl, env, self.eval(decl, env, *t), &pr),
             Tm::LiteralIntro(x) => Val::LiteralIntro(x),
             Tm::LiteralType => Val::LiteralType,
-            Tm::Prim => match (env.iter().nth(1), env.iter().nth(0)) {
-                (Some(Val::LiteralIntro(a)), Some(Val::LiteralIntro(b))) => {
-                    Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data)))
-                }
-                _ => Val::Prim,
-            },
+            Tm::Prim(name) => {
+                // 实参经 Lam 链进 env（最内 = 最后应用）：卡成带名字与实参
+                // spine 的 Prim。归约统一在 force（不在求值点按 env 触发——
+                // quote → eval 往返时项已改成 `Prim 实参` 的应用形态，按
+                // 现场 env 触发会把无关的字面量拼进来）。
+                let mut args: Vec<(Val, Icit)> =
+                    env.iter().map(|v| (v.clone(), Icit::Expl)).collect();
+                args.reverse(); // 应用序 → spine 头 = 最后应用
+                Val::Prim(
+                    name,
+                    args.into_iter().fold(List::new(), |acc, e| acc.prepend(e)),
+                )
+            }
             Tm::Sum(name, params, cases) => {
                 let new_params = params
                     .into_iter()
@@ -517,9 +564,9 @@ impl Infer {
                 match val {
                     Val::SumCase { .. } => match Compiler::eval_aux(self, decl, val.clone(), env, &cases) {
                         Some((body, env)) => self.eval(decl, &env, body),
-                        None => Val::Match(Box::new(val), env.clone(), cases),
+                        None => Val::Match(Box::new(val), env.clone(), cases, Vec::new()),
                     },
-                    neutral => Val::Match(Box::new(neutral), env.clone(), cases),
+                    neutral => Val::Match(Box::new(neutral), env.clone(), cases, Vec::new()),
                 }
             }
         }
@@ -562,7 +609,7 @@ impl Infer {
             Val::U => Tm::U,
             Val::LiteralIntro(x) => Tm::LiteralIntro(x),
             Val::LiteralType => Tm::LiteralType,
-            Val::Prim => Tm::Prim,
+            Val::Prim(name, sp) => self.quote_sp(decl, l, Tm::Prim(name), sp),
             Val::Sum(name, params, cases) => Tm::Sum(
                 name,
                 params
@@ -583,7 +630,7 @@ impl Infer {
                     .map(|(n, v, i)| (n, self.quote(decl, l, v), i))
                     .collect(),
             },
-            Val::Match(val, env, cases) => {
+            Val::Match(val, env, cases, pending) => {
                 // 分支体在"捕获 env + fresh rigid 槽"下重新求值再 quote：
                 // 这样 quote → eval 往返是恒等的（L07 没做完的关键一处）。
                 // 求值用简化 decl 表（全局值换成中性 Decl 引用），避免分支体
@@ -602,7 +649,13 @@ impl Infer {
                         (p, self.quote(&declb, l + count, tm))
                     })
                     .collect();
-                Tm::Match(Box::new(self.quote(decl, l, *val)), tm_cases)
+                // 卡住期累积的实参按应用序包在 Match 外（值层应用在
+                // force/eval 的分支选中后做；quote → eval 往返由此保持）。
+                // 实参的自由层级属当前上下文，quote 在调用方的 l 下正确。
+                let m = Tm::Match(Box::new(self.quote(decl, l, *val)), tm_cases);
+                pending.into_iter().fold(m, |acc, (u, i)| {
+                    Tm::App(Box::new(acc), Box::new(self.quote(decl, l, u)), i)
+                })
             }
         }
     }
@@ -655,11 +708,13 @@ fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
         Val::SumCase { typ, datas, .. } => {
             val_mentions_lvl(typ, x) || datas.iter().any(|(_, v, _)| val_mentions_lvl(v, x))
         }
-        Val::Match(s, env, _) => {
-            val_mentions_lvl(s, x) || env.iter().any(|v| val_mentions_lvl(v, x))
+        Val::Match(s, env, _, pending) => {
+            val_mentions_lvl(s, x)
+                || env.iter().any(|v| val_mentions_lvl(v, x))
+                || pending.iter().any(|(v, _)| val_mentions_lvl(v, x))
         }
-        Val::Lam(..) | Val::Pi(..) | Val::U | Val::LiteralType | Val::LiteralIntro(_)
-        | Val::Prim => false,
+        Val::Prim(_, sp) => spine(sp, x),
+        Val::Lam(..) | Val::Pi(..) | Val::U | Val::LiteralType | Val::LiteralIntro(_) => false,
     }
 }
 
@@ -704,7 +759,10 @@ fn simpl_decl(decl: &Decls) -> Decls {
 #[allow(unused)]
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).unwrap();
+    let ast = match parser::parser(&preprocess(input), path_id) {
+        Some(a) => a,
+        None => return Err(Error("parse error".to_owned())),
+    };
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {

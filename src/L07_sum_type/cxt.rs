@@ -67,7 +67,7 @@ impl Cxt {
                             Box::new(Tm::Lam(
                                 empty_span("y".to_owned()),
                                 Icit::Expl,
-                                Box::new(Tm::Prim),
+                                Box::new(Tm::Prim(SmolStr::new("string_concat"))),
                             )),
                         ),
                     ),

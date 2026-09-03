@@ -627,6 +627,58 @@ println ((f zero) zero)
     );
 }
 
+/// 回归：卡住 match 被应用、且实参引用比捕获 env 更外层的 binder。
+/// 旧实现把实参 quote 进分支体（quote 层级取捕获 env 长度），实参越界：
+/// debug 触发 lvl2ix 断言、release 静默错位成错误变量。修复后实参在值层
+/// 累积（pending）、分支选中后再应用——作用域天然正确。
+#[test]
+fn test_stuck_match_applied_with_outer_binder() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def pick(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(k) => k => succ k
+    }
+
+def test(m: Nat, j: Nat): Nat = (pick m) j
+
+println test
+"#,
+    );
+    // 正确形态：match 保持卡住（m 中性），实参 `j` 在分支**外层**应用
+    // ——旧实现把 j quote 进分支体（层级越界：debug panic / release 错位
+    // 成 m），此处 `) j` 的尾部应用与分支体引用都是修复后的标志。
+    assert!(out.contains("match m"), "{out}");
+    assert!(out.contains(") j"), "{out}");
+    assert!(!out.contains("zero => j"), "{out}");
+}
+
+/// 回归：卡住的内建（string_concat 实参非字面量）不再无条件判等——
+/// `x ++ y ≡ x ++ z` 必须不可证（旧实现 Val::Prim 不带实参，
+/// `(Prim, Prim) => Ok(())` 会把不同的拼接判成相等）。
+#[test]
+fn test_stuck_prim_not_unconditionally_equal() {
+    let msg = check_err(
+        r#"
+enum Eq[A : U](x : A, y : A) {
+    refl(x : A) -> Eq[A] x x
+}
+
+def bad(x: String, y: String, z: String): Eq[String] (string_concat x y) (string_concat x z) =
+    refl [String] (string_concat x y)
+
+println bad
+"#,
+    );
+    assert!(msg.contains("can't unify"), "{msg}");
+}
+
 /// 回归：分支体里的洞（未解 meta）不炸 pretty（L07a 的 pretty todo!()）
 #[test]
 fn test_hole_in_branch() {

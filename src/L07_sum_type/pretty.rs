@@ -64,7 +64,7 @@ fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
                 Icit::Impl => bracket(pretty_tm(ATP, ns, u)),
             };
             if need_paren {
-                format!("{{{f_t} {f_u}}}")
+                format!("({f_t} {f_u})")
             } else {
                 format!("{f_t} {f_u}")
             }
@@ -132,7 +132,7 @@ fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
         Tm::AppPruning(t, _) => go_app_pruning(prec, ns, t),
         Tm::LiteralType => "String".to_owned(),
         Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Prim => "<prim>".to_owned(),
+        Tm::Prim(name) => name.to_string(),
         Tm::Sum(span, params, _) => format!(
             "{}{}",
             span.data,

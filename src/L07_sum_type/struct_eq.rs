@@ -67,7 +67,7 @@ fn tm_eq_go(budget: &mut EqBudget, a: &Tm, b: &Tm) -> bool {
         }
         (Tm::LiteralType, Tm::LiteralType) => true,
         (Tm::LiteralIntro(x), Tm::LiteralIntro(y)) => x == y,
-        (Tm::Prim, Tm::Prim) => true,
+        (Tm::Prim(x), Tm::Prim(y)) => x == y,
         (Tm::Sum(xn, xp, _), Tm::Sum(yn, yp, _)) => {
             xn.data == yn.data
                 && xp.len() == yp.len()
@@ -126,7 +126,7 @@ fn val_eq_go(budget: &mut EqBudget, a: &Val, b: &Val) -> bool {
         (Val::U, Val::U) => true,
         (Val::LiteralType, Val::LiteralType) => true,
         (Val::LiteralIntro(x), Val::LiteralIntro(y)) => x == y,
-        (Val::Prim, Val::Prim) => true,
+        (Val::Prim(x, xs), Val::Prim(y, ys)) => x == y && spine_eq(budget, xs, ys),
         (Val::Sum(xn, xp, _), Val::Sum(yn, yp, _)) => {
             xn.data == yn.data
                 && xp.len() == yp.len()
@@ -155,7 +155,7 @@ fn val_eq_go(budget: &mut EqBudget, a: &Val, b: &Val) -> bool {
                     xi == yi && val_eq_go(budget, xv, yv)
                 })
         }
-        (Val::Match(xs, xe, xc), Val::Match(ys, ye, yc)) => {
+        (Val::Match(xs, xe, xc, xp), Val::Match(ys, ye, yc, yp)) => {
             val_eq_go(budget, xs, ys)
                 && env_eq_go(budget, xe, ye)
                 && xc.len() == yc.len()
@@ -163,6 +163,10 @@ fn val_eq_go(budget: &mut EqBudget, a: &Val, b: &Val) -> bool {
                     .iter()
                     .zip(yc.iter())
                     .all(|((p, xb), (q, yb))| p == q && tm_eq_go(budget, xb, yb))
+                && xp.len() == yp.len()
+                && xp.iter().zip(yp.iter()).all(|((xv, xi), (yv, yi))| {
+                    xi == yi && val_eq_go(budget, xv, yv)
+                })
         }
         _ => false,
     }

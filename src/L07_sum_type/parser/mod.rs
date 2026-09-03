@@ -19,11 +19,13 @@ pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
         p_decl
             .many1_sep(kw(EndLine).many1())
             .parse(&ret)
-            .map(|x| {
+            .and_then(|x| {
                 if !x.0.is_empty() {
-                    panic!("unexpected token: {:?}", x.0);
+                    // 残留 token：按解析失败处理（调用侧 `run` 报 parse error）
+                    None
+                } else {
+                    Some(x.1)
                 }
-                x.1
             })
     })
 }
