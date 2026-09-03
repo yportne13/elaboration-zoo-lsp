@@ -6,12 +6,13 @@ use syntax::{close_ty, Pruning};
 use crate::list::List;
 use crate::parser_lib::Span;
 
-mod parser;
+pub(crate) mod parser;
 mod elaboration;
 mod cxt;
 mod unification;
 mod syntax;
 mod pretty;
+pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MetaVar(u32);
@@ -382,9 +383,10 @@ pub fn preprocess(s: &str) -> String {
         .unwrap_or(s.to_owned())
 }
 
-#[test]
-fn test() {
-    let input = r#"
+/// 内嵌 `test` 与性能版（`bump_spine_iter`）互检共用的演示源：pruning 全套
+/// （Eq/refl/the/m 的非线性与交集剪枝）+ String 字面量 + builtin 注册表
+/// （str_eq / str_indent2 / 文件 IO）+ decl 表按名取值 + 可变全局。
+pub(crate) const DEMO_SRC: &str = r#"
 def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
 def refl[A : U, x: A]: Eq[A] x x = _ => px => px
 def symmetry [A : U] (a: A, b: A) (eqab : Eq a b) : Eq b a =
@@ -486,7 +488,16 @@ def issues : String = get_global "CheckIssues"
 println issues
 
 "#;
-    println!("{}", run(input, 0).unwrap());
+
+/// 文件 IO builtin 的演示用固定文件名（`l06_builtin_demo.txt`）——做文件
+/// 副作用的测试（参考版内嵌 `test` 与性能版互检/稳态测试）经它串行，
+/// 避免并行测试线程在 Windows 上的文件句柄竞争（删除报 os error 5）。
+pub(crate) static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn test() {
+    let _guard = FILE_IO_LOCK.lock().unwrap();
+    println!("{}", run(DEMO_SRC, 0).unwrap());
     println!("success");
 }
 
@@ -528,4 +539,78 @@ println str_id
 "#;
     println!("{}", run1(input, 0).unwrap());
     println!("success");
+}
+
+// benchmark entries（l06bench 用）
+// --------------------------------------------------------------------------------
+
+/// 参考版基准口径：全量 elaborate（def 注册 + 上下文延伸），返回是否通过。
+/// 每次调用新建 `Infer`（内置表 + 可变全局随之重置，与 `run` 的每调用新
+/// 状态一致）。
+pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&mut infer);
+    for d in decls {
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// 参考版项的节点数（与性能版 `tm_size` 同口径地数 AppPruning 掩码链）。
+fn tm_size_ref(t: &Tm) -> u64 {
+    let mut stack: Vec<&Tm> = vec![t];
+    let mut n = 0u64;
+    while let Some(x) = stack.pop() {
+        n += 1;
+        match x {
+            Tm::Var(_) | Tm::U | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Decl(_) => {}
+            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::App(f, a, _) => {
+                stack.push(f);
+                stack.push(a);
+            }
+            Tm::AppPruning(h, pr) => {
+                stack.push(h);
+                n += pr.iter().count() as u64;
+            }
+            Tm::Pi(_, _, a, b) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Tm::Let(_, a, t, u) => {
+                stack.push(a);
+                stack.push(t);
+                stack.push(u);
+            }
+        }
+    }
+    n
+}
+
+/// 参考版基准口径：elaborate 全部 decl 后，取**最后一个 def** 在 decl 表里
+/// 登记的值，空层级引读并数节点（深 Box 树的递归析构会爆栈，基准里
+/// `mem::forget`——L03/L04/L05 同款处理）。
+pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&mut infer);
+    let mut last = None;
+    for d in decls {
+        match d {
+            parser::syntax::Decl::Def { name, .. } => last = Some(name.data.clone()),
+            parser::syntax::Decl::Println(_) => {}
+        }
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return 0,
+        }
+    }
+    let Some(name) = last else { return 0 };
+    let Some(entry) = infer.decls.get(&name) else { return 0 };
+    let q = infer.quote(Lvl(0), &entry.vt);
+    let n = tm_size_ref(&q);
+    std::mem::forget(q);
+    n
 }
