@@ -80,7 +80,9 @@ fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             end += 1;
         }
     }
-    if end == 0 || end >= bytes.len() || bytes[end] != b'"' {
+    // 终止条件：闭引号必须存在（end==0 合法——`""` 的空内容；未闭合或
+    // 转义跳过越过末尾才算失败）
+    if end >= bytes.len() || bytes[end] != b'"' {
         return None;
     }
     let content = &data[..end];
@@ -109,6 +111,9 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
                 let tail_len = tail.map(|t| t.len()).unwrap_or(0);
+                // SAFETY: 切片长度 = head（首字符）+ tail_len（后续字符）
+                // 之和，head/tail 都派生自同一 `input.data` 的 char 迭代，
+                // 字节长度恰好覆盖一个完整 UTF-8 子序列，不会切在字符中间。
                 let ident = unsafe {
                     input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)

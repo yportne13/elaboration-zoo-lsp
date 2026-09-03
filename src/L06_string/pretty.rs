@@ -5,8 +5,6 @@ use super::parser::syntax::Icit;
 
 use super::Tm;
 
-type ShowS = Box<dyn FnOnce(&mut String)>;
-
 const ATP: i32 = 3;  // atomp
 const APPP: i32 = 2; // appp
 const PIP: i32 = 1;  // pip
@@ -26,24 +24,21 @@ fn fresh(ns: List<String>, suggested: &str) -> String {
     }
     
     let mut candidate = suggested.to_string();
-    while ns.iter().find(|x| *x == &candidate).is_some() {
+    while ns.iter().any(|x| *x == candidate) {
         candidate = format!("{}'", candidate);
     }
     candidate
 }
 
 fn go_ix(ns: List<String>, ix: u32) -> String {
-    let mut current_ix = ix;
-    let mut current_ns = ns.iter();
-    while let Some(name) = current_ns.next() {
-        if current_ix == 0 {
+    for (i, name) in ns.iter().enumerate() {
+        if i as u32 == ix {
             if name == "_" {
                 return format!("@{}", ix)
             } else {
                 return name.to_string()
             }
         }
-        current_ix -= 1;
     }
     panic!("Variable index out of bounds");
 }

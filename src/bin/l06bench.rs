@@ -130,7 +130,7 @@ fn run(cli: Cli) {
                 _ => strchain_src(k),
             };
             // 计时外：解析 + 正确性断言
-            let Some(raw) = parser(&L06_string::preprocess(&src), 0) else {
+            let Ok(raw) = parser(&L06_string::preprocess(&src), 0) else {
                 eprintln!("parse failed at k={k}");
                 continue;
             };
@@ -194,8 +194,10 @@ fn run(cli: Cli) {
             if want("fast") {
                 let mut ts = Vec::new();
                 for _ in 0..cli.rounds {
-                    let mut tycker = Tycker::new(); // 一次性口径：每轮新建
                     let start = Instant::now();
+                    // 一次性口径：每轮新建（Tycker::new 的 bump 预分配计入
+                    // 计时——参考版 Infer::new 的建表同样在 bench_check 内）
+                    let mut tycker = Tycker::new();
                     if nf_workload {
                         tycker.bench_check_nf(&raw);
                     } else {
@@ -210,8 +212,8 @@ fn run(cli: Cli) {
             if want("fast_memo") && nf_workload {
                 let mut ts = Vec::new();
                 for _ in 0..cli.rounds {
-                    let mut tycker = Tycker::new();
                     let start = Instant::now();
+                    let mut tycker = Tycker::new(); // 同 fast：新建计入计时
                     tycker.bench_check_nf_memo(&raw);
                     ts.push(start.elapsed().as_micros());
                 }

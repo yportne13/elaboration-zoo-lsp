@@ -1,11 +1,9 @@
 use std::rc::Rc;
 
-use colored::Colorize;
-
 use crate::parser_lib::Span;
 
 use super::{
-    cxt::NameOrigin, empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclEntry, DeclTm, Error, Infer, Ix, Tm, VTy, Val
+    empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclEntry, DeclTm, Error, Infer, Tm, VTy, Val
 };
 
 impl Infer {
@@ -129,7 +127,6 @@ impl Infer {
                 ret_type,
                 body
             } => {
-                //tele.iter().for_each(|x| cxt = cxt.bind(x.0, x.1));
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
                 });
@@ -140,11 +137,7 @@ impl Infer {
                 let ret_cxt = {
                     let typ_tm = self.check(cxt, typ, &Val::U.into())?;
                     let vtyp = self.eval(&cxt.env, &typ_tm);
-                    //println!("------------------->");
-                    //println!("{:?}", vtyp);
-                    //println!("-------------------<");
                     let t_tm = self.check(cxt, bod, &vtyp)?;
-                    //println!("begin vt {}", "------".green());
                     let vt = self.eval(&cxt.env, &t_tm);
                     // Decl-table entry: top-level defs become runtime
                     // name-lookups (`string_to_global_type`), mirroring
@@ -169,16 +162,6 @@ impl Infer {
         }
     }
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Rc<Val>), Error> {
-        /*println!(
-            "{} {:?} in {}",
-            "infer".red(),
-            t,
-            cxt.types
-                .iter()
-                .map(|x| format!("{x:?}"))
-                .reduce(|a, b| a + "\n" + &b)
-                .unwrap_or(String::new())
-        );*/
         match t {
             // Infer variable types
             Raw::Var(x) => {
@@ -192,7 +175,6 @@ impl Infer {
             Raw::Lam(x, Either::Icit(i), t) => {
                 let new_meta = self.fresh_meta(cxt, &Val::U.into());
                 let a = self.eval(&cxt.env, &new_meta);
-                //TODO:below may be wrong
                 let new_cxt = cxt.bind(x.clone(), self.quote(cxt.lvl, &a), a.clone());
                 let infered = self.infer_expr(&new_cxt, *t);
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
@@ -203,7 +185,7 @@ impl Infer {
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), t) => Err(Error("infer named lambda".to_owned())),
+            Raw::Lam(_, Either::Name(_), _) => Err(Error("infer named lambda".to_owned())),
 
             // Infer function applications
             Raw::App(t, u, i) => {
@@ -223,7 +205,6 @@ impl Infer {
                         (Icit::Expl, t, tty)
                     }
                 };
-                //println!("{} {:?} -> {:?}", "infer___".red(), t, tty); //debug
                 let tty = self.force(&tty);
                 let (a, b_closure) = match tty.as_ref() {
                     Val::Pi(_, i_t, a, b_closure) => {

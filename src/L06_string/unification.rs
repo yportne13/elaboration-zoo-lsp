@@ -1,9 +1,7 @@
-use colored::Colorize;
-
 use crate::{L06_string::empty_span, list::List};
 
 use super::{
-    Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, lvl2ix,
+    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, lvl2ix,
     parser::syntax::Icit, syntax::Pruning,
 };
 
@@ -100,29 +98,34 @@ impl Infer {
     }
     fn prune_ty_go(
         &mut self,
-        pr: &Pruning,
+        rev: &[Option<Icit>],
         pren: &PartialRenaming,
         a: &Rc<Val>,
     ) -> Result<Tm, UnifyError> {
         let a = self.force(a);
-        match (pr, a.as_ref()) {
-            (List { head: None, .. }, _) => self.rename(pren, &a),
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
+        match (rev.split_first(), a.as_ref()) {
+            (None, _) => self.rename(pren, &a),
+            (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
                 let a = self.rename(pren, a)?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                let b = self.prune_ty_go(&list.tail(), &lift(pren), &b)?;
+                let b = self.prune_ty_go(rest, &lift(pren), &b)?;
                 Ok(Tm::Pi(x.clone(), *i, Box::new(a), Box::new(b)))
             }
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+            (Some((None, rest)), Val::Pi(_, _, _, b)) => {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                self.prune_ty_go(&list.tail(), &skip(pren), &b)
+                self.prune_ty_go(rest, &skip(pren), &b)
             }
             _ => Err(UnifyError), // impossible case
         }
     }
+    /// 上游 `pruneTy (revPruning pr) a`：掩码**外→内**配对 Π 层。
+    /// 传入的掩码（invert / intersect / pruneVFlex 的产出）头 = 最内层，
+    /// 先反转成头 = 最外层再逐层剥 Π。
     fn prune_ty(&mut self, pr: &Pruning, a: &Rc<Val>) -> Result<Tm, UnifyError> {
+        let mut rev: Vec<Option<Icit>> = pr.iter().copied().collect();
+        rev.reverse();
         self.prune_ty_go(
-            pr,
+            &rev,
             &PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
@@ -139,7 +142,7 @@ impl Infer {
         };
 
         let prune_ty = self.prune_ty(&pruning, &mty)?;
-        let prunedty = self.eval(&List::new(), &prune_ty); //TODO:revPruning
+        let prunedty = self.eval(&List::new(), &prune_ty);
         let m_prime = MetaVar(self.new_meta(prunedty));
 
         let solution = self.eval(
@@ -214,17 +217,21 @@ impl Infer {
                 }
             }
             SpinePruneStatus::NeedsPruning => {
-                self.prune_meta(sp.map(|(mt, i)| mt.as_ref().map(|_| i.clone())), m)?
+                self.prune_meta(sp.map(|(mt, i)| mt.as_ref().map(|_| *i)), m)?
             }
         };
 
-        let t = sp.iter().fold(Tm::Meta(m_prime), |t, (mu, i)| {
+        // 上游 `foldr (\(mu, i) t -> maybe t (\u -> App t u i) mu) (Meta m') sp`：
+        // foldr 从尾（最外层）起 = 最外层实参先应用（修正旧移植 `iter().fold`
+        // 从内层起导致的倒序——sp 头 = 最内层，直接 fold 会把内层包在最外）。
+        let mut slots: Vec<(Option<Tm>, Icit)> = sp.iter().cloned().collect();
+        slots.reverse();
+        let mut t = Tm::Meta(m_prime);
+        for (mu, i) in slots {
             if let Some(u) = mu {
-                Tm::App(Box::new(t), Box::new(u.clone()), i.clone())
-            } else {
-                t
+                t = Tm::App(Box::new(t), Box::new(u), i);
             }
-        }); //TODO:need rev()?
+        }
 
         Ok(t)
     }
@@ -335,7 +342,7 @@ impl Infer {
         // can be pruned from the meta type (i.e. that the pruned solution will
         // be well-typed)
         if let Some(pr) = prune_non_linear {
-            self.prune_ty(&pr, &mty)?; //TODO:revPruning?
+            self.prune_ty(&pr, &mty)?;
         }
 
         let rhs = self.rename(
@@ -353,7 +360,7 @@ impl Infer {
     fn unify_sp(&mut self, l: Lvl, sp: &Spine, sp_prime: &Spine) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
             (List { head: None, .. }, List { head: None, .. }) => Ok(()), // Both spines are empty
-            (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
+            (a, b) if a.head().is_some() && b.head().is_some() => {
                 self.unify_sp(l, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
                 self.unify(l, &a.head().unwrap().0, &b.head().unwrap().0) // Unify the current values
             }
@@ -407,7 +414,9 @@ impl Infer {
                     _ => None,
                 }
             }
-            _ => unreachable!(),
+            // 长度失配：同一 meta 以不同 arity 出现——优雅回落 `intersect`
+            // 的 `None => unify_sp` 逐实参比较（不可 `unreachable!()`）
+            _ => None,
         }
     }
     fn intersect(
@@ -432,7 +441,7 @@ impl Infer {
 
         match (t.as_ref(), u.as_ref()) {
             (Val::U, Val::U) => Ok(()),
-            (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
+            (Val::Pi(_, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
                 self.unify(l, a, a_prime)?;
                 self.unify(
                     l + 1,

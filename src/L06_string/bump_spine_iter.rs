@@ -7,9 +7,9 @@
 //! 2. 复合环境（平坦 def 区域 + 持久 binder 链）；
 //! 3. 迭代内核：eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈 /
 //!    force 循环；
-//! 5. quote 记忆化（默认口径）+ unify 判等记忆化（`L06_NO_CONV_MEMO=1`
+//! 4. quote 记忆化（默认口径）+ unify 判等记忆化（`L06_NO_CONV_MEMO=1`
 //!    消融）+ O(1) 名字解析（`L06_NO_NAME_MAP=1` 消融）；
-//! 6. `Tycker` 稳态复用（跨轮 `Bump::reset`）、热路径草稿常驻、
+//! 5. `Tycker` 稳态复用（跨轮 `Bump::reset`）、热路径草稿常驻、
 //!    `Pruning` 跳段（none-run）、`RenBuf` 换代缓冲、fresh meta 免 eval
 //!    快捷路径。
 //!
@@ -1932,10 +1932,12 @@ fn invert_bump<'a>(
     if !nonlinear {
         return Some(Vec::new());
     }
-    // 掩码（应用序 = args 逆序，最外层槽在前；重复变量整级剪除）
+    // 掩码：内先序（mask[0] ↔ 最内层实参，与 prune_ty_bump 的
+    // mask_inner_first 契约一致——后者 .rev() 后外→内配对 Π 层）；重复变量
+    // 整级剪除
     let mut mask: Vec<Option<Icit>> = Vec::with_capacity(args.len());
-    for k in (0..args.len()).rev() {
-        // lvs 按应用序填：lvs[0] = 最先应用（外）；args[k] 内先 ↔ 应用序 n-1-k
+    for k in 0..args.len() {
+        // args[k] 内先 ↔ 应用序 n-1-k ↔ lvs[n-1-k]
         let x = lvs[args.len() - 1 - k] as usize;
         mask.push(match ren.get(x) {
             Some(_) => Some(args[k].1),
@@ -2702,9 +2704,9 @@ impl Machine {
     /// fresh meta 的求值快捷路径：掩码全为 define 槽（或空）时 AppPrun
     /// 走空转，结果恒为裸 meta 立即数——免一次 eval。
     fn eval_fresh(&mut self, bump: &Bump, env: Env, m: &Tm<'_>) -> V {
-        if let Tm::AppPruning(CTm_head, pr) = m {
+        if let Tm::AppPruning(head, pr) = m {
             // 头必须是裸 Meta 才有短路意义
-            if let Tm::Meta(mm) = CTm_head {
+            if let Tm::Meta(mm) = head {
                 if pr.map_or(true, |p| p.slot.is_none() && p.after_run.is_none()) {
                     return v_meta(*mm);
                 }
@@ -3750,10 +3752,7 @@ impl Tycker {
 
     /// 参考版 `run` 的全流程等价物（含 preprocess/parse）。
     pub(crate) fn run_input(&mut self, input: &str, path_id: u32) -> Result<String, Error> {
-        let ast = match super::parser::parser(&super::preprocess(input), path_id) {
-            Some(ast) => ast,
-            None => return Err(Error("parse error".to_owned())),
-        };
+        let ast = super::parser::parser(&super::preprocess(input), path_id).map_err(Error)?;
         self.run_decls(&ast)
     }
 
@@ -4005,7 +4004,7 @@ mod tests {
     #[test]
     fn deep_workloads() {
         let src = church_src(12);
-        let Some(raw) = super::super::parser::parser(&super::super::preprocess(&src), 0) else {
+        let Ok(raw) = super::super::parser::parser(&super::super::preprocess(&src), 0) else {
             panic!("parse failed");
         };
         let mut t = Tycker::new();
@@ -4013,7 +4012,7 @@ mod tests {
         assert_eq!(t.bench_check_nf_memo(&raw), 2 * (1u64 << 13) + 4, "nf 节点数");
 
         let src = strchain_src(9);
-        let Some(raw) = super::super::parser::parser(&super::super::preprocess(&src), 0) else {
+        let Ok(raw) = super::super::parser::parser(&super::super::preprocess(&src), 0) else {
             panic!("parse failed");
         };
         let mut t = Tycker::new();

@@ -1,6 +1,11 @@
-use colored::Colorize;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::ops::Add;
+use std::rc::Rc;
+
 use cxt::Cxt;
-use parser::syntax::{Either, Icit, Raw};
+// Icit 经 `use super::*` 供子模块（cxt/elaboration）取用
+use parser::syntax::Icit;
 use syntax::{close_ty, Pruning};
 
 use crate::list::List;
@@ -25,12 +30,6 @@ enum MetaEntry {
 
 #[derive(Debug, Clone, Copy)]
 struct Ix(u32);
-
-#[derive(Debug, Clone)]
-enum BD {
-    Bound,
-    Defined,
-}
 
 #[derive(Clone, Debug)]
 pub enum DeclTm {
@@ -99,11 +98,6 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
 }
 
-use std::ops::Add;
-use std::rc::Rc;
-use std::cell::RefCell;
-use std::collections::HashMap;
-
 #[derive(Debug)]
 struct UnifyError;
 
@@ -118,6 +112,14 @@ fn empty_span<T>(data: T) -> Span<T> {
 
 #[derive(Debug)]
 pub struct Error(String);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Native implementation of a builtin function, registered by name in the
 /// decl table (`Cxt::add_builtin`; ported from L13's `PrimFunc`).  Invoked
@@ -283,9 +285,6 @@ impl Infer {
     }
 
     fn quote_sp(&self, l: Lvl, t: Tm, spine: Spine) -> Tm {
-        /*spine.iter().fold(t, |acc, u| {
-            Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
-        })*/
         match spine {
             List { head: None, .. } => t,
             _ => {
@@ -331,30 +330,20 @@ impl Infer {
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>) -> Result<(), Error> {
         self.unify(cxt.lvl, t, t_prime)
             .map_err(|_| {
-                /*Error::CantUnify(
-                    cxt.clone(),
-                    self.quote(cxt.lvl, t),
-                    self.quote(cxt.lvl, t_prime),
-                )*/
                 Error(format!("can't unify {:?} == {:?}", self.quote(cxt.lvl, t), self.quote(cxt.lvl, t_prime)))
-                //Error(format!("can't unify {:?} == {:?}", t, t_prime))
             })
     }
 }
 
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = match parser::parser(&preprocess(input), path_id) {
-        Some(ast) => ast,
-        None => return Err(Error("parse error".to_owned())),
-    };
+    let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
     let mut cxt = Cxt::new(&mut infer);
     let mut ret = String::new();
     for tm in ast {
         let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
         cxt = new_cxt;
         if let DeclTm::Println(x) = x {
-            //ret += &format!("{:?}", infer.nf(&cxt.env, x));
             ret += &pretty::pretty_tm(0, cxt.names(), &infer.nf(&cxt.env, x));
             ret += "\n";
         }
@@ -534,46 +523,6 @@ pub(crate) static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(())
 fn test() {
     let _guard = FILE_IO_LOCK.lock().unwrap();
     println!("{}", run(DEMO_SRC, 0).unwrap());
-    println!("success");
-}
-
-
-pub fn run1(input: &str, path_id: u32) -> Result<String, Error> {
-    let mut infer = Infer::new();
-    let ast = parser::parser(input, path_id).unwrap();
-    let mut cxt = Cxt::new(&mut infer);
-    let mut ret = String::new();
-    for tm in ast {
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
-        cxt = new_cxt;
-        if let DeclTm::Println(x) = x {
-            ret += &format!("{:?}", infer.nf(&cxt.env, x));
-            ret += "\n";
-        }
-    }
-    println!("{:?}", cxt);
-    Ok(ret)
-}
-
-#[test]
-fn test1() {
-    let input = r#"
-def str_id(x: String, y: String): String = "builtin"
-
-"#;
-    println!("{}", run1(input, 0).unwrap());
-    let input = r#"
-def str_id(x: String, y: String): String = x
-
-"#;
-    println!("{}", run1(input, 0).unwrap());
-    let input = r#"
-def str_id: String = string_concat "hello " "world"
-
-println str_id
-
-"#;
-    println!("{}", run1(input, 0).unwrap());
     println!("success");
 }
 

@@ -8,20 +8,30 @@ pub mod syntax;
 
 use TokenKind::*;
 
-pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
-    super::parser::lex::lex(Span {
+/// 解析 decl 序列。decl 流必须吃完全部 token:`;` / 垃圾 token 曾把后续
+/// decl 静默截断(测试因此空转过)——现在一律报错,并带**首个残余 token**
+/// 的内容与偏移,`;` 结尾这类最常见错误不再无从定位。
+pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
+    lex::lex(Span {
         data: input,
         start_offset: 0,
         end_offset: input.len() as u32,
         path_id: id,
     })
     .and_then(|(_, ret)| {
-        // decl 流必须吃完全部 token:`;` / 垃圾 token 曾把后续 decl 静默
-        // 截断(测试因此空转过)——现在一律解析失败,由 run 报 Err
-        p_decl.many1().parse(&ret).and_then(|(rest, decls)| {
-            if rest.is_empty() { Some(decls) } else { None }
+        p_decl.many1().parse(&ret).map(|(rest, decls)| {
+            if rest.is_empty() {
+                Ok(decls)
+            } else {
+                let t = &rest[0];
+                Err(format!(
+                    "parse error: leftover token `{}` @ {},{}",
+                    t.data.0, t.start_offset, t.end_offset
+                ))
+            }
         })
     })
+    .unwrap_or(Err("parse error".to_owned()))
 }
 
 macro_rules! T {

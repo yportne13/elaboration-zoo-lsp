@@ -5,18 +5,10 @@ use super::{
     *,
 };
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum NameOrigin {
-    Inserted,
-    Source,
-}
-
-type Types = List<(Span<String>, NameOrigin, Val)>;
-
 // === builtin native implementations (ported from L13's cxt.rs) ===
 //
 // Each receives the applied arguments in natural order; `None` keeps the
-// application stuck (`Val::Prim(name, spine)`), e.g. on partial application
+// application stuck (`Val::Decl(name, spine)`), e.g. on partial application
 // or non-literal arguments.
 
 fn string_concat(_: &Infer, args: &[Rc<Val>]) -> Option<Rc<Val>> {
