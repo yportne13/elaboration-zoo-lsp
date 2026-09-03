@@ -8,6 +8,8 @@
 //! 设计说明见本目录 README.md。
 
 use std::{
+    cell::RefCell,
+    collections::HashMap,
     ops::{Add, Sub},
     rc::Rc,
     sync::{
@@ -211,8 +213,19 @@ fn empty_span<T>(data: T) -> Span<T> {
 #[derive(Debug)]
 pub struct Error(String);
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Error {}
+
 pub struct Infer {
     meta: Vec<MetaEntry>,
+    /// 可变全局表（create_global / change_mutable / get_global 族读写；
+    /// L06 同款：单线程 RefCell。参考版随 `Infer` 每次调用新建）。
+    pub(crate) mutable_map: RefCell<HashMap<SmolStr, Val>>,
     /// unify 递归深度防护（L13 同款做法）。每次外部配置（unify_catch /
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
@@ -233,6 +246,7 @@ impl Infer {
     pub fn new() -> Self {
         Self {
             meta: vec![],
+            mutable_map: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
             pm_defs: Vec::new(),
             pm_solvable: Vec::new(),
@@ -403,18 +417,15 @@ impl Infer {
                 None => Val::Decl(name, sp),
                 _ => Val::Decl(name, sp),
             },
-            // 卡住的内建：全部实参字面量时归约（目前仅 string_concat），
-            // 否则保持卡住。名字 + 实参 spine 由 eval(Tm::Prim) 构造。
+            // 卡住的内建：实参按自然序（应用序）交给对应 builtin 体归约
+            // （L06 builtin 注册表的全部函数体）；元数不足 / 实参不合 /
+            // 缺名时保持卡住。名字 + 实参 spine 由 eval(Tm::Prim) 构造。
             Val::Prim(name, sp) => {
-                let args: Vec<Val> = sp.iter().map(|(v, _)| v.clone()).collect();
-                if name == "string_concat" && args.len() >= 2 && burn(&self.unify_fuel) {
-                    match (&args[args.len() - 1], &args[args.len() - 2]) {
-                        (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
-                            return Val::LiteralIntro(
-                                a.clone().map(|x| format!("{x}{}", b.data)),
-                            );
-                        }
-                        _ => {}
+                if burn(&self.unify_fuel) {
+                    let mut args: Vec<Val> = sp.iter().map(|(v, _)| v.clone()).collect();
+                    args.reverse(); // spine 头 = 最后应用 → 自然序
+                    if let Some(v) = self.prim_reduce(decl, &name, &args) {
+                        return self.force(decl, v);
                     }
                 }
                 Val::Prim(name, sp)
@@ -429,6 +440,251 @@ impl Infer {
                 }
             }
             t => t,
+        }
+    }
+
+    /// 卡住内建的归约体（L06 builtin 注册表的逐句移植，force 时触发）。
+    /// `args` 自然序（最先应用在前）；元数 / 字面量检查与 L06 的
+    /// `PrimFunc` 逐条对应，不满足即 None 保持卡住。文件族失败 panic
+    /// （两版一致）。
+    fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
+        let lit = |v: &Val| match v {
+            Val::LiteralIntro(s) => Some(s.data.clone()),
+            _ => None,
+        };
+        match name {
+            "string_concat" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (&args[0], &args[1]) {
+                    (Val::LiteralIntro(a), Val::LiteralIntro(b)) => Some(Val::LiteralIntro(
+                        a.clone().map(|x| format!("{x}{}", b.data)),
+                    )),
+                    _ => None,
+                }
+            }
+            "str_eq" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (lit(&args[0]), lit(&args[1])) {
+                    (Some(a), Some(b)) => {
+                        let s = if a == b { "true" } else { "false" };
+                        Some(Val::LiteralIntro(empty_span(s.to_string())))
+                    }
+                    _ => None,
+                }
+            }
+            "str_indent2" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(s) => Some(Val::LiteralIntro(empty_span(s.replace('\n', "\n  ")))),
+                    None => None,
+                }
+            }
+            "report_check_issue" => {
+                if args.len() < 4 {
+                    return None;
+                }
+                let get = |i: usize| lit(&args[i]).unwrap_or_default();
+                let (code, module, signal, message) = (get(0), get(1), get(2), get(3));
+                if code.is_empty() || module.is_empty() {
+                    return Some(Val::U);
+                }
+                let line = format!("{}|{}|{}|{}", code, module, signal, message);
+                let mut map = self.mutable_map.borrow_mut();
+                let existing = match map.get("CheckIssues") {
+                    Some(v) => lit(v).unwrap_or_default(),
+                    None => String::new(),
+                };
+                if !existing.split('\n').any(|l| l == line) {
+                    let next = if existing.is_empty() {
+                        line
+                    } else {
+                        format!("{}\n{}", existing, line)
+                    };
+                    map.insert("CheckIssues".into(), Val::LiteralIntro(empty_span(next)));
+                }
+                Some(Val::U)
+            }
+            "string_to_global_type" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    // 登记名给登记**类型**（类型即值）；未登记名返回以其自身
+                    // 名字的卡住 Decl——动态类型的逃逸舱口（L06 同款），后续
+                    // unify 里按宽松臂处理
+                    Some(a) => Some(match decl.get(a.as_str()) {
+                        Some(e) => e.ty.clone(),
+                        None => Val::Decl(SmolStr::new(a), List::new()),
+                    }),
+                    None => None,
+                }
+            }
+            "create_global" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => {
+                        self.mutable_map.borrow_mut().insert(SmolStr::new(a), args[1].clone());
+                        Some(Val::U)
+                    }
+                    None => None,
+                }
+            }
+            "change_mutable" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => {
+                        // 先取旧值并结束借用，再求值 f——f 的求值可能再触发
+                        // 任何 prim（get_global 等），持有借用会 BorrowError
+                        let old = self.mutable_map.borrow().get(a.as_str()).cloned();
+                        if let Some(old) = old {
+                            let new = self.v_app(decl, args[1].clone(), old, Icit::Expl);
+                            self.mutable_map.borrow_mut().insert(SmolStr::new(a), new);
+                        }
+                        Some(Val::U)
+                    }
+                    None => None,
+                }
+            }
+            "get_global" => {
+                if args.is_empty() {
+                    return None;
+                }
+                // 缺名保持卡住（None），不 panic
+                match lit(&args[0]) {
+                    Some(a) => self.mutable_map.borrow().get(SmolStr::new(a).as_str()).cloned(),
+                    None => None,
+                }
+            }
+            "get_global_default" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => Some(
+                        self.mutable_map
+                            .borrow()
+                            .get(SmolStr::new(a).as_str())
+                            .cloned()
+                            .unwrap_or_else(|| args[1].clone()),
+                    ),
+                    None => None,
+                }
+            }
+            "change_mutable_default" => {
+                if args.len() < 3 {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(a) => {
+                        let existing = self.mutable_map.borrow().get(a.as_str()).cloned();
+                        match existing {
+                            Some(old) => {
+                                let new = self.v_app(decl, args[1].clone(), old, Icit::Expl);
+                                self.mutable_map.borrow_mut().insert(SmolStr::new(a), new);
+                            }
+                            None => {
+                                self.mutable_map.borrow_mut().insert(SmolStr::new(a), args[2].clone());
+                            }
+                        }
+                        Some(Val::U)
+                    }
+                    None => None,
+                }
+            }
+            "file_read_all_text" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(path) => {
+                        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                            panic!("file_read_all_text: failed to read '{}': {}", path, e)
+                        });
+                        Some(Val::LiteralIntro(empty_span(content)))
+                    }
+                    None => None,
+                }
+            }
+            "file_write_all_text" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (lit(&args[0]), lit(&args[1])) {
+                    (Some(path), Some(content)) => {
+                        std::fs::write(&path, &content).unwrap_or_else(|e| {
+                            panic!("file_write_all_text: failed to write '{}': {}", path, e)
+                        });
+                        Some(Val::U)
+                    }
+                    _ => None,
+                }
+            }
+            "file_append_all_text" => {
+                if args.len() < 2 {
+                    return None;
+                }
+                match (lit(&args[0]), lit(&args[1])) {
+                    (Some(path), Some(content)) => {
+                        use std::io::Write;
+                        let mut file = std::fs::OpenOptions::new()
+                            .append(true)
+                            .create(true)
+                            .open(&path)
+                            .unwrap_or_else(|e| {
+                                panic!("file_append_all_text: failed to open '{}': {}", path, e)
+                            });
+                        write!(file, "{}", content).unwrap_or_else(|e| {
+                            panic!(
+                                "file_append_all_text: failed to append to '{}': {}",
+                                path, e
+                            )
+                        });
+                        Some(Val::U)
+                    }
+                    _ => None,
+                }
+            }
+            "file_exists" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(path) => {
+                        let exists = std::path::Path::new(&path).exists();
+                        Some(Val::LiteralIntro(empty_span(if exists {
+                            "true".to_string()
+                        } else {
+                            "false".to_string()
+                        })))
+                    }
+                    None => None,
+                }
+            }
+            "file_delete" => {
+                if args.is_empty() {
+                    return None;
+                }
+                match lit(&args[0]) {
+                    Some(path) => {
+                        std::fs::remove_file(&path).unwrap_or_else(|e| {
+                            panic!("file_delete: failed to delete '{}': {}", path, e)
+                        });
+                        Some(Val::U)
+                    }
+                    None => None,
+                }
+            }
+            _ => None,
         }
     }
 
@@ -756,14 +1012,14 @@ fn simpl_decl(decl: &Decls) -> Decls {
         .collect()
 }
 
-#[allow(unused)]
+/// 文件 IO builtin 的固定文件名串行锁（L06 同款：Windows 并行测试线程
+/// 的句柄竞争会让删除报 os error 5）。
+pub static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = match parser::parser(&preprocess(input), path_id) {
-        Some(a) => a,
-        None => return Err(Error("parse error".to_owned())),
-    };
-    let mut cxt = Cxt::new();
+    let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
+    let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     for tm in ast {
         if std::env::var_os("L07_DEBUG").is_some() {
@@ -779,24 +1035,237 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     Ok(ret)
 }
 
+/// 内嵌 `test` 与性能版互检共用的演示源：enum + 依赖 match + String
+/// 字面量 + builtin 注册表（str_eq / str_indent2 / 文件 IO）+ decl 表
+/// 按名取值 + 可变全局（L06 DEMO 的 L07 版：补 enum/match 段）。
+pub(crate) const DEMO_SRC: &str = r#"
+def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def refl[A : U, x: A]: Eq[A] x x = _ => px => px
+def the(A : U)(x: A): A = x
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two : Nat = succ (succ zero)
+def four : Nat = succ (succ two)
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def six : Nat = add four two
+println six
+
+def pr1 = f => x => f x
+println pr1
+
+def mystr = "hello world"
+println mystr
+
+def add_tail(x: String): String = string_concat x "!"
+
+def mystr2 = add_tail mystr
+println mystr2
+
+def eq1 = str_eq "foo" "foo"
+println eq1
+
+def eq2 = str_eq "foo" "bar"
+println eq2
+
+def ind = str_indent2 "line1\nline2"
+println ind
+
+def demo_path = "l07_builtin_demo.txt"
+def demo_write : U = file_write_all_text demo_path "hello file"
+def demo_append : U = file_append_all_text demo_path "!"
+def read_back : String = file_read_all_text demo_path
+println read_back
+
+def exists1 : String = file_exists demo_path
+println exists1
+
+def demo_delete : U = file_delete demo_path
+def exists2 : String = file_exists demo_path
+println exists2
+
+def st : U = string_to_global_type "String"
+println st
+
+def st_nat : U = string_to_global_type "Nat"
+println st_nat
+
+def store1 : U = create_global "greeting" "hi"
+def upd1 : U = change_mutable "greeting" (s => string_concat s "!")
+def g1 : String = get_global "greeting"
+println g1
+
+def g2 : String = get_global_default "greeting" "fallback"
+println g2
+
+def g3 : String = get_global_default "missing_name" "fallback"
+println g3
+
+def upd2 : U = change_mutable_default "greeting" (s => string_concat s "?") "x"
+def g4 : String = get_global "greeting"
+println g4
+
+def rep1 : U = report_check_issue "E1" "demo_mod" "sig" "message"
+def issues : String = get_global "CheckIssues"
+println issues
+
+"#;
+
+/// 参考版基准口径：全量 elaborate（def/enum 注册），返回是否通过。
+pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    for d in decls {
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// 参考版项的节点数（与性能版 `tm_size` 同口径）。
+fn tm_size_ref(t: &Tm) -> u64 {
+    let mut stack: Vec<&Tm> = vec![t];
+    let mut n = 0u64;
+    while let Some(x) = stack.pop() {
+        n += 1;
+        match x {
+            Tm::Var(_) | Tm::U | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
+            | Tm::Decl(_) | Tm::Prim(_) => {}
+            Tm::Obj(h, _) => stack.push(h),
+            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::App(f, a, _) => {
+                stack.push(f);
+                stack.push(a);
+            }
+            Tm::AppPruning(h, pr) => {
+                stack.push(h);
+                n += pr.len() as u64;
+            }
+            Tm::Pi(_, _, a, b) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Tm::Let(_, a, t, u) => {
+                stack.push(a);
+                stack.push(t);
+                stack.push(u);
+            }
+            Tm::Sum(_, params, _) => {
+                for (_, v, ty, _) in params {
+                    stack.push(v);
+                    stack.push(ty);
+                }
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                stack.push(typ);
+                for (_, v, _) in datas {
+                    stack.push(v);
+                }
+            }
+            Tm::Match(s, cases) => {
+                stack.push(s);
+                for (p, b) in cases {
+                    n += p.bind_count() as u64;
+                    stack.push(b);
+                }
+            }
+        }
+    }
+    n
+}
+
+/// 参考版基准口径：elaborate 全部 decl 后，取**最后一个 def** 在 decl 表里
+/// 登记的值，空层级引读并数节点（深 Box 树的递归析构会爆栈，基准里
+/// `mem::forget`——L03/L04/L05/L06 同款处理）。
+pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let mut last: Option<String> = None;
+    for d in decls {
+        if let parser::syntax::Decl::Def { name, .. } = d {
+            last = Some(name.data.clone());
+        }
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return 0,
+        }
+    }
+    let Some(name) = last else { return 0 };
+    let Some(entry) = cxt.decl_get(&name) else { return 0 };
+    let q = infer.quote(cxt.decl(), Lvl(0), entry.val.clone());
+    let n = tm_size_ref(&q);
+    std::mem::forget(q);
+    n
+}
+
+/// 注释剥离(行 `//` 与块 `/* */`),**字符串字面量内不生效**——旧版对
+/// `//` / `/*` 做纯文本剥离,会把 `"http://…"` 之类的字面量截成未闭合
+/// 字符串导致解析失败。现按词法规则跳过字符串区间(含 `\` 转义);注释
+/// 内容只替换为空白(ASCII 下 span 偏移稳定;非 ASCII 注释内容会使后续
+/// 偏移前移,仅影响错误消息中的偏移数字)。块注释不嵌套;未闭合的块
+/// 注释剥到 EOF(余下 decl 静默消失,历史行为)。
 pub fn preprocess(s: &str) -> String {
-    let s = s
-        .split("/*")
-        .map(|x| {
-            x.split_once("*/")
-                .map(|(a, b)| a.replace(|c: char| !c.is_whitespace(), " ") + "  " + b)
-                .unwrap_or(x.to_owned())
-        })
-        .reduce(|a, b| a + "  " + &b)
-        .unwrap_or(s.to_owned());
-    s.lines()
-        .map(|x| {
-            x.split_once("//")
-                .map(|(a, b)| a.to_owned() + "  " + &b.replace(|c: char| !c.is_whitespace(), " "))
-                .unwrap_or(x.to_owned())
-        })
-        .reduce(|a, b| a + "\n" + &b)
-        .unwrap_or(s.to_owned())
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                chars.next();
+                out.push_str("  ");
+                // 行注释:换行前的内容替换为空白(保留换行符)
+                for rc in chars.by_ref() {
+                    if rc == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                out.push_str("  ");
+                // 块注释:到 `*/` 为止的内容替换为空白
+                while let Some(rc) = chars.next() {
+                    if rc == '*' && chars.peek() == Some(&'/') {
+                        chars.next();
+                        out.push_str("  ");
+                        break;
+                    }
+                    out.push(if rc.is_whitespace() { rc } else { ' ' });
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 use pattern_match::Compiler;

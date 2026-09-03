@@ -8,8 +8,11 @@ pub mod syntax;
 
 use TokenKind::*;
 
-pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
-    super::parser::lex::lex(Span {
+/// 解析 decl 序列。decl 流必须吃完全部 token：残留 token（`;` / 垃圾
+/// token 曾把后续 decl 静默截断）一律报错，并带**首个残余 token**的内容
+/// 与偏移——`;` 结尾这类最常见错误不再无从定位。
+pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
+    lex::lex(Span {
         data: input,
         start_offset: 0,
         end_offset: input.len() as u32,
@@ -19,15 +22,19 @@ pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
         p_decl
             .many1_sep(kw(EndLine).many1())
             .parse(&ret)
-            .and_then(|x| {
-                if !x.0.is_empty() {
-                    // 残留 token：按解析失败处理（调用侧 `run` 报 parse error）
-                    None
+            .map(|(rest, decls)| {
+                if rest.is_empty() {
+                    Ok(decls)
                 } else {
-                    Some(x.1)
+                    let t = &rest[0];
+                    Err(format!(
+                        "parse error: leftover token `{}` @ {},{}",
+                        t.data.0, t.start_offset, t.end_offset
+                    ))
                 }
             })
     })
+    .unwrap_or(Err("parse error".to_owned()))
 }
 
 macro_rules! T {
@@ -99,7 +106,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         .map(Raw::Var)
         .or(kw(UKeyword).map(|_| Raw::U))
         .or(kw(Hole).map(|_| Raw::Hole))
-        .or(string(Str).map(Raw::LiteralIntro))
+        .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(paren(p_raw))
         .parse(input)
 }

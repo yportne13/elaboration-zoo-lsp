@@ -40,10 +40,9 @@
 //!      死循环（`f true` 自递归）同样表现为栈溢出而非 fuel 错误——
 //!      fuel 耗尽的可黑盒触发路径未找到，深度防护以「可终止深项 +
 //!      边界探针」形式覆盖。
-//!   7. 预处理只用 `//` 与 `/* */`：字符串字面量里的 `//` 会被当注释
-//!      剥离导致字符串截断（→ 未闭合 → 解析失败）；`/*` 会被改写为
-//!      空白（`"a/*b"` 实际输出 `a  b`）。README 示例里的 `--` 注释
-//!      不支持。
+//!   7. 预处理感知字符串字面量（2026-09 与 L06 同步）：字面量内的
+//!      `//` 与 `/* */` 原样保留；空字符串 `""` 合法；解析失败带首个
+//!      残余 token 定位。README 示例里的 `--` 注释不支持。
 //!
 //! 运行：`cargo test --test l07_blackbox`（探针测试需 `-- --ignored
 //! --nocapture`）。
@@ -123,6 +122,15 @@ fn assert_parse_err(src: &str) {
     assert!(
         msg.contains("parse error"),
         "expected parse error, got:\n{msg}\nsrc:\n{src}"
+    );
+}
+
+/// 语法错误 → Err 且消息含 needle（残余 token 定位等稳定片段）。
+fn assert_parse_err_contains(src: &str, needle: &str) {
+    let msg = check_err(src);
+    assert!(
+        msg.contains(needle),
+        "expected parse error containing {needle:?}, got:\n{msg}\nsrc:\n{src}"
     );
 }
 
@@ -1266,23 +1274,42 @@ println two
     );
 }
 
-/// 预处理怪癖：字符串字面量里的 `//` 被当注释剥离 → 字符串截断 →
-/// 未闭合 → 解析失败（Err("parse error")）。
+/// 预处理感知字符串字面量（2026-09 与 L06 同步）：字面量内的 `//` 与
+/// `/* */` 不再被当注释剥离——`"a//b"`、`"a/*b"` 原样输出（旧版把
+/// `//` 截断成未闭合字符串、把 `/*` 改写为空白破坏输出）。
 #[test]
-fn bb_string_double_slash_parse_err() {
-    assert_parse_err("println \"a//b\"\n");
-}
-
-/// 预处理怪癖：字符串字面量里的 `/*` 被改写为空白（`"a/*b"` → `"a  b"`），
-/// 程序能运行但输出被破坏（如实文档化）。
-#[test]
-fn bb_string_block_comment_mangled() {
+fn bb_string_comment_markers_kept() {
     assert_lines(
         r#"
+println "a//b"
+
 println "a/*b"
+
+println "say \"hi\""
 "#,
-        &["a  b"],
+        &["a//b", "a/*b", "say \"hi\""],
     );
+}
+
+/// 空字符串字面量（lexer 曾把空内容误判为未闭合 → 整体解析失败）。
+#[test]
+fn bb_empty_string_literal() {
+    assert_lines(
+        r#"
+println ""
+
+def e : String = ""
+
+println (string_concat "" "x")
+"#,
+        &["", "x"],
+    );
+}
+
+/// 解析失败带首个残余 token 的内容与偏移（`;` 结尾不再无从定位）。
+#[test]
+fn bb_parse_error_locates_leftover() {
+    assert_parse_err_contains("def a : U = U\n;\n", "leftover token `;`");
 }
 
 /// 顶层 `let` 不在 decl 语法里（Decl = Def/Println/Enum）→ 解析失败；

@@ -1210,3 +1210,136 @@ println bits_adder (cons true nil) (cons false nil)
     assert!(out.contains("Bool::true"), "{out}");
     assert!(out.contains("Bool::false"), "{out}");
 }
+
+// L06 演进同步（2026-09）：builtin 注册表 / 可变全局 / 文件 IO / 宽松臂
+// --------------------------------------------------------------------------------
+
+/// DEMO 全串：enum + 依赖 match + 字符串 builtin + 文件 IO + 可变全局。
+#[test]
+fn test_demo() {
+    for (name, seg) in [
+        ("add", "enum Nat {\n    zero\n    succ(x: Nat)\n}\ndef add(x: Nat, y: Nat): Nat = {\n    match x {\n        case zero => y\n        case succ(n) => succ(add(n, y))\n    }\n}\n"),
+        ("add_sp", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat = {\n    match x {\n        case zero => y\n        case succ(n) => succ(add(n, y))\n    }\n}\n"),
+    ] {
+        let r = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || match run(seg, 0) {
+                Ok(_) => "ok".to_string(),
+                Err(e) => format!("ERR: {e}"),
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        println!("SEG {name}: {r}");
+    }
+}
+
+/// 字符串 builtin：拼接 / 判等 / 缩进。
+#[test]
+fn test_string_builtins() {
+    let out = check(
+        r#"
+def c : String = string_concat "foo" "bar"
+println c
+println (str_eq "foo" "foo")
+println (str_eq "foo" "bar")
+println (str_indent2 "a
+b")
+"#,
+    );
+    assert_eq!(out, "foobar
+true
+false
+a
+  b
+");
+}
+
+/// 可变全局族：建档 / 更新 / 读取 / 缺省。
+#[test]
+fn test_decl_table_and_globals() {
+    let out = check(
+        r#"
+def store : U = create_global "k" "v"
+def upd : U = change_mutable "k" (s => string_concat s "!")
+def g1 : String = get_global "k"
+println g1
+def g2 : String = get_global_default "k" "fb"
+println g2
+def g3 : String = get_global_default "nope" "fb"
+println g3
+"#,
+    );
+    assert_eq!(out, "v!
+v!
+fb
+");
+}
+
+/// get_global 缺名保持卡住（不 panic），宽松臂对未登记名放行。
+#[test]
+fn test_get_global_missing_stays_stuck() {
+    let out = check(
+        r#"
+def v : String = get_global "missing"
+println v
+"#,
+    );
+    assert!(out.contains("get_global"), "卡住值应打印名字：{out}");
+}
+
+/// 已登记名不冒充 String（宽松臂把关，L06 同款）。
+#[test]
+fn test_registered_prim_not_loosely_string() {
+    check_err(
+        r#"
+def bad : String = get_global "file_delete"
+println bad
+"#,
+    );
+    check_err(
+        r#"
+def dyn(x : String) : String = get_global x
+println (dyn "a")
+"#,
+    );
+}
+
+/// string_to_global_type：登记名给登记类型，未登记名走逃逸舱口。
+#[test]
+fn test_string_to_global_type() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def n : U = string_to_global_type "Nat"
+def two : Nat = succ (succ zero)
+println two
+"#,
+    );
+    assert!(out.contains("Nat::succ"), "{out}");
+}
+
+/// 文件 IO：写 / 追加 / 读回 / 存在性 / 删除。
+#[test]
+fn test_file_io_builtins() {
+    let _guard = FILE_IO_LOCK.lock().unwrap();
+    let out = check(
+        r#"
+def p : U = file_write_all_text "l07_test_io.txt" "hello"
+def a : U = file_append_all_text "l07_test_io.txt" "!"
+def r : String = file_read_all_text "l07_test_io.txt"
+println r
+println (file_exists "l07_test_io.txt")
+def d : U = file_delete "l07_test_io.txt"
+println (file_exists "l07_test_io.txt")
+"#,
+    );
+    assert_eq!(out, "hello!
+true
+false
+");
+}

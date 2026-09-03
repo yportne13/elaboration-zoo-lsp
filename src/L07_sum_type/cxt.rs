@@ -4,7 +4,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Env, Ix, Lvl, Tm, Ty, Val, VTy,
+    Closure, Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
     empty_span,
     parser::syntax::Icit,
     syntax::{Locals, Pruning},
@@ -32,49 +32,140 @@ pub struct Cxt {
     pub decl: Rc<Decls>,
 }
 
+/// `(name : dom) -> cod` 的 Tm 层 Π 链（builtin 注册期类型描述用）。
+fn tm_pi(name: &str, dom: Tm, cod: Tm) -> Tm {
+    Tm::Pi(
+        empty_span(name.to_owned()),
+        Icit::Expl,
+        Box::new(dom),
+        Box::new(cod),
+    )
+}
+
+/// `(String ->)^n ret` 的 Tm 层 Π 链——builtin 参数类型全部是 String。
+fn str_pi(params: &[&str], ret: Tm) -> Tm {
+    params
+        .iter()
+        .rev()
+        .fold(ret, |cod, name| tm_pi(name, Tm::LiteralType, cod))
+}
+
+/// `string_to_global_type Var(ix)`——de Bruijn 引用第 ix 个前导参数
+/// （动态类型：check 期求值时查 decl 表取登记类型；未登记名 → 卡住
+/// Decl 逃逸舱口）。
+fn st2g_app(ix: u32) -> Tm {
+    Tm::App(
+        Box::new(Tm::Decl(SmolStr::new("string_to_global_type"))),
+        Box::new(Tm::Var(Ix(ix))),
+        Icit::Expl,
+    )
+}
+
 impl Cxt {
-    pub fn new() -> Self {
-        Self::empty()
-            .decl_insert(
-                "String",
-                DeclEntry {
-                    ty: Val::U,
-                    val: Val::LiteralType,
-                },
+    /// builtin 注册表（L06 全组移植）：`String` 类型 + string /
+    /// report_check_issue / string_to_global_type / 可变全局族 / 文件 IO
+    /// 族。归约统一在 `Infer::force` 的 `prim_reduce`（L07 的 force 触发
+    /// 语义；L06 是应用时触发）。
+    ///
+    /// 注册顺序敏感：`string_to_global_type` 必须先于引用它的 global 族
+    /// （其类型的闭包体在 check 期才查表，但防御性保持 L06 顺序）。
+    pub fn new(infer: &Infer) -> Self {
+        let cxt = Self::empty().decl_insert(
+            "String",
+            DeclEntry {
+                ty: Val::U,
+                val: Val::LiteralType,
+            },
+        );
+        cxt.add_builtin(infer, "string_concat", str_pi(&["x", "y"], Tm::LiteralType))
+            .add_builtin(infer, "str_eq", str_pi(&["x", "y"], Tm::LiteralType))
+            .add_builtin(infer, "str_indent2", str_pi(&["x"], Tm::LiteralType))
+            .add_builtin(
+                infer,
+                "report_check_issue",
+                str_pi(&["code", "module", "signal", "message"], Tm::U),
             )
-            .decl_insert(
-                "string_concat",
-                DeclEntry {
-                    ty: Val::Pi(
-                        empty_span("x".to_owned()),
-                        Icit::Expl,
-                        Box::new(Val::LiteralType),
-                        Closure(
-                            List::new().prepend(Val::LiteralType),
-                            Box::new(Tm::Pi(
-                                empty_span("y".to_owned()),
-                                Icit::Expl,
-                                Box::new(Tm::Var(Ix(1))),
-                                Box::new(Tm::Var(Ix(2))),
-                            )),
-                        ),
-                    ),
-                    val: Val::Lam(
-                        empty_span("x".to_owned()),
-                        Icit::Expl,
-                        Closure(
-                            List::new(),
-                            Box::new(Tm::Lam(
-                                empty_span("y".to_owned()),
-                                Icit::Expl,
-                                Box::new(Tm::Prim(SmolStr::new("string_concat"))),
-                            )),
-                        ),
-                    ),
-                },
+            .add_builtin(infer, "string_to_global_type", str_pi(&["x"], Tm::U))
+            .add_builtin(
+                infer,
+                "create_global",
+                tm_pi("x", Tm::LiteralType, tm_pi("y", st2g_app(0), Tm::U)),
             )
+            .add_builtin(
+                infer,
+                "change_mutable",
+                tm_pi(
+                    "x",
+                    Tm::LiteralType,
+                    tm_pi("f", tm_pi("_", st2g_app(0), st2g_app(1)), Tm::U),
+                ),
+            )
+            .add_builtin(
+                infer,
+                "get_global",
+                tm_pi("x", Tm::LiteralType, st2g_app(0)),
+            )
+            .add_builtin(
+                infer,
+                "get_global_default",
+                tm_pi(
+                    "x",
+                    Tm::LiteralType,
+                    tm_pi("z", st2g_app(0), st2g_app(1)),
+                ),
+            )
+            .add_builtin(
+                infer,
+                "change_mutable_default",
+                tm_pi(
+                    "x",
+                    Tm::LiteralType,
+                    tm_pi(
+                        "f",
+                        tm_pi("_", st2g_app(0), st2g_app(1)),
+                        tm_pi("z", st2g_app(1), Tm::U),
+                    ),
+                ),
+            )
+            .add_builtin(
+                infer,
+                "file_read_all_text",
+                str_pi(&["path"], Tm::LiteralType),
+            )
+            .add_builtin(
+                infer,
+                "file_write_all_text",
+                str_pi(&["path", "content"], Tm::U),
+            )
+            .add_builtin(
+                infer,
+                "file_append_all_text",
+                str_pi(&["path", "content"], Tm::U),
+            )
+            .add_builtin(infer, "file_exists", str_pi(&["path"], Tm::LiteralType))
+            .add_builtin(infer, "file_delete", str_pi(&["path"], Tm::U))
     }
 
+    /// 注册一个 builtin：类型在 Tm 层描述，经 `infer.eval` 求值成 Π 链值
+    /// （只有最外层域被立即求值——恒为 String 常量；引用参数的内层域留在
+    /// 闭包里到 check 期才解）；值 = λ 参数链 → `Tm::Prim(name)`，应用满
+    /// 元数后由 `force` 的 `prim_reduce` 归约。
+    fn add_builtin(self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
+        let ty = infer.eval(&self.decl, &List::new(), ty_tm.clone());
+        // 值 = λ 参数链 → Prim(name)；参数名从类型的 Π 链取（与域同序）
+        let mut names = Vec::new();
+        let mut cur = &ty_tm;
+        while let Tm::Pi(n, _, _, body) = cur {
+            names.push(n.data.clone());
+            cur = body;
+        }
+        let mut val = Tm::Prim(SmolStr::new(name));
+        for p in names.iter().rev() {
+            val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Box::new(val));
+        }
+        let val = infer.eval(&self.decl, &List::new(), val);
+        self.decl_insert(SmolStr::new(name), DeclEntry { ty, val })
+    }
     pub fn empty() -> Self {
         Cxt {
             env: List::new(),

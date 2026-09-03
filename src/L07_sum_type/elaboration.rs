@@ -159,7 +159,11 @@ impl Infer {
                     },
                 );
                 let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                let vt = self.eval(fake_cxt.decl(), &fake_cxt.env, t_tm.clone());
+                // 注册值归约到 WHNF：builtin 副作用（可变全局写 / 文件 IO）
+                // 在声明序上驱动——L06「应用时触发」的等价物（否则
+                // change_mutable 等只在别处 force 到它时才生效）。递归
+                // 自引用由 force 的占位守卫兜住，不会展开。
+                let vt = self.force(fake_cxt.decl(), self.eval(fake_cxt.decl(), &fake_cxt.env, t_tm.clone()));
                 let out_cxt = cxt.decl_insert(
                     name.data.clone(),
                     DeclEntry {

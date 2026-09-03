@@ -15,6 +15,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use smol_str::SmolStr;
+
 use crate::list::List;
 
 use super::{
@@ -551,6 +553,23 @@ impl Infer {
         }
     }
 
+    /// 宽松臂的实现体：未登记名放行，已登记名按登记类型把关。
+    fn loose_string(
+        &mut self,
+        decl: &Decls,
+        l: Lvl,
+        cxt: &Cxt,
+        n: &SmolStr,
+    ) -> Result<(), UnifyError> {
+        match decl.get(n) {
+            None => Ok(()),
+            Some(e) => {
+                let ty = e.ty.clone();
+                self.unify(decl, l, cxt, Val::LiteralType, ty)
+            }
+        }
+    }
+
     pub fn unify(
         &mut self,
         decl: &Decls,
@@ -657,9 +676,16 @@ impl Infer {
             (Val::Flex(m, sp), _) => self.solve(decl, l, *m, sp.clone(), u.clone()),
             (_, Val::Flex(m_prime, sp_prime)) => self.solve(decl, l, *m_prime, sp_prime.clone(), t.clone()),
             (Val::LiteralType, Val::LiteralType) => Ok(()),
-            // 字符串字面量与内建 Prim 的宽松比较（保持 L07 时代行为）：
-            // 卡住的 string_concat 的值类型就是 String
-            (Val::LiteralType, Val::Prim(..)) | (Val::Prim(..), Val::LiteralType) => Ok(()),
+            // 宽松臂（L06 同款把关）：String 与卡住内建 / 卡住 Decl 的宽松
+            // 合一只对 decl 表**未登记名**放行——string_to_global_type 对
+            // 未知名返回以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记
+            // 名按登记类型把关（U 型返回的 builtin 卡住值不再冒充 String）
+            (Val::LiteralType, Val::Prim(n, _)) | (Val::Prim(n, _), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n)
+            }
+            (Val::LiteralType, Val::Decl(n, _)) | (Val::Decl(n, _), Val::LiteralType) => {
+                self.loose_string(decl, l, cxt, n)
+            }
             // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
             // Prim 会把 `x ++ y ≡ x ++ z` 判成相等
             (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {

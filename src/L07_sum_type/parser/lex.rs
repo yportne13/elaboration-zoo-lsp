@@ -77,9 +77,41 @@ const OP: [(&str, TokenKind); 16] = [
 pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
-    (is('"'), pmatch(|c: char| c != '"'), is('"'))
-        .map(|(_, x, _)| x.map(|t| (t, Str)))
-        .parse(input)
+    let data = input.data.strip_prefix('"')?;
+    let bytes = data.as_bytes();
+    let mut end = 0;
+    while end < bytes.len() {
+        if bytes[end] == b'"' {
+            break;
+        }
+        if bytes[end] == b'\\' {
+            end += 2;
+        } else {
+            end += 1;
+        }
+    }
+    // 终止条件：闭引号必须存在（end==0 合法——`""` 的空内容；未闭合或
+    // 转义跳过越过末尾才算失败）。旧组合子版 `pmatch(c != '"')` 至少吃
+    // 一字符，空字面量 `""` 被误杀，且 `\` 转义不跳过（`\"` 提前截断）。
+    if end >= bytes.len() || bytes[end] != b'"' {
+        return None;
+    }
+    let content = &data[..end];
+    let remaining = &data[end + 1..];
+    Some((
+        Span {
+            data: remaining,
+            start_offset: input.start_offset + 2 + end as u32,
+            end_offset: input.end_offset,
+            path_id: input.path_id,
+        },
+        Span {
+            data: (content, Str),
+            start_offset: input.start_offset + 1,
+            end_offset: input.start_offset + 1 + end as u32,
+            path_id: input.path_id,
+        },
+    ))
 }
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
@@ -90,6 +122,9 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
                 let tail_len = tail.map(|t| t.len()).unwrap_or(0);
+                // SAFETY: 切片长度 = head（首字符）+ tail_len（后续字符）
+                // 之和，head/tail 都派生自同一 `input.data` 的 char 迭代，
+                // 字节长度恰好覆盖一个完整 UTF-8 子序列，不会切在字符中间。
                 let ident = unsafe {
                     input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)
