@@ -8,8 +8,9 @@
 //!   外先序、`intersect_go` 长度失配优雅回落（对齐 L05 同款修复），快版
 //!   `invert_bump` 掩码改产内先序（兑现 `prune_ty_bump` 的
 //!   `mask_inner_first` 契约），本组用例钉住修复后的 parity；
-//! - **(Lit, Lit) 恒败**：readme 招牌声明（连相同字面量也不可合一）此前
-//!   零覆盖；
+//! - **(Lit, Lit) 恒败**：readme 招牌声明（连相同字面量也不可合一），
+//!   经命名隐式实参钉出刚性 spine 实参的源码级可达形态，探针实证消息
+//!   含 `LiteralIntro`（字面量确实进了 unify）；
 //! - **跨轮隔离**：快版 `Tycker` 稳态复用时 mutable_map / decl 表 / meta
 //!   编号随轮清空（旧稳态测试同一 src 跑两遍，对泄漏不敏感）；
 //! - **prim 触发语义角落**：decl 表登记的卡住部分应用再吃实参时补触发、
@@ -57,14 +58,14 @@ fn assert_parity(src: &str) {
     }
 }
 
-/// 双实现都 Err 且消息含 needle；另附消息全文一致断言（Error 字段私有，
-/// 经 Debug 形态读内容）。
+/// 双实现都 Err 且消息含 needle；另附消息全文一致断言（只用于不含
+/// span 偏移的消息——含项树的消息有快版 span 全零的文档化偏差）。
 fn assert_error_parity(src: &str, needle: &str) {
     let b = run_basic(src);
     let f = run_fast(src);
     assert!(b.is_err(), "basic 应报错：{src}");
     assert!(f.is_err(), "fast 应报错：{src}");
-    let (b, f) = (format!("{:?}", b.unwrap_err()), format!("{:?}", f.unwrap_err()));
+    let (b, f) = (b.unwrap_err().to_string(), f.unwrap_err().to_string());
     assert!(b.contains(needle), "basic 消息缺 {needle:?}：{b}");
     assert!(f.contains(needle), "fast 消息缺 {needle:?}：{f}");
     assert_eq!(b, f, "错误消息全文不一致（不含偏移的稳定片段也该一致）");
@@ -134,22 +135,32 @@ fn pruning_nonpalindrome_dependent_masks() {
 // --------------------------------------------------------------------------------
 
 /// readme 招牌声明：`(Lit, Lit)` 恒败——连相同字面量也不可合一（参考版
-/// unify 无字面量臂；快版 tag 7 位相等守卫如实复刻）。经刚性 spine 的
-/// `F "a" ≡ F "a"` 才是源码级唯一可达形态。
+/// unify 无字面量臂；快版 tag 7 位相等守卫如实复刻）。源码级可达形态是
+/// 命名隐式实参把 refl 的 x 位钉成刚性 spine 实参：`F "a" ≡ F "a"`。
+/// 探针实证：消息含 `LiteralIntro`（字面量确实进了 unify）；同/异字面量
+/// 均 Err。消息带 span 偏移（快版全零），只做 needle 断言。
 #[test]
 fn lit_lit_unify_always_fails_even_identical() {
     let pre = concat!(
         "def Eq [A : U] (x : A, y : A) : U = (P : A -> U) -> P x -> P y\n",
         "def refl [A : U, x : A] : Eq[A] x x = P => px => px\n",
-        "def h (F : String -> U) : ",
     );
-    for (xy, desc) in [
-        ("(F \"a\") (F \"a\")", "相同字面量"),
-        ("(F \"a\") (F \"b\")", "不同字面量"),
+    for (xy, extra) in [
+        ("(F \"a\") (F \"a\")", "[x = F \"a\"]"),
+        ("(F \"a\") (F \"b\")", "[x = F \"a\"]"),
     ] {
-        let src = format!("{pre}Eq U {xy} = refl\nprintln \"unreachable\"\n");
-        assert_error_parity(&src, "can't unify");
-        let _ = desc;
+        let src = format!(
+            "{pre}def h (F : String -> U) : Eq [U] {xy} = refl [U] {extra}\nprintln \"unreachable\"\n"
+        );
+        let b = run_basic(&src);
+        let f = run_fast(&src);
+        assert!(b.is_err() && f.is_err(), "两版都应 Err：{src}");
+        for (side, e) in [("basic", b.unwrap_err()), ("fast", f.unwrap_err())] {
+            let msg = e.to_string();
+            assert!(msg.contains("can't unify"), "{side} 消息缺 can't unify");
+            // 字面量确实进入 unify（否则测试没打到 (Lit, Lit) 臂）
+            assert!(msg.contains("LiteralIntro"), "{side} 消息缺 LiteralIntro：{msg}");
+        }
     }
 }
 

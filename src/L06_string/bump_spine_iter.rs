@@ -498,8 +498,11 @@ pub(crate) struct DeclEntryF {
 /// 可变全局表（参考版 `Infer.mutable_map`；单线程 RefCell）。
 pub(crate) type MutableMap = RefCell<FxHashMap<String, V>>;
 
-/// 从实参值取字面量内容（非字面量 → None；参考版同款 match）。内容指向
-/// 本轮 bump（调用域内使用）。
+/// 从实参值取字面量内容（非字面量 → None；参考版同款 match）。返回值的
+/// `'a` 与入参无 link——健全性依赖全局不变式：所有 `V` 的 XCell 都指向
+/// **当前轮的 bump**或 `'static` 钉串（builtin 的 "true"/"false" 等），
+/// 跨轮 `bump.reset()` 前一切句柄已消亡（`clear_round` 清空
+/// mutable_map / decl 表，见 `cross_round_isolation` 测试）。
 #[inline]
 fn lit_of<'a>(v: V) -> Option<&'a str> {
     match v_tag(v) {

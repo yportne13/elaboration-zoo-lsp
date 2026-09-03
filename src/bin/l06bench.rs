@@ -20,6 +20,9 @@
 //! - `strchain`（**L06 特色**）：每层 `string_concat s_{i-1} "x"`——define
 //!   链 + decl 表增长 + 每层一次 builtin prim 触发（末值 = 长 n 的字面量，
 //!   nf 节点数 = 1）。
+//! - `global`（**L06 特色**）：每层 `change_mutable "k" (s => string_concat
+//!   s "x")`——mutable_map 读写 + β 应用 + 重入 prim 触发（末值 = U，
+//!   nf 节点数 = 1）。
 //!
 //! 实现行：`basic`（参考版）、`fast` / `fast_ss`（bump_spine_iter 一次性 /
 //! 稳态）、`fast_memo`（quote 记忆化口径）。
@@ -27,7 +30,7 @@
 //! 用法：
 //! ```text
 //! cargo run --release --bin l06bench [--max-k 13] [--rounds 5] [--only basic,fast]
-//!                                     [--workload church|implicit|prune|solve|strchain|all]
+//!                                     [--workload church|implicit|prune|solve|strchain|global|all]
 //! ```
 
 #![feature(pattern)]

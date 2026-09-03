@@ -141,6 +141,9 @@ k=11  n=4096    fast=6.0ms*
 k=13  n=16384   fast=26.9ms*         （k=10 口径 basic/fast ≈ 7600×）
 == workload: prune ==（L05 已知超线性：telescope 物化，快版同款行为）
 k=9   n=1024    fast_ss=8594ms       （L05 实测 8.7s，一致）
+== workload: global ==（L06 特色：可变全局 + 重入 prim；check + nf）
+k=11  n=4096    fast=9.8ms*          basic=5338ms       (≈540×)
+k=12  n=8192    fast=21.6ms*         basic=35174ms      (≈1630×)
 ```
 
 church/solve 上快版稳定领先 10~20×；**strchain 是 L06 的主展示负载**——
@@ -159,3 +162,7 @@ n=16384 仅 27ms）。
 - `strchain` 2^(k+1)（**L06 特色**）：每层 `string_concat s_{i-1} "x"`——
   define 链 + decl 表增长 + 每层一次 prim 触发；末值 = 长 n 的字面量
   （nf 节点数 = 1）。
+- `global` 2^(k+1)（**L06 特色**）：每层
+  `change_mutable "k" (s => string_concat s "x")`——mutable_map 读写 +
+  函数实参的 β 应用 + 重入 prim 触发；末值 = U（nf 节点数 = 1）。
+  参考版超线性（k=12 已 35s），快版近线性（k=12 21.6ms，≈1600×）。
