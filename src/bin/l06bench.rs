@@ -50,7 +50,7 @@ use mimalloc::MiMalloc;
 use std::time::Instant;
 
 use L06_string::bump_spine_iter::{
-    church_src, implicit_src, prune_src, solve_src, strchain_src, Tycker,
+    church_src, globals_src, implicit_src, prune_src, solve_src, strchain_src, Tycker,
 };
 use L06_string::parser::parser;
 
@@ -72,7 +72,7 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（check+nf，默认）| implicit | prune | solve | strchain | all
+    /// 负载族：church（check+nf，默认）| implicit | prune | solve | strchain | global | all
     #[arg(long, default_value = "church")]
     workload: String,
 }
@@ -109,16 +109,17 @@ fn run(cli: Cli) {
         "prune" => &["prune"],
         "solve" => &["solve"],
         "strchain" => &["strchain"],
-        _ => &["church", "implicit", "prune", "solve", "strchain"],
+        "global" => &["global"],
+        _ => &["church", "implicit", "prune", "solve", "strchain", "global"],
     };
 
     for workload in workloads {
         println!("== workload: {workload} ==");
-        // implicit/prune/solve 只走 check（无 quote）；church/strchain 走
-        // check + nf。**implicit/prune 的参考版超线性**（L05 readme 同款：
+        // implicit/prune/solve 只走 check（无 quote）；church/strchain/
+        // global 走 check + nf。**implicit/prune 的参考版超线性**（L05 readme 同款：
         // 每 define 克隆 src_names + telescope 逐层重 eval，k=10 已 20s+），
         // 默认不排 basic（--only basic 可强制，自负超时）
-        let nf_workload = matches!(*workload, "church" | "strchain");
+        let nf_workload = matches!(*workload, "church" | "strchain" | "global");
         let basic_too_slow = matches!(*workload, "implicit" | "prune");
         for k in 9..=cli.max_k {
             let n = 1u64 << (k + 1);
@@ -127,6 +128,7 @@ fn run(cli: Cli) {
                 "implicit" => implicit_src(k),
                 "prune" => prune_src(k),
                 "solve" => solve_src(k),
+                "global" => globals_src(k),
                 _ => strchain_src(k),
             };
             // 计时外：解析 + 正确性断言
@@ -136,7 +138,7 @@ fn run(cli: Cli) {
             };
             let expect_nodes = match *workload {
                 "church" => 2 * n + 4,
-                "strchain" => 1,
+                "strchain" | "global" => 1,
                 _ => 0,
             };
             if nf_workload {

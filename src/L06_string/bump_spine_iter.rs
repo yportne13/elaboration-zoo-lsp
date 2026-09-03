@@ -363,6 +363,22 @@ impl Spine {
         }
     }
 
+    /// 链长（decl_apply 的元数预检：元数不足时不收集、零分配）。
+    #[inline]
+    fn spine_len(&self, h: usize) -> usize {
+        let mut cur = h;
+        let mut n = 1;
+        loop {
+            let e = &self.stack[cur];
+            if v_tag(e.f) == 2 {
+                cur = v_spine_of(e.f);
+                n += 1;
+            } else {
+                return n;
+            }
+        }
+    }
+
     /// force 后的未解 flex 探测：`tag 5`（空 spine）或 spine 头是 `Meta`。
     /// 返回 meta 号并把逆应用序实参（带 icit）收进 `out`。要求调用方先 force。
     fn flex_of(&self, v: V, out: &mut Vec<(V, Icit)>) -> Option<u32> {
@@ -450,6 +466,28 @@ pub(crate) enum Prim {
     FileDelete,
 }
 
+/// prim 的最小元数（decl_apply 的元数预检：不足即保持卡住，零收集）。
+#[inline]
+fn prim_arity(p: Prim) -> usize {
+    match p {
+        Prim::ReportCheckIssue => 4,
+        Prim::ChangeMutableDefault => 3,
+        Prim::StrConcat
+        | Prim::StrEq
+        | Prim::CreateGlobal
+        | Prim::ChangeMutable
+        | Prim::GetGlobalDefault
+        | Prim::FileWriteAllText
+        | Prim::FileAppendAllText => 2,
+        Prim::StrIndent2
+        | Prim::StringToGlobalType
+        | Prim::GetGlobal
+        | Prim::FileReadAllText
+        | Prim::FileExists
+        | Prim::FileDelete => 1,
+    }
+}
+
 /// decl 表条目（参考版 `DeclEntry` 的快版）：定义的值与类型，可选 builtin。
 pub(crate) struct DeclEntryF {
     pub(crate) vt: V,
@@ -473,9 +511,11 @@ fn lit_of<'a>(v: V) -> Option<&'a str> {
     }
 }
 
-/// prim 的统一执行（参数自然序 = 应用序）。返回 `None` 保持卡住（元数
-/// 不足 / 实参非字面量）；`change_mutable` 族要应用函数实参（走
-/// [`vapp1`]），文件族失败 panic——均与参考版逐句对应。
+/// prim 的统一执行。`args` 是 [`Spine::collect_args`] 的产出（**逆应用
+/// 序**，内层在前），[`arg`] 闭包按自然序（应用序）取第 k 个；调用方已
+/// 做元数预检（这里仍保留 `len <` 守卫，与参考版逐句对应）。返回 `None`
+/// 保持卡住（实参非字面量）；`change_mutable` 族要应用函数实参（走
+/// [`vapp1`]），文件族失败 panic。
 #[allow(clippy::too_many_arguments)]
 fn prim_fire<'a>(
     bump: &'a Bump,
@@ -488,26 +528,40 @@ fn prim_fire<'a>(
     decls: &FxHashMap<String, DeclEntryF>,
     mmap: &MutableMap,
     prim: Prim,
-    args: &[V], // 自然序（应用序，最先应用在前）
+    args: &[(V, Icit)], // collect_args 产出（逆应用序）
 ) -> Option<V> {
+    let n = args.len();
+    let arg = |k: usize| args[n - 1 - k].0; // 自然序（应用序）第 k 个
     match prim {
         Prim::StrConcat => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match (lit_of(args[0]), lit_of(args[1])) {
+            match (lit_of(arg(0)), lit_of(arg(1))) {
                 (Some(a), Some(b)) => {
-                    let s = bump.alloc_str(&format!("{a}{b}"));
+                    // 一次 bump 分配 + 两段 memcpy（format! 走 fmt 机器且
+                    // String → alloc_str 双份拷贝）
+                    let len = a.len() + b.len();
+                    let ptr = bump
+                        .alloc_layout(std::alloc::Layout::from_size_align(len, 1).unwrap())
+                        .as_ptr();
+                    // SAFETY: a/b 都是 &str（合法 UTF-8）；两段完整序列按
+                    // 字节拼接仍是合法 UTF-8，不会引入跨边界截断的码点
+                    let s = unsafe {
+                        std::ptr::copy_nonoverlapping(a.as_ptr(), ptr, a.len());
+                        std::ptr::copy_nonoverlapping(b.as_ptr(), ptr.add(a.len()), b.len());
+                        std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+                    };
                     Some(v_xcell(bump.alloc(XCell::Lit(s))))
                 }
                 _ => None,
             }
         }
         Prim::StrEq => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match (lit_of(args[0]), lit_of(args[1])) {
+            match (lit_of(arg(0)), lit_of(arg(1))) {
                 (Some(a), Some(b)) => {
                     let s = if a == b { "true" } else { "false" };
                     Some(v_xcell(bump.alloc(XCell::Lit(s))))
@@ -516,10 +570,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::StrIndent2 => {
-            if args.is_empty() {
+            if n == 0 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(s) => {
                     let indented = s.replace('\n', "\n  ");
                     Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&indented)))))
@@ -528,10 +582,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::ReportCheckIssue => {
-            if args.len() < 4 {
+            if n < 4 {
                 return None;
             }
-            let get = |i: usize| lit_of(args[i]).unwrap_or("").to_string();
+            let get = |i: usize| lit_of(arg(i)).unwrap_or("").to_string();
             let (code, module, signal, message) = (get(0), get(1), get(2), get(3));
             if code.is_empty() || module.is_empty() {
                 return Some(v_u());
@@ -556,10 +610,10 @@ fn prim_fire<'a>(
             Some(v_u())
         }
         Prim::StringToGlobalType => {
-            if args.is_empty() {
+            if n == 0 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(a) => Some(match decls.get(a) {
                     Some(e) => e.vt,
                     None => v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(a)))),
@@ -568,29 +622,29 @@ fn prim_fire<'a>(
             }
         }
         Prim::CreateGlobal => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(a) => {
-                    mmap.borrow_mut().insert(a.to_string(), args[1]);
+                    mmap.borrow_mut().insert(a.to_string(), arg(1));
                     Some(v_u())
                 }
                 _ => None,
             }
         }
         Prim::ChangeMutable => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(a) => {
                     // 同参考版:先取旧值并结束借用,再求值 f——f 的求值可能
                     // 再触发任何 prim,持有 borrow_mut 会 BorrowError panic
                     let old = mmap.borrow().get(a).copied();
                     if let Some(old) = old {
                         let new = vapp1(
-                            bump, spine, work, vals, icits, defs, metas, decls, mmap, args[1],
+                            bump, spine, work, vals, icits, defs, metas, decls, mmap, arg(1),
                             old, Icit::Expl,
                         );
                         mmap.borrow_mut().insert(a.to_string(), new);
@@ -601,34 +655,34 @@ fn prim_fire<'a>(
             }
         }
         Prim::GetGlobal => {
-            if args.is_empty() {
+            if n == 0 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 // 缺名不再 panic:None 保持卡住的 Decl 头(参考版同款修改)
                 Some(a) => mmap.borrow().get(a).copied(),
                 _ => None,
             }
         }
         Prim::GetGlobalDefault => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(a) => Some(
                     mmap.borrow()
                         .get(a)
                         .copied()
-                        .unwrap_or(args[1]),
+                        .unwrap_or(arg(1)),
                 ),
                 _ => None,
             }
         }
         Prim::ChangeMutableDefault => {
-            if args.len() < 3 {
+            if n < 3 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(a) => {
                     // 同 change_mutable:先取旧值并结束借用,再求值 f(重入安全)
                     let existing = mmap.borrow().get(a).copied();
@@ -636,12 +690,12 @@ fn prim_fire<'a>(
                         Some(old) => {
                             let new = vapp1(
                                 bump, spine, work, vals, icits, defs, metas, decls, mmap,
-                                args[1], old, Icit::Expl,
+                                arg(1), old, Icit::Expl,
                             );
                             mmap.borrow_mut().insert(a.to_string(), new);
                         }
                         None => {
-                            mmap.borrow_mut().insert(a.to_string(), args[2]);
+                            mmap.borrow_mut().insert(a.to_string(), arg(2));
                         }
                     }
                     Some(v_u())
@@ -650,10 +704,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::FileReadAllText => {
-            if args.is_empty() {
+            if n == 0 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(path) => {
                     let content = std::fs::read_to_string(path)
                         .unwrap_or_else(|e| panic!("file_read_all_text: failed to read '{}': {}", path, e));
@@ -663,10 +717,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::FileWriteAllText => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match (lit_of(args[0]), lit_of(args[1])) {
+            match (lit_of(arg(0)), lit_of(arg(1))) {
                 (Some(path), Some(content)) => {
                     std::fs::write(path, content)
                         .unwrap_or_else(|e| panic!("file_write_all_text: failed to write '{}': {}", path, e));
@@ -676,10 +730,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::FileAppendAllText => {
-            if args.len() < 2 {
+            if n < 2 {
                 return None;
             }
-            match (lit_of(args[0]), lit_of(args[1])) {
+            match (lit_of(arg(0)), lit_of(arg(1))) {
                 (Some(path), Some(content)) => {
                     use std::io::Write;
                     let mut file = std::fs::OpenOptions::new()
@@ -696,10 +750,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::FileExists => {
-            if args.is_empty() {
+            if n == 0 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(path) => {
                     let exists = std::path::Path::new(path).exists();
                     let s = if exists { "true" } else { "false" };
@@ -709,10 +763,10 @@ fn prim_fire<'a>(
             }
         }
         Prim::FileDelete => {
-            if args.is_empty() {
+            if n == 0 {
                 return None;
             }
-            match lit_of(args[0]) {
+            match lit_of(arg(0)) {
                 Some(path) => {
                     std::fs::remove_file(path)
                         .unwrap_or_else(|e| panic!("file_delete: failed to delete '{}': {}", path, e));
@@ -746,14 +800,17 @@ fn decl_apply<'a>(
     let name = decl_name(spine, f);
     if let Some(entry) = decls.get(name) {
         if let Some(prim) = entry.prim {
-            let mut args: Vec<(V, Icit)> = Vec::new();
-            spine.collect_args(v_spine_of(acc), &mut args); // 逆应用序
-            args.reverse(); // → 自然序
-            let arg_vs: Vec<V> = args.iter().map(|&(v, _)| v).collect();
-            if let Some(result) =
-                prim_fire(bump, spine, work, vals, icits, defs, metas, decls, mmap, prim, &arg_vs)
-            {
-                return result;
+            // 元数预检：不足即保持卡住（strchain 每层的一次 1 参触发
+            // 零收集零分配）；足够才按链长精确容量收集一次
+            let n = spine.spine_len(v_spine_of(acc));
+            if n >= prim_arity(prim) {
+                let mut args: Vec<(V, Icit)> = Vec::with_capacity(n);
+                spine.collect_args(v_spine_of(acc), &mut args); // 逆应用序
+                if let Some(result) =
+                    prim_fire(bump, spine, work, vals, icits, defs, metas, decls, mmap, prim, &args)
+                {
+                    return result;
+                }
             }
         }
     }
@@ -3886,6 +3943,18 @@ pub(crate) fn strchain_src(k: u32) -> String {
     s
 }
 
+/// globals 2^(k+1)（L06 特色：可变全局 + 重入 prim）：每层
+/// `change_mutable "k" (s => string_concat s "x")`——mutable_map 读写 +
+/// 函数实参的 β 应用 + 重入 prim 触发；末值 = U（nf 节点数 = 1）。
+pub(crate) fn globals_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from("def g0 : U = create_global \"k\" \"x\"\n");
+    for i in 1..n {
+        s += &format!("def g{i} : U = change_mutable \"k\" (s => string_concat s \"x\")\n");
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4022,6 +4091,14 @@ mod tests {
         let src_print = strchain_src(5) + "println s0\n";
         let basic = super::super::run(&src_print, 0).unwrap();
         assert_eq!(run_fast(&src_print, 0).unwrap(), basic);
+
+        let src = globals_src(9);
+        let Ok(raw) = super::super::parser::parser(&super::super::preprocess(&src), 0) else {
+            panic!("parse failed");
+        };
+        let mut t = Tycker::new();
+        assert!(t.bench_check(&raw), "globals 未通过");
+        assert_eq!(t.bench_check_nf_memo(&raw), 1, "globals nf 节点数");
     }
 
     /// 稳态复用正确性：同一 Tycker 连续多轮（含 mutable_map / decl 表的
