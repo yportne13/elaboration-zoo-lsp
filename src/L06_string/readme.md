@@ -13,20 +13,21 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
   环境、递归 eval/quote/force/unify/rename/prune、`HashMap` decl 表 +
   `Rc<dyn Fn>` prim；
 - `bump_spine_iter.rs`：极致性能版（L05 冠军配方的移植 + string 层机制），
-  两版 **Ok 输出逐字节一致**（互检测试 + `tests/l06_blackbox.rs` 双
-  oracle）。
+  两版 **Ok 输出逐字节一致**（互检测试 + `tests/l06_blackbox.rs` /
+  `tests/l06_blackbox_v2.rs` 双 oracle 套件）。
 
 ## 语法要点（与 L05 的表达式形态不同）
 
 - 顶层是 **decl 序列**：`def 名(参数): 返回类型 = 体` 与 `println 体`；
   `def` **无分号终结、无尾表达式行**——parser 要求 decl 流吃完全部
-  token，多余 token（含 `;`）使解析整体报错（历史版静默截断，曾让 `;`
-  结尾的测试用例空转）。
+  token，多余 token（含 `;`）使解析整体报错并**带首个残余 token 的内容
+  与偏移**（历史版静默截断，曾让 `;` 结尾的测试用例空转）。
 - λ 是 `binder组 => 体`（**无反斜杠、无点号**）；隐式 `[x : A]`、命名
   λ binder `[名字 = x]`、命名实参 `[名字 = e]`（L05 的 `{}` 全换成 `[]`）。
-- 字符串字面量 `"..."`（支持 `\\`、`\n` 转义；注释剥离感知字符串——
-  字面量内的 `//` / `/* */` 不生效）；`String` 是内置类型名（注册为
-  `LiteralType` 值）。
+- 字符串字面量 `"..."`（支持 `\n` `\t` `\r` `\\` `\"` `\0` 转义，未知
+  转义原样保留；空字面量 `""` 合法；注释剥离感知字符串——字面量内的
+  `//` / `/* */` 不生效）；`String` 是内置类型名（注册为 `LiteralType`
+  值）。
 - `let x : A = t; u`（表达式层，体以分号接续；`in` 不是关键字）。
 
 ## L06 的语义增量（相对 L05）
@@ -51,6 +52,8 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
    按登记类型把关，U 型 builtin 的卡住值不再冒充 String 型）；同名 Decl
    逐实参（`unify_sp`）；**(Lit, Lit) 恒败**——参考版
    unify 没有字面量臂，连相同字面量也不可合一（快版如实复刻，见下）。
+   源码级唯一可达形态是经刚性 spine 的 `F "a" ≡ F "a"`，失败消息会把
+   **两个相同的项**并列打印——无字面量臂的已知形态，不是消息构造 bug。
 
 ## 性能版要点（相对 L05 的增量）
 
@@ -92,9 +95,17 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
 - **`Span` 的 PartialEq 只比 data**（`parser_lib.rs` 自定义实现）：命名
   λ 按名匹配 Π、Decl 头同名可合一——快版按内容比较，一致。
 - **顶层程序形态**：无尾表达式；parser 要求 decl 流吃完全部 token，
-  `;` / 垃圾 token 一律解析报错（`run` 返回 `Err`，不再 panic/静默截断）。
+  `;` / 垃圾 token 一律解析报错（`run` 返回 `Err`，不再 panic/静默截断），
+  消息带首个残余 token 的内容与偏移（共用 parser，两版逐字节一致）。
 - **preprocess**：行 `//` 与块 `/* */` 注释剥离感知字符串字面量（字面量
-  内的注释标记原样保留），注释内容替换为空白保持 span 偏移稳定。
+  内的注释标记原样保留），注释内容替换为空白——ASCII 下 span 偏移稳定，
+  非 ASCII 注释内容会使后续偏移前移（仅影响错误消息里的偏移数字）；
+  **未闭合的块注释会静默吞掉余下全部 decl**（无告警，历史行为）。
+- **unify/剪枝的掩码方向**：参考版 `prune_ty` 按上游 `pruneTy (revPruning
+  pr)` 反转掩码（头 = 最内层 → 外→内配对 Π 层，L05 同款修复），
+  `prune_vflex` 的结果折叠按上游 `foldr` 外先序，`intersect_go` 长度
+  失配优雅回落逐实参比较（原 `unreachable!()`）；快版 `invert_bump`
+  掩码产**内先序**（`prune_ty_bump` 的 `mask_inner_first` 契约）。
 - 文件 IO builtin 做真实文件系统副作用；测试里写删固定文件名的用例经
   `FILE_IO_LOCK` 串行（Windows 并行线程的句柄竞争会让删除报 os error 5）。
 
@@ -103,6 +114,7 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
 ```text
 cargo test --lib L06_string          # 参考版 + 性能版内嵌测试（含互检）
 cargo test --test l06_blackbox       # 黑盒双 oracle 套件
+cargo test --test l06_blackbox_v2    # 黑盒第二卷：剪枝路径/跨轮隔离/词法角落
 cargo run --release --bin l06bench -- --workload church
 cargo run --release --bin l06bench -- --workload all --max-k 13
 ```
@@ -110,7 +122,7 @@ cargo run --release --bin l06bench -- --workload all --max-k 13
 消融开关（只影响性能，不影响输出）：`L06_NO_CONV_MEMO=1`（unify 判等
 记忆化）、`L06_NO_NAME_MAP=1`（名字解析回落线性 walk）。
 
-## 实测结果（Windows 10，release build，rounds=3 取 min）
+## 实测结果（Windows 10，release build，rounds=3 取 min；CLI 默认 rounds=5）
 
 ```text
 == workload: church ==（check + nf；basic 与 fast 齐跑）
