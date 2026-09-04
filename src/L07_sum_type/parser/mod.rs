@@ -276,7 +276,9 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         brace(
             (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
                 .map(|(_, pattern, _, _, body)| (pattern, body))
-                .many0_sep(kw(EndLine)),
+                // 臂间允许连续空行：注释行经 preprocess 剥成空白后仍产生
+                // EndLine，单 EndLine 分隔会把「臂间注释」打成语法错误
+                .many0_sep(kw(EndLine).many1()),
         ),
     )
         .map(|(_, scrutinee, body)| Raw::Match(Box::new(scrutinee), body))

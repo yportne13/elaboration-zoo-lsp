@@ -1120,13 +1120,21 @@ fn force<'a>(
                         HK_PRIM => {
                             // 卡住的内建：实参按自然序交给 builtin 体归约；
                             // 元数不足 / 实参不合 / 缺名时保持卡住。参考版对
-                            // 每次 force 调用烧 1 fuel（归约成功与否皆然）
+                            // 每次 force 调用烧 1 fuel（归约成功与否皆然）。
+                            // 实参先逐个 force 再交给 prim_reduce（与参考版
+                            // Val::Prim 分支对齐）：spine 槽可能存着未归约的
+                            // 嵌套 prim，不 force 外层永远过不了字面量检查。
                             if !burn(fuel) {
                                 return v;
                             }
                             let name = xcell_head_name(spine, hd);
                             args.clear();
                             spine.collect_args(h, &mut args);
+                            for i in 0..args.len() {
+                                let a = args[i].0;
+                                args[i].0 =
+                                    force(bump, spine, defs, metas, decls, mmap, fuel, pm_defs, a);
+                            }
                             match prim_reduce(
                                 bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
                                 decls, mmap, fuel, pm_defs, name, &args,

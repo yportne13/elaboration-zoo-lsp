@@ -421,9 +421,14 @@ impl Infer {
             // 卡住的内建：实参按自然序（应用序）交给对应 builtin 体归约
             // （L06 builtin 注册表的全部函数体）；元数不足 / 实参不合 /
             // 缺名时保持卡住。名字 + 实参 spine 由 eval(Tm::Prim) 构造。
+            // 实参先 force 再检查字面量：spine 槽可能存的是**未归约的嵌套
+            // prim**（如 change_mutable 存的 `f old`、源码里的嵌套应用），
+            // 不 force 则外层永远过不了字面量检查，prim 链失去可组合性
+            // （与 Val::Obj 分支先 force 头部的纪律对齐）。
             Val::Prim(name, sp) => {
                 if burn(&self.unify_fuel) {
-                    let mut args: Vec<Val> = sp.iter().map(|(v, _)| v.clone()).collect();
+                    let mut args: Vec<Val> =
+                        sp.iter().map(|(v, _)| self.force(decl, v.clone())).collect();
                     args.reverse(); // spine 头 = 最后应用 → 自然序
                     if let Some(v) = self.prim_reduce(decl, &name, &args) {
                         return self.force(decl, v);

@@ -126,6 +126,13 @@ def head[T, L: Nat](x: Vec[T] (succ L)): T =
 - `enum` 声明：方括号参数是隐式（自动插入），圆括号参数是显式；
   每个构造子可以 `-> ret` 自定义返回类型（缺省为 `Name` 应用到所有
   隐式参数）。索引的等式在 `ret` 与使用处的合一中自动生效。
+- 构造子引用：裸名即可；跨 enum **重名构造子**裸名按最后注册解析，
+  消歧用限定名**点号**语法 `Vec.cons`（注册键 `Enum.case`，经 Obj
+  投影特判解析；打印才渲染 `Vec::cons`——读写格式不对称）。
+- 显式参数是**索引**，不自动成为构造子绑定器：构造子的字段/返回类型
+  需要参数作 binder 时必须自己再量化一遍（`box1(T : U)(x : T)`），
+  直接 `box1(x : T)` 报 `name not in scope: T`。这是索引特化语义的
+  推论（索引值由返回类型方程解出，前置成实参会破坏精化）。
 - `match` 只能是**检查模式**（需要期望类型）；分支体在**精化过的**上下文
   里检查，期望类型按臂重锚。
 - `.field` 投影：对 Sum（类型）取索引参数的值，对构造子值先查索引再查
@@ -251,6 +258,8 @@ solve / intersect）。在此之上：
 | `unify(Match, Match)` 的按值槽位重映射（`bodies_eq_aligned`）补丁 | 删除——布局不再漂移，`val_eq` 结构快路径 + 重锚覆盖 |
 | `lvl2ix` 越界静默降级 `Ix(0)` | debug 构建断言，release 保留降级（显示路径） |
 | 旧账（相对更早的 L07/L07a）：`1919810` 全局 hack、Raw-in-Term 构造子字段、quote(Match) 原样拷贝、矩阵算法丢分支、`panic!("impossible apply")` 等 | 均已在上一轮重写中处理，本版保留 |
+| **黑盒二轮（2026-09）**：`force(Val::Prim)` 不 force spine 实参——嵌套 prim（`str_eq "foo" (string_concat "f" "oo")`）与 `change_mutable` 连续更新链（存入未 force 的 `f old`）永远过不了字面量检查，卡住不化简 | 读点对齐 `Val::Obj` 先 force 头部的纪律：逐个 force 实参再交 `prim_reduce`；参考版与孪生版同步修改（parity 保持，strchain/global 负载语义不变） |
+| match 臂分隔符是单个 `EndLine`——臂间**注释行**经预处理剥成空行后变成残余 token，整个 def 解析失败 | 分隔符放宽为 `EndLine+`（臂间注释行/空行合法；行尾注释本就安全） |
 
 ## 7. 已知限制（诚实清单）
 
@@ -286,8 +295,12 @@ solve / intersect）。在此之上：
   缺名卡住与宽松臂把关 / string_to_global_type / 文件 IO / DEMO 全串。
 
 黑盒与双 oracle：`cargo test --test l07_blackbox`（46 个，参考版唯一
-入口 `run`）；`cargo test --test l07_fast_parity`（53 个，run vs
-run_fast 逐字节互检，见 §10）。
+入口 `run`）；`cargo test --test l07_blackbox_v2`（51 个，二轮攻击面：
+builtin 全量扫描含文件 IO panic 契约 / enum 冷僻特性（重名、显式参数、
+空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
+run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
+回归在此，另含 2 个 `--ignored` 格式探针）；`cargo test --test
+l07_fast_parity`（53 个，run vs run_fast 逐字节互检，见 §10）。
 
 ## 9. 参考资料
 
