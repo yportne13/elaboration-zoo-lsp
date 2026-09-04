@@ -33,11 +33,12 @@ use smol_str::SmolStr;
 mod cxt;
 mod struct_eq;
 mod elaboration;
-mod parser;
+pub(crate) mod parser;
 mod pattern_match;
 mod pretty;
 mod syntax;
 mod unification;
+pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);

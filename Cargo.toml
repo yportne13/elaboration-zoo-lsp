@@ -35,6 +35,10 @@ path = "src/bin/l05bench.rs"
 name = "l06bench"
 path = "src/bin/l06bench.rs"
 
+[[bin]]
+name = "l07bench"
+path = "src/bin/l07bench.rs"
+
 
 
 [dependencies]
