@@ -1492,6 +1492,47 @@ println p.y
 }
 
 #[test]
+fn parity_match_differential_pending() {
+    // 两侧卡住 match 的 pending 实参数差分（(f x) 带 [y, z]、(g x) 带
+    // [w]）：MatchStruct 屏障的 icit 推入必须按公共前缀截断，差分判定
+    // 保留给弹出侧的 MatchPendingLen——修复前推入期 `pd2[i]` 越界 panic
+    //（进程崩溃 vs 参考版干净的分支体 Err，违反 Err 判定一致合同）。
+    // 同时覆盖屏障路径：scrutinee 比完 → cases 长度 → pattern → 分支体
+    //（case a 的 m=>n=>m 与 m=>m 在 η 后链长失配）→ 干净 Err。
+    assert_parity(
+        r#"
+enum Foo {
+    a
+    b
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl[t: A] -> Eq[A] t t
+}
+
+def f(x: Foo): Nat -> Nat -> Nat =
+    match x {
+        case a => m => n => m
+        case b => m => n => n
+    }
+
+def g(x: Foo): Nat -> Nat =
+    match x {
+        case a => m => m
+        case b => m => m
+    }
+
+def bad(x: Foo, y: Nat, z: Nat, w: Nat): Eq (g x w) (f x y z) = refl
+"#,
+    );
+}
+
+#[test]
 fn parity_product_name_identity_redef() {
     // 同名 struct 重定义 + 类型按名合一（Sum-Sum 臂只比名字与参数槽，
     // cases 不参与）的组合语义：后注册者覆盖 decl 表，早期 def 的登记

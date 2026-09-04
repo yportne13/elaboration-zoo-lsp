@@ -125,10 +125,10 @@ Machine 常驻缓冲（`'static` 存放口径 + 进核前 clear，quote memo 同
 
 ### 双 oracle
 
-`cargo test --test l08_fast_parity`（73 例）：DEMO 全串（含积类型段）、
-tests.rs 全部既有用例源码、积类型九连（基础 / 泛型 / 依赖 Sigma /
+`cargo test --test l08_fast_parity`（74 例）：DEMO 全串（含积类型段）、
+tests.rs 全部既有用例源码、积类型十连（基础 / 泛型 / 依赖 Sigma /
 投影链与部分应用 / Err 判定 / 剥链精确检查位 / new 直接接投影 /
-局部遮蔽与字段空行 / 同名重定义按名身份）、
+局部遮蔽与字段空行 / 同名重定义按名身份 / match 差分 pending 屏障）、
 继承的 Err parity、深负载
 church / strchain / global / match / enum / **struct**（快版 `Tycker`
 与参考版 `bench_check_nf` 节点数互检）、稳态复用。判据：**Ok 输出
@@ -222,8 +222,8 @@ fast=4.432，church k=12 ss 反超 7%）——稳态复用的内存有界优势�
   部分应用构造子）；另 1 个 `--ignored` 深度探针。
 - `cargo test --test l08_blackbox_v2`：**51**（L07 第二卷基线原样通过，
   另 2 个 `--ignored` 探针）。
-- `cargo test --test l08_fast_parity`：**73**（§6 双 oracle：27 个 parity
-  用例；`#[cfg(test)]` 的 45 个 lib 用例（含 lexer 回归）随模块在本目标
+- `cargo test --test l08_fast_parity`：**74**（§6 双 oracle：28 个 parity
+  用例；`#[cfg(test)]` 的 46 个 lib 用例（含 lexer 回归）随模块在本目标
   内执行并计入总运行数——lexer 回归两版共享同一解析器，不构成
   parity 对照）。
 
@@ -276,6 +276,18 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
   fast_ss 与 fast 打平或反超，§6 基准表全量重录；
 - §7 补充披露同名重定义 × 按名类型身份的组合语义（L06+ decl 表设计
   的组合效应，`parity_product_name_identity_redef` 锁定）。
+
+终验轮（对抗验证二轮修复）另附：
+
+- 修复 MatchStruct 屏障的**icit 推入越界 panic**：pending 长度差分时
+  `pd2[i]` 越界（参考版是干净的分支体 Err，违反 Err 判定一致合同）——
+  推入改按公共前缀 `min` 截断，差分判定保留给弹出侧的
+  MatchPendingLen（不提前，保住失败前的 meta 副作用时序对齐）；
+  `parity_match_differential_pending` 锁定（修复前该用例稳定复现
+  panic）；
+- 屏障重构的其余机制（深度优先弹出序、memo Store 屏障与 `return
+  false` 路径的交互、切片跨弹出存活、Rc 随 clear 减计）经逐行对抗
+  验证通过。
 
 ## 10. 参考资料
 

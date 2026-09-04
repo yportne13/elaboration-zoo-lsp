@@ -2609,7 +2609,12 @@ fn unify_iter<'a>(
                 for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
                     stack.push(UItem::Pair(l, *u1, *u2));
                 }
-                for i in (0..pd1.len()).rev() {
+                // icit 检查按公共前缀推入：pending 长度差分时上面的 zip 已
+                // 截断对推入，此处若仍用 pd1.len() 索引 pd2 会越界 panic
+                // （参考版是干净的 pendingLen Err）——差分判定保留给弹出侧
+                // 的 MatchPendingLen（提前到这里会改变失败前的 meta 副作用
+                // 时序，正是屏障重构要消除的分叉源）
+                for i in (0..pd1.len().min(pd2.len())).rev() {
                     stack.push(UItem::MatchIcit(pd1[i].1, pd2[i].1));
                 }
                 stack.push(UItem::MatchPendingLen(pd1.len(), pd2.len()));
@@ -4573,6 +4578,9 @@ impl Machine {
     // 内核包装（Machine 字段借出）
     // --------------------------------------------------------------------------------
 
+    // 'static → 'a 的两步指针转换是刻意的一生期重写（SAFETY 见方法体），
+    // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
+    #[allow(clippy::unnecessary_cast)]
     fn eval<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4615,6 +4623,9 @@ impl Machine {
         )
     }
 
+    // 'static → 'a 的两步指针转换是刻意的一生期重写（SAFETY 见方法体），
+    // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
+    #[allow(clippy::unnecessary_cast)]
     fn quote<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4669,6 +4680,9 @@ impl Machine {
 
     /// quote 的记忆化口径（表容量跨调用复用、内容每次调用 clear，绝不跨
     /// reset 持有条目——meta 求解会让旧条目过期）。
+    // 'static → 'a 的两步指针转换是刻意的一生期重写（SAFETY 见方法体），
+    // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
+    #[allow(clippy::unnecessary_cast)]
     fn quote_memo<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4726,6 +4740,9 @@ impl Machine {
         )
     }
 
+    // 'static → 'a 的两步指针转换是刻意的一生期重写（SAFETY 见方法体），
+    // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
+    #[allow(clippy::unnecessary_cast)]
     fn unify<'a>(
         &mut self,
         bump: &'a Bump,
