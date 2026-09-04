@@ -105,9 +105,8 @@ cargo run --release --features mem-profile --bin typort -- stats
 | `L04_implicit` | 隐式参数推导 |
 | `L05_pruning` | 剪枝（occurs check） |
 | `L06_string` | 字符串字面量 |
-| `L07_sum_type` | 和类型（枚举） |
-| `L07a_depend_pm` | 依赖模式匹配 |
-| `L08_product_type` | 积类型（结构体） |
+| `L07_sum_type` | 和类型（枚举）+ 依赖模式匹配（设计说明见 `src/L07_sum_type/README.md`） |
+| `L08_product_type` | 积类型（结构体；脱糖为单 `mk` 构造子 enum，设计说明见 `src/L08_product_type/README.md`） |
 | `L09_mltt` | MLTT 风格宇宙 |
 | `L10_typeclass` | 类型类 / Trait 系统 |
 | `L11_macro` | 宏系统 |

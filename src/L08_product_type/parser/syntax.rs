@@ -82,3 +82,13 @@ pub enum Decl {
         cases: Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Option<Raw>)>,
     },
 }
+
+impl Decl {
+    /// 声明名（调试用）
+    pub fn name(&self) -> String {
+        match self {
+            Decl::Def { name, .. } | Decl::Enum { name, .. } => name.data.clone(),
+            Decl::Println(_) => "<println>".to_owned(),
+        }
+    }
+}

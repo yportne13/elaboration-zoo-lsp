@@ -23,7 +23,7 @@ mod L04_implicit;
 mod L05_pruning;
 mod L06_string;
 pub mod L07_sum_type;
-mod L08_product_type;
+pub mod L08_product_type;
 mod L09_mltt;
 mod L10_typeclass;
 mod L11_macro;

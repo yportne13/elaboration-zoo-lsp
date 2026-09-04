@@ -8,16 +8,33 @@ pub mod syntax;
 
 use TokenKind::*;
 
-use super::empty_span;
-
-pub fn parser(input: &str, id: u32) -> Option<Vec<Decl>> {
-    super::parser::lex::lex(Span {
+/// 解析 decl 序列。decl 流必须吃完全部 token：残留 token（`;` / 垃圾
+/// token 曾把后续 decl 静默截断）一律报错，并带**首个残余 token**的内容
+/// 与偏移——`;` 结尾这类最常见错误不再无从定位。
+pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
+    lex::lex(Span {
         data: input,
         start_offset: 0,
         end_offset: input.len() as u32,
         path_id: id,
     })
-    .and_then(|(_, ret)| p_decl.many1_sep(kw(EndLine)).parse(&ret).map(|x| x.1))
+    .and_then(|(_, ret)| {
+        p_decl
+            .many1_sep(kw(EndLine).many1())
+            .parse(&ret)
+            .map(|(rest, decls)| {
+                if rest.is_empty() {
+                    Ok(decls)
+                } else {
+                    let t = &rest[0];
+                    Err(format!(
+                        "parse error: leftover token `{}` @ {},{}",
+                        t.data.0, t.start_offset, t.end_offset
+                    ))
+                }
+            })
+    })
+    .unwrap_or(Err("parse error".to_owned()))
 }
 
 macro_rules! T {
@@ -39,6 +56,7 @@ macro_rules! T {
     [->] => { $crate::L08_product_type::parser::TokenKind::Arrow };
     [=>] => { $crate::L08_product_type::parser::TokenKind::DoubleArrow };
     ['\\'] => { $crate::L08_product_type::parser::TokenKind::Lambda };
+    [:=] => { $crate::L08_product_type::parser::TokenKind::AssignEq };
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>> {
@@ -55,7 +73,6 @@ fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Str
     }
 }
 
-/// ( p )
 fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O>
 where
     P: Parser<&'b [TokenNode<'a>], O>,
@@ -63,7 +80,6 @@ where
     (kw(LParen), p, kw(RParen)).map(|c| c.1)
 }
 
-/// [ p ]
 fn square<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O>
 where
     P: Parser<&'b [TokenNode<'a>], O>,
@@ -71,7 +87,6 @@ where
     (kw(LSquare), p, kw(RSquare)).map(|c| c.1)
 }
 
-/// { p }
 fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O>
 where
     P: Parser<&'b [TokenNode<'a>], O>,
@@ -91,16 +106,18 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         .map(Raw::Var)
         .or(kw(UKeyword).map(|_| Raw::U))
         .or(kw(Hole).map(|_| Raw::Hole))
-        .or(string(Str).map(Raw::LiteralIntro))
+        .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(paren(p_raw))
         .parse(input)
 }
 
+/// 原子 + 投影后缀链。L07 只允许单个 `.field`，嵌套 struct 的 `l.a.x`
+/// 会以 leftover `.` 解析失败；L08 扩为**左结合多段投影链**（纯语法扩展，
+/// 单段与无段行为逐字不变）。
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
-    (p_atom1, (kw(T![.]), string(Ident)).option())
-        .map(|(x, t)| match t {
-            Some((_, t)) => Raw::Obj(Box::new(x), t),
-            None => x,
+    (p_atom1, (kw(T![.]), string(Ident)).many0())
+        .map(|(x, t)| {
+            t.into_iter().fold(x, |acc, (_, f)| Raw::Obj(Box::new(acc), f))
         })
         .parse(input)
 }
@@ -163,7 +180,7 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
 ) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
     square(
         (
-            p_bind, // 解析一个或多个绑定变量 xs
+            p_bind,
             (kw(Colon), p_raw).option().map(|x| match x {
                 Some((_, x)) => x,
                 None => Raw::Hole,
@@ -175,25 +192,20 @@ fn p_pi_impl_binder<'a: 'b, 'b>(
     .parse(input)
 }
 
-/// (x: A)
-fn p_pi_expl_binder<'a: 'b, 'b>(
-    input: &'b [TokenNode<'a>],
-) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
-    paren(
-        (
-            p_bind,                // 解析一个或多个绑定变量 xs
-            kw(Colon).with(p_raw), // 解析类型 A
-        )
-            .map(|(xs, a)| (xs, a.1, Icit::Expl))
-            .many0_sep(kw(T![,])),
-    ).parse(input) // 返回 (xs, a, Expl)
-}
-
 fn p_pi_binder<'a: 'b, 'b>(
     input: &'b [TokenNode<'a>],
 ) -> Option<(&'b [TokenNode<'a>], Vec<(Span<String>, Raw, Icit)>)> {
-    // 组合所有可能的解析器
-    p_pi_impl_binder.or(p_pi_expl_binder).parse(input)
+    // 解析显式参数 (x : A)
+    let explicit_binder = paren(
+        (
+            p_bind,
+            kw(Colon).with(p_raw),
+        )
+            .map(|(xs, a)| (xs, a.1, Icit::Expl))
+            .many0_sep(kw(T![,])),
+    );
+
+    p_pi_impl_binder.or(explicit_binder).parse(input)
 }
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
@@ -210,7 +222,6 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], 
         .parse(input)
 }
 
-//TODO:fun_or_spine
 fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
@@ -267,23 +278,35 @@ fn p_match<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>
         brace(
             (kw(CaseKeyword), p_pattern, kw(T![=>]), kw(EndLine).option(), p_raw)
                 .map(|(_, pattern, _, _, body)| (pattern, body))
-                .many0_sep(kw(EndLine)),
+                // 臂间允许连续空行：注释行经 preprocess 剥成空白后仍产生
+                // EndLine，单 EndLine 分隔会把「臂间注释」打成语法错误
+                .many0_sep(kw(EndLine).many1()),
         ),
     )
         .map(|(_, scrutinee, body)| Raw::Match(Box::new(scrutinee), body))
         .parse(input)
 }
 
+/// `new Name(a, b, ...)` —— 积类型的构造语法糖：脱糖成限定构造子
+/// `Name.mk` 的显式应用（`struct` 注册的构造子名就是 `{Name}.mk`）。
+/// 结果可直接接 `.field` 投影后缀链（与原子同等待遇，`new P(a, b).x`
+/// 等价 `(new P(a, b)).x`）；裸 spine 实参位仍不接 `new`（p_arg 不动）。
 fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Raw)> {
     (
-        kw(newKeyword),
+        kw(NewKeyword),
         string(Ident),
         paren(p_raw.many0_sep(kw(T![,]))),
+        (kw(T![.]), string(Ident)).many0(),
     )
-        .map(|(_, scrutinee, args)| args.into_iter()
-            .fold(Raw::Var(scrutinee.map(|x| format!("{x}.mk"))), |acc, x| 
-                Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl))
-            ))
+        .map(|(_, name, args, suffixes)| {
+            let head = args.into_iter().fold(
+                Raw::Var(name.map(|x| format!("{x}.mk"))),
+                |acc, x| Raw::App(Box::new(acc), Box::new(x), Either::Icit(Icit::Expl)),
+            );
+            suffixes
+                .into_iter()
+                .fold(head, |acc, (_, f)| Raw::Obj(Box::new(acc), f))
+        })
         .parse(input)
 }
 
@@ -337,15 +360,7 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
                 p_pi_binder
                     .many0()
                     .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
-                /*paren(p_raw.many0_sep(kw(T![,])))
-                    .option()
-                    .map(|x| x.unwrap_or_default()),*/
-                (
-                    kw(T![->]),
-                    p_raw,
-                )
-                    .option()
-                    .map(|x| x.map(|y| y.1))
+                (kw(T![->]), p_raw).option().map(|x| x.map(|y| y.1)),
             )
                 .many1_sep(kw(EndLine)),
         ),
@@ -358,6 +373,12 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
         .parse(input)
 }
 
+/// `struct Name[A: U, ...] { field: Type ... }` —— 积类型语法糖：脱糖成
+/// **单构造子 enum**，构造子名为 `{Name}.mk`，字段全部显式（Expl），参数
+/// 走隐式方括号组（`[A]` / `[A: U]`）。字段可依赖参数与在前字段
+/// （依赖积 / Sigma）：`struct Exists[A: U, P: A -> U] { witness: A, proof: P witness }`。
+/// 构造用 `new Name(e1, e2)` 或限定名 `Name.mk`；字段访问 `p.field` 走
+/// enum 投影（值级）与 `.mk` 构造子类型链剥层（类型级，见 elaboration）。
 fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
     (
         kw(StructKeyword),
@@ -366,110 +387,21 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a
         brace(
             (string(Ident), kw(T![:]), p_raw)
                 .map(|(name, _, ty)| (name, ty))
-                .many0_sep(kw(EndLine)), // named fields
-        ), /*.or(
-               paren(p_raw.many1_sep(kw(T![,]))).map(|fields| {
-                   // tuple-like struct with positional fields
-                   let mut unnamed_fields = Vec::new();
-                   for (idx, field) in fields.into_iter().enumerate() {
-                       unnamed_fields.push((empty_span(format!("{idx}")), field));
-                   }
-                   unnamed_fields
-               })
-           )*/
+                .many0_sep(kw(EndLine)), // 字段按行分隔，无逗号
+        ),
     )
         .map(|(_, name, params, fields)| Decl::Enum {
             name: name.clone(),
-            params: params.clone().into_iter()
-                //.chain(fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)))
-                .collect(),
-            cases: vec![
-                (
-                    name.clone().map(|x| format!("{x}.mk")),
-                    fields.clone().into_iter().map(|x| (x.0, x.1, Icit::Expl)).collect(),
-                    None,
-                ),
-            ]
+            params,
+            cases: vec![(
+                name.map(|x| format!("{x}.mk")),
+                fields.into_iter().map(|(n, ty)| (n, ty, Icit::Expl)).collect(),
+                None,
+            )],
         })
         .parse(input)
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
     p_def.or(p_print).or(p_enum).or(p_struct).parse(input)
-}
-
-#[test]
-fn test() {
-    let input = r#"
-def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
-def refl[A : U, x: A]: Eq[A] x x = _ => px => px
-
-def the(A : U)(x: A): A = x
-
-def m(A : U)(B : U): U -> U -> U = _
-def test = a => b => the (Eq (m a a) (x => y => y)) refl
-
-def m : U -> U -> U -> U = _
-def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
-
-
-def pr1 = f => x => f x
-def pr2 = f => x => y => f x y
-def pr3 = f => f U
-
-def Nat : U =
-    (N : U) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat =
-    a => b => N => s => z => a _ (b _ s) z
-def ten : Nat =
-    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
-def hundred = mul ten ten
-
-println hundred
-
-def mystr = "hello world"
-
-def add_tail(x: String): String = string_concat x "!"
-
-def mystr2 = add_tail mystr
-
-println mystr2
-
-enum Bool {
-    true
-    false
-}
-
-enum Nat {
-    zero
-    succ(Nat)
-}
-
-def two = succ succ zero
-
-def add(x: Nat, y: Nat): Nat =
-    match x {
-        case zero => y
-        case succ(n) => succ add n y
-    }
-
-def four = add two two
-
-println four
-
-struct Point {
-    x: Nat
-    y: Nat
-}
-
-struct Span[T] {
-    data: T
-    start: Nat
-    end: Nat
-}
-
-def get_x(p: Point): Nat = p.x
-
-"#;
-    println!("{:#?}", parser(input, 0).unwrap());
 }
