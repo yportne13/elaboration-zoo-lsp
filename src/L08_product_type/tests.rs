@@ -1676,15 +1676,17 @@ def pick(Foo: Nat) = Foo.c2
     assert!(e.contains("has no field"), "{e}");
 }
 
-/// struct 字段间容忍连续空行与注释行（注释行经 preprocess 剥成空白后
-/// 仍产生 EndLine，单 EndLine 分隔会把字段间注释打成语法错误——与
-/// match 臂的 `EndLine.many1()` 分隔同款）。
+/// struct 字段间与 enum case 间容忍连续空行与注释行（注释行经 preprocess
+/// 剥成空白后仍产生 EndLine，单 EndLine 分隔会把字段/case 间注释打成
+/// 语法错误——与 match 臂的 `EndLine.many1()` 分隔同款）。
 #[test]
 fn test_product_field_blank_lines() {
     let out = check(
         r#"
 enum Nat {
     zero
+
+    // case 间注释行
     succ(x: Nat)
 }
 

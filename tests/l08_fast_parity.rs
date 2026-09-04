@@ -1492,6 +1492,49 @@ println p.y
 }
 
 #[test]
+fn parity_product_name_identity_redef() {
+    // 同名 struct 重定义 + 类型按名合一（Sum-Sum 臂只比名字与参数槽，
+    // cases 不参与）的组合语义：后注册者覆盖 decl 表，早期 def 的登记
+    // 类型仍是旧一代 `Val::Sum` 值，但与新一代同名 Sum 判等通过——旧
+    // 函数会接受并产出新形状的值（`bad : Nat` 打印 `Bool::true`）。
+    // 这是 L06+「后注册者覆盖同名裸名」decl 表设计 + 按名类型身份的
+    // 组合结果（README §7 披露）：本用例锁定**两版一致地呈现**该语义，
+    // 不是对其的背书。
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+struct P {
+    x: Nat
+}
+
+def get(p: P): Nat = p.x
+
+struct P {
+    x: Bool
+}
+
+def bad : Nat = get(new P(true))
+println bad
+"#;
+    let b = run_basic(src);
+    let f = run_fast(src);
+    assert_eq!(
+        b.as_deref().ok(),
+        f.as_deref().ok(),
+        "判定/输出不一致，src:\n{src}\nbasic={b:?}\nfast={f:?}"
+    );
+    assert_eq!(b.as_deref().ok(), Some("Bool::true\n"), "{src}");
+}
+
+#[test]
 fn deep_workload_struct_parity() {
     // struct 负载（浅值投影 def 链 + 固定深度嵌套 Box 段）
     let src = fast::struct_src(8);

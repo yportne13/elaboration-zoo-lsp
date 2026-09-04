@@ -2268,6 +2268,26 @@ enum UItem<'a> {
         l: u32,
         count: u32,
     },
+    /// Match/Match 的结构展开屏障（弹出时执行）：scrutinee 对比完后到达
+    /// ——cases 长度检查、简化 decl 表重建、分支对与 pending 对的展开
+    /// （参考版 scrutinee unify 之后的余下步骤；此前实现把检查前置，
+    /// 失败路径的 meta 求解副作用时序与参考版分叉，错误消息正文可能
+    /// 不同——Err parity 升级为正文比对后按参考版时序归位）。
+    MatchStruct {
+        e1: Env<'a>,
+        e2: Env<'a>,
+        c1: &'a [(PatternDetail, &'a Tm<'a>)],
+        c2: &'a [(PatternDetail, &'a Tm<'a>)],
+        pd1: &'a [(V, Icit)],
+        pd2: &'a [(V, Icit)],
+        l: u32,
+    },
+    /// 分支 pattern 相等检查（参考版逐分支在分支体之前）。
+    MatchPattern(&'a PatternDetail, &'a PatternDetail),
+    /// pending 长度检查（参考版在分支体全部比完之后）。
+    MatchPendingLen(usize, usize),
+    /// pending 对的 icit 检查（参考版逐对在分支体之后）。
+    MatchIcit(Icit, Icit),
 }
 
 /// `?m args ≡ ?m args'`（同头 flex）：上游 `intersect`。逐槽（内→外）
@@ -2487,6 +2507,7 @@ fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
+    stack: &mut Vec<UItem<'a>>,
     vals: &mut Vec<V>,
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
@@ -2508,7 +2529,9 @@ fn unify_iter<'a>(
     conv.scratch1.clear();
     conv.scratch2.clear();
     let memo = &mut conv.memo;
-    let mut stack: Vec<UItem<'a>> = Vec::new();
+    // UItem 工作栈由调用方常驻复用（入口已 clear）；失败早退会留下非空
+    // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）
+    debug_assert!(stack.is_empty());
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
@@ -2561,6 +2584,67 @@ fn unify_iter<'a>(
                     env2, b2,
                 );
                 stack.push(UItem::Pair(l + count, v1, v2));
+                continue;
+            }
+            UItem::MatchStruct {
+                e1,
+                e2,
+                c1,
+                c2,
+                pd1,
+                pd2,
+                l,
+            } => {
+                // scrutinee 已比完（参考版 :766 之后）：cases 长度检查 →
+                // 简化 decl 表 → 展开分支与 pending（检查本身不烧 fuel，
+                // 与参考版一致——fuel 只随子 unify 调用/Pair 消耗）
+                if c1.len() != c2.len() {
+                    return false;
+                }
+                let declb = Rc::new(simpl_decl(bump, decls));
+                // 展开序 = 参考版执行序：逐分支 pattern 检查 → 分支体 →
+                // pending 长度检查 → 逐 pending icit 检查 → 对。LIFO 按执行
+                // 序的逆序压：pending（对 → icit，反序）→ pending 长度 →
+                // 分支（体 → pattern，反序）
+                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
+                    stack.push(UItem::Pair(l, *u1, *u2));
+                }
+                for i in (0..pd1.len()).rev() {
+                    stack.push(UItem::MatchIcit(pd1[i].1, pd2[i].1));
+                }
+                stack.push(UItem::MatchPendingLen(pd1.len(), pd2.len()));
+                for (i, ((p1, b1), (_, b2))) in
+                    c1.iter().zip(c2.iter()).enumerate().rev()
+                {
+                    stack.push(UItem::MatchBranch {
+                        b1: *b1,
+                        e1,
+                        b2: *b2,
+                        e2,
+                        declb: declb.clone(),
+                        l,
+                        count: p1.bind_count(),
+                    });
+                    stack.push(UItem::MatchPattern(p1, &c2[i].0));
+                }
+                continue;
+            }
+            UItem::MatchPattern(p1, p2) => {
+                if p1 != p2 {
+                    return false;
+                }
+                continue;
+            }
+            UItem::MatchPendingLen(n1, n2) => {
+                if n1 != n2 {
+                    return false;
+                }
+                continue;
+            }
+            UItem::MatchIcit(i1, i2) => {
+                if i1 != i2 {
+                    return false;
+                }
                 continue;
             }
             UItem::Pair(l, t, u) => (l, t, u),
@@ -2633,7 +2717,7 @@ fn unify_iter<'a>(
                 match (v_tag(t), v_tag(u)) {
                     (7, 7) => continue, // 双裸单元：unify_sp([][]) 自反成立
                     (2, 2) => {
-                        if !unify_sp_lockstep(spine, &mut stack, l, v_spine_of(t), v_spine_of(u)) {
+                        if !unify_sp_lockstep(spine, stack, l, v_spine_of(t), v_spine_of(u)) {
                             return false;
                         }
                         continue;
@@ -2739,7 +2823,7 @@ fn unify_iter<'a>(
             match (v_tag(t), v_tag(u)) {
                 (7, 7) => {}
                 (2, 2) => {
-                    if !unify_sp_lockstep(spine, &mut stack, l, v_spine_of(t), v_spine_of(u)) {
+                    if !unify_sp_lockstep(spine, stack, l, v_spine_of(t), v_spine_of(u)) {
                         return false;
                     }
                 }
@@ -2768,7 +2852,7 @@ fn unify_iter<'a>(
                 let ok = if m1 == m2 {
                     intersect_bump(
                         bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, pm_defs,
-                        &mut stack, l, m1, &a1, &a2,
+                        stack, l, m1, &a1, &a2,
                     )
                 } else {
                     flex_flex_bump(
@@ -2809,7 +2893,7 @@ fn unify_iter<'a>(
                 if memo_on {
                     stack.push(UItem::Store((t.0, u.0)));
                 }
-                if !unify_sp_lockstep(spine, &mut stack, l, h1, h2) {
+                if !unify_sp_lockstep(spine, stack, l, h1, h2) {
                     return false;
                 }
                 continue;
@@ -2854,7 +2938,7 @@ fn unify_iter<'a>(
                     let ok = if m1 == m2 {
                         intersect_bump(
                             bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel,
-                            pm_defs, &mut stack, l, m1, &a1, &a2,
+                            pm_defs, stack, l, m1, &a1, &a2,
                         )
                     } else {
                         flex_flex_bump(
@@ -2959,7 +3043,7 @@ fn unify_iter<'a>(
                     if memo_on {
                         stack.push(UItem::Store((t.0, u.0)));
                     }
-                    if !unify_sp_lockstep(spine, &mut stack, l, v_spine_of(t), v_spine_of(u)) {
+                    if !unify_sp_lockstep(spine, stack, l, v_spine_of(t), v_spine_of(u)) {
                         return false;
                     }
                     continue;
@@ -3030,42 +3114,19 @@ fn unify_iter<'a>(
                 {
                     continue;
                 }
-                // 前置结构检查（与参考版逐项判定一致，只是提前——Err 判定
-                // 不受比较顺序影响，Ok 只在全部通过时给出）
-                if c1.len() != c2.len() {
-                    return false;
-                }
-                for ((p1, _), (p2, _)) in c1.iter().zip(c2.iter()) {
-                    if p1 != p2 {
-                        return false;
-                    }
-                }
-                if pd1.len() != pd2.len() {
-                    return false;
-                }
-                for ((_, i1), (_, i2)) in pd1.iter().zip(pd2.iter()) {
-                    if i1 != i2 {
-                        return false;
-                    }
-                }
-                // 参考版比较顺序 = scrutinee → 分支体（正序）→ pending
-                // （正序）；LIFO 工作表按反序压：pending 先压（最后比）、
-                // 分支对次之、scrutinee 最后压（最先比）
-                let declb = Rc::new(simpl_decl(bump, decls));
-                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
-                    stack.push(UItem::Pair(l, *u1, *u2));
-                }
-                for ((p1, b1), (_, b2)) in c1.iter().zip(c2.iter()).rev() {
-                    stack.push(UItem::MatchBranch {
-                        b1: *b1,
-                        e1: *e1,
-                        b2: *b2,
-                        e2: *e2,
-                        declb: declb.clone(),
-                        l,
-                        count: p1.bind_count(),
-                    });
-                }
+                // 比较顺序与参考版逐项对齐（含失败路径的副作用时序）：
+                // scrutinee 最先比；cases/pending 的长度与 pattern 检查在
+                // scrutinee 之后由 MatchStruct 屏障执行（简化 decl 表的
+                // 重建同样推迟到检查通过）。——
+                stack.push(UItem::MatchStruct {
+                    e1: *e1,
+                    e2: *e2,
+                    c1,
+                    c2,
+                    pd1,
+                    pd2,
+                    l,
+                });
                 stack.push(UItem::Pair(l, *s1, *s2));
                 continue;
             }
@@ -4222,6 +4283,10 @@ pub(crate) struct Machine {
     quote_done: Vec<&'static Tm<'static>>,
     quote_work: Vec<W<'static>>,
     unify_work: Vec<W<'static>>,
+    /// unify 的 UItem 主工作栈（同上口径；`UItem::MatchBranch` 持
+    /// `Rc`——失败早退留下的 Rc 随下次入口 clear 正确减计，非 Drop 项
+    /// 是引用 Copy，'static 存放无析构风险）。
+    unify_stack: Vec<UItem<'static>>,
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
     /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项（表随
     /// 调用新鲜是口径的一部分，绝不跨 reset 持有）。
@@ -4251,6 +4316,7 @@ impl Machine {
             quote_done: Vec::new(),
             quote_work: Vec::new(),
             unify_work: Vec::new(),
+            unify_stack: Vec::new(),
             quote_memo: FxHashMap::default(),
         }
     }
@@ -4681,16 +4747,22 @@ impl Machine {
             pm_defs,
             pm_solvable,
             unify_work,
+            unify_stack,
             ..
         } = self;
-        // SAFETY：同 eval_work——'static 存放口径，进核前 clear。
+        // SAFETY：同 eval_work——'static 存放口径，进核前 clear（unify
+        // 的失败早退会把非空栈留在槽里，靠入口 clear 兜住）。
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(unify_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        let stack: &mut Vec<UItem<'a>> =
+            unsafe { &mut *(unify_stack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
         work.clear();
+        stack.clear();
         unify_iter(
             bump,
             spine,
             work,
+            stack,
             vals,
             icits,
             defs,

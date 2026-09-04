@@ -125,10 +125,10 @@ Machine 常驻缓冲（`'static` 存放口径 + 进核前 clear，quote memo 同
 
 ### 双 oracle
 
-`cargo test --test l08_fast_parity`（72 例）：DEMO 全串（含积类型段）、
-tests.rs 全部既有用例源码、积类型八连（基础 / 泛型 / 依赖 Sigma /
+`cargo test --test l08_fast_parity`（73 例）：DEMO 全串（含积类型段）、
+tests.rs 全部既有用例源码、积类型九连（基础 / 泛型 / 依赖 Sigma /
 投影链与部分应用 / Err 判定 / 剥链精确检查位 / new 直接接投影 /
-局部遮蔽与字段空行）、
+局部遮蔽与字段空行 / 同名重定义按名身份）、
 继承的 Err parity、深负载
 church / strchain / global / match / enum / **struct**（快版 `Tycker`
 与参考版 `bench_check_nf` 节点数互检）、稳态复用。判据：**Ok 输出
@@ -151,25 +151,31 @@ cargo run --release --bin l08bench -- --workload all --max-k 13 --rounds 3
 问题，但双 oracle 同负载对比就失去意义。**这是参考版表示的成本，不是
 语义的**——积类型的深值恰是孪生最该赢的地方，留给读者。
 
-实测（Windows 10，release，rounds=3 取 min；参考版超线性负载只列
-k≤11，同 L07 readme 惯例）：
+实测（Windows 10，release，**轮级交错计时**、取 min：同轮内依次跑各
+实现，消除时间窗相关的系统性偏置——此前 fast_ss 块恒先于 fast 执行，
+环境漂移被 ss 单侧吸收，制造出假性的稳态劣势；fast/fast_ss 15 轮、
+basic 3 轮；参考版超线性负载只列 k≤11，同 L07 readme 惯例）：
 
 ```text
 == workload: church ==（check + nf）
-k=12  n=8192    fast=0.727ms         basic=8.987ms      (≈12×)
+k=12  n=8192    fast=0.801ms         basic=9.740ms      (≈12×)
 == workload: strchain ==（每层 prim 触发；basic 二次方）
-k=11  n=4096    fast=3.673ms*        basic=2754.6ms     (≈750×)
+k=11  n=4096    fast=6.013ms*        basic=2648.0ms     (≈440×)
 == workload: global ==（可变全局 + 重入 prim）
-k=11  n=4096    fast=9.562ms*        basic=499.8ms      (≈52×)
+k=11  n=4096    fast=7.802ms*        basic=508.1ms      (≈65×)
 == workload: match ==（L07 特色：自递归依赖 match def 链）
-k=13  n=16384   fast=0.048ms*        basic=0.537ms      (≈11×)
+k=13  n=16384   fast_memo=0.049ms*   basic=0.539ms      (≈11×)
 == workload: enum ==（L07 特色：GADT + 投影 + 索引等式）
-fast=0.106ms          basic=1.033ms      (≈10×)
+fast=0.086ms          basic=0.741ms      (≈9×)
 == workload: struct ==（**L08 特色**：类型级 .mk 剥链 + new 构造链）
-k=9   n=1024    fast=1.174ms*        basic=216.0ms      (≈184×)
-k=10  n=2048    fast=2.348ms*        basic=842.8ms      (≈359×)
-k=11  n=4096    fast=5.250ms*        basic=3203.0ms     (≈610×)
+k=9   n=1024    fast=1.081ms*        basic=215.9ms      (≈200×)
+k=10  n=2048    fast=2.186ms*        basic=860.1ms      (≈393×)
+k=11  n=4096    fast=4.432ms*        basic=3242.9ms     (≈732×)
 ```
+
+交错后 fast_ss 与 fast 打平或反超（struct k=11 ss=4.453 vs
+fast=4.432，church k=12 ss 反超 7%）——稳态复用的内存有界优势不再被
+测量偏置掩盖。
 
 ### 已知偏差（与参考版）
 
@@ -192,6 +198,14 @@ k=11  n=4096    fast=5.250ms*        basic=3203.0ms     (≈610×)
 - 同名"参数 vs 字段"的投影按**参数槽优先**（与值级 `project` 同序）。
 - struct 值上的 `match` 只有单臂变量模式有实际意义（单构造子全覆盖，
   无精化可做）。
+- **同名重定义 + 按名类型身份**（L06+ decl 表设计的组合效应）：`struct
+  P` 两次注册时后注册者覆盖 decl 表（§1 双轨别名同规则），而 Sum-Sum
+  合一只比名字与参数槽（cases 不参与）——早期 def 的登记类型（旧一代
+  `Val::Sum` 值）与新一代同名 Sum 判等通过，旧函数会接受并产出新形状
+  的值（`struct P { x: Nat }` → `struct P { x: Bool }` 后，
+  `def get(p: P): Nat = p.x` 对 `new P(true)` 判过并返回 `Bool::true`）。
+  `enum P` 与 `struct P` 互覆同理。锁定用例
+  `parity_product_name_identity_redef`（记录现状，非背书）。
 
 ## 8. 测试
 
@@ -208,7 +222,7 @@ k=11  n=4096    fast=5.250ms*        basic=3203.0ms     (≈610×)
   部分应用构造子）；另 1 个 `--ignored` 深度探针。
 - `cargo test --test l08_blackbox_v2`：**51**（L07 第二卷基线原样通过，
   另 2 个 `--ignored` 探针）。
-- `cargo test --test l08_fast_parity`：**72**（§6 双 oracle：26 个 parity
+- `cargo test --test l08_fast_parity`：**73**（§6 双 oracle：27 个 parity
   用例；`#[cfg(test)]` 的 45 个 lib 用例（含 lexer 回归）随模块在本目标
   内执行并计入总运行数——lexer 回归两版共享同一解析器，不构成
   parity 对照）。
@@ -246,6 +260,22 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
 - `test_demo` 补断言时发现两段示例源码一直带着 parse error（花括号
   函数体 + enum 闭括号后缺空行，旧版零断言静默通过），已修正为
   DEMO 形态。
+
+第三轮评审（对抗验证 + 补扫 + 性能复审）另附：
+
+- 孪生 Match/Match 臂的结构检查从「前置」改为 **MatchStruct 屏障**
+  （scrutinee 比完后弹出执行），pattern/icit/长度检查与分支对展开的
+  时序与参考版逐项对齐——Err 正文 parity 升级为正文比对后，前置检查
+  在极端路径（scrutinee 求解副作用 + 结构失配）下会分叉错误消息；
+- unify 的 UItem 主工作栈也常驻化（此前只复用了 eval 转发缓冲，每对
+  值比较仍分配一次栈）；
+- enum case 分隔同步容忍连续空行 / 注释行（与 match 臂 / struct 字段
+  同款）；
+- `l08bench` 改**轮级交错计时**：fast_ss 块此前恒先于 fast 执行，
+  时间窗干扰被 ss 单侧吸收，制造出 ~10% 的假性稳态劣势——交错后
+  fast_ss 与 fast 打平或反超，§6 基准表全量重录；
+- §7 补充披露同名重定义 × 按名类型身份的组合语义（L06+ decl 表设计
+  的组合效应，`parity_product_name_identity_redef` 锁定）。
 
 ## 10. 参考资料
 

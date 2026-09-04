@@ -362,7 +362,10 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
                     .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
                 (kw(T![->]), p_raw).option().map(|x| x.map(|y| y.1)),
             )
-                .many1_sep(kw(EndLine)),
+                // case 间允许连续空行：注释行经 preprocess 剥成空白后仍产生
+                // EndLine，单 EndLine 分隔会把「case 间注释」打成语法错误
+                // （同 match 臂 / struct 字段）
+                .many1_sep(kw(EndLine).many1()),
         ),
     )
         .map(|(_, name, params, fields)| Decl::Enum {

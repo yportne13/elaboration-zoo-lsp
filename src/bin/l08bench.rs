@@ -176,54 +176,79 @@ fn run(cli: Cli) {
 
             let mut rows: Vec<(&str, u128, u128)> = Vec::new();
 
-            if want("fast_ss") {
-                let mut ts = Vec::new();
-                let mut tycker = Tycker::new();
-                // 预热 1 次
-                assert_eq!(tycker.bench_check_nf(&raw), fast_nodes);
-                for _ in 0..cli.rounds {
-                    let start = Instant::now();
-                    tycker.bench_check_nf(&raw);
-                    ts.push(start.elapsed().as_micros());
-                }
-                rows.push(("fast_ss", *ts.iter().min().unwrap(), median(&mut ts)));
+            // 轮级交错计时：同一轮内依次跑各实现，消除时间窗相关的系统性
+            // 偏置（此前 fast_ss 块恒先于 fast 执行，环境漂移被 ss 单侧
+            // 吸收，制造出假性的稳态劣势）。min 统计量下去相关。
+            let mut ts_ss: Vec<u128> = Vec::new();
+            let mut ts_fast: Vec<u128> = Vec::new();
+            let mut ts_memo: Vec<u128> = Vec::new();
+            let mut ts_basic: Vec<u128> = Vec::new();
+            let mut tycker_ss = if want("fast_ss") {
+                Some(Tycker::new())
+            } else {
+                None
+            };
+            // 预热各 1 次（同时验证通过；不计入计时）
+            if let Some(t) = tycker_ss.as_mut() {
+                assert_eq!(t.bench_check_nf(&raw), fast_nodes);
             }
-
-            if want("fast") {
-                let mut ts = Vec::new();
-                for _ in 0..cli.rounds {
+            if want("basic") {
+                L08_product_type::bench_check_nf(&raw);
+            }
+            for _ in 0..cli.rounds {
+                if let Some(t) = tycker_ss.as_mut() {
+                    let start = Instant::now();
+                    t.bench_check_nf(&raw);
+                    ts_ss.push(start.elapsed().as_micros());
+                }
+                if want("fast") {
                     let start = Instant::now();
                     // 一次性口径：每轮新建（Tycker::new 的 bump 预分配计入
                     // 计时——参考版 Infer::new 的建表同样在 bench_check 内）
                     let mut tycker = Tycker::new();
                     tycker.bench_check_nf(&raw);
-                    ts.push(start.elapsed().as_micros());
+                    ts_fast.push(start.elapsed().as_micros());
                 }
-                rows.push(("fast", *ts.iter().min().unwrap(), median(&mut ts)));
-            }
-
-            // quote 记忆化口径（有 quote 的负载才出赛）
-            if want("fast_memo") && nf_workload {
-                let mut ts = Vec::new();
-                for _ in 0..cli.rounds {
+                // quote 记忆化口径（有 quote 的负载才出赛）
+                if want("fast_memo") && nf_workload {
                     let start = Instant::now();
                     let mut tycker = Tycker::new(); // 同 fast：新建计入计时
                     tycker.bench_check_nf_memo(&raw);
-                    ts.push(start.elapsed().as_micros());
+                    ts_memo.push(start.elapsed().as_micros());
                 }
-                rows.push(("fast_memo", *ts.iter().min().unwrap(), median(&mut ts)));
-            }
-
-            if want("basic") && !(basic_too_slow && cli.only.is_none()) {
-                let mut ts = Vec::new();
-                // 预热 1 次（同时验证通过）
-                L08_product_type::bench_check_nf(&raw);
-                for _ in 0..cli.rounds {
+                if want("basic") && !(basic_too_slow && cli.only.is_none()) {
                     let start = Instant::now();
                     L08_product_type::bench_check_nf(&raw);
-                    ts.push(start.elapsed().as_micros());
+                    ts_basic.push(start.elapsed().as_micros());
                 }
-                rows.push(("basic", *ts.iter().min().unwrap(), median(&mut ts)));
+            }
+            if want("fast_ss") {
+                rows.push((
+                    "fast_ss",
+                    ts_ss.iter().min().unwrap_or(&0).to_owned(),
+                    median(&mut ts_ss),
+                ));
+            }
+            if want("fast") {
+                rows.push((
+                    "fast",
+                    ts_fast.iter().min().unwrap_or(&0).to_owned(),
+                    median(&mut ts_fast),
+                ));
+            }
+            if want("fast_memo") && nf_workload {
+                rows.push((
+                    "fast_memo",
+                    ts_memo.iter().min().unwrap_or(&0).to_owned(),
+                    median(&mut ts_memo),
+                ));
+            }
+            if want("basic") && !(basic_too_slow && cli.only.is_none()) {
+                rows.push((
+                    "basic",
+                    ts_basic.iter().min().unwrap_or(&0).to_owned(),
+                    median(&mut ts_basic),
+                ));
             }
 
             let fastest = rows.iter().map(|r| r.1).min().unwrap();
