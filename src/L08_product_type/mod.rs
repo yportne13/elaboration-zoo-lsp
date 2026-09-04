@@ -345,11 +345,6 @@ impl Infer {
         true
     }
 
-    /// 当前 fuel 余量（调试）
-    /// 元变量探测 + decl 表展开 + 卡住投影的再投影 + 模式精化展开。
-    /// 深度防护：meta 解链可能形成间接环（solve 无跨 meta occurs check），
-    /// 展开会无限递归——只在**展开递归**时消耗 fuel（高频直通路径不消耗），
-    /// fuel 耗尽时停止展开，把值当作未解处理。
     /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不展开 pm_defs 精化、
     /// 不做 Match 重选。`invert` / `prune_vflex` 关心的是"元变量被应用在
     /// 哪些槽位上"——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的
@@ -362,6 +357,10 @@ impl Infer {
         }
     }
 
+    /// 元变量探测 + decl 表展开 + 卡住投影的再投影 + 模式精化展开。
+    /// 深度防护：meta 解链可能形成间接环（solve 无跨 meta occurs check），
+    /// 展开会无限递归——只在**展开递归**时消耗 fuel（高频直通路径不消耗），
+    /// fuel 耗尽时停止展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
         /// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。
         fn burn(cell: &std::cell::Cell<u32>) -> bool {

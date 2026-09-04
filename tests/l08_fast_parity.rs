@@ -45,7 +45,44 @@ fn run_fast(src: &str) -> Result<String, L08_product_type::Error> {
         .unwrap()
 }
 
-/// Oracle：参考版与性能版的 Ok 输出逐字节一致；Err 判定一致。
+/// Err 文案归一化：剥掉 `@ 数字[,数字]` 形态的源码偏移（文档化偏差：
+/// 参考版错误文案的 Debug-Span 携带源码偏移，快版全零），比对正文形态。
+fn norm_err(e: &str) -> String {
+    let b = e.as_bytes();
+    let mut out = String::with_capacity(e.len());
+    let mut i = 0usize;
+    while i < b.len() {
+        if b[i] == b'@' && i + 1 < b.len() && b[i + 1] == b' ' {
+            let mut j = i + 2;
+            let s0 = j;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > s0 {
+                if j < b.len() && b[j] == b',' {
+                    let mut k = j + 1;
+                    let s1 = k;
+                    while k < b.len() && b[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    if k > s1 {
+                        j = k;
+                    }
+                }
+                out.push_str("@_");
+                i = j;
+                continue;
+            }
+        }
+        let ch = e[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Oracle：参考版与性能版的 Ok 输出逐字节一致；Err 判定一致，且 span
+/// 归一化后的错误正文形态一致。
 fn assert_parity(src: &str) {
     let b = run_basic(src);
     let f = run_fast(src);
@@ -54,7 +91,11 @@ fn assert_parity(src: &str) {
             b, f,
             "Ok 输出双实现不一致，src:\n{src}\n--- basic ---\n{b}--- fast ---\n{f}"
         ),
-        (Err(_), Err(_)) => {}
+        (Err(b), Err(f)) => assert_eq!(
+            norm_err(&b.to_string()),
+            norm_err(&f.to_string()),
+            "Err 正文（span 归一化后）双实现不一致，src:\n{src}\n--- basic ---\n{b}\n--- fast ---\n{f}"
+        ),
         _ => panic!(
             "判定不一致（basic={}，fast={}），src:\n{src}\nbasic-err={b:?}\nfast-err={f:?}",
             b.as_ref().map(|_| "Ok").unwrap_or("Err"),
@@ -1398,6 +1439,56 @@ fn parity_product_errors() {
     ] {
         assert_parity(src);
     }
+}
+
+#[test]
+fn parity_product_shadow_and_blank_lines() {
+    // 投影接收者的局部遮蔽：`Foo.c2` 在 `Foo` 是局部 binder 时必须走投影
+    //（旧实现先查 decl 表，静默解析成全局构造子——错误 Ok），同名但类型
+    // 不可投影时两版一致报 has no field
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c1(x: Nat)
+    c2
+}
+
+struct S {
+    c2: Foo
+}
+
+def s : S = new S(c1 zero)
+def pick(Foo: S) = Foo.c2
+println (pick s)
+"#,
+    );
+    assert_parity(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum Foo {\n    c1(x: Nat)\n    c2\n}\n\ndef pick(Foo: Nat) = Foo.c2\n",
+    );
+    // struct 字段间连续空行 / 注释行（注释行剥成空白后仍是 EndLine）
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct P {
+    x: Nat
+
+    // 注释行 + 空行
+    y: Nat
+}
+
+def p = new P(zero, (succ (succ zero)))
+println p.y
+"#,
+    );
 }
 
 #[test]

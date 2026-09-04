@@ -53,8 +53,9 @@
 //! 测试 + `tests/l08_fast_parity.rs`）。已知偏差（仅错误消息内容，不影响
 //! 判定与 Ok 输出）：快版导出项的名字 Span 全零，参考版错误文案里的
 //! Debug-Span 携带源码偏移，同构但数字不同。unify 的位相等捷径对 tag 7
-//! 与 **Obj 头的链**关闭（参考版无 `(Lit, Lit)` / `(Obj, Obj)` 臂——同
-//! 单元也不可合一，捷径放行会误 Accept）。
+//! 与 **Obj 头的链**关闭：`(Lit, Lit)` 参考版无自反臂（同字面量也 Err），
+//! `(Obj, Obj)` 走专门合同臂（比较接收者 + 实参）——两者都不做字面
+//! 自反放行；捷径放行会误 Accept。
 
 use bumpalo::Bump;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -530,8 +531,8 @@ fn head_kind(spine: &Spine, v: V) -> u8 {
     }
 }
 
-/// 链（或裸单元）是否 Obj 头——unify 的位相等捷径对它关闭（参考版无
-/// `(Obj, Obj)` 臂，同单元也须走 `_` → Err）。
+/// 链（或裸单元）是否 Obj 头——unify 的位相等捷径对它关闭（`(Obj, Obj)`
+/// 走专门合同臂比较接收者 + 实参；捷径关闭使同单元也进专臂而非字面放行）。
 #[inline]
 fn is_objheaded(spine: &Spine, v: V) -> bool {
     head_kind(spine, v) == HK_OBJ
@@ -1170,7 +1171,15 @@ fn force<'a>(
                                     spine.collect_args(h, &mut args);
                                     let mut t = p;
                                     for &(a, i) in args.iter().rev() {
-                                        t = spine.push(t, a, i);
+                                        // 命中路径须走 vapp1（参考版 vAppSp
+                                        // 逐步 vApp 同款）：字段值可能是 Lam
+                                        // 闭包（β）或卡住 Match（吸收 pending）
+                                        // ——spine.push 只压中性槽，会搁浅
+                                        t = vapp1(
+                                            bump, spine, &mut work, &mut vals, &mut icits,
+                                            defs, metas, decls, mmap, fuel, pm_defs, t, a,
+                                            i,
+                                        );
                                     }
                                     v = t;
                                 }
@@ -2404,7 +2413,7 @@ fn flex_flex_bump<'a>(
 
 /// 同头链（unify_sp）的实参 lockstep 比较：长度失配即败；实参 icit 不比
 /// （类型已定，上游同款）。位相等的实参对免比（tag 7 与 Obj 头链除外——
-/// 字面量恒败、Decl/Prim 走同名分派、Obj 无臂恒败）。
+/// 字面量恒败、Decl/Prim 走同名分派、Obj 走 `(Obj, Obj)` 专臂）。
 #[allow(clippy::too_many_arguments)]
 fn unify_sp_lockstep<'a>(
     spine: &Spine,
@@ -2428,7 +2437,8 @@ fn unify_sp_lockstep<'a>(
             (e.f, e.a)
         };
         // 位相等后缀：实参对免比（tag 7 除外）；函数部分对仍须入栈。
-        // Obj 头的链（tag 2 + hk=Obj）同样不免——参考版恒败。
+        // Obj 头的链（tag 2 + hk=Obj）同样不免——接收者锁在头单元里，
+        // lockstep 看不见，须交回 (Obj, Obj) 专臂。
         let skip1 = a1.0 == a2.0 && v_tag(a1) != 7 && !(v_tag(a1) == 2 && spine.stack[v_spine_of(a1)].hk == HK_OBJ);
         if skip1 {
             if f1.0 != f2.0 {
@@ -2469,8 +2479,9 @@ fn unify_sp_lockstep<'a>(
 /// （双 flex = intersect/flex_flex、同头 lockstep、异头单 flex = solve）→
 /// flex 求解 → LiteralType/宽松臂 → Prim/Prim → Sum/Sum → SumCase/SumCase
 /// → Match/Match → Match 严格 η → 失配。
-/// **位相等捷径与实参跳过对 tag 7 与 Obj 头链关闭**：参考版 unify 无
-/// `(Lit, Lit)` / `(Obj, Obj)` 臂——同字面量也 Err，同单元 Obj 也 Err。
+/// **位相等捷径与实参跳过对 tag 7 与 Obj 头链关闭**：`(Lit, Lit)` 参考版
+/// 无自反臂——同字面量也 Err；`(Obj, Obj)` 走专门合同臂——同单元也须比
+/// 接收者 + 实参，不做字面自反放行。
 #[allow(clippy::too_many_arguments)]
 fn unify_iter<'a>(
     bump: &'a Bump,
@@ -2561,7 +2572,7 @@ fn unify_iter<'a>(
         }
         fuel.set(f - 1);
         // 位相等：同一值。tag 7 与 Obj 头链例外（见函数注释——参考版对
-        // 字面量/Obj 无自反性，Decl/Prim 需同名分派）
+        // 字面量无自反性、Obj 走专臂，Decl/Prim 需同名分派）
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
             continue;
         }
@@ -2699,8 +2710,14 @@ fn unify_iter<'a>(
         // 比接收者，再比 spine 实参（裸×裸接收者对入栈即完；链×链加
         // lockstep；裸×链长度失配即败——与参考版 (Obj, Obj) 臂语义一致）。
         // 卡住投影的两种形态（裸 XCell 单元 / 带实参 spine 链）统一在此
-        // 处理，接收者住在头单元里、lockstep 看不见，单独入栈。——
-        if head_kind(spine, t) == HK_OBJ && head_kind(spine, u) == HK_OBJ {
+        // 处理，接收者住在头单元里、lockstep 看不见，单独入栈。tag 预门控
+        // （head_kind 只对 tag 7/2 可能给 HK_OBJ）把每 Pair 的固定税从
+        // 两次 head_kind 降为位比较。——
+        if (v_tag(t) == 7 || v_tag(t) == 2)
+            && (v_tag(u) == 7 || v_tag(u) == 2)
+            && head_kind(spine, t) == HK_OBJ
+            && head_kind(spine, u) == HK_OBJ
+        {
             let (hc1, hc2) = (
                 if v_tag(t) == 7 { t } else { spine.spine_head(v_spine_of(t)) },
                 if v_tag(u) == 7 { u } else { spine.spine_head(v_spine_of(u)) },
@@ -3031,9 +3048,13 @@ fn unify_iter<'a>(
                         return false;
                     }
                 }
-                // 分支对后压（先比）、pending 次之、scrutinee 最后压（最先
-                // 比）——对齐参考版的失败顺序
+                // 参考版比较顺序 = scrutinee → 分支体（正序）→ pending
+                // （正序）；LIFO 工作表按反序压：pending 先压（最后比）、
+                // 分支对次之、scrutinee 最后压（最先比）
                 let declb = Rc::new(simpl_decl(bump, decls));
+                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
+                    stack.push(UItem::Pair(l, *u1, *u2));
+                }
                 for ((p1, b1), (_, b2)) in c1.iter().zip(c2.iter()).rev() {
                     stack.push(UItem::MatchBranch {
                         b1: *b1,
@@ -3044,9 +3065,6 @@ fn unify_iter<'a>(
                         l,
                         count: p1.bind_count(),
                     });
-                }
-                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
-                    stack.push(UItem::Pair(l, *u1, *u2));
                 }
                 stack.push(UItem::Pair(l, *s1, *s2));
                 continue;
@@ -4194,6 +4212,20 @@ pub(crate) struct Machine {
     /// 当前可被特化方程求解的 rigid 层级（= 当前子句的 bind 槽）。只在
     /// 模式走查与探测期间非空；分支体检查期间必须为空。
     pm_solvable: Vec<u32>,
+    /// eval / quote / unify 的可复用工作栈。`'static` 仅是**存放口径**：
+    /// 进核前 clear，借出期间写入的当轮条目不跨调用存活——与 `conv` /
+    /// `icits` 的「进核前 clear」纪律同款。`W`/`QJob`/`UItem` 均为无 Drop
+    /// 的 Copy 枚举，`Vec` 布局与元素生命周期参数无关，出借时按当次
+    /// 生命周期重写指针类型（SAFETY 见各包装方法）。
+    eval_work: Vec<W<'static>>,
+    quote_tasks: Vec<QJob<'static>>,
+    quote_done: Vec<&'static Tm<'static>>,
+    quote_work: Vec<W<'static>>,
+    unify_work: Vec<W<'static>>,
+    /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
+    /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项（表随
+    /// 调用新鲜是口径的一部分，绝不跨 reset 持有）。
+    quote_memo: QuoteMemo<'static>,
 }
 
 impl Machine {
@@ -4214,12 +4246,20 @@ impl Machine {
             fuel: Cell::new(UNIFY_FUEL),
             pm_defs: Vec::new(),
             pm_solvable: Vec::new(),
+            eval_work: Vec::new(),
+            quote_tasks: Vec::new(),
+            quote_done: Vec::new(),
+            quote_work: Vec::new(),
+            unify_work: Vec::new(),
+            quote_memo: FxHashMap::default(),
         }
     }
 
     /// 每轮 reset：metacontext + 名字表/轨迹/环境区域 + 可变全局 + pm 事实
     /// 表全部清空（builtin 的重注册在 [`Machine::prime_round`]；decl 表随
-    /// Cxt 的 Rc 释放）。
+    /// Cxt 的 Rc 释放）。spine 栈同轮清空（保容量）——tag-2 句柄只被当轮
+    /// bump 值 / metas / defs / mutable_map / pm_defs 持有，轮边界后无任何
+    /// 旧句柄可达，截断防稳态复用下的无界增长。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
@@ -4228,6 +4268,7 @@ impl Machine {
         self.mutable_map.borrow_mut().clear();
         self.pm_defs.clear();
         self.pm_solvable.clear();
+        self.spine.stack.clear();
         self.fuel.set(UNIFY_FUEL);
     }
 
@@ -4482,12 +4523,19 @@ impl Machine {
             mutable_map,
             fuel,
             pm_defs,
+            eval_work,
             ..
         } = self;
+        // SAFETY：'static 仅是存放口径（字段注释）。W 无 Drop、Vec 布局与
+        // 生命周期参数无关；借出期 = 本次调用，槽内容下次借出前必 clear，
+        // 任何 'a 条目都不会被以 'static 读到。
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(eval_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        work.clear();
         eval_iter(
             bump,
             spine,
-            &mut Vec::new(),
+            work,
             vals,
             icits,
             defs,
@@ -4517,14 +4565,28 @@ impl Machine {
             mutable_map,
             fuel,
             pm_defs,
+            quote_tasks,
+            quote_done,
+            quote_work,
             ..
         } = self;
+        // SAFETY：同 eval_work——'static 存放口径，进核前 clear。
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(quote_tasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> = unsafe {
+            &mut *(quote_done as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>)
+        };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(quote_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        tasks.clear();
+        done.clear();
+        work.clear();
         quote_iter(
             bump,
             spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             vals,
             icits,
             defs,
@@ -4539,7 +4601,8 @@ impl Machine {
         )
     }
 
-    /// quote 的记忆化口径（表随本次调用新建，绝不跨 reset 持有）。
+    /// quote 的记忆化口径（表容量跨调用复用、内容每次调用 clear，绝不跨
+    /// reset 持有条目——meta 求解会让旧条目过期）。
     fn quote_memo<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4556,15 +4619,33 @@ impl Machine {
             mutable_map,
             fuel,
             pm_defs,
+            quote_tasks,
+            quote_done,
+            quote_work,
+            quote_memo,
             ..
         } = self;
-        let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        // SAFETY：同 eval_work——'static 存放口径，进核前 clear。
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(quote_tasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> = unsafe {
+            &mut *(quote_done as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>)
+        };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(quote_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        let memo: &mut QuoteMemo<'a> = unsafe {
+            &mut *(quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>)
+        };
+        tasks.clear();
+        done.clear();
+        work.clear();
+        memo.clear();
         quote_iter(
             bump,
             spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             vals,
             icits,
             defs,
@@ -4575,13 +4656,13 @@ impl Machine {
             pm_defs,
             level,
             v,
-            Some(&mut memo),
+            Some(&mut *memo),
         )
     }
 
-    fn unify(
+    fn unify<'a>(
         &mut self,
-        bump: &Bump,
+        bump: &'a Bump,
         decls: &FxHashMap<String, DeclEntryF>,
         l: u32,
         t: V,
@@ -4599,12 +4680,17 @@ impl Machine {
             fuel,
             pm_defs,
             pm_solvable,
+            unify_work,
             ..
         } = self;
+        // SAFETY：同 eval_work——'static 存放口径，进核前 clear。
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(unify_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        work.clear();
         unify_iter(
             bump,
             spine,
-            &mut Vec::new(),
+            work,
             vals,
             icits,
             defs,
@@ -4895,11 +4981,30 @@ impl Machine {
             }
 
             Raw::Obj(x, f) => {
-                // 限定构造子引用 `Enum.case`
+                // 限定构造子引用 `Enum.case`——**局部遮蔽优先**：接收者名字
+                // 已被局部 binder 占用时必须走正常投影（与 Raw::Var 的
+                // 「局部先于全局」同序），否则同名局部会让 `Foo.c2` 静默
+                // 解析成全局构造子（类型恰巧对上即是错误的 Ok）
                 if let Raw::Var(n) = &**x {
-                    let key = format!("{}.{}", n.data, f.data);
-                    if let Some(e) = cxt.decl.borrow().get(key.as_str()) {
-                        return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&key))), e.ty));
+                    let shadowed = if !NO_NAME_MAP.load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.name_map.contains_key(n.data.as_str())
+                    } else {
+                        // 消融口径：沿 types 链线性找名（跳过 inserted binder）
+                        let mut tys = cxt.types;
+                        loop {
+                            match tys {
+                                Some(tc) if tc.source && tc.name == n.data => break true,
+                                Some(tc) => tys = tc.next,
+                                None => break false,
+                            }
+                        }
+                    };
+                    if !shadowed {
+                        let key = format!("{}.{}", n.data, f.data);
+                        if let Some(e) = cxt.decl.borrow().get(key.as_str()) {
+                            return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&key))), e.ty));
+                        }
                     }
                 }
                 let (tm, ty) = self.infer_expr(bump, cxt, x)?;
@@ -5246,22 +5351,31 @@ impl Machine {
                 ret_type,
                 body,
             } => {
-                // 参数折叠：typ = Π 参数. 返回类型；bod = λ 参数. 体
-                let mut typ = ret_type.clone();
+                // 参数折叠：typ = Π 参数. 返回类型；bod = λ 参数. 体。
+                // 无参时零克隆（借用直用），有参才构造包装层
+                let mut typ = std::borrow::Cow::Borrowed(ret_type);
                 for (n, a, i) in params.iter().rev() {
-                    typ = Raw::Pi(n.clone(), *i, Box::new(a.clone()), Box::new(typ));
+                    typ = std::borrow::Cow::Owned(Raw::Pi(
+                        n.clone(),
+                        *i,
+                        Box::new(a.clone()),
+                        Box::new(typ.into_owned()),
+                    ));
                 }
-                let mut bod = body.clone();
+                let mut bod = std::borrow::Cow::Borrowed(body);
                 for (n, _, i) in params.iter().rev() {
-                    bod = Raw::Lam(n.clone(), Either::Icit(*i), Box::new(bod));
+                    bod = std::borrow::Cow::Owned(Raw::Lam(
+                        n.clone(),
+                        Either::Icit(*i),
+                        Box::new(bod.into_owned()),
+                    ));
                 }
                 // 借用块化：Ref 带 Drop，作用域尾才释放——顶层的借力会压到
                 // 整个 match，与后面的 decl_insert（borrow_mut）冲突
-                let (typ_tm, vtyp) = {
+                let vtyp = {
                     let decls = cxt.decl.borrow();
                     let typ_tm = self.check(bump, cxt, &typ, v_u())?;
-                    let vtyp = self.eval(bump, &decls, cxt.env, typ_tm);
-                    (typ_tm, vtyp)
+                    self.eval(bump, &decls, cxt.env, typ_tm)
                 };
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实
                 // 值覆盖。占位只存在于克隆出来的 decl 表里，不影响外层。
@@ -5346,11 +5460,10 @@ impl Machine {
                 let bod = params.iter().rev().fold(sum, |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let (typ_tm, vtyp) = {
+                let vtyp = {
                     let decls = cxt.decl.borrow();
                     let typ_tm = self.check(bump, cxt, &typ, v_u())?;
-                    let vtyp = self.eval(bump, &decls, cxt.env, typ_tm);
-                    (typ_tm, vtyp)
+                    self.eval(bump, &decls, cxt.env, typ_tm)
                 };
                 // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）
                 let fake = decl_insert(
@@ -5532,7 +5645,16 @@ impl<'a> Cxt<'a> {
 /// 键，查表取后者）。写时复制克隆整表是 O(n)/次 → def 链 O(n²)
 /// （strchain k=12 实测 830ms 的根因），平铺后 ~13ms。
 fn decl_insert<'a>(cxt: &Cxt<'a>, k: &str, e: DeclEntryF) -> Cxt<'a> {
-    cxt.decl.borrow_mut().insert(k.to_string(), e);
+    {
+        let mut d = cxt.decl.borrow_mut();
+        // 覆盖写（占位 → 终值）不重分配键串
+        match d.get_mut(k) {
+            Some(slot) => *slot = e,
+            None => {
+                d.insert(k.to_string(), e);
+            }
+        }
+    }
     Cxt {
         env: cxt.env,
         types: cxt.types,

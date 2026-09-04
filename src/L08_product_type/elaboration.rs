@@ -141,12 +141,22 @@ impl Infer {
                 ret_type,
                 body,
             } => {
-                let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
-                    Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
-                });
-                let bod = params.iter().rev().fold(body.clone(), |a, b| {
-                    Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
-                });
+                // 参数折叠：typ = Π 参数. 返回类型；bod = λ 参数. 体。
+                // 无参时起点即本体（零克隆）；fold 消费 ret_type/body 本身
+                let typ = if params.is_empty() {
+                    ret_type
+                } else {
+                    params.iter().rev().fold(ret_type, |a, b| {
+                        Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                    })
+                };
+                let bod = if params.is_empty() {
+                    body
+                } else {
+                    params.iter().rev().fold(body, |a, b| {
+                        Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
+                    })
+                };
                 let typ_tm = self.check(cxt, typ, Val::U)?;
                 let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实值覆盖。
@@ -304,11 +314,16 @@ impl Infer {
             }
 
             Raw::Obj(x, f) => {
-                // 限定构造子引用 `Enum.case`
+                // 限定构造子引用 `Enum.case`——**局部遮蔽优先**：接收者名字
+                // 已被局部 binder 占用时必须走正常投影（与 Raw::Var 的
+                // 「局部先于全局」同序），否则同名局部会让 `Foo.c2` 静默
+                // 解析成全局构造子（类型恰巧对上即是错误的 Ok）
                 if let Raw::Var(n) = &*x {
-                    let key = format!("{}.{}", n.data, f.data);
-                    if let Some(e) = cxt.decl_get(&key) {
-                        return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
+                    if !cxt.src_names.contains_key(&n.data) {
+                        let key = format!("{}.{}", n.data, f.data);
+                        if let Some(e) = cxt.decl_get(&key) {
+                            return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
+                        }
                     }
                 }
                 let (tm, ty) = self.infer_expr(cxt, *x)?;
@@ -337,33 +352,30 @@ impl Infer {
                                     .collect();
                                 let mut ty = e.ty.clone();
                                 let mut impl_idx = 0;
-                                loop {
-                                    match self.force(decl, ty) {
-                                        Val::Pi(bname, _, bdom, closure) => {
-                                            if bname.data == f.data {
-                                                return Ok((
-                                                    Tm::Obj(Box::new(tm), f.clone()),
-                                                    *bdom,
-                                                ));
-                                            }
-                                            let u = if impl_idx < impl_vals.len() {
-                                                let v = impl_vals[impl_idx].clone();
-                                                impl_idx += 1;
-                                                v
-                                            } else {
-                                                self.eval(
-                                                    decl,
-                                                    &cxt.env,
-                                                    Tm::Obj(
-                                                        Box::new(tm.clone()),
-                                                        bname.clone(),
-                                                    ),
-                                                )
-                                            };
-                                            ty = self.closure_apply(decl, &closure, u);
-                                        }
-                                        _ => break,
+                                while let Val::Pi(bname, _, bdom, closure) =
+                                    self.force(decl, ty)
+                                {
+                                    if bname.data == f.data {
+                                        return Ok((
+                                            Tm::Obj(Box::new(tm), f.clone()),
+                                            *bdom,
+                                        ));
                                     }
+                                    let u = if impl_idx < impl_vals.len() {
+                                        let v = impl_vals[impl_idx].clone();
+                                        impl_idx += 1;
+                                        v
+                                    } else {
+                                        self.eval(
+                                            decl,
+                                            &cxt.env,
+                                            Tm::Obj(
+                                                Box::new(tm.clone()),
+                                                bname.clone(),
+                                            ),
+                                        )
+                                    };
+                                    ty = self.closure_apply(decl, &closure, u);
                                 }
                             }
                         }

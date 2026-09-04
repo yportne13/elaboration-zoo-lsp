@@ -71,7 +71,7 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（check+nf，默认）| strchain | global | match | enum | all
+    /// 负载族：church（check+nf，默认）| strchain | global | match | enum | struct | all
     #[arg(long, default_value = "church")]
     workload: String,
 }
@@ -120,7 +120,7 @@ fn run(cli: Cli) {
         let nf_workload = matches!(*workload, "church" | "strchain" | "global" | "match");
         let basic_too_slow = matches!(*workload, "strchain" | "global" | "struct");
         // match/enum 的节点数无闭式——以「快版 == 参考版」互检代替硬编码；
-        // struct 与 strchain/global 同轴（末值 zero，nf 节点数 = 1）
+        // struct 同轴：末值 zero（nf 节点数 = 2，见 expect_nodes）
         let closed_form = matches!(*workload, "church" | "strchain" | "global" | "struct");
 
         let ks: Vec<u32> = if *workload == "enum" {

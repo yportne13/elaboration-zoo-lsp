@@ -117,16 +117,23 @@ L07 的冠军配方（bump arena + 打包 `V` + 迭代内核 + 复合环境 + �
    原「Obj 头不进同头」的排除降级为防御性保留）；
 4. 新增 `struct_src(k)` 负载（见下）。
 
+评审轮附加的配方演进（L06/L07 孪生同款问题，本轮在 L08 先行落地）：
+包装层 `eval` / `quote` / `unify` 的 `&mut Vec::new()` 工作栈改为
+Machine 常驻缓冲（`'static` 存放口径 + 进核前 clear，quote memo 同款
+容量复用）；`clear_round` 补清 `spine.stack`（稳态复用内存有界）；
+`decl_insert` 覆盖写免键串重分配；`infer_decl` 无参时零克隆 Raw。
+
 ### 双 oracle
 
-`cargo test --test l08_fast_parity`（68 例）：DEMO 全串（含积类型段）、
-tests.rs 全部既有用例源码、积类型七连（基础 / 泛型 / 依赖 Sigma /
-投影链与部分应用 / Err 判定 / 剥链精确检查位 / new 直接接投影）、
+`cargo test --test l08_fast_parity`（72 例）：DEMO 全串（含积类型段）、
+tests.rs 全部既有用例源码、积类型八连（基础 / 泛型 / 依赖 Sigma /
+投影链与部分应用 / Err 判定 / 剥链精确检查位 / new 直接接投影 /
+局部遮蔽与字段空行）、
 继承的 Err parity、深负载
 church / strchain / global / match / enum / **struct**（快版 `Tycker`
 与参考版 `bench_check_nf` 节点数互检）、稳态复用。判据：**Ok 输出
-逐字节一致 / Err 判定一致**（错误文案的 Debug-Span 偏移是文档化偏差，
-同 L06/L07）。
+逐字节一致 / Err 判定一致**；错误正文经 span 归一化（剥掉
+`@ 数字[,数字]` 偏移）后也逐字节一致。
 
 ### 基准
 
@@ -149,19 +156,19 @@ k≤11，同 L07 readme 惯例）：
 
 ```text
 == workload: church ==（check + nf）
-k=12  n=8192    fast=0.728ms         basic=9.782ms      (≈13×)
+k=12  n=8192    fast=0.727ms         basic=8.987ms      (≈12×)
 == workload: strchain ==（每层 prim 触发；basic 二次方）
-k=11  n=4096    fast=6.513ms*        basic=2706.3ms     (≈416×)
+k=11  n=4096    fast=3.673ms*        basic=2754.6ms     (≈750×)
 == workload: global ==（可变全局 + 重入 prim）
-k=11  n=4096    fast=11.971ms*       basic=498.9ms      (≈42×)
+k=11  n=4096    fast=9.562ms*        basic=499.8ms      (≈52×)
 == workload: match ==（L07 特色：自递归依赖 match def 链）
-k=13  n=16384   fast_memo=0.066ms*   basic=0.592ms      (≈9×)
+k=13  n=16384   fast=0.048ms*        basic=0.537ms      (≈11×)
 == workload: enum ==（L07 特色：GADT + 投影 + 索引等式）
-fast=0.092ms          basic=0.808ms      (≈9×)
+fast=0.106ms          basic=1.033ms      (≈10×)
 == workload: struct ==（**L08 特色**：类型级 .mk 剥链 + new 构造链）
-k=9   n=1024    fast=1.729ms*        basic=213.9ms      (≈124×)
-k=10  n=2048    fast=3.293ms*        basic=830.1ms      (≈252×)
-k=11  n=4096    fast=6.837ms*        basic=3202.1ms     (≈470×)
+k=9   n=1024    fast=1.174ms*        basic=216.0ms      (≈184×)
+k=10  n=2048    fast=2.348ms*        basic=842.8ms      (≈359×)
+k=11  n=4096    fast=5.250ms*        basic=3203.0ms     (≈610×)
 ```
 
 ### 已知偏差（与参考版）
@@ -188,10 +195,11 @@ k=11  n=4096    fast=6.837ms*        basic=3202.1ms     (≈470×)
 
 ## 8. 测试
 
-- `cargo test --lib L08_product_type`：**44**（36 个 L07 继承 +
-  7 个积类型专项：`test_product_basic / _generic / _dependent /
+- `cargo test --lib L08_product_type`：**46**（36 个 L07 继承 +
+  9 个积类型专项：`test_product_basic / _generic / _dependent /
   _field_err / _vs_plain_enum / _dependent_check（剥链精确化回归）/
-  _new_dot_chain（new 直接接投影）`，另 1 个 lexer 回归
+  _new_dot_chain（new 直接接投影）/ _shadow（投影局部遮蔽回归）/
+  _field_blank_lines（字段间空行与注释行）`，另 1 个 lexer 回归
   `test_string_empty_and_escape`（空字面量 `""` 与 `\"` / `\\` 转义））；
   64 MB 栈线程。
 - `cargo test --test l08_blackbox`：**55**（L07 基线 46 原样通过 +
@@ -200,8 +208,10 @@ k=11  n=4096    fast=6.837ms*        basic=3202.1ms     (≈470×)
   部分应用构造子）；另 1 个 `--ignored` 深度探针。
 - `cargo test --test l08_blackbox_v2`：**51**（L07 第二卷基线原样通过，
   另 2 个 `--ignored` 探针）。
-- `cargo test --test l08_fast_parity`：**68**（§6 双 oracle；含内嵌的
-  43 个既有 lib 用例源码——lexer 回归两版共享同一解析器，不在对照内）。
+- `cargo test --test l08_fast_parity`：**72**（§6 双 oracle：26 个 parity
+  用例；`#[cfg(test)]` 的 45 个 lib 用例（含 lexer 回归）随模块在本目标
+  内执行并计入总运行数——lexer 回归两版共享同一解析器，不构成
+  parity 对照）。
 
 ## 9. 相对旧 L08（移植前）改了什么
 
@@ -220,6 +230,22 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
   裸 spine 实参位的限制不变；
 - 类型级与值级投影统一为**参数槽优先**（旧 L08 两处次序不一致：类型级
   字段优先、值级参数优先）。
+
+第二轮评审（本次）另附：
+
+- **投影限定构造子快捷路径尊重局部遮蔽**（两版同步）：`Foo.c2` 在
+  `Foo` 是局部 binder 时走投影而非静默解析成全局构造子（错误 Ok，
+  L07 同码潜伏）；回归 `test_product_shadow` / `parity_product_shadow_*`；
+- 孪生 `force` 的卡住投影命中路径改走 `vapp1`（字段值是 Lam 闭包 /
+  卡住 Match 时与参考版同归约，原先 `spine.push` 会搁浅）；孪生
+  Match/Match 臂的比较顺序对齐参考版（scrutinee → 分支体 → pending）；
+- struct 字段分隔容忍连续空行 / 注释行（`EndLine.many1()`，与 match
+  臂同款）；§6 配方演进的四处性能项（缓冲复用 / spine 轮清 /
+  `decl_insert` 免重分配 / 无参 `infer_decl` 零克隆，两版同受益）；
+- fast_parity 的 Err 正文升级为 span 归一化后逐字节比对；
+- `test_demo` 补断言时发现两段示例源码一直带着 parse error（花括号
+  函数体 + enum 闭括号后缺空行，旧版零断言静默通过），已修正为
+  DEMO 形态。
 
 ## 10. 参考资料
 

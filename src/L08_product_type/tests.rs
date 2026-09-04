@@ -1214,11 +1214,14 @@ println bits_adder (cons true nil) (cons false nil)
 // --------------------------------------------------------------------------------
 
 /// DEMO 全串：enum + 依赖 match + 字符串 builtin + 文件 IO + 可变全局。
+/// （形态对齐 DEMO_SRC：函数体无花括号、enum 闭括号后空一行——顶层 decl
+/// 分隔要求 `EndLine.many1()`，而 enum 的 case 分隔已吃掉 `}` 前的换行；
+/// 旧版此测试零断言，两段一直在静默报 parse error，断言补上后修正。）
 #[test]
 fn test_demo() {
     for (name, seg) in [
-        ("add", "enum Nat {\n    zero\n    succ(x: Nat)\n}\ndef add(x: Nat, y: Nat): Nat = {\n    match x {\n        case zero => y\n        case succ(n) => succ(add(n, y))\n    }\n}\n"),
-        ("add_sp", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat = {\n    match x {\n        case zero => y\n        case succ(n) => succ(add(n, y))\n    }\n}\n"),
+        ("add", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\nprintln (add (succ (succ zero)) (succ zero))\n"),
+        ("add_sp", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\nprintln (add (succ (succ zero)) (succ zero))\nprintln (add (succ zero) (succ (succ zero)))\n"),
     ] {
         let r = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
@@ -1230,6 +1233,7 @@ fn test_demo() {
             .join()
             .unwrap();
         println!("SEG {name}: {r}");
+        assert_eq!(r, "ok", "{name}");
     }
 }
 
@@ -1380,7 +1384,16 @@ def u = new Unit()
 println u
 "#,
     );
-    assert!(out.contains("Point.mk"), "{out}");
+    // 精确断言：p.x = two、p.y = four；p / p2 的显示去重形态（§4）；
+    // nullary 构造子显示为 `Unit.mk`（无实参括号）
+    assert_eq!(
+        out,
+        "Nat::succ(Nat::succ(Nat::zero))\n\
+         Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))\n\
+         Point.mk(Nat::succ(Nat::succ(Nat::zero)) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))\n\
+         Point.mk(Nat::succ(Nat::succ(Nat::zero)) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))\n\
+         Unit.mk\n"
+    );
 }
 
 /// 泛型 struct（隐式参数）+ 类型级投影（`get_x` 的 `p.x`：接收者只有
@@ -1472,8 +1485,23 @@ def w : Nat = exists_two.witness
 println w
 "#,
     );
-    assert!(out.contains("A"), "{out}");
-    assert!(out.contains("Exists.mk"), "{out}");
+    // 精确断言（已知形态的行）：get_name sigA = "A"（String 值裸打）；
+    // sigA 的 Bits.mk 两字段；w = exists_two.witness = two。
+    // （exists_two 自身的 Exists.mk 显示带隐参形态，泛型测试已覆盖同构
+    // 输出，这里不锁死。）
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.first(), Some(&"A"), "{out}");
+    assert!(
+        out.contains(
+            "Bits.mk(A Nat::succ(Nat::succ(Nat::zero)))"
+        ),
+        "{out}"
+    );
+    assert_eq!(
+        lines.last(),
+        Some(&"Nat::succ(Nat::succ(Nat::zero))"),
+        "{out}"
+    );
 }
 
 /// 字段不存在 → 类型级与值级都给 `has no field` 错误。
@@ -1598,6 +1626,80 @@ println d2
         2,
         "{out}"
     );
+}
+
+/// 投影接收者的**局部遮蔽**回归：`Foo.c2` 的限定构造子快捷路径不得越过
+/// 局部 binder——`Foo` 是函数参数（类型 S）时必须投影其字段，而不是静默
+/// 解析成全局构造子 `Foo.c2`（旧实现先查 decl 表，恒返回 `c2` 的错误 Ok）。
+/// 同形 `Foo: Nat` 的接收者则报 `Nat has no field c2`（修复前是 Ok）。
+#[test]
+fn test_product_shadow() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c1(x: Nat)
+    c2
+}
+
+struct S {
+    c2: Foo
+}
+
+def s : S = new S(c1 zero)
+def pick(Foo: S) = Foo.c2
+println (pick s)
+"#,
+    );
+    // 普通 enum case 的打印形态是 `Foo::c1`（§4 去重只作用于 `.mk` 形态）；
+    // 修复前此处恒打印全局构造子 `Foo::c2`
+    assert_eq!(out, "Foo::c1(Nat::zero)\n");
+    let e = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c1(x: Nat)
+    c2
+}
+
+def pick(Foo: Nat) = Foo.c2
+"#,
+    );
+    assert!(e.contains("has no field"), "{e}");
+}
+
+/// struct 字段间容忍连续空行与注释行（注释行经 preprocess 剥成空白后
+/// 仍产生 EndLine，单 EndLine 分隔会把字段间注释打成语法错误——与
+/// match 臂的 `EndLine.many1()` 分隔同款）。
+#[test]
+fn test_product_field_blank_lines() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+struct P {
+    x: Nat
+
+    // 注释行 + 空行
+    y: Nat
+}
+
+def p = new P(zero, (succ (succ zero)))
+println p.y
+"#,
+    );
+    assert_eq!(out, "Nat::succ(Nat::succ(Nat::zero))\n");
 }
 
 /// lexer 空字符串与转义回归（L08 附带修复）：组合子版 `string` 用

@@ -376,8 +376,9 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>]
 /// `struct Name[A: U, ...] { field: Type ... }` —— 积类型语法糖：脱糖成
 /// **单构造子 enum**，构造子名为 `{Name}.mk`，字段全部显式（Expl），参数
 /// 走隐式方括号组（`[A]` / `[A: U]`）。字段可依赖参数与在前字段
-/// （依赖积 / Sigma）：`struct Exists[A: U, P: A -> U] { witness: A, proof: P witness }`。
-/// 构造用 `new Name(e1, e2)` 或限定名 `Name.mk`；字段访问 `p.field` 走
+/// （依赖积 / Sigma）：`struct Exists[A: U, P: A -> U] { witness: A
+/// proof: P witness }`——字段按行分隔（无逗号形态）。构造用
+/// `new Name(e1, e2)` 或限定名 `Name.mk`；字段访问 `p.field` 走
 /// enum 投影（值级）与 `.mk` 构造子类型链剥层（类型级，见 elaboration）。
 fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a>], Decl)> {
     (
@@ -387,7 +388,10 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<(&'b [TokenNode<'a
         brace(
             (string(Ident), kw(T![:]), p_raw)
                 .map(|(name, _, ty)| (name, ty))
-                .many0_sep(kw(EndLine)), // 字段按行分隔，无逗号
+                // 字段按行分隔，无逗号；连续空行也容忍——注释行经
+                // preprocess 剥成空白后仍产生 EndLine，单 EndLine 分隔
+                // 会把「字段间注释」打成语法错误（同 match 臂）
+                .many0_sep(kw(EndLine).many1()), //
         ),
     )
         .map(|(_, name, params, fields)| Decl::Enum {

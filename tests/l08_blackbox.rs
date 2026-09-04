@@ -1573,10 +1573,8 @@ fn product_projection_errors() {
         .contains("Point has no field zzz")
     );
     assert!(
-        check_err(&format!(
-            "{PRODUCT_PRELUDE}def bad(p: Point) = p.zzz\n"
-        ))
-        .contains("Point has no field zzz")
+        check_err(&format!("{PRODUCT_PRELUDE}def bad(p: Point) = p.zzz\n"))
+            .contains("Point has no field zzz")
     );
     assert!(
         check_err(&format!(
@@ -1584,9 +1582,7 @@ fn product_projection_errors() {
         ))
         .contains("Nat has no field y")
     );
-    assert!(
-        check_err("def bad = new Nope(zero)\n").contains("name not in scope: Nope.mk")
-    );
+    assert!(check_err("def bad = new Nope(zero)\n").contains("name not in scope: Nope.mk"));
 }
 
 /// 普通单 case enum 不享受 `.mk` 类型级剥链（门控是构造子名含 `.mk`，
@@ -1616,17 +1612,19 @@ def bad(w: Wrap) = w.x
 /// leftover `.` 解析失败）。类型级与值级都逐段推进。
 #[test]
 fn product_chained_projections() {
-    let pre = &format!(
-        "{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n    b: Point\n}}\n"
-    );
+    let pre = &format!("{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n    b: Point\n}}\n");
     // 类型级：def 参数只有类型信息，逐段剥 `.mk` 链
     assert_lines(
-        &format!("{pre}def far(l: Line): Nat = l.a.x\ndef r : Nat = far(new Line((new Point(zero, succ zero)), (new Point(succ zero, zero))))\nprintln r\n"),
+        &format!(
+            "{pre}def far(l: Line): Nat = l.a.x\ndef r : Nat = far(new Line((new Point(zero, succ zero)), (new Point(succ zero, zero))))\nprintln r\n"
+        ),
         &["Nat::zero"],
     );
     // 值级：逐段 project
     assert_lines(
-        &format!("{pre}def l = new Line((new Point(zero, succ zero)), (new Point(succ zero, zero)))\nprintln l.a.y\nprintln l.b.x\n"),
+        &format!(
+            "{pre}def l = new Line((new Point(zero, succ zero)), (new Point(succ zero, zero)))\nprintln l.a.y\nprintln l.b.x\n"
+        ),
         &["Nat::succ(Nat::zero)", "Nat::succ(Nat::zero)"],
     );
 }
@@ -1694,7 +1692,9 @@ fn product_new_dot_chain() {
     );
     let pre = &format!("{PRODUCT_PRELUDE}struct Line {{\n    a: Point\n    b: Point\n}}\n");
     assert_lines(
-        &format!("{pre}println new Line(new Point(zero, succ zero), new Point(succ zero, zero)).b.y\n"),
+        &format!(
+            "{pre}println new Line(new Point(zero, succ zero), new Point(succ zero, zero)).b.y\n"
+        ),
         &["Nat::zero"],
     );
 }
