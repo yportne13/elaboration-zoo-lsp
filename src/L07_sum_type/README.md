@@ -293,3 +293,61 @@ solve / intersect）。在此之上：
 - 本仓库 `src/L13_namespace`：生产版（其 GADT 精化仍有弱点的分析见
   `docs/pattern-match-refinement-analysis.md`；本层的事实表方案是另一条
   路线，供其参考）
+
+## 10. 性能孪生（`bump_spine_iter`，2026-09 与 L06 同步）
+
+L06 的冠军配方（bump arena + 打包值 tag 编码 + 迭代内核 + 记忆化 + 稳态
+复用 + prim 元数预检/单次收集/手工拼接）的 L07 移植，另加 sum-type 层的
+机制落地：
+
+- **值编码**：tag 7 XCell 扩为 `Lit / Decl / Prim / Obj / Sum / SumCase /
+  Match`；Decl/Prim/Obj 头的链经 spine 栈的**链头种类标志** O(1) 判定
+  （church 热路径零额外遍历）；
+- **L07 语义的落点**：`pm_defs` 事实表 + `pm_solvable` 可解集（truncate
+  回滚）、`unify_fuel`（force 展开/每次 unify 递归各耗 1，充值点与参考版
+  一致）、Match 运行时首匹配（`eval_aux` 的值层迭代版）+ 卡住期 pending
+  的值层应用、Match quote/rename 的分支体在**简化 decl 表**下重求值再
+  导出（与参考版 `simpl_decl` 逐点对应）、struct_eq 快路径（bump 版
+  budget 结构比较）、Compiler（模式编译 + 特化合一）全套；
+- **decl 表平铺化**：参考版 `Cxt::decl_insert` 是 `Rc` 写时复制（整表
+  克隆 O(n)/次 → def 链 O(n²)）；快版用 `Rc<RefCell<FxHashMap>>` 平铺
+  覆盖——顶层 elaboration 的插入全部单调（占位 → 同名覆盖为终值），
+  语义等价且 O(1)/次（Ref 带 Drop 在作用域尾释放，借用按块化纪律组织）。
+  首版写时复制实测 strchain k=12 慢 70×，平铺后与 L06 同阶。
+
+### 双 oracle
+
+`cargo test --test l07_fast_parity`：`#[path]` 独立 crate，run vs run_fast
+**Ok 输出逐字节一致 / Err 判定一致**——覆盖 DEMO 全串（enum + 依赖
+match + 字符串/文件 IO/可变全局）、tests.rs 全部用例源码、Err 判定
+9 例、深负载（church/strchain/global/match 链/GADT enum，含与参考版
+`bench_check_nf` 的节点数互检）、卡住 match × 卡住 prim 混合、稳态复用。
+
+### 基准
+
+```text
+cargo run --release --bin l07bench -- --workload all --max-k 13
+```
+
+实测（Windows 10，release，rounds=3 取 min；CLI 默认 rounds=5）：
+
+```text
+== workload: church ==（check + nf）
+k=12  n=8192    fast=0.726ms         basic=9.884ms      (≈14×)
+== workload: strchain ==（每层 prim 触发；basic 二次方）
+k=11  n=4096    fast=5.975ms*        basic=2488.8ms     (≈400×)
+k=12  n=8192    fast=11.841ms*       （basic O(n²) 未跑满）
+== workload: global ==（可变全局 + 重入 prim）
+k=11  n=4096    fast=9.894ms*        basic=508.2ms      (≈51×)
+k=12  n=8192    fast=20.456ms*
+== workload: match ==（L07 特色：自递归依赖 match def 链）
+k=13  n=16384   fast=0.060ms*        basic=0.533ms      (≈9×)
+== workload: enum ==（L07 特色：GADT + 投影 + 索引等式）
+                 fast=0.086ms*        basic=0.737ms      (≈9×)
+```
+
+### 已知偏差（与参考版）
+
+- 错误消息 span 全零（文档化偏差，同 L06）；unify_catch 文案带
+  pretty 项 + `(fuel exhausted)` 尾注，span 数字两版不同；
+- 卡住 Prim 的 force 每次烧 1 fuel（与参考版同语义，频率依赖）。
