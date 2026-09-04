@@ -269,7 +269,7 @@ solve / intersect）。在此之上：
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（27 个测试，64 MB 栈线程）：
+`cargo test --lib L07_sum_type`（36 个测试，64 MB 栈线程）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心（cong / symm / trans / rfl）/ Church 编码与字符串；
@@ -281,7 +281,13 @@ solve / intersect）。在此之上：
 - 回归（针对旧 bug）：泛型类型上的 match、通配臂混合、GADT 可达性与
   不可达报错、覆盖缺失报错、索引等式负例、投影类型标注、stuck match
   的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义、
-  嵌套解构引用外层绑定器。
+  嵌套解构引用外层绑定器；
+- L06 演进同步（2026-09，见 §10）：字符串 builtin 全家 / 可变全局族 /
+  缺名卡住与宽松臂把关 / string_to_global_type / 文件 IO / DEMO 全串。
+
+黑盒与双 oracle：`cargo test --test l07_blackbox`（46 个，参考版唯一
+入口 `run`）；`cargo test --test l07_fast_parity`（53 个，run vs
+run_fast 逐字节互检，见 §10）。
 
 ## 9. 参考资料
 
