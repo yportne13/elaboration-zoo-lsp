@@ -188,10 +188,12 @@ k=11  n=4096    fast=6.837ms*        basic=3202.1ms     (≈470×)
 
 ## 8. 测试
 
-- `cargo test --lib L08_product_type`：**43**（36 个 L07 继承 +
+- `cargo test --lib L08_product_type`：**44**（36 个 L07 继承 +
   7 个积类型专项：`test_product_basic / _generic / _dependent /
   _field_err / _vs_plain_enum / _dependent_check（剥链精确化回归）/
-  _new_dot_chain（new 直接接投影）`）；64 MB 栈线程。
+  _new_dot_chain（new 直接接投影）`，另 1 个 lexer 回归
+  `test_string_empty_and_escape`（空字面量 `""` 与 `\"` / `\\` 转义））；
+  64 MB 栈线程。
 - `cargo test --test l08_blackbox`：**55**（L07 基线 46 原样通过 +
   9 个 `product_*` 专项：打印形态 / 投影错误文案 / 普通 enum 门控 /
   投影链 / match 变量臂 / 泛型 struct / new 嵌套 / new 直接接投影 /
@@ -199,7 +201,7 @@ k=11  n=4096    fast=6.837ms*        basic=3202.1ms     (≈470×)
 - `cargo test --test l08_blackbox_v2`：**51**（L07 第二卷基线原样通过，
   另 2 个 `--ignored` 探针）。
 - `cargo test --test l08_fast_parity`：**68**（§6 双 oracle；含内嵌的
-  43 个 lib 用例）。
+  43 个既有 lib 用例源码——lexer 回归两版共享同一解析器，不在对照内）。
 
 ## 9. 相对旧 L08（移植前）改了什么
 

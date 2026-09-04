@@ -1423,9 +1423,14 @@ def sy : Nat = end_point.y
 println sy
 "#,
     );
-    assert!(out.contains("zero"), "{out}");
-    assert!(out.contains("Point.mk(succ (succ succ (succ zero)) (add four two))")
-        || out.contains("Point.mk"), "{out}");
+    // 精确断言：get_x start_point = zero；point_add 两分量 = add zero four
+    // （= four）与 add four two（= six）；sy = end_point.y = two。
+    assert_eq!(
+        out,
+        "Nat::zero\n\
+         Point.mk(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))) Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero)))))))\n\
+         Nat::succ(Nat::succ(Nat::zero))\n"
+    );
 }
 
 /// 依赖字段（Sigma 积）：`Bits.name : String` 用字面量类型；
@@ -1593,4 +1598,19 @@ println d2
         2,
         "{out}"
     );
+}
+
+/// lexer 空字符串与转义回归（L08 附带修复）：组合子版 `string` 用
+/// `pmatch(c != '"')` 至少吃一字符，字面量 `""` 被误杀、`\` 不跳转义
+/// 使 `\"` 提前截断；重写为逐字节扫描（`\` 跳两字节）后形态正确。
+#[test]
+fn test_string_empty_and_escape() {
+    let out = check(
+        r#"
+println ""
+println "a\"b"
+println "\\"
+"#,
+    );
+    assert_eq!(out, "\na\"b\n\\\n");
 }
