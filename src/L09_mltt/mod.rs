@@ -487,7 +487,10 @@ impl Infer {
 #[allow(unused)]
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).unwrap();
+    let (ast, parse_errs) = parser::parser(&preprocess(input), path_id).unwrap();
+    for e in parse_errs {
+        println!("{:?}", e);
+    }
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {
@@ -699,7 +702,10 @@ def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
 
 pub fn run1(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(input, path_id).unwrap();
+    let (ast, parse_errs) = parser::parser(input, path_id).unwrap();
+    for e in parse_errs {
+        println!("{:?}", e);
+    }
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {
