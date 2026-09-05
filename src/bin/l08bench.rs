@@ -40,6 +40,8 @@ mod list;
 
 #[path = "../parser_lib.rs"]
 mod parser_lib;
+#[path = "../parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../L08_product_type/mod.rs"]
 mod L08_product_type;
