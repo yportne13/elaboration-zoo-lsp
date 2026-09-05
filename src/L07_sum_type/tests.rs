@@ -296,11 +296,11 @@ def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
 
 def pr1 = f => x => f x
 
-def Nat : U =
+def NatC : U =
     (N : U) -> (N -> N) -> N -> N
-def mul : Nat -> Nat -> Nat =
+def mul : NatC -> NatC -> NatC =
     a => b => N => s => z => a _ (b _ s) z
-def ten : Nat =
+def ten : NatC =
     N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
 def hundred = mul ten ten
 

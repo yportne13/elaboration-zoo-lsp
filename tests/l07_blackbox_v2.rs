@@ -773,10 +773,11 @@ fn v2_find_f6_apply_u_is_unify_error() {
 }
 
 #[test]
-fn v2_same_name_def_last_wins() {
-    assert_lines(
+fn v2_same_name_def_is_redefine_error() {
+    // 同名 def 由静默 last-wins 改为定向报错（L13 `fake_bind` 移植）
+    assert_err(
         &format!("{NAT}\ndef a : Nat = zero\ndef a : Nat = succ zero\nprintln a\n"),
-        &["Nat::succ(Nat::zero)"],
+        "redefine a",
     );
 }
 

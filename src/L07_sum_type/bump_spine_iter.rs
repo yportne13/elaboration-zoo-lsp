@@ -5177,6 +5177,12 @@ impl Machine {
                     let vtyp = self.eval(bump, &decls, cxt.env, typ_tm);
                     (typ_tm, vtyp)
                 };
+                // 重定义检查（与参考版同款，L13 `fake_bind` 移植）：builtin /
+                // 先前 def / enum 已登记 → 定向报错。必须在占位插入之前查
+                // （占位会平铺覆盖同名条目），且先类型后重定义与参考版一致。
+                if cxt.decl.borrow().contains_key(name.data.as_str()) {
+                    return Err(Error(format!("redefine {}", name.data)));
+                }
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实
                 // 值覆盖。占位只存在于克隆出来的 decl 表里，不影响外层。
                 let fake = decl_insert(
@@ -5266,6 +5272,11 @@ impl Machine {
                     let vtyp = self.eval(bump, &decls, cxt.env, typ_tm);
                     (typ_tm, vtyp)
                 };
+                // 重定义检查（与参考版同款）：同名 enum / def / builtin →
+                // 定向报错，先类型后重定义，占位插入之前查表。
+                if cxt.decl.borrow().contains_key(name.data.as_str()) {
+                    return Err(Error(format!("redefine {}", name.data)));
+                }
                 // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）
                 let fake = decl_insert(
                     cxt,
