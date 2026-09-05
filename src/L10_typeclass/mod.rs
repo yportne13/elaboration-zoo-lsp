@@ -533,7 +533,10 @@ impl Infer {
 #[allow(unused)]
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(&preprocess(input), path_id).unwrap();
+    let (ast, parse_errs) = parser::parser(&preprocess(input), path_id).unwrap();
+    for e in parse_errs {
+        println!("{:?}", e);
+    }
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {
@@ -1242,7 +1245,10 @@ println bits_adder (cons true nil) (cons false nil)"#;
 
 pub fn run1(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
-    let ast = parser::parser(input, path_id).unwrap();
+    let (ast, parse_errs) = parser::parser(input, path_id).unwrap();
+    for e in parse_errs {
+        println!("{:?}", e);
+    }
     let mut cxt = Cxt::new();
     let mut ret = String::new();
     for tm in ast {
