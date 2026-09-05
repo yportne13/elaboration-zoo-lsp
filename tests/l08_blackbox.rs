@@ -1757,3 +1757,40 @@ def bad = partial.y
 "#,
     );
 }
+// 重定义报错（L13 fake_bind 移植）
+// --------------------------------------------------------------------------------
+
+/// 同名 def / enum / struct、def 与 builtin 撞名（`String` 已登记）→ 定向
+/// 报错，不再静默覆盖（last-wins 语义退出）。struct 脱糖成单构造子 enum，
+/// 走同一 Enum 检查路径。
+#[test]
+fn redefine_error() {
+    let nat = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n";
+    let bool_ = "enum Bool {\n    true\n    false\n}\n";
+    // 同名 def
+    assert_err(
+        &format!("{nat}def a : Nat = zero\ndef a : Nat = succ zero\nprintln a\n"),
+        "redefine a",
+    );
+    // def 与 builtin 撞名
+    assert_err("def String : U = U\nprintln String\n", "redefine String");
+    // 同名 enum
+    assert_err(
+        &format!("{nat}enum Nat2 {{\n    zero\n    succ(x: Nat2)\n}}\nenum Nat2 {{\n    zero\n}}\n"),
+        "redefine Nat2",
+    );
+    // def 与 enum 名互相撞名
+    assert_err(&format!("{nat}def Nat : U = U\n"), "redefine Nat");
+    // enum 后 def 同名
+    assert_err(&format!("{bool_}def Bool : U = U\n"), "redefine Bool");
+    // struct 同名（struct 脱糖为单构造子 enum，检查路径相同）
+    assert_err(
+        "struct Pair[A : U] {\n    fst : A\n    snd : A\n}\nstruct Pair[A : U] {\n    fst : A\n}\n",
+        "redefine Pair",
+    );
+    // struct 与 def 撞名
+    assert_err(
+        "struct Q {\n    x : String\n}\ndef Q : U = U\n",
+        "redefine Q",
+    );
+}

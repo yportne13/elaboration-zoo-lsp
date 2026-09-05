@@ -159,6 +159,12 @@ impl Infer {
                 };
                 let typ_tm = self.check(cxt, typ, Val::U)?;
                 let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
+                // 重定义检查（L13 `fake_bind` 移植）：名字已登记（builtin /
+                // 先前 def / enum / struct）→ 定向报错，不再静默覆盖。先
+                // 类型后重定义，与 L13 检查顺序一致。
+                if cxt.decl().contains_key(name.data.as_str()) {
+                    return Err(Error(format!("redefine {}", name.data)));
+                }
                 // 递归：先把名字登记成指向自身的中性占位，检查体，再用真实值覆盖。
                 // 占位只存在于克隆出来的 decl 表里，不影响外层。
                 let fake_cxt = cxt.decl_insert(
@@ -241,6 +247,11 @@ impl Infer {
                 });
                 let typ_tm = self.check(cxt, typ, Val::U)?;
                 let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
+                // 重定义检查（L13 `fake_bind` 移植）：同名 enum / struct /
+                // def / builtin → 定向报错，不再静默覆盖。
+                if cxt.decl().contains_key(name.data.as_str()) {
+                    return Err(Error(format!("redefine {}", name.data)));
+                }
                 // 先占位再检查本体（本体内部引用自身时报"指向自身的中性值"）
                 let fake_cxt = cxt.decl_insert(
                     name.data.clone(),

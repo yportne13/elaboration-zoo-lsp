@@ -198,14 +198,14 @@ fast=4.432，church k=12 ss 反超 7%）——稳态复用的内存有界优势�
 - 同名"参数 vs 字段"的投影按**参数槽优先**（与值级 `project` 同序）。
 - struct 值上的 `match` 只有单臂变量模式有实际意义（单构造子全覆盖，
   无精化可做）。
-- **同名重定义 + 按名类型身份**（L06+ decl 表设计的组合效应）：`struct
-  P` 两次注册时后注册者覆盖 decl 表（§1 双轨别名同规则），而 Sum-Sum
-  合一只比名字与参数槽（cases 不参与）——早期 def 的登记类型（旧一代
-  `Val::Sum` 值）与新一代同名 Sum 判等通过，旧函数会接受并产出新形状
-  的值（`struct P { x: Nat }` → `struct P { x: Bool }` 后，
-  `def get(p: P): Nat = p.x` 对 `new P(true)` 判过并返回 `Bool::true`）。
-  `enum P` 与 `struct P` 互覆同理。锁定用例
-  `parity_product_name_identity_redef`（记录现状，非背书）。
+- **同名重定义已封禁**（L13 `fake_bind` 语义前传）：顶层 `def` / `enum`
+  / `struct` 名字已在 decl 表（builtin / 先前 def / enum / struct）→
+  `redefine {名}` 定向报错，不再静默覆盖；类型错误先于重定义报出。
+  旧"同名重定义 + 按名类型身份"效应（`struct P` 两次注册后旧函数接受
+  新形状值）随之**不可达**——原披露段落删除，锁定用例
+  `parity_product_name_identity_redef` 改为 redefine 错误断言。构造子
+  裸名（含 `.mk` 别名）跨类型重复仍按最后注册解析（与 L13 一致，检查
+  只罩 def/enum/struct 名）。
 
 ## 8. 测试
 

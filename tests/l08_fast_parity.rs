@@ -1533,14 +1533,11 @@ def bad(x: Foo, y: Nat, z: Nat, w: Nat): Eq (g x w) (f x y z) = refl
 }
 
 #[test]
-fn parity_product_name_identity_redef() {
-    // 同名 struct 重定义 + 类型按名合一（Sum-Sum 臂只比名字与参数槽，
-    // cases 不参与）的组合语义：后注册者覆盖 decl 表，早期 def 的登记
-    // 类型仍是旧一代 `Val::Sum` 值，但与新一代同名 Sum 判等通过——旧
-    // 函数会接受并产出新形状的值（`bad : Nat` 打印 `Bool::true`）。
-    // 这是 L06+「后注册者覆盖同名裸名」decl 表设计 + 按名类型身份的
-    // 组合结果（README §7 披露）：本用例锁定**两版一致地呈现**该语义，
-    // 不是对其的背书。
+fn parity_product_name_identity_redef_is_error() {
+    // 同名 struct 重定义由「后注册者覆盖」改为定向报错（L13 语义：
+    // struct 脱糖成 enum，名字同样过 fake_bind 检查）——旧「按名类型
+    // 身份让早期 def 接受新形状值」的组合语义随之不可达（README §7
+    // 已同步）。
     let src = r#"
 enum Nat {
     zero
@@ -1567,12 +1564,14 @@ println bad
 "#;
     let b = run_basic(src);
     let f = run_fast(src);
-    assert_eq!(
-        b.as_deref().ok(),
-        f.as_deref().ok(),
-        "判定/输出不一致，src:\n{src}\nbasic={b:?}\nfast={f:?}"
+    assert!(
+        b.is_err() && f.is_err(),
+        "两版都应 Err（redefine P），basic={b:?} fast={f:?}\nsrc:\n{src}"
     );
-    assert_eq!(b.as_deref().ok(), Some("Bool::true\n"), "{src}");
+    let bmsg = format!("{:?}", b.unwrap_err());
+    let fmsg = format!("{:?}", f.unwrap_err());
+    assert!(bmsg.contains("redefine P"), "basic 消息缺 redefine P：{bmsg}");
+    assert!(fmsg.contains("redefine P"), "fast 消息缺 redefine P：{fmsg}");
 }
 
 #[test]
