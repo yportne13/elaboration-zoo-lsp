@@ -16,6 +16,8 @@ mod list;
 
 #[path = "../src/parser_lib.rs"]
 mod parser_lib;
+#[path = "../src/parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../src/L07_sum_type/mod.rs"]
 mod L07_sum_type;
