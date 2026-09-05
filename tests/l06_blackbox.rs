@@ -380,6 +380,37 @@ fn redefine_error() {
     );
 }
 
+/// 类型注解的 universe 定向报错（L13 `check_universe` 的轻量移植）：注解
+/// 形态确定非类型（字面量 / 名字的类型非 U）→ 定向报错，不再落通用
+/// can't unify；洞与未解 meta 放行（原可解语义不变）。
+#[test]
+fn expected_universe_on_bad_annotation() {
+    // 名字注解且类型非 universe（builtin 函数型）
+    assert_error_parity(
+        "def bad : string_concat = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // 字面量注解
+    assert_error_parity(
+        "def bad : \"str\" = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // Π 参数类型同样校验
+    assert_error_parity(
+        "def bad (x : string_concat) : String = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // let 注解同校验（let 体以 `;` 接续，L06 语法）
+    assert_error_parity(
+        "def f : U = let y : \"str\" = \"a\"; y\nprintln f\n",
+        "expected universe, got",
+    );
+    // 洞注解放行（原可解语义不变，双实现 Ok 一致）
+    let src = "def s : _ = \"a\"\nprintln s\n";
+    assert!(run_basic(src).is_ok(), "{src}");
+    assert_parity(src);
+}
+
 // 深负载与稳态
 // --------------------------------------------------------------------------------
 
@@ -445,3 +476,4 @@ fn workload_node_counts() {
     assert_eq!(t.bench_check_nf(&raw), 1, "strchain 节点数");
     assert_eq!(L06_string::bench_check_nf(&raw), 1, "strchain 参考版节点数");
 }
+

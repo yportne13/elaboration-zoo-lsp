@@ -90,7 +90,7 @@ impl Infer {
             }
             // Check let bindings
             (Raw::Let(x, a_, t, u), _) => {
-                let a_checked = self.check(cxt, *a_, &Val::U.into())?;
+                let a_checked = self.check_ty(cxt, *a_)?;
                 let va = self.eval(&cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.env, &t_checked);
@@ -119,6 +119,42 @@ impl Infer {
             }
         }
     }
+    /// 类型注解的 universe 结构预检（L13 `check_universe` 的轻量移植，
+    /// 零副作用）：`LiteralIntro` 恒非类型；`Var` 在名字表且类型已确定
+    /// （非 U、非未解 meta）→ 定向报错。洞 / 未解 meta / 其余形态放行——
+    /// 可解与否交主检查路径（预检不推断、不造 meta，?N 编号不受扰动）。
+    fn ty_precheck(&self, cxt: &Cxt, t: &Raw) -> Result<(), Error> {
+        match t {
+            Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
+            Raw::Var(x) => match cxt.src_names.get(&x.data) {
+                Some((_, va)) => match self.force(va).as_ref() {
+                    // force 已展开已解 meta；留下的 Flex 必是未解 → 放行
+                    Val::U | Val::Flex(_, _) => Ok(()),
+                    other => Err(Error(format!("expected universe, got {:?}", other))),
+                },
+                None => Ok(()), // 未知名：主检查报 name-not-in-scope（原路径）
+            },
+            _ => Ok(()),
+        }
+    }
+
+    /// 类型注解的检查入口（Def 类型 / let 注解 / Π 域与余域）：结构预检
+    /// 后回落原 `check(…, Val::U)`；Π 链逐段预检——域检查后在绑定上下文
+    /// 里预检余域（与原 Pi 臂同构，域/余域各只检查一次，无额外 meta）。
+    fn check_ty(&mut self, cxt: &Cxt, t: Raw) -> Result<Tm, Error> {
+        if let Raw::Pi(x, i, a, b) = &t {
+            self.ty_precheck(cxt, a)?;
+            let a_checked = self.check(cxt, *a.clone(), &Val::U.into())?;
+            let a_eval = self.eval(&cxt.env, &a_checked);
+            let cxt2 = cxt.bind(x.clone(), self.quote(cxt.lvl, &a_eval), a_eval);
+            self.ty_precheck(&cxt2, b)?;
+            let b_checked = self.check(&cxt2, *b.clone(), &Val::U.into())?;
+            Ok(Tm::Pi(x.clone(), *i, Box::new(a_checked), Box::new(b_checked)))
+        } else {
+            self.ty_precheck(cxt, &t)?;
+            self.check(cxt, t, &Val::U.into())
+        }
+    }
     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
         match t {
             Decl::Def {
@@ -135,7 +171,7 @@ impl Infer {
                     .rev()
                     .fold(body.clone(), |a, b| Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a)));
                 let ret_cxt = {
-                    let typ_tm = self.check(cxt, typ, &Val::U.into())?;
+                    let typ_tm = self.check_ty(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, &typ_tm);
                     // 重定义检查（L13 `fake_bind` 的移植）：名字已登记
                     // （builtin / 先前 def）→ 定向报错，不再静默覆盖。
@@ -260,12 +296,11 @@ impl Infer {
 
             // Infer dependent function types
             Raw::Pi(x, i, a, b) => {
-                let a_checked = self.check(cxt, *a, &Val::U.into())?;
+                let a_checked = self.check_ty(cxt, *a)?;
                 let a_eval = self.eval(&cxt.env, &a_checked);
-                let b_checked = self.check(
+                let b_checked = self.check_ty(
                     &cxt.bind(x.clone(), self.quote(cxt.lvl, &a_eval), a_eval),
                     *b,
-                    &Val::U.into(),
                 )?;
                 Ok((
                     Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
@@ -275,7 +310,7 @@ impl Infer {
 
             // Infer let bindings
             Raw::Let(x, a, t, u) => {
-                let a_checked = self.check(cxt, *a, &Val::U.into())?;
+                let a_checked = self.check_ty(cxt, *a)?;
                 let va = self.eval(&cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, &va)?;
                 let vt = self.eval(&cxt.env, &t_checked);

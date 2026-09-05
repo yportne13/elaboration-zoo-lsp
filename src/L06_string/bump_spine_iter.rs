@@ -3097,7 +3097,7 @@ impl Machine {
             self.unwind_names(mark);
             Ok(bump.alloc(Tm::Lam(name, Icit::Impl, body)))
         } else if let Raw::Let(x, a_ty, t, u) = t {
-            let a_tm = self.check(bump, cxt, a_ty, v_u())?;
+            let a_tm = self.check_ty(bump, cxt, a_ty)?;
             let va = self.eval(bump, cxt.env, a_tm);
             let t_tm = self.check(bump, cxt, t, va)?;
             let vt = self.eval(bump, cxt.env, t_tm);
@@ -3115,6 +3115,68 @@ impl Machine {
             let (t2, tty) = self.insert(bump, cxt, t2, tty)?;
             self.unify_catch(bump, cxt.lvl, a, tty)?;
             Ok(t2)
+        }
+    }
+
+    /// 类型注解的 universe 结构预检（L13 `check_universe` 轻量移植，零副作用）：
+    /// `LiteralIntro` 恒非类型；`Var` 经 name_map 命中且类型已确定（非 U、非
+    /// 未解 meta）→ 定向报错。洞 / 未解 meta / 其余形态放行——可解性交主检
+    /// 查路径（预检不推断、不造 meta，?N 编号不受扰动）。
+    fn ty_precheck<'a>(&mut self, bump: &Bump, t: &Raw) -> Result<(), Error> {
+        match t {
+            Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
+            Raw::Var(x) => match self.name_map.get(x.data.as_str()) {
+                Some(&(_, ty)) => {
+                    // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
+                    // 头是 Meta）放行
+                    let v = self.force_v(bump, ty);
+                    if v_tag(v) == 3 {
+                        return Ok(());
+                    }
+                    let is_flex = match v_tag(v) {
+                        5 => true,
+                        2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
+                        _ => false,
+                    };
+                    if is_flex {
+                        Ok(())
+                    } else {
+                        Err(Error(format!("expected universe, got V({})", v.0)))
+                    }
+                }
+                None => Ok(()), // 未知名：主检查报 name-not-in-scope（原路径）
+            },
+            _ => Ok(()),
+        }
+    }
+
+    /// 类型注解检查入口（Def 类型 / let 注解 / Π 域与余域）：结构预检后回落
+    /// 原 `check(…, v_u())`；Π 链逐段预检——域检查后在绑定上下文里预检余域
+    /// （与原 Pi 臂同构，域/余域各只检查一次，无额外 meta）。
+    fn check_ty<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: Cxt<'a>,
+        t: &Raw,
+    ) -> Result<&'a Tm<'a>, Error> {
+        if let Raw::Pi(x, i, a, b) = t {
+            self.ty_precheck(bump, a)?;
+            let a_tm = self.check(bump, cxt, a, v_u())?;
+            let va = self.eval(bump, cxt.env, a_tm);
+            let name: &'a str = bump.alloc_str(&x.data);
+            let mark = cxt.mark;
+            let a_t = self.quote(bump, cxt.lvl, va);
+            let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, va);
+            let res: Result<&'a Tm<'a>, Error> = {
+                self.ty_precheck(bump, b)?;
+                let b_tm = self.check(bump, cxt2, b, v_u())?;
+                Ok(bump.alloc(Tm::Pi(name, *i, a_tm, b_tm)))
+            };
+            self.unwind_names(mark);
+            res
+        } else {
+            self.ty_precheck(bump, t)?;
+            self.check(bump, cxt, t, v_u())
         }
     }
 
@@ -3253,19 +3315,19 @@ impl Machine {
             }
 
             Raw::Pi(x, i, a, b) => {
-                let a_tm = self.check(bump, cxt, a, v_u())?;
+                let a_tm = self.check_ty(bump, cxt, a)?;
                 let va = self.eval(bump, cxt.env, a_tm);
                 let name: &'a str = bump.alloc_str(&x.data);
                 let mark = cxt.mark;
                 let a_t = self.quote(bump, cxt.lvl, va);
                 let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, va);
-                let b_tm = self.check(bump, cxt2, b, v_u())?;
+                let b_tm = self.check_ty(bump, cxt2, b)?;
                 self.unwind_names(mark);
                 Ok((bump.alloc(Tm::Pi(name, *i, a_tm, b_tm)), v_u()))
             }
 
             Raw::Let(x, a_ty, t, u) => {
-                let a_tm = self.check(bump, cxt, a_ty, v_u())?;
+                let a_tm = self.check_ty(bump, cxt, a_ty)?;
                 let va = self.eval(bump, cxt.env, a_tm);
                 let t_tm = self.check(bump, cxt, t, va)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
@@ -3311,7 +3373,7 @@ impl Machine {
                 for (n, _, i) in params.iter().rev() {
                     bod = Raw::Lam(n.clone(), Either::Icit(*i), Box::new(bod));
                 }
-                let typ_tm = self.check(bump, cxt, &typ, v_u())?;
+                let typ_tm = self.check_ty(bump, cxt, &typ)?;
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
                 // 重定义检查（与参考版同款，L13 `fake_bind` 的移植）：
                 // builtin / 先前 def 已登记 → 定向报错，不再静默覆盖。

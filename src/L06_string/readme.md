@@ -58,6 +58,10 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
    中 → `redefine {名}` 定向报错（L13 `fake_bind` 语义前传），不再静默
    覆盖；类型错误先于重定义报出（与 L13 检查顺序一致）。上游演示的
    "同名覆盖"习语随之失效，demo 改独立名（`m2`/`test2`）。
+7. **类型注解的 universe 定向报错**：注解形态确定非类型（字面量；名字
+   的类型非 `U` 且不是未解 meta）→ `expected universe, got …`（L13
+   `check_universe` 的轻量移植；结构预检零副作用，`?N` 编号不受扰动）。
+   洞 / 未解 meta 放行——可解性仍交主检查路径。
 
 ## 性能版要点（相对 L05 的增量）
 
