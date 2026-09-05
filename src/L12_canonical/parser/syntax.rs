@@ -50,6 +50,28 @@ impl Pattern {
             Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => icit.clone(),
         }
     }
+    pub fn to_span(&self) -> Span<()> {
+        match self {
+            Pattern::Any(s, _) => s.to_span(),
+            Pattern::Con(s, _, _) => s.to_span(),
+        }
+    }
+}
+
+impl std::fmt::Display for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Pattern::Any(_, _) => write!(f, "_"),
+            Pattern::Con(name, pats, _) => {
+                if pats.is_empty() {
+                    write!(f, "{}", name.data)
+                } else {
+                    let inner = pats.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                    write!(f, "{}({})", name.data, inner)
+                }
+            }
+        }
+    }
 }
 
 impl Pattern {

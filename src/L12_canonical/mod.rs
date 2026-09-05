@@ -802,7 +802,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     let mut global_macros: std::collections::HashMap<String, Vec<parser::macros::MacroRule>> = Default::default();
     let mut id = 0;
     for p in prelude {
-        if let Some((decls, parse_errs, new_exports)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
+        if let Some((decls, parse_errs, new_exports, _)) = parser::parser_with_macros(&preprocess(p), id, &global_macros) {
             for ast_err in parse_errs {
                 println!("{:?}", ast_err)
             }
@@ -818,7 +818,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
     }
     // Parse main file with accumulated macros from prelude
     let ast = parser::parser_with_macros(&preprocess(input), prelude.len() as u32, &global_macros)
-        .map(|(d, e, _)| (d, e))
+        .map(|(d, e, _, _)| (d, e))
         .unwrap();
     println!("-----------------");
     //TODO: do not print err. return error
