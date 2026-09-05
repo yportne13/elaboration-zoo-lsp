@@ -28,6 +28,8 @@ mod list;
 
 #[path = "../src/parser_lib.rs"]
 mod parser_lib;
+#[path = "../src/parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../src/L04_implicit/mod.rs"]
 mod L04_implicit;
