@@ -1,4 +1,5 @@
 use crate::parser_lib::*;
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TokenKind {
@@ -15,7 +16,13 @@ pub enum TokenKind {
     ImplKeyword,
     ForKeyword,
     ThisKeyword,
+    StaticKeyword,
     MacroKeyword,
+    WhereKeyword,
+    PackageKeyword,
+    ImportKeyword,
+    ClassKeyword,
+    ByKeyword,
 
     Hole,
     LParen,
@@ -48,11 +55,63 @@ pub enum TokenKind {
     Eof,
 }
 
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenKind::DefKeyword     => write!(f, "`def`"),
+            TokenKind::LetKeyword     => write!(f, "`let`"),
+            TokenKind::PrintlnKeyword => write!(f, "`println`"),
+            TokenKind::EnumKeyword    => write!(f, "`enum`"),
+            TokenKind::StructKeyword  => write!(f, "`struct`"),
+            TokenKind::TypeKeyword    => write!(f, "`Type`"),
+            TokenKind::MatchKeyword   => write!(f, "`match`"),
+            TokenKind::CaseKeyword    => write!(f, "`case`"),
+            TokenKind::NewKeyword     => write!(f, "`new`"),
+            TokenKind::TraitKeyword   => write!(f, "`trait`"),
+            TokenKind::ImplKeyword    => write!(f, "`impl`"),
+            TokenKind::ForKeyword     => write!(f, "`for`"),
+            TokenKind::ThisKeyword    => write!(f, "`this`"),
+            TokenKind::StaticKeyword  => write!(f, "`static`"),
+            TokenKind::MacroKeyword   => write!(f, "`macro_rules`"),
+            TokenKind::WhereKeyword   => write!(f, "`where`"),
+            TokenKind::PackageKeyword => write!(f, "`package`"),
+            TokenKind::ImportKeyword  => write!(f, "`import`"),
+            TokenKind::ClassKeyword   => write!(f, "`class`"),
+            TokenKind::ByKeyword      => write!(f, "`by`"),
+            TokenKind::Hole           => write!(f, "`_`"),
+            TokenKind::LParen         => write!(f, "`(`"),
+            TokenKind::RParen         => write!(f, "`)`"),
+            TokenKind::LSquare        => write!(f, "`[`"),
+            TokenKind::RSquare        => write!(f, "`]`"),
+            TokenKind::LCurly         => write!(f, "`{{}}`"),
+            TokenKind::RCurly         => write!(f, "`}}`"),
+            TokenKind::Dot            => write!(f, "`.`"),
+            TokenKind::Eq             => write!(f, "`=`"),
+            TokenKind::Semi           => write!(f, "`;`"),
+            TokenKind::Colon          => write!(f, "`:`"),
+            TokenKind::Arrow          => write!(f, "`->`"),
+            TokenKind::DoubleArrow    => write!(f, "`=>`"),
+            TokenKind::Lambda         => write!(f, "`\\`"),
+            TokenKind::Comma          => write!(f, "`,`"),
+            TokenKind::Ident          => write!(f, "identifier"),
+            TokenKind::MacroIdent     => write!(f, "macro identifier"),
+            TokenKind::Num            => write!(f, "number"),
+            TokenKind::Op             => write!(f, "operator"),
+            TokenKind::Str            => write!(f, "string"),
+            TokenKind::EndLine        => write!(f, "newline"),
+            TokenKind::ErrToken       => write!(f, "unexpected token"),
+            TokenKind::Eof            => write!(f, "end of file"),
+        }
+    }
+}
+
 pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
 
-const KEYWORD: [(&str, TokenKind); 14] = [
+const KEYWORD: [(&str, TokenKind); 20] = [
+    ("package", PackageKeyword),
+    ("import", ImportKeyword),
     ("def", DefKeyword),
     ("let", LetKeyword),
     ("println", PrintlnKeyword),
@@ -66,7 +125,11 @@ const KEYWORD: [(&str, TokenKind); 14] = [
     ("impl", ImplKeyword),
     ("for", ForKeyword),
     ("this", ThisKeyword),
+    ("static", StaticKeyword),
     ("macro_rules", MacroKeyword),
+    ("where", WhereKeyword),
+    ("class", ClassKeyword),
+    ("by", ByKeyword),
 ];
 
 const OP: [(&str, TokenKind); 15] = [
@@ -103,7 +166,7 @@ fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
             end += 1;
         }
     }
-    if end == 0 || end >= bytes.len() || bytes[end] != b'"' {
+    if end >= bytes.len() || bytes[end] != b'"' {
         return None;
     }
     let content = &data[..end];
@@ -127,7 +190,6 @@ fn string(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     is(';')
         .map(|x| x.map(|t| (t, Semi)))
-        .or(is('_').map(|x| x.map(|t| (t, Hole))))
         .or(pmatch(|c: char| c.is_alphabetic() || c == '_')
             .with(pmatch(|c: char| c.is_alphanumeric() || c == '_').option())
             .map(|(head, tail)| {
@@ -136,8 +198,15 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
                     input.data
                         .get_unchecked(..head.len() as usize + tail_len as usize)
                 };
-                let kind = if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
+                let kind = if ident == "_" {
+                    Hole
+                } else if let Some((_, k)) = KEYWORD.into_iter().find(|(k, _)| ident == *k) {
                     k
+                } else if ident == "until" {
+                    // HDL range operator: `0 until 4` parses as infix
+                    // `0.until(4)` (kind+text matcher in macro patterns
+                    // compares this token exactly like any Op).
+                    Op
                 } else {
                     Ident
                 };
@@ -172,13 +241,17 @@ fn macro_ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 }
 
 fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
+    let dot = is('.').map(|x| x.map(|y| (y, Dot)));
+    let comma = is(',').map(|x| x.map(|y| (y, Comma)));
     let lparen = is('(').map(|x| x.map(|y| (y, LParen)));
     let rparen = is(')').map(|x| x.map(|y| (y, RParen)));
     let lsquare = is('[').map(|x| x.map(|y| (y, LSquare)));
     let rsquare = is(']').map(|x| x.map(|y| (y, RSquare)));
     let lcurly = is('{').map(|x| x.map(|y| (y, LCurly)));
     let rcurly = is('}').map(|x| x.map(|y| (y, RCurly)));
-    lparen
+    dot
+        .or(comma)
+        .or(lparen)
         .or(rparen)
         .or(lsquare)
         .or(rsquare)
@@ -188,9 +261,11 @@ fn brace(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
 }
 
 fn op(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
+    // '.' is excluded from the operator character ranges so that it is never consumed
+    // as part of an operator token — it's always lexed as a standalone Dot.
     pmatch(|c: char| {
         ('!'..='\'').contains(&c)
-            || ('*'..='/').contains(&c)
+            || (('*'..='-').contains(&c) || c == '/')
             || ((':'..='@').contains(&c) && c != ';')
             || c == '\\'
             || (('^'..='`').contains(&c) && c != '_')
@@ -235,7 +310,16 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
                 .or(ws(err_token))
                 .many0(),
         )
-        .map(|(_, token)| token)
+        .map(|(_, token)| {
+            let mut token = token;
+            token.push(Span {
+                data: ("", Eof),
+                start_offset: input.end_offset,
+                end_offset: input.end_offset,
+                path_id: input.path_id,
+            });
+            token
+        })
         .parse(input)
 }
 
