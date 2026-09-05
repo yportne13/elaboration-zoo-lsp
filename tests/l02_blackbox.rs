@@ -24,6 +24,8 @@ mod list;
 
 #[path = "../src/parser_lib.rs"]
 mod parser_lib;
+#[path = "../src/parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../src/L02_tyck/mod.rs"]
 mod L02_tyck;

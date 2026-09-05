@@ -50,6 +50,8 @@ mod list;
 
 #[path = "../parser_lib.rs"]
 mod parser_lib;
+#[path = "../parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../L02_tyck/mod.rs"]
 mod L02_tyck;
