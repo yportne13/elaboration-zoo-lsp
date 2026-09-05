@@ -362,6 +362,24 @@ fn error_cases() {
     assert_error_parity("def bad : U = \"not a type\"\nprintln bad", "can't unify");
 }
 
+/// 重定义报错（L13 `fake_bind` 的移植）：同名 def 静默覆盖改为定向报错，
+/// def 与 builtin 撞名（`String` 已登记）同样被逮住——上游演示的
+/// "同名覆盖"习语相应退出 demo。
+#[test]
+fn redefine_error() {
+    assert_error_parity(
+        "def x : String = \"a\"\ndef x : String = \"b\"\nprintln x\n",
+        "redefine x",
+    );
+    // 与 builtin 撞名
+    assert_error_parity("def String : U = U\nprintln String\n", "redefine String");
+    // 重定义在体检查之前报出（第二个体的自引用不再生效）
+    assert_error_parity(
+        "def y : String = \"v\"\ndef y : String = y\nprintln y\n",
+        "redefine y",
+    );
+}
+
 // 深负载与稳态
 // --------------------------------------------------------------------------------
 

@@ -422,8 +422,10 @@ def the(A : U)(x: A): A = x
 def m(A : U)(B : U): U -> U -> U = _
 def test = a => b => the (Eq (m a a) (x => y => y)) refl
 
-def m : U -> U -> U -> U = _
-def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
+// 重定义报错（L13 fake_bind 语义）下名字不可覆盖——具体的 m2 接替上游
+// 演示里"同名覆盖"的角色，两条路径都保留
+def m2 : U -> U -> U -> U = _
+def test2 = a => b => c => the (Eq (m2 a b c) (m2 c b a)) refl
 
 
 def pr1 = f => x => f x

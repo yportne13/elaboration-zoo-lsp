@@ -3313,6 +3313,12 @@ impl Machine {
                 }
                 let typ_tm = self.check(bump, cxt, &typ, v_u())?;
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
+                // 重定义检查（与参考版同款，L13 `fake_bind` 的移植）：
+                // builtin / 先前 def 已登记 → 定向报错，不再静默覆盖。
+                // 在体检查之前返回，无名字/轨迹副作用残留。
+                if self.decls.contains_key(&name.data) {
+                    return Err(Error(format!("redefine {}", name.data)));
+                }
                 let t_tm = self.check(bump, cxt, &bod, vtyp)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
                 // decl 表登记（运行期按名取值：string_to_global_type 等）

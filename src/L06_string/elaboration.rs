@@ -137,6 +137,13 @@ impl Infer {
                 let ret_cxt = {
                     let typ_tm = self.check(cxt, typ, &Val::U.into())?;
                     let vtyp = self.eval(&cxt.env, &typ_tm);
+                    // 重定义检查（L13 `fake_bind` 的移植）：名字已登记
+                    // （builtin / 先前 def）→ 定向报错，不再静默覆盖。
+                    // 先类型后重定义，与 L13 的检查顺序一致（类型错误
+                    // 优先于重定义报出）。
+                    if self.decls.contains_key(&name.data) {
+                        return Err(Error(format!("redefine {}", name.data)));
+                    }
                     let t_tm = self.check(cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.env, &t_tm);
                     // Decl-table entry: top-level defs become runtime

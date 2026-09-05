@@ -219,17 +219,16 @@ fn decl_table_partial_application_refires() {
     assert_parity(src);
 }
 
-/// def 覆盖 builtin 名：decl 表单写入语义——同名 def 登记时 prim 被抹掉，
-/// 之后走用户定义的值。
+/// def 覆盖 builtin 名 → **重定义报错**（L13 `fake_bind` 移植）：decl 表
+/// 写入语义从静默覆盖改为定向报错，"同名 def 抹掉 prim"路径随之不可达。
 #[test]
-fn def_overrides_builtin_clears_prim() {
+fn def_overrides_builtin_is_redefine_error() {
     let src = concat!(
         "def string_concat : String -> String -> String = x => y => x\n",
         "def r : String = string_concat \"a\" \"b\"\n",
         "println r\n",
     );
-    assert_eq!(run_basic(src).unwrap(), "a\n");
-    assert_parity(src);
+    assert_error_parity(src, "redefine string_concat");
 }
 
 /// `change_mutable` 对缺失名是静默 no-op（不建档）——与
