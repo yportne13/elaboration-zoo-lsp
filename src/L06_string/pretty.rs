@@ -31,23 +31,83 @@ fn fresh(ns: List<String>, suggested: &str) -> String {
 }
 
 fn go_ix(ns: List<String>, ix: u32) -> String {
-    for (i, name) in ns.iter().enumerate() {
-        if i as u32 == ix {
+    let mut current_ix = ix;
+    for name in ns.iter() {
+        if current_ix == 0 {
             if name == "_" {
                 return format!("@{}", ix)
             } else {
                 return name.to_string()
             }
         }
+        current_ix -= 1;
     }
-    panic!("Variable index out of bounds");
+    // 名字表短于索引（如 hover 类调用方拿错名字表）：退化成固定文案而
+    // 不是 panic——显示路径绝不能崩（L13 pretty 同款行为）。
+    "Variable index out of bounds".to_owned()
 }
 
-/// `AppPruning` 是项层的洞形态（`fresh_meta` 产出），只存在于
-/// elaboration 中间；pretty 只吃 quote 出的 nf 项，而 quote 不产
-/// `AppPruning`——本分支不可达。
-fn go_app_pruning(_p: i32, _top_ns: List<String>, _ns: List<String>, _t: &Tm, _pr: &Pruning) -> String {
-    unreachable!("AppPruning 不进 pretty：quote 不产该形态")
+/// `AppPruning` 是项层的洞形态（`fresh_meta` 产出）；常规 pretty 只吃
+/// quote 出的 nf 项（quote 不产该形态），但显示路径必须兜底：掩码槽位
+/// 与名字表按位置配对，保留槽打印 binder 名（`_` 槽退化 `@序号`），
+/// 名字表不足时退化位置占位（L13 `go_pr_inner` 同款，不 panic）。
+fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+    fn go_pr_inner(
+        p: i32,
+        top_ns: &List<String>,
+        mut ns: List<String>,
+        t: &Tm,
+        mut pr: Pruning,
+        arg_index: u32,
+    ) -> String {
+        loop {
+            match (ns.split(), pr.split()) {
+                ((None, _), (None, _)) => return pretty_tm(p, top_ns.clone(), t),
+                ((Some(n), rest_ns), (Some(prune), rest_pr)) => {
+                    if let Some(i) = prune {
+                        let need_paren = p > APPP;
+                        let arg_str = if n == "_" {
+                            format!("@{}", arg_index)
+                        } else {
+                            n.clone()
+                        };
+                        let arg_display = match i {
+                            Icit::Expl => arg_str,
+                            Icit::Impl => format!("[{arg_str}]"),
+                        };
+                        let inner = go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1);
+                        let result = format!("{} {}", inner, arg_display);
+                        return if need_paren { paren(result) } else { result };
+                    } else {
+                        ns = rest_ns;
+                        pr = rest_pr;
+                    }
+                }
+                // 名字表短于掩码（AppPruning 的 meta 在更深的签名 binder
+                // 里创建、显示时名字表更短）：退化 `@序号` 占位而不是 panic。
+                ((None, _), (Some(prune), rest_pr)) => {
+                    if let Some(i) = prune {
+                        let need_paren = p > APPP;
+                        let arg_str = format!("@{}", arg_index);
+                        let arg_display = match i {
+                            Icit::Expl => arg_str,
+                            Icit::Impl => format!("[{arg_str}]"),
+                        };
+                        let inner = go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1);
+                        let result = format!("{} {}", inner, arg_display);
+                        return if need_paren { paren(result) } else { result };
+                    } else {
+                        pr = rest_pr;
+                    }
+                }
+                ((Some(_), rest_ns), (None, _)) => {
+                    ns = rest_ns;
+                }
+            }
+        }
+    }
+
+    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0)
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {

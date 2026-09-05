@@ -479,3 +479,71 @@ fn workload_node_counts() {
     assert_eq!(L06_string::bench_check_nf(&raw), 1, "strchain 参考版节点数");
 }
 
+// --------------------------------------------------------------------------------
+// 递归 def（L13 `fake_bind` 的另一半：查重 + 指向自身的占位 + Var 的 decl 表
+// 回退）。体检查期间自身名经 decl 表命中占位（`Tm::Decl` 引用，检查期即卡住
+// 的 Decl 头），检查完成后真实值覆盖登记。
+// --------------------------------------------------------------------------------
+
+/// 自指值（bare 自引用）：体检查通过，值是卡住的自身头，println 打回
+/// 名字本身。体应用自身的形态（`def f(x : U) : U = f x`）elaborate 同样
+/// 通过（见下一用例），但其归约无基底情形即发散（eval 层 delta 展开，
+/// L13 同款），不可 println 引读。
+#[test]
+fn bb_recursive_def_self_value() {
+    let src = "def n : U = n\nprintln n\n";
+    assert_parity(src);
+    assert_eq!(run_basic(src).unwrap(), "n\n");
+}
+
+/// 无注解的自指：注解位是洞（?0），体检查经占位回退对自身 Flex 类型
+/// 自反合一；输出仍为名字。
+#[test]
+fn bb_recursive_def_unannotated() {
+    let src = "def n = n\nprintln n\n";
+    assert_parity(src);
+    assert_eq!(run_basic(src).unwrap(), "n\n");
+}
+
+/// 自指函数（bare 自引用，函数类型）：值是卡住自身头，println 打回名字。
+#[test]
+fn bb_recursive_def_self_fun() {
+    let src = "def f : U -> U = f\nprintln f\n";
+    assert_parity(src);
+    assert_eq!(run_basic(src).unwrap(), "f\n");
+}
+
+/// 自应用递归：两实现都只钉 **elaboration 判定**（体检查期间自身名经
+/// decl 表占位回退命中）；归约发散，不引读输出。
+#[test]
+fn bb_recursive_def_self_app_elaborates() {
+    let src = "def f(x : U) : U = f x\n";
+    let raw = L06_string::parser::parser(&L06_string::preprocess(src), 0).unwrap();
+    assert!(L06_string::bench_check(&raw), "参考版应通过");
+    let raw2 = L06_string::parser::parser(&L06_string::preprocess(src), 0).unwrap();
+    let mut t = fast::Tycker::new();
+    assert!(t.bench_check(&raw2), "性能版应通过");
+}
+
+/// 递归名对**后续** def 可见（经 define 的正常路径），值沿用卡住自身头。
+#[test]
+fn bb_recursive_def_used_later() {
+    let src = "def n : U = n\ndef m : U = n\nprintln m\nprintln n\n";
+    assert_parity(src);
+    assert_eq!(run_basic(src).unwrap(), "n\nn\n");
+}
+
+/// 自身名只在**体**里可见：类型注解先于占位插入检查（L13 同序），
+/// 注解位自指仍报 name-not-in-scope。
+#[test]
+fn bb_recursive_name_not_in_own_annotation() {
+    assert_error_parity("def bad(b : bad) : U = U\n", "name not in scope");
+}
+
+/// 递归 def 与重定义检查共存：占位登记后，同名第二 def 仍被查重拦截。
+#[test]
+fn bb_recursive_def_still_redefine() {
+    assert_error_parity("def n : U = n\ndef n : U = n\n", "redefine n");
+}
+
+

@@ -3125,27 +3125,36 @@ impl Machine {
     fn ty_precheck<'a>(&mut self, bump: &Bump, t: &Raw) -> Result<(), Error> {
         match t {
             Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
-            Raw::Var(x) => match self.name_map.get(x.data.as_str()) {
-                Some(&(_, ty)) => {
-                    // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
-                    // 头是 Meta）放行
-                    let v = self.force_v(bump, ty);
-                    if v_tag(v) == 3 {
-                        return Ok(());
+            Raw::Var(x) => {
+                // 名字解析：name_map 优先，decl 表回退（与参考版 ty_precheck
+                // 对齐——覆盖 def 体检查期间的自身占位名）
+                let ty = self
+                    .name_map
+                    .get(x.data.as_str())
+                    .map(|&(_, ty)| ty)
+                    .or_else(|| self.decls.get(x.data.as_str()).map(|e| e.va));
+                match ty {
+                    Some(ty) => {
+                        // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
+                        // 头是 Meta）放行
+                        let v = self.force_v(bump, ty);
+                        if v_tag(v) == 3 {
+                            return Ok(());
+                        }
+                        let is_flex = match v_tag(v) {
+                            5 => true,
+                            2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
+                            _ => false,
+                        };
+                        if is_flex {
+                            Ok(())
+                        } else {
+                            Err(Error(format!("expected universe, got V({})", v.0)))
+                        }
                     }
-                    let is_flex = match v_tag(v) {
-                        5 => true,
-                        2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
-                        _ => false,
-                    };
-                    if is_flex {
-                        Ok(())
-                    } else {
-                        Err(Error(format!("expected universe, got V({})", v.0)))
-                    }
+                    None => Ok(()), // 未知名：主检查报 name-not-in-scope（原路径）
                 }
-                None => Ok(()), // 未知名：主检查报 name-not-in-scope（原路径）
-            },
+            }
             _ => Ok(()),
         }
     }
@@ -3200,6 +3209,13 @@ impl Machine {
                         i += 1;
                         tys = tc.next;
                     }
+                }
+                // decl 表回退（与参考版同款）：正常程序里 name_map 覆盖全部
+                // 可见名（def/builtin 都 define），唯一 miss 而 decl 表命中的
+                // 是递归 def 体检查期间的自身占位——引用走 `Tm::Decl`
+                // （求值期查表取登记值，检查期即占位的卡住 Decl 头）
+                if let Some(e) = self.decls.get(x.data.as_str()) {
+                    return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&x.data))), e.va));
                 }
                 Err(Error(format!(
                     "error name not in scope: {:?}",
@@ -3381,6 +3397,19 @@ impl Machine {
                 if self.decls.contains_key(&name.data) {
                     return Err(Error(format!("redefine {}", name.data)));
                 }
+                // 递归（L13 `fake_bind` 的另一半，与参考版同款）：先登记指向
+                // 自身的中性占位，体检查期间 Var 经 decl 表回退命中，检查完成
+                // 后用真实值覆盖（下方重新 insert）。检查失败时 run 整体 Err
+                // 退出，占位不会外泄。
+                let self_name: &'a str = bump.alloc_str(&name.data);
+                self.decls.insert(
+                    name.data.clone(),
+                    DeclEntryF {
+                        vt: v_xcell(bump.alloc(XCell::Decl(self_name))),
+                        va: vtyp,
+                        prim: None,
+                    },
+                );
                 let t_tm = self.check(bump, cxt, &bod, vtyp)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
                 // decl 表登记（运行期按名取值：string_to_global_type 等）

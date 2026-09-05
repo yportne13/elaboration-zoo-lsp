@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use crate::parser_lib::Span;
+use crate::{list::List, parser_lib::Span};
 
 use super::{
     empty_span, lvl2ix, parser::syntax::{Decl, Either, Icit, Raw}, Closure, Cxt, DeclEntry, DeclTm, Error, Infer, Tm, VTy, Val
@@ -126,13 +126,16 @@ impl Infer {
     fn ty_precheck(&self, cxt: &Cxt, t: &Raw) -> Result<(), Error> {
         match t {
             Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
-            Raw::Var(x) => match cxt.src_names.get(&x.data) {
-                Some((_, va)) => match self.force(va).as_ref() {
+            Raw::Var(x) => match cxt.src_names.get(&x.data).map(|(_, va)| va.clone()).or_else(|| self.decls.get(&x.data).map(|e| e.va.clone())) {
+                Some(va) => match self.force(&va).as_ref() {
                     // force 已展开已解 meta；留下的 Flex 必是未解 → 放行
                     Val::U | Val::Flex(_, _) => Ok(()),
                     other => Err(Error(format!("expected universe, got {:?}", other))),
                 },
-                None => Ok(()), // 未知名：主检查报 name-not-in-scope（原路径）
+                // 未知名：主检查报 name-not-in-scope（原路径）；decl 表
+                // 回退与 L07/L08 的 ty_precheck 对齐（覆盖 def 体检查期间
+                // 的自身占位名）
+                None => Ok(()),
             },
             _ => Ok(()),
         }
@@ -180,6 +183,16 @@ impl Infer {
                     if self.decls.contains_key(&name.data) {
                         return Err(Error(format!("redefine {}", name.data)));
                     }
+                    // 递归（L13 `fake_bind` 的另一半）：先把名字登记成指向
+                    // 自身的中性占位，体检查期间 Var 经 decl 表回退命中
+                    // （引用 = `Tm::Decl`，求值期查表——检查期即卡住的
+                    // Decl 头），检查完成后用真实值覆盖。检查失败时 run
+                    // 整体 Err 退出，占位不会外泄。
+                    self.decls.insert(name.data.clone(), DeclEntry {
+                        vt: Val::Decl(name.clone(), List::new()).into(),
+                        va: vtyp.clone(),
+                        prim: None,
+                    });
                     let t_tm = self.check(cxt, bod, &vtyp)?;
                     let vt = self.eval(&cxt.env, &t_tm);
                     // Decl-table entry: top-level defs become runtime
@@ -210,7 +223,15 @@ impl Infer {
             Raw::Var(x) => {
                 match cxt.src_names.get(&x.data) {
                     Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)), a.clone())),
-                    None => Err(Error(format!("error name not in scope: {:?}", x))),
+                    // decl 表回退（L13 fake_bind 语义的另一半）：正常程序
+                    // 里 src_names 覆盖全部可见名（def/builtin 都 define），
+                    // 唯一 miss 而 decl 表命中的是递归 def 体检查期间的
+                    // 自身占位——引用走 `Tm::Decl`（求值期查表取登记值，
+                    // 检查期即占位的卡住 Decl 头）
+                    None => match self.decls.get(&x.data) {
+                        Some(entry) => Ok((Tm::Decl(x.clone()), entry.va.clone())),
+                        None => Err(Error(format!("error name not in scope: {:?}", x))),
+                    },
                 }
             }
 
