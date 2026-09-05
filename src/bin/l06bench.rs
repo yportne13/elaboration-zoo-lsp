@@ -44,6 +44,8 @@ mod list;
 
 #[path = "../parser_lib.rs"]
 mod parser_lib;
+#[path = "../parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../L06_string/mod.rs"]
 mod L06_string;

@@ -35,6 +35,38 @@ pub enum TokenKind {
     Eof,
 }
 
+impl std::fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TokenKind::DefKeyword     => write!(f, "`def`"),
+            TokenKind::LetKeyword     => write!(f, "`let`"),
+            TokenKind::PrintlnKeyword => write!(f, "`println`"),
+            TokenKind::UKeyword       => write!(f, "`U`"),
+            TokenKind::Hole           => write!(f, "`_`"),
+            TokenKind::LParen         => write!(f, "`(`"),
+            TokenKind::RParen         => write!(f, "`)`"),
+            TokenKind::LSquare        => write!(f, "`[`"),
+            TokenKind::RSquare        => write!(f, "`]`"),
+            TokenKind::LCurly         => write!(f, "`{{}}`"),
+            TokenKind::RCurly         => write!(f, "`}}`"),
+            TokenKind::Dot            => write!(f, "`.`"),
+            TokenKind::Eq             => write!(f, "`=`"),
+            TokenKind::Semi           => write!(f, "`;`"),
+            TokenKind::Colon          => write!(f, "`:`"),
+            TokenKind::Arrow          => write!(f, "`->`"),
+            TokenKind::DoubleArrow    => write!(f, "`=>`"),
+            TokenKind::Lambda         => write!(f, "`\\`"),
+            TokenKind::Comma          => write!(f, "`,`"),
+            TokenKind::Ident          => write!(f, "identifier"),
+            TokenKind::Num            => write!(f, "number"),
+            TokenKind::Op             => write!(f, "operator"),
+            TokenKind::Str            => write!(f, "string"),
+            TokenKind::ErrToken       => write!(f, "unexpected token"),
+            TokenKind::Eof            => write!(f, "end of file"),
+        }
+    }
+}
+
 pub type Token<'a> = Span<(&'a str, TokenKind)>;
 
 use TokenKind::*;
