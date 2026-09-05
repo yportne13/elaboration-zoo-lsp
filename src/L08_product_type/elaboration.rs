@@ -97,7 +97,7 @@ impl Infer {
             }
             // let
             (Raw::Let(x, a, t, u), a_prime) => {
-                let a_checked = self.check(cxt, *a, Val::U)?;
+                let a_checked = self.check_ty(cxt, *a)?;
                 let va = self.eval(decl, &cxt.env, a_checked.clone());
                 let t_checked = self.check(cxt, *t, va.clone())?;
                 let vt = self.eval(decl, &cxt.env, t_checked.clone());
@@ -132,6 +132,55 @@ impl Infer {
         }
     }
 
+    /// 类型注解的 universe 结构预检（L13 `check_universe` 的轻量移植，
+    /// 零副作用）：`LiteralIntro` 恒非类型；`Var` 在名字表（局部优先，
+    /// 其次全局 decl 表）且类型已确定（非 U、非未解 meta）→ 定向报错。
+    /// 洞 / 未解 meta / 其余形态放行——可解与否交主检查路径（预检不推断、
+    /// 不造 meta，?N 编号不受扰动）。
+    fn ty_precheck(&self, cxt: &Cxt, t: &Raw) -> Result<(), Error> {
+        match t {
+            Raw::LiteralIntro(_) => Err(Error("expected universe, got LiteralType".to_owned())),
+            Raw::Var(x) => {
+                // L07/L08 的全局只登记在 decl 表（不 define 进 src_names）——
+                // 与 infer 的 Var 臂解析序一致：局部优先，其次 decl
+                let va = cxt
+                    .src_names
+                    .get(&x.data)
+                    .map(|(_, ty)| ty.clone())
+                    .or_else(|| cxt.decl_get(&x.data).map(|e| e.ty.clone()));
+                if let Some(va) = va {
+                    match self.force(cxt.decl(), va) {
+                        // force 已展开已解 meta；留下的 Flex 必是未解 → 放行
+                        Val::U | Val::Flex(_, _) => Ok(()),
+                        other => Err(Error(format!("expected universe, got {:?}", other))),
+                    }
+                } else {
+                    Ok(()) // 未知名：主检查报 name-not-in-scope（原路径）
+                }
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// 类型注解的检查入口（Def/enum/struct 类型 / let 注解 / Π 域与余域）：
+    /// 结构预检后回落原 `check(…, Val::U)`；Π 链逐段预检——域检查后在
+    /// 绑定上下文里预检余域（与原 Pi 臂同构，域/余域各只检查一次，无额外
+    /// meta）。
+    fn check_ty(&mut self, cxt: &Cxt, t: Raw) -> Result<Tm, Error> {
+        if let Raw::Pi(x, i, a, b) = &t {
+            self.ty_precheck(cxt, a)?;
+            let a_checked = self.check(cxt, *a.clone(), Val::U)?;
+            let a_eval = self.eval(cxt.decl(), &cxt.env, a_checked.clone());
+            let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
+            self.ty_precheck(&cxt2, b)?;
+            let b_checked = self.check(&cxt2, *b.clone(), Val::U)?;
+            Ok(Tm::Pi(x.clone(), *i, Box::new(a_checked), Box::new(b_checked)))
+        } else {
+            self.ty_precheck(cxt, &t)?;
+            self.check(cxt, t, Val::U)
+        }
+    }
+
     pub fn infer(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Val, Cxt), Error> {
         let decl = cxt.decl();
         match t {
@@ -157,7 +206,7 @@ impl Infer {
                         Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                     })
                 };
-                let typ_tm = self.check(cxt, typ, Val::U)?;
+                let typ_tm = self.check_ty(cxt, typ)?;
                 let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
                 // 重定义检查（L13 `fake_bind` 移植）：名字已登记（builtin /
                 // 先前 def / enum / struct）→ 定向报错，不再静默覆盖。先
@@ -245,7 +294,7 @@ impl Infer {
                 let bod = params.iter().rev().fold(sum, |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let typ_tm = self.check(cxt, typ, Val::U)?;
+                let typ_tm = self.check_ty(cxt, typ)?;
                 let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
                 // 重定义检查（L13 `fake_bind` 移植）：同名 enum / struct /
                 // def / builtin → 定向报错，不再静默覆盖。
@@ -540,12 +589,11 @@ impl Infer {
             Raw::U => Ok((Tm::U, Val::U)),
 
             Raw::Pi(x, i, a, b) => {
-                let a_checked = self.check(cxt, *a, Val::U)?;
+                let a_checked = self.check_ty(cxt, *a)?;
                 let a_eval = self.eval(decl, &cxt.env, a_checked.clone());
-                let b_checked = self.check(
+                let b_checked = self.check_ty(
                     &cxt.bind(x.clone(), self.quote(decl, cxt.lvl, a_eval.clone()), a_eval),
                     *b,
-                    Val::U,
                 )?;
                 Ok((
                     Tm::Pi(x, i, Box::new(a_checked), Box::new(b_checked)),
@@ -554,7 +602,7 @@ impl Infer {
             }
 
             Raw::Let(x, a, t, u) => {
-                let a_checked = self.check(cxt, *a, Val::U)?;
+                let a_checked = self.check_ty(cxt, *a)?;
                 let va = self.eval(decl, &cxt.env, a_checked.clone());
                 let t_checked = self.check(cxt, *t, va.clone())?;
                 let vt = self.eval(decl, &cxt.env, t_checked.clone());
