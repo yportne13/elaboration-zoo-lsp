@@ -34,6 +34,8 @@ mod list;
 
 #[path = "../parser_lib.rs"]
 mod parser_lib;
+#[path = "../parser_lib_resilient.rs"]
+mod parser_lib_resilient;
 
 #[path = "../L05_pruning/mod.rs"]
 mod L05_pruning;
