@@ -15,6 +15,7 @@ mod pattern_match;
 mod syntax;
 mod unification;
 mod pretty;
+pub(crate) mod bump_spine_iter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
@@ -530,6 +531,94 @@ pub fn preprocess(s: &str) -> String {
         })
         .reduce(|a, b| a + "\n" + &b)
         .unwrap_or(s.to_owned())
+}
+
+/// 参考版项的节点数（与性能版 `tm_size` 同口径）。
+fn tm_size_ref(t: &Tm) -> u64 {
+    let mut stack: Vec<&Tm> = vec![t];
+    let mut n = 0u64;
+    while let Some(x) = stack.pop() {
+        n += 1;
+        match x {
+            Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_)
+            | Tm::Prim => {}
+            Tm::Obj(h, _) => stack.push(h),
+            Tm::Lam(_, _, b) => stack.push(b),
+            Tm::App(f, a, _) => {
+                stack.push(f);
+                stack.push(a);
+            }
+            Tm::AppPruning(h, pr) => {
+                stack.push(h);
+                n += pr.len() as u64;
+            }
+            Tm::Pi(_, _, a, b) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            Tm::Let(_, a, t, u) => {
+                stack.push(a);
+                stack.push(t);
+                stack.push(u);
+            }
+            Tm::Sum(_, params, _) => {
+                for (_, v, ty, _) in params {
+                    stack.push(v);
+                    stack.push(ty);
+                }
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                stack.push(typ);
+                for (_, v, _) in datas {
+                    stack.push(v);
+                }
+            }
+            Tm::Match(s, cases) => {
+                stack.push(s);
+                for (p, b) in cases {
+                    n += p.bind_count() as u64;
+                    stack.push(b);
+                }
+            }
+        }
+    }
+    n
+}
+
+/// 参考版基准口径：elaborate 全部 decl，返回是否通过。
+pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new();
+    for d in decls {
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return false,
+        }
+    }
+    true
+}
+
+/// 参考版基准口径：check + nf——取**最后一个 def** 的登记值（define 链的
+/// env 槽顶）空层级引读并数节点（深 Box 树的递归析构会爆栈，`mem::forget`）。
+pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new();
+    let mut last: Option<Val> = None;
+    for d in decls {
+        let is_def = matches!(d, parser::syntax::Decl::Def { .. });
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return 0,
+        }
+        if is_def {
+            last = cxt.env.head().cloned();
+        }
+    }
+    let Some(v) = last else { return 0 };
+    let q = infer.quote(Lvl(0), v);
+    let n = tm_size_ref(&q);
+    std::mem::forget(q);
+    n
 }
 
 #[test]

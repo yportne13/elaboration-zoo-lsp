@@ -1,0 +1,956 @@
+//! L09_mltt 双 oracle 互检套件（参考版 `run` ↔ 性能版 `bump_spine_iter::
+//! run_fast`）。`#[path]` 只编 list.rs / bimap.rs / parser_lib.rs /
+//! L09_mltt/mod.rs（不含 LSP / L02-L08 / L10-L13），迭代快数倍
+//! （tests/l08_fast_parity.rs 同款）。
+//!
+//! 判据：**Ok 输出逐字节一致 / Err 判定一致**。错误文案两处已知偏差是
+//! 文档化偏差，比对前归一化：参考版错误 Span 携带源码偏移（快版全零），
+//! 且参考版消息内嵌的 Debug-Val/Tm 带真实偏移——统一剥掉
+//! `start_offset/end_offset/path_id` 数字后比对正文。
+
+#![feature(pattern)]
+
+#[path = "../src/list.rs"]
+mod list;
+
+#[path = "../src/bimap.rs"]
+mod bimap;
+
+#[path = "../src/parser_lib.rs"]
+mod parser_lib;
+#[path = "../src/parser_lib_resilient.rs"]
+mod parser_lib_resilient;
+
+#[path = "../src/L09_mltt/mod.rs"]
+mod L09_mltt;
+
+use L09_mltt::bump_spine_iter as fast;
+
+/// 在大栈线程里跑参考版 `run`。
+fn run_basic(src: &str) -> Result<String, L09_mltt::Error> {
+    let input = src.to_owned();
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || L09_mltt::run(&input, 0))
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// 在大栈线程里跑快版 `run_fast`。
+fn run_fast(src: &str) -> Result<String, L09_mltt::Error> {
+    let input = src.to_owned();
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || fast::run_fast(&input, 0))
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+/// Err 文案归一化：剥掉 Debug-Span 的偏移数字（文档化偏差：参考版错误
+/// 的 Debug-Span 携带源码偏移，快版导出项全零）。
+fn norm_err(e: &str) -> String {
+    let mut out = String::with_capacity(e.len());
+    let b = e.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() {
+        // `@ N` / `@ N,M`（Span 自定义 Debug）
+        if b[i] == b'@' && i + 1 < b.len() && b[i + 1] == b' ' {
+            let mut j = i + 2;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 2 {
+                if j < b.len() && b[j] == b',' {
+                    let mut k = j + 1;
+                    while k < b.len() && b[k].is_ascii_digit() {
+                        k += 1;
+                    }
+                    if k > j + 1 {
+                        j = k;
+                    }
+                }
+                out.push_str("@ _");
+                i = j;
+                continue;
+            }
+        }
+        // start_offset: N / end_offset: N / path_id: N（派生 Debug 形态）
+        let rest = &e[i..];
+        let mut matched = false;
+        for key in ["start_offset: ", "end_offset: ", "path_id: "] {
+            if rest.starts_with(key) {
+                let mut j = i + key.len();
+                while j < b.len() && b[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > i + key.len() {
+                    out.push('_');
+                    i = j;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if matched {
+            continue;
+        }
+        let ch = e[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn err_text(e: &L09_mltt::Error) -> String {
+    norm_err(&e.0.data)
+}
+
+/// Oracle：参考版与性能版的 Ok 输出逐字节一致；Err 判定一致，且归一化
+/// 后的错误正文一致。
+fn assert_parity(src: &str) {
+    let b = run_basic(src);
+    let f = run_fast(src);
+    match (&b, &f) {
+        (Ok(b), Ok(f)) => assert_eq!(
+            b, f,
+            "Ok 输出双实现不一致，src:\n{src}\n--- basic ---\n{b}--- fast ---\n{f}"
+        ),
+        (Err(b), Err(f)) => assert_eq!(
+            err_text(b),
+            err_text(f),
+            "Err 正文（span 归一化后）双实现不一致，src:\n{src}\n--- basic ---\n{}\n--- fast ---\n{}",
+            b.0.data,
+            f.0.data
+        ),
+        _ => panic!(
+            "判定不一致（basic={}，fast={}），src:\n{src}\nbasic-err={:?}\nfast-err={:?}",
+            b.as_ref().map(|_| "Ok").unwrap_or("Err"),
+            f.as_ref().map(|_| "Ok").unwrap_or("Err"),
+            b.as_ref().err().map(|e| &e.0.data),
+            f.as_ref().err().map(|e| &e.0.data),
+        ),
+    }
+}
+
+// 基础：enum / match / 多态 / 高阶 / struct / new / 投影
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_tests_rs_basic() {
+    // mod.rs test2 的主体（enum + 依赖 match + struct + 投影 + 等式推理）
+    assert_parity(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def listid(x: List[Bool]): List[Bool] = x
+
+def create0: List[Bool] = nil
+
+def create1: List[Bool] = cons true nil
+
+def create2: List[Bool] = cons true (cons false nil)
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println (not true)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) = match x {
+    case zero => zero
+    case succ(n) => add y (mul n y)
+}
+
+def four = add two two
+
+println four
+
+struct Point[T] {
+    x: T
+    y: T
+}
+
+def get_x[T](p: Point[T]): T = p.x
+
+def point_add(p1: Point[Nat], p2: Point[Nat]): Point[Nat] =
+    new Point((add p1.x p2.x), (add p1.y p2.y))
+
+def start_point = new Point(zero, four)
+
+def end_point = new Point(four, two)
+
+println (get_x start_point)
+
+println (point_add start_point end_point)
+
+def Eq[A](x: A, y: A) = (P : A -> Type 0) -> P x -> P y
+
+def refl[A, x: A]: Eq[A] x x = _ => px => px
+
+struct Bits {
+    name: String
+    size: Nat
+}
+
+def get_name(x: Bits) = x.name
+
+def assign(a: Bits, b: Bits)(eq: Eq[Nat] a.size b.size): String = a.name
+
+def sigA = new Bits("A", four)
+
+def sigB = new Bits("B", four)
+
+def sigC = new Bits("C", two)
+
+def sigD = new Bits("D", two)
+
+def ab = assign sigA sigB refl
+
+def cd = assign sigC sigD refl
+"#,
+    );
+}
+
+#[test]
+fn parity_universe_levels() {
+    // mod.rs test2 的宇宙段：Type N 分层、高宇宙 enum、依赖类型参数
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+enum HighLvl[A] {
+    case1(a: A)
+    case2(a: test1)
+}
+
+def test2: HighLvl[Nat] = case1 zero
+
+def test3: Type 2 = HighLvl[Nat]
+
+enum HighLvl2[A: Type 2] {
+    case2_1(x: A)
+    case2_2(x: Nat)
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = case2_1 test2
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+enum HighLvl3[A: Type 2] {
+    case3_1
+    case3_2(x: Nat)
+}
+
+def test2_2: HighLvl3[HighLvl[Nat]] = case3_1
+
+def test2_3: Type 2 = HighLvl3[HighLvl[Nat]]
+
+println test0
+println test1
+println test3
+println test1_3
+"#,
+    );
+    // struct 版高宇宙（.mk 剥链 + new）
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def test1: Type 2 = Type 1 -> Type 0
+
+def test2_t: Type 1 -> Type 0 = t => Nat
+
+struct HighLvl[A] {
+    case1: A
+    case2: test1
+}
+
+def test2: HighLvl[Nat] = new HighLvl(zero, test2_t)
+
+def test3: Type 2 = HighLvl[Nat]
+
+struct HighLvl2[A: Type 2] {
+    case2_1: A
+    case2_2: Nat
+}
+
+def test1_2: HighLvl2[HighLvl[Nat]] = new HighLvl2(test2, zero)
+
+def test1_3: Type 2 = HighLvl2[HighLvl[Nat]]
+
+println test3
+println test1_3
+"#,
+    );
+}
+
+#[test]
+fn parity_lambda_calculus() {
+    // mod.rs test 的 church 风格段：纯依赖 λ 演算 + 字符串内建
+    assert_parity(
+        r#"
+def str_id(x: String, y: String): String = x
+
+def str_id2: String = string_concat "hello " "world"
+
+println str_id2
+
+def Eq[A : Type 0](x: A, y: A): Type 0 = (P : A -> Type 0) -> P x -> P y
+
+def refl[A : Type 0, x: A]: Eq[A] x x = _ => px => px
+
+def the(A : Type 0)(x: A): A = x
+
+def m : Type 0 -> Type 0 -> Type 0 -> Type 0 = _
+def test = a => b => c => the (Eq (m a b c) (m c b a)) refl
+
+def pr1 = f => x => f x
+
+def Nat : Type 0 =
+    (N : Type 0) -> (N -> N) -> N -> N
+def mul : Nat -> Nat -> Nat =
+    a => b => N => s => z => a _ (b _ s) z
+def ten : Nat =
+    N => s => z => s (s (s (s (s (s (s (s (s (s z)))))))))
+def hundred = mul ten ten
+
+println hundred
+
+def mystr = "hello world"
+
+def add_tail(x: String): String = string_concat x "!"
+
+def mystr2 = add_tail mystr
+
+println mystr2
+
+def stuck_concat = string_concat mystr
+
+println stuck_concat
+println (stuck_concat "!")
+"#,
+    );
+}
+
+// 索引族 / 依赖 match / 卡住 match / 等式推理
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_tests_rs_index() {
+    // 索引族 Eq / Vec、构造子返回类型、投影
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def test: Eq two two = refl
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t = cons zero (cons two (cons three (cons two nil)))
+
+println t.len
+
+def head[T, L: Nat](x: Vec[T] (succ L)): T =
+    match x {
+        case cons(x, _) => x
+    }
+
+println (head (cons zero nil))
+
+def length[T, l: Nat](x: (Vec[T] l)): Nat =
+    match x {
+        case nil => zero
+        case cons(_, xs) => succ (xs.len)
+    }
+"#,
+    );
+}
+
+#[test]
+fn parity_tests_rs_dependent_match() {
+    // 索引精化传播到分支体与返回类型、嵌套 match
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => cons x (t xs ys)
+        }
+    }
+"#,
+    );
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
+    match x {
+        case nil => cons zero nil
+        case cons(x, xs) => match y {
+            case cons(y, ys) => match t xs ys {
+                case cons(z, zs) => cons zero (cons zero zs)
+            }
+        }
+    }
+"#,
+    );
+}
+
+#[test]
+fn parity_eq_reasoning() {
+    // cong / symm / trans / rfl
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {
+        case refl(a) => refl[A] a
+    }
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {
+        case refl(a) => e2
+    }
+
+def two = succ (succ zero)
+
+def ck: Eq two two = rfl
+println ck
+"#,
+    );
+}
+
+#[test]
+fn parity_stuck_match() {
+    // 卡住 match 的合一 / splice / 外层 binder 实参
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def V(n: Nat): Type 0 =
+    match n {
+        case zero => Bool
+        case succ(m) => Bool
+    }
+
+def useV(n: Nat)(x: V n): V n = x
+
+def intoV(n: Nat): V n =
+    match n {
+        case zero => true
+        case succ(m) => false
+    }
+
+println (useV zero (intoV zero))
+println (useV (succ zero) (intoV (succ zero)))
+"#,
+    );
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat -> Nat =
+    match n {
+        case zero => succ
+        case succ(k) => succ
+    }
+
+println f
+"#,
+    );
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def pick(n: Nat): Nat -> Nat =
+    match n {
+        case zero => k => k
+        case succ(k) => k => succ k
+    }
+
+def test(m: Nat, j: Nat): Nat = (pick m) j
+"#,
+    );
+    // 卡住 match 的递归链（match_src 的 check 期与 quote 期协同）。
+    // 注：`println g`（打印引用自递归卡住 match 的函数值）会让参考版
+    // v_app 触发 "impossible apply" panic（L09 语义下 succ 应用于卡住
+    // match 值）——两版同崩，不进 parity 断言。
+    assert_parity(&fast::match_src(6));
+}
+
+#[test]
+fn parity_recursive_defs() {
+    // 自递归 + 后定义引用先定义（fake_bind 占位 + global 表覆盖）
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def even(x: Nat): Bool =
+    match x {
+        case zero => true
+        case succ(n) => even n
+    }
+
+def odd(x: Nat): Bool =
+    match x {
+        case zero => false
+        case succ(n) => even n
+    }
+
+println (even (succ (succ zero)))
+println (odd (succ zero))
+"#,
+    );
+}
+
+#[test]
+fn parity_eq_proofs() {
+    // 依赖递归函数的索引族等式推理（stuck match 与精化的组合推理全链路）
+    let prefix = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl(a: A) -> Eq a a
+}
+
+def rfl[A][a: A]: Eq a a =
+    refl a
+
+def cong[A, B, f: A -> B, x: A, y: A](e: Eq x y): Eq (f x) (f y) =
+    match e {
+        case refl(a) => refl (f a)
+    }
+
+def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
+    cong[Nat][Nat][succ][x][y] e
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def mul(x: Nat, y: Nat) =
+    match x {
+        case zero => zero
+        case succ(n) => add y (mul n y)
+    }
+"#;
+    assert_parity(&format!(
+        r#"{prefix}
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {{
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }}
+"#
+    ));
+    assert_parity(&format!(
+        r#"{prefix}
+def add_succ_right(a: Nat, b: Nat): Eq (add a (succ b)) (succ (add a b)) =
+    match a {{
+        case zero => rfl[Nat][succ b]
+        case succ(t) => cong_succ (add_succ_right t b)
+    }}
+"#
+    ));
+    assert_parity(&format!(
+        r#"{prefix}
+def symm[A, x, y: A](e: Eq[A] x y): Eq[A] y x =
+    match e {{
+        case refl(a) => refl[A] a
+    }}
+
+def trans[A, x, y, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
+    match e1 {{
+        case refl(a) => e2
+    }}
+
+def add_zero_right(a: Nat): Eq (add a zero) a =
+    match a {{
+        case zero => refl zero
+        case succ(t) => cong_succ (add_zero_right t)
+    }}
+
+def add_succ_right(a: Nat, b: Nat): Eq (add a (succ b)) (succ (add a b)) =
+    match a {{
+        case zero => rfl[Nat][succ b]
+        case succ(t) => cong_succ (add_succ_right t b)
+    }}
+
+def add_comm(a: Nat, b: Nat): Eq (add a b) (add b a) =
+    match a {{
+        case zero => trans (refl b) (symm (add_zero_right b))
+        case succ(t) => trans (cong_succ (add_comm t b)) (symm (add_succ_right b t))
+    }}
+"#
+    ));
+    assert_parity(&format!(
+        r#"{prefix}
+def add_assoc(a: Nat, b: Nat, c: Nat): Eq (add (add a b) c) (add a (add b c)) =
+    match a {{
+        case zero => rfl
+        case succ(t) => cong_succ (add_assoc t b c)
+    }}
+"#
+    ));
+}
+
+#[test]
+fn parity_nested_patterns() {
+    // 嵌套模式 + 深层绑定器的 de Bruijn 对齐
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def second_or_zero(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => zero
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (second_or_zero (cons (succ zero) (cons (succ (succ zero)) nil)))
+println (second_or_zero (cons (succ zero) nil))
+println (second_or_zero nil)
+"#,
+    );
+}
+
+#[test]
+fn parity_holes_and_let() {
+    // 洞 / let / 隐式插入
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+def ck : Nat = _
+
+def with_let : Nat = let x = two; succ x
+
+println with_let
+println (ck two)
+"#,
+    );
+}
+
+// Err 判定 parity
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_error_cases() {
+    for src in [
+        // 名称不在 scope（L09 消息前缀 "error "）
+        "println nope\n",
+        // icit 失配
+        "def g : Nat -> Nat -> Nat = x => y => x\nprintln (g zero)\n",
+        // 命名 λ 不可推断
+        "def h = [B = zero] y => y\nprintln h\n",
+        // 字面量 vs 宇宙（expected universe, got LiteralType）
+        "def bad : Type 0 = \"not a type\"\nprintln bad\n",
+        // match 不能被推断
+        "enum Bool {\n    true\n    false\n}\ndef bad =\n    match true {\n        case true => false\n    }\n",
+        // 字段不存在（值级 receiver 是构造子值）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nstruct Point {\n    x: Nat\n}\n\ndef p = new Point(zero)\ndef bad = p.zzz\n",
+        // 字段不存在（类型级）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nstruct Point {\n    x: Nat\n}\n\ndef bad(p: Point) = p.zzz\n",
+    ] {
+        assert_parity(src);
+    }
+    // match 不完整：缺少构造子
+    assert_parity(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def bad(x: Bool): Bool =
+    match x {
+        case true => false
+    }
+"#,
+    );
+    // 分支不可达：Vec[Nat] zero 上没有 cons
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def bad(v: Vec[Nat] zero): Nat =
+    match v {
+        case cons(x, xs) => x
+    }
+"#,
+    );
+    // can't unify：Eq two three 不可证
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+def two = succ (succ zero)
+
+def three = succ (succ (succ zero))
+
+def bad: Eq two three = refl
+"#,
+    );
+}
+
+// 深负载：church / strchain / match 链 / 多 enum 依赖索引 / struct 链
+// --------------------------------------------------------------------------------
+
+fn parse_or_panic(src: &str) -> Vec<fast::SourceDecl> {
+    match fast::parse(src, 0) {
+        Ok(ast) => ast,
+        Err(e) => panic!("parse failed: {e}\nsrc:\n{src}"),
+    }
+}
+
+fn basic_bench(ast: &[fast::SourceDecl], f: fn(&[fast::SourceDecl]) -> u64) -> u64 {
+    let ast = ast.to_vec();
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || f(&ast))
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+#[test]
+fn deep_workloads_parity() {
+    // church：2^(k+1) 翻倍链（nf 节点数 = 2n + 4）
+    let src = fast::church_src(8);
+    let ast = parse_or_panic(&src);
+    let n = 1u64 << 9;
+    let basic = {
+        let ast = ast.clone();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || L09_mltt::bench_check(&ast))
+            .unwrap()
+            .join()
+            .unwrap()
+    };
+    let mut t = fast::Tycker::new();
+    assert!(t.bench_check(&ast), "church 未通过（fast）");
+    assert!(basic, "church 未通过（basic）");
+    let basic_nf = basic_bench(&ast, L09_mltt::bench_check_nf);
+    assert_eq!(t.bench_check_nf_memo(&ast), basic_nf, "church nf 节点数");
+    assert_eq!(basic_nf, 2 * n + 4, "church nf 公式");
+    // Ok 输出互检（含 println）
+    assert_parity(&format!("{}println p_8\n", fast::church_src(8)));
+
+    // strchain：builtin 触发链（nf 节点数 = 1）
+    let src = fast::strchain_src(9);
+    let ast = parse_or_panic(&src);
+    assert!(t.bench_check(&ast), "strchain 未通过");
+    assert_eq!(t.bench_check_nf_memo(&ast), 1, "strchain nf 节点数");
+    let src_print = fast::strchain_src(5) + "println s0\n";
+    assert_parity(&src_print);
+
+    // match 链：自递归依赖 match（编译期特化 + 运行时首匹配）
+    let src = fast::match_src(6);
+    let ast = parse_or_panic(&src);
+    assert!(t.bench_check(&ast), "match 链未通过");
+    let basic_nf = basic_bench(&ast, L09_mltt::bench_check_nf);
+    assert_eq!(t.bench_check_nf_memo(&ast), basic_nf, "match 链 nf 节点数");
+    assert!(basic_nf > 0, "match 链 basic nf");
+    assert_parity(&src);
+
+    // enum 负载：多 enum + Vec 风格 GADT + 索引等式 + 投影 + 递归 length
+    assert_parity(&fast::enum_src());
+
+    // struct 负载：浅值投影 def 链（末值 = zero：SumCase + typ 两个节点）
+    let src = fast::struct_src(7);
+    let ast = parse_or_panic(&src);
+    assert!(t.bench_check(&ast), "struct 负载未通过（fast）");
+    assert_eq!(t.bench_check_nf_memo(&ast), 2, "struct nf 节点数");
+    let basic = {
+        let ast = ast.clone();
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || L09_mltt::bench_check(&ast))
+            .unwrap()
+            .join()
+            .unwrap()
+    };
+    assert!(basic, "struct 负载未通过（basic）");
+    let basic_nf = basic_bench(&ast, L09_mltt::bench_check_nf);
+    assert_eq!(t.bench_check_nf_memo(&ast), basic_nf, "struct nf 不一致");
+    assert_parity(&src);
+}
+
+#[test]
+fn steady_state_reuse() {
+    // 稳态复用：同一 Tycker 连续多轮（metacontext / global 表 / 环境区域
+    // 轮清空），输出与每轮新建的一致
+    let src = fast::enum_src();
+    let r1 = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || {
+            let mut steady = fast::Tycker::new();
+            steady.run_input(&src, 0).unwrap()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let src2 = fast::enum_src();
+    let r2 = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || {
+            let mut steady = fast::Tycker::new();
+            steady.run_input(&src2, 0).unwrap();
+            let src3 = fast::enum_src();
+            steady.run_input(&src3, 0).unwrap()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    let src4 = fast::enum_src();
+    let fresh = run_fast(&src4).unwrap();
+    assert_eq!(r1, r2, "稳态两轮不一致");
+    assert_eq!(r1, fresh, "稳态与一次性不一致");
+}
