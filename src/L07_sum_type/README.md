@@ -130,6 +130,10 @@ def head[T, L: Nat](x: Vec[T] (succ L)): T =
   已在 decl 表（builtin / 先前 def / enum）中 → `redefine {名}` 定向
   报错，不再静默覆盖；类型错误先于重定义报出。构造子裸名跨 enum 重复
   仍按最后注册解析（与 L13 一致——检查只罩 def/enum 名）。
+- **类型注解的 universe 定向报错**（L13 `check_universe` 轻量移植）：注解
+  形态确定非类型（字面量；名字/构造子名的类型非 U 且不是未解 meta）→
+  `expected universe, got …`（结构预检零副作用，`?N` 编号不受扰动）；
+  洞 / 未解 meta 放行——可解性交主检查路径。
 - 构造子引用：裸名即可；跨 enum **重名构造子**裸名按最后注册解析，
   消歧用限定名**点号**语法 `Vec.cons`（注册键 `Enum.case`，经 Obj
   投影特判解析；打印才渲染 `Vec::cons`——读写格式不对称）。

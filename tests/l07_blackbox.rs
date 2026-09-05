@@ -1533,4 +1533,46 @@ fn redefine_error() {
     assert_err(&format!("{nat}def Nat : U = U\n"), "redefine Nat");
     // enum 后 def 同名
     assert_err(&format!("{bool_}def Bool : U = U\n"), "redefine Bool");
+}// 类型注解 universe 定向报错（L13 check_universe 轻量移植）
+// --------------------------------------------------------------------------------
+
+/// 注解形态确定非类型（字面量 / 名字的类型非 U）→ 定向报错，不再落通用
+/// can't unify；洞与未解 meta、真类型（enum 名）放行。
+#[test]
+fn expected_universe_on_bad_annotation() {
+    let nat = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n";
+    // 名字注解且类型非 universe（builtin 函数型）
+    assert_err(
+        "def bad : string_concat = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // 字面量注解
+    assert_err(
+        "def bad : \"str\" = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // 构造子名注解（`zero` 的类型是 Nat，不是 U）
+    assert_err(
+        &format!("{nat}def bad : zero = zero\nprintln bad\n"),
+        "expected universe, got",
+    );
+    // Π 参数类型同样校验
+    assert_err(
+        "def bad (x : string_concat) : String = \"a\"\nprintln bad\n",
+        "expected universe, got",
+    );
+    // let 注解同校验
+    assert_err(
+        "def f : U = let y : \"str\" = \"a\"; y\nprintln f\n",
+        "expected universe, got",
+    );
+    // 洞注解放行 + enum 名（真类型）放行
+    assert_lines(
+        &format!("{nat}def s : _ = zero\nprintln s\n"),
+        &["Nat::zero"],
+    );
+    assert_lines(
+        &format!("{nat}def t : Nat = succ zero\nprintln t\n"),
+        &["Nat::succ(Nat::zero)"],
+    );
 }
