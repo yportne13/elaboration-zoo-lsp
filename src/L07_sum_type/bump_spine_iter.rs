@@ -410,9 +410,10 @@ pub(crate) struct Spine {
 
 impl Spine {
     /// 轮清空（随 `Machine::clear_round` 调用）：V 句柄的全部载体
-    /// （metas/defs/mutable_map/pm_defs/decl Rc）在同一函数里清空，陈旧
-    /// 句柄流不进新轮；槽位下标从 0 重排与 `Machine::new` 同构。不清则
-    /// 稳态复用下 spine 随轮数线性增长（慢泄漏 + 偶发大 Vec 扩容拷贝）。
+    /// （metas/defs/name_map/name_trail/mutable_map/pm_defs 在同一函数里
+    /// 清空，decl Rc 随上轮 Cxt 在轮界释放）——陈旧句柄流不进新轮，
+    /// 槽位下标从 0 重排与 `Machine::new` 同构。不清则稳态复用下 spine
+    /// 随轮数线性增长（慢泄漏 + 偶发大 Vec 扩容拷贝）。
     fn clear(&mut self) {
         self.stack.clear();
     }
@@ -2668,7 +2669,8 @@ fn unify_iter<'a>(
         // （force 前后各一次），到这里必是异 level、必不等——免去走完
         // 整个 cascade 的两次 flex_of scratch 往返（GADT 索引合一的常见
         // 失败形态）。语义与 L06 的 (0,0) 末臂同构；位置是 L07 新增——
-        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L06/L08 无 pm 臂）——
+        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L06 无 pm 臂；L08 有
+        // 同款 pm 臂但未加此早退）——
         if v_tag(t) == 0 && v_tag(u) == 0 {
             return false;
         }
