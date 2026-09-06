@@ -17,6 +17,7 @@ mod syntax;
 mod unification;
 mod typeclass;
 pub mod pretty;
+pub(crate) mod bump_spine_iter;
 mod canonical;
 
 type Rc<T> = std::sync::Arc<T>;
