@@ -996,9 +996,22 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
         // Rigid 裸头
         0 => v_lvl_of(v) == x,
         2 => {
+            // 链形态也要查链头：Rigid 头链查头层级、Obj 头链查被投影者
+            // （参考版 `Val::Rigid(y, sp) => *y == x || spine(sp, x)`、
+            // `Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x)`）
+            let h = v_spine_of(v);
+            let hd = spine.spine_head(h);
+            let head_hit = match v_tag(hd) {
+                0 => v_lvl_of(hd) == x,
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+                    _ => false,
+                },
+                _ => false,
+            };
             let mut args: Vec<(V, Icit)> = Vec::new();
-            spine.collect_args(v_spine_of(v), &mut args);
-            args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
+            spine.collect_args(h, &mut args);
+            head_hit || args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
         }
         // Flex 裸头（链在 tag 2）
         5 => false,
@@ -1158,9 +1171,17 @@ fn force<'a>(
                                 Some(p) if burn(fuel) => {
                                     args.clear();
                                     spine.collect_args(h, &mut args);
+                                    // 命中路径逐步 vapp1（参考版
+                                    // v_app_sp(decl, p, sp)）：投影值可能是 λ
+                                    // （β）或卡住 match（收 pending），不能按
+                                    // 中性压栈——miss 重建分支（下方）才用 push。
                                     let mut t = p;
                                     for &(a, i) in args.iter().rev() {
-                                        t = spine.push(t, a, i);
+                                        t = vapp1(
+                                            bump, spine, &mut work, &mut vals, &mut icits,
+                                            defs, metas, decls, mmap, fuel, pm_defs, t, a,
+                                            i,
+                                        );
                                     }
                                     v = t;
                                 }
@@ -1571,7 +1592,14 @@ fn eval_iter<'a>(
                             tm = a;
                         }
                         _ => {
-                            // 复合函数头：通用三推（同样先收已收的头）
+                            // 复合函数头：通用三推（同样先收已收的头）。
+                            // **文档化偏差**：work 处理序是先函数后实参，参考
+                            // 版 eval(Tm::App) 先实参后函数（`eval(u)` 在
+                            // `eval(t)` 前）。W::Apply 的 vals 弹出约定（先弹
+                            // 实参后弹函数 → 实参必须后压）使两全不可得，除非
+                            // 引入临时槽变体；L06 孪生同序。仅当函数、实参两
+                            // 侧都有 eval 期副作用（Tm::Match scrutinee force
+                            // 的文件 IO / 可变全局写）时顺序可观测。
                             if heads > 0 {
                                 work.push(W::ChainWrap(heads));
                             }
@@ -1749,14 +1777,14 @@ fn eval_iter<'a>(
                 let s2 = force(bump, spine, defs, metas, decls, mmap, fuel, pm_defs, sv);
                 let mut stuck = true;
                 if v_tag(s2) == 7 && matches!(v_xcell_of(s2), XCell::SumCase { .. }) {
-                    if burn(fuel) {
-                        if let Some((body_tm, env2)) = eval_aux(
-                            bump, spine, defs, metas, decls, mmap, fuel, pm_defs, s2, env, cases,
-                        ) {
-                            // 分支选中：体在本 eval 循环里尾推（pending 空）
-                            work.push(W::Tm(body_tm, env2));
-                            stuck = false;
-                        }
+                    // 不烧 fuel：参考版 eval(Tm::Match) 直呼 eval_aux，无
+                    // burn（force 的 Match 重选臂才烧——见 force 1229 行）。
+                    if let Some((body_tm, env2)) = eval_aux(
+                        bump, spine, defs, metas, decls, mmap, fuel, pm_defs, s2, env, cases,
+                    ) {
+                        // 分支选中：体在本 eval 循环里尾推（pending 空）
+                        work.push(W::Tm(body_tm, env2));
+                        stuck = false;
                     }
                 }
                 if stuck {
@@ -2313,10 +2341,16 @@ fn intersect_bump<'a>(
     // unify_sp 回落：前缀对压栈（内先压 → 弹出外先，对齐 unify_sp 的递归序）。
     // tag 7 不跳过：参考版对字面量实参照走 unify（恒败）、对 Decl/Prim 实参
     // 照走同名逐参——位相等的同单元也须分派（见 unify 的 tag 7 守卫）。
+    // Obj 头的位相等链（tag 2 + hk=Obj）同样不免：参考版 intersect_go 只收
+    // 裸 Rigid，其余一律回落 unify_sp，而 Obj/Obj 无 unify 臂恒败（与
+    // unify_sp_lockstep 的跳过守卫同款）。
     for k in 0..common {
         let (a1, _) = args1[k];
         let (a2, _) = args2[k];
-        if a1.0 != a2.0 || v_tag(a1) == 7 {
+        if a1.0 != a2.0
+            || v_tag(a1) == 7
+            || (v_tag(a1) == 2 && spine.stack[v_spine_of(a1)].hk == HK_OBJ)
+        {
             stack.push(UItem::Pair(l, a1, a2));
         }
     }
@@ -2865,9 +2899,15 @@ fn unify_iter<'a>(
                 },
                 2 => {
                     let hd = spine.spine_head(v_spine_of(other));
-                    match v_xcell_of(hd) {
-                        XCell::Decl(n) => Some(n),
-                        XCell::Prim(n) => Some(n),
+                    // 链头可能是裸 Rigid / Meta（打包立即数，不是指针）——
+                    // 不看 tag 就 v_xcell_of 是野指针读；非卡住单元头按参考
+                    // 版语义走宽松臂失败（`_ => Err`）。
+                    match v_tag(hd) {
+                        7 => match v_xcell_of(hd) {
+                            XCell::Decl(n) => Some(n),
+                            XCell::Prim(n) => Some(n),
+                            _ => None,
+                        },
                         _ => None,
                     }
                 }
@@ -2985,9 +3025,14 @@ fn unify_iter<'a>(
                         return false;
                     }
                 }
-                // 分支对后压（先比）、pending 次之、scrutinee 最后压（最先
-                // 比）——对齐参考版的失败顺序
+                // 参考版比较序（unification.rs Match/Match 臂）：scrutinee →
+                // 分支体 → pending。栈 LIFO：pending 先压、分支对次之、
+                // scrutinee 最后压（最先比）——两侧都在解同一 meta 时先解
+                // 方向会影响最终解与 fuel 消耗序，序必须一致。
                 let declb = Rc::new(simpl_decl(bump, decls));
+                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
+                    stack.push(UItem::Pair(l, *u1, *u2));
+                }
                 for ((p1, b1), (_, b2)) in c1.iter().zip(c2.iter()).rev() {
                     stack.push(UItem::MatchBranch {
                         b1: *b1,
@@ -2998,9 +3043,6 @@ fn unify_iter<'a>(
                         l,
                         count: p1.bind_count(),
                     });
-                }
-                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
-                    stack.push(UItem::Pair(l, *u1, *u2));
                 }
                 stack.push(UItem::Pair(l, *s1, *s2));
                 continue;
@@ -4830,18 +4872,16 @@ impl Machine {
                     .map(|&(_, ty)| ty)
                     .or_else(|| decls.get(x.data.as_str()).map(|e| e.ty));
                 if let Some(ty) = ty {
-                    // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
-                    // 头是 Meta）放行
+                    // force 已展开已解 meta；未解 flex（裸 tag 5，或任意
+                    // spine 的 meta 头链）放行——参考版 `Val::Flex(_, _) =>
+                    // Ok(())` 对 spine 形状不设限，这里用 is_flex 走 spine_head
+                    // 判头（只看栈顶槽的 f 会把 ≥2 实参的 flex 链误判成非
+                    // flex）
                     let v = self.force_v(bump, decls, ty);
                     if v_tag(v) == 3 {
                         return Ok(());
                     }
-                    let is_flex = match v_tag(v) {
-                        5 => true,
-                        2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
-                        _ => false,
-                    };
-                    if is_flex {
+                    if is_flex(&self.spine, v) {
                         Ok(())
                     } else {
                         Err(Error(format!("expected universe, got V({})", v.0)))
