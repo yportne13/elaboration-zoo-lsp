@@ -2,7 +2,7 @@
 //!
 //! - `test_basic` / `test_index` / `test_dependent_match` / `test_dependent_match_nested_eval`
 //!   / `test_eq_reasoning` / `test_lambda_calculus_and_strings`：从 L07a_depend_pm
-//!   的 7 个测试移植（旧测试全部保留语义）。
+//!   移植（旧测试全部保留语义）。
 //! - `test_generic_match` / `test_catch_all_mixed` / `test_gadt_*` /
 //!   `test_projection_typing` / `test_stuck_match_*` / `test_hole_in_branch` /
 //!   `test_nested_patterns` / `test_missing_case_err` / `test_index_equality_err`：
@@ -241,12 +241,8 @@ def t[len: Nat](x: Vec[Nat] len, y: Vec[Nat] len): Vec[Nat] (succ len) =
 }
 
 /// 等式推理：cong / symm / trans / rfl（移植自 L07a test4 的核心部分）。
-///
-/// 已知限制（相对 L07a，详见 README 的"已知限制"一节）：依赖递归函数的
-/// 索引族等式推理（add_zero_right / add_succ_right / add_comm / add_assoc，
-/// 期望类型里出现"递归函数应用于模式绑定器"的 stuck match 组合）会触发
-/// unify 中"索引槽 ↔ 构造子值"互相引用的未收敛路径（被 fuel 防护拦下后
-/// 报 can't unify）。
+/// 依赖递归扩展即本文件后半的 `test_eq_add_*` / `test_eq_reasoning_*`
+/// 全家（README §6 的修复表）。
 #[test]
 fn test_eq_reasoning() {
     check(
@@ -1214,24 +1210,19 @@ println bits_adder (cons true nil) (cons false nil)
 // L06 演进同步（2026-09）：builtin 注册表 / 可变全局 / 文件 IO / 宽松臂
 // --------------------------------------------------------------------------------
 
-/// DEMO 全串：enum + 依赖 match + 字符串 builtin + 文件 IO + 可变全局。
+/// DEMO 全串：enum + 依赖 match + 字符串 builtin + 文件 IO + 可变全局
+/// （参考版整段跑通并断言 Ok；Ok 输出双实现对拍见
+/// tests/l07_fast_parity.rs::parity_demo_src）。
 #[test]
 fn test_demo() {
-    for (name, seg) in [
-        ("add", "enum Nat {\n    zero\n    succ(x: Nat)\n}\ndef add(x: Nat, y: Nat): Nat = {\n    match x {\n        case zero => y\n        case succ(n) => succ(add(n, y))\n    }\n}\n"),
-        ("add_sp", "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\ndef add(x: Nat, y: Nat): Nat = {\n    match x {\n        case zero => y\n        case succ(n) => succ(add(n, y))\n    }\n}\n"),
-    ] {
-        let r = std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(move || match run(seg, 0) {
-                Ok(_) => "ok".to_string(),
-                Err(e) => format!("ERR: {e}"),
-            })
-            .unwrap()
-            .join()
-            .unwrap();
-        println!("SEG {name}: {r}");
-    }
+    let _guard = FILE_IO_LOCK.lock().unwrap();
+    let r = std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || run(DEMO_SRC, 0).map(|_| ()))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(r.is_ok(), "DEMO_SRC 应整段跑通：{:?}", r);
 }
 
 /// 字符串 builtin：拼接 / 判等 / 缩进。

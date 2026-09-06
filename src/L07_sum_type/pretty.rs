@@ -51,7 +51,9 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
 /// pruning 只表示"元变量取哪些可见参数"，对显示无益）。
 fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
     pretty_tm(prec, ns, t)
-}pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+}
+
+pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
     match tm {
         Tm::Var(ix) => go_ix(ns, ix.0),
         Tm::Decl(name) => name.to_string(),

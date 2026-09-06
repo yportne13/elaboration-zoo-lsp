@@ -2,7 +2,8 @@
 //!
 //! 相对 L06 新增：`enum` 声明（参数 `[A]` / 索引 `(len: Nat)`、构造子字段、
 //! `-> ret` 索引返回）、`match`（编译为 (模式, 分支体) 列表 + 运行时首匹配）、
-//! 索引精化（`unify_pm` + `Cxt::update_cxt`）、卡住的 match 作为中性值参与
+//! 索引精化（特化方程解入 `pm_defs` 事实表 + `force` 读点惰性展开，见
+//! README §1.2）、卡住的 match 作为中性值参与
 //! unification / quote / rename / 应用（splice）。
 //!
 //! 设计说明见本目录 README.md。
@@ -338,11 +339,6 @@ impl Infer {
         true
     }
 
-    /// 当前 fuel 余量（调试）
-    /// 元变量探测 + decl 表展开 + 卡住投影的再投影 + 模式精化展开。
-    /// 深度防护：meta 解链可能形成间接环（solve 无跨 meta occurs check），
-    /// 展开会无限递归——只在**展开递归**时消耗 fuel（高频直通路径不消耗），
-    /// fuel 耗尽时停止展开，把值当作未解处理。
     /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不展开 pm_defs 精化、
     /// 不做 Match 重选。`invert` / `prune_vflex` 关心的是"元变量被应用在
     /// 哪些槽位上"——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的
@@ -356,6 +352,10 @@ impl Infer {
     }
 
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
+        /// 元变量探测 + decl 表展开 + 卡住投影的再投影 + 模式精化展开。
+        /// 深度防护：meta 解链可能形成间接环（solve 无跨 meta occurs check），
+        /// 展开会无限递归——只在**展开递归**时消耗 fuel（高频直通路径不
+        /// 消耗），fuel 耗尽时停止展开，把值当作未解处理。
         /// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。
         fn burn(cell: &std::cell::Cell<u32>) -> bool {
             let f = cell.get();
@@ -894,9 +894,10 @@ impl Infer {
             },
             Val::Match(val, env, cases, pending) => {
                 // 分支体在"捕获 env + fresh rigid 槽"下重新求值再 quote：
-                // 这样 quote → eval 往返是恒等的（L07 没做完的关键一处）。
-                // 求值用简化 decl 表（全局值换成中性 Decl 引用），避免分支体
-                // 里的递归调用被重展开（正确性 + 性能）。
+                // 这样 quote → eval 往返是恒等的（旧实现未做往返一致，此处
+                // 是现架构补齐的关键点）。求值用简化 decl 表（全局值换成
+                // 中性 Decl 引用），避免分支体里的递归调用被重展开（正确性
+                // + 性能）。
                 let declb = Rc::new(simpl_decl(decl));
                 let tm_cases = cases
                     .into_iter()

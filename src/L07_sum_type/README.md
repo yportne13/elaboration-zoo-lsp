@@ -286,7 +286,7 @@ solve / intersect）。在此之上：
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（36 个测试，64 MB 栈线程）：
+`cargo test --lib L07_sum_type`（39 个测试，64 MB 栈线程）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心（cong / symm / trans / rfl）/ Church 编码与字符串；
@@ -302,13 +302,15 @@ solve / intersect）。在此之上：
 - L06 演进同步（2026-09，见 §10）：字符串 builtin 全家 / 可变全局族 /
   缺名卡住与宽松臂把关 / string_to_global_type / 文件 IO / DEMO 全串。
 
-黑盒与双 oracle：`cargo test --test l07_blackbox`（46 个，参考版唯一
-入口 `run`）；`cargo test --test l07_blackbox_v2`（51 个，二轮攻击面：
+黑盒与双 oracle：`cargo test --test l07_blackbox`（49 个：48 可跑 +
+1 个 `--ignored` 深度探针，参考版唯一入口 `run`）；`cargo test --test
+l07_blackbox_v2`（53 个：51 可跑 + 2 个 `--ignored` 格式探针，二轮攻击面：
 builtin 全量扫描含文件 IO panic 契约 / enum 冷僻特性（重名、显式参数、
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
-回归在此，另含 2 个 `--ignored` 格式探针）；`cargo test --test
-l07_fast_parity`（53 个，run vs run_fast 逐字节互检，见 §10）。
+回归在此）；`cargo test --test
+l07_fast_parity`（57 个：本文件 18 个 #[test] + `#[path]` 引入库内的
+cfg(test) 测试 39 个，run vs run_fast 逐字节互检，见 §10）。
 
 ## 9. 参考资料
 
@@ -377,4 +379,10 @@ k=13  n=16384   fast=0.060ms*        basic=0.533ms      (≈9×)
 
 - 错误消息 span 全零（文档化偏差，同 L06）；unify_catch 文案带
   pretty 项 + `(fuel exhausted)` 尾注，span 数字两版不同；
-- 卡住 Prim 的 force 每次烧 1 fuel（与参考版同语义，频率依赖）。
+- 卡住 Prim 的 force 每次烧 1 fuel（与参考版同语义，频率依赖）；
+- eval(Tm::App) 复合函数头的求值序是先函数后实参（参考版先实参后函数；
+  仅当两侧都有 eval 期副作用时可观测，L06 孪生同序）；
+- 沿 meta 类型的 Π 层包 λ（`lams_from_ty`）把 `_` binder 改名
+  `x{n}`（参考版保留 `_`；L06 冠军配方沿袭）；
+- 消融开关沿用 `L06_NO_CONV_MEMO` / `L06_NO_NAME_MAP` 命名——L06/L07/L08
+  三层孪生共用同名开关的项目级约定，非笔误。

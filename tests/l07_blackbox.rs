@@ -1508,7 +1508,9 @@ def ok: Eq big big = refl big
         eprintln!("{}", probe(depth));
     }
     eprintln!("measured elsewhere: depth 2000 overflows the 64MB stack (process abort); higher depths slow down super-linearly");
-}// 重定义报错（L13 fake_bind 移植）
+}
+
+// 重定义报错（L13 fake_bind 移植）
 // --------------------------------------------------------------------------------
 
 /// 同名 def / enum、def 与 builtin 撞名（`String` 已登记）→ 定向报错，
@@ -1533,7 +1535,9 @@ fn redefine_error() {
     assert_err(&format!("{nat}def Nat : U = U\n"), "redefine Nat");
     // enum 后 def 同名
     assert_err(&format!("{bool_}def Bool : U = U\n"), "redefine Bool");
-}// 类型注解 universe 定向报错（L13 check_universe 轻量移植）
+}
+
+// 类型注解 universe 定向报错（L13 check_universe 轻量移植）
 // --------------------------------------------------------------------------------
 
 /// 注解形态确定非类型（字面量 / 名字的类型非 U）→ 定向报错，不再落通用
