@@ -351,11 +351,12 @@ impl Infer {
         }
     }
 
+    /// 把值更新到 metacontext / 模式特化的当前状态：元变量探测 + decl 表
+    /// 展开 + 卡住投影的再投影 + 模式精化展开。深度防护：meta 解链可能
+    /// 形成间接环（solve 无跨 meta occurs check），展开会无限递归——只在
+    /// **展开递归**时消耗 fuel（高频直通路径不消耗），fuel 耗尽时停止
+    /// 展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
-        /// 元变量探测 + decl 表展开 + 卡住投影的再投影 + 模式精化展开。
-        /// 深度防护：meta 解链可能形成间接环（solve 无跨 meta occurs check），
-        /// 展开会无限递归——只在**展开递归**时消耗 fuel（高频直通路径不
-        /// 消耗），fuel 耗尽时停止展开，把值当作未解处理。
         /// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。
         fn burn(cell: &std::cell::Cell<u32>) -> bool {
             let f = cell.get();

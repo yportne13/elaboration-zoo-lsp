@@ -1174,10 +1174,12 @@ def bar (F : U -> U) (x : F Nat) : String = x
 "#,
     );
 
-    // 卡住投影带实参链（HK_OBJ 路径）全链路：def 期 eval 把 use3 的体卡成
-    // Obj(stuck-match, g, [Nat])；`println use3` 覆盖卡住 Obj 链的 quote；
-    // `println (use3 zero)` 覆盖 force 的 Match 重选 + 投影命中——投影值是
-    // λ，实参必须走 vapp1 β 归约（快版曾按中性压栈，输出卡住链）。
+    // 卡住投影带实参链（HK_OBJ 路径）：def 期 eval 把 use3 的体卡成
+    // Obj(stuck-match, g, [Nat])，引用期归约走 eval 期的选支 + 投影命中
+    // （ObjSel + β）。`println use3` 覆盖卡住 Obj 链的 quote 与 force 的
+    // HK_OBJ miss 重建；force 的"投影命中 + 实参 vapp1 β"路径需要 receiver
+    // 在创建与读取之间被解出，表面程序不可构造（评审逐臂对照背书，见
+    // 7073447），此处看守的是 miss 重建 / quote / eval 命中三个伴生路径。
     assert_parity(
         r#"
 enum Nat {

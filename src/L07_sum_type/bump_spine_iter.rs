@@ -409,6 +409,14 @@ pub(crate) struct Spine {
 }
 
 impl Spine {
+    /// 轮清空（随 `Machine::clear_round` 调用）：V 句柄的全部载体
+    /// （metas/defs/mutable_map/pm_defs/decl Rc）在同一函数里清空，陈旧
+    /// 句柄流不进新轮；槽位下标从 0 重排与 `Machine::new` 同构。不清则
+    /// 稳态复用下 spine 随轮数线性增长（慢泄漏 + 偶发大 Vec 扩容拷贝）。
+    fn clear(&mut self) {
+        self.stack.clear();
+    }
+
     /// 中性应用 `f a`（icit i）压栈，返回句柄值。`hk` 随函数侧传播：
     /// 裸 XCell 直查种类，既有链延伸保持原种类。
     #[inline]
@@ -1034,10 +1042,35 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
                 pending,
                 ..
             } => {
+                // env 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区
+                // 倒序——单趟遍历替代 (0..env_len).any(env_nth) 的 O(d²)
+                let env_hit = {
+                    let mut hit = false;
+                    let mut n = env.binds;
+                    while let Some(e) = n {
+                        if val_mentions_lvl(spine, defs, e.val, x) {
+                            hit = true;
+                            break;
+                        }
+                        n = e.next;
+                    }
+                    if !hit {
+                        for k in 0..env.flat_len {
+                            if val_mentions_lvl(
+                                spine,
+                                defs,
+                                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+                                x,
+                            ) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                    }
+                    hit
+                };
                 val_mentions_lvl(spine, defs, *scrutinee, x)
-                    || (0..env_len(*env)).any(|i| {
-                        val_mentions_lvl(spine, defs, env_nth(defs, *env, i), x)
-                    })
+                    || env_hit
                     || pending.iter().any(|(u, _)| val_mentions_lvl(spine, defs, *u, x))
             }
         },
@@ -2631,10 +2664,11 @@ fn unify_iter<'a>(
             }
             return false;
         }
-        // —— (0,0) 裸刚性对早退（L06 同款）：同 level 的对已被位相等捷径
-        // 剪掉（force 前后各一次），到这里必是异 level，必不等——免去走完
+        // —— (0,0) 裸刚性对早退：同 level 的对已被位相等捷径剪掉
+        // （force 前后各一次），到这里必是异 level、必不等——免去走完
         // 整个 cascade 的两次 flex_of scratch 往返（GADT 索引合一的常见
-        // 失败形态）——
+        // 失败形态）。语义与 L06 的 (0,0) 末臂同构；位置是 L07 新增——
+        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L06/L08 无 pm 臂）——
         if v_tag(t) == 0 && v_tag(u) == 0 {
             return false;
         }
@@ -3010,7 +3044,11 @@ fn unify_iter<'a>(
                     continue;
                 }
                 // 前置结构检查（与参考版逐项判定一致，只是提前——Err 判定
-                // 不受比较顺序影响，Ok 只在全部通过时给出）
+                // 不受比较顺序影响，Ok 只在全部通过时给出）。**文档化偏差**：
+                // 参考版是惰性交错（scrutinee 先合一、可能已解出若干 meta
+                // 才因长度失配失败），前置后 Err 路径上这些 meta 副作用不
+                // 发生；仅当调用方捕获该错误并继续同轮检查时才可观测——
+                // 现有全部调用点的 unify 错误均致命，不可达。
                 if c1.len() != c2.len() {
                     return false;
                 }
@@ -3153,10 +3191,19 @@ impl RenBuf {
     }
     /// 整表逐代克隆（卡住 match 分支体的嵌套 renaming 用——参考版按分支
     /// clone 整个 HashMap 的对应物；克隆保持同代，lift 只写进克隆）。
+    /// 只克隆到本代有效高水位（stamp==epoch 的最高槽）：容量只增不减，
+    /// 整表克隆会背上历史最高 level 的死重；水位之上的条目本代无效，
+    /// `get` 视同缺项，语义不变。
     fn clone_valid(&self) -> RenBuf {
+        let mut end = 0usize;
+        for (i, g) in self.stamp.iter().enumerate() {
+            if *g == self.epoch {
+                end = i + 1;
+            }
+        }
         RenBuf {
-            val: self.val.clone(),
-            stamp: self.stamp.clone(),
+            val: self.val[..end].to_vec(),
+            stamp: self.stamp[..end].to_vec(),
             epoch: self.epoch,
         }
     }
@@ -4130,19 +4177,45 @@ fn struct_env_eq_go(
     b: Env<'_>,
 ) -> bool {
     let la = env_len(a);
-    let lb = env_len(b);
-    if la != lb {
+    if la != env_len(b) {
         return false;
     }
-    (0..la).all(|i| {
-        struct_val_eq_go(
-            budget,
-            spine,
-            defs,
-            env_nth(defs, a, i),
-            env_nth(defs, b, i),
-        )
-    })
+    // 单趟双链迭代（原 (0..la).all(env_nth) 对链段是 O(d²)）：槽序与
+    // env_nth 一致——各自链段先走（头 = 最内层），链尽后平坦区按
+    // `flat_base + flat_len - 1 - k` 倒序读。两侧链/平坦划分可以不同，
+    // 各自独立切换即可（env_nth 同款优先序）。
+    let mut na = a.binds;
+    let mut nb = b.binds;
+    let mut fa = a.flat_base + a.flat_len;
+    let mut fb = b.flat_base + b.flat_len;
+    for _ in 0..la {
+        let va = match na {
+            Some(e) => {
+                let v = e.val;
+                na = e.next;
+                v
+            }
+            None => {
+                fa -= 1;
+                defs[fa as usize]
+            }
+        };
+        let vb = match nb {
+            Some(e) => {
+                let v = e.val;
+                nb = e.next;
+                v
+            }
+            None => {
+                fb -= 1;
+                defs[fb as usize]
+            }
+        };
+        if !struct_val_eq_go(budget, spine, defs, va, vb) {
+            return false;
+        }
+    }
+    true
 }
 
 // Machine（稳态复用）与 elaboration
@@ -4216,8 +4289,8 @@ impl Machine {
     }
 
     /// 每轮 reset：metacontext + 名字表/轨迹/环境区域 + 可变全局 + pm 事实
-    /// 表全部清空（builtin 的重注册在 [`Machine::prime_round`]；decl 表随
-    /// Cxt 的 Rc 释放）。
+    /// 表 + 中性 spine 全部清空（builtin 的重注册在 [`Machine::prime_round`]；
+    /// decl 表随 Cxt 的 Rc 释放）。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
@@ -4226,6 +4299,7 @@ impl Machine {
         self.mutable_map.borrow_mut().clear();
         self.pm_defs.clear();
         self.pm_solvable.clear();
+        self.spine.clear();
         self.fuel.set(UNIFY_FUEL);
     }
 
