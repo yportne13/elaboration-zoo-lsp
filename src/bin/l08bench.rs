@@ -29,7 +29,6 @@
 //!                                     [--workload church|strchain|global|match|enum|struct|all]
 //! ```
 
-#![feature(pattern)]
 #![allow(dead_code)]
 
 #[global_allocator]

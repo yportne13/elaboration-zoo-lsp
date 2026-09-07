@@ -33,7 +33,6 @@
 //!                                     [--workload church|implicit|prune|solve|strchain|global|all]
 //! ```
 
-#![feature(pattern)]
 #![allow(dead_code)]
 
 #[global_allocator]

@@ -35,9 +35,6 @@
 //! `fast_ss` 的大 bump 池页被淘汰，大 k 段 min 被高估（见 readme「测量
 //! 方法论」）。
 
-// parser_lib 的 `pmatch`/`is` 泛型约束 `Pattern` 是 nightly API（lib 同款
-// feature；仓库依赖 nightly 工具链，见仓库根 rust-toolchain.toml）。
-#![feature(pattern)]
 #![allow(dead_code)]
 
 // 求值/quote/conv 全链路迭代化后深度无上限；参考版（Box/List 递归）在

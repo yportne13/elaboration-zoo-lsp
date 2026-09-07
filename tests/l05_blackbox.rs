@@ -23,7 +23,6 @@
 //!     产掩码 + prune_ty 验证）。
 //!   - **λ 包裹取自类型**：解的 λ 层名/icit 随 meta 类型 Π（`"_"` → `x{l}`）。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

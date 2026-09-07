@@ -23,7 +23,6 @@
 //!                                     [--workload church|implicit|prune|conv|conv_dup|chain|solve|dup|dup_deep|all]
 //! ```
 
-#![feature(pattern)]
 #![allow(dead_code)]
 
 #[global_allocator]

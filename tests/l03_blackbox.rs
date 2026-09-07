@@ -25,7 +25,6 @@
 //!   - 消融环境变量 `L03_NO_CONV_MEMO` / `L03_NO_NAME_MAP` 只影响性能，
 //!     逐字节输出不变（A/B 实验开关的非性能契约）。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

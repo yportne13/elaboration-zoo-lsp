@@ -25,7 +25,6 @@
 //!   - **可变全局**：`create_global` / `change_mutable{,_default}` /
 //!     `get_global{,_default}` 读写运行期全局表。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

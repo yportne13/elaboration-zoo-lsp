@@ -26,7 +26,6 @@
 //!                                     [--workload church|implicit|conv|conv_dup|chain|solve|dup|dup_deep|all]
 //! ```
 
-#![feature(pattern)]
 #![allow(dead_code)]
 
 // 参考版（Box/List 递归）在大 k 段仍需要深栈，默认 128MB 留足余量。

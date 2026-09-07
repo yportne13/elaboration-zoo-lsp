@@ -21,7 +21,6 @@
 //!   - 消融环境变量 `L04_NO_CONV_MEMO` / `L04_NO_NAME_MAP` 只影响性能，
 //!     逐字节输出不变。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

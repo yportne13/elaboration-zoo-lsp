@@ -1,6 +1,6 @@
-use std::{fmt::Debug, ops::Add, str::pattern::Pattern, hash::Hash, marker::PhantomData};
+use std::{fmt::Debug, ops::Add, hash::Hash, marker::PhantomData};
 
-pub use crate::parser_lib::{Span, ToSpan, Severity, Diagnostic, unescape};
+pub use crate::parser_lib::{Span, ToSpan, Severity, Diagnostic, unescape, Pattern};
 
 pub trait Parser<I: Copy, A, S, E>: Sized + Copy {
     fn parse(&self, input: I, state: &mut S) -> Result<(I, A), E>;

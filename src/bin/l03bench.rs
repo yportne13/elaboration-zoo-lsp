@@ -39,9 +39,6 @@
 //!                                     [--workload church|conv|conv_dup|chain|solve|dup|dup_deep|all]
 //! ```
 
-// parser_lib 的 `pmatch`/`is` 泛型约束 `Pattern` 是 nightly API（lib 同款
-// feature；仓库依赖 nightly 工具链）。
-#![feature(pattern)]
 #![allow(dead_code)]
 
 // 求值/quote/unify/rename 全链路迭代化后深度无上限；参考版（Box/List 递归）

@@ -27,7 +27,7 @@ beta-eta `conv`）→ 核心语法（de Bruijn 索引）→ `nf`/`type` 两种�
 
 ## 怎么跑
 
-工具链：nightly（`parser_lib` 的 `Pattern` 泛型约束；仓库根
+工具链：stable（`parser_lib` 自带 stable `Pattern` trait；仓库根
 `rust-toolchain.toml` 已固化，rustup 自动切换）。
 
 ```text

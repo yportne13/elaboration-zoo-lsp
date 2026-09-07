@@ -25,7 +25,6 @@
 //! 文档注释里标明（解析器不强制 EOF：首项完整后尾随 token——包括无法识别
 //! 的字节——被丢弃）。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

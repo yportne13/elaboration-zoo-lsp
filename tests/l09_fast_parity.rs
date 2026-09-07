@@ -8,7 +8,6 @@
 //! 且参考版消息内嵌的 Debug-Val/Tm 带真实偏移——统一剥掉
 //! `start_offset/end_offset/path_id` 数字后比对正文。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

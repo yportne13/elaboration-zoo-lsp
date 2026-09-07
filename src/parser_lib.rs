@@ -1,6 +1,59 @@
-use std::{fmt::Debug, ops::Add, str::pattern::Pattern, hash::Hash};
+use std::{fmt::Debug, ops::Add, hash::Hash};
 
 pub type PathId = u32;
+
+/// Stable 替代 nightly 的 `std::str::pattern::Pattern`：仓库里的 lexer 只用
+/// char / &str / &[char] / `FnMut(char) -> bool` 四种 pattern，且只依赖
+/// `strip_prefix` / `trim_start_matches` 两个操作。char / &str / &[char] 臂
+/// 直接委托 std 的 stable 同名方法（对具体 pattern 类型调用不受 unstable
+/// trait 限制）；闭包臂按 std 同款语义逐字符扫描。
+pub trait Pattern: Copy {
+    fn strip_prefix_of<'a>(self, haystack: &'a str) -> Option<&'a str>;
+    fn trim_start_matches_of<'a>(self, haystack: &'a str) -> &'a str;
+}
+
+impl Pattern for char {
+    fn strip_prefix_of<'a>(self, haystack: &'a str) -> Option<&'a str> {
+        haystack.strip_prefix(self)
+    }
+    fn trim_start_matches_of<'a>(self, haystack: &'a str) -> &'a str {
+        haystack.trim_start_matches(self)
+    }
+}
+
+impl Pattern for &str {
+    fn strip_prefix_of<'a>(self, haystack: &'a str) -> Option<&'a str> {
+        haystack.strip_prefix(self)
+    }
+    fn trim_start_matches_of<'a>(self, haystack: &'a str) -> &'a str {
+        haystack.trim_start_matches(self)
+    }
+}
+
+impl Pattern for &[char] {
+    fn strip_prefix_of<'a>(self, haystack: &'a str) -> Option<&'a str> {
+        haystack.strip_prefix(self)
+    }
+    fn trim_start_matches_of<'a>(self, haystack: &'a str) -> &'a str {
+        haystack.trim_start_matches(self)
+    }
+}
+
+impl<F: FnMut(char) -> bool + Copy> Pattern for F {
+    fn strip_prefix_of<'a>(mut self, haystack: &'a str) -> Option<&'a str> {
+        let mut matched = 0;
+        for c in haystack.chars() {
+            if !self(c) {
+                break;
+            }
+            matched += c.len_utf8();
+        }
+        haystack.get(matched..)
+    }
+    fn trim_start_matches_of<'a>(self, haystack: &'a str) -> &'a str {
+        self.strip_prefix_of(haystack).unwrap_or(haystack)
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Span<T> {
@@ -376,7 +429,7 @@ where
 
 pub fn pmatch<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a str>> {
     move |input: Input<'a>| {
-        let x = input.data.trim_start_matches(pat);
+        let x = pat.trim_start_matches_of(input.data);
         if x.len() == input.data.len() {
             None
         } else {
@@ -400,7 +453,7 @@ pub fn pmatch<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a 
 
 pub fn pmatch_empty<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a str>> {
     move |input: Input<'a>| {
-        let x = input.data.trim_start_matches(pat);
+        let x = pat.trim_start_matches_of(input.data);
         Some((
             Span {
                 data: x,
@@ -420,7 +473,7 @@ pub fn pmatch_empty<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Spa
 
 pub fn is<'a, P: Pattern + Copy>(pat: P) -> impl Parser<Input<'a>, Span<&'a str>> {
     move |input: Input<'a>| {
-        input.data.strip_prefix(pat).map(|x| {
+        pat.strip_prefix_of(input.data).map(|x| {
             (
                 Span {
                     data: x,

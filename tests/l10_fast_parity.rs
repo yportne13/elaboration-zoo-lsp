@@ -6,7 +6,6 @@
 //! 判据：**Ok 输出逐字节一致 / Err 判定一致**。错误文案的 Span 偏移
 //! （`@ N,M` 与 Debug-Span 数字）是文档化偏差，比对前归一化。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

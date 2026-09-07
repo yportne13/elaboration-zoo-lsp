@@ -24,7 +24,6 @@
 //! - Err 判定 + 归一化正文：name-not-in-scope、universe 报错。
 //! - 稳态复用（trait/可变全局跨轮清空）。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

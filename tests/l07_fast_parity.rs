@@ -9,7 +9,6 @@
 //! 两侧都在 256MB 栈线程里跑（L07 tests.rs 的 64MB 惯例再放宽——快版
 //! quote 分支体重求值 + 参考版递归 quote 的深度都吃栈）。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

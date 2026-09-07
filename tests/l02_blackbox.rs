@@ -17,7 +17,6 @@
 //!   - 错误列号按**字节**计算（`offset - line_start + 1`），多字节字符
 //!     （如 `λ`）出现在 caret 之前时，caret 视觉上会右移每个字符的字节差。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

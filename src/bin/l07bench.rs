@@ -25,7 +25,6 @@
 //!                                     [--workload church|strchain|global|match|enum|all]
 //! ```
 
-#![feature(pattern)]
 #![allow(dead_code)]
 
 #[global_allocator]

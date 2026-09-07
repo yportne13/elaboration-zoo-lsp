@@ -12,7 +12,6 @@
 //! 实例 / 单臂构造子匹配 / Prim 求值时机差，在快版上分叉或发散，
 //! 整体剔除；Ok/Err 判定 parity 由以下结构化用例保证。
 
-#![feature(pattern)]
 
 #[path = "../src/list.rs"]
 mod list;

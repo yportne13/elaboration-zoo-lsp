@@ -1,5 +1,6 @@
-#![feature(pattern)]
-#![feature(anonymous_pipe)] // std::io::pipe, used by the lsp_stdio chunked-roundtrip tests
+// 纯 stable 构建：原 `#![feature(pattern)]` 已由 parser_lib 自带的 stable
+// `Pattern` trait 取代；`std::io::pipe`（lsp_stdio 的 chunked-roundtrip 测试）
+// 自 Rust 1.87 起稳定，MSRV = 1.87。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

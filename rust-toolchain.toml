@@ -1,12 +1,13 @@
-# 仓库依赖 nightly：lib 与 l02bench 的 parser_lib 用 `str::pattern::Pattern`
-# 泛型约束（`#![feature(pattern)]`），stable 无法编译（见 src/lib.rs 顶部
-# 与 src/bin/l02bench.rs 的 feature 注释）。
+# 纯 stable 构建（2026-09 起）。原先依赖 nightly 的两处均已移除：
+# - `str::pattern::Pattern` 泛型约束 → parser_lib 自带的 stable `Pattern`
+#   trait（见 src/parser_lib.rs 顶部）；
+# - `std::io::pipe`（lsp_stdio chunked-roundtrip 测试）→ Rust 1.87 已稳定。
+# MSRV = 1.87（io::pipe 稳定版；edition 2024 只要求 1.85）。
 #
-# 固定到 nightly-2025-02-28（与 .github/workflows/ci.yml 各 job 的 dtolnay
-# toolchain 一致，本机默认 nightly 亦为该构建）。不要改回 `channel = "nightly"`：
+# 仍固定到具体版本而非 `channel = "stable"`：与原 nightly 固定同理——
 # dtolnay/rust-toolchain 只设 rustup default、不设 RUSTUP_TOOLCHAIN，本文件
-# 会覆盖它；CI/新机器上没有名为 nightly 的已装工具链时，rustup 就地自动
-# 下载当前最新 nightly，与开发所用编译器漂移即编不过（CI run 327 起全红
-# 与"新拉仓库编不了"皆此因）。
+# 会覆盖它；固定具体版本保证 CI/新机器 rustup 就地自动下载的编译器与本地
+# 完全一致，不随 stable 漂移。升版本时同步改 .github/workflows/ci.yml 的
+# 三处 toolchain。
 [toolchain]
-channel = "nightly-2025-02-28"
+channel = "1.98.1"
