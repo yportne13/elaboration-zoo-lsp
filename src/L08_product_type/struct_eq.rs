@@ -7,7 +7,7 @@
 //! 快路径即覆盖绝大多数比较。预算封顶，超限按"不相等"处理——快路径只会
 //! 把本可判等（但求值发散）的情形提前判等，回落路径保持原行为。
 
-use super::{Closure, Env, Icit, PatternDetail, Spine, Tm, Val};
+use super::{Closure, Env, Spine, Tm, Val};
 
 struct EqBudget(usize);
 
@@ -179,7 +179,3 @@ fn closure_eq(budget: &mut EqBudget, a: &Closure, b: &Closure) -> bool {
 fn env_eq_go(budget: &mut EqBudget, a: &Env, b: &Env) -> bool {
     a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| val_eq_go(budget, x, y))
 }
-
-// Icit 在 spine 比较里按引用比较即可；这里显式引用类型避免未使用告警。
-const _: fn(&Icit, &Icit) -> bool = |a, b| a == b;
-const _: fn(&PatternDetail, &PatternDetail) -> bool = |a, b| a == b;

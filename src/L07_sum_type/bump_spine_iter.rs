@@ -409,6 +409,15 @@ pub(crate) struct Spine {
 }
 
 impl Spine {
+    /// 轮清空（随 `Machine::clear_round` 调用）：V 句柄的全部载体
+    /// （metas/defs/name_map/name_trail/mutable_map/pm_defs 在同一函数里
+    /// 清空，decl Rc 随上轮 Cxt 在轮界释放）——陈旧句柄流不进新轮，
+    /// 槽位下标从 0 重排与 `Machine::new` 同构。不清则稳态复用下 spine
+    /// 随轮数线性增长（慢泄漏 + 偶发大 Vec 扩容拷贝）。
+    fn clear(&mut self) {
+        self.stack.clear();
+    }
+
     /// 中性应用 `f a`（icit i）压栈，返回句柄值。`hk` 随函数侧传播：
     /// 裸 XCell 直查种类，既有链延伸保持原种类。
     #[inline]
@@ -996,9 +1005,22 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
         // Rigid 裸头
         0 => v_lvl_of(v) == x,
         2 => {
+            // 链形态也要查链头：Rigid 头链查头层级、Obj 头链查被投影者
+            // （参考版 `Val::Rigid(y, sp) => *y == x || spine(sp, x)`、
+            // `Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x)`）
+            let h = v_spine_of(v);
+            let hd = spine.spine_head(h);
+            let head_hit = match v_tag(hd) {
+                0 => v_lvl_of(hd) == x,
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+                    _ => false,
+                },
+                _ => false,
+            };
             let mut args: Vec<(V, Icit)> = Vec::new();
-            spine.collect_args(v_spine_of(v), &mut args);
-            args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
+            spine.collect_args(h, &mut args);
+            head_hit || args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
         }
         // Flex 裸头（链在 tag 2）
         5 => false,
@@ -1021,10 +1043,35 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
                 pending,
                 ..
             } => {
+                // env 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区
+                // 倒序——单趟遍历替代 (0..env_len).any(env_nth) 的 O(d²)
+                let env_hit = {
+                    let mut hit = false;
+                    let mut n = env.binds;
+                    while let Some(e) = n {
+                        if val_mentions_lvl(spine, defs, e.val, x) {
+                            hit = true;
+                            break;
+                        }
+                        n = e.next;
+                    }
+                    if !hit {
+                        for k in 0..env.flat_len {
+                            if val_mentions_lvl(
+                                spine,
+                                defs,
+                                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+                                x,
+                            ) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                    }
+                    hit
+                };
                 val_mentions_lvl(spine, defs, *scrutinee, x)
-                    || (0..env_len(*env)).any(|i| {
-                        val_mentions_lvl(spine, defs, env_nth(defs, *env, i), x)
-                    })
+                    || env_hit
                     || pending.iter().any(|(u, _)| val_mentions_lvl(spine, defs, *u, x))
             }
         },
@@ -1158,9 +1205,17 @@ fn force<'a>(
                                 Some(p) if burn(fuel) => {
                                     args.clear();
                                     spine.collect_args(h, &mut args);
+                                    // 命中路径逐步 vapp1（参考版
+                                    // v_app_sp(decl, p, sp)）：投影值可能是 λ
+                                    // （β）或卡住 match（收 pending），不能按
+                                    // 中性压栈——miss 重建分支（下方）才用 push。
                                     let mut t = p;
                                     for &(a, i) in args.iter().rev() {
-                                        t = spine.push(t, a, i);
+                                        t = vapp1(
+                                            bump, spine, &mut work, &mut vals, &mut icits,
+                                            defs, metas, decls, mmap, fuel, pm_defs, t, a,
+                                            i,
+                                        );
                                     }
                                     v = t;
                                 }
@@ -1571,7 +1626,14 @@ fn eval_iter<'a>(
                             tm = a;
                         }
                         _ => {
-                            // 复合函数头：通用三推（同样先收已收的头）
+                            // 复合函数头：通用三推（同样先收已收的头）。
+                            // **文档化偏差**：work 处理序是先函数后实参，参考
+                            // 版 eval(Tm::App) 先实参后函数（`eval(u)` 在
+                            // `eval(t)` 前）。W::Apply 的 vals 弹出约定（先弹
+                            // 实参后弹函数 → 实参必须后压）使两全不可得，除非
+                            // 引入临时槽变体；L06 孪生同序。仅当函数、实参两
+                            // 侧都有 eval 期副作用（Tm::Match scrutinee force
+                            // 的文件 IO / 可变全局写）时顺序可观测。
                             if heads > 0 {
                                 work.push(W::ChainWrap(heads));
                             }
@@ -1701,21 +1763,21 @@ fn eval_iter<'a>(
                 }
             }
             W::SumAsm { name, params, cases } => {
-                let total = 2 * params.len();
-                let mut items: Vec<V> = Vec::with_capacity(total);
-                for _ in 0..total {
-                    items.push(vals.pop().expect("eval 栈：SumAsm 缺参数"));
-                }
-                items.reverse(); // [v0, t0, v1, t1, ...]
+                // vals 槽序 = v0, t0, v1, t1, ...（先压者在底）→ pop 序是
+                // t_{n-1}, v_{n-1}, ...：按 params 逆序逐槽收进 ps，再整体
+                // 反转回自然序——单缓冲，省掉 items 中转 + 二次下标拷贝
                 let mut ps: Vec<SumParamV<'_>> = Vec::with_capacity(params.len());
-                for (k, p) in params.iter().enumerate() {
+                for p in params.iter().rev() {
+                    let ty = vals.pop().expect("eval 栈：SumAsm 缺参数");
+                    let val = vals.pop().expect("eval 栈：SumAsm 缺参数");
                     ps.push(SumParamV {
                         name: p.name,
-                        val: items[2 * k],
-                        ty: items[2 * k + 1],
+                        val,
+                        ty,
                         icit: p.icit,
                     });
                 }
+                ps.reverse();
                 vals.push(v_xcell(bump.alloc(XCell::Sum {
                     name,
                     params: bump.alloc_slice_fill_iter(ps),
@@ -1723,21 +1785,19 @@ fn eval_iter<'a>(
                 })));
             }
             W::SumCaseAsm { case_name, datas } => {
-                let nd = datas.len();
-                let mut items: Vec<V> = Vec::with_capacity(nd);
-                for _ in 0..nd {
-                    items.push(vals.pop().expect("eval 栈：SumCaseAsm 缺字段"));
-                }
-                items.reverse(); // [d0, d1, ...]
-                let typ = vals.pop().expect("eval 栈：SumCaseAsm 缺 typ");
-                let mut ds: Vec<SumDataV<'_>> = Vec::with_capacity(nd);
-                for (k, d) in datas.iter().enumerate() {
+                // datas 字段在 vals 栈顶（typ 先压在底）：逆序 pop 落槽后
+                // 反转，typ 最后 pop
+                let mut ds: Vec<SumDataV<'_>> = Vec::with_capacity(datas.len());
+                for d in datas.iter().rev() {
+                    let val = vals.pop().expect("eval 栈：SumCaseAsm 缺字段");
                     ds.push(SumDataV {
                         name: d.name,
-                        val: items[k],
+                        val,
                         icit: d.icit,
                     });
                 }
+                ds.reverse();
+                let typ = vals.pop().expect("eval 栈：SumCaseAsm 缺 typ");
                 vals.push(v_xcell(bump.alloc(XCell::SumCase {
                     typ,
                     case_name,
@@ -1749,14 +1809,14 @@ fn eval_iter<'a>(
                 let s2 = force(bump, spine, defs, metas, decls, mmap, fuel, pm_defs, sv);
                 let mut stuck = true;
                 if v_tag(s2) == 7 && matches!(v_xcell_of(s2), XCell::SumCase { .. }) {
-                    if burn(fuel) {
-                        if let Some((body_tm, env2)) = eval_aux(
-                            bump, spine, defs, metas, decls, mmap, fuel, pm_defs, s2, env, cases,
-                        ) {
-                            // 分支选中：体在本 eval 循环里尾推（pending 空）
-                            work.push(W::Tm(body_tm, env2));
-                            stuck = false;
-                        }
+                    // 不烧 fuel：参考版 eval(Tm::Match) 直呼 eval_aux，无
+                    // burn（force 的 Match 重选臂才烧——见 force 1229 行）。
+                    if let Some((body_tm, env2)) = eval_aux(
+                        bump, spine, defs, metas, decls, mmap, fuel, pm_defs, s2, env, cases,
+                    ) {
+                        // 分支选中：体在本 eval 循环里尾推（pending 空）
+                        work.push(W::Tm(body_tm, env2));
+                        stuck = false;
                     }
                 }
                 if stuck {
@@ -2112,39 +2172,36 @@ fn quote_iter<'a>(
                 params,
                 cases,
             } => {
-                let n = params.len();
-                let mut items: Vec<&'a Tm<'a>> = Vec::with_capacity(2 * n);
-                for _ in 0..2 * n {
-                    items.push(done.pop().expect("quote 栈：Sum 缺参数"));
-                }
-                items.reverse(); // [v0, t0, v1, t1, ...]
-                let mut ps: Vec<SumParamT<'_>> = Vec::with_capacity(n);
-                for (k, p) in params.iter().enumerate() {
+                // done 槽序 = v0, t0, v1, t1, ...（先压者在底）→ 按 params
+                // 逆序逐槽收进 ps 再反转，省掉 items 中转 + 二次下标拷贝
+                let mut ps: Vec<SumParamT<'_>> = Vec::with_capacity(params.len());
+                for p in params.iter().rev() {
+                    let ty = done.pop().expect("quote 栈：Sum 缺参数");
+                    let val = done.pop().expect("quote 栈：Sum 缺参数");
                     ps.push(SumParamT {
                         name: p.name,
-                        val: items[2 * k],
-                        ty: items[2 * k + 1],
+                        val,
+                        ty,
                         icit: p.icit,
                     });
                 }
+                ps.reverse();
                 done.push(bump.alloc(Tm::Sum(name, bump.alloc_slice_fill_iter(ps), cases)));
             }
             QJob::SumCaseAsm { case_name, datas } => {
-                let nd = datas.len();
-                let mut items: Vec<&'a Tm<'a>> = Vec::with_capacity(nd);
-                for _ in 0..nd {
-                    items.push(done.pop().expect("quote 栈：SumCase 缺字段"));
-                }
-                items.reverse(); // [d0, d1, ...]
-                let typ = done.pop().expect("quote 栈：SumCase 缺 typ");
-                let mut ds: Vec<SumDataT<'_>> = Vec::with_capacity(nd);
-                for (k, d) in datas.iter().enumerate() {
+                // datas 字段在 done 栈顶（typ 先压在底）：逆序 pop 落槽后
+                // 反转，typ 最后 pop
+                let mut ds: Vec<SumDataT<'_>> = Vec::with_capacity(datas.len());
+                for d in datas.iter().rev() {
+                    let val = done.pop().expect("quote 栈：SumCase 缺字段");
                     ds.push(SumDataT {
                         name: d.name,
-                        val: items[k],
+                        val,
                         icit: d.icit,
                     });
                 }
+                ds.reverse();
+                let typ = done.pop().expect("quote 栈：SumCase 缺 typ");
                 done.push(bump.alloc(Tm::SumCase {
                     typ,
                     case_name,
@@ -2313,10 +2370,16 @@ fn intersect_bump<'a>(
     // unify_sp 回落：前缀对压栈（内先压 → 弹出外先，对齐 unify_sp 的递归序）。
     // tag 7 不跳过：参考版对字面量实参照走 unify（恒败）、对 Decl/Prim 实参
     // 照走同名逐参——位相等的同单元也须分派（见 unify 的 tag 7 守卫）。
+    // Obj 头的位相等链（tag 2 + hk=Obj）同样不免：参考版 intersect_go 只收
+    // 裸 Rigid，其余一律回落 unify_sp，而 Obj/Obj 无 unify 臂恒败（与
+    // unify_sp_lockstep 的跳过守卫同款）。
     for k in 0..common {
         let (a1, _) = args1[k];
         let (a2, _) = args2[k];
-        if a1.0 != a2.0 || v_tag(a1) == 7 {
+        if a1.0 != a2.0
+            || v_tag(a1) == 7
+            || (v_tag(a1) == 2 && spine.stack[v_spine_of(a1)].hk == HK_OBJ)
+        {
             stack.push(UItem::Pair(l, a1, a2));
         }
     }
@@ -2602,6 +2665,15 @@ fn unify_iter<'a>(
             }
             return false;
         }
+        // —— (0,0) 裸刚性对早退：同 level 的对已被位相等捷径剪掉
+        // （force 前后各一次），到这里必是异 level、必不等——免去走完
+        // 整个 cascade 的两次 flex_of scratch 往返（GADT 索引合一的常见
+        // 失败形态）。语义与 L06 的 (0,0) 末臂同构；位置是 L07 新增——
+        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L06 无 pm 臂；L08 有
+        // 同款 pm 臂但未加此早退）——
+        if v_tag(t) == 0 && v_tag(u) == 0 {
+            return false;
+        }
         // —— Decl/Decl 同名（参考臂 6）：同名比 spine（裸单元自反成立），
         // 异名落到后续臂（λ/η 等仍可命中）——
         if head_kind(spine, t) == HK_DECL && head_kind(spine, u) == HK_DECL {
@@ -2865,9 +2937,15 @@ fn unify_iter<'a>(
                 },
                 2 => {
                     let hd = spine.spine_head(v_spine_of(other));
-                    match v_xcell_of(hd) {
-                        XCell::Decl(n) => Some(n),
-                        XCell::Prim(n) => Some(n),
+                    // 链头可能是裸 Rigid / Meta（打包立即数，不是指针）——
+                    // 不看 tag 就 v_xcell_of 是野指针读；非卡住单元头按参考
+                    // 版语义走宽松臂失败（`_ => Err`）。
+                    match v_tag(hd) {
+                        7 => match v_xcell_of(hd) {
+                            XCell::Decl(n) => Some(n),
+                            XCell::Prim(n) => Some(n),
+                            _ => None,
+                        },
                         _ => None,
                     }
                 }
@@ -2968,7 +3046,11 @@ fn unify_iter<'a>(
                     continue;
                 }
                 // 前置结构检查（与参考版逐项判定一致，只是提前——Err 判定
-                // 不受比较顺序影响，Ok 只在全部通过时给出）
+                // 不受比较顺序影响，Ok 只在全部通过时给出）。**文档化偏差**：
+                // 参考版是惰性交错（scrutinee 先合一、可能已解出若干 meta
+                // 才因长度失配失败），前置后 Err 路径上这些 meta 副作用不
+                // 发生；仅当调用方捕获该错误并继续同轮检查时才可观测——
+                // 现有全部调用点的 unify 错误均致命，不可达。
                 if c1.len() != c2.len() {
                     return false;
                 }
@@ -2985,9 +3067,14 @@ fn unify_iter<'a>(
                         return false;
                     }
                 }
-                // 分支对后压（先比）、pending 次之、scrutinee 最后压（最先
-                // 比）——对齐参考版的失败顺序
+                // 参考版比较序（unification.rs Match/Match 臂）：scrutinee →
+                // 分支体 → pending。栈 LIFO：pending 先压、分支对次之、
+                // scrutinee 最后压（最先比）——两侧都在解同一 meta 时先解
+                // 方向会影响最终解与 fuel 消耗序，序必须一致。
                 let declb = Rc::new(simpl_decl(bump, decls));
+                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
+                    stack.push(UItem::Pair(l, *u1, *u2));
+                }
                 for ((p1, b1), (_, b2)) in c1.iter().zip(c2.iter()).rev() {
                     stack.push(UItem::MatchBranch {
                         b1: *b1,
@@ -2998,9 +3085,6 @@ fn unify_iter<'a>(
                         l,
                         count: p1.bind_count(),
                     });
-                }
-                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
-                    stack.push(UItem::Pair(l, *u1, *u2));
                 }
                 stack.push(UItem::Pair(l, *s1, *s2));
                 continue;
@@ -3109,10 +3193,19 @@ impl RenBuf {
     }
     /// 整表逐代克隆（卡住 match 分支体的嵌套 renaming 用——参考版按分支
     /// clone 整个 HashMap 的对应物；克隆保持同代，lift 只写进克隆）。
+    /// 只克隆到本代有效高水位（stamp==epoch 的最高槽）：容量只增不减，
+    /// 整表克隆会背上历史最高 level 的死重；水位之上的条目本代无效，
+    /// `get` 视同缺项，语义不变。
     fn clone_valid(&self) -> RenBuf {
+        let mut end = 0usize;
+        for (i, g) in self.stamp.iter().enumerate() {
+            if *g == self.epoch {
+                end = i + 1;
+            }
+        }
         RenBuf {
-            val: self.val.clone(),
-            stamp: self.stamp.clone(),
+            val: self.val[..end].to_vec(),
+            stamp: self.stamp[..end].to_vec(),
             epoch: self.epoch,
         }
     }
@@ -4086,19 +4179,45 @@ fn struct_env_eq_go(
     b: Env<'_>,
 ) -> bool {
     let la = env_len(a);
-    let lb = env_len(b);
-    if la != lb {
+    if la != env_len(b) {
         return false;
     }
-    (0..la).all(|i| {
-        struct_val_eq_go(
-            budget,
-            spine,
-            defs,
-            env_nth(defs, a, i),
-            env_nth(defs, b, i),
-        )
-    })
+    // 单趟双链迭代（原 (0..la).all(env_nth) 对链段是 O(d²)）：槽序与
+    // env_nth 一致——各自链段先走（头 = 最内层），链尽后平坦区按
+    // `flat_base + flat_len - 1 - k` 倒序读。两侧链/平坦划分可以不同，
+    // 各自独立切换即可（env_nth 同款优先序）。
+    let mut na = a.binds;
+    let mut nb = b.binds;
+    let mut fa = a.flat_base + a.flat_len;
+    let mut fb = b.flat_base + b.flat_len;
+    for _ in 0..la {
+        let va = match na {
+            Some(e) => {
+                let v = e.val;
+                na = e.next;
+                v
+            }
+            None => {
+                fa -= 1;
+                defs[fa as usize]
+            }
+        };
+        let vb = match nb {
+            Some(e) => {
+                let v = e.val;
+                nb = e.next;
+                v
+            }
+            None => {
+                fb -= 1;
+                defs[fb as usize]
+            }
+        };
+        if !struct_val_eq_go(budget, spine, defs, va, vb) {
+            return false;
+        }
+    }
+    true
 }
 
 // Machine（稳态复用）与 elaboration
@@ -4172,8 +4291,8 @@ impl Machine {
     }
 
     /// 每轮 reset：metacontext + 名字表/轨迹/环境区域 + 可变全局 + pm 事实
-    /// 表全部清空（builtin 的重注册在 [`Machine::prime_round`]；decl 表随
-    /// Cxt 的 Rc 释放）。
+    /// 表 + 中性 spine 全部清空（builtin 的重注册在 [`Machine::prime_round`]；
+    /// decl 表随 Cxt 的 Rc 释放）。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
@@ -4182,6 +4301,7 @@ impl Machine {
         self.mutable_map.borrow_mut().clear();
         self.pm_defs.clear();
         self.pm_solvable.clear();
+        self.spine.clear();
         self.fuel.set(UNIFY_FUEL);
     }
 
@@ -4830,18 +4950,16 @@ impl Machine {
                     .map(|&(_, ty)| ty)
                     .or_else(|| decls.get(x.data.as_str()).map(|e| e.ty));
                 if let Some(ty) = ty {
-                    // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
-                    // 头是 Meta）放行
+                    // force 已展开已解 meta；未解 flex（裸 tag 5，或任意
+                    // spine 的 meta 头链）放行——参考版 `Val::Flex(_, _) =>
+                    // Ok(())` 对 spine 形状不设限，这里用 is_flex 走 spine_head
+                    // 判头（只看栈顶槽的 f 会把 ≥2 实参的 flex 链误判成非
+                    // flex）
                     let v = self.force_v(bump, decls, ty);
                     if v_tag(v) == 3 {
                         return Ok(());
                     }
-                    let is_flex = match v_tag(v) {
-                        5 => true,
-                        2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
-                        _ => false,
-                    };
-                    if is_flex {
+                    if is_flex(&self.spine, v) {
                         Ok(())
                     } else {
                         Err(Error(format!("expected universe, got V({})", v.0)))
@@ -4961,7 +5079,7 @@ impl Machine {
                         // 类型取字段真实类型
                         let (sname, sparams) = match v_xcell_of(*typ) {
                             XCell::Sum { name, params, .. } => (*name, *params),
-                            _ => return Err(Error(" ill-scoped SumCase".to_owned())),
+                            _ => return Err(Error("ill-scoped SumCase".to_owned())),
                         };
                         if let Some(p) = sparams.iter().find(|p| p.name == f.data) {
                             return Ok((
@@ -5662,9 +5780,9 @@ impl<'a> Compiler<'a> {
         }
         // 覆盖检查：每个可达构造子必须被某个臂覆盖（通配臂覆盖全部）。
         // 可达性 = 在快照回滚下跑一次特化方程（与臂内走查同一套判定）。
-        for ctor in sum_case_names(head_sum) {
-            if Self::probe_accessible(mach, bump, cxt, head_sum, &ctor)
-                && !arms.iter().any(|(pat, _)| covers(pat, &ctor, &ctor_names))
+        for ctor in &ctor_names {
+            if Self::probe_accessible(mach, bump, cxt, head_sum, ctor)
+                && !arms.iter().any(|(pat, _)| covers(pat, ctor, &ctor_names))
             {
                 self.errors
                     .push(format!("match 不完整：缺少构造子 {}", ctor));

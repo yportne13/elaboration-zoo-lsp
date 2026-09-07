@@ -1154,3 +1154,89 @@ fn steady_state_reuse() {
     assert_eq!(r1, r2, "稳态两轮不一致");
     assert_eq!(r1, fresh, "稳态与一次性不一致");
 }
+
+// 第一轮评审回归（快版/参考版行为分歧的复现用例）
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_review1_obj_lenient_flex_arms() {
+    // 宽松臂遇中性链类型（裸 Rigid 头的 `F Nat`）：参考版干净 Err，快版
+    // 曾因链头未验 tag 直接 v_xcell_of 解引用打包立即数（野指针读）。
+    // 两侧都必须 Err（宽松臂只放行卡住 Decl/Prim 头）。
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def bar (F : U -> U) (x : F Nat) : String = x
+"#,
+    );
+
+    // 卡住投影带实参链（HK_OBJ 路径）：def 期 eval 把 use3 的体卡成
+    // Obj(stuck-match, g, [Nat])，引用期归约走 eval 期的选支 + 投影命中
+    // （ObjSel + β）。`println use3` 覆盖卡住 Obj 链的 quote 与 force 的
+    // HK_OBJ miss 重建；force 的"投影命中 + 实参 vapp1 β"路径需要 receiver
+    // 在创建与读取之间被解出，表面程序不可构造（评审逐臂对照背书，见
+    // 7073447），此处看守的是 miss 重建 / quote / eval 命中三个伴生路径。
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Box {
+    mk(g: U -> U)
+}
+
+def getb (n : Nat) : Box =
+    match n {
+        case zero => mk (X => X)
+        case succ(x) => mk (X => X)
+    }
+
+def use3 (n : Nat) : U = (getb n).g Nat
+
+println use3
+println (use3 zero)
+println (use3 (succ zero))
+"#,
+    );
+
+    // 投影命中发生在 eval 期（全局 ctor 值直接取 λ 字段再应用）
+    assert_parity(
+        r#"
+enum Box {
+    mk(g: U -> U)
+}
+
+def b1 : Box = mk (X => X)
+
+def use4 : U = (b1.g) Nat
+
+println use4
+"#,
+    );
+
+    // ≥2 实参的 flex 链作 binder 注解：ty_precheck 须放行（参考版
+    // `Val::Flex(_, _) => Ok(())` 不看 spine 形状；快版曾只看栈顶槽的 f，
+    // 把 `?m a b` 误判成非 flex 而在预检拒绝）。前置断言参考版确实接受，
+    // 避免 Err/Err 假绿。
+    let flex_src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def usef (a : U) (b : U) (T : _ a b) (u : T) : U = a
+
+println (usef Nat Nat Nat zero)
+"#;
+    assert!(
+        run_basic(flex_src).is_ok(),
+        "回归前置条件：参考版应接受 flex 链注解\n{flex_src}"
+    );
+    assert_parity(flex_src);
+}

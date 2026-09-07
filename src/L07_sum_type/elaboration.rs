@@ -389,7 +389,7 @@ impl Infer {
                     } => {
                         let (sname, params) = match self.force(decl, *typ) {
                             Val::Sum(sname, params, _) => (sname, params),
-                            _ => return Err(Error(" ill-scoped SumCase".to_owned())),
+                            _ => return Err(Error("ill-scoped SumCase".to_owned())),
                         };
                         if let Some((_, _, fty, _)) =
                             params.iter().find(|(n, ..)| n == &f)

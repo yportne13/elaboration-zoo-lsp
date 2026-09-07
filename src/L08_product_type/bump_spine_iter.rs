@@ -5241,7 +5241,7 @@ impl Machine {
                         // 类型取字段真实类型
                         let (sname, sparams) = match v_xcell_of(*typ) {
                             XCell::Sum { name, params, .. } => (*name, *params),
-                            _ => return Err(Error(" ill-scoped SumCase".to_owned())),
+                            _ => return Err(Error("ill-scoped SumCase".to_owned())),
                         };
                         if let Some(p) = sparams.iter().find(|p| p.name == f.data) {
                             return Ok((
