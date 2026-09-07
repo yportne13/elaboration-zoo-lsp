@@ -6,27 +6,23 @@
 //! 判据：**Ok 输出逐字节一致 / Err 判定一致**。错误文案的 Span 偏移、
 //! meta 编号（`?N`）与 Debug-Span 数字是文档化偏差，比对前归一化。
 //!
-//! # 已知偏差（快版孪生，缺陷另案跟踪）
+//! # 语言面注意（共用 parser 的形态约束）
 //!
-//! - **multiline 枚举声明的 match 编译**（`Compiler`，缺陷另案）：枚举声明
-//!   跨多行（构造子含子模式字段，如 `succ(x: Nat)`）时，快版 match 编译
-//!   对构造子分支子模式绑定会越界/死循环（Windows 下爆 `STATUS_ACCESS_
-//!   VIOLATION`）。**单行枚举声明**的等价 match（含递归、子模式、求值）
-//!   完全正常且与参考版逐字节一致（本套件 `parity_single_line` 覆盖）。
-//!   根因在快版 `Compiler::compile_aux` 对多行枚举构造子 span 的子模式
-//!   level 推算，尚未定位——单行枚举不受影响，故本套件的语言面（enum /
-//!   match / 递归 / trait / 全局 / 字符串 / 报错）全部用单行声明呈现。
-//! - **GADT 索引宇宙判定 × trait 求解交互**、struct 接收者实例、单臂构造
-//!   子匹配、Prim 求值时机差（L12 先例家族）在快版分叉或发散，整体剔除。
-//! - **prelude 依赖的测试源**（run_with_prelude / class / module / derive /
-//!   verilog / hdl）不在本套件（本套件用无 prelude 的 `run` 口径）；参考版
-//!   的这些行为由既有 `cargo test --lib`（647 例）保证。
+//! 枚举构造子 / match case 必须**换行分隔**（`many0_sep(kw(EndLine))`）。
+//! 把构造子写在同一行（如 `enum Nat { zero succ(x: Nat) }`）时，恢复性
+//! 解析会在第二个构造子处丢弃后续 token——两版拿到同样残缺的 AST，行为
+//! 依旧逐字节一致，但该形态的语言面**无构造子可用**（`succ` 未注册，
+//! 程序在首个引用处报 name-not-in-scope）。本套件早期版本全部用单行
+//! 枚举书写，parity"全绿"实为两版同错的假阴性；现已改用 multiline 声明
+//! 提供真覆盖（`parity_multiline_enum`）。
 //!
-//! # 覆盖（全部用单行枚举声明）
-//! - Ok 逐字节：enum + 构造子匹配（含子模式绑定 `succ(x)`）、递归 def +
-//!   match（natadd 雏形，含求值）、字符串拼接。
-//! - Err 判定 + 归一化正文：name-not-in-scope、universe 报错、`+` 运算符
-//!   未绑定（无 prelude 时 `String` 无 `+` 方法——两版一致报错）。
+//! # 覆盖
+//! - multiline 枚举（**标准声明形态**）：构造子子模式匹配 + 求值、递归
+//!   def + match（natadd / match_src 形态）、非穷尽报错（单臂 match 的
+//!   文案逐字节一致：`non-exhaustive pattern: ... not covered`）。
+//! - 单行枚举形态的行为钉子（两版同错，防分叉回归）。
+//! - Err 判定 + 归一化正文：name-not-in-scope、universe 报错。
+//! - 稳态复用（trait/可变全局跨轮清空）。
 
 #![feature(pattern)]
 
@@ -157,7 +153,8 @@ fn assert_parity(src: &str) {
     }
 }
 
-// 基础语言面（单行枚举声明，规避 multiline-enum match 编译缺陷）
+// 基础语言面（单行枚举声明——共用 parser 的恢复性解析会吞掉第二个及之后的
+// 构造子，两版同错；此处钉住该形态的逐字节一致，真覆盖见 parity_multiline_enum）
 // --------------------------------------------------------------------------------
 
 #[test]
@@ -190,10 +187,49 @@ fn parity_errors() {
     assert_parity("def bad = nope\n");
     // 期望宇宙（`: Nat` 无 prelude 时不解析——两版一致报 name not in scope）
     assert_parity("def bad : Nat = Type 0\n");
-    // 单臂 match 的非穷尽（两版都给 Unmatched 类警告文案）
+    // 单臂 match 的非穷尽（multiline 枚举：`succ` 真实存在，非穷尽真实可判，
+    // 文案逐字节一致 = "non-exhaustive pattern: `succ` not covered"）
     assert_parity(
-        "enum Nat { zero succ(x: Nat) } \
+        "enum Nat {\n  zero\n  succ(x: Nat)\n}\n\
          def mono(n: Nat): Nat = match n { case zero => zero }\n",
+    );
+}
+
+// multiline 枚举（标准声明形态：构造子换行分隔）——原"已知缺陷"场景
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_multiline_enum() {
+    // 构造子子模式匹配 + 求值（multiline match 臂；原 ACCESS_VIOLATION
+    // 崩溃场景——快版 nat_step_value 对中性字段无 tag 守卫的野指针解引用）
+    assert_parity(
+        "enum Nat {\n  zero\n  succ(x: Nat)\n}\n\
+         def two = succ (succ zero)\n\
+         def mono(n: Nat): Nat =\n  match n {\n    case zero => zero\n    case succ(x) => x\n  }\n\
+         println (mono two)\n",
+    );
+    // inline 单行 match 臂（同一 match，臂内布局不影响语义）
+    assert_parity(
+        "enum Nat {\n  zero\n  succ(x: Nat)\n}\n\
+         def three = succ (succ (succ zero))\n\
+         def pred(n: Nat): Nat = match n { case zero => zero case succ(x) => x }\n\
+         println (pred three)\n",
+    );
+    // 递归 def + match（natadd / match_src 形态：自递归 + 构造子链求值）
+    assert_parity(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\
+         def add(x: Nat, y: Nat): Nat =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\n\
+         def p0 : Nat = succ (succ zero)\n\
+         def p1 : Nat = add p0 p0\n\
+         def p2 : Nat = add p1 p1\n\
+         println p2\n",
+    );
+    // 自递归 def（match_src 形态：全局占位/覆盖 + 运行时首匹配）
+    assert_parity(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\
+         def f_0(x : Nat) : Nat =\n    match x {\n        case zero => zero\n        case succ(n) => succ (f_0 n)\n    }\n\
+         def two : Nat = succ (succ zero)\n\
+         println (f_0 two)\n",
     );
 }
 

@@ -74,15 +74,16 @@
 //! 为 false）、canonical/iddfs（只在参考版 Err 路径的重试闭包里，不
 //! 影响判定与输出）。
 //!
-//! **已知偏差**（缺陷另案跟踪，均不影响已用单行声明的语言面）：
-//! 1. **multiline 枚举声明的 match 编译**：枚举跨多行（构造子带子模式字段，
-//!    如 `succ(x: Nat)` 分行写）时，快版 `Compiler::compile_aux` 对构造子子
-//!    模式 level 推算越界/死循环（Windows 下 `STATUS_ACCESS_VIOLATION`）。
-//!    **单行枚举声明**的等价 match（含子模式、递归、求值）完全正常且与参考
-//!    版逐字节一致。root cause 在 `compile_aux` 的子模式 level 推算，仍未
-//!    定位——参考版 `filter_accessible_constrs` 的 `has_indices` 短路 +
-//!    限定名探测（本版已照移植）规避了部分路径，但决策树 `Con` 分支的子
-//!    模式绑定仍受影响；单行枚举的构造子 span 为零恰好绕开。
+//! **已知偏差**：
+//! 1. ~~multiline 枚举声明的 match 编译~~ **已修复**（曾报
+//!    `STATUS_ACCESS_VIOLATION`）：真凶是原生 Nat 折叠 `nat_step_value`——
+//!    `succ(字段)` 装配时对字段值**不查 tag** 就 `v_xcell_of` 解引用，字段为
+//!    中性值（Rigid，打包的是层级非指针）即野指针读。现加 `v_tag == 7`
+//!    守卫（中性字段保持卡住 SumCase 形状，与参考版一致）；决策树侧的
+//!    裸变量 catch-all（`is_var_like`）与叶子 `patcon.to_raw()` 同步照
+//!    参考版补齐。另注意：**单行枚举声明**（`enum Nat { zero succ(x: Nat) }`
+//!    构造子不换行）本就不在本语言面——共用 parser 恢复性解析会吞掉第二
+//!    个及之后的构造子，两版同错同报（parity 仍逐字节一致）。
 //! 2. GADT 索引宇宙判定 × trait 求解交互、struct 接收者实例、单臂构造子
 //!    匹配、Prim 求值时机差（L12 先例家族）在快版分叉或发散。
 //! 3. 仅错误消息内容、不影响判定与 Ok 输出：快版错误里内嵌 Debug-Val/Tm
@@ -278,7 +279,10 @@ fn nat_step_value(typ: V, index: u32, datas: &[SumDataV<'_>]) -> Option<u64> {
     }
     match index {
         0 if datas.is_empty() => Some(0),
-        1 if datas.len() == 1 => match v_xcell_of(datas[0].val) {
+        // 字段值须已是 XCell（tag 7）才能按 Nat 单元读——中性字段
+        // （Rigid / 卡住 SumCase / spine 头等）的构造链保持 SumCase 形状
+        // （与参考版一致）；tag 检查同时是 v_xcell_of 解引用的前置守卫
+        1 if datas.len() == 1 && v_tag(datas[0].val) == 7 => match v_xcell_of(datas[0].val) {
             XCell::Nat(k) => k.checked_add(1),
             _ => None,
         },
@@ -2632,6 +2636,10 @@ fn is_prim_application<'a>(decl: &Decls<'a>, spine: &Spine, v: V) -> bool {
         },
         2 => {
             let hd = spine.spine_head(v_spine_of(v));
+            // 头也须是 Decl 单元（Rigid 头链等非 Decl 形态 → false）
+            if v_tag(hd) != 7 {
+                return false;
+            }
             match v_xcell_of(hd) {
                 XCell::Decl { name } => *name,
                 _ => return false,
@@ -3728,6 +3736,11 @@ fn head_key_v(spine: &Spine, v: V) -> Option<SmolStr> {
         },
         2 => {
             let hd = spine.spine_head(v_spine_of(v));
+            // 头须是 XCell（tag 7）才能解引用——Rigid 等其余头按注释语义
+            // 落通配桶（None）
+            if v_tag(hd) != 7 {
+                return None;
+            }
             match v_xcell_of(hd) {
                 XCell::Decl { name } => Some(SmolStr::new(*name)),
                 XCell::Sum { name, .. } => Some(SmolStr::new(*name)),
@@ -5828,7 +5841,15 @@ impl Machine {
             let mut compiler = Compiler::new(a);
             compiler.compile(self, bump, typ, clauses, cxt, target)?;
             if !compiler.warnings.is_empty() {
-                return Err(Error(expr_span.map(|_| format!("{:?}", compiler.warnings)), vec![]));
+                // 参考版同款：warnings 以 Display 逐条 join("; ") 作错误文案
+                //（原为 Debug 形式，与参考版文案分叉）
+                let msg = compiler
+                    .warnings
+                    .iter()
+                    .map(|w| w.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(Error(expr_span.map(|_| msg.clone()), vec![]));
             }
             let cs: &'a [(PatternDetail, &'a Tm<'a>)] =
                 bump.alloc_slice_fill_iter(compiler.pats.into_iter());
@@ -8928,6 +8949,17 @@ pub(crate) enum Warning {
     Unmatched(Pattern),
 }
 
+/// Display 文案与参考版 pattern_match.rs 同款（match 非穷尽/不可达作为
+/// 错误文案输出：`warnings.iter().map(|w| w.to_string()).join("; ")`）。
+impl std::fmt::Display for Warning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Warning::Unreachable(body) => write!(f, "unreachable pattern: {}", body),
+            Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PatConstructor {
     data: Vec<(usize, Vec<PatternDetail>)>,
@@ -8963,6 +8995,63 @@ impl PatConstructor {
     fn new_level(mut self, index: usize) -> Self {
         self.data.push((index, vec![]));
         self
+    }
+
+    /// 把累积的模式构造子树转成 `Raw` 表达式（参考版 pattern_match.rs 81
+    /// —`to_raw`）：**含**匹配期间发现的隐式参数（如 `cons[l](x, xs)` 的
+    /// `l`），它们以 `PatternDetail::Any` 入栈、转成 Implicit `Raw::App`
+    /// 实参，从而让 `check_pm_final` 的推断复用已绑定的 Rigid 而非新建
+    /// 独立 meta。快版 leaf 分支必须用它（而非原始 `Raw`——原始用户模式
+    /// 是完整构造子 `succ(x)`，用它去 check 字段类型会越界崩溃）。
+    fn to_raw(&self) -> Raw {
+        let pat = self.clone().clean();
+        match pat.root_detail() {
+            Some(d) => Self::detail_to_raw(d),
+            None => Raw::Hole(empty_span(())),
+        }
+    }
+
+    /// 自全 clean 栈提取根构造子 detail（栈底 index 0 是根 Con）。
+    fn root_detail(&self) -> Option<&PatternDetail> {
+        if self.data.is_empty() || self.data[0].1.is_empty() {
+            return None;
+        }
+        Some(&self.data[0].1[0])
+    }
+
+    fn detail_to_raw(d: &PatternDetail) -> Raw {
+        match d {
+            PatternDetail::Con(_idx, name, subs) => {
+                subs.iter().fold(Raw::Var(name.clone()), |acc, sub| {
+                    let icit = match sub {
+                        PatternDetail::Any(var_name, param_name, Icit::Impl) => {
+                            if var_name.data.is_empty() {
+                                // 无名隐式 → 让 elaborated 自动填充
+                                Either::Icit(Icit::Impl)
+                            } else if let Some(pname) = param_name {
+                                // 具名隐式 + 显式参数名：`[pi_param=var]`
+                                // 让 insert_go 自动填充前置 Impl 且只绑定本个
+                                Either::Name(pname.clone())
+                            } else {
+                                // 兼容：剥离 `_` 前缀派生参数名
+                                Either::Name(var_name.clone().map(|s| SmolStr::new(&s[1..])))
+                            }
+                        }
+                        PatternDetail::Any(_, _, Icit::Expl) => Either::Icit(Icit::Expl),
+                        PatternDetail::Bind(_) => Either::Icit(Icit::Expl),
+                        PatternDetail::Con(_, _, _) => Either::Icit(Icit::Expl),
+                    };
+                    Raw::App(Box::new(acc), Box::new(Self::detail_to_raw(sub)), icit)
+                })
+            }
+            PatternDetail::Any(name, _, _) | PatternDetail::Bind(name) => {
+                if name.data.is_empty() {
+                    Raw::Hole(empty_span(()))
+                } else {
+                    Raw::Var(name.clone())
+                }
+            }
+        }
     }
 }
 
@@ -9270,9 +9359,14 @@ impl<'a> Compiler<'a> {
                             == Some(true) =>
                 {
                     // check_pm 失败 → Ok(false)（参考版同款：整个构造子
-                    // 分支回退 false）
+                    // 分支回退 false）。用 `patcon.to_raw()` 而非原始
+                    // `arm.raw`（参考版 pattern_match.rs 365 同款）——累积
+                    // 的 patcon 已把子模式绑定成精确的 `Var("...")`，用原始
+                    // 用户模式（完整构造子 `succ(x)`）去 check 字段类型会在
+                    // infer 内部越界（STATUS_ACCESS_VIOLATION）
+                    let patcon_raw = arm.patcon.clone().to_raw();
                     let (_, cxt) = match mach.check_pm_final(
-                        bump, &arm.cxt, &arm.raw, arm.target_typ, arm.ori,
+                        bump, &arm.cxt, &patcon_raw, arm.target_typ, arm.ori,
                     ) {
                         Ok(x) => x,
                         Err(_) => return Ok(false),
@@ -9313,9 +9407,41 @@ impl<'a> Compiler<'a> {
                 [] => Ok(false),
             },
             [(var, typ, head_name, icit), heads_rest @ ..] => {
+                // 构造子名集（非 Sum 头为空集），用于区分**真构造子模式**与
+                // **裸变量模式**：裸变量 parse 成 `Con(name, [], _)`，名字不在
+                // 构造子集里，必须当作 catch-all（绑定一次），而不是被复制到该
+                // Sum 头的每个构造子分支里重复展开（参考版 pattern_match.rs
+                // 431-440 的 `is_var_like` 同款——缺了它会指数级爆炸 / 多行枚举
+                // 直接越界崩溃）。
+                let is_sum = {
+                    let f = mach.force_v(bump, &arms[0].cxt, *typ);
+                    v_tag(f) == 7 && matches!(v_xcell_of(f), XCell::Sum { .. })
+                };
+                let constrs_name: std::collections::BTreeSet<SmolStr> = {
+                    let f = mach.force_v(bump, &arms[0].cxt, *typ);
+                    if v_tag(f) == 7 {
+                        if let XCell::Sum { cases, .. } = v_xcell_of(f) {
+                            cases.iter().map(|c| SmolStr::new(*c)).collect()
+                        } else {
+                            std::collections::BTreeSet::new()
+                        }
+                    } else {
+                        std::collections::BTreeSet::new()
+                    }
+                };
+                let is_var_like = |pat: &Pattern, icit: &Icit| -> bool {
+                    match pat {
+                        Pattern::Any(_, i) => &i.to_icit() == icit,
+                        Pattern::Con(name, subs, i) => {
+                            subs.is_empty()
+                                && &i.to_icit() == icit
+                                && (!is_sum || !constrs_name.contains(&name.data))
+                        }
+                    }
+                };
                 let not_necessary = arms
                     .iter()
-                    .all(|arm| matches!(&arm.arm.pats[..], [Pattern::Any(_, i)] if i.to_icit() == *icit));
+                    .all(|arm| arm.arm.pats.first().map(|p| is_var_like(p, icit)).unwrap_or(false));
 
                 if not_necessary {
                     let new_context =
@@ -9328,17 +9454,41 @@ impl<'a> Compiler<'a> {
                             arm.arm.pats.first(),
                             Some(Pattern::Any(sp, _)) if sp.data == false
                         );
-                        let cxt2 = if fake_first {
-                            clone_cxt(&arm.cxt)
-                        } else {
-                            let q = mach.quote(bump, &arm.cxt, arm.cxt.lvl, *typ);
-                            let name = head_name.clone().map(|x| format!("_{}", x));
-                            let cname = name.data.clone();
-                            mach.bind_name(bump, &arm.cxt, &cname, q, *typ)
+                        // 裸变量模式 `Con(name, [], _)` 且名字不在构造子集：按
+                        // 变量自身名字绑定一次（参考版 456-486），后续
+                        // check_pm_final 复用已绑定的 Rigid（emit `Bind`）
+                        let bare_con = match arm.arm.pats.first() {
+                            Some(Pattern::Con(name, subs, i))
+                                if subs.is_empty()
+                                    && i.to_icit() == *icit
+                                    && (!is_sum || !constrs_name.contains(&name.data)) =>
+                            {
+                                Some(name.clone())
+                            }
+                            _ => None,
                         };
-                        let patcon2 = if fake_first {
-                            arm.patcon.clone()
-                        } else if *icit == Icit::Impl {
+                        let (cxt2, patcon2) = if let Some(constr_name) = bare_con {
+                            if fake_first {
+                                (clone_cxt(&arm.cxt), arm.patcon.clone())
+                            } else {
+                                let q = mach.quote(bump, &arm.cxt, arm.cxt.lvl, *typ);
+                                (
+                                    mach.bind_name(bump, &arm.cxt, &constr_name.data, q, *typ),
+                                    arm.patcon.clone().clean().push(PatternDetail::Bind(constr_name)),
+                                )
+                            }
+                        } else {
+                            let cxt2 = if fake_first {
+                                clone_cxt(&arm.cxt)
+                            } else {
+                                let q = mach.quote(bump, &arm.cxt, arm.cxt.lvl, *typ);
+                                let name = head_name.clone().map(|x| format!("_{}", x));
+                                let cname = name.data.clone();
+                                mach.bind_name(bump, &arm.cxt, &cname, q, *typ)
+                            };
+                            let patcon2 = if fake_first {
+                                arm.patcon.clone()
+                            } else if *icit == Icit::Impl {
                             // 隐式头：具名（imp 名与绑定的 `_x` 同源——参考
                             // 版 make_implicit_name）
                             let imp = head_name
@@ -9357,6 +9507,8 @@ impl<'a> Compiler<'a> {
                                     None,
                                     *icit,
                                 ))
+                        };
+                        (cxt2, patcon2)
                         };
                         new_arms.push(Arm {
                             arm: MatchArm {
