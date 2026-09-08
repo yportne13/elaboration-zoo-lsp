@@ -683,15 +683,24 @@ pub(crate) struct PiCell<'a> {
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------
 
+/// 链头种类（`Entry.hk`）：push 时随函数侧传播，O(1) 判定链头是 Flex（force
+/// 的 meta 展开臂）/ Decl（force 的 prim 臂）/ 卡住投影 Obj（unify 的位相等
+/// 捷径对它关闭）还是其它（Rigid——force 直接原样返回）。
+const HK_OTHER: u8 = 0;
+const HK_FLEX: u8 = 1;
+const HK_DECL: u8 = 2;
+const HK_OBJ: u8 = 3;
+
 /// spine 栈槽：一次中性应用（icit 随槽携带）。`len`/`base` 支撑流式右链
-/// quote。链头只可能是 Rigid / Flex / 卡住投影 Obj（其余形态 v_app 即
-/// panic，进不了链）。
+/// quote；`hk` 记录链头种类（push 时随函数侧传播）。链头只可能是 Rigid /
+/// Flex / Decl / 卡住投影 Obj（其余形态 v_app 即 panic，进不了链）。
 struct Entry {
     f: V,
     a: V,
     icit: Icit,
     len: u32,
     base: u32,
+    hk: u8,
 }
 
 /// 求值机持有的扁平中性栈（只增不减，槽位下标即句柄）。
@@ -700,17 +709,28 @@ pub(crate) struct Spine {
 }
 
 impl Spine {
-    /// 中性应用 `f a`（icit i）压栈，返回句柄值。
+    /// 中性应用 `f a`（icit i）压栈，返回句柄值。`hk` 随函数侧传播：裸单元
+    /// 直查种类，既有链延伸保持原种类（顶端槽已记下头种类）。
     #[inline]
     fn push(&mut self, f: V, a: V, icit: Icit) -> V {
         let idx = self.stack.len();
+        let hk = match v_tag(f) {
+            5 => HK_FLEX,
+            7 => match v_xcell_of(f) {
+                XCell::Obj { .. } => HK_OBJ,
+                XCell::Decl { .. } => HK_DECL,
+                _ => HK_OTHER,
+            },
+            2 => self.stack[v_spine_of(f)].hk,
+            _ => HK_OTHER,
+        };
         let (len, base) = if v_tag(a) == 2 {
             let prev = &self.stack[v_spine_of(a)];
             (prev.len + 1, prev.base)
         } else {
             (1, idx as u32)
         };
-        self.stack.push(Entry { f, a, icit, len, base });
+        self.stack.push(Entry { f, a, icit, len, base, hk });
         v_spine(idx)
     }
 
@@ -766,10 +786,10 @@ impl Spine {
             5 => Some(v_meta_of(v)),
             2 => {
                 let h = v_spine_of(v);
-                let hd = self.spine_head(h);
-                if v_tag(hd) != 5 {
+                if self.stack[h].hk != HK_FLEX {
                     return None;
                 }
+                let hd = self.spine_head(h);
                 self.collect_args(h, out);
                 Some(v_meta_of(hd))
             }
@@ -778,12 +798,27 @@ impl Spine {
     }
 }
 
+/// 值侧头种类判定（裸单元直查；链查顶端槽的 `hk` 标志，O(1)，无需沿链走底）。
+#[inline]
+fn head_kind(spine: &Spine, v: V) -> u8 {
+    match v_tag(v) {
+        5 => HK_FLEX,
+        7 => match v_xcell_of(v) {
+            XCell::Obj { .. } => HK_OBJ,
+            XCell::Decl { .. } => HK_DECL,
+            _ => HK_OTHER,
+        },
+        2 => spine.stack[v_spine_of(v)].hk,
+        _ => HK_OTHER,
+    }
+}
+
 /// 值是否 Flex（裸未解 meta 立即数或 meta 头的链）。
 #[inline]
 fn is_flex(spine: &Spine, v: V) -> bool {
     match v_tag(v) {
         5 => true,
-        2 => v_tag(spine.spine_head(v_spine_of(v))) == 5,
+        2 => spine.stack[v_spine_of(v)].hk == HK_FLEX,
         _ => false,
     }
 }
@@ -901,10 +936,11 @@ fn vapp1<'a>(
         let env = env_ext(bump, c.env, a);
         eval_iter(bump, spine, work, vals, icits, defs, metas, decl, mutable, env, c.body)
     } else if v_tag(f) == 2 {
-        // 链头：Decl 头先查 prim（带全部既有实参 + 新实参执行）
+        // 链头：Decl 头先查 prim（带全部既有实参 + 新实参执行）。顶端槽的
+        // `hk` 让非 Decl 链免去整趟走底——每次中性应用都省这一笔。
         let h = v_spine_of(f);
-        let hd = spine.spine_head(h);
-        if v_tag(hd) == 7 {
+        if spine.stack[h].hk == HK_DECL {
+            let hd = spine.spine_head(h);
             if let XCell::Decl { name } = v_xcell_of(hd) {
                 let name = *name;
                 if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
@@ -1244,67 +1280,59 @@ fn force<'a>(
             },
             2 => {
                 let h = v_spine_of(v);
-                let hd = spine.spine_head(h);
-                if v_tag(hd) == 5 {
-                    // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
-                    // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
-                    match &metas[v_meta_of(hd) as usize] {
-                        MetaEntry::Unsolved(..) => return v,
-                        MetaEntry::Solved(sol, _) => {
-                            args.clear();
-                            spine.collect_args(h, &mut args);
-                            let mut t = *sol;
-                            for &(a, i) in args.iter().rev() {
-                                t = vapp1(
-                                    bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
-                                    decl, mutable, t, a, i,
-                                );
+                // 顶端槽的 `hk` 直接给出分派（省去非 flex/Decl 链的整趟走底）
+                match spine.stack[h].hk {
+                    HK_FLEX => {
+                        let hd = spine.spine_head(h);
+                        // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
+                        // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
+                        match &metas[v_meta_of(hd) as usize] {
+                            MetaEntry::Unsolved(..) => return v,
+                            MetaEntry::Solved(sol, _) => {
+                                args.clear();
+                                spine.collect_args(h, &mut args);
+                                let mut t = *sol;
+                                for &(a, i) in args.iter().rev() {
+                                    t = vapp1(
+                                        bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                        decl, mutable, t, a, i,
+                                    );
+                                }
+                                v = t;
                             }
-                            v = t;
                         }
                     }
-                } else if v_tag(hd) == 7 {
-                    match v_xcell_of(hd) {
+                    HK_DECL => {
+                        let hd = spine.spine_head(h);
                         // Decl 头的链：prim 执行（Some 结果再 force；None
                         // 卡住返回原链——参考版 force 的 Decl 臂）
-                        XCell::Decl { name } => {
-                            let name = *name;
-                            let prim = decl.get(name).and_then(|e| e.prim);
-                            match prim {
-                                Some(pid) => {
-                                    args.clear();
-                                    spine.collect_args(h, &mut args);
-                                    args.reverse();
-                                    let mut w2: Vec<W<'a>> = Vec::new();
-                                    let mut v2: Vec<V> = Vec::new();
-                                    let mut i2: Vec<Icit> = Vec::new();
-                                    match prim_exec(
-                                        bump,
-                                        spine,
-                                        &mut w2,
-                                        &mut v2,
-                                        &mut i2,
-                                        defs,
-                                        metas,
-                                        decl,
-                                        mutable,
-                                        pid,
-                                        &args,
-                                    ) {
-                                        Some(r) => v = force(
-                                            bump, spine, defs, metas, decl, mutable, r,
-                                        ),
-                                        None => return v,
+                        let name = match v_xcell_of(hd) {
+                            XCell::Decl { name } => *name,
+                            _ => return v,
+                        };
+                        match decl.get(name).and_then(|e| e.prim) {
+                            Some(pid) => {
+                                args.clear();
+                                spine.collect_args(h, &mut args);
+                                args.reverse();
+                                let mut w2: Vec<W<'a>> = Vec::new();
+                                let mut v2: Vec<V> = Vec::new();
+                                let mut i2: Vec<Icit> = Vec::new();
+                                match prim_exec(
+                                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl,
+                                    mutable, pid, &args,
+                                ) {
+                                    Some(r) => {
+                                        v = force(bump, spine, defs, metas, decl, mutable, r)
                                     }
+                                    None => return v,
                                 }
-                                None => return v,
                             }
+                            None => return v,
                         }
-                        _ => return v,
                     }
-                } else {
                     // Rigid / Obj 头的链：卡住
-                    return v;
+                    _ => return v,
                 }
             }
             7 => match v_xcell_of(v) {
@@ -2644,11 +2672,13 @@ fn is_prim_application<'a>(decl: &Decls<'a>, spine: &Spine, v: V) -> bool {
             _ => return false,
         },
         2 => {
-            let hd = spine.spine_head(v_spine_of(v));
-            // 头也须是 Decl 单元（Rigid 头链等非 Decl 形态 → false）
-            if v_tag(hd) != 7 {
+            let h = v_spine_of(v);
+            // 头也须是 Decl 单元（Rigid / Flex / Obj 头链 → false，O(1)
+            // 读顶端槽种类，免整趟走底）
+            if spine.stack[h].hk != HK_DECL {
                 return false;
             }
+            let hd = spine.spine_head(h);
             match v_xcell_of(hd) {
                 XCell::Decl { name } => *name,
                 _ => return false,
@@ -2663,14 +2693,7 @@ fn is_prim_application<'a>(decl: &Decls<'a>, spine: &Spine, v: V) -> bool {
 /// （参考版无 `(Obj, Obj)` 臂，同单元也须走 `_` → Err）。
 #[inline]
 fn is_objheaded(spine: &Spine, v: V) -> bool {
-    match v_tag(v) {
-        7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
-        2 => {
-            let hd = spine.spine_head(v_spine_of(v));
-            v_tag(hd) == 7 && matches!(v_xcell_of(hd), XCell::Obj { .. })
-        }
-        _ => false,
-    }
+    head_kind(spine, v) == HK_OBJ
 }
 
 /// `?m args ≡ ?m args'`（同头 flex）：上游 `intersect`。逐槽（内→外）
@@ -2858,7 +2881,11 @@ fn rigid_lvl(spine: &Spine, v: V) -> Option<u32> {
     match v_tag(v) {
         0 => Some(v_lvl_of(v)),
         2 => {
-            let hd = spine.spine_head(v_spine_of(v));
+            let h = v_spine_of(v);
+            if spine.stack[h].hk != HK_OTHER {
+                return None; // flex / Decl / Obj 头：必非 Rigid，免走底
+            }
+            let hd = spine.spine_head(h);
             if v_tag(hd) == 0 {
                 Some(v_lvl_of(hd))
             } else {
@@ -3706,14 +3733,7 @@ fn unify_iter<'a>(
 /// 值是否 Decl 头（裸 Decl 单元或 Decl 头链）——unify 的 (Decl,_) 拦截判据。
 #[inline]
 fn is_decl_val(spine: &Spine, v: V) -> bool {
-    match v_tag(v) {
-        7 => matches!(v_xcell_of(v), XCell::Decl { .. }),
-        2 => {
-            let hd = spine.spine_head(v_spine_of(v));
-            v_tag(hd) == 7 && matches!(v_xcell_of(hd), XCell::Decl { .. })
-        }
-        _ => false,
-    }
+    head_kind(spine, v) == HK_DECL
 }
 
 /// qualified path 拼接（参考版 `qualified_path_str`）：`a.b.c` 形的 Obj 链
@@ -3744,15 +3764,15 @@ fn head_key_v(spine: &Spine, v: V) -> Option<SmolStr> {
             _ => None,
         },
         2 => {
-            let hd = spine.spine_head(v_spine_of(v));
-            // 头须是 XCell（tag 7）才能解引用——Rigid 等其余头按注释语义
-            // 落通配桶（None）
-            if v_tag(hd) != 7 {
+            let h = v_spine_of(v);
+            // 链头能给出头键的只有 Decl（Sum 不可应用，进不了链）；顶端槽
+            // 种类非 Decl 时 O(1) 落通配桶，免整趟走底
+            if spine.stack[h].hk != HK_DECL {
                 return None;
             }
+            let hd = spine.spine_head(h);
             match v_xcell_of(hd) {
                 XCell::Decl { name } => Some(SmolStr::new(*name)),
-                XCell::Sum { name, .. } => Some(SmolStr::new(*name)),
                 _ => None,
             }
         }
