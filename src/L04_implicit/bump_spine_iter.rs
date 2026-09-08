@@ -738,9 +738,32 @@ fn quote_iter<'a>(
                             });
                             tasks.push(QJob::Q(base_v, level));
                         } else {
-                            tasks.push(QJob::App1(top_icit));
-                            tasks.push(QJob::Q(ea, level));
-                            tasks.push(QJob::Q(spine.stack[h].f, level));
+                            // 防御性回灌自 L05 65269fb（孪生 quote 链陈旧函数
+                            // 部分修复）。函数部分可能是「陈旧应用链」：建链后
+                            // 其头 meta 被解成 λ（值里的位模式不随后续求解更新），
+                            // force 单独引函数部分会停在部分应用的 λ 上，照搬
+                            // App 拼接就产出 β-redex 项（参考版整值 force 经
+                            // vAppSp 一路 β，永不产出）。本章无 pruning，「链实
+                            // 参个数恒等于解的 λ 数」不变量不被打破，多 λ 部分
+                            // 解形态不可达（同输入实测不触发，属潜伏）——仍挂
+                            // 防御：force 为闭包（v_tag == 1）时先按 β 语义应用
+                            // 本槽实参、再引应用结果，中性路径保持原速路。
+                            let fval = spine.stack[h].f;
+                            let ff = force(bump, spine, work, vals, icits, defs, metas, fval);
+                            if v_tag(ff) == 1 {
+                                let c = v_clo_of(ff);
+                                let applied = {
+                                    let env = env_ext(bump, c.env, ea);
+                                    eval_iter(
+                                        bump, spine, work, vals, icits, defs, metas, env, c.body,
+                                    )
+                                };
+                                tasks.push(QJob::Q(applied, level));
+                            } else {
+                                tasks.push(QJob::App1(top_icit));
+                                tasks.push(QJob::Q(ea, level));
+                                tasks.push(QJob::Q(fval, level));
+                            }
                         }
                     }
                 }
@@ -793,16 +816,47 @@ fn quote_iter<'a>(
                             i += 1;
                         }
                         _ => {
-                            // 非平凡链头：挂起引 f，ChainRun 续跑
-                            tasks.push(QJob::ChainRun {
-                                level,
-                                next: i + 1,
-                                end,
-                                f0,
-                                idx_node,
-                                prev: Some(prev),
-                            });
-                            tasks.push(QJob::Q(fi, level));
+                            // 非平凡链头：挂起引 f，ChainRun 续跑。f 可能是
+                            // 「陈旧应用链」（建链后头 meta 被解成 λ）：force
+                            // 单独引它停在部分应用的 λ 上，恢复点照搬 App 拼
+                            // 接就产出 β-redex 项（参考版整值 force 经 vAppSp
+                            // 一路 β，永不产出）。本章无 pruning，「链实参个
+                            // 数恒等于解的 λ 数」不变量不被打破，多 λ 部分解
+                            // 形态不可达（同输入实测不触发，属潜伏；防御性回
+                            // 灌自 L05 65269fb）——f force 为闭包时改为引
+                            // 「f 应用本槽实参」的整值，恢复点直接取该结果为
+                            // 已累计项（prev:None = 弹出为初始累计，不再拼接；
+                            // β 与 icit 无关，同 eval 的 ApplyKnown）。
+                            let ff = force(bump, spine, work, vals, icits, defs, metas, fi);
+                            if v_tag(ff) == 1 {
+                                let arg_v = spine.stack[i].a;
+                                let c = v_clo_of(ff);
+                                let applied = {
+                                    let env = env_ext(bump, c.env, arg_v);
+                                    eval_iter(
+                                        bump, spine, work, vals, icits, defs, metas, env, c.body,
+                                    )
+                                };
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: None,
+                                });
+                                tasks.push(QJob::Q(applied, level));
+                            } else {
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: Some(prev),
+                                });
+                                tasks.push(QJob::Q(fi, level));
+                            }
                             break;
                         }
                     }
