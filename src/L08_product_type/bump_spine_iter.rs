@@ -1082,8 +1082,11 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
 /// - Obj → force 被投影者 → project 命中且 burn → 应用链上实参，否则卡回
 ///   Obj（参考版返回 forced 内层的新单元，快版同款重建）。
 ///
-/// 内部的 eval_iter 调用用**本调用私有的草稿栈**（外层 eval/unify 循环的
-/// work/vals 不能被清空——force 可能在它们循环体中途被调用）。
+/// 内部的 eval_iter 调用用**本调用私有的草稿栈**：外层 eval/unify 循环的
+/// work/vals 不能被清空（force 可能在它们循环体中途被调用，且经 eval_aux
+/// 与本函数互递归）。L04-L06 的 force 借用调用方的栈，是因为那几章的
+/// eval_iter 不回调 force——这个差异**不是**漏同步，别往那方向改。四个
+/// `Vec::new()` 本身不分配，只有真正下钻时才增长，早退路径零成本。
 #[allow(clippy::too_many_arguments)]
 fn force<'a>(
     bump: &'a Bump,

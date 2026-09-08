@@ -629,6 +629,12 @@ fn vapp1<'a>(
 /// 只有一个 Flex 臂（已解 → 展开应用；未解原样）——无 pm 精化读点展开、
 /// 无 decl unfold、无 Match 重选、无投影归约。无燃料（meta 解由 occurs
 /// check 保证无环，参考版同款裸递归）。
+///
+/// 内部的 eval_iter 调用用**本调用私有的草稿栈**：外层 eval/unify 循环的
+/// work/vals 不能被清空（force 可能在它们循环体中途被调用，且经 eval_aux
+/// 与本函数互递归）。L04-L06 的 force 借用调用方的栈，是因为那几章的
+/// eval_iter 不回调 force——这个差异**不是**漏同步，别往那方向改。四个
+/// `Vec::new()` 本身不分配，只有真正下钻时才增长，早退路径零成本。
 fn force<'a>(
     bump: &'a Bump,
     spine: &mut Spine,

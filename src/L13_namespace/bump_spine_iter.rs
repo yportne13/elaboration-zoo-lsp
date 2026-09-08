@@ -1258,6 +1258,13 @@ fn prim_exec<'a>(
 /// 原生 Nat（WHNF 叶）、Obj（递归进内层重建）、Call（stale nat-primop 归一
 /// / force body + 实参）、Decl（prim 执行：`Some` 结果**再 force**）、
 /// SumCase（force typ + 逐 data 重建）、Sum 与其余（WHNF 叶，不下钻）。
+///
+/// 内部的 eval_iter 调用用**本调用私有的草稿栈**：外层 eval/unify 循环的
+/// work/vals 不能被清空（force 可能在它们循环体中途被调用，且经 eval_aux
+/// 与本函数互递归；Decl prim 的 `Some` 结果也就地再 force）。L04-L06 的
+/// force 借用调用方的栈，是因为那几章的 eval_iter 不回调 force——这个差异
+/// **不是**漏同步，别往那方向改。四个 `Vec::new()` 本身不分配，只有真正
+/// 下钻时才增长，早退路径零成本。
 fn force<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
