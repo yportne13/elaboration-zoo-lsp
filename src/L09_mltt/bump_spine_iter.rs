@@ -1108,21 +1108,21 @@ fn eval_iter<'a>(
                 }
             }
             W::SumAsm { name, params, cases } => {
-                let total = 2 * params.len();
-                let mut items: Vec<V> = Vec::with_capacity(total);
-                for _ in 0..total {
-                    items.push(vals.pop().expect("eval 栈：SumAsm 缺参数"));
-                }
-                items.reverse(); // [v0, t0, v1, t1, ...]
+                // vals 槽序 = v0, t0, v1, t1, ...（先压者在底）→ pop 序是
+                // t_{n-1}, v_{n-1}, ...：按 params 逆序逐槽收进 ps，再整体
+                // 反转回自然序——单缓冲，省掉 items 中转 + 二次下标拷贝
                 let mut ps: Vec<SumParamV<'_>> = Vec::with_capacity(params.len());
-                for (k, p) in params.iter().enumerate() {
+                for p in params.iter().rev() {
+                    let ty = vals.pop().expect("eval 栈：SumAsm 缺参数");
+                    let val = vals.pop().expect("eval 栈：SumAsm 缺参数");
                     ps.push(SumParamV {
                         name: p.name,
-                        val: items[2 * k],
-                        ty: items[2 * k + 1],
+                        val,
+                        ty,
                         icit: p.icit,
                     });
                 }
+                ps.reverse();
                 vals.push(v_xcell(bump.alloc(XCell::Sum {
                     name,
                     params: bump.alloc_slice_fill_iter(ps),
@@ -1130,21 +1130,19 @@ fn eval_iter<'a>(
                 })));
             }
             W::SumCaseAsm { case_name, datas } => {
-                let nd = datas.len();
-                let mut items: Vec<V> = Vec::with_capacity(nd);
-                for _ in 0..nd {
-                    items.push(vals.pop().expect("eval 栈：SumCaseAsm 缺字段"));
-                }
-                items.reverse(); // [d0, d1, ...]
-                let typ = vals.pop().expect("eval 栈：SumCaseAsm 缺 typ");
-                let mut ds: Vec<SumDataV<'_>> = Vec::with_capacity(nd);
-                for (k, d) in datas.iter().enumerate() {
+                // datas 字段在 vals 栈顶（typ 先压在底）：逆序 pop 落槽后
+                // 反转，typ 最后 pop
+                let mut ds: Vec<SumDataV<'_>> = Vec::with_capacity(datas.len());
+                for d in datas.iter().rev() {
+                    let val = vals.pop().expect("eval 栈：SumCaseAsm 缺字段");
                     ds.push(SumDataV {
                         name: d.name,
-                        val: items[k],
+                        val,
                         icit: d.icit,
                     });
                 }
+                ds.reverse();
+                let typ = vals.pop().expect("eval 栈：SumCaseAsm 缺 typ");
                 vals.push(v_xcell(bump.alloc(XCell::SumCase {
                     typ,
                     case_name,
@@ -1480,39 +1478,36 @@ fn quote_iter<'a>(
                 params,
                 cases,
             } => {
-                let n = params.len();
-                let mut items: Vec<&'a Tm<'a>> = Vec::with_capacity(2 * n);
-                for _ in 0..2 * n {
-                    items.push(done.pop().expect("quote 栈：Sum 缺参数"));
-                }
-                items.reverse(); // [v0, t0, v1, t1, ...]
-                let mut ps: Vec<SumParamT<'_>> = Vec::with_capacity(n);
-                for (k, p) in params.iter().enumerate() {
+                // done 槽序 = v0, t0, v1, t1, ...（先压者在底）→ 按 params
+                // 逆序逐槽收进 ps 再反转，省掉 items 中转 + 二次下标拷贝
+                let mut ps: Vec<SumParamT<'_>> = Vec::with_capacity(params.len());
+                for p in params.iter().rev() {
+                    let ty = done.pop().expect("quote 栈：Sum 缺参数");
+                    let val = done.pop().expect("quote 栈：Sum 缺参数");
                     ps.push(SumParamT {
                         name: p.name,
-                        val: items[2 * k],
-                        ty: items[2 * k + 1],
+                        val,
+                        ty,
                         icit: p.icit,
                     });
                 }
+                ps.reverse();
                 done.push(bump.alloc(Tm::Sum(name, bump.alloc_slice_fill_iter(ps), cases)));
             }
             QJob::SumCaseAsm { case_name, datas } => {
-                let nd = datas.len();
-                let mut items: Vec<&'a Tm<'a>> = Vec::with_capacity(nd);
-                for _ in 0..nd {
-                    items.push(done.pop().expect("quote 栈：SumCase 缺字段"));
-                }
-                items.reverse(); // [d0, d1, ...]
-                let typ = done.pop().expect("quote 栈：SumCase 缺 typ");
-                let mut ds: Vec<SumDataT<'_>> = Vec::with_capacity(nd);
-                for (k, d) in datas.iter().enumerate() {
+                // datas 字段在 done 栈顶（typ 先压在底）：逆序 pop 落槽后
+                // 反转，typ 最后 pop
+                let mut ds: Vec<SumDataT<'_>> = Vec::with_capacity(datas.len());
+                for d in datas.iter().rev() {
+                    let val = done.pop().expect("quote 栈：SumCase 缺字段");
                     ds.push(SumDataT {
                         name: d.name,
-                        val: items[k],
+                        val,
                         icit: d.icit,
                     });
                 }
+                ds.reverse();
+                let typ = done.pop().expect("quote 栈：SumCase 缺 typ");
                 done.push(bump.alloc(Tm::SumCase {
                     typ,
                     case_name,
