@@ -1374,3 +1374,146 @@ fn v3_probe_formats() {
         println!("{out}");
     }
 }
+
+// --------------------------------------------------------------------------------
+// G. 回灌回归：L05 孪生 quote 链「陈旧函数部分」——β-红ex 混入输出
+// --------------------------------------------------------------------------------
+//
+// L05 章在孪生版发现的真 bug 的 L07 回灌（L05 fix 65269fb 同款位点）：
+// meta 先被应用进某条 spine 值、随后才被解成多 λ 时，快版 quote 的链分解
+// （ChainRun bail 的 `prev: Some(prev)` + `Q(fi)`、二叉 fallback 的
+// `Q(stack[h].f)`）把该 spine 的「函数部分」单独 force 后引读——它停在
+// **部分应用的闭包**上，重拼 App 即产出 β-红ex 项（修复前快版实测输出
+// `?0 ((b' => ?5 a b') b) a`）；参考版整值 force 经 vAppSp 一路 β，永不
+// 产出红ex。修复：两处分解位点在函数部分 force 为闭包（tag 1）时改走
+// β 语义——按本槽实参求闭包体（env_ext + eval_iter）再引应用结果，
+// ChainRun 恢复点以 prev:None 直接取该结果为已累计项（不再拼接）；中性
+// 路径（变量/未解 meta）保持原速路。
+//
+// 判据：本节的 can't unify 错误文案不含 Span（快版 span 全零的文档化偏差
+// 不涉及），两版**全文逐字节**一致即钉死。F 节 `assert_parity` 对 Err 只比
+// 判定——修复前双版同为 Err，抓不住快版文案里的红ex；本节 oracle 加严。
+
+/// Church 编码前奏（Eq / refl / the；触发 unification 的标准模式）。
+const CHURCH: &str = "def Eq[A : U](x: A, y: A): U = (P : A -> U) -> P x -> P y
+def refl[A : U, x: A]: Eq[A] x x = _ => px => px
+def the(A : U)(x: A): A = x
+";
+
+/// Ok 输出 / Err 文案全文逐字节 parity（比 F 节加严：Err 也比全文）。
+fn assert_full_parity(src: &str) {
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let bt = match &b {
+        Ok(s) => s.clone(),
+        Err(e) => format!("{e:?}"),
+    };
+    let ft = match &f {
+        Ok(s) => s.clone(),
+        Err(e) => format!("{e:?}"),
+    };
+    assert_eq!(
+        bt, ft,
+        "双实现全文不一致，src:\n{src}\n--- basic ---\n{bt}--- fast ---\n{ft}"
+    );
+}
+
+/// 看门狗 + 全文 parity（家族批量扫描用；超时/恐慌让测试失败，套件不挂死）。
+fn assert_terminates_full_parity(src: &str, secs: u64) {
+    let input = src.to_owned();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let handle = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || {
+            assert_full_parity(&input);
+            let _ = tx.send(());
+        })
+        .expect("看门狗线程创建失败");
+    if rx
+        .recv_timeout(std::time::Duration::from_secs(secs))
+        .is_err()
+    {
+        panic!("输入在 {secs}s 内未终止（疑似挂死/发散）：\n{src}");
+    }
+    handle.join().unwrap();
+}
+
+/// 最小复现（L05 同款输入的 L07 语法移植）：`m1 : [A : U] -> U -> U` 的两个
+/// 部分应用做 Church-Eq。解 `m1` 的隐式槽时 `?0` 的 spine 里挂了 `?5 a b`；
+/// 随后 `?5` 被 flex_flex 解成**双 λ 转发解**，而引用它的 spine 值（建链早
+/// 于求解）仍是陈旧位模式。修复前快版报错混入红ex
+/// `?0 ((b' => ?5 a b') b) a`；修复后两版都给干净形态 `?0 (?5 a b)`。
+#[test]
+fn redex_regression_eq_swapped_args() {
+    let src = format!(
+        "{CHURCH}def m1[A : U] : U -> U = _\ndef t = a => b => the (Eq (m1 b) (m1 a)) refl\n"
+    );
+    let golden = r#"Error("can't unify (P: U → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) a) == (P: U → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) b)")"#;
+    // 参考版：干净形态（无重拼红ex），golden 钉死
+    let b = run_basic(&src).unwrap_err();
+    assert_eq!(format!("{b:?}"), golden);
+    // 快版：修复后与参考版逐字节同形
+    let f = run_fast(&src).unwrap_err();
+    assert_eq!(format!("{f:?}"), golden);
+}
+
+/// 同族镜像：实参顺序互换（`m1 a` vs `m1 b`），失败方向镜像。
+#[test]
+fn redex_regression_eq_args_order_mirror() {
+    let src = format!(
+        "{CHURCH}def m1[A : U] : U -> U = _\ndef t = a => b => the (Eq (m1 a) (m1 b)) refl\n"
+    );
+    let golden = r#"Error("can't unify (P: U → U) → P (?0 (?5 a b) a) → P (?0 (?5 a b) b) == (P: U → U) → P (?0 (?5 a b) a) → P (?0 (?5 a b) a)")"#;
+    let b = run_basic(&src).unwrap_err();
+    assert_eq!(format!("{b:?}"), golden);
+    let f = run_fast(&src).unwrap_err();
+    assert_eq!(format!("{f:?}"), golden);
+}
+
+/// 同族：`m1` 多一个显式域（P 的定义域带箭头），转发解照旧、红ex 照旧。
+#[test]
+fn redex_regression_extra_domain() {
+    let src = format!(
+        "{CHURCH}def m1[A : U] : U -> U -> U = _\ndef t = a => b => the (Eq (m1 b) (m1 a)) refl\n"
+    );
+    let golden = r#"Error("can't unify (P: (U → U) → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) a) == (P: (U → U) → U) → P (?0 (?5 a b) b) → P (?0 (?5 a b) b)")"#;
+    let b = run_basic(&src).unwrap_err();
+    assert_eq!(format!("{b:?}"), golden);
+    let f = run_fast(&src).unwrap_err();
+    assert_eq!(format!("{f:?}"), golden);
+}
+
+/// 家族批量全文 parity（L05 同款形状网格：6 体 × 3 声明），带看门狗。
+/// 覆盖转发解（红ex 位点）、可解 η-intersect、icit 失配、双版本 Ok 等形态。
+#[test]
+fn redex_family_full_parity_scan() {
+    let bodies = [
+        "def t = a => b => the (Eq (m1 b) (m1 a)) refl",
+        "def t = a => b => the (Eq (m1 a) (m1 b)) refl",
+        "def t = a => b => the (Eq (m1 [a] b) (m1 a)) refl",
+        "def t = a => b => the (Eq (m1 a b) (m1 b a)) refl",
+        "def t = a => b => the (Eq (z => m1 a z) (m1 b)) refl",
+        "def t = a => b => the (Eq (m1 [a] [b]) ([z] => m1 [a] [b] [z])) refl",
+    ];
+    let decls = [
+        "def m1[A : U] : U -> U = _",
+        "def m1 : U -> U -> U = _",
+        "def m1[A : U] : U -> U -> U = _",
+    ];
+    for d in decls {
+        for b in bodies {
+            assert_terminates_full_parity(&format!("{CHURCH}{d}\n{b}\n"), 60);
+        }
+    }
+}
+
+/// 可解例（Ok 路径对照）：η 展开后经 intersect 剪掉差异槽，方程可解、
+/// 程序成功——修复不得影响中性路径的正常引读。
+#[test]
+fn redex_family_solvable_ok() {
+    let src = format!(
+        "{CHURCH}def m1 : U -> U -> U = _\ndef t = a => b => the (Eq (m1 a) (z => m1 b z)) refl\nprintln U\n"
+    );
+    assert_lines(&src, &["U"]);
+    assert_full_parity(&src);
+}
