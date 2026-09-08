@@ -776,6 +776,12 @@ fn force<'a>(
                 //（binder 下的嵌套投影 `l.a.x` 即触发）。
                 XCell::Obj { val, name } => {
                     let v2 = force(bump, spine, defs, metas, decl, mutable, *val);
+                    // 内层未变则原样返回（L13 口径）：省一次 bump 分配，
+                    // 更保住**位相等**——unify 的 `t == u` 捷径与 memo 不会
+                    // 因同形重建而失配
+                    if v2.0 == val.0 {
+                        return v;
+                    }
                     return v_xcell(bump.alloc(XCell::Obj { val: v2, name }));
                 }
                 _ => return v,
