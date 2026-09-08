@@ -1374,11 +1374,18 @@ pub(crate) struct Machine {
     /// bind/define 的撤销轨迹：(名字, 旧值)。`Cxt.mark` 记各上下文的
     /// trail 长度，退出即截断。new_binder 不留轨迹、mark 不动。
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
-    /// [A/B 实验] 常驻 eval 工作栈（lifetime 洗白存储）。
+    /// eval / quote / unify 的可复用工作栈。`'static` 仅是**存放口径**：
+    /// 核函数进入即 clear，借出期间写入的当轮条目不跨调用存活——与
+    /// `conv` / `icits` 的「进核前 clear」纪律同款。`W`/`QJob`/`UItem` 均为
+    /// 无 Drop 的 Copy 枚举，`Vec` 布局与元素生命周期参数无关，出借时按当次
+    /// 生命周期重写指针类型（SAFETY 见各包装方法）。eval/quote/unify 共用
+    /// 一个 `workbuf` 是安全的：`work` 是「排空即返回」的暂存栈（每个内核
+    /// 都是 `while let Some(..) = work.pop()`），任何嵌套调用点
+    /// （`unify_iter → solve → eval_iter`）进入时它必已为空，故不存在
+    /// 跨层踩踏。收益实测见 L03 同名字段注释（同形态：solve −2~10%、
+    /// church −3~10%、conv −2~6%）。
     workbuf: Vec<W<'static>>,
-    /// [A/B 实验] 常驻 unify 工作表。
     unifybuf: Vec<UItem<'static>>,
-    /// 常驻 quote 工作栈（任务/结果两栈，同 L05+）。
     qtasks: Vec<QJob<'static>>,
     qdone: Vec<&'static Tm<'static>>,
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可

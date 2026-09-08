@@ -1895,6 +1895,9 @@ pub(crate) struct Machine {
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
     /// [perf] 常驻 eval/unify/quote 工作栈（lifetime 洗白存储：核函数进入
     /// 即 clear，条目仅在核函数活动期被读，bump 生命期覆盖之，跨轮无读取）。
+    /// eval/quote/unify 共用一个 `workbuf` 是安全的：`work` 是「排空即返回」
+    /// 的暂存栈，嵌套调用点（`unify_iter → solve → eval_iter`）进入时它必已
+    /// 为空。收益实测见 L03 同名字段注释。
     workbuf: Vec<W<'static>>,
     unifybuf: Vec<UItem<'static>>,
     qtasks: Vec<QJob<'static>>,
@@ -1905,9 +1908,9 @@ pub(crate) struct Machine {
 }
 
 /// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都是
-/// `'static` 类型，可常驻 Machine 复用容量——unify 的收集/判等路径零分配；
-/// 带 `'a` 的 work/tasks 小栈因借过 bump 生命周期，仍按调用新建，首个 push
-/// 各一次堆分配——同 L02-L04 的稳态设计）。
+/// `'static` 类型，可常驻 Machine 复用容量——unify 的收集/判等路径零分配。
+/// 带 `'a` 的 work/tasks 小栈同样常驻，只是以 `'static` 存放、进核时洗白
+/// 出借，见 [`Machine`] 的 `workbuf` 字段注释）。
 #[derive(Default)]
 struct ConvScratch {
     memo: FxHashSet<(u64, u64)>,

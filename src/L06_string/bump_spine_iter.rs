@@ -2567,6 +2567,9 @@ pub(crate) struct Machine {
     mutable_map: MutableMap,
     /// [perf] 常驻 eval/unify/quote 工作栈（lifetime 洗白存储：核函数进入
     /// 即 clear，条目仅在核函数活动期被读，bump 生命期覆盖之，跨轮无读取）。
+    /// eval/quote/unify 共用一个 `workbuf` 是安全的：`work` 是「排空即返回」
+    /// 的暂存栈，嵌套调用点（`unify_iter → solve → eval_iter`）进入时它必已
+    /// 为空。收益实测见 L03 同名字段注释。
     workbuf: Vec<W<'static>>,
     unifybuf: Vec<UItem<'static>>,
     qtasks: Vec<QJob<'static>>,

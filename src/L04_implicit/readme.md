@@ -92,9 +92,11 @@ cargo run --release --bin l04bench -- --workload all --max-k 15
    生效代数，`reset` 只推进 epoch——`vec![None; γ]` 的 O(γ) 清零与逐次
    分配降为 O(1)（implicit 负载 γ = 层深，二次项之二）。
 7. **热路径草稿常驻化**：`icits` 侧栈与 unify 的判等记忆化/实参收集草稿
-   （`ConvScratch`）从每次调用的 `Vec::new()` 提升为 `Machine` 字段——
-   进核前 clear 保容量，跨调用零分配（`W`/`QJob`/`UItem` 借 bump 生命
-   周期，仍按调用新建）。
+   （`ConvScratch`）从每次调用的 `Vec::new()` 提升为 `Machine` 字段；
+   eval/quote/unify 的工作栈（`workbuf`/`unifybuf`/`qtasks`/`qdone`）同样
+   常驻——它们借 bump 生命周期，故以 `'static` 存放、核函数入口洗白出借
+   （口径与 SAFETY 见 `Machine` 字段注释）。进核前 clear 保容量，跨调用
+   零分配。
 8. **fresh meta 免 eval 快捷路径**（`eval_fresh`）：bds 全为 define 槽
    （或空）时 AppBds 走空转、结果恒为裸 meta 立即数——直接取 `v_meta`，
    免一次 eval；bds 含 bound 槽时照常求值（产生 pattern spine）。
