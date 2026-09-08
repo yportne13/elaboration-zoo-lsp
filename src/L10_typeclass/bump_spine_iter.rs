@@ -413,15 +413,22 @@ pub(crate) struct PiCell<'a> {
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------
 
+/// 链头种类（`Entry.hk`）：push 时随函数侧传播，O(1) 判定链头是 Flex（force
+/// 的唯一展开臂）/ 卡住投影 Obj（unify 的位相等捷径对它关闭）还是其它（Rigid
+/// ——force 直接原样返回）。
+const HK_OTHER: u8 = 0;
+const HK_FLEX: u8 = 1;
+const HK_OBJ: u8 = 2;
+
 /// spine 栈槽：一次中性应用（icit 随槽携带）。`len`/`base` 支撑流式右链
-/// quote。链头只可能是 Rigid / Flex / 卡住投影 Obj（其余形态 v_app 即
-/// panic，进不了链）。
+/// quote；`hk` 记录链头种类（push 时随函数侧传播）。
 struct Entry {
     f: V,
     a: V,
     icit: Icit,
     len: u32,
     base: u32,
+    hk: u8,
 }
 
 /// 求值机持有的扁平中性栈（只增不减，槽位下标即句柄）。
@@ -430,17 +437,27 @@ pub(crate) struct Spine {
 }
 
 impl Spine {
-    /// 中性应用 `f a`（icit i）压栈，返回句柄值。
+    /// 中性应用 `f a`（icit i）压栈，返回句柄值。`hk` 随函数侧传播：裸单元
+    /// 直查种类，既有链延伸保持原种类（顶端槽已记下头种类）。
     #[inline]
     fn push(&mut self, f: V, a: V, icit: Icit) -> V {
         let idx = self.stack.len();
+        let hk = match v_tag(f) {
+            5 => HK_FLEX,
+            7 => match v_xcell_of(f) {
+                XCell::Obj { .. } => HK_OBJ,
+                _ => HK_OTHER,
+            },
+            2 => self.stack[v_spine_of(f)].hk,
+            _ => HK_OTHER,
+        };
         let (len, base) = if v_tag(a) == 2 {
             let prev = &self.stack[v_spine_of(a)];
             (prev.len + 1, prev.base)
         } else {
             (1, idx as u32)
         };
-        self.stack.push(Entry { f, a, icit, len, base });
+        self.stack.push(Entry { f, a, icit, len, base, hk });
         v_spine(idx)
     }
 
@@ -496,10 +513,10 @@ impl Spine {
             5 => Some(v_meta_of(v)),
             2 => {
                 let h = v_spine_of(v);
-                let hd = self.spine_head(h);
-                if v_tag(hd) != 5 {
+                if self.stack[h].hk != HK_FLEX {
                     return None;
                 }
+                let hd = self.spine_head(h);
                 self.collect_args(h, out);
                 Some(v_meta_of(hd))
             }
@@ -508,12 +525,13 @@ impl Spine {
     }
 }
 
-/// 值是否 Flex（裸未解 meta 立即数或 meta 头的链）。
+/// 值是否 Flex（裸未解 meta 立即数或 meta 头的链——链查顶端槽的 `hk`，
+/// O(1)，无需沿链走底）。
 #[inline]
 fn is_flex(spine: &Spine, v: V) -> bool {
     match v_tag(v) {
         5 => true,
-        2 => v_tag(spine.spine_head(v_spine_of(v))) == 5,
+        2 => spine.stack[v_spine_of(v)].hk == HK_FLEX,
         _ => false,
     }
 }
@@ -641,28 +659,28 @@ fn force<'a>(
             },
             2 => {
                 let h = v_spine_of(v);
-                let hd = spine.spine_head(h);
-                if v_tag(hd) == 5 {
-                    // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
-                    // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
-                    match &metas[v_meta_of(hd) as usize] {
-                        MetaEntry::Unsolved(_) => return v,
-                        MetaEntry::Solved(sol, _) => {
-                            args.clear();
-                            spine.collect_args(h, &mut args);
-                            let mut t = *sol;
-                            for &(a, i) in args.iter().rev() {
-                                t = vapp1(
-                                    bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
-                                    globals, t, a, i,
-                                );
-                            }
-                            v = t;
-                        }
-                    }
-                } else {
-                    // Rigid / Obj 头的链：卡住（参考版 force 无对应臂）
+                if spine.stack[h].hk != HK_FLEX {
+                    // Rigid / Obj 头的链：卡住（参考版 force 无对应臂）。
+                    // O(1) 读顶端槽种类，省去非 flex 链的整趟走底
                     return v;
+                }
+                let hd = spine.spine_head(h);
+                // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
+                // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
+                match &metas[v_meta_of(hd) as usize] {
+                    MetaEntry::Unsolved(_) => return v,
+                    MetaEntry::Solved(sol, _) => {
+                        args.clear();
+                        spine.collect_args(h, &mut args);
+                        let mut t = *sol;
+                        for &(a, i) in args.iter().rev() {
+                            t = vapp1(
+                                bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                globals, t, a, i,
+                            );
+                        }
+                        v = t;
+                    }
                 }
             }
             7 => match v_xcell_of(v) {
@@ -1682,10 +1700,7 @@ enum UItem<'a> {
 fn is_objheaded(spine: &Spine, v: V) -> bool {
     match v_tag(v) {
         7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
-        2 => {
-            let hd = spine.spine_head(v_spine_of(v));
-            v_tag(hd) == 7 && matches!(v_xcell_of(hd), XCell::Obj { .. })
-        }
+        2 => spine.stack[v_spine_of(v)].hk == HK_OBJ,
         _ => false,
     }
 }
@@ -1858,7 +1873,11 @@ fn rigid_lvl(spine: &Spine, v: V) -> Option<u32> {
     match v_tag(v) {
         0 => Some(v_lvl_of(v)),
         2 => {
-            let hd = spine.spine_head(v_spine_of(v));
+            let h = v_spine_of(v);
+            if spine.stack[h].hk != HK_OTHER {
+                return None; // flex / Obj 头：必非 Rigid，免走底
+            }
+            let hd = spine.spine_head(h);
             if v_tag(hd) == 0 {
                 Some(v_lvl_of(hd))
             } else {
