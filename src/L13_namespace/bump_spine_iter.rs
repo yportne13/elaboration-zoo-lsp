@@ -1,10 +1,10 @@
-//! L12 核心机（eval / quote / unify / rename / solve / prune / check /
+//! L13 核心机（eval / quote / unify / rename / solve / prune / check /
 //! infer / check_universe / 模式编译 / trait 求解）的极致性能版：L12
 //! 冠军配方（`bump_spine_iter`）向 namespace 层的移植。继承 L05-L12 的
 //! 全部机制（见 L06/L08/L10/L12 版模块注释）：bump arena、打包值 [`V`]、
-//! 扁平中性 + spine 栈、复合环境、迭代内核（eval 双栈 / quote 任务栈 /
-//! unify 工作表 / rename 任务栈）、quote 记忆化、O(1) 名字解析、
-//! `Tycker` 稳态复用。
+//! 扁平中性 + spine 栈（含链头种类 `Entry.hk` 的 O(1) 头判定）、复合环境、
+//! 迭代内核（eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈）、
+//! quote 记忆化、O(1) 名字解析、`Tycker` 稳态复用。
 //!
 //! **L13 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
 //! 准）——L13 是产品层（LSP / HDL codegen 宿主），核心机相对 L12 的变化：

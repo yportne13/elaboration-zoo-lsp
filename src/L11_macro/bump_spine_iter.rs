@@ -2,9 +2,9 @@
 //! infer / check_universe / 模式编译 / trait 求解）的极致性能版：L10
 //! 冠军配方（`bump_spine_iter`）向宏层的移植。继承 L05-L10 的全部机制
 //! （见 L06/L08/L10 版模块注释与 readme）：bump arena、打包值 [`V`]、
-//! 扁平中性 + spine 栈、复合环境、迭代内核（eval 双栈 / quote 任务栈 /
-//! unify 工作表 / rename 任务栈）、quote 记忆化、O(1) 名字解析、
-//! `Tycker` 稳态复用。
+//! 扁平中性 + spine 栈（含链头种类 `Entry.hk` 的 O(1) 头判定）、复合环境、
+//! 迭代内核（eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈）、
+//! quote 记忆化、O(1) 名字解析、`Tycker` 稳态复用。
 //!
 //! **L11 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
 //! 准）——L11 参考版是 L13 引擎的早期形态（Arc 持久化 + decl 表贯穿），

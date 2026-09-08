@@ -1,18 +1,40 @@
-//! L11 核心机（eval / quote / unify / rename / solve / prune / check /
-//! infer / check_universe / 模式编译 / trait 求解）的极致性能版：L10
-//! 冠军配方（`bump_spine_iter`）向宏层的移植。继承 L05-L10 的全部机制
-//! （见 L06/L08/L10 版模块注释与 readme）：bump arena、打包值 [`V`]、
-//! 扁平中性 + spine 栈、复合环境、迭代内核（eval 双栈 / quote 任务栈 /
-//! unify 工作表 / rename 任务栈）、quote 记忆化、O(1) 名字解析、
-//! `Tycker` 稳态复用。
+//! L12 核心机（eval / quote / unify / rename / solve / prune / check /
+//! infer / check_universe / 模式编译 / trait 求解）的极致性能版：L11
+//! 冠军配方（`bump_spine_iter`）向 canonical 层的移植。继承 L05-L11 的全部
+//! 机制（见 L06/L08/L10/L11 版模块注释与 readme）：bump arena、打包值 [`V`]、
+//! 扁平中性 + spine 栈（含链头种类 `Entry.hk` 的 O(1) 头判定）、复合环境、
+//! 迭代内核（eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈）、
+//! quote 记忆化、O(1) 名字解析、`Tycker` 稳态复用。
 //!
-//! **L11 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
-//! 准）——L11 参考版是 L13 引擎的早期形态（Arc 持久化 + decl 表贯穿），
-//! 与 L10 的 global 大下标世界有系统性不同，孪生版逐项对齐：
+//! **L12 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
+//! 准）——L12 参考版 = L11 的 decl 表引擎 + canonical 搜索（`canonical.rs`
+//! 的 `iddfs`/`search`）+ 参考版全面 SmolStr 化；世界口径逐条沿用 L11 版
+//! 注释（下方"要点"重述），此处先记 L12 的增量。
+//!
+//! - **未解 meta 保留上下文快照**：`MetaEntry::Unsolved` 从 L11 的一元扩为
+//!   参考版三元同构（闭类型, [`MetaSnap`], 原始类型）。[`MetaSnap`] =
+//!   { 创建时层级, 名字 telescope, decls }，`Rc<MetaSnap<'static>>` 存放
+//!   （跨轮 reset 前句柄已消亡，两步 transmute 入 `'a`），服务
+//!   `no_metas` 错误路径的 pretty/lvl/decls 重建与 `meta_contrains` 挂账。
+//! - **快版 → 求解器的 `Val` 桥**（[`v_to_ref_val`]，取代 L11 的
+//!   `val_to_typ`）：L12 的 `typeclass.rs` 移除了 `Typ` 桥接、求解器改为
+//!   `Val` 级匹配，故实参逐项解码成 `Arc<CVal>`（支持 Rigid 裸/U/
+//!   LiteralType/LiteralIntro/Sum/SumCase/Flex 立即数；Pi/Match/Decl 链等
+//!   形态降级为永不匹配的标记值——参考版 `val_match` 对非构造子 goal 一律
+//!   false，观察面相同）。只在求解边界用，非热路径。
+//! - **`solve_trait_ref` 对齐参考版 L12**：实参 force 后直通 `Val`，**任一
+//!   仍是 Flex 即 Ok(None)** 交回合一；命中给 (实例项, 实例值)，失败给
+//!   `{}[{:?}]` + 类实例表逐行的文案。方法名命中 trait 时以
+//!   `Flex(MetaVar(u32::MAX))` 通配参数试探，能解出实例才包装。
+//! - **canonical/`iddfs` 不移植**：参考版只在 Err 路径的重试闭包
+//!   （`elaboration.rs` 的 `ret = move || infer.iddfs(...)`）里调用，
+//!   不影响判定与 Ok 输出，快版无搜索机。
+//!
+//! **要点**（与 L11 共有，孪生版逐项对齐参考版）：
 //!
 //! - **全局 = decl 表（名字键）+ `Tm::Decl`/`Val::Decl`**：没有
 //!   `Infer.global` 表与 1919810 哨兵。顶层 def/enum/构造子/内建全部登记
-//!   在 `Cxt.decl: HashMap<String, (Span, Tm, Val, Ty, VTy)>`（快版 =
+//!   在 `Cxt.decl: HashMap<SmolStr, (Span, Tm, Val, Ty, VTy)>`（快版 =
 //!   `Rc<Decls>` 写时复制，方法与参考版逐 cxt 克隆语义一致）；项层引用是
 //!   `Tm::Decl(name)`（bump str）。eval 的 Decl 臂查表取登记值，未登记
 //!   → 卡 `Val::Decl(name, [])`（递归自引用 = fake_bind 插桩的存根）。
@@ -58,7 +80,7 @@
 //!   `Name.mk`）。
 //!
 //! 与参考版共用 parser / pretty / preprocess，**Ok 输出逐字节一致**（互检
-//! 测试 + `tests/l11_fast_parity.rs`）。已知偏差（仅错误消息内容，不影响
+//! 测试 + `tests/l12_fast_parity.rs`）。已知偏差（仅错误消息内容，不影响
 //! 判定与 Ok 输出）：快版错误里内嵌的 Debug-Val/Tm 的名字 Span 全零
 //! （参考版携带源码偏移），套件比对前按 `start_offset/end_offset/path_id`
 //! 归一化。

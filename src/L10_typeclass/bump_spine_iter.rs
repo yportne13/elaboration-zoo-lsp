@@ -1,14 +1,30 @@
 //! L10 核心机（eval / quote / unify / rename / solve / prune / check /
 //! infer / check_universe / 模式编译 / trait 求解）的极致性能版：L09
-//! 冠军配方（`bump_spine_iter`）向 typeclass 层的移植。继承 L05-L08 的全部
-//! 机制（见 L06/L08 版模块注释与 readme）：bump arena、打包值 [`V`]、
-//! 扁平中性 + spine 栈、复合环境、迭代内核（eval 双栈 / quote 任务栈 /
-//! unify 工作表 / rename 任务栈）、quote 记忆化、O(1) 名字解析、
-//! `Tycker` 稳态复用。
+//! 冠军配方（`bump_spine_iter`）向 typeclass 层的移植。继承 L05-L09 的全部
+//! 机制（见 L06/L08/L09 版模块注释与 readme）：bump arena、打包值 [`V`]、
+//! 扁平中性 + spine 栈（含链头种类 `Entry.hk` 的 O(1) 头判定）、复合环境、
+//! 迭代内核（eval 双栈 / quote 任务栈 / unify 工作表 / rename 任务栈）、
+//! quote 记忆化、O(1) 名字解析、`Tycker` 稳态复用。
 //!
-//! **L09 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
-//! 准）——参考版是 init 时期架构的现代残存层，与 L06-L08 的 decl 表世界
-//! 有系统性不同，孪生版逐项对齐：
+//! **L10 自己的增量与差异**（参考版 = `super` 的分文件实现，语义以其为
+//! 准）——L10 参考版 = L09 的 init 时期架构 + trait 脱糖与求解：世界口径
+//! （`U(u32)`、`Infer.global` 大下标哨兵、模式特化走 update_cxt、无燃料
+//! unify）逐条沿用 L09 版注释，下方"要点"重述；此处先记 L10 的增量。
+//!
+//! - **trait = `is_trait` 的 Sum**：trait 声明脱糖为 enum（构造子即实例），
+//!   另在 [`TraitState`] 里维护 `definition`（trait 名 → 方法表）与
+//!   `out_param`（参数 out 掩码）；`Tm::Sum`/`Tm::SumCase` 带 `is_trait`
+//!   标记，trait 的 fresh_meta 走实例合成。
+//! - **trait 求解镜像参考版 `Infer::solve_trait`**（`Machine::solve_trait_ref`）：
+//!   头是 trait Sum 时以 `Synth` 求解器按实例表匹配，命中给 (实例项,
+//!   实例值)，失败给 `solve trait failed` 文案，非 trait 给 None。
+//! - **快版 → 求解器的 `Typ` 桥**（[`val_to_typ`]，参考版 `Val::to_typ`）：
+//!   L10 的求解器在 `Typ` 级匹配，故实参经 `Typ` 而非 `Val`——Flex 与带
+//!   spine 的链给 None（参考版 `Rigid(_, _)` 非空 spine 即 None），裸 Rigid
+//!   → `Var`、`U(n)`/`Sum` → `Val`/`Construct`；字面量/Prim 分支参考版是
+//!   `todo!()`——同款不可达即崩。只在求解边界用，非热路径。
+//!
+//! **要点**（与 L09 共有，孪生版逐项对齐参考版）：
 //!
 //! - **宇宙层级**：`U(u32)`（`Type N` 语法；裸 `U` 只是普通变量名）。
 //!   打包值 tag 3 从立即数改为携带层级（`V = lvl<<3|3`，61 位余量）。
@@ -46,7 +62,7 @@
 //!   （无 `Enum.case` 别名；struct 的 case 名本身是 `Name.mk`）。
 //!
 //! 与参考版共用 parser / pretty / preprocess，**Ok 输出逐字节一致**（互检
-//! 测试 + `tests/l09_fast_parity.rs`）。已知偏差（仅错误消息内容，不影响
+//! 测试 + `tests/l10_fast_parity.rs`）。已知偏差（仅错误消息内容，不影响
 //! 判定与 Ok 输出）：快版错误里内嵌的 Debug-Val/Tm 的名字 Span 全零
 //! （参考版携带源码偏移），套件比对前按 `start_offset/end_offset/path_id`
 //! 归一化。
