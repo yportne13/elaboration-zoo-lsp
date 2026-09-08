@@ -232,6 +232,30 @@ fn parity_multiline_enum() {
     );
 }
 
+// 卡住 Call 的实参序（L13 Call/OpCall 专用面）
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_stuck_call_arg_order() {
+    // `wrap_match_in_call` 把 λ 链体的 Match 包成 Call(name, Var 链, Match)；
+    // 该 Call 在 λ 下求值仍卡住 → quote 的 CallAsm 必须按自然序输出实参。
+    // 回归：曾经逐槽 done.pop 得逆序、还与 icits 错配（2+ 实参全倒序）。
+    assert_parity(
+        "enum Nat {\n  zero\n  succ(x: Nat)\n}\n\
+         def add(x: Nat, y: Nat): Nat =\n  match x {\n    case zero => y\n    case succ(n) => succ (add n y)\n  }\n\
+         def two: Nat = succ (succ zero)\n\
+         def f = (a => add a two)\n\
+         println f\n",
+    );
+    assert_parity(
+        "enum Nat {\n  zero\n  succ(x: Nat)\n}\n\
+         def add3(x: Nat, y: Nat, z: Nat): Nat =\n  match x {\n    case zero => y\n    case succ(n) => succ (add3 n y z)\n  }\n\
+         def two: Nat = succ (succ zero)\n\
+         def f = (a => add3 a two zero)\n\
+         println f\n",
+    );
+}
+
 // 稳态复用（trait/可变全局跨轮清空）
 // --------------------------------------------------------------------------------
 

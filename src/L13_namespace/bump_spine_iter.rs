@@ -2430,13 +2430,16 @@ fn quote_iter<'a>(
             }
             QJob::CallAsm { name, icits } => {
                 let n = icits.len();
-                // done 自底向上是 (a_{n-1}, ..., a0, body)（body 最后引、在顶）
+                // done 自底向上是 (a0, ..., a_{n-1}, body)（实参按逆序压任务，
+                // 故 a0 先引、body 最后引在最顶）
                 let body = done.pop().expect("quote 栈：Call 缺体");
                 let mut items: Vec<&'a Tm<'a>> = Vec::with_capacity(n);
                 for _ in 0..n {
                     items.push(done.pop().expect("quote 栈：Call 缺实参"));
                 }
-                // 逐个弹出的顺序即 a0..a_{n-1}，无需 reverse
+                // 逐个弹出得 a_{n-1}..a0——反转回自然序再与 icits 对齐
+                // （否则 2+ 实参的卡住 Call 会实参倒序、icit 错配）
+                items.reverse();
                 let args: Vec<(&'a Tm<'a>, Icit)> =
                     items.into_iter().zip(icits.iter().copied()).collect();
                 done.push(bump.alloc(Tm::Call(name, bump.alloc_slice_copy(&args), body)));
@@ -2596,9 +2599,9 @@ fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
 /// Decl / Obj / Call / 卡住 Match（应用 splice）；Sum / SumCase / Nat / 字面
 /// 量 / Π / U 不可——η 展开对它们会 panic，须落 `_` 失配。
 #[inline]
-fn is_appliable(spine: &Spine, v: V) -> bool {
+fn is_appliable(_spine: &Spine, v: V) -> bool {
     match v_tag(v) {
-        0 | 2 | 5 => true,
+        0 | 1 | 2 | 5 => true,
         7 => matches!(
             v_xcell_of(v),
             XCell::Obj { .. } | XCell::Decl { .. } | XCell::Call { .. } | XCell::Match { .. }
@@ -10409,14 +10412,6 @@ fn export(symbols: &FxHashMap<(SmolStr, usize), SmolStr>, t: &Tm<'_>) -> Rc<CTm>
                 // 1-2 个且 symbol_table 命中 → 显示专用 OpCall（保留全部
                 // call 数据保证 eval 往返恒等）
                 let icits_buf: Vec<Icit> = args.iter().map(|(_, i)| *i).collect();
-                let sym = if args.iter().all(|(_, i)| *i == Icit::Expl) {
-                    symbols.get(&(SmolStr::new(nm), args.len())).cloned()
-                } else {
-                    None
-                };
-                // symbol 是栈上 String——借不到 'a。装配点需要它：放入
-                // tasks 的 symbol 用泄漏不可行；改为在 Do(Call) 处直接判定并
-                // 装配（实参先递归导出，再组装）
                 let sym_hit = if args.iter().all(|(_, i)| *i == Icit::Expl) {
                     symbols.get(&(SmolStr::new(nm), args.len())).cloned()
                 } else {
@@ -10432,7 +10427,6 @@ fn export(symbols: &FxHashMap<(SmolStr, usize), SmolStr>, t: &Tm<'_>) -> Rc<CTm>
                 for (a, _) in args.iter() {
                     tasks.push(J::Do(a));
                 }
-                let _ = sym;
             }
             J::Do(Tm::Match(s, cases)) => {
                 // 分支体逐个内联导出（递归深度 = match 嵌套深度）；模式直接
@@ -10605,12 +10599,15 @@ fn tm_size(t: &Tm<'_>) -> u64 {
 }
 
 impl Machine {
-    /// 每轮注册（参考版 `Cxt::new` 逐条对应）：String 类型 + 5 个内建
-    /// （string_concat / string_to_global_type / create_global /
-    /// change_mutable / get_global）。值/类型形态按参考版手工构造——
-    /// string_concat 的 λ 闭包 env 里钉着 `LiteralType` 填充槽（使
-    /// `Tm::Prim` 读 env 前两槽），类型闭包 env 与参考版逐槽一致；其余
-    /// 内建的 λ 链闭包 env 为空（参考版 Closure(List::new(), ...) 同款）。
+    /// 每轮注册（参考版 `Cxt::new` 逐条对应）：String 类型 + 15 个内建
+    /// （string_concat / str_eq / str_indent2 / report_check_issue /
+    /// string_to_global_type / create_global / change_mutable / get_global /
+    /// get_global_default / change_mutable_default / file_read_all_text /
+    /// file_write_all_text / file_append_all_text / file_exists /
+    /// file_delete）。值/类型形态按参考版手工构造——类型项经 `tm_pi` 同序
+    /// 折叠、空环境求值；登记项是自引用 `Tm::Decl(name)` 占位 + 卡住
+    /// `Decl` 单元 + prim 挂表，真正行为在 force / v_app 的 Decl 臂按
+    /// [`PrimId`] 分派（`def_needs_replay` 对内建恒 false）。
     fn prime_round<'a>(&mut self, bump: &'a Bump) -> Cxt<'a> {
         let empty = Cxt::empty();
         // String : U(0)，值 = LiteralType（参考版 Cxt::new 首项）
