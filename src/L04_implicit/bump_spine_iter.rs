@@ -1372,6 +1372,10 @@ pub(crate) struct Machine {
     /// 常驻 quote 工作栈（任务/结果两栈，同 L05+）。
     qtasks: Vec<QJob<'static>>,
     qdone: Vec<&'static Tm<'static>>,
+    /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
+    /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项（表随
+    /// 调用新鲜是口径的一部分，绝不跨 reset 持有）。
+    quote_memo: QuoteMemo<'static>,
 }
 
 /// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都
@@ -1401,6 +1405,7 @@ impl Machine {
             unifybuf: Vec::new(),
             qtasks: Vec::new(),
             qdone: Vec::new(),
+            quote_memo: FxHashMap::default(),
         }
     }
 
@@ -1549,9 +1554,13 @@ impl Machine {
         )
     }
 
-    /// quote 的记忆化口径（同 L03：表随本次调用新建，绝不跨 reset 持有）。
+    /// quote 的记忆化口径（表常驻 Machine 复用容量，内容每次调用清空——
+    /// meta 可能在两次调用之间被求解，绝不跨 reset 持有）。
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        let memo: &mut QuoteMemo<'a> = unsafe {
+            &mut *(&mut self.quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>)
+        };
+        memo.clear();
         let tasks: &mut Vec<QJob<'a>> =
             unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
         let done: &mut Vec<&'a Tm<'a>> =
@@ -1570,7 +1579,7 @@ impl Machine {
             &self.metas,
             level,
             v,
-            Some(&mut memo),
+            Some(memo),
         )
     }
 

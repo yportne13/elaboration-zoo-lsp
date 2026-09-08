@@ -4276,6 +4276,9 @@ pub(crate) struct Machine {
     unifybuf: Vec<UItem<'static>>,
     qtasks: Vec<QJob<'static>>,
     qdone: Vec<&'static Tm<'static>>,
+    /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
+    /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项。
+    quote_memo: QuoteMemo<'static>,
 }
 
 impl Machine {
@@ -4300,6 +4303,7 @@ impl Machine {
             unifybuf: Vec::new(),
             qtasks: Vec::new(),
             qdone: Vec::new(),
+            quote_memo: FxHashMap::default(),
         }
     }
 
@@ -4668,6 +4672,7 @@ impl Machine {
             workbuf,
             qtasks,
             qdone,
+            quote_memo,
             ..
         } = self;
         let tasks: &mut Vec<QJob<'a>> =
@@ -4676,7 +4681,9 @@ impl Machine {
             unsafe { &mut *(qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
-        let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        let memo: &mut QuoteMemo<'a> =
+            unsafe { &mut *(quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>) };
+        memo.clear();
         quote_iter(
             bump,
             spine,
@@ -4693,7 +4700,7 @@ impl Machine {
             pm_defs,
             level,
             v,
-            Some(&mut memo),
+            Some(memo),
         )
     }
 

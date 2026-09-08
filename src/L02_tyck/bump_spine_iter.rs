@@ -754,6 +754,10 @@ fn conv_iter<'a>(
 struct Machine {
     spine: Spine,
     vals: Vec<V>,
+    /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**（见
+    /// [`Machine::quote_memo`]）。`'static` 存放 + 调用期洗白，与上面
+    /// 小栈的"每调用新建"不同——表项是 Copy 引用、无析构，clear 即作废。
+    quote_memo: QuoteMemo<'static>,
 }
 
 impl Machine {
@@ -761,6 +765,7 @@ impl Machine {
         Machine {
             spine: Spine { stack: Vec::with_capacity(4096) },
             vals: Vec::with_capacity(4096),
+            quote_memo: FxHashMap::default(),
         }
     }
 
@@ -783,10 +788,13 @@ impl Machine {
     }
 
     /// quote 的记忆化口径：同一 (值, level) 只强制一次，重复 `Q` 共享子树
-    /// （结果 DAG 化）。表随本次调用新建——`Bump::reset` 后句柄作废，
-    /// 绝不跨调用持有。
+    /// （结果 DAG 化）。表常驻复用容量，内容每次调用清空——`Bump::reset`
+    /// 后旧句柄全部作废，跨调用保留会拿到过期中性项。
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        let memo: &mut QuoteMemo<'a> = unsafe {
+            &mut *(&mut self.quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>)
+        };
+        memo.clear();
         quote_iter(
             bump,
             &mut self.spine,
@@ -796,7 +804,7 @@ impl Machine {
             &mut self.vals,
             level,
             v,
-            Some(&mut memo),
+            Some(memo),
         )
     }
 

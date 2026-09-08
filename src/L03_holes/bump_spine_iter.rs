@@ -1309,6 +1309,9 @@ pub(crate) struct Machine {
     /// bind/define 的撤销轨迹：(名字, 旧值)。`Cxt.mark` 记各上下文的
     /// trail 长度，退出即截断。
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
+    /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**（见
+    /// [`Machine::quote_memo`]）。表项是 Copy 引用、无析构。
+    quote_memo: QuoteMemo<'static>,
 }
 
 const PI_NAME: &str = "x"; // infer App 非 Π 分支合成的闭包名（只服务 pretty）
@@ -1322,6 +1325,7 @@ impl Machine {
             metas: Vec::new(),
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
+            quote_memo: FxHashMap::default(),
         }
     }
 
@@ -1431,10 +1435,13 @@ impl Machine {
     }
 
     /// quote 的记忆化口径：同一 (值, level) 只强制一次，重复 `Q` 共享子树
-    /// （结果 DAG 化）。表随本次调用新建——`Bump::reset` 后句柄作废，
-    /// 绝不跨调用持有。
+    /// （结果 DAG 化）。表常驻复用容量，内容每次调用清空——`Bump::reset`
+    /// 后旧句柄全部作废，跨调用保留会拿到过期中性项。
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        let memo: &mut QuoteMemo<'a> = unsafe {
+            &mut *(&mut self.quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>)
+        };
+        memo.clear();
         quote_iter(
             bump,
             &mut self.spine,
@@ -1446,7 +1453,7 @@ impl Machine {
             &self.metas,
             level,
             v,
-            Some(&mut memo),
+            Some(memo),
         )
     }
 
