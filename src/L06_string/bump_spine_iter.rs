@@ -790,6 +790,29 @@ fn prim_fire<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 同款）：只有
+/// 中性值——裸 Rigid(0)/未解 Flex(5)、以中性头（Rigid/Flex/Decl）开链的
+/// tag 2、裸 Decl(7)——能吃 η 新变量。`string_to_global_type` 把 def 的
+/// 登记值（可以是 λ）当"动态类型"返回后，λ 值会以类型身份流入 unify；
+/// 对字面量/U/Π 压栈成卡住链虽也以失败告终，但直接判失败与参考版守卫
+/// 对齐（参考版此处曾命中 `v_app` impossible panic），免去绕路。
+#[inline]
+fn v_applicable(spine: &Spine, v: V) -> bool {
+    match v_tag(v) {
+        0 | 5 => true,
+        2 => {
+            let head = spine.spine_head(v_spine_of(v));
+            match v_tag(head) {
+                0 | 5 => true,
+                7 => matches!(v_xcell_of(head), XCell::Decl(_)),
+                _ => false, // U/Pi/LiteralType/字面量头的链（压栈惯例的产物）
+            }
+        }
+        7 => matches!(v_xcell_of(v), XCell::Decl(_)),
+        _ => false, // Lam(1) 已被前臂接住；U(3)/Pi(4)/LiteralType(6) 不可应用
+    }
+}
+
 /// 参考版 `v_app` 的 Decl 臂：对 Decl 头应用实参——压栈得到全条累积
 /// spine，再把**全部**实参（自然序）交给 prim（元数足够即触发；`None`
 /// 保持卡住返回句柄）。无 prim / 未登记的名字同样保持卡住。
@@ -1623,8 +1646,10 @@ fn unify_iter<'a>(
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
             // η：中性一侧按 λ 一侧的 icit 应用（Decl 头的应用可能触发
-            // builtin——走 decl_apply）
-            (_, 1) => {
+            // builtin——走 decl_apply）。守卫 `v_applicable`（参考版同款）：
+            // 只对可应用值做——st2g 把 def 的函数值当"动态类型"返回后，λ 值
+            // 会以类型身份流入 unify，与字面量/U/Π 的比较直接判失败。
+            (_, 1) if v_applicable(spine, t) => {
                 let c = v_clo_of(u);
                 let vu = {
                     let env = env_ext(bump, c.env, v_lvl(l));
@@ -1643,7 +1668,7 @@ fn unify_iter<'a>(
                 }
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
-            (1, _) => {
+            (1, _) if v_applicable(spine, u) => {
                 let c = v_clo_of(t);
                 let vt = {
                     let env = env_ext(bump, c.env, v_lvl(l));

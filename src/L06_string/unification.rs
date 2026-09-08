@@ -7,6 +7,16 @@ use super::{
 
 use std::{collections::{HashMap, HashSet}, rc::Rc};
 
+/// η 展开的可应用性守卫：只有中性值（Flex/Rigid/Decl 头）能吃 η 新变量。
+/// `string_to_global_type` 把 def 的登记值（可以是 λ）当"动态类型"返回后，
+/// λ 值会以**类型身份**流入 unify（源码级可达：`def f : U -> U = x => x`
+/// 之后 `get_global "f"` 的类型就是 f 的 λ 值）——对字面量/U/Π 做 η 应用
+/// 会命中 `v_app` 的 impossible panic。改为直接判失败（λ 与非函数值的
+/// 比较无从展开，最小惊讶；快版 `unify_iter` 的 η 臂同款守卫）。
+fn v_applicable(v: &Val) -> bool {
+    matches!(v, Val::Flex(_, _) | Val::Rigid(_, _) | Val::Decl(_, _))
+}
+
 #[derive(Debug, Clone)]
 struct PartialRenaming {
     occ: Option<MetaVar>,
@@ -463,12 +473,12 @@ impl Infer {
                 &self.closure_apply(&t, Val::vvar(l).into()),
                 &self.closure_apply(&t_prime, Val::vvar(l).into()),
             ),
-            (_, Val::Lam(_, i, t_prime)) => self.unify(
+            (_, Val::Lam(_, i, t_prime)) if v_applicable(t.as_ref()) => self.unify(
                 l + 1,
                 &self.v_app(t, Val::vvar(l).into(), *i),
                 &self.closure_apply(&t_prime, Val::vvar(l).into()),
             ),
-            (Val::Lam(_, i, t), _) => self.unify(
+            (Val::Lam(_, i, t), _) if v_applicable(u.as_ref()) => self.unify(
                 l + 1,
                 &self.closure_apply(&t, Val::vvar(l).into()),
                 &self.v_app(u, Val::vvar(l).into(), *i),
