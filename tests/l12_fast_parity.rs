@@ -170,6 +170,37 @@ println b
     );
 }
 
+#[test]
+fn parity_stuck_proj_under_binder() {
+    // 回归：binder 下的嵌套投影。`l` 是 Rigid，`l.a` 卡成 Obj，`l.a.x`
+    // 的 ObjSel 要先 force 这个卡住 Obj —— 快版 force 的 Obj 臂一旦把
+    // 重建值赋回循环变量（而非返回），这里就是死循环。
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Line {
+    a: Point
+    b: Point
+}
+
+def headX(l: Line): Nat = l.a.x
+
+println headX
+"#,
+    );
+}
+
 // Err 判定 parity（判定一致 + 归一化正文一致）
 // --------------------------------------------------------------------------------
 

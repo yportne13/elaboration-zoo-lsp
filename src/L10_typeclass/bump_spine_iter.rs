@@ -665,11 +665,14 @@ fn force<'a>(
                 }
             }
             7 => match v_xcell_of(v) {
-                // L10：force 递归进卡住投影的内层并**重建** Obj
-                //（参考版 force 的 Obj 臂：`Val::Obj(self.force(x), a, b)`）
+                // L10：force 递归进卡住投影的内层并**重建** Obj（参考版
+                // force 的 Obj 臂：`Val::Obj(self.force(x), a, b)`，重建后
+                // 即返回）。不能把新 Obj 赋回 v 继续循环：内层已是 force
+                // 的不动点，下一轮又落进本臂重建出同形值，死循环
+                //（binder 下的嵌套投影 `l.a.x` 即触发）。
                 XCell::Obj { val, name } => {
                     let v2 = force(bump, spine, defs, metas, globals, *val);
-                    v = v_xcell(bump.alloc(XCell::Obj { val: v2, name }));
+                    return v_xcell(bump.alloc(XCell::Obj { val: v2, name }));
                 }
                 _ => return v,
             },
