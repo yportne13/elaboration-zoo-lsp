@@ -1524,21 +1524,7 @@ fn quote_iter<'a>(
                             // `Decl(name)` 卡住值——递归引用停在存根，参考
                             // 版 declb 同款），再以**真实表** quote（参考版
                             // quote 的 Match 臂分工逐字对应）。
-                            let declb: Rc<Decls<'a>> = Rc::new(
-                                decl.iter()
-                                    .map(|(k, e)| {
-                                        let name = bump.alloc_str(k.as_str());
-                                        (
-                                            k.clone(),
-                                            DeclEntry {
-                                                tm: bump.alloc(Tm::Decl(name)),
-                                                val: v_xcell(bump.alloc(XCell::Decl { name })),
-                                                vty: e.vty,
-                                            },
-                                        )
-                                    })
-                                    .collect(),
-                            );
+                            let declb = declb_of(bump, decl);
                             let mut qc: Vec<(PatternDetail, &'a Tm<'a>)> =
                                 Vec::with_capacity(cases.len());
                             for (p, b) in cases.iter() {

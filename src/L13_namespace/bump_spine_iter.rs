@@ -2232,31 +2232,9 @@ fn quote_iter<'a>(
                         } => {
                             // 分支体在"捕获 env + fresh rigid 槽"下用
                             // **simpl_decl 存根表**重新求值（每 def 条目换成
-                            // `Decl(name)` 卡住值、**Sum 类型值保留**——否则
-                            // SumCase 的 typ 变 Decl 卡 pretty；参考版
-                            // simpl_decl 逐字对应），再以**真实表** quote。
-                            let declb: Rc<Decls<'a>> = Rc::new(
-                                decl.iter()
-                                    .map(|(k, e)| {
-                                        let name = bump.alloc_str(k.as_str());
-                                        (
-                                            k.clone(),
-                                            DeclEntry {
-                                                tm: bump.alloc(Tm::Decl(name)),
-                                                val: if v_tag(e.val) == 7
-                                                    && matches!(v_xcell_of(e.val), XCell::Sum { .. })
-                                                {
-                                                    e.val
-                                                } else {
-                                                    v_xcell(bump.alloc(XCell::Decl { name }))
-                                                },
-                                                vty: e.vty,
-                                                prim: e.prim,
-                                            },
-                                        )
-                                    })
-                                    .collect(),
-                            );
+                            // `Decl(name)` 卡住值、**Sum 类型值保留**——规则见
+                            // [`declb_of`]），再以**真实表** quote。
+                            let declb = declb_of(bump, decl);
                             let mut qc: Vec<(PatternDetail, &'a Tm<'a>)> =
                                 Vec::with_capacity(cases.len());
                             for (p, b) in cases.iter() {
