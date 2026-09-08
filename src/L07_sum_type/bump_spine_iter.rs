@@ -5481,6 +5481,22 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U（与参考版
+                // 同步）。域洞若保留，第 2+ 个参数的域 meta 会带 pruning
+                // （形如 `?m A`），使用点解 `?m A := U` 时 invert 无法倒序
+                // Decl 头 spine 而失败——显式提供隐式实参即报 can't unify。
+                // 方括号参数在语言定义上就是类型参数；显式标注与显式索引不动。
+                let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // enum 类型本体：λ params → Sum(name, [(p, Var p, ?, icit)], cases)
                 let new_params: Vec<(crate::parser_lib::Span<String>, Icit, Raw)> = params
                     .iter()
