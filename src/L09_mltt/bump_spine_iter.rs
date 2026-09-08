@@ -330,6 +330,21 @@ pub(crate) fn env_len(env: Env<'_>) -> u32 {
     n
 }
 
+/// 环境全部槽按 [`env_nth`] 的下标序单趟拷进 `out`：链段直走 +
+/// 平坦区倒序读。`(0..env_len).map(env_nth)` 对链段每次从头重走，是
+/// O(d²)；本函数一趟 O(d)（同 L07/L08 的 struct_eq / val_mentions_lvl 口径）。
+#[inline]
+pub(crate) fn env_collect(defs: &[V], env: Env<'_>, out: &mut Vec<V>) {
+    let mut nb = env.binds;
+    while let Some(e) = nb {
+        out.push(e.val);
+        nb = e.next;
+    }
+    for k in 0..env.flat_len {
+        out.push(defs[(env.flat_base + env.flat_len - 1 - k) as usize]);
+    }
+}
+
 /// 环境扩展（**binder 链**：bind / β / 瞬时求值扩展）——O(1)。
 #[inline]
 pub(crate) fn env_ext<'a>(bump: &'a Bump, env: Env<'a>, v: V) -> Env<'a> {
@@ -4071,7 +4086,8 @@ impl Machine {
             (cxt.lvl - x - 1) as usize
         };
         let n = env_len(cxt.env) as usize;
-        let mut slots2: Vec<V> = (0..n).map(|i| env_nth(&self.defs, cxt.env, i as u32)).collect();
+        let mut slots2: Vec<V> = Vec::with_capacity(n);
+        env_collect(&self.defs, cxt.env, &mut slots2);
         if x_prime < n {
             slots2[x_prime] = v;
         }
@@ -4128,7 +4144,11 @@ impl Machine {
         names: &mut Names,
     ) -> Vec<V> {
         let n = env_len(cxt.env) as usize;
-        let old: Vec<V> = (0..n).map(|i| env_nth(&self.defs, cxt.env, i as u32)).collect();
+        let old: Vec<V> = {
+            let mut v = Vec::with_capacity(n);
+            env_collect(&self.defs, cxt.env, &mut v);
+            v
+        };
         let mut refreshed: Vec<Option<V>> = vec![None; n];
         // 参考版递归：refresh(suffix d) 先算 refresh(d+1)，再算本槽。
         // env_tt(d) = slots2[0..=d] ++ refreshed[d+1..]（change_tail 语义）
