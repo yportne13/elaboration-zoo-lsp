@@ -1654,9 +1654,8 @@ fn eval_iter<'a>(
                 work.push(W::AppPrun(env, *pr));
                 work.push(W::Tm(head, env));
             }
-            // 投影：求值接收者（不 force——参考版同）。Sum/SumCase 命中给
-            // 投影值（miss panic，参考版 unwrap 同款）；Rigid（裸或链）卡成
-            // Obj；其余形态 panic（参考版 "impossible" 臂同款）。
+            // 投影：构造子头（Sum/SumCase）不 force 直接投影（miss panic）；
+            // 其余头先 force，仍不可投影一律卡成 Obj（详见 W::ObjSel）。
             W::Tm(Tm::Obj(h, name), env) => {
                 work.push(W::ObjSel(name));
                 work.push(W::Tm(h, env));

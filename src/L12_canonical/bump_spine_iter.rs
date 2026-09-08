@@ -32,10 +32,11 @@
 //!   读写 `mutable_map`（每轮清空，参考版 per-Infer 同款）。卡住 Prim 的
 //!   unify：与携带的 typ 合一（参考版两臂），**不再是** L10 的
 //!   `(LiteralType, Prim) => Ok(())` 宽放。
-//! - **卡住 match 无 pending、force 只展开 Flex**：v_app 对 Match panic
+//! - **卡住 match 无 pending、force 展开 Flex + Obj**：v_app 对 Match panic
 //!   （不可能吸收实参）；参考版 force 只有 Flex + Obj 两臂——meta 解开后
-//!   不会重选 match、不展开 Decl/投影。卡住投影 `Val::Obj` 只在 eval 的
-//!   Tm::Obj 臂产生（接收者 Rigid 才卡，其余 panic）。
+//!   不会重选 match、不展开 Decl。卡住投影 `Val::Obj` 只在 eval 的 Tm::Obj
+//!   臂产生：接收者 force 后非 Sum/SumCase 一律卡成 Obj（Flex、卡住 match、
+//!   卡住投影、字面量都在其内）。**L09 才是**仅 Rigid 卡、其余 panic。
 //! - **模式特化不走 pm_defs**：参考版走 `check_pm`/`unify_pm` +
 //!   `Cxt::update_cxt`/`refresh`——把精化等式**直接改写进环境**（目标槽
 //!   替换 + 全槽在"更新后 env"下重求值重锚定），src_names 按层级取类型
@@ -892,8 +893,9 @@ enum W<'a> {
     AppPrun(Env<'a>, Option<&'a PrCons<'a>>),
     /// vals 顶是 `vAppPruning` 的当前值；本步把 `arg` 以 `icit` 应用上去。
     AppPrunOne(V, Icit),
-    /// vals 顶是投影接收者的值：Sum/SumCase 命中给投影值（**miss panic**，
-    /// 参考版 unwrap 同款）；Rigid（裸或链）卡成 Obj；其余 panic。
+    /// vals 顶是投影接收者的值（先 force）：Sum/SumCase 命中给投影值
+    /// （**miss panic**，参考版 unwrap 同款）；其余形态一律卡成 Obj
+    ///（参考版 `_` 臂——L09 才是仅 Rigid 卡、其余 panic）。
     ObjSel(&'a str),
     /// vals 顶自底向上是 (v0,t0,...,v_{n-1},t_{n-1})（求值序）：装配 Sum。
     SumAsm {
@@ -1061,9 +1063,9 @@ fn eval_iter<'a>(
                 work.push(W::AppPrun(env, *pr));
                 work.push(W::Tm(head, env));
             }
-            // 投影：求值接收者（不 force——参考版同）。Sum/SumCase 命中给
-            // 投影值（miss panic，参考版 unwrap 同款）；Rigid（裸或链）卡成
-            // Obj；其余形态 panic（参考版 "impossible" 臂同款）。
+            // 投影：求值接收者后 force（参考版 eval 的 Tm::Obj 臂同）。
+            // Sum/SumCase 命中给投影值（miss panic，参考版 unwrap 同款）；
+            // 其余形态一律卡成 Obj（参考版 `_` 臂）。
             W::Tm(Tm::Obj(h, name), env) => {
                 work.push(W::ObjSel(name));
                 work.push(W::Tm(h, env));
@@ -1287,14 +1289,8 @@ v = vapp1(
                         // 字面量…）卡成 Obj（参考版 `_` 臂同款）
                         _ => vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name }))),
                     },
-                    // Rigid（裸或链）：卡住投影
-                    0 => vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name }))),
-                    2 => {
-                        let hd = spine.spine_head(v_spine_of(v));
-                        let _ = hd;
-                        vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name })));
-                    }
-                    // L10：Flex / Π / λ 等全部卡 Obj（参考版 `_` 臂）
+                    // 裸 Rigid / Rigid 链 / Flex / 卡住 match / 字面量……
+                    // 一律卡成 Obj（参考版 eval 的 Tm::Obj `_` 臂）
                     _ => vals.push(v_xcell(bump.alloc(XCell::Obj { val: v, name }))),
                 }
             }
