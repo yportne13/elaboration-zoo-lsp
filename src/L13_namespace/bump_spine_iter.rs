@@ -5347,18 +5347,18 @@ impl Machine {
             self.force_list(bump, &cxt.decls, &pv)
         };
         if allow_flex_defaulting
-            && non_out_params.iter().any(|v| v_tag(*v) == 5)
+            && non_out_params.iter().any(|v| is_flex(&self.spine, *v))
         {
             let known: Vec<V> = non_out_params
                 .iter()
                 .copied()
-                .filter(|v| v_tag(*v) != 5)
+                .filter(|v| !is_flex(&self.spine, *v))
                 .collect();
             if known.len() == 1 && non_out_params.len() > 1 {
                 let known_type = known[0];
                 let mut ok = true;
                 for v in non_out_params.iter() {
-                    if v_tag(*v) == 5 {
+                    if is_flex(&self.spine, *v) {
                         let mut terr = None;
                         if !self.unify(bump, cxt, cxt.lvl, *v, known_type, 100, &mut terr) {
                             ok = false;
@@ -5369,7 +5369,7 @@ impl Machine {
                 if ok {
                     let pv: Vec<V> = non_out_idx.iter().map(|&i| params[i].val).collect();
                     non_out_params = self.force_list(bump, &cxt.decls, &pv);
-                    if non_out_params.iter().any(|v| v_tag(*v) == 5) {
+                    if non_out_params.iter().any(|v| is_flex(&self.spine, *v)) {
                         return Ok(None);
                     }
                 } else {
@@ -5401,7 +5401,7 @@ impl Machine {
                     all_params.iter().zip(inst.assertion.arguments.iter()).enumerate()
                 {
                     let is_out = out_param.get(i).copied().unwrap_or(false);
-                    if is_out && v_tag(*g_arg) == 5 {
+                    if is_out && is_flex(&self.spine, *g_arg) {
                         continue;
                     }
                     let g_ref = v_to_ref_val(&self.spine, &self.defs, *g_arg);
@@ -5455,10 +5455,18 @@ impl Machine {
         if candidate_count == 0 {
             return Ok(None); // 无实例：交给后续（solve_multi_trait / 报错路径）
         }
-        // 非 out 参数仍 Flex → 推迟（val_match(Flex, _) 恒真会选错实例）
-        let has_flex_non_out = non_out_idx.iter().any(|&i| {
-            v_tag(self.force_list(bump, &cxt.decls, &[params[i].val])[0]) == 5
-        });
+        // 非 out 参数仍 Flex → 推迟（val_match(Flex, _) 恒真会选错实例）。
+        // 注意 `is_flex` 同时覆盖裸 meta 与 meta 头链（`?m x`）——goal 的
+        // 参数形态常是后者；只测 `v_tag == 5` 会漏判，让 flex goal 进入
+        // 实例匹配（val_match 对每个实例恒真）后按登记序选中错误实例。
+        let forced_params: Vec<V> = self.force_list(
+            bump,
+            &cxt.decls,
+            &params.iter().map(|p| p.val).collect::<Vec<_>>(),
+        );
+        let has_flex_non_out = non_out_idx
+            .iter()
+            .any(|&i| is_flex(&self.spine, forced_params[i]));
         if has_flex_non_out {
             return Ok(None);
         }
@@ -5470,9 +5478,9 @@ impl Machine {
             .filter(|(_, (_, o))| **o)
             .map(|(i, _)| i)
             .collect();
-        let has_flex_out = out_idx.iter().any(|&i| {
-            v_tag(self.force_list(bump, &cxt.decls, &[params[i].val])[0]) == 5
-        });
+        let has_flex_out = out_idx
+            .iter()
+            .any(|&i| is_flex(&self.spine, forced_params[i]));
         if has_flex_out && candidate_count > 1 {
             return Ok(None);
         }
@@ -8852,7 +8860,13 @@ pub(crate) fn v_to_ref_val(spine: &Spine, defs: &[V], v: V) -> Rc<CVal> {
         0 => Rc::new(CVal::Rigid(super::Lvl(v_lvl_of(v)), CList::new())),
         2 => {
             // 链：头解码 + 实参逐个挂上（参考版 spine 是 List（最新在前）；
-            // 解码保持最新在前——消费端 synth/val_match 只做 head-first 迭代）
+            // collect_args 产出的正是最新在前序，逐个 prepend 即还原同序）。
+            // **必须保留真实头**：先前把每步 acc 整体换成
+            // `Flex(MetaVar(u32::MAX), [该实参])`，既丢了头（`?A x` 变成
+            // 通配 `?_ x`，val_match 对任何实例恒真）又丢了更早的实参——
+            // trait 求解 Phase 1 的候选集被污染成全部实例，再按登记序选中
+            // 错误实例（core prelude `a + 0` 命中 Add[String,String] for
+            // String，报 `can't unify expected: String find: Nat`）。
             let h = v_spine_of(v);
             let hd = spine.spine_head(h);
             let mut acc = match v_tag(hd) {
@@ -8872,10 +8886,22 @@ pub(crate) fn v_to_ref_val(spine: &Spine, defs: &[V], v: V) -> Rc<CVal> {
             let mut args: Vec<(V, Icit)> = Vec::new();
             spine.collect_args(h, &mut args); // 最新在前
             for (a, i) in args.iter() {
-                acc = Rc::new(CVal::Flex(
-                    super::MetaVar(u32::MAX),
-                    CList::new().prepend((v_to_ref_val(spine, defs, *a), *i)),
-                ));
+                let av = v_to_ref_val(spine, defs, *a);
+                acc = match acc.as_ref() {
+                    CVal::Flex(m, sp) => {
+                        Rc::new(CVal::Flex(*m, sp.prepend((av, *i))))
+                    }
+                    CVal::Rigid(l, sp) => {
+                        Rc::new(CVal::Rigid(*l, sp.prepend((av, *i))))
+                    }
+                    CVal::Decl(n, sp) => {
+                        Rc::new(CVal::Decl(n.clone(), sp.prepend((av, *i))))
+                    }
+                    CVal::Obj(x, n, sp) => {
+                        Rc::new(CVal::Obj(x.clone(), n.clone(), sp.prepend((av, *i))))
+                    }
+                    _ => return unmatchable(),
+                };
             }
             acc
         }
@@ -9454,22 +9480,30 @@ impl<'a> Compiler<'a> {
                 // Sum 头的每个构造子分支里重复展开（参考版 pattern_match.rs
                 // 431-440 的 `is_var_like` 同款——缺了它会指数级爆炸 / 多行枚举
                 // 直接越界崩溃）。
-                let is_sum = {
-                    let f = mach.force_v(bump, &arms[0].cxt, *typ);
-                    v_tag(f) == 7 && matches!(v_xcell_of(f), XCell::Sum { .. })
-                };
-                let constrs_name: std::collections::BTreeSet<SmolStr> = {
-                    let f = mach.force_v(bump, &arms[0].cxt, *typ);
-                    if v_tag(f) == 7 {
-                        if let XCell::Sum { cases, .. } = v_xcell_of(f) {
-                            cases.iter().map(|c| SmolStr::new(*c)).collect()
-                        } else {
-                            std::collections::BTreeSet::new()
+                //
+                // `arms` 可为空（上一轮 not_necessary 递归剥完 heads 前的臂表
+                // 已耗尽）：此时 is_var_like/not_necessary 对空表恒真、两者
+                // 都不被读取，故不必 force（参考版直接读已求值的 typ，无此
+                // 依赖；快版 typ 是待 force 的 V，需要一个 cxt，空臂时取不到）。
+                let (is_sum, constrs_name): (bool, std::collections::BTreeSet<SmolStr>) =
+                    match arms.first() {
+                        Some(a) => {
+                            let f = mach.force_v(bump, &a.cxt, *typ);
+                            if v_tag(f) == 7 {
+                                if let XCell::Sum { cases, .. } = v_xcell_of(f) {
+                                    (
+                                        true,
+                                        cases.iter().map(|c| SmolStr::new(*c)).collect(),
+                                    )
+                                } else {
+                                    (false, std::collections::BTreeSet::new())
+                                }
+                            } else {
+                                (false, std::collections::BTreeSet::new())
+                            }
                         }
-                    } else {
-                        std::collections::BTreeSet::new()
-                    }
-                };
+                        None => (false, std::collections::BTreeSet::new()),
+                    };
                 let is_var_like = |pat: &Pattern, icit: &Icit| -> bool {
                     match pat {
                         Pattern::Any(_, i) => &i.to_icit() == icit,

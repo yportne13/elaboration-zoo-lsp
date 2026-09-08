@@ -256,6 +256,29 @@ fn parity_stuck_call_arg_order() {
     );
 }
 
+// trait 实例选择（flex goal 推迟）
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_trait_flex_goal_instance_pick() {
+    // 回归：trait 求解的 flex 判据曾用 `v_tag(v) == 5`（只认裸 meta），漏掉
+    // meta 头链 `?m x`——goal 参数恰是后者时不推迟，Phase 1 的 val_match 对
+    // 每个实例恒真，Phase 2 按登记序选中错误实例（core prelude `a + 0` 命中
+    // Add[String,String] for String，报 `can't unify expected: String find: Nat`）。
+    // 这个源是 core prelude 的最小化形态（op.typort 的 Add + String 实例 +
+    // nat.typort 的 Nat 实例），String 实例先登记是触发条件。
+    assert_parity(
+        "def outParam[A](a: A): A = a\n\
+         trait Add[T, O: outParam(Type 0)] {\n    def +(that: T): O\n}\n\
+         impl Add[String, String] for String {\n    def +(that: String): String = string_concat this that\n}\n\
+         enum Nat {\n    zero\n    succ(n: Nat)\n}\n\
+         def nat_add(x: Nat, y: Nat): Nat =\n    match y {\n        case zero => x\n        case succ(n) => succ (nat_add x n)\n    }\n\
+         impl Add[Nat, Nat] for Nat {\n    def +(that: Nat): Nat = nat_add this that\n}\n\
+         def f(a: Nat): Nat = a + zero\n\
+         println f\n",
+    );
+}
+
 // 稳态复用（trait/可变全局跨轮清空）
 // --------------------------------------------------------------------------------
 
