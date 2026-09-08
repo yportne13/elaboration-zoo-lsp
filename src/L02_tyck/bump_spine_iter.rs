@@ -444,9 +444,32 @@ fn quote_iter<'a>(
                         });
                         tasks.push(QJob::Q(base_v, level));
                     } else {
-                        tasks.push(QJob::App1);
-                        tasks.push(QJob::Q(ea, level));
-                        tasks.push(QJob::Q(ef, level));
+                        // 防御性回灌自 L05 65269fb（孪生 quote 链陈旧函数部分
+                        // 修复，按本章结构等价适配：本章无 meta/无 force，函数
+                        // 部分直接是终值，无需 force）。L05 的病灶是函数部分
+                        // force 停在部分应用的闭包上（建链后头 meta 被解成 λ），
+                        // 重拼 App 产出 β-redex；本章 spine 槽的 f 压栈时即非
+                        // 闭包（eval 的 β 岔路先行归尽，W::Apply/ChainWrap 只
+                        // 收非闭包头）且值不可变，闭包形态结构上不可达，此守
+                        // 卫恒假——仍按 L05 形状挂上：未来演进（加 meta/惰性
+                        // 解）若破坏该不变量，quote 不产出 β-redex，与参考版
+                        // 语义对齐。
+                        if v_tag(ef) == 1 {
+                            let c = v_clo_of(ef);
+                            let applied = eval_iter(
+                                bump,
+                                spine,
+                                work,
+                                vals,
+                                Some(bump.alloc(EnvCons { val: ea, next: c.env })),
+                                c.body,
+                            );
+                            tasks.push(QJob::Q(applied, level));
+                        } else {
+                            tasks.push(QJob::App1);
+                            tasks.push(QJob::Q(ea, level));
+                            tasks.push(QJob::Q(ef, level));
+                        }
                     }
                 }
             },
@@ -496,16 +519,44 @@ fn quote_iter<'a>(
                             i += 1;
                         }
                         _ => {
-                            // 非平凡链头：挂起引 f，ChainRun 续跑
-                            tasks.push(QJob::ChainRun {
-                                level,
-                                next: i + 1,
-                                end,
-                                f0,
-                                idx_node,
-                                prev: Some(prev),
-                            });
-                            tasks.push(QJob::Q(fi, level));
+                            // 非平凡链头：挂起引 f，ChainRun 续跑。防御性回灌
+                            // 自 L05 65269fb（陈旧函数部分修复，本章无 meta/
+                            // 无 force，等价适配）：f 若停在闭包（本章结构上
+                            // 不可达，论证见二叉 fallback 处注释）改为引「f 应
+                            // 用本槽实参」的整值，恢复点以 prev:None 直接取该
+                            // 结果为已累计项（不再拼接），quote 永不产出
+                            // β-redex。
+                            if v_tag(fi) == 1 {
+                                let arg_v = spine.stack[i].a;
+                                let c = v_clo_of(fi);
+                                let applied = eval_iter(
+                                    bump,
+                                    spine,
+                                    work,
+                                    vals,
+                                    Some(bump.alloc(EnvCons { val: arg_v, next: c.env })),
+                                    c.body,
+                                );
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: None,
+                                });
+                                tasks.push(QJob::Q(applied, level));
+                            } else {
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: Some(prev),
+                                });
+                                tasks.push(QJob::Q(fi, level));
+                            }
                             break;
                         }
                     }
