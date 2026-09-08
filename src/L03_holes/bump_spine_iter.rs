@@ -843,11 +843,18 @@ enum UItem<'a> {
 /// 4. 判等布尔与 level 无关（fresh 变量两侧对称插入、恒异于自由变量，
 ///    比较树在任意 level 同构）——键无需带 level，同 L02。
 ///
-/// 表随本次 unify 调用新建，`Bump::reset` 后无跨轮悬垂。
+/// 表与工作栈常驻 [`Machine`]（`umemo`/`ustack`/`scratch1..2`，L04+ 的
+/// `ConvScratch` 同款），每次 unify 入口 clear——键是值句柄的整数对，不指向
+/// bump，清空只为防止旧结论跨调用被复用。
+#[allow(clippy::too_many_arguments)]
 fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
+    stack: &mut Vec<UItem<'a>>,
+    memo: &mut rustc_hash::FxHashSet<(u64, u64)>,
+    scratch1: &mut Vec<V>,
+    scratch2: &mut Vec<V>,
     vals: &mut Vec<V>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
@@ -856,11 +863,10 @@ fn unify_iter<'a>(
     u0: V,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
-    let mut memo: rustc_hash::FxHashSet<(u64, u64)> = rustc_hash::FxHashSet::default();
-    let mut stack: Vec<UItem<'a>> = Vec::new();
-    // 实参收集草稿：跨 Pair 复用（clear 保容量），热路径上零分配
-    let mut scratch1: Vec<V> = Vec::new();
-    let mut scratch2: Vec<V> = Vec::new();
+    stack.clear();
+    memo.clear();
+    scratch1.clear();
+    scratch2.clear();
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
@@ -979,21 +985,21 @@ fn unify_iter<'a>(
                     // 判等完成（解按构造使两侧相等，无子比较需要屏障）——
                     // 直接入表：solve 负载里 (p_k, ?x) 型子对会因 `Eq A x x`
                     // 型的重复出现二次，命中省掉解展开后的整趟重走。
-                    let mut args = std::mem::take(&mut scratch1);
+                    let mut args = std::mem::take(&mut *scratch1);
                     args.clear();
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
                         solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
                     } else {
-                        let mut args2 = std::mem::take(&mut scratch2);
+                        let mut args2 = std::mem::take(&mut *scratch2);
                         args2.clear();
                         let r = match spine.flex_of(u, &mut args2) {
                             Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args2, t),
                             None => false,
                         };
-                        scratch2 = args2;
+                        *scratch2 = args2;
                         r
                     };
-                    scratch1 = args;
+                    *scratch1 = args;
                     if solved {
                         if memo_on {
                             memo.insert((t.0, u.0));
@@ -1065,7 +1071,7 @@ fn unify_iter<'a>(
             // 解才是 flex）；异 m 情形按参考版次序先解 t 侧。solve 成功即
             // 判等完成，直接入表（同 (2,2) flex 分支的理由）。
             _ => {
-                let mut args = std::mem::take(&mut scratch1);
+                let mut args = std::mem::take(&mut *scratch1);
                 args.clear();
                 let solved = if let Some(m) = spine.flex_of(t, &mut args) {
                     solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
@@ -1075,7 +1081,7 @@ fn unify_iter<'a>(
                         None => false,
                     }
                 };
-                scratch1 = args;
+                *scratch1 = args;
                 if solved {
                     if memo_on {
                         memo.insert((t.0, u.0));
@@ -1321,6 +1327,21 @@ pub(crate) struct Machine {
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**（见
     /// [`Machine::quote_memo`]）。表项是 Copy 引用、无析构。
     quote_memo: QuoteMemo<'static>,
+    /// [perf] eval/unify/quote 的工作栈与 unify 草稿常驻（`'static` 存放 +
+    /// 调用期洗白，入口 clear），对齐 L04+ 的 `workbuf`/`ConvScratch`。
+    /// 实测 l03bench（5 轮取最小，k=9..13 全线一致）：solve −2~10%、
+    /// church −3~10%、conv −2~6%、dup_deep −1.4~5%。
+    /// 注：**L02 同款改动是净负收益**（church/conv +4~10%）——L02 无 meta，
+    /// conv 调用短、草稿小，mimalloc 新分配的小缓冲留在热缓存里，比复用一个
+    /// 已涨大、被挤冷的常驻缓冲快；L03 起 unify/solve 频繁且草稿非平凡，
+    /// 复用才划算。别把这条往 L02 回灌。
+    workbuf: Vec<W<'static>>,
+    qtasks: Vec<QJob<'static>>,
+    qdone: Vec<&'static Tm<'static>>,
+    ustack: Vec<UItem<'static>>,
+    umemo: rustc_hash::FxHashSet<(u64, u64)>,
+    scratch1: Vec<V>,
+    scratch2: Vec<V>,
 }
 
 const PI_NAME: &str = "x"; // infer App 非 Π 分支合成的闭包名（只服务 pretty）
@@ -1335,6 +1356,13 @@ impl Machine {
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
             quote_memo: FxHashMap::default(),
+            workbuf: Vec::new(),
+            qtasks: Vec::new(),
+            qdone: Vec::new(),
+            ustack: Vec::new(),
+            umemo: rustc_hash::FxHashSet::default(),
+            scratch1: Vec::new(),
+            scratch2: Vec::new(),
         }
     }
 
@@ -1417,11 +1445,13 @@ impl Machine {
         bump.alloc(Tm::InsertedMeta(m, bds))
     }
 
-    fn eval<'a>(&mut self, bump: &'a Bump, env: Env, tm: &'a Tm<'a>) -> V {
+    fn eval<'a>(&mut self, bump: &'a Bump, env: Env<'a>, tm: &'a Tm<'a>) -> V {
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         eval_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
+            work,
             &mut self.vals,
             &mut self.defs,
             &self.metas,
@@ -1431,12 +1461,19 @@ impl Machine {
     }
 
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> = unsafe {
+            &mut *(&mut self.qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>)
+        };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             &mut self.vals,
             &mut self.defs,
             &self.metas,
@@ -1453,13 +1490,20 @@ impl Machine {
         let memo: &mut QuoteMemo<'a> = unsafe {
             &mut *(&mut self.quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>)
         };
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> = unsafe {
+            &mut *(&mut self.qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>)
+        };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         memo.clear();
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             &mut self.vals,
             &mut self.defs,
             &self.metas,
@@ -1470,10 +1514,19 @@ impl Machine {
     }
 
     fn unify(&mut self, bump: &Bump, l: u32, t: V, u: V) -> bool {
+        let work: &mut Vec<W<'_>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'_>>) };
+        let stack: &mut Vec<UItem<'_>> = unsafe {
+            &mut *(&mut self.ustack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'_>>)
+        };
         unify_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
+            work,
+            stack,
+            &mut self.umemo,
+            &mut self.scratch1,
+            &mut self.scratch2,
             &mut self.vals,
             &mut self.defs,
             &mut self.metas,
