@@ -758,8 +758,17 @@ fn conv_iter<'a>(
 
 /// 稳态复用机：spine 与 vals 两个无生命周期的大栈跨调用复用（clear 保
 /// 容量），配 [`Tycker`] 每轮 `Bump::reset` 即稳态近零分配（L01 `_ss` 口径）。
-/// 带生命周期的小栈（work/tasks/done）每调用新建，避免 struct 持 `'a`
-/// 跨 `Bump::reset` 的借用冲突。
+///
+/// 带生命周期的小栈（work/tasks/done/conv 栈）**每调用新建是实测后的决定，
+/// 不是被借用检查逼的**：L04+ 的洗白套路（`'static` 存放 + 入口 clear）在这
+/// 里写得出来，但 l02bench 上普遍变慢——church +6~13%、conv +4~10%、
+/// dup_deep +5~13%（fast/fast_ss 两口径、k=11..13 同向）；拆掉判等表常驻、
+/// 只留工作栈常驻后仍是同幅退化，即退化来自 Vec 常驻本身。机制：L02 无
+/// meta，conv/eval 调用短、栈普遍很浅，新建的 `Vec` 从零起步、由 mimalloc
+/// 复用最热的释放块；常驻缓冲则被历史上最深的那次调用撑大，之后每次 push
+/// 都在踩早已出缓存的大地址段。L03 起 unify/solve 频繁且草稿非平凡，同一
+/// 改动反而快 2~10%（见 L03 `Machine::workbuf` 注释）——本章是这条分界线
+/// 的负侧，别再往回灌。
 struct Machine {
     spine: Spine,
     vals: Vec<V>,
