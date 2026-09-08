@@ -153,12 +153,21 @@ struct Entry {
     base: u32,
 }
 
-/// 求值机持有的扁平中性栈（只增不减，槽位下标即句柄）。
+/// 求值机持有的扁平中性栈（轮内只增不减，槽位下标即句柄）。
 struct Spine {
     stack: Vec<Entry>,
 }
 
 impl Spine {
+    /// 轮清空（随 [`Machine::clear_round`] 调用）：`Entry` 是无 Drop 的
+    /// Copy 结构，`Vec::clear` 只把长度归零（O(1)、保容量），槽位下标
+    /// 从 0 重排，与 `Machine::new` 同构。不清则稳态复用下 spine 随轮数
+    /// 单调增长（内存滞留到历史最大 spine 深度 + 偶发大 Vec 扩容拷贝）。
+    #[inline]
+    fn clear(&mut self) {
+        self.stack.clear();
+    }
+
     /// 中性应用 `f a` 压栈，返回句柄值。
     #[inline]
     fn push(&mut self, f: V, a: V) -> V {
@@ -769,6 +778,13 @@ impl Machine {
         }
     }
 
+    /// 每轮 reset（随 `Bump::reset` 调用）：中性 spine 清空。本机的其余
+    /// V 句柄载体已在各自入口作废——`vals` 每次 eval 开头 clear、
+    /// `quote_memo` 每次 quote 入口 clear——故轮边界后无旧句柄可达。
+    fn clear_round(&mut self) {
+        self.spine.clear();
+    }
+
     fn eval<'a>(&mut self, bump: &'a Bump, env: Option<&'a EnvCons<'a>>, tm: &'a Tm<'a>) -> V {
         eval_iter(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, env, tm)
     }
@@ -1104,10 +1120,11 @@ fn tm_size(t: &Tm<'_>) -> u64 {
 }
 
 /// 稳态类型检查器：owns 一个反复 `reset` 的 `Bump` 与跨调用复用的
-/// [`Machine`]。`bump.reset` 不跑析构（bumpalo 语义），跨轮悬垂的两处
-/// 来源均无碍：`vals` 在每次 eval 开头 clear；`spine.stack` 条目虽不清理
-/// （下标跨轮单调递增、容量只增），但本轮句柄恒指向本轮压入的槽位，
-/// 旧条目不可达——代价是长驻 Machine 的内存随历史最大 spine 深度滞留。
+/// [`Machine`]。`bump.reset` 不跑析构（bumpalo 语义），跨轮悬垂的三处
+/// 来源各自在轮界/入口作废：`vals` 每次 eval 开头 clear、`quote_memo`
+/// 每次 quote 入口 clear、`spine.stack` 随 [`Machine::clear_round`] 在
+/// `bump.reset` 后立刻清空（保容量、下标从 0 重排）——长驻 Machine 的
+/// 内存不再随历史最大 spine 深度滞留。
 pub(crate) struct Tycker {
     bump: Bump,
     machine: Machine,
@@ -1133,6 +1150,7 @@ impl Tycker {
 
     fn run_impl(&mut self, mode: &str, file: &str, raw: &Raw, use_memo: bool) -> String {
         self.bump.reset();
+        self.machine.clear_round();
         let bump = &self.bump;
         let cxt = Cxt::empty(super::initial_pos());
         match self.machine.infer(bump, cxt, raw) {
@@ -1154,6 +1172,7 @@ impl Tycker {
     /// 基准口径（bench 用）：仅 check（conv 工作负载的转换检查发生在 check 里）。
     pub(crate) fn bench_check(&mut self, raw: &Raw) -> bool {
         self.bump.reset();
+        self.machine.clear_round();
         let bump = &self.bump;
         self.machine
             .infer(bump, Cxt::empty(super::initial_pos()), raw)
@@ -1173,6 +1192,7 @@ impl Tycker {
     /// 两个 bench nf 口径的公共实现，`use_memo` 分派同 [`quote_maybe`]。
     fn bench_nf_impl(&mut self, raw: &Raw, use_memo: bool) -> u64 {
         self.bump.reset();
+        self.machine.clear_round();
         let bump = &self.bump;
         match self.machine.infer(bump, Cxt::empty(super::initial_pos()), raw) {
             Err(_) => 0,

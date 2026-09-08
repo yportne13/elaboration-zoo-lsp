@@ -307,6 +307,15 @@ pub(crate) struct Spine {
 }
 
 impl Spine {
+    /// 轮清空（随 [`Machine::clear_round`] 调用）：`Entry` 是无 Drop 的
+    /// Copy 结构，`Vec::clear` 只把长度归零（O(1)、保容量），槽位下标
+    /// 从 0 重排，与 `Machine::new` 同构。不清则稳态复用下 spine 随轮数
+    /// 单调增长（内存滞留到历史最大 spine 深度 + 偶发大 Vec 扩容拷贝）。
+    #[inline]
+    fn clear(&mut self) {
+        self.stack.clear();
+    }
+
     /// 中性应用 `f a`（icit i）压栈，返回句柄值。`decl` 随函数侧传播：
     /// 裸 Decl 单元或既有 decl 链延伸——后续应用可 O(1) 判定要触发 prim。
     #[inline]
@@ -2602,7 +2611,10 @@ impl Machine {
     }
 
     /// 每轮 reset：metacontext + 名字表/轨迹/环境区域 + decl 表/可变全局
-    /// 全部清空（builtin 的重注册在 [`Machine::prime_round`]）。
+    /// + 中性 spine 全部清空（保容量；builtin 的重注册在 [`Machine::prime_round`]）。
+    /// tag-2 句柄只被上述各项与当轮 bump 值持有，轮边界后无旧句柄可达；
+    /// `ren` 存的是层级而非 spine 句柄（且 solve 入口换代），
+    /// `vals`/`conv`/`quote_memo`/工作栈各在核函数入口 clear。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
@@ -2610,6 +2622,7 @@ impl Machine {
         self.defs.clear();
         self.decls.clear();
         self.mutable_map.borrow_mut().clear();
+        self.spine.clear();
     }
 
     /// Extend Cxt with a bound variable（源码 binder）。

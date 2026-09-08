@@ -239,6 +239,15 @@ pub(crate) struct Spine {
 }
 
 impl Spine {
+    /// 轮清空（随 [`Machine::clear_round`] 调用）：`Entry` 是无 Drop 的
+    /// Copy 结构，`Vec::clear` 只把长度归零（O(1)、保容量），槽位下标
+    /// 从 0 重排，与 `Machine::new` 同构。不清则稳态复用下 spine 随轮数
+    /// 单调增长（内存滞留到历史最大 spine 深度 + 偶发大 Vec 扩容拷贝）。
+    #[inline]
+    fn clear(&mut self) {
+        self.stack.clear();
+    }
+
     /// 中性应用 `f a` 压栈，返回句柄值。
     #[inline]
     fn push(&mut self, f: V, a: V) -> V {
@@ -1330,12 +1339,15 @@ impl Machine {
     }
 
     /// 每轮 reset：metacontext 清空 + 名字表/轨迹/环境区域清空（表里存有
-    /// 指向上一轮 bump 的 V 字，必须随 `Bump::reset` 一同作废）。
+    /// 指向上一轮 bump 的 V 字，必须随 `Bump::reset` 一同作废）。中性
+    /// spine 同轮清空（保容量）：tag-2 句柄只被上述各项与当轮 bump 值
+    /// 持有，轮边界后无旧句柄可达（`vals`/`quote_memo` 各在入口 clear）。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
         self.name_trail.clear();
         self.defs.clear();
+        self.spine.clear();
     }
 
     /// Extend Cxt with a bound variable（名字解析版）：环境 + types 链 +
