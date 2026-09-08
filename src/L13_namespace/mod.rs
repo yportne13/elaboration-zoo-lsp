@@ -4016,6 +4016,45 @@ pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
     }
 }
 
+/// [`bench_check_nf`] 的带 nat 注册边界变体：在 `nat_after` 的下标后调用
+/// `Cxt::register_nat_builtins`（镜像真实 prelude 加载在 nat.typort 文件
+/// 边界注册 nat 内建）。bench 把多文件 prelude 拼成单一 decl 序列时需要。
+pub(crate) fn bench_check_nf_bounded(
+    decls: &[parser::syntax::Decl],
+    nat_after: &[usize],
+) -> u64 {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let mut last: Option<SmolStr> = None;
+    for (i, d) in decls.iter().enumerate() {
+        let is_def = matches!(d, parser::syntax::Decl::Def { .. });
+        let name = if let parser::syntax::Decl::Def { name, .. } = d {
+            Some(name.data.clone())
+        } else {
+            None
+        };
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return 0,
+        }
+        if nat_after.contains(&i) {
+            cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
+        }
+        if is_def {
+            last = name;
+        }
+    }
+    match last.and_then(|n| cxt.decl.get(&n).map(|e| e.2.clone())) {
+        Some(v) => {
+            let q = infer.quote(&cxt.decl, Lvl(0), &v);
+            let n = tm_size_ref(&q);
+            std::mem::forget(q);
+            n
+        }
+        None => 0,
+    }
+}
+
 #[test]
 fn test9() {
     let input = r#"

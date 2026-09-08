@@ -138,15 +138,32 @@ nat.typort 加载后调用；孪生无对应机制，属阶段 5 的 prelude 加
   上面量 force 次数/指针冗余。HDL 负载要先补内建注册。
 - 合成负载的 1.2-1.6× 领先真实；核心 prelude 1.54× 领先。
 
-## 7. 下一步（按优先级）
+## 7. 阶段 2（nat 内建注册）进展与剩余阻塞
 
-1. 让 bench 能跑 HDL prelude：给孪生补 nat 内建注册（阶段 5 的前哨），
-   或 bench 侧用参考版 prelude 状态喂。
+给孪生补了 `register_nat_builtins`（`nat_to_dec` / `width_range` /
+`nat_is_ground` + 五则算术 primop，逐句移植参考版 cxt.rs 的规则表），并加
+了 `bench_check_nf_bounded` / `run_decls_bounded`（按 decl 下标在
+"nat.typort 文件边界"注册——参考版 `load_prelude_state_impl` 同款时机），
+参考版侧也加了对称的 `bench_check_nf_bounded`（原先它的 `bench_check_nf`
+同样不注册 nat 内建，导致 `basic=0` 的假失败）。
+
+效果：孪生在 HDL prelude 上的推进 **136 → 171 / 943 decls**。剩余阻塞是
+decl 171 的 `can't unify`（`impl $trait_name$ModuleTree`，struct 脱糖出的
+inherent impl，涉及 class/module-macro 链）——属模块头"已知偏差 2"的
+class/struct 接收者家族，**不是 nat 内建问题**（诊断确认失败时
+`nat_to_dec` 在 decl 表中）。
+
+最小复现/下一步：定位 decl 171 的 unify 失败（class 两阶段 + 宏展开链的
+`Raw::Tm` 指针导入表与 trait 求解交互）。
+
+## 8. 下一步（按优先级）
+
+1. 定位并修 decl 171 的 unify 失败（class/module-macro 家族）。
 2. 修 `church`/`enum` 生成器（L13 语言面），恢复两族对照。
 3. 孪生能跑 HDL 负载后，测 force 次数/指针冗余，决定是否移植 force memo。
 4. 之后才谈阶段 3-5。
 
-## 8. 复现命令
+## 9. 复现命令
 
 ```bash
 cargo run --release --bin l13bench -- --workload prelude-core --rounds 3 --only basic,fast

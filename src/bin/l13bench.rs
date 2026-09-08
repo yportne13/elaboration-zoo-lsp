@@ -136,11 +136,14 @@ const HDL: &[(&str, &str)] = &[
 /// 按参考版 prelude 加载口径解析一串文件：逐文件 `parser_with_macros`，
 /// 累积导出宏，拼成单一 decl 序列（`bench_check_nf` 需要 `&[Decl]`）。
 /// 返回 (decls, 每文件 decl 数, 首个失败文件)。
-fn parse_prelude(files: &[(&str, &str)]) -> (Vec<Decl>, Vec<(String, usize)>, Option<String>) {
+fn parse_prelude(
+    files: &[(&str, &str)],
+) -> (Vec<Decl>, Vec<(String, usize)>, Option<String>, Vec<usize>) {
     let mut macros: HashMap<String, Vec<MacroRule>> = Default::default();
     let mut all: Vec<Decl> = Vec::new();
     let mut counts: Vec<(String, usize)> = Vec::new();
     let mut failed: Option<String> = None;
+    let mut nat_after: Vec<usize> = Vec::new();
     for (i, (name, src)) in files.iter().enumerate() {
         let pre = L13_namespace::preprocess(src);
         match parser_with_macros(&pre, i as u32, &macros) {
@@ -150,6 +153,9 @@ fn parse_prelude(files: &[(&str, &str)]) -> (Vec<Decl>, Vec<(String, usize)>, Op
                 }
                 counts.push((name.to_string(), decls.len()));
                 all.extend(decls);
+                if *name == "nat" && !all.is_empty() {
+                    nat_after.push(all.len() - 1);
+                }
             }
             None => {
                 failed = Some(name.to_string());
@@ -157,19 +163,19 @@ fn parse_prelude(files: &[(&str, &str)]) -> (Vec<Decl>, Vec<(String, usize)>, Op
             }
         }
     }
-    (all, counts, failed)
+    (all, counts, failed, nat_after)
 }
 
 /// 跑一个 decl 序列的两版口径，返回 (basic_nf, fast_nf, 两版是否一致)。
-fn nf_parity(decls: &[Decl]) -> (u64, u64, bool) {
-    let b = L13_namespace::bench_check_nf(decls);
+fn nf_parity(decls: &[Decl], nat_after: &[usize]) -> (u64, u64, bool) {
+    let b = L13_namespace::bench_check_nf_bounded(decls, nat_after);
     let mut t = fast::Tycker::new();
-    let f = t.bench_check_nf(decls);
+    let f = t.bench_check_nf_bounded(decls, nat_after);
     (b, f, b == f && b != 0)
 }
 
 /// 诊断：逐 decl 喂孪生，报首个失败的 decl 序号与错误（twin 早退时定位用）。
-fn diagnose_fast(label: &str, decls: &[Decl]) {
+fn diagnose_fast(label: &str, decls: &[Decl], nat_after: &[usize]) {
     if std::env::var_os("L13BENCH_DIAG").is_none() {
         return;
     }
@@ -178,7 +184,8 @@ fn diagnose_fast(label: &str, decls: &[Decl]) {
     let mut hi = decls.len();
     let fails = |n: usize| -> bool {
         let mut t = fast::Tycker::new();
-        t.run_decls(&decls[..n]).is_err()
+        let bounds: Vec<usize> = nat_after.iter().copied().filter(|&i| i < n).collect();
+        t.run_decls_bounded(&decls[..n], &bounds).is_err()
     };
     if !fails(decls.len()) {
         println!("   [diag] {label}: twin 全部 {} decls 通过", decls.len());
@@ -222,10 +229,10 @@ fn decl_name_of(d: &Decl) -> String {
     }
 }
 
-fn bench_one(label: &str, decls: &[Decl], cli: &Cli, want: &dyn Fn(&str) -> bool) {
+fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: &dyn Fn(&str) -> bool) {
     // 计时外：正确性互检
-    let (b_nf, f_nf, ok) = nf_parity(decls);
-    diagnose_fast(label, decls);
+    let (b_nf, f_nf, ok) = nf_parity(decls, nat_after);
+    diagnose_fast(label, decls, nat_after);
     let verdict = if ok {
         format!("nf={b_nf}")
     } else {
@@ -238,23 +245,23 @@ fn bench_one(label: &str, decls: &[Decl], cli: &Cli, want: &dyn Fn(&str) -> bool
     let mut ts_ss: Vec<u128> = Vec::new();
     let mut tycker_ss = if want("fast_ss") { Some(fast::Tycker::new()) } else { None };
     if let Some(t) = tycker_ss.as_mut() {
-        t.bench_check_nf(decls);
+        t.bench_check_nf_bounded(decls, nat_after);
     }
     for _ in 0..cli.rounds {
         if let Some(t) = tycker_ss.as_mut() {
             let s = Instant::now();
-            t.bench_check_nf(decls);
+            t.bench_check_nf_bounded(decls, nat_after);
             ts_ss.push(s.elapsed().as_micros());
         }
         if want("fast") {
             let s = Instant::now();
             let mut t = fast::Tycker::new();
-            t.bench_check_nf(decls);
+            t.bench_check_nf_bounded(decls, nat_after);
             ts_fast.push(s.elapsed().as_micros());
         }
         if want("basic") {
             let s = Instant::now();
-            L13_namespace::bench_check_nf(decls);
+            L13_namespace::bench_check_nf_bounded(decls, nat_after);
             ts_basic.push(s.elapsed().as_micros());
         }
     }
@@ -319,7 +326,7 @@ fn run(cli: Cli) {
                         eprintln!("parse failed at k={k}");
                         continue;
                     };
-                    bench_one(&format!("{workload} k={k}"), &decls, &cli, &want);
+                    bench_one(&format!("{workload} k={k}"), &decls, &[], &cli, &want);
                 }
             }
             "prelude-core" | "prelude-core-show" | "prelude-hdl" => {
@@ -330,18 +337,18 @@ fn run(cli: Cli) {
                 if workload == "prelude-hdl" {
                     files.extend_from_slice(HDL);
                 }
-                let (decls, counts, failed) = parse_prelude(&files);
+                let (decls, counts, failed, nat_after) = parse_prelude(&files);
                 for (n, c) in &counts {
                     println!("   parsed {n}: {c} decls");
                 }
                 if let Some(f) = &failed {
                     println!("   PARSE-FAILED at {f}");
                 }
-                bench_one(workload, &decls, &cli, &want);
+                bench_one(workload, &decls, &nat_after, &cli, &want);
             }
             "examples-hdl" => {
                 // 核心 prelude + 每个 example 单独一段（避免宏跨文件冲突）
-                let (prelude_decls, _c, _f) = parse_prelude(CORE);
+                let (prelude_decls, _c, _f, core_nat) = parse_prelude(CORE);
                 let mut examples: Vec<(String, String)> = Vec::new();
                 for e in [
                     include_str!("../../examples/hdl/01-basics.typort"),
@@ -363,7 +370,7 @@ fn run(cli: Cli) {
                             continue;
                         }
                     }
-                    bench_one(&format!("examples-hdl[{i}]"), &decls, &cli, &want);
+                    bench_one(&format!("examples-hdl[{i}]"), &decls, &core_nat, &cli, &want);
                 }
             }
             other => eprintln!("unknown workload: {other}"),

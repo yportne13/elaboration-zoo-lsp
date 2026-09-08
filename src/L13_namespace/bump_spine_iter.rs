@@ -143,6 +143,18 @@ enum PrimId {
     FileAppendAllText,
     FileExists,
     FileDelete,
+    /// `nat_to_dec`：Nat → 十进制字符串（`count_nat_forced`）。
+    NatToDec,
+    /// `width_range`：Nat 宽度 → Verilog `"[N-1:0] "`（N≤1 空串）。
+    WidthRange,
+    /// `nat_is_ground`：Nat 是否全具体 → decl 表的 `true`/`false`。
+    NatIsGround,
+    /// Nat 五则算术（word-size primop，复刻 `nat.typort` 结构递归的可归约性）。
+    NatAdd,
+    NatMul,
+    NatSub,
+    NatDiv,
+    NatRem,
 }
 
 /// 可变全局表 + def-replay 备忘（参考版 `Infer.mutable_map` +
@@ -1033,6 +1045,109 @@ fn vapp1<'a>(
 
 /// prim 执行（参考版 cxt.rs 各 `PrimFunc` 的逐句移植；实参自然序）。
 /// `None` = 卡住（调用方留 spine 上等再 force）。文件 IO 原样落盘/
+/// Nat prim 的共享辅助（参考版 cxt.rs 同名函数的逐句移植）。
+///
+/// `count_nat_forced`：Nat 值走成 u64（原生 `Nat(k)` 直取，succ 链逐层 +1，
+/// 卡住尾 → 0）。`nat_concrete`：仅全具体才有值。`nat_succ_inner`：
+/// `succ d` 的 d（要求已 force）。`nat_succ_shape`：装配 `succ inner`。
+/// `stuck_decl`：把 prim 名 + 实参装成卡住 `Decl` 链。
+fn count_nat_forced(
+    bump: &Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'_>,
+    mutable: &RefCell<Mutable>,
+    val: V,
+) -> u64 {
+    let mut count = 0u64;
+    let mut current = force(bump, spine, defs, metas, decl, mutable, val);
+    loop {
+        if v_tag(current) != 7 {
+            return 0;
+        }
+        match v_xcell_of(current) {
+            XCell::Nat(k) => return count.checked_add(*k).unwrap_or(0),
+            XCell::SumCase { index: 0, .. } => return count,
+            XCell::SumCase { index: 1, datas, .. } => match datas.first() {
+                Some(d) => {
+                    count = match count.checked_add(1) {
+                        Some(c) => c,
+                        None => return 0,
+                    };
+                    current = force(bump, spine, defs, metas, decl, mutable, d.val);
+                }
+                None => return 0,
+            },
+            _ => return 0,
+        }
+    }
+}
+
+/// 全具体 Nat → u64（未压缩的 `zero` 也算 0）；卡住一律 None。
+fn nat_concrete(
+    bump: &Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'_>,
+    mutable: &RefCell<Mutable>,
+    v: V,
+) -> Option<u64> {
+    let f = force(bump, spine, defs, metas, decl, mutable, v);
+    if v_tag(f) != 7 {
+        return None;
+    }
+    match v_xcell_of(f) {
+        XCell::Nat(k) => Some(*k),
+        XCell::SumCase { typ, index: 0, datas, .. } if datas.is_empty() => {
+            if is_nat_sum_v(force(bump, spine, defs, metas, decl, mutable, *typ)) {
+                Some(0)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `succ d` 链的内层 d（要求 v 已 force）；其余（含原生 `Nat(k)`）→ None。
+fn nat_succ_inner(v: V) -> Option<V> {
+    if v_tag(v) != 7 {
+        return None;
+    }
+    match v_xcell_of(v) {
+        XCell::SumCase { typ, index: 1, datas, .. }
+            if datas.len() == 1 && is_nat_sum_v(*typ) =>
+        {
+            Some(datas[0].val)
+        }
+        _ => None,
+    }
+}
+
+/// 装配 `succ inner`（Nat 类型缺失 → None）。
+fn nat_succ_shape<'a>(bump: &'a Bump, decl: &Decls<'a>, inner: V) -> Option<V> {
+    let nat_ty = decl.get("Nat")?.val;
+    let ds: &'a [SumDataV<'a>] =
+        bump.alloc([SumDataV { name: "n", val: inner, icit: Icit::Expl }]);
+    Some(v_xcell(bump.alloc(XCell::SumCase {
+        typ: nat_ty,
+        index: 1,
+        datas: ds,
+        is_trait: false,
+    })))
+}
+
+/// 卡住应用 `name args...`（参考版 `stuck_decl`：`Val::Decl(name, spine)`）。
+fn stuck_decl<'a>(bump: &'a Bump, spine: &mut Spine, name: &str, args: &[V]) -> V {
+    let mut acc = v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(name) }));
+    for a in args {
+        acc = spine.push(acc, *a, Icit::Expl);
+    }
+    acc
+}
+
 /// 崩溃（parity 套件不触达；与参考版行为一致）。
 #[allow(clippy::too_many_arguments)]
 fn prim_exec<'a>(
@@ -1245,6 +1360,157 @@ fn prim_exec<'a>(
             std::fs::remove_file(path)
                 .unwrap_or_else(|e| panic!("file_delete: failed to delete '{}': {}", path, e));
             Some(v_u(0))
+        }
+        // ── nat 族（参考版 cxt.rs 同名 PrimFunc 逐句）──
+        PrimId::NatToDec => {
+            let n = count_nat_forced(bump, spine, defs, metas, decl, mutable, arg(0)?);
+            Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&n.to_string())))))
+        }
+        PrimId::WidthRange => {
+            let w = count_nat_forced(bump, spine, defs, metas, decl, mutable, arg(0)?);
+            let s = if w <= 1 { String::new() } else { format!("[{}:0] ", w - 1) };
+            Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&s)))))
+        }
+        PrimId::NatIsGround => {
+            let mut cur = force(bump, spine, defs, metas, decl, mutable, arg(0)?);
+            let ground = loop {
+                if v_tag(cur) != 7 {
+                    break false;
+                }
+                match v_xcell_of(cur) {
+                    XCell::Nat(_) => break true,
+                    XCell::SumCase { index: 0, .. } => break true,
+                    XCell::SumCase { index: 1, datas, .. } => match datas.first() {
+                        Some(d) => cur = force(bump, spine, defs, metas, decl, mutable, d.val),
+                        None => break false,
+                    },
+                    _ => break false,
+                }
+            };
+            let name = if ground { "true" } else { "false" };
+            Some(decl.get(name).map(|e| e.val).unwrap_or_else(|| {
+                v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(name) }))
+            }))
+        }
+        // nat_add x y：y≡0 → x（无条件）；双具体 → u64；y≡succ⟨d⟩ →
+        // succ (nat_add x d)；y=Nat(k>0) 且 x 非具体 → 展开 succ^k x。
+        PrimId::NatAdd => {
+            if args.len() < 2 {
+                return None;
+            }
+            let x = args[0].0;
+            let y = force(bump, spine, defs, metas, decl, mutable, args[1].0);
+            if nat_concrete(bump, spine, defs, metas, decl, mutable, y) == Some(0) {
+                return Some(x);
+            }
+            if let (Some(a), Some(b)) = (
+                nat_concrete(bump, spine, defs, metas, decl, mutable, x),
+                nat_concrete(bump, spine, defs, metas, decl, mutable, y),
+            ) {
+                return a.checked_add(b).map(|k| v_xcell(bump.alloc(XCell::Nat(k))));
+            }
+            if let Some(d) = nat_succ_inner(y) {
+                let inner = stuck_decl(bump, spine, "nat_add", &[x, d]);
+                return nat_succ_shape(bump, decl, inner);
+            }
+            if v_tag(y) == 7 {
+                if let XCell::Nat(k) = v_xcell_of(y) {
+                    let mut inner = x;
+                    for _ in 0..*k {
+                        inner = nat_succ_shape(bump, decl, inner)?;
+                    }
+                    return Some(inner);
+                }
+            }
+            None
+        }
+        // nat_mul x y：y≡0 → 0；双具体 → u64；y≡succ⟨d⟩ → x + (x * d)；
+        // y=Nat(k>0) → k 层 add 链。
+        PrimId::NatMul => {
+            if args.len() < 2 {
+                return None;
+            }
+            let x = args[0].0;
+            let y = force(bump, spine, defs, metas, decl, mutable, args[1].0);
+            if nat_concrete(bump, spine, defs, metas, decl, mutable, y) == Some(0) {
+                return Some(v_xcell(bump.alloc(XCell::Nat(0))));
+            }
+            if let (Some(a), Some(b)) = (
+                nat_concrete(bump, spine, defs, metas, decl, mutable, x),
+                nat_concrete(bump, spine, defs, metas, decl, mutable, y),
+            ) {
+                return a.checked_mul(b).map(|k| v_xcell(bump.alloc(XCell::Nat(k))));
+            }
+            if let Some(d) = nat_succ_inner(y) {
+                let inner = stuck_decl(bump, spine, "nat_mul", &[x, d]);
+                return Some(stuck_decl(bump, spine, "nat_add", &[x, inner]));
+            }
+            if v_tag(y) == 7 {
+                if let XCell::Nat(k) = v_xcell_of(y) {
+                    let mut acc = v_xcell(bump.alloc(XCell::Nat(0)));
+                    for _ in 0..*k {
+                        acc = stuck_decl(bump, spine, "nat_add", &[x, acc]);
+                    }
+                    return Some(acc);
+                }
+            }
+            None
+        }
+        // nat_sub x y：x≡0 → 0；双具体 → saturating_sub；x≡succ⟨dx⟩ 时按 y
+        // 分支；x 卡住 → None（**不得**返回 x）。
+        PrimId::NatSub => {
+            if args.len() < 2 {
+                return None;
+            }
+            let x = force(bump, spine, defs, metas, decl, mutable, args[0].0);
+            let y = force(bump, spine, defs, metas, decl, mutable, args[1].0);
+            let xc = nat_concrete(bump, spine, defs, metas, decl, mutable, x);
+            let yc = nat_concrete(bump, spine, defs, metas, decl, mutable, y);
+            if xc == Some(0) {
+                return Some(v_xcell(bump.alloc(XCell::Nat(0))));
+            }
+            if let (Some(a), Some(b)) = (xc, yc) {
+                return Some(v_xcell(bump.alloc(XCell::Nat(a.saturating_sub(b)))));
+            }
+            if let Some(dx) = nat_succ_inner(x) {
+                return match yc {
+                    Some(0) => Some(x),
+                    Some(b) => Some(stuck_decl(
+                        bump,
+                        spine,
+                        "nat_sub",
+                        &[dx, v_xcell(bump.alloc(XCell::Nat(b - 1)))],
+                    )),
+                    _ => nat_succ_inner(y)
+                        .map(|dy| stuck_decl(bump, spine, "nat_sub", &[dx, dy])),
+                };
+            }
+            None
+        }
+        // nat_div / nat_rem：仅全具体快路径；y==0 返回 x。
+        PrimId::NatDiv => {
+            if args.len() < 2 {
+                return None;
+            }
+            let x = nat_concrete(bump, spine, defs, metas, decl, mutable, args[0].0);
+            let y = nat_concrete(bump, spine, defs, metas, decl, mutable, args[1].0);
+            match (x, y) {
+                (Some(a), Some(0)) => Some(v_xcell(bump.alloc(XCell::Nat(a)))),
+                (Some(a), Some(b)) => Some(v_xcell(bump.alloc(XCell::Nat(a / b)))),
+                _ => None,
+            }
+        }
+        PrimId::NatRem => {
+            if args.len() < 2 {
+                return None;
+            }
+            let x = nat_concrete(bump, spine, defs, metas, decl, mutable, args[0].0);
+            let y = nat_concrete(bump, spine, defs, metas, decl, mutable, args[1].0);
+            match (x, y) {
+                (Some(a), Some(0)) => Some(v_xcell(bump.alloc(XCell::Nat(a)))),
+                (Some(a), Some(b)) => Some(v_xcell(bump.alloc(XCell::Nat(a % b)))),
+                _ => None,
+            }
         }
     }
 }
@@ -10751,6 +11017,41 @@ impl Machine {
         cxt
     }
 
+    /// nat 族内建注册（参考版 `Cxt::register_nat_builtins` 逐条对应）：
+    /// `nat_to_dec` / `width_range` / `nat_is_ground` + 五则算术 primop。
+    /// **时机**：参考版在 nat.typort 加载后调用（该文件的 `+`/`-` impl 体要
+    /// 能解析这些名字，故先有递归 def 兜底、再由 prim 覆盖）。
+    fn register_nat_builtins<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>) -> Cxt<'a> {
+        let nat = bump.alloc(Tm::Decl(bump.alloc_str("Nat")));
+        let st = bump.alloc(Tm::Decl(bump.alloc_str("String")));
+        let boolean = bump.alloc(Tm::Decl(bump.alloc_str("Boolean")));
+        let pi = |bump: &'a Bump, args: Vec<(&'static str, &'a Tm<'a>)>, ret: &'a Tm<'a>| -> &'a Tm<'a> {
+            args.iter().rev().fold(ret, |acc, (n, d)| {
+                bump.alloc(Tm::Pi(bump.alloc_str(n), Icit::Expl, *d, acc))
+            })
+        };
+        let nat2 = || pi(bump, vec![("x", nat), ("y", nat)], nat);
+        let builtins: Vec<(&'static str, PrimId, &'a Tm<'a>)> = vec![
+            ("nat_to_dec", PrimId::NatToDec, pi(bump, vec![("n", nat)], st)),
+            ("width_range", PrimId::WidthRange, pi(bump, vec![("w", nat)], st)),
+            ("nat_is_ground", PrimId::NatIsGround, pi(bump, vec![("w", nat)], boolean)),
+            ("nat_add", PrimId::NatAdd, nat2()),
+            ("nat_mul", PrimId::NatMul, nat2()),
+            ("nat_sub", PrimId::NatSub, nat2()),
+            ("nat_div", PrimId::NatDiv, nat2()),
+            ("nat_rem", PrimId::NatRem, nat2()),
+        ];
+        let mut cxt = clone_cxt(cxt);
+        for (name, pid, ty_tm) in builtins {
+            let vty = self.eval(bump, &cxt, EMPTY_ENV, ty_tm);
+            let nm = bump.alloc_str(name);
+            let placeholder = bump.alloc(Tm::Decl(nm));
+            let val = v_xcell(bump.alloc(XCell::Decl { name: nm }));
+            cxt = self.decl_reg(bump, &cxt, name, placeholder, val, ty_tm, vty, Some(pid));
+        }
+        cxt
+    }
+
     fn elab_all<'a>(
         &mut self,
         bump: &'a Bump,
@@ -10866,14 +11167,27 @@ impl Tycker {
     /// builtin 重注册 + 逐 decl 推断，println 的 nf 经 pretty 输出（quote
     /// 走记忆化口径——与无记忆化输出逐字节一致，L03-L06 已证）。
     pub(crate) fn run_decls(&mut self, ast: &[Decl]) -> Result<String, Error> {
+        self.run_decls_bounded(ast, &[])
+    }
+
+    /// [`Tycker::run_decls`] 的带 nat 注册边界变体：`nat_after` 的下标后注册
+    /// nat 内建（镜像参考版按文件边界调用 `register_nat_builtins`）。
+    pub(crate) fn run_decls_bounded(
+        &mut self,
+        ast: &[Decl],
+        nat_after: &[usize],
+    ) -> Result<String, Error> {
         self.bump.reset();
         self.machine.clear_round();
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
-        for d in ast {
+        for (i, d) in ast.iter().enumerate() {
             let (out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
             cxt = nc;
+            if nat_after.contains(&i) {
+                cxt = self.machine.register_nat_builtins(bump, &cxt);
+            }
             // HDL 自检警告：逐 decl 排水（行级去重——参考版
             // take_fresh_check_issues + format_check_warning）
             {
@@ -10973,6 +11287,36 @@ impl Tycker {
         } else {
             self.machine.quote(bump, &_cxt, 0, v)
         };
+        tm_size(q)
+    }
+
+    /// 带 nat 注册边界的 check+nf 口径（bench 用）：与 [`Tycker::bench_check_nf`]
+    /// 同，但在 `nat_after` 的下标后注册 nat 内建（镜像参考版按文件边界调用
+    /// `register_nat_builtins`）。多文件 prelude 拼成单一 decl 序列时用。
+    pub(crate) fn bench_check_nf_bounded(&mut self, ast: &[Decl], nat_after: &[usize]) -> u64 {
+        self.bump.reset();
+        self.machine.clear_round();
+        let bump = &self.bump;
+        let mut cxt = self.machine.prime_round(bump);
+        let mut last: Option<V> = None;
+        for (i, d) in ast.iter().enumerate() {
+            match self.machine.infer_decl(bump, &cxt, d) {
+                Ok((out, nc)) => {
+                    cxt = nc;
+                    if nat_after.contains(&i) {
+                        cxt = self.machine.register_nat_builtins(bump, &cxt);
+                    }
+                    if let DeclOut::Def { name } = out {
+                        last = cxt.decls.get(name).map(|e| e.val);
+                    }
+                }
+                Err(_) => return 0,
+            }
+        }
+        let Some(v) = last else {
+            return 0;
+        };
+        let q = self.machine.quote(bump, &cxt, 0, v);
         tm_size(q)
     }
 }
