@@ -3200,12 +3200,12 @@ impl RenBuf {
     /// 整表克隆会背上历史最高 level 的死重；水位之上的条目本代无效，
     /// `get` 视同缺项，语义不变。
     fn clone_valid(&self) -> RenBuf {
-        let mut end = 0usize;
-        for (i, g) in self.stamp.iter().enumerate() {
-            if *g == self.epoch {
-                end = i + 1;
-            }
-        }
+        // 自尾回看取高水位：本代最后写入的槽通常就在尾部，几步即命中
+        let end = self
+            .stamp
+            .iter()
+            .rposition(|&g| g == self.epoch)
+            .map_or(0, |i| i + 1);
         RenBuf {
             val: self.val[..end].to_vec(),
             stamp: self.stamp[..end].to_vec(),

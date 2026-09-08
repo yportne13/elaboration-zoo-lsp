@@ -3847,10 +3847,19 @@ impl RenBuf {
     }
     /// 整表逐代克隆（卡住 match 分支体的嵌套 renaming 用——参考版按分支
     /// clone 整个 HashMap 的对应物；克隆保持同代，lift 只写进克隆）。
+    /// 只克隆到本代有效高水位（stamp==epoch 的最高槽）：容量只增不减，
+    /// 整表克隆会背上历史最高 level 的死重；水位之上的条目本代无效，
+    /// `get` 视同缺项，语义不变。
     fn clone_valid(&self) -> RenBuf {
+        // 自尾回看取高水位：本代最后写入的槽通常就在尾部，几步即命中
+        let end = self
+            .stamp
+            .iter()
+            .rposition(|&g| g == self.epoch)
+            .map_or(0, |i| i + 1);
         RenBuf {
-            val: self.val.clone(),
-            stamp: self.stamp.clone(),
+            val: self.val[..end].to_vec(),
+            stamp: self.stamp[..end].to_vec(),
             epoch: self.epoch,
         }
     }
