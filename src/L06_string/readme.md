@@ -98,8 +98,14 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
   互检只比判定，唯一例外是 icit 失配与命名 λ 两类不含 Span 的消息全文
   一致。
 - **不可应用值**：参考版 `v_app` 对 Π/U/字面量的应用 panic（"impossible"）；
-  快版照 L05 惯例压栈成卡住链（良类型程序不可达；两版都会在后续比较中
-  失败，只是失败形态不同）。
+  快版照 L05 惯例压栈成卡住链。历史上"良类型程序不可达"的论断有一个
+  源码级反例：`string_to_global_type` 把 def 的登记值（可以是 λ）当
+  "动态类型"返回后，λ 值会以类型身份流入 unify（如 `def f : U -> U =
+  x => x` 之后 `get_global "f"` 的类型就是 f 的 λ 值），unify 的 η 臂对
+  字面量/U/Π 做 η 应用即触发该 panic（参考版崩溃、快版 Err——判定发散）。
+  已修：η 两臂加**可应用性守卫**（只对 Flex/Rigid/Decl 头展开；两版
+  同步），λ 与非函数值的比较一致判失败——`can't unify`。`v_app` 的
+  panic 分支仍保留（其余路径确实不可达）。
 - **`Span` 的 PartialEq 只比 data**（`parser_lib.rs` 自定义实现）：命名
   λ 按名匹配 Π、Decl 头同名可合一——快版按内容比较，一致。
 - **顶层程序形态**：无尾表达式；parser 要求 decl 流吃完全部 token，
