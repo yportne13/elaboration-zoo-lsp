@@ -835,6 +835,7 @@ fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
+    stack: &mut Vec<UItem<'a>>,
     vals: &mut Vec<V>,
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
@@ -851,7 +852,7 @@ fn unify_iter<'a>(
     conv.scratch1.clear();
     conv.scratch2.clear();
     let memo = &mut conv.memo;
-    let mut stack: Vec<UItem<'a>> = Vec::new();
+    stack.clear();
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
@@ -1364,6 +1365,10 @@ pub(crate) struct Machine {
     /// bind/define 的撤销轨迹：(名字, 旧值)。`Cxt.mark` 记各上下文的
     /// trail 长度，退出即截断。new_binder 不留轨迹、mark 不动。
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
+    /// [A/B 实验] 常驻 eval 工作栈（lifetime 洗白存储）。
+    workbuf: Vec<W<'static>>,
+    /// [A/B 实验] 常驻 unify 工作表。
+    unifybuf: Vec<UItem<'static>>,
 }
 
 /// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都
@@ -1389,6 +1394,8 @@ impl Machine {
             ren: RenBuf::default(),
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
+            workbuf: Vec::new(),
+            unifybuf: Vec::new(),
         }
     }
 
@@ -1498,11 +1505,13 @@ impl Machine {
         self.eval(bump, env, m)
     }
 
-    fn eval<'a>(&mut self, bump: &'a Bump, env: Env, tm: &'a Tm<'a>) -> V {
+    fn eval<'a>(&mut self, bump: &'a Bump, env: Env<'a>, tm: &'a Tm<'a>) -> V {
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         eval_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
+            work,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
@@ -1548,11 +1557,16 @@ impl Machine {
         )
     }
 
-    fn unify(&mut self, bump: &Bump, l: u32, t: V, u: V) -> bool {
+    fn unify<'a>(&mut self, bump: &'a Bump, l: u32, t: V, u: V) -> bool {
+        let stack: &mut Vec<UItem<'a>> =
+            unsafe { &mut *(&mut self.unifybuf as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         unify_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
+            work,
+            stack,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,

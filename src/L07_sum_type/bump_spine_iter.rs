@@ -56,6 +56,8 @@ use super::parser::syntax::{Decl, Either, Icit, Pattern, Raw};
 use super::pretty::pretty_tm;
 use super::{empty_span, Error, Ix, MetaVar, PatternDetail, Tm as CTm};
 
+
+
 // syntax（bump 内的项表示）
 // --------------------------------------------------------------------------------
 
@@ -2529,6 +2531,7 @@ fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
+    mut stack: &mut Vec<UItem<'a>>,
     vals: &mut Vec<V>,
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
@@ -2550,7 +2553,7 @@ fn unify_iter<'a>(
     conv.scratch1.clear();
     conv.scratch2.clear();
     let memo = &mut conv.memo;
-    let mut stack: Vec<UItem<'a>> = Vec::new();
+    stack.clear();
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
@@ -4267,6 +4270,12 @@ pub(crate) struct Machine {
     /// 当前可被特化方程求解的 rigid 层级（= 当前子句的 bind 槽）。只在
     /// 模式走查与探测期间非空；分支体检查期间必须为空。
     pm_solvable: Vec<u32>,
+    /// [perf] 常驻 eval/unify/quote 工作栈（lifetime 洗白存储：核函数进入
+    /// 即 clear，条目仅在核函数活动期被读，bump 生命期覆盖之，跨轮无读取）。
+    workbuf: Vec<W<'static>>,
+    unifybuf: Vec<UItem<'static>>,
+    qtasks: Vec<QJob<'static>>,
+    qdone: Vec<&'static Tm<'static>>,
 }
 
 impl Machine {
@@ -4287,6 +4296,10 @@ impl Machine {
             fuel: Cell::new(UNIFY_FUEL),
             pm_defs: Vec::new(),
             pm_solvable: Vec::new(),
+            workbuf: Vec::new(),
+            unifybuf: Vec::new(),
+            qtasks: Vec::new(),
+            qdone: Vec::new(),
         }
     }
 
@@ -4487,8 +4500,18 @@ impl Machine {
             a
         } else {
             let q = self.quote(bump, &cxt.decl.borrow(), cxt.lvl, a);
-            if cxt.binds == 0 && !has_free_var(q) {
-                self.eval(bump, &cxt.decl.borrow(), EMPTY_ENV, q)
+            if let Some(k) = bind_prefix_of_telescope(cxt.locals) {
+                // 快路径：bind 段闭 Π、define 槽由 cxt.env 快照（平坦 def
+                // 区）供给，免全 close 的 Θ(层深²) Let 链重建与重求值（论证
+                // 见 L05 同名分支注释）。
+                let mut b = q;
+                let mut ls = cxt.locals;
+                for _ in 0..k {
+                    let n = ls.expect("bind 段长度已验证");
+                    b = bump.alloc(Tm::Pi(n.name, Icit::Expl, n.a_t, b));
+                    ls = n.next;
+                }
+                self.eval(bump, &cxt.decl.borrow(), cxt.env, b)
             } else {
                 let closed = self.close_tm(bump, cxt.locals, q);
                 self.eval(bump, &cxt.decl.borrow(), EMPTY_ENV, closed)
@@ -4556,12 +4579,15 @@ impl Machine {
             mutable_map,
             fuel,
             pm_defs,
+            workbuf,
             ..
         } = self;
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         eval_iter(
             bump,
             spine,
-            &mut Vec::new(),
+            work,
             vals,
             icits,
             defs,
@@ -4591,14 +4617,23 @@ impl Machine {
             mutable_map,
             fuel,
             pm_defs,
+            workbuf,
+            qtasks,
+            qdone,
             ..
         } = self;
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> =
+            unsafe { &mut *(qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         quote_iter(
             bump,
             spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             vals,
             icits,
             defs,
@@ -4630,15 +4665,24 @@ impl Machine {
             mutable_map,
             fuel,
             pm_defs,
+            workbuf,
+            qtasks,
+            qdone,
             ..
         } = self;
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> =
+            unsafe { &mut *(qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         let mut memo: QuoteMemo<'a> = FxHashMap::default();
         quote_iter(
             bump,
             spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             vals,
             icits,
             defs,
@@ -4653,9 +4697,9 @@ impl Machine {
         )
     }
 
-    fn unify(
+    fn unify<'a>(
         &mut self,
-        bump: &Bump,
+        bump: &'a Bump,
         decls: &FxHashMap<String, DeclEntryF>,
         l: u32,
         t: V,
@@ -4673,12 +4717,19 @@ impl Machine {
             fuel,
             pm_defs,
             pm_solvable,
+            workbuf,
+            unifybuf,
             ..
         } = self;
+        let stack: &mut Vec<UItem<'a>> =
+            unsafe { &mut *(unifybuf as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         unify_iter(
             bump,
             spine,
-            &mut Vec::new(),
+            work,
+            stack,
             vals,
             icits,
             defs,
@@ -5539,6 +5590,26 @@ enum DeclOut<'a> {
 
 /// 项里是否含自由 `Var`（按 binder 深度算）。`fresh_meta` 快捷路径 2 的
 /// 判据（保守：自由 ⇒ 走全构造）。
+/// locals 链形态判定（见 L05 同名函数）：头 bind 段长 k + 其后全 define
+/// → Some(k)；交错 → None。
+fn bind_prefix_of_telescope(mut ls: Option<&LCons<'_>>) -> Option<u32> {
+    let mut k = 0u32;
+    while let Some(n) = ls {
+        if n.t_t.is_none() {
+            k += 1;
+            ls = n.next;
+        } else {
+            break;
+        }
+    }
+    for n in std::iter::successors(ls, |l| l.next) {
+        if n.t_t.is_none() {
+            return None;
+        }
+    }
+    Some(k)
+}
+
 fn has_free_var(t: &Tm<'_>) -> bool {
     let mut stack: Vec<(&Tm<'_>, u32)> = vec![(t, 0)];
     while let Some((x, d)) = stack.pop() {

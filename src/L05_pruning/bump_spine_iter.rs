@@ -409,8 +409,7 @@ fn force<'a>(
                                 let c = v_clo_of(t);
                                 let env = env_ext(bump, c.env, a);
                                 t = eval_iter(
-                                    bump, spine, work, vals, icits, defs, metas, env, c.body,
-                                );
+                                    bump, spine, work, vals, icits, defs, metas, env, c.body);
                             } else {
                                 t = spine.push(t, a, i);
                             }
@@ -995,6 +994,7 @@ fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
+    mut stack: &mut Vec<UItem<'a>>,
     vals: &mut Vec<V>,
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
@@ -1011,7 +1011,7 @@ fn unify_iter<'a>(
     conv.scratch1.clear();
     conv.scratch2.clear();
     let memo = &mut conv.memo;
-    let mut stack: Vec<UItem<'a>> = Vec::new();
+    stack.clear();
     stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
@@ -1425,8 +1425,7 @@ fn solve_with_pren_bump<'a>(
     };
     let lam_tm = lams_from_ty(bump, spine, work, vals, icits, defs, metas, dom, mty, tm);
     let sol = eval_iter(
-        bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, lam_tm,
-    );
+        bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, lam_tm);
     metas[m as usize] = MetaEntry::Solved(sol, mty);
     true
 }
@@ -1728,8 +1727,7 @@ fn prune_meta_bump<'a>(
     };
     let pruned_tm = prune_ty_bump(bump, spine, work, vals, icits, defs, metas, mask, mty)?;
     let prunedty = eval_iter(
-        bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, pruned_tm,
-    );
+        bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, pruned_tm);
     let mp = metas.len() as u32;
     metas.push(MetaEntry::Unsolved(prunedty));
     // AppPruning 项：掩码外先入链（新槽恒链头 → 最终头 = 最内层）
@@ -1742,8 +1740,7 @@ fn prune_meta_bump<'a>(
         bump, spine, work, vals, icits, defs, metas, mask.len() as u32, mty, ap,
     );
     let sol = eval_iter(
-        bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, lam_tm,
-    );
+        bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, lam_tm);
     metas[m as usize] = MetaEntry::Solved(sol, mty);
     Some(mp)
 }
@@ -1794,8 +1791,7 @@ fn prune_ty_bump<'a>(
             defs,
             metas,
             env_ext(bump, env, v_lvl(cod)),
-            body,
-        );
+            body);
         cod += 1;
         cur = force(bump, spine, work, vals, icits, defs, metas, next);
     }
@@ -1847,8 +1843,7 @@ fn lams_from_ty<'a>(
             defs,
             metas,
             env_ext(bump, env, v_lvl(lp)),
-            body_tm,
-        );
+            body_tm);
         cur = force(bump, spine, work, vals, icits, defs, metas, next);
     }
     let mut t = body;
@@ -1889,6 +1884,12 @@ pub(crate) struct Machine {
     /// bind/define 的撤销轨迹：(名字, 旧值)。`Cxt.mark` 记各上下文的
     /// trail 长度，退出即截断。new_binder 不留轨迹、mark 不动。
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
+    /// [perf] 常驻 eval/unify/quote 工作栈（lifetime 洗白存储：核函数进入
+    /// 即 clear，条目仅在核函数活动期被读，bump 生命期覆盖之，跨轮无读取）。
+    workbuf: Vec<W<'static>>,
+    unifybuf: Vec<UItem<'static>>,
+    qtasks: Vec<QJob<'static>>,
+    qdone: Vec<&'static Tm<'static>>,
 }
 
 /// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都是
@@ -1918,6 +1919,10 @@ impl Machine {
             ren: RenBuf::default(),
             name_map: FxHashMap::default(),
             name_trail: Vec::new(),
+            workbuf: Vec::new(),
+            unifybuf: Vec::new(),
+            qtasks: Vec::new(),
+            qdone: Vec::new(),
         }
     }
 
@@ -2071,8 +2076,24 @@ impl Machine {
             a
         } else {
             let q = self.quote(bump, cxt.lvl, a);
-            if cxt.binds == 0 && !has_free_var(q) {
-                self.eval(bump, EMPTY_ENV, q)
+            if let Some(k) = bind_prefix_of_telescope(cxt.locals) {
+                // 快路径：locals 链 = 头部连续 k 个 bind 槽 + 其后全 define
+                // （k=0 即纯 define 链）。只把 bind 槽闭成 Π；define 槽不再
+                // 闭成 Let——它们的值已在平坦 def 区，eval 用 `cxt.env` 快照
+                // 供给（快照稳定：binds 链不可变、flat 区只追加且 env_nth 读
+                // 固定 (base, len) 窗口）。de Bruijn 对齐：Π 闭 k 层把 q 的
+                // define 槽索引推到「越过 2k 链步后的平坦区、偏移 j-k」，与
+                // 全 close 的 Let 链求值同值；define 引用与 defs 共享指针，
+                // 位相等/记忆化快捷更易命中。交错形态（bind 夹在 define 后）
+                // 回退全 close 路径，语义不变。
+                let mut b = q;
+                let mut ls = cxt.locals;
+                for _ in 0..k {
+                    let n = ls.expect("bind 段长度已验证");
+                    b = bump.alloc(Tm::Pi(n.name, Icit::Expl, n.a_t, b));
+                    ls = n.next;
+                }
+                self.eval(bump, cxt.env, b)
             } else {
                 let closed = self.close_tm(bump, cxt.locals, q);
                 self.eval(bump, EMPTY_ENV, closed)
@@ -2117,11 +2138,13 @@ impl Machine {
         self.eval(bump, env, m)
     }
 
-    fn eval<'a>(&mut self, bump: &'a Bump, env: Env, tm: &'a Tm<'a>) -> V {
+    fn eval<'a>(&mut self, bump: &'a Bump, env: Env<'a>, tm: &'a Tm<'a>) -> V {
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         eval_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
+            work,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
@@ -2132,12 +2155,18 @@ impl Machine {
     }
 
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> =
+            unsafe { &mut *(&mut self.qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
@@ -2151,12 +2180,18 @@ impl Machine {
     /// quote 的记忆化口径（同 L03/L04：表随本次调用新建，绝不跨 reset 持有）。
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
         let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> =
+            unsafe { &mut *(&mut self.qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
@@ -2167,11 +2202,16 @@ impl Machine {
         )
     }
 
-    fn unify(&mut self, bump: &Bump, l: u32, t: V, u: V) -> bool {
+    fn unify<'a>(&mut self, bump: &'a Bump, l: u32, t: V, u: V) -> bool {
+        let stack: &mut Vec<UItem<'a>> =
+            unsafe { &mut *(&mut self.unifybuf as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         unify_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
+            work,
+            stack,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
@@ -2648,6 +2688,27 @@ impl Machine {
 
 /// 项里是否含自由 `Var`（按 binder 深度算：Lam/Pi 体、Let 体 +1）。
 /// `fresh_meta` 快捷路径 2 的判据（保守：自由 ⇒ 走全构造）。
+/// locals 链形态判定：头部连续 `t_t: None`（bind 槽）段之后是否全为
+/// define（`t_t: Some`）到链尾。是 → 返回 bind 段长度 k（可为 0）；链中
+/// define 之后还有 bind（交错）→ None（fresh_meta 回退全 close 路径）。
+fn bind_prefix_of_telescope(mut ls: Option<&LCons<'_>>) -> Option<u32> {
+    let mut k = 0u32;
+    while let Some(n) = ls {
+        if n.t_t.is_none() {
+            k += 1;
+            ls = n.next;
+        } else {
+            break;
+        }
+    }
+    for n in std::iter::successors(ls, |l| l.next) {
+        if n.t_t.is_none() {
+            return None;
+        }
+    }
+    Some(k)
+}
+
 fn has_free_var(t: &Tm<'_>) -> bool {
     let mut stack: Vec<(&Tm<'_>, u32)> = vec![(t, 0)];
     while let Some((x, d)) = stack.pop() {
