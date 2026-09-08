@@ -2752,8 +2752,10 @@ impl Machine {
     /// `AppPruning ?m (cxt.pruning)`。快捷（L05 三级 + tag 6）：
     /// **`binds == 0`** 时常值类型（U / 裸未解 meta / LiteralType，tag
     /// 3/5/6）闭类型恒等（telescope 只剩 Define 的 Let 层——eval 只往 env
-    /// 塞值不添 Π 层）；`quote` 无自由变量则跳过 Let 链直接空环境求值；
-    /// 否则全构造（与参考版同形）。
+    /// 塞值不添 Π 层）；**快捷路径 1**：locals 为"头 bind 段 + 其后全
+    /// define"时只闭 bind 段成 Π、define 槽由 `cxt.env` 快照供给；
+    /// **快捷路径 2**（交错形态的兜底）：`quote` 无自由变量则直接空环境
+    /// 求值；否则全构造（与参考版同形）。
     fn fresh_meta<'a>(&mut self, bump: &'a Bump, cxt: Cxt<'a>, a: V) -> &'a Tm<'a> {
         let mty = if cxt.binds == 0 && matches!(v_tag(a), 3 | 5 | 6) {
             a
@@ -2771,6 +2773,8 @@ impl Machine {
                     ls = n.next;
                 }
                 self.eval(bump, cxt.env, b)
+            } else if cxt.binds == 0 && !has_free_var(q) {
+                self.eval(bump, EMPTY_ENV, q)
             } else {
                 let closed = self.close_tm(bump, cxt.locals, q);
                 self.eval(bump, EMPTY_ENV, closed)
@@ -3514,8 +3518,6 @@ enum DeclOut<'a> {
     Println(&'a Tm<'a>),
 }
 
-/// 项里是否含自由 `Var`（按 binder 深度算）。`fresh_meta` 快捷路径 2 的
-/// 判据（保守：自由 ⇒ 走全构造）。L06 新叶（字面量/类型/名字）无变量。
 /// locals 链形态判定（见 L05 同名函数）：头 bind 段长 k + 其后全 define
 /// → Some(k)；交错 → None。
 fn bind_prefix_of_telescope(mut ls: Option<&LCons<'_>>) -> Option<u32> {
@@ -3536,6 +3538,8 @@ fn bind_prefix_of_telescope(mut ls: Option<&LCons<'_>>) -> Option<u32> {
     Some(k)
 }
 
+/// 项里是否含自由 `Var`（按 binder 深度算）。`fresh_meta` 快捷路径 2 的
+/// 判据（保守：自由 ⇒ 走全构造）。L06 新叶（字面量/类型/名字）无变量。
 fn has_free_var(t: &Tm<'_>) -> bool {
     let mut stack: Vec<(&Tm<'_>, u32)> = vec![(t, 0)];
     while let Some((x, d)) = stack.pop() {

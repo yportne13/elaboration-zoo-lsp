@@ -4579,14 +4579,29 @@ impl Machine {
     /// `AppPruning ?m (cxt.pruning)`。快捷（L05 三级 + tag 6）：
     /// **`binds == 0`** 时常值类型（U / 裸未解 meta / LiteralType，tag
     /// 3/5/6）闭类型恒等（telescope 只剩 Define 的 Let 层——eval 只往 env
-    /// 塞值不添 Π 层）；`quote` 无自由变量则跳过 Let 链直接空环境求值；
-    /// 否则全构造（与参考版同形）。
+    /// 塞值不添 Π 层）；**快捷路径 1**：telescope 为"头 bind 段 + 其后全
+    /// define"时只闭 bind 段成 Π、define 槽由 `cxt.env` 快照供给，免全
+    /// close 的 Θ(层深²) Let 链重建与重求值；**快捷路径 2**（交错形态的
+    /// 兜底）：`quote` 无自由变量则直接空环境求值；否则全构造（与参考版
+    /// 同形）。
     fn fresh_meta<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, a: V) -> &'a Tm<'a> {
         let mty = if cxt.binds == 0 && matches!(v_tag(a), 3 | 5 | 6) {
             a
         } else {
             let q = self.quote(bump, &cxt.decl.borrow(), cxt.lvl, a);
-            if cxt.binds == 0 && !has_free_var(q) {
+            if let Some(k) = bind_prefix_of_telescope(cxt.locals) {
+                // 快路径：bind 段闭 Π、define 槽由 cxt.env 快照（平坦 def
+                // 区）供给，免全 close 的 Θ(层深²) Let 链重建与重求值（论证
+                // 见 L05 同名分支注释）。
+                let mut b = q;
+                let mut ls = cxt.locals;
+                for _ in 0..k {
+                    let n = ls.expect("bind 段长度已验证");
+                    b = bump.alloc(Tm::Pi(n.name, Icit::Expl, n.a_t, b));
+                    ls = n.next;
+                }
+                self.eval(bump, &cxt.decl.borrow(), cxt.env, b)
+            } else if cxt.binds == 0 && !has_free_var(q) {
                 self.eval(bump, &cxt.decl.borrow(), EMPTY_ENV, q)
             } else {
                 let closed = self.close_tm(bump, cxt.locals, q);
@@ -5766,6 +5781,26 @@ enum DeclOut<'a> {
     Def { name: &'a str },
     Println(&'a Tm<'a>),
     Enum,
+}
+
+/// locals 链形态判定（见 L05 同名函数）：头 bind 段长 k + 其后全 define
+/// → Some(k)；交错 → None。
+fn bind_prefix_of_telescope(mut ls: Option<&LCons<'_>>) -> Option<u32> {
+    let mut k = 0u32;
+    while let Some(n) = ls {
+        if n.t_t.is_none() {
+            k += 1;
+            ls = n.next;
+        } else {
+            break;
+        }
+    }
+    for n in std::iter::successors(ls, |l| l.next) {
+        if n.t_t.is_none() {
+            return None;
+        }
+    }
+    Some(k)
 }
 
 /// 项里是否含自由 `Var`（按 binder 深度算）。`fresh_meta` 快捷路径 2 的
