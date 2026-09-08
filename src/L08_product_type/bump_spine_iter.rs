@@ -1032,10 +1032,35 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
                 pending,
                 ..
             } => {
+                // env 槽序与 env_nth 一致：链段（头 = 最内层）先走，平坦区
+                // 倒序——单趟遍历替代 (0..env_len).any(env_nth) 的 O(d²)
+                let env_hit = {
+                    let mut hit = false;
+                    let mut n = env.binds;
+                    while let Some(e) = n {
+                        if val_mentions_lvl(spine, defs, e.val, x) {
+                            hit = true;
+                            break;
+                        }
+                        n = e.next;
+                    }
+                    if !hit {
+                        for k in 0..env.flat_len {
+                            if val_mentions_lvl(
+                                spine,
+                                defs,
+                                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+                                x,
+                            ) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                    }
+                    hit
+                };
                 val_mentions_lvl(spine, defs, *scrutinee, x)
-                    || (0..env_len(*env)).any(|i| {
-                        val_mentions_lvl(spine, defs, env_nth(defs, *env, i), x)
-                    })
+                    || env_hit
                     || pending.iter().any(|(u, _)| val_mentions_lvl(spine, defs, *u, x))
             }
         },
@@ -4220,19 +4245,45 @@ fn struct_env_eq_go(
     b: Env<'_>,
 ) -> bool {
     let la = env_len(a);
-    let lb = env_len(b);
-    if la != lb {
+    if la != env_len(b) {
         return false;
     }
-    (0..la).all(|i| {
-        struct_val_eq_go(
-            budget,
-            spine,
-            defs,
-            env_nth(defs, a, i),
-            env_nth(defs, b, i),
-        )
-    })
+    // 单趟双链迭代（原 (0..la).all(env_nth) 对链段是 O(d²)）：槽序与
+    // env_nth 一致——各自链段先走（头 = 最内层），链尽后平坦区按
+    // `flat_base + flat_len - 1 - k` 倒序读。两侧链/平坦划分可以不同，
+    // 各自独立切换即可（env_nth 同款优先序）。
+    let mut na = a.binds;
+    let mut nb = b.binds;
+    let mut fa = a.flat_base + a.flat_len;
+    let mut fb = b.flat_base + b.flat_len;
+    for _ in 0..la {
+        let va = match na {
+            Some(e) => {
+                let v = e.val;
+                na = e.next;
+                v
+            }
+            None => {
+                fa -= 1;
+                defs[fa as usize]
+            }
+        };
+        let vb = match nb {
+            Some(e) => {
+                let v = e.val;
+                nb = e.next;
+                v
+            }
+            None => {
+                fb -= 1;
+                defs[fb as usize]
+            }
+        };
+        if !struct_val_eq_go(budget, spine, defs, va, vb) {
+            return false;
+        }
+    }
+    true
 }
 
 // Machine（稳态复用）与 elaboration
