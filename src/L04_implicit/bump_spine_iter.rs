@@ -1369,6 +1369,9 @@ pub(crate) struct Machine {
     workbuf: Vec<W<'static>>,
     /// [A/B 实验] 常驻 unify 工作表。
     unifybuf: Vec<UItem<'static>>,
+    /// 常驻 quote 工作栈（任务/结果两栈，同 L05+）。
+    qtasks: Vec<QJob<'static>>,
+    qdone: Vec<&'static Tm<'static>>,
 }
 
 /// unify 的跨调用草稿（`FxHashSet`（判等记忆化）与两个实参收集 Vec 都
@@ -1396,6 +1399,8 @@ impl Machine {
             name_trail: Vec::new(),
             workbuf: Vec::new(),
             unifybuf: Vec::new(),
+            qtasks: Vec::new(),
+            qdone: Vec::new(),
         }
     }
 
@@ -1522,12 +1527,18 @@ impl Machine {
     }
 
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> =
+            unsafe { &mut *(&mut self.qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
@@ -1541,12 +1552,18 @@ impl Machine {
     /// quote 的记忆化口径（同 L03：表随本次调用新建，绝不跨 reset 持有）。
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
         let mut memo: QuoteMemo<'a> = FxHashMap::default();
+        let tasks: &mut Vec<QJob<'a>> =
+            unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
+        let done: &mut Vec<&'a Tm<'a>> =
+            unsafe { &mut *(&mut self.qdone as *mut Vec<&'static Tm<'static>> as *mut Vec<&'a Tm<'a>>) };
+        let work: &mut Vec<W<'a>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         quote_iter(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            tasks,
+            done,
+            work,
             &mut self.vals,
             &mut self.icits,
             &mut self.defs,
