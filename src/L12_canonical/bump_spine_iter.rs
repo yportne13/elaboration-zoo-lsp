@@ -3729,6 +3729,16 @@ impl Machine {
     /// **`binds == 0`** 时常值类型（U / 裸未解 meta / LiteralType，tag
     /// 3/5/6）闭类型恒等；`quote` 无自由变量则跳过 Let 链直接空环境求值；
     /// 否则全构造（与参考版同形）。
+    ///
+    /// **L05-L08 的 bind-prefix 快路径（`bind_prefix_of_telescope` + define
+    /// 槽由 `cxt.env` 快照供给）在 L09 起刻意不移植**：那条路径要求
+    /// "telescope 里 define 槽的项 ≡ env 快照里的值"。L05-L08 的模式特化走
+    /// pm_defs（只追加等式，快照恒成立）；L09 起改走参考版
+    /// `Cxt::update_cxt`——精化就地改写 env 槽再 refresh 重锚定，而
+    /// `locals` 照参考版保持陈旧（参考版 cxt.rs 里
+    /// `locals: self.locals.clone()` 的 TODO），全 close 正是靠这份陈旧项
+    /// 与参考版逐值同轨。改读快照会拿到精化后的值：孪生的契约是与参考版
+    /// Ok 输出逐字节一致，不是比参考版更正确。
     fn fresh_meta<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, a: V) -> &'a Tm<'a> {
         // L10：trait 类型先试实例合成（成功 → 直接给实例项）；
         // trait Sum → 裸 Meta（无 AppPruning 掩码）
