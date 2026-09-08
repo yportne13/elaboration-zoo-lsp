@@ -238,6 +238,24 @@ impl Infer {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U。域洞若保留，
+                // 第 2+ 个参数的域 meta 会带 pruning（形如 `?m A` 的部分应用
+                // meta），使用点解 `?m A := U` 时 invert 无法倒序 Decl 头
+                // spine（Nat 等）而失败——显式提供隐式实参（`P1[Nat][Bool]`）
+                // 即报 can't unify。语言定义上方括号参数就是类型参数（任意
+                // 类型的索引留给圆括号），钉 U 从声明处消除该 meta；用户
+                // 显式标注的域（`[A : Nat]`）与显式参数（索引）不动。
+                let params: Vec<(Span<String>, Raw, Icit)> = params
+                    .into_iter()
+                    .map(|(n, a, i)| {
+                        let a = if i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U
+                        } else {
+                            a
+                        };
+                        (n, a, i)
+                    })
+                    .collect();
                 // enum 类型本体：λ params → Sum(name, [(p, Var p, type-of-p, icit)], cases)
                 let new_params: Vec<_> = params
                     .iter()

@@ -2138,9 +2138,31 @@ fn quote_iter<'a>(
                             });
                             tasks.push(QJob::Q(base_v, level));
                         } else {
-                            tasks.push(QJob::App1(top_icit));
-                            tasks.push(QJob::Q(ea, level));
-                            tasks.push(QJob::Q(spine.stack[h].f, level));
+                            // 函数部分可能是「陈旧应用链」：建链后其头 meta
+                            // 被解成 λ（值里的位模式不随后续求解更新）。force
+                            // 单独引函数部分会停在部分应用的 λ 上，照搬 App
+                            // 拼接就产出 β-红ex 项（参考版整值 force 经 vAppSp
+                            // 一路 β，永不产出）。故函数部分 force 为闭包时，
+                            // 先按 β 语义应用本槽实参、再引应用结果。
+                            let fval = spine.stack[h].f;
+                            let ff = force(
+                                bump, spine, defs, metas, decls, mmap, fuel, pm_defs, fval,
+                            );
+                            if v_tag(ff) == 1 {
+                                let c = v_clo_of(ff);
+                                let applied = {
+                                    let env = env_ext(bump, c.env, ea);
+                                    eval_iter(
+                                        bump, spine, work, vals, icits, defs, metas, decls, mmap,
+                                        fuel, pm_defs, env, c.body,
+                                    )
+                                };
+                                tasks.push(QJob::Q(applied, level));
+                            } else {
+                                tasks.push(QJob::App1(top_icit));
+                                tasks.push(QJob::Q(ea, level));
+                                tasks.push(QJob::Q(fval, level));
+                            }
                         }
                     }
                 }
@@ -2250,16 +2272,46 @@ fn quote_iter<'a>(
                             i += 1;
                         }
                         _ => {
-                            // 非平凡链头：挂起引 f，ChainRun 续跑
-                            tasks.push(QJob::ChainRun {
-                                level,
-                                next: i + 1,
-                                end,
-                                f0,
-                                idx_node,
-                                prev: Some(prev),
-                            });
-                            tasks.push(QJob::Q(fi, level));
+                            // 非平凡链头：挂起引 f，ChainRun 续跑。f 可能是
+                            // 「陈旧应用链」（建链后头 meta 被解成 λ）：force
+                            // 单独引它停在部分应用的 λ 上，恢复点照搬 App 拼
+                            // 接就产出 β-红ex 项（参考版整值 force 经 vAppSp
+                            // 一路 β，永不产出）。故 f force 为闭包时改为引
+                            // 「f 应用本槽实参」的整值，恢复点直接取该结果为
+                            // 已累计项（prev:None = 弹出为初始累计，不再拼接）。
+                            let ff = force(
+                                bump, spine, defs, metas, decls, mmap, fuel, pm_defs, fi,
+                            );
+                            if v_tag(ff) == 1 {
+                                let arg_v = spine.stack[i].a;
+                                let c = v_clo_of(ff);
+                                let applied = {
+                                    let env = env_ext(bump, c.env, arg_v);
+                                    eval_iter(
+                                        bump, spine, work, vals, icits, defs, metas, decls, mmap,
+                                        fuel, pm_defs, env, c.body,
+                                    )
+                                };
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: None,
+                                });
+                                tasks.push(QJob::Q(applied, level));
+                            } else {
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: Some(prev),
+                                });
+                                tasks.push(QJob::Q(fi, level));
+                            }
                             break;
                         }
                     }
@@ -5481,6 +5533,22 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U（与参考版
+                // 同步）。域洞若保留，第 2+ 个参数的域 meta 会带 pruning
+                // （形如 `?m A`），使用点解 `?m A := U` 时 invert 无法倒序
+                // Decl 头 spine 而失败——显式提供隐式实参即报 can't unify。
+                // 方括号参数在语言定义上就是类型参数；显式标注与显式索引不动。
+                let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // enum 类型本体：λ params → Sum(name, [(p, Var p, ?, icit)], cases)
                 let new_params: Vec<(crate::parser_lib::Span<String>, Icit, Raw)> = params
                     .iter()
