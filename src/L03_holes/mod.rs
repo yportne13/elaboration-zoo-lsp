@@ -1110,18 +1110,6 @@ pub(crate) fn bench_check_nf(raw: &Raw) {
     }
 }
 
-/// church n 的 nf-mode 期望输出（`λ N s z. s (s (… z))`）。
-pub(crate) fn church_nf(n: usize) -> String {
-    fn f(k: usize) -> String {
-        match k {
-            0 => "z".to_string(),
-            1 => "s z".to_string(),
-            k => format!("s ({})", f(k - 1)),
-        }
-    }
-    format!("λ N s z. {}\n", f(n))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -347,6 +347,7 @@ fn meta_val_of(metas: &[MetaEntry], m: u32) -> V {
 /// **force**：把值更新到 metacontext 的当前状态。已解 meta 立即数 → 替换
 /// 为解；已解 flex spine → 沿 f 链收集实参（带 icit）、把解按应用序应用到
 /// 实参上（应用可触发 β，经 `eval_iter`），再继续。icit 沿实参原样搬运。
+#[allow(clippy::too_many_arguments)]
 fn force<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -432,6 +433,7 @@ enum W<'a> {
 /// 双栈迭代 eval（L03 版 + icit 穿线）。右链下降遇 Var 头（值非闭包）时，
 /// 头值进 `vals`、该应用的 icit 进 `icits` 侧栈；`ChainWrap` 折叠时成对
 /// 弹出（`Vec::new()` 起步的侧栈在无右链路径上零分配）。
+#[allow(clippy::too_many_arguments)]
 fn eval_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -894,6 +896,7 @@ enum UItem<'a> {
 /// unification：结构比较 + 模式求解，工作表迭代。分派次序与参考版一致：
 /// λ 情形（eta 按 λ 一侧的 icit 应用）→ U → Π（**icit 相等**）→ 同头中性
 /// （实参 icit 不比）→ 求解。判等记忆化同 L03。
+#[allow(clippy::too_many_arguments)]
 fn unify_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -1184,6 +1187,7 @@ impl RenBuf {
 /// 求解：`Γ ⊢ ?m args ≡ rhs` → `?m := λ x1…xn. rhs[args⁻¹]`。
 /// 失败即不改 metacontext（invert/rename 完成前不写表）。实参带 icit
 /// （lams 用）。
+#[allow(clippy::too_many_arguments)]
 fn solve<'a>(
     bump: &'a Bump,
     spine: &mut Spine,

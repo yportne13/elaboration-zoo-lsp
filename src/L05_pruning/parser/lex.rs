@@ -25,11 +25,8 @@ pub enum TokenKind {
     Ident,
     Num,
     Op,
-    Str,
 
     ErrToken,
-
-    Eof,
 }
 
 impl std::fmt::Display for TokenKind {
@@ -51,9 +48,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Ident       => write!(f, "identifier"),
             TokenKind::Num         => write!(f, "number"),
             TokenKind::Op          => write!(f, "operator"),
-            TokenKind::Str         => write!(f, "string"),
             TokenKind::ErrToken    => write!(f, "unexpected token"),
-            TokenKind::Eof         => write!(f, "end of file"),
         }
     }
 }
@@ -78,7 +73,6 @@ const OP: [(&str, TokenKind); 11] = [
     ("\\", Lambda),
 ];
 
-pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     // `;` 单独成 token（op 的字符区间盖住 ';'，须先切出来）
@@ -90,6 +84,7 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
         Some((rest, tail)) => (rest, head.data.len() + tail.data.len()),
         None => (after_head, head.data.len()),
     };
+    // SAFETY: head/tail 均为 input.data 的前缀，ident_len ≤ input.data.len()
     let ident = unsafe { input.data.get_unchecked(..ident_len) };
 
     // `λ` 在 main.hs 里是字符级匹配（pLam 的 `char 'λ'`），所以 `λx` 要拆成
@@ -212,7 +207,7 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
 }
 
 #[test]
-fn test() {
+fn lex_debug_dump() {
     let input = r#"
 let id : {A : U} -> A -> A = \{A} x. x;
 let argTest2 = const {B = U} U;
@@ -224,7 +219,7 @@ id _"#;
         path_id: 0,
     })
     .unwrap();
-    for x in ret.1 {
-        println!("{} @ {} {:?}", x.data.0, x.start_offset, x.data.1)
-    }
+    // 非空输入产出非空 token 流（首个 token 是 `let` 关键字）
+    assert!(!ret.1.is_empty());
+    assert_eq!(ret.1[0].data.1, TokenKind::LetKeyword);
 }

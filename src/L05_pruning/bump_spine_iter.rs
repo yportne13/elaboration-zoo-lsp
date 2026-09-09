@@ -2211,9 +2211,9 @@ impl Machine {
     /// 走空转（跳段后无实参可应用），结果恒为裸 meta 立即数——免一次
     /// eval。含绑定槽时照常求值（产生 pattern spine）。
     fn eval_fresh(&mut self, bump: &Bump, env: Env, m: &Tm<'_>) -> V {
-        if let Tm::AppPruning(CTm_head, pr) = m {
+        if let Tm::AppPruning(head, pr) = m {
             // 头必须是裸 Meta 才有短路意义（telescope 求值除外）
-            if let Tm::Meta(mm) = CTm_head {
+            if let Tm::Meta(mm) = head {
                 if pr.map_or(true, |p| p.slot.is_none() && p.after_run.is_none()) {
                     return v_meta(*mm);
                 }

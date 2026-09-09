@@ -1,4 +1,4 @@
-use lex::{TokenKind, TokenNode};
+use lex::{TokenKind, Token};
 
 use crate::parser_lib_resilient::*;
 use smol_str::SmolStr;
@@ -52,18 +52,14 @@ fn empty_span<T>(data: T) -> Span<T> {
 
 /// 解析单条表达式。失败返回 None（main_with 报 "parse error"）。
 pub fn parser(input: &str, id: u32) -> Option<Raw> {
-    match super::parser::lex::lex(Span {
+    let (_, ret) = super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,
         end_offset: input.len() as u32,
         path_id: id,
-    }) {
-        Some((_, ret)) => {
-            let mut err_collect: MacroState = vec![];
-            p_raw(&ret, &mut err_collect).ok().map(|(_, r)| r)
-        }
-        None => None,
-    }
+    })?; // many0 组合的 lex 恒 Some（空输入产空 token 流）
+    let mut err_collect: MacroState = vec![];
+    p_raw(&ret, &mut err_collect).ok().map(|(_, r)| r)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -79,13 +75,6 @@ pub enum ErrMsg {
     Base(BaseMsg),
     /// A parser-level error with a full user-facing message.
     Custom(String),
-}
-
-fn extract_base(m: ErrMsg) -> ErrMsg {
-    match m {
-        ErrMsg::Base(b) => ErrMsg::Base(b),
-        ErrMsg::Custom(_) => m,
-    }
 }
 
 use std::fmt;
@@ -115,7 +104,7 @@ pub struct IError {
     pub msg: Span<ErrMsg>,
 }
 
-type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
+type IResult<'a, 'b, O> = Result<(&'b [Token<'a>], O), IError>;
 
 /// 本层无宏也无 decl 流，解析态就是错误收集器；公开 API 只返回
 /// Option<Raw>，收集到的错误随整体失败折叠为 None。
@@ -125,8 +114,8 @@ trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
 }
 
-impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> ParserExt<&'b [TokenNode<'a>], A, MacroState> for T {
-    fn many1(self) -> impl Parser<&'b [TokenNode<'a>], Vec<A>, MacroState, IError> {
+impl<'a: 'b, 'b, A, T: Parser<&'b [Token<'a>], A, MacroState, IError>> ParserExt<&'b [Token<'a>], A, MacroState> for T {
+    fn many1(self) -> impl Parser<&'b [Token<'a>], Vec<A>, MacroState, IError> {
         move |input, state: &mut MacroState| match self.many0().parse(input, state) {
             Ok((i, v)) if v.is_empty() => Err(IError {
                 msg: i.first()
@@ -139,67 +128,52 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
     }
 }
 
-fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, MacroState, IError> {
-    move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
-        Some(x) => if x.data.1 == p {
-            input
-                .get(1..)
-                .map(|i| (i, x.map(|_| ())))
-                .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-                })
-        } else {
-            Err(IError {
-                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-            })
-        },
+fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [Token<'a>], Span<()>, MacroState, IError> {
+    move |input: &'b [Token<'a>], _: &mut MacroState| match input.first() {
+        // input.first() 为 Some ⇒ 长度 ≥ 1 ⇒ [1..] 恒在界内
+        Some(x) if x.data.1 == p => Ok((&input[1..], x.map(|_| ()))),
+        Some(x) => Err(IError {
+            msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p))),
+        }),
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p))),
         }),
     }
 }
 
-fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>, MacroState, IError> {
-    move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
-        Some(x) => if x.data.1 == p {
-            input
-                .get(1..)
-                .map(|i| (i, x.map(|s| SmolStr::new(s.0))))
-                .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-                })
-        } else {
-            Err(IError {
-                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-            })
-        },
+fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [Token<'a>], Span<SmolStr>, MacroState, IError> {
+    move |input: &'b [Token<'a>], _: &mut MacroState| match input.first() {
+        Some(x) if x.data.1 == p => Ok((&input[1..], x.map(|s| SmolStr::new(s.0)))),
+        Some(x) => Err(IError {
+            msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p))),
+        }),
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p))),
         }),
     }
 }
 
-fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, MacroState, IError>
+fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [Token<'a>], O, MacroState, IError>
 where
-    P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
+    P: Parser<&'b [Token<'a>], O, MacroState, IError>,
 {
     (kw(LParen), p, kw(RParen)).map(|c| c.1)
 }
 
-fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, MacroState, IError>
+fn brace<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [Token<'a>], O, MacroState, IError>
 where
-    P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
+    P: Parser<&'b [Token<'a>], O, MacroState, IError>,
 {
     (kw(LCurly), p, kw(RCurly)).map(|c| c.1)
 }
 
 /// main.hs 的 `withPos`：包一层 `Raw::SrcPos`，位置取产生式第一个 token 的
 /// 起点。
-fn with_pos<'a: 'b, 'b, P>(p: P) -> impl Parser<&'b [TokenNode<'a>], Raw, MacroState, IError>
+fn with_pos<'a: 'b, 'b, P>(p: P) -> impl Parser<&'b [Token<'a>], Raw, MacroState, IError>
 where
-    P: Parser<&'b [TokenNode<'a>], Raw, MacroState, IError>,
+    P: Parser<&'b [Token<'a>], Raw, MacroState, IError>,
 {
-    move |input: &'b [TokenNode<'a>], _state: &mut MacroState| {
+    move |input: &'b [Token<'a>], _state: &mut MacroState| {
         let first = *input.first().ok_or_else(|| IError {
             msg: empty_span(ErrMsg::Base(BaseMsg::ExpectRaw)),
         })?;
@@ -214,7 +188,7 @@ where
     }
 }
 
-fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_atom<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     with_pos(
         string(Ident)
             .map(Raw::Var)
@@ -235,7 +209,7 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 
 /// 实参（上游 `pArg`）：`{x = t}` 命名隐式 | `{t}` 隐式 | atom 显式。
 /// 命名形态须先于隐式形态尝试（`{x = t}` 的 `x` 会先吃掉 `{`）。
-fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, (Either, Raw)> {
+fn p_arg<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, (Either, Raw)> {
     let named_arg = brace((string(Ident), kw(Eq), p_raw)).map(|(x, _, t)| (Either::Name(x), t));
 
     let implicit_arg = brace(p_raw).map(|t| (Either::Icit(Icit::Impl), t));
@@ -245,7 +219,7 @@ fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     named_arg.or(implicit_arg).or(explicit_arg).parse(input, state)
 }
 
-fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_spine<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let (input, head) = p_atom(input, state)?;
     let (input, args) = p_arg.many0().parse(input, state)?;
 
@@ -256,14 +230,14 @@ fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
 }
 
 /// binder 位置：普通标识符或匿名 binder `_`。
-fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<SmolStr>> {
+fn p_bind<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<SmolStr>> {
     string(Ident).or(string(Hole)).parse(input, state)
 }
 
 /// lambda binder（上游 `pLamBinder`）：`x` | `{x}` | `{x = y}`
 /// （`y` 是体内可见的本地名，`x` 是按名定位的引用）。
 fn p_lam_binder<'a: 'b, 'b>(
-    input: &'b [TokenNode<'a>],
+    input: &'b [Token<'a>],
     state: &mut MacroState,
 ) -> IResult<'a, 'b, (Span<SmolStr>, Either)> {
     let explicit_binder = p_bind.map(|x| (x, Either::Icit(Icit::Expl)));
@@ -274,7 +248,7 @@ fn p_lam_binder<'a: 'b, 'b>(
     explicit_binder.or(implicit_binder).or(named_binder).parse(input, state)
 }
 
-fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_lam<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (kw(Lambda), p_lam_binder.many1(), kw(Dot), p_raw)
         .map(|(_, binder, _, ty)| {
             binder
@@ -288,7 +262,7 @@ fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 /// Pi binder（上游 `pPiBinder`）：`{xs}` / `{xs : A}`（类型可省 → 洞，隐式）
 /// | `(xs : A)`（显式）。
 fn p_pi_binder<'a: 'b, 'b>(
-    input: &'b [TokenNode<'a>],
+    input: &'b [Token<'a>],
     state: &mut MacroState,
 ) -> IResult<'a, 'b, (Vec<Span<SmolStr>>, Raw, Icit)> {
     let implicit_binder = brace((
@@ -308,7 +282,7 @@ fn p_pi_binder<'a: 'b, 'b>(
     implicit_binder.or(explicit_binder).parse(input, state)
 }
 
-fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_pi<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let param = p_pi_binder.map(|(binder, ty, icit)| {
         binder
             .into_iter()
@@ -328,7 +302,7 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResu
         .parse(input, state)
 }
 
-fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn fun_or_spine<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
             Some((kw, cod)) => {
@@ -340,7 +314,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
 }
 
 /// `let x [: A]? = t; u`（注解可省 → 洞；上游 04 的 readme 示例用到省略态）。
-fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_let<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (
         kw(LetKeyword),
         p_bind,
@@ -357,7 +331,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 }
 
 /// `pRaw = withPos (pLam <|> pLet <|> try pPi <|> funOrSpine)`。
-fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_raw<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     with_pos(p_lam.or(p_let).or(p_pi).or(fun_or_spine))
         .parse(input, state)
         .map_err(|_e| IError {
@@ -369,7 +343,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 }
 
 #[test]
-fn test() {
+fn parser_debug_dump() {
     let input = r#"
 let id : {A : U} -> A -> A = \x. x;
 let argTest1 = const {U}{U} U;
@@ -378,7 +352,8 @@ let namedLam : {A B C} -> A -> B -> C -> A = \{B = B} a b c. a;
 let insert2 = (\{A} x. the A x) U;
 the (Eq (mul ten ten) hundred) refl
 "#;
-    println!("{:#?}", parser(input, 0).unwrap());
+    // 样例可整体解析（形态细节由 blackbox 套件钉死）
+    assert!(parser(input, 0).is_some());
 }
 
 #[test]

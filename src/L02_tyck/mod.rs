@@ -299,12 +299,10 @@ fn infer(cxt: &Cxt, t: &Raw) -> M<(Tm, VTy)> {
         }
 
         Raw::Var(x) => {
-            let mut i = 0u32;
-            for (x2, a) in cxt.types.iter() {
+            for (i, (x2, a)) in cxt.types.iter().enumerate() {
                 if x.data == x2.data {
-                    return Ok((Tm::Var(Ix(i)), a.clone()));
+                    return Ok((Tm::Var(Ix(i as u32)), a.clone()));
                 }
-                i += 1;
             }
             Err(report(cxt, format!("variable out of scope: {}", x.data)))
         }

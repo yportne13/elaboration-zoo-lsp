@@ -21,11 +21,8 @@ pub enum TokenKind {
     Ident,
     Num,
     Op,
-    Str,
 
     ErrToken,
-
-    Eof,
 }
 
 impl std::fmt::Display for TokenKind {
@@ -45,9 +42,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Ident       => write!(f, "identifier"),
             TokenKind::Num         => write!(f, "number"),
             TokenKind::Op          => write!(f, "operator"),
-            TokenKind::Str         => write!(f, "string"),
             TokenKind::ErrToken    => write!(f, "unexpected token"),
-            TokenKind::Eof         => write!(f, "end of file"),
         }
     }
 }
@@ -70,7 +65,6 @@ const OP: [(&str, TokenKind); 9] = [
     ("\\", Lambda),
 ];
 
-pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     // `;` 单独成 token（op 的字符区间盖住 ';'，须先切出来）
@@ -82,6 +76,7 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
         Some((rest, tail)) => (rest, head.data.len() + tail.data.len()),
         None => (after_head, head.data.len()),
     };
+    // SAFETY: head/tail 均为 input.data 的前缀，ident_len ≤ input.data.len()
     let ident = unsafe { input.data.get_unchecked(..ident_len) };
 
     // main.hs 的关键字表：let / in / λ / U。

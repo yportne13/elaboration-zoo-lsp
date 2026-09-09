@@ -2271,7 +2271,7 @@ pub(crate) fn dup_deep_src(k: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{church_nf, EX0_SRC, EX1_SRC, EX2_SRC};
+    use super::super::{EX0_SRC, EX1_SRC, EX2_SRC};
     use super::*;
 
     #[test]

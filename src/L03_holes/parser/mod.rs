@@ -1,4 +1,4 @@
-use lex::{TokenKind, TokenNode};
+use lex::{TokenKind, Token};
 
 use crate::parser_lib_resilient::*;
 use smol_str::SmolStr;
@@ -9,18 +9,14 @@ use TokenKind::*;
 
 /// 解析单条表达式。失败返回 None（main_with 报 "parse error"）。
 pub fn parser(input: &str, id: u32) -> Option<Raw> {
-    match crate::L03_holes::parser::lex::lex(Span {
+    let (_, ret) = crate::L03_holes::parser::lex::lex(Span {
         data: input,
         start_offset: 0,
         end_offset: input.len() as u32,
         path_id: id,
-    }) {
-        Some((_, ret)) => {
-            let mut err_collect: MacroState = vec![];
-            p_raw(&ret, &mut err_collect).ok().map(|(_, r)| r)
-        }
-        None => None,
-    }
+    })?; // many0 组合的 lex 恒 Some（空输入产空 token 流）
+    let mut err_collect: MacroState = vec![];
+    p_raw(&ret, &mut err_collect).ok().map(|(_, r)| r)
 }
 
 /// L03（holes）的表面语法（上游 03-holes `Main.hs` 的 `Raw`）。与 L02 的差别：
@@ -63,13 +59,6 @@ pub enum ErrMsg {
     Custom(String),
 }
 
-fn extract_base(m: ErrMsg) -> ErrMsg {
-    match m {
-        ErrMsg::Base(b) => ErrMsg::Base(b),
-        ErrMsg::Custom(_) => m,
-    }
-}
-
 use std::fmt;
 
 impl fmt::Display for BaseMsg {
@@ -97,7 +86,7 @@ pub struct IError {
     pub msg: Span<ErrMsg>,
 }
 
-type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
+type IResult<'a, 'b, O> = Result<(&'b [Token<'a>], O), IError>;
 
 /// 本层无宏也无 decl 流，解析态就是错误收集器；公开 API 只返回
 /// Option<Raw>，收集到的错误随整体失败折叠为 None。
@@ -107,8 +96,8 @@ trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
 }
 
-impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> ParserExt<&'b [TokenNode<'a>], A, MacroState> for T {
-    fn many1(self) -> impl Parser<&'b [TokenNode<'a>], Vec<A>, MacroState, IError> {
+impl<'a: 'b, 'b, A, T: Parser<&'b [Token<'a>], A, MacroState, IError>> ParserExt<&'b [Token<'a>], A, MacroState> for T {
+    fn many1(self) -> impl Parser<&'b [Token<'a>], Vec<A>, MacroState, IError> {
         move |input, state: &mut MacroState| match self.many0().parse(input, state) {
             Ok((i, v)) if v.is_empty() => Err(IError {
                 msg: i.first()
@@ -121,8 +110,8 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
     }
 }
 
-fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, MacroState, IError> {
-    move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
+fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [Token<'a>], Span<()>, MacroState, IError> {
+    move |input: &'b [Token<'a>], _: &mut MacroState| match input.first() {
         Some(x) => if x.data.1 == p {
             input
                 .get(1..)
@@ -141,8 +130,8 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, Ma
     }
 }
 
-fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<SmolStr>, MacroState, IError> {
-    move |input: &'b [TokenNode<'a>], _: &mut MacroState| match input.first() {
+fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [Token<'a>], Span<SmolStr>, MacroState, IError> {
+    move |input: &'b [Token<'a>], _: &mut MacroState| match input.first() {
         Some(x) => if x.data.1 == p {
             input
                 .get(1..)
@@ -161,20 +150,20 @@ fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<Smo
     }
 }
 
-fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [TokenNode<'a>], O, MacroState, IError>
+fn paren<'a: 'b, 'b, P, O>(p: P) -> impl Parser<&'b [Token<'a>], O, MacroState, IError>
 where
-    P: Parser<&'b [TokenNode<'a>], O, MacroState, IError>,
+    P: Parser<&'b [Token<'a>], O, MacroState, IError>,
 {
     (kw(LParen), p, kw(RParen)).map(|c| c.1)
 }
 
 /// main.hs 的 `withPos`：包一层 `Raw::SrcPos`，位置取产生式第一个 token 的起点
 /// （lex 已跳过前导空白，与 megaparsec `getSourcePos` 在 `ws` 之后取位置的语义一致）。
-fn with_pos<'a: 'b, 'b, P>(p: P) -> impl Parser<&'b [TokenNode<'a>], Raw, MacroState, IError>
+fn with_pos<'a: 'b, 'b, P>(p: P) -> impl Parser<&'b [Token<'a>], Raw, MacroState, IError>
 where
-    P: Parser<&'b [TokenNode<'a>], Raw, MacroState, IError>,
+    P: Parser<&'b [Token<'a>], Raw, MacroState, IError>,
 {
-    move |input: &'b [TokenNode<'a>], _state: &mut MacroState| {
+    move |input: &'b [Token<'a>], _state: &mut MacroState| {
         let first = *input.first().ok_or_else(|| IError {
             msg: empty_span(ErrMsg::Base(BaseMsg::ExpectRaw)),
         })?;
@@ -189,7 +178,7 @@ where
     }
 }
 
-fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_atom<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     with_pos(
         string(Ident)
             .map(Raw::Var)
@@ -209,11 +198,11 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 }
 
 /// binder 位置：普通标识符或匿名 binder `_`（`pBinder = pIdent <|> symbol "_"`）。
-fn p_binder<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<SmolStr>> {
+fn p_binder<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<SmolStr>> {
     string(Ident).or(string(Hole)).parse(input, state)
 }
 
-fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_spine<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     p_atom
         .many1()
         .map(|atoms| {
@@ -225,7 +214,7 @@ fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .parse(input, state)
 }
 
-fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_lam<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (kw(Lambda), p_binder.many1(), kw(Dot), p_raw)
         .map(|(_, binder, _, ty)| {
             binder
@@ -236,7 +225,7 @@ fn p_lam<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         .parse(input, state)
 }
 
-fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_pi<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let param = paren((p_binder.many1(), kw(Colon), p_raw)).map(|(binder, _, ty)| {
         binder
             .into_iter()
@@ -256,8 +245,7 @@ fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResu
         .parse(input, state)
 }
 
-//TODO:fun_or_spine
-fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn fun_or_spine<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (p_spine, (kw(Arrow), p_raw).option())
         .map(|(sp, tail)| match tail {
             Some((kw, cod)) => Raw::Pi(kw.map(|_| SmolStr::new("_")), Box::new(sp), Box::new(cod)),
@@ -266,7 +254,7 @@ fn fun_or_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) 
         .parse(input, state)
 }
 
-fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_let<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     (
         kw(LetKeyword),
         p_binder,
@@ -286,7 +274,7 @@ fn p_let<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 /// main.hs：`pRaw = withPos (pLam <|> pLet <|> try pPi <|> funOrSpine)`。
 /// 组合子版 `or` 在纯函数 token 切片上天然带回溯（失败不消费输入），
 /// `try` 的语义由尝试顺序实现。
-fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+fn p_raw<'a: 'b, 'b>(input: &'b [Token<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     with_pos(p_lam.or(p_let).or(p_pi).or(fun_or_spine))
         .parse(input, state)
         .map_err(|_e| IError {
@@ -298,14 +286,15 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 }
 
 #[test]
-fn test() {
+fn parser_debug_dump() {
     let input = r#"
 let id : (A : _) -> A -> A
   = \A x. x;
 let foo : U = _;
 let bar : U -> U = \x. id _ x;
 bar _"#;
-    println!("{:#?}", parser(input, 0).unwrap());
+    // 样例可整体解析（形态细节由 blackbox 套件钉死）
+    assert!(parser(input, 0).is_some());
 }
 
 #[test]

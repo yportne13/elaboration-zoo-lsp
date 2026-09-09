@@ -102,7 +102,7 @@ pub type Pruning = List<Option<Icit>>;
 #[derive(Debug, Clone)]
 pub enum Locals {
     Here,
-    Define(Box<Locals>, Name, crate::L05_pruning::Ty, crate::L05_pruning::Tm),
+    Define(Box<Locals>, Name, Ty, Tm),
     Bind(Box<Locals>, Name, crate::L05_pruning::Ty),
 }
 

@@ -21,11 +21,8 @@ pub enum TokenKind {
     Ident,
     Num,
     Op,
-    Str,
 
     ErrToken,
-
-    Eof,
 }
 
 impl std::fmt::Display for TokenKind {
@@ -45,9 +42,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Ident       => write!(f, "identifier"),
             TokenKind::Num         => write!(f, "number"),
             TokenKind::Op          => write!(f, "operator"),
-            TokenKind::Str         => write!(f, "string"),
             TokenKind::ErrToken    => write!(f, "unexpected token"),
-            TokenKind::Eof         => write!(f, "end of file"),
         }
     }
 }
@@ -69,8 +64,6 @@ const OP: [(&str, TokenKind); 9] = [
     ("->", Arrow),
     ("\\", Lambda),
 ];
-
-pub type TokenNode<'a> = Span<(&'a str, TokenKind)>;
 
 fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
     // `;` 单独成 token（L03 同款：op 的字符区间盖住 ';'，须先切出来）
