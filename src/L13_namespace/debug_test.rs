@@ -59,8 +59,8 @@ fn let_pattern_wildcard() {
 fn hover_type_of(input: &str, name: &str) -> String {
     let infer = elaborate_infer(input);
     let pos = input.find(name).unwrap();
-    let (_, _, h, v) = infer.hover_entry_at(24, pos).unwrap();
-    pretty_tm(0, h.clone(), v)
+    let (_, _, s) = infer.hover_entry_at(24, pos).unwrap();
+    s.clone()
 }
 
 #[test]
@@ -152,24 +152,24 @@ fn tuple_hover_element_entries() {
 
     // Element entries: exact element span, quoted element type.
     let entries = |span: (usize, usize)| infer.hover_table.iter()
-        .filter(|(s, _, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
+        .filter(|(s, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
         .collect::<Vec<_>>();
     let a_entries = entries(a_span);
     assert!(!a_entries.is_empty(), "no hover entry for tuple element `a`");
-    assert!(a_entries.iter().any(|(_, _, h, v)| pretty_tm(0, h.clone(), v) == "Nat"));
+    assert!(a_entries.iter().any(|(_, _, s)| s.clone() == "Nat"));
     let b_entries = entries(b_span);
     assert!(!b_entries.is_empty(), "no hover entry for tuple element `b`");
-    assert!(b_entries.iter().any(|(_, _, h, v)| pretty_tm(0, h.clone(), v) == "Bool"));
+    assert!(b_entries.iter().any(|(_, _, s)| s.clone() == "Bool"));
 
     // The tuple's own `Tuple2.mk` entry still spans the whole element list.
-    assert!(infer.hover_table.iter().any(|(s, _, _, _)|
+    assert!(infer.hover_table.iter().any(|(s, _, _)|
         s.start_offset as usize == a_span.0 && s.end_offset as usize == b_span.1
     ), "expected a hover entry spanning the whole tuple element list");
 
     // LSP hover selection (`hover_entry_at`: most specific / smallest span
     // wins): hovering either element shows that element's type.
     let pick = |off: usize| infer.hover_entry_at(24, off)
-        .map(|(_, _, h, v)| pretty_tm(0, h.clone(), v))
+        .map(|(_, _, s)| s.clone())
         .unwrap();
     assert_eq!(pick(a_span.0), "Nat", "hover over `a` should show Nat");
     assert_eq!(pick(b_span.0), "Bool", "hover over `b` should show Bool");
@@ -188,10 +188,10 @@ fn tuple_hover_literal_elements() {
     let base = input.rfind("(1, 2)").unwrap();
     for (elem_off, elem_end) in [(base + 1, base + 2), (base + 4, base + 5)] {
         let entries = infer.hover_table.iter()
-            .filter(|(s, _, _, _)| s.start_offset as usize == elem_off && s.end_offset as usize == elem_end)
+            .filter(|(s, _, _)| s.start_offset as usize == elem_off && s.end_offset as usize == elem_end)
             .collect::<Vec<_>>();
         assert!(!entries.is_empty(), "no hover entry for literal tuple element at {elem_off}");
-        assert!(entries.iter().any(|(_, _, h, v)| pretty_tm(0, h.clone(), v) == "Nat"));
+        assert!(entries.iter().any(|(_, _, s)| s.clone() == "Nat"));
     }
 }
 
@@ -208,7 +208,7 @@ fn pm_ctor_hover_prelude_boolean() {
     }"#;
     let infer = elaborate_infer(input);
     let entries_at = |span: (usize, usize)| infer.hover_table.iter()
-        .filter(|(s, _, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
+        .filter(|(s, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
         .collect::<Vec<_>>();
     let true_base = input.find("case true").unwrap() + 5; // token `true`
     let true_span = (true_base, true_base + 4);
@@ -220,20 +220,20 @@ fn pm_ctor_hover_prelude_boolean() {
     // definition span points at the prelude declaration, not the input.
     let true_entries = entries_at(true_span);
     assert!(!true_entries.is_empty(), "no hover entry for `true` pattern");
-    assert!(true_entries.iter().any(|(_, d, h, v)| {
+    assert!(true_entries.iter().any(|(_, d, s)| {
         d.path_id != 24
-            && pretty_tm(0, h.clone(), v) == "Boolean::true"
+            && s.clone() == "Boolean::true"
     }), "expected a `Boolean::true` entry with prelude definition span for `true`");
     let false_entries = entries_at(false_span);
     assert!(!false_entries.is_empty(), "no hover entry for `false` pattern");
-    assert!(false_entries.iter().any(|(_, d, h, v)| {
+    assert!(false_entries.iter().any(|(_, d, s)| {
         d.path_id != 24
-            && pretty_tm(0, h.clone(), v) == "Boolean::false"
+            && s.clone() == "Boolean::false"
     }), "expected a `Boolean::false` entry with prelude definition span for `false`");
 
     // LSP hover selection picks the constructor entry at the token.
     let pick = |off: usize| infer.hover_entry_at(24, off)
-        .map(|(_, _, h, v)| pretty_tm(0, h.clone(), v))
+        .map(|(_, _, s)| s.clone())
         .unwrap();
     assert_eq!(pick(true_span.0), "Boolean::true", "hover over pattern `true`");
     assert_eq!(pick(false_span.0), "Boolean::false", "hover over pattern `false`");
@@ -263,7 +263,7 @@ def pick(c: Color): Nat =
         (s, s + name.len())
     };
     let entries_at = |span: (usize, usize)| infer.hover_table.iter()
-        .filter(|(s, _, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
+        .filter(|(s, _, _)| s.start_offset as usize == span.0 && s.end_offset as usize == span.1)
         .collect::<Vec<_>>();
     for (name, case) in [("red", "case red"), ("green", "case green"), ("blue", "case blue")] {
         let pat_base = input.find(case).unwrap() + 5;
@@ -271,11 +271,11 @@ def pick(c: Color): Nat =
         let (def_s, def_e) = def_span(name);
         let entries = entries_at(pat_span);
         assert!(!entries.is_empty(), "no hover entry for pattern `{name}`");
-        assert!(entries.iter().any(|(_, d, h, v)| {
+        assert!(entries.iter().any(|(_, d, s)| {
             d.start_offset as usize == def_s
                 && d.end_offset as usize == def_e
                 && d.path_id == 24
-                && pretty_tm(0, h.clone(), v).contains("Color")
+                && s.clone().contains("Color")
         }), "pattern `{name}` entry must point at the enum declaration case span");
     }
 }
@@ -291,7 +291,7 @@ fn pm_ctor_hover_differs_from_bound_var() {
     }"#;
     let infer = elaborate_infer(input);
     let pick = |off: usize| infer.hover_entry_at(24, off)
-        .map(|(_, _, h, v)| pretty_tm(0, h.clone(), v))
+        .map(|(_, _, s)| s.clone())
         .unwrap();
     let true_off = input.find("case true").unwrap() + 5;
     let x_off = input.find("case x").unwrap() + 5;
@@ -320,7 +320,7 @@ def depth(t: Tree): Nat =
 "#;
     let infer = elaborate_infer(input);
     let pick = |off: usize| infer.hover_entry_at(24, off)
-        .map(|(_, _, h, v)| pretty_tm(0, h.clone(), v))
+        .map(|(_, _, s)| s.clone())
         .unwrap();
     // `node` pattern token → Pi signature mentioning Tree.
     let node_off = input.find("case node").unwrap() + 5;

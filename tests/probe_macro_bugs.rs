@@ -31,12 +31,12 @@ fn setup() -> (std::sync::Arc<Backend<CapturingClient>>, String) {
 fn hover_text(b: &Backend<CapturingClient>, uri: &Url, offset: usize) -> Option<String> {
     let infer = b.hover_table.get(uri.as_str())?;
     let id = b.document_id.get(uri.as_str())?;
-    let (span, _, hcxt, val) = infer.hover_entry_at(*id, offset)?;
+    let (span, _, s) = infer.hover_entry_at(*id, offset)?;
     Some(format!(
         "[{:?}..{:?}] {}",
         span.start_offset,
         span.end_offset,
-        elaboration_zoo_lsp::L13_namespace::pretty::pretty_tm(0, hcxt.clone(), val)
+        s
     ))
 }
 
@@ -70,11 +70,11 @@ fn dump_entries(b: &Backend<CapturingClient>, uri: &Url, src: &str, lo: usize, h
         None => { println!("{label}: NO hover table"); return; }
     };
     println!("\n-- entries of {label} intersecting [{lo}..{hi}] --");
-    for (span, def, hcxt, val) in infer.hover_table.iter() {
+    for (span, def, s) in infer.hover_table.iter() {
         if span.start_offset as usize > hi || (span.end_offset as usize) < lo {
             continue;
         }
-        let text = elaboration_zoo_lsp::L13_namespace::pretty::pretty_tm(0, hcxt.clone(), val);
+        let text = s;
         let def_uri = b.document_id.iter()
             .find(|e| *e.value() == def.path_id)
             .map(|e| e.key().clone())

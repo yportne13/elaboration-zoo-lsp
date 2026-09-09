@@ -2094,9 +2094,9 @@ impl Infer {
     /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
     /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
     pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
-        let names = cxt.names();
         let tm = self.quote(&cxt.decl, cxt.lvl, val);
-        self.hover_table.push((t_span, def_span, names, tm));
+        let rendered = super::pretty_tm(0, cxt.names(), &tm);
+        self.hover_table.push((t_span, def_span, rendered));
     }
 
     /// L5: push hover entries for the intermediate prefixes of a qualified

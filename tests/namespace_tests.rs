@@ -558,7 +558,7 @@ fn qualified_access_hovers_intermediate_segments() {
     let segments: Vec<String> = b.hover_table.get("file:///b.typort")
         .map(|infer| {
             infer.value().hover_table.iter()
-                .map(|(span, _, _, _)| {
+                .map(|(span, _, _)| {
                     rope.byte_slice(span.start_offset as usize..span.end_offset as usize).to_string()
                 })
                 .collect()

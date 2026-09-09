@@ -1121,12 +1121,12 @@ pub struct PrintlnJob {
     pub names: List<SmolStr>,
 }
 
-/// A hover-table entry: (source span, definition span, binder names at the
-/// push site, the type quoted eagerly at push time). Owned contract
-/// (docs/lsp-twin-wiring-2026-09.md 阶段 0): the query side only pretty-rs the
-/// stored `Rc<Tm>` — no quotable live `Infer`/`Val` required, so the
-/// bump-arena twin can serve the same table.
-pub type HoverEntry = (Span<()>, Span<()>, List<SmolStr>, Rc<Tm>);
+/// A hover-table entry: (source span, definition span, type rendered at push
+/// time). Final cross-engine contract (docs/lsp-twin-wiring-2026-09.md): the
+/// string is produced during elaboration, so a bump-arena engine (whose
+/// quoted Tm dies with the round) can populate the same table — the query side
+/// only copies it out.
+pub type HoverEntry = (Span<()>, Span<()>, String);
 
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
