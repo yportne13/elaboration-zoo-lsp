@@ -7724,9 +7724,18 @@ impl Machine {
                 let fake = self.fake_bind(bump, cxt, &name.data, typ_tm, vtyp)?;
                 let t_checked = self.check(bump, &fake, &bod, vtyp)?;
                 let t_tm = self.wrap_match_in_call(bump, name.data.as_str(), t_checked);
-                // solve_multi_trait(this_meta, **true**)（参考版 Def 臂；
-                // 失败 panic——参考版 unwrap 同款）
-                self.solve_multi_trait_ref(bump, &fake, this_meta, true).unwrap();
+                // solve_multi_trait(this_meta, **true**)（参考版 Def 臂
+                // elaboration.rs:972）：失败 **返回 Err** 交上层（`.map_err(
+                // |e| Error(name.span, ..))?`），不是 panic——参考版没有
+                // unwrap。孪生早前误写成 unwrap，会让 trait 求解失败直接崩，
+                // 掩盖后续的 Nat 默认化重试与丰富错误文案路径（HDL prelude
+                // decl 308 的 `impl Add for UInt[width]` 就是这样从 panic
+                // 变成可诊断的 Err，推进 171→308）。
+                self.solve_multi_trait_ref(bump, &fake, this_meta, true)
+                    .map_err(|e| {
+                        let msg = e.clone();
+                        Error(name.clone().map(move |_| msg.clone()), vec![])
+                    })?;
                 // no_metas 三元检查 + Nat 默认化重试 + 丰富错误文案
                 if let Some((meta_names, oty)) =
                     no_metas(bump, self, &fake, t_tm)
