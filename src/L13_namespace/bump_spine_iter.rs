@@ -5184,6 +5184,13 @@ pub(crate) struct Machine {
     /// bump 值跨轮消亡）。
     tm_import: FxHashMap<usize, &'static Tm<'static>>,
     val_import: FxHashMap<usize, V>,
+    // ── 观察面（LSP 接线阶段 1，docs/lsp-twin-wiring-2026-09.md）──
+    // 与参考版 `Infer` 同名表逐字段同契约（push 期渲染成 owned String；
+    // bump 域 Tm 轮末即弃）。每轮 `clear_round` 清空，`run_decls` 返回后
+    // 由 LSP 读取——本轮声明的本轮快照，与 bump 生命周期严格同界。
+    pub(crate) hover_table: Vec<(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)>,
+    pub(crate) completion_table: Vec<(crate::parser_lib::Span<()>, SmolStr)>,
+    pub(crate) inlay_hint_table: Vec<(u32, String)>,
 }
 
 impl Machine {
@@ -5214,6 +5221,9 @@ impl Machine {
             trait_method_cache: FxHashMap::default(),
             tm_import: FxHashMap::default(),
             val_import: FxHashMap::default(),
+            hover_table: Vec::new(),
+            completion_table: Vec::new(),
+            inlay_hint_table: Vec::new(),
         }
     }
 
@@ -5236,6 +5246,42 @@ impl Machine {
         self.trait_method_cache.clear();
         self.tm_import.clear();
         self.val_import.clear();
+        self.hover_table.clear();
+        self.completion_table.clear();
+        self.inlay_hint_table.clear();
+    }
+
+    // ── 观察面（与参考版 `Infer::push_hover` / `hover_entry_at` 同契约）──
+
+    /// push 期把类型渲染成 owned String 入表：走本机 println/错误消息同款
+    /// `quote → export → pretty_tm` 管线（parity 已证该管线与参考版逐字节
+    /// 一致）。bump 域 Tm 出表即弃，LSP 跨轮读到的只是字符串快照。
+    pub(crate) fn push_hover<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t_span: crate::parser_lib::Span<()>,
+        def_span: crate::parser_lib::Span<()>,
+        v: V,
+    ) {
+        let tm = self.quote(bump, cxt, cxt.lvl, v);
+        let names = types_names_list(cxt.types);
+        let rendered = pretty_tm(0, names, &export(&self.symbol_table, tm));
+        self.hover_table.push((t_span, def_span, rendered));
+    }
+
+    /// 与参考版 `Infer::hover_entry_at` 同规则：同 path 内命中 offset 的最
+    /// 小 span 胜出。
+    pub(crate) fn hover_entry_at(
+        &self,
+        path_id: u32,
+        offset: usize,
+    ) -> Option<&(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)> {
+        self.hover_table
+            .iter()
+            .filter(|x| x.0.path_id == path_id)
+            .filter(|x| x.0.contains(offset))
+            .min_by_key(|x| x.0.end_offset - x.0.start_offset)
     }
 
     // Extend Cxt（源码 binder / inserted binder / define / fake_bind）
@@ -11392,6 +11438,25 @@ impl Tycker {
             bump: Bump::with_capacity(1 << 20),
             machine: Machine::new(),
         }
+    }
+
+    // ── 观察面访问器（`run_decls*` 返回后读取本轮快照；契约与参考版 `Infer`
+    // 的三张表逐字段同型，接线时消费端可按同一套逻辑处理两引擎）──
+    pub(crate) fn hover_table(&self) -> &[(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)] {
+        &self.machine.hover_table
+    }
+    pub(crate) fn completion_table(&self) -> &[(crate::parser_lib::Span<()>, SmolStr)] {
+        &self.machine.completion_table
+    }
+    pub(crate) fn inlay_hint_table(&self) -> &[(u32, String)] {
+        &self.machine.inlay_hint_table
+    }
+    pub(crate) fn hover_entry_at(
+        &self,
+        path_id: u32,
+        offset: usize,
+    ) -> Option<&(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)> {
+        self.machine.hover_entry_at(path_id, offset)
     }
 
     /// 参考版 `run` 的等价物：preprocess + parse 由调用方完成（与参考版
