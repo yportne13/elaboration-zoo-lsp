@@ -164,6 +164,11 @@ enum PrimId {
     NatSub,
     NatDiv,
     NatRem,
+    /// `vconnT`：Verilog 兼容具名端口连接（`child u1 (.a(x))` 宏展开产物，
+    /// 仅 prelude 后挂载——签名引用 prelude 的 ModuleTree/Expr）。走子树判
+    /// 端口方向并经 prelude 助手 `vconnEmit` 发射 assign（参考版 cxt.rs
+    /// `vconn_builtin` 逐句）。
+    VconnT,
 }
 
 /// 可变全局表 + def-replay 备忘（参考版 `Infer.mutable_map` +
@@ -1542,6 +1547,119 @@ fn prim_exec<'a>(
                 (Some(a), Some(b)) => Some(v_xcell(bump.alloc(XCell::Nat(a % b)))),
                 _ => None,
             }
+        }
+        // vconnT（参考版 cxt.rs `vconn_builtin` 逐句）：port 必须是
+        // `subSignal` 构造值；走子 ModuleTree 的 head def `expr` 列表按端口
+        // 名判方向（createIn* → input）；经 prelude 助手 `vconnEmit` 发射
+        // assign（结果弃）；恒返回 U(0)。
+        PrimId::VconnT => {
+            if args.len() < 3 {
+                return None;
+            }
+            let noop = v_u(0);
+            let child_tree = args[0].0;
+            let port = args[1].0;
+            let sig = args[2].0;
+            // SumCase 值的构造子名：经 typ 的 Sum cases 表按 index 反查
+            // （不 hardcode 枚举顺序；typ 不 force——参考版同款）。
+            let ctor_name = |v: V| -> Option<&str> {
+                if v_tag(v) != 7 {
+                    return None;
+                }
+                match v_xcell_of(v) {
+                    XCell::SumCase { typ, index, .. } => match v_xcell_of(*typ) {
+                        XCell::Sum { cases, .. } => cases.get(*index as usize).copied(),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            };
+            if ctor_name(port) != Some("subSignal") {
+                return Some(noop);
+            }
+            let pname = match v_xcell_of(port) {
+                XCell::SumCase { datas, .. } => match datas.get(1) {
+                    Some(d) => match v_xcell_of(d.val) {
+                        XCell::Lit(s) => *s,
+                        _ => return Some(noop),
+                    },
+                    None => return Some(noop),
+                },
+                _ => return Some(noop),
+            };
+            // 参考版 field() 只认 SumCase 的 datas（不查 Sum 参数槽）。
+            let field = |v: V, name: &str| -> Option<V> {
+                match v_xcell_of(v) {
+                    XCell::SumCase { datas, .. } => {
+                        datas.iter().find(|d| d.name == name).map(|d| d.val)
+                    }
+                    _ => None,
+                }
+            };
+            let field_str = |v: V, name: &str| -> Option<&str> {
+                match field(v, name) {
+                    Some(x) => match v_xcell_of(x) {
+                        XCell::Lit(s) => Some(*s),
+                        _ => None,
+                    },
+                    None => None,
+                }
+            };
+            // 子树是 ModuleTree 结构：取 `data` → head ModuleDef 的 `expr`
+            // 列表，逐个扫描端口声明找 `pname`。
+            let ct = force(bump, spine, defs, metas, decl, mutable, child_tree);
+            let data = match field(ct, "data") {
+                Some(v) => force(bump, spine, defs, metas, decl, mutable, v),
+                None => return Some(noop),
+            };
+            let head_def = match field(data, "x") {
+                Some(v) => force(bump, spine, defs, metas, decl, mutable, v),
+                None => return Some(noop),
+            };
+            let mut is_input = false;
+            let mut cur = match field(head_def, "expr") {
+                Some(v) => force(bump, spine, defs, metas, decl, mutable, v),
+                None => return Some(noop),
+            };
+            while let Some("cons") = ctor_name(cur) {
+                let (x, xs) = match (field(cur, "x"), field(cur, "xs")) {
+                    (Some(x), Some(xs)) => (x, xs),
+                    _ => break,
+                };
+                let xf = force(bump, spine, defs, metas, decl, mutable, x);
+                let cn = ctor_name(xf).unwrap_or_default();
+                if matches!(cn, "createIn" | "createInWidth" | "createSIntInWidth")
+                    && field_str(xf, "name") == Some(pname)
+                {
+                    is_input = true;
+                    break;
+                }
+                cur = force(bump, spine, defs, metas, decl, mutable, xs);
+            }
+            let bool_name = if is_input { "Boolean.true" } else { "Boolean.false" };
+            let Some(b) = decl.get(bool_name).map(|e| e.val) else {
+                return Some(noop);
+            };
+            if let Some(emit) = decl.get("vconnEmit").map(|e| e.val) {
+                // 内层 β 用独立草稿栈（同 ChangeMutable：复用外层栈会销毁
+                // 外层 eval 的待续状态）；发射结果弃（副作用走 mutable）。
+                let mut w2: Vec<W<'a>> = Vec::new();
+                let mut v2: Vec<V> = Vec::new();
+                let mut i2: Vec<Icit> = Vec::new();
+                let e = vapp1(
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, emit, b,
+                    Icit::Expl,
+                );
+                let e = vapp1(
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, e, port,
+                    Icit::Expl,
+                );
+                let _ = vapp1(
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, e, sig,
+                    Icit::Expl,
+                );
+            }
+            Some(noop)
         }
     }
 }
@@ -5268,6 +5386,12 @@ impl Machine {
         self.trait_method_cache.clear();
         self.tm_import.clear();
         self.val_import.clear();
+        self.clear_observation_tables();
+    }
+
+    /// 观察表清空（两个调用点：轮入口 `clear_round`；prelude 装载收尾——
+    /// 参考版加载器对缓存态清三张表同款，用户文件查询只见用户段条目）。
+    fn clear_observation_tables(&mut self) {
         self.hover_table.clear();
         self.completion_table.clear();
         self.inlay_hint_table.clear();
@@ -6779,6 +6903,37 @@ impl<'a> Cxt<'a> {
             decls: self.decls.clone(),
         }
     }
+}
+
+/// prelude 短名别名 auto-import（参考版 `load_prelude_state_impl` 尾部
+/// 逐句）：全局 decl 表里带 `.` 的键给短名别名（`Nat.zero` → `zero`），
+/// **ns 方法键排除**（`TypeHead.method` 只经 `x.m` 分派可达、绝不裸名，
+/// 不得遮构造子别名）；短名冲突按全键排序 `or_insert` first-wins（结果
+/// 与 HashMap 迭代序无关的确定性）。
+fn insert_prelude_aliases<'a>(mut cxt: Cxt<'a>) -> Cxt<'a> {
+    let mut ns_method_keys: FxHashSet<SmolStr> = FxHashSet::default();
+    let mut cur = cxt.namespace;
+    while let Some(ns) = cur {
+        for m in ns.methods {
+            ns_method_keys.insert(SmolStr::new(format!("{}.{}", ns.type_name, m)));
+        }
+        cur = ns.next;
+    }
+    let mut aliases: Vec<(SmolStr, SmolStr, DeclEntry<'a>)> = cxt
+        .decls
+        .iter()
+        .filter(|(k, _)| k.contains('.') && !ns_method_keys.contains(*k))
+        .map(|(k, v)| {
+            let short = SmolStr::new(k.split('.').last().unwrap());
+            (short, k.clone(), v.clone())
+        })
+        .collect();
+    aliases.sort_by(|a, b| a.1.cmp(&b.1));
+    let map = Rc::make_mut(&mut cxt.decls);
+    for (short, _full_key, v) in aliases {
+        map.entry(short).or_insert(v);
+    }
+    cxt
 }
 
 fn tuple_n_arity(name: &str) -> Option<usize> {
@@ -11714,6 +11869,31 @@ impl Machine {
         cxt
     }
 
+    /// Verilog 兼容具名端口连接内建 `vconnT`（参考版 `Cxt::
+    /// register_vconn_builtin` 对应）：`ModuleTree -> Expr -> Expr -> U(0)`。
+    /// **时机**：prelude 全部装载后（nat 内建之后）——签名引用的
+    /// ModuleTree/Expr 只有 prelude 里有；提前登记的 `tm_decl("ModuleTree")`
+    /// 是悬空 neutral，会让后续 unify 打转（参考版注释同款）。
+    fn register_vconn_builtin<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>) -> Cxt<'a> {
+        let mt = bump.alloc(Tm::Decl(bump.alloc_str("ModuleTree")));
+        let expr = bump.alloc(Tm::Decl(bump.alloc_str("Expr")));
+        let pi = |bump: &'a Bump, args: Vec<(&'static str, &'a Tm<'a>)>, ret: &'a Tm<'a>| -> &'a Tm<'a> {
+            args.iter().rev().fold(ret, |acc, (n, d)| {
+                bump.alloc(Tm::Pi(bump.alloc_str(n), Icit::Expl, *d, acc))
+            })
+        };
+        let ty_tm = pi(
+            bump,
+            vec![("childTree", mt), ("port", expr), ("sig", expr)],
+            bump.alloc(Tm::U(0)),
+        );
+        let vty = self.eval(bump, cxt, EMPTY_ENV, ty_tm);
+        let nm = bump.alloc_str("vconnT");
+        let placeholder = bump.alloc(Tm::Decl(nm));
+        let val = v_xcell(bump.alloc(XCell::Decl { name: nm }));
+        self.decl_reg(bump, cxt, "vconnT", empty_span(()), placeholder, val, ty_tm, vty, Some(PrimId::VconnT))
+    }
+
     fn elab_all<'a>(
         &mut self,
         bump: &'a Bump,
@@ -11865,61 +12045,133 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
         for (i, d) in ast.iter().enumerate() {
-            let (out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
-            cxt = nc;
-            if nat_after.contains(&i) {
-                cxt = self.machine.register_nat_builtins(bump, &cxt);
-            }
-            // HDL 自检警告：逐 decl 排水（行级去重——参考版
-            // take_fresh_check_issues + format_check_warning）
-            {
-                let mut m = self.machine.mutable.borrow_mut();
-                let pending = m
+            cxt = Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, nat_after, &mut ret)?;
+        }
+        Ok(ret)
+    }
+
+    /// 轮内推进单个 decl：infer + nat 边界 + CheckIssues 逐 decl 排水 +
+    /// println 收集（[`Tycker::run_decls_bounded`] 与
+    /// [`Tycker::run_decls_with_prelude`] 的用户段共用）。显式取
+    /// `&mut Machine`——调用方持有 `&self.bump`，字段不相交方可借用。
+    fn step_round_decl<'a>(
+        machine: &mut Machine,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        d: &Decl,
+        i: usize,
+        nat_after: &[usize],
+        ret: &mut String,
+    ) -> Result<Cxt<'a>, Error> {
+        let (out, nc) = machine.infer_decl(bump, cxt, d)?;
+        let mut cxt = nc;
+        if nat_after.contains(&i) {
+            cxt = machine.register_nat_builtins(bump, &cxt);
+        }
+        // HDL 自检警告：逐 decl 排水（行级去重——参考版
+        // take_fresh_check_issues + format_check_warning）
+        {
+            let mut m = machine.mutable.borrow_mut();
+            let pending = m
+                .map
+                .get("CheckIssues")
+                .and_then(|v| match v_xcell_of(*v) {
+                    XCell::Lit(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            if !pending.is_empty() {
+                m.map.insert(
+                    SmolStr::new("CheckIssues"),
+                    v_xcell(bump.alloc(XCell::Lit(bump.alloc_str("")))),
+                );
+                let seen = m
                     .map
-                    .get("CheckIssues")
+                    .get("CheckIssuesSeen")
                     .and_then(|v| match v_xcell_of(*v) {
                         XCell::Lit(s) => Some(s.to_string()),
                         _ => None,
                     })
                     .unwrap_or_default();
-                if !pending.is_empty() {
-                    m.map.insert(
-                        SmolStr::new("CheckIssues"),
-                        v_xcell(bump.alloc(XCell::Lit(bump.alloc_str("")))),
-                    );
-                    let seen = m
-                        .map
-                        .get("CheckIssuesSeen")
-                        .and_then(|v| match v_xcell_of(*v) {
-                            XCell::Lit(s) => Some(s.to_string()),
-                            _ => None,
-                        })
-                        .unwrap_or_default();
-                    let mut seen2 = seen.clone();
-                    for line in pending.split('\n').filter(|l| !l.is_empty()) {
-                        if !seen2.split('\n').any(|l| l == line) {
-                            seen2 = if seen2.is_empty() {
-                                line.to_string()
-                            } else {
-                                format!("{}\n{}", seen2, line)
-                            };
-                            ret += &super::format_check_warning(line);
-                            ret += "\n";
-                        }
-                    }
-                    if seen2 != seen {
-                        m.map.insert(
-                            SmolStr::new("CheckIssuesSeen"),
-                            v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&seen2)))),
-                        );
+                let mut seen2 = seen.clone();
+                for line in pending.split('\n').filter(|l| !l.is_empty()) {
+                    if !seen2.split('\n').any(|l| l == line) {
+                        seen2 = if seen2.is_empty() {
+                            line.to_string()
+                        } else {
+                            format!("{}\n{}", seen2, line)
+                        };
+                        *ret += &super::format_check_warning(line);
+                        *ret += "\n";
                     }
                 }
+                if seen2 != seen {
+                    m.map.insert(
+                        SmolStr::new("CheckIssuesSeen"),
+                        v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&seen2)))),
+                    );
+                }
             }
-            if let DeclOut::Println(_, out_s) = out {
-                // elaboration 期即算好的 pretty 串（参考版 DeclTm::Println）
-                ret += &out_s;
-                ret += "\n";
+        }
+        if let DeclOut::Println(_, out_s) = out {
+            // elaboration 期即算好的 pretty 串（参考版 DeclTm::Println）
+            *ret += &out_s;
+            *ret += "\n";
+        }
+        Ok(cxt)
+    }
+
+    /// **阶段 2（prelude 装载）整轮入口**：本轮 = prelude 重放 + 用户 decls。
+    /// `prelude_decls`/`prelude_file_ends`/`prelude_nat_after` 来自共享
+    /// `super::parse_prelude_files`（参考版 `load_prelude_state_impl` 同
+    /// 口径的 parse 段）。装载段镜像参考版：逐 decl 推断（println/排水
+    /// 不收集——参考版加载器丢弃输出同款）、nat 边界注册 nat 内建、每
+    /// 文件边界清 force memo（参考版逐文件清空的内存口径）、全部完成后
+    /// 注册 vconnT → 短名别名 or_insert → HdlLoopIdx 复位 → 清观察表
+    /// （缓存态不参与 hover/completion）。用户段与
+    /// [`Tycker::run_decls_bounded`] 同一推进。
+    ///
+    /// 每 kick 都从 prime_round 重放整个 prelude（bump 一次性口径）——
+    /// 这是接线文档阶段 3a 要实测的 seed 开销基线。
+    pub(crate) fn run_decls_with_prelude(
+        &mut self,
+        prelude_decls: &[Decl],
+        prelude_file_ends: &[usize],
+        prelude_nat_after: &[usize],
+        user_ast: &[Decl],
+    ) -> Result<String, Error> {
+        self.bump.reset();
+        self.machine.clear_round();
+        force_memo_clear();
+        let bump = &self.bump;
+        let mut cxt = self.machine.prime_round(bump);
+        let mut file_i = 0usize;
+        for (i, d) in prelude_decls.iter().enumerate() {
+            let (_out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
+            cxt = nc;
+            if prelude_nat_after.contains(&i) {
+                cxt = self.machine.register_nat_builtins(bump, &cxt);
             }
+            if file_i < prelude_file_ends.len() && prelude_file_ends[file_i] == i {
+                force_memo_clear();
+                file_i += 1;
+            }
+        }
+        cxt = self.machine.register_vconn_builtin(bump, &cxt);
+        cxt = insert_prelude_aliases(cxt);
+        {
+            let mut m = self.machine.mutable.borrow_mut();
+            m.map.insert(
+                SmolStr::new("HdlLoopIdx"),
+                v_xcell(bump.alloc(XCell::Decl {
+                    name: bump.alloc_str("hdlLoopIdxEmpty"),
+                })),
+            );
+        }
+        self.machine.clear_observation_tables();
+        let mut ret = String::new();
+        for (i, d) in user_ast.iter().enumerate() {
+            cxt = Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, &[], &mut ret)?;
         }
         Ok(ret)
     }
