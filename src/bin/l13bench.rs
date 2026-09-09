@@ -7,7 +7,10 @@
 //!
 //! 负载族（`--workload`）：
 //! - `church` / `natadd` / `gadt` / `strchain` / `match` / `enum` / `struct`：
-//!   孪生自带生成器（与 L02-L08 bench 同族）。
+//!   孪生自带生成器（与 L02-L08 bench 同族）。`church`（具体 Nat 上的高阶
+//!   迭代倍增）与 `enum`（Vec GADT，元组式构造子应用）已改写成 L13 语言面
+//!   合法形态——原 impredicative Church 编码与分离位置 `cons a b` 两版一致判型
+//!   失败，非孪生分叉。
 //! - `prelude-core`：核心 prelude 15 个文件（无 `show.typort`——它依赖
 //!   `nat_to_dec` prim，本 bench 不注册 nat 内建，两版同缺）。
 //! - `prelude-core-show`：再加 `show.typort`（预期两版同 Err，用于确认
@@ -21,6 +24,8 @@
 //! cargo run --release --bin l13bench [--max-k 13] [--rounds 5]
 //!        [--only basic,fast,fast_ss]
 //!        [--workload church|prelude-core|...|all]
+//!        [--file <path.typort>]   # 跑任意源文件（忽略 --workload）；
+//!                                 # 配 L13BENCH_DIAG=1 逐 decl 定位两版首个失败点
 //! ```
 
 #![allow(dead_code)]
@@ -73,6 +78,10 @@ struct Cli {
     /// 负载族（见文件头）
     #[arg(long, default_value = "church")]
     workload: String,
+
+    /// 调试口：跑任意源文件（两版互检 + L13BENCH_DIAG=1 逐 decl 定位），忽略 --workload
+    #[arg(long)]
+    file: Option<String>,
 }
 
 fn median(ts: &mut [u128]) -> u128 {
@@ -210,6 +219,39 @@ fn diagnose_fast(label: &str, decls: &[Decl], nat_after: &[usize]) {
     );
 }
 
+/// 诊断：逐 decl 喂参考版，报首个失败的 decl 序号与错误（--file 迭代时定位用）。
+fn diagnose_basic(label: &str, decls: &[Decl], nat_after: &[usize]) {
+    if std::env::var_os("L13BENCH_DIAG").is_none() {
+        return;
+    }
+    let fails = |n: usize| -> bool {
+        let bounds: Vec<usize> = nat_after.iter().copied().filter(|&i| i < n).collect();
+        L13_namespace::bench_check_first_err_bounded(&decls[..n], &bounds).is_err()
+    };
+    if !fails(decls.len()) {
+        println!("   [diag] {label}: basic 全部 {} decls 通过", decls.len());
+        return;
+    }
+    let mut lo = 0usize;
+    let mut hi = decls.len();
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        if fails(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let bounds: Vec<usize> = nat_after.iter().copied().filter(|&i| i < hi).collect();
+    let err = L13_namespace::bench_check_first_err_bounded(&decls[..hi], &bounds).err();
+    let decl_name = decl_name_of(&decls[hi - 1]);
+    println!(
+        "   [diag] {label}: basic 首个失败在第 {hi}/{} 个 decl ({decl_name}): {:?}",
+        decls.len(),
+        err.map(|e| e.0.data)
+    );
+}
+
 fn decl_name_of(d: &Decl) -> String {
     use L13_namespace::parser::syntax::Decl as D;
     match d {
@@ -234,6 +276,7 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
     // 计时外：正确性互检
     let (b_nf, f_nf, ok) = nf_parity(decls, nat_after);
     diagnose_fast(label, decls, nat_after);
+    diagnose_basic(label, decls, nat_after);
     let verdict = if ok {
         format!("nf={b_nf}")
     } else {
@@ -296,6 +339,16 @@ fn run(cli: Cli) {
             .map(|s| s.split(',').any(|x| x.trim() == name))
             .unwrap_or(true)
     };
+    if let Some(path) = &cli.file {
+        let src = std::fs::read_to_string(path).expect("--file: cannot read");
+        let label = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
+        let Ok(decls) = fast::parse(&src, 0) else {
+            eprintln!("parse failed: {label}");
+            return;
+        };
+        bench_one(&label, &decls, &[], &cli, &want);
+        return;
+    }
     let workloads: Vec<&str> = match cli.workload.as_str() {
         "all" => vec![
             "church", "natadd", "gadt", "strchain", "match", "enum", "struct", "moduletree",

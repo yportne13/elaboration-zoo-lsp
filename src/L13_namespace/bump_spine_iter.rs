@@ -11580,17 +11580,25 @@ pub(crate) type SourceDecl = Decl;
 // 递归 def、struct/new）
 // --------------------------------------------------------------------------------
 
-/// church 2^(k+1)：k 次 ×2 翻倍（`add p p`）的 def 链，末位 def 为 `p_k`
-/// （nf 节点数与 L06/L08 同为 2n + 4）。
+/// church 2^(k+1)（L13 合法版）：**具体 Nat 类型上的高阶迭代倍增**——`d0`
+/// 是"两次 succ"的自函数，`d{i} = n => d{i-1} (d{i-1} n)` 每层翻倍，末位
+/// `total : Nat = d{k} zero` 把组合链完全展开成 2^(k+1) 个 succ 的深正规式。
+///
+/// 注：原 impredicative Church 编码（`Nat = (N : Type 0) -> (N -> N) -> N -> N`
+/// 配 `add p p` 式高阶应用）在 L13 **两版一致**判型失败——把 pattern-free 的
+/// 多态 church 数嵌套应用于其自身绑定的类型变量 `N`（`a N s (b N s z)`）触发
+/// `can't unify expected: N → N find: N`，单层 eta（`a N s z`）则可过。这是该
+/// elaborator 语言面限制（非孪生分叉），故换成本形态：同样是高阶函数复合驱动
+/// 的 2^(k+1) 深归一化，但两版都能过、可对照计时。
 pub(crate) fn church_src(k: u32) -> String {
     let mut s = String::from(
-        "def Nat : Type 1 = (N : Type 0) -> (N -> N) -> N -> N\n\
-         def add : Nat -> Nat -> Nat = a => b => N => s => z => a N s (b N s z)\n\
-         def p0 : Nat = N => s => z => s (s z)\n",
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\
+         def d0 : Nat -> Nat = n => succ (succ n)\n",
     );
     for i in 1..=k {
-        s += &format!("def p{i} : Nat = add p{} p{}\n", i - 1, i - 1);
+        s += &format!("def d{i} : Nat -> Nat = n => d{} (d{} n)\n", i - 1, i - 1);
     }
+    s += &format!("def total : Nat = d{k} zero\n");
     s
 }
 
@@ -11688,7 +11696,16 @@ pub(crate) fn match_src(k: u32) -> String {
 }
 
 /// enum 负载：多 enum + 依赖索引（Vec 风格 GADT）+ 投影 + 索引等式（Eq）
-/// + 递归 length——覆盖 Sum/SumCase 值的 unify / quote / rename 全链路。
+/// + 递归 length/rep——覆盖 Sum/SumCase 值的 unify / quote / rename 全链路。
+///
+/// 注（L13 合法化，两版一致）：
+/// - 构造子应用用元组形式 `cons (x, xs)`；分离位置形式 `cons zero (...)`
+///   在本语言面两版一致报 `can't unify expected: (x: ?) → ? x find: Nat`。
+/// - `rep` 体内不对 pattern 精化出的 `xs : Vec[Nat] l` 调用**类型泛型**的
+///   `length[T]`——把精化 existential 再喂进另一索引多态函数，两版一致报
+///   `expected: (x': ? _l h xs) → ? _l h xs x' find: Nat`（已知偏差 2 家族，
+///   非孪生分叉）。故 `rep` 走自身递归 `succ (rep xs)`，`add`/`length` 各自
+///   独立用 `println` 触发、互不嵌套。
 pub(crate) fn enum_src() -> String {
     String::from(
         r#"enum Nat {
@@ -11712,7 +11729,7 @@ enum Eq[A](x: A, y: A) {
 
 def two = succ (succ zero)
 
-def t = cons zero (cons two nil)
+def t = cons (zero, cons (two, nil))
 
 println t.len
 
@@ -11732,13 +11749,17 @@ def add(x: Nat, y: Nat): Nat =
         case succ(n) => succ (add n y)
     }
 
+println (add two two)
+
 def rep[n: Nat](x: Vec[Nat] n): Nat =
     match x {
         case nil => zero
-        case cons(h, xs) => add h (rep xs)
+        case cons(_, xs) => succ (rep xs)
     }
 
-println (rep (cons two (cons two nil)))
+println (rep (cons (two, cons (two, nil))))
+
+println (length (cons (two, cons (two, nil))))
 "#,
     )
 }

@@ -22,7 +22,7 @@
 | HDL prelude（943 decls） | ✅ 通过，nf=219，**1.8×** 领先（移植 force memo 后） |
 | 合成负载（natadd/gadt/match/struct/strchain/moduletree） | ✅ 全部 nf 一致，1.2-1.6× 领先 |
 | 已修阻塞点 | 5 个（见 §10 时间线） |
-| 剩余阻塞 | church/enum 生成器语法面；LSP 接线（观察面 + prelude 加载） |
+| 剩余阻塞 | LSP 接线（观察面 + prelude 加载）；~~church/enum 生成器~~ 已改 L13 合法形态（09-09） |
 
 ---
 
@@ -37,12 +37,24 @@ release，min/med（ms），`--rounds 3`：
 | match | 11 | 15 | 0.285 | 0.251 | 0.250 | 0.88× |
 | struct | 11 | 4101 | 8657 | 7107 | 7175 | 0.82× |
 | strchain | 11 | 4096 | 5458 | 3898 | — | 0.71× |
+| church（重写后） | 11 | 14 | 5902 | 4286 | 4277 | 0.73× |
+| enum（重写后） | 9 | 15 | 0.626 | 0.608 | 0.596 | 0.97× |
 
-即孪生在这些负载上稳定领先 ~1.2-1.6×，与 L02-L08 的结论一致。但：
+即孪生在这些负载上稳定领先 ~1.2-1.6×（小负载趋平），与 L02-L08 的结论一致。注：
 
-- `church` / `enum` 两族**两版都返回 nf=0**（生成器语法超出 L13 语言面，
-  非分叉）。需要修生成器或换成 L13 合法源，否则这两族在 L13 无意义。
-- 这些负载**都不加载 prelude**，与 LSP 的真实负载（HDL 文件 + 24 个
+- ~~`church` / `enum` 两族两版都返回 nf=0~~ **已修复（09-09）**：原生成器
+  超出 L13 语言面（**两版一致**拒绝，非分叉）。已改写成合法形态并恢复对照：
+  - `church`：impredicative Church 编码 `Nat = (N:Type 0) -> (N->N) -> N -> N`
+    的嵌套高阶应用 `a N s (b N s z)` 两版一致报 `can't unify expected: N → N
+    find: N`（单层 eta `a N s z` 可过）。换成**具体 Nat 类型上的高阶迭代倍增**
+    （`d{i} = n => d{i-1} (d{i-1} n)`，末位 `total = d{k} zero`）：k=9/10/11
+    nf=2050/4098/8194，fast_ss 对 basic **~1.38×** 领先，可测差。
+  - `enum`：分离位置构造子应用 `cons zero (…)` 两版一致报 `can't unify
+    expected: (x: ?) → ? x find: Nat`。改元组式 `cons (x, xs)`；`rep` 体内不再
+    把 pattern 精化的 `xs` 喂进类型泛型 `length[T]`（该嵌套依赖索引传播两版一致
+    失败，落在已知偏差 2 家族）。15 decls 两版一致 nf=18，覆盖 Vec GADT +
+    Eq/refl + length/add/rep 全链路。
+- 这些合成负载**都不加载 prelude**，与 LSP 的真实负载（HDL 文件 + 24 个
   prelude 文件）相去甚远。
 
 ## 2. 真实 prelude 负载（决定性，修复前）
@@ -234,7 +246,9 @@ panic（`solve trait failed: Into[Nat, UInt[...]]`）。
 
 ## 9. 下一步（按优先级）
 
-1. 修 `church`/`enum` 生成器（L13 语言面），恢复两族对照。
+1. ~~修 `church`/`enum` 生成器（L13 语言面），恢复两族对照。~~ **已完成
+   （09-09）**：两族均改写成两版一致通过的合法形态（见 §1）；顺带确认这些失败
+   **不是孪生分叉**而是语言面共享限制。
 2. LSP 接线（阶段 5，最大）：观察面（hover/completion/inlay/accumulated_errors/
    defer_println）+ prelude 加载（PreludePool/宏）+ 跨请求数据面。
 3. 扩 parity 覆盖到 namespace/class/trait/Nat 语言面。

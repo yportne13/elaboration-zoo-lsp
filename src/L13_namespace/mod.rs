@@ -4055,6 +4055,44 @@ pub(crate) fn bench_check_nf_bounded(
     }
 }
 
+/// [`bench_check_nf_bounded`] 的诊断孪生：首个 decl Err 直接把错误传出
+/// （而非吞成 0），供 l13bench `--file` 模式逐 decl 定位参考版失败点。
+pub(crate) fn bench_check_first_err_bounded(
+    decls: &[parser::syntax::Decl],
+    nat_after: &[usize],
+) -> Result<u64, Error> {
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let mut last: Option<SmolStr> = None;
+    for (i, d) in decls.iter().enumerate() {
+        let is_def = matches!(d, parser::syntax::Decl::Def { .. });
+        let name = if let parser::syntax::Decl::Def { name, .. } = d {
+            Some(name.data.clone())
+        } else {
+            None
+        };
+        match infer.infer(&cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(e) => return Err(e),
+        }
+        if nat_after.contains(&i) {
+            cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
+        }
+        if is_def {
+            last = name;
+        }
+    }
+    match last.and_then(|n| cxt.decl.get(&n).map(|e| e.2.clone())) {
+        Some(v) => {
+            let q = infer.quote(&cxt.decl, Lvl(0), &v);
+            let n = tm_size_ref(&q);
+            std::mem::forget(q);
+            Ok(n)
+        }
+        None => Ok(0),
+    }
+}
+
 #[test]
 fn test9() {
     let input = r#"
