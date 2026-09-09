@@ -200,7 +200,8 @@ fn diagnose_fast(label: &str, decls: &[Decl], nat_after: &[usize]) {
         }
     }
     let mut t = fast::Tycker::new();
-    let err = t.run_decls(&decls[..hi]).err();
+    let bounds: Vec<usize> = nat_after.iter().copied().filter(|&i| i < hi).collect();
+    let err = t.run_decls_bounded(&decls[..hi], &bounds).err();
     let decl_name = decl_name_of(&decls[hi - 1]);
     println!(
         "   [diag] {label}: twin 首个失败在第 {hi}/{} 个 decl ({decl_name}): {:?}",
@@ -297,7 +298,7 @@ fn run(cli: Cli) {
     };
     let workloads: Vec<&str> = match cli.workload.as_str() {
         "all" => vec![
-            "church", "natadd", "gadt", "strchain", "match", "enum", "struct",
+            "church", "natadd", "gadt", "strchain", "match", "enum", "struct", "moduletree",
             "prelude-core", "prelude-core-show", "prelude-hdl", "examples-hdl",
         ],
         w => vec![w],
@@ -306,8 +307,8 @@ fn run(cli: Cli) {
     for workload in workloads {
         println!("== workload: {workload} ==");
         match workload {
-            "church" | "natadd" | "gadt" | "strchain" | "match" | "enum" | "struct" => {
-                let ks: Vec<u32> = if matches!(workload, "gadt" | "enum") {
+            "church" | "natadd" | "gadt" | "strchain" | "match" | "enum" | "struct" | "moduletree" => {
+                let ks: Vec<u32> = if matches!(workload, "gadt" | "enum" | "moduletree") {
                     vec![9]
                 } else {
                     (9..=cli.max_k).collect()
@@ -320,6 +321,7 @@ fn run(cli: Cli) {
                         "strchain" => fast::strchain_src(k),
                         "match" => fast::match_src(k),
                         "struct" => fast::struct_src(k),
+                        "moduletree" => fast::moduletree_src(),
                         _ => fast::enum_src(),
                     };
                     let Ok(decls) = fast::parse(&src, 0) else {

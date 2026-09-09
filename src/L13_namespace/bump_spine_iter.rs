@@ -7295,9 +7295,17 @@ impl Machine {
                 a = a_f;
                 if v_tag(a) == 7 {
                     if let XCell::Sum { params, cases, .. } = v_xcell_of(a) {
-                        // struct：单 case 且名字带 `.mk` → 剥 mk 的构造子
-                        // 类型链取字段类型（**U(0) 占位怪癖保留**——参考版
-                        // TODO 注释原样：显式 binder 以 U(0) 实例化）
+                        // struct：单 case 且名字带 `.mk` → 剥 mk 的构造子类型
+                        // 链取字段类型。实例化口径照参考版（elaboration.rs
+                        // 2380-2398）：**显式** binder 以接收者自身
+                        // （`Obj(接收者)`）实例化——这样 `this.data` 的类型是
+                        // `Vec[ModuleDef](this.num)` 而非占位值，下游
+                        // `cons m this.data` 的隐式 len 才能解到 `this.num`；
+                        // **隐式** binder 用 struct 的实际参数值，缺失回退
+                        // 接收者。曾误用 `U(0)` 占位两处：依赖索引字段的投影
+                        // 类型全部退化成 `Vec[..](U(0))`（HDL prelude 的
+                        // `impl $trait_name$ModuleTree` 处 can't unify）。
+                        let receiver = self.eval(bump, cxt, cxt.env, tm);
                         let mut c: Option<Vec<(&str, V)>> = None;
                         if cases.len() == 1 && cases[0].contains(".mk") {
                             let case = cases[0];
@@ -7313,23 +7321,21 @@ impl Machine {
                                     let typ_f = self.force_v(bump, cxt, typ);
                                     if v_tag(typ_f) == 4 {
                                         let p = v_pi_of(typ_f);
-                                        if p.icit == Icit::Expl {
-                                            ret.push((p.name, p.dom));
-                                            typ = {
-                                                let env = env_ext(bump, p.env, v_u(0));
-                                                self.eval(bump, cxt, env, p.body)
-                                            };
+                                        let this_obj =
+                                            v_xcell(bump.alloc(XCell::Obj {
+                                                val: receiver,
+                                                name: bump.alloc_str(p.name),
+                                            }));
+                                        let val = if p.icit == Icit::Expl {
+                                            this_obj
                                         } else {
-                                            let val = param
-                                                .pop()
-                                                .map(|x| x.val)
-                                                .unwrap_or_else(v_u0);
-                                            ret.push((p.name, p.dom));
-                                            typ = {
-                                                let env = env_ext(bump, p.env, val);
-                                                self.eval(bump, cxt, env, p.body)
-                                            };
-                                        }
+                                            param.pop().map(|x| x.val).unwrap_or(this_obj)
+                                        };
+                                        ret.push((p.name, p.dom));
+                                        typ = {
+                                            let env = env_ext(bump, p.env, val);
+                                            self.eval(bump, cxt, env, p.body)
+                                        };
                                     } else {
                                         break;
                                     }
@@ -11502,6 +11508,44 @@ def rep[n: Nat](x: Vec[Nat] n): Nat =
     }
 
 println (rep (cons two (cons two nil)))
+"#,
+    )
+}
+
+/// 最小 struct + inherent impl（`impl Name { def ... }`）+ 依赖索引 Vec
+/// —— HDL prelude decl 171（`impl $trait_name$ModuleTree`）unify 失败的
+/// 最小化形态：struct 脱糖出的 inherent impl，方法体带 `succ(this.num)`
+/// 构造子链与 `m :: this.data` 的 cons 链。
+pub(crate) fn moduletree_src() -> String {
+    String::from(
+        r#"enum Nat {
+    zero
+    succ(n: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+struct ModuleDef {
+    expr_num: Nat
+}
+
+struct ModuleTree {
+    num: Nat
+    data: Vec[ModuleDef] num
+}
+
+impl ModuleTree {
+    def insert(m: ModuleDef): ModuleTree = ModuleTree.mk(succ(this.num), cons m this.data)
+}
+
+def md: ModuleDef = ModuleDef.mk(zero)
+
+def t: ModuleTree = ModuleTree.mk(zero, nil)
+
+println (t.insert md).num
 "#,
     )
 }
