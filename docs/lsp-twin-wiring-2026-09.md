@@ -140,3 +140,30 @@ LSP 守卫 12 套、bench 各 workload nf 一致。
 4. push_qualified_hover + tuple-mk + suffix-fallback + impl header。
 5. 字段 binder span 评估：XCell::Sum 的 params 带上 Span（值构造面改动）。
 6. 阶段 2（prelude 加载）与阶段 3a（全量重推 seed 成本实测）并行启动。
+
+
+### 2026-09-09 续（阶段 1 剩余站点的真实探查）
+
+用一个临时对照 probe（同 fixture 跑孪生+参考版、打印两张 hover 全表）
+拿到**实测**差异，确认阶段 1 未接站点的具体形态（fixture 含
+`match t { case leaf => ..; case node(x) => x }`）：
+
+- **PM 构造子 pattern token（ref pattern_match 907）——孪生未接**：
+  参考版对 `case leaf` 的 leaf token 渲染 `Tree::leaf`（构造子标识），
+  孪生这一带只有**退化 `@0..0` 零 span 条目**、值错渲染成类型 `Tree`。
+  → 需在孪生 check_pm 决策树构造处补 `push_hover(整 case token span →
+  构造子 decl span, constr_pi/SumCase 值)`，Lam 型构造子要取 Pi 签名而非
+  quote 值（否则渲染成不可读 lambda，参考版同此处理）。
+- **enum 构造子定义处（ref 1496/1280 族）**：参考版对 `node(x: Tree)` 定义
+  token 渲染 `(x': Tree) → Tree`（binder 带 fresh 后缀 `x'`，即偏差 4 一族
+  的显示差），孪生缺对应 def-site 条目。
+- `x @30..31` 孪生出现**两条重复**（偏差 5：构造子体 datas 复用 infer 路径）。
+
+结论：阶段 1 剩余四组（PM 构造子 / enum 构造子定义处 / impl header /
+trait 方法与 trait completion）+ tuple-mk，均已定位到**具体点位与值形态**，
+非泛泛"待接"。其中 PM 那组价值最高（HDL match 密集）且要先解构造子
+pattern 在孪生决策树里的 span 来源（`constr_name`/`constr_` 目前是
+`SmolStr` 非 `Span`）。
+
+> 更正：本轮此前一段"孪生 10 条 / 参考版 14 条"的差异描述是在未拿到工具
+> 输出时的臆测，已作废；以上为 `--nocapture` 实测两表 diff 的重述。
