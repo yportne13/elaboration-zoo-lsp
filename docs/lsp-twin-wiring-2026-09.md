@@ -106,20 +106,21 @@ LSP 加引擎开关（先 env/config），孪生模式与参考版模式跑同�
 `e2564c1`（binder span 16 点穿线 + local/def-site/let/qualified/field 五组）→
 `128d552`（completion 4 站点）。
 
-**孪生观察面站点状态（对参考版 21 站点）**：
+**孪生观察面站点状态（对参考版 21 站点，2026-09-09 晚更新）**：
 | 组 | 状态 |
 |---|---|
-| Var 解析五支（global/import/prefix/local/suffix-fallback） | local/global/import/prefix ✅；suffix-fallback ❌（matches 集不带 span） |
+| Var 解析五支（global/import/prefix/local/suffix-fallback） | ✅ 五支全（suffix-fallback 带 decl span + cached 串） |
 | check-Lam binder（742）/ let（2627）/ def 名（1153） | ✅ 三点 |
-| Obj qualified 三连（2317/2330/2339） | ✅（cached push） |
+| Obj qualified 三连（2317/2330/2339） | ✅（cached push，键=整 Raw span 对齐参考版 t_span） |
 | 字段投影 struct/SumCase（2422/2455） | ✅ 但 **def_span 降级为字段 token**——孪生 Sum/SumCase 值不持字段 binder span，待评估补 |
-| qualified 中间段 push_qualified_hover（2126） | ❌（孪生未移植该函数） |
+| qualified 中间段 push_qualified_hover（2126） | ✅（逐段 cached push） |
 | tuple-mk 元素（2577） | ❌ |
-| ns-method/trait 方法（2839/2982） | ns 支理论等价免接（内层 Var(qname) 站点同 span 同串、min_by_key 平手规则两版一致）；trait-definition 支 ❌（需 trait_definition 方法名 span 穿线） |
-| PM 构造子 pattern token（pattern_match 907） | ❌ |
+| ns-method/trait 方法（2839/2982） | ns 支理论等价免接；trait-definition 支 ❌（需 trait_definition 方法名 span 穿线） |
+| PM 构造子 pattern token（pattern_match 907） | ✅（Con==Con arm 构造路径；无参→Tree::leaf、参数化→Pi；`9a6faff`） |
+| enum 构造子定义处（use==def==声明 token） | ✅（constrs 从 decl 表回填声明 span；prime 渲染差属偏差 4） |
 | impl header（1462/1482） | ❌ |
 | completion（2431/2446/2466/3001/3035） | struct/SumCase 命中与未命中 4 点 ✅；trait 方法候选（3001/3035）❌ |
-| inlay（def 1157 / let 2601） | ❌ 两点——def 支需孪生 ret_cxt/telescope-names 对齐（孪生 Def 臂结构与参考版 1122-1183 不同构），let 支较直接 |
+| inlay（def 1157 / let 2601） | ✅ 两点（def peel_pi_collect 收 telescope names；偏移-标签集互检过） |
 
 **性能事实（prelude-hdl 943 decls，release）**：
 - 观察面接线前：fast 2204ms / fast_ss 1865ms。
