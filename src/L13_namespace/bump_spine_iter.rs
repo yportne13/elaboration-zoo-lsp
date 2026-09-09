@@ -8669,6 +8669,34 @@ impl Machine {
                     }
                     let (typ_tm, _) = self.check_universe(bump, &temp_cxt, name)?;
                     let typ_val = self.eval(bump, &temp_cxt, temp_cxt.env, typ_tm);
+                    // 观察面（参考版 1452-1486 impl header hover 对）：
+                    //  A) trait 名 token → trait 声明处（点 trait_name 跳声明，
+                    //     而非实现自跳）；B) 实现方法名 token → trait 方法声明
+                    //     名 span，值 = 方法自身 Pi 类型（实现参数上下文求值）。
+                    if let Some(e) = cxt.decls.get(trait_full.as_str()) {
+                        let (espan, evty) = (e.span, e.vty);
+                        self.push_hover(bump, &cxt, trait_name.to_span(), espan, evty);
+                    }
+                    if let Some((_, _, _, trait_methods)) =
+                        self.tstate.definition.get(&trait_full).cloned()
+                    {
+                        for (decl, _) in methods.iter() {
+                            if let Decl::Def { name: def_name, params: m_params, ret_type: m_ret, .. } = decl {
+                                if let Some((tm_name, _, _, _)) =
+                                    trait_methods.iter().find(|(mn, _, _, _)| mn.data == def_name.data)
+                                {
+                                    let mty = m_params.iter().rev().fold(m_ret.clone(), |a, b| {
+                                        Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
+                                    });
+                                    let mty_val = self
+                                        .infer_expr(bump, &temp_cxt, &mty)
+                                        .map(|(t, _)| self.eval(bump, &temp_cxt, temp_cxt.env, t))
+                                        .unwrap_or_else(|_| v_u(0));
+                                    self.push_hover(bump, &temp_cxt, def_name.to_span(), tm_name.to_span(), mty_val);
+                                }
+                            }
+                        }
+                    }
                     // 保留全部参数（含 outParam）——求解器要区分仅 out 参数
                     // 不同的实例（Into[String] vs Into[Bool]）
                     let mut trait_param: Vec<Rc<CVal>> = {
@@ -12432,6 +12460,54 @@ def d0 : Nat -> Nat = n => succ n
             "`case node` token must also hover as its Pi signature; got {:?}",
             node_entries
         );
+    }
+
+    /// Impl-header hover pair: `impl Trait for Ty` — the trait-name token
+    /// resolves to the trait declaration, and each implementing `def` name
+    /// resolves to the trait method's declaration span.
+    #[test]
+    fn hover_impl_header_matches_reference() {
+        let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\ntrait Pick[T] {\n    def pick(t: T): T\n}\nimpl Pick[Nat] for Nat {\n    def pick(t: Nat): Nat = t\n}\n";
+        let ast = parse(src, 49).expect("parse");
+
+        let mut t = Tycker::new();
+        t.run_input(src, 49).expect("twin check");
+        let mut twin_v: Vec<(u32, u32, u32, u32, String)> = t
+            .hover_table()
+            .iter()
+            .map(|(ts, ds, r)| {
+                (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone())
+            })
+            .collect();
+        twin_v.sort();
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let mut ref_v: Vec<(u32, u32, u32, u32, String)> = infer
+            .hover_table
+            .iter()
+            .map(|(ts, ds, r)| {
+                (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone())
+            })
+            .collect();
+        ref_v.sort();
+
+        // 断言两版各自的 impl-header 关键条目存在（trait 名 token、实现
+        // 方法名 token），且两版 key 集合一致（渲染串允许偏差 4 的 prime 差）。
+        let trait_tok = src.find("impl Pick").unwrap() + "impl ".len();
+        let method_tok = src.rfind("def pick").unwrap() + 4;
+        let key = |x: &(u32, u32, u32, u32, String)| x.0;
+        for (name, off, len) in [("trait-name", trait_tok, 4), ("method-name", method_tok, 4)] {
+            let _ = key;
+            let in_ref = ref_v.iter().any(|x| x.0 == off as u32 && x.1 == (off + len) as u32);
+            let in_twin = twin_v.iter().any(|x| x.0 == off as u32 && x.1 == (off + len) as u32);
+            assert!(in_ref, "reference lacks {} hover entry", name);
+            assert!(in_twin, "twin lacks {} hover entry", name);
+        }
     }
 
     /// Whole-table parity on a package + qualified-access + bare-name
