@@ -7664,6 +7664,17 @@ impl Machine {
                                 c = Some(ret);
                             }
                         }
+                        // 观察面：type-ahead completion 关键集（ref 2431/2446——
+                        // 命中与未命中都推，键 = 接收者 span，owned 零渲染）。
+                        {
+                            let rcv = x.to_span();
+                            self.completion_table.extend(
+                                c.iter()
+                                    .flatten()
+                                    .map(|(n, _)| (rcv, SmolStr::new(*n)))
+                                    .chain(params.iter().map(|pp| (rcv, SmolStr::new(pp.name)))),
+                            );
+                        }
                         let field = c
                             .and_then(|params| {
                                 params
@@ -7696,6 +7707,12 @@ impl Machine {
                             .iter()
                             .find(|d| d.name == t.data.as_str())
                             .map(|d| d.val);
+                        {
+                            // 观察面：构造子值字段名 completion（ref 2466 口径）
+                            let rcv = x.to_span();
+                            self.completion_table
+                                .extend(datas.iter().map(|d| (rcv, SmolStr::new(d.name))));
+                        }
                         if let Some(ty) = field {
                             // 观察面：构造子字段访问 hover（ref 2455，同样降级 def_span）
                             self.push_hover(bump, cxt, t.to_span(), t.to_span(), ty);
@@ -12079,5 +12096,38 @@ def d0 : Nat -> Nat = n => succ n
 
         assert_eq!(&tw.2, &rf.2, "field rendered type");
         assert_eq!(tw.2, "String", "field type is String");
+    }
+
+    /// Type-ahead completion on a struct receiver: the set of offered field
+    /// names keyed at the receiver span agrees with the reference.
+    #[test]
+    fn completion_struct_fields_matches_reference() {
+        let src = "struct P {\n    x: String\n    y: String\n}\ndef get(p: P): String = p.x\n";
+        let ast = parse(src, 45).expect("parse");
+
+        let mut t = Tycker::new();
+        t.run_input(src, 45).expect("twin check");
+        let mut twin_set: Vec<(u32, u32, String)> = t
+            .completion_table()
+            .iter()
+            .map(|(sp, n)| (sp.start_offset, sp.end_offset, n.to_string()))
+            .collect();
+        twin_set.sort();
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let mut ref_set: Vec<(u32, u32, String)> = infer
+            .completion_table
+            .iter()
+            .map(|(sp, n)| (sp.start_offset, sp.end_offset, n.to_string()))
+            .collect();
+        ref_set.sort();
+
+        assert!(!twin_set.is_empty(), "twin offered no completions");
+        assert_eq!(twin_set, ref_set, "completion sets (span-keyed) agree");
     }
 }
