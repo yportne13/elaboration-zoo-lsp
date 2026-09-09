@@ -878,10 +878,15 @@ const APPP: usize = 2; // application
 const PIP: usize = 1; // pi
 const LETP: usize = 0; // let, lambda
 
-/// ns 按 Main.hs 的约定：**最内层 binder 在头部**，`Var (Ix x) -> ns !! x`。
+/// ns 按 Main.hs 的约定：**最内层 binder 在头部**（调用方从 types 链收集，
+/// 头 = 最新 binder）。本实现入核前反转一次，之后用 Vec 尾部当栈顶
+/// （push/pop 进出 binder，索引 `ns[len-1-x]`），每 binder O(1)；
+/// `fresh` 仍全表扫（与上游 Haskell cons 表同阶）。
 pub fn pretty_tm(prec: usize, ns: &[String], t: &Tm) -> String {
     let mut out = String::new();
-    go(prec, ns, t, &mut out);
+    let mut ns = ns.to_vec();
+    ns.reverse();
+    go(prec, &mut ns, t, &mut out);
     out
 }
 
@@ -891,9 +896,9 @@ fn show_tm(cxt: &Cxt, t: &Tm) -> String {
 }
 
 /// Wrap in parens if expression precedence is lower than enclosing precedence.
-fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
+fn go(p: usize, ns: &mut Vec<String>, t: &Tm, out: &mut String) {
     match t {
-        Tm::Var(Ix(x)) => out.push_str(&ns[*x as usize]),
+        Tm::Var(Ix(x)) => out.push_str(&ns[ns.len() - 1 - *x as usize]),
 
         // 显式实参按 atom 优先级；隐式实参裹 `{}`（内部 let 优先级，不再加括号）
         Tm::App(t, u, i) => {
@@ -922,8 +927,7 @@ fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
                 out.push('(');
             }
             out.push_str("λ ");
-            let mut ns = ns.to_vec();
-            let x = fresh(&ns, &name.data);
+            let x = fresh(ns, &name.data);
             match i {
                 Icit::Expl => out.push_str(&x),
                 Icit::Impl => {
@@ -932,8 +936,9 @@ fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
                     out.push('}');
                 }
             }
-            ns.insert(0, x);
-            go_lam(&ns, body, out);
+            ns.push(x);
+            go_lam(ns, body, out);
+            ns.pop();
             if paren {
                 out.push(')');
             }
@@ -949,9 +954,9 @@ fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
             }
             go(APPP, ns, a, out);
             out.push_str(" → ");
-            let mut ns = ns.to_vec();
-            ns.insert(0, "_".to_string());
-            go(PIP, &ns, b, out);
+            ns.push("_".to_string());
+            go(PIP, ns, b, out);
+            ns.pop();
             if paren {
                 out.push(')');
             }
@@ -962,11 +967,11 @@ fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
             if paren {
                 out.push('(');
             }
-            let mut ns = ns.to_vec();
-            let x = fresh(&ns, &name.data);
-            pi_bind(&ns, &x, *i, a, out);
-            ns.insert(0, x);
-            go_pi(&ns, b, out);
+            let x = fresh(ns, &name.data);
+            pi_bind(ns, &x, *i, a, out);
+            ns.push(x);
+            go_pi(ns, b, out);
+            ns.pop();
             if paren {
                 out.push(')');
             }
@@ -977,17 +982,17 @@ fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
             if paren {
                 out.push('(');
             }
-            let mut ns = ns.to_vec();
-            let x = fresh(&ns, &name.data);
+            let x = fresh(ns, &name.data);
             out.push_str("let ");
             out.push_str(&x);
             out.push_str(" : ");
-            go(LETP, &ns, a, out);
+            go(LETP, ns, a, out);
             out.push_str("\n  = ");
-            go(LETP, &ns, t, out);
+            go(LETP, ns, t, out);
             out.push_str(";\n\n");
-            ns.insert(0, x);
-            go(LETP, &ns, u, out);
+            ns.push(x);
+            go(LETP, ns, u, out);
+            ns.pop();
             if paren {
                 out.push(')');
             }
@@ -1000,28 +1005,29 @@ fn go(p: usize, ns: &[String], t: &Tm, out: &mut String) {
     }
 }
 
-/// `goBDS`：`?m n_外 … n_内`（ns 与 bds 平行推进，`Defined` 跳名）。
+/// `goBDS`：`?m n_外 … n_内`（ns 与 bds 自**内层**平行推进——ns 外→内
+/// 存放，故取 `split_last` 配 bds 头；`Defined` 跳名）。
 fn go_bds(p: usize, ns: &[String], m: u32, bds: &List<BD>, out: &mut String) {
-    match (ns.split_first(), bds.head()) {
+    match (ns.split_last(), bds.head()) {
         (None, None) => out.push_str(&format!("?{m}")),
-        (Some((n, ns_tail)), Some(BD::Bound)) => {
+        (Some((n, ns_prefix)), Some(BD::Bound)) => {
             let paren = APPP < p;
             if paren {
                 out.push('(');
             }
-            go_bds(APPP, ns_tail, m, &bds.tail(), out);
+            go_bds(APPP, ns_prefix, m, &bds.tail(), out);
             out.push(' ');
             out.push_str(n);
             if paren {
                 out.push(')');
             }
         }
-        (Some((_, ns_tail)), Some(BD::Defined)) => go_bds(APPP, ns_tail, m, &bds.tail(), out),
+        (Some((_, ns_prefix)), Some(BD::Defined)) => go_bds(APPP, ns_prefix, m, &bds.tail(), out),
         _ => panic!("impossible"), // ns 与 bds 长度错位
     }
 }
 
-fn go_lam(ns: &[String], t: &Tm, out: &mut String) {
+fn go_lam(ns: &mut Vec<String>, t: &Tm, out: &mut String) {
     match t {
         Tm::Lam(name, i, body) => {
             out.push(' ');
@@ -1034,9 +1040,9 @@ fn go_lam(ns: &[String], t: &Tm, out: &mut String) {
                     out.push('}');
                 }
             }
-            let mut ns = ns.to_vec();
-            ns.insert(0, x);
-            go_lam(&ns, body, out);
+            ns.push(x);
+            go_lam(ns, body, out);
+            ns.pop();
         }
         t => {
             out.push_str(". ");
@@ -1047,14 +1053,14 @@ fn go_lam(ns: &[String], t: &Tm, out: &mut String) {
 
 /// Π 链：后续 binder 的 fresh 名 ≠ `"_"` 才续链（上游 goPi 守卫），否则
 /// 落回箭头形（`"_"` binder 由 `go` 的 Expl 简写或 `{_ : A}` 处理）。
-fn go_pi(ns: &[String], t: &Tm, out: &mut String) {
+fn go_pi(ns: &mut Vec<String>, t: &Tm, out: &mut String) {
     match t {
         Tm::Pi(name, i, a, b) if name.data != "_" => {
-            let mut ns = ns.to_vec();
-            let x = fresh(&ns, &name.data);
-            pi_bind(&ns, &x, *i, a, out);
-            ns.insert(0, x);
-            go_pi(&ns, b, out);
+            let x = fresh(ns, &name.data);
+            pi_bind(ns, &x, *i, a, out);
+            ns.push(x);
+            go_pi(ns, b, out);
+            ns.pop();
         }
         t => {
             out.push_str(" → ");
@@ -1064,7 +1070,7 @@ fn go_pi(ns: &[String], t: &Tm, out: &mut String) {
 }
 
 /// Pi binder：显式 `(x : A)`，隐式 `{x : A}`。
-fn pi_bind(ns: &[String], x: &str, i: Icit, a: &Tm, out: &mut String) {
+fn pi_bind(ns: &mut Vec<String>, x: &str, i: Icit, a: &Tm, out: &mut String) {
     match i {
         Icit::Expl => {
             out.push('(');
