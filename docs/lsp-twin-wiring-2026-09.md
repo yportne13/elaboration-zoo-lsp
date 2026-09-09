@@ -149,6 +149,58 @@ LSP 加引擎开关（先 env/config），孪生模式与参考版模式跑同�
 5. 双引擎 LSP 灰度（阶段 4）：lib.rs 加引擎开关，8 测试套件跑孪生模式。
 
 
+### 2026-09-09 续（三路评审 + 修复轮）
+
+阶段 2 提交后按性能 / 正确性 / 代码风格三个维度并行评审，修复全部落地
+（提交 `7c69eff` + 本轮）：
+
+**正确性（3 修 + 1 对齐）**：
+1. **VconnT `field`/`ctor_name` 补 tag 守卫（P1）**：`v_xcell_of` 是裸
+   打包字解引用，tag 检查是前置守卫（`lit_of`/`project` 同款惯例）——
+   参考版的 `match Val::SumCase` 是天然安全匹配，移植时漏了。恶意/畸形
+   实参下是野指针读；好输入不触发（09-hierarchy 过了）。
+2. **check 路径 Let binder hover 补 push（P1）**：参考版 742 在 **check
+   的 Let 臂**（推断路径孪生已有 8223 同款）——检查路径的 let（HDL 模块
+   体常见）此前丢条目。全表 fixture 加 `let m = succ(n)` 锁住。
+3. **后缀回退臂仍读登记期缓存串（P2）**：与本轮主修同缺陷类的漏网点。
+   改实时渲染（ref 2220）。
+4. **参考版加载器补清 inlay 表（P2）**：参考侧只清 hover/completion，
+   prelude 一旦未来产出 inlay 会按裸 offset 键泄漏进每个 backend clone；
+   孪生三表全清。取参考侧对齐（行为今日等价——prelude 无 inlay）。
+5. `run_decls_with_prelude` 签名收敛为 `&PreludeParse`，`failed` 非 None
+   快速失败（parse 截断静默重放会以难诊断的 infer Err 爆在下游）。
+
+**性能（1 主修 + 实测）**：
+- **prelude 装载段关观察面 push（`Machine.observe` 总闸）**：装载段全部
+  hover/inlay/completion push 与 decl_reg 的 typ_pretty 渲染在本轮末
+  `clear_observation_tables` 里丢弃——参考版 LSP 只在进程启动装一次
+  prelude，孪生每 kick 重放不应为被删的表条目付费。实测（release，
+  observation 套件 4 次 prelude 重放）：**9.75s → 9.23s**，HDL 级重放
+  省约 440ms/kick（≈ 阶段 1 接线的 +20% 渲染税全额回收）。gate 默认
+  `true`——bench/run 口径维持与参考版的对称渲染成本，bench 数字可比。
+- 未采纳（登记备查）：`types_names_list` O(lvl)→O(1)（bind 期缓存，
+  留作"渲染 memo by (lvl,V)"候选的先导）；prelude 段 per-file force
+  memo clear 去留（孪生 memo 不持 Rc，纯速度实验，语义中性）。
+
+**代码风格（文档同步）**：
+- 模块头"不移植"清单拆分为**已移植（阶段 1-2）**与仍不移植两部分；
+  PrimId 文档"故不在枚举内"陈旧句删除；**偏差 4 标记已修复**（历史描述
+  与现行为相反会误导下一棒），新增偏差 5 扩展（PM 重复）与偏差 6
+  （零 span 条目）。
+- `parse_prelude_files` 注释如实标注与加载器的差异（失败即止 vs 跳过
+  继续）；测试 `run_prelude_both` 加 files/include_hdl 一致性守卫；
+  mod.rs 测试本地 PRELUDE_FILES 标注"故意子集"防误"修复"。
+- `tests/l13_into_probe.rs`（前会话临时探针）按仓库惯例收编入库。
+
+**回归（评审修复后复测）**：lib 659、`l13_fast_parity` 385、observation
+12、LSP 守卫 12 套全绿。注意：lib 全量与 release bench **并行**跑出现过
+一次偶发异常退出（资源竞争），串行复跑均绿——回归闸请串行执行。
+
+**bench 基线（本轮，release，prelude-hdl 943 decls，nf=219 两版一致）**：
+basic 3946ms / fast 2746ms（min）。fast 较阶段 1 的 ~2644ms +4%：
+使用处实时渲染的对称成本（参考版同款语义），observe 门控只作用于
+`run_decls_with_prelude` 的 prelude 段（LSP 路径），不影响 bench 口径。
+
 ### 2026-09-09 续（阶段 2 完成：prelude 装载 + 真实互检）
 
 **提交链**：`0b466a4`（prelude 表库化：`PRELUDE_CORE`/`PRELUDE_HDL`/
