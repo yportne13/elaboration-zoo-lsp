@@ -1621,7 +1621,9 @@ pub fn ex1() -> String {
 
 /// 基准口径：仅 check。
 pub(crate) fn bench_check(raw: &Raw) {
-    let _ = Infer::new().infer(&Cxt::empty(initial_pos()), raw);
+    if let Ok((t, a)) = Infer::new().infer(&Cxt::empty(initial_pos()), raw) {
+        std::mem::forget((t, a)); // 深 Box 树递归析构会爆栈,与 bench_check_nf 同款
+    }
 }
 
 /// 基准口径：check + nf，产出丢弃（深 Box 树的递归析构会爆栈，基准里

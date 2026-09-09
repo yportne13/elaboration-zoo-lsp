@@ -649,8 +649,12 @@ pub(crate) fn bench_check_nf(raw: &Raw) {
 }
 
 /// 基准口径：仅 check（conv 工作负载的转换检查发生在 check 里）。
+/// 返回的 (Tm, VTy) 同样是深 Box 树，`let _ =` 的递归析构会爆栈——与
+/// `bench_check_nf` 同款 mem::forget。
 pub(crate) fn bench_check(raw: &Raw) {
-    let _ = infer(&Cxt::empty(initial_pos()), raw);
+    if let Ok((t, a)) = infer(&Cxt::empty(initial_pos()), raw) {
+        std::mem::forget((t, a));
+    }
 }
 
 /// church n 的 nf-mode 期望输出（`λ N s z. s (s (… z))`）。

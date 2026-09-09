@@ -1270,8 +1270,12 @@ pub fn ex1() -> String {
 // --------------------------------------------------------------------------------
 
 /// 基准口径：仅 check（插入/求解工作负载的 unification 发生在 check 里）。
+/// 返回的 (Tm, VTy) 同样是深 Box 树，`let _ =` 的递归析构会爆栈——与
+/// `bench_check_nf` 同款 mem::forget。
 pub(crate) fn bench_check(raw: &Raw) {
-    let _ = Infer::new().infer(&Cxt::empty(initial_pos()), raw);
+    if let Ok((t, a)) = Infer::new().infer(&Cxt::empty(initial_pos()), raw) {
+        std::mem::forget((t, a));
+    }
 }
 
 /// 基准口径：check + nf，产出丢弃（深 Box 树的递归析构会爆栈，基准里
