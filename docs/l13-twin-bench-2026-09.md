@@ -147,18 +147,48 @@ nat.typort 加载后调用；孪生无对应机制，属阶段 5 的 prelude 加
 参考版侧也加了对称的 `bench_check_nf_bounded`（原先它的 `bench_check_nf`
 同样不注册 nat 内建，导致 `basic=0` 的假失败）。
 
-效果：孪生在 HDL prelude 上的推进 **136 → 171 / 943 decls**。剩余阻塞是
-decl 171 的 `can't unify`（`impl $trait_name$ModuleTree`，struct 脱糖出的
-inherent impl，涉及 class/module-macro 链）——属模块头"已知偏差 2"的
-class/struct 接收者家族，**不是 nat 内建问题**（诊断确认失败时
-`nat_to_dec` 在 decl 表中）。
+效果：孪生在 HDL prelude 上的推进 **136 → 171 / 943 decls**。
 
-最小复现/下一步：定位 decl 171 的 unify 失败（class 两阶段 + 宏展开链的
-`Raw::Tm` 指针导入表与 trait 求解交互）。
+### 7.1 decl 171 已修（Obj 臂剥 mk 链的 U(0) 占位）
+
+根因：孪生 `infer_expr` 的 Obj 臂剥 `.mk` 构造子类型链时，**显式** binder
+以 `U(0)` 实例化；参考版（elaboration.rs 2380-2398）用**接收者自身**
+`Obj(this)`。于是 `this.data` 的投影类型在孪生里是
+`Vec[ModuleDef](U(0))` 而非 `Vec[ModuleDef](this.num)`，下游
+`cons m this.data` 的隐式 len 被迫解成 U(0)，
+`expected: Vec[ModuleDef](this.num + 1) find: Vec[ModuleDef](Type 0 + 1)`。
+所有带依赖索引字段（`data: Vec[T] num`）的 struct 投影都命中。
+
+修复后最小复现（新增 `l13bench --workload moduletree`，8 decls）两版一致
+（nf=11），HDL prelude 冲过 decl 171。
+
+### 7.2 新阻塞：`Into` out 参数求解 + 模块树巨链（未解）
+
+修掉 7.1 后，阻塞推进到 `Add[Nat, UInt[width]] for UInt[width]` 的方法体
+`this + that.into`：孪生在 Def 臂 `solve_multi_trait_ref(...).unwrap()` 处
+panic（`solve trait failed: Into[Nat, UInt[...]]`）。
+
+已核实的事实（`L13_TRACE_INTO` 探针，已移除）：
+
+- `Into` 只有 out 参数（`out_param = [false, true]`，含前置 Self），
+  goal 的 out 槽是**未解 flex 的巨链**（`spine(len=63606)`，头 `Flex`，
+  `is_flex=true`）——这是模块树值链，形态正常。
+- `has_flex_non_out` / `has_flex_out` 判据**都正确触发**推迟
+  （`cand=4, has_flex_out=true` → `Ok(None)`），与参考版一致。
+- 因此分叉不在推迟逻辑；错误解来自**推迟之后**由上下文补齐的路径
+  （`Add` 的 `has_flex_non_out=true` 也推迟，之后重试）。
+- 参考版同源能收敛，说明差异在 `unify` / `rename` / `prune` 某一臂对
+  「flex 巨链」的处理，或 pretty 里 `Variable index out of bounds` 对应的
+  那个坏解的产生点。
+
+**下一步**：用 `l13bench --workload moduletree` 加 `Into` 自反实例与
+`Add[Nat, UInt]` 的最小组合复现（自包含，不带巨链），二分是 rename 越界
+还是 unify 选错实例。注意：曾尝试把 `has_flex_out` 的判据从二次 force 改成
+复用 `all_params`，**实测无效且偏离参考版**（参考版就是二次 force），已回退。
 
 ## 8. 下一步（按优先级）
 
-1. 定位并修 decl 171 的 unify 失败（class/module-macro 家族）。
+1. 用自包含最小复现定位 7.2 的 `Into` 求解分叉（rename 越界 / unify 选错）。
 2. 修 `church`/`enum` 生成器（L13 语言面），恢复两族对照。
 3. 孪生能跑 HDL 负载后，测 force 次数/指针冗余，决定是否移植 force memo。
 4. 之后才谈阶段 3-5。
@@ -167,7 +197,8 @@ class/struct 接收者家族，**不是 nat 内建问题**（诊断确认失败�
 
 ```bash
 cargo run --release --bin l13bench -- --workload prelude-core --rounds 3 --only basic,fast
-L13BENCH_DIAG=1 cargo run --release --bin l13bench -- --workload prelude-core --rounds 1 --only fast
+cargo run --release --bin l13bench -- --workload moduletree --rounds 3 --only basic,fast
+L13BENCH_DIAG=1 cargo run --release --bin l13bench -- --workload prelude-hdl --rounds 1 --only fast
 cargo run --release --bin l13bench -- --workload struct --max-k 11 --rounds 3 --only basic,fast,fast_ss
 ```
 
