@@ -48,7 +48,7 @@ fn hover_type_at(b: &Arc<Backend<CapturingClient>>, uri: &Url, src: &str, offset
     let (_, _, hcxt, val) = infer
         .hover_entry_at(*id, offset)
         .unwrap_or_else(|| panic!("no hover entry at offset {offset} in:\n{src}"));
-    pretty_tm(0, hcxt.names(), &infer.quote(&hcxt.decl, hcxt.lvl, val))
+    pretty_tm(0, hcxt.clone(), val)
 }
 
 #[test]

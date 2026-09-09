@@ -904,16 +904,7 @@ impl Compiler {
                                                         .unwrap_or_else(|| typ.clone()),
                                                 }
                                             };
-                                            infer.hover_table.push((
-                                                constr_.to_span(),
-                                                constr.to_span(),
-                                                super::cxt::HoverCxt {
-                                                    lvl: cxt.lvl,
-                                                    locals: cxt.locals.clone(),
-                                                    decl: cxt.decl.clone(),
-                                                },
-                                                hover_val,
-                                            ));
+                                            infer.push_hover(cxt, constr_.to_span(), constr.to_span(), &hover_val);
 
                                             let mut new_cxt = cxt.clone();
                                             let mut new_cxt_ff = cxt_for_filter.clone();

@@ -36,7 +36,7 @@ fn hover_text(b: &Backend<CapturingClient>, uri: &Url, offset: usize) -> Option<
         "[{:?}..{:?}] {}",
         span.start_offset,
         span.end_offset,
-        elaboration_zoo_lsp::L13_namespace::pretty::pretty_tm(0, hcxt.names(), &infer.quote(&hcxt.decl, hcxt.lvl, val))
+        elaboration_zoo_lsp::L13_namespace::pretty::pretty_tm(0, hcxt.clone(), val)
     ))
 }
 
@@ -74,7 +74,7 @@ fn dump_entries(b: &Backend<CapturingClient>, uri: &Url, src: &str, lo: usize, h
         if span.start_offset as usize > hi || (span.end_offset as usize) < lo {
             continue;
         }
-        let text = elaboration_zoo_lsp::L13_namespace::pretty::pretty_tm(0, hcxt.names(), &infer.quote(&hcxt.decl, hcxt.lvl, val));
+        let text = elaboration_zoo_lsp::L13_namespace::pretty::pretty_tm(0, hcxt.clone(), val);
         let def_uri = b.document_id.iter()
             .find(|e| *e.value() == def.path_id)
             .map(|e| e.key().clone())

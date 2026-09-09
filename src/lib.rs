@@ -357,8 +357,8 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 self.hover_table
                     .get(uri.as_str())
                     .and_then(|x| x.hover_entry_at(*id, offset)
-                        .map(|(span, def_span, hcxt, val)| {
-                            (*span, *def_span, pretty_tm(0, hcxt.names(), &x.quote(&hcxt.decl, hcxt.lvl, val)))
+                        .map(|(span, def_span, names, ty_tm)| {
+                            (*span, *def_span, pretty_tm(0, names.clone(), ty_tm))
                         })
                     )
                     .and_then(|(span, def_span, type_str)| {
