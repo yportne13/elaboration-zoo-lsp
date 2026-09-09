@@ -963,6 +963,9 @@ fn vapp1<'a>(
             if let XCell::Decl { name } = v_xcell_of(hd) {
                 let name = *name;
                 if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
+                    if !prim_is_pure(pid) {
+                        force_taint_bump();
+                    }
                     let mut args: Vec<(V, Icit)> = Vec::new();
                     spine.collect_args(h, &mut args); // 逆应用序（最新在前）
                     args.reverse(); // 自然序（最老在前）
@@ -984,6 +987,9 @@ fn vapp1<'a>(
                 // → 压 spine；参考版 v_app 的 Decl 臂同款）
                 let name = *name;
                 if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
+                    if !prim_is_pure(pid) {
+                        force_taint_bump();
+                    }
                     let args = [(a, i)];
                     if let Some(r) = prim_exec(
                         bump, spine, work, vals, icits, defs, metas, decl, mutable, pid, &args,
@@ -1522,15 +1528,117 @@ fn prim_exec<'a>(
     }
 }
 
+// force 记忆化（参考版 mod.rs `FORCE_MEMO` 的 bump 版；L13 参考版靠它把
+// prelude 22.4s → 6.0s，见 docs/l13-perf-review-4.md §16）。
+//
+// 参考版的三根正确性支柱在 bump 模型下的处置：
+// 1. **keepalive**（条目持有输入 Rc 防地址复用）——bump 同代内单调分配、
+//    地址不复用，跨代 `bump.reset()` 前一切句柄已消亡；只要 memo 在每轮
+//    入口清空（见 `force_memo_clear` 的调用点）即可，无需持有输入。
+// 2. **taint**：walk 途中 consult 了不可抽象状态（未解 meta / 有副作用
+//    prim）就 bump 计数器，动过的条目不插入。
+// 3. **prim-ness 版本**：force 唯一读的 decl 表状态是名字的 prim-ness
+//    （Decl / prim 两条臂）；`decl_reg` 时 prim-ness 变化即 bump 版本，
+//    条目记版本、不匹配即 miss。
+thread_local! {
+    /// key = 输入 `V` 的打包字（仅 tag 7 复合形状入表；同代内唯一）。
+    static FORCE_MEMO: RefCell<FxHashMap<u64, (V, u64)>> =
+        RefCell::new(FxHashMap::default());
+    static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static PRIM_VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// 条目上限；溢出整表清空（防 keepalive 钉住垃圾，代价是一次重走）。
+const FORCE_MEMO_CAP: usize = 1 << 20;
+
+/// 每轮入口清空 memo（bump.reset() 处调用；地址可能被下一代复用）。
+fn force_memo_clear() {
+    FORCE_MEMO.with(|m| m.borrow_mut().clear());
+}
+
+#[inline]
+fn force_taint_bump() {
+    FORCE_TAINT.with(|t| t.set(t.get() + 1));
+}
+
+/// decl 条目的 prim-ness 发生变化时调用（缓存失效）。
+#[inline]
+fn prim_version_bump() {
+    PRIM_VERSION.with(|v| v.set(v.get() + 1));
+}
+
+/// 结果只依赖实参的 prim（可安全记忆化）；其余（mutable 全局 / 文件 IO /
+/// 诊断）一律按 impure 处理。参考版 `prim_is_pure` 的 PrimId 版。
+fn prim_is_pure(pid: PrimId) -> bool {
+    matches!(
+        pid,
+        PrimId::NatAdd
+            | PrimId::NatMul
+            | PrimId::NatSub
+            | PrimId::NatDiv
+            | PrimId::NatRem
+            | PrimId::NatToDec
+            | PrimId::WidthRange
+            | PrimId::StringConcat
+            | PrimId::StrEq
+            | PrimId::StrIndent2
+    )
+}
+
 // force（迭代；L13 参考版 force_inner 的臂集：Flex 链 / Nat 叶 / Obj 重建
 // / Call 归一 / Decl prim / SumCase typ+datas / Sum 与其余 WHNF 叶）
 // --------------------------------------------------------------------------------
 
-/// **force**：把值更新到 metacontext 的当前状态。参考版 `Infer::force`
-/// （无 memo——本机按值重算）逐臂对齐：Flex（已解 → 展开应用；未解原样）、
-/// 原生 Nat（WHNF 叶）、Obj（递归进内层重建）、Call（stale nat-primop 归一
-/// / force body + 实参）、Decl（prim 执行：`Some` 结果**再 force**）、
-/// SumCase（force typ + 逐 data 重建）、Sum 与其余（WHNF 叶，不下钻）。
+/// **force**：把值更新到 metacontext 的当前状态，带记忆化（参考版
+/// `Infer::force` 的 memo 壳）。只有 `SumCase | Call | Obj` 三种复合形状
+/// 走 memo（叶子臂是 O(1)，连哈希查找都省）。逐臂语义见 [`force_inner`]。
+fn force<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'a>,
+    mutable: &RefCell<Mutable>,
+    v0: V,
+) -> V {
+    let compound = v_tag(v0) == 7
+        && matches!(
+            v_xcell_of(v0),
+            XCell::SumCase { .. } | XCell::Call { .. } | XCell::Obj { .. }
+        );
+    if !compound {
+        return force_inner(bump, spine, defs, metas, decl, mutable, v0);
+    }
+    let key = v0.0;
+    let ver = PRIM_VERSION.with(|v| v.get());
+    if let Some(r) = FORCE_MEMO.with(|m| {
+        m.borrow()
+            .get(&key)
+            .filter(|(_, v)| *v == ver)
+            .map(|(r, _)| *r)
+    }) {
+        return r;
+    }
+    let taint0 = FORCE_TAINT.with(|t| t.get());
+    let r = force_inner(bump, spine, defs, metas, decl, mutable, v0);
+    // walk 途中 consult 了未解 meta / 有副作用 prim → 不插入
+    if FORCE_TAINT.with(|t| t.get()) == taint0 && PRIM_VERSION.with(|v| v.get()) == ver {
+        FORCE_MEMO.with(|m| {
+            let mut m = m.borrow_mut();
+            if m.len() >= FORCE_MEMO_CAP {
+                m.clear();
+            }
+            m.insert(key, (r, ver));
+        });
+    }
+    r
+}
+
+/// force 的实际臂集（无 memo；参考版 `force_inner` 逐臂对齐）：
+/// Flex（已解 → 展开应用；未解原样）、原生 Nat（WHNF 叶）、Obj（递归进内层
+/// 重建）、Call（stale nat-primop 归一 / force body + 实参）、Decl（prim
+/// 执行：`Some` 结果**再 force**）、SumCase（force typ + 逐 data 重建）、
+/// Sum 与其余（WHNF 叶，不下钻）。
 ///
 /// 内部的 eval_iter 调用用**本调用私有的草稿栈**：外层 eval/unify 循环的
 /// work/vals 不能被清空（force 可能在它们循环体中途被调用，且经 eval_aux
@@ -1538,7 +1646,7 @@ fn prim_exec<'a>(
 /// force 借用调用方的栈，是因为那几章的 eval_iter 不回调 force——这个差异
 /// **不是**漏同步，别往那方向改。四个 `Vec::new()` 本身不分配，只有真正
 /// 下钻时才增长，早退路径零成本。
-fn force<'a>(
+fn force_inner<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     defs: &mut Vec<V>,
@@ -1556,7 +1664,11 @@ fn force<'a>(
         match v_tag(v) {
             5 => match &metas[v_meta_of(v) as usize] {
                 MetaEntry::Solved(sol, _) => v = *sol,
-                _ => return v,
+                _ => {
+                    // 裸未解 meta：taint（参考版 force 的 Flex 臂同款）
+                    force_taint_bump();
+                    return v;
+                }
             },
             2 => {
                 let h = v_spine_of(v);
@@ -1567,7 +1679,12 @@ fn force<'a>(
                         // flex 链：解应用到全部实参（应用序 = 收集序的逆序）；
                         // 每步都可能 β（参考版 vAppSp 逐步 vApp 同款）
                         match &metas[v_meta_of(hd) as usize] {
-                            MetaEntry::Unsolved(..) => return v,
+                            MetaEntry::Unsolved(..) => {
+                                // 未解 meta：解会变（ns 探测还会快照回滚），
+                                // 不可抽象 → taint（参考版同款）
+                                force_taint_bump();
+                                return v;
+                            }
                             MetaEntry::Solved(sol, _) => {
                                 args.clear();
                                 spine.collect_args(h, &mut args);
@@ -1592,6 +1709,11 @@ fn force<'a>(
                         };
                         match decl.get(name).and_then(|e| e.prim) {
                             Some(pid) => {
+                                // 有副作用 prim：重执行可观察 → taint（参考版
+                                // force 的 Decl 臂 `prim_is_pure` 同款）
+                                if !prim_is_pure(pid) {
+                                    force_taint_bump();
+                                }
                                 args.clear();
                                 spine.collect_args(h, &mut args);
                                 args.reverse();
@@ -1678,6 +1800,9 @@ fn force<'a>(
                     let prim = decl.get(name).and_then(|e| e.prim);
                     match prim {
                         Some(pid) => {
+                            if !prim_is_pure(pid) {
+                                force_taint_bump();
+                            }
                             let mut w2: Vec<W<'a>> = Vec::new();
                             let mut v2: Vec<V> = Vec::new();
                             let mut i2: Vec<Icit> = Vec::new();
@@ -5252,6 +5377,9 @@ impl Machine {
         let _ = bump;
         let _ = typ_tm;
         let mut decls = cxt.decls.clone();
+        // prim-ness 变化会让 force 对同名链的结果改变（Decl 臂走不走 prim
+        // 执行）→ 版本号 bump，旧 memo 条目惰性失效（参考版 Cxt::decl 同款）
+        let had_prim = decls.get(x).map(|e| e.prim.is_some()).unwrap_or(false);
         Rc::make_mut(&mut decls).insert(
             SmolStr::new(x),
             DeclEntry {
@@ -5261,6 +5389,9 @@ impl Machine {
                 prim,
             },
         );
+        if had_prim != prim.is_some() {
+            prim_version_bump();
+        }
         Cxt {
             env: cxt.env,
             update_from: cxt.update_from,
@@ -11214,6 +11345,7 @@ impl Tycker {
     ) -> Result<String, Error> {
         self.bump.reset();
         self.machine.clear_round();
+        force_memo_clear();
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
@@ -11291,6 +11423,7 @@ impl Tycker {
     pub(crate) fn bench_check(&mut self, ast: &[Decl]) -> bool {
         self.bump.reset();
         self.machine.clear_round();
+        force_memo_clear();
         let bump = &self.bump;
         self.machine.elab_all(bump, ast).0.is_ok()
     }
@@ -11309,6 +11442,7 @@ impl Tycker {
     fn bench_nf_impl(&mut self, ast: &[Decl], use_memo: bool) -> u64 {
         self.bump.reset();
         self.machine.clear_round();
+        force_memo_clear();
         let bump = &self.bump;
         let (r, _cxt, last) = self.machine.elab_all(bump, ast);
         if r.is_err() {
@@ -11331,6 +11465,7 @@ impl Tycker {
     pub(crate) fn bench_check_nf_bounded(&mut self, ast: &[Decl], nat_after: &[usize]) -> u64 {
         self.bump.reset();
         self.machine.clear_round();
+        force_memo_clear();
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut last: Option<V> = None;
