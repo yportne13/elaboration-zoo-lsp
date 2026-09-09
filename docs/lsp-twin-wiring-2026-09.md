@@ -1,0 +1,94 @@
+# LSP × 性能孪生接线：架构决策（2026-09-09）
+
+> 前提结论（bench 已证）：孪生在真实 HDL prelude 上一次性 1.83s vs 参考版 3.29s
+> （1.8×）。接线的目标就是让交互路径也吃到这个倍数。
+
+## 0. 一页纸结论
+
+**观察面与跨请求数据面不是两个独立任务，而是一个契约问题**：参考版三张观察表
+存"live `Val` 句柄 + 查询期 quote"，这要求快照可持久——正是 bump arena 给不了的。
+破法是**把观察表的存储形态从 `Val` 换成 push 期 quote 出的 owned `Rc<CTm>`
+（+ binder names + spans）**：
+
+- 孪生侧：push 时 `quote(V → ref Tm)` 即逃逸 bump，类型通常很小、成本可控
+  （参考版生产路径本就在每个 def 处 eager 算 `vtyp_pretty`，是同类先例）；
+- 消费侧：`hover_at`/`completion_at` 不再对 live Val quote，改对存的 `CTm`
+  直接 `pretty_tm`——quote 从"每查询一次"变"每 push 一次"，需要在阶段 0 实测
+  HDL 负载的 push 密度/类型规模，若个别大类型拖垮，再上"按 decl 惰性补表"
+  或"查询触发孪生重放"兜底（孪生快，这是接线后才存在的免费选项）；
+- 跨请求数据面随之降维：LSP 持久层只需持有 **owned 快照**（strings/CTm/spans）
+  + 参考域全局 decl 表；"跨代 bump 快照"从必答题变成优化题。
+
+## 1. 两侧现状（代码坐标）
+
+### 参考版（LSP 生产路径）
+- 消费主循环 `src/lib.rs`：`hover_table: DashMap<String, Infer>`（URI→整份
+  Infer 快照，:221）；didChange = `local_cxt = cxt.clone()` 剔旧符号（:1604）
+  → `local_infer = infer.clone()`（:1630）→ 逐 decl `infer()` → 无错则
+  `cxt.decl = local_cxt.decl.clone()` Arc 写回（:1680）。
+- 观察面 `elaboration.rs`：hover/completion/inlay 共 **27 push 点**
+  （:188/:742/:905/:1153/:1467/:2126-2455/:2577/:2627/:2839/:2982/:3001/:3035
+  等）；`accumulated_errors`（:775-778，match 分支诊断）；
+  `defer_println + println_jobs` 两阶段（:1195-1196，消费于 lib.rs:1811）。
+- `Cxt::decl` 条目 = **7 元组** `(span, t, vt, a, va, prim, typ_pretty)`
+  （cxt.rs:955-969）。
+- hover 消费两路径（lib.rs:346-367）：Path1 def 直接读 `DeclTm::typ_pretty`
+  （owned String）；Path2 表达式 `hover_entry_at` 返回 `(span, def_span,
+  HoverCxt, &Val)`，**查询期** `x.quote(&hcxt.decl, hcxt.lvl, val)`。
+
+### 孪生（bump_spine_iter.rs）
+- `Tycker { bump, machine }`（:11384）；入口 `run_decls_bounded` 第一件事
+  `bump.reset()`（:11413）——一次性口径，跨请求复用值 = 悬垂。
+- `DeclEntry<'a>` = Copy 四字段 `tm/val/vty/prim`（:558），刻意丢
+  Span/typ_pretty。
+- 观察面：0 处。`defer_println` 不移植（:8029 注释：立即 nf+pretty，
+  run() 口径本就等价）；`accumulated_errors` 需核实是否有等价排水。
+- 已有桥：`v_to_ref_val(spine, defs, v) -> Rc<CVal>`（:9339）——但只覆盖
+  trait 求解的固定形态（闭包/Pi 等 unreachable），**不能**当观察面通用解码器；
+  通用逃逸口是孪生自己的 `quote`（bench nf 已用）。
+
+## 2. 分阶段计划
+
+### 阶段 0：消费侧契约改造（先只动参考版，行为不变）
+把三张表的元素类型从 `(Span, Span, HoverCxt, Rc<Val>)` 改为
+`(t_span, def_span, names: Vec<SmolStr>, ty: Rc<CTm>)`——push 期
+quote+存 owned；`hover_at` Path2 改 `pretty_tm(0, &names, &ty)`。
+**验收**：`tests/` 下 LSP 8 件套（hover/completion/namespace/impl_goto/
+macro_goto/hdl_check_locations/println_two_phase/large_did_open）全绿；
+HDL 负载 didChange 计时对比改造前（盯 eager-quote 回归）。
+产出：owned 化契约 + push 密度/类型规模实测数——决定要不要兜底。
+
+### 阶段 1：孪生观察面 + 登记面（本文档主体动机）
+- `DeclEntry` 补 `span: Span<SmolStr>` + `typ_pretty: String`（owned，
+  与 bump 无关，不破坏 Copy？——会，二字段进 `Decls` 的另一张并表或
+  DeclEntry 弃 Copy 改 `Clone`；性能影响在 bench 上量）。
+- `Tycker` 挂三张 owned 表（阶段 0 同契约），逐 push 点移植 27 处，
+  错误消息形态与参考版逐字节对齐（parity 口径）。
+- 两阶段 println：孪生维持立即口径，`println_jobs` 仅参考版；LSP 接线时
+  按引擎分派（或孪生提供 jobs 兼容层——阶段 3 再定）。
+- 验收：`l13_fast_parity` 绿 + 新孪生观察面对同一源 dump 与参考版逐条一致。
+
+### 阶段 2：prelude 加载
+`prime_round` 扩展为可装载 24 文件 prelude（bench 已有手工拼装先例
+l13bench::parse_prelude，抽成复用 API）；宏表/PreludePool 口径对齐。
+
+### 阶段 3：跨请求数据面（降维后的选择题，实测定夺）
+- 3a **全量重推**：didChange 只重推该文件（全局 decl 表参考域常驻，
+  孪生每轮读它进 bump；新 decl 结果 quote 回参考域合并）。击键成本 =
+  单文件推 + 全局 seed，需要测 seed 开销。
+- 3b 逐 decl 克隆模型移植：孪生支持"上下文快照→推一个 decl→合并"——
+  要求 bump 跨代，最后手段。
+- 默认先 3a：简单、无悬垂风险，且孪生本身 1.8×。
+
+### 阶段 4：双引擎并行与灰度
+LSP 加引擎开关（先 env/config），孪生模式与参考版模式跑同一测试套件 +
+真实 HDL 工程对比（击键延迟 P50/P99、内存）；达标后默认切孪生。
+
+## 3. 已知风险
+1. eager-quote 成本：943-decl HDL 全量重推时 27×N 处 push 的 quote 开销
+   → 阶段 0 实测；兜底见 §0。
+2. `DeclEntry` 弃 Copy 的热路径回归 → 并表方案对照 bench 定量后再选。
+3. 观察面消息若含 `?N` meta 编号，跨引擎不逐字节一致（已知偏差 3），
+   parity 比对需归一化——消费侧契约里存的是 quote 后 Tm，渲染归 pretty，
+   不受影响。
+4. LSP 8 测试驱动参考版：阶段 0 每步都以它们为回归闸，改契约不分叉。
