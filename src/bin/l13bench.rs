@@ -49,13 +49,11 @@ mod L13_namespace;
 
 use clap::Parser;
 use mimalloc::MiMalloc;
-use std::collections::HashMap;
 use std::time::Instant;
 
 use L13_namespace::bump_spine_iter as fast;
-use L13_namespace::parser::macros::MacroRule;
-use L13_namespace::parser::syntax::Decl;
 use L13_namespace::parser::parser_with_macros;
+use L13_namespace::parser::syntax::Decl;
 
 #[derive(Parser)]
 #[command(
@@ -142,37 +140,13 @@ const HDL: &[(&str, &str)] = &[
     ("hdl-verilog", include_str!("../prelude/hdl/hdl-verilog.typort")),
 ];
 
-/// 按参考版 prelude 加载口径解析一串文件：逐文件 `parser_with_macros`，
-/// 累积导出宏，拼成单一 decl 序列（`bench_check_nf` 需要 `&[Decl]`）。
-/// 返回 (decls, 每文件 decl 数, 首个失败文件)。
+/// 按参考版 prelude 加载口径解析一串文件（库化：[`L13_namespace::
+/// parse_prelude_files`]，与参考加载器 / 孪生 prelude 轮三方同源）。
 fn parse_prelude(
     files: &[(&str, &str)],
 ) -> (Vec<Decl>, Vec<(String, usize)>, Option<String>, Vec<usize>) {
-    let mut macros: HashMap<String, Vec<MacroRule>> = Default::default();
-    let mut all: Vec<Decl> = Vec::new();
-    let mut counts: Vec<(String, usize)> = Vec::new();
-    let mut failed: Option<String> = None;
-    let mut nat_after: Vec<usize> = Vec::new();
-    for (i, (name, src)) in files.iter().enumerate() {
-        let pre = L13_namespace::preprocess(src);
-        match parser_with_macros(&pre, i as u32, &macros) {
-            Some((decls, _errs, exports, _exp)) => {
-                for (k, v) in exports {
-                    macros.insert(k, v);
-                }
-                counts.push((name.to_string(), decls.len()));
-                all.extend(decls);
-                if *name == "nat" && !all.is_empty() {
-                    nat_after.push(all.len() - 1);
-                }
-            }
-            None => {
-                failed = Some(name.to_string());
-                break;
-            }
-        }
-    }
-    (all, counts, failed, nat_after)
+    let p = L13_namespace::parse_prelude_files(files);
+    (p.decls, p.counts, p.failed, p.nat_after)
 }
 
 /// 跑一个 decl 序列的两版口径，返回 (basic_nf, fast_nf, 两版是否一致)。
