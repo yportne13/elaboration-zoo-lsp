@@ -114,33 +114,39 @@ LSP 加引擎开关（先 env/config），孪生模式与参考版模式跑同�
 | Obj qualified 三连（2317/2330/2339） | ✅（cached push，键=整 Raw span 对齐参考版 t_span） |
 | 字段投影 struct/SumCase（2422/2455） | ✅ 但 **def_span 降级为字段 token**——孪生 Sum/SumCase 值不持字段 binder span，待评估补 |
 | qualified 中间段 push_qualified_hover（2126） | ✅（逐段 cached push） |
-| tuple-mk 元素（2577） | ❌ |
-| ns-method/trait 方法（2839/2982） | ns 支理论等价免接；trait-definition 支 ❌（需 trait_definition 方法名 span 穿线） |
+| tuple-mk 元素（2577） | ✅（is_tuple_mk_head/tuple_n_arity 移植，`af8bdd9`；**实测互检待阶段 2**——TupleN.mk 来自 prelude） |
+| ns-method/trait 方法（2817/2955） | ✅ 两点（`fc297f8`：trait 定义解析成功 push(方法 token→trait 声明名 span, 实例化调用类型)；ns 命中 push(Type.method 登记 span)） |
 | PM 构造子 pattern token（pattern_match 907） | ✅（Con==Con arm 构造路径；无参→Tree::leaf、参数化→Pi；`9a6faff`） |
 | enum 构造子定义处（use==def==声明 token） | ✅（constrs 从 decl 表回填声明 span；prime 渲染差属偏差 4） |
-| impl header（1462/1482） | ❌ |
-| completion（2431/2446/2466/3001/3035） | struct/SumCase 命中与未命中 4 点 ✅；trait 方法候选（3001/3035）❌ |
+| impl header（1462/1482） | ✅（trait 名 token→声明、实现方法名→trait 方法声明名；`32a5635`） |
+| completion（2431/2446/2466/3001/3035） | struct/SumCase 4 点 ✅；trait 未命中方法名收集 ✅（`fc297f8`；ns 失败传播支同参考版不收） |
 | inlay（def 1157 / let 2601） | ✅ 两点（def peel_pi_collect 收 telescope names；偏移-标签集互检过） |
 
 **性能事实（prelude-hdl 943 decls，release）**：
 - 观察面接线前：fast 2204ms / fast_ss 1865ms。
-- 接线后（五组 hover + completion）：fast ~2455ms / fast_ss ~2067ms，**+11%**。
-- 归因：与参考版 eager 化同比例（参考版 prelude-core 亦 +11%）——是
-  **push 期渲染契约的对称成本**，非孪生退化；对参考版领先维持 ~1.3×。
-- 微优化候选（统一做，不分引擎）：local 使用处渲染 memo by (lvl,V)、
-  Names 已并 (V,Span) 二表。
+- 阶段 1 全接通后：fast ~2644ms / fast_ss ~2222ms（**+20%**）。
+- 归因：与参考版 eager 化同比例（参考版 prelude-core 亦 +11%，且其 push 期
+  同样只渲染不 lazy）——是 **push 期渲染契约的对称成本**，非孪生退化；对
+  参考版（~3.2s）领先维持 ~1.2-1.3×。
+- 微优化候选（统一做，不分引擎）：local 使用处渲染 memo by (lvl,V)；
+  trait 方法调用渲染 memo by (method, 类型头)；PM 探针内 constr_pi 复用
+  （参考版已部分做）；qualified 三连可 spread cached。
 
-**回归闸（每提交必绿）**：`l13_fast_parity` 377、`observation_tests` 4 例
-（global/local/field/completion 双引擎集合级互检）、`debug_test` 15、
-LSP 守卫 12 套、bench 各 workload nf 一致。
+**回归闸（每提交必绿）**：`l13_fast_parity` 382、`observation_tests` 9 例
+（global/local/field/completion/inlay/impl-header/trait-dispatch/PM/全表
+双引擎互检）、`debug_test` 15、LSP 守卫 12 套、bench 各 workload nf 一致。
 
-### 下一步（顺序建议）
-1. let-inlay + def-inlay（先 let，简单）。
-2. PM 构造子 pattern hover + enum case 列表（905/pattern_match 907）。
-3. trait-definition 方法 hover（2982）+ trait 方法 completion（3001/3035）。
-4. push_qualified_hover + tuple-mk + suffix-fallback + impl header。
-5. 字段 binder span 评估：XCell::Sum 的 params 带上 Span（值构造面改动）。
-6. 阶段 2（prelude 加载）与阶段 3a（全量重推 seed 成本实测）并行启动。
+### 下一步（阶段 1 已 wire-complete，转入收尾与接线主体）
+1. **阶段 2：prelude 加载**——孪生 `prime_round` 扩为装载 24 prelude 文件
+   （PreludePool/宏表口径），这是 tuple-mk/真实 HDL 观察面实测互检的前提。
+2. **阶段 3a：全量重推数据面**——LSP didChange 走孪生全量推该文件（全局
+   decl 参考域常驻 + 每轮 seed 进 bump），实测 seed 开销；owned 快照下
+   跨代 bump 快照已非必需。
+3. **值层增强**：XCell::Sum params/SumCase datas 带上字段 binder 源码 Span
+   （解字段投影 def_span 降级）——独立子工程，评估后做。
+4. tuple-mk 实测互检：随阶段 2 一并补（当前以参考版 debug_test 两枚 tuple
+   用例 + parity 背书）。
+5. 双引擎 LSP 灰度（阶段 4）：lib.rs 加引擎开关，8 测试套件跑孪生模式。
 
 
 ### 2026-09-09 续（阶段 1 剩余站点的真实探查）
