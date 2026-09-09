@@ -9748,61 +9748,71 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        for constr_name in all_constrs {
-            // 1. 为构造子自身实参造 fresh meta（类型经逐层推断取得；推断在
-            //    **真实 infer** 上——meta 分配保留，参考版同款）。构造子以
-            //    **限定名** `Sum.constru` 探测（参考版 pattern_match.rs 同款：
-            //    sum_name 非空时用 `Raw::Obj(Var(sum), Some(constr))`，否则裸
-            //    Var——限定名在 multiline 枚举的 span 下也能稳定解析，避免
-            //    后缀 fallback 歧义）。
-            let sum_name = match v_xcell_of(forced_type) {
-                XCell::Sum { name, .. } => *name,
-                _ => "",
-            };
-            let to_check = if sum_name.is_empty() {
-                Raw::Var(constr_name.clone())
-            } else {
-                Raw::Obj(
-                    Box::new(Raw::Var(empty_span(SmolStr::new(sum_name)))),
-                    Some(constr_name.clone()),
-                )
-            };
-            let mut to_check = to_check;
-            let mut cur_cxt = clone_cxt(cxt);
-            loop {
-                let (_, typ2) = mach.infer_expr(bump, &cur_cxt, &to_check)?;
-                if v_tag(typ2) == 4 {
-                    let p = v_pi_of(typ2);
-                    // Only explicit args matter for the structure
-                    to_check = Raw::App(
-                        Box::new(to_check),
-                        Box::new(Raw::Hole(empty_span(()))),
-                        Either::Icit(p.icit),
-                    );
-                    let q = mach.quote(bump, &cur_cxt, cur_cxt.lvl, p.dom);
-                    let name = p.name.to_string();
-                    cur_cxt = mach.bind_name(bump, &cur_cxt, &name, q, p.dom);
+        // 参考版 pattern_match.rs 同款：逐构造子可达性探测是**纯探测**。
+        // 探测循环里的 infer_expr（逐层 Pi 强制）与 check_pm（unify）都可能
+        // 分配 fresh meta，并解掉**已有的** meta / trait meta，而这些解又引用
+        // 探测新建的 meta——单纯截断会让解悬空（后续查找越界）。故在探测循环
+        // 之前同时快照 `metas` 与 `trait_metas`，把整段探测闭包化，出闭包后
+        // **无条件**恢复两者（成功或错误路径都回滚）。本函数只把可达构造子的
+        // **名字列表**带出去，探测期状态无需存活，故可整套回滚。
+        // 构造子以**限定名** `Sum.constru` 探测（参考版同款：sum_name 非空时用
+        // `Raw::Obj(Var(sum), Some(constr))`，否则裸 Var——限定名在 multiline
+        // 枚举的 span 下也能稳定解析，避免后缀 fallback 歧义）。
+        let meta_snapshot = mach.metas.clone();
+        let trait_metas_snapshot = mach.trait_metas.clone();
+        let result = (|| -> Result<Vec<crate::parser_lib::Span<SmolStr>>, Error> {
+            let mut accessible = Vec::new();
+            for constr_name in all_constrs {
+                // 1. 为构造子自身实参造 fresh meta（类型经逐层推断取得；推断在
+                //    真实 `mach` 上跑，但**探测整体回滚**，meta 分配不外泄）。
+                let sum_name = match v_xcell_of(forced_type) {
+                    XCell::Sum { name, .. } => *name,
+                    _ => "",
+                };
+                let to_check = if sum_name.is_empty() {
+                    Raw::Var(constr_name.clone())
                 } else {
-                    break;
+                    Raw::Obj(
+                        Box::new(Raw::Var(empty_span(SmolStr::new(sum_name)))),
+                        Some(constr_name.clone()),
+                    )
+                };
+                let mut to_check = to_check;
+                let mut cur_cxt = clone_cxt(cxt);
+                loop {
+                    let (_, typ2) = mach.infer_expr(bump, &cur_cxt, &to_check)?;
+                    if v_tag(typ2) == 4 {
+                        let p = v_pi_of(typ2);
+                        // Only explicit args matter for the structure
+                        to_check = Raw::App(
+                            Box::new(to_check),
+                            Box::new(Raw::Hole(empty_span(()))),
+                            Either::Icit(p.icit),
+                        );
+                        let q = mach.quote(bump, &cur_cxt, cur_cxt.lvl, p.dom);
+                        let name = p.name.to_string();
+                        cur_cxt = mach.bind_name(bump, &cur_cxt, &name, q, p.dom);
+                    } else {
+                        break;
+                    }
+                }
+
+                // 2. 可访问性判定（temp infer；状态由外层快照统一回滚）
+                let r = mach.check_pm(bump, &cur_cxt, &to_check, forced_type);
+                if std::env::var("L09_TRACE").is_ok() {
+                    eprintln!("FILTER {} {}", constr_name.data, if r.is_ok() {"ok"} else {"err"});
+                }
+                if r.is_ok() {
+                    // 构造子可访问
+                    accessible.push(constr_name.clone());
                 }
             }
 
-            // 2. 可访问性判定在 metas 快照里跑（temp infer；快照换入换出 +
-            //    名字轨迹回滚）
-            let temp_metas = mach.metas.clone();
-            let saved = std::mem::replace(&mut mach.metas, temp_metas);
-            let r = mach.check_pm(bump, &cur_cxt, &to_check, forced_type);
-            mach.metas = saved;
-            if std::env::var("L09_TRACE").is_ok() {
-                eprintln!("FILTER {} {}", constr_name.data, if r.is_ok() {"ok"} else {"err"});
-            }
-            if r.is_ok() {
-                // 构造子可访问
-                accessible.push(constr_name.clone());
-            }
-        }
-
-        Ok(accessible)
+            Ok(accessible)
+        })();
+        mach.metas = meta_snapshot;
+        mach.trait_metas = trait_metas_snapshot;
+        result
     }
 
     fn compile(
