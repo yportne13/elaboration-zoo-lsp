@@ -92,3 +92,51 @@ LSP 加引擎开关（先 env/config），孪生模式与参考版模式跑同�
    parity 比对需归一化——消费侧契约里存的是 quote 后 Tm，渲染归 pretty，
    不受影响。
 4. LSP 8 测试驱动参考版：阶段 0 每步都以它们为回归闸，改契约不分叉。
+
+
+---
+
+## 4. 进展日志
+
+### 2026-09-09（阶段 0 完成 + 阶段 1 大部）
+
+**提交链**：`fba6638`（阶段0 hover owned 化）→ `f9070e6`（契约收敛
+`(t_span, def_span, String)`）→ `c63c6be`（孪生三表+push_hover 骨架）→
+`dc49f52`+`bbefc1b`（DeclEntry 回填 span/typ_pretty + Var→global 首站点）→
+`e2564c1`（binder span 16 点穿线 + local/def-site/let/qualified/field 五组）→
+`128d552`（completion 4 站点）。
+
+**孪生观察面站点状态（对参考版 21 站点）**：
+| 组 | 状态 |
+|---|---|
+| Var 解析五支（global/import/prefix/local/suffix-fallback） | local/global/import/prefix ✅；suffix-fallback ❌（matches 集不带 span） |
+| check-Lam binder（742）/ let（2627）/ def 名（1153） | ✅ 三点 |
+| Obj qualified 三连（2317/2330/2339） | ✅（cached push） |
+| 字段投影 struct/SumCase（2422/2455） | ✅ 但 **def_span 降级为字段 token**——孪生 Sum/SumCase 值不持字段 binder span，待评估补 |
+| qualified 中间段 push_qualified_hover（2126） | ❌（孪生未移植该函数） |
+| tuple-mk 元素（2577） | ❌ |
+| ns-method/trait 方法（2839/2982） | ns 支理论等价免接（内层 Var(qname) 站点同 span 同串、min_by_key 平手规则两版一致）；trait-definition 支 ❌（需 trait_definition 方法名 span 穿线） |
+| PM 构造子 pattern token（pattern_match 907） | ❌ |
+| impl header（1462/1482） | ❌ |
+| completion（2431/2446/2466/3001/3035） | struct/SumCase 命中与未命中 4 点 ✅；trait 方法候选（3001/3035）❌ |
+| inlay（def 1157 / let 2601） | ❌ 两点——def 支需孪生 ret_cxt/telescope-names 对齐（孪生 Def 臂结构与参考版 1122-1183 不同构），let 支较直接 |
+
+**性能事实（prelude-hdl 943 decls，release）**：
+- 观察面接线前：fast 2204ms / fast_ss 1865ms。
+- 接线后（五组 hover + completion）：fast ~2455ms / fast_ss ~2067ms，**+11%**。
+- 归因：与参考版 eager 化同比例（参考版 prelude-core 亦 +11%）——是
+  **push 期渲染契约的对称成本**，非孪生退化；对参考版领先维持 ~1.3×。
+- 微优化候选（统一做，不分引擎）：local 使用处渲染 memo by (lvl,V)、
+  Names 已并 (V,Span) 二表。
+
+**回归闸（每提交必绿）**：`l13_fast_parity` 377、`observation_tests` 4 例
+（global/local/field/completion 双引擎集合级互检）、`debug_test` 15、
+LSP 守卫 12 套、bench 各 workload nf 一致。
+
+### 下一步（顺序建议）
+1. let-inlay + def-inlay（先 let，简单）。
+2. PM 构造子 pattern hover + enum case 列表（905/pattern_match 907）。
+3. trait-definition 方法 hover（2982）+ trait 方法 completion（3001/3035）。
+4. push_qualified_hover + tuple-mk + suffix-fallback + impl header。
+5. 字段 binder span 评估：XCell::Sum 的 params 带上 Span（值构造面改动）。
+6. 阶段 2（prelude 加载）与阶段 3a（全量重推 seed 成本实测）并行启动。
