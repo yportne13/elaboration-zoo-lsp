@@ -5306,6 +5306,61 @@ impl Machine {
         self.hover_table.push((t_span, e.span, rendered));
     }
 
+    /// 观察面 inlay（参考版 `push_inlay_hint` 同口径）：含未解 meta 跳过，
+    /// label 超 80 字符截断。
+    pub(crate) fn push_inlay_hint<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        offset: u32,
+        v: V,
+    ) {
+        let tm = self.quote(bump, cxt, cxt.lvl, v);
+        if no_metas(bump, self, cxt, tm).is_some() {
+            return;
+        }
+        let names = types_names_list(cxt.types);
+        let mut label = format!(": {}", pretty_tm(0, names, &export(&self.symbol_table, tm)));
+        const MAX_LEN: usize = 80;
+        if label.chars().count() > MAX_LEN {
+            let truncated: String = label.chars().take(MAX_LEN.saturating_sub(1)).collect();
+            label = format!("{}\u{2026}", truncated);
+        }
+        self.inlay_hint_table.push((offset, label));
+    }
+
+    /// 参考版 `peel_pi` 对象：逐层剥 Pi（隐式/显式都剥，与参考版
+    /// `Val::Pi` 全匹配同溝），封闭以 `vvar(lvl)` 填充；顺便收集参数
+    /// 名拼出等价 `ret_cxt.names()`（头 = 最内层，与 types_names_list
+    /// 同序）。返回 (剩余类型值, 新层级, names 追加段)。
+    fn peel_pi_collect<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        vtyp: V,
+    ) -> (V, u32, Vec<SmolStr>) {
+        let mut t = vtyp;
+        let mut lvl = cxt.lvl;
+        let mut peeled: Vec<SmolStr> = Vec::new();
+        loop {
+            let tf = self.force_v(bump, cxt, t);
+            if v_tag(tf) != 4 {
+                return (t, lvl, peeled);
+            }
+            let p = v_pi_of(tf);
+            let pname = SmolStr::new(p.name);
+            let body = p.body;
+            let penv = p.env;
+            let val = v_lvl(lvl);
+            t = {
+                let env = env_ext(bump, penv, val);
+                self.eval(bump, cxt, env, body)
+            };
+            lvl += 1;
+            peeled.push(pname);
+        }
+    }
+
     /// 与参考版 `Infer::hover_entry_at` 同规则：同 path 内命中 offset 的最
     /// 小 span 胜出。
     pub(crate) fn hover_entry_at(
@@ -7874,6 +7929,11 @@ impl Machine {
                 let t_checked = self.check(bump, &cxt_named, t2, va)?;
                 let vt = self.eval(bump, &cxt, cxt.env, t_checked);
                 let name: &'a str = bump.alloc_str(&x.data);
+                // 观察面：let 无标注 → inlay 展示推断值类型（参考版 2601，
+                // 注意其传的是右值语 vt、offset 取 binder 名结束）
+                if matches!(a_ty.as_ref(), Raw::Hole(_)) {
+                    self.push_inlay_hint(bump, cxt, x.to_span().end_offset, vt);
+                }
                 // 观察面：let binder 定义处 hover（参考版 2627 同点位）
                 self.push_hover(bump, cxt, x.to_span(), x.to_span(), va);
                 let cxt2 = self.define_name(bump, cxt, &x.data, x.to_span(), a_checked, t_checked, vt, va);
@@ -8151,6 +8211,35 @@ impl Machine {
                 } else {
                     self.eval(bump, &fake, fake.env, t_tm)
                 };
+                // 观察面：def 无显式返回类型 → inlay 推断返回类型
+                // （参考版 1157-1176：peel_pi 后 quote 于 ret_lvl，no_metas
+                // 干净才推；锚点 = 最后参数结束+1，无参则名结束）
+                if matches!(*ret_type, Raw::Hole(_)) {
+                    let (ret_val, ret_lvl, peeled) = self.peel_pi_collect(bump, cxt, vtyp);
+                    let ret_tm = self.quote(bump, cxt, ret_lvl, ret_val);
+                    if no_metas(bump, self, cxt, ret_tm).is_none() {
+                        let mut names = types_names_list(cxt.types);
+                        // peeled 为外→内剥集序；List 头 = 最内层 → 逆序 prepend
+                        for pn in peeled.iter().rev() {
+                            names = names.prepend(pn.clone());
+                        }
+                        let mut label = format!(
+                            ": {}",
+                            pretty_tm(0, names, &export(&self.symbol_table, ret_tm))
+                        );
+                        const MAX_LEN: usize = 80;
+                        if label.chars().count() > MAX_LEN {
+                            let truncated: String =
+                                label.chars().take(MAX_LEN.saturating_sub(1)).collect();
+                            label = format!("{}\u{2026}", truncated);
+                        }
+                        let pos = params
+                            .last()
+                            .map(|p| p.1.to_span().end_offset + 1)
+                            .unwrap_or_else(|| name.to_span().end_offset);
+                        self.inlay_hint_table.push((pos, label));
+                    }
+                }
                 // 观察面：def 名定义处 hover（参考版 1153 同点位）
                 self.push_hover(bump, cxt, name.to_span(), name.to_span(), vtyp);
                 let out = self.decl_reg(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
@@ -12129,5 +12218,39 @@ def d0 : Nat -> Nat = n => succ n
 
         assert!(!twin_set.is_empty(), "twin offered no completions");
         assert_eq!(twin_set, ref_set, "completion sets (span-keyed) agree");
+    }
+
+    /// Inlay hints for inferred returns / un-annotated lets: label text and
+    /// anchor offsets agree with the reference (plain, dependent-telescope,
+    /// and let cases).
+    #[test]
+    fn inlay_hints_match_reference() {
+        let src = "def g = \"hi\"\ndef id(a: String): String = a\ndef h(b: String) = b\n";
+        let ast = parse(src, 46).expect("parse");
+
+        let mut t = Tycker::new();
+        t.run_input(src, 46).expect("twin check");
+        let mut twin_v: Vec<(u32, String)> = t
+            .inlay_hint_table()
+            .iter()
+            .map(|(o, l)| (*o, l.clone()))
+            .collect();
+        twin_v.sort();
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let mut ref_v: Vec<(u32, String)> = infer
+            .inlay_hint_table
+            .iter()
+            .map(|(o, l)| (*o, l.clone()))
+            .collect();
+        ref_v.sort();
+
+        assert!(!ref_v.is_empty(), "fixture must produce inlay hints");
+        assert_eq!(twin_v, ref_v, "inlay (offset, label) sets agree");
     }
 }
