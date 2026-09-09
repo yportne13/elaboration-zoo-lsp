@@ -3467,6 +3467,112 @@ fn load_prelude_state() -> Result<PreludeState, Error> {
     load_prelude_state_impl(true)
 }
 
+// ── 共享 prelude 表（阶段 2 接线：参考版加载器 / l13bench / 孪生 prelude
+// 轮三方同源；旧实现参考版内联 include_str!、bench 二进制再抄一份）──
+
+/// 核心 prelude 文件（名字, 源），顺序 = 加载顺序。nat 内建在名为 `nat`
+/// 的文件之后注册（两版引擎共用该判定）。
+pub(crate) const PRELUDE_CORE: &[(&str, &str)] = &[
+    ("op", include_str!("../prelude/core/op.typort")),
+    ("eq", include_str!("../prelude/core/eq.typort")),
+    ("nat", include_str!("../prelude/core/nat.typort")),
+    ("calc", include_str!("../prelude/core/calc.typort")),
+    ("bool", include_str!("../prelude/core/bool.typort")),
+    ("option", include_str!("../prelude/data/option.typort")),
+    ("result", include_str!("../prelude/data/result.typort")),
+    ("order", include_str!("../prelude/data/order.typort")),
+    ("void", include_str!("../prelude/core/void.typort")),
+    ("decidable", include_str!("../prelude/data/decidable.typort")),
+    ("vec", include_str!("../prelude/data/vec.typort")),
+    ("either", include_str!("../prelude/data/either.typort")),
+    ("list", include_str!("../prelude/data/list.typort")),
+    ("string", include_str!("../prelude/data/string.typort")),
+    ("nonempty", include_str!("../prelude/data/nonempty.typort")),
+];
+
+/// HDL prelude 文件（CORE 之后、show 之前加载；`include_hdl=false` 跳过）。
+pub(crate) const PRELUDE_HDL: &[(&str, &str)] = &[
+    ("hdl-core", include_str!("../prelude/hdl/hdl-core.typort")),
+    ("hdl-check", include_str!("../prelude/hdl/hdl-check.typort")),
+    ("hdl-types", include_str!("../prelude/hdl/hdl-types.typort")),
+    ("hdl-ops", include_str!("../prelude/hdl/hdl-ops.typort")),
+    ("hdl-clock", include_str!("../prelude/hdl/hdl-clock.typort")),
+    ("hdl-bus", include_str!("../prelude/hdl/hdl-bus.typort")),
+    ("hdl-signals", include_str!("../prelude/hdl/hdl-signals.typort")),
+    ("hdl-utils", include_str!("../prelude/hdl/hdl-utils.typort")),
+    ("hdl-stream", include_str!("../prelude/hdl/hdl-stream.typort")),
+    ("hdl-crossclock", include_str!("../prelude/hdl/hdl-crossclock.typort")),
+    ("hdl-bus-proto", include_str!("../prelude/hdl/hdl-bus-proto.typort")),
+    ("hdl-misc-io", include_str!("../prelude/hdl/hdl-misc-io.typort")),
+    ("hdl-misc", include_str!("../prelude/hdl/hdl-misc.typort")),
+    ("hdl-macros", include_str!("../prelude/hdl/hdl-macros.typort")),
+    ("hdl-verilog-compat", include_str!("../prelude/hdl/hdl-verilog-compat.typort")),
+    ("hdl-verilog", include_str!("../prelude/hdl/hdl-verilog.typort")),
+];
+
+/// show.typort 恒排在最后（依赖 `nat_to_dec` prim，nat 内建注册后加载）。
+pub(crate) const PRELUDE_SHOW: (&str, &str) = ("show", include_str!("../prelude/show.typort"));
+
+/// [`parse_prelude_files`] 的产物：展平 decl 序列 + 引擎侧边界信息。
+pub(crate) struct PreludeParse {
+    /// 全部文件展平的 decl 序列（止于首个 parse 失败文件之前）。
+    pub decls: Vec<parser::syntax::Decl>,
+    /// 每个非空文件的末 decl 下标（force-memo 每文件清空边界，两版共用）。
+    pub file_ends: Vec<usize>,
+    /// nat 内建注册边界（`nat.typort` 末 decl 下标；镜像参考版按内容判定，
+    /// 这里按文件名——同义且列表增删时不错位）。
+    pub nat_after: Vec<usize>,
+    /// 每文件 (名字, decl 数)（bench 报表用）。
+    pub counts: Vec<(String, usize)>,
+    /// 首个 parse 失败的文件名（None = 全部成功）。
+    pub failed: Option<String>,
+    /// 累积导出宏表（用户文件 parse 依赖它——hdl-macros 等导出）。
+    pub macros: PreludeMacros,
+}
+
+/// 按参考版 prelude 加载口径解析一串文件：逐文件 `parser_with_macros`
+/// （path_id 从 0 递增，与参考版加载器同款），累积导出宏，展平成单一
+/// decl 序列。仅 parse 不 infer——两版引擎各自推这份序列（l13bench 的
+/// `parse_prelude` 由此库化）。
+pub(crate) fn parse_prelude_files(files: &[(&str, &str)]) -> PreludeParse {
+    let mut macros: PreludeMacros = Default::default();
+    let mut all: Vec<parser::syntax::Decl> = Vec::new();
+    let mut file_ends: Vec<usize> = Vec::new();
+    let mut nat_after: Vec<usize> = Vec::new();
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    let mut failed: Option<String> = None;
+    for (i, (name, src)) in files.iter().enumerate() {
+        let pre = preprocess(src);
+        match parser::parser_with_macros(&pre, i as u32, &macros) {
+            Some((decls, _errs, exports, _exp)) => {
+                for (k, v) in exports {
+                    macros.insert(k, v);
+                }
+                counts.push((name.to_string(), decls.len()));
+                if !decls.is_empty() {
+                    all.extend(decls);
+                    file_ends.push(all.len() - 1);
+                    if *name == "nat" {
+                        nat_after.push(all.len() - 1);
+                    }
+                }
+            }
+            None => {
+                failed = Some(name.to_string());
+                break;
+            }
+        }
+    }
+    PreludeParse {
+        decls: all,
+        file_ends,
+        nat_after,
+        counts,
+        failed,
+        macros,
+    }
+}
+
 fn decl_name_of(tm: &parser::syntax::Decl) -> SmolStr {
     match tm {
         parser::syntax::Decl::Def { name, .. }
@@ -3487,44 +3593,11 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     // Fresh force-memo epoch for the load (see `force_memo_clear`).
     force_memo_clear();
     let mut infer = Infer::new();
-    let mut prelude: Vec<&str> = vec![
-        include_str!("../prelude/core/op.typort"),
-        include_str!("../prelude/core/eq.typort"),
-        include_str!("../prelude/core/nat.typort"),
-        include_str!("../prelude/core/calc.typort"),
-        include_str!("../prelude/core/bool.typort"),
-        include_str!("../prelude/data/option.typort"),
-        include_str!("../prelude/data/result.typort"),
-        include_str!("../prelude/data/order.typort"),
-        include_str!("../prelude/core/void.typort"),
-        include_str!("../prelude/data/decidable.typort"),
-        include_str!("../prelude/data/vec.typort"),
-        include_str!("../prelude/data/either.typort"),
-        include_str!("../prelude/data/list.typort"),
-        include_str!("../prelude/data/string.typort"),
-        include_str!("../prelude/data/nonempty.typort"),
-    ];
+    let mut prelude: Vec<&str> = PRELUDE_CORE.iter().map(|(_, s)| *s).collect();
     if include_hdl {
-        prelude.extend([
-            include_str!("../prelude/hdl/hdl-core.typort"),
-            include_str!("../prelude/hdl/hdl-check.typort"),
-            include_str!("../prelude/hdl/hdl-types.typort"),
-            include_str!("../prelude/hdl/hdl-ops.typort"),
-            include_str!("../prelude/hdl/hdl-clock.typort"),
-            include_str!("../prelude/hdl/hdl-bus.typort"),
-            include_str!("../prelude/hdl/hdl-signals.typort"),
-            include_str!("../prelude/hdl/hdl-utils.typort"),
-            include_str!("../prelude/hdl/hdl-stream.typort"),
-            include_str!("../prelude/hdl/hdl-crossclock.typort"),
-            include_str!("../prelude/hdl/hdl-bus-proto.typort"),
-            include_str!("../prelude/hdl/hdl-misc-io.typort"),
-            include_str!("../prelude/hdl/hdl-misc.typort"),
-            include_str!("../prelude/hdl/hdl-macros.typort"),
-            include_str!("../prelude/hdl/hdl-verilog-compat.typort"),
-            include_str!("../prelude/hdl/hdl-verilog.typort"),
-        ]);
+        prelude.extend(PRELUDE_HDL.iter().map(|(_, s)| *s));
     }
-    prelude.push(include_str!("../prelude/show.typort"));
+    prelude.push(PRELUDE_SHOW.1);
     let mut cxt = Cxt::new(&infer);
 
     // Accumulate exported macros from prelude files
