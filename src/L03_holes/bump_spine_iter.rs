@@ -1506,6 +1506,16 @@ impl Machine {
         )
     }
 
+    /// elaboration 顶层的 force 出口：复用常驻 workbuf（同 `eval` 的洗白
+    /// 出借；「排空即返回」不变量对顶层调用点成立——它们不在任何核的
+    /// 迭代中途）。已解 flex spine 的 force 会经 `eval_iter` 走 β 路径，
+    /// 临时 `Vec::new()` 在此每次展开都付一次堆分配。
+    fn force(&mut self, bump: &Bump, v: V) -> V {
+        let work: &mut Vec<W<'_>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'_>>) };
+        force(bump, &mut self.spine, work, &mut self.vals, &mut self.defs, &self.metas, v)
+    }
+
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
         let tasks: &mut Vec<QJob<'a>> =
             unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
@@ -1613,7 +1623,7 @@ impl Machine {
         a: V,
     ) -> Result<&'a Tm<'a>, Error> {
         // force 期望类型后分派（已解 meta 可能展开成 Pi）
-        let a = force(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &mut self.defs, &self.metas, a);
+        let a = self.force(bump, a);
         match t {
             Raw::SrcPos(pos, t) => {
                 let mut cxt = cxt;
@@ -1716,7 +1726,7 @@ impl Machine {
                 let (t, tty) = self.infer(bump, cxt, t)?;
                 // 确保 tty 是 Π：不是则挂一对洞（定义域 + 余定义域），
                 // 用合成的 Π 与 tty 做 unification（可能求解出它们的值）
-                let tty = force(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, &mut self.defs, &self.metas, tty);
+                let tty = self.force(bump, tty);
                 let (a, bcell) = if v_tag(tty) == 4 {
                     let p = v_pi_of(tty);
                     (p.dom, p)

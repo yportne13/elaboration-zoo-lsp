@@ -2219,6 +2219,25 @@ impl Machine {
         )
     }
 
+    /// elaboration 顶层的 force 出口：复用常驻 workbuf/icits（同 `eval` 的
+    /// 洗白出借；「排空即返回」不变量对顶层调用点成立——它们不在任何核的
+    /// 迭代中途）。已解 flex spine 的 force 会经 `eval_iter` 走 β 路径，
+    /// 临时 `Vec::new()` 在此每次展开都付一次堆分配。
+    fn force(&mut self, bump: &Bump, v: V) -> V {
+        let work: &mut Vec<W<'_>> =
+            unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'_>>) };
+        force(
+            bump,
+            &mut self.spine,
+            work,
+            &mut self.vals,
+            &mut self.icits,
+            &mut self.defs,
+            &self.metas,
+            v,
+        )
+    }
+
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
         let tasks: &mut Vec<QJob<'a>> =
             unsafe { &mut *(&mut self.qtasks as *mut Vec<QJob<'static>> as *mut Vec<QJob<'a>>) };
@@ -2323,16 +2342,7 @@ impl Machine {
         t: &'a Tm<'a>,
         va: V,
     ) -> (&'a Tm<'a>, V) {
-        let va = force(
-            bump,
-            &mut self.spine,
-            &mut Vec::new(),
-            &mut self.vals,
-            &mut self.icits,
-            &mut self.defs,
-            &self.metas,
-            va,
-        );
+        let va = self.force(bump, va);
         if v_tag(va) == 4 && v_pi_of(va).icit == Icit::Impl {
             let p = v_pi_of(va);
             let m = self.fresh_meta(bump, cxt, p.dom);
@@ -2386,17 +2396,7 @@ impl Machine {
     ) -> Result<(&'a Tm<'a>, V), Error> {
         let mut t = t;
         loop {
-            let forced = force(
-                bump,
-                &mut self.spine,
-                &mut Vec::new(),
-                &mut self.vals,
-                &mut Vec::new(),
-                &mut self.defs,
-                &self.metas,
-                va,
-            );
-            va = forced;
+            va = self.force(bump, va);
             if v_tag(va) == 4 && v_pi_of(va).icit == Icit::Impl {
                 let p = v_pi_of(va);
                 if p.name == name {
@@ -2431,16 +2431,7 @@ impl Machine {
         a: V,
     ) -> Result<&'a Tm<'a>, Error> {
         // force 期望类型后分派（已解 meta 可能展开成 Pi）
-        let a = force(
-            bump,
-            &mut self.spine,
-            &mut Vec::new(),
-            &mut self.vals,
-            &mut self.icits,
-            &mut self.defs,
-            &self.metas,
-            a,
-        );
+        let a = self.force(bump, a);
         match t {
             Raw::SrcPos(pos, t) => {
                 let mut cxt = cxt;
@@ -2620,16 +2611,7 @@ impl Machine {
                         (Icit::Expl, t, tty)
                     }
                 };
-                let tty = force(
-                    bump,
-                    &mut self.spine,
-                    &mut Vec::new(),
-                    &mut self.vals,
-                    &mut Vec::new(),
-                    &mut self.defs,
-                    &self.metas,
-                    tty,
-                );
+                let tty = self.force(bump, tty);
                 let (a, bcell) = if v_tag(tty) == 4 {
                     let p = v_pi_of(tty);
                     if p.icit != i {
