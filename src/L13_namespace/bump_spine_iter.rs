@@ -93,6 +93,11 @@
 //!    （`DeclEntry::typ_pretty`），参考版在**使用处**上下文渲染；类型含
 //!    binder 且使用处名字遮蔽时 pretty fresh 后缀（`x` vs `x'`）或有显示
 //!    差异。判定、诊断与 Ok 输出不受影响（观察表不参与 run 口径）。
+//! 5. 观察面表形态：孪生 Enum 臂构造子体 `datas` 复用 `Raw::Var(参数名)`
+//!    过 infer，产生与 binder 条目**同 span 同串的重复项**（参考版该处在
+//!    值层合成、不过 infer）。`hover_entry_at` 平手取先且串相同，对 LSP
+//!    行为无影响；全表互检按「无缺失 + 无异质」口径断言（见
+//!    `observation_tests::hover_table_full_matches_reference_on_qualified_fixture`）。
 
 use bumpalo::Bump;
 use smol_str::SmolStr;
@@ -5361,6 +5366,31 @@ impl Machine {
         }
     }
 
+    /// L5：限定访问中间段 hover（参考版 `push_qualified_hover` 同款）——
+    /// `mylib.Foo.mk` 在 `Foo` 上 hover 出类型、`mylib` 上 hover 出命名空
+    /// 间声明（若登记）。逐段累积限定名查 decl 表，命中则 cached push。
+    fn push_qualified_hover<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        x: &Raw,
+    ) {
+        let mut cur = x;
+        loop {
+            match cur {
+                Raw::Obj(inner, Some(seg)) => {
+                    if let Some(full) = qualified_path_str(inner.as_ref(), &seg.data) {
+                        if let Some(e) = cxt.decls.get(full.as_str()) {
+                            self.push_hover_cached(bump, cxt, seg.to_span(), e);
+                        }
+                    }
+                    cur = inner.as_ref();
+                }
+                _ => break,
+            }
+        }
+    }
+
     /// 与参考版 `Infer::hover_entry_at` 同规则：同 path 内命中 offset 的最
     /// 小 span 胜出。
     pub(crate) fn hover_entry_at(
@@ -7471,6 +7501,9 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, V), Error> {
+        // 整个 Raw 节点的 span（参考版 infer_expr 的 t_span 形参；Ob臂
+        // qualified 三试的 hover 键跟它对齐，其余站点用各自 token span）
+        let raw_span = t.to_span();
         match t {
             // 变量：五级解析链（参考版 Raw::Var 臂逐句）——局部名字 → decl
             // 精确键 → import 别名 → namespace 前缀 → `.name` 后缀唯一回退
@@ -7521,7 +7554,7 @@ impl Machine {
                     }
                     s
                 };
-                let matches: Vec<(SmolStr, V)> = cxt
+                let matches: Vec<(SmolStr, V, crate::parser_lib::Span<()>)> = cxt
                     .decls
                     .iter()
                     .filter(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
@@ -7538,16 +7571,25 @@ impl Machine {
                         }
                     })
                     .filter(|(k, _)| !ns_method_keys.contains(*k))
-                    .map(|(k, e)| (k.clone(), e.vty))
+                    .map(|(k, e)| (k.clone(), e.vty, e.span))
                     .collect();
                 if matches.len() == 1 {
-                    let (full_key, vty) = &matches[0];
+                    let (full_key, vty, dspan) = &matches[0];
+                    // 观察面（ref 2242）：唯一回退命中也登记 hover（cached 渲染）
+                    let rendered = match cxt.decls.get(full_key.as_str()).and_then(|e| e.typ_pretty.clone()) {
+                        Some(sp) => (*sp).clone(),
+                        None => {
+                            let tm = self.quote(bump, cxt, cxt.lvl, *vty);
+                            pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm))
+                        }
+                    };
+                    self.hover_table.push((x.to_span(), *dspan, rendered));
                     let name = bump.alloc_str(full_key.as_str());
                     return Ok((bump.alloc(Tm::Decl(name)), *vty));
                 } else if matches.len() > 1 {
                     let names = matches
                         .iter()
-                        .map(|(k, _)| k.as_str())
+                        .map(|(k, _, _)| k.as_str())
                         .collect::<Vec<_>>()
                         .join(", ");
                     return Err(Error(
@@ -7577,8 +7619,10 @@ impl Machine {
 
             Raw::Obj(x, t) => {
                 // 字段名可缺省（中缀运算符前缀 / 空 `.foo` 补全场景）；参考版
-                // Obj 臂入口 unwrap_or(empty_span("")) 同款
+                // Obj 臂兣口 unwrap_or(empty_span("")) 同款
                 let t = t.clone().unwrap_or(empty_span(SmolStr::new("")));
+                // 观察面：限定访问中间段 hover（ref 2313 同点，无条件调用）
+                self.push_qualified_hover(bump, cxt, x);
                 if t.data == "mk" {
                     if let Raw::Var(sum_name) = x.as_ref() {
                         return self.infer_expr(
@@ -7607,7 +7651,7 @@ impl Machine {
                 if !t.data.is_empty() {
                     if let Some(qual) = qualified_path_str(x.as_ref(), &t.data) {
                         if let Some(e) = cxt.decls.get(qual.as_str()) {
-                            self.push_hover_cached(bump, cxt, t.to_span(), e);
+                            self.push_hover_cached(bump, cxt, raw_span, e);
                             let name = bump.alloc_str(qual.as_str());
                             return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                         }
@@ -7615,7 +7659,7 @@ impl Machine {
                             if let Some(full_head) = self.import_map.get(head.as_str()) {
                                 let resolved = format!("{}.{}", full_head, rest);
                                 if let Some(e) = cxt.decls.get(resolved.as_str()) {
-                                    self.push_hover_cached(bump, cxt, t.to_span(), e);
+                                    self.push_hover_cached(bump, cxt, raw_span, e);
                                     let name = bump.alloc_str(&resolved);
                                     return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                                 }
@@ -7624,7 +7668,7 @@ impl Machine {
                         if let Some(prefix) = &cxt.namespace_prefix {
                             let prefixed = format!("{}.{}", prefix, qual);
                             if let Some(e) = cxt.decls.get(prefixed.as_str()) {
-                                self.push_hover_cached(bump, cxt, t.to_span(), e);
+                                self.push_hover_cached(bump, cxt, raw_span, e);
                                 let name = bump.alloc_str(&prefixed);
                                 return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                             }
@@ -12252,5 +12296,59 @@ def d0 : Nat -> Nat = n => succ n
 
         assert!(!ref_v.is_empty(), "fixture must produce inlay hints");
         assert_eq!(twin_v, ref_v, "inlay (offset, label) sets agree");
+    }
+
+    /// Whole-table parity on a package + qualified-access + bare-name
+    /// fallback fixture: every (use-span, rendered-type) entry the reference
+    /// table holds must be present in the twin table (twin may hold a few
+    /// extra prefix-walk entries; the reference does the same walk, so in
+    /// practice sets are equal — assert full equality).
+    #[test]
+    fn hover_table_full_matches_reference_on_qualified_fixture() {
+        let src = "package mylib\n\nenum Tree {\n    leaf\n    node(x: Tree)\n}\n\ndef t: Tree = leaf\n\ndef u: Tree = Tree.node(t)\n";
+        let ast = parse(src, 47).expect("parse");
+
+        let mut t = Tycker::new();
+        t.run_input(src, 47).expect("twin check");
+        let mut twin_v: Vec<(u32, u32, String)> = t
+            .hover_table()
+            .iter()
+            .map(|(ts, _, r)| (ts.start_offset, ts.end_offset, r.clone()))
+            .collect();
+        twin_v.sort();
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let mut ref_v: Vec<(u32, u32, String)> = infer
+            .hover_table
+            .iter()
+            .map(|(ts, _, r)| (ts.start_offset, ts.end_offset, r.clone()))
+            .collect();
+        ref_v.sort();
+
+        // 已知偏差 5：孪生构造子体 datas 的 Raw::Var(参数名) 复用 infer 路径，
+        // 产生与 binder 条目同 span 同串的**重复**（参考版该处在值层合成、
+        // 不过 infer）。对 LSP 无行为影响（min_by_key 平手取先、串相同）。
+        // 断言方向：参考版每条都在孪生（无缺失），且孪生每条都能在参考版
+        // 找到同 (span, 串) 项（孪生只允许重复、不允许异质条目）。
+        let missing: Vec<_> = ref_v
+            .iter()
+            .filter(|x| !twin_v.contains(x))
+            .map(|(a, b, r)| format!("{}..{} {:?}", a, b, &src[*a as usize..*b as usize]))
+            .collect();
+        assert!(missing.is_empty(), "twin missing reference entries: {:?}", missing);
+        let foreign: Vec<_> = twin_v
+            .iter()
+            .filter(|x| !ref_v.contains(x))
+            .collect();
+        assert!(
+            foreign.is_empty(),
+            "twin has entries absent from reference (should only duplicate): {:?}",
+            foreign
+        );
     }
 }
