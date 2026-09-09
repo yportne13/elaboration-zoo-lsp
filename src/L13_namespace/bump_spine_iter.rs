@@ -5131,9 +5131,11 @@ struct Names {
     /// 名字 → 层级（map1：只收源码 binder 与 fake_bind；inserted binder
     /// 与参考版 `new_binder` 一样不入）。
     by_name: FxHashMap<SmolStr, u32>,
-    /// 层级 → 类型值（map2：按层级持久，refresh 的 get_by_key2_mut 目标；
-    /// 名字查类型经此中转，refresh 更新即生效）。
-    by_lvl: FxHashMap<u32, V>,
+    /// 层级 →（类型值, binder 名源码 span）（map2：按层级持久，refresh 的
+    /// get_by_key2_mut 目标；名字查类型经此中转，refresh 更新即生效。
+    /// span 为观察面 def_span（局部 hover/goto，合成 binder 记零 span）；
+    /// 并入元组而非平行表——Names 随 bind 链 COW 克隆，三表克隆实测 +5% 。
+    by_lvl: FxHashMap<u32, (V, crate::parser_lib::Span<()>)>,
 }
 
 /// 稳态复用机（L06/L08 版 + L09 增量：global 表）。L09 没有 decl 表 /
@@ -5327,12 +5329,13 @@ impl Machine {
         bump: &'a Bump,
         cxt: &Cxt<'a>,
         x: &str,
+        b_span: crate::parser_lib::Span<()>,
         a_t: &'a Tm<'a>,
         ty: V,
     ) -> Cxt<'a> {
         let mut names = (*cxt.names).clone();
         names.by_name.insert(SmolStr::new(x), cxt.lvl);
-        names.by_lvl.insert(cxt.lvl, ty);
+        names.by_lvl.insert(cxt.lvl, (ty, b_span));
         let env = env_ext(bump, cxt.env, v_lvl(cxt.lvl));
         Cxt {
             env,
@@ -5407,6 +5410,7 @@ impl Machine {
         bump: &'a Bump,
         cxt: &Cxt<'a>,
         x: &str,
+        b_span: crate::parser_lib::Span<()>,
         a_t: &'a Tm<'a>,
         t_t: &'a Tm<'a>,
         val: V,
@@ -5414,7 +5418,7 @@ impl Machine {
     ) -> Cxt<'a> {
         let mut names = (*cxt.names).clone();
         names.by_name.insert(SmolStr::new(x), cxt.lvl);
-        names.by_lvl.insert(cxt.lvl, ty);
+        names.by_lvl.insert(cxt.lvl, (ty, b_span));
         let env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
         Cxt {
             env,
@@ -6369,7 +6373,9 @@ impl Machine {
                         self.eval(bump, cxt, env, p.body)
                     };
                     let a_t = self.quote(bump, cxt, cxt.lvl, p.dom);
-                    let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, p.dom);
+                    // 观察面：显式 lambda binder 定义处 hover（参考版 742 同点位）
+                    self.push_hover(bump, cxt, x.to_span(), x.to_span(), p.dom);
+                    let cxt2 = self.bind_name(bump, cxt, &x.data, x.to_span(), a_t, p.dom);
                     let body = self.check(bump, &cxt2, tbody, body_a)?;
                     Ok(bump.alloc(Tm::Lam(name, p.icit, body)))
                 } else if p.icit == Icit::Impl {
@@ -6425,7 +6431,7 @@ impl Machine {
             let t_tm = self.check(bump, &cxt_named, t2, va)?;
             let vt = self.eval(bump, &cxt, cxt.env, t_tm);
             let name: &'a str = bump.alloc_str(&x.data);
-            let cxt2 = self.define_name(bump, cxt, &x.data, a_tm, t_tm, vt, va);
+            let cxt2 = self.define_name(bump, cxt, &x.data, x.to_span(), a_tm, t_tm, vt, va);
             let u_tm = self.check(bump, &cxt2, u2, a)?;
             Ok(bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)))
         } else if let Raw::Hole(_) = t {
@@ -7033,11 +7039,12 @@ impl Machine {
             // src_names 按层级同步（Lvl(env_t.len()) = n-1-d）；L10：
             // 无条目静默跳过（if let Some 同款）
             let lvl = (n - 1 - d) as u32;
-            if let Some(old_ty) = names.by_lvl.get(&lvl) {
+            if let Some((old_ty, sp)) = names.by_lvl.get(&lvl) {
                 let old_ty = *old_ty;
+                let sp = *sp;
                 let qt = self.quote(bump, cxt, n as u32, old_ty);
                 let rty = self.eval(bump, cxt, env_tt_chain, qt);
-                names.by_lvl.insert(lvl, rty);
+                names.by_lvl.insert(lvl, (rty, sp));
             }
         }
         refreshed.into_iter().map(|x| x.expect("refresh: 槽未刷新")).collect()
@@ -7415,7 +7422,10 @@ impl Machine {
             //（歧义报错；排除 namespace 方法键、要求首段可见）
             Raw::Var(x) => {
                 if let Some(&blvl) = cxt.names.by_name.get(x.data.as_str()) {
-                    let ty = *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级");
+                    let (ty, def_span) = *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级");
+                    // 观察面：局部变量使用处现场渲染（与参考版使用处同溝）；
+                    // def_span = binder 源码 span（Names.by_lvl 元组携带，合成 binder 为零）。
+                    self.push_hover(bump, cxt, x.to_span(), def_span, ty);
                     let ix = cxt.lvl - blvl - 1;
                     return Ok((bump.alloc(Tm::Var(ix)), ty));
                 }
@@ -7542,6 +7552,7 @@ impl Machine {
                 if !t.data.is_empty() {
                     if let Some(qual) = qualified_path_str(x.as_ref(), &t.data) {
                         if let Some(e) = cxt.decls.get(qual.as_str()) {
+                            self.push_hover_cached(bump, cxt, t.to_span(), e);
                             let name = bump.alloc_str(qual.as_str());
                             return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                         }
@@ -7549,6 +7560,7 @@ impl Machine {
                             if let Some(full_head) = self.import_map.get(head.as_str()) {
                                 let resolved = format!("{}.{}", full_head, rest);
                                 if let Some(e) = cxt.decls.get(resolved.as_str()) {
+                                    self.push_hover_cached(bump, cxt, t.to_span(), e);
                                     let name = bump.alloc_str(&resolved);
                                     return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                                 }
@@ -7557,6 +7569,7 @@ impl Machine {
                         if let Some(prefix) = &cxt.namespace_prefix {
                             let prefixed = format!("{}.{}", prefix, qual);
                             if let Some(e) = cxt.decls.get(prefixed.as_str()) {
+                                self.push_hover_cached(bump, cxt, t.to_span(), e);
                                 let name = bump.alloc_str(&prefixed);
                                 return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                             }
@@ -7665,6 +7678,9 @@ impl Machine {
                                     .map(|p| p.ty)
                             });
                         if let Some(ty) = field {
+                            // 观察面：字段访问 hover（ref 2422；def_span 降级为字段
+                            // token 自身——双值不持字段 binder span，待评估）
+                            self.push_hover(bump, cxt, t.to_span(), t.to_span(), ty);
                             return Ok((
                                 bump.alloc(Tm::Obj(tm, bump.alloc_str(&t.data))),
                                 ty,
@@ -7681,6 +7697,8 @@ impl Machine {
                             .find(|d| d.name == t.data.as_str())
                             .map(|d| d.val);
                         if let Some(ty) = field {
+                            // 观察面：构造子字段访问 hover（ref 2455，同样降级 def_span）
+                            self.push_hover(bump, cxt, t.to_span(), t.to_span(), ty);
                             return Ok((
                                 bump.alloc(Tm::Obj(tm, bump.alloc_str(&t.data))),
                                 ty,
@@ -7700,7 +7718,7 @@ impl Machine {
                 let new_meta = self.fresh_meta(bump, cxt, v_u(0));
                 let a = self.eval_fresh(bump, cxt, cxt.env, new_meta);
                 let a_t = self.quote(bump, cxt, cxt.lvl, a);
-                let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, a);
+                let cxt2 = self.bind_name(bump, cxt, &x.data, x.to_span(), a_t, a);
                 let infered = self.infer_expr(bump, &cxt2, tbody);
                 let (t_inferred0, b0) = infered?;
                 let (t_inferred, b) = self.insert(bump, &cxt2, t_inferred0, b0)?;
@@ -7778,7 +7796,7 @@ impl Machine {
                     let new_meta = self.fresh_meta(bump, cxt, v_u(0));
                     let a = self.eval_fresh(bump, cxt, cxt.env, new_meta);
                     let a_t = self.quote(bump, cxt, cxt.lvl, a);
-                    let cxt2 = self.bind_name(bump, cxt, "x", a_t, a);
+                    let cxt2 = self.bind_name(bump, cxt, "x", empty_span(()), a_t, a);
                     let cod_meta = self.fresh_meta(bump, &cxt2, v_u(0));
                     let cell = bump.alloc(PiCell {
                         name: "x",
@@ -7811,7 +7829,7 @@ impl Machine {
                 let a_eval = self.eval(bump, &cxt, cxt.env, a_checked);
                 let name: &'a str = bump.alloc_str(&x.data);
                 let a_t = self.quote(bump, &cxt, cxt.lvl, a_eval);
-                let cxt2 = self.bind_name(bump, cxt, &x.data, a_t, a_eval);
+                let cxt2 = self.bind_name(bump, cxt, &x.data, x.to_span(), a_t, a_eval);
                 let checked = self.check_universe(bump, &cxt2, b);
                 let (b_checked, lvl) = checked?;
                 universe = universe.max(lvl);
@@ -7839,7 +7857,9 @@ impl Machine {
                 let t_checked = self.check(bump, &cxt_named, t2, va)?;
                 let vt = self.eval(bump, &cxt, cxt.env, t_checked);
                 let name: &'a str = bump.alloc_str(&x.data);
-                let cxt2 = self.define_name(bump, cxt, &x.data, a_checked, t_checked, vt, va);
+                // 观察面：let binder 定义处 hover（参考版 2627 同点位）
+                self.push_hover(bump, cxt, x.to_span(), x.to_span(), va);
+                let cxt2 = self.define_name(bump, cxt, &x.data, x.to_span(), a_checked, t_checked, vt, va);
                 let inferred = self.infer_expr(bump, &cxt2, u2);
                 let (u_inferred, b) = inferred?;
                 Ok((
@@ -8114,6 +8134,8 @@ impl Machine {
                 } else {
                     self.eval(bump, &fake, fake.env, t_tm)
                 };
+                // 观察面：def 名定义处 hover（参考版 1153 同点位）
+                self.push_hover(bump, cxt, name.to_span(), name.to_span(), vtyp);
                 let out = self.decl_reg(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
@@ -8493,7 +8515,7 @@ impl Machine {
                         let (a_checked, _) = self.check_universe(bump, &temp_cxt, a)?;
                         let a_eval = self.eval(bump, &temp_cxt, temp_cxt.env, a_checked);
                         let a_t = self.quote(bump, &temp_cxt, temp_cxt.lvl, a_eval);
-                        temp_cxt = self.bind_name(bump, &temp_cxt, &x.data, a_t, a_eval);
+                        temp_cxt = self.bind_name(bump, &temp_cxt, &x.data, x.to_span(), a_t, a_eval);
                     }
                     let (typ_tm, _) = self.check_universe(bump, &temp_cxt, name)?;
                     let typ_val = self.eval(bump, &temp_cxt, temp_cxt.env, typ_tm);
@@ -8825,7 +8847,7 @@ impl Machine {
                     let (a_checked, _) = self.check_universe(bump, &a_cxt, pty)?;
                     let a_eval = self.eval(bump, &a_cxt, a_cxt.env, a_checked);
                     let a_t = self.quote(bump, &a_cxt, a_cxt.lvl, a_eval);
-                    a_cxt = self.bind_name(bump, &a_cxt, &pname.data, a_t, a_eval);
+                    a_cxt = self.bind_name(bump, &a_cxt, &pname.data, pname.to_span(), a_t, a_eval);
                 }
                 if traits.iter().any(|(t, _)| t.data == "Module") {
                     let (a_checked, _) = self.check_universe(
@@ -8839,6 +8861,7 @@ impl Machine {
                         bump,
                         &a_cxt,
                         "bn",
+                        empty_span(()),
                         a_t,
                         a_eval,
                     );
@@ -8903,6 +8926,7 @@ impl Machine {
                         bump,
                         &a_cxt,
                         &n.data,
+                        n.to_span(),
                         a_checked,
                         t_checked,
                         vt,
@@ -9895,7 +9919,7 @@ impl<'a> Compiler<'a> {
                         );
                         let q = mach.quote(bump, &cur_cxt, cur_cxt.lvl, p.dom);
                         let name = p.name.to_string();
-                        cur_cxt = mach.bind_name(bump, &cur_cxt, &name, q, p.dom);
+                        cur_cxt = mach.bind_name(bump, &cur_cxt, &name, empty_span(()), q, p.dom);
                     } else {
                         break;
                     }
@@ -10139,7 +10163,7 @@ impl<'a> Compiler<'a> {
                             } else {
                                 let q = mach.quote(bump, &arm.cxt, arm.cxt.lvl, *typ);
                                 (
-                                    mach.bind_name(bump, &arm.cxt, &constr_name.data, q, *typ),
+                                    mach.bind_name(bump, &arm.cxt, &constr_name.data, constr_name.to_span(), q, *typ),
                                     arm.patcon.clone().clean().push(PatternDetail::Bind(constr_name)),
                                 )
                             }
@@ -10150,7 +10174,7 @@ impl<'a> Compiler<'a> {
                                 let q = mach.quote(bump, &arm.cxt, arm.cxt.lvl, *typ);
                                 let name = head_name.clone().map(|x| format!("_{}", x));
                                 let cname = name.data.clone();
-                                mach.bind_name(bump, &arm.cxt, &cname, q, *typ)
+                                mach.bind_name(bump, &arm.cxt, &cname, empty_span(()), q, *typ)
                             };
                             let patcon2 = if fake_first {
                                 arm.patcon.clone()
@@ -10306,7 +10330,7 @@ impl<'a> Compiler<'a> {
                                     let q = mach.quote(bump, &arm.cxt, arm.cxt.lvl, *typ);
                                     let imp = name.clone();
                                     (
-                                        mach.bind_name(bump, &arm.cxt, &cname, q, *typ),
+                                        mach.bind_name(bump, &arm.cxt, &cname, empty_span(()), q, *typ),
                                         arm.patcon
                                             .clone()
                                             .clean()
@@ -10368,7 +10392,7 @@ impl<'a> Compiler<'a> {
                                         body: arm.arm.body.clone(),
                                     },
                                     idx: arm.idx,
-                                    cxt: mach.bind_name(bump, &arm.cxt, &constr_.data, q, *typ),
+                                    cxt: mach.bind_name(bump, &arm.cxt, &constr_.data, constr_.to_span(), q, *typ),
                                     heads: new_heads.clone(),
                                     raw: arm.raw.clone(),
                                     target_typ: arm.target_typ,
@@ -10420,7 +10444,7 @@ impl<'a> Compiler<'a> {
                                             body: arm.arm.body.clone(),
                                         },
                                         idx: arm.idx,
-                                        cxt: mach.bind_name(bump, &arm.cxt, &cname, q, *typ),
+                                        cxt: mach.bind_name(bump, &arm.cxt, &cname, empty_span(()), q, *typ),
                                         heads: vec![],
                                         raw: arm.raw.clone(),
                                         target_typ: arm.target_typ,
@@ -11990,5 +12014,70 @@ mod observation_tests {
             (rf.1.start_offset, rf.1.end_offset, rf.1.path_id),
             "def-site span"
         );
+    }
+
+    /// Local variable (lambda binder) use-site hover: rendered string and
+    /// def_span (pointing at the binder token) agree with the reference.
+    #[test]
+    fn hover_local_var_use_matches_reference() {
+        let src = "enum Nat {
+    zero
+    succ(x: Nat)
+}
+def d0 : Nat -> Nat = n => succ n
+";
+        let ast = parse(src, 43).expect("parse");
+        let line = src.rfind("succ n").unwrap();
+        let use_off = line + "succ ".len();
+        let binder_off = src.find("= n =").unwrap() + 2;
+
+        let mut t = Tycker::new();
+        t.run_input(src, 43).expect("twin check");
+        let tw = t.hover_entry_at(43, use_off).expect("twin local hover");
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let rf = infer.hover_entry_at(43, use_off).expect("ref local hover");
+
+        assert_eq!(&tw.2, &rf.2, "local rendered type");
+        assert_eq!(
+            (tw.1.start_offset, tw.1.end_offset),
+            (binder_off as u32, (binder_off + 1) as u32),
+            "local def_span points at binder token"
+        );
+        assert_eq!(
+            (tw.1.start_offset, tw.1.end_offset, tw.1.path_id),
+            (rf.1.start_offset, rf.1.end_offset, rf.1.path_id),
+            "local def_span matches reference"
+        );
+    }
+
+    /// Struct field projection hover: rendered field type agrees with the
+    /// reference (def_span intentionally degrades to the field token until
+    /// Sum values carry binder spans - see wiring doc).
+    #[test]
+    fn hover_field_projection_matches_reference() {
+        let src = "struct P {\n    x: String\n}\ndef get(p: P): String = p.x\n";
+        let ast = parse(src, 44).expect("parse");
+        let use_off = src.rfind(".x").unwrap() + 1;
+
+        let mut t = Tycker::new();
+        t.run_input(src, 44).expect("twin check");
+        let tw = t.hover_entry_at(44, use_off).expect("twin field hover");
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let rf = infer.hover_entry_at(44, use_off).expect("ref field hover");
+
+        assert_eq!(&tw.2, &rf.2, "field rendered type");
+        assert_eq!(tw.2, "String", "field type is String");
     }
 }
