@@ -10370,10 +10370,28 @@ impl<'a> Compiler<'a> {
                 let (param, constrs) = {
                     let f = mach.force_v(bump, &arms[0].cxt, *typ);
                     if v_tag(f) == 7 {
-                        if let XCell::Sum { params, cases, .. } = v_xcell_of(f) {
+                        if let XCell::Sum { name, params, cases, .. } = v_xcell_of(f) {
+                            // 值层 cases 只有名字；构造子**定义 span** 从 decl 表回填
+                            // （参考版 Val::Sum.cases 直接带 Span<SmolStr>，其 PM 路径的
+                            // hover/def 键都落在这个声明 token 上——这里对齐）。
                             let cs: Vec<crate::parser_lib::Span<SmolStr>> = cases
                                 .iter()
-                                .map(|c| empty_span(SmolStr::new(c)))
+                                .map(|c| {
+                                    let key = format!("{}.{}", name, c);
+                                    let sp = arms[0]
+                                        .cxt
+                                        .decls
+                                        .get(key.as_str())
+                                        .or_else(|| arms[0].cxt.decls.get(*c))
+                                        .map(|e| e.span)
+                                        .unwrap_or_else(|| empty_span(()));
+                                    crate::parser_lib::Span {
+                                        data: SmolStr::new(*c),
+                                        start_offset: sp.start_offset,
+                                        end_offset: sp.end_offset,
+                                        path_id: sp.path_id,
+                                    }
+                                })
                                 .collect();
                             (params.to_vec(), cs)
                         } else {
