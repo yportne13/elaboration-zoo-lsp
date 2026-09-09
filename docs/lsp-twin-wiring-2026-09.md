@@ -149,6 +149,64 @@ LSP 加引擎开关（先 env/config），孪生模式与参考版模式跑同�
 5. 双引擎 LSP 灰度（阶段 4）：lib.rs 加引擎开关，8 测试套件跑孪生模式。
 
 
+### 2026-09-09 续（阶段 2 完成：prelude 装载 + 真实互检）
+
+**提交链**：`0b466a4`（prelude 表库化：`PRELUDE_CORE`/`PRELUDE_HDL`/
+`PRELUDE_SHOW` + `parse_prelude_files`，参考加载器/l13bench/孪生三方同源）
+→ 孪生侧（VconnT prim 移植 + `run_decls_with_prelude` 整轮入口）→
+`0eb625b`（阶段 2 验收测试 + 三处引擎修复）。
+
+**孪生新增**：
+- `PrimId::VconnT`：参考版 `vconn_builtin` 逐句移植（subSignal 端口方向
+  判定 + `vconnEmit` 发射），`register_vconn_builtin` 在 prelude 末尾注册
+  （签名引用 prelude 的 ModuleTree/Expr，时机镜像参考版）。
+- `Tycker::run_decls_with_prelude(prelude_decls, file_ends, nat_after,
+  user_ast)`：本轮 = prime_round → 逐 decl 重放 prelude（nat 边界 + 每文件
+  边界清 force memo）→ vconnT 注册 → **短名别名 or_insert**（参考版尾部
+  逐句：ns 方法键排除、全键排序 first-wins）→ HdlLoopIdx 复位 → 清观察表
+  → 用户 decls（与 `run_decls_bounded` 共用 `step_round_decl`）。每 kick
+  重放整个 prelude，是阶段 3a seed 开销的基线。
+- `insert_prelude_aliases` / `clear_observation_tables`。
+
+**真实互检结果（12 例 observation_tests，全部逐字节/按已登记工件口径过）**：
+- `prelude_tuple_mk_element_hover_matches_reference`：阶段 1 遗留的
+  tuple-mk 实测互检完成——元素 token（`true`→Boolean、`zero`→Nat）双版
+  一致，顺带验证别名解析。
+- `prelude_full_observation_tables_match_reference`：Option/match/PM/
+  字段投影/tuple 字面全表互检（三类已登记工件放行：参考 start=0 畸变、
+  孪生零 span 条目、投影 def_span 降级）。
+- `hdl_example_parity_with_full_prelude`：全量 prelude +
+  examples/hdl/09-hierarchy **端到端**输出逐字节一致——vconnT 路径由
+  `sum := u.sum` 展开实测，println 走 moduleTreeVL 全模块渲染。
+
+**互检揪出的三个真分叉（已修）**：
+1. **全局名使用处 hover 用登记期缓存串**：泛型 struct 参数的宇宙 meta
+   在登记后才被构造子 check 解出，缓存串把 `?N` 带进使用处悬浮
+   （`Tuple2` 使用处 `[A: ?264]` vs 参考 `[A: Type 0]`）。修复：
+   `push_hover_cached` 改实时渲染（同参考版）；`typ_pretty` 保留给 LSP
+   def-site 悬浮（参考版 Path1 直读）。
+2. **no_metas 已解 meta 按 cxt.lvl quote 下溢**（debug panic，
+   09-hierarchy 实测）：解出时上下文可比当前深。修复：`NM_QUOTE_LVL =
+   u32::MAX/2`（参考版 `val_no_metas` 的 NM_QUOTE_LVL 同款，结果只扫
+   Meta 节点、下标无所谓）。
+3. **check 的 Lam 臂多余的 binder 定义处 push**：接线旧文档把参考版
+   742 归因为 Lam 臂（实为 **let** 臂），def 参数折叠成 λ 会经过，推出
+   参考版没有的条目。修复：删该 push，局部变量 hover 仍由使用处 Var 臂
+   推（binder span 经 Names.by_lvl 携带，不回退）。
+
+另：`unify_iter` 入口的 `debug_assert!(stack.is_empty())` 与 Call/Call
+spine 快路径的嵌套调用（"首个对作入口、其余预载子栈"）矛盾，HDL 负载
+实测踩中，已移除断言并注明合法形态。
+
+**新偏差（已登记，不修）**：
+- 偏差 5 扩展：PM 构造子 pattern token 处孪生可能推**同串重复**条目
+  （PM 臂 + Var 臂各一），set 级互检不可见、对 LSP 取值无影响。
+- 孪生零 span 条目：tuple 字段访问 `p._2` 反糖出的合成构造子 Var 无源码
+  span，`.name` 后缀回退 push 的 t_span=0（参考版同场景推声明 span）。
+
+**回归闸（本轮实测）**：lib 659、`l13_fast_parity` 385、observation 12、
+LSP 守卫 12 套全绿；bench prelude-hdl parity 待本轮 bench 复跑确认。
+
 ### 2026-09-09 续（阶段 1 剩余站点的真实探查）
 
 用一个临时对照 probe（同 fixture 跑孪生+参考版、打印两张 hover 全表）
