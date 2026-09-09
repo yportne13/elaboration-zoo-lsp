@@ -1390,6 +1390,25 @@ fn rename_iter<'a>(
     done.pop()
 }
 
+/// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
+/// `String`（solve 密集负载下 `lams` 每 λ 层都要一个）。
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `λ x1 x2. … body`：最外层 λ 取**最先应用**槽位的 icit（与上游
 /// `lams (reverse $ map snd sp)` 一致——`args` 收集序的头是最后应用的
 /// 实参，反转后头 = 最先应用；bump 分配，名字只服务 pretty）。
@@ -1399,7 +1418,7 @@ fn lams<'a>(bump: &'a Bump, args: &[(V, Icit)], body: &'a Tm<'a>) -> &'a Tm<'a> 
     for (j, &(_, i)) in args.iter().enumerate() {
         // args[j]：j = 0 是最后应用的实参（λ 链最内层），j = n-1 是最先
         // 应用的实参（最外层 λ x1）
-        let name = bump.alloc_str(&format!("x{}", n - j));
+        let name = alloc_xname(bump, (n - j) as u32);
         t = bump.alloc(Tm::Lam(name, i, t));
     }
     t

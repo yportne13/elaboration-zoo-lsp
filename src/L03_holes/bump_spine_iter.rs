@@ -1337,11 +1337,30 @@ fn rename_iter<'a>(
     done.pop()
 }
 
+/// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
+/// `String`（solve 密集负载下 `lams` 每 λ 层都要一个）。
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `λ x1 x2. … body`（与参考版 `lams` 同语义；bump 分配，名字只服务 pretty）。
 fn lams<'a>(bump: &'a Bump, dom: u32, body: &'a Tm<'a>) -> &'a Tm<'a> {
     let mut t = body;
     for i in (0..dom).rev() {
-        let name = bump.alloc_str(&format!("x{}", i + 1));
+        let name = alloc_xname(bump, i + 1);
         t = bump.alloc(Tm::Lam(name, t));
     }
     t
