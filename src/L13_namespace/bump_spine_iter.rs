@@ -10557,6 +10557,41 @@ impl<'a> Compiler<'a> {
                             }
                             [Pattern::Con(constr_, item_pats, i), ..]
                                 if i.to_icit() == *icit && constr_ == constr => {
+                                // 观察面：case 构造子 pattern token 的 hover（对应参考版
+                                // pattern_match 862-907）。此点在 arm 构造路径（可达性
+                                // 探针之后），只读 decls + quote，不建 meta、不触探针回滚
+                                // 纪律（避开 filter_accessible_constrs 的 AV 雷区）。
+                                // 参数化构造子（值 tag==1 闭包）渲染其 Pi 类型（vty），
+                                // 无参构造子渲染 SumCase 值（如 `Tree::leaf`）；def_span
+                                // 取登记项回填的构造子定义 span。
+                                {
+                                    let sum_name: SmolStr = if v_tag(*typ) == 7 {
+                                        match v_xcell_of(*typ) {
+                                            XCell::Sum { name, .. } => SmolStr::new(name),
+                                            _ => SmolStr::new(""),
+                                        }
+                                    } else {
+                                        SmolStr::new("")
+                                    };
+                                    let qualified = if sum_name.is_empty() {
+                                        constr.data.clone()
+                                    } else {
+                                        SmolStr::new(format!("{}.{}", sum_name, constr.data))
+                                    };
+                                    match arm.cxt
+                                        .decls
+                                        .get(qualified.as_str())
+                                        .or_else(|| arm.cxt.decls.get(constr.data.as_str()))
+                                    {
+                                        Some(e) => {
+                                            let val = if v_tag(e.val) == 1 { e.vty } else { e.val };
+                                            mach.push_hover(bump, &arm.cxt, constr_.to_span(), e.span, val);
+                                        }
+                                        None => {
+                                            mach.push_hover(bump, &arm.cxt, constr_.to_span(), constr.to_span(), *typ);
+                                        }
+                                    }
+                                }
                                 let mut pats = item_pats.iter().cloned().collect::<Vec<_>>();
                                 pats.extend(arm.arm.pats[1..].iter().cloned());
                                 Some(Arm {
@@ -12296,6 +12331,89 @@ def d0 : Nat -> Nat = n => succ n
 
         assert!(!ref_v.is_empty(), "fixture must produce inlay hints");
         assert_eq!(twin_v, ref_v, "inlay (offset, label) sets agree");
+    }
+
+    /// PM constructor-pattern hover: `case leaf` / `case node(x)` tokens must
+    /// hover like constructor expressions (nullary -> `Tree::leaf`,
+    /// parameterized -> Pi signature), keyed at the user's token with def
+    /// span at the enum declaration.
+    #[test]
+    fn hover_pm_constructor_patterns_match_reference() {
+        let src = "enum Tree {\n    leaf\n    node(x: Tree)\n}\ndef depth(t: Tree): Tree =\n    match t {\n        case leaf => leaf\n        case node(x) => x\n    }\n";
+        let ast = parse(src, 48).expect("parse");
+
+        let mut t = Tycker::new();
+        t.run_input(src, 48).expect("twin check");
+        let mut twin_v: Vec<(u32, u32, u32, u32, String)> = t
+            .hover_table()
+            .iter()
+            .map(|(ts, ds, r)| {
+                (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone())
+            })
+            .collect();
+        twin_v.sort();
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let mut ref_v: Vec<(u32, u32, u32, u32, String)> = infer
+            .hover_table
+            .iter()
+            .map(|(ts, ds, r)| {
+                (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone())
+            })
+            .collect();
+        ref_v.sort();
+
+        // 允许两类已知缺项（均登记在接线文档，非本测试核心）：
+        //  A) start=0 的参考版 artifact（其 Val::Sum cases 的 Span 丢 start，
+        //     PM push 键跟着畸变；孪生值层 cases 只有名字，无从复现 end）；
+        //  B) 构造子定义处（use==def-span 形态）条目——孪生 Enum 臂尚未接
+        //     def-site push（下一组待接项）。
+        let missing: Vec<_> = ref_v
+            .iter()
+            .filter(|x| !twin_v.contains(x))
+            .filter(|x| {
+                let start_zero_artifact = x.0 == 0 && x.1 != 0;
+                let def_site_entry = x.0 == x.2 && x.1 == x.3;
+                !(start_zero_artifact || def_site_entry)
+            })
+            .map(|x| format!("{}..{}@{}..{} {:?}", x.0, x.1, x.2, x.3, x.4))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "twin PM hover missing unexplained reference entries: {:?}",
+            missing
+        );
+        // 关键断言（从 src 真实计算 token 偏移，不硬编码）：case 的构造子
+        // token 必须渲染构造子标识（无参→`Tree::leaf`；参数化→Pi 签名串）。
+        let leaf_tok = src.find("case leaf").unwrap() + "case ".len();
+        let node_tok = src.find("case node").unwrap() + "case ".len();
+        let leaf_entries: Vec<&String> = twin_v
+            .iter()
+            .filter(|x| x.0 == leaf_tok as u32 && x.1 == (leaf_tok + 4) as u32)
+            .map(|x| &x.4)
+            .collect();
+        let node_entries: Vec<&String> = twin_v
+            .iter()
+            .filter(|x| x.0 == node_tok as u32 && x.1 == (node_tok + 4) as u32)
+            .map(|x| &x.4)
+            .collect();
+        println!("LEAF token entries: {:?}", leaf_entries);
+        println!("NODE token entries: {:?}", node_entries);
+        assert!(
+            leaf_entries.iter().any(|r| r.as_str() == "Tree::leaf"),
+            "`case leaf` token must also hover as Tree::leaf; got {:?}",
+            leaf_entries
+        );
+        assert!(
+            node_entries.iter().any(|r| r.starts_with("(x")),
+            "`case node` token must also hover as its Pi signature; got {:?}",
+            node_entries
+        );
     }
 
     /// Whole-table parity on a package + qualified-access + bare-name
