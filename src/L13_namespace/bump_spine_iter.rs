@@ -3510,8 +3510,10 @@ fn unify_iter<'a>(
     conv.scratch2.clear();
     let memo = &mut conv.memo;
     // UItem 工作栈由调用方常驻复用（入口已 clear）；失败早退会留下非空
-    // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）
-    debug_assert!(stack.is_empty());
+    // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）。
+    // **不设** stack.is_empty() 断言：Call/Call spine 快路径的嵌套调用
+    // （3657/3686）按设计以"首个对作入口、其余预载子栈"进入，入口非空
+    // 是合法形态（实测 09-hierarchy 走到该路径）。
     stack.push(UItem::Pair(l0, t0, u0, fuel0));
     while let Some(item) = stack.pop() {
         let (l, t, u, fuel) = match item {
@@ -5416,8 +5418,13 @@ impl Machine {
         self.hover_table.push((t_span, def_span, rendered));
     }
 
-    /// 全局名使用处 hover：优先复用登记处缓存串（零渲染，见
-    /// [`DeclEntry::typ_pretty`]）；无缓存时现渲染兜底。
+    /// 全局名使用处 hover：def_span 取登记处 span，**串实时渲染**（参考版
+    /// 同款）。不得用登记期缓存串 `typ_pretty`：登记值里的 meta 可能在登
+    /// 记之后才被求解（如泛型 struct 的参数宇宙 meta 由构造子/使用处
+    /// check 解出），缓存串会把未解 `?N` 带进使用处悬浮（实测分叉：
+    /// `P2[A, B]` 登记期 `[A: ?5]` vs 使用处 `[A: Type 0]`，见
+    /// observation_tests::prelude_tuple_mk_element_hover_matches_reference）。
+    /// typ_pretty 本身保留——LSP def-site 悬浮（参考版 Path1 直读）用。
     fn push_hover_cached<'a>(
         &mut self,
         bump: &'a Bump,
@@ -5425,14 +5432,7 @@ impl Machine {
         t_span: crate::parser_lib::Span<()>,
         e: &DeclEntry<'a>,
     ) {
-        let rendered = match &e.typ_pretty {
-            Some(s) => (**s).clone(),
-            None => {
-                let tm = self.quote(bump, cxt, cxt.lvl, e.vty);
-                pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm))
-            }
-        };
-        self.hover_table.push((t_span, e.span, rendered));
+        self.push_hover(bump, cxt, t_span, e.span, e.vty);
     }
 
     /// 观察面 inlay（参考版 `push_inlay_hint` 同口径）：含未解 meta 跳过，
@@ -6582,8 +6582,12 @@ impl Machine {
                         self.eval(bump, cxt, env, p.body)
                     };
                     let a_t = self.quote(bump, cxt, cxt.lvl, p.dom);
-                    // 观察面：显式 lambda binder 定义处 hover（参考版 742 同点位）
-                    self.push_hover(bump, cxt, x.to_span(), x.to_span(), p.dom);
+                    // 不 push binder 定义处 hover——参考版 check 的 Lam 臂没有
+                    // push（接线文档旧表的"742"实为 **let** 臂；def 参数折叠
+                    // 成 λ 会经过这里，推了参考版没有的条目——实测见
+                    // prelude_full_observation_tables_match_reference）。局部
+                    // 变量的 hover 在使用处 Var 臂推（binder span 由
+                    // Names.by_lvl 携带）。
                     let cxt2 = self.bind_name(bump, cxt, &x.data, x.to_span(), a_t, p.dom);
                     let body = self.check(bump, &cxt2, tbody, body_a)?;
                     Ok(bump.alloc(Tm::Lam(name, p.icit, body)))
@@ -11916,6 +11920,13 @@ impl Machine {
     }
 }
 
+/// no_metas 的已解 meta quote 层级（参考版 `val_no_metas` 的
+/// `NM_QUOTE_LVL = u32::MAX / 2` 同款）：解出时的上下文可以比当前 cxt 深
+/// （值里 Rigid 层级 ≥ cxt.lvl），按 cxt.lvl 引会在 `level - l - 1` 下溢
+/// （实测 09-hierarchy 的 def no_metas 检查）。结果只被扫 `Tm::Meta`
+/// 节点，de Bruijn 下标无所谓，层级任意但必须足够大。
+const NM_QUOTE_LVL: u32 = u32::MAX / 2;
+
 /// 参考版 `Tm::no_metas`（L12）：项里第一个**未解** meta 的（上下文快照,
 /// 原始类型）——已解 meta **递归进解**（quote 后继续查，参考版同款）。
 fn no_metas<'a>(
@@ -11936,7 +11947,7 @@ fn no_metas<'a>(
                     return Some((types_names_list(snap.types), *oty));
                 }
                 MetaEntry::Solved(v, _) => {
-                    let q = m.quote(bump, cxt, cxt.lvl, *v);
+                    let q = m.quote(bump, cxt, NM_QUOTE_LVL, *v);
                     stack.push(q);
                 }
             },
@@ -12934,5 +12945,283 @@ def d0 : Nat -> Nat = n => succ n
             "twin has entries absent from reference (should only duplicate): {:?}",
             foreign
         );
+    }
+
+    // ── 阶段 2：prelude 装载口径的双引擎互检 ──
+    // 孪生 prelude 轮（`run_decls_with_prelude`）对参考版缓存加载
+    // （`clone_prelude_state`）：同源 parse_prelude_files 表、nat/vconnT
+    // 注册、短名别名、HdlLoopIdx 复位。用户段观察表三张 + Ok 输出逐字节
+    // 互检——tuple-mk/真实 HDL 观察面在此前只能"接线待实测"，本组测试是
+    // 阶段 2 的验收面。
+
+    use crate::L13_namespace::{PreludeParse, PRELUDE_CORE, PRELUDE_HDL, PRELUDE_SHOW};
+
+    /// 核心 prelude 文件序列（含 show——参考版加载器恒排在最后）。
+    fn core_files() -> Vec<(&'static str, &'static str)> {
+        let mut v: Vec<(&'static str, &'static str)> = PRELUDE_CORE.to_vec();
+        v.push(PRELUDE_SHOW);
+        v
+    }
+
+    /// 全量 prelude 文件序列（core + hdl + show，参考版 include_hdl 同序）。
+    fn hdl_files() -> Vec<(&'static str, &'static str)> {
+        let mut v = core_files();
+        let (show, show_src) = v.pop().unwrap();
+        v.extend(PRELUDE_HDL);
+        v.push((show, show_src));
+        v
+    }
+
+    /// 双引擎各跑一遍「prelude 装载 + 用户源」：
+    /// - 孪生：[`Tycker::run_decls_with_prelude`]（共享 parse 产物）；
+    /// - 参考：`clone_prelude_state`（缓存加载器，含别名/HdlLoopIdx 收尾）
+    ///   + 逐 decl `infer`，输出组装镜像参考版 `run`（排水行 + println 串）。
+    /// 返回 (twin 输出, 参考输出, twin Tycker, 参考 Infer)。
+    fn run_prelude_both(
+        files: &[(&'static str, &'static str)],
+        include_hdl: bool,
+        user_src: &str,
+        path_id: u32,
+    ) -> (String, String, Tycker, crate::L13_namespace::Infer) {
+        let pre: PreludeParse = crate::L13_namespace::parse_prelude_files(files);
+        assert_eq!(pre.failed, None, "prelude files must parse");
+        let (user_decls, _errs, _exports, _expansions) =
+            crate::L13_namespace::parser::parser_with_macros(&crate::L13_namespace::preprocess(user_src), path_id, &pre.macros)
+                .expect("user parse");
+
+        // twin
+        let mut t = Tycker::new();
+        let t_out = t
+            .run_decls_with_prelude(&pre.decls, &pre.file_ends, &pre.nat_after, &user_decls)
+            .expect("twin prelude round");
+
+        // reference（缓存态三张观察表已清——用户段条目即全部）
+        let (mut infer, mut rcxt, _macros) = crate::L13_namespace::clone_prelude_state(include_hdl)
+            .expect("reference prelude load");
+        let mut r_out = String::new();
+        for d in &user_decls {
+            let (x, _, nc) = infer.infer(&rcxt, d.clone()).expect("ref user decl");
+            rcxt = nc;
+            for line in crate::L13_namespace::take_fresh_check_issues(&infer) {
+                r_out += &crate::L13_namespace::format_check_warning(&line);
+                r_out += "\n";
+            }
+            if let crate::L13_namespace::DeclTm::Println(_, s, _) = x {
+                r_out += &s;
+                r_out += "\n";
+            }
+        }
+        (t_out, r_out, t, infer)
+    }
+
+    /// 表快照（排序后的 hover/completion/inlay 双引擎六元组），由
+    /// [`diff_report`] 求双向 diff。
+    #[allow(clippy::type_complexity)]
+    fn table_snapshots(
+        t: &Tycker,
+        infer: &crate::L13_namespace::Infer,
+    ) -> (
+        Vec<(u32, u32, u32, u32, String)>,
+        Vec<(u32, u32, u32, u32, String)>,
+        Vec<(u32, u32, String)>,
+        Vec<(u32, u32, String)>,
+        Vec<(u32, String)>,
+        Vec<(u32, String)>,
+    ) {
+        let mut th: Vec<_> = t
+            .hover_table()
+            .iter()
+            .map(|(ts, ds, r)| {
+                (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone())
+            })
+            .collect();
+        th.sort();
+        let mut rh: Vec<_> = infer
+            .hover_table
+            .iter()
+            .map(|(ts, ds, r)| {
+                (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone())
+            })
+            .collect();
+        rh.sort();
+        let mut tc: Vec<_> = t
+            .completion_table()
+            .iter()
+            .map(|(sp, n)| (sp.start_offset, sp.end_offset, n.to_string()))
+            .collect();
+        tc.sort();
+        let mut rc: Vec<_> = infer
+            .completion_table
+            .iter()
+            .map(|(sp, n)| (sp.start_offset, sp.end_offset, n.to_string()))
+            .collect();
+        rc.sort();
+        let mut ti: Vec<_> = t
+            .inlay_hint_table()
+            .iter()
+            .map(|(o, l)| (*o, l.clone()))
+            .collect();
+        ti.sort();
+        let mut ri: Vec<_> = infer
+            .inlay_hint_table
+            .iter()
+            .map(|(o, l)| (*o, l.clone()))
+            .collect();
+        ri.sort();
+        (th, rh, tc, rc, ti, ri)
+    }
+
+    fn diff_report<T: PartialEq + std::fmt::Debug>(a: &[T], b: &[T]) -> Vec<String> {
+        let mut out = Vec::new();
+        for x in a {
+            if !b.contains(x) {
+                out.push(format!("twin-only: {:?}", x));
+            }
+        }
+        for x in b {
+            if !a.contains(x) {
+                out.push(format!("ref-only: {:?}", x));
+            }
+        }
+        out
+    }
+
+    /// tuple-mk 元素 hover 的**实测互检**（阶段 1 遗留：`Tuple2.mk` 来自
+    /// prelude op.typort，当时无 prelude 口径只能以参考版 debug_test 背书）。
+    /// 断言：两版 Ok 输出一致；hover 全表互检无缺失无异质；tuple 元素
+    /// token 上有以元素类型渲染的条目（`true`→Boolean、`zero`→Nat——后者
+    /// 顺带验证 prelude 短名别名 `Nat.zero`→`zero`）。
+    #[test]
+    fn prelude_tuple_mk_element_hover_matches_reference() {
+        let src = "def pair : Tuple2[Boolean, Boolean] = Tuple2.mk(true, false)\n\
+                   def nz : Tuple2[Boolean, Nat] = Tuple2.mk(false, zero)\n";
+        let (t_out, r_out, t, infer) = run_prelude_both(&core_files(), false, src, 100);
+        assert_eq!(t_out, r_out, "user-segment output parity");
+        let (th, rh, _tc, _rc, _ti, _ri) = table_snapshots(&t, &infer);
+        let h = diff_report(&th, &rh);
+        assert!(
+            h.is_empty(),
+            "tuple-mk hover tables diverge on prelude fixture:\n{}",
+            h.join("\n")
+        );
+        // 元素 token 实测：每个元素上有条目且串为元素类型（偏移从 src 算）。
+        let true_tok = src.find("mk(true").unwrap() + "mk(".len();
+        let zero_tok = src.rfind("mk(false, zero").unwrap() + "mk(false, ".len();
+        let at_true: Vec<&String> = th
+            .iter()
+            .filter(|x| x.0 == true_tok as u32)
+            .map(|x| &x.4)
+            .collect();
+        let at_zero: Vec<&String> = th
+            .iter()
+            .filter(|x| x.0 == zero_tok as u32)
+            .map(|x| &x.4)
+            .collect();
+        assert!(
+            at_true.iter().any(|s| s.as_str() == "Boolean"),
+            "`true` element token must hover as Boolean; got {:?}",
+            at_true
+        );
+        assert!(
+            at_zero.iter().any(|s| s.as_str() == "Nat"),
+            "`zero` element token must hover as Nat (alias resolution); got {:?}",
+            at_zero
+        );
+    }
+
+    /// prelude 装载口径下的观察面全表互检（hover/completion/inlay 三张，
+    /// 用户段）：fixture 覆盖 enum 构造子 match/PM/字段投影/tuple 字面。
+    /// 三类**已登记**工件按 PM 测试同款口径放行：
+    /// - 参考版 start=0 畸变条目（Val::Sum cases 的 Span 丢 start）；
+    /// - 孪生零 span 条目（tuple 字段访问 `p._2` 反糖出的合成构造子 Var
+    ///   无源码 span，经 `.name` 后缀回退 push 时 t_span=0——参考版同场
+    ///   景推声明 span 形态，属 push 键畸变非串差异）；
+    /// - 字段投影 def_span 降级（孪生 (t,t,串) vs 参考 (t,真声明,串)——
+    ///   值层不持字段 binder span，接线文档"待评估补"项）。
+    #[test]
+    fn prelude_full_observation_tables_match_reference() {
+        let src = "def len(o: Option[Nat]): Nat =\n\
+                      match o {\n\
+                          case Some(n) => n\n\
+                          case None => zero\n\
+                      }\n\
+                   def wrap(n: Nat): Option[Nat] = Some(n)\n\
+                   def pair(b: Boolean) = (b, succ(zero))\n\
+                   def get(p: Tuple2[Boolean, Nat]): Nat = p._2\n";
+        let (t_out, r_out, t, infer) = run_prelude_both(&core_files(), false, src, 101);
+        assert_eq!(t_out, r_out, "user-segment output parity");
+        let (th, rh, tc, rc, ti, ri) = table_snapshots(&t, &infer);
+        // hover：允许上面三类工件后的双向 diff
+        let allowed_twin = |tw: &(u32, u32, u32, u32, String),
+                            rf: &[(u32, u32, u32, u32, String)]|
+         -> bool {
+            // ① 孪生零 span 条目
+            if tw.0 == 0 && tw.1 == 0 {
+                return true;
+            }
+            // ③ 投影 def_span 降级：孪生 def_span==t_span，参考有同
+            //    t_span 同串、def_span 指向真声明的条目
+            if tw.2 == tw.0 && tw.3 == tw.1 {
+                return rf
+                    .iter()
+                    .any(|x| x.0 == tw.0 && x.1 == tw.1 && x.4 == tw.4 && (x.2 != x.3));
+            }
+            false
+        };
+        let allowed_ref = |rf: &(u32, u32, u32, u32, String),
+                           th: &[(u32, u32, u32, u32, String)]|
+         -> bool {
+            // ② 参考 start=0 畸变条目
+            if rf.0 == 0 && rf.1 != 0 {
+                return true;
+            }
+            // 参考"use==def==声明 token"形态 vs 孪生同串零 span 条目
+            //（①的镜像；或同串下孪生 def_span 降级形态 ③ 的镜像）
+            if rf.0 == rf.2 && rf.1 == rf.3 {
+                return th.iter().any(|x| {
+                    x.4 == rf.4 && x.2 == rf.2 && x.3 == rf.3 && x.0 == 0 && x.1 == 0
+                });
+            }
+            if th.iter().any(|x| {
+                x.0 == rf.0 && x.1 == rf.1 && x.4 == rf.4 && x.2 == x.0 && x.3 == x.1
+            }) {
+                return true;
+            }
+            false
+        };
+        let h_missing: Vec<String> = rh
+            .iter()
+            .filter(|x| !th.contains(x))
+            .filter(|x| !allowed_ref(x, &th))
+            .map(|(a, b, c, d, r)| format!("ref-only: {}..{} -> {}..{} {:?}", a, b, c, d, r))
+            .collect();
+        let h_foreign: Vec<String> = th
+            .iter()
+            .filter(|x| !rh.contains(x))
+            .filter(|x| !allowed_twin(x, &rh))
+            .map(|(a, b, c, d, r)| format!("twin-only: {}..{} -> {}..{} {:?}", a, b, c, d, r))
+            .collect();
+        let mut report = h_missing;
+        report.extend(h_foreign);
+        report.extend(diff_report(&tc, &rc));
+        report.extend(diff_report(&ti, &ri));
+        assert!(
+            report.is_empty(),
+            "prelude-fixture observation tables diverge:\n{}",
+            report.join("\n")
+        );
+    }
+
+    /// 真实 HDL 负载端到端：全量 prelude（含 HDL）+ examples/hdl/
+    /// 09-hierarchy.typort——两版 Ok 判定与用户段输出逐字节一致。该文件
+    /// 的 `sum := u.sum` 展开出 `.port(sig)` 连接 → **vconnT prim**（本阶段
+    /// 移植的 prim 由此实测），println 走 moduleTreeVL 全模块 Verilog 渲染
+    /// （nat_to_dec/HdlLoopIdx 口径敏感）。
+    #[test]
+    fn hdl_example_parity_with_full_prelude() {
+        let src = include_str!("../../examples/hdl/09-hierarchy.typort");
+        let (t_out, r_out, _t, _infer) = run_prelude_both(&hdl_files(), true, src, 102);
+        assert_eq!(t_out, r_out, "HDL example output parity (vconnT path)");
+        assert!(t_out.contains("=== 09"), "example must produce its println output");
     }
 }
