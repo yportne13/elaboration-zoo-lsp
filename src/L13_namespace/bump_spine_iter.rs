@@ -6781,6 +6781,44 @@ impl<'a> Cxt<'a> {
     }
 }
 
+fn tuple_n_arity(name: &str) -> Option<usize> {
+    let digits = name.strip_prefix("Tuple")?;
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// 判定函数位是否为组合子字面构造 `TupleN.mk e0 … en`
+/// （参考版 is_tuple_mk_head 逐句对应，服务元素 hover）。
+fn is_tuple_mk_head(head: &Raw) -> bool {
+    let mut cur = head;
+    loop {
+        match cur {
+            Raw::App(f, _, _) => cur = f.as_ref(),
+            _ => break,
+        }
+    }
+    match cur {
+        Raw::Var(n) => n
+            .data
+            .strip_suffix(".mk")
+            .and_then(tuple_n_arity)
+            .is_some(),
+        Raw::Obj(base, Some(m)) if m.data == "mk" => {
+            let mut cur = base.as_ref();
+            loop {
+                match cur {
+                    Raw::App(f, _, _) => cur = f.as_ref(),
+                    _ => break,
+                }
+            }
+            matches!(cur, Raw::Var(n) if tuple_n_arity(&n.data).is_some())
+        }
+        _ => false,
+    }
+}
+
 /// types 链 → 参考版 pretty 的名字 List（头 = 最内层；List::prepend 从尾
 /// 起构回，序不变）。
 fn types_names_list(tys: Option<&TCons<'_>>) -> crate::list::List<SmolStr> {
@@ -7898,6 +7936,7 @@ impl Machine {
                 // 位置 Impl → 直接应用；位置 Expl → 先 insert_t
                 let t_span = t.to_span();
                 let t_raw = (**t).clone();
+                let tuple_head = is_tuple_mk_head(&t_raw); // 观察面：提前计算（t_raw 后续可能被移动）
                 let u_raw = (**u).clone();
                 let (i, t, tty) = match arg {
                     Either::Name(name) => {
@@ -7963,6 +8002,11 @@ impl Machine {
                     (a, &*cell)
                 };
                 let u_checked = self.check(bump, cxt, u, a)?;
+                // 观察面（ref 2554-2556）：组合子字面每个元素独立 hover
+                // 条目（键 = 元素 span，值 = 元素类型 Pi dom）；LSP 取最窄 span。
+                if tuple_head {
+                    self.push_hover(bump, cxt, u.to_span(), u.to_span(), a);
+                }
                 let arg_v = self.eval(bump, cxt, cxt.env, u_checked);
                 // t u : B[x |-> u]
                 let ty = {
