@@ -7283,18 +7283,36 @@ impl Machine {
             // 一致；裸名 fallback 排除 namespace 方法键，模式 `mux` 仍只解
             // 构造子）
             let qname = SmolStr::new(format!("{}.{}", type_name, t.data));
+            let qname2 = qname.clone();
             let call = Raw::App(
-                Box::new(Raw::Var(t_span.map(move |_| qname.clone()))),
+                Box::new(Raw::Var(t_span.map(move |_| qname2.clone()))),
                 Box::new(x.clone()),
                 Either::Icit(Icit::Expl),
             );
-            return self.infer_expr(bump, cxt, &call);
+            match self.infer_expr(bump, cxt, &call) {
+                Ok(r) => {
+                    // 观察面（ref 2817）：ns 方法命中 → 方法名 token hover。
+                    // 参考版 def_span 取 ns 条目登记 span；此处从 decl 表取
+                    // 限定键登记项的 span（同一登记来源）。
+                    let ds = cxt
+                        .decls
+                        .get(qname.as_str())
+                        .map(|e| e.span)
+                        .unwrap_or(t_span);
+                    self.push_hover(bump, cxt, t_span, ds, r.1);
+                    return Ok(r);
+                }
+                // 参考版此处是 `?`——失败直接传播，不收 completion（补全只在
+                // trait 定义查表未命中的 else 支）。
+                Err(e) => return Err(e),
+            }
         }
 
         // —— trait 定义查表（参考版 2847-2988）——
         let mut traits: Vec<(
             SmolStr,
             Raw,
+            crate::parser_lib::Span<SmolStr>, // trait 方法声明名 span（hover def）
             usize, // argc（显式参数数——同名算符消歧）
         )> = self
             .tstate
@@ -7370,18 +7388,18 @@ impl Machine {
                         Either::Icit(Icit::Expl),
                     )),
                 );
-                (trait_name, decl, argc)
+                (trait_name, decl, methods_name.clone(), argc)
             })
             .collect();
         if traits.len() > 1 {
             // 同名算符按显参个数消歧（中缀 `a - b` 恒有 ≥1 实参——Neg.- 0 参
             // vs Sub.- 1 参）；仍歧义才报错
-            let nonzero: Vec<(SmolStr, Raw, usize)> =
-                traits.iter().filter(|(_, _, argc)| *argc > 0).cloned().collect();
+            let nonzero: Vec<(SmolStr, Raw, crate::parser_lib::Span<SmolStr>, usize)> =
+                traits.iter().filter(|(_, _, _, argc)| *argc > 0).cloned().collect();
             if nonzero.len() == 1 && nonzero.len() < traits.len() {
                 traits = nonzero;
             } else {
-                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _, _)| n).collect();
+                let trait_names: Vec<&SmolStr> = traits.iter().map(|(n, _, _, _)| n).collect();
                 return Err(Error(
                     t.clone().map(|m| format!(
                         "ambiguous method `{}`: found in traits {}",
@@ -7396,7 +7414,7 @@ impl Machine {
                 ));
             }
         }
-        if let Some((_, decl, _)) = traits.first() {
+        if let Some((_, decl, def_span, _)) = traits.first() {
             // trait 方法 elaboration 缓存：同算符在结构相等的接收者类型上
             // 再次 elaborate 时，经 Raw::Tm 注解复用已查 Π 链与方法体 λ
             //（跳过 check_universe 与体重查）。缓存仅在**全无 meta** 时写入
@@ -7457,8 +7475,28 @@ impl Machine {
                 },
                 None => self.infer_expr(bump, cxt, decl)?,
             };
+            // 观察面（ref 2955）：trait 方法调用解析成功 → 方法名 token 的
+            // hover，def = trait 方法声明名 span，值 = 实例化后的调用类型。
+            self.push_hover(bump, cxt, t_span, def_span.to_span(), result.1);
             Ok(result)
         } else {
+            // 观察面（ref 2964-2970）：方法未解析 = 补全现场，键 = 接收者
+            // span；收集可满足 trait 的方法名（失败路径才收集，同参考版）。
+            {
+                let rcv = x.to_span();
+                let mut tn: Vec<SmolStr> = Vec::new();
+                for (tname, (_p, _o, _st, ms)) in self.tstate.definition.iter() {
+                    self.tstate.solver.clean();
+                    if self.tstate.solver.can_satisfy(tname, &typ_raw_ref) {
+                        for m in ms.iter() {
+                            tn.push(m.0.data.clone());
+                        }
+                    }
+                }
+                for name in tn {
+                    self.completion_table.push((rcv, name));
+                }
+            }
             // 未解析：no object 错误（LSP 补全收集不移植）
             Err(self.mk_no_object_err(bump, cxt, &t, a, tm))
         }
@@ -12508,6 +12546,44 @@ def d0 : Nat -> Nat = n => succ n
             assert!(in_ref, "reference lacks {} hover entry", name);
             assert!(in_twin, "twin lacks {} hover entry", name);
         }
+    }
+
+    /// Trait-dispatched member access (`x.pick` resolved through the trait
+    /// dictionary, not an inherent namespace entry): the method-name token
+    /// must hover with the trait method's declaration span on both engines.
+    #[test]
+    fn hover_trait_dispatched_method_matches_reference() {
+        let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\ntrait Pick {\n    def pick: Nat\n}\nimpl Pick for Nat {\n    def pick: Nat = zero\n}\ndef use(n: Nat): Nat = n.pick\n";
+        let ast = parse(src, 50).expect("parse");
+
+        let mut t = Tycker::new();
+        t.run_input(src, 50).expect("twin check");
+        let mut twin_v: Vec<(u32, u32, String)> = t
+            .hover_table()
+            .iter()
+            .map(|(ts, _, r)| (ts.start_offset, ts.end_offset, r.clone()))
+            .collect();
+        twin_v.sort();
+
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let mut ref_v: Vec<(u32, u32, String)> = infer
+            .hover_table
+            .iter()
+            .map(|(ts, _, r)| (ts.start_offset, ts.end_offset, r.clone()))
+            .collect();
+        ref_v.sort();
+
+        // 使用处的 pick token（`n.pick`）两版都必须有条目
+        let use_pick = src.rfind("n.pick").unwrap() + 2;
+        let in_ref = ref_v.iter().any(|x| x.0 == use_pick as u32 && x.1 == (use_pick + 4) as u32);
+        let in_twin = twin_v.iter().any(|x| x.0 == use_pick as u32 && x.1 == (use_pick + 4) as u32);
+        assert!(in_ref, "reference lacks trait-dispatch method hover");
+        assert!(in_twin, "twin lacks trait-dispatch method hover");
     }
 
     /// Whole-table parity on a package + qualified-access + bare-name
