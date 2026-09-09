@@ -4404,6 +4404,18 @@ impl Machine {
         self.unify_catch(bump, cxt, f1, f2).map(|_| clone_cxt(cxt))
     }
 
+    /// 「纯探测」统一执行器：进入前快照 `metas`，跑完闭包后**无条件**换回
+    /// （无论闭包返回 Ok/Err），把探测期分配的 fresh meta 与对已有 meta 的求解
+    /// 一律回滚，杜绝污染外泄到真实机。可达性探测等投机性 check 都走此入口。
+    /// 必须**整表 clone**，不能只按 meta 上界截断——探测期 unify 可能解掉已有
+    /// meta，而这些解又引用闭包内新建 meta，截断会让解悬空（后续查找越界 panic）。
+    fn run_pure_probe<R>(&mut self, f: impl FnOnce(&mut Machine) -> R) -> R {
+        let metas = self.metas.clone();
+        let r = f(self);
+        self.metas = metas;
+        r
+    }
+
     /// `check_pm`：infer + insert + `unify_pm`。
     fn check_pm<'a>(
         &mut self,
@@ -5657,14 +5669,10 @@ impl<'a> Compiler<'a> {
             return Ok(accessible);
         }
 
-        // 参考版 pattern_match.rs 同款：逐构造子可达性探测是**纯探测**。探测
-        // 循环里的 infer_expr（逐层 Pi 强制）与 check_pm（unify）都可能分配
-        // fresh meta 并解掉**已有**的 meta，而这些解又引用探测新建的 meta——
-        // 单纯截断会让解悬空（后续查找越界）。故在探测循环前快照 `metas`，把
-        // 整段探测闭包化，出闭包后**无条件**恢复（成功或错误路径都回滚）。本
-        // 函数只把可达构造子的名字列表带出去，探测期状态无需存活，故可整套回滚。
-        let meta_snapshot = mach.metas.clone();
-        let result = (|| -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
+        // 逐构造子可达性探测是**纯探测**：infer_expr（逐层 Pi 强制）与 check_pm
+        // 都可能分配 fresh meta 并解掉已有 meta，探测期状态无需存活（本函数只带出
+        // 可达构造子**名字列表**）。统一走 `run_pure_probe` 入口做快照/回滚。
+        mach.run_pure_probe(|mach| -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
             let mut accessible = Vec::new();
             for constr_name in all_constrs {
                 // 1. 为构造子自身实参造 fresh meta（类型经逐层推断取得；推断在
@@ -5701,9 +5709,7 @@ impl<'a> Compiler<'a> {
             }
 
             Ok(accessible)
-        })();
-        mach.metas = meta_snapshot;
-        result
+        })
     }
 
     fn compile(

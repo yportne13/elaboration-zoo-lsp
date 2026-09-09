@@ -6758,6 +6758,23 @@ impl Machine {
         self.unify_catch(bump, cxt, f1, f2).map(|_| clone_cxt(cxt))
     }
 
+    /// 「纯探测」统一执行器：进入前快照 `metas` 与 `trait_metas`，跑完闭包后
+    /// **无条件**换回（无论闭包返回 Ok/Err），把探测期分配的 fresh meta 与对
+    /// 已有 meta/trait meta 的求解一律回滚，杜绝污染外泄到真实机。可达性探测等
+    /// 投机性 check 都走此入口，避免各处手写快照漏掉错误路径（AV 根因）。
+    ///
+    /// 注意：必须**整表 clone**，不能只按 meta 上界截断——探测期的 unify 可能
+    /// 解掉**已有**的 meta，而这些解又引用闭包内新建的 meta，截断会让那些解
+    /// 悬空（后续查找越界 panic）；参考版 pattern_match.rs 同款理由。
+    fn run_pure_probe<R>(&mut self, f: impl FnOnce(&mut Machine) -> R) -> R {
+        let metas = self.metas.clone();
+        let trait_metas = self.trait_metas.clone();
+        let r = f(self);
+        self.metas = metas;
+        self.trait_metas = trait_metas;
+        r
+    }
+
     /// `check_pm`：infer + insert + `unify_pm`。
     fn check_pm<'a>(
         &mut self,
@@ -9748,19 +9765,14 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        // 参考版 pattern_match.rs 同款：逐构造子可达性探测是**纯探测**。
-        // 探测循环里的 infer_expr（逐层 Pi 强制）与 check_pm（unify）都可能
-        // 分配 fresh meta，并解掉**已有的** meta / trait meta，而这些解又引用
-        // 探测新建的 meta——单纯截断会让解悬空（后续查找越界）。故在探测循环
-        // 之前同时快照 `metas` 与 `trait_metas`，把整段探测闭包化，出闭包后
-        // **无条件**恢复两者（成功或错误路径都回滚）。本函数只把可达构造子的
-        // **名字列表**带出去，探测期状态无需存活，故可整套回滚。
-        // 构造子以**限定名** `Sum.constru` 探测（参考版同款：sum_name 非空时用
-        // `Raw::Obj(Var(sum), Some(constr))`，否则裸 Var——限定名在 multiline
-        // 枚举的 span 下也能稳定解析，避免后缀 fallback 歧义）。
-        let meta_snapshot = mach.metas.clone();
-        let trait_metas_snapshot = mach.trait_metas.clone();
-        let result = (|| -> Result<Vec<crate::parser_lib::Span<SmolStr>>, Error> {
+        // 逐构造子可达性探测是**纯探测**：infer_expr（逐层 Pi 强制）与 check_pm
+        // 都可能分配 fresh meta 并解掉已有 meta/trait meta，探测期状态无需存活
+        // （本函数只带出可达构造子**名字列表**）。统一走 `run_pure_probe` 入口做
+        // 快照/回滚，杜绝各处手写快照漏掉错误路径（AV 根因）。构造子以**限定名**
+        // `Sum.constru` 探测（参考版同款：sum_name 非空时用 `Raw::Obj(Var(sum),
+        // Some(constr))`，否则裸 Var——限定名在 multiline 枚举的 span 下也能稳定
+        // 解析，避免后缀 fallback 歧义）。
+        mach.run_pure_probe(|mach| -> Result<Vec<crate::parser_lib::Span<SmolStr>>, Error> {
             let mut accessible = Vec::new();
             for constr_name in all_constrs {
                 // 1. 为构造子自身实参造 fresh meta（类型经逐层推断取得；推断在
@@ -9809,10 +9821,7 @@ impl<'a> Compiler<'a> {
             }
 
             Ok(accessible)
-        })();
-        mach.metas = meta_snapshot;
-        mach.trait_metas = trait_metas_snapshot;
-        result
+        })
     }
 
     fn compile(
