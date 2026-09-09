@@ -3533,7 +3533,8 @@ pub(crate) struct PreludeParse {
 /// 按参考版 prelude 加载口径解析一串文件：逐文件 `parser_with_macros`
 /// （path_id 从 0 递增，与参考版加载器同款），累积导出宏，展平成单一
 /// decl 序列。仅 parse 不 infer——两版引擎各自推这份序列（l13bench 的
-/// `parse_prelude` 由此库化）。
+/// `parse_prelude` 由此库化）。与加载器的差异：parse 失败即止（记入
+/// `failed`，参考版加载器打印错误后**跳过该文件继续**）；错误串不打印。
 pub(crate) fn parse_prelude_files(files: &[(&str, &str)]) -> PreludeParse {
     let mut macros: PreludeMacros = Default::default();
     let mut all: Vec<parser::syntax::Decl> = Vec::new();
@@ -3673,9 +3674,13 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
         decl_map.entry(short).or_insert(v);
     }
     // The cached state is never queried for hover/completion; drop the
-    // accumulated tables so per-call clones stay cheap.
+    // accumulated tables so per-call clones stay cheap.  The inlay table is
+    // cleared too: a prelude that ever emitted inlay hints would otherwise
+    // leak prelude-offset rows (bare u32 keys) into every backend clone
+    // (twin's prelude round clears all three — run_decls_with_prelude).
     infer.hover_table.clear();
     infer.completion_table.clear();
+    infer.inlay_hint_table.clear();
     // Reset the HDL loop-index global to a clean empty at the end of the
     // load: checking `genFrom`'s succ-case body evaluates its side-effecting
     // lets (the checker evaluates applications), leaving Rigid-indexed
@@ -6916,6 +6921,10 @@ mod prelude_tests {
     use super::*;
     use super::parser::parser as parse_file;
 
+    // 语法冒烟专用清单：PRELUDE_HDL 的**故意子集**（8 个 hdl 文件未列——
+    // 该测试只逐文件 parse 检查语法，全量装载覆盖在 lib 测试与
+    // observation_tests::hdl_example_parity_with_full_prelude）。勿"顺手"
+    // 改成 PRELUDE_CORE/HDL 拼接——文件名带 .typort 后缀是本测试的输出格式。
     const PRELUDE_FILES: &[(&str, &str)] = &[
         ("op.typort", include_str!("../prelude/core/op.typort")),
         ("eq.typort", include_str!("../prelude/core/eq.typort")),

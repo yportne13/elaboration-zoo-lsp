@@ -67,12 +67,17 @@
 //!   型隐参以 `BindingName.mk` 字面量合成。
 //!
 //! 与参考版共用 parser / pretty / preprocess / Synth，**Ok 输出逐字节
-//! 一致**（互检测试 + `tests/l13_fast_parity.rs`）。不移植（观察面 / LSP
-//! 专用）：hover/completion/inlay/retry 闭包、FUNC_PROF、force 记忆化
-//! （本机 force 按值重算、无 memo，taint/prim_version 随之不需要）、
-//! Tm/Val 迭代 Drop（bump 免疫）、PreludePool/defer_println（run() 口径
-//! 为 false）、canonical/iddfs（只在参考版 Err 路径的重试闭包里，不
-//! 影响判定与输出）。
+//! 一致**（互检测试 + `tests/l13_fast_parity.rs`）。
+//!
+//! **已移植（观察面 / LSP 接线阶段 1-2，docs/lsp-twin-wiring-2026-09.md）**：
+//! hover/completion/inlay 三张 owned 观察表（push 期渲染）、prelude 装载轮
+//! （[`Tycker::run_decls_with_prelude`]，nat/vconnT 内建 + 短名别名 +
+//! HdlLoopIdx 口径；**无池化**——每 kick 从 prime_round 重放，装载段
+//! `observe=false` 关观察面 push）。
+//! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF、force 记忆化（本机 force
+//! 按值重算、无 memo，taint/prim_version 随之不需要）、Tm/Val 迭代 Drop
+//! （bump 免疫）、PreludePool 池化/defer_println（run() 口径为 false）、
+//! canonical/iddfs（只在参考版 Err 路径的重试闭包里，不影响判定与输出）。
 //!
 //! **已知偏差**：
 //! 1. ~~multiline 枚举声明的 match 编译~~ **已修复**（曾报
@@ -89,15 +94,21 @@
 //! 3. 仅错误消息内容、不影响判定与 Ok 输出：快版错误里内嵌 Debug-Val/Tm
 //!    的名字 Span 全零（参考版携带源码偏移），meta 编号 `?N` 双实现分配
 //!    序列不同——套件比对前按 `start_offset/end_offset/path_id` 归一化。
-//! 4. 观察面（LSP 接线阶段 1）：全局名使用的 hover 串取**登记处**缓存
-//!    （`DeclEntry::typ_pretty`），参考版在**使用处**上下文渲染；类型含
-//!    binder 且使用处名字遮蔽时 pretty fresh 后缀（`x` vs `x'`）或有显示
-//!    差异。判定、诊断与 Ok 输出不受影响（观察表不参与 run 口径）。
+//! 4. 观察面（LSP 接线阶段 1）：~~全局名使用的 hover 串取登记处缓存~~
+//!    **已修复（阶段 2）**：使用处（含 qualified 三连、后缀回退）一律
+//!    实时渲染（`push_hover_cached` = push_hover），登记期 `typ_pretty`
+//!    仅保留给 LSP def-site 悬浮。残余仅 fresh 后缀显示差异（参考版在使用
+//!    处上下文渲染，binder 遮蔽时 `x` vs `x'`）。
 //! 5. 观察面表形态：孪生 Enum 臂构造子体 `datas` 复用 `Raw::Var(参数名)`
 //!    过 infer，产生与 binder 条目**同 span 同串的重复项**（参考版该处在
 //!    值层合成、不过 infer）。`hover_entry_at` 平手取先且串相同，对 LSP
 //!    行为无影响；全表互检按「无缺失 + 无异质」口径断言（见
 //!    `observation_tests::hover_table_full_matches_reference_on_qualified_fixture`）。
+//!    **扩展（阶段 2）**：PM 构造子 pattern token 同理可推**同串重复**
+//!    （PM 臂 + Var 臂各一），set 级互检不可见。
+//! 6. 观察面表形态（阶段 2）：tuple 字段访问 `p._2` 反糖出的合成构造子
+//!    Var 无源码 span，`.name` 后缀回退 push 的 t_span=0（参考版同场景推
+//!    声明 span 形态）——push 键畸变，串与 def_span 一致。
 
 use bumpalo::Bump;
 use smol_str::SmolStr;
@@ -118,11 +129,11 @@ use crate::list::List as CList;
 use super::MetaVar as CMetaVar;
 
 /// 内建 prim 标识（参考版 `PrimFunc` 闭包挂在 decl 表条目的 `.5` 槽；
-/// bump 内不能携带闭包，以枚举替代）。执行点：force 的 Decl 臂（结果再
-/// force）与 v_app 的 Decl 臂（结果直接返回）；实参逆 spine 序收集后转
+/// bump 内不能携带闭包，以枚举替代）。执行点 = force 的 Decl 臂（结果再
+/// force）+ v_app 的 Decl 臂（结果直接返回）；实参逆 spine 序收集后转
 /// 正序传入；返回 `None` = 卡住（留 spine 上等再 force）。nat 算术 prim
 /// 与 `vconnT` 仅在 prelude 挂载（register_nat_builtins /
-/// register_vconn_builtin），run() 口径不出现，故不在枚举内。
+/// register_vconn_builtin），run() 口径不出现。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PrimId {
     /// `string_concat`：两字面量槽拼接（非字面量 → 卡住）。
@@ -574,10 +585,11 @@ pub(crate) struct DeclEntry<'a> {
     /// goto-definition 读取。LSP 接线阶段 1 回填）。
     pub(crate) span: crate::parser_lib::Span<()>,
     /// 登记处渲染的类型字符串（参考版行的 .6 `typ_pretty`，同思路：
-    /// [`Machine::decl_reg`] 一次 quote→export→pretty；全局名使用的
-    /// hover 直接 clone，免去每使用点重复渲染。已知口径差：类型含
-    /// binder 遮蔽时注册处 names 与使用处 names 的 fresh 后缀可能
-    /// 不同——仅显示差异，见模块头偏差说明）。
+    /// [`Machine::decl_reg`] 一次 quote→export→pretty）。**消费方是 LSP
+    /// def-site 悬浮（参考版 lib.rs Path1 直读 decl 行同款）**——使用处
+    /// 悬浮走实时渲染（`push_hover_cached`，阶段 2 起：登记期缓存串可能
+    /// 是 meta 解出前的旧形态）。prelude 装载段跳过渲染（`observe` 门控，
+    /// 见 [`Machine::decl_reg`]）。
     pub(crate) typ_pretty: Option<Rc<String>>,
     /// 登记项（参考版行的 .1；eval 的 `Tm::Decl` 臂 replay 路径取它重放）。
     pub(crate) tm: &'a Tm<'a>,
@@ -1567,10 +1579,17 @@ fn prim_exec<'a>(
                     return None;
                 }
                 match v_xcell_of(v) {
-                    XCell::SumCase { typ, index, .. } => match v_xcell_of(*typ) {
-                        XCell::Sum { cases, .. } => cases.get(*index as usize).copied(),
-                        _ => None,
-                    },
+                    XCell::SumCase { typ, index, .. } => {
+                        // typ 守卫同 [`project`]（:939 惯例）——tag 检查是
+                        // v_xcell_of 解引用的前置守卫，非 Sum 形态回 noop
+                        if v_tag(*typ) != 7 {
+                            return None;
+                        }
+                        match v_xcell_of(*typ) {
+                            XCell::Sum { cases, .. } => cases.get(*index as usize).copied(),
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 }
             };
@@ -1579,16 +1598,26 @@ fn prim_exec<'a>(
             }
             let pname = match v_xcell_of(port) {
                 XCell::SumCase { datas, .. } => match datas.get(1) {
-                    Some(d) => match v_xcell_of(d.val) {
-                        XCell::Lit(s) => *s,
-                        _ => return Some(noop),
-                    },
+                    Some(d) => {
+                        if v_tag(d.val) != 7 {
+                            return Some(noop);
+                        }
+                        match v_xcell_of(d.val) {
+                            XCell::Lit(s) => *s,
+                            _ => return Some(noop),
+                        }
+                    }
                     None => return Some(noop),
                 },
                 _ => return Some(noop),
             };
-            // 参考版 field() 只认 SumCase 的 datas（不查 Sum 参数槽）。
+            // 参考版 field() 只认 SumCase 的 datas（不查 Sum 参数槽）；
+            // 非构造子值（宇宙/中性/λ……）→ None → noop（参考版 match
+            // Val::SumCase 的 `_ => None` 同款——tag 检查即解引用守卫）。
             let field = |v: V, name: &str| -> Option<V> {
+                if v_tag(v) != 7 {
+                    return None;
+                }
                 match v_xcell_of(v) {
                     XCell::SumCase { datas, .. } => {
                         datas.iter().find(|d| d.name == name).map(|d| d.val)
@@ -1597,12 +1626,13 @@ fn prim_exec<'a>(
                 }
             };
             let field_str = |v: V, name: &str| -> Option<&str> {
-                match field(v, name) {
-                    Some(x) => match v_xcell_of(x) {
-                        XCell::Lit(s) => Some(*s),
-                        _ => None,
-                    },
-                    None => None,
+                let x = field(v, name)?;
+                if v_tag(x) != 7 {
+                    return None;
+                }
+                match v_xcell_of(x) {
+                    XCell::Lit(s) => Some(*s),
+                    _ => None,
                 }
             };
             // 子树是 ModuleTree 结构：取 `data` → head ModuleDef 的 `expr`
@@ -5333,6 +5363,12 @@ pub(crate) struct Machine {
     pub(crate) hover_table: Vec<(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)>,
     pub(crate) completion_table: Vec<(crate::parser_lib::Span<()>, SmolStr)>,
     pub(crate) inlay_hint_table: Vec<(u32, String)>,
+    /// 观察面 push 总闸：prelude 装载段置 `false`（push 期渲染 + decl_reg
+    /// 的 typ_pretty 渲染是本轮末 `clear_observation_tables` 要丢弃的纯死
+    /// 工作——参考版 LSP 只在进程启动装一次 prelude，孪生每 kick 重放就
+    /// 不应为被删的表条目付费），用户段恢复 `true`。默认 `true`——bench
+    /// /run 口径维持与参考版同含渲染成本的对称口径。
+    observe: bool,
 }
 
 impl Machine {
@@ -5366,6 +5402,7 @@ impl Machine {
             hover_table: Vec::new(),
             completion_table: Vec::new(),
             inlay_hint_table: Vec::new(),
+            observe: true,
         }
     }
 
@@ -5412,6 +5449,10 @@ impl Machine {
         def_span: crate::parser_lib::Span<()>,
         v: V,
     ) {
+        // prelude 装载段总闸（本轮末表即清，渲染是纯死工作）
+        if !self.observe {
+            return;
+        }
         let tm = self.quote(bump, cxt, cxt.lvl, v);
         let names = types_names_list(cxt.types);
         let rendered = pretty_tm(0, names, &export(&self.symbol_table, tm));
@@ -5444,6 +5485,10 @@ impl Machine {
         offset: u32,
         v: V,
     ) {
+        // prelude 装载段总闸（同 push_hover）
+        if !self.observe {
+            return;
+        }
         let tm = self.quote(bump, cxt, cxt.lvl, v);
         if no_metas(bump, self, cxt, tm).is_some() {
             return;
@@ -5723,11 +5768,18 @@ impl Machine {
         // prim-ness 变化会让 force 对同名链的结果改变（Decl 臂走不走 prim
         // 执行）→ 版本号 bump，旧 memo 条目惰性失效（参考版 Cxt::decl 同款）
         let had_prim = decls.get(x).map(|e| e.prim.is_some()).unwrap_or(false);
-        // 登记处渲染类型一次（观察面：每 decl 一次 quote→export→pretty；
-        // 全局名使用的 hover 直接 clone 此串，见 push_hover_cached）。
-        let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
-        let qn = types_names_list(cxt.types);
-        let typ_pretty = Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))));
+        // 登记处渲染类型一次（每 decl 一次 quote→export→pretty）。消费方
+        // 是 LSP def-site 悬浮（参考版 Path1 直读 decl 行 typ_pretty）；
+        // 使用处悬浮是实时渲染（push_hover_cached），不读此串。prelude 装
+        // 载段 observe=false 跳过渲染（每 kick 重放时这段是表清空前的死
+        // 工作；参考版 LSP 只在进程启动装一次）。
+        let typ_pretty = if self.observe {
+            let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+            let qn = types_names_list(cxt.types);
+            Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))))
+        } else {
+            None
+        };
         Rc::make_mut(&mut decls).insert(
             SmolStr::new(x),
             DeclEntry {
@@ -6644,6 +6696,10 @@ impl Machine {
             let t_tm = self.check(bump, &cxt_named, t2, va)?;
             let vt = self.eval(bump, &cxt, cxt.env, t_tm);
             let name: &'a str = bump.alloc_str(&x.data);
+            // 观察面：**检查路径** let binder 定义处 hover（参考版 check 的
+            // Let 臂 742 同点位——接线旧文档误归为"Lam 臂"；推断路径的
+            // 同款 push 在 infer_expr 的 Let 臂）
+            self.push_hover(bump, cxt, x.to_span(), x.to_span(), va);
             let cxt2 = self.define_name(bump, cxt, &x.data, x.to_span(), a_tm, t_tm, vt, va);
             let u_tm = self.check(bump, &cxt2, u2, a)?;
             Ok(bump.alloc(Tm::Let(name, a_tm, t_tm, u_tm)))
@@ -7679,7 +7735,7 @@ impl Machine {
         } else {
             // 观察面（ref 2964-2970）：方法未解析 = 补全现场，键 = 接收者
             // span；收集可满足 trait 的方法名（失败路径才收集，同参考版）。
-            {
+            if self.observe {
                 let rcv = x.to_span();
                 let mut tn: Vec<SmolStr> = Vec::new();
                 for (tname, (_p, _o, _st, ms)) in self.tstate.definition.iter() {
@@ -7810,13 +7866,12 @@ impl Machine {
                     .collect();
                 if matches.len() == 1 {
                     let (full_key, vty, dspan) = &matches[0];
-                    // 观察面（ref 2242）：唯一回退命中也登记 hover（cached 渲染）
-                    let rendered = match cxt.decls.get(full_key.as_str()).and_then(|e| e.typ_pretty.clone()) {
-                        Some(sp) => (*sp).clone(),
-                        None => {
-                            let tm = self.quote(bump, cxt, cxt.lvl, *vty);
-                            pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm))
-                        }
+                    // 观察面（ref 2220）：唯一回退命中也登记 hover——
+                    // **实时渲染**（与 push_hover_cached 同理：登记期缓存串
+                    // 可能是 meta 解出前的旧形态；参考版此处 push vty 同款）
+                    let rendered = {
+                        let tm = self.quote(bump, cxt, cxt.lvl, *vty);
+                        pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm))
                     };
                     self.hover_table.push((x.to_span(), *dspan, rendered));
                     let name = bump.alloc_str(full_key.as_str());
@@ -8000,7 +8055,7 @@ impl Machine {
                         }
                         // 观察面：type-ahead completion 关键集（ref 2431/2446——
                         // 命中与未命中都推，键 = 接收者 span，owned 零渲染）。
-                        {
+                        if self.observe {
                             let rcv = x.to_span();
                             self.completion_table.extend(
                                 c.iter()
@@ -8043,9 +8098,11 @@ impl Machine {
                             .map(|d| d.val);
                         {
                             // 观察面：构造子值字段名 completion（ref 2466 口径）
-                            let rcv = x.to_span();
-                            self.completion_table
-                                .extend(datas.iter().map(|d| (rcv, SmolStr::new(d.name))));
+                            if self.observe {
+                                let rcv = x.to_span();
+                                self.completion_table
+                                    .extend(datas.iter().map(|d| (rcv, SmolStr::new(d.name))));
+                            }
                         }
                         if let Some(ty) = field {
                             // 观察面：构造子字段访问 hover（ref 2455，同样降级 def_span）
@@ -12133,27 +12190,38 @@ impl Tycker {
     }
 
     /// **阶段 2（prelude 装载）整轮入口**：本轮 = prelude 重放 + 用户 decls。
-    /// `prelude_decls`/`prelude_file_ends`/`prelude_nat_after` 来自共享
-    /// `super::parse_prelude_files`（参考版 `load_prelude_state_impl` 同
-    /// 口径的 parse 段）。装载段镜像参考版：逐 decl 推断（println/排水
-    /// 不收集——参考版加载器丢弃输出同款）、nat 边界注册 nat 内建、每
-    /// 文件边界清 force memo（参考版逐文件清空的内存口径）、全部完成后
-    /// 注册 vconnT → 短名别名 or_insert → HdlLoopIdx 复位 → 清观察表
-    /// （缓存态不参与 hover/completion）。用户段与
+    /// `prelude` 来自共享 `super::parse_prelude_files`（参考版
+    /// `load_prelude_state_impl` 同口径的 parse 段）；`prelude.failed`
+    /// 非 `None` 时**快速失败**（parse 截断的 prelude 静默重放会以难诊断
+    /// 的 infer 错误形式爆在下游）。装载段镜像参考版：逐 decl 推断
+    /// （println/排水不收集——参考版加载器丢弃输出同款）、nat 边界注册
+    /// nat 内建、每文件边界清 force memo（参考版逐文件清空的内存口径）、
+    /// 全部完成后注册 vconnT → 短名别名 or_insert → HdlLoopIdx 复位 →
+    /// 清观察表（缓存态不参与 hover/completion）。用户段与
     /// [`Tycker::run_decls_bounded`] 同一推进。
     ///
     /// 每 kick 都从 prime_round 重放整个 prelude（bump 一次性口径）——
     /// 这是接线文档阶段 3a 要实测的 seed 开销基线。
     pub(crate) fn run_decls_with_prelude(
         &mut self,
-        prelude_decls: &[Decl],
-        prelude_file_ends: &[usize],
-        prelude_nat_after: &[usize],
+        prelude: &super::PreludeParse,
         user_ast: &[Decl],
     ) -> Result<String, Error> {
+        if let Some(f) = &prelude.failed {
+            return Err(Error(
+                empty_span(format!("prelude file `{f}` failed to parse")),
+                vec![],
+            ));
+        }
+        let prelude_decls: &[Decl] = &prelude.decls;
+        let prelude_file_ends: &[usize] = &prelude.file_ends;
+        let prelude_nat_after: &[usize] = &prelude.nat_after;
         self.bump.reset();
         self.machine.clear_round();
         force_memo_clear();
+        // prelude 段关观察面 push（含 decl_reg 的 typ_pretty 渲染）——
+        // 装载完即清表，渲染全是死工作；用户段恢复。
+        self.machine.observe = false;
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut file_i = 0usize;
@@ -12168,6 +12236,7 @@ impl Tycker {
                 file_i += 1;
             }
         }
+        self.machine.observe = true;
         cxt = self.machine.register_vconn_builtin(bump, &cxt);
         cxt = insert_prelude_aliases(cxt);
         {
@@ -12983,6 +13052,13 @@ def d0 : Nat -> Nat = n => succ n
         user_src: &str,
         path_id: u32,
     ) -> (String, String, Tycker, crate::L13_namespace::Infer) {
+        // 两参数必须一致（files 决定 prelude 内容，include_hdl 决定参考版
+        // 走哪个缓存池）——错配会以难读的全表 diff 收场
+        assert_eq!(
+            include_hdl,
+            files.iter().any(|(n, _)| *n == "hdl-core"),
+            "files/include_hdl must agree"
+        );
         let pre: PreludeParse = crate::L13_namespace::parse_prelude_files(files);
         assert_eq!(pre.failed, None, "prelude files must parse");
         let (user_decls, _errs, _exports, _expansions) =
@@ -12992,7 +13068,7 @@ def d0 : Nat -> Nat = n => succ n
         // twin
         let mut t = Tycker::new();
         let t_out = t
-            .run_decls_with_prelude(&pre.decls, &pre.file_ends, &pre.nat_after, &user_decls)
+            .run_decls_with_prelude(&pre, &user_decls)
             .expect("twin prelude round");
 
         // reference（缓存态三张观察表已清——用户段条目即全部）
@@ -13147,6 +13223,7 @@ def d0 : Nat -> Nat = n => succ n
                       }\n\
                    def wrap(n: Nat): Option[Nat] = Some(n)\n\
                    def pair(b: Boolean) = (b, succ(zero))\n\
+                   def withlet(n: Nat) = let m = succ(n); m\n\
                    def get(p: Tuple2[Boolean, Nat]): Nat = p._2\n";
         let (t_out, r_out, t, infer) = run_prelude_both(&core_files(), false, src, 101);
         assert_eq!(t_out, r_out, "user-segment output parity");
