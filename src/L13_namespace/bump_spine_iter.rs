@@ -89,6 +89,10 @@
 //! 3. 仅错误消息内容、不影响判定与 Ok 输出：快版错误里内嵌 Debug-Val/Tm
 //!    的名字 Span 全零（参考版携带源码偏移），meta 编号 `?N` 双实现分配
 //!    序列不同——套件比对前按 `start_offset/end_offset/path_id` 归一化。
+//! 4. 观察面（LSP 接线阶段 1）：全局名使用的 hover 串取**登记处**缓存
+//!    （`DeclEntry::typ_pretty`），参考版在**使用处**上下文渲染；类型含
+//!    binder 且使用处名字遮蔽时 pretty fresh 后缀（`x` vs `x'`）或有显示
+//!    差异。判定、诊断与 Ok 输出不受影响（观察表不参与 run 口径）。
 
 use bumpalo::Bump;
 use smol_str::SmolStr;
@@ -551,11 +555,20 @@ pub(crate) enum XCell<'a> {
 }
 
 /// decl 表条目（参考版 decl 行 7 元组 `(Span, Tm, Val, Ty, VTy,
-/// Option<PrimFunc>, String)` 的快版：Span 不进表（快版错误消息全零
-/// Span）；`ty` 类型项在快版无读取点，省略；`typ_pretty` 无读取点
-/// （hover 专用），省略）。
-#[derive(Clone, Copy)]
+/// Option<PrimFunc>, String)` 的快版：`ty` 类型项在快版无读取点，省略；
+/// Span/typ_pretty 为观察面（LSP 接线阶段 1）回填——错误消息仍用零 Span
+/// 渲染，不受影响）。
+#[derive(Clone)]
 pub(crate) struct DeclEntry<'a> {
+    /// 登记名源码 span（参考版行的 .0；观察面 hover 的 def_span 与
+    /// goto-definition 读取。LSP 接线阶段 1 回填）。
+    pub(crate) span: crate::parser_lib::Span<()>,
+    /// 登记处渲染的类型字符串（参考版行的 .6 `typ_pretty`，同思路：
+    /// [`Machine::decl_reg`] 一次 quote→export→pretty；全局名使用的
+    /// hover 直接 clone，免去每使用点重复渲染。已知口径差：类型含
+    /// binder 遮蔽时注册处 names 与使用处 names 的 fresh 后缀可能
+    /// 不同——仅显示差异，见模块头偏差说明）。
+    pub(crate) typ_pretty: Option<Rc<String>>,
     /// 登记项（参考版行的 .1；eval 的 `Tm::Decl` 臂 replay 路径取它重放）。
     pub(crate) tm: &'a Tm<'a>,
     /// 登记值（参考版行的 .2；eval 的 `Tm::Decl` 臂与 string_to_global_type
@@ -3024,6 +3037,8 @@ fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
                 (
                     k.clone(),
                     DeclEntry {
+                        span: e.span,
+                        typ_pretty: e.typ_pretty.clone(),
                         tm: bump.alloc(Tm::Decl(name)),
                         val: if v_tag(e.val) == 7
                             && matches!(v_xcell_of(e.val), XCell::Sum { .. })
@@ -5270,6 +5285,25 @@ impl Machine {
         self.hover_table.push((t_span, def_span, rendered));
     }
 
+    /// 全局名使用处 hover：优先复用登记处缓存串（零渲染，见
+    /// [`DeclEntry::typ_pretty`]）；无缓存时现渲染兜底。
+    fn push_hover_cached<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t_span: crate::parser_lib::Span<()>,
+        e: &DeclEntry<'a>,
+    ) {
+        let rendered = match &e.typ_pretty {
+            Some(s) => (**s).clone(),
+            None => {
+                let tm = self.quote(bump, cxt, cxt.lvl, e.vty);
+                pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm))
+            }
+        };
+        self.hover_table.push((t_span, e.span, rendered));
+    }
+
     /// 与参考版 `Infer::hover_entry_at` 同规则：同 path 内命中 offset 的最
     /// 小 span 胜出。
     pub(crate) fn hover_entry_at(
@@ -5427,6 +5461,8 @@ impl Machine {
         let prev = Rc::make_mut(&mut decls).insert(
             SmolStr::new(x),
             DeclEntry {
+                span: empty_span(()),
+                typ_pretty: None,
                 tm: stub,
                 val: v_xcell(bump.alloc(XCell::Decl { name })),
                 vty: ty,
@@ -5462,21 +5498,28 @@ impl Machine {
         bump: &'a Bump,
         cxt: &Cxt<'a>,
         x: &str,
+        span: crate::parser_lib::Span<()>,
         t_tm: &'a Tm<'a>,
         vt: V,
         typ_tm: &'a Tm<'a>,
         vtyp: V,
         prim: Option<PrimId>,
     ) -> Cxt<'a> {
-        let _ = bump;
         let _ = typ_tm;
         let mut decls = cxt.decls.clone();
         // prim-ness 变化会让 force 对同名链的结果改变（Decl 臂走不走 prim
         // 执行）→ 版本号 bump，旧 memo 条目惰性失效（参考版 Cxt::decl 同款）
         let had_prim = decls.get(x).map(|e| e.prim.is_some()).unwrap_or(false);
+        // 登记处渲染类型一次（观察面：每 decl 一次 quote→export→pretty；
+        // 全局名使用的 hover 直接 clone 此串，见 push_hover_cached）。
+        let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+        let qn = types_names_list(cxt.types);
+        let typ_pretty = Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))));
         Rc::make_mut(&mut decls).insert(
             SmolStr::new(x),
             DeclEntry {
+                span,
+                typ_pretty,
                 tm: t_tm,
                 val: vt,
                 vty: vtyp,
@@ -7377,12 +7420,14 @@ impl Machine {
                     return Ok((bump.alloc(Tm::Var(ix)), ty));
                 }
                 if let Some(e) = cxt.decls.get(x.data.as_str()) {
+                    self.push_hover_cached(bump, cxt, x.to_span(), e);
                     let name = bump.alloc_str(x.data.as_str());
                     return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                 }
                 // import 别名（`import mylib.add` 让裸 `add` → 全键）
-                if let Some(full) = self.import_map.get(x.data.as_str()) {
+                if let Some(full) = self.import_map.get(x.data.as_str()).cloned() {
                     if let Some(e) = cxt.decls.get(full.as_str()) {
+                        self.push_hover_cached(bump, cxt, x.to_span(), e);
                         let name = bump.alloc_str(full.as_str());
                         return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                     }
@@ -7391,6 +7436,7 @@ impl Machine {
                 if let Some(prefix) = &cxt.namespace_prefix {
                     let qualified = format!("{}.{}", prefix, x.data);
                     if let Some(e) = cxt.decls.get(qualified.as_str()) {
+                        self.push_hover_cached(bump, cxt, x.to_span(), e);
                         let name = bump.alloc_str(&qualified);
                         return Ok((bump.alloc(Tm::Decl(name)), e.vty));
                     }
@@ -8068,7 +8114,7 @@ impl Machine {
                 } else {
                     self.eval(bump, &fake, fake.env, t_tm)
                 };
-                let out = self.decl_reg(bump, cxt, &name.data, t_tm, vt, typ_tm, vtyp, None);
+                let out = self.decl_reg(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -8166,7 +8212,7 @@ impl Machine {
                 // 登记值在含存根的 fake 表下求值（注意用**原 cxt 的 decl**：
                 // Enum 臂与 Def 臂不同，参考版在此用 `cxt.decl`）
                 let vt = self.eval(bump, cxt, fake.env, t_tm);
-                let mut cxt = self.decl_reg(bump, cxt, &name.data, t_tm, vt, typ_tm, vtyp, None);
+                let mut cxt = self.decl_reg(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 // 逐构造子注册：体 = λ(隐式参数, 字段) → SumCase{typ: ret, datas: 字段自身}；
                 // **限定键 `EnumName.caseName` 登记**（无裸名别名——裸名靠 Var
                 // 的后缀 fallback 解析；参考版 1322 同款）
@@ -8196,7 +8242,7 @@ impl Machine {
                     let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                     let vt = self.eval(bump, &cxt, cxt.env, t_tm);
                     let case_key = format!("{}.{}", name.data, case_name.data);
-                    cxt = self.decl_reg(bump, &cxt, &case_key, t_tm, vt, typ_tm, vtyp, None);
+                    cxt = self.decl_reg(bump, &cxt, &case_key, case_name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 }
                 Ok((DeclOut::Enum, cxt))
             }
@@ -11191,7 +11237,7 @@ impl Machine {
         let empty = Cxt::empty();
         // String : U(0)，值 = LiteralType（参考版 Cxt::new 首项）
         let cxt = self.decl_reg(
-            bump, &empty, "String",
+            bump, &empty, "String", empty_span(()),
             bump.alloc(Tm::LiteralType),
             v_lit_ty(),
             bump.alloc(Tm::U(0)),
@@ -11291,7 +11337,7 @@ impl Machine {
             let nm = bump.alloc_str(name);
             let placeholder = bump.alloc(Tm::Decl(nm));
             let val = v_xcell(bump.alloc(XCell::Decl { name: nm }));
-            cxt = self.decl_reg(bump, &cxt, name, placeholder, val, ty_tm, vty, Some(pid));
+            cxt = self.decl_reg(bump, &cxt, name, empty_span(()), placeholder, val, ty_tm, vty, Some(pid));
         }
         cxt
     }
@@ -11326,7 +11372,7 @@ impl Machine {
             let nm = bump.alloc_str(name);
             let placeholder = bump.alloc(Tm::Decl(nm));
             let val = v_xcell(bump.alloc(XCell::Decl { name: nm }));
-            cxt = self.decl_reg(bump, &cxt, name, placeholder, val, ty_tm, vty, Some(pid));
+            cxt = self.decl_reg(bump, &cxt, name, empty_span(()), placeholder, val, ty_tm, vty, Some(pid));
         }
         cxt
     }
@@ -11902,4 +11948,47 @@ pub(crate) fn struct_src(k: u32) -> String {
     s += &format!("println q{}
 ", n - 1);
     s
+}
+
+// 观察面（LSP 接线阶段 1）测试
+// --------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod observation_tests {
+    use super::*;
+
+    /// 同一段源分别过孪生与参考版：全局声明使用处的 hover 条目必须逐字节
+    /// 一致（渲染字符串 + def span），证明孪生 push 期 quote→export→pretty
+    /// 管线与参考版同界。
+    #[test]
+    fn hover_global_decl_use_matches_reference() {
+        let src = "def foo = \"hello\"\ndef bar = foo\n";
+        let ast = parse(src, 42).expect("parse");
+        let use_off = src.rfind("foo").unwrap();
+
+        // twin
+        let mut t = Tycker::new();
+        t.run_input(src, 42).expect("twin check");
+        let tw = t
+            .hover_entry_at(42, use_off)
+            .expect("twin hover entry at `foo` use");
+
+        // reference
+        let mut infer = crate::L13_namespace::Infer::new();
+        let mut cxt = crate::L13_namespace::cxt::Cxt::new(&infer);
+        for d in &ast {
+            let (_, _, nc) = infer.infer(&cxt, d.clone()).expect("ref check");
+            cxt = nc;
+        }
+        let rf = infer
+            .hover_entry_at(42, use_off)
+            .expect("ref hover entry at `foo` use");
+
+        assert_eq!(&tw.2, &rf.2, "rendered hover string");
+        assert_eq!(
+            (tw.1.start_offset, tw.1.end_offset, tw.1.path_id),
+            (rf.1.start_offset, rf.1.end_offset, rf.1.path_id),
+            "def-site span"
+        );
+    }
 }
