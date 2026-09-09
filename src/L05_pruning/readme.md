@@ -84,6 +84,15 @@ cargo run --release --bin l05bench -- --workload all --max-k 13
    Cannot unify）。修复：加 `RenBuf::has_mark` 区分「已标哨兵」与「从未
    出现」，已标者保持哨兵。黑盒 `nonlinear_triple_occurrence_rejected_by_both`
    钉住（`(m a a a)` 三次出现形态；既有两次出现用例不覆盖本缺陷）。
+   **修订（2026-09-10）**：`invert` 的非线性掩码循环原以 `.rev()` 产出**外先序**，
+   与注释声称的「内先序 = args 原序」相反；消费方 `prune_ty_bump`
+   （`mask_inner_first` 参数 + `.rev()` 配对外层 Π）按内先序约定再反转一次，
+   结果 Some/None 槽位与 Π 层**镜像配对**——非对称非线性 spine（如 `m a a b c`，
+   重复变量在外层槽）下 codomain 依赖被错剪层：依赖保留层时快版误拒（参考版
+   可解）、依赖被剪层时快版误收（参考版 Cannot unify）。既有非线性用例的掩码
+   恰为回文（`m a a`、`m a b c =? m c b a` 交集）故互检全绿。修复：掩码循环改
+   正序产出内先序。黑盒 `nonlinear_asymmetric_mask_pairs_inner_first` /
+   `nonlinear_asymmetric_cod_depends_on_pruned_layer_rejected` 钉住两个方向。
 5. **quote/unify 记忆化、复合环境、稳态复用、迭代内核**全部继承 L04；
    `AppPruning` 是项层的洞形态（值层无此构造），quote/unify 主体不增分支，
    pruning 只活在 `fresh_meta` / `solve` / `rename` 的 flex 分支 / `intersect`。

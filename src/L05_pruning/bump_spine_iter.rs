@@ -1430,7 +1430,7 @@ fn invert_bump<'a>(
     }
     // 掩码（内先序 = args 原序；重复变量整级剪除）
     let mut mask: Vec<Option<Icit>> = Vec::with_capacity(args.len());
-    for k in (0..args.len()).rev() {
+    for k in 0..args.len() {
         // lvs 按应用序填：lvs[0] = 最先应用（外）；args[k] 内先 ↔ 应用序 n-1-k
         let x = lvs[args.len() - 1 - k] as usize;
         mask.push(match ren.get(x) {

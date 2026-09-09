@@ -212,6 +212,44 @@ U";
     assert_error_at(src, 5, 47, "Cannot unify expected type");
 }
 
+/// 非对称非线性 spine（回归：invert 掩码序）：`m a a b c` 的非线性变量在
+/// 外层槽位，掩码非回文——掩码必须按内先序与 Π 层配对，否则 D 层被错剪、
+/// codomain 依赖 D 导致快版误拒（参考版可解）。
+#[test]
+fn nonlinear_asymmetric_mask_pairs_inner_first() {
+    let src = "\
+let Eq : {A : U} -> A -> A -> U = \\{A} x y. (P : A -> U) -> P x -> P y;
+let refl : {A : U}{x : A} -> Eq {A} x x = \\ _ px. px;
+let the : (A : U) -> A -> A = \\ _ x. x;
+let m : (A : U)(B : U)(C : U)(D : U) -> D -> D = _;
+let test = \\ a b c. the (Eq (m a a b c) (\\ d. d)) refl;
+U";
+    assert_eq!(ty(src), "U\n");
+    let out = elab(src);
+    // 非线性的 A/B 层剪除、D 层保留：解是 4 参恒等
+    assert!(
+        out.contains("let ?0 : (A : U)(B : U)(C : U)(D : U) → D → D = λ A B C D x2. x2;\n"),
+        "{out}"
+    );
+    assert!(out.contains("let test : ?1\n  = λ a b c. the (Eq {?5 a b c} (m a a b c) (λ d. d)) (refl {?6 a b c} {?7 a b c});\n\nU\n"), "{out}");
+    assert_parity(src);
+}
+
+/// 非对称非线性 spine 的另一向：codomain 依赖非线性变量所在层（A），
+/// 掩码序错配会让快版误收（参考版拒绝）——两版都必须 Cannot unify。
+#[test]
+fn nonlinear_asymmetric_cod_depends_on_pruned_layer_rejected() {
+    let src = "\
+let Eq : {A : U} -> A -> A -> U = \\{A} x y. (P : A -> U) -> P x -> P y;
+let refl : {A : U}{x : A} -> Eq {A} x x = \\ _ px. px;
+let the : (A : U) -> A -> A = \\ _ x. x;
+let m : (A : U)(B : U)(C : U)(D : U) -> A -> A = _;
+let test = \\ a b c. the (Eq (m a a b c) (\\ d. d)) refl;
+U";
+    assert_error_at(src, 5, 51, "Cannot unify expected type");
+    assert_parity(src);
+}
+
 /// 交集剪枝（README 例 3）：`m a b c =? m c b a`——首尾实参不等被剪，
 /// 只留中间的 b；m 解为 `λ x0 x1 x2. ?8 x1`。
 #[test]
