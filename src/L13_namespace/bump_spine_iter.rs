@@ -839,8 +839,8 @@ fn is_flex(spine: &Spine, v: V) -> bool {
 // --------------------------------------------------------------------------------
 
 /// meta 创建时刻的上下文快照（参考版 `Arc<Cxt>` 的孪生：错误路径的
-/// pretty/lvl/decls 重建用）。`'static` 存放口径同工作栈（跨轮 reset
-/// 前一切句柄已消亡）。
+/// pretty/lvl/decls 重建 **+ 求解时用创建处上下文**）。`'static` 存放口径
+/// 同工作栈（跨轮 reset 前一切句柄已消亡）。
 pub(crate) struct MetaSnap<'a> {
     /// meta 创建时的层级。
     pub(crate) lvl: u32,
@@ -848,6 +848,13 @@ pub(crate) struct MetaSnap<'a> {
     pub(crate) types: Option<&'a TCons<'a>>,
     /// decl 表快照（错误路径 quote/eval 用）。
     pub(crate) decls: Rc<Decls<'a>>,
+    /// **完整上下文快照**（参考版 `MetaEntry::Unsolved(v, Arc<Cxt>, ..)`
+    /// 的第二元）：`solve_multi_trait` 必须用 **meta 创建处**的上下文求解，
+    /// 不能用调用方的——goal 里的 Rigid 层级按创建处 de Bruijn 编号，换用
+    /// 浅上下文会让 rename/quote 算出越界变量（HDL prelude decl 308 的
+    /// `impl Add for UInt[width]`：meta 创建于 lvl=4，被以 lvl=0 求解，
+    /// 报 `Into[Nat, UInt[Variable index out of bounds]]`）。
+    pub(crate) cxt: Cxt<'static>,
 }
 
 /// metacontext 条目（参考版 L13 四元同构）：**类型一律保留**（pruning 检查
@@ -4803,6 +4810,7 @@ fn prune_meta_bump<'a>(
             lvl: 0,
             types: None,
             decls: Rc::new(decl.clone()),
+            cxt: std::mem::transmute::<Cxt<'_>, Cxt<'static>>(Cxt::empty()),
         }))
     };
     metas.push(MetaEntry::Unsolved(prunedty, snap, origin, empty_span(())));
@@ -5279,6 +5287,9 @@ impl Machine {
                 lvl: cxt.lvl,
                 types: cxt.types,
                 decls: cxt.decls.clone(),
+                // 完整上下文快照（参考版 Arc<Cxt> 第二元）：solve_multi_trait
+                // 用它求解，而不是调用方的 cxt。
+                cxt: std::mem::transmute::<Cxt<'a>, Cxt<'static>>(clone_cxt(cxt)),
             }))
         };
         self.metas.push(MetaEntry::Unsolved(a, snap, origin_typ, empty_span(())));
@@ -5560,8 +5571,17 @@ impl Machine {
                 MetaEntry::Unsolved(v, ..) => *v,
                 _ => continue,
             };
+            // 用 **meta 创建处**的上下文求解（参考版 `meta_cxt`）：goal 里的
+            // Rigid 层级按创建处 de Bruijn 编号，用调用方的浅上下文会让
+            // rename/quote 算出越界变量。
+            let meta_cxt: &Cxt<'a> = match &self.metas[idx] {
+                MetaEntry::Unsolved(_, s, ..) => unsafe {
+                    &*(&s.cxt as *const Cxt<'static> as *const Cxt<'a>)
+                },
+                _ => continue,
+            };
             let typ = self
-                .solve_trait_ref(bump, cxt, x, allow_flex_defaulting)
+                .solve_trait_ref(bump, meta_cxt, x, allow_flex_defaulting)
                 .map_err(|e| e)?;
             if let Some((_, val)) = typ {
                 self.metas[idx] = MetaEntry::Solved(val, x);
