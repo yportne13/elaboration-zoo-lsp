@@ -56,6 +56,10 @@ pub(crate) fn v_lvl_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: v 由 `v_clo` 构造（tag 1）；指针来自 `Bump::alloc(CloCell)`，
+    // 对齐 ≥4（下方 const 断言钉住；64 位目标为 8，wasm32 上 `&str`/`&T`
+    // 仅 4 字节对齐）⇒ 低 2 位为 0，`& !3` 精确还原指针。`'a` 由调用方
+    // 保证与分配它的 `Bump` 同寿（值不跨 `Bump::reset`/析构存活）。
     unsafe { &*((v.0 & !3) as *const CloCell) }
 }
 #[inline]
@@ -68,12 +72,18 @@ pub(crate) struct CloCell<'a> {
     pub(crate) env: Option<&'a EnvCons<'a>>,
     pub(crate) body: &'a Bt<'a>,
 }
+// packed tag 用 2 位（`v_clo` 写 `ptr | 1`，`v_clo_of` 读 `v.0 & !3`），
+// 要求分配地址低 2 位为 0：`CloCell` 只含引用，64 位对齐 8、wasm32 对齐 4，
+// 两者都满足 ≥4。断言把该不变式钉在编译期（若未来字段改动破坏它即编译失败）。
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 4);
 
 /// 环境节点（持久链表）。
 pub(crate) struct EnvCons<'a> {
     pub(crate) val: V,
     pub(crate) next: Option<&'a EnvCons<'a>>,
 }
+// `EnvCons` 含 `V(u64)`，对齐恒 ≥8（不参与 ptr|tag 解码，仅钉住）。
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 /// spine 栈槽：一次中性应用。`len`/`base` 支撑流式右链 quote。
 pub(crate) struct Entry {

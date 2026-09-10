@@ -37,6 +37,9 @@ use super::term::Term;
 pub(crate) struct Clo<'a> {
     pub(crate) f: &'a (dyn Fn(&mut Spine, V) -> V + 'a),
 }
+// packed tag 用 2 位（`ptr | 1` / `v.0 & !3`），要求 ≥4 对齐：`&dyn Fn` 胖指针
+// 在 64 位对齐 8、wasm32 对齐 4，均满足。
+const _: () = assert!(std::mem::align_of::<Clo<'static>>() >= 4);
 
 #[inline]
 fn v_clo<'a>(p: &'a Clo<'a>) -> V {
@@ -45,6 +48,10 @@ fn v_clo<'a>(p: &'a Clo<'a>) -> V {
 
 #[inline]
 fn v_clo_of<'a>(v: V) -> &'a Clo<'a> {
+    // SAFETY: v 由 `v_clo` 构造（tag 1）；指针来自 `Bump::alloc(Clo)`，
+    // 对齐 ≥4（下方 const 断言钉住；`&dyn Fn` 胖指针 64 位对齐 8、wasm32
+    // 对齐 4）⇒ 低 2 位为 0，`& !3` 还原指针。`'a` 由调用方保证与分配
+    // 它的 `Bump` 同寿。
     unsafe { &*((v.0 & !3) as *const Clo) }
 }
 

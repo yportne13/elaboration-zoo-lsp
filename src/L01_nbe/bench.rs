@@ -882,6 +882,10 @@ fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
     }
 
     if rows.is_empty() {
+        // 同下方注释：check 是百万层深 Box 树，递归析构会爆栈；此提前返回
+        // 路径若漏掉 forget，`--only` 未选中任何出赛变体时（如
+        // `--only naive --max-church 64000`）会在 drop 时炸栈。
+        std::mem::forget(check);
         println!("（此规模没有选中的变体）
 ");
         return;
