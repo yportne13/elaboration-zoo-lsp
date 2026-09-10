@@ -12074,6 +12074,9 @@ struct Resident {
     cxt: Cxt<'static>,
     /// prelude 段的 `defs` 长度（用户段 append-only，下轮 truncate 回此）。
     defs_len: usize,
+    /// prime 完成时的 bump 已分配字节数（基线）。用户段每 kick 的中间值
+    /// 无法回收，超过 `base + RESIDENT_BUMP_LIMIT` 时下轮重新 prime。
+    base_bytes: usize,
     /// 稳态快照：用户段可能改动这些 per-run 状态（新增 meta、注册实例、
     /// 写可变全局、挂算符方法、导入别名），每 kick 恢复。值均为 owned 或被
     /// 常驻 bump 钉住的句柄（Clone 即安全）。
@@ -12158,6 +12161,7 @@ impl Tycker {
         self.resident = Some(Resident {
             cxt: unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(clone_cxt(&cxt)) },
             defs_len: self.machine.defs.len(),
+            base_bytes: self.bump.allocated_bytes(),
             metas: self.machine.metas.clone(),
             tstate: self.machine.tstate.clone(),
             mutable: self.machine.mutable.borrow().clone(),
@@ -12180,7 +12184,11 @@ impl Tycker {
         prelude: &super::PreludeParse,
         user_ast: &[Decl],
     ) -> Result<(), Error> {
-        if self.resident.is_none() || self.bump.allocated_bytes() > RESIDENT_BUMP_LIMIT {
+        let over = match &self.resident {
+            Some(r) => self.bump.allocated_bytes().saturating_sub(r.base_bytes) > RESIDENT_BUMP_LIMIT,
+            None => true,
+        };
+        if over {
             self.prime_resident(prelude)?;
         }
         let r = self.resident.as_ref().expect("resident just primed");

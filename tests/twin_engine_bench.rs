@@ -4,10 +4,16 @@
 // Run explicitly in release:
 //   cargo test --release --test twin_engine_bench -- --ignored --nocapture
 //
-// Finding (2026-09-10, 09-hierarchy, release): the twin path replays the
-// entire ~943-decl prelude on every kick (`run_decls_with_prelude`), which is
-// ~10x the reference engine's cached-prelude kick.  A resident twin prelude
-// is required before twin can be a net win; see the wiring doc's progress log.
+// Findings (09-hierarchy, release):
+// - Stage 3a (whole-prelude replay per kick): twin ~3285 ms vs reference
+//   ~328 ms -> ~10x SLOWER.  The ~2.8 s prelude replay dominated.
+// - Stage 3b (resident checkpoint, current): twin ~399 ms vs reference
+//   ~325 ms.  The seed tax is gone, but the twin pass is still *additive*:
+//   twin mode runs the reference pipeline for diagnostics/cross-file state
+//   and then adds the twin observation pass (~74 ms).  A net win requires
+//   dropping the reference per-file elaboration in twin mode, i.e. the twin
+//   taking over diagnostics + the cross-file data plane.
+// See the wiring doc's 2026-09-10 progress log.
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -155,6 +155,31 @@ fn twin_inlay_matches_reference() {
     assert_eq!(hint_labels(&tb, &uri), hint_labels(&rb, &uri), "inlay mismatch");
 }
 
+/// The resident prelude is reused across sequential kicks on one Backend, and
+/// the second file's observation must not be polluted by the first
+/// (per-kick state restore): both must match fresh single-file Backends.
+#[test]
+fn twin_resident_reuse_across_kicks_is_consistent() {
+    let u1 = Url::parse("file:///twin_k1.typort").unwrap();
+    let u2 = Url::parse("file:///twin_k2.typort").unwrap();
+    let s1 = "def first(n: Nat): Nat = n";
+    let s2 = "def second(a: Nat, b: Boolean): Tuple2[Nat, Boolean] = (a, b)";
+
+    // One twin Backend, two sequential kicks (resident primed on kick 1).
+    let tb = backend(Engine::Twin);
+    tb.process_file(&u1, s1, Some(1));
+    tb.process_file(&u2, s2, Some(1));
+
+    // Baseline: a fresh twin Backend per file.
+    for (u, s) in [(&u1, s1), (&u2, s2)] {
+        let fb = backend(Engine::Twin);
+        fb.process_file(u, s, Some(1));
+        let got = tb.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
+        let want = fb.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
+        assert_eq!(got, want, "resident kick diverged from fresh for {u}");
+    }
+}
+
 /// End-to-end twin pass on a real HDL example (full HDL prelude, module with
 /// `sum := u.sum` vconnT expansion): the twin must produce a non-empty
 /// observation snapshot without panicking, and hovering a known signal

@@ -254,6 +254,21 @@ pub struct ObserveSnapshot {
     pub inlay: Vec<(u32, String)>,
 }
 
+/// Resident twin prelude checkpoint for the LSP observation path (stage 3b).
+/// The twin elaborator's `Bump` is `!Sync` and the LSP drains analysis jobs
+/// on a single thread, so the resident lives in a thread-local rather than a
+/// `Backend` field.  The two engines' prelude shapes (HDL vs core-only) must
+/// not share a checkpoint, hence the `include_hdl` key.
+struct TwinResident {
+    include_hdl: bool,
+    tycker: L13_namespace::bump_spine_iter::Tycker,
+}
+
+thread_local! {
+    static TWIN_RESIDENT: std::cell::RefCell<Option<TwinResident>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl ObserveSnapshot {
     /// Same rule as `Infer::hover_entry_at` / `Machine::hover_entry_at`: the
     /// smallest span on `path_id` containing `offset` wins.
@@ -1207,15 +1222,20 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
     }
 
-    /// Twin-engine observation pass for one file (stage 3a): replay the
-    /// prelude + this file's decls through the bump elaborator and snapshot
-    /// its hover/completion/inlay tables (path ids match the reference
-    /// loader and the builtin document registration, both sequential from 0).
-    /// Diagnostics, the global decl table and cross-file bookkeeping stay on
-    /// the reference engine — this pass only serves the interactive
-    /// hover / goto / completion / inlay surface.  A parse failure or twin
-    /// inference error drops any stale snapshot, mirroring the reference
-    /// path's "clear on parse error / keep previous symbols" split.
+    /// Twin-engine observation pass for one file (stage 3a/3b): elaborate
+    /// this file's decls against a **resident** prelude checkpoint and
+    /// snapshot the hover/completion/inlay tables (path ids match the
+    /// reference loader and the builtin document registration, both
+    /// sequential from 0).  Diagnostics, the global decl table and cross-file
+    /// bookkeeping stay on the reference engine — this pass only serves the
+    /// interactive hover / goto / completion / inlay surface.  A parse failure
+    /// or twin inference error drops any stale snapshot, mirroring the
+    /// reference path's "clear on parse error / keep previous symbols" split.
+    ///
+    /// The resident prelude lives in a thread-local (the twin `Bump` is
+    /// `!Sync`, and the LSP drains analysis jobs on one thread) keyed by
+    /// whether HDL is included; the first observation of a given shape pays
+    /// the one-time prelude prime, every later kick only the user-file cost.
     fn twin_observe(&self, uri: &Url, text: &str) {
         if self.engine != Engine::Twin {
             return;
@@ -1235,22 +1255,40 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let Some(prelude) = prelude_guard.as_ref() else {
             return;
         };
-        let mut t = L13_namespace::bump_spine_iter::Tycker::new();
-        match t.run_decls_with_prelude(prelude, &decls) {
-            Ok(_) => {
-                let snap = ObserveSnapshot {
-                    hover: t.hover_table().to_vec(),
-                    completion: t.completion_table().to_vec(),
-                    inlay: t.inlay_hint_table().to_vec(),
-                };
-                self.twin_tables.insert(uri_str, snap);
+        let include_hdl = prelude.counts.iter().any(|(n, _)| n == "hdl-core");
+        // The resident Tycker holds a `!Sync` bump; the analysis loop is
+        // single-threaded, so a thread-local (not a Backend field) is the
+        // right home.  Reuse is keyed by prelude shape (HDL or core-only).
+        TWIN_RESIDENT.with(|slot| {
+            let mut guard = slot.borrow_mut();
+            let stale = !matches!(guard.as_ref(), Some(r) if r.include_hdl == include_hdl);
+            if stale {
+                let mut t = L13_namespace::bump_spine_iter::Tycker::new();
+                if t.prime_resident(prelude).is_err() {
+                    *guard = None;
+                    self.twin_tables.remove(&uri_str);
+                    return;
+                }
+                *guard = Some(TwinResident { include_hdl, tycker: t });
             }
-            Err(_) => {
-                // Mirror the reference path: a failed pass keeps the previous
-                // symbols and drops this file's stale observation snapshot.
-                self.twin_tables.remove(&uri_str);
+            let resident = guard.as_mut().expect("resident just primed");
+            match resident.tycker.observe_user(prelude, &decls) {
+                Ok(()) => {
+                    let t = &resident.tycker;
+                    let snap = ObserveSnapshot {
+                        hover: t.hover_table().to_vec(),
+                        completion: t.completion_table().to_vec(),
+                        inlay: t.inlay_hint_table().to_vec(),
+                    };
+                    self.twin_tables.insert(uri_str.clone(), snap);
+                }
+                Err(_) => {
+                    // Mirror the reference path: a failed pass keeps the
+                    // previous symbols and drops this file's stale snapshot.
+                    self.twin_tables.remove(&uri_str);
+                }
             }
-        }
+        });
     }
 
     /// Process queued analysis jobs inline (latest-per-URI wins).
