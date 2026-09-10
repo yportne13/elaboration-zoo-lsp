@@ -5371,6 +5371,9 @@ pub(crate) struct Machine {
     pub(crate) hover_table: Vec<(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)>,
     pub(crate) completion_table: Vec<(crate::parser_lib::Span<()>, SmolStr)>,
     pub(crate) inlay_hint_table: Vec<(u32, String)>,
+    /// println 输出（span + 渲染串）：孪生自产 INFORMATION 诊断用
+    /// （参考版 `println_jobs` 的对位；每轮 `clear_round` 清空）。
+    pub(crate) println_spans: Vec<(crate::parser_lib::Span<()>, String)>,
     /// 观察面 push 总闸：prelude 装载段置 `false`（push 期渲染 + decl_reg
     /// 的 typ_pretty 渲染是本轮末 `clear_observation_tables` 要丢弃的纯死
     /// 工作——参考版 LSP 只在进程启动装一次 prelude，孪生每 kick 重放就
@@ -5410,6 +5413,7 @@ impl Machine {
             hover_table: Vec::new(),
             completion_table: Vec::new(),
             inlay_hint_table: Vec::new(),
+            println_spans: Vec::new(),
             observe: true,
         }
     }
@@ -5442,6 +5446,7 @@ impl Machine {
         self.hover_table.clear();
         self.completion_table.clear();
         self.inlay_hint_table.clear();
+        self.println_spans.clear();
     }
 
     // ── 观察面（与参考版 `Infer::push_hover` / `hover_entry_at` 同契约）──
@@ -6324,7 +6329,7 @@ impl Machine {
                 let mut val = self.eval(bump, cxt, cxt.env, tm);
                 if v_tag(val) == 7 {
                     if let XCell::SumCase { typ, .. } = v_xcell_of(val) {
-                        self.unify_catch(bump, cxt, *typ, x).map_err(|e| e.0.data)?;
+                        self.unify_catch(bump, cxt, *typ, x, empty_span(())).map_err(|e| e.0.data)?;
                         // 重 eval：首次 eval 在实例隐参（fresh meta）求解前
                         // 跑，闭包捕获冻结的未解 meta 环境——宽度参数会永远
                         // 悬空（typeclass instance Nat param bug）。以已解
@@ -6373,6 +6378,7 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: V,
         t_prime: V,
+        span: crate::parser_lib::Span<()>,
     ) -> Result<(), Error> {
         let mut trait_err: Option<String> = None;
         self.constraints.clear();
@@ -6383,36 +6389,32 @@ impl Machine {
             let tq = export(&self.symbol_table, tq0);
             let uq = export(&self.symbol_table, uq0);
             let names = types_names_list(cxt.types);
+            let msg = format!(
+                "can't unify for unsolved meta\n  expected: {}\n      find: {}",
+                pretty_tm(0, names.clone(), &tq),
+                pretty_tm(0, names, &uq),
+            );
             self.constraints.clear();
-            return Err(Error(
-                empty_span(format!(
-                    "can't unify for unsolved meta\n  expected: {}\n      find: {}",
-                    pretty_tm(0, names.clone(), &tq),
-                    pretty_tm(0, names, &uq),
-                )),
-                vec![],
-            ));
+            return Err(Error(span.map(|_| msg.clone()), vec![]));
         }
         self.constraints.clear();
         if ok {
             Ok(())
         } else {
             if let Some(e) = trait_err {
-                return Err(Error(empty_span(e), vec![]));
+                return Err(Error(span.map(|_| e.clone()), vec![]));
             }
             let tq0 = self.quote(bump, cxt, cxt.lvl, t);
             let uq0 = self.quote(bump, cxt, cxt.lvl, t_prime);
             let tq = export(&self.symbol_table, tq0);
             let uq = export(&self.symbol_table, uq0);
             let names = types_names_list(cxt.types);
-            Err(Error(
-                empty_span(format!(
-                    "can't unify\n  expected: {}\n      find: {}",
-                    pretty_tm(0, names.clone(), &tq),
-                    pretty_tm(0, names, &uq),
-                )),
-                vec![],
-            ))
+            let msg = format!(
+                "can't unify\n  expected: {}\n      find: {}",
+                pretty_tm(0, names.clone(), &tq),
+                pretty_tm(0, names, &uq),
+            );
+            Err(Error(span.map(|_| msg.clone()), vec![]))
         }
     }
 
@@ -6621,7 +6623,7 @@ impl Machine {
                     self.metas[m as usize] = MetaEntry::Solved(ty, mty);
                 }
                 _ => {
-                    self.unify_catch(bump, cxt, a, ty)?;
+                    self.unify_catch(bump, cxt, a, ty, t.to_span())?;
                 }
             }
             return Ok(tm);
@@ -6667,13 +6669,13 @@ impl Machine {
                     // 显式 Π 上的 icit 失配：回落 general
                     let (t2, tty) = self.infer_expr(bump, cxt, t)?;
                     let (t2, tty) = self.insert(bump, cxt, t2, tty)?;
-                    self.unify_catch(bump, cxt, a, tty)?;
+                    self.unify_catch(bump, cxt, a, tty, t.to_span())?;
                     Ok(t2)
                 }
             } else {
                 let (t2, tty) = self.infer_expr(bump, cxt, t)?;
                 let (t2, tty) = self.insert(bump, cxt, t2, tty)?;
-                self.unify_catch(bump, cxt, a, tty)?;
+                self.unify_catch(bump, cxt, a, tty, t.to_span())?;
                 Ok(t2)
             }
         } else if v_tag(a) == 4 && v_pi_of(a).icit == Icit::Impl {
@@ -6738,7 +6740,7 @@ impl Machine {
         } else {
             let (t2, tty) = self.infer_expr(bump, cxt, t)?;
             let (t2, tty) = self.insert(bump, cxt, t2, tty)?;
-            self.unify_catch(bump, cxt, a, tty)?;
+            self.unify_catch(bump, cxt, a, tty, t.to_span())?;
             Ok(t2)
         }
     }
@@ -7196,7 +7198,7 @@ impl Machine {
                 return Err(Error(t_span.map(|_| "".to_string()), vec![]));
             }
         }
-        self.unify_catch(bump, cxt, f1, f2).map(|_| clone_cxt(cxt))
+        self.unify_catch(bump, cxt, f1, f2, *t_span).map(|_| clone_cxt(cxt))
     }
 
     /// 「纯探测」统一执行器：进入前快照 `metas` 与 `trait_metas`，跑完闭包后
@@ -7500,7 +7502,7 @@ impl Machine {
                                 break;
                             }
                         }
-                        if self.unify_catch(bump, cxt, check_typ, typ_raw).is_ok() {
+                        if self.unify_catch(bump, cxt, check_typ, typ_raw, empty_span(())).is_ok() {
                             ns_result.push((ns.val, SmolStr::new(ns.type_name)));
                         }
                         self.metas = meta_snapshot;
@@ -8222,7 +8224,7 @@ impl Machine {
                         env: cxt.env,
                         body: cod_meta,
                     });
-                    self.unify_catch(bump, cxt, v_pi(cell), tty)?;
+                    self.unify_catch(bump, cxt, v_pi(cell), tty, t_span)?;
                     (a, &*cell)
                 };
                 let u_checked = self.check(bump, cxt, u, a)?;
@@ -8605,7 +8607,7 @@ impl Machine {
                     let names = types_names_list(cxt.types);
                     pretty_tm(0, names, &e)
                 };
-                Ok((DeclOut::Println(tm, t_pretty), clone_cxt(cxt)))
+                Ok((DeclOut::Println(tm, t.to_span(), t_pretty), clone_cxt(cxt)))
             }
             Decl::Enum {
                 is_trait,
@@ -10092,8 +10094,9 @@ fn chain_env<'a>(bump: &'a Bump, slots: &[V]) -> Env<'a> {
 /// elaborated 体（run 的 nf 输出用）。
 enum DeclOut<'a> {
     Def { name: &'a str },
-    /// println：elaboration 期即算好的 pretty 串（参考版 DeclTm::Println）。
-    Println(&'a Tm<'a>, String),
+    /// println：源码 span + elaboration 期即算好的 pretty 串（参考版
+    /// `DeclTm::Println(span, s, _)` 同形；span 供 LSP 的 INFORMATION 诊断）。
+    Println(&'a Tm<'a>, crate::parser_lib::Span<()>, String),
     Enum,
     Trait,
     TraitImpl,
@@ -12106,6 +12109,9 @@ pub(crate) struct Tycker {
     /// 阶段 3b 常驻 prelude 检查点（[`Tycker::prime_resident`] 置，
     /// [`Tycker::observe_user`] 消费；`bump.reset()` 的任何路径清空）。
     resident: Option<Resident>,
+    /// 用户段累积错误（[`Tycker::observe_user`] 逐 decl 收集，不早退）——
+    /// 孪生自产诊断用（参考版 `Infer.accumulated_errors` 等的对位）。
+    user_errors: Vec<Error>,
 }
 
 impl Tycker {
@@ -12114,7 +12120,13 @@ impl Tycker {
             bump: Bump::with_capacity(1 << 20),
             machine: Machine::new(),
             resident: None,
+            user_errors: Vec::new(),
         }
+    }
+
+    /// 本轮用户段累积的错误（每 kick `observe_user` 前清空）。
+    pub(crate) fn user_errors(&self) -> &[Error] {
+        &self.user_errors
     }
 
     /// **阶段 3b 常驻入口**：装载 prelude 并固化检查点。之后多次
@@ -12180,13 +12192,18 @@ impl Tycker {
     /// **阶段 3b 常驻用户段**：从检查点恢复 machine 稳态，用常驻 prelude
     /// 上下文推进 `user_ast`，观察三表落 `machine`（调用方经
     /// [`Tycker::hover_table`] 等读取）。bump 超 [`RESIDENT_BUMP_LIMIT`] 时
-    /// 内部重新 prime。返回 `Ok(())`；本轮 println 输出丢弃（LSP 双引擎
-    /// 口径下 println 诊断走参考版）。
+    /// 内部重新 prime。
+    ///
+    /// **错误不早退**：单 decl 失败记入 [`Tycker::user_errors`] 并跳过该
+    /// decl 的 cxt 推进（参考版 `elaborate` 逐 decl `err_collect` 同口径），
+    /// 这样后续 decl 仍被检查、诊断能列全。只有 prelude prime 失败才是
+    /// `Err`（调用方据此降级）。
     pub(crate) fn observe_user(
         &mut self,
         prelude: &super::PreludeParse,
         user_ast: &[Decl],
     ) -> Result<(), Error> {
+        self.user_errors.clear();
         let over = match &self.resident {
             Some(r) => self.bump.allocated_bytes().saturating_sub(r.base_bytes) > RESIDENT_BUMP_LIMIT,
             None => true,
@@ -12215,9 +12232,19 @@ impl Tycker {
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
         for (i, d) in user_ast.iter().enumerate() {
-            cxt = Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, &[], &mut sink)?;
+            match Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, &[], &mut sink) {
+                Ok(nc) => cxt = nc,
+                // Keep the previous cxt for subsequent decls (reference
+                // `elaborate` keeps `local_cxt` on error).
+                Err(e) => self.user_errors.push(e),
+            }
         }
         Ok(())
+    }
+
+    /// 本轮用户段的 println 输出（span + 渲染串）——孪生 INFORMATION 诊断。
+    pub(crate) fn println_spans(&self) -> &[(crate::parser_lib::Span<()>, String)] {
+        &self.machine.println_spans
     }
 
     // ── 观察面访问器（`run_decls*` 返回后读取本轮快照；契约与参考版 `Infer`
@@ -12331,8 +12358,11 @@ impl Tycker {
                 }
             }
         }
-        if let DeclOut::Println(_, out_s) = out {
+        if let DeclOut::Println(_, span, out_s) = out {
             // elaboration 期即算好的 pretty 串（参考版 DeclTm::Println）
+            if machine.observe {
+                machine.println_spans.push((span, out_s.clone()));
+            }
             *ret += &out_s;
             *ret += "\n";
         }
@@ -13228,6 +13258,64 @@ def d0 : Nat -> Nat = n => succ n
         }
         eprintln!("[SPLIT] prelude-only {best_p:.1} ms | prelude+file {best_full:.1} ms | user ~{:.1} ms",
             best_full - best_p);
+    }
+
+    /// **孪生自产诊断的互检**：错误语料上孪生 `observe_user` 累积的
+    /// (span, message) 多重集必须与参考版 LSP `elaborate` 口径收集的
+    /// ERROR 诊断一致（错误 span 保真 + 逐 decl 不早退）。
+    #[test]
+    fn twin_user_errors_match_reference_diagnostics() {
+        let corpus = [
+            // 单错：unify
+            "def foo: Nat = true\n",
+            // 单错：未绑定名
+            "def qux: Nat = nope\n",
+            // 多错：两个 decl 各自错（验证不早退）
+            "def a: Nat = true\ndef b: Boolean = 1\n",
+            // 中间 decl 错、后续仍应被检查
+            "def a: Nat = zero\ndef bad: Nat = true\ndef c: Nat = succ zero\n",
+            // 调用处实参类型错
+            "def inc(n: Nat): Nat = succ n\ndef use: Nat = inc true\n",
+            // 字面量类型错
+            "def s: String = 42\n",
+            // 错误 + 正确混合
+            "def good: Nat = zero\ndef bad2: Boolean = zero\n",
+        ];
+        let pre = crate::L13_namespace::parse_prelude_files(&core_files());
+        assert_eq!(pre.failed, None);
+
+        for src in corpus {
+            let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+                &crate::L13_namespace::preprocess(src), 880, &pre.macros,
+            ).expect("parse");
+
+            // twin: observe_user accumulates, never early-returns.
+            let mut t = Tycker::new();
+            t.prime_resident(&pre).expect("prime");
+            t.observe_user(&pre, &decls).expect("observe");
+            let mut twin: Vec<(u32, u32, u32, String)> = t
+                .user_errors()
+                .iter()
+                .map(|e| (e.0.start_offset, e.0.end_offset, e.0.path_id, e.0.data.clone()))
+                .collect();
+            twin.sort();
+
+            // reference: mirror `lib.rs::elaborate`'s ERROR collection.
+            let (mut infer, mut rcxt, _m) =
+                crate::L13_namespace::clone_prelude_state(false).expect("ref load");
+            let mut refs: Vec<(u32, u32, u32, String)> = Vec::new();
+            for d in &decls {
+                match infer.infer(&rcxt, d.clone()) {
+                    Ok((_, _, nc)) => rcxt = nc,
+                    Err(e) => refs.push((e.0.start_offset, e.0.end_offset, e.0.path_id, e.0.data.clone())),
+                }
+                for e in infer.accumulated_errors.drain(..) {
+                    refs.push((e.0.start_offset, e.0.end_offset, e.0.path_id, e.0.data.clone()));
+                }
+            }
+            refs.sort();
+            assert_eq!(twin, refs, "diagnostic mismatch for:\n{src}");
+        }
     }
 
     /// **阶段 3b 等价性验收**：常驻检查点（`prime_resident` 一次 +
