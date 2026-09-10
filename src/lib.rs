@@ -209,6 +209,67 @@ struct AnalysisJob {
     version: Option<i32>,
 }
 
+/// Which elaboration engine backs the LSP analysis path.
+///
+/// `Reference` is the original `Infer`/`Cxt` engine (the correctness
+/// baseline).  `Twin` is the bump-arena elaborator in
+/// `L13_namespace::bump_spine_iter`, which is ~1.8x faster on the real HDL
+/// prelude (docs/lsp-twin-wiring-2026-09.md §0).  The switch is opt-in via
+/// `TYPORT_LSP_ENGINE=twin` (or `reference`); the default stays `Reference`
+/// so the twelve LSP guard suites and the production behavior are unchanged
+/// until the twin path reaches parity.
+///
+/// Wiring status (stage 3a/4 of the wiring doc) is tracked in
+/// `docs/lsp-twin-wiring-2026-09.md §4`; the twin path currently serves the
+/// per-file observation surface (hover / completion / inlay / goto) with the
+/// prelude replayed per kick, while cross-file symbol merging, styled
+/// diagnostics and the deferred-println phase still run on the reference
+/// engine.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Engine {
+    Reference,
+    Twin,
+}
+
+impl Engine {
+    /// Read the engine from the environment (`TYPORT_LSP_ENGINE`).  Anything
+    /// other than the exact string `twin` (including unset/empty) selects the
+    /// reference engine, so a typo can never silently switch engines.
+    pub fn from_env() -> Engine {
+        match std::env::var("TYPORT_LSP_ENGINE") {
+            Ok(v) if v.eq_ignore_ascii_case("twin") => Engine::Twin,
+            _ => Engine::Reference,
+        }
+    }
+}
+
+/// Owned, engine-independent observation snapshot for one file (stage-0
+/// contract of the wiring doc): the three tables the hover / goto /
+/// completion / inlay handlers read, stored as owned strings/spans so the
+/// twin's bump arena may die before the request arrives.
+#[derive(Clone, Default)]
+pub struct ObserveSnapshot {
+    pub hover: Vec<(Span<()>, Span<()>, String)>,
+    pub completion: Vec<(Span<()>, SmolStr)>,
+    pub inlay: Vec<(u32, String)>,
+}
+
+impl ObserveSnapshot {
+    /// Same rule as `Infer::hover_entry_at` / `Machine::hover_entry_at`: the
+    /// smallest span on `path_id` containing `offset` wins.
+    pub fn hover_entry_at(
+        &self,
+        path_id: u32,
+        offset: usize,
+    ) -> Option<&(Span<()>, Span<()>, String)> {
+        self.hover
+            .iter()
+            .filter(|x| x.0.path_id == path_id)
+            .filter(|x| x.0.contains(offset))
+            .min_by_key(|x| x.0.end_offset - x.0.start_offset)
+    }
+}
+
 // 3. 修改 Backend 结构
 pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub client: C,
@@ -219,6 +280,16 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     /// Full document text for incremental sync (maintained on the LSP server thread)
     pub document_buffers: Mutex<HashMap<String, String>>,
     pub hover_table: DashMap<String, Infer>,
+    /// Twin-engine observation snapshots (per-file hover/completion/inlay),
+    /// populated only when `engine == Engine::Twin`.  Kept separate from
+    /// `hover_table` so the reference path stays byte-identical and the guard
+    /// suites that read `Infer` internals keep compiling.
+    pub twin_tables: DashMap<String, ObserveSnapshot>,
+    /// Which elaborator backs the analysis path (see [`Engine`]).
+    pub engine: Engine,
+    /// Parsed prelude decls for the twin engine (shared, parse-once per
+    /// process).  `None` until `load_prelude` runs in twin mode.
+    twin_prelude: Mutex<Option<std::rc::Rc<L13_namespace::PreludeParse>>>,
     pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String>>>>>,
     /// Exported macros accumulated across all files (keyed by macro name)
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
@@ -262,6 +333,11 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
 
 impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     pub fn new(client: C) -> Arc<Self> {
+        Self::new_with_engine(client, Engine::from_env())
+    }
+
+    /// Construct a Backend with an explicit engine (tests / embedding).
+    pub fn new_with_engine(client: C, engine: Engine) -> Arc<Self> {
         let ast_map = Default::default();
         let type_map = Default::default();
         let document_map = Default::default();
@@ -283,6 +359,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             document_id,
             document_buffers: Mutex::new(HashMap::new()),
             hover_table,
+            twin_tables: DashMap::new(),
+            engine,
+            twin_prelude: Mutex::new(None),
             quickfix_map: DashMap::new(),
             exported_macros: DashMap::new(),
             file_macros: DashMap::new(),
