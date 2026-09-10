@@ -1754,7 +1754,8 @@ enum UItem<'a> {
 }
 
 /// 链（或裸单元）是否卡住投影 Obj 头——unify 的位相等捷径对它关闭
-/// （参考版无 `(Obj, Obj)` 臂，同单元也须走 `_` → Err）。
+/// （同单元 Obj 也走 `(Obj, Obj)` 合同臂比接收者，不做字面自反放行——
+/// 与参考版守卫后的语义一致）。
 #[inline]
 fn is_objheaded(spine: &Spine, v: V) -> bool {
     match v_tag(v) {
@@ -1892,8 +1893,8 @@ fn unify_sp_lockstep<'a>(
             (e.f, e.a)
         };
         // 位相等后缀：实参对免比（tag 7 除外）；函数部分对仍须入栈。
-        // Obj 头的链（tag 2 头 = Obj 单元）同样不免——参考版无 (Obj, Obj)
-        // 臂，交回完整分派后走 `_` → Err。
+        // Obj 头的链（tag 2 头 = Obj 单元）同样不免——交回完整分派后走
+        // `(Obj, Obj)` 合同臂比接收者。
         let skip1 = a1.0 == a2.0 && v_tag(a1) != 7 && !is_objheaded(spine, a1);
         if skip1 {
             if f1.0 != f2.0 {
@@ -2066,7 +2067,7 @@ fn unify_iter<'a>(
             UItem::Pair(l, t, u) => (l, t, u),
         };
         // 位相等：同一值。tag 7 与 Obj 头链例外（见函数注释——参考版对
-        // 字面量无自反性、卡住投影走 `_` → Err）
+        // 字面量无自反性；卡住投影走 `(Obj, Obj)` 合同臂比接收者）
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
             continue;
         }
@@ -2149,8 +2150,7 @@ fn unify_iter<'a>(
             // 同头判定：位相等（同变量 / 同 meta / 同卡住投影单元）
             if hd1.0 == hd2.0 {
                 if !is_objheaded(spine, hd1) {
-                    // 同头刚性/卡住投影以外的头：逐实参比较（lockstep，长度
-                    // 失配即败）；Obj 头交回 `_`（参考版无 (Obj,Obj) 臂）
+                    // 同头刚性：逐实参比较（lockstep，长度失配即败）
                     if memo_on {
                         stack.push(UItem::Store((t.0, u.0)));
                     }
@@ -2159,7 +2159,27 @@ fn unify_iter<'a>(
                     }
                     continue;
                 }
-                return false; // 同单元 Obj 链：参考版 `_` → Err
+                // 同头 Obj 链：(Obj,Obj) 合同（参考版新臂，L08 评审修复回移）
+                // ——比接收者，再比实参（lockstep）。接收者住在头单元里、
+                // lockstep 看不见，单独入栈。
+                if let (
+                    XCell::Obj { val: o1, name: n1 },
+                    XCell::Obj { val: o2, name: n2 },
+                ) = (v_xcell_of(hd1), v_xcell_of(hd2))
+                {
+                    if n1 != n2 {
+                        return false; // 防御（同头单元名字必相同）
+                    }
+                    if memo_on {
+                        stack.push(UItem::Store((t.0, u.0)));
+                    }
+                    stack.push(UItem::Pair(l, *o1, *o2));
+                    if !unify_sp_lockstep(spine, stack, l, h1, h2) {
+                        return false;
+                    }
+                    continue;
+                }
+                return false; // 防御（is_objheaded 已保证 Obj 头）
             }
             // 异头：一侧 flex 头（f1/f2 已排除双 flex）→ 该侧 solve（参考
             // 臂 9/10 的链形态）；双刚性异级 / Obj 头组合 → 失配。
@@ -2325,6 +2345,24 @@ fn unify_iter<'a>(
             || (v_tag(t) == 7 && matches!(v_xcell_of(t), XCell::Prim) && v_tag(u) == 6)
         {
             continue;
+        }
+        // —— (Obj, Obj) 合同（参考版新臂，L08 8988f7c 评审修复回移）：
+        // 字段名相同 ⇒ 比接收者（裸单元无实参，spine 空 vs 空即完）。
+        // 带实参的 Obj 链在下方链分派的同头分支处理（接收者 + lockstep）。
+        // 位相等捷径对 Obj 仍关闭（同单元也走本臂比接收者，与参考版一致）。
+        // ——
+        if v_tag(t) == 7 && v_tag(u) == 7 {
+            let (xt, xu) = (v_xcell_of(t), v_xcell_of(u));
+            if let (XCell::Obj { val: o1, name: n1 }, XCell::Obj { val: o2, name: n2 }) = (xt, xu) {
+                if n1 != n2 {
+                    return false;
+                }
+                if memo_on {
+                    stack.push(UItem::Store((t.0, u.0)));
+                }
+                stack.push(UItem::Pair(l, *o1, *o2));
+                continue;
+            }
         }
         // —— Sum/Sum（参考臂 13）：同名即逐参数（含索引）值合一；zip 语义
         // （参数数不等取 min——参考版同款）；异名失配 ——
@@ -4362,8 +4400,11 @@ impl Machine {
                 if v_tag(a_f) == 7 {
                     if let XCell::Sum { params, cases, .. } = v_xcell_of(a_f) {
                         // struct：单 case 且名字带 `.mk` → 剥 mk 的构造子
-                        // 类型链取字段类型（**U(0) 占位怪癖保留**——参考版
-                        // TODO 注释原样：显式 binder 以 U(0) 实例化）
+                        // 类型链取字段类型。隐式 binder 用头部 Sum 实参实例化
+                        // （只取 Impl——显式索引不占槽）；**显式字段 binder 用
+                        // 接收者的卡住投影实例化**（eval(Obj(接收者项, 字段名))，
+                        // L08 评审修复回移——旧 U(0) 占位会让依赖在前字段的
+                        // 在后字段出现在检查位时假拒，与参考版同步）
                         let mut c: Option<Vec<(&str, V)>> = None;
                         if cases.len() == 1 && cases[0].contains(".mk") {
                             let case = cases[0];
@@ -4372,8 +4413,12 @@ impl Machine {
                             {
                                 let mut ret: Vec<(&str, V)> = vec![];
                                 let mut typ = case_typ;
-                                let mut param: Vec<&SumParamV<'_>> =
-                                    params.iter().collect();
+                                // struct 隐式参数的实例值（声明序）
+                                let mut param: Vec<V> = params
+                                    .iter()
+                                    .filter(|p| p.icit == Icit::Impl)
+                                    .map(|p| p.val)
+                                    .collect();
                                 param.reverse();
                                 loop {
                                     let typ_f = self.force_v(bump, typ);
@@ -4381,14 +4426,18 @@ impl Machine {
                                         let p = v_pi_of(typ_f);
                                         if p.icit == Icit::Expl {
                                             ret.push((p.name, p.dom));
+                                            let val = self.eval(
+                                                bump,
+                                                cxt.env,
+                                                bump.alloc(Tm::Obj(tm, p.name)),
+                                            );
                                             typ = {
-                                                let env = env_ext(bump, p.env, v_u(0));
+                                                let env = env_ext(bump, p.env, val);
                                                 self.eval(bump, env, p.body)
                                             };
                                         } else {
                                             let val = param
                                                 .pop()
-                                                .map(|x| x.val)
                                                 .unwrap_or_else(v_u0);
                                             ret.push((p.name, p.dom));
                                             typ = {

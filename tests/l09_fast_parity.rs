@@ -993,3 +993,21 @@ fn steady_state_reuse() {
     assert_eq!(r1, r2, "稳态两轮不一致");
     assert_eq!(r1, fresh, "稳态与一次性不一致");
 }
+
+// 连续性审计 R2（2026-09）：L08 8988f7c「剥链精确化 + (Obj,Obj) 合同臂」回移探针
+// --------------------------------------------------------------------------------
+
+/// 依赖在前字段的在后字段（`proof : Eq witness two`）：剥链以接收者
+/// **卡住投影**实例化显式字段 binder——旧 U(0) 占位使 `e.proof` 的类型
+/// 成为 `Eq (U 0) two`，在检查位与 `Eq e.witness two` 合一失败（假拒）；
+/// 精确化后参数槽是 stuck Obj 对，`(Obj,Obj)` 合同臂按接收者判等。
+/// 断言两版 Ok + parity（修复前两版一致 Err，探针即失败）。
+#[test]
+fn parity_struct_dependent_field_projection() {
+    let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Eq[A](x: A, y: A) {\n    refl(a: A) -> Eq a a\n}\ndef two = succ (succ zero)\nstruct Ex {\n    witness: Nat\n    proof: Eq witness two\n}\ndef p = Ex.mk two (refl two)\ndef get_proof(e: Ex): Eq e.witness two = e.proof\nprintln (get_proof p)\n";
+    assert!(
+        run_basic(src).is_ok(),
+        "依赖字段投影在检查位假拒（剥链 U(0) 占位回退？），src:\n{src}"
+    );
+    assert_parity(src);
+}

@@ -455,15 +455,30 @@ impl Infer {
                                     let (_, case_typ) = self.infer_expr(cxt, Raw::Var(case.clone()))?;
                                     let mut ret = vec![];
                                     let mut typ = case_typ;
-                                    let mut param = params.clone();
+                                    // struct 隐式参数的实例值（按声明序；只取
+                                    // Impl——显式索引不占槽，与 L08 同款）
+                                    let mut param: Vec<_> = params
+                                        .iter()
+                                        .filter(|(_, _, _, i)| *i == Icit::Impl)
+                                        .map(|(_, v, _, _)| v.clone())
+                                        .collect();
                                     param.reverse();
-                                    while let Val::Pi(name, icit, ty, closure) = typ {
+                                    // 剥 mk 构造子类型链取字段类型。隐式 binder 用
+                                    // 头部 Sum 实参实例化；**显式字段 binder 用接收者
+                                    // 的卡住投影实例化**（eval(Obj(接收者项, 字段名))，
+                                    // L08 评审修复回移——旧实现以 U(0) 占位会让依赖在
+                                    // 前字段的在后字段出现在检查位时假拒：
+                                    // `P e.witness` vs `P (U 0)` 合一失败）。
+                                    while let Val::Pi(name, icit, ty, closure) = self.force(typ.clone()) {
                                         if icit == Icit::Expl {
+                                            let val = self.eval(
+                                                &cxt.env,
+                                                Tm::Obj(Box::new(tm.clone()), name.clone()),
+                                            );
                                             ret.push((name, *ty));
-                                            typ = self.closure_apply(&closure, Val::U(0));//TODO:not Val::U(0)
+                                            typ = self.closure_apply(&closure, val);
                                         } else {
                                             let val = param.pop()
-                                                .map(|x| x.1)
                                                 .unwrap_or(Val::U(0));
                                             ret.push((name, *ty));
                                             typ = self.closure_apply(&closure, val);

@@ -548,6 +548,15 @@ impl Infer {
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime)
             }
+            // 卡住的投影：字段名相同即比接收者与卡住期实参 spine（合同规则，
+            // L08 8988f7c 评审修复回移）。剥链精确化（elaboration 的 Obj 臂以
+            // 接收者卡住投影实例化显式依赖字段）之后，`e.witness ≡ e.witness`
+            // 这类形态成为可达；无本臂则落兜底 Err 误报 can't unify。
+            // `Obj` vs 其它仍按失配处理（兜底臂）。
+            (Val::Obj(o1, f1, sp1), Val::Obj(o2, f2, sp2)) if f1.data == f2.data => {
+                self.unify(l, cxt, (**o1).clone(), (**o2).clone())?;
+                self.unify_sp(l, cxt, sp1, sp2)
+            }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
                 self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
             }

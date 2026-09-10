@@ -795,6 +795,8 @@ impl Infer {
                 let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x, t_span)?;
                 if CANONICAL {
+                    // 顶层合一入口：充值 fuel 池（L08 前向传播的护栏纪律）
+                    self.refuel();
                     self.unify(cxt.lvl, cxt, &a, &inferred_type, 100).map_err(|e| {
                         let err = match e {
                             super::UnifyError::Basic | super::UnifyError::Stuck => format!(
@@ -905,6 +907,9 @@ impl Infer {
             self.push_hover(cxt, node.name.to_span(), node.def_span, &node.vty);
         }
         let result = if CANONICAL {
+            // 顶层合一入口：充值 fuel 池（L08 前向传播的护栏纪律；
+            // 构造子链重建后的终态 unify，与 check 通用臂同款）
+            self.refuel();
             self.unify(cxt.lvl, cxt, a, &ret, 100).map_err(|e| {
                 let err = match e {
                     super::UnifyError::Basic | super::UnifyError::Stuck => format!(

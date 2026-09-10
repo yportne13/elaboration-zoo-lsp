@@ -280,8 +280,14 @@ impl Synth {
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if x1 == x2 && sp1.is_empty() && sp2.is_empty() => {
                 true
             }
-            // Rigid var in instance pattern (empty spine) - bind to ground goal value
-            (_, Val::Rigid(x, sp)) | (Val::Rigid(x, sp), _) if sp.is_empty() => {
+            // Rigid var in instance pattern (empty spine) - bind to ground goal value.
+            // 单向一阶匹配（对齐 L10/L11 的 `match_typ`，d4c05ea 同族）：
+            // 只允许**实例侧** rigid 变量被绑定；目标侧的裸 rigid（调用方的
+            // 泛型变量）不得被实例构造子"吃掉"——否则
+            // `impl[T] Say for List[T]` 会把泛型目标 `Say[T']` 假匹配成
+            // List 实例（目标 rigid 被绑成 `List[..]` 而静默选错实例）。
+            // 旧实现的 `| (Val::Rigid(x, sp), _)` 备选即犯此病，已删。
+            (_, Val::Rigid(x, sp)) if sp.is_empty() => {
                 if let Some(existing) = subst.get(&x.0) {
                     // Already bound - check structural equality with existing binding
                     Self::vals_eq_ground(a, existing)

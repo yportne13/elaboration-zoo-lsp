@@ -1143,6 +1143,12 @@ pub struct PrintlnJob {
 /// only copies it out.
 pub type HoverEntry = (Span<()>, Span<()>, String);
 
+/// unify/force 的共享递归 fuel 池容量（L08 护栏前向传播：L09 重写时丢失，
+/// L10/L11/L12 已回传，L13 同步）。`unify(.., fuel)` 参数只护 Decl 展开
+/// 重试 / Match 归约臂，本池补齐 `force` meta 展开与 unify 结构递归的
+/// 深度防护（solve 无跨 meta occurs check，解链成环时防无界递归栈溢出）。
+const UNIFY_FUEL: u32 = 4096;
+
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
@@ -1202,6 +1208,11 @@ pub struct Infer {
     /// declaration (outside any module tree) and never re-run, silently
     /// dropping HDL statements in parameterless hardware `def` bodies.
     pub def_replay_memo: Rc<std::sync::RwLock<HashMap<SmolStr, bool>>>,
+    /// unify/force 共享 fuel 池（L08/L10-L12 同款）：外层入口（`nf`/
+    /// `unify_catch`/canonical 探测点/check 的顶层 unify）充值；`unify`
+    /// 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按不可合一失败、
+    /// force 停止展开按未解处理。
+    unify_fuel: std::cell::Cell<u32>,
 }
 
 impl Clone for Infer {
@@ -1224,6 +1235,8 @@ impl Clone for Infer {
             defer_println: self.defer_println,
             println_jobs: Vec::new(),
             def_replay_memo: self.def_replay_memo.clone(),
+            // 快照拿全新燃料池：fuel 是每轮 unify 的递归护栏，不跨快照继承
+            unify_fuel: std::cell::Cell::new(self.unify_fuel.get()),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -1869,7 +1882,22 @@ impl Infer {
             defer_println: false,
             println_jobs: vec![],
             def_replay_memo: Default::default(),
+            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
         }
+    }
+
+    /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
+    fn burn_fuel(&self) -> bool {
+        let f = self.unify_fuel.get();
+        if f == 0 {
+            return false;
+        }
+        self.unify_fuel.set(f - 1);
+        true
+    }
+    /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
+    fn refuel(&self) {
+        self.unify_fuel.set(UNIFY_FUEL);
     }
 
     pub fn meta_len(&self) -> usize { self.meta.len() }
@@ -2329,9 +2357,12 @@ impl Infer {
                 // back), so walks through this arm are never cached.
                 force_taint_bump();
                 match self.lookup_meta(*m) {
-                    MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl,
+                    // 展开烧 fuel（L08 前向传播）：solve 无跨 meta occurs
+                    // check，解链成环时展开会无限递归；池空停止展开、按
+                    // 未解处理（落入下方兜底臂）
+                    MetaEntry::Solved(t_solved, _) if self.burn_fuel() => self.force(decl, &self.v_app_sp(decl,
                  t_solved.clone(), sp)),
-                    MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
+                    _ => Val::Flex(*m, sp.clone()).into(),
                 }
             }
             // A native Nat is already WHNF (definitionally `succ^n zero`
@@ -3286,6 +3317,8 @@ impl Infer {
 
     pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
         let _g = prof_enter(&FUNC_PROF.nf.0, &FUNC_PROF.nf.1);
+        // quote → eval 会 force；一次 nf 充值 fuel 防循环解（L08 同款）
+        self.refuel();
         let l = Lvl(env.len() as u32);
         self.quote(decl, l, &self.eval(decl, env, t))
     }
@@ -3296,6 +3329,7 @@ impl Infer {
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
         self.meta_contrains.clear();
+        self.refuel();
         let ret = self.unify(cxt.lvl, cxt, t, t_prime, 100)
             .map_err(|e| {
                 /*Error::CantUnify(

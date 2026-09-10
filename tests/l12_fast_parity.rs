@@ -468,7 +468,14 @@ fn probe_prune_ty_mask_reversal_parity() {
 /// `(_, Rigid) | (Rigid, _)` 允许**目标侧** rigid 被实例构造子绑定
 /// （`f two` 会错选 List 实例答 `"list"`），与本函数文档注释宣称的单向
 /// 语义相悖；改为仅实例侧绑定（对齐 L10/L11 的 `match_typ`）后无实例
-/// → Err。参考/快版共用同一 `Synth`，判定必须一致。
+/// → Err。参考/快版共用同一 `Synth`，Ok/Err 判定必须一致。
+///
+/// 口径说明：本源含 impl 实例登记，属文件头「trait/impl 实例合成演示源
+/// 在快版上分叉、整体剔除」的同类——快版经 canonical-Val 桥（`v_to_ref_val`）
+/// 的 impl 链路 Err 文案与参考版不同构（参考版：`has no object`；快版：
+/// 上游宇宙检查的 Err），故与 `probe_solve_multi_trait_recoverable_parity`
+/// 同款只钉 **Ok/Err 判定一致**（快版 trait_wrap 的 `mk_no_object_err`
+/// 兜底本身与 L11 逐字一致，见 `bump_spine_iter.rs` 的 `mk_no_object_err`）。
 #[test]
 fn synth_rigid_generic_not_falsely_matched() {
     let src = r#"
@@ -496,10 +503,20 @@ def two = succ (succ zero)
 
 println (f two)
 "#;
+    let b = unpanic(|| run_basic(src));
+    let f = unpanic(|| run_fast(src));
+    assert!(b.is_ok() && f.is_ok(), "两版都不应 panic");
+    let (b, f) = (b.unwrap(), f.unwrap());
     assert!(
-        run_basic(src).is_err(),
-        "泛型 T 不得被假匹配成 List；basic={:?}",
-        run_basic(src)
+        b.is_err(),
+        "参考版：泛型 T 不得被假匹配成 List；basic={:?}",
+        b.as_ref().err()
     );
-    assert_parity(src);
+    assert_eq!(
+        b.is_ok(),
+        f.is_ok(),
+        "泛型假匹配拒绝的 Ok/Err 判定两版应一致：basic={:?} fast={:?}",
+        b.as_ref().err(),
+        f.as_ref().err(),
+    );
 }

@@ -5234,18 +5234,16 @@ impl Machine {
                     .map(|&(_, ty)| ty)
                     .or_else(|| decls.get(x.data.as_str()).map(|e| e.ty));
                 if let Some(ty) = ty {
-                    // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
-                    // 头是 Meta）放行
                     let v = self.force_v(bump, decls, ty);
                     if v_tag(v) == 3 {
                         return Ok(());
                     }
-                    let is_flex = match v_tag(v) {
-                        5 => true,
-                        2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
-                        _ => false,
-                    };
-                    if is_flex {
+                    // force 已展开已解 meta；未解 flex（裸 tag 5，或任意
+                    // spine 的 meta 头链）放行——参考版 `Val::Flex(_, _) =>
+                    // Ok(())` 对 spine 形状不设限，这里用 is_flex 走 spine_head
+                    // 判头（只看栈顶槽的 f 会把 ≥2 实参的 flex 链误判成非
+                    // flex——L07 已修，2026-09 连续性审计回移）
+                    if is_flex(&self.spine, v) {
                         Ok(())
                     } else {
                         Err(Error(format!("expected universe, got V({})", v.0)))

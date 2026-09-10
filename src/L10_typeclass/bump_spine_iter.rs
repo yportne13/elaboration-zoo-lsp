@@ -645,6 +645,21 @@ fn project<'a>(v: V, name: &str) -> Option<V> {
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `v_applicable` 同款，按 `vapp1` 的
+/// panic 集裁剪——L10 无 Decl）：λ 值以**类型身份**流入 unify 时不做 η
+/// （L11 的触发器是 `get_global` 取 def 登记值；L10 无该路径，属防御性
+/// 对齐）。tag 7 仅 Obj 可（`Lit`/`Prim`/`Sum`/`SumCase`/`Match` →
+/// panic）；tag 3(U)/4(Pi)/6(Lit) 不可；其余（Rigid 0 / Clo 1 / 链 2 /
+/// Flex 5）可。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
+        _ => true,
+    }
+}
+
 /// 独立应用（eval_iter 之外的 v_app：force 的解值展开等）。λ → β；其余
 /// 形态逐项对齐参考版 v_app：Rigid/Flex（裸或链）与卡住投影 Obj → spine
 /// 压栈；字面量 / Prim / U / Π / LiteralType / Sum / SumCase / 卡住 match
@@ -2280,9 +2295,10 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链；卡住
-        // match / 字面量等形态的应用 panic——参考版 v_app 同款）
-        if v_tag(u) == 1 {
+        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链）。可应用
+        // 性守卫（参考版 `v_applicable` 同款）：卡住 match / 字面量 / U / Π
+        // 等形态不做 η，落后续臂 → 最终 false（参考版同处 Err），不再 panic。
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2297,7 +2313,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -5135,6 +5151,12 @@ impl Machine {
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
+                // 参考版 Def 臂：检查后 `solve_multi_trait(0)`（L11 快版同
+                // 款对齐；此前 L10 快版漏拷——def 尾未解 trait meta 不在定
+                // 义点求解/报错，与参考版报错时机分叉）。求解失败为可恢复
+                // Err，文案 = 参考版 `UnifyError::Trait(msg)` 的 Debug 形态。
+                self.solve_multi_trait_ref(bump, &fake, 0)
+                    .map_err(|e| Error(name.to_span().map(|_| format!("Trait({:?})", e))))?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
                 let out = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);

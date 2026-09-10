@@ -911,6 +911,11 @@ impl Infer {
 
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>, fuel: u32) -> Result<(), UnifyError> {
         let _g = super::prof_enter(&super::FUNC_PROF.unify.0, &super::FUNC_PROF.unify.1);
+        // 递归深度防护（L08 前向传播，与 `fuel` 参数互补）：fuel 耗尽按
+        // 不可合一失败
+        if !self.burn_fuel() {
+            return Err(UnifyError::Basic);
+        }
         //println!("unify: {t:?} {u:?}");
         let t = self.force(&cxt.decl, t);
         let u = self.force(&cxt.decl, u);

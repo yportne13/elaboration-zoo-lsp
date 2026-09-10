@@ -7,6 +7,21 @@ use super::{
 
 use std::{collections::{HashMap, HashSet}, rc::Rc};
 
+/// η 展开的可应用性守卫（L11 `v_applicable` 同款，按 L10 的 `v_app` 形态
+/// 裁剪——L10 无 `Val::Decl`）：只有中性值（Flex/Rigid/Obj 头）能被 η 新
+/// 变量应用——这正是 `Infer::v_app` 能处理的全部形态（其余会命中
+/// `panic!("impossible apply")`）。λ 值以**类型身份**流入 unify 时
+/// （L11 的触发器是 `get_global` 取 def 登记值；L10 无该路径，属防御性
+/// 对齐）对字面量 / U / Π / Sum 做 η 应用会 panic。改为直接判失败（λ 与
+/// 非函数值的比较无从展开，最小惊讶）；快版 `unify_iter` 的 η 臂同款
+/// 守卫（`vapp_ok`）。
+fn v_applicable(v: &Val) -> bool {
+    matches!(
+        v,
+        Val::Flex(..) | Val::Rigid(..) | Val::Obj(..)
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
@@ -619,13 +634,13 @@ impl Infer {
                 &self.closure_apply(t, Val::vvar(l).into()),
                 &self.closure_apply(t_prime, Val::vvar(l).into()),
             ),
-            (_, Val::Lam(_, i, t_prime)) => self.unify(
+            (_, Val::Lam(_, i, t_prime)) if v_applicable(&t) => self.unify(
                 l + 1,
                 cxt,
                 &self.v_app(&t, Val::vvar(l).into(), *i),
                 &self.closure_apply(t_prime, Val::vvar(l).into()),
             ),
-            (Val::Lam(_, i, t), _) => self.unify(
+            (Val::Lam(_, i, t), _) if v_applicable(&u) => self.unify(
                 l + 1,
                 cxt,
                 &self.closure_apply(t, Val::vvar(l).into()),

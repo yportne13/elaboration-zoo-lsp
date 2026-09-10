@@ -335,3 +335,45 @@ fn probe_macro_self_recursion_depth_limit() {
     let errs = res.unwrap().expect("parser 应返回 Some");
     assert!(errs > 0, "自递归宏应产生解析错误而非无限展开");
 }
+
+/// R2 移植修复回归（对齐 l10/l11/l12 探针）：`impl[T] Say for List[T]`
+/// 不得假匹配泛型目标 `Say[T]`。L13 的 `val_match` 原第三臂 or-模式
+/// `(_, Rigid) | (Rigid, _)` 允许**目标侧** rigid 被实例构造子绑定
+/// （`f two` 会错选 List 实例答 `"list"`），与本函数文档注释宣称的单向
+/// 语义相悖；改为仅实例侧绑定（对齐 L10/L11 的 `match_typ`）后无实例
+/// → Err。参考/快版共用同一 `Synth`（twin 经 `Synth::val_match` 复用），
+/// 一处修复两版同判。
+#[test]
+fn synth_rigid_generic_not_falsely_matched() {
+    let src = r#"
+trait Say {
+    def say: String
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+impl[T] Say for List[T] {
+    def say: String = "list"
+}
+
+def f[T](x: T): String = x.say
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+println (f two)
+"#;
+    assert!(
+        run_basic(src).is_err(),
+        "泛型 T 不得被假匹配成 List；basic={:?}",
+        run_basic(src)
+    );
+    assert_parity(src);
+}
