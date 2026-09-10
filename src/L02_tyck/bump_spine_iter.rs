@@ -104,6 +104,10 @@ fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: v 由 `v_clo` 构造（tag 1）；指针来自 `Bump::alloc(CloCell)`，
+    // 8 字节对齐（`repr(align(8))` 保证，含 wasm32；const 断言钉住）⇒ 低 3
+    // 位为 0，`& !7` 精确还原指针。`'a` 由调用方保证与分配它的 `Bump`
+    // （Tycker 每轮 reset）同寿。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -112,15 +116,24 @@ fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: v 由 `v_pi` 构造（tag 4）；指针来自 `Bump::alloc(PiCell)`，
+    // 含 `V(u64)` 故对齐 ≥8（含 wasm32；const 断言钉住）⇒ 低 3 位为 0，
+    // `& !7` 精确还原指针。`'a` 由调用方保证与分配它的 `Bump` 同寿。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 
 /// 闭包单元：λ 的名字（只服务 quote 产出的 pretty）+ env + 体。
+///
+/// packed tag 用 3 位（`ptr | 1` / `v.0 & !7`），要求分配地址低 3 位为 0。
+/// `CloCell` 只含引用，wasm32 上仅 4 字节对齐，故显式 `repr(align(8))`
+/// （64 位本就 8，零行为变化；下方 const 断言钉住）。
+#[repr(align(8))]
 struct CloCell<'a> {
     name: &'a str,
     env: Option<&'a EnvCons<'a>>,
     body: &'a Tm<'a>,
 }
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
 
 /// Π 值单元：名字 + 定义域值 + 余定义域闭包（内联，一次分配）。
 struct PiCell<'a> {
@@ -129,12 +142,15 @@ struct PiCell<'a> {
     env: Option<&'a EnvCons<'a>>,
     body: &'a Tm<'a>,
 }
+// 含 `V(u64)`，对齐恒 ≥8；断言钉住 ptr|tag 所需的低 3 位为 0。
+const _: () = assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
 
 /// 环境节点（bump 内持久链表，头 = 最内层绑定）。
 struct EnvCons<'a> {
     val: V,
     next: Option<&'a EnvCons<'a>>,
 }
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 #[inline]
 fn nth<'a>(mut env: Option<&'a EnvCons<'a>>, idx: usize) -> V {

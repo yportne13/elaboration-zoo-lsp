@@ -46,7 +46,7 @@ L03 相对 L02 新增的语义（元变量机制）：
 ## 怎么跑
 
 ```text
-cargo test --lib L03_holes                 # 26 个测试：三示例、错误路径、
+cargo test --lib L03_holes                 # 28 个测试：三示例、错误路径、
                                            # 基础/性能互检、深度/稳态/求解压力、
                                            # dup 双口径、memo 指针共享、conv_dup/
                                            # chain 互检、shadowing 还原

@@ -123,6 +123,10 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: v 由 `v_clo` 构造（tag 1）；指针来自 `Bump::alloc(CloCell)`，
+    // 8 字节对齐（`repr(align(8))` 保证，含 wasm32；const 断言钉住）⇒ 低 3
+    // 位为 0，`& !7` 精确还原指针。`'a` 由调用方保证与分配它的 `Bump`
+    // （Tycker 每轮 reset）同寿。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -131,6 +135,9 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: v 由 `v_pi` 构造（tag 4）；指针来自 `Bump::alloc(PiCell)`，
+    // 含 `V(u64)` 故对齐 ≥8（含 wasm32；const 断言钉住）⇒ 低 3 位为 0，
+    // `& !7` 精确还原指针。`'a` 由调用方保证与分配它的 `Bump` 同寿。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -158,6 +165,8 @@ pub(crate) struct EnvCons<'a> {
     val: V,
     next: Option<&'a EnvCons<'a>>,
 }
+// 含 `V(u64)`，对齐恒 ≥8（不参与 ptr|tag 解码，仅钉住）。
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 /// `i < binds 深度` → 走链；否则读平坦 def 区域（`i - 链深` 为区域内的
 /// de Bruijn 位置）。类型系统保证 i < 环境总长（越界是闭项 bug，panic）。
@@ -210,11 +219,17 @@ pub(crate) fn env_ext_defs<'a>(bump: &'a Bump, defs: &mut Vec<V>, env: Env<'a>, 
 }
 
 /// 闭包单元：λ 的名字（只服务 quote 产出的 pretty）+ env + 体。
+///
+/// packed tag 用 3 位（`ptr | 1` / `v.0 & !7`），要求分配地址低 3 位为 0。
+/// `CloCell` 只含引用与 `Env`（u32 + 引用），wasm32 上仅 4 字节对齐，故
+/// 显式 `repr(align(8))`（64 位本就 8，零行为变化；下方 const 断言钉住）。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
 
 /// Π 值单元：名字 + 定义域值 + 余定义域闭包（内联，一次分配）。
 pub(crate) struct PiCell<'a> {
@@ -223,6 +238,8 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+// 含 `V(u64)`，对齐恒 ≥8；断言钉住 ptr|tag 所需的低 3 位为 0。
+const _: () = assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
 
 /// spine 栈槽：一次中性应用。`len`/`base` 支撑流式右链 quote（连续性引理
 /// 见 L01 `bump_spine.rs`：`base + len - 1 == idx` 当且仅当链上下标连续）。
@@ -1369,10 +1386,10 @@ fn lams<'a>(bump: &'a Bump, dom: u32, body: &'a Tm<'a>) -> &'a Tm<'a> {
 // Machine（稳态复用）与 elaboration
 // --------------------------------------------------------------------------------
 
-/// 稳态复用机：spine 与 vals 两个无生命周期的大栈跨调用复用（clear 保
-/// 容量），metacontext 也常住（每轮 elaboration 清空），配 [`Tycker`] 每轮
-/// `Bump::reset` 即稳态近零分配。带生命周期的小栈（work/tasks/done）每
-/// 调用新建，避免 struct 持 `'a` 跨 `Bump::reset` 的借用冲突。
+/// 稳态复用机：spine/vals/defs/metacontext/quote_memo 常住（各自入口
+/// clear），配 [`Tycker`] 每轮 `Bump::reset` 即稳态近零分配。带生命周期
+/// 的工作栈（`workbuf`/`qtasks`/`qdone`/`ustack`）也常住——`'static` 存放 +
+/// 调用期把生命周期洗白回 `'a`（各入口 clear，见各字段注）。
 pub(crate) struct Machine {
     spine: Spine,
     vals: Vec<V>,
@@ -2003,11 +2020,11 @@ static NO_NAME_MAP: std::sync::LazyLock<std::sync::atomic::AtomicBool> =
     });
 
 /// 稳态类型检查器：owns 一个反复 `reset` 的 `Bump` 与跨调用复用的
-/// [`Machine`]（spine/vals/metacontext）。`bump.reset` 不跑析构（bumpalo
-/// 语义），跨轮悬垂的两处来源均无碍：`vals` 在每次 eval 开头 clear；
-/// `spine.stack` 条目虽不清理（下标跨轮单调递增），但本轮句柄恒指向
-/// 本轮压入的槽位，旧条目不可达——代价是长驻 Machine 的内存随历史
-/// 最大 spine 深度滞留。metas/defs/name_map 由 `clear_round` 清。
+/// [`Machine`]（spine/vals/defs/metacontext/名字表/workbuf 等）。`bump.reset`
+/// 不跑析构（bumpalo 语义），跨轮悬垂的句柄各自作废：`vals`/`quote_memo`/
+/// `umemo`/`scratch*`/工作栈在各自入口 clear，`spine.stack` 与
+/// metas/defs/name_map/name_trail 由 [`Machine::clear_round`] 在每轮
+/// `bump.reset` 后立刻清空（保容量，下标从 0 重排）。
 pub(crate) struct Tycker {
     bump: Bump,
     machine: Machine,

@@ -75,6 +75,8 @@ fn ident(input: Span<&str>) -> Option<(Input<'_>, Token<'_>)> {
         Some((rest, tail)) => (rest, head.data.len() + tail.data.len()),
         None => (after_head, head.data.len()),
     };
+    // SAFETY: head 是 input.data 的前缀、tail 是 after_head.data 的前缀，
+    // ident_len = head.len() + tail.len() ≤ input.data.len()，切片必在界内。
     let ident = unsafe { input.data.get_unchecked(..ident_len) };
 
     // main.hs 的关键字表：let / in / λ / U。
