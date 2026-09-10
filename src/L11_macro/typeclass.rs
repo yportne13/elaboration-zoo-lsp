@@ -173,10 +173,10 @@ impl Synth {
             return None;
         }
 
-        // 执行合一
+        // 一阶匹配：goal 视为已确定，pattern（实例断言）可含实例类型参数
         let mut subst = Subst::new();
         for (g_arg, i_arg) in goal.arguments.iter().zip(&instance.assertion.arguments) {
-            if !unify(g_arg, i_arg, &mut subst) {
+            if !match_typ(g_arg, i_arg, &mut subst) {
                 return None;
             }
         }
@@ -365,23 +365,33 @@ fn apply_subst_to_assertion(assert: &Assertion, subst: &Subst) -> Assertion {
     }
 }
 
-/// 合一两个类型，更新代换 subst
-/// 返回 false 表示失败（冲突）
-fn unify(t1: &Typ, t2: &Typ, subst: &mut Subst) -> bool {
-    let t1 = apply_subst_to_typ(t1, subst);
-    let t2 = apply_subst_to_typ(t2, subst);
+/// 一阶结构匹配：`goal`（目标，视为已确定）对 `pattern`（实例断言，可含实例
+/// 类型参数 `Typ::Var`）。只有 **pattern 侧** 的 `Var` 允许被绑定；目标侧的
+/// `Var`（泛型 rigid）不得被实例构造子"吃掉"。
+///
+/// 旧实现是双向 `subst.insert`（且无 occurs check），会让
+/// `impl[T] Say for List[T]` 假匹配泛型目标 `Say[T]`：`Say[Var(0)]` 对
+/// `Say[Construct("List", [Var(0)])]` 把目标 rigid 绑成 `List[..]` 而静默选出
+/// 错误实例（`f two` 错答 "list"）。L12/L13 的 `val_match` 就是这套单向语义，
+/// 此处按 `Typ` 镜像。
+fn match_typ(goal: &Typ, pattern: &Typ, subst: &mut Subst) -> bool {
+    let goal = apply_subst_to_typ(goal, subst);
+    let pattern = apply_subst_to_typ(pattern, subst);
 
-    match (&t1, &t2) {
+    match (&goal, &pattern) {
         (Typ::Var(i), Typ::Var(j)) if i == j => true,
-        (Typ::Var(i), _) => {
-            // Occurs check omitted for simplicity
-            subst.insert(*i, t2);
-            true
-        }
-        (_, Typ::Var(i)) => {
-            subst.insert(*i, t1);
-            true
-        }
+        // pattern 侧变量：绑定目标值；已绑定则要求与既有绑定结构相等
+        (_, Typ::Var(j)) => match subst.get(j) {
+            Some(existing) => existing == &goal,
+            None => {
+                subst.insert(*j, goal);
+                true
+            }
+        },
+        // `Any` 是 trait_wrap 给 out_param 填的通配，与任何目标值匹配
+        (Typ::Any, _) | (_, Typ::Any) => true,
+        // 目标侧的 rigid 不能与实例构造子匹配（假匹配根因）
+        (Typ::Var(_), _) => false,
         (Typ::Val(s1), Typ::Val(s2)) => s1 == s2,
         (Typ::Construct(n1, args1), Typ::Construct(n2, args2)) => {
             n1 == n2
@@ -389,10 +399,11 @@ fn unify(t1: &Typ, t2: &Typ, subst: &mut Subst) -> bool {
                 && args1
                     .iter()
                     .zip(args2)
-                    .all(|(a1, a2)| unify(a1, a2, subst))
+                    .all(|(a1, a2)| match_typ(a1, a2, subst))
         }
-        (Typ::Fn(a1, b1), Typ::Fn(a2, b2)) => unify(a1, a2, subst) && unify(b1, b2, subst),
-        (Typ::Any, _) | (_, Typ::Any) => true, // Any 与任何类型匹配（可选）
+        (Typ::Fn(a1, b1), Typ::Fn(a2, b2)) => {
+            match_typ(a1, a2, subst) && match_typ(b1, b2, subst)
+        }
         _ => false,
     }
 }

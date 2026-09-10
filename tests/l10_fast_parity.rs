@@ -673,26 +673,20 @@ fn parity_global_sentinel_self_ref() {
     assert_parity(src);
 }
 
-// ROUND2 §C：L10 Synth::unify 假匹配探针（needs-verify）。
+// ROUND2 §C / 移植修复：L10 Synth 实例匹配（单向 match_typ）。
 // --------------------------------------------------------------------------------
 
-/// **探针（orchestrator 裁决用）**：`Synth` 旧求解器的 `unify`
-/// （`typeclass.rs:371-399`）无 occurs check，且把 `Typ::Var(level)` 的裸
-/// level 当全局变量号双向代换。`impl[T] Say for List[T]` 登记断言
-/// `Say[Construct("List",[Var(0)])]`；`def f[T](x: T) = x.say` 的接收者
-/// 类型 `T` 为 `Var(0)`，两 level 数值相同 → `unify(Var(0), Construct(...))`
-/// 走 `(Var, _)` 臂直接 `subst[0] = List[Var(0)]` 返回 true。静态推理预期
-/// 泛型 `T` 被假匹配成 `List`，`f` 被接受且 `f two` 返回 "list"。
+/// 回归：`impl[T] Say for List[T]` **不得**假匹配泛型目标 `Say[T]`。
 ///
-/// 因无法在本环境运行，本探针标 `#[ignore]` 并要求 orchestrator 显式执行：
-/// `cargo test --test l10_fast_parity -- --ignored probe_synth_...`。
-/// - 若通过（Ok 输出含 "list"）：P1 假匹配成立，按报告记 P1。
-/// - 若失败（Err / 不同输出）：假匹配不成立，请更正报告并降级该 P1。
+/// 旧 `Synth::unify` 双向绑定且无 occurs check：`Say[Var(0)]`（T 是 rigid）
+/// 对 `Say[Construct("List",[Var(0)])]` 走 `(Var, _)` 臂把目标 rigid 绑成
+/// `List[..]` 返回 true，于是 `f two` 错误输出 List 实例的 `"list"`。
+/// 移植 L12/L13 的单向一阶匹配（`match_typ`：只允许实例侧变量绑定）后，
+/// 目标 rigid 无法匹配构造子 → 无实例 → Err。参考版与快版共用同一 `Synth`，
+/// 故两版判定必须一致。
 #[test]
-#[ignore = "needs-verify 假匹配探针，由 orchestrator 显式运行裁决（ROUND2 §C）"]
-fn probe_synth_false_match_rigid_generic() {
-    let out = run_basic(
-        r#"
+fn synth_rigid_generic_not_falsely_matched() {
+    let src = r#"
 trait Say {
     def say: String
 }
@@ -716,16 +710,11 @@ enum Nat {
 def two = succ (succ zero)
 
 println (f two)
-"#,
+"#;
+    assert!(
+        run_basic(src).is_err(),
+        "泛型 T 不得被假匹配成 List；basic={:?}",
+        run_basic(src)
     );
-    match out {
-        Ok(s) => assert_eq!(
-            s, "list\n",
-            "假匹配成立（P1）：泛型 T 被匹配成 List，f two 返回 List 实例的 say"
-        ),
-        Err(e) => panic!(
-            "假匹配不成立：求解器给出 Err（{}）；请更正报告中的 P1",
-            e.0.data
-        ),
-    }
+    assert_parity(src);
 }

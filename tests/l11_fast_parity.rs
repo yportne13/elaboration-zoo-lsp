@@ -643,3 +643,42 @@ fn probe_prune_ty_mask_reversal_parity() {
         "println test\n",
     ));
 }
+
+/// 移植修复回归：`impl[T] Say for List[T]` 不得假匹配泛型目标 `Say[T]`。
+/// 旧 `Synth::unify` 双向绑定把目标 rigid 绑成 `List[..]`，`f two` 错答
+/// `"list"`；改为单向 `match_typ` 后无实例 → Err。参考/快版共用 `Synth`，
+/// 判定必须一致。
+#[test]
+fn synth_rigid_generic_not_falsely_matched() {
+    let src = r#"
+trait Say {
+    def say: String
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+impl[T] Say for List[T] {
+    def say: String = "list"
+}
+
+def f[T](x: T): String = x.say
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+println (f two)
+"#;
+    assert!(
+        run_basic(src).is_err(),
+        "泛型 T 不得被假匹配成 List；basic={:?}",
+        run_basic(src)
+    );
+    assert_parity(src);
+}

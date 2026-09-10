@@ -66,14 +66,17 @@
   属高风险重构，且本环境无 Miri 无法验证；盲改可能引入真实错误。
 - 建议：单独立项 + CI 跑 Miri（`MIRIFLAGS=-Zmiri-strict-provenance cargo miri test`）。
 
-### 3.2 [P1] L10/L11 `Synth::unify` 无 occurs check → 假匹配（错误结果，已运行确认）
-- 位置：`L10 typeclass.rs:377-380`（`:378` 自述省略 occurs check），接收者路径
-  `elaboration.rs:828`；L11 同码 `typeclass.rs:370`。
-- 复现（`tests/l10_fast_parity.rs:693` 的 `#[ignore]` 探针，已实测 passed）：
-  `impl[T] Say for List[T]` + `def f[T](x: T): String = x.say` + `f two` → 输出 `"list"`
-  （泛型 `T` 被误配到 `List[T]` 实例；正确行为应为"无实例"错误）。
-- 未修原因：L12/L13 已把该旧求解器重写为单向 `val_match`，移植是语义重写、高风险，
-  且现有测试可能锁定旧行为；需专门任务 + parity 证据。
+### 3.2 [P1→已修复] L10/L11 `Synth` 假匹配（错误结果）
+- 位置（修复前）：`L10 typeclass.rs:377-380`（`:378` 自述省略 occurs check），
+  接收者路径 `elaboration.rs:828`；L11 同码 `typeclass.rs:370`。
+- 复现：`impl[T] Say for List[T]` + `def f[T](x: T): String = x.say` + `f two`
+  → 旧实现输出 `"list"`（泛型 `T` 被误配到 `List[T]` 实例；正确行为是"无实例"错误）。
+- **已修复**：`try_resolve` 的双向 `unify` 改为单向 `match_typ(goal, pattern)`
+  （只允许实例侧 `Typ::Var` 绑定，目标侧 rigid 拒绝构造子；`Any` 通配语义不变），
+  对齐 L12/L13 的 `val_match`。参考版与快版共用同一 `Synth`，一处修复两版同判。
+  回归测试：`tests/l10_fast_parity.rs`、`tests/l11_fast_parity.rs` 的
+  `synth_rigid_generic_not_falsely_matched`。实测泛型目标现报无实例 Err，
+  与 L13 行为一致。
 
 ### 3.3 [P0/P1] L13 共享文件中的同族缺陷（本次范围外，已定位）
 - 宏展开无深度上限：`src/L13_namespace/parser/mod.rs:1267/1603/3151`（同构副本）。
@@ -99,8 +102,9 @@
 - A1（L01–L03）、A2（L04–L06）、A3（L07/L09）：**收敛**，自审与交叉均 0 个 P0/P1/P2。
 - A4（L08/L10）、A5（L11/L12）：**条件收敛**——所有可安全修复项清零，但明确记录
   §3.1 SB P0 与 §3.2 假匹配 P1 为需独立立项的深水区残余。
-- 因此，严格意义上"所有 agent 都认为代码完美"**未达成**：存在 1 个 SB 别名 UB、
-  1 个已确认的错误结果 bug，以及若干已文档化的 needs-verify/跨层共享副本问题。
+- 因此，严格意义上"所有 agent 都认为代码完美"**未达成**：仍存在 1 个 SB 别名 UB
+  （L10–L13 共有，见 §3.1）与若干已文档化的 needs-verify/跨层共享副本问题；
+  L10/L11 的假匹配 P1 已在后续移植中修复（见 §3.2）。
   这些均**不适合在没有 Miri 与专项验证的条件下盲改**——盲改一个正在工作的
   依赖类型语言实现的风险高于保留有据可查的已知项。
 
