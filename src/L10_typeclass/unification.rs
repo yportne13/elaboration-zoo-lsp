@@ -1,10 +1,8 @@
-use colored::Colorize;
-
 use crate::list::List;
 
 use super::{
-    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
-    parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw,
+    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+    parser::syntax::Icit, syntax::Pruning, empty_span, typeclass::Assertion, Raw,
 };
 
 use std::{collections::{HashMap, HashSet}, rc::Rc};
@@ -100,29 +98,38 @@ impl Infer {
     }
     fn prune_ty_go(
         &mut self,
-        pr: &Pruning,
+        rev: &[Option<Icit>],
         pren: &PartialRenaming,
         a: &Rc<Val>,
     ) -> Result<Rc<Tm>, UnifyError> {
+        // 掩码按"外→内"配对 Π 层：`rev` 头 = 最外层槽位（`prune_ty` 已把
+        // Pruning 反转——List 头是最内层）。旧实现直接按链头配对外层 Π，
+        // 多层 telescope + 混合掩码时掩码与 Π 层错位（L05–L08 已修的同款；
+        // 快版 `prune_ty_bump` 亦 `mask_inner_first.iter().rev()`）。
         let a = self.force(a);
-        match (pr, a.as_ref()) {
-            (List { head: None, .. }, _) => self.rename(pren, &a),
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
+        match (rev.split_first(), a.as_ref()) {
+            (None, _) => self.rename(pren, &a),
+            (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
                 let a = self.rename(pren, a)?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                let b = self.prune_ty_go(&list.tail(), &lift(pren), &b)?;
+                let b = self.prune_ty_go(rest, &lift(pren), &b)?;
                 Ok(Tm::Pi(x.clone(), *i, a, b).into())
             }
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+            (Some((None, rest)), Val::Pi(x, i, _, b)) => {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod).into());
-                self.prune_ty_go(&list.tail(), &skip(pren), &b)
+                self.prune_ty_go(rest, &skip(pren), &b)
             }
             _ => Err(UnifyError::Basic), // impossible case
         }
     }
     pub fn prune_ty(&mut self, pr: &Pruning, a: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+        // Pruning 头 = 最内层槽位；meta 类型的 Π 层从最外层剥起——先反转
+        // 成"外→内"（RevPruning，L05–L08 的 pruneTy 同款）。旧移植未反转，
+        // 多层非线性 pruning 下与快版分叉。
+        let mut rev: Vec<Option<Icit>> = pr.iter().copied().collect();
+        rev.reverse();
         self.prune_ty_go(
-            pr,
+            &rev,
             &PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
@@ -139,7 +146,7 @@ impl Infer {
         };
 
         let prune_ty = self.prune_ty(&pruning, &mty)?;
-        let prunedty = self.eval(&List::new(), &prune_ty); //TODO:revPruning
+        let prunedty = self.eval(&List::new(), &prune_ty);
         let m_prime = MetaVar(self.new_meta(prunedty));
 
         let solution = self.eval(
@@ -246,7 +253,9 @@ impl Infer {
                 _ => self.prune_vflex(pren, *m_prime, sp.clone()),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => if x.0 <= 1919810 {
+                // 全局 iff `x.0 >= 1919810`（0 号全局恰为 1919810）；局部
+                // 未映射才是 scope error。旧 `<=` 会把 0 号全局误判为局部。
+                None => if x.0 < 1919810 {
                     Err(UnifyError::Basic)
                 } else {
                     let t = Tm::Var(lvl2ix(pren.dom, *x));
@@ -402,7 +411,7 @@ impl Infer {
         // can be pruned from the meta type (i.e. that the pruned solution will
         // be well-typed)
         if let Some(pr) = prune_non_linear {
-            self.prune_ty(&pr, &mty)?; //TODO:revPruning?
+            self.prune_ty(&pr, &mty)?;
         }
 
         let rhs = self.rename(
@@ -546,7 +555,11 @@ impl Infer {
                     _ => None,
                 }
             }
-            _ => unreachable!(),
+            // 长度失配：同一 meta 以不同 arity 出现。回落 `intersect` 的
+            // `None => unify_sp` 逐实参比较（L06/L07/L08 同款显式处理；
+            // 此处不可 `unreachable!()`——L10 参考版误留会导致用户可触发
+            // panic）。快版 `intersect_bump` 对长度失配直接返回 false。
+            _ => None,
         }
     }
     fn intersect(

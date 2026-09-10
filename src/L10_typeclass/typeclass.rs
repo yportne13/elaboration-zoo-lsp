@@ -25,9 +25,14 @@ impl Val {
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
-            Val::LiteralType => todo!(),
-            Val::LiteralIntro(span) => todo!(),
-            Val::Prim => todo!(),
+            // 字面量类型 / 字面量值 / 裸 Prim 不是可参与实例求解的类型形态。
+            // 旧实现 `todo!()` 可被用户程序触发：`"s".foo` 使接收者类型为
+            // `LiteralType`，`trait_wrap` 走到此处即崩；快版
+            // `val_to_typ` 对这些 tag 恒返回 None（"has no object" Err）。
+            // 返回 None 与快版及非 Sum 接收者（Pi 等）的既有语义一致。
+            Val::LiteralType => None,
+            Val::LiteralIntro(_) => None,
+            Val::Prim => None,
             Val::Sum(span, items, _, _) => Some(
                 if items.is_empty() {
                     Typ::Val(span.clone())

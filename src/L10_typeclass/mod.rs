@@ -1,4 +1,3 @@
-use colored::Colorize;
 use cxt::Cxt;
 use parser::syntax::{Either, Icit, Raw};
 use pattern_match::Compiler;
@@ -170,7 +169,11 @@ impl Val {
 }
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
-    if x.0 > 1919810 {
+    // 全局层级哨兵：global_idx 从 0 起（`global_idx + 1919810`），故 0 号
+    // 全局恰好等于 1919810——边界必须是 `>=`（eval 的 `x - 1919810` 与快版
+    // `*i >= GLOBAL_BASE` 同口径）。用 `>` 会让首个声明的自引用走
+    // `l - x - 1` 下溢（debug panic / release 大索引越界）。
+    if x.0 >= 1919810 {
         Ix(x.0)
     } else {
         Ix(l.0 - x.0 - 1)

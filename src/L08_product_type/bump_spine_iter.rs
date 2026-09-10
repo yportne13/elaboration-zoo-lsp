@@ -218,6 +218,10 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: 调用方保证 `v_tag(v) == 1`（Clo 指针立即数）；`& !7` 抹掉低 3
+    // 位 tag 还原 bump 内 CloCell 地址，分配存活于本轮 Machine 的 'a。依赖
+    // `CloCell` ≥8 对齐（`repr(align(8))` 保证，含 wasm32），否则 `& !7` 会
+    // 清掉真实地址位。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -226,6 +230,9 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: 调用方保证 `v_tag(v) == 4`（Π 指针立即数）；`& !7` 抹掉低 3 位
+    // tag 还原 bump 内 PiCell 地址，分配存活于本轮 Machine 的 'a。依赖
+    // `PiCell` ≥8 对齐（`dom: V` 保证；编译期断言钉住，含 wasm32）。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -235,6 +242,10 @@ pub(crate) fn v_meta_of(v: V) -> u32 {
 /// tag 7 单元解引用（bump 内分配，本轮内有效）。
 #[inline]
 pub(crate) fn v_xcell_of<'a>(v: V) -> &'a XCell<'a> {
+    // SAFETY: 调用方保证 `v_tag(v) == 7`（XCell 指针立即数）；`& !7` 抹掉低
+    // 3 位 tag 还原 bump 内 XCell 地址，分配存活于本轮 Machine 的 'a。依赖
+    // `XCell` ≥8 对齐（由 `repr(align(8))` 保证，含 wasm32——wasm 上 `&str`
+    // 仅 4 对齐，若不钉住则 `& !7` 清掉 bit2 = UB）。
     unsafe { &*((v.0 & !7) as *const XCell) }
 }
 
@@ -257,6 +268,11 @@ pub(crate) struct SumDataV<'a> {
 /// 和类型本体、构造子值、卡住 match。判等按单元指针（同内容不同次求值各
 /// 造单元——与参考版每次构造新值同构）；**位相等捷径对 tag 7 关闭**（见
 /// 模块注释），其中 Obj 头的链在 unify 里单独排除。
+///
+/// 对齐：`v_xcell` 以 `ptr | 7` 编码、`v_xcell_of` 以 `& !7` 解码，要求单元
+/// 地址低 3 位为 0（≥8 对齐）。64 位目标 `&str` 已 8 对齐；wasm32 上 `&str`
+/// 仅 4 对齐，故显式 `repr(align(8))` 钉住（否则解码会清掉 bit2 → UB）。
+#[repr(align(8))]
 pub(crate) enum XCell<'a> {
     Lit(&'a str),
     Decl(&'a str),
@@ -377,6 +393,11 @@ pub(crate) fn env_ext_defs<'a>(
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+///
+/// 对齐：`v_clo` 以 `ptr | 1` 编码、`v_clo_of` 以 `& !7` 解码，要求 ≥8 对齐。
+/// 本单元不含 u64 字段，wasm32 上仅 4 对齐（`&str`/`Env`/`&Tm`），故显式
+/// `repr(align(8))`（64 位上本就 8 对齐，零行为变化）。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -385,6 +406,8 @@ pub(crate) struct CloCell<'a> {
 }
 
 /// Π 值单元：名字 + icit + 定义域值 + 余定义域闭包（内联，一次分配）。
+/// 对齐：`v_pi` 以 `ptr | 4` 编码、`v_pi_of` 以 `& !7` 解码，要求 ≥8 对齐；
+/// `dom: V`（u64）已保证任意目标 ≥8，断言仅钉住该不变式。
 pub(crate) struct PiCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -392,6 +415,15 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+
+// packed-word 编码的不变式：这些类型被 `ptr | tag`（低 3 位）编码，解码用
+// `& !7`，要求地址 ≥8 对齐（wasm32 亦须成立）。
+const _: () = assert!(std::mem::align_of::<XCell<'static>>() >= 8);
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
+const _: () = assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
+// `EnvCons` 不直接经 packed 字编码（env 走直接引用），断言为防御性
+// （`val: V` 已保证 ≥8）。
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------

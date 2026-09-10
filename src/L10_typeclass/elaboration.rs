@@ -1,7 +1,5 @@
 use std::{cmp::max, rc::Rc};
 
-use colored::Colorize;
-
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{

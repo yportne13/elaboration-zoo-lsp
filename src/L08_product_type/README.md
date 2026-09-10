@@ -214,22 +214,24 @@ fast=4.432，church k=12 ss 反超 7%）——稳态复用的内存有界优势�
 
 ## 8. 测试
 
-- `cargo test --lib L08_product_type`：**46**（36 个 L07 继承 +
+- `cargo test --lib L08_product_type`：**49**（36 个 L07 继承 +
   9 个积类型专项：`test_product_basic / _generic / _dependent /
   _field_err / _vs_plain_enum / _dependent_check（剥链精确化回归）/
   _new_dot_chain（new 直接接投影）/ _shadow（投影局部遮蔽回归）/
-  _field_blank_lines（字段间空行与注释行）`，另 1 个 lexer 回归
-  `test_string_empty_and_escape`（空字面量 `""` 与 `\"` / `\\` 转义））；
-  64 MB 栈线程。
-- `cargo test --test l08_blackbox`：**55**（L07 基线 46 原样通过 +
-  9 个 `product_*` 专项：打印形态 / 投影错误文案 / 普通 enum 门控 /
+  _field_blank_lines（字段间空行与注释行）`，另 `parser/mod.rs` 3 个
+  解析器回归（`test / test_ok / test_leftover_located`）+ 1 个 lexer
+  回归 `test_string_empty_and_escape`（空字面量 `""` 与 `\"` / `\\`
+  转义））；64 MB 栈线程。
+- `cargo test --test l08_blackbox`：**58** 个 `#[test]`（L07 基线原样通过
+  + 9 个 `product_*` 专项：打印形态 / 投影错误文案 / 普通 enum 门控 /
   投影链 / match 变量臂 / 泛型 struct / new 嵌套 / new 直接接投影 /
-  部分应用构造子）；另 1 个 `--ignored` 深度探针。
-- `cargo test --test l08_blackbox_v2`：**51**（L07 第二卷基线原样通过，
-  另 2 个 `--ignored` 探针）。
-- `cargo test --test l08_fast_parity`：**74**（§6 双 oracle：28 个 parity
-  用例；`#[cfg(test)]` 的 46 个 lib 用例（含 lexer 回归）随模块在本目标
-  内执行并计入总运行数——lexer 回归两版共享同一解析器，不构成
+  部分应用构造子；余为其它评审回归）；其中 1 个 `#[ignore]` 深度探针，
+  **57** 活跃。
+- `cargo test --test l08_blackbox_v2`：**53** 个 `#[test]`（L07 第二卷
+  基线原样通过），另 2 个 `#[ignore]` 探针 → **51** 活跃。
+- `cargo test --test l08_fast_parity`：**77**（§6 双 oracle：28 个 parity
+  用例；`#[cfg(test)]` 的 49 个 lib 用例（含解析器 / lexer 回归）随模块
+  在本目标内执行并计入总运行数——lexer 回归两版共享同一解析器，不构成
   parity 对照）。
 
 ## 9. 相对旧 L08（移植前）改了什么
