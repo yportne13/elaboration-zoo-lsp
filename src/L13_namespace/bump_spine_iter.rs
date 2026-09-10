@@ -69,11 +69,14 @@
 //! 与参考版共用 parser / pretty / preprocess / Synth，**Ok 输出逐字节
 //! 一致**（互检测试 + `tests/l13_fast_parity.rs`）。
 //!
-//! **已移植（观察面 / LSP 接线阶段 1-2，docs/lsp-twin-wiring-2026-09.md）**：
+//! **已移植（观察面 / LSP 接线阶段 1-3a，docs/lsp-twin-wiring-2026-09.md）**：
 //! hover/completion/inlay 三张 owned 观察表（push 期渲染）、prelude 装载轮
 //! （[`Tycker::run_decls_with_prelude`]，nat/vconnT 内建 + 短名别名 +
 //! HdlLoopIdx 口径；**无池化**——每 kick 从 prime_round 重放，装载段
-//! `observe=false` 关观察面 push）。
+//! `observe=false` 关观察面 push）。LSP 侧 `Engine::Twin` 已接线
+//! （`lib.rs::twin_observe` 每 kick 重放 + owned 快照 + 参考版回落）；
+//! 实测 seed 成本压过收益（~10× 慢），**常驻/池化 prelude 是兑现速度的
+//! 前提**（阶段 3b），详见该文档 2026-09-10 进展。
 //! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF、force 记忆化（本机 force
 //! 按值重算、无 memo，taint/prim_version 随之不需要）、Tm/Val 迭代 Drop
 //! （bump 免疫）、PreludePool 池化/defer_println（run() 口径为 false）、

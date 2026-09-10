@@ -284,3 +284,50 @@ pattern 在孪生决策树里的 span 来源（`constr_name`/`constr_` 目前是
 
 > 更正：本轮此前一段"孪生 10 条 / 参考版 14 条"的差异描述是在未拿到工具
 > 输出时的臆测，已作废；以上为 `--nocapture` 实测两表 diff 的重述。
+
+### 2026-09-10（阶段 3a 接线落地 + seed 成本实测）
+
+**提交链**：`0259015`（Engine 开关 + ObserveSnapshot 契约）→ `c987621`
+（阶段 3a 孪生观察面接线）。**阶段 3a 已接线，但实测不是净收益——需要
+池化/常驻 prelude 才能兑现速度。**
+
+**接线内容**：
+- `Backend` 增 `Engine { Reference, Twin }`（`TYPORT_LSP_ENGINE=twin`
+  切换，默认 `Reference`；`Backend::new_with_engine` 供测试显式选）。
+- Twin 模式下 `load_prelude_impl` 顺带 parse 一次 24 文件 prelude
+  （`PRELUDE_CORE`+`PRELUDE_HDL`+`PRELUDE_SHOW`，与参考加载器同序）。
+- `elaborate`（LSP 的 `process_file` 路径）在参考版分析之外，把 prelude +
+  该文件经 `Tycker::run_decls_with_prelude` 重放，把三张 owned 表存
+  `twin_tables[uri]`（阶段 0 契约：`ObserveSnapshot`）。
+- 消费端按引擎分派：`hover_at` / `goto_definition_at` / `cross_file_references`
+  / `completion_at` / `inlay_hint_at` 命中孪生快照即用，未命中或该轮孪生
+  报错则回落参考版 `Infer` 表。**孪生是加速器，出错降级而非替换**——诊断、
+  全局 decl 表、跨文件符号合并、两阶段 println 仍在参考版。
+- `inlay_hint` 主体提到泛型 `inlay_hint_at`（与 hover/completion 同款可测）。
+
+**观测（`tests/twin_engine_tests.rs`，4 例全绿）**：tuple 元素 hover /
+局部变量 hover / 成员补全 / inlay，双引擎逐字节一致。参考版 LSP 守卫
+7 套默认引擎全绿；`TYPORT_LSP_ENGINE=twin` 下同样 7 套全绿（降级路径
+保证行为等价）。
+
+**seed 成本实测（release，09-hierarchy，`tests/twin_engine_bench.rs`，
+`--ignored`）**：
+| 引擎 | ms/kick（5 次取最小） |
+|---|---|
+| Reference（缓存 prelude） | **328.5** |
+| Twin（每 kick 重放 prelude） | **3285.5** |
+
+即**当前 3a 每次击键慢约 10×**：孪生把 943-decl prelude 整轮重放
+（`run_decls_with_prelude` 体内 `bump.reset()` + `prime_round`）的
+~2.9s 全额计入每次 kick，而参考版的 prelude 是进程级缓存、kick 只
+重新 elaborate 改动文件。这与 bench 的 1.8× 优势不矛盾——bench 比的是
+**一次性全量**，交互路径扣掉这个一次性成本才能兑现。
+
+**结论 / 下一步（关键）**：3a 的"全量重推"口径在交互路径上被 seed 成本
+压垮，必须让 prelude 常驻（`PreludePool` 池化移植 = 文档阶段 3b 的
+"bump 跨代"），或退一步只在 3a 里 seed 参考域全局 decl 表（把参考版
+`cxt.decl` 的条目一次性解码进孪生 bump，避免逐 decl 重推 prelude）。
+在 seed 成本降下来之前，**默认引擎保持 `Reference`，不要切默认**。
+`Backend` 为 `Send + Sync`（LSP 多线程握手需要），而 `Bump`/`Tycker`
+是 `!Sync`，常驻孪生态只能挂线程局部（主循环单线程）——这既是 3b 的
+约束也是其不进入 `Backend` 字段的原因。
