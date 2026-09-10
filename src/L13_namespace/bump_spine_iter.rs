@@ -9485,7 +9485,7 @@ impl Machine {
                     Some(&pc),
                 );
                 let mut cxt2 = clone_cxt(cxt);
-                for dd in decls {
+                for (di, dd) in decls.into_iter().enumerate() {
                     let (_, c) = self.infer_after_prefix(bump, &cxt2, &dd)?;
                     cxt2 = c;
                 }
@@ -12011,70 +12011,198 @@ impl Machine {
 const NM_QUOTE_LVL: u32 = u32::MAX / 2;
 
 /// 参考版 `Tm::no_metas`（L12）：项里第一个**未解** meta 的（上下文快照,
-/// 原始类型）——已解 meta **递归进解**（quote 后继续查，参考版同款）。
+/// 原始类型）——已解 meta **递归进解**。
+///
+/// **必须走值图 + 访问集，不能对已解 meta 的解做 quote 再查**（参考版
+/// mod.rs `no_metas` 的同一修复）：扁平化的 module/bundle 链上，解里嵌着
+/// 巨大且**自引用**的已解 meta——quote 出解再查会重新遇到同一个 meta，
+/// 无限展开（实测 `examples/hdl/01-basics.typort`：表达式 `let x = a + b`
+/// 展开出的 create 体在 `no_metas` 处死循环）。值图上按值身份去重即可终止；
+/// 参考版注释记录该 quote 版曾占某 HDL 例 65% 采样。
+///
+/// 两套访问集分开：`Tm` 用指针、值用打包字——二者是不同地址空间，混用会
+/// 误判同号（参考版两套都是 Rc 指针故可共用）。
 fn no_metas<'a>(
     bump: &'a Bump,
     m: &mut Machine,
     cxt: &Cxt<'a>,
     t: &'a Tm<'a>,
 ) -> Option<(crate::list::List<SmolStr>, V)> {
-    let mut stack: Vec<&Tm<'a>> = vec![t];
-    while let Some(x) = stack.pop() {
-        match x {
-            Tm::Meta(mm) => match &m.metas[*mm as usize] {
-                MetaEntry::Unsolved(_, snap, oty, _) => {
-                    // 名单取快照的 telescope（参考版用整个快照 cxt 的
-                    // names()——错误消息 pretty 用的名字表）
-                    let snap: &MetaSnap<'_> =
-                        unsafe { &*(snap.as_ref() as *const MetaSnap<'static> as *const MetaSnap<'_>) };
-                    return Some((types_names_list(snap.types), *oty));
+    let mut seen_v: FxHashSet<u64> = FxHashSet::default();
+    let mut seen_tm: FxHashSet<usize> = FxHashSet::default();
+    tm_no_metas(bump, m, cxt, t, &mut seen_v, &mut seen_tm)
+}
+
+/// 未解 meta 的（名字表, 原始类型）——取自快照 telescope（参考版用整个快照
+/// cxt 的 names()，错误消息 pretty 用）。
+fn meta_unsolved_result(snap: &Rc<MetaSnap<'static>>, oty: V) -> (crate::list::List<SmolStr>, V) {
+    let snap: &MetaSnap<'_> =
+        unsafe { &*(snap.as_ref() as *const MetaSnap<'static> as *const MetaSnap<'_>) };
+    (types_names_list(snap.types), oty)
+}
+
+/// 项层遍历（指针去重）。`Tm::Meta` 已解 → 转值图（`val_no_metas`）。
+fn tm_no_metas<'a>(
+    bump: &'a Bump,
+    m: &mut Machine,
+    cxt: &Cxt<'a>,
+    t: &'a Tm<'a>,
+    seen_v: &mut FxHashSet<u64>,
+    seen_tm: &mut FxHashSet<usize>,
+) -> Option<(crate::list::List<SmolStr>, V)> {
+    if !seen_tm.insert(t as *const Tm<'a> as usize) {
+        return None;
+    }
+    match t {
+        Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => None,
+        Tm::Lam(_, _, b) => tm_no_metas(bump, m, cxt, b, seen_v, seen_tm),
+        Tm::App(f, a, _) => tm_no_metas(bump, m, cxt, f, seen_v, seen_tm)
+            .or_else(|| tm_no_metas(bump, m, cxt, a, seen_v, seen_tm)),
+        Tm::AppPruning(h, _) => tm_no_metas(bump, m, cxt, h, seen_v, seen_tm),
+        Tm::Pi(_, _, a, b) => tm_no_metas(bump, m, cxt, a, seen_v, seen_tm)
+            .or_else(|| tm_no_metas(bump, m, cxt, b, seen_v, seen_tm)),
+        Tm::Let(_, a, x, u) => tm_no_metas(bump, m, cxt, a, seen_v, seen_tm)
+            .or_else(|| tm_no_metas(bump, m, cxt, x, seen_v, seen_tm))
+            .or_else(|| tm_no_metas(bump, m, cxt, u, seen_v, seen_tm)),
+        Tm::Meta(mm) => match &m.metas[*mm as usize] {
+            MetaEntry::Unsolved(_, snap, oty, _) => Some(meta_unsolved_result(snap, *oty)),
+            MetaEntry::Solved(sol, _) => val_no_metas(bump, m, cxt, *sol, seen_v, seen_tm),
+        },
+        Tm::Obj(h, _) => tm_no_metas(bump, m, cxt, h, seen_v, seen_tm),
+        Tm::Sum(_, params, ..) => params.iter().find_map(|p| {
+            tm_no_metas(bump, m, cxt, p.val, seen_v, seen_tm)
+                .or_else(|| tm_no_metas(bump, m, cxt, p.ty, seen_v, seen_tm))
+        }),
+        Tm::SumCase { typ, datas, .. } => tm_no_metas(bump, m, cxt, typ, seen_v, seen_tm)
+            .or_else(|| {
+                datas.iter().find_map(|d| tm_no_metas(bump, m, cxt, d.val, seen_v, seen_tm))
+            }),
+        Tm::Match(s, cases) => tm_no_metas(bump, m, cxt, s, seen_v, seen_tm).or_else(|| {
+            cases.iter().find_map(|(_, b)| tm_no_metas(bump, m, cxt, b, seen_v, seen_tm))
+        }),
+        Tm::Call(_, args, body) => args
+            .iter()
+            .find_map(|(a, _)| tm_no_metas(bump, m, cxt, a, seen_v, seen_tm))
+            .or_else(|| tm_no_metas(bump, m, cxt, body, seen_v, seen_tm)),
+    }
+}
+
+/// 值层遍历（按打包字去重，破自引用环）。对照参考版 `val_no_metas`。
+fn val_no_metas<'a>(
+    bump: &'a Bump,
+    m: &mut Machine,
+    cxt: &Cxt<'a>,
+    v: V,
+    seen_v: &mut FxHashSet<u64>,
+    seen_tm: &mut FxHashSet<usize>,
+) -> Option<(crate::list::List<SmolStr>, V)> {
+    if !seen_v.insert(v.0) {
+        return None;
+    }
+    match v_tag(v) {
+        0 | 3 | 6 => None, // Rigid / U / LiteralType
+        1 => {
+            let c: &CloCell<'a> = v_clo_of(v);
+            env_no_metas(bump, m, cxt, c.env, seen_v, seen_tm)
+                .or_else(|| tm_no_metas(bump, m, cxt, c.body, seen_v, seen_tm))
+        }
+        2 => {
+            let h = v_spine_of(v);
+            let hd = m.spine.spine_head(h);
+            let mut args: Vec<(V, Icit)> = Vec::new();
+            m.spine.collect_args(h, &mut args);
+            let in_args = |m: &mut Machine,
+                           seen_v: &mut FxHashSet<u64>,
+                           seen_tm: &mut FxHashSet<usize>|
+             -> Option<(crate::list::List<SmolStr>, V)> {
+                args.iter()
+                    .find_map(|(a, _)| val_no_metas(bump, m, cxt, *a, seen_v, seen_tm))
+            };
+            match v_tag(hd) {
+                // 头是 meta：等价参考版 `Val::Flex(m, sp)`。带 spine 的解
+                // 只有求值才能得，退回 quote（参考版同款，层级用 NM_QUOTE_LVL）。
+                5 => {
+                    if !args.is_empty() {
+                        let q = m.quote(bump, cxt, NM_QUOTE_LVL, v);
+                        return tm_no_metas(bump, m, cxt, q, seen_v, seen_tm);
+                    }
+                    let mi = v_meta_of(hd);
+                    match &m.metas[mi as usize] {
+                        MetaEntry::Unsolved(_, snap, oty, _) => Some(meta_unsolved_result(snap, *oty)),
+                        MetaEntry::Solved(sol, _) => val_no_metas(bump, m, cxt, *sol, seen_v, seen_tm),
+                    }
                 }
-                MetaEntry::Solved(v, _) => {
-                    let q = m.quote(bump, cxt, NM_QUOTE_LVL, *v);
-                    stack.push(q);
-                }
-            },
-            Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {}
-            Tm::Lam(_, _, b) => stack.push(b),
-            Tm::App(f, a, _) => {
-                stack.push(f);
-                stack.push(a);
+                // 卡住投影头：本体 + 实参都要走（参考版 `Val::Obj`）。
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => val_no_metas(bump, m, cxt, *val, seen_v, seen_tm)
+                        .or_else(|| in_args(m, seen_v, seen_tm)),
+                    _ => in_args(m, seen_v, seen_tm),
+                },
+                // Rigid / Decl 头：只看实参（参考版 `Val::Rigid | Val::Decl`）。
+                _ => in_args(m, seen_v, seen_tm),
             }
-            Tm::AppPruning(h, _) => stack.push(h),
-            Tm::Pi(_, _, a, b) => {
-                stack.push(a);
-                stack.push(b);
+        }
+        4 => {
+            let p: &PiCell<'a> = v_pi_of(v);
+            val_no_metas(bump, m, cxt, p.dom, seen_v, seen_tm)
+                .or_else(|| env_no_metas(bump, m, cxt, p.env, seen_v, seen_tm))
+                .or_else(|| tm_no_metas(bump, m, cxt, p.body, seen_v, seen_tm))
+        }
+        5 => {
+            let mi = v_meta_of(v);
+            match &m.metas[mi as usize] {
+                MetaEntry::Unsolved(_, snap, oty, _) => Some(meta_unsolved_result(snap, *oty)),
+                MetaEntry::Solved(sol, _) => val_no_metas(bump, m, cxt, *sol, seen_v, seen_tm),
             }
-            Tm::Let(_, a, t, u) => {
-                stack.push(a);
-                stack.push(t);
-                stack.push(u);
+        }
+        7 => match v_xcell_of(v) {
+            XCell::Lit(_) | XCell::Nat(_) | XCell::Decl { .. } => None,
+            XCell::Obj { val, .. } => val_no_metas(bump, m, cxt, *val, seen_v, seen_tm),
+            XCell::Sum { params, .. } => params.iter().find_map(|p| {
+                val_no_metas(bump, m, cxt, p.val, seen_v, seen_tm)
+                    .or_else(|| val_no_metas(bump, m, cxt, p.ty, seen_v, seen_tm))
+            }),
+            XCell::SumCase { typ, datas, .. } => val_no_metas(bump, m, cxt, *typ, seen_v, seen_tm)
+                .or_else(|| {
+                    datas.iter().find_map(|d| val_no_metas(bump, m, cxt, d.val, seen_v, seen_tm))
+                }),
+            XCell::Call { args, body, .. } => args
+                .iter()
+                .find_map(|(a, _)| val_no_metas(bump, m, cxt, *a, seen_v, seen_tm))
+                .or_else(|| val_no_metas(bump, m, cxt, *body, seen_v, seen_tm)),
+            XCell::Match { scrutinee, env, cases, .. } => {
+                val_no_metas(bump, m, cxt, *scrutinee, seen_v, seen_tm)
+                    .or_else(|| env_no_metas(bump, m, cxt, *env, seen_v, seen_tm))
+                    .or_else(|| {
+                        cases.iter().find_map(|(_, b)| tm_no_metas(bump, m, cxt, b, seen_v, seen_tm))
+                    })
             }
-            Tm::Obj(h, _) => stack.push(h),
-            Tm::Sum(_, params, ..) => {
-                for p in params.iter() {
-                    stack.push(p.val);
-                    stack.push(p.ty);
-                }
-            }
-            Tm::SumCase { typ, datas, .. } => {
-                stack.push(typ);
-                for d in datas.iter() {
-                    stack.push(d.val);
-                }
-            }
-            Tm::Match(s, cases) => {
-                stack.push(s);
-                for (_, b) in cases.iter() {
-                    stack.push(b);
-                }
-            }
-            Tm::Call(_, args, body) => {
-                for (a, _) in args.iter() {
-                    stack.push(a);
-                }
-                stack.push(body);
-            }
+        },
+        _ => None,
+    }
+}
+
+/// 环境遍历：链（binds）逐节点值 + 平坦区（defs 切片）。
+fn env_no_metas<'a>(
+    bump: &'a Bump,
+    m: &mut Machine,
+    cxt: &Cxt<'a>,
+    env: Env<'a>,
+    seen_v: &mut FxHashSet<u64>,
+    seen_tm: &mut FxHashSet<usize>,
+) -> Option<(crate::list::List<SmolStr>, V)> {
+    let mut cur = env.binds;
+    while let Some(e) = cur {
+        if let Some(r) = val_no_metas(bump, m, cxt, e.val, seen_v, seen_tm) {
+            return Some(r);
+        }
+        cur = e.next;
+    }
+    let base = env.flat_base as usize;
+    let end = base + env.flat_len as usize;
+    for i in base..end {
+        if let Some(r) = val_no_metas(bump, m, cxt, m.defs[i], seen_v, seen_tm) {
+            return Some(r);
         }
     }
     None
@@ -12115,6 +12243,11 @@ struct Resident {
 /// prelude）。用户段每 kick 分配的中间值无法回收（bump 不支持截断），用
 /// 周期性重放换内存上界；~2.8s 重放按上限摊到多次 kick。
 const RESIDENT_BUMP_LIMIT: usize = 512 << 20;
+
+/// `TYPORT_TWIN_MEM` 开时打印 prime 的逐文件 bump 增长（内存剖析）。
+fn twin_mem_prof() -> bool {
+    std::env::var_os("TYPORT_TWIN_MEM").is_some()
+}
 
 /// 稳态类型检查器（同 L03-L08：owns 反复 `reset` 的 `Bump` 与跨调用复用
 /// 的 [`Machine`]）。
@@ -12181,6 +12314,12 @@ impl Tycker {
             }
             if file_i < prelude.file_ends.len() && prelude.file_ends[file_i] == i {
                 force_memo_clear();
+                if twin_mem_prof() {
+                    eprintln!(
+                        "[TMEM] after file {file_i}: decl i={i} alloc={} bytes",
+                        self.bump.allocated_bytes()
+                    );
+                }
                 file_i += 1;
             }
         }
@@ -13301,6 +13440,31 @@ def d0 : Nat -> Nat = n => succ n
         v
     }
 
+    /// **回归**：模块体内表达式 `let`（`let x = a + b`）的展开会经过
+    /// `no_metas`——它必须走值图 + 访问集，不能对已解 meta 的（自引用）
+    /// 解做 quote 再查，否则在扁平化 module 链上死循环（实测 01-basics 的
+    /// `exprLet`/`autoNames` 两模块曾挂死；参考版 mod.rs 已记录该 quote 版
+    /// 在某 HDL 例占 65% 采样）。此例锁死不再挂。
+    #[test]
+    fn expr_let_in_module_body_terminates() {
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        assert_eq!(pre.failed, None);
+        let cases = [
+            // 表达式 let（LetNamed）+ 后续使用
+            "module m {\n    input a = UInt[8]\n    input b = UInt[8]\n    output y = UInt[8]\n    let x = a + b\n    y := x\n}\n",
+            // auto* 自动命名系列
+            "module m {\n    let w = autoUInt(8)\n    let i = autoUIntInput(8)\n    let r = autoUIntReg(8)\n    r := w + i\n}\n",
+        ];
+        let mut t = Tycker::new();
+        t.prime_resident(&pre).expect("prime");
+        for src in cases {
+            let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+                &crate::L13_namespace::preprocess(src), 610, &pre.macros,
+            ).expect("parse");
+            t.observe_user(&pre, &decls).expect("observe_user must terminate");
+        }
+    }
+
     /// 手动性能测量：把孪生 kick 拆成「prelude 重放」与「用户文件增量」，
     /// 判断 3b 常驻 prelude 能否让交互路径净收益为正。
     /// 运行：`cargo test --release --lib split -- --ignored --nocapture`
@@ -13406,7 +13570,14 @@ struct P {
         ).expect("parse");
         let mut t = Tycker::new();
         t.prime_resident(&pre).expect("prime");
-        eprintln!("[MEM] after prime: abs_alloc={}", t.bump.allocated_bytes());
+        let cap = t.bump.allocated_bytes();
+        let used = cap - t.bump.chunk_capacity();
+        eprintln!(
+            "[MEM] after prime: capacity={cap} ({} MB) used={used} ({} MB) waste={} MB",
+            cap >> 20,
+            used >> 20,
+            (cap - used) >> 20,
+        );
         let mut prev = 0usize;
         for i in 0..8 {
             t.observe_user(&pre, &decls).expect("observe");

@@ -484,6 +484,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .and_then(|x| x.hover_entry_at(path_id, offset).map(|(a, b, c)| (*a, *b, c.clone())))
     }
 
+    /// Public engine-routed full hover table (see [`Self::hover_entries_owned`]).
+    pub fn hover_entries(&self, uri: &str) -> Vec<(Span<()>, Span<()>, String)> {
+        self.hover_entries_owned(uri).unwrap_or_default()
+    }
+
     /// Engine-appropriate full hover table for `uri` (owned).  Used by goto /
     /// references, which need to scan every entry rather than a single
     /// winner; hover itself uses [`Self::hover_entry_owned`].
@@ -1375,34 +1380,23 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             )
         });
         drop(prelude_guard);
-        // Safety valve for multi-file workspaces: a no-import file must not
-        // depend on another open file's symbols, but the reference shares one
-        // global table (and resolves bare names by unique suffix, e.g. `foo`
-        // → `liba.foo`, with an import-fix diagnostic).  If the twin reports
-        // an unresolved name that the global table resolves — exactly or by
-        // short name — its prelude-only view was insufficient: fall back.
-        {
-            let unresolved: Vec<&str> = errors
-                .iter()
-                .filter_map(|(_, m)| m.strip_prefix("error name not in scope: "))
-                .collect();
-            if !unresolved.is_empty() {
-                let cxt = self.cxt.lock().unwrap();
-                let resolves = |n: &str| {
-                    cxt.decl.contains_key(n)
-                        || cxt.decl.keys().any(|k| k.rsplit('.').next() == Some(n))
-                };
-                if unresolved.iter().any(|n| resolves(n)) {
-                    drop(cxt);
-                    self.twin_tables.remove(&uri_str);
-                    return false;
-                }
-            }
+        // **Correctness gate**: the twin must not be authoritative when it
+        // reports errors.  It is a faithful port but not yet complete on every
+        // real input — e.g. `examples/hdl/13-adder-tree.typort` makes its
+        // pattern compiler flag unreachable arms the reference accepts, which
+        // cascades into spurious "not in scope" errors.  Any twin error ⇒ fall
+        // back to the reference for diagnostics, observation and the data
+        // plane.  Error-free files (the common editing case) stay twin-owned,
+        // keeping the speedup; error cases pay the reference anyway, and only
+        // the reference's diagnostics are published.
+        if !errors.is_empty() || !parse_errs.is_empty() {
+            self.twin_tables.remove(&uri_str);
+            return false;
         }
         let rope = Rope::from_str(text);
-        let has_error = !errors.is_empty() || !parse_errs.is_empty();
         // Merge exports into the reference global table (mirrors the
-        // reference path's per-file symbol replacement).
+        // reference path's per-file symbol replacement).  Error-free by the
+        // gate above, so the previous symbols are always replaced.
         {
             let mut cxt = self.cxt.lock().unwrap();
             let m = Rc::make_mut(&mut cxt.decl);
@@ -1413,42 +1407,36 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     }
                 }
             }
-            if !has_error {
-                let mut new_keys: HashSet<String> = HashSet::new();
-                for (name, e) in &exports {
-                    m.insert(
-                        name.clone(),
-                        (e.span, e.tm.clone(), e.val.clone(), e.ty.clone(), e.vty.clone(), None, e.typ_pretty.clone()),
-                    );
-                    new_keys.insert(name.to_string());
-                }
-                if new_keys.is_empty() {
-                    self.file_symbols.remove(&uri_str);
-                } else {
-                    self.file_symbols.insert(uri_str.clone(), new_keys);
-                }
+            let mut new_keys: HashSet<String> = HashSet::new();
+            for (name, e) in &exports {
+                m.insert(
+                    name.clone(),
+                    (e.span, e.tm.clone(), e.val.clone(), e.ty.clone(), e.vty.clone(), None, e.typ_pretty.clone()),
+                );
+                new_keys.insert(name.to_string());
+            }
+            if new_keys.is_empty() {
+                self.file_symbols.remove(&uri_str);
+            } else {
+                self.file_symbols.insert(uri_str.clone(), new_keys);
             }
         }
         // Path1 fallback entries for defs (name span + signature rendering).
-        if !has_error {
-            let mut terms = Vec::new();
-            for d in &decls {
-                if let Decl::Def { name, .. } = d {
-                    if let Some((_, e)) = exports.iter().find(|(k, _)| k == &name.data) {
-                        terms.push(DeclTm::Def {
-                            name: name.clone(),
-                            typ: e.vty.clone(),
-                            body: e.val.clone(),
-                            typ_pretty: e.typ_pretty.clone(),
-                            body_pretty: String::new(),
-                        });
-                    }
+        let mut terms = Vec::new();
+        for d in &decls {
+            if let Decl::Def { name, .. } = d {
+                if let Some((_, e)) = exports.iter().find(|(k, _)| k == &name.data) {
+                    terms.push(DeclTm::Def {
+                        name: name.clone(),
+                        typ: e.vty.clone(),
+                        body: e.val.clone(),
+                        typ_pretty: e.typ_pretty.clone(),
+                        body_pretty: String::new(),
+                    });
                 }
             }
-            self.type_map.insert(uri_str.clone(), terms);
-        } else {
-            self.type_map.remove(&uri_str);
         }
+        self.type_map.insert(uri_str.clone(), terms);
         // Build diagnostics: twin errors (ERROR) + parse errors + HDL
         // warnings (WARNING, span resolved like the reference) + println
         // (INFORMATION).

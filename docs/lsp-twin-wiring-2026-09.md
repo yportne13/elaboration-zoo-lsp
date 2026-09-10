@@ -456,6 +456,43 @@ debug_test 15 全绿。
 bump，属另一子工程。HDL 工作负载不用 import（全靠 prelude 短名别名），故
 目标已达成。
 
+### 2026-09-10 续（全 HDL 语料验收：修挂死 + 诊断正确性闸）
+
+全语料互检（`examples/hdl/` 23 例，双双装载完整 HDL prelude）暴露两个孪生
+核心问题，均已处理：
+
+**1. 挂死：`no_metas` 的 quote 版在模块链上死循环（已修）**
+症状 `01-basics.typort` 的 `module { let x = a + b; y := x }` 永久挂起
+（Phase B 的 `create` 体在 `no_metas` 处）。定位：内核调用计数器
+（force/eval/quote/unify 均不增）+ 原子步骤标记，锁定 `no_metas`。根因：
+孪生 `no_metas` 是**未修版**——对已解 meta 的解做 quote 再查，而
+module/bundle 链上的解**自引用**（解里又嵌同一个 meta），quote 展开即无限。
+参考版 mod.rs 早已改为**值图遍历 + 访问集**（注释记录该 quote 版曾占某
+HDL 例 65% 采样）。已按参考版移植 `tm_no_metas`/`val_no_metas`/
+`env_no_metas`：值身份去重破环；`Tm` 指针与值打包字用两套访问集（不同
+地址空间，混用会误判同号）。回归 `expr_let_in_module_body_terminates`。
+
+**2. 伪错误：孪生在某些真实输入上比参考版"更严"（已加闸）**
+`13-adder-tree.typort`：孪生 pattern 编译器把参考版接受的分支判成
+unreachable → 该 decl 失败 → 递归 def 未登记 → 连锁 "not in scope" 伪错误，
+而参考版干净通过。**故任何孪生错误都不可作为权威诊断**：`twin_elaborate`
+现在遇任何 ERROR/parse 错误即整体回落参考版（诊断+观察+数据面）。无错文件
+（编辑常态）仍由孪生拥有、保留加速；出错文件本就要参考版兜底，只是诊断
+一律取参考版。此闸涵盖原多文件未解析名安全阀，后者已删。
+
+**全语料验收** `twin_matches_reference_on_all_hdl_examples`：23 例诊断逐条
+一致（严重度/文案/range），且参考版能解析的每个用户文件标识符位置孪生都能
+解析（无缺失 hover）。渲染文本/def_span 在宏生成的方法/限定访问路径上仍有
+已登记偏差（见下），由 curated 守卫套件严格把关。
+
+**新登记偏差（记录，暂不修）**：
+- 宏限定成员访问（如 `basicDecls.create[8].tree`）：孪生渲染 `create` 的
+  签名，参考版渲染投影后的 `ModuleTree`（偏差 4 家族）。
+- 方法 hover：孪生渲染泛型方法签名（`[T: Type 0, len: Nat] → … Vec.get`），
+  参考版渲染实例化后的类型（`19-stream` 的 `Stream`）。
+- 宏内 module-local 信号的 def_span 退化为使用处 token（只影响 goto，不影响
+  popup 文案）——值层缺 binder span，偏差 6 家族。
+
 **内存实测（决定默认的关键，2026-09-10）**：同一 09-hierarchy，进程 RSS
 （`GetProcessMemoryInfo`）：
 
