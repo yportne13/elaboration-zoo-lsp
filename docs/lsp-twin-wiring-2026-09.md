@@ -331,3 +331,13 @@ pattern 在孪生决策树里的 span 来源（`constr_name`/`constr_` 目前是
 `Backend` 为 `Send + Sync`（LSP 多线程握手需要），而 `Bump`/`Tycker`
 是 `!Sync`，常驻孪生态只能挂线程局部（主循环单线程）——这既是 3b 的
 约束也是其不进入 `Backend` 字段的原因。
+
+**价值前提修正（本轮实测后必须澄清）**：bench 的 1.8× 是**一次性全量**
+（prelude+user 一起 elaborate）的口径，而 LSP 交互路径里参考版的 prelude
+已经是**进程级缓存**（`clone_prelude_state`），kick 只重新 elaborate 改动
+文件。也就是说：**孪生省下的 prelude 装载时间，恰好是参考版缓存已经省掉
+的那部分**——3a 若不池化，不但吃不到 1.8×，还要每 kick 倒贴一次 prelude。
+即便池化（3b）把 seed 压到 ~0，孪生的净收益也只剩**单文件 elaborate** 的
+差值，须先用 3b 的常驻态实测该差值是否为正、多大。因此 LSP×孪生的兑现
+顺序应是：3b 常驻 prelude → 单文件 kick 双引擎对照 → 再谈默认切换；
+单看 bench 的 1.8× 不足以推断 LSP 收益。
