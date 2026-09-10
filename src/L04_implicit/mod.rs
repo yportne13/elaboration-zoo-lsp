@@ -131,6 +131,16 @@ impl Val {
     }
 }
 
+/// η 展开的可应用性守卫（L06 `unification::v_applicable` 同款）：只有中性值
+/// （Flex/Rigid）能吃 η 新变量。L04 无 decl/builtin，无法制造"λ 值当类型"
+/// 的种子，故 η 臂的 Pi/U 分支本层不可达；补守卫后该分支由 `v_app` 的
+/// impossible panic（`mod.rs:182`）变为普通 unify 失败（Err）。行为变化
+/// **只**发生在原本 panic 的分支：守卫为真（Flex/Rigid）时 `v_app` 照旧，
+/// 无任何既有成功/Err 路径受影响。
+fn v_applicable(v: &Val) -> bool {
+    matches!(v, Val::Flex(_, _) | Val::Rigid(_, _))
+}
+
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
     Ix(l.0 - x.0 - 1)
 }
@@ -423,12 +433,12 @@ impl Infer {
                 &self.closure_apply(t_clo, Val::vvar(l)),
                 &self.closure_apply(u_clo, Val::vvar(l)),
             ),
-            // η：按 λ 一侧的 icit 应用中性一侧
-            (_, Val::Lam(_, i, u_clo)) => {
+            // η：按 λ 一侧的 icit 应用中性一侧（守卫见 `v_applicable`）
+            (_, Val::Lam(_, i, u_clo)) if v_applicable(&t) => {
                 let t2 = self.v_app(&t, Val::vvar(l), *i);
                 self.unify(l + 1, &t2, &self.closure_apply(u_clo, Val::vvar(l)))
             }
-            (Val::Lam(_, i, t_clo), _) => {
+            (Val::Lam(_, i, t_clo), _) if v_applicable(&u) => {
                 let u2 = self.v_app(&u, Val::vvar(l), *i);
                 self.unify(l + 1, &self.closure_apply(t_clo, Val::vvar(l)), &u2)
             }

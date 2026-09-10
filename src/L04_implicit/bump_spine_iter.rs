@@ -133,6 +133,9 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: 调用方已确认 `v_tag(v) == 1`；`CloCell` 由 bump 分配，
+    // 对齐 ≥ 8 由 `#[repr(align(8))]` 保证（含 wasm32，低 3 位恒 0），
+    // `& !7` 还原的即原指针；`'a` 由 bump 生命期覆盖。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -141,11 +144,28 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: 调用方已确认 `v_tag(v) == 4`；`PiCell` 由 bump 分配，
+    // 对齐 ≥ 8 由 `#[repr(align(8))]` 保证（含 wasm32，低 3 位恒 0），
+    // `& !7` 还原的即原指针；`'a` 由 bump 生命期覆盖。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
 pub(crate) fn v_meta_of(v: V) -> u32 {
     (v.0 >> 3) as u32
+}
+
+/// η 展开的可应用性守卫（参考版 `mod.rs::v_applicable` 同款）：只有中性值
+/// （裸 Lvl(0)/未解 Flex(5)，或 tag 2 链的头为中性）能吃 η 新变量。参考版
+/// 对非中性值（U/Pi）做 `v_app` 会命中 impossible panic；快版压栈成卡住链
+/// 虽也以失败告终，但直接判失败与参考版守卫对齐，免去绕路。L04 无
+/// decl/builtin，该分支不可达，改动仅消除潜伏 panic 面。
+#[inline]
+fn v_applicable(spine: &Spine, v: V) -> bool {
+    match v_tag(v) {
+        0 | 5 => true,
+        2 => matches!(v_tag(spine.spine_head(v_spine_of(v))), 0 | 5),
+        _ => false, // Lam(1) 已被前臂接住；U(3)/Pi(4) 不可应用
+    }
 }
 
 /// 复合环境：**平坦 def 区域**（elaborator 的 define 链，指入每轮
@@ -168,6 +188,11 @@ pub(crate) struct EnvCons<'a> {
     val: V,
     next: Option<&'a EnvCons<'a>>,
 }
+
+// 不变式钉：`EnvCons` 持有 `V(u64)`（wasm32 上 u64 仍 align 8），
+// 与 Clo/Pi 同属 bump 单元族；当前未被 `ptr|tag` 打包（仅经 `&` 引用），
+// 断言仅防止未来改动把它塞进打包字时对齐退化。
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 /// `i < binds 深度` → 走链；否则读平坦 def 区域。
 #[inline]
@@ -218,6 +243,9 @@ pub(crate) fn env_ext_defs<'a>(bump: &'a Bump, defs: &mut Vec<V>, env: Env<'a>, 
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+/// `repr(align(8))`：被 `v_clo` 以 `ptr | 1` 打包，解码 `& !7` 要求 ≥8 对齐；
+/// wasm32 上字段最大对齐仅 4，显式钉到 8（64 位布局不变，零行为变化）。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -225,7 +253,11 @@ pub(crate) struct CloCell<'a> {
     body: &'a Tm<'a>,
 }
 
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
+
 /// Π 值单元：名字 + icit + 定义域值 + 余定义域闭包（内联，一次分配）。
+/// `repr(align(8))` 理由同 [`CloCell`]（`v_pi` 的 `ptr | 4` 解码）。
+#[repr(align(8))]
 pub(crate) struct PiCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -233,6 +265,8 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+
+const _: () = assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
 
 /// spine 栈槽：一次中性应用（icit 随槽携带——quote 的 `f {a}`、solve 的
 /// lams、rename 的 App 重建都从这里取）。`len`/`base` 支撑流式右链 quote。
@@ -969,8 +1003,9 @@ fn unify_iter<'a>(
                 }
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
-            // η：中性一侧按 λ 一侧的 icit 应用（上游 `vApp t (VVar l) i`）
-            (_, 1) => {
+            // η：中性一侧按 λ 一侧的 icit 应用（上游 `vApp t (VVar l) i`；
+            // 守卫 `v_applicable`，参考版同款）
+            (_, 1) if v_applicable(spine, t) => {
                 let c = v_clo_of(u);
                 let vu = {
                     let env = env_ext(bump, c.env, v_lvl(l));
@@ -982,7 +1017,7 @@ fn unify_iter<'a>(
                 }
                 stack.push(UItem::Pair(l + 1, vt, vu));
             }
-            (1, _) => {
+            (1, _) if v_applicable(spine, u) => {
                 let c = v_clo_of(t);
                 let vt = {
                     let env = env_ext(bump, c.env, v_lvl(l));
@@ -1455,7 +1490,8 @@ pub(crate) struct Machine {
     /// 核函数进入即 clear，借出期间写入的当轮条目不跨调用存活——与
     /// `conv` / `icits` 的「进核前 clear」纪律同款。`W`/`QJob`/`UItem` 均为
     /// 无 Drop 的 Copy 枚举，`Vec` 布局与元素生命周期参数无关，出借时按当次
-    /// 生命周期重写指针类型（SAFETY 见各包装方法）。eval/quote/unify 共用
+    /// 生命周期重写指针类型（SAFETY：上述「进核即 clear」纪律 + 元素无 Drop，
+    /// 使按当次 `'a` 重写指针类型安全，借出期条目不跨调用存活）。eval/quote/unify 共用
     /// 一个 `workbuf` 是安全的：`work` 是「排空即返回」的暂存栈（每个内核
     /// 都是 `while let Some(..) = work.pop()`），任何嵌套调用点
     /// （`unify_iter → solve → eval_iter`）进入时它必已为空，故不存在

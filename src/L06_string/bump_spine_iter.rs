@@ -168,6 +168,9 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: 调用方已确认 `v_tag(v) == 1`；`CloCell` 由 bump 分配，
+    // 对齐 ≥ 8 由 `#[repr(align(8))]` 保证（含 wasm32，低 3 位恒 0），
+    // `& !7` 还原的即原指针；`'a` 由 bump 生命期覆盖。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -176,6 +179,9 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: 调用方已确认 `v_tag(v) == 4`；`PiCell` 由 bump 分配，
+    // 对齐 ≥ 8 由 `#[repr(align(8))]` 保证（含 wasm32，低 3 位恒 0），
+    // `& !7` 还原的即原指针；`'a` 由 bump 生命期覆盖。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -185,16 +191,29 @@ pub(crate) fn v_meta_of(v: V) -> u32 {
 /// tag 7 单元解引用（bump 内分配，本轮内有效）。
 #[inline]
 pub(crate) fn v_xcell_of<'a>(v: V) -> &'a XCell<'a> {
+    // SAFETY: 调用方已确认 `v_tag(v) == 7`；`XCell` 由 bump 分配，
+    // 对齐 ≥ 8 由 `#[repr(align(8))]` 保证（含 wasm32，低 3 位恒 0），
+    // `& !7` 还原的即原指针；`'a` 由 bump 生命期覆盖。
     unsafe { &*((v.0 & !7) as *const XCell) }
 }
 
 /// tag 7 的两种载体：字符串字面量（惰性无害值）与卡住的按名 Decl 头。
 /// 名字内容只在 pretty / prim 里用；判等按单元指针（同内容不同次求值
 /// 各造单元——与参考版每次 `Rc::new` 同构）。
+///
+/// `repr(align(8))`：本类型被 `v_xcell` 以 `ptr | 7` 打包、`v_xcell_of` 以
+/// `& !7` 还原，要求 bump 分配地址低 3 位为 0。64 位目标 `&str` 自然对齐 8，
+/// 但 wasm32（`&str` = 8B/align 4）上 `align_of == 4`，`& !7` 会清掉 bit2
+/// 还原出错误指针（UB）——显式钉到 8 对齐在所有目标上都成立。64 位下布局
+/// 与原先逐字节一致（align 本已为 8），零行为变化。
+#[repr(align(8))]
 pub(crate) enum XCell<'a> {
     Lit(&'a str),
     Decl(&'a str),
 }
+
+// packed tag 解码（`& !7`）依赖 ≥8 对齐；断言在编译期钉住，含 wasm32。
+const _: () = assert!(std::mem::align_of::<XCell<'static>>() >= 8);
 
 /// 复合环境：**平坦 def 区域**（elaborator 的 define 链，指入每轮
 /// [`Machine::defs`]；tip 环境原地追加，`nth` O(1)；**非 tip 环境**
@@ -218,6 +237,11 @@ pub(crate) struct EnvCons<'a> {
     val: V,
     next: Option<&'a EnvCons<'a>>,
 }
+
+// 不变式钉：`EnvCons` 持有 `V(u64)`（wasm32 上 u64 仍 align 8），
+// 与 Clo/Pi/XCell 同属 bump 单元族；当前未被 `ptr|tag` 打包（仅经 `&` 引用），
+// 断言仅防止未来改动把它塞进打包字时对齐退化。
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 /// `i < binds 深度` → 走链；否则读平坦 def 区域。
 #[inline]
@@ -273,6 +297,9 @@ pub(crate) fn env_ext_defs<'a>(
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+/// `repr(align(8))`：被 `v_clo` 以 `ptr | 1` 打包，解码 `& !7` 要求 ≥8 对齐；
+/// wasm32 上字段最大对齐仅 4，显式钉到 8（64 位布局不变，零行为变化）。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -280,7 +307,11 @@ pub(crate) struct CloCell<'a> {
     body: &'a Tm<'a>,
 }
 
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
+
 /// Π 值单元：名字 + icit + 定义域值 + 余定义域闭包（内联，一次分配）。
+/// `repr(align(8))` 理由同 [`CloCell`]（`v_pi` 的 `ptr | 4` 解码）。
+#[repr(align(8))]
 pub(crate) struct PiCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -288,6 +319,8 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+
+const _: () = assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
 
 /// spine 栈槽：一次中性应用（icit 随槽携带）。`len`/`base` 支撑流式右链
 /// quote；`decl` 标志函数侧是否 Decl 头（builtin 的增量触发要 O(1) 判定，
