@@ -213,18 +213,23 @@ struct AnalysisJob {
 ///
 /// `Reference` is the original `Infer`/`Cxt` engine (the correctness
 /// baseline).  `Twin` is the bump-arena elaborator in
-/// `L13_namespace::bump_spine_iter`, which is ~1.8x faster on the real HDL
-/// prelude (docs/lsp-twin-wiring-2026-09.md §0).  The switch is opt-in via
-/// `TYPORT_LSP_ENGINE=twin` (or `reference`); the default stays `Reference`
-/// so the twelve LSP guard suites and the production behavior are unchanged
-/// until the twin path reaches parity.
+/// `L13_namespace::bump_spine_iter`.
 ///
-/// Wiring status (stage 3a/4 of the wiring doc) is tracked in
-/// `docs/lsp-twin-wiring-2026-09.md §4`; the twin path currently serves the
-/// per-file observation surface (hover / completion / inlay / goto) with the
-/// prelude replayed per kick, while cross-file symbol merging, styled
-/// diagnostics and the deferred-println phase still run on the reference
-/// engine.
+/// **Stage 4 status** (docs/lsp-twin-wiring-2026-09.md §4): a file with no
+/// `import` and no `package` is fully owned by the twin — it produces the
+/// diagnostics, the observation tables and the decl exports itself, and the
+/// reference per-decl infer loop is skipped.  Measured on the HDL workload
+/// (09-hierarchy, release, steady state): **359 ms → 102 ms per kick (~3.5x)**,
+/// with the one-time twin prelude prime moved to `load_prelude` (~3.3 s,
+/// comparable to the reference's own startup prelude load).  Files that
+/// import a project namespace, or declare one, still fall back to the
+/// reference engine (the twin's replay only sees the prelude + the file).
+///
+/// **Trade-off / why the default stays `Reference`**: the resident twin
+/// prelude costs ~1.8 GB RSS (vs ~200 MB for the reference's Rc cache) —
+/// the bump arena cannot reclaim the prelude's intermediate values.  That is
+/// a ~9x memory-for-CPU trade; enable `TYPORT_LSP_ENGINE=twin` where memory
+/// is available.  See `resident_memory_growth_per_kick` for the measurement.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Engine {
     Reference,
