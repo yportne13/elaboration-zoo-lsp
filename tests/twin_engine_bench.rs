@@ -7,12 +7,14 @@
 // Findings (09-hierarchy, release):
 // - Stage 3a (whole-prelude replay per kick): twin ~3285 ms vs reference
 //   ~328 ms -> ~10x SLOWER.  The ~2.8 s prelude replay dominated.
-// - Stage 3b (resident checkpoint, current): twin ~399 ms vs reference
-//   ~325 ms.  The seed tax is gone, but the twin pass is still *additive*:
-//   twin mode runs the reference pipeline for diagnostics/cross-file state
-//   and then adds the twin observation pass (~74 ms).  A net win requires
-//   dropping the reference per-file elaboration in twin mode, i.e. the twin
-//   taking over diagnostics + the cross-file data plane.
+// - Stage 3b (resident checkpoint): twin ~399 ms vs reference ~325 ms.
+//   Seed tax gone, but the twin pass was still *additive* (reference ran for
+//   diagnostics/cross-file state, then twin observation added ~74 ms).
+// - Stage 4 (twin takeover, current): twin ~97 ms vs reference ~335 ms ->
+//   ~3.4x FASTER.  The twin now owns diagnostics + observation + the global
+//   decl merge for files with no imports (the HDL workload), so the
+//   reference per-decl infer loop (~280 ms) is skipped entirely.  Files that
+//   import a project namespace, or declare one, still fall back.
 // See the wiring doc's 2026-09-10 progress log.
 
 use std::sync::Arc;

@@ -197,6 +197,11 @@ fn twin_diagnostics_match_reference() {
         "def inc(n: Nat): Nat = succ n\ndef use: Nat = inc true",
         "def s: String = 42",
         "def ok: Nat = zero",
+        // println INFORMATION diagnostics (reference publishes them in a
+        // second phase; the twin publishes them in one pass — the final set
+        // must agree).
+        "def foo: Nat = succ zero\nprintln foo\n",
+        "def good: Nat = succ zero\nprintln good\ndef bad: Nat = true\n",
     ];
     // (severity, message, start, end) of the last publish per engine.
     fn last_diags(b: &Arc<Backend<CapturingClient>>, uri: &Url) -> Vec<(Option<lsp_types::DiagnosticSeverity>, String, u32, u32)> {

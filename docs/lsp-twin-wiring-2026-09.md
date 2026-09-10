@@ -398,3 +398,59 @@ elaboration（kick 可望落到 ~80ms 级）。这需要：
 3b 已把孪生从"慢 10×"降到"慢 ~23%"，且观察面正确性已验证，但还不能默认。
 单看 bench 的 1.8× 与 3b 的 5.5× 都不足以推断 LSP 收益——**收益取决于
 孪生接管诊断**这一尚未完成的前提。
+
+### 2026-09-10 续（阶段 4 落地：孪生接管单文件诊断——**净收益 3.4×**）
+
+**提交链**：`cfcb503`（错误 span 保真 + 逐 decl 累积）→ `0a2cb3d`（用户声明
+导出为参考域 Decl 行）→ `f4d5da8`（孪生接管单文件诊断+观察）→ `2ce437c`
+（多文件放开 + 未解析名安全阀）。
+
+**诊断面（孪生自产，`cfcb503`）**：
+- `unify_catch` 补 span 形参，从 check/infer_expr/unify_pm 各调用点传入源码
+  span（此前 `empty_span`，"can't unify"系列定位全零）。
+- `observe_user` 逐 decl 累积错误不早退（参考版 `elaborate` 的 `err_collect`
+  同口径：失败 decl 保留旧 cxt 继续）。
+- println 记 span（`DeclOut::Println` 补 Span）；HDL 自检行记 (decl 下标, 行)。
+- 验收 `twin_user_errors_match_reference_diagnostics`：7 例错误语料
+  (span, msg) 多重集与参考版一致。
+- `fake_bind` 的 redefine 错误补 span（实测 `def ok` 撞 prelude 名时暴露
+  与参考版 4..6 vs 0..0 的分叉）。
+
+**数据面（`0a2cb3d`）**：孪生 `DeclEntry` 补 `ty`（类型**项**，参考版行 .3）
+——此前"无读取点省略"，导出层一来成必需（`pretty_sum_definition` 靠它渲染
+构造子签名并判定尾随 `→ ret` 省略）。`observe_user` 末尾把本轮新增的用户
+声明（对 prelude 基线 diff）导出成 `ExportedDecl` 七元组。验收
+`twin_exported_decls_render_sum_members_like_reference`：enum/struct 成员
+列表经导出表与参考版逐字节一致。
+
+**接管（`f4d5da8`）**：`twin_elaborate` 在 `elaborate` 入口——孪生可拥有时
+（Twin 引擎 + 无 import + 无 package）自产诊断、存观察快照、把导出声明并回
+参考域 `cxt.decl`（Defs 另建 `DeclTm::Def` 供 Path1），**跳过参考版逐 decl
+infer 循环**（那 ~280ms/kick 的成本主体）。有 ERROR 时保留旧符号（同参考版）。
+
+**多文件放开（`2ce437c`）**：gate 去掉"仅一个用户文件"限制；安全阀——孪生
+报 `error name not in scope: X` 且全局表确实定义 X 时判定视图不足，回落
+参考版，不误报。
+
+**实测（09-hierarchy，release，min/5）**：
+
+| 阶段 | 参考版 | 孪生 | 相对 |
+|---|---|---|---|
+| 3a 每 kick 重放 prelude | 328ms | 3285ms | 慢 10× |
+| 3b 常驻检查点（仍加性） | 325ms | 399ms | 慢 23% |
+| **4 接管诊断** | **335ms** | **97ms** | **快 3.4×** |
+
+**验收**：`twin_engine_tests` 10 例（错误诊断逐条互检含 println、跨文件回落、
+未导入跨文件符号回落、同文件多 kick 常驻复用、多文件独立拥有、真实 HDL）；
+参考版与孪生两模式 11 套 LSP 守卫全绿；`l13_fast_parity` 388、observation 15、
+debug_test 15 全绿。
+
+**剩余边界（不阻塞 HDL 目标）**：有 import 的文件（`import mylib._`）与
+声明 package 的文件仍走参考版——它们的跨文件符号需要把别的文件喂进孪生的
+bump，属另一子工程。HDL 工作负载不用 import（全靠 prelude 短名别名），故
+目标已达成。
+
+**默认切换建议**：孪生模式现已净收益 3.4× 且诊断/观察/守卫全绿，可考虑
+`TYPORT_LSP_ENGINE=twin` 灰度；但跨文件工程仍回落参考版（正确但无加速），
+默认切换前建议在真实多文件 HDL 工程上量一遍 P50/P99 与内存（resident
+bump 常驻 + 每 kick 追加不可回收，512MB 上限触发重放）。
