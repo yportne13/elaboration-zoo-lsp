@@ -10272,7 +10272,8 @@ struct Arm<'a> {
 pub(crate) struct Compiler<'a> {
     warnings: Vec<Warning>,
     reachable: FxHashMap<usize, ()>,
-    checked_ret: FxHashSet<Raw>,
+    /// 已完整编译（体检查 + pats 记录）的臂下标（参考版同名字段同义）。
+    checked_ret: FxHashSet<usize>,
     pub(crate) pats: Vec<(PatternDetail, &'a Tm<'a>)>,
     seed: i32,
     ret_type: V,
@@ -10542,6 +10543,23 @@ impl<'a> Compiler<'a> {
                             .map(|x| matches!(x, Pattern::Any(sp, _) if sp.data == false))
                             == Some(true) =>
                 {
+                    // **可达性先记**（参考版 pattern_match.rs:361 同序）：
+                    // 到达本叶即该臂可达，与 check_pm/体检查是否成功无关。
+                    // 先前把 insert 放在 check_pm_final 成功之后：构造子分支
+                    // 走查里 check_pm_final 失败（本分支不适用的臂）就不记
+                    // 可达，决策树遍历结束即误报 `unreachable pattern`
+                    // （13-adder-tree 的递归 match 实测）。
+                    if std::env::var("L09_TRACE").is_ok() {
+                        eprintln!("CAUX REACH idx={}", arm.idx);
+                    }
+                    self.reachable.insert(arm.idx, ());
+                    // 同一臂可能在多个构造子分支被走到：已完整编译（体检查
+                    // + pats 记录）则只需可达、无需重检查。**按臂下标**记录
+                    // （参考版 `checked_ret.insert(entry.idx)` 同款）——按体
+                    // Raw 记录会把两个体相同的不同臂混为一谈。
+                    if self.checked_ret.contains(&arm.idx) {
+                        return Ok(true);
+                    }
                     // check_pm 失败 → Ok(false)（参考版同款：整个构造子
                     // 分支回退 false）。用 `patcon.to_raw()` 而非原始
                     // `arm.raw`（参考版 pattern_match.rs 365 同款）——累积
@@ -10555,13 +10573,6 @@ impl<'a> Compiler<'a> {
                         Ok(x) => x,
                         Err(_) => return Ok(false),
                     };
-                    if std::env::var("L09_TRACE").is_ok() {
-                        eprintln!("CAUX REACH idx={}", arm.idx);
-                    }
-                    self.reachable.insert(arm.idx, ());
-                    if self.checked_ret.contains(&arm.raw) {
-                        return Ok(true);
-                    }
                     // 期望类型重锚到臂上下文：quote → eval（flex 免锚）
                     let ret_type = {
                         let t = mach.force_v(bump, &cxt, self.ret_type);
@@ -10573,7 +10584,7 @@ impl<'a> Compiler<'a> {
                         }
                     };
                     let ret = mach.check(bump, &cxt, &arm.arm.body.0, ret_type)?;
-                    self.checked_ret.insert(arm.raw.clone());
+                    self.checked_ret.insert(arm.idx);
                     let patcon = arm.patcon.clone().clean();
                     self.pats.push((patcon.data[0].1[0].clone(), ret));
                     Ok(true)
@@ -12328,6 +12339,14 @@ impl Tycker {
         cxt = insert_prelude_aliases(cxt);
         {
             let mut m = self.machine.mutable.borrow_mut();
+            // 会话级全局复位（参考版 `clone_prelude_state` 逐字：装载期由
+            // 声明处 check 求值写脏的这些键，每次 run 从空基线重来，由
+            // prelude 自身的 `change_mutable_default` 再播种）。孪生此前只
+            // 复位 HdlLoopIdx——残留的 ModuleTree 等会让模块 close-check
+            // 看到脏树：13-adder-tree 实测**漏报** HDL001/HDL002 警告。
+            for k in ["WhenStack", "ModuleTree", "CombCtx", "ModulePortTable"] {
+                m.map.remove(k);
+            }
             m.map.insert(
                 SmolStr::new("HdlLoopIdx"),
                 v_xcell(bump.alloc(XCell::Decl {
@@ -13438,6 +13457,34 @@ def d0 : Nat -> Nat = n => succ n
         v.extend(PRELUDE_HDL);
         v.push((show, show_src));
         v
+    }
+
+    /// 临时探针：打印某 HDL 例的孪生错误（`HBAD` 选文件）。
+    #[test]
+    #[ignore = "manual probe"]
+    fn probe_twin_errors_on_hdl() {
+        let name = std::env::var("HBAD").unwrap_or_else(|_| "18-utils.typort".into());
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        let mut t = Tycker::new();
+        t.prime_resident(&pre).expect("prime");
+        let src = std::fs::read_to_string(format!("examples/hdl/{name}")).unwrap();
+        let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+            &crate::L13_namespace::preprocess(&src), 700, &pre.macros,
+        ).expect("parse");
+        t.observe_user(&pre, &decls).expect("observe");
+        for e in t.user_errors() {
+            eprintln!(
+                "[TERR] {}..{} {:?}",
+                e.0.start_offset,
+                e.0.end_offset,
+                e.0.data.lines().take(3).collect::<Vec<_>>().join(" / ")
+            );
+        }
+        eprintln!("[TERR] errors={}", t.user_errors().len());
+        for (i, l) in t.check_issue_lines() {
+            eprintln!("[TERR] check decl{i}: {}", l.chars().take(80).collect::<String>());
+        }
+        eprintln!("[TERR] checks={}", t.check_issue_lines().len());
     }
 
     /// **回归**：模块体内表达式 `let`（`let x = a + b`）的展开会经过

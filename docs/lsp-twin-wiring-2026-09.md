@@ -472,18 +472,37 @@ HDL 例 65% 采样）。已按参考版移植 `tm_no_metas`/`val_no_metas`/
 `env_no_metas`：值身份去重破环；`Tm` 指针与值打包字用两套访问集（不同
 地址空间，混用会误判同号）。回归 `expr_let_in_module_body_terminates`。
 
-**2. 伪错误：孪生在某些真实输入上比参考版"更严"（已加闸）**
-`13-adder-tree.typort`：孪生 pattern 编译器把参考版接受的分支判成
-unreachable → 该 decl 失败 → 递归 def 未登记 → 连锁 "not in scope" 伪错误，
-而参考版干净通过。**故任何孪生错误都不可作为权威诊断**：`twin_elaborate`
-现在遇任何 ERROR/parse 错误即整体回落参考版（诊断+观察+数据面）。无错文件
-（编辑常态）仍由孪生拥有、保留加速；出错文件本就要参考版兜底，只是诊断
-一律取参考版。此闸涵盖原多文件未解析名安全阀，后者已删。
+**2. 伪错误：可达性记录顺序错了（已修）**
+`13-adder-tree.typort`：孪生把参考版接受的分支判成 unreachable → 该 decl
+失败 → 递归 def 未登记 → 连锁 "not in scope" 伪错误，而参考版干净通过。
+根因：孪生 `compile_aux` 在 `check_pm_final` **成功之后**才 `reachable.insert`，
+而参考版（pattern_match.rs:361）是**到达叶即先记可达**——决策树按构造子
+分支走查时，本分支不适用的臂 check_pm_final 会失败，孪生便漏记可达，遍历
+结束即误报 unreachable。已按参考版改序；`checked_ret` 同步由"体 Raw"改为
+"臂下标"（参考版 `entry.idx` 同款，避免两个同体臂互相顶替）。修后全语料
+23 例中 **22 例由孪生拥有**（此前更少）。
+
+**3. 漏报：模块 close-check 未跑全（已加闸）**
+同语料暴露：`13-adder-tree` 孪生 **checks=0** 而参考版报 8 条
+HDL001/HDL002 警告——该文件的模块树在孪生侧构建不全，close-check 走不到
+报告点（`18-utils` 另有 trait 求解分叉，孪生报错故已被错误闸挡下）。
+**任何孪生诊断都不可无验证地当权威**：`twin_elaborate` 现有两道闸——
+(1) 遇任何 ERROR/parse 错误整体回落参考版；(2) **声明了模块的文件若
+check 警告为空则回落**（干净的模块文件会多付一次参考版代价，方向安全）。
+无错且非空警告的文件仍由孪生拥有、保留加速。原多文件未解析名安全阀被
+(1) 涵盖，已删。
 
 **全语料验收** `twin_matches_reference_on_all_hdl_examples`：23 例诊断逐条
 一致（严重度/文案/range），且参考版能解析的每个用户文件标识符位置孪生都能
 解析（无缺失 hover）。渲染文本/def_span 在宏生成的方法/限定访问路径上仍有
 已登记偏差（见下），由 curated 守卫套件严格把关。
+
+**代价（错误态）**：出错文件每 kick 白跑一次孪生（~100ms）再回落参考版
+（~334ms）——即打字期（常态性临时错误）比纯参考版慢 ~30%。换取的是诊断
+永远正确。若后续修掉 pattern 编译器的 false-unreachable（`13-adder-tree`
+根因），此闸可放宽为"仅未解析名类错误回落"，该损失随之消失。孪生自产
+诊断的逐条互检仍在 lib 层保留（`twin_user_errors_match_reference_diagnostics`），
+以便修好后可验证地放开。
 
 **新登记偏差（记录，暂不修）**：
 - 宏限定成员访问（如 `basicDecls.create[8].tree`）：孪生渲染 `create` 的

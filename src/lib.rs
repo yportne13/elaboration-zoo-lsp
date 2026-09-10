@@ -1393,6 +1393,18 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             self.twin_tables.remove(&uri_str);
             return false;
         }
+        // Second correctness gate: HDL self-check warnings.  `hdl-check`'s
+        // module close-check runs while the module tree is walked; when the
+        // twin builds that tree incompletely it reports *no* issues where the
+        // reference reports several (e.g. 13-adder-tree: 0 vs 8 warnings).
+        // A file that declares modules but yields no check issues is therefore
+        // distrusted — fall back.  Clean module files pay the reference
+        // unnecessarily, which is the safe direction.
+        let has_module = decls.iter().any(|d| matches!(d, Decl::Class { .. }));
+        if has_module && checks.is_empty() {
+            self.twin_tables.remove(&uri_str);
+            return false;
+        }
         let rope = Rope::from_str(text);
         // Merge exports into the reference global table (mirrors the
         // reference path's per-file symbol replacement).  Error-free by the
