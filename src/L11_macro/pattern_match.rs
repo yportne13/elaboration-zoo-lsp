@@ -65,7 +65,6 @@ pub struct Compiler {
     reachable: HashMap<usize, ()>,
     checked_ret: HashSet<Raw>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
-    seed: i32,
     ret_type: Rc<Val>,
 }
 
@@ -76,14 +75,8 @@ impl Compiler {
             reachable: HashMap::new(),
             checked_ret: HashSet::new(),
             pats: Vec::new(),
-            seed: 0,
             ret_type,
         }
-    }
-
-    fn fresh(&mut self) -> i32 {
-        self.seed += 1;
-        self.seed
     }
 
     fn fill_context(ctx: &MatchContext, pat: &Pattern) -> Pattern {

@@ -1,8 +1,7 @@
 
 use super::{
-    Infer, MetaEntry, Cxt, Rc, Val, UnifyError, Ty, Span,
-    MetaVar, Tm, Lvl, Ix, List, Closure, VTy, syntax::Locals,
-    empty_span, Raw, Either, Spine, close_ty, Icit,
+    Infer, Cxt, Rc, Val, UnifyError, List,
+    empty_span, Raw, Either, Icit,
 };
 
 impl Infer {

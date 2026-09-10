@@ -1,13 +1,25 @@
-use colored::Colorize;
-
 use crate::list::List;
 
 use super::{
-    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix, typeclass::Typ,
+    Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm, typeclass::Assertion, Raw, Rc, Decl,
 };
 
 use std::collections::{HashMap, HashSet};
+
+/// η 展开的可应用性守卫：只有中性值（Flex/Rigid/Decl/Obj 头）能被 η 新变量
+/// 应用——这正是 `Infer::v_app` 能处理的全部形态（其余会命中
+/// `panic!("impossible apply")`）。`string_to_global_type` 把 def 的登记值
+/// （可以是 λ）当"动态类型"返回后，λ 值会以**类型身份**流入 unify（源码级
+/// 可达：`def f : U -> U = x => x` 之后 `get_global "f"` 的类型就是 f 的
+/// λ 值）——对字面量 / U / Π 做 η 应用会 panic。改为直接判失败（λ 与非函数
+/// 值的比较无从展开，最小惊讶）；快版 `unify_iter` 的 η 臂同款守卫。
+fn v_applicable(v: &Val) -> bool {
+    matches!(
+        v,
+        Val::Flex(..) | Val::Rigid(..) | Val::Decl(..) | Val::Obj(..)
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
@@ -103,30 +115,39 @@ impl Infer {
     fn prune_ty_go(
         &mut self,
         decl: &Decl,
-        pr: &Pruning,
+        rev: &[Option<Icit>],
         pren: &PartialRenaming,
         a: &Rc<Val>,
     ) -> Result<Rc<Tm>, UnifyError> {
+        // 掩码按"外→内"配对 Π 层：`rev` 头 = 最外层槽位（`prune_ty` 已把
+        // Pruning 反转——List 头是最内层）。旧实现直接按链头配对外层 Π，
+        // 多层 telescope + 混合掩码时掩码与 Π 层错位（L05–L10 已修的同款；
+        // 快版 `prune_ty_bump` 亦 `mask_inner_first.iter().rev()`）。
         let a = self.force(decl, a);
-        match (pr, a.as_ref()) {
-            (List { head: None, .. }, _) => self.rename(decl, pren, &a),
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
+        match (rev.split_first(), a.as_ref()) {
+            (None, _) => self.rename(decl, pren, &a),
+            (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
                 let a = self.rename(decl, pren, a)?;
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod).into());
-                let b = self.prune_ty_go(decl, &list.tail(), &lift(pren), &b)?;
+                let b = self.prune_ty_go(decl, rest, &lift(pren), &b)?;
                 Ok(Tm::Pi(x.clone(), *i, a, b).into())
             }
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+            (Some((None, rest)), Val::Pi(_, _, _, b)) => {
                 let b = self.closure_apply(decl, &b, Val::vvar(pren.cod).into());
-                self.prune_ty_go(decl, &list.tail(), &skip(pren), &b)
+                self.prune_ty_go(decl, rest, &skip(pren), &b)
             }
             _ => Err(UnifyError::Basic), // impossible case
         }
     }
     pub fn prune_ty(&mut self, decl: &Decl, pr: &Pruning, a: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
+        // Pruning 头 = 最内层槽位；meta 类型的 Π 层从最外层剥起——先反转
+        // 成"外→内"（RevPruning，L05–L10 的 pruneTy 同款）。旧移植未反转，
+        // 多层非线性 pruning 下与快版分叉。
+        let mut rev: Vec<Option<Icit>> = pr.iter().copied().collect();
+        rev.reverse();
         self.prune_ty_go(
             decl,
-            pr,
+            &rev,
             &PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
@@ -143,7 +164,7 @@ impl Infer {
         };
 
         let prune_ty = self.prune_ty(decl, &pruning, &mty)?;
-        let prunedty = self.eval(decl, &List::new(), &prune_ty); //TODO:revPruning
+        let prunedty = self.eval(decl, &List::new(), &prune_ty);
         let m_prime = MetaVar(self.new_meta(prunedty));
 
         let solution = self.eval(
@@ -422,7 +443,7 @@ impl Infer {
         // can be pruned from the meta type (i.e. that the pruned solution will
         // be well-typed)
         if let Some(pr) = prune_non_linear {
-            self.prune_ty(decl, &pr, &mty)?; //TODO:revPruning?
+            self.prune_ty(decl, &pr, &mty)?;
         }
 
         let rhs = self.rename(
@@ -584,7 +605,10 @@ impl Infer {
                     _ => None,
                 }
             }
-            _ => unreachable!(),
+            // 长度失配（一侧空、另一侧非空）：与 L05–L10 及快版
+            // `intersect_bump`（`n1 != n2` 返回 false）一致，回落 `unify_sp`
+            // 判失败，不再 `unreachable!()` panic。
+            _ => None,
         }
     }
     fn intersect(
@@ -643,13 +667,13 @@ impl Infer {
                 &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
                 &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
             ),
-            (_, Val::Lam(_, i, t_prime)) => self.unify(
+            (_, Val::Lam(_, i, t_prime)) if v_applicable(&t) => self.unify(
                 l + 1,
                 cxt,
                 &self.v_app(&cxt.decl, &t, Val::vvar(l).into(), *i),
                 &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
             ),
-            (Val::Lam(_, i, t), _) => self.unify(
+            (Val::Lam(_, i, t), _) if v_applicable(&u) => self.unify(
                 l + 1,
                 cxt,
                 &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),

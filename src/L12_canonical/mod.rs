@@ -1,4 +1,3 @@
-use colored::Colorize;
 use cxt::Cxt;
 use parser::{syntax::{Either, Icit, Raw}, IError};
 use pattern_match::Compiler;

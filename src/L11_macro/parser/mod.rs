@@ -127,6 +127,55 @@ type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
 pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>);
 
+/// 宏展开重解析的递归深度上限：自递归宏（`macro_rules m { () => { m } }` +
+/// `def x = m`）在展开后再次命中同名宏，若不加限制会无限递归直至栈溢出
+/// （LSP 可在任意用户源码上触发）。合法宏/块嵌套深度远小于此值；超限推
+/// 一条 IError 并停止展开（不再递归）。
+const MAX_MACRO_EXPANSION_DEPTH: u32 = 256;
+
+thread_local! {
+    /// 当前线程的宏展开重解析深度（普通解析不计入）。
+    static MACRO_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// RAII 深度守卫：`enter` 成功即计数 +1，`Drop`（含 panic 展开）时 -1。
+struct MacroDepthGuard;
+
+impl MacroDepthGuard {
+    /// 进入下一层展开；已达上限返回 `None`（调用方推 IError 并退化）。
+    fn enter() -> Option<Self> {
+        MACRO_DEPTH.with(|d| {
+            let n = d.get();
+            if n >= MAX_MACRO_EXPANSION_DEPTH {
+                None
+            } else {
+                d.set(n + 1);
+                Some(MacroDepthGuard)
+            }
+        })
+    }
+}
+
+impl Drop for MacroDepthGuard {
+    fn drop(&mut self) {
+        MACRO_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
+
+/// 展开超限错误（span 取宏调用首 token）。
+fn macro_depth_error(input: &[TokenNode<'_>]) -> IError {
+    IError {
+        msg: input
+            .first()
+            .map(|x| x.to_span())
+            .unwrap_or(empty_span(()))
+            .map(|_| ErrMsg::Custom(format!(
+                "macro expansion too deep (limit {})",
+                MAX_MACRO_EXPANSION_DEPTH
+            ))),
+    }
+}
+
 fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
     let mut result = String::new();
     for (i, tok) in tokens.iter().enumerate() {
@@ -501,17 +550,33 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         )))//TODO:do not unwrap
         .or(kw(Hole).map(Raw::Hole))
         .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
-        .or(string(Num).map(|x| {
+        .or(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
             // No Nat literal — numbers desugar to Church numeral chains.
-            let num_span = x.map(|x| x.parse::<u64>().unwrap());
-            let mut ret = Raw::Var(num_span.to_span().map(|_| "zero".to_owned()));
-            let mut num = num_span.data;
-            while num > 0 {
-                ret = Raw::app(Raw::Var(num_span.to_span().map(|_| "succ".to_owned())), ret);
-                num -= 1;
+            let (rest, x) = string(Num).parse(input, state)?;
+            match x.data.parse::<u64>() {
+                Ok(mut num) => {
+                    let num_span = x.to_span();
+                    let mut ret = Raw::Var(num_span.map(|_| "zero".to_owned()));
+                    while num > 0 {
+                        ret =
+                            Raw::app(Raw::Var(num_span.map(|_| "succ".to_owned())), ret);
+                        num -= 1;
+                    }
+                    Ok((rest, ret))
+                }
+                Err(_) => {
+                    // 整数超出 u64（如 `99999999999999999999999999`）：推一条
+                    // 解析错误并退化为 `Raw::Hole`，不再 panic；与常规语法
+                    // 错误同路径（双版共用本 parser）。
+                    state.push_error(IError {
+                        msg: x.to_span().map(|_| {
+                            ErrMsg::Custom("integer literal does not fit in u64".to_owned())
+                        }),
+                    });
+                    Ok((rest, Raw::Hole(x.to_span())))
+                }
             }
-            ret
-        }))
+        })
         .or(
             // Tuple literal: (a, b, ...) -> TupleN.mk a b ...
             paren_cut(
@@ -1116,6 +1181,11 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         path_id: tok.path_id,
                     }).collect(),
                 };
+                let _guard = match MacroDepthGuard::enter() {
+                    Some(g) => g,
+                    // 展开深度超限：停止递归，返回错误（由上层 recover 记录）。
+                    None => return Err(macro_depth_error(input)),
+                };
                 let mut temp_state = (vec![], state.1.clone(), vec![]);
                 let ret = p_raw(&t_borrowed, &mut temp_state)?;
                 state.0.extend(temp_state.0);
@@ -1375,6 +1445,10 @@ fn p_def_stmt_block<'a: 'b, 'b>(
         None => {
             return Err(IError { msg: lcurly.map(|_| ErrMsg::Base(BaseMsg::ExpectRaw)) });
         }
+    };
+    let _guard = match MacroDepthGuard::enter() {
+        Some(g) => g,
+        None => return Err(macro_depth_error(input)),
     };
     let mut temp_state = (vec![], state.1.clone(), vec![]);
     let ret = p_raw(&t_borrowed, &mut temp_state)?;
@@ -1915,6 +1989,19 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 end_offset: tok.end_offset,
                 path_id: tok.path_id,
             }).collect();
+            let _guard = match MacroDepthGuard::enter() {
+                Some(g) => g,
+                // 展开深度超限：停止递归，推 IError 后退化（is_cut → Hole，
+                // 否则试下一条规则），与本函数现有 Err 分支同款。
+                None => {
+                    state.0.push(macro_depth_error(input));
+                    if is_cut {
+                        return Ok((i, Decl::Println(Raw::Hole(empty_span(())))))
+                    } else {
+                        continue;
+                    }
+                }
+            };
             let mut temp_state = (vec![], state.1.clone(), vec![]);
             let ret = match p_decl(&t_borrowed, &mut temp_state) {
                 Ok(r) => r,

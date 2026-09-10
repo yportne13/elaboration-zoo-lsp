@@ -1,12 +1,10 @@
 use std::cmp::max;
 
-use colored::Colorize;
-
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
-    Lvl, Rc,
+    Rc,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
@@ -159,7 +157,7 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&cxt.decl, &pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
+                    self.prune_ty(&cxt.decl, &pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?;
                 }
 
                 if pren.dom.0 == 0 {
@@ -291,7 +289,8 @@ impl Infer {
                     //println!("-------------------<");
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), typ_tm.clone(), vtyp.clone())?;
                     let t_tm = self.check(&fake_cxt, bod.clone(), &vtyp)?;
-                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
+                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
+                        .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
                     if let Some(meta_ty) = t_tm.no_metas(self) {
                         let err_msg = if let Val::Sum(name, params, _, true) = meta_ty.as_ref() {

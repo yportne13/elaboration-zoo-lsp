@@ -5,8 +5,6 @@ use super::parser::syntax::Icit;
 
 use super::Tm;
 
-type ShowS = Box<dyn FnOnce(&mut String)>;
-
 const ATP: i32 = 3;  // atomp
 const APPP: i32 = 2; // appp
 const PIP: i32 = 1;  // pip

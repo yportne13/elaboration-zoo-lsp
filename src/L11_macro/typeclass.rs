@@ -27,9 +27,11 @@ impl Val {
             Val::Lam(..) => None,
             Val::Pi(span, icit, val, closure) => None,
             Val::U(x) => Some(Typ::Val(empty_span(format!("Type {x}")))),
-            Val::LiteralType => todo!(),
-            Val::LiteralIntro(span) => todo!(),
-            Val::Prim(_, _) => todo!(),
+            // 字面量 / Prim 无 trait 求解器类型：返回 None。快版孪生
+            // `bump_spine_iter::val_to_typ` 对同形值一律 None；此前这里是
+            // `todo!()`，字符串字面量取字段（`"a".foo`）或作 trait 实参
+            // （`impl Foo["x"] for T`）会直接 panic。
+            Val::LiteralType | Val::LiteralIntro(_) | Val::Prim(_, _) => None,
             Val::Sum(span, items, _, _) => Some(
                 if items.is_empty() {
                     Typ::Val(span.clone())

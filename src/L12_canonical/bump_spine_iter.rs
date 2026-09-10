@@ -270,6 +270,9 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: v 是 `v_clo` 写出的 tag 1 打包字（`ptr|1`）。`CloCell` 由
+    // `#[repr(align(8))]` 保证 ≥8 对齐，`& !7` 恰好还原分配地址；生命周期
+    // 由调用方按 bump 轮次不变式（reset 前句柄消亡）担保。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -278,6 +281,8 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: v 是 `v_pi` 写出的 tag 4 打包字（`ptr|4`）。`PiCell` 含 `V(u64)`
+    // 字段故天然 ≥8 对齐（上方 const 断言钉住），`& !7` 还原分配地址。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -292,6 +297,8 @@ pub(crate) fn v_u_of(v: V) -> u32 {
 /// tag 7 单元解引用（bump 内分配，本轮内有效）。
 #[inline]
 pub(crate) fn v_xcell_of<'a>(v: V) -> &'a XCell<'a> {
+    // SAFETY: v 是 `v_xcell` 写出的 tag 7 打包字（`ptr|7`）。`XCell` 由
+    // `#[repr(align(8))]` 保证 ≥8 对齐（含 wasm32），`& !7` 恰好还原分配地址。
     unsafe { &*((v.0 & !7) as *const XCell) }
 }
 
@@ -315,6 +322,11 @@ pub(crate) struct SumDataV<'a> {
 /// 类型本体、构造子值、卡住 match。判等按单元指针（同内容不同次求值各造
 /// 单元——与参考版每次构造新值同构）；**位相等捷径对 tag 7 关闭**（见模块
 /// 注释）。
+///
+/// `#[repr(align(8))]`：packed 编码用 `ptr | 7` 写、`v.0 & !7` 读回，要求
+/// 单元地址低 3 位为 0。64 位目标 `&str` 已 8 对齐，但 wasm32 上 `&str`
+/// 仅 4 字节对齐，故显式钉死 ≥8（下方有编译期断言）。
+#[repr(align(8))]
 pub(crate) enum XCell<'a> {
     Lit(&'a str),
     /// 卡住的声明引用（参考版 `Val::Decl(name, sp)` 的裸头）：decl 表
@@ -473,6 +485,7 @@ pub(crate) fn env_ext_defs<'a>(
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -488,6 +501,18 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+
+/// 编译期钉住所有经 `ptr|tag` 编码的单元类型 ≥8 对齐：`v_clo`/`v_pi`/
+/// `v_xcell` 写 `ptr|tag`，对应 `v_*_of` 用 `& !7` 解引用，地址低 3 位必须
+/// 为 0。64 位目标天然满足；wasm32（`&str` 仅 4 对齐）靠上面的
+/// `#[repr(align(8))]`。`EnvCons` 不直接经 packed 字编码（env 走直接引用），
+/// 但同样断言以钉住 packed 值字段的对齐不变式。
+const _: () = {
+    assert!(std::mem::align_of::<XCell<'static>>() >= 8);
+    assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
+    assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
+    assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
+};
 
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------
@@ -734,6 +759,21 @@ fn vapp1<'a>(
         panic!("impossible apply")
     } else {
         spine.push(f, a, i)
+    }
+}
+
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应）：
+/// 只有 `vapp1` 不会 panic 的形态能吃 η 新变量。tag 7 仅 `Obj`/`Decl` 可
+/// （`Lit`/`Prim`/`Sum`/`SumCase`/`Match` → panic）；tag 3(U)/4(Pi)/6(Lit)
+/// 不可；其余（Rigid 0 / Clo 1 / 链 2 / Flex 5）可。防止 λ 值以类型身份
+/// 流入 unify 时（`get_global "f"` 取到 `x => x` 的登记值）触发
+/// `impossible apply`。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => matches!(v_xcell_of(v), XCell::Obj { .. } | XCell::Decl { .. }),
+        _ => true,
     }
 }
 
@@ -2439,9 +2479,10 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链；卡住
-        // match / 字面量等形态的应用 panic——参考版 v_app 同款）
-        if v_tag(u) == 1 {
+        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影/声明/链的应用压链）。
+        // 可应用性守卫（参考版 `v_applicable` 同款）：字面量/U/Π/Sum 等形态
+        // 不做 η，落后续臂 → 最终 false（参考版同处 Err），不再 panic。
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2456,7 +2497,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -3480,9 +3521,9 @@ struct Names {
     by_lvl: FxHashMap<u32, V>,
 }
 
-/// 稳态复用机（L06/L08 版 + L09 增量：global 表）。L09 没有 decl 表 /
-/// 可变全局 / 燃料池 / pm 事实表——全局 def 走 [`Machine::decl`]（下标
-/// = global_idx，项层以 `GLOBAL_BASE` 偏移的大下标引用）；名字状态在
+/// 稳态复用机（L06/L08 版 + L12 增量：decl 表 / trait 合成 / 可变全局）。
+/// 全局走 `Cxt.decls`（名字键，参考版 `Cxt.decl` 同构），**没有** L09/L10 的
+/// `Infer.global` 大下标与 `GLOBAL_BASE` 哨兵——无相应下溢边界；名字状态在
 /// [`Cxt`] 的 `names` 快照里（参考版 BiMap 同构）。
 pub(crate) struct Machine {
     spine: Spine,
@@ -5396,9 +5437,11 @@ impl Machine {
                 // redefine 报错），检查体，再用真值覆盖（decl_reg 静默写）。
                 let fake = self.fake_bind(bump, cxt, &name.data, typ_tm, vtyp)?;
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
-                // 参考版 Def 臂：检查后 solve_multi_trait(0).unwrap()（求解
-                // 失败即 panic——参考版 unwrap 同款崩溃）
-                self.solve_multi_trait_ref(bump, &fake, 0).unwrap();
+                // 参考版 Def 臂：检查后 `solve_multi_trait(0)`，求解失败由
+                // `.map_err(...)?` 返回可恢复错误（对齐参考版口径：Debug
+                // 序列化 `UnifyError::Trait(msg)` → `Trait("...")`）。
+                self.solve_multi_trait_ref(bump, &fake, 0)
+                    .map_err(|e| Error(name.to_span().map(|_| format!("Trait({:?})", e)), vec![]))?;
                 // 参考版 Def 臂：no_metas 检查（未解 meta 带类型类定型消息）
                 if let Some((_snap, meta_ty)) = no_metas(bump, self, &fake, t_tm) {
                     return Err(err_unsolved_meta(bump, self, &fake, t_tm, meta_ty));
