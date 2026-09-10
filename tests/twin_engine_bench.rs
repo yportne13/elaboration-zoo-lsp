@@ -37,20 +37,30 @@ impl ClientLike for SilentClient {
 #[ignore = "manual perf measurement; run with --release --ignored --nocapture"]
 fn bench_kick_cost_by_engine() {
     let src = std::fs::read_to_string("examples/hdl/09-hierarchy.typort").unwrap();
-    let kicks = 5usize;
+    // ONE Backend per engine, an explicit warm-up kick (which pays the
+    // engine's one-time setup: the twin's resident prelude prime), then
+    // steady-state kicks.  Measuring min over fresh Backends would hide the
+    // twin's prime behind the thread-local resident (reused across the loop).
     for eng in [Engine::Reference, Engine::Twin] {
+        let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
+        b.load_prelude();
+        let uri = Url::parse("file:///bench.typort").unwrap();
+        let t0 = Instant::now();
+        b.process_file(&uri, &src, Some(0));
+        let warmup = t0.elapsed().as_secs_f64() * 1000.0;
         let mut best = f64::MAX;
-        for _ in 0..kicks {
-            let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
-            b.load_prelude();
-            let uri = Url::parse("file:///bench.typort").unwrap();
+        let mut total = 0.0;
+        let kicks = 5usize;
+        for i in 0..kicks {
             let t0 = Instant::now();
-            b.process_file(&uri, &src, Some(1));
+            b.process_file(&uri, &src, Some(i as i32 + 1));
             let dt = t0.elapsed().as_secs_f64() * 1000.0;
-            if dt < best {
-                best = dt;
-            }
+            total += dt;
+            if dt < best { best = dt; }
         }
-        println!("[BENCH] {eng:?}: {best:.1} ms/kick (min of {kicks})");
+        println!(
+            "[BENCH] {eng:?}: warmup(first kick incl. setup)={warmup:.0} ms | steady-state min={best:.0} avg={:.0} ms/kick ({kicks})",
+            total / kicks as f64,
+        );
     }
 }

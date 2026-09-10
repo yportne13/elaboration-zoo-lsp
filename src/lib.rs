@@ -1224,9 +1224,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         *self.infer.lock().unwrap() = infer;
         *self.cxt.lock().unwrap() = cxt;
 
-        // Twin engine: parse the prelude once for the per-file observation
-        // passes (`twin_observe`).  Parse-only, no elaboration — the twin
-        // replay happens per kick and is the seed-cost baseline of stage 3a.
+        // Twin engine: parse the prelude once and prime the resident twin
+        // checkpoint NOW (at startup), so the first edit does not pay the
+        // one-time ~3.3 s prime — only the ~100 ms per-kick user segment.
+        // The resident is a thread-local; `load_prelude` and the analysis
+        // loop run on the same (main) thread.
         if self.engine == Engine::Twin {
             let mut files: Vec<(&str, &str)> = L13_namespace::PRELUDE_CORE.to_vec();
             if !skip_hdl {
@@ -1236,6 +1238,27 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let parsed = L13_namespace::parse_prelude_files(&files);
             if let Some(f) = &parsed.failed {
                 eprintln!("typort: twin prelude parse failed at `{f}`");
+            }
+            if parsed.failed.is_none() {
+                let include_hdl = !skip_hdl;
+                let primed = TWIN_RESIDENT.with(|slot| {
+                    let mut slot = slot.borrow_mut();
+                    // Reuse a resident of the same prelude shape (the LSP has
+                    // one Backend per process, but tests create many on one
+                    // thread) — only (re)prime when absent or mismatched.
+                    if matches!(slot.as_ref(), Some(r) if r.include_hdl == include_hdl) {
+                        return true;
+                    }
+                    let mut t = L13_namespace::bump_spine_iter::Tycker::new();
+                    if t.prime_resident(&parsed).is_err() {
+                        return false;
+                    }
+                    *slot = Some(TwinResident { include_hdl, tycker: t });
+                    true
+                });
+                if !primed {
+                    eprintln!("typort: twin prelude prime failed");
+                }
             }
             *self.twin_prelude.lock().unwrap() = Some(parsed);
         }
@@ -1349,10 +1372,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         drop(prelude_guard);
         // Safety valve for multi-file workspaces: a no-import file must not
         // depend on another open file's symbols, but the reference shares one
-        // global table, so an unimported reference would resolve there and
-        // not in the twin's prelude-only replay.  If the twin reports an
-        // unresolved name that the global table (other files + this file's
-        // previous symbols) does define, fall back to the reference engine.
+        // global table (and resolves bare names by unique suffix, e.g. `foo`
+        // → `liba.foo`, with an import-fix diagnostic).  If the twin reports
+        // an unresolved name that the global table resolves — exactly or by
+        // short name — its prelude-only view was insufficient: fall back.
         {
             let unresolved: Vec<&str> = errors
                 .iter()
@@ -1360,7 +1383,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 .collect();
             if !unresolved.is_empty() {
                 let cxt = self.cxt.lock().unwrap();
-                if unresolved.iter().any(|n| cxt.decl.contains_key(*n)) {
+                let resolves = |n: &str| {
+                    cxt.decl.contains_key(n)
+                        || cxt.decl.keys().any(|k| k.rsplit('.').next() == Some(n))
+                };
+                if unresolved.iter().any(|n| resolves(n)) {
                     drop(cxt);
                     self.twin_tables.remove(&uri_str);
                     return false;
@@ -1448,14 +1475,23 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             d.severity = Some(DiagnosticSeverity::WARNING);
             diags.push(d);
         }
-        for (span, s) in &printlns {
-            let start_position = offset_to_position(span.start_offset as usize, &rope).unwrap_or_default();
-            let end_position = offset_to_position(span.end_offset as usize, &rope).unwrap_or_default();
-            let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), s.clone());
-            d.severity = Some(DiagnosticSeverity::INFORMATION);
-            diags.push(d);
+        // Two-phase publish, mirroring the reference: errors/warnings first
+        // (fast), then the same set plus println INFORMATION results.  The
+        // twin computes println values inline during elaboration, so it has
+        // them already — but publishing twice keeps the client's UX (errors
+        // land immediately) and the two-phase guard suite engine-agnostic.
+        self.client.publish_diagnostics(uri.clone(), diags.clone(), version);
+        if !printlns.is_empty() {
+            let mut with_print = diags;
+            for (span, s) in &printlns {
+                let start_position = offset_to_position(span.start_offset as usize, &rope).unwrap_or_default();
+                let end_position = offset_to_position(span.end_offset as usize, &rope).unwrap_or_default();
+                let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), s.clone());
+                d.severity = Some(DiagnosticSeverity::INFORMATION);
+                with_print.push(d);
+            }
+            self.client.publish_diagnostics(uri.clone(), with_print, version);
         }
-        self.client.publish_diagnostics(uri.clone(), diags, version);
         true
     }
 
