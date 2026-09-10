@@ -261,6 +261,8 @@ impl Infer {
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
                 if CANONICAL {
+                    // 顶层合一入口：充值 fuel 池（L08 前向传播的护栏纪律）
+                    self.refuel();
                     self.unify(cxt.lvl, cxt, &a, &inferred_type, 100).map_err(|e| {
                         let err = match e {
                             super::UnifyError::Basic | super::UnifyError::Stuck => format!(

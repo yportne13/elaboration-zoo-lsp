@@ -652,6 +652,21 @@ fn vapp1<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// 按 L09 `vapp1` 的可应用集裁剪）：只有裸 Rigid(0)/未解 Flex(5)/链(2)
+/// 与 Obj 头的 tag 7 单元能吃 η 新变量；U(3)/Π(4)/LiteralType(6) 与
+/// Lit/Prim/Sum/SumCase/Match 单元不可应用（`vapp1` panic 集）。λ 与
+/// 不可应用值相遇时 η 臂不展开，落空后按合一失败返回（与参考版守卫
+/// 同判；守卫为真时行为照旧）。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
+        _ => true,
+    }
+}
+
 // force（迭代；L09 参考版只有 Flex 臂）
 // --------------------------------------------------------------------------------
 
@@ -2201,8 +2216,10 @@ fn unify_iter<'a>(
             continue;
         }
         // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链；卡住
-        // match / 字面量等形态的应用 panic——参考版 v_app 同款）
-        if v_tag(u) == 1 {
+        // match / 字面量等形态的应用 panic——参考版 v_app 同款）。可应用
+        // 性守卫 `vapp_ok`（参考版 `v_applicable` 同款）：不可应用一侧
+        // 不展开，落空后按合一失败返回
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2217,7 +2234,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));

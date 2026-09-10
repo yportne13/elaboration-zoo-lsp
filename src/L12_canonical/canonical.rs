@@ -103,6 +103,9 @@ impl Infer {
                 //println!("{:?}", self.unify(cxt.lvl, &cxt, &vt, &typ, 100));
                 //println!("{:?}", self.check::<true>(origin_cxt, raw.clone()(raw_list.clone()), origin_target));
                 let lamb = lamb.clone();
+                // canonical 逐候选探测：每次探测充值 fuel 池（L08 前向传播
+                // 的护栏纪律，与 unify 的 `fuel` 参数互补）
+                self.refuel();
                 if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 5), Ok(_) | Err(UnifyError::Stuck))
                     && self.check::<true>(origin_cxt, raw.clone()(raw_list), origin_target).is_ok() {
                         /*println!(

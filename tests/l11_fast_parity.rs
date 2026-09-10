@@ -525,6 +525,25 @@ println ttt
     assert_parity(gsrc);
 }
 
+/// 快版 packed-word 单元的对齐钉子（同 l08/l10 `packed_cells_align_at_least_8`）：
+/// `XCell`/`CloCell`/`PiCell` 的 `ptr|tag` 编码用 `v.0 & !7` 解码，要求对齐
+/// ≥ 8（`#[repr(align(8))]` + 源内 `const _` 断言之外的双保险口径一致演进）。
+#[test]
+fn packed_cells_align_at_least_8() {
+    assert!(
+        std::mem::align_of::<fast::XCell<'static>>() >= 8,
+        "XCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::CloCell<'static>>() >= 8,
+        "CloCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::PiCell<'static>>() >= 8,
+        "PiCell 对齐不足以承载 3 位 tag 解码"
+    );
+}
+
 // Round-2 探针（A2 η 守卫 / A4 u64 / A5 trait 求解 / A6 prune_ty / A8 宏递归）
 // 由 orchestrator 集中运行裁决；期望值在注释中标注。
 // --------------------------------------------------------------------------------

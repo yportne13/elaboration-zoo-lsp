@@ -296,3 +296,42 @@ fn steady_state_reuse() {
     assert_eq!(a, b, "跨轮 mutable 全局泄漏");
     assert_parity(gsrc);
 }
+
+// 上轮 L01-L12 同族修复移植回归探针（docs/review-l01l12/FINAL.md §2.2/§2.3）
+// --------------------------------------------------------------------------------
+
+/// 超大整数字面量（> u64::MAX）不得 panic：推解析错误并退化为 Hole
+/// （L11/L12 parser 同款修复；L13 的原生 Nat 数字字面量路径同族）。
+#[test]
+fn probe_oversized_int_literal_recoverable() {
+    let src = "def x = 99999999999999999999999999\n";
+    let res = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            // L13 解析树含 Rc 非 Send：断言收进线程内，只回传错误数
+            L13_namespace::parser::parser(src, 0).map(|(_, errs)| errs.len())
+        })
+        .unwrap()
+        .join();
+    assert!(res.is_ok(), "超大整数不应 panic");
+    let errs = res.unwrap().expect("parser 应返回 Some");
+    assert!(errs > 0, "超大整数应产生解析错误");
+}
+
+/// 自递归宏不得栈溢出：受展开深度上限（256）保护，超限给解析错误
+/// （L11/L12 MacroDepthGuard 同款；L13 parser 三处展开点均加守卫）。
+#[test]
+fn probe_macro_self_recursion_depth_limit() {
+    let src = "macro_rules m { () => { m } }\ndef x = m\n";
+    let res = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            // 同上：解析树非 Send，只回传错误数
+            L13_namespace::parser::parser(src, 0).map(|(_, errs)| errs.len())
+        })
+        .unwrap()
+        .join();
+    assert!(res.is_ok(), "自递归宏不应栈溢出");
+    let errs = res.unwrap().expect("parser 应返回 Some");
+    assert!(errs > 0, "自递归宏应产生解析错误而非无限展开");
+}

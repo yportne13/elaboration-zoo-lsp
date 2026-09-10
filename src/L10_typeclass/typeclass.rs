@@ -37,9 +37,11 @@ impl Val {
                 if items.is_empty() {
                     Typ::Val(span.clone())
                 } else {
+                    // 任一参数不可转换则整体 None（L11 已修 flat_map 静默
+                    // 丢参导致实参错位，此处按继承连续性回传）
                     Typ::Construct(
                         span.clone(),
-                        items.iter().flat_map(|x| x.1.to_typ()).collect(),//TODO:
+                        items.iter().map(|x| x.1.to_typ()).collect::<Option<Vec<_>>>()?,//TODO:
                     )
                 }
             ),

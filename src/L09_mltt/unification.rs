@@ -7,6 +7,16 @@ use super::{
 
 use std::collections::{HashMap, HashSet};
 
+/// η 展开的可应用性守卫（L06 `unification::v_applicable` 同款，按 L09
+/// `v_app` 的可应用集裁剪——Flex/Rigid/卡住投影）：其余形态（U/Π/字面量/
+/// Sum/SumCase/卡住 Prim/卡住 match）与 λ 相遇时无从应用，不加守卫会
+/// 命中 `v_app` 的 `impossible apply` panic。L09 无 st2g/get_global，
+/// λ 进类型位的已知注入路径不存在；本守卫为同型加固——守卫为真时行为
+/// 照旧，唯一变化是原本 panic 的分支改判 unify 失败。
+fn v_applicable(v: &Val) -> bool {
+    matches!(v, Val::Flex(..) | Val::Rigid(..) | Val::Obj(..))
+}
+
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
@@ -525,7 +535,12 @@ impl Infer {
                 self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
                 self.unify(
                     l + 1,
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a.clone()),
+                    // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
+                    // `l+1` 不推进 cxt（binder 类型在值层不可得），`l == cxt.lvl`
+                    // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
+                    // 打越界（lvl2ix 下溢）。cxt 只服务显示名字表，名字对不上
+                    // 时 go_ix 有 `@i` 兜底。（L08 评审修复回移，见其 README §5。）
+                    &cxt.bind(x.clone(), self.quote(l, *a.clone()), *a.clone()),
                     self.closure_apply(b, Val::vvar(l)),
                     self.closure_apply(b_prime, Val::vvar(l)),
                 )
@@ -545,13 +560,13 @@ impl Infer {
                 self.closure_apply(t, Val::vvar(l)),
                 self.closure_apply(t_prime, Val::vvar(l)),
             ),
-            (t, Val::Lam(_, i, t_prime)) => self.unify(
+            (t, Val::Lam(_, i, t_prime)) if v_applicable(t) => self.unify(
                 l + 1,
                 cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
                 self.closure_apply(t_prime, Val::vvar(l)),
             ),
-            (Val::Lam(_, i, t), t_prime) => self.unify(
+            (Val::Lam(_, i, t), t_prime) if v_applicable(t_prime) => self.unify(
                 l + 1,
                 cxt,
                 self.closure_apply(t, Val::vvar(l)),

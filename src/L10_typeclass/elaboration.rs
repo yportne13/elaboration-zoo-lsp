@@ -284,7 +284,10 @@ impl Infer {
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
-                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
+                    // trait 合成失败可恢复（f51a0e4 只落在 L11/L12，此处按
+                    // 继承连续性回传 L11 的同款 Err 文案）
+                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
+                        .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, &typ_tm));
                     let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, &t_tm));
                     //println!("begin vt {}", "------".green());

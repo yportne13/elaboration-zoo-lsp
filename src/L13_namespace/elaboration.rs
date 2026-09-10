@@ -549,7 +549,7 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&cxt.decl, &pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned()), vec![]))?; //TODO:revPruning?
+                    self.prune_ty(&cxt.decl, &pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned()), vec![]))?;
                 }
 
                 if pren.dom.0 == 0 {

@@ -327,6 +327,25 @@ println ttt
     assert_parity(gsrc);
 }
 
+/// 快版 packed-word 单元的对齐钉子（同 l08/l10 `packed_cells_align_at_least_8`）：
+/// `XCell`/`CloCell`/`PiCell` 的 `ptr|tag` 编码用 `v.0 & !7` 解码，要求对齐
+/// ≥ 8（`#[repr(align(8))]` + 源内 `const _` 断言之外的双保险口径一致演进）。
+#[test]
+fn packed_cells_align_at_least_8() {
+    assert!(
+        std::mem::align_of::<fast::XCell<'static>>() >= 8,
+        "XCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::CloCell<'static>>() >= 8,
+        "CloCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::PiCell<'static>>() >= 8,
+        "PiCell 对齐不足以承载 3 位 tag 解码"
+    );
+}
+
 // Round-2 探针（A2 η 守卫 / A4 u64 / A5 trait 求解 / A6 prune_ty / A8 宏递归）
 // 由 orchestrator 集中运行裁决；期望值在注释中标注。
 // --------------------------------------------------------------------------------
@@ -442,4 +461,45 @@ fn probe_prune_ty_mask_reversal_parity() {
         "def test = x => y => the (Eq (m x) (w => n y w)) refl\n",
         "println test\n",
     ));
+}
+
+/// 移植修复回归（对齐 l10/l11 探针）：`impl[T] Say for List[T]` 不得假匹配
+/// 泛型目标 `Say[T]`。L12 的 `val_match` 原第三臂 or-模式
+/// `(_, Rigid) | (Rigid, _)` 允许**目标侧** rigid 被实例构造子绑定
+/// （`f two` 会错选 List 实例答 `"list"`），与本函数文档注释宣称的单向
+/// 语义相悖；改为仅实例侧绑定（对齐 L10/L11 的 `match_typ`）后无实例
+/// → Err。参考/快版共用同一 `Synth`，判定必须一致。
+#[test]
+fn synth_rigid_generic_not_falsely_matched() {
+    let src = r#"
+trait Say {
+    def say: String
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+impl[T] Say for List[T] {
+    def say: String = "list"
+}
+
+def f[T](x: T): String = x.say
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+println (f two)
+"#;
+    assert!(
+        run_basic(src).is_err(),
+        "泛型 T 不得被假匹配成 List；basic={:?}",
+        run_basic(src)
+    );
+    assert_parity(src);
 }

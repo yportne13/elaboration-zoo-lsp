@@ -735,7 +735,7 @@ fn bench_cek_deep(n: usize, rounds: usize, only: Option<&str>) {
             let input = church_pair_iter(n);
             let bump = Bump::with_capacity(1 << 28);
             let tm = bump_arena::import_iter(&bump, &input);
-            let res = cek_bump::normalize_imported(&bump, tm); // 临时改为 eval_only 排查
+            let res = cek_bump::normalize_imported(&bump, tm);
             assert!(iter_eq_bump(res, &check), "cek_bump 大 n 结果不正确");
             std::mem::forget(input); // 百万层树泄漏，见上方注释
         }

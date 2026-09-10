@@ -340,6 +340,11 @@ impl IError {
     }
 }
 
+/// unify/force 的共享递归 fuel 池容量（L08 护栏前向传播：L09 重写时
+/// 丢失；L12 的 `unify(.., fuel)` 参数只护 Decl 展开重试臂，本池补齐
+/// `force` meta 展开与 unify 结构递归的深度防护）。
+const UNIFY_FUEL: u32 = 4096;
+
 #[derive(Clone)]
 pub struct Infer {
     meta: Vec<MetaEntry>,
@@ -350,6 +355,10 @@ pub struct Infer {
     pub mutable_map: Rc<std::sync::RwLock<HashMap<String, Rc<Val>>>>,
     pub hover_table: Vec<(Span<()>, Span<()>, Cxt, Rc<Val>)>,
     pub completion_table: Vec<(Span<()>, SmolStr)>,
+    /// unify/force 共享 fuel 池（L08 同款）：外层入口（`nf`/`unify_catch`/
+    /// canonical 探测点）充值；`unify` 递归与 `force` 的 meta 展开各烧 1，
+    /// 耗尽时 unify 按不可合一失败、force 停止展开按未解处理。
+    unify_fuel: std::cell::Cell<u32>,
 }
 
 impl Infer {
@@ -363,7 +372,21 @@ impl Infer {
             mutable_map: Default::default(),
             hover_table: vec![],
             completion_table: vec![],
+            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
         }
+    }
+    /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
+    fn burn_fuel(&self) -> bool {
+        let f = self.unify_fuel.get();
+        if f == 0 {
+            return false;
+        }
+        self.unify_fuel.set(f - 1);
+        true
+    }
+    /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
+    fn refuel(&self) {
+        self.unify_fuel.set(UNIFY_FUEL);
     }
     fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ));
@@ -395,8 +418,12 @@ impl Infer {
         //println!("{} {:?}", "force".red(), t);
         match t.as_ref() {
             Val::Flex(m, sp) => match self.lookup_meta(*m) {
-                MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp)),
-                MetaEntry::Unsolved(_, _, _) => Val::Flex(*m, sp.clone()).into(),
+                // 展开烧 fuel（L08 前向传播）：solve 无跨 meta occurs check，
+                // 解链成环时展开会无限递归；池空停止展开、按未解处理
+                MetaEntry::Solved(t_solved, _) if self.burn_fuel() => {
+                    self.force(decl, &self.v_app_sp(decl, t_solved.clone(), sp))
+                }
+                _ => Val::Flex(*m, sp.clone()).into(),
             },
             Val::Obj(x, a, b) => {
                 Val::Obj(self.force(decl, x), a.clone(), b.clone()).into()
@@ -674,6 +701,8 @@ impl Infer {
     }
 
     pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
+        // quote → eval 会 force；一次 nf 充值 fuel 防循环解（L08 同款）
+        self.refuel();
         let l = Lvl(env.iter().count() as u32);
         self.quote(decl, l, &self.eval(decl, env, t))
     }
@@ -684,6 +713,7 @@ impl Infer {
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
         self.meta_contrains.clear();
+        self.refuel();
         let ret = self.unify(cxt.lvl, cxt, t, t_prime, 100)
             .map_err(|e| {
                 /*Error::CantUnify(

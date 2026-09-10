@@ -43,7 +43,8 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
-    panic!("Variable index out of bounds");
+    // 越界不再 panic（L12 已降级，回传对齐）：错误文本充当显示名
+    "Variable index out of bounds".to_owned()
 }
 
 fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {

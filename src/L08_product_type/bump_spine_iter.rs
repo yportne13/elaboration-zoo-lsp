@@ -1005,6 +1005,24 @@ fn vapp1<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// L06 同款）：只有 `vapp1` 能吃 η 新变量的形态——裸 Rigid(0)/未解
+/// Flex(5)/链(2)，以及 Decl/Prim/Obj/Match 头的 tag 7 单元；字面量 /
+/// Sum / SumCase 单元与 U(3)/Π(4)/LiteralType(6) 不可应用（`vapp1`
+/// panic 集）。λ 与不可应用值相遇时 η 臂不展开，落空后按合一失败返回
+/// （与参考版守卫同判；守卫为真时行为照旧）。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => !matches!(
+            v_xcell_of(v),
+            XCell::Lit(_) | XCell::Sum { .. } | XCell::SumCase { .. }
+        ),
+        _ => true,
+    }
+}
+
 /// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）
 /// 再查构造子字段。其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回
 /// None → 卡住成 `Obj`。（参考版 mod.rs `project` 同款。）
@@ -2869,8 +2887,10 @@ fn unify_iter<'a>(
             continue;
         }
         // η：中性一侧按 λ 一侧的 icit 应用（Decl/Prim/Obj 头的应用压链；
-        // 卡住 match 吸收进 pending）
-        if v_tag(u) == 1 {
+        // 卡住 match 吸收进 pending）。可应用性守卫 `vapp_ok`（参考版
+        // `v_applicable` 同款）：不可应用一侧（字面量/U/Π/Sum/SumCase）
+        // 不展开，落空后按合一失败返回
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2889,7 +2909,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -5741,6 +5761,24 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U（与参考版
+                // 同步）。域洞若保留，第 2+ 个参数的域 meta 会带 pruning
+                // （形如 `?m A`），使用点解 `?m A := U` 时 invert 无法倒序
+                // Decl 头 spine 而失败——显式提供隐式实参即报 can't unify。
+                // 方括号参数在语言定义上就是类型参数；显式标注与显式索引
+                // 不动。struct 脱糖走的也是本臂。（L07 黑盒三轮修复，
+                // 2026-09 连续性审计回移。）
+                let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // enum 类型本体：λ params → Sum(name, [(p, Var p, ?, icit)], cases)
                 let new_params: Vec<(crate::parser_lib::Span<String>, Icit, Raw)> = params
                     .iter()

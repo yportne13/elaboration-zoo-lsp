@@ -629,6 +629,10 @@ impl Infer {
         }
     }
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+        // 递归深度防护（L08 前向传播）：fuel 耗尽按不可合一失败
+        if !self.burn_fuel() {
+            return Err(UnifyError::Basic);
+        }
         //println!("unify: {t:?} {u:?}");
         let t = self.force(&cxt.decl, t);
         let u = self.force(&cxt.decl, u);

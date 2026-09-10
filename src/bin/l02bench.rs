@@ -74,7 +74,7 @@ struct Cli {
     #[arg(long, default_value_t = 5)]
     rounds: usize,
 
-    /// 只跑指定实现（逗号分隔：basic,fast,fast_ss）
+    /// 只跑指定实现（逗号分隔：basic,fast,fast_ss,fast_memo）
     #[arg(long)]
     only: Option<String>,
 
