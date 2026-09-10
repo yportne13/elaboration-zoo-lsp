@@ -289,7 +289,7 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub engine: Engine,
     /// Parsed prelude decls for the twin engine (shared, parse-once per
     /// process).  `None` until `load_prelude` runs in twin mode.
-    twin_prelude: Mutex<Option<std::rc::Rc<L13_namespace::PreludeParse>>>,
+    twin_prelude: Mutex<Option<L13_namespace::PreludeParse>>,
     pub quickfix_map: DashMap<String, HashMap<String, Vec<Box<dyn Fn() -> Option<String>>>>>,
     /// Exported macros accumulated across all files (keyed by macro name)
     pub exported_macros: DashMap<String, Vec<MacroRule>>,
@@ -433,15 +433,90 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 make_hover(def_span, self.hover_def_block(&def_span), x.1.clone())
             })
             .or_else(|| {
-                self.hover_table
-                    .get(uri.as_str())
-                    .and_then(|x| x.hover_entry_at(*id, offset)
-.map(|(span, def_span, rendered)| (*span, *def_span, rendered.clone()))
-                    )
+                self.hover_entry_owned(uri.as_str(), *id, offset)
                     .and_then(|(span, def_span, type_str)| {
                         make_hover(span, self.hover_def_block(&def_span), type_str)
                     })
             })
+    }
+
+    /// Engine-appropriate per-file hover entry at `offset`: the twin
+    /// observation snapshot when running twin, else the reference `Infer`.
+    /// Only the single winning entry is cloned, so the frequent hover request
+    /// stays cheap.
+    fn hover_entry_owned(
+        &self,
+        uri: &str,
+        path_id: u32,
+        offset: usize,
+    ) -> Option<(Span<()>, Span<()>, String)> {
+        if self.engine == Engine::Twin {
+            if let Some(s) = self.twin_tables.get(uri) {
+                if let Some((a, b, c)) = s.hover_entry_at(path_id, offset) {
+                    return Some((*a, *b, c.clone()));
+                }
+                // Twin snapshot exists but has no entry here: fall through to
+                // the reference table (kept in sync while both engines run).
+            }
+        }
+        self.hover_table
+            .get(uri)
+            .and_then(|x| x.hover_entry_at(path_id, offset).map(|(a, b, c)| (*a, *b, c.clone())))
+    }
+
+    /// Engine-appropriate full hover table for `uri` (owned).  Used by goto /
+    /// references, which need to scan every entry rather than a single
+    /// winner; hover itself uses [`Self::hover_entry_owned`].
+    fn hover_entries_owned(&self, uri: &str) -> Option<Vec<(Span<()>, Span<()>, String)>> {
+        if self.engine == Engine::Twin {
+            if let Some(s) = self.twin_tables.get(uri) {
+                return Some(s.hover.clone());
+            }
+        }
+        self.hover_table.get(uri).map(|x| x.hover_table.clone())
+    }
+
+    /// Engine-appropriate completion table for `uri` (owned).  `None` when no
+    /// successful analysis exists (parse error), matching the reference
+    /// `hover_table` guard.
+    fn completion_entries_owned(&self, uri: &str) -> Option<Vec<(Span<()>, SmolStr)>> {
+        if self.engine == Engine::Twin {
+            if let Some(s) = self.twin_tables.get(uri) {
+                return Some(s.completion.clone());
+            }
+        }
+        self.hover_table.get(uri).map(|x| x.completion_table.clone())
+    }
+
+    /// Engine-appropriate inlay table for `uri` (owned).
+    fn inlay_entries_owned(&self, uri: &str) -> Option<Vec<(u32, String)>> {
+        if self.engine == Engine::Twin {
+            if let Some(s) = self.twin_tables.get(uri) {
+                return Some(s.inlay.clone());
+            }
+        }
+        self.hover_table.get(uri).map(|x| x.inlay_hint_table.clone())
+    }
+
+    /// Engine-appropriate hover tables across every open file, as
+    /// `(uri, entries)`.  Used by cross-file references: twin snapshots take
+    /// precedence per file, with the reference table as the fallback for
+    /// files the twin did not (yet) observe.
+    fn all_hover_tables_owned(&self) -> Vec<(String, Vec<(Span<()>, Span<()>, String)>)> {
+        let mut out: Vec<(String, Vec<(Span<()>, Span<()>, String)>)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        if self.engine == Engine::Twin {
+            for e in self.twin_tables.iter() {
+                out.push((e.key().clone(), e.value().hover.clone()));
+                seen.insert(e.key().clone());
+            }
+        }
+        for e in self.hover_table.iter() {
+            if !seen.contains(e.key().as_str()) {
+                out.push((e.key().clone(), e.value().hover_table.clone()));
+            }
+        }
+        out
     }
 
     /// One markdown code block for a hover panel.  Very long content is
@@ -1114,6 +1189,68 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         infer.mutable_map.write().unwrap().clear();
         *self.infer.lock().unwrap() = infer;
         *self.cxt.lock().unwrap() = cxt;
+
+        // Twin engine: parse the prelude once for the per-file observation
+        // passes (`twin_observe`).  Parse-only, no elaboration — the twin
+        // replay happens per kick and is the seed-cost baseline of stage 3a.
+        if self.engine == Engine::Twin {
+            let mut files: Vec<(&str, &str)> = L13_namespace::PRELUDE_CORE.to_vec();
+            if !skip_hdl {
+                files.extend_from_slice(L13_namespace::PRELUDE_HDL);
+            }
+            files.push(L13_namespace::PRELUDE_SHOW);
+            let parsed = L13_namespace::parse_prelude_files(&files);
+            if let Some(f) = &parsed.failed {
+                eprintln!("typort: twin prelude parse failed at `{f}`");
+            }
+            *self.twin_prelude.lock().unwrap() = Some(parsed);
+        }
+    }
+
+    /// Twin-engine observation pass for one file (stage 3a): replay the
+    /// prelude + this file's decls through the bump elaborator and snapshot
+    /// its hover/completion/inlay tables (path ids match the reference
+    /// loader and the builtin document registration, both sequential from 0).
+    /// Diagnostics, the global decl table and cross-file bookkeeping stay on
+    /// the reference engine — this pass only serves the interactive
+    /// hover / goto / completion / inlay surface.  A parse failure or twin
+    /// inference error drops any stale snapshot, mirroring the reference
+    /// path's "clear on parse error / keep previous symbols" split.
+    fn twin_observe(&self, uri: &Url, text: &str) {
+        if self.engine != Engine::Twin {
+            return;
+        }
+        let uri_str = uri.to_string();
+        let Some(now_id) = self.document_id.get(&uri_str).map(|x| *x) else {
+            return;
+        };
+        let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+        let Some((decls, _, _, _)) = parser_with_macros(&preprocess(text), now_id, &global_macros) else {
+            self.twin_tables.remove(&uri_str);
+            return;
+        };
+        let prelude_guard = self.twin_prelude.lock().unwrap();
+        let Some(prelude) = prelude_guard.as_ref() else {
+            return;
+        };
+        let mut t = L13_namespace::bump_spine_iter::Tycker::new();
+        match t.run_decls_with_prelude(prelude, &decls) {
+            Ok(_) => {
+                let snap = ObserveSnapshot {
+                    hover: t.hover_table().to_vec(),
+                    completion: t.completion_table().to_vec(),
+                    inlay: t.inlay_hint_table().to_vec(),
+                };
+                self.twin_tables.insert(uri_str, snap);
+            }
+            Err(_) => {
+                // Mirror the reference path: a failed pass keeps the previous
+                // symbols and drops this file's stale observation snapshot.
+                self.twin_tables.remove(&uri_str);
+            }
+        }
     }
 
     /// Process queued analysis jobs inline (latest-per-URI wins).
@@ -1441,8 +1578,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// path_id + offsets (`Span<()>` PartialEq only compares the payload).
     fn cross_file_references(&self, uri: &Url, offset: usize) -> Option<Vec<Location>> {
         let uri = normalize_builtin_uri(uri);
-        let semantic = self.hover_table.get(uri.as_str())?;
-        let targets: Vec<(u32, u32, u32)> = semantic.hover_table.iter()
+        let all_tables = self.all_hover_tables_owned();
+        let semantic = all_tables.iter().find(|(u, _)| u == uri.as_str())?;
+        let targets: Vec<(u32, u32, u32)> = semantic.1.iter()
             .filter(|x| x.1.contains(offset))
             .map(|x| (x.1.path_id, x.1.start_offset, x.1.end_offset))
             .collect();
@@ -1450,10 +1588,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             return Some(vec![]);
         }
         let mut ret: Vec<Location> = Vec::new();
-        for entry in self.hover_table.iter() {
-            let file_uri = entry.key().clone();
-            let f_rope = self.document_map.get(&file_uri)?.clone();
-            for x in entry.value().hover_table.iter() {
+        for (file_uri, hover_table) in &all_tables {
+            let f_rope = self.document_map.get(file_uri.as_str())?.clone();
+            for x in hover_table.iter() {
                 if targets.iter().any(|(pid, so, eo)| {
                     *pid == x.1.path_id && *so == x.1.start_offset && *eo == x.1.end_offset
                 }) {
@@ -1470,7 +1607,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         offset_to_position(x.0.start_offset as usize, &f_rope),
                         offset_to_position(x.0.end_offset as usize, &f_rope),
                     ) {
-                        if let Ok(u) = Url::parse(&file_uri) {
+                        if let Ok(u) = Url::parse(file_uri) {
                             ret.push(Location::new(u, Range::new(sp, ep)));
                         }
                     }
@@ -1815,12 +1952,19 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // by MOVING it (no deep clone of `meta`/trait tables); the local
             // `local_infer` is replaced with a fresh instance.
             if !is_builtin {
-                self.hover_table.insert(uri_str, std::mem::replace(&mut local_infer, Infer::new()));
+                self.hover_table.insert(uri_str.clone(), std::mem::replace(&mut local_infer, Infer::new()));
+            }
+            if !is_builtin {
+                // Twin observation surface (stage 3a): replay the prelude +
+                // this file through the bump elaborator for hover / goto /
+                // completion / inlay.  No-op unless `engine == Twin`.
+                self.twin_observe(uri, text);
             }
         } else {
             // Parse error: clear per-file analysis state, keep previous symbols.
             self.type_map.remove(uri.as_str());
             self.hover_table.remove(uri.as_str());
+            self.twin_tables.remove(uri.as_str());
             self.quickfix_map.remove(uri.as_str());
             self.macro_expansion_map.remove(uri.as_str());
             self.remove_file_macros(&uri_str);
@@ -1967,6 +2111,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.clear_file_deps(&uri_str);
         self.type_map.remove(uri.as_str());
         self.hover_table.remove(uri.as_str());
+        self.twin_tables.remove(uri.as_str());
         self.quickfix_map.remove(uri.as_str());
         self.macro_expansion_map.remove(uri.as_str());
         self.remove_file_macros(&uri_str);
@@ -2086,9 +2231,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             return Some(def);
         }
         // 2. Semantic resolution (most specific entry wins, like hover).
-        let semantic = self.hover_table.get(uri.as_str())?;
+        let hover_entries = self.hover_entries_owned(uri.as_str())?;
         let file_id = self.document_id.get(uri.as_str())?;
-        let interval = semantic.hover_table
+        let interval = hover_entries
             .iter()
             .filter(|x| x.0.path_id == *file_id)
             .filter(|x| x.0.contains(offset))
@@ -2117,7 +2262,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             })
             .or({
                 let rope = self.document_map.get(uri.as_str())?;
-                let ret: Vec<Location> = semantic.hover_table
+                let ret: Vec<Location> = hover_entries
                     .iter()
                     .filter(|x| x.1.contains(offset))
                     .map(|x| x.0)
@@ -2186,7 +2331,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut items = self.import_context_completions(&rope, offset, line);
             let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
             // Member-access completions need a successful analysis.
-            if let Some(infer) = self.hover_table.get(&uri.to_string()) {
+            if let Some(completion_table) = self.completion_entries_owned(uri.as_str()) {
                 // Member-access entries are keyed to the RECEIVER's span (not
                 // the whole `x.y` access).  The cursor's member prefix starts
                 // one byte past the last `.` on the line; a candidate matches
@@ -2213,7 +2358,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         None => false,
                     }
                 };
-                infer.completion_table
+                completion_table
                     .iter()
                     .filter(|(span, _)| filter(span))
                     .filter_map(|(span, name)| {
@@ -2243,6 +2388,29 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             Some(items)
         }();
         Ok(completions.map(CompletionResponse::Array))
+    }
+
+    /// Inlay-hint handler body, kept on the generic `Backend<C>` so tests can
+    /// exercise the real engine-routing path (the LSP trait impl forwards).
+    pub fn inlay_hint_at(&self, raw_uri: &Url) -> Option<Vec<InlayHint>> {
+        let uri = normalize_builtin_uri(raw_uri);
+        let inlay = self.inlay_entries_owned(uri.as_str())?;
+        let rope = self.document_map.get(uri.as_str())?;
+        let mut ret = Vec::new();
+        for (offset, label) in &inlay {
+            let position = offset_to_position(*offset as usize, &rope)?;
+            ret.push(InlayHint {
+                position,
+                label: InlayHintLabel::String(label.clone()),
+                kind: Some(InlayHintKind::TYPE),
+                text_edits: None,
+                tooltip: None,
+                padding_left: Some(true),
+                padding_right: None,
+                data: None,
+            });
+        }
+        Some(ret)
     }
 }
 
@@ -2404,27 +2572,7 @@ impl LanguageServer for Backend<Client> {
     }
 
     fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
-        let uri = normalize_builtin_uri(&params.text_document.uri);
-        let hints = || -> Option<Vec<InlayHint>> {
-            let infer = self.hover_table.get(uri.as_str())?;
-            let rope = self.document_map.get(uri.as_str())?;
-            let mut ret = Vec::new();
-            for (offset, label) in &infer.inlay_hint_table {
-                let position = offset_to_position(*offset as usize, &rope)?;
-                ret.push(InlayHint {
-                    position,
-                    label: InlayHintLabel::String(label.clone()),
-                    kind: Some(InlayHintKind::TYPE),
-                    text_edits: None,
-                    tooltip: None,
-                    padding_left: Some(true),
-                    padding_right: None,
-                    data: None,
-                });
-            }
-            Some(ret)
-        }();
-        Ok(hints)
+        Ok(self.inlay_hint_at(&params.text_document.uri))
     }
 
     fn goto_definition(
