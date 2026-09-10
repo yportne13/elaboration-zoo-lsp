@@ -351,3 +351,50 @@ kick 只需 59ms 级即可完成观察面刷新，远优于参考版 328ms。
 池化移植；`Bump` `!Sync` → 线程局部挂主循环），随后实测"常驻态下 09
 及更大 HDL 的双引擎 kick 对照"再谈默认切换。单看 bench 的 1.8× 不足以
 推断 LSP 收益——真正的杠杆是这 5.5× 的单文件差值。
+
+### 2026-09-10 续（阶段 3b 落地：常驻 prelude + 剩余阻塞点定位）
+
+**提交链**：`cb0a3b4`（孪生侧 `prime_resident`/`observe_user` 检查点 + 跨
+kick 等价性测试）→ `5000d31`（LSP 侧线程局部常驻接入）。
+
+**孪生侧**：`Tycker` 增 `resident` 检查点——`prime_resident` 一次装载
+prelude 并固化稳态（cxt + defs 长度 + metas/tstate/mutable/symbol_table/
+import_map/trait_method_cache/指针导入表），`observe_user` 多次复用，每
+kick 只付用户段。正确性：快照句柄钉在常驻 bump 上（检查点存活期间 bump
+绝不 reset，所有 reset 路径清 resident）；每 kick 从检查点恢复 per-run
+状态。bump 用户段增长超 512MB 时下个 kick 重新 prime（bump 不支持截断，
+用周期性重放换内存上界）。验收
+`resident_checkpoint_matches_fresh_replay_across_kicks`：prime 一次跑
+三个不同源（全局使用/tuple/真实 HDL 09-hierarchy），hover 全表（含重复）
+与每源全新 `run_decls_with_prelude` 逐字节一致。
+
+**LSP 侧**：`twin_observe` 走线程局部 `TWIN_RESIDENT`（`Bump` `!Sync` 且
+分析主循环单线程；按 `include_hdl` 分池），首 kick prime、后续 kick 复用。
+新增 LSP 级测试 `twin_resident_reuse_across_kicks_is_consistent`（顺序
+两 kick 与各自全新 Backend 一致）。`twin_engine_tests` 6 例、孪生模式
+hover/completion/cross_file 守卫全绿。
+
+**实测（09-hierarchy，release，min/5）**：
+
+| 阶段 | 参考版 | 孪生 | 说明 |
+|---|---|---|---|
+| 3a（每 kick 重放 prelude） | 328ms | **3285ms** | seed 税压垮 |
+| 3b（常驻检查点） | 325ms | **399ms** | seed 税清零，但孪生仍**加性** |
+
+拆解参考版 kick（临时打点）：`cxt.clone` ~0.2µs、`infer.clone` ~0.7ms、
+**`infer_loop` ~280ms**（单文件 elaboration 就是全部成本）。孪生用户段
+~60-80ms。**即孪生单文件 elaboration 比参考版快 ~4×**，但当前 twin 模式
+为诊断/跨文件状态跑完整参考版流水线，再叠加孪生观察段，故 399 ≈ 325 + 74。
+
+**剩余阻塞点（下一步的唯一问题）**：要让孪生成为净收益，必须让孪生在
+twin 模式下**接管诊断 + 跨文件数据面**，从而省掉参考版那 280ms 的单文件
+elaboration（kick 可望落到 ~80ms 级）。这需要：
+1. 孪生产诊断：当前 `run_decls_with_prelude` 遇错即 `?` 早退（不累积），
+   且错误 span 全零（已知偏差 3）——要补**错误累积**与**源码 span 保真**，
+   否则诊断定位错乱、UX 退化。
+2. 跨文件符号合并 / namespace 登记 / goto 跨文件：孪生需给出等价的数据面
+   （参考版 `file_symbols`/`file_namespace_regs` 那套）。
+这是独立子工程。在完成前，**twin 模式保持 opt-in、默认 `Reference`**：
+3b 已把孪生从"慢 10×"降到"慢 ~23%"，且观察面正确性已验证，但还不能默认。
+单看 bench 的 1.8× 与 3b 的 5.5× 都不足以推断 LSP 收益——**收益取决于
+孪生接管诊断**这一尚未完成的前提。
