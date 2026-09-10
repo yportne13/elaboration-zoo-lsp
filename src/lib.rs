@@ -1473,6 +1473,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // doesn't show outdated hovers / type info from the last good parse.
             self.type_map.remove(params.uri.as_str());
             self.hover_table.remove(params.uri.as_str());
+            self.twin_tables.remove(params.uri.as_str());
             self.quickfix_map.remove(params.uri.as_str());
             self.macro_expansion_map.remove(params.uri.as_str());
             self.remove_file_macros(params.uri.as_str());
