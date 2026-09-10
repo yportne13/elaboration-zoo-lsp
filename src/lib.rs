@@ -1241,17 +1241,18 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
     }
 
-    /// Whether the twin can *fully own* this file's elaboration (stage 4):
-    /// the twin replays only the prelude + this file, so it is authoritative
-    /// exactly when the reference-domain global table holds no OTHER user
-    /// file's symbols (which the twin's replay would not see).  A file that
-    /// imports a project namespace, or declares one, still needs the
-    /// reference engine's cross-file data plane.
+    /// Whether the twin can *fully own* this file's elaboration (stage 4).
+    /// The twin replays only the prelude + this file, so a file that imports
+    /// a project namespace, or declares one other files import, still needs
+    /// the reference engine's cross-file data plane.  Files with no imports
+    /// are prelude-only in a well-formed project, so the twin's view is
+    /// complete; [`Self::twin_elaborate`] additionally verifies at run time
+    /// that no unresolved name is actually defined by another open file, and
+    /// falls back if so.
     fn twin_can_own(&self, uri_str: &str) -> bool {
         self.engine == Engine::Twin
             && !self.file_deps.contains_key(uri_str)
             && !self.file_namespaces.contains_key(uri_str)
-            && self.type_map.iter().all(|e| e.key() == uri_str)
     }
 
     /// Twin-authoritative elaboration (stage 4).  When the twin can own the
@@ -1346,6 +1347,26 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             )
         });
         drop(prelude_guard);
+        // Safety valve for multi-file workspaces: a no-import file must not
+        // depend on another open file's symbols, but the reference shares one
+        // global table, so an unimported reference would resolve there and
+        // not in the twin's prelude-only replay.  If the twin reports an
+        // unresolved name that the global table (other files + this file's
+        // previous symbols) does define, fall back to the reference engine.
+        {
+            let unresolved: Vec<&str> = errors
+                .iter()
+                .filter_map(|(_, m)| m.strip_prefix("error name not in scope: "))
+                .collect();
+            if !unresolved.is_empty() {
+                let cxt = self.cxt.lock().unwrap();
+                if unresolved.iter().any(|n| cxt.decl.contains_key(*n)) {
+                    drop(cxt);
+                    self.twin_tables.remove(&uri_str);
+                    return false;
+                }
+            }
+        }
         let rope = Rope::from_str(text);
         let has_error = !errors.is_empty() || !parse_errs.is_empty();
         // Merge exports into the reference global table (mirrors the

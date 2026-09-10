@@ -253,6 +253,45 @@ fn twin_falls_back_for_cross_file_and_still_resolves() {
     );
 }
 
+/// Two independent no-import files in one workspace are both twin-owned (the
+/// gate is not "only one open file"), and both return correct diagnostics.
+#[test]
+fn twin_owns_multiple_independent_files() {
+    let u1 = Url::parse("file:///twin_m1.typort").unwrap();
+    let u2 = Url::parse("file:///twin_m2.typort").unwrap();
+    let tb = backend(Engine::Twin);
+    tb.process_file(&u1, "def f1(n: Nat): Nat = n", Some(1));
+    tb.process_file(&u2, "def f2(a: Nat, b: Boolean): Tuple2[Nat, Boolean] = (a, b)", Some(1));
+    for (u, s) in [(&u1, "def f1(n: Nat): Nat = n"), (&u2, "def f2(a: Nat, b: Boolean): Tuple2[Nat, Boolean] = (a, b)")] {
+        assert!(errors(&tb, u).is_empty(), "unexpected errors for {u}: {:?}", errors(&tb, u));
+        assert!(tb.twin_tables.contains_key(u.as_str()), "twin did not own {u}");
+        // Reference comparison.
+        let rb = backend(Engine::Reference);
+        rb.process_file(u, s, Some(1));
+        assert!(errors(&rb, u).is_empty());
+    }
+}
+
+/// A no-import file that (illegally) uses another open file's symbol must fall
+/// back to the reference engine rather than emit a spurious unresolved error.
+#[test]
+fn twin_falls_back_when_using_another_files_symbol_without_import() {
+    let u1 = Url::parse("file:///twin_imp1.typort").unwrap();
+    let u2 = Url::parse("file:///twin_imp2.typort").unwrap();
+    let tb = backend(Engine::Twin);
+    tb.process_file(&u1, "def shared: Nat = zero", Some(1));
+    // No import; the reference's shared global table resolves `shared`.
+    tb.process_file(&u2, "def use: Nat = shared", Some(1));
+    // Either resolved (no error) or fell back — but never a spurious error on
+    // a symbol the reference resolves.
+    let rb = backend(Engine::Reference);
+    rb.process_file(&u1, "def shared: Nat = zero", Some(1));
+    rb.process_file(&u2, "def use: Nat = shared", Some(1));
+    assert_eq!(errors(&tb, &u2).len(), errors(&rb, &u2).len(),
+        "twin produced different error count than reference: twin={:?} ref={:?}",
+        errors(&tb, &u2), errors(&rb, &u2));
+}
+
 /// End-to-end twin pass on a real HDL example (full HDL prelude, module with
 /// `sum := u.sum` vconnT expansion): the twin must produce a non-empty
 /// observation snapshot without panicking, and hovering a known signal
