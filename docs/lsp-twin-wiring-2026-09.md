@@ -509,10 +509,19 @@ check 警告为空则回落**（干净的模块文件会多付一次参考版代
 以便修好后可验证地放开。
 
 **新登记偏差（记录，暂不修）**：
+- **ns-method 调用点的 hover 集合分叉**（19-stream 的 `outs.at(0, si)`，
+  逐条 dump 实测）：参考版在该方法 token 上只有**一条实例化后**的条目
+  （`(n: Nat, default: Stream[UInt[8]]) → Stream[UInt[8]]`），泛型签名挂在
+  整个 `outs.at` 的宽 span（2273..2280）上；孪生在方法 token 上有
+  **两条实例化（正确）+ 两条泛型签名**（`Vec.get` 的声明 π，含 `this`）。
+  泛型条目经 ns_method 分派的 `push_hover(r.1)` 产生——即孪生对
+  `App(Var(TypeHead.at), receiver)` 推的 `r.1` 是**未实例化**的声明 π
+  （接收者未被 v_app 消费），而参考版同点位推的是实例化结果；且孪生缺
+  参考版挂在宽 span 上的那条。`min_by_key` 平局取先时泛型条目可能压过
+  实例化条目 → popup 文案错。根因在 ns-method 分派/实例化层，非 hover
+  渲染层。
 - 宏限定成员访问（如 `basicDecls.create[8].tree`）：孪生渲染 `create` 的
-  签名，参考版渲染投影后的 `ModuleTree`（偏差 4 家族）。
-- 方法 hover：孪生渲染泛型方法签名（`[T: Type 0, len: Nat] → … Vec.get`），
-  参考版渲染实例化后的类型（`19-stream` 的 `Stream`）。
+  签名，参考版渲染投影后的 `ModuleTree`（偏差 4 家族，与上一条同源）。
 - 宏内 module-local 信号的 def_span 退化为使用处 token（只影响 goto，不影响
   popup 文案）——值层缺 binder span，偏差 6 家族。
 
