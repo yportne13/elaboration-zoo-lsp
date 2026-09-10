@@ -94,6 +94,20 @@
 						"scope": "machine",
 						"default": "",
 						"markdownDescription": "Path to the `typort` CLI binary for CLI server mode. If empty, the `typort` binary is searched in PATH."
+					},
+					"typort-hdl.cli-server.engine": {
+						"type": "string",
+						"scope": "window",
+						"enum": [
+							"reference",
+							"twin"
+						],
+						"enumDescriptions": [
+							"Reference elaborator (baseline; lower memory).",
+							"L13 twin elaborator: ~3.8x faster per edit and faster startup, at ~2x memory. Files with project imports or twin-unsupported constructs fall back automatically."
+						],
+						"default": "reference",
+						"markdownDescription": "Elaboration engine for the CLI language server (sets `TYPORT_LSP_ENGINE`). `twin` is the L13 performance build."
 					}
 				}
 			}

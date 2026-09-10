@@ -17,6 +17,10 @@ let logChannel: LogOutputChannel | undefined;
 let cliCommand = 'typort';
 let cliArgs: string[] = ['lsp'];
 let cliClientOptions: LanguageClientOptions | undefined;
+// Extra environment for the CLI server process. `undefined` leaves the child
+// environment untouched; `typort-hdl.cli-server.engine = "twin"` selects the
+// L13 performance elaborator via TYPORT_LSP_ENGINE.
+let cliEnv: Record<string, string> | undefined;
 
 // Number of consecutive unexpected server exits. Reset to 0 whenever the
 // server successfully reaches State.Running (automatic or manual restart).
@@ -57,7 +61,16 @@ function updateStatusBar(state: State): void {
 async function startClient(): Promise<void> {
 	if (!cliClientOptions) return;
 	updateStatusBar(State.Starting);
-	const newClient = new LanguageClient('lspClient', 'LSP Client', { command: cliCommand, args: cliArgs }, cliClientOptions);
+	// `options.env` replaces the child environment, so merge the parent's.
+	// Only set when an engine is selected so the default spawn is unchanged.
+	// (`process` is read off globalThis because this project's tsconfig only
+	// includes the `vscode` types, and this file only runs in the desktop host.)
+	const parentEnv =
+		(globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
+	const serverOptions = cliEnv
+		? { command: cliCommand, args: cliArgs, options: { env: { ...parentEnv, ...cliEnv } } }
+		: { command: cliCommand, args: cliArgs };
+	const newClient = new LanguageClient('lspClient', 'LSP Client', serverOptions, cliClientOptions);
 	newClient.onDidChangeState(handleStateChange);
 	client = newClient;
 	try {
@@ -150,8 +163,10 @@ export async function activate(context: ExtensionContext) {
 	if (mode === 'cli') {
 		cliCommand = config.get<string>('cli-server.path', '') || 'typort';
 		cliArgs = ['lsp'];
+		const engine = config.get<string>('cli-server.engine', 'reference');
+		cliEnv = engine === 'twin' ? { TYPORT_LSP_ENGINE: 'twin' } : undefined;
 		logChannel = window.createOutputChannel('TyportHDL Language Server', { log: true });
-		logChannel.appendLine(`Starting CLI language server: ${cliCommand} lsp`);
+		logChannel.appendLine(`Starting CLI language server: ${cliCommand} lsp (engine: ${engine})`);
 
 		cliClientOptions = {
 			documentSelector: [{ language: "typort" }],
