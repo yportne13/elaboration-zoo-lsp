@@ -608,6 +608,46 @@ println (odd (succ zero))
     );
 }
 
+/// A6/§C 钉子：多层非线性 pruning 的掩码反转（参考版 `prune_ty` vs 快版
+/// `prune_ty_bump`）。源取自 L06 `pruning_nonpalindrome_dependent_masks` 的
+/// 非对称非线性形态（`m a a b c`），按 L09 的 `Type N` 层级适配：
+/// `Eq` 是对 `A -> Type 0` 的 Leibniz 量化，故其**返回宇宙必须是 `Type 1`**
+/// （`A : Type 0` ⇒ `A -> Type 0 : Type 1`）；直接照搬 `: Type 0` 会在
+/// `Eq` 声明处就报 `find Type 0 / expected Type 1`，根本走不到 pruning。
+///
+/// `m a a b c` 的重复实参（η 展开后掩码内先序 `[Some,Some,Some,None,None]`）
+/// 使参考版旧实现（不反转、按链头配最外层 Π）保留 A/B、剪掉 C/D，而 codomain
+/// `D -> D` 引用被剪的 D → 参考版 Err，快版 Ok（修复前分叉）；修复后参考版
+/// 与快版 `mask_inner_first.iter().rev()` 同口径，两版 Ok。
+#[test]
+fn parity_nonlinear_pruning_rev_mask() {
+    let src = r#"
+def Eq[A : Type 0](x : A, y : A) : Type 1 = (P : A -> Type 0) -> P x -> P y
+
+def refl[A : Type 0, x : A] : Eq[A] x x = P => px => px
+
+def m : (A : Type 0) -> (B : Type 0) -> (C : Type 0) -> (D : Type 0) -> D -> D = _
+
+def test (a : Type 0)(b : Type 0)(c : Type 0) : Eq (m a a b c) (d => d) = refl
+"#;
+    assert!(
+        run_basic(src).is_ok(),
+        "多层非线性剪枝源应能过类型检查并解出 meta，basic={:?}",
+        run_basic(src)
+    );
+    assert_parity(src);
+}
+
+/// A7 钉子：0 号全局（`global_idx=0` ⇒ 层级恰为哨兵 `1919810`）自引用。
+/// 边界必须是 `>=`：用 `>` 会走 `l - x - 1` 下溢（debug panic / release
+/// 大索引越界）；`println f` 经 pretty 的 `>=` 分支打印 `recursive_0`。
+#[test]
+fn parity_global_sentinel_self_ref() {
+    let src = "def f : String = f\n\nprintln f\n";
+    assert_eq!(run_basic(src).unwrap(), "recursive_0\n");
+    assert_parity(src);
+}
+
 #[test]
 fn parity_eq_proofs() {
     // 依赖递归函数的索引族等式推理（stuck match 与精化的组合推理全链路）

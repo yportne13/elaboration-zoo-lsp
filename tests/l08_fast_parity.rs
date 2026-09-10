@@ -2,8 +2,9 @@
 //! run_fast`）。`#[path]` 只编 list.rs / parser_lib.rs / L08_product_type/mod.rs
 //! （不含 LSP / L02-L06 / L13），迭代快数倍（tests/l06_blackbox.rs 同款）。
 //!
-//! 判据：**Ok 输出逐字节一致 / Err 判定一致**。错误文案的 Debug-Span 偏移
-//! 是文档化偏差（快版导出项的 span 全零），不比内容。
+//! 判据：**Ok 输出逐字节一致**；Err 判定一致，且 **span 偏移归一化后错误
+//! 正文逐字节一致**（`norm_err` 剥掉 Debug-Span 的 `@ N` 数字——快版导出项
+//! 的 span 全零属文档化偏差）。
 //!
 //! 深递归（依赖匹配的精化合一链、深值 quote）远超测试线程默认 2MB 栈，
 //! 两侧都在 256MB 栈线程里跑（L07 tests.rs 的 64MB 惯例再放宽——快版
@@ -1609,4 +1610,25 @@ fn deep_workload_struct_parity() {
         "struct 负载 nf 节点数不一致"
     );
     assert_parity(&src);
+}
+
+// ROUND2 A1：packed-word 对齐不变式（wasm32 亦须 ≥8）。
+// --------------------------------------------------------------------------------
+
+/// `v_xcell`/`v_clo`/`v_pi` 以 `ptr | tag` 编码、`& !7` 解码，要求地址 ≥8
+/// 对齐。编译期断言已在 `bump_spine_iter.rs` 钉住；此处再给运行时可见证据。
+#[test]
+fn packed_cells_align_at_least_8() {
+    assert!(
+        std::mem::align_of::<fast::XCell<'static>>() >= 8,
+        "XCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::CloCell<'static>>() >= 8,
+        "CloCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::PiCell<'static>>() >= 8,
+        "PiCell 对齐不足以承载 3 位 tag 解码"
+    );
 }

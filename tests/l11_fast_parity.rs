@@ -524,3 +524,122 @@ println ttt
     assert_eq!(a, b, "跨轮 mutable 全局泄漏");
     assert_parity(gsrc);
 }
+
+// Round-2 探针（A2 η 守卫 / A4 u64 / A5 trait 求解 / A6 prune_ty / A8 宏递归）
+// 由 orchestrator 集中运行裁决；期望值在注释中标注。
+// --------------------------------------------------------------------------------
+
+fn unpanic<T>(f: impl FnOnce() -> T) -> std::thread::Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+}
+
+/// A2：η 臂 applicability 守卫。`get_global "f"` 的类型 = f 的登记值（λ）；
+/// `def g : String = …` 让 LiteralType 与 λ 落 η 臂。修复前 v_app(LiteralType)
+/// → panic；修复后两版都可恢复、判定一致（本探针只钉「不 panic + 同判定」，
+/// 不比较逐字文案）。
+#[test]
+fn probe_eta_applicability_guard() {
+    let src = r#"
+enum U {
+    u
+}
+
+def f : U -> U = x => x
+
+def g : String = get_global "f"
+"#;
+    let b = unpanic(|| run_basic(src));
+    let f = unpanic(|| run_fast(src));
+    assert!(b.is_ok(), "参考版 η 臂不应 panic（应可恢复 Err）");
+    assert!(f.is_ok(), "快版 η 臂不应 panic（应可恢复 Err）");
+    let (b, f) = (b.unwrap(), f.unwrap());
+    assert_eq!(
+        b.is_ok(),
+        f.is_ok(),
+        "η 路径两版 Ok/Err 判定应一致；basic={:?} fast={:?}",
+        b.as_ref().err().map(|e| &e.0.data),
+        f.as_ref().err().map(|e| &e.0.data),
+    );
+}
+
+/// A4：超大整数字面量不再 panic；parser 推 IError。
+#[test]
+fn probe_u64_literal_overflow_no_panic() {
+    let src = "def x = 99999999999999999999999999\n";
+    let res = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || L11_macro::parser::parser(src, 0))
+        .unwrap()
+        .join();
+    assert!(res.is_ok(), "超大整数不应 panic");
+    let parsed = res.unwrap().expect("parser 应返回 Some");
+    assert!(!parsed.1.is_empty(), "超大整数应产生解析错误");
+}
+
+/// A8（P0）：自递归宏受展开深度上限保护，不得栈溢出；返回解析错误。
+/// 线程栈刻意取小（8MiB，远小于 parity 用例的 256MiB），修复前可稳定复现
+/// 栈溢出。
+#[test]
+fn probe_macro_self_recursion_depth_limit() {
+    let src = "macro_rules m { () => { m } }\ndef x = m\n";
+    let res = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || L11_macro::parser::parser(src, 0))
+        .unwrap()
+        .join();
+    assert!(res.is_ok(), "自递归宏不应栈溢出");
+    let parsed = res.unwrap().expect("parser 应返回 Some");
+    assert!(!parsed.1.is_empty(), "自递归宏应产生解析错误而非无限展开");
+}
+
+/// A5：无实例 trait 调用返回可恢复 Err（参考版+快版都不 panic）。修复前
+/// 两版都在 `solve_multi_trait(...).unwrap()` panic。
+#[test]
+fn probe_solve_multi_trait_recoverable() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Foo[T] {
+    def foo(x: T): String
+}
+
+def bar[T][f: Foo[T]](x: T): String = f.foo x
+
+def baz = bar 1
+"#;
+    let b = unpanic(|| run_basic(src));
+    let f = unpanic(|| run_fast(src));
+    assert!(b.is_ok(), "参考版 trait 求解失败不应 panic");
+    assert!(f.is_ok(), "快版 trait 求解失败不应 panic");
+    assert!(b.unwrap().is_err() && f.unwrap().is_err(), "两版都应给可恢复 Err");
+}
+
+/// A6：多层/非线性 pruning 的掩码反转 parity。源取自 L06
+/// `pruning_nonpalindrome_dependent_masks`（`U` → `Type 0` 改写）；参考版
+/// 修复前未反转掩码，与快版 `prune_ty_bump` 的 `iter().rev()` 错位。
+/// 若源未真正落到 prune_meta，本探针至少钉住该形态两版 parity。
+#[test]
+fn probe_prune_ty_mask_reversal_parity() {
+    // 1) intersect：m A x ≡ m A y，依赖 telescope (A : Type 0) -> (x : A) -> …
+    assert_parity(concat!(
+        "def Eq [A : Type 0] (x : A, y : A) : Type 0 = (P : A -> Type 0) -> P x -> P y\n",
+        "def refl [A : Type 0, x : A] : Eq[A] x x = P => px => px\n",
+        "def the (A : Type 0)(x : A) : A = x\n",
+        "def m (A : Type 0)(x : A) : Type 0 = _\n",
+        "def test = A => x => y => the (Eq (m A x) (m A y)) refl\n",
+        "println test\n",
+    ));
+    // 2) 非回文掩码 + 依赖 telescope：n 的第二参类型依赖第一参
+    assert_parity(concat!(
+        "def Eq [A : Type 0] (x : A, y : A) : Type 0 = (P : A -> Type 0) -> P x -> P y\n",
+        "def refl [A : Type 0, x : A] : Eq[A] x x = P => px => px\n",
+        "def the (A : Type 0)(x : A) : A = x\n",
+        "def m : (x : Type 0) -> Type 0 -> Type 0 = _\n",
+        "def n : (y : Type 0) -> (z : y) -> Type 0 = _\n",
+        "def test = x => y => the (Eq (m x) (w => n y w)) refl\n",
+        "println test\n",
+    ));
+}

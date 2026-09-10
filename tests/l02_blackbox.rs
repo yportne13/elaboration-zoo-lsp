@@ -2,7 +2,7 @@
 //!
 //! 被测对象：`src/L02_tyck`（elaboration-zoo `typecheck-closures-debruijn` 的
 //! Rust 移植），唯一黑盒入口是 `main_with(mode, src)`（mode ∈ {nf, type,
-//! --help}），经 `#[path]` 独立编译进本测试 crate（同 `tests/l03_review_probe.rs`
+//! --help}），经 `#[path]` 独立编译进本测试 crate（同 `tests/l03_blackbox.rs`
 //! 的做法；L02 是 `lib.rs` 里的私有 `mod`，集成测试无法直接引用）。
 //!
 //! 双 oracle：

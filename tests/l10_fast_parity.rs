@@ -603,3 +603,129 @@ fn steady_state_reuse() {
     assert_eq!(r1, r2, "稳态两轮不一致");
     assert_eq!(r1, fresh, "稳态与一次性不一致");
 }
+
+// ROUND2 A1：packed-word 对齐不变式（wasm32 亦须 ≥8）。
+// --------------------------------------------------------------------------------
+
+/// `v_xcell`/`v_clo`/`v_pi` 以 `ptr | tag` 编码、`& !7` 解码，要求地址 ≥8
+/// 对齐。编译期断言已在 `bump_spine_iter.rs` 钉住；此处再给运行时可见证据。
+#[test]
+fn packed_cells_align_at_least_8() {
+    assert!(
+        std::mem::align_of::<fast::XCell<'static>>() >= 8,
+        "XCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::CloCell<'static>>() >= 8,
+        "CloCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::PiCell<'static>>() >= 8,
+        "PiCell 对齐不足以承载 3 位 tag 解码"
+    );
+}
+
+// ROUND2 A6：prune_ty 掩码反转 parity 探针。
+// --------------------------------------------------------------------------------
+
+/// 多层非线性 pruning 的参考/快版 parity。L10 参考版 `prune_ty` 旧移植直接以
+/// Pruning 链头（最内层槽位）配对外层 Π，未 `rev`（`//TODO:revPruning`）；快版
+/// `prune_ty_bump` 已 `mask_inner_first.iter().rev()`（外→内）。
+///
+/// 源形状取自 A3 已通过的 L09 `parity_nonlinear_pruning_rev_mask`（同一位点、
+/// 同一实现族）：`m a a b c` 的重复实参产生**非回文**内先序掩码
+/// `[Some(c), Some(b), None(a), None(a)]`。旧参考版按链头配最外层 Π 会剪错层
+/// （保留 A/B、剪掉 C/D），与快版外→内口径相反 → 判定/正文分叉；修复后一致。
+#[test]
+fn parity_prune_ty_rev_multilevel_nonlinear() {
+    // 源与 L09 `parity_nonlinear_pruning_rev_mask` 同形（已验证可过类型检查并
+    // 走到 meta 剪枝路径）：`Eq` 返回宇宙须是 Type 1（`A : Type 0` ⇒
+    // `A -> Type 0 : Type 1`，写 Type 0 会在注释层就 universe 报错，到不了剪枝）。
+    let src = r#"
+def Eq[A : Type 0](x : A, y : A) : Type 1 = (P : A -> Type 0) -> P x -> P y
+
+def refl[A : Type 0, x : A] : Eq[A] x x = P => px => px
+
+def m : (A : Type 0) -> (B : Type 0) -> (C : Type 0) -> (D : Type 0) -> D -> D = _
+
+def test (a : Type 0)(b : Type 0)(c : Type 0) : Eq (m a a b c) (d => d) = refl
+"#;
+    assert!(
+        run_basic(src).is_ok(),
+        "多层非线性剪枝源应能过类型检查并解出 meta，basic={:?}",
+        run_basic(src)
+    );
+    assert_parity(src);
+}
+
+// ROUND2 A7：0 号全局哨兵边界探针。
+// --------------------------------------------------------------------------------
+
+/// 0 号全局（`global_idx=0` ⇒ 层级恰为哨兵 `1919810`）自引用。边界必须是
+/// `>=`（全局 iff `level >= BASE`）：用 `>` 会走 `l - x - 1` 下溢（debug
+/// panic / release 大索引越界）；参考版 `rename` 的旧 `<=` 还会把 0 号全局
+/// 误判为局部 scope error。修复后 `println f` 经 pretty 的 `>=` 分支打印
+/// `recursive_0`，且参考/快版一致。L09 `parity_global_sentinel_self_ref` 同款。
+#[test]
+fn parity_global_sentinel_self_ref() {
+    let src = "def f : String = f\n\nprintln f\n";
+    assert_eq!(run_basic(src).unwrap(), "recursive_0\n");
+    assert_parity(src);
+}
+
+// ROUND2 §C：L10 Synth::unify 假匹配探针（needs-verify）。
+// --------------------------------------------------------------------------------
+
+/// **探针（orchestrator 裁决用）**：`Synth` 旧求解器的 `unify`
+/// （`typeclass.rs:371-399`）无 occurs check，且把 `Typ::Var(level)` 的裸
+/// level 当全局变量号双向代换。`impl[T] Say for List[T]` 登记断言
+/// `Say[Construct("List",[Var(0)])]`；`def f[T](x: T) = x.say` 的接收者
+/// 类型 `T` 为 `Var(0)`，两 level 数值相同 → `unify(Var(0), Construct(...))`
+/// 走 `(Var, _)` 臂直接 `subst[0] = List[Var(0)]` 返回 true。静态推理预期
+/// 泛型 `T` 被假匹配成 `List`，`f` 被接受且 `f two` 返回 "list"。
+///
+/// 因无法在本环境运行，本探针标 `#[ignore]` 并要求 orchestrator 显式执行：
+/// `cargo test --test l10_fast_parity -- --ignored probe_synth_...`。
+/// - 若通过（Ok 输出含 "list"）：P1 假匹配成立，按报告记 P1。
+/// - 若失败（Err / 不同输出）：假匹配不成立，请更正报告并降级该 P1。
+#[test]
+#[ignore = "needs-verify 假匹配探针，由 orchestrator 显式运行裁决（ROUND2 §C）"]
+fn probe_synth_false_match_rigid_generic() {
+    let out = run_basic(
+        r#"
+trait Say {
+    def say: String
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+impl[T] Say for List[T] {
+    def say: String = "list"
+}
+
+def f[T](x: T): String = x.say
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+println (f two)
+"#,
+    );
+    match out {
+        Ok(s) => assert_eq!(
+            s, "list\n",
+            "假匹配成立（P1）：泛型 T 被匹配成 List，f two 返回 List 实例的 say"
+        ),
+        Err(e) => panic!(
+            "假匹配不成立：求解器给出 Err（{}）；请更正报告中的 P1",
+            e.0.data
+        ),
+    }
+}
