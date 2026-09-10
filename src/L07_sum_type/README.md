@@ -310,7 +310,7 @@ builtin 全量扫描含文件 IO panic 契约 / enum 冷僻特性（重名、显
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（40 个：39 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
+l07_blackbox_v3`（46 个：45 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
 遮蔽臂不查体）/ unification 边界（rigid 头不同、spine 长度不齐、自引用

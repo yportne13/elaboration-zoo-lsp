@@ -1,5 +1,3 @@
-use colored::Colorize;
-
 use crate::list::List;
 
 use super::{
@@ -100,28 +98,36 @@ impl Infer {
     }
     fn prune_ty_go(
         &mut self,
-        pr: &Pruning,
+        rev: &[Option<Icit>],
         pren: &PartialRenaming,
         a: Val,
     ) -> Result<Tm, UnifyError> {
-        match (pr, self.force(a)) {
-            (List { head: None, .. }, a) => self.rename(pren, a),
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_some() => {
+        // 掩码按"外→内"配对 Π 层：`rev` 头 = 最外层槽位（`prune_ty` 已把
+        // Pruning 反转——List 头是最内层）。旧实现直接按链头配对外层 Π，
+        // 多层 telescope + 混合掩码时掩码与 Π 层错位（L05–L08 已修的同款；
+        // 本层快版 `prune_ty_bump` 走 `mask_inner_first.iter().rev()`）。
+        match (rev.split_first(), self.force(a)) {
+            (None, a) => self.rename(pren, a),
+            (Some((Some(_), rest)), Val::Pi(x, i, a, b)) => {
                 let a = self.rename(pren, *a)?;
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
-                let b = self.prune_ty_go(&list.tail(), &lift(pren), b)?;
+                let b = self.prune_ty_go(rest, &lift(pren), b)?;
                 Ok(Tm::Pi(x, i, Box::new(a), Box::new(b)))
             }
-            (list, Val::Pi(x, i, a, b)) if list.head().unwrap().is_none() => {
+            (Some((None, rest)), Val::Pi(x, i, _, b)) => {
                 let b = self.closure_apply(&b, Val::vvar(pren.cod));
-                self.prune_ty_go(&list.tail(), &skip(pren), b)
+                self.prune_ty_go(rest, &skip(pren), b)
             }
             _ => Err(UnifyError), // impossible case
         }
     }
     pub fn prune_ty(&mut self, pr: &Pruning, a: Val) -> Result<Tm, UnifyError> {
+        // Pruning 头 = 最内层槽位；meta 类型的 Π 层从最外层剥起——先反转
+        // 成"外→内"（RevPruning，上游 05/L07/L08 与快版 `prune_ty_bump` 同款）。
+        let mut rev: Vec<Option<Icit>> = pr.iter().copied().collect();
+        rev.reverse();
         self.prune_ty_go(
-            pr,
+            &rev,
             &PartialRenaming {
                 occ: None,
                 dom: Lvl(0),
@@ -138,7 +144,7 @@ impl Infer {
         };
 
         let prune_ty = self.prune_ty(&pruning, mty.clone())?;
-        let prunedty = self.eval(&List::new(), prune_ty); //TODO:revPruning
+        let prunedty = self.eval(&List::new(), prune_ty);
         let m_prime = MetaVar(self.new_meta(prunedty));
 
         let solution = self.eval(
@@ -243,7 +249,7 @@ impl Infer {
                 _ => self.prune_vflex(pren, m_prime, sp),
             },
             Val::Rigid(x, sp) => match pren.ren.get(&x.0) {
-                None => if x.0 <= 1919810 {
+                None => if x.0 < 1919810 {
                     Err(UnifyError)
                 } else {
                     let t = Tm::Var(lvl2ix(pren.dom, x));
@@ -397,7 +403,7 @@ impl Infer {
         // can be pruned from the meta type (i.e. that the pruned solution will
         // be well-typed)
         if let Some(pr) = prune_non_linear {
-            self.prune_ty(&pr, mty.clone())?; //TODO:revPruning?
+            self.prune_ty(&pr, mty.clone())?; // 掩码反转在 prune_ty 内完成
         }
 
         let rhs = self.rename(
@@ -480,7 +486,10 @@ impl Infer {
                     _ => None,
                 }
             }
-            _ => unreachable!(),
+            // 长度失配：同一 meta 以不同 arity 出现——回落 `intersect` 的
+            // `None => unify_sp` 逐实参比较（不可 `unreachable!()`；L05/L06/
+            // L07/L08 与快版 `intersect_bump` 对长度失配均取失败而非 panic）
+            _ => None,
         }
     }
     fn intersect(

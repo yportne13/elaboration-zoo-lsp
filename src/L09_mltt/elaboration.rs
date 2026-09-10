@@ -1,6 +1,4 @@
-use std::{cmp::max, collections::HashMap};
-
-use colored::Colorize;
+use std::cmp::max;
 
 use crate::{list::List, parser_lib::Span};
 
@@ -8,9 +6,8 @@ use super::{
     Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
     Lvl,
     empty_span, lvl2ix,
-    parser::syntax::{Decl, Either, Icit, Raw, Pattern},
+    parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
-    PatternDetail,
     unification::PartialRenaming,
 };
 
@@ -153,7 +150,7 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&pr, mty.clone()).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
+                    self.prune_ty(&pr, mty.clone()).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; // 掩码反转在 prune_ty 内完成
                 }
 
                 if pren.dom.0 == 0 {

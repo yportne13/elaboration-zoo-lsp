@@ -1,7 +1,15 @@
-use colored::Colorize;
+//! L09_mltt —— MLTT 切片（`Type N` 分层宇宙 + 和类型 / match）。
+//!
+//! **已知限制（ROUND2 §B3，非缺陷，参考版与快版同崩 + parity 一致）**：
+//! 值层不支持"卡住 match 再被应用"——`Val::Match` 经 `v_app` 会
+//! `panic!("impossible apply")`。合法源码（如打印引用自递归卡住 match 的
+//! 函数值）可触发；L07 起以值层 splice 实现了该特性，L09 是时代缺口。
+//! 修复需实现实参吸收并要求参考版+快版同步大改，超出最小改动范围。
 use cxt::Cxt;
-use parser::syntax::{Either, Icit, Pattern, Raw};
-use pattern_match::{Compiler, DecisionTree};
+// `Either` 本文件几乎不用，但子模块 `pattern_match` 以 `super::Either` 引用
+// （`pattern_match.rs:192/200`）——勿按"本文件未用"删除。
+use parser::syntax::{Either, Icit};
+use pattern_match::Compiler;
 use syntax::{Pruning, close_ty};
 use pretty::pretty_tm;
 
@@ -159,7 +167,11 @@ impl Val {
 }
 
 fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
-    if x.0 > 1919810 {
+    // 全局层级哨兵：global_idx 从 0 起（`global_idx + 1919810`），故 0 号
+    // 全局恰好等于 1919810——边界必须是 `>=`（eval 的 `x - 1919810` 与快版
+    // `*i >= GLOBAL_BASE` 同口径）。用 `>` 会让首个声明的自引用走
+    // `l - x - 1` 下溢（debug panic / release 大索引越界）。
+    if x.0 >= 1919810 {
         Ix(x.0)
     } else {
         Ix(l.0 - x.0 - 1)

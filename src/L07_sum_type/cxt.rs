@@ -4,7 +4,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
+    Env, Infer, Ix, Lvl, Tm, Ty, Val, VTy,
     empty_span,
     parser::syntax::Icit,
     syntax::{Locals, Pruning},

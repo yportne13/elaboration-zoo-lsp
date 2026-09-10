@@ -209,6 +209,8 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: tag 1 由 `v_clo`（`ptr | 1`）唯一产出；`CloCell` 地址 ≥8 对齐
+    // （下面的编译期断言），`& !7` 精确还原指针，且该单元在 bump `'a` 内存活。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -217,6 +219,8 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: tag 4 由 `v_pi`（`ptr | 4`）唯一产出；`PiCell` 地址 ≥8 对齐
+    // （编译期断言），`& !7` 精确还原指针，单元在 bump `'a` 内存活。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -224,8 +228,14 @@ pub(crate) fn v_meta_of(v: V) -> u32 {
     (v.0 >> 3) as u32
 }
 /// tag 7 单元解引用（bump 内分配，本轮内有效）。
+///
+/// 依赖 `XCell` ≥8 对齐（由 `#[repr(align(8))]` 保证，含 wasm32——
+/// `&str` 仅 4 对齐时枚举会跌破 8）；`& !7` 才能精确还原 `ptr | 7`。
 #[inline]
 pub(crate) fn v_xcell_of<'a>(v: V) -> &'a XCell<'a> {
+    // SAFETY: tag 7 由 `v_xcell`（`ptr | 7`）唯一产出；`XCell` 地址 ≥8 对齐
+    // （`#[repr(align(8))]` + 编译期断言），`& !7` 精确还原指针，单元在
+    // bump `'a` 内存活。
     unsafe { &*((v.0 & !7) as *const XCell) }
 }
 
@@ -248,6 +258,11 @@ pub(crate) struct SumDataV<'a> {
 /// 和类型本体、构造子值、卡住 match。判等按单元指针（同内容不同次求值各
 /// 造单元——与参考版每次构造新值同构）；**位相等捷径对 tag 7 关闭**（见
 /// 模块注释），其中 Obj 头的链在 unify 里单独排除。
+///
+/// 显式 `align(8)`：packed 字用 `ptr | 7` 编码、`v.0 & !7` 解码，要求单元
+/// 地址低 3 位为 0。wasm32 的 `&str` 仅 4 字节对齐，若枚举最大对齐由
+/// 指针/长度字段决定会跌破 8，`& !7` 就会清掉 bit2 → 错误指针 UB。
+#[repr(align(8))]
 pub(crate) enum XCell<'a> {
     Lit(&'a str),
     Decl(&'a str),
@@ -368,6 +383,11 @@ pub(crate) fn env_ext_defs<'a>(
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+///
+/// 对齐：`v_clo` 以 `ptr | 1` 编码、`v_clo_of` 以 `& !7` 解码，要求 ≥8 对齐。
+/// 本单元不含 u64 字段，wasm32 上仅 4 对齐（`&str`/`Env`/`&Tm`），故显式
+/// `repr(align(8))`（64 位上本就 8 对齐，零行为变化）。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -383,6 +403,16 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+
+// packed-word 指针编码（`ptr | tag`，tag ∈ {1,4,7}）的解引用走 `v.0 & !7`，
+// 要求单元地址低 3 位为 0 ⇒ align_of ≥ 8。wasm32 上 `&str` 仅 4 对齐：
+// `XCell`/`CloCell`（均无 u64 字段）靠 `#[repr(align(8))]` 钉住；`PiCell`
+// 含 `dom: V`(u64) 天然 ≥8，断言只是把不变式写进编译期（防未来改字段跌破）。
+// `EnvCons` 不直接进 packed 字，断言为防御性。
+const _: () = assert!(std::mem::align_of::<XCell<'static>>() >= 8);
+const _: () = assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
+const _: () = assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
+const _: () = assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
 
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------

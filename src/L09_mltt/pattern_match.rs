@@ -3,7 +3,7 @@ use std::{
     rc::Rc,
 };
 
-use crate::parser_lib::{Span, ToSpan};
+use crate::parser_lib::Span;
 
 use super::{
     Env, Error, Infer, Tm, Val,
