@@ -74,9 +74,12 @@
 //! （[`Tycker::run_decls_with_prelude`]，nat/vconnT 内建 + 短名别名 +
 //! HdlLoopIdx 口径；**无池化**——每 kick 从 prime_round 重放，装载段
 //! `observe=false` 关观察面 push）。LSP 侧 `Engine::Twin` 已接线
-//! （`lib.rs::twin_observe` 每 kick 重放 + owned 快照 + 参考版回落）；
-//! 实测 seed 成本压过收益（~10× 慢），**常驻/池化 prelude 是兑现速度的
-//! 前提**（阶段 3b），详见该文档 2026-09-10 进展。
+//! （`lib.rs::twin_observe`），并走**常驻 prelude 检查点**（阶段 3b：
+//! [`Tycker::prime_resident`] 一次装载 + [`Tycker::observe_user`] 多次复用，
+//! 线程局部挂分析主循环）——seed 税已清零（kick 3285→399ms）。**仍未净
+//! 收益**：twin 模式为诊断/跨文件跑完整参考版流水线（~280ms 单文件
+//! elaboration），孪生观察段是叠加的 ~74ms；净收益需孪生接管诊断面（错误
+//! 累积 + 源码 span 保真），详见该文档 2026-09-10 进展。
 //! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF、force 记忆化（本机 force
 //! 按值重算、无 memo，taint/prim_version 随之不需要）、Tm/Val 迭代 Drop
 //! （bump 免疫）、PreludePool 池化/defer_println（run() 口径为 false）、
