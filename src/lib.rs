@@ -513,6 +513,25 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.hover_table.get(uri).map(|x| x.inlay_hint_table.clone())
     }
 
+    /// Engine-routed hover entry at `offset` (rendered type string), the same
+    /// entry `hover_at` would pick.  Public surface for tests/tools so guard
+    /// suites do not reach into the reference `hover_table` directly (which
+    /// is empty under twin ownership).
+    pub fn hover_type_at(&self, uri: &str, offset: usize) -> Option<String> {
+        self.resolved_hover_entry(uri, offset).map(|(_, _, s)| s)
+    }
+
+    /// Engine-routed winning hover entry `(range_span, def_span, rendered)`
+    /// at `offset` — the full entry, not just the type string.
+    pub fn resolved_hover_entry(
+        &self,
+        uri: &str,
+        offset: usize,
+    ) -> Option<(Span<()>, Span<()>, String)> {
+        let id = self.document_id.get(uri).map(|x| *x)?;
+        self.hover_entry_owned(uri, id, offset)
+    }
+
     /// Engine-appropriate hover tables across every open file, as
     /// `(uri, entries)`.  Used by cross-file references: twin snapshots take
     /// precedence per file, with the reference table as the fallback for
@@ -1222,52 +1241,70 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
     }
 
-    /// Twin-engine observation pass for one file (stage 3a/3b): elaborate
-    /// this file's decls against a **resident** prelude checkpoint and
-    /// snapshot the hover/completion/inlay tables (path ids match the
-    /// reference loader and the builtin document registration, both
-    /// sequential from 0).  Diagnostics, the global decl table and cross-file
-    /// bookkeeping stay on the reference engine — this pass only serves the
-    /// interactive hover / goto / completion / inlay surface.  A parse failure
-    /// or twin inference error drops any stale snapshot, mirroring the
-    /// reference path's "clear on parse error / keep previous symbols" split.
+    /// Whether the twin can *fully own* this file's elaboration (stage 4):
+    /// the twin replays only the prelude + this file, so it is authoritative
+    /// exactly when the reference-domain global table holds no OTHER user
+    /// file's symbols (which the twin's replay would not see).  A file that
+    /// imports a project namespace, or declares one, still needs the
+    /// reference engine's cross-file data plane.
+    fn twin_can_own(&self, uri_str: &str) -> bool {
+        self.engine == Engine::Twin
+            && !self.file_deps.contains_key(uri_str)
+            && !self.file_namespaces.contains_key(uri_str)
+            && self.type_map.iter().all(|e| e.key() == uri_str)
+    }
+
+    /// Twin-authoritative elaboration (stage 4).  When the twin can own the
+    /// file ([`Self::twin_can_own`]) this parses, elaborates with the
+    /// resident twin, publishes the twin's own diagnostics (errors / HDL
+    /// warnings / println), snapshots the observation tables, and merges the
+    /// twin's exported decls into the reference-domain global table so Path1
+    /// definition hover, member rendering and later cross-file reads keep
+    /// working.  Returns `true` when it handled the file (the caller then
+    /// skips the reference per-decl infer loop); `false` falls back to the
+    /// reference path.
     ///
-    /// The resident prelude lives in a thread-local (the twin `Bump` is
-    /// `!Sync`, and the LSP drains analysis jobs on one thread) keyed by
-    /// whether HDL is included; the first observation of a given shape pays
-    /// the one-time prelude prime, every later kick only the user-file cost.
-    fn twin_observe(&self, uri: &Url, text: &str) {
-        if self.engine != Engine::Twin {
-            return;
-        }
+    /// Diagnostics come from the twin's per-decl accumulation (which the
+    /// parity suite proves byte-equal to the reference's on an error corpus).
+    /// A parse failure or an ERROR keeps the previous symbols, mirroring the
+    /// reference path.
+    fn twin_elaborate(&self, uri: &Url, text: &str, version: Option<i32>) -> bool {
         let uri_str = uri.to_string();
+        if !self.twin_can_own(&uri_str) {
+            return false;
+        }
         let Some(now_id) = self.document_id.get(&uri_str).map(|x| *x) else {
-            return;
+            return false;
         };
         let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        let Some((decls, _, _, _)) = parser_with_macros(&preprocess(text), now_id, &global_macros) else {
+        let Some((decls, parse_errs, new_exports, expansions)) =
+            parser_with_macros(&preprocess(text), now_id, &global_macros)
+        else {
+            // Parse failure: clear this file's observation snapshot; the
+            // caller's reference path clears the rest.
             self.twin_tables.remove(&uri_str);
-            return;
+            return false;
         };
+        self.update_file_macros(&uri_str, &new_exports);
+        self.macro_expansion_map.insert(uri_str.clone(), expansions);
         let prelude_guard = self.twin_prelude.lock().unwrap();
         let Some(prelude) = prelude_guard.as_ref() else {
-            return;
+            return false;
         };
         let include_hdl = prelude.counts.iter().any(|(n, _)| n == "hdl-core");
         // The resident Tycker holds a `!Sync` bump; the analysis loop is
         // single-threaded, so a thread-local (not a Backend field) is the
         // right home.  Reuse is keyed by prelude shape (HDL or core-only).
-        TWIN_RESIDENT.with(|slot| {
+        let ran = TWIN_RESIDENT.with(|slot| {
             let mut guard = slot.borrow_mut();
             let stale = !matches!(guard.as_ref(), Some(r) if r.include_hdl == include_hdl);
             if stale {
                 let mut t = L13_namespace::bump_spine_iter::Tycker::new();
                 if t.prime_resident(prelude).is_err() {
                     *guard = None;
-                    self.twin_tables.remove(&uri_str);
-                    return;
+                    return false;
                 }
                 *guard = Some(TwinResident { include_hdl, tycker: t });
             }
@@ -1281,14 +1318,124 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                         inlay: t.inlay_hint_table().to_vec(),
                     };
                     self.twin_tables.insert(uri_str.clone(), snap);
+                    true
                 }
                 Err(_) => {
-                    // Mirror the reference path: a failed pass keeps the
-                    // previous symbols and drops this file's stale snapshot.
                     self.twin_tables.remove(&uri_str);
+                    false
                 }
             }
         });
+        if !ran {
+            return false;
+        }
+        // Publish twin diagnostics + merge exports (resident still borrowed).
+        let (errors, printlns, checks, exports) = TWIN_RESIDENT.with(|slot| {
+            let guard = slot.borrow();
+            let t = &guard.as_ref().expect("resident").tycker;
+            let errors: Vec<(Span<()>, String)> = t
+                .user_errors()
+                .iter()
+                .map(|e| (e.0.clone().map(|_| ()), e.0.data.clone()))
+                .collect();
+            (
+                errors,
+                t.println_spans().to_vec(),
+                t.check_issue_lines().to_vec(),
+                t.user_decl_exports().to_vec(),
+            )
+        });
+        drop(prelude_guard);
+        let rope = Rope::from_str(text);
+        let has_error = !errors.is_empty() || !parse_errs.is_empty();
+        // Merge exports into the reference global table (mirrors the
+        // reference path's per-file symbol replacement).
+        {
+            let mut cxt = self.cxt.lock().unwrap();
+            let m = Rc::make_mut(&mut cxt.decl);
+            if let Some(keys) = self.file_symbols.get(&uri_str) {
+                for k in keys.value().clone() {
+                    if m.remove(k.as_str()).map_or(false, |e| e.5.is_some()) {
+                        L13_namespace::prim_version_bump();
+                    }
+                }
+            }
+            if !has_error {
+                let mut new_keys: HashSet<String> = HashSet::new();
+                for (name, e) in &exports {
+                    m.insert(
+                        name.clone(),
+                        (e.span, e.tm.clone(), e.val.clone(), e.ty.clone(), e.vty.clone(), None, e.typ_pretty.clone()),
+                    );
+                    new_keys.insert(name.to_string());
+                }
+                if new_keys.is_empty() {
+                    self.file_symbols.remove(&uri_str);
+                } else {
+                    self.file_symbols.insert(uri_str.clone(), new_keys);
+                }
+            }
+        }
+        // Path1 fallback entries for defs (name span + signature rendering).
+        if !has_error {
+            let mut terms = Vec::new();
+            for d in &decls {
+                if let Decl::Def { name, .. } = d {
+                    if let Some((_, e)) = exports.iter().find(|(k, _)| k == &name.data) {
+                        terms.push(DeclTm::Def {
+                            name: name.clone(),
+                            typ: e.vty.clone(),
+                            body: e.val.clone(),
+                            typ_pretty: e.typ_pretty.clone(),
+                            body_pretty: String::new(),
+                        });
+                    }
+                }
+            }
+            self.type_map.insert(uri_str.clone(), terms);
+        } else {
+            self.type_map.remove(&uri_str);
+        }
+        // Build diagnostics: twin errors (ERROR) + parse errors + HDL
+        // warnings (WARNING, span resolved like the reference) + println
+        // (INFORMATION).
+        let mut diags: Vec<Diagnostic> = Vec::new();
+        for e in &errors {
+            let start_position = offset_to_position(e.0.start_offset as usize, &rope).unwrap_or_default();
+            let end_position = offset_to_position(e.0.end_offset as usize, &rope).unwrap_or_default();
+            let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), e.1.clone());
+            d.severity = Some(DiagnosticSeverity::ERROR);
+            diags.push(d);
+        }
+        for e in &parse_errs {
+            let ie = e.clone().to_err();
+            let start_position = offset_to_position(ie.0.start_offset as usize, &rope).unwrap_or_default();
+            let end_position = offset_to_position(ie.0.end_offset as usize, &rope).unwrap_or_default();
+            let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), ie.0.data.clone());
+            d.severity = Some(DiagnosticSeverity::ERROR);
+            diags.push(d);
+        }
+        for (idx, line) in &checks {
+            let anchor = decls.get(*idx).map(decl_span).unwrap_or_else(|| Span { data: (), start_offset: 0, end_offset: 0, path_id: 0 });
+            let span = check_issue_span(text, line, anchor);
+            let start_position = offset_to_position(span.start_offset as usize, &rope).unwrap_or_default();
+            let end_position = offset_to_position(span.end_offset as usize, &rope).unwrap_or_default();
+            let mut d = Diagnostic::new_simple(
+                Range::new(start_position, end_position),
+                L13_namespace::format_check_warning(line),
+            );
+            d.severity = Some(DiagnosticSeverity::WARNING);
+            diags.push(d);
+        }
+        for (span, s) in &printlns {
+            let start_position = offset_to_position(span.start_offset as usize, &rope).unwrap_or_default();
+            let end_position = offset_to_position(span.end_offset as usize, &rope).unwrap_or_default();
+            let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), s.clone());
+            d.severity = Some(DiagnosticSeverity::INFORMATION);
+            diags.push(d);
+        }
+        self.client.publish_diagnostics(uri.clone(), diags, version);
+        true
     }
 
     /// Process queued analysis jobs inline (latest-per-URI wins).
@@ -1843,6 +1990,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// them; on a type error the previous successful symbols are kept.
     fn elaborate(&self, uri: &Url, text: &str, version: Option<i32>) {
         let uri_str = uri.to_string();
+        // Stage 4: when the twin can fully own this file it handles
+        // diagnostics + observation + the global decl merge itself, and the
+        // reference per-decl infer loop (the expensive 280ms/kick pass) is
+        // skipped entirely.  Fall back to the reference path otherwise.
+        if self.twin_elaborate(uri, text, version) {
+            return;
+        }
         let rope = Rope::from_str(text);
         let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
@@ -1993,12 +2147,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             if !is_builtin {
                 self.hover_table.insert(uri_str.clone(), std::mem::replace(&mut local_infer, Infer::new()));
             }
-            if !is_builtin {
-                // Twin observation surface (stage 3a): replay the prelude +
-                // this file through the bump elaborator for hover / goto /
-                // completion / inlay.  No-op unless `engine == Twin`.
-                self.twin_observe(uri, text);
-            }
+            // This is the reference fallback path, taken only when
+            // `twin_elaborate` declined ownership (cross-file file, or twin
+            // disabled).  Twin observation is not run here: its prelude-only
+            // replay would miss the other files' symbols, and it costs a
+            // replay per kick for snapshots that would immediately clear.
         } else {
             // Parse error: clear per-file analysis state, keep previous symbols.
             self.type_map.remove(uri.as_str());

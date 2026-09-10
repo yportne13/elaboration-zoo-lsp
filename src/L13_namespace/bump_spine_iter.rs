@@ -5381,6 +5381,11 @@ pub(crate) struct Machine {
     /// println 输出（span + 渲染串）：孪生自产 INFORMATION 诊断用
     /// （参考版 `println_jobs` 的对位；每轮 `clear_round` 清空）。
     pub(crate) println_spans: Vec<(crate::parser_lib::Span<()>, String)>,
+    /// HDL 自检警告行（decl 下标 + 原始行）：孪生自产 WARNING 诊断用——
+    /// 下标记住归属 decl，LSP 侧按 `check_issue_span` 解析到信号 span
+    /// （参考版 `take_fresh_check_issues` + `check_issue_span` 同口径）。
+    /// 每轮 `clear_round` 清空。
+    pub(crate) check_issue_lines: Vec<(usize, String)>,
     /// 观察面 push 总闸：prelude 装载段置 `false`（push 期渲染 + decl_reg
     /// 的 typ_pretty 渲染是本轮末 `clear_observation_tables` 要丢弃的纯死
     /// 工作——参考版 LSP 只在进程启动装一次 prelude，孪生每 kick 重放就
@@ -5421,6 +5426,7 @@ impl Machine {
             completion_table: Vec::new(),
             inlay_hint_table: Vec::new(),
             println_spans: Vec::new(),
+            check_issue_lines: Vec::new(),
             observe: true,
         }
     }
@@ -5454,6 +5460,7 @@ impl Machine {
         self.completion_table.clear();
         self.inlay_hint_table.clear();
         self.println_spans.clear();
+        self.check_issue_lines.clear();
     }
 
     // ── 观察面（与参考版 `Infer::push_hover` / `hover_entry_at` 同契约）──
@@ -5730,6 +5737,7 @@ impl Machine {
         bump: &'a Bump,
         cxt: &Cxt<'a>,
         x: &str,
+        span: crate::parser_lib::Span<()>,
         a_t: &'a Tm<'a>,
         ty: V,
     ) -> Result<Cxt<'a>, Error> {
@@ -5739,7 +5747,7 @@ impl Machine {
         let prev = Rc::make_mut(&mut decls).insert(
             SmolStr::new(x),
             DeclEntry {
-                span: empty_span(()),
+                span,
                 typ_pretty: None,
                 tm: stub,
                 ty: a_t,
@@ -5749,9 +5757,8 @@ impl Machine {
             },
         );
         if prev.is_some() {
-            return Err(Error(empty_span(format!("redefine {}", x)), vec![]));
+            return Err(Error(span.map(|_| format!("redefine {}", x)), vec![]));
         }
-        let _ = a_t;
         Ok(Cxt {
             env: cxt.env,
             update_from: cxt.update_from,
@@ -8486,7 +8493,7 @@ impl Machine {
                 let vtyp = self.eval(bump, &cxt, cxt.env, typ_tm);
                 // 递归：fake_bind 先把名字登记成 `Decl(name)` 存根（撞名即
                 // redefine 报错），检查体，再 wrap_match_in_call 包装。
-                let fake = self.fake_bind(bump, cxt, &name.data, typ_tm, vtyp)?;
+                let fake = self.fake_bind(bump, cxt, &name.data, name.to_span(), typ_tm, vtyp)?;
                 let t_checked = self.check(bump, &fake, &bod, vtyp)?;
                 let t_tm = self.wrap_match_in_call(bump, name.data.as_str(), t_checked);
                 // solve_multi_trait(this_meta, **true**)（参考版 Def 臂
@@ -8695,7 +8702,7 @@ impl Machine {
                 });
                 let (typ_tm, _) = self.check_universe(bump, cxt, &typ)?;
                 let vtyp = self.eval(bump, &cxt, cxt.env, typ_tm);
-                let fake = self.fake_bind(bump, cxt, &name.data, typ_tm, vtyp)?;
+                let fake = self.fake_bind(bump, cxt, &name.data, name.to_span(), typ_tm, vtyp)?;
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                 // 登记值在含存根的 fake 表下求值（注意用**原 cxt 的 decl**：
                 // Enum 臂与 Def 臂不同，参考版在此用 `cxt.decl`）
@@ -12299,6 +12306,11 @@ impl Tycker {
         &self.machine.println_spans
     }
 
+    /// 本轮用户段的 HDL 自检警告行（decl 下标 + 原始行）——孪生 WARNING 诊断。
+    pub(crate) fn check_issue_lines(&self) -> &[(usize, String)] {
+        &self.machine.check_issue_lines
+    }
+
     // ── 观察面访问器（`run_decls*` 返回后读取本轮快照；契约与参考版 `Infer`
     // 的三张表逐字段同型，接线时消费端可按同一套逻辑处理两引擎）──
     pub(crate) fn hover_table(&self) -> &[(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)] {
@@ -12400,6 +12412,10 @@ impl Tycker {
                         };
                         *ret += &super::format_check_warning(line);
                         *ret += "\n";
+                        // 结构化记录（孪生自产 WARNING 诊断；下标记 decl）
+                        if machine.observe {
+                            machine.check_issue_lines.push((i, line.to_string()));
+                        }
                     }
                 }
                 if seen2 != seen {

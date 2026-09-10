@@ -38,17 +38,15 @@ fn elaborate(b: &Arc<Backend<CapturingClient>>, uri: &Url, src: &str) {
 /// Type text of the hover entry that the LSP hover handler would pick for
 /// `offset` (most specific span wins).
 fn hover_type_at(b: &Arc<Backend<CapturingClient>>, uri: &Url, src: &str, offset: usize) -> String {
-    let infer = b.hover_table.get(uri.as_str()).unwrap();
     let rope = b.document_map.get(uri.as_str()).unwrap();
-    let id = b.document_id.get(uri.as_str()).unwrap();
     assert_eq!(offset, position_to_offset(
         lsp_types::Position::new(0, offset as u32),
         &rope,
     ).unwrap(), "single-line ASCII source: byte offset == character offset");
-    let (_, _, s) = infer
-        .hover_entry_at(*id, offset)
-        .unwrap_or_else(|| panic!("no hover entry at offset {offset} in:\n{src}"));
-    s.clone()
+    // Engine-routed: reads the twin snapshot under `TYPORT_LSP_ENGINE=twin`,
+    // the reference `Infer` table otherwise.
+    b.hover_type_at(uri.as_str(), offset)
+        .unwrap_or_else(|| panic!("no hover entry at offset {offset} in:\n{src}"))
 }
 
 #[test]
@@ -65,11 +63,9 @@ fn hover_over_tuple_element_shows_element_type() {
     assert_eq!(hover_type_at(&b, &uri, src, base + 4), "Boolean");
 
     // Between the elements (the comma) only the whole-tuple entry matches.
-    let infer = b.hover_table.get(uri.as_str()).unwrap();
     let rope = b.document_map.get(uri.as_str()).unwrap();
-    let id = b.document_id.get(uri.as_str()).unwrap();
     let comma = position_to_offset(lsp_types::Position::new(0, (base + 2) as u32), &rope).unwrap();
-    let (span, ..) = infer.hover_entry_at(*id, comma).unwrap();
+    let (span, ..) = b.resolved_hover_entry(uri.as_str(), comma).unwrap();
     assert_eq!(
         (span.start_offset as usize, span.end_offset as usize),
         (base + 1, base + 5),

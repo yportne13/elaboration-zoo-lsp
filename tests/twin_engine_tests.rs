@@ -155,29 +155,102 @@ fn twin_inlay_matches_reference() {
     assert_eq!(hint_labels(&tb, &uri), hint_labels(&rb, &uri), "inlay mismatch");
 }
 
-/// The resident prelude is reused across sequential kicks on one Backend, and
-/// the second file's observation must not be polluted by the first
-/// (per-kick state restore): both must match fresh single-file Backends.
+/// Repeated kicks on the same file reuse the resident prelude and restore
+/// per-kick state: the observation after an edit must equal a fresh
+/// single-file Backend's, and must not carry over the previous edit's
+/// entries.
 #[test]
 fn twin_resident_reuse_across_kicks_is_consistent() {
-    let u1 = Url::parse("file:///twin_k1.typort").unwrap();
-    let u2 = Url::parse("file:///twin_k2.typort").unwrap();
+    let u = Url::parse("file:///twin_kick.typort").unwrap();
     let s1 = "def first(n: Nat): Nat = n";
     let s2 = "def second(a: Nat, b: Boolean): Tuple2[Nat, Boolean] = (a, b)";
 
-    // One twin Backend, two sequential kicks (resident primed on kick 1).
+    // One twin Backend, two sequential edits of the same file.
     let tb = backend(Engine::Twin);
-    tb.process_file(&u1, s1, Some(1));
-    tb.process_file(&u2, s2, Some(1));
+    tb.process_file(&u, s1, Some(1));
+    let after1 = tb.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
+    tb.process_file(&u, s2, Some(2));
+    let after2 = tb.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
 
-    // Baseline: a fresh twin Backend per file.
-    for (u, s) in [(&u1, s1), (&u2, s2)] {
-        let fb = backend(Engine::Twin);
-        fb.process_file(u, s, Some(1));
-        let got = tb.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
-        let want = fb.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
-        assert_eq!(got, want, "resident kick diverged from fresh for {u}");
+    // Baselines: a fresh twin Backend per content.
+    let fb1 = backend(Engine::Twin);
+    fb1.process_file(&u, s1, Some(1));
+    let want1 = fb1.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
+    let fb2 = backend(Engine::Twin);
+    fb2.process_file(&u, s2, Some(1));
+    let want2 = fb2.twin_tables.get(u.as_str()).map(|t| t.hover.clone()).unwrap_or_default();
+
+    assert_eq!(after1, want1, "first kick diverged from fresh");
+    assert_eq!(after2, want2, "second kick diverged from fresh (state leak?)");
+}
+
+/// Twin-authoritative diagnostics (stage 4) match the reference engine's on
+/// an error corpus.  The twin now owns the file's diagnostics entirely, so
+/// this guards message + span + severity parity through the real Backend.
+#[test]
+fn twin_diagnostics_match_reference() {
+    let corpus: &[&str] = &[
+        "def foo: Nat = true",
+        "def qux: Nat = nope",
+        "def a: Nat = true\ndef b: Boolean = 1",
+        "def a: Nat = zero\ndef bad: Nat = true\ndef c: Nat = succ zero",
+        "def inc(n: Nat): Nat = succ n\ndef use: Nat = inc true",
+        "def s: String = 42",
+        "def ok: Nat = zero",
+    ];
+    // (severity, message, start, end) of the last publish per engine.
+    fn last_diags(b: &Arc<Backend<CapturingClient>>, uri: &Url) -> Vec<(Option<lsp_types::DiagnosticSeverity>, String, u32, u32)> {
+        let d = b.client.diagnostics.lock().unwrap();
+        let last = d.iter().filter(|(u, _, _)| u == uri).last().cloned();
+        match last {
+            Some((_, ds, _)) => ds.into_iter()
+                .map(|d| (d.severity, d.message, d.range.start.character, d.range.end.character))
+                .collect(),
+            None => Vec::new(),
+        }
     }
+    for (i, src) in corpus.iter().enumerate() {
+        let uri = Url::parse(&format!("file:///twin_diag_{i}.typort")).unwrap();
+        let tb = backend(Engine::Twin);
+        tb.process_file(&uri, src, Some(1));
+        let rb = backend(Engine::Reference);
+        rb.process_file(&uri, src, Some(1));
+        assert_eq!(
+            last_diags(&tb, &uri), last_diags(&rb, &uri),
+            "diagnostic mismatch for:\n{src}",
+        );
+    }
+}
+
+/// A cross-file file (imports a project namespace) must fall back to the
+/// reference engine: the twin replays only the prelude + the file, so it
+/// cannot see the other file's symbols.  Hover across the boundary must still
+/// resolve (through the reference), proving the fallback is wired.
+#[test]
+fn twin_falls_back_for_cross_file_and_still_resolves() {
+    let a = Url::parse("file:///twin_xa.typort").unwrap();
+    let b_uri = Url::parse("file:///twin_xb.typort").unwrap();
+    let tb = backend(Engine::Twin);
+    tb.process_file(&a, "package mylib\n\nstruct Tree {\n    h: Nat\n}\n", Some(1));
+    let b_src = "import mylib._\n\ndef t: Tree = mylib.Tree.mk zero\n";
+    tb.process_file(&b_uri, b_src, Some(1));
+    // `Tree` in `mylib.Tree.mk` must resolve to the other file's struct.
+    let off = b_src.rfind("Tree.mk").unwrap();
+    let rope = ropey::Rope::from_str(b_src);
+    let pos = elaboration_zoo_lsp::offset_to_position(off, &rope).unwrap();
+    let h = tb.hover_at(&b_uri, pos);
+    assert!(h.is_some(), "cross-file hover did not resolve under twin fallback");
+    // Must match the reference engine's hover (and, since the reference path
+    // is what the fallback uses, its diagnostics too).
+    let rb = backend(Engine::Reference);
+    rb.process_file(&a, "package mylib\n\nstruct Tree {\n    h: Nat\n}\n", Some(1));
+    rb.process_file(&b_uri, b_src, Some(1));
+    let hr = rb.hover_at(&b_uri, pos);
+    assert_eq!(
+        h.map(|x| format!("{:?}", x.contents)),
+        hr.map(|x| format!("{:?}", x.contents)),
+        "cross-file hover differed from reference",
+    );
 }
 
 /// End-to-end twin pass on a real HDL example (full HDL prelude, module with
