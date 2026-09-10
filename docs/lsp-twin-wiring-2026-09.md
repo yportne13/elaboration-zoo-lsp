@@ -335,9 +335,19 @@ pattern 在孪生决策树里的 span 来源（`constr_name`/`constr_` 目前是
 **价值前提修正（本轮实测后必须澄清）**：bench 的 1.8× 是**一次性全量**
 （prelude+user 一起 elaborate）的口径，而 LSP 交互路径里参考版的 prelude
 已经是**进程级缓存**（`clone_prelude_state`），kick 只重新 elaborate 改动
-文件。也就是说：**孪生省下的 prelude 装载时间，恰好是参考版缓存已经省掉
-的那部分**——3a 若不池化，不但吃不到 1.8×，还要每 kick 倒贴一次 prelude。
-即便池化（3b）把 seed 压到 ~0，孪生的净收益也只剩**单文件 elaborate** 的
-差值，须先用 3b 的常驻态实测该差值是否为正、多大。因此 LSP×孪生的兑现
-顺序应是：3b 常驻 prelude → 单文件 kick 双引擎对照 → 再谈默认切换；
-单看 bench 的 1.8× 不足以推断 LSP 收益。
+文件。也就是说：**孪生省下的 prelude 装载时间，恰好是参考版缓存已经省掉的
+那部分**——3a 若不池化，不但吃不到 1.8×，还要每 kick 倒贴一次 prelude。
+
+**seed vs 用户段拆分（release，`split_seed_vs_user_cost` 手动测量）**：
+- 孪生 prelude-only 重放：**2780.7 ms**
+- 孪生 prelude + 09-hierarchy：**2839.5 ms** ⇒ **用户文件仅 ~58.8 ms**
+
+对照参考版整 kick 328.5ms（其 prelude 已缓存，328ms 基本就是"单文件
+elaborate + Infer/Cxt 深克隆"）。**孪生的单文件 elaborate 工作 ~59ms，
+比参考版整 kick 快 ~5.5×**——这印证了 3b 的兑现路径：把 prelude 常驻后，
+kick 只需 59ms 级即可完成观察面刷新，远优于参考版 328ms。
+
+因此下一步（阶段 3b）优先级很高：**常驻/池化孪生 prelude**（`PreludePool`
+池化移植；`Bump` `!Sync` → 线程局部挂主循环），随后实测"常驻态下 09
+及更大 HDL 的双引擎 kick 对照"再谈默认切换。单看 bench 的 1.8× 不足以
+推断 LSP 收益——真正的杠杆是这 5.5× 的单文件差值。

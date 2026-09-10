@@ -13044,6 +13044,41 @@ def d0 : Nat -> Nat = n => succ n
         v
     }
 
+    /// 手动性能测量：把孪生 kick 拆成「prelude 重放」与「用户文件增量」，
+    /// 判断 3b 常驻 prelude 能否让交互路径净收益为正。
+    /// 运行：`cargo test --release --lib split -- --ignored --nocapture`
+    #[test]
+    #[ignore = "manual perf measurement"]
+    fn split_seed_vs_user_cost() {
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        assert_eq!(pre.failed, None);
+
+        let mut best_p = f64::MAX;
+        for _ in 0..3 {
+            let mut t = Tycker::new();
+            let t0 = std::time::Instant::now();
+            t.run_decls_with_prelude(&pre, &[]).expect("prelude replay");
+            let dt = t0.elapsed().as_secs_f64() * 1000.0;
+            if dt < best_p { best_p = dt; }
+        }
+
+        let src = include_str!("../../examples/hdl/09-hierarchy.typort");
+        let (user_decls, _e, _x, _p) =
+            crate::L13_namespace::parser::parser_with_macros(
+                &crate::L13_namespace::preprocess(src), 900, &pre.macros,
+            ).expect("user parse");
+        let mut best_full = f64::MAX;
+        for _ in 0..3 {
+            let mut t = Tycker::new();
+            let t0 = std::time::Instant::now();
+            t.run_decls_with_prelude(&pre, &user_decls).expect("full replay");
+            let dt = t0.elapsed().as_secs_f64() * 1000.0;
+            if dt < best_full { best_full = dt; }
+        }
+        eprintln!("[SPLIT] prelude-only {best_p:.1} ms | prelude+file {best_full:.1} ms | user ~{:.1} ms",
+            best_full - best_p);
+    }
+
     /// 双引擎各跑一遍「prelude 装载 + 用户源」：
     /// - 孪生：[`Tycker::run_decls_with_prelude`]（共享 parse 产物）；
     /// - 参考：`clone_prelude_state`（缓存加载器，含别名/HdlLoopIdx 收尾）
