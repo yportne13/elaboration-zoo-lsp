@@ -154,3 +154,41 @@ fn twin_inlay_matches_reference() {
     }
     assert_eq!(hint_labels(&tb, &uri), hint_labels(&rb, &uri), "inlay mismatch");
 }
+
+/// End-to-end twin pass on a real HDL example (full HDL prelude, module with
+/// `sum := u.sum` vconnT expansion): the twin must produce a non-empty
+/// observation snapshot without panicking, and hovering a known signal
+/// identifier must agree with the reference engine.
+#[test]
+fn twin_observes_real_hdl_example() {
+    let src = include_str!("../examples/hdl/09-hierarchy.typort");
+    // `root`/`u` are the module instance names in 09-hierarchy.
+    let probe = src.find("u.").or_else(|| src.find("sum")).unwrap();
+
+    let tb = {
+        let b = Backend::new_with_engine(CapturingClient::default(), Engine::Twin);
+        b.load_prelude();
+        b
+    };
+    let uri = Url::parse("file:///twin_hdl.typort").unwrap();
+    tb.process_file(&uri, src, Some(1));
+    let snap = tb.twin_tables.get(uri.as_str())
+        .unwrap_or_else(|| panic!("twin produced no HDL snapshot; diagnostics: {:?}", errors(&tb, &uri)));
+    assert!(!snap.hover.is_empty(), "twin HDL snapshot has no hover entries");
+    assert!(!snap.completion.is_empty(), "twin HDL snapshot has no completion entries");
+    drop(snap);
+
+    let rb = {
+        let b = Backend::new_with_engine(CapturingClient::default(), Engine::Reference);
+        b.load_prelude();
+        b
+    };
+    rb.process_file(&uri, src, Some(1));
+
+    // Hover a specific character and compare engines, allowing the reference
+    // to have no entry (twin-only entries are permitted by the parity
+    // contract, just not heterogeneous ones).
+    if let Some(r) = hover_text(&rb, &uri, probe) {
+        assert_eq!(hover_text(&tb, &uri, probe).as_deref(), Some(r.as_str()), "HDL hover mismatch");
+    }
+}
