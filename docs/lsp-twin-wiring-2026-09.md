@@ -432,13 +432,19 @@ infer 循环**（那 ~280ms/kick 的成本主体）。有 ERROR 时保留旧符�
 报 `error name not in scope: X` 且全局表确实定义 X 时判定视图不足，回落
 参考版，不误报。
 
-**实测（09-hierarchy，release，min/5）**：
+**实测（09-hierarchy，release；同 Backend 先 warm-up 再测稳态）**：
 
 | 阶段 | 参考版 | 孪生 | 相对 |
 |---|---|---|---|
 | 3a 每 kick 重放 prelude | 328ms | 3285ms | 慢 10× |
 | 3b 常驻检查点（仍加性） | 325ms | 399ms | 慢 23% |
-| **4 接管诊断** | **335ms** | **97ms** | **快 3.4×** |
+| **4 接管诊断（稳态）** | **359ms** | **102ms** | **快 3.5×** |
+
+启动成本单列：孪生首个 kick 需 prime（~3.3s）——已提前到 `load_prelude`
+（启动期），故首 kick 也降到 121ms；参考版启动亦要装载 prelude（~1-3s）。
+注：早期"min of 5 fresh Backend"口径被**线程局部常驻复用**掩盖了 prime
+成本（首次 prime 后 5 次都命中常驻），故 `bench_kick_cost_by_engine` 改为
+单 Backend + 显式 warm-up 分解，prime 成本不再被 min 吃掉。
 
 **验收**：`twin_engine_tests` 10 例（错误诊断逐条互检含 println、跨文件回落、
 未导入跨文件符号回落、同文件多 kick 常驻复用、多文件独立拥有、真实 HDL）；
