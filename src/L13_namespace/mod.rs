@@ -306,6 +306,21 @@ type Rc<T> = std::rc::Rc<T>;
 // them (~4M lookups during prelude load alone).
 pub(crate) type Decl = rustc_hash::FxHashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>, Option<PrimFunc>, String)>;
 
+/// 一条由孪生导出、与参考版 `Decl` 行同形的声明条目（阶段 4 数据面：
+/// 孪生自产诊断/观察外，还需把它本轮登记的用户声明交回 LSP 的参考域
+/// 全局表——Path1 定义处悬浮、`pretty_sum_definition` 成员渲染、跨文件
+/// 分派都读这张表）。字段与 `Decl` 七元组逐一对位；`.5` prim 恒 `None`
+/// （用户声明不会是 prim；prim 条目仍由参考版 prelude 表持有）。
+#[derive(Clone)]
+pub struct ExportedDecl {
+    pub span: Span<()>,
+    pub tm: Rc<Tm>,
+    pub val: Rc<Val>,
+    pub ty: Rc<Tm>,
+    pub vty: Rc<Val>,
+    pub typ_pretty: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MetaVar(u32);
 

@@ -601,6 +601,12 @@ pub(crate) struct DeclEntry<'a> {
     pub(crate) typ_pretty: Option<Rc<String>>,
     /// 登记项（参考版行的 .1；eval 的 `Tm::Decl` 臂 replay 路径取它重放）。
     pub(crate) tm: &'a Tm<'a>,
+    /// 类型**项**（参考版行的 .3 `a_quote`）：登记处 `check_universe` 出的
+    /// 类型项，非引出的类型值。LSP 参考域导出（阶段 4）需要真实存它——
+    /// `pretty_sum_definition` 靠它渲染构造子签名、并判定尾随 `→ ret`
+    /// 是否省略（codomain 头是否 `Tm::Decl(enum)`）。此前快版无读取点故
+    /// 省略，导出层一来它就成了必需字段。
+    pub(crate) ty: &'a Tm<'a>,
     /// 登记值（参考版行的 .2；eval 的 `Tm::Decl` 臂与 string_to_global_type
     /// 直接取）。
     pub(crate) val: V,
@@ -3201,6 +3207,7 @@ fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
                         span: e.span,
                         typ_pretty: e.typ_pretty.clone(),
                         tm: bump.alloc(Tm::Decl(name)),
+                        ty: e.ty,
                         val: if v_tag(e.val) == 7
                             && matches!(v_xcell_of(e.val), XCell::Sum { .. })
                         {
@@ -5735,6 +5742,7 @@ impl Machine {
                 span: empty_span(()),
                 typ_pretty: None,
                 tm: stub,
+                ty: a_t,
                 val: v_xcell(bump.alloc(XCell::Decl { name })),
                 vty: ty,
                 prim: None,
@@ -5776,7 +5784,6 @@ impl Machine {
         vtyp: V,
         prim: Option<PrimId>,
     ) -> Cxt<'a> {
-        let _ = typ_tm;
         let mut decls = cxt.decls.clone();
         // prim-ness 变化会让 force 对同名链的结果改变（Decl 臂走不走 prim
         // 执行）→ 版本号 bump，旧 memo 条目惰性失效（参考版 Cxt::decl 同款）
@@ -5799,6 +5806,7 @@ impl Machine {
                 span,
                 typ_pretty,
                 tm: t_tm,
+                ty: typ_tm,
                 val: vt,
                 vty: vtyp,
                 prim,
@@ -12112,6 +12120,9 @@ pub(crate) struct Tycker {
     /// 用户段累积错误（[`Tycker::observe_user`] 逐 decl 收集，不早退）——
     /// 孪生自产诊断用（参考版 `Infer.accumulated_errors` 等的对位）。
     user_errors: Vec<Error>,
+    /// 本轮用户段声明的参考域导出（[`Tycker::observe_user`] 末尾导出）：
+    /// 供 LSP 合并进参考域 `cxt.decl`（Path1 定义处悬浮/成员渲染/跨文件）。
+    user_decl_exports: Vec<(SmolStr, super::ExportedDecl)>,
 }
 
 impl Tycker {
@@ -12121,12 +12132,19 @@ impl Tycker {
             machine: Machine::new(),
             resident: None,
             user_errors: Vec::new(),
+            user_decl_exports: Vec::new(),
         }
     }
 
     /// 本轮用户段累积的错误（每 kick `observe_user` 前清空）。
     pub(crate) fn user_errors(&self) -> &[Error] {
         &self.user_errors
+    }
+
+    /// 本轮用户段声明的参考域导出（prim 条目不导出——用户声明不会是
+    /// prim；prim 条目仍由参考版 prelude 表持有）。
+    pub(crate) fn user_decl_exports(&self) -> &[(SmolStr, super::ExportedDecl)] {
+        &self.user_decl_exports
     }
 
     /// **阶段 3b 常驻入口**：装载 prelude 并固化检查点。之后多次
@@ -12228,6 +12246,8 @@ impl Tycker {
         self.machine.tm_import = r.tm_import.clone();
         self.machine.val_import = r.val_import.clone();
         self.machine.clear_observation_tables();
+        // 常驻基线（prelude）键集——用户段结束后用于 diff 出本轮新声明。
+        let base_keys: FxHashSet<SmolStr> = r.cxt.decls.keys().cloned().collect();
         let bump = &self.bump;
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
@@ -12239,6 +12259,38 @@ impl Tycker {
                 Err(e) => self.user_errors.push(e),
             }
         }
+        // 本轮新增的用户声明名（相对 prelude 基线）。
+        let user_keys: Vec<SmolStr> = cxt
+            .decls
+            .keys()
+            .filter(|k| !base_keys.contains(*k))
+            .cloned()
+            .collect();
+        // 导出成参考域 Decl 行（`.3` 读类型项——pretty_sum_definition 的
+        // 构造子/方法签名渲染需要它，必须真实导出而非占位）。
+        let mut exports: Vec<(SmolStr, super::ExportedDecl)> = Vec::with_capacity(user_keys.len());
+        for k in &user_keys {
+            let Some(e) = cxt.decls.get(k) else { continue };
+            if e.prim.is_some() {
+                continue;
+            }
+            let tm_rc = export(&self.machine.symbol_table, e.tm);
+            let val_rc = v_to_ref_val(&self.machine.spine, &self.machine.defs, e.val);
+            // `.3` 是类型**项**（参考版行的 a_quote），非引出的类型值——
+            // pretty_sum_definition 靠它渲染构造子签名。
+            let ty_rc = export(&self.machine.symbol_table, e.ty);
+            let vty_rc = v_to_ref_val(&self.machine.spine, &self.machine.defs, e.vty);
+            let typ_pretty = e.typ_pretty.as_ref().map(|s| (**s).clone()).unwrap_or_default();
+            exports.push((k.clone(), super::ExportedDecl {
+                span: e.span,
+                tm: tm_rc,
+                val: val_rc,
+                ty: ty_rc,
+                vty: vty_rc,
+                typ_pretty,
+            }));
+        }
+        self.user_decl_exports = exports;
         Ok(())
     }
 
@@ -13258,6 +13310,56 @@ def d0 : Nat -> Nat = n => succ n
         }
         eprintln!("[SPLIT] prelude-only {best_p:.1} ms | prelude+file {best_full:.1} ms | user ~{:.1} ms",
             best_full - best_p);
+    }
+
+    /// **导出面互检（阶段 4 数据面前提）**：孪生 `observe_user` 导出的用户
+    /// 声明构成参考域 `Decl` 表后，`pretty_sum_definition`（enum/struct 成员
+    /// 渲染）与参考版逐字节一致——这是 LSP Path1 定义处悬浮不走样、可把
+    /// 参考域全局表交给孪生导出的前提。
+    #[test]
+    fn twin_exported_decls_render_sum_members_like_reference() {
+        let src = r#"enum Tree {
+    leaf
+    node(l: Tree, r: Tree)
+}
+struct P {
+    x: Nat
+    y: Boolean
+}
+"#;
+        let pre = crate::L13_namespace::parse_prelude_files(&core_files());
+        assert_eq!(pre.failed, None);
+        let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+            &crate::L13_namespace::preprocess(src), 910, &pre.macros,
+        ).expect("parse");
+
+        // twin exports -> reference Decl map.
+        let mut t = Tycker::new();
+        t.prime_resident(&pre).expect("prime");
+        t.observe_user(&pre, &decls).expect("observe");
+        let mut tdecl: crate::L13_namespace::Decl = rustc_hash::FxHashMap::default();
+        for (k, e) in t.user_decl_exports() {
+            tdecl.insert(k.clone(), (e.span, e.tm.clone(), e.val.clone(), e.ty.clone(), e.vty.clone(), None, e.typ_pretty.clone()));
+        }
+
+        // reference Decl map.
+        let (mut infer, mut rcxt, _m) =
+            crate::L13_namespace::clone_prelude_state(false).expect("ref load");
+        for d in &decls {
+            let (_, _, nc) = infer.infer(&rcxt, d.clone()).expect("ref infer");
+            rcxt = nc;
+        }
+        let rdecl = &rcxt.decl;
+
+        // Render each user type's member list through both tables.
+        for key in ["Tree", "P"] {
+            let ttm = &tdecl.get(key).expect("twin exported key").1;
+            let rtm = &rdecl.get(key).expect("ref key").1;
+            let ts = crate::L13_namespace::pretty_sum_definition(key, ttm, &tdecl);
+            let rs = crate::L13_namespace::pretty_sum_definition(key, rtm, rdecl);
+            assert_eq!(ts, rs, "sum rendering mismatch for {key}");
+            assert!(ts.is_some(), "expected member list for {key}");
+        }
     }
 
     /// **孪生自产诊断的互检**：错误语料上孪生 `observe_user` 累积的
