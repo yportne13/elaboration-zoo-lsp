@@ -12311,6 +12311,14 @@ impl Tycker {
         &self.machine.check_issue_lines
     }
 
+    /// 常驻 bump 自检查点以来的用户段增长字节数（内存上界诊断/测试用）。
+    pub(crate) fn resident_user_bytes(&self) -> usize {
+        match &self.resident {
+            Some(r) => self.bump.allocated_bytes().saturating_sub(r.base_bytes),
+            None => 0,
+        }
+    }
+
     // ── 观察面访问器（`run_decls*` 返回后读取本轮快照；契约与参考版 `Infer`
     // 的三张表逐字段同型，接线时消费端可按同一套逻辑处理两引擎）──
     pub(crate) fn hover_table(&self) -> &[(crate::parser_lib::Span<()>, crate::parser_lib::Span<()>, String)] {
@@ -13375,6 +13383,36 @@ struct P {
             let rs = crate::L13_namespace::pretty_sum_definition(key, rtm, rdecl);
             assert_eq!(ts, rs, "sum rendering mismatch for {key}");
             assert!(ts.is_some(), "expected member list for {key}");
+        }
+    }
+
+    /// 手动测量：常驻 bump 的内存占用（内存/CPU 权衡决策用）。
+    ///
+    /// **实测（2026-09-10，release，HDL 全量 prelude）**：prime 后 bump
+    /// `allocated_bytes` ≈ **2.15GB**（进程 RSS ≈ 1.8GB），此后每 kick 用户段
+    /// 增量落在既有 chunk 余量内（观测 0 增长）。对照参考版 prelude 缓存
+    /// RSS ≈ 200MB——**孪生常驻以 ~9× 内存换 3.4× CPU**：bump arena 不回收
+    /// 中间值，prelude 装载期的全部中间值都留在常驻 bump 里，而参考版 Rc
+    /// 图会释放不可达节点。故 twin 模式保持 opt-in（`TYPORT_LSP_ENGINE=twin`），
+    /// **不宜默认开启**；降内存需另做「装载后压实 / 分段 arena」。
+    #[test]
+    #[ignore = "manual memory measurement"]
+    fn resident_memory_growth_per_kick() {
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        assert_eq!(pre.failed, None);
+        let src = include_str!("../../examples/hdl/09-hierarchy.typort");
+        let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+            &crate::L13_namespace::preprocess(src), 920, &pre.macros,
+        ).expect("parse");
+        let mut t = Tycker::new();
+        t.prime_resident(&pre).expect("prime");
+        eprintln!("[MEM] after prime: abs_alloc={}", t.bump.allocated_bytes());
+        let mut prev = 0usize;
+        for i in 0..8 {
+            t.observe_user(&pre, &decls).expect("observe");
+            let now = t.resident_user_bytes();
+            eprintln!("[MEM] kick {i}: user_bytes={} (delta={}) abs_alloc={}", now, now - prev, t.bump.allocated_bytes());
+            prev = now;
         }
     }
 

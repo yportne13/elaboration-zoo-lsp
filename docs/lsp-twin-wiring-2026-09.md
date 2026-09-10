@@ -450,7 +450,22 @@ debug_test 15 全绿。
 bump，属另一子工程。HDL 工作负载不用 import（全靠 prelude 短名别名），故
 目标已达成。
 
-**默认切换建议**：孪生模式现已净收益 3.4× 且诊断/观察/守卫全绿，可考虑
-`TYPORT_LSP_ENGINE=twin` 灰度；但跨文件工程仍回落参考版（正确但无加速），
-默认切换前建议在真实多文件 HDL 工程上量一遍 P50/P99 与内存（resident
-bump 常驻 + 每 kick 追加不可回收，512MB 上限触发重放）。
+**内存实测（决定默认的关键，2026-09-10）**：同一 09-hierarchy，进程 RSS
+（`GetProcessMemoryInfo`）：
+
+| | prelude 装载后 | 一次 kick 后 |
+|---|---|---|
+| 参考版 | 201 MB | **203 MB** |
+| 孪生 | 203 MB（含 parse；prime 在首次 kick） | **1835 MB** |
+
+孪生常驻 bump 的 prime 成本 ≈ 2.15GB `allocated_bytes`（RSS 1.8GB），
+存量来自 **bump arena 不回收 prelude 装载期的中间值**；参考版的 Rc 图会
+释放不可达节点故仅 200MB。**即：孪生以 ~9× 内存（+1.6GB）换 3.4× CPU。**
+此后每 kick 的用户段增量落在既有 chunk 余量内（实测 0 增长），故不是
+逐 kick 泄漏，而是一次性的常驻高水位。
+
+**默认切换结论**：**暂不默认开启**。+1.6GB 常驻对编辑器 LSP 是硬伤
+（`resident_memory_growth_per_kick` 记录了该测量）。twin 模式保持
+`TYPORT_LSP_ENGINE=twin` opt-in，供 HDL 专用/内存充裕场景使用。要默认
+开启需先降内存，方向：装载后 arena 压实、分段 arena（prelude 段与用户段
+分离，用户段可 reset）、或对 prelude 只保留可导出视图而非全部中间值。
