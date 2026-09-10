@@ -129,6 +129,8 @@ use super::pretty::pretty_tm;
 use super::{empty_span, Error, Ix, MetaVar, PatternDetail, Tm as CTm};
 use std::collections::HashMap;
 
+mod compact;
+
 use super::typeclass::{Assertion, Instance, Synth};
 use super::Val as CVal;
 use crate::list::List as CList;
@@ -12314,28 +12316,50 @@ impl Tycker {
         force_memo_clear();
         // prelude 段关观察面 push（同 run_decls_with_prelude）。
         self.machine.observe = false;
-        let bump = &self.bump;
-        let mut cxt = self.machine.prime_round(bump);
+        // cxt 以 'static 存放口径持有（见 `compact` 模块头）：每文件边界就地
+        // 压实把它与 machine 的可达状态拷进紧凑 bump，`self.bump` 随之更换
+        // ——故不缓存 `&self.bump`，每处用前现取。
+        let mut cxt: Cxt<'static> = unsafe {
+            std::mem::transmute::<Cxt<'_>, Cxt<'static>>(self.machine.prime_round(&self.bump))
+        };
+        let mut cap_hint: usize = 8 << 20;
         let mut file_i = 0usize;
         for (i, d) in prelude.decls.iter().enumerate() {
-            let (_out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
-            cxt = nc;
+            let (_out, nc) = {
+                let b: &Bump = &self.bump;
+                self.machine.infer_decl(b, &cxt, d)?
+            };
+            cxt = unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(nc) };
             if prelude.nat_after.contains(&i) {
-                cxt = self.machine.register_nat_builtins(bump, &cxt);
+                let nc = {
+                    let b: &Bump = &self.bump;
+                    self.machine.register_nat_builtins(b, &cxt)
+                };
+                cxt = unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(nc) };
             }
             if file_i < prelude.file_ends.len() && prelude.file_ends[file_i] == i {
                 force_memo_clear();
+                if compact::compact_enabled() {
+                    // 就地压实：arena 只承载可达状态，峰值 RSS 不随装载累积。
+                    let (nc, live) = self.compact_state(cxt, cap_hint);
+                    cxt = nc;
+                    cap_hint = (live + live / 8 + (1 << 20)).max(8 << 20);
+                }
                 if twin_mem_prof() {
                     eprintln!(
-                        "[TMEM] after file {file_i}: decl i={i} alloc={} bytes",
-                        self.bump.allocated_bytes()
+                        "[TMEM] after file {file_i}: decl i={i} cap={} MB",
+                        self.bump.allocated_bytes() >> 20
                     );
                 }
                 file_i += 1;
             }
         }
         self.machine.observe = true;
-        cxt = self.machine.register_vconn_builtin(bump, &cxt);
+        let nc = {
+            let b: &Bump = &self.bump;
+            self.machine.register_vconn_builtin(b, &cxt)
+        };
+        cxt = unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(nc) };
         cxt = insert_prelude_aliases(cxt);
         {
             let mut m = self.machine.mutable.borrow_mut();
@@ -12347,17 +12371,27 @@ impl Tycker {
             for k in ["WhenStack", "ModuleTree", "CombCtx", "ModulePortTable"] {
                 m.map.remove(k);
             }
+            let b: &Bump = &self.bump;
             m.map.insert(
                 SmolStr::new("HdlLoopIdx"),
-                v_xcell(bump.alloc(XCell::Decl {
-                    name: bump.alloc_str("hdlLoopIdxEmpty"),
+                v_xcell(b.alloc(XCell::Decl {
+                    name: b.alloc_str("hdlLoopIdxEmpty"),
                 })),
             );
         }
         self.machine.clear_observation_tables();
+        // 收尾压实：把最后一个文件遗留的垃圾一并丢掉（若文件边界已压过，
+        // 这里只处理尾巴；`compact_enabled` 关时跳过）。
+        if compact::compact_enabled() {
+            let (nc, live) = self.compact_state(cxt, cap_hint);
+            cxt = nc;
+            if twin_mem_prof() {
+                eprintln!("[TMEM] final compact: live={} MB cap={} MB", live >> 20, self.bump.allocated_bytes() >> 20);
+            }
+        }
         // 固化检查点（bump 自此常驻不 reset，句柄地址稳定）。
         self.resident = Some(Resident {
-            cxt: unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(clone_cxt(&cxt)) },
+            cxt,
             defs_len: self.machine.defs.len(),
             base_bytes: self.bump.allocated_bytes(),
             metas: self.machine.metas.clone(),
@@ -12656,10 +12690,11 @@ impl Tycker {
         cxt = insert_prelude_aliases(cxt);
         {
             let mut m = self.machine.mutable.borrow_mut();
+            let b: &Bump = &self.bump;
             m.map.insert(
                 SmolStr::new("HdlLoopIdx"),
-                v_xcell(bump.alloc(XCell::Decl {
-                    name: bump.alloc_str("hdlLoopIdxEmpty"),
+                v_xcell(b.alloc(XCell::Decl {
+                    name: b.alloc_str("hdlLoopIdxEmpty"),
                 })),
             );
         }

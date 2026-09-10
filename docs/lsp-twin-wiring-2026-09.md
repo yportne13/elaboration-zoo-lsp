@@ -530,8 +530,55 @@ check 警告为空则回落**（干净的模块文件会多付一次参考版代
 此后每 kick 的用户段增量落在既有 chunk 余量内（实测 0 增长），故不是
 逐 kick 泄漏，而是一次性的常驻高水位。
 
-**默认切换结论**：**暂不默认开启**。+1.6GB 常驻对编辑器 LSP 是硬伤
+**默认切换结论（当时）**：**暂不默认开启**。+1.6GB 常驻对编辑器 LSP 是硬伤
 （`resident_memory_growth_per_kick` 记录了该测量）。twin 模式保持
 `TYPORT_LSP_ENGINE=twin` opt-in，供 HDL 专用/内存充裕场景使用。要默认
 开启需先降内存，方向：装载后 arena 压实、分段 arena（prelude 段与用户段
 分离，用户段可 reset）、或对 prelude 只保留可导出视图而非全部中间值。
+
+### 2026-09-10 续（arena 压实落地：内存 1835MB → 429MB，峰值 730MB）
+
+**提交**：`L13_namespace/bump_spine_iter/compact.rs` 新增常驻态深拷器 +
+`compact_state` 就地压实，`prime_resident` 在每个 prelude 文件边界与收尾
+各压一次。
+
+**原理**：bump arena 不回收，prime 期间产生的**不可达中间值**是内存主体。
+可达根只有 decl 表（`Resident.cxt`）、meta（含 `MetaSnap` 快照）、会话
+全局、`defs`、`spine.stack`、两张指针导入表。实测**可达仅 ~53MB**，其余
+~1.4GB 是垃圾。深拷器按旧指针/旧打包字 memo 遍历值图（DAG 无环，memo 防
+共享子树重复拷）：
+
+- 打包值 `V`：tag 0/3/6 立即数、tag 2 spine 下标、tag 5 meta 下标原样保留
+  （下标因**保序拷贝** `spine.stack`/`defs` 而仍有效）；tag 1/4/7 指针深拷
+  并按旧打包字 remap。
+- 需拷的 bump 类型：`Tm`/`XCell`/`CloCell`/`PiCell`/`EnvCons`/`TCons`/
+  `LCons`/`PrCons`/`NsCons`/`SumParamV`/`SumDataV`/`SumParamT`/`SumDataT`/
+  `DeclEntry`+`Decls`/`Names`/`MetaSnap`/`Cxt`/`str`（按指针 intern 保共享）。
+- **无需拷**：`TraitState`/`Synth`（引用域 `Rc<Val>` 与 owned `Raw`，与 bump
+  无关，跨 bump 交换原样存活）、`symbol_table`/`import_map`、
+  `trait_method_cache`、`Rc<String>` 渲染串、观察三表。
+- 每文件边界压实使 arena **只承载可达状态**，峰值不随装载累积；容量按上一次
+  压实实测的 live ×2 提示，避开 bumpalo 倍增过冲。
+
+**实测（09-hierarchy，release，Windows 工作集/峰值）**：
+
+| | 参考版 | 孪生（压实前） | 孪生（压实后） |
+|---|---|---|---|
+| prelude 装载 | 5630ms / 196MB / peak 211MB | 2759ms | **4046ms / 392MB / peak 730MB** |
+| 一次 kick | 369ms / 199MB | 98ms / 1835MB / peak 1847MB | **98ms / 429MB / peak 730MB** |
+
+即：稳态 **1835→429MB（4.3×）**、峰值 **1847→730MB（2.5×）**，CPU 优势
+（3.8×）不变，且启动（4.0s）仍快于参考版（5.6s）。常驻 bump 本身仅
+**60MB 容量 / 53MB 已用**；剩余工作集主要是参考版 prelude 缓存（~200MB，
+Path1/回落仍需）+ 压实换 bump 的分配器余量。
+
+**正确性闸**：压实后的常驻态被全部孪生测试覆盖——`twin_engine_tests`
+11 例（含 23 例 HDL 语料诊断逐条一致）、`resident_checkpoint_matches_fresh_
+replay_across_kicks`（压实态 vs 全新重放逐字节一致）、两模式 11 套 LSP 守卫、
+`l13_fast_parity` 389、observation 16、debug_test 15 全绿。`TYPORT_TWIN_NO_
+COMPACT` 可关压实（对照测量用）。
+
+**默认切换建议（更新）**：内存已从 9× 降到 ~2.2×（429 vs 199MB），启动
+更快，CPU 3.8×——**已具备默认开启的条件**，建议在真实多文件 HDL 工程上
+量一轮 P50/P99 与长时内存曲线后即可考虑切默认；跨文件工程仍回落参考版
+（正确但无加速）。
