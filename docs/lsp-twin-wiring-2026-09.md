@@ -485,7 +485,11 @@ HDL 例 65% 采样）。已按参考版移植 `tm_no_metas`/`val_no_metas`/
 **3. 漏报：模块 close-check 未跑全（已加闸）**
 同语料暴露：`13-adder-tree` 孪生 **checks=0** 而参考版报 8 条
 HDL001/HDL002 警告——该文件的模块树在孪生侧构建不全，close-check 走不到
-报告点（`18-utils` 另有 trait 求解分叉，孪生报错故已被错误闸挡下）。
+报告点。`18-utils` 另有 trait 求解分叉（孪生报错，被错误闸挡下）：实测定位
+到**flex-flex 带 spine 的合一**——goal 是 `LetNamed[?m₁[rigid], ?m₁[rigid]]`、
+候选实例实例化后是 `LetNamed[?m₂[rigid], ?m₂[rigid]]`，两个未解 meta 带同一
+刚性 spine 的合一在孪生 unify 里失败（`unify_catch` 报 Basic/Stuck），参考版
+成立。属 unify 核心分叉，非局部修补。
 **任何孪生诊断都不可无验证地当权威**：`twin_elaborate` 现有两道闸——
 (1) 遇任何 ERROR/parse 错误整体回落参考版；(2) **声明了模块的文件若
 check 警告为空则回落**（干净的模块文件会多付一次参考版代价，方向安全）。

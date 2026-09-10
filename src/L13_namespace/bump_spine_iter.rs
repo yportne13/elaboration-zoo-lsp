@@ -13477,7 +13477,7 @@ def d0 : Nat -> Nat = n => succ n
                 "[TERR] {}..{} {:?}",
                 e.0.start_offset,
                 e.0.end_offset,
-                e.0.data.lines().take(3).collect::<Vec<_>>().join(" / ")
+                e.0.data.lines().take(30).collect::<Vec<_>>().join(" / ")
             );
         }
         eprintln!("[TERR] errors={}", t.user_errors().len());
