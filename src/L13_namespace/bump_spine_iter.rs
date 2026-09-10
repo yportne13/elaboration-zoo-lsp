@@ -187,6 +187,8 @@ enum PrimId {
 
 /// 可变全局表 + def-replay 备忘（参考版 `Infer.mutable_map` +
 /// `Infer.def_replay_memo` 的合一；两者都是 per-run 状态，随轮清空）。
+/// Clone 供常驻检查点（阶段 3b）每 kick 恢复。
+#[derive(Clone)]
 struct Mutable {
     map: FxHashMap<SmolStr, V>,
     /// 无参 def 的 body 是否含全局副作用（`def_needs_replay` 按名缓存）。
@@ -12059,11 +12061,45 @@ fn no_metas<'a>(
 
 /// 参考版 Def 臂的未解 meta 报错（elaboration.rs 逐字——类型类是 trait
 /// Sum 时给类型类消息，否则 `find unsolved meta with type ...`）。
+/// 常驻 prelude 检查点（阶段 3b，docs/lsp-twin-wiring-2026-09.md）：prelude
+/// 装载后的稳态快照，使每次交互 kick 只支付用户段增量（~59ms）而非整轮
+/// 重放（~2.8s）。
+///
+/// **生命周期口径**：`cxt` 与快照里的句柄都指向 [`Tycker::bump`]；检查点
+/// 存活期间 bump 绝不 `reset()`（任何 reset 路径都清 `resident`），故地址
+/// 稳定、句柄有效。`cxt` 以 `'static` 存放（[`Tycker::prime_resident`] 处
+/// transmute，与模块内 workbuf / `MetaSnap` 的 'static 存放口径同款），取出
+/// 时按 `Cxt` 的协变降回 `bump` 的实生命周期。
+struct Resident {
+    cxt: Cxt<'static>,
+    /// prelude 段的 `defs` 长度（用户段 append-only，下轮 truncate 回此）。
+    defs_len: usize,
+    /// 稳态快照：用户段可能改动这些 per-run 状态（新增 meta、注册实例、
+    /// 写可变全局、挂算符方法、导入别名），每 kick 恢复。值均为 owned 或被
+    /// 常驻 bump 钉住的句柄（Clone 即安全）。
+    metas: Vec<MetaEntry>,
+    tstate: TraitState,
+    mutable: Mutable,
+    symbol_table: FxHashMap<(SmolStr, usize), SmolStr>,
+    import_map: FxHashMap<SmolStr, SmolStr>,
+    trait_method_cache: FxHashMap<(SmolStr, SmolStr), (Rc<CTm>, Rc<CVal>, Rc<CTm>)>,
+    tm_import: FxHashMap<usize, &'static Tm<'static>>,
+    val_import: FxHashMap<usize, V>,
+}
+
+/// 常驻 bump 上限（字节）：超限时下个 kick 重新 prime（reset + 重放
+/// prelude）。用户段每 kick 分配的中间值无法回收（bump 不支持截断），用
+/// 周期性重放换内存上界；~2.8s 重放按上限摊到多次 kick。
+const RESIDENT_BUMP_LIMIT: usize = 512 << 20;
+
 /// 稳态类型检查器（同 L03-L08：owns 反复 `reset` 的 `Bump` 与跨调用复用
 /// 的 [`Machine`]）。
 pub(crate) struct Tycker {
     bump: Bump,
     machine: Machine,
+    /// 阶段 3b 常驻 prelude 检查点（[`Tycker::prime_resident`] 置，
+    /// [`Tycker::observe_user`] 消费；`bump.reset()` 的任何路径清空）。
+    resident: Option<Resident>,
 }
 
 impl Tycker {
@@ -12071,7 +12107,106 @@ impl Tycker {
         Tycker {
             bump: Bump::with_capacity(1 << 20),
             machine: Machine::new(),
+            resident: None,
         }
+    }
+
+    /// **阶段 3b 常驻入口**：装载 prelude 并固化检查点。之后多次
+    /// [`Tycker::observe_user`] 复用这份 prelude，只支付用户段增量。
+    /// `prelude.failed` 非 `None` 快速失败（同 `run_decls_with_prelude`）。
+    pub(crate) fn prime_resident(&mut self, prelude: &super::PreludeParse) -> Result<(), Error> {
+        if let Some(f) = &prelude.failed {
+            return Err(Error(
+                empty_span(format!("prelude file `{f}` failed to parse")),
+                vec![],
+            ));
+        }
+        self.bump.reset();
+        self.resident = None;
+        self.machine.clear_round();
+        force_memo_clear();
+        // prelude 段关观察面 push（同 run_decls_with_prelude）。
+        self.machine.observe = false;
+        let bump = &self.bump;
+        let mut cxt = self.machine.prime_round(bump);
+        let mut file_i = 0usize;
+        for (i, d) in prelude.decls.iter().enumerate() {
+            let (_out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
+            cxt = nc;
+            if prelude.nat_after.contains(&i) {
+                cxt = self.machine.register_nat_builtins(bump, &cxt);
+            }
+            if file_i < prelude.file_ends.len() && prelude.file_ends[file_i] == i {
+                force_memo_clear();
+                file_i += 1;
+            }
+        }
+        self.machine.observe = true;
+        cxt = self.machine.register_vconn_builtin(bump, &cxt);
+        cxt = insert_prelude_aliases(cxt);
+        {
+            let mut m = self.machine.mutable.borrow_mut();
+            m.map.insert(
+                SmolStr::new("HdlLoopIdx"),
+                v_xcell(bump.alloc(XCell::Decl {
+                    name: bump.alloc_str("hdlLoopIdxEmpty"),
+                })),
+            );
+        }
+        self.machine.clear_observation_tables();
+        // 固化检查点（bump 自此常驻不 reset，句柄地址稳定）。
+        self.resident = Some(Resident {
+            cxt: unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(clone_cxt(&cxt)) },
+            defs_len: self.machine.defs.len(),
+            metas: self.machine.metas.clone(),
+            tstate: self.machine.tstate.clone(),
+            mutable: self.machine.mutable.borrow().clone(),
+            symbol_table: self.machine.symbol_table.clone(),
+            import_map: self.machine.import_map.clone(),
+            trait_method_cache: self.machine.trait_method_cache.clone(),
+            tm_import: self.machine.tm_import.clone(),
+            val_import: self.machine.val_import.clone(),
+        });
+        Ok(())
+    }
+
+    /// **阶段 3b 常驻用户段**：从检查点恢复 machine 稳态，用常驻 prelude
+    /// 上下文推进 `user_ast`，观察三表落 `machine`（调用方经
+    /// [`Tycker::hover_table`] 等读取）。bump 超 [`RESIDENT_BUMP_LIMIT`] 时
+    /// 内部重新 prime。返回 `Ok(())`；本轮 println 输出丢弃（LSP 双引擎
+    /// 口径下 println 诊断走参考版）。
+    pub(crate) fn observe_user(
+        &mut self,
+        prelude: &super::PreludeParse,
+        user_ast: &[Decl],
+    ) -> Result<(), Error> {
+        if self.resident.is_none() || self.bump.allocated_bytes() > RESIDENT_BUMP_LIMIT {
+            self.prime_resident(prelude)?;
+        }
+        let r = self.resident.as_ref().expect("resident just primed");
+        // 恢复稳态：defs 截回 prelude 长度（用户段 append-only），per-run
+        // 状态整体换回检查点克隆（上轮用户段的 meta/实例/全局写入作废）。
+        self.machine.defs.truncate(r.defs_len);
+        self.machine.spine.stack.clear();
+        self.machine.vals.clear();
+        self.machine.icits.clear();
+        self.machine.constraints.clear();
+        self.machine.metas = r.metas.clone();
+        self.machine.tstate = r.tstate.clone();
+        self.machine.mutable = RefCell::new(r.mutable.clone());
+        self.machine.symbol_table = r.symbol_table.clone();
+        self.machine.import_map = r.import_map.clone();
+        self.machine.trait_method_cache = r.trait_method_cache.clone();
+        self.machine.tm_import = r.tm_import.clone();
+        self.machine.val_import = r.val_import.clone();
+        self.machine.clear_observation_tables();
+        let bump = &self.bump;
+        let mut cxt = clone_cxt(&r.cxt);
+        let mut sink = String::new();
+        for (i, d) in user_ast.iter().enumerate() {
+            cxt = Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, &[], &mut sink)?;
+        }
+        Ok(())
     }
 
     // ── 观察面访问器（`run_decls*` 返回后读取本轮快照；契约与参考版 `Infer`
@@ -12110,6 +12245,7 @@ impl Tycker {
         nat_after: &[usize],
     ) -> Result<String, Error> {
         self.bump.reset();
+        self.resident = None;
         self.machine.clear_round();
         force_memo_clear();
         let bump = &self.bump;
@@ -12220,6 +12356,7 @@ impl Tycker {
         let prelude_file_ends: &[usize] = &prelude.file_ends;
         let prelude_nat_after: &[usize] = &prelude.nat_after;
         self.bump.reset();
+        self.resident = None;
         self.machine.clear_round();
         force_memo_clear();
         // prelude 段关观察面 push（含 decl_reg 的 typ_pretty 渲染）——
@@ -12272,6 +12409,7 @@ impl Tycker {
     /// 基准口径（bench 用）：仅 elaborate。
     pub(crate) fn bench_check(&mut self, ast: &[Decl]) -> bool {
         self.bump.reset();
+        self.resident = None;
         self.machine.clear_round();
         force_memo_clear();
         let bump = &self.bump;
@@ -12291,6 +12429,7 @@ impl Tycker {
 
     fn bench_nf_impl(&mut self, ast: &[Decl], use_memo: bool) -> u64 {
         self.bump.reset();
+        self.resident = None;
         self.machine.clear_round();
         force_memo_clear();
         let bump = &self.bump;
@@ -12314,6 +12453,7 @@ impl Tycker {
     /// `register_nat_builtins`）。多文件 prelude 拼成单一 decl 序列时用。
     pub(crate) fn bench_check_nf_bounded(&mut self, ast: &[Decl], nat_after: &[usize]) -> u64 {
         self.bump.reset();
+        self.resident = None;
         self.machine.clear_round();
         force_memo_clear();
         let bump = &self.bump;
@@ -13077,6 +13217,60 @@ def d0 : Nat -> Nat = n => succ n
         }
         eprintln!("[SPLIT] prelude-only {best_p:.1} ms | prelude+file {best_full:.1} ms | user ~{:.1} ms",
             best_full - best_p);
+    }
+
+    /// **阶段 3b 等价性验收**：常驻检查点（`prime_resident` 一次 +
+    /// 多次 `observe_user`）对同一用户源产出的观察三表，必须与每次全新
+    /// `run_decls_with_prelude` 逐字节一致。多轮用**不同**源，揪出跨 kick
+    /// 的状态泄漏（meta/实例/全局/别名）。
+    #[test]
+    fn resident_checkpoint_matches_fresh_replay_across_kicks() {
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        assert_eq!(pre.failed, None);
+
+        // 三个不同形态的用户源：全局使用、tuple、真实 HDL 模块。
+        let srcs: Vec<(&str, u32)> = vec![
+            ("def foo = \"hello\"\ndef bar = foo\n", 300),
+            ("def ff(a: Nat, b: Boolean): Tuple2[Nat, Boolean] = (a, b)\n", 301),
+            (include_str!("../../examples/hdl/09-hierarchy.typort"), 302),
+        ];
+
+        // 常驻：prime 一次，逐源 observe_user。
+        let mut resident = Tycker::new();
+        resident.prime_resident(&pre).expect("prime");
+        let mut resident_tables = Vec::new();
+        for (src, pid) in &srcs {
+            let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+                &crate::L13_namespace::preprocess(src), *pid, &pre.macros,
+            ).expect("parse");
+            resident.observe_user(&pre, &decls).expect("observe_user");
+            let mut v: Vec<(u32, u32, u32, u32, String)> = resident
+                .hover_table()
+                .iter()
+                .map(|(ts, ds, r)| (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone()))
+                .collect();
+            v.sort();
+            resident_tables.push(v);
+        }
+
+        // 全新：每源一个 Tycker，整轮重放。
+        for (i, (src, pid)) in srcs.iter().enumerate() {
+            let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+                &crate::L13_namespace::preprocess(src), *pid, &pre.macros,
+            ).expect("parse");
+            let mut fresh = Tycker::new();
+            fresh.run_decls_with_prelude(&pre, &decls).expect("fresh replay");
+            let mut v: Vec<(u32, u32, u32, u32, String)> = fresh
+                .hover_table()
+                .iter()
+                .map(|(ts, ds, r)| (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone()))
+                .collect();
+            v.sort();
+            assert_eq!(
+                resident_tables[i], v,
+                "resident kick {i} hover table diverged from fresh replay for:\n{src}",
+            );
+        }
     }
 
     /// 双引擎各跑一遍「prelude 装载 + 用户源」：
