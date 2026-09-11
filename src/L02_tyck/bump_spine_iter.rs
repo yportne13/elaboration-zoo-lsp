@@ -643,10 +643,9 @@ fn conv_iter<'a>(
     l0: u32,
     t0: V,
     u0: V,
+    biteq: bool,
+    memo_on: bool,
 ) -> bool {
-    // 位相等/记忆化开关入口各读一次（消融模式同时关掉链内环里的剪枝）
-    let biteq = !NO_BITEQ.load(std::sync::atomic::Ordering::Relaxed);
-    let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
     let mut memo: rustc_hash::FxHashSet<(u64, u64)> = rustc_hash::FxHashSet::default();
     let mut stack: Vec<WItem<'a>> = Vec::new();
     stack.push(WItem::Pair(l0, t0, u0));
@@ -908,6 +907,9 @@ impl Machine {
     }
 
     fn conv(&mut self, bump: &Bump, l: u32, t: V, u: V) -> bool {
+        // 位相等/记忆化开关入口各读一次（消融模式同时关掉链内环里的剪枝）
+        let biteq = !NO_BITEQ.load(std::sync::atomic::Ordering::Relaxed);
+        let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
         conv_iter(
             bump,
             &mut self.spine,
@@ -916,6 +918,8 @@ impl Machine {
             l,
             t,
             u,
+            biteq,
+            memo_on,
         )
     }
 
@@ -1629,5 +1633,83 @@ mod tests {
         assert_eq!(r1, r2);
         assert_eq!(r1, fresh.run_memo("nf", "", &raw));
         assert_eq!(r1, main_with("nf", &dup_src(6)));
+    }
+
+    /// 消融正确性：conv 的位相等剪枝与判等记忆化必须只是加速——关掉后结论
+    /// 不变（readme「快速路径不能是正确性的唯一依托」）。直接以显式开关调
+    /// `conv_iter`，绕开 `LazyLock` 的进程内缓存（环境变量消融只能在进程启动
+    /// 前设，进程内切换无效，故不写成依赖 env 的测试）。覆盖闭包/Π/U/中性链/
+    /// 两级链的等与不等两侧。
+    #[test]
+    fn conv_ablation_flags_agree_with_structural_path() {
+        let bump = Bump::new();
+        let mut spine = Spine { stack: Vec::new() };
+        let mut work = Vec::new();
+        let mut vals = Vec::new();
+
+        let id = v_clo(bump.alloc(CloCell {
+            name: "x",
+            env: None,
+            body: bump.alloc(Tm::Var(0)),
+        }));
+        // η 形态：`\x. (\y. y) x`，与 id βη 等价但句柄不同
+        let eta = v_clo(bump.alloc(CloCell {
+            name: "x",
+            env: None,
+            body: bump.alloc(Tm::App(
+                bump.alloc(Tm::Lam("y", bump.alloc(Tm::Var(0)))),
+                bump.alloc(Tm::Var(0)),
+            )),
+        }));
+        let konst = v_clo(bump.alloc(CloCell {
+            name: "x",
+            env: None,
+            body: bump.alloc(Tm::U),
+        }));
+        let u = v_u();
+        let pi = v_pi(bump.alloc(PiCell {
+            name: "x",
+            dom: v_u(),
+            env: None,
+            body: bump.alloc(Tm::U),
+        }));
+        let pi2 = v_pi(bump.alloc(PiCell {
+            name: "x",
+            dom: v_u(),
+            env: None,
+            body: bump.alloc(Tm::U),
+        }));
+
+        // 中性链：单级（结构相同 / 实参不同）与两级
+        let n1 = spine.push(v_lvl(0), v_lvl(1));
+        let n2 = spine.push(v_lvl(0), v_lvl(1));
+        let n3 = spine.push(v_lvl(0), v_lvl(2));
+        let deep_a = spine.push(v_lvl(0), v_lvl(1));
+        let outer_a = spine.push(v_lvl(0), deep_a);
+        let deep_b = spine.push(v_lvl(0), v_lvl(1));
+        let outer_b = spine.push(v_lvl(0), deep_b);
+
+        let cases: &[(V, V, bool, &str)] = &[
+            (id, id, true, "闭包同句柄"),
+            (id, eta, true, "η 等价闭包"),
+            (id, konst, false, "不同闭包"),
+            (u, u, true, "U==U"),
+            (pi, pi2, true, "结构相同的 Π"),
+            (id, u, false, "闭包 vs U"),
+            (n1, n2, true, "结构相同的中性链"),
+            (n1, n3, false, "实参不同的中性链"),
+            (outer_a, outer_b, true, "结构相同的两级链"),
+            (n1, outer_a, false, "单级 vs 两级链"),
+        ];
+
+        for (i, &(t, u2, expect, what)) in cases.iter().enumerate() {
+            let on = conv_iter(&bump, &mut spine, &mut work, &mut vals, 0, t, u2, true, true);
+            let off = conv_iter(&bump, &mut spine, &mut work, &mut vals, 0, t, u2, false, false);
+            assert_eq!(on, expect, "case {i}（{what}）开启剪枝时结论错");
+            assert_eq!(
+                off, expect,
+                "case {i}（{what}）消融（位相等+记忆化全关）后与结构化路径不一致"
+            );
+        }
     }
 }
