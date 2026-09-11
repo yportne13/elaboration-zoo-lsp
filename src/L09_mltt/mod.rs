@@ -5,6 +5,9 @@
 //! `panic!("impossible apply")`。合法源码（如打印引用自递归卡住 match 的
 //! 函数值）可触发；L07 起以值层 splice 实现了该特性，L09 是时代缺口。
 //! 修复需实现实参吸收并要求参考版+快版同步大改，超出最小改动范围。
+//! （unify 的两个 η 臂已加 `v_applicable`/`vapp_ok` 守卫——卡住 match/
+//! 字面量一侧与 λ 比较时不再 panic，改判 Err；其余 v_app 路径仍同崩，
+//! 限制本身不变。）
 use cxt::Cxt;
 // `Either` 本文件几乎不用，但子模块 `pattern_match` 以 `super::Either` 引用
 // （`pattern_match.rs:192/200`）——勿按"本文件未用"删除。

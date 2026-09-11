@@ -45,7 +45,9 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
-    panic!("Variable index out of bounds");
+    // 越界说明显示上下文里没有这个名字（错误文案对更浅上下文的项做
+    // pretty 时可达），退化显示索引而不是 panic（L08 `go_ix` 同款）。
+    format!("@{}", ix)
 }
 
 /// `AppPruning` 是项层的洞形态（`fresh_meta` 产出）；常规 pretty 只吃
@@ -209,10 +211,10 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         ),
         Tm::SumCase { typ, case_name, datas: params } => format!(
             "{}::{}{}",
-            match typ.as_ref() {
-                Tm::Sum(name, _, _) => &name.data,
-                _ => panic!("Sum case must be applied to a sum"),
-            },
+            // typ 非 `Tm::Sum` 时（构造子的 `-> ret` 原样存储，可以是 App
+            // 链）沿链找头部 Sum 名字，找不到退化 `?` 而不是 panic
+            // （L08 `sum_head_name` 同款降级）。
+            sum_head_name(typ),
             case_name.data,
             params
                 .iter()
@@ -225,5 +227,16 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
             "(unsolved match {})",
             pretty_tm(prec, ns, tm),
         ),
+    }
+}
+
+/// `SumCase.typ` 可能不是展开的 `Tm::Sum`（构造子的 `-> ret` 原样存储，
+/// 可以是 App 链）：沿 App 链找头部的 Sum 名字，找不到就显示 `?`
+/// （L08 同款降级，不再 panic）。
+fn sum_head_name(tm: &Tm) -> String {
+    match tm {
+        Tm::Sum(name, ..) => name.data.clone(),
+        Tm::App(f, _, _) => sum_head_name(f),
+        _ => "?".to_owned(),
     }
 }

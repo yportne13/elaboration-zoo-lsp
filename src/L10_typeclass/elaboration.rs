@@ -156,7 +156,7 @@ impl Infer {
                 // can be pruned from the meta type (i.e. that the pruned solution will
                 // be well-typed)
                 if let Some(pr) = prune_non_linear {
-                    self.prune_ty(&pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; //TODO:revPruning?
+                    self.prune_ty(&pr, &mty).map_err(|_| Error(t_span.map(|_| "prune failed".to_owned())))?; // 掩码反转在 prune_ty 内完成
                 }
 
                 if pren.dom.0 == 0 {
@@ -284,7 +284,10 @@ impl Infer {
                     let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
-                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0)).unwrap();
+                    // trait 求解失败可恢复为 Err（L11 同款口径；unwrap 会让
+                    // "无实例类型类调用形态" 直接 panic 而不是给诊断）
+                    self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
+                        .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
                     let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, &typ_tm));
                     let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, &t_tm));
                     //println!("begin vt {}", "------".green());

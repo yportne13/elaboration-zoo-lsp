@@ -652,6 +652,21 @@ fn vapp1<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// L11 同款）：只有 `vapp1` 不会 panic 的形态能吃 η 新变量。tag 7 仅
+/// `Obj` 可（`Sum`/`SumCase`/`Prim` → panic）；tag 3(U)/4(Pi)/6(Lit) 不可；
+/// 其余（Rigid 0 / Clo 1 / 链 2 / Flex 5）可。防止 λ 值以类型/值身份流入
+/// unify 的 η 臂时触发 `impossible apply`（守卫失败落后续臂判败，与参考
+/// 版守卫后落 `_` → Err 同判定）。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
+        _ => true,
+    }
+}
+
 // force（迭代；L09 参考版只有 Flex 臂）
 // --------------------------------------------------------------------------------
 
@@ -2200,9 +2215,11 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链；卡住
-        // match / 字面量等形态的应用 panic——参考版 v_app 同款）
-        if v_tag(u) == 1 {
+        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链）。可应用性
+        // 由 `vapp_ok` 把关——卡住 match / 字面量等形态的应用本是 panic
+        // （参考版 `v_app` 同款），守卫后改判失败（参考版 η 臂
+        // `v_applicable` 同款，两版同判定）。
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2217,7 +2234,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -3099,6 +3116,26 @@ fn prune_ty_bump<'a>(
     Some(t)
 }
 
+/// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
+/// `String`（solve/prune 密集负载下 `lams_from_ty` 每 λ 层都要一个）。
+/// （a806ff0 的同款补齐——该 commit 只落到 L03-L05。）
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `lams l a t`：沿 **meta 类型**的 Π 层包 λ（名字与 icit 随 Π，`"_"` 改名
 /// `x{l'}`；逐层用 `VVar l'` 剥闭包）。
 #[allow(clippy::too_many_arguments)]
@@ -3124,7 +3161,7 @@ fn lams_from_ty<'a>(
         let p = v_pi_of(cur);
         let (name, icit, env, body_tm) = (p.name, p.icit, p.env, p.body);
         let name = if name == "_" {
-            bump.alloc_str(&format!("x{}", lp))
+            alloc_xname(bump, lp)
         } else {
             name
         };
@@ -4944,7 +4981,7 @@ struct Arm<'a> {
 pub(crate) struct Compiler<'a> {
     warnings: Vec<Warning>,
     reachable: FxHashMap<usize, ()>,
-    checked_ret: FxHashMap<Raw, &'a Tm<'a>>,
+    checked_ret: FxHashMap<usize, &'a Tm<'a>>,
     pub(crate) pats: Vec<(PatternDetail, &'a Tm<'a>)>,
     seed: i32,
     ret_type: V,
@@ -5009,10 +5046,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// 构造子可达性过滤（参考版 `filter_accessible_constrs`）：构造子类型
-    /// 链逐层推断（**真实 infer**——meta 分配保留），可访问性判定在
-    /// **metas 快照换入换出**的 temp-infer 里跑 check_pm（参考版克隆
-    /// `temp_infer` 的对应物）。错误路径统一撤销名字轨迹（temp cxt 的
-    /// 绑定全部丢弃——参考版克隆丢弃同款）。
+    /// 链逐层推断与可访问性判定都是**纯探测**——统一在 `run_pure_probe`
+    /// 的 metas 快照换入换出里跑，探测期 meta 分配/求解一律回滚（参考版
+    /// meta 快照换入换出的同款机制）。错误路径统一撤销名字轨迹（temp cxt
+    /// 的绑定全部丢弃——参考版同款）。
     fn filter_accessible_constrs(
         &mut self,
         mach: &mut Machine,
@@ -5172,7 +5209,11 @@ impl<'a> Compiler<'a> {
                         .check_pm_final(bump, &arm.cxt, &arm.raw, arm.target_typ, arm.ori)
                         .expect("check_pm_final 失败（参考版 unwrap）");
                     self.reachable.insert(arm.idx, ());
-                    if self.checked_ret.contains_key(&arm.raw) {
+                    // 已完整编译（体检查 + pats 记录）则只需可达、无需重检查。
+                    // **按臂下标**记录（L13 2a0eb6e 同族，参考版同款）——按
+                    // Raw 记录会把两个模式相同的不同臂混为一谈，第二个臂复用
+                    // 第一个臂的检查体、自身漏检。
+                    if self.checked_ret.contains_key(&arm.idx) {
                         return Ok(());
                     }
                     // 期望类型重锚到臂上下文：quote → eval（flex 免锚）
@@ -5186,7 +5227,7 @@ impl<'a> Compiler<'a> {
                         }
                     };
                     let ret = mach.check(bump, &cxt, &arm.arm.body.0, ret_type)?;
-                    self.checked_ret.insert(arm.raw.clone(), ret);
+                    self.checked_ret.insert(arm.idx, ret);
                     let patcon = arm.patcon.clone().clean();
                     self.pats.push((patcon.data[0].1[0].clone(), ret));
                     Ok(())

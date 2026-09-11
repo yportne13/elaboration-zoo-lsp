@@ -7,6 +7,16 @@ use super::{
 
 use std::collections::{HashMap, HashSet};
 
+/// η 展开的可应用性守卫（L06/L11 的 `v_applicable` 同款）：只有 `v_app`
+/// 不会 panic 的形态（Flex / Rigid / 卡住投影 Obj）能吃 η 新变量。λ 值以
+/// 类型/值身份流入 unify 时，对字面量 / U / Π / Sum / 卡住 match 一侧做
+/// η 应用会命中 `v_app` 的 `impossible apply` panic——守卫失败直接落
+/// 后续臂判失败（λ 与非函数值的比较无从展开，最小惊讶；快版 η 臂的
+/// `vapp_ok` 同款守卫）。
+fn v_applicable(v: &Val) -> bool {
+    matches!(v, Val::Flex(..) | Val::Rigid(..) | Val::Obj(..))
+}
+
 #[derive(Debug, Clone)]
 pub struct PartialRenaming {
     pub occ: Option<MetaVar>,
@@ -545,13 +555,13 @@ impl Infer {
                 self.closure_apply(t, Val::vvar(l)),
                 self.closure_apply(t_prime, Val::vvar(l)),
             ),
-            (t, Val::Lam(_, i, t_prime)) => self.unify(
+            (t, Val::Lam(_, i, t_prime)) if v_applicable(t) => self.unify(
                 l + 1,
                 cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
                 self.closure_apply(t_prime, Val::vvar(l)),
             ),
-            (Val::Lam(_, i, t), t_prime) => self.unify(
+            (Val::Lam(_, i, t), t_prime) if v_applicable(t_prime) => self.unify(
                 l + 1,
                 cxt,
                 self.closure_apply(t, Val::vvar(l)),

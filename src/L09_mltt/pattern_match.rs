@@ -87,7 +87,7 @@ impl PatConstructor {
 pub struct Compiler {
     warnings: Vec<Warning>,
     reachable: HashMap<usize, ()>,
-    checked_ret: HashMap<Raw, Tm>,
+    checked_ret: HashMap<usize, Tm>,
     pub pats: Vec<(PatternDetail, Tm)>,
     seed: i32,
     ret_type: Val,
@@ -173,43 +173,55 @@ impl Compiler {
             }
         };
 
-        for constr_def @ constr_name in all_constrs {
-            // We create a temporary, throwaway inference state for the unification check
-            // to avoid polluting the main inference state with temporary metavariables.
+        // This is a pure probe: the per-constructor infer_expr/check_pm may
+        // solve metas (including pre-existing ones) and allocate throwaway
+        // fresh metas. L13 同款窄快照（快版 `run_pure_probe` 同口径）：只把
+        // 探测面 `meta` 整表换入换出，循环结束**无条件**回滚（Success/Error
+        // 皆然）。必须整表 clone、不能 truncate——探测期解掉的已有 meta 可能
+        // 引用循环内新建 meta，截断会让解悬空（后续查找越界 panic）。
+        // `global` 是注册表，探测期只读（探测只做表达式级 infer/check，
+        // 无 decl 登记），无需快照。
+        let meta_snapshot = infer.meta.clone();
+        let result = (|| -> Result<Vec<_>, Error> {
+            for constr_def @ constr_name in all_constrs {
+                // We create a temporary, throwaway inference state for the unification check
+                // to avoid polluting the main inference state with temporary metavariables.
 
-            // 1. Create fresh metavariables for the constructor's own arguments.
-            //    We need their types first, which are given as raw syntax.
-            let mut to_check = Raw::Var(constr_name.clone());
-            let mut params = vec![];
-            let mut cxt = cxt.clone();
-            loop {
-                let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
-                match typ {
-                    Val::Pi(name, icit, ty, _) => {
-                        if icit == Icit::Expl { // Only explicit args matter for the structure 
-                            params.push((name.clone(), *ty.clone(), icit));
-                        }
-                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(icit));
-                        cxt = cxt.bind(name, infer.quote(cxt.lvl, *ty.clone()), *ty);
-                    },
-                    _ => {break;}
+                // 1. Create fresh metavariables for the constructor's own arguments.
+                //    We need their types first, which are given as raw syntax.
+                let mut to_check = Raw::Var(constr_name.clone());
+                let mut params = vec![];
+                let mut cxt = cxt.clone();
+                loop {
+                    let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
+                    match typ {
+                        Val::Pi(name, icit, ty, _) => {
+                            if icit == Icit::Expl { // Only explicit args matter for the structure
+                                params.push((name.clone(), *ty.clone(), icit));
+                            }
+                            to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(icit));
+                            cxt = cxt.bind(name, infer.quote(cxt.lvl, *ty.clone()), *ty);
+                        },
+                        _ => {break;}
+                    }
+                }
+                /*for (_, _, icit) in constr_arg_tys_raw {
+                    if *icit == Icit::Expl { // Only explicit args matter for the structure
+                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
+                    }
+                }*/
+
+                // 4. Try to unify it with the type of the matched term.
+                if let Ok((_, cxt)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
+                    // If unification succeeds, the constructor is accessible.
+                    accessible.push((constr_def, params, cxt));
                 }
             }
-            /*for (_, _, icit) in constr_arg_tys_raw {
-                if *icit == Icit::Expl { // Only explicit args matter for the structure 
-                    to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
-                }
-            }*/
 
-            let mut temp_infer = infer.clone();
-            // 4. Try to unify it with the type of the matched term.
-            if let Ok((_, cxt)) = temp_infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
-                // If unification succeeds, the constructor is accessible.
-                accessible.push((constr_def, params, cxt));
-            }
-        }
-
-        Ok(accessible)
+            Ok(accessible)
+        })();
+        infer.meta = meta_snapshot;
+        result
     }
 
     fn compile_aux(
@@ -237,7 +249,12 @@ impl Compiler {
                 [(arm, idx, cxt, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() => {
                     let (_, cxt) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
                     self.reachable.insert(*idx, ());
-                    if let Some(ret) = self.checked_ret.get(raw) {
+                    // 同一臂可能在多个构造子分支被走到：已完整编译（体检查 +
+                    // pats 记录）则只需可达、无需重检查。按臂下标记录（L13
+                    // 2a0eb6e 同族，A5 在 L11/L12 同款）——按模式 Raw 记录会把
+                    // 两个模式相同的不同臂混为一谈，第二个臂复用第一个臂的
+                    // 检查体、自身漏检。
+                    if let Some(ret) = self.checked_ret.get(idx) {
                         return Ok(Box::new(DecisionTree::Leaf((ret.clone(), arm.body.1))))
                     }
                     //println!("prepare to check {:?}", arm.body);
@@ -250,7 +267,7 @@ impl Compiler {
                         },
                     };
                     let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
-                    self.checked_ret.insert(raw.clone(), ret.clone());
+                    self.checked_ret.insert(*idx, ret.clone());
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
                     self.pats.push((patcon.data[0].1[0].clone(), ret.clone()));

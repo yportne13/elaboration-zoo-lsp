@@ -39,6 +39,19 @@ impl Val {
                 } else {
                     Typ::Construct(
                         span.clone(),
+                        // **刻意语义（本轮评审论证，勿"修"成 collect::<Option<..>>）**：
+                        // 参数槽里不可作类型的值（如未解 meta Flex）被静默剔除，
+                        // 产出 arity 短一的 Construct。这不是丢参 bug：
+                        // 1. 实例登记侧（elaboration ImplDecl 臂）对 to_typ()==None
+                        //    的实参直接 Err "Not a type"，实例断言永远不含被剔形态；
+                        // 2. 目标侧被剔后 arity 与实例失配 → try_resolve 判不失配
+                        //    → "no instance"，不会选出错误实例；
+                        // 3. trait_wrap 的接收者路径**依赖**该剔除：`x: List[?m]`
+                        //    （元素仍是未解 meta）时接收者类型化为
+                        //    Construct("List",[])，与 `impl[T] Say for List[T]` 的
+                        //    pattern 一阶匹配成功（pattern Var 吃掉整个目标）——
+                        //    改成整体 None 会让这类合法程序从 Ok 变 Err。
+                        // 快版 `val_to_typ` 的 filter_map 同款语义，两侧一致。
                         items.iter().flat_map(|x| x.1.to_typ()).collect(),//TODO:
                     )
                 }

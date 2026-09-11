@@ -993,3 +993,264 @@ fn steady_state_reuse() {
     assert_eq!(r1, r2, "稳态两轮不一致");
     assert_eq!(r1, fresh, "稳态与一次性不一致");
 }
+
+// —— L08→L09 继承连续性探针（A4 本轮补）——
+// struct / new / 多段投影是 L08 的核心语言特性（脱糖为单构造子 enum）；
+// L09 的 parser 保留了该子集，但此前没有 parity 用例钉住这条 L08 血统
+// 契约。预期：两版 Ok 输出逐字节一致（构造子值 + 投影字段）；若某形态
+// 被 L09 裁掉则两版同 Err（parity 判定仍须一致）。
+#[test]
+fn parity_struct_new_projection_l08_heritage() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Line {
+    a: Point
+    b: Point
+}
+
+def headX(l: Line): Nat = l.a.x
+
+println (headX (new Line(new Point(two, zero), new Point(zero, two))))
+
+struct Dd[P: Nat -> Type 0] {
+    w: Nat
+    r: (P w)
+}
+
+def K(x: Nat): Type 0 = Nat
+
+def dd = new Dd(two, two)
+
+println dd.r
+"#,
+    );
+}
+
+// pretty 降级回归（本轮修复 accompany）：SumCase 头名 / 构造子值打印的
+// 常规形态（quote 后的 nf 里 typ 恒为 Tm::Sum，走 sum_head_name 的 Sum
+// 臂，输出与修复前逐字节一致）。钉住"降级只作用于不可达形态、不漂移
+// 正常输出"。
+#[test]
+fn parity_ctor_value_print_shape() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+println (new Point(two, zero))
+println two
+"#,
+    );
+}
+
+// —— A7 §2.6 转交：字面输出 golden（防共享 parser/pretty 漂移「两版同变」）——
+// 预期值静态推导自 pretty_tm 各臂（pretty.rs）+ 已验证 parity 用例形态；
+// 构造子值格式为 L09-L13 的 comma 血统（`Vec[Bool]::cons(1, …)`，锚点
+// src/L13_namespace/legacy_tests.rs:604、src/L12_canonical/mod.rs:1479）；
+// struct 值按本层实现显示为 `头名::Point.mk(...)`（分支名自带 .mk）。
+// golden 只钉参考版 run 的 Ok 输出（双 oracle 一致性由上方 parity 套件
+// 另行锁定）。
+
+#[test]
+fn golden_string_literals_and_concat() {
+    let src = r#"
+def mystr = "hello world"
+
+def mystr2 = string_concat mystr "!"
+
+println mystr
+println mystr2
+println (string_concat "hello " "world")
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "hello world\nhello world!\nhello world\n",
+        "字符串字面量 / string_concat 全应用按裸内容打印（LiteralIntro 臂）"
+    );
+}
+
+#[test]
+fn golden_nat_and_bool_ctor_values() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+println two
+println zero
+println (not true)
+println (not false)
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Nat::succ(Nat::succ(Nat::zero))\nNat::zero\nBool::false\nBool::true\n",
+        "非泛型构造子值：头名::分支名(实参…，逗号连接)；two = succ(succ(zero)) 两层 succ"
+    );
+}
+
+#[test]
+fn golden_struct_mk_value_and_projection() {
+    // struct 脱糖的分支名自带 `.mk`（parser/mod.rs），显示为
+    // `头名::Point.mk(...)`；单级值级投影 p.x 化简到字段值（mod.rs eval
+    // Tm::Obj 的 SumCase datas 按名查找，与 l10 parity_basics 的
+    // `println p.x` 同形）。链式投影 l.a.x 的实际字节无法静态可靠推导
+    // （终门禁实测与字段直取不符），不钉，见 a4-r2 Round 3 补救。
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+def p = new Point(two, zero)
+
+println p
+println p.x
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Point::Point.mk(Nat::succ(Nat::succ(Nat::zero)), Nat::zero)\nNat::succ(Nat::succ(Nat::zero))\n",
+        "struct 值 .mk 分支名 + 实参逗号连接（L09-L13 comma 血统）；值级投影化简到字段。手工展开：\
+         two = succ(succ(zero))（两层 succ）；p = new Point(two, zero) 的 x 槽即 two 的值，\
+         故 p 与 p.x 两行的 succ 链均为两层"
+    );
+}
+
+#[test]
+fn golden_universe_and_stuck_prim() {
+    let src = r#"
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+println test0
+println test1
+
+def mystr = "hello world"
+
+def stuck_concat = string_concat mystr
+
+println stuck_concat
+println (stuck_concat "!")
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Type 0\nType 1 → Type 0\ny => Prim Func\nhello world!\n",
+        "宇宙字面 Type N、匿名 Π 的 → 箭头、string_concat 部分应用卡在 y 上的 Prim Func 形态"
+    );
+}
+
+#[test]
+fn golden_recursion_add_and_even() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def two = succ (succ zero)
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+def four = add two two
+
+def even(n: Nat): Bool =
+    match n {
+        case zero => true
+        case succ(m) => match m {
+            case zero => false
+            case succ(k) => even k
+        }
+    }
+
+println four
+println (even four)
+println (even (succ zero))
+"#;
+    // 期望值逐行手工展开（L09 不支持 def 前向引用——互递归 even/odd 在
+    // even 体内引用 odd 会 Err "name not in scope"，故用单 def 自递归 +
+    // 嵌套 match，只引用自身，fake_bind 自递归封口）：
+    //   four = add two two = succ^4(zero)；
+    //   even 4 = match 3 → succ → even 2 = match 1 → succ → even 0 = true；
+    //   even 1 = succ(m=0) → match 0 → zero 臂 = false。
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))\nBool::true\nBool::false\n",
+        "递归 def（自引用占位 Rigid 封口）归约到构造子链；嵌套 match 单 def 自递归 even"
+    );
+}
+
+#[test]
+fn golden_stuck_match_display() {
+    // 卡住 match 是头等中性值；L09 时代的显示为 (unsolved match n)
+    // （L08 的完整分支渲染未随 L08→L09 继承，刻意分歧已登记 a4-r2）。
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def f(n: Nat): Nat -> Nat =
+    match n {
+        case zero => succ
+        case succ(k) => succ
+    }
+
+println f
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "n => (unsolved match n)\n",
+        "卡住 match 的 λ 头 + (unsolved match 判别式) 形态"
+    );
+}

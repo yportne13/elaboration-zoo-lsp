@@ -718,3 +718,229 @@ println (f two)
     );
     assert_parity(src);
 }
+
+// —— L09→L10 / L08→L10 继承连续性探针（A4 本轮补）——
+// 卡住投影的 (Obj,Obj) 合同臂：`e.witness ≡ e.witness`（同字段卡住投影
+// 的合一）是 L08 引入、L10 参考版继承的合同规则；快版的合同臂位次本轮
+// 对齐 L08（先于中性链分派），本用例钉住裸单元（tag 7）路径判定不变
+// （预期：两版同 Ok）。索引枚举 Eq 的写法与 tests/l09_fast_parity.rs 的
+// parity_tests_rs_index 同款。
+#[test]
+fn parity_stuck_projection_contract_unify() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+enum Eq[A](x: A, y: A) {
+    refl[a: A] -> Eq[A] a a
+}
+
+struct Sig[A] {
+    witness: A
+}
+
+def pf(e: Sig[Nat], p: Eq[Nat] (e.witness) (e.witness)): Eq[Nat] (e.witness) (e.witness) = p
+
+println (pf (new Sig(two)) rfl)
+"#,
+    );
+}
+
+// struct / new / 多段投影的 L08 血统契约（L10 参考版与快版同判；依赖
+// 字段 r: (P w) 的构造检查走接收者剥链精确实例化）。
+#[test]
+fn parity_struct_new_projection_l08_heritage() {
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+struct Line {
+    a: Point
+    b: Point
+}
+
+def headX(l: Line): Nat = l.a.x
+
+println (headX (new Line(new Point(two, zero), new Point(zero, two))))
+
+struct Dd[P: Nat -> Type 0] {
+    w: Nat
+    r: (P w)
+}
+
+def K(x: Nat): Type 0 = Nat
+
+def dd = new Dd(two, two)
+
+println dd.r
+"#,
+    );
+}
+
+// —— A7 §2.6 转交：字面输出 golden（防共享 parser/pretty 漂移「两版同变」）——
+// 预期值静态推导自 pretty_tm 各臂（pretty.rs）+ 已验证 parity 用例形态
+// （parity_trait_pieces / parity_trait_full_demo / parity_basics 的子集）；
+// 构造子值格式为 L09-L13 的 comma 血统（`Vec[Bool]::cons(1, …)`，锚点
+// src/L13_namespace/legacy_tests.rs:604、src/L12_canonical/mod.rs:1479）；
+// struct 值按本层实现显示为 `头名::Point.mk(...)`。golden 只钉参考版 run
+// 的 Ok 输出（双 oracle 一致性由上方 parity 套件另行锁定）。
+
+#[test]
+fn golden_trait_tostring_and_say_synthesis() {
+    let src = r#"
+enum Bool {
+    true
+    false
+}
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+def t[T][s: ToString[T]](x: T): String =
+    s.to_string x
+
+println (t true)
+println (t false)
+
+trait Say {
+    def say(x: Nat): String
+}
+
+impl[T] Say for T {
+    def say(x: Nat): String = "hello"
+}
+
+println (zero.say zero)
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "true\nfalse\nhello\n",
+        "实例求解（含毛毯 impl 的 Say）合成的方法结果按裸字符串打印"
+    );
+}
+
+#[test]
+fn golden_outparam_add_chain() {
+    // 程序形态取 parity_trait_full_demo 的 Add 段逐字子集（含 outParam
+    // 恒等 def——demo 顶部同有，保证裁剪后仍按已验证形态 elaborate）。
+    let src = r#"
+def outParam[A](a: A): A = a
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Add[T, O: outParam(Type 0)] {
+    def add(that: T): O
+}
+
+def nat_add_helper(x: Nat, y: Nat): Nat =
+    match y {
+        case zero => x
+        case succ(n) => succ (nat_add_helper x n)
+    }
+
+impl Add[Nat, Nat] for Nat {
+    def add(that: Nat): Nat =
+        nat_add_helper this that
+}
+
+def two = succ (succ zero)
+
+def four = two.add two
+
+println four
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Nat::succ(Nat::succ(Nat::succ(Nat::succ(Nat::zero))))\n",
+        "outParam trait 的接收者方法调用（two.add two = 4）归约到构造子链"
+    );
+}
+
+#[test]
+fn golden_l09_heritage_values() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+def two = succ (succ zero)
+
+def not(x: Bool): Bool =
+    match x {
+        case true => false
+        case false => true
+    }
+
+struct Point {
+    x: Nat
+    y: Nat
+}
+
+def p = new Point(two, zero)
+
+println (not true)
+println p
+println p.x
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Bool::false\nPoint::Point.mk(Nat::succ(Nat::succ(Nat::zero)), Nat::zero)\nNat::succ(Nat::succ(Nat::zero))\n",
+        "L09 血统形态在 L10 的字面锚：构造子值（comma 血统，.mk 分支名带头名前缀）/ 值级投影。\
+         手工展开：two = succ(succ(zero))（两层 succ），p 的 x 槽即 two 的值，故 p 与 p.x 两行均为两层"
+    );
+}
+
+#[test]
+fn golden_universe_levels() {
+    let src = r#"
+def test0: Type 1 = Type 0
+
+def test1: Type 2 = Type 1 -> Type 0
+
+println test0
+println test1
+"#;
+    assert_eq!(
+        run_basic(src).unwrap(),
+        "Type 0\nType 1 → Type 0\n",
+        "L09 继承的 Type N 分层宇宙字面与匿名 Π 的 → 箭头"
+    );
+}

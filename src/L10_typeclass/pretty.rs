@@ -45,9 +45,17 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
-    panic!("Variable index out of bounds");
+    // 越界说明显示上下文里没有这个名字（错误文案对更浅上下文的项做
+    // pretty 时可达），退化显示索引而不是 panic（L08/L09 `go_ix` 同款）。
+    format!("@{}", ix)
 }
 
+/// `AppPruning` 是项层的洞形态（`fresh_meta` 产出）；常规 pretty 只吃
+/// quote 出的 nf 项（quote 不产该形态），但 `infer_expr` 的错误文案会对
+/// **未 quote 的**推断项调用 `pretty_tm`（如 `_.foo` 的洞接收者），必须
+/// 兜底。掩码槽位与名字表按位置配对，保留槽打印 binder 名（`_` 槽退化
+/// `@序号`），名字表不足时退化位置占位（L06 `go_app_pruning` 同款，不
+/// panic；注释与 L09 同源贴齐）。
 fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
     fn go_pr_inner(
         p: i32,
@@ -79,13 +87,10 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                         // Skip implicit argument
                         ns = rest_ns;
                         pr = rest_pr;
-                        // continue loop
                     }
                 }
-                // A pruning longer than the display name list (e.g. a decl
-                // type printed under a shallower context than the meta's
-                // elaboration depth) degrades to positional placeholders
-                // instead of panicking.
+                // 名字表短于掩码（AppPruning 的 meta 在更深的 binder 里
+                // 创建、显示时名字表更短）：退化 `@序号` 占位而不是 panic。
                 ((None, _), (Some(prune), rest_pr)) => {
                     if let Some(i) = prune {
                         let need_paren = p > APPP;
@@ -208,10 +213,10 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
         ),
         Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
             "{}::{}{}",
-            match typ.as_ref() {
-                Tm::Sum(name, _, _, _) => &name.data,
-                _ => panic!("Sum case must be applied to a sum"),
-            },
+            // typ 非 `Tm::Sum` 时（构造子的 `-> ret` 原样存储，可以是 App
+            // 链）沿链找头部 Sum 名字，找不到退化 `?` 而不是 panic
+            // （L08/L09 `sum_head_name` 同款降级）。
+            sum_head_name(typ),
             case_name.data,
             params
                 .iter()
@@ -233,5 +238,16 @@ pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
                 .reduce(|acc, x| acc + ",\n" + &x)
                 .unwrap_or("".to_owned())
         ),*/
+    }
+}
+
+/// `SumCase.typ` 可能不是展开的 `Tm::Sum`（构造子的 `-> ret` 原样存储，
+/// 可以是 App 链）：沿 App 链找头部的 Sum 名字，找不到就显示 `?`
+/// （L08/L09 同款降级，不再 panic）。
+fn sum_head_name(tm: &Tm) -> String {
+    match tm {
+        Tm::Sum(name, ..) => name.data.clone(),
+        Tm::App(f, _, _) => sum_head_name(f),
+        _ => "?".to_owned(),
     }
 }

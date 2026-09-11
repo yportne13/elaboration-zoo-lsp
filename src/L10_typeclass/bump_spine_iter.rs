@@ -679,6 +679,21 @@ fn vapp1<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// L09/L11 同款）：只有 `vapp1` 不会 panic 的形态能吃 η 新变量。tag 7 仅
+/// `Obj` 可（`Sum`/`SumCase`/`Prim` → panic）；tag 3(U)/4(Pi)/6(Lit) 不可；
+/// 其余（Rigid 0 / Clo 1 / 链 2 / Flex 5）可。防止 λ 值以类型/值身份流入
+/// unify 的 η 臂时触发 `impossible apply`（守卫失败落后续臂判败，与参考
+/// 版守卫后落 `_` → Err 同判定）。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => matches!(v_xcell_of(v), XCell::Obj { .. }),
+        _ => true,
+    }
+}
+
 // force（迭代；臂集同 L09：只有 Flex 臂）
 // --------------------------------------------------------------------------------
 
@@ -1802,8 +1817,9 @@ enum UItem<'a> {
     MatchPattern(&'a PatternDetail, &'a PatternDetail),
 }
 
-/// 链（或裸单元）是否卡住投影 Obj 头——unify 的位相等捷径对它关闭
-/// （参考版无 `(Obj, Obj)` 臂，同单元也须走 `_` → Err）。
+/// 链（或裸单元）是否卡住投影 Obj 头——unify 的位相等捷径对它关闭，
+/// (Obj, Obj) 合同臂用它做门控（L10 参考版有该臂；tag2 链的头种类在
+/// spine 槽上缓存的 `HK_OBJ` O(1) 判定）。
 #[inline]
 fn is_objheaded(spine: &Spine, v: V) -> bool {
     match v_tag(v) {
@@ -1941,8 +1957,9 @@ fn unify_sp_lockstep<'a>(
             (e.f, e.a)
         };
         // 位相等后缀：实参对免比（tag 7 除外）；函数部分对仍须入栈。
-        // Obj 头的链（tag 2 头 = Obj 单元）同样不免——参考版无 (Obj, Obj)
-        // 臂，交回完整分派后走 `_` → Err。
+        // Obj 头的链（tag 2 头 = Obj 单元）同样不免——交回完整分派后由
+        // 前移的 (Obj, Obj) 合同臂接管（L10 参考版有该臂；同字段卡住投影
+        // 链按参考版语义逐槽比，异头非 flex 判败）。
         let skip1 = a1.0 == a2.0 && v_tag(a1) != 7 && !is_objheaded(spine, a1);
         if skip1 {
             if f1.0 != f2.0 {
@@ -2159,6 +2176,42 @@ fn unify_iter<'a>(
                 continue; // 双裸单元：unify_sp([][]) 自反成立
             }
         }
+        // —— (Obj, Obj) 合同臂（L10 新增，L08 快版同款位次）：字段名同 ⇒
+        // 比接收者 + spine 实参（参考版 unify 的 Obj/Obj 臂同款）。必须
+        // 先于中性链分派：tag2×tag2 的 Obj 头链在链分派里会被同头/异头
+        // 失配提前拦下，参考版的合同判定就不可达了。裸 XCell 单元（tag 7）
+        // 与带实参链（tag 2）统一在此处理；裸×链 = spine 长度失配即败——
+        // 与参考版 unify_sp([][..]) 同判定。——
+        if is_objheaded(spine, t) && is_objheaded(spine, u) {
+            let (hc1, hc2) = (
+                if v_tag(t) == 7 { t } else { spine.spine_head(v_spine_of(t)) },
+                if v_tag(u) == 7 { u } else { spine.spine_head(v_spine_of(u)) },
+            );
+            let (o1, n1, o2, n2) = match (v_xcell_of(hc1), v_xcell_of(hc2)) {
+                (
+                    XCell::Obj { val: a1, name: m1 },
+                    XCell::Obj { val: a2, name: m2 },
+                ) => (*a1, *m1, *a2, *m2),
+                _ => return false,
+            };
+            if n1 != n2 {
+                return false;
+            }
+            if memo_on {
+                stack.push(UItem::Store((t.0, u.0)));
+            }
+            stack.push(UItem::Pair(l, o1, o2));
+            match (v_tag(t), v_tag(u)) {
+                (7, 7) => {}
+                (2, 2) => {
+                    if !unify_sp_lockstep(spine, stack, l, v_spine_of(t), v_spine_of(u)) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+            continue;
+        }
         // —— 中性链 vs 中性链（参考臂 3/4/5 的链形态全在此分派）——
         if v_tag(t) == 2 && v_tag(u) == 2 {
             let h1 = v_spine_of(t);
@@ -2198,11 +2251,13 @@ fn unify_iter<'a>(
                 }
                 return false;
             }
-            // 同头判定：位相等（同变量 / 同 meta / 同卡住投影单元）
+            // 同头判定：位相等（同变量 / 同 meta / 同卡住投影单元）。Obj 头
+            // 已被上文 (Obj, Obj) 合同臂接管（同头 Obj 不可达；保留防御性
+            // 排除，L08 快版同款口径）
             if hd1.0 == hd2.0 {
                 if !is_objheaded(spine, hd1) {
                     // 同头刚性/卡住投影以外的头：逐实参比较（lockstep，长度
-                    // 失配即败）；Obj 头交回 `_`（参考版无 (Obj,Obj) 臂）
+                    // 失配即败）
                     if memo_on {
                         stack.push(UItem::Store((t.0, u.0)));
                     }
@@ -2211,10 +2266,11 @@ fn unify_iter<'a>(
                     }
                     continue;
                 }
-                return false; // 同单元 Obj 链：参考版 `_` → Err
+                return false; // 防御保留：同头 Obj 不会走到这里（见上臂）
             }
             // 异头：一侧 flex 头（f1/f2 已排除双 flex）→ 该侧 solve（参考
-            // 臂 9/10 的链形态）；双刚性异级 / Obj 头组合 → 失配。
+            // 臂 9/10 的链形态）；双 Obj 头已被上文 (Obj, Obj) 合同臂接管，
+            // 剩余双刚性异级 / Obj×刚性组合 → 失配。
             let (mv, h, rhs) = if f1 {
                 (v_meta_of(hd1), h1, u)
             } else if f2 {
@@ -2275,9 +2331,11 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链；卡住
-        // match / 字面量等形态的应用 panic——参考版 v_app 同款）
-        if v_tag(u) == 1 {
+        // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链）。可应用性
+        // 由 `vapp_ok` 把关——卡住 match / 字面量等形态的应用本是 panic
+        // （参考版 `v_app` 同款），守卫后改判失败（参考版 η 臂
+        // `v_applicable` 同款，两版同判定）。
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2292,7 +2350,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2484,38 +2542,11 @@ fn unify_iter<'a>(
                 continue;
             }
         }
-        // —— (Obj, Obj) 合同臂（L10 新增）：字段名同 ⇒ 比接收者 + spine
-        // 实参（参考版 unify 的 Obj/Obj 臂同款）——
-        if is_objheaded(spine, t) && is_objheaded(spine, u) {
-            let (hc1, hc2) = (
-                if v_tag(t) == 7 { t } else { spine.spine_head(v_spine_of(t)) },
-                if v_tag(u) == 7 { u } else { spine.spine_head(v_spine_of(u)) },
-            );
-            let (o1, n1, o2, n2) = match (v_xcell_of(hc1), v_xcell_of(hc2)) {
-                (
-                    XCell::Obj { val: a1, name: m1 },
-                    XCell::Obj { val: a2, name: m2 },
-                ) => (*a1, *m1, *a2, *m2),
-                _ => return false,
-            };
-            if n1 != n2 {
-                return false;
-            }
-            if memo_on {
-                stack.push(UItem::Store((t.0, u.0)));
-            }
-            stack.push(UItem::Pair(l, o1, o2));
-            match (v_tag(t), v_tag(u)) {
-                (7, 7) => {}
-                (2, 2) => {
-                    if !unify_sp_lockstep(spine, stack, l, v_spine_of(t), v_spine_of(u)) {
-                        return false;
-                    }
-                }
-                _ => return false,
-            }
-            continue;
-        }
+        // (Obj, Obj) 合同臂已前移到中性链分派之前（L08 快版同款位次）：
+        // tag2×tag2 的 Obj 头链（含同头/异头）若落进上面的链分派，会被
+        // "同头 Obj → false / 异头非 flex → false" 提前判败，永远到不了
+        // 臂本身——参考版 (Obj,Obj) 臂对同字段投影是可判等的，故必须
+        // 先于链分派拦截（与参考版同判定）。
         return false;
     }
     true
@@ -3231,6 +3262,26 @@ fn prune_ty_bump<'a>(
     Some(t)
 }
 
+/// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
+/// `String`（solve/prune 密集负载下 `lams_from_ty` 每 λ 层都要一个）。
+/// （a806ff0 的同款补齐——该 commit 只落到 L03-L05。）
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `lams l a t`：沿 **meta 类型**的 Π 层包 λ（名字与 icit 随 Π，`"_"` 改名
 /// `x{l'}`；逐层用 `VVar l'` 剥闭包）。
 #[allow(clippy::too_many_arguments)]
@@ -3256,7 +3307,7 @@ fn lams_from_ty<'a>(
         let p = v_pi_of(cur);
         let (name, icit, env, body_tm) = (p.name, p.icit, p.env, p.body);
         let name = if name == "_" {
-            bump.alloc_str(&format!("x{}", lp))
+            alloc_xname(bump, lp)
         } else {
             name
         };
@@ -5127,6 +5178,13 @@ impl Machine {
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
+                // 参考版 Def 臂：检查后 `solve_multi_trait(0)`，求解失败由
+                // `.map_err(...)?` 返回可恢复错误（对齐参考版口径：Debug
+                // 序列化 `UnifyError::Trait(msg)` → `Trait("...")`；L11 快版
+                // 同款——此前本臂缺这道 def 级求解，检查过但留有可解 trait
+                // meta 的 def 会漏解，与参考版分叉）。
+                self.solve_multi_trait_ref(bump, &fake, 0)
+                    .map_err(|e| Error(name.to_span().map(|_| format!("Trait({:?})", e))))?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
                 let out = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
@@ -5475,6 +5533,11 @@ pub(crate) fn val_to_typ(spine: &Spine, defs: &[V], v: V) -> Option<Typ> {
                 } else {
                     let args: Vec<Typ> = params
                         .iter()
+                        // **刻意语义**：不可作类型的参数槽（未解 meta）被
+                        // filter_map 剔除——参考版 `Val::to_typ` 同款（见该处
+                        // 注释：实例登记侧 None 即 Err、目标侧 arity 失配即
+                        // no-instance、trait_wrap 接收者路径依赖该剔除），勿
+                        // 改成整体 None。
                         .filter_map(|p| val_to_typ(spine, defs, p.val))
                         .collect();
                     Typ::Construct(
@@ -5606,7 +5669,7 @@ struct Arm<'a> {
 pub(crate) struct Compiler<'a> {
     warnings: Vec<Warning>,
     reachable: FxHashMap<usize, ()>,
-    checked_ret: FxHashSet<Raw>,
+    checked_ret: FxHashSet<usize>,
     pub(crate) pats: Vec<(PatternDetail, &'a Tm<'a>)>,
     seed: i32,
     ret_type: V,
@@ -5671,10 +5734,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// 构造子可达性过滤（参考版 `filter_accessible_constrs`）：构造子类型
-    /// 链逐层推断（**真实 infer**——meta 分配保留），可访问性判定在
-    /// **metas 快照换入换出**的 temp-infer 里跑 check_pm（参考版克隆
-    /// `temp_infer` 的对应物）。错误路径统一撤销名字轨迹（temp cxt 的
-    /// 绑定全部丢弃——参考版克隆丢弃同款）。
+    /// 链逐层推断与可访问性判定都是**纯探测**——统一在 `run_pure_probe`
+    /// 的 metas 快照换入换出里跑，探测期 meta 分配/求解一律回滚（参考版
+    /// meta 快照换入换出的同款机制）。错误路径统一撤销名字轨迹（temp cxt
+    /// 的绑定全部丢弃——参考版同款）。
     fn filter_accessible_constrs(
         &mut self,
         mach: &mut Machine,
@@ -5840,6 +5903,12 @@ impl<'a> Compiler<'a> {
                             .map(|x| matches!(x, Pattern::Any(sp, _) if !sp.data))
                             == Some(true) =>
                 {
+                    // **可达性先记**（L13 2a0eb6e 同族，参考版同款）：到达本叶
+                    // 即该臂可达，与 check_pm_final/体检查是否成功无关。先前把
+                    // insert 放在 check_pm_final 成功之后：构造子分支走查里
+                    // check_pm_final 失败（本分支不适用的臂）就不记可达，决策
+                    // 树遍历结束即误报 `unreachable pattern`。
+                    self.reachable.insert(arm.idx, ());
                     // check_pm 失败 → Ok(false)（参考版同款：整个构造子
                     // 分支回退 false）
                     let (_, cxt) = match mach.check_pm_final(
@@ -5848,8 +5917,10 @@ impl<'a> Compiler<'a> {
                         Ok(x) => x,
                         Err(_) => return Ok(false),
                     };
-                    self.reachable.insert(arm.idx, ());
-                    if self.checked_ret.contains(&arm.raw) {
+                    // 已完整编译（体检查 + pats 记录）则只需可达、无需重检查。
+                    // **按臂下标**记录（L13 同族）——按 Raw 记录会把两个模式
+                    // 相同的不同臂混为一谈，漏检第二个臂的体。
+                    if self.checked_ret.contains(&arm.idx) {
                         return Ok(true);
                     }
                     // 期望类型重锚到臂上下文：quote → eval（flex 免锚）
@@ -5863,7 +5934,7 @@ impl<'a> Compiler<'a> {
                         }
                     };
                     let ret = mach.check(bump, &cxt, &arm.arm.body.0, ret_type)?;
-                    self.checked_ret.insert(arm.raw.clone());
+                    self.checked_ret.insert(arm.idx);
                     let patcon = arm.patcon.clone().clean();
                     self.pats.push((patcon.data[0].1[0].clone(), ret));
                     Ok(true)
