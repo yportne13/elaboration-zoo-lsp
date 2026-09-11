@@ -112,40 +112,25 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [Token<'a>], A, MacroState, IError>> ParserExt
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [Token<'a>], Span<()>, MacroState, IError> {
     move |input: &'b [Token<'a>], _: &mut MacroState| match input.first() {
-        Some(x) => if x.data.1 == p {
-            input
-                .get(1..)
-                .map(|i| (i, x.map(|_| ())))
-                .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-                })
-        } else {
-            Err(IError {
-                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-            })
-        },
+        // input.first() 为 Some ⇒ 长度 ≥ 1 ⇒ [1..] 恒在界内
+        Some(x) if x.data.1 == p => Ok((&input[1..], x.map(|_| ()))),
+        Some(x) => Err(IError {
+            msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p))),
+        }),
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p))),
         }),
     }
 }
 
 fn string<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [Token<'a>], Span<SmolStr>, MacroState, IError> {
     move |input: &'b [Token<'a>], _: &mut MacroState| match input.first() {
-        Some(x) => if x.data.1 == p {
-            input
-                .get(1..)
-                .map(|i| (i, x.map(|s| SmolStr::new(s.0))))
-                .ok_or_else(|| IError {
-                    msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-                })
-        } else {
-            Err(IError {
-                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
-            })
-        },
+        Some(x) if x.data.1 == p => Ok((&input[1..], x.map(|s| SmolStr::new(s.0)))),
+        Some(x) => Err(IError {
+            msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p))),
+        }),
         _ => Err(IError {
-            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p)))
+            msg: empty_span(ErrMsg::Base(BaseMsg::Expect(p))),
         }),
     }
 }
