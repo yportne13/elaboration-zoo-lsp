@@ -444,6 +444,15 @@ mod tests {
     }
 
     #[test]
+    fn guest_shapes_ok() {
+        // 负载设计取自 guest0x0/normalization-bench：二次输出 / Parigot 共享 /
+        // 指数共享三个形状都须归一到期望的正态形。
+        assert_eq!(normalize(term::church_mul_pair(5)), term::church(25));
+        assert_eq!(normalize(term::parigot_add_pair(2)), term::parigot(4));
+        assert_eq!(normalize(term::exponential(5)), term::exponential_expect(5));
+    }
+
+    #[test]
     fn machine_steady_state_two_rounds() {
         // 稳态机连续两轮（同一 Bump，reset 后重 import）——检查栈清理正确
         let mut bump = Bump::with_capacity(1 << 16);

@@ -44,7 +44,9 @@ struct Cli {
     #[arg(long)]
     only: Option<String>,
 
-    /// 负载族：church（church_pair，默认）| dup（复制强制，开记忆化轴）| all
+    /// 负载族：church（church_pair，默认）| dup（复制强制，开记忆化轴）|
+    /// guest（guest0x0/normalization-bench 的 church_mul/parigot_add/exponential
+    /// 三个形状）| all
     #[arg(long, default_value = "church")]
     workload: String,
 }

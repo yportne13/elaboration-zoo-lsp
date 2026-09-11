@@ -2,9 +2,11 @@
 
 纯 lambda 演算（`Term`，de Bruijn 索引）的正常化（eval + quote），在 22 种
 表示/策略变体下实现，回答：**项和值的表示方式对求值性能有多大影响？**
-基准负载两族（`--workload`）：丘奇数加法 `church_pair(n)`（默认，线性）
-与复制强制 `dup_pair`/`dup_deep`（开记忆化轴），每个变体先断言结果正确
-再计时（`l01bench`）。
+基准负载三族（`--workload`）：丘奇数加法 `church_pair(n)`（默认，线性）、
+复制强制 `dup_pair`/`dup_deep`（开记忆化轴）、以及移植自
+guest0x0/normalization-bench 的 `church_mul`/`parigot_add`/`exponential`
+（二次输出 / 指数共享形状，`guest`）。每个变体先断言结果正确再计时
+（`l01bench`）。
 
 ## 变体一览（变体名即文件名，见 `src/L01_nbe/`）
 
@@ -49,8 +51,11 @@ cargo build --release --bin l01bench
 ./target/release/l01bench --max-church 8000 --rounds 7
 ./target/release/l01bench --only bump_iter,cek --max-church 512000   # 深度无上限演示
 ./target/release/l01bench --workload dup --only bump_spine_iter,bump_spine_memo  # 复制强制轴
+./target/release/l01bench --workload guest --rounds 5   # guest0x0 的三个形状
 ```
 
+- `--workload`：`church`（默认，church_pair）| `dup`（复制强制轴）|
+  `guest`（church_mul/parigot_add/exponential，见"guest 负载形状"）| `all`。
 - 规模从 1000 起翻倍到 `--max-church`；`--only` 逗号分隔多值过滤变体。
 - 口径：预热 1 次 + `--rounds` 轮，只计 `normalize`（入参编码/import 在计时
   外），arena 变体跨轮次复用（稳态）；输出最小 / 中位时间（毫秒），`*` 标
@@ -251,6 +256,52 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
 `cek_bump`/`bump_iter` 大 n 段自身也快了 2.6-3.2×——深递归的机器
 栈帧（冷栈页 + 缓存不友好）本身就是慢的，迭代化一举两得。
 
+## guest 负载形状（`--workload guest`，2026-09，移植自 guest0x0/normalization-bench）
+
+原基准（OCaml）的设计要点是**用多个形状互补的负载**，而不是单一线性负载；
+并按负载设 `CBN`/`NoLargeTerm` 属性决定哪些归一化器参赛、每轮独立进程、
+20s 超时。本轮把 L01 能承载的三个形状搬进 `term.rs`/`bench.rs`：
+
+- `church_mul`：`mul (church n) (church n)` → `church(n²)`。输出规模 ~n²，
+  压结果树构建与 readback 体积（`church_pair` 的输出只有 ~2n）。
+- `parigot_add`：Parigot 数加法，正态形规模 ~2^n；输入 `parigot_shared n =
+  succ (succ … zero)` 让求值期同一闭包被引两次。这是"指数增长 + 共享"的
+  实际例子。
+- `exponential`：`λx. t(n)`，`t(0)=x`、`t(k+1)=(λy. y y) t(k)`；正态形
+  `λx. r(n)`（`r(0)=x`、`r(k)=r(k-1) r(k-1)`）规模 2^n 且高度共享。
+
+规模按 L01 的 `Box<Term>` 结果表示调小（guest 用 OCaml 物理共享能到 2^24
+节点，L01 的期望值是逐节点真树，受内存与递归析构约束）。未移植：
+
+- `random`：需 `count_terms.ml` 生成的项计数表 + 发散项超时过滤，且随机
+  项可能含 Ω 类发散项；混合形状（穿插链、β 岔路、混合链头）的 fallback
+  覆盖已由各变体单测承担。
+- `self_interp_size`：Scott 编码自解释，属另一条（编码/自应用）轴。
+
+实测（release，min ms，rounds 5；完整表见 `l01bench --workload guest`）：
+
+| 变体 | church_mul n=200 | parigot_add n=8 | exponential n=18 |
+|---|---|---|---|
+| `naive` | 151.16 | 18.26 | 16.64 |
+| `bump_tree` | 0.817 | 3.645 | 1.476 |
+| `bump_spine` | 0.315 | 3.451 | 1.261 |
+| `bump_spine_iter` | 0.188 | 6.251 | 2.497 |
+| `bump_spine_iter_ss` | 0.150 | 6.097 | 2.546 |
+| **`bump_spine_memo`** | 0.206 | **0.108** | **0.005** |
+
+两个 church_pair 单一负载看不出来的结论：
+
+1. **共享轴上 memo 是碾压性的**：`parigot_add n=8` 比最快的非 memo 变体
+   （`bump_spine` 3.45）快 **32×**，`exponential n=18` 快 **252×**——远超
+   dup 轴的 1.8×/3.6×（那只是 2×/4× 复制，这里是 2^n 复制被塌缩）。
+   线性负载上 memo 只付哈希税（`church_mul` 0.206 vs iter 0.188，+10%），
+   一旦负载带共享就是数量级收益。**elaborator 的 conversion checking /
+   let-共享展开正是这种负载**，故 memo 应作为带共享场景的默认。
+2. **非右链形状下递归版反超迭代版**：`bump_spine`（递归）在 parigot/
+   exponential 上比 `bump_spine_iter` 快 ~1.8×/2.0×。流式右链快速路径只对
+   `f (f (f x))` 形状有效；`r(k)=r(k-1) r(k-1)` 是平衡树，迭代任务栈反而
+   多一层固定开销。church_pair（纯右链）完全测不出这一点。
+
 ## 怎么选（结论）
 
 - **默认推荐：`bump_spine_iter`，长驻进程用它的 `Machine` 稳态口径**。
@@ -260,7 +311,8 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
   不受进程栈限（4MB 栈跑 51 万）。LSP 一类跨请求复用机器的形态，
   稳态才是真实成本。
 - **栈限内的极限速度：`bump_spine`**。递归版，n ≤ 2000 时与迭代版互有
-  胜负；深度受进程栈限（~1.6 万）。
+  胜负；深度受进程栈限（~1.6 万）。**非右链形状下（parigot/exponential）
+  反超迭代版 ~2×**，见"guest 负载形状"。
 - `bump_spine_rpn`：spine 系 + 扁平输出——速度与树输出持平，输出体积
   ~2.4× 小；下游接受字节流时选它。
 - `native_clo` / `bump_spine_slim` / `compiled`：三条被实测否决的轴
@@ -268,8 +320,9 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
   上方"第十二轮的三个实测"。
 - **`bump_spine_memo`：负载含重复强制时开**（同一值被多次 quote——
   elaborator 的 conversion checking、let-共享展开的常态）。线性负载付
-  3-8% 哈希税；复制强制负载收益 1.8×（×2）/3.6×（×4），随复制层数
-  指数增长，复制被塌缩为单次强制（见"重复求值轴"）。
+  3-8% 哈希税；复制强制负载收益 1.8×（×2）/3.6×（×4），**带共享的指数
+  负载收益 32×（parigot）/252×（exponential）**，复制被塌缩为单次强制
+  （见"重复求值轴"与"guest 负载形状"）。
 - `cek_bump` / `bump_iter`：spine 系出现前的迭代答案（CEK kont 栈 vs
   双栈推土机，等价），现为对照保留。
 - `cek`：最简的栈安全实现（慢 ~50×），适合教学/对照。

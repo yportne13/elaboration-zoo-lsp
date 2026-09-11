@@ -347,6 +347,14 @@ mod tests {
     }
 
     #[test]
+    fn guest_shapes_ok() {
+        // guest0x0/normalization-bench 的三个形状在记忆化变体下同样须正确。
+        assert_eq!(normalize(term::church_mul_pair(5)), term::church(25));
+        assert_eq!(normalize(term::parigot_add_pair(2)), term::parigot(4));
+        assert_eq!(normalize(term::exponential(5)), term::exponential_expect(5));
+    }
+
+    #[test]
     fn dup_pair_ok() {
         // 复制强制负载：quote 两次强制同一闭包，memo 命中须给出共享 DAG
         assert_eq!(normalize(term::dup_pair(3)), term::dup_pair_expect(3));

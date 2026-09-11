@@ -41,27 +41,243 @@ pub fn run(max_church: usize, rounds: usize, only: Option<&str>, workload: &str)
         eprintln!("rounds 必须 ≥ 1（收到 0）");
         return;
     }
-    println!("L01 NBE bench: church_pair(n) = add (church n) (church n) -> church(2n)");
+    println!("L01 NBE bench（workload = {workload}）");
     match only {
         Some(names) => println!("rounds per variant = {rounds}, only variants = {names}\n"),
         None => println!("rounds per variant = {rounds}, sizes double from 1000\n"),
     }
     let do_church = matches!(workload, "church" | "all");
     let do_dup = matches!(workload, "dup" | "all");
+    let do_guest = matches!(workload, "guest" | "shapes" | "all");
 
-    let mut n = 1000;
-    loop {
-        if do_church {
-            bench_size(n, rounds, only);
-        }
-        if do_dup {
-            bench_dup(n, rounds, only);
-        }
-        if n >= max_church {
-            break;
-        }
-        n = n.saturating_mul(2);
+    if do_guest {
+        bench_guest(rounds, only);
     }
+    if do_church || do_dup {
+        let mut n = 1000;
+        loop {
+            if do_church {
+                bench_size(n, rounds, only);
+            }
+            if do_dup {
+                bench_dup(n, rounds, only);
+            }
+            if n >= max_church {
+                break;
+            }
+            n = n.saturating_mul(2);
+        }
+    }
+}
+
+/// guest0x0/normalization-bench 的负载设计移植（`--workload guest`）：三个
+/// 与 L01 原有单一线性 `church_pair` 互补的形状——
+///
+/// * `church_mul`：输出规模 ~n²，压结果树构建/readback 体积；
+/// * `parigot_add`：Parigot 数加法，正态形规模 ~2^n，输入 `parigot_shared`
+///   让求值期同一闭包被引两次（记忆化/共享轴）；
+/// * `exponential`：正态形规模 2^n 且高度共享（`r(k)=r(k-1) r(k-1)`）。
+///
+/// 规模按 L01 的 `Box<Term>` 结果表示调小：guest 用 OCaml 的物理共享可跑到
+/// 2^24 节点，L01 的期望值是逐节点真树（且 export/比较/析构递归），故 n 上限
+/// 受内存与递归栈约束。`random` 负载未移植——它依赖 `count_terms` 生成的项
+/// 计数表与发散项超时过滤，非 L01 现状可直接复用；混合形状的 fallback 覆盖
+/// 已由各变体单测承担（见 `bump_spine_iter` 等的 `interleaved_chains_fallback`/
+/// `chain_beta_fork`）。
+///
+/// 口径与 `bench_size` 一致：import/export 在计时外，只计 `normalize`。
+fn bench_guest(rounds: usize, only: Option<&str>) {
+    println!("== guest-shape benches（负载设计取自 guest0x0/normalization-bench）==");
+    println!("（口径：import/export 在计时外；表内为 min ms）\n");
+
+    let cases: [(&str, &[usize], fn(usize) -> (Term, Term)); 3] = [
+        ("church_mul", &[50, 100, 200], |n| {
+            (term::church_mul_pair(n), term::church(n * n))
+        }),
+        ("parigot_add", &[4, 6, 8], |n| {
+            (term::parigot_add_pair(n), term::parigot(2 * n))
+        }),
+        ("exponential", &[10, 14, 18], |n| {
+            (term::exponential(n), term::exponential_expect(n))
+        }),
+    ];
+
+    for (label, sizes, build) in cases {
+        let inputs: Vec<(usize, Term, Term)> = sizes
+            .iter()
+            .map(|&n| {
+                let (t, e) = build(n);
+                (n, t, e)
+            })
+            .collect();
+        bench_guest_workload(label, &inputs, rounds, only);
+    }
+}
+
+/// guest 负载可变体集（与 `bench_size` 同口径：只对已 import 的 `&Bt` 计时）。
+/// 需要 `Machine` 稳态口径的 `bump_spine_iter_ss` 与 `Term` 基座
+/// （`naive`/`cek`）另行特判。
+type BumpNorm = for<'a> fn(&'a Bump, &'a Bt<'a>) -> &'a Bt<'a>;
+const GUEST_BUMP_VARIANTS: &[(&str, BumpNorm)] = &[
+    // 注：bump_arena 的 normalize_imported 直接返回 Term（其 quote 输出 Box），
+    // 签名与其余返回 &Bt 的变体不同，在 guest_time_one 里单独处理。
+    ("bump_tree", bump_tree::normalize_imported),
+    ("bump_iter", bump_iter::normalize_imported),
+    ("cek_bump", cek_bump::normalize_imported),
+    ("bump_spine", bump_spine::normalize_imported),
+    ("bump_spine_iter", bump_spine_iter::normalize_imported),
+    ("bump_spine_slim", bump_spine_slim::normalize_imported),
+    ("bump_spine_memo", bump_spine_memo::normalize_imported),
+];
+
+/// guest 负载的变体展示顺序。
+const GUEST_ORDER: &[&str] = &[
+    "naive",
+    "cek",
+    "bump_arena",
+    "bump_tree",
+    "bump_iter",
+    "cek_bump",
+    "bump_spine",
+    "bump_spine_iter",
+    "bump_spine_iter_ss",
+    "bump_spine_slim",
+    "bump_spine_memo",
+];
+
+/// 单变体在给定输入上的（结果，最小耗时）。预热 1 次 + `rounds` 轮；import/
+/// export 在计时窗口外。结果取最后一轮（用于断言，也是 export 后的 `Term`）。
+fn guest_time_one(name: &str, input: &Term, rounds: usize) -> (Term, Duration) {
+    match name {
+        "naive" | "cek" => {
+            let run = |t: Term| {
+                if name == "naive" {
+                    naive::normalize(t)
+                } else {
+                    cek::normalize(t)
+                }
+            };
+            drop(run(input.clone())); // 预热
+            let mut ts = Vec::with_capacity(rounds);
+            let mut last = None;
+            for _ in 0..rounds {
+                let t = input.clone(); // 计时外
+                let start = Instant::now();
+                let got = run(t);
+                ts.push(start.elapsed());
+                last = Some(got);
+            }
+            (last.unwrap(), *ts.iter().min().unwrap())
+        },
+        "bump_spine_iter_ss" => {
+            let mut bump = Bump::with_capacity(1 << 24);
+            let mut m = bump_spine_iter::Machine::new();
+            {
+                let tm = bump_arena::import(&bump, input);
+                m.normalize(&bump, tm);
+            }
+            bump.reset();
+            let mut ts = Vec::with_capacity(rounds);
+            let mut last = None;
+            for _ in 0..rounds {
+                bump.reset();
+                let tm = bump_arena::import(&bump, input); // 计时外
+                let start = Instant::now();
+                let res = m.normalize(&bump, tm);
+                ts.push(start.elapsed());
+                last = Some(bump_arena::export(res)); // 计时外
+            }
+            (last.unwrap(), *ts.iter().min().unwrap())
+        },
+        "bump_arena" => {
+            // 该变体的 normalize_imported 直接 quote 到 Box<Term>（返回 Term），
+            // 其余 bump 族返回 &Bt 再 export；这里单独走同一口径。
+            {
+                let bump = Bump::with_capacity(1 << 24);
+                let tm = bump_arena::import(&bump, input);
+                bump_arena::normalize_imported(&bump, tm); // 预热
+            }
+            let mut ts = Vec::with_capacity(rounds);
+            let mut last = None;
+            for _ in 0..rounds {
+                let bump = Bump::with_capacity(1 << 24);
+                let tm = bump_arena::import(&bump, input); // 计时外
+                let start = Instant::now();
+                let res = bump_arena::normalize_imported(&bump, tm);
+                ts.push(start.elapsed());
+                last = Some(res);
+            }
+            (last.unwrap(), *ts.iter().min().unwrap())
+        },
+        _ => {
+            let f = GUEST_BUMP_VARIANTS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, f)| *f)
+                .unwrap_or_else(|| panic!("未知 guest 变体 {name}"));
+            {
+                let bump = Bump::with_capacity(1 << 24);
+                let tm = bump_arena::import(&bump, input);
+                f(&bump, tm); // 预热
+            }
+            let mut ts = Vec::with_capacity(rounds);
+            let mut last = None;
+            for _ in 0..rounds {
+                let bump = Bump::with_capacity(1 << 24);
+                let tm = bump_arena::import(&bump, input); // 计时外
+                let start = Instant::now();
+                let res = f(&bump, tm);
+                ts.push(start.elapsed());
+                last = Some(bump_arena::export(res)); // 计时外
+            }
+            (last.unwrap(), *ts.iter().min().unwrap())
+        },
+    }
+}
+
+/// 打印一个 guest 负载在多个规模、多个变体下的 min ms 表（行=变体，列=规模）。
+fn bench_guest_workload(
+    label: &str,
+    cases: &[(usize, Term, Term)],
+    rounds: usize,
+    only: Option<&str>,
+) {
+    let want = |name: &'static str| match only {
+        None => true,
+        Some(list) => list.split(',').any(|x| x == name),
+    };
+    let selected: Vec<&'static str> = GUEST_ORDER.iter().copied().filter(|n| want(n)).collect();
+    if selected.is_empty() {
+        return;
+    }
+
+    let mut rows: Vec<(&'static str, Vec<Duration>)> = selected
+        .iter()
+        .map(|&n| (n, Vec::with_capacity(cases.len())))
+        .collect();
+
+    for (size, input, expect) in cases {
+        for (i, &name) in selected.iter().enumerate() {
+            let (got, d) = guest_time_one(name, input, rounds);
+            assert_eq!(got, *expect, "guest/{label}(n={size}) 变体 {name} 结果不正确");
+            rows[i].1.push(d);
+        }
+    }
+
+    println!("== guest/{label} ==");
+    print!("  {:<18}", "variant");
+    for (size, _, _) in cases {
+        print!("{:>12}", format!("n={size}"));
+    }
+    println!();
+    for (name, ds) in &rows {
+        print!("  {name:<18}");
+        for d in ds {
+            print!("{:>12.3}", d.as_secs_f64() * 1000.0);
+        }
+        println!();
+    }
+    println!();
 }
 
 fn bench_size(n: usize, rounds: usize, only: Option<&str>) {

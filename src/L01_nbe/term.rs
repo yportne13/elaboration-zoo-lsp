@@ -318,3 +318,110 @@ pub(crate) fn dup_deep_expect(n: usize) -> Term {
     let inner = lam(apply(Term::Idx(0), vec![c.clone(), c]));
     lam(apply(Term::Idx(0), vec![inner.clone(), inner]))
 }
+
+// ===== guest 负载形状（移植自 guest0x0/normalization-bench 的 bench.ml）=====
+//
+// 该基准的负载设计与 L01 原有的单一线性 church_pair 互补：church_mul 压
+// “输出规模 ~n²”的输出构建，parigot/exponential 压“正态形规模 ~2^n 且
+// 求值期高度共享”的 readback（记忆化/共享轴）。规模按 L01 的 Box<Term>
+// 结果表示调小——guest 用 OCaml 的物理共享可到 2^24，L01 的期望值是逐
+// 节点真树，n 上限受内存与递归析构约束（见 bench_guest）。
+
+/// church 乘法：`λm.λn.λsucc.λzero. m (n succ) zero`。
+fn church_mul() -> Term {
+    lam(lam(lam(lam(apply(
+        Term::Idx(3),
+        vec![apply(Term::Idx(2), vec![Term::Idx(1)]), Term::Idx(0)],
+    )))))
+}
+
+/// `church_mul (church n) (church n)` → `church(n²)`。
+pub(crate) fn church_mul_pair(n: usize) -> Term {
+    apply(church_mul(), vec![church(n), church(n)])
+}
+
+/// Parigot 后继：`λn.λsucc.λzero. succ n (n succ zero)`。
+fn parigot_succ() -> Term {
+    lam(lam(lam(apply(
+        Term::Idx(1),
+        vec![
+            Term::Idx(2),
+            apply(Term::Idx(2), vec![Term::Idx(1), Term::Idx(0)]),
+        ],
+    ))))
+}
+
+fn parigot_zero() -> Term {
+    lam(lam(Term::Idx(0)))
+}
+
+/// `aux 0 = 0`；`aux n = succ (λ.λ. aux(n-1)) (aux(n-1))`——后一项出现两次，
+/// 正态形的结构大小随 n 指数增长。
+fn parigot_aux(n: usize) -> Term {
+    match n {
+        0 => Term::Idx(0),
+        _ => {
+            let p = parigot_aux(n - 1);
+            apply(Term::Idx(1), vec![lam(lam(p.clone())), p])
+        },
+    }
+}
+
+/// Parigot 数的**正态形**（`λ.λ. aux n`，结构大小 ~2^n）。
+pub(crate) fn parigot(n: usize) -> Term {
+    lam(lam(parigot_aux(n)))
+}
+
+/// Parigot 数的**共享输入**：`succ (succ … zero)`，求值期各层闭包被引两次。
+fn parigot_shared(n: usize) -> Term {
+    match n {
+        0 => parigot_zero(),
+        _ => Term::App(Box::new(parigot_succ()), Box::new(parigot_shared(n - 1))),
+    }
+}
+
+/// Parigot 加法：`λm.λn. n (λ.λ. succ 0) 0`。
+fn parigot_add() -> Term {
+    lam(lam(apply(
+        Term::Idx(1),
+        vec![
+            lam(lam(apply(parigot_succ(), vec![Term::Idx(0)]))),
+            Term::Idx(0),
+        ],
+    )))
+}
+
+/// `parigot_add (parigot_shared n) (parigot_shared n)` → `parigot(2n)`。
+pub(crate) fn parigot_add_pair(n: usize) -> Term {
+    apply(parigot_add(), vec![parigot_shared(n), parigot_shared(n)])
+}
+
+/// `λx. (λy. y y) ((λy. y y) (… x))`（n 层 `(λy. y y)`）。
+fn exponential_src(k: usize) -> Term {
+    match k {
+        0 => Term::Idx(0),
+        _ => {
+            let yy = lam(Term::App(Box::new(Term::Idx(0)), Box::new(Term::Idx(0))));
+            Term::App(Box::new(yy), Box::new(exponential_src(k - 1)))
+        },
+    }
+}
+
+/// `λx. t(n)`，`t(0)=x`、`t(k+1)=(λy. y y) t(k)`——正态形规模 2^n 且高度共享。
+pub(crate) fn exponential(n: usize) -> Term {
+    lam(exponential_src(n))
+}
+
+/// 上式的期望正态形 `λx. r(n)`，`r(0)=x`、`r(k)=r(k-1) r(k-1)`。
+pub(crate) fn exponential_expect(n: usize) -> Term {
+    fn r(k: usize) -> Term {
+        match k {
+            0 => Term::Idx(0),
+            _ => {
+                let t = r(k - 1);
+                Term::App(Box::new(t.clone()), Box::new(t))
+            },
+        }
+    }
+    lam(r(n))
+}
