@@ -51,13 +51,22 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
+    // 0 轮没有可报告的最小/中位时间，继续下去会在 bench.rs 的
+    // `ts.iter().min().unwrap()` 处 panic；这里提前给出可读诊断。
+    if cli.rounds == 0 {
+        eprintln!("--rounds 必须 ≥ 1（收到 0）");
+        std::process::exit(2);
+    }
     // 大栈线程：bump 系迭代变体（cek_bump/bump_iter/bump_spine_iter）全链路
     // 迭代化后 4MB 栈即可跑到 51 万+（L01_STACK_MB=4 可复验）；仍需大栈的
     // 只有 `cek`（Value 派生 Clone/Drop 对深 Box 树递归，见 cek.rs 头注释）
     // 和小 n 段的递归 import/export 接线。默认 128MB 留足余量。
+    // `L01_STACK_MB=0`（或非法值）视为未设置：0 不是合法栈大小，若直接传给
+    // `stack_size` 会让 spawn 失败 panic，落到 1MB 又会让常规递归负载溢出。
     let stack_mb: usize = std::env::var("L01_STACK_MB")
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&mb| mb > 0)
         .unwrap_or(128);
     std::thread::Builder::new()
         .stack_size(stack_mb << 20)

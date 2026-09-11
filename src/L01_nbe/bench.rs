@@ -35,6 +35,12 @@ use super::{
 const RECURSION_SAFE_MAX: usize = 8000;
 
 pub fn run(max_church: usize, rounds: usize, only: Option<&str>, workload: &str) {
+    // 0 轮会让每个变体的 `ts.iter().min().unwrap()`（本文件多处）取 None 而
+    // panic；入口统一挡住，调用者（l01bench）另有 clap 层诊断。
+    if rounds == 0 {
+        eprintln!("rounds 必须 ≥ 1（收到 0）");
+        return;
+    }
     println!("L01 NBE bench: church_pair(n) = add (church n) (church n) -> church(2n)");
     match only {
         Some(names) => println!("rounds per variant = {rounds}, only variants = {names}\n"),
