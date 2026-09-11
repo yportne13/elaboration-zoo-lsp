@@ -1,6 +1,6 @@
-# L01_nbe — 归一化求值（NBE）：22 种实现的对比与基准
+# L01_nbe — 归一化求值（NBE）：23 种实现的对比与基准
 
-纯 lambda 演算（`Term`，de Bruijn 索引）的正常化（eval + quote），在 22 种
+纯 lambda 演算（`Term`，de Bruijn 索引）的正常化（eval + quote），在 23 种
 表示/策略变体下实现，回答：**项和值的表示方式对求值性能有多大影响？**
 基准负载三族（`--workload`）：丘奇数加法 `church_pair(n)`（默认，线性）、
 复制强制 `dup_pair`/`dup_deep`（开记忆化轴）、以及移植自
@@ -35,6 +35,7 @@ guest0x0/normalization-bench 的 `church_mul`/`parigot_add`/`exponential`
 | `bump_spine_iter` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote | 速度 + 深度（一次性口径的推荐） |
 | `bump_spine_slim` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote | 条目 16B + quote 期连续性推断（实测否决） |
 | `bump_spine_memo` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote + memo | quote 记忆化：值×level → 共享子树（dup 轴） |
+| `bump_spine_memo_inline` | bump 引用树 | bump 引用链表 + spine 栈 | 双栈 + 流式 quote + 内联槽 | 同上但槽挂在值 cell（无哈希表；实测否决） |
 | `bump_spine_rpn` | bump 引用树 | bump 引用链表 + spine 栈 | 递归 + 流式写字节 | quote 直出 RPN 字节流（输出体积 ~2.4× 小） |
 | `native_clo` | 原生闭包树（bump `&dyn Fn`） | bump 引用链表 + spine 栈 | 原生调用 + 流式 quote | β=间接调用（封轴实验，实测否决） |
 
@@ -305,6 +306,29 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
    `f (f (f x))` 形状有效；`r(k)=r(k-1) r(k-1)` 是平衡树，迭代任务栈反而
    多一层固定开销。church_pair（纯右链）完全测不出这一点。
 
+## 内联记忆化槽被否决（`bump_spine_memo_inline`，2026-09）
+
+`bump_spine_memo` 的 quote 记忆化走全局 `FxHashMap<(值, level), 结果>`。受
+"把缓存槽内联进值分支、少一层间接"的常见 NBE 记忆化布局启发，本变体把槽改成
+挂在 `CloCell`/`Entry` 自带的 `Cell<Option<(level, 结果)>>`，彻底去掉哈希与查表。
+实测**否决**（release，min ms）：
+
+| 负载 | `bump_spine_memo` | `bump_spine_memo_inline` | 备注 |
+|---|---|---|---|
+| church_pair 4000 / 8000（线性） | 0.039 / 0.079 | 0.045 / 0.088 | 慢 ~14% |
+| dup_pair 8000 | 0.080 | 0.088 | 慢 ~10% |
+| exponential 20（单调 level 访问） | 0.004 | 0.003 | 略快 |
+| parigot_add 6 / 8 / 10 | 0.073 / 0.112 / 0.203 | 0.340 / 3.510 / **37.713** | **指数级变慢** |
+
+机制：单槽只能留"最后一次 (值, level)"。parigot 的共享子值会在**多个 level**
+下被反复 quote，单槽来回覆盖 → 每次都当 miss 重算 → 共享子树被反复展开，随 n
+指数增长（n=10 慢 186×）。**哈希表能同时保留同一值的多个 level 条目——这一点
+是收益的来源，不是开销**。线性负载上内联槽也不省：`Q` 调用只有 O(λ) 次，哈希
+本就不是瓶颈，而每个 `Entry`/`CloCell` 多 16B（`Entry` 24→40B）的热路径开销
+是实打实的。
+
+结论：保留 `bump_spine_memo` 的哈希表实现；本变体作否决轴保留供复验。
+
 ## 怎么选（结论）
 
 - **默认推荐：`bump_spine_iter`，长驻进程用它的 `Machine` 稳态口径**。
@@ -325,7 +349,9 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
   elaborator 的 conversion checking、let-共享展开的常态）。线性负载付
   3-8% 哈希税；复制强制负载收益 1.8×（×2）/3.6×（×4），**带共享的指数
   负载收益 32×（parigot）/252×（exponential）**，复制被塌缩为单次强制
-  （见"重复求值轴"与"guest 负载形状"）。
+  （见"重复求值轴"与"guest 负载形状"）。哈希表实现已被内联槽版对照验证：
+  后者在 parigot 上因单槽跨 level 抖动而指数变慢（见"内联记忆化槽被否决"）
+  ——**多 (值, level) 条目的能力是必需的**，保留哈希表。
 - `cek_bump` / `bump_iter`：spine 系出现前的迭代答案（CEK kont 栈 vs
   双栈推土机，等价），现为对照保留。
 - `cek`：最简的栈安全实现（慢 ~50×），适合教学/对照。

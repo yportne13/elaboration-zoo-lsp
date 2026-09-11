@@ -1,4 +1,4 @@
-//! 22 个 NBE 变体（加 2 条稳态口径行 `bump_spine_iter_ss`/`bump_spine_slim_ss`）
+//! 23 个 NBE 变体（加 2 条稳态口径行 `bump_spine_iter_ss`/`bump_spine_slim_ss`）
 //! 的对比基准（独立二进制 `l01bench`，见 `src/bin/l01bench.rs`）。
 //!
 //! 工作负载固定为丘奇数加法：`church_pair(n)` = `add (church n) (church n)`，
@@ -26,9 +26,9 @@ use super::term::{self, Term};
 use super::bump_arena::Bt;
 use super::{
     ast_env_arena, bytes_env_arena, bytes_env_arena_tm, bytes_env_list, bytes_flat_value,
-    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_spine_memo, bump_spine_rpn,
-    bump_spine_slim, bump_tree, cek, cek_bump, compiled, env_slice, naive, native_clo, rc_term,
-    rc_value, rpn_owned,
+    bump_arena, bump_iter, bump_spine, bump_spine_iter, bump_spine_memo,
+    bump_spine_memo_inline, bump_spine_rpn, bump_spine_slim, bump_tree, cek, cek_bump, compiled,
+    env_slice, naive, native_clo, rc_term, rc_value, rpn_owned,
 };
 
 /// 递归变体（构造/求值/比较全链路）的栈安全规模上限。
@@ -128,6 +128,7 @@ const GUEST_BUMP_VARIANTS: &[(&str, BumpNorm)] = &[
     ("bump_spine_iter", bump_spine_iter::normalize_imported),
     ("bump_spine_slim", bump_spine_slim::normalize_imported),
     ("bump_spine_memo", bump_spine_memo::normalize_imported),
+    ("bump_spine_memo_inline", bump_spine_memo_inline::normalize_imported),
 ];
 
 /// guest 负载的变体展示顺序。
@@ -143,6 +144,7 @@ const GUEST_ORDER: &[&str] = &[
     "bump_spine_iter_ss",
     "bump_spine_slim",
     "bump_spine_memo",
+    "bump_spine_memo_inline",
 ];
 
 /// 单变体在给定输入上的（结果，最小耗时）。预热 1 次 + `rounds` 轮；import/
@@ -781,6 +783,31 @@ fn bench_size(n: usize, rounds: usize, only: Option<&str>) {
         rows.push(("bump_spine_memo", *ts.iter().min().unwrap(), median(&mut ts)));
     }
 
+    // bump_spine_memo_inline — 同上，但记忆化槽内联在值 cell（无哈希表）
+    if want("bump_spine_memo_inline") {
+        let got = {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_arena::export(bump_spine_memo_inline::normalize_imported(&bump, tm))
+        };
+        assert_eq!(got, check, "bump_spine_memo_inline 结果不正确");
+        {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n));
+            bump_spine_memo_inline::normalize_imported(&bump, tm);
+        }
+        let mut ts = Vec::with_capacity(rounds);
+        for _ in 0..rounds {
+            let bump = Bump::with_capacity(1 << 20);
+            let tm = bump_arena::import(&bump, &term::church_pair(n)); // import 在计时外
+            let start = Instant::now();
+            let res = bump_spine_memo_inline::normalize_imported(&bump, tm);
+            ts.push(start.elapsed());
+            assert_eq!(bump_arena::export(res), check);
+        }
+        rows.push(("bump_spine_memo_inline", *ts.iter().min().unwrap(), median(&mut ts)));
+    }
+
     // bump_spine_rpn — spine 系 + RPN 扁平输出：quote 不建结果树，直接写字节流
     if want("bump_spine_rpn") {
         {
@@ -843,7 +870,7 @@ fn bench_dup(n: usize, rounds: usize, only: Option<&str>) {
         None => true,
         Some(list) => list.split(',').any(|x| x == name),
     };
-    if !(want("bump_spine_iter") || want("bump_spine_memo")) {
+    if !(want("bump_spine_iter") || want("bump_spine_memo") || want("bump_spine_memo_inline")) {
         return;
     }
 
@@ -902,6 +929,31 @@ fn bench_dup(n: usize, rounds: usize, only: Option<&str>) {
                 assert_eq!(bump_arena::export(res), check);
             }
             rows.push(("bump_spine_memo", *ts.iter().min().unwrap(), median(&mut ts)));
+        }
+
+        if want("bump_spine_memo_inline") {
+            let got = {
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &input(n));
+                bump_arena::export(bump_spine_memo_inline::normalize_imported(&bump, tm))
+            };
+            assert_eq!(got, check, "bump_spine_memo_inline {name} 结果不正确");
+            {
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &input(n));
+                bump_spine_memo_inline::normalize_imported(&bump, tm);
+            }
+            let mut ts = Vec::with_capacity(rounds);
+            for _ in 0..rounds {
+                let t = input(n);
+                let bump = Bump::with_capacity(1 << 20);
+                let tm = bump_arena::import(&bump, &t); // import 在计时外
+                let start = Instant::now();
+                let res = bump_spine_memo_inline::normalize_imported(&bump, tm);
+                ts.push(start.elapsed());
+                assert_eq!(bump_arena::export(res), check);
+            }
+            rows.push(("bump_spine_memo_inline", *ts.iter().min().unwrap(), median(&mut ts)));
         }
 
         println!("== {name}({n}) — 复制强制：无记忆化时 quote 强制 C 2×/4× ==");
