@@ -561,6 +561,32 @@ elaboration 路径比参考版多展开了隐参/洞**，从而多发 `fresh_met
 步可用"按 `fresh_meta` 调用点给调用方打 tag"定位多出的 46 次来自哪个路径
 （Phase A/B、ns 方法缓存探测、trait 候选 elaborat​ion 等），这是收敛的单点调试。
 
+**2026-09-11 调用方 backtrace（本轮最后一步，插桩已移除）**：在孪生
+`fresh_meta` 的登记分支抓 `std::backtrace::Backtrace`（对本机源码行可达），
+滤掉 `Add` 的大头后聚合 428 条：
+
+```
+ 341  Data       caller=:6607  up=:6628
+  32  Sub        caller=:6607  up=:6628
+  21  Cons       caller=:6607  up=:6628
+  13  LetNamed   caller=:6607  up=:6605
+  12  Equal      caller=:6607  up=:6628
+   5  Into       caller=:6607  up=:6628
+```
+
+**所有额外登记都出自同一行** `bump_spine_iter.rs:6607`——即 `insert_go` 里
+"Pi 的隐式域 → `fresh_meta`（隐参洞）"那一步。所以不是"多了不同调用点"，而是
+**孪生对 18-utils 用户文件多执行了约 46 次隐参插入**；多出的 `LetNamed` 洞正是
+后来 trait 求解失败的那批。上游成因是孪生某处对用户 decl 的 elaboration 重复
+（check/infer 调用次数多于参考版），属引擎级重复，不是单点补丁。
+
+**收敛到此为止的结论**：18-utils 孪生分叉 = 用户段 elaboration 比参考版多跑
+约 46 次隐参插入 → 多登记对应 trait meta → `LetNamed` 那条在
+`mv >= m` 扫描中被递归求解并失败 → 错误外传。要修须做**逐 decl 的
+`insert_go`/`fresh_meta` 调用计数对照**（两版同一 decl 的计数差即定位点），
+这是有界的下一步；在拿到该计数前不宜改引擎。
+
+
 
 
 
