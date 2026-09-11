@@ -94,10 +94,10 @@ fn bench_guest(rounds: usize, only: Option<&str>) {
         ("church_mul", &[50, 100, 200], |n| {
             (term::church_mul_pair(n), term::church(n * n))
         }),
-        ("parigot_add", &[4, 6, 8], |n| {
+        ("parigot_add", &[4, 6, 8, 10], |n| {
             (term::parigot_add_pair(n), term::parigot(2 * n))
         }),
-        ("exponential", &[10, 14, 18], |n| {
+        ("exponential", &[10, 14, 18, 20], |n| {
             (term::exponential(n), term::exponential_expect(n))
         }),
     ];

@@ -270,8 +270,11 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
 - `exponential`：`λx. t(n)`，`t(0)=x`、`t(k+1)=(λy. y y) t(k)`；正态形
   `λx. r(n)`（`r(0)=x`、`r(k)=r(k-1) r(k-1)`）规模 2^n 且高度共享。
 
-规模按 L01 的 `Box<Term>` 结果表示调小（guest 用 OCaml 物理共享能到 2^24
-节点，L01 的期望值是逐节点真树，受内存与递归析构约束）。未移植：
+规模按 L01 的 `Box<Term>` 结果表示取（guest 用 OCaml 物理共享能到 2^24
+节点，L01 的期望值是逐节点真树，受内存与递归析构约束）：`church_mul`
+[50, 100, 200]、`parigot_add` [4, 6, 8, 10]、`exponential` [10, 14, 18, 20]
+（`exponential 20` 的期望树已达 2^20 ≈ 1M 节点，接近 L01 实际上限）。
+未移植：
 
 - `random`：需 `count_terms.ml` 生成的项计数表 + 发散项超时过滤，且随机
   项可能含 Ω 类发散项；混合形状（穿插链、β 岔路、混合链头）的 fallback
@@ -280,25 +283,25 @@ v 的整棵子任务跑完后屏障弹出、done 栈顶恰是完整结果——�
 
 实测（release，min ms，rounds 5；完整表见 `l01bench --workload guest`）：
 
-| 变体 | church_mul n=200 | parigot_add n=8 | exponential n=18 |
+| 变体 | church_mul n=200 | parigot_add n=10 | exponential n=20 |
 |---|---|---|---|
-| `naive` | 151.16 | 18.26 | 16.64 |
-| `bump_tree` | 0.817 | 3.645 | 1.476 |
-| `bump_spine` | 0.315 | 3.451 | 1.261 |
-| `bump_spine_iter` | 0.188 | 6.251 | 2.497 |
-| `bump_spine_iter_ss` | 0.150 | 6.097 | 2.546 |
-| **`bump_spine_memo`** | 0.206 | **0.108** | **0.005** |
+| `naive` | 168.05 | 336.61 | 73.80 |
+| `bump_tree` | 0.827 | 62.05 | 6.292 |
+| `bump_spine` | 0.387 | 59.21 | 5.166 |
+| `bump_spine_iter` | 0.317 | 112.45 | 10.134 |
+| `bump_spine_iter_ss` | 0.241 | 107.29 | 10.140 |
+| **`bump_spine_memo`** | 0.214 | **0.207** | **0.010** |
 
 两个 church_pair 单一负载看不出来的结论：
 
-1. **共享轴上 memo 是碾压性的**：`parigot_add n=8` 比最快的非 memo 变体
-   （`bump_spine` 3.45）快 **32×**，`exponential n=18` 快 **252×**——远超
+1. **共享轴上 memo 是碾压性的**：`parigot_add n=10` 比最快的非 memo 变体
+   （`bump_spine` 59.2）快 **286×**，`exponential n=20` 快 **517×**——远超
    dup 轴的 1.8×/3.6×（那只是 2×/4× 复制，这里是 2^n 复制被塌缩）。
-   线性负载上 memo 只付哈希税（`church_mul` 0.206 vs iter 0.188，+10%），
+   线性负载上 memo 只付哈希税（`church_mul` 0.214 vs `_ss` 0.241，在噪声内），
    一旦负载带共享就是数量级收益。**elaborator 的 conversion checking /
    let-共享展开正是这种负载**，故 memo 应作为带共享场景的默认。
 2. **非右链形状下递归版反超迭代版**：`bump_spine`（递归）在 parigot/
-   exponential 上比 `bump_spine_iter` 快 ~1.8×/2.0×。流式右链快速路径只对
+   exponential 上比 `bump_spine_iter` 快 ~1.9×/2.0×。流式右链快速路径只对
    `f (f (f x))` 形状有效；`r(k)=r(k-1) r(k-1)` 是平衡树，迭代任务栈反而
    多一层固定开销。church_pair（纯右链）完全测不出这一点。
 
