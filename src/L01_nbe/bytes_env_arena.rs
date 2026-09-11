@@ -2,7 +2,8 @@
 //! 追加式下标，求值不再分配 `Rc` 节点，多次求值可复用同一 arena。
 //!
 //! 项仍是 `to_vec2` 前缀字节码；闭包体以 `Rc<Vec<u8>>` 存进值（`Lam` 的
-//! 第二字段是环境链头）。L01a 时代的 readme 判定本变体最快——该结论
+//! 第一字段是环境链头、第二字段是闭包体）。L01a 时代的 readme 判定本变体
+//! 最快——该结论
 //! 现在由 `typort bench` 复核（见模块 readme）。
 
 use std::{num::NonZeroUsize, rc::Rc};
@@ -47,6 +48,8 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
             let result = apply_val(value1, value2, arena);
             (result, final_tm)
         },
+        // SAFETY: `tm` 必须由 `Term::to_vec2` 产出（见 term.rs 的编码契约），
+        // tag 只可能是 0/1/2 且各字段长度自洽；畸形输入属调用方违约。
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
@@ -97,6 +100,11 @@ fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>, arena: &mut L
 
             // 回填长度
             let len = (ret.len() - pos - 9) as u64;
+            // SAFETY: `pos + 1` 处是上面 `extend_from_slice(&0u64.to_le_bytes())`
+            // 已写入的 8 字节长度占位，位于 `ret` 的已初始化区间内（`ret.len()`
+            // 只会增长，此处 `len` 覆盖后 `ret` 未再收缩）；`pos + 1 .. pos + 9`
+            // 与该占位完全重合。用 `write_unaligned` 是因为不假设 Vec 缓冲的
+            // 8 字节对齐。
             unsafe {
                 (ret.as_mut_ptr().add(pos + 1) as *mut u64).write_unaligned(len.to_le());
             }
@@ -110,5 +118,5 @@ fn quote_append(level: usize, value: Rc<Value>, ret: &mut Vec<u8>, arena: &mut L
 }
 
 pub(crate) fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    quote(0, eval(unsafe { NonZeroUsize::new_unchecked(1) }, &t, arena).0.into(), arena)
+    quote(0, eval(ListArena::<Value>::empty(), &t, arena).0.into(), arena)
 }

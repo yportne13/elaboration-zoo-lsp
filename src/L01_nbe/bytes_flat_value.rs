@@ -2,8 +2,9 @@
 //! 同一套布局。彻底去掉 enum 判分派和 `Rc`，`apply_val`/`quote` 直接按
 //! 字节前缀匹配；环境用 `ListArena`（`Lam` 的 env 与体长都内联在值里）。
 //!
-//! 代价：每次把值塞进环境都要整段 memcpy，`App` 值也是两个子值的字节
-//! 拼接——空间换掉了引用的间接性。
+//! 代价：查表 `nth` 要 `clone()` 整段值、`App` 值是两个子值的字节拼接，
+//! 每步都在整段 memcpy——空间换掉了引用的间接性（`prepend` 入表本身是
+//! move，memcpy 发生在读取与拼接处）。
 
 use std::num::NonZeroUsize;
 
@@ -52,6 +53,8 @@ fn eval<'a>(env: NonZeroUsize, tm: &'a [u8], arena: &mut ListArena<Value>) -> (V
             let result = apply_val(value1, value2, arena);
             (result, final_tm)
         },
+        // SAFETY: `tm` 必须由 `Term::to_vec2` 产出（见 term.rs 的编码契约），
+        // tag 只可能是 0/1/2 且字段长度自洽；畸形输入属调用方违约。
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
@@ -72,6 +75,8 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>) -> Value {
             tail,
             arena
         ).0,
+        // SAFETY: Lam 值恒带完整的 env(8B)+len(8B)+体，长度由构造保证；
+        // 长度字段截断（< 17B）属构造期不变量被破坏，非本分支可达状态。
         [1, ..] => unsafe { std::hint::unreachable_unchecked() },
         _ => Value({
             let mut ret = Vec::with_capacity(1 + vf.0.len() + va.0.len());
@@ -107,6 +112,9 @@ fn quote_append<'a>(level: usize, value: &'a [u8], ret: &mut Vec<u8>, arena: &mu
             b0, b1, b2, b3, b4, b5, b6, b7,
             tail @ ..
         ] => {
+            // SAFETY: `Value::Lam` 的 env 字段来自 `ListArena` 下标（`env.get()`
+            // 或 `prepend` 返回值），`ListArena` 只追加不收缩且下标从 1 起，
+            // 故非零。
             let env = unsafe { NonZeroUsize::new_unchecked(usize::from_le_bytes([*a0, *a1, *a2, *a3, *a4, *a5, *a6, *a7])) };
             let (body, tail) = tail.split_at(usize::from_le_bytes([*b0, *b1, *b2, *b3, *b4, *b5, *b6, *b7]));
             let t = quote(
@@ -125,10 +133,11 @@ fn quote_append<'a>(level: usize, value: &'a [u8], ret: &mut Vec<u8>, arena: &mu
             let tail = quote_append(level, tail, ret, arena);
             quote_append(level, tail, ret, arena)
         },
+        // SAFETY: 同 `eval`——值由本文件的构造路径产出，tag 只会是 0/1/2。
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
 
 pub(crate) fn normalize(t: Vec<u8>, arena: &mut ListArena<Value>) -> Vec<u8> {
-    quote(0, &eval(unsafe { NonZeroUsize::new_unchecked(1) }, &t, arena).0.0, arena).0
+    quote(0, &eval(ListArena::<Value>::empty(), &t, arena).0.0, arena).0
 }

@@ -25,18 +25,35 @@ impl<T> ListArena<T> {
     pub fn alloc(&mut self, value: T) -> NonZeroUsize {
         let index = self.0.len();
         self.0.push((value, None));
+        // SAFETY: `len()` 从 1 起（`new` 预置下标 0），且 push 只会让长度继续
+        // 增长，故 index ≥ 1，永不为 0。
         unsafe { NonZeroUsize::new_unchecked(index) }
+    }
+
+    /// 空环境哨兵（下标 1，语义见模块头）。
+    ///
+    /// 它不是 arena 里预先存在的槽位——首次 `prepend` 才落在下标 1 并把链尾
+    /// 后继指回自身形成自环。因此本值只能在**首次 prepend 之前**作为空环境
+    /// 传递，且只有闭项（索引深度 < 环境深度）的 `nth` 不会走到哨兵；开项
+    /// 误用会在 release 下静默读到首个绑定（见 `nth`）。用这个名字取代各处
+    /// 手写的 `NonZeroUsize::new_unchecked(1)`，让哨兵约定只有一个定义点。
+    pub fn empty() -> NonZeroUsize {
+        // SAFETY: 1 != 0，NonZeroUsize 的构造前提成立。
+        unsafe { NonZeroUsize::new_unchecked(1) }
     }
 
     pub fn prepend(&mut self, list: NonZeroUsize, value: T) -> NonZeroUsize {
         let index = self.0.len();
         self.0.push((value, Some(list)));
+        // SAFETY: 同 `alloc`，`len()` ≥ 1。
         unsafe { NonZeroUsize::new_unchecked(index) }
     }
 
     pub fn nth(&self, list: NonZeroUsize, idx: usize) -> &T {
         let mut list = list;
         for _ in 0..idx {
+            // SAFETY: 契约是「闭项」——`idx < 环境深度`，步进次数不足以越过
+            // 最后一个真实节点，故 `list.get()` 恒落在已初始化槽位内。
             let node = unsafe { self.0.get_unchecked(list.get()) };
             // 越界防护（debug 构建）：合法闭项的查找步数 < 环境深度，绝不会
             // 从链尾哨兵（自环，下标 1）再步进——这里提前炸出误用；release
@@ -46,8 +63,11 @@ impl<T> ListArena<T> {
                 node.1 != Some(list),
                 "ListArena::nth 越界：闭项不应从链尾哨兵（自环）再步进"
             );
+            // SAFETY: 同上——契约保证步进后仍有真实节点，`next` 为 Some。
             list = unsafe { node.1.unwrap_unchecked() };
         }
+        // SAFETY: 契约保证最终落点（含 idx == 0 的空环境、首次 prepend 后
+        // 的下标 1）是已初始化槽位。
         unsafe { &self.0.get_unchecked(list.get()).0 }
     }
 }

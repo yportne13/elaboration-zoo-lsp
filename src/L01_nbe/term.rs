@@ -12,8 +12,11 @@
 //!   共享的 `arena_tm: Vec<Rc<Vec<u8>>>`，字节流里只存下标
 //!   （`bytes_env_arena_tm` 用）。
 //!
-//! 编码本身带长度字段（`Lam` 体用小端 u64 记长），解码时可直接切出子串；
-//! 所有 `from_*` 都用 `get_unchecked` 假定输入由对应的 `to_*` 产生。
+//! 编码本身带长度字段（`Lam` 体用小端 u64 记长），解码时可直接切出子串。
+//! 三个 `from_*` 都**假定输入由对应的 `to_*` 产出**：`from_vec` 用
+//! `get_unchecked` 读 tag/负载，`from_vec2`/`from_vec3` 用安全下标但把未知
+//! tag 交给 `unreachable_unchecked`——畸形输入一律是调用方违约（release 下
+//! 可能 UB，而非受控 panic）。
 
 use std::rc::Rc;
 
@@ -55,6 +58,8 @@ impl Term {
     }
 
     pub fn from_vec(mut bytes: Vec<u8>) -> (Term, Vec<u8>) {
+        // SAFETY: 契约（模块头）是 `bytes` 由 `to_vec` 产出，故至少含 1 字节
+        // tag；畸形/空输入属调用方违约（release 为 UB）。
         let tag = unsafe { *bytes.get_unchecked(bytes.len() - 1) };
         bytes.pop();
 
@@ -63,6 +68,8 @@ impl Term {
                 // Idx case: read 8 bytes as usize
                 let mut idx_bytes = [0u8; 8];
                 let start = bytes.len() - 8;
+                // SAFETY: `to_vec` 的 Idx 分支在 tag 前写了完整 8 字节索引，
+                // `start..start+8` 落在该负载内。
                 idx_bytes.copy_from_slice(unsafe { bytes.get_unchecked(start..start + 8) });
                 bytes.truncate(start);
                 let idx = usize::from_le_bytes(idx_bytes);
@@ -72,6 +79,8 @@ impl Term {
                 // Lam case: read length (8 bytes) and extract term
                 let mut len_bytes = [0u8; 8];
                 let start = bytes.len() - 8;
+                // SAFETY: `to_vec` 的 Lam 分支在 tag 前写了完整 8 字节长度，
+                // `start..start+8` 落在该字段内。
                 len_bytes.copy_from_slice(unsafe { bytes.get_unchecked(start..start + 8) });
                 bytes.truncate(start);
                 let len = u64::from_le_bytes(len_bytes) as usize;
@@ -87,6 +96,7 @@ impl Term {
                 let (arg1, final_remaining) = Term::from_vec(remaining);
                 (Term::App(Box::new(arg1), Box::new(arg2)), final_remaining)
             },
+            // SAFETY: `to_vec` 产出的 tag 只会是 0/1/2；畸形输入属调用方违约。
             _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
@@ -146,6 +156,7 @@ impl Term {
                     let a = parse_at(bytes, pos);
                     Term::App(Box::new(f), Box::new(a))
                 },
+                // SAFETY: `bytes` 必须由 `to_vec2` 产出；tag 只会是 0/1/2。
                 _ => unsafe { std::hint::unreachable_unchecked() },
             }
         }
@@ -207,6 +218,7 @@ impl Term {
                     let a = parse_at(bytes, arena_tm, pos);
                     Term::App(Box::new(f), Box::new(a))
                 },
+                // SAFETY: `bytes` 必须由 `to_vec3` 产出；tag 只会是 0/1/2。
                 _ => unsafe { std::hint::unreachable_unchecked() },
             }
         }

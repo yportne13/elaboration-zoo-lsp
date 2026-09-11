@@ -40,6 +40,9 @@ fn eval(env: List<Value>, tm: &[u8]) -> (Value, &[u8]) {
             let result = apply_val(value1, value2);
             (result, final_tm)
         },
+        // SAFETY: `tm` 必须由 `Term::to_vec2` 产出（见 term.rs 的编码契约），
+        // tag 只可能是 0/1/2 且各字段长度自洽；畸形输入属调用方违约（release
+        // 下为 UB，本函数不为其提供分支）。
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }

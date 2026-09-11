@@ -50,6 +50,8 @@ fn eval<'a>(
             let result = apply_val(value1, value2, arena, arena_tm);
             (result, final_tm)
         },
+        // SAFETY: `tm` 必须由 `Term::to_vec3` 产出（见 term.rs 的编码契约），
+        // tag 只可能是 0/1/2 且各字段长度自洽；畸形输入属调用方违约。
         _ => unsafe { std::hint::unreachable_unchecked() },
     }
 }
@@ -62,6 +64,8 @@ fn apply_val(vf: Value, va: Value, arena: &mut ListArena<Value>, arena_tm: &mut 
     match vf {
         Value::Lam(env, body) => {
             // 克隆 Rc 使借用独立于 arena_tm（eval 内部还要可变借用 arena_tm）
+            // SAFETY: `body` 是 `to_vec3` 编码期写入的 `arena_tm` 下标（见
+            // term.rs:158-181），且同一 `arena_tm` 只追加不收缩，故恒在界内。
             let body_tm = unsafe { arena_tm.get_unchecked(body) }.clone();
             eval(arena.prepend(env, va), &body_tm, arena, arena_tm).0
         },
@@ -99,6 +103,7 @@ fn quote_append(
         },
         Value::Lam(env, body) => {
             // 计算闭包体的值，再压进 arena_tm，字节流里只写下标
+            // SAFETY: 同 `apply_val`——`body` 是同一 `arena_tm` 的既有下标。
             let body_tm = unsafe { arena_tm.get_unchecked(*body) }.clone();
             let (evaluated_body, _) = eval(arena.prepend(*env, Value::Lvl(level)), &body_tm, arena, arena_tm);
 
@@ -120,5 +125,5 @@ pub(crate) fn normalize(
     arena: &mut ListArena<Value>,
     arena_tm: &mut Vec<Rc<Vec<u8>>>,
 ) -> Vec<u8> {
-    quote(0, eval(unsafe { NonZeroUsize::new_unchecked(1) }, &t, arena, arena_tm).0.into(), arena, arena_tm)
+    quote(0, eval(ListArena::<Value>::empty(), &t, arena, arena_tm).0.into(), arena, arena_tm)
 }

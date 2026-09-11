@@ -73,5 +73,5 @@ fn quote(level: usize, value: Value, arena: &mut ListArena<Value>) -> Term {
 }
 
 pub(crate) fn normalize(t: Term, arena: &mut ListArena<Value>) -> Term {
-    quote(0, eval(unsafe { NonZeroUsize::new_unchecked(1) }, t, arena), arena)
+    quote(0, eval(ListArena::<Value>::empty(), t, arena), arena)
 }
