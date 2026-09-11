@@ -296,3 +296,45 @@ fn steady_state_reuse() {
     assert_eq!(a, b, "跨轮 mutable 全局泄漏");
     assert_parity(gsrc);
 }
+
+// 解析护栏（L11/L12 同款探针，f51a0e4 家族在 L13 的贴齐验证）
+// --------------------------------------------------------------------------------
+
+/// 超大整数字面量（>u64::MAX）不得 panic：推一条解析错误并退化为 Hole。
+#[test]
+fn probe_big_int_literal_recoverable() {
+    let src = "def x = 99999999999999999999999999\n";
+    // parser 返回值含 Rc（!Send）不能跨线程传递：Some/错误条数的解包与
+    // 判定在线程内完成，只回传 Send 的 (是否 Some, 解析错误条数)。
+    let res = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || match L13_namespace::parser::parser(src, 0) {
+            Some((_, errs)) => (true, errs.len()),
+            None => (false, 0usize),
+        })
+        .unwrap()
+        .join();
+    assert!(res.is_ok(), "超大整数不应 panic");
+    let (some, n_errs) = res.unwrap();
+    assert!(some, "parser 应返回 Some");
+    assert!(n_errs > 0, "超大整数应产生解析错误");
+}
+
+/// 自递归宏受展开深度上限保护（thread_local + RAII，上限 256），不得栈溢出。
+#[test]
+fn probe_macro_self_recursion_depth_limit() {
+    let src = "macro_rules m { () => { m } }\ndef x = m\n";
+    // 同上：!Send 的解析结果不留出线程，线程只回传 (是否 Some, 解析错误条数)。
+    let res = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || match L13_namespace::parser::parser(src, 0) {
+            Some((_, errs)) => (true, errs.len()),
+            None => (false, 0usize),
+        })
+        .unwrap()
+        .join();
+    assert!(res.is_ok(), "自递归宏不应栈溢出");
+    let (some, n_errs) = res.unwrap();
+    assert!(some, "parser 应返回 Some");
+    assert!(n_errs > 0, "自递归宏应产生解析错误而非无限展开");
+}

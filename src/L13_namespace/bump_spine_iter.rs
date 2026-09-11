@@ -494,6 +494,9 @@ pub(crate) fn v_lvl_of(v: V) -> u32 {
 }
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
+    // SAFETY: v 是 `v_clo` 写出的 tag 1 打包字（`ptr|1`）。`CloCell` 由
+    // `#[repr(align(8))]` 保证 ≥8 对齐，`& !7` 恰好还原分配地址；生命周期
+    // 由调用方按 bump 轮次不变式（reset 前句柄消亡）担保。
     unsafe { &*((v.0 & !7) as *const CloCell) }
 }
 #[inline]
@@ -502,6 +505,8 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 }
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
+    // SAFETY: v 是 `v_pi` 写出的 tag 4 打包字（`ptr|4`）。`PiCell` 含 `V(u64)`
+    // 字段故天然 ≥8 对齐（下方 const 断言钉住），`& !7` 还原分配地址。
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -516,6 +521,8 @@ pub(crate) fn v_u_of(v: V) -> u32 {
 /// tag 7 单元解引用（bump 内分配，本轮内有效）。
 #[inline]
 pub(crate) fn v_xcell_of<'a>(v: V) -> &'a XCell<'a> {
+    // SAFETY: v 是 `v_xcell` 写出的 tag 7 打包字（`ptr|7`）。`XCell` 由
+    // `#[repr(align(8))]` 保证 ≥8 对齐（含 wasm32），`& !7` 恰好还原分配地址。
     unsafe { &*((v.0 & !7) as *const XCell) }
 }
 
@@ -540,6 +547,11 @@ pub(crate) struct SumDataV<'a> {
 /// 本体、构造子值、内联调用、卡住 match。判等按单元指针（同内容不同次
 /// 求值各造单元——与参考版每次构造新值同构）；**位相等捷径对 tag 7
 /// 关闭**（见模块注释）。
+///
+/// `#[repr(align(8))]`：packed 编码用 `ptr | 7` 写、`v.0 & !7` 读回，要求
+/// 单元地址低 3 位为 0。64 位目标 `&str` 已 8 对齐，但 wasm32 上 `&str`
+/// 仅 4 字节对齐，故显式钉死 ≥8（下方有编译期断言）。
+#[repr(align(8))]
 pub(crate) enum XCell<'a> {
     Lit(&'a str),
     /// 原生 Nat（参考版 `Val::Nat(u64)`，Lean/Agda 式压缩）：定义上等于
@@ -727,6 +739,7 @@ pub(crate) fn env_ext_defs<'a>(
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+#[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
     icit: Icit,
@@ -742,6 +755,18 @@ pub(crate) struct PiCell<'a> {
     env: Env<'a>,
     body: &'a Tm<'a>,
 }
+
+/// 编译期钉住所有经 `ptr|tag` 编码的单元类型 ≥8 对齐：`v_clo`/`v_pi`/
+/// `v_xcell` 写 `ptr|tag`，对应 `v_*_of` 用 `& !7` 解引用，地址低 3 位必须
+/// 为 0。64 位目标天然满足；wasm32（`&str` 仅 4 对齐）靠上面的
+/// `#[repr(align(8))]`。`EnvCons` 不直接经 packed 字编码（env 走直接引用），
+/// 但同样断言以钉住 packed 值字段的对齐不变式。
+const _: () = {
+    assert!(std::mem::align_of::<XCell<'static>>() >= 8);
+    assert!(std::mem::align_of::<CloCell<'static>>() >= 8);
+    assert!(std::mem::align_of::<PiCell<'static>>() >= 8);
+    assert!(std::mem::align_of::<EnvCons<'static>>() >= 8);
+};
 
 // spine 栈（扁平中性）
 // --------------------------------------------------------------------------------
@@ -5247,6 +5272,25 @@ fn prune_ty_bump<'a>(
     Some(t)
 }
 
+/// `String`（solve/prune 密集负载下 `lams_from_ty` 每 λ 层都要一个）。
+/// （五方同款样板（L03-L10 twin，a806ff0 家族）；本层为继承连贯性轮补齐。）
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `lams l a t`：沿 **meta 类型**的 Π 层包 λ（名字与 icit 随 Π，`"_"` 改名
 /// `x{l'}`；逐层用 `VVar l'` 剥闭包）。
 #[allow(clippy::too_many_arguments)]
@@ -5273,7 +5317,7 @@ fn lams_from_ty<'a>(
         let p = v_pi_of(cur);
         let (name, icit, env, body_tm) = (p.name, p.icit, p.env, p.body);
         let name = if name == "_" {
-            bump.alloc_str(&format!("x{}", lp))
+            alloc_xname(bump, lp)
         } else {
             name
         };
