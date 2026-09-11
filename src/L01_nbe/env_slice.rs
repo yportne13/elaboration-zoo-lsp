@@ -21,7 +21,7 @@ enum BvS<'a> {
 
 /// 环境扩展：`[v] ++ env`（复制旧环境，新值在头部）。
 fn prepend<'a>(bump: &'a Bump, env: &'a [BvS<'a>], v: BvS<'a>) -> &'a [BvS<'a>] {
-    let mut dst = bump.alloc_slice_fill_copy(env.len() + 1, BvS::Lvl(0)); // 占位
+    let dst = bump.alloc_slice_fill_copy(env.len() + 1, BvS::Lvl(0)); // 占位
     dst[0] = v;
     dst[1..].copy_from_slice(env);
     dst
@@ -87,8 +87,78 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_imported
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = bump_arena::import(&bump, &t);
     bump_arena::export(normalize_imported(&bump, tm))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::term::{self, Term};
+    use super::normalize;
+
+    #[test]
+    fn church_pair_ok() {
+        assert_eq!(normalize(term::church_pair(5)), term::church(10));
+    }
+
+    #[test]
+    fn already_normal_right_chain() {
+        // λf.λx. f (f (f (f x)))：已正态，归一化须逐字还原
+        let input = {
+            let mut t = Term::Idx(0);
+            for _ in 0..4 {
+                t = Term::App(Box::new(Term::Idx(1)), Box::new(t));
+            }
+            Term::Lam(Box::new(Term::Lam(Box::new(t))))
+        };
+        assert_eq!(normalize(input.clone()), input);
+    }
+
+    #[test]
+    fn beta_under_binder() {
+        // λg. (λx. x) g → λg. g
+        let inner = Term::App(Box::new(Term::Lam(Box::new(Term::Idx(0)))), Box::new(Term::Idx(0)));
+        let input = Term::Lam(Box::new(inner));
+        assert_eq!(normalize(input), Term::Lam(Box::new(Term::Idx(0))));
+    }
+
+    #[test]
+    fn interleaved_chains_fallback() {
+        // λf.λg.λx. (λy. (f y) (g y)) (f x) → λf.λg.λx. (f (f x)) (g (f x))
+        let idx = |i: usize| Term::Idx(i);
+        let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
+        let lam = |b: Term| Term::Lam(Box::new(b));
+        let inner = app(app(idx(3), idx(0)), app(idx(2), idx(0)));
+        let input = lam(lam(lam(app(lam(inner), app(idx(2), idx(0))))));
+        let expect = lam(lam(lam(app(
+            app(idx(2), app(idx(2), idx(0))),
+            app(idx(1), app(idx(2), idx(0))),
+        ))));
+        assert_eq!(normalize(input), expect);
+    }
+
+    #[test]
+    fn chain_beta_fork() {
+        // (λf.λx. f (f x)) (λu.u) → λx. x
+        let idx = |i: usize| Term::Idx(i);
+        let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
+        let lam = |b: Term| Term::Lam(Box::new(b));
+        let id = lam(idx(0));
+        let church2 = lam(lam(app(idx(1), app(idx(1), idx(0)))));
+        let input = app(church2, id.clone());
+        assert_eq!(normalize(input), id);
+    }
+
+    #[test]
+    fn chain_mixed_heads() {
+        // λf.λg.λx. f (g x)：连续右链、链头不同
+        let idx = |i: usize| Term::Idx(i);
+        let app = |f: Term, a: Term| Term::App(Box::new(f), Box::new(a));
+        let lam = |b: Term| Term::Lam(Box::new(b));
+        let input = lam(lam(lam(app(idx(2), app(idx(1), idx(0))))));
+        assert_eq!(normalize(input.clone()), input);
+    }
 }
