@@ -6180,19 +6180,22 @@ impl Machine {
             if idx >= self.metas.len() {
                 continue;
             }
-            let x = match &self.metas[idx] {
-                MetaEntry::Unsolved(v, ..) => *v,
+            let (x, snap): (V, Rc<MetaSnap<'static>>) = match &self.metas[idx] {
+                MetaEntry::Unsolved(v, s, ..) => (*v, s.clone()),
                 _ => continue,
             };
             // 用 **meta 创建处**的上下文求解（参考版 `meta_cxt`）：goal 里的
             // Rigid 层级按创建处 de Bruijn 编号，用调用方的浅上下文会让
             // rename/quote 算出越界变量。
-            let meta_cxt: &Cxt<'a> = match &self.metas[idx] {
-                MetaEntry::Unsolved(_, s, ..) => unsafe {
-                    &*(&s.cxt as *const Cxt<'static> as *const Cxt<'a>)
-                },
-                _ => continue,
-            };
+            //
+            // `snap` 是**保命强引用**：`solve_trait_ref` 的候选实例走嵌套
+            // unify 时可能把 `self.metas[idx]` 换成 `Solved`，丢掉该快照最后
+            // 一个 `Rc` —— 不留住，下面的 solve 就会读已释放快照的 `cxt`
+            // （释放块填充 `0xFEEEFEEE`，读 `cxt.decls` 即
+            // `HashMap::get` 解引用野指针 → STATUS_ACCESS_VIOLATION）。参考版
+            // 同点位是 `arc_cxt.as_ref().clone()` 先克隆 `Arc` 再调 `&mut self`。
+            let meta_cxt: &Cxt<'a> =
+                unsafe { &*(&snap.cxt as *const Cxt<'static> as *const Cxt<'a>) };
             let typ = self
                 .solve_trait_ref(bump, meta_cxt, x, allow_flex_defaulting)
                 .map_err(|e| e)?;

@@ -1,9 +1,11 @@
-# L13 并行测试 STATUS_ACCESS_VIOLATION：悬垂 decl 表句柄（2026-09-11）
+# L13 并行测试 STATUS_ACCESS_VIOLATION：悬垂 meta 快照——**已修复**（2026-09-11）
 
-> 分支 `master`（70ec7b9）。现象：`cargo test` 默认并行口径在高并发下以
-> `0xC0000005` 崩溃，`--test-threads=4` / 串行全绿。本文件记录已完成的
-> 归因链、已排除项与下一步；**未修复**（属低层 UB，需专门工具）。
-> 本轮新增诊断开关 `TYPORT_NO_PRELUDE_POOL=1`（见 §6）。
+> 分支 `master`。现象：`cargo test` 默认并行口径在高并发下以
+> `0xC0000005` 崩溃，`--test-threads=4` / 串行全绿。**根因已定位并修复**
+> （§8），修复后 12 线程 16/16 复跑绿、完整 `cargo test` 默认并行全绿。
+> 本文件保留完整归因链与已排除项，供后续参考。本轮新增诊断开关
+> `TYPORT_NO_PRELUDE_POOL=1`（见 §6）。
+
 
 ---
 
@@ -68,17 +70,16 @@ churn 下页被回收/填充后即 `0xFEEEFEEE` → 解引用炸。孪生有大�
 `cxt`）与 `mach_ptr: *mut Machine` 别名写，均属 UB 高危面，具体生产点尚未
 定位。
 
-## 5. 为什么没修
-
-已尝试的工具路径：
+## 5. 工具路径（为什么一开始没直接定位）
 
 - **AddressSanitizer**：仓库 toolchain 未随附 `clang_rt.asan*`，
   `-Zsanitizer=address` 的 build script 因 `STATUS_DLL_NOT_FOUND` 失败；
   需要另装 clang/LLVM。
-- **PDB 符号化**：`llvm-tools` 组件不含 `llvm-symbolizer`；mingw gdb 不读 PDB；
-  WER 未为本进程落 1000/1001 事件。已用 dumpbin `/disasm` 的函数标签 + 栈扫描
-  完成"函数级"符号化（§2），但拿不到源码行级归因。
-- 已装 `llvm-tools`（llvm-objdump/nm/readobj 可用）供后续复用。
+- **PDB 符号化**：`llvm-tools` 组件不含 `llvm-symbolizer`；mingw gdb 不读
+  PDB；WER 未为本进程落 1000/1001 事件。
+- **最终解法**：用本地 cargo 缓存里的 `pdb-addr2line 0.10.4` + `pdb 0.8`
+  写了一个 ~30 行的临时符号器（读 PDB → RVA → 函数 + **源码 file:line**，
+  含内联帧），配合 gdb 在崩溃时的栈转储，拿到行号级调用链（§8）。
 
 ## 6. 本轮落地的诊断开关
 
@@ -86,13 +87,79 @@ churn 下页被回收/填充后即 `0xFEEEFEEE` → 解引用炸。孪生有大�
 prelude 池（取池改空、退池改销毁）。用于把"并行崩溃"二分到池交接或别处；
 本轮据此排除了池。语义中性（只影响速度），默认关闭零开销。
 
-## 7. 下一步建议（按性价比）
+## 7. 下一步建议
 
-1. **装 cdb/WinDbg**（Windows SDK Debugging Tools）→ 用 PDB 直接取故障线程
-   的源码行级栈，一小时内可定位到具体 `&Decls`/`transmute` 点位。
-2. 或装 clang 运行时后用 nightly + `-Zsanitizer=address` 跑本套件，ASan 会
-   直接给出 free/alloc/access 三处栈。
-3. 或对孪生做**提交二分**（`d85a759` 移植 force memo 之后至 `d711fde`），
-   定位引入 commit 后再看语义。
-4. 在上述任一之前，回归闸请用 `--test-threads=4` 或串行（已验证稳定）；
-   `0xC0000005` 是签名，不是随机噪声。
+1. **已完成**：装 `llvm-tools`（llvm-objdump/nm/readobj）已装；PDB 行号
+   符号器已用 `pdb` crate 现搭（临时工具，未入库）。**若再遇同类并行 UAF，
+   直接复用该配方**（WER/cdb 亦可，但本机没有）。
+2. 回归闸恢复默认并行即可（修复后已验证）；`TYPORT_NO_PRELUDE_POOL` /
+   `TYPORT_TWIN_NO_COMPACT` 保留为对照测量用。
+
+---
+
+## 8. 根因与修复（**已落地**）
+
+### 8.1 行号级调用链（崩溃线程栈 + PDB 符号化）
+
+```
+prime_resident:12398            // prelude 装载循环：infer_decl(&cxt, d)
+→ infer_decl:8507 → infer_after_prefix:8544 → infer_expr:8297/8245
+→ Machine::check:6808 → unify_iter:4117 → solve_flex_side_bump:4469
+→ solve_multi_trait_ref:6197
+→ solve_trait_ref:6390/closure:6404 → Machine::eval:6014
+→ eval_iter:2261                // ← 故障：decl.get(*x)
+```
+
+### 8.2 机制
+
+`solve_multi_trait_ref`（bump_spine_iter.rs:6190）从 `self.metas[idx]` 的
+`Rc<MetaSnap<'static>>` 里借出 meta 创建处上下文：
+
+```rust
+let meta_cxt: &Cxt<'a> = unsafe {
+    &*(&s.cxt as *const Cxt<'static> as *const Cxt<'a>)   // 裸指针洗掉生命周期
+};
+let typ = self.solve_trait_ref(bump, meta_cxt, x, allow_flex_defaulting)?;
+```
+
+`meta_cxt` 指向 `MetaSnap`（堆分配，内含 `cxt: Cxt`）的**内部**；随后调用的
+`solve_trait_ref` 是 `&mut self`，其候选实例的嵌套 unify/eval 会把
+`self.metas[idx]` 替换成 `MetaEntry::Solved`（`self.metas[m] = ...`，多处），
+**丢掉该快照的最后一个 `Rc` 并释放它** —— `meta_cxt` 随即悬垂；后续
+`eval` 读 `meta_cxt.decls`（`Cxt.decls: Rc<Decls>` 字段）时拿到的就是释放块
+填充值 `0xFEEEFEEE`，`HashMap::get` 解引用野指针 → `0xC0000005`。
+
+- 为什么"只在并发下崩"：这是**确定性悬垂读**，低并发时释放堆页仍驻留、
+  填充模式未必落在被解引用的字段上（读不炸、测试仍过），高并发堆 churn
+  下页回收/填充后必炸。
+- 为什么"混合才崩 / 崩点漂移"：同一 UB 的受害点取决于哪次嵌套求解替换了
+  对应槽位；故障函数恒为 `HashMap<SmolStr, DeclEntry>::get`（受害字段是
+  `cxt.decls`）。
+
+### 8.3 修复
+
+与参考版同点位对齐（`unification.rs:597-601` 是 `arc_cxt.as_ref().clone()`——
+**先克隆 `Arc` 再调 `&mut self`**）：孪生改为同时克隆快照 `Rc` 作保命引用：
+
+```rust
+let (x, snap): (V, Rc<MetaSnap<'static>>) = match &self.metas[idx] {
+    MetaEntry::Unsolved(v, s, ..) => (*v, s.clone()),   // ← Rc 强引用保命
+    _ => continue,
+};
+let meta_cxt: &Cxt<'a> =
+    unsafe { &*(&snap.cxt as *const Cxt<'static> as *const Cxt<'a>) };
+```
+
+`snap` 是局部强引用，即使槽位被替换，快照也活到本轮求解结束；语义与参考版
+的 `Arc` 克隆完全一致（只防提前释放，不改任何判定）。`x` 是 `V`（Copy），
+无额外成本。
+
+### 8.4 验证
+
+- **12 线程复跑**：修复前约 5/6 崩、修复后 **16/16 全绿**
+  （`l13_fast_parity --test-threads=12`）。
+- **完整 `cargo test`（全 target，默认并行）全绿**（此前 `--lib` 亦间歇崩）。
+- `cargo test --lib` 默认并行 681 过；`l13_fast_parity` 393 过；
+  `twin_engine_tests` 11 过。
+- 性能冒烟：`l13bench prelude-hdl fast` 2758ms（修复前基线 2711ms，噪声内）。
+

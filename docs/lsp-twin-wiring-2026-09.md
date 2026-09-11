@@ -594,14 +594,25 @@ COMPACT` 可关压实（对照测量用）。
 
 ---
 
-## 2026-09-11（回归体检发现：并行测试 UAF，未修复）
+## 2026-09-11（回归体检发现并行测试 UAF：已定位并修复）
 
 `cargo test` 默认并行口径在 8-12 线程下稳定 `0xC0000005`（4 线程/串行全绿），
-此前 §2026-09-09 记的"偶发资源竞争"被证实是**孪生内部悬垂 decl 表句柄**
-（故障 RVA 恒为 `HashMap<SmolStr, DeclEntry>::get`，map 指针为 Windows 堆
-释放填充 `0xFEEEFEEE`）。已排除 prelude 池交接（`TYPORT_NO_PRELUDE_POOL=1`
-关池后同点崩溃）与 arena 压实（`TYPORT_TWIN_NO_COMPACT=1` 同点崩溃），
-且该现象在评审合并 `66da950` 之前就存在。完整证据链、已排除项与下一步
-工具建议见 `docs/l13-parallel-test-uaf-2026-09.md`。**在那之前回归闸请用
-`--test-threads=4` 或串行；`0xC0000005` 是确定性签名，不要当噪声。**
+此前 §2026-09-09 记的"偶发资源竞争"实为**孪生内部悬垂 meta 快照**：
+
+- 故障恒为 `HashMap<SmolStr, DeclEntry>::get`，map 指针为 Windows 堆释放填充
+  `0xFEEEFEEE`；行号级栈为 `prime_resident:12398 → … →
+  solve_multi_trait_ref:6197 → solve_trait_ref → eval → eval_iter:2261`。
+- 根因：`solve_multi_trait_ref` 从 `self.metas[idx]` 的 `Rc<MetaSnap>` 里用裸
+  指针借出 meta 创建处 `&Cxt`，再调 `&mut self` 的 `solve_trait_ref`；候选实例
+  的嵌套 unify 会把该槽位替换成 `Solved`，丢掉快照最后一个 `Rc` 并释放它 ——
+  仍被使用的 `meta_cxt`（其 `cxt.decls`）随即悬垂。参考版同点位是
+  `arc_cxt.as_ref().clone()` 先克隆 `Arc` 保命，孪生移植时缺了这一步。
+- 修复：同点位克隆 `Rc<MetaSnap>` 作保命引用（语义与参考版一致，只防提前
+  释放）。修复后 12 线程 16/16 绿、完整 `cargo test` 默认并行全绿。
+
+已排除的其它嫌疑（均带 A/B）：prelude 池交接（`TYPORT_NO_PRELUDE_POOL=1`
+关池后同点崩溃，开关生效经 -j4 套件 31s→9m42s 验证）、arena 压实
+（`TYPORT_TWIN_NO_COMPACT=1` 同点崩溃）、内存耗尽、栈溢出。完整证据链见
+`docs/l13-parallel-test-uaf-2026-09.md`。**回归闸恢复默认并行即可。**
+
 
