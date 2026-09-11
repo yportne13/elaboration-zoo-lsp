@@ -883,6 +883,13 @@ impl Machine {
     /// （结果 DAG 化）。表常驻复用容量，内容每次调用清空——`Bump::reset`
     /// 后旧句柄全部作废，跨调用保留会拿到过期中性项。
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
+        // SAFETY: 字段类型是 `QuoteMemo<'static>`（借用检查器无法表达「表项借用
+        // 随 Bump 重置而作废」），此处把它的生命周期擦成调用方的 `'a`。不变式：
+        // (1) `memo.clear()` 在任何读写前先作废全部旧键，故绝不读到上一次调用
+        // 遗留的引用；(2) 本次调用写入的 `&'a Tm<'a>` 均由 `bump: &'a Bump` 分配，
+        // 与返回值的 `'a` 同寿；(3) 表只经 `Machine` 可达，而 `Machine` 与其
+        // `Bump` 同被 `Tycker` 持有，`Bump::reset` 后旧键作废——跨轮保留会拿到
+        // 过期中性项，故每个入口都必须先 clear（本函数是唯一入口）。
         let memo: &mut QuoteMemo<'a> = unsafe {
             &mut *(&mut self.quote_memo as *mut QuoteMemo<'static> as *mut QuoteMemo<'a>)
         };
