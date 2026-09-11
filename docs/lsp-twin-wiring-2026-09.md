@@ -531,19 +531,36 @@ trait 注册点各打一行 `[REG] idx trait名`，同一输入跑完做序列 d
   insert**——孪生的注册序列是参考版的**超集**：顺序一致，在 18-utils 用户文件
   段额外插入 46 条（名字集中在 `Cons` / `Data` / `Add` / `LetNamed`，其中
   **5 条 `LetNamed`**，正是后来递归失败的那个）。
-- 机制：`fresh_meta` 第一步是"先试实例合成"（两版逐句一致）——合成成功即直接
-  返回、**不登记** trait meta；只有合成失败才 `new_meta + trait_metas.push`。
-  孪生多出来的 46 条，就是**孪生的 `solve_trait_ref` 在这些 goal 上没能合成、
-  退回登记延后求解**，而参考版同点位合成成功。
-- 因此这不是"簿记 bug"，而是**同一个 trait 合成判定分叉的下游症状**：孪生把
-  本可当场合成的目标登记成 trait meta，这些 meta 之后既解不出、又在
-  `mv >= m` 扫描中被反复尝试，最终在 `LetNamed` 那条上递归失败并报错。方向与
-  ffc4a83 的"flex-flex"判断一致，但失败点更靠前（合成判定），也解释了为何改
-  `solve_multi_trait_ref` 的簿记无用——要修的是**瘦身前的那一步合成**。
+- 机制（**已由下一步的 outcome 直方图修正，见下**）：`fresh_meta` 第一步是
+  "先试实例合成"——合成成功即直接返回、**不登记**；失败才登记 trait meta。
 - 下一步（可落地）：取首个额外注册（用户段起点，trait 名 `Cons`/`Data`）时
   `fresh_meta` 的 goal 值，直接对比孪生 `solve_trait_ref` 与参考版
   `solve_trait` 在该 goal 上的实例匹配走向（谁被选/为何推迟），这是有界调试，
   不再需要全序列对照。
+
+**2026-09-11 outcome 直方图（再收窄，插桩已移除）**：给两版 `fresh_meta` 记
+每次调用的结局（`synth` = 合成成功直接返回 / `reg` = 退化为登记）与 trait 名，
+按 (结局, 名) 计数后 diff：
+
+| trait | twin reg | ref reg | twin synth | ref synth |
+|---|---|---|---|---|
+| Data | 341 | 312 | 0 | 0 |
+| Cons | 21 | 15 | 0 | 0 |
+| LetNamed | 13 | 7 | 0 | 0 |
+| Add | 6560 | 6555 | 0 | 0 |
+| Into | 5 | 5 | **111** | **82** |
+
+**修正了上一条的机制推断**：对 `Data`/`Cons`/`LetNamed`/`Add`，**两版都不合成**
+（synth=0），所以多出来的 46 条注册**不是**"孪生合成失败退回登记"，而是
+**孪生在这些 trait 上多调用了 `fresh_meta`**（多出的调用每次都会登记）。唯一
+会走合成路径的是 `Into`，且孪生也更高（111 vs 82）。即根因更上游：**孪生某条
+elaboration 路径比参考版多展开了隐参/洞**，从而多发 `fresh_meta`；`LetNamed`
+那 6 条额外登记里就有后来递归失败的一条。
+
+修点：对齐孪生那段多展开的 elaboration 路径（而非合成判定、更非簿记）。下一
+步可用"按 `fresh_meta` 调用点给调用方打 tag"定位多出的 46 次来自哪个路径
+（Phase A/B、ns 方法缓存探测、trait 候选 elaborat​ion 等），这是收敛的单点调试。
+
 
 
 
