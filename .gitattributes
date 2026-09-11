@@ -1,0 +1,8 @@
+# Repository-wide line endings: store LF.
+#
+# History: CRLF and LF were mixed, which made an ordinary merge rewrite a whole
+# file with no content change (src/L13_namespace/bump_spine_iter.rs in 66da950),
+# hiding real edits inside tens of thousands of phantom diff lines. Pin every
+# text file to LF in the repository (and in the working tree) so that cannot
+# recur.
+* text=auto eol=lf
