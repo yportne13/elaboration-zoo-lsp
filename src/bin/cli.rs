@@ -328,6 +328,51 @@ enum Commands {
         #[arg(long)]
         list: bool,
     },
+
+    /// Generate API documentation from TyportHDL sources (like `cargo doc`).
+    ///
+    /// Builds a static HTML site under `<target>/doc` (or --out) with one
+    /// page per declaration, `///` doc comments rendered as Markdown, member
+    /// lists and impl relations. Pass source files explicitly or run inside a
+    /// Typort.toml project.
+    #[command(visible_alias = "d")]
+    Doc {
+        /// Source files (.typort); default: sources from Typort.toml
+        files: Vec<String>,
+
+        /// Output directory (default: <target>/doc)
+        #[arg(long, short)]
+        out: Option<PathBuf>,
+
+        /// Output formats, comma-separated: html, json
+        #[arg(long, value_delimiter = ',', default_value = "html")]
+        format: Vec<String>,
+
+        /// Do not generate pages for the builtin prelude
+        #[arg(long)]
+        no_prelude: bool,
+
+        /// Open index.html (or the served URL) when done
+        #[arg(long)]
+        open: bool,
+
+        /// External source-link template using {path} and {line}
+        #[arg(long, value_name = "TEMPLATE")]
+        source_link: Option<String>,
+
+        /// Serve the generated site on 127.0.0.1:<PORT> and block
+        /// (omit the value to pick a free port)
+        #[arg(long, num_args = 0..=1, default_missing_value = "0", value_name = "PORT")]
+        serve: Option<u16>,
+
+        /// Exit non-zero when any documentation warning is emitted
+        #[arg(long)]
+        deny_warnings: bool,
+
+        /// Exit non-zero when documentation coverage is below PCT percent
+        #[arg(long, value_name = "PCT")]
+        min_coverage: Option<f64>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -377,6 +422,30 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 elaboration_zoo_lsp::quick::QuickOptions { topic, list },
             )?;
         }
+
+        Commands::Doc {
+            files,
+            out,
+            format,
+            no_prelude,
+            open,
+            source_link,
+            serve,
+            deny_warnings,
+            min_coverage,
+        } => {
+            run_doc(
+                files,
+                out,
+                format,
+                no_prelude,
+                open,
+                source_link,
+                serve,
+                deny_warnings,
+                min_coverage,
+            )?;
+        }
     }
 
     Ok(())
@@ -385,6 +454,46 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 // ---------------------------------------------------------------------------
 // Subcommand implementations
 // ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn run_doc(
+    files: Vec<String>,
+    out: Option<PathBuf>,
+    format: Vec<String>,
+    no_prelude: bool,
+    open: bool,
+    source_link: Option<String>,
+    serve: Option<u16>,
+    deny_warnings: bool,
+    min_coverage: Option<f64>,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    use elaboration_zoo_lsp::doc::{DocFormat, DocOptions};
+    let mut formats = Vec::new();
+    for f in &format {
+        match f.as_str() {
+            "html" => formats.push(DocFormat::Html),
+            "json" => formats.push(DocFormat::Json),
+            other => {
+                return Err(format!("unknown doc format '{other}' (expected html | json)").into());
+            }
+        }
+    }
+    if formats.is_empty() {
+        formats.push(DocFormat::Html);
+    }
+    elaboration_zoo_lsp::doc::run(DocOptions {
+        files: files.into_iter().map(PathBuf::from).collect(),
+        out,
+        formats,
+        no_prelude,
+        open,
+        source_link,
+        serve,
+        deny_warnings,
+        min_coverage,
+    })
+    .map_err(|e| e.into())
+}
 
 fn run_emit(
     files: Vec<String>,

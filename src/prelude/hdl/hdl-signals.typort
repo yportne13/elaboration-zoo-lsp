@@ -1,3 +1,4 @@
+//! Signal construction, registers and combinational/sequential assignment.
 // ============================================================
 // HDL Signal Creation Functions
 // ============================================================

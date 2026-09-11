@@ -1,10 +1,13 @@
+//! String helpers (repeat, join) and the `Boolean -> String` conversion.
 
+/// `s` repeated `n` times.
 def str_repeat(s: String, n: Nat): String =
     match n {
         case zero => ""
         case succ(m) => s + (str_repeat s m)
     }
 
+/// Join `parts` with `sep` between adjacent elements.
 def str_join(parts: List[String], sep: String): String =
     match parts {
         case lnil => ""

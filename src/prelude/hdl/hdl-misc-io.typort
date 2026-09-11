@@ -1,3 +1,4 @@
+//! Miscellaneous HDL I/O helpers (inout, tri-state).
 // ============================================================
 //  HDL io / math / logic / fsm —— SpinalHDL lib/io、lib/math、
 //  lib/logic、lib/fsm 复刻（Wave 5）

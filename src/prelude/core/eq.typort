@@ -1,27 +1,40 @@
+//! Propositional equality (Martin-Löf identity type) and its combinators.
+//!
+//! `Eq[A] x y` is the identity type; it has the single constructor `refl`,
+//! which proves `Eq a a`.  `rfl` is the convenient proof of `Eq a a` for any
+//! `a`, and `cong` / `symm` / `trans` / `subst` are the standard eliminators.
 
+/// The identity type: a proof that `x` and `y` are definitionally equal.
 enum Eq[A](x: A, y: A) {
+    /// Reflexivity: proves `Eq a a` for any `a`.
     refl(a: A) -> Eq a a
 }
 
+/// Reflexivity, with the type arguments inferred: `rfl : Eq a a`.
 def rfl[A][a: A]: Eq a a =
     refl a
 
+/// Congruence: equal arguments give equal results under any function.
 def cong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) =
     match e {
         case refl(a) => refl (f a)
     }
 
+/// Symmetry: `Eq x y` implies `Eq y x`.
 def symm[A, x: A, y: A](e: Eq[A] x y): Eq[A] y x =
     match e {
         case refl(a) => refl[A] a
     }
 
+/// Transitivity: `Eq x y` and `Eq y z` imply `Eq x z`.
 def trans[A, x: A, y: A, z: A](e1: Eq[A] x y, e2: Eq[A] y z): Eq[A] x z =
     match e1 {
         case refl(a) => e2
     }
 
+/// Safe casts: convert `Self` to `U` given a proof `Eq(Self, U)`.
 trait Cast[U] {
+    /// Cast `this` to `U` using an equality proof.
     def cast(prove: Eq(Self, U)): U
 }
 
@@ -32,11 +45,14 @@ impl[T, U] Cast[U] for T {
         }
 }
 
+/// Substitution: if `x` equals `y`, a proof of `P x` yields a proof of `P y`.
 def subst[A, P: A -> Type 0, x: A, y: A](e: Eq[A] x y, p: P x): P y =
     match e {
         case refl(a) => p
     }
 
+/// `eq_comm` is `symm` under a different name.
 def eq_comm[A, x: A, y: A](e: Eq[A] x y): Eq[A] y x = symm e
 
+/// `eq_congr` is `cong` with the function argument last.
 def eq_congr[A, B, x: A, y: A, f: A -> B](e: Eq[A] x y): Eq[B] (f x) (f y) = cong f e

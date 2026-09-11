@@ -1,25 +1,31 @@
+//! Decidability: a value that is either a proof of `A` or a refutation.
 
+/// A decision procedure for a proposition `A`: `yes` carries a proof, `no` a
+/// refutation (a function from `A` to `Void`).
 enum Dec[A] {
+    /// `A` holds, with a proof.
     yes(proof: A)
+    /// `A` is refuted.
     no(proof: A -> Void)
 }
 
 impl[A] Dec[A] {
+    /// Whether this is a proof.
     def is_yes: Boolean =
         match this {
             case yes(_) => true
             case no(_) => false
         }
+    /// Whether this is a refutation.
     def is_no: Boolean =
         match this {
             case yes(_) => false
             case no(_) => true
         }
+    /// The proof as an `Option`, discarding the refutation.
     def to_option: Option[A] =
         match this {
             case yes(a) => Some a
             case no(_) => None
         }
 }
-
-

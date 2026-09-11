@@ -1,3 +1,4 @@
+//! Stream interfaces and flow-control helpers.
 // ============================================================
 //  HDL Stream / Flow / Fragment —— SpinalHDL lib/Stream.scala、
 //  lib/Flow.scala、lib/Fragment.scala 复刻（Wave 2）

@@ -1,3 +1,4 @@
+//! Cross-clock-domain primitives.
 // ============================================================
 //  HDL CrossClock —— SpinalHDL lib/CrossClock.scala 复刻（Wave 3）
 //

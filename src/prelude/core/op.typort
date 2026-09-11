@@ -1,35 +1,62 @@
+//! Operators, core traits and small combinators.
+//!
+//! This module defines the operator traits (`Add`, `Sub`, `Mul`, `Div`, `Rem`,
+//! `And`, `Or`, `Xor`, `Neg`, `Not`), the comparison/conversion traits
+//! (`Equal`, `Compare`, `Into`), `Default` / `Clone`, a few function
+//! combinators, the `Product` struct and the tuple structs `Tuple2`..`Tuple8`.
+//!
+//! Operator traits take an explicit result type `O` marked `outParam`, which
+//! the instance solver infers instead of matching on it.
+
 // 类型参数注解约定：
 // - 纯类型参数（如 List[T]、def vecmap[T, ...]）省略 `: Type 0`，依赖自动泛化。
 // - 需要具体 universe 下界的场景（关联类型 `outParam(Type 0)`、依赖类型
 //   `Exists[A: Type 0, ...]`）必须显式 `A: Type 0`。
 // 两者语义不同，并非纯风格差异。
+
+/// Wrap a value as an output (`outParam`) type argument.  Used in trait
+/// headers to mark the result type that the instance solver should infer.
 def outParam[A](a: A): A = a
 
+/// Addition: `this + that`.  `O` is the (solver-inferred) result type.
 trait Add[T, O: outParam(Type 0)] {
+    /// Add `that` to `this`, producing `O`.
     def +(that: T): O
 }
 
+/// Subtraction: `this - that`.
 trait Sub[T, O: outParam(Type 0)] {
+    /// Subtract `that` from `this`, producing `O`.
     def -(that: T): O
 }
 
+/// Multiplication: `this * that`.
 trait Mul[T, O: outParam(Type 0)] {
+    /// Multiply `this` by `that`, producing `O`.
     def *(that: T): O
 }
 
+/// Division: `this / that`.
 trait Div[T, O: outParam(Type 0)] {
+    /// Divide `this` by `that`, producing `O`.
     def /(that: T): O
 }
 
+/// Bitwise / logical AND: `this & that`.
 trait And[T, O: outParam(Type 0)] {
+    /// Bitwise-and `this` with `that`, producing `O`.
     def &(that: T): O
 }
 
+/// Bitwise / logical OR: `this | that`.
 trait Or[T, O: outParam(Type 0)] {
+    /// Bitwise-or `this` with `that`, producing `O`.
     def |(that: T): O
 }
 
+/// Bitwise / logical XOR: `this ^ that`.
 trait Xor[T, O: outParam(Type 0)] {
+    /// Bitwise-xor `this` with `that`, producing `O`.
     def ^(that: T): O
 }
 
@@ -37,7 +64,9 @@ impl Add[String, String] for String {
     def +(that: String): String = string_concat this that
 }
 
+/// Conversion into a target type: `x.into`.
 trait Into[O: outParam(Type 0)] {
+    /// Convert `this` into `O`.
     def into: O
 }
 
@@ -45,64 +74,99 @@ impl[T] Into[T] for T {
     def into: T = this
 }
 
+/// Equality comparisons: `===` (equal) and `=/=` (not equal), returning `O`
+/// (typically `Bool`).
 trait Equal[T, O: outParam(Type 0)] {
+    /// True when `this` equals `that`.
     def ===(that: T): O
+    /// True when `this` differs from `that`.
     def =/=(that: T): O
 }
 
+/// Ordering comparisons `<`, `<=`, `>`, `>=`, returning `O` (typically
+/// `Bool`).
 trait Compare[T, O: outParam(Type 0)] {
+    /// `this < that`.
     def <(that: T): O
+    /// `this <= that`.
     def <=(that: T): O
+    /// `this > that`.
     def >(that: T): O
+    /// `this >= that`.
     def >=(that: T): O
 }
 
+/// Arithmetic negation: unary `-this`.
 trait Neg {
+    /// Negate `this`.
     def - : Self
 }
 
+/// Types with a canonical default value.
 trait Default {
+    /// The default value of `Self`.
     def default: Self
 }
 
+/// A structural pair.  Construct with `new Product(a, b)` or
+/// `Product.mk a b`; access fields with `.fst` / `.snd`.
 struct Product[A, B] {
+    /// The first component.
     fst: A
+    /// The second component.
     snd: B
 }
 
+/// The identity function: returns its argument unchanged.
 def id[A](x: A): A = x
 
+/// The constant function: returns `x`, ignoring `y`.
 def const[A, B](x: A, y: B): A = x
 
+/// Flip the argument order of a two-argument (curried) function.
 def flip[A, B, C](f: A -> B -> C, x: B, y: A): C = f y x
 
+/// Function composition: `compose f g x = f (g x)`.
 def compose[A, B, C](f: B -> C, g: A -> B, x: A): C = f (g x)
 
+/// Boolean / bitwise negation: unary `!this`.
 trait Not {
+    /// Negate `this`.
     def ! : Self
 }
 
+/// Remainder: `this % that`.
 trait Rem[T, O: outParam(Type 0)] {
+    /// The remainder of `this` divided by `that`, producing `O`.
     def %(that: T): O
 }
 
 impl[A, B] Product[A, B] {
+    /// Swap the two components.
     def swap: Product[B, A] = new Product(this.snd, this.fst)
+    /// Apply `f` to the first component.
     def map_first[C](f: A -> C): Product[C, B] = new Product(f this.fst, this.snd)
+    /// Apply `f` to the second component.
     def map_second[C](f: B -> C): Product[A, C] = new Product(this.fst, f this.snd)
 }
 
+/// Curry a function over a `Product` into a two-argument function.
 def curry[A, B, C](f: Product[A, B] -> C, a: A, b: B): C = f (new Product(a, b))
 
+/// Uncurry a two-argument function into one taking a `Product`.
 def uncurry[A, B, C](f: A -> B -> C, p: Product[A, B]): C = f p.fst p.snd
 
+/// Types that can be duplicated: `x.clone`.
 trait Clone {
+    /// A copy of `this`.
     def clone: Self
 }
 
 // ---------- Unit ----------
 
+/// The unit type: exactly one value, `unit`.
 enum Unit {
+    /// The single value of `Unit`.
     unit
 }
 
@@ -112,17 +176,20 @@ enum Unit {
 // Supported up to Tuple8 for common use cases.
 // 手写展开，未用宏生成（宏系统无法按 arity 递归生成）；如需 Tuple9+ 请手工补。
 
+/// A 2-tuple.  `(A, B)` is sugar for `Tuple2[A, B]`; fields are `._1`, `._2`.
 struct Tuple2[A, B] {
     _1: A
     _2: B
 }
 
+/// A 3-tuple; fields `._1` .. `._3`.
 struct Tuple3[A, B, C] {
     _1: A
     _2: B
     _3: C
 }
 
+/// A 4-tuple; fields `._1` .. `._4`.
 struct Tuple4[A, B, C, D] {
     _1: A
     _2: B
@@ -130,6 +197,7 @@ struct Tuple4[A, B, C, D] {
     _4: D
 }
 
+/// A 5-tuple; fields `._1` .. `._5`.
 struct Tuple5[A, B, C, D, E] {
     _1: A
     _2: B
@@ -138,6 +206,7 @@ struct Tuple5[A, B, C, D, E] {
     _5: E
 }
 
+/// A 6-tuple; fields `._1` .. `._6`.
 struct Tuple6[A, B, C, D, E, F] {
     _1: A
     _2: B
@@ -147,6 +216,7 @@ struct Tuple6[A, B, C, D, E, F] {
     _6: F
 }
 
+/// A 7-tuple; fields `._1` .. `._7`.
 struct Tuple7[A, B, C, D, E, F, G] {
     _1: A
     _2: B
@@ -157,6 +227,7 @@ struct Tuple7[A, B, C, D, E, F, G] {
     _7: G
 }
 
+/// An 8-tuple; fields `._1` .. `._8`.
 struct Tuple8[A, B, C, D, E, F, G, H] {
     _1: A
     _2: B

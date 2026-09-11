@@ -1,15 +1,24 @@
+//! A list guaranteed to contain at least one element.
 
+/// A non-empty list: a mandatory `head` plus a (possibly empty) `tail`.
 struct NonEmpty[T] {
+    /// The first element.
     head: T
+    /// The remaining elements.
     tail: List[T]
 }
 
 impl[T] NonEmpty[T] {
+    /// View as a plain `List`.
     def to_list: List[T] = lcons this.head this.tail
+    /// Map `f` over every element.
     def map[U](f: T -> U): NonEmpty[U] =
         new NonEmpty(f this.head, this.tail.map f)
+    /// The first element as an `Option` (always `Some`).
     def head_option: Option[T] = Some this.head
+    /// The number of elements (at least one).
     def length: Nat = 1 + this.tail.length
+    /// The last element.
     def last: T =
         match this.tail {
             case lnil => this.head
@@ -17,6 +26,7 @@ impl[T] NonEmpty[T] {
                 let rest: NonEmpty[T] = new NonEmpty(x, xs);
                 rest.last
         }
+    /// The elements in reverse order.
     def reverse: NonEmpty[T] =
         match this.tail {
             case lnil => this

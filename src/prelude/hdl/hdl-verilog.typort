@@ -1,3 +1,4 @@
+//! Verilog code generation (designVL and module emission).
 // ============================================================
 // HDL Verilog Code Generation (pure typort library)
 // ============================================================

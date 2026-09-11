@@ -1,3 +1,4 @@
+//! Core HDL types, clock domains and module scaffolding.
 // ============================================================
 // HDL Core: utility types, Expr AST, Module system,
 //           WhenStack tracking, createSignalExpr

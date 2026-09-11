@@ -322,10 +322,14 @@ fn hover_on_enum_type_shows_members() {
     let line = src.find("def use_nat").unwrap();
     let nat_off = src.find("Nat").unwrap();
     let value = hover_markup_at(&b, &uri, 0, (nat_off - line) as u32);
-    assert_eq!(
-        value,
-        "```typort\nenum Nat {\n    zero\n    succ(n: Nat)\n}\n```",
+    assert!(
+        value.starts_with("```typort\nenum Nat {\n    zero\n    succ(n: Nat)\n}\n```"),
         "enum hover must show members, got:\n{value}"
+    );
+    // The prelude now carries `///` docs, which hover appends after the panel.
+    assert!(
+        value.contains("Unary (Peano) natural numbers."),
+        "enum hover must append the doc comment, got:\n{value}"
     );
 }
 
@@ -454,10 +458,13 @@ fn hover_on_namespaced_trait_shows_methods() {
     let line = src.find("def keep").unwrap();
     let a_off = src.find("Add").unwrap();
     let value = hover_markup_at(&b, &uri, 0, (a_off - line) as u32);
-    assert_eq!(
-        value,
-        "```typort\ntrait Add[T, O] {\n    +(this: Self, that: T) → O\n}\n```",
+    assert!(
+        value.starts_with("```typort\ntrait Add[T, O] {\n    +(this: Self, that: T) → O\n}\n```"),
         "namespaced trait hover must show methods, not the `mk` constructor, got:\n{value}"
+    );
+    assert!(
+        value.contains("Addition: `this + that`."),
+        "trait hover must append the doc comment, got:\n{value}"
     );
 }
 
@@ -502,9 +509,12 @@ fn hover_on_namespaced_struct_shows_fields() {
     let line = src.find("def swap").unwrap();
     let t_off = src.find("Tuple2").unwrap();
     let value = hover_markup_at(&b, &uri, 0, (t_off - line) as u32);
-    assert_eq!(
-        value,
-        "```typort\nstruct Tuple2[A, B](_1: A, _2: B)\n```",
+    assert!(
+        value.starts_with("```typort\nstruct Tuple2[A, B](_1: A, _2: B)\n```"),
         "namespaced struct hover must show fields, got:\n{value}"
+    );
+    assert!(
+        value.contains("A 2-tuple."),
+        "struct hover must append the doc comment, got:\n{value}"
     );
 }

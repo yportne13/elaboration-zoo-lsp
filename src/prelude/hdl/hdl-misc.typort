@@ -1,3 +1,4 @@
+//! Miscellaneous HDL helpers.
 // ============================================================
 //  HDL misc —— SpinalHDL lib/misc 复刻（Wave 6）
 //  Prescaler / Timer / InterruptCtrl / Plru / Watchdog

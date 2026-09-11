@@ -1,4 +1,7 @@
+//! The empty type `Void` and its eliminator.
 
+/// The uninhabited type: it has no constructors.
 enum Void {}
 
+/// Ex falso: from a `Void` value, produce a value of any type `A`.
 def absurd[A](v: Void): A = match v {}

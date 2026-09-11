@@ -1,50 +1,63 @@
+//! The optional-value type `Option[T]` and its combinators.
 
+/// An optional value: either `Some x` or `None`.
 enum Option[T] {
+    /// A present value.
     Some(t: T)
+    /// An absent value.
     None
 }
 
 impl[T] Option[T] {
+    /// Transform the contained value with `f`, if present.
     def map[U](f: T -> U): Option[U] =
         match this {
             case Some(t) => Some(f(t))
             case None => None
         }
+    /// Monadic bind: apply `f` to the contained value, if present.
     def flatmap[U](f: T -> Option[U]): Option[U] =
         match this {
             case Some(t) => f(t)
             case None => None
         }
+    /// The contained value, or `default` when `None`.
     def unwrap_or(default: T): T =
         match this {
             case Some(t) => t
             case None => default
         }
+    /// Whether this is `Some`.
     def is_some: Boolean =
         match this {
             case Some(_) => true
             case None => false
         }
+    /// Whether this is `None`.
     def is_none: Boolean =
         match this {
             case Some(_) => false
             case None => true
         }
+    /// `this` when `Some`, otherwise `other`.
     def or_else(other: Option[T]): Option[T] =
         match this {
             case Some(_) => this
             case None => other
         }
+    /// Map the contained value, falling back to `default` when `None`.
     def map_or[U](default: U, f: T -> U): U =
         match this {
             case Some(t) => f t
             case None => default
         }
+    /// Whether the contained value equals `x` under `eq`.
     def contains(x: T, eq: T -> T -> Boolean): Boolean =
         match this {
             case Some(t) => eq t x
             case None => false
         }
+    /// Keep `this` when the contained value satisfies `p`, else `None`.
     def filter(p: T -> Boolean): Option[T] =
         match this {
             case Some(t) =>
@@ -61,6 +74,7 @@ impl[T] Default for Option[T] {
     def default: Option[T] = None
 }
 
+/// `Some x` when `cond` holds, else `None`.
 def guard[T](cond: Boolean, x: T): Option[T] =
     match cond {
         case true => Some x

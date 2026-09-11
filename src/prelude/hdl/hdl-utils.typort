@@ -1,3 +1,4 @@
+//! Width and bit utility functions (log2Up, metaPow2, ...).
 // ============================================================
 //  HDL Utils — SpinalHDL lib/Utils.scala + lib/Counter.scala 复刻
 //

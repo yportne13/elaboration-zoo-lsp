@@ -1,3 +1,4 @@
+//! Bus / bundle infrastructure.
 // ============================================================
 // HDL Bus/Interface Types: Bundle, Stream, Flow, BlackBox, FSM
 // ============================================================

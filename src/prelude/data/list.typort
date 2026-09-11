@@ -1,32 +1,44 @@
+//! Immutable singly-linked lists.
+//!
+//! The constructors use the `l`-prefix (`lnil` / `lcons`) because the
+//! `Vec` GADT already occupies the `nil` / `cons` names.
 
 // List：不可变链表。
 // 构造器用 lnil/lcons 前缀 —— 因 Vec 的 GADT 构造器已占用 nil/cons 名。
+/// An immutable singly-linked list of `T`.
 enum List[T] {
+    /// The empty list.
     lnil
+    /// A cons cell: `head` followed by `tail`.
     lcons(head: T, tail: List[T])
 }
 
 impl[T] List[T] {
+    /// Map `f` over every element.
     def map[U](f: T -> U): List[U] =
         match this {
             case lnil => lnil
             case lcons(x, xs) => lcons(f x, xs.map f)
         }
+    /// The number of elements.
     def length: Nat =
         match this {
             case lnil => 0
             case lcons(_, xs) => 1 + xs.length
         }
+    /// Concatenate `that` after `this`.
     def append(that: List[T]): List[T] =
         match this {
             case lnil => that
             case lcons(x, xs) => lcons(x, xs.append that)
         }
+    /// `Some` of the first element, or `None` when empty.
     def head_option: Option[T] =
         match this {
             case lnil => None
             case lcons(x, _) => Some x
         }
+    /// The list in reverse order.
     def reverse: List[T] =
         match this {
             case lnil => lnil
@@ -35,6 +47,8 @@ impl[T] List[T] {
 }
 
 impl[T] List[T] {
+    /// Pair each element with the corresponding element of `other`, stopping
+    /// at the shorter list.
     def zip[B](other: List[B]): List[Product[T, B]] =
         match this {
             case lnil => lnil
@@ -44,6 +58,7 @@ impl[T] List[T] {
                     case lcons(y, ys) => lcons(new Product(x, y), xs.zip ys)
                 }
         }
+    /// The first element satisfying `p`, if any.
     def find(p: T -> Boolean): Option[T] =
         match this {
             case lnil => None
@@ -54,6 +69,7 @@ impl[T] List[T] {
                     case false => xs.find p
                 }
         }
+    /// The first `n` elements (fewer when the list is shorter).
     def take(n: Nat): List[T] =
         match n {
             case zero => lnil
@@ -63,6 +79,7 @@ impl[T] List[T] {
                     case lcons(x, xs) => lcons(x, xs.take m)
                 }
         }
+    /// `this` without its first `n` elements.
     def drop(n: Nat): List[T] =
         match n {
             case zero => this
@@ -72,6 +89,7 @@ impl[T] List[T] {
                     case lcons(_, xs) => xs.drop m
                 }
         }
+    /// The elements satisfying `p`.
     def filter(p: T -> Boolean): List[T] =
         match this {
             case lnil => lnil
@@ -82,6 +100,7 @@ impl[T] List[T] {
                     case false => xs.filter p
                 }
         }
+    /// Whether every element satisfies `p`.
     def all(p: T -> Boolean): Boolean =
         match this {
             case lnil => true
@@ -92,6 +111,7 @@ impl[T] List[T] {
                     case false => false
                 }
         }
+    /// Whether some element satisfies `p`.
     def any(p: T -> Boolean): Boolean =
         match this {
             case lnil => false
@@ -108,12 +128,14 @@ impl[T] Default for List[T] {
     def default: List[T] = lnil
 }
 
+/// The list without its head, if non-empty.
 def list_tail_option[T](l: List[T]): Option[List[T]] =
     match l {
         case lnil => None
         case lcons(_, xs) => Some xs
     }
 
+/// The list without its last element, if non-empty.
 def list_init[T](l: List[T]): Option[List[T]] =
     match l {
         case lnil => None
@@ -126,6 +148,7 @@ def list_init[T](l: List[T]): Option[List[T]] =
             }
     }
 
+/// The last element, if any.
 def list_last[T](l: List[T]): Option[T] =
     match l {
         case lnil => None
@@ -133,35 +156,45 @@ def list_last[T](l: List[T]): Option[T] =
         case lcons(_, xs) => list_last xs
     }
 
+/// Concatenate a list of lists.
 def list_flatten[T](l: List[List[T]]): List[T] =
     match l {
         case lnil => lnil
         case lcons(x, xs) => x.append (list_flatten xs)
     }
 
+/// Map `f` over `l` and concatenate the results.
 def list_concat_map[T, U](f: T -> List[U], l: List[T]): List[U] =
     list_flatten (l.map f)
 
+/// `[0, 1, ..., n-1]`.
 def range(n: Nat): List[Nat] =
     match n {
         case zero => lnil
         case succ(m) => (range m).append (lcons m lnil)
     }
 
+/// A one-element list.
 def list_singleton[T](x: T): List[T] = lcons x lnil
 
+/// The first element, if any.
 def list_head[T](l: List[T]): Option[T] = l.head_option
 
+/// Whether the list is empty.
 def list_is_empty[T](l: List[T]): Boolean =
     match l {
         case lnil => true
         case lcons(_, _) => false
     }
 
+/// Free-function form of `List.map`.
 def list_map[T, U](f: T -> U, l: List[T]): List[U] = l.map f
 
+/// Free-function form of `List.append`.
 def list_append[T](l: List[T], r: List[T]): List[T] = l.append r
 
+/// Free-function form of `List.reverse`.
 def list_reverse[T](l: List[T]): List[T] = l.reverse
 
+/// Free-function form of `List.length`.
 def list_length[T](l: List[T]): Nat = l.length

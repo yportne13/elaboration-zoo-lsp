@@ -1,3 +1,4 @@
+//! Bus protocol definitions (Axi, Apb, AvalonST, ...).
 // ============================================================
 //  HDL Bus 协议 —— SpinalHDL lib/bus 复刻（Wave 4）
 //  APB3 / AxiLite4 / Axi4Stream / Wishbone / AvalonST bundle 定义

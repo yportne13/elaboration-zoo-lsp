@@ -1,6 +1,17 @@
+//! Peano natural numbers, their arithmetic, and basic equational lemmas.
+//!
+//! The recursive definitions here are the *fallback* implementations: after
+//! this file loads, `Cxt::register_nat_builtins` replaces `nat_add`,
+//! `nat_mul`, `nat_sub`, `nat_div` and `nat_rem` with native word-size
+//! primops that reproduce the same reduction behaviour (see
+//! `docs/nat-primops-plan.md`).  The definitions must stay so the `impl`
+//! method bodies below have the names in scope while this file elaborates.
 
+/// Unary (Peano) natural numbers.
 enum Nat {
+    /// Zero.
     zero
+    /// The successor of `n`.
     succ(n: Nat)
 }
 
@@ -12,6 +23,7 @@ enum Nat {
 // the impl method bodies below have these names in scope while this file
 // elaborates (registration happens after the whole file).
 
+/// Addition, by recursion on the second argument.
 def nat_add(x: Nat, y: Nat): Nat =
     match y {
         case zero => x
@@ -23,6 +35,7 @@ impl Add[Nat, Nat] for Nat {
         nat_add this that
 }
 
+/// Multiplication, by recursion on the second argument.
 def nat_mul(x: Nat, y: Nat): Nat =
     match y {
         case zero => zero
@@ -34,47 +47,57 @@ impl Mul[Nat, Nat] for Nat {
         nat_mul this that
 }
 
+/// Congruence of `succ`: equal arguments give equal successors.
 def cong_succ[x: Nat, y: Nat](e: Eq x y): Eq (succ x) (succ y) =
     cong succ e
 
 // a + 0 由 nat_add（y=zero 分支直接返回 x，word-size primop）definitionally 化为 a，故 rfl 即可。
+/// `a + 0 = a`, by computation (the primop returns `x` when the second
+/// argument is `zero`).
 def add_zero_right(a: Nat): Eq (a + 0) a =
     rfl
 
 // 0 + a 需对 a 归纳（nat_add 对 y 为具体 0 直接返回 x，a 非具体时卡住）。
+/// `0 + a = a`, by induction on `a`.
 def add_zero_left(a: Nat): Eq (0 + a) a =
     match a {
         case zero => refl 0
         case succ(t) => cong_succ (add_zero_left t)
     }
 
+/// `n + (succ m) = succ (n + m)`, definitionally.
 def add_succ_right (n: Nat, m: Nat): Eq ((n + (succ m))) (succ (n + m)) =
     rfl
 
+/// `(succ n) + m = succ (n + m)`, by induction on `m`.
 def add_succ_left (n: Nat, m: Nat): Eq (((succ n) + m)) (succ (n + m)) =
     match m {
         case zero => refl[Nat] (succ n)
         case succ(k) => cong_succ (add_succ_left n k)
     }
 
+/// Addition is commutative: `n + m = m + n`.
 def add_comm (n: Nat, m: Nat): Eq(n + m, m + n) =
     match m {
         case zero => symm(add_zero_left n)
         case succ(k) => trans (cong_succ (add_comm n k)) (symm (add_succ_left k n))
     }
 
+/// Addition is associative: `(n + m) + k = n + (m + k)`.
 def add_assoc (n: Nat, m: Nat, k: Nat): Eq((n + m) + k, n + (m + k)) =
     match k {
         case zero => rfl
         case succ(l) => cong_succ (add_assoc n m l)
     }
 
+/// Predecessor: `pred 0 = 0`, `pred (succ n) = n`.
 def pred(n: Nat): Nat =
     match n {
         case zero => zero
         case succ(m) => m
     }
 
+/// Truncated subtraction: `nat_sub n m` is `max(n - m, 0)`.
 def nat_sub(n: Nat, m: Nat): Nat =
     match n {
         case zero => zero
@@ -89,6 +112,7 @@ impl Sub[Nat, Nat] for Nat {
     def -(that: Nat): Nat = nat_sub this that
 }
 
+/// Division, by repeated subtraction.
 def nat_div(x: Nat, y: Nat): Nat =
     match x {
         case zero => zero
@@ -108,6 +132,7 @@ impl Div[Nat, Nat] for Nat {
     def /(that: Nat): Nat = nat_div this that
 }
 
+/// Remainder, by repeated subtraction.
 def nat_rem(x: Nat, y: Nat): Nat =
     match x {
         case zero => zero
@@ -127,12 +152,14 @@ impl Rem[Nat, Nat] for Nat {
     def %(that: Nat): Nat = nat_rem this that
 }
 
+/// Doubling: `n + n`.
 def double(n: Nat): Nat = n + n
 
 impl Default for Nat {
     def default: Nat = zero
 }
 
+/// The larger of two naturals.
 def nat_max(a: Nat, b: Nat): Nat =
     match a {
         case zero => b
@@ -143,6 +170,7 @@ def nat_max(a: Nat, b: Nat): Nat =
             }
     }
 
+/// The smaller of two naturals.
 def nat_min(a: Nat, b: Nat): Nat =
     match a {
         case zero => zero
@@ -152,4 +180,3 @@ def nat_min(a: Nat, b: Nat): Nat =
                 case succ(bs) => succ (nat_min as bs)
             }
     }
-

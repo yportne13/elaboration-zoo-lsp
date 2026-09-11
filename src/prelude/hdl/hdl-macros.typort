@@ -1,3 +1,4 @@
+//! HDL surface-syntax macros (Expr, when, module).
 // ============================================================
 // HDL Macros: Expr (ergonomic hardware DSL), when, and module
 // ============================================================

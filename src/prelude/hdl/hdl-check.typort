@@ -1,3 +1,4 @@
+//! HDL design self-check rules and diagnostics.
 // ============================================================
 // HDL Self-Check: tyck-stage lint pass (name-level, phase 1)
 // ============================================================

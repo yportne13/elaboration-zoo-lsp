@@ -1,9 +1,14 @@
+//! Length-indexed vectors (a GADT indexed by `Nat`).
 
+/// A vector of exactly `len` elements of type `A`.
 enum Vec[A](len: Nat) {
+    /// The empty vector, of length 0.
     nil -> Vec[A] 0
+    /// A cons cell: prepending one element raises the length by one.
     cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (l + 1)
 }
 
+/// Map `f` over a vector, preserving its length.
 def vecmap[T, U, len: Nat](x: Vec[T] len, f: T -> U): Vec[U] len =
     match x {
         case nil => nil
@@ -11,23 +16,28 @@ def vecmap[T, U, len: Nat](x: Vec[T] len, f: T -> U): Vec[U] len =
     }
 
 impl[T, len: Nat] Vec[T] len {
+    /// Map `f` over the vector, preserving its length.
     def map[U](f: T -> U): Vec[U] len =
         vecmap this f
+    /// Left fold with initial accumulator `z`.
     def foldl[U](z: U, f: U -> T -> U): U =
         match this {
             case nil => z
             case cons(x, xs) => f (xs.foldl z f) x
         }
+    /// Right fold with initial accumulator `z`.
     def fold[U](z: U, f: U -> T -> U): U =
         match this {
             case nil => z
             case cons(x, xs) => f (xs.fold z f) x
         }
+    /// The first element, if any.
     def head_option: Option[T] =
         match this {
             case nil => None
             case cons(x, _) => Some x
         }
+    /// Whether every element satisfies `p`.
     def all(p: T -> Boolean): Boolean =
         match this {
             case nil => true
@@ -38,6 +48,7 @@ impl[T, len: Nat] Vec[T] len {
                     case false => false
                 }
         }
+    /// Whether some element satisfies `p`.
     def any(p: T -> Boolean): Boolean =
         match this {
             case nil => false
@@ -48,6 +59,7 @@ impl[T, len: Nat] Vec[T] len {
                     case false => xs.any p
                 }
         }
+    /// The first element satisfying `p`, if any.
     def find(p: T -> Boolean): Option[T] =
         match this {
             case nil => None
@@ -58,6 +70,7 @@ impl[T, len: Nat] Vec[T] len {
                     case false => xs.find p
                 }
         }
+    /// Whether some element equals `x` under `eq`.
     def elem(x: T, eq: T -> T -> Boolean): Boolean =
         match this {
             case nil => false
@@ -68,6 +81,7 @@ impl[T, len: Nat] Vec[T] len {
                     case false => xs.elem (x, eq)
                 }
         }
+    /// The element at index `n`, or `default` when out of range.
     def at(n: Nat, default: T): T =
         match n {
             case zero =>
@@ -84,21 +98,26 @@ impl[T, len: Nat] Vec[T] len {
 }
 
 impl[T, len: Nat] Vec[T](succ len) {
+    /// The first element of a non-empty vector.
     def head: T =
         match this {
             case cons(x, _) => x
         }
+    /// The tail of a non-empty vector (`len` elements).
     def tail: Vec[T] len =
         match this {
             case cons(_, xs) => xs
         }
+    /// Fold a non-empty vector with its first element as the initial value.
     def reduce(f: T -> T -> T): T =
         match this {
             case cons(x, xs) => xs.fold x f
         }
 }
 
+/// Prepend an element to a vector: `x :: xs`.
 trait Cons {
+    /// Cons `x` onto `that`, growing the length by one.
     def ::[l: Nat](that: Vec[Self] l): Vec[Self] (l + 1)
 }
 
@@ -106,5 +125,3 @@ impl[T] Cons for T {
     def ::[l: Nat](that: Vec[T] l): Vec[T] (l + 1) =
         cons this that
 }
-
-

@@ -1,5 +1,12 @@
+//! Rendering values as strings (`Show`) and the integer type `Int`.
+//!
+//! `Int` is a sign-magnitude encoding built from `Nat`: `ofNat n` is `n` and
+//! `negSucc n` is `-(n + 1)` (so zero has a single representation).  The usual
+//! arithmetic traits are implemented on top of the helpers here.
 
+/// Types that can be rendered as a `String`.
 trait Show {
+    /// Render `this` as a string.
     def show: String
 }
 
@@ -9,13 +16,17 @@ impl Nat {
 
 // === Int 类型 ===
 
+/// Arbitrary-precision integers as a sign-magnitude pair over `Nat`.
 enum Int {
+    /// A non-negative integer: `n`.
     ofNat(n: Nat)
+    /// A negative integer: `-(n + 1)`.
     negSucc(n: Nat)
 }
 
 // === 基础运算 ===
 
+/// Negate an `Int`.
 def int_neg(i: Int): Int =
     match i {
         case ofNat(n) =>
@@ -26,6 +37,7 @@ def int_neg(i: Int): Int =
         case negSucc(n) => ofNat(succ(n))
     }
 
+/// Add two `Int`s.
 def int_add(x: Int, y: Int): Int =
     match x {
         case ofNat(a) =>
@@ -47,10 +59,12 @@ def int_add(x: Int, y: Int): Int =
             }
     }
 
+/// Subtract two `Int`s (`x - y` is `x + (-y)`).
 def int_sub(x: Int, y: Int): Int =
     let ny: Int = int_neg y;
     int_add x ny
 
+/// Multiply two `Int`s.
 def int_mul(x: Int, y: Int): Int =
     match x {
         case ofNat(n) =>
@@ -67,8 +81,10 @@ def int_mul(x: Int, y: Int): Int =
 
 // === 转换 ===
 
+/// Embed a `Nat` into `Int`.
 def int_of_nat(n: Nat): Int = ofNat n
 
+/// Truncate an `Int` to `Nat` (negative values become `zero`).
 def nat_of_int(i: Int): Nat =
     match i {
         case ofNat(n) => n
@@ -77,6 +93,7 @@ def nat_of_int(i: Int): Nat =
 
 // === Show ===
 
+/// Render an `Int` in decimal, with a leading `-` for negatives.
 def int_to_string(i: Int): String =
     match i {
         case ofNat(n) => nat_to_dec n

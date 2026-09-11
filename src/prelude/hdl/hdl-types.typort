@@ -1,3 +1,4 @@
+//! HDL data types (UInt/SInt/Bits/Bool) and their representation.
 // ============================================================
 // HDL Types: Data trait, Bool/Bits/UInt/SInt structs
 // ============================================================

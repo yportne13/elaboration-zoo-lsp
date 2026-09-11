@@ -1,10 +1,16 @@
+//! A three-way comparison result and the `Nat` comparison function.
 
+/// The result of a comparison: less-than, equal or greater-than.
 enum Ordering {
+    /// The left operand is smaller.
     lt
+    /// The operands are equal.
     eq
+    /// The left operand is greater.
     gt
 }
 
+/// Compare two naturals, returning an `Ordering`.
 def nat_compare(x: Nat, y: Nat): Ordering =
     match x {
         case zero =>
@@ -20,16 +26,19 @@ def nat_compare(x: Nat, y: Nat): Ordering =
     }
 
 impl Ordering {
+    /// Whether this is `lt`.
     def is_lt: Boolean =
         match this {
             case lt => true
             case _ => false
         }
+    /// Whether this is `eq`.
     def is_eq: Boolean =
         match this {
             case eq => true
             case _ => false
         }
+    /// Whether this is `gt`.
     def is_gt: Boolean =
         match this {
             case gt => true

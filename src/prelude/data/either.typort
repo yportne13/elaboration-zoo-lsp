@@ -1,35 +1,45 @@
+//! The sum type `Either[A, B]` and its conversions to `Option` / `Result`.
 
+/// A value that is either `left a` or `right b`.
 enum Either[A, B] {
+    /// A left value.
     left(a: A)
+    /// A right value.
     right(b: B)
 }
 
 impl[A, B] Either[A, B] {
+    /// Whether this is a `left`.
     def is_left: Boolean =
         match this {
             case left(_) => true
             case right(_) => false
         }
+    /// Whether this is a `right`.
     def is_right: Boolean =
         match this {
             case left(_) => false
             case right(_) => true
         }
+    /// Exchange `left` and `right`.
     def swap: Either[B, A] =
         match this {
             case left(a) => right(a)
             case right(b) => left(b)
         }
+    /// Map `f` over the left value, if any.
     def map_left[C](f: A -> C): Either[C, B] =
         match this {
             case left(a) => left(f a)
             case right(b) => right(b)
         }
+    /// Map `f` over the right value, if any.
     def map_right[C](f: B -> C): Either[A, C] =
         match this {
             case left(a) => left(a)
             case right(b) => right(f b)
         }
+    /// Case analysis: apply `f` to a left value or `g` to a right value.
     def elim[O](f: A -> O, g: B -> O): O =
         match this {
             case left(a) => f a
@@ -37,20 +47,24 @@ impl[A, B] Either[A, B] {
         }
 }
 
+/// Free-function form of `Either.swap`.
 def either_swap[A, B](e: Either[A, B]): Either[B, A] = e.swap
 
+/// Keep the right value as an `Option`, discarding a left value.
 def either_to_option[A, B](e: Either[A, B]): Option[B] =
     match e {
         case left(_) => None
         case right(b) => Some b
     }
 
+/// `Result` to `Either` (err becomes left, ok becomes right).
 def result_to_either[Ok, Err](r: Result[Ok, Err]): Either[Err, Ok] =
     match r {
         case ok(v) => right(v)
         case err(e) => left(e)
     }
 
+/// `Either` to `Result` (left becomes err, right becomes ok).
 def either_to_result[A, B](e: Either[A, B]): Result[B, A] =
     match e {
         case left(a) => err(a)
@@ -59,6 +73,7 @@ def either_to_result[A, B](e: Either[A, B]): Result[B, A] =
 
 impl[A, B] Either[A, B] {
     // Err-first 约定，与 either_to_result 一致：left = err，right = ok。
+    /// Convert to `Result`, mapping the left value through `f` into the error.
     def to_result[Err](f: A -> Err): Result[B, Err] =
         match this {
             case left(a) => err(f a)

@@ -1,3 +1,4 @@
+//! HDL arithmetic, bitwise and comparison operators on UInt/SInt/Bits.
 // ============================================================
 // HDL Operations: arithmetic, bitwise, shift, comparison,
 //                 reduction, mux, cat, bit extraction,

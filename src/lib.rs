@@ -17,6 +17,7 @@ pub mod sim;
 pub mod config;
 pub mod tutorial;
 pub mod quick;
+pub mod doc;
 mod lsp_stdio;
 mod L02_tyck;
 mod L03_holes;
@@ -710,23 +711,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             return None;
         }
         let before = rope.byte_slice(0..def_span.start_offset as usize).to_string();
-        // Keep every COMPLETE line above the declaration (cut after the last
-        // newline, not before it): the declaration's own partial line
-        // (`def foo…`) must be skipped without discarding separating blank
-        // lines, which terminate the doc run.
-        let above = &before[..before.rfind('\n').map(|i| i + 1).unwrap_or(0)];
-        let mut docs: Vec<&str> = Vec::new();
-        for line in above.lines().rev() {
-            match line.trim_start().strip_prefix("///") {
-                Some(rest) => docs.push(rest.strip_prefix(' ').unwrap_or(rest)),
-                None => break,
-            }
-        }
-        if docs.is_empty() {
-            return None;
-        }
-        docs.reverse();
-        Some(docs.join("\n"))
+        // Single implementation shared with `typort doc`: complete lines above
+        // the declaration (cut after the last newline, not before it) so the
+        // declaration's own partial line (`def foo…`) is skipped without
+        // discarding separating blank lines, which terminate the doc run.
+        crate::doc::markup::extract_doc_prefix(&before)
     }
 
     /// Post-process an extracted doc body into hover-friendly markdown.

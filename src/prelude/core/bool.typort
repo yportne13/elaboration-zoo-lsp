@@ -1,9 +1,16 @@
+//! The inductive boolean type `Boolean` and boolean/`Nat` predicates.
+//!
+//! Note: `Boolean` is the *runtime* truth type.  It is distinct from the HDL
+//! hardware-signal `Bool` defined in `hdl-types.typort`; see
+//! `impl Into[Bool] for Boolean` there (via `bool_to_nat`) to convert.
 
 // Boolean：归纳布尔类型（运行时真值）。
 // 与 HDL 的 `Bool`（hdl-types.typort 的硬件信号 struct {name, zz_expr}）不同。
 // 转换见 hdl-types.typort: `impl Into[Bool] for Boolean`（bool_to_nat）。
 enum Boolean {
+    /// Logical truth.
     true
+    /// Logical falsity.
     false
 }
 
@@ -39,12 +46,14 @@ impl Or[Boolean, Boolean] for Boolean {
         }
 }
 
+/// If-then-else as a function: `if_then_else cond t e`.
 def if_then_else[A](cond: Boolean, t: A, e: A): A =
     match cond {
         case true => t
         case false => e
     }
 
+/// Decidable equality on `Nat`.
 def nat_eq(x: Nat, y: Nat): Boolean =
     match x {
         case zero =>
@@ -59,6 +68,7 @@ def nat_eq(x: Nat, y: Nat): Boolean =
             }
     }
 
+/// Strict less-than on `Nat`.
 def nat_lt(x: Nat, y: Nat): Boolean =
     match x {
         case zero =>
@@ -73,6 +83,7 @@ def nat_lt(x: Nat, y: Nat): Boolean =
             }
     }
 
+/// Less-than-or-equal on `Nat`.
 def nat_lte(x: Nat, y: Nat): Boolean =
     match x {
         case zero => true
@@ -83,10 +94,13 @@ def nat_lte(x: Nat, y: Nat): Boolean =
             }
     }
 
+/// Greater-than on `Nat` (defined as `nat_lt` with arguments swapped).
 def nat_gt(x: Nat, y: Nat): Boolean = nat_lt y x
 
+/// Greater-than-or-equal on `Nat`.
 def nat_gte(x: Nat, y: Nat): Boolean = nat_lte y x
 
+/// True when `n` is even.
 def is_even(n: Nat): Boolean =
     match n {
         case zero => true
@@ -97,6 +111,7 @@ def is_even(n: Nat): Boolean =
             }
     }
 
+/// True when `n` is odd.
 def is_odd(n: Nat): Boolean =
     match n {
         case zero => false
@@ -107,22 +122,23 @@ impl Default for Boolean {
     def default: Boolean = false
 }
 
+/// `zero` is false, any successor is true.
 def nat_to_bool(n: Nat): Boolean =
     match n {
         case zero => false
         case succ(_) => true
     }
 
+/// `true` is `1`, `false` is `0`.
 def bool_to_nat(b: Boolean): Nat =
     match b {
         case true => 1
         case false => 0
     }
 
+/// Boolean implication: `a -> b`.
 def implies(a: Boolean, b: Boolean): Boolean =
     match a {
         case true => b
         case false => true
     }
-
-
