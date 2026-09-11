@@ -229,14 +229,15 @@ struct AnalysisJob {
 /// import a project namespace, or declare one, still fall back to the
 /// reference engine (the twin's replay only sees the prelude + the file).
 ///
-/// **Trade-off / why the default stays `Reference`**: after the arena
-/// compaction landed 2026-09-10 (`prime_resident` → `compact_state`), the
-/// resident twin prelude costs ~429 MB steady / ~730 MB peak vs ~200 MB for
-/// the reference's Rc cache — a ~2.2x memory-for-CPU trade, down from the
-/// ~9x / ~1.8 GB measured before compaction.  Enable with
-/// `TYPORT_LSP_ENGINE=twin` (the VS Code extension's status-bar menu writes
-/// this); both the CLI and the WASM backend honour it, the latter bounded by
-/// the module's 2 GiB link-time memory.  See
+/// **Default**: after the arena compaction landed 2026-09-10
+/// (`prime_resident` → `compact_state`), the resident twin prelude costs
+/// ~429 MB steady / ~730 MB peak vs ~200 MB for the reference's Rc cache —
+/// a ~2.2x memory-for-CPU trade, down from the ~9x / ~1.8 GB measured before
+/// compaction.  The VS Code extension therefore defaults its WASM backend to
+/// `Twin` (via `TYPORT_LSP_ENGINE=twin`, bounded by the module's 2 GiB
+/// link-time memory) and keeps its CLI backend on `Reference`; a bare
+/// `typort lsp` with the variable unset also stays on `Reference`.  The
+/// status-bar menu switches either backend.  See
 /// `resident_memory_growth_per_kick` for the pre-compaction measurement.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Engine {

@@ -19,10 +19,33 @@ const SECTION = 'typort-hdl';
 export const ENGINE_KEY = 'cli-server.engine';
 export const BACKEND_KEY = 'lsp-mode';
 
+/** Engine used when the setting has not been set explicitly. */
+const UNSET_ENGINE: Record<Backend, Engine> = {
+	// The WASM backend is the out-of-the-box experience: default to the fast
+	// L13 twin. The CLI backend is a power-user path and keeps the low-memory
+	// reference engine unless the setting is set explicitly.
+	wasm: 'twin',
+	cli: 'reference',
+};
+
+/**
+ * The user-set value, ignoring the schema default. `get()` alone cannot be
+ * used here: the schema default (`twin`, see package.json) would be
+ * indistinguishable from an explicit choice, and the CLI backend needs the
+ * opposite fallback.
+ */
+function explicitEngine(): string | undefined {
+	const inspect = workspace.getConfiguration(SECTION).inspect<string>(ENGINE_KEY);
+	return inspect?.workspaceFolderValue ?? inspect?.workspaceValue ?? inspect?.globalValue;
+}
+
 /** `twin` (the L13 performance elaborator) is the only value that opts in. */
-export function readEngine(): Engine {
-	const value = workspace.getConfiguration(SECTION).get<string>(ENGINE_KEY, 'reference');
-	return value.toLowerCase() === 'twin' ? 'twin' : 'reference';
+export function readEngine(backend: Backend): Engine {
+	const explicit = explicitEngine();
+	if (explicit !== undefined) {
+		return explicit.toLowerCase() === 'twin' ? 'twin' : 'reference';
+	}
+	return UNSET_ENGINE[backend];
 }
 
 export function readBackend(): Backend {
@@ -67,7 +90,7 @@ export function serverActionItems(host: ServerActionHost): ActionItem[] {
 	const items: ActionItem[] = [];
 
 	if (host.canUseTwin) {
-		const engine = readEngine();
+		const engine = readEngine(host.backend);
 		items.push(
 			{ label: 'Elaboration engine', kind: QuickPickItemKind.Separator },
 			{
@@ -110,7 +133,7 @@ export function serverActionItems(host: ServerActionHost): ActionItem[] {
 }
 
 async function applyEngine(engine: Engine, host: ServerActionHost): Promise<void> {
-	if (engine === readEngine()) {
+	if (engine === readEngine(host.backend)) {
 		return;
 	}
 	if (!host.canUseTwin) {

@@ -63,7 +63,7 @@ async function startLanguageServer(
 		channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
 	}
 	const serverOptions: ServerOptions = async () => {
-		const engine = canUseTwin ? readEngine() : 'reference';
+		const engine = canUseTwin ? readEngine('wasm') : 'reference';
 		const options: ProcessOptions = {
 			stdio: createStdioOptions(),
 			mountPoints: [

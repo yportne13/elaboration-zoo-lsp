@@ -103,11 +103,11 @@
 							"twin"
 						],
 						"enumDescriptions": [
-							"Reference elaborator (baseline; lower memory).",
-							"L13 twin elaborator: ~3.8x faster per edit and faster startup, at ~2x memory. Works on both backends; files with project imports or twin-unsupported constructs fall back automatically."
+							"Reference elaborator (baseline; lower memory). The CLI backend defaults to this.",
+							"L13 twin elaborator (default on the WASM backend): ~3.8x faster per edit and faster startup, at ~2x memory. Files with project imports or twin-unsupported constructs fall back automatically."
 						],
-						"default": "reference",
-						"markdownDescription": "Elaboration engine for the language server (sets `TYPORT_LSP_ENGINE`). `twin` is the L13 performance build."
+						"default": "twin",
+						"markdownDescription": "Elaboration engine (sets `TYPORT_LSP_ENGINE`). Defaults to `twin` on the WASM backend and `reference` on the CLI backend; set it explicitly to override."
 					}
 				}
 			}
