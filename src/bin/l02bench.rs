@@ -90,9 +90,28 @@ fn median(ts: &mut [u128]) -> u128 {
 
 fn main() {
     let cli = Cli::parse();
+    // 0 轮没有可报告的最小/中位时间，继续下去会在 `ts.iter().min().unwrap()`
+    // 处 panic；这里提前给出可读诊断（与 l01bench 同款）。
+    if cli.rounds == 0 {
+        eprintln!("--rounds 必须 ≥ 1（收到 0）");
+        std::process::exit(2);
+    }
+    // 口径名先校验：全是未知名时 `rows` 恒空，最终在 `rows.iter().min().unwrap()`
+    // 处 panic（`--only bogus`）。
+    const VALID_IMPLS: [&str; 4] = ["basic", "fast", "fast_ss", "fast_memo"];
+    if let Some(only) = cli.only.as_deref() {
+        let bad: Vec<&str> = only.split(',').map(str::trim).filter(|s| !VALID_IMPLS.contains(s)).collect();
+        if !bad.is_empty() {
+            eprintln!("未知口径：{}（可选 {}）", bad.join(","), VALID_IMPLS.join(","));
+            std::process::exit(2);
+        }
+    }
+    // `L02_STACK_MB=0`（或非法值）视为未设置：0 不是合法栈大小，部分平台上直接
+    // 传给 `stack_size` 会让 spawn 失败 panic（l01bench 同款处理）。
     let stack_mb: usize = std::env::var("L02_STACK_MB")
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&mb| mb > 0)
         .unwrap_or(128);
     std::thread::Builder::new()
         .stack_size(stack_mb << 20)
@@ -228,6 +247,12 @@ fn run(cli: Cli) {
                 rows.push(("basic", *ts.iter().min().unwrap(), median(&mut ts)));
             }
 
+            if rows.is_empty() {
+                // 合法口径名但与 workload 不匹配（如 conv/conv_dup + 仅 fast_memo，
+                // 这两族只走 check、无 quote）：没有可报告的行，跳过而非 panic。
+                println!("k={k:<3} n={n:<8} (无可报告口径：--only 与 workload 不匹配)");
+                continue;
+            }
             let fastest = rows.iter().map(|r| r.1).min().unwrap();
             print!("k={k:<3} n={n:<8}");
             for (name, min, med) in &rows {
