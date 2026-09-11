@@ -485,11 +485,27 @@ HDL 例 65% 采样）。已按参考版移植 `tm_no_metas`/`val_no_metas`/
 **3. 漏报：模块 close-check 未跑全（已加闸）**
 同语料暴露：`13-adder-tree` 孪生 **checks=0** 而参考版报 8 条
 HDL001/HDL002 警告——该文件的模块树在孪生侧构建不全，close-check 走不到
-报告点。`18-utils` 另有 trait 求解分叉（孪生报错，被错误闸挡下）：实测定位
-到**flex-flex 带 spine 的合一**——goal 是 `LetNamed[?m₁[rigid], ?m₁[rigid]]`、
-候选实例实例化后是 `LetNamed[?m₂[rigid], ?m₂[rigid]]`，两个未解 meta 带同一
-刚性 spine 的合一在孪生 unify 里失败（`unify_catch` 报 Basic/Stuck），参考版
-成立。属 unify 核心分叉，非局部修补。
+报告点。`18-utils` 另有 trait 求解分叉（孪生报错，被错误闸挡下）。
+**2026-09-11 精确化**（临时插桩 `TDBG_UNIFY`/`TDBG_FLEX`/`TDBG_SOLVE`，已全部
+移除）：旧的"flex-flex 带 spine 合一"定位不够准——实际失败链是
+
+```
+unify_catch(LetNamed[?m₁[r],?m₁[r]] vs LetNamed[?m₂[r],?m₂[r]])
+→ Sum/Sum 臂逐参数 → 参数对 Flex(?m[r]) vs …
+→ solve_flex_side_bump(m=33949, args=[Rigid(Lvl(0))], rhs=TimeoutHandle[tm,3])
+→ solve_bump 成功（?m33949[rigid] := TimeoutHandle）
+→ solve_multi_trait_ref(33949) 解 LetNamed trait 时报错并向外传播
+→ flexside fail → 候选全败 → 用户可见 "solve trait failed: LetNamed[...]"
+```
+
+即 `solve_bump` 本身不失败，失败在其后**同一步内**的 `solve_multi_trait_ref`：
+刚解出的 trait meta 触发对 `LetNamed` 的再求解，而该求解的候选实例化又产生
+`LetNamed[?m[rigid],?m[rigid]]` 与目标的 flex 参数对比，递归下去全候选失败。
+参考版同点位（`unification.rs::solve_flex_side`：`solve` 后 `?` 传播
+`solve_multi_trait` 结果）代码形状一致，故差异在**求解簿记/状态**（此时哪批
+trait meta 仍未解、以及解出值是否已被写入），不在分支本身——修它需两版逐点
+状态对照，属 unify 核心子工程，非局部修补。
+
 **任何孪生诊断都不可无验证地当权威**：`twin_elaborate` 现有两道闸——
 (1) 遇任何 ERROR/parse 错误整体回落参考版；(2) **声明了模块的文件若
 check 警告为空则回落**（干净的模块文件会多付一次参考版代价，方向安全）。
