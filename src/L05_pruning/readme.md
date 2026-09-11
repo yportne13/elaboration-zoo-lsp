@@ -48,6 +48,8 @@ elaboration zoo 上游 `05-pruning` 的 Rust 移植：在 L04（implicit args）
 ```text
 cargo test --lib L05_pruning          # 参考版 + 性能版内嵌测试（含互检）
 cargo test --test l05_blackbox        # 黑盒双 oracle 套件
+cargo test --test l05_blackbox_v2     # 黑盒第二卷
+cargo test --test l05_blackbox_v3     # 黑盒第三卷（β-redex/occurs/剪枝矩阵）
 cargo run --release --bin l05bench -- --workload prune
 cargo run --release --bin l05bench -- --workload all --max-k 13
 ```
@@ -143,3 +145,7 @@ conv 内联环在刚性同头链上恢复零往返。）
   前缀里的 flex 被提前求解，见 `intersect_bump` 文档注释）；参考版
   `intersect_go` 返回 `None` 回落 `unify_sp`，长度失配即 `Err`。结论同为
   不可解，不炸栈。（旧版此条误写为「共同前缀照常比较 + 必败哨兵」。）
+- pretty 的越界形态（`go` 的 Var 下标、`go_pr_i` 的 ns/掩码错位）保留上游
+  同款 panic——本章无 hover 类外部调用方，elab/nf/show 的名字表恒为造项
+  时的当前 cxt，无可达触发路径；L06 的优雅退化（go_ix 固定文案 /
+  `go_pr_inner` 位置占位）系其外部调用方所需，不回灌。

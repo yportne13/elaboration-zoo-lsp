@@ -48,6 +48,7 @@ unification）之上加**隐式参数**（`Icit` 穿线、隐式插入、命名�
 ```text
 cargo test --lib L04_implicit          # 参考版 + 性能版内嵌测试（含互检）
 cargo test --test l04_blackbox         # 黑盒双 oracle 套件
+cargo test --test l04_blackbox_v2      # 黑盒第二卷（错误路径/组合语料）
 cargo run --release --bin l04bench -- --workload implicit
 cargo run --release --bin l04bench -- --workload all --max-k 15
 ```
@@ -131,6 +132,9 @@ Defined 槽位逐一走过（`vAppBDs` 只应用 Bound 槽，但**遍历**整条
   栈（l04bench 默认 128MB 线程；`L04_STACK_MB` 可调）。实测 ~5 万层
   溢栈（chain/implicit k=15，n=65536）。
 - 参考版的深层 Box 项析构会爆栈，bench 里 `mem::forget`（L03 同款处理）。
+- pretty 的 Var 下标越界（`go` 里 `ns[len-1-x]` 直索引）保留 panic——本章
+  无 hover 类外部调用方，pretty 只吃当前 cxt 名字表下的 nf/项，无可达
+  触发路径；L06 的优雅退化（go_ix 固定文案）系其外部调用方所需，不回灌。
 - **λ 体内的 `let`**（L03 潜伏缺陷的 L04 同款，已修）：define 原本无条件
   追加到全局 `defs`，λ 体内的 define 占位后、外层再 define 会与全局
   位置冲突（debug 断言炸 / release 静默解析错）。修复：`env_ext_defs`

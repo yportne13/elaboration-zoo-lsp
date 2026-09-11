@@ -129,6 +129,7 @@ L06 在 L05（typed metas + pruning）之上加 **String 字面量类型**、
 cargo test --lib L06_string          # 参考版 + 性能版内嵌测试（含互检）
 cargo test --test l06_blackbox       # 黑盒双 oracle 套件
 cargo test --test l06_blackbox_v2    # 黑盒第二卷：剪枝路径/跨轮隔离/词法角落
+cargo test --test l06_blackbox_v3    # 黑盒第三卷：prim/global 词法与深负载矩阵
 cargo run --release --bin l06bench -- --workload church
 cargo run --release --bin l06bench -- --workload all --max-k 13
 ```
