@@ -127,6 +127,21 @@ pub trait LanguageServer {
         Err(Error::method_not_found())
     }
 
+    fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let _ = params;
+        //error!("Got a textDocument/formatting request, but it is not implemented");
+        Err(Error::method_not_found())
+    }
+
+    fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let _ = params;
+        //error!("Got a textDocument/rangeFormatting request, but it is not implemented");
+        Err(Error::method_not_found())
+    }
+
     fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let _ = params;
         //error!("Got a textDocument/codeAction request, but it is not implemented");

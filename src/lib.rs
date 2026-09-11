@@ -31,6 +31,9 @@ mod L11_macro;
 pub mod L12_canonical;
 pub mod L13_namespace;
 
+/// Whitespace-only document formatter (`textDocument/formatting`).
+pub mod format;
+
 #[cfg(feature = "sampler")]
 pub mod sampler;
 
@@ -42,7 +45,7 @@ use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
 use lsp_server::{ExtractError, Message, ProtocolError, Request, RequestId, Response};
-use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, GotoDefinition, HoverRequest, InlayHintRequest, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
+use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, Formatting, GotoDefinition, HoverRequest, InlayHintRequest, RangeFormatting, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -290,6 +293,17 @@ impl ObserveSnapshot {
     }
 }
 
+/// Explicit formatter settings (all optional), from the client's
+/// `initializationOptions.format`. See [`Backend::apply_initialization_options`].
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FormatSettings {
+    pub indent_width: Option<usize>,
+    pub use_tabs: Option<bool>,
+    pub max_blank_lines: Option<usize>,
+    pub max_bytes: Option<usize>,
+}
+
 // 3. 修改 Backend 结构
 pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub client: C,
@@ -299,6 +313,10 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub document_id: DashMap<String, u32>,
     /// Full document text for incremental sync (maintained on the LSP server thread)
     pub document_buffers: Mutex<HashMap<String, String>>,
+    /// Explicit formatter settings from
+    /// `InitializeParams.initialization_options` (`{"format": {...}}`).
+    /// `None` fields fall back to the per-request `FormattingOptions`.
+    pub format_settings: Mutex<FormatSettings>,
     pub hover_table: DashMap<String, Infer>,
     /// Twin-engine observation snapshots (per-file hover/completion/inlay),
     /// populated only when `engine == Engine::Twin`.  Kept separate from
@@ -378,6 +396,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             document_map,
             document_id,
             document_buffers: Mutex::new(HashMap::new()),
+            format_settings: Mutex::new(FormatSettings::default()),
             hover_table,
             twin_tables: DashMap::new(),
             engine,
@@ -2666,10 +2685,116 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         Some(ret)
     }
+
+    /// Seed the process-wide formatter options from
+    /// `InitializeParams.initialization_options` (`{"format": {...}}`).
+    /// Unknown/malformed settings are ignored, leaving defaults in place.
+    pub fn apply_initialization_options(&self, init: Option<Value>) {
+        let Some(fmt) = init.as_ref().and_then(|v| v.get("format")) else {
+            return;
+        };
+        let Ok(s) = serde_json::from_value::<FormatSettings>(fmt.clone()) else {
+            return;
+        };
+        let mut cfg = self.format_settings.lock().unwrap();
+        if s.indent_width.is_some() {
+            cfg.indent_width = s.indent_width.filter(|v| *v > 0);
+        }
+        if s.use_tabs.is_some() {
+            cfg.use_tabs = s.use_tabs;
+        }
+        if s.max_blank_lines.is_some() {
+            cfg.max_blank_lines = s.max_blank_lines;
+        }
+        if s.max_bytes.is_some() {
+            cfg.max_bytes = s.max_bytes.filter(|v| *v > 0);
+        }
+    }
+
+    /// Current full text of `uri` (normalized by the caller), preferring the
+    /// live sync buffer and falling back to the analysed rope.
+    fn document_text(&self, uri: &Url) -> Option<String> {
+        let buffers = self.document_buffers.lock().unwrap();
+        match buffers.get(uri.as_str()) {
+            Some(t) => Some(t.clone()),
+            None => self.document_map.get(uri.as_str()).map(|r| r.to_string()),
+        }
+    }
+
+    /// Merge the process-wide formatter config with per-request options.
+    fn format_options(&self, options: &FormattingOptions) -> crate::format::FormatOptions {
+        let s = *self.format_settings.lock().unwrap();
+        let d = crate::format::FormatOptions::default();
+        crate::format::FormatOptions {
+            // Explicit initializationOptions wins; else the editor's tab size.
+            indent_width: s.indent_width.unwrap_or(options.tab_size.max(1) as usize),
+            use_tabs: s.use_tabs.unwrap_or(!options.insert_spaces),
+            max_blank_lines: s.max_blank_lines.unwrap_or(d.max_blank_lines),
+            max_bytes: s.max_bytes.unwrap_or(d.max_bytes),
+        }
+    }
+
+    /// Core format-document logic shared by the LSP trait handler and tests.
+    ///
+    /// Returns `None` when the formatter declines (unsafe input), an empty edit
+    /// list when the document is already formatted, or a single whole-document
+    /// `TextEdit` replacing the buffer.
+    pub fn format_document_at(
+        &self,
+        uri: &Url,
+        options: &FormattingOptions,
+    ) -> Option<Vec<TextEdit>> {
+        let uri = normalize_builtin_uri(uri);
+        let text = self.document_text(&uri)?;
+        let opts = self.format_options(options);
+        let formatted = crate::format::format_document(&text, &opts)?;
+        if formatted == text {
+            return Some(Vec::new());
+        }
+        let rope = Rope::from_str(&text);
+        let end = offset_to_position(text.len(), &rope)?;
+        Some(vec![TextEdit {
+            range: Range::new(Position::new(0, 0), end),
+            new_text: formatted,
+        }])
+    }
+
+    /// Core range-format logic. Returns `None` when the formatter declines, an
+    /// empty edit list when the selected lines are already formatted, or one
+    /// `TextEdit` replacing the selected whole-line span.
+    pub fn format_range_at(
+        &self,
+        uri: &Url,
+        range: Range,
+        options: &FormattingOptions,
+    ) -> Option<Vec<TextEdit>> {
+        let uri = normalize_builtin_uri(uri);
+        let text = self.document_text(&uri)?;
+        let opts = self.format_options(options);
+        let mut start_line = range.start.line as usize;
+        let mut end_line = range.end.line as usize;
+        // A selection ending at column 0 of a line does not include that line.
+        if end_line > start_line && range.end.character == 0 {
+            end_line -= 1;
+        }
+        let edit = match crate::format::format_range(&text, &opts, start_line, end_line)? {
+            Some(edit) => edit,
+            // Declined? no — safely formatted but the range is already clean.
+            None => return Some(Vec::new()),
+        };
+        let rope = Rope::from_str(&text);
+        let start = offset_to_position(edit.start_byte, &rope)?;
+        let end = offset_to_position(edit.end_byte, &rope)?;
+        Some(vec![TextEdit {
+            range: Range::new(start, end),
+            new_text: edit.new_text,
+        }])
+    }
 }
 
 impl LanguageServer for Backend<Client> {
-    fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        self.apply_initialization_options(params.initialization_options);
         Ok(InitializeResult {
             server_info: None,
             offset_encoding: None,
@@ -2709,6 +2834,8 @@ impl LanguageServer for Backend<Client> {
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
+                document_range_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
         })
@@ -2866,6 +2993,19 @@ impl LanguageServer for Backend<Client> {
 
     fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         self.completion_at(params)
+    }
+
+    fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = normalize_builtin_uri(&params.text_document.uri);
+        Ok(self.format_document_at(&uri, &params.options))
+    }
+
+    fn range_formatting(
+        &self,
+        params: DocumentRangeFormattingParams,
+    ) -> Result<Option<Vec<TextEdit>>> {
+        let uri = normalize_builtin_uri(&params.text_document.uri);
+        Ok(self.format_range_at(&uri, params.range, &params.options))
     }
 
     fn did_change_configuration(&self, _: DidChangeConfigurationParams) {
@@ -3162,6 +3302,28 @@ impl Backend<Client> {
                     match cast::<ExecuteCommand>(req.clone()) {
                         Ok((id, params)) => {
                             let result = self.execute_command(params)?;
+                            let result = serde_json::to_value(&result).unwrap();
+                            let resp = Response { id, result: Some(result), error: None };
+                            self.client.connection.sender.send(Message::Response(resp))?;
+                            continue;
+                        }
+                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                        Err(ExtractError::MethodMismatch(req)) => req,
+                    };
+                    match cast::<Formatting>(req.clone()) {
+                        Ok((id, params)) => {
+                            let result = self.formatting(params)?;
+                            let result = serde_json::to_value(&result).unwrap();
+                            let resp = Response { id, result: Some(result), error: None };
+                            self.client.connection.sender.send(Message::Response(resp))?;
+                            continue;
+                        }
+                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                        Err(ExtractError::MethodMismatch(req)) => req,
+                    };
+                    match cast::<RangeFormatting>(req.clone()) {
+                        Ok((id, params)) => {
+                            let result = self.range_formatting(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
