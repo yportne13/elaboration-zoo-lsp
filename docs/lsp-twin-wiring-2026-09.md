@@ -499,12 +499,30 @@ unify_catch(LetNamed[?m₁[r],?m₁[r]] vs LetNamed[?m₂[r],?m₂[r]])
 ```
 
 即 `solve_bump` 本身不失败，失败在其后**同一步内**的 `solve_multi_trait_ref`：
-刚解出的 trait meta 触发对 `LetNamed` 的再求解，而该求解的候选实例化又产生
-`LetNamed[?m[rigid],?m[rigid]]` 与目标的 flex 参数对比，递归下去全候选失败。
-参考版同点位（`unification.rs::solve_flex_side`：`solve` 后 `?` 传播
-`solve_multi_trait` 结果）代码形状一致，故差异在**求解簿记/状态**（此时哪批
-trait meta 仍未解、以及解出值是否已被写入），不在分支本身——修它需两版逐点
-状态对照，属 unify 核心子工程，非局部修补。
+刚解出的 trait meta 触发对 `LetNamed` 的再求解。参考版同点位
+（`unification.rs::solve_flex_side`：`solve` 后 `?` 传播 `solve_multi_trait`
+结果）代码形状一致，故差异在**求解簿记/状态**，不在分支本身。
+
+**2026-09-11 再进一步**（双引擎日志，插桩已移除）：把失败那一步的 trait meta
+候选打出来，两版差异是"该步要解的 trait meta 集合不同"：
+
+- 孪生：`solve_multi_trait_ref(m=33949)` 的候选 = `[33950]`，即**同一步内新
+  产生的 trait meta 33950（trait 名 LetNamed）** 落在 `mv >= m` 扫描范围内，
+  被求解 → 其候选实例化又和目标的 flex 参数对比 → 递归求解失败 → 错误外传。
+- 参考版：对应调用形如 `solve_multi_trait(m=34237)`、随后 `m=34238` 且
+  `metas_len=34238`（m 已等于 meta 表长度）——索引越界即 `continue`，没有可解
+  候选，直接 Ok；整轮 `solve_multi_trait` 全程 `ok=true`。
+- 佐证：同一步孪生 `trait_metas` 长度 6962，参考版同阶段 6942——**孪生多注册
+  约 20 条 trait meta**。两版 `fresh_meta` 的注册条件逐句一致（先试实例合成，
+  trait Sum 才 `new_meta + trait_metas.push`），故多出来的来自孪生在某些路径上
+  多走了一次 `fresh_meta`（或某处 rollback 只回滚 `metas` 未回滚
+  `trait_metas`——Nat 默认化回滚点是两版共有的，已核查非此因）。
+
+结论不变但点位更窄：**修点是让孪生在该步的 trait meta 集合/求解顺序与参考版
+一致**（或让 `solve_multi_trait_ref` 对"同一步新产生、正被外层求解的 meta"
+不再递归触发）。需要两版同步 trace（给 `fresh_meta` 记逻辑 id）才能安全定位，
+属 unify 核心子工程。
+
 
 **任何孪生诊断都不可无验证地当权威**：`twin_elaborate` 现有两道闸——
 (1) 遇任何 ERROR/parse 错误整体回落参考版；(2) **声明了模块的文件若
