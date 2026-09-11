@@ -2,6 +2,7 @@ import 'vscode-languageclient/node';
 import { ExtensionContext, window, workspace, commands, StatusBarItem, StatusBarAlignment, LogOutputChannel } from 'vscode';
 import { LanguageClient, LanguageClientOptions, State, StateChangeEvent, ErrorAction, CloseAction } from 'vscode-languageclient/node';
 import { activate as activateWasm, deactivate as deactivateWasm } from './extension';
+import { readEngine, showServerActions } from './serverActions';
 
 // Maximum number of consecutive unexpected server exits before we stop
 // retrying automatically and ask the user to restart the server manually.
@@ -61,6 +62,9 @@ function updateStatusBar(state: State): void {
 async function startClient(): Promise<void> {
 	if (!cliClientOptions) return;
 	updateStatusBar(State.Starting);
+	// Re-read the engine on every start so a switch from the status bar takes
+	// effect on the restart that follows it.
+	cliEnv = readEngine() === 'twin' ? { TYPORT_LSP_ENGINE: 'twin' } : undefined;
 	// `options.env` replaces the child environment, so merge the parent's.
 	// Only set when an engine is selected so the default spawn is unchanged.
 	// (`process` is read off globalThis because this project's tsconfig only
@@ -81,6 +85,33 @@ async function startClient(): Promise<void> {
 	if (newClient.state === State.Running) {
 		updateStatusBar(State.Running);
 	}
+}
+
+/**
+ * User-initiated restart of the CLI server. Cancels a pending automatic
+ * restart and marks the stop as intentional so it is not counted as a crash.
+ * Shared by the restart command and the status-bar action picker.
+ */
+async function restartCliClient(): Promise<void> {
+	if (restartTimer !== undefined) {
+		clearTimeout(restartTimer);
+		restartTimer = undefined;
+	}
+	consecutiveCrashCount = 0;
+	userStopped = true;
+	try {
+		if (client) {
+			try {
+				await client.stop();
+			} catch (error) {
+				client.error(`Stopping server failed`, error, 'force');
+			}
+		}
+	} finally {
+		userStopped = false;
+	}
+	await startClient();
+	window.showInformationMessage('TyportHDL Language Server restarted.');
 }
 
 /**
@@ -142,20 +173,10 @@ export async function activate(context: ExtensionContext) {
 	context.subscriptions.push(statusBarItem);
 	statusBarItem.show();
 
-	// Register shared commands
-	context.subscriptions.push(commands.registerCommand('typort-hdl.showServerActions', async () => {
-		if (!client) return;
-		const pick = await window.showQuickPick([
-			{ label: '$(debug-restart) Restart Language Server', description: 'Restart the TyportHDL language server' },
-			{ label: '$(output) Show Log', description: 'Open the language server output channel' },
-		], { placeHolder: 'Language Server Actions' });
-		if (!pick) return;
-		if (pick.label.includes('Restart')) {
-			commands.executeCommand('typort-hdl.restartLanguageServer');
-		} else if (pick.label.includes('Log')) {
-			logChannel?.show();
-		}
-	}));
+	// The action picker is registered per backend below: the CLI branch wires
+	// it to the in-place restart, the WASM branch to `activateWasm`, which
+	// registers it itself. Registering it here as well would double-register
+	// `typort-hdl.showServerActions`.
 
 	const config = workspace.getConfiguration('typort-hdl');
 	const mode = config.get<string>('lsp-mode', 'wasm');
@@ -163,10 +184,8 @@ export async function activate(context: ExtensionContext) {
 	if (mode === 'cli') {
 		cliCommand = config.get<string>('cli-server.path', '') || 'typort';
 		cliArgs = ['lsp'];
-		const engine = config.get<string>('cli-server.engine', 'reference');
-		cliEnv = engine === 'twin' ? { TYPORT_LSP_ENGINE: 'twin' } : undefined;
 		logChannel = window.createOutputChannel('TyportHDL Language Server', { log: true });
-		logChannel.appendLine(`Starting CLI language server: ${cliCommand} lsp (engine: ${engine})`);
+		logChannel.appendLine(`Starting CLI language server: ${cliCommand} lsp (engine: ${readEngine()})`);
 
 		cliClientOptions = {
 			documentSelector: [{ language: "typort" }],
@@ -192,33 +211,20 @@ export async function activate(context: ExtensionContext) {
 
 		await startClient();
 
-		context.subscriptions.push(commands.registerCommand('typort-hdl.restartLanguageServer', async () => {
-			// The user takes control: cancel any pending automatic restart and
-			// break the chain of consecutive crashes.
-			if (restartTimer !== undefined) {
-				clearTimeout(restartTimer);
-				restartTimer = undefined;
-			}
-			consecutiveCrashCount = 0;
-			// Mark the stop as user-initiated so that it is not counted as a
-			// crash by handleStateChange.
-			userStopped = true;
-			try {
-				if (client) {
-					try {
-						await client.stop();
-					} catch (error) {
-						client.error(`Stopping server failed`, error, 'force');
-					}
-				}
-			} finally {
-				userStopped = false;
-			}
-			await startClient();
-			window.showInformationMessage('TyportHDL Language Server restarted.');
+		context.subscriptions.push(commands.registerCommand('typort-hdl.restartLanguageServer', () => restartCliClient()));
+
+		context.subscriptions.push(commands.registerCommand('typort-hdl.showServerActions', () => {
+			if (!client) return;
+			return showServerActions({
+				backend: 'cli',
+				canUseCli: true,
+				canUseTwin: true,
+				restart: () => restartCliClient(),
+				showLog: () => logChannel?.show(),
+			});
 		}));
 	} else {
-		await activateWasm(context);
+		await activateWasm(context, { canUseCli: true, canUseTwin: true });
 	}
 }
 

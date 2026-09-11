@@ -649,4 +649,38 @@ COMPACT` 可关压实（对照测量用）。
 （`TYPORT_TWIN_NO_COMPACT=1` 同点崩溃）、内存耗尽、栈溢出。完整证据链见
 `docs/l13-parallel-test-uaf-2026-09.md`。**回归闸恢复默认并行即可。**
 
+---
+
+## 2026-09-11（wasm 后端接入孪生 + 状态栏切换）
+
+**背景**：孪生此前只在 CLI 后端可用——`TYPORT_LSP_ENGINE` 只由
+`extension.desktop.ts` 的 CLI 分支注入，wasm 分支（`extension.ts`）从不给
+进程传 env；且模块线性内存上限 ~1 GiB，容不下压实前的 1.8 GB。压实落地后
+峰值 730 MB，上限才有谈的余地。
+
+**接线**：
+
+- **env 注入**：wasm 进程创建时经 `ProcessOptions.env` 传
+  `TYPORT_LSP_ENGINE=twin`（`@vscode/wasm-wasi` 的 `Environment` 支持该
+  字段，WASI guest 由 `Engine::from_env` 读取）。这与 CLI 分支的 env 注入
+  是同一个内核入口，不新增引擎分派代码。
+- **内存上限**：`extension.ts` 的 memory descriptor `16000` → `32768` 页
+  （~976 MiB → 2 GiB），`package.json` 构建脚本 `--max-memory=1048576000`
+  → `2147483648`。两者必须同步：wasm32-wasip1-threads 模块导入的 shared
+  memory 边界由 linker 决定，descriptor 必须匹配，否则实例化失败。2 GiB
+  对 730 MB 峰值留约 2.7× 余量。
+- **状态栏切换**：新增 `client/src/serverActions.ts`，桌面两个后端都提供
+  引擎组（`Reference` / `Twin (performance)`）与后端组（`WASM` / `CLI`）；
+  引擎切换写 `typort-hdl.cli-server.engine` 后就地重启（两个后端都读它），
+  后端切换因激活期语义需重载窗口。web 宿主（不能 spawn CLI）固定
+  reference，不显示切换项。
+- 顺带修掉重复注册：`extension.desktop.ts` 原先在分支前注册
+  `showServerActions`，wasm 分支的 `activateWasm` 又注册同名命令。
+
+**验证边界**：本地完成 TS `tsc -b` + esbuild 打包、以及
+`cargo rustc --target wasm32-wasip1-threads` 带新 `--max-memory` 的链接，
+确认 wasm-ld 接受 2 GiB；**未在 VS Code 运行时里真机点过**——env 注入与
+2 GiB 上界在 wasm-wasi 宿主下的实际行为（含孪生常驻态是否稳定）仍待一轮
+真机验证。
+
 
