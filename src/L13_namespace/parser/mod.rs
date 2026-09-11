@@ -30,7 +30,7 @@ pub struct MacroExpansionInfo {
 
 use crate::parser_lib_resilient::*;
 
-mod lex;
+pub mod lex;
 pub mod syntax;
 pub mod macros;
 pub mod derive;
