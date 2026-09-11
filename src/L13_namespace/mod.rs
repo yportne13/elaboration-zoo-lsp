@@ -3509,10 +3509,24 @@ struct PreludeSlot {
     pool: &'static PreludePool,
 }
 
+/// 诊断开关：`TYPORT_NO_PRELUDE_POOL=1` 完全禁用跨线程池化（退池改销毁、
+/// 取池改空）。每次取用都重新 elaborate prelude（慢），但排除一切跨线程
+/// Rc 交接，用于把并行测试崩溃二分到"池交接"或"别处"。
+fn prelude_pool_disabled() -> bool {
+    // 进程启动后缓存一次：环境变量在此期间不会变。
+    static NO_POOL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *NO_POOL.get_or_init(|| std::env::var_os("TYPORT_NO_PRELUDE_POOL").is_some())
+}
+
 impl PreludeSlot {
     fn new(pool: &'static PreludePool) -> Self {
+        let initial = if prelude_pool_disabled() {
+            None
+        } else {
+            pool.lock().unwrap().pop().map(|p| p.0)
+        };
         Self {
-            cell: std::cell::RefCell::new(pool.lock().unwrap().pop().map(|p| p.0)),
+            cell: std::cell::RefCell::new(initial),
             pool,
         }
     }
@@ -3539,7 +3553,7 @@ impl Drop for PreludeSlot {
             force_memo_clear();
             declb_cache_clear();
             let mut pool = self.pool.lock().unwrap();
-            if pool.len() < 64 {
+            if !prelude_pool_disabled() && pool.len() < 64 {
                 pool.push(PoolState(state));
             }
         }

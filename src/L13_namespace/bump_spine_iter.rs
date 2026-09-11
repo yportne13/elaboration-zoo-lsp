@@ -69,19 +69,19 @@
 //! 与参考版共用 parser / pretty / preprocess / Synth，**Ok 输出逐字节
 //! 一致**（互检测试 + `tests/l13_fast_parity.rs`）。
 //!
-//! **已移植（观察面 / LSP 接线阶段 1-3a，docs/lsp-twin-wiring-2026-09.md）**：
+//! **已移植（观察面 / LSP 接线阶段 1-4，docs/lsp-twin-wiring-2026-09.md）**：
 //! hover/completion/inlay 三张 owned 观察表（push 期渲染）、prelude 装载轮
 //! （[`Tycker::run_decls_with_prelude`]，nat/vconnT 内建 + 短名别名 +
-//! HdlLoopIdx 口径；**无池化**——每 kick 从 prime_round 重放，装载段
-//! `observe=false` 关观察面 push）。LSP 侧 `Engine::Twin` 已接线
-//! （`lib.rs::twin_observe`），并走**常驻 prelude 检查点**（阶段 3b：
-//! [`Tycker::prime_resident`] 一次装载 + [`Tycker::observe_user`] 多次复用，
-//! 线程局部挂分析主循环）——seed 税已清零（kick 3285→399ms）。**仍未净
-//! 收益**：twin 模式为诊断/跨文件跑完整参考版流水线（~280ms 单文件
-//! elaboration），孪生观察段是叠加的 ~74ms；净收益需孪生接管诊断面（错误
-//! 累积 + 源码 span 保真），详见该文档 2026-09-10 进展。
-//! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF、force 记忆化（本机 force
-//! 按值重算、无 memo，taint/prim_version 随之不需要）、Tm/Val 迭代 Drop
+//! HdlLoopIdx 口径；**无 PreludePool 池化**——每 kick 从 prime_round 重放，
+//! 装载段 `observe=false` 关观察面 push）、以及 **force 记忆化**
+//! （[`FORCE_MEMO`]，`d85a759` 移植：HDL prelude 由 11.0s 降到 1.8s，是 LSP
+//! 接线的前提；bump 同代不回收，故免 keepalive，每轮入口 `force_memo_clear`）。
+//! LSP 侧 `Engine::Twin` 已接线（`lib.rs::twin_observe` / `twin_elaborate`），
+//! 走**常驻 prelude 检查点**（阶段 3b：`prime_resident` 一次装载 +
+//! `observe_user` 多次复用，线程局部挂分析主循环），并在**阶段 4 接管单文件
+//! 诊断**（错误 span 保真 + 逐 decl 累积 + 导出声明并回参考域）——稳态 kick
+//! 98ms vs 参考版 359ms（约 3.5×），常驻态经 arena 压实 1835MB → 429MB。
+//! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF、Tm/Val 迭代 Drop
 //! （bump 免疫）、PreludePool 池化/defer_println（run() 口径为 false）、
 //! canonical/iddfs（只在参考版 Err 路径的重试闭包里，不影响判定与输出）。
 //!
