@@ -194,6 +194,8 @@ impl Synth {
     fn vals_eq_ground_impl(a: &Val, b: &Val, visited: &mut HashMap<u32, u32>) -> bool {
         //println!("###### {a:?} ===== {b:?}");
         match (a, b) {
+            // Flex（未解 meta）视为等于一切：与 `val_match` 的 Flex 宽放
+            // 同一策略（实例匹配容忍未解实参，靠后续 refine），刻意语义。
             (Val::Flex(..), _) | (_, Val::Flex(..)) => true,
             (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) => {
                 x1 == x2 && sp1.is_empty() && sp2.is_empty()
@@ -225,9 +227,16 @@ impl Synth {
             (Val::U(x1), Val::U(x2)) => x1 == x2,
             (Val::LiteralType, Val::LiteralType) => true,
             (Val::Match(a1, b1, c1, _), Val::Match(a2, b2, c2, _)) => {
+                // 分支体也必须一致（L13 同款修复，原 TODO 落地）：只比
+                // scrutinee 与 env 长度不健全——同一变量上两个不同函数的
+                // 卡住 match 会被判等。同一 def 出现的分支体共享 Rc 指针，
+                // 指针相等即可靠地判"同源"；pattern 逐结构比较。
                 Self::vals_eq_ground_impl(a1, a2, visited)
                     && b1.len() == b2.len()
-                    //TODO:&& c1.iter().zip(c2.iter()).all(|()| )
+                    && c1.len() == c2.len()
+                    && c1.iter().zip(c2.iter()).all(|((p1, t1), (p2, t2))| {
+                        p1 == p2 && Rc::ptr_eq(t1, t2)
+                    })
             }
             _ => false,
         }

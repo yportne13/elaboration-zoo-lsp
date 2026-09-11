@@ -65,7 +65,7 @@ impl PatConstructor {
 pub struct Compiler {
     warnings: Vec<Warning>,
     reachable: HashMap<usize, ()>,
-    checked_ret: HashSet<Raw>,
+    checked_ret: HashSet<usize>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     ret_type: Rc<Val>,
 }
@@ -145,6 +145,22 @@ impl Compiler {
             }
         };
 
+        // This is a pure probe: the per-constructor infer_expr/check_pm may
+        // solve metas (including pre-existing ones) and allocate throwaway
+        // fresh metas. L13/L09/L10 同款窄快照（快版 `run_pure_probe` 同口径，
+        // 整循环一回滚）：只把探测面 `meta` 整表换入换出，循环结束**无条件**
+        // 回滚（Success/Error 皆然）。必须整表 clone、不能 truncate——探测期
+        // 解掉的已有 meta 可能引用循环内新建 meta，截断会让解悬空（后续查找
+        // 越界 panic）。其余字段探测期只读或自清：`trait_definition`/
+        // `trait_out_param` 是注册表（探测只做表达式级 infer/check，无
+        // decl/实例登记）；`trait_solver` 每次真查询先 `clean()`
+        // （`unification.rs::solve_trait`），瞬态残留不跨查询生效；
+        // `meta_contrains` 由 `unify_catch` 入口/出口无条件清空，探测期挂账
+        // 要么就地转 Err 要么被清，不持久；`mutable_map` 是 Rc 共享（整
+        // Infer clone 亦共享），探测无全局登记；`hover_table`/
+        // `completion_table` 只在 decl elaboration 追加。
+        let meta_snapshot = infer.meta.clone();
+        let result = (|| -> Result<Vec<_>, Error> {
         for constr_def @ constr_name in all_constrs {
             // We create a temporary, throwaway inference state for the unification check
             // to avoid polluting the main inference state with temporary metavariables.
@@ -158,7 +174,7 @@ impl Compiler {
                 let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
                 match typ.as_ref() {
                     Val::Pi(name, icit, ty, _) => {
-                        if *icit == Icit::Expl { // Only explicit args matter for the structure 
+                        if *icit == Icit::Expl { // Only explicit args matter for the structure
                             params.push((name.clone(), ty.clone(), *icit));
                         }
                         to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole(name.to_span())), super::Either::Icit(*icit));
@@ -168,12 +184,11 @@ impl Compiler {
                 }
             }
             /*for (_, _, icit) in constr_arg_tys_raw {
-                if *icit == Icit::Expl { // Only explicit args matter for the structure 
+                if *icit == Icit::Expl { // Only explicit args matter for the structure
                     to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
                 }
             }*/
 
-            //let mut temp_infer = infer.clone();
             // 4. Try to unify it with the type of the matched term.
             if let Ok((_, cxt)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
                 // If unification succeeds, the constructor is accessible.
@@ -182,6 +197,9 @@ impl Compiler {
         }
 
         Ok(accessible)
+        })();
+        infer.meta = meta_snapshot;
+        result
     }
 
     fn compile_aux(
@@ -207,14 +225,22 @@ impl Compiler {
         match heads {
             [] => match arms {
                 [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
+                    // 可达性先记（L13 2a0eb6e 同族）：到达本叶即该臂可达，与
+                    // check_pm_final/体检查是否成功无关；后记会在构造子分支
+                    // 走查 check_pm_final 失败（本分支不适用的臂）时漏记，
+                    // 决策树遍历结束即误报 unreachable pattern。
+                    self.reachable.insert(*idx, ());
                     let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
                         Ok(x) => x,
                         Err(e) => {
                             return Ok(false);
                         }
                     };
-                    self.reachable.insert(*idx, ());
-                    if self.checked_ret.contains(raw) {
+                    // 同一臂可能在多个构造子分支被走到：已完整编译（体检查 +
+                    // pats 记录）则只需可达、无需重检查。按臂下标记录（L13
+                    // 同族）——按模式 Raw 记录会把两个模式相同的不同臂混为
+                    // 一谈，漏检第二个臂的体。
+                    if self.checked_ret.contains(idx) {
                         return Ok(true)
                     }
                     //println!("prepare to check {:?}", arm.body);
@@ -227,7 +253,7 @@ impl Compiler {
                         },
                     };
                     let ret = infer.check::<false>(&cxt, arm.body.0.clone(), ret_type)?;
-                    self.checked_ret.insert(raw.clone());
+                    self.checked_ret.insert(*idx);
                     let patcon = patcon.clone().clean();
                     //TODO:check patcon is clean
                     self.pats.push((patcon.data[0].1[0].clone(), ret));

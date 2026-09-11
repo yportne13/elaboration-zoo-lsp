@@ -45,7 +45,10 @@ fn go_ix(ns: List<SmolStr>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
-    "Variable index out of bounds".to_owned()
+    // 越界说明显示上下文里没有这个名字（错误文案对更浅上下文的项做
+    // pretty 时可达），退化显示索引而不是 panic/整句文案（L08/L09/L10
+    // `go_ix` 同款）。
+    format!("@{}", ix)
 }
 
 fn go_app_pruning(p: i32, top_ns: List<SmolStr>, ns: List<SmolStr>, t: &Tm, pr: &Pruning) -> String {
@@ -238,7 +241,10 @@ fn pretty_tm_indent(prec: i32, indent: usize, ns: List<SmolStr>, tm: &Tm) -> Str
                     .reduce(|a, b| a + ", " + &b)
                     .map(|x| format!("{}[{}]", name.data, x))
                     .unwrap_or(name.data.to_string()),
-                _ => panic!("Sum case must be applied to a sum"),
+                // typ 非 `Tm::Sum`（构造子的 `-> ret` 原样存储，可以是 App
+                // 链）：沿链找头部 Sum 名字，找不到退化 `?` 而不是 panic
+                // （L08/L09/L10/L11 `sum_head_name` 同款降级）。
+                _ => sum_head_name(typ.as_ref()),
             },
             case_name.data,
             params
@@ -291,5 +297,17 @@ fn pretty_nat(prec: i32, indent: usize, ns: List<SmolStr>, param: Option<&Tm>, s
         },
         Some(tm) => format!("{} + {}", pretty_tm_indent(prec, indent, ns, tm), sum),
         None => format!("unknown + {}", sum),
+    }
+}
+
+/// `SumCase.typ` 可能不是展开的 `Tm::Sum`（构造子的 `-> ret` 原样存储，
+/// 可以是 App 链）：沿 App 链找头部的 Sum 名字，找不到就显示 `?`
+/// （L08/L09/L10/L11 同款降级，不再 panic）。
+fn sum_head_name(tm: &Tm) -> String {
+    match tm {
+        // L12 的 Sum 名字是 SmolStr：转 String 与函数签名/邻层同型。
+        Tm::Sum(name, ..) => name.data.to_string(),
+        Tm::App(f, _, _) => sum_head_name(f),
+        _ => "?".to_owned(),
     }
 }

@@ -365,28 +365,40 @@ def g : String = get_global "f"
 #[test]
 fn probe_u64_literal_overflow_no_panic() {
     let src = "def x = 99999999999999999999999999\n";
+    // 解析结果含 Rc（!Send）：Some/错误条数在子线程内解包，只回传 (bool, usize)
     let res = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
-        .spawn(move || L12_canonical::parser::parser(src, 0))
+        .spawn(move || {
+            L12_canonical::parser::parser(src, 0)
+                .map(|(_, errs)| (true, errs.len()))
+                .unwrap_or((false, 0))
+        })
         .unwrap()
         .join();
     assert!(res.is_ok(), "超大整数不应 panic");
-    let parsed = res.unwrap().expect("parser 应返回 Some");
-    assert!(!parsed.1.is_empty(), "超大整数应产生解析错误");
+    let (parsed_some, err_count) = res.unwrap();
+    assert!(parsed_some, "parser 应返回 Some");
+    assert!(err_count > 0, "超大整数应产生解析错误");
 }
 
 /// A8（P0）：自递归宏受展开深度上限保护，不得栈溢出；返回解析错误。
 #[test]
 fn probe_macro_self_recursion_depth_limit() {
     let src = "macro_rules m { () => { m } }\ndef x = m\n";
+    // 解析结果含 Rc（!Send）：Some/错误条数在子线程内解包，只回传 (bool, usize)
     let res = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
-        .spawn(move || L12_canonical::parser::parser(src, 0))
+        .spawn(move || {
+            L12_canonical::parser::parser(src, 0)
+                .map(|(_, errs)| (true, errs.len()))
+                .unwrap_or((false, 0))
+        })
         .unwrap()
         .join();
     assert!(res.is_ok(), "自递归宏不应栈溢出");
-    let parsed = res.unwrap().expect("parser 应返回 Some");
-    assert!(!parsed.1.is_empty(), "自递归宏应产生解析错误而非无限展开");
+    let (parsed_some, err_count) = res.unwrap();
+    assert!(parsed_some, "parser 应返回 Some");
+    assert!(err_count > 0, "自递归宏应产生解析错误而非无限展开");
 }
 
 /// A5：无实例 trait 调用两端同判定（钉住 L12 快版 `:5442` 由 `.unwrap()`
