@@ -224,6 +224,7 @@ pub(crate) fn normalize_compiled<'a>(bump: &'a Bump, code: Code<'a>) -> &'a Bt<'
 }
 
 /// 便捷入口：import + compile + normalize 一步完成（计时含转换成本）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_compiled
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = bump_arena::import_iter(&bump, &t);

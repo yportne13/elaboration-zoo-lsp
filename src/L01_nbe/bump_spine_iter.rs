@@ -12,6 +12,12 @@
 //! `bump_tree` 的 1.2×）。求值/quote 深度均不受进程栈限——大 n 段
 //! （`bench_cek_deep`）出赛。
 //!
+//! 孪生同步：本文件的 quote 保留两道 `v_tag(...) == 1` 防御性回灌守卫
+//! （二叉 fallback 与 ChainRun，回灌自 L02+ 各章）；L01 内因 eval 已保证
+//! spine 条目的 `f` 恒非闭包（β 岔路在压栈前先行归尽）而恒假。
+//! `bump_spine_slim`/`bump_spine_memo` 是 L01 本地实验变体，刻意不带守卫
+//! （论证见各自模块头）。
+//!
 //! 另提供 [`Machine`]：spine 与 vals 两个无生命周期的大栈跨调用复用
 //! （配合同一 `Bump` 的 `reset()`），即稳态近零分配口径（bench 的 `_ss`
 //! 行）。对照变体 [`super::bump_spine_slim`] 实测：条目瘦到 16B、把连续性
@@ -359,6 +365,7 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_imported
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = bump_arena::import_iter(&bump, &t);

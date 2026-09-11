@@ -19,6 +19,10 @@
 //! 里 `Q` 的调用次数只有 O(λ 层)（链节点走 ChainRun，不经过 Q），故
 //! 开销趋近于零；dup 负载（`dup_pair`/`dup_deep`，见 bench）里把
 //! 2×/4× 的重复强制压回 1×。
+//!
+//! 孪生同步：本变体是 L01 本地实验，quote 复用 `bump_spine_iter` 的任务栈/
+//! 流式链但**不带**其两道 `v_tag(...) == 1` 防御性回灌守卫（L01 内恒假，
+//! 论证见 `bump_spine_iter` 模块头），不随 L02+ 孪生演进。
 
 use bumpalo::Bump;
 use rustc_hash::FxHashMap;
@@ -272,6 +276,7 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_imported
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = bump_arena::import_iter(&bump, &t);

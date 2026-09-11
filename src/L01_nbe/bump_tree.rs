@@ -19,6 +19,7 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_imported
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = bump_arena::import(&bump, &t);

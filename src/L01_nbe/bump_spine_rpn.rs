@@ -120,6 +120,7 @@ pub(crate) fn normalize_imported_rpn<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> Vec<
 }
 
 /// 便捷入口：import + normalize + 解码（计时含转换成本，供测试）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_imported_rpn
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = super::bump_arena::import(&bump, &t);

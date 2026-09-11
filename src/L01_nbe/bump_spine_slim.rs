@@ -11,6 +11,10 @@
 //! - 语义与 `bump_spine_iter` 完全一致（同一右链快速路径、同一 fallback
 //!   形状）；差别只在记账的位置。下行推断只多一次顺序向下 load（硬件
 //!   预取友好），换 push 期每次 -1 load -1 store -加法。
+//! - 与 iter 的另一处差异：**不带**其两道 `v_tag(...) == 1` 防御性回灌守卫
+//!   （二叉 fallback 与 ChainRun 续跑）。L01 的 eval 保证 spine 条目的 `f`
+//!   恒非闭包（β 岔路在压栈前先行归尽），守卫恒假；本变体是 L01 本地对照
+//!   实验（实测否决），不随 L02+ 孪生演进，故不复制那两道守卫。
 //!
 //! 另提供 [`Machine`]：spine 与 vals 两个无生命周期的大栈跨调用复用
 //! （配合同一 `Bump` 的 `reset()`），即稳态近零分配口径（bench 的 `_ss` 行）。
@@ -303,13 +307,15 @@ impl Machine {
     /// 调用复用（clear 保容量）。调用方保证 `bump`/`tm` 同源（reset 后重 import）。
     pub(crate) fn normalize<'a>(&mut self, bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'a> {
         self.spine.stack.clear();
-        let v = eval_with(bump, &mut self.spine, &mut Vec::new(), &mut self.vals, None, tm);
+        // 与 `bump_spine_iter::Machine` 同口径：小栈预留 64 槽，避免稳态首推
+        // 的分配（本负载恒浅，不会扩容）。
+        let v = eval_with(bump, &mut self.spine, &mut Vec::with_capacity(64), &mut self.vals, None, tm);
         quote_with(
             bump,
             &mut self.spine,
-            &mut Vec::new(),
-            &mut Vec::new(),
-            &mut Vec::new(),
+            &mut Vec::with_capacity(64),
+            &mut Vec::with_capacity(64),
+            &mut Vec::with_capacity(64),
             &mut self.vals,
             v,
         )
@@ -332,6 +338,7 @@ pub(crate) fn normalize_imported<'a>(bump: &'a Bump, tm: &'a Bt<'a>) -> &'a Bt<'
 }
 
 /// 便捷入口：import + normalize 一步完成（计时含转换成本）。
+#[allow(dead_code)] // 仅供单测：bench 走 normalize_imported
 pub(crate) fn normalize(t: Term) -> Term {
     let bump = Bump::new();
     let tm = bump_arena::import_iter(&bump, &t);

@@ -1,7 +1,10 @@
 //! `naive` 的变体：值改为 `Rc` 骨架。
 //!
-//! 只有 `App(Rc<Value>, Rc<Value>)` 换成了引用计数——quote 递归走
-//! `Rc` 时不再深拷贝整棵值树，代价是每次构造/克隆都多一次原子计数。
+//! 只有 `App(Rc<Value>, Rc<Value>)` 换成了引用计数——`App` 的 quote 走
+//! `Rc` 浅拷、不再深拷贝子树，代价是每次 `Rc` 克隆多一次**非原子**计数
+//! （`std::rc::Rc`）。注意 `Value::Lam(List<Value>, Term)` 的闭包体仍是
+//! `Box<Term>` 树：quote 的 Lam 分支要 `body.clone()`（`eval` 按值取项），
+//! 对体树深拷一次——并非所有路径都免深拷。
 
 use std::rc::Rc;
 
