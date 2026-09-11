@@ -2039,20 +2039,30 @@ fn unify_iter<'a>(
     l0: u32,
     t0: V,
     u0: V,
-    cxt: &Cxt<'a>,
-    mach_ptr: *mut Machine,
-    trait_err: &mut Option<String>,
+    // 续跑标记：`true` = 由 trait 合成挂起点返回后续跑（跳过入口
+    // clear 与初始入栈——工作栈/草稿都住在 Machine 字段里，内容跨
+    // 挂起点保持，等价于旧实现「回调返回后继续循环」）。
+    resume: bool,
+    // trait 合成挂起信号：flex 解开后需跑 `solve_multi_trait_ref` 的
+    // meta。由 `unify` 驱动在**无任何字段借用存活**的点上以独占
+    // `&mut Machine` 执行（替代旧实现的 `mach_ptr` 整机重借——那在
+    // Stacked Borrows 下使存活中的字段借用失效，属别名违规）。
+    solve_req: &mut Option<u32>,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
-    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配
-    conv.memo.clear();
-    conv.scratch1.clear();
-    conv.scratch2.clear();
+    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配（resume 续跑
+    // 不清——挂起点前已把草稿原样恢复；嵌套 unify 的入口 clear 对记忆
+    // 表的影响与旧实现一致）
+    if !resume {
+        conv.memo.clear();
+        conv.scratch1.clear();
+        conv.scratch2.clear();
+        // UItem 工作栈由调用方常驻复用（入口已 clear）；失败早退会留下非空
+        // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）
+        debug_assert!(stack.is_empty());
+        stack.push(UItem::Pair(l0, t0, u0));
+    }
     let memo = &mut conv.memo;
-    // UItem 工作栈由调用方常驻复用（入口已 clear）；失败早退会留下非空
-    // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）
-    debug_assert!(stack.is_empty());
-    stack.push(UItem::Pair(l0, t0, u0));
     while let Some(item) = stack.pop() {
         let (l, t, u) = match item {
             UItem::Store(key) => {
@@ -2284,20 +2294,15 @@ fn unify_iter<'a>(
             let solved = solve_bump(
                 bump, spine, work, vals, icits, defs, metas, globals, ren, l, mv, &args, rhs,
             );
-            if solved {
-                let tr = unsafe { (&mut *mach_ptr).solve_multi_trait_ref(bump, cxt, mv) };
-                if let Err(e) = tr {
-                    *trait_err = Some(e);
-                    conv.scratch1 = args;
-                    return false;
-                }
-            }
             conv.scratch1 = args;
             if solved {
                 if memo_on {
                     memo.insert((t.0, u.0));
                 }
-                continue;
+                // 参考 solve 臂：解后跑 trait 合成（失败 → Err）。经挂起信号
+                // 交回 unify 驱动以独占 &mut Machine 执行（SB 别名安全）
+                *solve_req = Some(mv);
+                return false;
             }
             return false;
         }
@@ -2331,10 +2336,12 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
+
         // η：中性一侧按 λ 一侧的 icit 应用（卡住投影的应用压链）。可应用性
         // 由 `vapp_ok` 把关——卡住 match / 字面量等形态的应用本是 panic
         // （参考版 `v_app` 同款），守卫后改判失败（参考版 η 臂
         // `v_applicable` 同款，两版同判定）。
+
         if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
@@ -2400,23 +2407,16 @@ fn unify_iter<'a>(
                     let ok = solve_bump(
                         bump, spine, work, vals, icits, defs, metas, globals, ren, l, m, &a1, u,
                     );
-                    if ok {
-                        // 参考 solve 臂：解后跑 trait 合成（失败 → Err）
-                        let tr = unsafe { (&mut *mach_ptr).solve_multi_trait_ref(bump, cxt, m) };
-                        if let Err(e) = tr {
-                            *trait_err = Some(e);
-                            conv.scratch1 = a1;
-                            conv.scratch2 = a2;
-                            return false;
-                        }
-                    }
                     conv.scratch1 = a1;
                     conv.scratch2 = a2;
                     if ok {
                         if memo_on {
                             memo.insert((t.0, u.0));
                         }
-                        continue;
+                        // 参考 solve 臂：解后跑 trait 合成（失败 → Err）。经挂起
+                        // 信号交回 unify 驱动以独占 &mut Machine 执行
+                        *solve_req = Some(m);
+                        return false;
                     }
                     return false;
                 }
@@ -2424,22 +2424,14 @@ fn unify_iter<'a>(
                     let ok = solve_bump(
                         bump, spine, work, vals, icits, defs, metas, globals, ren, l, m, &a2, t,
                     );
-                    if ok {
-                        let tr = unsafe { (&mut *mach_ptr).solve_multi_trait_ref(bump, cxt, m) };
-                        if let Err(e) = tr {
-                            *trait_err = Some(e);
-                            conv.scratch1 = a1;
-                            conv.scratch2 = a2;
-                            return false;
-                        }
-                    }
                     conv.scratch1 = a1;
                     conv.scratch2 = a2;
                     if ok {
                         if memo_on {
                             memo.insert((t.0, u.0));
                         }
-                        continue;
+                        *solve_req = Some(m);
+                        return false;
                     }
                     return false;
                 }
@@ -3786,38 +3778,56 @@ impl Machine {
         u: V,
         trait_err: &mut Option<String>,
     ) -> bool {
-        // 先取裸指针再解构字段（避免 &mut self 与字段借用的叠加）
-        let mach_ptr: *mut Machine = self;
         let neutral = neutral_of(&self.globals);
-        let Machine {
-            spine,
-            vals,
-            icits,
-            defs,
-            metas,
-            globals,
-            ren,
-            conv,
-            unify_work,
-            unify_stack,
-            ..
-        } = self;
-        // SAFETY：同 eval_work——'static 存放口径，进核前 clear（unify
-        // 的失败早退会把非空栈留在槽里，靠入口 clear 兜住）。
-        let work: &mut Vec<W<'a>> =
-            unsafe { &mut *(unify_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
-        let stack: &mut Vec<UItem<'a>> =
-            unsafe { &mut *(unify_stack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
-        work.clear();
-        stack.clear();
-        // 重入句柄 mach_ptr 在解构前取得：unify 的 flex 求解点要回调
-        // trait 求解（参考版 solve 臂的 solve_multi_trait）——字段已按
-        // 不相交集合借出，重入经裸指针走 Machine 方法（仅触碰同分配的
-        // 堆内容，无移动）
-        unify_iter(
-            bump, spine, work, stack, vals, icits, defs, metas, globals, &neutral, ren, conv, l,
-            t, u, cxt, mach_ptr, trait_err,
-        )
+        // trait 合成与字段借用的分离（SB 别名安全）：unify_iter 遇到「flex
+        // 解开后需跑 trait 合成」的点不再经裸指针重建整机 &mut（旧实现
+        // 在字段借用存活时 `(&mut *mach_ptr).solve_multi_trait_ref(..)`，
+        // Stacked Borrows 下字段借用被弹出，回调返回后继续使用属
+        // use-after-invalidate），而是写入 solve_req 挂起返回；本驱动在
+        // 字段借用已结束（NLL：上次使用 = unify_iter 调用）的点上以独占
+        // &mut self 执行合成，随后每轮循环**重新解构**字段——不存在与
+        // 字段借用并存的整机重借，整段除既有 'static 槽位生命周期改写
+        // 外无 unsafe。
+        let mut resume = false;
+        let mut solve_req: Option<u32> = None;
+        loop {
+            let Machine {
+                spine,
+                vals,
+                icits,
+                defs,
+                metas,
+                globals,
+                ren,
+                conv,
+                unify_work,
+                unify_stack,
+                ..
+            } = self;
+            // SAFETY：同 eval_work——'static 存放口径，进核前 clear（unify
+            // 的失败早退会把非空栈留在槽里，靠入口 clear 兜住）。
+            let work: &mut Vec<W<'a>> =
+                unsafe { &mut *(unify_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+            let stack: &mut Vec<UItem<'a>> =
+                unsafe { &mut *(unify_stack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
+            if !resume {
+                work.clear();
+                stack.clear();
+            }
+            if unify_iter(
+                bump, spine, work, stack, vals, icits, defs, metas, globals, &neutral, ren, conv,
+                l, t, u, resume, &mut solve_req,
+            ) {
+                return true;
+            }
+            // None = 真实失败；Some(m) = trait 合成挂起（solve 后续跑）
+            let Some(m) = solve_req.take() else { return false };
+            if let Err(e) = self.solve_multi_trait_ref(bump, cxt, m) {
+                *trait_err = Some(e);
+                return false;
+            }
+            resume = true;
+        }
     }
 
     /// 参考 `Infer::solve_multi_trait`：从 meta m 起扫描所有未解 meta，
@@ -5178,11 +5188,13 @@ impl Machine {
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
+
                 // 参考版 Def 臂：检查后 `solve_multi_trait(0)`，求解失败由
                 // `.map_err(...)?` 返回可恢复错误（对齐参考版口径：Debug
                 // 序列化 `UnifyError::Trait(msg)` → `Trait("...")`；L11 快版
                 // 同款——此前本臂缺这道 def 级求解，检查过但留有可解 trait
                 // meta 的 def 会漏解，与参考版分叉）。
+
                 self.solve_multi_trait_ref(bump, &fake, 0)
                     .map_err(|e| Error(name.to_span().map(|_| format!("Trait({:?})", e))))?;
                 let vt = self.eval(bump, fake.env, t_tm);
@@ -5200,6 +5212,23 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)（与参考版
+                // 同步，L07/L08 黑盒三轮修复的前向传播）。域洞若保留，第
+                // 2+ 个参数的域是 AppPruning 部分应用 meta（`?m A`），使用
+                // 点显式供给隐式实参需解该 meta，invert 对非变量 spine 实参
+                // 直接 Err——误报 can't unify。宇宙扫描对 U(0) 域贡献 lvl 0
+                // = max 恒等；显式标注与显式索引不动。
+                let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U(0)
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // 宇宙层级扫描（副作用照参考版：infer_expr/check_universe
                 // 的 meta 分配全保留，结果只取层级）
                 let mut universe_lvl = 0u32;

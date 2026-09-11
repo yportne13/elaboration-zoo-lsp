@@ -327,6 +327,25 @@ println ttt
     assert_parity(gsrc);
 }
 
+/// 快版 packed-word 单元的对齐钉子（同 l08/l10 `packed_cells_align_at_least_8`）：
+/// `XCell`/`CloCell`/`PiCell` 的 `ptr|tag` 编码用 `v.0 & !7` 解码，要求对齐
+/// ≥ 8（`#[repr(align(8))]` + 源内 `const _` 断言之外的双保险口径一致演进）。
+#[test]
+fn packed_cells_align_at_least_8() {
+    assert!(
+        std::mem::align_of::<fast::XCell<'static>>() >= 8,
+        "XCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::CloCell<'static>>() >= 8,
+        "CloCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::PiCell<'static>>() >= 8,
+        "PiCell 对齐不足以承载 3 位 tag 解码"
+    );
+}
+
 // Round-2 探针（A2 η 守卫 / A4 u64 / A5 trait 求解 / A6 prune_ty / A8 宏递归）
 // 由 orchestrator 集中运行裁决；期望值在注释中标注。
 // --------------------------------------------------------------------------------
@@ -454,4 +473,92 @@ fn probe_prune_ty_mask_reversal_parity() {
         "def test = x => y => the (Eq (m x) (w => n y w)) refl\n",
         "println test\n",
     ));
+}
+
+/// 移植修复回归（对齐 l10/l11 探针）：`impl[T] Say for List[T]` 不得假匹配
+/// 泛型目标 `Say[T]`。L12 的 `val_match` 原第三臂 or-模式
+/// `(_, Rigid) | (Rigid, _)` 允许**目标侧** rigid 被实例构造子绑定
+/// （`f two` 会错选 List 实例答 `"list"`），与本函数文档注释宣称的单向
+/// 语义相悖；改为仅实例侧绑定（对齐 L10/L11 的 `match_typ`）后无实例
+/// → Err。参考/快版共用同一 `Synth`，Ok/Err 判定必须一致。
+///
+/// 口径说明：本源含 impl 实例登记，属文件头「trait/impl 实例合成演示源
+/// 在快版上分叉、整体剔除」的同类——快版经 canonical-Val 桥（`v_to_ref_val`）
+/// 的 impl 链路 Err 文案与参考版不同构（参考版：`has no object`；快版：
+/// 上游宇宙检查的 Err），故与 `probe_solve_multi_trait_recoverable_parity`
+/// 同款只钉 **Ok/Err 判定一致**（快版 trait_wrap 的 `mk_no_object_err`
+/// 兜底本身与 L11 逐字一致，见 `bump_spine_iter.rs` 的 `mk_no_object_err`）。
+#[test]
+fn synth_rigid_generic_not_falsely_matched() {
+    let src = r#"
+trait Say {
+    def say: String
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+impl[T] Say for List[T] {
+    def say: String = "list"
+}
+
+def f[T](x: T): String = x.say
+
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def two = succ (succ zero)
+
+println (f two)
+"#;
+    let b = unpanic(|| run_basic(src));
+    let f = unpanic(|| run_fast(src));
+    assert!(b.is_ok() && f.is_ok(), "两版都不应 panic");
+    let (b, f) = (b.unwrap(), f.unwrap());
+    assert!(
+        b.is_err(),
+        "参考版：泛型 T 不得被假匹配成 List；basic={:?}",
+        b.as_ref().err()
+    );
+    assert_eq!(
+        b.is_ok(),
+        f.is_ok(),
+        "泛型假匹配拒绝的 Ok/Err 判定两版应一致：basic={:?} fast={:?}",
+        b.as_ref().err(),
+        f.as_ref().err(),
+    );
+}
+
+/// P13（A6 矩阵复扫）：enum 隐式无标注域钉 U(0) 回归（L09
+/// `parity_enum_struct_impl_hole_pinned_u0` 同款 4 源）。修复前：域洞保留
+/// → 第 2+ 参数域为 AppPruning 部分应用 meta，使用点显式供给枚举隐式
+/// 实参（`P1[Nat][Bool]`）需解该 meta，invert 对非变量 spine 实参直接
+/// Err → 误报 can't unify；钉 U(0) 后声明处消除该 meta。含合法索引族
+/// （显式标注 + 显式索引）形态确认不受钉影响（源为 L08 R1 病态源教训
+/// 修正版：枚举级显式索引参数、返回类型完全应用）。
+#[test]
+fn parity_enum_struct_impl_hole_pinned_u0() {
+    for src in [
+        // enum：多隐式无标注参数 + 显式实例化（修复的原始触发形态）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\nprintln (p1[Nat][Bool] zero true)\n",
+        // enum：无标注隐式参数 + 注解处显式实例化 + 全显式构造子应用
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\ndef s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true\nprintln s1\n",
+        // struct：多类型参数 + 投影（脱糖路径同一臂）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nstruct Pair[A, B] {\n    fst: A\n    snd: B\n}\ndef p = new Pair(succ zero, zero)\nprintln p.fst\n",
+        // 显式标注的隐式域与显式索引不动：annotated 索引族形态仍通过
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : Type 0](a: A) {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] zero = q[Nat] zero\nprintln t\n",
+    ] {
+        // is_ok（参考版）+ 双版结果诊断输出 + parity
+        let b = run_basic(src);
+        let f = run_fast(src);
+        assert!(
+            b.is_ok(),
+            "参考版 Err（隐式无标注域未钉 U(0)/钉后误拒/子用例病态？），src:\n{src}\nbasic={b:?}\nfast={f:?}"
+        );
+        assert_parity(src);
+    }
 }

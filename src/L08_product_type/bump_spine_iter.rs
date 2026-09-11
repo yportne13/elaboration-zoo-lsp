@@ -1005,6 +1005,24 @@ fn vapp1<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// L06 同款）：只有 `vapp1` 能吃 η 新变量的形态——裸 Rigid(0)/未解
+/// Flex(5)/链(2)，以及 Decl/Prim/Obj/Match 头的 tag 7 单元；字面量 /
+/// Sum / SumCase 单元与 U(3)/Π(4)/LiteralType(6) 不可应用（`vapp1`
+/// panic 集）。λ 与不可应用值相遇时 η 臂不展开，落空后按合一失败返回
+/// （与参考版守卫同判；守卫为真时行为照旧）。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => !matches!(
+            v_xcell_of(v),
+            XCell::Lit(_) | XCell::Sum { .. } | XCell::SumCase { .. }
+        ),
+        _ => true,
+    }
+}
+
 /// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）
 /// 再查构造子字段。其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回
 /// None → 卡住成 `Obj`。（参考版 mod.rs `project` 同款。）
@@ -2890,8 +2908,10 @@ fn unify_iter<'a>(
             continue;
         }
         // η：中性一侧按 λ 一侧的 icit 应用（Decl/Prim/Obj 头的应用压链；
-        // 卡住 match 吸收进 pending）
-        if v_tag(u) == 1 {
+        // 卡住 match 吸收进 pending）。可应用性守卫 `vapp_ok`（参考版
+        // `v_applicable` 同款）：不可应用一侧（字面量/U/Π/Sum/SumCase）
+        // 不展开，落空后按合一失败返回
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2910,7 +2930,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -5261,15 +5281,24 @@ impl Machine {
                     .map(|&(_, ty)| ty)
                     .or_else(|| decls.get(x.data.as_str()).map(|e| e.ty));
                 if let Some(ty) = ty {
+
                     // force 已展开已解 meta；未解 flex（裸 tag 5，或任意
                     // spine 的 meta 头链）放行——参考版 `Val::Flex(_, _) =>
                     // Ok(())` 对 spine 形状不设限，这里用 is_flex 走 spine_head
                     // 判头（只看栈顶槽的 f 会把 ≥2 实参的 flex 链误判成非
                     // flex）
+
                     let v = self.force_v(bump, decls, ty);
                     if v_tag(v) == 3 {
                         return Ok(());
                     }
+
+                    // force 已展开已解 meta；未解 flex（裸 tag 5，或任意
+                    // spine 的 meta 头链）放行——参考版 `Val::Flex(_, _) =>
+                    // Ok(())` 对 spine 形状不设限，这里用 is_flex 走 spine_head
+                    // 判头（只看栈顶槽的 f 会把 ≥2 实参的 flex 链误判成非
+                    // flex——L07 已修，2026-09 连续性审计回移）
+
                     if is_flex(&self.spine, v) {
                         Ok(())
                     } else {
@@ -5790,7 +5819,11 @@ impl Machine {
                 // 同步）。域洞若保留，第 2+ 个参数的域 meta 会带 pruning
                 // （形如 `?m A`），使用点解 `?m A := U` 时 invert 无法倒序
                 // Decl 头 spine 而失败——显式提供隐式实参即报 can't unify。
-                // 方括号参数在语言定义上就是类型参数；显式标注与显式索引不动。
+
+                // 方括号参数在语言定义上就是类型参数；显式标注与显式索引
+                // 不动。struct 脱糖走的也是本臂。（L07 黑盒三轮修复，
+                // 2026-09 连续性审计回移。）
+
                 let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
                     .iter()
                     .map(|(n, a, i)| {

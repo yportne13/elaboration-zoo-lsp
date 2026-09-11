@@ -17,11 +17,15 @@ impl Infer {
         avoid_recurse: &str,//TODO: this is incorrect
     ) -> Result<String, UnifyError> {
         let mut basic_target_limit = 1;
-        while basic_target_limit < target_limit {
+        // 预算逐步递增至含 target_limit（修复旧 `+= 2` + `<` 的跳档：偶数
+        // 预算与最终预算永不尝试——调用方授权的 target_limit 恰为奇数时
+        // 最后一档必然跳过，完备性缺口）。iddfs 仅由 LSP quickfix 的重试
+        // 闭包触达（`run`/`run_fast` 不经此路径），预算细化不影响测试口径。
+        while basic_target_limit <= target_limit {
             if let Ok(s) = self.search(cxt, target, origin_cxt, origin_target, raw.clone(), depth, basic_target_limit, avoid_recurse) {
                 return Ok(s);
             }
-            basic_target_limit += 2;
+            basic_target_limit += 1;
         }
         Err(UnifyError::Basic)
     }
@@ -103,6 +107,9 @@ impl Infer {
                 //println!("{:?}", self.unify(cxt.lvl, &cxt, &vt, &typ, 100));
                 //println!("{:?}", self.check::<true>(origin_cxt, raw.clone()(raw_list.clone()), origin_target));
                 let lamb = lamb.clone();
+                // canonical 逐候选探测：每次探测充值 fuel 池（L08 前向传播
+                // 的护栏纪律，与 unify 的 `fuel` 参数互补）
+                self.refuel();
                 if matches!(self.unify(cxt.lvl, &cxt, &vt, &typ, 5), Ok(_) | Err(UnifyError::Stuck))
                     && self.check::<true>(origin_cxt, raw.clone()(raw_list), origin_target).is_ok() {
                         /*println!(

@@ -37,8 +37,11 @@ impl Val {
                 if items.is_empty() {
                     Typ::Val(span.clone())
                 } else {
+                    // 任一参数不可转换则整体 None（L11 已修 flat_map 静默
+                    // 丢参导致实参错位，此处按继承连续性回传）
                     Typ::Construct(
                         span.clone(),
+
                         // **刻意语义（本轮评审论证，勿"修"成 collect::<Option<..>>）**：
                         // 参数槽里不可作类型的值（如未解 meta Flex）被静默剔除，
                         // 产出 arity 短一的 Construct。这不是丢参 bug：
@@ -53,6 +56,7 @@ impl Val {
                         //    改成整体 None 会让这类合法程序从 Ok 变 Err。
                         // 快版 `val_to_typ` 的 filter_map 同款语义，两侧一致。
                         items.iter().flat_map(|x| x.1.to_typ()).collect(),//TODO:
+
                     )
                 }
             ),

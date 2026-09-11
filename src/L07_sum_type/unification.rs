@@ -29,6 +29,20 @@ use super::{
     Ix,
 };
 
+/// η 展开的可应用性守卫（L06 `unification::v_applicable` 同款）：只有
+/// `v_app` 能吃 η 新变量的形态（中性头 / Decl / 卡住投影 / 卡住内建 /
+/// 卡住 match）允许 η 展开。字面量/U/Π/Sum/SumCase 与 λ 相遇时无从
+/// 应用——不加守卫会命中 `v_app` 的 `impossible apply` panic（L06 曾由
+/// `string_to_global_type` 把 def 函数值当"动态类型"送进 unify 而踩中；
+/// L07 的 st2g 只返回登记**类型**，该触发路径关闭，本守卫为同型加固）。
+/// 守卫为真时行为照旧，唯一变化是原本 panic 的分支改判 unify 失败。
+fn v_applicable(v: &Val) -> bool {
+    matches!(
+        v,
+        Val::Flex(..) | Val::Rigid(..) | Val::Decl(..) | Val::Obj(..) | Val::Prim(..) | Val::Match(..)
+    )
+}
+
 #[derive(Debug, Clone)]
 struct PartialRenaming {
     occ: Option<MetaVar>,
@@ -611,6 +625,7 @@ impl Infer {
                     // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
                     // `l+1` 不推进 cxt（binder 类型在值层不可得），`l == cxt.lvl`
                     // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
+
                     // 打越界（lvl2ix assert；L08 Exists 的 `P witness` 域踩中，
                     // L07 同码潜伏，自 L08 回合）。cxt 只服务显示名字表，名字
                     // 对不上时 go_ix 有 `@i` 兜底。
@@ -619,6 +634,7 @@ impl Infer {
                         self.quote(decl, l, (**a).clone()),
                         (**a).clone(),
                     ),
+
                     self.closure_apply(decl, b, Val::vvar(l)),
                     self.closure_apply(decl, b_prime, Val::vvar(l)),
                 )
@@ -669,14 +685,14 @@ impl Infer {
                 self.closure_apply(decl, b, Val::vvar(l)),
                 self.closure_apply(decl, b_prime, Val::vvar(l)),
             ),
-            (t, Val::Lam(_, i, b_prime)) => self.unify(
+            (t, Val::Lam(_, i, b_prime)) if v_applicable(t) => self.unify(
                 decl,
                 l + 1,
                 cxt,
                 self.v_app(decl, t.clone(), Val::vvar(l), *i),
                 self.closure_apply(decl, b_prime, Val::vvar(l)),
             ),
-            (Val::Lam(_, i, b), t_prime) => self.unify(
+            (Val::Lam(_, i, b), t_prime) if v_applicable(t_prime) => self.unify(
                 decl,
                 l + 1,
                 cxt,

@@ -315,6 +315,28 @@ impl Infer {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)。域洞若保留，
+                // 第 2+ 个参数的域经 fresh_meta 的 AppPruning 成为部分应用
+                // meta（`?m A`），使用点显式供给枚举隐式实参（`P1[Nat][Bool]`）
+                // 需解 `?m A := U(0)`，invert 对非变量 spine 实参（如 Nat 的
+                // 值）直接 Err → 误报 can't unify（L07/L08 黑盒三轮修复的
+                // L09 形态；check_universe 只解洞的类型 meta，域值 meta 仍
+                // 未解，触发链完整）。钉 U(0)（L09 的全局默认层级，与
+                // check_universe 的 meta 解 U(0) 同口径）从声明处消除该
+                // meta；宇宙扫描对 U(0) 域贡献 lvl 0 = max 恒等，不扰动
+                // universe_lvl。用户显式标注的域（`[A : Type 1]`）与显式
+                // 索引不动——需高层级实例化时显式标注即可。
+                let params: Vec<(Span<String>, Raw, Icit)> = params
+                    .into_iter()
+                    .map(|(n, a, i)| {
+                        let a = if i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U(0)
+                        } else {
+                            a
+                        };
+                        (n, a, i)
+                    })
+                    .collect();
                 let mut universe_lvl = 0;
                 for p in params.iter() {
                     if let Ok((Tm::U(lvl), _)) = self.infer_expr(cxt, p.1.clone()) {
@@ -455,15 +477,30 @@ impl Infer {
                                     let (_, case_typ) = self.infer_expr(cxt, Raw::Var(case.clone()))?;
                                     let mut ret = vec![];
                                     let mut typ = case_typ;
-                                    let mut param = params.clone();
+                                    // struct 隐式参数的实例值（按声明序；只取
+                                    // Impl——显式索引不占槽，与 L08 同款）
+                                    let mut param: Vec<_> = params
+                                        .iter()
+                                        .filter(|(_, _, _, i)| *i == Icit::Impl)
+                                        .map(|(_, v, _, _)| v.clone())
+                                        .collect();
                                     param.reverse();
-                                    while let Val::Pi(name, icit, ty, closure) = typ {
+                                    // 剥 mk 构造子类型链取字段类型。隐式 binder 用
+                                    // 头部 Sum 实参实例化；**显式字段 binder 用接收者
+                                    // 的卡住投影实例化**（eval(Obj(接收者项, 字段名))，
+                                    // L08 评审修复回移——旧实现以 U(0) 占位会让依赖在
+                                    // 前字段的在后字段出现在检查位时假拒：
+                                    // `P e.witness` vs `P (U 0)` 合一失败）。
+                                    while let Val::Pi(name, icit, ty, closure) = self.force(typ.clone()) {
                                         if icit == Icit::Expl {
+                                            let val = self.eval(
+                                                &cxt.env,
+                                                Tm::Obj(Box::new(tm.clone()), name.clone()),
+                                            );
                                             ret.push((name, *ty));
-                                            typ = self.closure_apply(&closure, Val::U(0));//TODO:not Val::U(0)
+                                            typ = self.closure_apply(&closure, val);
                                         } else {
                                             let val = param.pop()
-                                                .map(|x| x.1)
                                                 .unwrap_or(Val::U(0));
                                             ret.push((name, *ty));
                                             typ = self.closure_apply(&closure, val);

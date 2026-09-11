@@ -7,6 +7,7 @@ use super::{
 
 use std::{collections::{HashMap, HashSet}, rc::Rc};
 
+
 /// η 展开的可应用性守卫（L06/L09/L11 的 `v_applicable` 同款）：只有
 /// `v_app` 不会 panic 的形态（Flex / Rigid / 卡住投影 Obj）能吃 η 新变量。
 /// λ 值以类型/值身份流入 unify 时，对字面量 / U / Π / Sum / 卡住 match
@@ -15,6 +16,7 @@ use std::{collections::{HashMap, HashSet}, rc::Rc};
 /// `vapp_ok` 同款守卫）。
 fn v_applicable(v: &Val) -> bool {
     matches!(v, Val::Flex(..) | Val::Rigid(..) | Val::Obj(..))
+
 }
 
 #[derive(Debug, Clone)]
@@ -590,6 +592,10 @@ impl Infer {
         }
     }
     pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>) -> Result<(), UnifyError> {
+        // 递归深度防护（L08 前向传播）：fuel 耗尽按不可合一失败
+        if !self.burn_fuel() {
+            return Err(UnifyError::Basic);
+        }
         //println!("unify: {t:?} {u:?}");
         let t = self.force(t);
         let u = self.force(u);
@@ -605,7 +611,12 @@ impl Infer {
                 self.unify(l, cxt, a, a_prime)?;
                 self.unify(
                     l + 1,
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, a), a.clone()),
+                    // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
+                    // `l+1` 不推进 cxt（binder 类型在值层不可得），`l == cxt.lvl`
+                    // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
+                    // 打越界（lvl2ix assert）。cxt 只服务显示名字表，名字对不上
+                    // 时 go_ix 有 `@i` 兜底。（L07/L08/L09 同款修复回移。）
+                    &cxt.bind(x.clone(), self.quote(l, a), a.clone()),
                     &self.closure_apply(b, Val::vvar(l).into()),
                     &self.closure_apply(b_prime, Val::vvar(l).into()),
                 )

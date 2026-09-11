@@ -261,6 +261,8 @@ impl Infer {
                 let x = self.infer_expr(cxt, t);
                 let (t_inferred, inferred_type) = self.insert(cxt, x)?;
                 if CANONICAL {
+                    // 顶层合一入口：充值 fuel 池（L08 前向传播的护栏纪律）
+                    self.refuel();
                     self.unify(cxt.lvl, cxt, &a, &inferred_type, 100).map_err(|e| {
                         let err = match e {
                             super::UnifyError::Basic | super::UnifyError::Stuck => format!(
@@ -426,6 +428,28 @@ impl Infer {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)。域洞若保留，
+                // 第 2+ 个参数的域经 fresh_meta 的 AppPruning 成为部分应用
+                // meta（`?m A`），使用点显式供给枚举隐式实参（`P1[Nat][Bool]`）
+                // 需解 `?m A := U(0)`，invert 对非变量 spine 实参（如 Nat 的
+                // 值）直接 Err → 误报 can't unify（L07/L08 黑盒三轮修复的
+                // 前向传播；check_universe 只解洞的类型 meta，域值 meta 仍
+                // 未解，触发链完整）。钉 U(0)（与 check_universe 的 meta 解
+                // U(0) 同口径）从声明处消除该 meta；宇宙扫描对 U(0) 域贡献
+                // lvl 0 = max 恒等，不扰动 universe_lvl。用户显式标注的域
+                // （`[A : Type 1]`）与显式索引不动——需高层级实例化时显式
+                // 标注即可。
+                let params: Vec<(Span<SmolStr>, Raw, Icit)> = params
+                    .into_iter()
+                    .map(|(n, a, i)| {
+                        let a = if i == Icit::Impl && matches!(a, Raw::Hole(_)) {
+                            Raw::U(0)
+                        } else {
+                            a
+                        };
+                        (n, a, i)
+                    })
+                    .collect();
                 let mut universe_lvl = 0;
                 for p in params.iter() {
                     let u = self.infer_expr(cxt, p.1.clone());
@@ -462,7 +486,20 @@ impl Infer {
                             .iter()
                             .filter(|x| x.2 == Icit::Impl)
                             .cloned()
-                            .chain(p)
+                            // case 级隐式无标注域（`p1[A, B]` 的 Hole 域）与
+                            // 枚举参数钉同款钉 U(0)（快版同步，见 bump 侧同
+                            // 款注释）：参考版下这些洞的 meta 本就被
+                            // check_universe 的 rename 分支解成 U(0) 常函数，
+                            // 钉只是显式化，universe 扫描仍在上方按原洞跑。
+                            .chain(p.into_iter().map(|(n, a, i)| (
+                                n,
+                                if i == Icit::Impl && matches!(a, Raw::Hole(_)) {
+                                    Raw::U(0)
+                                } else {
+                                    a
+                                },
+                                i,
+                            )))
                             .rev()
                             .fold(bind.unwrap_or(default_ret.clone()), |ret, x| {
                                 Raw::Pi(x.0.clone(), x.2, Box::new(x.1.clone()), Box::new(ret))

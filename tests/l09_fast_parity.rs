@@ -994,6 +994,7 @@ fn steady_state_reuse() {
     assert_eq!(r1, fresh, "稳态与一次性不一致");
 }
 
+
 // —— L08→L09 继承连续性探针（A4 本轮补）——
 // struct / new / 多段投影是 L08 的核心语言特性（脱糖为单构造子 enum）；
 // L09 的 parser 保留了该子集，但此前没有 parity 用例钉住这条 L08 血统
@@ -1253,4 +1254,65 @@ println f
         "n => (unsolved match n)\n",
         "卡住 match 的 λ 头 + (unsolved match 判别式) 形态"
     );
+}
+
+// 连续性审计 R2（2026-09）：L08 8988f7c「剥链精确化 + (Obj,Obj) 合同臂」回移探针
+// --------------------------------------------------------------------------------
+
+/// 依赖在前字段的在后字段（`proof : Eq witness two`）：剥链以接收者
+/// **卡住投影**实例化显式字段 binder——旧 U(0) 占位使 `e.proof` 的类型
+/// 成为 `Eq (U 0) two`，在检查位与 `Eq e.witness two` 合一失败（假拒）；
+/// 精确化后参数槽是 stuck Obj 对，`(Obj,Obj)` 合同臂按接收者判等。
+/// 断言两版 Ok + parity（修复前两版一致 Err，探针即失败）。
+#[test]
+fn parity_struct_dependent_field_projection() {
+    let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Eq[A](x: A, y: A) {\n    refl(a: A) -> Eq a a\n}\ndef two = succ (succ zero)\nstruct Ex {\n    witness: Nat\n    proof: Eq witness two\n}\ndef p = Ex.mk two (refl two)\ndef get_proof(e: Ex): Eq e.witness two = e.proof\nprintln (get_proof p)\n";
+    assert!(
+        run_basic(src).is_ok(),
+        "依赖字段投影在检查位假拒（剥链 U(0) 占位回退？），src:\n{src}"
+    );
+    assert_parity(src);
+}
+
+// 连续性审计 R3（2026-09）：enum/struct 声明处隐式无标注域钉 U(0) 的回移探针
+// --------------------------------------------------------------------------------
+
+/// L07/L08「黑盒三轮」修复的 L09 形态：多隐式无标注参数（`[A, B]`）时，
+/// 第 2+ 个参数的域经 fresh_meta 的 AppPruning 成为部分应用 meta
+/// （`?m A`），构造子上显式供给枚举隐式实参（`p1[Nat][Bool]`）需解
+/// `?m A := U(0)`，L09 的 invert 对非变量 spine 实参（Nat 的值）直接
+/// Err → 误报 can't unify。钉 U(0)（L09 全局默认层级）从声明处消除该
+/// meta；struct 脱糖走同一 Decl::Enum 臂。显式标注（`[A : Type 0]`）
+/// 与显式索引不动。
+///
+/// R3 门禁订正：原第 4 源 `enum Q[A : Type 0] { q[A](a: A) -> Q[A] a }`
+/// 是**病态形态**——Q 无枚举级显式索引参数，返回类型 `Q[A] a` 把
+/// `Q[A] : Type 0` 过度应用（App 臂对非 Π 函数类型造 `Π(?dom,?cod)`
+/// 合一，`U(0) ≡ Π` 必败，enum 声明处即 Err）。R1 的 L08 探针同款源只
+/// 做 parity 断言（两版一致 Err 也通过）故未被察觉；本套件的 is_ok
+/// 断言揭示了它。已改写为 L07 `pack_annotated_params` 的合法索引族
+/// 形态（枚举级显式索引 `(a : A)`、返回类型完全应用——L09 既有
+/// `Vec[A](len: Nat)` 同构）。
+#[test]
+fn parity_enum_struct_impl_hole_pinned_u0() {
+    for src in [
+        // enum：多隐式无标注参数 + 显式实例化（修复的原始触发形态）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\nprintln (p1[Nat][Bool] zero true)\n",
+        // enum：无标注隐式参数 + 注解处显式实例化 + 全显式构造子应用
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\ndef s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true\nprintln s1\n",
+        // struct：多类型参数 + 投影（脱糖路径同一臂）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nstruct Pair[A, B] {\n    fst: A\n    snd: B\n}\ndef p = new Pair(succ zero, zero)\nprintln p.fst\n",
+        // 显式标注的隐式域与显式索引不动：annotated 索引族形态仍通过
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : Type 0](a: A) {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] zero = q[Nat] zero\nprintln t\n",
+    ] {
+        // is_ok（参考版）+ 双版结果诊断输出 + parity
+        let b = run_basic(src);
+        let f = run_fast(src);
+        assert!(
+            b.is_ok(),
+            "参考版 Err（隐式无标注域未钉 U(0)/钉后误拒/子用例病态？），src:\n{src}\nbasic={b:?}\nfast={f:?}"
+        );
+        assert_parity(src);
+    }
+
 }

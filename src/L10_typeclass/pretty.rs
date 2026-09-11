@@ -45,9 +45,11 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
+
     // 越界说明显示上下文里没有这个名字（错误文案对更浅上下文的项做
     // pretty 时可达），退化显示索引而不是 panic（L08/L09 `go_ix` 同款）。
     format!("@{}", ix)
+
 }
 
 /// `AppPruning` 是项层的洞形态（`fresh_meta` 产出）；常规 pretty 只吃

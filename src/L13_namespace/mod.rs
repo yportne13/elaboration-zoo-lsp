@@ -157,8 +157,10 @@ const FORCE_MEMO_CAP: usize = 1 << 20;
 /// leaks into unrelated elaboration — e.g. a later test reusing the freed
 /// address of an old forced term).
 pub fn force_memo_clear() {
-    FORCE_MEMO.with(|m| m.borrow_mut().clear());
-    FORCE_MEMO_EPOCH.with(|e| e.set(e.get() + 1));
+    // `try_with`：本函数也被 `Drop for PreludeSlot`（TLS 析构期）调用；
+    // 若目标 TLS 已先行析构则跳过——其内容（含 Rc 引用）已随析构释放。
+    let _ = FORCE_MEMO.try_with(|m| m.borrow_mut().clear());
+    let _ = FORCE_MEMO_EPOCH.try_with(|e| e.set(e.get() + 1));
 }
 
 #[inline]
@@ -987,16 +989,26 @@ pub fn tm_is_closed(tm: &Tm) -> bool {
     !free_var(tm, 0)
 }
 
+/// `simpl_decl` 的 decl 缓存（自函数体提升至模块级）：`Drop for
+/// PreludeSlot` 推池前要能清空它（见该处的约束注释）。
+thread_local! {
+    static DECLB_CACHE: std::cell::RefCell<Option<(usize, Rc<Decl>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// 清空 `simpl_decl` 的 decl 缓存（丢弃其 `Rc<Decl>`，其中含与 prelude
+/// 状态共享的 `Rc<Val>` 节点）。仅由 `Drop for PreludeSlot` 在推池前调用。
+/// `try_with` 容忍 TLS 析构期调用：已析构则其 Rc 引用已释放，跳过即可。
+fn declb_cache_clear() {
+    let _ = DECLB_CACHE.try_with(|c| *c.borrow_mut() = None);
+}
+
 /// Build a simplified copy of `decl` where every definition's body is
 /// replaced by a `Decl` reference, so evaluating match-case bodies does not
 /// re-expand recursive definitions.  O(decl) to build; cached per decl
 /// address — decl maps are persistent (`Rc<HashMap>`), so the pointer is a
 /// stable key.  Used by `quote`/`rename`/`unify` on `Val::Match` values.
 pub(crate) fn simpl_decl(decl: &Decl) -> Rc<Decl> {
-    thread_local! {
-        static DECLB_CACHE: std::cell::RefCell<Option<(usize, Rc<Decl>)>> =
-            const { std::cell::RefCell::new(None) };
-    }
     let key = decl as *const Decl as usize;
     let cached = DECLB_CACHE.with(|c| {
         let b = c.borrow();
@@ -1143,6 +1155,12 @@ pub struct PrintlnJob {
 /// only copies it out.
 pub type HoverEntry = (Span<()>, Span<()>, String);
 
+/// unify/force 的共享递归 fuel 池容量（L08 护栏前向传播：L09 重写时丢失，
+/// L10/L11/L12 已回传，L13 同步）。`unify(.., fuel)` 参数只护 Decl 展开
+/// 重试 / Match 归约臂，本池补齐 `force` meta 展开与 unify 结构递归的
+/// 深度防护（solve 无跨 meta occurs check，解链成环时防无界递归栈溢出）。
+const UNIFY_FUEL: u32 = 4096;
+
 pub struct Infer {
     pub meta: Vec<MetaEntry>,
     pub meta_contrains: Vec<(Rc<Val>, Rc<Val>)>,
@@ -1202,6 +1220,11 @@ pub struct Infer {
     /// declaration (outside any module tree) and never re-run, silently
     /// dropping HDL statements in parameterless hardware `def` bodies.
     pub def_replay_memo: Rc<std::sync::RwLock<HashMap<SmolStr, bool>>>,
+    /// unify/force 共享 fuel 池（L08/L10-L12 同款）：外层入口（`nf`/
+    /// `unify_catch`/canonical 探测点/check 的顶层 unify）充值；`unify`
+    /// 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按不可合一失败、
+    /// force 停止展开按未解处理。
+    unify_fuel: std::cell::Cell<u32>,
 }
 
 impl Clone for Infer {
@@ -1224,6 +1247,8 @@ impl Clone for Infer {
             defer_println: self.defer_println,
             println_jobs: Vec::new(),
             def_replay_memo: self.def_replay_memo.clone(),
+            // 快照拿全新燃料池：fuel 是每轮 unify 的递归护栏，不跨快照继承
+            unify_fuel: std::cell::Cell::new(self.unify_fuel.get()),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -1869,7 +1894,22 @@ impl Infer {
             defer_println: false,
             println_jobs: vec![],
             def_replay_memo: Default::default(),
+            unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
         }
+    }
+
+    /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
+    fn burn_fuel(&self) -> bool {
+        let f = self.unify_fuel.get();
+        if f == 0 {
+            return false;
+        }
+        self.unify_fuel.set(f - 1);
+        true
+    }
+    /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
+    fn refuel(&self) {
+        self.unify_fuel.set(UNIFY_FUEL);
     }
 
     pub fn meta_len(&self) -> usize { self.meta.len() }
@@ -2329,9 +2369,12 @@ impl Infer {
                 // back), so walks through this arm are never cached.
                 force_taint_bump();
                 match self.lookup_meta(*m) {
-                    MetaEntry::Solved(t_solved, _) => self.force(decl, &self.v_app_sp(decl,
+                    // 展开烧 fuel（L08 前向传播）：solve 无跨 meta occurs
+                    // check，解链成环时展开会无限递归；池空停止展开、按
+                    // 未解处理（落入下方兜底臂）
+                    MetaEntry::Solved(t_solved, _) if self.burn_fuel() => self.force(decl, &self.v_app_sp(decl,
                  t_solved.clone(), sp)),
-                    MetaEntry::Unsolved(_, _, _, _) => Val::Flex(*m, sp.clone()).into(),
+                    _ => Val::Flex(*m, sp.clone()).into(),
                 }
             }
             // A native Nat is already WHNF (definitionally `succ^n zero`
@@ -3286,6 +3329,8 @@ impl Infer {
 
     pub fn nf(&self, decl: &Decl, env: &Env, t: &Rc<Tm>) -> Rc<Tm> {
         let _g = prof_enter(&FUNC_PROF.nf.0, &FUNC_PROF.nf.1);
+        // quote → eval 会 force；一次 nf 充值 fuel 防循环解（L08 同款）
+        self.refuel();
         let l = Lvl(env.len() as u32);
         self.quote(decl, l, &self.eval(decl, env, t))
     }
@@ -3296,6 +3341,7 @@ impl Infer {
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
         self.meta_contrains.clear();
+        self.refuel();
         let ret = self.unify(cxt.lvl, cxt, t, t_prime, 100)
             .map_err(|e| {
                 /*Error::CantUnify(
@@ -3435,6 +3481,11 @@ thread_local! {
 /// of this wrapper.  The same argument covers the `RwLock`/`HashMap`
 /// reachable from the state: access is strictly sequential across the
 /// handoff.
+///
+/// "推池时持最后引用"这一前提**由 `Drop for PreludeSlot` 主动维护**：推池
+/// 前先清 FORCE_MEMO/DECLB_CACHE 两个可能仍钉着池化图共享节点的线程本地
+/// 缓存——lazy TLS 的析构序（初始化逆序）不保证它们先于本槽消亡。见
+/// `Drop for PreludeSlot` 处的完整约束注释。
 struct PoolState(PreludeState);
 // SAFETY: see the block comment above `PoolState` — the state crosses
 // threads only by exclusive-ownership handoff through the pool Mutex, so
@@ -3470,6 +3521,23 @@ impl PreludeSlot {
 impl Drop for PreludeSlot {
     fn drop(&mut self) {
         if let Some(state) = self.cell.get_mut().take() {
+            // 推池前必须先清掉本线程仍钉住池化状态 Rc 图的缓存：
+            // `FORCE_MEMO` 的 keepalive 与 `DECLB_CACHE` 的简化 decl 都持有
+            // 与 prelude 状态**共享**的 `Rc<Val>` 节点（`Infer::clone`/`Cxt`
+            // 克隆只克隆 Rc 句柄，不深拷值图）。线程退出时 lazy TLS 按
+            // **初始化逆序**析构——若本线程曾先做过不经 prelude 缓存的
+            // elaboration（FORCE_MEMO/DECLB_CACHE 先于本槽初始化），本 Drop
+            // 会先于它们执行：推池解锁后取用线程即可开始对同一批节点做
+            // `Rc::clone`/drop，而本线程这些缓存的析构发生在解锁之后、与
+            // 之无 happens-before 边——非原子引用计数并发触碰 → 计数漂移 →
+            // 过早释放 → use-after-free（tests/l13_* 默认多线程间歇
+            // STATUS_ACCESS_VIOLATION 的主嫌疑，docs/review-cont/a5-r2.md
+            // §3.2）。清缓存只丢 memo（纯缓存，语义中性，重算即得），在
+            // 独占所有权仍属本线程时把引用降回"仅池化状态自身"，恢复
+            // `PoolState` 的 `unsafe impl Send` 论证前提（"推池时持最后
+            // 引用"）。
+            force_memo_clear();
+            declb_cache_clear();
             let mut pool = self.pool.lock().unwrap();
             if pool.len() < 64 {
                 pool.push(PoolState(state));

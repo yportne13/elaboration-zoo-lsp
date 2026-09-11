@@ -255,6 +255,10 @@ impl Infer {
                 // 即报 can't unify。语言定义上方括号参数就是类型参数（任意
                 // 类型的索引留给圆括号），钉 U 从声明处消除该 meta；用户
                 // 显式标注的域（`[A : Nat]`）与显式参数（索引）不动。
+
+                // （L07 黑盒三轮修复；struct 脱糖走的也是本臂，`struct P[A][B]`
+                // 同样受益——2026-09 连续性审计回移。）
+
                 let params: Vec<(Span<String>, Raw, Icit)> = params
                     .into_iter()
                     .map(|(n, a, i)| {

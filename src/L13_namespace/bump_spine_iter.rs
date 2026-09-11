@@ -506,7 +506,9 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 #[inline]
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
     // SAFETY: v 是 `v_pi` 写出的 tag 4 打包字（`ptr|4`）。`PiCell` 含 `V(u64)`
+
     // 字段故天然 ≥8 对齐（下方 const 断言钉住），`& !7` 还原分配地址。
+
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }
 #[inline]
@@ -739,6 +741,10 @@ pub(crate) fn env_ext_defs<'a>(
 }
 
 /// 闭包单元：λ 的名字 + icit（quote 产出带 icit 的 `Lam`）+ env + 体。
+
+/// `#[repr(align(8))]`：packed 编码用 `ptr | 1` 写、`v.0 & !7` 读回（wasm32
+/// 上 `&str` 仅 4 对齐，显式钉死，见 [`XCell`] 的说明）。
+
 #[repr(align(8))]
 pub(crate) struct CloCell<'a> {
     name: &'a str,
@@ -5354,10 +5360,10 @@ struct Names {
     by_lvl: FxHashMap<u32, (V, crate::parser_lib::Span<()>)>,
 }
 
-/// 稳态复用机（L06/L08 版 + L09 增量：global 表）。L09 没有 decl 表 /
-/// 可变全局 / 燃料池 / pm 事实表——全局 def 走 [`Machine::decl`]（下标
-/// = global_idx，项层以 `GLOBAL_BASE` 偏移的大下标引用）；名字状态在
-/// [`Cxt`] 的 `names` 快照里（参考版 BiMap 同构）。
+/// 稳态复用机（L06/L08 版 + L12/L13 增量：decl 表 / trait 合成 / 可变全局
+/// / pm 事实表）。全局走 `Cxt.decls`（名字键，参考版 `Cxt.decl` 同构），
+/// **没有** L09/L10 的 `Infer.global` 大下标与 `GLOBAL_BASE` 哨兵——无相应
+/// 下溢边界；名字状态在 [`Cxt`] 的 `names` 快照里（参考版 BiMap 同构）。
 pub(crate) struct Machine {
     spine: Spine,
     vals: Vec<V>,
@@ -8676,6 +8682,24 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)（与参考版
+                // 同步，L07/L08 黑盒三轮修复、L09-L12 回移的 L13 形态）。
+                // 域洞若保留，第 2+ 个参数的域是 AppPruning 部分应用 meta
+                // （`?m A`），使用点显式供给隐式实参需解该 meta，invert 对
+                // 非变量 spine 实参直接失败——误报 can't unify。宇宙扫描对
+                // U(0) 域贡献 lvl 0 = max 恒等；显式标注与显式索引不动；
+                // struct 脱糖走同一 Decl::Enum 臂。
+                let params: Vec<_> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole(_)) {
+                            Raw::U(0)
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // 宇宙层级扫描（副作用照参考版：infer_expr/check_universe
                 // 的 meta 分配全保留，结果只取层级）
                 let mut universe_lvl = 0u32;

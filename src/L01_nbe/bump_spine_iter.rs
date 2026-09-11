@@ -198,9 +198,29 @@ fn quote_iter<'a>(
                         });
                         tasks.push(QJob::Q(base_v, level));
                     } else {
-                        tasks.push(QJob::App1);
-                        tasks.push(QJob::Q(ea, level));
-                        tasks.push(QJob::Q(ef, level));
+                        // 防御性回灌自 L05 65269fb（孪生 quote 链陈旧函数部分
+                        // 修复，L02+ 各章同款）：本章无 meta/无 force，spine
+                        // 槽的 f 压栈时即非闭包（eval 的 β 岔路先行归尽，
+                        // W::Apply/ChainWrap 只收非闭包头）且值不可变，闭包
+                        // 形态结构上不可达，此守卫恒假——仍挂上：未来演进
+                        // （加 meta/惰性解）若破坏该不变量，函数部分按 β 语义
+                        // 应用本槽实参再引，quote 永不产出 β-redex。
+                        if v_tag(ef) == 1 {
+                            let c = v_clo_of(ef);
+                            let applied = eval_iter(
+                                bump,
+                                spine,
+                                work,
+                                vals,
+                                Some(bump.alloc(EnvCons { val: ea, next: c.env })),
+                                c.body,
+                            );
+                            tasks.push(QJob::Q(applied, level));
+                        } else {
+                            tasks.push(QJob::App1);
+                            tasks.push(QJob::Q(ea, level));
+                            tasks.push(QJob::Q(ef, level));
+                        }
                     }
                 },
             },
@@ -239,16 +259,43 @@ fn quote_iter<'a>(
                             i += 1;
                         },
                         _ => {
-                            // 非平凡链头：挂起引 f，ChainRun 续跑
-                            tasks.push(QJob::ChainRun {
-                                level,
-                                next: i + 1,
-                                end,
-                                f0,
-                                idx_node,
-                                prev: Some(prev),
-                            });
-                            tasks.push(QJob::Q(fi, level));
+                            // 非平凡链头：挂起引 f，ChainRun 续跑。防御性回灌
+                            // 自 L05 65269fb（L02+ 各章同款）：f 若为闭包（本章
+                            // 结构上不可达，论证见二叉 fallback 处注释）改为引
+                            // 「f 应用本槽实参」的整值，恢复点以 prev:None 直接
+                            // 取该结果为已累计项（不再拼接），quote 永不产出
+                            // β-redex。
+                            if v_tag(fi) == 1 {
+                                let arg_v = spine.stack[i].a;
+                                let c = v_clo_of(fi);
+                                let applied = eval_iter(
+                                    bump,
+                                    spine,
+                                    work,
+                                    vals,
+                                    Some(bump.alloc(EnvCons { val: arg_v, next: c.env })),
+                                    c.body,
+                                );
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: None,
+                                });
+                                tasks.push(QJob::Q(applied, level));
+                            } else {
+                                tasks.push(QJob::ChainRun {
+                                    level,
+                                    next: i + 1,
+                                    end,
+                                    f0,
+                                    idx_node,
+                                    prev: Some(prev),
+                                });
+                                tasks.push(QJob::Q(fi, level));
+                            }
                             break;
                         },
                     }

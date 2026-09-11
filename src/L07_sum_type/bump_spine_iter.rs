@@ -1003,6 +1003,24 @@ fn vapp1<'a>(
     }
 }
 
+/// η 展开的可应用性守卫（参考版 `unification::v_applicable` 的快版对应，
+/// L06 同款）：只有 `vapp1` 能吃 η 新变量的形态——裸 Rigid(0)/未解
+/// Flex(5)/链(2)，以及 Decl/Prim/Obj/Match 头的 tag 7 单元；字面量 /
+/// Sum / SumCase 单元与 U(3)/Π(4)/LiteralType(6) 不可应用（`vapp1`
+/// panic 集）。λ 与不可应用值相遇时 η 臂不展开，落空后按合一失败返回
+/// （与参考版守卫同判；守卫为真时行为照旧）。
+#[inline]
+fn vapp_ok(v: V) -> bool {
+    match v_tag(v) {
+        3 | 4 | 6 => false,
+        7 => !matches!(
+            v_xcell_of(v),
+            XCell::Lit(_) | XCell::Sum { .. } | XCell::SumCase { .. }
+        ),
+        _ => true,
+    }
+}
+
 /// `v.field` 的值级投影：Sum 取索引参数的值；SumCase 先查 typ 的参数（索引）
 /// 再查构造子字段。其余（Rigid / Flex / Decl / 卡住的 Obj / 函数……）返回
 /// None → 卡住成 `Obj`。（参考版 mod.rs `project` 同款。）
@@ -2812,8 +2830,10 @@ fn unify_iter<'a>(
             continue;
         }
         // η：中性一侧按 λ 一侧的 icit 应用（Decl/Prim/Obj 头的应用压链；
-        // 卡住 match 吸收进 pending）
-        if v_tag(u) == 1 {
+        // 卡住 match 吸收进 pending）。可应用性守卫 `vapp_ok`（参考版
+        // `v_applicable` 同款）：不可应用一侧（字面量/U/Π/Sum/SumCase）
+        // 不展开，落空后按合一失败返回
+        if v_tag(u) == 1 && vapp_ok(t) {
             let c = v_clo_of(u);
             let vu = {
                 let env = env_ext(bump, c.env, v_lvl(l));
@@ -2832,7 +2852,7 @@ fn unify_iter<'a>(
             stack.push(UItem::Pair(l + 1, vt, vu));
             continue;
         }
-        if v_tag(t) == 1 {
+        if v_tag(t) == 1 && vapp_ok(u) {
             let c = v_clo_of(t);
             let vt = {
                 let env = env_ext(bump, c.env, v_lvl(l));

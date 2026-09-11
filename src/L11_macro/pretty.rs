@@ -43,10 +43,12 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
         }
         current_ix -= 1;
     }
+
     // 越界说明显示上下文里没有这个名字（错误文案对更浅上下文的项做
     // pretty 时可达），退化显示索引而不是 panic（L08/L09/L10 `go_ix`
     // 同款）。
     format!("@{}", ix)
+
 }
 
 fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {

@@ -7,12 +7,14 @@ use super::{
 
 use std::collections::{HashMap, HashSet};
 
+
 /// η 展开的可应用性守卫（L06/L11 的 `v_applicable` 同款）：只有 `v_app`
 /// 不会 panic 的形态（Flex / Rigid / 卡住投影 Obj）能吃 η 新变量。λ 值以
 /// 类型/值身份流入 unify 时，对字面量 / U / Π / Sum / 卡住 match 一侧做
 /// η 应用会命中 `v_app` 的 `impossible apply` panic——守卫失败直接落
 /// 后续臂判失败（λ 与非函数值的比较无从展开，最小惊讶；快版 η 臂的
 /// `vapp_ok` 同款守卫）。
+
 fn v_applicable(v: &Val) -> bool {
     matches!(v, Val::Flex(..) | Val::Rigid(..) | Val::Obj(..))
 }
@@ -535,13 +537,27 @@ impl Infer {
                 self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
                 self.unify(
                     l + 1,
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, *a.clone()), *a.clone()),
+                    // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
+                    // `l+1` 不推进 cxt（binder 类型在值层不可得），`l == cxt.lvl`
+                    // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
+                    // 打越界（lvl2ix 下溢）。cxt 只服务显示名字表，名字对不上
+                    // 时 go_ix 有 `@i` 兜底。（L08 评审修复回移，见其 README §5。）
+                    &cxt.bind(x.clone(), self.quote(l, *a.clone()), *a.clone()),
                     self.closure_apply(b, Val::vvar(l)),
                     self.closure_apply(b_prime, Val::vvar(l)),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
                 self.unify_sp(l, cxt, sp, sp_prime)
+            }
+            // 卡住的投影：字段名相同即比接收者与卡住期实参 spine（合同规则，
+            // L08 8988f7c 评审修复回移）。剥链精确化（elaboration 的 Obj 臂以
+            // 接收者卡住投影实例化显式依赖字段）之后，`e.witness ≡ e.witness`
+            // 这类形态成为可达；无本臂则落兜底 Err 误报 can't unify。
+            // `Obj` vs 其它仍按失配处理（兜底臂）。
+            (Val::Obj(o1, f1, sp1), Val::Obj(o2, f2, sp2)) if f1.data == f2.data => {
+                self.unify(l, cxt, (**o1).clone(), (**o2).clone())?;
+                self.unify_sp(l, cxt, sp1, sp2)
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
                 self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())

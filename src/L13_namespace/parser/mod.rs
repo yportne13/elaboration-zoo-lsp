@@ -133,7 +133,9 @@ pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroEx
 /// 宏展开重解析的递归深度上限：自递归宏（`macro_rules m { () => { m } }` +
 /// `def x = m`）在展开后再次命中同名宏，若不加限制会无限递归直至栈溢出
 /// （LSP 可在任意用户源码上触发）。合法宏/块嵌套深度远小于此值；超限推
+
 /// 一条 IError 并停止展开（不再递归）。（L11/L12 同款守卫，f51a0e4。）
+
 const MAX_MACRO_EXPANSION_DEPTH: u32 = 256;
 
 thread_local! {
@@ -600,6 +602,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         .or(kw(Hole).map(Raw::Hole))
         .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
+
             // 整数超出 u64（如 `99999999999999999999999999`）：推一条解析
             // 错误并退化为 `Raw::Hole`，不再 panic；与常规语法错误同路径
             // （L11/L12 同款，双版共用本 parser）。
@@ -607,6 +610,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             match x.data.parse::<u64>() {
                 Ok(n) => Ok((rest, Raw::Nat(x.map(|_| n)))),
                 Err(_) => {
+
                     state.push_error(IError {
                         msg: x.to_span().map(|_| {
                             ErrMsg::Custom("integer literal does not fit in u64".to_owned())
@@ -3221,7 +3225,9 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
             }).collect();
             let _guard = match MacroDepthGuard::enter() {
                 Some(g) => g,
-                // 展开深度超限：停止递归，推 IError 后退化（is_cut → Hole，
+
+                // 展开深度超限：停止递归，推 IError 后退化（is_cut → 空 Package，
+
                 // 否则试下一条规则），与本函数现有 Err 分支同款。
                 None => {
                     state.0.push(macro_depth_error(input));

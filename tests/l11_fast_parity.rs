@@ -525,6 +525,25 @@ println ttt
     assert_parity(gsrc);
 }
 
+/// 快版 packed-word 单元的对齐钉子（同 l08/l10 `packed_cells_align_at_least_8`）：
+/// `XCell`/`CloCell`/`PiCell` 的 `ptr|tag` 编码用 `v.0 & !7` 解码，要求对齐
+/// ≥ 8（`#[repr(align(8))]` + 源内 `const _` 断言之外的双保险口径一致演进）。
+#[test]
+fn packed_cells_align_at_least_8() {
+    assert!(
+        std::mem::align_of::<fast::XCell<'static>>() >= 8,
+        "XCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::CloCell<'static>>() >= 8,
+        "CloCell 对齐不足以承载 3 位 tag 解码"
+    );
+    assert!(
+        std::mem::align_of::<fast::PiCell<'static>>() >= 8,
+        "PiCell 对齐不足以承载 3 位 tag 解码"
+    );
+}
+
 // Round-2 探针（A2 η 守卫 / A4 u64 / A5 trait 求解 / A6 prune_ty / A8 宏递归）
 // 由 orchestrator 集中运行裁决；期望值在注释中标注。
 // --------------------------------------------------------------------------------
@@ -693,4 +712,34 @@ println (f two)
         run_basic(src)
     );
     assert_parity(src);
+}
+
+/// P13（A6 矩阵复扫）：enum 隐式无标注域钉 U(0) 回归（L09
+/// `parity_enum_struct_impl_hole_pinned_u0` 同款 4 源）。修复前：域洞保留
+/// → 第 2+ 参数域为 AppPruning 部分应用 meta，使用点显式供给枚举隐式
+/// 实参（`P1[Nat][Bool]`）需解该 meta，invert 对非变量 spine 实参直接
+/// Err → 误报 can't unify；钉 U(0) 后声明处消除该 meta。含合法索引族
+/// （显式标注 + 显式索引）形态确认不受钉影响（源为 L08 R1 病态源教训
+/// 修正版：枚举级显式索引参数、返回类型完全应用）。
+#[test]
+fn parity_enum_struct_impl_hole_pinned_u0() {
+    for src in [
+        // enum：多隐式无标注参数 + 显式实例化（修复的原始触发形态）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\nprintln (p1[Nat][Bool] zero true)\n",
+        // enum：无标注隐式参数 + 注解处显式实例化 + 全显式构造子应用
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\ndef s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true\nprintln s1\n",
+        // struct：多类型参数 + 投影（脱糖路径同一臂）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nstruct Pair[A, B] {\n    fst: A\n    snd: B\n}\ndef p = new Pair(succ zero, zero)\nprintln p.fst\n",
+        // 显式标注的隐式域与显式索引不动：annotated 索引族形态仍通过
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : Type 0](a: A) {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] zero = q[Nat] zero\nprintln t\n",
+    ] {
+        // is_ok（参考版）+ 双版结果诊断输出 + parity
+        let b = run_basic(src);
+        let f = run_fast(src);
+        assert!(
+            b.is_ok(),
+            "参考版 Err（隐式无标注域未钉 U(0)/钉后误拒/子用例病态？），src:\n{src}\nbasic={b:?}\nfast={f:?}"
+        );
+        assert_parity(src);
+    }
 }
