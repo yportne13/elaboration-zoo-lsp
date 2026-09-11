@@ -523,6 +523,29 @@ unify_catch(LetNamed[?m₁[r],?m₁[r]] vs LetNamed[?m₂[r],?m₂[r]])
 不再递归触发）。需要两版同步 trace（给 `fresh_meta` 记逻辑 id）才能安全定位，
 属 unify 核心子工程。
 
+**2026-09-11 注册序列 diff（最终收窄，插桩已移除）**：给两版 `fresh_meta` 的
+trait 注册点各打一行 `[REG] idx trait名`，同一输入跑完做序列 diff（按 trait 名，
+忽略跨引擎索引差异）：
+
+- 孪生 **6988** 条、参考版 **6942** 条；diff 结果**没有任何 delete，只有
+  insert**——孪生的注册序列是参考版的**超集**：顺序一致，在 18-utils 用户文件
+  段额外插入 46 条（名字集中在 `Cons` / `Data` / `Add` / `LetNamed`，其中
+  **5 条 `LetNamed`**，正是后来递归失败的那个）。
+- 机制：`fresh_meta` 第一步是"先试实例合成"（两版逐句一致）——合成成功即直接
+  返回、**不登记** trait meta；只有合成失败才 `new_meta + trait_metas.push`。
+  孪生多出来的 46 条，就是**孪生的 `solve_trait_ref` 在这些 goal 上没能合成、
+  退回登记延后求解**，而参考版同点位合成成功。
+- 因此这不是"簿记 bug"，而是**同一个 trait 合成判定分叉的下游症状**：孪生把
+  本可当场合成的目标登记成 trait meta，这些 meta 之后既解不出、又在
+  `mv >= m` 扫描中被反复尝试，最终在 `LetNamed` 那条上递归失败并报错。方向与
+  ffc4a83 的"flex-flex"判断一致，但失败点更靠前（合成判定），也解释了为何改
+  `solve_multi_trait_ref` 的簿记无用——要修的是**瘦身前的那一步合成**。
+- 下一步（可落地）：取首个额外注册（用户段起点，trait 名 `Cons`/`Data`）时
+  `fresh_meta` 的 goal 值，直接对比孪生 `solve_trait_ref` 与参考版
+  `solve_trait` 在该 goal 上的实例匹配走向（谁被选/为何推迟），这是有界调试，
+  不再需要全序列对照。
+
+
 
 **任何孪生诊断都不可无验证地当权威**：`twin_elaborate` 现有两道闸——
 (1) 遇任何 ERROR/parse 错误整体回落参考版；(2) **声明了模块的文件若
