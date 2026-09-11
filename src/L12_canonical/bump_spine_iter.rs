@@ -5470,6 +5470,23 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)（与参考版
+                // 同步，L07/L08 黑盒三轮修复的前向传播）。域洞若保留，第
+                // 2+ 个参数的域是 AppPruning 部分应用 meta（`?m A`），使用
+                // 点显式供给隐式实参需解该 meta，invert 对非变量 spine 实参
+                // 直接 Err——误报 can't unify。宇宙扫描对 U(0) 域贡献 lvl 0
+                // = max 恒等；显式标注与显式索引不动。
+                let params: Vec<(crate::parser_lib::Span<SmolStr>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole(_)) {
+                            Raw::U(0)
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // 宇宙层级扫描（副作用照参考版：infer_expr/check_universe
                 // 的 meta 分配全保留，结果只取层级）
                 let mut universe_lvl = 0u32;
@@ -5502,6 +5519,14 @@ impl Machine {
                         )
                     });
                 // 构造子类型：Pi(枚举隐式参数 ++ 构造子绑定器) -> (用户 ret || 缺省)
+                // case 级隐式无标注域（`p1[A, B]` 的 Hole 域）与枚举参数钉同
+                // 款钉 U(0)：若保留，构造子类型检查（check_universe(ctor_ty)）
+                // 在 binds == 2 处为域洞挂 meta，其闭类型 = close_tm(局部
+                // [A,B], U(0))——快版 meta 条目三元扩展下该 meta 族与参考版
+                // 分叉，把闭类型经 check_universe 兜底暴露成
+                // "expected universe, got Pi(A: Expl, U(0), …)"。参考版语义
+                // 等价：这些洞的 meta 本就被 rename 分支解成 U(0) 常函数，
+                // 钉只是显式化。universe 扫描在上方按原洞跑（层级贡献不变）。
                 let new_cases: Vec<(crate::parser_lib::Span<SmolStr>, Raw)> = cases
                     .iter()
                     .map(|(case_name, p, bind)| {
@@ -5509,7 +5534,17 @@ impl Machine {
                             .iter()
                             .filter(|x| x.2 == Icit::Impl)
                             .cloned()
-                            .chain(p.clone())
+                            .chain(p.iter().map(|(n, a, i)| {
+                                (
+                                    n.clone(),
+                                    if *i == Icit::Impl && matches!(a, Raw::Hole(_)) {
+                                        Raw::U(0)
+                                    } else {
+                                        a.clone()
+                                    },
+                                    *i,
+                                )
+                            }))
                             .rev()
                             .fold(
                                 bind.clone().unwrap_or(default_ret.clone()),

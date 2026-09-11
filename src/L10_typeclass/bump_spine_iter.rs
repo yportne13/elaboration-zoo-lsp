@@ -5172,6 +5172,23 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)（与参考版
+                // 同步，L07/L08 黑盒三轮修复的前向传播）。域洞若保留，第
+                // 2+ 个参数的域是 AppPruning 部分应用 meta（`?m A`），使用
+                // 点显式供给隐式实参需解该 meta，invert 对非变量 spine 实参
+                // 直接 Err——误报 can't unify。宇宙扫描对 U(0) 域贡献 lvl 0
+                // = max 恒等；显式标注与显式索引不动。
+                let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U(0)
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // 宇宙层级扫描（副作用照参考版：infer_expr/check_universe
                 // 的 meta 分配全保留，结果只取层级）
                 let mut universe_lvl = 0u32;

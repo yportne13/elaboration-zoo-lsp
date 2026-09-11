@@ -614,7 +614,12 @@ impl Infer {
                 self.unify(l, cxt, a, a_prime)?;
                 self.unify(
                     l + 1,
-                    &cxt.bind(x.clone(), self.quote(cxt.lvl, a), a.clone()),
+                    // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
+                    // `l+1` 不推进 cxt（binder 类型在值层不可得），`l == cxt.lvl`
+                    // 的不变式在那里就会破——用 cxt.lvl quote 会把 `Rigid(l)`
+                    // 打越界（lvl2ix assert）。cxt 只服务显示名字表，名字对不上
+                    // 时 go_ix 有 `@i` 兜底。（L07/L08/L09 同款修复回移。）
+                    &cxt.bind(x.clone(), self.quote(l, a), a.clone()),
                     &self.closure_apply(b, Val::vvar(l).into()),
                     &self.closure_apply(b_prime, Val::vvar(l).into()),
                 )

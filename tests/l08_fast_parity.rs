@@ -1641,6 +1641,13 @@ fn packed_cells_align_at_least_8() {
 /// meta），构造子上显式供给枚举隐式实参需解该 meta := U，invert 无法
 /// 倒序 Decl 头 spine → 误报 can't unify。struct 脱糖同样走 Decl::Enum
 /// 臂，一并钉住。
+///
+/// R3 门禁订正：原第 4 源 `enum Q[A : U] { q[A](a: A) -> Q[A] a }` 是
+/// **病态形态**——Q 无枚举级显式索引参数，返回类型 `Q[A] a` 把
+/// `Q[A] : U` 过度应用，enum 声明处即 Err；本探针只做 parity 断言
+/// （两版一致 Err 也通过）故 R2 门禁未察觉（L09 R3 同款源的 is_ok
+/// 断言揭示了它）。已改写为 L07 `pack_annotated_params` 的合法索引族
+/// 形态（枚举级显式索引 `(a : A)`、返回类型完全应用）。
 #[test]
 fn parity_enum_struct_impl_hole_pinned_u() {
     for src in [
@@ -1650,8 +1657,8 @@ fn parity_enum_struct_impl_hole_pinned_u() {
         "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\ndef s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true\nprintln s1\n",
         // struct：多类型参数 + 投影（脱糖路径同一臂）
         "enum Nat {\n    zero\n    succ(x: Nat)\n}\nstruct Pair[A, B] {\n    fst: A\n    snd: B\n}\ndef p = new Pair(succ zero, zero)\nprintln p.fst\n",
-        // 显式标注的隐式域与显式索引不动：annotated 形态仍通过
-        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : U] {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] = q[Nat] zero\nprintln t\n",
+        // 显式标注的隐式域与显式索引不动：annotated 索引族形态仍通过
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : U](a: A) {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] zero = q[Nat] zero\nprintln t\n",
     ] {
         assert_parity(src);
     }

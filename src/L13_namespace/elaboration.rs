@@ -1215,6 +1215,29 @@ impl Infer {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U(0)（L07/L08
+                // 黑盒三轮修复、L09-L12 回移的 L13 形态）。域洞若保留，
+                // 第 2+ 个参数的域经 fresh_meta 的 AppPruning 成为部分应用
+                // meta（`?m A`），使用点显式供给枚举隐式实参（`p1[Nat][Bool]`）
+                // 需解 `?m A := U(0)`，invert_go 对非变量 spine 实参（Nat 的
+                // 值）直接 Stuck → 误报 can't unify（L13 触发链在位：parser
+                // p_pi_impl_binder 允许无标注 → Hole；check_universe 只解洞
+                // 的类型 meta，域值 meta 仍未解）。钉 U(0)（与 check_universe
+                // 的 meta 解 U(0) 同口径）从声明处消除该 meta；宇宙扫描对
+                // U(0) 域贡献 lvl 0 = max 恒等，不扰动 universe_lvl。用户显式
+                // 标注的域（`[A : Type 1]`）与显式索引不动——struct 脱糖走的
+                // 也是本臂（p_struct → Decl::Enum），同样受益。
+                let params: Vec<_> = params
+                    .into_iter()
+                    .map(|(n, a, i)| {
+                        let a = if i == Icit::Impl && matches!(a, Raw::Hole(_)) {
+                            Raw::U(0)
+                        } else {
+                            a
+                        };
+                        (n, a, i)
+                    })
+                    .collect();
                 let mut universe_lvl = 0;
                 for p in params.iter() {
                     let u = self.infer_expr(cxt, p.1.clone());

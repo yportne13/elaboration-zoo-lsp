@@ -377,3 +377,38 @@ println (f two)
     );
     assert_parity(src);
 }
+
+/// P13 补钉（A6 矩阵复扫路由）：enum 隐式无标注域钉 U(0) 回归（L09
+/// `parity_enum_struct_impl_hole_pinned_u0` / L12 同款 4 源）。修复前：
+/// 域洞保留 → 第 2+ 参数域为 AppPruning 部分应用 meta（`?m A`），使用点
+/// 显式供给枚举隐式实参（`p1[Nat][Bool]`）需解该 meta，invert_go 对非
+/// 变量 spine 实参直接 Stuck → 误报 can't unify；钉 U(0) 后声明处消除
+/// 该 meta。L13 触发链核实：parser p_pi_impl_binder 允许 `[A]` 无标注 →
+/// Hole、fresh_meta AppPruning、invert_go `_ => Err(Stuck)`、
+/// check_universe 只解洞的类型 meta。含合法索引族（显式标注 + 显式索引）
+/// 形态确认不受钉影响（源为 L08 R1 病态源教训修正版：枚举级显式索引
+/// 参数、返回类型完全应用——L13 同构于 legacy_tests 的 `Vec[A](len: Nat)`
+/// 形态）。L13 语法适配已核实：multiline 构造子、p_arg 的无名方括号实参
+/// （`[Nat]` → Icit::Impl）。
+#[test]
+fn parity_enum_struct_impl_hole_pinned_u0() {
+    for src in [
+        // enum：多隐式无标注参数 + 显式实例化（修复的原始触发形态）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\nprintln (p1[Nat][Bool] zero true)\n",
+        // enum：无标注隐式参数 + 注解处显式实例化 + 全显式构造子应用
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\ndef s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true\nprintln s1\n",
+        // struct：多类型参数 + 投影（脱糖路径同一臂）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nstruct Pair[A, B] {\n    fst: A\n    snd: B\n}\ndef p = new Pair(succ zero, zero)\nprintln p.fst\n",
+        // 显式标注的隐式域与显式索引不动：annotated 索引族形态仍通过
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : Type 0](a: A) {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] zero = q[Nat] zero\nprintln t\n",
+    ] {
+        // is_ok（参考版）+ 双版结果诊断输出 + parity
+        let b = run_basic(src);
+        let f = run_fast(src);
+        assert!(
+            b.is_ok(),
+            "参考版 Err（隐式无标注域未钉 U(0)/钉后误拒/子用例病态？），src:\n{src}\nbasic={b:?}\nfast={f:?}"
+        );
+        assert_parity(src);
+    }
+}
