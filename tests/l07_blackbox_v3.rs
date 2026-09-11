@@ -1517,3 +1517,35 @@ fn redex_family_solvable_ok() {
     assert_lines(&src, &["U"]);
     assert_full_parity(&src);
 }
+
+// --------------------------------------------------------------------------------
+// H. 连贯性评审 A3：L08 b66f5e4（投影限定构造子快捷路径尊重局部遮蔽）回合
+// --------------------------------------------------------------------------------
+
+/// 局部 binder 遮蔽 enum 名后，带点的限定引用必须走正常投影（局部先于
+/// 全局），而不是静默解析成全局构造子给出错误的 Ok（L08 评审修复的
+/// L07 同码潜伏位点，参考版与快版同款回合）。
+#[test]
+fn v3_qualified_ctor_respects_local_shadow() {
+    assert_err(
+        r#"
+enum Foo {
+    c2
+}
+
+def bad(Foo: U): U = Foo.c2
+"#,
+        "cannot project field",
+    );
+    // 对照组：无遮蔽时限定构造子照常解析
+    assert_lines(
+        r#"
+enum Foo {
+    c2
+}
+
+println Foo.c2
+"#,
+        &["Foo::c2"],
+    );
+}

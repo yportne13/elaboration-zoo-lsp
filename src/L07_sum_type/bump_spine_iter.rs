@@ -2763,8 +2763,8 @@ fn unify_iter<'a>(
         // （force 前后各一次），到这里必是异 level、必不等——免去走完
         // 整个 cascade 的两次 flex_of scratch 往返（GADT 索引合一的常见
         // 失败形态）。语义与 L06 的 (0,0) 末臂同构；位置是 L07 新增——
-        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L06 无 pm 臂；L08 有
-        // 同款 pm 臂但未加此早退）——
+        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L06 无 pm 臂；L08 已
+        // 回补同款早退）——
         if v_tag(t) == 0 && v_tag(u) == 0 {
             return false;
         }
@@ -3981,6 +3981,26 @@ fn prune_ty_bump<'a>(
     Some(t)
 }
 
+/// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
+/// `String`（solve/prune 密集负载下 `lams_from_ty` 每 λ 层都要一个）。
+/// （a806ff0 的 L07 同款补齐——该 commit 只落到 L03-L05。）
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `lams l a t`：沿 **meta 类型**的 Π 层包 λ（名字与 icit 随 Π，`"_"` 改名
 /// `x{l'}`；逐层用 `VVar l'` 剥闭包）。
 #[allow(clippy::too_many_arguments)]
@@ -4011,7 +4031,7 @@ fn lams_from_ty<'a>(
         let p = v_pi_of(cur);
         let (name, icit, env, body_tm) = (p.name, p.icit, p.env, p.body);
         let name = if name == "_" {
-            bump.alloc_str(&format!("x{}", lp))
+            alloc_xname(bump, lp)
         } else {
             name
         };
@@ -5196,11 +5216,31 @@ impl Machine {
             }
 
             Raw::Obj(x, f) => {
-                // 限定构造子引用 `Enum.case`
+                // 限定构造子引用 `Enum.case`——**局部遮蔽优先**：接收者名字
+                // 已被局部 binder 占用时必须走正常投影（与 Raw::Var 的
+                // 「局部先于全局」同序），否则同名局部会让 `Foo.c2` 静默
+                // 解析成全局构造子（类型恰巧对上即是错误的 Ok）。
+                // b66f5e4（L08 评审修复）回合：L07 同码潜伏。
                 if let Raw::Var(n) = &**x {
-                    let key = format!("{}.{}", n.data, f.data);
-                    if let Some(e) = cxt.decl.borrow().get(key.as_str()) {
-                        return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&key))), e.ty));
+                    let shadowed = if !NO_NAME_MAP.load(std::sync::atomic::Ordering::Relaxed)
+                    {
+                        self.name_map.contains_key(n.data.as_str())
+                    } else {
+                        // 消融口径：沿 types 链线性找名（跳过 inserted binder）
+                        let mut tys = cxt.types;
+                        loop {
+                            match tys {
+                                Some(tc) if tc.source && tc.name == n.data => break true,
+                                Some(tc) => tys = tc.next,
+                                None => break false,
+                            }
+                        }
+                    };
+                    if !shadowed {
+                        let key = format!("{}.{}", n.data, f.data);
+                        if let Some(e) = cxt.decl.borrow().get(key.as_str()) {
+                            return Ok((bump.alloc(Tm::Decl(bump.alloc_str(&key))), e.ty));
+                        }
                     }
                 }
                 let (tm, ty) = self.infer_expr(bump, cxt, x)?;

@@ -1632,3 +1632,60 @@ fn packed_cells_align_at_least_8() {
         "PiCell 对齐不足以承载 3 位 tag 解码"
     );
 }
+
+// 连贯性评审 A3：L07 2b4ff68（enum 无标注隐式参数域钉 U）继承回合。
+// --------------------------------------------------------------------------------
+
+/// 多索引 GADT 的隐式参数无标注（域洞）：声明处域钉 U（L07 2b4ff68，
+/// L08 缺 inheritance、本轮回合）。构造子上显式供给枚举隐式实参
+/// `p[Nat][Bool]` 是对域洞求解机制的回归钉——缺钉时 `?m Nat := U` 因
+/// invert 倒序不了 Decl 头 spine 而误报 can't unify。注意参考版与快版
+/// 曾**同缺**此钉（双向一致的 Err），普通 assert_parity 查不出，须按
+/// Ok 期望值断言。
+#[test]
+fn parity_multi_index_gadt_unannotated_impl_params() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+enum Pack2[A : U, B : U](x: A, y: B) {
+    p2[A, B](a: A, b: B) -> Pack2[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw
+println sw.x
+println sw.y
+
+def un(p: Pack[Nat][Bool] zero true): Bool =
+    match p {
+        case p(a, b) => b
+    }
+println (un (p[Nat][Bool] zero true))
+
+println (p2 zero false).x
+"#;
+    let expected = "Pack::p([Nat] [Bool] Nat::zero Bool::true)\n\
+                    Nat::zero\n\
+                    Bool::true\n\
+                    Bool::true\n\
+                    Nat::zero\n";
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let b = b.unwrap_or_else(|e| panic!("basic 应 Ok：{e:?}\nsrc:\n{src}"));
+    let f = f.unwrap_or_else(|e| panic!("fast 应 Ok：{e:?}\nsrc:\n{src}"));
+    assert_eq!(b, expected, "basic 输出不符，src:\n{src}");
+    assert_eq!(f, expected, "fast 输出不符，src:\n{src}");
+}

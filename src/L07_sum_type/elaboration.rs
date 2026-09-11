@@ -382,11 +382,17 @@ impl Infer {
             }
 
             Raw::Obj(x, f) => {
-                // 限定构造子引用 `Enum.case`
+                // 限定构造子引用 `Enum.case`——**局部遮蔽优先**：接收者名字
+                // 已被局部 binder 占用时必须走正常投影（与 Raw::Var 的
+                // 「局部先于全局」同序），否则同名局部会让 `Foo.c2` 静默
+                // 解析成全局构造子（类型恰巧对上即是错误的 Ok）。
+                // b66f5e4（L08 评审修复）回合：L07 同码潜伏。
                 if let Raw::Var(n) = &*x {
-                    let key = format!("{}.{}", n.data, f.data);
-                    if let Some(e) = cxt.decl_get(&key) {
-                        return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
+                    if !cxt.src_names.contains_key(&n.data) {
+                        let key = format!("{}.{}", n.data, f.data);
+                        if let Some(e) = cxt.decl_get(&key) {
+                            return Ok((Tm::Decl(SmolStr::new(key)), e.ty.clone()));
+                        }
                     }
                 }
                 let (tm, ty) = self.infer_expr(cxt, *x)?;

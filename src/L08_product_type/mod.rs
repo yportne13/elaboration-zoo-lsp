@@ -900,7 +900,7 @@ impl Infer {
             },
             Val::Match(val, env, cases, pending) => {
                 // 分支体在"捕获 env + fresh rigid 槽"下重新求值再 quote：
-                // 这样 quote → eval 往返是恒等的（L07 没做完的关键一处）。
+                // 这样 quote → eval 往返是恒等的（与 L07 同码同注释）。
                 // 求值用简化 decl 表（全局值换成中性 Decl 引用），避免分支体
                 // 里的递归调用被重展开（正确性 + 性能）。
                 let declb = Rc::new(simpl_decl(decl));

@@ -211,6 +211,10 @@ fast=4.432，church k=12 ss 反超 7%）——稳态复用的内存有界优势�
   meta）→ `expected universe, got …`（结构预检零副作用，`?N` 编号不受
   扰动）；洞 / 未解 meta 与真类型（enum / struct / 构造子名）放行——
   可解性交主检查路径。
+- **pretty 的 `AppPruning` 只显示内核**（同 L07，L06/L13 的掩码感知
+  `go_pr_inner` 未移植）：本层所有 pretty 调用点都吃 quote 产物（quote
+  对 Flex 产 `Meta` + 实参链），该分支仅作不 panic 的兜底；`go_ix` 越界
+  退化 `@{ix}`。
 
 ## 8. 测试
 

@@ -269,6 +269,7 @@ solve / intersect）。在此之上：
 | **黑盒二轮（2026-09）**：`force(Val::Prim)` 不 force spine 实参——嵌套 prim（`str_eq "foo" (string_concat "f" "oo")`）与 `change_mutable` 连续更新链（存入未 force 的 `f old`）永远过不了字面量检查，卡住不化简 | 读点对齐 `Val::Obj` 先 force 头部的纪律：逐个 force 实参再交 `prim_reduce`；参考版与孪生版同步修改（parity 保持，strchain/global 负载语义不变） |
 | match 臂分隔符是单个 `EndLine`——臂间**注释行**经预处理剥成空行后变成残余 token，整个 def 解析失败 | 分隔符放宽为 `EndLine+`（臂间注释行/空行合法；行尾注释本就安全） |
 | **黑盒三轮（2026-09）**：多隐式参数 enum 的无标注域洞在第 2+ 个参数处成为带 pruning 的部分应用 meta（`?m A`），构造子上显式供给枚举隐式实参（`P1[Nat][Bool]`）需解 `?m A := U`，invert 无法倒序 Decl 头 spine → 误报 can't unify | enum 声明处把无标注隐式参数的域**钉为 U**（方括号参数在语言定义上就是类型参数，任意类型的索引留给圆括号；显式标注 `[A : Nat]` 与显式索引不动）。参考版 + 孪生版同步；def 的隐式参数不限于类型，不受此修复影响（域洞保留，显式供参本就可用） |
+| **连贯性评审（2026-09）**：三处 L08 侧修复的 L07 同码位点回合——①投影限定构造子快捷路径尊重局部遮蔽（L08 b66f5e4，遮蔽时走投影而非静默解析全局构造子）；②enum case 分隔放宽为 `EndLine+`（case 间注释行/空行合法，同 match 臂）；③unify 的 Π 臂 quote 改用当前层级 `l`（η descent 后 `l == cxt.lvl` 不变式已破，L08 §5 同款） | ①参考版 `elaboration.rs` `Raw::Obj` 臂 + 孪生同位（消融口径同步）；②`parser/mod.rs` `p_enum`；③参考版 `unification.rs`（孪版 Pi 臂不 quote 域值，无此路径）。回归：`l07_blackbox_v3` §H |
 
 ## 7. 已知限制（诚实清单）
 
@@ -284,6 +285,11 @@ solve / intersect）。在此之上：
 4. **probe 与臂内方程理论上可能不同步**：两者跑同一套代码，但探测用
    scratch 层级、臂内用真槽，极端情形（方程解依赖层级数值本身）判定
    可能不一致——现有测试未触发。
+5. **pretty 的 `AppPruning` 只显示内核**（不按掩码渲染实参，L06/L13 的
+   `go_pr_inner` 全量渲染未移植）：本层所有 pretty 调用点都吃 quote 产物
+   （quote 对 Flex 产 `Meta` + 实参链，不产 `AppPruning`），该分支仅作
+   不 panic 的兜底，渲染差异不可达；`go_ix` 越界退化 `@{ix}`（与 L06 的
+   固定文案不同，语义同为不崩）。
 
 ## 8. 测试
 

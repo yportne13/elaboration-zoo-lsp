@@ -1039,9 +1039,22 @@ pub(crate) fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool 
         // Rigid 裸头
         0 => v_lvl_of(v) == x,
         2 => {
+            // 链形态也要查链头：Rigid 头链查头层级、Obj 头链查被投影者
+            // （参考版 `Val::Rigid(y, sp) => *y == x || spine(sp, x)`、
+            // `Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x)`）
+            let h = v_spine_of(v);
+            let hd = spine.spine_head(h);
+            let head_hit = match v_tag(hd) {
+                0 => v_lvl_of(hd) == x,
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+                    _ => false,
+                },
+                _ => false,
+            };
             let mut args: Vec<(V, Icit)> = Vec::new();
-            spine.collect_args(v_spine_of(v), &mut args);
-            args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
+            spine.collect_args(h, &mut args);
+            head_hit || args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
         }
         // Flex 裸头（链在 tag 2）
         5 => false,
@@ -1832,14 +1845,14 @@ fn eval_iter<'a>(
                 let s2 = force(bump, spine, defs, metas, decls, mmap, fuel, pm_defs, sv);
                 let mut stuck = true;
                 if v_tag(s2) == 7 && matches!(v_xcell_of(s2), XCell::SumCase { .. }) {
-                    if burn(fuel) {
-                        if let Some((body_tm, env2)) = eval_aux(
-                            bump, spine, defs, metas, decls, mmap, fuel, pm_defs, s2, env, cases,
-                        ) {
-                            // 分支选中：体在本 eval 循环里尾推（pending 空）
-                            work.push(W::Tm(body_tm, env2));
-                            stuck = false;
-                        }
+                    // 不烧 fuel：参考版 eval(Tm::Match) 直呼 eval_aux，无
+                    // burn（force 的 Match 重选臂才烧——见 force 的 Match 臂）。
+                    if let Some((body_tm, env2)) = eval_aux(
+                        bump, spine, defs, metas, decls, mmap, fuel, pm_defs, s2, env, cases,
+                    ) {
+                        // 分支选中：体在本 eval 循环里尾推（pending 空）
+                        work.push(W::Tm(body_tm, env2));
+                        stuck = false;
                     }
                 }
                 if stuck {
@@ -2825,6 +2838,14 @@ fn unify_iter<'a>(
             }
             return false;
         }
+        // —— (0,0) 裸刚性对早退：同 level 的对已被位相等捷径剪掉
+        // （force 前后各一次），到这里必是异 level、必不等——免去走完
+        // 整个 cascade 的两次 flex_of scratch 往返（GADT 索引合一的常见
+        // 失败形态）。语义与 L06 的 (0,0) 末臂同构；位置在 pm 臂之后——
+        // 刚性对可被 pm 臂求解，pm 臂必须保持在前（L07 7811a99 同款回补）——
+        if v_tag(t) == 0 && v_tag(u) == 0 {
+            return false;
+        }
         // —— Decl/Decl 同名（参考臂 6）：同名比 spine（裸单元自反成立），
         // 异名落到后续臂（λ/η 等仍可命中）——
         if head_kind(spine, t) == HK_DECL && head_kind(spine, u) == HK_DECL {
@@ -3130,9 +3151,15 @@ fn unify_iter<'a>(
                 },
                 2 => {
                     let hd = spine.spine_head(v_spine_of(other));
-                    match v_xcell_of(hd) {
-                        XCell::Decl(n) => Some(n),
-                        XCell::Prim(n) => Some(n),
+                    // 链头可能是裸 Rigid / Meta（打包立即数，不是指针）——
+                    // 不看 tag 就 v_xcell_of 是野指针读；非卡住单元头按参考
+                    // 版语义走宽松臂失败（`_ => Err`）。
+                    match v_tag(hd) {
+                        7 => match v_xcell_of(hd) {
+                            XCell::Decl(n) => Some(n),
+                            XCell::Prim(n) => Some(n),
+                            _ => None,
+                        },
                         _ => None,
                     }
                 }
@@ -4046,6 +4073,26 @@ fn prune_ty_bump<'a>(
     Some(t)
 }
 
+/// `x{n}` 的 bump 拷贝：栈上格式化，省每 binder 一次 system-heap
+/// `String`（solve/prune 密集负载下 `lams_from_ty` 每 λ 层都要一个）。
+/// （a806ff0 的 L08 同款补齐——该 commit 只落到 L03-L05。）
+fn alloc_xname<'a>(bump: &'a Bump, n: u32) -> &'a str {
+    let mut buf = [0u8; 11]; // 'x' + u32 十进制最多 10 位
+    let mut i = buf.len();
+    let mut v = n;
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    i -= 1;
+    buf[i] = b'x';
+    bump.alloc_str(std::str::from_utf8(&buf[i..]).unwrap()) // ASCII 恒有效
+}
+
 /// `lams l a t`：沿 **meta 类型**的 Π 层包 λ（名字与 icit 随 Π，`"_"` 改名
 /// `x{l'}`；逐层用 `VVar l'` 剥闭包）。
 #[allow(clippy::too_many_arguments)]
@@ -4076,7 +4123,7 @@ fn lams_from_ty<'a>(
         let p = v_pi_of(cur);
         let (name, icit, env, body_tm) = (p.name, p.icit, p.env, p.body);
         let name = if name == "_" {
-            bump.alloc_str(&format!("x{}", lp))
+            alloc_xname(bump, lp)
         } else {
             name
         };
@@ -5214,18 +5261,16 @@ impl Machine {
                     .map(|&(_, ty)| ty)
                     .or_else(|| decls.get(x.data.as_str()).map(|e| e.ty));
                 if let Some(ty) = ty {
-                    // force 已展开已解 meta；未解 flex（tag 5，或 tag 2 链
-                    // 头是 Meta）放行
+                    // force 已展开已解 meta；未解 flex（裸 tag 5，或任意
+                    // spine 的 meta 头链）放行——参考版 `Val::Flex(_, _) =>
+                    // Ok(())` 对 spine 形状不设限，这里用 is_flex 走 spine_head
+                    // 判头（只看栈顶槽的 f 会把 ≥2 实参的 flex 链误判成非
+                    // flex）
                     let v = self.force_v(bump, decls, ty);
                     if v_tag(v) == 3 {
                         return Ok(());
                     }
-                    let is_flex = match v_tag(v) {
-                        5 => true,
-                        2 => v_tag(self.spine.stack[v_spine_of(v)].f) == 5,
-                        _ => false,
-                    };
-                    if is_flex {
+                    if is_flex(&self.spine, v) {
                         Ok(())
                     } else {
                         Err(Error(format!("expected universe, got V({})", v.0)))
@@ -5741,6 +5786,22 @@ impl Machine {
                 params,
                 cases,
             } => {
+                // 隐式参数是类型参数：无标注（Hole）的域钉为 U（与参考版
+                // 同步）。域洞若保留，第 2+ 个参数的域 meta 会带 pruning
+                // （形如 `?m A`），使用点解 `?m A := U` 时 invert 无法倒序
+                // Decl 头 spine 而失败——显式提供隐式实参即报 can't unify。
+                // 方括号参数在语言定义上就是类型参数；显式标注与显式索引不动。
+                let params: Vec<(crate::parser_lib::Span<String>, Raw, Icit)> = params
+                    .iter()
+                    .map(|(n, a, i)| {
+                        let a = if *i == Icit::Impl && matches!(a, Raw::Hole) {
+                            Raw::U
+                        } else {
+                            a.clone()
+                        };
+                        (n.clone(), a, *i)
+                    })
+                    .collect();
                 // enum 类型本体：λ params → Sum(name, [(p, Var p, ?, icit)], cases)
                 let new_params: Vec<(crate::parser_lib::Span<String>, Icit, Raw)> = params
                     .iter()
@@ -6142,9 +6203,9 @@ impl<'a> Compiler<'a> {
         }
         // 覆盖检查：每个可达构造子必须被某个臂覆盖（通配臂覆盖全部）。
         // 可达性 = 在快照回滚下跑一次特化方程（与臂内走查同一套判定）。
-        for ctor in sum_case_names(head_sum) {
-            if Self::probe_accessible(mach, bump, cxt, head_sum, &ctor)
-                && !arms.iter().any(|(pat, _)| covers(pat, &ctor, &ctor_names))
+        for ctor in &ctor_names {
+            if Self::probe_accessible(mach, bump, cxt, head_sum, ctor)
+                && !arms.iter().any(|(pat, _)| covers(pat, ctor, &ctor_names))
             {
                 self.errors
                     .push(format!("match 不完整：缺少构造子 {}", ctor));
