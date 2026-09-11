@@ -44,6 +44,22 @@ name = "l08bench"
 path = "src/bin/l08bench.rs"
 
 [[bin]]
+name = "l09bench"
+path = "src/bin/l09bench.rs"
+
+[[bin]]
+name = "l10bench"
+path = "src/bin/l10bench.rs"
+
+[[bin]]
+name = "l11bench"
+path = "src/bin/l11bench.rs"
+
+[[bin]]
+name = "l12bench"
+path = "src/bin/l12bench.rs"
+
+[[bin]]
 name = "l13bench"
 path = "src/bin/l13bench.rs"
 
