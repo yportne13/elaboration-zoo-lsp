@@ -34,7 +34,8 @@ beta-eta `conv`）→ 核心语法（de Bruijn 索引）→ `nf`/`type` 两种�
 cargo test --lib L02_tyck                 # 26 个测试：三示例、报错路径、
                                           # 基础/性能互检、深度/稳态/conv 压力、
                                           # dup/conv_dup 负载、memo 指针共享
-cargo run --release --bin l02bench        # 基准：k=9..15，五负载族 × 四口径
+cargo run --release --bin l02bench -- --workload all   # 五负载族 × 四口径（k=9..15）
+                                                       # 不加 --workload 默认只跑 church
 ./target/release/l02bench --max-k 21 --only fast,fast_ss   # 大 n 段
 ./target/release/l02bench --workload dup --only fast,fast_memo   # call-by-need 轴
 ```
