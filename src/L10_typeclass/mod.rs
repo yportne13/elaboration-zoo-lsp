@@ -41,8 +41,6 @@ pub enum DeclTm {
         name: Span<String>,
         typ: Rc<Val>,
         body: Rc<Val>,
-        typ_pretty: String,
-        body_pretty: String,
     },
     Println(Rc<Tm>),
     Enum {

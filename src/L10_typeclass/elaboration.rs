@@ -274,7 +274,14 @@ impl Infer {
                 let bod = params.iter().rev().fold(body.clone(), |a, b| {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
-                let (ret_cxt, vty, vt, vtyp_pretty, vt_pretty) = {
+                // 注：不再逐 def 热心计算 nf + pretty 填 `DeclTm::Def` 的
+                // typ_pretty/body_pretty——两字段自引入起无任何消费方
+                // （`run` 只取 `DeclTm::Println`），而 body 的完整规范化在
+                // 大值负载上每 decl 一次 O(值大小)，church 翻倍负载实测
+                // O(n²)（k=13 单 decl 205ms / quote 仅 9.6ms，2026-09-12
+                // 逐 decl 探针），是 l10bench 参考版对孪生 162× 的全部
+                // 来源。L11（只留类型侧）与 L13（整段注释）同款处置。
+                let (ret_cxt, vty, vt) = {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(ret_cxt, typ)?;
                     let vtyp = self.eval(&ret_cxt.env, &typ_tm);
@@ -290,8 +297,6 @@ impl Infer {
 
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(0))
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e))))?;
-                    let vtyp_pretty = super::pretty_tm(0, ret_cxt.names(), &self.nf(&ret_cxt.env, &typ_tm));
-                    let vt_pretty = super::pretty_tm(0, fake_cxt.names(), &self.nf(&fake_cxt.env, &t_tm));
                     //println!("begin vt {}", "------".green());
                     let vt = self.eval(&fake_cxt.env, &t_tm);
                     self.global.insert(global_idx, vt.clone());
@@ -299,8 +304,6 @@ impl Infer {
                         ret_cxt.define(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
                         vtyp,
                         vt,
-                        vtyp_pretty,
-                        vt_pretty,
                     )
                 };
                 Ok((
@@ -308,8 +311,6 @@ impl Infer {
                         name: name.clone(),
                         typ: vty,
                         body: vt,
-                        typ_pretty: vtyp_pretty,
-                        body_pretty: vt_pretty,
                     },
                     //vt,
                     Val::U(0).into(),
