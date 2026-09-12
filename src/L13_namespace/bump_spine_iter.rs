@@ -5787,16 +5787,20 @@ impl Machine {
     fn fake_bind<'a>(
         &mut self,
         bump: &'a Bump,
-        cxt: &Cxt<'a>,
+        cxt: &mut Cxt<'a>,
         x: &str,
         span: crate::parser_lib::Span<()>,
         a_t: &'a Tm<'a>,
         ty: V,
     ) -> Result<Cxt<'a>, Error> {
-        let mut decls = cxt.decls.clone();
+        // 就地 COW（2026-09-12）：cxt 独占 decls 快照（强计数 1，顺序 decl
+        // 路径恒成立）时 make_mut 原地插存根，替代旧的先克隆整表再写——
+        // 大 decl 数负载上每 def O(D) 克隆实测 O(D²)；有别的快照观察者时
+        // make_mut 自动回退深拷贝，隔离语义与旧实现逐字一致。decl_reg 随
+        // 后以真值静默覆盖同名条目；调用方需先 drop(fake) 释放 Rc 引用。
         let name = bump.alloc_str(x);
         let stub = bump.alloc(Tm::Decl(name));
-        let prev = Rc::make_mut(&mut decls).insert(
+        let prev = Rc::make_mut(&mut cxt.decls).insert(
             SmolStr::new(x),
             DeclEntry {
                 span,
@@ -5811,21 +5815,46 @@ impl Machine {
         if prev.is_some() {
             return Err(Error(span.map(|_| format!("redefine {}", x)), vec![]));
         }
-        Ok(Cxt {
-            env: cxt.env,
-            update_from: cxt.update_from,
-            names: cxt.names.clone(),
-            types: cxt.types,
-            locals: cxt.locals,
-            pruning: cxt.pruning,
-            binds: cxt.binds,
-            lvl: cxt.lvl,
-            decls,
-            namespace: cxt.namespace,
-            namespace_prefix: cxt.namespace_prefix.clone(),
-            namespaces: cxt.namespaces.clone(),
-            binding_name: cxt.binding_name.clone(),
-        })
+        Ok(clone_cxt(cxt))
+    }
+
+    /// 声明登记（参考版 `Cxt::decl`）：**静默覆盖**（参考版 redefine 检查
+    /// 被注释）——fake_bind 之后以真值覆盖存根。prim-ness 翻转在快版无
+    /// force memo，无需 PRIM_VERSION。
+    fn decl_reg_in<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &mut Cxt<'a>,
+        x: &str,
+        span: crate::parser_lib::Span<()>,
+        t_tm: &'a Tm<'a>,
+        vt: V,
+        typ_tm: &'a Tm<'a>,
+        vtyp: V,
+        prim: Option<PrimId>,
+    ) -> Cxt<'a> {
+        // 就地 COW（2026-09-12，论证见 [`Self::fake_bind`]）：独占时原地
+        // 写 O(1)；observe 渲染保持 decl_reg 同款条件。
+        let typ_pretty = if self.observe {
+            let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+            let qn = types_names_list(cxt.types);
+            Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))))
+        } else {
+            None
+        };
+        Rc::make_mut(&mut cxt.decls).insert(
+            SmolStr::new(x),
+            DeclEntry {
+                span,
+                typ_pretty,
+                tm: t_tm,
+                ty: typ_tm,
+                val: vt,
+                vty: vtyp,
+                prim,
+            },
+        );
+        clone_cxt(cxt)
     }
 
     /// 声明登记（参考版 `Cxt::decl`）：**静默覆盖**（参考版 redefine 检查
@@ -8492,7 +8521,7 @@ impl Machine {
     fn infer_decl<'a>(
         &mut self,
         bump: &'a Bump,
-        cxt: &Cxt<'a>,
+        cxt: &mut Cxt<'a>,
         d: &Decl,
     ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
         // package 前缀（参考版 infer 入口）：Def/Enum/TraitDecl/Class 的名字
@@ -8507,7 +8536,7 @@ impl Machine {
         } else {
             d
         };
-        self.infer_after_prefix(bump, cxt, d)
+        self.infer_after_prefix_mut(bump, cxt, d)
     }
 
     /// 已前缀的 decl 推断（class Phase B 复用，免二次前缀——参考版
@@ -8516,6 +8545,18 @@ impl Machine {
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
+        d: &Decl,
+    ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
+        let mut cxt = clone_cxt(cxt);
+        return self.infer_after_prefix_mut(bump, &mut cxt, d);
+    }
+
+    /// [`Self::infer_after_prefix`] 的就地版：调用方独占 cxt 时免浅克隆
+    /// （infer_decl 顺序路径直通；COW 论证见 [`Self::fake_bind`]）。
+    fn infer_after_prefix_mut<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &mut Cxt<'a>,
         d: &Decl,
     ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
         match d {
@@ -8664,7 +8705,8 @@ impl Machine {
                 }
                 // 观察面：def 名定义处 hover（参考版 1153 同点位）
                 self.push_hover(bump, cxt, name.to_span(), name.to_span(), vtyp);
-                let out = self.decl_reg(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
+                drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
+                let out = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -8780,7 +8822,8 @@ impl Machine {
                 // 登记值在含存根的 fake 表下求值（注意用**原 cxt 的 decl**：
                 // Enum 臂与 Def 臂不同，参考版在此用 `cxt.decl`）
                 let vt = self.eval(bump, cxt, fake.env, t_tm);
-                let mut cxt = self.decl_reg(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
+                drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
+                let mut cxt = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 // 逐构造子注册：体 = λ(隐式参数, 字段) → SumCase{typ: ret, datas: 字段自身}；
                 // **限定键 `EnumName.caseName` 登记**（无裸名别名——裸名靠 Var
                 // 的后缀 fallback 解析；参考版 1322 同款）
@@ -8810,7 +8853,7 @@ impl Machine {
                     let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                     let vt = self.eval(bump, &cxt, cxt.env, t_tm);
                     let case_key = format!("{}.{}", name.data, case_name.data);
-                    cxt = self.decl_reg(bump, &cxt, &case_key, case_name.to_span(), t_tm, vt, typ_tm, vtyp, None);
+                    cxt = self.decl_reg_in(bump, &mut cxt, &case_key, case_name.to_span(), t_tm, vt, typ_tm, vtyp, None);
                 }
                 Ok((DeclOut::Enum, cxt))
             }
@@ -12073,7 +12116,7 @@ impl Machine {
         let mut cxt = self.prime_round(bump);
         let mut last = None;
         for d in ast {
-            match self.infer_decl(bump, &cxt, d) {
+            match self.infer_decl(bump, &mut cxt, d) {
                 Ok((out, nc)) => {
                     cxt = nc;
                     if let DeclOut::Def { name } = out {
@@ -12398,7 +12441,10 @@ impl Tycker {
         for (i, d) in prelude.decls.iter().enumerate() {
             let (_out, nc) = {
                 let b: &Bump = &self.bump;
-                self.machine.infer_decl(b, &cxt, d)?
+                // Cxt<'static> 经 &mut 不可缩（不变型），浅克隆出本地可变
+                // 副本再走 infer_decl（浅克隆 = Rc 引用计数 + Copy 字段）
+                let mut cxt_local = clone_cxt(&cxt);
+                self.machine.infer_decl(b, &mut cxt_local, d)?
             };
             cxt = unsafe { std::mem::transmute::<Cxt<'_>, Cxt<'static>>(nc) };
             if prelude.nat_after.contains(&i) {
@@ -12522,7 +12568,7 @@ impl Tycker {
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
         for (i, d) in user_ast.iter().enumerate() {
-            match Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, &[], &mut sink) {
+            match Self::step_round_decl(&mut self.machine, bump, &mut cxt, d, i, &[], &mut sink) {
                 Ok(nc) => cxt = nc,
                 // Keep the previous cxt for subsequent decls (reference
                 // `elaborate` keeps `local_cxt` on error).
@@ -12625,7 +12671,7 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
         for (i, d) in ast.iter().enumerate() {
-            cxt = Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, nat_after, &mut ret)?;
+            cxt = Self::step_round_decl(&mut self.machine, bump, &mut cxt, d, i, nat_after, &mut ret)?;
         }
         Ok(ret)
     }
@@ -12637,7 +12683,7 @@ impl Tycker {
     fn step_round_decl<'a>(
         machine: &mut Machine,
         bump: &'a Bump,
-        cxt: &Cxt<'a>,
+        cxt: &mut Cxt<'a>,
         d: &Decl,
         i: usize,
         nat_after: &[usize],
@@ -12746,7 +12792,7 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut file_i = 0usize;
         for (i, d) in prelude_decls.iter().enumerate() {
-            let (_out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
+            let (_out, nc) = self.machine.infer_decl(bump, &mut cxt, d)?;
             cxt = nc;
             if prelude_nat_after.contains(&i) {
                 cxt = self.machine.register_nat_builtins(bump, &cxt);
@@ -12772,7 +12818,7 @@ impl Tycker {
         self.machine.clear_observation_tables();
         let mut ret = String::new();
         for (i, d) in user_ast.iter().enumerate() {
-            cxt = Self::step_round_decl(&mut self.machine, bump, &cxt, d, i, &[], &mut ret)?;
+            cxt = Self::step_round_decl(&mut self.machine, bump, &mut cxt, d, i, &[], &mut ret)?;
         }
         Ok(ret)
     }
@@ -12841,7 +12887,7 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut last: Option<V> = None;
         for (i, d) in ast.iter().enumerate() {
-            match self.machine.infer_decl(bump, &cxt, d) {
+            match self.machine.infer_decl(bump, &mut cxt, d) {
                 Ok((out, nc)) => {
                     cxt = nc;
                     if nat_after.contains(&i) {
