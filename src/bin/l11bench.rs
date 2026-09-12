@@ -114,6 +114,78 @@ fn main() {
 
 /// macro 负载源（**L11 特色**，两段均为 tests/l11_fast_parity.rs 已验证
 /// 形态：声明级 `make_bool` / 表达式级 `$x: raw` 捕获（mwrap 同款））。
+
+/// universe 负载（自 l09/l10bench 移植）：固定宇宙塔 + 2^(k+1) 层
+/// `Type N` Pi 判定 def 链（每层一次 check_universe + global 登记；
+/// 末值无闭式，双实现互检）。
+fn universe_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\n\
+         def t0 : Type 1 = Type 0\n\n\
+         def t1 : Type 2 = Type 1 -> Type 0\n\n\
+         enum HighLvl[A] {\n    case1(a: A)\n    case2(a: t1)\n}\n\n\
+         def hl : HighLvl[Nat] = case1 zero\n\n\
+         def c0 : Type 2 = Type 1 -> Type 0\n",
+    );
+    for i in 1..n {
+        s += &format!("def c{i} : Type 2 = Type 1 -> Type 0\n");
+    }
+    s
+}
+
+/// traitchain 负载（自 l10bench 移植，**L10 特色**）：固定段（ToString for
+/// Bool + 泛型约束 t[T][s: ToString[T]] + 毛毯实例 impl[T] Say for T）+
+/// 2^(k+1) 层 `def c{i} : Nat = c{i-1}.say zero` 方法调用 def 链——每层
+/// 一次实例合成（Synth → 单实例求解）+ 方法 β 应用；末值 = succ^n zero
+/// （节点数无闭式，双实现互检）。
+fn traitchain_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+trait Say {
+    def say(x: Nat): Nat
+}
+
+impl[T] Say for T {
+    def say(x: Nat): Nat = succ x
+}
+
+def t[T][s: ToString[T]](x: T): String =
+    s.to_string x
+
+println (t true)
+
+def c0 : Nat = zero
+"#,
+    );
+    for i in 1..n {
+        s += &format!("def c{i} : Nat = c{}.say zero\n", i - 1);
+    }
+    s
+}
+
 fn macro_src(k: u32) -> String {
     let n = 1u64 << (k + 1);
     let mut s = String::from(
@@ -161,16 +233,19 @@ fn run(cli: Cli) {
         "enum" => &["enum"],
         "struct" => &["struct"],
         "macro" => &["macro"],
+        "universe" => &["universe"],
+        "traitchain" => &["traitchain"],
         // 无 church 负载：church_src 在 L11 参考版即判型失败（终裁
         // 2026-09-11，实测 Err @113,123；见文件头与 a7-r2 终裁节）
-        _ => &["natadd", "strchain", "match", "enum", "struct", "macro"],
+        _ => &["natadd", "strchain", "match", "enum", "struct", "macro", "universe", "traitchain"],
     };
 
     for workload in workloads {
         println!("== workload: {workload} ==");
         // **strchain/struct/macro 的参考版超线性**（L06 readme 同款：每
         // define 克隆 src_names/decl 表），默认不排 basic
-        let basic_too_slow = matches!(*workload, "strchain" | "struct" | "macro");
+        let basic_too_slow =
+            matches!(*workload, "strchain" | "struct" | "macro" | "universe" | "traitchain");
         // 闭式节点数（孪生生成器注释 + tests/l11_fast_parity.rs 钉值）：
         // strchain = 1、struct = 2；其余以快版双口径互检代替硬编码
         let closed_form = matches!(*workload, "strchain" | "struct");
@@ -189,6 +264,8 @@ fn run(cli: Cli) {
                 "match" => match_src(k),
                 "struct" => struct_src(k),
                 "macro" => macro_src(k),
+                "universe" => universe_src(k),
+                "traitchain" => traitchain_src(k),
                 _ => enum_src(),
             };
             // 计时外：解析 + 快版正确性闸门（check-only / memo 互检）
