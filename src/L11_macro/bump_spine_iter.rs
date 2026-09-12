@@ -7733,15 +7733,26 @@ pub(crate) type SourceDecl = Decl;
 
 /// church 2^(k+1)：k 次 ×2 翻倍（`add p p`）的 def 链，末位 def 为 `p_k`
 /// （nf 节点数与 L06/L08 同为 2n + 4）。
+///
+/// **2026-09-12 语法订正**：`add` 体的高阶嵌套应用改逗号调用
+/// `a(N, s, b(N, s, z))`——旧空格形式 `a N s (b N s z)` 在 L11+ 的
+/// parser 下括号组并进前一个实参（实测两版一致报
+/// `can't unify expected: N → N find: N`，L09/L10 同源绿），逗号形式
+/// 两版一致通过（L13 --file 探针 nf=12/36 与 L02 闭式 2n+4 吻合）。
 pub(crate) fn church_src(k: u32) -> String {
     let mut s = String::from(
         "def Nat : Type 1 = (N : Type 0) -> (N -> N) -> N -> N\n\
-         def add : Nat -> Nat -> Nat = a => b => N => s => z => a N s (b N s z)\n\
+         def add : Nat -> Nat -> Nat = a => b => N => s => z => a(N, s, b(N, s, z))\n\
          def p0 : Nat = N => s => z => s (s z)\n",
     );
     for i in 1..=k {
         s += &format!("def p{i} : Nat = add p{} p{}\n", i - 1, i - 1);
     }
+    // println 强制末值求值：L11/L12 参考版无强制引读的 bench_check_nf，
+    // 唯一 basic 口径是全流程 run()——λ 体在无 println 时不被强制
+    // （basic 会退化成 elaborate-only 平坦值），println 让两版都走
+    // 「check + 强制 nf + 输出」的完整路径。
+    s += &format!("println p{}\n", k);
     s
 }
 
