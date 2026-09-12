@@ -149,6 +149,115 @@ fn parse_prelude(
     (p.decls, p.counts, p.failed, p.nat_after)
 }
 
+
+/// universe 负载（自 l09/l10bench 移植）：固定宇宙塔 + 2^(k+1) 层
+/// `Type N` Pi 判定 def 链（每层一次 check_universe + global 登记；
+/// 末值无闭式，双实现互检）。
+fn universe_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from(
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\n\n\
+         def t0 : Type 1 = Type 0\n\n\
+         def t1 : Type 2 = Type 1 -> Type 0\n\n\
+         enum HighLvl[A] {\n    case1(a: A)\n    case2(a: t1)\n}\n\n\
+         def hl : HighLvl[Nat] = case1 zero\n\n\
+         def c0 : Type 2 = Type 1 -> Type 0\n",
+    );
+    for i in 1..n {
+        s += &format!("def c{i} : Type 2 = Type 1 -> Type 0\n");
+    }
+    s
+}
+
+/// traitchain 负载（自 l10bench 移植，**L10 特色**）：固定段（ToString for
+/// Bool + 泛型约束 t[T][s: ToString[T]] + 毛毯实例 impl[T] Say for T）+
+/// 2^(k+1) 层 `def c{i} : Nat = c{i-1}.say zero` 方法调用 def 链——每层
+/// 一次实例合成（Synth → 单实例求解）+ 方法 β 应用；末值 = succ^n zero
+/// （节点数无闭式，双实现互检）。
+fn traitchain_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+trait ToString {
+    def to_string: String
+}
+
+impl ToString for Bool {
+    def to_string: String =
+        match this {
+            case true => "true"
+            case false => "false"
+        }
+}
+
+trait Say {
+    def say(x: Nat): Nat
+}
+
+impl[T] Say for T {
+    def say(x: Nat): Nat = succ x
+}
+
+def t[T][s: ToString[T]](x: T): String =
+    s.to_string x
+
+println (t true)
+
+def c0 : Nat = zero
+"#,
+    );
+    for i in 1..n {
+        s += &format!("def c{i} : Nat = c{}.say zero\n", i - 1);
+    }
+    s
+}
+
+/// macro 负载（自 l11bench 移植，**L11 特色**）：macro_rules 两段（枚举
+/// 生成 make_bool + raw 片段插值 addtwo）+ 2^(k+1) 层
+/// `def c{i} : Nat = addtwo c{i-1}` 宏展开 def 链（末值 = succ^n zero，
+/// 节点数无闭式，双实现互检）。
+fn macro_src(k: u32) -> String {
+    let n = 1u64 << (k + 1);
+    let mut s = String::from(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+macro_rules make_bool {
+    (yes) => {
+        enum Yes { y }
+    }
+}
+
+make_bool yes
+
+def b = y
+
+println b
+
+macro_rules addtwo {
+    ($x: raw) => { succ (succ $x) }
+}
+
+def c0 : Nat = zero
+"#,
+    );
+    for i in 1..n {
+        s += &format!("def c{i} : Nat = addtwo c{}\n", i - 1);
+    }
+    s
+}
+
 /// 跑一个 decl 序列的两版口径，返回 (basic_nf, fast_nf, 两版是否一致)。
 fn nf_parity(decls: &[Decl], nat_after: &[usize]) -> (u64, u64, bool) {
     let b = L13_namespace::bench_check_nf_bounded(decls, nat_after);
@@ -334,7 +443,8 @@ fn run(cli: Cli) {
     for workload in workloads {
         println!("== workload: {workload} ==");
         match workload {
-            "church" | "natadd" | "gadt" | "strchain" | "match" | "enum" | "struct" | "moduletree" => {
+            "church" | "natadd" | "gadt" | "strchain" | "match" | "enum" | "struct" | "moduletree"
+            | "universe" | "traitchain" | "macro" => {
                 let ks: Vec<u32> = if matches!(workload, "gadt" | "enum" | "moduletree") {
                     vec![9]
                 } else {
@@ -349,6 +459,9 @@ fn run(cli: Cli) {
                         "match" => fast::match_src(k),
                         "struct" => fast::struct_src(k),
                         "moduletree" => fast::moduletree_src(),
+                        "universe" => universe_src(k),
+                        "traitchain" => traitchain_src(k),
+                        "macro" => macro_src(k),
                         _ => fast::enum_src(),
                     };
                     let Ok(decls) = fast::parse(&src, 0) else {
