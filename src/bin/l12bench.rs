@@ -71,7 +71,8 @@ use mimalloc::MiMalloc;
 use std::time::Instant;
 
 use L12_canonical::bump_spine_iter::{
-    enum_src, match_src, natadd_src, parse, run_fast, strchain_src, struct_src, Tycker,
+    church_src, enum_src, match_src, natadd_src, parse, run_fast, strchain_src, struct_src,
+    Tycker,
 };
 
 #[derive(Parser)]
@@ -209,6 +210,7 @@ fn run(cli: Cli) {
             .unwrap_or(true)
     };
     let workloads: &[&str] = match cli.workload.as_str() {
+        "church" => &["church"],
         "natadd" => &["natadd"],
         "strchain" => &["strchain"],
         "match" => &["match"],
@@ -217,9 +219,13 @@ fn run(cli: Cli) {
         "traitchain" => &["traitchain"],
         "universe" => &["universe"],
         "macro" => &["macro"],
-        // 无 church 负载：church_src 在 L12 参考版即判型失败（终裁
-        // 2026-09-11，实测 Err @113,123；见文件头与 a7-r2 终裁节）
-        _ => &["natadd", "strchain", "match", "enum", "struct", "traitchain", "universe", "macro"],
+        // church 负载 2026-09-12 复活：旧排除（终裁 2026-09-11，Err
+        // @113,123）根因是 parser 对括号组的并栈变化——add 体改逗号调用
+        // a(N, s, b(N, s, z)) 后两版一致通过（见 L12 twin church_src 注）
+        _ => &[
+            "church", "natadd", "strchain", "match", "enum", "struct", "traitchain", "universe",
+            "macro",
+        ],
     };
 
     for workload in workloads {
@@ -241,6 +247,7 @@ fn run(cli: Cli) {
         for k in ks {
             let n = 1u64 << (k + 1);
             let src = match *workload {
+                "church" => church_src(k),
                 "natadd" => natadd_src(k),
                 "strchain" => strchain_src(k),
                 "match" => match_src(k),
