@@ -106,6 +106,33 @@ fn main() {
         .unwrap();
 }
 
+
+/// natadd 负载（自 L11 移植）：enum Nat + 递归 add（match 两分支）+
+/// p{i} = add p{i-1} p{i-1} 翻倍链——构造子/递归调用负载，末值
+/// succ^n zero（节点数无闭式，以「快版 == 参考版」互检代替硬编码）。
+fn natadd_src(k: u32) -> String {
+    let mut s = String::from(
+        "enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+         def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+         def p0 : Nat = succ (succ zero)
+",
+    );
+    for i in 1..=k {
+        s += &format!("def p{i} : Nat = add p{} p{}
+", i - 1, i - 1);
+    }
+    s
+}
+
 /// universe 负载源（L09 特色负载，形态取自 tests/l09_fast_parity.rs 的
 /// parity_universe_levels 已验证用例；L10 = L09 + trait，语法面超集）。
 fn universe_src(k: u32) -> String {
@@ -188,6 +215,7 @@ fn run(cli: Cli) {
         "struct" => &["struct"],
         "universe" => &["universe"],
         "traitchain" => &["traitchain"],
+        "natadd" => &["natadd"],
         _ => &[
             "church",
             "strchain",
@@ -196,6 +224,7 @@ fn run(cli: Cli) {
             "struct",
             "universe",
             "traitchain",
+            "natadd",
         ],
     };
 
@@ -204,8 +233,10 @@ fn run(cli: Cli) {
         // church/strchain/match/universe/traitchain 走 check + nf；enum 是
         // 固定源（check+nf 一次）。**strchain/struct 的参考版超线性**
         // （L06 readme 同款），默认不排 basic
-        let nf_workload =
-            matches!(*workload, "church" | "strchain" | "match" | "universe" | "traitchain");
+        let nf_workload = matches!(
+            *workload,
+            "church" | "strchain" | "match" | "universe" | "traitchain" | "natadd"
+        );
         let basic_too_slow = matches!(*workload, "strchain" | "struct");
         // church/strchain/struct 的节点数有闭式（孪生生成器注释 +
         // tests/l10_fast_parity.rs 钉值）；match/enum/universe/traitchain
@@ -227,6 +258,7 @@ fn run(cli: Cli) {
                 "struct" => struct_src(k),
                 "universe" => universe_src(k),
                 "traitchain" => traitchain_src(k),
+                "natadd" => natadd_src(k),
                 _ => enum_src(),
             };
             // 计时外：解析（共用参考版 parser，快版 `parse` 同时可见私有
