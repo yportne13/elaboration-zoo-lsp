@@ -3749,15 +3749,19 @@ impl Machine {
     fn fake_bind<'a>(
         &mut self,
         bump: &'a Bump,
-        cxt: &Cxt<'a>,
+        cxt: &mut Cxt<'a>,
         x: &str,
         a_t: &'a Tm<'a>,
         ty: V,
     ) -> Result<Cxt<'a>, Error> {
-        let mut decls = cxt.decls.clone();
+        // 就地 COW（2026-09-12）：cxt 独占 decls 快照（强计数 1，顺序 decl
+        // 路径恒成立）时 make_mut 原地插存根，替代旧的先克隆整表再写——
+        // 大 decl 数负载上每 def O(D) 克隆实测 O(D²)；有别的快照观察者时
+        // make_mut 自动回退深拷贝，隔离语义与旧实现逐字一致。decl_reg 随
+        // 后以真值静默覆盖同名条目；调用方需先 drop(fake) 释放 Rc 引用。
         let name = bump.alloc_str(x);
         let stub = bump.alloc(Tm::Decl(name));
-        let prev = Rc::make_mut(&mut decls).insert(
+        let prev = Rc::make_mut(&mut cxt.decls).insert(
             SmolStr::new(x),
             DeclEntry {
                 tm: stub,
@@ -3769,17 +3773,7 @@ impl Machine {
             return Err(Error(empty_span(format!("redefine {}", x)), vec![]));
         }
         let _ = a_t;
-        Ok(Cxt {
-            env: cxt.env,
-            update_from: cxt.update_from,
-            names: cxt.names.clone(),
-            types: cxt.types,
-            locals: cxt.locals,
-            pruning: cxt.pruning,
-            binds: cxt.binds,
-            lvl: cxt.lvl,
-            decls,
-        })
+        Ok(clone_cxt(cxt))
     }
 
     /// 声明登记（参考版 `Cxt::decl`）：**静默覆盖**（参考版 redefine 检查
@@ -3831,6 +3825,31 @@ impl Machine {
         };
         self.metas.push(MetaEntry::Unsolved(a, snap, origin_typ));
         self.metas.len() as u32 - 1
+    }
+
+    /// [`Self::decl_reg`] 的就地版（调用方独占 cxt 的 decl 臂顺序路径
+    /// 专用）：`Rc::make_mut` 独占时原地写 O(1)，语义与克隆版逐字一致
+    /// （COW 论证见 [`Self::fake_bind`]）。check 路径（父视图存活）继续
+    /// 走克隆版 [`Self::decl_reg`]。
+    fn decl_reg_in<'a>(
+        &mut self,
+        cxt: &mut Cxt<'a>,
+        x: &str,
+        t_tm: &'a Tm<'a>,
+        vt: V,
+        typ_tm: &'a Tm<'a>,
+        vtyp: V,
+    ) -> Cxt<'a> {
+        let _ = typ_tm;
+        Rc::make_mut(&mut cxt.decls).insert(
+            SmolStr::new(x),
+            DeclEntry {
+                tm: t_tm,
+                val: vt,
+                vty: vtyp,
+            },
+        );
+        clone_cxt(cxt)
     }
 
     /// 挂新洞（上游 `freshMeta`）：物化闭类型、追加未解条目，产出
@@ -5452,7 +5471,7 @@ impl Machine {
     fn infer_decl<'a>(
         &mut self,
         bump: &'a Bump,
-        cxt: &Cxt<'a>,
+        cxt: &mut Cxt<'a>,
         d: &Decl,
     ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
         match d {
@@ -5498,7 +5517,8 @@ impl Machine {
                 // 登记值在**含存根的 fake 表**下求值（自引用停在国内；
                 // 参考版 eval(&fake_cxt.decl, ...) 同款）
                 let vt = self.eval(bump, &fake, fake.env, t_tm);
-                let out = self.decl_reg(bump, cxt, &name.data, t_tm, vt, typ_tm, vtyp);
+                drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
+                let out = self.decl_reg_in(cxt, &name.data, t_tm, vt, typ_tm, vtyp);
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -5624,7 +5644,8 @@ impl Machine {
                 // &fake_cxt.env, ...)——注意用**原 cxt 的 decl**：Enum 臂
                 // 与 Def 臂不同，参考版在此用 `cxt.decl`
                 let vt = self.eval(bump, cxt, fake.env, t_tm);
-                let mut cxt = self.decl_reg(bump, cxt, &name.data, t_tm, vt, typ_tm, vtyp);
+                drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
+                let mut cxt = self.decl_reg_in(cxt, &name.data, t_tm, vt, typ_tm, vtyp);
                 // 逐构造子注册：体 = λ(隐式参数, 字段) → SumCase{typ: ret, datas: 字段自身}；
                 // **裸名登记**（L11 无 Enum.case 别名）
                 for ((case_name, binders, ret), (ctor_name, ctor_ty)) in
@@ -5652,7 +5673,7 @@ impl Machine {
                     let vtyp = self.eval(bump, &cxt, cxt.env, typ_tm);
                     let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                     let vt = self.eval(bump, &cxt, cxt.env, t_tm);
-                    cxt = self.decl_reg(bump, &cxt, &ctor_name.data, t_tm, vt, typ_tm, vtyp);
+                    cxt = self.decl_reg_in(&mut cxt, &ctor_name.data, t_tm, vt, typ_tm, vtyp);
                 }
                 Ok((DeclOut::Enum, cxt))
             }
@@ -5688,7 +5709,7 @@ impl Machine {
                         .collect(),
                     None,
                 )];
-                let (_, c) = self.infer_decl(bump, &cxt, &Decl::Enum {
+                let (_, c) = self.infer_decl(bump, &mut cxt, &Decl::Enum {
                     is_trait: true,
                     name: name.clone(),
                     params: param,
@@ -5712,7 +5733,7 @@ impl Machine {
                             _ => None,
                         })
                         .collect::<Vec<_>>();
-                    let (_, new_cxt) = self.infer_decl(bump, &cxt, &Decl::TraitDecl {
+                    let (_, new_cxt) = self.infer_decl(bump, &mut cxt, &Decl::TraitDecl {
                         name: trait_name.clone(),
                         params: params.clone(),
                         methods: new_methods,
@@ -5777,7 +5798,7 @@ impl Machine {
                         Either::Icit(Icit::Impl)
                     ), |a, b| Raw::App(Box::new(a), Box::new(b), Either::Icit(Icit::Impl)));
                 let def_name = trait_name.clone().to_span().map(|_| SmolStr::new(typ_name.clone()));
-                let (_, c) = self.infer_decl(bump, &cxt, &Decl::Def {
+                let (_, c) = self.infer_decl(bump, &mut cxt, &Decl::Def {
                     name: def_name,
                     params: params.clone(),
                     ret_type,
@@ -7602,7 +7623,7 @@ impl Machine {
         let mut cxt = self.prime_round(bump);
         let mut last = None;
         for d in ast {
-            match self.infer_decl(bump, &cxt, d) {
+            match self.infer_decl(bump, &mut cxt, d) {
                 Ok((out, nc)) => {
                     cxt = nc;
                     if let DeclOut::Def { name } = out {
@@ -7782,7 +7803,7 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
         for d in ast {
-            let (out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
+            let (out, nc) = self.machine.infer_decl(bump, &mut cxt, d)?;
             cxt = nc;
             if let DeclOut::Println(t) = out {
                 // nf：eval + quote（层级 = env 槽数，参考版 `Infer::nf` 同款）
