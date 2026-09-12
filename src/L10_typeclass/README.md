@@ -25,3 +25,15 @@
   与 `src/L13_namespace/legacy_tests.rs:604`）。L08 的空格格式是本地形态
   （A4-R2 的 L08 对齐已回滚）；卡住 match 显示保留 `(unsolved match …)`
   简形（同 L09，刻意分歧，l10 golden 锚定）。
+
+## 后续修复（2026-09-12）：参考版 Def 臂 eager nf+pretty 移除
+
+`Decl::Def` 臂原先对每个 def 热心计算 `nf` + `pretty_tm` 填入
+`DeclTm::Def { typ_pretty, body_pretty }`——两字段无任何消费方（`run` 只
+取 `DeclTm::Println`），而 body 的完整规范化在大值负载上每 decl 一次
+O(值大小)，church 翻倍负载实测 O(n²)（逐 decl 探针：k=13 单 decl
+205ms / 最终 quote 仅 9.6ms），是 l10bench 参考版对孪生 162× 的全部来
+源。两字段已删除；church basic k=13 199.4ms → 6.78ms（29.4×，×4.2/翻倍
+→ ×2.0 恢复线性），对孪生倍率回落到 5.1×。L11（body 侧置空）/L13（整
+段注释）同款处置的补齐；孪生侧名字/声明表 COW 同轮落地，详见
+`docs/opt-name-table-cow-2026-09-12.md`。
