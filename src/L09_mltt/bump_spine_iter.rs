@@ -3419,19 +3419,58 @@ impl Machine {
     /// fake_bind（参考版 `Cxt::fake_bind`）：递归 def 的占位——名字指到
     /// 全局层级（`GLOBAL_BASE + global_idx`），env/lvl/locals/pruning 一概
     /// 不动。
-    fn fake_bind<'a>(&mut self, cxt: &Cxt<'a>, x: &str, ty: V, global_idx: u32) -> Cxt<'a> {
-        let mut names = (*cxt.names).clone();
+    ///
+    /// **就地 COW（2026-09-12）**：`Rc::make_mut` 在 cxt 独占名字快照
+    /// （强计数 1，顺序 decl 路径恒成立）时原地插入，替代旧的整表深克隆
+    /// ——大 decl 数负载（universe/macro 等 2^(k+1) 个 def）上每 def
+    /// O(D) 克隆实测 O(D²)；有别的快照观察者（match 臂捕获、refresh 克隆
+    /// 等）时自动回退深拷贝，隔离语义与旧实现逐字一致。随后 define 用真
+    /// 名覆盖同名 by_name 条目；占位残留的 `by_lvl[GLOBAL_BASE+idx]` 键
+    /// 无查找路径可达（by_lvl 只点查，按名解析已指向真实层级）。调用方
+    /// 需在使用完返回的 fake 视图后 `drop(fake)` 再就地 define（否则多出
+    /// 的 Rc 引用会触发 make_mut 克隆回退）。
+    fn fake_bind<'a>(&mut self, cxt: &mut Cxt<'a>, x: &str, ty: V, global_idx: u32) -> Cxt<'a> {
+        let names = Rc::make_mut(&mut cxt.names);
         names.by_name.insert(SmolStr::new(x), global_idx + GLOBAL_BASE);
         names.by_lvl.insert(global_idx + GLOBAL_BASE, ty);
-        Cxt {
-            env: cxt.env,
-            names: Rc::new(names),
-            types: cxt.types,
-            locals: cxt.locals,
-            pruning: cxt.pruning,
-            binds: cxt.binds,
-            lvl: cxt.lvl,
-        }
+        clone_cxt(cxt)
+    }
+
+    /// [`Self::define_name`] 的就地版（调用方独占 cxt 的 decl 臂 /
+    /// prime_round 顺序路径专用）：`Rc::make_mut` 独占时原地扩展 O(1)，
+    /// 语义与克隆版逐字一致（COW 论证见 [`Self::fake_bind`]）。调用点
+    /// 审计：返回后父视图立即被丢弃/覆盖（infer_decl Def/Enum 臂、
+    /// prime_round），无"父视图仍被读取"的形态；check 路径的 Let/Pi
+    /// （父视图存活）继续走克隆版 [`Self::define_name`]。
+    fn define_name_in<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &mut Cxt<'a>,
+        x: &str,
+        a_t: &'a Tm<'a>,
+        t_t: &'a Tm<'a>,
+        val: V,
+        ty: V,
+    ) -> Cxt<'a> {
+        let names = Rc::make_mut(&mut cxt.names);
+        names.by_name.insert(SmolStr::new(x), cxt.lvl);
+        names.by_lvl.insert(cxt.lvl, ty);
+        cxt.env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
+        cxt.types = Some(bump.alloc(TCons {
+            name: bump.alloc_str(x),
+            ty,
+            source: true,
+            next: cxt.types,
+        }));
+        cxt.locals = Some(bump.alloc(LCons {
+            name: bump.alloc_str(x),
+            a_t,
+            t_t: Some(t_t),
+            next: cxt.locals,
+        }));
+        cxt.pruning = Some(bump.alloc(PrCons::new(None, cxt.pruning)));
+        cxt.lvl += 1;
+        clone_cxt(cxt)
     }
 
     /// 挂新洞（上游 `freshMeta`）：物化闭类型、追加未解条目，产出
@@ -4734,7 +4773,7 @@ impl Machine {
     fn infer_decl<'a>(
         &mut self,
         bump: &'a Bump,
-        cxt: &Cxt<'a>,
+        cxt: &mut Cxt<'a>,
         d: &Decl,
     ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
         match d {
@@ -4772,7 +4811,8 @@ impl Machine {
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
-                let out = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
+                drop(fake); // 释放 Rc 引用，define 的 make_mut 才能原地写
+                let out = self.define_name_in(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -4873,7 +4913,8 @@ impl Machine {
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
-                let mut cxt = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
+                drop(fake); // 释放 Rc 引用，define 的 make_mut 才能原地写
+                let mut cxt = self.define_name_in(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
                 // 逐构造子注册：体 = λ(隐式参数, 字段) → SumCase{typ: ret, datas: 字段自身}；
                 // **裸名登记**（L09 无 Enum.case 别名）
                 for ((case_name, binders, ret), (ctor_name, ctor_ty)) in
@@ -4900,7 +4941,7 @@ impl Machine {
                     let vtyp = self.eval(bump, cxt.env, typ_tm);
                     let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                     let vt = self.eval(bump, cxt.env, t_tm);
-                    cxt = self.define_name(bump, &cxt, &ctor_name.data, typ_tm, t_tm, vt, vtyp);
+                    cxt = self.define_name_in(bump, &mut cxt, &ctor_name.data, typ_tm, t_tm, vt, vtyp);
                 }
                 Ok((DeclOut::Enum, cxt))
             }
@@ -6231,9 +6272,10 @@ impl Machine {
         let lit_ty: &'a Tm<'a> = bump.alloc(Tm::LiteralType);
         let u0_t: &'a Tm<'a> = bump.alloc(Tm::U(0));
         // String : U(0)，值 = LiteralType
-        let cxt = self.define_name(
+        let mut cxt = Cxt::empty();
+        self.define_name_in(
             bump,
-            &Cxt::empty(),
+            &mut cxt,
             "String",
             u0_t,
             lit_ty,
@@ -6274,7 +6316,7 @@ impl Machine {
             env: filled,
             body: sc_pi_cod(bump),
         }));
-        self.define_name(bump, &cxt, "string_concat", sc_pi_tm, sc_lam_tm, sc_val, sc_ty)
+        self.define_name_in(bump, &mut cxt, "string_concat", sc_pi_tm, sc_lam_tm, sc_val, sc_ty)
     }
 
     /// 参考版 `bench_check` 的主循环（无输出变体）：返回 (是否通过，最终
@@ -6288,7 +6330,7 @@ impl Machine {
         let mut last = None;
         for d in ast {
             let is_def = matches!(d, Decl::Def { .. });
-            match self.infer_decl(bump, &cxt, d) {
+            match self.infer_decl(bump, &mut cxt, d) {
                 Ok((_, nc)) => {
                     cxt = nc;
                     if is_def {
@@ -6345,7 +6387,7 @@ impl Tycker {
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();
         for d in ast {
-            let (out, nc) = self.machine.infer_decl(bump, &cxt, d)?;
+            let (out, nc) = self.machine.infer_decl(bump, &mut cxt, d)?;
             cxt = nc;
             if let DeclOut::Println(t) = out {
                 // nf：eval + quote（层级 = env 槽数，参考版 `Infer::nf` 同款）
