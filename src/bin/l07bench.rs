@@ -22,7 +22,7 @@
 //! 用法：
 //! ```text
 //! cargo run --release --bin l07bench [--max-k 13] [--rounds 5] [--only basic,fast]
-//!                                     [--workload church|strchain|global|match|enum|all]
+//!                                     [--workload church|strchain|global|match|enum|natadd|all]
 //! ```
 
 #![allow(dead_code)]
@@ -73,6 +73,33 @@ struct Cli {
     workload: String,
 }
 
+
+/// natadd 负载（自 L11 移植）：enum Nat + 递归 add（match 两分支）+
+/// p{i} = add p{i-1} p{i-1} 翻倍链——构造子/递归调用负载，末值
+/// succ^n zero（节点数无闭式，以「快版 == 参考版」互检代替硬编码）。
+fn natadd_src(k: u32) -> String {
+    let mut s = String::from(
+        "enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+         def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+         def p0 : Nat = succ (succ zero)
+",
+    );
+    for i in 1..=k {
+        s += &format!("def p{i} : Nat = add p{} p{}
+", i - 1, i - 1);
+    }
+    s
+}
+
 fn median(ts: &mut [u128]) -> u128 {
     ts.sort_unstable();
     ts[ts.len() / 2]
@@ -105,7 +132,8 @@ fn run(cli: Cli) {
         "global" => &["global"],
         "match" => &["match"],
         "enum" => &["enum"],
-        _ => &["church", "strchain", "global", "match", "enum"],
+        "natadd" => &["natadd"],
+        _ => &["church", "strchain", "global", "match", "enum", "natadd"],
     };
 
     for workload in workloads {
@@ -113,7 +141,7 @@ fn run(cli: Cli) {
         // church/strchain/global/match 走 check + nf；enum 是固定源（check+nf
         // 一次）。**strchain/global 的参考版超线性**（L06 readme 同款：每
         // define 克隆 src_names/decl 表 + prim 链求值），默认不排 basic
-        let nf_workload = matches!(*workload, "church" | "strchain" | "global" | "match");
+        let nf_workload = matches!(*workload, "church" | "strchain" | "global" | "match" | "natadd");
         let basic_too_slow = matches!(*workload, "strchain" | "global");
         // match/enum 的节点数无闭式——以「快版 == 参考版」互检代替硬编码
         let closed_form = matches!(*workload, "church" | "strchain" | "global");
@@ -131,6 +159,7 @@ fn run(cli: Cli) {
                 "strchain" => strchain_src(k),
                 "global" => globals_src(k),
                 "match" => match_src(k),
+                "natadd" => natadd_src(k),
                 _ => enum_src(),
             };
             // 计时外：解析 + 正确性断言
