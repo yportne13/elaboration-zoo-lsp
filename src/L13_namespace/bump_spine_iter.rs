@@ -234,7 +234,10 @@ fn def_needs_replay(mutable: &RefCell<Mutable>, decl: &Decls<'_>, name: &str) ->
     }
     let mut visiting = std::collections::HashSet::new();
     let result = scan_def_replay(mutable, decl, name, &mut visiting);
-    mutable.borrow_mut().replay.insert(SmolStr::new(name), result);
+    // kick 撤销帧记账（评审 B#2 二期）：memo 只增，撤销 = 移除本键。
+    let k = SmolStr::new(name);
+    let old = mutable.borrow_mut().replay.insert(k.clone(), result);
+    state_journal_record(StateUndo::MutableReplay(k, old));
     result
 }
 
@@ -266,9 +269,12 @@ fn scan_def_replay(
     visiting.remove(name);
     // memo 写（带截断守卫）：子扫描途中命中过环守卫的结果可能是保守假
     // （op 经由在扫祖先才可达），存表会毒化后续查询——只在全程无截断
-    // （链形/树形引用，独立重扫必得同值）时入表。
+    // （链形/树形引用，独立重扫必得同值）时入表。kick 撤销帧同步记账
+    // （memo 只增，撤销 = 移除本键）。
     if !truncated {
-        mutable.borrow_mut().replay.insert(SmolStr::new(name), result);
+        let k = SmolStr::new(name);
+        let old = mutable.borrow_mut().replay.insert(k.clone(), result);
+        state_journal_record(StateUndo::MutableReplay(k, old));
     }
     result
 }
@@ -312,10 +318,10 @@ fn tm_scan_global_ops(
                     };
                     visiting.remove(*x);
                     if !*truncated {
-                        mutable
-                            .borrow_mut()
-                            .replay
-                            .insert(SmolStr::new(*x), result);
+                        // kick 撤销帧记账（评审 B#2 二期）：内联回填 memo。
+                        let k = SmolStr::new(*x);
+                        let old = mutable.borrow_mut().replay.insert(k.clone(), result);
+                        state_journal_record(StateUndo::MutableReplay(k, old));
                     }
                     if result {
                         *found = true;
@@ -1405,7 +1411,9 @@ fn prim_exec<'a>(
             let key = SmolStr::new(line);
             if !m.check_line_set.contains(&key) {
                 m.check_line_set.insert(key.clone());
-                m.check_lines.push(key);
+                m.check_lines.push(key.clone());
+                // kick 撤销帧记账（评审 B#2 二期）：仅新键推送。
+                state_journal_record(StateUndo::CheckLinesPush(key));
             }
             drop(m);
             Some(v_u(0))
@@ -1426,7 +1434,10 @@ fn prim_exec<'a>(
                 return None;
             }
             let name = lit_of(arg(0)?)?;
-            mutable.borrow_mut().map.insert(SmolStr::new(name), arg(1).unwrap());
+            // kick 撤销帧记账（评审 B#2 二期）：insert 返回值即旧值。
+            let k = SmolStr::new(name);
+            let old = mutable.borrow_mut().map.insert(k.clone(), arg(1).unwrap());
+            state_journal_record(StateUndo::MutableMap(k, old));
             Some(v_u(0))
         }
         PrimId::ChangeMutable => {
@@ -1446,7 +1457,10 @@ fn prim_exec<'a>(
                     bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, f, x,
                     Icit::Expl,
                 );
-                mutable.borrow_mut().map.insert(SmolStr::new(name), nx);
+                // kick 撤销帧记账（评审 B#2 二期）。
+                let k = SmolStr::new(name);
+                let prev = mutable.borrow_mut().map.insert(k.clone(), nx);
+                state_journal_record(StateUndo::MutableMap(k, prev));
             }
             Some(v_u(0))
         }
@@ -1485,10 +1499,16 @@ fn prim_exec<'a>(
                         bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, f, x,
                         Icit::Expl,
                     );
-                    mutable.borrow_mut().map.insert(SmolStr::new(name), nx);
+                    // kick 撤销帧记账（评审 B#2 二期）。
+                    let k = SmolStr::new(name);
+                    let prev = mutable.borrow_mut().map.insert(k.clone(), nx);
+                    state_journal_record(StateUndo::MutableMap(k, prev));
                 }
                 None => {
-                    mutable.borrow_mut().map.insert(SmolStr::new(name), default);
+                    // kick 撤销帧记账（评审 B#2 二期）。
+                    let k = SmolStr::new(name);
+                    let prev = mutable.borrow_mut().map.insert(k.clone(), default);
+                    state_journal_record(StateUndo::MutableMap(k, prev));
                 }
             }
             Some(v_u(0))
@@ -1871,6 +1891,222 @@ fn meta_journal_rollback(metas: &mut Vec<MetaEntry>, pre_len: usize) {
         }
     }
     metas.truncate(pre_len);
+}
+
+thread_local! {
+    /// 稳态七表撤销日志（评审 B#2 二期）：`Tycker::observe_user` 每 kick
+    /// 的整克隆恢复（tstate/mutable/symbol_table/import_map/
+    /// trait_method_cache/tm_import/val_import）改为「kick 末撤销日志」
+    /// ——kick 开帧后所有写点记 (key, 旧值 Option)，kick 末逆序撤销，
+    /// 逐键回到 checkpoint 形态。七表 add-mostly/覆盖少（用户段只追加
+    /// trait/实例/算符方法/import 别名/指针导入与可变全局），撤销面 =
+    /// 本 kick 增量；首条 (key, 旧值) 即 checkpoint 值，逆序撤销必然
+    /// 终止于 checkpoint 形态。纪律与 [`META_JOURNAL`] 同款：栈式帧、
+    /// **栈空时写点零成本 no-op**（bench / run_decls / prime 路径不记）。
+    /// 当前只有 kick 单层帧——探测（`run_pure_probe` 等）只回滚
+    /// metas/trait_metas，探测期七表写照记 kick 帧、kick 末一并撤销
+    /// （与旧行为一致：探测期表写本就存活到 kick 末）。
+    ///
+    /// 恢复语义注意：
+    /// - mutable 的 check_lines/check_line_set 恒配对（ReportCheckIssue
+    ///   成对插入、排水成对清空），`CheckLinesTake` 撤销时按 lines 重建
+    ///   set；
+    /// - `Synth` 的 scratch（generator_stack/resume_stack/assertion_table/
+    ///   root_answer）L13 从不填充（`synth` 只被 L10-L12 调用；
+    ///   can_satisfy 是 &self 读），clean() 清的恒是空表，无需记账。
+    static STATE_JOURNAL: RefCell<Vec<Vec<StateUndo>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// 撤销条目：表写点的 (key, 旧值 Option)。撤销 = Some 重插 / None 移除；
+/// Push 型撤销 = 桶 pop（`impl_trait_for` 的实例/索引桶只增）。
+/// `pub(super)`：`typeclass.rs` 的 Synth 写点（new_trait /
+/// set_trait_out_params / impl_trait_for）直接记账。
+pub(super) enum StateUndo {
+    SymbolTable((SmolStr, usize), Option<SmolStr>),
+    ImportMap(SmolStr, Option<SmolStr>),
+    TraitMethodCache((SmolStr, SmolStr), Option<(Rc<CTm>, Rc<CVal>, Rc<CTm>)>),
+    TmImport(usize, Option<&'static Tm<'static>>),
+    ValImport(usize, Option<V>),
+    MutableMap(SmolStr, Option<V>),
+    MutableReplay(SmolStr, Option<bool>),
+    /// 排水 take+clear 联合撤销：lines 恢复进 check_lines，set 按 lines 重建。
+    CheckLinesTake(Vec<SmolStr>),
+    /// ReportCheckIssue 的新行推送（行进 check_lines、键进 check_line_set
+    /// 恒配对）：撤销 = vec pop + set 移除。
+    CheckLinesPush(SmolStr),
+    /// check_seen 新键（排水去重 insert 返回 true 才记）。
+    CheckSeenInsert(SmolStr),
+    /// `new_trait`：键可覆盖（用户重声明 prelude trait 名）→ 记整桶旧值。
+    TraitInstancesSet(SmolStr, Option<Vec<Instance>>),
+    /// `impl_trait_for` 实例桶追加（撤销 = pop；桶若为本次 entry 新建，
+    /// pop 后整键移除——第二元 = 桶在 push 前是否已存在）。
+    TraitInstancesPush(SmolStr, bool),
+    /// `impl_trait_for` head 索引桶追加（同上）。
+    TraitHeadIndexPush((SmolStr, SmolStr), bool),
+    /// `set_trait_out_params`：solver 侧 out 参数掩码。
+    TraitSolverOutParamsSet(SmolStr, Option<Vec<bool>>),
+    /// `TraitState.definition` 整条覆盖。
+    TraitDefinitionSet(SmolStr, Option<TraitDefEntry>),
+    /// `TraitState.out_param` 掩码覆盖。
+    TraitStateOutParamSet(SmolStr, Option<Vec<bool>>),
+    /// `TraitState.assoc_defaults` 条目覆盖。
+    TraitAssocDefaultSet((SmolStr, SmolStr), Option<Option<Raw>>),
+}
+
+/// kick 开帧（[`Tycker::observe_user`] 起点一次）。
+fn state_journal_open_frame() {
+    STATE_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
+}
+
+/// 写点记账：journal 未激活（栈空）时零成本。`pub(super)` 同 [`StateUndo`]。
+pub(super) fn state_journal_record(ent: StateUndo) {
+    STATE_JOURNAL.with(|j| {
+        if let Some(top) = j.borrow_mut().last_mut() {
+            top.push(ent);
+        }
+    });
+}
+
+/// kick 末回滚：弹栈顶帧逆序撤销（栈空 = 无帧期写点，无事可撤）。
+fn state_journal_rollback(m: &mut Machine) {
+    let top = STATE_JOURNAL.with(|j| j.borrow_mut().pop());
+    let Some(log) = top else { return };
+    for ent in log.into_iter().rev() {
+        match ent {
+            StateUndo::SymbolTable(k, old) => match old {
+                Some(v) => {
+                    m.symbol_table.insert(k, v);
+                }
+                None => {
+                    m.symbol_table.remove(&k);
+                }
+            },
+            StateUndo::ImportMap(k, old) => match old {
+                Some(v) => {
+                    m.import_map.insert(k, v);
+                }
+                None => {
+                    m.import_map.remove(&k);
+                }
+            },
+            StateUndo::TraitMethodCache(k, old) => match old {
+                Some(v) => {
+                    m.trait_method_cache.insert(k, v);
+                }
+                None => {
+                    m.trait_method_cache.remove(&k);
+                }
+            },
+            StateUndo::TmImport(k, old) => match old {
+                Some(v) => {
+                    m.tm_import.insert(k, v);
+                }
+                None => {
+                    m.tm_import.remove(&k);
+                }
+            },
+            StateUndo::ValImport(k, old) => match old {
+                Some(v) => {
+                    m.val_import.insert(k, v);
+                }
+                None => {
+                    m.val_import.remove(&k);
+                }
+            },
+            StateUndo::MutableMap(k, old) => match old {
+                Some(v) => {
+                    m.mutable.borrow_mut().map.insert(k, v);
+                }
+                None => {
+                    m.mutable.borrow_mut().map.remove(&k);
+                }
+            },
+            StateUndo::MutableReplay(k, old) => match old {
+                Some(v) => {
+                    m.mutable.borrow_mut().replay.insert(k, v);
+                }
+                None => {
+                    m.mutable.borrow_mut().replay.remove(&k);
+                }
+            },
+            StateUndo::CheckLinesTake(lines) => {
+                let mut mu = m.mutable.borrow_mut();
+                mu.check_lines = lines;
+                mu.check_line_set = mu.check_lines.iter().cloned().collect();
+            }
+            StateUndo::CheckLinesPush(k) => {
+                let mut mu = m.mutable.borrow_mut();
+                mu.check_line_set.remove(&k);
+                // 配对不变式：push 的键恒在 vec 尾部（排水期 vec 被整体
+                // take 走，残留 push 必发生在 take 之后且无中间 push）。
+                if mu.check_lines.last().map(|x| *x == k).unwrap_or(false) {
+                    mu.check_lines.pop();
+                }
+            }
+            StateUndo::CheckSeenInsert(k) => {
+                m.mutable.borrow_mut().check_seen.remove(&k);
+            }
+            StateUndo::TraitInstancesSet(k, old) => match old {
+                Some(v) => {
+                    m.tstate.solver.class_instances.insert(k, v);
+                }
+                None => {
+                    m.tstate.solver.class_instances.remove(&k);
+                }
+            },
+            StateUndo::TraitInstancesPush(k, existed) => {
+                let mut solver = &mut m.tstate.solver;
+                if let Some(v) = solver.class_instances.get_mut(&k) {
+                    v.pop();
+                }
+                if !existed {
+                    solver.class_instances.remove(&k);
+                }
+            }
+            StateUndo::TraitHeadIndexPush(k, existed) => {
+                let mut solver = &mut m.tstate.solver;
+                if let Some(v) = solver.head_index.get_mut(&k) {
+                    v.pop();
+                }
+                if !existed {
+                    solver.head_index.remove(&k);
+                }
+            }
+            StateUndo::TraitSolverOutParamsSet(k, old) => match old {
+                Some(v) => {
+                    m.tstate.solver.trait_out_params.insert(k, v);
+                }
+                None => {
+                    m.tstate.solver.trait_out_params.remove(&k);
+                }
+            },
+            StateUndo::TraitDefinitionSet(k, old) => match old {
+                Some(v) => {
+                    m.tstate.definition.insert(k, v);
+                }
+                None => {
+                    m.tstate.definition.remove(&k);
+                }
+            },
+            StateUndo::TraitStateOutParamSet(k, old) => match old {
+                Some(v) => {
+                    m.tstate.out_param.insert(k, v);
+                }
+                None => {
+                    m.tstate.out_param.remove(&k);
+                }
+            },
+            StateUndo::TraitAssocDefaultSet(k, old) => match old {
+                Some(v) => {
+                    m.tstate.assoc_defaults.insert(k, v);
+                }
+                None => {
+                    m.tstate.assoc_defaults.remove(&k);
+                }
+            },
+        }
+    }
 }
 
 /// 条目上限；溢出整表清空（防 keepalive 钉住垃圾，代价是一次重走）。
@@ -8123,27 +8359,33 @@ impl Machine {
                                 let rc_a = export(&self.symbol_table, a_checked);
                                 let rc_t = export(&self.symbol_table, t_checked);
                                 let rc_va = v_to_ref_val(&self.spine, &self.defs, va);
-                                // 登记指针导入表
-                                self.tm_import.insert(
-                                    Rc::as_ptr(&rc_a) as usize,
+                                // 登记指针导入表（kick 撤销帧同步记账，评审 B#2 二期）
+                                let ka = Rc::as_ptr(&rc_a) as usize;
+                                let old_a = self.tm_import.insert(
+                                    ka,
                                     unsafe {
                                         std::mem::transmute::<&Tm<'a>, &'static Tm<'static>>(
                                             a_checked,
                                         )
                                     },
                                 );
-                                self.tm_import.insert(
-                                    Rc::as_ptr(&rc_t) as usize,
+                                state_journal_record(StateUndo::TmImport(ka, old_a));
+                                let kt = Rc::as_ptr(&rc_t) as usize;
+                                let old_t = self.tm_import.insert(
+                                    kt,
                                     unsafe {
                                         std::mem::transmute::<&Tm<'a>, &'static Tm<'static>>(
                                             t_checked,
                                         )
                                     },
                                 );
-                                self.val_import
-                                    .insert(Rc::as_ptr(&rc_va) as usize, va);
-                                self.trait_method_cache
+                                state_journal_record(StateUndo::TmImport(kt, old_t));
+                                let kv = Rc::as_ptr(&rc_va) as usize;
+                                let old_v = self.val_import.insert(kv, va);
+                                state_journal_record(StateUndo::ValImport(kv, old_v));
+                                let old_c = self.trait_method_cache
                                     .insert(key.clone(), (rc_a, rc_va, rc_t));
+                                state_journal_record(StateUndo::TraitMethodCache(key.clone(), old_c));
                             }
                         }
                         result
@@ -9288,16 +9530,30 @@ impl Machine {
                 self.tstate
                     .solver
                     .set_trait_out_params(name.data.clone(), out_param.clone());
-                self.tstate.definition.insert(
+                // 以下三表 kick 撤销帧记账（评审 B#2 二期）：insert 返回值
+                // 即旧值（用户重声明 prelude trait 名时为 Some）。
+                let old_def = self.tstate.definition.insert(
                     name.data.clone(),
-                    (param.clone(), out_param.clone(), resolved_supertraits.clone(), all_methods.clone()),
+                    (
+                        param.clone(),
+                        out_param.clone(),
+                        resolved_supertraits.clone(),
+                        all_methods.clone(),
+                    ),
                 );
-                self.tstate.out_param.insert(name.data.clone(), out_param);
+                state_journal_record(StateUndo::TraitDefinitionSet(name.data.clone(), old_def));
+                let old_op = self.tstate.out_param.insert(name.data.clone(), out_param);
+                state_journal_record(StateUndo::TraitStateOutParamSet(name.data.clone(), old_op));
                 // 关联类型默认值
                 for (aname, adefault) in assoc_defaults {
-                    self.tstate
+                    let old_ad = self
+                        .tstate
                         .assoc_defaults
                         .insert((name.data.clone(), aname.clone()), adefault.clone());
+                    state_journal_record(StateUndo::TraitAssocDefaultSet(
+                        (name.data.clone(), aname.clone()),
+                        old_ad,
+                    ));
                 }
                 let cxt2 = clone_cxt(cxt);
                 let new_cases = vec![(
@@ -9371,10 +9627,11 @@ impl Machine {
                                     // 直接应用时记 (helper, 元数) → 算符）
                                     if is_operator_method_name(&name_d.data) {
                                         if let Some(head) = raw_ctor_name(body) {
-                                            self.symbol_table.insert(
-                                                (head, params.len() + 1 + p.len()),
-                                                name_d.data.clone(),
-                                            );
+                                            // kick 撤销帧记账（评审 B#2 二期）
+                                            let k = (head.clone(), params.len() + 1 + p.len());
+                                            let old =
+                                                self.symbol_table.insert(k.clone(), name_d.data.clone());
+                                            state_journal_record(StateUndo::SymbolTable(k, old));
                                         }
                                     }
                                     // 实例方法：前置 `this` 参数、注册为
@@ -9623,10 +9880,12 @@ impl Machine {
                             if is_operator_method_name(&def_name.data) {
                                 if let Some(head) = raw_ctor_name(&body) {
                                     if class_type_name.is_none() {
-                                        self.symbol_table.insert(
-                                            (head, params.len() + 1),
-                                            def_name.data.clone(),
-                                        );
+                                        // kick 撤销帧记账（评审 B#2 二期）
+                                        let k = (head.clone(), params.len() + 1);
+                                        let old = self
+                                            .symbol_table
+                                            .insert(k.clone(), def_name.data.clone());
+                                        state_journal_record(StateUndo::SymbolTable(k, old));
                                     }
                                 }
                             }
@@ -9786,6 +10045,8 @@ impl Machine {
                             ));
                         }
                     } else {
+                        // kick 撤销帧记账（评审 B#2 二期）：此臂键必为新。
+                        state_journal_record(StateUndo::ImportMap(alias.clone(), None));
                         self.import_map.insert(alias, full);
                     }
                 }
@@ -9891,22 +10152,29 @@ impl Machine {
                     // 指针导入表（parser 的 build_class_chain_tm /
                     // maybe_prechecked_method_body 会以 (t, va) 与
                     // (a_checked, va) 两种组合嵌 Raw::Tm）
+                    // （kick 撤销帧同步记账，评审 B#2 二期）
                     let rc_tm = export(&self.symbol_table, t_checked);
                     let rc_a = export(&self.symbol_table, a_checked);
                     let rc_ty = v_to_ref_val(&self.spine, &self.defs, va);
-                    self.tm_import.insert(
-                        Rc::as_ptr(&rc_tm) as usize,
+                    let kt = Rc::as_ptr(&rc_tm) as usize;
+                    let old_t = self.tm_import.insert(
+                        kt,
                         unsafe {
                             std::mem::transmute::<&Tm<'a>, &'static Tm<'static>>(t_checked)
                         },
                     );
-                    self.tm_import.insert(
-                        Rc::as_ptr(&rc_a) as usize,
+                    state_journal_record(StateUndo::TmImport(kt, old_t));
+                    let ka = Rc::as_ptr(&rc_a) as usize;
+                    let old_a = self.tm_import.insert(
+                        ka,
                         unsafe {
                             std::mem::transmute::<&Tm<'a>, &'static Tm<'static>>(a_checked)
                         },
                     );
-                    self.val_import.insert(Rc::as_ptr(&rc_ty) as usize, va);
+                    state_journal_record(StateUndo::TmImport(ka, old_a));
+                    let kv = Rc::as_ptr(&rc_ty) as usize;
+                    let old_v = self.val_import.insert(kv, va);
+                    state_journal_record(StateUndo::ValImport(kv, old_v));
                     prechecked.push(PreA {
                         name: n,
                         rc_tm,
@@ -10337,26 +10605,26 @@ fn clone_cxt<'a>(cxt: &Cxt<'a>) -> Cxt<'a> {
 /// trait 定义 / 合成状态（参考版 `Infer` 的 trait_solver / trait_definition /
 /// trait_out_param 三表同构；Clone 供 temp-infer 快照换入换出）。L13：
 /// definition 多 supertraits 与方法默认体两元（参考版同构）。
+/// `TraitDefEntry` = definition 的值型（撤销日志 [`StateUndo`] 引用）。
+type TraitDefEntry = (
+    Vec<(crate::parser_lib::Span<SmolStr>, Raw, Icit)>,
+    Vec<bool>,
+    Vec<crate::parser_lib::Span<SmolStr>>,
+    Vec<(
+        crate::parser_lib::Span<SmolStr>,
+        Vec<(crate::parser_lib::Span<SmolStr>, Raw, Icit)>,
+        Raw,
+        Option<Raw>,
+    )>,
+);
+
 #[derive(Clone, Default)]
 pub(crate) struct TraitState {
     /// Prolog 式实例求解器。
     solver: Synth,
     /// trait 名 → (参数表（含 Self）, out_param 掩码, supertrait 链, 方法表)。
     /// 方法表条目：(名字, 参数表, 返回类型, 默认体)。
-    definition: HashMap<
-        SmolStr,
-        (
-            Vec<(crate::parser_lib::Span<SmolStr>, Raw, Icit)>,
-            Vec<bool>,
-            Vec<crate::parser_lib::Span<SmolStr>>,
-            Vec<(
-                crate::parser_lib::Span<SmolStr>,
-                Vec<(crate::parser_lib::Span<SmolStr>, Raw, Icit)>,
-                Raw,
-                Option<Raw>,
-            )>,
-        ),
-    >,
+    definition: HashMap<SmolStr, TraitDefEntry>,
     /// trait 名 → 参数 out_param 掩码。
     out_param: HashMap<SmolStr, Vec<bool>>,
     /// (trait, 关联类型名) → 默认类型（参考版 `Infer.assoc_defaults`）。
@@ -12917,27 +13185,24 @@ impl Tycker {
             self.prime_resident(prelude)?;
         }
         let r = self.resident.as_ref().expect("resident just primed");
-        // 恢复稳态：defs 截回 prelude 长度（用户段 append-only），per-run
-        // 状态整体换回检查点克隆（上轮用户段的实例/全局写入作废）。
-        // metas 例外：不再整表克隆恢复（评审 B#2a——万条级 memcpy/kick），
-        // 改 journal 帧记账——kick 开放帧后所有就地写经 journal_meta 记旧
-        // 值、append 在帧里，kick 末回滚+截断后逐字节回到 checkpoint；上
-        // 一 kick 末已回滚，起点天然就是 checkpoint 形态。
+        // 恢复稳态：defs 截回 prelude 长度（用户段 append-only），scratch
+        // 栈清空。七表（tstate/mutable/symbol_table/import_map/
+        // trait_method_cache/tm_import/val_import）不再整克隆恢复（评审
+        // B#2 一期 metas / 二期七表）：kick 开撤销帧，写点经 journal 记
+        // (key, 旧值)，kick 末逆序撤销——起点即 checkpoint 形态（上一
+        // kick 末已回滚），与本轮写点集合无关地逐键还原。
         self.machine.defs.truncate(r.defs_len);
         self.machine.spine.stack.clear();
         self.machine.vals.clear();
         self.machine.icits.clear();
         self.machine.constraints.clear();
-        self.machine.tstate = r.tstate.clone();
-        self.machine.mutable = RefCell::new(r.mutable.clone());
-        self.machine.symbol_table = r.symbol_table.clone();
-        self.machine.import_map = r.import_map.clone();
-        self.machine.trait_method_cache = r.trait_method_cache.clone();
-        self.machine.tm_import = r.tm_import.clone();
-        self.machine.val_import = r.val_import.clone();
         self.machine.clear_observation_tables();
         let pre_meta_len = self.machine.metas.len();
         META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
+        // 七表撤销帧（评审 B#2 二期）：随后的 symbol_table/import_map/
+        // trait_method_cache/tm_import/val_import/mutable(t)/tstate 写点
+        // 全部经 state_journal_record 记账。
+        state_journal_open_frame();
         let restore_done = kick_t0.map(|t| std::time::Instant::now());
         // 常驻基线（prelude）键集——prime 时预计算，每 kick 只读借用。
         let base_keys = &r.base_keys;
@@ -12984,15 +13249,96 @@ impl Tycker {
             }));
         }
         self.user_decl_exports = exports;
-        // kick 末：撤销本 kick 的 meta 就地写与新增（journal 帧回滚）——
-        // 下 kick 起点的整表恢复由此免除。导出数据已深快照成 owned Rc，
-        // 不受回滚影响。
+        // kick 末：撤销本 kick 的 meta 就地写与新增（journal 帧回滚）+ 七表
+        // 写点逆序撤销（评审 B#2 二期）——下 kick 起点的整表恢复由此免除。
+        // 导出数据已深快照成 owned Rc，不受回滚影响。
         meta_journal_rollback(&mut self.machine.metas, pre_meta_len);
+        state_journal_rollback(&mut self.machine);
+        // 撤销后自检（TYPORT_KICK_PROBE 门控）：七表逐键回到 checkpoint
+        // 形态。可全等比较的表做整表全等；值无 PartialEq 的表（Rc/AST 型）
+        // 按键做指针全等（journal 撤销恢复的就是 checkpoint 条目本身，
+        // 指针全等是真全等）；tstate 桶型（definition/instances 等）查
+        // 键集/长度守恒 + 桶长守恒。防「漏埋写点」回归。
+        if std::env::var_os("TYPORT_KICK_PROBE").is_some() {
+            let mu = self.machine.mutable.borrow();
+            assert!(self.machine.symbol_table == r.symbol_table, "symbol_table undo");
+            assert!(self.machine.import_map == r.import_map, "import_map undo");
+            assert!(mu.map == r.mutable.map, "mutable.map undo");
+            assert!(mu.replay == r.mutable.replay, "mutable.replay undo");
+            assert!(mu.check_lines == r.mutable.check_lines, "check_lines undo");
+            assert!(mu.check_line_set == r.mutable.check_line_set, "check_line_set undo");
+            assert!(mu.check_seen == r.mutable.check_seen, "check_seen undo");
+            // 指针导入表：键集 + 值指针全等。
+            for (k, v) in &r.tm_import {
+                assert_eq!(
+                    self.machine.tm_import.get(k).map(|x| *x as *const Tm as usize),
+                    Some(*v as *const Tm as usize),
+                    "tm_import undo at {k}"
+                );
+            }
+            assert_eq!(self.machine.tm_import.len(), r.tm_import.len(), "tm_import size");
+            assert!(self.machine.val_import == r.val_import, "val_import undo");
+            // trait 方法缓存：键集 + Rc 指针全等。
+            for (k, (a, va, t)) in &r.trait_method_cache {
+                match self.machine.trait_method_cache.get(k) {
+                    Some((a2, va2, t2)) => {
+                        assert!(Rc::ptr_eq(a, a2) && Rc::ptr_eq(va, va2) && Rc::ptr_eq(t, t2),
+                            "trait_method_cache undo at {k:?}");
+                    }
+                    None => panic!("trait_method_cache undo missing {k:?}"),
+                }
+            }
+            assert_eq!(self.machine.trait_method_cache.len(), r.trait_method_cache.len());
+            // tstate：可全等的两掩码表全等；桶型表键集 + 桶长守恒。
+            assert!(self.machine.tstate.solver.trait_out_params == r.tstate.solver.trait_out_params);
+            assert!(self.machine.tstate.out_param == r.tstate.out_param);
+            for (k, v) in &r.tstate.solver.class_instances {
+                assert_eq!(
+                    self.machine.tstate.solver.class_instances.get(k).map(|x| x.len()),
+                    Some(v.len()),
+                    "class_instances undo at {k}"
+                );
+            }
+            assert_eq!(
+                self.machine.tstate.solver.class_instances.len(),
+                r.tstate.solver.class_instances.len()
+            );
+            for (k, v) in &r.tstate.solver.head_index {
+                assert_eq!(
+                    self.machine.tstate.solver.head_index.get(k).map(|x| x.len()),
+                    Some(v.len()),
+                    "head_index undo at {k:?}"
+                );
+            }
+            assert_eq!(self.machine.tstate.solver.head_index.len(), r.tstate.solver.head_index.len());
+            for k in r.tstate.definition.keys() {
+                assert!(self.machine.tstate.definition.contains_key(k), "definition undo at {k}");
+            }
+            if self.machine.tstate.definition.len() != r.tstate.definition.len() {
+                let extra: Vec<&SmolStr> = self
+                    .machine
+                    .tstate
+                    .definition
+                    .keys()
+                    .filter(|k| !r.tstate.definition.contains_key(*k))
+                    .collect();
+                panic!("definition undo: machine={} checkpoint={} extra={extra:?}",
+                    self.machine.tstate.definition.len(), r.tstate.definition.len());
+            }
+            for k in r.tstate.assoc_defaults.keys() {
+                assert!(
+                    self.machine.tstate.assoc_defaults.contains_key(k),
+                    "assoc_defaults undo at {k:?}"
+                );
+            }
+            assert_eq!(self.machine.tstate.assoc_defaults.len(), r.tstate.assoc_defaults.len());
+        }
         if let (Some(t0), Some(t_restore)) = (kick_t0, restore_done) {
+            // µs 精度（评审 B#2 二期基线：七表克隆恢复在毫秒取整下不可见）。
             eprintln!(
-                "[KICK_PROBE] restore(clones)={}ms loop+export={}ms",
-                t_restore.duration_since(t0).as_millis(),
-                t_restore.elapsed().as_millis(),
+                "[KICK_PROBE] restore(clones)={:.1}ms loop+export={:.1}ms",
+                t_restore.duration_since(t0).as_secs_f64() * 1e3,
+                t_restore.elapsed().as_secs_f64() * 1e3,
             );
         }
         Ok(())
@@ -13092,9 +13438,13 @@ impl Tycker {
             let mut m = machine.mutable.borrow_mut();
             if !m.check_lines.is_empty() {
                 let pending = std::mem::take(&mut m.check_lines);
+                // kick 撤销帧记账（评审 B#2 二期）：take+clear 联合撤销
+                // （set 与 lines 恒配对，撤销时按 lines 重建）。
+                state_journal_record(StateUndo::CheckLinesTake(pending.clone()));
                 m.check_line_set.clear();
                 for line in &pending {
                     if m.check_seen.insert(line.clone()) {
+                        state_journal_record(StateUndo::CheckSeenInsert(line.clone()));
                         *ret += &super::format_check_warning(line);
                         *ret += "\n";
                         // 结构化记录（孪生自产 WARNING 诊断；下标记 decl）

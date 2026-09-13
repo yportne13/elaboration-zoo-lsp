@@ -136,18 +136,33 @@ impl Synth {
     }
 
     pub fn new_trait(&mut self, name: SmolStr) {
-        self.class_instances.insert(name, vec![]);
+        // kick 撤销帧记账（评审 B#2 二期）：insert 返回值即旧桶（用户重
+        // 声明 prelude trait 名时为 Some）；帧未开（bench/run 路径）no-op。
+        let old = self.class_instances.insert(name.clone(), vec![]);
+        super::bump_spine_iter::state_journal_record(
+            super::bump_spine_iter::StateUndo::TraitInstancesSet(name, old),
+        );
     }
 
     pub fn set_trait_out_params(&mut self, name: SmolStr, out_params: Vec<bool>) {
-        self.trait_out_params.insert(name, out_params);
+        // kick 撤销帧记账（评审 B#2 二期）。
+        let old = self.trait_out_params.insert(name.clone(), out_params);
+        super::bump_spine_iter::state_journal_record(
+            super::bump_spine_iter::StateUndo::TraitSolverOutParamsSet(name, old),
+        );
     }
 
     pub fn impl_trait_for(&mut self, trait_name: SmolStr, instance: Instance) {
+        // kick 撤销帧记账（评审 B#2 二期）：实例桶/索引桶只增，撤销 = pop；
+        // 桶若为本次 entry 新建，pop 后整键移除（checkpoint 键集守恒）。
+        let inst_existed = self.class_instances.contains_key(&trait_name);
         let instances = self.class_instances
             .entry(trait_name.clone())
             .or_default();
         let idx = instances.len();
+        super::bump_spine_iter::state_journal_record(
+            super::bump_spine_iter::StateUndo::TraitInstancesPush(trait_name.clone(), inst_existed),
+        );
 
         // Index by first non-out param's head constructor.
         // A Rigid (generic) Self has no concrete head key; stash it under the
@@ -158,6 +173,11 @@ impl Synth {
                     continue;
                 }
                 let head = head_key(arg).unwrap_or_else(|| SmolStr::new(GENERIC_SELF_HEAD));
+                let hk = (trait_name.clone(), head.clone());
+                let head_existed = self.head_index.contains_key(&hk);
+                super::bump_spine_iter::state_journal_record(
+                    super::bump_spine_iter::StateUndo::TraitHeadIndexPush(hk, head_existed),
+                );
                 self.head_index
                     .entry((trait_name.clone(), head))
                     .or_default()
