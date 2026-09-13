@@ -53,139 +53,185 @@ fn go_app_pruning(prec: i32, ns: List<String>, t: &Tm) -> String {
     pretty_tm(prec, ns, t)
 }
 
-pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+/// `pretty_tm` 的增量核心：逐节点写入单个输出缓冲，任何字节只写一次。
+/// 旧实现逐节点 `format!` 从子串拼新串——深度 d 处的字符串上下文 O(d)，
+/// 嵌套链全链 O(n²) 字节复制（perf-debt 剩余机会 9，同 L11/L12 P3 模板）。
+/// 输出与旧实现逐字节一致。
+fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
     match tm {
-        Tm::Var(ix) => go_ix(ns, ix.0),
-        Tm::Decl(name) => name.to_string(),
-        Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
+        Tm::Var(ix) => out.push_str(&go_ix(ns, ix.0)),
+        Tm::Decl(name) => out.push_str(name),
+        Tm::Obj(x, name) => {
+            go(prec, ns, x, out);
+            out.push('.');
+            out.push_str(&name.data);
+        }
         Tm::App(t, u, i) => {
             let need_paren = prec > APPP;
-            let f_t = pretty_tm(APPP, ns.clone(), t);
-            let f_u = match i {
-                Icit::Expl => pretty_tm(ATP, ns, u),
-                Icit::Impl => bracket(pretty_tm(ATP, ns, u)),
-            };
             if need_paren {
-                format!("({f_t} {f_u})")
-            } else {
-                format!("{f_t} {f_u}")
+                out.push('(');
+            }
+            go(APPP, ns.clone(), t, out);
+            out.push(' ');
+            match i {
+                Icit::Expl => go(ATP, ns, u, out),
+                Icit::Impl => {
+                    out.push('[');
+                    go(ATP, ns, u, out);
+                    out.push(']');
+                }
+            }
+            if need_paren {
+                out.push(')');
             }
         }
         Tm::Lam(span, i, body) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &span.data);
             let new_ns = ns.prepend(x.clone());
-            let binder = match i {
-                Icit::Expl => x,
-                Icit::Impl => bracket(x),
-            };
-            let ret = format!("{binder} => {}", pretty_tm(LETP, new_ns, body));
             if need_paren {
-                paren(ret)
-            } else {
-                ret
+                out.push('(');
+            }
+            match i {
+                Icit::Expl => out.push_str(&x),
+                Icit::Impl => {
+                    out.push('[');
+                    out.push_str(&x);
+                    out.push(']');
+                }
+            }
+            out.push_str(" => ");
+            go(LETP, new_ns, body, out);
+            if need_paren {
+                out.push(')');
             }
         }
-        Tm::U => "U".to_owned(),
+        Tm::U => out.push('U'),
         Tm::Pi(name_span, i, a, b) => {
             let need_paren = prec > PIP;
             let is_anonymous = name_span.data == "_";
+            if need_paren {
+                out.push('(');
+            }
             if is_anonymous {
-                let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
-                let ret = format!("{f_a} → {f_b}");
-                if need_paren {
-                    paren(ret)
-                } else {
-                    ret
-                }
+                go(APPP, ns.clone(), a, out);
+                out.push_str(" → ");
+                go(PIP, ns.prepend("_".to_owned()), b, out);
             } else {
                 let x = fresh(ns.clone(), &name_span.data);
                 let new_ns = ns.prepend(x.clone());
-                let binder = match i {
-                    Icit::Expl => paren(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                };
-                let ret = format!("{binder} → {}", pretty_tm(PIP, new_ns, b));
-                if need_paren {
-                    paren(ret)
-                } else {
-                    ret
+                // binder 里的域类型是小串，单独渲染（binder 需要整体加括号）
+                let dom = pretty_tm(LETP, ns, a);
+                match i {
+                    Icit::Expl => out.push_str(&paren(format!("{x}: {dom}"))),
+                    Icit::Impl => out.push_str(&bracket(format!("{x}: {dom}"))),
                 }
+                out.push_str(" → ");
+                go(PIP, new_ns, b, out);
+            }
+            if need_paren {
+                out.push(')');
             }
         }
         Tm::Let(name_span, a, t, u) => {
             let need_paren = prec > LETP;
             let x = fresh(ns.clone(), &name_span.data);
             let new_ns = ns.prepend(x.clone());
-            let ret = format!(
-                "let {x}: {} = {};\n{}",
-                pretty_tm(LETP, ns.clone(), a),
-                pretty_tm(LETP, ns, t),
-                pretty_tm(LETP, new_ns, u),
-            );
             if need_paren {
-                paren(ret)
-            } else {
-                ret
+                out.push('(');
+            }
+            out.push_str("let ");
+            out.push_str(&x);
+            out.push_str(": ");
+            go(LETP, ns.clone(), a, out);
+            out.push_str(" = ");
+            go(LETP, ns, t, out);
+            out.push_str(";\n");
+            go(LETP, new_ns, u, out);
+            if need_paren {
+                out.push(')');
             }
         }
-        Tm::Meta(m) => format!("?{}", m.0),
-        Tm::AppPruning(t, _) => go_app_pruning(prec, ns, t),
-        Tm::LiteralType => "String".to_owned(),
-        Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Prim(name) => name.to_string(),
-        Tm::Sum(span, params, _) => format!(
-            "{}{}",
-            span.data,
-            params
-                .iter()
-                .map(|(_, v, _, i)| match i {
-                    Icit::Expl => pretty_tm(ATP, ns.clone(), v),
-                    Icit::Impl => bracket(pretty_tm(ATP, ns.clone(), v)),
-                })
-                .reduce(|acc, x| format!("{acc}, {x}"))
-                .map(|x| format!("[{x}]"))
-                .unwrap_or_default(),
-        ),
+        Tm::Meta(m) => out.push_str(&format!("?{}", m.0)),
+        Tm::AppPruning(t, _) => out.push_str(&go_app_pruning(prec, ns, t)),
+        Tm::LiteralType => out.push_str("String"),
+        Tm::LiteralIntro(span) => out.push_str(&span.data),
+        Tm::Prim(name) => out.push_str(name),
+        Tm::Sum(span, params, _) => {
+            out.push_str(&span.data);
+            if !params.is_empty() {
+                out.push('[');
+                for (idx, (_, v, _, i)) in params.iter().enumerate() {
+                    if idx > 0 {
+                        out.push_str(", ");
+                    }
+                    match i {
+                        Icit::Expl => go(ATP, ns.clone(), v, out),
+                        Icit::Impl => {
+                            out.push('[');
+                            go(ATP, ns.clone(), v, out);
+                            out.push(']');
+                        }
+                    }
+                }
+                out.push(']');
+            }
+        }
         Tm::SumCase {
             typ,
             case_name,
             datas,
-        } => format!(
-            "{}::{}{}",
-            sum_head_name(typ),
-            case_name.data,
-            datas
-                .iter()
-                .map(|(_, v, i)| match i {
-                    Icit::Expl => pretty_tm(ATP, ns.clone(), v),
-                    Icit::Impl => bracket(pretty_tm(ATP, ns.clone(), v)),
-                })
-                .reduce(|acc, x| format!("{acc} {x}"))
-                .map(|x| format!("({x})"))
-                .unwrap_or_default(),
-        ),
+        } => {
+            out.push_str(&sum_head_name(typ));
+            out.push_str("::");
+            out.push_str(&case_name.data);
+            if !datas.is_empty() {
+                out.push('(');
+                for (idx, (_, v, i)) in datas.iter().enumerate() {
+                    if idx > 0 {
+                        out.push(' ');
+                    }
+                    match i {
+                        Icit::Expl => go(ATP, ns.clone(), v, out),
+                        Icit::Impl => {
+                            out.push('[');
+                            go(ATP, ns.clone(), v, out);
+                            out.push(']');
+                        }
+                    }
+                }
+                out.push(')');
+            }
+        }
         Tm::Match(scrut, cases) => {
-            let inner = cases
-                .iter()
-                .map(|(pat, body)| {
-                    format!(
-                        "case {} => {}",
-                        pretty_pattern(pat),
-                        pretty_tm(LETP, prepend_pattern_ns(ns.clone(), pat), body)
-                    )
-                })
-                .reduce(|a, b| format!("{a}; {b}"))
-                .unwrap_or_default();
-            let ret = format!("match {} {{ {inner} }}", pretty_tm(ATP, ns, scrut));
-            if prec > LETP {
-                paren(ret)
-            } else {
-                ret
+            let need_paren = prec > LETP;
+            if need_paren {
+                out.push('(');
+            }
+            out.push_str("match ");
+            go(ATP, ns.clone(), scrut, out);
+            out.push_str(" { ");
+            for (idx, (pat, body)) in cases.iter().enumerate() {
+                if idx > 0 {
+                    out.push_str("; ");
+                }
+                out.push_str("case ");
+                out.push_str(&pretty_pattern(pat));
+                out.push_str(" => ");
+                go(LETP, prepend_pattern_ns(ns.clone(), pat), body, out);
+            }
+            out.push_str(" }");
+            if need_paren {
+                out.push(')');
             }
         }
     }
+}
+
+pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
+    let mut out = String::with_capacity(64);
+    go(prec, ns, tm, &mut out);
+    out
 }
 
 /// SumCase.typ 可能是 `Decl` / 应用链（构造子的 `-> ret` 原样存储），
