@@ -12717,6 +12717,10 @@ struct Resident {
     /// 写可变全局、挂算符方法、导入别名），每 kick 恢复。值均为 owned 或被
     /// 常驻 bump 钉住的句柄（Clone 即安全）。
     metas: Vec<MetaEntry>,
+    /// 常驻基线（prelude）decl 键集——`observe_user` 每 kick diff 出本轮
+    /// 新声明用。源 `cxt` 在 kick 间只读，prime 时预计算一次（评审 B#2h：
+    /// 原每 kick 重建 943+ SmolStr 集合 ~1-2ms）。
+    base_keys: FxHashSet<SmolStr>,
     tstate: TraitState,
     mutable: Mutable,
     symbol_table: FxHashMap<(SmolStr, usize), SmolStr>,
@@ -12867,10 +12871,12 @@ impl Tycker {
             }
         }
         // 固化检查点（bump 自此常驻不 reset，句柄地址稳定）。
+        let base_keys = cxt.decls.keys().cloned().collect();
         self.resident = Some(Resident {
             cxt,
             defs_len: self.machine.defs.len(),
             base_bytes: self.bump.allocated_bytes(),
+            base_keys,
             metas: self.machine.metas.clone(),
             tstate: self.machine.tstate.clone(),
             mutable: self.machine.mutable.borrow().clone(),
@@ -12898,6 +12904,11 @@ impl Tycker {
         user_ast: &[Decl],
     ) -> Result<(), Error> {
         self.user_errors.clear();
+        let kick_t0 = if std::env::var_os("TYPORT_KICK_PROBE").is_some() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
         let over = match &self.resident {
             Some(r) => self.bump.allocated_bytes().saturating_sub(r.base_bytes) > RESIDENT_BUMP_LIMIT,
             None => true,
@@ -12907,13 +12918,16 @@ impl Tycker {
         }
         let r = self.resident.as_ref().expect("resident just primed");
         // 恢复稳态：defs 截回 prelude 长度（用户段 append-only），per-run
-        // 状态整体换回检查点克隆（上轮用户段的 meta/实例/全局写入作废）。
+        // 状态整体换回检查点克隆（上轮用户段的实例/全局写入作废）。
+        // metas 例外：不再整表克隆恢复（评审 B#2a——万条级 memcpy/kick），
+        // 改 journal 帧记账——kick 开放帧后所有就地写经 journal_meta 记旧
+        // 值、append 在帧里，kick 末回滚+截断后逐字节回到 checkpoint；上
+        // 一 kick 末已回滚，起点天然就是 checkpoint 形态。
         self.machine.defs.truncate(r.defs_len);
         self.machine.spine.stack.clear();
         self.machine.vals.clear();
         self.machine.icits.clear();
         self.machine.constraints.clear();
-        self.machine.metas = r.metas.clone();
         self.machine.tstate = r.tstate.clone();
         self.machine.mutable = RefCell::new(r.mutable.clone());
         self.machine.symbol_table = r.symbol_table.clone();
@@ -12922,8 +12936,11 @@ impl Tycker {
         self.machine.tm_import = r.tm_import.clone();
         self.machine.val_import = r.val_import.clone();
         self.machine.clear_observation_tables();
-        // 常驻基线（prelude）键集——用户段结束后用于 diff 出本轮新声明。
-        let base_keys: FxHashSet<SmolStr> = r.cxt.decls.keys().cloned().collect();
+        let pre_meta_len = self.machine.metas.len();
+        META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
+        let restore_done = kick_t0.map(|t| std::time::Instant::now());
+        // 常驻基线（prelude）键集——prime 时预计算，每 kick 只读借用。
+        let base_keys = &r.base_keys;
         let bump = &self.bump;
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
@@ -12967,6 +12984,17 @@ impl Tycker {
             }));
         }
         self.user_decl_exports = exports;
+        // kick 末：撤销本 kick 的 meta 就地写与新增（journal 帧回滚）——
+        // 下 kick 起点的整表恢复由此免除。导出数据已深快照成 owned Rc，
+        // 不受回滚影响。
+        meta_journal_rollback(&mut self.machine.metas, pre_meta_len);
+        if let (Some(t0), Some(t_restore)) = (kick_t0, restore_done) {
+            eprintln!(
+                "[KICK_PROBE] restore(clones)={}ms loop+export={}ms",
+                t_restore.duration_since(t0).as_millis(),
+                t_restore.elapsed().as_millis(),
+            );
+        }
         Ok(())
     }
 
