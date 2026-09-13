@@ -1,9 +1,13 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
+// 双向映射的两个方向都用 FxHashMap：BiMap 只做查找/插入（src_names 等
+// 热路径），不依赖迭代序（唯一的迭代用途 iter_all/values 在内存画像的
+// visited 集合收集里，序无关）；FxHashMap 省去 SipHash，与仓库其他热表
+// 一致（perf-debt 剩余机会 14）。
 #[derive(Clone, Default)]
 pub struct BiMap<K1, K2, V> {
-    map1: HashMap<K1, K2>,
-    map2: HashMap<K2, V>,
+    map1: FxHashMap<K1, K2>,
+    map2: FxHashMap<K2, V>,
 }
 
 impl<K1, K2, V> std::fmt::Debug for BiMap<K1, K2, V> {
@@ -21,8 +25,8 @@ where
 {
     pub fn new() -> Self {
         BiMap {
-            map1: HashMap::new(),
-            map2: HashMap::new(),
+            map1: FxHashMap::default(),
+            map2: FxHashMap::default(),
         }
     }
 

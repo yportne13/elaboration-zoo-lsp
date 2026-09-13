@@ -4056,13 +4056,37 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
 }
 
 pub fn preprocess(s: &str) -> String {
-    // Helper: replace each non-whitespace char with spaces equal to its byte length,
-    // so the preprocessed text has the same byte length as the original.
-    // This ensures parser span byte offsets still match the original text.
-    fn replace_non_ws_preserve_bytes(input: &str) -> String {
-        let mut out = String::with_capacity(input.len());
-        for c in input.chars() {
-            if c.is_whitespace() {
+    // 单遍扫描 + 单输出缓冲：一次左到右扫描同时完成原「块注释 → 行注释」
+    // 两遍变换，任何字节只写一次。旧实现逐行/逐块 `reduce(|a, b| a + sep + &b)`
+    // 折叠——第 i 步重拷前 i 段全部字节，O(字节数 × 行数)（LSP 每按键跑 2 遍，
+    // perf-debt 共享层发现 1）。
+    //
+    // 与旧实现的逐字节一致性（含全部边界怪癖）：
+    // - 旧第一遍按 `/*` 切块：每块内首个 `*/` 之前的文本换等字节空白、`*/`
+    //   换两空格，其后原样；无 `*/` 的块整体原样（含 `*/` 先于任何 `/*` 的
+    //   块、嵌套 `/*` 重新切块后未闭合的前段）。这里用区间扫描完全复刻：
+    //   chunk = 相邻 `/*` 之间的文本，块内首个 `*/`（不得越过块边界——与
+    //   `/*` 跨界重叠的匹配不算，如 `a*/*b`）之前空白化。
+    // - 旧第二遍按行处理第一遍的输出：行内首个「存活」的 `//` 换两空格、
+    //   到行尾换等字节空白。这里以 line_blank 状态融合进同一遍：仅原样区
+    //   间里的 `//` 会存活（空白化区间里的 `//` 已被第一遍吃掉），触发后到
+    //   `\n` 为止全部空白化，`\n` 复位。
+    // - 空白化按 char 语义（is_whitespace 的原 char 保留、其余按 len_utf8
+    //   换空格），与旧 replace_non_ws_preserve_bytes 完全一致，保持 parser
+    //   span 字节偏移不变量；输出与旧实现逐字节一致（黄金校验：全仓
+    //   .typort 逐文件 diff + 差分模糊测试 + lib 测试）。
+    // - 不变量：输出与输入等字节长。
+    let mut out = String::with_capacity(s.len());
+    // 行注释状态：触发后到 `\n` 为止输出全部空白化
+    let mut line_blank = false;
+
+    // 块注释内部区间发射：等字节空白，保留换行（并复位行注释状态）
+    fn emit_blanked(region: &str, out: &mut String, line_blank: &mut bool) {
+        for c in region.chars() {
+            if c == '\n' {
+                out.push('\n');
+                *line_blank = false;
+            } else if c.is_whitespace() {
                 out.push(c);
             } else {
                 for _ in 0..c.len_utf8() {
@@ -4070,24 +4094,77 @@ pub fn preprocess(s: &str) -> String {
                 }
             }
         }
-        out
     }
-    let s = s.split("/*")
-        .map(|x| {
-            x.split_once("*/")
-                .map(|(a, b)| replace_non_ws_preserve_bytes(a) + "  " + b)
-                .unwrap_or(x.to_owned())
-        })
-        .reduce(|a, b| a + "  " + &b)
-        .unwrap_or(s.to_owned());
-    s.split('\n')
-        .map(|x| {
-            x.split_once("//")
-                .map(|(a, b)| a.to_owned() + "  " + &replace_non_ws_preserve_bytes(b))
-                .unwrap_or(x.to_owned())
-        })
-        .reduce(|a, b| a + "\n" + &b)
-        .unwrap_or(s.to_owned())
+
+    // 原样区间发射 + 行注释融合：首个存活的 `//` 触发行空白化
+    fn emit_raw(region: &str, out: &mut String, line_blank: &mut bool) {
+        let bytes = region.as_bytes();
+        let mut j = 0usize;
+        while j < region.len() {
+            if *line_blank {
+                let c = region[j..].chars().next().unwrap();
+                if c == '\n' {
+                    out.push('\n');
+                    *line_blank = false;
+                } else if c.is_whitespace() {
+                    out.push(c);
+                } else {
+                    for _ in 0..c.len_utf8() {
+                        out.push(' ');
+                    }
+                }
+                j += c.len_utf8();
+            } else if bytes[j] == b'/' && j + 1 < bytes.len() && bytes[j + 1] == b'/' {
+                // 行注释头：`//` 换两空格，行尾前全部空白化
+                out.push_str("  ");
+                *line_blank = true;
+                j += 2;
+            } else {
+                // 批量拷贝到下一个 '/'（ASCII，必在 char 边界）；孤 '/' 原样推入
+                match bytes[j..].iter().position(|&b| b == b'/') {
+                    Some(k) if k > 0 => {
+                        out.push_str(&region[j..j + k]);
+                        j += k;
+                    }
+                    Some(_) => {
+                        out.push('/');
+                        j += 1;
+                    }
+                    None => {
+                        out.push_str(&region[j..]);
+                        j = region.len();
+                    }
+                }
+            }
+        }
+    }
+
+    // 块注释主扫描：chunk = 相邻 `/*` 之间的文本
+    let mut i = 0usize;
+    loop {
+        let next_open = s[i..].find("/*").map(|p| i + p);
+        let chunk_end = next_open.unwrap_or(s.len());
+        match s[i..chunk_end].find("*/") {
+            Some(qrel) => {
+                let q = i + qrel;
+                emit_blanked(&s[i..q], &mut out, &mut line_blank);
+                // `*/` → 两空格
+                out.push_str("  ");
+                emit_raw(&s[q + 2..chunk_end], &mut out, &mut line_blank);
+            }
+            None => emit_raw(&s[i..chunk_end], &mut out, &mut line_blank),
+        }
+        match next_open {
+            Some(p) => {
+                // `/*` → 两空格，下一块从标记之后开始
+                out.push_str("  ");
+                i = p + 2;
+            }
+            None => break,
+        }
+    }
+    debug_assert_eq!(out.len(), s.len(), "preprocess 必须保持等字节长");
+    out
 }
 
 /// 参考版项的节点数（与性能版 `tm_size` 同口径）。
