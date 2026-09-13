@@ -173,6 +173,11 @@ struct LCons<'a> {
     /// `Some` = define（闭成 Let），`None` = binder（闭成显式 Π）。
     t_t: Option<&'a Tm<'a>>,
     next: Option<&'a LCons<'a>>,
+    /// define 槽的**已求值登记值**（评审 A-1：fresh_meta close 从「重求值
+    /// 全链 def 项」改「值链直评」——登记值已在手（env_ext_defs 用的同一
+    /// 个），免每次 close 对 stale 链逐条重求值；k=9 一轮 2.1M 个 Let 节点
+    /// 重求值的载体）。binder 槽 None。
+    val: Option<V>,
 }
 
 // values（打包值）
@@ -4131,6 +4136,7 @@ impl Machine {
                 a_t,
                 t_t: None,
                 next: cxt.locals,
+                val: None,
             })),
             pruning: Some(bump.alloc(PrCons::new(Some(Icit::Expl), cxt.pruning))),
             binds: cxt.binds + 1,
@@ -4164,6 +4170,7 @@ impl Machine {
                 a_t,
                 t_t: None,
                 next: cxt.locals,
+                val: None,
             })),
             pruning: Some(bump.alloc(PrCons::new(Some(Icit::Expl), cxt.pruning))),
             binds: cxt.binds + 1,
@@ -4202,6 +4209,7 @@ impl Machine {
                 a_t,
                 t_t: Some(t_t),
                 next: cxt.locals,
+                val: Some(val),
             })),
             pruning: Some(bump.alloc(PrCons::new(None, cxt.pruning))),
             binds: cxt.binds, // define 槽不产生 Π 层
@@ -4262,6 +4270,7 @@ impl Machine {
             a_t,
             t_t: Some(t_t),
             next: cxt.locals,
+            val: Some(val),
         }));
         cxt.pruning = Some(bump.alloc(PrCons::new(None, cxt.pruning)));
         cxt.lvl += 1;
@@ -4317,17 +4326,18 @@ impl Machine {
             if cxt.binds == 0 && !has_free_var(q) {
                 self.eval(bump, EMPTY_ENV, q)
             } else {
-                // 全局段免包装（perf-debt 实现轮：L10 traitchain O(D²) 主因）。
-                // locals 链的历史 def 段每顶层 def 一条（O(D)），旧路径每次
-                // fresh_meta 物化 O(D) 个 Let 并逐条重求值其值项。现只包当前
-                // def 的 k = cxt.lvl - flat_len 个局部条目，以平坦区
-                // （defs[flat_base..+flat_len]，登记时已求值的 def 值）为基底
-                // 环境求值：包裹 k 层后闭包捕获平坦区，q 的全局引用下标
-                // i = D+k-1-ℓ 在应用期落位链外第 i-k 槽 = defs[ℓ]，与全量
-                // 包装逐值同轨（eval 确定性 + solve 写一次单调 ⇒ 重求值 ≡
-                // 登记值；孪生其余全部取值点本就读登记值）。平坦区被
-                // update_cxt 溶解（flat_len = 0，纯链环境）时 k = cxt.lvl，
-                // 退化为全量包装 + 空环境，与旧路径逐字一致。
+                // 全局段免包装（perf-debt 实现轮）：只包当前 def 的
+                // k = cxt.lvl - flat_len 个局部条目，以平坦区为基底环境求值
+                // （论证见 git 历史 c7f6349 前版）。
+                //
+                // 评审 A-1「登记值链直评」尝试（2026-09-13，已回退）：把
+                // define 槽的 Let 重求值换成 LCons.val 登记值直评——k=9 正常
+                // （88ms）但 k=10 起 >100s 病态化：`LCons.val` 是登记时刻的
+                // 快照，而 def 项里 insert_go/合成的 meta 在登记后才求解，
+                // 旧 close 路径每次重求值会内联**最新**解，「登记值 ≡ 重求
+                // 值」不变式对含 late-solve meta 的链不成立。复活此方案的前
+                // 置：(a) LCons 缓存带 meta-epoch 失效（任一 meta 求解即作
+                // 废重评），或 (b) 证明/保证登记后 def 项再无未解 meta。
                 let flat_len = cxt.env.flat_len;
                 let k = cxt.lvl as usize - flat_len as usize;
                 solve_probe::C.fm_close_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
