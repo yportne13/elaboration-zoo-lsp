@@ -673,6 +673,11 @@ pub(crate) struct DeclEntry<'a> {
     /// 是 meta 解出前的旧形态）。prelude 装载段跳过渲染（`observe` 门控，
     /// 见 [`Machine::decl_reg`]）。
     pub(crate) typ_pretty: Option<Rc<String>>,
+    /// `typ_pretty` 可安全复用旗：登记期引出项无未解 meta（`no_metas`
+    /// 闸）——此时串与使用处实时渲染逐字节一致，`push_hover_cached` 直推
+    /// 免重复 quote/export/pretty（评审 B#1）。`false`（含 None）保持实时
+    /// 渲染，语义与旧路径一致。
+    pub(crate) typ_pretty_final: bool,
     /// 登记项（参考版行的 .1；eval 的 `Tm::Decl` 臂 replay 路径取它重放）。
     pub(crate) tm: &'a Tm<'a>,
     /// 类型**项**（参考版行的 .3 `a_quote`）：登记处 `check_universe` 出的
@@ -3354,6 +3359,7 @@ fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
                     DeclEntry {
                         span: e.span,
                         typ_pretty: e.typ_pretty.clone(),
+                        typ_pretty_final: e.typ_pretty_final,
                         tm: bump.alloc(Tm::Decl(name)),
                         ty: e.ty,
                         val: if v_tag(e.val) == 7
@@ -5701,6 +5707,14 @@ impl Machine {
         t_span: crate::parser_lib::Span<()>,
         e: &DeclEntry<'a>,
     ) {
+        // final 串（登记期无未解 meta）与使用处实时渲染逐字节一致——
+        // 直推缓存，免 quote/export/pretty 全管线（评审 B#1）。
+        if e.typ_pretty_final {
+            if let Some(s) = &e.typ_pretty {
+                self.hover_table.push((t_span, e.span, s.as_ref().clone()));
+                return;
+            }
+        }
         self.push_hover(bump, cxt, t_span, e.span, e.vty);
     }
 
@@ -5954,6 +5968,7 @@ impl Machine {
             DeclEntry {
                 span,
                 typ_pretty: None,
+                typ_pretty_final: false,
                 tm: stub,
                 ty: a_t,
                 val: v_xcell(bump.alloc(XCell::Decl { name })),
@@ -6054,13 +6069,18 @@ impl Machine {
         bump: &'a Bump,
         cxt: &Cxt<'a>,
         vtyp: V,
-    ) -> Option<Rc<String>> {
+    ) -> Option<(Rc<String>, bool)> {
         if !self.observe {
             return None;
         }
         let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+        // final = 引出项无未解 meta——此时渲染串与使用处实时渲染逐字节
+        // 一致（meta 后续求解不再改变形态），push_hover_cached 可安全
+        // 复用（评审 B#1：prelude-hdl 使用处 hover 实时渲染 ~10% 观察
+        // 面开销的大头）。
+        let typ_pretty_final = no_metas(bump, self, cxt, qt).is_none();
         let qn = types_names_list(cxt.types);
-        Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))))
+        Some((Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))), typ_pretty_final))
     }
 
     /// 声明登记（参考版 `Cxt::decl`）：**静默覆盖**（参考版 redefine 检查
@@ -6081,17 +6101,23 @@ impl Machine {
         typ_tm: &'a Tm<'a>,
         vtyp: V,
         prim: Option<PrimId>,
-        typ_pretty: Option<Rc<String>>,
+        typ_pretty: Option<(Rc<String>, bool)>,
     ) -> Cxt<'a> {
         // 就地 COW（2026-09-12，论证见 [`Self::fake_bind`]）：独占时原地
         // 写 O(1)；observe 渲染保持 decl_reg 同款条件。
-        let typ_pretty =
-            typ_pretty.or_else(|| self.render_typ_pretty(bump, cxt, vtyp));
+        let (typ_pretty, typ_pretty_final) = match typ_pretty {
+            Some((s, f)) => (Some(s), f),
+            None => match self.render_typ_pretty(bump, cxt, vtyp) {
+                Some((s, f)) => (Some(s), f),
+                None => (None, false),
+            },
+        };
         Rc::make_mut(&mut cxt.decls).insert(
             SmolStr::new(x),
             DeclEntry {
                 span,
                 typ_pretty,
+                typ_pretty_final,
                 tm: t_tm,
                 ty: typ_tm,
                 val: vt,
@@ -6127,18 +6153,20 @@ impl Machine {
         // 使用处悬浮是实时渲染（push_hover_cached），不读此串。prelude 装
         // 载段 observe=false 跳过渲染（每 kick 重放时这段是表清空前的死
         // 工作；参考版 LSP 只在进程启动装一次）。
-        let typ_pretty = if self.observe {
+        let (typ_pretty, typ_pretty_final) = if self.observe {
             let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+            let no_meta = no_metas(bump, self, cxt, qt).is_none();
             let qn = types_names_list(cxt.types);
-            Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))))
+            (Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt)))), no_meta)
         } else {
-            None
+            (None, false)
         };
         Rc::make_mut(&mut decls).insert(
             SmolStr::new(x),
             DeclEntry {
                 span,
                 typ_pretty,
+                typ_pretty_final,
                 tm: t_tm,
                 ty: typ_tm,
                 val: vt,
@@ -9011,7 +9039,7 @@ impl Machine {
                 // （同 vtyp 同 lvl 同管线，原实现各渲染一遍——评审机会 4）；
                 // hover_table 推进顺序与原实现一致（先 push 后登记）。
                 let rendered = self.render_typ_pretty(bump, cxt, vtyp);
-                if let Some(r) = &rendered {
+                if let Some((r, _)) = &rendered {
                     self.hover_table
                         .push((name.to_span(), name.to_span(), r.as_ref().clone()));
                 }

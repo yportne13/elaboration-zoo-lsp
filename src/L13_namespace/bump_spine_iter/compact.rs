@@ -420,7 +420,11 @@ impl<'o, 'n> Copier<'o, 'n> {
             let span = e.span;
             let prim = e.prim;
             let typ_pretty = e.typ_pretty.clone();
-            out.insert(k.clone(), DeclEntry { span, typ_pretty, tm, ty, val, vty, prim });
+            let typ_pretty_final = e.typ_pretty_final;
+            out.insert(
+                k.clone(),
+                DeclEntry { span, typ_pretty, typ_pretty_final, tm, ty, val, vty, prim },
+            );
         }
         let r = Rc::new(out);
         self.dmap.insert(key, r.clone());
