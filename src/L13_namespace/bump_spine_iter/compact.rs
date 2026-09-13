@@ -526,7 +526,15 @@ impl<'o, 'n> Copier<'o, 'n> {
         for (k, v) in m.map.iter() {
             map.insert(k.clone(), self.v(*v));
         }
-        Mutable { map, replay: m.replay.clone() }
+        Mutable {
+            map,
+            replay: m.replay.clone(),
+            // CheckIssues 行缓存与 bump 无关（纯 owned SmolStr/Vec/Set），
+            // 原样平移即可（未排水行与已报告集的轮内语义不因压实改变）。
+            check_lines: m.check_lines.clone(),
+            check_line_set: m.check_line_set.clone(),
+            check_seen: m.check_seen.clone(),
+        }
     }
 
     /// `tm_import` 的字段类型是 `&'static Tm<'static>`（'static 存放口径），

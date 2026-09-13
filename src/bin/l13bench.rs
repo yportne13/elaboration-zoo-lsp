@@ -51,6 +51,10 @@ use clap::Parser;
 use mimalloc::MiMalloc;
 use std::time::Instant;
 
+#[cfg(feature = "sampler")]
+#[path = "../sampler.rs"]
+mod sampler;
+
 use L13_namespace::bump_spine_iter as fast;
 use L13_namespace::parser::parser_with_macros;
 use L13_namespace::parser::syntax::Decl;
@@ -381,10 +385,19 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
             ts_ss.push(s.elapsed().as_micros());
         }
         if want("fast") {
+            #[cfg(feature = "sampler")]
+            if std::env::var_os("L13SAMPLE").is_some() {
+                sampler::enable();
+            }
             let s = Instant::now();
             let mut t = fast::Tycker::new();
             t.bench_check_nf_bounded(decls, nat_after);
             ts_fast.push(s.elapsed().as_micros());
+            #[cfg(feature = "sampler")]
+            if std::env::var_os("L13SAMPLE").is_some() {
+                let _ = std::fs::create_dir_all("target/bench_out");
+                sampler::write_folded("target/bench_out/l13_fast.folded").ok();
+            }
         }
         if want("basic") {
             let s = Instant::now();

@@ -198,12 +198,25 @@ struct Mutable {
     map: FxHashMap<SmolStr, V>,
     /// 无参 def 的 body 是否含全局副作用（`def_needs_replay` 按名缓存）。
     replay: FxHashMap<SmolStr, bool>,
+    /// CheckIssues 行缓存（评审机会 5）：`report_check_issue` 追加的行
+    /// （插入序）+ 未排水行成员集 + 已排水行成员集。行串不再在 mutable
+    /// map 里累积（`CheckIssues`/`CheckIssuesSeen` 两个键退役——全仓无
+    /// get_global 读者，prelude 只经 `report_check_issue` 写、
+    /// `step_round_decl` 排水读），成员判定 O(1)、追加免整串 clone；
+    /// 输出字节序由插入序 Vec 保持（append-only 语义逐字节不变）。
+    /// 随 Mutable 一起 Clone，常驻检查点恢复语义不变。
+    check_lines: Vec<SmolStr>,
+    check_line_set: FxHashSet<SmolStr>,
+    check_seen: FxHashSet<SmolStr>,
 }
 
 impl Mutable {
     fn clear(&mut self) {
         self.map.clear();
         self.replay.clear();
+        self.check_lines.clear();
+        self.check_line_set.clear();
+        self.check_seen.clear();
     }
 }
 
@@ -231,30 +244,45 @@ fn scan_def_replay(
     name: &str,
     visiting: &mut std::collections::HashSet<SmolStr>,
 ) -> bool {
+    // memo 读：已扫描过的名字直接用其独立答案（与 def_needs_replay 的顶层
+    // memo 同源同值）。无此读则引用链上每个 def 的扫描都从头走整条链——
+    // 依赖链负载（strchain）每 decl O(D)、全轮 O(D²)（perf-debt P4）。
+    if let Some(m) = mutable.borrow().replay.get(name) {
+        return *m;
+    }
     if !visiting.insert(SmolStr::new(name)) {
         return false; // 环：无新信息
     }
+    let mut truncated = false;
     let result = match decl.get(name) {
         Some(e) if e.prim.is_some() => false,
         Some(e) => {
             let mut found = false;
-            tm_scan_global_ops(mutable, decl, e.tm, visiting, &mut found);
+            tm_scan_global_ops(mutable, decl, e.tm, visiting, &mut found, &mut truncated);
             found
         }
         None => false,
     };
     visiting.remove(name);
+    // memo 写（带截断守卫）：子扫描途中命中过环守卫的结果可能是保守假
+    // （op 经由在扫祖先才可达），存表会毒化后续查询——只在全程无截断
+    // （链形/树形引用，独立重扫必得同值）时入表。
+    if !truncated {
+        mutable.borrow_mut().replay.insert(SmolStr::new(name), result);
+    }
     result
 }
 
 /// 深度优先扫闭合项里的 REPLAY_GLOBAL_OPS 调用（`Tm::Decl` 头）或对其它
-/// 需重放 def 的引用（参考版 `tm_scan_global_ops` 逐句）。
+/// 需重放 def 的引用（参考版 `tm_scan_global_ops` 逐句）。`truncated` =
+/// 扫描途中命中过环守卫（调用方据此决定 memo 是否可存）。
 fn tm_scan_global_ops(
     mutable: &RefCell<Mutable>,
     decl: &Decls<'_>,
     tm: &Tm<'_>,
     visiting: &mut std::collections::HashSet<SmolStr>,
     found: &mut bool,
+    truncated: &mut bool,
 ) {
     if *found {
         return;
@@ -263,47 +291,77 @@ fn tm_scan_global_ops(
         Tm::Decl(x) => {
             if REPLAY_GLOBAL_OPS.contains(x) {
                 *found = true;
-            } else if decl.get(*x).is_some() && scan_def_replay(mutable, decl, x, visiting) {
-                *found = true;
+            } else if decl.get(*x).is_some() {
+                if let Some(m) = mutable.borrow().replay.get(*x) {
+                    if *m {
+                        *found = true;
+                    }
+                } else if !visiting.insert(SmolStr::new(*x)) {
+                    *truncated = true;
+                } else {
+                    // 内联 scan_def_replay 主体（memo 读已做，子扫描后按
+                    // 截断守卫回填 memo）
+                    let result = match decl.get(*x) {
+                        Some(e) if e.prim.is_some() => false,
+                        Some(e) => {
+                            let mut f2 = false;
+                            tm_scan_global_ops(mutable, decl, e.tm, visiting, &mut f2, truncated);
+                            f2
+                        }
+                        None => false,
+                    };
+                    visiting.remove(*x);
+                    if !*truncated {
+                        mutable
+                            .borrow_mut()
+                            .replay
+                            .insert(SmolStr::new(*x), result);
+                    }
+                    if result {
+                        *found = true;
+                    }
+                }
             }
         }
-        Tm::Obj(t, _) => tm_scan_global_ops(mutable, decl, t, visiting, found),
-        Tm::Lam(_, _, b) => tm_scan_global_ops(mutable, decl, b, visiting, found),
+        Tm::Obj(t, _) => tm_scan_global_ops(mutable, decl, t, visiting, found, truncated),
+        Tm::Lam(_, _, b) => tm_scan_global_ops(mutable, decl, b, visiting, found, truncated),
         Tm::App(f, u, _) => {
-            tm_scan_global_ops(mutable, decl, f, visiting, found);
-            tm_scan_global_ops(mutable, decl, u, visiting, found);
+            tm_scan_global_ops(mutable, decl, f, visiting, found, truncated);
+            tm_scan_global_ops(mutable, decl, u, visiting, found, truncated);
         }
-        Tm::AppPruning(t, _) => tm_scan_global_ops(mutable, decl, t, visiting, found),
+        Tm::AppPruning(t, _) => {
+            tm_scan_global_ops(mutable, decl, t, visiting, found, truncated)
+        }
         Tm::Pi(_, _, a, b) => {
-            tm_scan_global_ops(mutable, decl, a, visiting, found);
-            tm_scan_global_ops(mutable, decl, b, visiting, found);
+            tm_scan_global_ops(mutable, decl, a, visiting, found, truncated);
+            tm_scan_global_ops(mutable, decl, b, visiting, found, truncated);
         }
         Tm::Let(_, _, t, u) => {
-            tm_scan_global_ops(mutable, decl, t, visiting, found);
-            tm_scan_global_ops(mutable, decl, u, visiting, found);
+            tm_scan_global_ops(mutable, decl, t, visiting, found, truncated);
+            tm_scan_global_ops(mutable, decl, u, visiting, found, truncated);
         }
         Tm::SumCase { typ, datas, .. } => {
-            tm_scan_global_ops(mutable, decl, typ, visiting, found);
+            tm_scan_global_ops(mutable, decl, typ, visiting, found, truncated);
             for d in datas.iter() {
-                tm_scan_global_ops(mutable, decl, d.val, visiting, found);
+                tm_scan_global_ops(mutable, decl, d.val, visiting, found, truncated);
             }
         }
         Tm::Match(t, cases) => {
-            tm_scan_global_ops(mutable, decl, t, visiting, found);
+            tm_scan_global_ops(mutable, decl, t, visiting, found, truncated);
             for (_, b) in cases.iter() {
-                tm_scan_global_ops(mutable, decl, b, visiting, found);
+                tm_scan_global_ops(mutable, decl, b, visiting, found, truncated);
             }
         }
         Tm::Call(_, args, body) => {
             for (t, _) in args.iter() {
-                tm_scan_global_ops(mutable, decl, t, visiting, found);
+                tm_scan_global_ops(mutable, decl, t, visiting, found, truncated);
             }
-            tm_scan_global_ops(mutable, decl, body, visiting, found);
+            tm_scan_global_ops(mutable, decl, body, visiting, found, truncated);
         }
         Tm::Sum(_, params, _, _) => {
             for p in params.iter() {
-                tm_scan_global_ops(mutable, decl, p.val, visiting, found);
-                tm_scan_global_ops(mutable, decl, p.ty, visiting, found);
+                tm_scan_global_ops(mutable, decl, p.val, visiting, found, truncated);
+                tm_scan_global_ops(mutable, decl, p.ty, visiting, found, truncated);
             }
         }
         Tm::Var(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {}
@@ -1028,6 +1086,7 @@ fn vapp1<'a>(
     metas: &[MetaEntry],
     decl: &Decls<'a>,
     mutable: &RefCell<Mutable>,
+    lazy_pure_prim: bool,
     f: V,
     a: V,
     i: Icit,
@@ -1039,23 +1098,31 @@ fn vapp1<'a>(
     } else if v_tag(f) == 2 {
         // 链头：Decl 头先查 prim（带全部既有实参 + 新实参执行）。顶端槽的
         // `hk` 让非 Decl 链免去整趟走底——每次中性应用都省这一笔。
+        // lazy_pure_prim（eval 语境）= 纯 prim 不在 eval 点执行：纯 prim 的
+        // 结果只依赖实参，force 期归约同值——而急切执行会让"逐层字面量
+        // 串接"的 def 链每层物化全串（strchain O(D²) 字节）；保持中性则
+        // 最终 quote/force 一次归约 O(n)。非纯 prim 的副作用必须发生在
+        // eval 点，保持急切。
         let h = v_spine_of(f);
         if spine.stack[h].hk == HK_DECL {
             let hd = spine.spine_head(h);
             if let XCell::Decl { name } = v_xcell_of(hd) {
                 let name = *name;
-                if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
-                    if !prim_is_pure(pid) {
-                        force_taint_bump();
-                    }
-                    let mut args: Vec<(V, Icit)> = Vec::new();
-                    spine.collect_args(h, &mut args); // 逆应用序（最新在前）
-                    args.reverse(); // 自然序（最老在前）
-                    args.push((a, i));
-                    if let Some(r) = prim_exec(
-                        bump, spine, work, vals, icits, defs, metas, decl, mutable, pid, &args,
-                    ) {
-                        return r;
+                let pure = decl.get(name).and_then(|e| e.prim).is_some_and(prim_is_pure);
+                if !(lazy_pure_prim && pure) {
+                    if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
+                        if !prim_is_pure(pid) {
+                            force_taint_bump();
+                        }
+                        let mut args: Vec<(V, Icit)> = Vec::new();
+                        spine.collect_args(h, &mut args); // 逆应用序（最新在前）
+                        args.reverse(); // 自然序（最老在前）
+                        args.push((a, i));
+                        if let Some(r) = prim_exec(
+                            bump, spine, work, vals, icits, defs, metas, decl, mutable, pid, &args,
+                        ) {
+                            return r;
+                        }
                     }
                 }
             }
@@ -1068,15 +1135,18 @@ fn vapp1<'a>(
                 // 裸 Decl 单元上应用：prim 以单实参试执行（实参不足 → None
                 // → 压 spine；参考版 v_app 的 Decl 臂同款）
                 let name = *name;
-                if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
-                    if !prim_is_pure(pid) {
-                        force_taint_bump();
-                    }
-                    let args = [(a, i)];
-                    if let Some(r) = prim_exec(
-                        bump, spine, work, vals, icits, defs, metas, decl, mutable, pid, &args,
-                    ) {
-                        return r;
+                let pure = decl.get(name).and_then(|e| e.prim).is_some_and(prim_is_pure);
+                if !(lazy_pure_prim && pure) {
+                    if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
+                        if !prim_is_pure(pid) {
+                            force_taint_bump();
+                        }
+                        let args = [(a, i)];
+                        if let Some(r) = prim_exec(
+                            bump, spine, work, vals, icits, defs, metas, decl, mutable, pid, &args,
+                        ) {
+                            return r;
+                        }
                     }
                 }
                 spine.push(f, a, i)
@@ -1086,7 +1156,8 @@ fn vapp1<'a>(
                 new_args.push((a, i));
                 new_args.extend_from_slice(args);
                 let nb = vapp1(
-                    bump, spine, work, vals, icits, defs, metas, decl, mutable, *body, a, i,
+                    bump, spine, work, vals, icits, defs, metas, decl, mutable,
+                    lazy_pure_prim, *body, a, i,
                 );
                 v_xcell(bump.alloc(XCell::Call {
                     name,
@@ -1258,6 +1329,17 @@ fn prim_exec<'a>(
     pid: PrimId,
     args: &[(V, Icit)],
 ) -> Option<V> {
+    // 实参统一 force 到 WHNF 再进分派：非纯 prim 在 eval 点直呼时
+    // （lazy_pure_prim 只拦纯 prim），实参可能是 eval 惰性产生的纯 prim
+    // 中性 spine——不 force 则 lit_of / Nat / HDL 形状检查全部失准
+    // （vconnT 输出 parity 破坏的根因）；force 入口已各 force 一次，此处
+    // 重复 force 对 WHNF 是 O(1) 直通。参考版 prim_fn 的"实参先 force"
+    // 纪律同款。
+    let forced: Vec<(V, Icit)> = args
+        .iter()
+        .map(|(v, i)| (force(bump, spine, defs, metas, decl, mutable, *v), *i))
+        .collect();
+    let args: &[(V, Icit)] = &forced;
     let arg = |i: usize| args.get(i).map(|x| x.0);
     match pid {
         PrimId::StringConcat => {
@@ -1312,20 +1394,13 @@ fn prim_exec<'a>(
             }
             let line = format!("{}|{}|{}|{}", code, module, signal, message);
             let mut m = mutable.borrow_mut();
-            let existing = match m.map.get("CheckIssues") {
-                Some(v) => lit_of(*v).unwrap_or("").to_string(),
-                None => String::new(),
-            };
-            if !existing.split('\n').any(|l| l == line) {
-                let next = if existing.is_empty() {
-                    line
-                } else {
-                    format!("{}\n{}", existing, line)
-                };
-                m.map.insert(
-                    SmolStr::new("CheckIssues"),
-                    v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&next)))),
-                );
+            // 行级去重走行集缓存（评审机会 5）：原实现每次整串 clone +
+            // split 线性扫，串长随未排水行数线性增长；成员判定 O(1)，
+            // 行串只在排水时拼（插入序 Vec 保持 append-only 字节序）。
+            let key = SmolStr::new(line);
+            if !m.check_line_set.contains(&key) {
+                m.check_line_set.insert(key.clone());
+                m.check_lines.push(key);
             }
             drop(m);
             Some(v_u(0))
@@ -1363,7 +1438,7 @@ fn prim_exec<'a>(
                 let mut v2: Vec<V> = Vec::new();
                 let mut i2: Vec<Icit> = Vec::new();
                 let nx = vapp1(
-                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, f, x,
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, f, x,
                     Icit::Expl,
                 );
                 mutable.borrow_mut().map.insert(SmolStr::new(name), nx);
@@ -1402,7 +1477,7 @@ fn prim_exec<'a>(
                     let mut v2: Vec<V> = Vec::new();
                     let mut i2: Vec<Icit> = Vec::new();
                     let nx = vapp1(
-                        bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, f, x,
+                        bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, f, x,
                         Icit::Expl,
                     );
                     mutable.borrow_mut().map.insert(SmolStr::new(name), nx);
@@ -1724,15 +1799,15 @@ fn prim_exec<'a>(
                 let mut v2: Vec<V> = Vec::new();
                 let mut i2: Vec<Icit> = Vec::new();
                 let e = vapp1(
-                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, emit, b,
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, emit, b,
                     Icit::Expl,
                 );
                 let e = vapp1(
-                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, e, port,
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, e, port,
                     Icit::Expl,
                 );
                 let _ = vapp1(
-                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, e, sig,
+                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable, false, e, sig,
                     Icit::Expl,
                 );
             }
@@ -1759,6 +1834,38 @@ thread_local! {
         RefCell::new(FxHashMap::default());
     static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     static PRIM_VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// meta 就地写的撤销日志（perf-debt 评审轮）：栈非空时所有
+    /// `metas[idx] = …` 写点先记 (下标, 旧值) 到栈顶；探测回滚 = 弹栈顶
+    /// 逆序恢复 + 截断到探测前长度，替代整表 clone（metas 万条级时每分派
+    /// 一次整拷是 prelude-hdl 慢 decl 的主因）。栈式以支持嵌套探测：
+    /// 内层回滚把自身条目并入外层（内层恢复的旧值对外层而言仍是「探测期
+    /// 写入」，外层回滚需继续撤销）。
+    static META_JOURNAL: RefCell<Vec<Vec<(usize, MetaEntry)>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// meta 就地写统一入口：journal 激活时先记旧值再写新值。
+fn journal_meta(metas: &mut [MetaEntry], m: usize, entry: MetaEntry) {
+    META_JOURNAL.with(|j| {
+        if let Some(top) = j.borrow_mut().last_mut() {
+            top.push((m, metas[m].clone()));
+        }
+    });
+    metas[m] = entry;
+}
+
+/// journal 回滚：逆序恢复旧值（跳过探测期新增下标），然后截断 append。
+/// 返回值无；`metas` 由调用方在恢复后 truncate 到探测前长度。
+fn meta_journal_rollback(metas: &mut Vec<MetaEntry>, pre_len: usize) {
+    let top = META_JOURNAL.with(|j| j.borrow_mut().pop());
+    if let Some(log) = top {
+        for (idx, old) in log.iter().rev() {
+            if *idx < pre_len {
+                metas[*idx] = old.clone();
+            }
+        }
+    }
+    metas.truncate(pre_len);
 }
 
 /// 条目上限；溢出整表清空（防 keepalive 钉住垃圾，代价是一次重走）。
@@ -1905,7 +2012,7 @@ fn force_inner<'a>(
                                 for &(a, i) in args.iter().rev() {
                                     t = vapp1(
                                         bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
-                                        decl, mutable, t, a, i,
+                                        decl, mutable, false, t, a, i,
                                     );
                                 }
                                 v = t;
@@ -1930,6 +2037,14 @@ fn force_inner<'a>(
                                 args.clear();
                                 spine.collect_args(h, &mut args);
                                 args.reverse();
+                                // 实参先 force 再交 prim（参考版 force 的 Decl
+                                // 臂"实参先 force 再检查字面量"同款纪律）——
+                                // eval 期纯 prim 保持中性（lazy_pure_prim）后，
+                                // 链上实参是中性 spine，不 force 则 lit_of /
+                                // Nat 检查永不命中，prim 链无法归约。
+                                for a in args.iter_mut() {
+                                    a.0 = force(bump, spine, defs, metas, decl, mutable, a.0);
+                                }
                                 let mut w2: Vec<W<'a>> = Vec::new();
                                 let mut v2: Vec<V> = Vec::new();
                                 let mut i2: Vec<Icit> = Vec::new();
@@ -1975,7 +2090,7 @@ fn force_inner<'a>(
                         for &(a, i) in args.iter() {
                             acc = vapp1(
                                 bump, spine, &mut work, &mut vals, &mut icits, defs, metas, decl,
-                                mutable, acc, a, i,
+                                mutable, false, acc, a, i,
                             );
                         }
                         // prim 不能返回另一个 Call；Call 形态再 force 一次
@@ -2394,7 +2509,7 @@ fn eval_iter<'a>(
                     work.push(W::Tm(c.body, env));
                 } else {
                     let r = vapp1(
-                        bump, spine, work, vals, icits, defs, metas, decl, mutable, vf, va, i,
+                        bump, spine, work, vals, icits, defs, metas, decl, mutable, true, vf, va, i,
                     );
                     vals.push(r);
                 }
@@ -2411,7 +2526,7 @@ fn eval_iter<'a>(
                     let vf = vals.pop().expect("eval 栈：ChainWrap 缺链头");
                     let i = icits.pop().expect("eval 栈：ChainWrap 缺 icit");
 v = vapp1(
-                        bump, spine, work, vals, icits, defs, metas, decl, mutable, vf, v, i,
+                        bump, spine, work, vals, icits, defs, metas, decl, mutable, true, vf, v, i,
                     );
                 }
                 vals.push(v);
@@ -2486,7 +2601,7 @@ v = vapp1(
                     work.push(W::Tm(c.body, env));
                 } else {
                     let r = vapp1(
-                        bump, spine, work, vals, icits, defs, metas, decl, mutable, v, arg, i,
+                        bump, spine, work, vals, icits, defs, metas, decl, mutable, true, v, arg, i,
                     );
                     vals.push(r);
                 }
@@ -3741,6 +3856,7 @@ fn unify_iter<'a>(
                         )
                     }
                 } else {
+
                     let meta_snapshot = metas.clone();
                     let tm_snapshot = unsafe { (*mach_ptr).trait_metas.clone() };
                     let mc_snapshot = constraints.clone();
@@ -4058,7 +4174,7 @@ fn unify_iter<'a>(
                 eval_iter(bump, spine, work, vals, icits, defs, metas, decl, mutable, env, c.body)
             };
             let vt = vapp1(
-                bump, spine, work, vals, icits, defs, metas, decl, mutable, t, v_lvl(l), c.icit,
+                bump, spine, work, vals, icits, defs, metas, decl, mutable, false, t, v_lvl(l), c.icit,
             );
             if memo_on {
                 stack.push(UItem::Store((t.0, u.0)));
@@ -4073,7 +4189,7 @@ fn unify_iter<'a>(
                 eval_iter(bump, spine, work, vals, icits, defs, metas, decl, mutable, env, c.body)
             };
             let vu = vapp1(
-                bump, spine, work, vals, icits, defs, metas, decl, mutable, u, v_lvl(l), c.icit,
+                bump, spine, work, vals, icits, defs, metas, decl, mutable, false, u, v_lvl(l), c.icit,
             );
             if memo_on {
                 stack.push(UItem::Store((t.0, u.0)));
@@ -4658,7 +4774,7 @@ fn solve_with_pren_bump<'a>(
     let sol = eval_iter(
         bump, spine, work, vals, icits, defs, metas, decl, mutable, EMPTY_ENV, lam_tm,
     );
-    metas[m as usize] = MetaEntry::Solved(sol, mty);
+    journal_meta(metas, m as usize, MetaEntry::Solved(sol, mty));
     SolveRes::Ok
 }
 
@@ -4717,7 +4833,7 @@ fn solve_bump<'a>(
             let sol = eval_iter(
                 bump, spine, work, vals, icits, defs, metas, decl, mutable, EMPTY_ENV, lam_tm,
             );
-            metas[m as usize] = MetaEntry::Solved(sol, mty);
+            journal_meta(metas, m as usize, MetaEntry::Solved(sol, mty));
             SolveRes::Ok
         }
     }
@@ -5217,7 +5333,7 @@ fn prune_meta_bump<'a>(
     let sol = eval_iter(
         bump, spine, work, vals, icits, defs, metas, decl, mutable, EMPTY_ENV, lam_tm,
     );
-    metas[m as usize] = MetaEntry::Solved(sol, mty);
+    journal_meta(metas, m as usize, MetaEntry::Solved(sol, mty));
     Some(mp)
 }
 
@@ -5402,6 +5518,23 @@ pub(crate) struct Machine {
     quote_memo: QuoteMemo<'static>,
     /// trait 合成状态（每轮清空——参考版每次调用新建 Infer 的三表）。
     tstate: TraitState,
+    /// decl 键的末段倒排索引：`末段 -> 含该末段的完整 decl 键列表`（只收
+    /// 含 `.` 的限定键）。Var 裸名解析的第 5 级 `.name` 后缀 fallback 旧实现
+    /// 每 miss 一次全 decl 表 `ends_with` 扫描（O(D)/次，prelude-hdl 900+
+    /// decl 时合计量级 ~秒），索引后 O(命中数)。登记点（fake_bind /
+    /// decl_reg_in）增量维护；同键重复登记（fake 占位 → 真值覆盖）会产生
+    /// 重复条目，查询侧 dedup。decls 只增不删，轮界 clear。
+    decl_suffix_index: FxHashMap<SmolStr, Vec<SmolStr>>,
+    /// `BindingName.mk` 的解析缓存（含 package 前缀的限定形态）。精确键
+    /// 存在时各查询点本就走 O(1) contains_key；此缓存只加速「键带前缀」
+    /// 的 `keys().find(ends_with)` 兜底——旧实现每次全表扫。首见即冻结
+    /// （旧实现的 HashMap 迭代序本就任取一，语义面无差）。轮界 clear。
+    binding_name_mk: Option<SmolStr>,
+    /// namespace 方法键缓存（`(链头指针, 键集)`）：Var 后缀 fallback 的
+    /// 排除集。链头指针在两次 namespace 登记之间稳定（bump 分配），缓存
+    /// 命中即免每次 fallback 的全链重建（每方法一次 format! 分配，
+    /// prelude-hdl 标识符密集 decl 单个数万次 fallback）。轮界 clear。
+    ns_method_cache: Option<(usize, FxHashSet<SmolStr>)>,
     /// trait 型 Unsolved meta 登记表（参考版 `Infer.trait_metas`）：
     /// `fresh_meta` 对 trait Sum 走此表，`solve_multi_trait` 只扫它。
     /// （每轮清空。）
@@ -5458,7 +5591,13 @@ impl Machine {
             defs: Vec::with_capacity(4096),
             metas: Vec::new(),
             ren: RenBuf::default(),
-            mutable: RefCell::new(Mutable { map: FxHashMap::default(), replay: FxHashMap::default() }),
+            mutable: RefCell::new(Mutable {
+                map: FxHashMap::default(),
+                replay: FxHashMap::default(),
+                check_lines: Vec::new(),
+                check_line_set: FxHashSet::default(),
+                check_seen: FxHashSet::default(),
+            }),
             constraints: Vec::new(),
             eval_work: Vec::new(),
             quote_tasks: Vec::new(),
@@ -5468,6 +5607,9 @@ impl Machine {
             unify_stack: Vec::new(),
             quote_memo: FxHashMap::default(),
             tstate: TraitState::default(),
+            decl_suffix_index: FxHashMap::default(),
+            binding_name_mk: None,
+            ns_method_cache: None,
             trait_metas: Vec::new(),
             symbol_table: FxHashMap::default(),
             import_map: FxHashMap::default(),
@@ -5502,6 +5644,9 @@ impl Machine {
         self.trait_method_cache.clear();
         self.tm_import.clear();
         self.val_import.clear();
+        self.decl_suffix_index.clear();
+        self.binding_name_mk = None;
+        self.ns_method_cache = None;
         self.clear_observation_tables();
     }
 
@@ -5529,6 +5674,7 @@ impl Machine {
         v: V,
     ) {
         // prelude 装载段总闸（本轮末表即清，渲染是纯死工作）
+
         if !self.observe {
             return;
         }
@@ -5815,12 +5961,81 @@ impl Machine {
         if prev.is_some() {
             return Err(Error(span.map(|_| format!("redefine {}", x)), vec![]));
         }
+        self.index_decl_key(x);
         Ok(clone_cxt(cxt))
+    }
+
+    /// Var 后缀 fallback 的 namespace 方法键集（按链头指针缓存）——与
+    /// 「现场沿 `cxt.namespace` 链重建」逐字同集，链头不变时 O(1)。
+    fn ns_method_keys_for(&mut self, head: Option<&NsCons<'_>>) -> FxHashSet<SmolStr> {
+        let key = head.map(|n| n as *const _ as usize).unwrap_or(0);
+        if self
+            .ns_method_cache
+            .as_ref()
+            .map_or(true, |(k, _)| *k != key)
+        {
+            let mut set = FxHashSet::default();
+            let mut cur = head;
+            while let Some(ns) = cur {
+                for m in ns.methods.iter() {
+                    set.insert(SmolStr::new(format!("{}.{}", ns.type_name, m)));
+                }
+                cur = ns.next;
+            }
+            self.ns_method_cache = Some((key, set));
+        }
+        self.ns_method_cache.as_ref().unwrap().1.clone()
+    }
+
+    /// decl 登记点共用的索引/缓存维护：末段倒排索引（Var 后缀 fallback 用）
+    /// 与 BindingName.mk 解析缓存。同键重复登记（fake 占位 → 真值覆盖）会
+    /// 在索引里留重复条目，查询侧 dedup。
+    ///
+    /// 索引键 = 被查名字的**每个点分尾缀**（`Core.Add.mk` 同时入
+    /// `Add.mk` 与 `mk` 两个桶）：fallback 匹配 `k.ends_with(".{name}")`，
+    /// 多段键可被较短尾缀命中，只按末段建桶会漏（实测 prelude-hdl
+    /// `Add.mk` 解析失败的回归）。
+    fn index_decl_key(&mut self, key: &str) {
+        for (i, b) in key.char_indices() {
+            if b == '.' {
+                self.decl_suffix_index
+                    .entry(SmolStr::new(&key[i + 1..]))
+                    .or_default()
+                    .push(SmolStr::new(key));
+            }
+        }
+        if key == "BindingName.mk" {
+            self.binding_name_mk = Some(SmolStr::new(key));
+        } else if key.ends_with(".BindingName.mk") && self.binding_name_mk.is_none() {
+            self.binding_name_mk = Some(SmolStr::new(key));
+        }
+    }
+
+    /// 登记处类型渲染（push_hover 同管线：`quote → export → pretty_tm`，
+    /// observe 门控同款——prelude 装载段总闸下不渲染）。Def 臂以
+    /// `Rc` 共享给 push_hover 与 decl_reg_in，一次渲染两处消费
+    /// （评审机会 4）。
+    fn render_typ_pretty<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        vtyp: V,
+    ) -> Option<Rc<String>> {
+        if !self.observe {
+            return None;
+        }
+        let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+        let qn = types_names_list(cxt.types);
+        Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))))
     }
 
     /// 声明登记（参考版 `Cxt::decl`）：**静默覆盖**（参考版 redefine 检查
     /// 被注释）——fake_bind 之后以真值覆盖存根。prim-ness 翻转在快版无
     /// force memo，无需 PRIM_VERSION。
+    ///
+    /// `typ_pretty`：调用方已渲染的类型串（Def 臂与 push_hover 共享一次
+    /// 渲染，评审机会 4）；`None` = 登记处自渲染（observe 门控，Enum 臂
+    /// 同旧行为）。
     fn decl_reg_in<'a>(
         &mut self,
         bump: &'a Bump,
@@ -5832,16 +6047,12 @@ impl Machine {
         typ_tm: &'a Tm<'a>,
         vtyp: V,
         prim: Option<PrimId>,
+        typ_pretty: Option<Rc<String>>,
     ) -> Cxt<'a> {
         // 就地 COW（2026-09-12，论证见 [`Self::fake_bind`]）：独占时原地
         // 写 O(1)；observe 渲染保持 decl_reg 同款条件。
-        let typ_pretty = if self.observe {
-            let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
-            let qn = types_names_list(cxt.types);
-            Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))))
-        } else {
-            None
-        };
+        let typ_pretty =
+            typ_pretty.or_else(|| self.render_typ_pretty(bump, cxt, vtyp));
         Rc::make_mut(&mut cxt.decls).insert(
             SmolStr::new(x),
             DeclEntry {
@@ -5854,6 +6065,7 @@ impl Machine {
                 prim,
             },
         );
+        self.index_decl_key(x);
         clone_cxt(cxt)
     }
 
@@ -5955,6 +6167,7 @@ impl Machine {
     /// 与参考版逐值同轨。改读快照会拿到精化后的值：孪生的契约是与参考版
     /// Ok 输出逐字节一致，不是比参考版更正确。
     fn fresh_meta<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, a: V) -> &'a Tm<'a> {
+
         // L10：trait 类型先试实例合成（成功 → 直接给实例项）；
         // trait Sum → 裸 Meta（无 AppPruning 掩码）
         if let Ok(Some((tm, _))) = self.solve_trait_ref(bump, cxt, a, false) {
@@ -6024,6 +6237,9 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn eval<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, env: Env<'a>, tm: &'a Tm<'a>) -> V {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+
         let Machine {
             spine,
             vals,
@@ -6155,6 +6371,8 @@ impl Machine {
         fuel: u32,
         trait_err: &mut Option<String>,
     ) -> bool {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         // 先取裸指针再解构字段（避免 &mut self 与字段借用的叠加）
         let mach_ptr: *mut Machine = self;
         let Machine {
@@ -6229,7 +6447,7 @@ impl Machine {
                 .solve_trait_ref(bump, meta_cxt, x, allow_flex_defaulting)
                 .map_err(|e| e)?;
             if let Some((_, val)) = typ {
-                self.metas[idx] = MetaEntry::Solved(val, x);
+                journal_meta(&mut self.metas, idx, MetaEntry::Solved(val, x));
             }
         }
         Ok(())
@@ -6374,7 +6592,16 @@ impl Machine {
                         idxs.extend(indices.iter().copied());
                     }
                     if idxs.is_empty() {
-                        instances.iter().filter_map(filter).collect()
+                        // 桶空早退（评审机会 4）：head_index 由
+                        // `impl_trait_for` 对每个带非 out 参数的实例**无条件**
+                        // 维护（trait 注册时 `set_trait_out_params` 先行，
+                        // ImplDecl 臂 `tstate.out_param` 缺失即 Err，故索引
+                        // 覆盖完备；无具体头的实例——Rigid/Flex/Nat 等——
+                        // `head_key` 给 None 一律入通配桶）。两桶皆空 ⇒
+                        // 具体头实例按头键必不匹配、可变通实例不在通配桶 ⇒
+                        // 全实例 `filter` 必空（每实例的 `v_to_ref_val` Rc
+                        // 分配与逐参数 val_match 全部可免）。
+                        Vec::new()
                     } else {
                         idxs.iter().filter_map(|&i| filter(&instances[i])).collect()
                     }
@@ -6479,6 +6706,7 @@ impl Machine {
         t_prime: V,
         span: crate::parser_lib::Span<()>,
     ) -> Result<(), Error> {
+
         let mut trait_err: Option<String> = None;
         self.constraints.clear();
         let ok = self.unify(bump, cxt, cxt.lvl, t, t_prime, 100, &mut trait_err);
@@ -6597,10 +6825,11 @@ impl Machine {
                 let mk_key = if cxt.decls.contains_key("BindingName.mk") {
                     "BindingName.mk".to_string()
                 } else {
-                    cxt.decls
-                        .keys()
-                        .find(|k| k.ends_with(".BindingName.mk"))
-                        .cloned()
+                    // 带 package 前缀的限定键：从登记期缓存取（旧实现每次
+                    // 全表 keys().find 扫描 O(D)；首见冻结与 HashMap 迭代序
+                    // 任取一语义等价）
+                    self.binding_name_mk
+                        .clone()
                         .unwrap_or_else(|| SmolStr::new("BindingName.mk"))
                         .to_string()
                 };
@@ -6698,6 +6927,9 @@ impl Machine {
         t: &Raw,
         a: V,
     ) -> Result<&'a Tm<'a>, Error> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+
         // force 期望类型后分派（已解 meta 可能展开成 Pi）
         let a = self.force_v(bump, cxt, a);
         // 预检查值（class Phase-B / trait 方法缓存复用——参考版 check 的
@@ -6719,7 +6951,7 @@ impl Machine {
                         MetaEntry::Unsolved(v, ..) => *v,
                         _ => unreachable!(),
                     };
-                    self.metas[m as usize] = MetaEntry::Solved(ty, mty);
+                    journal_meta(&mut self.metas, m as usize, MetaEntry::Solved(ty, mty));
                 }
                 _ => {
                     self.unify_catch(bump, cxt, a, ty, t.to_span())?;
@@ -6910,7 +7142,7 @@ impl Machine {
                 // pren.dom == 0：meta 类型 force 后是 U 即解 `U(0)`
                 let f = self.force_v(bump, cxt, mty);
                 if v_tag(f) == 3 {
-                    self.metas[m as usize] = MetaEntry::Solved(v_u(0), mty);
+                    journal_meta(&mut self.metas, m as usize, MetaEntry::Solved(v_u(0), mty));
                     return Ok((t_inferred, 0));
                 }
                 let f2 = self.force_v(bump, cxt, mty);
@@ -6961,7 +7193,7 @@ impl Machine {
                 lams_from_ty(bump, spine, work, vals, icits, defs, metas, &*cxt.decls, mutable, args.len() as u32, mty, rhs)
             };
             let solution = self.eval(bump, cxt, EMPTY_ENV, lam_tm);
-            self.metas[m as usize] = MetaEntry::Solved(solution, mty);
+            journal_meta(&mut self.metas, m as usize, MetaEntry::Solved(solution, mty));
             return Ok((t_inferred, 0));
         }
         Err(Error(
@@ -7309,11 +7541,16 @@ impl Machine {
     /// 解掉**已有**的 meta，而这些解又引用闭包内新建的 meta，截断会让那些解
     /// 悬空（后续查找越界 panic）；参考版 pattern_match.rs 同款理由。
     fn run_pure_probe<R>(&mut self, f: impl FnOnce(&mut Machine) -> R) -> R {
-        let metas = self.metas.clone();
-        let trait_metas = self.trait_metas.clone();
+        // 探测回滚（perf-debt 评审轮）：旧实现整表 clone metas+trait_metas
+        // （match 编译每 (节点×构造子) 探测一次，metas 万条级时 47-case
+        // match 单 decl 数百 ms）。journal 记就地写、截断收 append；
+        // META_JOURNAL 栈式支持嵌套探测。
+        let pre_meta_len = self.metas.len();
+        let pre_tm_len = self.trait_metas.len();
+        META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
         let r = f(self);
-        self.metas = metas;
-        self.trait_metas = trait_metas;
+        meta_journal_rollback(&mut self.metas, pre_meta_len);
+        self.trait_metas.truncate(pre_tm_len);
         r
     }
 
@@ -7503,6 +7740,8 @@ impl Machine {
     /// 字段未命中时在 trait 表里找同名方法：能合成出实例 → 生成
     /// `let $method = λ...; $method x` 的包装项；否则报 "has no object"。
     fn trait_wrap<'a>(
+    // cnt 在函数体首行（trait_wrap 是多行签名，函数体首语句在下方标注）
+
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
@@ -7581,8 +7820,13 @@ impl Machine {
                         }
                     }
                     if !skip {
-                        let meta_snapshot = self.metas.clone();
-                        let tm_snapshot = self.trait_metas.clone();
+                        // 探测回滚（perf-debt 评审轮）：旧实现整表 clone
+                        // metas（万条级 × 每方法分派一次 = prelude-hdl 慢
+                        // decl 主因）。现 journal 就地写 + 截断 append：
+                        // trait_metas 探测期只 push，truncate 即可。
+                        let pre_meta_len = self.metas.len();
+                        let pre_tm_len = self.trait_metas.len();
+                        META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
                         // 探测：剥隐式 Π（fresh meta 实参化）后与接收者类型合一
                         let mut check_typ = ns.val;
                         let mut guard = 0;
@@ -7601,11 +7845,13 @@ impl Machine {
                                 break;
                             }
                         }
-                        if self.unify_catch(bump, cxt, check_typ, typ_raw, empty_span(())).is_ok() {
+                        let probe_ok =
+                            self.unify_catch(bump, cxt, check_typ, typ_raw, empty_span(())).is_ok();
+                        meta_journal_rollback(&mut self.metas, pre_meta_len);
+                        self.trait_metas.truncate(pre_tm_len);
+                        if probe_ok {
                             ns_result.push((ns.val, SmolStr::new(ns.type_name)));
                         }
-                        self.metas = meta_snapshot;
-                        self.trait_metas = tm_snapshot;
                     }
                 }
                 cur = ns.next;
@@ -7901,6 +8147,9 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, V), Error> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+
         // 整个 Raw 节点的 span（参考版 infer_expr 的 t_span 形参；Ob臂
         // qualified 三试的 hover 键跟它对齐，其余站点用各自 token span）
         let raw_span = t.to_span();
@@ -7942,23 +8191,31 @@ impl Machine {
                 // `.name` 后缀回退：唯一命中解析；多义报错（HashMap 迭代序
                 // 不定，任意取一会静默解析错构造子）。namespace 方法键
                 //（`TypeHead.method`）排除——实例方法只经 `x.m` 分派。
+                #[cfg(feature = "sampler")]
+                crate::sampler::tick();
                 let fallback = format!(".{}", x.data);
-                let ns_method_keys: std::collections::HashSet<SmolStr> = {
-                    let mut s = std::collections::HashSet::new();
-                    let mut cur = cxt.namespace;
-                    while let Some(ns) = cur {
-                        for m in ns.methods.iter() {
-                            s.insert(SmolStr::new(format!("{}.{}", ns.type_name, m)));
-                        }
-                        cur = ns.next;
-                    }
-                    s
-                };
-                let matches: Vec<(SmolStr, V, crate::parser_lib::Span<()>)> = cxt
-                    .decls
+                // 候选从倒排索引取（perf-debt 评审轮：旧实现每 miss 全
+                // decl 表 ends_with 扫描 O(D)）；空候选直接 not in scope
+                // （与旧实现滤空后 matches.len()==0 的出口一致）。
+                let mut candidates = self
+                    .decl_suffix_index
+                    .get(x.data.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                if candidates.is_empty() {
+                    return Err(Error(
+                        x.clone().map(|x| format!("error name not in scope: {}", x)),
+                        vec![],
+                    ));
+                }
+                candidates.sort_unstable();
+                candidates.dedup();
+                let ns_method_keys: std::collections::HashSet<SmolStr> =
+                    self.ns_method_keys_for(cxt.namespace).into_iter().collect();
+                let matches: Vec<(SmolStr, V, crate::parser_lib::Span<()>)> = candidates
                     .iter()
-                    .filter(|(k, _)| k.ends_with(&fallback) && k.len() > fallback.len())
-                    .filter(|(k, _)| {
+                    .filter(|k| k.ends_with(&fallback) && k.len() > fallback.len())
+                    .filter(|k| {
                         // 候选首段必须是 decl 键或本文件可见的 namespace
                         match k.rfind('.') {
                             Some(dot) => {
@@ -7970,8 +8227,10 @@ impl Machine {
                             None => false,
                         }
                     })
-                    .filter(|(k, _)| !ns_method_keys.contains(*k))
-                    .map(|(k, e)| (k.clone(), e.vty, e.span))
+                    .filter(|k| !ns_method_keys.contains(*k))
+                    .filter_map(|k| {
+                        cxt.decls.get(k.as_str()).map(|e| (k.clone(), e.vty, e.span))
+                    })
                     .collect();
                 if matches.len() == 1 {
                     let (full_key, vty, dspan) = &matches[0];
@@ -8091,10 +8350,9 @@ impl Machine {
                     let mk_key = if cxt.decls.contains_key("BindingName.mk") {
                         "BindingName.mk".to_string()
                     } else {
-                        cxt.decls
-                            .keys()
-                            .find(|k| k.ends_with(".BindingName.mk"))
-                            .cloned()
+                        // 同上：登记期缓存（perf-debt 评审轮）
+                        self.binding_name_mk
+                            .clone()
                             .unwrap_or_else(|| SmolStr::new("BindingName.mk"))
                             .to_string()
                     };
@@ -8638,7 +8896,7 @@ impl Machine {
                             for idx in &to_default {
                                 if let MetaEntry::Unsolved(ty, ..) = &self.metas[*idx] {
                                     let ty = *ty;
-                                    self.metas[*idx] = MetaEntry::Solved(nat_val, ty);
+                                    journal_meta(&mut self.metas, *idx, MetaEntry::Solved(nat_val, ty));
                                 }
                             }
                             let _ = self.solve_multi_trait_ref(bump, &fake, this_meta, false);
@@ -8665,7 +8923,8 @@ impl Machine {
                 let vt = if params.is_empty() {
                     let mut visiting = std::collections::HashSet::new();
                     let mut found = false;
-                    tm_scan_global_ops(&self.mutable, &fake.decls, t_tm, &mut visiting, &mut found);
+                    let mut scan_truncated = false;
+                    tm_scan_global_ops(&self.mutable, &fake.decls, t_tm, &mut visiting, &mut found, &mut scan_truncated);
                     if found {
                         v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(&name.data) }))
                     } else {
@@ -8703,10 +8962,17 @@ impl Machine {
                         self.inlay_hint_table.push((pos, label));
                     }
                 }
-                // 观察面：def 名定义处 hover（参考版 1153 同点位）
-                self.push_hover(bump, cxt, name.to_span(), name.to_span(), vtyp);
+                // 观察面：def 名定义处 hover（参考版 1153 同点位）。类型串
+                // 此处渲染一次，`Rc` 共享给下方 decl_reg_in 的 typ_pretty
+                // （同 vtyp 同 lvl 同管线，原实现各渲染一遍——评审机会 4）；
+                // hover_table 推进顺序与原实现一致（先 push 后登记）。
+                let rendered = self.render_typ_pretty(bump, cxt, vtyp);
+                if let Some(r) = &rendered {
+                    self.hover_table
+                        .push((name.to_span(), name.to_span(), r.as_ref().clone()));
+                }
                 drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
-                let out = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
+                let out = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None, rendered);
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -8823,7 +9089,7 @@ impl Machine {
                 // Enum 臂与 Def 臂不同，参考版在此用 `cxt.decl`）
                 let vt = self.eval(bump, cxt, fake.env, t_tm);
                 drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
-                let mut cxt = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None);
+                let mut cxt = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None, None);
                 // 逐构造子注册：体 = λ(隐式参数, 字段) → SumCase{typ: ret, datas: 字段自身}；
                 // **限定键 `EnumName.caseName` 登记**（无裸名别名——裸名靠 Var
                 // 的后缀 fallback 解析；参考版 1322 同款）
@@ -8853,7 +9119,7 @@ impl Machine {
                     let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                     let vt = self.eval(bump, &cxt, cxt.env, t_tm);
                     let case_key = format!("{}.{}", name.data, case_name.data);
-                    cxt = self.decl_reg_in(bump, &mut cxt, &case_key, case_name.to_span(), t_tm, vt, typ_tm, vtyp, None);
+                    cxt = self.decl_reg_in(bump, &mut cxt, &case_key, case_name.to_span(), t_tm, vt, typ_tm, vtyp, None, None);
                 }
                 Ok((DeclOut::Enum, cxt))
             }
@@ -9518,7 +9784,7 @@ impl Machine {
                             let m = v_meta_of(va);
                             if let MetaEntry::Unsolved(mty, ..) = &self.metas[m as usize] {
                                 let mty = *mty;
-                                self.metas[m as usize] = MetaEntry::Solved(vt, mty);
+                                journal_meta(&mut self.metas, m as usize, MetaEntry::Solved(vt, mty));
                             }
                         }
                     }
@@ -10887,6 +11153,14 @@ impl<'a> Compiler<'a> {
                     .collect();
 
                 let mut any_valid = false;
+                // 节点内探测 memo（评审机会 2）：可达性探测对同 (typ 位字,
+                // constr) 在同一决策节点内结果不变——探测整体在
+                // `run_pure_probe` 内跑（快照/回滚，无外泄状态），且本节点
+                // 全部臂共享同一头 typ（打包 u64）。键取 constr 下标，
+                // 0=未知 / 1=可达 / 2=不可达；只缓存 Ok 探测，Err（本臂移除）
+                // 保留逐臂原语义不进表。原实现每 (constr×臂) 全列表 O(C) 次
+                // 探测 → 现每节点 ≤ C 次。
+                let mut probe_memo: Vec<u8> = vec![0; constrs.len()];
                 for (constr_idx, constr) in constrs.iter().enumerate() {
                     // remaining_arms：每臂一个 Option（None = 该臂不参与本
                     // 构造子分支——参考版 filter_map 的 Some(None)/None 同型）
@@ -10896,22 +11170,36 @@ impl<'a> Compiler<'a> {
                             vec![];
                         if constr.data != "$any$" {
                             let matched = 'armblk: {
-                                let accessible_constrs = match self.filter_accessible_constrs(
-                                    mach,
-                                    bump,
-                                    &arm.cxt,
-                                    *typ,
-                                    &constrs,
-                                ) {
-                                    Ok(a) => a,
-                                    Err(e) => {
-                                        if std::env::var("L09_TRACE").is_ok() {
-                                            eprintln!("FILTER_ERR {}", e.0.data);
+                                let accessible = match probe_memo[constr_idx] {
+                                    1 => true,
+                                    2 => false,
+                                    _ => {
+                                        match self.filter_accessible_constrs(
+                                            mach,
+                                            bump,
+                                            &arm.cxt,
+                                            *typ,
+                                            &constrs,
+                                        ) {
+                                            Ok(a) => {
+                                                // 全列表回填：同节点其余 (constr, arm)
+                                                // 组合直接命中，不再逐构造子 check_pm
+                                                for (j, c) in constrs.iter().enumerate() {
+                                                    probe_memo[j] =
+                                                        if a.iter().any(|x| x == c) { 1 } else { 2 };
+                                                }
+                                                probe_memo[constr_idx] == 1
+                                            }
+                                            Err(e) => {
+                                                if std::env::var("L09_TRACE").is_ok() {
+                                                    eprintln!("FILTER_ERR {}", e.0.data);
+                                                }
+                                                break 'armblk None; // .ok()?：本臂移除
+                                            }
                                         }
-                                        break 'armblk None; // .ok()?：本臂移除
                                     }
                                 };
-                                if !accessible_constrs.iter().any(|x| x == constr) {
+                                if !accessible {
                                     break 'armblk Some(None); // 不可达：Some(None) 保留
                                 }
 
@@ -12695,38 +12983,18 @@ impl Tycker {
             cxt = machine.register_nat_builtins(bump, &cxt);
         }
         // HDL 自检警告：逐 decl 排水（行级去重——参考版
-        // take_fresh_check_issues + format_check_warning）
+        // take_fresh_check_issues + format_check_warning）。行集缓存版
+        // （评审机会 5）：pending 行存 `Mutable.check_lines`（插入序），
+        // 已排水行存 `check_seen` 成员集——原版每轮 `seen.clone()` 整串
+        // 拷贝 + 每 pending 行 O(S) 线性扫，现 O(1)；输出拼装序
+        // （pending 插入序 × seen 首见判定）与原 split 版逐字节一致。
         {
             let mut m = machine.mutable.borrow_mut();
-            let pending = m
-                .map
-                .get("CheckIssues")
-                .and_then(|v| match v_xcell_of(*v) {
-                    XCell::Lit(s) => Some(s.to_string()),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            if !pending.is_empty() {
-                m.map.insert(
-                    SmolStr::new("CheckIssues"),
-                    v_xcell(bump.alloc(XCell::Lit(bump.alloc_str("")))),
-                );
-                let seen = m
-                    .map
-                    .get("CheckIssuesSeen")
-                    .and_then(|v| match v_xcell_of(*v) {
-                        XCell::Lit(s) => Some(s.to_string()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                let mut seen2 = seen.clone();
-                for line in pending.split('\n').filter(|l| !l.is_empty()) {
-                    if !seen2.split('\n').any(|l| l == line) {
-                        seen2 = if seen2.is_empty() {
-                            line.to_string()
-                        } else {
-                            format!("{}\n{}", seen2, line)
-                        };
+            if !m.check_lines.is_empty() {
+                let pending = std::mem::take(&mut m.check_lines);
+                m.check_line_set.clear();
+                for line in &pending {
+                    if m.check_seen.insert(line.clone()) {
                         *ret += &super::format_check_warning(line);
                         *ret += "\n";
                         // 结构化记录（孪生自产 WARNING 诊断；下标记 decl）
@@ -12734,12 +13002,6 @@ impl Tycker {
                             machine.check_issue_lines.push((i, line.to_string()));
                         }
                     }
-                }
-                if seen2 != seen {
-                    m.map.insert(
-                        SmolStr::new("CheckIssuesSeen"),
-                        v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&seen2)))),
-                    );
                 }
             }
         }
@@ -12883,6 +13145,11 @@ impl Tycker {
         self.resident = None;
         self.machine.clear_round();
         force_memo_clear();
+        // 实验 口径开关（L13BENCH_NOBSERVE=1 时关观察面渲染，量化 observe
+        // 成本占比；仅实验用，落地后删除）
+        if std::env::var_os("L13BENCH_NOBSERVE").is_some() {
+            self.machine.observe = false;
+        }
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut last: Option<V> = None;
