@@ -300,7 +300,10 @@ impl Infer {
                 let new_params = params
                     .into_iter()
                     .map(|x| {
-                        match (self.rename(pren, x.1), self.rename(pren, x.2)) {
+                        match (
+                            self.rename(pren, super::rc_take(x.1)),
+                            self.rename(pren, super::rc_take(x.2)),
+                        ) {
                             (Ok(a), Ok(b)) => Ok((x.0, a, b, x.3)),
                             (Err(x), _) | (_, Err(x)) => Err(x),
                         }
@@ -313,11 +316,11 @@ impl Infer {
                 case_name,
                 datas: params,
             } => {
-                let typ = self.rename(pren, *typ)?;
+                let typ = self.rename(pren, super::rc_take(typ))?;
                 let params = params
                     .into_iter()
                     .map(|p| {
-                        let z = self.rename(pren, p.1)?;
+                        let z = self.rename(pren, super::rc_take(p.1))?;
                         Ok((p.0, z, p.2))
                     })
                     .collect::<Result<_, _>>()?;
@@ -593,7 +596,7 @@ impl Infer {
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify(l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
                 }
                 Ok(())
             }
@@ -602,9 +605,9 @@ impl Infer {
                 Val::SumCase { typ: b, case_name: cb, datas: params_b },
             ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
-                self.unify(l, cxt, *a.clone(), *b.clone())?;
+                self.unify(l, cxt, a.as_ref().clone(), b.as_ref().clone())?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify(l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
                 }
                 Ok(())
             }

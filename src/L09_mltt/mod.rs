@@ -146,13 +146,13 @@ pub enum Val {
     Prim,
     Sum(
         Span<String>,
-        Vec<(Span<String>, Val, VTy, Icit)>,
+        Vec<(Span<String>, Rc<Val>, Rc<VTy>, Icit)>,
         Vec<Span<String>>
     ),
     SumCase {
-        typ: Box<Val>,
+        typ: Rc<Val>,
         case_name: Span<String>,
-        datas: Vec<(Span<String>, Val, Icit)>,
+        datas: Vec<(Span<String>, Rc<Val>, Icit)>,
     },
     Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>),
 }
@@ -184,6 +184,7 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 use std::{
     collections::HashMap,
     ops::{Add, Sub},
+    rc::Rc,
 };
 
 #[derive(Debug)]
@@ -196,6 +197,14 @@ fn empty_span<T>(data: T) -> Span<T> {
         end_offset: 0,
         path_id: 0,
     }
+}
+
+/// Rc 槽位（Sum 参数 / SumCase typ+datas）的所有权取用：独占时零拷贝，
+/// 共享时深拷贝——与迁 Rc 前"按值持有、克隆即深拷贝"的语义一致。
+/// match 提取字段 / env 存槽走 Rc 引用计数（O(1)），消费型路径（quote /
+/// rename / 投影）经此取值。
+pub(crate) fn rc_take(v: Rc<Val>) -> Val {
+    Rc::try_unwrap(v).unwrap_or_else(|v| (*v).clone())
 }
 
 #[derive(Debug)]
@@ -301,18 +310,20 @@ impl Infer {
                     Val::Sum(_, params, _) => {
                         params.into_iter()
                             .find(|(f_name, _, _, _)| f_name == &name)
-                            .unwrap().1
+                            .map(|x| rc_take(x.1))
+                            .unwrap()
                     },
                     Val::SumCase { datas, typ, .. } => {
-                        (match *typ {
-                            Val::Sum(_, params, _) => params,
+                        (match typ.as_ref() {
+                            Val::Sum(_, params, _) => params.clone(),
                             _ => panic!("impossible {typ:?}"),
                         }).into_iter()
                             .map(|x| (x.0, x.1, x.3))
                             .chain(datas)
                         //datas.into_iter()
                             .find(|(f_name, _, _)| f_name == &name)
-                            .unwrap().1
+                            .map(|x| rc_take(x.1))
+                            .unwrap()
                     },
                     x @ Val::Rigid(_, _) => {
                         Val::Obj(Box::new(x), name, List::new())
@@ -343,7 +354,14 @@ impl Infer {
             Tm::Sum(name, params, cases) => {
                 let new_params = params
                     .into_iter()
-                    .map(|x| (x.0, self.eval(env, x.1), self.eval(env, x.2), x.3))
+                    .map(|x| {
+                        (
+                            x.0,
+                            Rc::new(self.eval(env, x.1)),
+                            Rc::new(self.eval(env, x.2)),
+                            x.3,
+                        )
+                    })
                     .collect();
                 Val::Sum(name, new_params, cases)
             }
@@ -354,11 +372,11 @@ impl Infer {
             } => {
                 let datas = datas
                     .into_iter()
-                    .map(|p| (p.0, self.eval(env, p.1), p.2))
+                    .map(|p| (p.0, Rc::new(self.eval(env, p.1)), p.2))
                     .collect();
                 let typ = self.eval(env, *typ);
                 Val::SumCase {
-                    typ: Box::new(typ),
+                    typ: Rc::new(typ),
                     case_name,
                     datas,
                 }
@@ -368,7 +386,7 @@ impl Infer {
                 let val = self.force(val);
                 match val {
                     val @ Val::SumCase { .. } => {
-                        let (tm, env) = Compiler::eval_aux(self, val, env, &cases).unwrap();
+                        let (tm, env) = Compiler::eval_aux(self, &val, env, &cases).unwrap();
                         self.eval(&env, tm)
                     }
                     neutral => {
@@ -417,7 +435,7 @@ impl Infer {
             Val::Sum(name, params, cases) => {
                 let new_params = params.into_iter()
                     .map(|x| {
-                        (x.0, self.quote(l, x.1), self.quote(l, x.2), x.3)
+                        (x.0, self.quote(l, rc_take(x.1)), self.quote(l, rc_take(x.2)), x.3)
                     })
                     .collect();
                 Tm::Sum(name, new_params, cases)
@@ -430,11 +448,11 @@ impl Infer {
                 let datas = datas
                     .into_iter()
                     .map(|p| {
-                        (p.0, self.quote(l, p.1), p.2)
+                        (p.0, self.quote(l, rc_take(p.1)), p.2)
                     })
                     .collect();
                 Tm::SumCase {
-                    typ: Box::new(self.quote(l, *typ)),
+                    typ: Box::new(self.quote(l, rc_take(typ))),
                     case_name,
                     datas,
                 }

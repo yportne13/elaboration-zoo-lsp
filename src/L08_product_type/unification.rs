@@ -343,7 +343,12 @@ impl Infer {
                 let new_params = params
                     .into_iter()
                     .map(|(n, v, t, i)| {
-                        Ok((n, self.rename(decl, pren, v)?, self.rename(decl, pren, t)?, i))
+                        Ok((
+                            n,
+                            self.rename(decl, pren, super::rc_take(v))?,
+                            self.rename(decl, pren, super::rc_take(t))?,
+                            i,
+                        ))
                     })
                     .collect::<Result<_, UnifyError>>()?;
                 Ok(Tm::Sum(name, new_params, cases))
@@ -353,10 +358,10 @@ impl Infer {
                 case_name,
                 datas,
             } => {
-                let typ = self.rename(decl, pren, *typ)?;
+                let typ = self.rename(decl, pren, super::rc_take(typ))?;
                 let datas = datas
                     .into_iter()
-                    .map(|(n, v, i)| Ok((n, self.rename(decl, pren, v)?, i)))
+                    .map(|(n, v, i)| Ok((n, self.rename(decl, pren, super::rc_take(v))?, i)))
                     .collect::<Result<_, UnifyError>>()?;
                 Ok(Tm::SumCase {
                     typ: Box::new(typ),
@@ -728,7 +733,7 @@ impl Infer {
             // Sum：同名即逐参数（含索引）合一
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(decl, l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify(decl, l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
                 }
                 Ok(())
             }
@@ -749,7 +754,7 @@ impl Infer {
                 },
             ) if ca.data == cb.data => {
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(decl, l, cxt, a.1.clone(), b.1.clone())?;
+                    self.unify(decl, l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
                 }
                 Ok(())
             }

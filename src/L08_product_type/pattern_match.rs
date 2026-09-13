@@ -27,6 +27,7 @@
 //! 运行时首匹配 = 用户语义；通配臂（`case x`）之后的所有臂不可达。
 
 use crate::parser_lib::Span;
+use std::rc::Rc;
 
 use super::{
     Env, Error, Infer, Lvl, Tm, Val,
@@ -156,7 +157,7 @@ impl Compiler {
                 params
                     .iter()
                     .filter(|(_, _, _, i)| *i == Icit::Impl)
-                    .map(|(_, v, _, _)| v.clone())
+                    .map(|(_, v, _, _)| v.as_ref().clone())
                     .collect::<Vec<_>>(),
             ),
             _ => return false,
@@ -219,7 +220,13 @@ impl Compiler {
         }
         for (a, b) in hp.iter().zip(rp.iter()) {
             infer
-                .unify(cxt.decl(), cxt.lvl, cxt, a.1.clone(), b.1.clone())
+                .unify(
+                    cxt.decl(),
+                    cxt.lvl,
+                    cxt,
+                    a.1.as_ref().clone(),
+                    b.1.as_ref().clone(),
+                )
                 .map_err(|_| Error(format!("构造子 {ctor} 与被匹配类型不相容（分支不可达）")))?;
         }
         Ok(())
@@ -322,13 +329,13 @@ impl Compiler {
         let impl_vals: Vec<Val> = sum_params
             .iter()
             .filter(|(_, _, _, i)| *i == Icit::Impl)
-            .map(|(_, v, _, _)| v.clone())
+            .map(|(_, v, _, _)| v.as_ref().clone())
             .collect();
         let mut impl_idx = 0;
         let mut sub_queue: Vec<Pattern> = subs;
         let mut details: Vec<PatternDetail> = Vec::new();
         // 构造子自身绑定器的值（写入头部精化时用）
-        let mut ctor_datas: Vec<(Span<String>, Val, Icit)> = Vec::new();
+        let mut ctor_datas: Vec<(Span<String>, Rc<Val>, Icit)> = Vec::new();
         let ret = loop {
             match infer.force(cxt.decl(), ty) {
                 Val::Pi(bname, bicit, dom, closure) => {
@@ -421,7 +428,7 @@ impl Compiler {
                     };
                     cxt = new_cxt;
                     details.push(detail);
-                    ctor_datas.push((bname.clone(), u.clone(), bicit));
+                    ctor_datas.push((bname.clone(), Rc::new(u.clone()), bicit));
                     ty = infer.closure_apply(cxt.decl(), &closure, u);
                 }
                 ret => break ret,
@@ -458,7 +465,7 @@ impl Compiler {
                 && infer.pm_def(*x).is_none()
             {
                 let ctor_val = Val::SumCase {
-                    typ: Box::new(head_sum.clone()),
+                    typ: Rc::new(head_sum.clone()),
                     case_name: name.clone(),
                     datas: ctor_datas,
                 };
@@ -475,11 +482,11 @@ impl Compiler {
     pub fn eval_aux(
         infer: &Infer,
         decl: &Decls,
-        head: Val,
+        head: &Val,
         env: &Env,
         cases: &[(PatternDetail, Tm)],
     ) -> Option<(Tm, Env)> {
-        let head = infer.force(decl, head);
+        let head = infer.force(decl, head.clone());
         for (pat, body) in cases {
             match pat {
                 PatternDetail::Any(_) | PatternDetail::Bind(_) => {
@@ -511,7 +518,7 @@ impl Compiler {
                             match Compiler::eval_aux(
                                 infer,
                                 decl,
-                                v.clone(),
+                                v,
                                 &cur.1,
                                 &[(sub.clone(), cur.0.clone())],
                             ) {

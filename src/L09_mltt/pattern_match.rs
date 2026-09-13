@@ -342,7 +342,7 @@ impl Compiler {
                                         while let Val::Pi(name, icit, ty, closure) = typ {
                                             if !param.is_empty() {
                                                 let val = param.pop()
-                                                    .map(|x| x.1)
+                                                    .map(|x| super::rc_take(x.1))
                                                     .unwrap_or(Val::U(0));
                                                 typ = infer.closure_apply(&closure, val);
                                             } else {
@@ -569,7 +569,7 @@ impl Compiler {
 
     pub fn eval_aux(
         infer: &Infer,
-        heads: Val,
+        heads: &Val,
         cxt: &Env,
         arms: &[(PatternDetail, Tm)],
     ) -> Option<(Tm, Env)> {
@@ -578,8 +578,8 @@ impl Compiler {
                 typ,
                 case_name,
                 datas: params,
-            } => (case_name, params, match *typ {
-                Val::Sum(_, _, cases) => cases,
+            } => (case_name, params, match typ.as_ref() {
+                Val::Sum(_, _, cases) => cases.clone(),
                 _ => panic!("by now only can match a sum type, but get {:?}", heads),
             }),
             //_ => panic!("by now only can match a sum type, but get {:?}", heads),
@@ -605,12 +605,12 @@ impl Compiler {
                 PatternDetail::Con(constr_, item_pats) if constr_ == &case_name => {
                     params.iter()
                         //.filter(|x| x.2 == Icit::Expl)
-                        .map(|x| &x.1)
+                        .map(|x| x.1.as_ref())
                         .zip(item_pats.iter())
                         .try_fold(
                             (body.clone(), cxt.clone()),
                             |(body, cxt), (param, pat): (&Val, &PatternDetail)| {
-                                Self::eval_aux(infer, param.clone(), &cxt, &[(pat.clone(), body)])
+                                Self::eval_aux(infer, param, &cxt, &[(pat.clone(), body)])
                             },
                         )
                 }

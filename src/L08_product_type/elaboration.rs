@@ -423,14 +423,17 @@ impl Infer {
                     // 构造子接收者，变量 / 全局 def 的接收者类型恒为 Sum）。
                     Val::Sum(sname, params, cases) => {
                         if let Some((_, _, fty, _)) = params.iter().find(|(n, ..)| n == &f) {
-                            return Ok((Tm::Obj(Box::new(tm), f.clone()), fty.clone()));
+                            return Ok((
+                                Tm::Obj(Box::new(tm), f.clone()),
+                                fty.as_ref().clone(),
+                            ));
                         }
                         if cases.len() == 1 && cases[0].data.contains(".mk") {
                             if let Some(e) = cxt.decl_get(&cases[0].data) {
                                 let impl_vals: Vec<Val> = params
                                     .iter()
                                     .filter(|(_, _, _, i)| *i == Icit::Impl)
-                                    .map(|(_, v, _, _)| v.clone())
+                                    .map(|(_, v, _, _)| v.as_ref().clone())
                                     .collect();
                                 let mut ty = e.ty.clone();
                                 let mut impl_idx = 0;
@@ -469,14 +472,17 @@ impl Infer {
                         case_name,
                         datas,
                     } => {
-                        let (sname, params) = match self.force(decl, *typ) {
+                        let (sname, params) = match self.force(decl, super::rc_take(typ)) {
                             Val::Sum(sname, params, _) => (sname, params),
                             _ => return Err(Error("ill-scoped SumCase".to_owned())),
                         };
                         if let Some((_, _, fty, _)) =
                             params.iter().find(|(n, ..)| n == &f)
                         {
-                            return Ok((Tm::Obj(Box::new(tm), f.clone()), fty.clone()));
+                            return Ok((
+                                Tm::Obj(Box::new(tm), f.clone()),
+                                fty.as_ref().clone(),
+                            ));
                         }
                         let ctor_ty = cxt
                             .decl_get(&format!("{}.{}", sname.data, case_name.data))
@@ -486,7 +492,7 @@ impl Infer {
                         let impl_vals: Vec<Val> = params
                             .iter()
                             .filter(|(_, _, _, i)| *i == Icit::Impl)
-                            .map(|(_, v, _, _)| v.clone())
+                            .map(|(_, v, _, _)| v.as_ref().clone())
                             .collect();
                         let mut ty = ctor_ty;
                         let mut impl_idx = 0;
@@ -507,7 +513,7 @@ impl Infer {
                                         datas
                                             .iter()
                                             .find(|(n, _, _)| n == &bname)
-                                            .map(|(_, v, _)| v.clone())
+                                            .map(|(_, v, _)| v.as_ref().clone())
                                             .ok_or_else(|| {
                                                 Error(format!(
                                                     "no field {} on {}",

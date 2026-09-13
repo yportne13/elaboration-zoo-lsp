@@ -103,7 +103,7 @@ impl Infer {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone(), t_span)?;
+                        cxt = self.unify_pm(&cxt, x.1.as_ref().clone(), y.1.as_ref().clone(), t_span)?;
                     }
                     Ok(cxt)
                 } else {
@@ -119,7 +119,7 @@ impl Infer {
                 if name1 == name2 {
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, x.1.clone(), y.1.clone(), t_span)?;
+                        cxt = self.unify_pm(&cxt, x.1.as_ref().clone(), y.1.as_ref().clone(), t_span)?;
                     }
                     Ok(cxt)
                 } else {
@@ -482,7 +482,7 @@ impl Infer {
                                     let mut param: Vec<_> = params
                                         .iter()
                                         .filter(|(_, _, _, i)| *i == Icit::Impl)
-                                        .map(|(_, v, _, _)| v.clone())
+                                        .map(|(_, v, _, _)| v.as_ref().clone())
                                         .collect();
                                     param.reverse();
                                     // 剥 mk 构造子类型链取字段类型。隐式 binder 用
@@ -520,7 +520,7 @@ impl Infer {
                             params
                                 .into_iter()
                                 .find(|(fields_name, _, _, _)| fields_name == &t)
-                                .map(|(_, _, ty, _)| ty)
+                                .map(|(_, _, ty, _)| super::rc_take(ty))
                             )
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
@@ -536,7 +536,7 @@ impl Infer {
                             params
                                 .into_iter()
                                 .find(|(fields_name, _, _)| fields_name == &t)
-                                .map(|(_, ty, _)| ty)
+                                .map(|(_, ty, _)| super::rc_take(ty))
                                 .ok_or_else(|| Error(t.map(|t| format!(
                                     "`{}`: {:?} has no object `{}`",
                                     super::pretty_tm(0, cxt.names(), &tm),
