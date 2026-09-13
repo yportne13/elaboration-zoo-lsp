@@ -921,6 +921,8 @@ fn unify_iter<'a>(
     vals: &mut Vec<V>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    ren: &mut RenBuf,
+    scratch: &mut RenameScratch<'a>,
     l0: u32,
     t0: V,
     u0: V,
@@ -1051,12 +1053,12 @@ fn unify_iter<'a>(
                     let mut args = std::mem::take(&mut *scratch1);
                     args.clear();
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                        solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
+                        solve(bump, spine, work, vals, defs, metas, ren, scratch, l, m, &args, u)
                     } else {
                         let mut args2 = std::mem::take(&mut *scratch2);
                         args2.clear();
                         let r = match spine.flex_of(u, &mut args2) {
-                            Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args2, t),
+                            Some(m) => solve(bump, spine, work, vals, defs, metas, ren, scratch, l, m, &args2, t),
                             None => false,
                         };
                         *scratch2 = args2;
@@ -1137,10 +1139,10 @@ fn unify_iter<'a>(
                 let mut args = std::mem::take(&mut *scratch1);
                 args.clear();
                 let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                    solve(bump, spine, work, vals, defs, metas, l, m, &args, u)
+                    solve(bump, spine, work, vals, defs, metas, ren, scratch, l, m, &args, u)
                 } else {
                     match spine.flex_of(u, &mut args) {
-                        Some(m) => solve(bump, spine, work, vals, defs, metas, l, m, &args, t),
+                        Some(m) => solve(bump, spine, work, vals, defs, metas, ren, scratch, l, m, &args, t),
                         None => false,
                     }
                 };
@@ -1161,6 +1163,66 @@ fn unify_iter<'a>(
 // solve（invert + rename + lams，全迭代）
 // --------------------------------------------------------------------------------
 
+/// solve 的偏置换缓冲（L04 同款移植；L03 无非线性求解，**无 NONE_MARK
+/// 需求**）：`val[x]` 在第 `epoch` 代里给出 level x → 新下标；
+/// `stamp[x] == epoch` 表示条目有效。`reset` 只推进 epoch（O(1) 换代，
+/// 免逐槽清零）——把 solve 的 `vec![None; γ]` 初始化从 O(上下文深度) 降为
+/// 常数。缓冲常驻 Machine（跨 solve 持久），按需扩容、旧代条目自然失效。
+#[derive(Default)]
+struct RenBuf {
+    val: Vec<u32>,
+    /// 各 level 槽位的生效代数（与 `val` 平行）；`== epoch` 才有效。
+    stamp: Vec<u64>,
+    epoch: u64,
+}
+
+impl RenBuf {
+    /// 换代即「清空」：旧条目的 gen 不等于新 epoch，全部失效。
+    #[inline]
+    fn reset(&mut self) {
+        self.epoch += 1;
+    }
+    #[inline]
+    fn get(&self, x: usize) -> Option<u32> {
+        if self.stamp.get(x).copied() == Some(self.epoch) {
+            Some(self.val[x])
+        } else {
+            None
+        }
+    }
+    #[inline]
+    fn set(&mut self, x: usize, v: u32) {
+        if x >= self.val.len() {
+            self.val.resize(x + 1, 0);
+            self.stamp.resize(x + 1, 0); // 0 != epoch（epoch 从 1 起），新槽全部无效
+        }
+        self.val[x] = v;
+        self.stamp[x] = self.epoch;
+    }
+}
+
+/// rename 的草稿栈组。rename 只从 `solve` 进入、solve 只在 unify 的 flex
+/// 臂触发（rename/solve 路径内无再入口），故单套常驻 Machine（`'static`
+/// 洗白存储，入口 clear）即可，无需池。
+#[derive(Default)]
+struct RenameScratch<'a> {
+    tasks: Vec<RJob<'a>>,
+    done: Vec<&'a Tm<'a>>,
+    /// 实参收集 / 折叠草稿（spine_case 内 clear 保容量），热路径零分配
+    args: Vec<V>,
+    popped: Vec<&'a Tm<'a>>,
+}
+
+impl RenameScratch<'_> {
+    /// 进核前清空：条目只在本次 rename 活动期被读（容量跨调用复用）。
+    fn clear(&mut self) {
+        self.tasks.clear();
+        self.done.clear();
+        self.args.clear();
+        self.popped.clear();
+    }
+}
+
 /// 求解：`Γ ⊢ ?m args ≡ rhs` → `?m := λ x1…xn. rhs[args⁻¹]`。
 /// 失败即不改 metacontext（invert/rename 完成前不写表）。
 fn solve<'a>(
@@ -1170,6 +1232,8 @@ fn solve<'a>(
     vals: &mut Vec<V>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    ren: &mut RenBuf,
+    scratch: &mut RenameScratch<'a>,
     gamma: u32,
     m: u32,
     args: &[V], // 逆应用序（spine 收集器的输出）
@@ -1178,20 +1242,21 @@ fn solve<'a>(
     // invert：实参（应用序）逐个 force 成刚性变量，赋解域下标；
     // 重复/非变量即非模式，失败
     let dom = args.len() as u32;
-    let mut ren: Vec<Option<u32>> = vec![None; gamma as usize];
+    ren.reset(); // 换代：本解的映射从空开始，O(1) 免逐槽清零
     for (i, &a) in args.iter().rev().enumerate() {
         let f = force(bump, spine, work, vals, defs, metas, a);
         if v_tag(f) != 0 {
             return false;
         }
         let x = v_lvl_of(f) as usize;
-        if x >= gamma as usize || ren[x].is_some() {
+        if x >= gamma as usize || ren.get(x).is_some() {
             return false;
         }
-        ren[x] = Some(i as u32);
+        ren.set(x, i as u32);
     }
     // rename（任务栈；occurs/scope check 在这里）
-    let Some(tm) = rename_iter(bump, spine, work, vals, defs, &mut ren, metas, m, dom, gamma, rhs)
+    let Some(tm) =
+        rename_iter(bump, spine, work, vals, defs, ren, metas, scratch, m, dom, gamma, rhs)
     else {
         return false;
     };
@@ -1218,30 +1283,35 @@ enum RJob<'a> {
 /// 填充）；lift 沿深度单调插入 `ren[cod] = dom`——spine 映射管 Γ 变量
 /// （< gamma），lift 管 lift 出的 binder（≥ gamma），两段不相交，插入
 /// 顺序与深度同步，故**无需回溯**（正规化论证见 L03 readme）。
+/// 草稿栈常驻 Machine（见 [`RenameScratch`]）。
 fn rename_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
     work: &mut Vec<W<'a>>,
     vals: &mut Vec<V>,
     defs: &mut Vec<V>,
-    ren: &mut Vec<Option<u32>>,
+    ren: &mut RenBuf,
     metas: &[MetaEntry],
+    s: &mut RenameScratch<'a>,
     target_m: u32,
     dom0: u32,
     cod0: u32,
     v0: V,
 ) -> Option<&'a Tm<'a>> {
-    let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren { dom: dom0, cod: cod0, v: v0 }];
-    let mut done: Vec<&'a Tm<'a>> = Vec::new();
-    // 实参收集 / 折叠草稿：跨任务复用（clear 保容量），热路径零分配
-    let mut args: Vec<V> = Vec::new();
-    let mut popped: Vec<&'a Tm<'a>> = Vec::new();
+    s.clear(); // 进核清空调用残留（借自 Machine，无返回纪律）
+    let RenameScratch {
+        tasks,
+        done,
+        args,
+        popped,
+    } = &mut *s;
+    tasks.push(RJob::Ren { dom: dom0, cod: cod0, v: v0 });
     // 派发辅助：spine 头分派（head_tm 就绪后按实参数压子任务；SpineFold
     // 先压——LIFO 保证实参任务先跑完，组合器最后执行）
     macro_rules! spine_case {
         ($dom:expr, $cod:expr, $h:expr, $head_tm:expr, $tasks:expr) => {{
             args.clear();
-            spine.collect_args($h, &mut args);
+            spine.collect_args($h, args);
             // 先压组合器（后执行）；args 逆应用序（h.a 先）→ 正序压，
             // 则 a1 的 Ren 最后压、最先弹（应用序先执行）
             $tasks.push(RJob::SpineFold { head_tm: $head_tm, n: args.len() as u32 });
@@ -1265,7 +1335,7 @@ fn rename_iter<'a>(
                     0 => {
                         let x = v_lvl_of(v) as usize;
                         // scope check（x 不在 spine 映射里）
-                        let Some(xp) = ren.get(x).and_then(|o| *o) else {
+                        let Some(xp) = ren.get(x) else {
                             return None;
                         };
                         done.push(bump.alloc(Tm::Var(dom - xp - 1)));
@@ -1284,7 +1354,7 @@ fn rename_iter<'a>(
                             }
                             _ => {
                                 let x = v_lvl_of(hd) as usize;
-                                let Some(xp) = ren.get(x).and_then(|o| *o) else {
+                                let Some(xp) = ren.get(x) else {
                                     return None; // scope check
                                 };
                                 let head_tm = bump.alloc(Tm::Var(dom - xp - 1));
@@ -1299,11 +1369,7 @@ fn rename_iter<'a>(
                             eval_iter(bump, spine, work, vals, defs, metas, env, c.body)
                         };
                         // lift：binder 槽 (cod → dom)，单调插入
-                        let idx = cod as usize;
-                        if idx >= ren.len() {
-                            ren.resize(idx + 1, None);
-                        }
-                        ren[idx] = Some(dom);
+                        ren.set(cod as usize, dom);
                         tasks.push(RJob::Lam1(c.name));
                         tasks.push(RJob::Ren { dom: dom + 1, cod: cod + 1, v: bv });
                     }
@@ -1314,11 +1380,7 @@ fn rename_iter<'a>(
                             eval_iter(bump, spine, work, vals, defs, metas, env, cell.body)
                         };
                         // lift（同 Lam）
-                        let idx = cod as usize;
-                        if idx >= ren.len() {
-                            ren.resize(idx + 1, None);
-                        }
-                        ren[idx] = Some(dom);
+                        ren.set(cod as usize, dom);
                         tasks.push(RJob::Pi2(cell.name));
                         tasks.push(RJob::Ren { dom: dom + 1, cod: cod + 1, v: bv });
                         tasks.push(RJob::Ren { dom, cod, v: cell.dom });
@@ -1424,6 +1486,12 @@ pub(crate) struct Machine {
     umemo: rustc_hash::FxHashSet<(u64, u64)>,
     scratch1: Vec<V>,
     scratch2: Vec<V>,
+    /// solve 的偏置换缓冲（[`RenBuf`]，L04 同款）：换代 O(1)，免每 solve
+    /// `vec![None; γ]`。
+    ren: RenBuf,
+    /// rename 的草稿栈（[`RenameScratch`]）：rename 非再入，单套常驻；
+    /// 入口 clear，`'static` 洗白存储同 workbuf。
+    rename_scratch: RenameScratch<'static>,
 }
 
 const PI_NAME: &str = "x"; // infer App 非 Π 分支合成的闭包名（只服务 pretty）
@@ -1445,6 +1513,8 @@ impl Machine {
             umemo: rustc_hash::FxHashSet::default(),
             scratch1: Vec::new(),
             scratch2: Vec::new(),
+            ren: RenBuf::default(),
+            rename_scratch: RenameScratch::default(),
         }
     }
 
@@ -1611,6 +1681,10 @@ impl Machine {
         let stack: &mut Vec<UItem<'_>> = unsafe {
             &mut *(&mut self.ustack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'_>>)
         };
+        let scratch: &mut RenameScratch<'_> = unsafe {
+            &mut *(&mut self.rename_scratch as *mut RenameScratch<'static>
+                as *mut RenameScratch<'_>)
+        };
         unify_iter(
             bump,
             &mut self.spine,
@@ -1622,6 +1696,8 @@ impl Machine {
             &mut self.vals,
             &mut self.defs,
             &mut self.metas,
+            &mut self.ren,
+            scratch,
             l,
             t,
             u,

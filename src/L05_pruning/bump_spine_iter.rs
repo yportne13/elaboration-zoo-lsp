@@ -983,6 +983,7 @@ fn intersect_bump<'a>(
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     stack: &mut Vec<UItem<'a>>,
+    pool: &mut Vec<RenameScratch<'a>>,
     l: u32,
     m: u32,
     args1: &[(V, Icit)], // 内先（collect_args 的产出序）
@@ -1012,8 +1013,10 @@ fn intersect_bump<'a>(
     }
     if !fallback {
         if pr.iter().any(|x| x.is_none()) {
-            return prune_meta_bump(bump, spine, work, vals, icits, defs, metas, &pr, m)
-                .is_some();
+            return prune_meta_bump(
+                bump, spine, work, vals, icits, defs, metas, pool, &pr, m,
+            )
+            .is_some();
         }
         return true; // 两 spine 逐槽相等
     }
@@ -1040,6 +1043,7 @@ fn flex_flex_bump<'a>(
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
+    pool: &mut Vec<RenameScratch<'a>>,
     gamma: u32,
     m1: u32,
     args1: &[(V, Icit)],
@@ -1055,14 +1059,14 @@ fn flex_flex_bump<'a>(
     };
     match invert_bump(bump, spine, work, vals, icits, defs, metas, ren, gamma, argsa) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, ren, gamma, ma, argsa.len() as u32, mask,
-            vrhs,
+            bump, spine, work, vals, icits, defs, metas, ren, pool, gamma, ma,
+            argsa.len() as u32, mask, vrhs,
         ),
         None => {
             // 一侧非模式：落另一侧（solve = invert + solve_with_pren）
             match invert_bump(bump, spine, work, vals, icits, defs, metas, ren, gamma, argsb) {
                 Some(mask) => solve_with_pren_bump(
-                    bump, spine, work, vals, icits, defs, metas, ren, gamma, mb,
+                    bump, spine, work, vals, icits, defs, metas, ren, pool, gamma, mb,
                     argsb.len() as u32, mask, vlhs,
                 ),
                 None => false,
@@ -1086,6 +1090,7 @@ fn unify_iter<'a>(
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
     conv: &mut ConvScratch,
+    pool: &mut Vec<RenameScratch<'a>>,
     l0: u32,
     t0: V,
     u0: V,
@@ -1214,13 +1219,13 @@ fn unify_iter<'a>(
                     let m2 = v_meta_of(hd2);
                     let ok = if m1 == m2 {
                         intersect_bump(
-                            bump, spine, work, vals, icits, defs, metas, &mut stack, l, m1, &a1,
-                            &a2,
+                            bump, spine, work, vals, icits, defs, metas, &mut stack, pool, l, m1,
+                            &a1, &a2,
                         )
                     } else {
                         flex_flex_bump(
-                            bump, spine, work, vals, icits, defs, metas, ren, l, m1, &a1, u, m2,
-                            &a2, t,
+                            bump, spine, work, vals, icits, defs, metas, ren, pool, l, m1, &a1,
+                            u, m2, &a2, t,
                         )
                     };
                     conv.scratch1 = a1;
@@ -1299,8 +1304,9 @@ fn unify_iter<'a>(
                 let mut args = std::mem::take(&mut conv.scratch1);
                 args.clear();
                 spine.collect_args(h, &mut args);
-                let solved =
-                    solve_bump(bump, spine, work, vals, icits, defs, metas, ren, l, mv, &args, rhs);
+                let solved = solve_bump(
+                    bump, spine, work, vals, icits, defs, metas, ren, pool, l, mv, &args, rhs,
+                );
                 conv.scratch1 = args;
                 if solved {
                     if memo_on {
@@ -1323,21 +1329,21 @@ fn unify_iter<'a>(
                     (Some(m1), Some(m2)) => {
                         if m1 == m2 {
                             intersect_bump(
-                                bump, spine, work, vals, icits, defs, metas, &mut stack, l, m1,
-                                &a1, &a2,
+                                bump, spine, work, vals, icits, defs, metas, &mut stack, pool,
+                                l, m1, &a1, &a2,
                             )
                         } else {
                             flex_flex_bump(
-                                bump, spine, work, vals, icits, defs, metas, ren, l, m1, &a1, u,
-                                m2, &a2, t,
+                                bump, spine, work, vals, icits, defs, metas, ren, pool, l, m1,
+                                &a1, u, m2, &a2, t,
                             )
                         }
                     }
                     (Some(m), None) => {
-                        solve_bump(bump, spine, work, vals, icits, defs, metas, ren, l, m, &a1, u)
+                        solve_bump(bump, spine, work, vals, icits, defs, metas, ren, pool, l, m, &a1, u)
                     }
                     (None, Some(m)) => {
-                        solve_bump(bump, spine, work, vals, icits, defs, metas, ren, l, m, &a2, t)
+                        solve_bump(bump, spine, work, vals, icits, defs, metas, ren, pool, l, m, &a2, t)
                     }
                     (None, None) => false, // 刚性失配 / 病态混杂
                 };
@@ -1489,6 +1495,7 @@ fn solve_with_pren_bump<'a>(
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
+    pool: &mut Vec<RenameScratch<'a>>,
     gamma: u32,
     m: u32,
     dom: u32,
@@ -1501,12 +1508,15 @@ fn solve_with_pren_bump<'a>(
     };
     // 非线性 spine：检查非线性的变量槽位可以从 meta 类型里剪掉
     // （剪后仍良型才允许求解）。嵌套 rename 自带 RenBuf（换代缓冲不互踩）。
-    if !mask.is_empty() && prune_ty_bump(bump, spine, work, vals, icits, defs, metas, &mask, mty).is_none() {
+    if !mask.is_empty()
+        && prune_ty_bump(bump, spine, work, vals, icits, defs, metas, pool, &mask, mty)
+            .is_none()
+    {
         return false;
     }
-    let Some(tm) =
-        rename_iter(bump, spine, work, vals, icits, defs, ren, metas, Some(m), dom, gamma, rhs)
-    else {
+    let Some(tm) = rename_iter(
+        bump, spine, work, vals, icits, defs, ren, metas, pool, Some(m), dom, gamma, rhs,
+    ) else {
         return false;
     };
     let lam_tm = lams_from_ty(bump, spine, work, vals, icits, defs, metas, dom, mty, tm);
@@ -1527,6 +1537,7 @@ fn solve_bump<'a>(
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
+    pool: &mut Vec<RenameScratch<'a>>,
     gamma: u32,
     m: u32,
     args: &[(V, Icit)],
@@ -1534,8 +1545,8 @@ fn solve_bump<'a>(
 ) -> bool {
     match invert_bump(bump, spine, work, vals, icits, defs, metas, ren, gamma, args) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, ren, gamma, m, args.len() as u32, mask,
-            rhs,
+            bump, spine, work, vals, icits, defs, metas, ren, pool, gamma, m,
+            args.len() as u32, mask, rhs,
         ),
         None => false,
     }
@@ -1559,9 +1570,37 @@ enum RJob<'a> {
     Pi2(&'a PiCell<'a>),
 }
 
+/// rename 的草稿栈组（每次 [`rename_iter`] 调用独占一套）。rename 会经
+/// `prune_vflex` / `prune_ty` **再入**（嵌套 rename），不能像 `workbuf`
+/// 那样单套 `'static` 常驻洗白——放 Machine 的池：每次调用弹出/新建一套
+/// （容量跨调用复用），返回前清空归还；嵌套调用取池中另一套，互不踩踏。
+#[derive(Default)]
+struct RenameScratch<'a> {
+    tasks: Vec<RJob<'a>>,
+    done: Vec<&'a Tm<'a>>,
+    /// SpineFold 的实参 icit 预装载栈：spine_case 按收集序压入（最后应用
+    /// 的实参在栈底），SpineFold 弹出序 = 应用序（最先应用的实参先弹）。
+    done_icits: Vec<Icit>,
+    /// 实参收集 / 折叠草稿（spine_case 内 clear 保容量）
+    args: Vec<(V, Icit)>,
+    popped: Vec<&'a Tm<'a>>,
+}
+
+impl RenameScratch<'_> {
+    /// 归还池前清空：栈内条目只在本次 rename 活动期被读，不得跨调用持有
+    ///（与 workbuf 的「洗白存储」同一纪律——清空后 `'a` → `'static` 收回池）。
+    fn clear(&mut self) {
+        self.tasks.clear();
+        self.done.clear();
+        self.done_icits.clear();
+        self.args.clear();
+        self.popped.clear();
+    }
+}
+
 /// partial renaming 的迭代版（L04 版 + flex 分支升级 pruneVFlex）。`ren`
-/// 单调插入无需回溯（L03/L04 论证）；flex 槽位的嵌套 rename 递归复用
-/// `rename_iter`（剪枝罕见，深递归可接受；spine 长度是迭代不是递归）。
+/// 单调插入无需回溯（L03/L04 论证）；flex 槽位的嵌套 rename 经
+/// `prune_vflex` 再入。池包装：见 [`RenameScratch`]。
 #[allow(clippy::too_many_arguments)]
 fn rename_iter<'a>(
     bump: &'a Bump,
@@ -1572,27 +1611,50 @@ fn rename_iter<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
+    pool: &mut Vec<RenameScratch<'a>>,
     occ: Option<u32>,
     dom0: u32,
     cod0: u32,
     v0: V,
 ) -> Option<&'a Tm<'a>> {
-    let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren {
+    let mut s = pool.pop().unwrap_or_default();
+    let r = rename_go(
+        bump, spine, work, vals, icits, defs, ren, metas, pool, &mut s, occ, dom0, cod0, v0,
+    );
+    s.clear();
+    pool.push(s);
+    r
+}
+
+/// [`rename_iter`] 的本体（草稿栈在 `s` 内，调用期独占；嵌套 rename 走
+/// `pool` 里其余套）。
+#[allow(clippy::too_many_arguments)]
+fn rename_go<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    work: &mut Vec<W<'a>>,
+    vals: &mut Vec<V>,
+    icits: &mut Vec<Icit>,
+    defs: &mut Vec<V>,
+    ren: &mut RenBuf,
+    metas: &mut Vec<MetaEntry>,
+    pool: &mut Vec<RenameScratch<'a>>,
+    s: &mut RenameScratch<'a>,
+    occ: Option<u32>,
+    dom0: u32,
+    cod0: u32,
+    v0: V,
+) -> Option<&'a Tm<'a>> {
+    let RenameScratch { tasks, done, done_icits, args, popped } = &mut *s;
+    tasks.push(RJob::Ren {
         dom: dom0,
         cod: cod0,
         v: v0,
-    }];
-    let mut done: Vec<&'a Tm<'a>> = Vec::new();
-    // SpineFold 的实参 icit 预装载栈：spine_case 按收集序压入（最后应用
-    // 的实参在栈底），SpineFold 弹出序 = 应用序（最先应用的实参先弹）。
-    let mut done_icits: Vec<Icit> = Vec::new();
-    // 实参收集 / 折叠草稿：跨任务复用（clear 保容量）
-    let mut args: Vec<(V, Icit)> = Vec::new();
-    let mut popped: Vec<&'a Tm<'a>> = Vec::new();
+    });
     macro_rules! spine_case {
         ($dom:expr, $cod:expr, $h:expr, $head_tm:expr, $tasks:expr) => {{
             args.clear();
-            spine.collect_args($h, &mut args);
+            spine.collect_args($h, args);
             $tasks.push(RJob::SpineFold {
                 head_tm: $head_tm,
                 n: args.len() as u32,
@@ -1640,8 +1702,8 @@ fn rename_iter<'a>(
                                     return None; // occurs check
                                 }
                                 let t = prune_vflex_bump(
-                                    bump, spine, work, vals, icits, defs, ren, metas, occ, dom,
-                                    cod, m, h,
+                                    bump, spine, work, vals, icits, defs, ren, metas, pool,
+                                    occ, dom, cod, m, h,
                                 )?;
                                 done.push(t);
                             }
@@ -1740,6 +1802,7 @@ fn prune_vflex_bump<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
+    pool: &mut Vec<RenameScratch<'a>>,
     occ: Option<u32>,
     dom: u32,
     cod: u32,
@@ -1767,7 +1830,7 @@ fn prune_vflex_bump<'a>(
                 return None; // 上游：剪枝后 spine 必须全变量
             }
             let t = rename_iter(
-                bump, spine, work, vals, icits, defs, ren, metas, occ, dom, cod, f,
+                bump, spine, work, vals, icits, defs, ren, metas, pool, occ, dom, cod, f,
             )?;
             slots.push((Some(t), i));
             status = SpinePruneStatus::OKNonRenaming;
@@ -1779,7 +1842,7 @@ fn prune_vflex_bump<'a>(
         for (st, i) in slots.iter().rev() {
             mask.push(if st.is_some() { Some(*i) } else { None });
         }
-        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, &mask, m)?
+        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, pool, &mask, m)?
     } else {
         m
     };
@@ -1804,6 +1867,7 @@ fn prune_meta_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    pool: &mut Vec<RenameScratch<'a>>,
     mask: &[Option<Icit>], // 内先序
     m: u32,
 ) -> Option<u32> {
@@ -1811,7 +1875,8 @@ fn prune_meta_bump<'a>(
         MetaEntry::Unsolved(a) => *a,
         _ => unreachable!(), // 只对未解 meta 剪枝
     };
-    let pruned_tm = prune_ty_bump(bump, spine, work, vals, icits, defs, metas, mask, mty)?;
+    let pruned_tm =
+        prune_ty_bump(bump, spine, work, vals, icits, defs, metas, pool, mask, mty)?;
     let prunedty = eval_iter(
         bump, spine, work, vals, icits, defs, metas, EMPTY_ENV, pruned_tm);
     let mp = metas.len() as u32;
@@ -1843,6 +1908,7 @@ fn prune_ty_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    pool: &mut Vec<RenameScratch<'a>>,
     mask_inner_first: &[Option<Icit>],
     mty: V,
 ) -> Option<&'a Tm<'a>> {
@@ -1861,7 +1927,8 @@ fn prune_ty_bump<'a>(
         let (name, icit, pdom, env, body) = (p.name, p.icit, p.dom, p.env, p.body);
         if entry.is_some() {
             let dtm = rename_iter(
-                bump, spine, work, vals, icits, defs, &mut ren2, metas, None, dom, cod, pdom,
+                bump, spine, work, vals, icits, defs, &mut ren2, metas, pool, None, dom, cod,
+                pdom,
             )?;
             // lift：binder 进映射（cod 是即将下探的 Δ 变量，dom 是它的 Γ 位）
             ren2.set(cod as usize, dom);
@@ -1882,7 +1949,7 @@ fn prune_ty_bump<'a>(
         cur = force(bump, spine, work, vals, icits, defs, metas, next);
     }
     let mut t = rename_iter(
-        bump, spine, work, vals, icits, defs, &mut ren2, metas, None, dom, cod, cur,
+        bump, spine, work, vals, icits, defs, &mut ren2, metas, pool, None, dom, cod, cur,
     )?;
     // 保留层由内向外回包（layers 序 = 外→内，rev = 内→外 ✓）
     for (name, icit, dtm) in layers.iter().rev() {
@@ -1998,6 +2065,9 @@ pub(crate) struct Machine {
     unifybuf: Vec<UItem<'static>>,
     qtasks: Vec<QJob<'static>>,
     qdone: Vec<&'static Tm<'static>>,
+    /// rename 的草稿栈池（[`RenameScratch`]）：rename 经 prune_vflex/prune_ty
+    /// 再入，嵌套各取一套；归还前清空，`'static` 洗白存储同 workbuf。
+    rename_pool: Vec<RenameScratch<'static>>,
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
     /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项。
     quote_memo: QuoteMemo<'static>,
@@ -2034,6 +2104,7 @@ impl Machine {
             unifybuf: Vec::new(),
             qtasks: Vec::new(),
             qdone: Vec::new(),
+            rename_pool: Vec::new(),
             quote_memo: FxHashMap::default(),
         }
     }
@@ -2347,6 +2418,10 @@ impl Machine {
             unsafe { &mut *(&mut self.unifybuf as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        let pool: &mut Vec<RenameScratch<'a>> = unsafe {
+            &mut *(&mut self.rename_pool as *mut Vec<RenameScratch<'static>>
+                as *mut Vec<RenameScratch<'a>>)
+        };
         unify_iter(
             bump,
             &mut self.spine,
@@ -2358,6 +2433,7 @@ impl Machine {
             &mut self.metas,
             &mut self.ren,
             &mut self.conv,
+            pool,
             l,
             t,
             u,

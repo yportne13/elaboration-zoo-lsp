@@ -942,6 +942,7 @@ fn unify_iter<'a>(
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
     conv: &mut ConvScratch,
+    scratch: &mut RenameScratch<'a>,
     l0: u32,
     t0: V,
     u0: V,
@@ -1066,13 +1067,13 @@ fn unify_iter<'a>(
                     let mut args = std::mem::take(&mut conv.scratch1);
                     args.clear();
                     let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                        solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
+                        solve(bump, spine, work, vals, icits, defs, metas, ren, scratch, l, m, &args, u)
                     } else {
                         let mut args2 = std::mem::take(&mut conv.scratch2);
                         args2.clear();
                         let r = match spine.flex_of(u, &mut args2) {
                             Some(m) => {
-                                solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args2, t)
+                                solve(bump, spine, work, vals, icits, defs, metas, ren, scratch, l, m, &args2, t)
                             }
                             None => false,
                         };
@@ -1157,10 +1158,10 @@ fn unify_iter<'a>(
                 let mut args = std::mem::take(&mut conv.scratch1);
                 args.clear();
                 let solved = if let Some(m) = spine.flex_of(t, &mut args) {
-                    solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, u)
+                    solve(bump, spine, work, vals, icits, defs, metas, ren, scratch, l, m, &args, u)
                 } else {
                     match spine.flex_of(u, &mut args) {
-                        Some(m) => solve(bump, spine, work, vals, icits, defs, metas, ren, l, m, &args, t),
+                        Some(m) => solve(bump, spine, work, vals, icits, defs, metas, ren, scratch, l, m, &args, t),
                         None => false,
                     }
                 };
@@ -1232,6 +1233,7 @@ fn solve<'a>(
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
     ren: &mut RenBuf,
+    scratch: &mut RenameScratch<'a>,
     gamma: u32,
     m: u32,
     args: &[(V, Icit)], // 逆应用序（spine 收集器的输出）
@@ -1253,9 +1255,9 @@ fn solve<'a>(
         ren.set(x, i as u32);
     }
     // rename（任务栈；occurs/scope check 在这里）
-    let Some(tm) =
-        rename_iter(bump, spine, work, vals, icits, defs, ren, metas, m, dom, gamma, rhs)
-    else {
+    let Some(tm) = rename_iter(
+        bump, spine, work, vals, icits, defs, ren, metas, scratch, m, dom, gamma, rhs,
+    ) else {
         return false;
     };
     // 包 λ 后空环境求值，写表（lams 的 icit 取应用序——上游 reverse 后的
@@ -1282,8 +1284,35 @@ enum RJob<'a> {
     Pi2(&'a PiCell<'a>),
 }
 
+/// rename 的草稿栈组。rename 只从 `solve` 进入、solve 只在 unify 的 flex
+/// 臂触发（rename/solve 路径内无再入口），故单套常驻 Machine（`'static`
+/// 洗白存储，入口 clear）即可，无需池。
+#[derive(Default)]
+struct RenameScratch<'a> {
+    tasks: Vec<RJob<'a>>,
+    done: Vec<&'a Tm<'a>>,
+    /// SpineFold 的实参 icit 预装载栈：spine_case 按收集序压入（最后应用
+    /// 的实参在栈底），SpineFold 弹出序 = 应用序（最先应用的实参先弹）。
+    /// 组合器不触碰。
+    done_icits: Vec<Icit>,
+    /// 实参收集 / 折叠草稿（spine_case 内 clear 保容量），热路径零分配
+    args: Vec<(V, Icit)>,
+    popped: Vec<&'a Tm<'a>>,
+}
+
+impl RenameScratch<'_> {
+    /// 进核前清空：条目只在本次 rename 活动期被读（容量跨调用复用）。
+    fn clear(&mut self) {
+        self.tasks.clear();
+        self.done.clear();
+        self.done_icits.clear();
+        self.args.clear();
+        self.popped.clear();
+    }
+}
+
 /// partial renaming 的迭代版（L03 版 + icit 穿线；`ren` 单调插入无需回溯，
-/// 论证见 L03 readme）。
+/// 论证见 L03 readme）。草稿栈常驻 Machine（见 [`RenameScratch`]）。
 fn rename_iter<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -1293,27 +1322,22 @@ fn rename_iter<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &[MetaEntry],
+    s: &mut RenameScratch<'a>,
     target_m: u32,
     dom0: u32,
     cod0: u32,
     v0: V,
 ) -> Option<&'a Tm<'a>> {
-    let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren { dom: dom0, cod: cod0, v: v0 }];
-    let mut done: Vec<&'a Tm<'a>> = Vec::new();
-    // SpineFold 的实参 icit 预装载栈：spine_case 按收集序压入（最后应用
-    // 的实参在栈底），SpineFold 弹出序 = 应用序（最先应用的实参先弹）。
-    // 组合器不触碰。
-    let mut done_icits: Vec<Icit> = Vec::new();
-    // 实参收集 / 折叠草稿：跨任务复用（clear 保容量），热路径零分配
-    let mut args: Vec<(V, Icit)> = Vec::new();
-    let mut popped: Vec<&'a Tm<'a>> = Vec::new();
+    s.clear(); // 进核清空调用残留（借自 Machine，无返回纪律）
+    let RenameScratch { tasks, done, done_icits, args, popped } = &mut *s;
+    tasks.push(RJob::Ren { dom: dom0, cod: cod0, v: v0 });
     // 派发辅助：spine 头分派（head_tm 就绪后按实参数压子任务；SpineFold
     // 先压——LIFO 保证实参任务先跑完，组合器最后执行；icit 预装载在
     // Rens 之前——嵌套 spine 的装载/弹出各自成对（LIFO））
     macro_rules! spine_case {
         ($dom:expr, $cod:expr, $h:expr, $head_tm:expr, $tasks:expr) => {{
             args.clear();
-            spine.collect_args($h, &mut args);
+            spine.collect_args($h, args);
             // 先压组合器（后执行）；args 逆应用序（h.a 先）→ 正序压，
             // 则 a1 的 Ren 最后压、最先弹（应用序先执行）
             $tasks.push(RJob::SpineFold { head_tm: $head_tm, n: args.len() as u32 });
@@ -1501,6 +1525,9 @@ pub(crate) struct Machine {
     unifybuf: Vec<UItem<'static>>,
     qtasks: Vec<QJob<'static>>,
     qdone: Vec<&'static Tm<'static>>,
+    /// rename 的草稿栈（[`RenameScratch`]）：rename 非再入（只从 solve 进
+    /// 入），单套常驻即可；入口 clear，`'static` 洗白存储同 workbuf。
+    rename_scratch: RenameScratch<'static>,
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
     /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项（表随
     /// 调用新鲜是口径的一部分，绝不跨 reset 持有）。
@@ -1534,6 +1561,7 @@ impl Machine {
             unifybuf: Vec::new(),
             qtasks: Vec::new(),
             qdone: Vec::new(),
+            rename_scratch: RenameScratch::default(),
             quote_memo: FxHashMap::default(),
         }
     }
@@ -1740,6 +1768,10 @@ impl Machine {
             unsafe { &mut *(&mut self.unifybuf as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(&mut self.workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        let scratch: &mut RenameScratch<'a> = unsafe {
+            &mut *(&mut self.rename_scratch as *mut RenameScratch<'static>
+                as *mut RenameScratch<'a>)
+        };
         unify_iter(
             bump,
             &mut self.spine,
@@ -1751,6 +1783,7 @@ impl Machine {
             &mut self.metas,
             &mut self.ren,
             &mut self.conv,
+            scratch,
             l,
             t,
             u,
@@ -2592,6 +2625,7 @@ mod tests {
         let mut defs: Vec<V> = Vec::new();
         let mut metas: Vec<MetaEntry> = vec![MetaEntry::Unsolved];
         let mut ren = RenBuf::default();
+        let mut scratch = RenameScratch::default();
         // rhs = ((v1) {v0}) v0：内层 Impl、外层 Expl
         let rhs1 = spine.push(v_lvl(1), v_lvl(0), Icit::Impl);
         let rhs = spine.push(rhs1, v_lvl(0), Icit::Expl);
@@ -2600,7 +2634,7 @@ mod tests {
         assert!(
             solve(
                 &bump, &mut spine, &mut work, &mut vals, &mut icits, &mut defs, &mut metas,
-                &mut ren, 2, 0, &args, rhs,
+                &mut ren, &mut scratch, 2, 0, &args, rhs,
             ),
             "solve 应成功"
         );

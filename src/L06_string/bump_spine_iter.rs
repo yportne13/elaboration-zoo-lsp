@@ -537,8 +537,10 @@ pub(crate) struct DeclEntryF {
     pub(crate) prim: Option<Prim>,
 }
 
-/// 可变全局表（参考版 `Infer.mutable_map`；单线程 RefCell）。
-pub(crate) type MutableMap = RefCell<FxHashMap<String, V>>;
+/// 可变全局表（参考版 `Infer.mutable_map`；单线程 RefCell）。key 用
+/// `SmolStr`：≤23 字节内联（builtin 用的 "CheckIssues" 与负载里的短键
+/// 全部内联），insert 免堆分配。
+pub(crate) type MutableMap = RefCell<FxHashMap<SmolStr, V>>;
 
 /// 从实参值取字面量内容（非字面量 → None；参考版同款 match）。返回值的
 /// `'a` 与入参无 link——健全性依赖全局不变式：所有 `V` 的 XCell 都指向
@@ -570,7 +572,7 @@ fn prim_fire<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     prim: Prim,
     args: &[(V, Icit)], // collect_args 产出（逆应用序）
@@ -648,7 +650,7 @@ fn prim_fire<'a>(
                     format!("{}\n{}", existing, line)
                 };
                 map.insert(
-                    "CheckIssues".to_string(),
+                    SmolStr::new("CheckIssues"),
                     v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&next)))),
                 );
             }
@@ -672,7 +674,7 @@ fn prim_fire<'a>(
             }
             match lit_of(arg(0)) {
                 Some(a) => {
-                    mmap.borrow_mut().insert(a.to_string(), arg(1));
+                    mmap.borrow_mut().insert(SmolStr::new(a), arg(1));
                     Some(v_u())
                 }
                 _ => None,
@@ -692,7 +694,7 @@ fn prim_fire<'a>(
                             bump, spine, work, vals, icits, defs, metas, decls, mmap, arg(1),
                             old, Icit::Expl,
                         );
-                        mmap.borrow_mut().insert(a.to_string(), new);
+                        mmap.borrow_mut().insert(SmolStr::new(a), new);
                     }
                     Some(v_u())
                 }
@@ -737,10 +739,10 @@ fn prim_fire<'a>(
                                 bump, spine, work, vals, icits, defs, metas, decls, mmap,
                                 arg(1), old, Icit::Expl,
                             );
-                            mmap.borrow_mut().insert(a.to_string(), new);
+                            mmap.borrow_mut().insert(SmolStr::new(a), new);
                         }
                         None => {
-                            mmap.borrow_mut().insert(a.to_string(), arg(2));
+                            mmap.borrow_mut().insert(SmolStr::new(a), arg(2));
                         }
                     }
                     Some(v_u())
@@ -858,7 +860,7 @@ fn decl_apply<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     f: V, // 裸 Decl 单元或 decl 头的链
     a: V,
@@ -899,7 +901,7 @@ fn vapp1<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     f: V,
     a: V,
@@ -930,7 +932,7 @@ fn force<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     v0: V,
 ) -> V {
@@ -1011,7 +1013,7 @@ fn eval_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     env0: Env<'a>,
     tm0: &'a Tm<'a>,
@@ -1274,7 +1276,7 @@ fn quote_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     level0: u32,
     v0: V,
@@ -1547,9 +1549,10 @@ fn intersect_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     stack: &mut Vec<UItem<'a>>,
+    pool: &mut Vec<RenameScratch<'a>>,
     l: u32,
     m: u32,
     args1: &[(V, Icit)], // 内先（collect_args 的产出序）
@@ -1583,8 +1586,10 @@ fn intersect_bump<'a>(
     }
     if !fallback {
         if pr.iter().any(|x| x.is_none()) {
-            return prune_meta_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, &pr, m)
-                .is_some();
+            return prune_meta_bump(
+                bump, spine, work, vals, icits, defs, metas, decls, mmap, pool, &pr, m,
+            )
+            .is_some();
         }
         return true; // 两 spine 逐槽相等
     }
@@ -1612,9 +1617,10 @@ fn flex_flex_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     ren: &mut RenBuf,
+    pool: &mut Vec<RenameScratch<'a>>,
     gamma: u32,
     m1: u32,
     args1: &[(V, Icit)],
@@ -1630,15 +1636,15 @@ fn flex_flex_bump<'a>(
     };
     match invert_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, gamma, argsa) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, gamma, ma,
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool, gamma, ma,
             argsa.len() as u32, mask, vrhs,
         ),
         None => {
             // 一侧非模式：落另一侧（solve = invert + solve_with_pren）
             match invert_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, gamma, argsb) {
                 Some(mask) => solve_with_pren_bump(
-                    bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, gamma, mb,
-                    argsb.len() as u32, mask, vlhs,
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool, gamma,
+                    mb, argsb.len() as u32, mask, vlhs,
                 ),
                 None => false,
             }
@@ -1663,10 +1669,11 @@ fn unify_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     ren: &mut RenBuf,
     conv: &mut ConvScratch,
+    pool: &mut Vec<RenameScratch<'a>>,
     l0: u32,
     t0: V,
     u0: V,
@@ -1814,12 +1821,12 @@ fn unify_iter<'a>(
                     let ok = if m1 == m2 {
                         intersect_bump(
                             bump, spine, work, vals, icits, defs, metas, decls, mmap, &mut stack,
-                            l, m1, &a1, &a2,
+                            pool, l, m1, &a1, &a2,
                         )
                     } else {
                         flex_flex_bump(
-                            bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, l, m1,
-                            &a1, u, m2, &a2, t,
+                            bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool,
+                            l, m1, &a1, u, m2, &a2, t,
                         )
                     };
                     conv.scratch1 = a1;
@@ -1910,8 +1917,8 @@ fn unify_iter<'a>(
                 args.clear();
                 spine.collect_args(h, &mut args);
                 let solved = solve_bump(
-                    bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, l, mv, &args,
-                    rhs,
+                    bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool, l, mv,
+                    &args, rhs,
                 );
                 conv.scratch1 = args;
                 if solved {
@@ -1973,22 +1980,22 @@ fn unify_iter<'a>(
                         if m1 == m2 {
                             intersect_bump(
                                 bump, spine, work, vals, icits, defs, metas, decls, mmap,
-                                &mut stack, l, m1, &a1, &a2,
+                                &mut stack, pool, l, m1, &a1, &a2,
                             )
                         } else {
                             flex_flex_bump(
-                                bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, l,
-                                m1, &a1, u, m2, &a2, t,
+                                bump, spine, work, vals, icits, defs, metas, decls, mmap, ren,
+                                pool, l, m1, &a1, u, m2, &a2, t,
                             )
                         }
                     }
                     (Some(m), None) => solve_bump(
-                        bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, l, m, &a1,
-                        u,
+                        bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool, l, m,
+                        &a1, u,
                     ),
                     (None, Some(m)) => solve_bump(
-                        bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, l, m, &a2,
-                        t,
+                        bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool, l, m,
+                        &a2, t,
                     ),
                     (None, None) => false, // 刚性失配 / 病态混杂
                 };
@@ -2076,7 +2083,7 @@ fn invert_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     ren: &mut RenBuf,
     gamma: u32,
@@ -2139,9 +2146,10 @@ fn solve_with_pren_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     ren: &mut RenBuf,
+    pool: &mut Vec<RenameScratch<'a>>,
     gamma: u32,
     m: u32,
     dom: u32,
@@ -2154,14 +2162,17 @@ fn solve_with_pren_bump<'a>(
     };
     // 非线性 spine：检查非线性的变量槽位可以从 meta 类型里剪掉
     if !mask.is_empty()
-        && prune_ty_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, &mask, mty)
-            .is_none()
+        && prune_ty_bump(
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, pool, &mask, mty,
+        )
+        .is_none()
     {
         return false;
     }
-    let Some(tm) =
-        rename_iter(bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, Some(m), dom, gamma, rhs)
-    else {
+    let Some(tm) = rename_iter(
+        bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, pool, Some(m), dom, gamma,
+        rhs,
+    ) else {
         return false;
     };
     let lam_tm = lams_from_ty(bump, spine, work, vals, icits, defs, metas, decls, mmap, dom, mty, tm);
@@ -2182,9 +2193,10 @@ fn solve_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     ren: &mut RenBuf,
+    pool: &mut Vec<RenameScratch<'a>>,
     gamma: u32,
     m: u32,
     args: &[(V, Icit)],
@@ -2192,7 +2204,7 @@ fn solve_bump<'a>(
 ) -> bool {
     match invert_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, gamma, args) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, gamma, m,
+            bump, spine, work, vals, icits, defs, metas, decls, mmap, ren, pool, gamma, m,
             args.len() as u32, mask, rhs,
         ),
         None => false,
@@ -2217,8 +2229,36 @@ enum RJob<'a> {
     Pi2(&'a PiCell<'a>),
 }
 
+/// rename 的草稿栈组（每次 [`rename_iter`] 调用独占一套）。rename 会经
+/// `prune_vflex` / `prune_ty` **再入**（嵌套 rename），不能像 `workbuf`
+/// 那样单套 `'static` 常驻洗白——放 Machine 的池：每次调用弹出/新建一套
+/// （容量跨调用复用），返回前清空归还；嵌套调用取池中另一套，互不踩踏。
+#[derive(Default)]
+struct RenameScratch<'a> {
+    tasks: Vec<RJob<'a>>,
+    done: Vec<&'a Tm<'a>>,
+    /// SpineFold 的实参 icit 预装载栈
+    done_icits: Vec<Icit>,
+    /// 实参收集 / 折叠草稿（spine_case 内 clear 保容量）
+    args: Vec<(V, Icit)>,
+    popped: Vec<&'a Tm<'a>>,
+}
+
+impl RenameScratch<'_> {
+    /// 归还池前清空：栈内条目只在本次 rename 活动期被读，不得跨调用持有
+    ///（与 workbuf 的「洗白存储」同一纪律——清空后 `'a` → `'static` 收回池）。
+    fn clear(&mut self) {
+        self.tasks.clear();
+        self.done.clear();
+        self.done_icits.clear();
+        self.args.clear();
+        self.popped.clear();
+    }
+}
+
 /// partial renaming 的迭代版（L05 版 + L06 增量：LiteralType/LiteralIntro/
-/// Decl 的 rename 臂与 Decl/Lit 头的 spine 重建）。
+/// Decl 的 rename 臂与 Decl/Lit 头的 spine 重建）。池包装：见
+/// [`RenameScratch`]。
 #[allow(clippy::too_many_arguments)]
 fn rename_iter<'a>(
     bump: &'a Bump,
@@ -2229,28 +2269,55 @@ fn rename_iter<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
+    pool: &mut Vec<RenameScratch<'a>>,
     occ: Option<u32>,
     dom0: u32,
     cod0: u32,
     v0: V,
 ) -> Option<&'a Tm<'a>> {
-    let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren {
+    let mut s = pool.pop().unwrap_or_default();
+    let r = rename_go(
+        bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, pool, &mut s, occ, dom0,
+        cod0, v0,
+    );
+    s.clear();
+    pool.push(s);
+    r
+}
+
+/// [`rename_iter`] 的本体（草稿栈在 `s` 内，调用期独占；嵌套 rename 走
+/// `pool` 里其余套）。
+#[allow(clippy::too_many_arguments)]
+fn rename_go<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    work: &mut Vec<W<'a>>,
+    vals: &mut Vec<V>,
+    icits: &mut Vec<Icit>,
+    defs: &mut Vec<V>,
+    ren: &mut RenBuf,
+    metas: &mut Vec<MetaEntry>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
+    mmap: &MutableMap,
+    pool: &mut Vec<RenameScratch<'a>>,
+    s: &mut RenameScratch<'a>,
+    occ: Option<u32>,
+    dom0: u32,
+    cod0: u32,
+    v0: V,
+) -> Option<&'a Tm<'a>> {
+    let RenameScratch { tasks, done, done_icits, args, popped } = &mut *s;
+    tasks.push(RJob::Ren {
         dom: dom0,
         cod: cod0,
         v: v0,
-    }];
-    let mut done: Vec<&'a Tm<'a>> = Vec::new();
-    // SpineFold 的实参 icit 预装载栈
-    let mut done_icits: Vec<Icit> = Vec::new();
-    // 实参收集 / 折叠草稿：跨任务复用（clear 保容量）
-    let mut args: Vec<(V, Icit)> = Vec::new();
-    let mut popped: Vec<&'a Tm<'a>> = Vec::new();
+    });
     macro_rules! spine_case {
         ($dom:expr, $cod:expr, $h:expr, $head_tm:expr, $tasks:expr) => {{
             args.clear();
-            spine.collect_args($h, &mut args);
+            spine.collect_args($h, args);
             $tasks.push(RJob::SpineFold {
                 head_tm: $head_tm,
                 n: args.len() as u32,
@@ -2301,7 +2368,7 @@ fn rename_iter<'a>(
                                 }
                                 let t = prune_vflex_bump(
                                     bump, spine, work, vals, icits, defs, ren, metas, decls,
-                                    mmap, occ, dom, cod, m, h,
+                                    mmap, pool, occ, dom, cod, m, h,
                                 )?;
                                 done.push(t);
                             }
@@ -2422,8 +2489,9 @@ fn prune_vflex_bump<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
+    pool: &mut Vec<RenameScratch<'a>>,
     occ: Option<u32>,
     dom: u32,
     cod: u32,
@@ -2453,7 +2521,8 @@ fn prune_vflex_bump<'a>(
                 return None; // 上游：剪枝后 spine 必须全变量
             }
             let t = rename_iter(
-                bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, occ, dom, cod, f,
+                bump, spine, work, vals, icits, defs, ren, metas, decls, mmap, pool, occ, dom,
+                cod, f,
             )?;
             slots.push((Some(t), i));
             status = SpinePruneStatus::OKNonRenaming;
@@ -2465,7 +2534,7 @@ fn prune_vflex_bump<'a>(
         for (st, i) in slots.iter().rev() {
             mask.push(if st.is_some() { Some(*i) } else { None });
         }
-        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, &mask, m)?
+        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, pool, &mask, m)?
     } else {
         m
     };
@@ -2490,8 +2559,9 @@ fn prune_meta_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
+    pool: &mut Vec<RenameScratch<'a>>,
     mask: &[Option<Icit>], // 内先序
     m: u32,
 ) -> Option<u32> {
@@ -2499,7 +2569,8 @@ fn prune_meta_bump<'a>(
         MetaEntry::Unsolved(a) => *a,
         _ => unreachable!(), // 只对未解 meta 剪枝
     };
-    let pruned_tm = prune_ty_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, mask, mty)?;
+    let pruned_tm =
+        prune_ty_bump(bump, spine, work, vals, icits, defs, metas, decls, mmap, pool, mask, mty)?;
     let prunedty = eval_iter(
         bump, spine, work, vals, icits, defs, metas, decls, mmap, EMPTY_ENV, pruned_tm,
     );
@@ -2531,8 +2602,9 @@ fn prune_ty_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
+    pool: &mut Vec<RenameScratch<'a>>,
     mask_inner_first: &[Option<Icit>],
     mty: V,
 ) -> Option<&'a Tm<'a>> {
@@ -2553,8 +2625,8 @@ fn prune_ty_bump<'a>(
         let (name, icit, pdom, env, body) = (p.name, p.icit, p.dom, p.env, p.body);
         if entry.is_some() {
             let dtm = rename_iter(
-                bump, spine, work, vals, icits, defs, &mut ren2, metas, decls, mmap, None, dom, cod,
-                pdom,
+                bump, spine, work, vals, icits, defs, &mut ren2, metas, decls, mmap, pool, None,
+                dom, cod, pdom,
             )?;
             // lift：binder 进映射
             ren2.set(cod as usize, dom);
@@ -2578,7 +2650,8 @@ fn prune_ty_bump<'a>(
         cur = force(bump, spine, work, vals, icits, defs, metas, decls, mmap, next);
     }
     let mut t = rename_iter(
-        bump, spine, work, vals, icits, defs, &mut ren2, metas, decls, mmap, None, dom, cod, cur,
+        bump, spine, work, vals, icits, defs, &mut ren2, metas, decls, mmap, pool, None, dom, cod,
+        cur,
     )?;
     // 保留层由内向外回包（layers 序 = 外→内，rev = 内→外 ✓）
     for (name, icit, dtm) in layers.iter().rev() {
@@ -2618,7 +2691,7 @@ fn lams_from_ty<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decls: &FxHashMap<String, DeclEntryF>,
+    decls: &FxHashMap<SmolStr, DeclEntryF>,
     mmap: &MutableMap,
     l: u32,
     ty: V,
@@ -2690,8 +2763,9 @@ pub(crate) struct Machine {
     name_map: FxHashMap<SmolStr, (u32, V)>,
     /// bind/define 的撤销轨迹：(名字, 旧值)。
     name_trail: Vec<(SmolStr, Option<(u32, V)>)>,
-    /// decl 表（L06）：名 → (值, 类型, 可选 builtin prim)。
-    decls: FxHashMap<String, DeclEntryF>,
+    /// decl 表（L06）：名 → (值, 类型, 可选 builtin prim)。key 用 `SmolStr`
+    /// （≤23 字节内联，负载里的 `s12345` 类短键 insert 免堆分配）。
+    decls: FxHashMap<SmolStr, DeclEntryF>,
     /// 可变全局（L06）：builtin `create_global` / `change_mutable` 族的
     /// 存取目标。值指向本轮 bump——每轮清空（参考版每次调用新建 Infer）。
     mutable_map: MutableMap,
@@ -2704,6 +2778,9 @@ pub(crate) struct Machine {
     unifybuf: Vec<UItem<'static>>,
     qtasks: Vec<QJob<'static>>,
     qdone: Vec<&'static Tm<'static>>,
+    /// rename 的草稿栈池（[`RenameScratch`]）：rename 经 prune_vflex/prune_ty
+    /// 再入，嵌套各取一套；归还前清空，`'static` 洗白存储同 workbuf。
+    rename_pool: Vec<RenameScratch<'static>>,
     /// quote 记忆化表：容量跨调用复用，内容**每次调用 clear**——meta 可
     /// 能在两次调用之间被求解，跨调用保留条目会拿到过期中性项。
     quote_memo: QuoteMemo<'static>,
@@ -2739,6 +2816,7 @@ impl Machine {
             unifybuf: Vec::new(),
             qtasks: Vec::new(),
             qdone: Vec::new(),
+            rename_pool: Vec::new(),
             quote_memo: FxHashMap::default(),
         }
     }
@@ -3073,12 +3151,16 @@ impl Machine {
             conv,
             workbuf,
             unifybuf,
+            rename_pool,
             ..
         } = self;
         let stack: &mut Vec<UItem<'a>> =
             unsafe { &mut *(unifybuf as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(workbuf as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
+        let pool: &mut Vec<RenameScratch<'a>> = unsafe {
+            &mut *(rename_pool as *mut Vec<RenameScratch<'static>> as *mut Vec<RenameScratch<'a>>)
+        };
         unify_iter(
             bump,
             spine,
@@ -3092,6 +3174,7 @@ impl Machine {
             mutable_map,
             ren,
             conv,
+            pool,
             l,
             t,
             u,
@@ -3586,47 +3669,56 @@ impl Machine {
                 body,
             } => {
                 // 参数折叠：typ = Π 参数. 返回类型；bod = λ 参数. 体
-                // （与参考版同款在 Raw 层做，一次成本）
-                let mut typ = ret_type.clone();
+                // （与参考版同款在 Raw 层做，一次成本）。Cow 免深拷
+                // （L13 Def 臂同款已验证形态）：零参数 def（strchain/global
+                // 负载的全部 def）typ/bod 直接借用原树，连 ret_type/body 的
+                // 深拷都省掉；有参时首折才克隆基底，余层仅移动。
+                let mut typ = std::borrow::Cow::Borrowed(ret_type);
                 for (n, a, i) in params.iter().rev() {
-                    typ = Raw::Pi(n.clone(), *i, Box::new(a.clone()), Box::new(typ));
+                    typ = std::borrow::Cow::Owned(Raw::Pi(
+                        n.clone(),
+                        *i,
+                        Box::new(a.clone()),
+                        Box::new(typ.into_owned()),
+                    ));
                 }
-                let mut bod = body.clone();
+                let mut bod = std::borrow::Cow::Borrowed(body);
                 for (n, _, i) in params.iter().rev() {
-                    bod = Raw::Lam(n.clone(), Either::Icit(*i), Box::new(bod));
+                    bod = std::borrow::Cow::Owned(Raw::Lam(
+                        n.clone(),
+                        Either::Icit(*i),
+                        Box::new(bod.into_owned()),
+                    ));
                 }
                 let typ_tm = self.check_ty(bump, cxt, &typ)?;
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
-                // 重定义检查（与参考版同款，L13 `fake_bind` 的移植）：
-                // builtin / 先前 def 已登记 → 定向报错，不再静默覆盖。
-                // 在体检查之前返回，无名字/轨迹副作用残留。
-                if self.decls.contains_key(&name.data) {
-                    return Err(Error(format!("redefine {}", name.data)));
+                // 重定义检查 + 占位登记合并为一次 entry（原三连写
+                // contains_key + insert×2 各散列/克隆一次 key，现仅一次）：
+                // builtin / 先前 def 已登记 → 定向报错（redefine，与参考版
+                // 同款）；否则登记指向自身的中性占位，体检查期间 Var 经 decl
+                // 表回退命中，检查完成后用真实值原地覆写（下方 get_mut）。
+                // 检查失败时 run 整体 Err 退出，占位不会外泄。
+                match self.decls.entry(SmolStr::from(&name.data)) {
+                    std::collections::hash_map::Entry::Occupied(_) => {
+                        return Err(Error(format!("redefine {}", name.data)));
+                    }
+                    std::collections::hash_map::Entry::Vacant(v) => {
+                        let self_name: &'a str = bump.alloc_str(&name.data);
+                        v.insert(DeclEntryF {
+                            vt: v_xcell(bump.alloc(XCell::Decl(self_name))),
+                            va: vtyp,
+                            prim: None,
+                        });
+                    }
                 }
-                // 递归（L13 `fake_bind` 的另一半，与参考版同款）：先登记指向
-                // 自身的中性占位，体检查期间 Var 经 decl 表回退命中，检查完成
-                // 后用真实值覆盖（下方重新 insert）。检查失败时 run 整体 Err
-                // 退出，占位不会外泄。
-                let self_name: &'a str = bump.alloc_str(&name.data);
-                self.decls.insert(
-                    name.data.clone(),
-                    DeclEntryF {
-                        vt: v_xcell(bump.alloc(XCell::Decl(self_name))),
-                        va: vtyp,
-                        prim: None,
-                    },
-                );
                 let t_tm = self.check(bump, cxt, &bod, vtyp)?;
                 let vt = self.eval(bump, cxt.env, t_tm);
-                // decl 表登记（运行期按名取值：string_to_global_type 等）
-                self.decls.insert(
-                    name.data.clone(),
-                    DeclEntryF {
-                        vt,
-                        va: vtyp,
-                        prim: None,
-                    },
-                );
+                // decl 表终值原地覆写（运行期按名取值：string_to_global_type
+                // 等）：占位刚插入且无中途删除路径，get_mut 必命中，免二次
+                // key 克隆
+                if let Some(slot) = self.decls.get_mut(name.data.as_str()) {
+                    slot.vt = vt;
+                }
                 let cxt2 = self.define_name(bump, cxt, &name.data, typ_tm, t_tm, vt, vtyp);
                 Ok((
                     DeclOut::Def {
@@ -3801,7 +3893,7 @@ impl Machine {
         let mut cxt = Cxt::empty();
         // String
         self.decls.insert(
-            "String".to_owned(),
+            SmolStr::new("String"),
             DeclEntryF {
                 vt: v_lit_ty(),
                 va: v_u(),
@@ -3921,7 +4013,7 @@ impl Machine {
             let va = self.eval(bump, EMPTY_ENV, ty);
             let head = v_xcell(bump.alloc(XCell::Decl(bump.alloc_str(name))));
             self.decls.insert(
-                name.to_owned(),
+                SmolStr::new(name),
                 DeclEntryF {
                     vt: head,
                     va,
