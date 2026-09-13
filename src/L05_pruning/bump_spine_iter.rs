@@ -105,6 +105,43 @@ struct LCons<'a> {
     /// `Some` = define（闭成 Let），`None` = binder（闭成显式 Π）。
     t_t: Option<&'a Tm<'a>>,
     next: Option<&'a LCons<'a>>,
+    /// 链形态缓存：`Some(k)` = 自本节点起头 k 个全是 bind 槽且其后全
+    /// define（`k=0` = 纯 define 链）。构造时 O(1) 维护，
+    /// [`bind_prefix_of_telescope`] 读缓存 O(1)——旧实现每次全链走查
+    /// O(D)，fresh_meta 每定义 4-6 次 → prune 负载 O(D²)（k=13 实测
+    /// 21 s，评审 D-F1）。
+    prefix: Option<u32>,
+}
+
+impl<'a> LCons<'a> {
+    /// 构造 + 形态缓存维护（bind：1 + 后继缓存；define：后继为空或纯
+    /// define 链才 `Some(0)`，交错/未知一律 `None` 走回退）。
+    fn alloc(
+        bump: &'a Bump,
+        name: &'a str,
+        a_t: &'a Tm<'a>,
+        t_t: Option<&'a Tm<'a>>,
+        next: Option<&'a LCons<'a>>,
+    ) -> &'a LCons<'a> {
+        let prefix = match t_t {
+            None => match next {
+                None => Some(1),
+                Some(n) => n.prefix.map(|k| k + 1),
+            },
+            Some(_) => match next {
+                None => Some(0),
+                Some(n) if n.prefix == Some(0) => Some(0),
+                _ => None,
+            },
+        };
+        bump.alloc(LCons {
+            name,
+            a_t,
+            t_t,
+            next,
+            prefix,
+        })
+    }
 }
 
 // values（打包值）
@@ -2146,12 +2183,7 @@ impl Machine {
                 source: true,
                 next: cxt.types,
             })),
-            locals: Some(bump.alloc(LCons {
-                name: bump.alloc_str(x),
-                a_t,
-                t_t: None,
-                next: cxt.locals,
-            })),
+            locals: Some(LCons::alloc(bump, bump.alloc_str(x), a_t, None, cxt.locals)),
             pruning: Some(bump.alloc(PrCons::new(Some(Icit::Expl), cxt.pruning))),
             binds: cxt.binds + 1,
             lvl: cxt.lvl + 1,
@@ -2181,12 +2213,7 @@ impl Machine {
                 source: false,
                 next: cxt.types,
             })),
-            locals: Some(bump.alloc(LCons {
-                name: bump.alloc_str(x),
-                a_t,
-                t_t: None,
-                next: cxt.locals,
-            })),
+            locals: Some(LCons::alloc(bump, bump.alloc_str(x), a_t, None, cxt.locals)),
             pruning: Some(bump.alloc(PrCons::new(Some(Icit::Expl), cxt.pruning))),
             binds: cxt.binds + 1,
             lvl: cxt.lvl + 1,
@@ -2222,12 +2249,7 @@ impl Machine {
                 source: true,
                 next: cxt.types,
             })),
-            locals: Some(bump.alloc(LCons {
-                name: bump.alloc_str(x),
-                a_t,
-                t_t: Some(t_t),
-                next: cxt.locals,
-            })),
+            locals: Some(LCons::alloc(bump, bump.alloc_str(x), a_t, Some(t_t), cxt.locals)),
             pruning: Some(bump.alloc(PrCons::new(None, cxt.pruning))),
             binds: cxt.binds, // define 槽不产生 Π 层
             lvl: cxt.lvl + 1,
@@ -2766,12 +2788,13 @@ impl Machine {
                     let cxt2 = Cxt {
                         env: env_ext(bump, cxt.env, v_lvl(cxt.lvl)),
                         types: cxt.types,
-                        locals: Some(bump.alloc(LCons {
-                            name: PI_NAME,
+                        locals: Some(LCons::alloc(
+                            bump,
+                            PI_NAME,
                             a_t,
-                            t_t: None,
-                            next: cxt.locals,
-                        })),
+                            None,
+                            cxt.locals,
+                        )),
                         pruning: Some(bump.alloc(PrCons::new(Some(Icit::Expl), cxt.pruning))),
                         binds: cxt.binds + 1, // 合成 binder 也是绑定槽
                         lvl: cxt.lvl + 1,
@@ -2868,22 +2891,9 @@ impl Machine {
 /// locals 链形态判定：头部连续 `t_t: None`（bind 槽）段之后是否全为
 /// define（`t_t: Some`）到链尾。是 → 返回 bind 段长度 k（可为 0）；链中
 /// define 之后还有 bind（交错）→ None（fresh_meta 回退全 close 路径）。
-fn bind_prefix_of_telescope(mut ls: Option<&LCons<'_>>) -> Option<u32> {
-    let mut k = 0u32;
-    while let Some(n) = ls {
-        if n.t_t.is_none() {
-            k += 1;
-            ls = n.next;
-        } else {
-            break;
-        }
-    }
-    for n in std::iter::successors(ls, |l| l.next) {
-        if n.t_t.is_none() {
-            return None;
-        }
-    }
-    Some(k)
+fn bind_prefix_of_telescope(ls: Option<&LCons<'_>>) -> Option<u32> {
+    // O(1) 读构造期缓存（语义同旧全链走查；缓存规则见 LCons::alloc）。
+    ls.and_then(|n| n.prefix)
 }
 
 /// 项里是否含自由 `Var`（按 binder 深度算：Lam/Pi 体、Let 体 +1）。
