@@ -5524,7 +5524,8 @@ pub(crate) struct Machine {
     /// decl 时合计量级 ~秒），索引后 O(命中数)。登记点（fake_bind /
     /// decl_reg_in）增量维护；同键重复登记（fake 占位 → 真值覆盖）会产生
     /// 重复条目，查询侧 dedup。decls 只增不删，轮界 clear。
-    decl_suffix_index: FxHashMap<SmolStr, Vec<SmolStr>>,
+    decl_suffix_index: FxHashMap<SmolStr, Rc<Vec<SmolStr>>>,
+    suffix_indexed_keys: FxHashSet<SmolStr>,
     /// `BindingName.mk` 的解析缓存（含 package 前缀的限定形态）。精确键
     /// 存在时各查询点本就走 O(1) contains_key；此缓存只加速「键带前缀」
     /// 的 `keys().find(ends_with)` 兜底——旧实现每次全表扫。首见即冻结
@@ -5608,6 +5609,7 @@ impl Machine {
             quote_memo: FxHashMap::default(),
             tstate: TraitState::default(),
             decl_suffix_index: FxHashMap::default(),
+            suffix_indexed_keys: FxHashSet::default(),
             binding_name_mk: None,
             ns_method_cache: None,
             trait_metas: Vec::new(),
@@ -5645,6 +5647,7 @@ impl Machine {
         self.tm_import.clear();
         self.val_import.clear();
         self.decl_suffix_index.clear();
+        self.suffix_indexed_keys.clear();
         self.binding_name_mk = None;
         self.ns_method_cache = None;
         self.clear_observation_tables();
@@ -5967,6 +5970,30 @@ impl Machine {
 
     /// Var 后缀 fallback 的 namespace 方法键集（按链头指针缓存）——与
     /// 「现场沿 `cxt.namespace` 链重建」逐字同集，链头不变时 O(1)。
+    /// [`Self::ns_method_keys_for`] 的成员查询版：缓存命中时免克隆整表
+    /// （查询侧原 clone FxHashSet → std HashSet 两头重建，缓存被抵消）。
+    fn ns_is_method_key(&mut self, head: Option<&NsCons<'_>>, key: &SmolStr) -> bool {
+        let key_ptr = head.map(|n| n as *const _ as usize).unwrap_or(0);
+        if self
+            .ns_method_cache
+            .as_ref()
+            .map_or(true, |(k, _)| *k != key_ptr)
+        {
+            let mut set = FxHashSet::default();
+            let mut cur = head;
+            while let Some(ns) = cur {
+                for m in ns.methods.iter() {
+                    set.insert(SmolStr::new(format!("{}.{}", ns.type_name, m)));
+                }
+                cur = ns.next;
+            }
+            self.ns_method_cache = Some((key_ptr, set));
+        }
+        self.ns_method_cache
+            .as_ref()
+            .map_or(false, |(_, s)| s.contains(key.as_str()))
+    }
+
     fn ns_method_keys_for(&mut self, head: Option<&NsCons<'_>>) -> FxHashSet<SmolStr> {
         let key = head.map(|n| n as *const _ as usize).unwrap_or(0);
         if self
@@ -5996,12 +6023,19 @@ impl Machine {
     /// 多段键可被较短尾缀命中，只按末段建桶会漏（实测 prelude-hdl
     /// `Add.mk` 解析失败的回归）。
     fn index_decl_key(&mut self, key: &str) {
+        // 同键重复登记（fake 占位→真值覆盖）只索引一次——查询侧原
+        // sort+dedup 每 miss 整桶复制重排 O(n log n)，责任移到写入侧
+        // 一次 O(1) 查集。集合随 decl_suffix_index 同界清空。
+        if !self.suffix_indexed_keys.insert(SmolStr::new(key)) {
+            return;
+        }
         for (i, b) in key.char_indices() {
             if b == '.' {
-                self.decl_suffix_index
+                let e = self
+                    .decl_suffix_index
                     .entry(SmolStr::new(&key[i + 1..]))
-                    .or_default()
-                    .push(SmolStr::new(key));
+                    .or_default();
+                Rc::make_mut(e).push(SmolStr::new(key));
             }
         }
         if key == "BindingName.mk" {
@@ -6531,9 +6565,16 @@ impl Machine {
         // 全参数（含 outParam）force，供实例匹配
         let all_params: Vec<V> =
             self.force_list(bump, &cxt.decls, &params.iter().map(|p| p.val).collect::<Vec<_>>());
+        // goal 参数解码一次（原实现对每个实例重复 v_to_ref_val 同一批
+        // g_arg——纯解码分配 ×C，多实例桶下占该相位大头）。
+        let g_refs: Vec<_> = all_params
+            .iter()
+            .map(|g| v_to_ref_val(&self.spine, &self.defs, *g))
+            .collect();
+        let name_key = SmolStr::new(name);
         // —— Phase 1：轻量过滤（head_index 桶优先 + val_match 确认）——
         let matching_lvls: Vec<crate::parser_lib::Span<SmolStr>> = {
-            let instances = match self.tstate.solver.class_instances.get(&SmolStr::new(name)) {
+            let instances = match self.tstate.solver.class_instances.get(&name_key) {
                 Some(insts) => insts,
                 None => return Ok(None),
             };
@@ -6546,14 +6587,13 @@ impl Machine {
                 }
                 let mut subst = std::collections::HashMap::new();
                 let mut ok = true;
-                for (i, (g_arg, i_arg)) in
-                    all_params.iter().zip(inst.assertion.arguments.iter()).enumerate()
+                for (i, (g_ref, i_arg)) in
+                    g_refs.iter().zip(inst.assertion.arguments.iter()).enumerate()
                 {
                     let is_out = out_param.get(i).copied().unwrap_or(false);
-                    if is_out && is_flex(&self.spine, *g_arg) {
+                    if is_out && is_flex(&self.spine, all_params[i]) {
                         continue;
                     }
-                    let g_ref = v_to_ref_val(&self.spine, &self.defs, *g_arg);
                     if !Synth::val_match(g_ref.as_ref(), i_arg, &mut subst) {
                         ok = false;
                         break;
@@ -8193,11 +8233,12 @@ impl Machine {
                 //（`TypeHead.method`）排除——实例方法只经 `x.m` 分派。
                 #[cfg(feature = "sampler")]
                 crate::sampler::tick();
-                let fallback = format!(".{}", x.data);
                 // 候选从倒排索引取（perf-debt 评审轮：旧实现每 miss 全
                 // decl 表 ends_with 扫描 O(D)）；空候选直接 not in scope
-                // （与旧实现滤空后 matches.len()==0 的出口一致）。
-                let mut candidates = self
+                // （与旧实现滤空后 matches.len()==0 的出口一致）。桶为
+                // Rc 共享（克隆 O(1)），插入侧已按键去重，查询免整桶
+                // 复制与重排序。
+                let candidates = self
                     .decl_suffix_index
                     .get(x.data.as_str())
                     .cloned()
@@ -8208,13 +8249,16 @@ impl Machine {
                         vec![],
                     ));
                 }
-                candidates.sort_unstable();
-                candidates.dedup();
-                let ns_method_keys: std::collections::HashSet<SmolStr> =
-                    self.ns_method_keys_for(cxt.namespace).into_iter().collect();
+                let tail = x.data.as_str();
                 let matches: Vec<(SmolStr, V, crate::parser_lib::Span<()>)> = candidates
                     .iter()
-                    .filter(|k| k.ends_with(&fallback) && k.len() > fallback.len())
+                    .filter(|k| {
+                        // 等价 `k.ends_with(".{tail}") && k.len() > 1+tail.len()`
+                        // （免每 miss 的 format! 分配）
+                        k.len() > tail.len() + 1
+                            && k.ends_with(tail)
+                            && k.as_bytes()[k.len() - tail.len() - 1] == b'.'
+                    })
                     .filter(|k| {
                         // 候选首段必须是 decl 键或本文件可见的 namespace
                         match k.rfind('.') {
@@ -8227,7 +8271,7 @@ impl Machine {
                             None => false,
                         }
                     })
-                    .filter(|k| !ns_method_keys.contains(*k))
+                    .filter(|k| !self.ns_is_method_key(cxt.namespace, k))
                     .filter_map(|k| {
                         cxt.decls.get(k.as_str()).map(|e| (k.clone(), e.vty, e.span))
                     })

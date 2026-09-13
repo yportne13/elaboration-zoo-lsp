@@ -2123,7 +2123,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             let mut err_collect = vec![];
             let mut terms = vec![];
             for tm in decls {
-                match local_infer.infer(&local_cxt, tm.clone()) {
+                // HDL 警告锚点需在 infer 消费 tm 前取好——否则得为它深拷
+                // 整棵 Decl AST（每 decl 一次，随文件线性）。
+                let anchor = decl_span(&tm);
+                match local_infer.infer(&local_cxt, tm) {
                     Ok((x, _, new_cxt)) => {
                         terms.push(x);
                         local_cxt = new_cxt;
@@ -2142,7 +2145,6 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 // Each line is resolved to the offending signal's source span
                 // in the module body (falling back to the module name span).
                 for line in L13_namespace::take_fresh_check_issues(&local_infer) {
-                    let anchor = decl_span(&tm);
                     let span = check_issue_span(text, &line, anchor);
                     let err = L13_namespace::Error(
                         span.map(|_| L13_namespace::format_check_warning(&line)),
@@ -2151,8 +2153,16 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     err_collect.push((err, DiagnosticSeverity::WARNING));
                 }
             }
-            let after_keys: HashSet<SmolStr> = local_cxt.decl.keys().cloned().collect();
-            let new_keys: HashSet<SmolStr> = after_keys.difference(&before_keys).cloned().collect();
+            // 新增键 = after 中 before 没有的键。after 侧只借键收集（免
+            // 每键全量 SmolStr 深拷 ×2），差集后的新增键（少数）才克隆。
+            let new_keys: Vec<SmolStr> = {
+                let after: HashSet<&SmolStr> = local_cxt.decl.keys().collect();
+                after
+                    .into_iter()
+                    .filter(|k| !before_keys.contains(*k))
+                    .cloned()
+                    .collect()
+            };
             // Decision 1-a: on type error, keep the previous successful symbols.
             let has_error = err_collect.iter().any(|(_, sev)| *sev == DiagnosticSeverity::ERROR);
             if !has_error {
@@ -2593,9 +2603,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // L2: import-context completion — `import mylib.<prefix>` /
             // `import mylib.{ <prefix>`.  Runs even when the file is mid-edit
             // (incomplete import → parse error → hover_table absent).
-            let before = rope.byte_slice(0..offset).to_string();
-            let line = before.rsplit('\n').next().unwrap_or("");
-            let mut items = self.import_context_completions(&rope, offset, line);
+            // 只取光标所在行的前缀（原实现拷贝光标前整个文档前缀再
+            // rsplit——百 KB 文件每次补全白拷全文）。offset 恰在换行后
+            // 时 byte_to_line 给下一行、line_to_byte==offset，切片为空，
+            // 与原 rsplit 语义逐字一致。
+            let off = offset.min(rope.len_bytes());
+            let li = rope.byte_to_line(off);
+            let line: String = rope.byte_slice(rope.line_to_byte(li)..off).to_string();
+            let mut items = self.import_context_completions(&rope, offset, &line);
             let mut seen: HashSet<String> = items.iter().map(|i| i.label.clone()).collect();
             // Member-access completions need a successful analysis.
             if let Some(completion_table) = self.completion_entries_owned(uri.as_str()) {
