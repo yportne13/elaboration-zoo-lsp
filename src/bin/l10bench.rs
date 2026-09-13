@@ -56,6 +56,10 @@ mod parser_lib_resilient;
 #[path = "../L10_typeclass/mod.rs"]
 mod L10_typeclass;
 
+#[cfg(feature = "sampler")]
+#[path = "../sampler.rs"]
+mod sampler;
+
 use clap::Parser;
 use mimalloc::MiMalloc;
 use std::time::Instant;
@@ -324,12 +328,21 @@ fn run(cli: Cli) {
                     ts_ss.push(start.elapsed().as_micros());
                 }
                 if want("fast") {
+                    #[cfg(feature = "sampler")]
+                    if std::env::var_os("L10SAMPLE").is_some() {
+                        sampler::enable();
+                    }
                     let start = Instant::now();
                     // 一次性口径：每轮新建（Tycker::new 的 bump 预分配计入
                     // 计时——参考版 Infer::new 的建表同样在 bench_check 内）
                     let mut tycker = Tycker::new();
                     tycker.bench_check_nf(&decls);
                     ts_fast.push(start.elapsed().as_micros());
+                    #[cfg(feature = "sampler")]
+                    if std::env::var_os("L10SAMPLE").is_some() {
+                        let _ = std::fs::create_dir_all("target/bench_out");
+                        sampler::write_folded("target/bench_out/l10_fast.folded").ok();
+                    }
                 }
                 // quote 记忆化口径（有 quote 的负载才出赛）
                 if want("fast_memo") && nf_workload {

@@ -345,6 +345,9 @@ pub(crate) struct EnvCons<'a> {
     next: Option<&'a EnvCons<'a>>,
 }
 
+static DN_TIP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static DN_FB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// `i < binds 深度` → 走链；否则读平坦 def 区域。
 #[inline]
 pub(crate) fn env_nth(defs: &[V], env: Env<'_>, i: u32) -> V {
@@ -410,6 +413,7 @@ pub(crate) fn env_ext_defs<'a>(
     v: V,
 ) -> Env<'a> {
     if env.binds.is_none() && env.flat_base + env.flat_len == defs.len() as u32 {
+        DN_TIP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         defs.push(v);
         Env {
             flat_base: env.flat_base,
@@ -417,6 +421,7 @@ pub(crate) fn env_ext_defs<'a>(
             binds: env.binds,
         }
     } else {
+        DN_FB.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Env {
             flat_base: env.flat_base,
             flat_len: env.flat_len,
@@ -2049,6 +2054,8 @@ fn unify_iter<'a>(
     // Stacked Borrows 下使存活中的字段借用失效，属别名违规）。
     solve_req: &mut Option<u32>,
 ) -> bool {
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
     // 草稿复用（Machine 常驻）：清空保容量，热路径零分配（resume 续跑
     // 不清——挂起点前已把草稿原样恢复；嵌套 unify 的入口 clear 对记忆
@@ -2064,6 +2071,9 @@ fn unify_iter<'a>(
     }
     let memo = &mut conv.memo;
     while let Some(item) = stack.pop() {
+        solve_probe::on().then(|| {
+            solve_probe::C.un_items.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
         let (l, t, u) = match item {
             UItem::Store(key) => {
                 memo.insert(key);
@@ -2291,6 +2301,9 @@ fn unify_iter<'a>(
             let mut args = std::mem::take(&mut conv.scratch1);
             args.clear();
             spine.collect_args(h, &mut args);
+            solve_probe::on().then(|| {
+                solve_probe::C.un_solve_bump.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            });
             let solved = solve_bump(
                 bump, spine, work, vals, icits, defs, metas, globals, ren, l, mv, &args, rhs,
             );
@@ -3321,9 +3334,311 @@ fn lams_from_ty<'a>(
 // Machine（稳态复用）与 elaboration
 // --------------------------------------------------------------------------------
 
+// ==== 临时探针（L10SOLVE_PROBE=1 启用，perf-debt「剩余机会清单」1 的定位；
+// 定位完成后整体删除）====
+mod solve_probe {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::LazyLock;
+
+    pub static ON: LazyLock<bool> =
+        LazyLock::new(|| std::env::var_os("L10SOLVE_PROBE").is_some());
+    static PRINTED: AtomicBool = AtomicBool::new(false);
+
+    /// 全部计数用 fetch_add/fetch_max 累积，elab_all 末尾统一 dump。
+    pub struct Cnt {
+        pub smt_calls: AtomicU64,
+        pub smt_scan: AtomicU64,
+        pub smt_scan_max: AtomicU64,
+        pub smt_prepare: AtomicU64,
+        pub smt_ns: AtomicU64,
+        pub str_calls: AtomicU64,
+        pub str_trait: AtomicU64,
+        pub str_ok: AtomicU64,
+        pub str_fail: AtomicU64,
+        pub str_ns: AtomicU64,
+        pub fm_calls: AtomicU64,
+        pub fm_trait_unsolved: AtomicU64,
+        pub fm_close_calls: AtomicU64,
+        pub fm_k_sum: AtomicU64,
+        pub fm_k_max: AtomicU64,
+        pub metas_max: AtomicU64,
+        pub tw_calls: AtomicU64,
+        pub tw_cand: AtomicU64,
+        pub tw_infer: AtomicU64,
+        pub tw_ns: AtomicU64,
+        pub tw_defs_ns: AtomicU64,
+        pub tw_build_ns: AtomicU64,
+        pub tw_infer_ns: AtomicU64,
+        pub un_calls: AtomicU64,
+        pub un_ns: AtomicU64,
+        pub q_calls: AtomicU64,
+        pub q_ns: AtomicU64,
+        pub e_calls: AtomicU64,
+        pub e_ns: AtomicU64,
+        pub ins_calls: AtomicU64,
+        pub ins_ns: AtomicU64,
+        pub fv_ns: AtomicU64,
+        pub cu_calls: AtomicU64,
+        pub cu_ns: AtomicU64,
+        pub ie_calls: AtomicU64,
+        pub ie_ns: AtomicU64,
+        pub un_items: AtomicU64,
+        pub un_solve_bump: AtomicU64,
+        pub un_eval: AtomicU64,
+        // 自耗时（重入门控：嵌套递归不计入外层）
+        pub ie_self_ns: AtomicU64,
+        pub un_self_ns: AtomicU64,
+        pub ins_self_ns: AtomicU64,
+        pub cu_self_ns: AtomicU64,
+        pub str_self_ns: AtomicU64,
+        pub tw_self_ns: AtomicU64,
+        // infer_expr 臂直方图
+        pub ie_var: AtomicU64,
+        pub ie_obj: AtomicU64,
+        pub ie_app: AtomicU64,
+        pub ie_pi: AtomicU64,
+        pub ie_lam: AtomicU64,
+        pub ie_let: AtomicU64,
+        pub ie_other: AtomicU64,
+        // trait_wrap 分桶：前 64 次 vs 之后（钉单次耗时是否随 def 序号增长）
+        pub tw_early_ns: AtomicU64,
+        pub tw_late_ns: AtomicU64,
+        pub tw_early_max_ns: AtomicU64,
+        pub tw_late_max_ns: AtomicU64,
+        pub defs: AtomicU64,
+        pub def_scan_unsolved: AtomicU64,
+        pub def_scan_trait_unsolved: AtomicU64,
+    }
+
+    /// 自耗时门控：未重入返回 Some(起点)，已重入返回 None。
+    #[inline]
+    pub fn self_t0(busy: &AtomicBool) -> Option<std::time::Instant> {
+        if busy.swap(true, Ordering::Relaxed) {
+            None
+        } else {
+            Some(std::time::Instant::now())
+        }
+    }
+
+    #[inline]
+    pub fn self_end(busy: &AtomicBool, acc: &AtomicU64, t0: Option<std::time::Instant>) {
+        if let Some(t0) = t0 {
+            busy.store(false, Ordering::Relaxed);
+            acc.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// 相位出口：重入未开的 None 不动 busy；Some(t0) 记 cum + 自耗时并开门。
+    #[inline]
+    pub fn phase_end(
+        busy: &AtomicBool,
+        cum: &AtomicU64,
+        self_acc: &AtomicU64,
+        t0: Option<std::time::Instant>,
+    ) {
+        if let Some(t0) = t0 {
+            busy.store(false, Ordering::Relaxed);
+            let d = t0.elapsed().as_nanos() as u64;
+            cum.fetch_add(d, Ordering::Relaxed);
+            self_acc.fetch_add(d, Ordering::Relaxed);
+        }
+    }
+
+    /// trait_wrap 专用出口：同 phase_end，另按调用序号分桶（前 64 次 vs 之后）。
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub fn tw_phase_end(
+        busy: &AtomicBool,
+        cum: &AtomicU64,
+        self_acc: &AtomicU64,
+        t0: Option<std::time::Instant>,
+        idx: u64,
+        early: &AtomicU64,
+        early_max: &AtomicU64,
+        late: &AtomicU64,
+        late_max: &AtomicU64,
+    ) {
+        if let Some(t0) = t0 {
+            busy.store(false, Ordering::Relaxed);
+            let d = t0.elapsed().as_nanos() as u64;
+            cum.fetch_add(d, Ordering::Relaxed);
+            self_acc.fetch_add(d, Ordering::Relaxed);
+            if idx < 64 {
+                early.fetch_add(d, Ordering::Relaxed);
+                early_max.fetch_max(d, Ordering::Relaxed);
+            } else {
+                late.fetch_add(d, Ordering::Relaxed);
+                late_max.fetch_max(d, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub static C: Cnt = Cnt {
+        smt_calls: AtomicU64::new(0),
+        smt_scan: AtomicU64::new(0),
+        smt_scan_max: AtomicU64::new(0),
+        smt_prepare: AtomicU64::new(0),
+        smt_ns: AtomicU64::new(0),
+        str_calls: AtomicU64::new(0),
+        str_trait: AtomicU64::new(0),
+        str_ok: AtomicU64::new(0),
+        str_fail: AtomicU64::new(0),
+        str_ns: AtomicU64::new(0),
+        fm_calls: AtomicU64::new(0),
+        fm_trait_unsolved: AtomicU64::new(0),
+        fm_close_calls: AtomicU64::new(0),
+        fm_k_sum: AtomicU64::new(0),
+        fm_k_max: AtomicU64::new(0),
+        metas_max: AtomicU64::new(0),
+        tw_calls: AtomicU64::new(0),
+        tw_cand: AtomicU64::new(0),
+        tw_infer: AtomicU64::new(0),
+        tw_ns: AtomicU64::new(0),
+        tw_defs_ns: AtomicU64::new(0),
+        tw_build_ns: AtomicU64::new(0),
+        tw_infer_ns: AtomicU64::new(0),
+        un_calls: AtomicU64::new(0),
+        un_ns: AtomicU64::new(0),
+        q_calls: AtomicU64::new(0),
+        q_ns: AtomicU64::new(0),
+        e_calls: AtomicU64::new(0),
+        e_ns: AtomicU64::new(0),
+        ins_calls: AtomicU64::new(0),
+        ins_ns: AtomicU64::new(0),
+        fv_ns: AtomicU64::new(0),
+        cu_calls: AtomicU64::new(0),
+        cu_ns: AtomicU64::new(0),
+        ie_calls: AtomicU64::new(0),
+        ie_ns: AtomicU64::new(0),
+        un_items: AtomicU64::new(0),
+        un_solve_bump: AtomicU64::new(0),
+        un_eval: AtomicU64::new(0),
+        ie_self_ns: AtomicU64::new(0),
+        un_self_ns: AtomicU64::new(0),
+        ins_self_ns: AtomicU64::new(0),
+        cu_self_ns: AtomicU64::new(0),
+        str_self_ns: AtomicU64::new(0),
+        tw_self_ns: AtomicU64::new(0),
+        ie_var: AtomicU64::new(0),
+        ie_obj: AtomicU64::new(0),
+        ie_app: AtomicU64::new(0),
+        ie_pi: AtomicU64::new(0),
+        ie_lam: AtomicU64::new(0),
+        ie_let: AtomicU64::new(0),
+        ie_other: AtomicU64::new(0),
+        tw_early_ns: AtomicU64::new(0),
+        tw_late_ns: AtomicU64::new(0),
+        tw_early_max_ns: AtomicU64::new(0),
+        tw_late_max_ns: AtomicU64::new(0),
+        defs: AtomicU64::new(0),
+        def_scan_unsolved: AtomicU64::new(0),
+        def_scan_trait_unsolved: AtomicU64::new(0),
+    };
+
+    // 自耗时的重入门控标志（单线程机，Relaxed 即可）
+    pub static B_IE: AtomicBool = AtomicBool::new(false);
+    pub static B_UN: AtomicBool = AtomicBool::new(false);
+    pub static B_INS: AtomicBool = AtomicBool::new(false);
+    pub static B_CU: AtomicBool = AtomicBool::new(false);
+    pub static B_STR: AtomicBool = AtomicBool::new(false);
+    pub static B_TW: AtomicBool = AtomicBool::new(false);
+
+    #[inline]
+    pub fn on() -> bool {
+        *ON
+    }
+
+    /// elab_all 末尾统一打印（每进程一次，防 parity 多用例刷屏）。
+    pub fn dump() {
+        if !*ON || PRINTED.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let g = |x: &AtomicU64| x.load(Ordering::Relaxed);
+        eprintln!(
+            "[L10SOLVE_PROBE] CLOSE: calls={} k_sum={} k_avg={} k_max={} | flat_env_paths_ok",
+            g(&C.fm_close_calls),
+            g(&C.fm_k_sum),
+            if g(&C.fm_close_calls) > 0 { g(&C.fm_k_sum) / g(&C.fm_close_calls) } else { 0 },
+            g(&C.fm_k_max),
+        );
+        eprintln!(
+            "[L10SOLVE_PROBE] env_ext_defs: tip={} fallback={}",
+            g(&super::DN_TIP),
+            g(&super::DN_FB),
+        );
+        eprintln!(
+            "[L10SOLVE_PROBE] defs={} metas_max={} | solve_multi: calls={} scan_sum={} scan_max={} prepare_sum={} time={:.1}ms | solve_trait: calls={} trait={} synth_ok={} synth_fail={} time={:.1}ms | fresh_meta: calls={} trait_unsolved_push={} | trait_wrap: calls={} cand={} infer={} time={:.1}ms (defs收集={:.1}ms raw构建={:.1}ms wrapper_infer={:.1}ms) | def臂扫描: Σunsolved={} Σtrait_unsolved={} | 相位cum: unify={}(cum {:.1}ms) quote={}(cum {:.1}ms) eval={}(cum {:.1}ms) insert_go={}(cum {:.1}ms) force_v cum={:.1}ms check_univ={}(cum {:.1}ms) infer_expr={}(cum {:.1}ms) | unify内部: items={} solve_bump={} eval/η={}",
+            g(&C.defs),
+            g(&C.metas_max),
+            g(&C.smt_calls),
+            g(&C.smt_scan),
+            g(&C.smt_scan_max),
+            g(&C.smt_prepare),
+            g(&C.smt_ns) as f64 / 1e6,
+            g(&C.str_calls),
+            g(&C.str_trait),
+            g(&C.str_ok),
+            g(&C.str_fail),
+            g(&C.str_ns) as f64 / 1e6,
+            g(&C.fm_calls),
+            g(&C.fm_trait_unsolved),
+            g(&C.tw_calls),
+            g(&C.tw_cand),
+            g(&C.tw_infer),
+            g(&C.tw_ns) as f64 / 1e6,
+            g(&C.tw_defs_ns) as f64 / 1e6,
+            g(&C.tw_build_ns) as f64 / 1e6,
+            g(&C.tw_infer_ns) as f64 / 1e6,
+            g(&C.def_scan_unsolved),
+            g(&C.def_scan_trait_unsolved),
+            g(&C.un_calls),
+            g(&C.un_ns) as f64 / 1e6,
+            g(&C.q_calls),
+            g(&C.q_ns) as f64 / 1e6,
+            g(&C.e_calls),
+            g(&C.e_ns) as f64 / 1e6,
+            g(&C.ins_calls),
+            g(&C.ins_ns) as f64 / 1e6,
+            g(&C.fv_ns) as f64 / 1e6,
+            g(&C.cu_calls),
+            g(&C.cu_ns) as f64 / 1e6,
+            g(&C.ie_calls),
+            g(&C.ie_ns) as f64 / 1e6,
+            g(&C.un_items),
+            g(&C.un_solve_bump),
+            g(&C.un_eval),
+        );
+        eprintln!(
+            "[L10SOLVE_PROBE] 自耗时: infer_expr={:.1}ms unify={:.1}ms insert_go={:.1}ms check_univ={:.1}ms solve_trait={:.1}ms trait_wrap={:.1}ms | infer_expr臂: Var={} Obj={} App={} Pi={} Lam={} Let={} 其他={} | tw分桶: 前64次Σ={:.1}ms max={:.1}ms / 之后Σ={:.1}ms max={:.1}ms",
+            g(&C.ie_self_ns) as f64 / 1e6,
+            g(&C.un_self_ns) as f64 / 1e6,
+            g(&C.ins_self_ns) as f64 / 1e6,
+            g(&C.cu_self_ns) as f64 / 1e6,
+            g(&C.str_self_ns) as f64 / 1e6,
+            g(&C.tw_self_ns) as f64 / 1e6,
+            g(&C.ie_var),
+            g(&C.ie_obj),
+            g(&C.ie_app),
+            g(&C.ie_pi),
+            g(&C.ie_lam),
+            g(&C.ie_let),
+            g(&C.ie_other),
+            g(&C.tw_early_ns) as f64 / 1e6,
+            g(&C.tw_early_max_ns) as f64 / 1e6,
+            g(&C.tw_late_ns) as f64 / 1e6,
+            g(&C.tw_late_max_ns) as f64 / 1e6,
+        );
+    }
+}
+// ==== 临时探针结束 ====
+
 /// 名字表快照（参考版 BiMap 的 map1/map2 同构；**随 Cxt 克隆**——
-/// bind/define/fake_bind 克隆整表插入，与参考版 `src_names.clone()` 的
+/// bind/define/fake_bind 克隆插入，与参考版 `src_names.clone()` 的
 /// 逐上下文隔离语义逐字对应，无需撤销轨迹）。
+///
+/// 只装**当前 def 的局部条目**（binder + fake 占位；顶层 define 已迁
+/// [`Machine::global_names`]，perf-debt P2）——表大小 = 当前 def 的
+/// binder 数（个位数），每 binder 克隆 O(1)。
 #[derive(Clone, Default)]
 struct Names {
     /// 名字 → 层级（map1：只收源码 binder 与 fake_bind；inserted binder
@@ -3354,6 +3669,16 @@ pub(crate) struct Machine {
     /// 层级的 Rigid）先压入、检查后覆盖。每轮清空（参考版每次调用新建
     /// Infer 的 global 表）。
     globals: Vec<V>,
+    /// 全局名字表（顶层 define 的 名字 → (层级, 类型)）：Machine 独有的
+    /// append-only 表，**不随 Cxt 克隆**（与 L11+ 的 decls 表同角色；
+    /// perf-debt P2：旧设计顶层 define 累积进 Cxt 的 names 快照，
+    /// bind_name 每 binder 克隆整表 O(D²)）。查找顺序：Cxt 局部 names
+    /// 优先（当前 def 的 binder + fake 占位），之后回落本表。每轮清空。
+    global_names: FxHashMap<SmolStr, (u32, V)>,
+    /// globals 的中性视图缓存：neutral[i] == v_lvl(i + GLOBAL_BASE)，
+    /// 随 globals 同步 push。quote/eval/unify 包装器的旧实现每次
+    /// neutral_of(&self.globals) 整拷 O(D)，现按字段借用 O(1)。每轮清空。
+    neutral: Vec<V>,
     /// eval / quote / unify 的可复用工作栈。`'static` 仅是**存放口径**：
     /// 进核前 clear，借出期间写入的当轮条目不跨调用存活——与 `conv` /
     /// `icits` 的「进核前 clear」纪律同款。`W`/`QJob`/`UItem` 均为无 Drop
@@ -3388,6 +3713,8 @@ impl Machine {
             metas: Vec::new(),
             ren: RenBuf::default(),
             globals: Vec::new(),
+            global_names: FxHashMap::default(),
+            neutral: Vec::new(),
             eval_work: Vec::new(),
             quote_tasks: Vec::new(),
             quote_done: Vec::new(),
@@ -3406,6 +3733,8 @@ impl Machine {
         self.metas.clear();
         self.defs.clear();
         self.globals.clear();
+        self.global_names.clear();
+        self.neutral.clear();
         self.spine.stack.clear();
         self.tstate = TraitState::default();
     }
@@ -3550,9 +3879,16 @@ impl Machine {
         val: V,
         ty: V,
     ) -> Cxt<'a> {
+        // 真名进 Machine 全局表（append-only，不随 Cxt 克隆——perf-debt
+        // P2），并撤除 fake_bind 留在局部 names 里的同名占位（by_name 旧
+        // 键即其 by_lvl 键；prime_round 的 builtin 注册无占位，remove
+        // 为 no-op）。
+        self.global_names
+            .insert(SmolStr::new(x), (cxt.lvl, ty));
         let names = Rc::make_mut(&mut cxt.names);
-        names.by_name.insert(SmolStr::new(x), cxt.lvl);
-        names.by_lvl.insert(cxt.lvl, ty);
+        if let Some(old_lvl) = names.by_name.remove(x) {
+            names.by_lvl.remove(&old_lvl);
+        }
         cxt.env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
         cxt.types = Some(bump.alloc(TCons {
             name: bump.alloc_str(x),
@@ -3587,6 +3923,11 @@ impl Machine {
     /// 与参考版逐值同轨。改读快照会拿到精化后的值：孪生的契约是与参考版
     /// Ok 输出逐字节一致，不是比参考版更正确。
     fn fresh_meta<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, a: V) -> &'a Tm<'a> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        solve_probe::on().then(|| {
+            solve_probe::C.fm_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
         // L10：trait 类型先试实例合成（成功 → 直接给实例项）；
         // trait Sum → 裸 Meta（无 AppPruning 掩码）
         if let Ok(Some((tm, _))) = self.solve_trait_ref(bump, cxt, a) {
@@ -3600,6 +3941,10 @@ impl Machine {
         if is_trait_sum {
             let m = self.metas.len() as u32;
             self.metas.push(MetaEntry::Unsolved(a));
+            solve_probe::on().then(|| {
+                solve_probe::C.fm_trait_unsolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                solve_probe::C.metas_max.fetch_max(self.metas.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            });
             return bump.alloc(Tm::Meta(m));
         }
         let mty = if cxt.binds == 0 && matches!(v_tag(a), 3 | 5 | 6) {
@@ -3609,24 +3954,59 @@ impl Machine {
             if cxt.binds == 0 && !has_free_var(q) {
                 self.eval(bump, EMPTY_ENV, q)
             } else {
-                let closed = self.close_tm(bump, cxt.locals, q);
-                self.eval(bump, EMPTY_ENV, closed)
+                // 全局段免包装（perf-debt 实现轮：L10 traitchain O(D²) 主因）。
+                // locals 链的历史 def 段每顶层 def 一条（O(D)），旧路径每次
+                // fresh_meta 物化 O(D) 个 Let 并逐条重求值其值项。现只包当前
+                // def 的 k = cxt.lvl - flat_len 个局部条目，以平坦区
+                // （defs[flat_base..+flat_len]，登记时已求值的 def 值）为基底
+                // 环境求值：包裹 k 层后闭包捕获平坦区，q 的全局引用下标
+                // i = D+k-1-ℓ 在应用期落位链外第 i-k 槽 = defs[ℓ]，与全量
+                // 包装逐值同轨（eval 确定性 + solve 写一次单调 ⇒ 重求值 ≡
+                // 登记值；孪生其余全部取值点本就读登记值）。平坦区被
+                // update_cxt 溶解（flat_len = 0，纯链环境）时 k = cxt.lvl，
+                // 退化为全量包装 + 空环境，与旧路径逐字一致。
+                let flat_len = cxt.env.flat_len;
+                let k = cxt.lvl as usize - flat_len as usize;
+                solve_probe::C.fm_close_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                solve_probe::C.fm_k_sum.fetch_add(k as u64, std::sync::atomic::Ordering::Relaxed);
+                solve_probe::C.fm_k_max.fetch_max(k as u64, std::sync::atomic::Ordering::Relaxed);
+                let global_env = Env {
+                    flat_base: cxt.env.flat_base,
+                    flat_len,
+                    binds: None,
+                };
+                if k == 0 {
+                    self.eval(bump, global_env, q)
+                } else {
+                    let closed = self.close_tm_until(bump, cxt.locals, k, q);
+                    self.eval(bump, global_env, closed)
+                }
             }
         };
         let m = self.metas.len() as u32;
         self.metas.push(MetaEntry::Unsolved(mty));
+        solve_probe::on().then(|| {
+            solve_probe::C.metas_max.fetch_max(self.metas.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        });
         bump.alloc(Tm::AppPruning(bump.alloc(Tm::Meta(m)), cxt.pruning))
     }
 
     /// 沿 telescope 链闭包（Bind → 显式 Π、Define → Let）。
-    fn close_tm<'a>(
+    /// 闭类型（参考版 `close_ty` 的截断化）：沿 locals 链头包 `k` 个条目
+    /// （`Bind` 槽闭成显式 Π、`Define` 槽闭成 Let），`k` 超过链长时包完整
+    /// 链。`fresh_meta` 的全局段免包装只传当前 def 的局部条目数
+    /// `k = cxt.lvl - flat_len`——平坦区被 update_cxt 溶解后 `k = cxt.lvl`
+    /// 恰好全额（见其函数注释的逐值同轨论证）。
+    fn close_tm_until<'a>(
         &self,
         bump: &'a Bump,
         mut ls: Option<&'a LCons<'a>>,
+        k: usize,
         q: &'a Tm<'a>,
     ) -> &'a Tm<'a> {
         let mut b = q;
-        while let Some(n) = ls {
+        for _ in 0..k {
+            let Some(n) = ls else { break };
             b = match n.t_t {
                 None => bump.alloc(Tm::Pi(n.name, Icit::Expl, n.a_t, b)),
                 Some(t) => bump.alloc(Tm::Let(n.name, n.a_t, t, b)),
@@ -3657,6 +4037,12 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn eval<'a>(&mut self, bump: &'a Bump, env: Env<'a>, tm: &'a Tm<'a>) -> V {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = solve_probe::on().then(|| {
+            solve_probe::C.e_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::time::Instant::now()
+        });
         let Machine {
             spine,
             vals,
@@ -3664,6 +4050,7 @@ impl Machine {
             defs,
             metas,
             globals,
+            neutral,
             eval_work,
             ..
         } = self;
@@ -3673,22 +4060,26 @@ impl Machine {
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(eval_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         work.clear();
-        eval_iter(
+        let r = eval_iter(
             bump, spine, work, vals, icits, defs, metas, globals, env, tm,
-        )
+        );
+        if let Some(t0) = probe_t0 {
+            solve_probe::C.e_ns.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
     }
 
     /// 中性 global 视图下的 eval（卡住 match 分支体的重求值——参考版
     /// avoid_recursive 克隆：全局值全部换成指向自身大层级的 Rigid）。
     #[allow(clippy::unnecessary_cast)]
     fn eval_neutral<'a>(&mut self, bump: &'a Bump, env: Env<'a>, tm: &'a Tm<'a>) -> V {
-        let neutral = neutral_of(&self.globals);
         let Machine {
             spine,
             vals,
             icits,
             defs,
             metas,
+            neutral,
             eval_work,
             ..
         } = self;
@@ -3696,7 +4087,7 @@ impl Machine {
             unsafe { &mut *(eval_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         work.clear();
         eval_iter(
-            bump, spine, work, vals, icits, defs, metas, &neutral, env, tm,
+            bump, spine, work, vals, icits, defs, metas, neutral, env, tm,
         )
     }
 
@@ -3704,7 +4095,12 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let neutral = neutral_of(&self.globals);
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = solve_probe::on().then(|| {
+            solve_probe::C.q_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::time::Instant::now()
+        });
         let Machine {
             spine,
             vals,
@@ -3712,6 +4108,7 @@ impl Machine {
             defs,
             metas,
             globals,
+            neutral,
             quote_tasks,
             quote_done,
             quote_work,
@@ -3728,7 +4125,7 @@ impl Machine {
         tasks.clear();
         done.clear();
         work.clear();
-        quote_iter(
+        let r = quote_iter(
             bump,
             spine,
             tasks,
@@ -3739,11 +4136,15 @@ impl Machine {
             defs,
             metas,
             globals,
-            &neutral,
+            neutral,
             level,
             v,
             None,
-        )
+        );
+        if let Some(t0) = probe_t0 {
+            solve_probe::C.q_ns.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
     }
 
     /// quote 的记忆化口径（表容量跨调用复用、内容每次调用 clear，绝不跨
@@ -3752,7 +4153,6 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let neutral = neutral_of(&self.globals);
         let Machine {
             spine,
             vals,
@@ -3760,6 +4160,7 @@ impl Machine {
             defs,
             metas,
             globals,
+            neutral,
             quote_tasks,
             quote_done,
             quote_work,
@@ -3792,7 +4193,7 @@ impl Machine {
             defs,
             metas,
             globals,
-            &neutral,
+            neutral,
             level,
             v,
             Some(&mut *memo),
@@ -3811,7 +4212,14 @@ impl Machine {
         u: V,
         trait_err: &mut Option<String>,
     ) -> bool {
-        let neutral = neutral_of(&self.globals);
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = if solve_probe::on() {
+            solve_probe::C.un_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::self_t0(&solve_probe::B_UN)
+        } else {
+            None
+        };
         // trait 合成与字段借用的分离（SB 别名安全）：unify_iter 遇到「flex
         // 解开后需跑 trait 合成」的点不再经裸指针重建整机 &mut（旧实现
         // 在字段借用存活时 `(&mut *mach_ptr).solve_multi_trait_ref(..)`，
@@ -3831,6 +4239,7 @@ impl Machine {
                 defs,
                 metas,
                 globals,
+                neutral,
                 ren,
                 conv,
                 unify_work,
@@ -3848,15 +4257,20 @@ impl Machine {
                 stack.clear();
             }
             if unify_iter(
-                bump, spine, work, stack, vals, icits, defs, metas, globals, &neutral, ren, conv,
+                bump, spine, work, stack, vals, icits, defs, metas, globals, neutral, ren, conv,
                 l, t, u, resume, &mut solve_req,
             ) {
+                solve_probe::phase_end(&solve_probe::B_UN, &solve_probe::C.un_ns, &solve_probe::C.un_self_ns, probe_t0);
                 return true;
             }
             // None = 真实失败；Some(m) = trait 合成挂起（solve 后续跑）
-            let Some(m) = solve_req.take() else { return false };
+            let Some(m) = solve_req.take() else {
+                solve_probe::phase_end(&solve_probe::B_UN, &solve_probe::C.un_ns, &solve_probe::C.un_self_ns, probe_t0);
+                return false;
+            };
             if let Err(e) = self.solve_multi_trait_ref(bump, cxt, m) {
                 *trait_err = Some(e);
+                solve_probe::phase_end(&solve_probe::B_UN, &solve_probe::C.un_ns, &solve_probe::C.un_self_ns, probe_t0);
                 return false;
             }
             resume = true;
@@ -3871,6 +4285,7 @@ impl Machine {
         cxt: &Cxt<'a>,
         m: u32,
     ) -> Result<(), String> {
+        let probe_t0 = solve_probe::on().then(std::time::Instant::now);
         let prepare: Vec<(u32, V)> = self
             .metas
             .get(m as usize..)
@@ -3882,11 +4297,33 @@ impl Machine {
                 _ => None,
             })
             .collect();
+        if let Some(t0) = probe_t0 {
+            solve_probe::C.smt_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let scan = self.metas.len().saturating_sub(m as usize) as u64;
+            solve_probe::C.smt_scan.fetch_add(scan, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::C.smt_scan_max.fetch_max(scan, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::C.smt_prepare.fetch_add(prepare.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            // def 臂（m == 0）：顺带钉每 def 扫描时表中未解 / 未解 trait 形态数
+            if m == 0 {
+                solve_probe::C.defs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                for (_, v) in prepare.iter() {
+                    if v_tag(*v) == 7
+                        && matches!(v_xcell_of(*v), XCell::Sum { is_trait: true, .. })
+                    {
+                        solve_probe::C.def_scan_trait_unsolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                solve_probe::C.def_scan_unsolved.fetch_add(prepare.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         for (idx, x) in prepare {
             let solved = self.solve_trait_ref(bump, cxt, x)?;
             if let Some((_, val)) = solved {
                 self.metas[(idx + m) as usize] = MetaEntry::Solved(val, x);
             }
+        }
+        if let Some(t0) = probe_t0 {
+            solve_probe::C.smt_ns.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         }
         Ok(())
     }
@@ -3894,6 +4331,25 @@ impl Machine {
     /// 参考 `Infer::solve_trait`：x 是 trait Sum → 查实例表合成；命中给
     /// (实例项, 实例值)，失败给 Err 文案，非 trait 给 None。
     fn solve_trait_ref<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        x: V,
+    ) -> Result<Option<(&'a Tm<'a>, V)>, String> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = if solve_probe::on() {
+            solve_probe::C.str_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::self_t0(&solve_probe::B_STR)
+        } else {
+            None
+        };
+        let r = self.solve_trait_ref_inner(bump, cxt, x);
+        solve_probe::phase_end(&solve_probe::B_STR, &solve_probe::C.str_ns, &solve_probe::C.str_self_ns, probe_t0);
+        r
+    }
+
+    fn solve_trait_ref_inner<'a>(
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
@@ -3907,6 +4363,9 @@ impl Machine {
         if !is_trait_sum {
             return Ok(None);
         }
+        solve_probe::on().then(|| {
+            solve_probe::C.str_trait.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
         let (name, params) = match v_xcell_of(x) {
             XCell::Sum { name, params, .. } => (*name, *params),
             _ => unreachable!(),
@@ -3940,6 +4399,13 @@ impl Machine {
             name: name.to_string(),
             arguments: args,
         });
+        if solve_probe::on() {
+            if answer.is_some() {
+                solve_probe::C.str_ok.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                solve_probe::C.str_fail.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
         if let Some(a) = answer {
             // infer_expr(Var 实例名) + insert
             let raw = Raw::Var(crate::parser_lib::Span {
@@ -4007,14 +4473,22 @@ impl Machine {
     /// force 的方法包装（Machine 内 elaboration 侧的散装调用点用；解值
     /// 应用可能 β——分配一律落本轮 bump）。
     fn force_v(&mut self, bump: &Bump, v: V) -> V {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = solve_probe::on().then(std::time::Instant::now);
         let Machine {
             spine,
             defs,
             metas,
             globals,
+            neutral,
             ..
         } = self;
-        force(bump, spine, defs, metas, globals, v)
+        let r = force(bump, spine, defs, metas, globals, v);
+        if let Some(t0) = probe_t0 {
+            solve_probe::C.fv_ns.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        r
     }
 
     // 隐式插入（上游 Elaboration.hs 的 insert 族）
@@ -4022,6 +4496,26 @@ impl Machine {
 
     /// `insert'`：类型的隐式 Pi 前缀逐个补 fresh meta 实参。
     fn insert_go<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t: &'a Tm<'a>,
+        va: V,
+    ) -> (&'a Tm<'a>, V) {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = if solve_probe::on() {
+            solve_probe::C.ins_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::self_t0(&solve_probe::B_INS)
+        } else {
+            None
+        };
+        let r = self.insert_go_inner(bump, cxt, t, va);
+        solve_probe::phase_end(&solve_probe::B_INS, &solve_probe::C.ins_ns, &solve_probe::C.ins_self_ns, probe_t0);
+        r
+    }
+
+    fn insert_go_inner<'a>(
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
@@ -4112,6 +4606,8 @@ impl Machine {
         t: &Raw,
         a: V,
     ) -> Result<&'a Tm<'a>, Error> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         // force 期望类型后分派（已解 meta 可能展开成 Pi）
         let a = self.force_v(bump, a);
         if let Raw::Lam(x, larg, tbody) = t {
@@ -4208,6 +4704,25 @@ impl Machine {
     // --------------------------------------------------------------------------------
 
     fn check_universe<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t: &Raw,
+    ) -> Result<(&'a Tm<'a>, u32), Error> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = if solve_probe::on() {
+            solve_probe::C.cu_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::self_t0(&solve_probe::B_CU)
+        } else {
+            None
+        };
+        let r = self.check_universe_inner(bump, cxt, t);
+        solve_probe::phase_end(&solve_probe::B_CU, &solve_probe::C.cu_ns, &solve_probe::C.cu_self_ns, probe_t0);
+        r
+    }
+
+    fn check_universe_inner<'a>(
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
@@ -4619,14 +5134,42 @@ impl Machine {
         } else {
             (cxt.lvl - x - 1) as usize
         };
+        // 平坦区保全（perf-debt 实现轮）：精化只落在本 def 的链上槽
+        // （x_prime < 链深）且 walk 不越过链底时，平坦区（已登记 def 值）
+        // 逐值不变——环境保留平坦区、只重接链上前 walk 个槽。旧路径的纯链
+        // 重建会把 defs 平坦区清出环境外：后续顶层 define 的 tip 快路径
+        // 失效（值全进链），fresh_meta 的全局段免包装退化成全量包装，
+        // O(D²) 复活（traitchain 的固定前导含一个 match，旧路径下首个
+        // update_cxt 即触发）。精化到全局槽（x_prime ≥ 链深）时平坦区
+        // 真会被改写，回落纯链重建（旧路径）。
+        let chain_depth = {
+            let mut d = 0usize;
+            let mut nb = cxt.env.binds;
+            while let Some(e) = nb {
+                d += 1;
+                nb = e.next;
+            }
+            d
+        };
         let n = env_len(cxt.env) as usize;
-        let mut slots2: Vec<V> = Vec::with_capacity(n);
-        env_collect(&self.defs, cxt.env, &mut slots2);
-        if x_prime < n {
+        let walk = cxt.lvl as usize - update_from;
+        let keep_flat = x_prime < chain_depth && walk <= chain_depth;
+        let mut slots2: Vec<V> = Vec::with_capacity(if keep_flat { chain_depth } else { n });
+        if keep_flat {
+            // 只收集链段（头 = 最内层）；平坦区不进 slots2——refresh 的
+            // env_tt 只取 slots2[..=d]（d < walk ≤ 链深），链段足够
+            let mut nb = cxt.env.binds;
+            while let Some(e) = nb {
+                slots2.push(e.val);
+                nb = e.next;
+            }
+        } else {
+            env_collect(&self.defs, cxt.env, &mut slots2);
+        }
+        if x_prime < slots2.len() {
             slots2[x_prime] = v;
         }
         let mut names = (*cxt.names).clone();
-        let walk = cxt.lvl as usize - update_from;
         let refreshed = self.refresh(bump, cxt, &slots2, &mut names, walk);
         // pruning：update_prune 时目标槽改 None（define 槽）并前缀重建；
         // 否则保持原 pruning（参考版 update_prune=false 同款）
@@ -4650,15 +5193,33 @@ impl Machine {
         } else {
             cxt.pruning
         };
-        // 环境：纯链重建（refresh 后的槽序，头 = 最内层）
-        let mut env: Option<&'a EnvCons<'a>> = None;
-        for val in refreshed.into_iter().rev() {
-            env = Some(bump.alloc(EnvCons { val, next: env }));
-        }
+        // 环境：keep_flat 时链前 walk 个槽换 refreshed 值、其余复用原链
+        // 节点（refreshed[d] 对 d ≥ walk 恒为原值），平坦区原样；否则纯链
+        // 重建（旧路径，refresh 后的槽序，头 = 最内层）
+        let (env, flat_base, flat_len) = if keep_flat {
+            let mut tail = cxt.env.binds;
+            for _ in 0..walk {
+                tail = tail.and_then(|e| e.next);
+            }
+            let mut nb: Option<&'a EnvCons<'a>> = tail;
+            for d in (0..walk).rev() {
+                nb = Some(bump.alloc(EnvCons {
+                    val: refreshed[d],
+                    next: nb,
+                }));
+            }
+            (nb, cxt.env.flat_base, cxt.env.flat_len)
+        } else {
+            let mut env: Option<&'a EnvCons<'a>> = None;
+            for val in refreshed.into_iter().rev() {
+                env = Some(bump.alloc(EnvCons { val, next: env }));
+            }
+            (env, 0, 0)
+        };
         Ok(Cxt {
             env: Env {
-                flat_base: 0,
-                flat_len: 0,
+                flat_base,
+                flat_len,
                 binds: env,
             },
             update_from: Some(update_from),
@@ -4738,9 +5299,21 @@ impl Machine {
         x: &Raw,
         tm: &'a Tm<'a>,
     ) -> Result<(&'a Tm<'a>, V), Error> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = if solve_probe::on() {
+            solve_probe::C.tw_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::self_t0(&solve_probe::B_TW)
+        } else {
+            None
+        };
+        let probe_idx = solve_probe::on().then(|| solve_probe::C.tw_calls.load(std::sync::atomic::Ordering::Relaxed));
         // has_no_object 不做成闭包（避免 &self 捕获与 infer_expr 的 &mut
         // 冲突）——两个错误点直接调用 [`Self::mk_no_object_err`]
         let Some(typ) = val_to_typ(&self.spine, &self.defs, a) else {
+            if let (Some(t0), Some(idx)) = (probe_t0, probe_idx) {
+                solve_probe::tw_phase_end(&solve_probe::B_TW, &solve_probe::C.tw_ns, &solve_probe::C.tw_self_ns, Some(t0), idx, &solve_probe::C.tw_early_ns, &solve_probe::C.tw_early_max_ns, &solve_probe::C.tw_late_ns, &solve_probe::C.tw_late_max_ns);
+            }
             return Err(self.mk_no_object_err(cxt, &t, a, tm));
         };
         // 方法名命中的 trait：合成 `Any × len(out_param)` 参数的 Assertion
@@ -4778,6 +5351,11 @@ impl Machine {
                     .is_some()
             })
             .collect();
+        if let Some(t0) = probe_t0 {
+            solve_probe::C.tw_cand.fetch_add(defs.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            solve_probe::C.tw_defs_ns.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        let probe_tb = solve_probe::on().then(std::time::Instant::now);
         // 参考版取第一个能推断成功的包装（traits.first().and_then(infer.ok)）
         let mut result: Option<Result<(&'a Tm<'a>, V), Error>> = None;
         for (trait_name, trait_params, _out_param, (methods_name, methods_params, ret_type)) in defs {
@@ -4825,15 +5403,35 @@ impl Machine {
                     Either::Icit(Icit::Expl),
                 )),
             );
+            if let Some(tb) = probe_tb {
+                solve_probe::C.tw_build_ns.fetch_add(tb.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            let probe_ti = solve_probe::on().then(std::time::Instant::now);
             let r = self.infer_expr(bump, cxt, &decl);
+            if let Some(ti) = probe_ti {
+                solve_probe::C.tw_infer_ns.fetch_add(ti.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
             if r.is_ok() {
                 result = Some(r);
                 break;
             }
         }
         match result {
-            Some(r) => r,
-            None => Err(self.mk_no_object_err(cxt, &t, a, tm)),
+            Some(r) => {
+                if let Some(t0) = probe_t0 {
+                    solve_probe::C.tw_infer.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                if let (Some(t0), Some(idx)) = (probe_t0, probe_idx) {
+                    solve_probe::tw_phase_end(&solve_probe::B_TW, &solve_probe::C.tw_ns, &solve_probe::C.tw_self_ns, Some(t0), idx, &solve_probe::C.tw_early_ns, &solve_probe::C.tw_early_max_ns, &solve_probe::C.tw_late_ns, &solve_probe::C.tw_late_max_ns);
+                }
+                r
+            }
+            None => {
+                if let (Some(t0), Some(idx)) = (probe_t0, probe_idx) {
+                    solve_probe::tw_phase_end(&solve_probe::B_TW, &solve_probe::C.tw_ns, &solve_probe::C.tw_self_ns, Some(t0), idx, &solve_probe::C.tw_early_ns, &solve_probe::C.tw_early_max_ns, &solve_probe::C.tw_late_ns, &solve_probe::C.tw_late_max_ns);
+                }
+                Err(self.mk_no_object_err(cxt, &t, a, tm))
+            }
         }
     }
 
@@ -4864,12 +5462,49 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, V), Error> {
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
+        let probe_t0 = if solve_probe::on() {
+            solve_probe::C.ie_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            match t {
+                Raw::Var(_) => solve_probe::C.ie_var.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                Raw::Obj(_, _) => solve_probe::C.ie_obj.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                Raw::App(_, _, _) => solve_probe::C.ie_app.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                Raw::Pi(_, _, _, _) => solve_probe::C.ie_pi.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                Raw::Lam(_, _, _) => solve_probe::C.ie_lam.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                Raw::Let(_, _, _, _) => solve_probe::C.ie_let.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                _ => solve_probe::C.ie_other.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            };
+            solve_probe::self_t0(&solve_probe::B_IE)
+        } else {
+            None
+        };
+        let r = self.infer_expr_inner(bump, cxt, t);
+        solve_probe::phase_end(&solve_probe::B_IE, &solve_probe::C.ie_ns, &solve_probe::C.ie_self_ns, probe_t0);
+        r
+    }
+
+    fn infer_expr_inner<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t: &Raw,
+    ) -> Result<(&'a Tm<'a>, V), Error> {
         match t {
-            // 变量：src_names（name_map + lvl_types）一锤定音——L09 没有
-            // decl 表回落（参考版 Raw::Var 臂同款，缺失即 not in scope）
+            // 变量：局部 names（当前 def 的 binder + fake 占位，覆盖全局）
+            // 优先，之后回落 Machine 的全局名字表（顶层 define）。都缺即
+            // not in scope（参考版 Raw::Var 臂同款）。
             Raw::Var(x) => {
                 if let Some(&blvl) = cxt.names.by_name.get(x.data.as_str()) {
                     let ty = *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级");
+                    let ix = if blvl >= GLOBAL_BASE {
+                        blvl
+                    } else {
+                        cxt.lvl - blvl - 1
+                    };
+                    return Ok((bump.alloc(Tm::Var(ix)), ty));
+                }
+                if let Some(&(blvl, ty)) = self.global_names.get(x.data.as_str()) {
                     let ix = if blvl >= GLOBAL_BASE {
                         blvl
                     } else {
@@ -5220,6 +5855,7 @@ impl Machine {
                 // global 表），检查体，再用真实值覆盖。
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
+                self.neutral.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
 
                 // 参考版 Def 臂：检查后 `solve_multi_trait(0)`，求解失败由
@@ -5338,6 +5974,7 @@ impl Machine {
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
+                self.neutral.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
@@ -7081,6 +7718,7 @@ impl Machine {
                 Err(e) => return (Err(e), cxt, last),
             }
         }
+        solve_probe::dump();
         (Ok(()), cxt, last)
     }
 }

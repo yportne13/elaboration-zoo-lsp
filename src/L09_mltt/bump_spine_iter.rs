@@ -3226,8 +3226,12 @@ fn lams_from_ty<'a>(
 // --------------------------------------------------------------------------------
 
 /// 名字表快照（参考版 BiMap 的 map1/map2 同构；**随 Cxt 克隆**——
-/// bind/define/fake_bind 克隆整表插入，与参考版 `src_names.clone()` 的
+/// bind/define/fake_bind 克隆插入，与参考版 `src_names.clone()` 的
 /// 逐上下文隔离语义逐字对应，无需撤销轨迹）。
+///
+/// 只装**当前 def 的局部条目**（binder + fake 占位；顶层 define 已迁
+/// [`Machine::global_names`]，perf-debt P2）——表大小 = 当前 def 的
+/// binder 数（个位数），每 binder 克隆 O(1)。
 #[derive(Clone, Default)]
 struct Names {
     /// 名字 → 层级（map1：只收源码 binder 与 fake_bind；inserted binder
@@ -3258,6 +3262,19 @@ pub(crate) struct Machine {
     /// 层级的 Rigid）先压入、检查后覆盖。每轮清空（参考版每次调用新建
     /// Infer 的 global 表）。
     globals: Vec<V>,
+    /// 全局名字表（顶层 define 的 名字 → (层级, 类型)）：Machine 独有的
+    /// append-only 表，**不随 Cxt 克隆**。与 L11+ 的 decls 表同角色——
+    /// 旧设计把顶层 define 累积进 Cxt 的 names 快照（每 def 各 +1 条，
+    /// 表大小 O(D)），`bind_name` 每 binder 克隆整表即 O(D²)（perf-debt
+    /// P2）。查找顺序：Cxt 的局部 names（当前 def 的 binder + fake 占位，
+    /// 覆盖全局）之后回落本表。每轮清空（同 globals）。
+    global_names: FxHashMap<SmolStr, (u32, V)>,
+    /// globals 的中性视图缓存：neutral[i] == v_lvl(i + GLOBAL_BASE)，
+    /// 随 globals 同步 push。quote/eval/unify 包装器每次调用都要这串值
+    /// （卡住 match 分支重求值的 avoid_recursive 视图）——旧实现每次
+    /// neutral_of(&self.globals) 整拷 O(D)（perf-debt P2 残余平方项），
+    /// 现按字段借用 O(1)。每轮清空（同 globals）。
+    neutral: Vec<V>,
     /// eval / quote / unify 的可复用工作栈。`'static` 仅是**存放口径**：
     /// 进核前 clear，借出期间写入的当轮条目不跨调用存活——与 `conv` /
     /// `icits` 的「进核前 clear」纪律同款。`W`/`QJob`/`UItem` 均为无 Drop
@@ -3290,6 +3307,8 @@ impl Machine {
             metas: Vec::new(),
             ren: RenBuf::default(),
             globals: Vec::new(),
+            global_names: FxHashMap::default(),
+            neutral: Vec::new(),
             eval_work: Vec::new(),
             quote_tasks: Vec::new(),
             quote_done: Vec::new(),
@@ -3307,6 +3326,8 @@ impl Machine {
         self.metas.clear();
         self.defs.clear();
         self.globals.clear();
+        self.global_names.clear();
+        self.neutral.clear();
         self.spine.stack.clear();
     }
 
@@ -3437,11 +3458,14 @@ impl Machine {
     }
 
     /// [`Self::define_name`] 的就地版（调用方独占 cxt 的 decl 臂 /
-    /// prime_round 顺序路径专用）：`Rc::make_mut` 独占时原地扩展 O(1)，
-    /// 语义与克隆版逐字一致（COW 论证见 [`Self::fake_bind`]）。调用点
+    /// prime_round 顺序路径专用）：真名进 **Machine 的全局名字表**
+    /// （append-only，不随 Cxt 克隆——P2：旧实现插进 Cxt 的 names 快照，
+    /// 表随 def 数累积，`bind_name` 每 binder 克隆即 O(D²)），并撤除
+    /// fake_bind 留在局部 names 里的同名占位（by_name 旧键即其 by_lvl
+    /// 键；prime_round 的 builtin 注册无占位，remove 为 no-op）。调用点
     /// 审计：返回后父视图立即被丢弃/覆盖（infer_decl Def/Enum 臂、
     /// prime_round），无"父视图仍被读取"的形态；check 路径的 Let/Pi
-    /// （父视图存活）继续走克隆版 [`Self::define_name`]。
+    /// （父视图存活、体局部作用域）继续走克隆版 [`Self::define_name`]。
     fn define_name_in<'a>(
         &mut self,
         bump: &'a Bump,
@@ -3452,9 +3476,12 @@ impl Machine {
         val: V,
         ty: V,
     ) -> Cxt<'a> {
+        self.global_names
+            .insert(SmolStr::new(x), (cxt.lvl, ty));
         let names = Rc::make_mut(&mut cxt.names);
-        names.by_name.insert(SmolStr::new(x), cxt.lvl);
-        names.by_lvl.insert(cxt.lvl, ty);
+        if let Some(old_lvl) = names.by_name.remove(x) {
+            names.by_lvl.remove(&old_lvl);
+        }
         cxt.env = env_ext_defs(bump, &mut self.defs, cxt.env, val);
         cxt.types = Some(bump.alloc(TCons {
             name: bump.alloc_str(x),
@@ -3568,13 +3595,13 @@ impl Machine {
     /// avoid_recursive 克隆：全局值全部换成指向自身大层级的 Rigid）。
     #[allow(clippy::unnecessary_cast)]
     fn eval_neutral<'a>(&mut self, bump: &'a Bump, env: Env<'a>, tm: &'a Tm<'a>) -> V {
-        let neutral = neutral_of(&self.globals);
         let Machine {
             spine,
             vals,
             icits,
             defs,
             metas,
+            neutral,
             eval_work,
             ..
         } = self;
@@ -3582,7 +3609,7 @@ impl Machine {
             unsafe { &mut *(eval_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         work.clear();
         eval_iter(
-            bump, spine, work, vals, icits, defs, metas, &neutral, env, tm,
+            bump, spine, work, vals, icits, defs, metas, neutral, env, tm,
         )
     }
 
@@ -3590,7 +3617,6 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn quote<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let neutral = neutral_of(&self.globals);
         let Machine {
             spine,
             vals,
@@ -3598,6 +3624,7 @@ impl Machine {
             defs,
             metas,
             globals,
+            neutral,
             quote_tasks,
             quote_done,
             quote_work,
@@ -3638,7 +3665,6 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn quote_memo<'a>(&mut self, bump: &'a Bump, level: u32, v: V) -> &'a Tm<'a> {
-        let neutral = neutral_of(&self.globals);
         let Machine {
             spine,
             vals,
@@ -3646,6 +3672,7 @@ impl Machine {
             defs,
             metas,
             globals,
+            neutral,
             quote_tasks,
             quote_done,
             quote_work,
@@ -3678,7 +3705,7 @@ impl Machine {
             defs,
             metas,
             globals,
-            &neutral,
+            neutral,
             level,
             v,
             Some(&mut *memo),
@@ -3689,7 +3716,6 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn unify<'a>(&mut self, bump: &'a Bump, l: u32, t: V, u: V) -> bool {
-        let neutral = neutral_of(&self.globals);
         let Machine {
             spine,
             vals,
@@ -3697,6 +3723,7 @@ impl Machine {
             defs,
             metas,
             globals,
+            neutral,
             ren,
             conv,
             unify_work,
@@ -3712,7 +3739,7 @@ impl Machine {
         work.clear();
         stack.clear();
         unify_iter(
-            bump, spine, work, stack, vals, icits, defs, metas, globals, &neutral, ren, conv, l,
+            bump, spine, work, stack, vals, icits, defs, metas, globals, neutral, ren, conv, l,
             t, u,
         )
     }
@@ -4407,16 +4434,18 @@ impl Machine {
             let q = self.quote(bump, n as u32, old[d]);
             let rv = self.eval(bump, env_tt_chain, q);
             refreshed[d] = Some(rv);
-            // src_names 按层级同步（Lvl(env_t.len()) = n-1-d）
+            // src_names 按层级同步（Lvl(env_t.len()) = n-1-d）。**只更新
+            // 局部 names 里的条目**（当前 def 的 binder）：过去的 define
+            // 已迁 Machine 全局表且不提及本 def 的局部层级（定义早于其
+            // 存在），重锚为恒等、跳过；inserted binder 不入名字表（参考
+            // 版 get_by_key2_mut unwrap 的 panic 形态同此不可达）。
             let lvl = (n - 1 - d) as u32;
-            let old_ty = match names.by_lvl.get(&lvl) {
-                Some(t) => *t,
-                // 参考 unwrap：inserted binder 的层级不在 src_names 里
-                None => panic!("refresh: no src_names entry at level {}", lvl),
-            };
-            let qt = self.quote(bump, n as u32, old_ty);
-            let rty = self.eval(bump, env_tt_chain, qt);
-            names.by_lvl.insert(lvl, rty);
+            if let Some(old_ty) = names.by_lvl.get(&lvl) {
+                let old_ty = *old_ty;
+                let qt = self.quote(bump, n as u32, old_ty);
+                let rty = self.eval(bump, env_tt_chain, qt);
+                names.by_lvl.insert(lvl, rty);
+            }
         }
         refreshed.into_iter().map(|x| x.expect("refresh: 槽未刷新")).collect()
     }
@@ -4431,11 +4460,20 @@ impl Machine {
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, V), Error> {
         match t {
-            // 变量：src_names（name_map + lvl_types）一锤定音——L09 没有
-            // decl 表回落（参考版 Raw::Var 臂同款，缺失即 not in scope）
+            // 变量：局部 names（当前 def 的 binder + fake 占位，覆盖全局）
+            // 优先，之后回落 Machine 的全局名字表（顶层 define，append-only
+            // 不随 Cxt 克隆）。都缺即 not in scope（参考版 Raw::Var 臂同款）。
             Raw::Var(x) => {
                 if let Some(&blvl) = cxt.names.by_name.get(x.data.as_str()) {
                     let ty = *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级");
+                    let ix = if blvl >= GLOBAL_BASE {
+                        blvl
+                    } else {
+                        cxt.lvl - blvl - 1
+                    };
+                    return Ok((bump.alloc(Tm::Var(ix)), ty));
+                }
+                if let Some(&(blvl, ty)) = self.global_names.get(x.data.as_str()) {
                     let ix = if blvl >= GLOBAL_BASE {
                         blvl
                     } else {
@@ -4808,6 +4846,7 @@ impl Machine {
                 // global 表），检查体，再用真实值覆盖。
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
+                self.neutral.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
@@ -4910,6 +4949,7 @@ impl Machine {
                 let vtyp = self.eval(bump, cxt.env, typ_tm);
                 let fake = self.fake_bind(cxt, &name.data, vtyp, global_idx);
                 self.globals.push(v_lvl(global_idx + GLOBAL_BASE));
+                self.neutral.push(v_lvl(global_idx + GLOBAL_BASE));
                 let t_tm = self.check(bump, &fake, &bod, vtyp)?;
                 let vt = self.eval(bump, fake.env, t_tm);
                 self.globals[global_idx as usize] = vt;
@@ -6333,7 +6373,7 @@ impl Machine {
             match self.infer_decl(bump, &mut cxt, d) {
                 Ok((_, nc)) => {
                     cxt = nc;
-                    if is_def {
+                    if matches!(d, Decl::Def { .. }) {
                         // define 链的 env 槽顶 = 本 def 的登记值
                         last = Some(env_nth(&self.defs, cxt.env, 0));
                     }
