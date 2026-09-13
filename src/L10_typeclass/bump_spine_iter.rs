@@ -1907,6 +1907,7 @@ fn intersect_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     stack: &mut Vec<UItem<'a>>,
     l: u32,
@@ -1938,7 +1939,9 @@ fn intersect_bump<'a>(
     }
     if !fallback {
         if pr.iter().any(|x| x.is_none()) {
-            return prune_meta_bump(bump, spine, work, vals, icits, defs, metas, globals, &pr, m)
+            return prune_meta_bump(
+                bump, spine, work, vals, icits, defs, metas, unsolved, globals, &pr, m,
+            )
                 .is_some();
         }
         return true; // 两 spine 逐槽相等
@@ -1968,6 +1971,7 @@ fn flex_flex_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     ren: &mut RenBuf,
     gamma: u32,
@@ -1988,11 +1992,11 @@ fn flex_flex_bump<'a>(
     };
     match invert_bump(bump, spine, defs, metas, globals, ren, aa) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, globals, ren, fa, aa.len() as u32, gamma,
+            bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, fa, aa.len() as u32, gamma,
             mask, va,
         ),
         None => solve_bump(
-            bump, spine, work, vals, icits, defs, metas, globals, ren, gamma, fb, ab, vb,
+            bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, gamma, fb, ab, vb,
         ),
     }
 }
@@ -2097,6 +2101,7 @@ fn unify_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     neutral: &[V],
     ren: &mut RenBuf,
@@ -2340,12 +2345,12 @@ fn unify_iter<'a>(
                 let m2 = v_meta_of(hd2);
                 let ok = if m1 == m2 {
                     intersect_bump(
-                        bump, spine, work, vals, icits, defs, metas, globals, stack, l, m1, &a1,
-                        &a2,
+                        bump, spine, work, vals, icits, defs, metas, unsolved, globals, stack, l,
+                        m1, &a1, &a2,
                     )
                 } else {
                     flex_flex_bump(
-                        bump, spine, work, vals, icits, defs, metas, globals, ren, l, m1, &a1, u,
+                        bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, l, m1, &a1, u,
                         m2, &a2, t,
                     )
                 };
@@ -2393,7 +2398,7 @@ fn unify_iter<'a>(
                 solve_probe::C.un_solve_bump.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             });
             let solved = solve_bump(
-                bump, spine, work, vals, icits, defs, metas, globals, ren, l, mv, &args, rhs,
+                bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, l, mv, &args, rhs,
             );
             conv.scratch1 = args;
             if solved {
@@ -2492,12 +2497,12 @@ fn unify_iter<'a>(
                 (Some(m1), Some(m2)) => {
                     let ok = if m1 == m2 {
                         intersect_bump(
-                            bump, spine, work, vals, icits, defs, metas, globals, stack, l, m1,
-                            &a1, &a2,
+                            bump, spine, work, vals, icits, defs, metas, unsolved, globals, stack,
+                            l, m1, &a1, &a2,
                         )
                     } else {
                         flex_flex_bump(
-                            bump, spine, work, vals, icits, defs, metas, globals, ren, l, m1, &a1,
+                            bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, l, m1, &a1,
                             u, m2, &a2, t,
                         )
                     };
@@ -2515,7 +2520,7 @@ fn unify_iter<'a>(
                     let bs_t0 = solve_probe::on().then(|| std::time::Instant::now());
                     solve_probe::C.un_bare_solve_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let ok = solve_bump(
-                        bump, spine, work, vals, icits, defs, metas, globals, ren, l, m, &a1, u,
+                        bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, l, m, &a1, u,
                     );
                     if let Some(b0) = bs_t0 {
                         solve_probe::C.un_bare_solve_ns.fetch_add(
@@ -2540,7 +2545,7 @@ fn unify_iter<'a>(
                     let bs_t0 = solve_probe::on().then(|| std::time::Instant::now());
                     solve_probe::C.un_bare_solve_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let ok = solve_bump(
-                        bump, spine, work, vals, icits, defs, metas, globals, ren, l, m, &a2, t,
+                        bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, l, m, &a2, t,
                     );
                     if let Some(b0) = bs_t0 {
                         solve_probe::C.un_bare_solve_ns.fetch_add(
@@ -2812,6 +2817,7 @@ fn solve_with_pren_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     ren: &mut RenBuf,
     m: u32,
@@ -2826,7 +2832,7 @@ fn solve_with_pren_bump<'a>(
     };
     // 非线性 spine：检查非线性的变量槽位可以从 meta 类型里剪掉
     if !mask.is_empty()
-        && prune_ty_bump(bump, spine, work, vals, icits, defs, metas, globals, &mask, mty)
+        && prune_ty_bump(bump, spine, work, vals, icits, defs, metas, unsolved, globals, &mask, mty)
             .is_none()
     {
         return false;
@@ -2834,7 +2840,7 @@ fn solve_with_pren_bump<'a>(
     let renamed = {
         let t0 = solve_probe::on().then(|| std::time::Instant::now());
         let r = rename_iter(
-            bump, spine, work, vals, icits, defs, ren, metas, globals, Some(m), dom, gamma, rhs,
+            bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals, Some(m), dom, gamma, rhs,
         );
         if let Some(t) = t0 {
             solve_probe::C.sb_rename_ns.fetch_add(
@@ -2872,6 +2878,9 @@ fn solve_with_pren_bump<'a>(
         r
     };
     metas[m as usize] = MetaEntry::Solved(sol, mty);
+    if let Some(p) = unsolved.iter().position(|&x| x == m) {
+        unsolved.swap_remove(p); // A-2 worklist 出表
+    }
     true
 }
 
@@ -2885,6 +2894,7 @@ fn solve_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     ren: &mut RenBuf,
     gamma: u32,
@@ -2895,7 +2905,7 @@ fn solve_bump<'a>(
     let _ = gamma;
     match invert_bump(bump, spine, defs, metas, globals, ren, args) {
         Some(mask) => solve_with_pren_bump(
-            bump, spine, work, vals, icits, defs, metas, globals, ren, m, args.len() as u32,
+            bump, spine, work, vals, icits, defs, metas, unsolved, globals, ren, m, args.len() as u32,
             gamma, mask, rhs,
         ),
         None => false,
@@ -2935,6 +2945,7 @@ fn rename_iter<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     occ: Option<u32>,
     dom0: u32,
@@ -3011,7 +3022,7 @@ fn rename_iter<'a>(
                                     return None; // occurs check
                                 }
                                 let t = prune_vflex_bump(
-                                    bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                     occ, dom, cod, m, h,
                                 )?;
                                 done.push(t);
@@ -3021,10 +3032,10 @@ fn rename_iter<'a>(
                             7 => {
                                 let head_tm: &'a Tm<'a> = bump.alloc(match v_xcell_of(hd) {
                                     XCell::Obj { val, name } => {
-                                        let inner = rename_iter(
-                                            bump, spine, work, vals, icits, defs, ren, metas,
-                                            globals, occ, dom, cod, *val,
-                                        )?;
+                            let inner = rename_iter(
+                                bump, spine, work, vals, icits, defs, ren, metas,
+                                unsolved, globals, occ, dom, cod, *val,
+                            )?;
                                         Tm::Obj(inner, name)
                                     }
                                     XCell::Lit(s) => Tm::LiteralIntro(s),
@@ -3098,7 +3109,7 @@ fn rename_iter<'a>(
                             // 卡住投影：rename 内层 → 包 Tm::Obj（空实参；
                             // 带实参的链在 tag 2 臂处理）
                             let inner = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                 occ, dom, cod, *val,
                             )?;
                             done.push(bump.alloc(Tm::Obj(inner, name)));
@@ -3112,11 +3123,11 @@ fn rename_iter<'a>(
                             let mut ps: Vec<SumParamT<'_>> = Vec::with_capacity(params.len());
                             for p in params.iter() {
                                 let pv = rename_iter(
-                                    bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                     occ, dom, cod, p.val,
                                 )?;
                                 let pt = rename_iter(
-                                    bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                     occ, dom, cod, p.ty,
                                 )?;
                                 ps.push(SumParamT {
@@ -3140,13 +3151,13 @@ fn rename_iter<'a>(
                             is_trait,
                         } => {
                             let tt = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                 occ, dom, cod, *typ,
                             )?;
                             let mut ds: Vec<SumDataT<'_>> = Vec::with_capacity(datas.len());
                             for d in datas.iter() {
                                 let dv = rename_iter(
-                                    bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                     occ, dom, cod, d.val,
                                 )?;
                                 ds.push(SumDataT {
@@ -3173,7 +3184,7 @@ fn rename_iter<'a>(
                             // 的 Match 臂同款；scrutinee 用真实表）
                             let neutral = neutral_of(globals);
                             let val_tm = rename_iter(
-                                bump, spine, work, vals, icits, defs, ren, metas, globals,
+                                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals,
                                 occ, dom, cod, *scrutinee,
                             )?;
                             let mut nc: Vec<(PatternDetail, &'a Tm<'a>)> =
@@ -3194,7 +3205,7 @@ fn rename_iter<'a>(
                                 );
                                 let bt = rename_iter(
                                     bump, spine, work, vals, icits, defs, &mut ren2, metas,
-                                    globals, occ, d2, c2, bv,
+                                    unsolved, globals, occ, d2, c2, bv,
                                 )?;
                                 nc.push(((*pat).clone(), bt));
                             }
@@ -3256,6 +3267,7 @@ fn prune_vflex_bump<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     occ: Option<u32>,
     dom: u32,
@@ -3284,7 +3296,7 @@ fn prune_vflex_bump<'a>(
                 return None; // 上游：剪枝后 spine 必须全变量
             }
             let t = rename_iter(
-                bump, spine, work, vals, icits, defs, ren, metas, globals, occ, dom, cod, f,
+                bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals, occ, dom, cod, f,
             )?;
             slots.push((Some(t), i));
             status = SpinePruneStatus::OKNonRenaming;
@@ -3296,7 +3308,7 @@ fn prune_vflex_bump<'a>(
         for (st, i) in slots.iter().rev() {
             mask.push(if st.is_some() { Some(*i) } else { None });
         }
-        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, globals, &mask, m)?
+        prune_meta_bump(bump, spine, work, vals, icits, defs, metas, unsolved, globals, &mask, m)?
     } else {
         m
     };
@@ -3321,6 +3333,7 @@ fn prune_meta_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     mask: &[Option<Icit>], // 内先序
     m: u32,
@@ -3330,13 +3343,14 @@ fn prune_meta_bump<'a>(
         _ => unreachable!(), // 只对未解 meta 剪枝
     };
     let pruned_tm = prune_ty_bump(
-        bump, spine, work, vals, icits, defs, metas, globals, mask, mty,
+        bump, spine, work, vals, icits, defs, metas, unsolved, globals, mask, mty,
     )?;
     let prunedty = eval_iter(
         bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, pruned_tm,
     );
     let mp = metas.len() as u32;
     metas.push(MetaEntry::Unsolved(prunedty));
+    unsolved.push(mp); // A-2 worklist 入表
     // AppPruning 项：掩码外先入链（新槽恒链头 → 最终头 = 最内层）
     let mut pr: Option<&'a PrCons<'a>> = None;
     for slot in mask.iter().rev() {
@@ -3350,6 +3364,9 @@ fn prune_meta_bump<'a>(
         bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, lam_tm,
     );
     metas[m as usize] = MetaEntry::Solved(sol, mty);
+    if let Some(p) = unsolved.iter().position(|&x| x == m) {
+        unsolved.swap_remove(p); // A-2 worklist 出表
+    }
     Some(mp)
 }
 
@@ -3363,6 +3380,7 @@ fn prune_ty_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
+    unsolved: &mut Vec<u32>,
     globals: &[V],
     mask_inner_first: &[Option<Icit>],
     mty: V,
@@ -3382,7 +3400,7 @@ fn prune_ty_bump<'a>(
         let (name, icit, pdom, env, body) = (p.name, p.icit, p.dom, p.env, p.body);
         if entry.is_some() {
             let dtm = rename_iter(
-                bump, spine, work, vals, icits, defs, &mut ren2, metas, globals, None, dom,
+                bump, spine, work, vals, icits, defs, &mut ren2, metas, unsolved, globals, None, dom,
                 cod, pdom,
             )?;
             // lift：binder 进映射
@@ -3399,7 +3417,7 @@ fn prune_ty_bump<'a>(
         cur = force(bump, spine, defs, metas, globals, next);
     }
     let mut t = rename_iter(
-        bump, spine, work, vals, icits, defs, &mut ren2, metas, globals, None, dom, cod, cur,
+        bump, spine, work, vals, icits, defs, &mut ren2, metas, unsolved, globals, None, dom, cod, cur,
     )?;
     // 保留层由内向外回包（layers 序 = 外→内，rev = 内→外 ✓）
     for (name, icit, dtm) in layers.iter().rev() {
@@ -3926,7 +3944,7 @@ mod solve_probe {
         }
         eprintln!("[L10SOLVE_PROBE] item-tag-pairs:{}", tags);
         eprintln!(
-            "[L10SOLVE_PROBE] defs={} metas_max={} | solve_multi: calls={} scan_sum={} scan_max={} prepare_sum={} time={:.1}ms | solve_trait: calls={} trait={} synth_ok={} synth_fail={} time={:.1}ms | fresh_meta: calls={} trait_unsolved_push={} | trait_wrap: calls={} cand={} infer={} time={:.1}ms (defs收集={:.1}ms raw构建={:.1}ms wrapper_infer={:.1}ms) | def臂扫描: Σunsolved={} Σtrait_unsolved={} | 相位cum: unify={}(cum {:.1}ms) quote={}(cum {:.1}ms) eval={}(cum {:.1}ms) insert_go={}(cum {:.1}ms) force_v cum={:.1}ms check_univ={}(cum {:.1}ms) infer_expr={}(cum {:.1}ms) | unify内部: items={} solve_bump={} eval/η={}",
+            "[L10SOLVE_PROBE] defs={} metas_max={} | solve_multi: calls={} scan_sum={} scan_max={} prepare_sum={} time={:.1}ms (scan口径v2=unsolved worklist长度，原metas后缀扫) | solve_trait: calls={} trait={} synth_ok={} synth_fail={} time={:.1}ms | fresh_meta: calls={} trait_unsolved_push={} | trait_wrap: calls={} cand={} infer={} time={:.1}ms (defs收集={:.1}ms raw构建={:.1}ms wrapper_infer={:.1}ms) | def臂扫描: Σunsolved={} Σtrait_unsolved={} | 相位cum: unify={}(cum {:.1}ms) quote={}(cum {:.1}ms) eval={}(cum {:.1}ms) insert_go={}(cum {:.1}ms) force_v cum={:.1}ms check_univ={}(cum {:.1}ms) infer_expr={}(cum {:.1}ms) | unify内部: items={} solve_bump={} eval/η={}",
             g(&C.defs),
             g(&C.metas_max),
             g(&C.smt_calls),
@@ -4027,6 +4045,16 @@ pub(crate) struct Machine {
     /// 平坦环境区域（每轮 append-only，只增不减）。
     defs: Vec<V>,
     pub(crate) metas: Vec<MetaEntry>,
+    /// 未解 meta worklist（A-2，评审第二轮）：当前仍为
+    /// [`MetaEntry::Unsolved`] 的 meta 下标集合，**无序**（含 swap_remove
+    /// 摘除）。入表点 = 3 处 `metas.push(Unsolved)`（fresh_meta 两路 +
+    /// prune_meta_bump 新 meta），出表点 = 5 处 `Solved` 写（solve_with_pren /
+    /// prune_meta / solve_multi / check_universe ×2）——与 metas 表严格同步，
+    /// [`Machine::run_pure_probe`] 的快照回滚两表同换。用途：
+    /// `solve_multi_trait_ref` 旧实现每次对 metas 表做全后缀线性扫
+    /// （traitchain 一轮 3076 次调用、Σscan 2.1M、仅产出个位候选），现只遍历
+    /// 本表（活跃未解数，个位量级）。每轮 clear_round 清空。
+    unsolved: Vec<u32>,
     /// solve 的偏置换换代缓冲（跨求解持久，epoch 换代免逐槽清零）。
     ren: RenBuf,
     /// 全局 def/enum 值表（下标 = global_idx）。递归 def 的占位（自身大
@@ -4076,6 +4104,7 @@ impl Machine {
             mention_cache: FxHashMap::default(),
             defs: Vec::with_capacity(4096),
             metas: Vec::new(),
+            unsolved: Vec::new(),
             ren: RenBuf::default(),
             globals: Vec::new(),
             global_names: FxHashMap::default(),
@@ -4096,6 +4125,7 @@ impl Machine {
     /// metas / defs / globals 持有，轮边界后无任何旧句柄可达。
     fn clear_round(&mut self) {
         self.metas.clear();
+        self.unsolved.clear();
         self.defs.clear();
         self.globals.clear();
         self.global_names.clear();
@@ -4103,6 +4133,15 @@ impl Machine {
         self.mention_cache.clear();
         self.spine.stack.clear();
         self.tstate = TraitState::default();
+    }
+
+    /// 未解 meta worklist 摘除（A-2）：任一 meta 写成 `Solved` 时调用。
+    /// 无序表 → swap_remove O(1)；按值定位 O(n)，n = 活跃未解数（个位量级）。
+    /// 双重摘除无害（side-effect 求解后 prepare 快照重放同一写点时容错）。
+    fn remove_unsolved(&mut self, m: u32) {
+        if let Some(p) = self.unsolved.iter().position(|&x| x == m) {
+            self.unsolved.swap_remove(p);
+        }
     }
 
     // Extend Cxt（源码 binder / inserted binder / define / fake_bind）
@@ -4311,6 +4350,7 @@ impl Machine {
         if is_trait_sum {
             let m = self.metas.len() as u32;
             self.metas.push(MetaEntry::Unsolved(a));
+            self.unsolved.push(m); // A-2 worklist 入表
             solve_probe::on().then(|| {
                 solve_probe::C.fm_trait_unsolved.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 solve_probe::C.metas_max.fetch_max(self.metas.len() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -4358,6 +4398,7 @@ impl Machine {
         };
         let m = self.metas.len() as u32;
         self.metas.push(MetaEntry::Unsolved(mty));
+        self.unsolved.push(m); // A-2 worklist 入表
         solve_probe::on().then(|| {
             solve_probe::C.metas_max.fetch_max(self.metas.len() as u64, std::sync::atomic::Ordering::Relaxed);
         });
@@ -4611,6 +4652,7 @@ impl Machine {
                 icits,
                 defs,
                 metas,
+                unsolved,
                 globals,
                 neutral,
                 ren,
@@ -4631,8 +4673,8 @@ impl Machine {
             }
             let probe_tit = solve_probe::on().then(std::time::Instant::now);
             let iter_r = unify_iter(
-                bump, spine, work, stack, vals, icits, defs, metas, globals, neutral, ren, conv,
-                l, t, u, resume, &mut solve_req,
+                bump, spine, work, stack, vals, icits, defs, metas, unsolved, globals, neutral,
+                ren, conv, l, t, u, resume, &mut solve_req,
             );
             if let Some(ti) = probe_tit {
                 solve_probe::C
@@ -4657,8 +4699,16 @@ impl Machine {
         }
     }
 
-    /// 参考 `Infer::solve_multi_trait`：从 meta m 起扫描所有未解 meta，
+    /// 参考 `Infer::solve_multi_trait`：对「下标 ≥ m」的所有未解 meta，
     /// 类型是 trait 的逐个跑实例合成（合成成功 → meta := 实例值）。
+    ///
+    /// A-2（评审第二轮）：旧实现每次对 metas 表做全后缀线性扫
+    /// （`metas[m..]` 逐槽过一遍，Solved 槽也在内）——traitchain 一轮
+    /// 3076 次调用、Σscan 2.1M、仅产出个位候选。现遍历
+    /// [`Machine::unsolved`] worklist（= 当前仍 Unsolved 的下标集，严格
+    /// 同步入出表），过滤 `idx ≥ m` 后按 idx 升序处理（与旧表序逐字同序，
+    /// 求解顺序不变）。worklist 无序（swap_remove 摘除），排序只对
+    /// prepare 快照做，量级 = 待合成候选数。
     fn solve_multi_trait_ref<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4666,24 +4716,26 @@ impl Machine {
         m: u32,
     ) -> Result<(), String> {
         let probe_t0 = solve_probe::on().then(std::time::Instant::now);
-        let prepare: Vec<(u32, V)> = self
-            .metas
-            .get(m as usize..)
-            .unwrap_or(&[])
+        let mut prepare: Vec<(u32, V)> = self
+            .unsolved
             .iter()
-            .enumerate()
-            .flat_map(|(i, x)| match x {
-                MetaEntry::Unsolved(v) => Some((i as u32, *v)),
-                _ => None,
+            .filter(|&&i| i >= m)
+            .filter_map(|&i| match &self.metas[i as usize] {
+                MetaEntry::Unsolved(v) => Some((i, *v)),
+                _ => None, // 表/worklist 严格同步下不可达（防御保留）
             })
             .collect();
+        prepare.sort_unstable_by_key(|&(i, _)| i);
         if let Some(t0) = probe_t0 {
             solve_probe::C.smt_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let scan = self.metas.len().saturating_sub(m as usize) as u64;
+            // 口径 v2（A-2）：scan 原为 metas 后缀长度，现 = worklist 长度
+            // （本次调用实际遍历的未解条目数）
+            let scan = self.unsolved.len() as u64;
             solve_probe::C.smt_scan.fetch_add(scan, std::sync::atomic::Ordering::Relaxed);
             solve_probe::C.smt_scan_max.fetch_max(scan, std::sync::atomic::Ordering::Relaxed);
             solve_probe::C.smt_prepare.fetch_add(prepare.len() as u64, std::sync::atomic::Ordering::Relaxed);
             // def 臂（m == 0）：顺带钉每 def 扫描时表中未解 / 未解 trait 形态数
+            // （m == 0 时过滤恒真，prepare = 全部未解，与旧口径一致）
             if m == 0 {
                 solve_probe::C.defs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 for (_, v) in prepare.iter() {
@@ -4699,7 +4751,8 @@ impl Machine {
         for (idx, x) in prepare {
             let solved = self.solve_trait_ref(bump, cxt, x)?;
             if let Some((_, val)) = solved {
-                self.metas[(idx + m) as usize] = MetaEntry::Solved(val, x);
+                self.metas[idx as usize] = MetaEntry::Solved(val, x);
+                self.remove_unsolved(idx);
             }
         }
         if let Some(t0) = probe_t0 {
@@ -5158,6 +5211,7 @@ impl Machine {
                         icits,
                         defs,
                         metas,
+                        unsolved,
                         globals,
                         eval_work,
                         ..
@@ -5167,7 +5221,7 @@ impl Machine {
                     };
                     work.clear();
                     prune_ty_bump(
-                        bump, spine, work, vals, icits, defs, metas, globals, &mask, mty,
+                        bump, spine, work, vals, icits, defs, metas, unsolved, globals, &mask, mty,
                     )
                 };
                 if ok.is_none() {
@@ -5179,6 +5233,7 @@ impl Machine {
                 let f = self.force_v(bump, mty);
                 if v_tag(f) == 3 {
                     self.metas[m as usize] = MetaEntry::Solved(v_u(0), mty);
+                    self.remove_unsolved(m); // A-2 worklist 出表
                     return Ok((t_inferred, 0));
                 }
                 let f2 = self.force_v(bump, mty);
@@ -5193,6 +5248,7 @@ impl Machine {
                     icits,
                     defs,
                     metas,
+                    unsolved,
                     globals,
                     ren,
                     unify_work,
@@ -5203,7 +5259,7 @@ impl Machine {
                 };
                 work.clear();
                 rename_iter(
-                    bump, spine, work, vals, icits, defs, ren, metas, globals, Some(m),
+                    bump, spine, work, vals, icits, defs, ren, metas, unsolved, globals, Some(m),
                     args.len() as u32, cxt.lvl, v_u(0),
                 )
             };
@@ -5232,6 +5288,7 @@ impl Machine {
             };
             let solution = self.eval(bump, EMPTY_ENV, lam_tm);
             self.metas[m as usize] = MetaEntry::Solved(solution, mty);
+            self.remove_unsolved(m); // A-2 worklist 出表
             return Ok((t_inferred, 0));
         }
         Err(Error(t_span.map(|_| {
@@ -5447,10 +5504,14 @@ impl Machine {
     /// 一律回滚，杜绝污染外泄到真实机。可达性探测等投机性 check 都走此入口。
     /// 必须**整表 clone**，不能只按 meta 上界截断——探测期 unify 可能解掉已有
     /// meta，而这些解又引用闭包内新建 meta，截断会让解悬空（后续查找越界 panic）。
+    /// A-2：`unsolved` worklist 与 metas 表严格同步（探测期 push/Solved 摘除
+    /// 照常入出表），回滚两表同换。
     fn run_pure_probe<R>(&mut self, f: impl FnOnce(&mut Machine) -> R) -> R {
         let metas = self.metas.clone();
+        let unsolved = self.unsolved.clone();
         let r = f(self);
         self.metas = metas;
+        self.unsolved = unsolved;
         r
     }
 
