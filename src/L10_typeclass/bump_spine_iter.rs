@@ -2135,6 +2135,7 @@ fn unify_iter<'a>(
                 continue;
             }
             UItem::EvalCod2(b1, e1, b2, e2, l) => {
+                let kod_t0 = solve_probe::on().then(|| std::time::Instant::now());
                 let vt = {
                     let env = env_ext(bump, e1, v_lvl(l));
                     eval_iter(bump, spine, work, vals, icits, defs, metas, globals, env, b1)
@@ -2143,6 +2144,11 @@ fn unify_iter<'a>(
                     let env = env_ext(bump, e2, v_lvl(l));
                     eval_iter(bump, spine, work, vals, icits, defs, metas, globals, env, b2)
                 };
+                if let Some(k0) = kod_t0 {
+                    solve_probe::C
+                        .un_kod_ns
+                        .fetch_add(k0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+                }
                 stack.push(UItem::Pair(l + 1, vt, vu));
                 continue;
             }
@@ -2217,8 +2223,18 @@ fn unify_iter<'a>(
         if memo_on && memo.contains(&(t.0, u.0)) {
             continue; // 本轮已判等过的子对（命中连 force 都省——成功单调）
         }
+        let pair_force_t0 = solve_probe::on().then(|| std::time::Instant::now());
         let t = force(bump, spine, defs, metas, globals, t);
         let u = force(bump, spine, defs, metas, globals, u);
+        if let Some(tf0) = pair_force_t0 {
+            solve_probe::C
+                .un_pair_force_ns
+                .fetch_add(tf0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        solve_probe::on().then(|| {
+            solve_probe::C.un_tag_pairs[((v_tag(t) << 3) | v_tag(u)) as usize]
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        });
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
             continue; // force 展开后同值（同一解的两处引用）
         }
@@ -3429,6 +3445,10 @@ mod solve_probe {
         pub tw_infer_ns: AtomicU64,
         pub un_calls: AtomicU64,
         pub un_ns: AtomicU64,
+        pub un_iter_ns: AtomicU64,
+        pub un_pair_force_ns: AtomicU64,
+        pub un_kod_ns: AtomicU64,
+        pub un_tag_pairs: [AtomicU64; 64],
         pub q_calls: AtomicU64,
         pub q_ns: AtomicU64,
         pub e_calls: AtomicU64,
@@ -3560,6 +3580,10 @@ mod solve_probe {
         tw_infer_ns: AtomicU64::new(0),
         un_calls: AtomicU64::new(0),
         un_ns: AtomicU64::new(0),
+        un_iter_ns: AtomicU64::new(0),
+        un_pair_force_ns: AtomicU64::new(0),
+        un_kod_ns: AtomicU64::new(0),
+        un_tag_pairs: [const { AtomicU64::new(0) }; 64],
         q_calls: AtomicU64::new(0),
         q_ns: AtomicU64::new(0),
         e_calls: AtomicU64::new(0),
@@ -3634,6 +3658,22 @@ mod solve_probe {
             g(&C.str_unify_ns) as f64 / 1e6,
             g(&C.str_trait),
         );
+        eprintln!(
+            "[L10SOLVE_PROBE] unify分解: iter内={:.1}ms / unify总cum={:.1}ms / pair-force={:.1}ms / EvalCod2-eval={:.1}ms (items={})",
+            g(&C.un_iter_ns) as f64 / 1e6,
+            g(&C.un_ns) as f64 / 1e6,
+            g(&C.un_pair_force_ns) as f64 / 1e6,
+            g(&C.un_kod_ns) as f64 / 1e6,
+            g(&C.un_items),
+        );
+        let mut tags = String::new();
+        for (i, c) in C.un_tag_pairs.iter().enumerate() {
+            let n = c.load(Ordering::Relaxed);
+            if n > 0 {
+                tags.push_str(&format!(" t{}u{}={}", i >> 3, i & 7, n));
+            }
+        }
+        eprintln!("[L10SOLVE_PROBE] item-tag-pairs:{}", tags);
         eprintln!(
             "[L10SOLVE_PROBE] defs={} metas_max={} | solve_multi: calls={} scan_sum={} scan_max={} prepare_sum={} time={:.1}ms | solve_trait: calls={} trait={} synth_ok={} synth_fail={} time={:.1}ms | fresh_meta: calls={} trait_unsolved_push={} | trait_wrap: calls={} cand={} infer={} time={:.1}ms (defs收集={:.1}ms raw构建={:.1}ms wrapper_infer={:.1}ms) | def臂扫描: Σunsolved={} Σtrait_unsolved={} | 相位cum: unify={}(cum {:.1}ms) quote={}(cum {:.1}ms) eval={}(cum {:.1}ms) insert_go={}(cum {:.1}ms) force_v cum={:.1}ms check_univ={}(cum {:.1}ms) infer_expr={}(cum {:.1}ms) | unify内部: items={} solve_bump={} eval/η={}",
             g(&C.defs),
@@ -4331,10 +4371,17 @@ impl Machine {
                 work.clear();
                 stack.clear();
             }
-            if unify_iter(
+            let probe_tit = solve_probe::on().then(std::time::Instant::now);
+            let iter_r = unify_iter(
                 bump, spine, work, stack, vals, icits, defs, metas, globals, neutral, ren, conv,
                 l, t, u, resume, &mut solve_req,
-            ) {
+            );
+            if let Some(ti) = probe_tit {
+                solve_probe::C
+                    .un_iter_ns
+                    .fetch_add(ti.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            if iter_r {
                 solve_probe::phase_end(&solve_probe::B_UN, &solve_probe::C.un_ns, &solve_probe::C.un_self_ns, probe_t0);
                 return true;
             }
@@ -5251,7 +5298,7 @@ impl Machine {
             if x_prime < slots2.len() {
                 slots2[x_prime] = v;
             }
-            self.refresh(bump, cxt, &slots2, &mut names, walk)
+            self.refresh(bump, cxt, &slots2, &mut names, walk, x)
         };
         // pruning：update_prune 时目标槽改 None（define 槽）。keep_flat 时
         // 只重接链头 ..=x_prime 的前缀（O(x_prime)），第 x_prime+1 节点起
@@ -5445,6 +5492,7 @@ impl Machine {
         slots2: &[V],
         names: &mut Names,
         walk: usize,
+        x: u32,
     ) -> Vec<V> {
         let n = env_len(cxt.env) as usize;
         let old: Vec<V> = {
@@ -5460,6 +5508,49 @@ impl Machine {
             refreshed[d] = Some(old[d]);
         }
         for d in (0..walk_n).rev() {
+            let lvl = (n - 1 - d) as u32;
+            // 重锚跳过（traitchain O(D²) 主杀器）：本槽值不提及本层精化
+            // 层级 x ⇒ quote+eval 重锚恒等——连 env_tt 构建一并免掉，直通
+            // 原值。保守浅判定 + (x, force 后值位型) 缓存（槽值不可变 ⇒
+            // 跨 synthesis 恒定；traitchain 每次合成精化同一实例参数，
+            // walk 区间内 def 槽全部命中缓存直通）。names 条目存在的槽
+            // 不跳（其类型可能提及 x，env_tt 仍需构建）。
+            if !names.by_lvl.contains_key(&lvl) {
+                let men = {
+                    let vf = {
+                        let Machine {
+                            spine,
+                            defs,
+                            metas,
+                            globals,
+                            ..
+                        } = self;
+                        force(bump, spine, defs, metas, globals, old[d])
+                    };
+                    let key = (x, vf.0);
+                    match self.mention_cache.get(&key) {
+                        Some(&b) => b,
+                        None => {
+                            let b = {
+                                let Machine {
+                                    spine,
+                                    defs,
+                                    metas,
+                                    globals,
+                                    ..
+                                } = self;
+                                val_mentions_lvl_shallow(bump, spine, defs, metas, globals, vf, x)
+                            };
+                            self.mention_cache.insert(key, b);
+                            b
+                        }
+                    }
+                };
+                if !men {
+                    refreshed[d] = Some(old[d]);
+                    continue;
+                }
+            }
             // env_tt：头 d+1 个取 slots2（含目标替换），其余取已刷新槽
             let mut env_tt: Vec<V> = Vec::with_capacity(n);
             env_tt.extend_from_slice(&slots2[..d + 1]);
@@ -5473,7 +5564,6 @@ impl Machine {
             refreshed[d] = Some(rv);
             // src_names 按层级同步（Lvl(env_t.len()) = n-1-d）；L10：
             // 无条目静默跳过（if let Some 同款）
-            let lvl = (n - 1 - d) as u32;
             if let Some(old_ty) = names.by_lvl.get(&lvl) {
                 let old_ty = *old_ty;
                 let qt = self.quote(bump, n as u32, old_ty);
