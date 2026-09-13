@@ -2112,6 +2112,7 @@ fn unify_iter<'a>(
     #[cfg(feature = "sampler")]
     crate::sampler::tick();
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
+    let g_pro = solve_probe::TGuard::on(&solve_probe::C.un_pro_ns);
     // 草稿复用（Machine 常驻）：清空保容量，热路径零分配（resume 续跑
     // 不清——挂起点前已把草稿原样恢复；嵌套 unify 的入口 clear 对记忆
     // 表的影响与旧实现一致）
@@ -2124,6 +2125,7 @@ fn unify_iter<'a>(
         debug_assert!(stack.is_empty());
         stack.push(UItem::Pair(l0, t0, u0));
     }
+    drop(g_pro);
     let memo = &mut conv.memo;
     while let Some(item) = stack.pop() {
         solve_probe::on().then(|| {
@@ -2131,6 +2133,7 @@ fn unify_iter<'a>(
         });
         let (l, t, u) = match item {
             UItem::Store(key) => {
+                let _g_store = solve_probe::TGuard::on(&solve_probe::C.un_store_ns);
                 memo.insert(key);
                 continue;
             }
@@ -2215,6 +2218,11 @@ fn unify_iter<'a>(
             }
             UItem::Pair(l, t, u) => (l, t, u),
         };
+        let _g_item = solve_probe::ItemGuard::on(
+            &solve_probe::C.un_item_sum_ns,
+            &solve_probe::C.un_item_max_ns,
+        );
+        let g_pre = solve_probe::TGuard::on(&solve_probe::C.un_pre_ns);
         // 位相等：同一值。tag 7 与 Obj 头链例外（见函数注释——参考版对
         // 字面量无自反性、卡住投影走 `_` → Err）
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
@@ -2223,6 +2231,7 @@ fn unify_iter<'a>(
         if memo_on && memo.contains(&(t.0, u.0)) {
             continue; // 本轮已判等过的子对（命中连 force 都省——成功单调）
         }
+        drop(g_pre);
         let pair_force_t0 = solve_probe::on().then(|| std::time::Instant::now());
         let t = force(bump, spine, defs, metas, globals, t);
         let u = force(bump, spine, defs, metas, globals, u);
@@ -2235,6 +2244,7 @@ fn unify_iter<'a>(
             solve_probe::C.un_tag_pairs[((v_tag(t) << 3) | v_tag(u)) as usize]
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         });
+        let _g_disp = solve_probe::TGuard::on(&solve_probe::C.un_disp_ns);
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
             continue; // force 展开后同值（同一解的两处引用）
         }
@@ -2274,6 +2284,7 @@ fn unify_iter<'a>(
         // 与带实参链（tag 2）统一在此处理；裸×链 = spine 长度失配即败——
         // 与参考版 unify_sp([][..]) 同判定。——
         if is_objheaded(spine, t) && is_objheaded(spine, u) {
+            let _g_arm = solve_probe::TGuard::on(&solve_probe::C.un_arm_obj_ns);
             let (hc1, hc2) = (
                 if v_tag(t) == 7 { t } else { spine.spine_head(v_spine_of(t)) },
                 if v_tag(u) == 7 { u } else { spine.spine_head(v_spine_of(u)) },
@@ -2305,6 +2316,7 @@ fn unify_iter<'a>(
         }
         // —— 中性链 vs 中性链（参考臂 3/4/5 的链形态全在此分派）——
         if v_tag(t) == 2 && v_tag(u) == 2 {
+            let _g_arm = solve_probe::TGuard::on(&solve_probe::C.un_arm_chain_ns);
             let h1 = v_spine_of(t);
             let h2 = v_spine_of(u);
             let hd1 = spine.spine_head(h1);
@@ -2458,12 +2470,19 @@ fn unify_iter<'a>(
         }
         // —— flex 求解（参考臂 4/5/9/10 的裸形态）——
         {
+            let _g_arm = solve_probe::TGuard::on(&solve_probe::C.un_arm_flex_ns);
+            let flexof_t0 = solve_probe::on().then(|| std::time::Instant::now());
             let mut a1 = std::mem::take(&mut conv.scratch1);
             a1.clear();
             let ft = spine.flex_of(t, &mut a1);
             let mut a2 = std::mem::take(&mut conv.scratch2);
             a2.clear();
             let fu = spine.flex_of(u, &mut a2);
+            if let Some(f0) = flexof_t0 {
+                solve_probe::C
+                    .un_flexof_ns
+                    .fetch_add(f0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
             match (ft, fu) {
                 (Some(m1), Some(m2)) => {
                     let ok = if m1 == m2 {
@@ -2488,9 +2507,17 @@ fn unify_iter<'a>(
                     return false;
                 }
                 (Some(m), None) => {
+                    let bs_t0 = solve_probe::on().then(|| std::time::Instant::now());
+                    solve_probe::C.un_bare_solve_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let ok = solve_bump(
                         bump, spine, work, vals, icits, defs, metas, globals, ren, l, m, &a1, u,
                     );
+                    if let Some(b0) = bs_t0 {
+                        solve_probe::C.un_bare_solve_ns.fetch_add(
+                            b0.elapsed().as_nanos() as u64,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
                     conv.scratch1 = a1;
                     conv.scratch2 = a2;
                     if ok {
@@ -2505,9 +2532,17 @@ fn unify_iter<'a>(
                     return false;
                 }
                 (None, Some(m)) => {
+                    let bs_t0 = solve_probe::on().then(|| std::time::Instant::now());
+                    solve_probe::C.un_bare_solve_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let ok = solve_bump(
                         bump, spine, work, vals, icits, defs, metas, globals, ren, l, m, &a2, t,
                     );
+                    if let Some(b0) = bs_t0 {
+                        solve_probe::C.un_bare_solve_ns.fetch_add(
+                            b0.elapsed().as_nanos() as u64,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                    }
                     conv.scratch1 = a1;
                     conv.scratch2 = a2;
                     if ok {
@@ -2540,6 +2575,7 @@ fn unify_iter<'a>(
         // —— Sum/Sum（参考臂 13）：同名即逐参数（含索引）值合一；zip 语义
         // （参数数不等取 min——参考版同款）；异名失配 ——
         if v_tag(t) == 7 && v_tag(u) == 7 {
+            let _g_arm = solve_probe::TGuard::on(&solve_probe::C.un_arm_sum_ns);
             let (xt, xu) = (v_xcell_of(t), v_xcell_of(u));
             if let (
                 XCell::Sum {
@@ -2790,17 +2826,46 @@ fn solve_with_pren_bump<'a>(
     {
         return false;
     }
-    let Some(tm) = rename_iter(
-        bump, spine, work, vals, icits, defs, ren, metas, globals, Some(m), dom, gamma, rhs,
-    ) else {
+    let renamed = {
+        let t0 = solve_probe::on().then(|| std::time::Instant::now());
+        let r = rename_iter(
+            bump, spine, work, vals, icits, defs, ren, metas, globals, Some(m), dom, gamma, rhs,
+        );
+        if let Some(t) = t0 {
+            solve_probe::C.sb_rename_ns.fetch_add(
+                t.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        r
+    };
+    let Some(tm) = renamed else {
         return false;
     };
-    let lam_tm = lams_from_ty(
-        bump, spine, work, vals, icits, defs, metas, globals, dom, mty, tm,
-    );
-    let sol = eval_iter(
-        bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, lam_tm,
-    );
+    let lam_tm = {
+        let t0 = solve_probe::on().then(|| std::time::Instant::now());
+        let r = lams_from_ty(bump, spine, work, vals, icits, defs, metas, globals, dom, mty, tm);
+        if let Some(t) = t0 {
+            solve_probe::C.sb_lams_ns.fetch_add(
+                t.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        r
+    };
+    let sol = {
+        let t0 = solve_probe::on().then(|| std::time::Instant::now());
+        let r = eval_iter(
+            bump, spine, work, vals, icits, defs, metas, globals, EMPTY_ENV, lam_tm,
+        );
+        if let Some(t) = t0 {
+            solve_probe::C.sb_eval_ns.fetch_add(
+                t.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        r
+    };
     metas[m as usize] = MetaEntry::Solved(sol, mty);
     true
 }
@@ -3375,7 +3440,17 @@ fn lams_from_ty<'a>(
     body: &'a Tm<'a>,
 ) -> &'a Tm<'a> {
     let mut names: Vec<(&'a str, Icit)> = Vec::with_capacity(l as usize);
+    let lams_pre = solve_probe::on().then(|| std::time::Instant::now());
     let mut cur = force(bump, spine, defs, metas, globals, ty);
+    let mut lams_loop = solve_probe::on().then(|| std::time::Instant::now());
+    if let Some(p0) = lams_pre {
+        solve_probe::C.sb_lams_pre_ns.fetch_add(
+            p0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    solve_probe::C.sb_l_sum.fetch_add(l as u64, std::sync::atomic::Ordering::Relaxed);
+    solve_probe::C.sb_l_max.fetch_max(l as u64, std::sync::atomic::Ordering::Relaxed);
     for lp in 0..l {
         if v_tag(cur) != 4 {
             unreachable!(); // 类型 Π 层数不足（上游同款不可能）
@@ -3388,12 +3463,40 @@ fn lams_from_ty<'a>(
             name
         };
         names.push((name, icit));
+        // 最后一层的余定义域值是死值（cur 只用于继续走层，循环到此为止）
+        // ——免一次 eval+force。traitchain 实测：meta 闭类型的 Π 体经 rename
+        // 后可达 O(D²) 节点（k≈D 的 close Let 链携带全部 def 项），且全部
+        // 4097 次调用 l≤1——这步死求值曾是 11.7s 的主体（11.7s/4097 次 ≈
+        // 2.85ms/次重走 1.6M 可达节点）。
+        if lp + 1 == l {
+            break;
+        }
+        let ev_t0 = solve_probe::on().then(|| std::time::Instant::now());
         let next = eval_iter(
             bump, spine, work, vals, icits, defs, metas, globals,
             env_ext(bump, env, v_lvl(lp)),
             body_tm,
         );
+        if let Some(e0) = ev_t0 {
+            solve_probe::C.sb_lams_eval_ns.fetch_add(
+                e0.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+        let fc_t0 = solve_probe::on().then(|| std::time::Instant::now());
         cur = force(bump, spine, defs, metas, globals, next);
+        if let Some(f0) = fc_t0 {
+            solve_probe::C.sb_lams_force_ns.fetch_add(
+                f0.elapsed().as_nanos() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+    }
+    if let Some(l0) = lams_loop {
+        solve_probe::C.sb_lams_loop_ns.fetch_add(
+            l0.elapsed().as_nanos() as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
     let mut t = body;
     for (name, icit) in names.iter().rev() {
@@ -3448,6 +3551,36 @@ mod solve_probe {
         pub un_iter_ns: AtomicU64,
         pub un_pair_force_ns: AtomicU64,
         pub un_kod_ns: AtomicU64,
+        pub un_pro_ns: AtomicU64,
+        pub un_store_ns: AtomicU64,
+        pub un_pre_ns: AtomicU64,
+        pub un_disp_ns: AtomicU64,
+        pub un_item_max_ns: AtomicU64,
+        pub un_item_sum_ns: AtomicU64,
+        pub un_arm_obj_ns: AtomicU64,
+        pub un_arm_chain_ns: AtomicU64,
+        pub un_arm_flex_ns: AtomicU64,
+        pub un_arm_sum_ns: AtomicU64,
+        pub un_flexof_ns: AtomicU64,
+        pub un_bare_solve_ns: AtomicU64,
+        pub un_bare_solve_cnt: AtomicU64,
+        pub sb_rename_ns: AtomicU64,
+        pub sb_lams_ns: AtomicU64,
+        pub sb_eval_ns: AtomicU64,
+        pub sb_l_sum: AtomicU64,
+        pub sb_l_max: AtomicU64,
+        pub sb_lams_pre_ns: AtomicU64,
+        pub sb_lams_loop_ns: AtomicU64,
+        pub sb_lams_eval_ns: AtomicU64,
+        pub sb_lams_force_ns: AtomicU64,
+        pub sb_lams_cu_cnt: AtomicU64,
+        pub sb_lams_prune_cnt: AtomicU64,
+        pub sb_body_nodes_sum: AtomicU64,
+        pub sb_body_nodes_max: AtomicU64,
+        pub sb_env_len_sum: AtomicU64,
+        pub sb_env_len_max: AtomicU64,
+        pub sb_q_nodes_sum: AtomicU64,
+        pub sb_q_nodes_max: AtomicU64,
         pub un_tag_pairs: [AtomicU64; 64],
         pub q_calls: AtomicU64,
         pub q_ns: AtomicU64,
@@ -3583,6 +3716,36 @@ mod solve_probe {
         un_iter_ns: AtomicU64::new(0),
         un_pair_force_ns: AtomicU64::new(0),
         un_kod_ns: AtomicU64::new(0),
+        un_pro_ns: AtomicU64::new(0),
+        un_store_ns: AtomicU64::new(0),
+        un_pre_ns: AtomicU64::new(0),
+        un_disp_ns: AtomicU64::new(0),
+        un_item_max_ns: AtomicU64::new(0),
+        un_item_sum_ns: AtomicU64::new(0),
+        un_arm_obj_ns: AtomicU64::new(0),
+        un_arm_chain_ns: AtomicU64::new(0),
+        un_arm_flex_ns: AtomicU64::new(0),
+        un_arm_sum_ns: AtomicU64::new(0),
+        un_flexof_ns: AtomicU64::new(0),
+        un_bare_solve_ns: AtomicU64::new(0),
+        un_bare_solve_cnt: AtomicU64::new(0),
+        sb_rename_ns: AtomicU64::new(0),
+        sb_lams_ns: AtomicU64::new(0),
+        sb_eval_ns: AtomicU64::new(0),
+        sb_l_sum: AtomicU64::new(0),
+        sb_l_max: AtomicU64::new(0),
+        sb_lams_pre_ns: AtomicU64::new(0),
+        sb_lams_loop_ns: AtomicU64::new(0),
+        sb_lams_eval_ns: AtomicU64::new(0),
+        sb_lams_force_ns: AtomicU64::new(0),
+        sb_lams_cu_cnt: AtomicU64::new(0),
+        sb_lams_prune_cnt: AtomicU64::new(0),
+        sb_body_nodes_sum: AtomicU64::new(0),
+        sb_body_nodes_max: AtomicU64::new(0),
+        sb_env_len_sum: AtomicU64::new(0),
+        sb_env_len_max: AtomicU64::new(0),
+        sb_q_nodes_sum: AtomicU64::new(0),
+        sb_q_nodes_max: AtomicU64::new(0),
         un_tag_pairs: [const { AtomicU64::new(0) }; 64],
         q_calls: AtomicU64::new(0),
         q_ns: AtomicU64::new(0),
@@ -3628,6 +3791,58 @@ mod solve_probe {
     pub static B_STR: AtomicBool = AtomicBool::new(false);
     pub static B_TW: AtomicBool = AtomicBool::new(false);
 
+    /// 作用域累计计时守卫：构造取 now，Drop 时累计进槽——`continue` /
+    /// `return` 路径全覆盖。探针关时 t0=None 零成本。需提前结束用
+    /// `drop(g)` 显式落账。
+    pub struct TGuard<'a> {
+        t0: Option<std::time::Instant>,
+        slot: &'a AtomicU64,
+    }
+    impl<'a> TGuard<'a> {
+        #[inline]
+        pub fn on(slot: &'a AtomicU64) -> Self {
+            Self {
+                t0: if *ON { Some(std::time::Instant::now()) } else { None },
+                slot,
+            }
+        }
+    }
+    impl Drop for TGuard<'_> {
+        #[inline]
+        fn drop(&mut self) {
+            if let Some(t0) = self.t0.take() {
+                self.slot.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// 单 item 计时守卫：sum 累计 + max 单点（判「均匀慢」vs「个别病态」）。
+    pub struct ItemGuard<'a> {
+        t0: Option<std::time::Instant>,
+        sum: &'a AtomicU64,
+        mx: &'a AtomicU64,
+    }
+    impl<'a> ItemGuard<'a> {
+        #[inline]
+        pub fn on(sum: &'a AtomicU64, mx: &'a AtomicU64) -> Self {
+            Self {
+                t0: if *ON { Some(std::time::Instant::now()) } else { None },
+                sum,
+                mx,
+            }
+        }
+    }
+    impl Drop for ItemGuard<'_> {
+        #[inline]
+        fn drop(&mut self) {
+            if let Some(t0) = self.t0.take() {
+                let d = t0.elapsed().as_nanos() as u64;
+                self.sum.fetch_add(d, Ordering::Relaxed);
+                self.mx.fetch_max(d, Ordering::Relaxed);
+            }
+        }
+    }
+
     #[inline]
     pub fn on() -> bool {
         *ON
@@ -3659,12 +3874,43 @@ mod solve_probe {
             g(&C.str_trait),
         );
         eprintln!(
-            "[L10SOLVE_PROBE] unify分解: iter内={:.1}ms / unify总cum={:.1}ms / pair-force={:.1}ms / EvalCod2-eval={:.1}ms (items={})",
-            g(&C.un_iter_ns) as f64 / 1e6,
-            g(&C.un_ns) as f64 / 1e6,
+            "[L10SOLVE_PROBE] unify内部分解(ms): pro={:.1} store={:.1} pre={:.1} force={:.1} kod={:.1} disp={:.1} | 臂: obj={:.1} chain22={:.1} flex={:.1} sum77={:.1} | iter={:.1} | item: sum={:.1} max={:.3}",
+            g(&C.un_pro_ns) as f64 / 1e6,
+            g(&C.un_store_ns) as f64 / 1e6,
+            g(&C.un_pre_ns) as f64 / 1e6,
             g(&C.un_pair_force_ns) as f64 / 1e6,
             g(&C.un_kod_ns) as f64 / 1e6,
-            g(&C.un_items),
+            g(&C.un_disp_ns) as f64 / 1e6,
+            g(&C.un_arm_obj_ns) as f64 / 1e6,
+            g(&C.un_arm_chain_ns) as f64 / 1e6,
+            g(&C.un_arm_flex_ns) as f64 / 1e6,
+            g(&C.un_arm_sum_ns) as f64 / 1e6,
+            g(&C.un_iter_ns) as f64 / 1e6,
+            g(&C.un_item_sum_ns) as f64 / 1e6,
+            g(&C.un_item_max_ns) as f64 / 1e6,
+        );
+        eprintln!(
+            "[L10SOLVE_PROBE] flex块分解(ms): flex_of={:.1} | bare solve_bump: cnt={} time={:.1}ms | solve内: rename={:.1} lams={:.1} eval={:.1} | lams: pre-force={:.1} loop={:.1} (loop内 eval={:.1} force={:.1}) | l: sum={} max={} | 调用点: cu={} prune={} | Π体: nodes_sum={} nodes_max={} | env_len: sum={} max={} | quote: sum={} max={}",
+            g(&C.un_flexof_ns) as f64 / 1e6,
+            g(&C.un_bare_solve_cnt),
+            g(&C.un_bare_solve_ns) as f64 / 1e6,
+            g(&C.sb_rename_ns) as f64 / 1e6,
+            g(&C.sb_lams_ns) as f64 / 1e6,
+            g(&C.sb_eval_ns) as f64 / 1e6,
+            g(&C.sb_lams_pre_ns) as f64 / 1e6,
+            g(&C.sb_lams_loop_ns) as f64 / 1e6,
+            g(&C.sb_lams_eval_ns) as f64 / 1e6,
+            g(&C.sb_lams_force_ns) as f64 / 1e6,
+            g(&C.sb_l_sum),
+            g(&C.sb_l_max),
+            g(&C.sb_lams_cu_cnt),
+            g(&C.sb_lams_prune_cnt),
+            g(&C.sb_body_nodes_sum),
+            g(&C.sb_body_nodes_max),
+            g(&C.sb_env_len_sum),
+            g(&C.sb_env_len_max),
+            g(&C.sb_q_nodes_sum),
+            g(&C.sb_q_nodes_max),
         );
         let mut tags = String::new();
         for (i, c) in C.un_tag_pairs.iter().enumerate() {
@@ -4066,6 +4312,8 @@ impl Machine {
             a
         } else {
             let q = self.quote(bump, cxt.lvl, a);
+            solve_probe::C.sb_q_nodes_sum.fetch_add(tm_size(q), std::sync::atomic::Ordering::Relaxed);
+            solve_probe::C.sb_q_nodes_max.fetch_max(tm_size(q), std::sync::atomic::Ordering::Relaxed);
             if cxt.binds == 0 && !has_free_var(q) {
                 self.eval(bump, EMPTY_ENV, q)
             } else {
@@ -4969,6 +5217,7 @@ impl Machine {
                     &mut *(eval_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>)
                 };
                 work.clear();
+                solve_probe::C.sb_lams_cu_cnt.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 lams_from_ty(bump, spine, work, vals, icits, defs, metas, globals, args.len() as u32, mty, rhs)
             };
             let solution = self.eval(bump, EMPTY_ENV, lam_tm);
