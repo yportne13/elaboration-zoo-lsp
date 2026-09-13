@@ -321,7 +321,7 @@ impl MacroTranscriber {
             },
         }
     }
-    fn get_used_metavars(&self) -> std::collections::HashSet<String> {
+    pub(super) fn get_used_metavars(&self) -> std::collections::HashSet<String> {
         match self {
             MacroTranscriber::Basic(x) => {
                 x.iter()

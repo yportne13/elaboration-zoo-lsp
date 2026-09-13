@@ -202,57 +202,127 @@ fn owned_tokens_to_string(tokens: &[OwnedToken]) -> String {
     result
 }
 
-/// Byte range in the expansion string -> the original owned token's source span.
-struct ExpansionSpan {
-    expansion_start: u32,
-    expansion_end: u32,
-    src_start: u32,
-    src_end: u32,
-    src_path_id: u32,
-}
-
-/// Like `owned_tokens_to_string`, but also records, for each token, the range it
-/// occupies in the expansion string and the token's original source span. Used
-/// to restore call-site spans after the expansion is re-lexed, so errors inside
-/// a macro expansion point back into the user's source (not the expansion).
-fn owned_tokens_to_string_mapped(tokens: &[OwnedToken]) -> (String, Vec<ExpansionSpan>) {
+/// 把展开 token 序列化成文本（仅用于 `MacroExpansionInfo.expanded_text`
+/// 的 LSP 记录；展开本身已改为 `splice_transcriber` 直接拼接 token，不再
+/// 经过「序列化 → 重词法」往返）。与 `owned_tokens_to_string` 逐字节一致。
+fn borrowed_tokens_to_string(tokens: &[TokenNode<'_>]) -> String {
     let mut result = String::new();
-    let mut map = Vec::with_capacity(tokens.len());
     for (i, tok) in tokens.iter().enumerate() {
         if i > 0 {
             result.push(' ');
         }
-        let expansion_start = result.len() as u32;
         // Wrap Str tokens in double quotes (string literals)
         if tok.data.1 == TokenKind::Str {
             result.push('"');
-            result.push_str(&tok.data.0);
+            result.push_str(tok.data.0);
             result.push('"');
         } else {
-            result.push_str(&tok.data.0);
+            result.push_str(tok.data.0);
         }
-        let expansion_end = result.len() as u32;
-        map.push(ExpansionSpan {
-            expansion_start,
-            expansion_end,
-            src_start: tok.start_offset,
-            src_end: tok.end_offset,
-            src_path_id: tok.path_id,
-        });
     }
-    (result, map)
+    result
 }
 
-/// span_map 二分查找：返回覆盖 expansion 串内偏移 `off` 的映射项。表按
-/// 构造序（即 token 序）天然按 `expansion_start` 升序、区间互不重叠，无需
-/// 再排序——取代过去逐 token 的线性 `find`（长展开 O(n^2)）。
-fn span_map_lookup(span_map: &[ExpansionSpan], off: u32) -> Option<&ExpansionSpan> {
-    let idx = span_map.partition_point(|m| m.expansion_start <= off);
-    if idx == 0 {
-        return None;
+/// 相邻 EndLine 折叠 + 丢弃 Eof：整串重词法按构造具备的两个归一化行为
+/// （lexer 的 endline matcher 是 many1——连续换行合一；Eof 不产出）。
+/// 直接拼接据此对齐，保证与旧重词法路径的 token 流逐 token 一致。
+fn splice_push<'t>(out: &mut Vec<TokenNode<'t>>, tok: TokenNode<'t>) {
+    if tok.data.1 == TokenKind::Eof {
+        return;
     }
-    let m = &span_map[idx - 1];
-    (m.expansion_start <= off && off < m.expansion_end).then_some(m)
+    if tok.data.1 == TokenKind::EndLine
+        && out.last().map_or(false, |p| p.data.1 == TokenKind::EndLine)
+    {
+        return;
+    }
+    out.push(tok);
+}
+
+/// 直接拼接展开 token（不落文本）：沿转写器树行走，
+/// - 元变量捕获：按借用原样拼入（捕获 token 在匹配期就带调用点 span/path）；
+/// - 模板字面量：span 改写为整个宏调用区间（调用点 path）——定义点 span
+///   泄漏进报错文案是过去「直接拼接失败」的根因，按调用点改写即按构造
+///   消除；下游消费 TokenNode 切片而非文本。
+/// 语义与旧「`replace` 深拷贝 → 序列化 → 重词法 → span_map 回查」路径
+/// 一致（Group 的逐迭代选表、BuiltIn 的 Str 化、EndLine 折叠/Eof 过滤），
+/// 但免去捕获 token 的 String 深拷贝、整串序列化与二次词法。
+fn splice_transcriber<'t>(
+    trans: &'t MacroTranscriber,
+    metavars: &[(&'t str, &'t [OwnedToken])],
+    invocation_start: u32,
+    invocation_end: u32,
+    call_site_path: u32,
+    out: &mut Vec<TokenNode<'t>>,
+) -> Result<(), IError> {
+    match trans {
+        MacroTranscriber::Basic(toks) => {
+            for tok in toks.iter() {
+                if tok.data.1 == TokenKind::MacroIdent {
+                    if let Some((_, cap)) = metavars.iter().find(|z| z.0 == tok.data.0) {
+                        for t0 in cap.iter() {
+                            splice_push(out, Span {
+                                data: (t0.data.0.as_str(), t0.data.1),
+                                start_offset: t0.start_offset,
+                                end_offset: t0.end_offset,
+                                path_id: t0.path_id,
+                            });
+                        }
+                        continue;
+                    }
+                }
+                splice_push(out, Span {
+                    data: (tok.data.0.as_str(), tok.data.1),
+                    start_offset: invocation_start,
+                    end_offset: invocation_end,
+                    path_id: call_site_path,
+                });
+            }
+            Ok(())
+        }
+        MacroTranscriber::Sequence(parts) => {
+            for p in parts.iter() {
+                splice_transcriber(p, metavars, invocation_start, invocation_end, call_site_path, out)?;
+            }
+            Ok(())
+        }
+        MacroTranscriber::Group(x) => {
+            let used = x.get_used_metavars();
+            // 每个被引用的元变量名 → 该名下全部捕获（按 metavars 条目序）。
+            let vars: Vec<(&'t str, Vec<&'t [OwnedToken]>)> = metavars.iter()
+                .filter(|(name, _)| used.contains(*name))
+                .map(|(name, toks)| (*name, vec![*toks]))
+                .collect();
+            let loop_num = vars.iter().map(|v| v.1.len()).max().unwrap_or(0);
+            for i in 0..loop_num {
+                let tables: Result<Vec<(&'t str, &'t [OwnedToken])>, IError> = vars.iter()
+                    .map(|(name, slices)| {
+                        if slices.len() == 1 {
+                            Ok((*name, slices[0]))
+                        } else if slices.len() == loop_num {
+                            Ok((*name, slices[i]))
+                        } else {
+                            Err(IError { msg: empty_span(ErrMsg::Base(BaseMsg::Expect(TokenKind::RParen))) })
+                        }
+                    })
+                    .collect();
+                splice_transcriber(x, &tables?, invocation_start, invocation_end, call_site_path, out)?;
+            }
+            Ok(())
+        }
+        MacroTranscriber::BuiltIn => {
+            for (_, toks) in metavars.iter() {
+                for t0 in toks.iter() {
+                    splice_push(out, Span {
+                        data: (t0.data.0.as_str(), TokenKind::Str),
+                        start_offset: t0.start_offset,
+                        end_offset: t0.end_offset,
+                        path_id: t0.path_id,
+                    });
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 trait ParserExt<I: Copy, A, S> {
@@ -1193,55 +1263,21 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         for m in macro_decl.iter() {
             if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
-                let t_owned = m.transcriber.replace(t)?;
-                // Re-lex the expanded text instead of splicing the owned tokens
-                // directly: owned tokens carry spans/path_ids from the macro
-                // definition, and mixing them with call-site tokens made the
-                // re-parse of the expansion fail (Expect(EndLine) at a literal
-                // token's definition-site span). The EOF token is filtered so
-                // the recursive p_raw sees a clean token stream.
-                let (t_str, span_map) = owned_tokens_to_string_mapped(&t_owned);
                 let invocation_start = input[0].start_offset;
                 let invocation_end = if input.len() > i.len() { input[input.len() - i.len() - 1].end_offset } else { input[0].end_offset };
                 let call_site_path = input[0].path_id;
-                let t_borrowed: Vec<_> = match super::parser::lex::lex(Span {
-                    data: &t_str,
-                    start_offset: 0,
-                    end_offset: t_str.len() as u32,
-                    path_id: call_site_path,
-                }) {
-                    Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).map(|t| {
-                        // Restore the original source span for each re-lexed
-                        // token: metavar captures keep their call-site span;
-                        // transcriber literals (definition-site path) map to the
-                        // whole invocation so errors stay inside the macro call.
-                        let orig = span_map_lookup(&span_map, t.start_offset);
-                        match orig {
-                            Some(m) if m.src_path_id == call_site_path => Span {
-                                data: (t.data.0, t.data.1),
-                                start_offset: m.src_start,
-                                end_offset: m.src_end,
-                                path_id: m.src_path_id,
-                            },
-                            _ => Span {
-                                data: (t.data.0, t.data.1),
-                                start_offset: invocation_start,
-                                end_offset: invocation_end,
-                                path_id: call_site_path,
-                            },
-                        }
-                    }).collect(),
-                    None => t_owned.iter().map(|tok| Span {
-                        data: (tok.data.0.as_str(), tok.data.1),
-                        start_offset: tok.start_offset,
-                        end_offset: tok.end_offset,
-                        path_id: tok.path_id,
-                    }).collect(),
-                };
-                // Record macro expansion info（expanded_text 复用上面唯一一次
-                // 序列化产出的 t_str——过去此处另跑一遍 owned_tokens_to_string，
-                // 同一串字节序列化两次；re-lex 的 token 借着 t_str，这里只能
-                // 克隆，但整段 memcpy 仍远便宜于第二次逐 token 序列化）。
+                // 直接拼接展开 token（不再「序列化成串 → 整串重词法 →
+                // span_map 回查」）：元变量捕获在匹配期就带调用点 span，按
+                // 借用原样拼入；模板字面量的 span 改写为整个宏调用区间。
+                // 过去直接拼接失败的根因是定义点 span 泄漏进报错文案——
+                // span 按调用点改写即按构造消除；下游消费 TokenNode 切片
+                // 而非文本。
+                let captures: Vec<(&str, &[OwnedToken])> =
+                    t.iter().map(|(name, toks)| (name.as_str(), toks.as_slice())).collect();
+                let mut t_borrowed: Vec<TokenNode> = Vec::new();
+                splice_transcriber(&m.transcriber, &captures, invocation_start, invocation_end, call_site_path, &mut t_borrowed)?;
+                // Record macro expansion info（expanded_text 只服务 LSP
+                // 记录，从拼接好的 token 借用序列化，单次分配、零深拷贝）。
                 {
                     let consumed = input.len() - i.len();
                     let start = input[0].start_offset;
@@ -1250,7 +1286,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         name: input[0].data.0.to_string(),
                         start_offset: start,
                         end_offset: end,
-                        expanded_text: t_str.clone(),
+                        expanded_text: borrowed_tokens_to_string(&t_borrowed),
                         name_token_is_macro: true,
                         def_start_offset: m.def_start_offset,
                         def_end_offset: m.def_end_offset,
@@ -1560,40 +1596,34 @@ fn p_def_stmt_block<'a: 'b, 'b>(
     if body_tokens.is_empty() {
         return Ok((input, Raw::Hole(lcurly)));
     }
-    // Re-lex the spliced body and parse it as ONE expression (the let-chain
-    // with the value tail) — mirroring p_raw's macro-expansion path so token
-    // spans map back to the block / source.
-    let (t_str, span_map) = owned_tokens_to_string_mapped(&body_tokens);
+    // Re-parse the spliced body as ONE expression (the let-chain with the
+    // value tail) — mirroring p_raw's macro-expansion path so token spans
+    // map back to the block / source. Direct token splice (same as p_raw's
+    // expansion): no serialize→re-lex→span_map round-trip; per-token span
+    // semantics match the old re-lex mapping (call-site path keeps its own
+    // span, foreign-path tokens map to the whole block; EndLine runs fold,
+    // Eof drops — the re-lexer's by-construction normalizations).
     let invocation_start = lcurly.start_offset;
     let invocation_end = rcurly.end_offset;
     let call_site_path = lcurly.path_id;
-    let t_borrowed: Vec<TokenNode> = match lex::lex(Span {
-        data: &t_str,
-        start_offset: 0,
-        end_offset: t_str.len() as u32,
-        path_id: call_site_path,
-    }) {
-        Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).map(|t| {
-            let orig = span_map_lookup(&span_map, t.start_offset);
-            match orig {
-                Some(m) if m.src_path_id == call_site_path => Span {
-                    data: (t.data.0, t.data.1),
-                    start_offset: m.src_start,
-                    end_offset: m.src_end,
-                    path_id: m.src_path_id,
-                },
-                _ => Span {
-                    data: (t.data.0, t.data.1),
-                    start_offset: invocation_start,
-                    end_offset: invocation_end,
-                    path_id: call_site_path,
-                },
+    let mut t_borrowed: Vec<TokenNode> = Vec::with_capacity(body_tokens.len());
+    for tok in body_tokens.iter() {
+        splice_push(&mut t_borrowed, if tok.path_id == call_site_path {
+            Span {
+                data: (tok.data.0.as_str(), tok.data.1),
+                start_offset: tok.start_offset,
+                end_offset: tok.end_offset,
+                path_id: tok.path_id,
             }
-        }).collect(),
-        None => {
-            return Err(IError { msg: lcurly.map(|_| ErrMsg::Base(BaseMsg::ExpectRaw)) });
-        }
-    };
+        } else {
+            Span {
+                data: (tok.data.0.as_str(), tok.data.1),
+                start_offset: invocation_start,
+                end_offset: invocation_end,
+                path_id: call_site_path,
+            }
+        });
+    }
     let _guard = match MacroDepthGuard::enter() {
         Some(g) => g,
         None => return Err(macro_depth_error(input)),
