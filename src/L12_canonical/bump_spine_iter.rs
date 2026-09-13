@@ -1527,7 +1527,7 @@ fn quote_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &[MetaEntry],
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     level0: u32,
     v0: V,
@@ -1963,10 +1963,36 @@ enum UItem<'a> {
     MatchPattern(&'a PatternDetail, &'a PatternDetail),
 }
 
+/// declb 缓存条目：`(存根表, 源表钉)`。把源表 `Rc` 的克隆一并存入缓存，
+/// 键地址（`Rc` 分配）在缓存存活期内不会释放复用——指针键无 ABA 风险。
+type DeclbEntry<'a> = (Rc<Decls<'a>>, Rc<Decls<'a>>);
+
+thread_local! {
+    /// declb 存根表缓存：键 = 源 decl 表 `Rc` 的分配地址。卡住 match 的
+    /// quote/unify/rename 每次重建 O(D) 存根表 → 每轮每表一次。放 TLS 而非
+    /// Machine 字段：declb_of 深在 eval/quote/unify/rename 的参数链底，穿
+    /// 参数要动 10 个核心函数约 40 个调用点（L13 meta journal 同款先例）。
+    /// 清除纪律与 Machine scratch 字段同款：`clear_round` 与 `bump.reset()`
+    /// 1:1 同界（Tycker 三入口均先 reset 后 clear），条目绝不跨轮存活；
+    /// 存放口径 'static 同 `unify_stack` 等槽位——条目只含当轮 bump 句柄。
+    static DECLB_CACHE: RefCell<FxHashMap<usize, DeclbEntry<'static>>> =
+        RefCell::new(FxHashMap::default());
+}
+
 /// 从 decl 表构建 declb 存根表（每条目换成 `Decl(name)` 卡住值——递归
-/// 引用停在存根；参考版 declb 逐字同构）。
-fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
-    Rc::new(
+/// 引用停在存根；参考版 declb 逐字同构）。带指针键缓存：同表重复构建
+/// O(D) → 每轮首建后 O(1)。
+fn declb_of<'a>(bump: &'a Bump, decl: &Rc<Decls<'a>>) -> Rc<Decls<'a>> {
+    let key = Rc::as_ptr(decl) as usize;
+    if let Some(entry) = DECLB_CACHE.with(|c| c.borrow_mut().get(&key).map(|e| e.0.clone())) {
+        // SAFETY：条目写于本轮（clear_round 之后），只含本轮 bump 句柄；
+        // 'static 仅是存放口径，读出时按当轮生命周期改写（同 unify_stack
+        // 的槽位纪律）。
+        let stub: &Rc<Decls<'a>> =
+            unsafe { &*(&entry as *const Rc<Decls<'static>> as *const Rc<Decls<'a>>) };
+        return stub.clone();
+    }
+    let stub: Rc<Decls<'a>> = Rc::new(
         decl.iter()
             .map(|(k, e)| {
                 let name = bump.alloc_str(k.as_str());
@@ -1980,7 +2006,15 @@ fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
                 )
             })
             .collect(),
-    )
+    );
+    // SAFETY：同上，反向写入（本轮 bump 句柄按存放口径擦成 'static）。
+    // SAFETY（源表钉）：`decl` 的克隆，同分配同生命周期改写。
+    let stub_static: &Rc<Decls<'static>> =
+        unsafe { &*(&stub as *const Rc<Decls<'a>> as *const Rc<Decls<'static>>) };
+    let decl_static: &Rc<Decls<'static>> =
+        unsafe { &*(decl as *const Rc<Decls<'a>> as *const Rc<Decls<'static>>) };
+    DECLB_CACHE.with(|c| c.borrow_mut().insert(key, (stub_static.clone(), decl_static.clone())));
+    stub
 }
 
 /// 链（或裸单元）是否卡住投影 Obj 头——unify 的位相等捷径对它关闭，
@@ -2008,7 +2042,7 @@ fn intersect_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     stack: &mut Vec<UItem<'a>>,
     l: u32,
@@ -2070,7 +2104,7 @@ fn flex_flex_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     ren: &mut RenBuf,
     gamma: u32,
@@ -2205,7 +2239,7 @@ fn unify_iter<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     ren: &mut RenBuf,
     conv: &mut ConvScratch,
@@ -2895,7 +2929,7 @@ fn solve_with_pren_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     ren: &mut RenBuf,
     m: u32,
@@ -2940,7 +2974,7 @@ fn solve_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     ren: &mut RenBuf,
     gamma: u32,
@@ -2991,7 +3025,7 @@ fn rename_iter<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     occ: Option<u32>,
     dom0: u32,
@@ -3305,7 +3339,7 @@ fn prune_vflex_bump<'a>(
     defs: &mut Vec<V>,
     ren: &mut RenBuf,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     occ: Option<u32>,
     dom: u32,
@@ -3371,7 +3405,7 @@ fn prune_meta_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     mask: &[Option<Icit>], // 内先序
     m: u32,
@@ -3387,12 +3421,14 @@ fn prune_meta_bump<'a>(
         bump, spine, work, vals, icits, defs, metas, decl, mutable, EMPTY_ENV, pruned_tm,
     );
     let mp = metas.len() as u32;
-    // 参考版：new_meta(prunedty, 空 Cxt（只塞 decl）, origin_ty)
+    // 参考版：new_meta(prunedty, 空 Cxt（只塞 decl）, origin_ty)。
+    // decls 共享当轮表的 Rc（decl 参数即 &Rc<Decls>；COW 纪律下共享分配
+    // 不可变，与旧的「深拷后新包 Rc」内容逐字一致）。
     let snap: Rc<MetaSnap<'static>> = unsafe {
         std::mem::transmute(Rc::new(MetaSnap {
             lvl: 0,
             types: None,
-            decls: Rc::new(decl.clone()),
+            decls: decl.clone(),
         }))
     };
     metas.push(MetaEntry::Unsolved(prunedty, snap, origin));
@@ -3422,7 +3458,7 @@ fn prune_ty_bump<'a>(
     icits: &mut Vec<Icit>,
     defs: &mut Vec<V>,
     metas: &mut Vec<MetaEntry>,
-    decl: &Decls<'a>,
+    decl: &Rc<Decls<'a>>,
     mutable: &RefCell<FxHashMap<SmolStr, V>>,
     mask_inner_first: &[Option<Icit>],
     mty: V,
@@ -3629,6 +3665,9 @@ impl Machine {
         self.constraints.clear();
         self.spine.stack.clear();
         self.tstate = TraitState::default();
+        // declb 存根缓存一并清（TLS；条目只含当轮 bump 句柄，与
+        // `bump.reset()` 同界——Tycker 三入口均先 reset 后 clear，1:1 配对）。
+        DECLB_CACHE.with(|c| c.borrow_mut().clear());
     }
 
     // Extend Cxt（源码 binder / inserted binder / define / fake_bind）
@@ -3993,7 +4032,7 @@ impl Machine {
             icits,
             defs,
             metas,
-            &*cxt.decls,
+            &cxt.decls,
             mutable,
             level,
             v,
@@ -4045,7 +4084,7 @@ impl Machine {
             icits,
             defs,
             metas,
-            &*cxt.decls,
+            &cxt.decls,
             mutable,
             level,
             v,
@@ -4101,7 +4140,7 @@ impl Machine {
                 stack.clear();
             }
             if unify_iter(
-                bump, spine, work, stack, vals, icits, defs, metas, &*cxt.decls, mutable, ren,
+                bump, spine, work, stack, vals, icits, defs, metas, &cxt.decls, mutable, ren,
                 conv, l, t, u, resume, &mut solve_req,
             ) {
                 return true;
@@ -4526,7 +4565,7 @@ impl Machine {
                     };
                     work.clear();
                     prune_ty_bump(
-                        bump, spine, work, vals, icits, defs, metas, &*cxt.decls, mutable, &mask, mty,
+                        bump, spine, work, vals, icits, defs, metas, &cxt.decls, mutable, &mask, mty,
                     )
                 };
                 if ok.is_none() {
@@ -4561,7 +4600,7 @@ impl Machine {
                 };
                 work.clear();
                 rename_iter(
-                    bump, spine, work, vals, icits, defs, ren, metas, &*cxt.decls, mutable,
+                    bump, spine, work, vals, icits, defs, ren, metas, &cxt.decls, mutable,
                     Some(m), args.len() as u32, cxt.lvl, v_u(0),
                 )
             };

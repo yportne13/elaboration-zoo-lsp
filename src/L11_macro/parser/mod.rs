@@ -1,6 +1,7 @@
 use lex::{TokenKind, TokenNode};
 use syntax::{Decl, Either, Icit, Pattern, Raw};
 use std::collections::HashMap;
+use std::rc::Rc;
 use macros::*;
 use serde::{Serialize, Deserialize};
 
@@ -125,7 +126,12 @@ pub struct IError {
 
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
-pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>);
+/// 累积宏表：整表包 `Rc`、每条规则表包 `Rc`。parse 期只在 `macro_rules`
+/// 声明点经 `Rc::make_mut` 增量插入（此时表独占，O(1)）；展开期
+/// `p_raw`/`p_decl` 递归用 `state.1.clone()` 传快照——Rc 克隆 O(1)，
+/// 取代过去每次展开对整表（含规则匹配器/转写器树）的深克隆；入口
+/// `state.1.get(..).cloned()` 同理降为规则表的 Rc 克隆。
+pub type MacroState = (Vec<IError>, Rc<HashMap<String, Rc<Vec<MacroRule>>>>, Vec<MacroExpansionInfo>);
 
 /// 宏展开重解析的递归深度上限：自递归宏（`macro_rules m { () => { m } }` +
 /// `def x = m`）在展开后再次命中同名宏，若不加限制会无限递归直至栈溢出
@@ -235,6 +241,18 @@ fn owned_tokens_to_string_mapped(tokens: &[OwnedToken]) -> (String, Vec<Expansio
     (result, map)
 }
 
+/// span_map 二分查找：返回覆盖 expansion 串内偏移 `off` 的映射项。表按
+/// 构造序（即 token 序）天然按 `expansion_start` 升序、区间互不重叠，无需
+/// 再排序——取代过去逐 token 的线性 `find`（长展开 O(n²)）。
+fn span_map_lookup(span_map: &[ExpansionSpan], off: u32) -> Option<&ExpansionSpan> {
+    let idx = span_map.partition_point(|m| m.expansion_start <= off);
+    if idx == 0 {
+        return None;
+    }
+    let m = &span_map[idx - 1];
+    (m.expansion_start <= off && off < m.expansion_end).then_some(m)
+}
+
 trait ParserExt<I: Copy, A, S> {
     fn many1(self) -> impl Parser<I, Vec<A>, S, IError>;
     fn many1_sep<P: Parser<I, X, S, IError>, X>(self, sep: P) -> impl Parser<I, Vec<A>, S, IError>;
@@ -341,13 +359,13 @@ impl<'a: 'b, 'b, A, T: Parser<&'b [TokenNode<'a>], A, MacroState, IError>> Parse
 /// Parse with no pre-existing macros (for tests). Returns (declarations, parse errors).
 pub fn parser(input: &str, id: u32) -> Option<(Vec<Decl>, Vec<IError>)> {
     let mut err_collect: MacroState = (vec![], Default::default(), vec![]);
-    err_collect.1.entry("stringify".to_owned()).or_insert_with(|| vec![MacroRule {
+    Rc::make_mut(&mut err_collect.1).entry("stringify".to_owned()).or_insert_with(|| Rc::new(vec![MacroRule {
         matcher: MacroMatcher::Metavar { name: empty_span(String::new()), fragment: MacroFragment::Ident },
         transcriber: MacroTranscriber::BuiltIn,
         def_start_offset: None,
         def_end_offset: None,
         def_path_id: None,
-    }]);
+    }]));
     match super::parser::lex::lex(Span {
         data: input,
         start_offset: 0,
@@ -1118,25 +1136,9 @@ fn p_new<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
 
 fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
-        for m in macro_decl {
+        for m in macro_decl.iter() {
             if let Ok((i, t)) = m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
                 let t_owned = m.transcriber.replace(t)?;
-                // Record macro expansion info
-                {
-                    let consumed = input.len() - i.len();
-                    let start = input[0].start_offset;
-                    let end = if consumed > 0 { input[consumed - 1].end_offset } else { input[0].end_offset };
-                    state.2.push(MacroExpansionInfo {
-                        name: input[0].data.0.to_string(),
-                        start_offset: start,
-                        end_offset: end,
-                        expanded_text: owned_tokens_to_string(&t_owned),
-                        name_token_is_macro: true,
-                        def_start_offset: m.def_start_offset,
-                        def_end_offset: m.def_end_offset,
-                        def_path_id: m.def_path_id,
-                    });
-                }
                 // Re-lex the expanded text instead of splicing the owned tokens
                 // directly: owned tokens carry spans/path_ids from the macro
                 // definition, and mixing them with call-site tokens made the
@@ -1158,7 +1160,7 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         // token: metavar captures keep their call-site span;
                         // transcriber literals (definition-site path) map to the
                         // whole invocation so errors stay inside the macro call.
-                        let orig = span_map.iter().find(|m| m.expansion_start <= t.start_offset && t.start_offset < m.expansion_end);
+                        let orig = span_map_lookup(&span_map, t.start_offset);
                         match orig {
                             Some(m) if m.src_path_id == call_site_path => Span {
                                 data: (t.data.0, t.data.1),
@@ -1181,6 +1183,25 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
                         path_id: tok.path_id,
                     }).collect(),
                 };
+                // Record macro expansion info（expanded_text 复用上面唯一一次
+                // 序列化产出的 t_str——过去此处另跑一遍 owned_tokens_to_string，
+                // 同一串字节序列化两次；re-lex 的 token 借着 t_str，这里只能
+                // 克隆，但整段 memcpy 仍远便宜于第二次逐 token 序列化）。
+                {
+                    let consumed = input.len() - i.len();
+                    let start = input[0].start_offset;
+                    let end = if consumed > 0 { input[consumed - 1].end_offset } else { input[0].end_offset };
+                    state.2.push(MacroExpansionInfo {
+                        name: input[0].data.0.to_string(),
+                        start_offset: start,
+                        end_offset: end,
+                        expanded_text: t_str.clone(),
+                        name_token_is_macro: true,
+                        def_start_offset: m.def_start_offset,
+                        def_end_offset: m.def_end_offset,
+                        def_path_id: m.def_path_id,
+                    });
+                }
                 let _guard = match MacroDepthGuard::enter() {
                     Some(g) => g,
                     // 展开深度超限：停止递归，返回错误（由上层 recover 记录）。
@@ -1426,7 +1447,7 @@ fn p_def_stmt_block<'a: 'b, 'b>(
         path_id: call_site_path,
     }) {
         Some((_, lexed)) => lexed.into_iter().filter(|t| t.data.1 != TokenKind::Eof).map(|t| {
-            let orig = span_map.iter().find(|m| m.expansion_start <= t.start_offset && t.start_offset < m.expansion_end);
+            let orig = span_map_lookup(&span_map, t.start_offset);
             match orig {
                 Some(m) if m.src_path_id == call_site_path => Span {
                     data: (t.data.0, t.data.1),
@@ -1919,7 +1940,7 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                 // Store exported status in the macro name's span metadata.
                 // We use a sentinel prefix to mark exported macros.
                 if is_exported {
-                    state.1.insert(format!("__exported__{}", name.data), vec![]);
+                    Rc::make_mut(&mut state.1).insert(format!("__exported__{}", name.data), Rc::new(Vec::new()));
                 }
                 // Stamp the definition span (the `macro_rules <name>` name
                 // token) onto every rule so use sites can resolve
@@ -1933,7 +1954,7 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
                         ..rule
                     })
                     .collect();
-                state.1.insert(name.data.clone(), rules);
+                Rc::make_mut(&mut state.1).insert(name.data.clone(), Rc::new(rules));
             }
             Ok((input, ()))
         },
@@ -1944,7 +1965,7 @@ fn p_macro_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
     if let Some(macro_decl) = input.first().and_then(|x| state.1.get(x.data.0).cloned()) {
         let is_cut = macro_decl.len() == 1;
-        for m in macro_decl {
+        for m in macro_decl.iter() {
             let (i, t) = if is_cut {
                 match m.matcher.to_parser().parse(input.get(1..).unwrap(), state) {
                     Ok(x) => x,
