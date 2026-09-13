@@ -712,6 +712,61 @@ fn vapp_ok(v: V) -> bool {
 /// 与本函数互递归）。L04-L06 的 force 借用调用方的栈，是因为那几章的
 /// eval_iter 不回调 force——这个差异**不是**漏同步，别往那方向改。四个
 /// `Vec::new()` 本身不分配，只有真正下钻时才增长，早退路径零成本。
+/// 值是否提及层级 `x`（update_cxt 重锚跳过判定，保守版）：只遍历与
+/// quote 同构的结构面（Rigid/Spine/Obj/Sum/SumCase）；闭包（Clo 体经
+/// env 捕获引用槽位）、Pi cod、卡住 match 的 env 捕获无法廉价证明不
+/// 提及 → 保守 true（调用方回退 quote+eval 重锚）。每个被遍历值先
+/// force（与 quote 的 QJob::Q 同纪律——Flex 展开后的解才可能提及）。
+/// 调用方以 (x, force 后值位型) 为键缓存判定（槽值不可变 ⇒ 跨
+/// synthesis 恒定）。
+fn val_mentions_lvl_shallow(
+    bump: &Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    globals: &[V],
+    v0: V,
+    x: u32,
+) -> bool {
+    let v = force(bump, spine, defs, metas, globals, v0);
+    match v_tag(v) {
+        0 => v_lvl_of(v) == x,
+        // Clo / Pi cod：保守 true
+        1 | 4 => true,
+        // U / 未解 meta 立即数 / 字面量类型：无层级引用面
+        3 | 5 | 6 => false,
+        2 => {
+            let h = spine.spine_head(v_spine_of(v));
+            if val_mentions_lvl_shallow(bump, spine, defs, metas, globals, h, x) {
+                return true;
+            }
+            let mut args: Vec<(V, Icit)> = Vec::new();
+            spine.collect_args(v_spine_of(v), &mut args);
+            args.iter()
+                .any(|(a, _)| val_mentions_lvl_shallow(bump, spine, defs, metas, globals, *a, x))
+        }
+        7 => match v_xcell_of(v) {
+            XCell::Lit(_) | XCell::Prim => false,
+            XCell::Obj { val, .. } => {
+                val_mentions_lvl_shallow(bump, spine, defs, metas, globals, *val, x)
+            }
+            XCell::Sum { params, .. } => params.iter().any(|p| {
+                val_mentions_lvl_shallow(bump, spine, defs, metas, globals, p.val, x)
+                    || val_mentions_lvl_shallow(bump, spine, defs, metas, globals, p.ty, x)
+            }),
+            XCell::SumCase { typ, datas, .. } => {
+                val_mentions_lvl_shallow(bump, spine, defs, metas, globals, *typ, x)
+                    || datas.iter().any(|dd| {
+                        val_mentions_lvl_shallow(bump, spine, defs, metas, globals, dd.val, x)
+                    })
+            }
+            // 卡住 match：env 捕获，保守 true
+            XCell::Match { .. } => true,
+        },
+        _ => true,
+    }
+}
+
 fn force<'a>(
     bump: &'a Bump,
     spine: &mut Spine,
@@ -3356,6 +3411,9 @@ mod solve_probe {
         pub str_ok: AtomicU64,
         pub str_fail: AtomicU64,
         pub str_ns: AtomicU64,
+        pub str_synth_ns: AtomicU64,
+        pub str_infer_ns: AtomicU64,
+        pub str_unify_ns: AtomicU64,
         pub fm_calls: AtomicU64,
         pub fm_trait_unsolved: AtomicU64,
         pub fm_close_calls: AtomicU64,
@@ -3424,7 +3482,7 @@ mod solve_probe {
     pub fn self_end(busy: &AtomicBool, acc: &AtomicU64, t0: Option<std::time::Instant>) {
         if let Some(t0) = t0 {
             busy.store(false, Ordering::Relaxed);
-            acc.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            acc.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -3484,6 +3542,9 @@ mod solve_probe {
         str_ok: AtomicU64::new(0),
         str_fail: AtomicU64::new(0),
         str_ns: AtomicU64::new(0),
+        str_synth_ns: AtomicU64::new(0),
+        str_infer_ns: AtomicU64::new(0),
+        str_unify_ns: AtomicU64::new(0),
         fm_calls: AtomicU64::new(0),
         fm_trait_unsolved: AtomicU64::new(0),
         fm_close_calls: AtomicU64::new(0),
@@ -3565,6 +3626,13 @@ mod solve_probe {
             "[L10SOLVE_PROBE] env_ext_defs: tip={} fallback={}",
             g(&super::DN_TIP),
             g(&super::DN_FB),
+        );
+        eprintln!(
+            "[L10SOLVE_PROBE] solve_trait分段: synth={:.1}ms infer+insert={:.1}ms unify={:.1}ms (trait调用总数={})",
+            g(&C.str_synth_ns) as f64 / 1e6,
+            g(&C.str_infer_ns) as f64 / 1e6,
+            g(&C.str_unify_ns) as f64 / 1e6,
+            g(&C.str_trait),
         );
         eprintln!(
             "[L10SOLVE_PROBE] defs={} metas_max={} | solve_multi: calls={} scan_sum={} scan_max={} prepare_sum={} time={:.1}ms | solve_trait: calls={} trait={} synth_ok={} synth_fail={} time={:.1}ms | fresh_meta: calls={} trait_unsolved_push={} | trait_wrap: calls={} cand={} infer={} time={:.1}ms (defs收集={:.1}ms raw构建={:.1}ms wrapper_infer={:.1}ms) | def臂扫描: Σunsolved={} Σtrait_unsolved={} | 相位cum: unify={}(cum {:.1}ms) quote={}(cum {:.1}ms) eval={}(cum {:.1}ms) insert_go={}(cum {:.1}ms) force_v cum={:.1}ms check_univ={}(cum {:.1}ms) infer_expr={}(cum {:.1}ms) | unify内部: items={} solve_bump={} eval/η={}",
@@ -3660,6 +3728,11 @@ pub(crate) struct Machine {
     icits: Vec<Icit>,
     /// unify 的判等记忆化 + 实参收集草稿（跨调用复用容量，进核前 clear）。
     conv: ConvScratch,
+    /// update_cxt 重锚跳过判定的缓存：键 (精化层级 x, force 后值位型)。
+    /// 槽值不可变 ⇒ 同 (x, 值) 的提及判定跨 synthesis 恒定（traitchain：
+    /// 同一实例参数被反复精化，walk 区间内 def 槽每次重查）。位型含
+    /// bump 指针——轮内不复用，clear_round 随轮清空，无 ABA。
+    mention_cache: FxHashMap<(u32, u64), bool>,
     /// 平坦环境区域（每轮 append-only，只增不减）。
     defs: Vec<V>,
     pub(crate) metas: Vec<MetaEntry>,
@@ -3709,6 +3782,7 @@ impl Machine {
             vals: Vec::with_capacity(4096),
             icits: Vec::new(),
             conv: ConvScratch::default(),
+            mention_cache: FxHashMap::default(),
             defs: Vec::with_capacity(4096),
             metas: Vec::new(),
             ren: RenBuf::default(),
@@ -3735,6 +3809,7 @@ impl Machine {
         self.globals.clear();
         self.global_names.clear();
         self.neutral.clear();
+        self.mention_cache.clear();
         self.spine.stack.clear();
         self.tstate = TraitState::default();
     }
@@ -4395,10 +4470,14 @@ impl Machine {
                 .collect()
         };
         self.tstate.solver.clean();
+        let probe_ts = solve_probe::on().then(std::time::Instant::now);
         let answer = self.tstate.solver.synth(Assertion {
             name: name.to_string(),
             arguments: args,
         });
+        if let Some(ts) = probe_ts {
+            solve_probe::C.str_synth_ns.fetch_add(ts.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
         if solve_probe::on() {
             if answer.is_some() {
                 solve_probe::C.str_ok.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4414,16 +4493,24 @@ impl Machine {
                 end_offset: a.end_offset,
                 path_id: a.path_id,
             });
+            let probe_ti = solve_probe::on().then(std::time::Instant::now);
             let infered =
                 self.infer_expr(bump, cxt, &raw).map_err(|e| e.0.data)?;
             let (tm, _) =
                 self.insert(bump, cxt, infered.0, infered.1).map_err(|e| e.0.data)?;
             let val = self.eval(bump, cxt.env, tm);
+            if let Some(ti) = probe_ti {
+                solve_probe::C.str_infer_ns.fetch_add(ti.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            let probe_tu = solve_probe::on().then(std::time::Instant::now);
             if v_tag(val) == 7 {
                 if let XCell::SumCase { typ, .. } = v_xcell_of(val) {
                     let mut te = None;
                     let _ = self.unify(bump, cxt, cxt.lvl, *typ, x, &mut te);
                 }
+            }
+            if let Some(tu) = probe_tu {
+                solve_probe::C.str_unify_ns.fetch_add(tu.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
             }
             Ok(Some((tm, val)))
         } else {
@@ -5134,62 +5221,78 @@ impl Machine {
         } else {
             (cxt.lvl - x - 1) as usize
         };
-        // 平坦区保全（perf-debt 实现轮）：精化只落在本 def 的链上槽
-        // （x_prime < 链深）且 walk 不越过链底时，平坦区（已登记 def 值）
-        // 逐值不变——环境保留平坦区、只重接链上前 walk 个槽。旧路径的纯链
-        // 重建会把 defs 平坦区清出环境外：后续顶层 define 的 tip 快路径
-        // 失效（值全进链），fresh_meta 的全局段免包装退化成全量包装，
-        // O(D²) 复活（traitchain 的固定前导含一个 match，旧路径下首个
-        // update_cxt 即触发）。精化到全局槽（x_prime ≥ 链深）时平坦区
-        // 真会被改写，回落纯链重建（旧路径）。
-        let chain_depth = {
-            let mut d = 0usize;
-            let mut nb = cxt.env.binds;
-            while let Some(e) = nb {
-                d += 1;
-                nb = e.next;
-            }
-            d
-        };
-        let n = env_len(cxt.env) as usize;
+        // 链深 = env_len - 平坦槽数 = lvl - flat_len（env_len == lvl 不变量），
+        // O(1)——旧实现全链遍历 O(D)/次，是 traitchain 实例合成 O(D²) 的
+        // 三个 O(D) 分量之一（另两个：refresh 全量收集 + pruning 全量重建）
+        let chain_depth = cxt.lvl as usize - cxt.env.flat_len as usize;
+        let n = cxt.lvl as usize;
         let walk = cxt.lvl as usize - update_from;
         let keep_flat = x_prime < chain_depth && walk <= chain_depth;
-        let mut slots2: Vec<V> = Vec::with_capacity(if keep_flat { chain_depth } else { n });
-        if keep_flat {
-            // 只收集链段（头 = 最内层）；平坦区不进 slots2——refresh 的
-            // env_tt 只取 slots2[..=d]（d < walk ≤ 链深），链段足够
+        let mut names = (*cxt.names).clone();
+        // 环境 + 槽值：keep_flat 时只取链前 walk 个槽（O(walk)），重锚走
+        // refresh_local；否则全量收集 + 全量 refresh（旧路径，O(n²)）
+        let refreshed: Vec<V> = if keep_flat {
+            let mut olds: Vec<V> = Vec::with_capacity(walk);
+            let mut slots: Vec<V> = Vec::with_capacity(walk);
             let mut nb = cxt.env.binds;
-            while let Some(e) = nb {
-                slots2.push(e.val);
+            for _ in 0..walk {
+                let Some(e) = nb else { break };
+                olds.push(e.val);
+                slots.push(e.val);
                 nb = e.next;
             }
+            if x_prime < slots.len() {
+                slots[x_prime] = v;
+            }
+            self.refresh_local(bump, cxt, &slots, &olds, &mut names, walk, x)
         } else {
+            let mut slots2: Vec<V> = Vec::with_capacity(n);
             env_collect(&self.defs, cxt.env, &mut slots2);
-        }
-        if x_prime < slots2.len() {
-            slots2[x_prime] = v;
-        }
-        let mut names = (*cxt.names).clone();
-        let refreshed = self.refresh(bump, cxt, &slots2, &mut names, walk);
-        // pruning：update_prune 时目标槽改 None（define 槽）并前缀重建；
-        // 否则保持原 pruning（参考版 update_prune=false 同款）
-        let mut pr_slots: Vec<Option<Icit>> = Vec::with_capacity(n);
-        {
-            let mut cur = cxt.pruning;
-            while let Some(b) = cur {
-                pr_slots.push(b.slot);
-                cur = b.next;
+            if x_prime < slots2.len() {
+                slots2[x_prime] = v;
             }
-        }
-        if update_prune && x_prime < pr_slots.len() {
-            pr_slots[x_prime] = None;
-        }
+            self.refresh(bump, cxt, &slots2, &mut names, walk)
+        };
+        // pruning：update_prune 时目标槽改 None（define 槽）。keep_flat 时
+        // 只重接链头 ..=x_prime 的前缀（O(x_prime)），第 x_prime+1 节点起
+        // 原样复用（槽值不变）；否则全量重建（旧路径）
         let pruning: Option<&'a PrCons<'a>> = if update_prune {
-            let mut pr: Option<&'a PrCons<'a>> = None;
-            for slot in pr_slots.into_iter().rev() {
-                pr = Some(bump.alloc(PrCons::new(slot, pr)));
+            if keep_flat && x_prime < chain_depth {
+                let mut heads: Vec<Option<Icit>> = Vec::with_capacity(x_prime + 1);
+                let mut cur = cxt.pruning;
+                for _ in 0..=x_prime {
+                    let Some(b) = cur else { break };
+                    heads.push(b.slot);
+                    cur = b.next;
+                }
+                if heads.len() == x_prime + 1 {
+                    heads[x_prime] = None;
+                    let mut pr = cur;
+                    for slot in heads.into_iter().rev() {
+                        pr = Some(bump.alloc(PrCons::new(slot, pr)));
+                    }
+                    pr
+                } else {
+                    cxt.pruning
+                }
+            } else {
+                let mut pr_slots: Vec<Option<Icit>> = Vec::with_capacity(n);
+                {
+                    let mut cur = cxt.pruning;
+                    while let Some(b) = cur {
+                        pr_slots.push(b.slot);
+                        cur = b.next;
+                    }
+                }
+                if x_prime < pr_slots.len() {
+                    pr_slots[x_prime] = None;
+                }
+                let mut pr: Option<&'a PrCons<'a>> = None;
+                for slot in pr_slots.into_iter().rev() {
+                    pr = Some(bump.alloc(PrCons::new(slot, pr)));
+                }
+                pr
             }
-            pr
         } else {
             cxt.pruning
         };
@@ -5230,6 +5333,102 @@ impl Machine {
             binds: cxt.binds,
             lvl: cxt.lvl,
         })
+    }
+
+    /// [`Self::refresh`] 的链上局部版（update_cxt 平坦区保全路径专用）：
+    /// 只重锚链头 `walk` 个槽。第 d 槽的重锚环境 = 链「slots[0..=d]
+    /// （含精化值）+ vals[d+1..walk]（已刷新）+ 原链第 walk 节点起的原样
+    /// 尾段」+ 原平坦区——槽位/层级/下标与全量版逐值同轨（walk 区间外的
+    /// 槽原样直通），代价 O(walk²) 替代全量版 O(n²)（旧 env_tt 每槽整链
+    /// 重建 + env_collect 全量收集，n = env_len = O(D)）。
+    /// 返回按槽位索引的 walk 个刷新值。
+    #[allow(clippy::too_many_arguments)]
+    fn refresh_local<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        slots: &[V],
+        olds: &[V],
+        names: &mut Names,
+        walk: usize,
+        x: u32,
+    ) -> Vec<V> {
+        let n = cxt.lvl as usize;
+        let mut tail = cxt.env.binds;
+        for _ in 0..walk {
+            tail = tail.and_then(|e| e.next);
+        }
+        let mut vals: Vec<V> = vec![v_u(0); walk];
+        for d in (0..walk).rev() {
+            // 重锚跳过（traitchain O(D²) 主杀器）：精化的层级 x 只可能被
+            // 「其作用域内的槽值」提及——实例 def 的类型参数出作用域后，
+            // walk 区间内的 def 槽值一律不提及，quote+eval 重锚是恒等
+            // 空转。保守浅判定 + (x, 值位型) 缓存；Clo/Pi-cod/Match 保守
+            // 回退旧路径。
+            let men = {
+                let vf = {
+                    let Machine {
+                        spine,
+                        defs,
+                        metas,
+                        globals,
+                        ..
+                    } = self;
+                    force(bump, spine, defs, metas, globals, olds[d])
+                };
+                let key = (x, vf.0);
+                match self.mention_cache.get(&key) {
+                    Some(&b) => b,
+                    None => {
+                        let b = {
+                            let Machine {
+                                spine,
+                                defs,
+                                metas,
+                                globals,
+                                ..
+                            } = self;
+                            val_mentions_lvl_shallow(bump, spine, defs, metas, globals, vf, x)
+                        };
+                        self.mention_cache.insert(key, b);
+                        b
+                    }
+                }
+            };
+            if !men {
+                vals[d] = olds[d];
+                continue;
+            }
+            let mut node = tail;
+            for s in (d + 1..walk).rev() {
+                node = Some(bump.alloc(EnvCons {
+                    val: vals[s],
+                    next: node,
+                }));
+            }
+            for s in (0..=d).rev() {
+                node = Some(bump.alloc(EnvCons {
+                    val: slots[s],
+                    next: node,
+                }));
+            }
+            let env_tt = Env {
+                flat_base: cxt.env.flat_base,
+                flat_len: cxt.env.flat_len,
+                binds: node,
+            };
+            let q = self.quote(bump, n as u32, olds[d]);
+            let rv = self.eval(bump, env_tt, q);
+            vals[d] = rv;
+            let lvl = (n - 1 - d) as u32;
+            if let Some(old_ty) = names.by_lvl.get(&lvl) {
+                let old_ty = *old_ty;
+                let qt = self.quote(bump, n as u32, old_ty);
+                let rty = self.eval(bump, env_tt, qt);
+                names.by_lvl.insert(lvl, rty);
+            }
+        }
+        vals
     }
 
     /// `Cxt::refresh`（参考版递归的迭代化）：从最内层槽向外逐槽把旧值在
