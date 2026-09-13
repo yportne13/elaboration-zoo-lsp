@@ -1,4 +1,5 @@
 /target
+/target_ag*
 vscode_extension/client/node_modules
 vscode_extension/client/dist
 vscode_extension/client/out
