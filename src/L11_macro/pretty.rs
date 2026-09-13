@@ -10,19 +10,19 @@ const APPP: i32 = 2; // appp
 const PIP: i32 = 1;  // pip
 const LETP: i32 = 0; // letp
 
-fn bracket(s: String) -> String {
+fn bracket(s: &str) -> String {
     format!("{{{}}}", s)
 }
 
-fn paren(f: String) -> String {
-    format!("({})", f)
+fn paren(s: &str) -> String {
+    format!("({})", s)
 }
 
 fn fresh(ns: List<String>, suggested: &str) -> String {
     if suggested == "_" {
         return "_".to_string();
     }
-    
+
     let mut candidate = suggested.to_string();
     while ns.iter().find(|x| *x == &candidate).is_some() {
         candidate = format!("{}'", candidate);
@@ -51,7 +51,175 @@ fn go_ix(ns: List<String>, ix: u32) -> String {
 
 }
 
-fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning) -> String {
+/// `pretty_tm` 的增量核心：逐节点写入单个输出缓冲，任何字节只写一次。
+/// 旧实现逐节点 `format!` 从子串拼新串——深度 d 处的字符串上下文 O(d)，
+/// 嵌套链全链 O(n²) 字节复制（perf-debt P3）。输出与旧实现逐字节一致。
+fn go(prec: i32, ns: List<String>, tm: &Tm, out: &mut String) {
+    match tm {
+        Tm::Var(ix) => out.push_str(&go_ix(ns, ix.0)),
+        Tm::Decl(x) => out.push_str(&x.data),
+        Tm::Obj(x, name) => {
+            go(prec, ns, x, out);
+            out.push('.');
+            out.push_str(&name.data);
+        }
+        Tm::App(t, u, i) => {
+            let need_paren = prec > APPP;
+            if need_paren {
+                out.push('{');
+            }
+            go(APPP, ns.clone(), t, out);
+            out.push(' ');
+            match i {
+                Icit::Expl => go(ATP, ns, u, out),
+                Icit::Impl => {
+                    out.push('{');
+                    go(ATP, ns, u, out);
+                    out.push('}');
+                }
+            }
+            if need_paren {
+                out.push('}');
+            }
+        }
+        Tm::Lam(span, i, body) => {
+            let need_paren = prec > LETP;
+            let x = fresh(ns.clone(), &span.data);
+            let new_ns = ns.prepend(x.clone());
+
+            if need_paren {
+                out.push('(');
+            }
+            match i {
+                Icit::Expl => out.push_str(&x),
+                Icit::Impl => {
+                    out.push('{');
+                    out.push_str(&x);
+                    out.push('}');
+                }
+            }
+            out.push_str(" => ");
+            go(LETP, new_ns, body, out);
+            if need_paren {
+                out.push(')');
+            }
+        }
+        Tm::U(uni) => out.push_str(&format!("Type {uni}")),
+        Tm::Pi(name_span, i, a, b) => {
+            let need_paren = prec > PIP;
+            let is_anonymous = name_span.data == "_";
+            if need_paren {
+                out.push('(');
+            }
+            if is_anonymous {
+                go(APPP, ns.clone(), a, out);
+                out.push_str(" → ");
+                go(PIP, ns.prepend("_".to_owned()), b, out);
+            } else {
+                let x = fresh(ns.clone(), &name_span.data);
+                let new_ns = ns.prepend(x.clone());
+                // binder 里的域类型是小串，单独渲染（binder 需要整体加括号）
+                let dom = pretty_tm(LETP, ns, a);
+                match i {
+                    Icit::Expl => out.push_str(&paren(&format!("{x}: {dom}"))),
+                    Icit::Impl => out.push_str(&bracket(&format!("{x}: {dom}"))),
+                }
+                out.push_str(" → ");
+                go(PIP, new_ns, b, out);
+            }
+            if need_paren {
+                out.push(')');
+            }
+        }
+        Tm::Let(name_span, a, t, u) => {
+            let need_paren = prec > LETP;
+            let x = fresh(ns.clone(), &name_span.data);
+            let new_ns = ns.prepend(x.clone());
+            if need_paren {
+                out.push('(');
+            }
+            out.push_str("let ");
+            out.push_str(&x);
+            out.push_str(": ");
+            go(LETP, ns.clone(), a, out);
+            out.push_str(" = ");
+            go(LETP, ns, t, out);
+            out.push_str(";\n  ");
+            go(LETP, new_ns, u, out);
+            if need_paren {
+                out.push(')');
+            }
+        }
+        Tm::Meta(m) => out.push_str(&format!("?{}", m.0)),
+        Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr, out),
+        Tm::LiteralType => out.push_str("String"),
+        Tm::LiteralIntro(span) => out.push_str(&span.data),
+        Tm::Prim(_, _) => out.push_str("Prim Func"),
+        Tm::Sum(span, tms, items, _) => {
+            out.push_str(&span.data);
+            if !tms.is_empty() {
+                out.push('[');
+                for (idx, tm) in tms.iter().enumerate() {
+                    if idx > 0 {
+                        out.push_str(", ");
+                    }
+                    go(prec, ns.clone(), &tm.1, out);
+                }
+                out.push(']');
+            }
+        }
+        Tm::SumCase { is_trait, typ, case_name, datas: params } => {
+            // 头部：typ 的隐式参数串（小串，单独渲染）
+            let head = match typ.as_ref() {
+                Tm::Sum(name, params, _, _) => {
+                    let impls: Vec<String> = params
+                        .iter()
+                        .filter(|x| x.3 == Icit::Impl)
+                        .map(|x| pretty_tm(prec, ns.clone(), &x.1))
+                        .collect();
+                    if impls.is_empty() {
+                        name.data.to_string()
+                    } else {
+                        format!("{}[{}]", name.data, impls.join(", "))
+                    }
+                }
+                // typ 非 `Tm::Sum`（构造子的 `-> ret` 原样存储，可以是 App
+                // 链）：沿链找头部 Sum 名字，找不到退化 `?` 而不是 panic
+                // （L08/L09/L10 `sum_head_name` 同款降级）。
+                _ => sum_head_name(typ.as_ref()),
+            };
+            out.push_str(&head);
+            out.push_str("::");
+            out.push_str(&case_name.data);
+            if !params.is_empty() {
+                out.push('(');
+                for (idx, tm) in params.iter().enumerate() {
+                    if idx > 0 {
+                        out.push_str(", ");
+                    }
+                    go(prec, ns.clone(), &tm.1, out);
+                }
+                out.push(')');
+            }
+        }
+        Tm::Match(tm, _) => {
+            out.push_str("(unsolved match ");
+            go(prec, ns, tm, out);
+            out.push(')');
+        }
+        /*Tm::Match(tm, cases) => format!(
+            "(match {} {{\n{}\n}})",
+            pretty_tm(prec, ns.clone(), tm),
+            cases
+                .iter()
+                .map(|(pat, tm)| format!("{:?} => {}", pat, pretty_tm(prec, ns.prepend("n".to_owned()), tm)))
+                .reduce(|acc, x| acc + ",\n" + &x)
+                .unwrap_or("".to_owned())
+        ),*/
+    }
+}
+
+fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &Pruning, out: &mut String) {
     fn go_pr_inner(
         p: i32,
         top_ns: &List<String>,
@@ -59,10 +227,14 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
         t: &Tm,
         mut pr: Pruning,
         arg_index: u32,
-    ) -> String {
+        out: &mut String,
+    ) {
         loop {
             match (ns.split(), pr.split()) {
-                ((None, _), (None, _)) => return pretty_tm(p, top_ns.clone(), t),
+                ((None, _), (None, _)) => {
+                    go(p, top_ns.clone(), t, out);
+                    return;
+                }
                 ((Some(n), rest_ns), (Some(prune), rest_pr)) => {
                     if let Some(i) = prune {
                         let need_paren = p > APPP;
@@ -73,11 +245,18 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                         };
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(arg_str),
+                            Icit::Impl => bracket(&arg_str),
                         };
-                        let inner = go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1);
-                        let result = format!("{} {}", inner, arg_display);
-                        return if need_paren { paren(result) } else { result };
+                        if need_paren {
+                            out.push('(');
+                        }
+                        go_pr_inner(APPP, top_ns, rest_ns, t, rest_pr, arg_index + 1, out);
+                        out.push(' ');
+                        out.push_str(&arg_display);
+                        if need_paren {
+                            out.push(')');
+                        }
+                        return;
                     } else {
                         // Skip implicit argument
                         ns = rest_ns;
@@ -95,11 +274,18 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
                         let arg_str = format!("@{}", arg_index);
                         let arg_display = match i {
                             Icit::Expl => arg_str,
-                            Icit::Impl => bracket(arg_str),
+                            Icit::Impl => bracket(&arg_str),
                         };
-                        let inner = go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1);
-                        let result = format!("{} {}", inner, arg_display);
-                        return if need_paren { paren(result) } else { result };
+                        if need_paren {
+                            out.push('(');
+                        }
+                        go_pr_inner(APPP, top_ns, ns.clone(), t, rest_pr, arg_index + 1, out);
+                        out.push(' ');
+                        out.push_str(&arg_display);
+                        if need_paren {
+                            out.push(')');
+                        }
+                        return;
                     } else {
                         pr = rest_pr;
                     }
@@ -111,143 +297,13 @@ fn go_app_pruning(p: i32, top_ns: List<String>, ns: List<String>, t: &Tm, pr: &P
         }
     }
 
-    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0)
+    go_pr_inner(p, &top_ns, ns, t, pr.clone(), 0, out)
 }
 
 pub fn pretty_tm(prec: i32, ns: List<String>, tm: &Tm) -> String {
-    match tm {
-        Tm::Var(ix) => go_ix(ns, ix.0),
-        Tm::Decl(x) => x.data.to_string(),
-        Tm::Obj(x, name) => format!("{}.{}", pretty_tm(prec, ns, x), name.data),
-        Tm::App(t, u, i) => {
-            let need_paren = prec > APPP;
-            let f_t = pretty_tm(APPP, ns.clone(), t);
-            let f_u = match i {
-                Icit::Expl => pretty_tm(ATP, ns, u),
-                Icit::Impl => bracket(pretty_tm(ATP, ns, u)),
-            };
-            if need_paren {
-                format!("{{{f_t} {f_u}}}")
-            } else {
-                format!("{f_t} {f_u}")
-            }
-        }
-        Tm::Lam(span, i, body) => {
-            let need_paren = prec > LETP;
-            let x = fresh(ns.clone(), &span.data);
-            let new_ns = ns.prepend(x.clone());
-
-            let binder = match i {
-                Icit::Expl => x,
-                Icit::Impl => bracket(x),
-            };
-
-            let body_printer = format!(" => {}", pretty_tm(LETP, new_ns, body));
-
-            let ret = format!("{binder}{body_printer}");
-            if need_paren {
-                paren(ret)
-            } else {
-                ret
-            }
-        }
-        Tm::U(uni) => format!("Type {uni}"),
-        Tm::Pi(name_span, i, a, b) => {
-            let need_paren = prec > PIP;
-            let is_anonymous = name_span.data == "_";
-            if is_anonymous {
-                let f_a = pretty_tm(APPP, ns.clone(), a);
-                let f_b = pretty_tm(PIP, ns.prepend("_".to_owned()), b);
-                let ret = format!("{f_a} → {f_b}");
-                if need_paren {
-                    paren(ret)
-                } else {
-                    ret
-                }
-            } else {
-                let x = fresh(ns.clone(), &name_span.data);
-                let new_ns = ns.prepend(x.clone());
-                let binder = match i {
-                    Icit::Expl => paren(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                    Icit::Impl => bracket(format!("{x}: {}", pretty_tm(LETP, ns, a))),
-                };
-                let f_b = pretty_tm(PIP, new_ns, b);
-                let ret = format!("{binder} → {f_b}");
-                if need_paren {
-                    paren(ret)
-                } else {
-                    ret
-                }
-            }
-        }
-        Tm::Let(name_span, a, t, u) => {
-            let need_paren = prec > LETP;
-            let x = fresh(ns.clone(), &name_span.data);
-            let new_ns = ns.prepend(x.clone());
-            let ret = format!(
-                "let {x}: {} = {};\n  {}",
-                pretty_tm(LETP, ns.clone(), a),
-                pretty_tm(LETP, ns, t),
-                pretty_tm(LETP, new_ns, u),
-            );
-            if need_paren { 
-                paren(ret)
-            } else {
-                ret
-            }
-        }
-        Tm::Meta(m) => format!("?{}", m.0),
-        Tm::AppPruning(t, pr) => go_app_pruning(prec, ns.clone(), ns, t, pr),
-        Tm::LiteralType => "String".to_owned(),
-        Tm::LiteralIntro(span) => span.data.clone(),
-        Tm::Prim(_, _) => "Prim Func".to_owned(),
-        Tm::Sum(span, tms, items, _) => format!(
-            "{}{}",
-            span.data,
-            tms.iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
-                .reduce(|acc, x| acc + ", " + &x)
-                .map(|x| format!("[{x}]"))
-                .unwrap_or("".to_owned()),
-        ),
-        Tm::SumCase { is_trait, typ, case_name, datas: params } => format!(
-            "{}::{}{}",
-            match typ.as_ref() {
-                Tm::Sum(name, params, _, _) => params
-                    .iter()
-                    .filter(|x| x.3 == Icit::Impl)
-                    .map(|x| &x.1)
-                    .map(|x| pretty_tm(prec, ns.clone(), x).to_string())
-                    .reduce(|a, b| a + ", " + &b)
-                    .map(|x| format!("{}[{}]", name.data, x))
-                    .unwrap_or(name.data.to_string()),
-                // typ 非 `Tm::Sum`（构造子的 `-> ret` 原样存储，可以是 App
-                // 链）：沿链找头部 Sum 名字，找不到退化 `?` 而不是 panic
-                // （L08/L09/L10 `sum_head_name` 同款降级）。
-                _ => sum_head_name(typ.as_ref()),
-            },
-            case_name.data,
-            params
-                .iter()
-                .map(|tm| pretty_tm(prec, ns.clone(), &tm.1))
-                .reduce(|acc, x| acc + ", " + &x)
-                .map(|x| format!("({x})"))
-                .unwrap_or("".to_owned()),
-        ),
-        Tm::Match(tm, _) => format!(
-            "(unsolved match {})",
-            pretty_tm(prec, ns, tm),
-        ),
-        /*Tm::Match(tm, cases) => format!(
-            "(match {} {{\n{}\n}})",
-            pretty_tm(prec, ns.clone(), tm),
-            cases
-                .iter()
-                .map(|(pat, tm)| format!("{:?} => {}", pat, pretty_tm(prec, ns.prepend("n".to_owned()), tm)))
-                .reduce(|acc, x| acc + ",\n" + &x)
-                .unwrap_or("".to_owned())
-        ),*/
-    }
+    let mut out = String::with_capacity(64);
+    go(prec, ns, tm, &mut out);
+    out
 }
 
 /// `SumCase.typ` 可能不是展开的 `Tm::Sum`（构造子的 `-> ret` 原样存储，
