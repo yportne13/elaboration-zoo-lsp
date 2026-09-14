@@ -8,16 +8,17 @@
 //   代码生成、LSP 全部复用。
 //
 //   - module top(ANSI 端口头); ... endmodule
-//   - input clk / reset / rst_n 折叠进时钟域（rst_n → ActiveLow）
+//   - input clk / reset / rst_n 折叠进时钟域（rst_n → ActiveLow），并生成真实端口
 //   - wire/reg [msb:lsb] 声明、assign、if/else、begin/end
 //   - always @(posedge clk [or negedge rst_n]) begin q <= d; end
 //   - always @(*) 组合块（reg 被组合驱动 → HDV002 提示）
 //   - 子模块实例化 add8 u1 (.a(x), .sum(s));（方向自动判定）
 //   - 8'hFF / 5'd10 / 4'b1010 sized 字面量、a == b / a != b
 //
-//   M1 限制：拼接用 ##（{a,b} 为 M2）、不支持 parameter/case/for/
-//   initial/generate/$display/延迟；always 体必须用 begin/end。
-//   完整映射表见 docs/verilog-compat.md。
+//   本例是最小骨架（对应 M1）。M2 的位选/部分选、拼接 {a,b}、归约 &|^、
+//   case/endcase 见 24-verilog-practice.typort；M3 的显式复位分支与带时钟
+//   子模块层次见 25-verilog-reset.typort。仍未支持：parameter 头 / for /
+//   initial / generate / $display / 延迟。完整映射表见 docs/verilog-compat.md。
 // ============================================================
 
 // ---- 加法器：Verilog 写法 ----

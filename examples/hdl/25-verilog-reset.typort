@@ -1,0 +1,56 @@
+// ============================================================
+// HDL Example 25: Verilog 复位与时钟层次（M3）
+//
+//   23/24 演示了 M1/M2 的语法骨架与表达式。本例演示 M3 打通的两件事：
+//
+//   - 折叠端口成为真实端口：`input clk` / `input reset` / `input rst_n`
+//     现在既折叠进 ClockDomain（rst_n → ActiveLow），又生成真实端口，
+//     模块体内可以直接引用（此前被静默丢弃）。
+//   - always 体内手写复位分支：
+//       if (!rst_n) q <= 8'h00; else q <= d;
+//     转写为互斥 when 链，复位沿由折叠的复位极性决定。
+//   - 带时钟域子模块的实例化：折叠的 clk / rst_n 现在是可连的端口，
+//     父模块用 `.clk(clk)` / `.rst_n(rst_n)` 连接（此前无法连接）。
+//
+//   复位两种风格都在：
+//   - vCntAsync：异步复位（always 敏感表带 negedge rst_n）
+//   - vCntSync ：同步复位（只在 posedge clk 内判 rst，端口名非魔法名）
+//
+//   完整映射表见 docs/verilog-compat.md。
+// ============================================================
+
+// ---- 异步复位计数器（显式复位分支）----
+module vCntAsync(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            q <= 8'h00;
+        else
+            q <= d + 8'h01;
+    end
+endmodule
+
+// ---- 同步复位计数器（端口名任意；只在时钟沿内判复位）----
+module vCntSync(input clk, input rst, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk) begin
+        if (rst)
+            q <= 8'h00;
+        else
+            q <= d;
+    end
+endmodule
+
+// ---- 层次：两级流水线，实例化带时钟域的子模块 ----
+module vPipe(input clk, input rst_n, input [7:0] d, output [7:0] q);
+    wire [7:0] s1;
+    wire [7:0] s2;
+    vCntAsync u1 (.clk(clk), .rst_n(rst_n), .d(d), .q(s1));
+    vCntAsync u2 (.clk(clk), .rst_n(rst_n), .d(s1), .q(s2));
+    assign q = s2;
+endmodule
+
+println("=== 25a: vCntAsync (异步复位，显式复位分支) ===")
+println(moduleTreeVL(vCntAsync.create.tree))
+println("=== 25b: vCntSync (同步复位) ===")
+println(moduleTreeVL(vCntSync.create.tree))
+println("=== 25c: vPipe (带时钟子模块的层次实例化) ===")
+println(moduleTreeVL(vPipe.create.tree))

@@ -995,7 +995,7 @@ def clockedBlockExtraVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
     }
 
 // Emit ONE clocked always block for the main cd (only if it has lines)
-def clockedBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
+def clockedBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, resetDeclared: Boolean): String =
     let ls = list_reverse(collectClockLinesCd(es, cd, true));
     let has_clk = match ls {
         case lnil => false
@@ -1006,39 +1006,53 @@ def clockedBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
         case lnil => false
         case _ => true
     };
+    // The reset edge belongs in the sensitivity list in two cases: the module
+    // init `reg ... = v` values (generated reset branch, need_reset), or the
+    // source declared the reset as a port (Verilog-compat writes the reset
+    // body itself). A Sync clock domain keeps the edge out of the list.
+    let want_edge = match need_reset {
+        case true => true
+        case false => resetDeclared
+    };
+    let is_async = match cd.config {
+        case Async => true
+        case Sync => false
+    };
+    let edge_in_header = match want_edge {
+        case false => false
+        case true => is_async
+    };
     match has_clk {
         case false => ""
         case true =>
             let clk_edge = clockEdgeStr(cd);
             let clk_nm = clockName(cd);
             let reset_cond = resetCondStr(cd);
-            match need_reset {
+            let header = match edge_in_header {
                 case false =>
                     "  always @" + "(" + clk_edge + " " + clk_nm + ") begin
-" + joinLines(ls) + "
-" + "  end
 "
                 case true =>
-                    let header = match cd.config {
-                        case Async =>
-                            let reset_edge = resetEdgeStr(cd);
-                            let reset_nm = resetName(cd);
-                            "  always @" + "(" + clk_edge + " " + clk_nm + " or " + reset_edge + " " + reset_nm + ") begin
+                    let reset_edge = resetEdgeStr(cd);
+                    let reset_nm = resetName(cd);
+                    "  always @" + "(" + clk_edge + " " + clk_nm + " or " + reset_edge + " " + reset_nm + ") begin
 "
-                        case Sync =>
-                            "  always @" + "(" + clk_edge + " " + clk_nm + ") begin
+            };
+            let inner = match need_reset {
+                case false => joinLines(ls) + "
 "
-                    };
+                case true =>
                     let indented_init = indentLines(init_lines);
                     let indented_clk = indentLines(ls);
-                    header + "    if (" + reset_cond + ") begin
+                    "    if (" + reset_cond + ") begin
 " + joinLines(indented_init) + "
     end else begin
 " + joinLines(indented_clk) + "
     end
-  end
 "
-            }
+            };
+            header + inner + "  end
+"
     }
 
 
@@ -1056,8 +1070,10 @@ def clockedExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[Cl
 
 // Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
 // the module default cd; createRegWidthInitCd belongs to its own cd.
-def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
-    let main = clockedBlockVL(es, cd);
+// `resetDeclared` mirrors moduleDefVL's port list (the cd's reset name is a
+// real port — Verilog-compat folds `input reset`/`rst_n` into a port).
+def clockedVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, resetDeclared: Boolean): String =
+    let main = clockedBlockVL(es, cd, resetDeclared);
     let extras = collectClockCds es;
     let extraBlocks = clockedExtrasVL(es, cd, extras);
     main + extraBlocks
@@ -1213,10 +1229,9 @@ def moduleDefVL(md: ModuleDef): String =
     let mem_decls = memsVL(md.expr);
     let assigns = assignsVL(md.expr, whenSigs);
     let always = alwaysVL(md.expr, whenSigs);
-    let clocked = clockedVL(md.expr, md.cd);
+    let clocked = clockedVL(md.expr, md.cd, strInList(resetName(md.cd), port_names));
     let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
-    let has_regs = match list_reverse(collectRegLines md.expr port_names) {
-        case lnil => false
+    let has_regs = match list_reverse(collectRegLines md.expr port_names) {        case lnil => false
         case _ => true
     };
     let has_out_regs = hasOutRegPorts md.expr;
@@ -1249,22 +1264,35 @@ def moduleDefVL(md: ModuleDef): String =
     };
     let clk_nm = clockName(md.cd);
     let reset_nm = resetName(md.cd);
+    // Verilog-compat modules declare `input clk` / `reset` / `rst_n` and the
+    // module arm turns them into real ports, so the synthesized clock/reset
+    // ports must not be added a second time (they would duplicate the
+    // declaration). Typort-style modules keep the implicit clock: it is
+    // synthesized here.
+    let clk_declared = strInList(clk_nm, port_names);
+    let reset_declared = strInList(reset_nm, port_names);
     let p0 = port_decls;
     let p1 = match has_seq {
         case false => p0
-        case true => match has_ports {
-            case false => "  input wire " + clk_nm
-            case _ => p0 + ",\n  input wire " + clk_nm
+        case true => match clk_declared {
+            case true => p0
+            case false => match has_ports {
+                case false => "  input wire " + clk_nm
+                case _ => p0 + ",\n  input wire " + clk_nm
+            }
         }
     };
     let p2 = match has_init {
         case false => p1
-        case true => match has_reg_any {
-            case false => match has_ports {
-                case false => "  input wire " + reset_nm
-                case true => port_decls + ",\n  input wire " + reset_nm
+        case true => match reset_declared {
+            case true => p1
+            case false => match has_reg_any {
+                case false => match has_ports {
+                    case false => "  input wire " + reset_nm
+                    case true => port_decls + ",\n  input wire " + reset_nm
+                }
+                case true => p1 + ",\n  input wire " + reset_nm
             }
-            case true => p1 + ",\n  input wire " + reset_nm
         }
     };
     let has_no_port_content = match has_ports {
@@ -1458,27 +1486,37 @@ def joinJsonLines(ls: List[String]): String = match ls {
     case lcons(s, tail) => s + ",\n" + joinJsonLines(tail)
 }
 
-// The clk/reset ports are SYNTHESIZED by moduleDefVL (p1/p2 there), not
-// recorded as Exprs in the module tree — mirror those conditions so the
+// The clk/reset ports are SYNTHESIZED by moduleDefVL (p1/p2 there) when the
+// module does not declare them itself — mirror those conditions so the
 // manifest lists every port the emitted Verilog declares. (Extra
 // clock-domain ports from collectClockCds are not mirrored yet.)
 def manifestSynthPorts(md: ModuleDef): List[String] =
+    let port_names = collectPortNames md.expr;
     // Mirror moduleDefVL's p1 condition: the clk port exists iff a clocked
-    // always block is emitted (see the has_seq note there).
-    let clocked = clockedVL(md.expr, md.cd);
+    // always block is emitted (see the has_seq note there) and the source did
+    // not declare it (Verilog-compat folds `input clk` into a real port).
+    let clocked = clockedVL(md.expr, md.cd, strInList(resetName(md.cd), port_names));
     let has_seq = match str_eq(clocked, "") {
         case true => false
         case false => true
+    };
+    let clk_out = match strInList(clockName(md.cd), port_names) {
+        case true => false
+        case false => has_seq
     };
     let has_init = match list_reverse(collectInitLinesCd(md.expr, md.cd, true)) {
         case lnil => false
         case _ => true
     };
-    let with_clk = match has_seq {
+    let reset_out = match strInList(resetName(md.cd), port_names) {
+        case true => false
+        case false => has_init
+    };
+    let with_clk = match clk_out {
         case false => lnil
         case true => lcons(portJsonLine(clockName(md.cd), "input", 1, false, false), lnil)
     };
-    match has_init {
+    match reset_out {
         case false => with_clk
         case true => with_clk.append(lcons(portJsonLine(resetName(md.cd), "input", 1, false, false), lnil))
     }

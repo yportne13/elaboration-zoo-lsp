@@ -149,6 +149,27 @@ def compatSetRst(n: String, activeHigh: Boolean): Unit =
     let _ = change_mutable("CompatCD", x => CompatCD.mk(x.clk, n, activeHigh));
     unit
 
+// One folded-port marker per declared scalar input, dispatched by NAME at run
+// time (the module macro cannot branch on a literal keyword in its pattern, so
+// it captures every leading scalar input and calls this). Only clk / reset /
+// rst_n touch the clock-domain fold; any other scalar input is a plain port.
+// Deliberately one `str_eq` per `match` (matching compatCD's note: nested
+// str_eq scrutinees made declaration-time elaboration loop).
+def compatFoldPort(n: String): Unit =
+    let _a = match str_eq(n, "clk") {
+        case true => compatSetClk(n)
+        case false => unit
+    };
+    let _b = match str_eq(n, "reset") {
+        case true => compatSetRst(n, true)
+        case false => unit
+    };
+    let _c = match str_eq(n, "rst_n") {
+        case true => compatSetRst(n, false)
+        case false => unit
+    };
+    unit
+
 // NOTE: keep this match NESTING SHALLOW (one str_eq level) — a three-level
 // nested str_eq match here made declaration-time elaboration loop.
 def compatCD(mname: String): ClockDomain =

@@ -52,6 +52,8 @@ def chkStrIn(s: String, ls: List[String]): Boolean = match ls {
     }
 }
 
+def chkStrEq(a: String, b: String): Boolean = str_eq(a, b)
+
 def chkNatNonZero(n: Nat): Boolean = match n {
     case zero => false
     case succ(_) => true
@@ -692,16 +694,20 @@ def ruleDanglingRead(mname: String, reads: List[String], mf: ModFacts): Unit = m
 }
 
 // HDL002: declared but never read (dead signal / unused input / dead mem).
-def ruleUnusedDecl(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
+// The clock and reset ports are intentionally never read in RTL — skip them
+// (Verilog-compat folds `input clk` / `reset` / `rst_n` into real ports now,
+// so without this every module would report both).
+def ruleUnusedDecl(mname: String, clkName: String, rstName: String, ds: List[SigDecl], mf: ModFacts): Unit = match ds {
     case lnil => unit
     case lcons(d, t) =>
         let read = chkStrIn(d.name, mf.reads);
-        let checkable = chkBor(kindEq(d.kind, kWire), chkBor(kindEq(d.kind, kReg), chkBor(kindEq(d.kind, kIn), kindEq(d.kind, kMem))));
+        let isClockOrReset = chkBor(chkStrEq(d.name, clkName), chkStrEq(d.name, rstName));
+        let checkable = chkBand(chkBnot(isClockOrReset), chkBor(kindEq(d.kind, kWire), chkBor(kindEq(d.kind, kReg), chkBor(kindEq(d.kind, kIn), kindEq(d.kind, kMem)))));
         let _ = match chkBand(checkable, chkBnot(read)) {
             case true => chkReport("HDL002", mname, d.name, "declared but never read")
             case false => unit
         };
-        ruleUnusedDecl(mname, t, mf)
+        ruleUnusedDecl(mname, clkName, rstName, t, mf)
 }
 
 // HDL003: output port never driven.
@@ -867,7 +873,7 @@ def runChecks(md: ModuleDef): Unit =
     let _ = change_mutable_default("ModulePortTable", x => portTableAdd(x, entry), ModulePortTable.mk(lnil));
     let tbl: ModulePortTable = get_global("ModulePortTable");
     let _ = ruleDanglingRead(md.name, mf.reads, mf);
-    let _ = ruleUnusedDecl(md.name, mf.decls, mf);
+    let _ = ruleUnusedDecl(md.name, md.cd.clockName, md.cd.resetName, mf.decls, mf);
     let _ = ruleOutUndriven(md.name, mf.decls, mf);
     let _ = ruleWidthGround(md.name, md.expr);
     let _ = ruleDrivers(md.name, mf.facts);

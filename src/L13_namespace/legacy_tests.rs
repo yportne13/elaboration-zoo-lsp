@@ -1671,8 +1671,8 @@ fn test_examples_hdl_dir() {
             "module vAdd8",                     // Verilog 写法 module 臂
             "assign s = (a + b);",              // vAdd8 与 tAdd8 逐字节一致
             "output reg [7:0] q",               // vCounter output reg
-            "always @(posedge clk) begin",      // always 块（rst_n 折叠进时钟域）
-            "q <= 0;",                          // 条件寄存器赋值
+            "always @(posedge clk or negedge rst_n) begin",  // 折叠的 rst_n 现已生成真实端口与复位沿
+            "q <= 8'd0;",                       // 条件寄存器赋值（sized 字面量带位宽）
             "wire [7:0] w;",                    // vTop wire 声明
             "assign b = (w & 8'd15);",          // sized 字面量 8'h0F → 8'd15（位宽保真）
             "vSub u1 (.x(a), .y(w));",          // 实例化方向自动判定
@@ -1689,6 +1689,14 @@ fn test_examples_hdl_dir() {
             "q <= 0;",                          // reg init → 复位分支
             "vByteSwap u_swap (.w(w), .y(sw));", // 组合子模块实例化
             "vAlu u_alu (.op(op), .a(a), .b(b), .y(al));",
+        ]),
+        ("25-verilog-reset.typort", include_str!("../../examples/hdl/25-verilog-reset.typort"), &[
+            "input wire clk,",                          // 折叠的 clk 现在是真实端口
+            "input wire rst_n,",                        // 折叠的 rst_n → ActiveLow
+            "always @(posedge clk or negedge rst_n) begin", // 折叠极性决定复位沿
+            "if (!rst_n) begin",                        // always 体内手写复位分支
+            "q <= 8'd0;",                               // 复位值（sized 字面量）
+            "vCntAsync u1 (",                           // 带时钟子模块的层次实例化
         ]),
     ];
 

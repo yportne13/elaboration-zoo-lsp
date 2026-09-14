@@ -332,25 +332,28 @@ macro_rules module {
 	// Body statements dispatch through the VExpr table (hdl-verilog-compat).
 	// Port grouping is positional (the transcriber cannot branch on an
 	// optional marker, so differently-transcribed shapes are separate
-	// contiguous runs, mirroring the typort arms): folded clock ports first
-	// (clk / reset / rst_n — folded into the ClockDomain, rst_n => ActiveLow,
-	// no separate port), then plain `[w]` ports, then `output reg [w]`,
-	// then scalar ports (Bool). This matches the dominant Verilog
-	// convention (typed inputs, then output regs, then scalars); Width is
-	// msb-lsb+1.
-	($name: ident ( $( input clk $(,)? )* $( input reset $(,)? )* $( input rst_n $(,)? )* $( $dir: ident [ $hi: raw : $lo: raw ] $p: ident $(,)? )* $( output reg [ $rhi: raw : $rlo: raw ] $rp: ident $(,)? )* $( output reg $rb: ident $(,)? )* $( $db: ident $pb: ident $(,)? )* ) ; $( $body: VExpr )* endmodule) => {
+	// contiguous runs): leading scalar `input NAME` ports first (clk / reset /
+	// rst_n additionally folded into the ClockDomain at run time by
+	// `compatFoldPort`, and every one of them — folded or not — becomes a real
+	// Bool port), then plain `[w]` ports, then `output reg [w]`, then scalar
+	// `output reg`, then remaining scalar ports. Width is msb-lsb+1.
+	// NOTE: the transcriber repetition MUST reference a metavar — a `$( ... )*`
+	// group with no metavariable expands ZERO times (macros.rs
+	// MacroTranscriber::Group), which silently killed the M1 folded-clock
+	// helpers. `$ik` (leading scalar inputs) exists partly for that reason.
+	($name: ident ( $( input $ik: ident $(,)? )* $( $dir: ident [ $hi: raw : $lo: raw ] $p: ident $(,)? )* $( output reg [ $rhi: raw : $rlo: raw ] $rp: ident $(,)? )* $( output reg $rb: ident $(,)? )* $( $db: ident $pb: ident $(,)? )* ) ; $( $body: VExpr )* endmodule) => {
 		class $name impl Module {
 			let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
 			let _ = create_global("WhenStack", whenStackEmpty)
 			let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
 			let _ = create_global("CombCtx", CombCtx.mk(zero))
 			let _ = create_global("CompatCD", CompatCD.mk("", "", true))
-			$( let _ = compatSetClk("clk"); )*
-			$( let _ = compatSetRst("reset", true); )*
-			$( let _ = compatSetRst("rst_n", false); )*
+			$( let _ = compatFoldPort(stringify $ik); )*
+			$( let _ = compatFoldPort(stringify $pb); )*
 			let __vcd: ClockDomain = compatCD(stringify $name)
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, __vcd, 0, nil) :: nil))
+			$( let $ik: Bool = Bool.mk(Some(stringify $ik), createBoolPortExpr("input")); )*
 			$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(Some(stringify $p), createPortExpr(compatDir(stringify $dir), "UInt", 1 + ($hi) - ($lo))); )*
 			$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(Some(stringify $rp), createOutRegPortExpr("UInt", 1 + ($rhi) - ($rlo))); )*
 			$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExpr); )*
@@ -359,6 +362,7 @@ macro_rules module {
 			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
 			let _ = create_global("ModuleTree", _prev)
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
+			$( let $ik: Bool = Bool.mk(None, subSignal(bn.name, stringify $ik)); )*
 			$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(None, subSignal(bn.name, stringify $rp)); )*
 			$( let $rb: Bool = Bool.mk(None, subSignal(bn.name, stringify $rb)); )*
@@ -370,12 +374,12 @@ macro_rules module {
 				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
 				let _ = create_global("CombCtx", CombCtx.mk(zero));
 				let _ = create_global("CompatCD", CompatCD.mk("", "", true));
-				$( let _ = compatSetClk("clk"); )*
-				$( let _ = compatSetRst("reset", true); )*
-				$( let _ = compatSetRst("rst_n", false); )*
+				$( let _ = compatFoldPort(stringify $ik); )*
+				$( let _ = compatFoldPort(stringify $pb); )*
 				let __vcd: ClockDomain = compatCD(stringify $name);
 				let _prev = get_global("ModuleTree");
 				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, __vcd, 0, nil) :: nil));
+				$( let $ik: Bool = Bool.mk(Some(stringify $ik), createBoolPortExpr("input")); )*
 				$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(Some(stringify $p), createPortExpr(compatDir(stringify $dir), "UInt", 1 + ($hi) - ($lo))); )*
 				$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(Some(stringify $rp), createOutRegPortExpr("UInt", 1 + ($rhi) - ($rlo))); )*
 				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExpr); )*

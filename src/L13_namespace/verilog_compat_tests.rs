@@ -336,3 +336,81 @@ fn m2_example24_end_to_end() {
         assert!(out.contains(needle), "example 24 missing {needle:?}:\n{out}");
     }
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  M3：折叠端口成为真实端口 + 手写复位分支 + 带时钟子模块实例化
+// ════════════════════════════════════════════════════════════════════
+
+#[test]
+fn m3_folded_ports_are_real_ports() {
+    // `input clk` / `input rst_n` 现在生成真实端口（此前被静默丢弃），
+    // always 头也保留 negedge 复位沿。
+    let out = check_ok(r#"
+module m(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk or negedge rst_n) begin
+        q <= d;
+    end
+endmodule
+println (moduleTreeVL(m.create.tree))
+"#);
+    assert!(out.contains("input wire clk,"), "clk port missing:\n{out}");
+    assert!(out.contains("input wire rst_n,"), "rst_n port missing:\n{out}");
+    assert!(out.contains("always @(posedge clk or negedge rst_n) begin"), "reset edge missing:\n{out}");
+}
+
+#[test]
+fn m3_explicit_reset_body() {
+    let out = check_ok(r#"
+module m(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            q <= 8'h00;
+        else
+            q <= d;
+    end
+endmodule
+println (moduleTreeVL(m.create.tree))
+"#);
+    assert!(out.contains("if (!rst_n) begin"), "reset branch missing:\n{out}");
+    assert!(out.contains("q <= 8'd0;"), "reset value missing:\n{out}");
+    assert!(out.contains("q <= d;"), "clocked body missing:\n{out}");
+}
+
+#[test]
+fn m3_clocked_child_instance() {
+    let out = check_ok(r#"
+module vCount2(input clk, input [7:0] d, output reg [7:0] q);
+    always @(posedge clk) begin
+        q <= d;
+    end
+endmodule
+module vTop(input clk, input [7:0] din, output [7:0] dout);
+    wire [7:0] w;
+    vCount2 u1 (.clk(clk), .d(din), .q(w));
+    assign dout = w;
+endmodule
+println (moduleTreeVL(vTop.create.tree))
+"#);
+    assert!(out.contains("vCount2 u1 (.clk(clk), .d(din), .q(w));"), "clocked child connection:\n{out}");
+}
+
+#[test]
+fn m3_example25_end_to_end() {
+    let out = check_ok(include_str!("../../examples/hdl/25-verilog-reset.typort"));
+    for needle in [
+        "module vCntAsync",
+        "input wire clk,",
+        "input wire rst_n,",
+        "always @(posedge clk or negedge rst_n) begin",
+        "if (!rst_n) begin",
+        "q <= 8'd0;",
+        "q <= (d + 8'd1);",
+        "module vCntSync",
+        "if (rst) begin",
+        "module vPipe",
+        "vCntAsync u1 (.clk(clk), .rst_n(rst_n), .d(d), .q(s1));",
+        "vCntAsync u2 (.clk(clk), .rst_n(rst_n), .d(s1), .q(s2));",
+    ] {
+        assert!(out.contains(needle), "example 25 missing {needle:?}:\n{out}");
+    }
+}
