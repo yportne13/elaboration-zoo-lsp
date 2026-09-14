@@ -965,4 +965,62 @@ cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` �
 **与上文的关系**：上文 examples 基准里「`first` 偶发约 3.4 s 尖峰：重 prime」
 即本条根因，已由就地压实取代（尖峰降至约 120 ms 级）。
 
+---
+
+## 2026-09-14（续）——18-utils 分叉根因之一：`tm_refs_bn` 索引公式修正
+
+> 承接 2026-09-11 的 18-utils 调查（孪生假 `solve trait failed: LetNamed`，
+> LSP 回落参考版）。本轮用 `TYPORT_DECL_PROBE` 分相计数 + `new_meta` 调用方
+> 回溯，把"孪生多造 meta"改判为**结构性复用失效**，并修掉公式错误。
+
+### 定位链
+
+1. **逐 decl**（探针 `twin_utils_divergence_probe`，HDL prelude）：full 文件
+   孪生 982 vs 参考版 733 net meta；增量全部落在 module decl，顶层 def 完全
+   一致（6 = 6）。
+2. **分相**（Class 臂 A-start/phaseA/phaseB 打印）：`enum` / `def create` /
+   `impldecl` / `impldecl` 四个生成 decl 中，`create` 两版都 +0（Raw::Tm 复用
+   正常），**第一个 `impldecl`（`tree` 方法体）孪生 +35 vs 参考版 +16**。
+3. **调用方**（`new_meta` 临时回溯 + 隐参域类型打印）：孪生的 Phase A 与该
+   impldecl 相位**各插入一遍同样的 33 个 Type 0 + 9 个 Nat**（Phase A 绑
+   `bn x`，impldecl 绑 `this x`）——tree 方法体整条链被重推；参考版 67 次
+   插入全在 Phase A、impldecl 相位 0 次。
+4. **判定输入**：复用决策唯一落点 `maybe_prechecked_method_body`（共享 parser
+   代码）对 tree 体要求 bn_refs 前段全 false。实测 bn_refs：孪生
+   `[F,F,F,F,T,F,F,T,F,F,T]` vs 参考版 `[F,F,F,F,F,F,F,F,F,F,T]`——孪生把第
+   4/7 项误判为 bn 引用 → 复用门恒真 → 整链回退重推。
+
+### 根因与修复
+
+`tm_refs_bn`（快版独立重写）的索引换算式写反：代码用 `depth + i == bind_idx`
+（等价 `i == bind_idx − depth`），而快版 Var(i) 与参考版 Ix(i) 表示**同构**
+（产生侧同为 `cxt.lvl - blvl - 1`，导出侧恒等映射），正确式是参考版的
+`ix == bind_idx + depth`（de Bruijn 索引随 λ 深度**增大**而增大）。
+
+修复：按参考版逐句移植（递归深度增量也对齐——Call 体 +1）。原公式双向都错：
+深度 >0 时既**漏判**真实 bn 引用（复用会把引用静默位移到 `this`，参考版注释
+警告的情形——潜在正确性隐患），又**误判**普通字段值，后者正是本轮性能症状。
+
+### 实测
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| 18-utils 用户段 net meta | 982（参考版 733） | **680**（impl 相位两版精确对齐：16 = 16） |
+| prelude-hdl 孪生（交替 A/B，min/3） | 1326–1388 ms | 1510–1529 ms（+15%） |
+| examples-hdl 孪生（交替 A/B，min/3） | 13.9–15.1 ms/文件 | 18.3–19.6 ms/文件（+30%） |
+
+**+15%/+30% 是正确性的诚实代价**：原版"更快"靠的是漏判 bn 引用后的错误复用
+（跳过了参考版同样会做的 tree 体检查）；修复后两版复用决策逐项一致。绝对量级
+仍小（用户文件 ~18 ms），孪生对参考版仍保持 ~2× 以上。
+
+### 残留（下一轮）
+
+- **Phase A 每模块少 12 个 Type 0 隐参插入**（孪生 37 vs 参考版 48，module
+  路径独有；顶层 def 对齐）——尚未定位。
+- **假 `solve trait failed: LetNamed[...]`**（+ 级联 utilsReg 未解析）仍在 →
+  18-utils 继续经信任闸回落参考版（行为不变：正确但不加速）。
+- 长期项：tree 体复用目前对"含 bn 引用"的值一律回退（参考版同款）；若在复用
+  点把 bn 引用改写为 `this` 即可安全复用，可把该族方法体从"重推"变"复用"
+  （对应 perf-review 的"3× → 1× 求值"长期方向）。
+
 

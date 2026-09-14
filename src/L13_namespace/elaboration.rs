@@ -1870,6 +1870,11 @@ impl Infer {
                 // implicit `bn: BindingName` for Module classes (mirrors the
                 // create's ctor params so inferred types quote to the same
                 // names/levels the create will use).
+                let __probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
+                let __pa0 = self.meta.len();
+                if __probe {
+                    eprintln!("[CLASS {}] ref A-start", name.data);
+                }
                 let mut a_cxt = cxt.clone();
                 for (pname, pty, _) in params.iter() {
                     let (a_checked, _) = self.check_universe(&a_cxt, pty.clone())?;
@@ -1978,6 +1983,11 @@ impl Infer {
                 // the trait impls — the exact decl sequence the parser-level
                 // expansion used to produce.  The create/tree bodies reuse the
                 // Phase-A checked terms (no re-elaboration). ══
+                if __probe {
+                    eprintln!("[CLASS {}] ref phaseA metas+{}", name.data, self.meta.len() - __pa0);
+                }
+                let __pb0 = self.meta.len();
+                let __name = name.data.clone();
                 let prechecked = super::parser::PrecheckedItems {
                     items: prechecked,
                     bn_refs,
@@ -1986,9 +1996,12 @@ impl Infer {
                     name, params, items, traits, struct_field_types, Some(&prechecked),
                 );
                 let mut cxt = cxt.clone();
-                for d in decls {
+                for (di, d) in decls.into_iter().enumerate() {
                     let (_, _, c) = self.infer_after_prefix(&cxt, d)?;
                     cxt = c;
+                    if __probe {
+                        eprintln!("[CLASS {}] ref phaseB[{}] metas+{}", __name, di, self.meta.len() - __pb0);
+                    }
                 }
                 Ok((DeclTm::Class {}, Val::U(0).into(), cxt))
             },

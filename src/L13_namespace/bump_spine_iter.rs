@@ -10058,6 +10058,11 @@ impl Machine {
             Decl::Class { name, params, items, traits } => {
                 // ══ Phase A：在 create 的参数上下文里逐字段推类型（struct
                 // 尚不存在）══（参考版 1861-1967 逐句）
+                let __probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
+                let __pa0 = self.metas.len();
+                if __probe {
+                    eprintln!("[CLASS {}] twin A-start", name.data);
+                }
                 let mut a_cxt = clone_cxt(cxt);
                 for (pname, pty, _) in params.iter() {
                     let (a_checked, _) = self.check_universe(bump, &a_cxt, pty)?;
@@ -10185,6 +10190,10 @@ impl Machine {
                 // ══ Phase B：组装 struct + create + inherent impl + trait
                 // impls（共享 parser 的 expand_class_decls；Raw::Tm 经指针
                 // 导入表复用 Phase A 结果）══
+                if __probe {
+                    eprintln!("[CLASS {}] twin phaseA metas+{}", name.data, self.metas.len() - __pa0);
+                }
+                let __pb0 = self.metas.len();
                 let prechecked_items: Vec<(
                     crate::parser_lib::Span<SmolStr>,
                     Rc<CTm>,
@@ -10210,6 +10219,9 @@ impl Machine {
                 for (di, dd) in decls.into_iter().enumerate() {
                     let (_, c) = self.infer_after_prefix(bump, &cxt2, &dd)?;
                     cxt2 = c;
+                    if __probe {
+                        eprintln!("[CLASS {}] twin phaseB[{}] metas+{}", name.data, di, self.metas.len() - __pb0);
+                    }
                 }
                 Ok((DeclOut::Class, cxt2))
             }
@@ -10516,61 +10528,38 @@ fn is_operator_method_name(name: &str) -> bool {
 }
 
 /// 项是否引用第 `bind_idx` 个（非方法）绑定的层级（bn 引用判定——参考版
-/// `tm_refs_bn`；twin 的 Var 是相对索引，转换见内）。
+/// `tm_refs_bn` 的逐句移植）。
+///
+/// 快版 `Var(i)` 与参考版 `Ix(i)` 表示同构（产生侧同为 `cxt.lvl - blvl - 1`，
+/// 导出侧恒等映射）——de Bruijn 索引随 λ 深度增大而增大：目标绑定在值顶层的
+/// 索引是 `bind_idx`（bn 绑在 params 层，第 i 项在 params + bn + i 层检查，
+/// 索引 = (params+1+i) − 1 − params = i），每进一层 λ 索引 +1。原实现误写成
+/// `depth + i == bind_idx`（符号反向）：深度 >0 时既漏判真实 bn 引用（复用
+/// 时会静默把引用位移到 `this`——参考版注释警告的情形），又误判普通字段值
+/// 为 bn 引用，使 `maybe_prechecked_method_body` 的复用门恒真、tree/create
+/// 方法体整链重推（18-utils 隐参分叉的根因）。
 fn tm_refs_bn(tm: &Tm<'_>, bind_idx: usize) -> bool {
-    // 参考版按 Var 的绝对层级判定；快版 Var 是相对索引——沿 λ 深度换算：
-    // Var(i) 在深度 d 下引用的绑定 = 当前绑定序 + (i - d)。保守近似：任何
-    // 项内出现 Var 且其相对索引 ≥ λ 深度时指向外层绑定——用与参考版同构
-    // 的"绝对层级 = 相对索引 + 该点深度"重算。
-    fn go(tm: &Tm<'_>, depth: usize, target_from_top: usize, binder_seen: &mut usize) -> bool {
+    fn go(tm: &Tm<'_>, i: usize, d: usize) -> bool {
         match tm {
-            Tm::Var(i) => {
-                let abs = binder_seen_plus(depth, *i as usize);
-                abs == target_from_top
-            }
+            Tm::Var(ix) => *ix as usize == i + d,
             Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => false,
-            Tm::Obj(h, _) => go(h, depth, target_from_top, binder_seen),
-            Tm::Lam(_, _, b) => go(b, depth + 1, target_from_top, binder_seen),
-            Tm::App(f, a, _) => {
-                go(f, depth, target_from_top, binder_seen)
-                    || go(a, depth, target_from_top, binder_seen)
-            }
-            Tm::AppPruning(h, _) => go(h, depth, target_from_top, binder_seen),
-            Tm::Pi(_, _, a, b) => {
-                go(a, depth, target_from_top, binder_seen)
-                    || go(b, depth + 1, target_from_top, binder_seen)
-            }
-            Tm::Let(_, a, t, u) => {
-                go(a, depth, target_from_top, binder_seen)
-                    || go(t, depth, target_from_top, binder_seen)
-                    || go(u, depth + 1, target_from_top, binder_seen)
-            }
-            Tm::Sum(_, ps, _, _) => ps.iter().any(|p| {
-                go(p.val, depth, target_from_top, binder_seen)
-                    || go(p.ty, depth, target_from_top, binder_seen)
-            }),
+            Tm::Obj(h, _) => go(h, i, d),
+            Tm::Lam(_, _, b) => go(b, i, d + 1),
+            Tm::App(f, a, _) => go(f, i, d) || go(a, i, d),
+            Tm::AppPruning(h, _) => go(h, i, d),
+            Tm::Pi(_, _, a, b) => go(a, i, d) || go(b, i, d + 1),
+            Tm::Let(_, a, t, u) => go(a, i, d) || go(t, i, d) || go(u, i, d + 1),
+            Tm::Sum(_, ps, _, _) => ps.iter().any(|p| go(p.val, i, d) || go(p.ty, i, d)),
             Tm::SumCase { typ, datas, .. } => {
-                go(typ, depth, target_from_top, binder_seen)
-                    || datas.iter().any(|d| go(d.val, depth, target_from_top, binder_seen))
+                go(typ, i, d) || datas.iter().any(|x| go(x.val, i, d))
             }
-            Tm::Match(s, cases) => {
-                go(s, depth, target_from_top, binder_seen)
-                    || cases.iter().any(|(_, b)| {
-                        go(b, depth, target_from_top, binder_seen)
-                    })
-            }
-            Tm::Call(_, args, body) => {
-                args.iter().any(|(a, _)| go(a, depth, target_from_top, binder_seen))
-                    || go(body, depth, target_from_top, binder_seen)
-            }
+            Tm::Match(s, cases) => go(s, i, d) || cases.iter().any(|(_, b)| go(b, i, d + 1)),
+            // Call 体是内联 def 体；字段值不含它，深度多算只损失优化
+            // （回退），不会误复用（参考版同款注释）。
+            Tm::Call(_, args, body) => args.iter().any(|(a, _)| go(a, i, d)) || go(body, i, d + 1),
         }
     }
-    fn binder_seen_plus(depth: usize, i: usize) -> usize {
-        // Var(i) 在 λ 深度 d 的项里引用“向外数第 i 个”绑定；绑定序（源码
-        // 序）从外向内递增，绝对层级 = d + i
-        depth + i
-    }
-    go(tm, 0, bind_idx, &mut 0)
+    go(tm, bind_idx, 0)
 }
 
 /// `Raw::Match` 推断错误用的 span（to_span 的借用版）。
@@ -13048,6 +13037,10 @@ pub(crate) struct Tycker {
     /// 用户段累积错误（[`Tycker::observe_user`] 逐 decl 收集，不早退）——
     /// 孪生自产诊断用（参考版 `Infer.accumulated_errors` 等的对位）。
     user_errors: Vec<Error>,
+    /// 上一轮 `observe_user` 用户段的 net meta 创建量（journal 回滚前
+    /// 记录）——18-utils 分叉调查的对照信号（孪生 vs 参考版
+    /// `infer.meta.len()` 增量）。
+    last_kick_metas_created: usize,
     /// 本轮用户段声明的参考域导出（[`Tycker::observe_user`] 末尾导出）：
     /// 供 LSP 合并进参考域 `cxt.decl`（Path1 定义处悬浮/成员渲染/跨文件）。
     user_decl_exports: Vec<(SmolStr, super::ExportedDecl)>,
@@ -13060,6 +13053,7 @@ impl Tycker {
             machine: Machine::new(),
             resident: None,
             user_errors: Vec::new(),
+            last_kick_metas_created: 0,
             user_decl_exports: Vec::new(),
         }
     }
@@ -13067,6 +13061,11 @@ impl Tycker {
     /// 本轮用户段累积的错误（每 kick `observe_user` 前清空）。
     pub(crate) fn user_errors(&self) -> &[Error] {
         &self.user_errors
+    }
+
+    /// 上一轮用户段的 net meta 创建量（见字段注释）。
+    pub(crate) fn last_kick_metas_created(&self) -> usize {
+        self.last_kick_metas_created
     }
 
     /// 本轮用户段声明的参考域导出（prim 条目不导出——用户声明不会是
@@ -13314,12 +13313,17 @@ impl Tycker {
         let bump = &self.bump;
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
+        let decl_probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
         for (i, d) in user_ast.iter().enumerate() {
+            let m0 = self.machine.metas.len();
             match Self::step_round_decl(&mut self.machine, bump, &mut cxt, d, i, &[], &mut sink) {
                 Ok(nc) => cxt = nc,
                 // Keep the previous cxt for subsequent decls (reference
                 // `elaborate` keeps `local_cxt` on error).
                 Err(e) => self.user_errors.push(e),
+            }
+            if decl_probe {
+                eprintln!("[DECL{}] metas+{}", i, self.machine.metas.len() - m0);
             }
         }
         // 本轮新增的用户声明名（相对 prelude 基线）。
@@ -13354,6 +13358,8 @@ impl Tycker {
             }));
         }
         self.user_decl_exports = exports;
+        // 回滚前记录本轮 net meta 创建量（18-utils 分叉对照信号）。
+        self.last_kick_metas_created = self.machine.metas.len() - pre_meta_len;
         // kick 末：撤销本 kick 的 meta 就地写与新增（journal 帧回滚）+ 七表
         // 写点逆序撤销（评审 B#2 二期）——下 kick 起点的整表恢复由此免除。
         // 导出数据已深快照成 owned Rc，不受回滚影响。
@@ -14665,6 +14671,82 @@ struct P {
             refs.sort();
             assert_eq!(twin, refs, "diagnostic mismatch for:\n{src}");
         }
+    }
+
+    /// **18-utils 分叉探针**（2026-09-11 调查的继任，2026-09-14 重启）。
+    ///
+    /// 2026-09-14 已定位并修复其中一因：`tm_refs_bn` 的索引公式符号反向
+    /// （`depth + i == bind_idx`，正确为 `ix == bind_idx + depth`），使
+    /// `bn_refs` 误判 → `maybe_prechecked_method_body` 的复用门恒真 →
+    /// module 的 tree 方法体整链重推（隐含调用全部隐参 fresh_meta）。
+    /// 修复后本站 impl 相位两版对齐（16 = 16），18-utils 用户段 net meta
+    /// 982 → 680（参考版 733，残差为 Phase A 的既有差，见下）。
+    ///
+    /// **残留**：① Phase A 孪生每模块少 12 个 `Type 0` 隐参插入（37 vs 48）；
+    /// ② 假 "solve trait failed: LetNamed[...]"（+ 级联 `utilsReg` 未解析）
+    /// 仍在 → 18-utils 继续经信任闸回落参考版。本站用于后续对比两版
+    /// （net meta 创建量 + 错误集）与源码收缩定位；`TYPORT_DECL_PROBE=1`
+    /// 时孪生逐步打逐 decl / 逐相位增量，参考侧由本站镜像循环打逐 decl。
+    #[test]
+    #[ignore = "divergence probe: cargo test twin_utils_divergence_probe -- --ignored --nocapture"]
+    fn twin_utils_divergence_probe() {
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        assert_eq!(pre.failed, None);
+
+        let compare = |name: &str, src: &str| {
+            let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+                &crate::L13_namespace::preprocess(src), 880, &pre.macros,
+            ).expect("parse");
+            let mut t = Tycker::new();
+            t.prime_resident(&pre).expect("prime");
+            t.observe_user(&pre, &decls).expect("observe");
+            let twin_metas = t.last_kick_metas_created();
+            let twin_errs: Vec<String> = t.user_errors().iter().map(|e| e.0.data.clone()).collect();
+
+            let (mut infer, mut rcxt, _m) =
+                crate::L13_namespace::clone_prelude_state(true).expect("ref load");
+            let rbase = infer.meta.len();
+            let mut rerrs: Vec<String> = Vec::new();
+            for (i, d) in decls.iter().enumerate() {
+                let m0 = infer.meta.len();
+                match infer.infer(&rcxt, d.clone()) {
+                    Ok((_, _, nc)) => rcxt = nc,
+                    Err(e) => rerrs.push(e.0.data.clone()),
+                }
+                for e in infer.accumulated_errors.drain(..) {
+                    rerrs.push(e.0.data.clone());
+                }
+                if std::env::var_os("TYPORT_DECL_PROBE").is_some() {
+                    eprintln!("[DECL{i}] ref metas+{}", infer.meta.len() - m0);
+                }
+            }
+            eprintln!(
+                "[PROBE {name}] decls={} twin_metas={} ref_metas={} twin_errs={} ref_errs={}",
+                decls.len(), twin_metas, infer.meta.len() - rbase, twin_errs.len(), rerrs.len(),
+            );
+            if !twin_errs.is_empty() { eprintln!("[PROBE {name}] twin errors: {twin_errs:#?}"); }
+            if !rerrs.is_empty() { eprintln!("[PROBE {name}] ref errors: {rerrs:#?}"); }
+        };
+
+        compare("full", include_str!("../../examples/hdl/18-utils.typort"));
+        // DECL0 (utilsRev) 逐语句收缩：定位 module 路径的 meta 源。
+        compare(
+            "utilsRev-whole",
+            "module utilsRev {\n    let a = Bits[8]\n    let r = Bits[8]\n    r := reverse(a)\n    let u = UInt[8]\n    let ru = UInt[8]\n    ru := reverse(u)\n    let p = Bits[8]\n    p := propagateOnes(a, false)\n    let p2 = Bits[8]\n    p2 := propagateOnes(a, true)\n}\n",
+        );
+        compare(
+            "rev-only",
+            "module m {\n    let a = Bits[8]\n    let r = Bits[8]\n    r := reverse(a)\n}\n",
+        );
+        compare(
+            "no-call",
+            "module m {\n    let a = Bits[8]\n    let r = Bits[8]\n}\n",
+        );
+        // 顶层 def 对照（无 module 宏包装）。
+        compare(
+            "top-level-rev",
+            "def a = Bits[8]\ndef r = reverse(a)\nprintln r\n",
+        );
     }
 
     /// **阶段 3b 等价性验收**：常驻检查点（`prime_resident` 一次 +
