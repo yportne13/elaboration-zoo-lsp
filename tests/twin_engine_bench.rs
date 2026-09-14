@@ -15,7 +15,12 @@
 //   decl merge for files with no imports (the HDL workload), so the
 //   reference per-decl infer loop (~280 ms) is skipped entirely.  Files that
 //   import a project namespace, or declare one, still fall back.
-// See the wiring doc's 2026-09-10 progress log.
+// - Error states (2026-09-14 gate narrowing): twin-owned for parity-verified
+//   error classes (parse errors identical by construction, can't-unify /
+//   genuinely-unresolved names by corpus) -> error-state kick ~98 ms, same
+//   as the clean state; before, any twin error forced a full reference
+//   fallback after the twin pass (~450 ms, ~30% worse than pure reference).
+// See the wiring doc's 2026-09-10/09-14 progress logs.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -31,6 +36,40 @@ impl ClientLike for SilentClient {
     fn publish_diagnostics(&self, _u: Url, _d: Vec<lsp_types::Diagnostic>, _v: Option<i32>) {}
     fn show_message(&self, _t: MessageType, _m: String) {}
     fn log_message(&self, _t: MessageType, _m: String) {}
+}
+
+#[test]
+#[ignore = "manual perf measurement; run with --release --ignored --nocapture"]
+fn bench_error_state_kick_cost_by_engine() {
+    // Typing-period state: the file carries a `can't unify` ERROR in a def
+    // while its modules stay well-formed (the common "error elsewhere in a
+    // module file" shape).  Before the 2026-09-14 gate narrowing, any twin
+    // error forced a full reference fallback *after* the twin pass already
+    // ran — double pay, ~30% worse than the pure reference engine.
+    let base = std::fs::read_to_string("examples/hdl/09-hierarchy.typort").unwrap();
+    let src = format!("{base}\ndef benchErrInject(): Nat = true\n");
+    for eng in [Engine::Reference, Engine::Twin] {
+        let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
+        b.load_prelude();
+        let uri = Url::parse("file:///bench_err.typort").unwrap();
+        let t0 = Instant::now();
+        b.process_file(&uri, &src, Some(0));
+        let warmup = t0.elapsed().as_secs_f64() * 1000.0;
+        let mut best = f64::MAX;
+        let mut total = 0.0;
+        let kicks = 5usize;
+        for i in 0..kicks {
+            let t0 = Instant::now();
+            b.process_file(&uri, &src, Some(i as i32 + 1));
+            let dt = t0.elapsed().as_secs_f64() * 1000.0;
+            total += dt;
+            if dt < best { best = dt; }
+        }
+        println!(
+            "[BENCH-ERR] {eng:?}: warmup={warmup:.0} ms | steady-state min={best:.0} avg={:.0} ms/kick ({kicks})",
+            total / kicks as f64,
+        );
+    }
 }
 
 #[test]

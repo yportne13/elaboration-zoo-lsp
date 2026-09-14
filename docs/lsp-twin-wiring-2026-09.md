@@ -783,4 +783,59 @@ reference。设置项 schema 默认值随之为 `twin`，实际回退按后端�
 是产品决策优先于测量流程；2 GiB 上界对 730 MB 峰值留 ~2.7× 余量，但真机
 长时内存曲线仍未测。
 
+---
+
+## 2026-09-14（错误态闸放宽：打字期双跑消除，错误态 kick 450→98 ms）
+
+**问题**：stage 4 的两道闸把"任何孪生错误"整体回落参考版——打字期
+（常态性临时错误）每 kick 白跑孪生 ~100 ms 再全跑参考版 ~340 ms，
+比纯参考慢 ~30%。
+
+**闸放宽（`lib.rs twin_elaborate`）**——从"任何错误不信任"改为
+**按错误类信任**：
+
+- **parse 错误**：两引擎跑的是同一个 `parser_with_macros` 调用（同
+  文本/同 id/同宏表），`parse_errs` 按构造逐字节一致——无条件信任。
+- **`can't unify`** / **`error name not in scope: X`（X 确实未定义）**：
+  错误语料互检（`twin_user_errors_match_reference_diagnostics` +
+  `twin_diagnostics_match_reference`）验证过 (span, msg) 多重集相等。
+- **不信任（回落）**：名字在参考版**全局表**里确实有定义（其它打开
+  文件的符号——参考版 local cxt 看得到、孪生看不到，视图不足）；本
+  文件自己上一轮的旧符号除外（参考版 local cxt 同样剔除——重命名瞬态
+  两版一致报错，孪生继续接管）。以及一切未验证错误类：`solve trait
+  failed`（18-utils 隐参分叉的表象）、`ambiguous name`、universe 类。
+- **HDL 自检闸（原闸 2）精化**：仍不信任"声明了模块且 0 条 check 警告"
+  的文件，但**模块自身 span 上有错误/解析错误的模块不计入**——该模块
+  在两版里都跑不到 close-check，缺警告是预期（打字期改模块体的常见
+  形态由此保住孪生接管）。
+- **错误态语义对齐参考版 decision 1-a**：错误 kick 不合并全局符号表
+  （保留上一轮成功符号），twin 观察快照保留，quickfix_map 清空
+  （孪生错误无 fix thunk；信任类在参考版同样不带 fix——2278 的 import
+  建议只在视图不足类出现，而那类已回落）。
+
+**实测（release，09-hierarchy + 尾部 `def benchErrInject(): Nat = true`，
+min/5）**：
+
+| 引擎 | 干净态 | 错误态 |
+|---|---|---|
+| Reference | 339 ms | 342 ms |
+| Twin（改前） | 97 ms | **450 ms**（双跑） |
+| Twin（改后） | 97 ms | **98 ms** |
+
+错误态与干净态持平（双跑彻底消除），对纯参考错误态 **3.5×**。
+
+**验证**：`twin_engine_tests` 16/16（新增 5 例：信任错误态接管+旧符号
+保留 / 重命名瞬态接管 / solve-trait 回落 / parse 错误态接管 / 模块体
+错误态接管）；lib 682、`l13_fast_parity` 393、8 套 LSP 守卫双引擎
+（hover/completion/namespace/impl_goto/macro_goto/hdl_check/println/
+cross_file）+ parser_error_tests 双引擎（91×2）全绿。
+
+**途中修掉的 bug**：精化闸 2 时首版闭包忘了取反（`any_clean_module`
+实际算成 any_broken），13-adder-tree 不回落、诊断分叉被语料测试立刻
+抓住——全语料验收闸再次证明其价值。
+
+**遗留**：模块干净但孪生树建不全的文件（13-adder-tree 形态）错误态
+仍回落（闸 2 保守方向不变）；未验证错误类（universe 等）打字态回落，
+后续按需扩语料放宽。
+
 

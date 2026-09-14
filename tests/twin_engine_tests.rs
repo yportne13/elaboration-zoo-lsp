@@ -437,3 +437,105 @@ fn twin_observes_real_hdl_example() {
         assert_eq!(hover_text(&tb, &uri, probe).as_deref(), Some(r.as_str()), "HDL hover mismatch");
     }
 }
+
+/// Error states whose error classes have verified parity stay twin-owned
+/// (2026-09-14 gate narrowing): the typing period no longer pays the twin
+/// pass *and* the full reference fallback.  The twin's own diagnostics are
+/// published, and symbols from the last clean kick are kept (the
+/// reference's decision 1-a).
+#[test]
+fn twin_owns_trusted_error_state_and_keeps_previous_symbols() {
+    let u = Url::parse("file:///twin_err_own.typort").unwrap();
+    let tb = backend(Engine::Twin);
+    let clean = "def good: Nat = zero\ndef use: Nat = succ good\n";
+    tb.process_file(&u, clean, Some(1));
+    assert!(errors(&tb, &u).is_empty());
+    assert!(tb.twin_tables.contains_key(u.as_str()), "clean kick not twin-owned");
+
+    // Introduce a can't-unify error in a new decl.
+    let dirty = "def good: Nat = zero\ndef use: Nat = succ good\ndef bad: Nat = true\n";
+    tb.process_file(&u, dirty, Some(2));
+    assert!(tb.twin_tables.contains_key(u.as_str()), "trusted error state fell back to reference");
+    assert_eq!(errors(&tb, &u).len(), 1, "expected exactly the one can't-unify error: {:?}", errors(&tb, &u));
+
+    // The published diagnostics must match the reference engine's on the
+    // same dirty source.
+    let rb = backend(Engine::Reference);
+    rb.process_file(&u, dirty, Some(2));
+    assert_eq!(errors(&tb, &u), errors(&rb, &u), "twin-owned error diagnostics differ from reference");
+
+    // Previous symbols survive the error kick: `good` still resolves for
+    // hover (kept symbols — no partial merge deletes them).
+    let probe = dirty.rfind("good").unwrap();
+    let rope = ropey::Rope::from_str(dirty);
+    let pos = elaboration_zoo_lsp::offset_to_position(probe, &rope).unwrap();
+    assert!(tb.hover_at(&u, pos).is_some(), "previous symbol hover lost during error state");
+}
+
+/// A rename transient: kick 1 defines `foo`, kick 2 renames the def so the
+/// still-present uses of `foo` become unresolved.  The stale global entry
+/// belongs to *this* file, so the reference's local cxt drops it too — both
+/// engines must report the error, and the twin must stay in charge (the
+/// own-previous-symbols exclusion in the trust gate).
+#[test]
+fn twin_owns_rename_transient_unresolved_error() {
+    let u = Url::parse("file:///twin_rename.typort").unwrap();
+    let tb = backend(Engine::Twin);
+    tb.process_file(&u, "def foo: Nat = zero\ndef use: Nat = succ foo\n", Some(1));
+    assert!(errors(&tb, &u).is_empty());
+    tb.process_file(&u, "def foo2: Nat = zero\ndef use: Nat = succ foo\n", Some(2));
+    assert!(tb.twin_tables.contains_key(u.as_str()), "rename transient fell back");
+    assert_eq!(errors(&tb, &u).len(), 1, "expected unresolved-foo error: {:?}", errors(&tb, &u));
+    let rb = backend(Engine::Reference);
+    rb.process_file(&u, "def foo2: Nat = zero\ndef use: Nat = succ foo\n", Some(2));
+    assert_eq!(errors(&tb, &u), errors(&rb, &u), "rename transient diagnostics differ");
+}
+
+/// Error classes WITHOUT verified parity (trait-solving failures) still
+/// fall back to the reference — the 18-utils implicit-hole divergence
+/// surfaces as a spurious "solve trait failed", so the reference's
+/// diagnostics must be the published ones.
+#[test]
+fn twin_falls_back_on_solve_trait_failure() {
+    let u = Url::parse("file:///twin_solve.typort").unwrap();
+    // `Add` has instances for Nat/String/UInt, not Bool.
+    let src = "def x = true + false\n";
+    let tb = backend(Engine::Twin);
+    tb.process_file(&u, src, Some(1));
+    assert!(!tb.twin_tables.contains_key(u.as_str()), "solve-trait failure must not stay twin-owned");
+    let rb = backend(Engine::Reference);
+    rb.process_file(&u, src, Some(1));
+    assert_eq!(errors(&tb, &u), errors(&rb, &u), "fallback diagnostics differ from reference");
+    assert!(!errors(&tb, &u).is_empty(), "expected a solve-trait error for Bool + Bool");
+}
+
+/// A parse error (the most common typing state) no longer forces a
+/// reference fallback: both engines run the identical parser call, so the
+/// parse diagnostics are equal by construction, and elaboration of the
+/// partial decls stays twin-owned when its errors are trusted.
+#[test]
+fn twin_owns_parse_error_state() {
+    let u = Url::parse("file:///twin_parse.typort").unwrap();
+    // Truncate mid-decl: the resilient parser yields partial decls plus a
+    // parse error.
+    let src = "def a: Nat = zero\ndef b: Nat = succ ze";
+    let tb = backend(Engine::Twin);
+    tb.process_file(&u, src, Some(1));
+    let rb = backend(Engine::Reference);
+    rb.process_file(&u, src, Some(1));
+    assert_eq!(errors(&tb, &u), errors(&rb, &u), "parse-state diagnostics differ: twin={:?} ref={:?}", errors(&tb, &u), errors(&rb, &u));
+}
+
+/// A type error *inside* a module body breaks the module decl in both
+/// engines (no close-check expected from either), so the HDL gate must not
+/// distrust the file: the typing-inside-a-module state stays twin-owned.
+#[test]
+fn twin_owns_module_body_error_state() {
+    let u = Url::parse("file:///twin_mod_err.typort").unwrap();
+    let tb = backend_hdl(Engine::Twin);
+    let src = "module broken {\n    input a = UInt[8]\n    let bad: Nat = true\n    output sum = UInt[8]\n    sum := a + a\n}\n";
+    tb.process_file(&u, src, Some(1));
+    let rb = backend_hdl(Engine::Reference);
+    rb.process_file(&u, src, Some(1));
+    assert_eq!(errors(&tb, &u), errors(&rb, &u), "module-body error diagnostics differ: twin={:?} ref={:?}", errors(&tb, &u), errors(&rb, &u));
+}

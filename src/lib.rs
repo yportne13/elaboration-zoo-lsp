@@ -1313,8 +1313,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     ///
     /// Diagnostics come from the twin's per-decl accumulation (which the
     /// parity suite proves byte-equal to the reference's on an error corpus).
-    /// A parse failure or an ERROR keeps the previous symbols, mirroring the
-    /// reference path.
+    /// Since 2026-09-14 the twin also stays authoritative on *error* states
+    /// whose error classes have verified parity (parse errors are identical by
+    /// construction; `can't unify` / genuinely-unresolved names by corpus) —
+    /// see the trust gate inside.  A parse failure or an ERROR keeps the
+    /// previous symbols, mirroring the reference path.
     fn twin_elaborate(&self, uri: &Url, text: &str, version: Option<i32>) -> bool {
         let uri_str = uri.to_string();
         if !self.twin_can_own(&uri_str) {
@@ -1393,36 +1396,83 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             )
         });
         drop(prelude_guard);
-        // **Correctness gate**: the twin must not be authoritative when it
-        // reports errors.  It is a faithful port but not yet complete on every
-        // real input — e.g. `examples/hdl/13-adder-tree.typort` makes its
-        // pattern compiler flag unreachable arms the reference accepts, which
-        // cascades into spurious "not in scope" errors.  Any twin error ⇒ fall
-        // back to the reference for diagnostics, observation and the data
-        // plane.  Error-free files (the common editing case) stay twin-owned,
-        // keeping the speedup; error cases pay the reference anyway, and only
-        // the reference's diagnostics are published.
-        if !errors.is_empty() || !parse_errs.is_empty() {
+        // **Correctness gate (narrowed 2026-09-14)**: the twin may own *error*
+        // states, but only for error classes it is known to reproduce
+        // byte-equal with the reference:
+        //   - parse errors: both engines run the very same
+        //     `parser_with_macros(&preprocess(text), now_id, ..)` call, so
+        //     `parse_errs` is identical by construction;
+        //   - `can't unify ...`: verified by the error corpus
+        //     (`twin_user_errors_match_reference_diagnostics` /
+        //     `twin_diagnostics_match_reference`);
+        //   - `error name not in scope: X` where X is genuinely unknown —
+        //     verified by the same corpus.  A name the reference's *global*
+        //     table does define (another open file's symbol — the reference's
+        //     local cxt sees every file's symbols) is view insufficiency, not
+        //     a real error: distrust it.  This file's own previous symbols
+        //     don't count (the reference drops them from its local cxt too —
+        //     the rename-transient case).
+        // Anything else (solve-trait failures, ambiguous names, universes, …)
+        // still falls back: the twin is a faithful port but not complete on
+        // every real input, and a wrong diagnostic is worse than a slow one
+        // (e.g. 18-utils' implicit-hole divergence surfaces as a spurious
+        // "solve trait failed").
+        let own_prev: HashSet<String> = self
+            .file_symbols
+            .get(&uri_str)
+            .map(|k| k.value().clone())
+            .unwrap_or_default();
+        let errors_trusted = errors.iter().all(|e| {
+            let msg = &e.1;
+            if msg.starts_with("can't unify") {
+                return true;
+            }
+            if let Some(name) = msg.strip_prefix("error name not in scope: ") {
+                let dotted = format!(".{name}");
+                let cxt = self.cxt.lock().unwrap();
+                return !cxt
+                    .decl
+                    .keys()
+                    .any(|k| (k == name || k.ends_with(&dotted)) && !own_prev.contains(k.as_str()));
+            }
+            false
+        });
+        if !errors_trusted {
             self.twin_tables.remove(&uri_str);
             return false;
         }
-        // Second correctness gate: HDL self-check warnings.  `hdl-check`'s
-        // module close-check runs while the module tree is walked; when the
-        // twin builds that tree incompletely it reports *no* issues where the
-        // reference reports several (e.g. 13-adder-tree: 0 vs 8 warnings).
-        // A file that declares modules but yields no check issues is therefore
-        // distrusted — fall back.  Clean module files pay the reference
-        // unnecessarily, which is the safe direction.
+        let has_error = !errors.is_empty() || !parse_errs.is_empty();
+        // HDL self-check gate: a file with modules that elaborated without an
+        // error on the module itself yet produced no check issues is
+        // distrusted — the twin can build the module tree incompletely and
+        // report *no* issues where the reference reports several
+        // (13-adder-tree: 0 vs 8 warnings).  Modules whose own span carries an
+        // elaboration or parse error cannot close-check in *either* engine, so
+        // their missing warnings are expected and do not trigger the
+        // fallback (the common "typing inside a module body" state).
         let has_module = decls.iter().any(|d| matches!(d, Decl::Class { .. }));
         if has_module && checks.is_empty() {
-            self.twin_tables.remove(&uri_str);
-            return false;
+            let any_clean_module = decls.iter().any(|d| {
+                if !matches!(d, Decl::Class { .. }) {
+                    return false;
+                }
+                let sp = decl_span(d);
+                let broken = |start: u32, end: u32| start < sp.end_offset && end > sp.start_offset;
+                !(errors.iter().any(|e| broken(e.0.start_offset, e.0.end_offset))
+                    || parse_errs.iter().any(|p| broken(p.msg.start_offset, p.msg.end_offset)))
+            });
+            if any_clean_module {
+                self.twin_tables.remove(&uri_str);
+                return false;
+            }
         }
         let rope = Rope::from_str(text);
         // Merge exports into the reference global table (mirrors the
-        // reference path's per-file symbol replacement).  Error-free by the
-        // gate above, so the previous symbols are always replaced.
-        {
+        // reference path's per-file symbol replacement).  On error the
+        // previous symbols are kept instead (the reference's decision 1-a):
+        // failed decls never export, and a partial merge would delete
+        // symbols other files may already use.
+        if !has_error {
             let mut cxt = self.cxt.lock().unwrap();
             let m = Rc::make_mut(&mut cxt.decl);
             if let Some(keys) = self.file_symbols.get(&uri_str) {
@@ -1462,6 +1512,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         }
         self.type_map.insert(uri_str.clone(), terms);
+        // Twin errors carry no quick-fix thunks; clear any entries a previous
+        // reference fallback may have left behind (twin diagnostics carry no
+        // `data` id, so nothing may look them up).
+        self.quickfix_map.insert(uri_str.clone(), HashMap::new());
         // Build diagnostics: twin errors (ERROR) + parse errors + HDL
         // warnings (WARNING, span resolved like the reference) + println
         // (INFORMATION).
