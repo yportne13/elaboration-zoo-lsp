@@ -539,3 +539,42 @@ fn twin_owns_module_body_error_state() {
     rb.process_file(&u, src, Some(1));
     assert_eq!(errors(&tb, &u), errors(&rb, &u), "module-body error diagnostics differ: twin={:?} ref={:?}", errors(&tb, &u), errors(&rb, &u));
 }
+
+/// Regression (2026-09): a *reduced* nat primop must unify against the same
+/// term built from the surface syntax.  `n + succ m` reduces to
+/// `succ (nat_add n m)` whose chain base is a `XCell::Decl("nat_add")`; the
+/// surface `succ (n + m)` reaches the same shape through a different
+/// allocation, so the two bare `Decl` bases are distinct cells and the
+/// bit-equality shortcut misses.  The unifier used to hit the prim "opaque
+/// leaf" interception (`is_prim_application` on the base stub) before the
+/// bare `Decl/Decl` same-name arm and report a spurious `can't unify`
+/// (examples/adder_proof.typort: every lemma application whose goal contains
+/// `n + succ m`).  Reference arm order (`unification.rs`) puts `Decl/Decl`
+/// first; the twin must match it.
+#[test]
+fn twin_unifies_reduced_nat_primop_against_surface_form() {
+    let corpus: &[&str] = &[
+        // Lemma application whose result type contains the reduced primop.
+        "def t(n: Nat, m: Nat): Eq (n + (succ m)) (succ (n + m)) = add_succ_right(n, m)",
+        // Same under a `let` ascription.
+        "def t(n: Nat, m: Nat): Eq (n + (succ m)) (succ (n + m)) =\n    let h: Eq (n + (succ m)) (succ (n + m)) = add_succ_right(n, m);\n    h",
+        // adder_proof.typort's `add_succ_succ` shape.
+        "def t(a: Nat, b: Nat): Eq((a+1)+(b+1), a+b+2) = add_succ_left(a, b + 1)",
+    ];
+    for (i, src) in corpus.iter().enumerate() {
+        let uri = Url::parse(&format!("file:///twin_primapply_{i}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        tb.process_file(&uri, src, Some(1));
+        let rb = backend_hdl(Engine::Reference);
+        rb.process_file(&uri, src, Some(1));
+        assert!(
+            errors(&tb, &uri).is_empty(),
+            "twin invented errors for:\n{src}\n-> {:?}",
+            errors(&tb, &uri),
+        );
+        assert_eq!(
+            errors(&tb, &uri), errors(&rb, &uri),
+            "twin/reference error mismatch for:\n{src}",
+        );
+    }
+}

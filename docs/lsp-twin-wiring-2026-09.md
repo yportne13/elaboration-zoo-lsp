@@ -1081,4 +1081,50 @@ cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` �
 孪生常驻态在浏览器 wasm 宿主下的稳定性与长时内存曲线仍待一轮真机验证；若异常，
 把设置改回 `reference` 即可回退，无需改代码。
 
+## 2026-09-14 续（孪生 unifier 臂序修正：裸 Decl/Decl 同名须在 prim 拦截之前）
+
+**症状**：web 切孪生后 `examples/adder_proof.typort` 多出 4 条 `can't unify`
+（参考版 0 错），且其中 3 条的 expected/find 打印**逐字节相同**——"类型一样却
+说不相等"。
+
+**定位**（临时探针：`TYPORT_UNIFY_DBG` 在 `unify_catch` 失败点 dump 值的
+tag/原始字/头/参数，并在 `unify_iter` 每条 `return false` 前打行号。探针已撤）：
+
+- 失败对是两颗**裸 `XCell::Decl{name:"nat_add"}`**（地址不同、同名）。
+- 根因：`nat_add` 被 `register_nat_builtins` 换成 prim，`n + succ m` 归约成
+  `succ (stuck nat_add n m)`，其链基座是 `stuck_decl` 现分配的一颗裸 Decl；
+  而表层 `succ (n + m)` 走到同一形状时基座是**另一颗**分配。位相等捷径不命中，
+  比较落到 `is_decl_val` 拦截（现 `bump_spine_iter.rs` 的 `(Decl,_)/(_,Decl)`
+  臂）→ `is_prim_application` 命中 prim 名 → 判"不透明叶"→ `return false`。
+- 臂序 bug：参考版 `unification.rs` 的 `(Val::Decl(x,sp), Val::Decl(x',sp')) if
+  x == x'` 排在 `(Decl,_)` prim 拦截**之前**，且参考版 `Val::Decl` 基座是 decl
+  表共享的 `Rc`（两侧天然同指针，永远走不到裸存根比较）。孪生把"裸 Decl/Decl
+  同名"臂放在 Sum/Sum 区块（拦截之后），因此**永远不可达**；链形态
+  （tag2/tag2）的同名臂在拦截之前，所以只有"归约产生的裸存根基座"这一形态中招。
+- 判别：`rfl` 版能过（比较路径不同），**应用引理**版失败；用户自定义递归
+  `myadd` 版能过（无 primop），确认与 prim 归约形态绑定。
+
+**修复**（`bump_spine_iter.rs`）：在 `(Decl,_)` 拦截之前补一条"裸 Decl/Decl
+同名"臂——两侧都是 tag7 `XCell::Decl` 时同名即成立（存 memo 后 `continue`）、
+异名失配。与参考版同序同位；行为面只影响此前被误判的裸存根对。
+
+**实测**：
+- 最小对 `def t(n,m): Eq (n + (succ m)) (succ (n + m)) = add_succ_right(n, m)`
+  修复前报错、修复后干净；7 条判别探针（rfl / 应用 / 具名 ascribe / `a+0` /
+  具体实参 / 用户自定义 `myadd` / 恒等引理）全绿。
+- `examples/**` 全 30 个文件双引擎诊断扫描：`adder_proof` 的 4 条 `can't unify`
+  全部消失。
+- 回归：lib 699、`l13_fast_parity` 410、`twin_engine_tests` 17（新增
+  `twin_unifies_reduced_nat_primop_against_surface_form`）全绿。
+
+**同批扫描暴露的其余分叉（本轮未修，另一类根因）**：
+- `theorem_proving.typort` 仍多 1 条错误：`can't unify expected: Eq[Nat](12,12)
+  find: Eq[Nat](5 + ?M, 5 + ?M)`——`add_cong_complex_calc` 里
+  `cong(x => 5 + x, add_zero_left(7))` 的 meta 未解（参考版解成 7）。属 meta
+  求解/隐参类，与本次 prim 存根问题无关。
+- `Information`（println）差异 3 处：`adder_proof` 第二条 `println` 孪生未把
+  证明项归一到 `Eq[Nat]::refl(4)`（打印成 `vec_adder_correct[2](...)` 原项）、
+  `theorem_proving` 对应一条、`typeclass_complex` 打印串内嵌的 span
+  （孪生导出项 Span 全零 `@ 0,0` vs 参考版 `@ 549,552`，属既有已知渲染差）。
+
 

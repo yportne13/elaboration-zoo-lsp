@@ -4317,6 +4317,29 @@ fn unify_iter<'a>(
                 return false;
             }
         }
+        // —— 裸 Decl/Decl 同名（参考臂 3.5，**须在下方 prim 拦截之前**）——
+        // 参考版 `unification.rs` 的 `(Val::Decl(x,sp), Val::Decl(x',sp')) if
+        // x == x'` 排在 `(Decl,_)` prim 不透明叶之前，且 `Val::Decl` 基座是
+        // decl 表里共享的 `Rc`，两侧天然同指针；孪生的 `XCell::Decl` 只存名字、
+        // 每次 `stuck_decl` 各自分配，链基座因此是两颗**地址不同**的裸 Decl
+        // 存根——位相等捷径不命中，若落到 prim 拦截就会被 `is_prim_application`
+        // 判成"不透明叶"直接失配（adder_proof：`n + succ m` 与 `succ (n + m)`
+        // 都归约成 `succ (nat_add n m)`，比较到 `nat_add` 链基座时误报
+        // `can't unify`）。裸 × 裸（空 spine）：同名即成立、异名失配——与参考版
+        // 同序同位。
+        if v_tag(t) == 7 && v_tag(u) == 7 {
+            if let (XCell::Decl { name: n1 }, XCell::Decl { name: n2 }) =
+                (v_xcell_of(t), v_xcell_of(u))
+            {
+                if n1 == n2 {
+                    if memo_on {
+                        memo.insert((t.0, u.0));
+                    }
+                    continue;
+                }
+                return false;
+            }
+        }
         // —— (Decl, _) / (_, Decl) 拦截（参考臂 3.6，在 η/flex 臂之前）：
         // 对侧是 Flex → 直接 solve_flex_side（None 返回的 prim 永不展开，
         // 烧燃料无意义）；prim 应用 = 不透明叶；否则 fuel>0 时 quote→eval
