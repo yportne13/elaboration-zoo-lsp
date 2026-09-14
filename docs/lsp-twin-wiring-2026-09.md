@@ -908,6 +908,19 @@ bench_examples_per_file_by_engine -- --ignored --nocapture`）：
   触发重 prime（journal 回滚不回填 bump），基准每文件 6 次 kick 会加速触发；
   稳态 `min` 已排除，LSP 实会话里表现为周期性重 prime。上表用 min。
 
+**复测（2026-09-14，bn_refs 修复后同口径）**：29 文件合计 **ref 14195 /
+twin 9907 ms（1.43×）**；逐文件倍率与上表分布一致（HDL 主力文件 2.4–3.6×）。
+变化有两处，方向相反：
+
+- **多数文件 +11–39%**（09 之外：01/02 +11%、10-bundle +24%、11-bundle-deep
+  +39%、19/20 +20–27%、adder_proof +17%）：`tm_refs_bn` 修正后孪生对含 bn
+  引用的方法体正确回退重推（详见本节下的 bn_refs 小节），属正确性代价；
+- **18-utils 桩段大幅缩水**：孪生段 ~3.8 s → ~1.2 s（4217 总 − 参考 3006），
+  总倍率 0.42× → 0.71×。原因同上——修复后那趟"注定被丢弃"的孪生段不再整链
+  重推。回落文件仍是双跑（13-adder-tree 0.56×、alu 0.77×、23-verilog-compat
+  0.73×、21-crossclock 0.85×），"让回落跳过孪生段"仍是明确的下一步。
+- 说明：两次运行的参考列有 6% 级漂移（机器负载），倍率列可比、绝对列跨轮慎比。
+
 **验证**：`twin_engine_tests` 16/16；8 套 LSP 守卫
 （hover/completion/namespace/impl_goto/macro_goto/hdl_check/println/
 cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` 引擎
