@@ -251,17 +251,49 @@ impl Cxt {
         }
     }
 
+    /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
+    /// src_names 的类型包 `VSub`；lvl / locals / pruning / decl 不动——
+    /// **槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经
+    /// force 展开看到解。σ 为空时零开销直通。
+    pub fn subst_cxt(&self, sub: &Rc<super::Subst>) -> Self {
+        if sub.is_empty() {
+            return self.clone();
+        }
+        let wrap = |v: &super::Val| super::Val::VSub(Box::new(v.clone()), sub.clone());
+        Cxt {
+            env: self.env.map(wrap),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names: self
+                .src_names
+                .iter()
+                .map(|(k, (l, ty))| (k.clone(), (*l, wrap(ty))))
+                .collect(),
+            decl: self.decl.clone(),
+        }
+    }
+
     /// 当前上下文里"真变量"（bind 槽，env 槽仍指向自身 vvar）的层级集合：
     /// 这些是模式特化方程可以求解的对象。let 定义槽（槽里是值不是
-    /// vvar）天然不在其中。
+    /// vvar）天然不在其中。嵌套 match 的入口上下文可能已被外层精化
+    /// 包裹（`subst_cxt`）——解包 VSub 看**槽的原始形态**；外层已解变量
+    /// 也按 raw 层级进入基线（无害：方程里它不再以 bare rigid 出现，
+    /// force 在读点已展开）。
     pub fn bind_slots(&self) -> Vec<Lvl> {
         let n = self.lvl.0;
         self.env
             .iter()
             .enumerate()
-            .filter_map(|(i, v)| match v {
-                Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
-                _ => None,
+            .filter_map(|(i, v)| {
+                let mut raw = v;
+                while let Val::VSub(inner, _) = raw {
+                    raw = inner;
+                }
+                match raw {
+                    Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
+                    _ => None,
+                }
             })
             .collect()
     }

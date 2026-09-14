@@ -1,9 +1,12 @@
 //! Unification。骨架 = elaboration-zoo 07 的 meta 求解器（invert / prune /
 //! rename / solve / intersect），在此基础上：
 //! - 全局引用 `Val::Decl` 作为中性头参与（与 Rigid 同型处理）；
-//! - **模式特化与常规转换共用本合一器**：差别只在 `pm_solvable`（当前子句
-//!   的 bind 槽）非空时，rigid 头是可解的——解记入 `pm_defs` 事实表，
-//!   由 `force` 在读点惰性展开；
+//! - **模式特化与常规转换共用本合一器**：可解性经 `SpecSolve` 参数显式
+//!   穿参——`spec` 非空（模式走查 / 覆盖探测）时 bare rigid 可解，解记入
+//!   `spec.acc`（显式替换，dpm-nbe 的 `insertSub`/`subst s2 s1`），由
+//!   force 在读点惰性展开；`spec = None`（分支体检查等常规转换）时不得
+//!   解假设。每次递归入口把方程两侧置于**当前 acc 之下**再解释——
+//!   dpm-nbe `subst ɑ vs`（剩余方程置于解之下）的惰性等价物；
 //! - Sum / SumCase 按参数逐槽合一（索引等式在此生效）；
 //! - 卡住的 `Val::Match`：`Match vs Match` 先比 scrutinee、再逐分支在 fresh
 //!   变量槽下比体；`Match vs 其它` 只接受严格 eta（每个分支都是通配且
@@ -14,6 +17,7 @@
 //!   变量），rename 产物的 λ 深度与使用现场天然一致。
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use smol_str::SmolStr;
 
@@ -21,13 +25,24 @@ use crate::list::List;
 
 use super::{
     pretty::pretty_tm,
-    Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, Tm, UnifyError, Val, VTy,
+    wrap_sub, val_mentions_lvl, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, Subst, Tm,
+    UnifyError, Val, VTy,
     cxt::{Cxt, Decls},
     lvl2ix,
     parser::syntax::Icit,
     syntax::Pruning,
     Ix,
 };
+
+/// 特化合一的进行时状态（dpm-nbe `unifyS` 的 Γ-shrinking + ɑ-accumulation
+/// 的 Rust 形态）。`solvable` = 本子句可解的 rigid 层级（模式槽 + 外层
+/// bind 槽基线）；`acc` = 已解出的替换——编译器的 σ 作种子，方程途中
+/// 叠加，调用方在方程结束后取走 `acc` 作为新 σ（臂边界回滚 = 恢复快照
+/// 指针）。
+pub(crate) struct SpecSolve<'a> {
+    pub(crate) solvable: &'a [Lvl],
+    pub(crate) acc: Rc<Subst>,
+}
 
 /// η 展开的可应用性守卫（L06 `unification::v_applicable` 同款）：只有
 /// `v_app` 能吃 η 新变量的形态（中性头 / Decl / 卡住投影 / 卡住内建 /
@@ -302,6 +317,8 @@ impl Infer {
             let _g = G;
         }
         match self.force(decl, t) {
+            // 不变式：force 的返回值顶层不会是 VSub（入口已推开）
+            Val::VSub(..) => Err(UnifyError),
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == m_prime => Err(UnifyError),
                 _ => self.prune_vflex(decl, pren, m_prime, sp),
@@ -467,17 +484,19 @@ impl Infer {
         cxt: &Cxt,
         sp: &Spine,
         sp_prime: &Spine,
+        mut spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
             (List { head: None, .. }, List { head: None, .. }) => Ok(()),
             (a, b) if a.head().is_some() && b.head().is_some() => {
-                self.unify_sp(decl, l, cxt, &a.tail(), &b.tail())?;
+                self.unify_sp(decl, l, cxt, &a.tail(), &b.tail(), spec.as_deref_mut())?;
                 self.unify(
                     decl,
                     l,
                     cxt,
                     a.head().unwrap().0.clone(),
                     b.head().unwrap().0.clone(),
+                    spec,
                 )
             }
             _ => Err(UnifyError),
@@ -561,9 +580,10 @@ impl Infer {
         m: MetaVar,
         sp: Spine,
         sp_prime: Spine,
+        spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match self.intersect_go(decl, sp.clone(), sp_prime.clone()) {
-            None => self.unify_sp(decl, l, cxt, &sp, &sp_prime),
+            None => self.unify_sp(decl, l, cxt, &sp, &sp_prime, spec),
             Some(pr) if pr.iter().any(|x| x.is_none()) => {
                 self.prune_meta(decl, pr, m)?;
                 Ok(())
@@ -579,12 +599,13 @@ impl Infer {
         l: Lvl,
         cxt: &Cxt,
         n: &SmolStr,
+        spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match decl.get(n) {
             None => Ok(()),
             Some(e) => {
                 let ty = e.ty.clone();
-                self.unify(decl, l, cxt, Val::LiteralType, ty)
+                self.unify(decl, l, cxt, Val::LiteralType, ty, spec)
             }
         }
     }
@@ -596,6 +617,7 @@ impl Infer {
         cxt: &Cxt,
         t: Val,
         u: Val,
+        mut spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         // 递归深度防护：索引槽互相嵌入的构造子值比较会无限递归
         let fuel = self.unify_fuel.get();
@@ -617,13 +639,23 @@ impl Infer {
                 pretty_tm(0, cxt.names(), &self.quote(decl, l, u.clone()))
             );
         }
-        let t = self.force(decl, t);
-        let u = self.force(decl, u);
+        let mut t = self.force(decl, t);
+        let mut u = self.force(decl, u);
+        // 特化模式：方程两侧置于**当前已积累的解**之下再解释（dpm-nbe
+        // `subst ɑ vs` 的惰性等价物）。每次递归入口按当时的 acc 重新包裹
+        // ——先解出的方程对后到的子方程自动可见，解两次的情形按构造
+        // 排除（已解变量不再以 bare rigid 出现）。acc 为空时零开销。
+        if let Some(s) = spec.as_deref() {
+            if !s.acc.is_empty() {
+                t = self.force(decl, wrap_sub(&s.acc, t));
+                u = self.force(decl, wrap_sub(&s.acc, u));
+            }
+        }
 
         match (&t, &u) {
             (Val::U, Val::U) => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(x_prime, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(decl, l, cxt, (**a).clone(), (**a_prime).clone())?;
+                self.unify(decl, l, cxt, (**a).clone(), (**a_prime).clone(), spec.as_deref_mut())?;
                 self.unify(
                     decl,
                     l + 1,
@@ -642,43 +674,52 @@ impl Infer {
 
                     self.closure_apply(decl, b, Val::vvar(l)),
                     self.closure_apply(decl, b_prime, Val::vvar(l)),
+                    spec.as_deref_mut(),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
-                self.unify_sp(decl, l, cxt, sp, sp_prime)
+                self.unify_sp(decl, l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
-            // 模式特化：可解 rigid（当前子句的 bind 槽）与非 Flex 值相遇 →
-            // 记入 pm_defs 事实表（惰性精化，层级与槽位一概不动）。Flex
-            // 除外——交给 Flex 规则（meta := var）。调用侧"头部一侧在前"，
-            // 双侧都可解时解的方向是"头部变量 := 构造子侧值"。
+            // 模式特化（dpm-nbe unify1 的 VVar 臂）：可解 rigid（spec 携带的
+            // 模式槽集）与非 Flex 值相遇 ⇒ 解入 `spec.acc`（显式替换，force
+            // 读点惰性展开）。Flex 除外——交给 Flex 规则（meta := var）。
+            // occurs 环守卫失败 = Err（对齐旧 pm_solve false ⇒ Err：调用侧
+            // 判为分支不可达）。spec = None（常规转换）时守卫不成立，落空
+            // 到后续臂——不得解假设，否则 `Eq x y` 会被"证成" `Eq y y`。
             (Val::Rigid(x, sp), v)
                 if sp.is_empty()
-                    && self.pm_solvable_contains(*x)
-                    && !matches!(v, Val::Flex(..)) =>
+                    && matches!(
+                        spec.as_deref(),
+                        Some(s) if s.solvable.contains(x) && !matches!(v, Val::Flex(..))
+                    ) =>
             {
-                if self.pm_solve(*x, v) {
-                    Ok(())
-                } else {
-                    Err(UnifyError)
+                if val_mentions_lvl(v, *x) {
+                    return Err(UnifyError);
                 }
+                let s = spec.as_deref_mut().unwrap();
+                s.acc = Subst::extend(&s.acc, *x, v.clone());
+                Ok(())
             }
             (v, Val::Rigid(x, sp))
                 if sp.is_empty()
-                    && self.pm_solvable_contains(*x)
-                    && !matches!(v, Val::Flex(..)) =>
+                    && matches!(
+                        spec.as_deref(),
+                        Some(s) if s.solvable.contains(x) && !matches!(v, Val::Flex(..))
+                    ) =>
             {
-                if self.pm_solve(*x, v) {
-                    Ok(())
-                } else {
-                    Err(UnifyError)
+                if val_mentions_lvl(v, *x) {
+                    return Err(UnifyError);
                 }
+                let s = spec.as_deref_mut().unwrap();
+                s.acc = Subst::extend(&s.acc, *x, v.clone());
+                Ok(())
             }
             // 全局引用：同名比 spine，不同名失败（force 已展开可展开的）
             (Val::Decl(a, sp), Val::Decl(b, sp_prime)) if a == b => {
-                self.unify_sp(decl, l, cxt, sp, sp_prime)
+                self.unify_sp(decl, l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
-                self.intersect(decl, l, cxt, *m, sp.clone(), sp_prime.clone())
+                self.intersect(decl, l, cxt, *m, sp.clone(), sp_prime.clone(), spec.as_deref_mut())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
                 self.flex_flex(decl, l, *m, sp.clone(), *m_prime, sp_prime.clone())
@@ -689,6 +730,7 @@ impl Infer {
                 cxt,
                 self.closure_apply(decl, b, Val::vvar(l)),
                 self.closure_apply(decl, b_prime, Val::vvar(l)),
+                spec.as_deref_mut(),
             ),
             (t, Val::Lam(_, i, b_prime)) if v_applicable(t) => self.unify(
                 decl,
@@ -696,6 +738,7 @@ impl Infer {
                 cxt,
                 self.v_app(decl, t.clone(), Val::vvar(l), *i),
                 self.closure_apply(decl, b_prime, Val::vvar(l)),
+                spec.as_deref_mut(),
             ),
             (Val::Lam(_, i, b), t_prime) if v_applicable(t_prime) => self.unify(
                 decl,
@@ -703,6 +746,7 @@ impl Infer {
                 cxt,
                 self.closure_apply(decl, b, Val::vvar(l)),
                 self.v_app(decl, t_prime.clone(), Val::vvar(l), *i),
+                spec.as_deref_mut(),
             ),
             (Val::Flex(m, sp), _) => self.solve(decl, l, *m, sp.clone(), u.clone()),
             (_, Val::Flex(m_prime, sp_prime)) => self.solve(decl, l, *m_prime, sp_prime.clone(), t.clone()),
@@ -712,21 +756,28 @@ impl Infer {
             // 未知名返回以其名字的卡住 Decl（动态类型的逃逸舱口）；已登记
             // 名按登记类型把关（U 型返回的 builtin 卡住值不再冒充 String）
             (Val::LiteralType, Val::Prim(n, _)) | (Val::Prim(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n)
+                self.loose_string(decl, l, cxt, n, spec)
             }
             (Val::LiteralType, Val::Decl(n, _)) | (Val::Decl(n, _), Val::LiteralType) => {
-                self.loose_string(decl, l, cxt, n)
+                self.loose_string(decl, l, cxt, n, spec)
             }
             // 卡住的内建：同名比实参 spine（异名失败）——不带实参的单元
             // Prim 会把 `x ++ y ≡ x ++ z` 判成相等
             (Val::Prim(a, sp), Val::Prim(b, sp_prime)) if a == b => {
-                self.unify_sp(decl, l, cxt, sp, sp_prime)
+                self.unify_sp(decl, l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
             (Val::Prim(..), Val::Prim(..)) => Err(UnifyError),
             // Sum：同名即逐参数（含索引）合一
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(decl, l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
+                    self.unify(
+                        decl,
+                        l,
+                        cxt,
+                        a.1.as_ref().clone(),
+                        b.1.as_ref().clone(),
+                        spec.as_deref_mut(),
+                    )?;
                 }
                 Ok(())
             }
@@ -747,7 +798,14 @@ impl Infer {
                 },
             ) if ca.data == cb.data => {
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(decl, l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
+                    self.unify(
+                        decl,
+                        l,
+                        cxt,
+                        a.1.as_ref().clone(),
+                        b.1.as_ref().clone(),
+                        spec.as_deref_mut(),
+                    )?;
                 }
                 Ok(())
             }
@@ -775,7 +833,7 @@ impl Infer {
                 {
                     return Ok(());
                 }
-                self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone())?;
+                self.unify(decl, l, cxt, (**s1).clone(), (**s2).clone(), spec.as_deref_mut())?;
                 if cases1.len() != cases2.len() {
                     return Err(UnifyError);
                 }
@@ -791,7 +849,7 @@ impl Infer {
                         .fold(env2.clone(), |env, i| env.prepend(Val::vvar(l + i)));
                     let v1 = self.eval(&declb, &env1, b1.clone());
                     let v2 = self.eval(&declb, &env2, b2.clone());
-                    self.unify(decl, l + count, cxt, v1, v2)?;
+                    self.unify(decl, l + count, cxt, v1, v2, spec.as_deref_mut())?;
                 }
                 if pending1.len() != pending2.len() {
                     return Err(UnifyError);
@@ -800,7 +858,7 @@ impl Infer {
                     if i1 != i2 {
                         return Err(UnifyError);
                     }
-                    self.unify(decl, l, cxt, u1.clone(), u2.clone())?;
+                    self.unify(decl, l, cxt, u1.clone(), u2.clone(), spec.as_deref_mut())?;
                 }
                 Ok(())
             }

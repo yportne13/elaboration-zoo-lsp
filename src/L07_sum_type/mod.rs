@@ -19,6 +19,8 @@ use std::{
     },
 };
 
+use rustc_hash::FxHashMap;
+
 /// `L07_LOOP` 调试开关（进程级，只读一次；热路径零 env 访问）。
 pub(crate) static LOOP_DEBUG: LazyLock<AtomicBool> =
     LazyLock::new(|| AtomicBool::new(std::env::var("L07_LOOP").is_ok()));
@@ -175,9 +177,78 @@ pub enum Val {
     /// ——项层 splice 把实参 quote 进分支体时，实参的自由变量会引用到
     /// 错误的上下文，见 `v_app` 的 Match 臂）。
     Match(Box<Val>, Env, Vec<(PatternDetail, Tm)>, Vec<(Val, Icit)>),
+    /// 显式替换下的值（模式精化，dpm-nbe `VSub`）：特化解不改写既有值，
+    /// 只把解包在外面；`force` 在读点把 σ 推进值的结构（`frcs`，对齐
+    /// dpm-nbe 的 `frcS`）。不变式：`force` 的返回值顶层不会是 VSub。
+    VSub(Box<Val>, Rc<Subst>),
 }
 
 type VTy = Val;
+
+/// 模式特化的解：层级 → 值 的有限映射（dpm-nbe 的 explicit substitution）。
+/// 仅由模式编译器经 `Subst::extend` / 特化合一的 `SpecSolve::acc` 构建；
+/// `Rc` 共享让臂边界回滚 = 指针赋值、`Val::VSub` 包裹 = O(1)。
+///
+/// 与旧 `pm_defs` 事实表的对应：`extend` ≙ `pm_solve` + push（新键覆盖
+/// 旧键，对齐 `pm_def` 的 `rev().find` 取最新），`lookup` ≙ force 读点的
+/// 查表展开——区别在于解只对**被包裹过的值**可见（读点显式），不再是
+/// 全局查找表。
+#[derive(Debug, Clone, Default)]
+pub struct Subst {
+    map: FxHashMap<u32, Val>,
+}
+
+impl Subst {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// 未映射即 fresh rigid（dpm-nbe `lookupSub` 的恒等延拓）。
+    pub(crate) fn lookup(&self, x: Lvl) -> Val {
+        self.map.get(&x.0).cloned().unwrap_or_else(|| Val::vvar(x))
+    }
+
+    /// x 是否已有解（旧 `pm_def(x).is_none()` 的否定形式）。
+    pub(crate) fn has(&self, x: Lvl) -> bool {
+        self.map.contains_key(&x.0)
+    }
+
+    /// 叠加一条解 `x := v`（dpm-nbe `insertSub` + `subst s2 s1` 的组合方向）：
+    /// 既有条目的值置于新解之下（`VSub(旧值, 新单解)`——"后解的包外层"，
+    /// 读取时 force 逐层推开），新键覆盖旧键。
+    pub(crate) fn extend(sub: &Rc<Subst>, x: Lvl, v: Val) -> Rc<Subst> {
+        let single = Rc::new(Subst {
+            map: FxHashMap::from_iter([(x.0, v)]),
+        });
+        Subst::compose(&single, sub)
+    }
+
+    /// 组合：内层 `inner` 先应用、外层 `outer` 后应用。内层条目的值包裹
+    /// `VSub(·, outer)`；键冲突外层（新）覆盖——dpm-nbe 的左偏 union 在
+    /// 其无冲突场景下与右侧覆盖等价，这里选右偏以严格对齐旧 `pm_def`
+    /// 的"取最新"语义。
+    pub(crate) fn compose(outer: &Rc<Subst>, inner: &Rc<Subst>) -> Rc<Subst> {
+        let mut map: FxHashMap<u32, Val> = inner
+            .map
+            .iter()
+            .map(|(k, v)| (*k, Val::VSub(Box::new(v.clone()), outer.clone())))
+            .collect();
+        for (k, v) in &outer.map {
+            map.insert(*k, v.clone());
+        }
+        Rc::new(Subst { map })
+    }
+}
+
+/// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc，
+/// force 在消费点惰性推开）。σ 为空时零开销直通。
+pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Val) -> Val {
+    if sub.is_empty() {
+        v
+    } else {
+        Val::VSub(Box::new(v), sub.clone())
+    }
+}
 
 impl Val {
     fn vvar(x: Lvl) -> Self {
@@ -240,14 +311,6 @@ pub struct Infer {
     /// pattern 编译入口）充值；递归中递减，归零即 Err——防索引槽互相嵌入
     /// 的构造子值比较（SuccCase 的 typ 含索引、索引又是 SuccCase）无限递归。
     unify_fuel: std::cell::Cell<u32>,
-    /// 模式特化方程的解：子句变量 := 值。这是**分支局部的事实表**——
-    /// 变量的层级、env 槽、运行时布局都不动，`force` 在读点惰性展开。
-    /// 臂边界 / 可达性探测做快照回滚（`pm_mark` / `pm_restore`）。
-    pm_defs: Vec<(Lvl, Val)>,
-    /// 当前可被特化方程求解的 rigid 层级（= 当前子句的 bind 槽）。
-    /// 只在模式走查与探测期间非空；分支体检查期间必须为空（常规转换
-    /// 不得解假设——否则 `Eq x y` 会被"证成" `Eq y y`）。
-    pm_solvable: Vec<Lvl>,
 }
 
 const UNIFY_FUEL: u32 = 4096;
@@ -258,8 +321,6 @@ impl Infer {
             meta: vec![],
             mutable_map: RefCell::new(HashMap::new()),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
-            pm_defs: Vec::new(),
-            pm_solvable: Vec::new(),
         }
     }
 
@@ -298,62 +359,22 @@ impl Infer {
         self.unify_fuel.set(UNIFY_FUEL);
     }
 
-    /// 模式精化状态的快照点（长度即可，回滚 = 截断）。
-    pub(crate) fn pm_mark(&self) -> (usize, usize) {
-        (self.pm_defs.len(), self.pm_solvable.len())
-    }
-
-    /// 回滚到快照点：臂边界 / 探测边界调用。本臂解出的 meta 不回滚
-    /// （分支体 Tm 引用着它们；解在 rename 时已把精化"烘焙"为无 def 形式）。
-    /// solvable 只在走查期间单调增长，截断即可回到快照长度。
-    pub(crate) fn pm_restore(&mut self, mark: (usize, usize)) {
-        self.pm_defs.truncate(mark.0);
-        self.pm_solvable.truncate(mark.1);
-    }
-
-    pub(crate) fn pm_solvable_push(&mut self, l: Lvl) {
-        self.pm_solvable.push(l);
-    }
-
-    /// 分支体检查前摘走可解集（体检查走常规转换语义，不得解假设），
-    /// 检查完由调用侧 `pm_solvable_set` 原样放回。
-    pub(crate) fn pm_solvable_take(&mut self) -> Vec<Lvl> {
-        std::mem::take(&mut self.pm_solvable)
-    }
-
-    pub(crate) fn pm_solvable_set(&mut self, v: Vec<Lvl>) {
-        self.pm_solvable = v;
-    }
-
-    pub(crate) fn pm_def(&self, x: Lvl) -> Option<&Val> {
-        self.pm_defs
-            .iter()
-            .rev()
-            .find(|(l, _)| *l == x)
-            .map(|(_, v)| v)
-    }
-
-    pub(crate) fn pm_solvable_contains(&self, x: Lvl) -> bool {
-        self.pm_solvable.contains(&x)
-    }
-
-    /// 记录一条特化解 `x := v`。环守卫：v 不得（结构上）提及 x——
-    /// 闭包内部不探查，那里的环由 force 的 fuel 兜底。
-    pub(crate) fn pm_solve(&mut self, x: Lvl, v: &Val) -> bool {
-        if val_mentions_lvl(v, x) {
-            return false;
-        }
-        self.pm_defs.push((x, v.clone()));
-        true
-    }
-
-    /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不展开 pm_defs 精化、
-    /// 不做 Match 重选。`invert` / `prune_vflex` 关心的是"元变量被应用在
-    /// 哪些槽位上"——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的
-    /// 精化等式（x := zero）不改变槽位的存在；在它们身上展开反而会把
-    /// 可逆 spine 变成含构造子值的不可逆 spine。
+    /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不做 Match 重选。
+    /// `invert` / `prune_vflex` 关心的是"元变量被应用在哪些**槽位**上"
+    /// ——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的精化等式
+    /// （x := zero）不改变槽位的存在；在它们身上展开反而会把可逆 spine
+    /// 变成含构造子值的不可逆 spine。
     pub(crate) fn force_arg(&self, decl: &Decls, t: Val) -> Val {
-        match &t {
+        // 精化包裹的槽位：逐层解包看裸形态（subst_cxt 可叠加——嵌套 match
+        // 的上下文被外层臂与内层臂各包一次）。解到底仍是 bare rigid ⇒ 槽位
+        // 保留（对齐旧"pm_defs 不参与 invert"的行为——旧版此处读到的正是
+        // 未展开的 Rigid(x)）；其余形态全量 force 推开。
+        let mut cur = &t;
+        while let Val::VSub(v, _) = cur {
+            cur = v;
+        }
+        match cur {
+            Val::Rigid(x, sp) if sp.is_empty() => Val::Rigid(*x, sp.clone()),
             Val::Rigid(..) | Val::Match(..) => t,
             _ => self.force(decl, t),
         }
@@ -384,13 +405,17 @@ impl Infer {
                 }
                 _ => Val::Flex(m, sp),
             },
-            // 模式精化：被特化的子句变量在**读点**展开。这是"惰性精化"的
-            // 核心——层级、env 槽、既有值一概不动，所有消费者（unify/quote/
-            // rename）经过 force 自动看到精化后的世界。
-            Val::Rigid(x, List { head: None, .. }) => match self.pm_def(x) {
-                Some(v) if burn(&self.unify_fuel) => self.force(decl, v.clone()),
-                _ => Val::Rigid(x, List::new()),
-            },
+            // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。推开
+            // 本身烧 1 fuel——浅 occurs 不探查闭包，闭包内的解环
+            // （x := λ…x…）在 closure_apply 后的读点闭环，fuel 兜底语义
+            // 与旧 pm_defs 时代一致。
+            Val::VSub(v, sub) => {
+                if burn(&self.unify_fuel) {
+                    self.frcs(decl, &sub, *v)
+                } else {
+                    Val::VSub(v, sub)
+                }
+            }
             // 卡住的 match：scrutinee 是在 match 创建之后才被特化/解出时，
             // 这里重新尝试选分支。没有这一步，精化无法传播进"卡住 match
             // 里面"（期望类型 `Eq (add a zero) a` 的 `add a zero` 就是它）。
@@ -456,6 +481,114 @@ impl Infer {
             }
             t => t,
         }
+    }
+
+    /// 把替换 `σ` 推进值 `v` 的结构（dpm-nbe `frcS`）。与 `force` 的分工：
+    /// σ 是本次精化的局部解，只作用于**被包裹过**的值；推进到中性头为止
+    /// ——spine 逐槽推进，闭包 env 逐槽包裹（惰性，不进入闭包体重求值）。
+    /// 槽位命中 `Rigid` 且 σ 有解时经 `v_app` 应用（λ ⇒ β；Match ⇒ pending；
+    /// 中性头 ⇒ spine 拼接），对应 dpm-nbe `napp (lookupSub sb v) (frcS sb sp)`。
+    fn frcs(&self, decl: &Decls, sub: &Rc<Subst>, v: Val) -> Val {
+        if sub.is_empty() {
+            return self.force(decl, v);
+        }
+        match v {
+            // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
+            Val::VSub(v2, sub2) => {
+                let composed = Subst::compose(sub, &sub2);
+                self.frcs(decl, &composed, *v2)
+            }
+            // 被解变量的读点：解出值 force 后按应用序（spine 尾到头）经
+            // v_app 拼接（λ ⇒ β；Match ⇒ pending；中性头 ⇒ spine）——对应
+            // dpm-nbe `napp (lookupSub sb v) (frcS sb sp)`。
+            Val::Rigid(x, sp) => {
+                let mut head = self.force(decl, sub.lookup(x));
+                let args: Vec<(Val, Icit)> = sp.iter().cloned().collect();
+                for (u, i) in args.into_iter().rev() {
+                    head = self.v_app(decl, head, wrap_sub(sub, u), i);
+                }
+                head
+            }
+            // 中性头的 spine 槽只**包裹**不推进——槽位引用是作用域事实，
+            // 物化会破坏后续 solve 的 invert（与 force_arg 的分工同一理由；
+            // 旧 force 也从不触碰 spine 槽）。包裹后交回 force 重走既有臂
+            // （meta 解 / decl 展开 / prim 归约 / 投影），保持"σ 之下的值
+            // force 到同一 WHNF 形态"的旧语义。
+            Val::Flex(m, sp) => self.force(decl, Val::Flex(m, self.wrap_sp(sub, sp))),
+            Val::Decl(name, sp) => self.force(decl, Val::Decl(name, self.wrap_sp(sub, sp))),
+            Val::Prim(name, sp) => self.force(decl, Val::Prim(name, self.wrap_sp(sub, sp))),
+            Val::Obj(o, name, sp) => self.force(decl, Val::Obj(
+                Box::new(self.frcs(decl, sub, *o)),
+                name,
+                self.wrap_sp(sub, sp),
+            )),
+            // 闭包 env 逐槽包裹（dpm-nbe `subst sb cl` 的惰性形态）
+            Val::Lam(x, i, cl) => Val::Lam(x, i, Closure(self.frcs_env(decl, sub, &cl.0), cl.1)),
+            Val::Pi(x, i, a, cl) => Val::Pi(
+                x,
+                i,
+                Box::new(self.frcs(decl, sub, *a)),
+                Closure(self.frcs_env(decl, sub, &cl.0), cl.1),
+            ),
+            // Sum/SumCase 的槽位同样只包裹（旧 force 不进入这些结构）
+            Val::Sum(name, params, cases) => Val::Sum(
+                name,
+                params
+                    .into_iter()
+                    .map(|(n, v, t, i)| {
+                        (
+                            n,
+                            Rc::new(wrap_sub(sub, rc_take(v))),
+                            Rc::new(wrap_sub(sub, rc_take(t))),
+                            i,
+                        )
+                    })
+                    .collect(),
+                cases,
+            ),
+            Val::SumCase {
+                typ,
+                case_name,
+                datas,
+            } => Val::SumCase {
+                typ: Rc::new(wrap_sub(sub, rc_take(typ))),
+                case_name,
+                datas: datas
+                    .into_iter()
+                    .map(|(n, v, i)| (n, Rc::new(wrap_sub(sub, rc_take(v))), i))
+                    .collect(),
+            },
+            // scrutinee **推进**（重选分支需要解出的构造子值）；捕获 env 与
+            // pending 只包裹。交回 force：scrutinee 若已是构造子值，force 的
+            // Match 臂按同一纪律重选分支
+            Val::Match(s, env, cases, pending) => self.force(
+                decl,
+                Val::Match(
+                    Box::new(self.frcs(decl, sub, *s)),
+                    self.frcs_env(decl, sub, &env),
+                    cases,
+                    pending
+                        .into_iter()
+                        .map(|(u, i)| (wrap_sub(sub, u), i))
+                        .collect(),
+                ),
+            ),
+            t => t,
+        }
+    }
+
+    fn wrap_sp(&self, sub: &Rc<Subst>, sp: Spine) -> Spine {
+        if sp.is_empty() {
+            return sp;
+        }
+        sp.map(|(v, i)| (wrap_sub(sub, v.clone()), *i))
+    }
+
+    fn frcs_env(&self, decl: &Decls, sub: &Rc<Subst>, env: &Env) -> Env {
+        if sub.is_empty() {
+            return env.clone();
+        }
+        env.map(|v| Val::VSub(Box::new(v.clone()), sub.clone()))
     }
 
     /// 卡住内建的归约体（L06 builtin 注册表的逐句移植，force 时触发）。
@@ -720,6 +853,12 @@ impl Infer {
     /// 捕获 env，无法引到正确上下文。
     fn v_app(&self, decl: &Decls, t: Val, u: Val, i: Icit) -> Val {
         match t {
+            // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点
+            // 会把 VSub 头送进来——如臂上下文里 Var 引用了被解槽）
+            Val::VSub(..) => {
+                let t = self.force(decl, t);
+                self.v_app(decl, t, u, i)
+            }
             Val::Lam(_, _, closure) => self.closure_apply(decl, &closure, u),
             Val::Flex(m, sp) => Val::Flex(m, sp.prepend((u, i))),
             Val::Rigid(x, sp) => Val::Rigid(x, sp.prepend((u, i))),
@@ -867,6 +1006,11 @@ impl Infer {
     fn quote(&self, decl: &Decls, l: Lvl, t: Val) -> Tm {
         let t = self.force(decl, t);
         match t {
+            // 不变式：force 的返回值顶层不会是 VSub（防御臂，不可达）
+            Val::VSub(..) => {
+                debug_assert!(false, "quote: VSub survived force");
+                Tm::U
+            }
             Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(m), sp),
             Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, x)), sp),
             Val::Decl(name, sp) => self.quote_sp(decl, l, Tm::Decl(name), sp),
@@ -959,7 +1103,7 @@ impl Infer {
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {
         self.unify_fuel.set(UNIFY_FUEL);
-        self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone())
+        self.unify(decl, cxt.lvl, cxt, t.clone(), t_prime.clone(), None)
             .map_err(|_| {
                 let fuel_note = if self.unify_fuel.get() == 0 {
                     " (fuel exhausted)"
@@ -977,7 +1121,7 @@ impl Infer {
 }
 
 /// 值树里是否出现某层级（浅层结构扫描；闭包跳过——那里的环由 force 的
-/// fuel 兜底）。特化解的环守卫（`pm_solve`）用。
+/// fuel 兜底）。特化解的环守卫（`Subst::extend` 的调用方）用。
 fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
     fn spine(sp: &Spine, x: Lvl) -> bool {
         sp.iter().any(|(v, _)| val_mentions_lvl(v, x))
@@ -986,6 +1130,14 @@ fn val_mentions_lvl(v: &Val, x: Lvl) -> bool {
         Val::Rigid(y, sp) => *y == x || spine(sp, x),
         Val::Flex(_, sp) | Val::Decl(_, sp) => spine(sp, x),
         Val::Obj(o, _, sp) => val_mentions_lvl(o, x) || spine(sp, x),
+        Val::VSub(v, _) => {
+            // 只扫解值自身的结构，**不扫 σ 的映射值**：σ 的其它条目（如头部
+            // 精化的构造子值）合法引用别的模式变量，扫进来会把无害的解误判
+            // 成环。σ 槽位若真引用 x，解包后的 v 结构里自会以 Rigid(x) 出现
+            // （对齐旧世界"occurs 只看解的裸值"的语义；更深的间接环仍由
+            // force 的 fuel 兜底）。
+            val_mentions_lvl(v, x)
+        }
         Val::Sum(_, params, _) => {
             params
                 .iter()
@@ -1306,6 +1458,5 @@ pub fn preprocess(s: &str) -> String {
 use pattern_match::Compiler;
 
 use parser::syntax::Icit;
-
 #[cfg(test)]
 mod tests;

@@ -16,3 +16,7 @@ flame.folded
 dhat_*
 analyze_symbols.py
 wasm_crash_analysis_report.md
+test_run*.log
+v3_fail.log
+*.bak
+.git-commit-msg.txt
