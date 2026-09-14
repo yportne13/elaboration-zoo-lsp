@@ -913,4 +913,56 @@ bench_examples_per_file_by_engine -- --ignored --nocapture`）：
 cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` 引擎
 探针四种取值符合预期；扩展 `tsc -b` + esbuild 通过。
 
+---
+
+## 2026-09-14 续（编辑期周期性多秒卡顿修复：重 prime → 就地压实）
+
+**问题**：默认引擎切孪生后，编辑 `examples/adder_proof.typort` 每多编辑一次
+越慢。逐 kick 实测（test profile，同一 Backend，40 次编辑）Twin 呈**交替**
+形态：约 330–1700 ms 的正常 kick 与持续增长的尖峰 **8.5 s → 16.5 s**；参考版
+同负载平坦（约 0.7–2.0 s，无尖峰）。
+
+**根因（两条）**：
+
+1. **重 prime 风暴**：用户段每 kick 在常驻 bump 上分配约 400 MB 中间值
+   （journal 回滚只恢复表条目，不回填 arena 字节），60 MB 基线两个 kick 就
+   超 `RESIDENT_BUMP_LIMIT`（512 MB）；旧处置是 `observe_user` 重放整个
+   prelude（本机实测 3.2–8 s/次）。每次重放峰值再分配约 2 GB arena，尖峰随
+   会话增长（分配器/页效应），表现为「越编辑越慢」。
+2. **`trait_metas` 跨 kick 泄漏**：它不在七表 journal 内、kick 末不回滚，
+   实测每 kick +281 条（6886 → 7167）；`solve_multi_trait` 每次求解都
+   `clone()` 整表，是缓增的次要成本。
+
+**修复**（`src/L13_namespace/bump_spine_iter.rs`）：
+
+- 新增 `Tycker::compact_resident`：用户段超预算时**不再重放 prelude**，而是把
+  已回滚的检查点态用现成的 `compact_state`（prime 每文件边界用的同一深拷器）
+  拷进新 arena、重建 `Resident` 句柄——代价 O(可达态)（约 120 ms）而非
+  O(prelude)（约 3 s）。`prime_resident` 只在冷启动走。
+- 压实用的 `cap_hint` 由 prime 实测 live 推得并存进 `Resident`（恒定）；若用
+  `base_bytes` 反推会形成每压一次涨 12.5% 的反馈环。
+- 压实后清掉一切指向旧 arena 的悬垂引用：`force_memo_clear()`（打包字键/值）、
+  `conv` 三个 scratch、`ren.reset()`、指针键 `ns_method_cache`——缺
+  `force_memo_clear()` 会在下一个 kick 以 `env_nth` 下标下溢炸出（已加回归锁）。
+- `observe_user` kick 末 `trait_metas.truncate(pre_len)`。
+- `TYPORT_TWIN_NO_COMPACT=1` 时仍走旧重放（对照测量）。
+- 测试钩子（`cfg(test)`，线程局部）：`set_resident_bump_budget` /
+  `resident_compactions`；新回归
+  `resident_compaction_matches_fresh_replay_across_kicks`（预算 0 强制每 kick
+  压实，观察表与全新重放逐字节一致，并断言压实确实发生）。
+
+**实测（test profile，`examples/adder_proof.typort`，20 kicks，同 Backend）**：
+
+| | 改前 | 改后 |
+|---|---|---|
+| kick 时间曲线 | 约 330 ms 正常 + **8.5 → 16.5 s 递增尖峰** | **313–475 ms 全程平坦** |
+| 常驻 bump | 60 → 909 MB 后重 prime | 稳定约 60 MB（每 2 kick 压实一次，约 120 ms） |
+
+**回归**：lib 683、`l13_fast_parity` 394、`twin_engine_tests` 16/16、8 套 LSP
+守卫 twin 模式 + `parser_error_tests` 双引擎共 188 全绿；`cargo test` 全量 67
+个 target 全绿。
+
+**与上文的关系**：上文 examples 基准里「`first` 偶发约 3.4 s 尖峰：重 prime」
+即本条根因，已由就地压实取代（尖峰降至约 120 ms 级）。
+
 

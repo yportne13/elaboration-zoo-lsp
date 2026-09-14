@@ -12979,8 +12979,12 @@ struct Resident {
     /// prelude 段的 `defs` 长度（用户段 append-only，下轮 truncate 回此）。
     defs_len: usize,
     /// prime 完成时的 bump 已分配字节数（基线）。用户段每 kick 的中间值
-    /// 无法回收，超过 `base + RESIDENT_BUMP_LIMIT` 时下轮重新 prime。
+    /// 无法回收，超过 `base + RESIDENT_BUMP_LIMIT` 时下轮就地压实
+    /// （[`Tycker::compact_resident`]，`base_bytes` 随新 arena 刷新）。
     base_bytes: usize,
+    /// 压实用的新 arena 容量提示（prime 由实测 live 推得，跨 kick 恒定——
+    /// 用 `base_bytes` 反推会形成每压一次涨 12.5% 的反馈环）。
+    cap_hint: usize,
     /// 稳态快照：用户段可能改动这些 per-run 状态（新增 meta、注册实例、
     /// 写可变全局、挂算符方法、导入别名），每 kick 恢复。值均为 owned 或被
     /// 常驻 bump 钉住的句柄（Clone 即安全）。
@@ -12998,10 +13002,35 @@ struct Resident {
     val_import: FxHashMap<usize, V>,
 }
 
-/// 常驻 bump 上限（字节）：超限时下个 kick 重新 prime（reset + 重放
-/// prelude）。用户段每 kick 分配的中间值无法回收（bump 不支持截断），用
-/// 周期性重放换内存上界；~2.8s 重放按上限摊到多次 kick。
+/// 常驻 bump 上限（字节）：用户段增量超限时下个 kick 由
+/// [`Tycker::compact_resident`] 就地压实检查点（换新 arena，O(可达)）。
+/// 用户段每 kick 分配的中间值无法回收（bump 不支持截断），压实把不可达
+/// 垃圾整体丢弃；旧实现此处重放整个 prelude（~3s/次），2026-09-14 改为
+/// 压实（~几十 ms/次），消除周期性多秒卡顿。
 const RESIDENT_BUMP_LIMIT: usize = 512 << 20;
+
+thread_local! {
+    /// 本线程的常驻用户段预算（默认 [`RESIDENT_BUMP_LIMIT`]）。测试/测量
+    /// 可调小以在小区间内走到 [`Tycker::compact_resident`]；线程局部，故
+    /// 并行测试互不干扰。
+    static RESIDENT_BUMP_BUDGET: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(RESIDENT_BUMP_LIMIT) };
+    /// 本线程压实次数（测试断言压实路径确实被走到）。
+    static RESIDENT_COMPACTIONS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// 设置本线程的常驻用户段预算（测试/测量钩子）。
+#[cfg(test)]
+pub(crate) fn set_resident_bump_budget(budget: usize) {
+    RESIDENT_BUMP_BUDGET.with(|c| c.set(budget));
+}
+
+/// 本线程累计的检查点压实次数（测试钩子）。
+#[cfg(test)]
+pub(crate) fn resident_compactions() -> usize {
+    RESIDENT_COMPACTIONS.with(|c| c.get())
+}
 
 /// `TYPORT_TWIN_MEM` 开时打印 prime 的逐文件 bump 增长（内存剖析）。
 fn twin_mem_prof() -> bool {
@@ -13144,6 +13173,7 @@ impl Tycker {
             cxt,
             defs_len: self.machine.defs.len(),
             base_bytes: self.bump.allocated_bytes(),
+            cap_hint,
             base_keys,
             metas: self.machine.metas.clone(),
             tstate: self.machine.tstate.clone(),
@@ -13157,10 +13187,70 @@ impl Tycker {
         Ok(())
     }
 
+    /// Refresh the resident checkpoint **without replaying the prelude**.
+    ///
+    /// The user segment's intermediate values are unreclaimable bump garbage
+    /// (journal rollback restores table entries, not arena bytes), so after
+    /// enough kicks `resident_user_bytes` crosses [`RESIDENT_BUMP_LIMIT`].
+    /// Replaying the whole prelude to reset the arena costs ~3 s; instead,
+    /// deep-copy the — already rolled back — checkpoint state into a fresh
+    /// arena (the same [`Tycker::compact_state`] prime uses at file
+    /// boundaries) and re-pin `Resident` to it.  Cost is O(live state)
+    /// (~tens of ms) rather than O(prelude).
+    ///
+    /// `compact_state` copies `metas`/`defs`/`spine` **order-preservingly**,
+    /// so every index-valued handle stays valid: tag-2 spine handles, tag-5
+    /// meta handles and `trait_metas`' meta indices.  The owned / reference-
+    /// domain tables (`tstate`, `symbol_table`, `import_map`,
+    /// `trait_method_cache`) carry no arena pointers and are re-snapshotted
+    /// from the (unchanged) machine; `tm_import`/`val_import` are remapped by
+    /// the copier.
+    fn compact_resident(&mut self) {
+        let Some(r) = self.resident.take() else { return };
+        RESIDENT_COMPACTIONS.with(|c| c.set(c.get() + 1));
+        // Stable capacity hint from prime's measured live state; the checkpoint
+        // footprint does not grow with kicks (user state is rolled back).
+        let cap_hint = r.cap_hint;
+        let cxt = clone_cxt(&r.cxt);
+        let cxt = {
+            let (cxt, _live) = self.compact_state(cxt, cap_hint);
+            cxt
+        };
+        // The force memo is keyed by packed `V` words (arena addresses) and
+        // holds `V` results: after the arena swap both are dangling, and a
+        // recycled address would even produce a false hit.  Prime does the
+        // same clear before its file-boundary compactions; the unify
+        // scratch/rename buffers hold `V`s too, so drop their contents as
+        // well (all are entry-cleared scratch by contract).
+        force_memo_clear();
+        self.machine.conv.memo.clear();
+        self.machine.conv.scratch1.clear();
+        self.machine.conv.scratch2.clear();
+        self.machine.ren.reset();
+        // Pointer-keyed caches into the old arena are stale after the swap;
+        // they are pure caches, so dropping them is semantically neutral.
+        self.machine.ns_method_cache = None;
+        self.resident = Some(Resident {
+            cxt,
+            defs_len: r.defs_len,
+            base_bytes: self.bump.allocated_bytes(),
+            cap_hint,
+            base_keys: r.base_keys,
+            metas: self.machine.metas.clone(),
+            tstate: self.machine.tstate.clone(),
+            mutable: self.machine.mutable.borrow().clone(),
+            symbol_table: self.machine.symbol_table.clone(),
+            import_map: self.machine.import_map.clone(),
+            trait_method_cache: self.machine.trait_method_cache.clone(),
+            tm_import: self.machine.tm_import.clone(),
+            val_import: self.machine.val_import.clone(),
+        });
+    }
+
     /// **阶段 3b 常驻用户段**：从检查点恢复 machine 稳态，用常驻 prelude
     /// 上下文推进 `user_ast`，观察三表落 `machine`（调用方经
-    /// [`Tycker::hover_table`] 等读取）。bump 超 [`RESIDENT_BUMP_LIMIT`] 时
-    /// 内部重新 prime。
+    /// [`Tycker::hover_table`] 等读取）。用户段 bump 垃圾超
+    /// [`RESIDENT_BUMP_LIMIT`] 时 [`Tycker::compact_resident`] 就地压实检查点。
     ///
     /// **错误不早退**：单 decl 失败记入 [`Tycker::user_errors`] 并跳过该
     /// decl 的 cxt 推进（参考版 `elaborate` 逐 decl `err_collect` 同口径），
@@ -13178,11 +13268,21 @@ impl Tycker {
             None
         };
         let over = match &self.resident {
-            Some(r) => self.bump.allocated_bytes().saturating_sub(r.base_bytes) > RESIDENT_BUMP_LIMIT,
+            Some(r) => {
+                let budget = RESIDENT_BUMP_BUDGET.with(|c| c.get());
+                self.bump.allocated_bytes().saturating_sub(r.base_bytes) > budget
+            }
             None => true,
         };
         if over {
-            self.prime_resident(prelude)?;
+            if self.resident.is_some() && compact::compact_enabled() {
+                // Arena full of user-segment garbage: refresh the checkpoint
+                // in place instead of replaying the prelude (see
+                // `compact_resident`).  `prime_resident` only on a cold start.
+                self.compact_resident();
+            } else {
+                self.prime_resident(prelude)?;
+            }
         }
         let r = self.resident.as_ref().expect("resident just primed");
         // 恢复稳态：defs 截回 prelude 长度（用户段 append-only），scratch
@@ -13198,6 +13298,11 @@ impl Tycker {
         self.machine.constraints.clear();
         self.machine.clear_observation_tables();
         let pre_meta_len = self.machine.metas.len();
+        // `trait_metas` is append-only (meta indices, order-preserving with
+        // `metas`) and NOT covered by the seven-table journal — without this
+        // truncation it grows ~hundreds of entries per kick forever, and every
+        // `solve_multi_trait` clones the whole vec.
+        let pre_trait_metas_len = self.machine.trait_metas.len();
         META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
         // 七表撤销帧（评审 B#2 二期）：随后的 symbol_table/import_map/
         // trait_method_cache/tm_import/val_import/mutable(t)/tstate 写点
@@ -13253,6 +13358,7 @@ impl Tycker {
         // 写点逆序撤销（评审 B#2 二期）——下 kick 起点的整表恢复由此免除。
         // 导出数据已深快照成 owned Rc，不受回滚影响。
         meta_journal_rollback(&mut self.machine.metas, pre_meta_len);
+        self.machine.trait_metas.truncate(pre_trait_metas_len);
         state_journal_rollback(&mut self.machine);
         // 撤销后自检（TYPORT_KICK_PROBE 门控）：七表逐键回到 checkpoint
         // 形态。可全等比较的表做整表全等；值无 PartialEq 的表（Rc/AST 型）
@@ -14613,6 +14719,61 @@ struct P {
                 "resident kick {i} hover table diverged from fresh replay for:\n{src}",
             );
         }
+    }
+
+    /// **压实等价性验收（2026-09-14 编辑卡顿修复）**：常驻检查点被
+    /// [`Tycker::compact_resident`] 就地压实后，跨 kick 的观察表仍须与全新
+    /// 重放逐字节一致。压实换 arena 后任何仍指向旧 arena 的陈旧引用
+    /// （force memo 的打包字键/值、unify scratch、指针键缓存）都会在这里
+    /// 炸出来——本用例把预算调到 0，强制每个 kick 起点压实一次。
+    #[test]
+    fn resident_compaction_matches_fresh_replay_across_kicks() {
+        let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
+        assert_eq!(pre.failed, None);
+        let src = include_str!("../../examples/hdl/09-hierarchy.typort");
+        let (decls, _e, _x, _p) = crate::L13_namespace::parser::parser_with_macros(
+            &crate::L13_namespace::preprocess(src), 302, &pre.macros,
+        ).expect("parse");
+
+        // Budget 0: the previous kick's (nonzero) user-segment garbage forces a
+        // compaction at the next kick's start.
+        set_resident_bump_budget(0);
+        let before = resident_compactions();
+        let mut resident = Tycker::new();
+        resident.prime_resident(&pre).expect("prime");
+        let mut kicks = Vec::new();
+        for _ in 0..4 {
+            resident.observe_user(&pre, &decls).expect("observe_user");
+            let mut v: Vec<(u32, u32, u32, u32, String)> = resident
+                .hover_table()
+                .iter()
+                .map(|(ts, ds, r)| (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone()))
+                .collect();
+            v.sort();
+            kicks.push(v);
+        }
+        assert!(
+            resident_compactions() - before >= 3,
+            "compaction path not exercised (counted {})",
+            resident_compactions() - before,
+        );
+
+        let mut fresh = Tycker::new();
+        fresh.run_decls_with_prelude(&pre, &decls).expect("fresh replay");
+        let mut fv: Vec<(u32, u32, u32, u32, String)> = fresh
+            .hover_table()
+            .iter()
+            .map(|(ts, ds, r)| (ts.start_offset, ts.end_offset, ds.start_offset, ds.end_offset, r.clone()))
+            .collect();
+        fv.sort();
+        for (i, v) in kicks.iter().enumerate() {
+            assert_eq!(
+                *v, fv,
+                "compacted resident kick {i} hover table diverged from fresh replay",
+            );
+        }
+        // Restore the default budget so a later test on this thread is unaffected.
+        set_resident_bump_budget(super::RESIDENT_BUMP_LIMIT);
     }
 
     /// 双引擎各跑一遍「prelude 装载 + 用户源」：
