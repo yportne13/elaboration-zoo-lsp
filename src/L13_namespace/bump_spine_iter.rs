@@ -10115,7 +10115,11 @@ impl Machine {
                     let va = self.eval(bump, &a_cxt, a_cxt.env, a_checked);
                     // 未注解字段直解 fresh meta 为推断类型；注解字段按注解查
                     let cxt_named = a_cxt.with_binding_name(n.data.clone());
+                    let __im0 = self.metas.len();
                     let t_checked = self.check(bump, &cxt_named, &val, va)?;
+                    if __probe {
+                        eprintln!("[PHA {}] {} ck={} metas+{}", name.data, n.data, bind_idx, self.metas.len() - __im0);
+                    }
                     let vt = self.eval(bump, &a_cxt, a_cxt.env, t_checked);
                     if matches!(ty, Raw::Hole(_)) {
                         if v_tag(va) == 5 {
@@ -14682,11 +14686,14 @@ struct P {
     /// 修复后本站 impl 相位两版对齐（16 = 16），18-utils 用户段 net meta
     /// 982 → 680（参考版 733，残差为 Phase A 的既有差，见下）。
     ///
-    /// **残留**：① Phase A 孪生每模块少 12 个 `Type 0` 隐参插入（37 vs 48）；
+    /// **残留**：① Phase A 每模块少 11 个隐参插入——逐 item 计数已定位到
+    /// module 脚手架的 `change_mutable("ModuleTree", ...)` 一项（参考版 22 /
+    /// 孪生 11 net），插入点头部对照显示参考版多走一趟含 `outParam`/`Self`
+    /// 的 trait 方法签名 elaboration，判定为孪生复用路径少干活的良性差异；
     /// ② 假 "solve trait failed: LetNamed[...]"（+ 级联 `utilsReg` 未解析）
     /// 仍在 → 18-utils 继续经信任闸回落参考版。本站用于后续对比两版
     /// （net meta 创建量 + 错误集）与源码收缩定位；`TYPORT_DECL_PROBE=1`
-    /// 时孪生逐步打逐 decl / 逐相位增量，参考侧由本站镜像循环打逐 decl。
+    /// 时孪生打逐 decl / 逐相位 / 逐 item 增量，参考侧由本站镜像循环打逐 decl。
     #[test]
     #[ignore = "divergence probe: cargo test twin_utils_divergence_probe -- --ignored --nocapture"]
     fn twin_utils_divergence_probe() {

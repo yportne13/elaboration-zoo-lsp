@@ -1015,10 +1015,21 @@ cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` �
 
 ### 残留（下一轮）
 
-- **Phase A 每模块少 12 个 Type 0 隐参插入**（孪生 37 vs 参考版 48，module
-  路径独有；顶层 def 对齐）——尚未定位。
+- **Phase A 每模块少 11 个隐参插入（已定位到单个 item，判定为良性）**：逐
+  item 计数显示只有 module 脚手架的 `let _ = change_mutable("ModuleTree",
+  λx. ModuleDef.mk(...) :: nil)` 一项分叉——参考版 22 net / 孪生 11 net，其余
+  item 逐项相等。插入点头部对照（`TYPORT_DECL_PROBE` + 临时 head 打印）：
+  参考版比孪生**多一整趟**同样的插入序列，内容含 `Decl(outParam)` 与带
+  `Self $$ $this l that` 的 Add——即参考版在 `0 + 1` 的 trait_wrap 路径上额外
+  重走了一趟 **trait 方法签名（outParam 隐参 + Self binder）的 elaboration**，
+  孪生的复用/缓存路径避开了它。输出 parity（23 例语料 + 观察表）不区分两者，
+  故按"孪生少干活"登记；若后续证伪（某例输出分叉），从这里的 item 4 窗口
+  重新对照。
 - **假 `solve trait failed: LetNamed[...]`**（+ 级联 utilsReg 未解析）仍在 →
-  18-utils 继续经信任闸回落参考版（行为不变：正确但不加速）。
+  18-utils 继续经信任闸回落参考版（行为不变：正确但不加速）。注意 2026-09-11
+  的分析前提已翻转：当时是"孪生多注册 ~20 条 trait meta"，bn_refs 修复后孪生
+  的 meta 总数已**少于**参考版（680 vs 733），分叉机制需按新基线重新定位
+  （`solve_multi_trait_ref` 的 `mv >= m` 索引扫描对 meta 编号敏感）。
 - 长期项：tree 体复用目前对"含 bn 引用"的值一律回退（参考版同款）；若在复用
   点把 bn 引用改写为 `this` 即可安全复用，可把该族方法体从"重推"变"复用"
   （对应 perf-review 的"3× → 1× 求值"长期方向）。

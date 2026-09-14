@@ -1927,7 +1927,11 @@ impl Infer {
                     // value or through member access) elaborate identically to
                     // the create body's own let chain.
                     let cxt_named = a_cxt.with_binding_name(n.data.clone());
+                    let __im0 = self.meta.len();
                     let t_checked = self.check::<false>(&cxt_named, val, &va)?;
+                    if __probe {
+                        eprintln!("[PHA {}] {} ck={} metas+{}", name.data, n.data, bind_idx, self.meta.len() - __im0);
+                    }
                     let vt = self.eval(&a_cxt.decl, &a_cxt.env, &t_checked);
                     // Close the inferred meta for UNANNOTATED items.  The
                     // check above solves the deduction goal against `va` but
