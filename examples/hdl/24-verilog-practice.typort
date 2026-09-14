@@ -1,0 +1,74 @@
+// ============================================================
+// HDL Example 24: Verilog 语法实践（M2）
+//
+//   23-verilog-compat 演示了 M1 的骨架（module 头 / wire / assign /
+//   always @(posedge clk) / if / 实例化 / sized 字面量）。本例演示 M2
+//   补齐的常用 Verilog 写法：
+//
+//   - 位选 a[3] 与部分选 a[7:4]（读、写两侧都支持）
+//   - 拼接 {a, b}（可嵌套，常量操作数保留自身位宽：{4'h3, b} → {4'd3, b}）
+//   - 归约 &a / |a / ^a（结果 Bool，即 1 bit）
+//   - case / endcase（default 标签；转写为互斥的 when 链）
+//   - always @(*) 组合块（不再多出多余的 clk 端口）
+//   - 复位值：模块体内 `reg q = <init>;` 与头部的 `output reg q`
+//     同名时自动去重（端口行声明存储，init 进复位分支）
+//   - sized 字面量带位宽输出（8'hFF → 8'd255）
+//
+//   M2 仍未覆盖：parameter 头、generate、initial、延迟、$display、
+//   always 体内手写复位分支（复位值请用 `reg q = <init>;` 表达）。
+//   完整映射表见 docs/verilog-compat.md。
+// ============================================================
+
+// ---- 字节序交换：部分选 + 拼接 ----
+module vByteSwap(input [15:0] w, output [15:0] y);
+    assign y = {w[7:0], w[15:8]};
+endmodule
+
+// ---- 归约运算：奇偶 / 全一 / 任意一 ----
+module vReduce(input [7:0] a, output p, output allOne, output anyOne);
+    assign p = ^a;
+    assign allOne = &a;
+    assign anyOne = |a;
+endmodule
+
+// ---- case/endcase 组合逻辑 ----
+module vAlu(input [1:0] op, input [7:0] a, input [7:0] b, output reg [7:0] y);
+    always @(*) begin
+        case (op)
+            2'b00: y = a + b;
+            2'b01: y = a & b;
+            2'b10: y = {a[3:0], b[3:0]};
+            default: y = {7'b0, ^a};
+        endcase
+    end
+endmodule
+
+// ---- 时序：移位寄存器（拼接 + 位选），复位值用 reg init ----
+module vShift(input clk, input [7:0] d, output reg [7:0] q);
+    reg [7:0] q = 0;
+    always @(posedge clk) begin
+        q <= {q[6:0], d[0]};
+    end
+endmodule
+
+// ---- 层次：实例化组合子模块（方向由 .port(sig) 自动判定）----
+module vTop(input [15:0] w, input [1:0] op, input [7:0] a, input [7:0] b,
+            output [15:0] swapped, output [7:0] alu);
+    wire [15:0] sw;
+    wire [7:0] al;
+    vByteSwap u_swap (.w(w), .y(sw));
+    vAlu u_alu (.op(op), .a(a), .b(b), .y(al));
+    assign swapped = sw;
+    assign alu = al;
+endmodule
+
+println("=== 24a: vByteSwap (部分选 + 拼接) ===")
+println(moduleTreeVL(vByteSwap.create.tree))
+println("=== 24b: vReduce (归约 & | ^) ===")
+println(moduleTreeVL(vReduce.create.tree))
+println("=== 24c: vAlu (case/endcase, always @(*)) ===")
+println(moduleTreeVL(vAlu.create.tree))
+println("=== 24d: vShift (时序 + reg init 复位) ===")
+println(moduleTreeVL(vShift.create.tree))
+println("=== 24e: vTop (实例化组合子模块) ===")
+println(moduleTreeVL(vTop.create.tree))

@@ -64,8 +64,8 @@ More feature demos live in [`examples/hdl/`](examples/hdl/), one file per featur
 group (declarations, arithmetic, bitwise, compare, bool, bit select & concat,
 registers, control flow, hierarchy, bundle, nested bundle, memory, adder tree,
 extra arithmetic, inout, counter, output reg, utils, stream, misc, cross-clock,
-vec index & width adapter, verilog compat). Each file prints its Verilog when run
-and doubles as a regression test (`test_examples_hdl_dir`).
+vec index & width adapter, verilog compat, verilog practice). Each file prints
+its Verilog when run and doubles as a regression test (`test_examples_hdl_dir`).
 
 ### LSP Server
 - **Go to definition** – navigate to declarations

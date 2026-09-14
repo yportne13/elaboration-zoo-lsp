@@ -1674,8 +1674,21 @@ fn test_examples_hdl_dir() {
             "always @(posedge clk) begin",      // always 块（rst_n 折叠进时钟域）
             "q <= 0;",                          // 条件寄存器赋值
             "wire [7:0] w;",                    // vTop wire 声明
-            "assign b = (w & 15);",             // sized 字面量 8'h0F → 15
+            "assign b = (w & 8'd15);",          // sized 字面量 8'h0F → 8'd15（位宽保真）
             "vSub u1 (.x(a), .y(w));",          // 实例化方向自动判定
+        ]),
+        ("24-verilog-practice.typort", include_str!("../../examples/hdl/24-verilog-practice.typort"), &[
+            "assign y = {w[7:0], w[15:8]};",    // 部分选 + 拼接
+            "assign p = ^a;",                   // 归约 XOR
+            "assign allOne = &a;",              // 归约 AND
+            "assign anyOne = |a;",              // 归约 OR
+            "if (op == 2'd0)",                  // case 转写的互斥 when 链
+            "y = {a[3:0], b[3:0]};",            // case 分支里的拼接
+            "y = {7'd0, ^a};",                  // sized 字面量位宽保真
+            "q <= {q[6:0], d[0]};",             // 移位寄存器（拼接 + 位选）
+            "q <= 0;",                          // reg init → 复位分支
+            "vByteSwap u_swap (.w(w), .y(sw));", // 组合子模块实例化
+            "vAlu u_alu (.op(op), .a(a), .b(b), .y(al));",
         ]),
     ];
 

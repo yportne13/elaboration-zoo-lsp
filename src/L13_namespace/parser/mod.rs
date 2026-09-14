@@ -641,7 +641,44 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             })
             .or(paren_cut(p_raw).map(|x| x.unwrap_or_else(Raw::Hole)))
         )
+        // Verilog concatenation `{a, b, c}` → `a ## b ## c` (the Cat trait).
+        // A leading `{` is otherwise unparseable as an expression: block
+        // braces are matched structurally by the macro matcher, and the
+        // `f { ... }` apply-block form is postfix (and commented out of the
+        // postfix list), so adding the atom form is backward compatible.
+        // NOTE: p_concat must fail CLEANLY (no consumption, no Hole) on a
+        // brace group that is not a concatenation — otherwise a `calc { ... }`
+        // block would be partly eaten here and the calc macro's single-line
+        // arm would mis-match (regression: calc_err_by_no_proof).
+        .or(p_concat)
         .parse(input, state)
+}
+
+/// Verilog concatenation atom: `{a, b, c}` → `a ## b ## c`. `{a}` is legal
+/// Verilog and yields `a`. Returns a clean `Err` when the braces do not hold a
+/// comma-separated expression list (block bodies, `match` bodies, …), leaving
+/// them for the structural parsers that own them.
+fn p_concat<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
+    let (input, _) = kw(LCurly).parse(input, state)?;
+    let (input, _) = kw(EndLine).many0().parse(input, state)?;
+    let (input, first) = p_raw.parse(input, state)?;
+    let (input, _) = kw(EndLine).many0().parse(input, state)?;
+    let mut input = input;
+    let mut acc = first;
+    loop {
+        let (i, _) = match (kw(T![,]), kw(EndLine).many0()).parse(input, state) {
+            Ok(x) => x,
+            Err(_) => break,
+        };
+        let (i, _) = kw(EndLine).many0().parse(i, state)?;
+        let (i, item) = p_raw.parse(i, state)?;
+        let sp = acc.to_span().map(|_| SmolStr::new("##"));
+        acc = Raw::app(Raw::Obj(Box::new(acc), Some(sp)), item);
+        input = i;
+    }
+    let (input, _) = kw(EndLine).many0().parse(input, state)?;
+    let (input, _) = kw(RCurly).parse(input, state)?;
+    Ok((input, acc))
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
@@ -671,6 +708,12 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("neg"))))))
                 } else if op.data == "~" {
                     Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("not"))))))
+                } else if op.data == "&" {
+                    Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("andR"))))))
+                } else if op.data == "|" {
+                    Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("orR"))))))
+                } else if op.data == "^" {
+                    Ok((input, Raw::Obj(Box::new(rhs), Some(op.map(|_| SmolStr::new("xorR"))))))
                 } else {
                     Ok((input, Raw::Obj(Box::new(rhs), Some(op))))
                 }
@@ -705,7 +748,23 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                         let (input_t, rhs) = p_raw
                             .many1_sep((kw(T![,]), kw(EndLine).option()))
                             .parse(input_after_el, state)?;
-                        (input_t, rhs.into_iter().fold(lhs, Raw::app_impl))
+                        // Verilog part-select `a[hi:lo]` → `a.slice[hi, lo]`
+                        // (`:` is a Colon token, not an Op, so p_raw stops
+                        // there and the label/rupper-bound case arm can still
+                        // match `2'b00:`). Only the single-argument form is a
+                        // part-select; `a[x, y]` keeps the implicit-apply path.
+                        match (rhs.len(), kw(Colon).parse(input_t, state)) {
+                            (1, Ok((input_c, colon))) => {
+                                let (input_t, lo) = p_raw.parse(input_c, state)?;
+                                let head = Raw::Obj(
+                                    Box::new(lhs),
+                                    Some(colon.map(|_| SmolStr::new("slice"))),
+                                );
+                                let hi = rhs.into_iter().next().unwrap();
+                                (input_t, Raw::app_impl(Raw::app_impl(head, hi), lo))
+                            }
+                            _ => (input_t, rhs.into_iter().fold(lhs, Raw::app_impl)),
+                        }
                     };
                     let (input_t, _) = (kw(EndLine).option(), kw(RSquare)).parse(input_t, state)?;
                     input = input_t;
@@ -908,6 +967,10 @@ fn sized_lit_value(s: &str) -> Option<u64> {
 fn prefix_binding_power(op: &Span<SmolStr>) -> Option<u8> {
     match &op.data {
         s if (s == "!") | (s == "~") | (s == "-") => Some(30),
+        // Verilog reduction operators `&a` / `|a` / `^a`. No typort expression
+        // starts with one of these (they are infix elsewhere), so making them
+        // prefix in atom position is unambiguous.
+        s if (s == "&") | (s == "|") | (s == "^") => Some(30),
         _ => None,
     }
 }
@@ -962,11 +1025,27 @@ fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
             .many0_sep(kw(T![,]))
     ).map(|x| x.ok().unwrap_or_default());
 
-    let explicit_arg = expr.map(|t| vec![(Either::Icit(Icit::Expl), t)]);
+    let explicit_arg = p_explicit_arg;
 
     let arg_parser = named_impl_arg.or(explicit_arg);
 
     arg_parser.parse(input, state)
+}
+
+/// One explicit application argument, used by `p_spine`'s juxtaposition loop.
+/// A leading `{` is rejected here: typort has no `f { ... }` apply-block form,
+/// and the Verilog-compat concatenation atom (`{a, b}` in `p_atom1`) must not
+/// be swallowed as a juxtposed argument — otherwise `impl X for T { ... }`
+/// and `for i in 0 until 4 { ... }` would eat their body braces.
+fn p_explicit_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
+    if matches!(input.first().map(|t| t.data.1), Some(TokenKind::LCurly)) {
+        return Err(IError {
+            msg: input.first()
+                .map(|x| x.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)))
+                .unwrap_or(empty_span(ErrMsg::Base(BaseMsg::ExpectAtom))),
+        });
+    }
+    expr.map(|t| vec![(Either::Icit(Icit::Expl), t)]).parse(input, state)
 }
 
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {

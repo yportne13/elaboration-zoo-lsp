@@ -267,6 +267,7 @@ def exprKey(e: Expr): String = match e {
     case createSIntOutRegWidth(n, w) => "csorw:" + n + ":" + nat_to_dec(w)
     case createSIntOutRegWidthInit(n, w, i) => "csorwi:" + n + ":" + nat_to_dec(w) + ":" + exprKey(i)
     case literal(v) => "l:" + nat_to_dec(v)
+    case sizedLiteral(v, w) => "sl:" + nat_to_dec(v) + ":" + nat_to_dec(w)
     case unary(op, x) => "u:" + op + "(" + exprKey(x) + ")"
     case binary(l, op, r) => "b:" + op + "(" + exprKey(l) + "," + exprKey(r) + ")"
     case assign(l, r) => "a:(" + exprKey(l) + "," + exprKey(r) + ")"
@@ -343,6 +344,7 @@ def mfAddDrive(acc: ModFacts, nm: String, comb: Boolean, cond: Boolean, cd: Opti
 def scanExpr(e: Expr, acc: ModFacts): ModFacts = match e {
     case subSignal(inm, pnm) => mfAddConn(acc, ConnInfo.mk(inm, pnm, false))
     case literal(_) => acc
+    case sizedLiteral(_, _) => acc
     case nop => acc
     case unary(_, x) => scanExpr(x, acc)
     case binary(l, _, r) =>

@@ -39,10 +39,12 @@
 // ---------- sized literals ----------
 // The parser rewrites `8'h2A` (Num "8", Op "'", Ident "h2A") to
 // sizedLit(8, 42) with the value computed on the Rust side; overflow past
-// the width is rejected there. The width lives in the TYPE, so size
-// arithmetic (##, +^, resize) behaves exactly as for any UInt.
+// the width is rejected there. The width lives in the TYPE, and (since the
+// `sizedLiteral` Expr variant) is also carried in the Expr so codegen emits
+// a legal sized constant `8'd42` — IEEE 1364 forbids unsized constants inside
+// concatenations, and `{4'h3, nib}` must keep its 4-bit width.
 
-def sizedLit(w: Nat, v: Nat): UInt[w] = UInt.mk(None, literal(v))
+def sizedLit(w: Nat, v: Nat): UInt[w] = UInt.mk(None, sizedLiteral(v, w))
 
 // ---------- Verilog comparison aliases ----------
 // `a == b` / `a != b` desugar to method calls. Inherent impl blocks allow
@@ -74,6 +76,51 @@ impl[width: Nat] VEq[SInt[width]] for SInt[width] {
 impl VEq[Bool] for Bool {
     def ==(that: Bool): Bool = this === that
     def !=(that: Bool): Bool = this =/=(that)
+}
+
+// ---------- case/endcase label comparison ----------
+// The VExpr `case` arm transcribes `case (x) L1: ... default: ... endcase`
+// into a flat when/elsewhen chain. Labels go through CaseEq instead of `===`
+// so the `default` label needs no dedicated macro arm: `default` is an
+// ordinary identifier here (the typort switch builder uses it only as a
+// method name), bound to a marker value whose instance is always true. The
+// signal-vs-signal and signal-vs-Nat instances delegate to `===`, so `2'b01`
+// and `1` labels behave exactly as in typort.
+// NOTE: a trait (not an inherent impl) so the method is found at the call
+// site — same reason as VEq above.
+
+enum CaseDefault {
+    caseDefault
+}
+
+def default: CaseDefault = caseDefault
+
+trait CaseEq[B] {
+    def caseEq(that: B): Bool
+}
+
+impl[width: Nat] CaseEq[UInt[width]] for UInt[width] {
+    def caseEq(that: UInt[width]): Bool = this === that
+}
+
+impl[width: Nat] CaseEq[Nat] for UInt[width] {
+    def caseEq(that: Nat): Bool = this === that
+}
+
+impl[width: Nat] CaseEq[CaseDefault] for UInt[width] {
+    def caseEq(that: CaseDefault): Bool = Bool.mk(None, literal(1))
+}
+
+impl[width: Nat] CaseEq[SInt[width]] for SInt[width] {
+    def caseEq(that: SInt[width]): Bool = this === that
+}
+
+impl[width: Nat] CaseEq[Nat] for SInt[width] {
+    def caseEq(that: Nat): Bool = this === that
+}
+
+impl[width: Nat] CaseEq[CaseDefault] for SInt[width] {
+    def caseEq(that: CaseDefault): Bool = Bool.mk(None, literal(1))
 }
 
 // ---------- folded clock-domain state ----------
@@ -400,6 +447,20 @@ macro_rules VExpr {
     };
     ( $l: ident = $r: raw ;) => {
         let _ = ($l := ($r));
+    };
+
+    // ---- case (x) L: stmt ... default: stmt endcase ----
+    // Flat when/elsewhen chain: whenBegin for the first label, whenElseBegin
+    // for the rest (it replaces the stack top and accumulates `!prev`, giving
+    // the exclusive-branch conditions). Labels compare through CaseEq, so
+    // `default` (a marker value) is just another label and may appear last.
+    // Placed before the `$x: raw ;` catch-all: a case statement has no
+    // trailing `;`, so only this arm can match it.
+    (case ( $e: raw ) $v1: raw : $s1: VExpr $( $v: raw : $s: VExpr )* endcase) => {
+        let _ = whenBegin((($e).caseEq($v1)).expr);
+        $s1
+        $( let _ = whenElseBegin((($e).caseEq($v)).expr); $s )*
+        let _ = whenEnd(unit);
     };
 
     // ---- expression statement (requires `;` so end/endmodule survive) ----

@@ -121,6 +121,12 @@ enum Expr {
     createSIntOutRegWidth(name: String, width: Nat)
     createSIntOutRegWidthInit(name: String, width: Nat, initVal: Expr)
     literal(v: Nat)
+    // A Verilog sized literal (`8'h2A` / `4'b1010`): the width is carried IN
+    // the Expr so codegen can emit a legal sized constant (IEEE 1364 forbids
+    // unsized constants inside concatenations, and a plain `literal` has no
+    // width at the Expr level). Produced by the parser's sized-literal
+    // desugar (hdl-verilog-compat.sizedLit).
+    sizedLiteral(v: Nat, w: Nat)
     unary(op: String, e: Expr)
     binary(lhs: Expr, op: String, rhs: Expr)
     assign(lhs: Expr, rhs: Expr)
@@ -447,6 +453,8 @@ def createSignalExpr(name: String, e: Expr): Expr =
             let d = change_mutable("ModuleTree", x => addExprToModuleHelper(x.num, x.data, name, e));
             e
         case literal(_) =>
+            e
+        case sizedLiteral(_, _) =>
             e
         case mux(_, _, _) =>
             e

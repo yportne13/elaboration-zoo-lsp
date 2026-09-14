@@ -61,6 +61,11 @@ def catLitStr(v: Nat): String = match v {
     case _ => natToDec(v)
 }
 
+// A sized Verilog literal `w'dv` for `sizedLiteral(v, w)` (parser desugar of
+// `8'h2A` etc.). Legal inside concatenations, unlike an unsized decimal.
+def sizedLitStr(v: Nat, w: Nat): String =
+    natToDec(w) + "'d" + natToDec(v)
+
 // Emit one memory write statement for the clocked always block:
 //   if (enable) mem[address] <= data;
 // An enable that evaluates to literal 1 (constructor form `literal(succ(zero))`)
@@ -104,6 +109,7 @@ def exprVL_proc(e: Expr): String = match e {
     case createSIntOutRegWidth(name, _) => name
     case createSIntOutRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
+    case sizedLiteral(v, w) => sizedLitStr(v, w)
     case unary(op, x) => op + exprVL_proc(x)
     case binary(lhs, op, rhs) =>
         let is_cat = str_eq(op, "##");
@@ -206,6 +212,7 @@ def exprVL(e: Expr): String = match e {
     case createSIntOutRegWidth(name, _) => name
     case createSIntOutRegWidthInit(name, _, _) => name
     case literal(v) => natToDec(v)
+    case sizedLiteral(v, w) => sizedLitStr(v, w)
     case unary(op, e) => op + exprVL(e)
     case binary(lhs, op, rhs) =>
         let is_cat = str_eq(op, "##");
@@ -466,20 +473,61 @@ def collectWireLines[ne: Nat](es: Vec[Expr] ne, portNames: List[String], whenSig
     case cons(e, tail) => list_append(wireLineSingle(e, portNames, whenSigs), collectWireLines(tail, portNames, whenSigs))
 }
 
-// Collect reg declarations from Vec[Expr]
-def collectRegLines[ne: Nat](es: Vec[Expr] ne): List[String] = match es {
+// Collect reg declarations from Vec[Expr].
+// A reg whose name is already a port (e.g. a body `reg [7:0] q = 0;` next to
+// the `output reg [7:0] q` header port — the Verilog-compat way to attach a
+// reset value) is skipped: the `output reg` port line already declares the
+// storage, and emitting both would be an illegal redeclaration. The port's
+// own init Expr still feeds the reset branch via collectInitLinesCd.
+def collectRegLines[ne: Nat](es: Vec[Expr] ne, portNames: List[String]): List[String] = match es {
     case nil => lnil
     case cons(e, tail) => match e {
-        case createReg(name) => lcons ("  reg " + name + ";") (collectRegLines tail)
-        case createRegWidth(name, w) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createRegWidthInit(name, w, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createRegWidthCd(name, w, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createRegWidthInitCd(name, w, _, _) => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createSIntRegWidthCd(name, w, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createSIntRegWidthInitCd(name, w, _, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createSIntRegWidth(name, w) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
-        case createSIntRegWidthInit(name, w, _) => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines tail)
-        case _ => collectRegLines tail
+        case createReg(name) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg " + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createRegWidth(name, w) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createRegWidthInit(name, w, _) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createRegWidthCd(name, w, _) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createRegWidthInitCd(name, w, _, _) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createSIntRegWidthCd(name, w, _) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createSIntRegWidthInitCd(name, w, _, _) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createSIntRegWidth(name, w) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case createSIntRegWidthInit(name, w, _) =>
+            match strInList(name, portNames) {
+                case true => collectRegLines(tail, portNames)
+                case false => lcons ("  reg signed " + widthRange(w) + name + ";") (collectRegLines(tail, portNames))
+            }
+        case _ => collectRegLines(tail, portNames)
     }
 }
 
@@ -816,8 +864,8 @@ def assignsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     }
 
 // Generate reg declarations (with leading newline if non-empty)
-def regsVL[ne: Nat](es: Vec[Expr] ne): String =
-    let ls = list_reverse(collectRegLines es);
+def regsVL[ne: Nat](es: Vec[Expr] ne, portNames: List[String]): String =
+    let ls = list_reverse(collectRegLines es portNames);
     match ls {
         case lnil => ""
         case _ => joinLines(ls) + "\n"
@@ -1161,32 +1209,30 @@ def moduleDefVL(md: ModuleDef): String =
     let port_decls = portsVL(md.expr, whenSigs);
     let port_lines = list_reverse(collectPortLines(md.expr, whenSigs));
     let wire_decls = wiresVL(md.expr, port_names, whenSigs);
-    let reg_decls = regsVL(md.expr);
+    let reg_decls = regsVL(md.expr, port_names);
     let mem_decls = memsVL(md.expr);
     let assigns = assignsVL(md.expr, whenSigs);
     let always = alwaysVL(md.expr, whenSigs);
     let clocked = clockedVL(md.expr, md.cd);
     let inst_lines = list_reverse(collectInstanceLinesTree md.expr);
-    let has_regs = match list_reverse(collectRegLines md.expr) {
+    let has_regs = match list_reverse(collectRegLines md.expr port_names) {
         case lnil => false
         case _ => true
     };
     let has_out_regs = hasOutRegPorts md.expr;
-    let has_mem = match list_reverse(collectMemLines md.expr) {
-        case lnil => false
-        case _ => true
-    };
-    // Sequential elements (registers, output-reg ports, or memories) need the
-    // clock port; output-reg ports count even though the port line itself
-    // declares the reg (no standalone `reg` declaration is emitted).
+    // Registers/output-reg ports/memories declare storage declarations, but
+    // the CLOCK port is needed exactly when a clocked always block is emitted
+    // (any regAssign/regAssignCd/memWrite, possibly under `when`). Counting
+    // storage declarations instead would add a spurious clk port to purely
+    // combinational modules — Verilog-compat `always @(*)` drives its regs
+    // combinationally (pickAssign → plain `assign`), so `clocked` stays "".
     let has_reg_any = match has_regs {
         case false => has_out_regs
         case true => true
     };
-    // Sequential elements (registers or memories) need the clock port.
-    let has_seq = match has_reg_any {
-        case false => has_mem
-        case true => true
+    let has_seq = match str_eq(clocked, "") {
+        case true => false
+        case false => true
     };
     let has_ports = match port_lines {
         case lnil => false
@@ -1417,21 +1463,12 @@ def joinJsonLines(ls: List[String]): String = match ls {
 // manifest lists every port the emitted Verilog declares. (Extra
 // clock-domain ports from collectClockCds are not mirrored yet.)
 def manifestSynthPorts(md: ModuleDef): List[String] =
-    let has_regs = match list_reverse(collectRegLines md.expr) {
-        case lnil => false
-        case _ => true
-    };
-    let has_reg_any = match has_regs {
-        case false => hasOutRegPorts md.expr
-        case true => true
-    };
-    let has_mem = match list_reverse(collectMemLines md.expr) {
-        case lnil => false
-        case _ => true
-    };
-    let has_seq = match has_reg_any {
-        case false => has_mem
-        case true => true
+    // Mirror moduleDefVL's p1 condition: the clk port exists iff a clocked
+    // always block is emitted (see the has_seq note there).
+    let clocked = clockedVL(md.expr, md.cd);
+    let has_seq = match str_eq(clocked, "") {
+        case true => false
+        case false => true
     };
     let has_init = match list_reverse(collectInitLinesCd(md.expr, md.cd, true)) {
         case lnil => false
