@@ -578,3 +578,90 @@ fn twin_unifies_reduced_nat_primop_against_surface_form() {
         );
     }
 }
+
+
+/// Regression (2026-09): a **nested** `unify` must not clobber the *shared*
+/// `unify_stack` of an enclosing `unify_iter`.  `Machine::unify` used to
+/// `stack.clear()` on entry; the flex-solving path re-enters `unify` through
+/// `solve_multi_trait_ref` (trait instance synthesis), so the outer call's
+/// still-pending work items were silently dropped and the outer loop returned
+/// `true` with metas unsolved.  Symptom: `Eq ?x ?y = Eq 7 7` solved only the
+/// first parameter, then the enclosing `cong` goal failed with a spurious
+/// `can't unify` (examples/theorem_proving.typort).
+///
+/// The trigger needs an **unannotated** inline lambda whose body contains a
+/// *stuck* nat primop (`5 + x`: `nat_add`'s second argument is a variable) --
+/// that is what forces trait synthesis (and hence the nested `unify`)
+/// mid-comparison.  `x => x + 5` reduces to `succ^5 x`; `def g(x: Nat) = 5 + x`,
+/// `(x: Nat) => 5 + x` and swapping the argument order (`myc4(proof, lambda)`)
+/// all avoid it.
+#[test]
+fn twin_solves_implicits_around_nested_unify() {
+    let corpus: &[&str] = &[
+        "def t: Eq(5 + (0 + 7), 5 + 7) = cong(x => 5 + x, add_zero_left(7))",
+        "def myc2[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) = cong(f, e)\ndef t: Eq(5 + (0 + 7), 5 + 7) = myc2(x => 5 + x, add_zero_left(7))",
+        "def t: Eq((5 + 0) + (0 + 7), 5 + 7) =\n    calc {\n        (5 + 0) + (0 + 7) = 5 + (0 + 7) by cong(x => x + (0 + 7), add_zero_right(5))\n        5 + (0 + 7) = 5 + 7 by cong(x => 5 + x, add_zero_left(7))\n    }",
+    ];
+    for (i, src) in corpus.iter().enumerate() {
+        let uri = Url::parse(&format!("file:///twin_nested_unify_{i}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        tb.process_file(&uri, src, Some(1));
+        let rb = backend_hdl(Engine::Reference);
+        rb.process_file(&uri, src, Some(1));
+        assert_eq!(
+            errors(&tb, &uri), errors(&rb, &uri),
+            "twin/reference error mismatch for:\n{src}",
+        );
+        assert!(
+            errors(&tb, &uri).is_empty(),
+            "twin invented errors for:\n{src}\n-> {:?}",
+            errors(&tb, &uri),
+        );
+    }
+}
+
+
+/// Error-diagnostic parity over the **whole** `examples/` tree.  The HDL-only
+/// test above misses the top-level proof examples, which is where the
+/// nested-`unify` bug (`twin_solves_implicits_around_nested_unify`) surfaced:
+/// adder_proof and theorem_proving used to grow spurious `can't unify`
+/// errors.  `Information` diagnostics (println rendering) are still allowed to
+/// differ; this pins the user-visible contract that the twin never *invents*
+/// an error on a shipping example.
+#[test]
+fn twin_error_diagnostics_match_reference_on_all_examples() {
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect(&p, out);
+            } else if p.extension().map(|e| e == "typort").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    collect(std::path::Path::new("examples"), &mut files);
+    files.sort();
+    assert!(files.len() >= 30, "expected the examples tree, found {}", files.len());
+    for (i, path) in files.iter().enumerate() {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let name = path.to_string_lossy().replace('\\', "/");
+        let uri = Url::parse(&format!("file:///ex_err_{i}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        tb.process_file(&uri, &src, Some(1));
+        let rb = backend_hdl(Engine::Reference);
+        rb.process_file(&uri, &src, Some(1));
+        assert!(
+            errors(&tb, &uri).is_empty(),
+            "twin invented errors on {name}: {:?}",
+            errors(&tb, &uri),
+        );
+        assert!(
+            errors(&rb, &uri).is_empty(),
+            "reference errors on {name}: {:?}",
+            errors(&rb, &uri),
+        );
+    }
+}

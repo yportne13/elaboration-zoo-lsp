@@ -1117,15 +1117,14 @@ tag/原始字/头/参数，并在 `unify_iter` 每条 `return false` 前打行�
 - 回归：lib 699、`l13_fast_parity` 410、`twin_engine_tests` 17（新增
   `twin_unifies_reduced_nat_primop_against_surface_form`）全绿。
 
-**同批扫描暴露的其余分叉（本轮未修，另一类根因）**：
+**同批扫描暴露的其余分叉**（下面第一条的根因随后定位并修复，见再下一节
+"嵌套 unify 清空共享工作栈"）：
 - **`cong` 隐参未解（`theorem_proving.typort`）**：多 1 条错误
   `can't unify expected: Eq[Nat](12,12) find: Eq[Nat](5 + ?m1, 5 + ?m2)`。
   内部值 dump（探针已撤）：expected `Eq Nat 12 12`，find
   `Eq (nat_add 5 ?m1) (nat_add 5 ?m2)`——`cong` 的隐参 `x,y` 两颗 meta
   **始终未解**，参考版从 `e : Eq (0+7) 7` 解出 `x := 0+7, y := 7`。
-  孪生随后把 `nat12` 与卡住的 `nat_add 5 ?m1` 交到 `(Decl,_)` prim 不透明叶
-  臂上失配（该臂本身与参考版一致；差别在 meta 没解，不在臂序）。
-  **触发条件**（逐项收窄，`check(Engine::{Twin,Reference})` 双跑）：
+  触发条件（逐项收窄，`check(Engine::{Twin,Reference})` 双跑）：
   - 需要 **未标注 binder 的 inline lambda**（`(x: Nat) => 5 + x` 或
     `let g: Nat -> Nat = ...` 或 `def myfn` 或传变量 `f` 都不触发）；
   - 且 lambda 体内是**卡住的 nat primop**——`5 + x` / `5 * x` / `n + x`
@@ -1142,17 +1141,72 @@ tag/原始字/头/参数，并在 `unify_iter` 每条 `return false` 前打行�
     同样触发；泛型 `apply[A,B]` + 未标注 lambda + 卡住 prim 却**不**触发
     （那里 `a : A` 的具体实参把 `A` 钉住了）。
   - 同一 lambda 体改由 `def g(x: Nat): Nat = 5 + x` 提供即正常 → 关键在
-    lambda 的 **binder 类型（=`A`）始终是未解 meta**，没有任何具体实参去钉它。
-  推测是 `+`（trait 方法）合成在接收者类型为 meta 时只挂账约束、不反解
-  `?A := Nat`；`cong` 这一路又没有别的具体实参能兜底，于是 `x,y` 全留未解，
-  最终只能靠"从结果类型反解 `nat_add 5 ?x ≡ 12`"——该反演孪生不支持，落在
-  prim 不透明叶臂上报错（与已登记的"18-utils 隐参分叉 / solve trait failed"
-  同族；真正根因待下一轮按 `solve_multi_trait_ref` 的接收者 meta 分支定位）。
+    lambda 的 binder 类型（=`A`）是未解 meta。
+  - **实参顺序是分水岭**：把证明放前面（
+    `def myc4[A,B,x:A,y:A](e: Eq x y, f: A -> B): Eq (f x) (f y) = cong(f, e)`
+    配 `myc4(add_zero_left(7), x => 5 + x)`）即正常。
+  当时推测是 `+` 的 trait 合成只挂账不反解 `?A := Nat`——**该推测后来被
+  探针证伪**：域 `Eq[?A] ?x ?y` 与实参类型 `Eq[Nat] 7 7` 的合一是**返回
+  `ok=true` 却只解掉第一个参数 `A`**（`Eq[Nat] 7 7` 与 `Eq[Nat] 7 7` 的
+  跟踪可证），`x,y` 从未被尝试求解。真因见下一节。
   **规避**：给 binder 标注 `(x: Nat) => 5 + x`，或用 `def`/带类型 `let` 绑定函数
   （给 `cong` 的 `e` 换成符号实参 `add_zero_left(n)` 也恰好躲开）。
 - `Information`（println）差异 3 处：`adder_proof` 第二条 `println` 孪生未把
   证明项归一到 `Eq[Nat]::refl(4)`（打印成 `vec_adder_correct[2](...)` 原项）、
   `theorem_proving` 对应一条、`typeclass_complex` 打印串内嵌的 span
   （孪生导出项 Span 全零 `@ 0,0` vs 参考版 `@ 549,552`，属既有已知渲染差）。
+
+## 2026-09-14 续（嵌套 unify 清空共享工作栈——`cong` 隐参分叉真因）
+
+**结论先给**：根因是 `Machine::unify` 入口的 `stack.clear()` 把**嵌套调用**
+外层尚未弹出的待办对清掉了；外层主循环见栈空即 `return true`，于是合一
+"判定成功"但 meta 悬空。与 primop/trait 合成无关——上一轮"不做 Nat builtin"
+实验（临时开关 `TYPORT_NO_NAT_ARITH_BUILTIN`，两引擎同时跳过五个算术
+primop，已撤）复现不了修复，正是因为根因在 unify 的栈管理。
+
+**探针链**（全部临时，已撤；手法沿用上一轮的 `TYPORT_UNIFY_DBG` 值 dump）：
+1. `[UC2]`——在 `unify_catch` 入口按 `Eq` 过滤 dump 合一前后：
+   `ok=true expected Eq[Nat](?x, ?y)  find Eq[Nat](7, 7)`：**返回成功但
+   两颗 meta 一个没解**（quote 后仍是 `?32024/?32025`）。
+2. `[META]`——失败点 dump 最近 24 颗 meta 的 Solved/Unsolved：只有这两颗 U。
+3. `[FLEX]`——flex 求解臂入口打 meta 号：**32024/32025 从未出现**（其余
+   全部出现过并解掉），说明它们连"被尝试"都没有。
+4. `[SUM]`——Sum/Sum 臂打印参数 tag 对：`[(5,7),(5,2),(5,7)]`，证明三对
+   **确实压栈了**。
+5. `[PAIR]`（按 meta 号过滤弹栈）+ 阅读 `Machine::unify`：
+   `work.clear(); stack.clear();` —— `unify_stack` 是 Machine 常驻的
+   **共享**栈。解第一颗 meta `A` 时进入 flex 求解 →
+   `solve_flex_side_bump` → `solve_multi_trait_ref` → 候选实例合成 →
+   **再次 `Machine::unify`** → 入口 `stack.clear()` 把外层挂着的
+   `(?x, ·)`、`(?y, ·)` 两个待办项清掉 → 外层循环立即结束并返回 true。
+
+**修复**（`Machine::unify`）：入口改为**暂存**而非清空——
+`let saved = std::mem::take(stack);` 跑完 `unify_iter` 后，成功时
+`*stack = saved`（内层主循环以空栈结束，内层栈必空，回填即续跑外层），
+失败时 `stack.clear()`（维持旧契约：残留不跨调用持有）。顶层调用因不变量
+（成功回填空 vec / 失败清空）恒以空栈进入，行为不变。
+
+**验收**：
+- 最小复现 `cong(x => 5 + x, add_zero_left(7))` 修复后与参考版一致（0 错）。
+- `examples/**` 全 30 文件**错误诊断零分叉**（此前 adder_proof 4 条、
+  theorem_proving 1 条孪生独有错误）。
+- 全量 `cargo test --release --no-fail-fast`：**3948 passed / 0 failed**
+  （唯一失败的 `l06_blackbox::workload_node_counts` 是**既有**栈溢出——
+  在未打补丁的 `8cda2dd` 基线上同样复现，与本修复无关）。
+- 新增两个回归：`twin_solves_implicits_around_nested_unify`（3 例，含
+  `calc` 两段式）、`twin_error_diagnostics_match_reference_on_all_examples`
+  （全 examples 树错误诊断零容忍）。
+- **性能**（`bench_examples_per_file_by_engine`，30 文件 min-of-5 稳态求和）：
+
+  | | Reference | Twin |
+  |---|---|---|
+  | 修复后 | 16734 ms | **12142 ms**（1.38×） |
+  | 修复前（stash 对照） | 16979 ms | 12414 ms（1.37×） |
+
+  即修复**没有**性能代价（12142 vs 12414，同批噪声内略优）：多做的只是
+  此前被丢弃、但正确性必需的合一工作。逐文件倍率仍为 HDL 段 2.4–3.6×，
+  已知回落/残差文件（13-adder-tree 0.60、18-utils 0.70、21/23/25、alu
+  0.76）不变。
+
 
 

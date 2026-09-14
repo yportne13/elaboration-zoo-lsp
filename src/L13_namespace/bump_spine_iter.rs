@@ -6710,22 +6710,37 @@ impl Machine {
             unify_stack,
             ..
         } = self;
-        // SAFETY：同 eval_work——'static 存放口径，进核前 clear（unify
-        // 的失败早退会把非空栈留在槽里，靠入口 clear 兜住）。
+        // SAFETY：同 eval_work——'static 存放口径，进核前 clear。
         let work: &mut Vec<W<'a>> =
             unsafe { &mut *(unify_work as *mut Vec<W<'static>> as *mut Vec<W<'a>>) };
         let stack: &mut Vec<UItem<'a>> =
             unsafe { &mut *(unify_stack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'a>>) };
         work.clear();
-        stack.clear();
-        // 重入句柄 mach_ptr 在解构前取得：unify 的 flex 求解点要回调
-        // trait 求解（参考版 solve 臂的 solve_multi_trait）——字段已按
-        // 不相交集合借出，重入经裸指针走 Machine 方法（仅触碰同分配的
-        // 堆内容，无移动）
-        unify_iter(
+        // **不能**在这里无条件 `stack.clear()`：`unify_iter` 允许嵌套重入
+        // （flex 求解 → `solve_multi_trait_ref` → 候选实例合成 → 再次
+        // unify），而 `unify_stack` 是 Machine 常驻的**共享**工作栈。嵌套
+        // 调用若清空它，外层尚未弹出的待办对（同一 Sum/Sum 或同头链臂压入
+        // 的其余参数对）会被静默丢弃——外层主循环见栈空即 `return true`，
+        // 症状是"判定成功但 meta 未解"：`Eq ?x ?y ≡ Eq (7, 7)` 只解掉第一个
+        // 参数 `A`（解它会触发 trait 合成 → 嵌套 unify → 清栈），随后
+        // `?x ?y` 悬空（examples/theorem_proving 的 `cong` 隐参分叉）。
+        // 改为入口暂存：成功时内层栈必已空（主循环以空栈结束），把调用方
+        // 挂起的项原样放回，嵌套调用得以续跑；失败时丢弃（旧契约：残留由
+        // 下次入口自行清理，不跨调用持有）。
+        // （重入句柄 mach_ptr 在解构前取得：unify 的 flex 求解点要回调
+        // trait 求解——参考版 solve 臂的 solve_multi_trait；字段已按不相交
+        // 集合借出，重入经裸指针走 Machine 方法，仅触碰同分配的堆内容。）
+        let saved: Vec<UItem<'a>> = std::mem::take(stack);
+        let r = unify_iter(
             bump, spine, work, stack, vals, icits, defs, metas, &*cxt.decls, mutable, ren, conv,
             constraints, l, t, u, fuel, cxt, mach_ptr, trait_err,
-        )
+        );
+        if r {
+            *stack = saved;
+        } else {
+            stack.clear();
+        }
+        r
     }
 
     /// 参考 `Infer::solve_multi_trait`（L13）：只扫 `trait_metas` 登记表
