@@ -105,7 +105,10 @@ module 宏的 Verilog 臂按**连续段**匹配端口组：
 - `parameter` 头、`generate`、`initial`、延迟（`#`）、`$display` 等。
 - 头部 `output reg [hi:lo] q = <init>` 形式：init 请写成模块体内的
   `reg [hi:lo] q = <init>;`（自动去重并进复位分支）。
-- `input reg` / `input wire` 等带类型修饰的输入端口头。
+- 端口头的类型修饰 `wire`（`input wire a` / `output wire [7:0] y`）：端口组按
+  连续段匹配，标量组 `input $ik` 会把 `input wire [7:0] a` 里的 `wire` 当成
+  端口名，而匹配器无前瞻/可选分支，无法区分 `input wire NAME` 与
+  `input wire [w] NAME`。请写裸方向（`input a` / `output [7:0] y`）。
 - 实例化的空连接 `.port()`、位置连接（只有命名连接 `.p(sig)`）。
 - `case` 转写为互斥 `if` 链（非原样 `case`），`default` 条件带 `1 && …` 前缀
   （语义等价，仅外观）。
