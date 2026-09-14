@@ -103,7 +103,7 @@
 							"twin"
 						],
 						"enumDescriptions": [
-							"Reference elaborator (baseline; lower memory). Debug escape hatch; the web host pins it because it cannot run the twin.",
+							"Reference elaborator (baseline; lower memory). Debug escape hatch for all hosts, including web.",
 							"L13 twin elaborator (default): ~3.8x faster per edit and faster startup, at ~2x memory. Files with project imports or twin-unsupported constructs fall back automatically."
 						],
 						"default": "twin",

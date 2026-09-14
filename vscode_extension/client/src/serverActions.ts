@@ -7,7 +7,7 @@
  * elaboration engine is no longer a user-facing choice — both backends run the
  * L13 performance twin. `readEngine` still honors an explicit
  * `typort-hdl.cli-server.engine = "reference"` setting as a baseline escape
- * hatch, and the web host (which cannot run the twin) is pinned to it.
+ * hatch, which applies to the web host as well.
  * ------------------------------------------------------------------------------------------ */
 
 import { commands, ConfigurationTarget, QuickPickItem, QuickPickItemKind, window, workspace } from 'vscode';
@@ -24,7 +24,7 @@ export const BACKEND_KEY = 'lsp-mode';
 /** Engine used when the setting has not been set explicitly. */
 const UNSET_ENGINE: Record<Backend, Engine> = {
 	// The L13 twin is the engine; the reference elaborator is only a debug
-	// escape hatch (explicit setting) and the web host's fallback.
+	// escape hatch (explicit setting).
 	wasm: 'twin',
 	cli: 'twin',
 };

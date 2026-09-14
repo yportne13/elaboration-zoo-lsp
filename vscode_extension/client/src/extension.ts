@@ -57,20 +57,21 @@ const WASM_MAX_PAGES = 32768; // 2,147,483,648 bytes
 async function startLanguageServer(
 	context: ExtensionContext,
 	wasm: Wasm,
-	canUseTwin: boolean,
 ): Promise<LanguageClient> {
 	if (!channel) {
 		channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
 	}
 	const serverOptions: ServerOptions = async () => {
-		const engine = canUseTwin ? readEngine('wasm') : 'reference';
+		// Re-read on every (re)start so a settings change to the `reference`
+		// escape hatch takes effect on the restart that follows it.
+		const engine = readEngine('wasm');
 		const options: ProcessOptions = {
 			stdio: createStdioOptions(),
 			mountPoints: [
 				{ kind: 'workspaceFolder' },
 			],
-			// Pass the engine explicitly. The server defaults to the twin, but
-			// the web host cannot run it, so `reference` must be spelled out.
+			// Pass the engine explicitly: the server's own default is the twin,
+			// and this is the only channel that can select `reference`.
 			env: { TYPORT_LSP_ENGINE: engine },
 		};
 		const filename = Uri.joinPath(context.extensionUri, 'client', 'server.wasm');
@@ -107,12 +108,12 @@ async function startLanguageServer(
 }
 
 /** Stop the running client and start a fresh one (status bar + command). */
-async function restartLanguageServer(context: ExtensionContext, wasm: Wasm, canUseTwin: boolean): Promise<void> {
+async function restartLanguageServer(context: ExtensionContext, wasm: Wasm): Promise<void> {
 	if (client) {
 		await client.stop();
 	}
 	updateStatusBar(State.Starting);
-	client = await startLanguageServer(context, wasm, canUseTwin);
+	client = await startLanguageServer(context, wasm);
 	client.onDidChangeState((e) => {
 		updateStatusBar(e.newState);
 	});
@@ -127,17 +128,10 @@ export interface ActivateOptions {
 	 * offers switching the backend. The web host cannot.
 	 */
 	canUseCli?: boolean;
-	/**
-	 * Whether the twin engine may be selected. Both desktop backends support
-	 * it (the WASM module reads `TYPORT_LSP_ENGINE`); the web host is kept on
-	 * the reference engine.
-	 */
-	canUseTwin?: boolean;
 }
 
 export async function activate(context: ExtensionContext, options: ActivateOptions = {}) {
 	const wasm: Wasm = await Wasm.load();
-	const canUseTwin = options.canUseTwin ?? false;
 
 	// Status bar
 	statusBarItem = createStatusBarItem();
@@ -145,7 +139,7 @@ export async function activate(context: ExtensionContext, options: ActivateOptio
 	statusBarItem.show();
 	updateStatusBar(State.Starting);
 
-	client = await startLanguageServer(context, wasm, canUseTwin);
+	client = await startLanguageServer(context, wasm);
 
 	// Track language client state changes → update status bar
 	client.onDidChangeState((e) => {
@@ -208,7 +202,7 @@ export async function activate(context: ExtensionContext, options: ActivateOptio
 	// ── Restart server ────────────────────────────────────────────────────
 
 	context.subscriptions.push(commands.registerCommand('typort-hdl.restartLanguageServer', async () => {
-		await restartLanguageServer(context, wasm, canUseTwin);
+		await restartLanguageServer(context, wasm);
 		window.showInformationMessage('TyportHDL Language Server restarted.');
 	}));
 
@@ -219,7 +213,7 @@ export async function activate(context: ExtensionContext, options: ActivateOptio
 		return showServerActions({
 			backend: 'wasm',
 			canUseCli: options.canUseCli ?? false,
-			restart: () => restartLanguageServer(context, wasm, canUseTwin),
+			restart: () => restartLanguageServer(context, wasm),
 			showLog: () => channel.show(),
 		});
 	}));

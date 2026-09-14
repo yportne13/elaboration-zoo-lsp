@@ -220,7 +220,7 @@ export async function activate(context: ExtensionContext) {
 			});
 		}));
 	} else {
-		await activateWasm(context, { canUseCli: true, canUseTwin: true });
+		await activateWasm(context, { canUseCli: true });
 	}
 }
 

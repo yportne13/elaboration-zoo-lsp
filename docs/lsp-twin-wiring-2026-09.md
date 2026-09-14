@@ -1047,4 +1047,38 @@ cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` �
   点把 bn 引用改写为 `this` 即可安全复用，可把该族方法体从"重推"变"复用"
   （对应 perf-review 的"3× → 1× 求值"长期方向）。
 
+## 2026-09-14 续（web 宿主解除 reference 固定，改走孪生）
+
+**症状**：VS Code for Web 启动打印 `typort: lsp engine = Reference`，且改
+`typort-hdl.cli-server.engine` 无效。
+
+**根因**：`extension.web.ts` 只是 `export * from './extension'`，宿主调用
+`activate(context)` 不带 options，于是 `ActivateOptions.canUseTwin` 取默认
+`false`，`extension.ts` 里 `const engine = canUseTwin ? readEngine('wasm') :
+'reference'` 把 web **硬钉**在参考版——`readEngine`（唯一的设置读取点）在 web
+上根本没被调用，所以设置项也被忽略。
+
+**为什么钉住**：该 pin 来自 wasm 孪生接线那次提交（2653f31），注释理由是
+"web 宿主跑不了孪生"，但同一份文档记录的验证边界是"未在 VS Code 运行时里真机
+点过"——即从未复现过失败。真正的约束只有一个：内存（孪生压实后 ~429 MB 稳态 /
+~730 MB 峰值，对参考版 ~200 MB）。而同一次提交已经把链接期 `--max-memory` 与
+`createProcess` descriptor 一起抬到 2 GiB / 32768 页，且今天的 web 版本本就在
+同一个 2 GiB 模块里跑参考版并成功实例化——2 GiB 线性内存的保留在浏览器侧不是
+障碍。故该 pin 属未经证实的保守默认，按需求移除。
+
+**改动**（TS 侧，内核无改动）：
+- 删掉 `ActivateOptions.canUseTwin` 与 `extension.ts` 的三元 pin；
+  `startLanguageServer` / `restartLanguageServer` 一律 `readEngine('wasm')`
+  （每次启动重读，保证设置逃生口在随后的重启生效）。
+- `extension.desktop.ts` 的 WASM 分支改为 `activateWasm(context, { canUseCli:
+  true })`（原来显式传 `canUseTwin: true`）。
+- `UNSET_ENGINE.wasm` 保持 `'twin'` 不变，所以 web 默认走孪生；逃生口不变：
+  `typort-hdl.cli-server.engine = reference`，现在 web 也认这个设置。
+
+**验证**：`tsc -b` 通过；esbuild 重建 web/desktop 两个 bundle，产物中
+`canUseTwin` 计数为 0，web bundle 内为 `const engine = readEngine("wasm")` +
+`env: { TYPORT_LSP_ENGINE: engine }`。**未在真机 VS Code for Web 里点过**——
+孪生常驻态在浏览器 wasm 宿主下的稳定性与长时内存曲线仍待一轮真机验证；若异常，
+把设置改回 `reference` 即可回退，无需改代码。
+
 
