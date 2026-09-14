@@ -103,3 +103,69 @@ fn bench_kick_cost_by_engine() {
         );
     }
 }
+
+/// Recursively collect every `.typort` under `dir`, sorted for stable output.
+fn collect_typort(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            collect_typort(&p, out);
+        } else if p.extension().map(|e| e == "typort").unwrap_or(false) {
+            out.push(p);
+        }
+    }
+}
+
+/// Per-file LSP kick cost for every `examples/**/*.typort`, both engines.
+///
+/// One fresh `Backend` per (file, engine) so no symbol from a previous file
+/// pollutes the next (the examples deliberately reuse names like `add`).  The
+/// twin's resident prelude is thread-local and reused, and the reference
+/// prelude is the cached clone, so neither engine pays its prelude load more
+/// than once per thread.  `first` is the opening kick (didOpen, includes any
+/// per-file setup); `min` is the best of `kicks` steady-state edits.
+#[test]
+#[ignore = "manual perf measurement; run with --release --ignored --nocapture"]
+fn bench_examples_per_file_by_engine() {
+    let mut files = Vec::new();
+    collect_typort(std::path::Path::new("examples"), &mut files);
+    files.sort();
+    let kicks = 5usize;
+    let root = std::fs::canonicalize(".").unwrap();
+    println!("[BENCH-EX] {} files, kicks={kicks}, min-of-{kicks} steady-state", files.len());
+    let mut tot_ref = 0.0f64;
+    let mut tot_twin = 0.0f64;
+    for (i, path) in files.iter().enumerate() {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let rel = path.strip_prefix(&root).unwrap_or(path).display().to_string();
+        let rel = rel.replace('\\', "/");
+        let mut line = format!("[BENCH-EX] {rel:<40}");
+        let mut mins = [0.0f64; 2];
+        for (slot, eng) in [Engine::Reference, Engine::Twin].into_iter().enumerate() {
+            let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
+            b.load_prelude();
+            let uri = Url::parse(&format!("file:///bench/{i}.typort")).unwrap();
+            let t0 = Instant::now();
+            b.process_file(&uri, &src, Some(0));
+            let first = t0.elapsed().as_secs_f64() * 1000.0;
+            let mut best = f64::MAX;
+            for k in 0..kicks {
+                let t0 = Instant::now();
+                b.process_file(&uri, &src, Some(k as i32 + 1));
+                let dt = t0.elapsed().as_secs_f64() * 1000.0;
+                if dt < best { best = dt; }
+            }
+            mins[slot] = best;
+            line.push_str(&format!(" {eng:?}: first={first:>7.1} min={best:>7.1} ms |"));
+        }
+        tot_ref += mins[0];
+        tot_twin += mins[1];
+        let speedup = if mins[1] > 0.0 { mins[0] / mins[1] } else { 0.0 };
+        println!("{line} x{speedup:.2}");
+    }
+    println!(
+        "[BENCH-EX] TOTAL ref={tot_ref:.0} ms twin={tot_twin:.0} ms ({:.2}x)",
+        if tot_twin > 0.0 { tot_ref / tot_twin } else { 0.0 }
+    );
+}

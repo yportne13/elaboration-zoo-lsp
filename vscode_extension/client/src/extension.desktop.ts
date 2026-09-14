@@ -18,9 +18,9 @@ let logChannel: LogOutputChannel | undefined;
 let cliCommand = 'typort';
 let cliArgs: string[] = ['lsp'];
 let cliClientOptions: LanguageClientOptions | undefined;
-// Extra environment for the CLI server process. `undefined` leaves the child
-// environment untouched; `typort-hdl.cli-server.engine = "twin"` selects the
-// L13 performance elaborator via TYPORT_LSP_ENGINE.
+// Extra environment for the CLI server process: the elaboration engine, passed
+// as `TYPORT_LSP_ENGINE`. The server defaults to the twin, but we always set
+// it explicitly so the `reference` escape hatch is honored.
 let cliEnv: Record<string, string> | undefined;
 
 // Number of consecutive unexpected server exits. Reset to 0 whenever the
@@ -64,16 +64,13 @@ async function startClient(): Promise<void> {
 	updateStatusBar(State.Starting);
 	// Re-read the engine on every start so a switch from the status bar takes
 	// effect on the restart that follows it.
-	cliEnv = readEngine('cli') === 'twin' ? { TYPORT_LSP_ENGINE: 'twin' } : undefined;
+	cliEnv = { TYPORT_LSP_ENGINE: readEngine('cli') };
 	// `options.env` replaces the child environment, so merge the parent's.
-	// Only set when an engine is selected so the default spawn is unchanged.
 	// (`process` is read off globalThis because this project's tsconfig only
 	// includes the `vscode` types, and this file only runs in the desktop host.)
 	const parentEnv =
 		(globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
-	const serverOptions = cliEnv
-		? { command: cliCommand, args: cliArgs, options: { env: { ...parentEnv, ...cliEnv } } }
-		: { command: cliCommand, args: cliArgs };
+	const serverOptions = { command: cliCommand, args: cliArgs, options: { env: { ...parentEnv, ...cliEnv } } };
 	const newClient = new LanguageClient('lspClient', 'LSP Client', serverOptions, cliClientOptions);
 	newClient.onDidChangeState(handleStateChange);
 	client = newClient;
@@ -218,7 +215,6 @@ export async function activate(context: ExtensionContext) {
 			return showServerActions({
 				backend: 'cli',
 				canUseCli: true,
-				canUseTwin: true,
 				restart: () => restartCliClient(),
 				showLog: () => logChannel?.show(),
 			});

@@ -229,16 +229,16 @@ struct AnalysisJob {
 /// import a project namespace, or declare one, still fall back to the
 /// reference engine (the twin's replay only sees the prelude + the file).
 ///
-/// **Default**: after the arena compaction landed 2026-09-10
-/// (`prime_resident` → `compact_state`), the resident twin prelude costs
-/// ~429 MB steady / ~730 MB peak vs ~200 MB for the reference's Rc cache —
-/// a ~2.2x memory-for-CPU trade, down from the ~9x / ~1.8 GB measured before
-/// compaction.  The VS Code extension therefore defaults its WASM backend to
-/// `Twin` (via `TYPORT_LSP_ENGINE=twin`, bounded by the module's 2 GiB
-/// link-time memory) and keeps its CLI backend on `Reference`; a bare
-/// `typort lsp` with the variable unset also stays on `Reference`.  The
-/// status-bar menu switches either backend.  See
-/// `resident_memory_growth_per_kick` for the pre-compaction measurement.
+/// **Default**: the LSP runs on the twin.  After the arena compaction landed
+/// 2026-09-10 (`prime_resident` → `compact_state`), the resident twin prelude
+/// costs ~429 MB steady / ~730 MB peak vs ~200 MB for the reference's Rc
+/// cache — a ~2.2x memory-for-CPU trade, down from the ~9x / ~1.8 GB measured
+/// before compaction.  [`Engine::lsp_default`] (the only constructor the
+/// server uses) selects the twin unless `TYPORT_LSP_ENGINE=reference`, the
+/// explicit baseline escape hatch — the VS Code web host, which cannot run
+/// the twin, sets it.  The reference engine stays wired as the automatic
+/// fallback for files with imports or packages, but is no longer the default.
+/// See `resident_memory_growth_per_kick` for the pre-compaction measurement.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Engine {
     Reference,
@@ -246,9 +246,24 @@ pub enum Engine {
 }
 
 impl Engine {
-    /// Read the engine from the environment (`TYPORT_LSP_ENGINE`).  Anything
+    /// The engine the LSP server starts on.  Unset — or any value other than
+    /// the exact string `reference` — selects the performance twin, so a typo
+    /// can never silently drop back to the baseline.  `TYPORT_LSP_ENGINE`
+    /// exists for the LSP only; the CLI / emit / tutorial paths go through
+    /// [`Backend::new`], which keeps the reference default.
+    pub fn lsp_default() -> Engine {
+        match std::env::var("TYPORT_LSP_ENGINE") {
+            Ok(v) if v.eq_ignore_ascii_case("reference") => Engine::Reference,
+            _ => Engine::Twin,
+        }
+    }
+
+    /// Read an explicitly configured engine (`TYPORT_LSP_ENGINE`).  Anything
     /// other than the exact string `twin` (including unset/empty) selects the
-    /// reference engine, so a typo can never silently switch engines.
+    /// reference engine, so a typo can never silently switch engines.  This is
+    /// the general-purpose constructor's default ([`Backend::new`]) — the
+    /// guard suites exercise the twin by setting the variable, while a bare
+    /// `cargo test` / `typort check` stays on the reference engine.
     pub fn from_env() -> Engine {
         match std::env::var("TYPORT_LSP_ENGINE") {
             Ok(v) if v.eq_ignore_ascii_case("twin") => Engine::Twin,
@@ -376,11 +391,17 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
 }
 
 impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
+    /// General-purpose constructor: the reference engine unless
+    /// `TYPORT_LSP_ENGINE=twin` is set.  Used by the CLI / emit / tutorial
+    /// paths and the test suites, which keep the reference default; the LSP
+    /// server goes through [`Engine::lsp_default`] instead (see
+    /// [`Backend::new_with_engine`]).
     pub fn new(client: C) -> Arc<Self> {
         Self::new_with_engine(client, Engine::from_env())
     }
 
-    /// Construct a Backend with an explicit engine (tests / embedding).
+    /// Construct a Backend with an explicit engine (the LSP server, tests /
+    /// embedding).
     pub fn new_with_engine(client: C, engine: Engine) -> Arc<Self> {
         let ast_map = Default::default();
         let type_map = Default::default();
@@ -3610,8 +3631,10 @@ pub fn run_lsp_server() -> std::result::Result<(), Box<dyn Error + Sync + Send>>
     #[cfg(feature = "stdio-monitor")]
     let connection = create_monitored_connection(connection);
 
-    // Run the server and wait for the two threads to end.
-    let backend = Backend::new(Client { connection });
+    // Run the server and wait for the two threads to end.  The server starts
+    // on the performance twin unless `TYPORT_LSP_ENGINE=reference`.
+    let backend = Backend::new_with_engine(Client { connection }, Engine::lsp_default());
+    eprintln!("typort: lsp engine = {:?}", backend.engine);
     let _initialization_params = match backend.init() {
         Ok(it) => it,
         Err(e) => {

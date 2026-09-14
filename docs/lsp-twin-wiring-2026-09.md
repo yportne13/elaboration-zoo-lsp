@@ -838,4 +838,79 @@ cross_file）+ parser_error_tests 双引擎（91×2）全绿。
 仍回落（闸 2 保守方向不变）；未验证错误类（universe 等）打字态回落，
 后续按需扩语料放宽。
 
+### 2026-09-14 续（LSP 默认切孪生 + examples 逐文件基准）
+
+**决定**：LSP 不再默认接入参考版，改用性能孪生为默认引擎。
+
+**接线（最小改动，工具/测试不受影响）**：
+- 新增 `Engine::lsp_default()`——unset（或任何非 `reference` 串）→ `Twin`，
+  仅 `TYPORT_LSP_ENGINE=reference` 回落参考版（VS Code web 宿主跑不了孪生，
+  它显式设该值）。`run_lsp_server` 改用它（`Backend::new_with_engine`），并在
+  启动打印 `typort: lsp engine = Twin|Reference` 便于确认。
+- `Engine::from_env()` / `Backend::new` 保持原语义（unset → `Reference`）：CLI
+  (`typort check`)、emit、tutorial、单测与守卫套件继续跑参考版，避免每个测试
+  线程多付一次孪生 prime；守卫套件仍靠 `TYPORT_LSP_ENGINE=twin` 显式跑孪生。
+- 扩展：WASM / CLI 两条后端默认都 `twin`（`UNSET_ENGINE.cli` 由 `reference`
+  改 `twin`）；启动时**总是**显式传 `TYPORT_LSP_ENGINE`（原来只在 twin 时传，
+  依赖"不传=参考"，与新默认冲突）；状态栏选择器移除 Reference 单选项，参考版
+  降为 settings 逃生口（`typort-hdl.cli-server.engine=reference`）。
+- 参考版引擎**保留为内部回退**：带 `import`/`package` 的文件、以及未验证错误
+  类仍回落（web 宿主亦然）。这不是"接入标准版"，是正确性兜底。
+
+**实测默认**（`typort lsp` 空 stdin 探针）：unset → Twin、`reference` →
+Reference、`twin` → Twin、错拼 `twn` → Twin（拼错安全落默认）。
+
+**examples 逐文件基准**（release，`tests/twin_engine_bench.rs::
+bench_examples_per_file_by_engine`，每 (文件,引擎) 新 Backend、min-of-5 稳态
+kick；`cargo test --release --test twin_engine_bench
+bench_examples_per_file_by_engine -- --ignored --nocapture`）：
+
+| 文件 | Reference | Twin | 倍率 |
+|---|---|---|---|
+| examples/adder_proof.typort | 592.7 ms | 278.1 ms | 2.13× |
+| examples/alu.typort | 56.9 ms | 78.2 ms | 0.73× |
+| examples/hdl/01-basics.typort | 211.1 ms | 70.1 ms | 3.01× |
+| examples/hdl/02-arithmetic.typort | 281.8 ms | 92.9 ms | 3.03× |
+| examples/hdl/03-bitwise.typort | 297.3 ms | 87.5 ms | 3.40× |
+| examples/hdl/04-compare.typort | 245.8 ms | 81.5 ms | 3.02× |
+| examples/hdl/05-bool.typort | 207.4 ms | 60.0 ms | 3.46× |
+| examples/hdl/06-select-cat.typort | 278.7 ms | 85.1 ms | 3.28× |
+| examples/hdl/07-registers.typort | 215.4 ms | 72.8 ms | 2.96× |
+| examples/hdl/08-control-flow.typort | 351.5 ms | 133.3 ms | 2.64× |
+| examples/hdl/09-hierarchy.typort | 308.5 ms | 91.8 ms | 3.36× |
+| examples/hdl/10-bundle.typort | 416.4 ms | 185.7 ms | 2.24× |
+| examples/hdl/11-bundle-deep.typort | 409.9 ms | 221.5 ms | 1.85× |
+| examples/hdl/12-memory.typort | 248.7 ms | 83.1 ms | 2.99× |
+| examples/hdl/13-adder-tree.typort | 278.6 ms | 496.0 ms | 0.56× |
+| examples/hdl/14-arithmetic-extra.typort | 425.2 ms | 130.0 ms | 3.27× |
+| examples/hdl/15-inout.typort | 143.1 ms | 57.4 ms | 2.49× |
+| examples/hdl/16-counter.typort | 141.5 ms | 47.3 ms | 2.99× |
+| examples/hdl/17-output-reg.typort | 178.6 ms | 65.3 ms | 2.73× |
+| examples/hdl/18-utils.typort | 2778.9 ms | 6565.7 ms | **0.42×** |
+| examples/hdl/19-stream.typort | 1487.3 ms | 444.5 ms | 3.35× |
+| examples/hdl/20-misc.typort | 1625.1 ms | 527.5 ms | 3.08× |
+| examples/hdl/21-crossclock.typort | 585.1 ms | 506.0 ms | 1.16× |
+| examples/hdl/22-widthadapter.typort | 307.9 ms | 119.9 ms | 2.57× |
+| examples/hdl/23-verilog-compat.typort | 556.7 ms | 801.3 ms | 0.69× |
+| examples/hdl_ops.typort | 564.5 ms | 193.0 ms | 2.93× |
+| examples/theorem_proving.typort | 74.8 ms | 48.7 ms | 1.54× |
+| examples/typeclass_complex.typort | 79.0 ms | 34.6 ms | 2.28× |
+| **合计** | **13348 ms** | **11659 ms** | **1.14×** |
+
+- 绝大多数 HDL 文件孪生 **2–3.5×**；合计只有 1.14×，被下面几个逆向文件吃掉。
+- **回落文件双跑**：13-adder-tree（闸 2 保守回落）、18-utils（solve trait
+  未验证类回落）、23-verilog-compat 均在孪生跑完后回落参考版——孪生段成了
+  纯浪费，18-utils 尤其（孪生段 ~3.8 s + 参考 2.8 s ≈ 6.6 s，比纯参考慢
+  2.4×）。这是默认切孪生后的**已知退化点**，也是下一步优化目标（把回落类
+  扩语料放宽 / 让回落跳过孪生段）。
+- `alu`/`21-crossclock` 接近持平（小型模块孪生启动/树构建无优势）。
+- **`first` 偶发 ~3.4 s 尖峰**：`observe_user` 的 `RESIDENT_BUMP_LIMIT`
+  触发重 prime（journal 回滚不回填 bump），基准每文件 6 次 kick 会加速触发；
+  稳态 `min` 已排除，LSP 实会话里表现为周期性重 prime。上表用 min。
+
+**验证**：`twin_engine_tests` 16/16；8 套 LSP 守卫
+（hover/completion/namespace/impl_goto/macro_goto/hdl_check/println/
+cross_file，85 测试）在 `TYPORT_LSP_ENGINE=twin` 下全绿；`typort lsp` 引擎
+探针四种取值符合预期；扩展 `tsc -b` + esbuild 通过。
+
 

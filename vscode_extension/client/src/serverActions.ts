@@ -3,14 +3,16 @@
  *
  * Shared by the WASM entry (`extension.ts`, used on web and on the desktop
  * WASM backend) and the desktop entry (`extension.desktop.ts`, CLI backend).
- * The picker exposes the two elaboration backends and the two engines; the
- * engine only takes effect on the CLI backend, so selecting `twin` from a
- * WASM host first offers to move to the CLI backend.
+ * The picker switches the language server backend (WASM vs CLI); the
+ * elaboration engine is no longer a user-facing choice — both backends run the
+ * L13 performance twin. `readEngine` still honors an explicit
+ * `typort-hdl.cli-server.engine = "reference"` setting as a baseline escape
+ * hatch, and the web host (which cannot run the twin) is pinned to it.
  * ------------------------------------------------------------------------------------------ */
 
 import { commands, ConfigurationTarget, QuickPickItem, QuickPickItemKind, window, workspace } from 'vscode';
 
-/** Elaboration engine passed to the CLI server as `TYPORT_LSP_ENGINE`. */
+/** Elaboration engine passed to the server as `TYPORT_LSP_ENGINE`. */
 export type Engine = 'reference' | 'twin';
 /** Language server backend the extension is running. */
 export type Backend = 'wasm' | 'cli';
@@ -21,18 +23,16 @@ export const BACKEND_KEY = 'lsp-mode';
 
 /** Engine used when the setting has not been set explicitly. */
 const UNSET_ENGINE: Record<Backend, Engine> = {
-	// The WASM backend is the out-of-the-box experience: default to the fast
-	// L13 twin. The CLI backend is a power-user path and keeps the low-memory
-	// reference engine unless the setting is set explicitly.
+	// The L13 twin is the engine; the reference elaborator is only a debug
+	// escape hatch (explicit setting) and the web host's fallback.
 	wasm: 'twin',
-	cli: 'reference',
+	cli: 'twin',
 };
 
 /**
  * The user-set value, ignoring the schema default. `get()` alone cannot be
  * used here: the schema default (`twin`, see package.json) would be
- * indistinguishable from an explicit choice, and the CLI backend needs the
- * opposite fallback.
+ * indistinguishable from an explicit choice.
  */
 function explicitEngine(): string | undefined {
 	const inspect = workspace.getConfiguration(SECTION).inspect<string>(ENGINE_KEY);
@@ -75,11 +75,9 @@ export interface ServerActionHost {
 	showLog(): void;
 	/** Whether this host can spawn the external CLI server (desktop). */
 	readonly canUseCli: boolean;
-	/** Whether this host can run the twin engine at all. */
-	readonly canUseTwin: boolean;
 }
 
-type ActionItem = QuickPickItem & { action?: string; engine?: Engine; backend?: Backend };
+type ActionItem = QuickPickItem & { action?: string; backend?: Backend };
 
 function radio(selected: boolean, label: string): string {
 	return `${selected ? '$(circle-filled)' : '$(circle-outline)'} ${label}`;
@@ -88,25 +86,6 @@ function radio(selected: boolean, label: string): string {
 /** Builds the picker entries; exported for tests / callers that pre-filter. */
 export function serverActionItems(host: ServerActionHost): ActionItem[] {
 	const items: ActionItem[] = [];
-
-	if (host.canUseTwin) {
-		const engine = readEngine(host.backend);
-		items.push(
-			{ label: 'Elaboration engine', kind: QuickPickItemKind.Separator },
-			{
-				label: radio(engine === 'reference', 'Reference'),
-				description: 'baseline; lower memory',
-				engine: 'reference',
-			},
-			{
-				label: radio(engine === 'twin', 'Twin (performance)'),
-				description: host.backend === 'cli'
-					? '~3.8x faster per edit, ~2x memory'
-					: '~3.8x faster per edit; raises the WASM memory ceiling',
-				engine: 'twin',
-			},
-		);
-	}
 
 	if (host.canUseCli) {
 		items.push(
@@ -132,19 +111,6 @@ export function serverActionItems(host: ServerActionHost): ActionItem[] {
 	return items;
 }
 
-async function applyEngine(engine: Engine, host: ServerActionHost): Promise<void> {
-	if (engine === readEngine(host.backend)) {
-		return;
-	}
-	if (!host.canUseTwin) {
-		window.showInformationMessage('The twin engine is not available in this host.');
-		return;
-	}
-	// Both backends read the setting at spawn, so a restart applies it.
-	await writeSetting(ENGINE_KEY, engine);
-	await host.restart();
-}
-
 async function applyBackend(backend: Backend, host: ServerActionHost): Promise<void> {
 	if (backend === host.backend) {
 		return;
@@ -166,9 +132,7 @@ export async function showServerActions(host: ServerActionHost): Promise<void> {
 	if (!pick) {
 		return;
 	}
-	if (pick.engine) {
-		await applyEngine(pick.engine, host);
-	} else if (pick.backend) {
+	if (pick.backend) {
 		await applyBackend(pick.backend, host);
 	} else if (pick.action === 'restart') {
 		await host.restart();
