@@ -1118,10 +1118,38 @@ tag/原始字/头/参数，并在 `unify_iter` 每条 `return false` 前打行�
   `twin_unifies_reduced_nat_primop_against_surface_form`）全绿。
 
 **同批扫描暴露的其余分叉（本轮未修，另一类根因）**：
-- `theorem_proving.typort` 仍多 1 条错误：`can't unify expected: Eq[Nat](12,12)
-  find: Eq[Nat](5 + ?M, 5 + ?M)`——`add_cong_complex_calc` 里
-  `cong(x => 5 + x, add_zero_left(7))` 的 meta 未解（参考版解成 7）。属 meta
-  求解/隐参类，与本次 prim 存根问题无关。
+- **`cong` 隐参未解（`theorem_proving.typort`）**：多 1 条错误
+  `can't unify expected: Eq[Nat](12,12) find: Eq[Nat](5 + ?m1, 5 + ?m2)`。
+  内部值 dump（探针已撤）：expected `Eq Nat 12 12`，find
+  `Eq (nat_add 5 ?m1) (nat_add 5 ?m2)`——`cong` 的隐参 `x,y` 两颗 meta
+  **始终未解**，参考版从 `e : Eq (0+7) 7` 解出 `x := 0+7, y := 7`。
+  孪生随后把 `nat12` 与卡住的 `nat_add 5 ?m1` 交到 `(Decl,_)` prim 不透明叶
+  臂上失配（该臂本身与参考版一致；差别在 meta 没解，不在臂序）。
+  **触发条件**（逐项收窄，`check(Engine::{Twin,Reference})` 双跑）：
+  - 需要 **未标注 binder 的 inline lambda**（`(x: Nat) => 5 + x` 或
+    `let g: Nat -> Nat = ...` 或 `def myfn` 或传变量 `f` 都不触发）；
+  - 且 lambda 体内是**卡住的 nat primop**——`5 + x` / `5 * x` / `n + x`
+    （`nat_add/nat_mul` 的**第二个**实参是变量，primop 返回 None）；
+    `x + 5`（第二实参具体 5 → 展开 `succ^5 x`，不卡）、`succ x`、
+    `double x`（类型取自 decl 签名）均正常；
+  - 且证明实参的等式两侧**具体**（`add_zero_left(7)`）——换成符号 `n`
+    不触发（`add_zero_left(n)` 版正常）。
+  最小复现：`def t: Eq(5 + (0 + 7), 5 + 7) = cong(x => 5 + x, add_zero_left(7))`
+  （`Eq(0+7) 7` 也可用 `add_zero_right(7)`；`rfl[Nat][7]` 同样触发）。
+  进一步判别：
+  - **与 prelude `cong` 无关**——用户自定义同签名
+    `def mycong[A, B, x: A, y: A](f: A -> B, e: Eq x y): Eq (f x) (f y) = cong(f, e)`
+    同样触发；泛型 `apply[A,B]` + 未标注 lambda + 卡住 prim 却**不**触发
+    （那里 `a : A` 的具体实参把 `A` 钉住了）。
+  - 同一 lambda 体改由 `def g(x: Nat): Nat = 5 + x` 提供即正常 → 关键在
+    lambda 的 **binder 类型（=`A`）始终是未解 meta**，没有任何具体实参去钉它。
+  推测是 `+`（trait 方法）合成在接收者类型为 meta 时只挂账约束、不反解
+  `?A := Nat`；`cong` 这一路又没有别的具体实参能兜底，于是 `x,y` 全留未解，
+  最终只能靠"从结果类型反解 `nat_add 5 ?x ≡ 12`"——该反演孪生不支持，落在
+  prim 不透明叶臂上报错（与已登记的"18-utils 隐参分叉 / solve trait failed"
+  同族；真正根因待下一轮按 `solve_multi_trait_ref` 的接收者 meta 分支定位）。
+  **规避**：给 binder 标注 `(x: Nat) => 5 + x`，或用 `def`/带类型 `let` 绑定函数
+  （给 `cong` 的 `e` 换成符号实参 `add_zero_left(n)` 也恰好躲开）。
 - `Information`（println）差异 3 处：`adder_proof` 第二条 `println` 孪生未把
   证明项归一到 `Eq[Nat]::refl(4)`（打印成 `vec_adder_correct[2](...)` 原项）、
   `theorem_proving` 对应一条、`typeclass_complex` 打印串内嵌的 span
