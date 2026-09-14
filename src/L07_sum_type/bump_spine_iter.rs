@@ -13,7 +13,13 @@
 //!    `Pruning` 跳段（none-run）、`RenBuf` 换代缓冲、fresh meta 免 eval 快捷路径。
 //!
 //! L07 的增量（sum-type 层语义的落地；参考版 = `super` 的分文件实现，语义
-//! 以其为准）：
+//! 以其为准。**分叉提示（2026-09）**：参考版已改为显式替换精化
+//! （`Subst`/`Val::VSub`/`frcs` + `SpecSolve` 穿参，见
+//! `docs/l07-dpm-refactor-design.md`）；本文件暂保留下述事实表机制，行为
+//! parity 由 `l07_fast_parity` 逐字节保证。机制对齐待移植——注意
+//! design doc §4 的槽位纪律（spine 只包裹不物化）与 `frcs` 对
+//! "已解 rigid + 非空 spine"的解析应用选择（tests.rs 的
+//! `test_fn_typed_index_slot_applied_after_refine` 强制孪生复刻））：
 //!
 //! - **值编码**：tag 7 的 [`XCell`] 从 Lit/Decl 扩到 `Prim`（卡住内建应用
 //!   头）、`Obj`（卡住投影）、`Sum` / `SumCase`（和类型与构造子值）、

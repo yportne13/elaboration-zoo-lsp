@@ -25,8 +25,8 @@ use crate::list::List;
 
 use super::{
     pretty::pretty_tm,
-    wrap_sub, val_mentions_lvl, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine, Subst, Tm,
-    UnifyError, Val, VTy,
+    v_applicable, wrap_sub, val_mentions_lvl, Infer, Lvl, MetaEntry, MetaVar, PatternDetail, Spine,
+    Subst, Tm, UnifyError, Val, VTy,
     cxt::{Cxt, Decls},
     lvl2ix,
     parser::syntax::Icit,
@@ -44,19 +44,8 @@ pub(crate) struct SpecSolve<'a> {
     pub(crate) acc: Rc<Subst>,
 }
 
-/// η 展开的可应用性守卫（L06 `unification::v_applicable` 同款）：只有
-/// `v_app` 能吃 η 新变量的形态（中性头 / Decl / 卡住投影 / 卡住内建 /
-/// 卡住 match）允许 η 展开。字面量/U/Π/Sum/SumCase 与 λ 相遇时无从
-/// 应用——不加守卫会命中 `v_app` 的 `impossible apply` panic（L06 曾由
-/// `string_to_global_type` 把 def 函数值当"动态类型"送进 unify 而踩中；
-/// L07 的 st2g 只返回登记**类型**，该触发路径关闭，本守卫为同型加固）。
-/// 守卫为真时行为照旧，唯一变化是原本 panic 的分支改判 unify 失败。
-fn v_applicable(v: &Val) -> bool {
-    matches!(
-        v,
-        Val::Flex(..) | Val::Rigid(..) | Val::Decl(..) | Val::Obj(..) | Val::Prim(..) | Val::Match(..)
-    )
-}
+/// η 展开的可应用性守卫的实现体已上移到 mod.rs（`super::v_applicable`，
+/// frcs 的 Rigid 读点共用同一守卫）。
 
 #[derive(Debug, Clone)]
 struct PartialRenaming {

@@ -1334,3 +1334,127 @@ true
 false
 ");
 }
+
+// 显式替换重构（2026-09，dpm-nbe 对齐）的直接单测：Subst 链语义 /
+// force_arg 多层解包 / struct_eq 的 VSub 分支。机制层回归——run 级行为
+// 由上方用例与 l07_fast_parity 双 oracle 覆盖。
+
+/// Subst 持久化链：沿链取最新（≙ 旧 pm_def 的 rev().find）、未命中回
+/// vvar、compose 外层覆盖、extend 不影响既有链（臂边界 Rc 回滚的前提）。
+#[test]
+fn subst_chain_semantics() {
+    let s0: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    assert!(s0.is_empty());
+
+    let s1 = Subst::extend(&s0, Lvl(5), Val::vvar(Lvl(1)));
+    assert!(s1.has(Lvl(5)));
+    assert!(struct_eq::val_eq(&s1.lookup(Lvl(5)), &Val::vvar(Lvl(1))));
+    // 未命中 = 恒等延拓
+    assert!(struct_eq::val_eq(&s1.lookup(Lvl(9)), &Val::vvar(Lvl(9))));
+
+    // 同键再解：链头（最新）胜
+    let s2 = Subst::extend(&s1, Lvl(5), Val::vvar(Lvl(2)));
+    assert!(struct_eq::val_eq(&s2.lookup(Lvl(5)), &Val::vvar(Lvl(2))));
+    // 旧链不受 extend 影响（Rc 共享）
+    assert!(struct_eq::val_eq(&s1.lookup(Lvl(5)), &Val::vvar(Lvl(1))));
+
+    // compose：外层（后应用）条目覆盖内层同键
+    let outer = Subst::extend(&s0, Lvl(5), Val::vvar(Lvl(3)));
+    let comp = Subst::compose(&outer, &s1);
+    assert!(struct_eq::val_eq(&comp.lookup(Lvl(5)), &Val::vvar(Lvl(3))));
+}
+
+/// lookup 命中的包裹判据：解值引用已解层级 ⇒ 包 VSub(·, σ)（读点推开）；
+/// 干净解值 ⇒ 原样返回（零分配零 fuel 的热路径）。
+#[test]
+fn subst_lookup_conditional_wrap() {
+    let s0: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    let s1 = Subst::extend(&s0, Lvl(3), Val::vvar(Lvl(30)));
+    // 1 := Rigid(3)：解值引用已解层级 3 ⇒ 包裹
+    let s2 = Subst::extend(&s1, Lvl(1), Val::vvar(Lvl(3)));
+    assert!(matches!(s2.lookup(Lvl(1)), Val::VSub(..)));
+    // 1 := U：解值干净 ⇒ 原样
+    let s3 = Subst::extend(&s1, Lvl(1), Val::U);
+    assert!(matches!(s3.lookup(Lvl(1)), Val::U));
+    // 1 := Rigid(7)：7 未解 ⇒ 原样（精化传播不需要 σ）
+    let s4 = Subst::extend(&s1, Lvl(1), Val::vvar(Lvl(7)));
+    assert!(struct_eq::val_eq(&s4.lookup(Lvl(1)), &Val::vvar(Lvl(7))));
+}
+
+/// force_arg 逐层解包：嵌套 match 的上下文被外层臂与内层臂各 subst_cxt
+/// 一次，槽位带两层 VSub——invert/prune 需要看的是裸 rigid 槽位。
+#[test]
+fn force_arg_unwraps_nested_vsub() {
+    let infer = Infer::new();
+    let decl = cxt::Decls::new();
+    let inner: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    let outer = Subst::extend(&inner, Lvl(9), Val::U);
+    // 两层包裹、内层是未解的裸 rigid 槽 ⇒ 解包到裸形态（pm_defs 不参与
+    // invert 的旧行为等价）
+    let slot = Val::VSub(Box::new(Val::vvar(Lvl(7))), outer.clone());
+    let slot = Val::VSub(Box::new(slot), outer);
+    match infer.force_arg(&decl, slot) {
+        Val::Rigid(x, sp) => {
+            assert!(sp.is_empty());
+            assert_eq!(x, Lvl(7));
+        }
+        other => panic!("expected bare rigid slot, got {other:?}"),
+    }
+    // 内层是已解引用：invert 视角同样**不**推开 σ（旧"pm_defs 不参与
+    // invert"等价——槽位是作用域事实，解的可见性属 force 全量视角）
+    let mapped = Subst::extend(&inner, Lvl(7), Val::U);
+    let slot2 = Val::VSub(Box::new(Val::vvar(Lvl(7))), mapped);
+    match infer.force_arg(&decl, slot2) {
+        Val::Rigid(x, sp) => {
+            assert!(sp.is_empty());
+            assert_eq!(x, Lvl(7));
+        }
+        other => panic!("expected bare rigid slot, got {other:?}"),
+    }
+    // 对照：全量 force 视角才推开为解值
+    let slot3 = Val::VSub(Box::new(Val::vvar(Lvl(7))), Subst::extend(&inner, Lvl(7), Val::U));
+    assert!(matches!(infer.force(&decl, slot3), Val::U));
+}
+
+/// struct_eq 的 VSub 分支：同一替换实例（同 Rc）且内层结构相等才短路；
+/// 异实例一律 false 回落慢路径（正确性由 unify 的 force 承接）。
+#[test]
+fn struct_eq_vsub_pointer_identity() {
+    let sub: std::rc::Rc<Subst> = std::rc::Rc::new(Subst::default());
+    let a = Val::VSub(Box::new(Val::U), sub.clone());
+    let b = Val::VSub(Box::new(Val::U), sub.clone());
+    assert!(struct_eq::val_eq(&a, &b));
+    let other = Subst::extend(&sub, Lvl(1), Val::U);
+    let c = Val::VSub(Box::new(Val::U), other);
+    assert!(!struct_eq::val_eq(&a, &c));
+}
+
+/// frcs 对"已解 rigid + 非空 spine"做解析应用（对齐 dpm-nbe 的 napp
+/// 组合子；旧 pm_defs 版在带 spine 的 rigid 上卡住不展开）。函数类型的
+/// 索引槽被特化解成 λ 后，类型位置的应用在 elaboration 期归约——本用例
+/// 在新架构下通过，旧架构下 `Rigid(g,[zero])` 卡住会误报 can't unify。
+/// 性能版移植必须复刻同一归约选择（l07_fast_parity 强制）。
+#[test]
+fn test_fn_typed_index_slot_applied_after_refine() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo(f: Nat -> Nat) {
+    mk -> Foo (n => n)
+}
+
+def refl_e[A : U, x: A]: (P : A -> U) -> P x -> P x =
+    P => px => px
+
+def t(g: Nat -> Nat, w: Foo g): (P : Nat -> U) -> P (g zero) -> P zero =
+    match w {
+        case mk => refl_e
+    }
+"#,
+    );
+    assert!(out.is_empty(), "{out}");
+}

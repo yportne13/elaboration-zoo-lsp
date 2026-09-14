@@ -35,41 +35,52 @@ env 槽、绑定为 fresh rigid，与运行时 `eval_aux` 的 prepend 严格同�
 不再像旧实现那样用 fresh meta 充当——meta 会参与 invert/prune，把
 模式匹配的约束问题搅进元变量求解里。
 
-**纪律二：特化解是上下文外的事实表，不是上下文改写。** 方程的解
-`len := succ l`、`a := zero` 只是 `Infer::pm_defs` 里一条
-`(层级 → 值)` 记录：
+**纪律二：特化解是显式替换（explicit substitution），不是上下文改写。**
+方程的解 `len := succ l`、`a := zero` 只是 `Compiler::sub: Rc<Subst>`
+（持久化单链，链头 = 最新）里的一条记录，由 `Subst::extend` O(1) 叠加：
 
 - 变量的层级、env 槽、元变量 spine **一概不动**；
-- `force` 在**读点**惰性展开（`force(Rigid(x))` → x 的定义值）；
-- 臂边界 / 可达性探测做快照回滚（`pm_mark` / `pm_restore`）。
+- "解前构建、解后消费"的值在**读点**用 `wrap_sub` 包裹成
+  `Val::VSub`，`force` 的 frcs 臂在读点把 σ 推进值的结构；
+- 臂边界回滚 = `self.sub` 的 Rc 指针赋值；可达性探测用局部 σ + meta
+  快照。
 
 旧实现"改写 env 槽 + quote→eval 刷新上下文"的根本缺陷：凡是已经捕获
 了旧上下文的值——卡住 match 的捕获 env、meta 解、闭包——全部变成过期
 引用；被精化变量又从元变量 pruning 里剔除（`update_cxt` 把槽置 None），
 解的 λ 深度与使用现场槽位数错开，分支体固定 de Bruijn 索引读偏。
-事实表 + 惰性展开让这类错位**无从产生**：没有任何东西被改写。
+显式替换让这类错位**无从产生**：没有任何东西被改写，解以值的形式
+随用随取。（2026-09 之前本层以 `Infer::pm_defs` 全局事实表承载同一
+思想；本轮改为随编译器走的显式替换，见 §6 末行与
+`docs/l07-dpm-refactor-design.md`。）
 
 **纪律三：合一器只有一个。** `unify` 与模式特化共用同一套结构规则，
-差别只在一个集合——`pm_solvable`（当前子句的 bind 槽）：非空时
-bare rigid 是可解的（解进 `pm_defs`）；为空时就是常规转换。旧实现的
-`unify` / `unify_pm` 双轨（后者带"先比 datas 后比 typ"等环回避补丁）
-合并为一条规则。配套的边界纪律：
+差别只在 `unify` 的 `spec: Option<&mut SpecSolve>` 参数——`SpecSolve`
+携带当前子句的可解槽集 `solvable` 与已累积的解 `acc`：`spec` 非空
+（模式走查 / 覆盖探测）时 bare rigid 可解，解经 `Subst::extend` 记入
+`spec.acc`（方程两侧在 unify 入口置于 acc 之下——dpm-nbe
+"剩余方程置于解之下"的惰性等价物）；`spec = None`（分支体检查等常规
+转换）时不得解假设，否则 `Eq x y` 会被"证成" `Eq y y`。可解性不再
+是 Infer 上的全局通道（旧 `pm_solvable_take/set` 编排已随之删除）。
+配套的边界纪律：
 
-- **走查期间**（模式槽逐个绑定、方程逐槽解）可解集增长；
-- **分支体检查期间**可解集摘走（`pm_solvable_take` / `set`）——
-  体检查走常规转换，不得解假设，否则 `Eq x y` 会被"证成" `Eq y y`；
-- **臂边界**回滚事实表（本臂解出的 meta 不回滚：分支体 Tm 引用着
+- **走查期间**（模式槽逐个绑定、方程逐槽解）`spec.acc` 单调增长；
+  每个方程结束后编译器把 `acc` 取回为新 σ；
+- **分支体检查期间** spec 不穿参——体检查走常规转换，不得解假设；
+- **臂边界**回滚 σ 快照（本臂解出的 meta 不回滚：分支体 Tm 引用着
   它们，且解在 rename 时已把精化事实烘焙成无 def 形式）。
 
 ### 1.3 惰性精化的两个读点
 
-`force` 是精化传播的唯一入口，它新增两条归约路径：
+`force` 是精化传播的唯一入口，它有两条精化归约路径：
 
-1. **def 展开**：`force(Rigid(x))` 查 `pm_defs`，有定义就展开。所有
+1. **VSub 推开（frcs）**：`force(VSub(v, σ))` 把 σ 推进 v 的结构——
+   被解变量的读点取出解值并按应用序拼接 spine（λ ⇒ β），闭包 env /
+   spine / Sum 槽逐层包裹（槽位只包裹不物化，见 design doc §4）。所有
    消费者（unify / quote / rename）都经过 force，精化对类型检查自动
-   生效——`Cxt::update_cxt` 的整套刷新 machinery 因此删除；
+   生效；
 2. **Match 重选**：`force(Val::Match)` 重新 force scrutinee，一旦它
-   （经 defs / meta 解）变成构造子值就重试选分支。没有这一步，精化
+   （经 σ 推开 / meta 解）变成构造子值就重试选分支。没有这一步，精化
    无法传播进"卡住 match 内部"——`Eq (add a zero) a` 里 `add a zero`
    这个 stuck match 要等 `a := zero` 之后才可能归约。
 
@@ -162,6 +173,7 @@ Val::Flex(MetaVar, Spine) | Val::Rigid(Lvl, Spine) | Val::Decl(SmolStr, Spine)
   | Val::Sum(名, 参数(名, 实参值, 实参类型, icit), 构造子名表)
   | Val::SumCase { typ, case_name, datas }
   | Val::Match(scrutinee, 捕获env, [(PatternDetail, 分支体Tm)])
+  | Val::VSub(val, Rc<Subst>)   -- 显式替换下的值：force 读点把 σ 推进
 ```
 
 ### 3.1 为什么 `SumCase` 要携带实例化的 `typ`
@@ -173,7 +185,7 @@ Val::Flex(MetaVar, Spine) | Val::Rigid(Lvl, Spine) | Val::Decl(SmolStr, Spine)
   datas 的函数，索引等式在外层 Sum-Sum 的参数 zip 里建立，比 typ 只会
   陷入"索引槽 ↔ 构造子值"的互相引用环；
 - 运行时投影 `t.len` 直接查 `typ` 的参数表；
-- 头部精化写入事实表的构造子值天然带着正确的类型。
+- 头部精化写入 σ 的构造子值天然带着正确的类型。
 
 ### 3.2 全局名字与递归
 
@@ -226,12 +238,19 @@ Val::Flex(MetaVar, Spine) | Val::Rigid(Lvl, Spine) | Val::Decl(SmolStr, Spine)
    槽），其余绑定器逐个绑成 fresh rigid，按 icit 对齐用户子模式
    （`[p]` 隐式子模式也支持；隐式绑定器可缺省 = 自动通配）；
 3. **特化方程**：头部 Sum 参数与构造子返回 Sum 参数逐槽 `unify`
-   （头部在前——双侧都是可解变量时解"头部变量 := 构造子侧值"）。
+   （头部在前——双侧都是可解变量时解"头部变量 := 构造子侧值"；
+   方程两侧由 unify 入口置于当前 acc 之下解释）。
    失败 = 分支不可达（absurd），臂报错且不计入覆盖；
 4. **头部精化（无条件）**：被匹配变量若是本子句未精化的 bare rigid，
-   把构造子值（typ = 头部 Sum，datas = 模式变量）写入 `pm_defs`；
-   环守卫（`pm_solve` 的 occurs 检查）失败时跳过不阻断；
-5. **分支体检查**：期望类型重锚（§1.4）后在臂上下文里 `check`。
+   把构造子值（typ = 头部 Sum，datas = 模式变量）经 `wrap_sub` 包裹后
+   `Subst::extend` 写入 σ（嵌套方程的解经组合链对其可见）；
+   环守卫（`val_mentions_lvl` 浅 occurs，只扫解值自身结构）失败时跳过
+   不阻断；
+4.5. **分支体检查前**：臂上下文 `subst_cxt`（env 槽与 src_names 类型
+   包 VSub；lvl/locals/pruning 不动——槽位布局 = 运行时布局，永不漂移，
+   dpm-nbe `subst sub ctx` 的同款）；
+5. **分支体检查**：期望类型 wrap + 重锚（§1.4）后在臂上下文里 `check`
+   （spec 不穿参——常规转换不得解假设）。
 
 覆盖检查：**同一套方程**在快照回滚下对头部 Sum 的每个构造子跑一遍
 （探测不产生真槽，绑定器用 scratch 层级；meta 与精化状态都回滚），
@@ -245,8 +264,10 @@ Val::Flex(MetaVar, Spine) | Val::Rigid(Lvl, Spine) | Val::Decl(SmolStr, Spine)
 solve / intersect）。在此之上：
 
 - `Val::Decl` 作为中性头参与（同名比 spine，不同名失败）；
-- **可解 rigid**：`pm_solvable` 非空时，bare rigid 与任意非 Flex 值合一
-  ⇒ `pm_solve` 记入事实表（Flex 除外——交给 meta 求解规则）；
+- **可解 rigid**：`spec: Option<&mut SpecSolve>` 非空时，bare rigid 与
+  任意非 Flex 值合一 ⇒ `Subst::extend` 记入 `spec.acc`（Flex 除外——
+  交给 meta 求解规则）；方程两侧在 unify 入口置于 acc 之下——先解出
+  的方程对后到的子方程自动可见（dpm-nbe "剩余方程置于解之下"）；
 - `Sum` 同名即逐参数（含索引）合一；`SumCase` 同构造子只逐字段比
   （§3.1）；`Val::Match` 的规则见 §3.3；
 - flex-flex 尝试两个方向（先短 spine 方向、失败回滚再反向）；
@@ -270,6 +291,7 @@ solve / intersect）。在此之上：
 | match 臂分隔符是单个 `EndLine`——臂间**注释行**经预处理剥成空行后变成残余 token，整个 def 解析失败 | 分隔符放宽为 `EndLine+`（臂间注释行/空行合法；行尾注释本就安全） |
 | **黑盒三轮（2026-09）**：多隐式参数 enum 的无标注域洞在第 2+ 个参数处成为带 pruning 的部分应用 meta（`?m A`），构造子上显式供给枚举隐式实参（`P1[Nat][Bool]`）需解 `?m A := U`，invert 无法倒序 Decl 头 spine → 误报 can't unify | enum 声明处把无标注隐式参数的域**钉为 U**（方括号参数在语言定义上就是类型参数，任意类型的索引留给圆括号；显式标注 `[A : Nat]` 与显式索引不动）。参考版 + 孪生版同步；def 的隐式参数不限于类型，不受此修复影响（域洞保留，显式供参本就可用） |
 | **连贯性评审（2026-09）**：三处 L08 侧修复的 L07 同码位点回合——①投影限定构造子快捷路径尊重局部遮蔽（L08 b66f5e4，遮蔽时走投影而非静默解析全局构造子）；②enum case 分隔放宽为 `EndLine+`（case 间注释行/空行合法，同 match 臂）；③unify 的 Π 臂 quote 改用当前层级 `l`（η descent 后 `l == cxt.lvl` 不变式已破，L08 §5 同款） | ①参考版 `elaboration.rs` `Raw::Obj` 臂 + 孪生同位（消融口径同步）；②`parser/mod.rs` `p_enum`；③参考版 `unification.rs`（孪版 Pi 臂不 quote 域值，无此路径）。回归：`l07_blackbox_v3` §H |
+| **显式替换重构（2026-09，dpm-nbe 对齐）**：`pm_defs` 事实表 + `pm_solvable` 全局旁路作为精化载体，`pm_def` 读点 O(n) 反序扫、回滚靠长度截断、可解性与合一器经 Infer 全局状态耦合 | `Subst`（持久化单链，extend O(1)）+ `Val::VSub` 包裹 + `force` 的 frcs 臂；可解性经 `SpecSolve` 穿参（方程两侧在入口置于 acc 之下）；臂边界回滚 = Rc 指针赋值。机制、槽位纪律（spine 只包裹不物化）与多轮评审记录见 `docs/l07-dpm-refactor-design.md`。本表前各行所述的"事实表"载体自本轮起改为显式替换，行为语义不变（全套测试逐字节保持） |
 
 ## 7. 已知限制（诚实清单）
 
@@ -278,8 +300,10 @@ solve / intersect）。在此之上：
    越界失败而报 can't unify（Agda 对此做 generalize / block）。教学取舍，
    与旧版同级。
 2. **force 无记忆**：`force(Val::Match)` 的重选与 def 展开不做缓存，
-   同一值被反复 force 会重复归约（正确性无虞，纯性能项；fuel 充值由
-   各外层入口负责）。
+   同一值被反复 force 会重复归约；显式替换版下 σ 的推开（frcs）同样
+   无展开缓存，fuel 耗尽时 `force` 原样返回未推开的 VSub（此时 quote
+   会打印 σ 未推开形态的值）——正确性无虞（fuel 是防环底线），纯
+   性能/显示项；fuel 充值由各外层入口负责。
 3. **没有 K 公理层面的安全保护**：精化一个出现在其它假设里的变量在
    完整依赖理论里需要 `--without-K` 级论证，本层与 L07a 相同，是教学取舍。
 4. **probe 与臂内方程理论上可能不同步**：两者跑同一套代码，但探测用
@@ -293,7 +317,7 @@ solve / intersect）。在此之上：
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（39 个测试，64 MB 栈线程）：
+`cargo test --lib L07_sum_type`（44 个测试，64 MB 栈线程）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心（cong / symm / trans / rfl）/ Church 编码与字符串；
@@ -307,7 +331,12 @@ solve / intersect）。在此之上：
   的合一 / 应用（splice）、分支体里的洞、嵌套模式、递归定义、
   嵌套解构引用外层绑定器；
 - L06 演进同步（2026-09，见 §10）：字符串 builtin 全家 / 可变全局族 /
-  缺名卡住与宽松臂把关 / string_to_global_type / 文件 IO / DEMO 全串。
+  缺名卡住与宽松臂把关 / string_to_global_type / 文件 IO / DEMO 全串；
+- 显式替换重构（2026-09）机制层单测：Subst 链语义（取最新 / compose
+  覆盖 / Rc 共享）、lookup 条件包裹、force_arg 多层解包、struct_eq 的
+  VSub 分支；`test_fn_typed_index_slot_applied_after_refine` 钉死
+  frcs 对"已解 rigid + 非空 spine"的解析应用行为（旧版卡住，孪生版
+  移植必须复刻）。
 
 黑盒与双 oracle：`cargo test --test l07_blackbox`（49 个：48 可跑 +
 1 个 `--ignored` 深度探针，参考版唯一入口 `run`）；`cargo test --test
@@ -316,15 +345,14 @@ builtin 全量扫描含文件 IO panic 契约 / enum 冷僻特性（重名、显
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（46 个：45 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
+l07_blackbox_v3`（86 个：85 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
 遮蔽臂不查体）/ unification 边界（rigid 头不同、spine 长度不齐、自引用
 占位 Decl、flex-flex、卡住投影不证等）/ 性能悬崖表征（深嵌套模式、
 多 pending 卡住 match，带超时防护）/ 解析残缺（截断不 panic、match
 位置精确刻画、CRLF、非 ASCII）；§6 三轮修复的回归在此）；`cargo test --test
-l07_fast_parity`（57 个：本文件 18 个 #[test] + `#[path]` 引入库内的
-cfg(test) 测试 39 个，run vs run_fast 逐字节互检，见 §10）。
+l07_fast_parity`（run vs run_fast 逐字节互检，见 §10）。
 
 ## 9. 参考资料
 
@@ -333,15 +361,28 @@ cfg(test) 测试 39 个，run vs run_fast 逐字节互检，见 §10）。
   by unification：本层 §1.1 的理论来源）
 - [elaboration-zoo](https://github.com/AndrasKovacs/elaboration-zoo) 07
   （pruning / unification 骨架）
+- [KonjacSource/dpm-nbe](https://github.com/KonjacSource/dpm-nbe)（explicit
+  substitutions + forcing：2026-09 重构的机制蓝本，对照见
+  `docs/l07-dpm-refactor-design.md`）
 - 本仓库 `src/L13_namespace`：生产版（其 GADT 精化仍有弱点的分析见
-  `docs/pattern-match-refinement-analysis.md`；本层的事实表方案是另一条
-  路线，供其参考）
+  `docs/pattern-match-refinement-analysis.md`；本层的显式替换方案
+  （dpm-nbe 对齐）是另一条路线，供其参考）
 
 ## 10. 性能孪生（`bump_spine_iter`，2026-09 与 L06 同步）
 
 L06 的冠军配方（bump arena + 打包值 tag 编码 + 迭代内核 + 记忆化 + 稳态
 复用 + prim 元数预检/单次收集/手工拼接）的 L07 移植，另加 sum-type 层的
-机制落地：
+机制落地。
+
+> **分叉说明（2026-09）**：参考版已改为显式替换精化（`Subst`/`VSub`/
+> `frcs` + `SpecSolve` 穿参，见 §6 末行）；本节描述的孪生版仍保留
+> `pm_defs` 事实表机制，行为 parity 由 `l07_fast_parity` 逐字节保证。
+> 机制对齐待移植——注意 design doc §4 的槽位纪律（spine 只包裹不
+> 物化）与 `frcs` 对"已解 rigid + 非空 spine"的解析应用选择
+> （tests.rs 的 `test_fn_typed_index_slot_applied_after_refine` 会强制
+> 孪生复刻）。
+
+机制落地清单（孪生侧现状）：
 
 - **值编码**：tag 7 XCell 扩为 `Lit / Decl / Prim / Obj / Sum / SumCase /
   Match`；Decl/Prim/Obj 头的链经 spine 栈的**链头种类标志** O(1) 判定

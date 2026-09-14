@@ -152,7 +152,9 @@ impl Compiler {
             }
             // 臂边界：回滚本臂的精化替换（O(1) 指针赋值）。本臂解出的
             // meta 不回滚（分支体 Tm 引用着它们，且解在 rename 时已把精化
-            // "烘焙"为无 def 形式）。
+            // "烘焙"为无 def 形式）。solvable 不回滚：各臂的槽按 cxt.lvl
+            // 确定性重绑，上一臂的陈旧条目要么与本臂同层槽重合、要么永不
+            // 以 bare rigid 进方程（其读点已解），与旧 pm_restore 截断等价。
             self.sub = sub_snap;
         }
         if self.errors.is_empty() {
@@ -172,8 +174,8 @@ impl Compiler {
         cxt: &Cxt,
         head_sum: &Val,
         ctor: &Span<String>,
-        sub0: &Rc<Subst>,
-        solvable0: &[Lvl],
+        init_sub: &Rc<Subst>,
+        base_solvable: &[Lvl],
     ) -> bool {
         let (sum_name, impl_vals) = match head_sum {
             Val::Sum(name, params, _) => (
@@ -192,13 +194,13 @@ impl Compiler {
         };
         let snap = infer.meta_snapshot();
         let decl = cxt.decl().clone();
-        let mut solvable = solvable0.to_vec();
-        let mut sigma = sub0.clone();
+        let mut solvable = base_solvable.to_vec();
+        let sub = init_sub.clone();
         let mut ty = entry.ty.clone();
         let mut impl_idx = 0;
         let mut scratch = 0u32;
         let ok = loop {
-            match infer.force(&decl, wrap_sub(&sigma, ty.clone())) {
+            match infer.force(&decl, wrap_sub(&sub, ty.clone())) {
                 Val::Pi(_, _, _, closure) => {
                     let u = if impl_idx < impl_vals.len() {
                         let v = impl_vals[impl_idx].clone();
@@ -213,14 +215,14 @@ impl Compiler {
                     ty = infer.closure_apply(&decl, &closure, u);
                 }
                 ret => {
-                    let ret_sum = match infer.force(&decl, wrap_sub(&sigma, ret)) {
+                    let ret_sum = match infer.force(&decl, wrap_sub(&sub, ret)) {
                         s @ Val::Sum(..) => s,
                         _ => break false,
                     };
                     break {
                         let mut spec = SpecSolve {
                             solvable: &solvable,
-                            acc: sigma.clone(),
+                            acc: sub.clone(),
                         };
                         Self::unify_indices(infer, cxt, &mut spec, head_sum, &ret_sum, &ctor.data)
                             .is_ok()

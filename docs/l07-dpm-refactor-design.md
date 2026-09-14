@@ -158,7 +158,30 @@ env 槽已带 VSub；方程两侧在 unify_spec 入口被 force 推开——已�
    与臂内方程判定主体）照旧——本次只动精化的**载体**，不动这些
    语义取舍。
 
-## 8. 预期收益
+## 9. 实现口径注记（首轮评审后补记，移植 L08–L13 前必读）
+
+1. **特化合一的形状**：§5 的 `UnifyRes { Succ, Absurd, Stuck }` /
+   `unify_spec` 独立入口是设计初稿；**实现**是 `unify(…,
+   Option<&mut SpecSolve>)` 穿参 + `spec.acc` 就地累积（无独立返回
+   类型）。语义等价、且不必触碰 elaboration-zoo meta 求解器的每个递归
+   臂——后续层移植按**实现**形状走，不要按本稿 §5 的形状。
+2. **`(LiteralIntro, LiteralIntro)` 臂不存在**：参考版 unify 无此臂，
+   两字面量值合一走 `_ => Err`（孪生版头注释有同款记录）。§5 的
+   "字面量同值 => Succ(空)"按实现删除。
+3. **命名**：替换类型实名 `Subst`（`Sub` 已被 `std::ops::Sub` 占用）。
+4. **σ 表示定稿（性能评审后）**：持久化单链（链头 = 最新），extend
+   O(1) cons、lookup 沿链首个命中 + **条件包裹**（解值浅结构——含闭包
+   env 槽——不引用任何已解层级时原样返回，零分配零 fuel；引用才包
+   `VSub(·, σ)`）。初版 FxHashMap 写时整表重建 + 逐条深拷贝包裹是
+   O(n³/6) 分配，深嵌套模式 2.5×@depth40 回归，已废弃。孪生移植直接
+   采用链表 + 条件包裹终态。
+5. **frcs 对"已解 rigid + 非空 spine"做解析应用**（v_app 带
+   v_applicable 守卫）——旧 pm_defs 版在此卡住。这是相对旧版的**有意
+   行为差异**（更完备，对齐 dpm-nbe napp），`tests.rs` 的
+   `test_fn_typed_index_slot_applied_after_refine` 钉死，各层移植必须
+   复刻。
+
+## 10. 预期收益
 
 1. force 热路径的 rigid 解查找 O(n) → O(1)（HashMap）；
 2. 解是合一器的**返回值**，可解性不再经 Infer 全局可变通道——
