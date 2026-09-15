@@ -62,6 +62,9 @@ impl Val {
             ),
             Val::SumCase { .. } => None,
             Val::Match(..) => None,
+            // 精化 σ 包裹：调用点（trait_wrap / ImplDecl）已 force 推开，
+            // 此臂不可达；保守返回 None（不得出类型）而非误判形态。
+            Val::VSub(..) => None,
         }
     }
 }

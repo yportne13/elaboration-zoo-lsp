@@ -12,7 +12,6 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: BiMap<String, Lvl, Rc<VTy>>,
-    update_from: Option<usize>,
 }
 
 impl Cxt {
@@ -82,7 +81,6 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
-            update_from: None,
         }
     }
 
@@ -107,7 +105,6 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
-            update_from: self.update_from,
         }
     }
 
@@ -121,7 +118,6 @@ impl Cxt {
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
             src_names,
-            update_from: self.update_from,
         }
     }
 
@@ -133,7 +129,6 @@ impl Cxt {
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
-            update_from: self.update_from,
         }
     }
 
@@ -147,81 +142,32 @@ impl Cxt {
             locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
             pruning: self.pruning.prepend(None),
             src_names,
-            update_from: self.update_from,
         }
     }
 
-    /// freshVal 函数实现
-    /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
-    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: &Rc<Val>) -> Rc<Val> {
-        // quote def from (Lvl (length from))
-        let quoted = infer.quote(Lvl(from.iter().count() as u32), val);
-
-        // eval def to
-        infer.eval(to, &quoted)
-    }
-
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>, update_prune: bool) -> Cxt {
-        match v.as_ref() {
-            Val::Flex(..) => self.clone(),
-            _ => {
-                let update_from = if let Some(u) = self.update_from {
-                    if u < x.0 as usize {
-                        u
-                    } else {
-                        x.0 as usize
-                    }
-                } else {
-                    x.0 as usize
-                };
-                let x_prime = lvl2ix(self.lvl, x).0 as usize;
-                /*println!(
-                    " update {}: {} with {}",
-                    x.0,
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, self.env.iter().nth(x_prime).unwrap().clone())),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
-                );*/
-                let env = self.env.change_n(x_prime, |_| v);
-                let mut new_src_names = self.src_names.clone();
-                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env, self.lvl.0 as usize - update_from);
-                //let locals = self.locals.clone().update_by_cxt(infer, self.lvl, &self.env);
-        
-                Cxt {
-                    env: env_t,
-                    lvl: self.lvl,
-                    locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-                    //locals: self.locals.clone().update_by_cxt(infer, self.lvl, &self.env),
-                    pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},
-                    src_names: new_src_names,
-                    update_from: Some(update_from),
-                }
-            }
+    /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
+    /// src_names 的类型包 `VSub`；lvl / locals / pruning 不动——**槽位布局
+    /// （= 运行时布局）不变**，被解变量仍在原槽位，读点经 force 推开看到解。
+    /// σ 为空时零开销直通。
+    ///
+    /// 替代旧的 `update_cxt`/`refresh`（改写 env 槽 + 全量重引用）：解不再
+    /// 改写既有值，只包在外面，消费点惰性展开——旧架构"已捕获旧上下文的值
+    /// 过期、槽位错位"的 bug 族按构造消除。
+    pub fn subst_cxt(&self, sub: &Rc<Subst>) -> Self {
+        if sub.is_empty() {
+            return self.clone();
         }
-    }
-
-    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, Rc<Val>>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
-        if env.is_empty() {
-            List::new()
-        } else {
-            let env_t = if walk == 0 {env.tail()} else {self.refresh(infer, &env.tail(), src_names, env2.clone(), walk - 1)};
-            let env_tt = env2.change_tail(env_t.clone());
-            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap());
-            /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
-            let b = pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()));
-            if a != b {
-                println!(
-                    "refresh {}: {} with {}",
-                    env.len(),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone())),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()))
-                );
-            }*/
-            
-            let ret = env_t.prepend(ret);
-            if let Some(x) = src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)) {
-                *x = self.fresh_val(infer, &self.env, &env_tt, x);
-            }
-            ret
+        let wrap = |v: &Rc<Val>| Rc::new(Val::VSub(v.clone(), sub.clone()));
+        let mut src_names = BiMap::new();
+        for (k, l, ty) in self.src_names.iter_all() {
+            src_names.insert(k.clone(), (*l, wrap(ty)));
+        }
+        Cxt {
+            env: self.env.map(wrap),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names,
         }
     }
 }

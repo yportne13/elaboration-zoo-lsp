@@ -37,3 +37,37 @@ O(值大小)，church 翻倍负载实测 O(n²)（逐 decl 探针：k=13 单 dec
 → ×2.0 恢复线性），对孪生倍率回落到 5.1×。L11（body 侧置空）/L13（整
 段注释）同款处置的补齐；孪生侧名字/声明表 COW 同轮落地，详见
 `docs/opt-name-table-cow-2026-09-12.md`。
+
+## 精化载体移植（L07 显式替换重构回合，2026-09）
+
+参考版 + 孪生版同批把模式精化从"上下文改写"改为"显式替换"（dpm-nbe
+对齐），与 L07/L08 重构后逐一对齐：
+
+- `unify_pm` 不再返回改写后的 `Cxt`，改为累积 `SpecSolve.acc`（持久化单链
+  `Subst`/`SubstV`）；可解臂 `x := v` 解入 acc（`occurs` 只扫解值结构），
+  入口 acc 非空时把方程两侧置于 σ 之下再解释；臂边界回滚 = Rc 指针赋值。
+- `Cxt::update_cxt` / `Cxt::refresh` / `update_from` 删除；调用侧改用
+  `subst_cxt`（env 槽 + src_names/`names.by_lvl` 类型包 `Val::VSub`/
+  `XCell::VSub`，槽位布局不动）。`force` 新增 VSub 臂 → `frcs`（对齐
+  dpm-nbe `frc`/`frcS`）：spine / Sum(SumCase) 槽只包裹不物化（保 invert
+  可逆），被解 rigid 读点按应用序解析应用（带 `v_applicable`/`vapp_ok`
+  守卫），卡住 match 的 scrutinee 单独推进后重选分支；`force_arg` 逐层解包
+  VSub 供 `invert`/`prune_vflex` 的参数视角。
+- **L10 定制**：(a) 可解集 = **任意裸 Rigid**（旧 `update_cxt` 语义，无 L07
+  的 bind-slot 白名单），故 `SpecSolve` 无 `solvable` 字段；(b) **occurs 守卫
+  不扫 Flex 的 spine**——L10 的元变量以全 scope 剪枝 spine 登记，spine 合法
+  含当前方程的 rigid，旧机制无 occurs，扫 spine 会把 GADT 嵌套 match 的合法
+  解误判成环（test5/test6/test_index/test0/test7 回归）；(c) `to_typ` 消费点
+  改走 `force_deep`（Sum/SumCase 槽位一并推开），否则 trait 接收者类型经
+  `val_to_typ` 掉参、实例匹配失配（`has no object`）；(d) 孪生 `subst_cxt`
+  必须同步包裹 `names.by_lvl` 影子索引（`Raw::Var` 快路径经它取类型），只包
+  `types` 链会丢外层精化。
+- **交互点**：`unify_pm` 只服务模式方程路径；trait 实例求解走常规 `unify`
+  （`solve_trait_ref`），不带 spec——实例求解过程中的合一**不会**获得特化解
+  能力（与旧 `update_cxt` 只从 `unify_pm` 调用的边界一致）。
+- 孪生 `bump_spine_iter` 无燃料池（模块注释：force 无燃料），`frcs` 的
+  lookup 命中不做有界降级；`update_cxt`/`refresh`/`refresh_local`/
+  `mention_cache`/`val_mentions_lvl_shallow` 整体删除。
+- 验收：`--lib` 705 全绿；`l10_fast_parity` 32 全绿；移植前后基线快照
+  （l10_fast_parity 全部源码字面量 + 生成器负载 + `examples/*.typort`，
+  参考版与孪生版各 45 段）**逐字节一致**（0 diff）。
