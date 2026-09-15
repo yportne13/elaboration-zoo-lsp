@@ -84,8 +84,6 @@ export interface ServerActionHost {
 	showLog(): void;
 	/** Whether this host can spawn the external CLI server (desktop). */
 	readonly canUseCli: boolean;
-	/** Human-readable liveness of the running server, when known. */
-	readonly liveness?: () => string;
 }
 
 type ActionItem = QuickPickItem & { action?: string; backend?: Backend; engine?: Engine };
@@ -111,13 +109,6 @@ export function serverActionItems(host: ServerActionHost): ActionItem[] {
 			engine: 'twin',
 		},
 	);
-
-	if (host.liveness) {
-		items.push(
-			{ label: 'Status', kind: QuickPickItemKind.Separator },
-			{ label: `$(pulse) Language server: ${host.liveness()}` },
-		);
-	}
 
 	if (host.canUseCli) {
 		items.push(

@@ -1424,6 +1424,36 @@ publishDiagnostics 帧同样远大于 16 KiB）。故在本机环境下 16384 �
 `change: …/adder_proof.typort` 则是"分析途中死"（共享代码路径）；若根本没有该行
 则命令帧未到达（传输层）。
 
+---
+
+## 2026-09-15 收尾（真因确认：宿主 stdio 管道 16384 缓冲；拆除排查脚手架）
+
+**真因**：`@vscode/wasm-wasi-core` 宿主的 stdio 管道是定长内存流
+`Stream.BufferSize = 16384`。写入**超过该值**的帧会走背压分支
+（`targetFillLevel = max(0, BufferSize - len) = 0`，即必须等缓冲完全排空才入队）。
+adder_proof 的 didOpen 帧约 24 KB，是演示工作区里唯一越过该阈值的帧——与"默认
+文件正常、一点 adder_proof 就死"完全吻合；而它位于**宿主/传输层**，所以两个引擎
+表现一致（这解释了"ref 和 twin 都挂"）。把 `Stream.BufferSize` 由 16384 抬到
+1 MiB 后用户确认恢复正常。
+
+**保留**：
+- 缓冲修复：`run.sh` 在宿主解包后 patch（覆盖 `_Stream.BufferSize = 16384;` 与
+  `__publicField(_Stream, "BufferSize", 16384);` 两种写法，都找不到则告警），
+  故每次部署都会重新打上。
+- 状态栏 ref/twin 切换（`serverActions.ts` 引擎组 + `applyEngine`，选中即写设置
+  并就地重启）与状态栏 `TyPort Ref|Twin` 标记。
+- 版本号 1.0.1 与 `/index.html`、`/TyportHDL/*`、`/myExt/*` 的
+  `Cache-Control: no-cache`（破 web 交付链缓存）。
+- web 默认引擎 reference（孪生在 web 上内存贴 2 GiB 硬顶，仍是 opt-in）。
+
+**拆除**（排查期临时加、现已无用）：服务端 `typort-hdl/ping` 处理、客户端探针 /
+自动重启 / 模态取证对话框 / 日志尾巴环形缓冲、菜单里的 Status 行。
+
+**教训**：本机测试用的宿主是 **1.0.2**，线上是 **0.13.3**——同源同形但版本不同，
+"在 1.0.2 上 252 KB 也没问题"的对照实验不能推广到 0.13.3。排查传输层问题时应当
+先对齐宿主版本再下结论；同时"用户侧能稳定复现而我侧不能"应尽早转向**在用户环境
+里加观测**（这次的对话框/日志镜像），而不是继续在本机加探针。
+
 
 
 

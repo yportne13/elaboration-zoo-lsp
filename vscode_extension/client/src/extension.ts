@@ -3,7 +3,7 @@
  * Licensed under the MIT License. See License.txt in the project root for license information.
  * ------------------------------------------------------------------------------------------ */
 
-import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel, Position, StatusBarItem, StatusBarAlignment, Disposable } from 'vscode';
+import { ExtensionContext, Uri, window, workspace, commands, LogOutputChannel, Position, StatusBarItem, StatusBarAlignment } from 'vscode';
 import { LanguageClient, LanguageClientOptions, ServerOptions, RequestType, State } from 'vscode-languageclient';
 import { Wasm } from '@vscode/wasm-wasi/v1';
 import type { ProcessOptions } from '@vscode/wasm-wasi/v1';
@@ -77,7 +77,6 @@ async function startLanguageServer(
 ): Promise<LanguageClient> {
 	if (!channel) {
 		channel = window.createOutputChannel('TyportHDL Language Server', { log: true });
-		trackServerActivity(channel);
 	}
 	const serverOptions: ServerOptions = async () => {
 		// Re-read on every (re)start so a settings change to the `reference`
@@ -140,169 +139,6 @@ async function restartLanguageServer(context: ExtensionContext, wasm: Wasm): Pro
 		updateStatusBar(e.newState);
 	});
 	updateStatusBar(State.Running);
-	watchServerLiveness(context, wasm);
-}
-
-// ── Liveness watchdog ───────────────────────────────────────────────────────
-
-const PingRequest = new RequestType<null, boolean, void>('typort-hdl/ping');
-// ~2 minutes of unanswered probes before reporting: long enough that a busy
-// server (a slow prelude prime queues the probe; it is answered as soon as the
-// main loop returns) is never mistaken for a dead one.
-const WATCHDOG_INTERVAL_MS = 20000;
-const WATCHDOG_TIMEOUT_MS = 10000;
-const WATCHDOG_MISSES = 6;
-
-let watchdog: Disposable | undefined;
-
-/** Auto-restarts performed after a detected hang; capped to avoid a storm. */
-let autoRestarts = 0;
-const MAX_AUTO_RESTARTS = 3;
-
-/** Timestamp of the last sign of life from the server (probe or log line). */
-let lastServerActivity = Date.now();
-
-/** Last answered liveness probe, and how many since have gone unanswered. */
-let lastProbeOkAt = 0;
-let probeMisses = 0;
-let lastProbeError = '';
-
-/**
- * Human-readable liveness, shown in the status-bar action picker so the state
- * of the server is inspectable without reading the log.
- */
-function describeServerLiveness(): string {
-	if (lastProbeOkAt === 0) {
-		return probeMisses === 0 ? 'starting (no probe answered yet)' : `not answering yet (${probeMisses} failed probes)`;
-	}
-	const age = Math.round((Date.now() - lastProbeOkAt) / 1000);
-	if (probeMisses === 0) {
-		return `responding (last probe ${age}s ago)`;
-	}
-	return `NOT answering (${probeMisses} probes missed, last response ${age}s ago` +
-		(lastProbeError ? `; ${lastProbeError}` : '') + ')';
-}
-
-/**
- * Count every message the server writes to the output channel as a sign of
- * life, so a server that is busy (a long prelude prime emits no log line for a
- * while but is answering probes as soon as it returns to its main loop) is
- * never reported as dead.  The last lines are kept so the watchdog can hand
- * them over when the server goes quiet.
- */
-const SERVER_LOG_TAIL = 40;
-const serverLogTail: string[] = [];
-
-function trackServerActivity(channel: LogOutputChannel): void {
-	for (const method of ['append', 'appendLine'] as const) {
-		const original = channel[method].bind(channel);
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		(channel as any)[method] = (...args: unknown[]) => {
-			lastServerActivity = Date.now();
-			const text = args.map((a) => String(a)).join(' ').trim();
-			if (text) {
-				for (const line of text.split('\n')) {
-					serverLogTail.push(line.trim());
-				}
-				if (serverLogTail.length > SERVER_LOG_TAIL) {
-					serverLogTail.splice(0, serverLogTail.length - SERVER_LOG_TAIL);
-				}
-			}
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			return (original as any)(...args);
-		};
-	}
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-	return new Promise<T>((resolve, reject) => {
-		const timer = setTimeout(() => reject(new Error(`no response within ${ms}ms`)), ms);
-		p.then(
-			(value) => { clearTimeout(timer); resolve(value); },
-			(error) => { clearTimeout(timer); reject(error); },
-		);
-	});
-}
-
-/**
- * Trailing-edge liveness probe for the wasm backend.
- *
- * A guest that dies — a wasm trap such as an allocation failure against the
- * module's linear-memory ceiling — produces no close and no error event:
- * `process.run()` never settles, so `@vscode/wasm-wasi-lsp` never fires end or
- * error, the language client keeps its connection open, and the status bar
- * goes on claiming the server is running while nothing is served.  Probing the
- * main loop turns that silent death into a message in the output channel plus
- * a restart prompt.
- */
-function watchServerLiveness(context: ExtensionContext, wasm: Wasm): void {
-	watchdog?.dispose();
-	const watched = client;
-	if (!watched) {
-		return;
-	}
-	lastProbeOkAt = 0;
-	probeMisses = 0;
-	lastProbeError = '';
-	let misses = 0;
-	let reported = false;
-	watchdog = new Disposable(() => clearInterval(timer));
-	const timer = setInterval(async () => {
-		if (reported || client !== watched) {
-			return;
-		}
-		try {
-			await withTimeout(watched.sendRequest(PingRequest, null), WATCHDOG_TIMEOUT_MS);
-			misses = 0;
-			lastServerActivity = Date.now();
-			lastProbeOkAt = Date.now();
-		} catch (error) {
-			misses += 1;
-			probeMisses = misses;
-			lastProbeError = String(error).slice(0, 160);
-			// Any server log line resets the expectation: only a server that is
-			// silent *and* not answering is treated as gone.
-			if (misses < WATCHDOG_MISSES || Date.now() - lastServerActivity < WATCHDOG_MISSES * WATCHDOG_INTERVAL_MS) {
-				return;
-			}
-			reported = true;
-			updateStatusBar(State.Stopped);
-			const detail = [
-				`engine: ${activeEngine ?? 'unknown'}   probe misses: ${misses}   silence: ~${Math.round(misses * WATCHDOG_INTERVAL_MS / 1000)}s`,
-				`last probe error: ${lastProbeError || '(none)'}`,
-				'',
-				`last ${serverLogTail.length} server log lines (most recent last):`,
-				...serverLogTail,
-			].join('\n');
-			channel.error(
-				`TyportHDL: the language server stopped answering ${misses} liveness probes ` +
-				`(~${Math.round(misses * WATCHDOG_INTERVAL_MS / 1000)}s of silence). It either died or is stuck; ` +
-				`its last log lines are shown in the dialog and above. Restart to recover.`,
-			);
-			channel.appendLine(detail);
-			// Recover first so the editor is usable while the user reads the
-			// dialog; the captured lines above are from before the restart.
-			let restartNote = 'Use "Restart Language Server" to recover.';
-			if (autoRestarts < MAX_AUTO_RESTARTS) {
-				autoRestarts += 1;
-				restartNote = `Restarted automatically (${autoRestarts}/${MAX_AUTO_RESTARTS}).`;
-				await restartLanguageServer(context, wasm);
-			}
-			const pick = await window.showErrorMessage(
-				`TyportHDL: the language server stopped responding (${restartNote}) ` +
-				`The lines below are its last log entries — please keep them.`,
-				{ modal: true, detail },
-				'Restart Language Server',
-				'Show Log',
-			);
-			if (pick === 'Restart Language Server') {
-				await restartLanguageServer(context, wasm);
-			} else if (pick === 'Show Log') {
-				channel.show();
-			}
-		}
-	}, WATCHDOG_INTERVAL_MS);
-	context.subscriptions.push(watchdog);
 }
 
 // ── Activation ──────────────────────────────────────────────────────────────
@@ -333,7 +169,6 @@ export async function activate(context: ExtensionContext, options: ActivateOptio
 
 	// After client is started, update to running state
 	updateStatusBar(State.Running);
-	watchServerLiveness(context, wasm);
 
 	// ── Builtin content provider ──────────────────────────────────────────
 
@@ -399,7 +234,6 @@ export async function activate(context: ExtensionContext, options: ActivateOptio
 		return showServerActions({
 			backend: 'wasm',
 			engine: activeEngine ?? readEngine('wasm'),
-			liveness: describeServerLiveness,
 			canUseCli: options.canUseCli ?? false,
 			restart: () => restartLanguageServer(context, wasm),
 			showLog: () => channel.show(),
