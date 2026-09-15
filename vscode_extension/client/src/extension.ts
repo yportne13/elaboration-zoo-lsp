@@ -183,14 +183,27 @@ function describeServerLiveness(): string {
  * Count every message the server writes to the output channel as a sign of
  * life, so a server that is busy (a long prelude prime emits no log line for a
  * while but is answering probes as soon as it returns to its main loop) is
- * never reported as dead.
+ * never reported as dead.  The last lines are kept so the watchdog can hand
+ * them over when the server goes quiet.
  */
+const SERVER_LOG_TAIL = 40;
+const serverLogTail: string[] = [];
+
 function trackServerActivity(channel: LogOutputChannel): void {
 	for (const method of ['append', 'appendLine'] as const) {
 		const original = channel[method].bind(channel);
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		(channel as any)[method] = (...args: unknown[]) => {
 			lastServerActivity = Date.now();
+			const text = args.map((a) => String(a)).join(' ').trim();
+			if (text) {
+				for (const line of text.split('\n')) {
+					serverLogTail.push(line.trim());
+				}
+				if (serverLogTail.length > SERVER_LOG_TAIL) {
+					serverLogTail.splice(0, serverLogTail.length - SERVER_LOG_TAIL);
+				}
+			}
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			return (original as any)(...args);
 		};
@@ -247,13 +260,22 @@ function watchServerLiveness(context: ExtensionContext, wasm: Wasm): void {
 			}
 			reported = true;
 			updateStatusBar(State.Stopped);
+			const detail = [
+				`engine: ${activeEngine ?? 'unknown'}   probe misses: ${misses}   silence: ~${Math.round(misses * WATCHDOG_INTERVAL_MS / 1000)}s`,
+				`last probe error: ${lastProbeError || '(none)'}`,
+				'',
+				`last ${serverLogTail.length} server log lines (most recent last):`,
+				...serverLogTail,
+			].join('\n');
 			channel.error(
-				`TyportHDL: the language server has not answered ${misses} liveness probes in a row ` +
-				`(${Math.round(misses * WATCHDOG_INTERVAL_MS / 1000)}s). A wasm guest that hits the module's ` +
-				`linear-memory ceiling dies without reporting an error, so restart the server to recover.`,
+				`TyportHDL: the language server stopped answering ${misses} liveness probes ` +
+				`(~${Math.round(misses * WATCHDOG_INTERVAL_MS / 1000)}s of silence). It either died or is stuck; ` +
+				`its last log lines are shown in the dialog and above. Restart to recover.`,
 			);
-			const pick = await window.showWarningMessage(
-				'TyportHDL: the language server stopped responding.',
+			channel.appendLine(detail);
+			const pick = await window.showErrorMessage(
+				'TyportHDL: the language server stopped responding. Its last log lines are below — please keep them.',
+				{ modal: true, detail },
 				'Restart Language Server',
 				'Show Log',
 			);
