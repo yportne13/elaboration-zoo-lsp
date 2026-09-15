@@ -955,6 +955,32 @@ fn vapp_ok(v: V) -> bool {
     }
 }
 
+// 精化传播的展开燃料（线程局部：每个测试/运行线程独立，与参考版
+// `Infer::unify_fuel` 的"每次运行新建"口径一致）。仅 frcs 的 lookup 命中
+// 与 Match 重选燃烧；外部入口（unify_catch / check_pm / check_pm_final /
+// nf / bench_nf）充值。
+const UNIFY_FUEL: u32 = 4096;
+thread_local! {
+    static PM_FUEL: std::cell::Cell<u32> = const { std::cell::Cell::new(UNIFY_FUEL) };
+}
+
+fn refuel() {
+    PM_FUEL.with(|c| c.set(UNIFY_FUEL));
+}
+
+#[inline]
+fn burn() -> bool {
+    PM_FUEL.with(|c| {
+        let f = c.get();
+        if f == 0 {
+            false
+        } else {
+            c.set(f - 1);
+            true
+        }
+    })
+}
+
 // force（迭代；L11 参考版只有 Flex + Obj 两臂）
 // --------------------------------------------------------------------------------
 
@@ -1145,7 +1171,13 @@ fn frcs<'a>(
                 let s2 = frcs(bump, spine, defs, metas, decl, mutable, sub, *scrutinee);
                 let e2 = frcs_env(bump, defs, sub, *env);
                 let s3 = force(bump, spine, defs, metas, decl, mutable, s2);
-                if v_tag(s3) == 7 && matches!(v_xcell_of(s3), XCell::SumCase { .. }) {
+                // Match 重选：推进后已是构造子值即重选分支（参考版
+                // `frcs` 的 Match 臂同款）；重选本身烧 1，耗尽则不重选、
+                // 按卡住 match 原样重建（有界降级）。
+                if v_tag(s3) == 7
+                    && matches!(v_xcell_of(s3), XCell::SumCase { .. })
+                    && burn()
+                {
                     if let Some((body, env3)) =
                         eval_aux(bump, spine, defs, metas, decl, mutable, s3, e2, cases)
                     {
@@ -1174,9 +1206,15 @@ fn frcs<'a>(
                 )
             }
         },
-        // 裸 rigid 的读点：lookup 命中即推进（解值可能再被 force 展开）
+        // 裸 rigid 的读点：lookup 命中（真正的精化传播）烧 1 fuel；fuel
+        // 耗尽按未解处理（返回裸 rigid）。未命中零成本直通。
         0 => match SubstV::lookup_hit(bump, spine, defs, sub, v_lvl_of(v0)) {
-            Some(hit) => force(bump, spine, defs, metas, decl, mutable, hit),
+            Some(hit) => {
+                if !burn() {
+                    return v0;
+                }
+                force(bump, spine, defs, metas, decl, mutable, hit)
+            }
             None => v0,
         },
         // spine 链分派：rigid 头 = 解析应用（对齐 dpm-nbe
@@ -1188,7 +1226,12 @@ fn frcs<'a>(
             if v_tag(hd) == 0 {
                 let x = v_lvl_of(hd);
                 let mut head = match SubstV::lookup_hit(bump, spine, defs, sub, x) {
-                    Some(hit) => force(bump, spine, defs, metas, decl, mutable, hit),
+                    Some(hit) => {
+                        if !burn() {
+                            return v0;
+                        }
+                        force(bump, spine, defs, metas, decl, mutable, hit)
+                    }
                     None => v_lvl(x),
                 };
                 // 解出值带实参但头不可应用（ill-typed 形态）时卡回原值
@@ -2759,7 +2802,9 @@ fn rigid_lvl(spine: &Spine, v: V) -> Option<u32> {
 /// SumCase/SumCase（typ+datas）→ Match/Match（scrutinee + 中性分支体重
 /// 求值）→ 失配。**位相等捷径对 tag 7 与 Obj 头链关闭**：参考版对字面量
 /// 无自反臂（同字面量也 Err）、卡住投影走 `_` → Err；捷径放行会误 Accept。
-/// 无燃料（参考版无 fuel）；无 pm 臂（L09 的模式特化在 elaboration 侧的
+/// 本孪生与参考版一致：frcs lookup 命中与 Match 重选各烧 1（thread_local
+/// `PM_FUEL` 4096，外部入口充值），耗尽时 lookup 命中降级为裸 rigid、
+/// Match 不重选；无 pm 臂（L09 的模式特化在 elaboration 侧的
 /// unify_pm/update_cxt 完成）。
 #[allow(clippy::too_many_arguments)]
 fn unify_iter<'a>(
@@ -4805,6 +4850,8 @@ impl Machine {
         t_prime: V,
     ) -> Result<(), Error> {
         let mut trait_err: Option<String> = None;
+        // 一次合一入口充值精化燃料池
+        refuel();
         let ok = self.unify(bump, cxt, cxt.lvl, t, t_prime, &mut trait_err);
         if ok {
             Ok(())
@@ -5405,6 +5452,8 @@ impl Machine {
         let t_span = t.to_span();
         let x = self.infer_expr(bump, cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
+        // 模式编译入口充值精化燃料池
+        refuel();
         let mut spec = SpecSolve {
             acc: Rc::new(SubstV::default()),
         };
@@ -5426,6 +5475,8 @@ impl Machine {
         let t_span = t.to_span();
         let x = self.infer_expr(bump, cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
+        // 模式编译入口充值精化燃料池
+        refuel();
         let mut spec = SpecSolve {
             acc: Rc::new(SubstV::default()),
         };
@@ -8264,6 +8315,8 @@ impl Tycker {
             cxt = nc;
             if let DeclOut::Println(t) = out {
                 // nf：eval + quote（层级 = env 槽数，参考版 `Infer::nf` 同款）
+                // 一次 nf 充值精化燃料池（参考版 `nf` 同款）
+                refuel();
                 let v = self.machine.eval(bump, &cxt, cxt.env, t);
                 let lvl = env_len(cxt.env);
                 let q = self.machine.quote_memo(bump, &cxt, lvl, v);
@@ -8315,6 +8368,8 @@ impl Tycker {
         let Some(v) = last else {
             return 0;
         };
+        // 一次 nf 充值精化燃料池（参考版 `bench_check_nf` 同款）
+        refuel();
         let q = if use_memo {
             self.machine.quote_memo(bump, &_cxt, 0, v)
         } else {
