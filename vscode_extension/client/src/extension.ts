@@ -155,6 +155,10 @@ const WATCHDOG_MISSES = 6;
 
 let watchdog: Disposable | undefined;
 
+/** Auto-restarts performed after a detected hang; capped to avoid a storm. */
+let autoRestarts = 0;
+const MAX_AUTO_RESTARTS = 3;
+
 /** Timestamp of the last sign of life from the server (probe or log line). */
 let lastServerActivity = Date.now();
 
@@ -237,6 +241,9 @@ function watchServerLiveness(context: ExtensionContext, wasm: Wasm): void {
 	if (!watched) {
 		return;
 	}
+	lastProbeOkAt = 0;
+	probeMisses = 0;
+	lastProbeError = '';
 	let misses = 0;
 	let reported = false;
 	watchdog = new Disposable(() => clearInterval(timer));
@@ -273,8 +280,17 @@ function watchServerLiveness(context: ExtensionContext, wasm: Wasm): void {
 				`its last log lines are shown in the dialog and above. Restart to recover.`,
 			);
 			channel.appendLine(detail);
+			// Recover first so the editor is usable while the user reads the
+			// dialog; the captured lines above are from before the restart.
+			let restartNote = 'Use "Restart Language Server" to recover.';
+			if (autoRestarts < MAX_AUTO_RESTARTS) {
+				autoRestarts += 1;
+				restartNote = `Restarted automatically (${autoRestarts}/${MAX_AUTO_RESTARTS}).`;
+				await restartLanguageServer(context, wasm);
+			}
 			const pick = await window.showErrorMessage(
-				'TyportHDL: the language server stopped responding. Its last log lines are below — please keep them.',
+				`TyportHDL: the language server stopped responding (${restartNote}) ` +
+				`The lines below are its last log entries — please keep them.`,
 				{ modal: true, detail },
 				'Restart Language Server',
 				'Show Log',

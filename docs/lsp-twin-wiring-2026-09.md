@@ -1397,6 +1397,33 @@ server: starting (no probe answered yet) | Restart Language Server | Show Log`�
 点 `Twin (performance)` 后状态栏就地变为 `TyPort Twin (engine: twin)`，无窗口
 重载。截图见 `target/tmp/picker-menu.png`（本地产物，未入库）。
 
+---
+
+## 2026-09-15 续五（"帧超过 16384"假设实测否定；看门狗加自动恢复 + 取证）
+
+**用户假设**：adder_proof（20,991 B）是工作区里唯一超过 16384 字节的文件，而
+16384 正是 wasm-wasi 宿主管道 `Stream.BufferSize`——怀疑大帧卡住管道。该假设很有
+吸引力：它天然解释"两个引擎都挂"（客户端侧写入卡住 → 连探针都发不出去 →
+看起来像服务端不应答）。
+
+**实测否定**：往演示工作区注入 `xxl.typort`（adder_proof ×12 ≈ 252 KB，即宿主
+缓冲的 15 倍）并在真实页面里打开：服务端日志出现
+`change: file:///workspace/xxl.typort` → `change 1.29`，诊断 242 errors + 68
+infos，LSP 全程 remaining running。方向也是双向成立（该文件的
+publishDiagnostics 帧同样远大于 16 KiB）。故在本机环境下 16384 不是触发点。
+（注意：这只否定"本机可复现"，用户侧仍需其现场数据。）
+
+**看门狗增强**（`extension.ts`）：
+- **自动恢复**：报警时先把取证信息落日志，然后**自动重启语言服务器**
+  （每次会话最多 3 次，避免风暴），再弹模态框展示重启前的日志尾巴——编辑器
+  立刻可用，用户读框的同时已经恢复。实测对话框文案含
+  `Restarted automatically (1/3)`，状态栏随即回到 `TyPort Ref` 对勾。
+- 重启时重置探针状态，菜单 `Status` 行随之刷新。
+
+**现场数据仍待用户提供**：对话框会自动给出最后 40 行服务端日志——若尾行是
+`change: …/adder_proof.typort` 则是"分析途中死"（共享代码路径）；若根本没有该行
+则命令帧未到达（传输层）。
+
 
 
 
