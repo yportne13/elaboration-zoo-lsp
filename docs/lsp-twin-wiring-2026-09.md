@@ -1317,6 +1317,41 @@ error）。这正是用户描述的"卡死"。
 序列**（其原始操作在干净 profile 下未能复现）。真机确认方法：卡死时看 DevTools
 console 是否出现 `RuntimeError: unreachable`，以及状态栏图标是否仍是对勾。
 
+---
+
+## 2026-09-15 续二（web 卡死：把"静默"变成"可诊断"——`typort-hdl/ping` 看门狗）
+
+**背景**：上一节上线后用户复测仍报"点开 adder_proof 没有任何响应，output 日志
+也完全不动"。把输出通道镜像进页面 console 后，用同一流程（先等
+typeclass_complex 稳定、再点 adder_proof）在本地复现：**参考版下日志完整正常**
+——`change: file:///workspace/adder_proof.typort` → `change 0.53`，诊断 32→35
+（+3 即 adder_proof 自身），LSP 启动到 main loop 约 10 秒。故参考版干净 profile
+下复现不出该症状。"日志完全不动"的两种可能：guest 已死（trap 后 `workerDone`
+不发、`process.run()` 永不 settle、既不 fire end 也不 fire error，故一行都不会
+有），或仍在跑浏览器缓存的旧（孪生）bundle——判据就是 output 首行的
+`typort: lsp engine = Reference|Twin`。
+
+**改动**：加心跳看门狗，把这一类静默死亡变成可见且可恢复：
+
+- 服务端：新增自定义请求 `typort-hdl/ping`，放在 `drain_analysis_jobs`
+  **之前**应答——空闲即答、忙则在回到主循环后答，从而把"忙"与"死"区分开
+  （死的永不答）。
+- 客户端：`extension.ts` 每 20 s 探一次（10 s 超时）；连续 6 次未答**且**该窗口
+  内没有任何服务端日志（输出通道的 `append`/`appendLine` 也计入存活信号）才
+  报警：状态栏转 Stopped、输出通道写一条说明性 error、并弹警告提供一键
+  `Restart Language Server` / `Show Log`。
+
+**验证**：
+- 原生：`typort-hdl/ping` 在 prelude 装载期间排队（4.2 s / 6.2 s 发出 → 14.3 s
+  主循环一开始一并应答），分析完成后即答；didOpen 后 ping 正常。
+- 浏览器：把探针方法名故意写错并缩短阈值（2 s × 3），11 s 即在输出通道打出
+  报警文本 —— 报警通路与 web 宿主下的 promise/超时链路都通。
+- 生产阈值（20 s × 6 = 120 s）下跑 170 s：无误报，adder_proof 正常出诊断。
+
+**边界**：看门狗只是让死亡可见并可恢复，**不消除**死亡原因；若真机仍出现
+报警，则说明确实是 guest 静默死亡，届时结合 DevTools console 的
+`RuntimeError: unreachable`（内存撞顶）或输出通道最后几行定位。
+
 
 
 

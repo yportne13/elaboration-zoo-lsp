@@ -3185,6 +3185,17 @@ impl Backend<Client> {
                     // used to do this concurrently is gone; draining here
                     // preserves the previous Mutex-blocking behavior with
                     // a bound of one analysis per request).
+                    // Custom request: liveness probe for the extension's
+                    // watchdog.  Answered before draining analysis jobs so an
+                    // idle-but-wedged server is distinguishable from a busy
+                    // one: a busy server answers as soon as it returns to this
+                    // loop, a dead one (e.g. a wasm trap that the host never
+                    // surfaces) never answers at all.
+                    if req.method == "typort-hdl/ping" {
+                        let resp = Response { id: req.id, result: Some(serde_json::Value::Bool(true)), error: None };
+                        self.client.connection.sender.send(Message::Response(resp))?;
+                        continue;
+                    }
                     self.drain_analysis_jobs();
                     // Custom request: fetch prelude/builtin file content for virtual documents
                     if req.method == "typort-hdl/builtinContent" {
