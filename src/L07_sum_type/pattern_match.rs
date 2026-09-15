@@ -265,7 +265,18 @@ impl Compiler {
                     b.1.as_ref().clone(),
                     Some(spec),
                 )
-                .map_err(|_| Error(format!("构造子 {ctor} 与被匹配类型不相容（分支不可达）")))?;
+                .map_err(|_| {
+                    // fuel 耗尽的失败是"假 absurd"（预算问题非结构冲突），
+                    // 文案带尾注供诊断——与 unify_catch 的同名尾注一致
+                    let fuel_note = if infer.fuel_exhausted() {
+                        " (fuel exhausted)"
+                    } else {
+                        ""
+                    };
+                    Error(format!(
+                        "构造子 {ctor} 与被匹配类型不相容（分支不可达）{fuel_note}"
+                    ))
+                })?;
         }
         Ok(())
     }

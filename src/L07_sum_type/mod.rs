@@ -215,24 +215,29 @@ impl Subst {
         self.head.is_none()
     }
 
-    /// 未映射即 fresh rigid（dpm-nbe `lookupSub` 的恒等延拓）。命中时：
-    /// 若解值**不引用**任何已解层级，原样返回（读点热路径，零分配零
-    /// fuel）；否则把整条 σ 包在解值外（解值不含 x 自身——occurs 守卫，
-    /// 也不含更旧解的 bare 引用——solve 存值已 force、头部精化值已 wrap，
-    /// 旧条目对它是恒等；比该条目更新的解恰好借此对解值生效），由 force
-    /// 在读点推开。
-    pub(crate) fn lookup(self: &Rc<Self>, x: Lvl) -> Val {
+    /// 命中返回 Some(展开前形态)：解值**不引用**任何已解层级时原样返回
+    /// （读点热路径，零分配零 fuel）；引用时把整条 σ 包在解值外（解值不含
+    /// x 自身——occurs 守卫，也不含更旧解的 bare 引用——solve 存值已
+    /// force、头部精化值已 wrap，旧条目对它是恒等；比该条目更新的解恰好
+    /// 借此对解值生效），由 force 在读点推开。未命中 None。
+    pub(crate) fn lookup_hit(self: &Rc<Self>, x: Lvl) -> Option<Val> {
         let mut cur = self.head.clone();
         while let Some(e) = cur {
             if e.lvl == x {
-                if !Self::mentions_level(&e.val, self) {
-                    return e.val.clone();
-                }
-                return Val::VSub(Box::new(e.val.clone()), self.clone());
+                return Some(if !Self::mentions_level(&e.val, self) {
+                    e.val.clone()
+                } else {
+                    Val::VSub(Box::new(e.val.clone()), self.clone())
+                });
             }
             cur = e.next.clone();
         }
-        Val::vvar(x)
+        None
+    }
+
+    /// 未映射即 fresh rigid（dpm-nbe `lookupSub` 的恒等延拓）。
+    pub(crate) fn lookup(self: &Rc<Self>, x: Lvl) -> Val {
+        self.lookup_hit(x).unwrap_or_else(|| Val::vvar(x))
     }
 
     /// 解值的浅结构是否引用 σ 的某个已解层级。含闭包 **env 槽**（它们是
@@ -348,6 +353,17 @@ pub(crate) fn wrap_sub(sub: &Rc<Subst>, v: Val) -> Val {
     }
 }
 
+/// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。force 的各展开臂
+/// 与 frcs 的 lookup 命中点共用。
+fn burn(cell: &std::cell::Cell<u32>) -> bool {
+    let f = cell.get();
+    if f == 0 {
+        return false;
+    }
+    cell.set(f - 1);
+    true
+}
+
 impl Val {
     fn vvar(x: Lvl) -> Self {
         Val::Rigid(x, List::new())
@@ -457,6 +473,12 @@ impl Infer {
         self.unify_fuel.set(UNIFY_FUEL);
     }
 
+    /// fuel 是否已耗尽（本编译单元的共享池）。错误诊断用：特化方程失败
+    /// 时区分"结构冲突（真 absurd）"与"预算耗尽（假 absurd）"。
+    pub(crate) fn fuel_exhausted(&self) -> bool {
+        self.unify_fuel.get() == 0
+    }
+
     /// 合一器**参数视角**的 WHNF：与 `force` 相同，但不做 Match 重选。
     /// `invert` / `prune_vflex` 关心的是"元变量被应用在哪些**槽位**上"
     /// ——槽位引用（`Rigid(x)`）本身就是作用域事实，分支内的精化等式
@@ -484,15 +506,6 @@ impl Infer {
     /// **展开递归**时消耗 fuel（高频直通路径不消耗），fuel 耗尽时停止
     /// 展开，把值当作未解处理。
     pub fn force(&self, decl: &Decls, t: Val) -> Val {
-        /// 展开燃料：每个展开步骤消耗 1，耗尽即停止（防环）。
-        fn burn(cell: &std::cell::Cell<u32>) -> bool {
-            let f = cell.get();
-            if f == 0 {
-                return false;
-            }
-            cell.set(f - 1);
-            true
-        }
         match t {
             Val::Flex(m, sp) => match self.lookup_meta(m) {
                 MetaEntry::Solved(t_solved, _) if burn(&self.unify_fuel) => {
@@ -503,17 +516,12 @@ impl Infer {
                 }
                 _ => Val::Flex(m, sp),
             },
-            // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。推开
-            // 本身烧 1 fuel——浅 occurs 不探查闭包，闭包内的解环
-            // （x := λ…x…）在 closure_apply 后的读点闭环，fuel 兜底语义
-            // 与旧 pm_defs 时代一致。
-            Val::VSub(v, sub) => {
-                if burn(&self.unify_fuel) {
-                    self.frcs(decl, &sub, *v)
-                } else {
-                    Val::VSub(v, sub)
-                }
-            }
+            // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。入口
+            // 不烧 fuel——真正的精化传播只发生在被解变量的读点（frcs 的
+            // Rigid 臂 lookup 命中时烧 1），对齐旧 pm_defs 时代
+            // "force(Rigid) 查表展开烧 1"的燃烧剖面；包裹/组合的机械开销
+            // 免费。fuel 耗尽的降级点也在 lookup 命中处（返回裸 rigid）。
+            Val::VSub(v, sub) => self.frcs(decl, &sub, *v),
             // 卡住的 match：scrutinee 是在 match 创建之后才被特化/解出时，
             // 这里重新尝试选分支。没有这一步，精化无法传播进"卡住 match
             // 里面"（期望类型 `Eq (add a zero) a` 的 `add a zero` 就是它）。
@@ -596,13 +604,25 @@ impl Infer {
                 let composed = Subst::compose(sub, &sub2);
                 self.frcs(decl, &composed, *v2)
             }
-            // 被解变量的读点：解出值 force 后按应用序（spine 尾到头）经
-            // v_app 拼接（λ ⇒ β；Match ⇒ pending；中性头 ⇒ spine）——对应
-            // dpm-nbe `napp (lookupSub sb v) (frcS sb sp)`。解值带实参但
-            // 头不可应用（对非函数解变量做应用的 ill-typed 形态）时保持
-            // 卡住，不进 v_app（η 臂的 v_applicable 守卫同款加固）。
+            // 被解变量的读点：lookup 命中（真正的精化传播）烧 1 fuel——
+            // 对齐旧 pm_defs 的 force(Rigid) 查表展开烧 1 剖面；fuel 耗尽
+            // 按未解处理（返回裸 rigid，有界降级，防闭环无限推进，也断了
+            // v_app ↔ force 在 fuel=0 角落的互递归）。未命中零成本直通。
+            // 解出值按应用序（spine 尾到头）经 v_app 拼接（λ ⇒ β；Match ⇒
+            // pending；中性头 ⇒ spine）——对应 dpm-nbe
+            // `napp (lookupSub sb v) (frcS sb sp)`。解值带实参但头不可应用
+            // （对非函数解变量做应用的 ill-typed 形态）时保持卡住，不进
+            // v_app（η 臂的 v_applicable 守卫同款加固）。
             Val::Rigid(x, sp) => {
-                let mut head = self.force(decl, sub.lookup(x));
+                let mut head = match sub.lookup_hit(x) {
+                    Some(hit) => {
+                        if !burn(&self.unify_fuel) {
+                            return Val::Rigid(x, sp);
+                        }
+                        self.force(decl, hit)
+                    }
+                    None => Val::vvar(x),
+                };
                 if !sp.is_empty() && !v_applicable(&head) {
                     return Val::Rigid(x, sp);
                 }

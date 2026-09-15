@@ -1372,13 +1372,29 @@ fn subst_lookup_conditional_wrap() {
     let s1 = Subst::extend(&s0, Lvl(3), Val::vvar(Lvl(30)));
     // 1 := Rigid(3)：解值引用已解层级 3 ⇒ 包裹
     let s2 = Subst::extend(&s1, Lvl(1), Val::vvar(Lvl(3)));
-    assert!(matches!(s2.lookup(Lvl(1)), Val::VSub(..)));
+    match s2.lookup(Lvl(1)) {
+        Val::VSub(v, sub) => {
+            // 包裹携带的是整条 σ（后解的 3 := 30 借此对先解的 1 生效）
+            assert!(std::rc::Rc::ptr_eq(&sub, &s2), "VSub must carry the full subst");
+            assert!(struct_eq::val_eq(&v, &Val::vvar(Lvl(3))));
+        }
+        other => panic!("expected VSub, got {other:?}"),
+    }
     // 1 := U：解值干净 ⇒ 原样
     let s3 = Subst::extend(&s1, Lvl(1), Val::U);
     assert!(matches!(s3.lookup(Lvl(1)), Val::U));
     // 1 := Rigid(7)：7 未解 ⇒ 原样（精化传播不需要 σ）
     let s4 = Subst::extend(&s1, Lvl(1), Val::vvar(Lvl(7)));
     assert!(struct_eq::val_eq(&s4.lookup(Lvl(1)), &Val::vvar(Lvl(7))));
+    // 解值引用藏在**闭包 env 槽**里（mentions_level 区别于 val_mentions_lvl
+    // 的分界情形）：λ 捕获 env 引用已解层级 3 ⇒ 也要包裹
+    let lam = Val::Lam(
+        empty_span("a".to_owned()),
+        Icit::Expl,
+        Closure(List::new().prepend(Val::vvar(Lvl(3))), Box::new(Tm::Var(Ix(0)))),
+    );
+    let s5 = Subst::extend(&s1, Lvl(1), lam);
+    assert!(matches!(s5.lookup(Lvl(1)), Val::VSub(..)));
 }
 
 /// force_arg 逐层解包：嵌套 match 的上下文被外层臂与内层臂各 subst_cxt
@@ -1457,4 +1473,56 @@ def t(g: Nat -> Nat, w: Foo g): (P : Nat -> U) -> P (g zero) -> P zero =
 "#,
     );
     assert!(out.is_empty(), "{out}");
+}
+
+/// 深嵌套模式的 fuel 预算边界回归：d=400 的逐层 cons 嵌套 + 通配兜底。
+/// 显式替换初版把"每次 VSub 推开"都计 1 fuel，燃烧剖面劣化使默认 4096
+/// 池在 d≈380 耗尽、被误报"分支不可达"（假 absurd）；燃烧点移到 lookup
+/// 命中后剖面与旧 pm_defs 对齐（旧版 d=2000 仍在预算内）。d=400 为
+/// 修复前的确定性失败点。512 MB 栈（走查递归深度 × walk_con 帧较大）。
+#[test]
+fn test_deep_pattern_fuel_budget_regression() {
+    let depth = 400usize;
+    let mut big = "nil".to_owned();
+    for i in 0..depth {
+        let elem = if i + 1 == depth { "succ zero" } else { "zero" };
+        big = format!("cons ({elem}) ({big})");
+    }
+    let mut pat = "nil".to_owned();
+    for i in (0..depth).rev() {
+        pat = format!("cons(h{i}, {pat})");
+    }
+    let src = format!(
+        "{NAT}{VEC}
+def big = {big}
+
+def f[n: Nat](v: Vec[Nat] n): Nat =
+    match v {{
+        case {pat} => h0
+        case _ => zero
+    }}
+
+println (f big)
+",
+        NAT = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+"#,
+        VEC = r#"enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+"#,
+    );
+    let src = src.to_owned();
+    let out = std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(move || run(&src, 0).unwrap_or_else(|e| panic!("check failed: {e:?}")))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(out.lines().next(), Some("Nat::succ(Nat::zero)"));
 }

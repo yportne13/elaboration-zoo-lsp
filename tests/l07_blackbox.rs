@@ -24,10 +24,11 @@
 //!      `.x`/`.xs`（构造子数据字段）报 `Vec has no field x`；nullary
 //!      构造子上任意投影报 `cannot project field ...`（README §2 的
 //!      "先查索引再查字段"以实际行为为准）。
-//!   3. 语法是行导向的：match 必须写在 `=` 之后的**下一行**（如所有
+//!   3. 语法是行导向的：match 习惯上写在 `=` 之后的**下一行**（如所有
 //!      `def f(x: T): U =` 换行 `match x { ... }`）；与 `=` 同行
-//!      （`def mf = match ...`）、以及 `println (match zero {...})`
-//!      内联的 match 都直接解析失败（Err("parse error")）；无期望类型的
+//!      （`def mf = match ...`）的写法自 2026-09 起**可以解析**（对抗
+//!      测试 090 实测：内联 match 走完整检查，缺覆盖照样报错）——本条
+//!      旧契约"内联 match 直接解析失败"已过期；无期望类型的
 //!      `def bad(x: Bool) =` 换行 `match ...` 反而被接受（不报错）。
 //!   4. 未标注的 λ 实参应用给绑定器类型（Church 编码的 `Nat : U`）在
 //!      prune_ty/prune_vflex 排序修复（2026-09）后可以正确通过——旧版

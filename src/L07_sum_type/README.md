@@ -89,6 +89,11 @@ env 槽、绑定为 fresh rigid，与运行时 `eval_aux` 的 prepend 严格同�
 的又一条事实，force 的 Match 重选负责让它起作用。`val_contains_match`
 与 `L07_NO_HEAD_REFINE` 环境变量一并删除。
 
+精化的可见性边界：σ 只对**被包裹过的值**生效——meta 的解（rename
+产物，Tm 层）与 decl 表条目不在 σ 的扫描/包裹范围内，meta 解值若引用
+后被特化的槽位，精化在读点不可见（重构既定取舍，孪生移植需对齐同一
+边界）。
+
 ### 1.4 两个配套机制
 
 **期望类型重锚（rebase）。** 每臂检查前把期望类型 quote → eval 到臂
@@ -299,11 +304,14 @@ solve / intersect）。在此之上：
    meta，臂内约束可能把它解成含臂局部模式变量的值，rename 因作用域
    越界失败而报 can't unify（Agda 对此做 generalize / block）。教学取舍，
    与旧版同级。
-2. **force 无记忆**：`force(Val::Match)` 的重选与 def 展开不做缓存，
-   同一值被反复 force 会重复归约；显式替换版下 σ 的推开（frcs）同样
-   无展开缓存，fuel 耗尽时 `force` 原样返回未推开的 VSub（此时 quote
-   会打印 σ 未推开形态的值）——正确性无虞（fuel 是防环底线），纯
-   性能/显示项；fuel 充值由各外层入口负责。
+2. **force 无记忆 + fuel 预算是软防护**：`force(Val::Match)` 的重选与
+   def 展开不做缓存；精化读点（lookup 命中）与各展开臂消耗共享 fuel
+   池（4096，外层入口充值）。fuel 耗尽时精化读点**按未解处理**——
+   极深嵌套模式负载下可能把合法分支误判为不可达（假 absurd），这是
+   有界降级而非纯显示问题：燃烧剖面已对齐旧 pm_defs（旧版 d=2000 /
+   新版 d=400+ 同池均安全，`test_deep_pattern_fuel_budget_regression`
+   钉住边界），特化方程路径的失败文案带 `(fuel exhausted)` 尾注供
+   诊断。更深的负载需加大 `UNIFY_FUEL`。
 3. **没有 K 公理层面的安全保护**：精化一个出现在其它假设里的变量在
    完整依赖理论里需要 `--without-K` 级论证，本层与 L07a 相同，是教学取舍。
 4. **probe 与臂内方程理论上可能不同步**：两者跑同一套代码，但探测用

@@ -55,15 +55,17 @@ enum Val { ..., VSub(Box<Val>, Rc<Sub>) }
 
 ```
 force(v):
-  VSub(v, σ)  => frcs(σ, v)                    -- 烧 1 fuel（防闭环）
+  VSub(v, σ)  => frcs(σ, v)                    -- 入口不烧 fuel
   Rigid(x,[]) => Rigid(x,[])                   -- pm_defs 查表臂【删除】
   Flex/Match/Decl/Prim/Obj 臂                  -- 全部保持不变
 
 frcs(σ, v):                                    -- 把 σ 推进 v 的结构
   VSub(v', σ') => frcs(compose(σ, σ'), v')     -- frcS sb (VSub v sb') = frcS (subst sb sb') v
-  Rigid(x, sp) => v_app(force(σ.lookup(x)), wrap_sp(σ, sp) 按应用序)
+  Rigid(x, sp) => lookup 命中烧 1 fuel（耗尽 ⇒ 返回裸 Rigid 有界降级）；
+                 v_app(force(σ.lookup_hit(x)), wrap_sp(σ, sp) 按应用序)
                  -- dpm-nbe: napp (lookupSub sb v) (frcS sb sp)
-                 -- lookup 命中 Lam ⇒ β；Flex/Rigid/Decl/Match ⇒ spine/pending
+                 -- 头不可应用（v_applicable 守卫）且带实参 ⇒ 卡回裸 Rigid
+                 -- lookup 命中且解值不引用已解层级 ⇒ 原样直通（零分配）
   Flex/Decl/Prim => force(同型值, wrap_sp(σ, sp))   -- 包裹后交回 force 走既有臂
   Obj            => force(Obj(frcs σ o, wrap_sp(σ, sp)))
   Lam/Pi       => 同型值，闭包 env 逐槽包 VSub(·, σ)（惰性，不重求值）
