@@ -168,6 +168,9 @@ impl Compiler {
             let mut cxt = cxt.clone();
             loop {
                 let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
+                // 精化 σ 包裹的类型先 force 推开（旧机制下 src_names 已被
+                // refresh 物化，这里必须显式推开才看得到 Π 形态）
+                let typ = infer.force(&cxt.decl, &typ);
                 match typ.as_ref() {
                     Val::Pi(name, icit, ty, _) => {
                         if *icit == Icit::Expl { // Only explicit args matter for the structure
@@ -186,9 +189,11 @@ impl Compiler {
             }*/
 
             // 4. Try to unify it with the type of the matched term.
-            if let Ok((_, cxt)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
+            // （精化 σ 在探测内被丢弃——探测只问可达性，与旧实现丢弃
+            // check_pm 返回的精化 cxt 同口径；meta 整表回滚在闭包外）
+            if infer.check_pm(&cxt, to_check.clone(), forced_type.clone()).is_ok() {
                 // If unification succeeds, the constructor is accessible.
-                accessible.push((constr_def, params, cxt));
+                accessible.push((constr_def, params, cxt.clone()));
             }
         }
 
@@ -226,12 +231,15 @@ impl Compiler {
                     // 走查 check_pm_final 失败（本分支不适用的臂）时漏记，
                     // 决策树遍历结束即误报 unreachable pattern。
                     self.reachable.insert(*idx, ());
-                    let (_, cxt) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
+                    let (_, sigma) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
                         Ok(x) => x,
                         Err(e) => {
                             return Ok(false);
                         }
                     };
+                    // 分支体检查的上下文置于精化 σ 之下（dpm-nbe `subst sub
+                    // ctx`）：env 槽与类型表包 VSub，布局不变，读点 force 推开。
+                    let cxt = cxt.subst_cxt(&sigma);
                     // 同一臂可能在多个构造子分支被走到：已完整编译（体检查 +
                     // pats 记录）则只需可达、无需重检查。按臂下标记录（L13
                     // 同族）——按模式 Raw 记录会把两个模式相同的不同臂混为
@@ -335,15 +343,23 @@ impl Compiler {
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
                                         param.reverse();
                                         let mut typ = typ;
-                                        while let Val::Pi(name, icit, ty, closure) = typ.as_ref() {
-                                            if !param.is_empty() {
-                                                let val = param.pop()
-                                                    .map(|x| x.1)
-                                                    .unwrap_or(Val::U(0).into());
-                                                typ = infer.closure_apply(&cxt_for_filter.decl, closure, val);
-                                            } else {
-                                                new_heads.push((ty.clone(), name.clone(), *icit));
-                                                typ = infer.closure_apply(&cxt_for_filter.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
+                                        // 精化 σ 包裹的构造子类型先 force 推开再剥 Π
+                                        // （旧机制下 src_names 已物化）
+                                        loop {
+                                            let tf = infer.force(&cxt_for_filter.decl, &typ);
+                                            match tf.as_ref() {
+                                                Val::Pi(name, icit, ty, closure) => {
+                                                    if !param.is_empty() {
+                                                        let val = param.pop()
+                                                            .map(|x| x.1)
+                                                            .unwrap_or(Val::U(0).into());
+                                                        typ = infer.closure_apply(&cxt_for_filter.decl, closure, val);
+                                                    } else {
+                                                        new_heads.push((ty.clone(), name.clone(), *icit));
+                                                        typ = infer.closure_apply(&cxt_for_filter.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
+                                                    }
+                                                }
+                                                _ => break,
                                             }
                                         }
                                     }

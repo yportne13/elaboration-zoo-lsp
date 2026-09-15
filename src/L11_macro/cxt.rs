@@ -16,11 +16,14 @@ pub struct Cxt {
     pub src_names: BiMap<String, Lvl, (Span<()>, Rc<VTy>)>,
     pub decl: HashMap<String, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
     pub namespace: List<(Rc<Val>, HashSet<String>, Raw)>,
-    update_from: Option<usize>,
 }
 
-fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match (env.iter().nth(1).unwrap().as_ref(), env.iter().nth(0).unwrap().as_ref()) {
+fn string_concat(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    // 精化 σ 包裹的槽值先 force 推开（臂体内引用被解槽时 env 带 VSub；
+    // 旧 refresh 世界槽值已物化）
+    let a = infer.force(decl, &env.iter().nth(1).unwrap());
+    let b = infer.force(decl, &env.iter().nth(0).unwrap());
+    match (a.as_ref(), b.as_ref()) {
         (Val::LiteralIntro(a), Val::LiteralIntro(b)) => {
             Val::LiteralIntro(a.clone().map(|x| format!("{x}{}", b.data))).into()
         },
@@ -29,7 +32,8 @@ fn string_concat(_: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
 }
 
 fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+    let a = infer.force(decl, &env.iter().next().unwrap());
+    match a.as_ref() {
         Val::LiteralIntro(a) => {
             infer.eval(decl, env, &Tm::Decl(a.clone()).into())
         }
@@ -38,7 +42,8 @@ fn string_to_global_type(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) ->
 }
 
 fn create_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(1).unwrap().as_ref() {
+    let a = infer.force(decl, &env.iter().nth(1).unwrap());
+    match a.as_ref() {
         Val::LiteralIntro(a) => {
             if let Ok(mut x) = infer.mutable_map.write() {
                 x.insert(a.data.clone(), env.iter().nth(0).unwrap().clone());
@@ -50,7 +55,8 @@ fn create_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val>
 }
 
 fn change_mutable(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().nth(1).unwrap().as_ref() {
+    let a = infer.force(decl, &env.iter().nth(1).unwrap());
+    match a.as_ref() {
         Val::LiteralIntro(a) => {
             if let Ok(mut x) = infer.mutable_map.write() {
                 if let Some(x) = x.get_mut(&a.data) {
@@ -68,8 +74,9 @@ fn change_mutable(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val
     }
 }
 
-fn get_global(infer: &Infer, _: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
-    match env.iter().next().unwrap().as_ref() {
+fn get_global(infer: &Infer, decl: &Decl, env: &Env, typ: Rc<Val>) -> Rc<Val> {
+    let a = infer.force(decl, &env.iter().next().unwrap());
+    match a.as_ref() {
         Val::LiteralIntro(a) => {
             infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone()
         }
@@ -335,7 +342,6 @@ impl Cxt {
             src_names: BiMap::new(),
             decl: HashMap::new(),
             namespace: List::new(),
-            update_from: None,
         }
     }
     pub fn clone_without_src_names(&self) -> Self {
@@ -347,7 +353,6 @@ impl Cxt {
             src_names: BiMap::new(),
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
-            update_from: self.update_from,
         }
     }
 
@@ -374,7 +379,6 @@ impl Cxt {
             src_names,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
-            update_from: self.update_from,
         }
     }
 
@@ -393,7 +397,6 @@ impl Cxt {
             src_names: self.src_names.clone(),
             decl,
             namespace: self.namespace.clone(),
-            update_from: self.update_from,
         })
     }
 
@@ -407,7 +410,6 @@ impl Cxt {
             src_names: self.src_names.clone(),
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
-            update_from: self.update_from,
         }
     }
 
@@ -423,7 +425,6 @@ impl Cxt {
             src_names,
             decl: self.decl.clone(),
             namespace: self.namespace.clone(),
-            update_from: self.update_from,
         }
     }
 
@@ -442,85 +443,35 @@ impl Cxt {
             src_names: self.src_names.clone(),
             decl,
             namespace: self.namespace.clone(),
-            update_from: self.update_from,
         })
     }
 
-    /// freshVal 函数实现
-    /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
-    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: &Rc<Val>) -> Rc<Val> {
-        // quote def from (Lvl (length from))
-        let quoted = infer.quote(&self.decl, Lvl(from.iter().count() as u32), val);
-
-        // eval def to
-        infer.eval(&self.decl, to, &quoted)
-    }
-
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Rc<Val>, update_prune: bool) -> Cxt {
-        match v.as_ref() {
-            Val::Flex(..) => self.clone(),
-            _ => {
-                let update_from = if let Some(u) = self.update_from {
-                    if u < x.0 as usize {
-                        u
-                    } else {
-                        x.0 as usize
-                    }
-                } else {
-                    x.0 as usize
-                };
-                let x_prime = lvl2ix(self.lvl, x).0 as usize;
-                /*println!(
-                    " update {}: {} with {}",
-                    x.0,
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, self.env.iter().nth(x_prime).unwrap().clone())),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
-                );*/
-                //let locals = self.locals.update_at(x_prime, infer.quote(&self.decl, self.lvl, &v));
-                let env = self.env.change_n(x_prime, |_| v);
-                let mut new_src_names = self.src_names.clone();
-                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env, self.lvl.0 as usize - update_from);
-                //let locals = self.locals.clone().update_by_cxt(infer, self.lvl, &self.env);
-        
-                Cxt {
-                    env: env_t,
-                    lvl: self.lvl,
-                    locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-                    //locals: self.locals.clone().update_by_cxt(infer, &self.decl, self.lvl, &self.env),
-                    //locals,
-                    pruning: if update_prune {self.pruning.change_n(x_prime, |_| None)} else {self.pruning.clone()},
-                    src_names: new_src_names,
-                    decl: self.decl.clone(),
-                    namespace: self.namespace.clone(),
-                    update_from: Some(update_from),
-                }
-            }
+    /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
+    /// src_names 的类型包 `VSub`；lvl / locals / pruning / decl / namespace
+    /// 不动——**槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经
+    /// force 推开看到解。decl 表是全局声明登记（旧 `update_cxt` 也从不改写
+    /// 它，故此处保持原样）。σ 为空时零开销直通。
+    ///
+    /// 替代旧的 `update_cxt`/`refresh`（改写 env 槽 + 全量重引用）：解不再
+    /// 改写既有值，只包在外面，消费点惰性展开——旧架构"已捕获旧上下文的值
+    /// 过期、槽位错位"的 bug 族按构造消除。
+    pub fn subst_cxt(&self, sub: &Rc<Subst>) -> Self {
+        if sub.is_empty() {
+            return self.clone();
         }
-    }
-
-    fn refresh(&self, infer: &Infer, env: &List<Rc<Val>>, src_names: &mut BiMap<String, Lvl, (Span<()>, Rc<Val>)>, env2: List<Rc<Val>>, walk: usize) -> List<Rc<Val>> {
-        if env.is_empty() {
-            List::new()
-        } else {
-            let env_t = if walk == 0 {env.tail()} else {self.refresh(infer, &env.tail(), src_names, env2.clone(), walk - 1)};
-            let env_tt = env2.change_tail(env_t.clone());
-            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap());
-            /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
-            let b = pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()));
-            if a != b {
-                println!(
-                    "refresh {}: {} with {}",
-                    env.len(),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone())),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()))
-                );
-            }*/
-            
-            let ret = env_t.prepend(ret);
-            if let Some((_, x)) = src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)) {
-                *x = self.fresh_val(infer, &self.env, &env_tt, x);
-            }
-            ret
+        let wrap = |v: &Rc<Val>| Rc::new(Val::VSub(v.clone(), sub.clone()));
+        let mut src_names = BiMap::new();
+        for (k, l, (sp, ty)) in self.src_names.iter_all() {
+            src_names.insert(k.clone(), (*l, (*sp, wrap(ty))));
+        }
+        Cxt {
+            env: self.env.map(wrap),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names,
+            decl: self.decl.clone(),
+            namespace: self.namespace.clone(),
         }
     }
 }

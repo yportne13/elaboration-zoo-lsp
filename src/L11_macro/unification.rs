@@ -67,7 +67,7 @@ impl Infer {
             List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
-                match self.force(decl, &a.head().unwrap().0).as_ref() {
+                match self.force_arg(decl, a.head().unwrap().0.clone()).as_ref() {
                     Val::Rigid(x, List { head: None, .. }) => {
                         if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
                             ren.remove(&x.0);
@@ -191,7 +191,7 @@ impl Infer {
             Ok((List::new(), SpinePruneStatus::OKRenaming))
         } else {
             let (sp_rest, status) = self.prune_vflex_go(decl, pren, sp.tail())?;
-            let t = self.force(decl, &sp.head().unwrap().0);
+            let t = self.force_arg(decl, sp.head().unwrap().0.clone());
             match t.as_ref() {
                 Val::Rigid(x, List { head: None, .. }) => match (pren.ren.get(&x.0), status) {
                     (Some(x), _) => Ok((
@@ -270,6 +270,9 @@ impl Infer {
     pub fn rename(&mut self, decl: &Decl, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
         let t = self.force(decl, t);
         match t.as_ref() {
+            // 不变式：force 的返回值顶层不会是 VSub（防御臂；fuel 耗尽的
+            // 降级返回裸 rigid，故正常不可达）
+            Val::VSub(..) => Err(UnifyError::Basic),
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == *m_prime => Err(UnifyError::Basic),
                 _ => self.prune_vflex(decl, pren, *m_prime, sp.clone()),
@@ -483,6 +486,8 @@ impl Infer {
             x = self.closure_apply(&clos, Val::vvar(lvl));
             lvl = lvl + 1;
         }*/
+        // 精化 σ 包裹的期望类型先推开（子句体内引用被解槽时会出现）
+        let x = self.force(&cxt.decl, x);
         if let Val::Sum(name, params, _, true) = x.as_ref() {
             let out_param = if let Some(o) = self.trait_out_param.get(&name.data) {
                 o
@@ -494,7 +499,7 @@ impl Infer {
                 .zip(out_param)
                 .filter(|(_, x)| !**x)
                 .map(|x| x.0)
-                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm).to_typ())
+                .map(|(_, tm, _, _)| self.force_deep(&cxt.decl, tm).to_typ())
                 .collect::<Option<Vec<_>>>();
             let params = if let Some(params) = params {
                 params
@@ -511,7 +516,7 @@ impl Infer {
                     .map_err(|e| e.0.data)?;
                 let val = self.eval(&cxt.decl, &cxt.env, &tm);
                 if let Val::SumCase { typ, .. } = val.as_ref() {
-                    let _ = self.unify(cxt.lvl, cxt, typ, x);
+                    let _ = self.unify(cxt.lvl, cxt, typ, &x);
                 }
                 Ok(Some((tm, val)))
             } else {
