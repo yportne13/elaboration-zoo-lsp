@@ -1352,6 +1352,27 @@ typeclass_complex 稳定、再点 adder_proof）在本地复现：**参考版下
 报警，则说明确实是 guest 静默死亡，届时结合 DevTools console 的
 `RuntimeError: unreachable`（内存撞顶）或输出通道最后几行定位。
 
+---
+
+## 2026-09-15 续三（web 交付链的缓存问题：版本号破缓存 + 状态栏暴露引擎）
+
+**现场**：连续三次改动（栈、引擎默认、看门狗）后用户仍报"还是死了、没啥有价值
+的信息"。三件事同时"没生效"更像是**改动根本没到浏览器**：vscode-web 会缓存
+内建扩展，而本扩展的 `version` 一直是 `1.0.0` 从未变过——缓存键（发布者/名/
+版本）不变，浏览器就一直复用旧的那份（孪生版，且没有看门狗，故永远不会报警）。
+
+**改动**：
+- `vscode_extension/package.json` 版本 1.0.0 → 1.0.1（缓存键随版本变化）。
+- `sample/_headers` 给 `/index.html`、`/TyportHDL/*`、`/myExt/*` 加
+  `Cache-Control: no-cache`（Cloudflare Pages 认这个文件；vscode-web 的大块静态
+  资源保持默认缓存，避免拖慢首屏）。`run.sh` 里写死的
+  `unzip TyportHDL-1.0.0.vsix` 改为取最新 vsix，避免以后升版本又漏改。
+- 状态栏暴露引擎：文本 `$(check) TyPort Ref|Twin`、tooltip 带
+  `engine: reference|twin`——不必读日志就能一眼判断浏览器里跑的是哪份构建。
+
+**验证**：本地（参考版构建）状态栏实测 `TyPort Ref` + tooltip
+`engine: reference`，adder_proof 正常出诊断（32→35）。
+
 
 
 

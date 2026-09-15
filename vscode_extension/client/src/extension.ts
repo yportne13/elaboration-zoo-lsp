@@ -9,6 +9,7 @@ import { Wasm } from '@vscode/wasm-wasi/v1';
 import type { ProcessOptions } from '@vscode/wasm-wasi/v1';
 import { createStdioOptions, createUriConverters, startServer } from '@vscode/wasm-wasi-lsp';
 import { readEngine, showServerActions } from './serverActions';
+import type { Engine } from './serverActions';
 
 let client: LanguageClient | undefined;
 let channel: LogOutputChannel;
@@ -16,6 +17,18 @@ let channel: LogOutputChannel;
 // ── Status Bar ──────────────────────────────────────────────────────────────
 
 let statusBarItem: StatusBarItem;
+
+/** Engine the running server was started with, shown so a stale web build is
+ * obvious at a glance (the web host caches builtin extensions by version). */
+let activeEngine: Engine | undefined;
+
+function engineTag(): string {
+	switch (activeEngine) {
+		case 'reference': return 'Ref';
+		case 'twin': return 'Twin';
+		default: return '';
+	}
+}
 
 function createStatusBarItem(): StatusBarItem {
 	const item = window.createStatusBarItem(StatusBarAlignment.Left, 0);
@@ -27,18 +40,20 @@ function createStatusBarItem(): StatusBarItem {
 }
 
 function updateStatusBar(state: State): void {
+	const tag = engineTag();
+	const suffix = tag ? ' ' + tag : '';
 	switch (state) {
 		case State.Starting:
-			statusBarItem.text = '$(sync~spin) TyPort';
-			statusBarItem.tooltip = 'Starting TyportHDL language server...';
+			statusBarItem.text = '$(sync~spin) TyPort' + suffix;
+			statusBarItem.tooltip = 'Starting TyportHDL language server...' + (tag ? ` (engine: ${activeEngine})` : '');
 			break;
 		case State.Running:
-			statusBarItem.text = '$(check) TyPort';
-			statusBarItem.tooltip = 'TyportHDL language server running';
+			statusBarItem.text = '$(check) TyPort' + suffix;
+			statusBarItem.tooltip = 'TyportHDL language server running' + (tag ? ` (engine: ${activeEngine})` : '');
 			break;
 		case State.Stopped:
-			statusBarItem.text = '$(warning) TyPort';
-			statusBarItem.tooltip = 'TyportHDL language server stopped';
+			statusBarItem.text = '$(warning) TyPort' + suffix;
+			statusBarItem.tooltip = 'TyportHDL language server stopped' + (tag ? ` (engine: ${activeEngine})` : '');
 			break;
 	}
 }
@@ -68,6 +83,10 @@ async function startLanguageServer(
 		// Re-read on every (re)start so a settings change to the `reference`
 		// escape hatch takes effect on the restart that follows it.
 		const engine = readEngine('wasm');
+		activeEngine = engine;
+		if (statusBarItem) {
+			updateStatusBar(State.Starting);
+		}
 		const options: ProcessOptions = {
 			stdio: createStdioOptions(),
 			mountPoints: [

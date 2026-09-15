@@ -3,7 +3,7 @@
 	"description": "VS Code extension for the Typort language: LSP-powered hover, completion, diagnostics and HDL code generation.",
 	"author": "TyportHDL contributors",
 	"license": "MIT",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"repository": {
 		"type": "git",
 		"url": "https://github.com/yportne13/elaboration-zoo-lsp"
