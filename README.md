@@ -134,7 +134,7 @@ The project is structured as an **elaboration zoo** — each module (`L01_*` …
 | `L04_implicit` | Implicit argument inference |
 | `L05_pruning` | Pruning (occurs check) |
 | `L06_string` | String literals |
-| `L07_sum_type` | Sum types (enums) + dependent pattern matching (design notes in `src/L07_sum_type/README.md`) |
+| `L07_sum_type` | Sum types (enums) + dependent pattern matching (design notes in `src/L07_sum_type/README.md`; refinement by explicit substitutions, dpm-nbe-aligned — see `docs/l07-dpm-refactor-design.md`) |
 | `L08_product_type` | Product types (structs; desugared to single-`mk` enums — design notes in `src/L08_product_type/README.md`) |
 | `L09_mltt` | MLTT-style universes |
 | `L10_typeclass` | Typeclass / trait system |
@@ -164,6 +164,7 @@ cargo run --release --features dhat-heap --bin typort -- --stats
 ## Inspired By
 
 [elaboration-zoo](https://github.com/AndrasKovacs/elaboration-zoo) ·
+[dpm-nbe](https://github.com/KonjacSource/dpm-nbe) ·
 [ShiTT2](https://github.com/KonjacSource/ShiTT2) ·
 [PM](https://gist.github.com/Guest0x0/844688233e1ea27b0a2307734271644d) ·
 [tabled-typeclass-resolution](https://github.com/purefunctor/tabled-typeclass-resolution) ·

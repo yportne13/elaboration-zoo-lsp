@@ -105,7 +105,7 @@ cargo run --release --features mem-profile --bin typort -- stats
 | `L04_implicit` | 隐式参数推导 |
 | `L05_pruning` | 剪枝（occurs check） |
 | `L06_string` | 字符串字面量 |
-| `L07_sum_type` | 和类型（枚举）+ 依赖模式匹配（设计说明见 `src/L07_sum_type/README.md`） |
+| `L07_sum_type` | 和类型（枚举）+ 依赖模式匹配（设计说明见 `src/L07_sum_type/README.md`；精化为显式替换、对齐 dpm-nbe，见 `docs/l07-dpm-refactor-design.md`） |
 | `L08_product_type` | 积类型（结构体；脱糖为单 `mk` 构造子 enum，设计说明见 `src/L08_product_type/README.md`） |
 | `L09_mltt` | MLTT 风格宇宙 |
 | `L10_typeclass` | 类型类 / Trait 系统 |
@@ -135,6 +135,7 @@ cargo run --release --features dhat-heap --bin typort -- stats
 ## 灵感来源
 
 [elaboration-zoo](https://github.com/AndrasKovacs/elaboration-zoo) ·
+[dpm-nbe](https://github.com/KonjacSource/dpm-nbe) ·
 [ShiTT2](https://github.com/KonjacSource/ShiTT2) ·
 [PM](https://gist.github.com/Guest0x0/844688233e1ea27b0a2307734271644d) ·
 [tabled-typeclass-resolution](https://github.com/purefunctor/tabled-typeclass-resolution) ·
