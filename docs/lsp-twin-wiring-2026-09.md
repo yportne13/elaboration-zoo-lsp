@@ -1267,6 +1267,56 @@ end 也不 fire error，语言客户端静默挂着、状态栏仍显示运行�
 可选头 +0x48（`e_lfanew` + 0x18 起算，8 字节小端），改小它等于给同一个 release
 二进制换一个栈预算，二分即可量出任一负载的峰值栈用量——比加探针重建快得多。
 
+---
+
+## 2026-09-15 续（web 宿主默认引擎回到参考版：孪生 wasm 内存贴顶 + 静默 trap）
+
+**现场**：VS Code for Web（`dependent-type-web-lsp.pages.dev`，由
+`F:/projects/Rust/typort-lsp` 的 `github-pages.yml` 在 push 后 `run.sh` 构建
+`sample/` 发布）切到 `adder_proof` 时插件卡死；状态栏不变、无任何报错。
+
+**先排除栈**：把线上 `TyportHDL/client/server.wasm` 下下来解析（3,532,858 B，
+非 8 月那份 2,323,470）：`__stack_pointer` = 67108864（64 MiB，即上一节的修复）、
+`env.memory` min=2048 / max=32768、含 `TYPORT_LSP_ENGINE`。**线上早已是新构建**，
+故 64 MiB 栈对本次症状无效——栈不是这条问题的原因。
+
+**真实浏览器实测**（ZCode 内嵌浏览器给不了跨源隔离，`SharedArrayBuffer` 为
+undefined，而本模块导入 shared memory，故必须用真 Chrome）：headless Chrome +
+CDP 驱动，用 `performance.measureUserAgentSpecificMemory()` 读整页（含 worker）
+内存，另抓 page/worker 的 console 与 `Runtime.exceptionThrown`：
+
+| 观测 | 结果 |
+|---|---|
+| LSP 进入 running | 本地 65 s / 线上 123 s（页面加载起算） |
+| adder_proof | 正常，3 条诊断（与原生一致） |
+| 页面总内存 | 226 MB（刚 running）→ **1182 MB**（首次分析后） |
+| 多文件切换 / 连续编辑 | 稳定在 1.17 GB，**不随 kick 增长** |
+| 硬上限 | 2048 MB（SharedArrayBuffer 上限，抬不动） |
+
+原生对照（同文件）：孪生峰值 **LSP 1059 / CLI 1269 MB**，参考版 **202 MB**；
+而 248 KB 的 HDL 合并语料孪生峰值只有 1050 MB → **内存跟文件"种类"（重 Nat
+证明）相关，不跟体积成正比**。注意不要拿"孪生常驻 429 MB"当基准比 web 的
+1182 MB：那是另一口径的稳态值，实测 web 与原生峰值同量级，**没有放大**。
+
+**失败签名（已复现）**：把链接期 `--max-memory` 压到 512 MiB 再跑同一个页面，
+22.7 s 时宿主 console 打出 `RuntimeError: unreachable`（wasm trap），而**状态栏
+全程显示绿色对勾 "language server running"、Problems 保持旧值、无任何报错**——
+即 guest 已死、客户端一无所知（`_start()` 抛异常后 `workerDone` 不发，
+`process.run()` 永不 settle，`@vscode/wasm-wasi-lsp` 既不 fire end 也不 fire
+error）。这正是用户描述的"卡死"。
+
+**A/B（同一 512 MiB 上限）**：参考版只用 **332 MB** 且正常出 3 条诊断；孪生
+739 MB 撞顶静默 trap。即 2 GiB 上界下孪生只剩 ~42% 余量，浏览器/系统内存一紧
+就会越顶，而越顶的代价是**静默死亡**。
+
+**改动**：`serverActions.ts` 的 `UNSET_ENGINE.wasm` 由 `'twin'` 改回
+`'reference'`（孪生仍可用 `typort-hdl.cli-server.engine = "twin"` 按机开启）。
+顺带收益：web 上孪生光 prime 就要 65–123 秒才可用，参考版响应快得多。
+
+**验证边界**：复现的是"撞内存顶 → 静默 trap"的机制，**不是用户那次的具体触发
+序列**（其原始操作在干净 profile 下未能复现）。真机确认方法：卡死时看 DevTools
+console 是否出现 `RuntimeError: unreachable`，以及状态栏图标是否仍是对勾。
+
 
 
 

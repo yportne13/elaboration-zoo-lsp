@@ -4,10 +4,11 @@
  * Shared by the WASM entry (`extension.ts`, used on web and on the desktop
  * WASM backend) and the desktop entry (`extension.desktop.ts`, CLI backend).
  * The picker switches the language server backend (WASM vs CLI); the
- * elaboration engine is no longer a user-facing choice — both backends run the
- * L13 performance twin. `readEngine` still honors an explicit
- * `typort-hdl.cli-server.engine = "reference"` setting as a baseline escape
- * hatch, which applies to the web host as well.
+ * elaboration engine is no longer a user-facing choice — the desktop backends
+ * run the L13 performance twin, while the WASM backend defaults to the
+ * reference elaborator (see `UNSET_ENGINE`).  `readEngine` honors an explicit
+ * `typort-hdl.cli-server.engine` setting as the escape hatch in both
+ * directions, on the web host too.
  * ------------------------------------------------------------------------------------------ */
 
 import { commands, ConfigurationTarget, QuickPickItem, QuickPickItemKind, window, workspace } from 'vscode';
@@ -23,9 +24,15 @@ export const BACKEND_KEY = 'lsp-mode';
 
 /** Engine used when the setting has not been set explicitly. */
 const UNSET_ENGINE: Record<Backend, Engine> = {
-	// The L13 twin is the engine; the reference elaborator is only a debug
-	// escape hatch (explicit setting).
-	wasm: 'twin',
+	// The CLI backend runs the L13 twin.  The web (wasm) backend defaults to
+	// the reference elaborator: the twin's resident state needs ~1.2 GB of the
+	// wasm module's hard 2 GiB linear-memory ceiling (the SharedArrayBuffer
+	// maximum) for one proof-sized file, and a guest that cannot grow dies as a
+	// `RuntimeError: unreachable` trap that the client never sees — the status
+	// bar keeps claiming "running" while the server is gone.  The reference
+	// path needs ~0.33 GB for the same file.  Opt back in per machine with
+	// `typort-hdl.cli-server.engine = "twin"`.
+	wasm: 'reference',
 	cli: 'twin',
 };
 
