@@ -1373,6 +1373,30 @@ typeclass_complex 稳定、再点 adder_proof）在本地复现：**参考版下
 **验证**：本地（参考版构建）状态栏实测 `TyPort Ref` + tooltip
 `engine: reference`，adder_proof 正常出诊断（32→35）。
 
+---
+
+## 2026-09-15 续四（状态栏菜单恢复引擎切换 + 暴露存活状态）
+
+**需求**：用户要求"点开状态栏图标，直接选 ref / twin"，并且此前"卡死时没有任何
+有价值的信息"。
+
+**改动**（`serverActions.ts` / `extension.ts` / `extension.desktop.ts`）：
+- 恢复引擎组（`Reference` / `Twin (performance)`，描述里标注 web 下的大致内存
+  占用），两端宿主都显示——web 也能跑孪生（opt-in）。选中即写
+  `typort-hdl.cli-server.engine` 并**就地重启**语言服务器（两个后端都在启动时
+  重读该设置），无需重载窗口。
+- 菜单里新增 `Status` 组，显示看门狗的存活结论：
+  `responding (last probe Ns ago)` / `NOT answering (N probes missed …)` /
+  `starting (no probe answered yet)`。这样"卡住"时点开菜单一眼就能区分
+  "服务端死了/不应答" 与 "服务端正常（问题在别处）"。
+
+**验证**（headless Chrome + CDP **真实鼠标输入**驱动，合成 DOM 事件驱动不了
+VS Code 状态栏）：点开菜单得到 5 项，内容为
+`Elaboration engine | ● Reference | ○ Twin (performance) | Status | Language
+server: starting (no probe answered yet) | Restart Language Server | Show Log`；
+点 `Twin (performance)` 后状态栏就地变为 `TyPort Twin (engine: twin)`，无窗口
+重载。截图见 `target/tmp/picker-menu.png`（本地产物，未入库）。
+
 
 
 

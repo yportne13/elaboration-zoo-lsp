@@ -158,6 +158,27 @@ let watchdog: Disposable | undefined;
 /** Timestamp of the last sign of life from the server (probe or log line). */
 let lastServerActivity = Date.now();
 
+/** Last answered liveness probe, and how many since have gone unanswered. */
+let lastProbeOkAt = 0;
+let probeMisses = 0;
+let lastProbeError = '';
+
+/**
+ * Human-readable liveness, shown in the status-bar action picker so the state
+ * of the server is inspectable without reading the log.
+ */
+function describeServerLiveness(): string {
+	if (lastProbeOkAt === 0) {
+		return probeMisses === 0 ? 'starting (no probe answered yet)' : `not answering yet (${probeMisses} failed probes)`;
+	}
+	const age = Math.round((Date.now() - lastProbeOkAt) / 1000);
+	if (probeMisses === 0) {
+		return `responding (last probe ${age}s ago)`;
+	}
+	return `NOT answering (${probeMisses} probes missed, last response ${age}s ago` +
+		(lastProbeError ? `; ${lastProbeError}` : '') + ')';
+}
+
 /**
  * Count every message the server writes to the output channel as a sign of
  * life, so a server that is busy (a long prelude prime emits no log line for a
@@ -214,8 +235,11 @@ function watchServerLiveness(context: ExtensionContext, wasm: Wasm): void {
 			await withTimeout(watched.sendRequest(PingRequest, null), WATCHDOG_TIMEOUT_MS);
 			misses = 0;
 			lastServerActivity = Date.now();
-		} catch {
+			lastProbeOkAt = Date.now();
+		} catch (error) {
 			misses += 1;
+			probeMisses = misses;
+			lastProbeError = String(error).slice(0, 160);
 			// Any server log line resets the expectation: only a server that is
 			// silent *and* not answering is treated as gone.
 			if (misses < WATCHDOG_MISSES || Date.now() - lastServerActivity < WATCHDOG_MISSES * WATCHDOG_INTERVAL_MS) {
@@ -336,6 +360,8 @@ export async function activate(context: ExtensionContext, options: ActivateOptio
 		if (!client) return;
 		return showServerActions({
 			backend: 'wasm',
+			engine: activeEngine ?? readEngine('wasm'),
+			liveness: describeServerLiveness,
 			canUseCli: options.canUseCli ?? false,
 			restart: () => restartLanguageServer(context, wasm),
 			showLog: () => channel.show(),

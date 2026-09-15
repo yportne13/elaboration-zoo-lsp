@@ -76,15 +76,19 @@ async function writeSetting(key: string, value: string): Promise<void> {
 export interface ServerActionHost {
 	/** Backend the running client was started with. */
 	readonly backend: Backend;
+	/** Engine the running client was started with. */
+	readonly engine: Engine;
 	/** Restart the client in place, re-reading settings. */
 	restart(): Promise<void>;
 	/** Reveal the language server log channel. */
 	showLog(): void;
 	/** Whether this host can spawn the external CLI server (desktop). */
 	readonly canUseCli: boolean;
+	/** Human-readable liveness of the running server, when known. */
+	readonly liveness?: () => string;
 }
 
-type ActionItem = QuickPickItem & { action?: string; backend?: Backend };
+type ActionItem = QuickPickItem & { action?: string; backend?: Backend; engine?: Engine };
 
 function radio(selected: boolean, label: string): string {
 	return `${selected ? '$(circle-filled)' : '$(circle-outline)'} ${label}`;
@@ -93,6 +97,27 @@ function radio(selected: boolean, label: string): string {
 /** Builds the picker entries; exported for tests / callers that pre-filter. */
 export function serverActionItems(host: ServerActionHost): ActionItem[] {
 	const items: ActionItem[] = [];
+
+	items.push(
+		{ label: 'Elaboration engine', kind: QuickPickItemKind.Separator },
+		{
+			label: radio(host.engine === 'reference', 'Reference'),
+			description: 'baseline elaborator; ~0.3 GB in the web host',
+			engine: 'reference',
+		},
+		{
+			label: radio(host.engine === 'twin', 'Twin (performance)'),
+			description: 'faster per edit, ~2x memory (~1.2 GB in the web host)',
+			engine: 'twin',
+		},
+	);
+
+	if (host.liveness) {
+		items.push(
+			{ label: 'Status', kind: QuickPickItemKind.Separator },
+			{ label: `$(pulse) Language server: ${host.liveness()}` },
+		);
+	}
 
 	if (host.canUseCli) {
 		items.push(
@@ -118,6 +143,19 @@ export function serverActionItems(host: ServerActionHost): ActionItem[] {
 	return items;
 }
 
+/**
+ * Switch the elaboration engine.  Both hosts re-read `typort-hdl.cli-server.engine`
+ * when they (re)start, so this takes effect in place — no window reload.
+ */
+async function applyEngine(engine: Engine, host: ServerActionHost): Promise<void> {
+	if (engine === host.engine) {
+		return;
+	}
+	await writeSetting(ENGINE_KEY, engine);
+	await host.restart();
+	window.showInformationMessage(`TyportHDL: elaboration engine = ${engine}.`);
+}
+
 async function applyBackend(backend: Backend, host: ServerActionHost): Promise<void> {
 	if (backend === host.backend) {
 		return;
@@ -139,7 +177,9 @@ export async function showServerActions(host: ServerActionHost): Promise<void> {
 	if (!pick) {
 		return;
 	}
-	if (pick.backend) {
+	if (pick.engine) {
+		await applyEngine(pick.engine, host);
+	} else if (pick.backend) {
 		await applyBackend(pick.backend, host);
 	} else if (pick.action === 'restart') {
 		await host.restart();
