@@ -300,6 +300,27 @@ builtin 注册表 / decl 表 / 可变全局 / 文件 IO / Error Display、无性
   false` 路径的交互、切片跨弹出存活、Rc 随 clear 减计）经逐行对抗
   验证通过。
 
+精化载体移植（L07 显式替换重构回合，2026-09）另附：
+
+- 参考版精化机制与 L07 重构后逐一对齐：`Infer::pm_defs` / `pm_solvable`
+  全局事实表与 `pm_mark` / `pm_restore` 编排**整体删除**，改为
+  `Compiler` 局部持有的显式替换 `sub: Rc<Subst>`（持久化单链）+
+  `solvable: Vec<Lvl>`；精化解以 `Val::VSub(Box<Val>, Rc<Subst>)` 包裹，
+  `force` 的 `frcs` 臂在读点把 σ 推进值结构（dpm-nbe `frc`/`frcS`）；
+  合一器可解性经 `SpecSolve{solvable, acc}` 参数显式穿参（分支体检查
+  `spec = None` 不得解假设）；臂边界回滚 = Rc 指针赋值；臂上下文
+  `Cxt::subst_cxt`（env 槽 + src_names 类型包 VSub，槽位布局不动）。
+  设计文档 `docs/l07-dpm-refactor-design.md`（§4 槽位纪律 / §9 实现
+  口径注记）。积类型的结构体表示（脱糖为 `{Name}.mk` 单构造子 enum）
+  **不新增值形态**，故 frcs 槽位纪律与 L07 完全同构：spine 槽 /
+  Sum(SumCase) 槽只包裹不物化（`?m x y := Bool` 的 invert 仍可逆），
+  被解 rigid 的读点按应用序解析应用（`v_app` 带 `v_applicable` 守卫）。
+  相对旧孪生（`bump_spine_iter` 未移植，仍为事实表机制）的唯一可观测
+  差异即 §9 记录的"已解 rigid + 非空 spine 解析应用"（参考版更完备）；
+  本层测试集无 L07 那条钉死用例的同构物，故 `l08_fast_parity` 保持全绿。
+- 验收：`--lib` 49 / `l08_blackbox` 57 / `l08_blackbox_v2` 51 /
+  `l08_fast_parity` 80 全绿（与移植前逐字节一致）。
+
 ## 10. 参考资料
 
 - 本仓库 `src/L07_sum_type/README.md`（本层全部核心机的出处）；

@@ -113,6 +113,12 @@ fn val_eq_go(budget: &mut EqBudget, a: &Val, b: &Val) -> bool {
         return false;
     }
     match (a, b) {
+        // 精化包裹：仅同一替换实例（同 Rc）且内层结构相等才短路；异实例
+        // 一律回落慢路径（慢路径的 force 会推开 VSub，正确性不受影响）
+        (Val::VSub(x, xs), Val::VSub(y, ys)) => {
+            std::rc::Rc::ptr_eq(xs, ys) && val_eq_go(budget, x, y)
+        }
+        (Val::VSub(..), _) | (_, Val::VSub(..)) => false,
         (Val::Flex(x, xs), Val::Flex(y, ys)) => x == y && spine_eq(budget, xs, ys),
         (Val::Rigid(x, xs), Val::Rigid(y, ys)) => x == y && spine_eq(budget, xs, ys),
         (Val::Decl(x, xs), Val::Decl(y, ys)) => x == y && spine_eq(budget, xs, ys),
