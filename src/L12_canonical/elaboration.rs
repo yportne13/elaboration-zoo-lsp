@@ -5,15 +5,24 @@ use smol_str::SmolStr;
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Tm, VTy, Val,
+    Closure, Cxt, DeclTm, Error, Infer, Subst, Tm, VTy, Val,
     Rc, MetaVar,
-    empty_span, lvl2ix,
+    empty_span, lvl2ix, val_mentions_lvl, wrap_sub,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler, MetaEntry,
     typeclass::Instance,
     unification::PartialRenaming,
     typeclass::Assertion,
 };
+
+/// 特化合一的进行时状态（dpm-nbe `unifyS` 的 ɑ-accumulation 的 Rust 形态）：
+/// `acc` = 已解出的替换——编译器的 σ（嵌套 match 时）作种子，方程途中叠加，
+/// 调用方在方程结束后取走 `acc` 作为新 σ。L12 的可解集 = **任意裸 Rigid**
+/// （旧 `update_cxt` 对任何裸 rigid 都改写槽位，没有 L07 的 bind-slot 白名单），
+/// 故这里没有 `solvable` 字段——臂条件 `sp.is_empty()` 即全部约束。
+struct SpecSolve {
+    acc: Rc<Subst>,
+}
 
 impl Infer {
     fn insert_go(&mut self, cxt: &Cxt, t: Rc<Tm>, va: Rc<Val>) -> (Rc<Tm>, Rc<VTy>) {
@@ -75,46 +84,101 @@ impl Infer {
     ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
         act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
     }
-    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
+    pub fn check_pm_final(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>, ori: Rc<Val>) -> Result<(Rc<Tm>, Rc<Subst>), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
-        let new_cxt = self.unify_pm(&new_cxt, &ori, &self.eval(&new_cxt.decl, &new_cxt.env, &t_inferred), t_span).unwrap_or(new_cxt);
-        Ok((t_inferred, new_cxt))
+        let mut spec = SpecSolve { acc: Rc::new(Subst::default()) };
+        self.unify_pm(cxt, &a, &inferred_type, t_span, &mut spec)?;
+        // 第二方程：把被匹配项的值 `ori` 与精化后的模式项值再对一次
+        // （旧 `.unwrap_or(new_cxt)`——失败容忍，丢弃第二次方程的解）。期望
+        // 类型重锚：在 σ 之下的上下文里重求值（subst_cxt 包裹 ⇒ eval 出来
+        // 的引用带 VSub，unify_pm 入口统一推开）。
+        let cxt2 = cxt.subst_cxt(&spec.acc);
+        let ori_v = self.eval(&cxt2.decl, &cxt2.env, &t_inferred);
+        let mut spec2 = SpecSolve { acc: spec.acc.clone() };
+        if self.unify_pm(&cxt2, &ori, &ori_v, t_span, &mut spec2).is_ok() {
+            spec.acc = spec2.acc;
+        }
+        Ok((t_inferred, spec.acc))
     }
-    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Cxt), Error> {
+    pub fn check_pm(&mut self, cxt: &Cxt, t: Raw, a: Rc<Val>) -> Result<(Rc<Tm>, Rc<Subst>), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
-        let new_cxt = self.unify_pm(cxt, &a, &inferred_type, t_span)?;
-        Ok((t_inferred, new_cxt))
+        let mut spec = SpecSolve { acc: Rc::new(Subst::default()) };
+        self.unify_pm(cxt, &a, &inferred_type, t_span, &mut spec)?;
+        Ok((t_inferred, spec.acc))
     }
-    fn unify_pm(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, t_span: Span<()>) -> Result<Cxt, Error> {
+    /// 特化合一（对应 dpm-nbe `unify1`）：可解臂把解**累加进 `spec.acc`**
+    /// （显式替换，dpm-nbe `insertSub`），不再改写 env 槽。方程两侧在入口
+    /// 置于当前 acc 之下再解释（`subst ɑ vs` 的惰性等价物）——先解出的
+    /// 方程对后到的子方程自动可见，已解变量不再以 bare rigid 出现，天然
+    /// 不可再解。
+    ///
+    /// 与 canonical / trait 求解的交互：本函数**只**服务模式方程路径
+    /// （pattern_match 的 `check_pm`/`check_pm_final`）；canonical 搜索
+    /// （`canonical.rs`）与 trait 实例求解（`solve_trait`）走常规 `unify`，
+    /// 不带 spec——实例求解过程中的合一**不会**获得特化解能力（对齐旧
+    /// `update_cxt` 只从 unify_pm 调用的边界）。
+    fn unify_pm(
+        &mut self,
+        cxt: &Cxt,
+        t: &Rc<Val>,
+        t_prime: &Rc<Val>,
+        t_span: Span<()>,
+        spec: &mut SpecSolve,
+    ) -> Result<(), Error> {
         //println!("  {}", self.meta.len());
         //println!("{:?} == {:?}", t, t_prime);
-        let t = self.force(&cxt.decl, t);
-        let t_prime = self.force(&cxt.decl, t_prime);
+        let mut t = self.force(&cxt.decl, t);
+        let mut t_prime = self.force(&cxt.decl, t_prime);
+        if !spec.acc.is_empty() {
+            t = self.force(&cxt.decl, &wrap_sub(&spec.acc, t));
+            t_prime = self.force(&cxt.decl, &wrap_sub(&spec.acc, t_prime));
+        }
         match (t.as_ref(), t_prime.as_ref()) {
-            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2)) if sp1.is_empty() && sp2.is_empty() && x1 == x2 => {
-                Ok(cxt.update_cxt(self, *x1, t_prime, false))
+            // 双裸 Rigid 同名：自反（旧 update_cxt(x1, t_prime, false) 对
+            // 槽值的重写是恒等，仅推进 update_from 优化——语义为 Ok）
+            (Val::Rigid(x1, sp1), Val::Rigid(x2, sp2))
+                if sp1.is_empty() && sp2.is_empty() && x1 == x2 =>
+            {
+                Ok(())
             }
-            (Val::Rigid(x, sp), _) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, *x, t_prime, true))
+            // 单侧裸 Rigid：解入 acc。Flex 解值保持旧 `update_cxt` 的 no-op
+            // （那时对 Flex 直接 clone、不改写槽）；occurs 环守卫只扫解值
+            // 自身结构（Flex 头不透明），失败 = 方程不可满足（分支不可达）。
+            (Val::Rigid(x, sp), v) if sp.is_empty() => {
+                if matches!(v, Val::Flex(..)) {
+                    return Ok(());
+                }
+                if val_mentions_lvl(v, *x) {
+                    return Err(Error(t_span.map(|_| "".to_string()), vec![]));
+                }
+                let v = Rc::new(v.clone());
+                spec.acc = Subst::extend(&spec.acc, *x, v);
+                Ok(())
             }
-            (_, Val::Rigid(x, sp)) if sp.is_empty() => { 
-                Ok(cxt.update_cxt(self, *x, t, true))
+            (v, Val::Rigid(x, sp)) if sp.is_empty() => {
+                if matches!(v, Val::Flex(..)) {
+                    return Ok(());
+                }
+                if val_mentions_lvl(v, *x) {
+                    return Err(Error(t_span.map(|_| "".to_string()), vec![]));
+                }
+                let v = Rc::new(v.clone());
+                spec.acc = Subst::extend(&spec.acc, *x, v);
+                Ok(())
             }
             (
                 Val::SumCase { case_name: name1, datas: d1, .. },
                 Val::SumCase { case_name: name2, datas: d2, .. },
             ) => {
                 if name1 == name2 {
-                    let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
+                        self.unify_pm(cxt, &x.1, &y.1, t_span, spec)?;
                     }
-                    Ok(cxt)
+                    Ok(())
                 } else {
                     Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
@@ -126,25 +190,23 @@ impl Infer {
                 Val::Sum(name2, d2, ..),
             ) => {
                 if name1 == name2 {
-                    let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
+                        self.unify_pm(cxt, &x.1, &y.1, t_span, spec)?;
                     }
-                    Ok(cxt)
+                    Ok(())
                 } else {
                     Err(Error(t_span.map(|_| "".to_string()), vec![]))
                 }
             }
-            (_, _) => {
-                self.unify_catch(cxt, &t, &t_prime, t_span)
-                    .map(|_| cxt.clone())
-            }
+            (_, _) => self.unify_catch(cxt, &t, &t_prime, t_span),
         }
     }
     pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, u32), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
+        // σ 包裹的类型先推开（子句体内引用被解槽的期望类型）
+        let inferred_type = self.force(&cxt.decl, &inferred_type);
         match inferred_type.as_ref() {
             Val::U(u) => Ok((t_inferred, *u)),
             Val::Flex(m, sp) => {

@@ -68,7 +68,7 @@ impl Infer {
             List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(decl, &a.tail())?;
-                match self.force(decl, &a.head().unwrap().0).as_ref() {
+                match self.force_arg(decl, &a.head().unwrap().0).as_ref() {
                     Val::Rigid(x, List { head: None, .. }) => {
                         if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
                             ren.remove(&x.0);
@@ -195,7 +195,7 @@ impl Infer {
             Ok((List::new(), SpinePruneStatus::OKRenaming))
         } else {
             let (sp_rest, status) = self.prune_vflex_go(decl, pren, sp.tail())?;
-            let t = self.force(decl, &sp.head().unwrap().0);
+            let t = self.force_arg(decl, &sp.head().unwrap().0);
             match t.as_ref() {
                 Val::Rigid(x, List { head: None, .. }) => match (pren.ren.get(&x.0), status) {
                     (Some(x), _) => Ok((
@@ -274,6 +274,9 @@ impl Infer {
     pub fn rename(&mut self, decl: &Decl, pren: &PartialRenaming, t: &Rc<Val>) -> Result<Rc<Tm>, UnifyError> {
         let t = self.force(decl, t);
         match t.as_ref() {
+            // 不变式：force 的返回值顶层不会是 VSub（防御臂；fuel 耗尽的
+            // 降级返回裸 rigid，故正常不可达）
+            Val::VSub(..) => Err(UnifyError::Basic),
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == *m_prime => Err(UnifyError::Basic),
                 _ => self.prune_vflex(decl, pren, *m_prime, sp.clone()),
@@ -495,6 +498,8 @@ impl Infer {
         Ok(())
     }
     pub fn solve_trait(&mut self, cxt: &Cxt, x: &Rc<Val>) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
+        // 精化 σ 包裹的接收者先推开（子句体内引用被解槽时会出现）
+        let x = self.force(&cxt.decl, x);
         if let Val::Sum(name, params, _, true) = x.as_ref() {
             let out_param = if let Some(o) = self.trait_out_param.get(&name.data) {
                 o
@@ -508,7 +513,10 @@ impl Infer {
                 .zip(out_param)
                 .filter(|(_, x)| !**x)
                 .map(|x| x.0)
-                .map(|(_, tm, _, _)| self.force(&cxt.decl, tm))
+                // 深推开：Sum/SumCase 的槽位在 frcs 里只包裹不物化（保
+                // invert 可逆），trait 匹配看到的是槽位结构，须显式展开
+                // （旧机制下 update_cxt/refresh 已物化）
+                .map(|(_, tm, _, _)| self.force_deep(&cxt.decl, tm))
                 .collect();
             // If any param is still Flex (unsolved meta), bail out
             if params.iter().any(|v| matches!(v.as_ref(), Val::Flex(..))) {
@@ -524,7 +532,7 @@ impl Infer {
                     .map_err(|e| e.0.data)?;
                 let val = self.eval(&cxt.decl, &cxt.env, &tm);
                 if let Val::SumCase { typ, .. } = val.as_ref() {
-                    let _ = self.unify_catch(cxt, typ, x, empty_span(()));
+                    let _ = self.unify_catch(cxt, typ, &x, empty_span(()));
                 }
                 Ok(Some((tm, val)))
             } else {
