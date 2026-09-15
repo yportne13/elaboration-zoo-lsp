@@ -1208,5 +1208,65 @@ primop，已撤）复现不了修复，正是因为根因在 unify 的栈管理�
   已知回落/残差文件（13-adder-tree 0.60、18-utils 0.70、21/23/25、alu
   0.76）不变。
 
+---
+
+## 2026-09-15（wasm 主线程栈 1 MiB → 64 MiB：web 大文件卡死的首要嫌疑）
+
+**症状**：VS Code for Web 打开大文件时插件偶发卡死——不报错、状态栏不变、
+语言功能静默无响应；桌面（同引擎、同为 L13 孪生）无此现象。
+
+**定位**：wasm 构建把主线程栈留在了 wasm-ld 默认的 ~1 MiB，桌面是 64 MiB。
+三条证据合起来指向溢出：
+
+- **量出来的**：`server.wasm` 第一个可变 i32 全局初值 = 1048576，即
+  `__stack_pointer`，主线程栈恰好 1 MiB（构建脚本与 CI 都没传 `-z stack-size`；
+  `--stack-first` 是 wasm-ld 默认，故栈位于线性内存起始处）。桌面
+  `.cargo/config.toml` 的 `/STACK:67108864` 注释早已写明"1 MiB 对该递归结构的
+  typechecker/evaluator 太小，连 prelude 都过不去"。
+- `docs/l13-force-recursion-stack-overflow.md`：`Infer::force` 递归深度随**文件
+  累积状态**增长（单文件 502 / 合并 752），且 elaboration 在主线程。
+- **本地实测**：把桌面 release 二进制的 PE `SizeOfStackReserve` 改小（无需重编
+  译）后跑 `typort check`，用 `TYPORT_LSP_ENGINE=twin` 对齐 web 口径，输入为
+  `examples/hdl` 合并成的单文件：
+
+  | 输入 | 大小 | reserve | 结果 |
+  |---|---|---|---|
+  | 13-adder-tree 单文件 | 5 KB | 320 KB | OK |
+  | 前 8 份 hdl | 12.6 KB | 768 KB | OK |
+  | 全 24 份 hdl | 62 KB | 880 KB / 896 KB | **0xC00000FD（两次复现）** |
+  | 同上 | 62 KB | 900 / 928 / 960 / 992 / 1008 / 1024 KB | OK |
+
+  即该语料峰值 x64 主线程栈 **≈0.9 MB**，prelude 自身 < 0.32 MB，其余来自文件
+  内容。1 MiB 的 wasm 栈在同一语料上余量仅 ~10%，而 wasm 的递归帧通常比 x64
+  更大（x64 有寄存器传参与溢出槽优化，wasm 的局部与溢出都落在线性内存影子栈
+  上），故 1 MiB 下溢出属预期。**更大的文件只会更糟。**
+
+**为什么表现为"卡死"而不是报错**（同一现象的另一半，本次未改）：wasm guest
+一旦 trap（栈越界即 out-of-bounds trap），`mainWorker` 的 `_start()` 抛异常 →
+`workerDone` 永不发出 → 宿主 `workerDone().then(resolveRunPromise)` 永不触发 →
+`process.run()` 永不 settle → `@vscode/wasm-wasi-lsp` 的 `startServer` 既不 fire
+end 也不 fire error，语言客户端静默挂着、状态栏仍显示运行中。（对照：`proc_exit`
+是干净的，宿主会 `resolveRunPromise(exitCode)`，所以正常退出能看到报错。）
+
+**改动**：
+- `vscode_extension/package.json` 构建脚本加 `-Clink-arg=-zstack-size=67108864`
+  （与桌面 `/STACK:67108864` 对齐，约 70× 实测所需），`--initial-memory`
+  41943040 → 134217728：栈在 wasm 里位于线性内存起始处，初始内存必须容下栈。
+- `extension.ts` 的 `WASM_INITIAL_PAGES` 640 → 2048。模块导入的 `env.memory`
+  最小页由 linker 决定，必须与 descriptor 逐字节一致，否则实例化失败。
+- 顺带订正 `lib.rs` 的 `Engine` 文档注释（"web 宿主跑不了孪生"已随 a28e0e5 过期）。
+
+**验证边界**：`cargo rustc` 链接通过；产物核对 `env.memory` min=2048 页
+（134217728 B）/ max=32768 页 / shared=true，`__stack_pointer` 初值 67108864
+（原 1048576）；`tsc -b` + esbuild 重建，`dist/web/extension.js` 内为
+`WASM_INITIAL_PAGES = 2048`。**未在真机 VS Code for Web 复测**——需用原先卡死的
+大文件验证。若仍卡死，按同一比例抬栈（`-zstack-size` 与 `--initial-memory` 必须
+同步抬，浏览器里初始内存是实打实提交的）。
+
+**测量方法**（可复用，本次未入库为脚本）：桌面 PE 的 `SizeOfStackReserve` 位于
+可选头 +0x48（`e_lfanew` + 0x18 起算，8 字节小端），改小它等于给同一个 release
+二进制换一个栈预算，二分即可量出任一负载的峰值栈用量——比加探针重建快得多。
+
+
 
 

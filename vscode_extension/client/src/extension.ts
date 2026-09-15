@@ -49,9 +49,11 @@ function updateStatusBar(state: State): void {
 // `--initial-memory` / `--max-memory` in the extension's `npm run build`
 // (vscode_extension/package.json): the wasm32-wasip1-threads module imports a
 // shared memory with those exact bounds, so a mismatch fails instantiation.
+// The initial size must cover the linker's main-thread stack (`-zstack-size`,
+// stack-first layout) plus data and the startup heap: 64 MiB stack + headroom.
 // 2 GiB max leaves headroom for the twin engine's resident state (~730 MB
 // peak measured natively, vs ~200 MB for the reference engine).
-const WASM_INITIAL_PAGES = 640; // 41,943,040 bytes
+const WASM_INITIAL_PAGES = 2048; // 134,217,728 bytes
 const WASM_MAX_PAGES = 32768; // 2,147,483,648 bytes
 
 async function startLanguageServer(

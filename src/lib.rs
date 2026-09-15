@@ -235,8 +235,9 @@ struct AnalysisJob {
 /// cache — a ~2.2x memory-for-CPU trade, down from the ~9x / ~1.8 GB measured
 /// before compaction.  [`Engine::lsp_default`] (the only constructor the
 /// server uses) selects the twin unless `TYPORT_LSP_ENGINE=reference`, the
-/// explicit baseline escape hatch — the VS Code web host, which cannot run
-/// the twin, sets it.  The reference engine stays wired as the automatic
+/// explicit baseline escape hatch — the VS Code extension passes whichever
+/// engine its `typort-hdl.cli-server.engine` setting resolved to, on the web
+/// host too.  The reference engine stays wired as the automatic
 /// fallback for files with imports or packages, but is no longer the default.
 /// See `resident_memory_growth_per_kick` for the pre-compaction measurement.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
