@@ -382,25 +382,33 @@ L06 的冠军配方（bump arena + 打包值 tag 编码 + 迭代内核 + 记忆�
 复用 + prim 元数预检/单次收集/手工拼接）的 L07 移植，另加 sum-type 层的
 机制落地。
 
-> **分叉说明（2026-09）**：参考版已改为显式替换精化（`Subst`/`VSub`/
-> `frcs` + `SpecSolve` 穿参，见 §6 末行）；本节描述的孪生版仍保留
-> `pm_defs` 事实表机制，行为 parity 由 `l07_fast_parity` 逐字节保证。
-> 机制对齐待移植——注意 design doc §4 的槽位纪律（spine 只包裹不
-> 物化）与 `frcs` 对"已解 rigid + 非空 spine"的解析应用选择
-> （tests.rs 的 `test_fn_typed_index_slot_applied_after_refine` 会强制
-> 孪生复刻）。
+> **机制对齐（2026-09，移植完成）**：参考版的显式替换精化已移植到孪生版
+> ——`SubstV`（持久化单链，`Rc` 共享）/ `XCell::VSub` / `frcs` +
+> `SpecSolve` 穿参，与参考版 `Subst`/`Val::VSub`/`frcs`/`SpecSolve`
+> 逐点同构；`pm_defs`/`pm_solvable`/`pm_mark`/`pm_restore` 已随之删除。
+> 两条参考版侧的关键语义选择在孪生侧复刻：design doc §4 的槽位纪律
+> （spine/Sum/SumCase 槽只包裹不物化、Lam/Pi 闭包 env 逐槽包裹、Match
+> scrutinee 单独推进）与 `frcs` 对"已解 rigid + 非空 spine"的解析应用
+> 选择（`tests.rs` 的 `test_fn_typed_index_slot_applied_after_refine`
+> 钉死，l07_fast_parity 逐字节保证）。fuel 燃烧点同步对齐：VSub 推开
+> 入口不烧，frcs 的 lookup 命中烧 1（对齐旧 force(Rigid) 查表剖面），
+> 耗尽返回裸 rigid。σ 用 std `Rc`（不进 reset arena——跨越单次模式编译
+> 生存，bump 轮界不清零 Rc，残留计数随轮内值一同失效）。
 
 机制落地清单（孪生侧现状）：
 
 - **值编码**：tag 7 XCell 扩为 `Lit / Decl / Prim / Obj / Sum / SumCase /
-  Match`；Decl/Prim/Obj 头的链经 spine 栈的**链头种类标志** O(1) 判定
-  （church 热路径零额外遍历）；
-- **L07 语义的落点**：`pm_defs` 事实表 + `pm_solvable` 可解集（truncate
-  回滚）、`unify_fuel`（force 展开/每次 unify 递归各耗 1，充值点与参考版
-  一致）、Match 运行时首匹配（`eval_aux` 的值层迭代版）+ 卡住期 pending
-  的值层应用、Match quote/rename 的分支体在**简化 decl 表**下重求值再
-  导出（与参考版 `simpl_decl` 逐点对应）、struct_eq 快路径（bump 版
-  budget 结构比较）、Compiler（模式编译 + 特化合一）全套；
+  Match / VSub`；Decl/Prim/Obj 头的链经 spine 栈的**链头种类标志** O(1)
+  判定（church 热路径零额外遍历）；
+- **L07 语义的落点**：模式特化 = 显式替换（解入 `SpecSolve.acc`，臂边界
+  Rc 指针赋值回滚；上下文经 `subst_cxt` 包裹 env 槽与类型表，布局不动；
+  `force_arg` 逐层解包 VSub、不推开精化、不重选 Match）、`unify_fuel`
+  （force 展开/每次 unify 递归各耗 1，充值点与参考版一致；frcs 的 lookup
+  命中烧 1）、Match 运行时首匹配（`eval_aux` 的值层迭代版）+ 卡住期
+  pending 的值层应用、Match quote/rename 的分支体在**简化 decl 表**下
+  重求值再导出（与参考版 `simpl_decl` 逐点对应）、struct_eq 快路径
+  （bump 版 budget 结构比较，VSub 对仅同 Rc 实例短路）、Compiler（模式
+  编译 + 特化合一）全套；
 - **decl 表平铺化**：参考版 `Cxt::decl_insert` 是 `Rc` 写时复制（整表
   克隆 O(n)/次 → def 链 O(n²)）；快版用 `Rc<RefCell<FxHashMap>>` 平铺
   覆盖——顶层 elaboration 的插入全部单调（占位 → 同名覆盖为终值），
