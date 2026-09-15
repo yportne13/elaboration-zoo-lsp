@@ -214,6 +214,7 @@ export async function activate(context: ExtensionContext) {
 			if (!client) return;
 			return showServerActions({
 				backend: 'cli',
+				engine: readEngine('cli'),
 				canUseCli: true,
 				restart: () => restartCliClient(),
 				showLog: () => logChannel?.show(),

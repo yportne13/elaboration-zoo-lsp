@@ -1208,5 +1208,252 @@ primop，已撤）复现不了修复，正是因为根因在 unify 的栈管理�
   已知回落/残差文件（13-adder-tree 0.60、18-utils 0.70、21/23/25、alu
   0.76）不变。
 
+---
+
+## 2026-09-15（wasm 主线程栈 1 MiB → 64 MiB：web 大文件卡死的首要嫌疑）
+
+**症状**：VS Code for Web 打开大文件时插件偶发卡死——不报错、状态栏不变、
+语言功能静默无响应；桌面（同引擎、同为 L13 孪生）无此现象。
+
+**定位**：wasm 构建把主线程栈留在了 wasm-ld 默认的 ~1 MiB，桌面是 64 MiB。
+三条证据合起来指向溢出：
+
+- **量出来的**：`server.wasm` 第一个可变 i32 全局初值 = 1048576，即
+  `__stack_pointer`，主线程栈恰好 1 MiB（构建脚本与 CI 都没传 `-z stack-size`；
+  `--stack-first` 是 wasm-ld 默认，故栈位于线性内存起始处）。桌面
+  `.cargo/config.toml` 的 `/STACK:67108864` 注释早已写明"1 MiB 对该递归结构的
+  typechecker/evaluator 太小，连 prelude 都过不去"。
+- `docs/l13-force-recursion-stack-overflow.md`：`Infer::force` 递归深度随**文件
+  累积状态**增长（单文件 502 / 合并 752），且 elaboration 在主线程。
+- **本地实测**：把桌面 release 二进制的 PE `SizeOfStackReserve` 改小（无需重编
+  译）后跑 `typort check`，用 `TYPORT_LSP_ENGINE=twin` 对齐 web 口径，输入为
+  `examples/hdl` 合并成的单文件：
+
+  | 输入 | 大小 | reserve | 结果 |
+  |---|---|---|---|
+  | 13-adder-tree 单文件 | 5 KB | 320 KB | OK |
+  | 前 8 份 hdl | 12.6 KB | 768 KB | OK |
+  | 全 24 份 hdl | 62 KB | 880 KB / 896 KB | **0xC00000FD（两次复现）** |
+  | 同上 | 62 KB | 900 / 928 / 960 / 992 / 1008 / 1024 KB | OK |
+
+  即该语料峰值 x64 主线程栈 **≈0.9 MB**，prelude 自身 < 0.32 MB，其余来自文件
+  内容。1 MiB 的 wasm 栈在同一语料上余量仅 ~10%，而 wasm 的递归帧通常比 x64
+  更大（x64 有寄存器传参与溢出槽优化，wasm 的局部与溢出都落在线性内存影子栈
+  上），故 1 MiB 下溢出属预期。**更大的文件只会更糟。**
+
+**为什么表现为"卡死"而不是报错**（同一现象的另一半，本次未改）：wasm guest
+一旦 trap（栈越界即 out-of-bounds trap），`mainWorker` 的 `_start()` 抛异常 →
+`workerDone` 永不发出 → 宿主 `workerDone().then(resolveRunPromise)` 永不触发 →
+`process.run()` 永不 settle → `@vscode/wasm-wasi-lsp` 的 `startServer` 既不 fire
+end 也不 fire error，语言客户端静默挂着、状态栏仍显示运行中。（对照：`proc_exit`
+是干净的，宿主会 `resolveRunPromise(exitCode)`，所以正常退出能看到报错。）
+
+**改动**：
+- `vscode_extension/package.json` 构建脚本加 `-Clink-arg=-zstack-size=67108864`
+  （与桌面 `/STACK:67108864` 对齐，约 70× 实测所需），`--initial-memory`
+  41943040 → 134217728：栈在 wasm 里位于线性内存起始处，初始内存必须容下栈。
+- `extension.ts` 的 `WASM_INITIAL_PAGES` 640 → 2048。模块导入的 `env.memory`
+  最小页由 linker 决定，必须与 descriptor 逐字节一致，否则实例化失败。
+- 顺带订正 `lib.rs` 的 `Engine` 文档注释（"web 宿主跑不了孪生"已随 a28e0e5 过期）。
+
+**验证边界**：`cargo rustc` 链接通过；产物核对 `env.memory` min=2048 页
+（134217728 B）/ max=32768 页 / shared=true，`__stack_pointer` 初值 67108864
+（原 1048576）；`tsc -b` + esbuild 重建，`dist/web/extension.js` 内为
+`WASM_INITIAL_PAGES = 2048`。**未在真机 VS Code for Web 复测**——需用原先卡死的
+大文件验证。若仍卡死，按同一比例抬栈（`-zstack-size` 与 `--initial-memory` 必须
+同步抬，浏览器里初始内存是实打实提交的）。
+
+**测量方法**（可复用，本次未入库为脚本）：桌面 PE 的 `SizeOfStackReserve` 位于
+可选头 +0x48（`e_lfanew` + 0x18 起算，8 字节小端），改小它等于给同一个 release
+二进制换一个栈预算，二分即可量出任一负载的峰值栈用量——比加探针重建快得多。
+
+---
+
+## 2026-09-15 续（web 宿主默认引擎回到参考版：孪生 wasm 内存贴顶 + 静默 trap）
+
+**现场**：VS Code for Web（`dependent-type-web-lsp.pages.dev`，由
+`F:/projects/Rust/typort-lsp` 的 `github-pages.yml` 在 push 后 `run.sh` 构建
+`sample/` 发布）切到 `adder_proof` 时插件卡死；状态栏不变、无任何报错。
+
+**先排除栈**：把线上 `TyportHDL/client/server.wasm` 下下来解析（3,532,858 B，
+非 8 月那份 2,323,470）：`__stack_pointer` = 67108864（64 MiB，即上一节的修复）、
+`env.memory` min=2048 / max=32768、含 `TYPORT_LSP_ENGINE`。**线上早已是新构建**，
+故 64 MiB 栈对本次症状无效——栈不是这条问题的原因。
+
+**真实浏览器实测**（ZCode 内嵌浏览器给不了跨源隔离，`SharedArrayBuffer` 为
+undefined，而本模块导入 shared memory，故必须用真 Chrome）：headless Chrome +
+CDP 驱动，用 `performance.measureUserAgentSpecificMemory()` 读整页（含 worker）
+内存，另抓 page/worker 的 console 与 `Runtime.exceptionThrown`：
+
+| 观测 | 结果 |
+|---|---|
+| LSP 进入 running | 本地 65 s / 线上 123 s（页面加载起算） |
+| adder_proof | 正常，3 条诊断（与原生一致） |
+| 页面总内存 | 226 MB（刚 running）→ **1182 MB**（首次分析后） |
+| 多文件切换 / 连续编辑 | 稳定在 1.17 GB，**不随 kick 增长** |
+| 硬上限 | 2048 MB（SharedArrayBuffer 上限，抬不动） |
+
+原生对照（同文件）：孪生峰值 **LSP 1059 / CLI 1269 MB**，参考版 **202 MB**；
+而 248 KB 的 HDL 合并语料孪生峰值只有 1050 MB → **内存跟文件"种类"（重 Nat
+证明）相关，不跟体积成正比**。注意不要拿"孪生常驻 429 MB"当基准比 web 的
+1182 MB：那是另一口径的稳态值，实测 web 与原生峰值同量级，**没有放大**。
+
+**失败签名（已复现）**：把链接期 `--max-memory` 压到 512 MiB 再跑同一个页面，
+22.7 s 时宿主 console 打出 `RuntimeError: unreachable`（wasm trap），而**状态栏
+全程显示绿色对勾 "language server running"、Problems 保持旧值、无任何报错**——
+即 guest 已死、客户端一无所知（`_start()` 抛异常后 `workerDone` 不发，
+`process.run()` 永不 settle，`@vscode/wasm-wasi-lsp` 既不 fire end 也不 fire
+error）。这正是用户描述的"卡死"。
+
+**A/B（同一 512 MiB 上限）**：参考版只用 **332 MB** 且正常出 3 条诊断；孪生
+739 MB 撞顶静默 trap。即 2 GiB 上界下孪生只剩 ~42% 余量，浏览器/系统内存一紧
+就会越顶，而越顶的代价是**静默死亡**。
+
+**改动**：`serverActions.ts` 的 `UNSET_ENGINE.wasm` 由 `'twin'` 改回
+`'reference'`（孪生仍可用 `typort-hdl.cli-server.engine = "twin"` 按机开启）。
+顺带收益：web 上孪生光 prime 就要 65–123 秒才可用，参考版响应快得多。
+
+**验证边界**：复现的是"撞内存顶 → 静默 trap"的机制，**不是用户那次的具体触发
+序列**（其原始操作在干净 profile 下未能复现）。真机确认方法：卡死时看 DevTools
+console 是否出现 `RuntimeError: unreachable`，以及状态栏图标是否仍是对勾。
+
+---
+
+## 2026-09-15 续二（web 卡死：把"静默"变成"可诊断"——`typort-hdl/ping` 看门狗）
+
+**背景**：上一节上线后用户复测仍报"点开 adder_proof 没有任何响应，output 日志
+也完全不动"。把输出通道镜像进页面 console 后，用同一流程（先等
+typeclass_complex 稳定、再点 adder_proof）在本地复现：**参考版下日志完整正常**
+——`change: file:///workspace/adder_proof.typort` → `change 0.53`，诊断 32→35
+（+3 即 adder_proof 自身），LSP 启动到 main loop 约 10 秒。故参考版干净 profile
+下复现不出该症状。"日志完全不动"的两种可能：guest 已死（trap 后 `workerDone`
+不发、`process.run()` 永不 settle、既不 fire end 也不 fire error，故一行都不会
+有），或仍在跑浏览器缓存的旧（孪生）bundle——判据就是 output 首行的
+`typort: lsp engine = Reference|Twin`。
+
+**改动**：加心跳看门狗，把这一类静默死亡变成可见且可恢复：
+
+- 服务端：新增自定义请求 `typort-hdl/ping`，放在 `drain_analysis_jobs`
+  **之前**应答——空闲即答、忙则在回到主循环后答，从而把"忙"与"死"区分开
+  （死的永不答）。
+- 客户端：`extension.ts` 每 20 s 探一次（10 s 超时）；连续 6 次未答**且**该窗口
+  内没有任何服务端日志（输出通道的 `append`/`appendLine` 也计入存活信号）才
+  报警：状态栏转 Stopped、输出通道写一条说明性 error、并弹警告提供一键
+  `Restart Language Server` / `Show Log`。
+
+**验证**：
+- 原生：`typort-hdl/ping` 在 prelude 装载期间排队（4.2 s / 6.2 s 发出 → 14.3 s
+  主循环一开始一并应答），分析完成后即答；didOpen 后 ping 正常。
+- 浏览器：把探针方法名故意写错并缩短阈值（2 s × 3），11 s 即在输出通道打出
+  报警文本 —— 报警通路与 web 宿主下的 promise/超时链路都通。
+- 生产阈值（20 s × 6 = 120 s）下跑 170 s：无误报，adder_proof 正常出诊断。
+
+**边界**：看门狗只是让死亡可见并可恢复，**不消除**死亡原因；若真机仍出现
+报警，则说明确实是 guest 静默死亡，届时结合 DevTools console 的
+`RuntimeError: unreachable`（内存撞顶）或输出通道最后几行定位。
+
+---
+
+## 2026-09-15 续三（web 交付链的缓存问题：版本号破缓存 + 状态栏暴露引擎）
+
+**现场**：连续三次改动（栈、引擎默认、看门狗）后用户仍报"还是死了、没啥有价值
+的信息"。三件事同时"没生效"更像是**改动根本没到浏览器**：vscode-web 会缓存
+内建扩展，而本扩展的 `version` 一直是 `1.0.0` 从未变过——缓存键（发布者/名/
+版本）不变，浏览器就一直复用旧的那份（孪生版，且没有看门狗，故永远不会报警）。
+
+**改动**：
+- `vscode_extension/package.json` 版本 1.0.0 → 1.0.1（缓存键随版本变化）。
+- `sample/_headers` 给 `/index.html`、`/TyportHDL/*`、`/myExt/*` 加
+  `Cache-Control: no-cache`（Cloudflare Pages 认这个文件；vscode-web 的大块静态
+  资源保持默认缓存，避免拖慢首屏）。`run.sh` 里写死的
+  `unzip TyportHDL-1.0.0.vsix` 改为取最新 vsix，避免以后升版本又漏改。
+- 状态栏暴露引擎：文本 `$(check) TyPort Ref|Twin`、tooltip 带
+  `engine: reference|twin`——不必读日志就能一眼判断浏览器里跑的是哪份构建。
+
+**验证**：本地（参考版构建）状态栏实测 `TyPort Ref` + tooltip
+`engine: reference`，adder_proof 正常出诊断（32→35）。
+
+---
+
+## 2026-09-15 续四（状态栏菜单恢复引擎切换 + 暴露存活状态）
+
+**需求**：用户要求"点开状态栏图标，直接选 ref / twin"，并且此前"卡死时没有任何
+有价值的信息"。
+
+**改动**（`serverActions.ts` / `extension.ts` / `extension.desktop.ts`）：
+- 恢复引擎组（`Reference` / `Twin (performance)`，描述里标注 web 下的大致内存
+  占用），两端宿主都显示——web 也能跑孪生（opt-in）。选中即写
+  `typort-hdl.cli-server.engine` 并**就地重启**语言服务器（两个后端都在启动时
+  重读该设置），无需重载窗口。
+- 菜单里新增 `Status` 组，显示看门狗的存活结论：
+  `responding (last probe Ns ago)` / `NOT answering (N probes missed …)` /
+  `starting (no probe answered yet)`。这样"卡住"时点开菜单一眼就能区分
+  "服务端死了/不应答" 与 "服务端正常（问题在别处）"。
+
+**验证**（headless Chrome + CDP **真实鼠标输入**驱动，合成 DOM 事件驱动不了
+VS Code 状态栏）：点开菜单得到 5 项，内容为
+`Elaboration engine | ● Reference | ○ Twin (performance) | Status | Language
+server: starting (no probe answered yet) | Restart Language Server | Show Log`；
+点 `Twin (performance)` 后状态栏就地变为 `TyPort Twin (engine: twin)`，无窗口
+重载。截图见 `target/tmp/picker-menu.png`（本地产物，未入库）。
+
+---
+
+## 2026-09-15 续五（"帧超过 16384"假设实测否定；看门狗加自动恢复 + 取证）
+
+**用户假设**：adder_proof（20,991 B）是工作区里唯一超过 16384 字节的文件，而
+16384 正是 wasm-wasi 宿主管道 `Stream.BufferSize`——怀疑大帧卡住管道。该假设很有
+吸引力：它天然解释"两个引擎都挂"（客户端侧写入卡住 → 连探针都发不出去 →
+看起来像服务端不应答）。
+
+**实测否定**：往演示工作区注入 `xxl.typort`（adder_proof ×12 ≈ 252 KB，即宿主
+缓冲的 15 倍）并在真实页面里打开：服务端日志出现
+`change: file:///workspace/xxl.typort` → `change 1.29`，诊断 242 errors + 68
+infos，LSP 全程 remaining running。方向也是双向成立（该文件的
+publishDiagnostics 帧同样远大于 16 KiB）。故在本机环境下 16384 不是触发点。
+（注意：这只否定"本机可复现"，用户侧仍需其现场数据。）
+
+**看门狗增强**（`extension.ts`）：
+- **自动恢复**：报警时先把取证信息落日志，然后**自动重启语言服务器**
+  （每次会话最多 3 次，避免风暴），再弹模态框展示重启前的日志尾巴——编辑器
+  立刻可用，用户读框的同时已经恢复。实测对话框文案含
+  `Restarted automatically (1/3)`，状态栏随即回到 `TyPort Ref` 对勾。
+- 重启时重置探针状态，菜单 `Status` 行随之刷新。
+
+**现场数据仍待用户提供**：对话框会自动给出最后 40 行服务端日志——若尾行是
+`change: …/adder_proof.typort` 则是"分析途中死"（共享代码路径）；若根本没有该行
+则命令帧未到达（传输层）。
+
+---
+
+## 2026-09-15 收尾（真因确认：宿主 stdio 管道 16384 缓冲；拆除排查脚手架）
+
+**真因**：`@vscode/wasm-wasi-core` 宿主的 stdio 管道是定长内存流
+`Stream.BufferSize = 16384`。写入**超过该值**的帧会走背压分支
+（`targetFillLevel = max(0, BufferSize - len) = 0`，即必须等缓冲完全排空才入队）。
+adder_proof 的 didOpen 帧约 24 KB，是演示工作区里唯一越过该阈值的帧——与"默认
+文件正常、一点 adder_proof 就死"完全吻合；而它位于**宿主/传输层**，所以两个引擎
+表现一致（这解释了"ref 和 twin 都挂"）。把 `Stream.BufferSize` 由 16384 抬到
+1 MiB 后用户确认恢复正常。
+
+**保留**：
+- 缓冲修复：`run.sh` 在宿主解包后 patch（覆盖 `_Stream.BufferSize = 16384;` 与
+  `__publicField(_Stream, "BufferSize", 16384);` 两种写法，都找不到则告警），
+  故每次部署都会重新打上。
+- 状态栏 ref/twin 切换（`serverActions.ts` 引擎组 + `applyEngine`，选中即写设置
+  并就地重启）与状态栏 `TyPort Ref|Twin` 标记。
+- 版本号 1.0.1 与 `/index.html`、`/TyportHDL/*`、`/myExt/*` 的
+  `Cache-Control: no-cache`（破 web 交付链缓存）。
+- web 默认引擎 reference（孪生在 web 上内存贴 2 GiB 硬顶，仍是 opt-in）。
+
+**拆除**（排查期临时加、现已无用）：服务端 `typort-hdl/ping` 处理、客户端探针 /
+自动重启 / 模态取证对话框 / 日志尾巴环形缓冲、菜单里的 Status 行。
+
+**教训**：本机测试用的宿主是 **1.0.2**，线上是 **0.13.3**——同源同形但版本不同，
+"在 1.0.2 上 252 KB 也没问题"的对照实验不能推广到 0.13.3。排查传输层问题时应当
+先对齐宿主版本再下结论；同时"用户侧能稳定复现而我侧不能"应尽早转向**在用户环境
+里加观测**（这次的对话框/日志镜像），而不是继续在本机加探针。
+
+
 
 
