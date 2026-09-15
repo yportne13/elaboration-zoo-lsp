@@ -1,22 +1,24 @@
 use crate::list::List;
 
 use super::{
-    Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Tm, UnifyError, VTy, Val, cxt::Cxt, lvl2ix,
+    Error, Infer, Lvl, MetaEntry, MetaVar, Spine, Subst, Tm, UnifyError, VTy, Val,
+    cxt::Cxt, lvl2ix, v_applicable, val_mentions_lvl, wrap_sub,
     parser::syntax::Icit, syntax::Pruning, empty_span, pretty::pretty_tm,
 };
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
+/// η 展开的可应用性守卫的实现体已上移到 mod.rs（`super::v_applicable`，
+/// frcs 的 Rigid 读点共用同一守卫）。
 
-/// η 展开的可应用性守卫（L06/L11 的 `v_applicable` 同款）：只有 `v_app`
-/// 不会 panic 的形态（Flex / Rigid / 卡住投影 Obj）能吃 η 新变量。λ 值以
-/// 类型/值身份流入 unify 时，对字面量 / U / Π / Sum / 卡住 match 一侧做
-/// η 应用会命中 `v_app` 的 `impossible apply` panic——守卫失败直接落
-/// 后续臂判失败（λ 与非函数值的比较无从展开，最小惊讶；快版 η 臂的
-/// `vapp_ok` 同款守卫）。
-
-fn v_applicable(v: &Val) -> bool {
-    matches!(v, Val::Flex(..) | Val::Rigid(..) | Val::Obj(..))
+/// 特化合一的进行时状态（dpm-nbe `unifyS` 的 ɑ-accumulation 的 Rust 形态）。
+/// `solvable` = 本子句可解的 rigid 层级（模式槽 + 外层 bind 槽基线）；
+/// `acc` = 已解出的替换——编译器的 σ 作种子，方程途中叠加，调用方在方程
+/// 结束后取走 `acc` 作为新 σ（臂边界回滚 = 恢复快照指针）。
+pub(crate) struct SpecSolve<'a> {
+    pub(crate) solvable: &'a [Lvl],
+    pub(crate) acc: Rc<Subst>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +66,7 @@ impl Infer {
             List { head: None, .. } => Ok((Lvl(0), HashMap::new(), HashSet::new(), List::new())),
             a => {
                 let (dom, mut ren, mut nlvars, fsp) = self.invert_go(a.tail())?;
-                match self.force(a.head().unwrap().0.clone()) {
+                match self.force_arg(a.head().unwrap().0.clone()) {
                     Val::Rigid(x, List { head: None, .. }) => {
                         if ren.contains_key(&x.0) || nlvars.contains(&x.0) {
                             ren.remove(&x.0);
@@ -180,7 +182,7 @@ impl Infer {
             Ok((List::new(), SpinePruneStatus::OKRenaming))
         } else {
             let (sp_rest, status) = self.prune_vflex_go(pren, sp.tail())?;
-            match self.force(sp.head().unwrap().0.clone()) {
+            match self.force_arg(sp.head().unwrap().0.clone()) {
                 Val::Rigid(x, List { head: None, .. }) => match (pren.ren.get(&x.0), status) {
                     (Some(x), _) => Ok((
                         sp_rest
@@ -256,6 +258,9 @@ impl Infer {
     }
     pub fn rename(&mut self, pren: &PartialRenaming, t: Val) -> Result<Tm, UnifyError> {
         match self.force(t) {
+            // 不变式：force 的返回值顶层不会是 VSub（入口已推开；fuel 耗尽的
+            // 降级点在 frcs 的 lookup 命中处，返回裸 rigid）——防御性失败
+            Val::VSub(..) => Err(UnifyError),
             Val::Flex(m_prime, sp) => match pren.occ {
                 Some(m) if m == m_prime => Err(UnifyError),
                 _ => self.prune_vflex(pren, m_prime, sp),
@@ -439,16 +444,18 @@ impl Infer {
         cxt: &Cxt,
         sp: &Spine,
         sp_prime: &Spine,
+        mut spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match (sp, sp_prime) {
             (List { head: None, .. }, List { head: None, .. }) => Ok(()), // Both spines are empty
             (a, b) if matches!(a.head(), Some(_)) && matches!(b.head(), Some(_)) => {
-                self.unify_sp(l, cxt, &a.tail(), &b.tail())?; // Recursively unify the rest of the spines
+                self.unify_sp(l, cxt, &a.tail(), &b.tail(), spec.as_deref_mut())?; // Recursively unify the rest of the spines
                 self.unify(
                     l,
                     cxt,
                     a.head().unwrap().0.clone(),
                     b.head().unwrap().0.clone(),
+                    spec,
                 ) // Unify the current values
             }
             _ => Err(UnifyError), // Rigid mismatch error
@@ -514,9 +521,10 @@ impl Infer {
         m: MetaVar,
         sp: Spine,
         sp_prime: Spine,
+        spec: Option<&mut SpecSolve<'_>>,
     ) -> Result<(), UnifyError> {
         match self.intersect_go(sp.clone(), sp_prime.clone()) {
-            None => self.unify_sp(l, cxt, &sp, &sp_prime),
+            None => self.unify_sp(l, cxt, &sp, &sp_prime, spec),
             Some(pr) if pr.iter().any(|x| x.is_none()) => {
                 self.prune_meta(pr, m)?;
                 Ok(())
@@ -524,10 +532,26 @@ impl Infer {
             Some(_) => Ok(()),
         }
     }
-    pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: Val, u: Val) -> Result<(), UnifyError> {
+    pub fn unify(
+        &mut self,
+        l: Lvl,
+        cxt: &Cxt,
+        t: Val,
+        u: Val,
+        mut spec: Option<&mut SpecSolve<'_>>,
+    ) -> Result<(), UnifyError> {
         //println!("unify: {t:?} {u:?}");
-        let t = self.force(t);
-        let u = self.force(u);
+        let mut t = self.force(t);
+        let mut u = self.force(u);
+        // 特化模式：方程两侧置于**当前已积累的解**之下再解释（dpm-nbe
+        // `subst ɑ vs` 的惰性等价物）。每次递归入口按当时的 acc 重新包裹
+        // ——先解出的方程对后到的子方程自动可见。acc 为空时零开销。
+        if let Some(s) = spec.as_deref() {
+            if !s.acc.is_empty() {
+                t = self.force(wrap_sub(&s.acc, t));
+                u = self.force(wrap_sub(&s.acc, u));
+            }
+        }
         /*println!(
             "uni {}\n == {}",
             pretty_tm(0, cxt.names(), &self.quote(l, t.clone())),
@@ -537,7 +561,7 @@ impl Infer {
         match (&t, &u) {
             (Val::U(x), Val::U(y)) if x == y => Ok(()),
             (Val::Pi(x, i, a, b), Val::Pi(_, i_prime, a_prime, b_prime)) if i == i_prime => {
-                self.unify(l, cxt, *a.clone(), *a_prime.clone())?;
+                self.unify(l, cxt, *a.clone(), *a_prime.clone(), spec.as_deref_mut())?;
                 self.unify(
                     l + 1,
                     // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
@@ -548,10 +572,11 @@ impl Infer {
                     &cxt.bind(x.clone(), self.quote(l, *a.clone()), *a.clone()),
                     self.closure_apply(b, Val::vvar(l)),
                     self.closure_apply(b_prime, Val::vvar(l)),
+                    spec.as_deref_mut(),
                 )
             }
             (Val::Rigid(x, sp), Val::Rigid(x_prime, sp_prime)) if x == x_prime => {
-                self.unify_sp(l, cxt, sp, sp_prime)
+                self.unify_sp(l, cxt, sp, sp_prime, spec.as_deref_mut())
             }
             // 卡住的投影：字段名相同即比接收者与卡住期实参 spine（合同规则，
             // L08 8988f7c 评审修复回移）。剥链精确化（elaboration 的 Obj 臂以
@@ -559,11 +584,45 @@ impl Infer {
             // 这类形态成为可达；无本臂则落兜底 Err 误报 can't unify。
             // `Obj` vs 其它仍按失配处理（兜底臂）。
             (Val::Obj(o1, f1, sp1), Val::Obj(o2, f2, sp2)) if f1.data == f2.data => {
-                self.unify(l, cxt, (**o1).clone(), (**o2).clone())?;
-                self.unify_sp(l, cxt, sp1, sp2)
+                self.unify(l, cxt, (**o1).clone(), (**o2).clone(), spec.as_deref_mut())?;
+                self.unify_sp(l, cxt, sp1, sp2, spec.as_deref_mut())
+            }
+            // 模式特化（dpm-nbe unify1 的 VVar 臂）：可解 rigid（spec 携带的
+            // 模式槽集）与非 Flex 值相遇 ⇒ 解入 `spec.acc`（显式替换，force
+            // 读点惰性展开）。Flex 除外——交给 Flex 规则（meta := var）。
+            // occurs 环守卫失败 = Err（对齐旧 update_cxt 语义下的分支不可达）。
+            // spec = None（常规转换）时守卫不成立，落到后续臂——不得解假设，
+            // 否则 `Eq x y` 会被"证成" `Eq y y`。
+            (Val::Rigid(x, sp), v)
+                if sp.is_empty()
+                    && matches!(
+                        spec.as_deref(),
+                        Some(s) if s.solvable.contains(x) && !matches!(v, Val::Flex(..))
+                    ) =>
+            {
+                if val_mentions_lvl(v, *x) {
+                    return Err(UnifyError);
+                }
+                let s = spec.as_deref_mut().unwrap();
+                s.acc = Subst::extend(&s.acc, *x, v.clone());
+                Ok(())
+            }
+            (v, Val::Rigid(x, sp))
+                if sp.is_empty()
+                    && matches!(
+                        spec.as_deref(),
+                        Some(s) if s.solvable.contains(x) && !matches!(v, Val::Flex(..))
+                    ) =>
+            {
+                if val_mentions_lvl(v, *x) {
+                    return Err(UnifyError);
+                }
+                let s = spec.as_deref_mut().unwrap();
+                s.acc = Subst::extend(&s.acc, *x, v.clone());
+                Ok(())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) if m == m_prime => {
-                self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone())
+                self.intersect(l, cxt, *m, sp.clone(), sp_prime.clone(), spec.as_deref_mut())
             }
             (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
                 self.flex_flex(l, *m, sp.clone(), *m_prime, sp_prime.clone())
@@ -573,18 +632,21 @@ impl Infer {
                 cxt,
                 self.closure_apply(t, Val::vvar(l)),
                 self.closure_apply(t_prime, Val::vvar(l)),
+                spec.as_deref_mut(),
             ),
             (t, Val::Lam(_, i, t_prime)) if v_applicable(t) => self.unify(
                 l + 1,
                 cxt,
                 self.v_app(t.clone(), Val::vvar(l), *i),
                 self.closure_apply(t_prime, Val::vvar(l)),
+                spec.as_deref_mut(),
             ),
             (Val::Lam(_, i, t), t_prime) if v_applicable(t_prime) => self.unify(
                 l + 1,
                 cxt,
                 self.closure_apply(t, Val::vvar(l)),
                 self.v_app(t_prime.clone(), Val::vvar(l), *i),
+                spec.as_deref_mut(),
             ),
             (Val::Flex(m, sp), t_prime) => self.solve(l, *m, sp.clone(), t_prime.clone()),
             (t, Val::Flex(m_prime, sp_prime)) => {
@@ -596,7 +658,13 @@ impl Infer {
             (Val::Sum(a, params_a, _), Val::Sum(b, params_b, _)) if a.data == b.data => {
                 // params_a.len() always equal to params_b.len()?
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
+                    self.unify(
+                        l,
+                        cxt,
+                        a.1.as_ref().clone(),
+                        b.1.as_ref().clone(),
+                        spec.as_deref_mut(),
+                    )?;
                 }
                 Ok(())
             }
@@ -605,15 +673,21 @@ impl Infer {
                 Val::SumCase { typ: b, case_name: cb, datas: params_b },
             ) if ca.data == cb.data => {
                 // params_a.len() always equal to params_b.len()?
-                self.unify(l, cxt, a.as_ref().clone(), b.as_ref().clone())?;
+                self.unify(l, cxt, a.as_ref().clone(), b.as_ref().clone(), spec.as_deref_mut())?;
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
-                    self.unify(l, cxt, a.1.as_ref().clone(), b.1.as_ref().clone())?;
+                    self.unify(
+                        l,
+                        cxt,
+                        a.1.as_ref().clone(),
+                        b.1.as_ref().clone(),
+                        spec.as_deref_mut(),
+                    )?;
                 }
                 Ok(())
             }
             (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
                 // 1. 合一 scrutinees
-                self.unify(l, cxt, *s1.clone(), *s2.clone())?;
+                self.unify(l, cxt, *s1.clone(), *s2.clone(), spec.as_deref_mut())?;
 
                 // 2. 检查分支数量是否相同
                 if cases1.len() != cases2.len() {
@@ -659,7 +733,7 @@ impl Infer {
                         pretty_tm(0, cxt.names(), &self.quote(l, body1_val.clone())),
                         pretty_tm(0, cxt.names(), &self.quote(l, body2_val.clone())),
                     );*/
-                    self.unify(l + count, cxt, body1_val, body2_val)?;
+                    self.unify(l + count, cxt, body1_val, body2_val, spec.as_deref_mut())?;
 
                     // 使用你在上一步中实现的 apply_match_closure (或类似逻辑)
                     // 来实例化两个闭包的 body。这会用新的局部变量 (vvar) 替换掉模式绑定的变量。

@@ -293,7 +293,307 @@ pub(crate) enum XCell<'a> {
         env: Env<'a>,
         cases: &'a [(PatternDetail, &'a Tm<'a>)],
     },
+    /// 显式替换下的值（模式精化，参考版 `Val::VSub` / dpm-nbe `VSub`）：
+    /// 特化解不改写既有值，只把解包在外面；`force` 在读点把 σ 推进值的
+    /// 结构（[`frcs`]，对齐 dpm-nbe 的 `frcS`）。不变式：`force` 的返回值
+    /// 顶层不会是 VSub（fuel 耗尽的降级点在 frcs 的 lookup 命中处，返回
+    /// 裸 rigid）。
+    VSub { val: V, sub: Rc<SubstV> },
 }
+
+/// 模式特化的解：层级 → 值 的**持久化单链**（参考版 `Subst` 同构；链头 =
+/// 最新的解）。仅由模式编译器经 [`SubstV::extend`] / 特化合一的
+/// [`SpecSolve::acc`] 构建；`Rc` 共享让臂边界回滚 = 指针赋值、VSub 包裹
+/// = O(1)。取代旧 `update_cxt` 的上下文改写（改写目标槽 + 全槽 refresh）。
+#[derive(Clone, Default)]
+pub(crate) struct SubstV {
+    head: Option<Rc<SubEntryV>>,
+}
+
+struct SubEntryV {
+    lvl: u32,
+    /// 解的原始值。不预先包裹"更新的解"——读取时 `lookup_hit` 把整条 σ
+    /// 包在外面（条件包裹，见其文档），由 force 在读点一次性推开。
+    val: V,
+    next: Option<Rc<SubEntryV>>,
+}
+
+impl SubstV {
+    #[inline]
+    fn is_empty(&self) -> bool {
+        self.head.is_none()
+    }
+
+    /// 命中返回 Some(展开前形态)：解值**不引用**任何已解层级时原样返回
+    /// （读点热路径，零分配零 fuel；`mentions_level` 浅扫描）；引用时把
+    /// 整条 σ 包在解值外（解值不含 x 自身——occurs 守卫；比该条目更新的
+    /// 解恰好借此对解值生效），由 force 在读点推开。未命中 None。
+    fn lookup_hit<'a>(
+        bump: &'a Bump,
+        spine: &Spine,
+        defs: &[V],
+        sub: &Rc<SubstV>,
+        x: u32,
+    ) -> Option<V> {
+        let mut cur = sub.head.clone();
+        while let Some(e) = cur {
+            if e.lvl == x {
+                return Some(if !mentions_level(spine, defs, e.val, sub) {
+                    e.val
+                } else {
+                    wrap_sub(bump, sub, e.val)
+                });
+            }
+            cur = e.next.clone();
+        }
+        None
+    }
+
+    /// x 是否已有解。
+    fn has(&self, x: u32) -> bool {
+        let mut cur = self.head.clone();
+        while let Some(e) = cur {
+            if e.lvl == x {
+                return true;
+            }
+            cur = e.next.clone();
+        }
+        false
+    }
+
+    /// 叠加一条解 `x := v`：O(1) cons 到链头（链头 = 最新）。
+    fn extend(sub: &Rc<SubstV>, x: u32, v: V) -> Rc<SubstV> {
+        Rc::new(SubstV {
+            head: Some(Rc::new(SubEntryV {
+                lvl: x,
+                val: v,
+                next: sub.head.clone(),
+            })),
+        })
+    }
+
+    /// 组合：内层 `inner` 先应用、外层 `outer` 后应用。外层条目接到链头
+    /// （先被查到 = 覆盖同键，"取最新"语义）。
+    fn compose(outer: &Rc<SubstV>, inner: &Rc<SubstV>) -> Rc<SubstV> {
+        fn cons_all(
+            entry: &Option<Rc<SubEntryV>>,
+            onto: Option<Rc<SubEntryV>>,
+        ) -> Option<Rc<SubEntryV>> {
+            match entry {
+                None => onto,
+                Some(e) => Some(Rc::new(SubEntryV {
+                    lvl: e.lvl,
+                    val: e.val,
+                    next: cons_all(&e.next, onto),
+                })),
+            }
+        }
+        Rc::new(SubstV {
+            head: cons_all(&outer.head, inner.head.clone()),
+        })
+    }
+}
+
+/// 解值的浅结构是否引用 σ 的某个已解层级（参考版 `Subst::mentions_level`
+/// 同款遍历面）。含闭包 **env 槽**与 Match 的 scrutinee/captured env；不含
+/// 闭包体 / Match 分支体。VSub 保守记为引用。Flex 只扫 spine。误报只多
+/// 一次包裹，漏报才会丢精化——宁宽勿窄。
+fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
+    fn env_slots(spine: &Spine, defs: &[V], env: Env<'_>, sub: &SubstV) -> bool {
+        let mut n = env.binds;
+        while let Some(e) = n {
+            if mentions_level(spine, defs, e.val, sub) {
+                return true;
+            }
+            n = e.next;
+        }
+        for k in 0..env.flat_len {
+            if mentions_level(
+                spine,
+                defs,
+                defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+                sub,
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+    match v_tag(v) {
+        0 => sub.has(v_lvl_of(v)),
+        2 => {
+            let h = v_spine_of(v);
+            let hd = spine.spine_head(h);
+            let head_hit = match v_tag(hd) {
+                0 => sub.has(v_lvl_of(hd)),
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
+                    XCell::VSub { .. } => true,
+                    _ => false,
+                },
+                _ => false,
+            };
+            let mut args: Vec<(V, Icit)> = Vec::new();
+            spine.collect_args(h, &mut args);
+            head_hit || args.iter().any(|(a, _)| mentions_level(spine, defs, *a, sub))
+        }
+        5 | 3 | 6 => false,
+        1 => {
+            let c = v_clo_of(v);
+            env_slots(spine, defs, c.env, sub)
+        }
+        4 => {
+            let p = v_pi_of(v);
+            mentions_level(spine, defs, p.dom, sub) || env_slots(spine, defs, p.env, sub)
+        }
+        7 => match v_xcell_of(v) {
+            XCell::VSub { .. } => true,
+            XCell::Lit(_) | XCell::Prim => false,
+            XCell::Obj { val, .. } => mentions_level(spine, defs, *val, sub),
+            XCell::Sum { params, .. } => params.iter().any(|p| {
+                mentions_level(spine, defs, p.val, sub)
+                    || mentions_level(spine, defs, p.ty, sub)
+            }),
+            XCell::SumCase { typ, datas, .. } => {
+                mentions_level(spine, defs, *typ, sub)
+                    || datas.iter().any(|d| mentions_level(spine, defs, d.val, sub))
+            }
+            XCell::Match {
+                scrutinee, env, ..
+            } => mentions_level(spine, defs, *scrutinee, sub) || env_slots(spine, defs, *env, sub),
+        },
+        _ => false,
+    }
+}
+
+/// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc
+/// clone + 一次 bump 单元，force 在消费点惰性推开）。σ 为空时零开销直通。
+#[inline]
+fn wrap_sub<'a>(bump: &'a Bump, sub: &Rc<SubstV>, v: V) -> V {
+    if sub.is_empty() {
+        v
+    } else {
+        v_xcell(bump.alloc(XCell::VSub {
+            val: v,
+            sub: sub.clone(),
+        }))
+    }
+}
+
+/// 值树里是否出现某层级（特化解的环守卫；参考版 `val_mentions_lvl`
+/// 同款遍历面，但 **Flex 头的实参视为不透明**）：可达性探测用 `Raw::Hole`
+/// 实例化构造子绑定器，fresh meta 的 pruning 会把整组绑定器（含被解变量
+/// 本身）收进 spine——`l := succ (?m … l …)` 是"meta 应用到变量"的合法
+/// 形，不是结构性自引用（旧 `update_cxt` 无 occurs，把 spine 算进来会把
+/// 可达构造子误判不可达）。结构性自引用（`x := succ x`）仍由 Rigid/
+/// SumCase 等臂捕获；更深的间接环由 force 的 fuel 兜底。
+fn val_mentions_lvl(spine: &Spine, defs: &[V], v: V, x: u32) -> bool {
+    match v_tag(v) {
+        0 => v_lvl_of(v) == x,
+        2 => {
+            let h = v_spine_of(v);
+            let hd = spine.spine_head(h);
+            // Flex 头的链 = 参考版 `Val::Flex(m, sp)` 的打包形态：**整条
+            // 视为不透明**（实参不扫，见函数注释——探测的 fresh meta 会把
+            // 绑定器（含被解变量）收进 spine，不是结构性自引用）
+            if v_tag(hd) == 5 {
+                return false;
+            }
+            let head_hit = match v_tag(hd) {
+                0 => v_lvl_of(hd) == x,
+                7 => match v_xcell_of(hd) {
+                    XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+                    _ => false,
+                },
+                _ => false,
+            };
+            let mut args: Vec<(V, Icit)> = Vec::new();
+            spine.collect_args(h, &mut args);
+            head_hit || args.iter().any(|(a, _)| val_mentions_lvl(spine, defs, *a, x))
+        }
+        // Flex 头（裸 meta 立即数）：实参视为不透明（见函数注释）
+        5 => false,
+        1 | 4 => false, // Lam/Pi 闭包跳过（参考版同）
+        3 | 6 => false,
+        7 => match v_xcell_of(v) {
+            XCell::Lit(_) | XCell::Prim => false,
+            // VSub：只扫解值自身的结构，**不扫 σ 的映射值**
+            XCell::VSub { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+            XCell::Obj { val, .. } => val_mentions_lvl(spine, defs, *val, x),
+            XCell::Sum { params, .. } => params.iter().any(|p| {
+                val_mentions_lvl(spine, defs, p.val, x)
+                    || val_mentions_lvl(spine, defs, p.ty, x)
+            }),
+            XCell::SumCase { typ, datas, .. } => {
+                val_mentions_lvl(spine, defs, *typ, x)
+                    || datas.iter().any(|d| val_mentions_lvl(spine, defs, d.val, x))
+            }
+            XCell::Match {
+                scrutinee, env, ..
+            } => {
+                let mut hit = val_mentions_lvl(spine, defs, *scrutinee, x);
+                if !hit {
+                    let mut n = env.binds;
+                    while let Some(e) = n {
+                        if val_mentions_lvl(spine, defs, e.val, x) {
+                            hit = true;
+                            break;
+                        }
+                        n = e.next;
+                    }
+                }
+                if !hit {
+                    'outer: for k in 0..env.flat_len {
+                        if val_mentions_lvl(
+                            spine,
+                            defs,
+                            defs[(env.flat_base + env.flat_len - 1 - k) as usize],
+                            x,
+                        ) {
+                            hit = true;
+                            break 'outer;
+                        }
+                    }
+                }
+                hit
+            }
+        },
+        _ => false,
+    }
+}
+
+/// 特化合一的进行时状态（参考版 `SpecSolve` 同构）。`solvable` = 本子句
+/// 可解的 rigid 层级；`acc` = 已解出的替换。
+pub(crate) struct SpecSolve<'a> {
+    pub(crate) solvable: &'a [u32],
+    pub(crate) acc: Rc<SubstV>,
+}
+
+/// 精化传播的展开燃料（线程局部：每个测试/运行线程独立，与参考版
+/// `Infer::unify_fuel` 的"每次运行新建"口径一致）。仅 frcs 的 lookup 命中
+/// 点燃烧；外部入口（unify_catch / nf / check_pm / 模式编译）充值。
+const UNIFY_FUEL: u32 = 4096;
+thread_local! {
+    static PM_FUEL: std::cell::Cell<u32> = const { std::cell::Cell::new(UNIFY_FUEL) };
+}
+
+fn refuel() {
+    PM_FUEL.with(|c| c.set(UNIFY_FUEL));
+}
+
+#[inline]
+fn burn() -> bool {
+    PM_FUEL.with(|c| {
+        let f = c.get();
+        if f == 0 {
+            false
+        } else {
+            c.set(f - 1);
+            true
+        }
+    })
+}
+
 
 /// 复合环境：**平坦 def 区域**（elaborator 的 define 链，指入每轮
 /// [`Machine::defs`]；tip 环境原地追加，`nth` O(1)；**非 tip 环境**
@@ -643,6 +943,15 @@ fn vapp1<'a>(
     } else if v_tag(f) == 7 {
         match v_xcell_of(f) {
             XCell::Obj { .. } => spine.push(f, a, i),
+            // 精化包裹的值先推开再分发（eval(App) 等不经 force 的调用点会
+            // 把 VSub 头送进来——如臂上下文里 Var 引用了被解槽；force 顶层
+            // 不再产出 VSub，递归必终止）
+            XCell::VSub { .. } => {
+                let ff = force(bump, spine, defs, metas, globals, f);
+                return vapp1(
+                    bump, spine, work, vals, icits, defs, metas, globals, ff, a, i,
+                );
+            }
             _ => panic!("impossible apply"),
         }
     } else if v_tag(f) == 3 || v_tag(f) == 4 || v_tag(f) == 6 {
@@ -727,8 +1036,263 @@ fn force<'a>(
                     }
                 }
             }
+            // 显式替换（dpm-nbe `frc`）：把模式精化的解推进值的结构。入口
+            // 不烧 fuel——真正的精化传播只发生在被解变量的读点（frcs 的
+            // Rigid 臂 lookup 命中时烧 1）。fuel 耗尽的降级点也在该处。
+            7 => {
+                if let XCell::VSub { val, sub } = v_xcell_of(v) {
+                    return frcs(bump, spine, defs, metas, globals, sub, *val);
+                }
+                return v;
+            }
             _ => return v,
         }
+    }
+}
+
+/// 把替换 `σ` 推进值 `v` 的结构（dpm-nbe `frcS`；参考版 `Infer::frcs`
+/// 的快版对应）。槽位纪律：σ 对 spine / Sum/SumCase 槽只**包裹**，绝不
+/// 推进物化——槽位引用是作用域事实，物化会破坏后续 solve 的 invert。
+#[allow(clippy::too_many_arguments)]
+fn frcs<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    globals: &[V],
+    sub: &Rc<SubstV>,
+    v0: V,
+) -> V {
+    if sub.is_empty() {
+        return force(bump, spine, defs, metas, globals, v0);
+    }
+    let mut work: Vec<W<'a>> = Vec::new();
+    let mut vals: Vec<V> = Vec::new();
+    let mut icits: Vec<Icit> = Vec::new();
+    match v_tag(v0) {
+        // 内层先应用、外层后应用：组合后一次推进（frcS (subst sb sb') v）
+        7 => match v_xcell_of(v0) {
+            XCell::VSub { val, sub: sub2 } => {
+                let composed = SubstV::compose(sub, sub2);
+                frcs(bump, spine, defs, metas, globals, &composed, *val)
+            }
+            // 中性头单元：包裹后交回 force 重走既有臂。Sum/SumCase 槽位只
+            // **包裹**不推进。
+            XCell::Sum { name, params, cases } => {
+                let ps: Vec<SumParamV<'_>> = params
+                    .iter()
+                    .map(|p| SumParamV {
+                        name: p.name,
+                        val: wrap_sub(bump, sub, p.val),
+                        ty: wrap_sub(bump, sub, p.ty),
+                        icit: p.icit,
+                    })
+                    .collect();
+                v_xcell(bump.alloc(XCell::Sum {
+                    name,
+                    params: bump.alloc_slice_fill_iter(ps),
+                    cases,
+                }))
+            }
+            XCell::SumCase {
+                typ,
+                case_name,
+                datas,
+            } => {
+                let ds: Vec<SumDataV<'_>> = datas
+                    .iter()
+                    .map(|d| SumDataV {
+                        name: d.name,
+                        val: wrap_sub(bump, sub, d.val),
+                        icit: d.icit,
+                    })
+                    .collect();
+                v_xcell(bump.alloc(XCell::SumCase {
+                    typ: wrap_sub(bump, sub, *typ),
+                    case_name,
+                    datas: bump.alloc_slice_fill_iter(ds),
+                }))
+            }
+            XCell::Lit(_) => v0,
+            XCell::Prim => force(bump, spine, defs, metas, globals, v0),
+            XCell::Obj { val, name } => {
+                let inner = frcs(bump, spine, defs, metas, globals, sub, *val);
+                force(
+                    bump,
+                    spine,
+                    defs,
+                    metas,
+                    globals,
+                    v_xcell(bump.alloc(XCell::Obj { val: inner, name })),
+                )
+            }
+            // scrutinee **推进**（分支重选需要解出的构造子值——L09 的分支
+            // 重选发生在 eval 的 Tm::Match 臂：scrutinee 经 force 推开 σ 后
+            // 是构造子值即选分支）；捕获 env 只包裹。
+            XCell::Match {
+                scrutinee, env, cases,
+            } => {
+                let s2 = frcs(bump, spine, defs, metas, globals, sub, *scrutinee);
+                let env2 = frcs_env(bump, defs, sub, env);
+                force(
+                    bump,
+                    spine,
+                    defs,
+                    metas,
+                    globals,
+                    v_xcell(bump.alloc(XCell::Match {
+                        scrutinee: s2,
+                        env: env2,
+                        cases,
+                    })),
+                )
+            }
+        },
+        // 裸 Rigid 的读点：lookup 命中（真正的精化传播）烧 1 fuel；fuel
+        // 耗尽按未解处理（返回裸 rigid）。未命中零成本直通。
+        0 => match SubstV::lookup_hit(bump, spine, defs, sub, v_lvl_of(v0)) {
+            Some(hit) => {
+                if !burn() {
+                    return v0;
+                }
+                force(bump, spine, defs, metas, globals, hit)
+            }
+            None => v0,
+        },
+        // spine 链分派：Rigid 头 = 解析应用（对齐 dpm-nbe 的
+        // `napp (lookupSub sb v) (frcS sb sp)`）；Flex/Obj 头 = 槽位只包裹，
+        // 重建链后交回 force。
+        2 => {
+            let h = v_spine_of(v0);
+            let hd = spine.spine_head(h);
+            if v_tag(hd) == 0 {
+                let x = v_lvl_of(hd);
+                let mut head = match SubstV::lookup_hit(bump, spine, defs, sub, x) {
+                    Some(hit) => {
+                        if !burn() {
+                            return v0;
+                        }
+                        force(bump, spine, defs, metas, globals, hit)
+                    }
+                    None => v_lvl(x),
+                };
+                if !vapp_ok(head) {
+                    return v0;
+                }
+                let mut args: Vec<(V, Icit)> = Vec::new();
+                spine.collect_args(h, &mut args);
+                for &(u, i) in args.iter().rev() {
+                    head = vapp1(
+                        bump, spine, &mut work, &mut vals, &mut icits, defs, metas, globals, head,
+                        wrap_sub(bump, sub, u), i,
+                    );
+                }
+                head
+            } else {
+                // **先查 tag 再解引用**：hd 可以是裸 rigid/meta 立即数
+                let base = if v_tag(hd) == 7 {
+                    match v_xcell_of(hd) {
+                        XCell::Obj { val, name } => v_xcell(bump.alloc(XCell::Obj {
+                            val: frcs(bump, spine, defs, metas, globals, sub, *val),
+                            name,
+                        })),
+                        _ => hd,
+                    }
+                } else {
+                    hd
+                };
+                let mut args: Vec<(V, Icit)> = Vec::new();
+                spine.collect_args(h, &mut args);
+                let mut t = base;
+                for &(u, i) in args.iter().rev() {
+                    t = spine.push(t, wrap_sub(bump, sub, u), i);
+                }
+                force(bump, spine, defs, metas, globals, t)
+            }
+        }
+        // 闭包 env 逐槽包裹；返回同型值，不再 force
+        1 => {
+            let c = v_clo_of(v0);
+            v_clo(bump.alloc(CloCell {
+                name: c.name,
+                icit: c.icit,
+                env: frcs_env(bump, defs, sub, &c.env),
+                body: c.body,
+            }))
+        }
+        4 => {
+            let p = v_pi_of(v0);
+            v_pi(bump.alloc(PiCell {
+                name: p.name,
+                icit: p.icit,
+                dom: frcs(bump, spine, defs, metas, globals, sub, p.dom),
+                // 平坦 defs 环境（定义期 cxt 环境）保持原样：其槽位是
+                // `defs` 共享区的借用，转链会改变 de Bruijn 索引可达面
+                // （参考版 List 表示无此问题；实测转链后 t 的 Π 体求值错位）。
+                // 链式环境（subst_cxt 之后）逐槽包裹以传播精化。
+                env: if p.env.binds.is_none() && p.env.flat_len > 0 {
+                    p.env
+                } else {
+                    frcs_env(bump, defs, sub, &p.env)
+                },
+                body: p.body,
+            }))
+        }
+        // 裸 flex：交回 force 走既有解链；U / LiteralType 原样
+        5 => force(bump, spine, defs, metas, globals, v0),
+        _ => v0,
+    }
+}
+
+/// 闭包 env 逐槽包裹。包裹值不进 defs 平坦区，整体退化为 binder 链表示
+/// （槽序与 `env_nth` 严格一致）。
+fn frcs_env<'a>(bump: &'a Bump, defs: &[V], sub: &Rc<SubstV>, env: &Env<'a>) -> Env<'a> {
+    if sub.is_empty() {
+        return *env;
+    }
+    let n = env_len(*env);
+    let mut e: Option<&'a EnvCons<'a>> = None;
+    for i in (0..n).rev() {
+        let v = env_nth(defs, *env, i);
+        e = Some(bump.alloc(EnvCons {
+            val: wrap_sub(bump, sub, v),
+            next: e,
+        }));
+    }
+    Env {
+        flat_base: 0,
+        flat_len: 0,
+        binds: e,
+    }
+}
+
+/// 合一器**参数视角**的 WHNF（参考版 `Infer::force_arg` 同款）：不推开
+/// VSub 精化包裹、不做 Match 重选。逐层解包 VSub 后：裸 rigid 返回裸值；
+/// 带实参的 rigid 链 / 卡住 match 返回**原值**（包裹原样保留）；其余形态
+/// 全量 force。
+fn force_arg<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    globals: &[V],
+    v: V,
+) -> V {
+    let mut cur = v;
+    loop {
+        match v_tag(cur) {
+            7 => match v_xcell_of(cur) {
+                XCell::VSub { val, .. } => cur = *val,
+                _ => break,
+            },
+            _ => break,
+        }
+    }
+    match v_tag(cur) {
+        0 => cur,
+        2 if v_tag(spine.spine_head(v_spine_of(cur))) == 0 => v,
+        7 if matches!(v_xcell_of(cur), XCell::Match { .. }) => v,
+        _ => force(bump, spine, defs, metas, globals, v),
     }
 }
 
@@ -757,7 +1321,10 @@ fn eval_aux<'a>(
     let (case_name, datas, ctor_names): (&str, &[SumDataV<'a>], &[&str]) = if v_tag(head) == 7 {
         match v_xcell_of(head) {
             XCell::SumCase { typ, case_name, datas } => {
-                let cases_list = match v_xcell_of(*typ) {
+                // typ 槽可能被 frcs 包成 VSub（只包裹不物化）——判 Sum 前先
+                // force（参考版 eval_aux 同款）
+                let typ_f = force(bump, spine, defs, metas, globals, *typ);
+                let cases_list = match v_xcell_of(typ_f) {
                     XCell::Sum { cases, .. } => *cases,
                     // 参考 panic：typ 不是 Sum（中性 global 下的重求值可达）
                     _ => panic!("by now only can match a sum type"),
@@ -1154,6 +1721,14 @@ fn eval_iter<'a>(
             }
             W::ObjSel(name) => {
                 let v = vals.pop().expect("eval 栈：ObjSel 缺接收者");
+                // 精化包裹的接收者（subst_cxt 包裹的 env 槽会以 VSub 流出）
+                // 先推开 σ 再判形态（参考版 eval 的 Obj 臂同款）；force 对
+                // 非 VSub 是恒等，旧行为不变。
+                let v = if v_tag(v) == 7 && matches!(v_xcell_of(v), XCell::VSub { .. }) {
+                    force(bump, spine, defs, metas, globals, v)
+                } else {
+                    v
+                };
                 match v_tag(v) {
                     7 => match v_xcell_of(v) {
                         XCell::Sum { params, .. } => {
@@ -1164,8 +1739,11 @@ fn eval_iter<'a>(
                         }
                         XCell::SumCase { typ, datas, .. } => {
                             // typ 必须是 Sum（参考版 match 同款，否则
-                            // panic "impossible"）；索引参数优先，字段在后
-                            let sparams = match v_xcell_of(*typ) {
+                            // panic "impossible"）；索引参数优先，字段在后。
+                            // typ 槽可能被 frcs 包成 VSub（只包裹不物化）——
+                            // 判 Sum 前先 force（参考版 eval 的 Obj 臂同款）。
+                            let typ_f = force(bump, spine, defs, metas, globals, *typ);
+                            let sparams = match v_xcell_of(typ_f) {
                                 XCell::Sum { params, .. } => *params,
                                 _ => panic!("impossible"),
                             };
@@ -1373,6 +1951,11 @@ fn quote_iter<'a>(
                     7 => match v_xcell_of(v) {
                         XCell::Lit(s) => done.push(bump.alloc(Tm::LiteralIntro(s))),
                         XCell::Prim => done.push(bump.alloc(Tm::Prim)),
+                        // 防御：正常路径 force 后顶层不会是 VSub（frcs 的
+                        // 降级点是返回裸 rigid）——解包打印内层
+                        XCell::VSub { val, .. } => {
+                            tasks.push(QJob::Q(*val, level));
+                        }
                         XCell::Obj { val, name } => {
                             tasks.push(QJob::Obj1(name));
                             tasks.push(QJob::Q(*val, level));
@@ -1973,6 +2556,7 @@ fn unify_iter<'a>(
     neutral: &[V],
     ren: &mut RenBuf,
     conv: &mut ConvScratch,
+    mut spec: Option<&mut SpecSolve<'_>>,
     l0: u32,
     t0: V,
     u0: V,
@@ -2076,10 +2660,21 @@ fn unify_iter<'a>(
         if memo_on && memo.contains(&(t.0, u.0)) {
             continue; // 本轮已判等过的子对（命中连 force 都省——成功单调）
         }
-        let t = force(bump, spine, defs, metas, globals, t);
-        let u = force(bump, spine, defs, metas, globals, u);
+        let mut t = force(bump, spine, defs, metas, globals, t);
+        let mut u = force(bump, spine, defs, metas, globals, u);
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
             continue; // force 展开后同值（同一解的两处引用）
+        }
+        // 特化模式：方程两侧置于**当前已积累的解**之下再解释（参考版
+        // `unify` 入口的 wrap_sub(&s.acc, ·)，dpm-nbe `subst ɑ vs` 的惰性
+        // 等价物）。每次弹出按当时的 acc 重新包裹——先解出的方程对后到的
+        // 子方程自动可见。acc 为空时零开销。
+        if let Some(s) = spec.as_deref() {
+            if !s.acc.is_empty() {
+                let acc = s.acc.clone();
+                t = force(bump, spine, defs, metas, globals, wrap_sub(bump, &acc, t));
+                u = force(bump, spine, defs, metas, globals, wrap_sub(bump, &acc, u));
+            }
         }
 
         // —— 宇宙（参考臂 1）：层级相等才成立（无累积）——
@@ -2109,6 +2704,34 @@ fn unify_iter<'a>(
             if v_lvl_of(t) == v_lvl_of(u) {
                 continue; // 双裸单元：unify_sp([][]) 自反成立
             }
+        }
+        // —— pm 特化臂（参考臂 4/5，**在 Flex/λ/η/链分派之前**——顺序敏感；
+        // dpm-nbe unify1 的 VVar 臂）：可解 rigid（spec 携带的模式槽集）与
+        // 非 Flex 值相遇 ⇒ 解入 `spec.acc`（显式替换，force 读点惰性展开）。
+        // Flex 除外——交给 Flex 规则（meta := var）。occurs 环守卫失败 =
+        // 失败。spec = None（常规转换）时守卫不成立，落空到后续臂——不得
+        // 解假设。调用侧"头部一侧在前"。
+        if v_tag(t) == 0
+            && matches!(spec.as_deref(), Some(s) if s.solvable.contains(&v_lvl_of(t)))
+            && !is_flex(spine, u)
+        {
+            if val_mentions_lvl(spine, defs, u, v_lvl_of(t)) {
+                return false;
+            }
+            let s = spec.as_deref_mut().unwrap();
+            s.acc = SubstV::extend(&s.acc, v_lvl_of(t), u);
+            continue;
+        }
+        if v_tag(u) == 0
+            && matches!(spec.as_deref(), Some(s) if s.solvable.contains(&v_lvl_of(u)))
+            && !is_flex(spine, t)
+        {
+            if val_mentions_lvl(spine, defs, t, v_lvl_of(u)) {
+                return false;
+            }
+            let s = spec.as_deref_mut().unwrap();
+            s.acc = SubstV::extend(&s.acc, v_lvl_of(u), t);
+            continue;
         }
         // —— 中性链 vs 中性链（参考臂 3/4/5 的链形态全在此分派）——
         if v_tag(t) == 2 && v_tag(u) == 2 {
@@ -2547,8 +3170,10 @@ fn invert_bump<'a>(
     let mut lvs: Vec<u32> = Vec::with_capacity(args.len());
     let mut nonlinear = false;
     for &(a, _) in args.iter().rev() {
-        // 应用序（外先）
-        let f = force(bump, spine, defs, metas, globals, a);
+        // 应用序（外先）。**参数视角**：用 force_arg——槽位可能被 subst_cxt
+        // 包成 VSub，解出的槽位不得物化（否则可逆 spine 变不可逆，solve
+        // 误败）；force_arg 逐层解包后裸 rigid 原样返回。
+        let f = force_arg(bump, spine, defs, metas, globals, a);
         if v_tag(f) != 0 {
             return None;
         }
@@ -2848,6 +3473,9 @@ fn rename_iter<'a>(
                     7 => match v_xcell_of(v) {
                         XCell::Lit(s) => done.push(bump.alloc(Tm::LiteralIntro(s))),
                         XCell::Prim => done.push(bump.alloc(Tm::Prim)),
+                        // 不变式：force 后顶层不会是 VSub——防御性失败（参考版
+                        // rename 的 VSub 臂 Err 同款）
+                        XCell::VSub { .. } => return None,
                         XCell::Obj { val, name } => {
                             // 卡住投影：rename 内层 → 包 Tm::Obj（空实参；
                             // 带实参的链在 tag 2 臂处理）
@@ -3018,8 +3646,8 @@ fn prune_vflex_bump<'a>(
     let mut slots: Vec<(Option<&'a Tm<'a>>, Icit)> = Vec::with_capacity(args.len());
     let mut status = SpinePruneStatus::OKRenaming;
     for &(a, i) in args.iter().rev() {
-        // 应用序（外先）
-        let f = force(bump, spine, defs, metas, globals, a);
+        // 应用序（外先）；参数视角用 force_arg（见 invert_bump 同款注释）
+        let f = force_arg(bump, spine, defs, metas, globals, a);
         if v_tag(f) == 0 {
             match ren.get(v_lvl_of(f) as usize) {
                 Some(xp) => slots.push((Some(bump.alloc(Tm::Var(dom - xp - 1))), i)),
@@ -3739,14 +4367,69 @@ impl Machine {
         work.clear();
         stack.clear();
         unify_iter(
-            bump, spine, work, stack, vals, icits, defs, metas, globals, neutral, ren, conv, l,
-            t, u,
+            bump, spine, work, stack, vals, icits, defs, metas, globals, neutral, ren, conv, None,
+            l, t, u,
+        )
+    }
+
+    /// 特化合一入口（参考版 `unify(…, Some(&mut SpecSolve))` 穿参）：模式
+    /// 方程与覆盖探测用——bare rigid 可解，解入 `spec.acc`。
+    fn unify_spec(
+        &mut self,
+        bump: &Bump,
+        l: u32,
+        t: V,
+        u: V,
+        spec: &mut SpecSolve<'_>,
+    ) -> bool {
+        let Machine {
+            spine,
+            vals,
+            icits,
+            defs,
+            metas,
+            globals,
+            neutral,
+            ren,
+            conv,
+            unify_work,
+            unify_stack,
+            ..
+        } = self;
+        // SAFETY：同 unify。
+        #[allow(clippy::unnecessary_cast)]
+        let work: &mut Vec<W<'_>> =
+            unsafe { &mut *(unify_work as *mut Vec<W<'static>> as *mut Vec<W<'_>>) };
+        #[allow(clippy::unnecessary_cast)]
+        let stack: &mut Vec<UItem<'_>> =
+            unsafe { &mut *(unify_stack as *mut Vec<UItem<'static>> as *mut Vec<UItem<'_>>) };
+        work.clear();
+        stack.clear();
+        unify_iter(
+            bump,
+            spine,
+            work,
+            stack,
+            vals,
+            icits,
+            defs,
+            metas,
+            globals,
+            neutral,
+            ren,
+            conv,
+            Some(spec),
+            l,
+            t,
+            u,
         )
     }
 
     /// 错误消息（参考版 `unify_catch`：pretty + 上下文名字表；快版导出项
     /// 的 Span 全零，消息内容与参考版同构）。
     fn unify_catch(&mut self, bump: &Bump, cxt: &Cxt<'_>, t: V, t_prime: V) -> Result<(), Error> {
+        // 常规转换（spec = None）；一次合一入口充值精化燃料池
+        refuel();
         if self.unify(bump, cxt.lvl, t, t_prime) {
             Ok(())
 } else {
@@ -4210,10 +4893,11 @@ impl Machine {
     // cxt.rs 的模式特化机制——精化等式直接改写进环境）
     // --------------------------------------------------------------------------------
 
-    /// `unify_pm`：模式特化的合一（参考版 elaboration.rs 同款臂序）：
-    /// 双裸 Rigid 同级自反；单侧裸 Rigid → `update_cxt`（精化写进环境）；
-    /// 同名 SumCase 逐 datas、同名 Sum 逐参数（均**只比值槽**）递归；
-    /// 其余落 `unify_catch`（全文案合一错误）。
+    /// `unify_pm`：模式特化的合一（参考版 elaboration.rs 同款臂序）：双裸
+    /// Rigid 同级自反；单侧裸 Rigid → 解累积进 σ（旧 `update_cxt` 的显式
+    /// 替换形态）；同名 SumCase 逐 datas、同名 Sum 逐参数（均**只比值槽**）
+    /// 递归；其余落 `unify_spec`（带 spec 的常规合一——途中的 bare rigid
+    /// 继续累积进 σ）。失败语义不变。
     fn unify_pm<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4221,20 +4905,27 @@ impl Machine {
         t: V,
         t_prime: V,
         t_span: &crate::parser_lib::Span<()>,
-    ) -> Result<Cxt<'a>, Error> {
-        let f1 = self.force_v(bump, t);
-        let f2 = self.force_v(bump, t_prime);
+        spec: &mut SpecSolve<'_>,
+    ) -> Result<(), Error> {
+        let mut f1 = self.force_v(bump, t);
+        let mut f2 = self.force_v(bump, t_prime);
+        // 方程两侧置于当前 acc 之下（dpm-nbe `subst ɑ vs` 的惰性等价物）
+        if !spec.acc.is_empty() {
+            let acc = spec.acc.clone();
+            f1 = self.force_v(bump, wrap_sub(bump, &acc, f1));
+            f2 = self.force_v(bump, wrap_sub(bump, &acc, f2));
+        }
         // (Rigid(x1, []), Rigid(x2, [])) if x1 == x2 → 自反
         if v_tag(f1) == 0 && v_tag(f2) == 0 && v_lvl_of(f1) == v_lvl_of(f2) {
-            return Ok(clone_cxt(cxt));
+            return Ok(());
         }
         // (Rigid(x, []), v) → 精化 x := v
         if v_tag(f1) == 0 {
-            return self.update_cxt(bump, cxt, v_lvl_of(f1), f2);
+            return self.spec_refine(cxt, v_lvl_of(f1), f2, t_span, spec);
         }
         // (v, Rigid(x, [])) → 精化 x := v
         if v_tag(f2) == 0 {
-            return self.update_cxt(bump, cxt, v_lvl_of(f2), f1);
+            return self.spec_refine(cxt, v_lvl_of(f2), f1, t_span, spec);
         }
         // 同名 SumCase：逐 datas（值槽）
         if v_tag(f1) == 7 && v_tag(f2) == 7 {
@@ -4252,11 +4943,10 @@ impl Machine {
             ) = (v_xcell_of(f1), v_xcell_of(f2))
             {
                 if n1 == n2 {
-                    let mut cxt = clone_cxt(cxt);
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(bump, &cxt, x.val, y.val, t_span)?;
+                        self.unify_pm(bump, cxt, x.val, y.val, t_span, spec)?;
                     }
-                    return Ok(cxt);
+                    return Ok(());
                 }
                 return Err(Error(t_span.map(|_| "".to_string())));
             }
@@ -4275,16 +4965,51 @@ impl Machine {
             ) = (v_xcell_of(f1), v_xcell_of(f2))
             {
                 if n1 == n2 {
-                    let mut cxt = clone_cxt(cxt);
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        cxt = self.unify_pm(bump, &cxt, x.val, y.val, t_span)?;
+                        self.unify_pm(bump, cxt, x.val, y.val, t_span, spec)?;
                     }
-                    return Ok(cxt);
+                    return Ok(());
                 }
                 return Err(Error(t_span.map(|_| "".to_string())));
             }
         }
-        self.unify_catch(bump, cxt, f1, f2).map(|_| clone_cxt(cxt))
+        // 其余落常规合一（spec 穿参）
+        if self.unify_spec(bump, cxt.lvl, f1, f2, spec) {
+            Ok(())
+        } else {
+            let tq = export(self.quote(bump, cxt.lvl, f1));
+            let uq = export(self.quote(bump, cxt.lvl, f2));
+            let names = types_names_list(cxt.types);
+            let msg = format!(
+                "can't unify\n      find: {}\n  expected: {}",
+                pretty_tm(0, names.clone(), &tq),
+                pretty_tm(0, names, &uq),
+            );
+            Err(Error(t_span.map(|_| msg.clone())))
+        }
+    }
+
+    /// 一条特化解 `x := v` 累积进 σ（旧 `Cxt::update_cxt` 的单步）。守卫：
+    /// Flex 不精化（旧直通）；越界 / 全局层级无操作；浅 occurs 失败 = Err。
+    fn spec_refine(
+        &self,
+        cxt: &Cxt<'_>,
+        x: u32,
+        v: V,
+        t_span: &crate::parser_lib::Span<()>,
+        spec: &mut SpecSolve<'_>,
+    ) -> Result<(), Error> {
+        if is_flex(&self.spine, v) {
+            return Ok(());
+        }
+        if x >= cxt.lvl {
+            return Ok(());
+        }
+        if val_mentions_lvl(&self.spine, &self.defs, v, x) {
+            return Err(Error(t_span.map(|_| "".to_string())));
+        }
+        spec.acc = SubstV::extend(&spec.acc, x, v);
+        Ok(())
     }
 
     /// 「纯探测」统一执行器：进入前快照 `metas`，跑完闭包后**无条件**换回
@@ -4299,23 +5024,29 @@ impl Machine {
         r
     }
 
-    /// `check_pm`：infer + insert + `unify_pm`。
+    /// `check_pm`：infer + insert + `unify_pm`；返回累积的精化替换 σ（调用方
+    /// 做 `subst_cxt`），不再返回改写过的 Cxt。
     fn check_pm<'a>(
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
         t: &Raw,
         a: V,
-    ) -> Result<(&'a Tm<'a>, Cxt<'a>), Error> {
+    ) -> Result<(&'a Tm<'a>, Rc<SubstV>), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(bump, cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
-        let new_cxt = self.unify_pm(bump, cxt, a, inferred_type, &t_span)?;
-        Ok((t_inferred, new_cxt))
+        refuel();
+        let solvable = self.bind_slots(cxt);
+        let mut spec = SpecSolve {
+            solvable: &solvable,
+            acc: Rc::new(SubstV::default()),
+        };
+        self.unify_pm(bump, cxt, a, inferred_type, &t_span, &mut spec)?;
+        Ok((t_inferred, spec.acc))
     }
 
-    /// `check_pm_final`：`check_pm` 之后把原始值与精化后的期望再对一次
-    /// （`.unwrap_or(new_cxt)`——失败容忍，参考版同款）。
+    /// `check_pm_final`：第二条方程把原始值与模式的值再对一次（失败容忍）。
     fn check_pm_final<'a>(
         &mut self,
         bump: &'a Bump,
@@ -4323,131 +5054,120 @@ impl Machine {
         t: &Raw,
         a: V,
         ori: V,
-    ) -> Result<(&'a Tm<'a>, Cxt<'a>), Error> {
+    ) -> Result<(&'a Tm<'a>, Rc<SubstV>), Error> {
         let t_span = t.to_span();
         let x = self.infer_expr(bump, cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
-        let new_cxt = self.unify_pm(bump, cxt, a, inferred_type, &t_span)?;
-        let ori_v = self.eval(bump, new_cxt.env, t_inferred);
-        // ori 精化**要传下去**（参考版 `let new_cxt = ...unwrap_or(new_cxt)`
-        // ——被匹配变量本身的值写进环境，期望类型重锚定后才能选中分支）
-        let refined = self.unify_pm(bump, &new_cxt, ori, ori_v, &t_span);
-        let new_cxt = refined.unwrap_or(new_cxt);
-        Ok((t_inferred, new_cxt))
+        refuel();
+        let solvable = self.bind_slots(cxt);
+        let mut acc = Rc::new(SubstV::default());
+        {
+            let mut spec = SpecSolve {
+                solvable: &solvable,
+                acc,
+            };
+            self.unify_pm(bump, cxt, a, inferred_type, &t_span, &mut spec)?;
+            acc = spec.acc;
+        }
+        // 在**未改写**的原 env 下求值 t_inferred（旧实现是在已改写 env 下
+        // 求值——显式替换的等价口径）；失败容忍。
+        let ori_v = self.eval(bump, cxt.env, t_inferred);
+        {
+            let mut spec = SpecSolve {
+                solvable: &solvable,
+                acc,
+            };
+            let _ = self.unify_pm(bump, cxt, ori, ori_v, &t_span, &mut spec);
+            acc = spec.acc;
+        }
+        Ok((t_inferred, acc))
     }
 
-    /// `Cxt::update_cxt`（参考版同款）：Flex 不动；否则把第 `x_prime` 槽
-    /// 换成精化值，再 `refresh` 全槽重锚定（src_names 按层级同步更新）。
-    fn update_cxt<'a>(
-        &mut self,
-        bump: &'a Bump,
-        cxt: &Cxt<'a>,
-        x: u32,
-        v: V,
-    ) -> Result<Cxt<'a>, Error> {
-        if is_flex(&self.spine, v) {
-            return Ok(clone_cxt(cxt));
+    /// 把精化替换 σ 施加到上下文（参考版 `Cxt::subst_cxt` / dpm-nbe
+    /// `subst sub ctx`）：env 槽、types 链、names.by_lvl（name_map 影子索引：
+    /// by_name 不动，按层级持久）的类型值包 VSub；lvl / locals / pruning /
+    /// binds 不动——**槽位布局不变**，读点经 force 展开。σ 为空零开销直通。
+    fn subst_cxt<'a>(&mut self, bump: &'a Bump, sub: &Rc<SubstV>, cxt: &Cxt<'a>) -> Cxt<'a> {
+        if sub.is_empty() {
+            return clone_cxt(cxt);
         }
-        // lvl2ix(lvl, x)：全局层级给大下标（change_n 越界 → 无操作，参考
-        // 版同款：f 永不应用、env2 == env）
-        let x_prime: usize = if x >= GLOBAL_BASE {
-            x as usize
-        } else {
-            (cxt.lvl - x - 1) as usize
-        };
-        let n = env_len(cxt.env) as usize;
-        let mut slots2: Vec<V> = Vec::with_capacity(n);
-        env_collect(&self.defs, cxt.env, &mut slots2);
-        if x_prime < n {
-            slots2[x_prime] = v;
-        }
-        let mut names = (*cxt.names).clone();
-        let refreshed = self.refresh(bump, cxt, &slots2, &mut names);
-        // pruning：目标槽改 None（define 槽）；前缀重建（PrCons run 统计
-        // 只读 next 节点，从外向内构链）
-        let mut pr_slots: Vec<Option<Icit>> = Vec::with_capacity(n);
-        {
-            let mut cur = cxt.pruning;
-            while let Some(b) = cur {
-                pr_slots.push(b.slot);
-                cur = b.next;
+        // env：全部槽包裹（包裹值不进 defs 平坦区，整体退化为 binder 链）
+        let env = {
+            let defs = &self.defs;
+            let n = env_len(cxt.env);
+            let mut e: Option<&'a EnvCons<'a>> = None;
+            for i in (0..n).rev() {
+                let v = env_nth(defs, cxt.env, i);
+                e = Some(bump.alloc(EnvCons {
+                    val: wrap_sub(bump, sub, v),
+                    next: e,
+                }));
             }
-        }
-        if x_prime < pr_slots.len() {
-            pr_slots[x_prime] = None;
-        }
-        let mut pruning: Option<&'a PrCons<'a>> = None;
-        for slot in pr_slots.into_iter().rev() {
-            pruning = Some(bump.alloc(PrCons::new(slot, pruning)));
-        }
-        // 环境：纯链重建（refresh 后的槽序，头 = 最内层）
-        let mut env: Option<&'a EnvCons<'a>> = None;
-        for val in refreshed.into_iter().rev() {
-            env = Some(bump.alloc(EnvCons { val, next: env }));
-        }
-        Ok(Cxt {
-            env: Env {
+            Env {
                 flat_base: 0,
                 flat_len: 0,
-                binds: env,
-            },
-            names: Rc::new(names),
-            types: cxt.types,
+                binds: e,
+            }
+        };
+        // types 链：逐节点包裹类型值（头 = 最内层，序不变）
+        let types = {
+            let mut nodes: Vec<(&'a str, V, bool)> = Vec::new();
+            let mut cur = cxt.types;
+            while let Some(tc) = cur {
+                nodes.push((tc.name, tc.ty, tc.source));
+                cur = tc.next;
+            }
+            let mut types: Option<&'a TCons<'a>> = None;
+            for (name, ty, source) in nodes.into_iter().rev() {
+                types = Some(bump.alloc(TCons {
+                    name,
+                    ty: wrap_sub(bump, sub, ty),
+                    source,
+                    next: types,
+                }));
+            }
+            types
+        };
+        // names：by_name 影子索引保持（层级键不变），by_lvl 类型值同步包裹
+        let names = {
+            let mut names = (*cxt.names).clone();
+            let keys: Vec<u32> = names.by_lvl.keys().copied().collect();
+            for k in keys {
+                let ty = names.by_lvl[&k];
+                names.by_lvl.insert(k, wrap_sub(bump, sub, ty));
+            }
+            Rc::new(names)
+        };
+        Cxt {
+            env,
+            names,
+            types,
             locals: cxt.locals,
-            pruning,
+            pruning: cxt.pruning,
             binds: cxt.binds,
             lvl: cxt.lvl,
-        })
+        }
     }
 
-    /// `Cxt::refresh`（参考版递归的迭代化）：从最内层槽向外逐槽把旧值在
-    /// 「目标槽已替换 + 更外槽已刷新」的环境下重锚定（quote 旧 env 长度 →
-    /// eval 新 env），`names.by_lvl` 同槽更新（**调用方传入的克隆快照**，
-    /// 与参考版 `new_src_names` 的 clone-then-mutate 同款）。参考版
-    /// `get_by_key2_mut(...).unwrap()`：无条目的层级（inserted binder）
-    /// panic——同款保留。
-    fn refresh<'a>(
-        &mut self,
-        bump: &'a Bump,
-        cxt: &Cxt<'a>,
-        slots2: &[V],
-        names: &mut Names,
-    ) -> Vec<V> {
-        let n = env_len(cxt.env) as usize;
-        let old: Vec<V> = {
-            let mut v = Vec::with_capacity(n);
-            env_collect(&self.defs, cxt.env, &mut v);
-            v
-        };
-        let mut refreshed: Vec<Option<V>> = vec![None; n];
-        // 参考版递归：refresh(suffix d) 先算 refresh(d+1)，再算本槽。
-        // env_tt(d) = slots2[0..=d] ++ refreshed[d+1..]（change_tail 语义）
-        for d in (0..n).rev() {
-            // env_tt：头 d+1 个取 slots2（含目标替换），其余取已刷新槽
-            let mut env_tt: Vec<V> = Vec::with_capacity(n);
-            env_tt.extend_from_slice(&slots2[..d + 1]);
-            for i in d + 1..n {
-                env_tt.push(refreshed[i].expect("refresh: 内层槽未刷新"));
+    /// 当前上下文里"真变量"（bind 槽，env 槽仍指向自身 vvar）的层级集合：
+    /// 模式特化方程可解的对象。嵌套 match 的入口上下文可能已被外层精化
+    /// 包裹（subst_cxt）——解包 VSub 看槽的原始形态。
+    fn bind_slots(&self, cxt: &Cxt<'_>) -> Vec<u32> {
+        let n = cxt.lvl;
+        let mut out = Vec::new();
+        for i in 0..env_len(cxt.env) {
+            let mut raw = env_nth(&self.defs, cxt.env, i);
+            while v_tag(raw) == 7 {
+                match v_xcell_of(raw) {
+                    XCell::VSub { val, .. } => raw = *val,
+                    _ => break,
+                }
             }
-            let env_tt_chain = chain_env(bump, &env_tt);
-            // 槽值重锚定
-            let q = self.quote(bump, n as u32, old[d]);
-            let rv = self.eval(bump, env_tt_chain, q);
-            refreshed[d] = Some(rv);
-            // src_names 按层级同步（Lvl(env_t.len()) = n-1-d）。**只更新
-            // 局部 names 里的条目**（当前 def 的 binder）：过去的 define
-            // 已迁 Machine 全局表且不提及本 def 的局部层级（定义早于其
-            // 存在），重锚为恒等、跳过；inserted binder 不入名字表（参考
-            // 版 get_by_key2_mut unwrap 的 panic 形态同此不可达）。
-            let lvl = (n - 1 - d) as u32;
-            if let Some(old_ty) = names.by_lvl.get(&lvl) {
-                let old_ty = *old_ty;
-                let qt = self.quote(bump, n as u32, old_ty);
-                let rty = self.eval(bump, env_tt_chain, qt);
-                names.by_lvl.insert(lvl, rty);
+            if v_tag(raw) == 0 && v_lvl_of(raw) + i + 1 == n {
+                out.push(v_lvl_of(raw));
             }
         }
-        refreshed.into_iter().map(|x| x.expect("refresh: 槽未刷新")).collect()
+        out
     }
 
     // 主 infer / infer_expr（与参考版 elaboration.rs 逐臂对应）
@@ -5243,6 +5963,9 @@ impl<'a> Compiler<'a> {
                 let mut cur_cxt = clone_cxt(cxt);
                 loop {
                     let (_, typ2) = mach.infer_expr(bump, &cur_cxt, &to_check)?;
+                    // 类型可能被 VSub 包裹（臂上下文曾经 subst_cxt）——判 Pi
+                    // 前先 force 推开精化（参考版 filter_accessible 同款）
+                    let typ2 = mach.force_v(bump, typ2);
                     if v_tag(typ2) == 4 {
                         let p = v_pi_of(typ2);
                         // Only explicit args matter for the structure
@@ -5356,9 +6079,12 @@ impl<'a> Compiler<'a> {
         match heads {
             [] => match arms {
                 [arm, ..] if arm.arm.pats.is_empty() => {
-                    let (_, cxt) = mach
+                    let (_, sub) = mach
                         .check_pm_final(bump, &arm.cxt, &arm.raw, arm.target_typ, arm.ori)
                         .expect("check_pm_final 失败（参考版 unwrap）");
+                    // 臂上下文置于精化 σ 之下（env 槽 + types + names.by_lvl
+                    // 包 VSub；布局不动）
+                    let cxt = mach.subst_cxt(bump, &sub, &arm.cxt);
                     self.reachable.insert(arm.idx, ());
                     // 已完整编译（体检查 + pats 记录）则只需可达、无需重检查。
                     // **按臂下标**记录（L13 2a0eb6e 同族，参考版同款）——按
@@ -5367,9 +6093,12 @@ impl<'a> Compiler<'a> {
                     if self.checked_ret.contains_key(&arm.idx) {
                         return Ok(());
                     }
-                    // 期望类型重锚到臂上下文：quote → eval（flex 免锚）
+                    // 期望类型重锚到臂上下文：quote → eval（flex 免锚）。
+                    // **不预先包裹 σ**——与参考版一致：σ 经臂上下文的
+                    // wrapped env 在 eval 读点生效（quote 出的 Var 索引在
+                    // cxt.env 里读到 VSub 槽）。
                     let ret_type = {
-                        let t = mach.force_v(bump, self.ret_type);
+                        let t = self.ret_type;
                         if is_flex(&mach.spine, t) {
                             t
                         } else {
@@ -5481,15 +6210,19 @@ impl<'a> Compiler<'a> {
                                     .cloned()
                                     .collect();
                                 param_impl.reverse();
+                                // 构造子类型可能被 VSub 包裹（臂上下文曾经
+                                // subst_cxt）——剥 Pi 链每一步都先 force
+                                cty = mach.force_v(bump, cty);
                                 while v_tag(cty) == 4 {
                                     let p = v_pi_of(cty);
                                     if !param_impl.is_empty() {
                                         let val =
                                             param_impl.pop().map(|x| x.val).unwrap_or_else(v_u0);
-                                        cty = {
+                                        let ev = {
                                             let env = env_ext(bump, p.env, val);
                                             mach.eval(bump, env, p.body)
                                         };
+                                        cty = mach.force_v(bump, ev);
                                     } else {
                                         new_heads.push((
                                             self.fresh(),
@@ -5497,7 +6230,7 @@ impl<'a> Compiler<'a> {
                                             empty_span(p.name.to_string()),
                                             p.icit,
                                         ));
-                                        cty = {
+                                        let ev = {
                                             let env = env_ext(
                                                 bump,
                                                 p.env,
@@ -5505,6 +6238,7 @@ impl<'a> Compiler<'a> {
                                             );
                                             mach.eval(bump, env, p.body)
                                         };
+                                        cty = mach.force_v(bump, ev);
                                     }
                                 }
                                 Some(Some(()))
@@ -5824,6 +6558,9 @@ fn debug_val_go(spine: &Spine, defs: &[V], v: V, out: &mut String) {
                 out.push_str(&format!("LiteralIntro({})", dbg_span_str(s)));
             }
             XCell::Prim => out.push_str("Prim"),
+            XCell::VSub { val, .. } => {
+                out.push_str(&format!("VSub({}, ..)", debug_val(spine, defs, *val)));
+            }
             XCell::Obj { val, name } => {
                 out.push_str(&format!(
                     "Obj({}, {}, [])",
@@ -6431,6 +7168,8 @@ impl Tycker {
             cxt = nc;
             if let DeclOut::Println(t) = out {
                 // nf：eval + quote（层级 = env 槽数，参考版 `Infer::nf` 同款）
+                // 一次 nf 充值精化燃料池（参考版 `nf` 同款）
+                refuel();
                 let v = self.machine.eval(bump, cxt.env, t);
                 let lvl = env_len(cxt.env);
                 let q = self.machine.quote_memo(bump, lvl, v);
@@ -6482,6 +7221,7 @@ impl Tycker {
         let Some(v) = last else {
             return 0;
         };
+        refuel();
         let q = if use_memo {
             self.machine.quote_memo(bump, 0, v)
         } else {

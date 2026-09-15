@@ -145,65 +145,54 @@ impl Cxt {
         }
     }
 
-    /// freshVal 函数实现
-    /// 参考 Haskell 代码: freshVal def from to = eval def to . quote def from (Lvl (length from))
-    pub fn fresh_val(&self, infer: &Infer, from: &Env, to: &Env, val: Val) -> Val {
-        // quote def from (Lvl (length from))
-        let quoted = infer.quote(Lvl(from.iter().count() as u32), val);
-
-        // eval def to
-        infer.eval(to, quoted)
+    /// 把精化替换 σ 施加到上下文（dpm-nbe `subst sub ctx`）：env 槽与
+    /// src_names 的类型值包 `VSub`；lvl / locals / pruning 一概不动——
+    /// **槽位布局（= 运行时布局）不变**，被解变量仍在原槽位，读点经 force
+    /// 展开看到解。σ 为空时零开销直通。
+    ///
+    /// 取代旧 `update_cxt`/`refresh`（改写目标槽 + 全槽重引用）——旧架构
+    /// 正是 L07 README §6 所述已淘汰的载体：已捕获旧上下文的值会过期、
+    /// 刷新后槽位可漂移。
+    pub fn subst_cxt(&self, sub: &Rc<Subst>) -> Self {
+        if sub.is_empty() {
+            return self.clone();
+        }
+        let wrap = |v: &Val| Val::VSub(Box::new(v.clone()), sub.clone());
+        let mut src_names = BiMap::new();
+        for (k, l, ty) in self.src_names.iter_all() {
+            src_names.insert(k.clone(), (*l, wrap(ty)));
+        }
+        Cxt {
+            env: self.env.map(wrap),
+            lvl: self.lvl,
+            locals: self.locals.clone(),
+            pruning: self.pruning.clone(),
+            src_names,
+        }
     }
 
-    pub fn update_cxt(&self, infer: &Infer, x: Lvl, v: Val) -> Cxt {
-        match v {
-            Val::Flex(..) => self.clone(),
-            v => {
-                let x_prime = lvl2ix(self.lvl, x).0 as usize;
-                /*println!(
-                    " update {}: {} with {}",
-                    x.0,
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, self.env.iter().nth(x_prime).unwrap().clone())),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, v.clone()))
-                );*/
-                let env = self.env.change_n(x_prime, |_| v);
-                let mut new_src_names = self.src_names.clone();
-                let env_t = self.refresh(infer, &self.env, &mut new_src_names, env);
-        
-                Cxt {
-                    env: env_t,
-                    lvl: self.lvl,
-                    locals: self.locals.clone(),//TODO: lookup env_t, if is not Val::vavar(lvl), set local to Define
-                    pruning: self.pruning.change_n(x_prime, |_| None),
-                    src_names: new_src_names,
+    /// 当前上下文里"真变量"（bind 槽，env 槽仍指向自身 vvar）的层级集合：
+    /// 这些是模式特化方程可以求解的对象。let 定义槽（槽里是值不是 vvar）
+    /// 天然不在其中。嵌套 match 的入口上下文可能已被外层精化包裹
+    /// （`subst_cxt`）——解包 VSub 看**槽的原始形态**；外层已解变量也按
+    /// raw 层级进入基线（无害：方程里它不再以 bare rigid 出现，force 在
+    /// 读点已展开）。
+    pub fn bind_slots(&self) -> Vec<Lvl> {
+        let n = self.lvl.0;
+        self.env
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| {
+                let mut raw = v;
+                while let Val::VSub(inner, _) = raw {
+                    raw = inner;
                 }
-            }
-        }
-    }
-
-    fn refresh(&self, infer: &Infer, env: &List<Val>, src_names: &mut BiMap<String, Lvl, Val>, env2: List<Val>) -> List<Val> {
-        if env.is_empty() {
-            List::new()
-        } else {
-            let env_t = self.refresh(infer, &env.tail(), src_names, env2.clone());
-            let env_tt = env2.change_tail(env_t.clone());
-            let ret = self.fresh_val(infer, &self.env, &env_tt, env.head().unwrap().clone());
-            /*let a = pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone()));
-            let b = pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()));
-            if a != b {
-                println!(
-                    "refresh {}: {} with {}",
-                    env.len(),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, env.head().unwrap().clone())),
-                    pretty_tm(0, self.names(), &infer.quote(self.lvl, ret.clone()))
-                );
-            }*/
-            
-            let ret = env_t.prepend(ret);
-            let src_change=  src_names.get_by_key2_mut(&Lvl(env_t.len() as u32)).unwrap();
-            *src_change = self.fresh_val(infer, &self.env, &env_tt, src_change.clone());
-            ret
-        }
+                match raw {
+                    Val::Rigid(l, sp) if sp.is_empty() && l.0 + (i as u32) + 1 == n => Some(*l),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 }
 

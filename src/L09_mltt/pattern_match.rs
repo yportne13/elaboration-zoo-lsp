@@ -8,7 +8,7 @@ use crate::parser_lib::Span;
 use super::{
     Env, Error, Infer, Tm, Val,
     cxt::Cxt,
-    empty_span,
+    empty_span, wrap_sub,
     parser::syntax::{Pattern, Raw, Icit},
     PatternDetail,
 };
@@ -194,7 +194,9 @@ impl Compiler {
                 let mut cxt = cxt.clone();
                 loop {
                     let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
-                    match typ {
+                    // 类型可能是 VSub 包裹的（臂上下文曾经 subst_cxt）——判 Pi
+                    // 前先 force 推开精化（σ 对 src_names 类型的读点纪律）。
+                    match infer.force(typ) {
                         Val::Pi(name, icit, ty, _) => {
                             if icit == Icit::Expl { // Only explicit args matter for the structure
                                 params.push((name.clone(), *ty.clone(), icit));
@@ -212,7 +214,8 @@ impl Compiler {
                 }*/
 
                 // 4. Try to unify it with the type of the matched term.
-                if let Ok((_, cxt)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
+                // 纯探测：σ 局部（丢弃即回滚），meta 由外层快照整表回滚。
+                if let Ok((_, _sub)) = infer.check_pm(&cxt, to_check.clone(), forced_type.clone()) {
                     // If unification succeeds, the constructor is accessible.
                     accessible.push((constr_def, params, cxt));
                 }
@@ -247,7 +250,11 @@ impl Compiler {
         match heads {
             [] => match arms {
                 [(arm, idx, cxt, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() => {
-                    let (_, cxt) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
+                    let (_, sub) = infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()).unwrap();
+                    // 臂上下文置于精化 σ 之下（dpm-nbe `subst sub ctx`）：env
+                    // 槽与 src_names 类型包 VSub，lvl/locals/pruning 不动——
+                    // 槽位布局（= 运行时布局）永不漂移，读点 force 展开。
+                    let cxt = cxt.subst_cxt(&sub);
                     self.reachable.insert(*idx, ());
                     // 同一臂可能在多个构造子分支被走到：已完整编译（体检查 +
                     // pats 记录）则只需可达、无需重检查。按臂下标记录（L13
@@ -259,10 +266,13 @@ impl Compiler {
                     }
                     //println!("prepare to check {:?}", arm.body);
                     //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
+                    // 期望类型是"解前构建、解后消费"的值：消费点用本臂 σ 包裹，
+                    // 再 quote → eval 重锚到臂上下文（旧实现的"精化后 cxt 重锚"
+                    // 的显式替换形态）。
                     let ret_type = match self.ret_type.clone() {
                         t @ Val::Flex(_, _) => t,
                         ret_type => {
-                            let ret_type = infer.quote(cxt.lvl, ret_type);
+                            let ret_type = infer.quote(cxt.lvl, wrap_sub(&sub, ret_type));
                             infer.eval(&cxt.env, ret_type)
                         },
                     };
@@ -338,16 +348,18 @@ impl Compiler {
                                         let (_, typ) = infer.infer_expr(cxt, Raw::Var(constr.clone())).ok()?;
                                         let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
                                         param.reverse();
-                                        let mut typ = typ;
+                                        // 构造子类型可能被 VSub 包裹（臂上下文曾经
+                                        // subst_cxt）——剥 Pi 链的每一步都先 force。
+                                        let mut typ = infer.force(typ);
                                         while let Val::Pi(name, icit, ty, closure) = typ {
                                             if !param.is_empty() {
                                                 let val = param.pop()
                                                     .map(|x| super::rc_take(x.1))
                                                     .unwrap_or(Val::U(0));
-                                                typ = infer.closure_apply(&closure, val);
+                                                typ = infer.force(infer.closure_apply(&closure, val));
                                             } else {
                                                 new_heads.push((self.fresh(), *ty, name, icit));
-                                                typ = infer.closure_apply(&closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1));
+                                                typ = infer.force(infer.closure_apply(&closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1)));
                                             }
                                         }
                                     }
@@ -578,7 +590,7 @@ impl Compiler {
                 typ,
                 case_name,
                 datas: params,
-            } => (case_name, params, match typ.as_ref() {
+            } => (case_name, params, match infer.force((*typ).clone()) {
                 Val::Sum(_, _, cases) => cases.clone(),
                 _ => panic!("by now only can match a sum type, but get {:?}", heads),
             }),
