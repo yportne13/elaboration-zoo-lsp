@@ -170,6 +170,38 @@ covered; ...`。⇒ **镜像修复 = 把参考版的逐列精化搬进孪生编�
 round 6 需逐条定位（`test14` 的报错走向、`test_prove_term_pure` 的证明
 搜索、`test_stuck_match...` 的卡住 match 应用）。
 
+### 孪生镜像的实现前置分析（round 6 第 1 项的实施要点）
+
+镜像不只是加 σ 字段，参考版的逐列精化依赖**头部值穿线**，孪生两者皆缺：
+
+1. 参考版的 heads 是四元组 `(typ, name, icit, head_val: Option<Rc<Val>>)`：
+   `compile()` 入口放 scrutinee 值（`Some(target_val)`），构造子分支把
+   `head_val` 的 SumCase datas 按字段序传给子列
+   （`head_val_datas.get(consumed_implicit_count + i)`）。
+2. 孪生的 heads 是 `(Var, V, Span, Icit)`（`Var = i32`，仅编号），**无值**；
+   `compile()` 入口也不放 scrutinee 值（值在 `Arm.ori`，只在叶子
+   `check_pm_final` 用）。
+3. 需要搬的三块（对照参考版 pattern_match.rs 行号）：
+   a. heads 加第五元 head_val + 入口/构造子分支的值穿线；
+   b. 索引精化块：`unify_pm(head_typ, constr_ret)`（constr_ret = Pi 剥完
+      隐参后的构造子返回类型，孪生的剥链循环在 12330-12375，循环结束的
+      `cty` 即 constr_ret，需存出）；
+   c. Rigid 头值传播块：head_val 为裸 Rigid 时
+      `unify_pm(vvar(l), SumCase{datas: 新鲜字段 vvar})` → σ。
+   然后 `refine_acc = compose(传播σ, compose(索引σ, 入臂σ))` 挂 `Arm.refine`
+   （新字段，6 个构造点），探测点（12301）`wrap_sub(&arm.refine, *typ)`。
+
+### test14 初步画像（round 6 第 2 项的入口）
+
+`test14` 期望 `find unsolved meta`，实得 `can't unify`，两侧 spine：
+`P {?32381 c b a (t+1)} → P {?32381 a b c (t+1)}` vs
+`P {?32381 (t+1) a b c} → P {?32381 (t+1) a b c}`。注意 spine 里混入了
+**`def t` 绑定器作用域的 `t`（`succ t` 打成 `t + 1`）**——顶层 `let test`
+的方程里出现了前一个 def 作用域的变量：外层 meta 越界泄漏（已知限制 #1
+地带）在 σ 机制下走向不同（怀疑与 `invert`/`prune` 的 `force_arg` 解包
+VSub 后把越界 rigid 当可逆元的口径有关）。诊断入口：对失败方程打
+pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入的方程序。
+
 ## 接续建议（round 6 工作清单，按优先级）
 
 1. **孪生版镜像 GADT 精化**（第 5 节）：把参考版的"逐列精化 σ 随臂下传 +
