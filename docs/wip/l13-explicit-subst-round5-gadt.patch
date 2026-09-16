@@ -1782,7 +1782,7 @@ index f3314d2..9c4c7b6 100644
          }
      }
 diff --git a/src/L13_namespace/elaboration.rs b/src/L13_namespace/elaboration.rs
-index 31dde7e..07610cf 100644
+index 31dde7e..ddf467e 100644
 --- a/src/L13_namespace/elaboration.rs
 +++ b/src/L13_namespace/elaboration.rs
 @@ -6,13 +6,13 @@ use smol_str::SmolStr;
@@ -1814,23 +1814,28 @@ index 31dde7e..07610cf 100644
          let lvl = cxt.lvl;
          let tm = self.quote(&cxt.decl, lvl, val);
          if tm.no_metas(self, &cxt.decl, lvl).is_some() {
-@@ -247,6 +252,15 @@ impl Infer {
+@@ -247,6 +252,20 @@ impl Infer {
          act.map(|(t, va)| self.insert_go(cxt, t, va, span))
      }
      pub fn insert(&mut self, cxt: &Cxt, act: Result<(Rc<Tm>, Rc<VTy>), Error>, span: Span<()>) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
 +        let _dt = super::DiagTimeBump::new(&super::D_T_INSERT);
-+        super::IN_INSERT.with(|c| c.set(c.get() + 1));
-+        struct InsGuard;
++        let ins_diag = super::DIAG_ON.load(std::sync::atomic::Ordering::Relaxed);
++        if ins_diag {
++            super::IN_INSERT.with(|c| c.set(c.get() + 1));
++        }
++        struct InsGuard(bool);
 +        impl Drop for InsGuard {
 +            fn drop(&mut self) {
-+                super::IN_INSERT.with(|c| c.set(c.get().saturating_sub(1)));
++                if self.0 {
++                    super::IN_INSERT.with(|c| c.set(c.get().saturating_sub(1)));
++                }
 +            }
 +        }
 +        let _ig = InsGuard;
          act.and_then(|x| if let Tm::Lam(_, Icit::Impl, _) = x.0.as_ref() {
              Ok(x)
          } else {
-@@ -286,16 +300,25 @@ impl Infer {
+@@ -286,16 +305,25 @@ impl Infer {
      ) -> Result<(Rc<Tm>, Rc<VTy>), Error> {
          act.and_then(|(t, va)| self.insert_until_go(cxt, name, t, va))
      }
@@ -1861,7 +1866,7 @@ index 31dde7e..07610cf 100644
      }
      /// Pattern-matching version of `infer_expr`.
      ///
-@@ -305,11 +328,13 @@ impl Infer {
+@@ -305,11 +333,13 @@ impl Infer {
      ///
      /// Non-`App` forms delegate to the regular `infer_expr`.
      ///
@@ -1877,7 +1882,7 @@ index 31dde7e..07610cf 100644
          match t {
              Raw::App(t, u, i) => {
                  let t_span = t.to_span();
-@@ -341,11 +366,14 @@ impl Infer {
+@@ -341,11 +371,14 @@ impl Infer {
                          }
                      }
                      _ => {
@@ -1893,7 +1898,7 @@ index 31dde7e..07610cf 100644
                          }
                          self.meta.truncate(meta_before);
  
-@@ -377,114 +405,112 @@ impl Infer {
+@@ -377,114 +410,112 @@ impl Infer {
                          (a, b_closure)
                      }
                  };
@@ -2036,12 +2041,12 @@ index 31dde7e..07610cf 100644
 +        if let Val::Rigid(x, sp) = f1.as_ref() {
 +            if sp.is_empty() {
 +                return Self::spec_refine(cxt, *x, f2.clone(), t_span, spec);
-             }
++            }
 +        }
 +        if let Val::Rigid(x, sp) = f2.as_ref() {
 +            if sp.is_empty() {
 +                return Self::spec_refine(cxt, *x, f1.clone(), t_span, spec);
-+            }
+             }
 +        }
 +        match (f1.as_ref(), f2.as_ref()) {
              (
@@ -2083,7 +2088,7 @@ index 31dde7e..07610cf 100644
                          }
                          _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
                      }
-@@ -496,11 +522,11 @@ impl Infer {
+@@ -496,11 +527,11 @@ impl Infer {
                  if super::is_nat_sum(&self.force(&cxt.decl, typ)) {
                      match index {
                          0 if datas.is_empty() => {
@@ -2098,7 +2103,7 @@ index 31dde7e..07610cf 100644
                          }
                          _ => Err(Error(t_span.map(|_| "".to_string()), vec![])),
                      }
-@@ -508,28 +534,39 @@ impl Infer {
+@@ -508,28 +539,39 @@ impl Infer {
                      Err(Error(t_span.map(|_| "".to_string()), vec![]))
                  }
              }
@@ -2149,7 +2154,7 @@ index 31dde7e..07610cf 100644
      pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, u32), Error> {
          let _g = super::prof_enter(&super::FUNC_PROF.check_universe.0, &super::FUNC_PROF.check_universe.1);
          let t_span = t.to_span();
-@@ -797,7 +834,7 @@ impl Infer {
+@@ -797,7 +839,7 @@ impl Infer {
                  if CANONICAL {
                      // 顶层合一入口：充值 fuel 池（L08 前向传播的护栏纪律）
                      self.refuel();
@@ -2158,7 +2163,7 @@ index 31dde7e..07610cf 100644
                          let err = match e {
                              super::UnifyError::Basic | super::UnifyError::Stuck => format!(
                                  //"can't unify {:?} == {:?}",
-@@ -910,7 +947,7 @@ impl Infer {
+@@ -910,7 +952,7 @@ impl Infer {
              // 顶层合一入口：充值 fuel 池（L08 前向传播的护栏纪律；
              // 构造子链重建后的终态 unify，与 check 通用臂同款）
              self.refuel();
@@ -2167,7 +2172,20 @@ index 31dde7e..07610cf 100644
                  let err = match e {
                      super::UnifyError::Basic | super::UnifyError::Stuck => format!(
                          "can't unify\n  expected: {}\n      find: {}",
-@@ -2139,9 +2176,115 @@ impl Infer {
+@@ -1160,7 +1202,11 @@ impl Infer {
+                     )
+                 };
+                 // Inlay hint: def without explicit return type → show inferred return type.
+-                if matches!(ret_type, Raw::Hole(_)) {
++                // prelude 期总闸（与 push_inlay_hint 同口径；性能复验 B'-A 指出的
++                // 第二生产点）。
++                if !self.lsp_collect {
++                    // skip: 表在缓存前清空，此处产出是死工作
++                } else if matches!(ret_type, Raw::Hole(_)) {
+                     let (ret_val, ret_lvl) = self.peel_pi(&ret_cxt, &vty);
+                     let ret_tm = self.quote(&ret_cxt.decl, ret_lvl, &ret_val);
+                     if ret_tm.no_metas(self, &ret_cxt.decl, ret_lvl).is_none() {
+@@ -2139,9 +2185,115 @@ impl Infer {
      /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
      /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
      pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
@@ -2286,7 +2304,7 @@ index 31dde7e..07610cf 100644
      }
  
      /// L5: push hover entries for the intermediate prefixes of a qualified
-@@ -2183,20 +2326,11 @@ impl Infer {
+@@ -2183,20 +2335,11 @@ impl Infer {
              Raw::Var(name) => match cxt.src_names.get(&name.data) {
                  Some((x, a)) => {
                      self.push_hover(cxt, t_span, a.0, &a.1);
@@ -4151,7 +4169,7 @@ index e6d95c1..b138ac9 100644
      let mut last: Option<SmolStr> = None;
      for (i, d) in decls.iter().enumerate() {
 diff --git a/src/L13_namespace/pattern_match.rs b/src/L13_namespace/pattern_match.rs
-index a1c0635..81ffa94 100644
+index a1c0635..6a8a87f 100644
 --- a/src/L13_namespace/pattern_match.rs
 +++ b/src/L13_namespace/pattern_match.rs
 @@ -5,10 +5,11 @@ use smol_str::SmolStr;
@@ -4183,23 +4201,29 @@ index a1c0635..81ffa94 100644
                  }
              }
  
-@@ -344,6 +348,15 @@ impl Compiler {
+@@ -344,6 +348,21 @@ impl Compiler {
          ori: Rc<Val>,
          target_typ: Rc<Val>,
      ) -> Result<bool, Error> {
 +        let _dt = super::DiagTimeBump::new(&super::D_T_COMPILER);
-+        super::IN_COMPILER.with(|c| c.set(c.get() + 1));
-+        struct CompGuard;
++        // 归因计数仅诊断面使用：DIAG 关时不付 TLS 开销（性能复验 B'-E）。
++        let comp_diag = super::DIAG_ON.load(std::sync::atomic::Ordering::Relaxed);
++        if comp_diag {
++            super::IN_COMPILER.with(|c| c.set(c.get() + 1));
++        }
++        struct CompGuard(bool);
 +        impl Drop for CompGuard {
 +            fn drop(&mut self) {
-+                super::IN_COMPILER.with(|c| c.set(c.get().saturating_sub(1)));
++                if self.0 {
++                    super::IN_COMPILER.with(|c| c.set(c.get().saturating_sub(1)));
++                }
 +            }
 +        }
-+        let _cg = CompGuard;
++        let _cg = CompGuard(comp_diag);
          match heads {
              [] => {
                  match arms {
-@@ -365,7 +378,7 @@ impl Compiler {
+@@ -365,7 +384,7 @@ impl Compiler {
                          let patcon_raw = entry.patcon.clone().to_raw();
                          // Try patcon_raw only (includes GADT implicits);
                          // NO fallback to raw — only patcon_raw is used.
@@ -4208,7 +4232,7 @@ index a1c0635..81ffa94 100644
                              &entry.cxt,
                              patcon_raw,
                              target_typ.clone(),
-@@ -377,17 +390,25 @@ impl Compiler {
+@@ -377,17 +396,25 @@ impl Compiler {
                                  return Ok(false);
                              }
                          };
@@ -4239,7 +4263,7 @@ index a1c0635..81ffa94 100644
                                  Ok(ret) => ret,
                                  Err(e) => {
                                      // Collect the type error but continue checking other branches
-@@ -466,6 +487,7 @@ impl Compiler {
+@@ -466,6 +493,7 @@ impl Compiler {
                                          body: entry.arm.body.clone(),
                                      },
                                      idx: entry.idx,
@@ -4247,7 +4271,7 @@ index a1c0635..81ffa94 100644
                                      cxt: cxt.bind(
                                          name.clone(),
                                          infer.quote(&cxt.decl, cxt.lvl, typ),
-@@ -499,6 +521,7 @@ impl Compiler {
+@@ -499,6 +527,7 @@ impl Compiler {
                                          body: entry.arm.body.clone(),
                                      },
                                      idx: entry.idx,
@@ -4255,7 +4279,7 @@ index a1c0635..81ffa94 100644
                                      cxt: if let Some(Pattern::Any(Span { data: false, .. }, _)) =
                                          entry.arm.pats.first()
                                      {
-@@ -561,10 +584,17 @@ impl Compiler {
+@@ -561,10 +590,17 @@ impl Compiler {
                                  // of silently treating every constructor as
                                  // inaccessible (which would surface as spurious
                                  // "unreachable pattern" errors for all arms).
@@ -4274,7 +4298,7 @@ index a1c0635..81ffa94 100644
                                      &constrs[..],
                                  )?;
                                  Some(accessible_constrs.into_iter().map(|x| x.0).collect())
-@@ -763,6 +793,7 @@ impl Compiler {
+@@ -763,6 +799,7 @@ impl Compiler {
                                                      ))
                                                  },
                                                  is_impl: false,
@@ -4282,7 +4306,7 @@ index a1c0635..81ffa94 100644
                                              }))
                                          }
                                          [Pattern::Con(constr_, item_pats, i), ..]
-@@ -827,6 +858,7 @@ impl Compiler {
+@@ -827,6 +864,7 @@ impl Compiler {
                                                      .clean()
                                                      .push(PatternDetail::Bind(constr_.clone())),
                                                  is_impl: false,
@@ -4290,7 +4314,7 @@ index a1c0635..81ffa94 100644
                                              }))
                                          }
                                          [Pattern::Con(constr_, item_pats, i), ..]
-@@ -908,6 +940,22 @@ impl Compiler {
+@@ -908,6 +946,22 @@ impl Compiler {
  
                                              let mut new_cxt = cxt.clone();
                                              let mut new_cxt_ff = cxt_for_filter.clone();
@@ -4313,7 +4337,7 @@ index a1c0635..81ffa94 100644
                                              let mut new_patcon = patcon
                                                  .clone()
                                                  .clean()
-@@ -975,13 +1023,28 @@ impl Compiler {
+@@ -975,13 +1029,28 @@ impl Compiler {
                                                          ty.clone(),
                                                      );
                                                  }
@@ -4345,7 +4369,7 @@ index a1c0635..81ffa94 100644
                                                  }
                                              }
  
-@@ -1018,13 +1081,24 @@ impl Compiler {
+@@ -1018,13 +1087,24 @@ impl Compiler {
                                                                  index: constr_idx as u32,
                                                                  datas: Rc::new(datas_vec),
                                                              });
@@ -4374,7 +4398,7 @@ index a1c0635..81ffa94 100644
                                                              }
                                                          }
                                                      }
-@@ -1059,6 +1133,7 @@ impl Compiler {
+@@ -1059,6 +1139,7 @@ impl Compiler {
                                                  new_heads: remaining_new_heads,
                                                  patcon: new_patcon,
                                                  is_impl: false,
@@ -4382,7 +4406,7 @@ index a1c0635..81ffa94 100644
                                              }))
                                          }
                                          _ => {
-@@ -1093,6 +1168,7 @@ impl Compiler {
+@@ -1093,6 +1174,7 @@ impl Compiler {
                                                          ),
                                                      ),
                                                      is_impl: true,
@@ -4390,7 +4414,7 @@ index a1c0635..81ffa94 100644
                                                  }))
                                              } else {
                                                  None
-@@ -1164,6 +1240,7 @@ impl Compiler {
+@@ -1164,6 +1246,7 @@ impl Compiler {
                                              cxt: x.cxt,
                                              cxt_for_filter: x.cxt_for_filter,
                                              patcon: x.patcon,
@@ -4398,7 +4422,7 @@ index a1c0635..81ffa94 100644
                                          })
                                          .collect::<Vec<_>>(),
                                      &context_,
-@@ -1212,6 +1289,7 @@ impl Compiler {
+@@ -1212,6 +1295,7 @@ impl Compiler {
                      cxt: cxt.clone(),
                      cxt_for_filter: cxt.clone(),
                      patcon: PatConstructor::new(),
@@ -4406,7 +4430,7 @@ index a1c0635..81ffa94 100644
                  })
                  .collect::<Vec<_>>(),
              &MatchContext::Outermost,
-@@ -1348,6 +1426,13 @@ struct ArmEntry {
+@@ -1348,6 +1432,13 @@ struct ArmEntry {
      cxt: Cxt,
      cxt_for_filter: Cxt,
      patcon: PatConstructor,
@@ -4420,7 +4444,7 @@ index a1c0635..81ffa94 100644
  }
  
  /// Temporary result produced by the filter_map closure in decision-tree
-@@ -1361,4 +1446,6 @@ struct FilterResult {
+@@ -1361,4 +1452,6 @@ struct FilterResult {
      new_heads: Vec<(Rc<Val>, Span<SmolStr>, Icit, Option<Rc<Val>>)>,
      patcon: PatConstructor,
      is_impl: bool,
@@ -4428,7 +4452,7 @@ index a1c0635..81ffa94 100644
 +    refine: Rc<Subst>,
  }
 diff --git a/src/L13_namespace/unification.rs b/src/L13_namespace/unification.rs
-index bef64f1..fdec9e1 100644
+index bef64f1..a4936b1 100644
 --- a/src/L13_namespace/unification.rs
 +++ b/src/L13_namespace/unification.rs
 @@ -5,10 +5,10 @@ use crate::list::List;
@@ -4550,7 +4574,7 @@ index bef64f1..fdec9e1 100644
              Some(pr) if pr.iter().any(|x| x.is_none()) => {
                  self.prune_meta(&cxt.decl, pr, m)?;
                  Ok(())
-@@ -909,16 +928,45 @@ impl Infer {
+@@ -909,16 +928,50 @@ impl Infer {
          self.solve_multi_trait(cxt, m, false)
      }
  
@@ -4558,11 +4582,16 @@ index bef64f1..fdec9e1 100644
 +    pub fn unify(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, u: &Rc<Val>, fuel: u32, mut spec: Option<&mut SpecSolve<'_>>) -> Result<(), UnifyError> {
          let _g = super::prof_enter(&super::FUNC_PROF.unify.0, &super::FUNC_PROF.unify.1);
 +        super::diag_bump(&super::D_UNIFY);
-+        super::IN_UNIFY.with(|c| c.set(c.get() + 1));
-+        struct UnGuard;
++        let un_diag = super::DIAG_ON.load(std::sync::atomic::Ordering::Relaxed);
++        if un_diag {
++            super::IN_UNIFY.with(|c| c.set(c.get() + 1));
++        }
++        struct UnGuard(bool);
 +        impl Drop for UnGuard {
 +            fn drop(&mut self) {
-+                super::IN_UNIFY.with(|c| c.set(c.get().saturating_sub(1)));
++                if self.0 {
++                    super::IN_UNIFY.with(|c| c.set(c.get().saturating_sub(1)));
++                }
 +            }
 +        }
 +        let _ug = UnGuard;
@@ -4599,7 +4628,7 @@ index bef64f1..fdec9e1 100644
          /*println!(
              "uni {}\n == {}",
              pretty_tm(0, cxt.names(), &self.quote(&cxt.decl, l, &t)),
-@@ -938,7 +986,7 @@ impl Infer {
+@@ -938,7 +991,7 @@ impl Infer {
                      // Skip the O(meta_len) snapshot entirely — this is the
                      // common case for theorem-proving workloads, where the
                      // same inlined helper call is compared with concrete args.
@@ -4608,7 +4637,7 @@ index bef64f1..fdec9e1 100644
                          return Ok(());
                      }
                      // Failure without side effects: fall through to the body
-@@ -947,7 +995,7 @@ impl Infer {
+@@ -947,7 +1000,7 @@ impl Infer {
                      let meta_snapshot = self.meta.clone();
                      let trait_metas_snapshot = self.trait_metas.clone();
                      let mc_snapshot = self.meta_contrains.clone();
@@ -4617,7 +4646,7 @@ index bef64f1..fdec9e1 100644
                          return Ok(())
                      }
                      self.meta = meta_snapshot;
-@@ -959,12 +1007,12 @@ impl Infer {
+@@ -959,12 +1012,12 @@ impl Infer {
          }
  
          match (t.as_ref(), u.as_ref()) {
@@ -4634,7 +4663,7 @@ index bef64f1..fdec9e1 100644
                  self.unify(
                      l + 1,
                      // quote 用**当前层级 l**而不是 cxt.lvl：Lam 的 η 递归臂
-@@ -976,13 +1024,48 @@ impl Infer {
+@@ -976,13 +1029,48 @@ impl Infer {
                      &self.closure_apply(&cxt.decl, b, Val::vvar(l).into()),
                      &self.closure_apply(&cxt.decl, b_prime, Val::vvar(l).into()),
                      fuel,
@@ -4685,7 +4714,7 @@ index bef64f1..fdec9e1 100644
              }
              (Val::Decl(..), _) => {
                  // A stuck prim application is a leaf: if the other side is a
-@@ -1002,7 +1085,7 @@ impl Infer {
+@@ -1002,7 +1090,7 @@ impl Infer {
                      Err(UnifyError::Basic)
                  } else {
                      let t2 = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &t));
@@ -4694,7 +4723,7 @@ index bef64f1..fdec9e1 100644
                  }
              }
              (_, Val::Decl(..)) => {
-@@ -1018,11 +1101,11 @@ impl Infer {
+@@ -1018,11 +1106,11 @@ impl Infer {
                      Err(UnifyError::Basic)
                  } else {
                      let u2 = self.eval(&cxt.decl, &cxt.env, &self.quote(&cxt.decl, l, &u));
@@ -4708,7 +4737,7 @@ index bef64f1..fdec9e1 100644
              }
              (Val::Flex(m, sp), Val::Flex(m_prime, sp_prime)) => {
                  self.flex_flex(l, cxt, *m, sp.clone(), *m_prime, sp_prime.clone())
-@@ -1033,6 +1116,7 @@ impl Infer {
+@@ -1033,6 +1121,7 @@ impl Infer {
                  &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
                  &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
                  fuel,
@@ -4716,7 +4745,7 @@ index bef64f1..fdec9e1 100644
              ),
              // Eta-expansion of the non-lambda side requires it to be a
              // function-like value; otherwise `v_app` would panic on e.g. a Sum.
-@@ -1042,6 +1126,7 @@ impl Infer {
+@@ -1042,6 +1131,7 @@ impl Infer {
                  &self.v_app(&cxt.decl, &t, Val::vvar(l).into(), *i),
                  &self.closure_apply(&cxt.decl, t_prime, Val::vvar(l).into()),
                  fuel,
@@ -4724,7 +4753,7 @@ index bef64f1..fdec9e1 100644
              ),
              (Val::Lam(_, i, t), _) if is_appliable(u.as_ref()) => self.unify(
                  l + 1,
-@@ -1049,6 +1134,7 @@ impl Infer {
+@@ -1049,6 +1139,7 @@ impl Infer {
                  &self.closure_apply(&cxt.decl, t, Val::vvar(l).into()),
                  &self.v_app(&cxt.decl, &u, Val::vvar(l).into(), *i),
                  fuel,
@@ -4732,7 +4761,7 @@ index bef64f1..fdec9e1 100644
              ),
              (Val::Flex(m, sp), _) => {
                  self.solve_flex_side(l, cxt, &t, &u, *m, sp.clone(), &u)
-@@ -1061,7 +1147,7 @@ impl Infer {
+@@ -1061,7 +1152,7 @@ impl Infer {
              (Val::Sum(a, params_a, _, _), Val::Sum(b, params_b, _, _)) if a.data == b.data => {
                  // params_a.len() always equal to params_b.len()?
                  for (a, b) in params_a.iter().zip(params_b.iter()) {
@@ -4741,7 +4770,7 @@ index bef64f1..fdec9e1 100644
                  }
                  Ok(())
              }
-@@ -1070,9 +1156,9 @@ impl Infer {
+@@ -1070,9 +1161,9 @@ impl Infer {
                  Val::SumCase { is_trait: _, typ: b, index: cb, datas: params_b },
              ) if ca == cb => {
                  // params_a.len() always equal to params_b.len()?
@@ -4753,7 +4782,7 @@ index bef64f1..fdec9e1 100644
                  }
                  Ok(())
              }
-@@ -1095,7 +1181,7 @@ impl Infer {
+@@ -1095,7 +1186,7 @@ impl Infer {
                  }
              }
              (Val::Match(s1, env1, cases1), Val::Match(s2, env2, cases2)) => {
@@ -4762,7 +4791,7 @@ index bef64f1..fdec9e1 100644
  
                  if cases1.len() != cases2.len() {
                      return Err(UnifyError::Basic);
-@@ -1121,7 +1207,7 @@ impl Infer {
+@@ -1121,7 +1212,7 @@ impl Infer {
                      let body1_val = self.eval(&declb, &env1, clos1);
                      let body2_val = self.eval(&declb, &env2, clos2);
  
@@ -4771,7 +4800,7 @@ index bef64f1..fdec9e1 100644
                  }
  
                  Ok(())
-@@ -1137,7 +1223,7 @@ impl Infer {
+@@ -1137,7 +1228,7 @@ impl Infer {
                      if let Some((tm, eval_env)) = Compiler::eval_aux(self, &s_forced, &cxt.decl, env_m, cases) {
                          let reduced = self.eval(&cxt.decl, &eval_env, &tm);
                          if fuel > 0 {
@@ -4780,7 +4809,7 @@ index bef64f1..fdec9e1 100644
                          }
                      }
                  }
-@@ -1169,8 +1255,8 @@ impl Infer {
+@@ -1169,8 +1260,8 @@ impl Infer {
                  }
              }
              (Val::Obj(a1, b1, sp1), Val::Obj(a2, b2, sp2)) if b1.data == b2.data => {
