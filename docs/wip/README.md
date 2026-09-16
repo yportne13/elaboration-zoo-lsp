@@ -1,127 +1,139 @@
 # L13 显式替换移植：未落地尝试的证据存档
 
-L13（生产层）的显式替换移植**代码已完成且裸语言语义正确**，但因
-prelude/calc 路径的规模放大未通过验收，**已回退到 HEAD 状态**。
-本目录保存历次尝试的补丁与结论，供后续接续。
+L13（生产层）的显式替换移植**代码完成、裸语言语义面基本正确**，但
+prelude/calc 路径存在规模放大与**若干 parity 语义回归**，未通过验收，
+**已回退到 HEAD**。本目录保存历次尝试的补丁与结论，供后续接续。
 
 ## 产物
 
 - `l13-explicit-subst-round1.patch`：第一轮移植（参考版 + 孪生版，8 文件
   / +1599−452）——裸语言语料 65 例逐字节 diff = 0，但 prelude 挂起。
-- `l13-explicit-subst-attempt.patch`：第二轮修复尝试（= round1 + `frcs`
-  入口 `mentions_level` 快路径、`wrap_sub` 展平、`compose` 去重、
-  `quote_sp` 迭代化 + 顶层 quote 记忆化、`subst_cxt` 条件包裹；对干净
-  HEAD 可独立应用，是 round1 的累积超集）——挂起缓解为"可完成但慢"，
-  calc 单测 74s（默认测试栈直接 STATUS_STACK_OVERFLOW，即 parity 崩因）。
-- `l13-explicit-subst-round3-perf-probes.patch`：第三轮（2026-09-15），
-  **= attempt 累积补丁 + 三项性能修复 + 全套诊断探针**，对干净 HEAD 可
-  独立应用（`git apply --check` 已验证）。见下文"第三轮结论"。
+- `l13-explicit-subst-attempt.patch`：第二轮修复（= round1 + frcs 入口
+  `mentions_level` 快路径、`wrap_sub` 展平、`compose` 去重、`quote_sp`
+  迭代化 + 顶层 quote 记忆化、`subst_cxt` 条件包裹）。对干净 HEAD 可独立
+  应用（round1 的累积超集）。
+- `l13-explicit-subst-round3-perf-probes.patch`：第三轮（= attempt + 三项
+  性能修复 + 诊断探针）。
+- `l13-explicit-subst-round4-patches.patch`：第四轮（2026-09-16）= round3
+  + **prelude 期 LSP 表总闸（重大，见下）+ unify_pm 重锚门槛 + FRCS_MEMO
+  内存口径修复 + 深链诊断探针**。对干净 HEAD 可独立应用（`git apply
+  --check` 已验证）。
 
-## 第三轮结论（2026-09-15）：根因已定位到函数级
+## 第四轮结论（2026-09-16）
 
-复现与方法：应用 attempt 补丁后，`TYPORT_PRELUDE_PROF=1`（逐文件/逐
-decl 计时）+ `L13_DIAG=1`（FUNC_PROF WATCH + [DIAG8] 计时探针）跑
-`typort check`（等价于测试的 `run_with_prelude` 全路径），与 stash 后的
-基线同法对照。
+### 一、prelude 期不再收集 LSP 表 —— 21s → 9.3s（已落地，零行为变更）
 
-### 画像一：耗时分这不是 eval，是"每个操作变贵"
+**发现**：`load_prelude_state_impl` 末尾本就 `hover_table.clear()`（连同
+completion/inlay），prelude 内部产生的 hover 条目**从不被任何消费者读到**；
+而显式替换下每个变量引用的类型都带 VSub 包裹，渲染要 quote+frcs 重建+
+打印，实测占 prelude 加载 21s 中的 **~10-12s（quote 1.6s + pretty 8.6s）**。
 
-prelude 全量加载（含 HDL）：**基线 ~4.5s → 移植后 ~30s**。逐 decl 热点
-（移植后）：`portLineSingle` 2.26s（基线 0.010s）、`collectRegLines`
-2.48s（0.013s）、`collectInitLinesCd` 2.28s（0.025s）、
-`wrapWithWhenContext` 1.78s、`createSignalExpr` 1.63s——全部是
-`hdl-verilog.typort`（file[30]，移植后单文件 15.5s / 基线 0.93s）里
-**大枚举 match（15–30 case）+ 字符串 List 处理**的函数。
+**修复**：`Infer.lsp_collect: bool`（prelude 加载期置 false，克隆给用户
+文件的状态恒为 true）。实测 `typort check`（含 HDL prelude 全量）：
+**21.1s → 9.3s**。孪生版**早已**有同样的总闸（`bump_spine_iter` 的
+`if !self.observe { return; }`，注释即"本轮末表即清，渲染是纯死工作"）
+——本修复只是让参考版对齐孪生版，parity 表不会分叉。
 
-### 画像二：elaboration 结构完全没变，是单次操作成本爆炸
+`l13bench --workload prelude-core` 的拆分（basic 列）：带 LSP 表 1242ms /
+不带 637ms / 基线（移植前）22.4ms ⇒ **LSP 表渲染 ~600ms，纯 elaboration
+仍 ~28×**（fast 孪生列 802ms，基线 12.8ms）。
 
-prelude 加载期间 FUNC_PROF 对比（同机同构建参数）：
+### 二、12k 深 quote 的真身：**meta 解链**（诊断完成，未修）
 
-| 函数 | 基线 | 移植后 | 倍率 |
-|---|---|---|---|
-| infer_expr 调用数 | **118 304** | **118 304（完全相同）** | 1× |
-| infer_expr 独占 | 0.441s | 13.4s | 30×（113µs/次） |
-| quote | 0.202s / 1.12M 次 | 8.5s / 4.2M 次 | 42× |
-| eval | 3.035s / 5.68M | 4.414s / 6.54M | 1.4× |
-| check | 0.153s / 44 292 次 | 2.363s / 44 292 次（次数相同） | 15× |
-| force | 0s / 5.18M | ~0s / 10.9M（memo 生效后） | — |
+- 最深 quote 路径 12,287 层，形状 `Flex=1, VSub=12,286`，扇出树 77,811
+  节点（第三次修正该画像的定性）：**不是**"巨型卡住应用"，也不是字面
+  VSub 塔（σ 链实测 ≤4 层、`wrap_sub` 展平有效、nested-创建计数≈0、
+  force 顶层从不返回 VSub）。
+- 帧值转储（新增 `QSTACK_VAL` + force 后 DFS）显示：链上每层是
+  `SumCase{ typ: VSub(Sum), data: VSub(Flex(m, [Rigid,Rigid,Rigid])) }`，
+  即 **`succ(?m₁)`，而 `?m₁ := succ(?m₂)`，`?m₂ := …`——一条 meta 解链**，
+  逐层 `force` 展开。深度只受 fuel 池约束（~12k ≈ 3 次充值的量级），
+  因此**默认测试栈（无 RUST_MIN_STACK）必栈溢出**——这就是
+  `l13_fast_parity` 默认运行崩溃的直接原因（`calc_two_step` 等）。
+- 触发位置：`nat.typort` 的 `nat_div`（file[2]）首次出现，之后随
+  elaboration 趟数翻倍增长（65→131→…→8447）。
+- 与第二轮的"meta 间接环由 fuel 兜底（语料不触发）"注记相符：**L13 的
+  prelude 触发了它**。
 
-调用次数逐一对齐 ⇒ 模式编译器/检查器的**递归结构没变**，是 σ 载体让
-每步（每次 force/quote/方程重锚）贵了 30–100×。
+### 三、深链之外的 elaboration 放大（画像）
 
-### 画像三：[DIAG8] 独占计时分解（移植后 ~30s）
+prelude 加载（LSP 表已关）逐函数画像：quote 3.7s / 2.93M 次（基线
+0.2s / 1.12M）、eval 3.5s（基线 3.0s）、check 2.2s（基线 0.15s，其中
+unify_pm 2.3s）。`infer_expr` 调用数与基线**完全一致（118,304）**而单次
+成本曾 30×——定位到其独占时间里 hover 渲染占绝大部分（已由总闸消除），
+其余是模式编译器分支循环内的 quote/探测。
 
-- **hover ≈ 11.0s**：`push_hover` 在每次变量引用时 quote+pretty 该变量的
-  类型值；σ 机制下类型带 VSub 包裹、且 meta 求解使类型值每次引用都是
-  **新指针**——按指针键的渲染缓存全 miss，每个引用都重走"force（frcs
-  重建）→ 全树 quote → pretty"。基线同样每引用都渲染，但类型值稳定且
-  小，总计仅 ~0.2s。
-- **unify_pm ≈ 2.5s**：每条方程入口 `force(VSub(f, acc))` 的重包裹重建。
-- **eval ≈ 4.2s（1.4×）**：可接受。
-- **模式编译器为最大子树**（compile_aux 含递归的 inclusive 计时 143s，
-  双计但量级指示明确）：每分支的构造子探测 `check_pm`、臂体 `ret_type`
-  的 quote→eval 重锚（对 σ 包裹值 quote 会展开出巨型树）都在分支循环里。
+quote 最外层调用归属（新增 `DIAG10`）：**compiler 63,953 / other 14,524
+/ unify 1,948 / insert 287**——编译器分支是 quote 的主要发起者。
 
-### 画像四：σ 身份漂移击败一切按指针键的缓存
+### 四、parity 状态：**移植版有 4 个既有失败**（第三轮未跑全量 suite）
 
-- frcs 慢路径实测 **~9.8e5 个不同 σ 指针、~1.3e6 个不同 (v,σ) 对**
-  （对 ≈ 调用数，几乎无重复）——每次 `extend`/`compose` 都是新 Subst，
-  每次包裹都是新 VSub cell；嵌套 match 的上下文被逐臂 `subst_cxt`
-  逐层再包裹。
-- 因此"巨型卡住应用"的旧定性需要修正：不存在字面 7.8 万实参的应用。
-  quote 树扇出 77 811 节点/深 12 287 层，是**σ 逐节点包裹的长 List 值**
-  （Verilog 字符串行列表）在 quote 时被逐单元展开；σ 链本身很短
-  （实测 maxsublen=4），force 后顶层从不是 VSub（DEEP2 零命中）。
+第四轮首次跑全量 `l13_fast_parity`（大栈）后发现，下列失败**在 round-3
+状态同样失败**（已用 stash 对照验证，非第四轮引入）：
 
-### 第三轮已落地的修复（在 round3 patch 内，74s → 26.6s）
+1. `legacy_tests::test_pm_vec_bool_exhaustive`
+   —— `match (l, x)` 的 GADT 约束本应使 `Tuple2.mk(zero, cons)` /
+   `Tuple2.mk(succ, nil)` 不可达，移植版**误报 non-exhaustive**；
+2. `legacy_tests::test_pm_tuple_vec_gadt`
+3. `legacy_tests::test_pm_tuple_vec_gadt_no_prelude`
+4. `bump_spine_iter::observation_tests::resident_compaction_matches_fresh_replay_across_kicks`
+   （孪生常驻内存/压缩一致性，26.8s 失败）
 
-1. `Subst::compose` 恒等快路径：`Rc::ptr_eq(outer, inner)` 时原指针返回
-   （读点反复自组合不再新分配内容相同的 Subst）。
-2. `FRCS_MEMO`：frcs **顶层入口**（深度 1）的 (结构, σ) 对 memo——输入
-   持 `Weak`（不延长生命、无 ABA）、结果持强引用（产物指针稳定 ⇒ 下游
-   FORCE_MEMO/QUOTE_MEMO 键恢复命中）；taint + fuel 水位 + PRIM_VERSION
-   + epoch 四重守卫。**注意选型教训**：输入强 keepalive 会钉住重建图
-   （实测 8 GB）；结果持 Weak 则跨调用全 miss（更慢）。
-3. `push_hover` 渲染串缓存：键 (值指针, locals 身份, PRIM_VERSION)，
-   输入 Weak + 渲染串 Rc——但只对"同一类型值被重复引用"生效，prelude
-   加载期类型值多为新指针，命中率低（见接续 a）。
+⇒ 移植版**同时**有性能问题与 GADT 覆盖检查的语义回归；后者的优先级高于
+性能（性能再好也不能落一个会误报非穷尽的类型检查器）。
 
-### 语义状态（第三轮实测）
+### 五、第四轮已落地/已回退的改动清单（patch 内）
 
-- `calc_err_by_no_proof` / `calc_err_by_wrong_position`：**通过**（第二轮
-  存档所称"报错文案改变"在 attempt + round3 状态不复现，round 4 可独立
-  复核）。
-- 裸语言 65 例 diff = 0 的结论仍属 round1，round3 未重跑全量。
+已落地（保留在补丁里）：
+- `Infer.lsp_collect` 总闸（prelude 期不收集 hover/completion/inlay），
+  并在 `bench_check_nf_bounded` 提供 `L13BENCH_NO_LSPTABLES` 开关；
+- `FRCS_MEMO` 内存口径：1<<20 强持结果会把长链重建图钉到 **8 GB**
+  （`resident_compaction_*` 直接 6-8 GB）；改为 **1<<18 + 溢出先按输入存活
+  清扫**，命中率与最快配置持平（9.2-9.8s）且内存有界（CLI 峰值 430 MB）。
+  选型数据：Weak/Weak 结果 14.4s（下游 memo 反复重算）、1<<14 强持 +
+  溢出即清 **103s**（抖动）；
+- `unify_pm` 方程重锚的 `mentions_level` 门槛（σ 对该侧无作用则跳过包裹+
+  force；语义恒等，实测该路径的值大多仍引用 σ，收益主要在非热点路径）；
+- 诊断探针：`DIAG8`（subst_cxt/mentions/check_pm/infer_pm/unify_pm/
+  insert/compiler/hover 计时）、`DIAG9/9b`（hover 键/命中/quote-vs-pretty）、
+  `DIAG10`（quote 调用方归属）、`DIAG11`（force 返回 VSub 不变式）、
+  `DEEPPATH`/`DEEPTREE`/`QSTACK_VAL`（最深路径与帧值转储）、
+  `DEEPCALLER`（深 quote 的调用栈）、`QLEAK`（深度配对性）。
 
-## 接续建议（round 4 工作清单，按预期收益排序）
+已回退（试过但**改变了行为**，勿再重复）：
+- `force_chain` / `quote` 的 SumCase 链"VSub 透明解包"：会让链首包裹层不再
+  被物化、`force` 可能返回仍带 VSub 槽的链，破坏"顶层非 VSub"不变式 ⇒
+  GADT 覆盖检查误报 non-exhaustive。深链不在此路径，修它无用。
 
-1. **hover 惰性化**：hover 表存 (Val Rc, 名字表, decl) 元组，
-   `hover_entry_at` / JSON 序列化时按需渲染一次（RefCell 缓存）。孪生版
-   本就有 `push_hover_cached`，参考版照做即可对齐。预期回收 ~11s。
-2. **unify_pm 方程入口**：`mentions_level` 判定 acc 对两侧无作用时跳过
-   `force(VSub(·, acc))` 重包裹。预期回收 ~2.5s。
-3. **σ 内容寻址内化（关键解锁项）**：为 `Subst`/`VSub` 包裹建 thread-local
-   内容寻址 canonical 表，使"逻辑相同的 σ/包裹"共享指针——此后
-   FRCS_MEMO、quote memo、渲染缓存全部开始跨分支命中。这是把"按指针键
-   缓存全部失效"的死结解开的唯一结构项。
-4. **模式编译器分支缓存**：ret_type 重锚（quote→eval）与构造子探测结果
-   按 (臂, canonical σ) 缓存；`checked_ret` 跨分支复用口径复核。
-5. **孪生版同批**：孪生 frcs/XCell 尚无 FRCS_MEMO 等价物，round 3 未动
-   孪生，parity 未跑（首测即栈溢出的行为由 1+2 缓解后应可跑完）。
-6. 验收口径不变：`l13_fast_parity` / `l13_into_probe` / 全量 `cargo test`
-   / examples `typort check` / 65 例裸语言 diff / l13bench ≤1.5×（基线
-   prelude-core basic 22.4ms / fast 12.8ms，prelude-hdl 3080ms / 1321ms，
-   见 `docs/bench-matrix-2026-09-12.md`）。
+## 接续建议（round 5 工作清单，按优先级）
 
-## 历史根因记录（第二轮回退时的定性，部分已被第三轮修正）
+1. **先修 GADT 覆盖回归**（第 4 节 3 例）：定位移植后"可达性/覆盖"判定与
+   旧 `update_cxt` 口径的差异（`accessible_constructors` 的探测 σ 与
+   `bind_slots` 基线、`is_refined` 语义）。这是**能否落地的前置条件**。
+2. **再修 meta 解链**（第 2 节）：深链来自某处把 meta 解成"含下一个已解
+   meta 的构造子"，需要定位构造点（建议在 `MetaEntry::Solved` 写入处加
+   环检测/深度上限，或对 `solve` 的 occurs 面扩展）。修好后默认栈不再溢出，
+   parity 才能进 CI 口径。
+3. **纯 elaboration 的 28×**：以 `DIAG10`（compiler 占 quote 绝大多数）为
+   入口，做编译器分支级缓存（探测结果按 (构造子, 目标类型) 缓存；ret_type
+   重锚按 canonical σ 缓存）；配合 σ 内容寻址内化（见 round-3 记录第 3 项）
+   才能真正把指针键缓存救活。
+4. **孪生版同批**：孪生 frcs/XCell 无 `FRCS_MEMO` 等价物（round 4 未动
+   孪生）；参考版与孪生版的 hover 总闸口径已一致。
+5. 验收口径不变（`l13_fast_parity` 全绿 / 全量 `cargo test` / 65 例裸语言
+   diff / examples `typort check` / l13bench ≤1.5×：基线 prelude-core
+   basic 22.4ms、fast 12.8ms，prelude-hdl 3080ms / 1321ms）。
+
+## 历史根因记录（早前轮回的定性，已按第三/四轮实测修正）
 
 1. ~~"一个 meta/中性头被累积应用到约 7.8 万个 VSub 包裹的实参上"~~
-   → 第三轮修正：是长 List 值逐节点 VSub 包裹后的 quote 展开树，见上。
-2. 参考版 quote 无记忆化且 `quote_sp` 递归 ⇒ 8MB 测试栈爆栈；迭代化 +
-   记忆化后能跑完但慢——**仍成立**（默认测试栈下 parity 崩因）。
+   → 第四轮修正：是**meta 解链**逐层 force 展开（第 2 节）。
+2. 参考版 quote 无记忆化且 `quote_sp` 递归 ⇒ 8MB 测试栈爆栈——**部分
+   成立**：`quote_sp` 已迭代化，但**深链仍以原生递归展开 12k 层**（第四轮
+   画像）。
 3. ~~calc_err_* 报错文案回归~~ → 第三轮实测不复现。
-4. "frcs 重建 + memo 失效"是次因——**仍成立**，round3 的 FRCS_MEMO 即
-   针对此项。
+4. "frcs 重建 + memo 失效"是次因——成立；第四轮的 `FRCS_MEMO` 即针对它，
+   但强结果的内存口径必须收紧（第 5 节数据）。
 
 ## 附带发现（对文档的订正）
 

@@ -113,21 +113,30 @@
   （L09 全递归臂透传；L10–L12 特化限 `unify_pm`，与旧决策树边界逐条对应，
   求解路径不获得特化解能力）。
 
-## 4. L13（生产层）：规模暴露的放大问题 —— **未落地**
+## 4. L13（生产层）：规模放大 + 语义回归 —— **未落地**
 
-L13 移植代码曾完整实现（参考版 + 孪生版，8 文件；**裸语言语料 65 例
-逐字节 diff = 0**，语义在裸语言面正确），但 prelude/calc 路径出现规模
-放大，三轮尝试后仍未达验收，**已回退至 HEAD**。证据、补丁存档与
-round-4 工作清单见 `docs/wip/README.md`（第三轮已把根因定位到函数级：
-prelude 加载基线 ~4.5s → 移植后 ~30s；infer_expr 调用数与基线完全一致
-而单次成本 30×——模式编译器分支循环里，σ 包裹类型值的 hover 渲染
-（~11s）、unify_pm 方程重锚（~2.5s）、ret_type 重锚 quote 与 σ 身份
-漂移（每次 extend/compose 新指针，击败全部按指针键的缓存）是主要构成；
-"7.8 万实参巨型卡住应用"的旧定性已修正为"长 List 值逐节点 VSub 包裹后
-的 quote 展开树"）。第三轮另落地三项修复（compose 恒等快路径、frcs
-顶层 (v,σ) Weak-input memo、hover 渲染缓存），calc 单测 74s → 26.6s，
-存于 `docs/wip/l13-explicit-subst-round3-perf-probes.patch`。**L13 保持
-原精化机制，本仓库其它层（L07–L12）的显式替换不受影响。**
+L13 移植代码曾完整实现（参考版 + 孪生版，8 文件；裸语言语料 65 例逐字节
+diff = 0），但四轮尝试后仍未达验收，**已回退至 HEAD**。第四轮（2026-09-16）
+的结论（完整数据见 `docs/wip/README.md`）：
+
+- **prelude 期 LSP 表总闸已落地**：prelude 加载末尾本就清空 hover/
+  completion/inlay 表，加载期渲染是纯死工作（hover 占 21s 中的 ~11s）；
+  加 `Infer.lsp_collect` 后 `typort check` 全量 prelude **21.1s → 9.3s**
+  （零行为变更；孪生版早有同款 `observe` 总闸，parity 表不分叉）。
+- **12k 深 quote 真身＝meta 解链**：`?m₁ := succ(?m₂) := succ(?m₃) …` 逐层
+  force 展开，深度仅受 fuel 约束 ⇒ 默认测试栈必溢出（parity 崩因）；
+  触发于 `nat.typort` 的 `nat_div`。
+- **纯 elaboration 仍 ~28×**（l13bench prelude-core basic：基线 22.4ms →
+  移植 1242ms，去掉 LSP 表后 637ms）；quote 最外层调用 79% 来自模式编译器
+  分支循环。
+- **移植版有 4 个既有 parity 失败**（round-3 状态同样失败，非第四轮引入）：
+  3 个 GADT 覆盖检查误报 non-exhaustive（`test_pm_vec_bool_exhaustive` /
+  `test_pm_tuple_vec_gadt` / `..._no_prelude`）+ 孪生
+  `resident_compaction_matches_fresh_replay_across_kicks`。
+  **语义回归的优先级高于性能**。
+- 第四轮的补丁（含 LSP 总闸、FRCS_MEMO 内存口径修复、unify_pm 重锚门槛、
+  全套诊断探针）存于 `docs/wip/l13-explicit-subst-round4-patches.patch`。
+- **L13 保持原精化机制**，本仓库其它层（L07–L12）的显式替换不受影响。
 
 ### L13 弱点分析文档的结论订正
 
