@@ -18,6 +18,11 @@ prelude/calc 路径存在规模放大与**若干 parity 语义回归**，未通�
   + **prelude 期 LSP 表总闸（重大，见下）+ unify_pm 重锚门槛 + FRCS_MEMO
   内存口径修复 + 深链诊断探针**。对干净 HEAD 可独立应用（`git apply
   --check` 已验证）。
+- `l13-explicit-subst-round5-gadt.patch`：**最终累积补丁**（第五轮与评审轮
+  修复，含 GADT 覆盖修复参考版实现 + 各项性能/正确性修复 + 诊断探针；
+  round1/attempt/round3/round4 的累积超集）。对干净 HEAD 可独立应用
+  （`git apply --check` 与 `--check --reverse` 双向验证）。**注意**：master
+  有意不含它——本文档写作时它应用在工作树（`git diff src/` 即其内容）。
 
 ## 第四轮结论（2026-09-16）
 
@@ -58,8 +63,9 @@ completion/inlay），prelude 内部产生的 hover 条目**从不被任何消�
 ### 三、深链之外的 elaboration 放大（画像）
 
 prelude 加载（LSP 表已关）逐函数画像：quote 3.7s / 2.93M 次（基线
-0.2s / 1.12M）、eval 3.5s（基线 3.0s）、check 2.2s（基线 0.15s，其中
-unify_pm 2.3s）。`infer_expr` 调用数与基线**完全一致（118,304）**而单次
+0.2s / 1.12M）、eval 3.5s（基线 3.0s）、check 2.2s（基线 0.15s）；另有
+unify_pm 计时 2.3s——DIAG8 是跨调用方的全局桶（check 之外还有
+insert/compiler 等发起），并非全部落在 check 内。`infer_expr` 调用数与基线**完全一致（118,304）**而单次
 成本曾 30×——定位到其独占时间里 hover 渲染占绝大部分（已由总闸消除），
 其余是模式编译器分支循环内的 quote/探测。
 
@@ -129,8 +135,14 @@ quote 最外层调用归属（新增 `DIAG10`）：**compiler 63,953 / other 14,
   `wrap_sub(&entry.refine, typ)` 再交给 `filter_accessible_constrs`。
 
 **验收**：`test_pm_vec_bool_exhaustive` / `test_pm_tuple_vec_gadt` /
-`..._no_prelude` **全部转绿**；全量 `l13_fast_parity`（大栈，跳过两个内存
-测量型用例）无新增失败；examples `typort check` 冒烟正常。
+`..._no_prelude` **全部转绿**。全量 `l13_fast_parity` 因 `FRCS_MEMO` 长跑
+内存残留（见"已知残留"）未能在单次进程内完整跑完（中断于 401/406），
+分段实测对账：GADT 3 例 + hover 15 例 + calc 19 例全绿；整跑可见的失败
+仅 3 个既有项（test14 / test_prove_term_pure /
+test_stuck_match_application_does_not_panic）；第 4 个既有失败
+`resident_compaction_matches_fresh_replay_across_kicks` 单独复跑确认仍
+失败（与 round-3/4 基线一致，非本轮引入）。examples `typort check` 冒烟
+正常。（提交 0ad32cd 信息里"跳过 3 个、397 通过"的口径以此段为准修正。）
 
 ### 途中试错（勿重复）
 
@@ -147,10 +159,10 @@ quote 最外层调用归属（新增 `DIAG10`）：**compiler 63,953 / other 14,
 
 孪生版编译器**只在臂体叶子做精化**（`check_pm_final` 返回的 σ → 
 `subst_cxt`，见 `bump_spine_iter.rs:12073-12081`），下降期**不退带
-σ**：`Arm` 结构（`bump_spine_iter.rs:11760`）没有 σ 字段，逐列下降构造
-的 `Arm { cxt: clone_cxt(&arm.cxt), heads: new_heads.clone(), .. }`
-（12408/12441/12511）既不带精化上下文也不带 σ，探测点（12301）用的仍是
-原始 `*typ` + 未精化 `arm.cxt`。
+σ**：`Arm` 结构（`bump_spine_iter.rs:11760`）没有 σ 字段，逐列下降的
+**6 个构造点**（11963 初始 / 12222 / 12408 / 12441 / 12511 / 12540）都不
+携带精化（cxt 分别为 clone/bind_name/未精化上下文），探测点（12301）用的
+仍是原始 `*typ` + 未精化 `arm.cxt`。
 
 实测（临时探针，已从树中移除）：孪生版对同一输入报**与修复前参考版
 逐字节相同**的错误 `non-exhaustive pattern: Tuple2.mk(zero, cons) not
@@ -178,9 +190,10 @@ round 6 需逐条定位（`test14` 的报错走向、`test_prove_term_pure` 的�
    `compile()` 入口放 scrutinee 值（`Some(target_val)`），构造子分支把
    `head_val` 的 SumCase datas 按字段序传给子列
    （`head_val_datas.get(consumed_implicit_count + i)`）。
-2. 孪生的 heads 是 `(Var, V, Span, Icit)`（`Var = i32`，仅编号），**无值**；
-   `compile()` 入口也不放 scrutinee 值（值在 `Arm.ori`，只在叶子
-   `check_pm_final` 用）。
+2. 孪生的 heads 是 `(Var, V, Span, Icit)`（`Var = i32`，仅编号），**heads
+   里没有值**；scrutinee 值经 `compile()` 的 `target_val: V` 参数进入
+   `Arm.ori`（bump_spine_iter.rs:11956/11976），但只在叶子 `check_pm_final`
+   用——镜像时把既有参数接进 heads 第五元即可，无需改签名。
 3. 需要搬的三块（对照参考版 pattern_match.rs 行号）：
    a. heads 加第五元 head_val + 入口/构造子分支的值穿线；
    b. 索引精化块：`unify_pm(head_typ, constr_ret)`（constr_ret = Pi 剥完
@@ -221,7 +234,22 @@ pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入�
    重锚按 canonical σ 缓存）；配合 σ 内容寻址内化才能真正把指针键缓存救活。
 5. **孪生版 FRCS_MEMO 等价物**：孪生 frcs/XCell 无对应记忆化（round 4/5
    未动孪生性能）。
-6. 验收口径不变（`l13_fast_parity` 全绿 / 全量 `cargo test` / 65 例裸语言
+6. **评审轮补充的工程项**（按性价比）：
+   - meta 快照改 undo journal（`filter_accessible_constrs` 每轮探测
+     `infer.meta.clone()` 整表拷贝 → journal 记 (下标, 旧值) 逆放；
+     `solve` 写入全是下标赋值，语义零变化）——compiler 是 quote 最大
+     发起方（DIAG10: 63,953 次），这是其最大常开非缓存开销；
+   - `constr_pi` 的 `infer_expr(构造子名)` 按名缓存（每列每构造子重推）；
+   - 探测缓存键不要用裸指针（`probe_typ` 每列都是 `wrap_sub` 新建 Rc，
+     指针必 miss）——对 forced probe 类型 quote 一次取规范 Tm 哈希做键；
+   - `unify_nat_chain` 硬编码 `None` spec 且回填（深路径 Nat 链方程丢
+     特化）；QUOTE_MEMO 补 taint/fuel 守卫（与 FRCS_MEMO 口径一致）；
+     `accessible_set` 每列只按 `arms.first()` 的 refine 计算——修种子化后
+     应评估 per-arm 探测；`typeclass.rs` 的 `val_match`/`vals_eq_ground`
+     无 VSub 臂——补"精化臂内 trait 解析"钉子测试；
+   - 孪生 `check_pm_final` 在未精化 env 求值 `ori_v`、叶子 ret_type 不
+     wrap——并入 round-6 #1 的孪生镜像范围。
+7. 验收口径不变（`l13_fast_parity` 全绿 / 全量 `cargo test` / 65 例裸语言
    diff / examples `typort check` / l13bench ≤1.5×：基线 prelude-core
    basic 22.4ms、fast 12.8ms，prelude-hdl 3080ms / 1321ms）。
 
@@ -230,7 +258,32 @@ pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入�
 - `FRCS_MEMO` 内存口径：1<<18 上限 + 溢出按输入存活清扫，在**长跑大负载**
   （legacy_tests 全量、parity 套件整跑）下仍会累积到 GB 级（实测单进程
   13 GB 仍在涨）——强持结果钉住重建图的量级随活跃值集增长。round 6 需要
-  更激进的回收（按字节预算 / 分段清空 / 直接用 Weak 结果 + 上游缓存）。
+  更激进的回收（双代清空 / σ 内锚 map，见评审轮建议 3/5）。
+- `FORCE_MEMO`（HEAD 既有，非本补丁引入）：1<<20 输入+结果**双双强持**、
+  溢出仅整体清空，是长跑内存的另一共同被告；且无 fuel 水位守卫（同
+  FRCS_MEMO 已修的 fuel=0 洞）。建议照 FRCS_MEMO 口径改 Weak 输入 +
+  retain 存活 + 补 fuel 守卫。
+- 常开小浪费（评审轮 P2 打包）：`DECL_PROBE` 的 env::var 每 Class decl
+  查一次（应 OnceLock）；completion_table push 未过 lsp_collect 闸；
+  mentions_level 原生递归无 visited；compose 的 cons_all O(|inner|·|outer|)
+  递归。均已列入 round-6。
+
+### 评审轮（2026-09-17，5 子 agent 多角度评审）结论与处置
+
+| 视角 | 结论 | 已处置 |
+|---|---|---|
+| 正确性 | σ-ABA（P0）→ **已修**（σ 半边 upgrade+ptr_eq）；fuel=0 缓存洞（P1）→ **已修**（FRCS_MEMO/HOVER_RENDER 插入守卫 `fuel0>0`）；hover 键缺 decl 身份、叶子 Flex 臂不包 σ → 记录（P2，显示层/对齐旧版） | ✅ |
+| 性能资源 | FRCS_MEMO σ-ABA 同上已修；inlay 总闸 → **已修**；FORCE_MEMO 残留 → 本节记录；meta 快照 undo journal、双代清空、σ 内锚 → round-6 清单 | ✅/📋 |
+| 测试完整性 | 补丁声明全部实测成立；**蓝图 §9.5 钉子缺失（P1）→ 已补**，实测暴露 fn 型索引槽解析应用在 HEAD 基线即未实现（既有限制），钉子测试标 `#[ignore]` 留档 | ✅ |
+| 文档交付 | round-5 数字对账（P1）→ 本节修正；6 项 P2 表述/一致性 → **已修** | ✅ |
+| 架构机制 | 内层精化块未种子化（P1）→ **已修**（acc 以 entry.refine / refine_acc 起种子）；孪生 Pi 平坦 env 跳包裹（P1）→ round-6 清单；未记录偏差（Flex occurs 不透明、v_applicable 含 Lam/Call）→ 本节偏差清单补录；typeclass 表面、QUOTE_MEMO 守卫、unify_nat_chain 丢 spec → round-6 清单 | ✅/📋 |
+
+补录的**有意偏差**（此前未记录）：
+1. `val_mentions_lvl` 对 Flex 实参不透明（L07 扫 Flex spine）——probe 的
+   fresh-meta pruning 合法形所需，后果是 meta 介导的间接环不被 occurs 拒绝、
+   由 force fuel 兜底（与 meta 解链同地带）。
+2. `v_applicable` 含 Lam/Call（L07 不含 Lam）——方向更完备（对齐 dpm-nbe
+   napp），λ 解 + 非空 spine 在 L13 会 β、L07 卡回裸 rigid。
 
 ## 历史根因记录（早前轮回的定性，已按第三/四轮实测修正）
 
