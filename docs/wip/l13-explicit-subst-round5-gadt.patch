@@ -1782,7 +1782,7 @@ index f3314d2..9c4c7b6 100644
          }
      }
 diff --git a/src/L13_namespace/elaboration.rs b/src/L13_namespace/elaboration.rs
-index 31dde7e..ddf467e 100644
+index 31dde7e..421789c 100644
 --- a/src/L13_namespace/elaboration.rs
 +++ b/src/L13_namespace/elaboration.rs
 @@ -6,13 +6,13 @@ use smol_str::SmolStr;
@@ -1831,7 +1831,7 @@ index 31dde7e..ddf467e 100644
 +                }
 +            }
 +        }
-+        let _ig = InsGuard;
++        let _ig = InsGuard(ins_diag);
          act.and_then(|x| if let Tm::Lam(_, Icit::Impl, _) = x.0.as_ref() {
              Ok(x)
          } else {
@@ -2185,7 +2185,7 @@ index 31dde7e..ddf467e 100644
                      let (ret_val, ret_lvl) = self.peel_pi(&ret_cxt, &vty);
                      let ret_tm = self.quote(&ret_cxt.decl, ret_lvl, &ret_val);
                      if ret_tm.no_metas(self, &ret_cxt.decl, ret_lvl).is_none() {
-@@ -2139,9 +2185,115 @@ impl Infer {
+@@ -2139,9 +2185,117 @@ impl Infer {
      /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
      /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
      pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
@@ -2253,7 +2253,9 @@ index 31dde7e..ddf467e 100644
 +                }
 +            })
 +        }) {
-+            super::D_HOVER_HIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            if super::DIAG_ON.load(std::sync::atomic::Ordering::Relaxed) {
++                super::D_HOVER_HIT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            }
 +            self.hover_table.push((t_span, def_span, (*rendered).clone()));
 +            return;
 +        }
@@ -2304,7 +2306,7 @@ index 31dde7e..ddf467e 100644
      }
  
      /// L5: push hover entries for the intermediate prefixes of a qualified
-@@ -2183,20 +2335,11 @@ impl Infer {
+@@ -2183,20 +2337,11 @@ impl Infer {
              Raw::Var(name) => match cxt.src_names.get(&name.data) {
                  Some((x, a)) => {
                      self.push_hover(cxt, t_span, a.0, &a.1);
@@ -4452,7 +4454,7 @@ index a1c0635..6a8a87f 100644
 +    refine: Rc<Subst>,
  }
 diff --git a/src/L13_namespace/unification.rs b/src/L13_namespace/unification.rs
-index bef64f1..a4936b1 100644
+index bef64f1..c9c0d29 100644
 --- a/src/L13_namespace/unification.rs
 +++ b/src/L13_namespace/unification.rs
 @@ -5,10 +5,10 @@ use crate::list::List;
@@ -4594,7 +4596,7 @@ index bef64f1..a4936b1 100644
 +                }
 +            }
 +        }
-+        let _ug = UnGuard;
++        let _ug = UnGuard(un_diag);
          // 递归深度防护（L08 前向传播，与 `fuel` 参数互补）：fuel 耗尽按
          // 不可合一失败
          if !self.burn_fuel() {
