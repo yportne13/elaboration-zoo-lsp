@@ -1782,7 +1782,7 @@ index f3314d2..9c4c7b6 100644
          }
      }
 diff --git a/src/L13_namespace/elaboration.rs b/src/L13_namespace/elaboration.rs
-index 31dde7e..500c8a8 100644
+index 31dde7e..07610cf 100644
 --- a/src/L13_namespace/elaboration.rs
 +++ b/src/L13_namespace/elaboration.rs
 @@ -6,13 +6,13 @@ use smol_str::SmolStr;
@@ -2167,7 +2167,7 @@ index 31dde7e..500c8a8 100644
                  let err = match e {
                      super::UnifyError::Basic | super::UnifyError::Stuck => format!(
                          "can't unify\n  expected: {}\n      find: {}",
-@@ -2139,9 +2176,109 @@ impl Infer {
+@@ -2139,9 +2176,115 @@ impl Infer {
      /// pretty，不再需要可 quote 的 live `Infer`——孪生（bump arena）供同一契约的
      /// 前提。quote 是纯函数（&self），与旧「存 Val、查询期 quote」逐字节等价。
      pub(crate) fn push_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>) {
@@ -2263,7 +2263,13 @@ index 31dde7e..500c8a8 100644
 +            }
 +            // walk 触及过 meta / 烧过 fuel（降级形态依赖池水位）⇒ 结果非纯，
 +            // 不缓存（下次重渲染，正确性优先）。
-+            if super::force_taint_load() == taint0 && self.unify_fuel.get() == fuel0 {
++            // fuel=0 起步的 walk：burn 在池空时不减水位，降级渲染（未展开
++            // 形态）无法与纯渲染区分——一律不缓存（评审轮 D' 发现：本守卫
++            // 曾只有相等检查，缺 >0）。
++            if super::force_taint_load() == taint0
++                && self.unify_fuel.get() == fuel0
++                && fuel0 > 0
++            {
 +                m.insert(
 +                    key,
 +                    (
@@ -2280,7 +2286,7 @@ index 31dde7e..500c8a8 100644
      }
  
      /// L5: push hover entries for the intermediate prefixes of a qualified
-@@ -2183,20 +2320,11 @@ impl Infer {
+@@ -2183,20 +2326,11 @@ impl Infer {
              Raw::Var(name) => match cxt.src_names.get(&name.data) {
                  Some((x, a)) => {
                      self.push_hover(cxt, t_span, a.0, &a.1);
@@ -2358,7 +2364,7 @@ index 145f77c..c673fbe 100644
  fn test_pm_tuple_vec_gadt() {
      let input = r#"
 diff --git a/src/L13_namespace/mod.rs b/src/L13_namespace/mod.rs
-index e6d95c1..3d4da21 100644
+index e6d95c1..b138ac9 100644
 --- a/src/L13_namespace/mod.rs
 +++ b/src/L13_namespace/mod.rs
 @@ -69,6 +69,342 @@ pub static FUNC_PROF: FuncProf = FuncProf {
@@ -3131,7 +3137,7 @@ index e6d95c1..3d4da21 100644
              Val::Sum(_, params, _, _) => params.iter().find_map(|(_, val, ty, _)| {
                  self.val_no_metas(decl, l, val, seen).or_else(|| self.val_no_metas(decl, l, ty, seen))
              }),
-@@ -2334,8 +2999,13 @@ impl Infer {
+@@ -2334,8 +2999,14 @@ impl Infer {
              return r;
          }
          let taint0 = FORCE_TAINT.with(|t| t.get());
@@ -3142,10 +3148,11 @@ index e6d95c1..3d4da21 100644
          let r = self.force_inner(decl, t);
          if FORCE_TAINT.with(|t| t.get()) == taint0
 +            && self.unify_fuel.get() == fuel0
++            && fuel0 > 0
              && PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed) == ver
          {
              FORCE_MEMO.with(|m| {
-@@ -2363,6 +3033,11 @@ impl Infer {
+@@ -2363,6 +3034,11 @@ impl Infer {
              }
          }
          match t.as_ref() {
@@ -3157,7 +3164,7 @@ index e6d95c1..3d4da21 100644
              Val::Flex(m, sp) => {
                  // Meta state is memo-tainting (see FORCE_MEMO): solutions
                  // change over time (and the ns-probe machinery rolls them
-@@ -2381,7 +3056,12 @@ impl Infer {
+@@ -2381,7 +3057,12 @@ impl Infer {
              // compressed to one u64).  Not forcing it here is exactly the
              // Lean/Agda native-Nat win: re-forcing a concrete Nat used to
              // re-walk (and possibly rebuild) the whole unary chain.
@@ -3171,7 +3178,7 @@ index e6d95c1..3d4da21 100644
              Val::Obj(x, a, b) => {
                  let xf = self.force(decl, x);
                  if Rc::ptr_eq(&xf, x) {
-@@ -2522,6 +3202,13 @@ impl Infer {
+@@ -2522,6 +3203,13 @@ impl Infer {
              datas: SumCaseDatas,
          }
          // Descend the spine iteratively.
@@ -3185,7 +3192,7 @@ index e6d95c1..3d4da21 100644
          let mut nodes: Vec<Node> = Vec::new();
          let mut cur = t.clone();
          loop {
-@@ -2569,6 +3256,302 @@ impl Infer {
+@@ -2569,6 +3257,302 @@ impl Infer {
          }
          Some(inner)
      }
@@ -3488,7 +3495,7 @@ index e6d95c1..3d4da21 100644
      fn v_meta(&self, m: MetaVar) -> Rc<Val> {
          match self.lookup_meta(m) {
              MetaEntry::Solved(v, _) => v.clone(),
-@@ -2585,6 +3568,13 @@ impl Infer {
+@@ -2585,6 +3569,13 @@ impl Infer {
          let _g = prof_enter(&FUNC_PROF.v_app.0, &FUNC_PROF.v_app.1);
          //println!("v_app {t:?} {u:?}");
          match t.as_ref() {
@@ -3502,7 +3509,7 @@ index e6d95c1..3d4da21 100644
              Val::Lam(_, _, closure) => self.closure_apply(decl, closure, u),
              Val::Flex(m, sp) => Val::Flex(*m, sp.prepend((u, i))).into(),
              Val::Rigid(x, sp) => Val::Rigid(*x, sp.prepend((u, i))).into(),
-@@ -3125,27 +4115,441 @@ impl Infer {
+@@ -3125,27 +4116,441 @@ impl Infer {
              }
          }
      }
@@ -3955,7 +3962,7 @@ index e6d95c1..3d4da21 100644
              Val::Flex(m, sp) => self.quote_sp(decl, l, Tm::Meta(*m).into(), sp),
              Val::Rigid(x, sp) => self.quote_sp(decl, l, Tm::Var(lvl2ix(l, *x)).into(), sp),
              Val::Decl(x, sp) => self.quote_sp(decl, l, Tm::Decl(x.clone()).into(), sp),
-@@ -3340,9 +4744,15 @@ impl Infer {
+@@ -3340,9 +4745,15 @@ impl Infer {
      }
  
      fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
@@ -3972,7 +3979,7 @@ index e6d95c1..3d4da21 100644
              .map_err(|e| {
                  /*Error::CantUnify(
                      cxt.clone(),
-@@ -3687,10 +5097,32 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
+@@ -3687,10 +5098,32 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
      let prelude_prof = std::env::var_os("TYPORT_PRELUDE_PROF").is_some();
      if prelude_prof {
          FUNC_PROF.enabled.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -4005,7 +4012,7 @@ index e6d95c1..3d4da21 100644
      let mut prelude: Vec<&str> = PRELUDE_CORE.iter().map(|(_, s)| *s).collect();
      if include_hdl {
          prelude.extend(PRELUDE_HDL.iter().map(|(_, s)| *s));
-@@ -3708,9 +5140,13 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
+@@ -3708,9 +5141,13 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
          // garbage promptly instead of batching one large drop later
          // (measured 0.35s of cascaded Val drops on the first clear).
          force_memo_clear();
@@ -4021,7 +4028,7 @@ index e6d95c1..3d4da21 100644
              for ast_err in parse_errs {
                  println!("{:?}", ast_err)
              }
-@@ -3718,21 +5154,45 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
+@@ -3718,21 +5155,45 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
                  global_macros.insert(name, rules);
              }
              let nd = decls.len();
@@ -4076,7 +4083,7 @@ index e6d95c1..3d4da21 100644
          if prelude_prof {
              eprintln!("[PPROF] file[{}] {:>8.3}s (parse {:>6.3}s + infer {:>6.3}s)  {} decls", id, _p_el, _p_parse_t.as_secs_f64(), _p_infer_t.as_secs_f64(), n_decls);
          }
-@@ -3778,6 +5238,9 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
+@@ -3778,6 +5239,9 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
      infer.hover_table.clear();
      infer.completion_table.clear();
      infer.inlay_hint_table.clear();
@@ -4086,7 +4093,7 @@ index e6d95c1..3d4da21 100644
      // Reset the HDL loop-index global to a clean empty at the end of the
      // load: checking `genFrom`'s succ-case body evaluates its side-effecting
      // lets (the checker evaluates applications), leaving Rigid-indexed
-@@ -3987,6 +5450,29 @@ pub fn take_fresh_check_issues(infer: &Infer) -> Vec<String> {
+@@ -3987,6 +5451,29 @@ pub fn take_fresh_check_issues(infer: &Infer) -> Vec<String> {
  
  #[allow(unused)]
  pub fn run_with_prelude(input: &str) -> Result<String, Error> {
@@ -4116,7 +4123,7 @@ index e6d95c1..3d4da21 100644
      let (mut infer, mut cxt, global_macros) = clone_prelude_state(true)?;
      let mut ret = String::new();
  
-@@ -3994,6 +5480,14 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
+@@ -3994,6 +5481,14 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
      let ast = parser::parser_with_macros(&preprocess(input), 24, &global_macros)
          .map(|(d, e, _, _)| (d, e))
          .unwrap();
@@ -4131,7 +4138,7 @@ index e6d95c1..3d4da21 100644
      println!("-----------------");
      //TODO: do not print err. return error
      for e in ast.1 {
-@@ -4278,6 +5772,11 @@ pub(crate) fn bench_check_nf_bounded(
+@@ -4278,6 +5773,11 @@ pub(crate) fn bench_check_nf_bounded(
      nat_after: &[usize],
  ) -> u64 {
      let mut infer = Infer::new();
@@ -4144,7 +4151,7 @@ index e6d95c1..3d4da21 100644
      let mut last: Option<SmolStr> = None;
      for (i, d) in decls.iter().enumerate() {
 diff --git a/src/L13_namespace/pattern_match.rs b/src/L13_namespace/pattern_match.rs
-index a1c0635..c6e7374 100644
+index a1c0635..81ffa94 100644
 --- a/src/L13_namespace/pattern_match.rs
 +++ b/src/L13_namespace/pattern_match.rs
 @@ -5,10 +5,11 @@ use smol_str::SmolStr;
@@ -4283,7 +4290,7 @@ index a1c0635..c6e7374 100644
                                              }))
                                          }
                                          [Pattern::Con(constr_, item_pats, i), ..]
-@@ -908,6 +940,18 @@ impl Compiler {
+@@ -908,6 +940,22 @@ impl Compiler {
  
                                              let mut new_cxt = cxt.clone();
                                              let mut new_cxt_ff = cxt_for_filter.clone();
@@ -4298,11 +4305,15 @@ index a1c0635..c6e7374 100644
 +                                            // `test_pm_vec_bool_exhaustive` 等 3 例）。
 +                                            // 旧机制靠 force 的全局解表天然避开；σ 机制要在
 +                                            // 「解后消费」点显式包裹（L07 设计 §6 的槽位纪律）。
-+                                            let mut refine_acc: Rc<Subst> = Rc::new(Subst::default());
++                                            // 以入臂 σ 初始化（而非空 σ）：精化块
++                                            // unify 失败/未进入时，子列仍必须看到入臂
++                                            // 已有的解——否则多臂异 σ 子树里探测回到
++                                            // "裸 rigid 再解"旧病（复评轮 E-P1）。
++                                            let mut refine_acc: Rc<Subst> = entry.refine.clone();
                                              let mut new_patcon = patcon
                                                  .clone()
                                                  .clean()
-@@ -975,13 +1019,28 @@ impl Compiler {
+@@ -975,13 +1023,28 @@ impl Compiler {
                                                          ty.clone(),
                                                      );
                                                  }
@@ -4334,7 +4345,7 @@ index a1c0635..c6e7374 100644
                                                  }
                                              }
  
-@@ -1018,13 +1077,24 @@ impl Compiler {
+@@ -1018,13 +1081,24 @@ impl Compiler {
                                                                  index: constr_idx as u32,
                                                                  datas: Rc::new(datas_vec),
                                                              });
@@ -4363,15 +4374,7 @@ index a1c0635..c6e7374 100644
                                                              }
                                                          }
                                                      }
-@@ -1040,6 +1110,7 @@ impl Compiler {
-                                                 .iter()
-                                                 .enumerate()
-                                                 .map(|(i, (ty, name, icit_h, _))| {
-+                                                    let _ = &refine_acc;
-                                                     (ty.clone(), name.clone(), *icit_h, head_val_datas.get(consumed_implicit_count + i).cloned())
-                                                 })
-                                                 .collect();
-@@ -1059,6 +1130,7 @@ impl Compiler {
+@@ -1059,6 +1133,7 @@ impl Compiler {
                                                  new_heads: remaining_new_heads,
                                                  patcon: new_patcon,
                                                  is_impl: false,
@@ -4379,7 +4382,7 @@ index a1c0635..c6e7374 100644
                                              }))
                                          }
                                          _ => {
-@@ -1093,6 +1165,7 @@ impl Compiler {
+@@ -1093,6 +1168,7 @@ impl Compiler {
                                                          ),
                                                      ),
                                                      is_impl: true,
@@ -4387,7 +4390,7 @@ index a1c0635..c6e7374 100644
                                                  }))
                                              } else {
                                                  None
-@@ -1164,6 +1237,7 @@ impl Compiler {
+@@ -1164,6 +1240,7 @@ impl Compiler {
                                              cxt: x.cxt,
                                              cxt_for_filter: x.cxt_for_filter,
                                              patcon: x.patcon,
@@ -4395,7 +4398,7 @@ index a1c0635..c6e7374 100644
                                          })
                                          .collect::<Vec<_>>(),
                                      &context_,
-@@ -1212,6 +1286,7 @@ impl Compiler {
+@@ -1212,6 +1289,7 @@ impl Compiler {
                      cxt: cxt.clone(),
                      cxt_for_filter: cxt.clone(),
                      patcon: PatConstructor::new(),
@@ -4403,7 +4406,7 @@ index a1c0635..c6e7374 100644
                  })
                  .collect::<Vec<_>>(),
              &MatchContext::Outermost,
-@@ -1348,6 +1423,13 @@ struct ArmEntry {
+@@ -1348,6 +1426,13 @@ struct ArmEntry {
      cxt: Cxt,
      cxt_for_filter: Cxt,
      patcon: PatConstructor,
@@ -4417,7 +4420,7 @@ index a1c0635..c6e7374 100644
  }
  
  /// Temporary result produced by the filter_map closure in decision-tree
-@@ -1361,4 +1443,6 @@ struct FilterResult {
+@@ -1361,4 +1446,6 @@ struct FilterResult {
      new_heads: Vec<(Rc<Val>, Span<SmolStr>, Icit, Option<Rc<Val>>)>,
      patcon: PatConstructor,
      is_impl: bool,

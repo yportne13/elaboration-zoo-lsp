@@ -248,7 +248,14 @@ pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入�
      应评估 per-arm 探测；`typeclass.rs` 的 `val_match`/`vals_eq_ground`
      无 VSub 臂——补"精化臂内 trait 解析"钉子测试；
    - 孪生 `check_pm_final` 在未精化 env 求值 `ori_v`、叶子 ret_type 不
-     wrap——并入 round-6 #1 的孪生镜像范围。
+     wrap、**frcs Pi 臂对平坦 defs env 跳过 `frcs_env` 包裹**（其自身
+     mentions_level 扫平坦槽，"判真后拒绝包裹"致精化在该闭包读点静默
+     丢失）——三项并入 round-6 #1 的孪生镜像范围；
+   - 参考版 `spec_refine`（elaboration.rs:557-569）无"已解"守卫：fuel 耗尽
+     时 frcs 静默返回裸 rigid，可 cons 出遮蔽旧解的冲突解（仅 fuel 有界
+     降级域可达）——防御性加 `spec.acc.has(*x)` 检查可闭合（评审轮 A-P2）；
+   - FORCE_MEMO（HEAD 既有）补 `fuel0 > 0` 下限已随本轮落地（fuel=0 降级
+     结果入缓存的正确性洞），内存口径仍待 Weak 输入改造。
 7. 验收口径不变（`l13_fast_parity` 全绿 / 全量 `cargo test` / 65 例裸语言
    diff / examples `typort check` / l13bench ≤1.5×：基线 prelude-core
    basic 22.4ms、fast 12.8ms，prelude-hdl 3080ms / 1321ms）。
@@ -272,11 +279,11 @@ pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入�
 
 | 视角 | 结论 | 已处置 |
 |---|---|---|
-| 正确性 | σ-ABA（P0）→ **已修**（σ 半边 upgrade+ptr_eq）；fuel=0 缓存洞（P1）→ **已修**（FRCS_MEMO/HOVER_RENDER 插入守卫 `fuel0>0`）；hover 键缺 decl 身份、叶子 Flex 臂不包 σ → 记录（P2，显示层/对齐旧版） | ✅ |
-| 性能资源 | FRCS_MEMO σ-ABA 同上已修；inlay 总闸 → **已修**；FORCE_MEMO 残留 → 本节记录；meta 快照 undo journal、双代清空、σ 内锚 → round-6 清单 | ✅/📋 |
+| 正确性 | σ-ABA（P0）→ **已修**（σ 半边 upgrade+ptr_eq）；fuel=0 缓存洞（P1）→ **已修**（FRCS_MEMO/HOVER_RENDER/FORCE_MEMO 插入守卫 `fuel0>0`）；hover 键缺 decl 身份、叶子 Flex 臂不包 σ → 记录（P2，显示层/对齐旧版）；复验新发现：refine_acc 失败路径丢种子（P1）→ **已修**、spec_refine has 守卫 → round-6 | ✅ |
+| 性能资源 | FRCS_MEMO σ-ABA 同上已修；inlay 总闸 → **已修**；FORCE_MEMO 残留 → 本节记录（其 fuel0>0 已随轮落地）；meta 快照 undo journal、双代清空、σ 内锚 → round-6 清单；复验新发现：第二 inlay 生产点未过闸（P2）→ **已修**、归因计数未挂 DIAG（P2）→ 记录 | ✅/📋 |
 | 测试完整性 | 补丁声明全部实测成立；**蓝图 §9.5 钉子缺失（P1）→ 已补**，实测暴露 fn 型索引槽解析应用在 HEAD 基线即未实现（既有限制），钉子测试标 `#[ignore]` 留档 | ✅ |
-| 文档交付 | round-5 数字对账（P1）→ 本节修正；6 项 P2 表述/一致性 → **已修** | ✅ |
-| 架构机制 | 内层精化块未种子化（P1）→ **已修**（acc 以 entry.refine / refine_acc 起种子）；孪生 Pi 平坦 env 跳包裹（P1）→ round-6 清单；未记录偏差（Flex occurs 不透明、v_applicable 含 Lam/Call）→ 本节偏差清单补录；typeclass 表面、QUOTE_MEMO 守卫、unify_nat_chain 丢 spec → round-6 清单 | ✅/📋 |
+| 文档交付 | round-5 数字对账（P1）→ 本节修正；6 项 P2 表述/一致性 → **已修**；复验新发现：HOVER_RENDER fuel0>0 声称与代码不符（P1）→ **已修**（补守卫）、评审表可追溯性 → 已补 | ✅ |
+| 架构机制 | 内层精化块未种子化（P1）→ **已修**（种子 + extend，失败路径种子保持由 `refine_acc = entry.refine` 初始化闭合——复验 E-P1）；孪生 Pi 平坦 env 跳包裹（P1）→ round-6 清单；未记录偏差（Flex occurs 不透明、v_applicable 含 Lam/Call）→ 本节偏差清单补录；typeclass 表面、QUOTE_MEMO 守卫、unify_nat_chain 丢 spec → round-6 清单 | ✅/📋 |
 
 补录的**有意偏差**（此前未记录）：
 1. `val_mentions_lvl` 对 Flex 实参不透明（L07 扫 Flex spine）——probe 的
