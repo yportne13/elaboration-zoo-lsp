@@ -22,7 +22,8 @@ prelude/calc 路径存在规模放大与**若干 parity 语义回归**，未通�
   修复，含 GADT 覆盖修复参考版实现 + 各项性能/正确性修复 + 诊断探针；
   round1/attempt/round3/round4 的累积超集）。对干净 HEAD 可独立应用
   （`git apply --check` 与 `--check --reverse` 双向验证）。**注意**：master
-  有意不含它——本文档写作时它应用在工作树（`git diff src/` 即其内容）。
+  有意不含它——补丁是否应用在工作树随评审轮次变动（应用态可用
+  `git diff src/` 查看；未应用态用 `git apply --check` 验证，两种均正常）。
 
 ## 第四轮结论（2026-09-16）
 
@@ -265,11 +266,14 @@ pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入�
 - `FRCS_MEMO` 内存口径：1<<18 上限 + 溢出按输入存活清扫，在**长跑大负载**
   （legacy_tests 全量、parity 套件整跑）下仍会累积到 GB 级（实测单进程
   13 GB 仍在涨）——强持结果钉住重建图的量级随活跃值集增长。round 6 需要
-  更激进的回收（双代清空 / σ 内锚 map，见评审轮建议 3/5）。
+  更激进的回收——性能复验报告的改进建议排序：1) 双代清空（young/old，
+  命中晋升，young 满只清 young）；2) "σ 内锚 map"变体（memo 搬进
+  `Rc<Subst>` 内部，产物生命周期 = σ 生命周期）；3) 按权重预算只作双代
+  之上的补充。
 - `FORCE_MEMO`（HEAD 既有，非本补丁引入）：1<<20 输入+结果**双双强持**、
-  溢出仅整体清空，是长跑内存的另一共同被告；且无 fuel 水位守卫（同
-  FRCS_MEMO 已修的 fuel=0 洞）。建议照 FRCS_MEMO 口径改 Weak 输入 +
-  retain 存活 + 补 fuel 守卫。
+  溢出仅整体清空，是长跑内存的另一共同被告。其 fuel=0 正确性洞已随评审轮
+  修复闭合（插入守卫现含 `fuel0 > 0`）；**剩余仅内存口径**：建议改 Weak
+  输入 + retain 存活（照 FRCS_MEMO 已验证的模式）。
 - 常开小浪费（评审轮 P2 打包）：`DECL_PROBE` 的 env::var 每 Class decl
   查一次（应 OnceLock）；completion_table push 未过 lsp_collect 闸；
   mentions_level 原生递归无 visited；compose 的 cons_all O(|inner|·|outer|)
