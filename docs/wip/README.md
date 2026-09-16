@@ -105,24 +105,100 @@ quote 最外层调用归属（新增 `DIAG10`）：**compiler 63,953 / other 14,
   被物化、`force` 可能返回仍带 VSub 槽的链，破坏"顶层非 VSub"不变式 ⇒
   GADT 覆盖检查误报 non-exhaustive。深链不在此路径，修它无用。
 
-## 接续建议（round 5 工作清单，按优先级）
+## 第五轮结论（2026-09-16 续）：GADT 覆盖回归已修复（参考版）
 
-1. **先修 GADT 覆盖回归**（第 4 节 3 例）：定位移植后"可达性/覆盖"判定与
-   旧 `update_cxt` 口径的差异（`accessible_constructors` 的探测 σ 与
-   `bind_slots` 基线、`is_refined` 语义）。这是**能否落地的前置条件**。
-2. **再修 meta 解链**（第 2 节）：深链来自某处把 meta 解成"含下一个已解
-   meta 的构造子"，需要定位构造点（建议在 `MetaEntry::Solved` 写入处加
-   环检测/深度上限，或对 `solve` 的 occurs 面扩展）。修好后默认栈不再溢出，
+### 修复了什么
+
+**症状**（见第四轮第 4 节）：`match (l, x)` 中 GADT 约束本应使
+`Tuple2.mk(zero, cons)` / `Tuple2.mk(succ, nil)` 不可达，移植版却把它们
+报成未覆盖（3 个 legacy 测试红）。
+
+**根因**：模式编译器的构造子可达性探测（`filter_accessible_constrs`）
+用的是**精化前构建的头部类型值**（如 `Vec[Boolean] l`），而上下文已被
+`subst_cxt` 精化（`l` 的槽已解为 `zero`）。σ 机制下 `force(Rigid(l))`
+**不再查全局解表**（旧机制靠它天然让精化对一切读点可见），于是探测把
+`cons : Vec[Boolean] (succ n)` 与 `Vec[Boolean] l` 合一成功、把已解为
+`zero` 的 l 重新解成 `succ n` ⇒ 误判可达。这正是 L07 设计 §6 的槽位
+纪律："解前构建、解后消费"的值**必须在消费点用当前 σ 包裹**。
+
+**修复**（`l13-explicit-subst-round5-gadt.patch`）：
+- `ArmEntry` / `FilterResult` 新增 `refine: Rc<Subst>`，把逐列累积的
+  GADT 精化 σ 随臂传到探测点（构造子分支处 `refine_acc = compose(新 acc,
+  旧 acc)`，其余分支原样透传）；
+- 探测前把头部类型置于该 σ 之下：
+  `wrap_sub(&entry.refine, typ)` 再交给 `filter_accessible_constrs`。
+
+**验收**：`test_pm_vec_bool_exhaustive` / `test_pm_tuple_vec_gadt` /
+`..._no_prelude` **全部转绿**；全量 `l13_fast_parity`（大栈，跳过两个内存
+测量型用例）无新增失败；examples `typort check` 冒烟正常。
+
+### 途中试错（勿重复）
+
+1. **把 σ 施加到递交给递归下降的全部头部类型**（`remaining_new_heads`）：
+   过度精化——prelude 的 `list.typort` 立刻报
+   `unreachable pattern: (let rest = list_init xs; match rest {...})`，
+   prelude 加载失败。原因：头部类型同时被 quote/bind 进上下文，包裹会改
+   变**绑定进去的**类型（旧机制只让 force 看到精化，quote 打的是原始
+   变量名）。⇒ σ 只能**局部施加在探测点**。
+2. 早先（第四轮）试过的 `force_chain`/`quote` 链式 VSub 透明解包同样
+   改变行为（破坏"顶层非 VSub"不变式），已回退。
+
+### 孪生版：同病，**未修**（记录分歧）
+
+孪生版编译器**只在臂体叶子做精化**（`check_pm_final` 返回的 σ → 
+`subst_cxt`，见 `bump_spine_iter.rs:12073-12081`），下降期**不退带
+σ**：`Arm` 结构（`bump_spine_iter.rs:11760`）没有 σ 字段，逐列下降构造
+的 `Arm { cxt: clone_cxt(&arm.cxt), heads: new_heads.clone(), .. }`
+（12408/12441/12511）既不带精化上下文也不带 σ，探测点（12301）用的仍是
+原始 `*typ` + 未精化 `arm.cxt`。
+
+实测（临时探针，已从树中移除）：孪生版对同一输入报**与修复前参考版
+逐字节相同**的错误 `non-exhaustive pattern: Tuple2.mk(zero, cons) not
+covered; ...`。⇒ **镜像修复 = 把参考版的逐列精化搬进孪生编译器**
+（结构性改动，非机械对齐）。当前参考版已修、孪生版未修，**任何覆盖
+索引类型 match 的 REF/TWIN parity 都会分叉**——列入 round 6 首项。
+
+### 剩余失败（第四轮已对照确认，均**非**本轮引入）
+
+- `legacy_tests::test14`（期望 `find unsolved meta`，实得 `can't unify`）
+- `legacy_tests::test_prove_term_pure`
+- `legacy_tests::test_stuck_match_application_does_not_panic`
+- `bump_spine_iter::observation_tests::resident_compaction_matches_fresh_replay_across_kicks`
+
+前三条在 round-4 状态（即无本轮 GADT 修复）下同样失败，已用 stash 对照
+验证；第四条在 round-3 状态同样失败。⇒ 它们属于移植的**另一些**语义差异，
+round 6 需逐条定位（`test14` 的报错走向、`test_prove_term_pure` 的证明
+搜索、`test_stuck_match...` 的卡住 match 应用）。
+
+## 接续建议（round 6 工作清单，按优先级）
+
+1. **孪生版镜像 GADT 精化**（第 5 节）：把参考版的"逐列精化 σ 随臂下传 +
+   探测点包裹"搬进孪生编译器（`Arm` 加 σ 字段、下降期构造 Arm 时带上、
+   探测点 `wrap_sub`）。在此之前任何覆盖索引类型 match 的 REF/TWIN parity
+   都会分叉——这是当前**唯一已知的 REF/TWIN 语义分歧**。
+2. **剩余 4 个既有失败**（第 5 节末）：`test14`（报错走向：期望
+   `find unsolved meta`）、`test_prove_term_pure`、`test_stuck_match_
+   application_does_not_panic`、`resident_compaction_matches_fresh_replay_
+   across_kicks`。逐条与旧机制对照定位。
+3. **meta 解链**（第四轮第 2 节）：深链来自某处把 meta 解成"含下一个已解
+   meta 的构造子"，需定位构造点（建议在 `MetaEntry::Solved` 写入处加环
+   检测/深度上限，或扩展 `solve` 的 occurs 面）。修好后默认测试栈不再溢出，
    parity 才能进 CI 口径。
-3. **纯 elaboration 的 28×**：以 `DIAG10`（compiler 占 quote 绝大多数）为
-   入口，做编译器分支级缓存（探测结果按 (构造子, 目标类型) 缓存；ret_type
-   重锚按 canonical σ 缓存）；配合 σ 内容寻址内化（见 round-3 记录第 3 项）
-   才能真正把指针键缓存救活。
-4. **孪生版同批**：孪生 frcs/XCell 无 `FRCS_MEMO` 等价物（round 4 未动
-   孪生）；参考版与孪生版的 hover 总闸口径已一致。
-5. 验收口径不变（`l13_fast_parity` 全绿 / 全量 `cargo test` / 65 例裸语言
+4. **纯 elaboration 的 28×**：以 `DIAG10`（compiler 占 quote 绝大多数）为
+   入口做编译器分支级缓存（探测结果按 (构造子, 目标类型) 缓存、ret_type
+   重锚按 canonical σ 缓存）；配合 σ 内容寻址内化才能真正把指针键缓存救活。
+5. **孪生版 FRCS_MEMO 等价物**：孪生 frcs/XCell 无对应记忆化（round 4/5
+   未动孪生性能）。
+6. 验收口径不变（`l13_fast_parity` 全绿 / 全量 `cargo test` / 65 例裸语言
    diff / examples `typort check` / l13bench ≤1.5×：基线 prelude-core
    basic 22.4ms、fast 12.8ms，prelude-hdl 3080ms / 1321ms）。
+
+### 已知残留（记录，未修）
+
+- `FRCS_MEMO` 内存口径：1<<18 上限 + 溢出按输入存活清扫，在**长跑大负载**
+  （legacy_tests 全量、parity 套件整跑）下仍会累积到 GB 级（实测单进程
+  13 GB 仍在涨）——强持结果钉住重建图的量级随活跃值集增长。round 6 需要
+  更激进的回收（按字节预算 / 分段清空 / 直接用 Weak 结果 + 上游缓存）。
 
 ## 历史根因记录（早前轮回的定性，已按第三/四轮实测修正）
 

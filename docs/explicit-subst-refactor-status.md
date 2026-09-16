@@ -129,11 +129,18 @@ diff = 0），但四轮尝试后仍未达验收，**已回退至 HEAD**。第四
 - **纯 elaboration 仍 ~28×**（l13bench prelude-core basic：基线 22.4ms →
   移植 1242ms，去掉 LSP 表后 637ms）；quote 最外层调用 79% 来自模式编译器
   分支循环。
-- **移植版有 4 个既有 parity 失败**（round-3 状态同样失败，非第四轮引入）：
-  3 个 GADT 覆盖检查误报 non-exhaustive（`test_pm_vec_bool_exhaustive` /
-  `test_pm_tuple_vec_gadt` / `..._no_prelude`）+ 孪生
+- **GADT 覆盖回归已修复（第五轮，参考版）**：可达性探测用的是精化前构建
+  的头部类型值，而上下文已被 `subst_cxt` 精化——旧机制靠 `force(Rigid)`
+  的全局解表处处可见精化，σ 机制必须在消费点显式包裹。修复＝
+  `ArmEntry`/`FilterResult` 携带逐列累积的 σ、探测点 `wrap_sub` 包裹头部
+  类型；3 个 GADT 测试转绿且无新增失败（`l13-explicit-subst-round5-gadt.patch`）。
+- **孪生版同病未修**（唯一已知 REF/TWIN 语义分歧）：孪生编译器只在臂体
+  叶子做精化、下降期不退带 σ，实测对同一输入报与修复前参考版逐字节相同
+  的错误。镜像＝把逐列精化搬进孪生编译器（round-6 首项）。
+- **另有 4 个既有 parity 失败**（第四轮已对照确认非新增）：
+  `test14`、`test_prove_term_pure`、
+  `test_stuck_match_application_does_not_panic`、
   `resident_compaction_matches_fresh_replay_across_kicks`。
-  **语义回归的优先级高于性能**。
 - 第四轮的补丁（含 LSP 总闸、FRCS_MEMO 内存口径修复、unify_pm 重锚门槛、
   全套诊断探针）存于 `docs/wip/l13-explicit-subst-round4-patches.patch`。
 - **L13 保持原精化机制**，本仓库其它层（L07–L12）的显式替换不受影响。
