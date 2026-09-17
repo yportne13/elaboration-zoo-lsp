@@ -14,13 +14,7 @@ use super::{
 ///
 /// 顶层定义（def / enum / 构造子）都登记在这里；项层引用用 `Tm::Decl(名字)`，
 /// 求值时查表取缓存的 WHNF。递归通过"先插入指向自身的占位值、检查完再覆盖"实现。
-///
-/// 条目按 `Rc` 共享：`decl_insert` 的写时复制只需重建哈希桶 + 逐条 Rc 递增，
-/// 不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi` 是整棵
-/// `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。插入频次
-/// 随 decl 数增长（每 def 一次），值深拷贝是其中的主项——L07 的 `strchain`
-/// 参考版曾因此到 O(n²) 字节量级。
-pub type Decls = HashMap<SmolStr, Rc<DeclEntry>>;
+pub type Decls = HashMap<SmolStr, DeclEntry>;
 
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
@@ -154,31 +148,18 @@ impl Cxt {
 
     /// 注册一个 builtin：类型在 Tm 层描述，经 `infer.eval` 求值成 Π 链值
     /// （只有最外层域被立即求值——恒为 String 常量；引用参数的内层域留在
-    /// 闭包里到 check 期才解）；值 = λ 参数链 → **App 链**重新应用参数到
-    /// `Tm::Prim(name)` 零元头，应用满元数后由 `force` 的 `prim_reduce`
-    /// 归约。
+    /// 闭包里到 check 期才解）；值 = λ 参数链 → `Tm::Prim(name)`，应用满
+    /// 元数后由 `force` 的 `prim_reduce` 归约。
     fn add_builtin(self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
         let ty = infer.eval(&self.decl, &List::new(), ty_tm.clone());
-        // 值 = λ 参数链 → ((Prim 名 p1) p2 …)；参数名从类型的 Π 链取（与
-        // 域同序）。实参经 App 显式应用而非 env 隐式收集——`Tm::Prim` 从
-        // 此是零元卡住头，quote → eval 往返在任意 env 下 spine 保真（旧
-        // 形态在非 builtin-λ 环境里重求值会把无关 env 槽拼进 spine）
+        // 值 = λ 参数链 → Prim(name)；参数名从类型的 Π 链取（与域同序）
         let mut names = Vec::new();
         let mut cur = &ty_tm;
         while let Tm::Pi(n, _, _, body) = cur {
             names.push(n.data.clone());
             cur = body;
         }
-        let n = names.len() as u32;
         let mut val = Tm::Prim(SmolStr::new(name));
-        for k in 0..n {
-            // 第 k 个参数（应用序在前）在 λ 链体内的 de Bruijn 索引 = n-1-k
-            val = Tm::App(
-                Box::new(val),
-                Box::new(Tm::Var(Ix(n - 1 - k))),
-                Icit::Expl,
-            );
-        }
         for p in names.iter().rev() {
             val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Box::new(val));
         }
@@ -201,15 +182,14 @@ impl Cxt {
     }
 
     pub fn decl_get(&self, k: &str) -> Option<&DeclEntry> {
-        self.decl.get(k).map(|e| &**e)
+        self.decl.get(k)
     }
 
     /// 写入一个 decl。写时复制：Rc 共享时才克隆整表，父上下文不受影响——
-    /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
-    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。
+    /// 这正是递归定义需要的"占位只对本定义的检查可见"。
     pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
         let mut decl = self.decl.clone();
-        Rc::make_mut(&mut decl).insert(k.into(), Rc::new(e));
+        Rc::make_mut(&mut decl).insert(k.into(), e);
         Cxt {
             decl,
             env: self.env.clone(),
@@ -232,10 +212,6 @@ impl Cxt {
     }
 
     /// 引入一个源码变量（模式绑定 / λ 参数 / Π 域）：env 压入 fresh rigid。
-    ///
-    /// 注：`src_names` 按值克隆（每次 bind O(上下文)）——n 个绑定器的检查是
-    /// O(n²)；参考版取"可读优先"的写法，孪生版用 name map + 轨迹回滚等价
-    /// 实现（`L06_NO_NAME_MAP` 消融口径）。此表只服务名字解析与报错显示。
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: VTy) -> Self {
         let mut src_names = self.src_names.clone();
         src_names.insert(x.data.clone(), (self.lvl, a));

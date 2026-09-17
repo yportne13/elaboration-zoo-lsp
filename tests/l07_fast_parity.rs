@@ -1239,3 +1239,132 @@ println (usef Nat Nat Nat zero)
     );
     assert_parity(flex_src);
 }
+
+// 本层归属钉子的回流（2026-09 跨章节用例清点）
+// --------------------------------------------------------------------------------
+
+// 下面两例钉的是 **L07 本层的修复**（2b4ff68「enum 无标注隐式参数域钉 U」），
+// 但此前只存在于 `tests/l08_fast_parity.rs`——L07 侧仅有黑盒三轮的参考版
+// 覆盖（`l07_blackbox_v3::pack_annotated_params`），孪生版无 parity 钉子。
+// 现按「用例归属修复所在的章节」回流到本套件；L08 套件中的同名副本继续钉
+// L08 自己那份代码（L08 的 `Decl::Enum` 臂曾丢失该钉，见 l08 处注释）。
+// L07 无 `struct` 语法，故省略 L08 副本中的 struct 子源。
+
+/// 多索引 GADT 的隐式参数无标注（域洞）：声明处域钉 U。构造子上显式供给
+/// 枚举隐式实参 `p[Nat][Bool]` 是对域洞求解机制的回归钉——缺钉时
+/// `?m Nat := U` 因 invert 倒序不了 Decl 头 spine 而误报 can't unify。
+/// 注意参考版与快版曾**同缺**此钉（双向一致的 Err），普通 assert_parity
+/// 查不出，须按 Ok 期望值断言。
+#[test]
+fn parity_multi_index_gadt_unannotated_impl_params() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+enum Pack2[A : U, B : U](x: A, y: B) {
+    p2[A, B](a: A, b: B) -> Pack2[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw
+println sw.x
+println sw.y
+
+def un(p: Pack[Nat][Bool] zero true): Bool =
+    match p {
+        case p(a, b) => b
+    }
+println (un (p[Nat][Bool] zero true))
+
+println (p2 zero false).x
+"#;
+    let expected = "Pack::p([Nat] [Bool] Nat::zero Bool::true)\n\
+                    Nat::zero\n\
+                    Bool::true\n\
+                    Bool::true\n\
+                    Nat::zero\n";
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let b = b.unwrap_or_else(|e| panic!("basic 应 Ok：{e:?}\nsrc:\n{src}"));
+    let f = f.unwrap_or_else(|e| panic!("fast 应 Ok：{e:?}\nsrc:\n{src}"));
+    assert_eq!(b, expected, "basic 输出不符，src:\n{src}");
+    assert_eq!(f, expected, "fast 输出不符，src:\n{src}");
+}
+
+/// 多隐式无标注参数（`[A, B]`）时第 2+ 个参数的域是 fresh_meta 的
+/// AppPruning 部分应用 meta（`?m A`）：使用点显式供给枚举隐式实参
+/// （`p1[Nat][Bool]`）需解 `?m A := U`，invert 对非变量 spine 实参直接
+/// Err → 误报 can't unify。声明处钉 U 后该 meta 不再产生。末源是显式标注
+/// 的索引族形态，确认钉不影响既有合法写法。
+#[test]
+fn parity_enum_struct_impl_hole_pinned_u() {
+    for src in [
+        // enum：多隐式无标注参数 + 显式实例化（修复的原始触发形态）
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\nprintln (p1[Nat][Bool] zero true)\n",
+        // enum：无标注隐式参数 + 注解处显式实例化 + 全显式构造子应用
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Bool {\n    true\n    false\n}\nenum P1[A, B] {\n    p1[A, B](a: A, b: B) -> P1[A][B]\n}\ndef s1: P1[Nat][Bool] = p1[Nat][Bool][Nat][Bool] zero true\nprintln s1\n",
+        // 显式标注的隐式域与显式索引不动：annotated 索引族形态仍通过
+        "enum Nat {\n    zero\n    succ(x: Nat)\n}\nenum Q[A : U](a: A) {\n    q[A](a: A) -> Q[A] a\n}\ndef t: Q[Nat] zero = q[Nat] zero\nprintln t\n",
+    ] {
+        let b = run_basic(src);
+        let f = run_fast(src);
+        assert!(
+            b.is_ok() && f.is_ok(),
+            "两版都应 Ok（域钉 U 缺失会误报 can't unify），src:\n{src}\nbasic={b:?}\nfast={f:?}"
+        );
+        assert_parity(src);
+    }
+}
+
+/// P0 回归钉：孪生 vapp1 经 VSub→闭包路径重入 eval_iter 会清空调用方
+/// 在飞的 work 栈（2026-09-17 评审轮独立复现）。触发形态：match 臂内对
+/// **let 绑定的 λ** 做多参应用，且结果流入类型注解——臂上下文经
+/// subst_cxt 把 env 槽包成 VSub 后，Tm::Var 的 tag-1 快路径把 tag-7 的
+/// VSub 当"非闭包"压进 vals，ChainWrap→vapp1 的 VSub 臂 force 出闭包，
+/// 闭包臂用外层自己的 work/vals 重入 eval_iter，入口 clear 把外层任务
+/// 静默丢弃——注解求值拿到截断的部分应用闭包而非 zero，快版误报
+/// can't unify。修复：vapp1 的 VSub→闭包 β 改用本次私有草稿栈（force
+/// 同款纪律）。
+#[test]
+fn parity_vsub_slot_applied_closure_workbuf() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def h(n: Nat): Nat =
+    let g : Nat -> Nat -> Nat = (x => (y => y));
+    match n {
+        case zero =>
+            let a = g zero zero;
+            let v : Vec[Nat] a = nil;
+            zero
+        case succ(m) => g m m }
+println (h zero)
+"#;
+    let expected = "Nat::zero\n";
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let b = b.unwrap_or_else(|e| panic!("basic 应 Ok：{e:?}\nsrc:\n{src}"));
+    let f = f.unwrap_or_else(|e| panic!("fast 应 Ok（workbuf 清栈已修）：{e:?}\nsrc:\n{src}"));
+    assert_eq!(b, expected, "basic 输出不符，src:\n{src}");
+    assert_eq!(f, expected, "fast 输出不符，src:\n{src}");
+}

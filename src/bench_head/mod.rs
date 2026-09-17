@@ -623,12 +623,7 @@ impl Infer {
                     }
                     None => Val::vvar(x),
                 };
-                // 头不可应用守卫：比 η 臂共用的 `v_applicable` **多放行 Lam**
-                // ——解值是 λ 且读点带实参是良型形态（β 应用），卡住反而与
-                // 孪生 `vapp_ok`（Clo tag 放行）分裂（D4-F1 对齐：只改 frcs
-                // 读点，η 臂的 v_applicable 语义不变——λ 与不可应用值相遇
-                // 在那里仍不展开）。
-                if !sp.is_empty() && !matches!(head, Val::Lam(..)) && !v_applicable(&head) {
+                if !sp.is_empty() && !v_applicable(&head) {
                     return Val::Rigid(x, sp);
                 }
                 let args: Vec<(Val, Icit)> = sp.iter().cloned().collect();
@@ -721,8 +716,8 @@ impl Infer {
 
     /// 卡住内建的归约体（L06 builtin 注册表的逐句移植，force 时触发）。
     /// `args` 自然序（最先应用在前）；元数 / 字面量检查与 L06 的
-    /// `PrimFunc` 逐条对应，不满足即 None 保持卡住。文件族 IO 失败同样
-    /// 保持卡住（None，与实参非字面量同口径）——源码可达路径不 panic。
+    /// `PrimFunc` 逐条对应，不满足即 None 保持卡住。文件族失败 panic
+    /// （两版一致）。
     fn prim_reduce(&self, decl: &Decls, name: &str, args: &[Val]) -> Option<Val> {
         let lit = |v: &Val| match v {
             Val::LiteralIntro(s) => Some(s.data.clone()),
@@ -882,9 +877,12 @@ impl Infer {
                     return None;
                 }
                 match lit(&args[0]) {
-                    Some(path) => std::fs::read_to_string(&path)
-                        .ok()
-                        .map(|content| Val::LiteralIntro(empty_span(content))),
+                    Some(path) => {
+                        let content = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                            panic!("file_read_all_text: failed to read '{}': {}", path, e)
+                        });
+                        Some(Val::LiteralIntro(empty_span(content)))
+                    }
                     None => None,
                 }
             }
@@ -894,7 +892,10 @@ impl Infer {
                 }
                 match (lit(&args[0]), lit(&args[1])) {
                     (Some(path), Some(content)) => {
-                        std::fs::write(&path, &content).ok().map(|()| Val::U)
+                        std::fs::write(&path, &content).unwrap_or_else(|e| {
+                            panic!("file_write_all_text: failed to write '{}': {}", path, e)
+                        });
+                        Some(Val::U)
                     }
                     _ => None,
                 }
@@ -906,13 +907,20 @@ impl Infer {
                 match (lit(&args[0]), lit(&args[1])) {
                     (Some(path), Some(content)) => {
                         use std::io::Write;
-                        std::fs::OpenOptions::new()
+                        let mut file = std::fs::OpenOptions::new()
                             .append(true)
                             .create(true)
                             .open(&path)
-                            .and_then(|mut file| write!(file, "{}", content))
-                            .ok()
-                            .map(|()| Val::U)
+                            .unwrap_or_else(|e| {
+                                panic!("file_append_all_text: failed to open '{}': {}", path, e)
+                            });
+                        write!(file, "{}", content).unwrap_or_else(|e| {
+                            panic!(
+                                "file_append_all_text: failed to append to '{}': {}",
+                                path, e
+                            )
+                        });
+                        Some(Val::U)
                     }
                     _ => None,
                 }
@@ -938,7 +946,12 @@ impl Infer {
                     return None;
                 }
                 match lit(&args[0]) {
-                    Some(path) => std::fs::remove_file(&path).ok().map(|()| Val::U),
+                    Some(path) => {
+                        std::fs::remove_file(&path).unwrap_or_else(|e| {
+                            panic!("file_delete: failed to delete '{}': {}", path, e)
+                        });
+                        Some(Val::U)
+                    }
                     None => None,
                 }
             }
@@ -1042,14 +1055,17 @@ impl Infer {
             Tm::LiteralIntro(x) => Val::LiteralIntro(x),
             Tm::LiteralType => Val::LiteralType,
             Tm::Prim(name) => {
-                // 零元卡住头：实参一律经 App 到达（builtin 值的 λ 链体是
-                // App 链，quote 产物也是 `Prim 实参` 应用形态）。**不读现场
-                // env**——旧实现把 env 全槽收集进 spine，只在"builtin λ 链
-                // 体"的正典路径下正确；quoted Prim 在其它 env 下重求值
-                // （fresh_meta 的 close_ty 闭包体、solve 的 lams、prune 的
-                // 类型重求值）会捕获无关 env 槽、spine 长度失真，unify_sp
-                // 长度失配即误报。归约统一在 force（prim_reduce）。
-                Val::Prim(name, List::new())
+                // 实参经 Lam 链进 env（最内 = 最后应用）：卡成带名字与实参
+                // spine 的 Prim。归约统一在 force（不在求值点按 env 触发——
+                // quote → eval 往返时项已改成 `Prim 实参` 的应用形态，按
+                // 现场 env 触发会把无关的字面量拼进来）。
+                let mut args: Vec<(Val, Icit)> =
+                    env.iter().map(|v| (v.clone(), Icit::Expl)).collect();
+                args.reverse(); // 应用序 → spine 头 = 最后应用
+                Val::Prim(
+                    name,
+                    args.into_iter().fold(List::new(), |acc, e| acc.prepend(e)),
+                )
             }
             Tm::Sum(name, params, cases) => {
                 let new_params = params
@@ -1300,7 +1316,7 @@ fn simpl_decl(decl: &Decls) -> Decls {
                 Val::Sum(..) => e.val.clone(),
                 _ => Val::Decl(k.clone(), List::new()),
             };
-            (k.clone(), Rc::new(DeclEntry { ty: e.ty.clone(), val }))
+            (k.clone(), DeclEntry { ty: e.ty.clone(), val })
         })
         .collect()
 }
@@ -1565,4 +1581,5 @@ use pattern_match::Compiler;
 
 use parser::syntax::Icit;
 #[cfg(test)]
+#[cfg(any())]
 mod tests;

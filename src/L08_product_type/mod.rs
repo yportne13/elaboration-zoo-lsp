@@ -1324,7 +1324,7 @@ fn simpl_decl(decl: &Decls) -> Decls {
                 Val::Sum(..) => e.val.clone(),
                 _ => Val::Decl(k.clone(), List::new()),
             };
-            (k.clone(), DeclEntry { ty: e.ty.clone(), val })
+            (k.clone(), Rc::new(DeclEntry { ty: e.ty.clone(), val }))
         })
         .collect()
 }

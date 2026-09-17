@@ -4,7 +4,7 @@
 //! 核心输出格式、依赖匹配正误路径、解析位置怪癖、深度边界）互补，本套件聚焦
 //! 其未触及的角落：
 //!   - builtin 注册表全量扫描（string prim / 可变全局族 / 文件 IO 族 /
-//!     string_to_global_type 逃逸舱口），含失败 panic 契约；
+//!     string_to_global_type 逃逸舱口），含 IO 失败的卡住降级契约；
 //!   - enum 冷僻特性：空 enum、显式参数 enum、跨 enum 重名构造子、
 //!     隐式子模式 `cons[_]`、命名隐式实参 `[A = Nat]`、限定名引用；
 //!   - 类型层 match（`T true ≡ String` 的往返）；
@@ -14,7 +14,8 @@
 //!
 //! 唯一黑盒入口：`elaboration_zoo_lsp::L07_sum_type::run(input, path_id)
 //!   -> Result<String, Error>`；成功输出逐行断言，错误用 `Error` 的
-//!   Debug/Display 文本断言，panic 契约用 catch_unwind 断言消息。
+//!   Debug/Display 文本断言。文件 IO 失败契约为**卡住降级**（不 panic，
+//!   2026-09-17 评审轮与参考版/孪生版同步落地）。
 //! 全部在 ≥64MB 栈线程内执行。文件 IO 用例持 `FILE_IO_LOCK`。
 //!
 //! 缺陷与修复状态（2026-09 黑盒二轮）：
@@ -66,30 +67,6 @@ fn check_err(src: &str) -> String {
         .unwrap()
         .join()
         .unwrap()
-}
-
-/// 在 64MB 栈线程里跑 `run`；返回 panic 消息（若有），Ok/Err 返回 None。
-fn check_panic(src: &str) -> Option<String> {
-    let input = src.to_owned();
-    std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(move || {
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&input, 0)));
-            match r {
-                Ok(_) => None,
-                Err(payload) => {
-                    let msg = payload
-                        .downcast_ref::<&str>()
-                        .map(|s| s.to_string())
-                        .or_else(|| payload.downcast_ref::<String>().cloned())
-                        .unwrap_or_else(|| format!("{payload:?}"));
-                    Some(msg)
-                }
-            }
-        })
-        .unwrap()
-        .join()
-        .unwrap_or_else(|_| panic!("worker aborted (stack overflow?) for src:\n{src}"))
 }
 
 /// 在指定栈大小线程里跑 `run`；返回 Ok/Err/panic 三态文本（探针用）。
@@ -406,34 +383,44 @@ def d : U = file_delete "l07_v2_bb_new.txt"
 }
 
 #[test]
-fn v2_file_read_missing_panics() {
+fn v2_file_read_missing_stuck_not_panic() {
+    // IO 失败降级为卡住（与实参非字面量同口径）：不 panic；类型上
+    // `String` 域由闭包应用给出，def 本身通过；println 物化卡住 prim。
     let _io = FILE_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let msg = check_panic(r#"
+    let out = check(
+        r#"
 def r : String = file_read_all_text "l07_v2_bb_no_such.txt"
-"#)
-    .expect("file_read_all_text on missing path must panic");
-    assert!(msg.contains("file_read_all_text: failed to read"), "panic msg: {msg}");
-    assert!(msg.contains("l07_v2_bb_no_such.txt"), "panic msg: {msg}");
+println r
+"#,
+    );
+    let line = out.lines().next().unwrap_or_default();
+    assert!(line.starts_with("file_read_all_text"), "out:\n{out}");
+    assert!(line.contains("l07_v2_bb_no_such.txt"), "out:\n{out}");
+    assert!(!std::path::Path::new("l07_v2_bb_no_such.txt").exists());
 }
 
 #[test]
-fn v2_file_delete_missing_panics() {
+fn v2_file_delete_missing_stuck_not_panic() {
     let _io = FILE_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let msg = check_panic(r#"
+    let out = check(
+        r#"
 def d : U = file_delete "l07_v2_bb_no_such_zzz.txt"
-"#)
-    .expect("file_delete on missing path must panic");
-    assert!(msg.contains("file_delete: failed to delete"), "panic msg: {msg}");
+"#,
+    );
+    assert_eq!(out, "");
+    assert!(!std::path::Path::new("l07_v2_bb_no_such_zzz.txt").exists());
 }
 
 #[test]
-fn v2_file_write_bad_path_panics() {
+fn v2_file_write_bad_path_stuck_not_panic() {
     let _io = FILE_IO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let msg = check_panic(r#"
+    let out = check(
+        r#"
 def w : U = file_write_all_text "l07_v2_bb_no_dir/sub.txt" "x"
-"#)
-    .expect("file_write_all_text into missing dir must panic");
-    assert!(msg.contains("file_write_all_text: failed to write"), "panic msg: {msg}");
+"#,
+    );
+    assert_eq!(out, "");
+    assert!(!std::path::Path::new("l07_v2_bb_no_dir").exists());
 }
 
 #[test]

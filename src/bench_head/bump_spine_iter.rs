@@ -26,17 +26,13 @@
 //! - **值编码**：tag 7 的 [`XCell`] 从 Lit/Decl 扩到 `Prim`（卡住内建应用
 //!   头）、`Obj`（卡住投影）、`Sum` / `SumCase`（和类型与构造子值）、
 //!   `Match`（卡住 match：scrutinee + 捕获 env + 编译分支 + pending 实参）、
-//!   `VSub`（显式替换下的值，σ = std `Rc<SubstV>`）。注意 σ 的"单次模式
-//!   编译"只对**可读性**成立：bump `reset()` 不跑 Drop，arena 内 `XCell::VSub`
-//!   持有的 Rc 克隆跨轮不递减（无 UB——reset 后无人再读、链无环——但长
-//!   生命周期 Machine 下是无上界慢泄漏，LSP 式接入前需评估量级或加回收）。
+//!   `VSub`（显式替换下的值，σ = std `Rc<SubstV>`，仅存活于单次模式编译）。
 //!   带实参的 Prim/Obj/Decl 与 Rigid/Flex 一样表示为 spine 栈上的链（头 =
 //!   `Entry.hk` 记录的头种类，push 时随函数侧传播，O(1) 判定）。
 //! - **builtin 触发点后移**：L06 在应用时触发（`decl_apply`）；L07 参考版
-//!   的 builtin 值是 `λ 参数链 → ((Tm::Prim(名) p1) p2 …)` App 链，
-//!   `Tm::Prim` 是**零元卡住头**（实参经 App 显式应用，不读现场 env——
-//!   quote → eval 往返在任意 env 下 spine 保真），归约统一在 force 的
-//!   [`prim_reduce`]（L06 cxt.rs 函数体的逐句移植）。
+//!   的 builtin 值是 `λ 参数链 → Tm::Prim(名)`，实参经 env 全槽进入
+//!   `Val::Prim(名, spine)`（链头 = 最后应用的实参），归约统一在 force
+//!   的 [`prim_reduce`]（L06 cxt.rs 函数体的逐句移植）。
 //! - **模式特化 = 显式替换**：解入 `SpecSolve.acc`（模式编译器的 σ 链，
 //!   臂边界 Rc 指针赋值回滚）；"解前构建、解后消费"的值在读点用
 //!   [`wrap_sub`] 包裹，force 的 [`frcs`] 读点惰性推开；上下文经
@@ -546,8 +542,8 @@ pub(crate) fn env_nth(defs: &[V], env: Env<'_>, i: u32) -> V {
     defs[(env.flat_base + env.flat_len - 1 - (i - j)) as usize]
 }
 
-/// 环境总槽数（链深 + 平坦区）。struct_eq / val_mentions_lvl 的 env
-/// 遍历用（`Tm::Prim` 的 env 全槽收集已随零元头改造移除）。
+/// 环境总槽数（链深 + 平坦区）。`Tm::Prim` 的 env 全槽收集与
+/// struct_eq / val_mentions_lvl 的 env 遍历用。
 #[inline]
 pub(crate) fn env_len(env: Env<'_>) -> u32 {
     let mut n = env.flat_len;
@@ -1073,17 +1069,17 @@ fn prim_reduce<'a>(
                 _ => None,
             }
         }
-        // 文件族 IO 失败保持卡住（None）——与"实参非字面量"同口径，
-        // 源码可达路径不 panic（参考版 prim_reduce 同步修改，parity 保持）
         "file_read_all_text" => {
             if n == 0 {
                 return None;
             }
             match lit_of(arg(0)) {
-                Some(path) => match std::fs::read_to_string(path) {
-                    Ok(content) => Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&content))))),
-                    Err(_) => None,
-                },
+                Some(path) => {
+                    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                        panic!("file_read_all_text: failed to read '{}': {}", path, e)
+                    });
+                    Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&content)))))
+                }
                 _ => None,
             }
         }
@@ -1093,7 +1089,10 @@ fn prim_reduce<'a>(
             }
             match (lit_of(arg(0)), lit_of(arg(1))) {
                 (Some(path), Some(content)) => {
-                    std::fs::write(path, content).ok().map(|()| v_u())
+                    std::fs::write(path, content).unwrap_or_else(|e| {
+                        panic!("file_write_all_text: failed to write '{}': {}", path, e)
+                    });
+                    Some(v_u())
                 }
                 _ => None,
             }
@@ -1105,13 +1104,17 @@ fn prim_reduce<'a>(
             match (lit_of(arg(0)), lit_of(arg(1))) {
                 (Some(path), Some(content)) => {
                     use std::io::Write;
-                    std::fs::OpenOptions::new()
+                    let mut file = std::fs::OpenOptions::new()
                         .append(true)
                         .create(true)
                         .open(path)
-                        .and_then(|mut file| write!(file, "{}", content))
-                        .ok()
-                        .map(|()| v_u())
+                        .unwrap_or_else(|e| {
+                            panic!("file_append_all_text: failed to open '{}': {}", path, e)
+                        });
+                    write!(file, "{}", content).unwrap_or_else(|e| {
+                        panic!("file_append_all_text: failed to append to '{}': {}", path, e)
+                    });
+                    Some(v_u())
                 }
                 _ => None,
             }
@@ -1134,7 +1137,12 @@ fn prim_reduce<'a>(
                 return None;
             }
             match lit_of(arg(0)) {
-                Some(path) => std::fs::remove_file(path).ok().map(|()| v_u()),
+                Some(path) => {
+                    std::fs::remove_file(path).unwrap_or_else(|e| {
+                        panic!("file_delete: failed to delete '{}': {}", path, e)
+                    });
+                    Some(v_u())
+                }
                 _ => None,
             }
         }
@@ -1199,35 +1207,6 @@ fn vapp1<'a>(
             // 顶层不再产出 VSub，递归必终止）
             XCell::VSub { .. } => {
                 let ff = force(bump, spine, defs, metas, decls, mmap, fuel, f);
-                if v_tag(ff) == 1 {
-                    // frcs 可把 VSub 头推成**闭包**（let 绑定的 λ 槽被精化包裹
-                    // 后经 Tm::Var 进应用位）。此时上方闭包臂的 eval_iter 会
-                    // 在入口 clear 调用方的 work/vals——而 W::Apply /
-                    // ChainWrap / AppPrunOne 正是带着**本循环在飞的栈**调进
-                    // 来的（它们的 tag-1 守卫只拦得住进入时已是闭包的值，
-                    // 拦不住"VSub 经 force 变闭包"这条 L06 时代不存在的路径），
-                    // 外层任务会被静默截断。β 用本次私有的草稿栈做（force
-                    // 1390 同款纪律；Vec::new 不分配，早退零成本）。
-                    let c = v_clo_of(ff);
-                    let env = env_ext(bump, c.env, a);
-                    let mut work2: Vec<W<'a>> = Vec::new();
-                    let mut vals2: Vec<V> = Vec::new();
-                    let mut icits2: Vec<Icit> = Vec::new();
-                    return eval_iter(
-                        bump,
-                        spine,
-                        &mut work2,
-                        &mut vals2,
-                        &mut icits2,
-                        defs,
-                        metas,
-                        decls,
-                        mmap,
-                        fuel,
-                        env,
-                        c.body,
-                    );
-                }
                 return vapp1(
                     bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, ff, a, i,
                 );
@@ -2092,13 +2071,19 @@ fn eval_iter<'a>(
                 Some(e) => e.val,
                 None => panic!("unbound global {}", name),
             }),
-            // builtin 体：零元卡住头，实参一律经 App 到达（builtin 值的
-            // λ 链体是 App 链，quote 产物也是 `Prim 实参` 应用形态）。不读
-            // 现场 env——旧实现把 env 全槽收集进 spine，quoted Prim 在其它
-            // env 下重求值会捕获无关槽、spine 长度失真（参考版 eval 的
-            // Tm::Prim 臂同步修改）。归约统一在 force（prim_reduce）。
-            W::Tm(Tm::Prim(name), _) => {
-                vals.push(v_xcell(bump.alloc(XCell::Prim(name))));
+            // builtin 体：实参 = env 全部槽（应用序 = 外层槽先应用）→ 链头
+            // = 最后应用 = 最内槽。归约统一在 force（不在求值点按 env 触发
+            // ——quote → eval 往返时项已改成 `Prim 实参` 的应用形态，按
+            // 现场 env 触发会把无关的字面量拼进来；参考版注释同款论证）
+            W::Tm(Tm::Prim(name), env) => {
+                let n = env_len(env);
+                let mut acc = v_xcell(bump.alloc(XCell::Prim(name)));
+                let mut i = n;
+                while i > 0 {
+                    i -= 1;
+                    acc = spine.push(acc, env_nth(defs, env, i), Icit::Expl);
+                }
+                vals.push(acc);
             }
             W::Tm(Tm::Pi(name, icit, dom, cod), env) => {
                 work.push(W::PiBody(name, *icit, cod, env));
@@ -2894,12 +2879,8 @@ enum UItem<'a> {
     /// 判等记忆化屏障（LIFO；健壮性论证同 L03——solve 写一次、成功单调）。
     Store((u64, u64)),
     /// 卡住 match 的一个分支对：两侧体在"各自捕获 env + fresh rigid 槽"
-    /// 下用简化 decl 表重求值，再压 `l + count` 层的体对。弹出时**先比
-    /// 模式**（参考版逐分支交错：先 `p1 != p2` 失败、后体合一——Err 路径
-    /// 上 scrutinee / 前序分支的 meta 副作用保留）。
+    /// 下用简化 decl 表重求值，再压 `l + count` 层的体对。
     MatchBranch {
-        p1: &'a PatternDetail,
-        p2: &'a PatternDetail,
         b1: &'a Tm<'a>,
         e1: Env<'a>,
         b2: &'a Tm<'a>,
@@ -2907,26 +2888,6 @@ enum UItem<'a> {
         declb: Rc<FxHashMap<String, DeclEntryF>>,
         l: u32,
         count: u32,
-    },
-    /// 卡住 match Match/Match 的分支数预检屏障：排在 scrutinee 对**之下**
-    /// 弹出（参考版顺序：scrutinee 合一 → 分支数检查 → 逐分支）。旧实现
-    /// 把全部结构预检前置，Err 路径上 scrutinee 合一的 meta 副作用被吞掉
-    /// ——spec 合一经 `unify_indices` 映射 `Walk::Unreachable` 后编译
-    /// 继续，副作用可观测（"unify 错误均致命"的论证不成立于 spec 路径）。
-    MatchPrecheck {
-        c1: &'a [(PatternDetail, &'a Tm<'a>)],
-        c2: &'a [(PatternDetail, &'a Tm<'a>)],
-    },
-    /// pending 实参数长度屏障：全部分支比完后弹出（参考版在分支循环后
-    /// 才查 `pending1.len() != pending2.len()`）。
-    MatchPendingLen(usize, usize),
-    /// pending 实参对：先比 icit 再压值对（参考版循环体顺序）。
-    MatchPending {
-        l: u32,
-        u1: V,
-        i1: Icit,
-        u2: V,
-        i2: Icit,
     },
 }
 
@@ -3200,8 +3161,6 @@ fn unify_iter<'a>(
                 continue;
             }
             UItem::MatchBranch {
-                p1,
-                p2,
                 b1,
                 e1,
                 b2,
@@ -3210,11 +3169,7 @@ fn unify_iter<'a>(
                 l,
                 count,
             } => {
-                // 先比模式（参考版逐分支交错：p1 != p2 即败，前序副作用保留）
-                if p1 != p2 {
-                    return false;
-                }
-                // 分支体：两侧各自"捕获 env + fresh rigid 槽（count =
+                // 分支体：两侧各自"捕获 env + fresh rigid 槽（count = 
                 // bind_count，lvl 从 l 起）"下用简化 decl 表重求值，再在
                 // l+count 层比较（参考版 unify 的 Match/Match 全路径同款）
                 let mut env1 = e1;
@@ -3230,34 +3185,6 @@ fn unify_iter<'a>(
                     bump, spine, work, vals, icits, defs, metas, &declb, mmap, fuel, env2, b2,
                 );
                 stack.push(UItem::Pair(l + count, v1, v2));
-                continue;
-            }
-            UItem::MatchPrecheck { c1, c2 } => {
-                // scrutinee 合一之后的分支数检查（参考版顺序）
-                if c1.len() != c2.len() {
-                    return false;
-                }
-                continue;
-            }
-            UItem::MatchPendingLen(n1, n2) => {
-                // 全部分支比完后的 pending 长度检查（参考版顺序）
-                if n1 != n2 {
-                    return false;
-                }
-                continue;
-            }
-            UItem::MatchPending {
-                l,
-                u1,
-                i1,
-                u2,
-                i2,
-            } => {
-                // 先比 icit 再压值对（参考版循环体顺序）
-                if i1 != i2 {
-                    return false;
-                }
-                stack.push(UItem::Pair(l, u1, u2));
                 continue;
             }
             UItem::Pair(l, t, u) => (l, t, u),
@@ -3732,28 +3659,38 @@ fn unify_iter<'a>(
                 {
                     continue;
                 }
-                // 参考版比较序（unification.rs Match/Match 臂）逐点对齐：
-                // scrutinee → 分支数检查 → 逐分支（模式检查 + 体合一）→
-                // pending 长度 → 逐 pending（icit 检查 + 值合一）。栈 LIFO
-                // 反序压栈；两侧都在解同一 meta 时先解方向会影响最终解与
-                // fuel 消耗序，序必须一致。结构检查作为屏障任务**交错**在
-                // 序中弹出而非前置——Err 路径上 scrutinee / 前序分支的
-                // meta 副作用与参考版保持一致。
-                let declb = Rc::new(simpl_decl(bump, decls));
-                for ((u1, i1), (u2, i2)) in pd1.iter().zip(pd2.iter()).rev() {
-                    stack.push(UItem::MatchPending {
-                        l,
-                        u1: *u1,
-                        i1: *i1,
-                        u2: *u2,
-                        i2: *i2,
-                    });
+                // 前置结构检查（与参考版逐项判定一致，只是提前——Err 判定
+                // 不受比较顺序影响，Ok 只在全部通过时给出）。**文档化偏差**：
+                // 参考版是惰性交错（scrutinee 先合一、可能已解出若干 meta
+                // 才因长度失配失败），前置后 Err 路径上这些 meta 副作用不
+                // 发生；仅当调用方捕获该错误并继续同轮检查时才可观测——
+                // 现有全部调用点的 unify 错误均致命，不可达。
+                if c1.len() != c2.len() {
+                    return false;
                 }
-                stack.push(UItem::MatchPendingLen(pd1.len(), pd2.len()));
-                for ((p1, b1), (p2, b2)) in c1.iter().zip(c2.iter()).rev() {
+                for ((p1, _), (p2, _)) in c1.iter().zip(c2.iter()) {
+                    if p1 != p2 {
+                        return false;
+                    }
+                }
+                if pd1.len() != pd2.len() {
+                    return false;
+                }
+                for ((_, i1), (_, i2)) in pd1.iter().zip(pd2.iter()) {
+                    if i1 != i2 {
+                        return false;
+                    }
+                }
+                // 参考版比较序（unification.rs Match/Match 臂）：scrutinee →
+                // 分支体 → pending。栈 LIFO：pending 先压、分支对次之、
+                // scrutinee 最后压（最先比）——两侧都在解同一 meta 时先解
+                // 方向会影响最终解与 fuel 消耗序，序必须一致。
+                let declb = Rc::new(simpl_decl(bump, decls));
+                for ((u1, _), (u2, _)) in pd1.iter().zip(pd2.iter()).rev() {
+                    stack.push(UItem::Pair(l, *u1, *u2));
+                }
+                for ((p1, b1), (_, b2)) in c1.iter().zip(c2.iter()).rev() {
                     stack.push(UItem::MatchBranch {
-                        p1: &p1,
-                        p2: &p2,
                         b1: *b1,
                         e1: *e1,
                         b2: *b2,
@@ -3763,7 +3700,6 @@ fn unify_iter<'a>(
                         count: p1.bind_count(),
                     });
                 }
-                stack.push(UItem::MatchPrecheck { c1, c2 });
                 stack.push(UItem::Pair(l, *s1, *s2));
                 continue;
             }
@@ -6760,9 +6696,6 @@ impl<'a> Compiler<'a> {
             Some(e) => *e,
             None => return false,
         };
-        // 每个探测独立充值（参考版 probe_accessible 同点）：多构造子枚举
-        // 的逐 ctor 探测不互相挤占共享池，避免后探的 ctor 假 absurd。
-        mach.fuel.set(UNIFY_FUEL);
         let snap = mach.metas.clone();
         let decl = cxt.decl.borrow();
         let mut solvable = base_solvable.to_vec();
@@ -7250,18 +7183,7 @@ impl Machine {
                 names.push(n);
                 cur = body;
             }
-            // 值 = λ 参数链 → ((Prim 名 p1) p2 …)：实参经 App 显式应用而非
-            // env 隐式收集——`Tm::Prim` 从此是零元卡住头，quote → eval
-            // 往返在任意 env 下 spine 保真（参考版 add_builtin 同步修改）
-            let n = names.len() as u32;
             let mut val: &'a Tm<'a> = bump.alloc(Tm::Prim(bump.alloc_str(name)));
-            for k in 0..n {
-                val = bump.alloc(Tm::App(
-                    val,
-                    bump.alloc(Tm::Var(n - 1 - k)),
-                    Icit::Expl,
-                ));
-            }
             for p in names.iter().rev() {
                 val = bump.alloc(Tm::Lam(bump.alloc_str(p), Icit::Expl, val));
             }

@@ -7,7 +7,6 @@ use super::{
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
     pattern_match::Compiler,
-    pretty::pretty_tm,
 };
 impl Infer {
     fn insert_go(&mut self, cxt: &Cxt, t: Tm, va: Val) -> Result<(Tm, Val), Error> {
@@ -153,13 +152,7 @@ impl Infer {
                     match self.force(cxt.decl(), va) {
                         // force 已展开已解 meta；留下的 Flex 必是未解 → 放行
                         Val::U | Val::Flex(_, _) => Ok(()),
-                        // 走 pretty（而非 Val 的 Debug 转储——大值树会印出
-                        // 巨量结构且不可读）；前缀 "expected universe" 被
-                        // blackbox v3 钉住，尾部文案自由
-                        other => Err(Error(format!(
-                            "expected universe, got {}",
-                            pretty_tm(0, cxt.names(), &self.quote(cxt.decl(), cxt.lvl, other))
-                        ))),
+                        other => Err(Error(format!("expected universe, got {:?}", other))),
                     }
                 } else {
                     Ok(()) // 未知名：主检查报 name-not-in-scope（原路径）

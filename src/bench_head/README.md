@@ -297,7 +297,6 @@ solve / intersect）。在此之上：
 | **黑盒三轮（2026-09）**：多隐式参数 enum 的无标注域洞在第 2+ 个参数处成为带 pruning 的部分应用 meta（`?m A`），构造子上显式供给枚举隐式实参（`P1[Nat][Bool]`）需解 `?m A := U`，invert 无法倒序 Decl 头 spine → 误报 can't unify | enum 声明处把无标注隐式参数的域**钉为 U**（方括号参数在语言定义上就是类型参数，任意类型的索引留给圆括号；显式标注 `[A : Nat]` 与显式索引不动）。参考版 + 孪生版同步；def 的隐式参数不限于类型，不受此修复影响（域洞保留，显式供参本就可用） |
 | **连贯性评审（2026-09）**：三处 L08 侧修复的 L07 同码位点回合——①投影限定构造子快捷路径尊重局部遮蔽（L08 b66f5e4，遮蔽时走投影而非静默解析全局构造子）；②enum case 分隔放宽为 `EndLine+`（case 间注释行/空行合法，同 match 臂）；③unify 的 Π 臂 quote 改用当前层级 `l`（η descent 后 `l == cxt.lvl` 不变式已破，L08 §5 同款） | ①参考版 `elaboration.rs` `Raw::Obj` 臂 + 孪生同位（消融口径同步）；②`parser/mod.rs` `p_enum`；③参考版 `unification.rs`（孪版 Pi 臂不 quote 域值，无此路径）。回归：`l07_blackbox_v3` §H |
 | **显式替换重构（2026-09，dpm-nbe 对齐）**：`pm_defs` 事实表 + `pm_solvable` 全局旁路作为精化载体，`pm_def` 读点 O(n) 反序扫、回滚靠长度截断、可解性与合一器经 Infer 全局状态耦合 | `Subst`（持久化单链，extend O(1)）+ `Val::VSub` 包裹 + `force` 的 frcs 臂；可解性经 `SpecSolve` 穿参（方程两侧在入口置于 acc 之下）；臂边界回滚 = Rc 指针赋值。机制、槽位纪律（spine 只包裹不物化）与多轮评审记录见 `docs/l07-dpm-refactor-design.md`。本表前各行所述的"事实表"载体自本轮起改为显式替换，行为语义不变（全套测试逐字节保持） |
-| **代码评审轮（2026-09-17）**：①孪生 `vapp1` 的 VSub→闭包路径用调用方的 work/vals 重入 `eval_iter`，入口 clear 静默截断外层在飞的求值任务（match 臂内对 let 绑定 λ 做多参应用 + 结果进注解即触发，**ref Ok / twin Err 判定分裂**，现有 65 个 parity 用例零命中）；②参考版 frcs 的"头不可应用"守卫不含 λ，与孪生 `vapp_ok`（Clo tag 放行）分裂；③文件族 IO 失败直接 panic（源码可达）；④参考版 `eval(Tm::Prim)` 从现场 env 收集实参 spine——只在 builtin λ 链体的正典路径下正确，quoted Prim 在其它 env 下重求值会捕获无关槽；⑤孪生 Match/Match 的结构预检整体前置，Err 路径上 scrutinee 合一的 meta 副作用被吞；⑥探测不独立充值燃料，多构造子枚举逐 ctor 探测互相挤占 | ①VSub→闭包 β 改用本次私有草稿栈（`force` 同款纪律；回归钉 `parity_vsub_slot_applied_closure_workbuf`）；②frcs 读点放行 `Val::Lam`（只改 frcs，η 臂共用的 `v_applicable` 语义不变）；③四个文件臂改卡住降级（双版同步，v2 三个 panic 契约改写为 `v2_file_*_stuck_not_panic`）；④`Tm::Prim` 改零元卡住头、builtin 值体与 quote 产物一律经 App 应用实参（双版同步）；⑤改为 `MatchPrecheck` / `MatchPendingLen` / `MatchPending` 三个屏障任务，与参考版逐点交错（scrutinee → 分支数 → 逐分支模式+体 → pending 长度 → 逐 pending icit+值）；⑥`probe_accessible` 入口充值（双版同点） |
 
 ## 7. 已知限制（诚实清单）
 
@@ -307,14 +306,12 @@ solve / intersect）。在此之上：
    与旧版同级。
 2. **force 无记忆 + fuel 预算是软防护**：`force(Val::Match)` 的重选与
    def 展开不做缓存；精化读点（lookup 命中）与各展开臂消耗共享 fuel
-   池（4096，外层入口充值；**可达性探测每个 ctor 独立充值**——2026-09-17
-   起，多构造子枚举的逐 ctor 探测不互相挤占，见 §6 评审轮行）。
-   fuel 耗尽时精化读点**按未解处理**——极深嵌套模式负载下可能把合法
-   分支误判为不可达（假 absurd），这是有界降级而非纯显示问题：燃烧
-   剖面已对齐旧 pm_defs（旧版 d=2000 / 新版 d=400+ 同池均安全，
-   `test_deep_pattern_fuel_budget_regression` 钉住边界），特化方程路径
-   的失败文案带 `(fuel exhausted)` 尾注供诊断。更深的负载需加大
-   `UNIFY_FUEL`。
+   池（4096，外层入口充值）。fuel 耗尽时精化读点**按未解处理**——
+   极深嵌套模式负载下可能把合法分支误判为不可达（假 absurd），这是
+   有界降级而非纯显示问题：燃烧剖面已对齐旧 pm_defs（旧版 d=2000 /
+   新版 d=400+ 同池均安全，`test_deep_pattern_fuel_budget_regression`
+   钉住边界），特化方程路径的失败文案带 `(fuel exhausted)` 尾注供
+   诊断。更深的负载需加大 `UNIFY_FUEL`。
 3. **没有 K 公理层面的安全保护**：精化一个出现在其它假设里的变量在
    完整依赖理论里需要 `--without-K` 级论证，本层与 L07a 相同，是教学取舍。
 4. **probe 与臂内方程理论上可能不同步**：两者跑同一套代码，但探测用
@@ -325,21 +322,10 @@ solve / intersect）。在此之上：
    （quote 对 Flex 产 `Meta` + 实参链，不产 `AppPruning`），该分支仅作
    不 panic 的兜底，渲染差异不可达；`go_ix` 越界退化 `@{ix}`（与 L06 的
    固定文案不同，语义同为不崩）。
-6. **深值上的原生递归吃栈（双版同形，非燃料可防）**：`val_mentions_lvl` /
-   `struct_eq::val_eq` / 孪生 `struct_val_eq_go`、`rename` 的 Sum/SumCase/
-   Match 臂等按**值深度**递归；`succ^N zero` 型深值可由 eval 不烧 fuel
-   地构造（def 倍增链），之后 occurs 守卫或合一快路径在 ~万级深度会爆栈。
-   两侧测试都在 64–512 MB 栈线程里跑，`run` 目前只被 bench/tests 驱动
-   （未接 LSP）；接入常规栈线程（1–8 MB）前需迭代化或定深拒绝。
-7. **孪生 σ 的跨轮内存不回收**：bump `reset()` 不跑 `Drop`，arena 内
-   `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不递减（无 UB——reset 后
-   无人再读、链无环；`Compiler.sub` 本体正常释放，残留的是 arena 内的
-   克隆）。长生命周期 Machine 下是无上界慢泄漏；LSP 式复用前需评估
-   量级（或给 `wrap_sub` 加回收登记，代价在热路径上，未做）。
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（45 个测试，64 MB 栈线程）：
+`cargo test --lib L07_sum_type`（44 个测试，64 MB 栈线程）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心（cong / symm / trans / rfl）/ Church 编码与字符串；
@@ -363,21 +349,18 @@ solve / intersect）。在此之上：
 黑盒与双 oracle：`cargo test --test l07_blackbox`（49 个：48 可跑 +
 1 个 `--ignored` 深度探针，参考版唯一入口 `run`）；`cargo test --test
 l07_blackbox_v2`（53 个：51 可跑 + 2 个 `--ignored` 格式探针，二轮攻击面：
-builtin 全量扫描含文件 IO 卡住降级契约（IO 失败不 panic，与实参非
-字面量同口径；2026-09-17 评审轮落地）/ enum 冷僻特性（重名、显式参数、
+builtin 全量扫描含文件 IO panic 契约 / enum 冷僻特性（重名、显式参数、
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（92 个：91 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
+l07_blackbox_v3`（86 个：85 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
 遮蔽臂不查体）/ unification 边界（rigid 头不同、spine 长度不齐、自引用
 占位 Decl、flex-flex、卡住投影不证等）/ 性能悬崖表征（深嵌套模式、
 多 pending 卡住 match，带超时防护）/ 解析残缺（截断不 panic、match
 位置精确刻画、CRLF、非 ASCII）；§6 三轮修复的回归在此）；`cargo test --test
-l07_fast_parity`（66 个：run vs run_fast 逐字节互检，见 §10；含
-2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf` 等工作区
-回归钉）。
+l07_fast_parity`（run vs run_fast 逐字节互检，见 §10）。
 
 ## 9. 参考资料
 
@@ -426,18 +409,11 @@ L06 的冠军配方（bump arena + 打包值 tag 编码 + 迭代内核 + 记忆�
   重求值再导出（与参考版 `simpl_decl` 逐点对应）、struct_eq 快路径
   （bump 版 budget 结构比较，VSub 对仅同 Rc 实例短路）、Compiler（模式
   编译 + 特化合一）全套；
-- **decl 表平铺化**：参考版 `Cxt::decl_insert` 是 `Rc` 写时复制（条目按
-  `Rc<DeclEntry>` 共享：整表克隆 = 重建哈希桶 + 逐条 Rc 递增，O(n)/次但
-  每条的常数是引用计数而非值深拷贝——`Val` 深拷贝对 `Lam`/`Pi` 是整棵
-  `Box<Tm>` 闭包树、对 `LiteralIntro` 是 String 分配，那才是主项）；
-  快版用 `Rc<RefCell<FxHashMap>>` 平铺覆盖——顶层 elaboration 的插入全部
-  单调（占位 → 同名覆盖为终值），语义等价且 O(1)/次（Ref 带 Drop 在作用域
-  尾释放，借用按块化纪律组织）。两版都保留写时复制/覆盖的**语义**差别：
-  参考版克隆出的父上下文看不到占位，快版因父上下文在体检查期间不被读而
-  等效（`tests/l07_fast_parity.rs` 是这条的 oracle）。
-  首版写时复制（值深拷贝）实测 strchain k=12 慢 70×，平铺后与 L06 同阶；
-  参考版条目 Rc 化（2026-09-17）后 k=11 strchain basic 2120 → 124 ms
-  （重构前 1902 ms 的 1/15），见 `docs/perf-l07-2026-09-17.md`。
+- **decl 表平铺化**：参考版 `Cxt::decl_insert` 是 `Rc` 写时复制（整表
+  克隆 O(n)/次 → def 链 O(n²)）；快版用 `Rc<RefCell<FxHashMap>>` 平铺
+  覆盖——顶层 elaboration 的插入全部单调（占位 → 同名覆盖为终值），
+  语义等价且 O(1)/次（Ref 带 Drop 在作用域尾释放，借用按块化纪律组织）。
+  首版写时复制实测 strchain k=12 慢 70×，平铺后与 L06 同阶。
 
 ### 双 oracle
 
@@ -453,27 +429,22 @@ match + 字符串/文件 IO/可变全局）、tests.rs 全部用例源码、Err 
 cargo run --release --bin l07bench -- --workload all --max-k 13
 ```
 
-实测（Windows 10，release，rounds=5 取 min；2026-09-17 复测，含参考版
-decl 条目 Rc 化）：
+实测（Windows 10，release，rounds=3 取 min；CLI 默认 rounds=5）：
 
 ```text
 == workload: church ==（check + nf）
-k=12  n=8192    fast_ss=0.610ms      basic=9.111ms      (≈15×)
-== workload: strchain ==（每层 prim 触发）
-k=11  n=4096    fast_ss=4.632ms      basic=124.071ms    (≈27×)
-k=12  n=8192    fast_ss=8.987ms      （basic 未跑满）
+k=12  n=8192    fast=0.726ms         basic=9.884ms      (≈14×)
+== workload: strchain ==（每层 prim 触发；basic 二次方）
+k=11  n=4096    fast=5.975ms*        basic=2488.8ms     (≈400×)
+k=12  n=8192    fast=11.841ms*       （basic O(n²) 未跑满）
 == workload: global ==（可变全局 + 重入 prim）
-k=11  n=4096    fast_ss=7.592ms      basic=138.073ms    (≈18×)
-k=12  n=8192    fast_ss=16.327ms
+k=11  n=4096    fast=9.894ms*        basic=508.2ms      (≈51×)
+k=12  n=8192    fast=20.456ms*
 == workload: match ==（L07 特色：自递归依赖 match def 链）
-k=13  n=16384   fast_ss=0.053ms      basic=0.177ms      (≈3×)
+k=13  n=16384   fast=0.060ms*        basic=0.533ms      (≈9×)
 == workload: enum ==（L07 特色：GADT + 投影 + 索引等式）
-                fast_ss=0.069ms      basic=0.341ms      (≈5×)
+                 fast=0.086ms*        basic=0.737ms      (≈9×)
 ```
-
-注：`strchain`/`global`/`natadd` 仍是超线性（值本身就是逐层变长的字符串，
-`string_concat` 复制 O(n) 字节 → 总量 O(n²) 字节），孪生版同样如此；参考版
-与孪生的差距已从"decl 表值深拷贝"缩小到常数因子。
 
 ### 已知偏差（与参考版）
 

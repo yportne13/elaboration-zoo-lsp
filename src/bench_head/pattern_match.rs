@@ -192,10 +192,6 @@ impl Compiler {
             Some(e) => e,
             None => return false,
         };
-        // 每个探测独立充值：多构造子枚举的逐 ctor 探测不互相挤占共享池
-        // （探测本身回滚，只有燃料单向消耗——前置时深负载下后探的 ctor
-        // 会假 absurd，与臂内方程的判定不同步）。孪生版同点充值。
-        infer.meta_refuel();
         let snap = infer.meta_snapshot();
         let decl = cxt.decl().clone();
         let mut solvable = base_solvable.to_vec();

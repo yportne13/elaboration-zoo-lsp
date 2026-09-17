@@ -26,6 +26,13 @@ pub enum ErrMsg {
     Custom(String),
 }
 
+fn extract_base(m: ErrMsg) -> ErrMsg {
+    match m {
+        ErrMsg::Base(b) => ErrMsg::Base(b),
+        ErrMsg::Custom(_) => m,
+    }
+}
+
 use std::fmt;
 
 impl fmt::Display for BaseMsg {
@@ -130,25 +137,25 @@ pub fn parser(input: &str, id: u32) -> Result<Vec<Decl>, String> {
 }
 
 macro_rules! T {
-    [def] => { $crate::L07_sum_type::parser::TokenKind::DefKeyword };
-    [let] => { $crate::L07_sum_type::parser::TokenKind::LetKeyword };
-    [U] => { $crate::L07_sum_type::parser::TokenKind::UKeyword };
-    [_] => { $crate::L07_sum_type::parser::TokenKind::Hole };
-    ['('] => { $crate::L07_sum_type::parser::TokenKind::LParen };
-    [')'] => { $crate::L07_sum_type::parser::TokenKind::RParen };
-    ['['] => { $crate::L07_sum_type::parser::TokenKind::LSquare };
-    [']'] => { $crate::L07_sum_type::parser::TokenKind::RSquare };
-    ['{'] => { $crate::L07_sum_type::parser::TokenKind::LCurly };
-    ['}'] => { $crate::L07_sum_type::parser::TokenKind::RCurly };
-    [.] => { $crate::L07_sum_type::parser::TokenKind::Dot };
-    [,] => { $crate::L07_sum_type::parser::TokenKind::Comma };
-    [=] => { $crate::L07_sum_type::parser::TokenKind::Eq };
-    [;] => { $crate::L07_sum_type::parser::TokenKind::Semi };
-    [:] => { $crate::L07_sum_type::parser::TokenKind::Colon };
-    [->] => { $crate::L07_sum_type::parser::TokenKind::Arrow };
-    [=>] => { $crate::L07_sum_type::parser::TokenKind::DoubleArrow };
-    ['\\'] => { $crate::L07_sum_type::parser::TokenKind::Lambda };
-    [:=] => { $crate::L07_sum_type::parser::TokenKind::AssignEq };
+    [def] => { $crate::L07_pre::parser::TokenKind::DefKeyword };
+    [let] => { $crate::L07_pre::parser::TokenKind::LetKeyword };
+    [U] => { $crate::L07_pre::parser::TokenKind::UKeyword };
+    [_] => { $crate::L07_pre::parser::TokenKind::Hole };
+    ['('] => { $crate::L07_pre::parser::TokenKind::LParen };
+    [')'] => { $crate::L07_pre::parser::TokenKind::RParen };
+    ['['] => { $crate::L07_pre::parser::TokenKind::LSquare };
+    [']'] => { $crate::L07_pre::parser::TokenKind::RSquare };
+    ['{'] => { $crate::L07_pre::parser::TokenKind::LCurly };
+    ['}'] => { $crate::L07_pre::parser::TokenKind::RCurly };
+    [.] => { $crate::L07_pre::parser::TokenKind::Dot };
+    [,] => { $crate::L07_pre::parser::TokenKind::Comma };
+    [=] => { $crate::L07_pre::parser::TokenKind::Eq };
+    [;] => { $crate::L07_pre::parser::TokenKind::Semi };
+    [:] => { $crate::L07_pre::parser::TokenKind::Colon };
+    [->] => { $crate::L07_pre::parser::TokenKind::Arrow };
+    [=>] => { $crate::L07_pre::parser::TokenKind::DoubleArrow };
+    ['\\'] => { $crate::L07_pre::parser::TokenKind::Lambda };
+    [:=] => { $crate::L07_pre::parser::TokenKind::AssignEq };
 }
 
 fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, MacroState, IError> {
@@ -489,8 +496,11 @@ fn p_enum<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
 }
 
 fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Decl> {
-    // 错误原样透传：外层按契约折叠为整体 `parse error`（Custom 文案不外泄）
-    p_def.or(p_print).or(p_enum).parse(input, state)
+    p_def.or(p_print).or(p_enum)
+        .parse(input, state)
+        .map_err(|e| IError {
+            msg: e.msg.map(extract_base)
+        })
 }
 
 #[test]

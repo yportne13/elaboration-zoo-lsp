@@ -14,7 +14,11 @@ use super::{
 ///
 /// 顶层定义（def / enum / 构造子）都登记在这里；项层引用用 `Tm::Decl(名字)`，
 /// 求值时查表取缓存的 WHNF。递归通过"先插入指向自身的占位值、检查完再覆盖"实现。
-pub type Decls = HashMap<SmolStr, DeclEntry>;
+///
+/// 条目按 `Rc` 共享（与 L07 同款）：`decl_insert` 的写时复制只需重建哈希桶 +
+/// 逐条 Rc 递增，不再深拷贝 `DeclEntry` 里的值（`Val` 的 clone 对 `Lam`/`Pi`
+/// 是整棵 `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。
+pub type Decls = HashMap<SmolStr, Rc<DeclEntry>>;
 
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
@@ -182,14 +186,15 @@ impl Cxt {
     }
 
     pub fn decl_get(&self, k: &str) -> Option<&DeclEntry> {
-        self.decl.get(k)
+        self.decl.get(k).map(|e| &**e)
     }
 
     /// 写入一个 decl。写时复制：Rc 共享时才克隆整表，父上下文不受影响——
-    /// 这正是递归定义需要的"占位只对本定义的检查可见"。
+    /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
+    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。
     pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
         let mut decl = self.decl.clone();
-        Rc::make_mut(&mut decl).insert(k.into(), e);
+        Rc::make_mut(&mut decl).insert(k.into(), Rc::new(e));
         Cxt {
             decl,
             env: self.env.clone(),

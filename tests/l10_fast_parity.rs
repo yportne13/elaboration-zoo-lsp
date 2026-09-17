@@ -976,3 +976,42 @@ fn parity_enum_struct_impl_hole_pinned_u0() {
     }
 
 }
+
+// 本层归属探针的回流（2026-09 跨章节用例清点）
+// --------------------------------------------------------------------------------
+
+/// trait 求解失败必须走**可恢复 Err**，不得 panic。本层是 trait/typeclass
+/// 的归属章节（`solve_multi_trait` 的定义处），`elaboration.rs` 的 Def 臂
+/// 也已写成 `.map_err(..)?`（该处注释即写明「L11 同款口径；unwrap 会让
+/// "无实例类型类调用形态" 直接 panic 而不是给诊断」），但**本套件此前没有
+/// 钉子**——探针只存在于 `tests/l11_fast_parity.rs` / `tests/l12_fast_parity.rs`。
+/// 现回流到本层，形态与 L11 同款；L11/L12 的副本继续钉各自那份代码。
+///
+/// 源改写（L11 → L10）：L11 用整数字面量 `bar 1`，而 L10 的 `Num` 词法只被
+/// `Type N` 规则消费、尚无项级整数字面量，故改用具名 `Nat` 值 `zero`——
+/// 求解失败（无 `Foo[Nat]` 实例）与 `.unwrap()` 恢复点完全同路径。
+#[test]
+fn probe_solve_multi_trait_recoverable() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+trait Foo[T] {
+    def foo(x: T): String
+}
+
+def bar[T][f: Foo[T]](x: T): String = f.foo x
+
+def baz = bar zero
+"#;
+    let b = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_basic(src)));
+    let f = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_fast(src)));
+    assert!(b.is_ok(), "参考版 trait 求解失败不应 panic");
+    assert!(f.is_ok(), "快版 trait 求解失败不应 panic");
+    assert!(
+        b.unwrap().is_err() && f.unwrap().is_err(),
+        "两版都应给可恢复 Err"
+    );
+}
