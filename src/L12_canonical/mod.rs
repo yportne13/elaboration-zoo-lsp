@@ -1100,6 +1100,18 @@ impl Infer {
                         (p, body_tm)
                     })
                     .collect();*/
+                // 中性 decl 表只依赖 decl，与分支无关——提到分支循环外
+                // （对齐 L07/L08 `simpl_decl` 的位置），避免 #分支 × |decls|
+                // 次全表重建。
+                let declb = decl.iter()
+                    .map(|x| (x.0.clone(), (
+                        x.1.0,
+                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                        x.1.3.clone(),
+                        x.1.4.clone(),
+                    )))
+                    .collect();
                 let tm_cases = cases
                     .iter()
                     .map(|x| (
@@ -1107,15 +1119,6 @@ impl Infer {
                         {
                             let env = (0..x.0.bind_count())
                                 .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
-                            let declb = decl.iter()
-                                .map(|x| (x.0.clone(), (
-                                    x.1.0,
-                                    Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                                    Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                                    x.1.3.clone(),
-                                    x.1.4.clone(),
-                                )))
-                                .collect();
                             let tm = self.eval(&declb, &env, &x.1);
                             self.quote(decl, l+x.0.bind_count(), &tm)
                         }

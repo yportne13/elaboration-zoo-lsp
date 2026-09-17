@@ -14,7 +14,11 @@ pub struct Cxt {
     pub locals: Locals,
     pub pruning: Pruning,
     pub src_names: BiMap<SmolStr, Lvl, (Span<()>, Rc<VTy>)>,
-    pub decl: HashMap<SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>)>,
+    /// 全局 decl 表，按 `Rc` 共享（对齐 L13 与 L07/L11 口径）：`Cxt` 的每次
+    /// 构造（bind / define / new_binder / subst_cxt …）只需递增引用计数，
+    /// 不再克隆整张表。写入仍走写时复制（`fake_bind` / `decl` 里的
+    /// `Rc::make_mut`），占位语义不变。
+    pub decl: Rc<Decl>,
     pub namespace: List<(Rc<Val>, HashSet<SmolStr>, Raw)>,
 }
 
@@ -199,7 +203,7 @@ impl Cxt {
             locals: Locals::Here,
             pruning: List::new(),
             src_names: BiMap::new(),
-            decl: HashMap::new(),
+            decl: Rc::new(HashMap::new()),
             namespace: List::new(),
         }
     }
@@ -244,7 +248,7 @@ impl Cxt {
     pub fn fake_bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
         let mut decl = self.decl.clone();
-        let t = decl.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
+        let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a));
         if t.is_some() {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
@@ -290,7 +294,7 @@ impl Cxt {
     pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Result<Self, Error> {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut decl = self.decl.clone();
-        let t = decl.insert(x.data.clone(), (x.to_span(), t, vt, a, va));
+        let t = Rc::make_mut(&mut decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va));
         /*if let Some((span, _, _, _, _)) = t {
             return Err(Error(span.map(|_| format!("redefine {}", x.data))));
         }*/

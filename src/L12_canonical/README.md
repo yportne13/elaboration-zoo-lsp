@@ -33,5 +33,9 @@ trait 求解器 Val 级重写（`typeclass.rs` 移除 `Typ` 桥接）+ `Val::Cal
   不免比，由 (Obj, Obj) 合同臂接管判定。
 - **`declb_of` 无缓存 / 参考版 `no_metas` 为 quote 版**：同 L11
   （见 L11 README；L13 同源机制 71e11ae / 指针键缓存未下沉的论证一致）。
+- **参考版 `Cxt.decl` 按 `Rc` 共享**（2026-09-17，同 L11 口径）：此前按值
+  持有 `HashMap`，每次 `Cxt` 构造克隆整表。`struct` 负载 k=11
+  3397→530 ms、`macro` 2731→801 ms（3.4–6.4×），写时复制语义不变。残留
+  （插入路径的整表克隆）见 `docs/perf-l08l13-followup-2026-09-17.md` §3.4。
 - **宏展开深度守卫 `MAX_MACRO_EXPANSION_DEPTH = 256`**（f51a0e4，
   `parser/mod.rs:136`）。

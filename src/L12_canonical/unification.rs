@@ -168,7 +168,7 @@ impl Infer {
         let prune_ty = self.prune_ty(decl, &pruning, &mty)?;
         let prunedty = self.eval(decl, &List::new(), &prune_ty);
         let mut empty_cxt = Cxt::empty();
-        empty_cxt.decl = decl.clone();
+        empty_cxt.decl = Rc::new(decl.clone());
         let m_prime = MetaVar(self.new_meta(prunedty, empty_cxt, origin_ty));
 
         let solution = self.eval(
@@ -355,6 +355,17 @@ impl Infer {
             }
             Val::Match(val, env, cases, _) => {
                 let val = self.rename(decl, pren, val)?;
+                // 中性 decl 表只依赖 decl，与分支无关——提到分支循环外
+                // （对齐 L07/L08 `simpl_decl` 的位置）。
+                let declb = decl.iter()
+                    .map(|x| (x.0.clone(), (
+                        x.1.0,
+                        Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
+                        Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
+                        x.1.3.clone(),
+                        x.1.4.clone(),
+                    )))
+                    .collect();
                 let cases = cases
                     .iter()
                     .map(|(pat, tm)| {
@@ -363,15 +374,6 @@ impl Infer {
                                 env.prepend(Val::vvar(pren.cod).into()),
                                 lift(&pren),
                             ));
-                        let declb = decl.iter()
-                            .map(|x| (x.0.clone(), (
-                                x.1.0,
-                                Tm::Decl(x.1.0.map(|_| x.0.clone())).into(),
-                                Val::Decl(x.1.0.map(|_| x.0.clone()), List::new()).into(),
-                                x.1.3.clone(),
-                                x.1.4.clone(),
-                            )))
-                            .collect();
                         let body = self.rename(
                             decl,
                             &pren,

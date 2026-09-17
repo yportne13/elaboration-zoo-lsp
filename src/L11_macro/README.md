@@ -20,7 +20,17 @@
 - **`declb_of` 每次整表重建、无缓存**：L13 twin（`bump_spine_iter.rs:3226`）
   同构；指针键缓存可行（`Decls` 是 Rc 地址稳定）但与快版 bump 每轮
   `reset()` 的生命周期耦合（缓存持有 bump 指针），热点仅定理证明负载，
-  2026-09 评审判定暂不做（a5-r1 §5）。
+  2026-09 评审判定暂不做（a5-r1 §5）。参考版侧的同类重建（quote/rename
+  的 Match 臂）2026-09-17 已提到分支循环外，实测无差别（命中路径的 decl
+  数只有十位量级），作一致性清理。
+- **参考版 `Cxt.decl` 按 `Rc` 共享**（2026-09-17）：此前是按值持有
+  `HashMap`，`bind`/`define`/`new_binder`/`subst_cxt` 等每次构造 `Cxt` 都
+  克隆整表——`struct` 负载 k=11 单 run 实测约 7 万次整表克隆、1.04 亿次
+  条目拷贝（键是 `String`，每次一次堆分配）。改 `Rc<Decl>` 后 `struct`
+  2952→846 ms、`macro` 2696→842 ms（3.2–3.5×），写时复制语义不变
+  （插入仍走 `Rc::make_mut`）。插入路径的整表克隆残留（O(n²)）与键类型
+  `String`（L12/L13 已是 `SmolStr`）未动，见
+  `docs/perf-l08l13-followup-2026-09-17.md` §3.4。
 - **参考版 `no_metas` 为 quote 版**（已解 meta quote 后续查、无 visited
   set）：L13 的值图遍历 + 指针去重（71e11ae，`mod.rs:519-565`）未下沉；
   触发类（模块/bundle 链巨型解图）为 L13-only，本层无已知触发例。
