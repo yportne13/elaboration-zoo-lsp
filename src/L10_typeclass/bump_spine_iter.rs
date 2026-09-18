@@ -54,8 +54,9 @@
 //!   重求值 + 名字表/轨迹双撤销）已整体删除（值过期/槽位错位 bug 族的
 //!   载体）。`subst_cxt` 包 env 槽 + `names.by_lvl` 影子索引 + `types` 链，
 //!   布局（槽位 = 运行时布局）不变。模式编译器（Compiler）逐句移植参考版
-//!   pattern_match.rs：决策树、PatConstructor、filter_accessible_constrs 的
-//!   temp-infer 克隆探测（快版 = metas 快照换入换出）、checked_ret 备忘，
+//!   pattern_match.rs：逐臂下钻（walk_pat / check_pm_final）、可达性探测 =
+//!   值级 `probe_accessible`（`resolve_name` 取构造子类型 + Π 链实例化 +
+//!   索引方程，快版 = metas/unsolved 两表快照换入换出）、checked_ret 备忘，
 //!   叶处 `subst_cxt` 后检查分支体。
 //! - **unify 无燃料、无 pm 臂、无 (Obj,Obj)/宽松臂**：臂序 = U/Pi/Rigid/
 //!   Flex/Flex/Lam/η/Flex 求解/LiteralType 宽松/Sum/SumCase/Match；
@@ -6348,6 +6349,26 @@ impl Machine {
         r
     }
 
+    /// 名字 → (Tm::Var 的索引, 类型值)：局部 names 优先，之后回落 Machine 的
+    /// 全局名字表（参考版 Raw::Var 臂同款解析序）。可达性探测只要类型值，
+    /// 与 `infer_expr_inner` 的 Var 臂共用本函数，避免两处解析漂移。
+    #[inline]
+    fn resolve_name(&self, cxt: &Cxt<'_>, x: &str) -> Option<(u32, V)> {
+        let (blvl, ty) = if let Some(&blvl) = cxt.names.by_name.get(x) {
+            (blvl, *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级"))
+        } else if let Some(&(blvl, ty)) = self.global_names.get(x) {
+            (blvl, ty)
+        } else {
+            return None;
+        };
+        let ix = if blvl >= GLOBAL_BASE {
+            blvl
+        } else {
+            cxt.lvl - blvl - 1
+        };
+        Some((ix, ty))
+    }
+
     fn infer_expr_inner<'a>(
         &mut self,
         bump: &'a Bump,
@@ -6358,26 +6379,10 @@ impl Machine {
             // 变量：局部 names（当前 def 的 binder + fake 占位，覆盖全局）
             // 优先，之后回落 Machine 的全局名字表（顶层 define）。都缺即
             // not in scope（参考版 Raw::Var 臂同款）。
-            Raw::Var(x) => {
-                if let Some(&blvl) = cxt.names.by_name.get(x.data.as_str()) {
-                    let ty = *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级");
-                    let ix = if blvl >= GLOBAL_BASE {
-                        blvl
-                    } else {
-                        cxt.lvl - blvl - 1
-                    };
-                    return Ok((bump.alloc(Tm::Var(ix)), ty));
-                }
-                if let Some(&(blvl, ty)) = self.global_names.get(x.data.as_str()) {
-                    let ix = if blvl >= GLOBAL_BASE {
-                        blvl
-                    } else {
-                        cxt.lvl - blvl - 1
-                    };
-                    return Ok((bump.alloc(Tm::Var(ix)), ty));
-                }
-                Err(Error(x.clone().map(|x| format!("error name not in scope: {}", x))))
-            }
+            Raw::Var(x) => match self.resolve_name(cxt, x.data.as_str()) {
+                Some((ix, ty)) => Ok((bump.alloc(Tm::Var(ix)), ty)),
+                None => Err(Error(x.clone().map(|x| format!("error name not in scope: {}", x)))),
+            },
 
             Raw::Obj(x, t) => {
                 // `Point.mk` 限定构造子引用：改写成 Var("Point.mk")（src_names
@@ -7219,80 +7224,99 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn filter_accessible_constrs(
-        &mut self,
+    /// 构造子可达性探测（值级，L07 孪生 `probe_accessible` 口径）：L10 的全局
+    /// 表按**层级**存（无名字键的 decl 表），构造子类型走 `resolve_name` 的
+    /// 名字 → 类型值表——与 `infer_expr(Var(名))` 的 Var 臂同一次查找，不再走
+    /// 整条推断。Π 链上枚举隐式参数用头部 Sum 的实参实例化，其余绑定器用超出
+    /// 上下文的 scratch 层 fresh rigid（同为刚性，可被方程解出；探测状态全在
+    /// 本地，弃掉即回滚），返回类型再与头部类型跑一次索引方程。成功 = 该构造
+    /// 子可能出现在头部类型的值里；结构冲突（`Vec[A] zero` 上不可能有
+    /// `cons`）= absurd。
+    fn probe_accessible(
         mach: &mut Machine,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
-        typ: V, // 被匹配项的具体类型，如 `Vec (Succ n)` 的 Val
-        all_constrs: &[crate::parser_lib::Span<String>],
-    ) -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
-        self.filter_accessible_constrs_inner(mach, bump, cxt, typ, all_constrs)
+        head_sum: V,
+        ctor: &str,
+    ) -> bool {
+        let (sum_name, head_params, impl_vals) = match v_xcell_of(head_sum) {
+            XCell::Sum { name, params, .. } => (
+                *name,
+                params.iter().map(|p| p.val).collect::<Vec<_>>(),
+                params
+                    .iter()
+                    .filter(|p| p.icit == Icit::Impl)
+                    .map(|p| p.val)
+                    .collect::<Vec<_>>(),
+            ),
+            _ => return false,
+        };
+        let entry_ty = match mach.resolve_name(cxt, ctor) {
+            Some((_, ty)) => ty,
+            None => return false,
+        };
+        // 每个探测独立充值（参考版 probe_accessible 同点）：多构造子枚举
+        // 的逐 ctor 探测不互相挤占共享池，避免后探的 ctor 假 absurd。
+        refuel();
+        let metas = mach.metas.clone();
+        // L10 的 `unsolved` worklist 与 metas 表严格同步（探测期 push/Solved
+        // 摘除照常入出表），回滚两表同换——只换 metas 会留下悬空下标。
+        let unsolved = mach.unsolved.clone();
+        let mut ty = entry_ty;
+        let mut impl_idx = 0;
+        let mut scratch = 0u32;
+        let ok = loop {
+            let tyf = mach.force_v(bump, ty);
+            if v_tag(tyf) != 4 {
+                break Self::unify_indices(mach, bump, cxt, sum_name, &head_params, tyf);
+            }
+            let p = v_pi_of(tyf);
+            let u = if impl_idx < impl_vals.len() {
+                let v = impl_vals[impl_idx];
+                impl_idx += 1;
+                v
+            } else {
+                let l = cxt.lvl + scratch;
+                scratch += 1;
+                v_lvl(l)
+            };
+            let env = env_ext(bump, p.env, u);
+            ty = mach.eval(bump, env, p.body);
+        };
+        mach.metas = metas;
+        mach.unsolved = unsolved;
+        ok
     }
 
-    fn filter_accessible_constrs_inner(
-        &mut self,
+    /// 索引方程：头部 Sum 的参数（含索引）与构造子返回 Sum 的参数逐槽特化
+    /// 合一，**头部一侧在前**——两侧都是可解变量时解的方向是"头部变量 :=
+    /// 构造子侧值"（与上下文顺序一致）。解只累积进探测私有的 σ，弃掉即回滚。
+    fn unify_indices(
         mach: &mut Machine,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
-        typ: V,
-        all_constrs: &[crate::parser_lib::Span<String>],
-    ) -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
-        let mut accessible = Vec::new();
-
-        let forced_type = mach.force_v(bump, typ);
-        if !(v_tag(forced_type) == 7 && matches!(v_xcell_of(forced_type), XCell::Sum { .. })) {
-            // 非和类型：所有构造子按"可达"处理（参考版同款退路）
-            for constr_def in all_constrs {
-                accessible.push(constr_def.clone());
-            }
-            return Ok(accessible);
+        sum_name: &'a str,
+        head_params: &[V],
+        ret_ty: V,
+    ) -> bool {
+        let ret_sum = mach.force_v(bump, ret_ty);
+        let rp = match v_xcell_of(ret_sum) {
+            XCell::Sum { name, params, .. } if *name == sum_name => params,
+            _ => return false,
+        };
+        if head_params.len() != rp.len() {
+            return false;
         }
-
-        // 逐构造子可达性探测是**纯探测**：infer_expr（逐层 Pi 强制）与 check_pm
-        // 都可能分配 fresh meta 并解掉已有 meta，探测期状态无需存活（本函数只带出
-        // 可达构造子**名字列表**）。统一走 `run_pure_probe` 入口做快照/回滚。
-        mach.run_pure_probe(|mach| -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
-            let mut accessible = Vec::new();
-            for constr_name in all_constrs {
-                // 1. 为构造子自身实参造 fresh meta（类型经逐层推断取得；推断在
-                //    真实 `mach` 上跑，但**探测整体回滚**，meta 分配不外泄）
-                let mut to_check = Raw::Var(constr_name.clone());
-                let mut cur_cxt = clone_cxt(cxt);
-                loop {
-                    let (_, typ2) = mach.infer_expr(bump, &cur_cxt, &to_check)?;
-                    // 精化 σ 包裹的类型先 force 推开（旧机制下 names.by_lvl 已
-                    // 被 refresh 物化，这里必须显式推开才看得到 Π 形态）
-                    let typ2 = mach.force_v(bump, typ2);
-                    if v_tag(typ2) == 4 {
-                        let p = v_pi_of(typ2);
-                        // Only explicit args matter for the structure
-                        to_check = Raw::App(
-                            Box::new(to_check),
-                            Box::new(Raw::Hole),
-                            Either::Icit(p.icit),
-                        );
-                        let q = mach.quote(bump, cur_cxt.lvl, p.dom);
-                        let name = p.name.to_string();
-                        cur_cxt = mach.bind_name(bump, &cur_cxt, &name, q, p.dom);
-                    } else {
-                        break;
-                    }
-                }
-
-                // 2. 可访问性判定（temp infer；状态由外层快照统一回滚）
-                let r = mach.check_pm(bump, &cur_cxt, &to_check, forced_type);
-                if std::env::var("L09_TRACE").is_ok() {
-                    eprintln!("FILTER {} {}", constr_name.data, if r.is_ok() {"ok"} else {"err"});
-                }
-                if r.is_ok() {
-                    // 构造子可访问
-                    accessible.push(constr_name.clone());
-                }
+        let span = empty_span(());
+        let mut spec = SpecSolve {
+            acc: Rc::new(SubstV::default()),
+        };
+        for (a, b) in head_params.iter().zip(rp.iter()) {
+            if mach.unify_pm(bump, cxt, *a, b.val, &span, &mut spec).is_err() {
+                return false;
             }
-
-            Ok(accessible)
-        })
+        }
+        true
     }
 
     /// 逐臂下钻编译（L07 口径，2026-09-18 自决策树矩阵重写；L11/L12 同款）。
@@ -7320,20 +7344,20 @@ impl<'a> Compiler<'a> {
             } else {
                 (vec![], vec![])
             };
-        if !constrs.is_empty() {
-            if let Ok(accessible) = self.filter_accessible_constrs(mach, bump, cxt, typ, &constrs) {
-                for ctor in &accessible {
-                    if !arms
-                        .iter()
-                        .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
-                    {
-                        self.warnings.push(Warning::Unmatched(Pattern::Con(
-                            ctor.clone(),
-                            vec![Pattern::Any(empty_span(false), Icit::Expl); 999],
-                            Icit::Expl,
-                        )));
-                    }
-                }
+        // 覆盖检查：可达且无臂覆盖 → Unmatched（探测失败按"无结论"处理）。
+        // 不可达（如 `Vec[A] zero` 上的 `cons`）不报——索引方程不可解即结构
+        // 上不可能出现。
+        for ctor in &constrs {
+            if Self::probe_accessible(mach, bump, cxt, typ, ctor.data.as_str())
+                && !arms
+                    .iter()
+                    .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
+            {
+                self.warnings.push(Warning::Unmatched(Pattern::Con(
+                    ctor.clone(),
+                    vec![Pattern::Any(empty_span(false), Icit::Expl); 999],
+                    Icit::Expl,
+                )));
             }
         }
         let mut unreachable: Vec<Warning> = Vec::new();

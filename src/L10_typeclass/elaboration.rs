@@ -18,8 +18,8 @@ use super::{
 /// 结束后取走 `acc` 作为新 σ。L10 的可解集 = **任意裸 Rigid**（旧
 /// `update_cxt` 对任何裸 rigid 都改写槽位，没有 L07 的 bind-slot 白名单），
 /// 故这里没有 `solvable` 字段——臂条件 `sp.is_empty()` 即全部约束。
-struct SpecSolve {
-    acc: Rc<Subst>,
+pub(crate) struct SpecSolve {
+    pub(crate) acc: Rc<Subst>,
 }
 
 impl Infer {
@@ -118,7 +118,7 @@ impl Infer {
     /// （`solve_trait` / `solve_multi_trait`），不带 spec——实例求解过程中
     /// 的合一**不会**获得特化解能力（对齐旧 `update_cxt` 只从 unify_pm
     /// 调用的边界）。
-    fn unify_pm(
+    pub(crate) fn unify_pm(
         &mut self,
         cxt: &Cxt,
         t: &Rc<Val>,
