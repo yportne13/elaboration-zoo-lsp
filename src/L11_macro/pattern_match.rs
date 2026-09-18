@@ -6,7 +6,8 @@ use crate::parser_lib::{Span, ToSpan};
 
 use super::{
     Env, Error, Infer, Tm, Val,
-    cxt::Cxt, Rc, Decl,
+    cxt::Cxt, Rc, Decl, Subst,
+    elaboration::SpecSolve,
     empty_span,
     parser::syntax::{Pattern, Raw, Icit},
     PatternDetail,
@@ -37,95 +38,97 @@ impl Compiler {
         }
     }
 
-    fn filter_accessible_constrs<'a>(
-        &mut self,
+    /// 构造子可达性探测（值级，L07 `probe_accessible` 口径）：直接读 decl 表
+    /// 拿构造子类型，走 Π 链实例化——枚举隐式参数用头部 Sum 的实参，其余绑定
+    /// 器用超出上下文的 scratch 层 fresh rigid（同为刚性，可被方程解出；探测
+    /// 状态全在本地，弃掉即回滚），返回类型再与头部类型跑一次索引方程。
+    /// 成功 = 该构造子可能出现在头部类型的值里；结构冲突（`Vec[A] zero` 上
+    /// 不可能有 `cons`）= absurd。
+    fn probe_accessible(
         infer: &mut Infer,
         cxt: &Cxt,
-        typ: &Rc<Val>, // The specific type of the matched term, e.g., Val for `Vec (Succ n)`
-        all_constrs: &'a [Constructor],
-    ) -> Result<
-        Vec<(&'a Constructor, Vec<(Span<String>, Rc<Val>, Icit)>, Cxt)>,
-        Error,
-    > {
-        let mut accessible = Vec::new();
-
-        let typ = infer.force(&cxt.decl, typ);
-        let forced_type = match typ.as_ref() {
-            Val::Sum(..) => typ,
-            _ => {
-                for constr_def in all_constrs {
-                    accessible.push((constr_def, vec![], cxt.clone()));
+        head_sum: &Rc<Val>,
+        ctor: &str,
+    ) -> bool {
+        let (sum_name, head_params, impl_vals) = match head_sum.as_ref() {
+            Val::Sum(name, params, ..) => (
+                name.clone(),
+                params.iter().map(|p| p.1.clone()).collect::<Vec<_>>(),
+                params
+                    .iter()
+                    .filter(|p| p.3 == Icit::Impl)
+                    .map(|p| p.1.clone())
+                    .collect::<Vec<_>>(),
+            ),
+            _ => return false,
+        };
+        let entry = match cxt.decl.get(ctor) {
+            Some(e) => e.4.clone(),
+            None => return false,
+        };
+        // 每个探测独立充值：多构造子枚举的逐 ctor 探测不互相挤占共享池
+        // （探测本身回滚，只有燃料单向消耗）。孪生版同点充值。
+        infer.refuel();
+        let snap = infer.meta.clone();
+        let mut ty = entry;
+        let mut impl_idx = 0;
+        let mut scratch = 0u32;
+        let ok = loop {
+            let tyf = infer.force(&cxt.decl, &ty);
+            match tyf.as_ref() {
+                Val::Pi(_, _, _, closure) => {
+                    let u = if impl_idx < impl_vals.len() {
+                        let v = impl_vals[impl_idx].clone();
+                        impl_idx += 1;
+                        v
+                    } else {
+                        let l = cxt.lvl + scratch;
+                        scratch += 1;
+                        Val::vvar(l).into()
+                    };
+                    ty = infer.closure_apply(&cxt.decl, closure, u);
                 }
-                return Ok(accessible)
+                _ => break Self::unify_indices(infer, cxt, &sum_name, &head_params, &tyf),
             }
         };
+        infer.meta = snap;
+        ok
+    }
 
-        // This is a pure probe: the per-constructor infer_expr/check_pm may
-        // solve metas (including pre-existing ones) and allocate throwaway
-        // fresh metas. L13/L09/L10 同款窄快照（快版 `run_pure_probe` 同口径，
-        // 整循环一回滚）：只把探测面 `meta` 整表换入换出，循环结束**无条件**
-        // 回滚（Success/Error 皆然）。必须整表 clone、不能 truncate——探测期
-        // 解掉的已有 meta 可能引用循环内新建 meta，截断会让解悬空（后续查找
-        // 越界 panic）。其余字段探测期只读或自清：`trait_definition`/
-        // `trait_out_param` 是注册表（探测只做表达式级 infer/check，无
-        // decl/实例登记）；`trait_solver` 每次真查询先 `clean()`
-        // （`unification.rs::solve_trait`），瞬态残留不跨查询生效；
-        // `mutable_map` 是 Rc 共享（整 Infer clone 亦共享），探测无全局登记；
-        // `hover_table`/`completion_table` 只在 decl elaboration 追加。
-        let meta_snapshot = infer.meta.clone();
-        let result = (|| -> Result<Vec<_>, Error> {
-        for constr_def @ constr_name in all_constrs {
-            // We create a temporary, throwaway inference state for the unification check
-            // to avoid polluting the main inference state with temporary metavariables.
-
-            // 1. Create fresh metavariables for the constructor's own arguments.
-            //    We need their types first, which are given as raw syntax.
-            let mut to_check = Raw::Var(constr_name.clone());
-            let mut params = vec![];
-            let mut cxt = cxt.clone();
-            loop {
-                let (_, typ) = infer.infer_expr(&cxt, to_check.clone())?;
-                // 精化 σ 包裹的类型先 force 推开（旧机制下 src_names 已被
-                // refresh 物化，这里必须显式推开才看得到 Π 形态）
-                let typ = infer.force(&cxt.decl, &typ);
-                match typ.as_ref() {
-                    Val::Pi(name, icit, ty, _) => {
-                        if *icit == Icit::Expl { // Only explicit args matter for the structure
-                            params.push((name.clone(), ty.clone(), *icit));
-                        }
-                        to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole(name.to_span())), super::Either::Icit(*icit));
-                        cxt = cxt.bind(name.clone(), infer.quote(&cxt.decl, cxt.lvl, ty), ty.clone());
-                    },
-                    _ => {break;}
-                }
-            }
-            /*for (_, _, icit) in constr_arg_tys_raw {
-                if *icit == Icit::Expl { // Only explicit args matter for the structure
-                    to_check = Raw::App(Box::new(to_check), Box::new(Raw::Hole), super::Either::Icit(Icit::Expl));
-                }
-            }*/
-
-            // 4. Try to unify it with the type of the matched term.
-            // （精化 σ 在探测内被丢弃——探测只问可达性，与旧实现丢弃
-            // check_pm 返回的精化 cxt 同口径；meta 整表回滚在闭包外）
-            if infer.check_pm(&cxt, to_check.clone(), forced_type.clone()).is_ok() {
-                // If unification succeeds, the constructor is accessible.
-                accessible.push((constr_def, params, cxt.clone()));
-            }
+    /// 索引方程：头部 Sum 的参数（含索引）与构造子返回 Sum 的参数逐槽特化
+    /// 合一，**头部一侧在前**——两侧都是可解变量时解的方向是"头部变量 :=
+    /// 构造子侧值"（与上下文顺序一致）。解只累积进探测私有的 σ，弃掉即回滚。
+    fn unify_indices(
+        infer: &mut Infer,
+        cxt: &Cxt,
+        sum_name: &Span<String>,
+        head_params: &[Rc<Val>],
+        ret_ty: &Rc<Val>,
+    ) -> bool {
+        let ret_sum = infer.force(&cxt.decl, ret_ty);
+        let rp = match ret_sum.as_ref() {
+            Val::Sum(name, params, ..) if name.data == sum_name.data => params,
+            _ => return false,
+        };
+        if head_params.len() != rp.len() {
+            return false;
         }
-
-        Ok(accessible)
-        })();
-        infer.meta = meta_snapshot;
-        result
+        let mut spec = SpecSolve {
+            acc: Rc::new(Subst::default()),
+        };
+        let span = empty_span(());
+        head_params
+            .iter()
+            .zip(rp.iter())
+            .all(|(a, b)| infer.unify_pm(cxt, a, &b.1, span, &mut spec).is_ok())
     }
 
     /// 逐臂下钻编译（L07 口径，2026-09-18 自决策树矩阵重写）。
     ///
-    /// 决策树在每个 (构造子 × 臂) 上重复 `filter_accessible_constrs` 探测并
-    /// 逐节点克隆上下文——match 编译期的主要热点；逐臂版把每臂的工作收敛为
-    /// 一次 `check_pm_final`（特化方程 + 头部精化，与树叶子同款）加一次
-    /// 体检查，可达性探测每 match 只做一轮。
+    /// 决策树在每个 (构造子 × 臂) 上重复可达性探测并逐节点克隆上下文；
+    /// 逐臂版把每臂的工作收敛为一次 `check_pm_final`（特化方程 + 头部精化，
+    /// 与树叶子同款）加一次体检查，可达性探测每 match 只做一轮（**值级**
+    /// `probe_accessible`，不再逐 ctor 走 infer/check）。
     ///
     /// 语义相对决策树的三处（已登记 README / 分析文档）：
     /// 1. 覆盖检查只在**顶层**做（`Unmatched` = 构造子 + 999 通配，与树的
@@ -152,24 +155,19 @@ impl Compiler {
             _ => (vec![], vec![]),
         };
         // 覆盖检查：可达且无臂覆盖 → Unmatched（fill_context(Outermost, ·)
-        // 的形态就是「构造子 + 999 通配」）。
-        if !constrs.is_empty() {
-            // 可达性探测是**纯探测**：失败（例如 `Eq[A] x y` 上探 `refl` 时
-            // 索引方程 x ≐ y 不可解）只说明该轮无结论，按"无覆盖结论"处理
-            // ——决策树里同一失败是 `.ok()?` 把该臂滤掉，不冒泡成硬错误。
-            if let Ok(accessible) = self.filter_accessible_constrs(infer, cxt, &typ, &constrs) {
-                for (ctor, ..) in &accessible {
-                    if !arms
-                        .iter()
-                        .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
-                    {
-                        self.warnings.push(Warning::Unmatched(Pattern::Con(
-                            (*ctor).clone(),
-                            vec![Pattern::Any(empty_span(true), Icit::Expl); 999],
-                            Icit::Expl,
-                        )));
-                    }
-                }
+        // 的形态就是「构造子 + 999 通配」）。不可达（如 `Vec[A] zero` 上的
+        // `cons`）不报——索引方程不可解即结构上不可能出现。
+        for ctor in &constrs {
+            if Self::probe_accessible(infer, cxt, &typ, &ctor.data)
+                && !arms
+                    .iter()
+                    .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
+            {
+                self.warnings.push(Warning::Unmatched(Pattern::Con(
+                    ctor.clone(),
+                    vec![Pattern::Any(empty_span(true), Icit::Expl); 999],
+                    Icit::Expl,
+                )));
             }
         }
         // 逐臂下钻：每臂一次 check_pm_final → σ 之下的上下文里检查体。
