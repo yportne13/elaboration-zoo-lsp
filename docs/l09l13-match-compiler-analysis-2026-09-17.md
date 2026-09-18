@@ -41,11 +41,13 @@
    `Any(span)`）。隐式参数名由 `Compiler::make_implicit_name`（`implicit_counter`
    计数器，产出 `_l0`/`_l1`…）生成，同一构造子在元组模式里出现多次时每个
    出现的隐式参数要**不同名**（否则 `Raw::Var("_l0")` 互相遮蔽）。
-6. **叶子不是用 `pat.to_raw()`，而是用 `patcon_raw`**：`entry.patcon.clone().to_raw()`
-   ——即由已积累的 `PatternDetail` 经 `detail_to_raw` 重建的 Raw（注释明写
-   "NO fallback to raw — only patcon_raw is used"）。逐臂实现里等价做法是：
-   先 `walk_pat` 出 detail，再 `detail_to_raw(&detail)` 得到那个 Raw，交给
-   `check_pm_final`。
+6. **叶子用的是 `patcon_raw`，但那是"树专属"的产物，逐臂实现不要复刻**：
+   树的叶子在**逐列分解后**才到（此时臂的模式已被拆成单列片段），`arm.raw`
+   （原始用户模式 `succ(x)`）拿去 check 字段类型会越界崩溃——所以树用
+   `patcon.clone().to_raw()`（由积累的 detail 经 `detail_to_raw` 重建）
+   重建"当前列深度"的模式（注释明写 "NO fallback to raw"）。**逐臂实现天然
+   在顶层整模式上工作**，直接用 `pat.to_raw()` 即正确（L10–L12 的孪生就是这么
+   做的，同一血统），不需要 `PatConstructor`/`detail_to_raw`。
 7. **错误是"收集"而非"短路"**：`Compiler::compile` 返回
    `Result<Vec<Warning>, Vec<Error>>`，叶子把 `check_pm_final`/`check` 的错误
    `self.errors.push(e)` 后继续检查其余分支（一次性报全）。逐臂实现要保留这个
@@ -55,11 +57,18 @@
 
 ### 工作量再评估（L13）
 
-L13 不是"L12 + 少量适配"：三字段 `PatternDetail` + `patcon_raw` + 错误收集
-语义意味着参考版（`compile_aux` 985 行）与孪生（`compile_aux_inner` 608 行）
-都要按 L13 自己的数据形状重写 `walk`，而不是照抄 L10–L12 的 `walk_pat`。
-建议单独开一轮（含逐段读 `PatConstructor`/`detail_to_raw`/`make_implicit_name`
-与两处叶子的时间预算），先孪生后参考版，以 `l13_fast_parity` 为闸门。
+L13 不是"L12 + 少量适配"，但也没到要重写全部的程度。需要额外处理的只有两件：
+
+- **三字段 `PatternDetail`**（`Con(idx, name, subs)` / `Any(var_name, param_name, icit)`）
+  ——`walk_pat` 要按这个形状构造（`idx` 取自头部 Sum 的命名空间索引、`var_name`
+  给槽名、`param_name` 供命名隐式参数），运行时 `eval_aux` 消费它；
+- **错误收集语义**：`compile` 返回 `Result<Vec<Warning>, Vec<Error>>`，叶子把
+  `check_pm_final`/`check` 的错误 push 后继续（保留 `errors` 字段与签名）。
+
+其余（`patcon_raw`、`PatConstructor`、`detail_to_raw`、`FilterResult`、`ArmEntry`、
+`make_implicit_name`、`MatchContext`）都是决策树内部件，随 `compile_aux*` 一并
+删除即可。建议单独开一轮，先孪生后参考版，以 `l13_fast_parity`（410 例，当前
+全绿）为闸门。
 
 ## 0. 结论
 
