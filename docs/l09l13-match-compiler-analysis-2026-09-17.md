@@ -34,8 +34,32 @@
    （L11/L12 是 400–450），另有 `make_implicit_name`/`FilterResult`/`ArmEntry`/
    `is_impl`/`moduletree` 等 L13 专有件——移植时只需覆盖 `compile`/`walk` 这条
    路径，那些都是决策树内部件，可随 `compile_aux*` 一并删除。
-5. **L09**：其孪生本就比参考版快 2.3×（`match`），优先级最低；适配点预计介于
+5. **`PatternDetail` 是另一套形态**（L13 独有的三字段版）：
+   `Con(idx, name, subs)` / `Any(var_name, param_name, icit)` / `Bind(name)`——
+   `idx` 是命名空间索引、`Any` 带**隐式参数名**。运行时 `eval_aux` 消费的就是
+   这个形状，所以 `walk_pat` 必须按它构造（不是 L11/L12 的 `Con(name, subs)` /
+   `Any(span)`）。隐式参数名由 `Compiler::make_implicit_name`（`implicit_counter`
+   计数器，产出 `_l0`/`_l1`…）生成，同一构造子在元组模式里出现多次时每个
+   出现的隐式参数要**不同名**（否则 `Raw::Var("_l0")` 互相遮蔽）。
+6. **叶子不是用 `pat.to_raw()`，而是用 `patcon_raw`**：`entry.patcon.clone().to_raw()`
+   ——即由已积累的 `PatternDetail` 经 `detail_to_raw` 重建的 Raw（注释明写
+   "NO fallback to raw — only patcon_raw is used"）。逐臂实现里等价做法是：
+   先 `walk_pat` 出 detail，再 `detail_to_raw(&detail)` 得到那个 Raw，交给
+   `check_pm_final`。
+7. **错误是"收集"而非"短路"**：`Compiler::compile` 返回
+   `Result<Vec<Warning>, Vec<Error>>`，叶子把 `check_pm_final`/`check` 的错误
+   `self.errors.push(e)` 后继续检查其余分支（一次性报全）。逐臂实现要保留这个
+   语义（签名与 `errors` 字段都得留着）。
+8. **L09**：其孪生本就比参考版快 2.3×（`match`），优先级最低；适配点预计介于
    L10（env 口径机器、层级化全局表）与 L11（String 键）之间。
+
+### 工作量再评估（L13）
+
+L13 不是"L12 + 少量适配"：三字段 `PatternDetail` + `patcon_raw` + 错误收集
+语义意味着参考版（`compile_aux` 985 行）与孪生（`compile_aux_inner` 608 行）
+都要按 L13 自己的数据形状重写 `walk`，而不是照抄 L10–L12 的 `walk_pat`。
+建议单独开一轮（含逐段读 `PatConstructor`/`detail_to_raw`/`make_implicit_name`
+与两处叶子的时间预算），先孪生后参考版，以 `l13_fast_parity` 为闸门。
 
 ## 0. 结论
 
