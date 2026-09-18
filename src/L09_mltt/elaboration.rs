@@ -122,8 +122,9 @@ impl Infer {
     }
     /// 模式特化合一：解入 `spec.acc`（显式替换 σ），调用方在方程结束后取走
     /// 做 `subst_cxt` / 下一方程入口的 wrap。失败语义与旧 `unify_pm` 一致
-    /// （臂报不可达）。
-    fn unify_pm(
+    /// （臂报不可达）。`pub(crate)`：模式编译器的覆盖探测（probe_accessible
+    /// 的索引方程）也走这里。
+    pub(crate) fn unify_pm(
         &mut self,
         cxt: &Cxt,
         t: Val,
@@ -327,7 +328,7 @@ impl Infer {
                 let expr_span = expr.to_span();
                 let (tm, typ) = self.infer_expr(cxt, *expr)?;
                 let mut compiler = Compiler::new(expected);
-                let (ret, error) = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
+                let error = compiler.compile(self, typ, &clause, cxt, self.eval(&cxt.env, tm.clone()))?;
                 if !error.is_empty() {
                     Err(Error(expr_span.map(|_| format!("{error:?}"))))
                 } else {

@@ -33,9 +33,10 @@
 //!   `Cxt::update_cxt`/`refresh`——把精化等式**直接改写进环境**（目标槽
 //!   替换 + 全槽在"更新后 env"下重求值重锚定），src_names 按层级取类型
 //!   （BiMap 的 map2 持久），快版镜像为 `lvl_types` 表 + 双轨迹撤销。
-//!   模式编译器（Compiler）逐句移植参考版 pattern_match.rs：决策树、
-//!   PatConstructor、filter_accessible_constrs 的 temp-infer 克隆探测
-//!   （快版 = metas 快照换入换出）、checked_ret 备忘。
+//!   模式编译器（Compiler）与参考版 pattern_match.rs 同步维护（2026-09-18
+//!   自决策树矩阵重写为 L07 逐臂下钻，L10-L12 同款）：walk_pat 绑槽 +
+//!   check_pm_final 特化 + subst_cxt 臂上下文；覆盖探测 = 值级结构探测
+//!   （`run_pure_probe` 快照回滚）。
 //! - **unify 无燃料、无 pm 臂、无 (Obj,Obj)/宽松臂**：臂序 = U/Pi/Rigid/
 //!   Flex/Flex/Lam/η/Flex 求解/LiteralType 宽松/Sum/SumCase/Match；
 //!   flex_flex 单方向尝试无快照回滚；SumCase/SumCase 比 typ+datas（L07+
@@ -5742,11 +5743,6 @@ pub(crate) fn neutral_of(globals: &[V]) -> Vec<V> {
         .collect()
 }
 
-/// 把 Option 臂表原地展平为 Some 臂的 Vec（参考版 `into_iter().flatten()`）。
-fn remaining_flatten<'a>(remaining: &mut Vec<Option<Arm<'a>>>) -> Vec<Arm<'a>> {
-    std::mem::take(remaining).into_iter().flatten().collect()
-}
-
 /// 槽位向量 → 纯链环境（头 = 最内层）。
 fn chain_env<'a>(bump: &'a Bump, slots: &[V]) -> Env<'a> {
     let mut env: Option<&'a EnvCons<'a>> = None;
@@ -5768,10 +5764,9 @@ enum DeclOut<'a> {
     Enum,
 }
 
-// 模式匹配编译（参考版 pattern_match.rs 的逐句移植）
+// 模式匹配编译（2026-09-18 自决策树矩阵重写为 L07 逐臂下钻；L10-L12 同款，
+// 参考版 pattern_match.rs 同步替换）
 // --------------------------------------------------------------------------------
-
-type Var = i32;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Warning {
@@ -5779,82 +5774,9 @@ pub(crate) enum Warning {
     Unmatched(Pattern),
 }
 
-#[derive(Debug, Clone)]
-struct PatConstructor {
-    data: Vec<(usize, Vec<PatternDetail>)>,
-}
-
-impl PatConstructor {
-    fn new() -> Self {
-        PatConstructor { data: vec![(2, vec![])] }
-    }
-
-    fn clean(mut self) -> Self {
-        while let Some(true) = self.data.last().map(|(num, x)| x.len() == *num) {
-            let (_, t) = self.data.pop().unwrap();
-            self.data
-                .last_mut()
-                .map(|x| {
-                    x.1.last_mut()
-                        .map(|x| match x {
-                            PatternDetail::Con(_, x) => {*x = t;},
-                            _ => {},
-                        })
-                });
-        }
-        self
-    }
-
-    fn push(self, detail: PatternDetail) -> Self {
-        let mut ret = self.clean();
-        ret.data.last_mut().map(|(_, x)| x.push(detail));
-        ret
-    }
-
-    fn new_level(mut self, index: usize) -> Self {
-        self.data.push((index, vec![]));
-        self
-    }
-}
-
-#[derive(Debug, Clone)]
-struct MatchArm {
-    pats: Vec<Pattern>,
-    body: (Raw, usize),
-}
-
-#[derive(Debug, Clone)]
-enum MatchContext {
-    Outermost,
-    InCons {
-        parent: Rc<MatchContext>,
-        constr: crate::parser_lib::Span<String>,
-        icit: Icit,
-        before: Vec<Pattern>,
-        after: Vec<Pattern>,
-    },
-}
-
-/// compile_aux 的臂记录（参考版元组的具名版）：heads = 构造子下钻的新增
-/// 槽（初始臂为空），is_impl = 隐式槽合成的通配臂标记。
-struct Arm<'a> {
-    arm: MatchArm,
-    idx: usize,
-    cxt: Cxt<'a>,
-    heads: Vec<(Var, V, crate::parser_lib::Span<String>, Icit)>,
-    raw: Raw,
-    target_typ: V,
-    ori: V,
-    patcon: PatConstructor,
-    is_impl: bool,
-}
-
 pub(crate) struct Compiler<'a> {
     warnings: Vec<Warning>,
-    reachable: FxHashMap<usize, ()>,
-    checked_ret: FxHashMap<usize, &'a Tm<'a>>,
     pub(crate) pats: Vec<(PatternDetail, &'a Tm<'a>)>,
-    seed: i32,
     ret_type: V,
 }
 
@@ -5862,141 +5784,117 @@ impl<'a> Compiler<'a> {
     fn new(ret_type: V) -> Self {
         Compiler {
             warnings: Vec::new(),
-            reachable: FxHashMap::default(),
-            checked_ret: FxHashMap::default(),
             pats: Vec::new(),
-            seed: 0,
             ret_type,
         }
     }
 
-    fn fresh(&mut self) -> i32 {
-        self.seed += 1;
-        self.seed
-    }
-
-    fn fill_context(ctx: &MatchContext, pat: &Pattern) -> Pattern {
-        match ctx {
-            MatchContext::Outermost => pat.clone(),
-            MatchContext::InCons {
-                parent,
-                constr,
-                icit,
-                before,
-                after,
-            } => {
-                let mut new_before = before.clone();
-                new_before.reverse();
-                new_before.push(pat.clone());
-                new_before.extend(after.clone());
-                Self::fill_context(parent, &Pattern::Con(constr.clone(), new_before, *icit))
-            }
-        }
-    }
-
-    fn next_hole(ctx: &MatchContext, pat: &Pattern) -> MatchContext {
-        match ctx {
-            MatchContext::Outermost => MatchContext::Outermost,
-            MatchContext::InCons {
-                parent,
-                constr,
-                icit,
-                before,
-                after,
-            } => match after[..] {
-                [] => Self::next_hole(parent, &Pattern::Con(constr.clone(), before.clone(), *icit)),
-                _ => MatchContext::InCons {
-                    parent: parent.clone(),
-                    constr: constr.clone(),
-                    icit: *icit,
-                    before: vec![pat.clone()],
-                    after: after[1..].to_vec(),
-                },
-            },
-        }
-    }
-
-    /// 构造子可达性过滤（参考版 `filter_accessible_constrs`）：构造子类型
-    /// 链逐层推断与可访问性判定都是**纯探测**——统一在 `run_pure_probe`
-    /// 的 metas 快照换入换出里跑，探测期 meta 分配/求解一律回滚（参考版
-    /// meta 快照换入换出的同款机制）。错误路径统一撤销名字轨迹（temp cxt
-    /// 的绑定全部丢弃——参考版同款）。
-    fn filter_accessible_constrs(
-        &mut self,
+    /// 构造子可达性探测（值级，L07 `probe_accessible` 口径；参考版同款）：
+    /// Π 链上枚举隐式参数用头部 Sum 的实参实例化，其余绑定器用超出上下文的
+    /// scratch 层 fresh rigid（同为刚性，可被方程解出；探测状态全在本地，
+    /// 弃掉即回滚），返回类型再与头部类型跑一次索引方程。成功 = 该构造子
+    /// 可能出现在头部类型的值里；结构冲突（`Vec[A] zero` 上不可能有
+    /// `cons`）= absurd。构造子类型经 `infer_expr(Var(名))` 取（L09 的全局
+    /// 表按层级存，无名字键的 decl 表——树同款）。
+    fn probe_accessible(
         mach: &mut Machine,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
-        typ: V, // 被匹配项的具体类型，如 `Vec (Succ n)` 的 Val
-        all_constrs: &[crate::parser_lib::Span<String>],
-    ) -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
-        self.filter_accessible_constrs_inner(mach, bump, cxt, typ, all_constrs)
-    }
-
-    fn filter_accessible_constrs_inner(
-        &mut self,
-        mach: &mut Machine,
-        bump: &'a Bump,
-        cxt: &Cxt<'a>,
-        typ: V,
-        all_constrs: &[crate::parser_lib::Span<String>],
-    ) -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
-        let mut accessible = Vec::new();
-
-        let forced_type = mach.force_v(bump, typ);
-        if !(v_tag(forced_type) == 7 && matches!(v_xcell_of(forced_type), XCell::Sum { .. })) {
-            // 非和类型：所有构造子按"可达"处理（参考版同款退路）
-            for constr_def in all_constrs {
-                accessible.push(constr_def.clone());
+        head_sum: V,
+        ctor: &crate::parser_lib::Span<String>,
+    ) -> bool {
+        let (sum_name, head_params, impl_vals) = {
+            let f = mach.force_v(bump, head_sum);
+            if v_tag(f) != 7 {
+                return false;
             }
-            return Ok(accessible);
-        }
-
-        // 逐构造子可达性探测是**纯探测**：infer_expr（逐层 Pi 强制）与 check_pm
-        // 都可能分配 fresh meta 并解掉已有 meta，探测期状态无需存活（本函数只带出
-        // 可达构造子**名字列表**）。统一走 `run_pure_probe` 入口做快照/回滚。
-        mach.run_pure_probe(|mach| -> Result<Vec<crate::parser_lib::Span<String>>, Error> {
-            let mut accessible = Vec::new();
-            for constr_name in all_constrs {
-                // 1. 为构造子自身实参造 fresh meta（类型经逐层推断取得；推断在
-                //    真实 `mach` 上跑，但**探测整体回滚**，meta 分配不外泄）
-                let mut to_check = Raw::Var(constr_name.clone());
-                let mut cur_cxt = clone_cxt(cxt);
-                loop {
-                    let (_, typ2) = mach.infer_expr(bump, &cur_cxt, &to_check)?;
-                    // 类型可能被 VSub 包裹（臂上下文曾经 subst_cxt）——判 Pi
-                    // 前先 force 推开精化（参考版 filter_accessible 同款）
-                    let typ2 = mach.force_v(bump, typ2);
-                    if v_tag(typ2) == 4 {
-                        let p = v_pi_of(typ2);
-                        // Only explicit args matter for the structure
-                        to_check = Raw::App(
-                            Box::new(to_check),
-                            Box::new(Raw::Hole),
-                            Either::Icit(p.icit),
-                        );
-                        let q = mach.quote(bump, cur_cxt.lvl, p.dom);
-                        let name = p.name.to_string();
-                        cur_cxt = mach.bind_name(bump, &cur_cxt, &name, q, p.dom);
-                    } else {
-                        break;
-                    }
-                }
-
-                // 2. 可访问性判定（temp infer；状态由外层快照统一回滚）
-                let r = mach.check_pm(bump, &cur_cxt, &to_check, forced_type);
-                if std::env::var("L09_TRACE").is_ok() {
-                    eprintln!("FILTER {} {}", constr_name.data, if r.is_ok() {"ok"} else {"err"});
-                }
-                if r.is_ok() {
-                    // 构造子可访问
-                    accessible.push(constr_name.clone());
-                }
+            match v_xcell_of(f) {
+                XCell::Sum { name, params, .. } => (
+                    *name,
+                    params.iter().map(|p| p.val).collect::<Vec<_>>(),
+                    params
+                        .iter()
+                        .filter(|p| p.icit == Icit::Impl)
+                        .map(|p| p.val)
+                        .collect::<Vec<_>>(),
+                ),
+                _ => return false,
             }
-
-            Ok(accessible)
+        };
+        // 逐构造子可达性探测是**纯探测**：infer_expr 与特化方程都可能分配/
+        // 解掉 meta，探测期状态无需存活（本函数只带出布尔）。统一走
+        // `run_pure_probe` 的 metas 快照换入换出（参考版 meta 快照同款机制）。
+        mach.run_pure_probe(|mach| {
+            // 每个探测独立充值：多构造子枚举的逐 ctor 探测不互相挤占共享池
+            // （探测本身回滚，只有燃料单向消耗）。
+            refuel();
+            let (_, mut ty) = match mach.infer_expr(bump, cxt, &Raw::Var(ctor.clone())) {
+                Ok(x) => x,
+                Err(_) => return false,
+            };
+            let mut impl_idx = 0;
+            let mut scratch = 0u32;
+            loop {
+                let tyf = mach.force_v(bump, ty);
+                if v_tag(tyf) != 4 {
+                    break Self::unify_indices(mach, bump, cxt, sum_name, &head_params, tyf);
+                }
+                let p = v_pi_of(tyf);
+                let u = if impl_idx < impl_vals.len() {
+                    let v = impl_vals[impl_idx];
+                    impl_idx += 1;
+                    v
+                } else {
+                    let l = cxt.lvl + scratch;
+                    scratch += 1;
+                    v_lvl(l)
+                };
+                let env = env_ext(bump, p.env, u);
+                ty = mach.eval(bump, env, p.body);
+            }
         })
     }
 
+    /// 索引方程：头部 Sum 的参数（含索引）与构造子返回 Sum 的参数逐槽特化
+    /// 合一，**头部一侧在前**——两侧都是可解变量时解的方向是"头部变量 :=
+    /// 构造子侧值"（与上下文顺序一致）。解只累积进探测私有的 σ，弃掉即回滚。
+    fn unify_indices(
+        mach: &mut Machine,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        sum_name: &str,
+        head_params: &[V],
+        ret_ty: V,
+    ) -> bool {
+        let ret_sum = mach.force_v(bump, ret_ty);
+        if v_tag(ret_sum) != 7 {
+            return false;
+        }
+        let rp = match v_xcell_of(ret_sum) {
+            XCell::Sum { name, params, .. } if *name == sum_name => params,
+            _ => return false,
+        };
+        if head_params.len() != rp.len() {
+            return false;
+        }
+        let span = empty_span(());
+        let solvable = mach.bind_slots(cxt);
+        let mut spec = SpecSolve {
+            solvable: &solvable,
+            acc: Rc::new(SubstV::default()),
+        };
+        for (a, b) in head_params.iter().zip(rp.iter()) {
+            if mach.unify_pm(bump, cxt, *a, b.val, &span, &mut spec).is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// 逐臂下钻编译（L07 口径，2026-09-18 自决策树矩阵重写；L10-L12 同款）。
+    /// L09 的机器 API 是"env 口径"（`force_v`/`quote`/`eval` 不带 cxt）。
+    /// 语义相对决策树的三处收窄（覆盖只做顶层 / 遮蔽只认通配臂 / 特化失败
+    /// 静默跳过）见 L11 README 与 docs/l09l13-match-compiler-analysis。
     fn compile(
         &mut self,
         mach: &mut Machine,
@@ -6007,426 +5905,198 @@ impl<'a> Compiler<'a> {
         target_val: V,
     ) -> Result<(), Error> {
         self.warnings = Vec::new();
-        self.reachable = FxHashMap::default();
-        let initial: Vec<Arm<'a>> = arms
-            .iter()
-            .enumerate()
-            .map(|(idx, (pat, body))| Arm {
-                arm: MatchArm {
-                    pats: vec![pat.clone()],
-                    body: (body.clone(), idx),
-                },
-                idx,
-                cxt: clone_cxt(cxt),
-                heads: vec![],
-                raw: pat.to_raw(),
-                target_typ: typ,
-                ori: target_val,
-                patcon: PatConstructor::new(),
-                is_impl: false,
-            })
-            .collect();
-        self.compile_aux(
-            mach,
-            bump,
-            &[(0, typ, empty_span(String::new()), Icit::Expl)],
-            &initial,
-            &MatchContext::Outermost,
-        )?;
-
-        // 检查是否有不可达分支
-        let unreachable = arms
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, (_, body))| {
-                if !self.reachable.contains_key(&idx) {
-                    Some(Warning::Unreachable(body.clone()))
-                } else {
-                    None
+        let typ = mach.force_v(bump, typ);
+        let (constrs, ctor_names): (Vec<crate::parser_lib::Span<String>>, Vec<String>) =
+            if v_tag(typ) == 7 {
+                match v_xcell_of(typ) {
+                    XCell::Sum { cases, .. } => (
+                        cases.iter().map(|c| empty_span(c.to_string())).collect(),
+                        cases.iter().map(|c| c.to_string()).collect(),
+                    ),
+                    _ => (vec![], vec![]),
                 }
-            })
-            .collect::<Vec<_>>();
-        // 参考版 `unreachable.into_iter().chain(self.warnings)`——不可达
-        // 警告在前
-        let mut all = unreachable;
-        all.extend(self.warnings.clone());
-        self.warnings = all;
+            } else {
+                (vec![], vec![])
+            };
+        // 覆盖检查：可达且无臂覆盖 → Unmatched（「构造子 + 999 通配」形态，
+        // 与参考版逐字一致）。不可达（如 `Vec[A] zero` 上的 `cons`）不报——
+        // 索引方程不可解即结构上不可能出现。
+        for ctor in &constrs {
+            if Self::probe_accessible(mach, bump, cxt, typ, ctor)
+                && !arms
+                    .iter()
+                    .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
+            {
+                self.warnings.push(Warning::Unmatched(Pattern::Con(
+                    ctor.clone(),
+                    vec![Pattern::Any(empty_span(()), Icit::Expl); 999],
+                    Icit::Expl,
+                )));
+            }
+        }
+        let mut unreachable: Vec<Warning> = Vec::new();
+        let mut shadowed = false;
+        for (pat, body) in arms {
+            if shadowed {
+                unreachable.push(Warning::Unreachable(body.clone()));
+                continue;
+            }
+            let (detail, cxt_walk) = match walk_pat(mach, bump, cxt, pat, typ) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            let raw = pat.to_raw();
+            let Ok((_, sigma)) = mach.check_pm_final(bump, &cxt_walk, &raw, typ, target_val)
+            else {
+                continue;
+            };
+            // 臂上下文置于精化 σ 之下（env 槽 + types + names.by_lvl 包
+            // VSub；lvl/locals/pruning 不动——槽位布局永不漂移，读点 force
+            // 推开）。
+            let cxt_arm = mach.subst_cxt(bump, &sigma, &cxt_walk);
+            // 期望类型重锚到臂上下文：quote → eval（flex 免锚）。σ 经臂上下文
+            // 的 wrapped env 在 eval 读点生效，无需预先包裹。
+            let ret_type = {
+                let t = self.ret_type;
+                if is_flex(&mach.spine, t) {
+                    t
+                } else {
+                    let tm = mach.quote(bump, cxt_arm.lvl, t);
+                    mach.eval(bump, cxt_arm.env, tm)
+                }
+            };
+            let ret = mach.check(bump, &cxt_arm, body, ret_type)?;
+            self.pats.push((detail, ret));
+            if is_catch_all(pat, &ctor_names) {
+                shadowed = true;
+            }
+        }
+        // 参考版 `unreachable.into_iter().chain(self.warnings)`——不可达警告在前
+        self.warnings = unreachable.into_iter().chain(self.warnings.drain(..)).collect();
         Ok(())
     }
+}
 
-    /// 臂边界统一撤销名字轨迹（compile_aux 内部经 bind_name 压入的绑定
-    /// 不经 unwind 退出——参考版 src_names 随 Cxt 克隆天然隔离，快版轨迹
-    /// 需手动回滚）。
-    fn compile_aux(
-        &mut self,
-        mach: &mut Machine,
-        bump: &'a Bump,
-        heads: &[(Var, V, crate::parser_lib::Span<String>, Icit)],
-        arms: &[Arm<'a>],
-        context: &MatchContext,
-    ) -> Result<(), Error> {
-        self.compile_aux_inner(mach, bump, heads, arms, context)
+/// 臂是否（结构上）覆盖构造子 `ctor`（L07 `covers` 同款）。
+fn covers(pat: &Pattern, ctor: &str, ctor_names: &[String]) -> bool {
+    match pat {
+        Pattern::Any(..) => true,
+        Pattern::Con(name, _, _) => {
+            !ctor_names.iter().any(|c| c == &name.data) || name.data == ctor
+        }
     }
+}
 
-    fn compile_aux_inner(
-        &mut self,
-        mach: &mut Machine,
-        bump: &'a Bump,
-        heads: &[(Var, V, crate::parser_lib::Span<String>, Icit)],
-        arms: &[Arm<'a>],
-        context: &MatchContext,
-    ) -> Result<(), Error> {
-        match heads {
-            [] => match arms {
-                [arm, ..] if arm.arm.pats.is_empty() => {
-                    let (_, sub) = mach
-                        .check_pm_final(bump, &arm.cxt, &arm.raw, arm.target_typ, arm.ori)
-                        .expect("check_pm_final 失败（参考版 unwrap）");
-                    // 臂上下文置于精化 σ 之下（env 槽 + types + names.by_lvl
-                    // 包 VSub；布局不动）
-                    let cxt = mach.subst_cxt(bump, &sub, &arm.cxt);
-                    self.reachable.insert(arm.idx, ());
-                    // 已完整编译（体检查 + pats 记录）则只需可达、无需重检查。
-                    // **按臂下标**记录（L13 2a0eb6e 同族，参考版同款）——按
-                    // Raw 记录会把两个模式相同的不同臂混为一谈，第二个臂复用
-                    // 第一个臂的检查体、自身漏检。
-                    if self.checked_ret.contains_key(&arm.idx) {
-                        return Ok(());
-                    }
-                    // 期望类型重锚到臂上下文：quote → eval（flex 免锚）。
-                    // **不预先包裹 σ**——与参考版一致：σ 经臂上下文的
-                    // wrapped env 在 eval 读点生效（quote 出的 Var 索引在
-                    // cxt.env 里读到 VSub 槽）。
-                    let ret_type = {
-                        let t = self.ret_type;
-                        if is_flex(&mach.spine, t) {
-                            t
-                        } else {
-                            let tm = mach.quote(bump, cxt.lvl, t);
-                            mach.eval(bump, cxt.env, tm)
-                        }
-                    };
-                    let ret = mach.check(bump, &cxt, &arm.arm.body.0, ret_type)?;
-                    self.checked_ret.insert(arm.idx, ret);
-                    let patcon = arm.patcon.clone().clean();
-                    self.pats.push((patcon.data[0].1[0].clone(), ret));
-                    Ok(())
-                }
-                _ => Ok(()), // DecisionTree::Fail（树不进项层）
-            },
-            [(var, typ, head_name, icit), heads_rest @ ..] => {
-                let not_necessary = arms
-                    .iter()
-                    .all(|arm| matches!(arm.arm.pats[..], [Pattern::Any(_, i)] if i == *icit));
+/// 通配臂（参考版 `is_catch_all` 同款）。
+fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
+    match pat {
+        Pattern::Any(..) => true,
+        Pattern::Con(name, subs, _) => {
+            subs.is_empty() && !ctor_names.iter().any(|c| c == &name.data)
+        }
+    }
+}
 
-                if not_necessary {
-                    let new_context = Self::next_hole(context, &Pattern::Any(empty_span(()), *icit));
-                    let mut new_arms: Vec<Arm<'a>> = Vec::with_capacity(arms.len());
-                    for arm in arms {
-                        let q = mach.quote(bump, arm.cxt.lvl, *typ);
-                        let name = head_name.clone().map(|x| format!("_{}", x));
-                        let cname = name.data.clone();
-                        let cxt2 = mach.bind_name(bump, &arm.cxt, &cname, q, *typ);
-                        new_arms.push(Arm {
-                            arm: MatchArm {
-                                pats: arm.arm.pats.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]),
-                                body: arm.arm.body.clone(),
-                            },
-                            idx: arm.idx,
-                            cxt: cxt2,
-                            heads: vec![],
-                            raw: arm.raw.clone(),
-                            target_typ: arm.target_typ,
-                            ori: arm.ori,
-                            patcon: arm
-                                .patcon
-                                .clone()
-                                .clean()
-                                .push(PatternDetail::Any(empty_span(()))),
-                            is_impl: false,
-                        });
-                    }
-                    return self.compile_aux(mach, bump, heads_rest, &new_arms, &new_context);
+/// 模式走查（L07 `walk_con` 口径；参考版 `walk_pat` 的快版）：绑定模式变量槽
+/// 并构建运行时 `PatternDetail`。槽位纪律：枚举隐式参数不占槽、构造子隐式
+/// 绑定器补虚通配、变量模式以用户名绑槽、**Con 本身不占槽**。
+/// 构造子类型经 `infer_expr(Var(名))` 取（L09 的全局表按层级存，无名字键的
+/// decl 表——树同款）。
+fn walk_pat<'a>(
+    mach: &mut Machine,
+    bump: &'a Bump,
+    cxt: &Cxt<'a>,
+    pat: &Pattern,
+    head_ty: V,
+) -> Result<(PatternDetail, Cxt<'a>), Error> {
+    match pat {
+        Pattern::Any(span, _) => {
+            let a_t = mach.quote(bump, cxt.lvl, head_ty);
+            let cxt2 = mach.bind_name(bump, cxt, "_", a_t, head_ty);
+            Ok((PatternDetail::Any(span.clone()), cxt2))
+        }
+        Pattern::Con(name, subs, _) => {
+            let head_sum = mach.force_v(bump, head_ty);
+            let is_sum = v_tag(head_sum) == 7
+                && matches!(v_xcell_of(head_sum), XCell::Sum { .. });
+            let (sum_params, cases): (Vec<SumParamV<'a>>, Vec<&'a str>) = if is_sum {
+                match v_xcell_of(head_sum) {
+                    XCell::Sum { params, cases, .. } => (params.to_vec(), cases.to_vec()),
+                    _ => (vec![], vec![]),
                 }
-                let (param, constrs) = {
-                    let f = mach.force_v(bump, *typ);
-                    if v_tag(f) == 7 {
-                        if let XCell::Sum { params, cases, .. } = v_xcell_of(f) {
-                            let cs: Vec<crate::parser_lib::Span<String>> = cases
-                                .iter()
-                                .map(|c| empty_span(c.to_string()))
-                                .collect();
-                            (params.to_vec(), cs)
-                        } else {
-                            (vec![], vec![empty_span("$any$".to_owned())])
-                        }
-                    } else {
-                        (vec![], vec![empty_span("$any$".to_owned())])
+            } else {
+                (vec![], vec![])
+            };
+            if !is_sum || !cases.iter().any(|c| *c == name.data.as_str()) {
+                if !subs.is_empty() {
+                    return Err(Error(name.clone().map(|n| format!(
+                        "`{n}` 不是构造子，不能带子模式解构"
+                    ))));
+                }
+                let a_t = mach.quote(bump, cxt.lvl, head_ty);
+                let cxt2 = mach.bind_name(bump, cxt, &name.data, a_t, head_ty);
+                return Ok((PatternDetail::Bind(name.clone()), cxt2));
+            }
+            let (_, mut ty) = mach.infer_expr(bump, cxt, &Raw::Var(name.clone()))?;
+            let mut impl_vals: Vec<V> = sum_params
+                .iter()
+                .filter(|p| p.icit == Icit::Impl)
+                .map(|p| p.val)
+                .collect();
+            impl_vals.reverse();
+            let mut sub_queue: Vec<&Pattern> = subs.iter().collect();
+            let mut details: Vec<PatternDetail> = Vec::new();
+            let mut cxt_arm = clone_cxt(cxt);
+            loop {
+                let tyf = mach.force_v(bump, ty);
+                if v_tag(tyf) != 4 {
+                    break;
+                }
+                let cell = v_pi_of(tyf);
+                let (bname, bicit, dom, body, env0) =
+                    (cell.name, cell.icit, cell.dom, cell.body, cell.env);
+                if let Some(v) = impl_vals.pop() {
+                    let env = env_ext(bump, env0, v);
+                    ty = mach.eval(bump, env, body);
+                    continue;
+                }
+                let sub: Option<&Pattern> = match bicit {
+                    Icit::Impl => sub_queue
+                        .first()
+                        .filter(|p| p.get_icit() == Icit::Impl)
+                        .copied(),
+                    Icit::Expl => match sub_queue.first() {
+                        Some(p) if p.get_icit() == Icit::Expl => Some(*p),
+                        _ => None,
+                    },
+                };
+                let u = v_lvl(cxt_arm.lvl);
+                let detail = match sub {
+                    None => {
+                        let b = format!("_{}", bname);
+                        let d_t = mach.quote(bump, cxt_arm.lvl, dom);
+                        cxt_arm = mach.bind_name(bump, &cxt_arm, &b, d_t, dom);
+                        PatternDetail::Any(empty_span(()))
+                    }
+                    Some(Pattern::Any(span, _)) => {
+                        sub_queue.remove(0);
+                        let b = format!("_{}", bname);
+                        let d_t = mach.quote(bump, cxt_arm.lvl, dom);
+                        cxt_arm = mach.bind_name(bump, &cxt_arm, &b, d_t, dom);
+                        PatternDetail::Any(span.clone())
+                    }
+                    Some(p @ Pattern::Con(..)) => {
+                        sub_queue.remove(0);
+                        let (d, c2) = walk_pat(mach, bump, &cxt_arm, p, dom)?;
+                        cxt_arm = c2;
+                        d
                     }
                 };
-
-                let constrs_name: std::collections::BTreeSet<String> = constrs
-                    .iter()
-                    .map(|x| x.data.clone())
-                    .collect();
-
-                for constr in constrs.iter() {
-                    // remaining_arms：每臂一个 Option（None = 该臂不参与本
-                    // 构造子分支——参考版 filter_map 的 Some(None)/None 同型）
-                    let mut remaining: Vec<Option<Arm<'a>>> = Vec::new();
-                    for arm in arms {
-                        let mut new_heads: Vec<(Var, V, crate::parser_lib::Span<String>, Icit)> =
-                            vec![];
-                        if constr.data != "$any$" {
-                            let matched = 'armblk: {
-                                let accessible_constrs = match self.filter_accessible_constrs(
-                                    mach,
-                                    bump,
-                                    &arm.cxt,
-                                    *typ,
-                                    &constrs,
-                                ) {
-                                    Ok(a) => a,
-                                    Err(e) => {
-                                        if std::env::var("L09_TRACE").is_ok() {
-                                            eprintln!("FILTER_ERR {}", e.0.data);
-                                        }
-                                        break 'armblk None; // .ok()?：本臂移除
-                                    }
-                                };
-                                if !accessible_constrs.iter().any(|x| x == constr) {
-                                    break 'armblk Some(None); // 不可达：Some(None) 保留
-                                }
-
-                                let infered =
-                                    mach.infer_expr(bump, &arm.cxt, &Raw::Var(constr.clone()));
-                                let (_, mut cty) = match infered {
-                                    Ok(x) => x,
-                                    Err(_) => break 'armblk None, // .ok()?：本臂丢弃
-                                };
-                                let mut param_impl: Vec<SumParamV<'_>> = param
-                                    .iter()
-                                    .filter(|x| x.icit == Icit::Impl)
-                                    .cloned()
-                                    .collect();
-                                param_impl.reverse();
-                                // 构造子类型可能被 VSub 包裹（臂上下文曾经
-                                // subst_cxt）——剥 Pi 链每一步都先 force
-                                cty = mach.force_v(bump, cty);
-                                while v_tag(cty) == 4 {
-                                    let p = v_pi_of(cty);
-                                    if !param_impl.is_empty() {
-                                        let val =
-                                            param_impl.pop().map(|x| x.val).unwrap_or_else(v_u0);
-                                        let ev = {
-                                            let env = env_ext(bump, p.env, val);
-                                            mach.eval(bump, env, p.body)
-                                        };
-                                        cty = mach.force_v(bump, ev);
-                                    } else {
-                                        new_heads.push((
-                                            self.fresh(),
-                                            p.dom,
-                                            empty_span(p.name.to_string()),
-                                            p.icit,
-                                        ));
-                                        let ev = {
-                                            let env = env_ext(
-                                                bump,
-                                                p.env,
-                                                v_lvl(arm.cxt.lvl + new_heads.len() as u32 - 1),
-                                            );
-                                            mach.eval(bump, env, p.body)
-                                        };
-                                        cty = mach.force_v(bump, ev);
-                                    }
-                                }
-                                Some(Some(()))
-                            };
-                            // matched: None = 本臂从 vec 移除；Some(None) =
-                                // 不可达保留；Some(Some(())) = 继续模式分派
-                                match matched {
-                                    None => continue,
-                                    Some(None) => {
-                                        remaining.push(None);
-                                        continue;
-                                    }
-                                    Some(Some(())) => {}
-                                }
-                        }
-                        let new_heads_len = new_heads.len();
-                        let matched: Option<Arm<'a>> = match &arm.arm.pats[..] {
-                            [Pattern::Any(x, i), ..] if i == icit => {
-                                let q = mach.quote(bump, arm.cxt.lvl, *typ);
-                                let name = head_name.clone().map(|x| format!("_{}", x));
-                                let cname = name.data.clone();
-                                Some(Arm {
-                                    arm: MatchArm {
-                                        pats: arm.arm.pats[1..].to_vec(),
-                                        body: arm.arm.body.clone(),
-                                    },
-                                    idx: arm.idx,
-                                    cxt: mach.bind_name(bump, &arm.cxt, &cname, q, *typ),
-                                    heads: vec![],
-                                    raw: arm.raw.clone(),
-                                    target_typ: arm.target_typ,
-                                    ori: arm.ori,
-                                    patcon: arm
-                                        .patcon
-                                        .clone()
-                                        .clean()
-                                        .push(PatternDetail::Any(*x)),
-                                    is_impl: false,
-                                })
-                            }
-                            [Pattern::Con(constr_, _item_pats, i), ..]
-                                if i == icit
-                                    && (constr.data == "$any$"
-                                        || !constrs_name.contains(&constr_.data)) =>
-                            {
-                                let q = mach.quote(bump, arm.cxt.lvl, *typ);
-                                Some(Arm {
-                                    arm: MatchArm {
-                                        pats: arm.arm.pats[1..].to_vec(),
-                                        body: arm.arm.body.clone(),
-                                    },
-                                    idx: arm.idx,
-                                    cxt: mach.bind_name(bump, &arm.cxt, &constr_.data, q, *typ),
-                                    heads: vec![],
-                                    raw: arm.raw.clone(),
-                                    target_typ: arm.target_typ,
-                                    ori: arm.ori,
-                                    patcon: arm
-                                        .patcon
-                                        .clone()
-                                        .clean()
-                                        .push(PatternDetail::Bind(constr_.clone())),
-                                    is_impl: false,
-                                })
-                            }
-                            [Pattern::Con(constr_, item_pats, i), ..]
-                                if i == icit && constr_ == constr =>
-                            {
-                                let mut pats = item_pats.iter().cloned().collect::<Vec<_>>();
-                                pats.extend(arm.arm.pats[1..].iter().cloned());
-                                Some(Arm {
-                                    arm: MatchArm {
-                                        pats,
-                                        body: arm.arm.body.clone(),
-                                    },
-                                    idx: arm.idx,
-                                    cxt: clone_cxt(&arm.cxt),
-                                    heads: new_heads.clone(),
-                                    raw: arm.raw.clone(),
-                                    target_typ: arm.target_typ,
-                                    ori: arm.ori,
-                                    patcon: arm
-                                        .patcon
-                                        .clone()
-                                        .clean()
-                                        .push(PatternDetail::Con(constr_.clone(), vec![]))
-                                        .new_level(new_heads_len),
-                                    is_impl: false,
-                                })
-                            }
-                            _ => {
-                                if *icit == Icit::Impl {
-                                    let q = mach.quote(bump, arm.cxt.lvl, *typ);
-                                    let name = head_name.clone().map(|x| format!("_{}", x));
-                                    let cname = name.data.clone();
-                                    Some(Arm {
-                                        arm: MatchArm {
-                                            pats: arm.arm.pats.clone(),
-                                            body: arm.arm.body.clone(),
-                                        },
-                                        idx: arm.idx,
-                                        cxt: mach.bind_name(bump, &arm.cxt, &cname, q, *typ),
-                                        heads: vec![],
-                                        raw: arm.raw.clone(),
-                                        target_typ: arm.target_typ,
-                                        ori: arm.ori,
-                                        patcon: arm
-                                            .patcon
-                                            .clone()
-                                            .clean()
-                                            .push(PatternDetail::Any(empty_span(()))),
-                                        is_impl: true,
-                                    })
-                                } else {
-                                    None
-                                }
-                            }
-                        };
-                        // 模式失配（None）→ 本臂从 vec 移除（不 push）；
-                        // 匹配 → Some(臂) 保留
-                        if let Some(a) = matched {
-                            remaining.push(Some(a));
-                        }
-                    }
-
-                    // remaining_arms.is_empty()（臂表本身为空）→ Unmatched；
-                    // 全臂 None → Ok(None)：本构造子静默跳过（参考版同款）
-                    if !remaining.is_empty() {
-                        if remaining.iter().all(|x| x.is_none()) {
-                                continue;
-                            }
-                            let heads_of_first = remaining
-                                .first()
-                                .and_then(|x| x.as_ref())
-                                .map(|x| x.heads.clone())
-                                .unwrap_or(vec![]);
-                        let is_impl = remaining
-                                .first()
-                                .and_then(|x| x.as_ref())
-                                .map(|x| x.is_impl)
-                                .unwrap_or(false);
-                        let context_ = if heads_of_first.is_empty() {
-                            if heads_rest.is_empty() || is_impl {
-                                context.clone()
-                            } else {
-                                Self::next_hole(
-                                    context,
-                                    &Pattern::Con(constr.clone(), vec![], *icit),
-                                )
-                            }
-                        } else {
-                            MatchContext::InCons {
-                                parent: Rc::new(context.clone()),
-                                constr: constr.clone(),
-                                icit: *icit,
-                                before: vec![],
-                                after: vec![
-                                    Pattern::Any(empty_span(()), *icit);
-                                    heads_of_first.len() - 1
-                                ],
-                            }
-                        };
-                        self.compile_aux(
-                            mach,
-                            bump,
-                            &heads_of_first
-                                .iter()
-                                .chain(heads_rest.iter())
-                                .cloned()
-                                .collect::<Vec<_>>(),
-                            &remaining_flatten(&mut remaining),
-                            &context_,
-                        )?;
-                    } else {
-                        let unmatched = Self::fill_context(
-                            context,
-                            &Pattern::Con(
-                                constr.clone(),
-                                vec![Pattern::Any(empty_span(()), Icit::Expl); 999],
-                                *icit,
-                            ),
-                        );
-                        self.warnings.push(Warning::Unmatched(unmatched));
-                    }
-                }
-                let _ = var; // 决策树不进项层（pats 才是产物）
-                Ok(())
+                details.push(detail);
+                let env = env_ext(bump, env0, u);
+                ty = mach.eval(bump, env, body);
             }
+            Ok((PatternDetail::Con(name.clone(), details), cxt_arm))
         }
     }
 }
