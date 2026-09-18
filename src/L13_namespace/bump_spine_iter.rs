@@ -7796,10 +7796,37 @@ impl Machine {
     // cxt.rs 的模式特化机制——精化等式直接改写进环境）
     // --------------------------------------------------------------------------------
 
+    /// 环境槽（0 = 最内层，`lvl2ix` 口径）；层级超出上下文给 None。
+    fn env_lvl_slot(&self, cxt: &Cxt<'_>, lvl: u32) -> Option<V> {
+        let ix = cxt.lvl.checked_sub(lvl + 1)?;
+        if ix >= env_len(cxt.env) {
+            return None;
+        }
+        Some(env_nth(&self.defs, cxt.env, ix))
+    }
+
+    /// 该层在环境里是否仍是自引用（未精化）。越界按 true（参考版
+    /// `env.iter().nth(..).map(..).unwrap_or(true)` 同款）。
+    fn env_lvl_is_self(&self, cxt: &Cxt<'_>, lvl: u32) -> bool {
+        match self.env_lvl_slot(cxt, lvl) {
+            Some(v) => v_tag(v) == 0 && v_lvl_of(v) == lvl,
+            None => true,
+        }
+    }
+
+    /// 该层若已精化（环境槽不再是自引用），给出当前精化值；未精化给 None。
+    fn env_lvl_refined(&self, cxt: &Cxt<'_>, lvl: u32) -> Option<V> {
+        match self.env_lvl_slot(cxt, lvl) {
+            Some(v) if !(v_tag(v) == 0 && v_lvl_of(v) == lvl) => Some(v),
+            _ => None,
+        }
+    }
+
     /// `unify_pm`：模式特化的合一（参考版 elaboration.rs 同款臂序）：
-    /// 双裸 Rigid 同级自反；单侧裸 Rigid → `update_cxt`（精化写进环境）；
-    /// 同名 SumCase 逐 datas、同名 Sum 逐参数（均**只比值槽**）递归；
-    /// 其余落 `unify_catch`（全文案合一错误）。
+    /// 双裸 Rigid 同级自反；双裸 Rigid 异名按「谁还没精化就精化谁」；
+    /// 单侧裸 Rigid 已精化时**与旧精化值继续合一**（而不是覆盖）；同名
+    /// SumCase 逐 datas、同名 Sum 逐参数（均**只比值槽**）递归；其余落
+    /// `unify_catch`（全文案合一错误）。
     fn unify_pm<'a>(
         &mut self,
         bump: &'a Bump,
@@ -7815,13 +7842,40 @@ impl Machine {
         if v_tag(f1) == 0 && v_tag(f2) == 0 && v_lvl_of(f1) == v_lvl_of(f2) {
             return self.update_cxt_impl(bump, cxt, v_lvl_of(f1), f2, false);
         }
-        // (Rigid(x, []), v) → 精化 x := v（update_prune=true）
-        if v_tag(f1) == 0 {
-            return self.update_cxt_impl(bump, cxt, v_lvl_of(f1), f2, true);
+        // 双裸 Rigid 异名：一侧可能已被**前面字段**的构造子精化过（环境槽
+        // 不再是自引用），另一侧是 fresh 模式变量。精化未精化的一侧，保住
+        // 早先的精化（参考版同臂；缺了它 `cons` 的第二个隐式 `_l1` 会把
+        // 前一个的 `l := _l0+1` 覆盖成 `l := _l1+1`，`_l0`/`_l1` 永不相等，
+        // 臂体里 `Vec _l0` vs `Vec _l1` 误报 can't unify——adder_proof 实测）。
+        if v_tag(f1) == 0 && v_tag(f2) == 0 {
+            let x1 = v_lvl_of(f1);
+            let x2 = v_lvl_of(f2);
+            let x1_is_self = self.env_lvl_is_self(cxt, x1);
+            let x2_is_self = self.env_lvl_is_self(cxt, x2);
+            if x1_is_self && !x2_is_self {
+                return self.update_cxt_impl(bump, cxt, x1, f2, true);
+            } else if x2_is_self && !x1_is_self {
+                return self.update_cxt_impl(bump, cxt, x2, f1, true);
+            }
+            return self.update_cxt_impl(bump, cxt, x1, f2, true);
         }
-        // (v, Rigid(x, [])) → 精化 x := v
+        // (Rigid(x, []), v)：x 已精化时**不覆盖**——把旧精化值与 v 继续
+        // 合一（约束传播：`l := succ _l0` 与 `l := succ _l1` 相遇时下钻到
+        // `_l0 = _l1`；参考版 already_refined 分支同款）。
+        if v_tag(f1) == 0 {
+            let x = v_lvl_of(f1);
+            if let Some(cur) = self.env_lvl_refined(cxt, x) {
+                return self.unify_pm(bump, cxt, cur, f2, t_span);
+            }
+            return self.update_cxt_impl(bump, cxt, x, f2, true);
+        }
+        // (v, Rigid(x, [])) → 对称
         if v_tag(f2) == 0 {
-            return self.update_cxt_impl(bump, cxt, v_lvl_of(f2), f1, true);
+            let x = v_lvl_of(f2);
+            if let Some(cur) = self.env_lvl_refined(cxt, x) {
+                return self.unify_pm(bump, cxt, f1, cur, t_span);
+            }
+            return self.update_cxt_impl(bump, cxt, x, f1, true);
         }
         // 原生 Nat ↔ 一元 `SumCase` 链（参考版 unify_pm 的两条 Nat 臂同口径）：
         // 压缩后的具体 Nat（`Nat(k)`）与 `zero`/`succ` 链按定义逐层比——探测面
