@@ -1,4 +1,21 @@
 # L12_canonical
+## 匹配编译器：决策树 → 逐臂下钻（2026-09-18）
+
+参考版与孪生都从**决策树矩阵**重写为 L07 的**逐臂下钻**（同 L11；动机是
+`match` 上孪生反而比参考版慢 3×）。实测（`l12bench --workload match`，同窗口
+交错，min，k=11）：
+
+| 口径 | 前 | 后 | 倍数 |
+|---|---|---|---|
+| 参考版 basic | 1.063 ms | 0.222 ms | 4.8× |
+| 孪生 fast_ss | 1.532 ms | **0.172 ms** | **8.9×** |
+| 孪生 fast_run | 1.563 ms | 0.219 ms | 7.1× |
+
+其余负载 `natadd` 0.83–0.93×、`strchain`/`struct` 0.97–1.04×（无回归）；
+`traitchain` 两侧都因既有的孪生 parity 缺口（perf-debt P5）不可测，与本次改动
+无关（改动前二进制同样失败）。诊断语义的三处收窄与 L11 完全一致，见 L11 README
+与 `docs/l09l13-match-compiler-analysis-2026-09-17.md`。
+
 
 canonical 搜索（`canonical.rs` 的 `iddfs`/`search`，Err 重试路径专属）+
 trait 求解器 Val 级重写（`typeclass.rs` 移除 `Typ` 桥接）+ `Val::Call`

@@ -63,6 +63,23 @@ path = "src/bin/l12bench.rs"
 name = "l13bench"
 path = "src/bin/l13bench.rs"
 
+# Tool bins: 通过 #[path] 直接编译多层源码（含各自的 #[cfg(test)] 模块），
+# 其测试目标会跑重复的文件 IO 测试并互相覆盖固定路径——关掉 test 目标。
+[[bin]]
+name = "l07alloc"
+path = "src/bin/l07alloc.rs"
+test = false
+
+[[bin]]
+name = "l07whoalloc"
+path = "src/bin/l07whoalloc.rs"
+test = false
+
+[[bin]]
+name = "l11repro"
+path = "src/bin/l11repro.rs"
+test = false
+
 
 
 [dependencies]
