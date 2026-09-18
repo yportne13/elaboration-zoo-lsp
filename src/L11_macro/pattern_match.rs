@@ -22,48 +22,8 @@ pub enum Warning {
     Unmatched(Pattern),
 }
 
-#[derive(Debug, Clone)]
-struct PatConstructor {
-    data: Vec<(usize, Vec<PatternDetail>)>,
-}
-
-impl PatConstructor {
-    fn new() -> Self {
-        PatConstructor { data: vec![(2, vec![])] }
-    }
-
-    fn clean(mut self) -> Self {
-        while let Some(true) = self.data.last().map(|(num, x)| x.len() == *num) {
-            let (_, t) = self.data.pop().unwrap();
-            self.data
-                .last_mut()
-                .map(|x| {
-                    x.1.last_mut()
-                        .map(|x| match x {
-                            PatternDetail::Con(_, x) => {*x = t;},
-                            _ => {},
-                        })
-                });
-        }
-        self
-    }
-
-    fn push(self, detail: PatternDetail) -> Self {
-        let mut ret = self.clean();
-        ret.data.last_mut().map(|(_, x)| x.push(detail));
-        ret
-    }
-
-    fn new_level(mut self, index: usize) -> Self {
-        self.data.push((index, vec![]));
-        self
-    }
-}
-
 pub struct Compiler {
     warnings: Vec<Warning>,
-    reachable: HashMap<usize, ()>,
-    checked_ret: HashSet<usize>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     ret_type: Rc<Val>,
 }
@@ -72,51 +32,8 @@ impl Compiler {
     pub fn new(ret_type: Rc<Val>) -> Self {
         Compiler {
             warnings: Vec::new(),
-            reachable: HashMap::new(),
-            checked_ret: HashSet::new(),
             pats: Vec::new(),
             ret_type,
-        }
-    }
-
-    fn fill_context(ctx: &MatchContext, pat: &Pattern) -> Pattern {
-        match ctx {
-            MatchContext::Outermost => pat.clone(),
-            MatchContext::InCons {
-                parent,
-                constr,
-                icit,
-                before,
-                after,
-            } => {
-                let mut new_before = before.clone();
-                new_before.reverse();
-                new_before.push(pat.clone());
-                new_before.extend(after.clone());
-                Self::fill_context(parent, &Pattern::Con(constr.clone(), new_before, *icit))
-            }
-        }
-    }
-
-    fn next_hole(&self, ctx: &MatchContext, pat: &Pattern) -> MatchContext {
-        match ctx {
-            MatchContext::Outermost => MatchContext::Outermost,
-            MatchContext::InCons {
-                parent,
-                constr,
-                icit,
-                before,
-                after,
-            } => match after[..] {
-                [] => self.next_hole(parent, &Pattern::Con(constr.clone(), before.clone(), *icit)),
-                _ => MatchContext::InCons {
-                    parent: parent.clone(),
-                    constr: constr.clone(),
-                    icit: *icit,
-                    before: vec![pat.clone()],
-                    after: after[1..].to_vec(),
-                },
-            },
         }
     }
 
@@ -203,339 +120,20 @@ impl Compiler {
         result
     }
 
-    fn compile_aux(
-        &mut self,
-        infer: &mut Infer,
-        heads: &[(Rc<Val>, Span<String>, Icit)],
-        arms: &[(MatchArm, usize, Cxt, Cxt, Raw, Rc<Val>, Rc<Val>, PatConstructor)],
-        context: &MatchContext,
-    ) -> Result<bool, Error> {
-        /*println!(
-            " arms: {}\nheads: {}",
-            arms
-                .iter()
-                .map(|x| format!("{:?}\n", x.0))
-                .reduce(|a, b| a + &b)
-                .unwrap_or("".to_owned()),
-            heads
-                .iter()
-                .map(|x| format!("{:?}\n", x))
-                .reduce(|a, b| a + &b)
-                .unwrap_or("".to_owned()),
-        );*/
-        match heads {
-            [] => match arms {
-                [(arm, idx, cxt, _, raw, target_typ, ori, patcon), ..] if arm.pats.is_empty() || arm.pats.get(0).map(|x| matches!(x, Pattern::Any(Span { data: false, .. }, _))) == Some(true) => {
-                    // 可达性先记（L13 2a0eb6e 同族）：到达本叶即该臂可达，与
-                    // check_pm_final/体检查是否成功无关；后记会在构造子分支
-                    // 走查 check_pm_final 失败（本分支不适用的臂）时漏记，
-                    // 决策树遍历结束即误报 unreachable pattern。
-                    self.reachable.insert(*idx, ());
-                    let (_, sigma) = match infer.check_pm_final(cxt, raw.clone(), target_typ.clone(), ori.clone()) {
-                        Ok(x) => x,
-                        Err(e) => {
-                            return Ok(false);
-                        }
-                    };
-                    // 分支体检查的上下文置于精化 σ 之下（dpm-nbe `subst sub
-                    // ctx`）：env 槽与类型表包 VSub，布局不变，读点 force 推开。
-                    let cxt = cxt.subst_cxt(&sigma);
-                    // 同一臂可能在多个构造子分支被走到：已完整编译（体检查 +
-                    // pats 记录）则只需可达、无需重检查。按臂下标记录（L13
-                    // 同族）——按模式 Raw 记录会把两个模式相同的不同臂混为
-                    // 一谈，漏检第二个臂的体。
-                    if self.checked_ret.contains(idx) {
-                        return Ok(true)
-                    }
-                    //println!("prepare to check {:?}", arm.body);
-                    //println!(" == {}", super::pretty::pretty_tm(0, cxt_global.names(), &infer.quote(cxt_global.lvl, self.ret_type.clone())));
-                    let ret_type = match self.ret_type.as_ref() {
-                        Val::Flex(_, _) => &self.ret_type,
-                        _ => {
-                            let ret_type = infer.quote(&cxt.decl, cxt.lvl, &self.ret_type);
-                            &infer.eval(&cxt.decl, &cxt.env, &ret_type)
-                        },
-                    };
-                    let ret = infer.check(&cxt, arm.body.0.clone(), ret_type)?;
-                    self.checked_ret.insert(*idx);
-                    let patcon = patcon.clone().clean();
-                    //TODO:check patcon is clean
-                    self.pats.push((patcon.data[0].1[0].clone(), ret));
-                    Ok(true)
-                },
-                [arm, ..] => Err(Error(match &arm.0.pats[0] {
-                    Pattern::Any(span, _) => span.map(|_| "invalid pattern".to_owned()),
-                    Pattern::Con(span, _, _) => span.clone().map(|x| format!("invalid pattern {}", x)),
-                })),
-                [] => Ok(false)
-            },
-            [(typ, head_name, icit), heads_rest @ ..] => {
-                let not_necessary = arms
-                    .iter()
-                    .all(|arm| matches!(arm.0.pats[..], [Pattern::Any(_, i), ..] if &i == icit));
-
-                if not_necessary {
-                    let new_context = self.next_hole(context, &Pattern::Any(empty_span(true), *icit));
-                    let new_arms = arms
-                        .iter()
-                        .map(|arm| {
-                            let cxt = &arm.2;
-                            (
-                                MatchArm {
-                                    pats: arm.0.pats.get(1..).map(|x| x.to_vec()).unwrap_or(vec![]),
-                                    body: arm.0.body.clone(),
-                                },
-                                arm.1,
-                                if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
-                                    cxt.clone()
-                                } else {
-                                    cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
-                                },
-                                arm.3.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&arm.3.decl, arm.3.lvl, typ), typ.clone()),
-                                arm.4.clone(),
-                                arm.5.clone(),
-                                arm.6.clone(),
-                                if let Some(Pattern::Any(Span { data: false, .. }, _)) = arm.0.pats.first() {
-                                    arm.7.clone()
-                                } else {
-                                    arm.7.clone().clean().push(PatternDetail::Any(empty_span(())))
-                                },
-                            )
-                        })
-                        .collect::<Vec<_>>();
-                    self.compile_aux(infer, heads_rest, &new_arms, &new_context)
-                } else {
-                    //println!(" -- {}", infer.meta.len());
-                    //println!("  {:?}", typ);
-                    //let typ = infer.force(typ);
-                    let (param, constrs) = match typ.as_ref() {
-                        Val::Sum(_, param, cases, _) => (param, cases),
-                        _ => {
-                            //(empty_span("$unknown$".to_owned()), vec![], vec![(empty_span("$unknown$".to_owned()), Val::U)])
-                            (&vec![], &vec![empty_span("$any$".to_owned())])
-                        }
-                    };
-
-                    let constrs_name = constrs
-                        .iter()
-                        .map(|x| x.data.clone())
-                        .collect::<BTreeSet<_>>();
-
-                    let decision_tree_branches = constrs
-                        .iter()
-                        .map(|constr| {
-                            let remaining_arms = arms
-                                .iter()
-                                .filter_map(|(arm, idx, cxt, cxt_for_filter, raw, target_typ, ori, patcon)| {
-                                    let mut new_heads = vec![];
-                                    if constr.data != "$any$" {
-                                        let accessible_constrs = self.filter_accessible_constrs(
-                                            infer,
-                                            cxt_for_filter,
-                                            typ,
-                                            constrs,
-                                        ).ok()?;
-                                        if !accessible_constrs.into_iter().any(|x| x.0 == constr) {
-                                            return Some(None);
-                                        }
-
-                                        let (_, typ) = infer.infer_expr(cxt_for_filter, Raw::Var(constr.clone())).ok()?;
-                                        let mut param = param.iter().filter(|x| x.3 == Icit::Impl).cloned().collect::<Vec<_>>();
-                                        param.reverse();
-                                        let mut typ = typ;
-                                        // 精化 σ 包裹的构造子类型先 force 推开再剥 Π
-                                        // （旧机制下 src_names 已物化）
-                                        loop {
-                                            let tf = infer.force(&cxt_for_filter.decl, &typ);
-                                            match tf.as_ref() {
-                                                Val::Pi(name, icit, ty, closure) => {
-                                                    if !param.is_empty() {
-                                                        let val = param.pop()
-                                                            .map(|x| x.1)
-                                                            .unwrap_or(Val::U(0).into());
-                                                        typ = infer.closure_apply(&cxt_for_filter.decl, closure, val);
-                                                    } else {
-                                                        new_heads.push((ty.clone(), name.clone(), *icit));
-                                                        typ = infer.closure_apply(&cxt_for_filter.decl, closure, Val::vvar(cxt.lvl + new_heads.len() as u32 - 1).into());
-                                                    }
-                                                }
-                                                _ => break,
-                                            }
-                                        }
-                                    }
-                                    let new_heads_len = new_heads.len();
-                                    match &arm.pats[..] {
-                                        [Pattern::Any(x, i), ..] if i == icit => Some(Some((
-                                            MatchArm {
-                                                pats: [
-                                                    new_heads
-                                                        .iter()
-                                                        .map(|n| Pattern::Any(x.to_span().map(|_| false), n.2))
-                                                        .collect::<Vec<_>>(),
-                                                    arm.pats[1..].to_vec(),
-                                                ].concat(),
-                                                body: arm.body.clone(),
-                                            },
-                                            *idx,
-                                            if !x.data {
-                                                cxt.clone()
-                                            } else {
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, typ), typ.clone())
-                                            },
-                                            cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, typ), typ.clone()),
-                                            new_heads,
-                                            raw.clone(),
-                                            target_typ.clone(),
-                                            ori.clone(),
-                                            if !x.data {
-                                                patcon.clone()
-                                            } else {
-                                                patcon.clone().clean().push(PatternDetail::Any(x.to_span()))
-                                            },
-                                            false,
-                                        ))),
-                                        [Pattern::Con(constr_, item_pats, i), ..]
-                                            if i == icit && (constr.data == "$any$" || !constrs_name.contains(&constr_.data)) =>
-                                        {
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: [
-                                                        new_heads
-                                                            .iter()
-                                                            .map(|n| Pattern::Any(constr_.to_span().map(|_| false), n.2))
-                                                            .collect::<Vec<_>>(),
-                                                        arm.pats[1..].to_vec(),
-                                                    ].concat(),
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                cxt.bind(constr_.clone(), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
-                                                cxt_for_filter.bind(constr_.clone(), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, &typ), typ.clone()),
-                                                new_heads,
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Bind(constr_.clone())),
-                                                false,
-                                            )))
-                                        }
-                                        [Pattern::Con(constr_, item_pats, i), ..] if i == icit && (constr_ == constr) => {
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: item_pats
-                                                        .iter()
-                                                        .chain(&arm.pats[1..])
-                                                        .cloned()
-                                                        .collect(),
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                cxt.clone(),
-                                                cxt_for_filter.clone(),
-                                                new_heads,
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Con(constr_.clone(), vec![])).new_level(new_heads_len),
-                                                false,
-                                            )))
-                                        }
-                                        _ => if *icit == Icit::Impl {
-                                            Some(Some((
-                                                MatchArm {
-                                                    pats: arm.pats.clone(),
-                                                    body: arm.body.clone(),
-                                                },
-                                                *idx,
-                                                cxt.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt.decl, cxt.lvl, &typ), typ.clone()),
-                                                cxt_for_filter.bind(head_name.clone().map(|x| format!("_{}", x)), infer.quote(&cxt_for_filter.decl, cxt_for_filter.lvl, &typ), typ.clone()),
-                                                vec![],
-                                                raw.clone(),
-                                                target_typ.clone(),
-                                                ori.clone(),
-                                                patcon.clone().clean().push(PatternDetail::Any(empty_span(()))),
-                                                true,
-                                            )))
-                                        } else {None},
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-
-                            let valid_tree = if remaining_arms.is_empty() {
-                                let unmatched = Self::fill_context(
-                                    context,
-                                    &Pattern::Con(
-                                        constr.clone(),
-                                        vec![],
-                                        *icit,
-                                    ),
-                                );
-                                self.warnings.push(Warning::Unmatched(unmatched));
-                                false
-                            } else if remaining_arms
-                                        .iter()
-                                        .flatten()
-                                        .map(|_| ())
-                                        .collect::<Vec<_>>().is_empty() {
-                                return Ok(false)
-                            } else {
-                                let new_heads = remaining_arms
-                                    .first()
-                                    .and_then(|x| x.as_ref().map(|y| y.4.clone()))
-                                    .unwrap_or(vec![]);
-                                let is_impl = remaining_arms
-                                    .first()
-                                    .and_then(|x| x.as_ref().map(|y| y.9))
-                                    .unwrap_or(false);
-                                let context_ = if new_heads.is_empty() {
-                                    if heads_rest.is_empty() || is_impl {
-                                        context.clone()
-                                    } else {
-                                        self.next_hole(
-                                            context,
-                                            &Pattern::Con(constr.clone(), vec![], *icit),
-                                        )
-                                    }
-                                } else {
-                                    MatchContext::InCons {
-                                        parent: context.clone().into(),
-                                        constr: constr.clone(),
-                                        icit: *icit,
-                                        before: vec![],
-                                        after: vec![
-                                            Pattern::Any(empty_span(true), *icit);
-                                            new_heads.len() - 1
-                                        ],
-                                    }
-                                };
-                                self.compile_aux(
-                                    infer,
-                                    &new_heads
-                                        .iter()
-                                        .chain(heads_rest)
-                                        .cloned()
-                                        .collect::<Vec<_>>(),
-                                    &remaining_arms
-                                        .into_iter()
-                                        .flatten()
-                                        .map(|x| (x.0, x.1, x.2, x.3, x.5, x.6, x.7, x.8))
-                                        .collect::<Vec<_>>(),
-                                    &context_,
-                                )?
-                            };
-
-                            Ok(valid_tree)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_iter()
-                        .any(|x| x);
-
-                    Ok(decision_tree_branches)
-                }
-            }
-        }
-    }
-
+    /// 逐臂下钻编译（L07 口径，2026-09-18 自决策树矩阵重写）。
+    ///
+    /// 决策树在每个 (构造子 × 臂) 上重复 `filter_accessible_constrs` 探测并
+    /// 逐节点克隆上下文——match 编译期的主要热点；逐臂版把每臂的工作收敛为
+    /// 一次 `check_pm_final`（特化方程 + 头部精化，与树叶子同款）加一次
+    /// 体检查，可达性探测每 match 只做一轮。
+    ///
+    /// 语义相对决策树的三处（已登记 README / 分析文档）：
+    /// 1. 覆盖检查只在**顶层**做（`Unmatched` = 构造子 + 999 通配，与树的
+    ///    Outermost 形态一致）；嵌套路径的缺失不再报；
+    /// 2. 遮蔽检查只认**通配臂**（`is_catch_all`）：通配臂之后的臂报
+    ///    `Unreachable`；非通配的联合遮蔽（如 `zero, succ, x` 的 x）不再报；
+    /// 3. 特化方程失败的臂**静默跳过**（不进 pats、不告警），与树叶子
+    ///    `check_pm_final` 失败即 `Ok(false)` 的口径一致。
     pub fn compile(
         &mut self,
         infer: &mut Infer,
@@ -545,54 +143,78 @@ impl Compiler {
         target_val: Rc<Val>,
     ) -> Result<Vec<Warning>, Error> {
         self.warnings = Vec::new();
-        self.reachable = HashMap::new();
         let typ = infer.force(&cxt.decl, &typ);
-        self.compile_aux(
-            infer,
-            &[(typ.clone(), empty_span("".to_owned()), Icit::Expl)],
-            &arms
-                .iter()
-                .enumerate()
-                .map(|(idx, (pat, body))| {
-                    (
-                        MatchArm {
-                            pats: vec![pat.clone()],
-                            body: (body.clone(), idx),
-                        },
-                        idx,
-                        cxt.clone(),
-                        cxt.clone(),
-                        pat.to_raw(),
-                        typ.clone(),
-                        target_val.clone(),
-                        PatConstructor::new(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-            &MatchContext::Outermost,
-        )?;
-
-        // 检查是否有不可达分支
-        let unreachable = arms
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, (_, body))| {
-                if !self.reachable.contains_key(&idx) {
-                    Some(Warning::Unreachable(body.clone()))
-                } else {
-                    None
+        let (constrs, ctor_names): (Vec<Constructor>, Vec<String>) = match typ.as_ref() {
+            Val::Sum(_, _, cases, _) => (
+                cases.clone(),
+                cases.iter().map(|c| c.data.clone()).collect(),
+            ),
+            _ => (vec![], vec![]),
+        };
+        // 覆盖检查：可达且无臂覆盖 → Unmatched（fill_context(Outermost, ·)
+        // 的形态就是「构造子 + 999 通配」）。
+        if !constrs.is_empty() {
+            // 可达性探测是**纯探测**：失败（例如 `Eq[A] x y` 上探 `refl` 时
+            // 索引方程 x ≐ y 不可解）只说明该轮无结论，按"无覆盖结论"处理
+            // ——决策树里同一失败是 `.ok()?` 把该臂滤掉，不冒泡成硬错误。
+            if let Ok(accessible) = self.filter_accessible_constrs(infer, cxt, &typ, &constrs) {
+                for (ctor, ..) in &accessible {
+                    if !arms
+                        .iter()
+                        .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
+                    {
+                        self.warnings.push(Warning::Unmatched(Pattern::Con(
+                            (*ctor).clone(),
+                            vec![Pattern::Any(empty_span(true), Icit::Expl); 999],
+                            Icit::Expl,
+                        )));
+                    }
                 }
-            })
-            .collect::<Vec<_>>();
-
-        Ok(
-            unreachable
-                .into_iter()
-                .chain(self.warnings.clone())
-                .collect()
-        )
+            }
+        }
+        // 逐臂下钻：每臂一次 check_pm_final → σ 之下的上下文里检查体。
+        // 臂序 = 用户序；首匹配语义由运行时 eval_aux 保住。
+        let mut unreachable: Vec<Warning> = Vec::new();
+        let mut shadowed = false;
+        for (pat, body) in arms {
+            if shadowed {
+                unreachable.push(Warning::Unreachable(body.clone()));
+                continue;
+            }
+            // 先走查模式：绑定模式变量槽（体与 check_pm_final 的名字解析
+            // 都依赖这些绑定），同时构建运行时 PatternDetail。
+            let (detail, cxt_walk) = match walk_pat(infer, cxt, pat, &typ) {
+                Ok(x) => x,
+                Err(_) => {
+                    // 结构冲突（absurd 臂）：不进 pats、不告警（同树叶子口径）
+                    continue;
+                }
+            };
+            let raw = pat.to_raw();
+            let Ok((_, sigma)) = infer.check_pm_final(
+                &cxt_walk,
+                raw,
+                typ.clone(),
+                target_val.clone(),
+            ) else {
+                continue;
+            };
+            let cxt_arm = cxt_walk.subst_cxt(&sigma);
+            let ret_type = match self.ret_type.as_ref() {
+                Val::Flex(..) => self.ret_type.clone(),
+                _ => {
+                    let q = infer.quote(&cxt_arm.decl, cxt_arm.lvl, &self.ret_type);
+                    infer.eval(&cxt_arm.decl, &cxt_arm.env, &q)
+                }
+            };
+            let ret = infer.check(&cxt_arm, body.clone(), &ret_type)?;
+            self.pats.push((detail, ret));
+            if is_catch_all(pat, &ctor_names) {
+                shadowed = true;
+            }
+        }
+        Ok(unreachable.into_iter().chain(self.warnings.clone()).collect())
     }
-
     pub fn eval_aux(
         infer: &Infer,
         heads: &Rc<Val>,
@@ -636,20 +258,152 @@ impl Compiler {
     }
 }
 
-#[derive(Debug, Clone)]
-enum MatchContext {
-    Outermost,
-    InCons {
-        parent: Rc<MatchContext>,
-        constr: Constructor,
-        icit: Icit,
-        before: Vec<Pattern>,
-        after: Vec<Pattern>,
-    },
+/// 臂是否（结构上）覆盖构造子 `ctor`：通配覆盖一切；构造子名不在该类型的
+/// 构造子表里 = 变量模式（覆盖一切）；否则同名才覆盖（L07 `covers` 同款）。
+fn covers(pat: &Pattern, ctor: &str, ctor_names: &[String]) -> bool {
+    match pat {
+        Pattern::Any(..) => true,
+        Pattern::Con(name, _, _) => {
+            !ctor_names.iter().any(|c| c == &name.data) || name.data == ctor
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
-struct MatchArm {
-    pats: Vec<Pattern>,
-    body: (Raw, usize),
+/// 通配臂：覆盖所有取值的臂（其后的臂不可达）。变量模式（构造子名不在
+/// 构造子表里且无子模式）也算（L07 `is_catch_all` 同款）。
+fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
+    match pat {
+        Pattern::Any(..) => true,
+        Pattern::Con(name, subs, _) => {
+            subs.is_empty() && !ctor_names.iter().any(|c| c == &name.data)
+        }
+    }
+}
+
+/// 模式 → 运行时 `PatternDetail`（L07 `walk` 的纯结构版，无槽位绑定）。
+///
+/// 槽位纪律与决策树的 patcon 记账一致：构造子 Π 链上**枚举隐式参数之后**
+/// 的每个绑定器各占一个 detail 槽——枚举隐式参数用头部 Sum 的实参实例化
+/// （不产生槽）；省写的构造子隐式绑定器补虚通配 `Any`；子模式按 icit 对齐
+/// （隐式可缺省、显式必须提供，多余子模式忽略——特化方程已在
+/// `check_pm_final` 里把关）。嵌套 Con 递归下钻（字段类型 = 该位置的
+/// telescope 实例化）。非构造子名 = 变量模式 → `Bind`。
+
+/// 模式走查（L07 `walk`/`walk_con` 的口径）：绑定模式变量槽并构建运行时
+/// `PatternDetail`。
+///
+/// 槽位纪律与决策树的列走查一致：构造子 Π 链上**枚举隐式参数之后**的每个
+/// 绑定器各绑一槽——枚举隐式参数用头部 Sum 的实参实例化（不绑槽）；省写
+/// 的构造子隐式绑定器绑 `_名` 槽、detail 记虚通配 `Any`；通配绑 `_名`；
+/// 变量模式（构造子名不在该类型构造子表里）以**用户名**绑槽、detail 记
+/// `Bind`；嵌套 Con 递归下钻（字段类型 = 该位置的 telescope 实例化）。
+/// **Con 本身不占槽**（运行时 eval_aux 的 Con 路径不 prepend，与树一致）。
+/// Err = 头部不是和类型却又带子模式解构之类的硬错误。
+fn walk_pat(
+    infer: &mut Infer,
+    cxt: &Cxt,
+    pat: &Pattern,
+    head_ty: &Rc<Val>,
+) -> Result<(PatternDetail, Cxt), Error> {
+    match pat {
+        Pattern::Any(span, _) => {
+            let a_t = infer.quote(&cxt.decl, cxt.lvl, head_ty);
+            let cxt2 = cxt.bind(empty_span("_".to_owned()), a_t, head_ty.clone());
+            Ok((PatternDetail::Any(span.to_span()), cxt2))
+        }
+        Pattern::Con(name, subs, _) => {
+            let head_sum = infer.force(&cxt.decl, head_ty);
+            let (sum_name, sum_params, cases) = match head_sum.as_ref() {
+                Val::Sum(sum_name, params, cases, _) => (sum_name, params, cases),
+                _ => {
+                    if !subs.is_empty() {
+                        return Err(Error(name.clone().map(|n| format!(
+                            "`{n}` 不是构造子，不能带子模式解构"
+                        ))));
+                    }
+                    let a_t = infer.quote(&cxt.decl, cxt.lvl, head_ty);
+                    let cxt2 = cxt.bind(name.clone(), a_t, head_ty.clone());
+                    return Ok((PatternDetail::Bind(name.clone()), cxt2));
+                }
+            };
+            if !cases.iter().any(|c| c.data == name.data) {
+                if !subs.is_empty() {
+                    return Err(Error(name.clone().map(|n| format!(
+                        "`{n}` 不是 {} 的构造子，不能带子模式解构", sum_name.data
+                    ))));
+                }
+                let a_t = infer.quote(&cxt.decl, cxt.lvl, head_ty);
+                let cxt2 = cxt.bind(name.clone(), a_t, head_ty.clone());
+                return Ok((PatternDetail::Bind(name.clone()), cxt2));
+            }
+            // L11 的构造子以**裸名**登记（elaboration.rs 里 cxt.decl(c.0, ..)）
+            let entry_ty = match cxt.decl.get(name.data.as_str()) {
+                Some(e) => e.4.clone(),
+                None => {
+                    return Err(Error(name.clone().map(|n| format!("找不到构造子 {}", n))))
+                }
+            };
+            // 枚举隐式参数（头部 Sum 的 Impl 实参）逐一实例化，不绑槽
+            let mut impl_vals: Vec<Rc<Val>> = sum_params
+                .iter()
+                .filter(|p| p.3 == Icit::Impl)
+                .map(|p| p.1.clone())
+                .collect();
+            impl_vals.reverse();
+            let mut ty = entry_ty;
+            let mut sub_queue: Vec<&Pattern> = subs.iter().collect();
+            let mut details: Vec<PatternDetail> = Vec::new();
+            let mut cxt_arm = cxt.clone();
+            loop {
+                let tyf = infer.force(&cxt.decl, &ty);
+                match tyf.as_ref() {
+                    Val::Pi(bname, bicit, dom, closure) => {
+                        let (bicit, dom, closure) = (*bicit, dom.clone(), closure.clone());
+                        if let Some(v) = impl_vals.pop() {
+                            ty = infer.closure_apply(&cxt.decl, &closure, v);
+                            continue;
+                        }
+                        let sub: Option<&Pattern> = match bicit {
+                            Icit::Impl => sub_queue
+                                .first()
+                                .filter(|p| p.get_icit() == Icit::Impl)
+                                .copied(),
+                            Icit::Expl => match sub_queue.first() {
+                                Some(p) if p.get_icit() == Icit::Expl => Some(*p),
+                                _ => None,
+                            },
+                        };
+                        // 本绑定器位置的 fresh rigid：绑槽即入 env
+                        let u = Rc::new(Val::vvar(cxt_arm.lvl));
+                        let detail = match sub {
+                            None => {
+                                let b = empty_span(format!("_{}", bname.data));
+                                let d_t = infer.quote(&cxt.decl, cxt_arm.lvl, &dom);
+                                cxt_arm = cxt_arm.bind(b, d_t, dom.clone());
+                                PatternDetail::Any(empty_span(()))
+                            }
+                            Some(Pattern::Any(span, _)) => {
+                                sub_queue.remove(0);
+                                let b = empty_span(format!("_{}", bname.data));
+                                let d_t = infer.quote(&cxt.decl, cxt_arm.lvl, &dom);
+                                cxt_arm = cxt_arm.bind(b, d_t, dom.clone());
+                                PatternDetail::Any(span.to_span())
+                            }
+                            Some(p @ Pattern::Con(..)) => {
+                                sub_queue.remove(0);
+                                let (d, c2) = walk_pat(infer, &cxt_arm, p, &dom)?;
+                                cxt_arm = c2;
+                                d
+                            }
+                        };
+                        details.push(detail);
+                        // 下一层域：以本绑定器位置的 fresh rigid 实例化
+                        ty = infer.closure_apply(&cxt_arm.decl, &closure, u);
+                    }
+                    _ => break,
+                }
+            }
+            Ok((PatternDetail::Con(name.clone(), details), cxt_arm))
+        }
+    }
 }
