@@ -9,12 +9,33 @@
 - **L11：已完成**（`6ae12a6`）——参考版 + 孪生同步重写；实测参考版 match 2.3×、
   孪生 8.5×（0.180 ms @k=11），孪生/参考从 0.3× 变为 ~3×。
 - **L12：已完成**（`45330e6`）——参考版 4.8×、孪生 8.9×（0.172 ms @k=11）。
-- **L10 / L13 / L09：未做**。配方与 L11/L12 相同（§3 的顺序），每层需要：
-  参考版 `pattern_match.rs` 与孪生 `bump_spine_iter.rs` 同步替换 `compile`/
-  `compile_aux*` 为逐臂 `compile` + `walk_pat`，以 `lXX_fast_parity` +
-  lib 测试为闸门，再跑 `lXXbench` 交错 A/B。层特有适配点（L11/L12 的例子：
-  `Span<SmolStr>` 构造子名/裸名登记、`Either::Icit`、`check::<false>`、
-  `Error(span, vec![])`、`DeclEntry.vty`）需逐层确认。
+- **L10：已完成**（`4e97743`）——参考版 3.0×、孪生 5.1×（0.186 ms @k=11）。
+- **L10：已完成**（`4e97743`）——参考版 3.0×（0.750→0.252 ms @k=11）、孪生
+  5.1×（0.946→0.186 ms）；孪生/参考 0.8× → 1.35×。其余负载 0.80–1.03×。
+- **L13 / L09：未做**。配方同 L11/L12（参考版 `pattern_match.rs` 与孪生
+  `bump_spine_iter.rs` 同步替换 `compile`/`compile_aux*` 为逐臂 `compile` +
+  `walk_pat`，以 `lXX_fast_parity` + lib 测试为闸门，再跑 bench 交错 A/B）。
+
+### L13 特有的适配点（已勘明，可直接照做）
+
+1. **构造子键是限定名**：`elaboration.rs:1345` 明确写 `EnumName.caseName`、
+   **不设裸名别名**（L10–L12 是裸名）。因此 `walk_pat` 里取构造子类型**不要**
+   手工拼 `{sum}.{ctor}`，改用树同款的 `infer_expr(Raw::Var(名))`——名字解析
+   交给命名空间机制；
+2. **参考版 `check_pm_final` 返回精化后的 `Cxt`**（`Result<(Rc<Tm>, Cxt)>`，
+   内部 `check_pm` → `infer_expr_pm` + `insert` + `unify_pm`，`unify_pm` 走
+   `cxt.update_cxt(...)` 改写），**不是 σ**——所以参考版逐臂实现里**不要**
+   调 `subst_cxt`，直接把返回的 Cxt 用作臂上下文；孪生侧仍是 σ（`SubstV`）
+   + `subst_cxt`（与 L10–L12 相同）；
+3. 参考版 `check<const CANONICAL: bool>`、`Error(span, vec![])`、
+   `Span<SmolStr>` + `Either::Icit`（同 L12）；`closure_apply(&self, decl, closure, u)`
+   带 `decl` 参（L11 也是）、`Cxt::bind(Span<SmolStr>, Rc<Tm>, Rc<Val>)`；
+4. 规模的量级：参考版 `compile_aux` 985 行、孪生 `compile_aux_inner` 608 行
+   （L11/L12 是 400–450），另有 `make_implicit_name`/`FilterResult`/`ArmEntry`/
+   `is_impl`/`moduletree` 等 L13 专有件——移植时只需覆盖 `compile`/`walk` 这条
+   路径，那些都是决策树内部件，可随 `compile_aux*` 一并删除。
+5. **L09**：其孪生本就比参考版快 2.3×（`match`），优先级最低；适配点预计介于
+   L10（env 口径机器、层级化全局表）与 L11（String 键）之间。
 
 ## 0. 结论
 
