@@ -297,6 +297,7 @@ solve / intersect）。在此之上：
 | **黑盒三轮（2026-09）**：多隐式参数 enum 的无标注域洞在第 2+ 个参数处成为带 pruning 的部分应用 meta（`?m A`），构造子上显式供给枚举隐式实参（`P1[Nat][Bool]`）需解 `?m A := U`，invert 无法倒序 Decl 头 spine → 误报 can't unify | enum 声明处把无标注隐式参数的域**钉为 U**（方括号参数在语言定义上就是类型参数，任意类型的索引留给圆括号；显式标注 `[A : Nat]` 与显式索引不动）。参考版 + 孪生版同步；def 的隐式参数不限于类型，不受此修复影响（域洞保留，显式供参本就可用） |
 | **连贯性评审（2026-09）**：三处 L08 侧修复的 L07 同码位点回合——①投影限定构造子快捷路径尊重局部遮蔽（L08 b66f5e4，遮蔽时走投影而非静默解析全局构造子）；②enum case 分隔放宽为 `EndLine+`（case 间注释行/空行合法，同 match 臂）；③unify 的 Π 臂 quote 改用当前层级 `l`（η descent 后 `l == cxt.lvl` 不变式已破，L08 §5 同款） | ①参考版 `elaboration.rs` `Raw::Obj` 臂 + 孪生同位（消融口径同步）；②`parser/mod.rs` `p_enum`；③参考版 `unification.rs`（孪版 Pi 臂不 quote 域值，无此路径）。回归：`l07_blackbox_v3` §H |
 | **显式替换重构（2026-09，dpm-nbe 对齐）**：`pm_defs` 事实表 + `pm_solvable` 全局旁路作为精化载体，`pm_def` 读点 O(n) 反序扫、回滚靠长度截断、可解性与合一器经 Infer 全局状态耦合 | `Subst`（持久化单链，extend O(1)）+ `Val::VSub` 包裹 + `force` 的 frcs 臂；可解性经 `SpecSolve` 穿参（方程两侧在入口置于 acc 之下）；臂边界回滚 = Rc 指针赋值。机制、槽位纪律（spine 只包裹不物化）与多轮评审记录见 `docs/l07-dpm-refactor-design.md`。本表前各行所述的"事实表"载体自本轮起改为显式替换，行为语义不变（全套测试逐字节保持） |
+| **深值栈安全轮（2026-09-18，LSP 接入前置）**：①`val_mentions_lvl` / `struct_eq` 全家 / `rename` 的 Sum/SumCase/Obj 臂按**值深度**原生递归（`succ^N zero` 型深值可由 def 倍增链构造，~万级深度在常规栈 1–8 MB 爆栈）；②孪生同款（`mentions_level` / `struct_val_eq` 族 / `rename_iter` 深链内联递归）；③孪生 arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不回收（长生命周期 Machine 下无上界慢泄漏） | ①参考版：`struct_eq` 改任务栈（短路序与燃烧面逐点对齐旧递归）、`val_mentions_lvl` 改工作栈、`rename` 拆 `rename_deep` 帧式收集器（Sum/SumCase/Obj 整链消化，`rename_arm` 收口浅臂，深链在任意深度进入收集器后不再按值深递归）；②孪生：`val_mentions_lvl`/`mentions_level` 工作栈、`struct_val_eq` 族任务栈、`rename_iter` 新增 `ObjWrap`/`ObjSpineFold`/`SumBuild`/`SumCaseBuild` 四收集任务（icit 平行栈与折叠序与 `SpineFold` 同构）；③`wrap_sub` 登记 `Rc::as_ptr` 进 `VSUB_REGS`（thread_local）+ 轮界 `vsub_reclaim`（`clear_round` 与 `run_decls` 出口 guard）逐指针归还，`SUBSTV_ALIVE` 存活计数为观察口。回归钉：`deep_value_iterative_under_default_stack` ×3（**默认 2 MB 测试栈**：10 万层 occurs/结构比较、1 万层 rename 收集器）与 `fast_substv_reclaimed_across_rounds`（两轮复用后计数回落基线）。残留边界见 §7.6（深值的递归 Drop 与 quote/pretty 深路径） |
 | **代码评审轮（2026-09-17）**：①孪生 `vapp1` 的 VSub→闭包路径用调用方的 work/vals 重入 `eval_iter`，入口 clear 静默截断外层在飞的求值任务（match 臂内对 let 绑定 λ 做多参应用 + 结果进注解即触发，**ref Ok / twin Err 判定分裂**，现有 65 个 parity 用例零命中）；②参考版 frcs 的"头不可应用"守卫不含 λ，与孪生 `vapp_ok`（Clo tag 放行）分裂；③文件族 IO 失败直接 panic（源码可达）；④参考版 `eval(Tm::Prim)` 从现场 env 收集实参 spine——只在 builtin λ 链体的正典路径下正确，quoted Prim 在其它 env 下重求值会捕获无关槽；⑤孪生 Match/Match 的结构预检整体前置，Err 路径上 scrutinee 合一的 meta 副作用被吞；⑥探测不独立充值燃料，多构造子枚举逐 ctor 探测互相挤占 | ①VSub→闭包 β 改用本次私有草稿栈（`force` 同款纪律；回归钉 `parity_vsub_slot_applied_closure_workbuf`）；②frcs 读点放行 `Val::Lam`（只改 frcs，η 臂共用的 `v_applicable` 语义不变）；③四个文件臂改卡住降级（双版同步，v2 三个 panic 契约改写为 `v2_file_*_stuck_not_panic`）；④`Tm::Prim` 改零元卡住头、builtin 值体与 quote 产物一律经 App 应用实参（双版同步）；⑤改为 `MatchPrecheck` / `MatchPendingLen` / `MatchPending` 三个屏障任务，与参考版逐点交错（scrutinee → 分支数 → 逐分支模式+体 → pending 长度 → 逐 pending icit+值）；⑥`probe_accessible` 入口充值（双版同点） |
 
 ## 7. 已知限制（诚实清单）
@@ -325,21 +326,33 @@ solve / intersect）。在此之上：
    （quote 对 Flex 产 `Meta` + 实参链，不产 `AppPruning`），该分支仅作
    不 panic 的兜底，渲染差异不可达；`go_ix` 越界退化 `@{ix}`（与 L06 的
    固定文案不同，语义同为不崩）。
-6. **深值上的原生递归吃栈（双版同形，非燃料可防）**：`val_mentions_lvl` /
-   `struct_eq::val_eq` / 孪生 `struct_val_eq_go`、`rename` 的 Sum/SumCase/
-   Match 臂等按**值深度**递归；`succ^N zero` 型深值可由 eval 不烧 fuel
-   地构造（def 倍增链），之后 occurs 守卫或合一快路径在 ~万级深度会爆栈。
-   两侧测试都在 64–512 MB 栈线程里跑，`run` 目前只被 bench/tests 驱动
-   （未接 LSP）；接入常规栈线程（1–8 MB）前需迭代化或定深拒绝。
-7. **孪生 σ 的跨轮内存不回收**：bump `reset()` 不跑 `Drop`，arena 内
-   `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不递减（无 UB——reset 后
-   无人再读、链无环；`Compiler.sub` 本体正常释放，残留的是 arena 内的
-   克隆）。长生命周期 Machine 下是无上界慢泄漏；LSP 式复用前需评估
-   量级（或给 `wrap_sub` 加回收登记，代价在热路径上，未做）。
+6. **深值遍历已迭代化（2026-09-18）；深值的"释放"级联仍是递归**：原先
+   `val_mentions_lvl` / `struct_eq` 全家 / `rename` 的 Sum/SumCase/Obj 臂
+   按**值深度**递归（`succ^N zero` 型深值可由 eval 不烧 fuel 地构造，
+   def 倍增链），~万级深度在常规栈（1–8 MB）爆栈。现已全部改为显式工作
+   栈 / 任务栈 / 帧式收集器（机制与回归钉见 §6 末行）；遍历面在**默认
+   2 MB 测试栈**下经 10 万层深值验证。**残留边界**（诚实清单）：
+   a. 深值的**释放**是 Rc/Box 链的递归 Drop——参考版的真树表示在深值析构
+      时仍按深度吃栈（回归测试用句柄保留 + `mem::forget` 泄漏承接，测试
+      基建行为、非被测路径）；孪生 arena 表示不跑 `Drop`，天然豁免；
+   b. `quote` / `pretty` 对深值仍是递归路径（触发面 = nf 输出与错误显示，
+      未含在本轮迭代化内，走 LSP 前需一并迭代化或定深拒绝）。
+7. **孪生 σ 的跨轮回收已落地（2026-09-18）**：bump `reset()` 不跑 `Drop`，
+   arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆跨轮不递减。修：
+   `wrap_sub` 在构造克隆的同一时刻把 `Rc::as_ptr` 登记进 `VSUB_REGS`
+   （thread_local），轮界 `clear_round`（与三处 `bump.reset()` 严格伴生）
+   与 `run_decls` 出口 guard 逐指针 `Rc::from_raw` + drop——恰好归还
+   "arena 那一份"强引用（SAFETY 论证见 `VSUB_REGS` 注释）；归还后链若
+   仍有表外持有者则继续存活（正常 Rc 语义）。泄漏上界从"无界累积"降为
+   "单轮量"，且轮尾归还后每轮归零。回归钉
+   `fast_substv_reclaimed_across_rounds`：`SUBSTV_ALIVE`（σ 链条目存活计数）在同一 Tycker 连跑两轮后
+   回落轮前基线。开销：仅"真包裹"分支多一次 TLS 表 push（条件包裹不命中
+   时零开销）。
 
 ## 8. 测试
 
-`cargo test --lib L07_sum_type`（45 个测试，64 MB 栈线程）：
+`cargo test --lib L07_sum_type`（48 个测试；除深值栈安全 3 个外都在
+64 MB 栈线程里跑）：
 
 - 移植自 L07a：基础 ADT / 索引族与投影 / 依赖匹配（`t`）/ 嵌套 match /
   等式推理核心（cong / symm / trans / rfl）/ Church 编码与字符串；
@@ -358,7 +371,12 @@ solve / intersect）。在此之上：
   覆盖 / Rc 共享）、lookup 条件包裹、force_arg 多层解包、struct_eq 的
   VSub 分支；`test_fn_typed_index_slot_applied_after_refine` 钉死
   frcs 对"已解 rigid + 非空 spine"的解析应用行为（旧版卡住，孪生版
-  移植必须复刻）。
+  移植必须复刻）；
+- 深值栈安全（2026-09-18）回归钉：`deep_value_iterative_under_default_
+  stack`（参考版 occurs/结构相等，10 万层，**默认 2 MB 测试栈**）、
+  `unification::deep_rename_tests::deep_rename_collector_under_default_
+  stack`（rename 收集器 1 万层，默认栈）、孪生同名单测（occurs /
+  mentions / 结构比较，10 万层，默认栈）。
 
 黑盒与双 oracle：`cargo test --test l07_blackbox`（49 个：48 可跑 +
 1 个 `--ignored` 深度探针，参考版唯一入口 `run`）；`cargo test --test
@@ -368,16 +386,18 @@ builtin 全量扫描含文件 IO 卡住降级契约（IO 失败不 panic，与�
 空 enum、点号限定名、命名隐式实参）/ 类型层 match / preprocess 怪癖 /
 run 层契约（Display、path_id、并发、跨 run 隔离）；§6 两条新修复的
 回归在此）；`cargo test --test
-l07_blackbox_v3`（92 个：91 可跑 + 1 个 `--ignored` 格式探针，三轮攻击面：
+l07_blackbox_v3`（95 个：94 可跑 + 1 个 `--ignored` 格式探针；它同样
+`#[path]` 引入 `mod.rs`，故深值栈安全 3 钉也在其中跑。三轮攻击面：
 依赖匹配深水区（`T n` 返回族 / 臂体换行嵌套 match / 双重精化 / `add` 型
 索引算术 / 荒谬嵌套模式 / 零臂假前提 / 投影 scrutinee / 隐式子模式具名 /
 遮蔽臂不查体）/ unification 边界（rigid 头不同、spine 长度不齐、自引用
 占位 Decl、flex-flex、卡住投影不证等）/ 性能悬崖表征（深嵌套模式、
 多 pending 卡住 match，带超时防护）/ 解析残缺（截断不 panic、match
 位置精确刻画、CRLF、非 ASCII）；§6 三轮修复的回归在此）；`cargo test --test
-l07_fast_parity`（66 个：run vs run_fast 逐字节互检，见 §10；含
-2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf` 等工作区
-回归钉）。
+l07_fast_parity`（70 个：run vs run_fast 逐字节互检，见 §10；含
+2026-09-17 评审轮的 `parity_vsub_slot_applied_closure_workbuf`、本轮
+`fast_substv_reclaimed_across_rounds`（σ 跨轮回收）与孪生深值默认栈钉等
+工作区回归钉）。
 
 ## 9. 参考资料
 
@@ -410,7 +430,10 @@ L06 的冠军配方（bump arena + 打包值 tag 编码 + 迭代内核 + 记忆�
 > 钉死，l07_fast_parity 逐字节保证）。fuel 燃烧点同步对齐：VSub 推开
 > 入口不烧，frcs 的 lookup 命中烧 1（对齐旧 force(Rigid) 查表剖面），
 > 耗尽返回裸 rigid。σ 用 std `Rc`（不进 reset arena——跨越单次模式编译
-> 生存，bump 轮界不清零 Rc，残留计数随轮内值一同失效）。
+> 生存）。**轮界回收（2026-09-18）**：`wrap_sub` 登记 + `clear_round`/
+> `run_decls` 出口归还，消除 arena 内克隆的跨轮泄漏（见 §7.7 与
+> `VSUB_REGS` 注释）；`deep_value_tests`（默认栈深值）与
+> `fast_substv_reclaimed_across_rounds` 为孪生侧回归钉。
 
 机制落地清单（孪生侧现状）：
 
@@ -471,6 +494,16 @@ k=13  n=16384   fast_ss=0.053ms      basic=0.177ms      (≈3×)
                 fast_ss=0.069ms      basic=0.341ms      (≈5×)
 ```
 
+> **2026-09-18 深值栈安全轮 A/B 实测**：方法 = 独立 worktree（基线 =
+> 本档提交版，`git worktree` 各自 target 缓存）+ 交错 10 轮取 min（当日
+> 环境有周期性干扰——中位数口径互差可达 2×，min 口径稳定可复现）。
+> 结论：strchain / global / enum / natadd / church 全部持平（±1.5%）；
+> 唯一系统性差异 = **match 负载 +2~4%**（绝对 1–2 μs，k=9 39→40 μs）
+> ——归因 = 任务栈创建与 §7.7 σ 回收 TLS 登记（真包裹分支一次 push）
+> 等常数项。首次测得 +7.7%（k=9）后定位到任务栈**每次调用**的堆分配，
+> 主循环栈全部内联化（`InlineStack`，溢出转 Vec）回收大半；表内数字
+> 保留 2026-09-17 基线（同口径）。
+
 注：`strchain`/`global`/`natadd` 仍是超线性（值本身就是逐层变长的字符串，
 `string_concat` 复制 O(n) 字节 → 总量 O(n²) 字节），孪生版同样如此；参考版
 与孪生的差距已从"decl 表值深拷贝"缩小到常数因子。
@@ -496,10 +529,19 @@ k=13  n=16384   fast_ss=0.053ms      basic=0.177ms      (≈3×)
   调用方缓冲）。干净形态是 Machine 常驻 `ForceScratch` + 深度标记
   （depth==0 清空复用、>0 私有局部），但 force/eval_iter 需穿参
   ~22 个调用点；预期个位数百分比，需 bench 证实后再动。
-- **simpl_decl 版本缓存**：quote/rename/unify 的卡住 match 臂每次全表
-  重建简化 decl 表（O(表) 次分配/事件，l13-perf-review §2.4 的同构
-  问题）。唯一写点 decl_insert 可挂版本号，但 Match 臂深处只持有
-  `&FxHashMap`，缓存需随表穿参或引入按地址键的旁表（有别名陷阱）。
-- **pending cons 化 / XCell 拆 Big 变体**：卡住 match 逐应用 O(k²) 拷贝、
-  高频小单元 64B 重量级——结构性改动面广（6 消费点 / ~30 匹配点），
-  与上两项同窗口做以摊薄回归成本。
+- ~~**simpl_decl 版本缓存**~~：**已落地（2026-09-19）**——thread-local 单槽
+  旁路缓存（decl 表实例地址为键），`decl_insert` 唯一写点逐次失效 +
+  轮界 `clear_round` 失效（缓存条目引用当轮 bump，跨轮即悬垂）；
+  quote/rename/unify 三处 Match 消费点共享缓存 Rc。
+- ~~**pending cons 化**~~：**已落地（2026-09-19）**——`XCell::Match.pending`
+  改 `Option<&PendingCons>` 头插 cons 链（头 = 最新实参、尾部共享），
+  vapp1 逐应用 O(k²)→O(k)；8 个消费点适配，栈序逐字节保持
+  （parity 钉住）。
+- **subst_cxt 平坦区丢失**：**已落地（2026-09-19）**——包裹槽经 `&mut
+  defs` 追加为 defs 尾部新平坦区（append-only 不破坏旧 env 共享），
+  臂体内 `env_nth` 恢复 O(1)。已知取舍：同作用域 match 之后再有
+  let-define 回落 binder 链（非 tip 路径，语义一致）。
+- **XCell 拆 Big 变体**：高频小单元 64B 重量级——结构性改动面广，
+  留待后续。
+- **frcs_env 闭包 env 逐槽包裹走链**：与 subst_cxt 平坦区同形态的
+  遗留优化点（~L2030），待负载画像。
