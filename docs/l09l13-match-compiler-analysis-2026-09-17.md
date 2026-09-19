@@ -21,7 +21,11 @@
   首测 13.3 ms）——旧的"enum 孪生判型失败"在此层不复存在。
 - **L10：已完成**（`4e97743`）——参考版 3.0×（0.750→0.252 ms @k=11）、孪生
   5.1×（0.946→0.186 ms）；孪生/参考 0.8× → 1.35×。其余负载 0.80–1.03×。
-- **L13：未做**。配方同 L11/L12（参考版 `pattern_match.rs` 与孪生
+- **L13：已完成**（`448775c` 移植 + `ba90f96` 孪生 unify_pm 补臂修 adder_proof
+  分裂 + `b3b1700` hover 缓存/case_spans memo）——参考版 1.44×、孪生 3.9×
+  （fast_ss 0.668→0.172 ms @k=11）。勘查时的两个前提后来被推翻：构造子类型
+  获取经 `Enum.case` decl 直查实测 1.2µs（非热点）；真正热点是**构造子 hover
+  渲染**（每 match 22µs 的 quote+export+pretty，观察面成本）。（参考版 `pattern_match.rs` 与孪生
   `bump_spine_iter.rs` 同步替换 `compile`/`compile_aux*` 为逐臂 `compile` +
   `walk_pat`，以 `lXX_fast_parity` + lib 测试为闸门，再跑 bench 交错 A/B）。
 
