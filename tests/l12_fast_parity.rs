@@ -29,9 +29,86 @@ mod L12_canonical;
 
 use L12_canonical::bump_spine_iter as fast;
 
+/// SUBSTV_ALIVE 是全局原子：σ 重建（match 编译）与回收计数的采样必须
+/// σ 制造活动计数 + 独占闸（原为 SIGMA_SAMPLING_LOCK Mutex——会自死锁）。
+/// 守卫用 **thread_local 深度计数**：同线程嵌套进入（deep_workloads 外层
+/// 持守卫、内部 assert_parity 的 run_basic 再进入）只增本地深度、不碰全局
+/// 计数，因此永远不会在持有 ACTIVE 的同时阻塞在 EXCL 上——这是计数版
+/// 「可重入」与死锁的分界；跨线程各自独立计数。
+static SIGMA_ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SIGMA_EXCL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static SIGMA_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// σ 制造活动的范围守卫：同线程可重入；最外层进入做 EXCL 等待 + 全局计数。
+struct SigmaGuard;
+
+impl SigmaGuard {
+    fn enter() -> Self {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        SIGMA_DEPTH.with(|d| {
+            let n = d.get();
+            d.set(n + 1);
+            if n == 0 {
+                loop {
+                    while SIGMA_EXCL.load(Acquire) {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    SIGMA_ACTIVE.fetch_add(1, AcqRel);
+                    if SIGMA_EXCL.load(Acquire) {
+                        // 撞上独占闸刚落下：退避重试（本线程无内层守卫在等，
+                        // 不会携 ACTIVE 睡眠）
+                        SIGMA_ACTIVE.fetch_sub(1, AcqRel);
+                        continue;
+                    }
+                    break;
+                }
+            }
+        });
+        SigmaGuard
+    }
+}
+
+impl Drop for SigmaGuard {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::AcqRel;
+        SIGMA_DEPTH.with(|d| {
+            let n = d.get() - 1;
+            d.set(n);
+            if n == 0 {
+                SIGMA_ACTIVE.fetch_sub(1, AcqRel);
+            }
+        });
+    }
+}
+
+/// 独占闸守卫：置 EXCL → 等在途 σ 活动清零 → 测量窗口内新活动被挡在
+/// 门外；drop 释放。仅 fast_substv_reclaimed_across_rounds 使用。
+struct SigmaExcl;
+
+impl SigmaExcl {
+    fn enter() -> Self {
+        use std::sync::atomic::Ordering::{Acquire, SeqCst};
+        SIGMA_EXCL.store(true, SeqCst);
+        while SIGMA_ACTIVE.load(Acquire) != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        SigmaExcl
+    }
+}
+
+impl Drop for SigmaExcl {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Release;
+        SIGMA_EXCL.store(false, Release);
+    }
+}
+
 /// 在大栈线程里跑参考版 `run`。线程边界只传归一化后的 Err 文案
 /// （L12 的 `Error` 携带非 Send 的重试闭包）。
 fn run_basic(src: &str) -> Result<String, String> {
+    let _sigma_guard = SigmaGuard::enter();
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
@@ -43,6 +120,7 @@ fn run_basic(src: &str) -> Result<String, String> {
 
 /// 在大栈线程里跑快版 `run_fast`。
 fn run_fast(src: &str) -> Result<String, String> {
+    let _sigma_guard = SigmaGuard::enter();
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
@@ -260,6 +338,10 @@ fn parse_or_panic(src: &str) -> Vec<fast::SourceDecl> {
 
 #[test]
 fn deep_workloads_parity() {
+    // 直接驱动孪生 bench_check 的段落计入 σ 活动计数（防污染采样钉）；
+    // 内部 assert_parity 的 run_basic/run_fast 各自再进入——计数可重入，
+    // 不会像旧 Mutex 那样自死锁。
+    let _sigma_guard = SigmaGuard::enter();
     // 枚举 Nat 加法链 2^(k+1)：递归 match + 构造子链
     let src = fast::natadd_src(6);
     let ast = parse_or_panic(&src);
@@ -288,6 +370,8 @@ fn deep_workloads_parity() {
 
 #[test]
 fn steady_state_reuse() {
+    // 直接驱动孪生 run_input 的段落计入 σ 活动计数（防污染采样钉）。
+    let _sigma_guard = SigmaGuard::enter();
     // 稳态复用：同一 Tycker 连续多轮（trait/可变全局状态一并轮清空），
     // 输出与一次性口径一致
     let src = fast::match_src(4);
@@ -561,4 +645,241 @@ fn parity_enum_struct_impl_hole_pinned_u0() {
         );
         assert_parity(src);
     }
+}
+
+// 2026-09-18 评审修复轮的 parity 钉（L07 修复轮同款场景向本层移植：嵌套
+// 模式覆盖检查 / 构造子良构性 / VSUB_REGS σ 跨轮回收）——双实现对判定
+// （Ok/Err）与归一化文案逐字节一致。
+//
+// 场景载体说明：L07 钉子的 List/Vec 载体在孪生侧踩中**既有的**
+// check_pm_final 分叉族（带注解 def + 非索引/嵌套构造子 raw 的臂特化在
+// 快版静默失败 → 臂全部跳过 → Ok 空编译；套件头注"已知偏差"登记的同族，
+// 与本轮修复无关——已用 env 门控逐项差分排除本轮改动）。parity 钉改用
+// 具体枚举（无类型参数/索引）载体，嵌套覆盖的记账/两段式/探测/cover_at
+// /去重/文案全链路两版仍逐字节对齐；List/Vec 场景保留在参考版单侧的
+// `src/L12_canonical/mod.rs` 回归钉里。
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_review_fixes_2026_09_18() {
+    for src in [
+        // P0 嵌套覆盖缺失（具体枚举载体）：位置 mk#2 两臂都是 false——
+        // true 无臂覆盖，两版一致报"模式位置 mk#2 缺少构造子 true"
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum P {
+    mk(a: Bool, b: Bool)
+}
+
+def g(p: P): Bool =
+    match p {
+        case mk(true, false) => false
+        case mk(false, false) => false
+    }
+"#,
+        // P0 三层嵌套：node 的第二字段（Tree）上 leaf 有臂、node 无臂覆盖
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Tree {
+    leaf(v: Bool)
+    node(l: Tree, r: Tree)
+}
+
+def h(t: Tree): Bool =
+    match t {
+        case leaf(true) => true
+        case leaf(false) => false
+        case node(l, leaf(v)) => v
+    }
+"#,
+        // 嵌套覆盖的正向对照：全位置完整覆盖 → 两版 Ok 且输出逐字节一致
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum P {
+    mk(a: Bool, b: Bool)
+}
+
+def g(p: P): Bool =
+    match p {
+        case mk(true, true) => true
+        case mk(true, false) => false
+        case mk(false, true) => false
+        case mk(false, false) => true
+    }
+
+println (g (mk true false))
+"#,
+        // P1 构造子良构性：ret 不是本 enum（phantom 构造子）
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#,
+        // P1 构造子良构性：隐式参数位特化（Foo[Bool]）
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Foo[A] {
+    c -> Foo[Bool]
+}
+"#,
+        // 侧向对照（L07 stale-solvable 场景）：本层可解集 = 任意裸 Rigid
+        //（无白名单可污染），两种臂序判定必须一致且双版一致（L12 语义下
+        // ident 臂的瞬态 η 方程两序皆可解 → 判定臂序无关）
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum W(f: Nat -> Nat) {
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
+    mk -> W (n => succ zero)
+    ident -> W (n => n)
+}
+
+def t(w: W (n => succ zero)): Nat =
+    match w {
+        case big(a, b, c, d) => a
+        case ident => zero
+        case mk => succ zero
+    }
+"#,
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum W(f: Nat -> Nat) {
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
+    mk -> W (n => succ zero)
+    ident -> W (n => n)
+}
+
+def t(w: W (n => succ zero)): Nat =
+    match w {
+        case ident => zero
+        case big(a, b, c, d) => a
+        case mk => succ zero
+    }
+"#,
+    ] {
+        assert_parity(src);
+    }
+    // 正向对照：构造子重绑定参数（p[A,B] -> Pack[A][B] a b）合法——
+    // WF 检查不误伤该惯用法，两版 Ok 输出逐字节一致
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw.y
+"#,
+    );
+}
+
+/// L07 §7.7 回归钉的本层移植：孪生 arena 内 XCell::VSub 持有的 Rc<SubstV>
+/// 克隆曾被 bump reset 跳过 Drop（跨轮慢泄漏）。修复 = wrap_sub 登记（alloc
+/// 成功后置）+ clear_round 逐指针归还 + run_decls 轮尾 ReclaimOnExit 守卫。
+/// 观察口：σ 链条目的存活计数 (SUBSTV_ALIVE)——同一 Tycker 连跑两轮含
+/// match 精化的程序，每轮结束后计数都应回落到轮前基线。必须同线程跑
+/// （登记表是 thread_local）。注：def 一律显式注解返回类型（无注解 def 的
+/// Hole 推导是快版已知分叉家族，套件头注登记）；该钉只断言双轮稳定与
+/// 计数回落，不作双版比对。
+#[test]
+fn fast_substv_reclaimed_across_rounds() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let src = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def len[A](xs: List[A]): Nat =
+    match xs {
+        case nil => zero
+        case cons(x, rest) => succ (len rest)
+    }
+
+def add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+println (add (len (cons zero nil)) (succ zero))
+"#;
+    let sigma_guard = SigmaExcl::enter();
+    let base = fast::SUBSTV_ALIVE.load(Relaxed);
+    // 同一 Tycker 复用两轮（LSP 式场景）：每轮 clear_round 都应归还 arena
+    // 克隆——计数不回落 = 泄漏回归。
+    let mut t = fast::Tycker::new();
+    let out1 = t.run_input(src, 0).expect("第 1 轮应 Ok");
+    let after1 = fast::SUBSTV_ALIVE.load(Relaxed);
+    let out2 = t.run_input(src, 0).expect("第 2 轮应 Ok");
+    let after2 = fast::SUBSTV_ALIVE.load(Relaxed);
+    assert_eq!(out1, out2, "两轮输出应一致");
+    assert_eq!(
+        (after1, after2),
+        (base, base),
+        "σ 链条目跨轮未回收（arena 克隆泄漏）：base={base} after1={after1} after2={after2}"
+    );
 }

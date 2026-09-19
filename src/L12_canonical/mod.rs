@@ -186,6 +186,43 @@ impl std::fmt::Display for PatternDetail {
     }
 }
 
+/// 已走查臂在某嵌套位置的覆盖贡献（参考版与孪生版共用，保证嵌套覆盖
+/// 检查的判定与文案逐字节一致，L07 mod.rs 同款 2026-09-18 前向传播）：
+/// 全覆盖（var/Any，含路径中途变变量）、贡献某构造子（路径末端是 Con）、
+/// 不可达该位置（祖先选了别的构造子）。
+pub(crate) enum PosCover {
+    All,
+    Ctor(SmolStr),
+    None,
+}
+
+/// 沿 (构造子名, 字段下标) 路径下钻一棵已走查的 PatternDetail 树。
+/// 字段下标与 `walk_pat` 的 details 布局同源（望远镜中产槽绑定器的序数）。
+pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosCover {
+    let mut cur = detail;
+    for (ctor, field) in path {
+        match cur {
+            PatternDetail::Any(_) | PatternDetail::Bind(_) => return PosCover::All,
+            PatternDetail::Con(n, subs) if n.data.as_str() == ctor.as_str() => {
+                cur = &subs[*field]
+            }
+            PatternDetail::Con(..) => return PosCover::None,
+        }
+    }
+    match cur {
+        PatternDetail::Any(_) | PatternDetail::Bind(_) => PosCover::All,
+        PatternDetail::Con(n, _) => PosCover::Ctor(n.data.clone()),
+    }
+}
+
+/// 人读路径：`cons#2 → nil#1` 表示 cons 第二字段的 nil 第一字段处。
+pub(crate) fn fmt_path(path: &[(String, usize)]) -> String {
+    path.iter()
+        .map(|(c, f)| format!("{c}#{}", f + 1))
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
@@ -609,6 +646,13 @@ impl Infer {
     /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
     fn refuel(&self) {
         self.unify_fuel.set(UNIFY_FUEL);
+    }
+    /// fuel 是否已耗尽。消费点：覆盖探测（`probe_accessible`）失败时区分
+    /// "预算问题"与"结构冲突"——fuel 耗尽的失败按**可达**处理（保守要求
+    /// 覆盖）；反方向（判不可达 → 覆盖检查放过该构造子）会让深负载下的
+    /// 非穷尽 match 被静默接受（L07 评审 P1-2 前向传播）。
+    pub(crate) fn fuel_exhausted(&self) -> bool {
+        self.unify_fuel.get() == 0
     }
     fn new_meta(&mut self, a: Rc<VTy>, cxt: Cxt, origin_typ: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a, std::sync::Arc::new(cxt), origin_typ));
@@ -2370,5 +2414,244 @@ println 5
     assert!(result.contains("0"));
     assert!(result.contains("Point[Nat]::Point.mk(4, 6)"));
     assert!(result.contains("5"));
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-18 评审修复轮回归钉（L07_sum_type 修复轮同款场景向本层移植，
+// docs/review-l07l12/REVIEW-4ANGLE-2026-09-18.md §六）：嵌套模式覆盖检查 /
+// 构造子良构性 / 覆盖探测的两段式结算。
+
+/// P0（嵌套覆盖缺失）：nil 臂 + cons(h, nil) 臂缺 cons(h, cons(..))——
+/// 修复前静默接受、运行期在尾部为 cons 的值上卡死；修复后报模式位置缺失。
+#[test]
+fn test_nested_coverage_gap() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+    }
+"#;
+    match run(src, 0) {
+        Err(e) => assert!(e.0.data.contains("缺少构造子 cons"), "{}", e.0.data),
+        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
+    }
+}
+
+/// P0（嵌套覆盖缺失，三层）：深度 2 的嵌套位置缺 cons。
+#[test]
+fn test_nested_coverage_gap3() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, nil)) => h2
+    }
+"#;
+    match run(src, 0) {
+        Err(e) => assert!(e.0.data.contains("缺少构造子 cons"), "{}", e.0.data),
+        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
+    }
+}
+
+/// 嵌套覆盖的正向对照：同一位置被 cons(h, cons(h2, t)) 完整覆盖 → Ok 且
+/// 求值正确（防误报）。运行期验证避开本层既有的
+/// 「双重嵌套构造子应用作实参」推导缺口（与本修复无关，见 parity 套件
+/// 头注的已知偏差登记）。
+#[test]
+fn test_nested_coverage_complete_ok() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f nil)
+println (f (cons (succ zero) nil))
+"#;
+    let out = run(src, 0).unwrap();
+    assert!(out.contains("0"), "{out}");
+}
+
+/// 索引族的嵌套位置（本层口径，与 L07 精度的刻意差异）：Vec 长度恰 2 上
+/// cons(h, nil) 臂是荒谬臂（尾部 nil 要求长度 1 与头部索引冲突）——raw
+/// 推断期 `?l := zero` 与特化方程冲突，check_pm_final 失败，臂按 L11 口径
+/// **静默跳过**；其嵌套记账随之丢弃（失败臂不产生覆盖义务）。存活的
+/// cons(h, cons(h2, t)) 臂的嵌套位置上，尾部索引槽未被 σ 精化（本层的
+/// 特化解只落 scrutinee 与内层槽，不落外层隐式索引槽），nil 与 cons 都
+/// 按"可达"处理——nil 无臂覆盖 → 报"模式位置缺少构造子 nil"。保守方向
+/// （拒绝运行期完备的程序），与 L07 的"分支不可达"拒绝同判。
+#[test]
+fn test_nested_coverage_gadt_tail_position() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def f(v: Vec[Nat] (succ (succ zero))): Nat =
+    match v {
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+"#;
+    match run(src, 0) {
+        Err(e) => {
+            assert!(
+                e.0.data.contains("缺少构造子 nil"),
+                "{}",
+                e.0.data
+            );
+        }
+        Ok(out) => panic!("索引族嵌套位置漏报：\n{out}"),
+    }
+}
+
+/// P1（构造子良构性）：ret 不是本 enum——c -> Nat 向构造子名字空间注入
+/// phantom 值（对 Nat 的覆盖完备 match 在该值上卡死），修复后注册期拒绝。
+#[test]
+fn test_ctor_wf_external_ret() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#;
+    match run(src, 0) {
+        Err(e) => assert!(e.0.data.contains("不是 Foo"), "{}", e.0.data),
+        Ok(out) => panic!("phantom 构造子被静默接受：\n{out}"),
+    }
+}
+
+/// P1（构造子良构性）：参数位特化——隐式参数位是 Bool 而非参数变量，
+/// 修复后拒绝（特化请走显式索引）。
+#[test]
+fn test_ctor_wf_param_specialized() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Foo[A] {
+    c -> Foo[Bool]
+}
+"#;
+    match run(src, 0) {
+        Err(e) => assert!(e.0.data.contains("参数变量"), "{}", e.0.data),
+        Ok(out) => panic!("参数特化被静默接受：\n{out}"),
+    }
+}
+
+/// 构造子良构性的正向对照：构造子重绑定参数惯用法（p[A,B](a,b) ->
+/// Pack[A][B] a b，使用点经特化方程解回枚举参数）必须保持 Ok——
+/// WF 检查只封 phantom/特化两个洞，不误伤该惯用法。
+#[test]
+fn test_ctor_rebind_params_ok() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw.y
+"#;
+    let out = run(src, 0).unwrap();
+    assert!(out.contains("Bool::true"), "{out}");
+}
+
+/// P1（stale-solvable 臂序污染，评审 2026-09-18）：L12 无 solvable 白名单
+/// 且臂 σ 逐臂重建（见 pattern_match.rs 头注），臂序不应影响可达性判定。
+/// 注意 L12 的收窄语义是"特化失败 = 臂静默跳过"（同 L10，非 L07 的报
+/// "分支不可达"），故本钉断言**两种臂序判定一致**（同为 Ok）；若失败说明
+/// 臂间出现了状态泄漏。
+#[test]
+fn test_stale_solvable_order_independent() {
+    let src = |arms: &str| {
+        format!(
+            r#"
+enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum W(f: Nat -> Nat) {{
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
+    mk -> W (n => succ zero)
+    ident -> W (n => n)
+}}
+
+def t(w: W (n => succ zero)): Nat =
+    match w {{
+        {arms}
+    }}
+"#
+        )
+    };
+    let r_big_first = run(&src("case big(a, b, c, d) => a\n        case ident => zero\n        case mk => succ zero"), 0);
+    let r_ident_first = run(&src("case ident => zero\n        case big(a, b, c, d) => a\n        case mk => succ zero"), 0);
+    match (&r_big_first, &r_ident_first) {
+        (Ok(a), Ok(b)) => assert_eq!(a, b, "臂序影响输出"),
+        (Err(a), Err(b)) => assert_eq!(a.0.data, b.0.data, "臂序影响错误判定"),
+        _ => panic!("臂序影响判定：big-first={r_big_first:?} ident-first={r_ident_first:?}"),
+    }
 }
 
