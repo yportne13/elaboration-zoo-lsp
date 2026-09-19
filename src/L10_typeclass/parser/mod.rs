@@ -359,21 +359,24 @@ fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
     }
 }
 
-fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, (Either, Raw)> {
-    let named_arg = square((string(Ident), kw(Eq), p_raw)).map(|(x, _, t)| (Either::Name(x), t));
+fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
+    // 方括号内逗号分隔的隐式实参表：`f[A, B]` ≡ `f[A][B]`（L11 起同款，2026-09-19 回移植）
+    let named_impl_arg = square_cut(
+        (string(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x), t.1.unwrap_or(Raw::Hole)))
+            .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
+            .many0_sep(kw(T![,]))
+    ).map(|x| x.ok().unwrap_or_default());
 
-    let implicit_arg = square(p_raw).map(|t| (Either::Icit(Icit::Impl), t));
+    let explicit_arg = p_atom.map(|t| vec![(Either::Icit(Icit::Expl), t)]);
 
-    let explicit_arg = p_atom.map(|t| (Either::Icit(Icit::Expl), t));
-
-    let arg_parser = named_arg.or(implicit_arg).or(explicit_arg);
+    let arg_parser = named_impl_arg.or(explicit_arg);
 
     arg_parser.parse(input, state)
 }
 
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let (input, head) = p_atom(input, state)?;
-    let (input, args) = p_arg.many0().parse(input, state)?;
+    let (input, args) = p_arg.many0().map(|x| x.concat()).parse(input, state)?;
 
     let result = args.into_iter().fold(head, |acc, (icit, arg)| {
         Raw::App(Box::new(acc), Box::new(arg), icit)
