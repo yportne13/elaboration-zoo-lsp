@@ -154,7 +154,11 @@ impl Infer {
     fn prune_meta(&mut self, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
         let mty = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a) => a.clone(),
-            _ => unreachable!(),
+            // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），
+            // 随后走到的剪枝/求解按合一失败降级，不 panic——与"fuel 耗尽
+            // 按未解失败"的既有降级故事一致（窗口：恰在 1→0 递减帧内）
+            // （L07 2026-09-18 修复 3 的同步移植）
+            _ => return Err(UnifyError),
         };
 
         let prune_ty = self.prune_ty(&pruning, mty.clone())?;
@@ -220,15 +224,17 @@ impl Infer {
             SpinePruneStatus::OKRenaming => {
                 match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(_) => m,
-                    //_ => return Err(Error::Impossible),
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force
+                    // 当未解返回，随后走到的剪枝按合一失败降级，不 panic
+                    // （L07 2026-09-18 修复 3 的同步移植）
+                    _ => return Err(UnifyError),
                 }
             }
             SpinePruneStatus::OKNonRenaming => {
                 match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(_) => m,
-                    //_ => return Err(Error::Impossible),
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（同 prune_meta 注）：按失败降级
+                    _ => return Err(UnifyError),
                 }
             }
             SpinePruneStatus::NeedsPruning => {
@@ -416,7 +422,10 @@ impl Infer {
     ) -> Result<(), UnifyError> {
         let mty = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a) => a.clone(),
-            _ => unreachable!(),
+            // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force 当未解
+            // 返回，随后走到的求解按合一失败降级，不 panic（L07 2026-09-18
+            // 修复 3 的同步移植）
+            _ => return Err(UnifyError),
         };
 
         // if the spine was non-linear, we check that the non-linear arguments

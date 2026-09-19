@@ -102,6 +102,41 @@ impl PatternDetail {
     }
 }
 
+/// 嵌套覆盖检查（L07 2026-09-18 评审修复 5 的 L09 移植）在某路径上的
+/// 覆盖判定：已走查臂的 PatternDetail 沿路径下钻的结构贡献。
+pub(crate) enum PosCover {
+    /// var/Any：该位置全覆盖。
+    All,
+    /// 该位置只可能是这个构造子（当前层是 Con 模式）。
+    Ctor(String),
+    /// 祖先异 ctor：该位置在本臂实例化下不可达，不贡献覆盖。
+    None,
+}
+
+/// 沿路径（根到被拆字段的 (构造子名, 字段下标) 链）下钻模式的覆盖贡献。
+pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosCover {
+    let mut cur = detail;
+    for (ctor, field) in path {
+        match cur {
+            PatternDetail::Any(_) | PatternDetail::Bind(_) => return PosCover::All,
+            PatternDetail::Con(n, subs) if n.data == *ctor => cur = &subs[*field],
+            PatternDetail::Con(..) => return PosCover::None,
+        }
+    }
+    match cur {
+        PatternDetail::Any(_) | PatternDetail::Bind(_) => PosCover::All,
+        PatternDetail::Con(n, _) => PosCover::Ctor(n.data.clone()),
+    }
+}
+
+/// 人读路径：`cons#2 → nil#1` 表示 cons 第二字段的 nil 第一字段处。
+pub(crate) fn fmt_path(path: &[(String, usize)]) -> String {
+    path.iter()
+        .map(|(c, f)| format!("{c}#{}", f + 1))
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
@@ -426,6 +461,12 @@ impl Infer {
     /// 给精化展开的燃料池充值（外部合一 / 求值入口调用）。
     pub(crate) fn meta_refuel(&self) {
         self.unify_fuel.set(UNIFY_FUEL);
+    }
+    /// 燃料池是否已耗尽（探测失败侧的观察口：fuel 耗尽的失败是预算问题
+    /// 而非结构冲突——probe_accessible 尾部据此把失败按"可达"处理，保守
+    /// 地要求覆盖。L07 2026-09-18 评审修复 2 的同步移植）。
+    pub(crate) fn fuel_exhausted(&self) -> bool {
+        self.unify_fuel.get() == 0
     }
     fn new_meta(&mut self, a: VTy) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));

@@ -159,10 +159,24 @@ impl Infer {
         }
         match (&f1, &f2) {
             (
-                Val::SumCase { case_name: n1, datas: d1, .. },
-                Val::SumCase { case_name: n2, datas: d2, .. },
+                Val::SumCase { typ: t1, case_name: n1, datas: d1, .. },
+                Val::SumCase { typ: t2, case_name: n2, datas: d2, .. },
             ) => {
                 if n1 == n2 {
+                    // **比 Sum 头名字**（L07/L10 同款，2026-09-18 评审修复 4）：
+                    // 跨 enum 重名构造子（E1.c / E2.c）是两个不同值，同
+                    // case_name 不足以判定身份——头名不同直接失败。**不比
+                    // typ 的值**：typ 的索引槽就是这些值自身的构造子形态，
+                    // 比值必然在互相引用上深递归；索引等式的比较在外层
+                    // Sum-Sum 的参数 zip 里。
+                    if let (Val::Sum(na, ..), Val::Sum(nb, ..)) = (
+                        self.force((**t1).clone()),
+                        self.force((**t2).clone()),
+                    ) {
+                        if na.data != nb.data {
+                            return Err(Error(t_span.map(|_| "".to_string())));
+                        }
+                    }
                     for (x, y) in d1.iter().zip(d2.iter()) {
                         self.unify_pm(
                             cxt,
@@ -471,7 +485,7 @@ impl Infer {
                             .fold(bind.unwrap_or(default_ret.clone()), |ret, x| {
                                 Raw::Pi(x.0.clone(), x.2, Box::new(x.1.clone()), Box::new(ret))
                             })
-                    ))//TODO: need to check the basic ret is this sum type or not
+                    ))//良构性由 check_ctor_wf 在构造子注册期检查（2026-09-18）
                     .collect::<Vec<_>>();
                 let sum = Raw::Sum(
                     name.clone(),
@@ -530,6 +544,10 @@ impl Infer {
                     cxt = {
                         let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                         let vtyp = self.eval(&cxt.env, typ_tm.clone());
+                        // 构造子良构性（L07 2026-09-18 评审修复 6 的同步移植）：
+                        // ret 必须是本 enum 的 Sum 且参数位是 telescope 内的
+                        // bare rigid
+                        self.check_ctor_wf(&cxt, &name.data, &c.0.data, &vtyp)?;
                         let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                         let vt = self.eval(&cxt.env, t_tm.clone());
                         cxt.define(c.0.clone(), t_tm, vt, typ_tm, vtyp)
@@ -539,6 +557,70 @@ impl Infer {
             }
         }
     }
+    /// 构造子返回类型良构性（L07 2026-09-18 评审修复 6 的同步移植）：
+    /// 实例化构造子类型的全部绑定器后，ret 的 WHNF 必须是 `enum_name` 的
+    /// `Sum`，且其隐式参数位逐一等于 telescope 内的 bare rigid。允许构造
+    /// 子重绑定参数（`p[A,B](a,b) -> Pack[A][B] a b`——使用点经特化方程
+    /// 解回枚举参数），拒绝参数位为非变量的特化（`c -> Foo[Bool]`）与非
+    /// 本 enum 的 ret（`c -> Nat`）：后者向构造子名字空间注入永不匹配任
+    /// 何模式的 phantom 值，对覆盖检查完备的 match 在封闭输入上卡死。
+    fn check_ctor_wf(
+        &mut self,
+        cxt: &Cxt,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: &Val,
+    ) -> Result<(), Error> {
+        let base = cxt.lvl.0;
+        let mut ty = ctor_vtyp.clone();
+        let mut bound = 0u32;
+        let ret = loop {
+            match self.force(ty.clone()) {
+                Val::Pi(_, _, _, closure) => {
+                    let u = Val::vvar(Lvl(base + bound));
+                    bound += 1;
+                    ty = self.closure_apply(&closure, u);
+                }
+                ret => break ret,
+            }
+        };
+        let ret_sum = match self.force(ret) {
+            s @ Val::Sum(..) => s,
+            _ => {
+                return Err(Error(empty_span(()).map(|_| {
+                    format!("构造子 {ctor_name} 的返回类型不是和类型")
+                })))
+            }
+        };
+        let (sname, sparams) = match &ret_sum {
+            Val::Sum(n, ps, _) => (n, ps),
+            _ => unreachable!(),
+        };
+        if sname.data != enum_name {
+            return Err(Error(empty_span(()).map(|_| {
+                format!(
+                    "构造子 {ctor_name} 的返回类型是 {}，不是 {enum_name}",
+                    sname.data
+                )
+            })));
+        }
+        let non_rigid = sparams
+            .iter()
+            .filter(|(_, _, _, i)| *i == Icit::Impl)
+            .map(|(_, v, _, _)| v.as_ref())
+            .find(|v| {
+                !matches!(v, Val::Rigid(l, sp) if l.0 >= base && l.0 < base + bound && sp.is_empty())
+            });
+        if let Some(_) = non_rigid {
+            return Err(Error(empty_span(()).map(|_| {
+                format!(
+                    "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+                )
+            })));
+        }
+        Ok(())
+    }
+
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
         /*println!(
             "{} {:?} in {}",

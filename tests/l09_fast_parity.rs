@@ -41,7 +41,10 @@ fn run_fast(src: &str) -> Result<String, L09_mltt::Error> {
     let input = src.to_owned();
     std::thread::Builder::new()
         .stack_size(256 * 1024 * 1024)
-        .spawn(move || fast::run_fast(&input, 0))
+        .spawn(move || {
+            let _sigma = SigmaGuard::enter();
+            fast::run_fast(&input, 0)
+        })
         .unwrap()
         .join()
         .unwrap()
@@ -108,6 +111,80 @@ fn err_text(e: &L09_mltt::Error) -> String {
 
 /// Oracle：参考版与性能版的 Ok 输出逐字节一致；Err 判定一致，且归一化
 /// 后的错误正文一致。
+/// SUBSTV_ALIVE 是全局原子：σ 制造活动计数 + 独占闸（L12 移植轮的同款
+/// 方案——原 Mutex 方案会自死锁）。守卫用 **thread_local 深度计数**：
+/// 同线程嵌套进入只增本地深度、不碰全局计数（可重入）；跨线程各自独立。
+/// 仅 fast_substv_reclaimed_across_rounds 使用 EXCL；run_fast 用 GUARD。
+static SIGMA_ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SIGMA_EXCL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    static SIGMA_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// σ 制造活动的范围守卫：同线程可重入；最外层进入做 EXCL 等待 + 全局计数。
+struct SigmaGuard;
+
+impl SigmaGuard {
+    fn enter() -> Self {
+        use std::sync::atomic::Ordering::{AcqRel, Acquire};
+        SIGMA_DEPTH.with(|d| {
+            let n = d.get();
+            d.set(n + 1);
+            if n == 0 {
+                loop {
+                    while SIGMA_EXCL.load(Acquire) {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    SIGMA_ACTIVE.fetch_add(1, AcqRel);
+                    if SIGMA_EXCL.load(Acquire) {
+                        // 撞上独占闸刚落下：退避重试（本线程无内层守卫在等，
+                        // 不会携 ACTIVE 睡眠）
+                        SIGMA_ACTIVE.fetch_sub(1, AcqRel);
+                        continue;
+                    }
+                    break;
+                }
+            }
+        });
+        SigmaGuard
+    }
+}
+
+impl Drop for SigmaGuard {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::AcqRel;
+        SIGMA_DEPTH.with(|d| {
+            let n = d.get() - 1;
+            d.set(n);
+            if n == 0 {
+                SIGMA_ACTIVE.fetch_sub(1, AcqRel);
+            }
+        });
+    }
+}
+
+/// 独占闸守卫：置 EXCL → 等在途 σ 活动清零 → 测量窗口内新活动被挡在
+/// 门外；drop 释放。仅 fast_substv_reclaimed_across_rounds 使用。
+struct SigmaExcl;
+
+impl SigmaExcl {
+    fn enter() -> Self {
+        use std::sync::atomic::Ordering::{Acquire, SeqCst};
+        SIGMA_EXCL.store(true, SeqCst);
+        while SIGMA_ACTIVE.load(Acquire) != 0 {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        SigmaExcl
+    }
+}
+
+impl Drop for SigmaExcl {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering::Release;
+        SIGMA_EXCL.store(false, Release);
+    }
+}
+
 fn assert_parity(src: &str) {
     let b = run_basic(src);
     let f = run_fast(src);
@@ -1315,4 +1392,304 @@ fn parity_enum_struct_impl_hole_pinned_u0() {
         assert_parity(src);
     }
 
+}
+
+// —— 2026-09-18 L07 评审修复轮的 L09 移植回归钉 ——
+// （任务 A：σ 跨轮回收；任务 B：7 项正确性修复的适用性评估与移植）
+// --------------------------------------------------------------------------------
+
+/// 任务 A（L07 README §7.7 / 修复 7 的 L09 移植）：孪生 arena 内
+/// `XCell::VSub` 持有的 `Rc<SubstV>` 克隆曾被 bump reset 跳过 Drop（跨轮
+/// 慢泄漏）。修复 = wrap_sub 登记后置（alloc 成功才 push）+ clear_round
+/// 逐指针归还 + run_decls 轮尾 ReclaimOnExit 守卫。观察口：σ 链条目的
+/// 存活计数 (SUBSTV_ALIVE)——同一 Tycker 连跑两轮含 match 精化的程序，
+/// 每轮结束后计数都应回落到轮前基线。必须同线程跑（登记表是
+/// thread_local），两轮都在同一个大栈线程内执行。
+#[test]
+fn fast_substv_reclaimed_across_rounds() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let src = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def len[A](xs: List[A]): Nat =
+    match xs {
+        case nil => zero
+        case cons(x, rest) => succ (len rest)
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+println (add (len (cons zero (cons zero nil))) (succ zero))
+"#;
+    // 独占闸：等在途 run_fast 清零并挡住新的并行 σ 活动——SUBSTV_ALIVE 的
+    // 测量窗口内没有并发加减（消融实验表明：若用"重试多窗"，下一窗轮首
+    // 的 clear_round 会恰好归还上一窗泄漏的 σ，把真泄漏伪装成干净窗口，
+    // 故这里必须单窗 + 独占，L12 方案）。
+    let _sigma_excl = SigmaExcl::enter();
+    // 测量全程在同一个大栈线程内（VSUB_REGS 登记表是 thread_local）；
+    // 同一 Tycker 复用两轮（LSP 式场景）：每轮 clear_round 与轮尾
+    // ReclaimOnExit 都应归还 arena 克隆——计数不回落 = 泄漏回归。
+    let (ok, last) = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || {
+            let base = fast::SUBSTV_ALIVE.load(Relaxed);
+            let mut t = fast::Tycker::new();
+            let out1 = t.run_input(src, 0).expect("第 1 轮应 Ok");
+            let after1 = fast::SUBSTV_ALIVE.load(Relaxed);
+            let out2 = t.run_input(src, 0).expect("第 2 轮应 Ok");
+            let after2 = fast::SUBSTV_ALIVE.load(Relaxed);
+            assert_eq!(out1, out2, "两轮输出应一致");
+            (
+                (after1, after2) == (base, base),
+                format!("base={base} after1={after1} after2={after2}"),
+            )
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    drop(_sigma_excl);
+    assert!(ok, "σ 链条目跨轮未回收（arena 克隆泄漏）：{last}");
+}
+
+/// B1（陈旧 solvable 臂序污染）在本层**数据性 N/A** 的实证钉：L09 的 σ
+/// 每臂在 check_pm_final 里重建（fresh acc）、solvable = 臂走查上下文的
+/// bind_slots 逐臂重算、覆盖探测的 meta 快照整表回滚——L07 的"臂边界
+/// 同步回滚 solvable"无载体（与 L10/L11/L12 移植轮的判定一致）。钉双臂
+/// 序 × 双 oracle 判定一致 + 跨臂序输出一致（臂序不得影响判定）。W 枚举
+/// 三构造子（big/ident/mk）：ident 在索引 `(\n => succ zero)` 精化下荒谬，
+/// 其荒谬性不得随臂序漂移。
+#[test]
+fn parity_stale_solvable_order_independent() {
+    let template = |arms: &str| {
+        format!(
+            r#"enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum W(f: Nat -> Nat) {{
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (\n => succ zero)
+    mk -> W (\n => succ zero)
+    ident -> W (\n => n)
+}}
+
+def t(w: W (\n => succ zero)): Nat =
+    match w {{
+        {arms}
+    }}
+"#
+        )
+    };
+    let order1 = template(
+        "case big(a, b, c, d) => a\n        case ident => zero\n        case mk => succ zero",
+    );
+    let order2 = template(
+        "case ident => zero\n        case big(a, b, c, d) => a\n        case mk => succ zero",
+    );
+    let b1 = run_basic(&order1);
+    let f1 = run_fast(&order1);
+    let b2 = run_basic(&order2);
+    let f2 = run_fast(&order2);
+    for (tag, r) in [("b1", &b1), ("f1", &f1), ("b2", &b2), ("f2", &f2)] {
+        assert!(r.is_ok(), "{tag} 应 Ok（荒谬臂静默跳过 + 覆盖完备）: {r:?}");
+    }
+    assert_eq!(b1.unwrap(), f1.unwrap(), "臂序 1 双 oracle 输出不一致");
+    assert_eq!(b2.unwrap(), f2.unwrap(), "臂序 2 双 oracle 输出不一致");
+}
+
+/// 任务 B 评审场景套件（双 oracle：判定一致 + 归一化错误正文一致；L07
+/// tests.rs 末尾 5 钉同款场景的 L09 语法/文案适配）：
+/// - 嵌套覆盖缺口（B5/修复 5）：顶层覆盖检查只看一维时会静默接受的
+///   `cons(h, nil)` 缺 `cons(h, cons(..))`——两版同报 L07 同款文案
+///   `match 不完整：模式位置 cons#2 缺少构造子 cons`；补齐第三臂后 Ok。
+/// - 索引精化下的正向对照（两段式结算不假阳性）：长度恰 2 的 Vec 上
+///   nil / cons(h, nil) 臂经终态 σ 结算后荒谬跳过，无缺覆盖告警。
+/// - 构造子良构性（B6/修复 6）：`c -> Nat`（phantom）与 `c -> Foo[Nat]`
+///   （参数特化）两版同 Err 且文案与 L07 一致；重绑定参数惯用法
+///   （`p1[A,B](a,b) -> P1[A][B]`）放行且输出逐字节一致。
+/// - SumCase/SumCase 特化方程路径（B4/修复 4 的头名字检查代码路径，
+///   同 enum 正向对照不误拒）。
+#[test]
+fn parity_review_fixes_2026_09_18() {
+    // (a) 嵌套覆盖缺口：两版同 Err 且文案与 L07 逐字同款
+    let gap = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(xs: List[Nat]): Nat =
+    match xs {
+        case nil => zero
+        case cons(h, nil) => h
+    }
+
+println (f nil)
+"#;
+    let b = run_basic(gap);
+    let f = run_fast(gap);
+    let (b, f) = match (&b, &f) {
+        (Err(b), Err(f)) => (b, f),
+        _ => panic!("嵌套缺口应两版同 Err：basic={b:?} fast={f:?}"),
+    };
+    assert_eq!(err_text(b), err_text(f), "嵌套缺口错误正文两版不一致");
+    assert!(
+        err_text(b).contains("match 不完整：模式位置 cons#2 缺少构造子 cons"),
+        "嵌套缺口文案不符（应与 L07 同款）：{}",
+        err_text(b)
+    );
+
+    // (b) 缺口补齐 → 两版同 Ok
+    assert_parity(&gap.replace(
+        "case cons(h, nil) => h\n    }",
+        "case cons(h, nil) => h\n        case cons(h, cons(h2, t)) => h2\n    }",
+    ));
+
+    // (c) 索引精化正向对照：长度恰 2 的 Vec，nil / cons(h, nil) 臂在终态
+    // σ 结算下荒谬（静默跳过），嵌套记账不产生假阳性
+    assert_parity(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def f(v: Vec[Nat] (succ (succ zero))): Nat =
+    match v {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f (cons zero (cons zero nil)))
+"#,
+    );
+
+    // (d) 泛型长度的正向对照：臂内 σ 把尾部精化为 succ 形（nil 不可达），
+    // 覆盖检查不误报
+    assert_parity(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def f[len: Nat](v: Vec[Nat] (succ len)): Nat =
+    match v {
+        case cons(h, cons(h2, t)) => h2
+    }
+"#,
+    );
+
+    // (e) 构造子良构性：phantom 构造子（ret 非本 enum）
+    let phantom = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#;
+    let b = run_basic(phantom);
+    let f = run_fast(phantom);
+    let (b, f) = match (&b, &f) {
+        (Err(b), Err(f)) => (b, f),
+        _ => panic!("phantom 构造子应两版同 Err：basic={b:?} fast={f:?}"),
+    };
+    assert_eq!(err_text(b), err_text(f), "phantom 构造子错误正文两版不一致");
+    assert!(
+        err_text(b).contains("构造子 c 的返回类型是 Nat，不是 Foo"),
+        "phantom 构造子文案不符：{}",
+        err_text(b)
+    );
+
+    // (f) 构造子良构性：参数特化
+    let spec = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo[A] {
+    c -> Foo[Nat]
+}
+"#;
+    let b = run_basic(spec);
+    let f = run_fast(spec);
+    let (b, f) = match (&b, &f) {
+        (Err(b), Err(f)) => (b, f),
+        _ => panic!("参数特化构造子应两版同 Err：basic={b:?} fast={f:?}"),
+    };
+    assert_eq!(err_text(b), err_text(f), "参数特化错误正文两版不一致");
+    assert!(
+        err_text(b).contains(
+            "构造子 c 的返回类型参数必须是 Foo 的参数变量（参数不得特化，特化请用显式索引）"
+        ),
+        "参数特化文案不符：{}",
+        err_text(b)
+    );
+
+    // (g) 重绑定参数惯用法放行（L07 v3_multi_index_gadt 钉的 L09 形态）
+    assert_parity(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum P1[A, B] {
+    p1[A, B](a: A, b: B) -> P1[A][B]
+}
+
+println (p1[Nat][Nat] zero zero)
+"#,
+    );
+
+    // (h) SumCase/SumCase 特化方程路径（修复 4 头名字检查的代码路径）：
+    // 同 enum 同名构造子索引方程不误拒，两版同 Ok
+    assert_parity(
+        r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Tagged[B](b: Bool) {
+    t1 -> Tagged[B] true
+}
+
+def f(x: Tagged[Nat] true): Nat =
+    match x {
+        case t1 => zero
+    }
+
+println (f t1)
+"#,
+    );
 }
