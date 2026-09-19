@@ -5840,6 +5840,14 @@ pub(crate) struct Machine {
     /// （参考版 `take_fresh_check_issues` + `check_issue_span` 同口径）。
     /// 每轮 `clear_round` 清空。
     pub(crate) check_issue_lines: Vec<(usize, String)>,
+    /// 构造子 hover 渲染缓存（`push_ctor_hover`，walk_pat Con 臂专用）：
+    /// 构造子 hover 值是 decl 条目的闭合值，渲染与使用处上下文无关——同键
+    /// 第二次起免 quote/export/pretty 全管线（match 负载实测每 Con 模式
+    /// ~0.9µs，walk_pat 内最大单项）。只在渲染**无未解 meta** 时缓存
+    /// （`push_hover_cached` 的 typ_pretty_final 同一保守线：meta 可能在
+    /// 首见之后才求解，缓存串会把 `?N` 冻进使用处悬浮）。与观察表同纪律
+    /// 每轮清空：decls 表轮界重建，跨轮保留只会白占内存。
+    ctor_hover_memo: FxHashMap<SmolStr, Rc<str>>,
     /// 观察面 push 总闸：prelude 装载段置 `false`（push 期渲染 + decl_reg
     /// 的 typ_pretty 渲染是本轮末 `clear_observation_tables` 要丢弃的纯死
     /// 工作——参考版 LSP 只在进程启动装一次 prelude，孪生每 kick 重放就
@@ -5891,6 +5899,7 @@ impl Machine {
             inlay_hint_table: Vec::new(),
             println_spans: Vec::new(),
             check_issue_lines: Vec::new(),
+            ctor_hover_memo: FxHashMap::default(),
             observe: true,
         }
     }
@@ -5929,6 +5938,7 @@ impl Machine {
         self.inlay_hint_table.clear();
         self.println_spans.clear();
         self.check_issue_lines.clear();
+        self.ctor_hover_memo.clear();
     }
 
     // ── 观察面（与参考版 `Infer::push_hover` / `hover_entry_at` 同契约）──
@@ -5980,6 +5990,35 @@ impl Machine {
             }
         }
         self.push_hover(bump, cxt, t_span, e.span, e.vty);
+    }
+
+    /// 构造子使用处 hover（walk_pat Con 臂专用）：hover 值是 decl 条目的
+    /// **闭合**值，渲染结果与使用处上下文无关，按 decl 键缓存渲染串——
+    /// 同键第二次起免 quote/export/pretty 全管线。无未解 meta 才缓存
+    /// （同 `push_hover_cached` 的保守线）；轮界随观察表清空。
+    fn push_ctor_hover<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t_span: crate::parser_lib::Span<()>,
+        def_span: crate::parser_lib::Span<()>,
+        v: V,
+        key: &str,
+    ) {
+        if !self.observe {
+            return;
+        }
+        if let Some(s) = self.ctor_hover_memo.get(key) {
+            self.hover_table.push((t_span, def_span, s.as_ref().to_owned()));
+            return;
+        }
+        let tm = self.quote(bump, cxt, cxt.lvl, v);
+        let rendered = pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm));
+        if no_metas(bump, self, cxt, tm).is_none() {
+            self.ctor_hover_memo
+                .insert(SmolStr::new(key), Rc::from(rendered.as_str()));
+        }
+        self.hover_table.push((t_span, def_span, rendered));
     }
 
     /// 观察面 inlay（参考版 `push_inlay_hint` 同口径）：含未解 meta 跳过，
@@ -11228,6 +11267,11 @@ pub(crate) struct Compiler<'a> {
     pending_pos: Vec<(Vec<(String, usize)>, V)>,
     /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
     cur_path: Vec<(String, usize)>,
+    /// `case_spans` 的 per-Compiler 缓存：一次 match 编译内 decl 表只读，
+    /// 同一 Sum 的 cases span 回填恒定——根走查 / 嵌套走查 / compile 头 /
+    /// nested 结算各算一遍纯属重复（每 cases 元素一次 format! + decls 查找
+    /// + SmolStr）。键 = Sum 名（bump 串，'a 存放口径内）。
+    case_spans_memo: FxHashMap<&'a str, Rc<Vec<crate::parser_lib::Span<SmolStr>>>>,
 }
 
 /// 一个嵌套拆分位置的记账（参考版 NestedCheck 的孪生形态）：路径 = 根到
@@ -11250,7 +11294,23 @@ impl<'a> Compiler<'a> {
             nested_checks: Vec::new(),
             pending_pos: Vec::new(),
             cur_path: Vec::new(),
+            case_spans_memo: FxHashMap::default(),
         }
+    }
+
+    /// `case_spans` 的缓存版（见 `case_spans_memo` 注）。
+    fn case_spans_cached(
+        &mut self,
+        cxt: &Cxt<'a>,
+        sum_name: &'a str,
+        cases: &'a [&'a str],
+    ) -> Rc<Vec<crate::parser_lib::Span<SmolStr>>> {
+        if let Some(v) = self.case_spans_memo.get(sum_name) {
+            return v.clone();
+        }
+        let v = Rc::new(case_spans(cxt, sum_name, cases));
+        self.case_spans_memo.insert(sum_name, v.clone());
+        v
     }
 
     /// 隐式绑定器名：`_{绑定器名}{序号}`（顶层绑定器名为空 → `_0`/`_1`…）。
@@ -11401,7 +11461,7 @@ impl<'a> Compiler<'a> {
             Pattern::Any(_, icit) => {
                 let b = self.make_implicit_name("");
                 let a_t =  mach.quote(bump, cxt, cxt.lvl, head_ty);
-                let cxt2 = 
+                let cxt2 =
                     mach.bind_name(bump, cxt, &b, empty_span(()), a_t, head_ty)
                 ;
                 Ok((
@@ -11418,16 +11478,16 @@ impl<'a> Compiler<'a> {
                 let (sum_name, sum_params, cases): (
                     &'a str,
                     Vec<SumParamV<'a>>,
-                    Vec<crate::parser_lib::Span<SmolStr>>,
+                    Rc<Vec<crate::parser_lib::Span<SmolStr>>>,
                 ) = if v_tag(head_sum) == 7 {
                     match v_xcell_of(head_sum) {
                         XCell::Sum {
                             name, params, cases, ..
-                        } => (*name, params.to_vec(), case_spans(cxt, name, cases)),
-                        _ => ("", vec![], vec![]),
+                        } => (*name, params.to_vec(), self.case_spans_cached(cxt, name, cases)),
+                        _ => ("", vec![], Rc::new(vec![])),
                     }
                 } else {
-                    ("", vec![], vec![])
+                    ("", vec![], Rc::new(vec![]))
                 };
                 let case_idx = match cases.iter().position(|c| c.data == name.data) {
                     Some(i) => i,
@@ -11442,7 +11502,7 @@ impl<'a> Compiler<'a> {
                             ));
                         }
                         let a_t =  mach.quote(bump, cxt, cxt.lvl, head_ty);
-                        let cxt2 = 
+                        let cxt2 =
                             mach.bind_name(bump, cxt, &name.data, name.to_span(), a_t, head_ty)
                         ;
                         return Ok((PatternDetail::Bind(name.clone()), cxt2));
@@ -11475,13 +11535,14 @@ impl<'a> Compiler<'a> {
                 };
                 // 悬停 / goto-definition：模式 token → 构造子（参数化构造子给
                 // Π 签名而非不可读的 λ 串，无参构造子给 SumCase 值），def span
-                // 取登记处 span。
+                // 取登记处 span。渲染走 decl 键缓存（push_ctor_hover）：构造子
+                // hover 值是闭合值，串与使用处无关。
                 let hover_val = match cxt.decls.get(qualified.as_str()).or_else(|| cxt.decls.get(name.data.as_str())) {
                     Some(e) => (if v_tag(e.val) == 1 { e.vty } else { e.val }, e.span),
                     None => (constr_pi, empty_span(())),
                 };
-                
-                    mach.push_hover(bump, cxt, name.to_span(), hover_val.1, hover_val.0)
+
+                    mach.push_ctor_hover(bump, cxt, name.to_span(), hover_val.1, hover_val.0, qualified.as_str())
                 ;
                 // 头部 Sum 的隐式参数（构造子 Π 链最前的 n 个绑定器）不占槽
                 let mut impl_vals: Vec<V> = sum_params
@@ -11520,7 +11581,7 @@ impl<'a> Compiler<'a> {
                             // 用户具名隐式绑定器（`cons[l=l0](..)`）：按用户名占槽
                             next += 1;
                             let a_t =  mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
-                            cxt_arm = 
+                            cxt_arm =
                                 mach.bind_name(bump, &cxt_arm, &vname.data, vname.to_span(), a_t, dom)
                             ;
                             PatternDetail::Any(vname.clone(), Some(pname.clone()), Icit::Impl)
@@ -11529,7 +11590,7 @@ impl<'a> Compiler<'a> {
                             next += 1;
                             let b = self.make_implicit_name(bname);
                             let a_t =  mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
-                            cxt_arm = 
+                            cxt_arm =
                                 mach.bind_name(bump, &cxt_arm, &b, empty_span(()), a_t, dom)
                             ;
                             PatternDetail::Any(
@@ -11569,7 +11630,7 @@ impl<'a> Compiler<'a> {
                             // 用户没写这个字段（或 icit 对不上）：补虚槽
                             let b = self.make_implicit_name(bname);
                             let a_t =  mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
-                            cxt_arm = 
+                            cxt_arm =
                                 mach.bind_name(bump, &cxt_arm, &b, empty_span(()), a_t, dom)
                             ;
                             PatternDetail::Any(
@@ -11629,9 +11690,9 @@ impl<'a> Compiler<'a> {
             if v_tag(typ) == 7 {
                 match v_xcell_of(typ) {
                     XCell::Sum { name, cases, .. } => {
-                        let cs = case_spans(cxt, name, cases);
+                        let cs = self.case_spans_cached(cxt, name, cases);
                         let names = cs.iter().map(|c| c.data.clone()).collect();
-                        (cs, names)
+                        (cs.as_ref().clone(), names)
                     }
                     _ => (vec![], vec![]),
                 }
@@ -11698,7 +11759,7 @@ impl<'a> Compiler<'a> {
             // （`[l=_l0]`），否则 check_pm 会新解 meta，臂上下文的
             // `xs : Vec[A] _l0` 与特化出的 `Vec[A] ?m` 各说各话。
             let raw =  detail_to_raw(&detail);
-            let cxt_arm = match 
+            let cxt_arm = match
                 mach.check_pm_final(bump, &cxt_walk, &raw, typ, target_val)
              {
                 Ok((_, c)) => c,
@@ -11754,7 +11815,9 @@ impl<'a> Compiler<'a> {
                 continue;
             } else {
                 match v_xcell_of(field_sum) {
-                    XCell::Sum { name, cases, .. } => case_spans(&nc.arm_cxt, name, cases),
+                    XCell::Sum { name, cases, .. } => {
+                        self.case_spans_cached(&nc.arm_cxt, name, cases).as_ref().clone()
+                    }
                     _ => continue,
                 }
             };

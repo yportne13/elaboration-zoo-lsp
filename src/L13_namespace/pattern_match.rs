@@ -297,15 +297,19 @@ impl Compiler {
                 };
                 // 悬停 / goto-definition：模式 token → 构造子。无参构造子给
                 // 构造子值（`Boolean::true`），参数化构造子给 Π 签名而不是不可读
-                // 的 λ 串；定义 span 指向枚举声明里的 case 名。
-                let hover_val = match cxt.decl.get(&key).or_else(|| cxt.decl.get(&name.data)) {
-                    Some((_, _, v, _, _, _, _)) => match v.as_ref() {
-                        Val::Lam(..) => constr_pi.clone(),
-                        _ => v.clone(),
-                    },
-                    None => constr_pi.clone(),
-                };
-                infer.push_hover(cxt, name.to_span(), cases[case_idx].to_span(), &hover_val);
+                // 的 λ 串；定义 span 指向枚举声明里的 case 名。渲染走 decl 键
+                // 缓存（push_ctor_hover）：构造子 hover 值是闭合值，串与使用处
+                // 上下文无关。
+                {
+                    let hover_val = match cxt.decl.get(&key).or_else(|| cxt.decl.get(&name.data)) {
+                        Some((_, _, v, _, _, _, _)) => match v.as_ref() {
+                            Val::Lam(..) => constr_pi.clone(),
+                            _ => v.clone(),
+                        },
+                        None => constr_pi.clone(),
+                    };
+                    infer.push_ctor_hover(cxt, name.to_span(), cases[case_idx].to_span(), &hover_val, key.as_str());
+                }
                 // 头部 Sum 的隐式参数（构造子 Π 链最前的 n 个绑定器）不占槽
                 let mut impl_vals: Vec<Rc<Val>> = sum_params
                     .iter()

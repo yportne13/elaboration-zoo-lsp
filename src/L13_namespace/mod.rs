@@ -1265,6 +1265,14 @@ pub struct Infer {
     /// 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按不可合一失败、
     /// force 停止展开按未解处理。
     unify_fuel: std::cell::Cell<u32>,
+    /// 构造子 hover 渲染缓存（`push_ctor_hover`，match 编译器 walk_pat
+    /// Con 臂专用）：构造子 hover 值是 decl 条目的**闭合**值，渲染结果与
+    /// 使用处上下文无关，按 decl 键缓存——同键第二次起免 quote/pretty
+    /// 全管线（match 负载实测每 Con 模式 ~0.5µs，walk_pat 内最大单项）。
+    /// 只在渲染**无未解 meta** 时缓存（meta 可能在首见之后才被求解，
+    /// 缓存串会把 `?N` 冻进使用处悬浮——LSP 快照克隆此表随 hover_table
+    /// 一起留空，prelude 缓存态收尾清空）。
+    ctor_hover_memo: HashMap<SmolStr, std::rc::Rc<str>>,
 }
 
 impl Clone for Infer {
@@ -1289,6 +1297,8 @@ impl Clone for Infer {
             def_replay_memo: self.def_replay_memo.clone(),
             // 快照拿全新燃料池：fuel 是每轮 unify 的递归护栏，不跨快照继承
             unify_fuel: std::cell::Cell::new(self.unify_fuel.get()),
+            // 快照不继承渲染缓存：条目与 hover_table 同生命周期纪律
+            ctor_hover_memo: HashMap::new(),
             // accumulated_errors are ephemeral per-checking-pass;
             // a clone (used for read-only analysis) starts fresh.
             accumulated_errors: Vec::new(),
@@ -1935,6 +1945,7 @@ impl Infer {
             println_jobs: vec![],
             def_replay_memo: Default::default(),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
+            ctor_hover_memo: HashMap::new(),
         }
     }
 
@@ -3826,6 +3837,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
     infer.hover_table.clear();
     infer.completion_table.clear();
     infer.inlay_hint_table.clear();
+    infer.ctor_hover_memo.clear();
     // Reset the HDL loop-index global to a clean empty at the end of the
     // load: checking `genFrom`'s succ-case body evaluates its side-effecting
     // lets (the checker evaluates applications), leaving Rigid-indexed

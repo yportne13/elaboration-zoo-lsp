@@ -2239,6 +2239,25 @@ impl Infer {
         self.hover_table.push((t_span, def_span, rendered));
     }
 
+    /// 构造子使用处 hover（match 编译器 walk_pat Con 臂专用）：hover 值是
+    /// decl 条目的**闭合**值，渲染结果与使用处上下文无关，按 decl 键缓存
+    /// 渲染串——同键第二次起免 quote/pretty 全管线。无未解 meta 才缓存
+    /// （meta 可能在首见之后才被求解，缓存串会把 `?N` 冻进使用处悬浮；
+    /// 快照克隆与 prelude 缓存态收尾都不继承此表）。
+    pub(crate) fn push_ctor_hover(&mut self, cxt: &Cxt, t_span: Span<()>, def_span: Span<()>, val: &Rc<Val>, key: &str) {
+        if let Some(s) = self.ctor_hover_memo.get(key) {
+            self.hover_table.push((t_span, def_span, s.as_ref().to_owned()));
+            return;
+        }
+        let tm = self.quote(&cxt.decl, cxt.lvl, val);
+        let rendered = super::pretty_tm(0, cxt.names(), &tm);
+        if tm.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
+            self.ctor_hover_memo
+                .insert(SmolStr::new(key), std::rc::Rc::from(rendered.as_str()));
+        }
+        self.hover_table.push((t_span, def_span, rendered));
+    }
+
     /// L5: push hover entries for the intermediate prefixes of a qualified
     /// access (`mylib.Foo.mk` also hovers the type `mylib.Foo` on its `Foo`
     /// token, and the constructor on `mk`).  Each entry is keyed to that
