@@ -6,12 +6,13 @@ use std::{
 use crate::parser_lib::{Span, ToSpan};
 
 use super::{
-    Env, Error, Infer, Tm, Val, Subst,
+    Env, Error, Infer, Lvl, Tm, Val, Subst,
+    cover_at, fmt_path, wrap_sub,
     cxt::Cxt,
     elaboration::SpecSolve,
     empty_span,
     parser::syntax::{Pattern, Raw, Icit},
-    PatternDetail,
+    PatternDetail, PosCover,
 };
 
 type Var = i32;
@@ -22,12 +23,40 @@ type Constructor = Span<String>;
 pub enum Warning {
     Unreachable(Raw),
     Unmatched(Pattern),
+    /// 嵌套位置覆盖缺失（L07 同文案：`match 不完整：模式位置 {path} 缺少
+    /// 构造子 {ctor}`；2026-09-18 评审修复）。
+    IncompleteNested(String),
 }
 
 pub struct Compiler {
     warnings: Vec<Warning>,
     pub pats: Vec<(PatternDetail, Rc<Tm>)>,
     ret_type: Rc<Val>,
+    /// 嵌套覆盖检查的记账（走查中收集，臂循环结束后统一探测；L07 同款，
+    /// 2026-09-18 评审修复 P0）。顶层覆盖检查只遍历 scrutinee 类型的构造子；
+    /// 嵌套 `Con` 字段位置的可达性从未被枚举会让非穷尽 match 被静默接受。
+    /// 两段式：走查中只记 (路径, 字段 Sum, 本层 ret)；本臂特化方程**解出
+    /// 后**（σ 为终态）才提升为带 σ/lvl 快照的完整记账——字段走查时索引
+    /// 精化不在 σ 里，此时探测会把已精化下不可达的构造子误判可达。整臂
+    /// 特化失败（荒谬臂，静默跳过）时丢弃记账。
+    nested_checks: Vec<NestedCheck>,
+    /// 本臂走查中的待提升位置（check_pm_final 成功后结算）。`ret` 是该层
+    /// Con 的走查返回类型（槽位刚性即本层走查变量，L07 walk_con 的特化
+    /// 方程的构造子侧）。
+    pending_pos: Vec<(Vec<(String, usize)>, Rc<Val>, Rc<Val>)>,
+    /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
+    cur_path: Vec<(String, usize)>,
+}
+
+/// 一个嵌套拆分位置的记账（L07 `NestedCheck` 同构；L10 无可解集白名单，
+/// 故无 solvable 槽）：路径 = 根到被拆字段的 (构造子名, 字段下标) 链；
+/// `field_sum` 是该字段在记录臂实例化下的 Sum 值；σ/lvl 是臂终态的走查
+/// 快照（延迟探测要在与臂内方程同构的状态下跑）。
+struct NestedCheck {
+    path: Vec<(String, usize)>,
+    field_sum: Rc<Val>,
+    sub: Rc<Subst>,
+    lvl: Lvl,
 }
 
 impl Compiler {
@@ -36,6 +65,9 @@ impl Compiler {
             warnings: Vec::new(),
             pats: Vec::new(),
             ret_type,
+            nested_checks: Vec::new(),
+            pending_pos: Vec::new(),
+            cur_path: Vec::new(),
         }
     }
 
@@ -47,11 +79,19 @@ impl Compiler {
     /// 可被方程解出；探测状态全在本地，弃掉即回滚），返回类型再与头部类型跑
     /// 一次索引方程。成功 = 该构造子可能出现在头部类型的值里；结构冲突
     /// （`Vec[A] zero` 上不可能有 `cons`）= absurd。
+    ///
+    /// `lvl` / `init_sub` 显式穿参（L07 同款，2026-09-18 评审修复）：顶层
+    /// 探测传入口 `cxt.lvl` 与空 σ；嵌套位置的延迟探测传记账时的臂内层级
+    /// 与终态 σ——scratch 层级必须落在该臂全部真槽之外。头部侧实参来自
+    /// σ 之下的字段 Sum（调用方已 force），方程两侧由 `unify_pm` 入口置于
+    /// acc 之下解释；构造子类型本身是全局项，不含臂内刚性，无需 σ 包裹。
     fn probe_accessible(
         infer: &mut Infer,
         cxt: &Cxt,
+        lvl: Lvl,
         head_sum: &Rc<Val>,
         ctor: &String, // BiMap::get 的键口径（`&str` 借查不支持，避免每次探测多一次分配）
+        init_sub: &Rc<Subst>,
     ) -> bool {
         let (sum_name, head_params, impl_vals) = match head_sum.as_ref() {
             Val::Sum(name, params, ..) => (
@@ -85,13 +125,20 @@ impl Compiler {
                         impl_idx += 1;
                         v
                     } else {
-                        let l = cxt.lvl + scratch;
+                        let l = lvl + scratch;
                         scratch += 1;
                         Val::vvar(l).into()
                     };
                     ty = infer.closure_apply(closure, u);
                 }
-                _ => break Self::unify_indices(infer, cxt, &sum_name, &head_params, &tyf),
+                _ => {
+                    break Self::unify_indices(infer, cxt, lvl, &sum_name, &head_params, &tyf, init_sub)
+                        // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
+                        // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
+                        // 过该构造子）会让深负载下的非穷尽 match 被静默接受
+                        // （L07 同款方向纠偏，2026-09-18 评审修复）。
+                        || infer.fuel_exhausted()
+                }
             }
         };
         infer.meta = snap;
@@ -100,13 +147,16 @@ impl Compiler {
 
     /// 索引方程：头部 Sum 的参数（含索引）与构造子返回 Sum 的参数逐槽特化
     /// 合一，**头部一侧在前**——两侧都是可解变量时解的方向是"头部变量 :=
-    /// 构造子侧值"（与上下文顺序一致）。解只累积进探测私有的 σ，弃掉即回滚。
+    /// 构造子侧值"（与上下文顺序一致）。解只累积进探测私有的 σ（以
+    /// `init_sub` 作种子），弃掉即回滚。
     fn unify_indices(
         infer: &mut Infer,
         cxt: &Cxt,
+        lvl: Lvl,
         sum_name: &Span<String>,
         head_params: &[Rc<Val>],
         ret_ty: &Rc<Val>,
+        init_sub: &Rc<Subst>,
     ) -> bool {
         let ret_sum = infer.force(ret_ty);
         let rp = match ret_sum.as_ref() {
@@ -117,18 +167,18 @@ impl Compiler {
             return false;
         }
         let mut spec = SpecSolve {
-            acc: Rc::new(Subst::default()),
+            acc: init_sub.clone(),
         };
         let span = empty_span(());
         head_params
             .iter()
             .zip(rp.iter())
-            .all(|(a, b)| infer.unify_pm(cxt, a, &b.1, span, &mut spec).is_ok())
+            .all(|(a, b)| infer.unify_pm(cxt, lvl, a, &b.1, span, &mut spec).is_ok())
     }
 
     /// 逐臂下钻编译（L07 口径，2026-09-18 自决策树矩阵重写；L11/L12 同款）。
-    /// 语义相对决策树的三处收窄（覆盖只做顶层 / 遮蔽只认通配臂 / 特化失败
-    /// 静默跳过）见 L11 README 与 docs/l09l13-match-compiler-analysis。
+    /// 语义相对决策树的三处收窄（覆盖含嵌套位置 / 遮蔽只认通配臂 / 特化
+    /// 失败静默跳过）见 L11 README 与 docs/l09l13-match-compiler-analysis。
     pub fn compile(
         &mut self,
         infer: &mut Infer,
@@ -138,6 +188,9 @@ impl Compiler {
         target_val: Rc<Val>,
     ) -> Result<Vec<Warning>, Error> {
         self.warnings = Vec::new();
+        self.nested_checks = Vec::new();
+        self.pending_pos = Vec::new();
+        self.cur_path = Vec::new();
         let typ = infer.force(&typ);
         let (constrs, ctor_names): (Vec<Constructor>, Vec<String>) = match typ.as_ref() {
             Val::Sum(_, _, cases, _) => (
@@ -149,8 +202,9 @@ impl Compiler {
         // 覆盖检查：可达且无臂覆盖 → Unmatched（fill_context(Outermost, ·)
         // 的形态就是「构造子 + 999 通配」）。不可达（如 `Vec[A] zero` 上的
         // `cons`）不报——索引方程不可解即结构上不可能出现。
+        let empty_sub: Rc<Subst> = Rc::new(Subst::default());
         for ctor in &constrs {
-            if Self::probe_accessible(infer, cxt, &typ, &ctor.data)
+            if Self::probe_accessible(infer, cxt, cxt.lvl, &typ, &ctor.data, &empty_sub)
                 && !arms
                     .iter()
                     .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
@@ -169,16 +223,69 @@ impl Compiler {
                 unreachable.push(Warning::Unreachable(body.clone()));
                 continue;
             }
-            let (detail, cxt_walk) = match walk_pat(infer, cxt, pat, &typ) {
+            // 本臂走查起点无遗留记账（上一臂已结算/丢弃，防御性清空）。
+            self.pending_pos.clear();
+            self.cur_path.clear();
+            let (detail, cxt_walk, top_ret) = match self.walk_pat(infer, cxt, pat, &typ) {
                 Ok(x) => x,
-                Err(_) => continue,
+                Err(_) => {
+                    // 走查失败臂的嵌套记账一并丢弃
+                    self.pending_pos.clear();
+                    continue;
+                }
             };
             let raw = pat.to_raw();
-            let Ok((_, sigma)) =
+            let Ok((_, sigma0)) =
                 infer.check_pm_final(&cxt_walk, raw, typ.clone(), target_val.clone())
             else {
+                // 荒谬臂（特化失败静默跳过）：其嵌套位置不产生覆盖义务——
+                // 臂本身被跳过已承担语义（L07 荒谬臂 clear pending 同款）
+                self.pending_pos.clear();
                 continue;
             };
+            // 走查特化方程的结算（L07 walk_con 内联方程的等价物，2026-09-18
+            // P0 修复的链接步骤）：本臂每层 Con 的「头部 ≐ 走查 ret」方程以
+            // σ 作种子补解入，把**走查槽位刚性链接进 σ**——嵌套位置的延迟
+            // 探测由此看到索引精化（如 `Vec[Nat] (succ zero)` 的尾部上
+            // `nil` 不可达）。方程失败 = 该臂在走查实例化下不可匹配（荒谬
+            // 臂）：连同嵌套记账一并静默跳过。
+            let mut spec = SpecSolve { acc: sigma0.clone() };
+            let span = empty_span(());
+            let mut absurd = false;
+            if let Some(top_ret) = &top_ret {
+                if infer
+                    .unify_pm(&cxt_walk, cxt_walk.lvl, &typ, top_ret, span, &mut spec)
+                    .is_err()
+                {
+                    absurd = true;
+                }
+            }
+            if !absurd {
+                for (_, field_sum, ret) in self.pending_pos.iter() {
+                    if infer
+                        .unify_pm(&cxt_walk, cxt_walk.lvl, field_sum, ret, span, &mut spec)
+                        .is_err()
+                    {
+                        absurd = true;
+                        break;
+                    }
+                }
+            }
+            if absurd {
+                self.pending_pos.clear();
+                continue;
+            }
+            let sigma = spec.acc;
+            // 嵌套位置结算：此刻本臂全部特化方程已解出、σ 为终态，字段 Sum
+            // 置于 σ 之下再探测才能看到索引精化（两段式，L07 同款）。
+            for (path, field_sum, _) in std::mem::take(&mut self.pending_pos) {
+                self.nested_checks.push(NestedCheck {
+                    path,
+                    field_sum,
+                    sub: sigma.clone(),
+                    lvl: cxt_walk.lvl,
+                });
+            }
             let cxt_arm = cxt_walk.subst_cxt(&sigma);
             let ret_type = match self.ret_type.as_ref() {
                 Val::Flex(..) => self.ret_type.clone(),
@@ -193,7 +300,45 @@ impl Compiler {
                 shadowed = true;
             }
         }
-        Ok(unreachable.into_iter().chain(self.warnings.clone()).collect())
+        let mut out: Vec<Warning> = unreachable
+            .into_iter()
+            .chain(std::mem::take(&mut self.warnings))
+            .collect();
+        // 嵌套位置的覆盖检查（沿模式下钻逐节点，L07 同款，2026-09-18 评审
+        // 修复 P0）：每条记账在记录臂的实例化（σ/lvl 快照）下探测字段 Sum
+        // 的可达构造子；覆盖集 = 已走查臂的 PatternDetail 沿路径的结构贡献
+        // （var/Any = 全覆盖；祖先异 ctor = 不可达该位置；同 ctor 前缀 = 贡
+        // 献其末端构造子）。可达集取各记账臂探测的并集（保守：任一臂实例化
+        // 下可达的构造子都要求被覆盖）。荒谬臂 / 被遮蔽臂不在 pats 里，天然
+        // 不贡献覆盖——与运行时首匹配结构语义一致。
+        let mut reported = HashSet::new();
+        for nc in std::mem::take(&mut self.nested_checks) {
+            // 字段 Sum 置于记录臂的终态 σ 之下再 force：索引精化（如尾部
+            // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型
+            let field_sum = infer.force(&Rc::new(wrap_sub(&nc.sub, (*nc.field_sum).clone())));
+            let ctor_cases: Vec<Span<String>> = match field_sum.as_ref() {
+                Val::Sum(_, _, cs, _) => cs.clone(),
+                _ => continue,
+            };
+            for ctor in ctor_cases {
+                if !Self::probe_accessible(infer, cxt, nc.lvl, &field_sum, &ctor.data, &nc.sub) {
+                    continue;
+                }
+                let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
+                    PosCover::All => true,
+                    PosCover::Ctor(n) => n == ctor.data,
+                    PosCover::None => false,
+                });
+                if !covered && reported.insert((nc.path.clone(), ctor.data.clone())) {
+                    out.push(Warning::IncompleteNested(format!(
+                        "match 不完整：模式位置 {} 缺少构造子 {}",
+                        fmt_path(&nc.path),
+                        ctor.data
+                    )));
+                }
+            }
+        }
+        Ok(out)
     }
     pub fn eval_aux(
         infer: &Infer,
@@ -235,6 +380,151 @@ impl Compiler {
             })
             .next()
     }
+
+    /// 模式走查（L07 `walk_con` 口径；L11 `walk_pat` 的 L10 版）：绑定模式变量槽
+    /// 并构建运行时 `PatternDetail`。槽位纪律：枚举隐式参数不占槽、构造子隐式
+    /// 绑定器补虚通配、变量模式以用户名绑槽、**Con 本身不占槽**。
+    /// L10 的全局表按**层级**存（`Infer.global`，无名字键的 decl 表），构造子
+    /// 类型经 `infer_expr(Var(名))` 取（树的头部展开同款）。
+    ///
+    /// 返回值第三项 = 该层 Con 的走查返回类型（已 force，槽位刚性 = 本层
+    /// 走查变量；compile 结算本层特化方程用；非 Con 模式为 `None`）。
+    /// 嵌套 `Con` 字段位置记入 `pending_pos`（两段式记账；结算见 `compile`，
+    /// 2026-09-18 评审修复 P0）。
+    fn walk_pat(
+        &mut self,
+        infer: &mut Infer,
+        cxt: &Cxt,
+        pat: &Pattern,
+        head_ty: &Rc<Val>,
+    ) -> Result<(PatternDetail, Cxt, Option<Rc<Val>>), Error> {
+        match pat {
+            Pattern::Any(span, _) => {
+                let a_t = infer.quote(cxt.lvl, head_ty);
+                let cxt2 = cxt.bind(empty_span("_".to_owned()), a_t, head_ty.clone());
+                Ok((PatternDetail::Any(span.to_span()), cxt2, None))
+            }
+            Pattern::Con(name, subs, _) => {
+                let head_sum = infer.force(head_ty);
+                let (sum_params, cases) = match head_sum.as_ref() {
+                    Val::Sum(_, params, cases, _) => (params.clone(), cases.clone()),
+                    _ => {
+                        if !subs.is_empty() {
+                            return Err(Error(name.clone().map(|n| format!(
+                                "`{n}` 不是构造子，不能带子模式解构"
+                            ))));
+                        }
+                        let a_t = infer.quote(cxt.lvl, head_ty);
+                        let cxt2 = cxt.bind(name.clone(), a_t, head_ty.clone());
+                        return Ok((PatternDetail::Bind(name.clone()), cxt2, None));
+                    }
+                };
+                if !cases.iter().any(|c| c.data == name.data) {
+                    if !subs.is_empty() {
+                        return Err(Error(name.clone().map(|n| format!(
+                            "`{n}` 不是该类型的构造子，不能带子模式解构"
+                        ))));
+                    }
+                    let a_t = infer.quote(cxt.lvl, head_ty);
+                    let cxt2 = cxt.bind(name.clone(), a_t, head_ty.clone());
+                    return Ok((PatternDetail::Bind(name.clone()), cxt2, None));
+                }
+                // 构造子类型：名字 → 层级 → Infer.global（树同款 infer_expr）
+                let (_, ty0) = infer.infer_expr(cxt, Raw::Var(name.clone()))?;
+                let mut impl_vals: Vec<Rc<Val>> = sum_params
+                    .iter()
+                    .filter(|p| p.3 == Icit::Impl)
+                    .map(|p| p.1.clone())
+                    .collect();
+                impl_vals.reverse();
+                let mut ty = ty0;
+                let mut sub_queue: Vec<&Pattern> = subs.iter().collect();
+                let mut details: Vec<PatternDetail> = Vec::new();
+                let mut cxt_arm = cxt.clone();
+                loop {
+                    let tyf = infer.force(&ty);
+                    match tyf.as_ref() {
+                        Val::Pi(bname, bicit, dom, closure) => {
+                            let (bicit, dom, closure) = (*bicit, dom.clone(), closure.clone());
+                            if let Some(v) = impl_vals.pop() {
+                                ty = infer.closure_apply(&closure, v);
+                                continue;
+                            }
+                            let sub: Option<&Pattern> = match bicit {
+                                Icit::Impl => sub_queue
+                                    .first()
+                                    .filter(|p| p.get_icit() == Icit::Impl)
+                                    .copied(),
+                                Icit::Expl => match sub_queue.first() {
+                                    Some(p) if p.get_icit() == Icit::Expl => Some(*p),
+                                    _ => None,
+                                },
+                            };
+                            let u = Rc::new(Val::vvar(cxt_arm.lvl));
+                            let detail = match sub {
+                                None => {
+                                    let b = empty_span(format!("_{}", bname.data));
+                                    let d_t = infer.quote(cxt_arm.lvl, &dom);
+                                    cxt_arm = cxt_arm.bind(b, d_t, dom.clone());
+                                    PatternDetail::Any(empty_span(()))
+                                }
+                                Some(Pattern::Any(span, _)) => {
+                                    sub_queue.remove(0);
+                                    let b = empty_span(format!("_{}", bname.data));
+                                    let d_t = infer.quote(cxt_arm.lvl, &dom);
+                                    cxt_arm = cxt_arm.bind(b, d_t, dom.clone());
+                                    PatternDetail::Any(span.to_span())
+                                }
+                                Some(p @ Pattern::Con(..)) => {
+                                    sub_queue.remove(0);
+                                    // 嵌套 Con：字段 dom 是含该构造子的 Sum 时
+                                    // 记一笔待提升的嵌套位置（该字段位置沿 ctor
+                                    // 路径的可达构造子必须有臂覆盖），臂特化方
+                                    // 程解出后以终态 σ 结算（见 compile）。
+                                    let Pattern::Con(cn, ..) = p else {
+                                        unreachable!()
+                                    };
+                                    let field_sum = infer.force(&dom);
+                                    let is_ctor = matches!(field_sum.as_ref(),
+                                        Val::Sum(_, _, cases, _)
+                                            if cases.iter().any(|c| c.data == cn.data));
+                                    let (d, c2) = if is_ctor {
+                                        self.cur_path.push((name.data.clone(), details.len()));
+                                        let (d, c2, inner_ret) =
+                                            self.walk_pat(infer, &cxt_arm, p, &dom)?;
+                                        self.cur_path.pop();
+                                        if let Some(r) = inner_ret {
+                                            self.pending_pos.push((
+                                                {
+                                                    let mut pa = self.cur_path.clone();
+                                                    pa.push((name.data.clone(), details.len()));
+                                                    pa
+                                                },
+                                                field_sum.clone(),
+                                                r,
+                                            ));
+                                        }
+                                        (d, c2)
+                                    } else {
+                                        let (d, c2, _) =
+                                            self.walk_pat(infer, &cxt_arm, p, &dom)?;
+                                        (d, c2)
+                                    };
+                                    cxt_arm = c2;
+                                    d
+                                }
+                            };
+                            details.push(detail);
+                            ty = infer.closure_apply(&closure, u);
+                        }
+                        _ => break,
+                    }
+                }
+                let ret = infer.force(&ty);
+                Ok((PatternDetail::Con(name.clone(), details), cxt_arm, Some(ret)))
+            }
+        }
+    }
 }
 
 /// 臂是否（结构上）覆盖构造子 `ctor`（L07 `covers` 同款）。
@@ -253,107 +543,6 @@ fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
         Pattern::Any(..) => true,
         Pattern::Con(name, subs, _) => {
             subs.is_empty() && !ctor_names.iter().any(|c| c == &name.data)
-        }
-    }
-}
-
-/// 模式走查（L07 `walk_con` 口径；L11 `walk_pat` 的 L10 版）：绑定模式变量槽
-/// 并构建运行时 `PatternDetail`。槽位纪律：枚举隐式参数不占槽、构造子隐式
-/// 绑定器补虚通配、变量模式以用户名绑槽、**Con 本身不占槽**。
-/// L10 的全局表按**层级**存（`Infer.global`，无名字键的 decl 表），构造子
-/// 类型经 `infer_expr(Var(名))` 取（树的头部展开同款）。
-fn walk_pat(infer: &mut Infer, cxt: &Cxt, pat: &Pattern, head_ty: &Rc<Val>) -> Result<(PatternDetail, Cxt), Error> {
-    match pat {
-        Pattern::Any(span, _) => {
-            let a_t = infer.quote(cxt.lvl, head_ty);
-            let cxt2 = cxt.bind(empty_span("_".to_owned()), a_t, head_ty.clone());
-            Ok((PatternDetail::Any(span.to_span()), cxt2))
-        }
-        Pattern::Con(name, subs, _) => {
-            let head_sum = infer.force(head_ty);
-            let (sum_params, cases) = match head_sum.as_ref() {
-                Val::Sum(_, params, cases, _) => (params.clone(), cases.clone()),
-                _ => {
-                    if !subs.is_empty() {
-                        return Err(Error(name.clone().map(|n| format!(
-                            "`{n}` 不是构造子，不能带子模式解构"
-                        ))));
-                    }
-                    let a_t = infer.quote(cxt.lvl, head_ty);
-                    let cxt2 = cxt.bind(name.clone(), a_t, head_ty.clone());
-                    return Ok((PatternDetail::Bind(name.clone()), cxt2));
-                }
-            };
-            if !cases.iter().any(|c| c.data == name.data) {
-                if !subs.is_empty() {
-                    return Err(Error(name.clone().map(|n| format!(
-                        "`{n}` 不是该类型的构造子，不能带子模式解构"
-                    ))));
-                }
-                let a_t = infer.quote(cxt.lvl, head_ty);
-                let cxt2 = cxt.bind(name.clone(), a_t, head_ty.clone());
-                return Ok((PatternDetail::Bind(name.clone()), cxt2));
-            }
-            // 构造子类型：名字 → 层级 → Infer.global（树同款 infer_expr）
-            let (_, ty0) = infer.infer_expr(cxt, Raw::Var(name.clone()))?;
-            let mut impl_vals: Vec<Rc<Val>> = sum_params
-                .iter()
-                .filter(|p| p.3 == Icit::Impl)
-                .map(|p| p.1.clone())
-                .collect();
-            impl_vals.reverse();
-            let mut ty = ty0;
-            let mut sub_queue: Vec<&Pattern> = subs.iter().collect();
-            let mut details: Vec<PatternDetail> = Vec::new();
-            let mut cxt_arm = cxt.clone();
-            loop {
-                let tyf = infer.force(&ty);
-                match tyf.as_ref() {
-                    Val::Pi(bname, bicit, dom, closure) => {
-                        let (bicit, dom, closure) = (*bicit, dom.clone(), closure.clone());
-                        if let Some(v) = impl_vals.pop() {
-                            ty = infer.closure_apply(&closure, v);
-                            continue;
-                        }
-                        let sub: Option<&Pattern> = match bicit {
-                            Icit::Impl => sub_queue
-                                .first()
-                                .filter(|p| p.get_icit() == Icit::Impl)
-                                .copied(),
-                            Icit::Expl => match sub_queue.first() {
-                                Some(p) if p.get_icit() == Icit::Expl => Some(*p),
-                                _ => None,
-                            },
-                        };
-                        let u = Rc::new(Val::vvar(cxt_arm.lvl));
-                        let detail = match sub {
-                            None => {
-                                let b = empty_span(format!("_{}", bname.data));
-                                let d_t = infer.quote(cxt_arm.lvl, &dom);
-                                cxt_arm = cxt_arm.bind(b, d_t, dom.clone());
-                                PatternDetail::Any(empty_span(()))
-                            }
-                            Some(Pattern::Any(span, _)) => {
-                                sub_queue.remove(0);
-                                let b = empty_span(format!("_{}", bname.data));
-                                let d_t = infer.quote(cxt_arm.lvl, &dom);
-                                cxt_arm = cxt_arm.bind(b, d_t, dom.clone());
-                                PatternDetail::Any(span.to_span())
-                            }
-                            Some(p @ Pattern::Con(..)) => {
-                                sub_queue.remove(0);
-                                let (d, c2) = walk_pat(infer, &cxt_arm, p, &dom)?;
-                                cxt_arm = c2;
-                                d
-                            }
-                        };
-                        details.push(detail);
-                        ty = infer.closure_apply(&closure, u);
-                    }
-                    _ => break,
-                }
-            }
-            Ok((PatternDetail::Con(name.clone(), details), cxt_arm))
         }
     }
 }

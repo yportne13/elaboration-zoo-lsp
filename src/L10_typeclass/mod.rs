@@ -97,6 +97,41 @@ impl PatternDetail {
     }
 }
 
+/// 已走查臂在某嵌套位置的覆盖贡献（参考版与孪生版共用，保证嵌套覆盖
+/// 检查的判定与文案逐字节一致；L07 同款，2026-09-18 评审修复）：全覆盖
+/// （var/Any，含路径中途变变量）、贡献某构造子（路径末端是 Con）、不可达
+/// 该位置（祖先选了别的构造子）。
+pub(crate) enum PosCover {
+    All,
+    Ctor(String),
+    None,
+}
+
+/// 沿 (构造子名, 字段下标) 路径下钻一棵已走查的 PatternDetail 树。
+/// 字段下标与 `walk_pat` 的 details 布局同源（望远镜中产槽绑定器的序数）。
+pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosCover {
+    let mut cur = detail;
+    for (ctor, field) in path {
+        match cur {
+            PatternDetail::Any(_) | PatternDetail::Bind(_) => return PosCover::All,
+            PatternDetail::Con(n, subs) if n.data == *ctor => cur = &subs[*field],
+            PatternDetail::Con(..) => return PosCover::None,
+        }
+    }
+    match cur {
+        PatternDetail::Any(_) | PatternDetail::Bind(_) => PosCover::All,
+        PatternDetail::Con(n, _) => PosCover::Ctor(n.data.clone()),
+    }
+}
+
+/// 人读路径：`cons#2 → nil#1` 表示 cons 第二字段的 nil 第一字段处。
+pub(crate) fn fmt_path(path: &[(String, usize)]) -> String {
+    path.iter()
+        .map(|(c, f)| format!("{c}#{}", f + 1))
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
@@ -448,6 +483,11 @@ impl Infer {
     /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
     fn refuel(&self) {
         self.unify_fuel.set(UNIFY_FUEL);
+    }
+    /// fuel 是否已耗尽（L07 同款观察口）：可达性探测在合一失败后用它区分
+    /// "结构冲突"与"预算耗尽的假 absurd"——后者按可达处理（保守要求覆盖）。
+    pub(crate) fn fuel_exhausted(&self) -> bool {
+        self.unify_fuel.get() == 0
     }
     fn new_meta(&mut self, a: Rc<VTy>) -> u32 {
         self.meta.push(MetaEntry::Unsolved(a));
@@ -949,8 +989,16 @@ impl Infer {
     }
 
     fn unify_catch(&mut self, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
+        self.unify_catch_at(cxt.lvl, cxt, t, t_prime, span)
+    }
+
+    /// `unify_catch` 的显式层级版（L07 的显式 lvl 穿参同款）：可达性探测
+    /// 的构造子绑定器以**超出上下文的 scratch 层级**实例化（嵌套位置的延迟
+    /// 探测还落在臂内全部真槽之外）——η/Π 展开的 binder 层级必须随之抬高，
+    /// 否则会与真槽撞号。
+    fn unify_catch_at(&mut self, l: Lvl, cxt: &Cxt, t: &Rc<Val>, t_prime: &Rc<Val>, span: Span<()>) -> Result<(), Error> {
         self.refuel();
-        self.unify(cxt.lvl, cxt, t, t_prime)
+        self.unify(l, cxt, t, t_prime)
             .map_err(|e| {
                 /*Error::CantUnify(
                     cxt.clone(),
@@ -1821,4 +1869,199 @@ println str_id
 "#;
     println!("{}", run1(input, 0).unwrap());
     println!("success");
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-18 评审回归钉（L07 修复轮移植）：嵌套模式覆盖检查 / 构造子良构性。
+// 文案与 L07 同款；孪生版同款钉在 tests/l10_fast_parity.rs 的
+// parity_review_fixes_2026_09_18 / fast_substv_reclaimed_across_rounds。
+
+fn check_err(input: &str) -> String {
+    run(input, 0).unwrap_err().0.data
+}
+
+/// P0（嵌套覆盖缺失）：nil 臂 + cons(h, nil) 臂缺 cons(h, cons(..))——
+/// 修复前静默接受、运行期在尾部为 cons 的值上卡住；修复后报模式位置缺失。
+#[test]
+fn test_nested_coverage_gap() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+    }
+"#,
+    );
+    assert!(msg.contains("缺少构造子 cons"), "{msg}");
+}
+
+/// P0（嵌套覆盖缺失，三层）：深度 2 的嵌套位置缺 cons。
+#[test]
+fn test_nested_coverage_gap3() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, nil)) => h2
+    }
+"#,
+    );
+    assert!(msg.contains("缺少构造子 cons"), "{msg}");
+}
+
+/// P0 正向对照：嵌套覆盖完备的 match 通过并正确求值（防误报钉）。
+#[test]
+fn test_nested_coverage_complete() {
+    let out = run(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f (cons zero (cons (succ zero) nil)))
+"#,
+        0,
+    )
+    .unwrap();
+    assert!(out.contains("succ"), "{out}");
+}
+
+/// P0 正向对照（索引精化）：Vec 长度恰 2 上 nil 臂特化失败静默跳过（L10
+/// 的荒谬臂收窄语义），尾部（长度 1）上 nil 不可达不触发嵌套误报。
+#[test]
+fn test_nested_refine_absurd_ok() {
+    let out = run(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def f(v: Vec[Nat] (succ (succ zero))): Nat =
+    match v {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f (cons zero (cons zero nil)))
+"#,
+        0,
+    )
+    .unwrap();
+    assert!(out.contains("zero"), "{out}");
+}
+
+/// P1（构造子良构性）：ret 不是本 enum——c -> Nat 向构造子名字空间注入
+/// phantom 值（对 Nat 的覆盖完备 match 在该值上卡死），修复后注册期拒绝。
+#[test]
+fn test_ctor_wf_external_ret() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#,
+    );
+    assert!(msg.contains("不是 Foo"), "{msg}");
+}
+
+/// P1（构造子良构性）：参数位特化——隐式参数位是 Bool 而非参数变量，
+/// 修复后拒绝（特化请走显式索引）。
+#[test]
+fn test_ctor_wf_param_specialized() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Foo[A] {
+    c -> Foo[Bool]
+}
+"#,
+    );
+    assert!(msg.contains("参数变量"), "{msg}");
+}
+
+/// P1 正向对照（构造子重绑定参数惯用法）：`p[A,B](a,b) -> Pack[A][B] a b`
+/// 合法——WF 检查不得误伤（v3_multi_index_gadt 同款语义）。
+#[test]
+fn test_ctor_wf_rebind_params_ok() {
+    let out = run(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw.y
+"#,
+        0,
+    )
+    .unwrap();
+    assert!(out.contains("true"), "{out}");
 }

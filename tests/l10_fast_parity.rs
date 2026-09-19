@@ -1015,3 +1015,199 @@ def baz = bar zero
         "两版都应给可恢复 Err"
     );
 }
+
+// 2026-09-18 评审修复轮的 parity 钉（L07 修复轮移植）：嵌套模式覆盖检查 /
+// 构造子良构性——双实现对判定（Ok/Err）与 Err 正文（span 归一化后）一致。
+// --------------------------------------------------------------------------------
+
+#[test]
+fn parity_review_fixes_2026_09_18() {
+    for src in [
+        // P0 嵌套覆盖缺失：缺 cons(h, cons(..))——两版都应 Err（不完整）
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+    }
+"#,
+        // P0 三层嵌套：深度 2 位置缺 cons
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, nil)) => h2
+    }
+"#,
+        // P1 构造子良构性：ret 不是本 enum（phantom 构造子）
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#,
+        // P1 构造子良构性：隐式参数位特化（Foo[Bool]）
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Foo[A] {
+    c -> Foo[Bool]
+}
+"#,
+    ] {
+        assert_parity(src);
+    }
+    // 正向对照 ①：嵌套覆盖完备的 match 通过并逐字节一致（防误报钉）
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f (cons zero (cons (succ zero) nil)))
+"#,
+    );
+    // 正向对照 ②：索引精化下的嵌套荒谬——Vec 长度恰 2 上 nil 臂特化失败
+    // 静默跳过（L10 荒谬臂收窄语义），尾部（长度 1）上 nil 不可达不触发
+    // 嵌套误报——两版 Ok 输出逐字节一致
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def f(v: Vec[Nat] (succ (succ zero))): Nat =
+    match v {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (f (cons zero (cons zero nil)))
+"#,
+    );
+    // 正向对照 ③：构造子重绑定参数（p[A,B] -> Pack[A][B] a b）合法，
+    // WF 检查不误伤，两版 Ok 输出逐字节一致
+    assert_parity(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Pack[A, B](x: A, y: B) {
+    p[A, B](a: A, b: B) -> Pack[A][B] a b
+}
+
+def sw: Pack[Nat][Bool] zero true = p[Nat][Bool] zero true
+
+println sw.y
+"#,
+    );
+}
+
+/// σ 跨轮回收回归钉（L07 README §7.7 同款，2026-09-18 评审修复移植）：
+/// 孪生 arena 内 XCell::VSub 持有的 Rc<SubstV> 克隆曾被 bump reset 跳过
+/// Drop（跨轮慢泄漏）。修复 = wrap_sub 登记裸指针（alloc 成功之后）+
+/// clear_round 逐指针归还。观察口：σ 链条目的存活计数 (SUBSTV_ALIVE)——
+/// 同一 Tycker 连跑两轮含 match 精化的程序，每轮结束后计数都应回落到轮前
+/// 基线。必须同线程跑（登记表是 thread_local）。
+#[test]
+fn fast_substv_reclaimed_across_rounds() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let src = r#"enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def lennat(xs: List[Nat]): Nat =
+    match xs {
+        case nil => zero
+        case cons(x, rest) => succ (lennat rest)
+    }
+
+def add(x: Nat, y: Nat) =
+    match x {
+        case zero => y
+        case succ(n) => succ (add n y)
+    }
+
+println (add (lennat (cons zero (cons zero nil))) (succ zero))
+"#;
+    let base = fast::SUBSTV_ALIVE.load(Relaxed);
+    // 同一 Tycker 复用两轮（LSP 式场景）：每轮 clear_round 都应归还 arena
+    // 克隆——计数不回落 = 泄漏回归。
+    let mut t = fast::Tycker::new();
+    let out1 = t.run_input(src, 0).expect("第 1 轮应 Ok");
+    let after1 = fast::SUBSTV_ALIVE.load(Relaxed);
+    let out2 = t.run_input(src, 0).expect("第 2 轮应 Ok");
+    let after2 = fast::SUBSTV_ALIVE.load(Relaxed);
+    assert_eq!(out1, out2, "两轮输出应一致");
+    assert_eq!(
+        (after1, after2),
+        (base, base),
+        "σ 链条目跨轮未回收（arena 克隆泄漏）：base={base} after1={after1} after2={after2}"
+    );
+}
