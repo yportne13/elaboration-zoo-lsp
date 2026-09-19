@@ -123,6 +123,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+// ── 热路径性能探针（临时，收尾全删）：原子累加 + 每次 bench 调用一次 dump。
+// 刻意不读 env 做门控判断热路径（Windows env::var 实测 ~8.2µs/次是毒药）：
+// 开关只在 dump 处经 OnceLock 读一次。累加是 Relaxed 原子，~1ns 量级。──
 use super::parser::syntax::{ClassItem, Decl, Either, Icit, Pattern, Raw};
 use crate::parser_lib::ToSpan;
 use super::pretty::pretty_tm;
@@ -2491,7 +2494,7 @@ fn eval_aux<'a>(
     };
     // 第一遍：Con(index) 相等（子模式 zip 失配 → 试下一臂）
     for (pat, body) in cases.iter() {
-        if let PatternDetail::Con(constr_idx, _, subs) = pat {
+        if let PatternDetail::Con(constr_idx, _, subs, _) = pat {
             if *constr_idx == index {
                 let mut cur_body = *body;
                 let mut cur_env = env;
@@ -5946,10 +5949,12 @@ impl Machine {
         if !self.observe {
             return;
         }
-        let tm = self.quote(bump, cxt, cxt.lvl, v);
-        let names = types_names_list(cxt.types);
-        let rendered = pretty_tm(0, names, &export(&self.symbol_table, tm));
-        self.hover_table.push((t_span, def_span, rendered));
+         {
+            let tm = self.quote(bump, cxt, cxt.lvl, v);
+            let names = types_names_list(cxt.types);
+            let rendered = pretty_tm(0, names, &export(&self.symbol_table, tm));
+            self.hover_table.push((t_span, def_span, rendered));
+        }
     }
 
     /// 全局名使用处 hover：def_span 取登记处 span，**串实时渲染**（参考版
@@ -5990,18 +5995,20 @@ impl Machine {
         if !self.observe {
             return;
         }
-        let tm = self.quote(bump, cxt, cxt.lvl, v);
-        if no_metas(bump, self, cxt, tm).is_some() {
-            return;
+         {
+            let tm = self.quote(bump, cxt, cxt.lvl, v);
+            if no_metas(bump, self, cxt, tm).is_some() {
+                return;
+            }
+            let names = types_names_list(cxt.types);
+            let mut label = format!(": {}", pretty_tm(0, names, &export(&self.symbol_table, tm)));
+            const MAX_LEN: usize = 80;
+            if label.chars().count() > MAX_LEN {
+                let truncated: String = label.chars().take(MAX_LEN.saturating_sub(1)).collect();
+                label = format!("{}\u{2026}", truncated);
+            }
+            self.inlay_hint_table.push((offset, label));
         }
-        let names = types_names_list(cxt.types);
-        let mut label = format!(": {}", pretty_tm(0, names, &export(&self.symbol_table, tm)));
-        const MAX_LEN: usize = 80;
-        if label.chars().count() > MAX_LEN {
-            let truncated: String = label.chars().take(MAX_LEN.saturating_sub(1)).collect();
-            label = format!("{}\u{2026}", truncated);
-        }
-        self.inlay_hint_table.push((offset, label));
     }
 
     /// 参考版 `peel_pi` 对象：逐层剥 Pi（隐式/显式都剥，与参考版
@@ -6332,14 +6339,16 @@ impl Machine {
         if !self.observe {
             return None;
         }
-        let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
-        // final = 引出项无未解 meta——此时渲染串与使用处实时渲染逐字节
-        // 一致（meta 后续求解不再改变形态），push_hover_cached 可安全
-        // 复用（评审 B#1：prelude-hdl 使用处 hover 实时渲染 ~10% 观察
-        // 面开销的大头）。
-        let typ_pretty_final = no_metas(bump, self, cxt, qt).is_none();
-        let qn = types_names_list(cxt.types);
-        Some((Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))), typ_pretty_final))
+        Some( {
+            let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+            // final = 引出项无未解 meta——此时渲染串与使用处实时渲染逐字节
+            // 一致（meta 后续求解不再改变形态），push_hover_cached 可安全
+            // 复用（评审 B#1：prelude-hdl 使用处 hover 实时渲染 ~10% 观察
+            // 面开销的大头）。
+            let typ_pretty_final = no_metas(bump, self, cxt, qt).is_none();
+            let qn = types_names_list(cxt.types);
+            (Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt))), typ_pretty_final)
+        })
     }
 
     /// 声明登记（参考版 `Cxt::decl`）：**静默覆盖**（参考版 redefine 检查
@@ -6413,10 +6422,12 @@ impl Machine {
         // 载段 observe=false 跳过渲染（每 kick 重放时这段是表清空前的死
         // 工作；参考版 LSP 只在进程启动装一次）。
         let (typ_pretty, typ_pretty_final) = if self.observe {
-            let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
-            let no_meta = no_metas(bump, self, cxt, qt).is_none();
-            let qn = types_names_list(cxt.types);
-            (Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt)))), no_meta)
+             {
+                let qt = self.quote(bump, cxt, cxt.lvl, vtyp);
+                let no_meta = no_metas(bump, self, cxt, qt).is_none();
+                let qn = types_names_list(cxt.types);
+                (Some(Rc::new(pretty_tm(0, qn, &export(&self.symbol_table, qt)))), no_meta)
+            }
         } else {
             (None, false)
         };
@@ -8877,14 +8888,22 @@ impl Machine {
                     .collect();
                 if matches.len() == 1 {
                     let (full_key, vty, dspan) = &matches[0];
-                    // 观察面（ref 2220）：唯一回退命中也登记 hover——
-                    // **实时渲染**（与 push_hover_cached 同理：登记期缓存串
-                    // 可能是 meta 解出前的旧形态；参考版此处 push vty 同款）
-                    let rendered = {
+                    // 观察面（ref 2220）：唯一回退命中也登记 hover。final
+                    // 条目直推登记期缓存串（push_hover_cached 同契约：登记
+                    // 期无未解 meta 时缓存串与使用处实时渲染逐字节一致，
+                    // 评审 B#1 已验证）；非 final 条目仍实时渲染（缓存串
+                    // 可能是 meta 解出前的旧形态；参考版此处 push vty 同款）。
+                    if let Some(e) = cxt.decls.get(full_key.as_str()) {
+                        self.push_hover_cached(bump, cxt, x.to_span(), e);
+                    } else {
                         let tm = self.quote(bump, cxt, cxt.lvl, *vty);
-                        pretty_tm(0, types_names_list(cxt.types), &export(&self.symbol_table, tm))
-                    };
-                    self.hover_table.push((x.to_span(), *dspan, rendered));
+                        let rendered = pretty_tm(
+                            0,
+                            types_names_list(cxt.types),
+                            &export(&self.symbol_table, tm),
+                        );
+                        self.hover_table.push((x.to_span(), *dspan, rendered));
+                    }
                     let name = bump.alloc_str(full_key.as_str());
                     return Ok((bump.alloc(Tm::Decl(name)), *vty));
                 } else if matches.len() > 1 {
@@ -11381,8 +11400,10 @@ impl<'a> Compiler<'a> {
         match pat {
             Pattern::Any(_, icit) => {
                 let b = self.make_implicit_name("");
-                let a_t = mach.quote(bump, cxt, cxt.lvl, head_ty);
-                let cxt2 = mach.bind_name(bump, cxt, &b, empty_span(()), a_t, head_ty);
+                let a_t =  mach.quote(bump, cxt, cxt.lvl, head_ty);
+                let cxt2 = 
+                    mach.bind_name(bump, cxt, &b, empty_span(()), a_t, head_ty)
+                ;
                 Ok((
                     PatternDetail::Any(
                         empty_span(b),
@@ -11393,7 +11414,7 @@ impl<'a> Compiler<'a> {
                 ))
             }
             Pattern::Con(name, subs, _) => {
-                let head_sum = mach.force_v(bump, cxt, head_ty);
+                let head_sum =  mach.force_v(bump, cxt, head_ty);
                 let (sum_name, sum_params, cases): (
                     &'a str,
                     Vec<SumParamV<'a>>,
@@ -11420,32 +11441,48 @@ impl<'a> Compiler<'a> {
                                 vec![],
                             ));
                         }
-                        let a_t = mach.quote(bump, cxt, cxt.lvl, head_ty);
-                        let cxt2 =
-                            mach.bind_name(bump, cxt, &name.data, name.to_span(), a_t, head_ty);
+                        let a_t =  mach.quote(bump, cxt, cxt.lvl, head_ty);
+                        let cxt2 = 
+                            mach.bind_name(bump, cxt, &name.data, name.to_span(), a_t, head_ty)
+                        ;
                         return Ok((PatternDetail::Bind(name.clone()), cxt2));
                     }
                 };
-                // 构造子类型：限定名 `Enum.case`（decl 无裸名别名），解析交给
-                // 命名空间机制
-                let ctor_raw = Raw::Obj(
-                    Box::new(Raw::Var(sum_name_span(cxt, sum_name))),
-                    Some(name.clone()),
-                );
-                let (_, constr_pi) = mach.infer_expr(bump, cxt, &ctor_raw)?;
+                // 构造子类型：限定名 `Enum.case`（decl 无裸名别名）。廉价通路
+                // = decls 直查（孪生 `infer_expr(Raw::Obj(..))` 对
+                // `Obj(Var(sum), Some(case))` 的解析结果就是 `decls[qual].vty`，
+                // 省掉完整解析链）。未命中（import 限定 Sum 等）回退原
+                // infer_expr 全链路。悬停面不变：case token 上的构造子条目
+                // 仍由下方 push_hover 登记（infer_expr 路径里
+                // push_qualified_hover 只走 receiver 链，对本形态在 token 上
+                // 本就无条目）。
+                let qualified = SmolStr::new(format!("{}.{}", sum_name, name.data));
+                let (constr_pi, ctor_key) =  match cxt.decls.get(qualified.as_str()) {
+                    Some(e) => (e.vty, Some(qualified.clone())),
+                    None => {
+                        let ctor_raw = Raw::Obj(
+                            Box::new(Raw::Var(sum_name_span(cxt, sum_name))),
+                            Some(name.clone()),
+                        );
+                        let (tm, constr_pi) = mach.infer_expr(bump, cxt, &ctor_raw)?;
+                        // 解析出的全键（Tm::Decl 的键）供 detail 记录限定名
+                        let ctor_key = match tm {
+                            Tm::Decl(k) => Some(SmolStr::new(k)),
+                            _ => None,
+                        };
+                        (constr_pi, ctor_key)
+                    }
+                };
                 // 悬停 / goto-definition：模式 token → 构造子（参数化构造子给
                 // Π 签名而非不可读的 λ 串，无参构造子给 SumCase 值），def span
                 // 取登记处 span。
-                let qualified = SmolStr::new(format!("{}.{}", sum_name, name.data));
-                let (hover_val, def_span) = match cxt
-                    .decls
-                    .get(qualified.as_str())
-                    .or_else(|| cxt.decls.get(name.data.as_str()))
-                {
+                let hover_val = match cxt.decls.get(qualified.as_str()).or_else(|| cxt.decls.get(name.data.as_str())) {
                     Some(e) => (if v_tag(e.val) == 1 { e.vty } else { e.val }, e.span),
                     None => (constr_pi, empty_span(())),
                 };
-                mach.push_hover(bump, cxt, name.to_span(), def_span, hover_val);
+                
+                    mach.push_hover(bump, cxt, name.to_span(), hover_val.1, hover_val.0)
+                ;
                 // 头部 Sum 的隐式参数（构造子 Π 链最前的 n 个绑定器）不占槽
                 let mut impl_vals: Vec<V> = sum_params
                     .iter()
@@ -11453,12 +11490,12 @@ impl<'a> Compiler<'a> {
                     .map(|p| p.val)
                     .collect();
                 impl_vals.reverse();
-                let mut cxt_arm = clone_cxt(cxt);
+                let mut cxt_arm =  clone_cxt(cxt);
                 let mut ty = constr_pi;
                 let mut next = 0usize;
                 let mut details: Vec<PatternDetail> = Vec::new();
                 loop {
-                    let tyf = mach.force_v(bump, &cxt_arm, ty);
+                    let tyf =  mach.force_v(bump, &cxt_arm, ty);
                     if v_tag(tyf) != 4 {
                         break;
                     }
@@ -11466,7 +11503,7 @@ impl<'a> Compiler<'a> {
                     let (bname, bicit, dom, body, env0) = (p.name, p.icit, p.dom, p.body, p.env);
                     if let Some(v) = impl_vals.pop() {
                         let env = env_ext(bump, env0, v);
-                        ty = mach.eval(bump, &cxt_arm, env, body);
+                        ty =  mach.eval(bump, &cxt_arm, env, body);
                         continue;
                     }
                     // 该绑定器对应的用户子模式：icit 对位才消费
@@ -11482,16 +11519,19 @@ impl<'a> Compiler<'a> {
                         {
                             // 用户具名隐式绑定器（`cons[l=l0](..)`）：按用户名占槽
                             next += 1;
-                            let a_t = mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
-                            cxt_arm =
-                                mach.bind_name(bump, &cxt_arm, &vname.data, vname.to_span(), a_t, dom);
+                            let a_t =  mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
+                            cxt_arm = 
+                                mach.bind_name(bump, &cxt_arm, &vname.data, vname.to_span(), a_t, dom)
+                            ;
                             PatternDetail::Any(vname.clone(), Some(pname.clone()), Icit::Impl)
                         }
                         Some(Pattern::Any(_, _)) => {
                             next += 1;
                             let b = self.make_implicit_name(bname);
-                            let a_t = mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
-                            cxt_arm = mach.bind_name(bump, &cxt_arm, &b, empty_span(()), a_t, dom);
+                            let a_t =  mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
+                            cxt_arm = 
+                                mach.bind_name(bump, &cxt_arm, &b, empty_span(()), a_t, dom)
+                            ;
                             PatternDetail::Any(
                                 empty_span(b),
                                 Some(empty_span(SmolStr::new(bname))),
@@ -11508,7 +11548,7 @@ impl<'a> Compiler<'a> {
                             let Pattern::Con(cn, ..) = q else {
                                 unreachable!()
                             };
-                            let field_sum = mach.force_v(bump, &cxt_arm, dom);
+                            let field_sum =  mach.force_v(bump, &cxt_arm, dom);
                             let is_ctor = v_tag(field_sum) == 7
                                 && matches!(v_xcell_of(field_sum),
                                     XCell::Sum { cases, .. }
@@ -11528,8 +11568,10 @@ impl<'a> Compiler<'a> {
                         None => {
                             // 用户没写这个字段（或 icit 对不上）：补虚槽
                             let b = self.make_implicit_name(bname);
-                            let a_t = mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
-                            cxt_arm = mach.bind_name(bump, &cxt_arm, &b, empty_span(()), a_t, dom);
+                            let a_t =  mach.quote(bump, &cxt_arm, cxt_arm.lvl, dom);
+                            cxt_arm = 
+                                mach.bind_name(bump, &cxt_arm, &b, empty_span(()), a_t, dom)
+                            ;
                             PatternDetail::Any(
                                 empty_span(b),
                                 Some(empty_span(SmolStr::new(bname))),
@@ -11539,7 +11581,7 @@ impl<'a> Compiler<'a> {
                     };
                     details.push(detail);
                     let env = env_ext(bump, env0, u);
-                    ty = mach.eval(bump, &cxt_arm, env, body);
+                    ty =  mach.eval(bump, &cxt_arm, env, body);
                 }
                 if let Some(extra) = subs.get(next) {
                     // 模式比构造子字段多：参考版叶上 "invalid pattern" 同文案
@@ -11554,7 +11596,7 @@ impl<'a> Compiler<'a> {
                     ));
                 }
                 Ok((
-                    PatternDetail::Con(case_idx as u32, cases[case_idx].clone(), details),
+                    PatternDetail::Con(case_idx as u32, cases[case_idx].clone(), details, ctor_key),
                     cxt_arm,
                 ))
             }
@@ -11603,10 +11645,11 @@ impl<'a> Compiler<'a> {
         // 不可达（如 `Vec[A] zero` 上的 `cons`）不报——索引方程不可解即结构上
         // 不可能出现。
         for (i, ctor) in constrs.iter().enumerate() {
-            if Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i)
-                && !arms
-                    .iter()
-                    .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
+            if 
+                Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i)
+             && !arms
+                .iter()
+                .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
             {
                 self.warnings.push(Warning::Unmatched(Pattern::Con(
                     ctor.clone(),
@@ -11631,14 +11674,17 @@ impl<'a> Compiler<'a> {
             // 让它落进 check_pm_final 报出假的特化错误。
             if let Pattern::Con(name, _, _) = pat {
                 if let Some(i) = ctor_names.iter().position(|c| c.as_str() == name.data.as_str()) {
-                    if !Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i)
-                    {
+                    if !
+                        Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i)
+                     {
                         unreachable.push(Warning::Unreachable(body.clone()));
                         continue;
                     }
                 }
             }
-            let (detail, cxt_walk) = match self.walk_pat(mach, bump, cxt, pat, typ) {
+            let (detail, cxt_walk) = match 
+                self.walk_pat(mach, bump, cxt, pat, typ)
+             {
                 Ok(x) => x,
                 Err(e) => {
                     // 走查失败臂的嵌套记账一并丢弃
@@ -11651,8 +11697,10 @@ impl<'a> Compiler<'a> {
             // 同款）：构造子隐含参数必须按走查已绑定的具名 rigid 传入
             // （`[l=_l0]`），否则 check_pm 会新解 meta，臂上下文的
             // `xs : Vec[A] _l0` 与特化出的 `Vec[A] ?m` 各说各话。
-            let raw = detail_to_raw(&detail);
-            let cxt_arm = match mach.check_pm_final(bump, &cxt_walk, &raw, typ, target_val) {
+            let raw =  detail_to_raw(&detail);
+            let cxt_arm = match 
+                mach.check_pm_final(bump, &cxt_walk, &raw, typ, target_val)
+             {
                 Ok((_, c)) => c,
                 Err(e) => {
                     // 荒谬臂（特化失败）：其嵌套位置不产生覆盖义务——臂本
@@ -11672,7 +11720,7 @@ impl<'a> Compiler<'a> {
                 });
             }
             // 期望类型重锚到臂上下文：quote → eval（flex 免锚）
-            let ret_type = {
+            let ret_type =  {
                 let t = mach.force_v(bump, &cxt_arm, self.ret_type);
                 if is_flex(&mach.spine, t) {
                     t
@@ -11681,7 +11729,7 @@ impl<'a> Compiler<'a> {
                     mach.eval(bump, &cxt_arm, cxt_arm.env, tm)
                 }
             };
-            match mach.check(bump, &cxt_arm, body, ret_type) {
+            match  mach.check(bump, &cxt_arm, body, ret_type) {
                 Ok(ret) => self.pats.push((detail, ret)),
                 Err(e) => {
                     self.errors.push(e);
@@ -11711,7 +11759,9 @@ impl<'a> Compiler<'a> {
                 }
             };
             for ctor in ctor_cases {
-                if !Self::probe_accessible(mach, bump, &nc.arm_cxt, field_sum, &ctor) {
+                if !
+                    Self::probe_accessible(mach, bump, &nc.arm_cxt, field_sum, &ctor)
+                 {
                     continue;
                 }
                 let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
@@ -11786,7 +11836,14 @@ fn sum_name_span(cxt: &Cxt<'_>, sum_name: &str) -> crate::parser_lib::Span<SmolS
 /// 复用同一批已绑定 rigid；无名通配发 `Raw::Hole` 让 elaborator 自动填充。
 fn detail_to_raw(d: &PatternDetail) -> Raw {
     match d {
-        PatternDetail::Con(_, name, subs) => subs.iter().fold(Raw::Var(name.clone()), |acc, sub| {
+        PatternDetail::Con(_, name, subs, qual) => {
+            // 全限定 decl 键（走查期自 decl 表解析，span 保持 case token）：
+            // check_pm 的 Var 臂 O(1) 精确命中，免后缀回退扫描 + 实时渲染
+            let head = match qual {
+                Some(q) => name.clone().map(|_| q.clone()),
+                None => name.clone(),
+            };
+            subs.iter().fold(Raw::Var(head), |acc, sub| {
             let icit = match sub {
                 PatternDetail::Any(var_name, param_name, Icit::Impl) => {
                     if var_name.data.is_empty() {
@@ -11802,10 +11859,11 @@ fn detail_to_raw(d: &PatternDetail) -> Raw {
                 }
                 PatternDetail::Any(_, _, Icit::Expl) => Either::Icit(Icit::Expl),
                 PatternDetail::Bind(_) => Either::Icit(Icit::Expl),
-                PatternDetail::Con(_, _, _) => Either::Icit(Icit::Expl),
+                PatternDetail::Con(..) => Either::Icit(Icit::Expl),
             };
             Raw::App(Box::new(acc), Box::new(detail_to_raw(sub)), icit)
-        }),
+            })
+        }
         PatternDetail::Any(name, _, _) | PatternDetail::Bind(name) => {
             if name.data.is_empty() {
                 Raw::Hole(empty_span(()))
@@ -12069,7 +12127,7 @@ fn debug_pat_go(p: &PatternDetail, out: &mut String) {
         PatternDetail::Bind(name) => {
             out.push_str(&format!("Bind({})", dbg_span_str(&name.data)));
         }
-        PatternDetail::Con(idx, name, subs) => {
+        PatternDetail::Con(idx, name, subs, _) => {
             out.push_str(&format!("Con({}, {}, [", idx, dbg_span_str(&name.data)));
             for (k, s) in subs.iter().enumerate() {
                 if k > 0 {
@@ -13716,10 +13774,10 @@ impl Tycker {
             self.machine.observe = false;
         }
         let bump = &self.bump;
-        let mut cxt = self.machine.prime_round(bump);
+        let mut cxt =  self.machine.prime_round(bump);
         let mut last: Option<V> = None;
         for (i, d) in ast.iter().enumerate() {
-            match self.machine.infer_decl(bump, &mut cxt, d) {
+            match  self.machine.infer_decl(bump, &mut cxt, d) {
                 Ok((out, nc)) => {
                     cxt = nc;
                     if nat_after.contains(&i) {
@@ -13735,8 +13793,9 @@ impl Tycker {
         let Some(v) = last else {
             return 0;
         };
-        let q = self.machine.quote(bump, &cxt, 0, v);
-        tm_size(q)
+        let q =  self.machine.quote(bump, &cxt, 0, v);
+        let r = tm_size(q);
+        r
     }
 }
 

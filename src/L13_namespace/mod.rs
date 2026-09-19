@@ -577,7 +577,11 @@ pub enum PatternDetail {
     /// - `2`: icit
     Any(Span<SmolStr>, Option<Span<SmolStr>>, Icit),
     Bind(Span<SmolStr>),
-    Con(u32, Span<SmolStr>, Vec<PatternDetail>),
+    /// `3`：构造子的**全限定 decl 键**（`Enum.case`；import 限定 Sum 下是
+    /// 实际解析出的全键）。走查期从 decl 表取得，`detail_to_raw` 回写进
+    /// 特化用 `Raw::Var`，让 `check_pm` 的 Var 解析走 O(1) 精确命中而
+    /// 不是后缀回退扫描。`None` = 走查未解析到 decl 条目（回退裸名）。
+    Con(u32, Span<SmolStr>, Vec<PatternDetail>, Option<SmolStr>),
 }
 
 impl PatternDetail {
@@ -585,7 +589,7 @@ impl PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => 1,
             PatternDetail::Bind(_) => 1,
-            PatternDetail::Con(_, _, pattern_details) => {
+            PatternDetail::Con(_, _, pattern_details, _) => {
                 pattern_details.iter().map(|pattern_detail| pattern_detail.bind_count()).sum::<u32>()
             },
         }
@@ -594,7 +598,7 @@ impl PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => ns.prepend(SmolStr::new("_")),
             PatternDetail::Bind(name) => ns.prepend(name.data.clone()),
-            PatternDetail::Con(_, _, pattern_details) => {
+            PatternDetail::Con(_, _, pattern_details, _) => {
                 pattern_details
                     .iter()
                     .fold(ns.clone(), |ns, pattern_detail| pattern_detail.bind_names(&ns))
@@ -610,7 +614,7 @@ impl PatternDetail {
                 cxt.bind(empty_span(SmolStr::new("")), Tm::U(0).into(), Val::U(0).into())
             }
             PatternDetail::Bind(name) => cxt.bind(name.clone(), Tm::U(0).into(), Val::U(0).into()),
-            PatternDetail::Con(_, _, pattern_details) => {
+            PatternDetail::Con(_, _, pattern_details, _) => {
                 pattern_details
                     .iter()
                     .fold(cxt.clone(), |cxt, pattern_detail| pattern_detail.bind_cxt(&cxt))
@@ -624,7 +628,7 @@ impl std::fmt::Display for PatternDetail {
         match self {
             PatternDetail::Any(_, _, _) => write!(f, "_"),
             PatternDetail::Bind(name) => write!(f, "{}", name.data),
-            PatternDetail::Con(idx, name, pattern_details) => {
+            PatternDetail::Con(idx, name, pattern_details, _) => {
                 let p = pattern_details
                     .iter()
                     .map(|pattern_detail| pattern_detail.to_string())
@@ -657,13 +661,13 @@ pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosC
     for (ctor, field) in path {
         match cur {
             PatternDetail::Any(..) | PatternDetail::Bind(_) => return PosCover::All,
-            PatternDetail::Con(_, n, subs) if n.data == *ctor => cur = &subs[*field],
+            PatternDetail::Con(_, n, subs, _) if n.data == *ctor => cur = &subs[*field],
             PatternDetail::Con(..) => return PosCover::None,
         }
     }
     match cur {
         PatternDetail::Any(..) | PatternDetail::Bind(_) => PosCover::All,
-        PatternDetail::Con(_, n, _) => PosCover::Ctor(n.data.to_string()),
+        PatternDetail::Con(_, n, _, _) => PosCover::Ctor(n.data.to_string()),
     }
 }
 

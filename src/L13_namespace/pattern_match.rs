@@ -272,15 +272,33 @@ impl Compiler {
                     }
                 };
                 // 构造子类型：限定名 `Enum.case`，解析交给命名空间机制
-                let ctor_raw =
-                    Raw::Obj(Box::new(Raw::Var(sum_name.clone())), Some(name.clone()));
-                let (_, constr_pi) = infer.infer_expr(cxt, ctor_raw)?;
+                // 构造子类型：限定名 `Enum.case`。廉价通路 = decl 表直查
+                //（`infer_expr(Raw::Obj(..))` 对 `Obj(Var(sum), Some(case))`
+                // 的解析结果就是 `decl[qual].vty`，省掉完整解析链）。未命中
+                // （import 限定 Sum 等）回退原 infer_expr 全链路。悬停面
+                // 不变：case token 上的构造子条目仍由下方 push_hover 登记
+                //（infer_expr 路径里 push_qualified_hover 只走 receiver
+                // 链，对本形态在 token 上本就无条目）。
+                let key = SmolStr::new(format!("{}.{}", sum_name.data, name.data));
+                let (constr_pi, ctor_key) = match cxt.decl.get(&key) {
+                    // decl 条目： (def span, Tm, VAL, Ty, VTy, prim, typ_pretty)
+                    Some((_, _, _, _, vty, _, _)) => (vty.clone(), Some(key.clone())),
+                    None => {
+                        let ctor_raw =
+                            Raw::Obj(Box::new(Raw::Var(sum_name.clone())), Some(name.clone()));
+                        let (tm, constr_pi) = infer.infer_expr(cxt, ctor_raw)?;
+                        // 解析出的全键（Tm::Decl 的键）供 detail 记录限定名
+                        let ctor_key = match tm.as_ref() {
+                            Tm::Decl(k) => Some(k.data.clone()),
+                            _ => None,
+                        };
+                        (constr_pi, ctor_key)
+                    }
+                };
                 // 悬停 / goto-definition：模式 token → 构造子。无参构造子给
                 // 构造子值（`Boolean::true`），参数化构造子给 Π 签名而不是不可读
                 // 的 λ 串；定义 span 指向枚举声明里的 case 名。
-                let key = SmolStr::new(format!("{}.{}", sum_name.data, name.data));
                 let hover_val = match cxt.decl.get(&key).or_else(|| cxt.decl.get(&name.data)) {
-                    // decl 条目： (def span, Tm, VAL, Ty, VTy, prim, typ_pretty)
                     Some((_, _, v, _, _, _, _)) => match v.as_ref() {
                         Val::Lam(..) => constr_pi.clone(),
                         _ => v.clone(),
@@ -387,7 +405,7 @@ impl Compiler {
                     ));
                 }
                 Ok((
-                    PatternDetail::Con(case_idx as u32, cases[case_idx].clone(), details),
+                    PatternDetail::Con(case_idx as u32, cases[case_idx].clone(), details, ctor_key),
                     cxt_arm,
                 ))
             }
@@ -617,7 +635,7 @@ impl Compiler {
 
         arms.iter()
             .filter_map(|(pattern, body)| match pattern {
-                PatternDetail::Con(constr_, _, item_pats) if *constr_ == index => {
+                PatternDetail::Con(constr_, _, item_pats, _) if *constr_ == index => {
                     params
                         .iter()
                         //.filter(|x| x.2 == Icit::Expl)
@@ -653,7 +671,14 @@ impl Compiler {
 /// rigid；无名通配发 `Raw::Hole` 让 elaborator 自动填充。
 fn detail_to_raw(d: &PatternDetail) -> Raw {
     match d {
-        PatternDetail::Con(_, name, subs) => subs.iter().fold(Raw::Var(name.clone()), |acc, sub| {
+        PatternDetail::Con(_, name, subs, qual) => {
+            // 全限定 decl 键（走查期自 decl 表解析，span 保持 case token）：
+            // check_pm 的 Var 臂 O(1) 精确命中，免后缀回退扫描 + 实时渲染
+            let head = match qual {
+                Some(q) => name.clone().map(|_| q.clone()),
+                None => name.clone(),
+            };
+            subs.iter().fold(Raw::Var(head), |acc, sub| {
             let icit = match sub {
                 PatternDetail::Any(var_name, param_name, Icit::Impl) => {
                     if var_name.data.is_empty() {
@@ -670,10 +695,11 @@ fn detail_to_raw(d: &PatternDetail) -> Raw {
                 }
                 PatternDetail::Any(_, _, Icit::Expl) => Either::Icit(Icit::Expl),
                 PatternDetail::Bind(_) => Either::Icit(Icit::Expl),
-                PatternDetail::Con(_, _, _) => Either::Icit(Icit::Expl),
+                PatternDetail::Con(..) => Either::Icit(Icit::Expl),
             };
             Raw::App(Box::new(acc), Box::new(detail_to_raw(sub)), icit)
-        }),
+            })
+        }
         PatternDetail::Any(name, _, _) | PatternDetail::Bind(name) => {
             if name.data.is_empty() {
                 Raw::Hole(empty_span(()))
