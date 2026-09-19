@@ -126,7 +126,7 @@ use std::sync::Arc;
 use super::parser::syntax::{ClassItem, Decl, Either, Icit, Pattern, Raw};
 use crate::parser_lib::ToSpan;
 use super::pretty::pretty_tm;
-use super::{empty_span, Error, Ix, MetaVar, PatternDetail, Tm as CTm};
+use super::{cover_at, empty_span, fmt_path, Error, Ix, MetaVar, PatternDetail, PosCover, Tm as CTm};
 use std::collections::HashMap;
 
 mod compact;
@@ -7893,11 +7893,13 @@ impl Machine {
         if v_tag(f1) == 7 && v_tag(f2) == 7 {
             if let (
                 XCell::SumCase {
+                    typ: ty1,
                     index: i1,
                     datas: d1,
                     ..
                 },
                 XCell::SumCase {
+                    typ: ty2,
                     index: i2,
                     datas: d2,
                     ..
@@ -7905,6 +7907,25 @@ impl Machine {
             ) = (v_xcell_of(f1), v_xcell_of(f2))
             {
                 if i1 == i2 {
+                    // Sum 头名字判据（L07 修复 4 同款，参考版 unify_pm 同点）：
+                    // 跨 enum 重名构造子（index 同、typ 的 Sum 头异）直接
+                    // Err——只比头名，不 unify typ 值（避免互相引用深递归）。
+                    // typ 非和类型（meta / 未定型）时不加严。
+                    let h1 = self.force_v(bump, cxt, *ty1);
+                    let h2 = self.force_v(bump, cxt, *ty2);
+                    if v_tag(h1) == 7
+                        && v_tag(h2) == 7
+                        && matches!(v_xcell_of(h1), XCell::Sum { .. })
+                        && matches!(v_xcell_of(h2), XCell::Sum { .. })
+                    {
+                        let (n1, n2) = match (v_xcell_of(h1), v_xcell_of(h2)) {
+                            (XCell::Sum { name: n1, .. }, XCell::Sum { name: n2, .. }) => (*n1, *n2),
+                            _ => unreachable!(),
+                        };
+                        if n1 != n2 {
+                            return Err(Error(t_span.map(|_| "".to_string()), vec![]));
+                        }
+                    }
                     let mut cxt = clone_cxt(cxt);
                     for (x, y) in d1.iter().zip(d2.iter()) {
                         cxt = self.unify_pm(bump, &cxt, x.val, y.val, t_span)?;
@@ -8004,7 +8025,92 @@ impl Machine {
         r
     }
 
-    /// `check_pm`：infer + insert + `unify_pm`。
+    /// Pattern-matching version of `infer_expr`（参考版 `infer_expr_pm` 的
+    /// 孪生镜像，2026-09-19 GADT 嵌套漂移修复）：对 `Raw::App` 的**实参**
+    /// 用 `check_pm`（→ `unify_pm`）而不是常规 `check`（→ `unify_catch`），
+    /// 嵌套构造子模式（`cons(x, nil)` 的 `nil` 应用）才能把走查 rigid 精化
+    /// （`_l0 := zero`）——否则嵌套 GADT 匹配在 `unify_catch` 的 rigid 冲突
+    /// 上误报 `can't unify expected: Vec[Nat](_l0) find: Vec[Nat](0)`
+    ///（iso_a/b/c 探针钉）。头部侧的 Name/Impl/Expl 分派与常规 infer_expr
+    /// 逐句同构（参考版同款：头部不精化，只精化实参）。
+    fn infer_expr_pm<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        t: &Raw,
+    ) -> Result<(&'a Tm<'a>, V, Cxt<'a>), Error> {
+        match t {
+            Raw::App(t, u, arg) => {
+                let t_span = t.to_span();
+                let t_raw = (**t).clone();
+                let u_raw = (**u).clone();
+                let (i, t, tty) = match arg {
+                    Either::Name(name) => {
+                        let infered = self.infer_expr(bump, cxt, t)?;
+                        let (t, tty) = self.insert_until_name(bump, cxt, &name.data, infered.0, infered.1)?;
+                        (Icit::Impl, t, tty)
+                    }
+                    Either::Icit(Icit::Impl) => {
+                        let (t, tty) = self.infer_expr(bump, cxt, t)?;
+                        (Icit::Impl, t, tty)
+                    }
+                    Either::Icit(Icit::Expl) => {
+                        let infered = self.infer_expr(bump, cxt, t)?;
+                        let (t, tty) = self.insert_t(bump, cxt, infered.0, infered.1)?;
+                        (Icit::Expl, t, tty)
+                    }
+                };
+                let tty = self.force_v(bump, cxt, tty);
+                let (a, bcell) = if v_tag(tty) == 4 {
+                    let p = v_pi_of(tty);
+                    if p.icit != i {
+                        return Err(Error(
+                            t_span.map(|_| format!("icit mismatch {:?} {:?}", i, p.icit)),
+                            vec![],
+                        ));
+                    }
+                    (p.dom, p)
+                } else {
+                    // Scala 式 apply（参考版同款）：非 Π 头先试 `expr.apply(arg)`
+                    let meta_before = self.metas.len();
+                    let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
+                    let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
+                    if let Ok(result) = self.infer_expr(bump, cxt, &apply_call) {
+                        return Ok((result.0, result.1, clone_cxt(cxt)));
+                    }
+                    self.metas.truncate(meta_before);
+                    // 非 Π 头：合成 Π（定义域 + 余定义域挂洞）与之合一
+                    let new_meta = self.fresh_meta(bump, cxt, v_u(0));
+                    let a = self.eval_fresh(bump, cxt, cxt.env, new_meta);
+                    let a_t = self.quote(bump, cxt, cxt.lvl, a);
+                    let cxt2 = self.bind_name(bump, cxt, "x", empty_span(()), a_t, a);
+                    let cod_meta = self.fresh_meta(bump, &cxt2, v_u(0));
+                    let cell = bump.alloc(PiCell {
+                        name: "x",
+                        icit: i,
+                        dom: a,
+                        env: cxt.env,
+                        body: cod_meta,
+                    });
+                    self.unify_catch(bump, cxt, v_pi(cell), tty, t_span)?;
+                    (a, &*cell)
+                };
+                // KEY DIFFERENCE: use check_pm instead of check（参考版同款注释）
+                let (u_checked, cxt) = self.check_pm(bump, cxt, u, a)?;
+                let arg_v = self.eval(bump, &cxt, cxt.env, u_checked);
+                let ty = {
+                    let env = env_ext(bump, bcell.env, arg_v);
+                    self.eval(bump, &cxt, env, bcell.body)
+                };
+                Ok((bump.alloc(Tm::App(t, u_checked, i)), ty, cxt))
+            }
+            _ => self
+                .infer_expr(bump, cxt, t)
+                .map(|(tm, ty)| (tm, ty, clone_cxt(cxt))),
+        }
+    }
+
+    /// `check_pm`：infer + insert + `unify_pm`（实参经 `infer_expr_pm` 精化）。
     fn check_pm<'a>(
         &mut self,
         bump: &'a Bump,
@@ -8013,14 +8119,15 @@ impl Machine {
         a: V,
     ) -> Result<(&'a Tm<'a>, Cxt<'a>), Error> {
         let t_span = t.to_span();
-        let x = self.infer_expr(bump, cxt, t)?;
-        let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
-        let new_cxt = self.unify_pm(bump, cxt, a, inferred_type, &t_span)?;
+        let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(bump, cxt, t)?;
+        let (t_inferred, inferred_type) = self.insert(bump, &refined_cxt, t_inferred, inferred_type)?;
+        let new_cxt = self.unify_pm(bump, &refined_cxt, a, inferred_type, &t_span)?;
         Ok((t_inferred, new_cxt))
     }
 
     /// `check_pm_final`：`check_pm` 之后把原始值与精化后的期望再对一次
-    /// （`.unwrap_or(new_cxt)`——失败容忍，参考版同款）。
+    /// （`.unwrap_or(new_cxt)`——失败容忍，参考版同款）。模式 raw 经
+    /// `infer_expr_pm` 精化（嵌套构造子应用把走查 rigid 解进上下文）。
     fn check_pm_final<'a>(
         &mut self,
         bump: &'a Bump,
@@ -8030,15 +8137,91 @@ impl Machine {
         ori: V,
     ) -> Result<(&'a Tm<'a>, Cxt<'a>), Error> {
         let t_span = t.to_span();
-        let x = self.infer_expr(bump, cxt, t)?;
-        let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
-        let new_cxt = self.unify_pm(bump, cxt, a, inferred_type, &t_span)?;
-        let ori_v = self.eval(bump, cxt, new_cxt.env, t_inferred);
+        let (t_inferred, inferred_type, refined_cxt) = self.infer_expr_pm(bump, cxt, t)?;
+        let (t_inferred, inferred_type) = self.insert(bump, &refined_cxt, t_inferred, inferred_type)?;
+        let new_cxt = self.unify_pm(bump, &refined_cxt, a, inferred_type, &t_span)?;
+        let ori_v = self.eval(bump, &new_cxt, new_cxt.env, t_inferred);
         // ori 精化**要传下去**（参考版 `let new_cxt = ...unwrap_or(new_cxt)`
         // ——被匹配变量本身的值写进环境，期望类型重锚定后才能选中分支）
         let refined = self.unify_pm(bump, &new_cxt, ori, ori_v, &t_span);
         let new_cxt = refined.unwrap_or(new_cxt);
         Ok((t_inferred, new_cxt))
+    }
+
+    /// 构造子返回类型良构性（参考版 elaboration.rs `check_ctor_wf` 的孪生
+    /// 镜像，2026-09-18 L07 修复 6 移植）：实例化构造子类型的全部绑定器后，
+    /// ret 的 WHNF 必须是 `enum_name` 的 `Sum`，且其隐式参数位逐一等于
+    /// telescope 内的 bare rigid（孪生值层裸 rigid = tag 0 的 `v_lvl`）。允许
+    /// 构造子重绑定参数（`p[A,B](a,b) -> Pack[A][B] a b` 惯用法），拒绝参数
+    /// 位特化（`c -> Foo[Nat]`）与非本 enum 的 ret（`c -> Nat`）——后者注入
+    /// 永不匹配任何模式的 phantom 值。显式索引位任由特化（GADT 保留）。
+    fn check_ctor_wf<'a>(
+        &mut self,
+        bump: &'a Bump,
+        cxt: &Cxt<'a>,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: V,
+    ) -> Result<(), Error> {
+        let base = cxt.lvl;
+        let mut ty = ctor_vtyp;
+        let mut bound = 0u32;
+        let ret = loop {
+            let tyf = self.force_v(bump, cxt, ty);
+            if v_tag(tyf) == 4 {
+                let p = v_pi_of(tyf);
+                let u = v_lvl(base + bound);
+                bound += 1;
+                let env = env_ext(bump, p.env, u);
+                ty = self.eval(bump, cxt, env, p.body);
+            } else {
+                break tyf;
+            }
+        };
+        let retf = self.force_v(bump, cxt, ret);
+        if v_tag(retf) != 7 {
+            return Err(Error(
+                empty_span(()).map(|_| format!("构造子 {ctor_name} 的返回类型不是和类型")),
+                vec![],
+            ));
+        }
+        let (sum_name, params) = match v_xcell_of(retf) {
+            XCell::Sum { name, params, .. } => (*name, params),
+            _ => {
+                return Err(Error(
+                    empty_span(()).map(|_| format!("构造子 {ctor_name} 的返回类型不是和类型")),
+                    vec![],
+                ))
+            }
+        };
+        if sum_name != enum_name {
+            return Err(Error(
+                empty_span(()).map(|_| {
+                    format!("构造子 {ctor_name} 的返回类型是 {sum_name}，不是 {enum_name}")
+                }),
+                vec![],
+            ));
+        }
+        for p in params.iter() {
+            if p.icit != Icit::Impl {
+                continue;
+            }
+            let bare = v_tag(p.val) == 0 && {
+                let l = v_lvl_of(p.val);
+                base <= l && l < base + bound
+            };
+            if !bare {
+                return Err(Error(
+                    empty_span(()).map(|_| {
+                        format!(
+                            "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+                        )
+                    }),
+                    vec![],
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn update_cxt<'a>(
@@ -9576,6 +9759,12 @@ impl Machine {
                         });
                     let (typ_tm, _) = self.check_universe(bump, &cxt, ctor_ty)?;
                     let vtyp = self.eval(bump, &cxt, cxt.env, typ_tm);
+                    // 构造子良构性（参考版 elaboration.rs 同点同改）：ret 必须
+                    // 是本 enum 的 Sum 且隐式参数位是 telescope 内 bare rigid。
+                    // trait/class enum（is_trait）的 case 是方法签名，不适用。
+                    if !*is_trait {
+                        self.check_ctor_wf(bump, &cxt, &name.data, &case_name.data, vtyp)?;
+                    }
                     let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                     let vt = self.eval(bump, &cxt, cxt.env, t_tm);
                     let case_key = format!("{}.{}", name.data, case_name.data);
@@ -10983,6 +11172,9 @@ enum DeclOut<'a> {
 pub(crate) enum Warning {
     Unreachable(Raw),
     Unmatched(Pattern),
+    /// 嵌套位置覆盖缺失（L07 同文案：`match 不完整：模式位置 {path} 缺少
+    /// 构造子 {ctor}`；2026-09-18 评审修复 P0 的 L13 移植）。
+    IncompleteNested(String),
 }
 
 /// Display 文案与参考版 pattern_match.rs 同款（match 非穷尽/不可达作为
@@ -10992,6 +11184,7 @@ impl std::fmt::Display for Warning {
         match self {
             Warning::Unreachable(body) => write!(f, "unreachable pattern: {}", body),
             Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
+            Warning::IncompleteNested(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -11006,6 +11199,25 @@ pub(crate) struct Compiler<'a> {
     /// 多次时，每个出现的隐式绑定器必须拿到不同名——否则臂上下文里两个
     /// `_l0` 互相遮蔽，`Raw` 回读取错槽。
     implicit_counter: u32,
+    /// 嵌套覆盖检查的记账（参考版 pattern_match.rs 同款，两段式）：走查中
+    /// 只记 (路径, 字段 Sum)；臂特化**成功后**提升为带臂上下文快照的完整
+    /// 记账——L13 的精化载体是 `update_cxt`（解进臂 Cxt 的 env 槽），嵌套
+    /// 位置的索引精化在 check_pm 期已写进臂上下文，延迟探测以臂上下文跑
+    /// unify_pm 即可看到。整臂特化失败（荒谬臂）时丢弃。
+    nested_checks: Vec<NestedCheck<'a>>,
+    /// 本臂走查中的待提升位置（臂特化成功后结算）。
+    pending_pos: Vec<(Vec<(String, usize)>, V)>,
+    /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
+    cur_path: Vec<(String, usize)>,
+}
+
+/// 一个嵌套拆分位置的记账（参考版 NestedCheck 的孪生形态）：路径 = 根到
+/// 被拆字段的 (构造子名, 字段下标) 链；`field_sum` 是该字段在**走查实例
+/// 化**下的 Sum 值；arm_cxt 是臂特化成功后的精化上下文快照。
+struct NestedCheck<'a> {
+    path: Vec<(String, usize)>,
+    field_sum: V,
+    arm_cxt: Cxt<'a>,
 }
 
 impl<'a> Compiler<'a> {
@@ -11016,6 +11228,9 @@ impl<'a> Compiler<'a> {
             ret_type,
             errors: Vec::new(),
             implicit_counter: 0,
+            nested_checks: Vec::new(),
+            pending_pos: Vec::new(),
+            cur_path: Vec::new(),
         }
     }
 
@@ -11285,8 +11500,29 @@ impl<'a> Compiler<'a> {
                         }
                         Some(q @ Pattern::Con(..)) => {
                             next += 1;
+                            // 嵌套 Con：字段 dom 是含该子构造子的 Sum 时记一
+                            // 笔待提升的嵌套位置（参考版 walk_pat 同款；该字
+                            // 段位置沿 ctor 路径的可达构造子必须有臂覆盖），
+                            // 臂特化成功后以臂上下文结算（见 compile）。
+                            // cur_path 先推后弹（更深的记账要看到完整链）。
+                            let Pattern::Con(cn, ..) = q else {
+                                unreachable!()
+                            };
+                            let field_sum = mach.force_v(bump, &cxt_arm, dom);
+                            let is_ctor = v_tag(field_sum) == 7
+                                && matches!(v_xcell_of(field_sum),
+                                    XCell::Sum { cases, .. }
+                                        if cases.iter().any(|c| *c == cn.data.as_str())
+                                );
+                            self.cur_path.push((name.data.to_string(), details.len()));
                             let (d, c2) = self.walk_pat(mach, bump, &cxt_arm, q, dom)?;
+                            self.cur_path.pop();
                             cxt_arm = c2;
+                            if is_ctor {
+                                let mut pa = self.cur_path.clone();
+                                pa.push((name.data.to_string(), details.len()));
+                                self.pending_pos.push((pa, field_sum));
+                            }
                             d
                         }
                         None => {
@@ -11340,6 +11576,9 @@ impl<'a> Compiler<'a> {
         self.warnings = Vec::new();
         self.errors = Vec::new();
         self.implicit_counter = 0;
+        self.nested_checks = Vec::new();
+        self.pending_pos = Vec::new();
+        self.cur_path = Vec::new();
         let typ = mach.force_v(bump, cxt, typ);
         // 值层 `XCell::Sum.cases` 只有名字，构造子**定义 span** 从 decl 表回填
         // （参考版 `Val::Sum.cases` 直接带声明 span——PM 路径的 hover/def 键与
@@ -11383,6 +11622,9 @@ impl<'a> Compiler<'a> {
                 unreachable.push(Warning::Unreachable(body.clone()));
                 continue;
             }
+            // 本臂走查起点无遗留记账（上一臂已结算/丢弃，防御性清空）。
+            self.pending_pos.clear();
+            self.cur_path.clear();
             // 臂前置过滤（决策树构造子分支上的可达性筛选同口径）：首模式是头部
             // Sum 的构造子、但索引方程不可解（`Vec[A] zero` 上的 `cons`）——
             // 该臂不可能匹配，静默跳过并按「从未走到」记 `Unreachable`；不
@@ -11399,6 +11641,8 @@ impl<'a> Compiler<'a> {
             let (detail, cxt_walk) = match self.walk_pat(mach, bump, cxt, pat, typ) {
                 Ok(x) => x,
                 Err(e) => {
+                    // 走查失败臂的嵌套记账一并丢弃
+                    self.pending_pos.clear();
                     self.errors.push(e);
                     continue;
                 }
@@ -11411,10 +11655,22 @@ impl<'a> Compiler<'a> {
             let cxt_arm = match mach.check_pm_final(bump, &cxt_walk, &raw, typ, target_val) {
                 Ok((_, c)) => c,
                 Err(e) => {
+                    // 荒谬臂（特化失败）：其嵌套位置不产生覆盖义务——臂本
+                    // 身的特化错误已承担语义（参考版同款）
+                    self.pending_pos.clear();
                     self.errors.push(e);
                     continue;
                 }
             };
+            // 嵌套位置结算（两段式，参考版同款）：此刻本臂特化方程已解出、
+            // 精化写进了臂上下文的 env 槽。
+            for (path, field_sum) in std::mem::take(&mut self.pending_pos) {
+                self.nested_checks.push(NestedCheck {
+                    path,
+                    field_sum,
+                    arm_cxt: clone_cxt(&cxt_arm),
+                });
+            }
             // 期望类型重锚到臂上下文：quote → eval（flex 免锚）
             let ret_type = {
                 let t = mach.force_v(bump, &cxt_arm, self.ret_type);
@@ -11438,6 +11694,40 @@ impl<'a> Compiler<'a> {
         }
         // 参考版 `unreachable.into_iter().chain(self.warnings)`——不可达警告在前
         self.warnings = unreachable.into_iter().chain(self.warnings.drain(..)).collect();
+        // 嵌套位置的覆盖检查（沿模式下钻逐节点，参考版同款）：每条记账在
+        // 记录臂的实例化（臂上下文快照）下探测字段 Sum 的可达构造子；覆盖
+        // 集 = 已走查臂的 PatternDetail 沿路径的结构贡献。可达集取各记账臂
+        // 探测的并集（保守）。荒谬臂 / 被遮蔽臂不在 pats 里，天然不贡献
+        // 覆盖——与运行时首匹配结构语义一致。
+        let mut reported = std::collections::HashSet::new();
+        for nc in std::mem::take(&mut self.nested_checks) {
+            let field_sum = mach.force_v(bump, &nc.arm_cxt, nc.field_sum);
+            let ctor_cases: Vec<crate::parser_lib::Span<SmolStr>> = if v_tag(field_sum) != 7 {
+                continue;
+            } else {
+                match v_xcell_of(field_sum) {
+                    XCell::Sum { name, cases, .. } => case_spans(&nc.arm_cxt, name, cases),
+                    _ => continue,
+                }
+            };
+            for ctor in ctor_cases {
+                if !Self::probe_accessible(mach, bump, &nc.arm_cxt, field_sum, &ctor) {
+                    continue;
+                }
+                let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
+                    PosCover::All => true,
+                    PosCover::Ctor(n) => n == ctor.data,
+                    PosCover::None => false,
+                });
+                if !covered && reported.insert((nc.path.clone(), ctor.data.clone())) {
+                    self.warnings.push(Warning::IncompleteNested(format!(
+                        "match 不完整：模式位置 {} 缺少构造子 {}",
+                        fmt_path(&nc.path),
+                        ctor.data
+                    )));
+                }
+            }
+        }
         match self.errors.drain(..).next() {
             Some(e) => Err(e),
             None => Ok(()),

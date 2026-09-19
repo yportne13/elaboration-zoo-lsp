@@ -639,6 +639,42 @@ impl std::fmt::Display for PatternDetail {
     }
 }
 
+/// 已走查臂在某嵌套位置的覆盖贡献（参考版与孪生版共用，保证嵌套覆盖
+/// 检查的判定与文案逐字节一致；L07/L10 同款，2026-09-18 评审修复 P0 的
+/// L13 移植）：全覆盖（var/Any，含路径中途变变量）、贡献某构造子（路径
+/// 末端是 Con）、不可达该位置（祖先选了别的构造子）。
+pub(crate) enum PosCover {
+    All,
+    Ctor(String),
+    None,
+}
+
+/// 沿 (构造子名, 字段下标) 路径下钻一棵已走查的 PatternDetail 树。
+/// 字段下标与 `walk_pat` 的 details 布局同源（望远镜中产槽绑定器的序数；
+/// 同一构造子的望远镜同形，任一臂的 detail 在同一路径上的槽位一致）。
+pub(crate) fn cover_at(detail: &PatternDetail, path: &[(String, usize)]) -> PosCover {
+    let mut cur = detail;
+    for (ctor, field) in path {
+        match cur {
+            PatternDetail::Any(..) | PatternDetail::Bind(_) => return PosCover::All,
+            PatternDetail::Con(_, n, subs) if n.data == *ctor => cur = &subs[*field],
+            PatternDetail::Con(..) => return PosCover::None,
+        }
+    }
+    match cur {
+        PatternDetail::Any(..) | PatternDetail::Bind(_) => PosCover::All,
+        PatternDetail::Con(_, n, _) => PosCover::Ctor(n.data.to_string()),
+    }
+}
+
+/// 人读路径：`cons#2 → nil#1` 表示 cons 第二字段的 nil 第一字段处。
+pub(crate) fn fmt_path(path: &[(String, usize)]) -> String {
+    path.iter()
+        .map(|(c, f)| format!("{c}#{}", f + 1))
+        .collect::<Vec<_>>()
+        .join(" → ")
+}
+
 type Ty = Tm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
@@ -1910,6 +1946,14 @@ impl Infer {
     /// 外层入口充值（L08 `meta_refuel` 同款纪律）。
     fn refuel(&self) {
         self.unify_fuel.set(UNIFY_FUEL);
+    }
+
+    /// fuel 是否已耗尽（本编译单元的共享池）。可达性探测用：特化方程失败
+    /// 时区分"结构冲突（真 absurd）"与"预算耗尽（假 absurd）"——fuel 耗尽
+    /// 按可达处理（保守要求覆盖），否则深负载下的非穷尽 match 会被静默
+    /// 接受（L07 修复 2 同款，unsound → incomplete）。
+    pub(crate) fn fuel_exhausted(&self) -> bool {
+        self.unify_fuel.get() == 0
     }
 
     pub fn meta_len(&self) -> usize { self.meta.len() }

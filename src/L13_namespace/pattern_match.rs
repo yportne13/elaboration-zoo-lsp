@@ -4,6 +4,7 @@ use crate::parser_lib::{Span, ToSpan};
 
 use super::{
     Decl, Either, Env, Error, Infer, PatternDetail, Rc, Tm, Val,
+    cover_at, fmt_path, PosCover,
     cxt::Cxt,
     empty_span,
     parser::syntax::{Icit, Pattern, Raw},
@@ -15,6 +16,9 @@ type Constructor = Span<SmolStr>;
 pub enum Warning {
     Unreachable(Raw),
     Unmatched(Pattern),
+    /// 嵌套位置覆盖缺失（L07 同文案：`match 不完整：模式位置 {path} 缺少
+    /// 构造子 {ctor}`；2026-09-18 评审修复 P0 的 L13 移植）。
+    IncompleteNested(String),
 }
 
 impl std::fmt::Display for Warning {
@@ -22,6 +26,7 @@ impl std::fmt::Display for Warning {
         match self {
             Warning::Unreachable(body) => write!(f, "unreachable pattern: {}", body),
             Warning::Unmatched(pat) => write!(f, "non-exhaustive pattern: `{}` not covered", pat),
+            Warning::IncompleteNested(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -36,6 +41,29 @@ pub struct Compiler {
     /// 出现多次时，每个出现的隐式绑定器必须拿到不同名——否则臂上下文里
     /// 两个 `_l0` 互相遮蔽，`Raw` 回读取错槽。
     implicit_counter: usize,
+    /// 嵌套覆盖检查的记账（L07 修复 5 的 L13 移植，2026-09-18 评审 P0）：
+    /// 嵌套 `Con` 字段位置的可达性从未被枚举会让非穷尽 match 被静默接受。
+    /// 两段式：走查中只记 (路径, 字段 Sum)；臂特化**成功后**才提升为带
+    /// 臂上下文快照的完整记账——L13 的精化载体是 `update_cxt`（解进臂
+    /// Cxt 的 env 槽，不是 σ），嵌套位置的索引精化（如 `Vec[Nat] (succ
+    /// zero)` 的尾部上 `nil` 把 `_l0` 解成 `zero`）在 check_pm 期就已写进
+    /// 臂上下文，延迟探测以臂上下文跑 unify_pm 即可看到。整臂特化失败
+    /// （荒谬臂）时丢弃（其位置不产生覆盖义务，语义由臂错误承担）。
+    nested_checks: Vec<NestedCheck>,
+    /// 本臂走查中的待提升位置（臂特化成功后结算）。
+    pending_pos: Vec<(Vec<(String, usize)>, Rc<Val>)>,
+    /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
+    cur_path: Vec<(String, usize)>,
+}
+
+/// 一个嵌套拆分位置的记账：路径 = 根到被拆字段的 (构造子名, 字段下标)
+/// 链；`field_sum` 是该字段在**走查实例化**下的 Sum 值（内含走查 rigid，
+/// 精化状态在 arm_cxt 的 env 里）；arm_cxt 是臂特化成功后的精化上下文
+/// 快照（延迟探测要在与臂方程同构的状态下跑）。
+struct NestedCheck {
+    path: Vec<(String, usize)>,
+    field_sum: Rc<Val>,
+    arm_cxt: Cxt,
 }
 
 impl Compiler {
@@ -46,6 +74,9 @@ impl Compiler {
             ret_type,
             errors: Vec::new(),
             implicit_counter: 0,
+            nested_checks: Vec::new(),
+            pending_pos: Vec::new(),
+            cur_path: Vec::new(),
         }
     }
 
@@ -126,7 +157,12 @@ impl Compiler {
                     probe_cxt = probe_cxt.bind(bname, a_t, dom);
                     ty = infer.closure_apply(&probe_cxt.decl, &closure, u);
                 }
-                _ => break Self::unify_indices(infer, &probe_cxt, &sum_name, &head_params, &tyf),
+                _ => break Self::unify_indices(infer, &probe_cxt, &sum_name, &head_params, &tyf)
+                    // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
+                    // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
+                    // 过该构造子）会让深负载下的非穷尽 match 被静默接受
+                    // （L07 修复 2 同款，unsound → incomplete）。
+                    || infer.fuel_exhausted(),
             }
         };
         infer.meta = snap;
@@ -302,8 +338,29 @@ impl Compiler {
                         }
                         Some(p @ Pattern::Con(..)) => {
                             next += 1;
+                            // 嵌套 Con：字段 dom 是含该子构造子的 Sum 时记一笔
+                            // 待提升的嵌套位置（该字段位置沿 ctor 路径的可达
+                            // 构造子必须有臂覆盖），臂特化成功后以臂上下文结
+                            // 算（见 compile）。字段 Sum 用走查实例化下的值
+                            // （内含走查 rigid，精化在臂上下文里）。cur_path
+                            // 先推后弹（更深的记账要看到完整链）。
+                            let Pattern::Con(cn, ..) = p else {
+                                unreachable!()
+                            };
+                            let field_sum = infer.force(&cxt_arm.decl, &dom);
+                            let is_ctor = matches!(field_sum.as_ref(),
+                                Val::Sum(_, _, cases, _)
+                                    if cases.iter().any(|c| c.data == cn.data)
+                            );
+                            self.cur_path.push((name.data.to_string(), details.len()));
                             let (d, c2) = self.walk_pat(infer, &cxt_arm, p, &dom)?;
+                            self.cur_path.pop();
                             cxt_arm = c2;
+                            if is_ctor {
+                                let mut pa = self.cur_path.clone();
+                                pa.push((name.data.to_string(), details.len()));
+                                self.pending_pos.push((pa, field_sum));
+                            }
                             d
                         }
                         None => {
@@ -353,6 +410,9 @@ impl Compiler {
     ) -> Result<Vec<Warning>, Vec<Error>> {
         self.warnings = Vec::new();
         self.errors = Vec::new();
+        self.nested_checks = Vec::new();
+        self.pending_pos = Vec::new();
+        self.cur_path = Vec::new();
         let typ = infer.force(&cxt.decl, &typ);
         let (constrs, ctor_names): (Vec<Constructor>, Vec<SmolStr>) = match typ.as_ref() {
             Val::Sum(_, _, cases, _) => (
@@ -387,6 +447,9 @@ impl Compiler {
                 unreachable.push(Warning::Unreachable(body.clone()));
                 continue;
             }
+            // 本臂走查起点无遗留记账（上一臂已结算/丢弃，防御性清空）。
+            self.pending_pos.clear();
+            self.cur_path.clear();
             // 臂前置过滤（决策树构造子分支上的可达性筛选同口径）：首模式是头部
             // Sum 的构造子、但索引方程不可解（`Vec[A] zero` 上的 `cons`）——
             // 该臂不可能匹配，静默跳过并按「从未走到」记 `Unreachable`；不
@@ -402,6 +465,8 @@ impl Compiler {
             let (detail, cxt_walk) = match self.walk_pat(infer, cxt, pat, &typ) {
                 Ok(x) => x,
                 Err(e) => {
+                    // 走查失败臂的嵌套记账一并丢弃
+                    self.pending_pos.clear();
                     self.errors.push(e);
                     continue;
                 }
@@ -424,10 +489,23 @@ impl Compiler {
                 // 不是 σ）——直接当臂上下文用。
                 Ok((_, cxt)) => cxt,
                 Err(e) => {
+                    // 荒谬臂（特化失败）：其嵌套位置不产生覆盖义务——臂本身
+                    // 的特化错误已承担语义（L07 荒谬臂 clear pending 同款）
+                    self.pending_pos.clear();
                     self.errors.push(e);
                     continue;
                 }
             };
+            // 嵌套位置结算（两段式）：此刻本臂特化方程已解出、精化写进了
+            // 臂上下文的 env 槽，字段 Sum 置于臂上下文之下探测才能看到索引
+            // 精化（如 `Vec[Nat] (succ zero)` 的尾部上 `nil` 不可达）。
+            for (path, field_sum) in std::mem::take(&mut self.pending_pos) {
+                self.nested_checks.push(NestedCheck {
+                    path,
+                    field_sum,
+                    arm_cxt: cxt_arm.clone(),
+                });
+            }
             let ret_type = match self.ret_type.as_ref() {
                 Val::Flex(_, _) => self.ret_type.clone(),
                 _ => {
@@ -449,7 +527,46 @@ impl Compiler {
         if !self.errors.is_empty() {
             Err(std::mem::take(&mut self.errors))
         } else {
-            Ok(unreachable.into_iter().chain(self.warnings.clone()).collect())
+            let mut out: Vec<Warning> = unreachable
+                .into_iter()
+                .chain(std::mem::take(&mut self.warnings))
+                .collect();
+            // 嵌套位置的覆盖检查（沿模式下钻逐节点，L07 同款）：每条记账在
+            // 记录臂的实例化（臂上下文快照）下探测字段 Sum 的可达构造子；
+            // 覆盖集 = 已走查臂的 PatternDetail 沿路径的结构贡献（var/Any =
+            // 全覆盖；祖先异 ctor = 不可达该位置；同 ctor 前缀 = 贡献其末端
+            // 构造子）。可达集取各记账臂探测的并集（保守：任一臂实例化下
+            // 可达的构造子都要求被覆盖）。荒谬臂 / 被遮蔽臂不在 pats 里，
+            // 天然不贡献覆盖——与运行时首匹配结构语义一致。
+            let mut reported = std::collections::HashSet::new();
+            for nc in std::mem::take(&mut self.nested_checks) {
+                // 字段 Sum 在臂上下文下 force：走查 rigid 的索引精化由
+                // unify_pm 探测时经臂 env 的 already-refined 查询看到
+                //（L13 精化载体是 update_cxt，不是 σ/wrap_sub）。
+                let field_sum = infer.force(&nc.arm_cxt.decl, &nc.field_sum);
+                let ctor_cases: Vec<Constructor> = match field_sum.as_ref() {
+                    Val::Sum(_, _, cs, _) => cs.to_vec(),
+                    _ => continue,
+                };
+                for ctor in ctor_cases {
+                    if !Self::probe_accessible(infer, &nc.arm_cxt, &field_sum, &ctor) {
+                        continue;
+                    }
+                    let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
+                        PosCover::All => true,
+                        PosCover::Ctor(n) => n == ctor.data,
+                        PosCover::None => false,
+                    });
+                    if !covered && reported.insert((nc.path.clone(), ctor.data.clone())) {
+                        out.push(Warning::IncompleteNested(format!(
+                            "match 不完整：模式位置 {} 缺少构造子 {}",
+                            fmt_path(&nc.path),
+                            ctor.data
+                        )));
+                    }
+                }
+            }
+            Ok(out)
         }
     }
 

@@ -278,6 +278,82 @@ impl Infer {
             _ => Err(Error(name.map(|x| format!("no named implicit arg {}", x)), vec![])),
         }
     }
+    /// 构造子返回类型良构性（L07 修复 6 的 L13 移植，2026-09-18 评审 P1-1）：
+    /// 实例化构造子类型的全部绑定器后，ret 的 WHNF 必须是 `enum_name` 的
+    /// `Sum`，且其隐式参数位逐一等于 telescope 内的 bare rigid。允许构造子
+    /// 重绑定参数（`p[A,B](a,b) -> Pack[A][B] a b`——使用点经特化方程解回
+    /// 枚举参数，ctor_wf_rebind_ok 探针钉的惯用法），拒绝参数位为非变量的
+    /// 特化（`c -> Foo[Nat]`）与非本 enum 的 ret（`c -> Nat`）：后者向构造
+    /// 子名字空间注入"类型正确但永不匹配任何模式"的 phantom 值，对覆盖
+    /// 检查完备的 match 在封闭输入上卡死。显式索引位任由特化（GADT 保留，
+    /// `nil -> Vec[A] zero` 同款）。
+    fn check_ctor_wf(
+        &mut self,
+        cxt: &Cxt,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: &Rc<Val>,
+    ) -> Result<(), Error> {
+        let decl = cxt.decl.clone();
+        let base = cxt.lvl.0;
+        let mut ty = ctor_vtyp.clone();
+        let mut bound = 0u32;
+        let ret = loop {
+            match self.force(&decl, &ty).as_ref() {
+                Val::Pi(_, _, _, closure) => {
+                    let u: Rc<Val> = Rc::new(Val::vvar(Lvl(base + bound)));
+                    bound += 1;
+                    ty = self.closure_apply(&decl, closure, u);
+                }
+                ret => break Rc::new(ret.clone()),
+            }
+        };
+        let ret_sum = match self.force(&decl, &ret).as_ref() {
+            s @ Val::Sum(..) => s.clone(),
+            _ => {
+                return Err(Error(
+                    empty_span(()).map(|_| {
+                        format!("构造子 {ctor_name} 的返回类型不是和类型")
+                    }),
+                    vec![],
+                ))
+            }
+        };
+        let (sname, sparams) = match &ret_sum {
+            Val::Sum(n, ps, _, _) => (n, ps),
+            _ => unreachable!(),
+        };
+        if sname.data != enum_name {
+            return Err(Error(
+                empty_span(()).map(|_| {
+                    format!(
+                        "构造子 {ctor_name} 的返回类型是 {}，不是 {enum_name}",
+                        sname.data
+                    )
+                }),
+                vec![],
+            ));
+        }
+        let non_rigid = sparams
+            .iter()
+            .filter(|(_, _, _, i)| *i == Icit::Impl)
+            .map(|(_, v, _, _)| v.as_ref())
+            .find(|v| {
+                !matches!(v, Val::Rigid(l, sp) if base <= l.0 && l.0 < base + bound && sp.is_empty())
+            });
+        if non_rigid.is_some() {
+            return Err(Error(
+                empty_span(()).map(|_| {
+                    format!(
+                        "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+                    )
+                }),
+                vec![],
+            ));
+        }
+        Ok(())
+    }
+
     fn insert_until_name(
         &mut self,
         cxt: &Cxt,
@@ -457,10 +533,21 @@ impl Infer {
                 }
             }
             (
-                Val::SumCase { index: name1, datas: d1, .. },
-                Val::SumCase { index: name2, datas: d2, .. },
+                Val::SumCase { typ: ty1, index: name1, datas: d1, .. },
+                Val::SumCase { typ: ty2, index: name2, datas: d2, .. },
             ) => {
                 if name1 == name2 {
+                    // Sum 头名字判据（L07 修复 4 同款）：跨 enum 重名构造子
+                    //（index 同、typ 的 Sum 头异）直接 Err——只比头名，不
+                    // unify typ 值（避免互相引用深递归）。typ 非和类型
+                    //（meta / 未定型）时不加严，保持 index+datas 判定。
+                    let h1 = self.force(&cxt.decl, ty1);
+                    let h2 = self.force(&cxt.decl, ty2);
+                    if let (Val::Sum(n1, ..), Val::Sum(n2, ..)) = (h1.as_ref(), h2.as_ref()) {
+                        if n1.data != n2.data {
+                            return Err(Error(t_span.map(|_| "".to_string()), vec![]));
+                        }
+                    }
                     let mut cxt = cxt.clone();
                     for (x, y) in d1.iter().zip(d2.iter()) {
                         cxt = self.unify_pm(&cxt, &x.1, &y.1, t_span)?;
@@ -1339,6 +1426,14 @@ impl Infer {
                     cxt = {
                         let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                         let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
+                        // 构造子良构性（2026-09-18 L07 修复 6 的 L13 移植）：
+                        // ret 必须是本 enum 的 Sum 且隐式参数位是 telescope 内
+                        // 的 bare rigid（防 phantom 构造子 / 参数特化注入，见
+                        // check_ctor_wf）。trait/class enum（is_trait）的 case
+                        // 是方法签名，ret 不指向本类型——不适用。
+                        if !is_trait {
+                            self.check_ctor_wf(&cxt, &name.data, &c.0.data, &vtyp)?;
+                        }
                         let t_tm = self.check::<false>(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
                         // Store as EnumName.caseName only — no bare caseName alias

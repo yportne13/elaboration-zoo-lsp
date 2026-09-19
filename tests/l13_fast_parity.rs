@@ -421,3 +421,232 @@ fn parity_enum_struct_impl_hole_pinned_u0() {
     }
 
 }
+
+// 评审修复轮移植（2026-09-19，L07 修复 1–6 的 L13 落地）：双 oracle 判定
+// 一致 + 期望语义（不只 parity，防"两版同错"假阴性）
+// --------------------------------------------------------------------------------
+
+const RF_NAT: &str = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n";
+const RF_LIST: &str = "enum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n";
+const RF_VEC: &str = "enum Vec[A](len: Nat) {\n    nil -> Vec[A] zero\n    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)\n}\n";
+const RF_BOOL: &str = "enum Bool {\n    true\n    false\n}\n";
+
+/// 双版都 Err 且错误正文都含 `needle`（先跑 parity 归一化比对，再钉语义）。
+fn assert_both_err_contains(src: &str, needle: &str) {
+    assert_parity(src);
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let be = match b {
+        Err(e) => e,
+        Ok(o) => panic!("参考版应 Err（needle={needle}），得到 Ok({o})，src:\n{src}"),
+    };
+    let fe = match f {
+        Err(e) => e,
+        Ok(o) => panic!("孪生版应 Err（needle={needle}），得到 Ok({o})，src:\n{src}"),
+    };
+    assert!(be.contains(needle), "参考版错误缺 `{needle}`：{be}\nsrc:\n{src}");
+    assert!(fe.contains(needle), "孪生版错误缺 `{needle}`：{fe}\nsrc:\n{src}");
+}
+
+/// 双版都 Ok 且输出都含 `needle`。
+fn assert_both_ok_contains(src: &str, needle: &str) {
+    assert_parity(src);
+    let b = run_basic(src);
+    let f = run_fast(src);
+    let bo = match b {
+        Ok(o) => o,
+        Err(e) => panic!("参考版应 Ok（needle={needle}），得到 Err({e})，src:\n{src}"),
+    };
+    let fo = match f {
+        Ok(o) => o,
+        Err(e) => panic!("孪生版应 Ok（needle={needle}），得到 Err({e})，src:\n{src}"),
+    };
+    assert!(bo.contains(needle), "参考版输出缺 `{needle}`：{bo}\nsrc:\n{src}");
+    assert!(fo.contains(needle), "孪生版输出缺 `{needle}`：{fo}\nsrc:\n{src}");
+}
+
+/// P0 嵌套覆盖（修复 5）：非穷尽的嵌套 Con 子模式必须报
+/// `match 不完整：模式位置 {fmt_path} 缺少构造子 {ctor}`（此前静默接受，
+/// 运行期卡住）。覆盖检查工作在 elaboration 期——探针用「只 def 不调用」
+/// 形态验证覆盖判定，与值级调用缺陷（nested_complete_ok 的函性推断缺口，
+/// L11 同族既有缺陷）正交。
+#[test]
+fn parity_review_fixes_2026_09_19() {
+    // (1) 位置级缺口：cons#2 只有 nil，缺 cons
+    assert_both_err_contains(
+        &format!(
+            "{RF_NAT}{RF_LIST}def f(x: List[Nat]): Nat =\n    match x {{\n        case nil => zero\n        case cons(h, nil) => h\n    }}\n"
+        ),
+        "match 不完整：模式位置 cons#2 缺少构造子 cons",
+    );
+    // (2) 深度 2 缺口：cons#2 → cons#2 缺 cons
+    assert_both_err_contains(
+        &format!(
+            "{RF_NAT}{RF_LIST}def f(x: List[Nat]): Nat =\n    match x {{\n        case nil => zero\n        case cons(h, nil) => h\n        case cons(h, cons(h2, nil)) => h2\n    }}\n"
+        ),
+        "match 不完整：模式位置 cons#2 → cons#2 缺少构造子 cons",
+    );
+    // (3) 完整嵌套 match（只 def 不调用）必须保持 Ok——无假阳性
+    assert_both_ok_contains(
+        &format!(
+            "{RF_NAT}{RF_LIST}def f(x: List[Nat]): Nat =\n    match x {{\n        case nil => zero\n        case cons(h, nil) => h\n        case cons(h, cons(h2, t)) => succ h2\n    }}\n"
+        ),
+        "",
+    );
+    // (3b) 值级调用（原「既有缺陷钉」，2026-09-19 根治后转正为正向钉）：
+    // 完整嵌套 match 的调用点必须 Ok 且求值正确（h2 = succ zero →
+    // succ h2 = 2）。曾经的 Err `can't unify expected: (x: ?N) → ?M x`
+    // 根因不在 elaboration——是共用 parser 的 expr_bp 后缀 `(`-call 把
+    // `f a (b)` 误解析成 `f (a b)`（`cons (zero (cons …))`，对 Nat 值做
+    // 函数调用），修复见 parser/mod.rs 的 SPINE_ESCAPE 逃逸结算；
+    // parity_spine_escape_juxtaposed_paren 是解析层的专项钉。
+    assert_both_ok_contains(
+        &format!(
+            "{RF_NAT}{RF_LIST}def f(x: List[Nat]): Nat =\n    match x {{\n        case nil => zero\n        case cons(h, nil) => h\n        case cons(h, cons(h2, t)) => succ h2\n    }}\nprintln (f (cons zero (cons (succ zero) nil)))\n"
+        ),
+        "2",
+    );
+    // (4) GADT 索引精化下的两段式（孪生 iso_a/b/c 漂移回归钉）：Vec 1 的
+    // 尾部只能是 nil（不可达位置不产生义务）——此前孪生版误报
+    // `can't unify expected: Vec[Nat](_l0) find: Vec[Nat](0)`
+    assert_both_ok_contains(
+        &format!(
+            "{RF_NAT}{RF_VEC}def f(v: Vec[Nat] (succ zero)): Nat =\n    match v {{\n        case cons(x, nil) => x\n    }}\nprintln (f (cons zero nil))\n"
+        ),
+        "0",
+    );
+    // (5) GADT 索引精化下的真缺口：Vec 2 的尾部缺 cons（该臂嵌套特化失败
+    // ——L13 错误通道按特化错误报，双版文案一致）
+    assert_both_err_contains(
+        &format!(
+            "{RF_NAT}{RF_VEC}def f(v: Vec[Nat] (succ (succ zero))): Nat =\n    match v {{\n        case cons(x, nil) => x\n    }}\nprintln (f (cons zero (cons zero nil)))\n"
+        ),
+        "can't unify",
+    );
+    // (6) 修复 6 构造子良构性：`c -> Nat`（ret 非本 enum——phantom 构造子）
+    assert_both_err_contains(
+        &format!("{RF_NAT}enum Foo {{\n    c -> Nat\n}}\n"),
+        "返回类型是 Nat，不是 Foo",
+    );
+    // (7) 修复 6：`c -> Foo[Nat]` 参数特化（此前静默接受）
+    assert_both_err_contains(
+        &format!("{RF_NAT}enum Foo[A] {{\n    c -> Foo[Nat]\n}}\n"),
+        "参数不得特化",
+    );
+    // (8) 修复 6 侧向：构造子重绑定参数惯用法必须放行（v3_multi_index_gadt 形态）
+    assert_both_ok_contains(
+        &format!(
+            "{RF_NAT}enum Pack[A, B](x: A, y: B) {{\n    p[A, B](a: A, b: B) -> Pack[A][B] a b\n}}\ndef sw: Pack[Nat][Nat] zero zero = p[Nat][Nat] zero zero\nprintln sw.x\n"
+        ),
+        "0",
+    );
+    // (9) 修复 6 侧向：显式索引 GADT（Vec）不受参数特化检查误伤
+    assert_both_ok_contains(
+        &format!("{RF_NAT}{RF_VEC}def v0: Vec[Nat] zero = nil\nprintln v0\n"),
+        "Vec[Nat]::nil",
+    );
+    // (10) 修复 1 臂序无关性（数据性 N/A 的性质钉）：双臂序 × 双 oracle，
+    // 同判「unreachable pattern: zero」（ident 臂对 `W (n => succ zero)` 不可达）
+    let w_src = |arms: &str| {
+        format!(
+            "{RF_NAT}enum W(f: Nat -> Nat) {{\n    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)\n    mk -> W (n => succ zero)\n    ident -> W (n => n)\n}}\n\ndef t(w: W (n => succ zero)): Nat =\n    match w {{\n        {arms}\n    }}\nprintln (t (mk))\n"
+        )
+    };
+    assert_both_err_contains(
+        &w_src("case big(a, b, c, d) => a\n        case ident => zero\n        case mk => succ zero"),
+        "unreachable pattern: zero",
+    );
+    assert_both_err_contains(
+        &w_src("case ident => zero\n        case big(a, b, c, d) => a\n        case mk => succ zero"),
+        "unreachable pattern: zero",
+    );
+    // (11) 位置级语义的保守边界（L07 同款，防日后无意收紧）：Bool×Bool 双臂
+    // 组合缺口（mk(true,true)/mk(false,false) 缺 (true,false) 组合）在**位置
+    // 级**覆盖检查下仍接受——组合维度需真正案例树编译，本钉锁住现状。
+    assert_both_ok_contains(
+        &format!(
+            "{RF_BOOL}{RF_NAT}enum P {{\n    mk(a: Bool, b: Bool)\n}}\ndef f(p: P): Bool =\n    match p {{\n        case mk(true, true) => true\n        case mk(false, false) => false\n    }}\nprintln (f (mk true false))\n"
+        ),
+        "f(P::mk(Bool::true, Bool::false))",
+    );
+    // (12) 深负载无 panic、无假通过（修复 2/3 的负载形态；multiline 臂保证
+    // 真覆盖）：完整 match 的递归深算两版一致 Ok
+    let mut deep = String::from(RF_NAT);
+    deep.push_str(RF_LIST);
+    deep.push_str("def add(x: Nat, y: Nat): Nat =\n    match x {\n        case zero => y\n        case succ(n) => succ (add n y)\n    }\n");
+    deep.push_str("def four : Nat = add (add (succ (succ zero)) (succ (succ zero))) (add (succ (succ zero)) (succ (succ zero)))\n");
+    deep.push_str("def deep(n: Nat): Nat =\n    match n {\n        case zero => zero\n        case succ(m) => add (deep m) (succ zero)\n    }\n");
+    deep.push_str("println (deep four)\n");
+    assert_both_ok_contains(&deep, "8");
+    // (13) 修复 4（SumCase 头名字判据，防御性——常规路径的齐型关卡先行
+    // 拒绝，本钉锁住跨 enum 重名构造子的双版同判）
+    assert_both_err_contains(
+        "enum E1 {\n    c\n}\nenum E2 {\n    c\n}\ndef bad: E2 = E1.c\nprintln bad\n",
+        "can't unify",
+    );
+    // (14) 扁平 GADT match（无嵌套 Con 子模式）不受嵌套覆盖检查影响
+    assert_both_ok_contains(
+        &format!(
+            "{RF_NAT}{RF_VEC}def f(v: Vec[Nat] zero): Nat =\n    match v {{\n        case nil => zero\n    }}\nprintln (f nil)\n"
+        ),
+        "0",
+    );
+}
+
+// 解析器消歧回归（SPINE_ESCAPE，2026-09-19）：`f a (b)` 的相邻实参读法
+// --------------------------------------------------------------------------------
+
+/// expr_bp 后缀 `(`-call 与 spine 相邻实参的消歧。修复前 `f a (b)` 被读成
+/// `f (a b)`（单实参括号组按调用折到前一个实参上）——嵌套 match 调用点
+/// `println (f (cons zero (cons (succ zero) nil)))` 报
+/// `can't unify expected: (x: ?N) → ?M x` 的根因（对 Nat 值做函数调用，
+/// elaboration 侧本无缺陷；L07 无此后缀 `(`-call 故同形程序正常）。
+/// 修复：单实参括号组以逃逸哨兵 icit 折叠，p_spine 把顶层带标记的头/
+/// 显式实参拆成相邻实参；埋在算符/后缀下的标记剥回 Expl（调用读法）。
+#[test]
+fn parity_spine_escape_juxtaposed_paren() {
+    let nat = "enum Nat {\n    zero\n    succ(x: Nat)\n}\n";
+    // (1) `f a (b)` ≡ 纯相邻 `f a b` ≡ 逗号调用 `f(a, b)`（同一定义三种
+    //     写法同值；`two` 返回第一实参；`succ zero` 作实参必须加括号——
+    //     相邻写法 `two zero succ zero` 是三个实参，左结合下对 Nat 结果
+    //     再应用，属既有语义）
+    let two = format!("{nat}def two(x: Nat, y: Nat): Nat = x\ndef one = succ zero\n");
+    assert_both_ok_contains(&format!("{two}println (two zero (succ zero))\n"), "0");
+    assert_both_ok_contains(&format!("{two}println (two zero one)\n"), "0");
+    assert_both_ok_contains(&format!("{two}println (two(zero, succ zero))\n"), "0");
+    // (2) 嵌套构造子实参（原缺陷的最小形态——无 match 参与也误报，纯解析）：
+    //     `second (cons zero (cons (succ zero) nil))` 的内层括号组必须落到
+    //     外层 `cons` 的第二槽，取第二元素 = succ zero = 1
+    let list = "enum List[A] {\n    nil\n    cons(head: A, tail: List[A])\n}\n";
+    let second = format!(
+        "{nat}{list}def second(l: List[Nat]): Nat =\n    match l {{\n        case nil => zero\n        case cons(h, nil) => h\n        case cons(h, cons(h2, t)) => h2\n    }}\n"
+    );
+    assert_both_ok_contains(
+        &format!("{second}println (second (cons zero (cons (succ zero) nil)))\n"),
+        "1",
+    );
+    // (3) 头位单实参括号链（哨兵在头位拆分 → 项与修复前一致）
+    assert_both_ok_contains(&format!("{nat}println (succ (succ (zero)))\n"), "2");
+    // (4) 带空格的多实参逗号调用（prelude `xs.elem (x, eq)` 形态）读法不变：
+    //     仍是双实参调用而非单 tuple 实参
+    assert_both_ok_contains(&format!("{two}println (two (succ zero, zero))\n"), "1");
+    // (5) 空括号组 `f()`（len=0 不标记，恒为无操作）
+    let zz = format!("{nat}def zz: Nat = zero\n");
+    assert_both_ok_contains(&format!("{zz}println (zz())\n"), "0");
+    // (6) 埋在算符下的单实参括号组保持调用读法（strip 路径的语义钉）：
+    //     `succ (zero) + (succ zero)` 的 `(zero)` 是 succ 的调用实参（项 = 1），
+    //     再 + (succ zero) = 2。修复前哨兵若泄漏，insert_until_name 报
+    //     "no named implicit arg"。结果经注解 def 落型（无注解的裸 `+`
+    //     表达式输出类型参数 O 无从解出，trait 目标按既有语义卡住打印）。
+    //     注：infix 右操作数不带相邻实参（`a + succ zero` 的 `succ` 是
+    //     构造子值）——既有语义，与本修复无关。
+    let add = format!(
+        "{nat}def nat_add(x: Nat, y: Nat): Nat =\n    match x {{\n        case zero => y\n        case succ(n) => succ (nat_add n y)\n    }}\ndef outParam[A](a: A): A = a\ntrait Add[T, O: outParam(Type 0)] {{\n    def +(that: T): O\n}}\nimpl Add[Nat, Nat] for Nat {{\n    def +(that: Nat): Nat = nat_add this that\n}}\n"
+    );
+    assert_both_ok_contains(&format!("{add}def r: Nat = succ (zero) + (succ zero)\nprintln r\n"), "2");
+    // (7) `new` 结构体形态不受影响（p_new 在原子层吃掉 `new X(..)`，
+    //     单/多实参都不经 expr_bp 的后缀 `(`）
+    let pair = format!("{nat}struct Pair {{\n    fst: Nat\n    snd: Nat\n}}\nstruct Wrap {{\n    v: Nat\n}}\n");
+    assert_both_ok_contains(&format!("{pair}def p = new Pair(succ zero, zero)\nprintln p.fst\n"), "1");
+    assert_both_ok_contains(&format!("{pair}def w = new Wrap(zero)\nprintln w.v\n"), "0");
+}

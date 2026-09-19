@@ -242,7 +242,11 @@ impl Infer {
     fn prune_meta(&mut self, decl: &Decl, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
         let (mty, origin_ty, span) = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a, _, ref o, s) => (a.clone(), o.clone(), s),
-            _ => unreachable!(),
+            // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），
+            // 随后走到的剪枝/求解按合一失败降级，不 panic——与"fuel 耗尽
+            // 按未解失败"的既有降级故事一致（L07 修复 3 同款；窗口：恰在
+            // 1→0 递减帧内）
+            _ => return Err(UnifyError::Basic),
         };
 
         let prune_ty = self.prune_ty(decl, &pruning, &mty)?;
@@ -315,15 +319,16 @@ impl Infer {
             SpinePruneStatus::OKRenaming => {
                 match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(_, _, _, _) => m,
-                    //_ => return Err(Error::Impossible),
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force
+                    // 当未解返回后走到这里，按失败降级（L07 修复 3 同款）
+                    _ => return Err(UnifyError::Basic),
                 }
             }
             SpinePruneStatus::OKNonRenaming => {
                 match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(_, _, _, _) => m,
-                    //_ => return Err(Error::Impossible),
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（同 prune_meta 注）
+                    _ => return Err(UnifyError::Basic),
                 }
             }
             SpinePruneStatus::NeedsPruning => {
@@ -531,7 +536,9 @@ impl Infer {
                 };
                 let mty = match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(ref a, _, _, _) => a.clone(),
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（同 prune_meta 注）：按失败降级而不是
+                    // panic（L07 修复 3 同款）
+                    _ => return Err(UnifyError::Basic),
                 };
                 // Clamp the number of lambdas to the meta type's leading Pi
                 // chain (the meta's context length); the spine may carry extra
@@ -562,7 +569,9 @@ impl Infer {
     ) -> Result<(), UnifyError> {
         let mty = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a, _, _, _) => a.clone(),
-            _ => unreachable!(),
+            // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force 当未解
+            // 返回后走到求解臂，按合一失败降级而不是 panic（L07 修复 3 同款）
+            _ => return Err(UnifyError::Basic),
         };
 
         // if the spine was non-linear, we check that the non-linear arguments
