@@ -65,7 +65,7 @@ use std::rc::Rc;
 
 use super::parser::syntax::{Decl, Either, Icit, Pattern, Raw};
 use super::pretty::pretty_tm;
-use super::{empty_span, Error, Ix, MetaVar, PatternDetail, Tm as CTm};
+use super::{empty_span, Error, Ix, MetaVar, PatternDetail, PosCover, cover_at, fmt_path, Tm as CTm};
 
 // syntax（bump 内的项表示）
 // --------------------------------------------------------------------------------
@@ -329,6 +329,50 @@ struct SubEntryV {
     next: Option<Rc<SubEntryV>>,
 }
 
+/// 存活的 σ 链条目数（`SubEntryV` 各计 1；头壳 `SubstV` 带 `Clone` derive、
+/// 值级复制会破坏计数配对，故不计）。仅为跨轮回收的回归测试提供观察口
+/// ([SUBSTV_ALIVE])；一次原子加减发生在 extend / compose 的分配与 Rc
+/// 归零的 Drop 时机，均非热路径。观察泄漏同样有效：arena 克隆泄漏 ⇒ 其
+/// head 链的条目引用不归还 ⇒ 计数不回落。
+pub(crate) static SUBSTV_ALIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Drop for SubEntryV {
+    fn drop(&mut self) {
+        SUBSTV_ALIVE.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+// --------------------------------------------------------------------------------
+// σ 克隆的跨轮回收（2026-09-18，README §7.7 的落地；L07 孪生版同款移植）
+// --------------------------------------------------------------------------------
+// bump `reset()` 不跑 Drop：arena 内 `XCell::VSub` 持有的 `Rc<SubstV>` 克隆
+// 的强引用永不归还，链（及后缀）跨轮慢泄漏。登记表在 [`wrap_sub`] 构造
+// 克隆的**同一时刻**记录 `Rc::as_ptr`，轮界（[`Machine::clear_round`]，与
+// 三处 `bump.reset()` 严格伴生）逐指针 `Rc::from_raw` + drop。
+//
+// SAFETY（恰好归还"arena 那一份"强引用，等价于被跳过的 Drop）：
+// - 指针在登记到归还之间始终有效：arena 克隆持强引用，外部持有者
+//   （`Compiler.sub`、链共享）只会让计数更多，不会提前释放节点；
+// - 同一节点被 wrap 多次 = 多个克隆 = 多次登记 = 多次减一，各归还各的；
+// - 表外持有者不受影响：归还后节点若仍有引用则继续存活（正常 Rc 语义），
+//   归零则连同后缀级联释放（后缀条目有自己的计数与 Drop）；
+// - [`vsub_reclaim`] 后表已清空，旧指针不会跨轮重复 drop。
+thread_local! {
+    static VSUB_REGS: std::cell::RefCell<Vec<*const SubstV>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// 轮界归还 arena 内的全部 σ 克隆（与 `bump.reset()` 伴生）。
+fn vsub_reclaim() {
+    VSUB_REGS.with(|r| {
+        for p in r.borrow_mut().drain(..) {
+            // SAFETY：见上——p 来自 wrap_sub 登记的 Rc 克隆，本调用归还其
+            // arena 份额且仅此一次（表已 drain）。
+            drop(unsafe { Rc::from_raw(p) });
+        }
+    });
+}
+
 impl SubstV {
     #[inline]
     fn is_empty(&self) -> bool {
@@ -375,6 +419,7 @@ impl SubstV {
     /// 叠加一条解 `x := v`：O(1) cons 到链头（链头 = 最新 ≙ 旧 `pm_def`
     /// 的 `rev().find` 取最新；同键旧条目留在链上但永不命中）。
     fn extend(sub: &Rc<SubstV>, x: u32, v: V) -> Rc<SubstV> {
+        SUBSTV_ALIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Rc::new(SubstV {
             head: Some(Rc::new(SubEntryV {
                 lvl: x,
@@ -393,11 +438,14 @@ impl SubstV {
         ) -> Option<Rc<SubEntryV>> {
             match entry {
                 None => onto,
-                Some(e) => Some(Rc::new(SubEntryV {
-                    lvl: e.lvl,
-                    val: e.val,
-                    next: cons_all(&e.next, onto),
-                })),
+                Some(e) => {
+                    SUBSTV_ALIVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Some(Rc::new(SubEntryV {
+                        lvl: e.lvl,
+                        val: e.val,
+                        next: cons_all(&e.next, onto),
+                    }))
+                }
             }
         }
         Rc::new(SubstV {
@@ -491,15 +539,22 @@ fn mentions_level(spine: &Spine, defs: &[V], v: V, sub: &SubstV) -> bool {
 
 /// "解前构建、解后消费"的值的读点纪律：用当前精化替换包裹（O(1) Rc
 /// clone + 一次 bump 单元，force 在消费点惰性推开）。σ 为空时零开销直通。
+/// 包裹克隆进 arena 的同时登记 [`VSUB_REGS`]——轮界 [`vsub_reclaim`] 补上
+/// 被 bump reset 跳过的 Drop（见其 SAFETY 注释）。
 #[inline]
 fn wrap_sub<'a>(bump: &'a Bump, sub: &Rc<SubstV>, v: V) -> V {
     if sub.is_empty() {
         v
     } else {
-        v_xcell(bump.alloc(XCell::VSub {
+        let cell = bump.alloc(XCell::VSub {
             val: v,
             sub: sub.clone(),
-        }))
+        });
+        // 注册后置：alloc 成功（cell 内 clone 的 +1 已落账）才登记。若注册
+        // 在前而 alloc 失败 panic 又被 catch_unwind 捕获，轮界 reclaim 的
+        // Rc::from_raw + drop 会按未发生的 +1 过度递减引用计数（评审 P2）
+        VSUB_REGS.with(|r| r.borrow_mut().push(Rc::as_ptr(sub)));
+        v_xcell(cell)
     }
 }
 
@@ -3743,14 +3798,26 @@ fn unify_iter<'a>(
                 return false; // 异名 Sum：参考版无后续可命中臂 → Err
             }
             // —— SumCase/SumCase（参考臂 18）：同构造子才比；**只比
-            // datas**（typ 是 datas 的函数，比 typ 会在索引槽互相引用上深
-            // 递归——索引等式在外层 Sum-Sum 的参数 zip 里建立）——
+            // datas 的值**（typ 是 datas 的函数，比 typ 值会在索引槽互相
+            // 引用上深递归——索引等式在外层 Sum-Sum 的参数 zip 里建立），
+            // 但**比 typ 的 Sum 头名字**：跨 enum 重名构造子（E1.c / E2.c）
+            // 是两个不同值，同 case_name 不足以判定身份（参考版 2026-09-18
+            // 同步）——
             if let (
-                XCell::SumCase { case_name: c1, datas: d1, .. },
-                XCell::SumCase { case_name: c2, datas: d2, .. },
+                XCell::SumCase { case_name: c1, datas: d1, typ: t1 },
+                XCell::SumCase { case_name: c2, datas: d2, typ: t2 },
             ) = (xt, xu)
             {
                 if c1 == c2 {
+                    if let (
+                        XCell::Sum { name: n1, .. },
+                        XCell::Sum { name: n2, .. },
+                    ) = (v_xcell_of(*t1), v_xcell_of(*t2))
+                    {
+                        if n1 != n2 {
+                            return false; // 异 enum 头：跨实例构造子 → Err
+                        }
+                    }
                     for (a, b) in d1.iter().zip(d2.iter()).rev() {
                         stack.push(UItem::Pair(l, a.val, b.val));
                     }
@@ -4012,7 +4079,10 @@ fn solve_with_pren_bump<'a>(
 ) -> bool {
     let mty = match &metas[m as usize] {
         MetaEntry::Unsolved(a) => *a,
-        _ => unreachable!(), // 只对未解 meta 求解
+        // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），随后
+        // 走到的求解按合一失败降级，不 panic——与"fuel 耗尽按未解失败"的
+        // 既有降级故事一致（窗口：恰在 1→0 递减帧内）
+        _ => return false,
     };
     // 非线性 spine：检查非线性的变量槽位可以从 meta 类型里剪掉
     if !mask.is_empty()
@@ -4507,7 +4577,8 @@ fn prune_meta_bump<'a>(
 ) -> Option<u32> {
     let mty = match &metas[m as usize] {
         MetaEntry::Unsolved(a) => *a,
-        _ => unreachable!(), // 只对未解 meta 剪枝
+        // fuel 耗尽窗口（同 solve_with_pren_bump 注）：按失败降级
+        _ => return None,
     };
     let pruned_tm = prune_ty_bump(
         bump, spine, work, vals, icits, defs, metas, decls, mmap, fuel, mask, mty,
@@ -5057,6 +5128,9 @@ impl Machine {
         self.mutable_map.borrow_mut().clear();
         self.spine.stack.clear();
         self.fuel.set(UNIFY_FUEL);
+        // 与三处 bump.reset() 严格伴生：归还 arena 内 σ 克隆的强引用
+        // （Rc 节点在全局堆上，reset 不动其数据；见 VSUB_REGS 的 SAFETY 注释）
+        vsub_reclaim();
     }
 
     /// fuel 是否已耗尽（本编译单元的共享池）。错误诊断用：特化方程失败
@@ -6450,6 +6524,9 @@ impl Machine {
                         let decls_c = cxt.decl.borrow();
                         let typ_tm = self.check(bump, &cxt, ctor_ty, v_u())?;
                         let vtyp = self.eval(bump, &decls_c, cxt.env, typ_tm);
+                        // 构造子良构性（参考版同步）：ret 必须是本 enum 的
+                        // Sum 且参数位是 telescope 内的 bare rigid
+                        self.check_ctor_wf(bump, &cxt, &name.data, &ctor_name.data, vtyp)?;
                         let t_tm = self.check(bump, &cxt, &bod, vtyp)?;
                         let vt = self.eval(bump, &decls_c, cxt.env, t_tm);
                         DeclEntryF { ty: vtyp, val: vt }
@@ -6465,6 +6542,69 @@ impl Machine {
                 Ok((DeclOut::Enum, cxt))
             }
         }
+    }
+
+    /// 构造子返回类型良构性（参考版 `Infer::check_ctor_wf` 同款，
+    /// 2026-09-18）：实例化构造子类型的全部绑定器后，ret 的 WHNF 必须是
+    /// `enum_name` 的 `Sum`，且其隐式参数位逐一等于 telescope 内的 bare
+    /// rigid。允许构造子重绑定参数（`p[A,B](a,b) -> Pack[A][B] a b`，
+    /// 多索引 GADT 钉），拒绝参数位非变量（`c -> Foo[Bool]`）与
+    /// 非本 enum 的 ret（`c -> Nat`）——后者向构造子名字空间注入永不匹配
+    /// 任何模式的 phantom 值，对覆盖检查完备的 match 在封闭输入上卡死。
+    fn check_ctor_wf(
+        &mut self,
+        bump: &Bump,
+        cxt: &Cxt<'_>,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: V,
+    ) -> Result<(), Error> {
+        let decls = cxt.decl.borrow();
+        let base = cxt.lvl;
+        let mut ty = ctor_vtyp;
+        let mut bound = 0u32;
+        let ret = loop {
+            let tyf = self.force_v(bump, &decls, ty);
+            if v_tag(tyf) == 4 {
+                let p = v_pi_of(tyf);
+                let u = v_lvl(base + bound);
+                bound += 1;
+                let env = env_ext(bump, p.env, u);
+                ty = self.eval(bump, &decls, env, p.body);
+            } else {
+                break tyf;
+            }
+        };
+        let retf = self.force_v(bump, &decls, ret);
+        if !(v_tag(retf) == 7 && matches!(v_xcell_of(retf), XCell::Sum { .. })) {
+            return Err(Error(format!(
+                "构造子 {ctor_name} 的返回类型不是和类型"
+            )));
+        }
+        match v_xcell_of(retf) {
+            XCell::Sum { name: sname, params, .. } => {
+                if *sname != enum_name {
+                    return Err(Error(format!(
+                        "构造子 {ctor_name} 的返回类型是 {sname}，不是 {enum_name}"
+                    )));
+                }
+                for p in params.iter() {
+                    if p.icit == Icit::Impl {
+                        let v = p.val;
+                        let bare_rigid = v_tag(v) == 0
+                            && v_lvl_of(v) >= base
+                            && v_lvl_of(v) < base + bound;
+                        if !bare_rigid {
+                            return Err(Error(format!(
+                                "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+                            )));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 }
 
@@ -6727,20 +6867,50 @@ struct Compiler<'a> {
     /// 收集所有错误（覆盖缺失 / 分支不可达），一次报全。
     errors: Vec<String>,
     pats: Vec<(PatternDetail, &'a Tm<'a>)>,
-    /// 当前精化替换（参考版 `Compiler::sub` / dpm-nbe 的 explicit
+    /// 当前精化替换（参考版 `Compiler::sub`，dpm-nbe 的 explicit
     /// substitution）：特化方程的解在此累积；"解前构建、解后消费"的值在
-    /// 读点用 `wrap_sub` 包裹，force 惰性推开。臂边界 / 探测边界回滚 =
+    /// 读点用 [`wrap_sub`] 包裹，force 惰性推开。臂边界 / 探测边界回滚 =
     /// Rc 指针赋值。
     sub: Rc<SubstV>,
     /// 本子句可解的 rigid 层级（入口 bind 槽基线 + 走查中新绑的模式槽）。
-    /// 只经 `SpecSolve` 穿参给方程合一；分支体检查走常规转换（spec 缺席），
-    /// 不得解假设。
+    /// 只经 [`SpecSolve`] 穿参给方程合一；分支体检查走常规转换（spec 缺
+    /// 席），不得解假设。
     solvable: Vec<u32>,
+    /// 嵌套覆盖检查的记账（参考版同款，2026-09-18）：顶层覆盖检查只遍历
+    /// scrutinee 类型的构造子；嵌套 `Con` 字段位置的可达性也要枚举，否则
+    /// 非穷尽 match 被静默接受（P0）。两段式：走查中只记 (路径, 字段
+    /// Sum)；臂走查**成功后**（特化方程已解出、σ 为终态）才提升为带
+    /// σ/solvable/lvl 快照的完整记账。整臂 Unreachable 时丢弃。
+    nested_checks: Vec<NestedCheck>,
+    /// 本臂走查中的待提升位置（臂边界结算）。
+    pending_pos: Vec<(Vec<(String, usize)>, V)>,
+    /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
+    cur_path: Vec<(String, usize)>,
+}
+
+/// 一个嵌套拆分位置的记账（参考版 `NestedCheck` 同构）：路径 = 根到被拆
+/// 字段的 (构造子名, 字段下标) 链；`field_sum` 是该字段在记录臂实例化下的
+/// Sum 值；σ/solvable/lvl 是臂终态的走查快照。
+struct NestedCheck {
+    path: Vec<(String, usize)>,
+    field_sum: V,
+    sub: Rc<SubstV>,
+    solvable: Vec<u32>,
+    lvl: u32,
 }
 
 enum Walk<'a> {
     Matched(PatternDetail, Cxt<'a>),
     Unreachable,
+}
+
+impl<'a> Walk<'a> {
+    fn matched(self) -> Option<(PatternDetail, Cxt<'a>)> {
+        match self {
+            Walk::Matched(d, c) => Some((d, c)),
+            Walk::Unreachable => None,
+        }
+    }
 }
 
 /// `Sum` 值的构造子名表（覆盖检查用）。
@@ -6778,6 +6948,9 @@ impl<'a> Compiler<'a> {
             pats: Vec::new(),
             sub: Rc::new(SubstV::default()),
             solvable: Vec::new(),
+            nested_checks: Vec::new(),
+            pending_pos: Vec::new(),
+            cur_path: Vec::new(),
         }
     }
 
@@ -6811,7 +6984,7 @@ impl<'a> Compiler<'a> {
         // 可达性 = 在（meta + σ + 本地可解集）快照回滚下跑一次特化方程
         // （与臂内走查同一套判定）。
         for ctor in &ctor_names {
-            if Self::probe_accessible(mach, bump, cxt, head_sum, ctor, &self.sub, &self.solvable)
+            if Self::probe_accessible(mach, bump, cxt, cxt.lvl, head_sum, ctor, &self.sub, &self.solvable)
                 && !arms.iter().any(|(pat, _)| covers(pat, ctor, &ctor_names))
             {
                 self.errors
@@ -6825,13 +6998,26 @@ impl<'a> Compiler<'a> {
             if shadowed {
                 continue;
             }
+            // 臂边界的精化替换快照（回滚 = Rc 指针赋值，见循环尾）。
             let sub_snap = self.sub.clone();
+            let solvable_snap = self.solvable.clone();
             // 臂边界同时是名字轨迹的基线：walk_con 经 bind_name 压入的
             // 模式绑定不在臂检查的 unwind 范围内，臂结束后显式截断
             // （参考版 src_names 随 Cxt 克隆天然隔离，快版轨迹需手动回滚）
             let name_mark = mach.name_mark();
             match self.walk(mach, bump, pat, scrut_ty, head_val, cxt)? {
                 Walk::Matched(detail, cxt_arm) => {
+                    // 嵌套位置结算：此刻本臂全部特化方程已解出、σ 为终态，
+                    // 字段 Sum 置于 σ 之下再探测才能看到索引精化（参考版同款）
+                    for (path, field_sum) in std::mem::take(&mut self.pending_pos) {
+                        self.nested_checks.push(NestedCheck {
+                            path,
+                            field_sum,
+                            sub: self.sub.clone(),
+                            solvable: self.solvable.clone(),
+                            lvl: cxt_arm.lvl,
+                        });
+                    }
                     // 分支体走**常规转换**检查：spec 不穿参，可解性不再需要
                     // "摘走/放回"的编排（旧 pm_solvable_take/set 已随之删除）。
                     // 上下文先置于精化之下（dpm-nbe `subst sub ctx`）：env 槽
@@ -6865,17 +7051,62 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 Walk::Unreachable => {
+                    // 荒谬臂的嵌套位置不产生覆盖义务（参考版同款，v3 回归钉）
+                    self.pending_pos.clear();
                     self.errors
                         .push(format!("分支不可达：模式 {:?} 与被匹配类型不相容", pat));
                 }
             }
-            // 臂边界：回滚本臂的精化替换（O(1) 指针赋值）。本臂解出的 meta
-            // 不回滚（分支体 Tm 引用着它们，且解在 rename 时已把精化"烘焙"
-            // 为无 def 形式）。solvable 不回滚：各臂的槽按 cxt.lvl 确定性重
-            // 绑，上一臂的陈旧条目要么与本臂同层槽重合、要么永不以 bare
-            // rigid 进方程（其读点已解），与旧 pm_restore 截断等价。
+            // 臂边界：回滚本臂的精化替换与名字轨迹（本臂解出的 meta 保留
+            // ——分支体 Tm 引用着它们，且解在 rename 时已烘焙为无 def 形
+            // 式）。solvable 同步回滚：上一臂多绑的槽若残留，会让后续臂特
+            // 化方程中的瞬态 rigid（Λ 下钻产生的、超出本臂槽位的层级）被
+            // 误判为可解——臂序依赖的可达性漂移（stale-solvable 污染，
+            // 参考版 stale-solvable 回归钉）。
             mach.unwind_names(name_mark);
             self.sub = sub_snap;
+            self.solvable = solvable_snap;
+            self.cur_path.clear();
+        }
+        // 嵌套位置的覆盖检查（沿模式下钻逐节点，参考版同款）：每条记账在
+        // 记录臂的实例化（σ/solvable/lvl 快照）下探测字段 Sum 的可达构造
+        // 子；覆盖集 = 已走查臂的 PatternDetail 沿路径的结构贡献（var/Any
+        // = 全覆盖；祖先异 ctor = 不可达该位置；同 ctor 前缀 = 贡献其末端
+        // 构造子）。可达集取各记账臂探测的并集（保守）。荒谬臂 / 被遮蔽臂
+        // 不在 pats 里，天然不贡献覆盖——与运行时首匹配结构语义一致。
+        let mut reported = std::collections::HashSet::new();
+        for nc in std::mem::take(&mut self.nested_checks) {
+            // 字段 Sum 置于记录臂的终态 σ 之下再 force（参考版同款）
+            let field_sum = mach.force_v(bump, &decls, wrap_sub(bump, &nc.sub, nc.field_sum));
+            if !(v_tag(field_sum) == 7 && matches!(v_xcell_of(field_sum), XCell::Sum { .. })) {
+                continue;
+            }
+            for ctor in sum_case_names(field_sum) {
+                if !Self::probe_accessible(
+                    mach,
+                    bump,
+                    cxt,
+                    nc.lvl,
+                    field_sum,
+                    &ctor,
+                    &nc.sub,
+                    &nc.solvable,
+                ) {
+                    continue;
+                }
+                let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
+                    PosCover::All => true,
+                    PosCover::Ctor(n) => n == ctor,
+                    PosCover::None => false,
+                });
+                if !covered && reported.insert((nc.path.clone(), ctor.clone())) {
+                    self.errors.push(format!(
+                        "match 不完整：模式位置 {} 缺少构造子 {}",
+                        fmt_path(&nc.path),
+                        ctor
+                    ));
+                }
+            }
         }
         if self.errors.is_empty() {
             Ok(())
@@ -6888,11 +7119,14 @@ impl<'a> Compiler<'a> {
     /// 方程。探测不产生真槽——构造子绑定器用超出上下文的 scratch 层级
     /// 实例化（同为刚性、同可被方程解出，探测状态全在本地，弃掉即回滚）。
     /// 成功 = 该构造子可能出现在头部类型的值里；结构冲突
-    /// （`Vec[A] zero` 上不可能有 `cons`）= absurd。
+    /// （`Vec[A] zero` 上不可能有 `cons`）= absurd。`lvl` 显式穿参（参考
+    /// 版同款）：顶层探测传入口 `cxt.lvl`；嵌套位置的延迟探测传记账时的
+    /// 臂内层级。
     fn probe_accessible(
         mach: &mut Machine,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
+        lvl: u32,
         head_sum: V,
         ctor: &str,
         init_sub: &Rc<SubstV>,
@@ -6913,6 +7147,9 @@ impl<'a> Compiler<'a> {
             Some(e) => *e,
             None => return false,
         };
+        // 每个探测独立充值（参考版 probe_accessible 同点）：多构造子枚举
+        // 的逐 ctor 探测不互相挤占共享池，避免后探的 ctor 假 absurd。
+        mach.fuel.set(UNIFY_FUEL);
         let snap = mach.metas.clone();
         let decl = cxt.decl.borrow();
         let mut solvable = base_solvable.to_vec();
@@ -6929,7 +7166,7 @@ impl<'a> Compiler<'a> {
                     impl_idx += 1;
                     v
                 } else {
-                    let l = cxt.lvl + scratch;
+                    let l = lvl + scratch;
                     scratch += 1;
                     solvable.push(l);
                     v_lvl(l)
@@ -6946,8 +7183,13 @@ impl<'a> Compiler<'a> {
                         solvable: &solvable,
                         acc: sub.clone(),
                     };
-                    Self::unify_indices(mach, bump, cxt, &mut spec, head_sum, ret_sum, ctor)
+                    // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
+                    // （保守地要求覆盖）——反方向（判不可达 → 覆盖检查放过
+                    // 该构造子）会让深负载下的非穷尽 match 被静默接受。
+                    // 参考版 probe_accessible 同点。
+                    Self::unify_indices(mach, bump, cxt, lvl, &mut spec, head_sum, ret_sum, ctor)
                         .is_ok()
+                        || mach.fuel.get() == 0
                 };
             }
         };
@@ -6964,6 +7206,7 @@ impl<'a> Compiler<'a> {
         mach: &mut Machine,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
+        lvl: u32,
         spec: &mut SpecSolve<'_>,
         head_sum: V,
         ret_sum: V,
@@ -6981,7 +7224,7 @@ impl<'a> Compiler<'a> {
         }
         let decl = cxt.decl.borrow();
         for (a, b) in hp.iter().zip(rp.iter()) {
-            if !mach.unify_with(bump, &decl, cxt.lvl, a.val, b.val, Some(spec)) {
+            if !mach.unify_with(bump, &decl, lvl, a.val, b.val, Some(spec)) {
                 // fuel 耗尽的失败是"假 absurd"（预算问题非结构冲突），
                 // 文案带尾注供诊断——与 unify_catch 的同名尾注一致
                 let fuel_note = if mach.fuel_exhausted() {
@@ -7170,11 +7413,25 @@ impl<'a> Compiler<'a> {
                                 _ => false,
                             };
                         if is_ctor2 {
-                            // 解构：子 walk_con 入口绑自己的 head 槽
-                            // （槽值即本字段的实例化 rigid u）
-                            match self.walk_con(mach, bump, cn, csubs, dom, u, &cxt)? {
-                                Walk::Matched(d, c) => (d, c),
-                                Walk::Unreachable => return Ok(Walk::Unreachable),
+                            // 解构：子 walk_con 入口绑自己的 head 槽（槽值即
+                            // 本字段的实例化 rigid u）。同时记一笔待提升的嵌套
+                            // 位置，臂走查成功后以终态 σ 结算（参考版同款）。
+                            self.pending_pos.push((
+                                {
+                                    let mut p = self.cur_path.clone();
+                                    p.push((name.data.clone(), details.len()));
+                                    p
+                                },
+                                domf,
+                            ));
+                            self.cur_path.push((name.data.clone(), details.len()));
+                            let walked = self
+                                .walk_con(mach, bump, cn, csubs, dom, u, &cxt)?
+                                .matched();
+                            self.cur_path.pop();
+                            match walked {
+                                Some(dc) => dc,
+                                None => return Ok(Walk::Unreachable),
                             }
                         } else {
                             if !csubs.is_empty() {
@@ -7226,7 +7483,7 @@ impl<'a> Compiler<'a> {
             solvable: &self.solvable,
             acc: self.sub.clone(),
         };
-        let spec_res = Self::unify_indices(mach, bump, &cxt, &mut spec, head_sum, ret_sum, &name.data);
+        let spec_res = Self::unify_indices(mach, bump, &cxt, cxt.lvl, &mut spec, head_sum, ret_sum, &name.data);
         self.sub = spec.acc;
         if spec_res.is_err() {
             return Ok(Walk::Unreachable);
@@ -7688,6 +7945,16 @@ impl Tycker {
     pub(crate) fn run_decls(&mut self, ast: &[Decl]) -> Result<String, Error> {
         self.bump.reset();
         self.machine.clear_round();
+        // 轮尾/出错出口都归还本轮 arena 克隆（轮首 clear_round 覆盖不到
+        // "最后一轮"——Tycker 长存时其 σ 会挂到进程结束；归还后 arena 内
+        // XCell::VSub 的 Rc 悬垂，但本轮出口已无人再读 arena）
+        struct ReclaimOnExit;
+        impl Drop for ReclaimOnExit {
+            fn drop(&mut self) {
+                vsub_reclaim();
+            }
+        }
+        let _reclaim = ReclaimOnExit;
         let bump = &self.bump;
         let mut cxt = self.machine.prime_round(bump);
         let mut ret = String::new();

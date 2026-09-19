@@ -184,7 +184,10 @@ impl Infer {
     fn prune_meta(&mut self, decl: &Decls, pruning: Pruning, m: MetaVar) -> Result<MetaVar, UnifyError> {
         let mty = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a) => a.clone(),
-            _ => unreachable!(),
+            // force 在 fuel 耗尽时会把已解 meta 当未解返回（拒绝展开），
+            // 随后走到的剪枝/求解按合一失败降级，不 panic——与"fuel 耗尽
+            // 按未解失败"的既有降级故事一致（窗口：恰在 1→0 递减帧内）
+            _ => return Err(UnifyError),
         };
 
         let prune_ty = self.prune_ty(decl, &pruning, mty.clone())?;
@@ -255,7 +258,9 @@ impl Infer {
             SpinePruneStatus::OKRenaming | SpinePruneStatus::OKNonRenaming => {
                 match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(_) => m,
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force
+                    // 当未解返回后走到这里，按失败降级
+                    _ => return Err(UnifyError),
                 }
             }
             SpinePruneStatus::NeedsPruning => {
@@ -444,7 +449,9 @@ impl Infer {
     ) -> Result<(), UnifyError> {
         let mty = match self.meta[m.0 as usize] {
             MetaEntry::Unsolved(ref a) => a.clone(),
-            _ => unreachable!(),
+            // fuel 耗尽窗口（同 prune_meta 注）：已解 meta 被 force 当未解
+            // 返回后走到求解臂，按合一失败降级而不是 panic
+            _ => return Err(UnifyError),
         };
 
         // spine 非线性时，检查这些参数能从 meta 类型里剪掉（保证解是良型的）
@@ -792,22 +799,30 @@ impl Infer {
                 }
                 Ok(())
             }
-            // SumCase：同构造子才比；只比 datas（L07a 同款）。**不比 typ**：
-            // typ 的索引槽就是这些值自身的构造子形态（succ ?l 的 typ 里
-            // len 槽是 succ ?l），比 typ 必然在互相引用上深递归；
-            // 索引等式的比较发生在**外层 Sum-Sum 的参数 zip**里。
+            // SumCase：同构造子才比；只比 datas（L07a 同款）。**不比 typ 的
+            // 值**：typ 的索引槽就是这些值自身的构造子形态（succ ?l 的 typ
+            // 里 len 槽是 succ ?l），比值必然在互相引用上深递归；索引等式
+            // 的比较发生在**外层 Sum-Sum 的参数 zip**里。但**比 Sum 头名
+            // 字**：跨 enum 重名构造子（E1.c / E2.c）是两个不同值，同
+            // case_name 不足以判定身份——头名不同直接失败，构造子身份判
+            // 据局部化，不押"喂进方程的两侧必齐型"这条未检查的不变式。
             (
                 Val::SumCase {
+                    typ: ta,
                     case_name: ca,
                     datas: params_a,
-                    ..
                 },
                 Val::SumCase {
+                    typ: tb,
                     case_name: cb,
                     datas: params_b,
-                    ..
                 },
             ) if ca.data == cb.data => {
+                if let (Val::Sum(na, _, _), Val::Sum(nb, _, _)) = (ta.as_ref(), tb.as_ref()) {
+                    if na.data != nb.data {
+                        return Err(UnifyError);
+                    }
+                }
                 for (a, b) in params_a.iter().zip(params_b.iter()) {
                     self.unify(
                         decl,

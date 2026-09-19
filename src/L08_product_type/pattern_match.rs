@@ -35,11 +35,12 @@ use std::rc::Rc;
 use super::{
     Env, Error, Infer, Lvl, Subst, Tm, Val,
     val_mentions_lvl, wrap_sub,
+    cover_at, fmt_path,
     cxt::{Cxt, Decls},
     empty_span,
     parser::syntax::{Icit, Pattern, Raw},
     unification::SpecSolve,
-    PatternDetail,
+    PatternDetail, PosCover,
 };
 
 pub struct Compiler {
@@ -54,11 +55,44 @@ pub struct Compiler {
     /// 只经 `SpecSolve` 穿参给方程合一；分支体检查走常规转换（spec 缺席），
     /// 不得解假设。
     solvable: Vec<Lvl>,
+    /// 嵌套覆盖检查的记账（走查中收集，臂循环结束后统一探测）。顶层
+    /// 覆盖检查只遍历 scrutinee 类型的构造子；嵌套 `Con` 字段位置的可达
+    /// 性从未被枚举会让非穷尽 match 被静默接受（P0，2026-09-18）。
+    /// 两段式：走查中只记 (路径, 字段 Sum)；臂走查**成功后**（特化方程
+    /// 已解出、σ 为终态）才提升为带 σ/solvable/lvl 快照的完整记账——
+    /// 字段走查时外层方程尚未解出，索引精化不在 σ 里，此时探测会把已
+    /// 精化下不可达的构造子误判可达。整臂 Unreachable 时丢弃（其位置
+    /// 不产生覆盖义务，语义由"分支不可达"报错承担，v3 回归钉）。
+    nested_checks: Vec<NestedCheck>,
+    /// 本臂走查中的待提升位置（臂边界结算）。
+    pending_pos: Vec<(Vec<(String, usize)>, Val)>,
+    /// 当前下钻路径（根到当前字段的 ctor 选择链），臂内 push/pop 平衡。
+    cur_path: Vec<(String, usize)>,
+}
+
+/// 一个嵌套拆分位置的记账：路径 = 根到被拆字段的 (构造子名, 字段下标)
+/// 链；`field_sum` 是该字段在记录臂实例化下的 Sum 值；σ/solvable/lvl 是
+/// 记录时刻的走查状态快照（延迟探测要在与臂内方程同构的状态下跑）。
+struct NestedCheck {
+    path: Vec<(String, usize)>,
+    field_sum: Val,
+    sub: Rc<Subst>,
+    solvable: Vec<Lvl>,
+    lvl: Lvl,
 }
 
 enum Walk {
     Matched(PatternDetail, Cxt),
     Unreachable,
+}
+
+impl Walk {
+    fn matched(self) -> Option<(PatternDetail, Cxt)> {
+        match self {
+            Walk::Matched(d, c) => Some((d, c)),
+            Walk::Unreachable => None,
+        }
+    }
 }
 
 impl Compiler {
@@ -68,6 +102,9 @@ impl Compiler {
             pats: Vec::new(),
             sub: Rc::new(Subst::default()),
             solvable: Vec::new(),
+            nested_checks: Vec::new(),
+            pending_pos: Vec::new(),
+            cur_path: Vec::new(),
         }
     }
 
@@ -101,7 +138,7 @@ impl Compiler {
         // 可达性 = 在（meta + σ + 本地可解集）快照回滚下跑一次特化方程
         // （与臂内走查同一套判定）。
         for ctor in head_sum.sum_cases() {
-            if Self::probe_accessible(infer, cxt, &head_sum, &ctor, &self.sub, &self.solvable)
+            if Self::probe_accessible(infer, cxt, cxt.lvl, &head_sum, &ctor, &self.sub, &self.solvable)
                 && !arms
                     .iter()
                     .any(|(pat, _)| covers(pat, &ctor.data, &ctor_names))
@@ -118,8 +155,21 @@ impl Compiler {
                 continue;
             }
             let sub_snap = self.sub.clone();
+            let solvable_snap = self.solvable.clone();
             match self.walk(infer, pat.clone(), scrut_ty.clone(), head_val.clone(), cxt)? {
                 Walk::Matched(detail, cxt_arm) => {
+                    // 嵌套位置结算：此刻本臂全部特化方程已解出、σ 为终态，
+                    // 字段 Sum 置于 σ 之下再探测才能看到索引精化（如
+                    // `Vec[A] (succ n)` 的尾部上 `nil` 不可达）。
+                    for (path, field_sum) in std::mem::take(&mut self.pending_pos) {
+                        self.nested_checks.push(NestedCheck {
+                            path,
+                            field_sum,
+                            sub: self.sub.clone(),
+                            solvable: self.solvable.clone(),
+                            lvl: cxt_arm.lvl,
+                        });
+                    }
                     // 分支体走**常规转换**检查：spec 不穿参，可解性不再需要
                     // "摘走/放回"的编排（旧 pm_solvable_take/set 已随之删除）。
                     // 上下文先置于精化之下（dpm-nbe `subst sub ctx`）：env 槽
@@ -146,16 +196,63 @@ impl Compiler {
                     }
                 }
                 Walk::Unreachable => {
+                    // 荒谬臂的嵌套位置不产生覆盖义务：臂本身的"分支不可达"
+                    // 报错已承担语义（v3_absurd_nested_pattern_both_errors 钉）
+                    self.pending_pos.clear();
                     self.errors
                         .push(format!("分支不可达：模式 {:?} 与被匹配类型不相容", pat));
                 }
             }
             // 臂边界：回滚本臂的精化替换（O(1) 指针赋值）。本臂解出的
             // meta 不回滚（分支体 Tm 引用着它们，且解在 rename 时已把精化
-            // "烘焙"为无 def 形式）。solvable 不回滚：各臂的槽按 cxt.lvl
-            // 确定性重绑，上一臂的陈旧条目要么与本臂同层槽重合、要么永不
-            // 以 bare rigid 进方程（其读点已解），与旧 pm_restore 截断等价。
+            // "烘焙"为无 def 形式）。solvable 同步回滚：上一臂多绑的槽若
+            // 残留，会让后续臂特化方程中的瞬态 rigid（Λ 下钻产生的、超出
+            // 本臂槽位的层级）被误判为可解——臂序依赖的可达性漂移
+            // （stale-solvable 污染，stale-solvable 回归钉）。
             self.sub = sub_snap;
+            self.solvable = solvable_snap;
+            self.cur_path.clear();
+        }
+        // 嵌套位置的覆盖检查（沿模式下钻逐节点）：每条记账在记录臂的
+        // 实例化（σ/solvable/lvl 快照）下探测字段 Sum 的可达构造子；
+        // 覆盖集 = 已走查臂的 PatternDetail 沿路径的结构贡献（var/Any =
+        // 全覆盖；祖先异 ctor = 不可达该位置；同 ctor 前缀 = 贡献其末端
+        // 构造子）。可达集取各记账臂探测的并集（保守：任一臂实例化下
+        // 可达的构造子都要求被覆盖）。荒谬臂 / 被遮蔽臂不在 pats 里，
+        // 天然不贡献覆盖——与运行时首匹配结构语义一致。
+        let mut reported = std::collections::HashSet::new();
+        for nc in std::mem::take(&mut self.nested_checks) {
+            // 字段 Sum 置于记录臂的终态 σ 之下再 force：索引精化（如尾部
+            // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型
+            let field_sum = match infer.force(cxt.decl(), wrap_sub(&nc.sub, nc.field_sum.clone())) {
+                s @ Val::Sum(..) => s,
+                _ => continue,
+            };
+            for ctor in field_sum.sum_cases() {
+                if !Self::probe_accessible(
+                    infer,
+                    cxt,
+                    nc.lvl,
+                    &field_sum,
+                    &ctor,
+                    &nc.sub,
+                    &nc.solvable,
+                ) {
+                    continue;
+                }
+                let covered = self.pats.iter().any(|(d, _)| match cover_at(d, &nc.path) {
+                    PosCover::All => true,
+                    PosCover::Ctor(n) => n == ctor.data,
+                    PosCover::None => false,
+                });
+                if !covered && reported.insert((nc.path.clone(), ctor.data.clone())) {
+                    self.errors.push(format!(
+                        "match 不完整：模式位置 {} 缺少构造子 {}",
+                        fmt_path(&nc.path),
+                        ctor.data
+                    ));
+                }
+            }
         }
         if self.errors.is_empty() {
             Ok(())
@@ -169,9 +266,12 @@ impl Compiler {
     /// 实例化（同为刚性、同可被方程解出，探测状态全在本地，弃掉即回滚）。
     /// 成功 = 该构造子可能出现在头部类型的值里；结构冲突
     /// （`Vec[A] zero` 上不可能有 `cons`）= absurd。
+    /// `lvl` 显式穿参：顶层探测传入口 `cxt.lvl`；嵌套位置的延迟探测传
+    /// 记账时的臂内层级（scratch 层级必须落在该臂全部真槽之外）。
     fn probe_accessible(
         infer: &mut Infer,
         cxt: &Cxt,
+        lvl: Lvl,
         head_sum: &Val,
         ctor: &Span<String>,
         init_sub: &Rc<Subst>,
@@ -192,6 +292,10 @@ impl Compiler {
             Some(e) => e,
             None => return false,
         };
+        // 每个探测独立充值：多构造子枚举的逐 ctor 探测不互相挤占共享池
+        // （探测本身回滚，只有燃料单向消耗——前置时深负载下后探的 ctor
+        // 会假 absurd，与臂内方程的判定不同步）。孪生版同点充值。
+        infer.meta_refuel();
         let snap = infer.meta_snapshot();
         let decl = cxt.decl().clone();
         let mut solvable = base_solvable.to_vec();
@@ -207,7 +311,7 @@ impl Compiler {
                         impl_idx += 1;
                         v
                     } else {
-                        let l = Lvl(cxt.lvl.0 + scratch);
+                        let l = Lvl(lvl.0 + scratch);
                         scratch += 1;
                         solvable.push(l);
                         Val::vvar(l)
@@ -224,8 +328,12 @@ impl Compiler {
                             solvable: &solvable,
                             acc: sub.clone(),
                         };
-                        Self::unify_indices(infer, cxt, &mut spec, head_sum, &ret_sum, &ctor.data)
+                        // fuel 耗尽的失败是预算问题而非结构冲突：按可达处理
+                        // （保守地要求覆盖）。反方向（判不可达 → 覆盖检查放
+                        // 过该构造子）会让深负载下的非穷尽 match 被静默接受。
+                        Self::unify_indices(infer, cxt, lvl, &mut spec, head_sum, &ret_sum, &ctor.data)
                             .is_ok()
+                            || infer.fuel_exhausted()
                     };
                 }
             }
@@ -243,6 +351,7 @@ impl Compiler {
     fn unify_indices(
         infer: &mut Infer,
         cxt: &Cxt,
+        lvl: Lvl,
         spec: &mut SpecSolve<'_>,
         head_sum: &Val,
         ret_sum: &Val,
@@ -259,7 +368,7 @@ impl Compiler {
             infer
                 .unify(
                     cxt.decl(),
-                    cxt.lvl,
+                    lvl,
                     cxt,
                     a.1.as_ref().clone(),
                     b.1.as_ref().clone(),
@@ -450,18 +559,33 @@ impl Compiler {
                             (PatternDetail::Any(span), c)
                         }
                         Some(Pattern::Con(cn, csubs, _)) => {
-                            let is_ctor = matches!(
-                                infer.force(cxt.decl(), wrap_sub(&self.sub, dom.clone())),
+                            let field_sum =
+                                infer.force(cxt.decl(), wrap_sub(&self.sub, dom.clone()));
+                            let is_ctor = matches!(&field_sum,
                                 Val::Sum(_, _, cases) if cases.iter().any(|c| c.data == cn.data)
                             );
                             if is_ctor {
                                 // 解构：子 walk_con 入口绑自己的 head 槽
-                                // （槽值即本字段的实例化 rigid u）
-                                match self.walk_con(
-                                    infer, cn, csubs, dom.clone(), u.clone(), &cxt,
-                                )? {
-                                    Walk::Matched(d, c) => (d, c),
-                                    Walk::Unreachable => return Ok(Walk::Unreachable),
+                                // （槽值即本字段的实例化 rigid u）。同时记一笔
+                                // 待提升的嵌套位置（该字段位置沿 ctor 路径的
+                                // 可达构造子必须有臂覆盖），臂走查成功后以终
+                                // 态 σ 结算（见 compile）。
+                                self.pending_pos.push((
+                                    {
+                                        let mut p = self.cur_path.clone();
+                                        p.push((name.data.clone(), details.len()));
+                                        p
+                                    },
+                                    field_sum.clone(),
+                                ));
+                                self.cur_path.push((name.data.clone(), details.len()));
+                                let walked = self
+                                    .walk_con(infer, cn, csubs, dom.clone(), u.clone(), &cxt)?
+                                    .matched();
+                                self.cur_path.pop();
+                                match walked {
+                                    Some(dc) => dc,
+                                    None => return Ok(Walk::Unreachable),
                                 }
                             } else {
                                 if !csubs.is_empty() {
@@ -513,7 +637,7 @@ impl Compiler {
             solvable: &self.solvable,
             acc: self.sub.clone(),
         };
-        let spec_res = Self::unify_indices(infer, &cxt, &mut spec, &head_sum, &ret_sum, &name.data);
+        let spec_res = Self::unify_indices(infer, &cxt, cxt.lvl, &mut spec, &head_sum, &ret_sum, &name.data);
         self.sub = spec.acc;
         if spec_res.is_err() {
             return Ok(Walk::Unreachable);

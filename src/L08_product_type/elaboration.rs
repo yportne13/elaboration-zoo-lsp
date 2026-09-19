@@ -2,7 +2,7 @@ use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Tm, Val,
+    Closure, Cxt, DeclTm, Error, Infer, Lvl, Tm, Val,
     cxt::DeclEntry,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
@@ -363,6 +363,10 @@ impl Infer {
                         });
                     let typ_tm = self.check(&cxt, ctor_ty, Val::U)?;
                     let vtyp = self.eval(cxt.decl(), &cxt.env, typ_tm.clone());
+                    // 构造子良构性（2026-09-18）：ret 必须是本 enum 的 Sum
+                    // 且参数位是 telescope 内的 bare rigid（防 phantom 构造
+                    // 子注入，见 check_ctor_wf）
+                    self.check_ctor_wf(&cxt, &name.data, &ctor_name.data, vtyp.clone())?;
                     let t_tm = self.check(&cxt, bod, vtyp.clone())?;
                     let vt = self.eval(cxt.decl(), &cxt.env, t_tm.clone());
                     let entry = DeclEntry {
@@ -379,6 +383,68 @@ impl Infer {
                 Ok((DeclTm::Enum, Val::U, cxt))
             }
         }
+    }
+
+    /// 构造子返回类型良构性：实例化构造子类型的全部绑定器后，ret 的
+    /// WHNF 必须是 `enum_name` 的 `Sum`，且其隐式参数位逐一等于 telescope
+    /// 内的 bare rigid。允许构造子重绑定参数（`p[A,B](a,b) -> Pack[A][B]
+    /// a b`——使用点经特化方程解回枚举参数，多索引 GADT 钉），
+    /// 拒绝参数位为非变量的特化（`c -> Foo[Bool]`）与非本 enum 的 ret
+    /// （`c -> Nat`）：后者向构造子名字空间注入永不匹配任何模式的
+    /// phantom 值，对覆盖检查完备的 match 在封闭输入上卡死。
+    fn check_ctor_wf(
+        &mut self,
+        cxt: &Cxt,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: Val,
+    ) -> Result<(), Error> {
+        let decl = cxt.decl();
+        let base = cxt.lvl.0;
+        let mut ty = ctor_vtyp;
+        let mut bound = 0u32;
+        let ret = loop {
+            match self.force(decl, ty) {
+                Val::Pi(_, _, _, closure) => {
+                    let u = Val::vvar(Lvl(base + bound));
+                    bound += 1;
+                    ty = self.closure_apply(decl, &closure, u);
+                }
+                ret => break ret,
+            }
+        };
+        let ret_sum = match self.force(decl, ret) {
+            s @ Val::Sum(..) => s,
+            _ => {
+                return Err(Error(format!(
+                    "构造子 {ctor_name} 的返回类型不是和类型"
+                )))
+            }
+        };
+        let (sname, sparams) = match &ret_sum {
+            Val::Sum(n, ps, _) => (n, ps),
+            _ => unreachable!(),
+        };
+        if sname.data != enum_name {
+            return Err(Error(format!(
+                "构造子 {ctor_name} 的返回类型是 {}，不是 {enum_name}",
+                sname.data
+            )));
+        }
+        let non_rigid = sparams
+            .iter()
+            .filter(|(_, _, _, i)| *i == Icit::Impl)
+            .map(|(_, v, _, _)| v.as_ref())
+            .find(|v| {
+                !matches!(v, Val::Rigid(l, sp) if base <= l.0 && l.0 < base + bound && sp.is_empty())
+            });
+        if let Some(v) = non_rigid {
+            let _ = v;
+            return Err(Error(format!(
+                "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+            )));
+        }
+        Ok(())
     }
 
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {

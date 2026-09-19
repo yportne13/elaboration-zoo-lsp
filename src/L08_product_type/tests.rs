@@ -1718,3 +1718,198 @@ println "\\"
     );
     assert_eq!(out, "\na\"b\n\\\n");
 }
+
+// --------------------------------------------------------------------------------
+// 2026-09-18 评审回归钉（四角度评审 + 修复轮，自 L07 同款移植）：
+// 嵌套覆盖检查 / stale-solvable 臂序污染 / 构造子良构性。
+
+/// P0（嵌套覆盖缺失）：nil 臂 + cons(h, nil) 臂缺 cons(h, cons(..))——
+/// 修复前静默接受、运行期在尾部为 cons 的值上卡住；修复后报模式位置缺失。
+#[test]
+fn test_nested_coverage_gap() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+    }
+"#,
+    );
+    assert!(msg.contains("缺少构造子 cons"), "{msg}");
+}
+
+/// P0（嵌套覆盖缺失，三层）：深度 2 的嵌套位置缺 cons。
+#[test]
+fn test_nested_coverage_gap3() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, nil)) => h2
+    }
+"#,
+    );
+    assert!(msg.contains("缺少构造子 cons"), "{msg}");
+}
+
+/// P1（stale-solvable 臂序污染）：big 臂（5 槽）在前时，其陈旧可解条目
+/// 让后续 ident 荒谬臂的瞬态 η 被误判可解——修复前静默接受（臂序依赖），
+/// 修复后两种臂序一致报"分支不可达"。
+#[test]
+fn test_stale_solvable_order_independent() {
+    for arms in [
+        "case big(a, b, c, d) => a\n        case ident => zero\n        case mk => succ zero",
+        "case ident => zero\n        case big(a, b, c, d) => a\n        case mk => succ zero",
+    ] {
+        let src = format!(
+            r#"
+enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum W(f: Nat -> Nat) {{
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
+    mk -> W (n => succ zero)
+    ident -> W (n => n)
+}}
+
+def t(w: W (n => succ zero)): Nat =
+    match w {{
+        {arms}
+    }}
+"#
+        );
+        let msg = check_err(&src);
+        assert!(msg.contains("分支不可达"), "{msg}");
+    }
+}
+
+/// P1（构造子良构性）：ret 不是本 enum——c -> Nat 向构造子名字空间注入
+/// phantom 值（对 Nat 的覆盖完备 match 在该值上卡死），修复后注册期拒绝。
+#[test]
+fn test_ctor_wf_external_ret() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#,
+    );
+    assert!(msg.contains("不是 Foo"), "{msg}");
+}
+
+/// P1（构造子良构性）：参数位特化——隐式参数位是 Bool 而非参数变量，
+/// 修复后拒绝（特化请走显式索引）。
+#[test]
+fn test_ctor_wf_param_specialized() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Foo[A] {
+    c -> Foo[Bool]
+}
+"#,
+    );
+    assert!(msg.contains("参数变量"), "{msg}");
+}
+
+/// 两段式结算的正向钉（v3_len_two_nested_pattern_refine 同款）：`Vec[Nat]
+/// two` 上嵌套两层 cons——外层方程解出 `l := succ zero` 后，字段 Sum 置于
+/// 终态 σ 下 force，内层位置才正确判出 cons 可达、nil 不可达。若在字段
+/// 走查中途早记 σ（第一版实现），外层解不在其中，内层 cons 会被误判
+/// 可达并报缺 nil。
+#[test]
+fn test_nested_pattern_refine_two_phase() {
+    let out = check(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def two = succ (succ zero)
+
+def len_two(v: Vec[Nat] two): Nat =
+    match v {
+        case cons(h, cons(h2, t)) => h2
+    }
+
+println (len_two (cons zero (cons two nil)))
+"#,
+    );
+    assert_eq!(out, "Nat::succ(Nat::succ(Nat::zero))\n");
+}
+
+/// 荒谬臂不产生覆盖义务（v3_absurd_nested_pattern_both_errors 同款）：
+/// `Vec[Nat] (succ zero)` 上的 `cons(h, cons(h2, t))`——内层 cons 结构
+/// 冲突 → 整臂不可达；nil 在该头部类型上同样不可达 → 不计覆盖要求
+/// （只报不可达一条，不叠加"缺 nil"）。
+#[test]
+fn test_absurd_nested_pattern_not_missing_coverage() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def bad(v: Vec[Nat] (succ zero)): Nat =
+    match v {
+        case cons(h, cons(h2, t)) => h2
+    }
+"#,
+    );
+    assert!(msg.contains("分支不可达"), "err: {msg}");
+    assert!(
+        !msg.contains("缺少构造子"),
+        "nil 在 succ zero 上不可达，不应报缺:\n{msg}"
+    );
+}
