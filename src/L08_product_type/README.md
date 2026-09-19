@@ -8,6 +8,17 @@ Tm/Val 变体**：`struct` 是语法糖——脱糖成**单构造子 enum**
 以接收者卡住投影精确实例化，§2）；合一臂只补了一条——`unify` 的
 `(Obj, Obj)` 合同臂（§2，L07 潜伏缺口的修复而非新语义）。
 
+匹配编译器现状（2026-09 登记）：本层的 `match` 编译继承 L07 重写后的
+**逐臂下钻**实现（`pattern_match.rs`，编译期保持用户书写顺序 = 运行时
+首匹配）——决策树矩阵从未在本层存在。2026-09-17 的算法级诊断
+（`docs/l09l13-match-compiler-analysis-2026-09-17.md`）确认 L09–L13 的
+决策树才是 match 慢的根因后，是 L09–L13 反过来以 L07/L08 这套逐臂实现
+为蓝本整体重写（L09 `09b9ee8`、L10 `4e97743`、L11 `6ae12a6`、L12
+`45330e6`、L13 `448775c`），本层无需改动。覆盖检查是**值级结构探测**
+（`probe_accessible`：meta+σ 快照回滚、构造子绑定器用 scratch 层级、
+逐构造子独立充值燃料、索引方程 `unify_indices` 头部在前），参考版与
+孪生同构。
+
 ## 1. 语言特性
 
 ```text
@@ -98,7 +109,8 @@ Lam 的 η 递归臂 `unify(l+1, …)` 时 **cxt 不推进**（η binder 的类�
 η 展开后进入 Pi 域 quote），release 构建静默降级成错误的 de Bruijn
 索引。修法：Pi 臂 quote 改用**当前层级 `l`**（cxt 只服务显示名字表，
 对不上时 `go_ix` 有 `@i` 兜底）。孪生版结构不同（Pi 臂不 quote 域值），
-无此路径。L07 同码潜伏（其测试集恰好无触发用例），可择机回合。
+无此路径。L07 的同码位点已在 2026-09 连贯性评审中回合（见
+`../L07_sum_type/README.md` §6「连贯性评审」行）。
 
 ## 6. 性能孪生（`bump_spine_iter`）
 
@@ -123,6 +135,37 @@ Machine 常驻缓冲（`'static` 存放口径 + 进核前 clear，quote memo 同
 容量复用）；`clear_round` 补清 `spine.stack`（稳态复用内存有界）；
 `decl_insert` 覆盖写免键串重分配；`infer_decl` 无参时零克隆 Raw。
 
+### decl 表条目 Rc 化（参考版，2026-09-17 `370fb3f`）
+
+参考版 decl 表从 `HashMap<SmolStr, DeclEntry>` 改为
+`HashMap<SmolStr, Rc<DeclEntry>>`（`cxt.rs` 的 `Decls` 类型别名；
+`decl_insert` 侧包 `Rc::new`、`decl_get` 解引用、`mod.rs` 的
+`simpl_decl` 同步）。写时复制的整表克隆从「逐条深拷贝 `Val`」降为
+「重建哈希桶 + 逐条 Rc 递增」——`Val` 的深拷贝对 `Lam`/`Pi` 是整棵
+`Box<Tm>` 闭包树、对 `LiteralIntro` 是 String 分配，那才是克隆的主项；
+每条的常数从值深拷贝降为一次引用计数。机制与 L07 同款（对照
+`../L07_sum_type/README.md` §10「decl 表平铺化」段与
+`docs/perf-l07-2026-09-17.md`）。
+
+语义不变：条目构造后无处 `&mut`，表仍是写时复制，「占位只对本定义的
+检查可见」的递归纪律原样保留——`l08_fast_parity` 是这条等价性的
+oracle。孪生侧不受影响：平铺表 `Rc<RefCell<FxHashMap>>` 的覆盖写本就
+O(1)（§6 首段「decl 表平铺化」），两版都保留写时复制/覆盖的**语义**
+差别（参考版克隆出的父上下文看不到占位，快版因父上下文在体检查期间
+不被读而等效）。
+
+传播范围止于 L07/L08（`370fb3f` 提交说明的同族排查结论）：L11–L13 的
+decl 值本就是 Rc 元组（克隆已浅），L09/L10 用 `global: HashMap<Lvl,
+VTy>` 层级化全局表而非名字键 decl 表，无此形态（见
+`../L09_mltt/README.md` §2）。净效果（对照 09-12 存档，
+`docs/bench-matrix-2026-09-18.md` §2）：struct basic 1728.7 → 135.2 ms
+（0.078×）、strchain 2158.4 → 124.3（0.058×）、global 465.2 → 134.7
+（0.289×）、match 0.412 → 0.143（0.347×）、enum 0.565 → 0.311
+（0.550×）、church 持平（4.207 → 4.016，在跨窗漂移内）；同窗口交错
+A/B 的 L07 数据为 strchain k=11 1902 → 125 ms（15.1×）。旧基准表的
+struct basic k=10/k=11 格子（860.1 / 3242.9 ms）即该悬崖在 k≤11 的
+可见段，已随本修复消失（新表 k=11 basic 135.2 ms）。
+
 ### 双 oracle
 
 `cargo test --test l08_fast_parity`（74 例）：DEMO 全串（含积类型段）、
@@ -141,41 +184,43 @@ church / strchain / global / match / enum / **struct**（快版 `Tycker`
 cargo run --release --bin l08bench -- --workload all --max-k 13 --rounds 3
 ```
 
+实测（`docs/bench-matrix-2026-09-18.md` §3 的 L08 行：隔离进程、
+`--max-k 11`（`enum` 取 k=9）、`--rounds 3`、每格取 min；Windows 10，
+release。取代本节旧表——旧表数字是 09-12/09-16 两轮口径，其中
+strchain/global/struct 的 basic 分钟级格子已被 decl 条目 Rc 化消除，
+见上小节）：
+
+| 负载 | k | basic (ms) | fast_ss (ms) | basic/fast_ss |
+|---|---|---|---|---|
+| church | 11 | 4.016 | 0.313 | 12.8× |
+| strchain | 11 | 124.285 | 3.381 | 36.8× |
+| global | 11 | 134.657 | 6.220 | 21.6× |
+| match | 11 | 0.143 | 0.048 | 3.0× |
+| enum | 9 | 0.311 | 0.077 | 4.0× |
+| struct | 11 | 135.205 | 4.340 | 31.2× |
+
+- `fast` 列（非稳态口径）与各 k 档全量数字同见矩阵文档；对照 09-12
+  存档的净效果表（同文档 §2）即上小节 Rc 化的数字来源。跨窗可比性由
+  未改动的对照层支撑（L03/L05/L06 与 09-12 存档逐格 0.979–1.004×）。
+- `strchain` 的剩余差距是**负载本身的超线性**（`string_concat` 逐层
+  复制 O(n) 字节 → 总量 O(n²) 字节），孪生版同样如此（同 L07 口径）；
+  `global`/`struct` 对孪生的差距（21.6×/31.2×）已缩到常数因子——旧表
+  中 struct 的秒级 basic 格子是 decl 条目 Rc 化之前的悬崖（见上小节），
+  与引擎语义无关。
+- `l08bench` 的**轮级交错计时**（此前 fast_ss 块恒先于 fast 执行、
+  时间窗漂移被 ss 单侧吸收，制造 ~10% 假性稳态劣势）已并入 bench
+  二进制；矩阵口径另用隔离进程逐格 min，两者独立。
+
 `struct_src`（**L08 特色负载**）：固定 4 层嵌套 Box（类型级 `.mk`
 剥链 + 左结合投影链 `p.inner.v` + 一个浅嵌套种子值）+ 2^(k+1) 层
 **浅值投影 def 链**（`def q{i} : Nat = get_x(new P(q{i-1}, zero))`——
 每层一次构造子 β + 类型级投影 + 合一）。末值 = `zero`（nf 节点数 = 2）。
-设计注记：**不**用深嵌套值链（`b_i` 含 `b_{i-1}` 直到底）作主负载——
-参考版 decl 表 `Rc` 写时复制 + `Val` 深拷贝下，插入第 n 个 def 要整体
-克隆深度 i 的值树，复杂度 O(n³)（k=700 即分钟级）；孪生的平铺表无此
-问题，但双 oracle 同负载对比就失去意义。**这是参考版表示的成本，不是
-语义的**——积类型的深值恰是孪生最该赢的地方，留给读者。
-
-实测（Windows 10，release，**轮级交错计时**、取 min：同轮内依次跑各
-实现，消除时间窗相关的系统性偏置——此前 fast_ss 块恒先于 fast 执行，
-环境漂移被 ss 单侧吸收，制造出假性的稳态劣势；fast/fast_ss 15 轮、
-basic 3 轮；参考版超线性负载只列 k≤11，同 L07 readme 惯例）：
-
-```text
-== workload: church ==（check + nf）
-k=12  n=8192    fast=0.801ms         basic=9.740ms      (≈12×)
-== workload: strchain ==（每层 prim 触发；basic 二次方）
-k=11  n=4096    fast=6.013ms*        basic=2648.0ms     (≈440×)
-== workload: global ==（可变全局 + 重入 prim）
-k=11  n=4096    fast=7.802ms*        basic=508.1ms      (≈65×)
-== workload: match ==（L07 特色：自递归依赖 match def 链）
-k=13  n=16384   fast_memo=0.049ms*   basic=0.539ms      (≈11×)
-== workload: enum ==（L07 特色：GADT + 投影 + 索引等式）
-fast=0.086ms          basic=0.741ms      (≈9×)
-== workload: struct ==（**L08 特色**：类型级 .mk 剥链 + new 构造链）
-k=9   n=1024    fast=1.081ms*        basic=215.9ms      (≈200×)
-k=10  n=2048    fast=2.186ms*        basic=860.1ms      (≈393×)
-k=11  n=4096    fast=4.432ms*        basic=3242.9ms     (≈732×)
-```
-
-交错后 fast_ss 与 fast 打平或反超（struct k=11 ss=4.453 vs
-fast=4.432，church k=12 ss 反超 7%）——稳态复用的内存有界优势不再被
-测量偏置掩盖。
+设计注记：负载刻意用**浅**值链——旧参考版 decl 表写时复制按值深拷贝
+时，深嵌套值链（`b_i` 含 `b_{i-1}` 直到底）会让插入第 n 个 def 克隆
+深度 i 的值树、总代价 O(n³)（k=700 即分钟级），双 oracle 同负载对比
+失去意义。条目 Rc 化（见上小节）已消除该悬崖，负载形态保持不变以
+维持与矩阵历史可比；深嵌套值链负载两侧如今都可跑但仍缺——积类型的
+深值恰是孪生 arena 表示与参考版真树的差异面，留给后续负载画像。
 
 ### 已知偏差（与参考版）
 
