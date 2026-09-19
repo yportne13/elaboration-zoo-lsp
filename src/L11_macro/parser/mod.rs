@@ -767,7 +767,24 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                         .parse(input_t, state)?;
                     let (input_t, _) = (kw(EndLine).option(), kw(RParen)).parse(input_t, state)?;
                     input = input_t;
-                    rhs.into_iter().fold(lhs, Raw::app)
+                    if rhs.len() == 1 {
+                        // 单实参括号组 `a (b)`：与相邻实参同项（App(a, b) ≡
+                        // `a b`）。以逃逸哨兵 icit 折叠（见 SPINE_ESCAPE），
+                        // 由 p_spine 结算成相邻实参——否则 `lcons zero
+                        // (lcons zero lnil)` 被读成
+                        // `lcons (zero (lcons zero lnil))`，调用点误报
+                        // can't unify（同 L13 完备性缺陷 2026-09-19）。
+                        let arg = rhs.into_iter().next().unwrap();
+                        Raw::App(
+                            Box::new(lhs),
+                            Box::new(arg),
+                            Either::Name(op.map(|_| SPINE_ESCAPE.to_owned())),
+                        )
+                    } else {
+                        // 多实参逗号调用 `f(a, b)` / 空组 `f()`：真实调用，
+                        // 读法不变。
+                        rhs.into_iter().fold(lhs, Raw::app)
+                    }
                 } else if &op.data == "{" {
                     // Dead code — the `{` operator is disabled above.
                     let (input_t, rhs) = p_raw
@@ -916,13 +933,99 @@ fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     arg_parser.parse(input, state)
 }
 
+/// 单实参括号组「逃逸」哨兵 icit：`a (b)` 的后缀 `(`-call 折叠出的 App 以
+/// `Either::Name(SPINE_ESCAPE)` 记 icit。用户语法 `[name=..]` 的名字来自
+/// Ident 词法单元（不能为空/含 NUL），哨兵不可能撞名。p_spine 结算：
+/// 顶层带标记的**头/显式实参**拆成相邻实参（`f a (b)` 读作 `f a b`，
+/// 修复 `lcons zero (lcons zero lnil)` 被读成 `lcons (zero (lcons …))`
+/// 导致调用点 can't unify 的误解析）；埋在算符/后缀之下的标记由
+/// `strip_spine_escapes` 剥回 Expl，保持调用读法（`succ (x) + y`、
+/// `xs.map (f).length`、`f a (b) (c)` 内层语义不变）。多实参逗号调用
+/// （`f(a, b)`，含带空格的 `xs.elem (x, eq)`）与空组（`f()`）从不标记。
+/// 与 L13 参考/孪生同款（2026-09-19）。
+const SPINE_ESCAPE: &str = "\u{0}spine-escape";
+
+fn is_spine_escape(icit: &Either) -> bool {
+    matches!(icit, Either::Name(s) if s.data == SPINE_ESCAPE)
+}
+
+/// 就位剥离 Raw 树里所有残留的逃逸哨兵 icit（改回 Expl）。干净子树只
+/// 移动不重建。对每个 p_spine 结果无条件跑一遍：p_raw 的每个表达式核
+/// 恰好经过一个 p_spine，标记不可能越过它泄漏到 elaboration。
+fn strip_spine_escapes(t: &mut Raw) {
+    match t {
+        Raw::App(l, r, icit) => {
+            if is_spine_escape(icit) {
+                *icit = Either::Icit(Icit::Expl);
+            }
+            strip_spine_escapes(l);
+            strip_spine_escapes(r);
+        }
+        Raw::Obj(x, _) => strip_spine_escapes(x),
+        Raw::Lam(_, _, body) => strip_spine_escapes(body),
+        Raw::Pi(_, _, a, b) => {
+            strip_spine_escapes(a);
+            strip_spine_escapes(b);
+        }
+        Raw::Let(_, ty, v, body) => {
+            strip_spine_escapes(ty);
+            strip_spine_escapes(v);
+            strip_spine_escapes(body);
+        }
+        Raw::Match(scr, arms) => {
+            strip_spine_escapes(scr);
+            for (_, body) in arms.iter_mut() {
+                strip_spine_escapes(body);
+            }
+        }
+        Raw::Sum(_, fields, _, _, _) => {
+            for (_, _, ty) in fields.iter_mut() {
+                strip_spine_escapes(ty);
+            }
+        }
+        Raw::SumCase { typ, datas, .. } => {
+            strip_spine_escapes(typ);
+            for (_, ty, _) in datas.iter_mut() {
+                strip_spine_escapes(ty);
+            }
+        }
+        Raw::Var(_) | Raw::U(_) | Raw::Hole(_) | Raw::LiteralIntro(_) => {}
+    }
+}
+
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let (input, head) = expr(input, state)?;
     let (input, args) = p_arg.many0().map(|x| x.concat()).parse(input, state)?;
 
-    let result = args.into_iter().fold(head, |acc, (icit, arg)| {
+    // 逃逸哨兵结算（`f a (b)` 误解析修复，与 L13 同款 2026-09-19）：头/
+    // 显式实参顶层的单实参括号调用拆成两个相邻实参——`lcons zero
+    // (lcons zero lnil)` 折叠链正确落回 `lcons` 而不是 `zero`。隐式括号
+    // `[..]` 的值经内层 p_raw → p_spine（头位拆分）已净，永不带顶层标记
+    // 到这里。
+    let mut pieces: Vec<(Either, Raw)> = Vec::new();
+    let head = match head {
+        Raw::App(acc, arg, icit) if is_spine_escape(&icit) => {
+            pieces.push((Either::Icit(Icit::Expl), *arg));
+            *acc
+        }
+        other => other,
+    };
+    for (icit, raw) in args {
+        match raw {
+            Raw::App(acc, arg, mark)
+                if is_spine_escape(&mark) && icit == Either::Icit(Icit::Expl) =>
+            {
+                pieces.push((Either::Icit(Icit::Expl), *acc));
+                pieces.push((Either::Icit(Icit::Expl), *arg));
+            }
+            _ => pieces.push((icit, raw)),
+        }
+    }
+
+    let mut result = pieces.into_iter().fold(head, |acc, (icit, arg)| {
         Raw::App(Box::new(acc), Box::new(arg), icit)
     });
+    strip_spine_escapes(&mut result);
 
     Ok((input, result))
 }
