@@ -1391,7 +1391,7 @@ fn subst_lookup_conditional_wrap() {
     let lam = Val::Lam(
         empty_span("a".to_owned()),
         Icit::Expl,
-        Closure(List::new().prepend(Val::vvar(Lvl(3))), Box::new(Tm::Var(Ix(0)))),
+        Closure(List::new().prepend(Val::vvar(Lvl(3))), Rc::new(Tm::Var(Ix(0)))),
     );
     let s5 = Subst::extend(&s1, Lvl(1), lam);
     assert!(matches!(s5.lookup(Lvl(1)), Val::VSub(..)));
@@ -1525,4 +1525,202 @@ println (f big)
         .join()
         .unwrap();
     assert_eq!(out.lines().next(), Some("Nat::succ(Nat::zero)"));
+}
+
+/// README §7.6 回归钉（2026-09-18）：深值（succ^N 链）上的 occurs 守卫与
+/// 结构相等全部迭代化——**默认测试栈**（约 2 MB，正是“常规栈 1–8 MB”的
+/// 下界）下不再爆栈（旧递归版在 ~万级深度爆栈）。深链的 Rc/Drop 自身是
+/// 深递归（测试基建的坑，非被测代码），故 ManuallyDrop 泄漏给进程。
+#[test]
+fn deep_value_iterative_under_default_stack() {
+    const N_OCCURS: usize = 100_000;
+    const N_EQ: usize = 4_000;
+
+    fn nat_sum() -> Val {
+        Val::Sum(
+            empty_span("Nat".to_string()),
+            vec![],
+            vec![
+                empty_span("zero".to_string()),
+                empty_span("succ".to_string()),
+            ],
+        )
+    }
+    fn succ_of(typ: &std::rc::Rc<Val>, prev: Val) -> Val {
+        Val::SumCase {
+            typ: std::rc::Rc::clone(typ),
+            case_name: empty_span("succ".to_string()),
+            datas: vec![(empty_span("x".to_string()), std::rc::Rc::new(prev), Icit::Expl)],
+        }
+    }
+    fn chain(nat: &std::rc::Rc<Val>, n: usize) -> Val {
+        let mut v = Val::SumCase {
+            typ: std::rc::Rc::clone(nat),
+            case_name: empty_span("zero".to_string()),
+            datas: vec![],
+        };
+        for _ in 0..n {
+            v = succ_of(nat, v);
+        }
+        v
+    }
+
+    let nat = std::rc::Rc::new(nat_sum());
+    // ① occurs 守卫：10 万层深链（无预算，纯遍历）
+    let deep = std::mem::ManuallyDrop::new(chain(&nat, N_OCCURS));
+    assert!(
+        !val_mentions_lvl(&deep, Lvl(1)),
+        "深链不含 Lvl(1)（且旧递归版此处爆栈）"
+    );
+    // 链中段嵌 Rigid(7)：命中为 true、别处为 false
+    let mut with_rigid = Val::vvar(Lvl(7));
+    for _ in 0..N_OCCURS / 2 {
+        with_rigid = succ_of(&nat, with_rigid);
+    }
+    let with_rigid = std::mem::ManuallyDrop::new(with_rigid);
+    assert!(val_mentions_lvl(&with_rigid, Lvl(7)));
+    assert!(!val_mentions_lvl(&with_rigid, Lvl(1)));
+
+    // ② 结构相等：预算内同构链判等；超预算（10 万层 > EQ_BUDGET 2 万）
+    // 有界降级为 false——两者都不爆栈
+    let a = std::mem::ManuallyDrop::new(chain(&nat, N_EQ));
+    let b = std::mem::ManuallyDrop::new(chain(&nat, N_EQ));
+    assert!(struct_eq::val_eq(&a, &b), "同构深链应判等（预算内）");
+    let c = std::mem::ManuallyDrop::new(chain(&nat, N_OCCURS));
+    assert!(
+        !struct_eq::val_eq(&deep, &c),
+        "超预算应有界降级（false），不爆栈"
+    );
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-18 评审回归钉（四角度评审 + 修复轮）：
+// 嵌套覆盖检查 / stale-solvable 臂序污染 / 构造子良构性。
+
+/// P0（嵌套覆盖缺失）：nil 臂 + cons(h, nil) 臂缺 cons(h, cons(..))——
+/// 修复前静默接受、运行期在尾部为 cons 的值上卡住；修复后报模式位置缺失。
+#[test]
+fn test_nested_coverage_gap() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+    }
+"#,
+    );
+    assert!(msg.contains("缺少构造子 cons"), "{msg}");
+}
+
+/// P0（嵌套覆盖缺失，三层）：深度 2 的嵌套位置缺 cons。
+#[test]
+fn test_nested_coverage_gap3() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum List[A] {
+    nil
+    cons(head: A, tail: List[A])
+}
+
+def f(x: List[Nat]): Nat =
+    match x {
+        case nil => zero
+        case cons(h, nil) => h
+        case cons(h, cons(h2, nil)) => h2
+    }
+"#,
+    );
+    assert!(msg.contains("缺少构造子 cons"), "{msg}");
+}
+
+/// P1（stale-solvable 臂序污染）：big 臂（5 槽）在前时，其陈旧可解条目
+/// 让后续 ident 荒谬臂的瞬态 η 被误判可解——修复前静默接受（臂序依赖），
+/// 修复后两种臂序一致报"分支不可达"。
+#[test]
+fn test_stale_solvable_order_independent() {
+    for arms in [
+        "case big(a, b, c, d) => a\n        case ident => zero\n        case mk => succ zero",
+        "case ident => zero\n        case big(a, b, c, d) => a\n        case mk => succ zero",
+    ] {
+        let src = format!(
+            r#"
+enum Nat {{
+    zero
+    succ(x: Nat)
+}}
+
+enum W(f: Nat -> Nat) {{
+    big(a: Nat, b: Nat, c: Nat, d: Nat) -> W (n => succ zero)
+    mk -> W (n => succ zero)
+    ident -> W (n => n)
+}}
+
+def t(w: W (n => succ zero)): Nat =
+    match w {{
+        {arms}
+    }}
+"#
+        );
+        let msg = check_err(&src);
+        assert!(msg.contains("分支不可达"), "{msg}");
+    }
+}
+
+/// P1（构造子良构性）：ret 不是本 enum——c -> Nat 向构造子名字空间注入
+/// phantom 值（对 Nat 的覆盖完备 match 在该值上卡死），修复后注册期拒绝。
+#[test]
+fn test_ctor_wf_external_ret() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Foo {
+    c -> Nat
+}
+"#,
+    );
+    assert!(msg.contains("不是 Foo"), "{msg}");
+}
+
+/// P1（构造子良构性）：参数位特化——隐式参数位是 Bool 而非参数变量，
+/// 修复后拒绝（特化请走显式索引）。
+#[test]
+fn test_ctor_wf_param_specialized() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Bool {
+    true
+    false
+}
+
+enum Foo[A] {
+    c -> Foo[Bool]
+}
+"#,
+    );
+    assert!(msg.contains("参数变量"), "{msg}");
 }

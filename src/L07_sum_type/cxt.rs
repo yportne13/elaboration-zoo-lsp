@@ -20,7 +20,49 @@ use super::{
 /// `Box<Tm>` 闭包树的深拷贝、对 `LiteralIntro` 是 String 分配）。插入频次
 /// 随 decl 数增长（每 def 一次），值深拷贝是其中的主项——L07 的 `strchain`
 /// 参考版曾因此到 O(n²) 字节量级。
-pub type Decls = HashMap<SmolStr, Rc<DeclEntry>>;
+///
+/// `ver` = 实例代数（性能评审 P1-2 的旁表缓存键）：`decl_insert` 每次 COW
+/// 出的新实例取全局单调的唯一代数——**同 ver ⟹ 同实例**（表创建后不可变，
+/// COW 只出新实例），`simpl_decl` 缓存以此判"同实例同内容"；`ver == 0` 的
+/// 手工空表内容恒等（空），命中同样安全。简化表继承源的 ver——`simpl` 对
+/// 自身幂等（非 Sum 条目归一为 `Decl(自身名, [])`），对简化表再简化内容
+/// 不变，命中缓存的简化表语义一致。
+#[derive(Debug, Clone, Default)]
+pub struct Decls {
+    /// crate 内可构造（mod.rs 的 simpl_decl 组装）；常规读写走 Deref(Mut)
+    /// 与 `decl_insert`。
+    pub(crate) map: HashMap<SmolStr, Rc<DeclEntry>>,
+    /// 实例代数（见上）：同 ver ⟹ 同实例同内容。crate 内可读
+    /// （simpl_decl 缓存键），写入只经 `decl_insert`。
+    pub(crate) ver: u64,
+}
+
+impl Decls {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl std::ops::Deref for Decls {
+    type Target = HashMap<SmolStr, Rc<DeclEntry>>;
+    fn deref(&self) -> &HashMap<SmolStr, Rc<DeclEntry>> {
+        &self.map
+    }
+}
+
+impl std::ops::DerefMut for Decls {
+    fn deref_mut(&mut self) -> &mut HashMap<SmolStr, Rc<DeclEntry>> {
+        &mut self.map
+    }
+}
+
+/// [`Decls`] 实例代数发生器（全局单调，进程级；单线程语义下仅用于保证
+/// ver 不重复）。
+static DECL_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn next_decl_version() -> u64 {
+    std::sync::atomic::AtomicU64::fetch_add(&DECL_VERSION, 1, std::sync::atomic::Ordering::Relaxed) + 1
+}
 
 #[derive(Debug, Clone)]
 pub struct DeclEntry {
@@ -34,7 +76,12 @@ pub struct Cxt {
     pub lvl: Lvl, // 下一个 fresh 层级（unify / quote 用）
     pub locals: Locals,
     pub pruning: Pruning, // 与 env 一一对应：Some(icit) = 该槽是待插入的隐式参数
-    pub src_names: HashMap<String, (Lvl, VTy)>,
+    /// 源码变量名 → (绑定层级, 类型值)。两层 Rc（性能评审 P1-3）：
+    /// - 值 `Rc<(Lvl, VTy)>`：条目克隆 = 引用计数，不再深拷贝 `Val` 类型树；
+    /// - 表 `Rc<HashMap>`：`new_binder` / `decl_insert` 等不改表的派生是
+    ///   O(1) 指针共享；`bind` / `define` 经 `Rc::make_mut` 写时复制——
+    ///   Cxt 全程按持久风格派生（无 &mut 改写点），共享不可观测。
+    pub src_names: Rc<HashMap<String, Rc<(Lvl, VTy)>>>,
     pub decl: Rc<Decls>,
 }
 
@@ -158,7 +205,7 @@ impl Cxt {
     /// `Tm::Prim(name)` 零元头，应用满元数后由 `force` 的 `prim_reduce`
     /// 归约。
     fn add_builtin(self, infer: &Infer, name: &str, ty_tm: Tm) -> Self {
-        let ty = infer.eval(&self.decl, &List::new(), ty_tm.clone());
+        let ty = infer.eval(&self.decl, &List::new(), &ty_tm);
         // 值 = λ 参数链 → ((Prim 名 p1) p2 …)；参数名从类型的 Π 链取（与
         // 域同序）。实参经 App 显式应用而非 env 隐式收集——`Tm::Prim` 从
         // 此是零元卡住头，quote → eval 往返在任意 env 下 spine 保真（旧
@@ -182,7 +229,7 @@ impl Cxt {
         for p in names.iter().rev() {
             val = Tm::Lam(empty_span(p.clone()), Icit::Expl, Box::new(val));
         }
-        let val = infer.eval(&self.decl, &List::new(), val);
+        let val = infer.eval(&self.decl, &List::new(), &val);
         self.decl_insert(SmolStr::new(name), DeclEntry { ty, val })
     }
     pub fn empty() -> Self {
@@ -191,8 +238,8 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
-            decl: Rc::new(HashMap::new()),
+            src_names: Rc::new(HashMap::new()),
+            decl: Rc::new(Decls::new()),
         }
     }
 
@@ -206,10 +253,13 @@ impl Cxt {
 
     /// 写入一个 decl。写时复制：Rc 共享时才克隆整表，父上下文不受影响——
     /// 这正是递归定义需要的"占位只对本定义的检查可见"。表克隆是逐条 `Rc`
-    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。
+    /// 递增 + 重建哈希桶（条目本身共享，不深拷贝值）。新实例取唯一代数
+    /// （`ver`，见 [`Decls`] 文档）。
     pub fn decl_insert(&self, k: impl Into<SmolStr>, e: DeclEntry) -> Self {
         let mut decl = self.decl.clone();
-        Rc::make_mut(&mut decl).insert(k.into(), Rc::new(e));
+        let d = Rc::make_mut(&mut decl);
+        d.ver = next_decl_version();
+        d.insert(k.into(), Rc::new(e));
         Cxt {
             decl,
             env: self.env.clone(),
@@ -233,12 +283,13 @@ impl Cxt {
 
     /// 引入一个源码变量（模式绑定 / λ 参数 / Π 域）：env 压入 fresh rigid。
     ///
-    /// 注：`src_names` 按值克隆（每次 bind O(上下文)）——n 个绑定器的检查是
-    /// O(n²)；参考版取"可读优先"的写法，孪生版用 name map + 轨迹回滚等价
-    /// 实现（`L06_NO_NAME_MAP` 消融口径）。此表只服务名字解析与报错显示。
+    /// 注：`src_names` 表写时复制（每次 bind O(上下文) 的条目引用计数）——
+    /// n 个绑定器的检查仍是 O(n²)，但条目值共享后无 `Val` 深拷贝；参考版取
+    /// "可读优先"的写法，孪生版用 name map + 轨迹回滚等价实现
+    /// （`L06_NO_NAME_MAP` 消融口径）。此表只服务名字解析与报错显示。
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: VTy) -> Self {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, a));
+        let mut src_names = Rc::clone(&self.src_names);
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), Rc::new((self.lvl, a)));
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
@@ -256,15 +307,15 @@ impl Cxt {
             lvl: self.lvl + 1,
             locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: self.src_names.clone(),
+            src_names: Rc::clone(&self.src_names),
             decl: self.decl.clone(),
         }
     }
 
     /// let 绑定：env 压入定义的值，pruning 对应槽为 None（后续隐式插入不再经过它）。
     pub fn define(&self, x: Span<String>, t: Tm, vt: Val, a: Ty, va: VTy) -> Self {
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, va));
+        let mut src_names = Rc::clone(&self.src_names);
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), Rc::new((self.lvl, va)));
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
@@ -289,11 +340,13 @@ impl Cxt {
             lvl: self.lvl,
             locals: self.locals.clone(),
             pruning: self.pruning.clone(),
-            src_names: self
-                .src_names
-                .iter()
-                .map(|(k, (l, ty))| (k.clone(), (*l, wrap(ty))))
-                .collect(),
+            // 类型值逐条包 VSub（值变 → 新条目 Rc；键名照旧克隆）
+            src_names: Rc::new(
+                self.src_names
+                    .iter()
+                    .map(|(k, e)| (k.clone(), Rc::new((e.0, wrap(&e.1)))))
+                    .collect(),
+            ),
             decl: self.decl.clone(),
         }
     }

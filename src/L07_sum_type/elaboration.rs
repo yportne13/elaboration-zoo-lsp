@@ -1,8 +1,10 @@
+use std::rc::Rc;
+
 use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Tm, Val,
+    Closure, Cxt, DeclTm, Error, Infer, Lvl, Tm, Val,
     cxt::DeclEntry,
     empty_span, lvl2ix,
     parser::syntax::{Decl, Either, Icit, Raw},
@@ -14,7 +16,7 @@ impl Infer {
         match self.force(cxt.decl(), va) {
             Val::Pi(_, Icit::Impl, a, b) => {
                 let m = self.fresh_meta(cxt.decl(), cxt, *a);
-                let mv = self.eval(cxt.decl(), &cxt.env, m.clone());
+                let mv = self.eval(cxt.decl(), &cxt.env, &m);
                 self.insert_go(
                     cxt,
                     Tm::App(Box::new(t), Box::new(m), Icit::Impl),
@@ -50,7 +52,7 @@ impl Infer {
                     Ok((t, Val::Pi(x, Icit::Impl, a, b)))
                 } else {
                     let m = self.fresh_meta(cxt.decl(), cxt, *a);
-                    let mv = self.eval(cxt.decl(), &cxt.env, m.clone());
+                    let mv = self.eval(cxt.decl(), &cxt.env, &m);
                     self.insert_until_go(
                         cxt,
                         name,
@@ -99,9 +101,9 @@ impl Infer {
             // let
             (Raw::Let(x, a, t, u), a_prime) => {
                 let a_checked = self.check_ty(cxt, *a)?;
-                let va = self.eval(decl, &cxt.env, a_checked.clone());
+                let va = self.eval(decl, &cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, va.clone())?;
-                let vt = self.eval(decl, &cxt.env, t_checked.clone());
+                let vt = self.eval(decl, &cxt.env, &t_checked);
                 let u_checked = self.check(
                     &cxt.define(x.clone(), t_checked.clone(), vt, a_checked.clone(), va),
                     *u,
@@ -147,7 +149,7 @@ impl Infer {
                 let va = cxt
                     .src_names
                     .get(&x.data)
-                    .map(|(_, ty)| ty.clone())
+                    .map(|e| e.1.clone())
                     .or_else(|| cxt.decl_get(&x.data).map(|e| e.ty.clone()));
                 if let Some(va) = va {
                     match self.force(cxt.decl(), va) {
@@ -177,7 +179,7 @@ impl Infer {
         if let Raw::Pi(x, i, a, b) = &t {
             self.ty_precheck(cxt, a)?;
             let a_checked = self.check(cxt, *a.clone(), Val::U)?;
-            let a_eval = self.eval(cxt.decl(), &cxt.env, a_checked.clone());
+            let a_eval = self.eval(cxt.decl(), &cxt.env, &a_checked);
             let cxt2 = cxt.bind(x.clone(), self.quote(cxt.decl(), cxt.lvl, a_eval.clone()), a_eval);
             self.ty_precheck(&cxt2, b)?;
             let b_checked = self.check(&cxt2, *b.clone(), Val::U)?;
@@ -204,7 +206,7 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let typ_tm = self.check_ty(cxt, typ)?;
-                let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
+                let vtyp = self.eval(decl, &cxt.env, &typ_tm);
                 // 重定义检查（L13 `fake_bind` 移植）：名字已登记（builtin /
                 // 先前 def / enum）→ 定向报错，不再静默覆盖。先类型后重定义，
                 // 与 L13 检查顺序一致。
@@ -225,7 +227,7 @@ impl Infer {
                 // 在声明序上驱动——L06「应用时触发」的等价物（否则
                 // change_mutable 等只在别处 force 到它时才生效）。递归
                 // 自引用由 force 的占位守卫兜住，不会展开。
-                let vt = self.force(fake_cxt.decl(), self.eval(fake_cxt.decl(), &fake_cxt.env, t_tm.clone()));
+                let vt = self.force(fake_cxt.decl(), self.eval(fake_cxt.decl(), &fake_cxt.env, &t_tm));
                 let out_cxt = cxt.decl_insert(
                     name.data.clone(),
                     DeclEntry {
@@ -310,7 +312,7 @@ impl Infer {
                     Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                 });
                 let typ_tm = self.check_ty(cxt, typ)?;
-                let vtyp = self.eval(decl, &cxt.env, typ_tm.clone());
+                let vtyp = self.eval(decl, &cxt.env, &typ_tm);
                 // 重定义检查（L13 `fake_bind` 移植）：同名 enum / def / builtin
                 // → 定向报错，不再静默覆盖。
                 if cxt.decl().contains_key(name.data.as_str()) {
@@ -325,7 +327,7 @@ impl Infer {
                     },
                 );
                 let t_tm = self.check(&fake_cxt, bod, vtyp.clone())?;
-                let vt = self.eval(fake_cxt.decl(), &fake_cxt.env, t_tm.clone());
+                let vt = self.eval(fake_cxt.decl(), &fake_cxt.env, &t_tm);
                 let mut cxt = cxt.decl_insert(
                     name.data.clone(),
                     DeclEntry {
@@ -355,9 +357,13 @@ impl Infer {
                             Raw::Lam(b.0.clone(), Either::Icit(b.2), Box::new(a))
                         });
                     let typ_tm = self.check(&cxt, ctor_ty, Val::U)?;
-                    let vtyp = self.eval(cxt.decl(), &cxt.env, typ_tm.clone());
+                    let vtyp = self.eval(cxt.decl(), &cxt.env, &typ_tm);
+                    // 构造子良构性（2026-09-18）：ret 必须是本 enum 的 Sum
+                    // 且参数位是 telescope 内的 bare rigid（防 phantom 构造
+                    // 子注入，见 check_ctor_wf）
+                    self.check_ctor_wf(&cxt, &name.data, &ctor_name.data, &vtyp)?;
                     let t_tm = self.check(&cxt, bod, vtyp.clone())?;
-                    let vt = self.eval(cxt.decl(), &cxt.env, t_tm.clone());
+                    let vt = self.eval(cxt.decl(), &cxt.env, &t_tm);
                     let entry = DeclEntry {
                         ty: vtyp,
                         val: vt,
@@ -374,12 +380,74 @@ impl Infer {
         }
     }
 
+    /// 构造子返回类型良构性：实例化构造子类型的全部绑定器后，ret 的
+    /// WHNF 必须是 `enum_name` 的 `Sum`，且其隐式参数位逐一等于 telescope
+    /// 内的 bare rigid。允许构造子重绑定参数（`p[A,B](a,b) -> Pack[A][B]
+    /// a b`——使用点经特化方程解回枚举参数，v3_multi_index_gadt 钉），
+    /// 拒绝参数位为非变量的特化（`c -> Foo[Bool]`）与非本 enum 的 ret
+    /// （`c -> Nat`）：后者向构造子名字空间注入永不匹配任何模式的
+    /// phantom 值，对覆盖检查完备的 match 在封闭输入上卡死。
+    fn check_ctor_wf(
+        &mut self,
+        cxt: &Cxt,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: &Val,
+    ) -> Result<(), Error> {
+        let decl = cxt.decl();
+        let base = cxt.lvl.0;
+        let mut ty = ctor_vtyp.clone();
+        let mut bound = 0u32;
+        let ret = loop {
+            match self.force(decl, ty) {
+                Val::Pi(_, _, _, closure) => {
+                    let u = Val::vvar(Lvl(base + bound));
+                    bound += 1;
+                    ty = self.closure_apply(decl, &closure, u);
+                }
+                ret => break ret,
+            }
+        };
+        let ret_sum = match self.force(decl, ret) {
+            s @ Val::Sum(..) => s,
+            _ => {
+                return Err(Error(format!(
+                    "构造子 {ctor_name} 的返回类型不是和类型"
+                )))
+            }
+        };
+        let (sname, sparams) = match &ret_sum {
+            Val::Sum(n, ps, _) => (n, ps),
+            _ => unreachable!(),
+        };
+        if sname.data != enum_name {
+            return Err(Error(format!(
+                "构造子 {ctor_name} 的返回类型是 {}，不是 {enum_name}",
+                sname.data
+            )));
+        }
+        let non_rigid = sparams
+            .iter()
+            .filter(|(_, _, _, i)| *i == Icit::Impl)
+            .map(|(_, v, _, _)| v.as_ref())
+            .find(|v| {
+                !matches!(v, Val::Rigid(l, sp) if base <= l.0 && l.0 < base + bound && sp.is_empty())
+            });
+        if let Some(v) = non_rigid {
+            let _ = v;
+            return Err(Error(format!(
+                "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+            )));
+        }
+        Ok(())
+    }
+
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Tm, Val), Error> {
         let decl = cxt.decl();
         match t {
             // 变量：先局部（src_names），再全局（decl 表）
             Raw::Var(x) => {
-                if let Some((lvl, ty)) = cxt.src_names.get(&x.data) {
+                if let Some((lvl, ty)) = cxt.src_names.get(&x.data).map(|e| e.as_ref()) {
                     Ok((Tm::Var(lvl2ix(cxt.lvl, *lvl)), ty.clone()))
                 } else if let Some(e) = cxt.decl_get(&x.data) {
                     Ok((Tm::Decl(SmolStr::new(&x.data)), e.ty.clone()))
@@ -487,7 +555,7 @@ impl Infer {
             // λ 推断：域用 fresh meta，值域闭包封口
             Raw::Lam(x, Either::Icit(i), t) => {
                 let new_meta = self.fresh_meta(decl, cxt, Val::U);
-                let a = self.eval(decl, &cxt.env, new_meta);
+                let a = self.eval(decl, &cxt.env, &new_meta);
                 let new_cxt = cxt.bind(x.clone(), self.quote(decl, cxt.lvl, a.clone()), a.clone());
                 let infered = self.infer_expr(&new_cxt, *t);
                 let (t_inferred, b) = self.insert(&new_cxt, infered)?;
@@ -498,7 +566,7 @@ impl Infer {
                 ))
             }
 
-            Raw::Lam(x, Either::Name(_), t) => Err(Error(format!("infer named lambda {x:?}"))),
+            Raw::Lam(x, Either::Name(_), _) => Err(Error(format!("infer named lambda {x:?}"))),
 
             // 应用
             Raw::App(t, u, i) => {
@@ -528,10 +596,10 @@ impl Infer {
                     }
                     tty => {
                         let new_meta = self.fresh_meta(decl, cxt, Val::U);
-                        let a = self.eval(decl, &cxt.env, new_meta);
+                        let a = self.eval(decl, &cxt.env, &new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
-                            Box::new(self.fresh_meta(
+                            Rc::new(self.fresh_meta(
                                 decl,
                                 &cxt.bind(
                                     empty_span("x".to_string()),
@@ -558,7 +626,7 @@ impl Infer {
                 let u_checked = self.check(cxt, *u, a)?;
                 Ok((
                     Tm::App(Box::new(t), Box::new(u_checked.clone()), i),
-                    self.closure_apply(decl, &b_closure, self.eval(decl, &cxt.env, u_checked)),
+                    self.closure_apply(decl, &b_closure, self.eval(decl, &cxt.env, &u_checked)),
                 ))
             }
 
@@ -566,7 +634,7 @@ impl Infer {
 
             Raw::Pi(x, i, a, b) => {
                 let a_checked = self.check_ty(cxt, *a)?;
-                let a_eval = self.eval(decl, &cxt.env, a_checked.clone());
+                let a_eval = self.eval(decl, &cxt.env, &a_checked);
                 let b_checked = self.check_ty(
                     &cxt.bind(x.clone(), self.quote(decl, cxt.lvl, a_eval.clone()), a_eval),
                     *b,
@@ -579,9 +647,9 @@ impl Infer {
 
             Raw::Let(x, a, t, u) => {
                 let a_checked = self.check_ty(cxt, *a)?;
-                let va = self.eval(decl, &cxt.env, a_checked.clone());
+                let va = self.eval(decl, &cxt.env, &a_checked);
                 let t_checked = self.check(cxt, *t, va.clone())?;
-                let vt = self.eval(decl, &cxt.env, t_checked.clone());
+                let vt = self.eval(decl, &cxt.env, &t_checked);
                 let (u_inferred, b) = self.infer_expr(
                     &cxt.define(
                         x.clone(),
@@ -605,7 +673,7 @@ impl Infer {
 
             Raw::Hole => {
                 let new_meta = self.fresh_meta(decl, cxt, Val::U);
-                let a = self.eval(decl, &cxt.env, new_meta);
+                let a = self.eval(decl, &cxt.env, &new_meta);
                 let t = self.fresh_meta(decl, cxt, a.clone());
                 Ok((t, a))
             }
@@ -635,7 +703,7 @@ impl Infer {
                 datas,
             } => {
                 let (typ_checked, _) = self.infer_expr(cxt, *typ)?;
-                let typ_val = self.eval(decl, &cxt.env, typ_checked.clone());
+                let typ_val = self.eval(decl, &cxt.env, &typ_checked);
                 let datas = datas
                     .into_iter()
                     .map(|(n, raw, i)| {

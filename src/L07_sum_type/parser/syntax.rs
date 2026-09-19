@@ -1,4 +1,4 @@
-use crate::{list::List, parser_lib::Span};
+use crate::parser_lib::Span;
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Icit {
