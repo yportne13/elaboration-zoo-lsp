@@ -3,7 +3,7 @@ use std::cmp::max;
 use crate::{list::List, parser_lib::{Span, ToSpan}};
 
 use super::{
-    Closure, Cxt, DeclTm, Error, Infer, Subst, Tm, VTy, Val,
+    Closure, Cxt, DeclTm, Error, Infer, Lvl, Subst, Tm, VTy, Val,
     Rc,
     empty_span, lvl2ix, val_mentions_lvl, wrap_sub,
     parser::syntax::{Decl, Either, Icit, Raw},
@@ -87,7 +87,7 @@ impl Infer {
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         let mut spec = SpecSolve { acc: Rc::new(Subst::default()) };
-        self.unify_pm(cxt, &a, &inferred_type, t_span, &mut spec)?;
+        self.unify_pm(cxt, cxt.lvl, &a, &inferred_type, t_span, &mut spec)?;
         // 第二方程：把被匹配项的值 `ori` 与精化后的模式项值再对一次
         // （旧 `.unwrap_or(new_cxt)`——失败容忍，丢弃第二次方程的解）。期望
         // 类型重锚：在 σ 之下的上下文里重求值（subst_cxt 包裹 ⇒ eval 出来
@@ -95,7 +95,7 @@ impl Infer {
         let cxt2 = cxt.subst_cxt(&spec.acc);
         let ori_v = self.eval(&cxt2.decl, &cxt2.env, &t_inferred);
         let mut spec2 = SpecSolve { acc: spec.acc.clone() };
-        if self.unify_pm(&cxt2, &ori, &ori_v, t_span, &mut spec2).is_ok() {
+        if self.unify_pm(&cxt2, cxt2.lvl, &ori, &ori_v, t_span, &mut spec2).is_ok() {
             spec.acc = spec2.acc;
         }
         Ok((t_inferred, spec.acc))
@@ -105,7 +105,7 @@ impl Infer {
         let x = self.infer_expr(cxt, t);
         let (t_inferred, inferred_type) = self.insert(cxt, x)?;
         let mut spec = SpecSolve { acc: Rc::new(Subst::default()) };
-        self.unify_pm(cxt, &a, &inferred_type, t_span, &mut spec)?;
+        self.unify_pm(cxt, cxt.lvl, &a, &inferred_type, t_span, &mut spec)?;
         Ok((t_inferred, spec.acc))
     }
     /// 特化合一（对应 dpm-nbe `unify1`）：可解臂把解**累加进 `spec.acc`**
@@ -122,6 +122,7 @@ impl Infer {
     pub(crate) fn unify_pm(
         &mut self,
         cxt: &Cxt,
+        lvl: Lvl,
         t: &Rc<Val>,
         t_prime: &Rc<Val>,
         t_span: Span<()>,
@@ -172,9 +173,24 @@ impl Infer {
                 Val::SumCase { case_name: name1, datas: d1, .. },
                 Val::SumCase { case_name: name2, datas: d2, .. },
             ) => {
+                // Sum 头名字检查（2026-09-18 评审修复，L07 unify 同款）：
+                // case_name 不足以判定构造子身份——跨 enum 重名构造子
+                // （E1.c / E2.c）是两个不同值，头名不同直接失败；不比值
+                // （深递归），只在头名以 Sum 形态可见时比较。
                 if name1 == name2 {
+                    if let (
+                        Val::SumCase { typ: ta, .. },
+                        Val::SumCase { typ: tb, .. },
+                    ) = (t.as_ref(), t_prime.as_ref())
+                    {
+                        if let (Val::Sum(na, ..), Val::Sum(nb, ..)) = (ta.as_ref(), tb.as_ref()) {
+                            if na.data != nb.data {
+                                return Err(Error(t_span.map(|_| "".to_string())));
+                            }
+                        }
+                    }
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        self.unify_pm(cxt, &x.1, &y.1, t_span, spec)?;
+                        self.unify_pm(cxt, lvl, &x.1, &y.1, t_span, spec)?;
                     }
                     Ok(())
                 } else {
@@ -184,14 +200,14 @@ impl Infer {
             (Val::Sum(name1, d1, ..), Val::Sum(name2, d2, ..)) => {
                 if name1 == name2 {
                     for (x, y) in d1.iter().zip(d2.iter()) {
-                        self.unify_pm(cxt, &x.1, &y.1, t_span, spec)?;
+                        self.unify_pm(cxt, lvl, &x.1, &y.1, t_span, spec)?;
                     }
                     Ok(())
                 } else {
                     Err(Error(t_span.map(|_| "".to_string())))
                 }
             }
-            (_, _) => self.unify_catch(cxt, &t, &t_prime, t_span),
+            (_, _) => self.unify_catch_at(cxt, lvl, &t, &t_prime, t_span),
         }
     }
     pub fn check_universe(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, u32), Error> {
@@ -207,7 +223,14 @@ impl Infer {
                     .map_err(|_| Error(t_span.map(|_| "invert failed".to_owned())))?;
                 let mty = match self.meta[m.0 as usize] {
                     MetaEntry::Unsolved(ref a) => a.clone(),
-                    _ => unreachable!(),
+                    // fuel 耗尽窗口（2026-09-18 评审修复，L07 同款降级故事）：
+                    // force 耗尽时把已解 meta 当未解返回，走到这里按失败降级
+                    // 而不是 panic
+                    _ => {
+                        return Err(Error(
+                            t_span.map(|_| "check_universe: meta already solved (fuel exhausted)".to_owned()),
+                        ))
+                    }
                 };
 
                 // if the spine was non-linear, we check that the non-linear arguments
@@ -556,6 +579,10 @@ impl Infer {
                     cxt = {
                         let (typ_tm, _) = self.check_universe(&cxt, typ)?;
                         let vtyp = self.eval(&cxt.decl, &cxt.env, &typ_tm);
+                        // 构造子良构性（2026-09-18 评审修复，L07 同款）：ret
+                        // 必须是本 enum 的 Sum 且参数位是 telescope 内的 bare
+                        // rigid（防 phantom 构造子注入，见 check_ctor_wf）
+                        self.check_ctor_wf(&cxt, &name.data, &c.0.data, vtyp.clone())?;
                         let t_tm = self.check(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.decl, &cxt.env, &t_tm);
                         cxt.decl(c.0.clone(), t_tm, vt, typ_tm, vtyp)?
@@ -716,6 +743,67 @@ impl Infer {
             },
         }
     }
+
+    /// 构造子返回类型良构性（2026-09-18 评审修复，L07 `Infer::check_ctor_wf`
+    /// 同款）：实例化构造子类型的全部绑定器后，ret 的 WHNF 必须是
+    /// `enum_name` 的 `Sum`，且其隐式参数位逐一等于 telescope 内的 bare
+    /// rigid。允许构造子重绑定参数（`p[A,B](a,b) -> Pack[A][B] a b`——使用
+    /// 点经特化方程解回枚举参数，v3_multi_index_gadt 钉），拒绝参数位为非
+    /// 变量的特化（`c -> Foo[Bool]`）与非本 enum 的 ret（`c -> Nat`）：后者
+    /// 向构造子名字空间注入永不匹配任何模式的 phantom 值，对覆盖检查完备
+    /// 的 match 在封闭输入上卡死。
+    fn check_ctor_wf(
+        &mut self,
+        cxt: &Cxt,
+        enum_name: &str,
+        ctor_name: &str,
+        ctor_vtyp: Rc<Val>,
+    ) -> Result<(), Error> {
+        let decl = &cxt.decl;
+        let base = cxt.lvl.0;
+        let mut ty: Rc<Val> = ctor_vtyp;
+        let mut bound = 0u32;
+        let ret = loop {
+            let tyf = self.force(decl, &ty);
+            match tyf.as_ref() {
+                Val::Pi(_, _, _, closure) => {
+                    let u = Val::vvar(Lvl(base + bound));
+                    bound += 1;
+                    ty = self.closure_apply(decl, closure, u.into());
+                }
+                _ => break tyf,
+            }
+        };
+        let ret_sum = self.force(decl, &ret);
+        let (sname, sparams) = match ret_sum.as_ref() {
+            Val::Sum(n, ps, _, _) => (n, ps),
+            _ => {
+                return Err(Error(empty_span(format!(
+                    "构造子 {ctor_name} 的返回类型不是和类型"
+                ))))
+            }
+        };
+        if sname.data != enum_name {
+            return Err(Error(empty_span(format!(
+                "构造子 {ctor_name} 的返回类型是 {}，不是 {enum_name}",
+                sname.data
+            ))));
+        }
+        let non_rigid = sparams
+            .iter()
+            .filter(|(_, _, _, i)| *i == Icit::Impl)
+            .map(|(_, v, _, _)| v.as_ref())
+            .find(|v| {
+                !matches!(v, Val::Rigid(l, sp) if base <= l.0 && l.0 < base + bound && sp.is_empty())
+            });
+        if non_rigid.is_some() {
+            return Err(Error(empty_span(format!(
+                "构造子 {ctor_name} 的返回类型参数必须是 {enum_name} 的参数变量（参数不得特化，特化请用显式索引）"
+            ))));
+        }
+        Ok(())
+    }
+
     pub fn infer_expr(&mut self, cxt: &Cxt, t: Raw) -> Result<(Rc<Tm>, Rc<Val>), Error> {
         /*println!(
             "{} {}",
