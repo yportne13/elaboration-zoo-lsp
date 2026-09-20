@@ -20,6 +20,13 @@ pub mod pretty;
 mod canonical;
 pub(crate) mod bump_spine_iter;
 
+/// 孪生引擎的缓存/arena 规模读数（供 `typort stats` 报告）。
+///
+/// LSP 默认跑孪生引擎（`Engine::lsp_default`），而 `--stats` 里的
+/// `Infer::memory_stats_with_cxt` 只覆盖参考版口径——孪生的
+/// FORCE_MEMO/conv/quote/spine 容量与 arena 分配量由这里单独出口。
+pub use bump_spine_iter::twin_mem_stats;
+
 // ---------------------------------------------------------------------------
 // Function-level CPU probe for the elaborator (perf diagnostics).
 //
@@ -146,6 +153,11 @@ static PRIM_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// memory for garbage-pin scenarios, at the price of re-walking once).
 const FORCE_MEMO_CAP: usize = 1 << 20;
 
+/// 整表清空（`clear()`）不归还桶数组：容量到过该量级的表在清空时
+/// 主动 `shrink_to_fit()`，否则峰值容量会常驻到进程结束。阈值取
+/// CAP 的 1/4——小表重建比留着更贵，大表留着就是几十 MB 的空桶。
+const CACHE_SHRINK_MIN_ENTRIES: usize = 1 << 18;
+
 /// Start a fresh memo epoch (per user file change / prelude load).  Not
 /// required for correctness — purely bounds the memory pinned by
 /// keepalives of values that are no longer otherwise reachable.
@@ -159,7 +171,16 @@ const FORCE_MEMO_CAP: usize = 1 << 20;
 pub fn force_memo_clear() {
     // `try_with`：本函数也被 `Drop for PreludeSlot`（TLS 析构期）调用；
     // 若目标 TLS 已先行析构则跳过——其内容（含 Rc 引用）已随析构释放。
-    let _ = FORCE_MEMO.try_with(|m| m.borrow_mut().clear());
+    // `clear()` 只清条目、不还桶数组，故容量到过阈值时顺带归还（见
+    // `CACHE_SHRINK_MIN_ENTRIES`）；入口/出口/每文件各一次，重建成本可忽略。
+    let _ = FORCE_MEMO.try_with(|m| {
+        let mut m = m.borrow_mut();
+        let big = m.capacity() >= CACHE_SHRINK_MIN_ENTRIES;
+        m.clear();
+        if big {
+            m.shrink_to_fit();
+        }
+    });
     let _ = FORCE_MEMO_EPOCH.try_with(|e| e.set(e.get() + 1));
 }
 
@@ -2003,6 +2024,19 @@ impl Infer {
         let hover_cap_bytes = hover_cap * hover_entry_sz;
         type DeclEntry = (SmolStr, (Span<()>, Rc<Tm>, Rc<Val>, Rc<Ty>, Rc<VTy>));
         let decl_entry_sz = std::mem::size_of::<DeclEntry>();
+        // 线程本地 force 记忆表的容量口径（`typort stats`）：`clear()` 不还
+        // 桶数组，故峰值后 capacity 才反映常驻字节（见 `CACHE_SHRINK_MIN_ENTRIES`）。
+        // TLS 可能已析构，`try_with` 取不到即记 0。
+        type ForceMemoEntry = (usize, (Rc<Val>, Rc<Val>, u64, u64));
+        let force_memo_entry_sz = std::mem::size_of::<ForceMemoEntry>();
+        let (force_memo_len, force_memo_cap) = FORCE_MEMO
+            .try_with(|m| {
+                let m = m.borrow();
+                (m.len(), m.capacity())
+            })
+            .unwrap_or((0, 0));
+        let force_memo_epoch = FORCE_MEMO_EPOCH.try_with(|e| e.get()).unwrap_or(0);
+        let force_memo_cap_bytes = force_memo_cap * force_memo_entry_sz;
 
         // ── Meta content analysis ──
         // Categorize unsolved metas by their Cxt env length (= number of bound variables)
@@ -2233,6 +2267,13 @@ impl Infer {
                 "entry_size": meta_contrains_entry_sz,
                 "capacity_bytes": meta_contrains_cap_bytes,
             },
+            "force_memo": {
+                "epoch": force_memo_epoch,
+                "len": force_memo_len,
+                "capacity": force_memo_cap,
+                "entry_size": force_memo_entry_sz,
+                "est_table_bytes": force_memo_cap_bytes,
+            },
             "completion_table": {
                 "len": completions_len,
             },
@@ -2400,7 +2441,11 @@ impl Infer {
             FORCE_MEMO.with(|m| {
                 let mut m = m.borrow_mut();
                 if m.len() >= FORCE_MEMO_CAP {
+                    // 表满路径：清空的同时归还桶数组——容量必已远超
+                    // `CACHE_SHRINK_MIN_ENTRIES`，否则峰值容量（可达数十 MB）
+                    // 常驻到进程结束。
                     m.clear();
+                    m.shrink_to_fit();
                 }
                 m.insert(key, (t.clone(), r.clone(), ver, epoch));
             });

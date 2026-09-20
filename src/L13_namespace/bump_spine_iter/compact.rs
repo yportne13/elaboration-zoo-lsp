@@ -623,7 +623,9 @@ impl Tycker {
         self.machine.quote_work.clear();
         self.machine.unify_work.clear();
         self.machine.unify_stack.clear();
-        self.machine.quote_memo.clear();
+        // 压实的目的是丢内存：quote 表清空的同时按阈值归还桶数组
+        //（`CACHE_SHRINK_MIN_ENTRIES`），否则这几 MB 空桶会抵消压实收益。
+        twin_stat_record(&TWIN_STAT_QUOTE, self.machine.quote_memo.reclaim(CACHE_SHRINK_MIN_ENTRIES));
         self.machine.vals.clear();
         self.machine.icits.clear();
         self.machine.constraints.clear();

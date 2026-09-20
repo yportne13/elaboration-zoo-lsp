@@ -740,6 +740,12 @@ fn run_stats(no_hdl: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
             "pagefile_usage_bytes": pf,
             "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
             "heap_histogram": heap_histogram,
+            // 引擎口径：LSP 默认跑孪生（`Engine::lsp_default`），而下面
+            // `infer_stats`/`backend_stats` 是参考版口径——孪生自己的缓存
+            // 容量/arena 分配量只有 `twin_mem_stats()` 报得出来。用
+            // `TYPORT_LSP_ENGINE=twin|reference` 切换本次统计的引擎。
+            "engine": format!("{:?}", backend.engine),
+            "twin_mem_stats": elaboration_zoo_lsp::L13_namespace::twin_mem_stats(),
             "backend_stats": backend.backend_stats(),
             "infer_stats": stats,
             "timings": {
