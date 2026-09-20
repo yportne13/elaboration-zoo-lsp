@@ -46,6 +46,7 @@ use crate::parser_lib::Span;
 use smol_str::SmolStr;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 
 // metacontext
 // --------------------------------------------------------------------------------
@@ -99,24 +100,70 @@ pub type Pruning = List<Option<Icit>>;
 
 /// 局部 telescope：`Bind` 存**引好的类型项**、`Define` 存类型项与定义项，
 /// `close_ty` 只需沿链搬运（上游 Syntax.hs 注释同款：不重命名不重引）。
+///
+/// 脊与载荷都是 `Rc`（对齐 L13 `syntax.rs` 的同名形态）：本结构是**持久
+/// 栈**（只压不退），但 `Box` 脊 + 按值载荷让它每次扩展都要深拷整条链
+/// （节点数 = 作用域深度 D）——而 `check`/`infer` 的 `Raw::SrcPos` 每条声明
+/// 要克隆 6-8 次 `Cxt`（每次连带深拷 `Locals`），于是「每扩展 O(D)」被放大成
+/// 「每声明 O(6-8·D) 次分配」：chain k=11（D=4096）本轮基线 33.9 s。
+/// Rc 化后扩展与 `Cxt::clone` 都是 O(1)（引用计数递增），载荷只在 `close_ty`
+/// 真取用时按层取出——语义零变化：全程只读、无 `&mut` 别名，共享不可观测。
 #[derive(Debug, Clone)]
 pub enum Locals {
     Here,
-    Define(Box<Locals>, Name, Ty, Tm),
-    Bind(Box<Locals>, Name, crate::L05_pruning::Ty),
+    Define(Rc<Locals>, Name, Rc<Ty>, Rc<Tm>),
+    Bind(Rc<Locals>, Name, Rc<Ty>),
+}
+
+/// `Locals` 链是否**全为 define 槽**（无 Bind）——`fresh_meta` 闭类型快捷的
+/// 守卫：Bind 槽会把闭类型多出一层显式 Π，结果类型本身不同，不能跳过构造。
+/// 逐节点走查 O(D)（零分配；孪生版把同一查询缓存在 `LCons.prefix` 上
+/// O(1)，参考版此处按需走查——它比被省掉的 O(D²) 链求值低两个数量级）。
+fn all_define_slots(mut l: &Locals) -> bool {
+    loop {
+        match l {
+            Locals::Here => return true,
+            Locals::Bind(..) => return false,
+            Locals::Define(next, ..) => l = next,
+        }
+    }
+}
+
+/// `q` 的求值是否与 env 无关：只有 `Var`（de Bruijn 查环境）与
+/// `AppPruning`（把项按 scope 掩码应用，同样读环境）会读 env；两者都不出现
+/// 时 `eval env q` 对任何 env 同值（嵌套闭包同理——闭包只在被应用时读它捕获
+/// 的 env，读点同样消失）。保守起见**任何** `Var` 都算读（含被内层 binder
+/// 绑定的），宁可回落全构造。
+fn env_independent(t: &Tm) -> bool {
+    match t {
+        Tm::Var(_) | Tm::AppPruning(..) => false,
+        Tm::U | Tm::Meta(_) => true,
+        Tm::Lam(_, _, b) => env_independent(b),
+        Tm::App(f, a, _) => env_independent(f) && env_independent(a),
+        Tm::Pi(_, _, a, b) => env_independent(a) && env_independent(b),
+        Tm::Let(_, a, t, u) => env_independent(a) && env_independent(t) && env_independent(u),
+    }
 }
 
 /// 上下文内的类型 → 闭包迭代 Π/Λ-let（上游 `closeTy`：Bind 补显式 Π、
-/// Define 补 let；先剥内层，故内层 binder 包得更深）。
-pub fn close_ty(mcl: Locals, b: Ty) -> Ty {
+/// Define 补 let；先剥内层，故内层 binder 包得更深）。收 `&Locals` 借用遍历
+/// （旧版按值消耗整条链，调用方必须先深拷一份才能调用）。
+pub fn close_ty(mcl: &Locals, b: Ty) -> Ty {
     match mcl {
         Locals::Here => b,
-        Locals::Bind(mcl, x, a) => {
-            close_ty(*mcl, Tm::Pi(x, Icit::Expl, Box::new(a), Box::new(b)))
-        }
-        Locals::Define(mcl, x, a, t) => {
-            close_ty(*mcl, Tm::Let(x, Box::new(a), Box::new(t), Box::new(b)))
-        }
+        Locals::Bind(mcl, x, a) => close_ty(
+            mcl,
+            Tm::Pi(x.clone(), Icit::Expl, Box::new((**a).clone()), Box::new(b)),
+        ),
+        Locals::Define(mcl, x, a, t) => close_ty(
+            mcl,
+            Tm::Let(
+                x.clone(),
+                Box::new((**a).clone()),
+                Box::new((**t).clone()),
+                Box::new(b),
+            ),
+        ),
     }
 }
 
@@ -191,13 +238,18 @@ fn lvl2ix(l: Lvl, x: Lvl) -> Ix {
 /// Elaboration 上下文（上游 Cxt.hs）：`src_names` 只收**源码 binder**
 /// （bind/define），`new_binder` 补的隐式 binder 不入表——对源码名不可见。
 /// `pruning` 与 env 平行（bind/newBinder → Some(Expl)，define → None）。
+///
+/// 表值也是 `Rc<VTy>`：`Raw::SrcPos` 让每条声明克隆 6-8 次 `Cxt`，按值载荷
+/// 使每次克隆都深拷全部条目的值（`Nat` 这类 define 的值是 ~8 的 Box 树）；
+/// `Locals` Rc 化之后这是 chain 负载仅剩的 O(D)/次乘数。值只在 `Raw::Var`
+/// 命中时取一份（语义不变：条目只读、无 `&mut` 别名）。
 #[derive(Debug, Clone)]
 struct Cxt {
     env: Env,
     lvl: Lvl,
     locals: Locals,
     pruning: Pruning,
-    src_names: HashMap<SmolStr, (Lvl, VTy)>,
+    src_names: HashMap<SmolStr, (Lvl, Rc<VTy>)>,
     pos: Span<()>,
 }
 
@@ -216,11 +268,11 @@ impl Cxt {
     /// 源码 binder：env/lvl/locals/pruning/src_names 全扩展。
     fn bind(&self, x: Name, a_quote: Tm, a: Val) -> Cxt {
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, a.clone()));
+        src_names.insert(x.data.clone(), (self.lvl, Rc::new(a)));
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
             pos: self.pos,
@@ -232,7 +284,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl)),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
             pos: self.pos,
@@ -242,11 +294,11 @@ impl Cxt {
     /// 定义：env 收**值**、locals 收类型项与定义项、pruning 记 `None`。
     fn define(&self, x: Name, t: Tm, vt: Val, a: Ty, va: VTy) -> Cxt {
         let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, va));
+        src_names.insert(x.data.clone(), (self.lvl, Rc::new(va)));
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
-            locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
+            locals: Locals::Define(Rc::new(self.locals.clone()), x, Rc::new(a), Rc::new(t)),
             pruning: self.pruning.prepend(None),
             src_names,
             pos: self.pos,
@@ -256,17 +308,17 @@ impl Cxt {
     /// pretty 用名字表：locals 头 = 最内层（与 `Tm::Var` 的 Ix 同序）。
     fn names(&self) -> Vec<String> {
         let mut ns = Vec::new();
-        let mut cur = &self.locals;
+        let mut cur: &Locals = &self.locals;
         loop {
             match cur {
                 Locals::Here => break,
                 Locals::Bind(next, x, _) => {
                     ns.push(x.data.to_string());
-                    cur = next;
+                    cur = &**next;
                 }
                 Locals::Define(next, x, _, _) => {
                     ns.push(x.data.to_string());
-                    cur = next;
+                    cur = &**next;
                 }
             }
         }
@@ -366,9 +418,32 @@ impl Infer {
     /// `freshMeta cxt a`：类型闭成迭代 Π 存进 metacontext，项侧是
     /// `AppPruning ?m (cxtPruning)`——把 meta 应用到当前全部绑定槽位。
     fn fresh_meta(&mut self, cxt: &Cxt, a: VTy) -> Tm {
-        let closed = self.eval(&List::new(), &close_ty(cxt.locals.clone(), self.quote(cxt.lvl, &a)));
+        let closed = self.close_meta_ty(cxt, self.quote(cxt.lvl, &a));
         let m = self.new_meta(closed);
         Tm::AppPruning(Box::new(Tm::Meta(m)), cxt.pruning.clone())
+    }
+
+    /// `eval [] (close_ty locals q)` 的**等价快捷**（上游惰性求值下本就不物化
+    /// 这条链，本实现显式物化后暴露；见 `readme.md` 的「已知限制」）：
+    ///
+    /// `locals` 全为 define 槽 ⇒ `close_ty` 只产生 Let 层；q 的求值不读 env
+    /// （无 `Var`、无 `AppPruning` 的 scope 应用）⇒ 每层 Let 往 env 压的新变量
+    /// 都不被读取，整条链对 q 的求值完全透明 ⇒ 结果就是 `eval [] q`。
+    ///
+    /// 省掉的是每次 `fresh_meta` 的 O(D) 闭项构造 + O(D²) 链求值（每层载荷
+    /// 逐层重求值，其中 `AppPruning` 还要走查整条 env/掩码）：L05 implicit
+    /// k=9（D=1024）参考版 4567 → **67.9 ms**（67×；其中子树物化一步
+    /// 3235 → 67.9 = 48×），k=11（4096 声明）1273 ms（残差见 readme「已知限制」）。
+    ///
+    /// 有 **Bind 槽**时必须全构造——Π 层改变结果类型本身，不只是求值路径。
+    /// L05 无 decl 表 / 无 prim / 无 IO，`eval` 是 `&self` 纯读（只读
+    /// metacontext），被跳过的求值不携带任何副作用；两分支产出同一个值。
+    fn close_meta_ty(&self, cxt: &Cxt, q: Ty) -> VTy {
+        if all_define_slots(&cxt.locals) && env_independent(&q) {
+            self.eval(&List::new(), &q)
+        } else {
+            self.eval(&List::new(), &close_ty(&cxt.locals, q))
+        }
     }
 
     fn lookup_meta(&self, m: MetaVar) -> &MetaEntry {
@@ -1095,7 +1170,7 @@ impl Infer {
             }
 
             Raw::Var(x) => match cxt.src_names.get(&x.data) {
-                Some((x2, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x2)), a.clone())),
+                Some((x2, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x2)), (**a).clone())),
                 None => Err(report_at(
                     cxt.pos,
                     format!("Name not in scope: {}", x.data),

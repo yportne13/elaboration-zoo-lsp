@@ -6,7 +6,7 @@ use std::rc::Rc;
 use cxt::Cxt;
 // Icit 经 `use super::*` 供子模块（cxt/elaboration）取用
 use parser::syntax::Icit;
-use syntax::{close_ty, Pruning};
+use syntax::{all_define_slots, close_ty, env_independent, Pruning};
 
 use crate::list::List;
 use crate::parser_lib::Span;
@@ -172,9 +172,34 @@ impl Infer {
         self.meta.len() as u32 - 1
     }
     fn fresh_meta(&mut self, cxt: &Cxt, a: &Rc<VTy>) -> Tm {
-        let closed = self.eval(&List::new(), &close_ty(cxt.locals.clone(), self.quote(cxt.lvl, a)));
+        let closed = self.close_meta_ty(cxt, self.quote(cxt.lvl, a));
         let m = self.new_meta(closed);
         Tm::AppPruning(Box::new(Tm::Meta(MetaVar(m))), cxt.pruning.clone())
+    }
+
+    /// `eval [] (close_ty locals q)` 的**等价快捷**（上游惰性求值下本就不物化
+    /// 这条链，本实现显式物化后暴露）：
+    ///
+    /// `locals` 全为 define 槽 ⇒ `close_ty` 只产生 Let 层；q 的求值不读 env
+    /// 也不读 decl 表（`env_independent`）⇒ 每层 Let 压进 env 的新变量都不被
+    /// 读取，整条链对 q 的求值完全透明 ⇒ 结果就是 `eval [] q`。
+    ///
+    /// 省掉每次 `fresh_meta` 的 O(D) 闭项构造 + O(D²) 链求值（每层载荷逐层
+    /// 重求值，`AppPruning` 还要走查整条 env/掩码）：L06 implicit k=9
+    /// （D=1024）参考版 2350 → **27.9 ms**（84×；其中多数由本快捷贡献），
+    /// k=11（4096 声明）533 ms。
+    ///
+    /// 有 **Bind 槽**时必须全构造——Π 层改变结果类型本身。载荷求值在参考版里
+    /// 是**重复**求值（值已在 elaboration 时求过一次并压进 env），跳过的只有
+    /// 这一次重复；副作用型 prim 本就被逐次 fresh_meta 重复触发，跳过后与孪生
+    /// 版一致（孪生版的同类快捷同样不重求值），且 `Decl` 守卫保证 q 自身既不
+    /// 读全局也不触发 prim。
+    fn close_meta_ty(&self, cxt: &Cxt, q: Ty) -> Rc<VTy> {
+        if all_define_slots(&cxt.locals) && env_independent(&q) {
+            self.eval(&List::new(), &q)
+        } else {
+            self.eval(&List::new(), &close_ty(&cxt.locals, q))
+        }
     }
     fn lookup_meta(&self, m: &MetaVar) -> &MetaEntry {
         &self.meta[m.0 as usize]

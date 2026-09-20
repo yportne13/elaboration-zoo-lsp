@@ -133,9 +133,11 @@ conv 内联环在刚性同头链上恢复零往返。）
   下的每次 `fresh_meta` 是 O(上下文深)——`prune_src` 每层在 `\a b.`（2 binder）
   下插入数个 meta、且链上有大量 define，`close_tm`+eval 使快版与参考版都超
   线性（快版 n=1024 约 8.7s，参考版 80s）。上游 05 用惰性/持久结构隐藏此
-  成本，本层显式物化后暴露；但**并非不可优化**：locals 是持久链表，在 LCons
-  节点缓存「已闭 telescope 前缀」、fresh_meta 只增量补新层，即可把每次构造
-  摊还 O(1)（未做）。`binds==0`（顶层）的插入仍走快路径 O(1)。
+  成本，本层显式物化后暴露；**参考版已对「无 Bind 槽且闭类型不读 env」的形态
+  做等价快捷**（`Infer::close_meta_ty`：Let 层对不读 env 的闭体求值透明 ⇒
+  直接 `eval [] q`；L05 implicit k=9 3235 → 68.3 ms）。含 Bind 槽或读 env 的
+  形态（prune 的绑定层）仍走全构造；「在 telescope 节点缓存已闭前缀、
+  fresh_meta 只增量补新层」的摊还 O(1) 仍未做。
 - check/infer 与 parser 在 let 链上仍是递归（L03/L04 同款），参考版的深层
   rename/prune 在深负载需大栈（l05bench 默认 128MB 线程，`L05_STACK_MB` 可调；
   互检/黑盒里深负载用 `with_big_stack` 线程跑参考版）。

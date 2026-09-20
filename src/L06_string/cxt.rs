@@ -262,7 +262,13 @@ pub struct Cxt {
     pub lvl: Lvl, // Used for unification
     pub locals: Locals,
     pub pruning: Pruning,
-    pub src_names: HashMap<String, (Lvl, Rc<VTy>)>,
+    /// 名字表（写时复制，L07/L08 `Decls = Rc<..>` 的同款手法）：旧版是按值
+    /// 字段，`bind`/`define`/`new_binder` 各整表克隆一次（键是 `String`，
+    /// 每条目一次 malloc）。strchain k=11（D=4096）参考版 1215 ms，同负载
+    /// L07/L08 参考版 123/124 ms。表改 `Rc` 后 `new_binder` 与 `Cxt::clone`
+    /// 零成本，插入走 `Rc::make_mut`（父 cxt 仍持有时整拷一次，与旧版同价，
+    /// 故「占位只对本定义可见」的写时复制语义原样保留、无新增别名可观测）。
+    pub src_names: Rc<HashMap<String, (Lvl, Rc<VTy>)>>,
 }
 
 impl Cxt {
@@ -347,7 +353,7 @@ impl Cxt {
             lvl: Lvl(0),
             locals: Locals::Here,
             pruning: List::new(),
-            src_names: HashMap::new(),
+            src_names: Rc::new(HashMap::new()),
         }
     }
 
@@ -355,8 +361,8 @@ impl Cxt {
         fn go(locals: &Locals) -> List<String> {
             match locals {
                 Locals::Here => List::new(),
-                Locals::Define(locals, name, _, _) => go(locals).prepend(name.data.clone()),
-                Locals::Bind(locals, name, _) => go(locals).prepend(name.data.clone()),
+                Locals::Define(locals, name, _, _) => go(&**locals).prepend(name.data.clone()),
+                Locals::Bind(locals, name, _) => go(&**locals).prepend(name.data.clone()),
             }
         }
         go(&self.locals)
@@ -364,12 +370,12 @@ impl Cxt {
 
     pub fn bind(&self, x: Span<String>, a_quote: Tm, a: Rc<Val>) -> Self {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, a));
+        let mut src_names = Rc::clone(&self.src_names);
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, a));
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names,
         }
@@ -380,20 +386,20 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Locals::Bind(Rc::new(self.locals.clone()), x, Rc::new(a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names: self.src_names.clone(),
+            src_names: Rc::clone(&self.src_names),
         }
     }
 
     pub fn define(&self, x: Span<String>, t: Tm, vt: Rc<Val>, a: Ty, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (self.lvl, va));
+        let mut src_names = Rc::clone(&self.src_names);
+        Rc::make_mut(&mut src_names).insert(x.data.clone(), (self.lvl, va));
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
-            locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
+            locals: Locals::Define(Rc::new(self.locals.clone()), x, Rc::new(a), Rc::new(t)),
             pruning: self.pruning.prepend(None),
             src_names,
         }
