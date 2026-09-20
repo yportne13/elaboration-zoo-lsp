@@ -753,7 +753,7 @@ impl Cxt {
         cxt
     }
 
-    pub fn add_builtin(self, infer: &Infer, name: &str, ty: Rc<Tm>, prim: PrimFunc) -> Result<Self, Error> {
+    pub fn add_builtin(mut self, infer: &Infer, name: &str, ty: Rc<Tm>, prim: PrimFunc) -> Result<Self, Error> {
         let va = infer.eval(&self.decl, &self.env, &ty);
         let name_span = empty_span(SmolStr::new(name));
         let val_tm = Tm::Decl(name_span.clone()).into();
@@ -885,27 +885,27 @@ impl Cxt {
         }
     }
 
-    pub fn fake_bind(&self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
+    /// Recursive-def placeholder: insert a `Tm::Decl(name)` self-referential
+    /// stub so the body check can resolve the def's own name; a name already
+    /// in the table (builtins included) is a `redefine` error, and the table
+    /// is left untouched on that path.
+    ///
+    /// In-place COW (ported from the twin's `Tycker::fake_bind`,
+    /// `bump_spine_iter.rs`): the old form cloned the whole table into a local
+    /// first, so the strong count was always 2 when `Rc::make_mut` ran and
+    /// EVERY insert deep-copied the table — with L13's 7-tuple entries (heap
+    /// `String typ_pretty` per entry) that is ~893ns/entry, paid once per
+    /// declaration here and once again in `decl` (total O(D²) over a file).
+    /// Mutating through `&mut self` lets an exclusive holder (the sequential
+    /// decl path) insert in O(1); a shared table still deep-copies inside
+    /// `make_mut`, so isolation semantics are unchanged.
+    pub fn fake_bind(&mut self, x: Span<SmolStr>, a_quote: Rc<Tm>, a: Rc<Val>) -> Result<Self, Error> {
         //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut decl = self.decl.clone();
-        let decl_map = Rc::make_mut(&mut decl);
-        let t = decl_map.insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a, None, String::new()));
-        if t.is_some() {
+        if self.decl.contains_key(&x.data) {
             return Err(Error(x.to_span().map(|_| format!("redefine {}", x.data)), vec![]));
         }
-        Ok(Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            decl,
-            namespace: self.namespace.clone(),
-            namespace_prefix: self.namespace_prefix.clone(),
-            namespaces: self.namespaces.clone(),
-            update_from: self.update_from,
-            binding_name: self.binding_name.clone(),
-        })
+        Rc::make_mut(&mut self.decl).insert(x.data.clone(), (x.to_span(), Tm::Decl(x.clone()).into(), Val::Decl(x.clone(), List::new()).into(), a_quote, a, None, String::new()));
+        Ok(self.clone())
     }
 
     pub fn new_binder(&self, x: Span<SmolStr>, a_quote: Rc<Tm>) -> Self {
@@ -957,32 +957,23 @@ impl Cxt {
     /// `Tm` because the raw term can embed `AppPruning(Meta, pr)` whose
     /// pruning is deeper than any display-side name list — hover must show
     /// the precomputed string instead of re-pretty-printing without context.
-    pub fn decl(&self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>, prim: Option<PrimFunc>, typ_pretty: String) -> Result<Self, Error> {
-        let mut decl = self.decl.clone();
-        let decl_map = Rc::make_mut(&mut decl);
+    ///
+    /// In-place COW (ported from the twin's `Tycker::decl_reg`, see
+    /// [`Self::fake_bind`]): insertion overwrites the in-flight entry the
+    /// caller's `fake_bind` stub installed, so an exclusive holder pays O(1)
+    /// instead of a full-table deep copy per declaration.
+    pub fn decl(&mut self, x: Span<SmolStr>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>, prim: Option<PrimFunc>, typ_pretty: String) -> Result<Self, Error> {
         // prim-ness transitions invalidate the force memo (see
         // `PRIM_VERSION`): registering a prim (`register_nat_builtins`,
         // startup builtins) or shadowing one with a plain def both change
         // what `force` computes for spines of that name.
-        let had_prim = decl_map.get(&x.data).map_or(false, |e| e.5.is_some());
+        let had_prim = self.decl.get(&x.data).map_or(false, |e| e.5.is_some());
         let now_prim = prim.is_some();
-        decl_map.insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim, typ_pretty));
+        Rc::make_mut(&mut self.decl).insert(x.data.clone(), (x.to_span(), t, vt, a, va, prim, typ_pretty));
         if had_prim != now_prim {
             super::prim_version_bump();
         }
-        Ok(Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
-            src_names: self.src_names.clone(),
-            decl,
-            namespace: self.namespace.clone(),
-            namespace_prefix: self.namespace_prefix.clone(),
-            namespaces: self.namespaces.clone(),
-            update_from: self.update_from,
-            binding_name: self.binding_name.clone(),
-        })
+        Ok(self.clone())
     }
 
     /// freshVal 函数实现

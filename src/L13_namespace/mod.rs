@@ -2752,39 +2752,69 @@ impl Infer {
             }
         }
         let mut visiting = std::collections::HashSet::new();
-        let result = self.scan_def_replay(decl, name, &mut visiting);
+        let mut truncated = false;
+        let result = self.scan_def_replay(decl, name, &mut visiting, &mut truncated);
         if let Ok(mut memo) = self.def_replay_memo.write() {
             memo.insert(name.clone(), result);
         }
         result
     }
 
-    fn scan_def_replay(&self, decl: &Decl, name: &SmolStr, visiting: &mut std::collections::HashSet<SmolStr>) -> bool {
-        if !visiting.insert(name.clone()) {
-            return false; // cycle: nothing new to learn
+    /// Is `name`'s body (transitively) an effect performer?  Ported from the
+    /// twin (`bump_spine_iter.rs::scan_def_replay`, perf-debt P4):
+    ///
+    /// The memo read below is what keeps a chain-shaped reference graph
+    /// linear.  Without it the DFS re-walks the whole chain on every query —
+    /// `def_needs_replay`'s top-level memo only covers the name it was asked
+    /// about, so its inner recursion (`tm_scan_global_ops` → here) re-scanned
+    /// depth D for each of the ~9 queries a declaration issues
+    /// (`strchain`: 2.1M scan steps for 1024 decls = O(D) each, O(D²) per
+    /// file; measured 4.0s → ~0.1s at k=11).
+    ///
+    /// `truncated` is the conservative-write guard: a sub-scan that hit the
+    /// `visiting` cycle guard may report a false negative (the effect could
+    /// be reachable through an ancestor still being scanned), so such a
+    /// result must not be memoized.  Clean (chain/tree-shaped) scans memoize
+    /// at every level, which is what makes the following queries O(1).  The
+    /// flag is shared with the whole scan below, so one truncation suppresses
+    /// every memo write of that scan — same discipline as the twin.
+    fn scan_def_replay(&self, decl: &Decl, name: &SmolStr, visiting: &mut std::collections::HashSet<SmolStr>, truncated: &mut bool) -> bool {
+        if let Ok(memo) = self.def_replay_memo.read() {
+            if let Some(m) = memo.get(name) {
+                return *m;
+            }
         }
-        match decl.get(name) {
+        if !visiting.insert(name.clone()) {
+            // cycle: nothing new to learn — and the false we return here may
+            // hide an effect reachable only through the ancestor on the stack.
+            *truncated = true;
+            return false;
+        }
+        let result = match decl.get(name) {
             // Builtins (prim) are never replayed: their stored body term is a
             // self-referential `Tm::Decl(name)` placeholder, and the actual
             // behavior runs through the prim function at application time.
-            Some(e) if e.5.is_some() => {
-                visiting.remove(name);
-                return false;
-            }
+            Some(e) if e.5.is_some() => false,
             Some(e) => {
                 let body = e.1.clone();
                 let mut found = false;
-                self.tm_scan_global_ops(decl, &body, visiting, &mut found);
-                visiting.remove(name);
+                self.tm_scan_global_ops(decl, &body, visiting, &mut found, truncated);
                 found
             }
             None => false,
+        };
+        visiting.remove(name);
+        if !*truncated {
+            if let Ok(mut memo) = self.def_replay_memo.write() {
+                memo.insert(name.clone(), result);
+            }
         }
+        result
     }
 
     /// Depth-first scan of a closed term for `REPLAY_GLOBAL_OPS` calls (as
     /// `Tm::Decl` heads) or references to other defs that need replay.
-    fn tm_scan_global_ops(&self, decl: &Decl, tm: &Tm, visiting: &mut std::collections::HashSet<SmolStr>, found: &mut bool) {
+    fn tm_scan_global_ops(&self, decl: &Decl, tm: &Tm, visiting: &mut std::collections::HashSet<SmolStr>, found: &mut bool, truncated: &mut bool) {
         if *found {
             return;
         }
@@ -2796,55 +2826,55 @@ impl Infer {
                     // A reference to another def: if that def needs replay,
                     // this one does too (the effect happens through it).
                     let entry = decl.get(&x.data).map(|e| e.1.clone());
-                    if entry.is_some() && self.scan_def_replay(decl, &x.data, visiting) {
+                    if entry.is_some() && self.scan_def_replay(decl, &x.data, visiting, truncated) {
                         *found = true;
                     }
                 }
             }
-            Tm::Obj(t, _) => self.tm_scan_global_ops(decl, t, visiting, found),
-            Tm::Lam(_, _, b) => self.tm_scan_global_ops(decl, b, visiting, found),
+            Tm::Obj(t, _) => self.tm_scan_global_ops(decl, t, visiting, found, truncated),
+            Tm::Lam(_, _, b) => self.tm_scan_global_ops(decl, b, visiting, found, truncated),
             Tm::App(f, u, _) => {
-                self.tm_scan_global_ops(decl, f, visiting, found);
-                self.tm_scan_global_ops(decl, u, visiting, found);
+                self.tm_scan_global_ops(decl, f, visiting, found, truncated);
+                self.tm_scan_global_ops(decl, u, visiting, found, truncated);
             }
-            Tm::AppPruning(t, _) => self.tm_scan_global_ops(decl, t, visiting, found),
+            Tm::AppPruning(t, _) => self.tm_scan_global_ops(decl, t, visiting, found, truncated),
             Tm::Pi(_, _, a, b) => {
-                self.tm_scan_global_ops(decl, a, visiting, found);
-                self.tm_scan_global_ops(decl, b, visiting, found);
+                self.tm_scan_global_ops(decl, a, visiting, found, truncated);
+                self.tm_scan_global_ops(decl, b, visiting, found, truncated);
             }
             Tm::Let(_, _, t, u) => {
-                self.tm_scan_global_ops(decl, t, visiting, found);
-                self.tm_scan_global_ops(decl, u, visiting, found);
+                self.tm_scan_global_ops(decl, t, visiting, found, truncated);
+                self.tm_scan_global_ops(decl, u, visiting, found, truncated);
             }
             Tm::SumCase { typ, datas, .. } => {
-                self.tm_scan_global_ops(decl, typ, visiting, found);
+                self.tm_scan_global_ops(decl, typ, visiting, found, truncated);
                 for (_, t, _) in datas.iter() {
-                    self.tm_scan_global_ops(decl, t, visiting, found);
+                    self.tm_scan_global_ops(decl, t, visiting, found, truncated);
                 }
             }
             Tm::Match(t, cases) => {
-                self.tm_scan_global_ops(decl, t, visiting, found);
+                self.tm_scan_global_ops(decl, t, visiting, found, truncated);
                 for (_, b) in cases {
-                    self.tm_scan_global_ops(decl, b, visiting, found);
+                    self.tm_scan_global_ops(decl, b, visiting, found, truncated);
                 }
             }
             Tm::Call(_, args, body) => {
                 for (t, _) in args.iter() {
-                    self.tm_scan_global_ops(decl, t, visiting, found);
+                    self.tm_scan_global_ops(decl, t, visiting, found, truncated);
                 }
-                self.tm_scan_global_ops(decl, body, visiting, found);
+                self.tm_scan_global_ops(decl, body, visiting, found, truncated);
             }
             Tm::OpCall { args, body, .. } => {
                 for (t, _) in args.iter() {
-                    self.tm_scan_global_ops(decl, t, visiting, found);
+                    self.tm_scan_global_ops(decl, t, visiting, found, truncated);
                 }
-                self.tm_scan_global_ops(decl, body, visiting, found);
+                self.tm_scan_global_ops(decl, body, visiting, found, truncated);
             }
             Tm::Sum(_, params, _, _) => {
                 // Dependent-index param values can embed calls (case names
                 // in `TmSumCases` are plain strings, nothing to scan).
                 for (_, val, _, _) in params.iter() {
-                    self.tm_scan_global_ops(decl, val, visiting, found);
+                    self.tm_scan_global_ops(decl, val, visiting, found, truncated);
                 }
             }
             // Remaining variants (Var/U/Meta/LiteralType/LiteralIntro) carry
@@ -3485,7 +3515,7 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
                 println!("> {}", name.data);
             }
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
         cxt = new_cxt;
         // HDL self-check warnings: drain per decl (the module close-check
         // runs during the module class decl's own elaboration).
@@ -3781,7 +3811,7 @@ fn load_prelude_state_impl(include_hdl: bool) -> Result<PreludeState, Error> {
             for tm in decls {
                 let _d_t0 = std::time::Instant::now();
                 let _e0 = FUNC_PROF.eval.0.load(std::sync::atomic::Ordering::Relaxed);
-                let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+                let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
                 let _d_el = _d_t0.elapsed().as_secs_f64();
                 if prelude_prof && _d_el > 0.005 {
                     let _e1 = FUNC_PROF.eval.0.load(std::sync::atomic::Ordering::Relaxed);
@@ -4091,7 +4121,7 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
                 println!("> {}", name.data);
             }
         }
-        let (x, _, new_cxt) = infer.infer(&cxt, tm.clone())?;
+        let (x, _, new_cxt) = infer.infer_in_place(&mut cxt, tm.clone())?;
         cxt = new_cxt;
         // HDL self-check warnings: drain per decl (the module close-check
         // runs during the module class decl's own elaboration).
@@ -4290,7 +4320,7 @@ pub(crate) fn bench_check(decls: &[parser::syntax::Decl]) -> bool {
     let mut infer = Infer::new();
     let mut cxt = Cxt::new(&infer);
     for d in decls {
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_in_place(&mut cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return false,
         }
@@ -4311,7 +4341,7 @@ pub(crate) fn bench_check_nf(decls: &[parser::syntax::Decl]) -> u64 {
         } else {
             None
         };
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_in_place(&mut cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }
@@ -4347,7 +4377,7 @@ pub(crate) fn bench_check_nf_bounded(
         } else {
             None
         };
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_in_place(&mut cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(_) => return 0,
         }
@@ -4385,7 +4415,7 @@ pub(crate) fn bench_check_first_err_bounded(
         } else {
             None
         };
-        match infer.infer(&cxt, d.clone()) {
+        match infer.infer_in_place(&mut cxt, d.clone()) {
             Ok((_, _, nc)) => cxt = nc,
             Err(e) => return Err(e),
         }

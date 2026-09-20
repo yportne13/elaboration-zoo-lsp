@@ -1023,11 +1023,39 @@ impl Infer {
         };
         self.infer_after_prefix(cxt, t)
     }
+    /// [`Self::infer`] taking the context by `&mut`: the sequential decl
+    /// drivers (prelude load, `run`, the bench drivers) hold the only
+    /// reference to `cxt`, so the decl-table writes inside stay in place —
+    /// O(1) per declaration instead of a full-table deep copy (see
+    /// `Cxt::fake_bind`).  Callers rebind `cxt = new_cxt` as with `infer`.
+    pub(crate) fn infer_in_place(&mut self, cxt: &mut Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
+        // Apply package prefix if active (unless the declaration itself sets the prefix)
+        let t = match &t {
+            Decl::Package { .. } | Decl::Import { .. } => t,
+            _ => if let Some(ref prefix) = cxt.namespace_prefix {
+                prefix_decl_name(t, prefix)
+            } else { t },
+        };
+        self.infer_after_prefix_mut(cxt, t)
+    }
     /// The per-declaration elaboration, run on an already-prefixed decl.
     /// Split out so the class elaboration (which expands a class into its
     /// four phase-B decls with concrete field types) can recurse without
     /// re-applying the namespace prefix.
+    ///
+    /// Shared-borrow entry: callers that cannot lend a `&mut Cxt` pay one
+    /// shallow `Cxt` clone (Rc bumps only) and delegate.  The in-place
+    /// variant below is what the sequential decl drivers use.
     fn infer_after_prefix(&mut self, cxt: &Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
+        let mut cxt = cxt.clone();
+        self.infer_after_prefix_mut(&mut cxt, t)
+    }
+    /// [`Self::infer_after_prefix`] taking the context by `&mut`: the caller's
+    /// `Cxt` owns the decl table exclusively on the sequential decl path, so
+    /// `fake_bind`/`decl` write it in place (no per-declaration full-table
+    /// deep copy).  See `Cxt::fake_bind`.  The returned `Cxt` shares the same
+    /// table; callers that keep only one of the two keep the count at 1.
+    fn infer_after_prefix_mut(&mut self, cxt: &mut Cxt, t: Decl) -> Result<(DeclTm, Rc<Val>, Cxt), Error> {
         match t {
             Decl::Def {
                 name,
@@ -1035,7 +1063,7 @@ impl Infer {
                 ret_type,
                 body,
             } => {
-                let ret_cxt = cxt;
+                let ret_cxt: &mut Cxt = cxt;
                 let this_meta = self.meta.len();
                 let typ = params.iter().rev().fold(ret_type.clone(), |a, b| {
                     Raw::Pi(b.0.clone(), b.2, Box::new(b.1.clone()), Box::new(a))
@@ -1059,22 +1087,22 @@ impl Infer {
                     self.solve_multi_trait(&fake_cxt, super::MetaVar(this_meta as u32), true)
                         .map_err(|e| Error(name.to_span().map(|_| format!("{:?}", e)), vec![]))?;
                     //let t_tm_nf = self.nf(&ret_cxt.decl, &fake_cxt.env, &t_tm);
-                    if let Some((meta_cxt, oty, meta_span)) = t_tm.no_metas(self, &cxt.decl, cxt.lvl) {
+                    if let Some((meta_cxt, oty, meta_span)) = t_tm.no_metas(self, &ret_cxt.decl, ret_cxt.lvl) {
                         // --- Try Nat defaulting (Lean-style fallback) ---
                         // When there are unsolved type metas, try defaulting them to Nat
                         // and re-attempt trait resolution, before giving up.
                         let saved_meta: Vec<_> = self.meta.clone();
                         let nat_tm: Rc<Tm> = Tm::Decl(empty_span(SmolStr::new("Nat"))).into();
-                        let nat_val: Rc<Val> = self.eval(&cxt.decl, &cxt.env, &nat_tm);
+                        let nat_val: Rc<Val> = self.eval(&ret_cxt.decl, &ret_cxt.env, &nat_tm);
                         let nat_ok = matches!(
-                            self.force(&cxt.decl, &nat_val).as_ref(),
+                            self.force(&ret_cxt.decl, &nat_val).as_ref(),
                             Val::Sum(..) | Val::Decl(..)
                         );
                         let nat_solved = if nat_ok {
                             // Phase 1: collect indices of type-valued unsolved metas (immutable borrow)
                             let to_default: Vec<usize> = self.meta.iter().enumerate()
                                 .filter(|(_, entry)| matches!(entry, MetaEntry::Unsolved(ty, _, _, _)
-                                    if matches!(self.force(&cxt.decl, ty).as_ref(), Val::U(_))))
+                                    if matches!(self.force(&ret_cxt.decl, ty).as_ref(), Val::U(_))))
                                 .map(|(i, _)| i)
                                 .collect();
                             if to_default.is_empty() {
@@ -1087,7 +1115,7 @@ impl Infer {
                                     }
                                 }
                                 let _ = self.solve_multi_trait(&fake_cxt, MetaVar(this_meta as u32), false);
-                                if t_tm.no_metas(self, &cxt.decl, cxt.lvl).is_none() {
+                                if t_tm.no_metas(self, &ret_cxt.decl, ret_cxt.lvl).is_none() {
                                     true
                                 } else {
                                     // Restore original meta state for proper error reporting
@@ -1102,7 +1130,7 @@ impl Infer {
                         if !nat_solved {
                             let err_msg = if let Val::Sum(name, params, _, true) = oty.as_ref() {
                                 let has_flex = params.iter().any(|(_, val, _, _)| {
-                                    matches!(self.force(&cxt.decl, val).as_ref(), Val::Flex(..))
+                                    matches!(self.force(&ret_cxt.decl, val).as_ref(), Val::Flex(..))
                                 });
                                 let instances = self.trait_solver.class_instances.get(&name.data);
                                 if has_flex {
@@ -1140,7 +1168,7 @@ impl Infer {
                                         // Width hint: UInt/Bits/SInt with
                                         // different widths — the classic slip.
                                         let width_of = |val: &Rc<Val>| -> Option<String> {
-                                            match self.force(&cxt.decl, val).as_ref() {
+                                            match self.force(&ret_cxt.decl, val).as_ref() {
                                                 Val::Sum(n, ps, _, _)
                                                     if n.data == "UInt" || n.data == "SInt" || n.data == "Bits" =>
                                                 {
@@ -1227,7 +1255,12 @@ impl Infer {
                         if params.is_empty() {
                             let mut visiting = std::collections::HashSet::new();
                             let mut found = false;
-                            self.tm_scan_global_ops(&fake_cxt.decl, &t_tm, &mut visiting, &mut found);
+                            // `scan_truncated` mirrors the memo guard in
+                            // `scan_def_replay`: this probe scans the def's own
+                            // (not yet registered) body, so its nested answers
+                            // are memoized there, not here.
+                            let mut scan_truncated = false;
+                            self.tm_scan_global_ops(&fake_cxt.decl, &t_tm, &mut visiting, &mut found, &mut scan_truncated);
                             if found {
                                 Rc::new(Val::Decl(name.clone(), List::new()))
                             } else {
@@ -1237,7 +1270,13 @@ impl Infer {
                             self.eval(&fake_cxt.decl, &fake_cxt.env, &t_tm)
                         }
                     };
-                    self.push_hover(cxt, name.to_span(), name.to_span(), &vtyp);
+                    self.push_hover(ret_cxt, name.to_span(), name.to_span(), &vtyp);
+                    // Release the fake table's Rc before registering the real
+                    // entry: with another holder alive `Rc::make_mut` would
+                    // deep-copy the whole table (the O(D) cost this port
+                    // removes).  The table contents are the same either way —
+                    // the stub is overwritten in place by the entry below.
+                    drop(fake_cxt);
                     (
                         ret_cxt.decl(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone(), None, vtyp_pretty.clone())?,
                         vtyp,
@@ -1389,6 +1428,9 @@ impl Infer {
                     let vt = self.eval(&cxt.decl, &fake_cxt.env, &t_tm);
                     let typ_pretty =
                         super::pretty_tm(0, cxt.names(), &self.nf(&cxt.decl, &cxt.env, &typ_tm));
+                    // Drop the fake table's Rc first (see the Def arm): keeps
+                    // the registration below an in-place overwrite.
+                    drop(fake_cxt);
                     cxt.decl(name.clone(), t_tm, vt, typ_tm, vtyp, None, typ_pretty)?
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
