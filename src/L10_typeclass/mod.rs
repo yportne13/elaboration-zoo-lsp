@@ -1,7 +1,7 @@
 use cxt::Cxt;
 use parser::syntax::{Either, Icit, Raw};
 use pattern_match::Compiler;
-use syntax::{Pruning, close_ty};
+use syntax::{Locals, Pruning, close_ty};
 use pretty::pretty_tm;
 
 use crate::list::List;
@@ -425,6 +425,8 @@ use std::{
     ops::{Add, Sub}, rc::Rc,
 };
 
+use rustc_hash::FxHashMap;
+
 #[derive(Debug)]
 enum UnifyError {
     Basic,
@@ -451,9 +453,32 @@ const UNIFY_FUEL: u32 = 4096;
 pub struct Infer {
     meta: Vec<MetaEntry>,
     global: HashMap<Lvl, Rc<VTy>>,
+    /// 顶层名字表（名字 → (层级, 类型值)）：**append-only，随 Infer 存续、
+    /// 不随 Cxt 克隆**——顶层 def/enum/构造子的真名与 `fake_bind` 的递归
+    /// 占位都记在这里（2026-09-20 参考版 O(D²) 修复）。
+    ///
+    /// 旧设计把顶层名累积进 `Cxt.src_names`（每声明 +1 条），而 `fake_bind`
+    /// / `define` 每次克隆整表（表大小 O(D)）⇒ 每声明 2 次全表克隆、总计
+    /// O(D²)（L10 strchain k=11 实测 929ms vs 孪生 3.2ms，见
+    /// `docs/perf-debt-2026-09-12.md` P2 的孪生侧同款处置）。查找顺序：
+    /// `cxt.src_names`（局部，遮蔽）优先，回落本表。
+    global_names: FxHashMap<String, (Lvl, Rc<VTy>)>,
     trait_solver: typeclass::Synth,
     trait_definition: HashMap<String, (Vec<(Span<String>, Raw, Icit)>, Vec<bool>, Vec<(Span<String>, Vec<(Span<String>, Raw, Icit)>, Raw)>)>,
     trait_out_param: HashMap<String, Vec<bool>>,
+    /// **中性全局视图开关**（孪生 `Machine.neutral` 视图的参考版形态）：
+    /// 置位期间 `eval` 的全局回落返回中性 rigid（`Rigid(GLOBAL_BASE + idx)`）
+    /// 而非全局值——Match/Match 合一、`rename` 与 `quote` 的分支体重求值要
+    /// 的"全局名字不再递归展开"视图（求值函数全为 `&self`，Cell 提供内部
+    /// 可变性；可嵌套，存旧值恢复）。
+    ///
+    /// 旧实现是三处 `self.clone()` 整个 Infer 再就地改写 global 表——L10 的
+    /// Infer 还带 trait_solver / trait_definition / trait_out_param 三张表，
+    /// 每次克隆都跟着深拷（孪生侧曾以 `neutral_of(&self.globals)` 整拷同病，
+    /// perf-debt P2 残余平方项）；开关是 O(1)，语义逐值一致：原先被改写的
+    /// 每个条目恰好是"已登记的全局 → 中性 rigid"，未登记的仍 panic（本字段
+    /// 只改回落路径的取值，不改可达性）。
+    neutral_globals: std::cell::Cell<bool>,
     /// unify/force 共享 fuel 池（L08 同款）：外层入口（`nf`/`unify_catch`）
     /// 充值；`unify` 递归与 `force` 的 meta 展开各烧 1，耗尽时 unify 按
     /// 不可合一失败、force 停止展开按未解处理。
@@ -465,11 +490,60 @@ impl Infer {
         Self {
             meta: vec![],
             global: HashMap::new(),
+            global_names: FxHashMap::default(),
             trait_solver: Default::default(),
             trait_definition: Default::default(),
             trait_out_param: Default::default(),
+            neutral_globals: std::cell::Cell::new(false),
             unify_fuel: std::cell::Cell::new(UNIFY_FUEL),
         }
+    }
+    /// 顶层名的局部影子：`Cxt::new` 的两个内建（`String` /
+    /// `string_concat`）留在局部表里，而 `Raw::Var` / 构造子探测一律**局部
+    /// 优先**；旧单表语义是"后定义覆盖先定义"，两表分离后顶层 def 若与内建
+    /// 撞名，必须同步覆写局部条目，否则新 def 反被内建遮蔽（同名递归 def
+    /// 的自身引用也会指错）。无同名时是纯读。
+    fn shadow_local(cxt: &mut Cxt, x: &Span<String>, lvl: Lvl, ty: &Rc<VTy>) {
+        if cxt.src_names.get(&x.data).is_some() {
+            cxt.src_names.insert(x.data.clone(), (lvl, ty.clone()));
+        }
+    }
+    /// `Cxt::fake_bind` 的 Infer 侧形态：递归 def/enum 的占位——名字指到
+    /// 全局层级（`global_idx + 1919810`），env/lvl/locals/pruning 一概不动，
+    /// 返回父上下文的视图。真名随后由 [`Self::define_global`] 覆盖同一条目
+    /// （占位只服务本次检查的体）。
+    fn fake_bind(&mut self, cxt: &Cxt, x: Span<String>, a: Rc<VTy>, global_idx: Lvl) -> Cxt {
+        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), cxt.lvl.0);
+        let lvl = global_idx + 1919810;
+        self.global_names.insert(x.data.clone(), (lvl, a.clone()));
+        let mut out = cxt.clone();
+        Self::shadow_local(&mut out, &x, lvl, &a);
+        out
+    }
+    /// 顶层 define（`Decl::Def` / `Decl::Enum` / 构造子登记）：真名进
+    /// [`Self::global_names`]（append-only，不随 Cxt 克隆），槽位照旧——env
+    /// 压值、lvl +1、telescope 压 `Define` 槽、pruning 记 `None`。局部表
+    /// 不增长，故本次返回的 Cxt 克隆是 O(1)（孪生 `define_name_in` 同款）。
+    fn define_global(
+        &mut self,
+        cxt: &Cxt,
+        x: Span<String>,
+        t: Rc<Tm>,
+        vt: Rc<Val>,
+        a: Rc<Ty>,
+        va: Rc<VTy>,
+    ) -> Cxt {
+        //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define_global".bright_purple(), x.data);
+        self.global_names.insert(x.data.clone(), (cxt.lvl, va.clone()));
+        let mut out = Cxt {
+            env: cxt.env.prepend(vt),
+            lvl: cxt.lvl + 1,
+            locals: Rc::new(Locals::Define(cxt.locals.clone(), x.clone(), a, t)),
+            pruning: cxt.pruning.prepend(None),
+            src_names: cxt.src_names.clone(),
+        };
+        Self::shadow_local(&mut out, &x, cxt.lvl, &va);
+        out
     }
     /// 烧 1 格 fuel；池空返回 `false`（调用方按各自失败语义降级）。
     fn burn_fuel(&self) -> bool {
@@ -505,7 +579,7 @@ impl Infer {
         } else {
             let closed = self.eval(
                 &List::new(),
-                &close_ty(cxt.locals.clone(), self.quote(cxt.lvl, &a)),
+                &close_ty(&cxt.locals, self.quote(cxt.lvl, &a)),
             );
             let m = self.new_meta(closed);
             Tm::AppPruning(Tm::Meta(MetaVar(m)).into(), cxt.pruning.clone()).into()
@@ -783,7 +857,14 @@ impl Infer {
         match tm.as_ref() {
             Tm::Var(x) => match env.iter().nth(x.0 as usize) {
                 Some(v) => v.clone(),
-                None => self.global.get(&Lvl(x.0 - 1919810)).unwrap().clone(),
+                None => {
+                    let v = self.global.get(&Lvl(x.0 - 1919810)).unwrap();
+                    if self.neutral_globals.get() {
+                        Val::vvar(Lvl(x.0)).into()
+                    } else {
+                        v.clone()
+                    }
+                }
             },
             Tm::Obj(tm, name) => {
                 let a = self.eval(env, tm);
@@ -879,6 +960,17 @@ impl Infer {
         }
     }
 
+    /// 中性全局视图下的求值（[`Self::neutral_globals`] 的作用域包装）：
+    /// 置位 → eval → 恢复旧值（可嵌套）。三处 Match 分支体重求值点共用
+    /// （match 合一的臂体 / `rename` 的 Match 臂 / `quote` 的 Match 臂），
+    /// 取代旧实现"`self.clone()` 整机深拷 + 就地改写 global 表"。
+    fn eval_neutral(&self, env: &Env, tm: &Rc<Tm>) -> Rc<Val> {
+        let prev = self.neutral_globals.replace(true);
+        let v = self.eval(env, tm);
+        self.neutral_globals.set(prev);
+        v
+    }
+
     fn quote_sp(&self, l: Lvl, t: Rc<Tm>, spine: &Spine) -> Rc<Tm> {
         /*spine.iter().fold(t, |acc, u| {
             Tm::App(Box::new(acc), Box::new(self.quote(l, u.0.clone())), u.1)
@@ -963,11 +1055,9 @@ impl Infer {
                         {
                             let env = (0..x.0.bind_count())
                                 .fold(env.clone(), |env, x| env.prepend(Val::vvar(l + x).into()));
-                            let mut avoid_recursive = self.clone();
-                            avoid_recursive.global
-                                .iter_mut()
-                                .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
-                            let tm = avoid_recursive.eval(&env, &x.1);
+                            // 分支体在中性全局视图下重求值（全局名字不再展开，
+                            // 免递归）——`eval_neutral` 取代旧的整机克隆
+                            let tm = self.eval_neutral(&env, &x.1);
                             self.quote(l+x.0.bind_count(), &tm)
                         }
                     ))
@@ -2064,4 +2154,127 @@ println sw.y
     )
     .unwrap();
     assert!(out.contains("true"), "{out}");
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-20 负例补齐（模式匹配「应当失败」）。
+//
+// 本层此前只有嵌套位置（test_nested_coverage_gap*）的负例，顶层缺分支与
+// 臂不可达两处覆盖义务没有钉子。两者各钉一条，末条是防误报的正向对照。
+// 警告经 `elaboration.rs:313` 的 `format!("{error:?}")` 落到 `Error.0.data`，
+// 故断言按 Debug 变体名（与 L09/L11/L12 同形）。
+
+/// 负例：顶层缺构造子（Bool 少了 false 臂）必须报错，不得静默接受。
+#[test]
+fn test_pm_missing_branch_rejected() {
+    let msg = check_err(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def bad(x: Bool): Bool =
+    match x {
+        case true => false
+    }
+"#,
+    );
+    assert!(
+        msg.contains("Unmatched") || msg.contains("not covered") || msg.contains("缺少构造子"),
+        "错误文案不含缺分支信息：{msg}"
+    );
+}
+
+/// 负例：臂不可达（`Vec[Nat] zero` 上 cons 臂的索引方程无解）。
+/// 本层是"特化失败 = 臂静默跳过"（与 L11/L12 同款，非 L07 的报"分支
+/// 不可达"），故钉的是"整个 match 必须被拒"。
+#[test]
+fn test_pm_unreachable_arm_rejected() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def bad(v: Vec[Nat] zero): Nat =
+    match v {
+        case cons(x, xs) => x
+    }
+"#,
+    );
+    assert!(
+        msg.contains("Unmatched") || msg.contains("Unreachable")
+            || msg.contains("缺少构造子") || msg.contains("不可达"),
+        "错误文案不含拒因信息：{msg}"
+    );
+}
+
+/// 正向对照（防误报）：通配臂覆盖全部 → 不得报覆盖类错误。
+#[test]
+fn test_pm_wildcard_covers_ok() {
+    let out = run(
+        r#"
+enum Bool {
+    true
+    false
+}
+
+def ok(x: Bool): Bool =
+    match x {
+        case true => false
+        case _ => true
+    }
+"#,
+        0,
+    )
+    .unwrap_or_else(|e| panic!("通配臂被误报：{}", e.0.data));
+    assert!(!out.contains("非穷尽"), "{out}");
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-20 跨层一致性钉子：通配臂之后的臂。
+//
+// L07 的 README §4（`src/L07_sum_type/README.md:264`）是这条语义的规格：
+// 「通配臂之后的臂跳过（运行时永不可达，保持首匹配语义**不报错**）」，
+// 且 L07/L08 各有回归钉 `test_catch_all_mixed` 断言这种程序**通过**。
+//
+// 本层（及 L09/L11/L12）在 `pattern_match.rs` 的臂循环里对被遮蔽的臂推
+// `Warning::Unreachable`，而本层把非空 warnings 直接变成 `Err`
+// （`elaboration.rs:313`）——于是同一份源在 L07/L08 通过、在本层被拒。
+// 该 `Warning::Unreachable` 是决策树时代的残留（老算法里"树从未到达的臂"
+// 是另一回事，见 docs/l09l13-match-compiler-analysis-2026-09-17.md §2；
+// 改成逐臂下钻后只剩"被 catch-all 遮蔽"这一种情形，而它恰是规格要求不报的）。
+/// 2026-09-20 owner 口径更正：**不可达的臂应当报错**（上一轮曾按 L07
+/// README:264 对齐成沉默跳过，本轮已还原为报错）。
+#[test]
+fn test_pm_shadowed_arm_after_catch_all_rejected() {
+    match run(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def const_zero(x: Nat): Nat =
+    match x {
+        case n => zero
+        case zero => zero
+        case succ(k) => succ k
+    }
+"#,
+        0,
+    ) {
+        Err(e) => assert!(
+            e.0.data.contains("Unreachable") || e.0.data.contains("不可达"),
+            "错误文案不含臂不可达信息：{}", e.0.data
+        ),
+        Ok(out) => panic!("通配臂之后的臂（运行时永不可达）被静默接受：\n{out}"),
+    }
 }

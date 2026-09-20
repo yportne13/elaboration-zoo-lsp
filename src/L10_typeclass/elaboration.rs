@@ -357,7 +357,7 @@ impl Infer {
                     //println!("------------------->");
                     //println!("{:?}", vtyp);
                     //println!("-------------------<");
-                    let fake_cxt = ret_cxt.fake_bind(name.clone(), vtyp.clone(), global_idx);
+                    let fake_cxt = self.fake_bind(ret_cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
 
@@ -370,7 +370,7 @@ impl Infer {
                     let vt = self.eval(&fake_cxt.env, &t_tm);
                     self.global.insert(global_idx, vt.clone());
                     (
-                        ret_cxt.define(name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
+                        self.define_global(ret_cxt, name.clone(), t_tm, vt.clone(), typ_tm, vtyp.clone()),
                         vtyp,
                         vt,
                     )
@@ -479,12 +479,12 @@ impl Infer {
                     let global_idx = Lvl(self.global.len() as u32);
                     let (typ_tm, _) = self.check_universe(cxt, typ)?;
                     let vtyp = self.eval(&cxt.env, &typ_tm);
-                    let fake_cxt = cxt.fake_bind(name.clone(), vtyp.clone(), global_idx);
+                    let fake_cxt = self.fake_bind(cxt, name.clone(), vtyp.clone(), global_idx);
                     self.global.insert(global_idx, Val::vvar(global_idx + 1919810).into());
                     let t_tm = self.check(&fake_cxt, bod, &vtyp)?;
                     let vt = self.eval(&fake_cxt.env, &t_tm);
                     self.global.insert(global_idx, vt.clone());
-                    cxt.define(name.clone(), t_tm, vt, typ_tm, vtyp)
+                    self.define_global(&cxt, name.clone(), t_tm, vt, typ_tm, vtyp)
                 };
                 for (c, typ) in cases.iter().zip(new_cases.clone().into_iter()) {
                     let body_ret_type = Raw::SumCase {
@@ -527,7 +527,7 @@ impl Infer {
                         self.check_ctor_wf(&cxt, &name.data, &c.0.data, vtyp.clone())?;
                         let t_tm = self.check(&cxt, bod, &vtyp)?;
                         let vt = self.eval(&cxt.env, &t_tm);
-                        cxt.define(c.0.clone(), t_tm, vt, typ_tm, vtyp)
+                        self.define_global(&cxt, c.0.clone(), t_tm, vt, typ_tm, vtyp)
                     };
                 }
                 Ok((DeclTm::Enum {}, Val::U(0).into(), cxt))
@@ -734,8 +734,14 @@ impl Infer {
         );*/
         let t_span = t.to_span();
         match t {
-            // Infer variable types
-            Raw::Var(x) => match cxt.src_names.get(&x.data) {
+            // 变量：局部 `src_names`（内建 + 当前 def 的 binder/let，遮蔽）
+            // 优先，回落 `Infer::global_names`（顶层 def/enum/构造子，
+            // append-only、不随 Cxt 克隆）；都缺即 not in scope。
+            Raw::Var(x) => match cxt
+                .src_names
+                .get(&x.data)
+                .or_else(|| self.global_names.get(&x.data).map(|(l, t)| (l, t)))
+            {
                 Some((x, a)) => Ok((Tm::Var(lvl2ix(cxt.lvl, *x)).into(), a.clone())),
                 None => Err(Error(x.map(|x| format!("error name not in scope: {}", x)))),
             },

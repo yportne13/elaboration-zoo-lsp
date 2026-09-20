@@ -105,7 +105,14 @@ impl Compiler {
             ),
             _ => return false,
         };
-        let entry = match cxt.src_names.get(ctor) {
+        // 构造子名查找：与 `infer_expr(Var(名))` 的 Var 臂同序——局部
+        // `src_names`（内建 + 当前 def 的 binder/let）优先，回落
+        // `Infer::global_names`（顶层 def 的构造子登记，append-only）。
+        let entry = match cxt
+            .src_names
+            .get(ctor)
+            .or_else(|| infer.global_names.get(ctor).map(|(l, t)| (l, t)))
+        {
             Some((_, ty)) => ty.clone(),
             None => return false,
         };

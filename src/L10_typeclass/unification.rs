@@ -353,13 +353,11 @@ impl Infer {
                                 env.prepend(Val::vvar(pren.cod).into()),
                                 lift(&pren),
                             ));
-                        let mut avoid_recursive = self.clone();
-                        avoid_recursive.global
-                            .iter_mut()
-                            .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
+                        // 分支体在中性全局视图下求值（全局名字不再展开，免
+                        // 递归）——取代旧的整机克隆 + 就地改写 global 表
                         let body = self.rename(
                             &pren,
-                            &avoid_recursive.eval(&env, tm),
+                            &self.eval_neutral(&env, tm),
                         )?;
                         Ok((pat.clone(), body))
                     })
@@ -725,12 +723,10 @@ impl Infer {
                     );*/
                     //let body1_val = self.eval(&bind_env, clos1.clone());
                     //let body2_val = self.eval(&bind_env, clos2.clone());
-                    let mut avoid_recursive = self.clone();
-                    avoid_recursive.global
-                        .iter_mut()
-                        .for_each(|x| *x.1 = Val::Rigid(*x.0 + 1919810, List::new()).into());
-                    let body1_val = avoid_recursive.eval(&env1, clos1);
-                    let body2_val = avoid_recursive.eval(&env2, clos2);
+                    // 两个分支体在中性全局视图下求值（全局名字不再展开，免
+                    // 递归）——取代旧的整机克隆 + 就地改写 global 表
+                    let body1_val = self.eval_neutral(&env1, clos1);
+                    let body2_val = self.eval_neutral(&env2, clos2);
 
                     /*println!(
                         "-> {:?}\n== {:?}",

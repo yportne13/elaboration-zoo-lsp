@@ -5,11 +5,25 @@ use super::{
     *,
 };
 
+/// 精化上下文。
+///
+/// 2026-09-20 参考版 O(D²) 修复（照 `docs/perf-debt-2026-09-12.md` P2 的
+/// 孪生侧处置搬运，L07/L08 `Rc<DeclEntry>`、L11/L12 `Rc<Decl>` 参考版先例
+/// 同款）：
+/// - `locals` 改 `Rc<Locals>`（脊见 `syntax.rs`）——Cxt 克隆与 prepend 由
+///   整链深拷退化为引用计数；
+/// - `src_names` 只装**局部**条目（值早已是 `Rc<VTy>`，整表克隆只加计数）；
+/// - 顶层 def/enum/构造子的**真名表搬到 `Infer::global_names`**（append-only，
+///   随 Infer 存续、不随 Cxt 克隆）：旧设计里这张表随 def 数累积，`bind` /
+///   `define` 每声明各克隆一次整表（表大小 O(D)，且 L10 的 `Rc<VTy>` 值
+///   使单次全表克隆本身也含 O(D) 次引用计数操作），顶层循环总计 O(D²)。
+///   本表现在只剩 `Cxt::new` 的两个内建 + 当前 def 内的 binder/let（个位数
+///   条目）。查找顺序：本表优先（遮蔽），回落全局表——遮蔽序与旧单表一致。
 #[derive(Debug, Clone)]
 pub struct Cxt {
     pub env: Env, // Used for evaluation
     pub lvl: Lvl, // Used for unification
-    pub locals: Locals,
+    pub locals: Rc<Locals>,
     pub pruning: Pruning,
     pub src_names: BiMap<String, Lvl, Rc<VTy>>,
 }
@@ -78,7 +92,7 @@ impl Cxt {
         Cxt {
             env: List::new(),
             lvl: Lvl(0),
-            locals: Locals::Here,
+            locals: Rc::new(Locals::Here),
             pruning: List::new(),
             src_names: BiMap::new(),
         }
@@ -102,21 +116,8 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Rc::new(Locals::Bind(self.locals.clone(), x, a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
-            src_names,
-        }
-    }
-
-    pub fn fake_bind(&self, x: Span<String>, a: Rc<Val>, global_idx: Lvl) -> Self {
-        //println!("{} {x:?} {a:?} at {}", "bind".bright_purple(), self.lvl.0);
-        let mut src_names = self.src_names.clone();
-        src_names.insert(x.data.clone(), (global_idx + 1919810, a));
-        Cxt {
-            env: self.env.clone(),
-            lvl: self.lvl,
-            locals: self.locals.clone(),
-            pruning: self.pruning.clone(),
             src_names,
         }
     }
@@ -126,12 +127,15 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(Val::vvar(self.lvl).into()),
             lvl: self.lvl + 1,
-            locals: Locals::Bind(Box::new(self.locals.clone()), x, a_quote),
+            locals: Rc::new(Locals::Bind(self.locals.clone(), x, a_quote)),
             pruning: self.pruning.prepend(Some(Icit::Expl)),
             src_names: self.src_names.clone(),
         }
     }
 
+    /// **局部** define（`Raw::Let` 一项）：真名进本 Cxt 的 `src_names`。
+    /// 顶层 def/enum/构造子走 `Infer::define_global`（真名进全局表，见本
+    /// 文件头注释）。`fake_bind` 同迁 `Infer`（占位也要写全局表）。
     pub fn define(&self, x: Span<String>, t: Rc<Tm>, vt: Rc<Val>, a: Rc<Ty>, va: Rc<VTy>) -> Self {
         //println!("{} {}\n{t:?}\n{vt:?}\n{a:?}\n{va:?}", "define".bright_purple(), x.data);
         let mut src_names = self.src_names.clone();
@@ -139,7 +143,7 @@ impl Cxt {
         Cxt {
             env: self.env.prepend(vt),
             lvl: self.lvl + 1,
-            locals: Locals::Define(Box::new(self.locals.clone()), x, a, t),
+            locals: Rc::new(Locals::Define(self.locals.clone(), x, a, t)),
             pruning: self.pruning.prepend(None),
             src_names,
         }
@@ -153,6 +157,11 @@ impl Cxt {
     /// 替代旧的 `update_cxt`/`refresh`（改写 env 槽 + 全量重引用）：解不再
     /// 改写既有值，只包在外面，消费点惰性展开——旧架构"已捕获旧上下文的值
     /// 过期、槽位错位"的 bug 族按构造消除。
+    ///
+    /// 全局名字（`Infer::global_names`）不参与包裹：σ 的定义域是局部
+    /// binder 槽（`bind_slots`，层级 < 1919810），顶层 def 的类型是闭值、
+    /// 只含全局 rigid 与 meta，包裹与不包裹在 force 下同值——孪生
+    /// `Machine::subst_cxt` 同款（只包局部 names 的 by_lvl）。
     pub fn subst_cxt(&self, sub: &Rc<Subst>) -> Self {
         if sub.is_empty() {
             return self.clone();
