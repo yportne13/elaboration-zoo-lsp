@@ -6862,7 +6862,7 @@ fn types_names_list(tys: Option<&TCons<'_>>) -> crate::list::List<String> {
 /// 把 `match` 的 (模式, 分支体) 列表编译成 `Vec<(PatternDetail, Tm)>`，
 /// 并做覆盖性 / 可达性检查。特化方程解得出 = 分支可达且解就是精化；结构
 /// 冲突 = 分支不可能（absurd）。逐臂下钻保持用户书写顺序，运行时首匹配 =
-/// 用户语义；通配臂之后的所有臂不可达（跳过）。
+/// 用户语义；通配臂之后的所有臂不可达（报「分支不可达」）。
 struct Compiler<'a> {
     /// 收集所有错误（覆盖缺失 / 分支不可达），一次报全。
     errors: Vec<String>,
@@ -6992,10 +6992,15 @@ impl<'a> Compiler<'a> {
             }
         }
         // 逐臂下钻。一旦出现通配臂（覆盖所有取值），后续臂运行时永远不会
-        // 被选中——保持用户顺序的首匹配语义即可，被遮蔽的臂跳过。
+        // 被选中——保持用户顺序的首匹配语义，且被遮蔽的臂报「分支不可达」。
         let mut shadowed = false;
         for (pat, body) in arms {
             if shadowed {
+                // 被前面的通配臂遮蔽：运行时永不可达（首匹配语义）。
+                // owner 2026-09-20 口径：不可达的臂**报错**（与 Walk::Unreachable
+                // 的「分支不可达」同类），不静默跳过。
+                self.errors
+                    .push(format!("分支不可达：模式 {:?} 被前面的通配臂遮蔽", pat));
                 continue;
             }
             // 臂边界的精化替换快照（回滚 = Rc 指针赋值，见循环尾）。

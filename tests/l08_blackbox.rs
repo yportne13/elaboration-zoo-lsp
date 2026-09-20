@@ -661,13 +661,12 @@ def any(v: Vec[Nat] zero): Nat =
 /// 首匹配语义：通配臂之后的臂在运行时被跳过（编译期不报错）。
 #[test]
 fn bb_wildcard_first_match_wins() {
-    assert_lines(
+    // owner 2026-09-20 口径：通配臂之后的臂运行时永不可达 → 报「分支不可达」。
+    // 本用例原先钉的是"首匹配语义（通配臂之后的臂静默跳过、返回首个臂的值）"，
+    // 该形态现在报错；而"首匹配"在无重叠模式（本语言里只有通配臂会与前臂
+    // 重叠）下不可观测，故改为负例钉子。
+    assert_err(
         r#"
-enum Bool {
-    true
-    false
-}
-
 enum Nat {
     zero
     succ(x: Nat)
@@ -679,19 +678,8 @@ def pick(x: Nat): Nat =
         case zero => succ zero
         case succ(k) => succ k
     }
-
-def is_zero(x: Nat): Bool =
-    match x {
-        case zero => true
-        case other => false
-    }
-
-println (pick (succ (succ zero)))
-println (pick zero)
-println (is_zero zero)
-println (is_zero (succ zero))
 "#,
-        &["Nat::zero", "Nat::zero", "Bool::true", "Bool::false"],
+        "分支不可达",
     );
 }
 

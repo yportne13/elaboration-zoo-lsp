@@ -428,7 +428,10 @@ println (f (cons zero (cons (succ zero) nil)))
 /// 遮蔽臂里的类型错误不报——首匹配语义的编译期投影。
 #[test]
 fn v3_shadowed_arm_body_not_checked() {
-    assert_lines(
+    // 原钉：被遮蔽臂的体**不被类型检查**（故体里写一个类型错误的字符串也不报）。
+    // owner 2026-09-20 口径下该臂本身报「分支不可达」——本钉改为断言报的是**分支
+    // 不可达**而非体错误，从而继续守住"体未被检查"这一事实。
+    assert_err(
         &format!(
             "{NAT}{BOOL}
 def f(x: Bool): Nat =
@@ -436,12 +439,9 @@ def f(x: Bool): Nat =
         case b => zero
         case true => \"若被检查此处会类型错误\"
     }}
-
-println (f true)
-println (f false)
 "
         ),
-        &["Nat::zero", "Nat::zero"],
+        "分支不可达",
     );
 }
 
@@ -619,8 +619,9 @@ def f(x: Bool): Nat =
         ),
         "can't unify Nat == Bool",
     );
-    // 避开遮蔽后：首臂（跨 enum 名）就是通配，两输入都走它；后续臂被遮蔽
-    assert_lines(
+    // 避开遮蔽后：首臂（跨 enum 名 `zero` 不是 Bool 构造子 → 通配绑定）覆盖全部，
+    // 尾臂 `true` 运行时永不可达 → 新口径报「分支不可达」（此前为静默跳过并返回首臂值）
+    assert_err(
         &format!(
             "{NAT}{BOOL}
 def one = succ zero
@@ -630,12 +631,9 @@ def f(x: Bool): Nat =
         case zero => one
         case true => zero
     }}
-
-println (f true)
-println (f false)
 "
         ),
-        &["Nat::succ(Nat::zero)", "Nat::succ(Nat::zero)"],
+        "分支不可达",
     );
 }
 

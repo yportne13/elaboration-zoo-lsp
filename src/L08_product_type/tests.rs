@@ -417,20 +417,35 @@ def is_zero(x: Nat): Bool =
 println (is_zero zero)
 println (is_zero (succ zero))
 
+"#,
+    );
+    assert_eq!(
+        out.lines().collect::<Vec<_>>(),
+        vec!["Bool::true", "Bool::false"]
+    );
+}
+
+/// 负例（owner 2026-09-20 口径）：通配臂之后的臂运行时永不可达 → 报「分支不可达」。
+/// 此前该形态是**静默跳过**（本测试的前身 `const_zero` 就钉着"接受"），
+/// 口径改为报错后由本钉子接替。
+#[test]
+fn test_shadowed_arm_err() {
+    let msg = check_err(
+        r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
 def const_zero(x: Nat): Nat =
     match x {
         case n => zero
         case zero => zero
         case succ(k) => succ k
     }
-
-println (const_zero (succ (succ zero)))
 "#,
     );
-    assert_eq!(
-        out.lines().collect::<Vec<_>>(),
-        vec!["Bool::true", "Bool::false", "Nat::zero"]
-    );
+    assert!(msg.contains("分支不可达"), "{msg}");
 }
 
 /// 回归：GADT 可达性 —— 在 `Vec[Nat] zero` 上匹配不到 cons，

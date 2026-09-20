@@ -27,7 +27,7 @@
 //! 合一只有一套：方程走 `unify(…, Some(&mut SpecSolve))`（可解性显式
 //! 穿参），分支体检查走 `unify(…, None)` 常规转换——不得解假设。
 //! 逐臂（per-arm）下钻保持用户书写顺序，运行时首匹配 = 用户语义；
-//! 通配臂（`case x`）之后的所有臂不可达。
+//! 通配臂（`case x`）之后的所有臂不可达（**报「分支不可达」**）。
 
 use crate::parser_lib::Span;
 use std::rc::Rc;
@@ -148,10 +148,15 @@ impl Compiler {
             }
         }
         // 逐臂下钻。一旦出现通配臂（覆盖所有取值），后续臂运行时永远不会被
-        // 选中——保持用户顺序的首匹配语义即可，被遮蔽的臂跳过。
+        // 选中——保持用户顺序的首匹配语义，且被遮蔽的臂报「分支不可达」。
         let mut shadowed = false;
         for (pat, body) in arms {
             if shadowed {
+                // 被前面的通配臂遮蔽：运行时永不可达（首匹配语义）。
+                // owner 2026-09-20 口径：不可达的臂**报错**（与 Walk::Unreachable
+                // 的「分支不可达」同类），不静默跳过。
+                self.errors
+                    .push(format!("分支不可达：模式 {:?} 被前面的通配臂遮蔽", pat));
                 continue;
             }
             let sub_snap = self.sub.clone();
@@ -749,7 +754,7 @@ fn covers(pat: &Pattern, ctor: &str, ctor_names: &[String]) -> bool {
     }
 }
 
-/// 通配臂：覆盖所有取值的臂（其后的臂不可达）。
+/// 通配臂：覆盖所有取值的臂（其后的臂不可达 → 报「分支不可达」）。
 fn is_catch_all(pat: &Pattern, ctor_names: &[String]) -> bool {
     match pat {
         Pattern::Any(..) => true,
