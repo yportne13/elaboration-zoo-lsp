@@ -443,7 +443,7 @@ impl SubstV {
                 next: sub.head.clone(),
             })),
         });
-        if std::env::var("ZZ_TRACE").is_ok() {
+        if *ZZ_TRACE_ON {
             eprintln!(
                 "TRACE extend entry={:p} lvl={}",
                 r.head.as_ref().map(|e| Rc::as_ptr(e)).unwrap(),
@@ -469,7 +469,7 @@ impl SubstV {
                         val: e.val,
                         next: cons_all(&e.next, onto),
                     }));
-                    if std::env::var("ZZ_TRACE").is_ok() {
+                    if *ZZ_TRACE_ON {
                         eprintln!("TRACE compose entry={:p}", &r);
                     }
                     r
@@ -515,12 +515,18 @@ fn vsub_reclaim() {
 
 /// σ 链条目的存活计数（回归观察口，`fast_substv_reclaimed_across_rounds`
 /// 钉）：`SubEntryV` 构造 +1、Drop -1。arena 克隆泄漏 ⇒ 跨轮计数不回落。
+/// 调试打印开关（`ZZ_TRACE=1`）：**一次读取**。逐次 `std::env::var` 会锁进程
+/// 环境——σ 写路径（`extend`/`Drop`）上实测 3.2 µs/次、占 match 编译的
+/// 62-64%（2026-09-20 分相实测）；改为 LazyLock 后该相 6728 → 183 ns。
+static ZZ_TRACE_ON: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("ZZ_TRACE").is_ok());
+
 pub(crate) static SUBSTV_ALIVE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 impl Drop for SubEntryV {
     fn drop(&mut self) {
-        if std::env::var("ZZ_TRACE").is_ok() {
+        if *ZZ_TRACE_ON {
             eprintln!("TRACE drop entry={:p} lvl={}", self as *const _, self.lvl);
         }
         SUBSTV_ALIVE.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);

@@ -1367,13 +1367,18 @@ fn simpl_decl(decl: &Decls) -> Decls {
 /// 的句柄竞争会让删除报 os error 5）。
 pub static FILE_IO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// 逐 decl 调试打印开关（`L08_DEBUG=1`）：**一次读取**——逐次 `env::var_os`
+/// 会锁进程环境（Windows 上 ~µs/次），而这里每条声明都要判一次。
+static L08_DEBUG_ON: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var_os("L08_DEBUG").is_some());
+
 pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let mut infer = Infer::new();
     let ast = parser::parser(&preprocess(input), path_id).map_err(Error)?;
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
     for tm in ast {
-        if std::env::var_os("L08_DEBUG").is_some() {
+        if *L08_DEBUG_ON {
             eprintln!("> {}", parser::syntax::Decl::name(&tm));
         }
         let (x, _, new_cxt) = infer.infer(&cxt, tm)?;
