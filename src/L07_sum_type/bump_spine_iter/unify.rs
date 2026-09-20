@@ -12,7 +12,8 @@ use super::PatternDetail;
 use super::env::{env_ext, Env};
 use super::eval::{eval_iter, W};
 use super::force::{force, vapp1, vapp_ok, val_mentions_lvl};
-use super::machine::ConvScratch;
+use super::machine::{ConvScratch, ReclaimOnClear};
+use super::machine::{CACHE_SHRINK_MIN_ENTRIES, SPINE_SHRINK_MIN_ENTRIES};
 use super::prim::{DeclEntryF, Fuel, MutableMap};
 use super::rename::{invert_bump, prune_meta_bump, solve_bump, solve_with_pren_bump, RenBuf};
 use super::spine::{head_kind, is_flex, is_objheaded, xcell_head_name, HK_DECL, HK_OBJ, HK_PRIM, MetaEntry, Spine};
@@ -326,10 +327,12 @@ pub(super) fn unify_iter<'a>(
     u0: V,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
-    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配
-    conv.memo.clear();
-    conv.scratch1.clear();
-    conv.scratch2.clear();
+    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配；容量到过阈值的表
+    // 在清空时归还缓冲（memo 见 `CACHE_SHRINK_MIN_ENTRIES`，工作表见
+    // `SPINE_SHRINK_MIN_ENTRIES`），否则峰值容量随常驻 Machine 到进程结束。
+    let _ = conv.memo.reclaim(CACHE_SHRINK_MIN_ENTRIES);
+    let _ = conv.scratch1.reclaim(SPINE_SHRINK_MIN_ENTRIES);
+    let _ = conv.scratch2.reclaim(SPINE_SHRINK_MIN_ENTRIES);
     let memo = &mut conv.memo;
     stack.clear();
     stack.push(UItem::Pair(l0, t0, u0));

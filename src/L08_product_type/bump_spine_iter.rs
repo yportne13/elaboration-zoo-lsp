@@ -3191,10 +3191,12 @@ fn unify_iter<'a>(
     u0: V,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
-    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配
-    conv.memo.clear();
-    conv.scratch1.clear();
-    conv.scratch2.clear();
+    // 草稿复用（Machine 常驻）：清空保容量，热路径零分配；容量到过阈值的表
+    // 在清空时归还缓冲（memo 见 `CACHE_SHRINK_MIN_ENTRIES`，工作表见
+    // `SPINE_SHRINK_MIN_ENTRIES`），否则峰值容量随常驻 Machine 到进程结束。
+    let _ = conv.memo.reclaim(CACHE_SHRINK_MIN_ENTRIES);
+    let _ = conv.scratch1.reclaim(SPINE_SHRINK_MIN_ENTRIES);
+    let _ = conv.scratch2.reclaim(SPINE_SHRINK_MIN_ENTRIES);
     let memo = &mut conv.memo;
     // UItem 工作栈由调用方常驻复用（入口已 clear）；失败早退会留下非空
     // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）
@@ -5030,6 +5032,78 @@ fn struct_env_eq_go(
 // Machine（稳态复用）与 elaboration
 // --------------------------------------------------------------------------------
 
+/// 整表/整栈清空不归还缓冲：容量到过该量级时在清空点主动归还，否则峰值
+/// 容量会一路常驻到进程结束（多轮 bench / 长驻进程里直接算进稳态 RSS）。
+/// 阈值与 L13 孪生版同值同口径：小表重建比留着更贵，大表留着就是几 MB 起
+/// 的空桶（1<<18 条 × ~24B ≈ 6MB）。
+const CACHE_SHRINK_MIN_ENTRIES: usize = 1 << 18;
+/// 工作表栈（`Spine::stack` 与 unify 草稿 `scratch1/scratch2`）的同一阈值：
+/// 槽位（`Entry` / `(V, Icit)`）比 memo 条目小，阈值低一档（1<<16 槽
+/// ≈ 1–2MB）。与 L13 同口径。
+const SPINE_SHRINK_MIN_ENTRIES: usize = 1 << 16;
+
+/// `Vec` / `HashMap` / `HashSet` 共用的「清空 + 按阈值归还缓冲」口径
+/// （三者没有公共 trait，自备一个最小版本）：`clear()` 只清条目、桶数组照留，
+/// 容量到过阈值的表在清空时顺带 `shrink_to_fit()`；阈值以下照旧只 `clear()`
+/// （重建比留着更贵），故常态只是「clear 前多读一次 capacity」的固定开销。
+/// **只改清空的写法，不动清空时机**——时机是既有语义（地址复用、换代、
+/// 轮边界），正确性不依赖容量。形状照 L13 孪生版。
+trait ReclaimOnClear {
+    /// 清空并（容量到 `min_entries` 时）归还缓冲；返回 `(清空前 len, 清空后
+    /// capacity)`，与 L13 同形（该处供 `twin_mem_stats` 影子登记；本版无
+    /// 统计消费者，调用点 `let _ =`）。
+    fn reclaim(&mut self, min_entries: usize) -> (usize, usize);
+}
+
+impl<T> ReclaimOnClear for Vec<T> {
+    #[inline]
+    fn reclaim(&mut self, min_entries: usize) -> (usize, usize) {
+        let len = self.len();
+        let big = self.capacity() >= min_entries;
+        self.clear();
+        if big {
+            self.shrink_to_fit();
+        }
+        (len, self.capacity())
+    }
+}
+
+// impl 的界照 L13 原样带上（`K: Hash + Eq` / `S: BuildHasher`）；调用点都是
+// 具名类型，无感。
+impl<K, T, S> ReclaimOnClear for std::collections::HashMap<K, T, S>
+where
+    K: std::hash::Hash + Eq,
+    S: std::hash::BuildHasher,
+{
+    #[inline]
+    fn reclaim(&mut self, min_entries: usize) -> (usize, usize) {
+        let len = self.len();
+        let big = self.capacity() >= min_entries;
+        self.clear();
+        if big {
+            self.shrink_to_fit();
+        }
+        (len, self.capacity())
+    }
+}
+
+impl<T, S> ReclaimOnClear for std::collections::HashSet<T, S>
+where
+    T: std::hash::Hash + Eq,
+    S: std::hash::BuildHasher,
+{
+    #[inline]
+    fn reclaim(&mut self, min_entries: usize) -> (usize, usize) {
+        let len = self.len();
+        let big = self.capacity() >= min_entries;
+        self.clear();
+        if big {
+            self.shrink_to_fit();
+        }
+        (len, self.capacity())
+    }
+}
+
 /// unify 的跨调用草稿。
 #[derive(Default)]
 struct ConvScratch {
@@ -5119,14 +5193,15 @@ impl Machine {
     /// 释放。模式精化的 σ 在 `Compiler` 本地，随 compile 结束消亡，无跨轮
     /// 状态）。spine 栈同轮清空（保容量）——tag-2 句柄只被当轮 bump 值 /
     /// metas / defs / mutable_map 持有，轮边界后无任何旧句柄可达，截断防
-    /// 稳态复用下的无界增长。
+    /// 稳态复用下的无界增长；容量到过 `SPINE_SHRINK_MIN_ENTRIES` 时清空
+    /// 顺带归还缓冲（否则峰值容量随常驻 Machine 到进程结束）。
     fn clear_round(&mut self) {
         self.metas.clear();
         self.name_map.clear();
         self.name_trail.clear();
         self.defs.clear();
         self.mutable_map.borrow_mut().clear();
-        self.spine.stack.clear();
+        let _ = self.spine.stack.reclaim(SPINE_SHRINK_MIN_ENTRIES);
         self.fuel.set(UNIFY_FUEL);
         // 与三处 bump.reset() 严格伴生：归还 arena 内 σ 克隆的强引用
         // （Rc 节点在全局堆上，reset 不动其数据；见 VSUB_REGS 的 SAFETY 注释）
@@ -5523,7 +5598,8 @@ impl Machine {
         tasks.clear();
         done.clear();
         work.clear();
-        memo.clear();
+        // 清空保容量（表随 Machine 常驻），容量到阈值时顺带归还缓冲。
+        let _ = memo.reclaim(CACHE_SHRINK_MIN_ENTRIES);
         quote_iter(
             bump,
             spine,

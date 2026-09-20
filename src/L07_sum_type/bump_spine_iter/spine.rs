@@ -4,6 +4,7 @@
 
 use super::parser::syntax::Icit;
 
+use super::machine::{ReclaimOnClear, SPINE_SHRINK_MIN_ENTRIES};
 use super::syntax::{V, XCell, v_meta, v_spine, v_meta_of, v_spine_of, v_tag, v_xcell_of};
 
 // spine 栈（扁平中性）
@@ -37,9 +38,11 @@ impl Spine {
     /// （metas/defs/name_map/name_trail/mutable_map 在同一函数里
     /// 清空，decl Rc 随上轮 Cxt 在轮界释放）——陈旧句柄流不进新轮，
     /// 槽位下标从 0 重排与 `Machine::new` 同构。不清则稳态复用下 spine
-    /// 随轮数线性增长（慢泄漏 + 偶发大 Vec 扩容拷贝）。
+    /// 随轮数线性增长（慢泄漏 + 偶发大 Vec 扩容拷贝）；容量到过
+    /// `SPINE_SHRINK_MIN_ENTRIES` 时清空顺带归还缓冲，否则峰值容量随常驻
+    /// Machine 到进程结束（与 L13 孪生版 `spine.stack.reclaim` 同口径）。
     pub(super) fn clear(&mut self) {
-        self.stack.clear();
+        let _ = self.stack.reclaim(SPINE_SHRINK_MIN_ENTRIES);
     }
 
     /// 中性应用 `f a`（icit i）压栈，返回句柄值。`hk` 随函数侧传播：
