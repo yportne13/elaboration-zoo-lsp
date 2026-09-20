@@ -270,7 +270,6 @@ impl Compiler {
             // 字段 Sum 置于记录臂的终态 σ 之下再 force：索引精化（如尾部
             // 长度 l := succ n）在 σ 里，推开后的 Sum 才是探测该用的类型
             let field_sum = infer.force(&cxt.decl, &wrap_sub(&nc.sub, nc.field_sum.clone()));
-            eprintln!("DBG nc path={:?} lvl={:?} field_sum={:?} pats={:?}", nc.path, nc.lvl, field_sum, self.pats.iter().map(|(d, _)| d.to_string()).collect::<Vec<_>>());
             let cases = match field_sum.as_ref() {
                 Val::Sum(_, _, cases, _) => cases.clone(),
                 _ => continue,
