@@ -2,7 +2,7 @@
 // `Pattern` trait 取代；`std::io::pipe`（lsp_stdio 的 chunked-roundtrip 测试）
 // 自 Rust 1.87 起稳定，MSRV = 1.87。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 mod parser_lib;
@@ -333,6 +333,10 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     pub type_map: DashMap<String, Vec<DeclTm>>,
     pub document_map: DashMap<String, Rope>,
     pub document_id: DashMap<String, u32>,
+    /// 单调递增的 `path_id` 分配器（`0` 起，从不回收）。原先新 id 取
+    /// `document_id.len()`；`did_close` 开始删条目后 `len()` 会与仍存活的
+    /// id 撞车，必须换成独立计数器（见 [`Self::next_path_id`]）。
+    next_path_id: AtomicU32,
     /// Full document text for incremental sync (maintained on the LSP server thread)
     pub document_buffers: Mutex<HashMap<String, String>>,
     /// Explicit formatter settings from
@@ -423,6 +427,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             type_map,
             document_map,
             document_id,
+            next_path_id: AtomicU32::new(0),
             document_buffers: Mutex::new(HashMap::new()),
             format_settings: Mutex::new(FormatSettings::default()),
             hover_table,
@@ -450,6 +455,15 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             timings,
         });
         ret
+    }
+
+    /// 分配一个**单调递增、从不回收**的 `path_id`（文档 id）。原实现用
+    /// `document_id.len()` 当新 id：那时条目只增不删，`len()` 恰好等于
+    /// 「下一个 id」；`did_close` 开始删除条目后 `len()` 会与**仍存活**的
+    /// 条目撞车（两个文档共用 path_id，hover / goto 的 `path_id` 过滤和
+    /// 「id 反查 URI」都会取错文件），因此改成独立计数器。
+    fn next_path_id(&self) -> u32 {
+        self.next_path_id.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Core hover logic shared by the LSP trait handler and tests: resolve
@@ -1216,13 +1230,14 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 ]);
             }
             docs.push(("builtin:///show.typort", include_str!("prelude/show.typort")));
-            let mut next_id = self.document_id.len() as u32;
             for (uri, text) in docs {
                 let key = uri.to_string();
                 self.document_map.insert(key.clone(), Rope::from_str(text));
                 if !self.document_id.contains_key(&key) {
+                    // 每个 prelude 文档取一个全新的单调 id：首次调用分配的
+                    // 0..n 与旧的 `len()` 实现逐字一致，重复调用不再多占 id。
+                    let next_id = self.next_path_id();
                     self.document_id.insert(key, next_id);
-                    next_id += 1;
                 }
             }
         }
@@ -1343,6 +1358,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     fn twin_elaborate(&self, uri: &Url, text: &str, version: Option<i32>) -> bool {
         let uri_str = uri.to_string();
         if !self.twin_can_own(&uri_str) {
+            // 该文件此前可能由 twin 拥有过（快照还在 twin_tables 里），后来
+            // 加了 import / package 使 twin 不再能完整拥有它：旧快照必须立刻
+            // 清掉。hover / completion / inlay 在 twin 模式下优先读
+            // twin_tables，残留快照既占内存、又会拿上一版文本的 span 出结果，
+            // 还会盖住紧接着的参考引擎结果。
+            self.twin_tables.remove(&uri_str);
             return false;
         }
         let Some(now_id) = self.document_id.get(&uri_str).map(|x| *x) else {
@@ -1399,6 +1420,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
         });
         if !ran {
+            // 兜底：twin 这次没能拥有该文件（如 prelude 形态变化导致 resident
+            // 重新 prime 失败），上一版的快照不能留（observe 失败那一支已删，
+            // 这里对已删条目是空操作）。
+            self.twin_tables.remove(&uri_str);
             return false;
         }
         // Publish twin diagnostics + merge exports (resident still borrowed).
@@ -1650,7 +1675,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .insert(params.uri.to_string(), rope.clone());
         let now_id = self.document_id.get(params.uri.as_str())
             .map(|x| *x)
-            .unwrap_or(self.document_id.len() as u32);
+            .unwrap_or_else(|| self.next_path_id());
         self.document_id.insert(params.uri.to_string(), now_id);
         let start = std::time::Instant::now();
         // Collect all currently exported macros from the global table
@@ -2404,7 +2429,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.document_map.insert(uri_str.clone(), Rope::from_str(text));
         let now_id = self.document_id.get(&uri_str)
             .map(|x| *x)
-            .unwrap_or(self.document_id.len() as u32);
+            .unwrap_or_else(|| self.next_path_id());
         self.document_id.insert(uri_str.clone(), now_id);
         let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
@@ -3022,12 +3047,61 @@ impl LanguageServer for Backend<Client> {
     fn did_close(&self, params: DidCloseTextDocumentParams) {
         debug!("file closed!");
         let uri = params.text_document.uri;
-        self.document_buffers.lock().unwrap().remove(uri.as_str());
-        // Remove the file's symbols from the global cxt and rebuild dependents.
-        if !self.file_symbols.contains_key(uri.as_str()) {
+        // builtin:// 是服务端自带的虚拟文档（prelude），不由客户端管理：与
+        // did_open/did_change/did_save 一致地跳过，避免关闭一个 prelude 标签页
+        // 就把它的 document_map / document_id 条目删掉（hover 的 doc 注释、
+        // 宏定义跳转、依赖者重建都靠它们）。
+        if uri.scheme() == "builtin" {
             return;
         }
+        let uri_str = uri.to_string();
+        // 增量同步缓冲区（全文的又一份拷贝）最先释放。
+        self.document_buffers.lock().unwrap().remove(uri.as_str());
+        // 关闭前已入队、尚未被 drain_analysis_jobs 取走的作业要丢掉：否则
+        // drain 会把 process_file 跑一遍，document_map / document_id /
+        // type_map / hover_table / file_symbols 全被重新插回来，等于没关。
+        // 只筛掉这一个 URI，其余作业按原序重新入队，latest-wins 去抖语义不变。
+        {
+            let guard = self.job_receiver.lock().unwrap();
+            if let Some(jobs) = guard.as_ref() {
+                let mut keep: Vec<AnalysisJob> = Vec::new();
+                while let Ok(job) = jobs.try_recv() {
+                    if job.uri.as_str() != uri.as_str() {
+                        keep.push(job);
+                    }
+                }
+                for job in keep {
+                    self.job_sender.send(job).ok();
+                }
+            }
+        }
+        // 先删 document_map / document_id：`remove_file` 只有在重建依赖者时
+        // 才读 document_map，且读的是**别的**文件的文本；对本文件自己的条目
+        // 提前删除正好让依赖者集合万一包含它自身时不会重新 elaborate 一遍
+        // （那会把 type_map / hover_table / file_symbols 又插回来）。全文
+        // (Rope) 与 path_id 原本是「只插不删」的常驻泄漏点，关掉就释放；
+        // id 由单调计数器分配（见 `next_path_id`），不会把这个 id 复用给新文档。
+        self.document_map.remove(&uri_str);
+        self.document_id.remove(&uri_str);
+        // remove_file 的输入是 file_symbols / file_namespaces /
+        // file_namespace_regs / file_deps（它据此从全局 cxt 摘键、按命名空间
+        // 找依赖者重建），这些必须在它跑完之后才轮到清 —— 它内部自行清理
+        // type_map / hover_table / twin_tables / quickfix_map /
+        // macro_expansion_map / file_macros，所以这里不重复做，也不提前删。
+        // 旧实现在 file_symbols 不含该 URI 时直接 return：语法错误/空文件/
+        // 只有 import·package 的文件关闭后，上面这些 per-file 表单就永远留着。
         self.remove_file(&uri);
+        // 纯统计/信号类 per-URI 状态：关闭后不再有人查询（timings 只被
+        // bin/cli.rs 在批量跑完后整体读取，LSP 路径下删自己那几行即可；
+        // processed_signal/pending/processing 是「等待分析完成」的信号，
+        // 文档已关就没有等待者）。
+        self.timings.lock().unwrap().retain(|(u, _, _, _)| u != &uri_str);
+        self.pending_uris.remove(&uri_str);
+        self.processing_uris.remove(&uri_str);
+        {
+            let (lock, _) = &*self.processed_signal;
+            lock.lock().unwrap().remove(&uri_str);
+        }
     }
 
     fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
