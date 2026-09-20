@@ -5131,3 +5131,131 @@ def are(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (a + c) (b + c) =
     }
     assert!(panics.is_empty(), "{} decl types panic on empty-ns pretty: {panics:?}", panics.len());
 }
+
+// --------------------------------------------------------------------------------
+// 2026-09-20 负例补齐（模式匹配「应当失败」）。
+//
+// 本层有 375 个测试、`pattern_match.rs` 的 IncompleteNested 与顶层覆盖检查也都
+// 实现了，但此前**没有一个测试断言"非穷尽 match 必须报错"**——三处覆盖义务
+// 全靠 `tests/l13_fast_parity.rs` 的跨引擎套件兜底。以下三条把顶层缺分支 /
+// 臂不可达 / 嵌套位置缺构造子各钉一条，末条是防误报的正向对照（通配臂与完整
+// 嵌套覆盖都不得被误拒）。
+// 本层警告经 Display 落到 `Error.0.data`（elaboration.rs:853），故文案为
+// "non-exhaustive pattern: ... not covered" / "unreachable pattern: ..."，
+// 嵌套位置那条与 L07 同中文文案。
+
+/// 负例：顶层缺构造子（Boolean 少了 false 臂）必须报错，不得静默接受。
+#[test]
+fn test_pm_missing_branch_rejected() {
+    let input = r#"
+def bad_missing(x: Boolean): Boolean =
+    match x {
+        case true => false
+    }
+"#;
+    match run_with_prelude(input) {
+        Err(e) => assert!(
+            e.0.data.contains("not covered") || e.0.data.contains("non-exhaustive")
+                || e.0.data.contains("缺少构造子"),
+            "错误文案不含缺分支信息：{}", e.0.data
+        ),
+        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
+    }
+}
+
+/// 负例：臂不可达（`Vec[Boolean] 0` 上 cons 臂的索引方程无解）。
+#[test]
+fn test_pm_unreachable_arm_rejected() {
+    let input = r#"
+def bad_unreach(v: Vec[Boolean] 0): Boolean =
+    match v {
+        case cons(_, _) => true
+    }
+"#;
+    match run_with_prelude(input) {
+        Err(e) => assert!(
+            e.0.data.contains("unreachable") || e.0.data.contains("not covered")
+                || e.0.data.contains("不可达") || e.0.data.contains("缺少构造子"),
+            "错误文案不含拒因信息：{}", e.0.data
+        ),
+        Ok(out) => panic!("只有不可达臂的 match 被静默接受：\n{out}"),
+    }
+}
+
+/// 负例：嵌套位置覆盖缺失（lnil 臂 + lcons(h, lnil) 臂缺 lcons(h, lcons(..))）。
+/// 这类缺口在修复前静默接受、运行期在尾部为 lcons 的值上卡死。
+#[test]
+fn test_pm_nested_coverage_gap_rejected() {
+    let input = r#"
+def bad_nested(x: List[Boolean]): Boolean =
+    match x {
+        case lnil => true
+        case lcons(h, lnil) => h
+    }
+"#;
+    match run_with_prelude(input) {
+        Err(e) => assert!(e.0.data.contains("缺少构造子 lcons"), "{}", e.0.data),
+        Ok(out) => panic!("嵌套覆盖缺口被静默接受：\n{out}"),
+    }
+}
+
+/// 正向对照（防误报）：通配臂覆盖全部 + 嵌套位置完整覆盖，两种形态都必须
+/// **不报**覆盖类错误。
+#[test]
+fn test_pm_coverage_controls_ok() {
+    let wild = r#"
+def ok_wild(x: Boolean): Boolean =
+    match x {
+        case true => false
+        case _ => true
+    }
+"#;
+    run_with_prelude(wild).unwrap_or_else(|e| panic!("通配臂被误报：{}", e.0.data));
+
+    let nested = r#"
+def ok_nested(x: List[Boolean]): Boolean =
+    match x {
+        case lnil => true
+        case lcons(h, lnil) => h
+        case lcons(h, lcons(h2, t)) => h2
+    }
+"#;
+    run_with_prelude(nested).unwrap_or_else(|e| panic!("完整嵌套覆盖被误报：{}", e.0.data));
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-20 跨层一致性钉子：通配臂之后的臂。
+//
+// L07 的 README §4（`src/L07_sum_type/README.md:264`）是这条语义的规格：
+// 「通配臂之后的臂跳过（运行时永不可达，保持首匹配语义**不报错**）」，
+// 且 L07/L08 各有回归钉 `test_catch_all_mixed` 断言这种程序**通过**。
+//
+// 本层（及 L09–L12）在 `pattern_match.rs` 的臂循环里对被遮蔽的臂推
+// `Warning::Unreachable`，而本层把非空 warnings 直接变成 `Err`
+// （`elaboration.rs:853`）——于是同一份源在 L07/L08 通过、在本层被拒。
+// 该 `Warning::Unreachable` 是决策树时代的残留（老算法里"树从未到达的臂"
+// 是另一回事，见 docs/l09l13-match-compiler-analysis-2026-09-17.md §2；
+// 改成逐臂下钻后只剩"被 catch-all 遮蔽"这一种情形，而它恰是规格要求不报的）。
+// 注意本层的**结构性不可达**（`Vec[Boolean] 0` 上的 cons 臂，
+// `ctor_accessible` 前置过滤）仍然报 `unreachable pattern`——那处与 L07 的
+// "分支不可达"同判，是有记录的口径，与此钉无关。
+/// 2026-09-20 owner 口径更正：**不可达的臂应当报错**（上一轮曾按 L07
+/// README:264 对齐成沉默跳过，本轮已还原为报错）。
+#[test]
+fn test_pm_shadowed_arm_after_catch_all_rejected() {
+    let input = r#"
+def const_zero(x: Nat): Nat =
+    match x {
+        case n => zero
+        case zero => zero
+        case succ(k) => succ k
+    }
+"#;
+        match run_with_prelude(input) {
+            Err(e) => assert!(
+                e.0.data.contains("unreachable") || e.0.data.contains("不可达"),
+                "错误文案不含臂不可达信息：{}", e.0.data
+            ),
+            Ok(out) => panic!("通配臂之后的臂（运行时永不可达）被静默接受：\n{out}"),
+        }
+    }

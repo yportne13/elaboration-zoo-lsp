@@ -2655,3 +2655,123 @@ def t(w: W (n => succ zero)): Nat =
     }
 }
 
+// --------------------------------------------------------------------------------
+// 2026-09-20 负例补齐（模式匹配「应当失败」）。
+//
+// 本层此前的负例只覆盖嵌套位置（test_nested_coverage_gap*），顶层缺分支与
+// 臂不可达两处覆盖义务没有钉子。两者各钉一条，末条是防误报的正向对照。
+// 警告经 `elaboration.rs:327` 的 `format!("{error:?}")` 落到 `Error.0.data`，
+// 故断言按 Debug 变体名（与 L09/L10/L11 同形）。
+
+/// 负例：顶层缺构造子（Bool 少了 false 臂）必须报错，不得静默接受。
+#[test]
+fn test_pm_missing_branch_rejected() {
+    let src = r#"
+enum Bool {
+    true
+    false
+}
+
+def bad(x: Bool): Bool =
+    match x {
+        case true => false
+    }
+"#;
+    match run(src, 0) {
+        Err(e) => assert!(
+            e.0.data.contains("Unmatched") || e.0.data.contains("not covered")
+                || e.0.data.contains("缺少构造子"),
+            "错误文案不含缺分支信息：{}", e.0.data
+        ),
+        Ok(out) => panic!("非穷尽 match 被静默接受：\n{out}"),
+    }
+}
+
+/// 负例：臂不可达（`Vec[Nat] zero` 上 cons 臂的索引方程无解）。
+/// 本层是"特化失败 = 臂静默跳过"（同 L10/L11，非 L07 的报"分支不可达"），
+/// 故钉的是"整个 match 必须被拒"。
+#[test]
+fn test_pm_unreachable_arm_rejected() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+enum Vec[A](len: Nat) {
+    nil -> Vec[A] zero
+    cons[l: Nat](x: A, xs: Vec[A] l) -> Vec[A] (succ l)
+}
+
+def bad(v: Vec[Nat] zero): Nat =
+    match v {
+        case cons(x, xs) => x
+    }
+"#;
+    match run(src, 0) {
+        Err(e) => assert!(
+            e.0.data.contains("Unmatched") || e.0.data.contains("Unreachable")
+                || e.0.data.contains("缺少构造子") || e.0.data.contains("不可达"),
+            "错误文案不含拒因信息：{}", e.0.data
+        ),
+        Ok(out) => panic!("只有不可达臂的 match 被静默接受：\n{out}"),
+    }
+}
+
+/// 正向对照（防误报）：通配臂覆盖全部 → 不得报覆盖类错误。
+#[test]
+fn test_pm_wildcard_covers_ok() {
+    let src = r#"
+enum Bool {
+    true
+    false
+}
+
+def ok(x: Bool): Bool =
+    match x {
+        case true => false
+        case _ => true
+    }
+"#;
+    run(src, 0).unwrap_or_else(|e| panic!("通配臂被误报：{}", e.0.data));
+}
+
+// --------------------------------------------------------------------------------
+// 2026-09-20 跨层一致性钉子：通配臂之后的臂。
+//
+// L07 的 README §4（`src/L07_sum_type/README.md:264`）是这条语义的规格：
+// 「通配臂之后的臂跳过（运行时永不可达，保持首匹配语义**不报错**）」，
+// 且 L07/L08 各有回归钉 `test_catch_all_mixed` 断言这种程序**通过**。
+//
+// 本层（及 L09–L11）在 `pattern_match.rs` 的臂循环里对被遮蔽的臂推
+// `Warning::Unreachable`，而本层把非空 warnings 直接变成 `Err`
+// （`elaboration.rs:327`）——于是同一份源在 L07/L08 通过、在本层被拒。
+// 该 `Warning::Unreachable` 是决策树时代的残留（老算法里"树从未到达的臂"
+// 是另一回事，见 docs/l09l13-match-compiler-analysis-2026-09-17.md §2；
+// 改成逐臂下钻后只剩"被 catch-all 遮蔽"这一种情形，而它恰是规格要求不报的）。
+/// 2026-09-20 owner 口径更正：**不可达的臂应当报错**（上一轮曾按 L07
+/// README:264 对齐成沉默跳过，本轮已还原为报错）。
+#[test]
+fn test_pm_shadowed_arm_after_catch_all_rejected() {
+    let src = r#"
+enum Nat {
+    zero
+    succ(x: Nat)
+}
+
+def const_zero(x: Nat): Nat =
+    match x {
+        case n => zero
+        case zero => zero
+        case succ(k) => succ k
+    }
+"#;
+        match run(src, 0) {
+            Err(e) => assert!(
+                e.0.data.contains("Unreachable") || e.0.data.contains("不可达"),
+                "错误文案不含臂不可达信息：{}", e.0.data
+            ),
+            Ok(out) => panic!("通配臂之后的臂（运行时永不可达）被静默接受：\n{out}"),
+        }
+    }
+
