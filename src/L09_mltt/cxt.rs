@@ -56,7 +56,7 @@ impl Cxt {
                     Icit::Expl,
                     Closure(
                         List::new().prepend(Val::LiteralType),
-                        Box::new(Tm::Lam(
+                        Rc::new(Tm::Lam(
                             empty_span("y".to_owned()),
                             Icit::Expl,
                             Box::new(Tm::Prim),
@@ -80,7 +80,7 @@ impl Cxt {
                     Box::new(Val::LiteralType),
                     Closure(
                         List::new().prepend(Val::LiteralType),
-                        Box::new(Tm::Pi(
+                        Rc::new(Tm::Pi(
                             empty_span("y".to_owned()),
                             Icit::Expl,
                             Box::new(Tm::Var(Ix(1))),

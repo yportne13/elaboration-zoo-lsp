@@ -176,7 +176,7 @@ type Env = List<Val>;
 type Spine = List<(Val, Icit)>;
 
 #[derive(Clone)]
-pub struct Closure(Env, Box<Tm>);
+pub struct Closure(Env, Rc<Tm>);
 
 impl std::fmt::Debug for Closure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1010,7 +1010,7 @@ impl Infer {
     }
 
     fn closure_apply(&self, decl: &Decls, closure: &Closure, u: Val) -> Val {
-        self.eval(decl, &closure.0.prepend(u), *closure.1.clone())
+        self.eval(decl, &closure.0.prepend(u), (*closure.1).clone())
     }
 
     /// 把 `u` 应用到 `t`。卡住的 match 把实参收进 `pending`（值层保存）——
@@ -1086,8 +1086,8 @@ impl Infer {
                 let u_val = self.eval(decl, env, *u);
                 self.v_app(decl, self.eval(decl, env, *t), u_val, i)
             }
-            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), t)),
-            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(decl, env, *a)), Closure(env.clone(), b)),
+            Tm::Lam(x, i, t) => Val::Lam(x, i, Closure(env.clone(), Rc::new(*t))),
+            Tm::Pi(x, i, a, b) => Val::Pi(x, i, Box::new(self.eval(decl, env, *a)), Closure(env.clone(), Rc::new(*b))),
             Tm::Let(_, _, t, u) => {
                 let t_val = self.eval(decl, env, *t);
                 self.eval(decl, &env.prepend(t_val), *u)
@@ -1262,7 +1262,7 @@ impl Infer {
     }
 
     fn close_val(&self, decl: &Decls, cxt: &Cxt, t: Val) -> Closure {
-        Closure(cxt.env.clone(), Box::new(self.quote(decl, cxt.lvl + 1, t)))
+        Closure(cxt.env.clone(), Rc::new(self.quote(decl, cxt.lvl + 1, t)))
     }
 
     fn unify_catch(&mut self, decl: &Decls, cxt: &Cxt, t: Val, t_prime: Val) -> Result<(), Error> {

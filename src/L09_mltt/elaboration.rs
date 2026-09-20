@@ -788,7 +788,7 @@ impl Infer {
                         let a = self.eval(&cxt.env, new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
-                            Box::new(self.fresh_meta(
+                            Rc::new(self.fresh_meta(
                                 &cxt.bind(
                                     empty_span("x".to_string()),
                                     self.quote(cxt.lvl, a.clone()),

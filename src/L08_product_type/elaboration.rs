@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use crate::{list::List, parser_lib::Span};
 use smol_str::SmolStr;
 
@@ -649,7 +651,7 @@ impl Infer {
                         let a = self.eval(decl, &cxt.env, new_meta);
                         let b_closure = Closure(
                             cxt.env.clone(),
-                            Box::new(self.fresh_meta(
+                            Rc::new(self.fresh_meta(
                                 decl,
                                 &cxt.bind(
                                     empty_span("x".to_string()),
