@@ -86,5 +86,46 @@ pending 长度与 icit 检查整体**前置**，而参考版是惰性交错（sc
 ## 4. 仍未做（本仓库待办）
 
 1. §1 表中未核验的其余 FIXES 条目（L09–L12 侧）——若确认未落地需重做；
-2. 深值原生递归的迭代化（README §7.6，LSP 接入前置）；
-3. 孪生 `Rc<SubstV>` 跨轮回收（README §7.7，需表示层改造或热路径登记）。
+2. ~~深值原生递归的迭代化（README §7.6，LSP 接入前置）~~ —— 2026-09-18
+   落地（见 §5）；
+3. ~~孪生 `Rc<SubstV>` 跨轮回收（README §7.7，需表示层改造或热路径登记）~~
+   —— 2026-09-18 落地（见 §5）。
+
+## 5. 2026-09-18 深值栈安全轮（LSP 接入前置，实际落地）
+
+起因：README §7.6/§7.7 两条"LSP 接入前置"仍未做。本轮全部收口 + 回归钉。
+
+① **参考版深值遍历迭代化**：`struct_eq` 全家改任务栈（短路序与燃烧面
+逐点对齐旧递归：值/项任务各烧 1、Env/Spine/Closure 展开不烧、零成本判定
+压栈前完成）；`val_mentions_lvl` 改工作栈；`rename` 拆 `rename_deep` 帧式
+收集器（Sum/SumCase/Obj 整链消化；`rename_arm` 收口浅臂，
+`rename_sp`/Match 分支体等子值调用点回到入口分派——深链在任意深度进入
+收集器后不再按值深递归）。
+
+② **孪生同款**：`val_mentions_lvl` / `mentions_level` 工作栈；`struct_val_eq`
+族任务栈（`SEqTask` + `seq_step_t` 共用展开）；`rename_iter` 新增
+`ObjWrap` / `ObjSpineFold` / `SumBuild` / `SumCaseBuild` 四收集任务
+（icit 平行栈与折叠序与既有 `SpineFold` 同构）。
+
+③ **孪生 σ 跨轮回收**：`wrap_sub` 构造克隆时登记 `Rc::as_ptr`（thread_local
+`VSUB_REGS`），轮界 `vsub_reclaim`（`clear_round` + `run_decls` 出口 guard）
+逐指针 `Rc::from_raw` + drop（SAFETY 注释在 `VSUB_REGS` 定义处）；观察口
+`SUBSTV_ALIVE`（σ 链条目存活计数，SubEntryV 挂 Drop 配对 extend/compose
+的 fetch_add）。
+
+**回归钉（默认 2 MB 测试栈，正是常规栈下界）**：
+`deep_value_iterative_under_default_stack`（lib，occurs 10 万层 + 结构
+相等预算内/超预算）、`deep_rename_tests::deep_rename_collector_under_
+default_stack`（lib，rename 1 万层 + 产物剥链深度断言）、
+`deep_value_tests::deep_value_iterative_under_default_stack`（孪生，
+occurs/mentions/结构比较 10 万层）、`fast_substv_reclaimed_across_rounds`
+（parity，同一 Tycker 两轮后 σ 计数回落基线）。
+
+**残留边界**（登记：README §7.6）：深值的**释放**（Rc/Box 链递归 Drop）
+参考版仍按深度吃栈（测试用句柄保留 + `mem::forget` 承接；孪生 arena 表示
+天然豁免）；`quote` / `pretty` 对深值仍是递归路径（触发面 = nf 输出与错误
+显示，未含本轮）。
+
+**验收（本轮实测）**：`--lib L07_sum_type` 48、`l07_blackbox` 48+1、
+`_v2` 51+2、`_v3` 94+1、`l07_fast_parity` 70（v3 与 parity 各自 `#[path]`
+引入 `mod.rs`，故深值 3 钉在其中的也计入）。
