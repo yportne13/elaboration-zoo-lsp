@@ -1975,6 +1975,9 @@ pub(super) fn state_journal_record(ent: StateUndo) {
 fn state_journal_rollback(m: &mut Machine) {
     let top = STATE_JOURNAL.with(|j| j.borrow_mut().pop());
     let Some(log) = top else { return };
+    // 回滚可能撤销 decl 键（SymbolTable/ImportMap 等）——suffix_memo 的
+    // 正/负结果都可能过期，版本 bump 使查询侧整表弃用
+    m.suffix_memo_version = m.suffix_memo_version.wrapping_add(1);
     for ent in log.into_iter().rev() {
         match ent {
             StateUndo::SymbolTable(k, old) => match old {
@@ -5887,6 +5890,19 @@ struct Names {
 /// / pm 事实表）。全局走 `Cxt.decls`（名字键，参考版 `Cxt.decl` 同构），
 /// **没有** L09/L10 的 `Infer.global` 大下标与 `GLOBAL_BASE` 哨兵——无相应
 /// 下溢边界；名字状态在 [`Cxt`] 的 `names` 快照里（参考版 BiMap 同构）。
+/// Var 后缀回退 memo 的条目（失效纪律见 [`Machine::suffix_memo`] 字段注释）
+#[derive(Clone)]
+enum SuffixMemo {
+    /// 唯一命中：全键（头在填表时可见，可见性单调 → 无需复查头）
+    Pos { full_key: SmolStr, bucket_ptr: usize },
+    /// 确定无唯一命中：记填表时被"头不可见"过滤的候选首段集（空桶为空集）。
+    /// 活检头可见性，任一转可见即重查；桶指针变化（新候选）同样重查。
+    Neg {
+        bucket_ptr: usize,
+        blocked_heads: Vec<SmolStr>,
+    },
+}
+
 pub(crate) struct Machine {
     spine: Spine,
     vals: Vec<V>,
@@ -5943,6 +5959,25 @@ pub(crate) struct Machine {
     /// 命中即免每次 fallback 的全链重建（每方法一次 format! 分配，
     /// prelude-hdl 标识符密集 decl 单个数万次 fallback）。轮界 clear。
     ns_method_cache: Option<(usize, FxHashSet<SmolStr>)>,
+    /// Var 后缀回退的**解析结果 memo**：裸名 → 已解析结果。回退查询对同一
+    /// 裸名是重读纯函数（候选桶 + 活过滤），合成负载与真实源里高频重复
+    /// （struct 负载 `P.mk`/`zero` 各 1 次/decl、名字全部相同；match 负载的
+    /// 构造子名同理），memo 命中免整桶扫描与四级过滤。
+    ///
+    /// 失效纪律（按失效源精确到条目）：
+    /// * **桶内容变化**（新键入桶）——条目记填表时的桶 `Rc` 指针；桶只在
+    ///   `Rc::make_mut` 实插时换地址，指针不符即重查。轮界
+    ///   `decl_suffix_index.clear()` 后指针必然不符（memo 同界清）。
+    /// * **首段可见性翻转**（负结果专用）——负条目记填表时被"头不可见"
+    ///   过滤掉的候选首段集；活检 `decls/namespaces` 可见性，任一转可见
+    ///   即重查（可见性单调增长，正向条目无此失效源）。
+    /// * **namespace 方法键集 / namespace 准入集变化**——`Package`/`Import`
+    ///   登记与 state journal 回滚 bump `suffix_memo_version`，查询侧纪元
+    ///   不符整表弃用。
+    suffix_memo: FxHashMap<SmolStr, SuffixMemo>,
+    suffix_memo_version: u64,
+    /// memo 表当前所处的版本纪元（≠ version 即待清）
+    suffix_memo_epoch: u64,
     /// trait 型 Unsolved meta 登记表（参考版 `Infer.trait_metas`）：
     /// `fresh_meta` 对 trait Sum 走此表，`solve_multi_trait` 只扫它。
     /// （每轮清空。）
@@ -6027,6 +6062,9 @@ impl Machine {
             suffix_indexed_keys: FxHashSet::default(),
             binding_name_mk: None,
             ns_method_cache: None,
+            suffix_memo: FxHashMap::default(),
+            suffix_memo_version: 0,
+            suffix_memo_epoch: 0,
             trait_metas: Vec::new(),
             symbol_table: FxHashMap::default(),
             import_map: FxHashMap::default(),
@@ -6067,6 +6105,9 @@ impl Machine {
         self.suffix_indexed_keys.clear();
         self.binding_name_mk = None;
         self.ns_method_cache = None;
+        // 后缀回退 memo 与 decl_suffix_index 同界清（版本号一并归零）
+        self.suffix_memo.clear();
+        self.suffix_memo_version = 0;
         self.clear_observation_tables();
     }
 
@@ -6472,6 +6513,15 @@ impl Machine {
             self.ns_method_cache = Some((key, set));
         }
         self.ns_method_cache.as_ref().unwrap().1.clone()
+    }
+
+    /// 后缀桶当前指针（桶只在 `Rc::make_mut` 实插时换地址；缺席 = 0）。
+    /// memo 条目的桶纪元比对用——见 [`Machine::suffix_memo`] 注释。
+    fn suffix_bucket_ptr(&self, tail: &str) -> usize {
+        self.decl_suffix_index
+            .get(tail)
+            .map(|rc| Rc::as_ptr(rc) as usize)
+            .unwrap_or(0)
     }
 
     /// decl 登记点共用的索引/缓存维护：末段倒排索引（Var 后缀 fallback 用）
@@ -9023,6 +9073,43 @@ impl Machine {
                 //（`TypeHead.method`）排除——实例方法只经 `x.m` 分派。
                 #[cfg(feature = "sampler")]
                 crate::sampler::tick();
+                // 【后缀回退 memo】版本纪元不符即整表弃用；正结果 = 全键
+                // 直取（与唯一命中分支同出口），负结果 = 确定未命中（与
+                // 空桶/滤空同文案）。多义（>1 命中）不记，逐次重查。
+                if self.suffix_memo_epoch != self.suffix_memo_version {
+                    self.suffix_memo.clear();
+                    self.suffix_memo_epoch = self.suffix_memo_version;
+                }
+                if let Some(memo) = self.suffix_memo.get(x.data.as_str()).cloned() {
+                    let tail = x.data.as_str();
+                    match memo {
+                        SuffixMemo::Pos { full_key, bucket_ptr }
+                            if self.suffix_bucket_ptr(tail) == bucket_ptr =>
+                        {
+                            if let Some(e) = cxt.decls.get(full_key.as_str()) {
+                                self.push_hover_cached(bump, cxt, x.to_span(), e);
+                                let name = bump.alloc_str(full_key.as_str());
+                                return Ok((bump.alloc(Tm::Decl(name)), e.vty));
+                            }
+                        }
+                        SuffixMemo::Neg {
+                            bucket_ptr,
+                            blocked_heads,
+                        }
+                            if self.suffix_bucket_ptr(tail) == bucket_ptr
+                                && blocked_heads.iter().all(|h| {
+                                    !cxt.decls.contains_key(h.as_str())
+                                        && !cxt.namespaces.contains(h)
+                                }) =>
+                        {
+                            return Err(Error(
+                                x.clone().map(|x| format!("error name not in scope: {}", x)),
+                                vec![],
+                            ));
+                        }
+                        _ => {} // 桶已变 / 被阻头已可见 → 全量查询重查
+                    }
+                }
                 // 候选从倒排索引取（perf-debt 评审轮：旧实现每 miss 全
                 // decl 表 ends_with 扫描 O(D)）；空候选直接 not in scope
                 // （与旧实现滤空后 matches.len()==0 的出口一致）。桶为
@@ -9034,6 +9121,13 @@ impl Machine {
                     .cloned()
                     .unwrap_or_default();
                 if candidates.is_empty() {
+                    self.suffix_memo.insert(
+                        x.data.clone(),
+                        SuffixMemo::Neg {
+                            bucket_ptr: 0,
+                            blocked_heads: Vec::new(),
+                        },
+                    );
                     return Err(Error(
                         x.clone().map(|x| format!("error name not in scope: {}", x)),
                         vec![],
@@ -9085,6 +9179,13 @@ impl Machine {
                         self.hover_table.push((x.to_span(), *dspan, rendered));
                     }
                     let name = bump.alloc_str(full_key.as_str());
+                    self.suffix_memo.insert(
+                        x.data.clone(),
+                        SuffixMemo::Pos {
+                            full_key: full_key.clone(),
+                            bucket_ptr: self.suffix_bucket_ptr(tail),
+                        },
+                    );
                     return Ok((bump.alloc(Tm::Decl(name)), *vty));
                 } else if matches.len() > 1 {
                     let names = matches
@@ -9099,6 +9200,27 @@ impl Machine {
                         vec![],
                     ));
                 }
+                // 滤后零命中：记负结果（含被"头不可见"过滤的候选首段集）
+                let mut blocked: Vec<SmolStr> = Vec::new();
+                for k in candidates.iter() {
+                    if let Some(dot) = k.rfind('.') {
+                        let head = &k[..dot];
+                        let first = head.split('.').next().unwrap_or(head);
+                        if !cxt.decls.contains_key(first)
+                            && !cxt.namespaces.contains(first)
+                            && !blocked.iter().any(|b| b == first)
+                        {
+                            blocked.push(SmolStr::new(first));
+                        }
+                    }
+                }
+                self.suffix_memo.insert(
+                    x.data.clone(),
+                    SuffixMemo::Neg {
+                        bucket_ptr: self.suffix_bucket_ptr(tail),
+                        blocked_heads: blocked,
+                    },
+                );
                 Err(Error(x.clone().map(|x| format!("error name not in scope: {}", x)), vec![]))
             }
 
@@ -10481,6 +10603,8 @@ impl Machine {
                 cxt.namespace_prefix = Some(SmolStr::new(&pkg_path));
                 // G6：声明的 package 记为可见 namespace（后缀 fallback 准入）
                 Rc::make_mut(&mut cxt.namespaces).insert(SmolStr::new(&pkg_path));
+                // namespace 准入集变化 ⇒ suffix_memo 过滤结果过期
+                self.suffix_memo_version = self.suffix_memo_version.wrapping_add(1);
                 Ok((DeclOut::Package, cxt))
             }
             Decl::Import { prefix, names, wildcard } => {
@@ -10489,6 +10613,8 @@ impl Machine {
                 // G6：import 的 namespace 记为可见
                 if !prefix_str.is_empty() {
                     Rc::make_mut(&mut cxt.namespaces).insert(SmolStr::new(&prefix_str));
+                    // namespace 准入集变化 ⇒ suffix_memo 过滤结果过期
+                    self.suffix_memo_version = self.suffix_memo_version.wrapping_add(1);
                 }
                 // G4：拒绝单名 import
                 if prefix.is_empty() && !names.is_empty() {
