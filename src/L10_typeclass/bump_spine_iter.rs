@@ -1325,6 +1325,11 @@ fn frcs_env<'a>(bump: &'a Bump, defs: &[V], sub: &Rc<SubstV>, env: Env<'a>) -> E
     if sub.is_empty() {
         return env;
     }
+    // [临时探针] 平坦区被溶解（flat_len → 0）的调用点定位
+    if env.flat_len > 32 && std::env::var_os("L10PROBE_FRCS").is_some() {
+        let bt = std::backtrace::Backtrace::capture();
+        eprintln!("[FRCS_ENV] destroying flat_len={} (lvl_env={})\n{}", env.flat_len, env_len(env), bt);
+    }
     let n = env_len(env);
     let mut e: Option<&'a EnvCons<'a>> = None;
     for i in (0..n).rev() {
@@ -4249,6 +4254,8 @@ mod solve_probe {
         pub fm_close_calls: AtomicU64,
         pub fm_k_sum: AtomicU64,
         pub fm_k_max: AtomicU64,
+    pub fm_kept_sum: AtomicU64,
+    pub fm_kept_max: AtomicU64,
         pub metas_max: AtomicU64,
         pub tw_calls: AtomicU64,
         pub tw_cand: AtomicU64,
@@ -4414,6 +4421,8 @@ mod solve_probe {
         fm_close_calls: AtomicU64::new(0),
         fm_k_sum: AtomicU64::new(0),
         fm_k_max: AtomicU64::new(0),
+    fm_kept_sum: AtomicU64::new(0),
+    fm_kept_max: AtomicU64::new(0),
         metas_max: AtomicU64::new(0),
         tw_calls: AtomicU64::new(0),
         tw_cand: AtomicU64::new(0),
@@ -4566,11 +4575,14 @@ mod solve_probe {
         }
         let g = |x: &AtomicU64| x.load(Ordering::Relaxed);
         eprintln!(
-            "[L10SOLVE_PROBE] CLOSE: calls={} k_sum={} k_avg={} k_max={} | flat_env_paths_ok",
+            "[L10SOLVE_PROBE] CLOSE: calls={} k_sum={} k_avg={} k_max={} | kept_sum={} kept_avg={} kept_max={} (kept = 化简后实际包装层数) | flat_env_paths_ok",
             g(&C.fm_close_calls),
             g(&C.fm_k_sum),
             if g(&C.fm_close_calls) > 0 { g(&C.fm_k_sum) / g(&C.fm_close_calls) } else { 0 },
             g(&C.fm_k_max),
+            g(&C.fm_kept_sum),
+            if g(&C.fm_close_calls) > 0 { g(&C.fm_kept_sum) / g(&C.fm_close_calls) } else { 0 },
+            g(&C.fm_kept_max),
         );
         eprintln!(
             "[L10SOLVE_PROBE] env_ext_defs: tip={} fallback={}",
@@ -5141,7 +5153,25 @@ impl Machine {
                 if k == 0 {
                     self.eval(bump, global_env, q)
                 } else {
-                    let closed = self.close_tm_until(bump, cxt.locals, k, q);
+                    // 值中性化简（2026-09-21，L10 traitchain O(n²) 内存修复）：
+                    // 全链 close 里「q 未引用的 define 槽」是纯浪费——`Let(x, A,
+                    // t, body)` 包一个 body 不引用的 x，求值结果与不包相同
+                    // （`binds == 0 && !has_free_var(q)` 快路径的同族论证：
+                    // 参考版的 Let 层在这种位置上从不进入输出）。traitchain
+                    // 实测（L10SOLVE_PROBE CLOSE 行）：75% 的 close 调用 q 是
+                    // 闭项（`Type 0`），25% 只引用一个 impl 泄漏的深层 Bind——
+                    // 全链包装 2.1M 节点里 95%+ 是这种死重，k=11 时 2.1GB。
+                    // 化简规则（与参考版逐值同轨）：
+                    // - **Bind 槽全留**：Π 层是参考版可观察语义；
+                    // - **q 引用的 define 槽留**：q 的 Var 靠它们解析；
+                    // - 其余 define 槽丢弃，q 的自由变量下标按保留槽位重编号
+                    //   （`remap_free_vars`；未被引用 ⇒ 无下标需要改）。
+                    // 走查范围 = 前 k 条（≥flat_len 的非平坦层）；平坦层由
+                    // `global_env` 供给，q 引用它们的 Var 保持自由、原样解析
+                    // （与舊路径「以平坦区为基底环境求值」一致）。
+                    let (closed, kept) = close_tm_reduced(bump, cxt.locals, q, k);
+                    solve_probe::C.fm_kept_sum.fetch_add(kept as u64, std::sync::atomic::Ordering::Relaxed);
+                    solve_probe::C.fm_kept_max.fetch_max(kept as u64, std::sync::atomic::Ordering::Relaxed);
                     self.eval(bump, global_env, closed)
                 }
             }
@@ -5153,32 +5183,6 @@ impl Machine {
             solve_probe::C.metas_max.fetch_max(self.metas.len() as u64, std::sync::atomic::Ordering::Relaxed);
         });
         bump.alloc(Tm::AppPruning(bump.alloc(Tm::Meta(m)), cxt.pruning))
-    }
-
-    /// 沿 telescope 链闭包（Bind → 显式 Π、Define → Let）。
-    /// 闭类型（参考版 `close_ty` 的截断化）：沿 locals 链头包 `k` 个条目
-    /// （`Bind` 槽闭成显式 Π、`Define` 槽闭成 Let），`k` 超过链长时包完整
-    /// 链。`fresh_meta` 的全局段免包装只传当前 def 的局部条目数
-    /// `k = cxt.lvl - flat_len`——平坦区被 update_cxt 溶解（本轮起为
-    /// subst_cxt 的 env 链化重建，flat_len = 0）后 `k = cxt.lvl`
-    /// 恰好全额（见其函数注释的逐值同轨论证）。
-    fn close_tm_until<'a>(
-        &self,
-        bump: &'a Bump,
-        mut ls: Option<&'a LCons<'a>>,
-        k: usize,
-        q: &'a Tm<'a>,
-    ) -> &'a Tm<'a> {
-        let mut b = q;
-        for _ in 0..k {
-            let Some(n) = ls else { break };
-            b = match n.t_t {
-                None => bump.alloc(Tm::Pi(n.name, Icit::Expl, n.a_t, b)),
-                Some(t) => bump.alloc(Tm::Let(n.name, n.a_t, t, b)),
-            };
-            ls = n.next;
-        }
-        b
     }
 
     /// fresh meta 的求值快捷路径：掩码全为 define 槽（或空）时 AppPrun
@@ -6147,8 +6151,258 @@ fn types_names_list(tys: Option<&TCons<'_>>) -> crate::list::List<String> {
     list
 }
 
-/// 项里是否含自由 `Var`（按 binder 深度算）。`fresh_meta` 快捷路径 2 的
-/// 判据（保守：自由 ⇒ 走全构造）。
+/// q 的自由 `Var` 下标集合（升序去重；绑定器内的下标不算）。`fresh_meta`
+/// close 化简用：只有这些下标对应的 telescope 槽必须保留 Let 包装。
+fn free_var_indices(t: &Tm<'_>) -> Vec<u32> {
+    let mut stack: Vec<(&Tm<'_>, u32)> = vec![(t, 0)];
+    let mut out: Vec<u32> = Vec::new();
+    while let Some((x, d)) = stack.pop() {
+        match x {
+            Tm::Var(i) => {
+                if *i >= d && out.binary_search(i).is_err() {
+                    let pos = out.partition_point(|y| *y < *i);
+                    out.insert(pos, *i);
+                }
+            }
+            Tm::Lam(_, _, b) => stack.push((b, d + 1)),
+            Tm::App(f, a, _) => {
+                stack.push((f, d));
+                stack.push((a, d));
+            }
+            Tm::AppPruning(h, _) => stack.push((h, d)),
+            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => {}
+            Tm::Obj(h, _) => stack.push((h, d)),
+            Tm::Pi(_, _, a, b) => {
+                stack.push((a, d));
+                stack.push((b, d + 1));
+            }
+            Tm::Let(_, a, t, u) => {
+                stack.push((a, d));
+                stack.push((t, d));
+                stack.push((u, d + 1));
+            }
+            Tm::Sum(_, params, ..) => {
+                for p in params.iter() {
+                    stack.push((p.val, d));
+                    stack.push((p.ty, d));
+                }
+            }
+            Tm::SumCase { typ, datas, .. } => {
+                stack.push((typ, d));
+                for dd in datas.iter() {
+                    stack.push((dd.val, d));
+                }
+            }
+            Tm::Match(s, cases) => {
+                stack.push((s, d));
+                for (_, b) in cases.iter() {
+                    stack.push((b, d));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 按 `map` 重编号项的自由 `Var` 下标（绑定器内的下标不动）。子树无变化时
+/// 原样返回（指针相等），闭项零分配。
+fn remap_free_vars<'a>(
+    bump: &'a Bump,
+    t: &'a Tm<'a>,
+    map: &dyn Fn(u32) -> u32,
+) -> &'a Tm<'a> {
+    fn go<'a>(bump: &'a Bump, t: &'a Tm<'a>, d: u32, map: &dyn Fn(u32) -> u32) -> &'a Tm<'a> {
+        match *t {
+            Tm::Var(i) => {
+                if i >= d {
+                    let j = map(i);
+                    if j != i {
+                        return bump.alloc(Tm::Var(j));
+                    }
+                }
+                t
+            }
+            Tm::Lam(n, icit, b) => {
+                let b2 = go(bump, b, d + 1, map);
+                if std::ptr::eq(b2, b) {
+                    t
+                } else {
+                    bump.alloc(Tm::Lam(n, icit, b2))
+                }
+            }
+            Tm::App(f, a, icit) => {
+                let f2 = go(bump, f, d, map);
+                let a2 = go(bump, a, d, map);
+                if std::ptr::eq(f2, f) && std::ptr::eq(a2, a) {
+                    t
+                } else {
+                    bump.alloc(Tm::App(f2, a2, icit))
+                }
+            }
+            Tm::AppPruning(h, pr) => {
+                let h2 = go(bump, h, d, map);
+                if std::ptr::eq(h2, h) {
+                    t
+                } else {
+                    bump.alloc(Tm::AppPruning(h2, pr))
+                }
+            }
+            Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) | Tm::Prim => t,
+            Tm::Obj(h, f) => {
+                let h2 = go(bump, h, d, map);
+                if std::ptr::eq(h2, h) {
+                    t
+                } else {
+                    bump.alloc(Tm::Obj(h2, f))
+                }
+            }
+            Tm::Pi(n, icit, a, b) => {
+                let a2 = go(bump, a, d, map);
+                let b2 = go(bump, b, d + 1, map);
+                if std::ptr::eq(a2, a) && std::ptr::eq(b2, b) {
+                    t
+                } else {
+                    bump.alloc(Tm::Pi(n, icit, a2, b2))
+                }
+            }
+            Tm::Let(n, a, tt, u) => {
+                let a2 = go(bump, a, d, map);
+                let t2 = go(bump, tt, d, map);
+                let u2 = go(bump, u, d + 1, map);
+                if std::ptr::eq(a2, a) && std::ptr::eq(t2, tt) && std::ptr::eq(u2, u) {
+                    t
+                } else {
+                    bump.alloc(Tm::Let(n, a2, t2, u2))
+                }
+            }
+            Tm::Sum(name, params, cases, is_trait) => {
+                let mut changed = false;
+                let ps: &'a [SumParamT<'a>] = bump.alloc_slice_fill_iter(params.iter().map(|p| {
+                    let v2 = go(bump, p.val, d, map);
+                    let t2 = go(bump, p.ty, d, map);
+                    if !std::ptr::eq(v2, p.val) || !std::ptr::eq(t2, p.ty) {
+                        changed = true;
+                    }
+                    SumParamT {
+                        name: p.name,
+                        val: v2,
+                        ty: t2,
+                        icit: p.icit,
+                    }
+                }));
+                if !changed {
+                    t
+                } else {
+                    bump.alloc(Tm::Sum(name, ps, cases, is_trait))
+                }
+            }
+            Tm::SumCase {
+                typ,
+                case_name,
+                datas,
+                is_trait,
+            } => {
+                let t2 = go(bump, typ, d, map);
+                let mut changed = !std::ptr::eq(t2, typ);
+                let ds: &'a [SumDataT<'a>] = bump.alloc_slice_fill_iter(datas.iter().map(|dd| {
+                    let v2 = go(bump, dd.val, d, map);
+                    if !std::ptr::eq(v2, dd.val) {
+                        changed = true;
+                    }
+                    SumDataT {
+                        name: dd.name,
+                        val: v2,
+                        icit: dd.icit,
+                    }
+                }));
+                if !changed {
+                    t
+                } else {
+                    bump.alloc(Tm::SumCase {
+                        typ: t2,
+                        case_name,
+                        datas: ds,
+                        is_trait,
+                    })
+                }
+            }
+            Tm::Match(s, cases) => {
+                let s2 = go(bump, s, d, map);
+                let mut changed = !std::ptr::eq(s2, s);
+                let cs: &'a [(PatternDetail, &'a Tm<'a>)] =
+                    bump.alloc_slice_fill_iter(cases.iter().map(|(pd, b)| {
+                        let b2 = go(bump, b, d, map);
+                        if !std::ptr::eq(b2, *b) {
+                            changed = true;
+                        }
+                        (pd.clone(), b2)
+                    }));
+                if !changed {
+                    t
+                } else {
+                    bump.alloc(Tm::Match(s2, cs))
+                }
+            }
+        }
+    }
+    go(bump, t, 0, map)
+}
+
+/// `fresh_meta` close 的**值中性化简**（2026-09-21 L10 traitchain O(n²) 内存
+/// 修复）：`close_tm_until(locals, k, q)` 把前 k 条 telescope 全量包上，其中
+/// 「q 未引用的 define 槽」是纯死重——`Let(x, A, t, body)` 包一个 body 不
+/// 引用的 x，求值结果与不包相同（参考版的 Let 层在这种位置从不进入输出；
+/// `binds == 0 && !has_free_var(q)` 快路径的同族论证）。本函数只保留：
+///
+/// 1. **全部 Bind 槽**（Π 层是参考版可观察语义，丢了会与参考版分叉）；
+/// 2. **q 实际引用的 define 槽**（q 的 Var 靠它们解析）。
+///
+/// 其余 define 槽丢弃；q 的自由变量下标按保留槽位重编号到新位置。走查范围
+/// = 前 k 条（≥ flat_len 的非平坦层）——Bind 只可能出现在这一区（平坦区
+/// 只由 `env_ext_defs`  tip 路径增长、该路径要求 `binds.is_none()`）；q 引用
+/// 平坦层（下标 ≥ k）的 Var 保持自由、由调用方的 `global_env` 解析，与舊
+/// 路径「以平坦区为基底环境求值」一致。
+fn close_tm_reduced<'a>(
+    bump: &'a Bump,
+    locals: Option<&'a LCons<'a>>,
+    q: &'a Tm<'a>,
+    k: usize,
+) -> (&'a Tm<'a>, usize) {
+    let free = free_var_indices(q);
+    let mut kept: Vec<&'a LCons<'a>> = Vec::new();
+    let mut kept_pos: Vec<usize> = Vec::new();
+    let mut ls = locals;
+    for p in 0..k {
+        let Some(n) = ls else { break };
+        // Bind 槽（t_t = None）全留；define 槽仅被引用时留
+        if n.t_t.is_none() || free.binary_search(&(p as u32)).is_ok() {
+            kept.push(n);
+            kept_pos.push(p);
+        }
+        ls = n.next;
+    }
+    let n_kept = kept.len();
+    if kept.is_empty() {
+        // 无 Bind 且 q 不引用任何非平坦 define：q 原样（其自由变量只能指向
+        // 平坦层，由 global_env 解析）
+        return (q, 0);
+    }
+    let q2 = remap_free_vars(bump, q, &|i| {
+        kept_pos
+            .binary_search(&(i as usize))
+            .map(|r| r as u32)
+            .unwrap_or(i)
+    });
+    let mut b = q2;
+    for n in kept.iter() {
+        b = match n.t_t {
+            None => bump.alloc(Tm::Pi(n.name, Icit::Expl, n.a_t, b)),
+            Some(t) => bump.alloc(Tm::Let(n.name, n.a_t, t, b)),
+        };
+    }
+    (b, n_kept)
+}
+
 fn has_free_var(t: &Tm<'_>) -> bool {
     let mut stack: Vec<(&Tm<'_>, u32)> = vec![(t, 0)];
     while let Some((x, d)) = stack.pop() {

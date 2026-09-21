@@ -80,6 +80,18 @@ name = "l11repro"
 path = "src/bin/l11repro.rs"
 test = false
 
+# 内存分析工具：L02–L05 性能版分配计数/字节/直方图（确定性口径，l07alloc 同族）
+[[bin]]
+name = "l02l05mem"
+path = "src/bin/l02l05mem.rs"
+test = false
+
+# 内存分析工具：L06–L13 性能版分配计数/字节/直方图（l02l05mem 的姊妹）
+[[bin]]
+name = "l06l13mem"
+path = "src/bin/l06l13mem.rs"
+test = false
+
 
 
 [dependencies]

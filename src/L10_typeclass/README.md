@@ -298,6 +298,36 @@ min；`traitchain` 取 k=9）：
 
 ## 6. 已知偏差与已知限制（诚实清单）
 
+### 6.0 已修复：`fresh_meta` close 的 O(n²) 内存（2026-09-21）
+
+`fresh_meta` 的闭类型路径沿 telescope 链**全量**包装（Bind → Π、Define →
+Let）以与参考版 `close_ty` 逐值同轨。但 impl 声明的类型参数经
+`ImplDecl` 臂泄漏进 decl 级上下文（参考版同款泄漏，`cxt.bind` 后
+`cxt = c`）后，`env_ext_defs` 的 tip 路径永久失效（`binds.is_none()` 不再
+成立），此后每个顶层 define 都落进 binder 链——`flat_len` 停在泄漏前的
+13，于是 close 的 `k = cxt.lvl - flat_len` 随 define 数线性增长。方法调用
+密集负载（traitchain）每次 `.say` 触发 ~4 次 `fresh_meta`，每轮闭环
+2.1M 个 wrapper 节点：**k=9 142.67MB / k=11 2,115.82MB / k=13 ~32GB，
+内存 O(n²)**（l06l13mem 分配计数实测；L10SOLVE_PROBE 的 CLOSE 行
+`k_sum=2108412` 即死重量）。
+
+探针画像：**75% 的 close 调用 q 是闭项**（trait_wrap 合成 Let 的隐式 `T`
+参数，类型 `Type 0`），25% 只引用那一个泄漏的深层 Bind（`?k T`）。
+
+**修复 = 值中性化简**（`close_tm_reduced`）：只保留 ① 全部 Bind 槽
+（Π 层是参考版可观察语义）② q 实际引用的 define 槽；其余 define 槽丢弃，
+q 的自由变量下标按保留槽位重编号（`remap_free_vars`）。正确性依据：`Let`
+包一个体项不引用的变量，求值结果与不包相同——与既有
+`binds == 0 && !has_free_var(q)` 快路径同族（该路径已在生产）。平坦层
+由 `global_env` 供给、q 引用它们的 Var 保持自由，与舊路径一致。
+
+实测（l06l13mem / l10bench，k=9 / k=11）：内存 **142.67→30.63MB /
+2,115.82→125.63MB**（−78% / −94%，转为线性）；CLOSE 探针
+`kept_avg=1`（每调用只包 1 层）；traitchain fast_ss **81.3→50.4ms
+（−38%）**，universe −6%、struct −3%，其余负载在噪声带内。门禁：
+`l10_fast_parity` 46 / lib 25 全绿，l10bench 七负载「快版==参考版」互检
+通过（enum 负载的既有孪生发散与本修复无关——原始二进制同样失败）。
+
 ### 6.1 性能缺口
 
 - **traitchain 参考版 268×**：参考版侧的候选因素——`trait_wrap` 每次调用
