@@ -49,6 +49,18 @@ static SZ: [AtomicU64; NB] = [const { AtomicU64::new(0) }; NB];
 /// （`std::env::var` 自身要分配 → 重入全局分配器 → 死锁）。默认 `usize::MAX`
 /// = 关闭。
 static TRACE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// 相位闸：`trace_arm()` 置 true 后才输出调用栈（测量循环在 parse 结束后
+/// 置位，engine 段开始时再置位——把 parse 段噪声挡在栈外）。
+static TRACE_ARM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 重入闸：`Backtrace::capture()` 自身要分配，低阈值下会经本分配器重新进入
+/// `trace_big` 并死锁在 backtrace 库的内部锁上。线程内嵌套追踪直接抑制
+/// （只采栈顶那一次）。
+static IN_TRACE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn trace_arm() {
+    TRACE_ARM.store(true, Ordering::Relaxed);
+}
 
 fn init_trace() {
     let min = std::env::var("L06L13MEM_TRACE_MIN")
@@ -85,16 +97,68 @@ fn bump_sz(size: usize) {
 }
 
 fn trace_big(size: usize) {
+    // `L06L13MEM_TRACE_EXACT=<size>`：只追踪该精确大小的分配（归因特定桶）。
+    if let Some(exact) = trace_exact() {
+        if size != exact {
+            return;
+        }
+    }
+    if !TRACE_ARM.load(Ordering::Relaxed) {
+        return; // 相位闸未开：parse 段噪声不抽样
+    }
+    // **重入闸**：`Backtrace::capture()` 自身要分配，低阈值下会经本分配器
+    // 重新进入本函数并死锁在 backtrace 库的内部锁上。嵌套追踪直接抑制
+    // （只采栈顶那一次；`swap` 返回旧值，已在追踪中即为 true）。
+    if IN_TRACE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let _guard = TraceGuard;
+    // `L06L13MEM_TRACE_SKIP=<n>`：跳过前 n 次匹配（越过 parse 段的同尺寸分配）。
+    let skip = trace_skip();
     static N: AtomicUsize = AtomicUsize::new(0);
+    let i = N.fetch_add(1, Ordering::Relaxed);
+    if i < skip {
+        return;
+    }
     let cap: usize = std::env::var("L06L13MEM_TRACE_MAX")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100);
-    if N.fetch_add(1, Ordering::Relaxed) >= cap {
+    if i - skip >= cap {
         return;
     }
     let bt = std::backtrace::Backtrace::capture();
     eprintln!("[big alloc] {size} B\n{bt}");
+}
+
+fn trace_exact() -> Option<usize> {
+    use std::sync::OnceLock;
+    static E: OnceLock<Option<usize>> = OnceLock::new();
+    *E.get_or_init(|| {
+        std::env::var("L06L13MEM_TRACE_EXACT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+    })
+}
+
+/// 重入闸的 RAII 复位（含 panic 路径）。
+struct TraceGuard;
+
+impl Drop for TraceGuard {
+    fn drop(&mut self) {
+        IN_TRACE.store(false, Ordering::Relaxed);
+    }
+}
+
+fn trace_skip() -> usize {
+    use std::sync::OnceLock;
+    static S: OnceLock<usize> = OnceLock::new();
+    *S.get_or_init(|| {
+        std::env::var("L06L13MEM_TRACE_SKIP")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0)
+    })
 }
 
 unsafe impl GlobalAlloc for Counting {
@@ -758,6 +822,7 @@ macro_rules! measure_decl_chapter {
         hist_reset();
         let c0 = snap();
         let mut t = Tycker::new();
+        trace_arm(); // 开栈抽样：parse 段已结束，此后全是 engine 分配
         if $nf {
             t.bench_check_nf(&decls);
         } else {
@@ -766,6 +831,7 @@ macro_rules! measure_decl_chapter {
         let fast = snap().sub(c0);
         let h_fast = hist_snapshot();
         drop(t);
+        crate::TRACE_ARM.store(false, std::sync::atomic::Ordering::Relaxed);
 
         hist_reset();
         let c_new = snap();
@@ -854,6 +920,7 @@ macro_rules! measure_run_chapter {
         hist_reset();
         let c0 = snap();
         let mut t = Tycker::new();
+        trace_arm(); // 开栈抽样：parse 段已结束，此后全是 engine 分配
         if $nf {
             t.bench_check_nf(&decls);
         } else {
@@ -862,6 +929,7 @@ macro_rules! measure_run_chapter {
         let fast = snap().sub(c0);
         let h_fast = hist_snapshot();
         drop(t);
+        crate::TRACE_ARM.store(false, std::sync::atomic::Ordering::Relaxed);
 
         hist_reset();
         let c_new = snap();
@@ -1055,6 +1123,19 @@ fn run_l13_prelude(rounds: usize, basic: bool) {
         fmt_mb(h_fast.big_b),
         fmt_chunks(&h_fast.big_sizes)
     );
+
+    // 观察面成本对照：L13BENCH_NOBSERVE=1 关掉 typ_pretty / hover / inlay 渲染
+    // （bench 口径仅量化"孪生为 LSP 观察面额外付的内存"，与参考版无关）。
+    if std::env::var_os("L13BENCH_NOBSERVE").is_some() {
+        let c0 = snap();
+        let mut t = Tycker::new();
+        let n3 = t.bench_check_nf_bounded(&p.decls, &p.nat_after);
+        let c = snap().sub(c0);
+        println!(
+            "  fast(no-obs)  {} (nodes={n3})",
+            fmt_count(c.allocs, c.bytes)
+        );
+    }
 
     hist_reset();
     let c_new = snap();

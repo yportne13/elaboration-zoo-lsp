@@ -6971,13 +6971,31 @@ impl Machine {
         // （重入句柄 mach_ptr 在解构前取得：unify 的 flex 求解点要回调
         // trait 求解——参考版 solve 臂的 solve_multi_trait；字段已按不相交
         // 集合借出，重入经裸指针走 Machine 方法，仅触碰同分配的堆内容。）
-        let saved: Vec<UItem<'a>> = std::mem::take(stack);
+        // 重入保护：外层尚未弹出的待办对要先暂存出来（内层 success 时栈必空，
+        // 主循环以空栈结束）。**只在非空时 take**——非重入入口若也 take，
+        //  field 里的 buffer 被挪进局部量、内层从 0 重新长，成功路径再整体
+        // 换回去就把长大的 buffer 丢掉了（下次调用重放 4→8→16 的整段增长）。
+        // 非空才 take 让"上次长大的空 buffer"留在 field 里被内层直接续用。
+        let mut saved = Vec::new();
+        if !stack.is_empty() {
+            saved = std::mem::take(stack);
+        }
         let r = unify_iter(
             bump, spine, work, stack, vals, icits, defs, metas, &*cxt.decls, mutable, ren, conv,
             constraints, l, t, u, fuel, cxt, mach_ptr, trait_err,
         );
         if r {
-            *stack = saved;
+            if stack.is_empty() {
+                // 外层挂起项原样放回；field 里已是本层长大的 buffer（空），
+                // 直接留给下次调用续用，不重新分配。
+                if !saved.is_empty() {
+                    let mut s = saved;
+                    stack.append(&mut s);
+                }
+            } else {
+                // 非预期残留（成功却非空）：照旧整体替换，语义对齐旧行为。
+                *stack = saved;
+            }
         } else {
             stack.clear();
         }
