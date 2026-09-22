@@ -1938,6 +1938,15 @@ fn meta_journal_rollback(metas: &mut Vec<MetaEntry>, pre_len: usize) {
     metas.truncate(pre_len);
 }
 
+/// journal 帧丢弃（探测**成功**路径）：帧内记录的全部保留（就地写与
+/// append 都成立），只把帧从栈上拿掉。与 [`meta_journal_rollback`] 成对——
+/// 失败回滚、成功丢弃，两路径都必须出帧，否则后续写点记错层。
+fn meta_journal_discard() {
+    META_JOURNAL.with(|j| {
+        j.borrow_mut().pop();
+    });
+}
+
 thread_local! {
     /// 稳态七表撤销日志（评审 B#2 二期）：`Tycker::observe_user` 每 kick
     /// 的整克隆恢复（tstate/mutable/symbol_table/import_map/
@@ -4350,9 +4359,15 @@ fn unify_iter<'a>(
                     }
                 } else {
 
-                    let meta_snapshot = metas.clone();
-                    let tm_snapshot = unsafe { (*mach_ptr).trait_metas.clone() };
-                    let mc_snapshot = constraints.clone();
+                    // 探测回滚（META_JOURNAL，trait_wrap 同款）：旧实现整表
+                    // clone metas（万条级 × 每次 Call/Call 带 Flex 比较一遍
+                    // = trait 密集证明的主因之一）；journal 记就地写、截断
+                    // 收 append。trait_metas 子 unify 期只 push，truncate 即
+                    // 可。constraints 本就经局部 `cons` 账本、成功才并入，
+                    // 旧代码的整表快照从未被读取（死克隆），一并移除。
+                    let pre_meta_len = metas.len();
+                    let pre_tm_len = unsafe { (*mach_ptr).trait_metas.len() };
+                    META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
                     let mut conv_fresh = ConvScratch::default();
                     let mut sub: Vec<UItem<'a>> = Vec::new();
                     let mut terr: Option<String> = None;
@@ -4380,10 +4395,12 @@ fn unify_iter<'a>(
                     };
                     if ok {
                         constraints.extend(cons);
+                        // 成功：探测期解出的 meta 全部保留，只出帧
+                        meta_journal_discard();
                     } else {
                         // 回滚（mutable 的 prim 副作用不回滚——参考版同款）
-                        metas.clone_from(&meta_snapshot);
-                        unsafe { (*mach_ptr).trait_metas = tm_snapshot; }
+                        meta_journal_rollback(metas, pre_meta_len);
+                        unsafe { (*mach_ptr).trait_metas.truncate(pre_tm_len); }
                     }
                     ok
                 };
@@ -9985,7 +10002,13 @@ impl Machine {
                 {
                     // --- Nat 默认化（Lean 式回退）：把类型值 meta 批量解成
                     // Nat 再重试 trait 求解，失败回滚 ---
-                    let saved_meta = self.metas.clone();
+                    // journal 帧（trait_wrap / run_pure_probe 同款）替代旧
+                    // 的整表 clone 保存现场：重试期就地写走 journal_meta、
+                    // append 由 truncate 收，失败恢复 = 弹帧回滚；成功 =
+                    // 出帧保留（旧实现 `self.metas = saved_meta` 只走失败
+                    // 分支，语义一致）。
+                    let pre_meta_len = self.metas.len();
+                    META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
                     let nat_val = cxt.decls.get("Nat").map(|e| e.val).unwrap_or_else(v_u0);
                     let nat_ok = is_nat_sum_v(nat_val);
                     let nat_solved = if nat_ok {
@@ -10008,6 +10031,8 @@ impl Machine {
                                 .collect()
                         };
                         if to_default.is_empty() {
+                            // 无可默认化 meta：无写发生，直接出帧
+                            meta_journal_discard();
                             false
                         } else {
                             for idx in &to_default {
@@ -10018,13 +10043,15 @@ impl Machine {
                             }
                             let _ = self.solve_multi_trait_ref(bump, &fake, this_meta, false);
                             if no_metas(bump, self, &fake, t_tm).is_none() {
+                                meta_journal_discard();
                                 true
                             } else {
-                                self.metas = saved_meta;
+                                meta_journal_rollback(&mut self.metas, pre_meta_len);
                                 false
                             }
                         }
                     } else {
+                        meta_journal_discard();
                         false
                     };
                     if !nat_solved {
