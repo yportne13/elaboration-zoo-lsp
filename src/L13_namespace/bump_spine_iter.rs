@@ -2314,6 +2314,7 @@ fn force<'a>(
             XCell::SumCase { .. } | XCell::Call { .. } | XCell::Obj { .. }
         );
     if !compound {
+        let _g = super::prof_enter(&super::FUNC_PROF.force_leaves.0, &super::FUNC_PROF.force_leaves.1);
         return force_inner(bump, spine, defs, metas, decl, mutable, v0);
     }
     let key = v0.0;
@@ -2324,8 +2325,11 @@ fn force<'a>(
             .filter(|(_, v)| *v == ver)
             .map(|(r, _)| *r)
     }) {
+        // `.0` 计时槽测的是**命中路径本身**（探针开销），不是整条 force。
+        let _g = super::prof_enter(&super::FUNC_PROF.force_hits.0, &super::FUNC_PROF.force_hits.1);
         return r;
     }
+    let _g = super::prof_enter(&super::FUNC_PROF.force_misses.0, &super::FUNC_PROF.force_misses.1);
     let taint0 = FORCE_TAINT.with(|t| t.get());
     let r = force_inner(bump, spine, defs, metas, decl, mutable, v0);
     // walk 途中 consult 了未解 meta / 有副作用 prim → 不插入
@@ -2339,6 +2343,9 @@ fn force<'a>(
             }
             m.insert(key, (r, ver));
         });
+    } else {
+        // taint / prim 版本变化 → 不入表：同一形状下次还要整走一遍。
+        super::prof_count(&super::FUNC_PROF.force_tainted.1);
     }
     r
 }

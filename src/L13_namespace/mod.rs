@@ -49,6 +49,15 @@ pub struct FuncProf {
     pub nf: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
     pub unify: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
     pub solve_trait: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    /// `force` 的 memo 命中 / 未命中 / 走完但**不入表**（taint：途中 consult 了
+    /// 未解 meta 或有副作用 prim）三段计数——"超多次 force"归因用。
+    pub force_hits: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub force_misses: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    pub force_tainted: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
+    /// `force` 的**叶子**路径（非复合形状：Flex/Rigid/Decl/Sum/U/Nat…，不查
+    /// memo 直接进 `force_inner`）的计数 + 独占耗时——"每步都过一次
+    /// wrapper"的调用约定开销。
+    pub force_leaves: (std::sync::atomic::AtomicU64, std::sync::atomic::AtomicU64),
     /// force() entry value shape histogram, indexed by `val_shape_index`.
     pub force_shape: [std::sync::atomic::AtomicU64; 14],
 }
@@ -65,6 +74,10 @@ pub static FUNC_PROF: FuncProf = FuncProf {
     nf: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
     unify: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
     solve_trait: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    force_hits: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    force_misses: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    force_tainted: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
+    force_leaves: (std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)),
     force_shape: [
         std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
         std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0),
@@ -2421,7 +2434,10 @@ impl Infer {
             // sub-values benefit from the memo; every other shape is an
             // O(1) arm in `force_inner`.
             Val::SumCase { .. } | Val::Call(..) | Val::Obj(..) => {}
-            _ => return self.force_inner(decl, t),
+            _ => {
+                let _g = prof_enter(&FUNC_PROF.force_leaves.0, &FUNC_PROF.force_leaves.1);
+                return self.force_inner(decl, t);
+            }
         }
         let key = Rc::as_ptr(t) as usize;
         let ver = PRIM_VERSION.load(std::sync::atomic::Ordering::Relaxed);
@@ -2431,8 +2447,11 @@ impl Infer {
                 .filter(|(_, _, v, e)| *v == ver && *e == epoch)
                 .map(|(_, r, _, _)| r.clone())
         }) {
+            // `.0` 计时槽测的是**命中路径本身**（探针开销），不是整条 force。
+            let _g = prof_enter(&FUNC_PROF.force_hits.0, &FUNC_PROF.force_hits.1);
             return r;
         }
+        let _g = prof_enter(&FUNC_PROF.force_misses.0, &FUNC_PROF.force_misses.1);
         let taint0 = FORCE_TAINT.with(|t| t.get());
         let r = self.force_inner(decl, t);
         if FORCE_TAINT.with(|t| t.get()) == taint0
@@ -2449,6 +2468,10 @@ impl Infer {
                 }
                 m.insert(key, (t.clone(), r.clone(), ver, epoch));
             });
+        } else {
+            // taint（未解 meta / 副作用 prim）/ prim 版本变化 → 不入表：
+            // 同一形状下次还要整走一遍，这是 force 次数高的主要放大器。
+            prof_count(&FUNC_PROF.force_tainted.1);
         }
         r
     }
