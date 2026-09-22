@@ -65,6 +65,16 @@ path = "src/bin/l13bench.rs"
 
 # Tool bins: 通过 #[path] 直接编译多层源码（含各自的 #[cfg(test)] 模块），
 # 其测试目标会跑重复的文件 IO 测试并互相覆盖固定路径——关掉 test 目标。
+#
+# `pmabbench` 同样是多层 `#[path]` 编译（L07 + bench_pre/L07 + L09），此前靠
+# bin 自动发现、没进这张名单，于是 L07 与 L07_pre 两份 `test_file_io_builtins`
+# 在同一测试二进制里并行读写/删除同一个固定路径 `l07_test_io.txt`，Windows 上
+# 删一个仍被另一个打开的文件即 `os error 5`（2026-09-22 全量 cargo test 命中）。
+[[bin]]
+name = "pmabbench"
+path = "src/bin/pmabbench.rs"
+test = false
+
 [[bin]]
 name = "l07alloc"
 path = "src/bin/l07alloc.rs"
