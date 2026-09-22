@@ -20,3 +20,21 @@ test_run*.log
 v3_fail.log
 *.bak
 .git-commit-msg.txt
+
+# Local session scratch space (memory notes, one-off patch scripts, rollback backups).
+# Kept on disk on purpose; never part of the repository.
+/.workbuddy/
+
+# Generated run outputs. `probe-out.txt` is rewritten by the `probe_timing` test
+# (src/L13_namespace/module_probe_tests.rs), the rest are profiling/invocation
+# snapshots. All are regenerable, so they stay untracked.
+/probe-out.txt
+/sampler.folded
+/flamegraph.svg
+/err*.txt
+/out[0-9]*.txt
+/prof*.txt
+/clippy_*.txt
+
+# Temporary debug harnesses in the auto-discovered tests/ dir.
+/tests/zz_tmp_*.rs
