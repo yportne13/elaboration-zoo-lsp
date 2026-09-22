@@ -4435,6 +4435,10 @@ pub(crate) fn bench_check_nf_bounded(
     decls: &[parser::syntax::Decl],
     nat_after: &[usize],
 ) -> u64 {
+    // 每轮入口清 FORCE_MEMO（孪生 bench_nf_impl 入口同款，2026-09-22）：
+    // memo 键是值指针且条目持 Rc keepalive，跨轮指针不复用——不清则表只涨
+    // 不中（CAP 前每 force 付死表 miss，CAP 1M 后还钉住数百万死值）。
+    force_memo_clear();
     let mut infer = Infer::new();
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<SmolStr> = None;
@@ -4473,6 +4477,7 @@ pub(crate) fn bench_check_first_err_bounded(
     decls: &[parser::syntax::Decl],
     nat_after: &[usize],
 ) -> Result<u64, Error> {
+    force_memo_clear(); // 每轮入口清 memo（同 bench_check_nf_bounded）
     let mut infer = Infer::new();
     let mut cxt = Cxt::new(&infer);
     let mut last: Option<SmolStr> = None;
