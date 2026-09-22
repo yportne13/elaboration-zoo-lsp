@@ -81,9 +81,13 @@
 //! `observe_user` 多次复用，线程局部挂分析主循环），并在**阶段 4 接管单文件
 //! 诊断**（错误 span 保真 + 逐 decl 累积 + 导出声明并回参考域）——稳态 kick
 //! 98ms vs 参考版 359ms（约 3.5×），常驻态经 arena 压实 1835MB → 429MB。
-//! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF、Tm/Val 迭代 Drop
-//! （bump 免疫）、PreludePool 池化/defer_println（run() 口径为 false）、
+//! 不移植（仍仅参考版）：retry 闭包、FUNC_PROF 的**计时**版、Tm/Val 迭代
+//! Drop（bump 免疫）、PreludePool 池化/defer_println（run() 口径为 false）、
 //! canonical/iddfs（只在参考版 Err 路径的重试闭包里，不影响判定与输出）。
+//! FUNC_PROF 的**计数**探针已接（`super::prof_count`，与参考版同一组计数器，
+//! 仅 `enabled` 时一次原子加）——双引擎调用量 A/B 用（`TYPORT_PRELUDE_PROF`
+//! 或直接置 `FUNC_PROF.enabled`），孪生侧刻意不取 `Instant`，避免给热路径
+//! 加计时开销。
 //!
 //! **已知偏差**：
 //! 1. ~~multiline 枚举声明的 match 编译~~ **已修复**（曾报
@@ -2303,6 +2307,7 @@ fn force<'a>(
     mutable: &RefCell<Mutable>,
     v0: V,
 ) -> V {
+    super::prof_count(&super::FUNC_PROF.force.1);
     let compound = v_tag(v0) == 7
         && matches!(
             v_xcell_of(v0),
@@ -6820,6 +6825,7 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn eval<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, env: Env<'a>, tm: &'a Tm<'a>) -> V {
+        super::prof_count(&super::FUNC_PROF.eval.1);
         #[cfg(feature = "sampler")]
         crate::sampler::tick();
 
@@ -6848,6 +6854,7 @@ impl Machine {
     // clippy 在其类型显示里塌缩生命周期参数会误报 unnecessary_cast
     #[allow(clippy::unnecessary_cast)]
     fn quote<'a>(&mut self, bump: &'a Bump, cxt: &Cxt<'a>, level: u32, v: V) -> &'a Tm<'a> {
+        super::prof_count(&super::FUNC_PROF.quote.1);
         let Machine {
             spine,
             vals,
@@ -6955,6 +6962,7 @@ impl Machine {
         fuel: u32,
         trait_err: &mut Option<String>,
     ) -> bool {
+        super::prof_count(&super::FUNC_PROF.unify.1);
         #[cfg(feature = "sampler")]
         crate::sampler::tick();
         // 先取裸指针再解构字段（避免 &mut self 与字段借用的叠加）
@@ -7083,6 +7091,7 @@ impl Machine {
         x: V,
         allow_flex_defaulting: bool,
     ) -> Result<Option<(&'a Tm<'a>, V)>, String> {
+        super::prof_count(&super::FUNC_PROF.solve_trait.1);
         let is_trait_sum = v_tag(x) == 7
             && match v_xcell_of(x) {
                 XCell::Sum { is_trait, .. } => *is_trait,
@@ -7550,6 +7559,7 @@ impl Machine {
         t: &Raw,
         a: V,
     ) -> Result<&'a Tm<'a>, Error> {
+        super::prof_count(&super::FUNC_PROF.check.1);
         #[cfg(feature = "sampler")]
         crate::sampler::tick();
 
@@ -7709,6 +7719,7 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, u32), Error> {
+        super::prof_count(&super::FUNC_PROF.check_universe.1);
         let t_span = t.to_span();
         let x = self.infer_expr(bump, cxt, t)?;
         let (t_inferred, inferred_type) = self.insert(bump, cxt, x.0, x.1)?;
@@ -9067,6 +9078,7 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, V), Error> {
+        super::prof_count(&super::FUNC_PROF.infer_expr.1);
         #[cfg(feature = "sampler")]
         crate::sampler::tick();
 
