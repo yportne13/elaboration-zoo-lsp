@@ -1,0 +1,356 @@
+use smol_str::SmolStr;
+
+use super::super::{Rc, Tm, Val};
+
+use crate::{parser_lib::{Span, ToSpan}};
+
+use super::empty_span;
+
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+pub enum Icit {
+    Impl,
+    Expl,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Either {
+    Name(Span<SmolStr>),
+    Icit(Icit),
+}
+
+impl Either {
+    pub fn to_icit(&self) -> Icit {
+        match self {
+            Either::Name(_) => Icit::Impl,
+            Either::Icit(icit) => *icit,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Pattern {
+    Any(Span<bool>, Either),
+    Con(Span<SmolStr>, Vec<Pattern>, Either),
+}
+
+impl Pattern {
+    pub fn to_impl(self) -> Self {
+        match self {
+            Pattern::Any(span, _) => Pattern::Any(span, Either::Icit(Icit::Impl)),
+            Pattern::Con(name, pats, _) => Pattern::Con(name, pats, Either::Icit(Icit::Impl)),
+        }
+    }
+    pub fn to_name(self, name: Span<SmolStr>) -> Self {
+        match self {
+            Pattern::Any(span, _) => Pattern::Any(span, Either::Name(name)),
+            Pattern::Con(name1, pats, _) => Pattern::Con(name1, pats, Either::Name(name)),
+        }
+    }
+
+    pub fn get_icit(&self) -> Either {
+        match self {
+            Pattern::Any(_, icit) | Pattern::Con(_, _, icit) => icit.clone(),
+        }
+    }
+    pub fn to_span(&self) -> Span<()> {
+        match self {
+            Pattern::Any(s, _) => s.to_span(),
+            Pattern::Con(s, _, _) => s.to_span(),
+        }
+    }
+}
+
+impl std::fmt::Display for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Pattern::Any(_, _) => write!(f, "_"),
+            Pattern::Con(name, pats, _) => {
+                if pats.is_empty() {
+                    write!(f, "{}", name.data)
+                } else {
+                    let inner = pats.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+                    write!(f, "{}({})", name.data, inner)
+                }
+            }
+        }
+    }
+}
+
+impl Pattern {
+    pub fn to_raw(&self) -> Raw {
+        match self {
+            Pattern::Any(s, _) => Raw::Hole(s.to_span()),
+            Pattern::Con(name, pats, _) => pats.iter()
+                .fold(Raw::Var(name.clone()), |ret, p| Raw::App(
+                    Box::new(ret),
+                    Box::new(p.to_raw()),
+                    p.get_icit(),
+                )),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Raw {
+    Var(Span<SmolStr>),
+    Obj(Box<Raw>, Option<Span<SmolStr>>),
+    Lam(Span<SmolStr>, Either, Box<Raw>),
+    App(Box<Raw>, Box<Raw>, Either),
+    U(u32),
+    Pi(Span<SmolStr>, Icit, Box<Raw>, Box<Raw>),
+    Let(Span<SmolStr>, Box<Raw>, Box<Raw>, Box<Raw>),
+    Hole(Span<()>),
+    LiteralIntro(Span<String>),
+    Nat(Span<u64>),
+    Match(Box<Raw>, Vec<(Pattern, Raw)>),
+    Sum(Span<SmolStr>, Vec<(Span<SmolStr>, Icit, Raw)>, Vec<Span<SmolStr>>, u32, bool),
+    SumCase {
+        is_trait: bool,
+        typ: Box<Raw>,
+        case_name: Span<SmolStr>,
+        datas: Vec<(Span<SmolStr>, Raw, Icit)>,
+    },
+    /// A pre-checked value (internal only, never produced by the parser):
+    /// `class` Phase B reuses the field terms checked in Phase A by wrapping
+    /// them in `Raw::Tm`, so the create/tree bodies are not re-elaborated.
+    /// The second field is the value's checked type (Phase A's `va`), used to
+    /// solve the fresh meta / re-verify the annotation at reuse time.
+    Tm(Rc<Tm>, Rc<Val>),
+}
+
+// `Tm` has no structural equality (it carries `Arc` graphs); the pre-checked
+// wrapper compares by pointer identity, which is enough for the internal-only
+// `Raw::Tm` node (nothing outside the class Phase-B path compares Raw terms).
+impl PartialEq for Raw {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Raw::Var(a), Raw::Var(b)) => a == b,
+            (Raw::Obj(a, b), Raw::Obj(c, d)) => a == c && b == d,
+            (Raw::Lam(a, b, c), Raw::Lam(d, e, f)) => a == d && b == e && c == f,
+            (Raw::App(a, b, c), Raw::App(d, e, f)) => a == d && b == e && c == f,
+            (Raw::U(a), Raw::U(b)) => a == b,
+            (Raw::Pi(a, b, c, d), Raw::Pi(e, f, g, h)) => a == e && b == f && c == g && d == h,
+            (Raw::Let(a, b, c, d), Raw::Let(e, f, g, h)) => a == e && b == f && c == g && d == h,
+            (Raw::Hole(a), Raw::Hole(b)) => a == b,
+            (Raw::LiteralIntro(a), Raw::LiteralIntro(b)) => a == b,
+            (Raw::Nat(a), Raw::Nat(b)) => a == b,
+            (Raw::Match(a, b), Raw::Match(c, d)) => a == c && b == d,
+            (Raw::Sum(a, b, c, d, e), Raw::Sum(f, g, h, i, j)) => a == f && b == g && c == h && d == i && e == j,
+            (
+                Raw::SumCase { is_trait: a, typ: b, case_name: c, datas: d },
+                Raw::SumCase { is_trait: e, typ: f, case_name: g, datas: h },
+            ) => a == e && b == f && c == g && d == h,
+            (Raw::Tm(a, at), Raw::Tm(b, bt)) => Rc::ptr_eq(a, b) && Rc::ptr_eq(at, bt),
+            _ => false,
+        }
+    }
+}
+impl Eq for Raw {}
+impl std::hash::Hash for Raw {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(self).hash(state);
+        match self {
+            Raw::Var(x) => x.hash(state),
+            Raw::Obj(x, y) => { x.hash(state); y.hash(state); }
+            Raw::Lam(x, y, z) => { x.hash(state); y.hash(state); z.hash(state); }
+            Raw::App(x, y, z) => { x.hash(state); y.hash(state); z.hash(state); }
+            Raw::U(x) => x.hash(state),
+            Raw::Pi(x, y, z, w) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); }
+            Raw::Let(x, y, z, w) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); }
+            Raw::Hole(x) => x.hash(state),
+            Raw::LiteralIntro(x) => x.hash(state),
+            Raw::Nat(x) => x.hash(state),
+            Raw::Match(x, y) => { x.hash(state); y.hash(state); }
+            Raw::Sum(x, y, z, w, v) => { x.hash(state); y.hash(state); z.hash(state); w.hash(state); v.hash(state); }
+            Raw::SumCase { is_trait, typ, case_name, datas } => {
+                is_trait.hash(state); typ.hash(state); case_name.hash(state); datas.hash(state);
+            }
+            Raw::Tm(x, _) => (Rc::as_ptr(x) as *const () as usize).hash(state),
+        }
+    }
+}
+
+impl Raw {
+    pub fn app(lhs: Raw, rhs: Raw) -> Self {
+        Raw::App(Box::new(lhs), Box::new(rhs), Either::Icit(Icit::Expl))
+    }
+    pub fn app_impl(lhs: Raw, rhs: Raw) -> Self {
+        Raw::App(Box::new(lhs), Box::new(rhs), Either::Icit(Icit::Impl))
+    }
+    pub fn to_span(&self) -> Span<()> {
+        match self {
+            Raw::Var(span) => span.to_span(),
+            Raw::Obj(raw, span) => match span {
+                Some(span) => raw.to_span() + span.to_span(),
+                None => raw.to_span(),
+            },
+            Raw::Lam(span, _, raw) => span.to_span() + raw.to_span(),
+            Raw::App(raw, raw1, either) => raw.to_span() + match either {
+                Either::Name(span) => span.to_span(),
+                Either::Icit(_) => raw1.to_span(),
+            },
+            Raw::U(_) => empty_span(()),//TODO:
+            Raw::Pi(span, _, _, raw1) => span.to_span() + raw1.to_span(),
+            Raw::Let(span, _, _, raw2) => span.to_span() + raw2.to_span(),
+            Raw::Hole(span) => span.clone(),//TODO:
+            Raw::LiteralIntro(span) => span.to_span(),
+            Raw::Nat(span) => span.to_span(),
+            Raw::Match(raw, items) => items.last()
+                .map(|x| raw.to_span() + x.1.to_span())
+                .unwrap_or(raw.to_span()),
+            Raw::Sum(span, params, items, _, _) => items.last()
+                .map(|x| span.to_span() + x.to_span())
+                .unwrap_or(params.last().map(|x| span.to_span() + x.2.to_span()).unwrap_or(span.to_span())),
+            Raw::SumCase { is_trait: _, typ, case_name, datas } => datas.last()
+                .map(|x| case_name.to_span() + x.1.to_span())
+                .unwrap_or(case_name.to_span()),
+            Raw::Tm(_, _) => empty_span(()),
+        }
+    }
+}
+
+impl std::fmt::Display for Raw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Raw::Var(name) => write!(f, "{}", name.data),
+            Raw::Obj(expr, name) => write!(f, "{}.{:?}", expr, name),
+            Raw::Lam(param, Either::Name(name), body) => write!(f, "([{}={}] => {})", name.data, param.data, body),
+            Raw::Lam(param, Either::Icit(Icit::Impl), body) => write!(f, "([{}] => {})", param.data, body),
+            Raw::Lam(param, Either::Icit(Icit::Expl), body) => write!(f, "({} => {})", param.data, body),
+            Raw::App(func, arg, Either::Name(name)) => write!(f, "({} [{}={}])", func, name.data, arg),
+            Raw::App(func, arg, Either::Icit(Icit::Impl)) => write!(f, "({} [{}])", func, arg),
+            Raw::App(func, arg, Either::Icit(Icit::Expl)) => write!(f, "({} {})", func, arg),
+            Raw::U(level) => write!(f, "U{}", level),
+            Raw::Pi(param, Icit::Impl, domain, codomain) => write!(f, "([{} : {}] -> {})", param.data, domain, codomain),
+            Raw::Pi(param, Icit::Expl, domain, codomain) => write!(f, "({} : {}) -> {}", param.data, domain, codomain),
+            Raw::Let(name, typ, expr, body) => write!(f, "(let {} : {} = {};\n{})", name.data, typ, expr, body),
+            Raw::Hole(_) => write!(f, "_"),
+            Raw::LiteralIntro(lit) => write!(f, "\"{}\"", lit.data),
+            Raw::Nat(n) => write!(f, "{}", n.data),
+            Raw::Match(expr, cases) => {
+                write!(f, "(match {}", expr)?;
+                for (pattern, result) in cases {
+                    match pattern {
+                        Pattern::Any(_, _) => write!(f, " _ => {}", result)?,
+                        Pattern::Con(name, patterns, _) => {
+                            if patterns.is_empty() {
+                                write!(f, " {} => {}", name.data, result)?;
+                            } else {
+                                write!(f, " {}({}) => {}", name.data,
+                                    patterns.iter().map(|p| {
+                                        match p {
+                                            Pattern::Any(_, _) => SmolStr::new("_"),
+                                            Pattern::Con(n, _, _) => n.data.clone(),
+                                        }
+                                    }).collect::<Vec<_>>().join(" "),
+                                    result)?;
+                            }
+                        }
+                    }
+                }
+                write!(f, ")")
+            },
+            Raw::Sum(name, variants, constructors, _, is_inductive) => {
+                if *is_inductive {
+                    write!(f, "(enum {}", name.data)?;
+                } else {
+                    write!(f, "(struct {}", name.data)?;
+                }
+                
+                // 显示 variants
+                for (variant_name, icit, variant_type) in variants {
+                    match icit {
+                        Icit::Impl => write!(f, " {{{} : {}}}", variant_name.data, variant_type)?,
+                        Icit::Expl => write!(f, " ({} : {})", variant_name.data, variant_type)?,
+                    }
+                }
+                
+                // 显示 constructors
+                for constructor in constructors {
+                    write!(f, " {}", constructor.data)?;
+                }
+                
+                write!(f, ")")
+            },
+            Raw::SumCase { is_trait: _, typ, case_name, datas } => {
+                write!(f, "(case {} of {} ", typ, case_name.data)?;
+                for (data_name, data_type, icit) in datas {
+                    match icit {
+                        Icit::Impl => write!(f, "{{{} : {}}} ", data_name.data, data_type)?,
+                        Icit::Expl => write!(f, "({} : {}) ", data_name.data, data_type)?,
+                    }
+                }
+                write!(f, ")")
+            },
+            Raw::Tm(_, _) => write!(f, "<prechecked>"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Decl {
+    Package {
+        path: Vec<Span<SmolStr>>,
+    },
+    Import {
+        prefix: Vec<SmolStr>,
+        names: Vec<SmolStr>,
+        wildcard: bool,
+    },
+    Def {
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        ret_type: Raw,
+        body: Raw,
+    },
+    Println(Raw),
+    Enum {
+        is_trait: bool,
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        cases: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Option<Raw>)>,
+    },
+    TraitDecl {
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        supertraits: Vec<Span<SmolStr>>,
+        methods: Vec<(Span<SmolStr>, Vec<(Span<SmolStr>, Raw, Icit)>, Raw, Option<Raw>)>,
+        assoc_defaults: Vec<(SmolStr, Option<Raw>)>,
+    },
+    ImplDecl {
+        name: Raw,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        trait_name: Span<SmolStr>,
+        trait_params: Vec<Raw>,
+        methods: Vec<(Decl, bool)>,
+        /// `true` for an *inherent* impl (`impl Foo { ... }`, no `for Trait`):
+        /// methods are registered in the type's namespace (`Foo.method`, with a
+        /// `this` param) and dispatched through `x.method` member lookup.
+        /// `false` for a trait impl (`impl Trait for Foo`): methods build a
+        /// trait record instance (`Trait.mk [Foo] (lam this => ...)`), used for
+        /// generic trait-constrained dispatch.
+        inherent: bool,
+        /// Generated from a `class ... impl Trait` body: methods are filtered to
+        /// those declared by the trait during elaboration (extra methods are
+        /// inherited by the class's inherent impl instead).
+        from_class: bool,
+    },
+    Derive {
+        traits: Vec<Span<SmolStr>>,
+        decl: Box<Decl>,
+    },
+    Class {
+        name: Span<SmolStr>,
+        params: Vec<(Span<SmolStr>, Raw, Icit)>,
+        items: Vec<ClassItem>,                     // ordered fields + methods + statements
+        traits: Vec<(Span<SmolStr>, Vec<Raw>)>,    // (impl Trait[, trait params])
+    },
+}
+
+/// A single item in a class body: a field (let binding), a method (def) or a statement.
+#[derive(Debug, Clone)]
+pub enum ClassItem {
+    Field(Span<SmolStr>, Raw, Raw), // (name, type, value)
+    Method(Decl, bool),             // method definition (Decl::Def) + is_static
+    Stmt(Raw),
+}
