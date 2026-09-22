@@ -1324,8 +1324,23 @@ fn nat_succ_shape<'a>(bump: &'a Bump, decl: &Decls<'a>, inner: V) -> Option<V> {
 }
 
 /// 卡住应用 `name args...`（参考版 `stuck_decl`：`Val::Decl(name, spine)`）。
+///
+/// 裸基座 intern（表见 [`STUCK_DECL_INTERN`]）：同名字存根轮内共享同一
+/// bump 单元——参考版的 `Val::Decl` 基座本就是 decl 表共享的 Rc，位相等
+/// 捷径与 conv.memo 键因此常命中；孪生旧实现每次新造单元，两条捷径系统性
+/// miss。轮界 `force_memo_clear()` 清空（bump 句柄不跨轮）。
 fn stuck_decl<'a>(bump: &'a Bump, spine: &mut Spine, name: &str, args: &[V]) -> V {
-    let mut acc = v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(name) }));
+    let base = match STUCK_DECL_INTERN.with(|c| c.borrow().get(name).copied()) {
+        Some(v) => v,
+        None => {
+            let v = v_xcell(bump.alloc(XCell::Decl { name: bump.alloc_str(name) }));
+            STUCK_DECL_INTERN.with(|c| {
+                c.borrow_mut().insert(SmolStr::new(name), v);
+            });
+            v
+        }
+    };
+    let mut acc = base;
     for a in args {
         acc = spine.push(acc, *a, Icit::Expl);
     }
@@ -1874,6 +1889,29 @@ thread_local! {
     /// 写入」，外层回滚需继续撤销）。
     static META_JOURNAL: RefCell<Vec<Vec<(usize, MetaEntry)>>> =
         const { RefCell::new(Vec::new()) };
+    /// `declb_of` 的单条目缓存（参考版 `DECLB_CACHE` 同款移植）：Match/Match
+    /// unify、quote、rename 每碰到一对 Match 值就重建整张 decl 存根表（O(D)
+    /// 键克隆 + 2 次 bump 分配/条目），adder_proof 这类 Match/Match 密集证明
+    /// 每 decl 数千次。键 = (decl 表地址, len)：decl 表是 COW `Rc`，轮内
+    /// `Rc::make_mut` 重分配换地址即自然 miss 重建；(addr, len) 双键挡住
+    /// 同轮 free→realloc 同址不同内容的 ABA。**存放口径 'static**：条目全
+    /// 指向当轮 bump（与 `unify_stack` 同纪律），`force_memo_clear()`——每个
+    /// `bump.reset()` 轮入口的唯一钩子——清空。
+    static TWIN_DECLB_CACHE: RefCell<Option<(usize, usize, Rc<Decls<'static>>)>> =
+        const { RefCell::new(None) };
+    /// quote 的 `Nat` 类型项缓存：`XCell::Nat(k)` quote 每次都要嵌套 quote
+    /// 一遍闭合的 `Nat` Sum 值（轮内恒定、与层级无关）+ 两个新草稿栈。键 =
+    /// Nat 值打包字（fake/真登记各一个地址，键随值换代自然失效）。轮界
+    /// `force_memo_clear()` 清。
+    static QUOTE_NAT_TM: RefCell<Option<(u64, &'static Tm<'static>)>> =
+        const { RefCell::new(None) };
+    /// `stuck_decl` 裸 Decl 存根 intern 表（参考版 `Val::Decl` 基座共享同
+    /// 款）：旧实现每次卡住都新造单元——同名基座地址永不同，位相等捷径
+    /// （`t.0 == u.0`）与 conv.memo 键系统性 miss。intern 后同名存根轮内共
+    /// 享同一 bump 单元（值不可变，共享即等价）。键 = 名字内容（SmolStr
+    /// 内联零堆）。轮界 `force_memo_clear()` 清。
+    static STUCK_DECL_INTERN: RefCell<FxHashMap<SmolStr, V>> =
+        RefCell::new(FxHashMap::default());
 }
 
 /// meta 就地写统一入口：journal 激活时先记旧值再写新值。
@@ -2257,9 +2295,17 @@ pub fn twin_mem_stats() -> serde_json::Value {
 /// 每轮入口清空 memo（bump.reset() 处调用；地址可能被下一代复用）。
 /// 容量到过 [`CACHE_SHRINK_MIN_ENTRIES`] 时顺带归还桶数组（长驻进程里
 /// 峰值容量否则活到进程结束）。
+///
+/// 同为「轮界清」纪律的 TLS 缓存在此一并清空：`TWIN_DECLB_CACHE` /
+/// `QUOTE_NAT_TM` 的条目是当轮 bump 句柄、`STUCK_DECL_INTERN` 的值同理——
+/// 本函数是每个 `bump.reset()` 轮入口的唯一汇聚点（bench / run / prelude /
+/// kick 各入口均配对调用），挂这里即继承其完整失效纪律。
 fn force_memo_clear() {
     let snap = FORCE_MEMO.with(|m| m.borrow_mut().reclaim(CACHE_SHRINK_MIN_ENTRIES));
     twin_stat_record(&TWIN_STAT_FORCE, snap);
+    TWIN_DECLB_CACHE.with(|c| *c.borrow_mut() = None);
+    QUOTE_NAT_TM.with(|c| *c.borrow_mut() = None);
+    STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
 }
 
 #[inline]
@@ -3285,22 +3331,47 @@ fn quote_iter<'a>(
                         // 缺失回退 U(0)——下游看到与一元链完全相同的形状）
                         XCell::Nat(k) => {
                             let nat_ty = decl.get("Nat").map(|e| e.val).unwrap_or_else(v_u0);
-                            let nat_tm = quote_iter(
-                                bump,
-                                spine,
-                                &mut Vec::new(),
-                                &mut Vec::new(),
-                                work,
-                                vals,
-                                icits,
-                                defs,
-                                metas,
-                                decl,
-                                mutable,
-                                level,
-                                nat_ty,
-                                None,
-                            );
+                            // Nat 类型项缓存（[`QUOTE_NAT_TM`]）：闭合 Sum 值
+                            // 的引出项轮内恒定、与层级无关，免每次嵌套 quote
+                            // + 双草稿栈。轮界 force_memo_clear 清。
+                            let nat_tm: &'a Tm<'a> = match QUOTE_NAT_TM.with(|c| {
+                                c.borrow().filter(|(k0, _)| *k0 == nat_ty.0).map(|(_, t)| t)
+                            }) {
+                                Some(t) => t,
+                                None => {
+                                    let t = quote_iter(
+                                        bump,
+                                        spine,
+                                        &mut Vec::new(),
+                                        &mut Vec::new(),
+                                        work,
+                                        vals,
+                                        icits,
+                                        defs,
+                                        metas,
+                                        decl,
+                                        mutable,
+                                        level,
+                                        nat_ty,
+                                        None,
+                                    );
+                                    QUOTE_NAT_TM.with(|c| {
+                                        // SAFETY：'static 仅是存放口径，条目
+                                        // 指向当轮 bump，轮界随
+                                        // force_memo_clear 清空。
+                                        *c.borrow_mut() = Some((
+                                            nat_ty.0,
+                                            unsafe {
+                                                std::mem::transmute::<
+                                                    &'a Tm<'a>,
+                                                    &'static Tm<'static>,
+                                                >(t)
+                                            },
+                                        ));
+                                    });
+                                    t
+                                }
+                            };
                             done.push(quote_nat_chain(bump, nat_tm, *k));
                         }
                         XCell::Obj { val, name } => {
@@ -3740,8 +3811,20 @@ enum UItem<'a> {
 
 /// 从 decl 表构建 declb 存根表（**Sum 类型值保留**——否则 SumCase 的 typ
 /// 变 Decl 卡 pretty，参考版 `simpl_decl` 逐字对应；prim 槽随行）。
+///
+/// 单条目缓存（参考版 `DECLB_CACHE` 同款移植，表见 [`TWIN_DECLB_CACHE`]）：
+/// Match/Match unify、quote、rename 对同一 decl 表的重复重建整表免掉。
+/// 轮界由 `force_memo_clear()` 清空（bump 句柄不跨轮）。
 fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
-    Rc::new(
+    let key = (decl as *const Decls<'a> as usize, decl.len());
+    if let Some(hit) = TWIN_DECLB_CACHE.with(|c| {
+        c.borrow().as_ref().and_then(|(a, l, d)| {
+            (*a == key.0 && *l == key.1).then(|| d.clone())
+        })
+    }) {
+        return hit;
+    }
+    let built: Rc<Decls<'a>> = Rc::new(
         decl.iter()
             .map(|(k, e)| {
                 let name = bump.alloc_str(k.as_str());
@@ -3766,7 +3849,18 @@ fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
                 )
             })
             .collect(),
-    )
+    );
+    TWIN_DECLB_CACHE.with(|c| {
+        // SAFETY：'static 仅是存放口径——条目全指向当轮 bump，跨轮前
+        // `force_memo_clear()` 已把本表清空（与 unify_stack 的借出重写同
+        // 纪律）；`Decls<'a>` 与 `Decls<'static>` 布局无关生命周期参数。
+        *c.borrow_mut() = Some((
+            key.0,
+            key.1,
+            unsafe { std::mem::transmute::<Rc<Decls<'a>>, Rc<Decls<'static>>>(built.clone()) },
+        ));
+    });
+    built
 }
 
 /// `v_app` 可否安全应用到该值（参考版 `is_appliable`）：λ / Flex / Rigid /
