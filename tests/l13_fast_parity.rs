@@ -194,6 +194,38 @@ fn parity_errors() {
     );
 }
 
+// 后缀回退 memo 的失效纪律（2026-09-22）
+// --------------------------------------------------------------------------------
+
+/// 同一轮内"先靠唯一候选解析、后往同名桶追加候选"必须重查。
+///
+/// 复现（LSP 双引擎实测确认过）：`foo` 先被后缀回退唯一解析成 `A.foo` 并记
+/// Pos memo；随后 `enum B { foo }` 往**同一**尾缀桶追加候选——而稳态下
+/// `Rc::make_mut` 原地追加、桶地址不变，memo 的"桶指针纪元"看不见这次变化。
+/// 旧实现于是把 `def h: A = foo` 静默解析成 `A.foo`（Ok、零诊断），参考版
+/// 报 `ambiguous name`。这既是判定分叉，也属"漏诊断"——LSP 的信任闸只审
+/// 错误文本，对"没有诊断的分叉"结构上无防护。
+#[test]
+fn parity_suffix_fallback_memo_invalidated_by_new_candidate() {
+    assert_parity(
+        "enum A {\n  foo\n}\n\
+         def g: A = foo\n\
+         enum B {\n  foo\n}\n\
+         def h: A = foo\n",
+    );
+}
+
+/// 对照组：两个候选在**首次**查询前就都在（memo 只填一次），两版都报
+/// ambiguous——钉住"修失效纪律不能把这条也改坏"。
+#[test]
+fn parity_suffix_fallback_ambiguous_without_memo() {
+    assert_parity(
+        "enum A {\n  foo\n}\n\
+         enum B {\n  foo\n}\n\
+         def h: A = foo\n",
+    );
+}
+
 // multiline 枚举（标准声明形态：构造子换行分隔）——原"已知缺陷"场景
 // --------------------------------------------------------------------------------
 

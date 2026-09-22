@@ -5965,12 +5965,19 @@ pub(crate) struct Machine {
     /// 构造子名同理），memo 命中免整桶扫描与四级过滤。
     ///
     /// 失效纪律（按失效源精确到条目）：
-    /// * **桶内容变化**（新键入桶）——条目记填表时的桶 `Rc` 指针；桶只在
-    ///   `Rc::make_mut` 实插时换地址，指针不符即重查。轮界
-    ///   `decl_suffix_index.clear()` 后指针必然不符（memo 同界清）。
+    /// * **桶内容变化 / 跨 kick 重新可见**——`index_decl_key` 在
+    ///   `suffix_indexed_keys` 早退**之前**按桶名 `suffix_memo.remove(tail)`
+    ///   精确弃用。**不能靠桶指针发现**：稳态下桶 `Rc` 的 refcount==1
+    ///   （memo 只存裸指针、不持 `Rc`），`Rc::make_mut` 原地追加、地址不变；
+    ///   且索引跨 kick 常驻而 decl 表每 kick 重建，同键重登记会早退。
+    ///   两处漏弃都会让"先唯一解析、后候选可见"沿用旧结论（2026-09-22 修复，
+    ///   回归用例 `parity_suffix_fallback_memo_invalidated_by_new_candidate`）。
+    ///   指针纪元保留为兜底（轮界 `clear` 后新桶可能复用旧地址）。
     /// * **首段可见性翻转**（负结果专用）——负条目记填表时被"头不可见"
     ///   过滤掉的候选首段集；活检 `decls/namespaces` 可见性，任一转可见
-    ///   即重查（可见性单调增长，正向条目无此失效源）。
+    ///   即重查。正向条目不需要这条：候选能进 `cxt.decls` 必经过
+    ///   `index_decl_key`，注册时已按桶名弃用该条目；`cxt.namespaces` 的变化
+    ///   （package/import）走下面的版本纪元整表弃用。
     /// * **namespace 方法键集 / namespace 准入集变化**——`Package`/`Import`
     ///   登记与 state journal 回滚 bump `suffix_memo_version`，查询侧纪元
     ///   不符整表弃用。
@@ -6533,6 +6540,21 @@ impl Machine {
     /// 多段键可被较短尾缀命中，只按末段建桶会漏（实测 prelude-hdl
     /// `Add.mk` 解析失败的回归）。
     fn index_decl_key(&mut self, key: &str) {
+        // 后缀回退 memo 的**内容失效**，与"索引是否实插"无关——必须早于下面
+        // 的 `suffix_indexed_keys` 早退：
+        //  1) 本键的每个点分尾缀桶新增了一个候选；稳态下桶 refcount==1
+        //     （memo 只存裸指针、不持 `Rc`），`Rc::make_mut` 原地追加、地址
+        //     不变，指针纪元看不见这次新增；
+        //  2) **跨 kick**：索引常驻（prime 段建的 prelude 桶必须留用），而
+        //     decl 表每 kick 从检查点重建 → 同键重登记走早退，但该键在本轮
+        //     `cxt` 里是**新可见**的；memo 里可能存着"它还没可见时"填的唯一
+        //     命中（LSP 常驻路径实测：kick 0 正确报 ambiguous，kick 1 静默
+        //     解析回 A.foo）。
+        for (i, b) in key.char_indices() {
+            if b == '.' {
+                self.suffix_memo.remove(&key[i + 1..]);
+            }
+        }
         // 同键重复登记（fake 占位→真值覆盖）只索引一次——查询侧原
         // sort+dedup 每 miss 整桶复制重排 O(n log n)，责任移到写入侧
         // 一次 O(1) 查集。集合随 decl_suffix_index 同界清空。
