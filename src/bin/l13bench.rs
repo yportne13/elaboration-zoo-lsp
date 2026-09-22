@@ -84,6 +84,12 @@ struct Cli {
     /// 调试口：跑任意源文件（两版互检 + L13BENCH_DIAG=1 逐 decl 定位），忽略 --workload
     #[arg(long)]
     file: Option<String>,
+
+    /// `--file` 配套：装载 prelude（none|core|hdl）。旧实现 --file 不带
+    /// prelude 也不注册 nat 内建——依赖 prelude 的真实示例（adder_proof 等）
+    /// 两版都在 decl 1 报 `name not in scope: Nat`，示例级互检不可用。
+    #[arg(long, default_value = "none")]
+    with_prelude: String,
 }
 
 fn median(ts: &mut [u128]) -> u128 {
@@ -442,7 +448,30 @@ fn run(cli: Cli) {
             eprintln!("parse failed: {label}");
             return;
         };
-        bench_one(&label, &decls, &[], &cli, &want);
+        if cli.with_prelude == "none" {
+            bench_one(&label, &decls, &[], &cli, &want);
+            return;
+        }
+        // 装载 prelude 后跑（--with-prelude core|hdl）：示例级两版互检
+        let files: Vec<(&str, &str)> = match cli.with_prelude.as_str() {
+            "core" => CORE.to_vec(),
+            "hdl" => {
+                let mut f = CORE.to_vec();
+                f.extend_from_slice(HDL);
+                f
+            }
+            other => {
+                eprintln!("unknown --with-prelude: {other} (none|core|hdl)");
+                return;
+            }
+        };
+        let (mut all, _counts, failed, nat_after) = parse_prelude(&files);
+        if let Some(f) = &failed {
+            eprintln!("prelude PARSE-FAILED at {f}");
+            return;
+        }
+        all.extend(decls);
+        bench_one(&label, &all, &nat_after, &cli, &want);
         return;
     }
     let workloads: Vec<&str> = match cli.workload.as_str() {
