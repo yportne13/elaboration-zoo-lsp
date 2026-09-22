@@ -15,6 +15,7 @@ use lsp_types::{CompletionParams, CompletionResponse, MessageType, PartialResult
 #[derive(Default)]
 struct CapturingClient {
     diagnostics: Mutex<Vec<(Url, Vec<lsp_types::Diagnostic>, Option<i32>)>>,
+    logs: Mutex<Vec<String>>,
 }
 
 impl ClientLike for CapturingClient {
@@ -22,7 +23,9 @@ impl ClientLike for CapturingClient {
         self.diagnostics.lock().unwrap().push((uri, diagnostics, version));
     }
     fn show_message(&self, _typ: MessageType, _message: String) {}
-    fn log_message(&self, _typ: MessageType, _message: String) {}
+    fn log_message(&self, _typ: MessageType, message: String) {
+        self.logs.lock().unwrap().push(message);
+    }
 }
 
 fn backend(engine: Engine) -> Arc<Backend<CapturingClient>> {
@@ -45,6 +48,11 @@ fn errors(b: &Arc<Backend<CapturingClient>>, uri: &Url) -> Vec<String> {
         .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
         .map(|d| d.message.clone())
         .collect()
+}
+
+/// Every `window/logMessage` line the backend emitted (fallback reasons land here).
+fn logs(b: &Arc<Backend<CapturingClient>>) -> Vec<String> {
+    b.client.logs.lock().unwrap().clone()
 }
 
 fn hover_text(b: &Arc<Backend<CapturingClient>>, uri: &Url, offset: usize) -> Option<String> {
@@ -507,6 +515,73 @@ fn twin_falls_back_on_solve_trait_failure() {
     rb.process_file(&u, src, Some(1));
     assert_eq!(errors(&tb, &u), errors(&rb, &u), "fallback diagnostics differ from reference");
     assert!(!errors(&tb, &u).is_empty(), "expected a solve-trait error for Bool + Bool");
+}
+
+/// A twin decline used to be silent: the output channel named the engine only
+/// at startup, so "is this file running on the twin or did it fall back?" could
+/// not be answered at runtime.  Every decline must now leave one log line
+/// naming the reason, and the reason must be queryable
+/// ([`Backend::twin_fallback_reason`]) — that query is also what makes the
+/// difference between "the twin got it right" and "the reference covered for
+/// it" testable, which the diagnostic-only assertions could not distinguish.
+#[test]
+fn twin_fallback_is_logged_with_its_reason() {
+    // (1) Unverified error class: the twin runs, then declines.
+    let err_uri = Url::parse("file:///twin_fb_err.typort").unwrap();
+    let tb = backend(Engine::Twin);
+    tb.process_file(&err_uri, "def x = true + false\n", Some(1));
+    let reason = tb.twin_fallback_reason(err_uri.as_str()).expect("fallback not recorded");
+    assert!(reason.starts_with("untrusted-error"), "unexpected reason: {reason}");
+    assert!(!tb.twin_tables.contains_key(err_uri.as_str()), "untrusted file stayed twin-owned");
+    assert!(
+        logs(&tb).iter().any(|l| l.contains("twin fallback:") && l.contains("untrusted-error")),
+        "no fallback log line: {:?}",
+        logs(&tb),
+    );
+
+    // (2) A twin-owned file records nothing and logs nothing.
+    let ok_uri = Url::parse("file:///twin_fb_ok.typort").unwrap();
+    let tb2 = backend(Engine::Twin);
+    tb2.process_file(&ok_uri, "def f(n: Nat): Nat = n\n", Some(1));
+    assert!(tb2.twin_tables.contains_key(ok_uri.as_str()), "clean file was not twin-owned");
+    assert_eq!(tb2.twin_fallback_reason(ok_uri.as_str()), None);
+    assert!(!logs(&tb2).iter().any(|l| l.contains("twin fallback:")));
+
+    // (3) Cross-file gate: the reason names the import / the declared package.
+    let provider = Url::parse("file:///twin_fb_a.typort").unwrap();
+    let dependent = Url::parse("file:///twin_fb_b.typort").unwrap();
+    let tb3 = backend(Engine::Twin);
+    tb3.process_file(&provider, "package mylib\n\nstruct Tree {\n    h: Nat\n}\n", Some(1));
+    tb3.process_file(&dependent, "import mylib._\n\ndef t: Tree = mylib.Tree.mk zero\n", Some(1));
+    let prov_reason = tb3.twin_fallback_reason(provider.as_str()).expect("package fallback not recorded");
+    assert!(
+        prov_reason.starts_with("cross-file") && prov_reason.contains("mylib"),
+        "unexpected package reason: {prov_reason}",
+    );
+    let dep_reason = tb3.twin_fallback_reason(dependent.as_str()).expect("import fallback not recorded");
+    assert!(
+        dep_reason.starts_with("cross-file") && dep_reason.contains("mylib"),
+        "unexpected import reason: {dep_reason}",
+    );
+
+    // (4) A parse *diagnostic* is not a decline: the resilient parser still
+    // yields partial decls, so the twin owns the file and publishes the parse
+    // errors itself (both engines run the same parser call).  The only decline
+    // on the parse front is `no-parse-result`, which needs
+    // `parser_with_macros` to return `None` — unreachable, since the lexer
+    // accepts any input.
+    let bad_uri = Url::parse("file:///twin_fb_parse.typort").unwrap();
+    let tb4 = backend(Engine::Twin);
+    tb4.process_file(&bad_uri, "def a: Nat = zero\ndef b: Nat = succ ze", Some(1));
+    assert!(tb4.twin_tables.contains_key(bad_uri.as_str()), "parse state should stay twin-owned");
+    assert_eq!(tb4.twin_fallback_reason(bad_uri.as_str()), None);
+    assert!(!logs(&tb4).iter().any(|l| l.contains("twin fallback:")));
+
+    // (5) The reference engine never reports a fallback: the twin is not run.
+    let rb = backend(Engine::Reference);
+    rb.process_file(&err_uri, "def x = true + false\n", Some(1));
+    assert_eq!(rb.twin_fallback_reason(err_uri.as_str()), None);
+    assert!(!logs(&rb).iter().any(|l| l.contains("twin fallback:")));
 }
 
 /// A parse error (the most common typing state) no longer forces a

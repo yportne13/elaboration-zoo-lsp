@@ -273,6 +273,19 @@ impl Engine {
     }
 }
 
+/// One file's parse products: `(decls, parse_errs, macro exports, expansions)`.
+///
+/// Both engines run the *same* `parser_with_macros` call with the same macro
+/// table and `path_id`, so this is parsed once per kick and handed to whichever
+/// engine ends up owning the file — `parse_errs` are byte-identical by
+/// construction and therefore never a reason to fall back.
+type ParsedFile = (
+    Vec<Decl>,
+    Vec<L13_namespace::parser::IError>,
+    std::collections::HashMap<String, Vec<MacroRule>>,
+    Vec<MacroExpansionInfo>,
+);
+
 /// Owned, engine-independent observation snapshot for one file (stage-0
 /// contract of the wiring doc): the three tables the hover / goto /
 /// completion / inlay handlers read, stored as owned strings/spans so the
@@ -349,6 +362,14 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     /// `hover_table` so the reference path stays byte-identical and the guard
     /// suites that read `Infer` internals keep compiling.
     pub twin_tables: DashMap<String, ObserveSnapshot>,
+    /// uri -> why the twin declined to own the file on its last kick
+    /// (`Engine::Twin` only).  Purely diagnostic: the LSP logs one line per
+    /// decline (mirroring the per-kick `change:` lines) and tests / tools can
+    /// ask via [`Self::twin_fallback_reason`].  Before this existed the
+    /// fallback was silent — the output channel named the engine only at
+    /// startup, so "which engine actually ran this file" could not be answered
+    /// at runtime.
+    pub twin_fallback: DashMap<String, String>,
     /// Which elaborator backs the analysis path (see [`Engine`]).
     pub engine: Engine,
     /// Parsed prelude decls for the twin engine (shared, parse-once per
@@ -432,6 +453,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             format_settings: Mutex::new(FormatSettings::default()),
             hover_table,
             twin_tables: DashMap::new(),
+            twin_fallback: DashMap::new(),
             engine,
             twin_prelude: Mutex::new(None),
             quickfix_map: DashMap::new(),
@@ -1324,6 +1346,32 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
     }
 
+    /// Record + log that the twin declined to own `uri` on this kick.
+    ///
+    /// `class` is a stable short label, `detail` carries the offending
+    /// names/keys/message so the log line is actionable.  Logging mirrors the
+    /// existing per-kick `change:` lines (one line per fallback per kick); the
+    /// last reason is kept in [`Self::twin_fallback_reason`] for tests/tools.
+    fn note_twin_fallback(&self, uri: &str, class: &str, detail: &str) {
+        let line = if detail.is_empty() {
+            class.to_string()
+        } else {
+            format!("{class} ({detail})")
+        };
+        self.client.log_message(
+            MessageType::LOG,
+            format!("twin fallback: {uri} — {line}"),
+        );
+        self.twin_fallback.insert(uri.to_string(), line);
+    }
+
+    /// Why the twin declined to own `uri` on the last kick: `None` when the
+    /// twin owns the file, when it was never attempted, or when the server runs
+    /// the reference engine (then no file is a "fallback").
+    pub fn twin_fallback_reason(&self, uri: &str) -> Option<String> {
+        self.twin_fallback.get(uri).map(|r| r.value().clone())
+    }
+
     /// Whether the twin can *fully own* this file's elaboration (stage 4).
     /// The twin replays only the prelude + this file, so a file that imports
     /// a project namespace, or declares one other files import, still needs
@@ -1353,43 +1401,35 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// Since 2026-09-14 the twin also stays authoritative on *error* states
     /// whose error classes have verified parity (parse errors are identical by
     /// construction; `can't unify` / genuinely-unresolved names by corpus) —
-    /// see the trust gate inside.  A parse failure or an ERROR keeps the
-    /// previous symbols, mirroring the reference path.
-    fn twin_elaborate(&self, uri: &Url, text: &str, version: Option<i32>) -> bool {
+    /// see the trust gate inside.  An ERROR keeps the previous symbols,
+    /// mirroring the reference path.
+    ///
+    /// The caller ([`Self::elaborate_with`]) has already checked
+    /// [`Self::twin_can_own`] (engine + cross-file gate), parsed the file with
+    /// the very same `parser_with_macros` call the reference path uses, and
+    /// registered its macros.  The parser is *shared* between the two engines,
+    /// so `decls` / `parse_errs` reach both byte-identically; a syntax error is
+    /// therefore never a reason to decline (only a total parse failure — which
+    /// the resilient lexer cannot produce — is, and the caller handles it).
+    fn twin_elaborate(
+        &self,
+        uri: &Url,
+        text: &str,
+        version: Option<i32>,
+        decls: &[Decl],
+        parse_errs: &[crate::L13_namespace::parser::IError],
+    ) -> bool {
         let uri_str = uri.to_string();
-        if !self.twin_can_own(&uri_str) {
-            // 该文件此前可能由 twin 拥有过（快照还在 twin_tables 里），后来
-            // 加了 import / package 使 twin 不再能完整拥有它：旧快照必须立刻
-            // 清掉。hover / completion / inlay 在 twin 模式下优先读
-            // twin_tables，残留快照既占内存、又会拿上一版文本的 span 出结果，
-            // 还会盖住紧接着的参考引擎结果。
-            self.twin_tables.remove(&uri_str);
-            return false;
-        }
-        let Some(now_id) = self.document_id.get(&uri_str).map(|x| *x) else {
-            return false;
-        };
-        let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
-        let Some((decls, parse_errs, new_exports, expansions)) =
-            parser_with_macros(&preprocess(text), now_id, &global_macros)
-        else {
-            // Parse failure: clear this file's observation snapshot; the
-            // caller's reference path clears the rest.
-            self.twin_tables.remove(&uri_str);
-            return false;
-        };
-        self.update_file_macros(&uri_str, &new_exports);
-        self.macro_expansion_map.insert(uri_str.clone(), expansions);
         let prelude_guard = self.twin_prelude.lock().unwrap();
         let Some(prelude) = prelude_guard.as_ref() else {
+            self.note_twin_fallback(&uri_str, "prelude-unavailable", "");
             return false;
         };
         let include_hdl = prelude.counts.iter().any(|(n, _)| n == "hdl-core");
         // The resident Tycker holds a `!Sync` bump; the analysis loop is
         // single-threaded, so a thread-local (not a Backend field) is the
         // right home.  Reuse is keyed by prelude shape (HDL or core-only).
+        let mut decline: &str = "resident-unavailable";
         let ran = TWIN_RESIDENT.with(|slot| {
             let mut guard = slot.borrow_mut();
             let stale = !matches!(guard.as_ref(), Some(r) if r.include_hdl == include_hdl);
@@ -1397,12 +1437,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 let mut t = L13_namespace::bump_spine_iter::Tycker::new();
                 if t.prime_resident(prelude).is_err() {
                     *guard = None;
+                    decline = "prelude-prime-failed";
                     return false;
                 }
                 *guard = Some(TwinResident { include_hdl, tycker: t });
             }
             let resident = guard.as_mut().expect("resident just primed");
-            match resident.tycker.observe_user(prelude, &decls) {
+            match resident.tycker.observe_user(prelude, decls) {
                 Ok(()) => {
                     let t = &resident.tycker;
                     let snap = ObserveSnapshot {
@@ -1415,6 +1456,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                 }
                 Err(_) => {
                     self.twin_tables.remove(&uri_str);
+                    decline = "observe-failed";
                     false
                 }
             }
@@ -1424,6 +1466,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // 重新 prime 失败），上一版的快照不能留（observe 失败那一支已删，
             // 这里对已删条目是空操作）。
             self.twin_tables.remove(&uri_str);
+            self.note_twin_fallback(&uri_str, decline, "");
             return false;
         }
         // Publish twin diagnostics + merge exports (resident still borrowed).
@@ -1469,23 +1512,37 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             .get(&uri_str)
             .map(|k| k.value().clone())
             .unwrap_or_default();
-        let errors_trusted = errors.iter().all(|e| {
-            let msg = &e.1;
+        // `(trusted, view_insufficiency)`: the second flag isolates the one
+        // rule that is about the *twin's view* (a name the reference's global
+        // table defines, i.e. another file's symbol) rather than about an
+        // unverified error class.
+        let classify = |msg: &str| -> (bool, bool) {
             if msg.starts_with("can't unify") {
-                return true;
+                return (true, false);
             }
             if let Some(name) = msg.strip_prefix("error name not in scope: ") {
                 let dotted = format!(".{name}");
                 let cxt = self.cxt.lock().unwrap();
-                return !cxt
+                let defined_elsewhere = cxt
                     .decl
                     .keys()
                     .any(|k| (k == name || k.ends_with(&dotted)) && !own_prev.contains(k.as_str()));
+                return (!defined_elsewhere, defined_elsewhere);
             }
-            false
+            (false, false)
+        };
+        let untrusted = errors.iter().find_map(|e| {
+            let (trusted, view_insufficiency) = classify(&e.1);
+            (!trusted).then_some((e.1.as_str(), view_insufficiency))
         });
-        if !errors_trusted {
+        if let Some((msg, view_insufficiency)) = untrusted {
             self.twin_tables.remove(&uri_str);
+            let detail: String = msg.lines().next().unwrap_or("").chars().take(160).collect();
+            if view_insufficiency {
+                self.note_twin_fallback(&uri_str, "symbol-defined-in-another-file", &detail);
+            } else {
+                self.note_twin_fallback(&uri_str, "untrusted-error", &detail);
+            }
             return false;
         }
         let has_error = !errors.is_empty() || !parse_errs.is_empty();
@@ -1510,6 +1567,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             });
             if any_clean_module {
                 self.twin_tables.remove(&uri_str);
+                self.note_twin_fallback(
+                    &uri_str,
+                    "hdl-check-gate",
+                    "clean module with no check issues",
+                );
                 return false;
             }
         }
@@ -1545,7 +1607,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         // Path1 fallback entries for defs (name span + signature rendering).
         let mut terms = Vec::new();
-        for d in &decls {
+        for d in decls {
             if let Decl::Def { name, .. } = d {
                 if let Some((_, e)) = exports.iter().find(|(k, _)| k == &name.data) {
                     terms.push(DeclTm::Def {
@@ -1574,7 +1636,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             d.severity = Some(DiagnosticSeverity::ERROR);
             diags.push(d);
         }
-        for e in &parse_errs {
+        for e in parse_errs {
             let ie = e.clone().to_err();
             let start_position = offset_to_position(ie.0.start_offset as usize, &rope).unwrap_or_default();
             let end_position = offset_to_position(ie.0.end_offset as usize, &rope).unwrap_or_default();
@@ -1611,6 +1673,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             }
             self.client.publish_diagnostics(uri.clone(), with_print, version);
         }
+        // The twin owns this file again: drop the stale "fell back" record so a
+        // later decline is logged afresh.
+        self.twin_fallback.remove(&uri_str);
         true
     }
 
@@ -2161,24 +2226,110 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         order
     }
 
-    /// Analyze a single file and publish its diagnostics.  The file's symbols
-    /// are merged back into the *global* cxt.decl so other files can import
-    /// them; on a type error the previous successful symbols are kept.
+    /// Analyze a single file and publish its diagnostics (see
+    /// [`Self::elaborate_with`] for the engine dispatch).
     fn elaborate(&self, uri: &Url, text: &str, version: Option<i32>) {
+        self.elaborate_with(uri, text, version, None)
+    }
+
+    /// [`Self::elaborate`] with an optional pre-parsed file (see
+    /// [`Self::parse_file`]).  `process_file` passes the parse it already made
+    /// for the dependency scan, so a twin-owned file is parsed **once** per
+    /// kick instead of twice (and the reference path re-parses only when the
+    /// twin actually ran and declined).
+    fn elaborate_with(
+        &self,
+        uri: &Url,
+        text: &str,
+        version: Option<i32>,
+        pre: Option<ParsedFile>,
+    ) {
         let uri_str = uri.to_string();
-        // Stage 4: when the twin can fully own this file it handles
-        // diagnostics + observation + the global decl merge itself, and the
-        // reference per-decl infer loop (the expensive 280ms/kick pass) is
-        // skipped entirely.  Fall back to the reference path otherwise.
-        if self.twin_elaborate(uri, text, version) {
+        if !self.twin_can_own(&uri_str) {
+            // 该文件此前可能由 twin 拥有过（快照还在 twin_tables 里），后来
+            // 加了 import / package 使 twin 不再能完整拥有它：旧快照必须立刻
+            // 清掉。hover / completion / inlay 在 twin 模式下优先读
+            // twin_tables，残留快照既占内存、又会拿上一版文本的 span 出结果，
+            // 还会盖住紧接着的参考引擎结果。
+            self.twin_tables.remove(&uri_str);
+            // With `Engine::Reference` the twin never runs, so nothing "fell
+            // back": only report the decline when the twin was selected.
+            if self.engine == Engine::Twin {
+                let mut why: Vec<String> = Vec::new();
+                if let Some(deps) = self.file_deps.get(&uri_str) {
+                    let mut names: Vec<&str> = deps.value().iter().map(|s| s.as_str()).collect();
+                    names.sort_unstable();
+                    why.push(format!("imports {}", names.join(", ")));
+                }
+                if let Some(ns) = self.file_namespaces.get(&uri_str) {
+                    let mut names: Vec<&str> = ns.value().iter().map(|s| s.as_str()).collect();
+                    names.sort_unstable();
+                    why.push(format!("declares package {}", names.join(", ")));
+                }
+                self.note_twin_fallback(&uri_str, "cross-file", &why.join("; "));
+            }
+            // The twin never touched `pre`: hand it to the reference path.
+            return self.elaborate_reference(uri, text, version, pre);
+        }
+        if !self.document_id.contains_key(&uri_str) {
+            // Defensive: `process_file` seeds the id before analysing, and
+            // `remove_file` only re-elaborates open documents.
+            self.note_twin_fallback(&uri_str, "no-document-id", "");
+            return self.elaborate_reference(uri, text, version, pre);
+        }
+        let parsed: ParsedFile = match pre {
+            Some(p) => p,
+            None => match self.parse_file(&uri_str, text) {
+                Some(p) => p,
+                None => {
+                    // `parser_with_macros` yields nothing at all — a total
+                    // parse failure, unreachable today because the resilient
+                    // lexer accepts any input (and a *syntax error* is not a
+                    // decline: `parse_errs` reach both engines identically, so
+                    // the twin publishes them itself).  The reference path
+                    // publishes the synthetic "parse error" diagnostic for it.
+                    self.twin_tables.remove(&uri_str);
+                    self.note_twin_fallback(&uri_str, "no-parse-result", "");
+                    return self.elaborate_reference(uri, text, version, None);
+                }
+            },
+        };
+        self.update_file_macros(&uri_str, &parsed.2);
+        self.macro_expansion_map.insert(uri_str.clone(), parsed.3);
+        if self.twin_elaborate(uri, text, version, &parsed.0, &parsed.1) {
             return;
         }
-        let rope = Rope::from_str(text);
+        // The twin ran and declined (untrusted error class, HDL self-check
+        // gate, prelude/resident state).  The reference path consumes `Decl` by
+        // value, so it re-parses instead of deep-cloning the AST.
+        self.elaborate_reference(uri, text, version, None)
+    }
+
+    /// The one parse per kick: same call, same macro table and same `path_id`
+    /// for both engines (the parser is shared, so the two engines see
+    /// byte-identical `decls` and `parse_errs`).
+    fn parse_file(&self, uri_str: &str, text: &str) -> Option<ParsedFile> {
+        let now_id = self.document_id.get(uri_str).map(|x| *x).unwrap_or(0);
         let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        let now_id = self.document_id.get(&uri_str).map(|x| *x).unwrap_or(0);
-        if let Some((decls, parse_errs, new_exports, expansions)) = parser_with_macros(&preprocess(text), now_id, &global_macros) {
+        parser_with_macros(&preprocess(text), now_id, &global_macros)
+    }
+
+    /// Analyze a single file and publish its diagnostics.  The file's symbols
+    /// are merged back into the *global* cxt.decl so other files can import
+    /// them; on a type error the previous successful symbols are kept.
+    ///
+    /// `pre` reuses an already-computed parse (the reference path consumes
+    /// `Decl` by value, so it takes ownership rather than borrowing).
+    fn elaborate_reference(&self, uri: &Url, text: &str, version: Option<i32>, pre: Option<ParsedFile>) {
+        let uri_str = uri.to_string();
+        let rope = Rope::from_str(text);
+        let parsed = match pre {
+            Some(p) => Some(p),
+            None => self.parse_file(&uri_str, text),
+        };
+        if let Some((decls, parse_errs, new_exports, expansions)) = parsed {
             self.update_file_macros(&uri_str, &new_exports);
             self.macro_expansion_map.insert(uri_str.clone(), expansions);
             let mut infer = self.infer.lock().unwrap();
@@ -2434,15 +2585,23 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let global_macros: std::collections::HashMap<String, Vec<MacroRule>> = self.exported_macros.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
-        if let Some((decls, _, _, _)) = parser_with_macros(&preprocess(text), now_id, &global_macros) {
-            self.update_deps(&uri_str, &decls);
+        // Parsed once here for the dependency scan; the same parse is handed to
+        // the changed file's elaboration below (same text, same `path_id`, same
+        // macro table), so a twin-owned file costs one parse per kick.
+        let mut parsed: Option<ParsedFile> = parser_with_macros(&preprocess(text), now_id, &global_macros);
+        if let Some((decls, _, _, _)) = &parsed {
+            self.update_deps(&uri_str, decls);
         }
         let rebuild = self.rebuild_set(&uri_str);
         for f in &rebuild {
             let f_text = self.document_map.get(f).map(|r| r.to_string()).unwrap_or_default();
             if let Ok(f_url) = Url::parse(f) {
                 let f_version = if f == &uri_str { version } else { None };
-                self.elaborate(&f_url, &f_text, f_version);
+                // Only the changed file can reuse this kick's parse: the other
+                // members of the rebuild set are re-elaborated from unchanged
+                // text and parse on their own.
+                let pre = if f == &uri_str { parsed.take() } else { None };
+                self.elaborate_with(&f_url, &f_text, f_version, pre);
             }
         }
         self.client.log_message(MessageType::LOG, format!("change {:?}", start_all.elapsed().as_secs_f32()));
@@ -2490,6 +2649,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.type_map.remove(uri.as_str());
         self.hover_table.remove(uri.as_str());
         self.twin_tables.remove(uri.as_str());
+        self.twin_fallback.remove(uri.as_str());
         self.quickfix_map.remove(uri.as_str());
         self.macro_expansion_map.remove(uri.as_str());
         self.remove_file_macros(&uri_str);
