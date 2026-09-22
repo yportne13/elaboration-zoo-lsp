@@ -8,9 +8,9 @@
 // Use a.apply[N] to extract a single bit from a UInt/Bits/SInt
 // ============================================================
 module bitExtract {
-    let a = UInt[8]
-    let bit0 = Bool
-    let bit7 = Bool
+    input a = UInt[8]
+    output bit0 = Bool
+    output bit7 = Bool
     bit0 := a.apply[0]
     bit7 := a.apply[7]
 }
@@ -21,9 +21,9 @@ println(moduleTreeVL(bitExtract.create.tree))
 // Example 2: Bracket sugar a[N] (desugars to a.apply[N])
 // ============================================================
 module bracketSugar {
-    let a = UInt[8]
-    let lsb = Bool
-    let msb = Bool
+    input a = UInt[8]
+    output lsb = Bool
+    output msb = Bool
     lsb := a[0]
     msb := a[7]
 }
@@ -35,9 +35,9 @@ println(moduleTreeVL(bracketSugar.create.tree))
 // Returns a narrower type of width (hi - lo + 1)
 // ============================================================
 module sliceExample {
-    let a = UInt[8]
-    let low_nibble = UInt[4]
-    let high_nibble = UInt[4]
+    input a = UInt[8]
+    output low_nibble = UInt[4]
+    output high_nibble = UInt[4]
     low_nibble := a.slice[3, 0]
     high_nibble := a.slice[7, 4]
 }
@@ -48,12 +48,12 @@ println(moduleTreeVL(sliceExample.create.tree))
 // Example 4: Bool logic operators (&&, ||, !, ^)
 // ============================================================
 module boolOps {
-    let a = Bool
-    let b = Bool
-    let and_result = Bool
-    let or_result = Bool
-    let not_result = Bool
-    let xor_result = Bool
+    input a = Bool
+    input b = Bool
+    output and_result = Bool
+    output or_result = Bool
+    output not_result = Bool
+    output xor_result = Bool
     and_result := a && b
     or_result := a || b
     not_result := !a
@@ -67,8 +67,8 @@ println(moduleTreeVL(boolOps.create.tree))
 // t[N] := x desugars to t.apply[N] := x on the LHS
 // ============================================================
 module lhsBitsel {
-    let t = UInt[8]
-    let x = Bool
+    output t = UInt[8]
+    input x = Bool
     t[0] := x
     t[7] := x
 }
@@ -79,11 +79,11 @@ println(moduleTreeVL(lhsBitsel.create.tree))
 // Example 6: Combining apply, slice, and comparisons
 // ============================================================
 module comparator {
-    let a = UInt[8]
-    let b = UInt[8]
-    let msb_a = Bool
-    let msb_b = Bool
-    let eq = Bool
+    input a = UInt[8]
+    input b = UInt[8]
+    output msb_a = Bool
+    output msb_b = Bool
+    output eq = Bool
     msb_a := a[7]
     msb_b := b[7]
     eq := a === b
@@ -93,20 +93,30 @@ println(moduleTreeVL(comparator.create.tree))
 
 // ============================================================
 // Example 7: Sub-module instantiation
-// Define a reusable adder and instantiate it in a top module
+// Define a reusable adder and instantiate it in a top module.
+// Ports are declared in the module header so the instance exposes
+// subSignal handles: `_adder.a := a` wires the parent's ports into
+// the child (SpinalHDL-style hierarchical connection), and
+// `sum := _adder.sum` reads the child's output. The raw mkInstance
+// demo (u_adder) is deliberately left unconnected.
 // ============================================================
-module myAdder[w: Nat] {
+module myAdder[w: Nat]
     input a = UInt[w]
     input b = UInt[w]
     output sum = UInt[w + 1]
+{
     sum := a +^ b
 }
 
 module topWithAdder {
     input a = UInt[8]
     input b = UInt[8]
+    output sum = UInt[9]
     let _adder = myAdder.create[8]
     let inst = mkInstance("u_adder", "myAdder")
+    _adder.a := a
+    _adder.b := b
+    sum := _adder.sum
 }
 println("=== Example 7: Sub-module instantiation ===")
 println(moduleTreeVL(topWithAdder.create.tree))
@@ -115,15 +125,15 @@ println(moduleTreeVL(topWithAdder.create.tree))
 // Example 8: Bit concatenation (##) — SpinalHDL style
 // ============================================================
 module concatExample {
-    let a = Bits[4]
-    let b = Bits[4]
-    let cat_bb = Bits[8]
-    let flag = Bool
-    let cat_flag = Bits[5]
-    let x = UInt[8]
-    let y = UInt[8]
-    let cat_uu = UInt[16]
-    let cat_ub = UInt[12]
+    input a = Bits[4]
+    input b = Bits[4]
+    output cat_bb = Bits[8]
+    input flag = Bool
+    output cat_flag = Bits[5]
+    input x = UInt[8]
+    input y = UInt[8]
+    output cat_uu = UInt[16]
+    output cat_ub = UInt[12]
     cat_bb := a ## b
     cat_flag := flag ## a
     cat_uu := x ## y

@@ -71,15 +71,15 @@ def adder_tree[width: Nat, len: Nat](x: Vec[UInt[width]] (len + 1)): UInt[width 
 // ============================================================
 
 module adderTree8 {
-    let a0 = UInt[8]
-    let a1 = UInt[8]
-    let a2 = UInt[8]
-    let a3 = UInt[8]
-    let a4 = UInt[8]
-    let a5 = UInt[8]
-    let a6 = UInt[8]
-    let a7 = UInt[8]
-    let sum = UInt[11]
+    input a0 = UInt[8]
+    input a1 = UInt[8]
+    input a2 = UInt[8]
+    input a3 = UInt[8]
+    input a4 = UInt[8]
+    input a5 = UInt[8]
+    input a6 = UInt[8]
+    input a7 = UInt[8]
+    output sum = UInt[11]
     sum := adder_tree (a0 :: a1 :: a2 :: a3 :: a4 :: a5 :: a6 :: a7 :: nil)
 }
 println("=== 13a: adderTree8 (8 x UInt[8] -> UInt[11]) ===")
@@ -87,11 +87,11 @@ println(moduleTreeVL(adderTree8.create.tree))
 
 // 4 个 UInt[16] 输入 → UInt[16 + log2Up 4] = UInt[18]
 module adderTree4 {
-    let b0 = UInt[16]
-    let b1 = UInt[16]
-    let b2 = UInt[16]
-    let b3 = UInt[16]
-    let sum = UInt[18]
+    input b0 = UInt[16]
+    input b1 = UInt[16]
+    input b2 = UInt[16]
+    input b3 = UInt[16]
+    output sum = UInt[18]
     sum := adder_tree (b0 :: b1 :: b2 :: b3 :: nil)
 }
 println("=== 13b: adderTree4 (4 x UInt[16] -> UInt[18]) ===")
@@ -99,10 +99,10 @@ println(moduleTreeVL(adderTree4.create.tree))
 
 // 3 个 UInt[8] 输入（奇数个，触发 widenOne 路径）→ UInt[8 + log2Up 3] = UInt[10]
 module adderTree3 {
-    let c0 = UInt[8]
-    let c1 = UInt[8]
-    let c2 = UInt[8]
-    let sum = UInt[10]
+    input c0 = UInt[8]
+    input c1 = UInt[8]
+    input c2 = UInt[8]
+    output sum = UInt[10]
     sum := adder_tree (c0 :: c1 :: c2 :: nil)
 }
 println("=== 13c: adderTree3 (3 x UInt[8] -> UInt[10], 奇数个元素) ===")

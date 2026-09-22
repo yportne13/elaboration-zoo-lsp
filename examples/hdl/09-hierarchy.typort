@@ -17,12 +17,13 @@ module myAdder[w: Nat]
     output sum = UInt[w]
     input en = Bool
 {
-    sum := a + b
+    // en 必须被真实读取（否则 HDL002）：使能为真输出 a+b，否则输出 a
+    sum := en.mux(a + b, a)
 }
 
 module topWithAdder {
-    input a = UInt[8]
-    input b = UInt[8]
+    // a/b 在本演示中从未被读取（实例刻意保持完全不连接 myAdder u ();），
+    // 方向修复对死声明无效（未用 input 仍报 HDL002）→ 直接删除这两个输入
     let u = myAdder.create[8]
 }
 println("=== 09a: topWithAdder (自动实例化) ===")

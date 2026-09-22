@@ -4,7 +4,7 @@
 // 在三层嵌套下练习 Bundle 的三种能力（与 10-bundle 的 10d/10e 一层
 // 嵌套对应）：
 //   1. 命名全路径化：嵌套工厂把绑定名前缀沿字段路径逐级下推，
-//      `let m = Axi4.create` 得到 m_aw_lane_data / m_w_lane_data ——
+//      `let m = Axi4.create.asMaster` 得到 m_aw_lane_data / m_w_lane_data ——
 //      即便 aw/w 两个通道的叶子字段同名也不会冲突（3 层以上必须有
 //      全路径名，否则重复 wire/端口）。
 //   2. 参数沿链下传：Bus.create[32] → Channel[32] → Lane[32]。
@@ -18,7 +18,9 @@
 
 // 三层嵌套 (SpinalHDL Axi4 ⊃ AxiChannel ⊃ AxiLane 风格):工厂递归逐级创建,
 // 绑定名前缀沿字段路径下推,每个叶子得到唯一全路径名——m_aw_lane_data /
-// m_w_lane_data 不冲突(即便 aw/w 两个通道的叶子字段同名)。
+// m_w_lane_data 不冲突(即便 aw/w 两个通道的叶子字段同名)。方向由下方
+// IMasterSlave 提供:正向 m := s 灌 payload、反向 s := m 补 ready(:= 自动
+// 跳过 input 端口 LHS),每个叶子只被驱动一次(无环);11c 用 <> 合成一句。
 #[derive(Bundle)]
 struct AxiLane {
     data: UInt[8]
@@ -38,10 +40,37 @@ struct Axi4 {
     ready: Bool
 }
 
+// 三层方向化 (完整 Axi4):子 bundle 各自实现 IMasterSlave,父级用
+// out(this.aw)/out(this.w) 把整个通道按自己的 asMaster 方向建、in(this.ready)
+// 反之;asSlave 全链翻转。端口名带全路径:master_aw_lane_data (output) vs
+// slave_aw_lane_data (input),互不冲突。
+impl IMasterSlave for AxiLane {
+    def asMaster: AxiLane =
+        let _ = out(this.data);
+        let _ = out(this.last);
+        this
+}
+
+impl IMasterSlave for AxiChannel {
+    def asMaster: AxiChannel =
+        let _ = out(this.lane);
+        let _ = out(this.valid);
+        this
+}
+
+impl IMasterSlave for Axi4 {
+    def asMaster: Axi4 =
+        let _ = out(this.aw);
+        let _ = out(this.w);
+        let _ = in(this.ready);
+        this
+}
+
 module bundleDeep {
-    let m = Axi4.create
-    let s = Axi4.create
+    let m = Axi4.create.asMaster
+    let s = Axi4.create.asSlave
     m := s
+    s := m
 }
 println("=== 11a: bundleDeep (三层嵌套命名) ===")
 println(moduleTreeVL(bundleDeep.create.tree))
@@ -69,38 +98,27 @@ struct Bus[w: Nat] {
 module bundleParamDeep {
     let m = Bus.create[32]
     let s = Bus.create[32]
+    // 悬空叶子补方向(方向注解助手 in_u/out_u 重建同名端口,工厂 wire 被
+    // 端口遮蔽丢弃):m 侧只被 := 驱动 → 全部 output;s 侧只被 := 读取 →
+    // 全部 input,单向 m := s 两侧刚好互补。参数化嵌套链不在调用点走
+    // asMaster 分派:impl 参数宽度经嵌套分派会冻结退化成 1 位(HDL004,
+    // 见 docs/l13-typeclass-instance-nat-param-bug.md);助手直接取
+    // create[32] 实参宽度,[31:0] 得以保留。
+    let _ = out_u(m.aw.lane.data)
+    let _ = out_bool(m.aw.lane.last)
+    let _ = out_bool(m.aw.valid)
+    let _ = out_bool(m.ready)
+    let _ = in_u(s.aw.lane.data)
+    let _ = in_bool(s.aw.lane.last)
+    let _ = in_bool(s.aw.valid)
+    let _ = in_bool(s.ready)
     m := s
 }
 println("=== 11b: bundleParamDeep (参数化三层嵌套) ===")
 println(moduleTreeVL(bundleParamDeep.create.tree))
 
-// 三层方向化 (完整 Axi4):子 bundle 各自实现 IMasterSlave,父级用
-// out(this.aw)/out(this.w) 把整个通道按自己的 asMaster 方向建、in(this.ready)
-// 反之;asSlave 全链翻转。`master <> slave` 单向一次连通全部叶子,且只驱动
-// 可驱动端口。端口名带全路径:master_aw_lane_data (output) vs slave_aw_lane_data
-// (input),互不冲突。
-impl IMasterSlave for AxiLane {
-    def asMaster: AxiLane =
-        let _ = out(this.data);
-        let _ = out(this.last);
-        this
-}
-
-impl IMasterSlave for AxiChannel {
-    def asMaster: AxiChannel =
-        let _ = out(this.lane);
-        let _ = out(this.valid);
-        this
-}
-
-impl IMasterSlave for Axi4 {
-    def asMaster: Axi4 =
-        let _ = out(this.aw);
-        let _ = out(this.w);
-        let _ = in(this.ready);
-        this
-}
-
+// 11c:方向化后的 `master <> slave` 单向一次连通全部叶子(等价于 11a 的
+// 两次 :=),且只驱动可驱动端口。
 module bundleDeepMS {
     let master = Axi4.create.asMaster
     let slave  = Axi4.create.asSlave

@@ -777,9 +777,41 @@ fn twin_error_diagnostics_match_reference_on_all_examples() {
 fn twin_ownership_and_warning_parity_on_all_examples() {
     /// `(path suffix, expected reason class)`.  Editing this list is the
     /// deliberate act that accompanies any engine/gate change.
+    ///
+    /// The HDL direction cleanup (all examples made warning-free except
+    /// 06/08/09/24 and hdl_ops) moved every clean-module example through the
+    /// conservative gate below: `checks.is_empty()` on a module that
+    /// elaborated cleanly is indistinguishable from an incompletely built
+    /// tree, so those files now fall back to the reference with
+    /// `hdl-check-gate`.  The files that still carry check issues keep
+    /// non-empty `checks`, never trip the gate, and must stay OUT of this
+    /// list (they are asserted twin-owned below): 06-select-cat (HDL010),
+    /// 08-control-flow (HDL004), 09-hierarchy (HDL022), 24-verilog-practice
+    /// (HDV002), hdl_ops (HDL010/HDL022).
     const EXPECTED_FALLBACKS: &[(&str, &str)] = &[
         ("examples/alu.typort", "hdl-check-gate"),
+        ("examples/hdl/01-basics.typort", "hdl-check-gate"),
+        ("examples/hdl/02-arithmetic.typort", "hdl-check-gate"),
+        ("examples/hdl/03-bitwise.typort", "hdl-check-gate"),
+        ("examples/hdl/04-compare.typort", "hdl-check-gate"),
+        ("examples/hdl/05-bool.typort", "hdl-check-gate"),
+        ("examples/hdl/07-registers.typort", "hdl-check-gate"),
+        ("examples/hdl/10-bundle.typort", "hdl-check-gate"),
+        ("examples/hdl/11-bundle-deep.typort", "hdl-check-gate"),
+        ("examples/hdl/12-memory.typort", "hdl-check-gate"),
+        ("examples/hdl/13-adder-tree.typort", "hdl-check-gate"),
+        ("examples/hdl/14-arithmetic-extra.typort", "hdl-check-gate"),
+        ("examples/hdl/15-inout.typort", "hdl-check-gate"),
+        ("examples/hdl/16-counter.typort", "hdl-check-gate"),
+        ("examples/hdl/17-output-reg.typort", "hdl-check-gate"),
+        // 18-utils keeps untrusted-error: the twin fails the LetNamed trait
+        // solve for the timeout demo's TimeoutHandle before the gate runs
+        // (the untrusted-error check precedes the clean-module gate).
         ("examples/hdl/18-utils.typort", "untrusted-error"),
+        ("examples/hdl/19-stream.typort", "hdl-check-gate"),
+        ("examples/hdl/20-misc.typort", "hdl-check-gate"),
+        ("examples/hdl/21-crossclock.typort", "hdl-check-gate"),
+        ("examples/hdl/22-widthadapter.typort", "hdl-check-gate"),
         ("examples/hdl/23-verilog-compat.typort", "hdl-check-gate"),
         ("examples/hdl/25-verilog-reset.typort", "hdl-check-gate"),
     ];

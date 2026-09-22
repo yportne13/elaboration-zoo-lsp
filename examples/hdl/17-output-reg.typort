@@ -54,6 +54,8 @@ module autoOutRegDemo {
     output reg c = UInt[8]
     let v = autoUIntOutReg(8)
     let w = autoBoolOutReg
+    // v 须有真实驱动（output reg 未驱动会报 HDL003）
+    v := v + 1
     c := v
     w := true
 }

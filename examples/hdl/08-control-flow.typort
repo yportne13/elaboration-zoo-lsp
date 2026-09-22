@@ -14,10 +14,10 @@
 // ============================================================
 
 module whenExample {
-    let a = UInt[8]
-    let b = UInt[8]
-    let sel = Bool
-    let out = UInt[8]
+    input a = UInt[8]
+    input b = UInt[8]
+    input sel = Bool
+    output out = UInt[8]
     when sel {
         out := a
     } otherwise {
@@ -28,11 +28,11 @@ println("=== 08a: whenExample (when/otherwise) ===")
 println(moduleTreeVL(whenExample.create.tree))
 
 module whenElseWhen {
-    let a = UInt[8]
-    let b = UInt[8]
-    let c = UInt[8]
-    let sel = UInt[2]
-    let out = UInt[8]
+    input a = UInt[8]
+    input b = UInt[8]
+    input c = UInt[8]
+    input sel = UInt[2]
+    output out = UInt[8]
     when sel === 0 {
         out := a
     } elsewhen sel === 1 {
@@ -45,11 +45,11 @@ println("=== 08b: whenElseWhen (elsewhen 链) ===")
 println(moduleTreeVL(whenElseWhen.create.tree))
 
 module switchExample {
-    let sel = UInt[4]
-    let a = UInt[4]
-    let b = UInt[4]
-    let c = UInt[4]
-    let result = UInt[4]
+    input sel = UInt[4]
+    input a = UInt[4]
+    input b = UInt[4]
+    input c = UInt[4]
+    output result = UInt[4]
     switch sel {
         is 0 { result := a }
         is 1 { result := b }
@@ -63,7 +63,7 @@ println(moduleTreeVL(switchExample.create.tree))
 // for i in lo until hi { ... } — 编译期循环展开
 //
 //   • 半开区间 [lo, hi)：hi <= lo 时一次都不展开（无信号生成）
-//   • 每次迭代展开一份循环体，体内 let 声明的信号自动带索引后缀：
+//   • 每次迭代展开一份循环体，体内 let/output 声明的信号自动带索引后缀：
 //     x → x_0, x_1, ...；嵌套时 名_i_j
 //   • 循环索引是当次迭代的 Nat 常量，可直接参与位宽表达式
 // ============================================================
@@ -71,7 +71,8 @@ println(moduleTreeVL(switchExample.create.tree))
 module forUnroll {
     input a = UInt[8]
     for i in 0 until 4 {
-        let x = UInt[8]
+        // 每次迭代的副本作为 output 端口送出（x_i := a 驱动）
+        output x = UInt[8]
         x := a
     }
 }
@@ -79,8 +80,12 @@ println("=== 08d: forUnroll (展开命名：x_0..x_3) ===")
 println(moduleTreeVL(forUnroll.create.tree))
 
 module forWidths {
+    input a = UInt[8]
     for w in 0 until 3 {
-        let v = UInt[w + 2]
+        // 迭代信号 v 作 output 端口，由 a 的 w+2 位切片驱动
+        // （切片上界 w + 1 同样体现索引参与位宽）
+        output v = UInt[w + 2]
+        v := a.slice[w + 1, 0]
     }
 }
 println("=== 08e: forWidths (索引参与位宽：[1:0]/[2:0]/[3:0]) ===")
@@ -90,7 +95,8 @@ module forNested {
     input a = UInt[8]
     for i in 0 until 2 {
         for j in 0 until 2 {
-            let cell = UInt[8]
+            // 嵌套展开的每份副本作为 output 端口送出
+            output cell = UInt[8]
             cell := a
         }
     }

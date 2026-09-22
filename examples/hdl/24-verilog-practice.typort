@@ -20,19 +20,32 @@
 // ============================================================
 
 // ---- 字节序交换：部分选 + 拼接 ----
-module vByteSwap(input [15:0] w, output [15:0] y);
+module vByteSwap(
+    input [15:0] w,
+    output [15:0] y
+);
     assign y = {w[7:0], w[15:8]};
 endmodule
 
 // ---- 归约运算：奇偶 / 全一 / 任意一 ----
-module vReduce(input [7:0] a, output p, output allOne, output anyOne);
+module vReduce(
+    input [7:0] a,
+    output p,
+    output allOne,
+    output anyOne
+);
     assign p = ^a;
     assign allOne = &a;
     assign anyOne = |a;
 endmodule
 
 // ---- case/endcase 组合逻辑 ----
-module vAlu(input [1:0] op, input [7:0] a, input [7:0] b, output reg [7:0] y);
+module vAlu(
+    input [1:0] op,
+    input [7:0] a,
+    input [7:0] b,
+    output reg [7:0] y
+);
     always @(*) begin
         case (op)
             2'b00: y = a + b;
@@ -44,7 +57,11 @@ module vAlu(input [1:0] op, input [7:0] a, input [7:0] b, output reg [7:0] y);
 endmodule
 
 // ---- 时序：移位寄存器（拼接 + 位选），复位值用 reg init ----
-module vShift(input clk, input [7:0] d, output reg [7:0] q);
+module vShift(
+    input clk,
+    input [7:0] d,
+    output reg [7:0] q
+);
     reg [7:0] q = 0;
     always @(posedge clk) begin
         q <= {q[6:0], d[0]};
@@ -52,8 +69,14 @@ module vShift(input clk, input [7:0] d, output reg [7:0] q);
 endmodule
 
 // ---- 层次：实例化组合子模块（方向由 .port(sig) 自动判定）----
-module vTop(input [15:0] w, input [1:0] op, input [7:0] a, input [7:0] b,
-            output [15:0] swapped, output [7:0] alu);
+module vTop(
+    input [15:0] w,
+    input [1:0] op,
+    input [7:0] a,
+    input [7:0] b,
+    output [15:0] swapped,
+    output [7:0] alu
+);
     wire [15:0] sw;
     wire [7:0] al;
     vByteSwap u_swap (.w(w), .y(sw));

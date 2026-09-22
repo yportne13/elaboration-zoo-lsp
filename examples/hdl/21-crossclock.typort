@@ -8,18 +8,20 @@ def inCd: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
 def outCd: ClockDomain = ClockDomain.mk "clkB" "rstB" Async RisingEdge ActiveHigh
 
 module ccPulse[inCd] {
-    let pulseIn = Bool
-    let pulseOut = Bool
+    // 只被逻辑读取、从未驱动 → input 端口（HDL001）
+    input pulseIn = Bool
+    input data = UInt[8]
+    // 只被驱动、模块内无人读取 → output 端口（HDL002）
+    output pulseOut = Bool
+    output oValid = Bool
+    output oData = UInt[8]
+    output s2 = UInt[8]
     pulseOut := pulseCCByToggle(pulseIn, inCd, outCd)
-    let data = UInt[8]
     let ccin = CcByToggleIO.mk(Bool.mk(None, literal(1)), data)
     let ccOut = ccByToggleUInt(ccin.valid, ccin.payload, inCd, outCd)
-    let oValid = Bool
-    let oData = UInt[8]
     oValid := ccOut.valid
     oData := ccOut.payload
     let synced = bufferCCUIntCd(data, 2, outCd)
-    let s2 = UInt[8]
     s2 := synced
 }
 println("=== 21a: PulseCCByToggle / CCByToggle / BufferCC-cd ===")
@@ -27,15 +29,22 @@ println(moduleTreeVL(ccPulse.create[inCd].tree))
 
 module ccFifo[inCd] {
     // 写域（clkA 主时钟）推入，读域（clkB）弹出
+    // 推入信号被 FIFO 逻辑读取、从未驱动 → input 端口（HDL001）
+    input pushValid = Bool
+    input pushData = UInt[8]
+    // FIFO 反压/占用数：被 FIFO 驱动、模块内无人读取 → output 端口（HDL002）
+    output pushReady = Bool
+    output occ = UInt[3]
+    // 读域弹出侧观测：只被驱动、无人读取 → output 端口（HDL002）
+    output pv = Bool
+    output pd = UInt[8]
     let io = StreamFifoCCIO.mk[8, 4](
-        newBoolNamed("pushValid"), newBoolNamed("pushReady"),
-        newUIntNamed("pushData", 8),
+        pushValid, pushReady,
+        pushData,
         newBoolNamed("popValid"), newUIntNamed("popData", 8),
-        newUIntNamed("occ", 3))
+        occ)
     let _d = streamFifoCC[8][4](io, inCd, outCd)
-    let pv = Bool
     pv := io.popValid
-    let pd = UInt[8]
     pd := io.popData
 }
 println("=== 21b: StreamFifoCC ===")

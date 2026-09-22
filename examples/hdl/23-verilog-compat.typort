@@ -22,7 +22,11 @@
 // ============================================================
 
 // ---- 加法器：Verilog 写法 ----
-module vAdd8(input [7:0] a, input [7:0] b, output [7:0] s);
+module vAdd8(
+    input [7:0] a,
+    input [7:0] b,
+    output [7:0] s
+);
     assign s = a + b;
 endmodule
 
@@ -35,7 +39,12 @@ module tAdd8 {
 }
 
 // ---- 计数器：Verilog 写法（rst_n 折叠为 ActiveLow 复位）----
-module vCounter(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
+module vCounter(
+    input clk,
+    input rst_n,
+    input [7:0] d,
+    output reg [7:0] q
+);
     always @(posedge clk or negedge rst_n) begin
         if (d == 8'hFF)
             q <= 8'h00;
@@ -56,10 +65,16 @@ module tCounter {
 }
 
 // ---- 组合逻辑 + 实例化：Verilog 写法 ----
-module vSub(input [7:0] x, output [7:0] y);
+module vSub(
+    input [7:0] x,
+    output [7:0] y
+);
     assign y = ~x;
 endmodule
-module vTop(input [7:0] a, output [7:0] b);
+module vTop(
+    input [7:0] a,
+    output [7:0] b
+);
     wire [7:0] w;
     vSub u1 (.x(a), .y(w));
     assign b = w & 8'h0F;

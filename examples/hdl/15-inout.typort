@@ -9,8 +9,9 @@
 //
 //  Bundle 的 inout 方向在 impl IMasterSlave 的 asMaster 里用
 //  inout(this.<field>) 声明：asMaster / asSlave 两侧都生成真正的 inout
-//  端口（不再按 input 处理）；`master := slave` 仍跳过 inout LHS
-//  （模块不驱动自己的双向引脚 —— 三态驱动不在本模型内）。
+//  端口（不再按 input 处理）；`master <> slave` 对连仍跳过 inout/input
+//  LHS（模块不驱动自己的双向引脚 —— 三态驱动不在本模型内），只有
+//  dir 字段以 master_dir(input) → slave_dir(output) 直通相连。
 // ============================================================
 
 module inoutPorts {
@@ -29,7 +30,8 @@ println(moduleTreeVL(inoutPorts.create.tree))
 module inoutAuto {
     let myio = autoUIntInOut(8)
     let myflag = autoBoolInOut
-    let readback = autoUInt(8)
+    // readback 引到输出端口（内部线无人读取会报 HDL002 死信号）
+    let readback = autoUIntOutput(8)
     readback := myio
 }
 println("=== 15b: inoutAuto (auto*InOut 自动命名) ===")
@@ -53,7 +55,7 @@ impl IMasterSlave for TriBus {
 module bundleInOut {
     let master = TriBus.create.asMaster
     let slave = TriBus.create.asSlave
-    master := slave
+    master <> slave
 }
 println("=== 15c: bundleInOut (Bundle inout 字段) ===")
 println(moduleTreeVL(bundleInOut.create.tree))

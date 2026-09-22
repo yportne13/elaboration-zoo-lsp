@@ -149,10 +149,12 @@ fn dut_validates_ports_and_widths() {
     assert!(dut.get("a").is_err());
     // value wider than the 8-bit port
     assert!(dut.set("a", 0x100).is_err());
-    // max representable value fits; 8-bit sum truncates (HDL wrap)
-    dut.set("a", 0xff).unwrap().set("b", 2).unwrap().eval().unwrap();
+    // max representable value fits; 8-bit sum truncates (HDL wrap).
+    // myAdder's `en` is a real enable now (it used to be a dead input the
+    // HDL checker flagged): drive it high, or the adder output passes `a`.
+    dut.set("a", 0xff).unwrap().set("b", 2).unwrap().set("en", 1).unwrap().eval().unwrap();
     assert_eq!(dut.get("sum").unwrap(), 0x01);
-    dut.set("a", 0x0f).unwrap().set("b", 2).unwrap().eval().unwrap();
+    dut.set("a", 0x0f).unwrap().set("b", 2).unwrap().set("en", 1).unwrap().eval().unwrap();
     assert_eq!(dut.get("sum").unwrap(), 0x11);
     dut.finish().unwrap();
 }

@@ -39,10 +39,15 @@ impl IMasterSlave for AxiLite {
         this
 }
 
+// 10a:方向化端口上的批量赋值 —— 正向 `master := slave` 灌 payload,
+// 反向 `slave := master` 补反向 ready;:= 自动跳过 input 端口 LHS
+// (header 第 1 条),所以每个叶子只被驱动一次、无环。10c 用 `<>`
+// 把这两句合并成一句。
 module bundleTop {
-    let master = AxiLite.create
-    let slave = AxiLite.create
+    let master = AxiLite.create.asMaster
+    let slave = AxiLite.create.asSlave
     master := slave
+    slave := master
 }
 println("=== 10a: bundleTop (derive(Bundle) 批量赋值) ===")
 println(moduleTreeVL(bundleTop.create.tree))
@@ -54,9 +59,20 @@ struct MyBus[w: Nat] {
     valid: Bool
 }
 
+// 参数化 Bundle 同样能方向化:impl 上绑定宽度参数,derive 校验要求
+// impl[w: Nat] 与 struct 的隐式参数一一对应。MyBus 没有反向字段 ——
+// master 视角两个字段全是 out,asSlave 自动翻转为全 in,单向
+// bus1 := bus2 两侧刚好互补(payload 从 bus2 灌进 bus1)。
+impl[w: Nat] IMasterSlave for MyBus[w] {
+    def asMaster: MyBus[w] =
+        let _ = out(this.data);
+        let _ = out(this.valid);
+        this
+}
+
 module bundleParam {
-    let bus1 = MyBus.create[8]
-    let bus2 = MyBus.create[8]
+    let bus1 = MyBus.create[8].asMaster
+    let bus2 = MyBus.create[8].asSlave
     bus1 := bus2
 }
 println("=== 10b: bundleParam (参数化 Bundle) ===")
@@ -92,17 +108,11 @@ struct OuterBus {
     ready: Bool
 }
 
-module bundleNested {
-    let outer1 = OuterBus.create
-    let outer2 = OuterBus.create
-    outer1 := outer2
-}
-println("=== 10d: bundleNested (嵌套 Bundle) ===")
-println(moduleTreeVL(bundleNested.create.tree))
-
 // 嵌套方向化(Axi4 ⊃ Axi4AW 风格):子 bundle 自己实现 IMasterSlave,
 // 父的 asMaster 里 out(this.inner) 让整个子 bundle 按自己的 asMaster
 // 方向创建、in(this.ready) 反之;命名链延续(master_value 等)。
+// 10d 用它把两侧建成方向互补的端口(两次单向 := 即全连通),
+// 10e 再用 <> 合成一句。
 impl IMasterSlave for InnerBus {
     def asMaster: InnerBus =
         let _ = out(this.value);
@@ -116,6 +126,15 @@ impl IMasterSlave for OuterBus {
         let _ = in(this.ready);
         this
 }
+
+module bundleNested {
+    let outer1 = OuterBus.create.asMaster
+    let outer2 = OuterBus.create.asSlave
+    outer1 := outer2
+    outer2 := outer1
+}
+println("=== 10d: bundleNested (嵌套 Bundle) ===")
+println(moduleTreeVL(bundleNested.create.tree))
 
 module bundleNestedMasterSlave {
     let master = OuterBus.create.asMaster

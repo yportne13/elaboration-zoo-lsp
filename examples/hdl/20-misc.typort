@@ -13,62 +13,79 @@ module miscTriState {
     let m = triStateAsMasterBits(t)
     let r = Bits[8]
     r := m.read
+    // master 视角的 write/writeEnable 由本模块驱动：读回值回环写出、恒使能
+    m.write := r
+    m.writeEnable := true
 }
 println("=== 20a: TriState ===")
 println(moduleTreeVL(miscTriState.create.tree))
 
 module miscGpio {
-    let pinRead = Bits[4]
-    let pinWrite = Bits[4]
-    let pinWE = Bits[4]
-    let clr = Bits[4]
-    let io = GpioIO.mk(pinRead, pinWrite, pinWE, newBitsNamed("g_in", 4), newBitsNamed("g_out", 4), newBitsNamed("g_oe", 4), newBitsNamed("g_int", 4))
+    // 只被逻辑读取、从未驱动 → input 端口（HDL001）
+    input pinRead = Bits[4]
+    input clr = Bits[4]
+    // gpioCtrl 要读的输出寄存器：模块内无配置逻辑，作为 input 供其读取
+    input g_out = Bits[4]
+    input g_oe = Bits[4]
+    // 只被驱动、模块内无人读取 → output 端口（HDL002）
+    output pinWrite = Bits[4]
+    output pinWE = Bits[4]
+    output sampled = Bits[4]
+    output irq = Bits[4]
+    let io = GpioIO.mk(pinRead, pinWrite, pinWE, newBitsNamed("g_in", 4), g_out, g_oe, newBitsNamed("g_int", 4))
     let _d = gpioCtrl(io, clr)
-    let sampled = Bits[4]
     sampled := io.input
-    let irq = Bits[4]
     irq := io.interrupts
 }
 println("=== 20b: Gpio ===")
 println(moduleTreeVL(miscGpio.create.tree))
 
 module miscBcd {
-    let a = UInt[4]
-    let b = UInt[4]
-    let cin = Bool
+    // 只被加法/判零逻辑读取、从未驱动 → input 端口（HDL001）
+    input a = UInt[4]
+    input b = UInt[4]
+    input cin = Bool
+    input bcd_d = Bits[8]
+    // 只被驱动、模块内无人读取 → output 端口（HDL002）
+    output s = UInt[4]
+    output co = Bool
+    output isz = Bool
     let r = bcdAddDigit(a, b, cin)
-    let s = UInt[4]
-    let co = Bool
     s := r.sum
     co := r.carry
-    let isz = Bool
-    isz := bcdIsZero(Bcd.mk[2](newBitsNamed("bcd_d", 8)))
+    isz := bcdIsZero(Bcd.mk[2](bcd_d))
 }
 println("=== 20c: Bcd ===")
 println(moduleTreeVL(miscBcd.create.tree))
 
 module miscDivider {
-    let cmdValid = Bool
-    let cmdReady = Bool
-    let num = UInt[8]
-    let den = UInt[8]
-    let rspValid = Bool
-    let quo = UInt[8]
-    let rem = UInt[8]
+    // 除法命令 valid/numerator/denominator 来自外部 → input 端口（HDL001）
+    input cmdValid = Bool
+    input num = UInt[8]
+    input den = UInt[8]
+    // 命令握手回压、运算结果与忙状态由核心计算 → output 端口（HDL002）
+    output cmdReady = Bool
+    output rspValid = Bool
+    output quo = UInt[8]
+    output rem = UInt[8]
+    output busy = Bool
     let cmd = DividerCmd.mk(cmdValid, num, den, cmdReady)
     let rsp = DividerRsp.mk(rspValid, quo, rem)
     let fsm = dividerCore(cmd, rsp)
-    let busy = Bool
+    // cmd.ready 由核心的 !busy 反压真实驱动
+    cmd.ready := fsm.cmdReady
     busy := fsm.busy
 }
 println("=== 20d: Divider ===")
 println(moduleTreeVL(miscDivider.create.tree))
 
 module miscFsm {
-    let go = Bool
+    // go 只被状态转移条件读取、从未驱动 → input 端口（HDL001）
+    input go = Bool
     let sm = stateMachine[2](4)
-    let s0 = Bool
-    let s1 = Bool
+    // 状态观察口只被驱动、无人读取 → output 端口（HDL002）
+    output s0 = Bool
+    output s1 = Bool
     s0 := stateIs(sm, 0)
     s1 := stateIs(sm, 1)
     when go {
@@ -79,13 +96,15 @@ println("=== 20e: StateMachine ===")
 println(moduleTreeVL(miscFsm.create.tree))
 
 module miscPrescaler {
-    let lim = UInt[8]
+    // 分频/定时限值只被计数逻辑读取、从未驱动 → input 端口（HDL001）
+    input lim = UInt[8]
     let p = prescaler(lim)
-    let ov = Bool
-    ov := p.overflow
     let t = timer(Bool.mk(None, literal(1)), Bool.mk(None, literal(0)), lim)
-    let tf = Bool
-    let tv = UInt[8]
+    // 溢出脉冲 / 到期标志 / 计数值只被驱动 → output 端口（HDL002）
+    output ov = Bool
+    output tf = Bool
+    output tv = UInt[8]
+    ov := p.overflow
     tf := t.full
     tv := t.value
 }
@@ -93,47 +112,95 @@ println("=== 20f: Prescaler / Timer ===")
 println(moduleTreeVL(miscPrescaler.create.tree))
 
 module miscInterrupts {
-    let inputs = Bits[4]
-    let clears = Bits[4]
-    let masks = Bits[4]
-    let pend = Bits[4]
+    // 中断源 / 清除 / 掩码只被控制器读取、从未驱动 → input 端口（HDL001）
+    input inputs = Bits[4]
+    input clears = Bits[4]
+    input masks = Bits[4]
+    // 挂起向量与看门狗超时只被驱动、无人读取 → output 端口（HDL002）
+    output pend = Bits[4]
+    output wd = Bool
     pend := interruptCtrl(inputs, clears, masks)
-    let wd = Bool
     wd := watchdog(Bool.mk(None, literal(0)), UInt.mk[4](None, literal(7)))
 }
 println("=== 20g: InterruptCtrl / Watchdog ===")
 println(moduleTreeVL(miscInterrupts.create.tree))
 
 module busApb3 {
+    // 寄存器读回观察口：只被驱动、无人读取 → output 端口（HDL002）
+    output r0v = UInt[32]
     let bus = Apb3.mk(newUIntNamed("PADDR", 32), newBitsNamed("PSEL", 1), newBoolNamed("PENABLE"),
                       newBoolNamed("PREADY"), newBoolNamed("PWRITE"), newBitsNamed("PWDATA", 32),
                       newBitsNamed("PRDATA", 32), newBoolNamed("PSLVERROR"))
-    let mbus = apb3AsMaster(bus)
     let sbus = apb3AsSlave(bus)
+    // 本模块即从端：恒就绪、无从端错误（从端视角的输出必须有真实驱动）
+    sbus.PREADY := true
+    sbus.PSLVERROR := false
     let r0 = newUIntRegNamed("r0", 32)
     let bank = Apb3RegBank.mk(sbus)
     let _d = bank.regReadWrite(0, r0)
     let _d = bank.readDefault()
-    let r0v = UInt[32]
     r0v := r0
 }
 println("=== 20h: APB3 + 寄存器组 ===")
 println(moduleTreeVL(busApb3.create.tree))
 
 module busAxiLite {
-    let ax = AxiLite4Ax.mk(newUIntNamed("ax_addr", 32), newBitsNamed("ax_prot", 3))
-    let w = AxiLite4W.mk(newBitsNamed("w_data", 32), newBitsNamed("w_strb", 4))
-    let b = AxiLite4B.mk(newBitsNamed("b_resp", 2))
-    let r = AxiLite4R.mk(newBitsNamed("r_data", 32), newBitsNamed("r_resp", 2))
-    let bus = AxiLite4.mk(Stream.mk(newBoolNamed("aw_v"), newBoolNamed("aw_r"), ax),
-                          Stream.mk(newBoolNamed("w_v"), newBoolNamed("w_r"), w),
-                          Stream.mk(newBoolNamed("b_v"), newBoolNamed("b_r"), b),
-                          Stream.mk(newBoolNamed("ar_v"), newBoolNamed("ar_r"), ax),
-                          Stream.mk(newBoolNamed("r_v"), newBoolNamed("r_r"), r))
-    let ok = Bits[2]
-    ok := axiRespOkay
-    let awReady = Bool
+    // 五个通道的载荷 / 握手来自外部总线、被观察逻辑读取 → input 端口（HDL001/002）
+    input ax_addr = UInt[32]
+    input ax_prot = Bits[3]
+    input w_data = Bits[32]
+    input w_strb = Bits[4]
+    input b_resp = Bits[2]
+    input r_data = Bits[32]
+    input r_resp = Bits[2]
+    input aw_v = Bool
+    input aw_r = Bool
+    input w_v = Bool
+    input w_r = Bool
+    input b_v = Bool
+    input b_r = Bool
+    input ar_v = Bool
+    input ar_r = Bool
+    input r_v = Bool
+    input r_r = Bool
+    let ax = AxiLite4Ax.mk(ax_addr, ax_prot)
+    let w = AxiLite4W.mk(w_data, w_strb)
+    let b = AxiLite4B.mk(b_resp)
+    let r = AxiLite4R.mk(r_data, r_resp)
+    let bus = AxiLite4.mk(Stream.mk(aw_v, aw_r, ax),
+                          Stream.mk(w_v, w_r, w),
+                          Stream.mk(b_v, b_r, b),
+                          Stream.mk(ar_v, ar_r, ax),
+                          Stream.mk(r_v, r_r, r))
+    // 观察输出：握手对 / 载荷只被驱动、无人读取 → output 端口（HDL002）
+    output awHs = Bits[2]
+    output awAddr = UInt[32]
+    output awProt = Bits[3]
+    output wHs = Bits[2]
+    output wData = Bits[32]
+    output wStrb = Bits[4]
+    output bHs = Bits[2]
+    output bResp = Bits[2]
+    output arHs = Bits[2]
+    output rHs = Bits[2]
+    output rData = Bits[32]
+    output rResp = Bits[2]
+    output awReady = Bool
+    output ok = Bits[2]
+    awHs := bus.aw.valid ## bus.aw.ready
+    awAddr := bus.aw.payload.addr
+    awProt := bus.aw.payload.prot
+    wHs := bus.w.valid ## bus.w.ready
+    wData := bus.w.payload.data
+    wStrb := bus.w.payload.strb
+    bHs := bus.b.valid ## bus.b.ready
+    bResp := bus.b.payload.resp
+    arHs := bus.ar.valid ## bus.ar.ready
+    rHs := bus.r.valid ## bus.r.ready
+    rData := bus.r.payload.data
+    rResp := bus.r.payload.resp
     awReady := bus.aw.ready
+    ok := axiRespOkay
 }
 println("=== 20i: AxiLite4 ===")
 println(moduleTreeVL(busAxiLite.create.tree))
@@ -143,26 +210,57 @@ module busWb {
                          newBoolNamed("WE"), newUIntNamed("ADR", 32), newBitsNamed("DAT_MISO", 32),
                          newBitsNamed("DAT_MOSI", 32), newBitsNamed("SEL", 4))
     let m = wishboneAsMaster(wb)
-    let cyc = Bool
+    // master 视角输出由本模块驱动：恒定单周期读事务（CYC/STB 有效、WE 关断）
+    m.CYC := true
+    m.STB := true
+    m.WE := false
+    m.ADR := 0
+    m.DAT_MOSI := Bits.mk(None, literal(0))
+    m.SEL := Bits.mk(None, literal(0))
+    // 从端返回的 ACK / DAT_MISO 被读出 → output 观察口（HDL002）
+    output cyc = Bool
+    output wbAck = Bool
+    output wbRData = Bits[32]
     cyc := m.CYC
+    wbAck := m.ACK
+    wbRData := m.DAT_MISO
     let av = AvalonST.mk(newBitsNamed("av_data", 8), newBoolNamed("av_valid"), newBoolNamed("av_ready"),
                          newBitsNamed("av_empty", 1), newBoolNamed("av_sop"), newBoolNamed("av_eop"))
     let am = avalonSTAsMaster(av)
-    let sop = Bool
+    // AvalonST master：恒 valid 的单拍数据流（sop/eop 同拍置位）
+    am.data := Bits.mk(None, literal(0))
+    am.valid := true
+    am.empty := Bits.mk(None, literal(0))
+    am.startOfPacket := true
+    am.endOfPacket := true
+    // 从端反压 av_ready 被读出 → output 观察口（HDL002）
+    output avReady = Bool
+    output sop = Bool
+    avReady := am.ready
     sop := am.startOfPacket
     let st = Axi4Stream.mk(newBitsNamed("s_data", 8), newBitsNamed("s_strb", 1), newBoolNamed("s_last"))
     let sm = axi4StreamAsMaster(st)
-    let last = Bool
+    // Axi4Stream master：恒 last 的单拍输出
+    sm.data := Bits.mk(None, literal(0))
+    sm.strb := Bits.mk(None, literal(0))
+    sm.last := false
+    output last = Bool
     last := sm.last
 }
 println("=== 20j: Wishbone / AvalonST / Axi4Stream ===")
 println(moduleTreeVL(busWb.create.tree))
 
 module ccBuffer {
-    let asyncIn = UInt[8]
+    // 异步输入只被同步链读取、从未驱动 → input 端口（HDL001）
+    input asyncIn = UInt[8]
+    input asyncB = Bool
+    // 同步链末端寄存器导出为观察口（读出 _sync 末端寄存器，HDL002）
+    output syncedOut = UInt[8]
+    output syncBOut = Bool
     let synced = bufferCCUInt2(asyncIn)
-    let asyncB = Bool
     let syncB = bufferCCBool2(asyncB)
+    syncedOut := synced
+    syncBOut := syncB
 }
 println("=== 20k: BufferCC ===")
 println(moduleTreeVL(ccBuffer.create.tree))

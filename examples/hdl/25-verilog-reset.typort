@@ -20,7 +20,12 @@
 // ============================================================
 
 // ---- 异步复位计数器（显式复位分支）----
-module vCntAsync(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
+module vCntAsync(
+    input clk,
+    input rst_n,
+    input [7:0] d,
+    output reg [7:0] q
+);
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n)
             q <= 8'h00;
@@ -30,7 +35,12 @@ module vCntAsync(input clk, input rst_n, input [7:0] d, output reg [7:0] q);
 endmodule
 
 // ---- 同步复位计数器（端口名任意；只在时钟沿内判复位）----
-module vCntSync(input clk, input rst, input [7:0] d, output reg [7:0] q);
+module vCntSync(
+    input clk,
+    input rst,
+    input [7:0] d,
+    output reg [7:0] q
+);
     always @(posedge clk) begin
         if (rst)
             q <= 8'h00;
@@ -40,7 +50,12 @@ module vCntSync(input clk, input rst, input [7:0] d, output reg [7:0] q);
 endmodule
 
 // ---- 层次：两级流水线，实例化带时钟域的子模块 ----
-module vPipe(input clk, input rst_n, input [7:0] d, output [7:0] q);
+module vPipe(
+    input clk,
+    input rst_n,
+    input [7:0] d,
+    output [7:0] q
+);
     wire [7:0] s1;
     wire [7:0] s2;
     vCntAsync u1 (.clk(clk), .rst_n(rst_n), .d(d), .q(s1));

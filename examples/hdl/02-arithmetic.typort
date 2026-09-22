@@ -9,15 +9,15 @@
 // ============================================================
 
 module arithmeticUInt {
-    let a = UInt[8]
-    let b = UInt[8]
-    let sum = UInt[8]
-    let diff = UInt[8]
-    let carry = UInt[9]
-    let borrow = UInt[9]
-    let prod = UInt[16]
-    let add_nat = UInt[8]
-    let mul_nat = UInt[8]
+    input a = UInt[8]
+    input b = UInt[8]
+    output sum = UInt[8]
+    output diff = UInt[8]
+    output carry = UInt[9]
+    output borrow = UInt[9]
+    output prod = UInt[16]
+    output add_nat = UInt[8]
+    output mul_nat = UInt[8]
     sum := a + b
     diff := a - b
     carry := a +^ b
@@ -30,11 +30,11 @@ println("=== 02a: arithmeticUInt (+ - +^ -^ * 与 Nat 字面量) ===")
 println(moduleTreeVL(arithmeticUInt.create.tree))
 
 module arithmeticSInt {
-    let a = SInt[8]
-    let b = SInt[8]
-    let sum = SInt[8]
-    let carry = SInt[9]
-    let neg = SInt[8]
+    input a = SInt[8]
+    input b = SInt[8]
+    output sum = SInt[8]
+    output carry = SInt[9]
+    output neg = SInt[8]
     sum := a + b
     carry := a +^ b
     neg := a.neg

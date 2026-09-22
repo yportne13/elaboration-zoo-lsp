@@ -7,17 +7,17 @@
 // ============================================================
 
 module bitwiseOps {
-    let a = Bits[8]
-    let b = Bits[8]
-    let and_r = Bits[8]
-    let or_r = Bits[8]
-    let xor_r = Bits[8]
-    let not_r = Bits[8]
-    let shl = Bits[8]
-    let shr = Bits[8]
-    let all_ones = Bool
-    let any_one = Bool
-    let parity = Bool
+    input a = Bits[8]
+    input b = Bits[8]
+    output and_r = Bits[8]
+    output or_r = Bits[8]
+    output xor_r = Bits[8]
+    output not_r = Bits[8]
+    output shl = Bits[8]
+    output shr = Bits[8]
+    output all_ones = Bool
+    output any_one = Bool
+    output parity = Bool
     and_r := a & b
     or_r := a | b
     xor_r := a ^ b
@@ -32,10 +32,10 @@ println("=== 03a: bitwiseOps (按位 + 移位 + 归约) ===")
 println(moduleTreeVL(bitwiseOps.create.tree))
 
 module bitwiseUInt {
-    let a = UInt[8]
-    let b = UInt[8]
-    let and_r = UInt[8]
-    let not_r = UInt[8]
+    input a = UInt[8]
+    input b = UInt[8]
+    output and_r = UInt[8]
+    output not_r = UInt[8]
     and_r := a & b
     not_r := ~a
 }

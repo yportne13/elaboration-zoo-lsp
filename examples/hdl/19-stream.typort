@@ -3,111 +3,156 @@
 //   m2sPipe / s2mPipe / halfPipe / throwWhen / haltWhen
 //   StreamFifo / StreamMux / StreamDemux / StreamArbiter / StreamFork
 //   Fragment（last）/ Flow
+//
+// 信号方向约定：valid/payload 流出模块 → output，ready 流入 → input；
+// 模块驱动的 ready（反压）→ output。仅在级联中间传递的线网保持 let。
 // ============================================================
 
+// 19a-1：m2sPipe → s2mPipe 级联。
+//   push 是输入流：valid/data 从外部进入，ready 由 m2sPipe 驱动后输出；
+//   p2 是末级输出流，其 ready 由下游（外部）输入。
 module streamPipe {
-    let push = Stream.mk(newBoolNamed("push_valid"), newBoolNamed("push_ready"), newUIntNamed("push_data", 8))
+    input push_valid = Bool
+    output push_ready = Bool
+    input push_data = UInt[8]
+    // 与 s2mPipe 内部创建的同名线网同名：端口声明优先，遮蔽内部 wire
+    input p2_ready = Bool
+    let push = Stream.mk(push_valid, push_ready, push_data)
     let p1 = streamM2sPipeUInt(push)
     let p2 = streamS2mPipeUInt(p1)
-    let outValid = Bool
-    let outData = UInt[8]
+    output outValid = Bool
+    output outData = UInt[8]
     outValid := p2.valid
     outData := p2.payload
+}
+
+// 19a-2：halfPipe → throwWhen → haltWhen 级联。
+//   各级 ready 只有一个驱动源（若并联作用在同一个 push 上，
+//   push_ready 会被多个工具无条件驱动，产生多驱动冲突）；
+//   hw 是末级输出流，其 ready（hw_ready）由下游（外部）输入。
+module streamHalfPipeEx {
+    input push_valid = Bool
+    output push_ready = Bool
+    input push_data = UInt[8]
+    input cond = Bool
+    // 与 haltWhen 内部创建的同名线网同名：端口声明优先，遮蔽内部 wire
+    input hw_ready = Bool
+    let push = Stream.mk(push_valid, push_ready, push_data)
     let h1 = streamHalfPipeUInt(push)
-    let hValid = Bool
+    let tw = streamThrowWhenUInt(h1, cond)
+    let hw = streamHaltWhenUInt(tw, cond)
+    output hValid = Bool
+    output twValid = Bool
+    output hwValid = Bool
+    output outData = UInt[8]
     hValid := h1.valid
-    let tw = streamThrowWhenUInt(push, hValid)
-    let twValid = Bool
     twValid := tw.valid
-    let hw = streamHaltWhenUInt(push, hValid)
-    let hwValid = Bool
     hwValid := hw.valid
+    outData := hw.payload
 }
 println("=== 19a: 管线原语 ===")
 println(moduleTreeVL(streamPipe.create.tree))
+println(moduleTreeVL(streamHalfPipeEx.create.tree))
 
+// 19b：push 侧 valid/data 输入、ready 输出（反压）；
+//      pop 侧 valid/data 输出、ready 输入；occupancy 输出。
 module streamFifoEx {
-    let pushValid = Bool
-    let pushReady = Bool
-    let pushData = UInt[8]
-    let popValid = Bool
-    let popReady = Bool
-    let popData = UInt[8]
+    input pushValid = Bool
+    output pushReady = Bool
+    input pushData = UInt[8]
+    output popValid = Bool
+    input popReady = Bool
+    output popData = UInt[8]
+    output occ = UInt[3]
     let push = Stream.mk(pushValid, pushReady, pushData)
     let pop = Stream.mk(popValid, popReady, popData)
-    let occ = UInt[3]
     occ := streamFifoConnect[8][3][3](4, push, pop)
 }
 println("=== 19b: StreamFifo ===")
 println(moduleTreeVL(streamFifoEx.create.tree))
 
+// 19c：a/b 两路为输入流，mux 输出 m 也是流；
+//      aReady/bReady 由 mux 反压驱动 → 输出，mReady 来自下游 → 输入。
 module streamMuxEx {
-    let aValid = Bool
-    let aReady = Bool
-    let aData = UInt[8]
-    let bValid = Bool
-    let bReady = Bool
-    let bData = UInt[8]
-    let sel = UInt[1]
+    input aValid = Bool
+    output aReady = Bool
+    input aData = UInt[8]
+    input bValid = Bool
+    output bReady = Bool
+    input bData = UInt[8]
+    input sel = UInt[1]
+    input mReady = Bool
+    output mValid = Bool
+    output mData = UInt[8]
     let sa = Stream.mk(aValid, aReady, aData)
     let sb = Stream.mk(bValid, bReady, bData)
     let m = streamMuxUInt(sel, cons(sa, cons(sb, nil)))
-    let mValid = Bool
-    let mData = UInt[8]
     mValid := m.valid
     mData := m.payload
-    let mReady = Bool
     m.ready := mReady
 }
 println("=== 19c: StreamMux ===")
 println(moduleTreeVL(streamMuxEx.create.tree))
 
+// 19d：si 为输入流；demux 内部由 inReady 推出各分支 ready
+//      （demux_ready_0/1 为级联中间线网，保持 let），
+//      分支 ready/valid/payload 均观测为输出。
 module streamDemuxEx {
-    let inValid = Bool
-    let inReady = Bool
-    let inData = UInt[8]
-    let sel = UInt[1]
+    input inValid = Bool
+    input inReady = Bool
+    input inData = UInt[8]
+    input sel = UInt[1]
+    output o0Valid = Bool
+    output o0Data = UInt[8]
+    output o0Ready = Bool
+    output o1Valid = Bool
+    output o1Ready = Bool
     let si = Stream.mk(inValid, inReady, inData)
     let outs = streamDemuxUInt(si, sel, 2)
-    let o0Valid = Bool
-    let o0Data = UInt[8]
     o0Valid := outs.at(0, si).valid
     o0Data := outs.at(0, si).payload
-    let o1Valid = Bool
+    o0Ready := outs.at(0, si).ready
     o1Valid := outs.at(1, si).valid
+    o1Ready := outs.at(1, si).ready
 }
 println("=== 19d: StreamDemux ===")
 println(moduleTreeVL(streamDemuxEx.create.tree))
 
+// 19e：与 19c 同构：两路请求输入、仲裁结果输出。
 module streamArbEx {
-    let aValid = Bool
-    let aReady = Bool
-    let aData = UInt[8]
-    let bValid = Bool
-    let bReady = Bool
-    let bData = UInt[8]
+    input aValid = Bool
+    output aReady = Bool
+    input aData = UInt[8]
+    input bValid = Bool
+    output bReady = Bool
+    input bData = UInt[8]
+    input mReady = Bool
+    output mValid = Bool
+    output mData = UInt[8]
     let sa = Stream.mk(aValid, aReady, aData)
     let sb = Stream.mk(bValid, bReady, bData)
     let m = streamArbiterLowerPriorityUInt(cons(sa, cons(sb, nil)))
-    let mValid = Bool
-    let mData = UInt[8]
     mValid := m.valid
     mData := m.payload
-    let mReady = Bool
     m.ready := mReady
 }
 println("=== 19e: StreamArbiter ===")
 println(moduleTreeVL(streamArbEx.create.tree))
 
+// 19f：si 为输入流；fork 要求各分支 ready 同时为真，
+//      fork_ready_0/1 是各分支回传的 ready（外部输入，端口优先遮蔽内部线网），
+//      inReady 由 fork 汇聚驱动 → 输出（反压）。
 module streamForkEx {
-    let inValid = Bool
-    let inReady = Bool
-    let inData = UInt[8]
+    input inValid = Bool
+    output inReady = Bool
+    input inData = UInt[8]
+    input fork_ready_0 = Bool
+    input fork_ready_1 = Bool
+    output o0Valid = Bool
+    output o1Valid = Bool
+    output o0Data = UInt[8]
     let si = Stream.mk(inValid, inReady, inData)
     let outs = streamForkUInt[2](si)
-    let o0Valid = Bool
-    let o1Valid = Bool
-    let o0Data = UInt[8]
     o0Valid := outs.at(0, si).valid
     o1Valid := outs.at(1, si).valid
     o0Data := outs.at(0, si).payload
@@ -115,34 +160,41 @@ module streamForkEx {
 println("=== 19f: StreamFork ===")
 println(moduleTreeVL(streamForkEx.create.tree))
 
+// 19g：Stream → Fragment → Stream 往返；
+//      str_ready 是回转后流的 ready（下游外部输入，端口优先遮蔽内部线网），
+//      backData 把 payload 完整带回（否则 inData 无人读取）。
 module streamFragEx {
-    let inValid = Bool
-    let inReady = Bool
-    let inData = UInt[8]
+    input inValid = Bool
+    output inReady = Bool
+    input inData = UInt[8]
+    input str_ready = Bool
+    output fragValid = Bool
+    output fragLast = Bool
+    output backValid = Bool
+    output backData = UInt[8]
     let si = Stream.mk(inValid, inReady, inData)
     let frag = streamToFragmentUInt(si)
-    let fragValid = Bool
-    let fragLast = Bool
     fragValid := frag.valid
     fragLast := frag.last
     let back = fragmentToStreamUInt(frag)
-    let backValid = Bool
     backValid := back.valid
+    backData := back.payload
 }
 println("=== 19g: Fragment ===")
 println(moduleTreeVL(streamFragEx.create.tree))
 
+// 19h：两路 Flow 与 select 均来自外部 → 输入；合并结果 → 输出。
 module flowEx {
-    let fv = Bool
-    let fd = UInt[8]
-    let gv = Bool
-    let gd = UInt[8]
-    let sel = UInt[1]
+    input fv = Bool
+    input fd = UInt[8]
+    input gv = Bool
+    input gd = UInt[8]
+    input sel = UInt[1]
+    output mValid = Bool
+    output mData = UInt[8]
     let fa = Flow.mk(fd, fv)
     let fb = Flow.mk(gd, gv)
     let m = flowMuxUInt(sel, cons(fa, cons(fb, nil)))
-    let mValid = Bool
-    let mData = UInt[8]
     mValid := m.valid
     mData := m.payload
 }

@@ -16,15 +16,18 @@
 // ============================================================
 
 module basicDecls[w: Nat] {
-    let a = UInt[w]
-    let b = Bits[w]
-    let c = SInt[w]
-    let d = Bool
+    input a = UInt[w]
+    output b = Bits[w]
+    output c = SInt[w]
+    output d = Bool
     input x = UInt[w]
     output y = UInt[w]
-    reg r = UInt[w]
+    output reg r = UInt[w]
     y := a + x
     r := y
+    b := a.asBits
+    c := a.asSInt
+    d := a > x
 }
 println("=== 01a: basicDecls (参数化宽度 + 各类声明) ===")
 println(moduleTreeVL(basicDecls.create[8].tree))
@@ -48,6 +51,9 @@ module autoNames {
     let myinit = autoUIntRegInit(8, 5)
     let mybool = autoBool
     let myoutput = autoUIntOutput(8)
+    mywire := myinput + 1
+    mybool := mywire > myinput
+    myinit := mywire
     myreg := mywire + myinput
     myoutput := mybool.mux(myreg, myinit)
 }

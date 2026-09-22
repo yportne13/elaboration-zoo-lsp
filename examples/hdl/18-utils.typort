@@ -12,104 +12,110 @@
 // ============================================================
 
 module utilsRev {
-    let a = Bits[8]
-    let r = Bits[8]
+    input a = Bits[8]
+    output r = Bits[8]
+    input u = UInt[8]
+    output ru = UInt[8]
+    output p = Bits[8]
+    output p2 = Bits[8]
     r := reverse(a)
-    let u = UInt[8]
-    let ru = UInt[8]
     ru := reverse(u)
-    let p = Bits[8]
     p := propagateOnes(a, false)
-    let p2 = Bits[8]
     p2 := propagateOnes(a, true)
 }
 println("=== 18a: reverse / propagateOnes ===")
 println(moduleTreeVL(utilsRev.create.tree))
 
 module utilsCount {
-    let a = Bits[8]
-    let c = UInt[4]
+    input a = Bits[8]
+    output c = UInt[4]
+    input u = UInt[8]
+    output cu = UInt[4]
+    output v = UInt[4]
+    output cl = UInt[4]
+    output ct = UInt[4]
+    output mv = Bool
     c := countOne(a)
-    let u = UInt[8]
-    let cu = UInt[4]
     cu := countOneUInt(u)
-    let v = UInt[4]
     v := countOne(a)
-    let cl = UInt[4]
     cl := countLeadingZeroes(a)
-    let ct = UInt[4]
     ct := countTrailingZeroes(a)
-    let mv = Bool
     mv := majorityVote(a)
 }
 println("=== 18b: countOne / clz / ctz / majorityVote ===")
 println(moduleTreeVL(utilsCount.create.tree))
 
 module utilsOh {
-    let a = Bits[8]
+    input a = Bits[8]
     let oh = Bits[8]
+    output idx = UInt[3]
+    output legal = Bool
+    output first = Bits[8]
+    output last = Bits[8]
     oh := uintToOh(a.slice[2, 0].asUInt)
-    let idx = UInt[3]
     idx := ohToUInt(oh)
-    let legal = Bool
     legal := ohIsLegal(oh)
-    let first = Bits[8]
     first := ohMaskingFirst(oh)
-    let last = Bits[8]
     last := ohMaskingLast(oh)
 }
 println("=== 18c: uintToOh / ohToUInt / ohIsLegal / ohMasking ===")
 println(moduleTreeVL(utilsOh.create.tree))
 
 module utilsMux {
-    let sel = Bits[4]
-    let a = UInt[8]
-    let b = UInt[8]
-    let c = UInt[8]
-    let d = UInt[8]
-    let dflt = UInt[8]
-    let pm = UInt[8]
+    input sel = Bits[4]
+    input a = UInt[8]
+    input b = UInt[8]
+    input c = UInt[8]
+    input d = UInt[8]
+    input dflt = UInt[8]
+    output pm = UInt[8]
+    output m = UInt[8]
+    output o = UInt[8]
+    output mn = UInt[8]
+    output mx = UInt[8]
+    output cl = UInt[8]
     pm := priorityMux(sel, cons(a, cons(b, cons(c, cons(d, nil)))), dflt)
-    let m = UInt[8]
     m := muxOH(sel, cons(a, cons(b, cons(c, cons(d, nil)))))
-    let o = UInt[8]
     o := ohMuxOr(sel, cons(a, cons(b, cons(c, cons(d, nil)))))
-    let mn = UInt[8]
     mn := min(a, b)
-    let mx = UInt[8]
     mx := max(a, b)
-    let cl = UInt[8]
     cl := clamp(a, b, c)
 }
 println("=== 18d: priorityMux / muxOH / ohMuxOr / min / max / clamp ===")
 println(moduleTreeVL(utilsMux.create.tree))
 
 module utilsGray {
-    let x = UInt[8]
+    input x = UInt[8]
     let g = Bits[8]
+    output back = UInt[8]
+    input es = Bits[16]
+    output sw = Bits[16]
+    output swu = UInt[16]
     g := toGray(x)
-    let back = UInt[8]
     back := fromGray(g)
-    let es = Bits[16]
-    let sw = Bits[16]
     sw := endiannessSwap(es, 8)
-    let swu = UInt[16]
     swu := endiannessSwapUInt(es.asUInt, 8)
 }
 println("=== 18e: gray / endiannessSwap ===")
 println(moduleTreeVL(utilsGray.create.tree))
 
 module utilsReg {
-    let a = UInt[8]
-    let d1 = UInt[8]
-    d1 := delayUInt(a, 2)
-    let h = UInt[8]
-    h := historyUInt(a, 3).at(0, UInt.mk(None, literal(0)))
-    let ev = Bool
-    let de = Bool
-    de := delayEvent(ev, 4)
+    input a = UInt[8]
+    output d1 = UInt[8]
+    output h = UInt[8]
+    input ev = Bool
+    output de = Bool
+    // historyUInt 内部多产生一级最深延迟寄存器 history_1（不进入返回 Vec），
+    // 以同名 output reg 端口取出该内部寄存器，避免死寄存器
+    output reg history_1 = UInt[8]
     let tm = timeout(8)
-    let ts = Bool
+    output ts = Bool
+    d1 := delayUInt(a, 2)
+    // 触发 history 移位链生成（history_3 / history_2 / history_1）
+    let hv = historyUInt(a, 3)
+    // h 直接观测链上最深一级：a 延迟 3 拍
+    h := history_1
+    de := delayEvent(ev, 4)
     ts := tm.state
 }
 println("=== 18f: delay / history / delayEvent / timeout ===")
@@ -117,21 +123,21 @@ println(moduleTreeVL(utilsReg.create.tree))
 
 module utilsCounters {
     let cm = counterMod(10)
-    let cmv = UInt[4]
-    cmv := cm.value
+    output cmv = UInt[4]
     let cmo = Bool
-    cmo := cm.willOverflow
-    let en = Bool
+    input en = Bool
     let ci = counterIncMod(10, en)
     let ud = counterUpDown(10, en, cmo)
     let dc = downCounter(10)
     let ohc = oneHotCounter(4)
     let jc = johnsonCounter(4)
-    let jv = Bits[4]
+    output jv = Bits[4]
+    output ohv = Bits[4]
+    output udv = UInt[4]
+    cmv := cm.value
+    cmo := cm.willOverflow
     jv := jc.value
-    let ohv = Bits[4]
     ohv := ohc.value
-    let udv = UInt[4]
     udv := ud.value
 }
 println("=== 18g: counter 家族 ===")
