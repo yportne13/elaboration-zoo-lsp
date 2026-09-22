@@ -1126,9 +1126,11 @@ fn vapp1<'a>(
             let hd = spine.spine_head(h);
             if let XCell::Decl { name } = v_xcell_of(hd) {
                 let name = *name;
-                let pure = decl.get(name).and_then(|e| e.prim).is_some_and(prim_is_pure);
+                // 单次查表取 prim-ness（旧实现 pure 判定与执行各查一次）
+                let pid = decl.get(name).and_then(|e| e.prim);
+                let pure = pid.is_some_and(prim_is_pure);
                 if !(lazy_pure_prim && pure) {
-                    if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
+                    if let Some(pid) = pid {
                         if !prim_is_pure(pid) {
                             force_taint_bump();
                         }
@@ -1151,11 +1153,13 @@ fn vapp1<'a>(
             XCell::Obj { .. } => spine.push(f, a, i),
             XCell::Decl { name } => {
                 // 裸 Decl 单元上应用：prim 以单实参试执行（实参不足 → None
-                // → 压 spine；参考版 v_app 的 Decl 臂同款）
+                // → 压 spine；参考版 v_app 的 Decl 臂同款）。单次查表取
+                // prim-ness（旧实现 pure 判定与执行各查一次）。
                 let name = *name;
-                let pure = decl.get(name).and_then(|e| e.prim).is_some_and(prim_is_pure);
+                let pid = decl.get(name).and_then(|e| e.prim);
+                let pure = pid.is_some_and(prim_is_pure);
                 if !(lazy_pure_prim && pure) {
-                    if let Some(pid) = decl.get(name).and_then(|e| e.prim) {
+                    if let Some(pid) = pid {
                         if !prim_is_pure(pid) {
                             force_taint_bump();
                         }
@@ -2496,12 +2500,11 @@ fn force_inner<'a>(
                                 for a in args.iter_mut() {
                                     a.0 = force(bump, spine, defs, metas, decl, mutable, a.0);
                                 }
-                                let mut w2: Vec<W<'a>> = Vec::new();
-                                let mut v2: Vec<V> = Vec::new();
-                                let mut i2: Vec<Icit> = Vec::new();
+                                // 复用本函数主栈（arm 入口处已排空，vapp1 臂
+                                // :同款）——旧实现每次 prim 执行三个新 Vec
                                 match prim_exec(
-                                    bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl,
-                                    mutable, pid, &args,
+                                    bump, spine, &mut work, &mut vals, &mut icits, defs, metas,
+                                    decl, mutable, pid, &args,
                                 ) {
                                     Some(r) => {
                                         v = force(bump, spine, defs, metas, decl, mutable, r)
@@ -2582,15 +2585,13 @@ fn force_inner<'a>(
                             if !prim_is_pure(pid) {
                                 force_taint_bump();
                             }
-                            let mut w2: Vec<W<'a>> = Vec::new();
-                            let mut v2: Vec<V> = Vec::new();
-                            let mut i2: Vec<Icit> = Vec::new();
+                            // 复用本函数主栈（vapp1/prim 臂同款，旧实现三个新 Vec）
                             if let Some(r) = prim_exec(
                                 bump,
                                 spine,
-                                &mut w2,
-                                &mut v2,
-                                &mut i2,
+                                &mut work,
+                                &mut vals,
+                                &mut icits,
                                 defs,
                                 metas,
                                 decl,
@@ -7367,11 +7368,10 @@ impl Machine {
         // 注意 `is_flex` 同时覆盖裸 meta 与 meta 头链（`?m x`）——goal 的
         // 参数形态常是后者；只测 `v_tag == 5` 会漏判，让 flex goal 进入
         // 实例匹配（val_match 对每个实例恒真）后按登记序选中错误实例。
-        let forced_params: Vec<V> = self.force_list(
-            bump,
-            &cxt.decls,
-            &params.iter().map(|p| p.val).collect::<Vec<_>>(),
-        );
+        // Phase 1（上面）是纯过滤（val_match / is_flex / head_key_v 全只
+        // 读），两次 force 之间无任何状态变更——`all_params` 即
+        // `forced_params`，旧实现第二遍 force_list 是纯重复（2026-09-22 移除）。
+        let forced_params: &Vec<V> = &all_params;
         let has_flex_non_out = non_out_idx
             .iter()
             .any(|&i| is_flex(&self.spine, forced_params[i]));
