@@ -370,6 +370,12 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     /// startup, so "which engine actually ran this file" could not be answered
     /// at runtime.
     pub twin_fallback: DashMap<String, String>,
+    /// URIs whose HDL self-check gate has fired at least once.  For these the
+    /// twin's diagnostics are discarded on every kick, so the twin pass is pure
+    /// waste: later kicks go straight to the reference path (which always
+    /// publishes — correctness is unaffected, only speed is).  Cleared when the
+    /// file is closed, so re-opening re-probes.
+    pub twin_gate_distrusted: DashMap<String, ()>,
     /// Which elaborator backs the analysis path (see [`Engine`]).
     pub engine: Engine,
     /// Parsed prelude decls for the twin engine (shared, parse-once per
@@ -454,6 +460,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             hover_table,
             twin_tables: DashMap::new(),
             twin_fallback: DashMap::new(),
+            twin_gate_distrusted: DashMap::new(),
             engine,
             twin_prelude: Mutex::new(None),
             quickfix_map: DashMap::new(),
@@ -1554,6 +1561,17 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         // elaboration or parse error cannot close-check in *either* engine, so
         // their missing warnings are expected and do not trigger the
         // fallback (the common "typing inside a module body" state).
+        //
+        // **Why this stays conservative** (2026-09-22, re-derived): a
+        // correctly built tree with no findings and a wrongly built tree with
+        // no findings are indistinguishable *from inside the twin*.  The
+        // 2026-09-10 root cause (a stale session-global `ModuleTree` from the
+        // prelude load) did run `checkModuleTree` — it just ran it against an
+        // old-epoch tree — so neither "did the close-check run" nor "did the
+        // tree value change" discriminates; the twin-visible symptom is only
+        // "0 issues", which is also what a genuinely clean module produces.
+        // The waste this costs is removed by the sticky demotion below instead
+        // of by weakening the gate.
         let has_module = decls.iter().any(|d| matches!(d, Decl::Class { .. }));
         if has_module && checks.is_empty() {
             let any_clean_module = decls.iter().any(|d| {
@@ -1567,6 +1585,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             });
             if any_clean_module {
                 self.twin_tables.remove(&uri_str);
+                // Sticky: the twin's diagnostics for this file are discarded
+                // every kick, so re-running the twin on the next kick is pure
+                // waste (23-verilog-compat / 25-verilog-reset / alu: ~0.73x).
+                // The reference path still publishes, so this costs nothing but
+                // speed, and `remove_file` clears the flag on close.
+                self.twin_gate_distrusted.insert(uri_str.clone(), ());
                 self.note_twin_fallback(
                     &uri_str,
                     "hdl-check-gate",
@@ -2271,6 +2295,13 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             // The twin never touched `pre`: hand it to the reference path.
             return self.elaborate_reference(uri, text, version, pre);
         }
+        if self.twin_gate_distrusted.contains_key(&uri_str) {
+            // Sticky HDL self-check demotion (see `twin_gate_distrusted`): the
+            // twin's diagnostics were discarded for this file, so skip the
+            // whole twin pass.  `twin_fallback_reason` still reports the gate.
+            self.twin_tables.remove(&uri_str);
+            return self.elaborate_reference(uri, text, version, pre);
+        }
         if !self.document_id.contains_key(&uri_str) {
             // Defensive: `process_file` seeds the id before analysing, and
             // `remove_file` only re-elaborates open documents.
@@ -2650,6 +2681,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         self.hover_table.remove(uri.as_str());
         self.twin_tables.remove(uri.as_str());
         self.twin_fallback.remove(uri.as_str());
+        self.twin_gate_distrusted.remove(uri.as_str());
         self.quickfix_map.remove(uri.as_str());
         self.macro_expansion_map.remove(uri.as_str());
         self.remove_file_macros(&uri_str);

@@ -696,6 +696,24 @@ fn twin_solves_implicits_around_nested_unify() {
 }
 
 
+/// (severity, message, start line/char) for ERROR + WARNING diagnostics,
+/// sorted — `Information` (println rendering) is allowed to differ.
+fn errwarn(b: &Arc<Backend<CapturingClient>>, uri: &Url) -> Vec<(String, String, u32, u32)> {
+    let mut v: Vec<(String, String, u32, u32)> = b.client.diagnostics.lock().unwrap().iter()
+        .filter(|(u, _, _)| u == uri)
+        .flat_map(|(_, ds, _)| ds.iter())
+        .filter(|d| {
+            d.severity == Some(lsp_types::DiagnosticSeverity::ERROR)
+                || d.severity == Some(lsp_types::DiagnosticSeverity::WARNING)
+        })
+        .map(|d| {
+            (format!("{:?}", d.severity), d.message.clone(), d.range.start.line, d.range.start.character)
+        })
+        .collect();
+    v.sort();
+    v
+}
+
 /// Error-diagnostic parity over the **whole** `examples/` tree.  The HDL-only
 /// test above misses the top-level proof examples, which is where the
 /// nested-`unify` bug (`twin_solves_implicits_around_nested_unify`) surfaced:
@@ -740,3 +758,114 @@ fn twin_error_diagnostics_match_reference_on_all_examples() {
         );
     }
 }
+
+/// Ownership + **warning** parity over the whole `examples/` tree.
+///
+/// Both corpus walks above pass trivially when the twin declines (the reference
+/// publishes), which is how the HDL self-check gate's double-run on 23/25 stayed
+/// invisible.  This test pins the two things they could not see:
+///
+/// 1. **Ownership**: every file is either twin-owned or has a *recorded*
+///    fallback reason, and the fallback set is exactly the documented one — a
+///    file silently changing engines fails here.
+/// 2. **Warning parity** for twin-owned files: the existing walk compared ERROR
+///    severities only, so a twin that *under-reports* HDL warnings (the failure
+///    mode the conservative gate exists for) was invisible.  This is the safety
+///    check that lets the gate stay conservative while its waste is removed by
+///    the sticky demotion.
+#[test]
+fn twin_ownership_and_warning_parity_on_all_examples() {
+    /// `(path suffix, expected reason class)`.  Editing this list is the
+    /// deliberate act that accompanies any engine/gate change.
+    const EXPECTED_FALLBACKS: &[(&str, &str)] = &[
+        ("examples/alu.typort", "hdl-check-gate"),
+        ("examples/hdl/18-utils.typort", "untrusted-error"),
+        ("examples/hdl/23-verilog-compat.typort", "hdl-check-gate"),
+        ("examples/hdl/25-verilog-reset.typort", "hdl-check-gate"),
+    ];
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect(&p, out);
+            } else if p.extension().map(|e| e == "typort").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    collect(std::path::Path::new("examples"), &mut files);
+    files.sort();
+    assert!(files.len() >= 30, "expected the examples tree, found {}", files.len());
+    let mut seen_fallbacks: Vec<String> = Vec::new();
+    for (i, path) in files.iter().enumerate() {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let name = path.to_string_lossy().replace('\\', "/");
+        let uri = Url::parse(&format!("file:///ex_own_{i}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        tb.process_file(&uri, &src, Some(1));
+        let rb = backend_hdl(Engine::Reference);
+        rb.process_file(&uri, &src, Some(1));
+
+        let owned = tb.twin_tables.contains_key(uri.as_str());
+        let reason = tb.twin_fallback_reason(uri.as_str());
+        let expected = EXPECTED_FALLBACKS.iter().find(|(p, _)| name.ends_with(p));
+        match expected {
+            Some((_, class)) => {
+                assert!(!owned, "{name} is twin-owned again — update EXPECTED_FALLBACKS");
+                let reason = reason.unwrap_or_else(|| panic!("{name} fell back without a reason"));
+                assert!(
+                    reason.starts_with(class),
+                    "{name}: expected reason class {class}, got {reason}",
+                );
+                seen_fallbacks.push(name.clone());
+            }
+            None => {
+                assert!(owned, "{name} is no longer twin-owned (reason: {reason:?})");
+                assert_eq!(reason, None, "{name}: owned but a fallback reason was recorded");
+            }
+        }
+        // Whichever engine published, the user-visible ERROR+WARNING set must
+        // match the reference exactly.
+        assert_eq!(
+            errwarn(&tb, &uri),
+            errwarn(&rb, &uri),
+            "ERROR/WARNING diagnostics diverged on {name}",
+        );
+    }
+    assert_eq!(
+        seen_fallbacks.len(),
+        EXPECTED_FALLBACKS.len(),
+        "expected fallbacks {:?}, saw {seen_fallbacks:?}",
+        EXPECTED_FALLBACKS.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+    );
+}
+
+/// The HDL self-check demotion is sticky: the gate's note is emitted once and
+/// later kicks skip the twin pass entirely (its diagnostics are discarded
+/// anyway).  Correctness is unaffected — the reference still publishes, and the
+/// published set must equal a fresh reference run.
+#[test]
+fn twin_hdl_gate_distrust_is_sticky() {
+    let src = std::fs::read_to_string("examples/hdl/23-verilog-compat.typort")
+        .expect("examples/hdl/23-verilog-compat.typort");
+    let uri = Url::parse("file:///twin_gate_sticky.typort").unwrap();
+    let tb = backend_hdl(Engine::Twin);
+    for k in 0..3 {
+        tb.process_file(&uri, &src, Some(k));
+        assert!(!tb.twin_tables.contains_key(uri.as_str()), "gate file became twin-owned on kick {k}");
+        let reason = tb.twin_fallback_reason(uri.as_str()).expect("gate reason missing");
+        assert!(reason.starts_with("hdl-check-gate"), "unexpected reason: {reason}");
+    }
+    let notes = logs(&tb)
+        .iter()
+        .filter(|l| l.contains("twin fallback:") && l.contains("hdl-check-gate"))
+        .count();
+    assert_eq!(notes, 1, "expected exactly one gate note, got: {:?}", logs(&tb));
+
+    let rb = backend_hdl(Engine::Reference);
+    rb.process_file(&uri, &src, Some(2));
+    assert_eq!(errwarn(&tb, &uri), errwarn(&rb, &uri), "sticky-demoted file diverged from the reference");
+}
+
