@@ -25,6 +25,10 @@ v3_fail.log
 # Kept on disk on purpose; never part of the repository.
 /.workbuddy/
 
+# AI-session execution plans (session-ID filenames). Transient working state,
+# not project documentation.
+/.zcode/
+
 # Generated run outputs. `probe-out.txt` is rewritten by the `probe_timing` test
 # (src/L13_namespace/module_probe_tests.rs), the rest are profiling/invocation
 # snapshots. All are regenerable, so they stay untracked.
