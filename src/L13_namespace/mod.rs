@@ -442,6 +442,29 @@ pub enum Tm {
     OpCall { symbol: SmolStr, name: SmolStr, args: List<(Rc<Tm>, Icit)>, body: Rc<Tm> },
 }
 
+/// Release an owned field that an iterative drain (`drain_tm`/`drain_val`)
+/// deliberately left in place.
+///
+/// `Tm::drop` and `Val::drop` move every field that can reach another
+/// `Rc<Tm>`/`Rc<Val>` out of the node with `ptr::read` (collections are
+/// replaced with empty ones) and then `mem::forget` the shell, so a normal
+/// drop cannot double-release those.  Everything the drain does *not* move
+/// out is therefore never released either — and several non-`Rc` fields do
+/// own heap: a `Span<SmolStr>`/`SmolStr` holds an `Arc<str>` once the name is
+/// longer than smol_str's 23-byte inline capacity, a `List<_>` holds its `Rc`
+/// node spine, and an `Rc<Vec<..>>` (`SumCases`) holds its `RcBox` plus the
+/// vector buffer.  Each such field leaked one block per dropped shell.
+///
+/// All of them are `Tm`/`Val`-free, so releasing one here cannot recurse back
+/// into the drop currently being drained — it only gives the memory back.
+#[inline]
+fn release_owned<T>(f: &mut T) {
+    // SAFETY: the caller owns the shell holding `f` and never drops it (it is
+    // forgotten right after the drain), so this is the only read of `f` and
+    // the value is dropped exactly once.
+    drop(unsafe { std::ptr::read(f) });
+}
+
 impl Drop for Tm {
     fn drop(&mut self) {
         // Leaf fast path: most drops are leaf-shaped terms; skip the
@@ -451,20 +474,23 @@ impl Drop for Tm {
         }
         // SAFETY contract for `drain_tm`: it moves every nested `Rc<Tm>` out
         // of the shell with `ptr::read` (nested collections are replaced
-        // with empty ones); the caller must `forget` the shell, never drop
+        // with empty ones); every other owned field is released with
+        // `release_owned`; the caller must `forget` the shell, never drop
         // it normally.  Leaves are left untouched.
         fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
             match t {
                 Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
                     return;
                 }
-                Tm::Obj(x, _) => {
+                Tm::Obj(x, name) => {
                     let x = unsafe { std::ptr::read(x) };
                     tms.push(x);
+                    release_owned(name);
                 }
-                Tm::Lam(_, _, b) => {
+                Tm::Lam(name, _, b) => {
                     let b = unsafe { std::ptr::read(b) };
                     tms.push(b);
+                    release_owned(name);
                 }
                 Tm::App(f, u, _) => {
                     let f = unsafe { std::ptr::read(f) };
@@ -472,30 +498,40 @@ impl Drop for Tm {
                     tms.push(f);
                     tms.push(u);
                 }
-                Tm::AppPruning(t, _) => {
+                Tm::AppPruning(t, pruning) => {
                     let t = unsafe { std::ptr::read(t) };
                     tms.push(t);
+                    release_owned(pruning);
                 }
-                Tm::Pi(_, _, a, b) => {
+                Tm::Pi(name, _, a, b) => {
                     let a = unsafe { std::ptr::read(a) };
                     let b = unsafe { std::ptr::read(b) };
                     tms.push(a);
                     tms.push(b);
+                    release_owned(name);
                 }
-                Tm::Let(_, a, t, u) => {
+                Tm::Let(name, a, t, u) => {
                     let a = unsafe { std::ptr::read(a) };
                     let t = unsafe { std::ptr::read(t) };
                     let u = unsafe { std::ptr::read(u) };
                     tms.push(a);
                     tms.push(t);
                     tms.push(u);
+                    release_owned(name);
                 }
-                Tm::Sum(_, params, _, _) => {
+                Tm::Sum(name, params, cases, _) => {
                     let params = unsafe { std::ptr::read(params) };
                     for (_, t, ty, _) in params.iter() {
                         tms.push(t.clone());
                         tms.push(ty.clone());
                     }
+                    // `cases` holds no `Tm` (`Vec<Span<SmolStr>>`) and is a
+                    // separate allocation from `params`, so it is released
+                    // here rather than walked: without this every `Sum` node
+                    // leaked its `RcBox` plus one `Span<SmolStr>` slot per
+                    // case (the S7 headline leak).
+                    release_owned(name);
+                    release_owned(cases);
                 }
                 Tm::SumCase { typ, datas, .. } => {
                     let typ = unsafe { std::ptr::read(typ) };
@@ -513,21 +549,24 @@ impl Drop for Tm {
                         tms.push(b.clone());
                     }
                 }
-                Tm::Call(_, args, body) => {
+                Tm::Call(name, args, body) => {
                     let args = std::mem::replace(args, List::new());
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
                     let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
+                    release_owned(name);
                 }
-                Tm::OpCall { args, body, .. } => {
+                Tm::OpCall { symbol, name, args, body } => {
                     let args = std::mem::replace(args, List::new());
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
                     let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
+                    release_owned(symbol);
+                    release_owned(name);
                 }
             }
             // The drained shell's fields were moved out; the caller
@@ -791,7 +830,8 @@ impl Drop for Val {
         // `Val::SumCase`s) — which overflows even the 64 MiB CLI stack at
         // ~100k depth.  Drain the nested references iteratively: each
         // node's `Rc` fields are moved out with `ptr::read` (collections are
-        // replaced with empty ones), then the drained shell is forgotten
+        // replaced with empty ones) and every other owned field is released
+        // with `release_owned`, then the drained shell is forgotten
         // by the caller — a normal drop would double-release the moved-from
         // fields.  Semantics are identical to the derived drop.
         fn drain_tm(t: &mut Tm, tms: &mut Vec<Rc<Tm>>) {
@@ -799,13 +839,15 @@ impl Drop for Val {
                 Tm::Var(_) | Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => {
                     return;
                 }
-                Tm::Obj(x, _) => {
+                Tm::Obj(x, name) => {
                     let x = unsafe { std::ptr::read(x) };
                     tms.push(x);
+                    release_owned(name);
                 }
-                Tm::Lam(_, _, b) => {
+                Tm::Lam(name, _, b) => {
                     let b = unsafe { std::ptr::read(b) };
                     tms.push(b);
+                    release_owned(name);
                 }
                 Tm::App(f, u, _) => {
                     let f = unsafe { std::ptr::read(f) };
@@ -813,30 +855,38 @@ impl Drop for Val {
                     tms.push(f);
                     tms.push(u);
                 }
-                Tm::AppPruning(t, _) => {
+                Tm::AppPruning(t, pruning) => {
                     let t = unsafe { std::ptr::read(t) };
                     tms.push(t);
+                    release_owned(pruning);
                 }
-                Tm::Pi(_, _, a, b) => {
+                Tm::Pi(name, _, a, b) => {
                     let a = unsafe { std::ptr::read(a) };
                     let b = unsafe { std::ptr::read(b) };
                     tms.push(a);
                     tms.push(b);
+                    release_owned(name);
                 }
-                Tm::Let(_, a, t, u) => {
+                Tm::Let(name, a, t, u) => {
                     let a = unsafe { std::ptr::read(a) };
                     let t = unsafe { std::ptr::read(t) };
                     let u = unsafe { std::ptr::read(u) };
                     tms.push(a);
                     tms.push(t);
                     tms.push(u);
+                    release_owned(name);
                 }
-                Tm::Sum(_, params, _, _) => {
+                Tm::Sum(name, params, cases, _) => {
                     let params = unsafe { std::ptr::read(params) };
                     for (_, t, ty, _) in params.iter() {
                         tms.push(t.clone());
                         tms.push(ty.clone());
                     }
+                    // Same release as the `Tm::drop` copy of this drain: this
+                    // duplicate (reached when a `Tm` is released through the
+                    // `Val` worklist) leaked `Sum.cases` and the names too.
+                    release_owned(name);
+                    release_owned(cases);
                 }
                 Tm::SumCase { typ, datas, .. } => {
                     let typ = unsafe { std::ptr::read(typ) };
@@ -854,49 +904,64 @@ impl Drop for Val {
                         tms.push(b.clone());
                     }
                 }
-                Tm::Call(_, args, body) => {
+                Tm::Call(name, args, body) => {
                     let args = std::mem::replace(args, List::new());
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
                     let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
+                    release_owned(name);
                 }
-                Tm::OpCall { args, body, .. } => {
+                Tm::OpCall { symbol, name, args, body } => {
                     let args = std::mem::replace(args, List::new());
                     for (a, _) in args.iter() {
                         tms.push(a.clone());
                     }
                     let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
+                    release_owned(symbol);
+                    release_owned(name);
                 }
             }
         }
         fn drain_val(v: &mut Val, vals: &mut Vec<Rc<Val>>, tms: &mut Vec<Rc<Tm>>) {
             match v {
-                Val::Flex(_, sp) | Val::Rigid(_, sp) | Val::Decl(_, sp) => {
+                Val::Flex(_, sp) | Val::Rigid(_, sp) => {
                     let sp = std::mem::replace(sp, List::new());
                     for (x, _) in sp.iter() {
                         vals.push(x.clone());
                     }
                 }
-                Val::Obj(x, _, sp) => {
+                // Same spine drain as `Flex`/`Rigid`, plus the `Decl` name —
+                // a `Span<SmolStr>`, which owns an `Arc<str>` past smol_str's
+                // 23-byte inline capacity.
+                Val::Decl(name, sp) => {
+                    let sp = std::mem::replace(sp, List::new());
+                    for (x, _) in sp.iter() {
+                        vals.push(x.clone());
+                    }
+                    release_owned(name);
+                }
+                Val::Obj(x, name, sp) => {
                     let x = unsafe { std::ptr::read(x) };
                     vals.push(x);
                     let sp = std::mem::replace(sp, List::new());
                     for (a, _) in sp.iter() {
                         vals.push(a.clone());
                     }
+                    release_owned(name);
                 }
-                Val::Lam(_, _, Closure(env, body)) => {
+                Val::Lam(name, _, Closure(env, body)) => {
                     let env = std::mem::replace(env, List::new());
                     for x in env.iter() {
                         vals.push(x.clone());
                     }
                     let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
+                    release_owned(name);
                 }
-                Val::Pi(_, _, a, Closure(env, body)) => {
+                Val::Pi(name, _, a, Closure(env, body)) => {
                     let a = unsafe { std::ptr::read(a) };
                     vals.push(a);
                     let env = std::mem::replace(env, List::new());
@@ -905,16 +970,22 @@ impl Drop for Val {
                     }
                     let body = unsafe { std::ptr::read(body) };
                     tms.push(body);
+                    release_owned(name);
                 }
                 Val::U(_) | Val::LiteralType | Val::LiteralIntro(_) | Val::Nat(_) => {
                     return;
                 }
-                Val::Sum(_, params, _, _) => {
+                Val::Sum(name, params, cases, _) => {
                     let params = unsafe { std::ptr::read(params) };
                     for (_, v, ty, _) in params.iter() {
                         vals.push(v.clone());
                         vals.push(ty.clone());
                     }
+                    // Same `cases` release as `Tm::Sum`: `Vec<Span<SmolStr>>`
+                    // holds no `Val`, and is a separate allocation from
+                    // `params`.
+                    release_owned(name);
+                    release_owned(cases);
                 }
                 Val::SumCase { typ, datas, .. } => {
                     let typ = unsafe { std::ptr::read(typ) };
@@ -936,13 +1007,14 @@ impl Drop for Val {
                         tms.push(b.clone());
                     }
                 }
-                Val::Call(_, args, body) => {
+                Val::Call(name, args, body) => {
                     let args = std::mem::replace(args, List::new());
                     for (a, _) in args.iter() {
                         vals.push(a.clone());
                     }
                     let body = unsafe { std::ptr::read(body) };
                     vals.push(body);
+                    release_owned(name);
                 }
             }
             // The drained shell's fields were moved out; the caller
