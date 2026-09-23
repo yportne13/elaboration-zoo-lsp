@@ -61,6 +61,17 @@ fn head_key_v(spine: &Spine, v: V) -> Option<SmolStr> {
     }
 }
 
+/// solve_multi_trait 的待解条目快照缓冲池（S1 轮）：旧实现每次调用
+/// `self.trait_metas.clone()`——整表快照（prelude-hdl 实测均值 3234 条、
+/// 峰值 6585 条）× 每次 trait 求解一次（实测 5 万次/轮）= 每轮数百 MB 的
+/// 分配 + memcpy 大户。retain+过滤后真正待解的条目通常个位数，改为进
+/// **带所有权的小缓冲**：池按 LIFO 复用（嵌套 solve → solve → trait_wrap
+/// 探测 → 再 solve 的重入链各自取各的缓冲，互不踩），暖机后零分配。
+thread_local! {
+    static TRAIT_METAS_SNAP_POOL: std::cell::RefCell<Vec<Vec<u32>>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
 impl Machine {
     /// 参考 `Infer::solve_multi_trait`（L13）：只扫 `trait_metas` 登记表
     /// （fresh_meta 对 trait Sum 走此表），清理指向截断 meta 的条目；从 m
@@ -72,40 +83,55 @@ impl Machine {
         m: u32,
         allow_flex_defaulting: bool,
     ) -> Result<(), String> {
-        self.trait_metas
-            .retain(|mv| (*mv as usize) < self.metas.len());
-        for mv in self.trait_metas.clone() {
-            if mv < m {
-                continue;
+        // 单遍合并：retain（清指向已截断 meta 的条目，语义不变）+ 顺手收集
+        // 本轮待解条目（`mv < m` 是常量谓词，从逐条 visit 提前到收集期——
+        // 逐条等价）。旧实现的整表 clone 三重成本（堆分配 + 全表 memcpy +
+        // 遍历期再扫一遍）全部消失；幸存条目的 `mv < metas.len()` 由 retain
+        // 在入口保证，此后 metas 只增、或经嵌套探测截断——后者旧代码也是
+        // visit 期 bounds 检查跳过，下面的循环原样保留该现读检查。
+        let mut snap = TRAIT_METAS_SNAP_POOL.with(|p| p.borrow_mut().pop().unwrap_or_default());
+        let r = (|| {
+            snap.clear();
+            let ml = self.metas.len();
+            self.trait_metas.retain(|mv| {
+                let keep = (*mv as usize) < ml;
+                if keep && *mv >= m {
+                    snap.push(*mv);
+                }
+                keep
+            });
+            for &mv in snap.iter() {
+                let idx = mv as usize;
+                if idx >= self.metas.len() {
+                    continue;
+                }
+                let (x, snap): (V, Rc<MetaSnap<'static>>) = match &self.metas[idx] {
+                    MetaEntry::Unsolved(v, s, ..) => (*v, s.clone()),
+                    _ => continue,
+                };
+                // 用 **meta 创建处**的上下文求解（参考版 `meta_cxt`）：goal 里的
+                // Rigid 层级按创建处 de Bruijn 编号，用调用方的浅上下文会让
+                // rename/quote 算出越界变量。
+                //
+                // `snap` 是**保命强引用**：`solve_trait_ref` 的候选实例走嵌套
+                // unify 时可能把 `self.metas[idx]` 换成 `Solved`，丢掉该快照最后
+                // 一个 `Rc` —— 不留住，下面的 solve 就会读已释放快照的 `cxt`
+                // （释放块填充 `0xFEEEFEEE`，读 `cxt.decls` 即
+                // `HashMap::get` 解引用野指针 → STATUS_ACCESS_VIOLATION）。参考版
+                // 同点位是 `arc_cxt.as_ref().clone()` 先克隆 `Arc` 再调 `&mut self`。
+                let meta_cxt: &Cxt<'a> =
+                    unsafe { &*(&snap.cxt as *const Cxt<'static> as *const Cxt<'a>) };
+                let typ = self
+                    .solve_trait_ref(bump, meta_cxt, x, allow_flex_defaulting)
+                    .map_err(|e| e)?;
+                if let Some((_, val)) = typ {
+                    journal_meta(&mut self.metas, idx, MetaEntry::Solved(val, x));
+                }
             }
-            let idx = mv as usize;
-            if idx >= self.metas.len() {
-                continue;
-            }
-            let (x, snap): (V, Rc<MetaSnap<'static>>) = match &self.metas[idx] {
-                MetaEntry::Unsolved(v, s, ..) => (*v, s.clone()),
-                _ => continue,
-            };
-            // 用 **meta 创建处**的上下文求解（参考版 `meta_cxt`）：goal 里的
-            // Rigid 层级按创建处 de Bruijn 编号，用调用方的浅上下文会让
-            // rename/quote 算出越界变量。
-            //
-            // `snap` 是**保命强引用**：`solve_trait_ref` 的候选实例走嵌套
-            // unify 时可能把 `self.metas[idx]` 换成 `Solved`，丢掉该快照最后
-            // 一个 `Rc` —— 不留住，下面的 solve 就会读已释放快照的 `cxt`
-            // （释放块填充 `0xFEEEFEEE`，读 `cxt.decls` 即
-            // `HashMap::get` 解引用野指针 → STATUS_ACCESS_VIOLATION）。参考版
-            // 同点位是 `arc_cxt.as_ref().clone()` 先克隆 `Arc` 再调 `&mut self`。
-            let meta_cxt: &Cxt<'a> =
-                unsafe { &*(&snap.cxt as *const Cxt<'static> as *const Cxt<'a>) };
-            let typ = self
-                .solve_trait_ref(bump, meta_cxt, x, allow_flex_defaulting)
-                .map_err(|e| e)?;
-            if let Some((_, val)) = typ {
-                journal_meta(&mut self.metas, idx, MetaEntry::Solved(val, x));
-            }
-        }
-        Ok(())
+            Ok(())
+        })();
+        TRAIT_METAS_SNAP_POOL.with(|p| p.borrow_mut().push(snap));
+        r
     }
 
     /// 参考 `Infer::solve_trait`（L13 unification.rs:600 逐句）：trait Sum →
@@ -356,6 +382,15 @@ impl Machine {
         ))
     }
 }
+
+// —— S1 轮归因结论（2026-09-23，详见 perf 汇报）——
+// trait_wrap 入口的 quote→eval 二次正规化、v_to_ref_val 解码、ns 链扫描、
+// traits 查表+decl 构造，四者合计 <2% prelude-hdl fast（L13_TW_DBG 插桩
+// 实测 canon 1ms / ref 0ms / ns 9ms / scan+build 29ms vs 全轮 ~1460ms）；
+// trait_wrap 子树的大头是命中后 `infer_expr($method x)` 的逐调用 elaborate
+//（insert/ fresh_meta / unify / solve 级联，语义必需，不在本文件）。
+// 故本轮不改 trait_wrap 本体，真正的可动项在 solve_multi_trait_ref 的
+// trait_metas 整表 clone（见下方 TRAIT_METAS_SNAP_POOL）。
 
 impl Machine {
     // L10：trait 方法包装（参考版 elaboration.rs `trait_wrap` 逐句移植）
