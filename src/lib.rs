@@ -1561,52 +1561,52 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
             return false;
         }
         let has_error = !errors.is_empty() || !parse_errs.is_empty();
-        // HDL self-check gate: a file with modules that elaborated without an
-        // error on the module itself yet produced no check issues is
-        // distrusted — the twin can build the module tree incompletely and
-        // report *no* issues where the reference reports several
-        // (13-adder-tree: 0 vs 8 warnings).  Modules whose own span carries an
-        // elaboration or parse error cannot close-check in *either* engine, so
-        // their missing warnings are expected and do not trigger the
-        // fallback (the common "typing inside a module body" state).
+        // ── HDL self-check gate: **removed 2026-09-23** ────────────────────
         //
-        // **Why this stays conservative** (2026-09-22, re-derived): a
-        // correctly built tree with no findings and a wrongly built tree with
-        // no findings are indistinguishable *from inside the twin*.  The
-        // 2026-09-10 root cause (a stale session-global `ModuleTree` from the
-        // prelude load) did run `checkModuleTree` — it just ran it against an
-        // old-epoch tree — so neither "did the close-check run" nor "did the
-        // tree value change" discriminates; the twin-visible symptom is only
-        // "0 issues", which is also what a genuinely clean module produces.
-        // The waste this costs is removed by the sticky demotion below instead
-        // of by weakening the gate.
-        let has_module = decls.iter().any(|d| matches!(d, Decl::Class { .. }));
-        if has_module && checks.is_empty() {
-            let any_clean_module = decls.iter().any(|d| {
-                if !matches!(d, Decl::Class { .. }) {
-                    return false;
-                }
-                let sp = decl_span(d);
-                let broken = |start: u32, end: u32| start < sp.end_offset && end > sp.start_offset;
-                !(errors.iter().any(|e| broken(e.0.start_offset, e.0.end_offset))
-                    || parse_errs.iter().any(|p| broken(p.msg.start_offset, p.msg.end_offset)))
-            });
-            if any_clean_module {
-                self.twin_tables.remove(&uri_str);
-                // Sticky: the twin's diagnostics for this file are discarded
-                // every kick, so re-running the twin on the next kick is pure
-                // waste (23-verilog-compat / 25-verilog-reset / alu: ~0.73x).
-                // The reference path still publishes, so this costs nothing but
-                // speed, and `remove_file` clears the flag on close.
-                self.twin_gate_distrusted.insert(uri_str.clone(), ());
-                self.note_twin_fallback(
-                    &uri_str,
-                    "hdl-check-gate",
-                    "clean module with no check issues",
-                );
-                return false;
-            }
-        }
+        // The gate used to distrust any file that "declares a module and
+        // produced 0 check issues", because the twin could build the module
+        // tree incompletely and report *no* issues where the reference reports
+        // several (13-adder-tree, 2026-09-10: twin 0 vs reference 8
+        // HDL001/HDL002 warnings).
+        //
+        // Why it had to go:
+        //
+        // 1. **Its root cause was already fixed.**  The 2026-09-10 mechanism
+        //    was a *stale session-global* `ModuleTree` left over from the
+        //    prelude load; `prime_resident` now resets `WhenStack` /
+        //    `ModuleTree` / `CombCtx` / `ModulePortTable` at every run
+        //    (`bump_spine_iter/entry.rs`, "会话级全局复位").
+        // 2. **Its cost had inverted.**  The 2026-09-22 example cleanup
+        //    (`fafe143`, warnings 531→11) made "clean module, no issues" the
+        //    *normal* state, so the gate demoted 21 of the 26 HDL examples and
+        //    22 of the 30 example files overall — the twin was systematically
+        //    denied exactly the files it handles best.  Verified against the
+        //    corpus: every demoted file is warning-free in the reference, and
+        //    every twin-owned file still carries warnings.
+        // 3. **The evidence says the twin is right on all of them.**  With the
+        //    gate disabled, all 29 non-`untrusted-error` example files become
+        //    twin-owned and pass ERROR+WARNING parity against the reference.
+        //
+        // What replaces it: `twin_ownership_and_warning_parity_on_all_examples`
+        // now asserts *real* warning parity for those files (while the gate was
+        // in place the assertion was vacuous for every demoted file, since both
+        // backends published the reference's own set), and that suite is part
+        // of `tools/gate_l13.sh` since the same change.
+        //
+        // Two probe designs were tried and rejected before removing the gate,
+        // both because the twin cannot read a ground value back out of its own
+        // `mutable` table at kick end: the module macro restores the pre-entry
+        // empty `ModuleTree` right after the check (`hdl-macros.typort:346/363`),
+        // and `ModuleRegistry` entries are held as *stuck* `Call(headModuleDef)`
+        // values, not reduced `ModuleDef` sums.
+        //
+        // **Residual risk (accepted, documented):** an input outside the corpus
+        // could still make the twin under-report HDL warnings, and nothing
+        // detects that at run time any more.  Re-enabling is a six-line change:
+        // distrust when `decls` declares a module, `checks` is empty and no
+        // module of this file overlaps an error/parse-error span.  The
+        // `twin_gate_distrusted` plumbing and its sticky early-return are kept
+        // for exactly that.
         let rope = Rope::from_str(text);
         // Merge exports into the reference global table (mirrors the
         // reference path's per-file symbol replacement).  On error the

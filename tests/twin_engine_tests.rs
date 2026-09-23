@@ -778,42 +778,24 @@ fn twin_ownership_and_warning_parity_on_all_examples() {
     /// `(path suffix, expected reason class)`.  Editing this list is the
     /// deliberate act that accompanies any engine/gate change.
     ///
-    /// The HDL direction cleanup (all examples made warning-free except
-    /// 06/08/09/24 and hdl_ops) moved every clean-module example through the
-    /// conservative gate below: `checks.is_empty()` on a module that
-    /// elaborated cleanly is indistinguishable from an incompletely built
-    /// tree, so those files now fall back to the reference with
-    /// `hdl-check-gate`.  The files that still carry check issues keep
-    /// non-empty `checks`, never trip the gate, and must stay OUT of this
-    /// list (they are asserted twin-owned below): 06-select-cat (HDL010),
-    /// 08-control-flow (HDL004), 09-hierarchy (HDL022), 24-verilog-practice
-    /// (HDV002), hdl_ops (HDL010/HDL022).
+    /// **2026-09-23: the HDL self-check gate was removed**, so the 21
+    /// `hdl-check-gate` entries that used to live here are gone — every
+    /// clean-module example is twin-owned again.  Why the gate went: its root
+    /// cause (a stale session-global `ModuleTree`) was fixed on 2026-09-11 by
+    /// the per-run reset in `bump_spine_iter/entry.rs`, and the 2026-09-22
+    /// example cleanup (`fafe143`, warnings 531→11) had turned "clean module,
+    /// no issues" into the *normal* state, so the gate demoted 21 of 26 HDL
+    /// examples and 22 of 30 files overall.  With the gate disabled all 29
+    /// non-`untrusted-error` files become twin-owned and pass ERROR+WARNING
+    /// parity against the reference — which is what this test now asserts for
+    /// real (while the gate was in place the assertion was vacuous for every
+    /// demoted file, because both backends published the reference's own set).
+    ///
+    /// The single remaining fallback is gate-independent: `18-utils` fails the
+    /// `LetNamed` trait solve for the timeout demo's `TimeoutHandle`, an error
+    /// class without verified parity (`untrusted-error`).
     const EXPECTED_FALLBACKS: &[(&str, &str)] = &[
-        ("examples/alu.typort", "hdl-check-gate"),
-        ("examples/hdl/01-basics.typort", "hdl-check-gate"),
-        ("examples/hdl/02-arithmetic.typort", "hdl-check-gate"),
-        ("examples/hdl/03-bitwise.typort", "hdl-check-gate"),
-        ("examples/hdl/04-compare.typort", "hdl-check-gate"),
-        ("examples/hdl/05-bool.typort", "hdl-check-gate"),
-        ("examples/hdl/07-registers.typort", "hdl-check-gate"),
-        ("examples/hdl/10-bundle.typort", "hdl-check-gate"),
-        ("examples/hdl/11-bundle-deep.typort", "hdl-check-gate"),
-        ("examples/hdl/12-memory.typort", "hdl-check-gate"),
-        ("examples/hdl/13-adder-tree.typort", "hdl-check-gate"),
-        ("examples/hdl/14-arithmetic-extra.typort", "hdl-check-gate"),
-        ("examples/hdl/15-inout.typort", "hdl-check-gate"),
-        ("examples/hdl/16-counter.typort", "hdl-check-gate"),
-        ("examples/hdl/17-output-reg.typort", "hdl-check-gate"),
-        // 18-utils keeps untrusted-error: the twin fails the LetNamed trait
-        // solve for the timeout demo's TimeoutHandle before the gate runs
-        // (the untrusted-error check precedes the clean-module gate).
         ("examples/hdl/18-utils.typort", "untrusted-error"),
-        ("examples/hdl/19-stream.typort", "hdl-check-gate"),
-        ("examples/hdl/20-misc.typort", "hdl-check-gate"),
-        ("examples/hdl/21-crossclock.typort", "hdl-check-gate"),
-        ("examples/hdl/22-widthadapter.typort", "hdl-check-gate"),
-        ("examples/hdl/23-verilog-compat.typort", "hdl-check-gate"),
-        ("examples/hdl/25-verilog-reset.typort", "hdl-check-gate"),
     ];
     fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -874,30 +856,69 @@ fn twin_ownership_and_warning_parity_on_all_examples() {
     );
 }
 
-/// The HDL self-check demotion is sticky: the gate's note is emitted once and
-/// later kicks skip the twin pass entirely (its diagnostics are discarded
-/// anyway).  Correctness is unaffected — the reference still publishes, and the
-/// published set must equal a fresh reference run.
+/// **2026-09-23: the HDL self-check gate is gone**, so this test pins the
+/// replacement contract instead of the demotion.  `23-verilog-compat` used to
+/// be the canonical sticky-demoted file (it was one of the three that paid the
+/// twin pass for nothing before `0ee20bf`); now the twin owns it on every kick,
+/// emits no fallback note at all, and its published ERROR+WARNING set must
+/// still equal a fresh reference run.
+///
+/// The old assertions are kept in spirit: repeated kicks must be stable (no
+/// snapshot drift, no reason recorded), and warning parity is what the removed
+/// gate existed to protect.
 #[test]
-fn twin_hdl_gate_distrust_is_sticky() {
-    let src = std::fs::read_to_string("examples/hdl/23-verilog-compat.typort")
-        .expect("examples/hdl/23-verilog-compat.typort");
-    let uri = Url::parse("file:///twin_gate_sticky.typort").unwrap();
-    let tb = backend_hdl(Engine::Twin);
-    for k in 0..3 {
-        tb.process_file(&uri, &src, Some(k));
-        assert!(!tb.twin_tables.contains_key(uri.as_str()), "gate file became twin-owned on kick {k}");
-        let reason = tb.twin_fallback_reason(uri.as_str()).expect("gate reason missing");
-        assert!(reason.starts_with("hdl-check-gate"), "unexpected reason: {reason}");
-    }
-    let notes = logs(&tb)
-        .iter()
-        .filter(|l| l.contains("twin fallback:") && l.contains("hdl-check-gate"))
-        .count();
-    assert_eq!(notes, 1, "expected exactly one gate note, got: {:?}", logs(&tb));
+fn twin_hdl_gate_removed_clean_module_files_stay_twin_owned() {
+    // `23-verilog-compat` is the canonical *formerly demoted* file (clean
+    // module, 0 check issues); `09-hierarchy` still carries HDL022 warnings, so
+    // its parity assertion can actually see under-reporting.
+    for (fixture, must_warn) in [
+        ("examples/hdl/23-verilog-compat.typort", false),
+        ("examples/hdl/09-hierarchy.typort", true),
+    ] {
+        let src = std::fs::read_to_string(fixture).unwrap_or_else(|_| panic!("{fixture}"));
+        let uri = Url::parse(&format!("file:///twin_gate_removed_{must_warn}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        for k in 0..3 {
+            tb.process_file(&uri, &src, Some(k));
+            assert!(
+                tb.twin_tables.contains_key(uri.as_str()),
+                "{fixture} fell back on kick {k}: {:?}",
+                tb.twin_fallback_reason(uri.as_str()),
+            );
+            assert_eq!(
+                tb.twin_fallback_reason(uri.as_str()),
+                None,
+                "{fixture} is twin-owned but recorded a fallback reason on kick {k}",
+            );
+        }
+        assert!(
+            !logs(&tb).iter().any(|l| l.contains("hdl-check-gate")),
+            "{fixture}: hdl-check-gate should no longer be reachable: {:?}",
+            logs(&tb),
+        );
 
-    let rb = backend_hdl(Engine::Reference);
-    rb.process_file(&uri, &src, Some(2));
-    assert_eq!(errwarn(&tb, &uri), errwarn(&rb, &uri), "sticky-demoted file diverged from the reference");
+        let rb = backend_hdl(Engine::Reference);
+        rb.process_file(&uri, &src, Some(2));
+        // Parity is compared on a **fresh** twin backend with a single kick:
+        // `CapturingClient::publish_diagnostics` accumulates (it pushes, and
+        // `errwarn` reads every entry for the URI), so the 3-kick backend above
+        // would report each warning 6× against the reference's 2×.  The
+        // ownership loop above is what needed the repeated kicks.
+        let pb = backend_hdl(Engine::Twin);
+        pb.process_file(&uri, &src, Some(2));
+        assert_eq!(
+            errwarn(&pb, &uri),
+            errwarn(&rb, &uri),
+            "{fixture} diverged from the reference",
+        );
+        if must_warn {
+            // Without this the parity assertion above is satisfied by two empty
+            // sets — exactly the blind spot the removed gate traded against.
+            assert!(
+                !errwarn(&rb, &uri).is_empty(),
+                "{fixture} must carry check warnings for this test to see under-reporting",
+            );
+        }
+    }
 }
 

@@ -1452,7 +1452,51 @@ adder_proof 的 didOpen 帧约 24 KB，是演示工作区里唯一越过该阈�
 **教训**：本机测试用的宿主是 **1.0.2**，线上是 **0.13.3**——同源同形但版本不同，
 "在 1.0.2 上 252 KB 也没问题"的对照实验不能推广到 0.13.3。排查传输层问题时应当
 先对齐宿主版本再下结论；同时"用户侧能稳定复现而我侧不能"应尽早转向**在用户环境
-里加观测**（这次的对话框/日志镜像），而不是继续在本机加探针。
+里加观测**（这次的对话框/日志缓冲镜像），而不是继续在本机加探针。
+
+---
+
+## 2026-09-23（HDL 自检闸撤除：孪生重新接管 21 个 HDL 示例）
+
+**背景**：审计发现 §2026-09-14 记的「全语料 23 例中 22 例由孪生拥有」已经**反转**：
+`tests/twin_engine_tests.rs` 的 `EXPECTED_FALLBACKS` 在 HEAD 上是 **22 条**（21×
+`hdl-check-gate` + 1× `untrusted-error`），即 30 个示例里只有 8 个真由孪生接管、
+HDL 文件 21/25 跑参考版。
+
+**根因是一次语义反转，不是孪生退化**：闸的判据是「声明了 module 且 **0 条 check
+警告**」，而 2026-09-22 `fafe143`（HDL 示例端口方向整改，警告 531→11）之后
+"干净 module"变成了常态。实测对照（`typort check` 逐个文件）：回落名单里的
+`alu`/`01`/`02`/`05`… 警告数全为 **0**；孪生接管的 `06`/`08`/`09`/`24`/`hdl_ops`
+全都**还带警告**——闸把写得干净的 HDL 文件系统性踢回参考版。
+
+**判定实验**：临时关掉闸跑全语料（`twin_ownership_and_warning_parity_on_all_examples`
+的 `EXPECTED_FALLBACKS` 清空），**29 个非 `untrusted-error` 文件全部转为孪生接管
+且 ERROR+WARNING parity 通过**。注意此前这条 parity 断言对 22 个回落文件是**空转的**
+（两版发布的都是参考版结果），所以"孪生少报警告"这个闸存在的理由从未被真正检验过。
+
+**两个被否掉的收窄方案**（都卡在"孪生读不回自己的 mutable 地面值"）：
+1. 读 `ModuleTree` 头部模块名——module 宏在 `checkModuleTree` 之后立刻
+   `create_global("ModuleTree", _prev)` 把树**还原**成进入前的空树
+   （`hdl-macros.typort:346/363`），kick 末读到的是 `ModuleTree.mk(0, nil)`；
+2. 读 `ModuleRegistry` 登记的模块名——表里存的是**卡住的
+   `Call(headModuleDef)`**（惰性求值未归约），不是 `ModuleDef` 构造值；
+   而且 `Vec.cons` 的槽序是 `[索引, 元素, 尾]`（GADT 索引槽在声明字段之前）。
+
+**改动**：`src/lib.rs` 的 `twin_elaborate` 删掉整个 HDL 自检闸块（连同其
+"0 警告不可分辨"的论证），替换为一段记录来龙去脉、证据与**残余风险**的注释；
+`twin_gate_distrusted` 管道与粘性早退**保留**作为重新开启点（现在无人置位）。
+测试侧：`EXPECTED_FALLBACKS` 收缩到只剩 `18-utils`（`untrusted-error`，与闸无关），
+原 `twin_hdl_gate_distrust_is_sticky` 改写为
+`twin_hdl_gate_removed_clean_module_files_stay_twin_owned`——钉「曾被回落的
+`23-verilog-compat` 与带警告的 `09-hierarchy` 在连续 3 个 kick 上都被孪生拥有、
+无回落原因、无 `hdl-check-gate` 日志，且与参考版 ERROR+WARNING 一致」。
+
+**残余风险（已接受并记录）**：语料之外的输入若让孪生漏报 HDL 警告，运行期不再有
+任何东西能发现。重新开启是六行改动（声明了 module + `checks` 为空 + 无 module 与
+错误 span 重叠 ⇒ 不信任）。
+
+**实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
+孪生接管面从 8/30 恢复到 29/30。
 
 
 
