@@ -16,7 +16,7 @@ use super::machine::v_u0;
 use super::prim::{Decls, Mutable};
 use super::spine::{MetaEntry, Spine};
 use super::syntax::{
-    SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, XCell, v_clo_of, v_lvl, v_lvl_of,
+    SumDataT, SumDataV, SumParamT, SumParamV, Tm, V, XCell, lvl2ix, v_clo_of, v_lvl, v_lvl_of,
     v_meta_of, v_pi_of, v_spine_of, v_tag, v_u_of, v_xcell_of,
 };
 use super::unify::declb_of;
@@ -114,7 +114,7 @@ pub(super) fn quote_iter<'a>(
                 match v_tag(v) {
                     0 => {
                         let l = v_lvl_of(v);
-                        done.push(bump.alloc(Tm::Var(level - l - 1)));
+                        done.push(bump.alloc(Tm::Var(lvl2ix(level, l))));
                     }
                     1 => {
                         if let Some(t) = memo.as_deref_mut().and_then(|m| m.get(&(v.0, level))) {
@@ -327,7 +327,7 @@ pub(super) fn quote_iter<'a>(
                             let idx_node = match v_tag(f0) {
                                 0 => {
                                     let l = v_lvl_of(f0);
-                                    Some(&*bump.alloc(Tm::Var(level - l - 1)) as &Tm<'a>)
+                                    Some(&*bump.alloc(Tm::Var(lvl2ix(level, l))) as &Tm<'a>)
                                 }
                                 // flex 链头：未解 meta 立即数（已解的在
                                 // force 里早已展开），共享单一 ?m 节点

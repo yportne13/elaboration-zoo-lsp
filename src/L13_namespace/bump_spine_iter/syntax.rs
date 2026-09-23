@@ -164,6 +164,31 @@ pub(crate) fn v_tag(v: V) -> u64 {
 pub(crate) fn v_lvl_of(v: V) -> u32 {
     (v.0 >> 3) as u32
 }
+
+/// 层级 → de Bruijn 索引：`level - l - 1`（参考版 `mod.rs::lvl2ix` 同口径，
+/// 孪生此前是 4 处裸减法——加固漏移植）。
+///
+/// 加 checked 运算与诊断消息的理由与参考版逐字相同：越界层级意味着一个
+/// **精化期变量泄漏进了 quote**（typeclass 实例 Nat 参数 bug —
+/// `docs/l13-typeclass-instance-nat-param-bug.md` — 与
+/// `docs/l13-known-bugs-2026-08.md` Bug 2）。裸减法在 debug 下 panic 成
+/// `attempt to subtract with overflow`、**release 下 wrap 成巨大 u32 让
+/// 下游行为随机**；`tests/l13_into_probe.rs` 的 v7 探针（hdl-ops 字段投影
+/// 形态）正好落在该路径上，两版因此报出不同形态的失败。
+#[inline]
+pub(crate) fn lvl2ix(level: u32, l: u32) -> u32 {
+    level
+        .checked_sub(l)
+        .and_then(|v| v.checked_sub(1))
+        .unwrap_or_else(|| {
+            panic!(
+                "lvl2ix: level {} is out of scope for a context of level {} — a dangling \
+                 elaboration-time variable leaked into a quote (see \
+                 docs/l13-typeclass-instance-nat-param-bug.md)",
+                l, level
+            )
+        })
+}
 #[inline]
 pub(crate) fn v_clo_of<'a>(v: V) -> &'a CloCell<'a> {
     // SAFETY: v 是 `v_clo` 写出的 tag 1 打包字（`ptr|1`）。`CloCell` 由

@@ -43,7 +43,7 @@ use super::spine::{
     Spine,
 };
 use super::syntax::{
-    LCons, PrCons, SumDataT, SumParamT, SumParamV, Tm, V, XCell, v_lit_ty, v_lvl, v_lvl_of,
+    LCons, PrCons, SumDataT, SumParamT, SumParamV, Tm, V, XCell, lvl2ix, v_lit_ty, v_lvl, v_lvl_of,
     v_meta, v_meta_of, v_pi, v_pi_of, v_tag, v_u, v_u_of, v_xcell, v_xcell_of,
 };
 use super::typeclass::{TraitDefEntry, TraitState, v_to_ref_val};
@@ -2556,7 +2556,7 @@ impl Machine {
         };
         // lvl2ix(lvl, x)：x 恒为局部层级（顶层声明不进环境——参考版
         // update_cxt 同款）
-        let x_prime: usize = (cxt.lvl - x - 1) as usize;
+        let x_prime: usize = lvl2ix(cxt.lvl, x) as usize;
         let n = env_len(cxt.env) as usize;
         let mut slots2: Vec<V> = Vec::with_capacity(n);
         env_collect(&self.defs, cxt.env, &mut slots2);
@@ -2696,7 +2696,7 @@ impl Machine {
                     // 观察面：局部变量使用处现场渲染（与参考版使用处同溝）；
                     // def_span = binder 源码 span（Names.by_lvl 元组携带，合成 binder 为零）。
                     self.push_hover(bump, cxt, x.to_span(), def_span, ty);
-                    let ix = cxt.lvl - blvl - 1;
+                    let ix = lvl2ix(cxt.lvl, blvl);
                     return Ok((bump.alloc(Tm::Var(ix)), ty));
                 }
                 if let Some(e) = cxt.decls.get(x.data.as_str()) {
