@@ -1542,23 +1542,45 @@ HDL 文件 21/25 跑参考版。
 | 口径 | 参考版 | 孪生 | 比值 |
 |---|---|---|---|
 | LSP kick（`process_file`，resident + 观察面 + 导出桥） | **~560 ms** | **~1641 ms** | **0.34×** |
-| bench（`bench_check_nf_bounded`，无观察面/无导出桥/无常驻） | 20.6 ms | **9.7 ms** | **2.1×（孪生更快）** |
 
-即**慢的不是 elaborator**（同一份 decls，bench 口径孪生快 2 倍），而是 LSP 专属
-机械。已做的分解（`bench_adder_proof_kick_cost_by_engine` + 临时探针，探针已撤）：
+已做的分解（`bench_adder_proof_kick_cost_by_engine` + 临时探针，探针已撤）：
 
 - 常驻压实：**~228 ms/kick**（`TYPORT_TWIN_NO_COMPACT=1` 对照：关压实后"正常"
   kick 降到 ~1420 ms，但每隔一 kick 重 prime 到 ~2700–3200 ms）；
 - 观察面（用户段 push）：**~216 ms/kick**（临时关 `machine.observe` 对照）；
 - 导出桥（`export` + `v_to_ref_val` 逐声明）：**~0 ms**；
-- 其余 **~1400 ms** 落在 `observe_user` 的声明循环内，未定位。计数探针显示该循环
+- 其余 **~1200 ms** 在 `observe_user` 的声明循环内，**未定位**。计数探针显示该循环
   每 kick 触发 **~2,900 次 `clone_cxt`**（首 kick 45,778 次），但 `clone_cxt` 本身
-  全是 Rc/`Copy` 克隆（`decls: Rc<Decls>`、`names_len=0`），所以那只是**工作形状**
-  而非成本本身——下一步需要采样器（`tools/attr_l13.sh` 那套）才能继续下切。
+  全是 Rc/`Copy` 克隆（`decls: Rc<Decls>`、`names_len=0`），属**工作形状**而非成本
+  本身——下一步需要采样器（`tools/attr_l13.sh` 那套）才能继续下切。
 
 参考基线：`docs/lsp-twin-wiring-2026-09.md` 的 2026-09-14 节记 adder_proof 为
 313–475 ms/kick（**test profile**，口径与本次 release 不同，不可直接比），
 `examples/adder_proof.typort` 自 2026-09-14 起未改动（`git log --since` 为空）。
+
+> **订正（同日）**：本条最初写有"bench 口径同文件孪生 9.7ms vs 参考 20.6ms ⇒ 慢的
+> 不是 elaborator"，**该论断作废**。`l13bench --file` 对 adder_proof **跑不到文件
+> 内容**：两版都在第 5 个文件声明 `def add_right_eq` 上以
+> `error name not in scope: calc` 同错早退（`NF-DIVERGE basic=0 fast=0`），那 9.7 /
+> 20.6 ms 只是 prelude-core 前缀的成本（`--with-prelude hdl` 同理，943/963 仍在
+> prelude 内）。所以目前**没有任何 bench 口径能测这个文件**——见下一节。
+
+### 工具缺口：`l13bench --file` 测不了几乎所有示例
+
+`l13bench --file X --with-prelude core|hdl` 是唯一的示例级两版互检入口，但它把
+prelude 与文件喂进 `bench_check_nf_bounded`（`fast::parse` 直连，不经宏累积），
+于是**用到 prelude 宏的文件在两版里同时早退**，`NF-DIVERGE basic=0 fast=0`：
+
+| 文件 | bench 结果 | 首个失败点（两版一致） |
+|---|---|---|
+| `examples/adder_proof.typort` | 0/0 | `def add_right_eq`: `error name not in scope: calc` |
+| `examples/hdl_ops.typort` | 0/0 | `println`: `error name not in scope: bitExtract` |
+| `examples/hdl/09-hierarchy.typort` | 0/0 | `println`: `error name not in scope: topWithAdder` |
+| `examples/hdl/23-verilog-compat.typort`、`25-verilog-reset.typort` | 0/0 | 同上类 |
+| `examples/typeclass_complex.typort` | **nf=48 ✓** | —（唯一能测的示例） |
+
+⇒ 30 个示例里只有 1 个能被 bench 口径测到。示例级性能/parity 目前**只能靠 LSP
+口径**（`twin_engine_bench`），而那是 2–3 分钟一趟的全量 sweep，无法单文件下钻。
 
 **实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
 孪生接管面从 8/30 恢复到 29/30。
