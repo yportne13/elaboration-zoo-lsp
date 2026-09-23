@@ -529,16 +529,29 @@ impl<'a> Compiler<'a> {
         // 构造子可达性 memo（下标对齐 constrs）：覆盖检查与臂前置过滤共用同一
         // 判定（决策树 filter 的 probe_memo 同口径）。
         let mut accessible: Vec<Option<bool>> = vec![None; constrs.len()];
+        // 覆盖检查索引：**每 match 编译一次**的 O(n) 构建（`CtorIndex` 注），
+        // 宽表下把「逐构造子 × 逐臂 × 从 `ctor_names[0]` 线性扫名」的 O(n³)
+        // 字符串比较降为 O(n + 臂数) 查表；窄表返回 `None`（不建表、零额外
+        // 分配），覆盖判定走原线性 `covers` 口径。
+        let ctor_ix = CtorIndex::build(&ctor_names);
+        let covered = ctor_ix.covered(arms, &ctor_names);
         // 覆盖检查：可达且无臂覆盖 → Unmatched（探测失败按「无结论」处理）。
         // 不可达（如 `Vec[A] zero` 上的 `cons`）不报——索引方程不可解即结构上
         // 不可能出现。
         for (i, ctor) in constrs.iter().enumerate() {
-            if 
-                Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i)
-             && !arms
-                .iter()
-                .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names))
-            {
+            // 与旧码同序：可达性对每个下标照常求值（结果被下面的臂前置过滤
+            // 复用），只有覆盖判定换成索引路径的布尔读（`None` 时 = 旧口径，
+            // 调用序列与成本逐点不变）。
+            if !Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i) {
+                continue;
+            }
+            let cov = match covered.as_ref() {
+                Some(c) => c[i],
+                None => arms
+                    .iter()
+                    .any(|(pat, _)| covers(pat, ctor.data.as_str(), &ctor_names)),
+            };
+            if !cov {
                 self.warnings.push(Warning::Unmatched(Pattern::Con(
                     ctor.clone(),
                     vec![Pattern::Any(empty_span(false), Either::Icit(Icit::Expl)); 999],
@@ -561,7 +574,7 @@ impl<'a> Compiler<'a> {
             // 该臂不可能匹配，静默跳过并按「从未走到」记 `Unreachable`；不
             // 让它落进 check_pm_final 报出假的特化错误。
             if let Pattern::Con(name, _, _) = pat {
-                if let Some(i) = ctor_names.iter().position(|c| c.as_str() == name.data.as_str()) {
+                if let Some(i) = ctor_ix.pos(name.data.as_str(), &ctor_names) {
                     if !
                         Self::ctor_accessible(mach, bump, cxt, typ, &constrs, &mut accessible, i)
                      {
@@ -624,7 +637,7 @@ impl<'a> Compiler<'a> {
                     continue;
                 }
             }
-            if is_catch_all(pat, &ctor_names) {
+            if is_catch_all(pat, &ctor_ix, &ctor_names) {
                 shadowed = true;
             }
         }
@@ -764,7 +777,8 @@ fn detail_to_raw(d: &PatternDetail) -> Raw {
     }
 }
 
-/// 臂是否（结构上）覆盖构造子 `ctor`（参考版 `covers` 同款）。
+/// 覆盖检查的**参考口径**（窄表路径；也是 `CtorIndex::covered` 的等价性
+/// 基准）：臂是否（结构上）覆盖构造子 `ctor`（参考版 `covers` 同款）。
 fn covers(pat: &Pattern, ctor: &str, ctor_names: &[SmolStr]) -> bool {
     match pat {
         Pattern::Any(..) => true,
@@ -776,11 +790,113 @@ fn covers(pat: &Pattern, ctor: &str, ctor_names: &[SmolStr]) -> bool {
 }
 
 /// 通配臂（参考版 `is_catch_all` 同款）。
-fn is_catch_all(pat: &Pattern, ctor_names: &[SmolStr]) -> bool {
+fn is_catch_all(pat: &Pattern, ctor_ix: &CtorIndex<'_>, ctor_names: &[SmolStr]) -> bool {
     match pat {
         Pattern::Any(..) => true,
         Pattern::Con(name, subs, _) => {
-            subs.is_empty() && !ctor_names.iter().any(|c| c.as_str() == name.data.as_str())
+            subs.is_empty() && !ctor_ix.contains(name.data.as_str(), ctor_names)
         }
+    }
+}
+
+/// 索引化的长度闸：构造子数 ≥ 此值才建 name→下标表。
+///
+/// 标定（S8/2026-09-23 实测）：线性口径每 match 的覆盖检查 ≈ Σᵢ i²/2 = n³/6
+/// 次字符串比较（n=2048 实测 1.43e9 次、1.4-2.4ns/次）；索引的固定成本 =
+/// 一次表分配 + n 次插入 + n 位布尔写（n×20-30ns 量级）。n=16 时线性
+/// ≈ 682 次比较（~1.5µs）对索引 ≈ 0.5µs——两者同量级且都在噪声里；阈值取
+/// 16 的目的是让窄表负载（struct/church/strchain/prelude-*，构造子数 2-8）
+/// **零额外分配**、路径与成本逐点不变（`covered` 返回 `None` 走原码）。
+/// 真正的收益区在 k≥9（n≥512，n³/6 ≥ 2.2e7 次比较）。
+const COVERS_INDEX_MIN_CTORS: usize = 16;
+
+/// 覆盖检查的构造子名索引：`ctor_names` 名 → 下标。`compile` 入口建一次
+/// （O(n) 插入），此后覆盖判定 / 臂前置过滤 / 通配臂判定都是 O(1) 查表。
+///
+/// **与被证伪形态的区别**（务必保持）：2026-09-23 轮 §4 证伪的是 `eval_aux`
+/// 值层分派臂表的**逐调用重建**索引——每分派全表触达、表宽超 L2 后强制
+/// 整表 DRAM 扫（we11 +9.1%、match k=12 +16~24%）。本索引挂在 `compile`
+/// 上，一个 match 表达式的编译只建一次（生命周期同 `case_spans_memo`），
+/// 不存在逐调用重建；构建本身 O(n) 且只碰一遍 `ctor_names`。
+enum CtorIndex<'x> {
+    /// 窄表，或构造子名单重名（正常 enum 语法不可达的防御形态）：不建表，
+    /// 查询全部走原线性口径（`covers`/`position`/逐串比较）。
+    Linear,
+    /// 名唯一且表宽达标：一次分配，查询 O(1)。
+    Indexed(FxHashMap<&'x str, u32>),
+}
+
+impl<'x> CtorIndex<'x> {
+    fn build(names: &'x [SmolStr]) -> Self {
+        if names.len() < COVERS_INDEX_MIN_CTORS {
+            return CtorIndex::Linear;
+        }
+        let mut map: FxHashMap<&'x str, u32> =
+            FxHashMap::with_capacity_and_hasher(names.len(), Default::default());
+        for (i, n) in names.iter().enumerate() {
+            // 重名 ⇒ 下标不唯一（`position` 取首个，而 `covers` 的
+            // `name == ctor` 会命中全部同名字）——退回线性口径保持逐点等价，
+            // 不做近似。
+            if map.insert(n.as_str(), i as u32).is_some() {
+                return CtorIndex::Linear;
+            }
+        }
+        CtorIndex::Indexed(map)
+    }
+
+    /// `name` 是否在构造子名单里（`is_catch_all` 的第二子句）。
+    fn contains(&self, name: &str, names: &[SmolStr]) -> bool {
+        match self {
+            CtorIndex::Linear => names.iter().any(|c| c.as_str() == name),
+            CtorIndex::Indexed(map) => map.contains_key(name),
+        }
+    }
+
+    /// `name` 在名单里的**首个**下标（臂前置过滤的 `position` 口径）。
+    fn pos(&self, name: &str, names: &[SmolStr]) -> Option<usize> {
+        match self {
+            CtorIndex::Linear => names.iter().position(|c| c.as_str() == name),
+            CtorIndex::Indexed(map) => map.get(name).map(|&i| i as usize),
+        }
+    }
+
+    /// 覆盖集：`covered[i]` = 存在臂覆盖 `ctor_names[i]`，宽表一遍
+    /// O(n + 臂数)。窄表返回 `None`（调用方走原 `covers` 线性口径）。
+    ///
+    /// 等价性论证（旧外层循环对每个下标 i 求 `∃臂 covers(pat, ctor_i)`）：
+    /// `covers(Con(name,_), ctor_i)` = 「`name` 不在 `ctor_names` 里」∨
+    /// 「`name == ctor_i`」——前件与 i 无关，可整体提出（查不到名 ⇒ 该臂
+    /// 覆盖**全部**下标，`all = true`）；名唯一时后件恰命中它自己的下标 j
+    /// （命中别的 i 需要两个不同下标同串，即重名——`build` 已回退 `Linear`）。
+    /// `Any` 臂覆盖全部。于是 `covered[i] = ∃臂: all ∨ map[name] = i` 与逐 i
+    /// 调用 `covers` 逐点相等：布尔或的取值与臂遍历序无关，每个 i 的取值只
+    /// 依赖「是否有这样的臂」，与旧码每个 i 独立求 `any` 的结果一一对应。
+    /// 调用方仍按 i 升序 push 警告 ⇒ 警告集合与顺序都不变。
+    fn covered(&self, arms: &[(Pattern, Raw)], names: &[SmolStr]) -> Option<Vec<bool>> {
+        let map = match self {
+            CtorIndex::Linear => return None,
+            CtorIndex::Indexed(map) => map,
+        };
+        let mut covered = vec![false; names.len()];
+        let mut all = false;
+        for (pat, _) in arms {
+            match pat {
+                Pattern::Any(..) => {
+                    all = true;
+                    break;
+                }
+                Pattern::Con(name, _, _) => match map.get(name.data.as_str()) {
+                    Some(&j) => covered[j as usize] = true,
+                    None => {
+                        all = true;
+                        break;
+                    }
+                },
+            }
+        }
+        if all {
+            covered.iter_mut().for_each(|b| *b = true);
+        }
+        Some(covered)
     }
 }
