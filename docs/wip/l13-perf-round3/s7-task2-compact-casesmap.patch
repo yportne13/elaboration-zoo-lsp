@@ -1,0 +1,49 @@
+diff --git a/src/L13_namespace/bump_spine_iter/compact.rs b/src/L13_namespace/bump_spine_iter/compact.rs
+index e82f632..322c1e1 100644
+--- a/src/L13_namespace/bump_spine_iter/compact.rs
++++ b/src/L13_namespace/bump_spine_iter/compact.rs
+@@ -49,6 +49,13 @@ struct Copier<'o, 'n> {
+     namemap: FxHashMap<usize, Rc<Names>>,
+     smap: FxHashMap<usize, Rc<MetaSnap<'static>>>,
+     setmap: FxHashMap<usize, Rc<FxHashSet<SmolStr>>>,
++    /// match 分支表按**旧切片 (指针, 长度)** memo（`match_tm_cases`）。与
++    /// `tmap`/`xmap` 同构：同一份 `cases` 会被每个共享它的卡住
++    /// `XCell::Match`/`Tm::Match` 引用，XCell 图与 Tm 图两条路径也会各到达
++    /// 一次，不 memo 就对同一份分支表深拷 k 次。长度进键是为了排除"同一
++    /// 起始地址、不同长度"的子切片别名（空切片全部退化成同一个悬挂指针，
++    /// 但内容同为"空"，命中无害）。
++    casesmap: FxHashMap<(usize, usize), &'n [(PatternDetail, &'n Tm<'n>)]>,
+     strs: FxHashMap<usize, &'n str>,
+ }
+ 
+@@ -71,6 +78,7 @@ impl<'o, 'n> Copier<'o, 'n> {
+             namemap: FxHashMap::default(),
+             smap: FxHashMap::default(),
+             setmap: FxHashMap::default(),
++            casesmap: FxHashMap::default(),
+             strs: FxHashMap::default(),
+         }
+     }
+@@ -317,12 +325,21 @@ impl<'o, 'n> Copier<'o, 'n> {
+         n
+     }
+ 
++    /// 深拷一份 match 分支表，按旧切片指针 memo（见 `casesmap` 字段注释）。
++    /// 旧切片在整趟压实内不可变（旧 arena 到本趟结束才释放），深拷结果是它
++    /// 的纯函数，故命中即复用同一份新切片，把 k 次坍缩成 1 次。
+     fn match_tm_cases(
+         &mut self,
+         cases: &'o [(PatternDetail, &'o Tm<'o>)],
+     ) -> &'n [(PatternDetail, &'n Tm<'n>)] {
++        let key = (cases.as_ptr() as usize, cases.len());
++        if let Some(r) = self.casesmap.get(&key) {
++            return r;
++        }
+         let b = self.new;
+-        b.alloc_slice_fill_iter(cases.iter().map(|(p, t)| (p.clone(), self.tm(t))))
++        let r = b.alloc_slice_fill_iter(cases.iter().map(|(p, t)| (p.clone(), self.tm(t))));
++        self.casesmap.insert(key, r);
++        r
+     }
+ 
+     // ── 环境 / 链 ─────────────────────────────────────────────────────────

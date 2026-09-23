@@ -1,0 +1,294 @@
+diff --git a/src/L13_namespace/bump_spine_iter/eval.rs b/src/L13_namespace/bump_spine_iter/eval.rs
+index 3ae9acd..ee165d1 100644
+--- a/src/L13_namespace/bump_spine_iter/eval.rs
++++ b/src/L13_namespace/bump_spine_iter/eval.rs
+@@ -243,6 +243,69 @@ pub(super) enum W<'a> {
+     },
+ }
+ 
++/// CallAsm 臂实参求值草稿栈池（S8 内存轮）：原为每个 CallAsm 工作项现开
++/// `argv/w2/v2/i2` 四个小 Vec（首块 cap 4，S3 逐点栈定位的分配源之一）。
++/// LIFO 借还，池热后零分配；纪律与论证同 `quote::quote_sub_take/put`
++/// （取时 clear、还栈前 clear ⇒ 池内条目恒空；`W<'a>` 带生命周期 ⇒ 用
++/// `'static` 代存，`V`/`Icit`/`(V, Icit)` 无生命周期参数，直接存放）。
++thread_local! {
++    static EVAL_SUB_POOL: RefCell<Vec<(Vec<W<'static>>, Vec<V>, Vec<Icit>, Vec<(V, Icit)>)>> =
++        RefCell::new(Vec::new());
++}
++
++/// 池长上限（= 同时在飞的嵌套 eval 深度高水位）。
++const EVAL_SUB_POOL_MAX: usize = 64;
++/// 单条容量上限（元素数）：超过即丢弃，不常驻大缓冲。
++const EVAL_SUB_CAP_MAX: usize = 1024;
++
++/// 借一组 CallAsm 草稿栈（LIFO；池空 ⇒ 全空 Vec，语义同原 `Vec::new()`）。
++fn eval_sub_take<'a>() -> (Vec<W<'a>>, Vec<V>, Vec<Icit>, Vec<(V, Icit)>) {
++    let (mut w, mut v, mut i, mut argv) = EVAL_SUB_POOL
++        .with(|p| p.borrow_mut().pop())
++        .unwrap_or_default();
++    w.clear();
++    v.clear();
++    i.clear();
++    argv.clear();
++    // SAFETY：'static 仅是**存放**口径——池内条目在还栈前与取栈后都 clear，
++    // 池里只有容量、没有任何 `'a` 值；`W<'a>` 与 `W<'static>` 布局逐位相同。
++    unsafe { (std::mem::transmute::<Vec<W<'static>>, Vec<W<'a>>>(w), v, i, argv) }
++}
++
++/// 归还一组 CallAsm 草稿栈（先 clear 再入池）。
++fn eval_sub_put<'a>(
++    mut w: Vec<W<'a>>,
++    mut v: Vec<V>,
++    mut i: Vec<Icit>,
++    mut argv: Vec<(V, Icit)>,
++) {
++    w.clear();
++    v.clear();
++    i.clear();
++    argv.clear();
++    if w.capacity() > EVAL_SUB_CAP_MAX
++        || v.capacity() > EVAL_SUB_CAP_MAX
++        || i.capacity() > EVAL_SUB_CAP_MAX
++        || argv.capacity() > EVAL_SUB_CAP_MAX
++    {
++        return;
++    }
++    EVAL_SUB_POOL.with(|p| {
++        let mut p = p.borrow_mut();
++        if p.len() < EVAL_SUB_POOL_MAX {
++            // SAFETY：同上——条目此刻为空，池里不留 `'a` 引用。
++            p.push(unsafe {
++                (
++                    std::mem::transmute::<Vec<W<'a>>, Vec<W<'static>>>(w),
++                    v,
++                    i,
++                    argv,
++                )
++            });
++        }
++    });
++}
++
+ /// 双栈迭代 eval（L06 版 + L11 变体：Decl 表查名、带类型的 Prim 五路
+ /// 分派、投影的 panic 语义、match 的编译期选择与卡住停等）。
+ #[allow(clippy::too_many_arguments)]
+@@ -606,24 +669,23 @@ v = vapp1(
+             W::CallAsm { name, args, env } => {
+                 let body = vals.pop().expect("eval 栈：CallAsm 缺体值");
+                 if v_tag(body) == 7 && matches!(v_xcell_of(body), XCell::Match { .. }) {
+-                    // 实参项在捕获 env 下求值（独立草稿栈——eval_iter 入口
+-                    // 清空 work/vals/icits）
+-                    let mut argv: Vec<(V, Icit)> = Vec::with_capacity(args.len());
+-                    let mut w2: Vec<W<'a>> = Vec::new();
+-                    let mut v2: Vec<V> = Vec::new();
+-                    let mut i2: Vec<Icit> = Vec::new();
++                    // 实参项在捕获 env 下求值（独立草稿栈——借 `eval_sub_take`
++                    // 的池：eval_iter 入口清空 work/vals/icits，故这里的草稿栈
++                    // 与本帧自身的工作栈刻意分离）
++                    let (mut sw, mut sv, mut si, mut sargv) = eval_sub_take();
+                     for (t, i) in args.iter() {
+                         let av = eval_iter(
+-                            bump, spine, &mut w2, &mut v2, &mut i2, defs, metas, decl, mutable,
++                            bump, spine, &mut sw, &mut sv, &mut si, defs, metas, decl, mutable,
+                             env, t,
+                         );
+-                        argv.push((av, *i));
++                        sargv.push((av, *i));
+                     }
+                     vals.push(v_xcell(bump.alloc(XCell::Call {
+                         name,
+-                        args: bump.alloc_slice_copy(&argv),
++                        args: bump.alloc_slice_copy(&sargv),
+                         body,
+                     })));
++                    eval_sub_put(sw, sv, si, sargv);
+                 } else {
+                     vals.push(body);
+                 }
+diff --git a/src/L13_namespace/bump_spine_iter/force.rs b/src/L13_namespace/bump_spine_iter/force.rs
+index 4439873..17d4f32 100644
+--- a/src/L13_namespace/bump_spine_iter/force.rs
++++ b/src/L13_namespace/bump_spine_iter/force.rs
+@@ -17,7 +17,7 @@ use super::parser::syntax::Icit;
+ use super::env::{env_ext, env_len};
+ use super::eval::{eval_iter, W};
+ use super::prim::{prim_exec, Decls, Mutable, PrimId};
+-use super::quote::quote_iter;
++use super::quote::{quote_iter, quote_sub_put, quote_sub_take};
+ use super::spine::{Entry, HK_DECL, HK_FLEX, MetaEntry, Spine};
+ use super::syntax::{
+     SumDataV, Tm, V, XCell, v_clo_of, v_meta_of, v_spine_of, v_tag, v_xcell, v_xcell_of,
+@@ -153,13 +153,16 @@ pub(super) fn vapp1<'a>(
+             }
+             XCell::Match { scrutinee, env, cases } => {
+                 // splice：每个分支体追 `App(body, quote_l(u), i)`；quote 用
+-                // 独立任务栈（quote_iter 自清）。
++                // 独立任务栈——借 `quote.rs` 的 LIFO 池（S8：原为
++                // `&mut Vec::new()` 对，每次 splice 一对新小 Vec；池热后零分配，
++                // 取值/还值纪律见 `quote_sub_take` 注）。
+                 let l = env_len(*env);
++                let (mut st, mut sd) = quote_sub_take();
+                 let u_tm = quote_iter(
+                     bump,
+                     spine,
+-                    &mut Vec::new(),
+-                    &mut Vec::new(),
++                    &mut st,
++                    &mut sd,
+                     work,
+                     vals,
+                     icits,
+@@ -171,6 +174,7 @@ pub(super) fn vapp1<'a>(
+                     a,
+                     None,
+                 );
++                quote_sub_put(st, sd);
+                 let new_case_vec: Vec<(PatternDetail, &'a Tm<'a>)> = cases
+                     .iter()
+                     .map(|(p, b)| {
+diff --git a/src/L13_namespace/bump_spine_iter/quote.rs b/src/L13_namespace/bump_spine_iter/quote.rs
+index 012f733..bae84f4 100644
+--- a/src/L13_namespace/bump_spine_iter/quote.rs
++++ b/src/L13_namespace/bump_spine_iter/quote.rs
+@@ -84,6 +84,74 @@ pub(super) enum QJob<'a> {
+ /// 口径）。
+ pub(super) type QuoteMemo<'a> = FxHashMap<(u64, u32), &'a Tm<'a>>;
+ 
++/// 嵌套 quote 草稿栈池（S8 内存轮；S3 逐点栈定位的头号分配源）：quote.rs 的
++/// 三个嵌套调用点（Nat 类型项 / Match 分支体 / Match scrutinee）与 force.rs
++/// 的 Match splice 点原为 `&mut Vec::new()` 对——每次嵌套调用一对新小 Vec
++/// （首块 cap 4 × 8B = 32B，church 每轮 8269 个）。改为 **LIFO 池**：借一对、
++/// 还一对，池热后零分配（纪律同 `TRAIT_METAS_SNAP_POOL`；差异只在元素带
++/// `'a`，故池用 `'static` 代存，见 `quote_sub_take` 的 SAFETY 注）。
++///
++/// 为什么不是「本帧复用一对」（已实测证伪，2026-09-23）：每个嵌套调用都开
++/// 新帧、且多数帧只做一次嵌套调用，帧内复用不减少任何一次分配（`l06l13mem`
++/// 计数逐项不变）；而池是**跨帧**复用——嵌套链退栈后缓冲回池，下一棵子树
++/// 直接用，只有「同时在飞」的深度条数会被新建。
++///
++/// 取值/还值纪律（不可省）：
++/// - **取时 clear**、**还栈前 clear**：池内条目恒为空 ⇒ 池里从不真正持有
++///   短生命周期引用（`'static` 只是存放口径，与 `unify_stack`/`QUOTE_NAT_TM`
++///   同款论证）；
++/// - 池长与单条容量都有上限：异常形态退化为「借不到就新建」，不常驻膨胀。
++thread_local! {
++    static QUOTE_SUB_POOL: RefCell<Vec<(Vec<QJob<'static>>, Vec<&'static Tm<'static>>)>> =
++        RefCell::new(Vec::new());
++}
++
++/// 池长上限（= 同时在飞的嵌套 quote 深度高水位；超出即丢弃还栈条目）。
++const QUOTE_SUB_POOL_MAX: usize = 64;
++/// 单条容量上限（元素数）：超过即丢弃（quote 草稿栈实测只在 cap 4 量级，
++/// 大缓冲不值得常驻）。
++const QUOTE_SUB_CAP_MAX: usize = 1024;
++
++/// 借一对嵌套 quote 草稿栈（LIFO；池空 ⇒ 空 Vec，语义同原 `Vec::new()`）。
++pub(super) fn quote_sub_take<'a>() -> (Vec<QJob<'a>>, Vec<&'a Tm<'a>>) {
++    let (mut tasks, mut done) = QUOTE_SUB_POOL
++        .with(|p| p.borrow_mut().pop())
++        .unwrap_or_default();
++    tasks.clear();
++    done.clear();
++    // SAFETY：'static 仅是**存放**口径——池内条目在还栈前与取栈后都 clear，
++    // 池里只有容量、没有任何 `'a` 值；`QJob<'a>`/`&'a Tm<'a>` 与 `'static`
++    // 变体布局逐位相同（生命周期不参与布局）。同 `unify_stack`/
++    // `TWIN_DECLB_CACHE`/`QUOTE_NAT_TM` 的既有纪律。
++    unsafe {
++        (
++            std::mem::transmute::<Vec<QJob<'static>>, Vec<QJob<'a>>>(tasks),
++            std::mem::transmute::<Vec<&'static Tm<'static>>, Vec<&'a Tm<'a>>>(done),
++        )
++    }
++}
++
++/// 归还一对草稿栈（先 clear 再入池，见上纪律）。
++pub(super) fn quote_sub_put<'a>(mut tasks: Vec<QJob<'a>>, mut done: Vec<&'a Tm<'a>>) {
++    tasks.clear();
++    done.clear();
++    if tasks.capacity() > QUOTE_SUB_CAP_MAX || done.capacity() > QUOTE_SUB_CAP_MAX {
++        return;
++    }
++    QUOTE_SUB_POOL.with(|p| {
++        let mut p = p.borrow_mut();
++        if p.len() < QUOTE_SUB_POOL_MAX {
++            // SAFETY：同上——条目此刻为空，池里不留 `'a` 引用。
++            p.push(unsafe {
++                (
++                    std::mem::transmute::<Vec<QJob<'a>>, Vec<QJob<'static>>>(tasks),
++                    std::mem::transmute::<Vec<&'a Tm<'a>>, Vec<&'static Tm<'static>>>(done),
++                )
++            });
++        }
++    });
++}
++
+ /// 任务栈 quote（L06 版 + LiteralType/LiteralIntro/Prim/Obj/Sum/SumCase/
+ /// Match 臂；L09：tag 0 的大下标直通、tag 3 带层级）。
+ #[allow(clippy::too_many_arguments)]
+@@ -151,11 +219,12 @@ pub(super) fn quote_iter<'a>(
+                             }) {
+                                 Some(t) => t,
+                                 None => {
++                                    let (mut st, mut sd) = quote_sub_take();
+                                     let t = quote_iter(
+                                         bump,
+                                         spine,
+-                                        &mut Vec::new(),
+-                                        &mut Vec::new(),
++                                        &mut st,
++                                        &mut sd,
+                                         work,
+                                         vals,
+                                         icits,
+@@ -167,6 +236,7 @@ pub(super) fn quote_iter<'a>(
+                                         nat_ty,
+                                         None,
+                                     );
++                                    quote_sub_put(st, sd);
+                                     QUOTE_NAT_TM.with(|c| {
+                                         // SAFETY：'static 仅是存放口径，条目
+                                         // 指向当轮 bump，轮界随
+@@ -252,11 +322,12 @@ pub(super) fn quote_iter<'a>(
+                                     bump, spine, work, vals, icits, defs, metas, &declb, mutable,
+                                     env2, b,
+                                 );
++                                let (mut st, mut sd) = quote_sub_take();
+                                 let q = quote_iter(
+                                     bump,
+                                     spine,
+-                                    &mut Vec::new(),
+-                                    &mut Vec::new(),
++                                    &mut st,
++                                    &mut sd,
+                                     work,
+                                     vals,
+                                     icits,
+@@ -268,16 +339,18 @@ pub(super) fn quote_iter<'a>(
+                                     tv,
+                                     None,
+                                 );
++                                quote_sub_put(st, sd);
+                                 qc.push(((*p).clone(), q));
+                             }
+                             let cs: &'a [(PatternDetail, &'a Tm<'a>)] =
+                                 bump.alloc_slice_fill_iter(qc);
+                             // scrutinee 用真实表（调用方的 level 下正确）
++                            let (mut st, mut sd) = quote_sub_take();
+                             let sq = quote_iter(
+                                 bump,
+                                 spine,
+-                                &mut Vec::new(),
+-                                &mut Vec::new(),
++                                &mut st,
++                                &mut sd,
+                                 work,
+                                 vals,
+                                 icits,
+@@ -289,6 +362,7 @@ pub(super) fn quote_iter<'a>(
+                                 *scrutinee,
+                                 None,
+                             );
++                            quote_sub_put(st, sd);
+                             done.push(bump.alloc(Tm::Match(sq, cs)));
+                         }
+                     },

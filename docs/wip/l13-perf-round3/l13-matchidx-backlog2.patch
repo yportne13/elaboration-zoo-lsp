@@ -1,0 +1,238 @@
+diff --git a/src/L13_namespace/bump_spine_iter/eval.rs b/src/L13_namespace/bump_spine_iter/eval.rs
+index 3ae9acd..8991e22 100644
+--- a/src/L13_namespace/bump_spine_iter/eval.rs
++++ b/src/L13_namespace/bump_spine_iter/eval.rs
+@@ -5,15 +5,21 @@
+ //! 子模式递归走单臂助手 `eval_aux_one`（不再每步 bump 构造 1 元臂表 +
+ //! 深克隆子模式）。大表 Con 臂索引（同节候选）经 A/B 证伪回退：逐调用
+ //! 重建索引本身要全表一遍触达，宽表超 L2 后反劣化（wide_enum k=11
+-//! +9%），且小收益不稳（k=9 两窗口 -8%/-0.7%）。
++//! +9%），且小收益不稳（k=9 两窗口 -8%/-0.7%）。**正解落地（本轮
++//! backlog #2）**：`cases` 属 bump 内不可变 `Tm::Match` 节点，(切片地址,
++//! 长度) 在一代 bump 内唯一——按其 **per-node 懒建一次** 分派索引
++//! （[`MatchIdx`]），同代跨调用复用；窄表（< [`CON_INDEX_MIN_ARMS`] 臂）
++//! 不进表，分派路径零改动。
+ 
+ use bumpalo::Bump;
++use rustc_hash::FxHashMap;
+ use std::cell::RefCell;
++use std::rc::Rc;
+ 
+ use super::parser::syntax::Icit;
+ 
+ use super::env::{env_ext, env_nth, EMPTY_ENV, CloCell, Env, PiCell};
+-use super::force::{force, vapp1};
++use super::force::{force, vapp1, ReclaimOnClear, SPINE_SHRINK_MIN_ENTRIES};
+ use super::prim::{def_needs_replay, nat_step_value, Decls, Mutable};
+ use super::spine::{meta_val_of, MetaEntry, Spine};
+ use super::syntax::{
+@@ -27,6 +33,119 @@ use super::PatternDetail;
+ // index 制 + 原生 Nat O(1) 分派）
+ // --------------------------------------------------------------------------------
+ 
++// 宽表 match 的 per-node 分派索引（perf-l13-round-2026-09-23 §7 backlog #2）
++// --------------------------------------------------------------------------------
++
++/// 建表下限（臂数）：低于它的 match（Nat 二臂、prelude 常规数臂表）不进
++/// [`MATCH_IDX`]——`eval_aux` 只多一次长度比较，其余逐字原路径（窄表零
++/// 回归的保护闸）。wide_enum k=4（16 臂）起已受益：其三个 match 节点每轮
++/// 各被分派 2^12~2^13 次，一次建表摊销极快。
++const CON_INDEX_MIN_ARMS: usize = 16;
++/// 稠密表浪费闸：Con 臂构造子序号上限 ≥ 8×臂数视为稀疏（如只匹配某宽
++/// enum 尾部构造子的窄 match），不建稠密 `first` 表——防 `max_idx` 巨大
++/// 时 `vec![NONE_ARM; max_idx + 1]` 分配炸裂；此闸同时兜住 `constr_idx`
++/// 理论上的 `u32::MAX`（≥8×len 恒成立，提前返回不做 +1）。稀疏负结果以
++/// 空 `first` 哨兵缓存（`fallback` 位仍索引），不会每次分派重付建表扫描。
++const CON_INDEX_SPARSE_FACTOR: usize = 8;
++/// 臂位哨兵：无首个同 idx 臂 / 链尾 / 无 Any-Bind 兜底。
++const NONE_ARM: u32 = u32::MAX;
++
++/// per-`Tm::Match` 节点的分派索引。键 = (cases 切片地址, 长度)：切片属
++/// bump 内不可变节点，一代 bump 内单调分配、地址不复用，故键唯一且内容
++/// 恒定；轮界（每个 `bump.reset()` 入口，含 `compact_resident` 换 arena）
++/// 随 [`match_idx_clear`] 清空——下一代地址复用不会产生假命中（与
++/// FORCE_MEMO 同款失效纪律，见 force.rs）。vapp1 对卡住 Match 的 splice
++/// 会产出新切片 = 新键，按需重建（splice 本身就是 O(arms) 全表触达）。
++///
++/// 与原两遍扫描**逐点等价**（首匹配语义）：
++/// - 第一遍只试 `constr_idx == index` 的 Con 臂、按出现序——`first[c]` →
++///   `next[arm]` → … 恰是该序列的链表（**重复构造器臂**、子模式失配后
++///   继续试同 idx 下一臂的语义都保序）；不同 idx 的臂在原实现里只是被
++///   `constr_idx == index` 比较跳过（无副作用），跳过不改变行为。
++/// - 第二遍只取**首个** Any/Bind 臂 = `fallback`（一次 position 扫描的
++///   预计算）。
++/// - `first` 为空 = 「够宽但无 Con 臂 / 稀疏」的负结果哨兵：第一遍走原
++///   线性扫描，第二遍仍用 `fallback`。
++struct MatchIdx {
++    /// constr_idx → 该 idx 的首个 Con 臂位（稠密，0..=max_idx）。
++    first: Vec<u32>,
++    /// 臂位 → 同 constr_idx 的下一臂位（NONE_ARM = 链尾）。
++    next: Vec<u32>,
++    /// 首个 Any/Bind 臂位（NONE_ARM = 无兜底臂）。
++    fallback: u32,
++}
++
++thread_local! {
++    /// cases 键 → 索引。值 `Rc`：分派点取句柄（一次 refcount）后即释放
++    /// borrow，无重入问题；轮界清空即释放两条 Vec。
++    static MATCH_IDX: RefCell<FxHashMap<(usize, usize), Rc<MatchIdx>>> =
++        RefCell::new(FxHashMap::default());
++}
++
++/// 轮界清空（挂在 force.rs `force_memo_clear` 的汇聚点：bench / run /
++/// prelude / kick / compact 各 bump 边界必经，继承其完整失效纪律）。
++/// 容量过 [`SPINE_SHRINK_MIN_ENTRIES`]（1<<16）还桶——14 表归还档同款
++/// 纪律：键 16B + Rc 句柄 8B，1<<16 槽 ≈ 2MB 空桶才值得还；稳态条目数
++/// = 宽 match 节点数（个位到百位级），远低于阈值，常态只 `clear` 复用。
++pub(super) fn match_idx_clear() {
++    MATCH_IDX.with(|m| {
++        let _ = m.borrow_mut().reclaim(SPINE_SHRINK_MIN_ENTRIES);
++    });
++}
++
++/// 建表（已过 [`CON_INDEX_MIN_ARMS`] 闸）。逆序一遍填链：`first[ci]` 在
++/// 逆序扫描里始终是「已见的最小臂位」，先取出作 `next[pos]` 再覆盖——
++/// 终态 `first[ci]` = 首臂、链沿臂位升序，无需辅助 map。
++fn build_match_idx(cases: &[(PatternDetail, &Tm)]) -> MatchIdx {
++    let fallback = cases
++        .iter()
++        .position(|(p, _)| matches!(p, PatternDetail::Any(..) | PatternDetail::Bind(_)))
++        .map_or(NONE_ARM, |pos| pos as u32);
++    let mut max_ci = 0u32;
++    let mut any_con = false;
++    for (pat, _) in cases {
++        if let PatternDetail::Con(ci, ..) = pat {
++            any_con = true;
++            if *ci > max_ci {
++                max_ci = *ci;
++            }
++        }
++    }
++    if !any_con || max_ci as usize >= CON_INDEX_SPARSE_FACTOR * cases.len() {
++        return MatchIdx { first: Vec::new(), next: Vec::new(), fallback };
++    }
++    let mut first = vec![NONE_ARM; max_ci as usize + 1];
++    let mut next = vec![NONE_ARM; cases.len()];
++    for (pos, (pat, _)) in cases.iter().enumerate().rev() {
++        if let PatternDetail::Con(ci, ..) = pat {
++            let slot = &mut first[*ci as usize];
++            next[pos] = *slot;
++            *slot = pos as u32;
++        }
++    }
++    MatchIdx { first, next, fallback }
++}
++
++/// 查/懒建 cases 的分派索引。窄表（< [`CON_INDEX_MIN_ARMS`] 臂）返回
++/// `None` 且**不触碰 TLS**——窄表路径唯一新增成本是一次长度比较。
++/// 命中（含负结果哨兵）以 `Rc` 句柄返回，本代内同节点后续分派全部
++/// 复用，不再扫臂表建索引（上轮证伪的「逐调用重建」形态不复存在）。
++fn match_idx_of(cases: &[(PatternDetail, &Tm)]) -> Option<Rc<MatchIdx>> {
++    if cases.len() < CON_INDEX_MIN_ARMS {
++        return None;
++    }
++    let key = (cases.as_ptr() as usize, cases.len());
++    MATCH_IDX.with(|m| {
++        let mut m = m.borrow_mut();
++        if let Some(rc) = m.get(&key) {
++            return Some(rc.clone());
++        }
++        let rc = Rc::new(build_match_idx(cases));
++        m.insert(key, rc.clone());
++        Some(rc)
++    })
++}
++
+ /// 构造子头分类：Some((index, datas))；`Nat(k>0)` 的参数表按需 bump 构造
+ /// （`eval_aux` / [`eval_aux_one`] 共用）。
+ fn classify_head<'a>(bump: &'a Bump, v: V) -> Option<(u32, &'a [SumDataV<'a>])> {
+@@ -79,9 +198,12 @@ fn classify_force_head<'a>(
+ ///   head 本身不 prepend）；子模式失配 → 试下臂。头 `u32::MAX`（非构造
+ ///   子）直接跳过第一遍——Con 臂的 `constr_idx` 是 enum 内 case 序号，
+ ///   恒 ≠ `u32::MAX`（参考版的 `u32::MAX` 精确匹假阳，见 L13-code-review
+-///   N7，实际不可达）。
++///   N7，实际不可达）。宽表（≥ [`CON_INDEX_MIN_ARMS`] 臂）走 per-node
++///   懒建的分派索引（[`match_idx_of`]），只触达同 idx 臂链；窄表线性扫
++///   描原路径。
+ /// - 第二遍（兜底）：首个 Any/Bind 模式命中，**原始 head**（非 force 后的
+-///   值）prepend 进 env——参考版 `cxt.prepend(heads.clone())` 同款。
++///   值）prepend 进 env——参考版 `cxt.prepend(heads.clone())` 同款；索引
++///   存在时直接跳 `fallback` 臂位。
+ #[allow(clippy::too_many_arguments)]
+ pub(super) fn eval_aux<'a>(
+     bump: &'a Bump,
+@@ -96,22 +218,50 @@ pub(super) fn eval_aux<'a>(
+ ) -> Option<(&'a Tm<'a>, Env<'a>)> {
+     let (index, datas): (u32, &[SumDataV<'a>]) =
+         classify_force_head(bump, spine, defs, metas, decl, mutable, head);
++    // 宽表（≥CON_INDEX_MIN_ARMS 臂）才查/建 per-node 索引；窄表 None =
++    // 下方两遍与旧实现逐字相同（零回归保护）。
++    let midx = match_idx_of(cases);
+     // 第一遍：Con(index) 相等（子模式 zip 失配 → 试下一臂）。头非构造子
+     // （u32::MAX）直接跳过——Con 臂的 constr_idx 恒 ≠ u32::MAX（见上）。
+     if index != u32::MAX {
+-        for (pat, body) in cases.iter() {
+-            if let PatternDetail::Con(constr_idx, _, subs, _) = pat {
+-                if *constr_idx == index {
++        if let Some(idx) = midx.as_ref().filter(|i| !i.first.is_empty()) {
++            // 索引路径：沿 first[index] → next[·] 链只触达同 idx 的 Con 臂
++            // （出现序），宽表分派 O(命中臂数) 而非 O(全表)。
++            let mut arm = idx.first.get(index as usize).copied().unwrap_or(NONE_ARM);
++            while arm != NONE_ARM {
++                let (pat, body) = &cases[arm as usize];
++                if let PatternDetail::Con(constr_idx, _, subs, _) = pat {
++                    debug_assert_eq!(*constr_idx, index, "MatchIdx 链混入异 idx 臂");
+                     if let Some(hit) = try_con_arm(
+                         bump, spine, defs, metas, decl, mutable, datas, env, subs, *body,
+                     ) {
+                         return Some(hit);
+                     }
+                 }
++                arm = idx.next[arm as usize];
++            }
++        } else {
++            for (pat, body) in cases.iter() {
++                if let PatternDetail::Con(constr_idx, _, subs, _) = pat {
++                    if *constr_idx == index {
++                        if let Some(hit) = try_con_arm(
++                            bump, spine, defs, metas, decl, mutable, datas, env, subs, *body,
++                        ) {
++                            return Some(hit);
++                        }
++                    }
++                }
+             }
+         }
+     }
+     // 第二遍：首个 Any/Bind（绑定原始 head）
++    if let Some(idx) = &midx {
++        if idx.fallback != NONE_ARM {
++            let (_, body) = &cases[idx.fallback as usize];
++            return Some((body, env_ext(bump, env, head)));
++        }
++        return None;
++    }
+     for (pat, body) in cases.iter() {
+         match pat {
+             PatternDetail::Any(..) | PatternDetail::Bind(_) => {
+diff --git a/src/L13_namespace/bump_spine_iter/force.rs b/src/L13_namespace/bump_spine_iter/force.rs
+index 4439873..b93b481 100644
+--- a/src/L13_namespace/bump_spine_iter/force.rs
++++ b/src/L13_namespace/bump_spine_iter/force.rs
+@@ -390,12 +390,16 @@ pub fn twin_mem_stats() -> serde_json::Value {
+ /// `QUOTE_NAT_TM` 的条目是当轮 bump 句柄、`STUCK_DECL_INTERN` 的值同理——
+ /// 本函数是每个 `bump.reset()` 轮入口的唯一汇聚点（bench / run / prelude /
+ /// kick 各入口均配对调用），挂这里即继承其完整失效纪律。
++/// `MATCH_IDX`（eval.rs 宽表 match 的 per-node 分派索引，键 = cases 切片
++/// 地址）同款：compact_resident 换 arena 后旧地址可被回收复用，存留即
++/// 假命中。
+ pub(super) fn force_memo_clear() {
+     let snap = FORCE_MEMO.with(|m| m.borrow_mut().reclaim(CACHE_SHRINK_MIN_ENTRIES));
+     twin_stat_record(&TWIN_STAT_FORCE, snap);
+     TWIN_DECLB_CACHE.with(|c| *c.borrow_mut() = None);
+     QUOTE_NAT_TM.with(|c| *c.borrow_mut() = None);
+     STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
++    super::eval::match_idx_clear();
+ }
+ 
+ #[inline]

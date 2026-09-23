@@ -1,0 +1,52 @@
+diff --git a/src/L13_namespace/bump_spine_iter/machine.rs b/src/L13_namespace/bump_spine_iter/machine.rs
+index 72a7576..b5d5e1c 100644
+--- a/src/L13_namespace/bump_spine_iter/machine.rs
++++ b/src/L13_namespace/bump_spine_iter/machine.rs
+@@ -2343,8 +2343,10 @@ impl Machine {
+         match t {
+             Raw::App(t, u, arg) => {
+                 let t_span = t.to_span();
+-                let t_raw = (**t).clone();
+-                let u_raw = (**u).clone();
++                // 同 `infer_expr`：两处 Raw 深克隆只服务非 Π 头的 Scala-apply
++                // 回退，挪进该分支（S6 打包项 #1，语义零变）。`let (i, t, tty)`
++                // 会遮蔽 `t`/`u`，故先留 Raw 借用。
++                let (t_src, u_src): (&Raw, &Raw) = (t, u);
+                 let (i, t, tty) = match arg {
+                     Either::Name(name) => {
+                         let infered = self.infer_expr(bump, cxt, t)?;
+@@ -2374,6 +2376,8 @@ impl Machine {
+                 } else {
+                     // Scala 式 apply（参考版同款）：非 Π 头先试 `expr.apply(arg)`
+                     let meta_before = self.metas.len();
++                    let t_raw = t_src.clone();
++                    let u_raw = u_src.clone();
+                     let apply_obj = Raw::Obj(Box::new(t_raw), Some(empty_span(SmolStr::new("apply"))));
+                     let apply_call = Raw::App(Box::new(apply_obj), Box::new(u_raw), Either::Icit(i));
+                     if let Ok(result) = self.infer_expr(bump, cxt, &apply_call) {
+@@ -3135,9 +3139,13 @@ impl Machine {
+                 // 实参分派：命名 → insertUntilName 后按 Impl 应用；
+                 // 位置 Impl → 直接应用；位置 Expl → 先 insert_t
+                 let t_span = t.to_span();
+-                let t_raw = (**t).clone();
+-                let tuple_head = is_tuple_mk_head(&t_raw); // 观察面：提前计算（t_raw 后续可能被移动）
+-                let u_raw = (**u).clone();
++                // 观察面：只读头形即可（`is_tuple_mk_head` 沿 App 头脊走，不改内容）
++                // ——旧实现为此先整树克隆 `t_raw`。两处 Raw 深克隆都只服务下方
++                // 「非 Π 头」的 Scala-apply 回退，故整体挪进该分支：Π 头（常规
++                // 路径）不再付两次 O(term) 克隆（S6 打包项 #1，语义零变）。
++                // `let (i, t, tty)` 会遮蔽 `t`/`u`，故先留 Raw 借用给该分支用。
++                let tuple_head = is_tuple_mk_head(t);
++                let (t_src, u_src): (&Raw, &Raw) = (t, u);
+                 let (i, t, tty) = match arg {
+                     Either::Name(name) => {
+                         let infered = self.infer_expr(bump, cxt, t)?;
+@@ -3171,6 +3179,8 @@ impl Machine {
+                     // 成 `expr.apply(arg)`（icit 保持），失败截断 metas 再走
+                     // 合成 Π
+                     let meta_before = self.metas.len();
++                    let t_raw = t_src.clone();
++                    let u_raw = u_src.clone();
+                     let apply_obj = Raw::Obj(
+                         Box::new(t_raw),
+                         Some(empty_span(SmolStr::new("apply"))),
