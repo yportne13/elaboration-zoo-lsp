@@ -1565,22 +1565,46 @@ HDL 文件 21/25 跑参考版。
 > 20.6 ms 只是 prelude-core 前缀的成本（`--with-prelude hdl` 同理，943/963 仍在
 > prelude 内）。所以目前**没有任何 bench 口径能测这个文件**——见下一节。
 
-### 工具缺口：`l13bench --file` 测不了几乎所有示例
+### 工具缺口：`l13bench --file` 测不了几乎所有示例 —— **已修（2026-09-23）**
 
 `l13bench --file X --with-prelude core|hdl` 是唯一的示例级两版互检入口，但它把
-prelude 与文件喂进 `bench_check_nf_bounded`（`fast::parse` 直连，不经宏累积），
-于是**用到 prelude 宏的文件在两版里同时早退**，`NF-DIVERGE basic=0 fast=0`：
+prelude 与文件喂进 `bench_check_nf_bounded` 时，**用户文件是用 `fast::parse`
+（空宏表）解析的**，prelude 累积出来的导出宏没有传下去。于是凡用到 prelude 宏的
+文件在两版里同时早退，`NF-DIVERGE basic=0 fast=0`：
 
-| 文件 | bench 结果 | 首个失败点（两版一致） |
+| 文件（修复前） | bench 结果 | 首个失败点（两版一致） |
 |---|---|---|
 | `examples/adder_proof.typort` | 0/0 | `def add_right_eq`: `error name not in scope: calc` |
 | `examples/hdl_ops.typort` | 0/0 | `println`: `error name not in scope: bitExtract` |
 | `examples/hdl/09-hierarchy.typort` | 0/0 | `println`: `error name not in scope: topWithAdder` |
 | `examples/hdl/23-verilog-compat.typort`、`25-verilog-reset.typort` | 0/0 | 同上类 |
-| `examples/typeclass_complex.typort` | **nf=48 ✓** | —（唯一能测的示例） |
+| `examples/typeclass_complex.typort` | **nf=48 ✓** | —（当时唯一能测的示例） |
 
-⇒ 30 个示例里只有 1 个能被 bench 口径测到。示例级性能/parity 目前**只能靠 LSP
-口径**（`twin_engine_bench`），而那是 2–3 分钟一趟的全量 sweep，无法单文件下钻。
+⇒ 30 个示例里只有 1 个能被 bench 口径测到；示例级性能/parity 只能靠 2–3 分钟一趟
+的 LSP 全量 sweep，无法单文件下钻。
+
+**修法**（`src/bin/l13bench.rs`）：`parse_prelude` 改为返回整个 `PreludeParse`
+（其 `macros` 字段本就为此准备，见 `parse_prelude_files` 的注释），`--file` 口径
+改用 `parser_with_macros(&preprocess(&src), files.len() as u32, &p.macros)` 解析
+用户文件（path_id 取 prelude 文件数，与加载器逐文件递增口径一致）。
+
+**修复后立刻可测**（`--with-prelude core` / `hdl`）：
+
+| 文件 | 结果 |
+|---|---|
+| `theorem_proving.typort` | **nf=42 ✓**（两版一致） |
+| `hdl_ops.typort` | **nf=219 ✓** |
+| `09-hierarchy.typort` | **nf=1 ✓** |
+| `adder_proof.typort` | **NF-DIVERGE basic=26307 fast=26357** ← 新发现，见下 |
+
+> **新发现（待查）**：`adder_proof` 两版都跑完后，末 def 的 nf 尺寸稳定地差
+> **50 个节点**（26307 vs 26357，`--rounds 2` 两次一致），而同口径下
+> `theorem_proving` / `hdl_ops` / `09-hierarchy` 逐字节一致。`bench_check_nf_bounded`
+> 只回尺寸不回项，所以"这 50 个节点是语义不同的范式、还是可互相转换的表示差异
+> （如原生 Nat 折叠与 succ 链的边界）"**尚未判定**。LSP 侧看不到它：诊断 parity
+> 只比 ERROR+WARNING，INFORMATION（println 渲染）被显式排除。下一步用
+> `l13_fast_parity` 的 `assert_parity` 口径（Ok 输出逐字节）加一条 adder_proof
+> 用例即可定性。
 
 **实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
 孪生接管面从 8/30 恢复到 29/30。

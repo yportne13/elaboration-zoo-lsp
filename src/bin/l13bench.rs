@@ -152,11 +152,11 @@ const HDL: &[(&str, &str)] = &[
 
 /// 按参考版 prelude 加载口径解析一串文件（库化：[`L13_namespace::
 /// parse_prelude_files`]，与参考加载器 / 孪生 prelude 轮三方同源）。
-fn parse_prelude(
-    files: &[(&str, &str)],
-) -> (Vec<Decl>, Vec<(String, usize)>, Option<String>, Vec<usize>) {
-    let p = L13_namespace::parse_prelude_files(files);
-    (p.decls, p.counts, p.failed, p.nat_after)
+///
+/// 返回整个 `PreludeParse`（而非只取四个字段）：`--file` 口径需要它的
+/// `macros` 去解析用户文件，否则用到 prelude 宏的示例两版同错早退。
+fn parse_prelude(files: &[(&str, &str)]) -> L13_namespace::PreludeParse {
+    L13_namespace::parse_prelude_files(files)
 }
 
 
@@ -444,12 +444,13 @@ fn run(cli: Cli) {
     if let Some(path) = &cli.file {
         let src = std::fs::read_to_string(path).expect("--file: cannot read");
         let label = path.rsplit(['/', '\\']).next().unwrap_or(path).to_string();
-        let Ok(decls) = fast::parse(&src, 0) else {
+        // 无 prelude 口径：没有可继承的宏表，按老路 parse。
+        let Ok(bare_decls) = fast::parse(&src, 0) else {
             eprintln!("parse failed: {label}");
             return;
         };
         if cli.with_prelude == "none" {
-            bench_one(&label, &decls, &[], &cli, &want);
+            bench_one(&label, &bare_decls, &[], &cli, &want);
             return;
         }
         // 装载 prelude 后跑（--with-prelude core|hdl）：示例级两版互检
@@ -465,12 +466,32 @@ fn run(cli: Cli) {
                 return;
             }
         };
-        let (mut all, _counts, failed, nat_after) = parse_prelude(&files);
+        let p = parse_prelude(&files);
+        let (mut all, failed, nat_after) = (p.decls, p.failed, p.nat_after);
         if let Some(f) = &failed {
             eprintln!("prelude PARSE-FAILED at {f}");
             return;
         }
-        all.extend(decls);
+        // **用户文件必须带 prelude 累积的宏表解析**（2026-09-23 修）：旧实现用
+        // `fast::parse(&src, 0)`（空宏表），凡用到 prelude 导出宏的示例——`calc`
+        // (adder_proof)、`when`/`switch`/`module` (hdl_ops、09-hierarchy、23/25
+        // 等)——两版都在**同一个文件声明**上以 `error name not in scope: <宏名>`
+        // 早退，`bench_one` 只报 `NF-DIVERGE basic=0 fast=0`，示例级互检与性能
+        // 都成了空转（30 个示例里只有 typeclass_complex 能测）。`PreludeParse`
+        // 的 `macros` 字段本就为此准备（见 `parse_prelude_files` 的注释）。
+        // path_id 取 prelude 文件数，与加载器的逐文件递增口径一致。
+        let user_decls = match parser_with_macros(
+            &L13_namespace::preprocess(&src),
+            files.len() as u32,
+            &p.macros,
+        ) {
+            Some((decls, _errs, _exports, _exp)) => decls,
+            None => {
+                eprintln!("parse failed: {label}");
+                return;
+            }
+        };
+        all.extend(user_decls);
         bench_one(&label, &all, &nat_after, &cli, &want);
         return;
     }
@@ -525,18 +546,19 @@ fn run(cli: Cli) {
                 if workload == "prelude-hdl" {
                     files.extend_from_slice(HDL);
                 }
-                let (decls, counts, failed, nat_after) = parse_prelude(&files);
-                for (n, c) in &counts {
+                let p = parse_prelude(&files);
+                for (n, c) in &p.counts {
                     println!("   parsed {n}: {c} decls");
                 }
-                if let Some(f) = &failed {
+                if let Some(f) = &p.failed {
                     println!("   PARSE-FAILED at {f}");
                 }
-                bench_one(workload, &decls, &nat_after, &cli, &want);
+                bench_one(workload, &p.decls, &p.nat_after, &cli, &want);
             }
             "examples-hdl" => {
                 // 核心 prelude + 每个 example 单独一段（避免宏跨文件冲突）
-                let (prelude_decls, _c, _f, core_nat) = parse_prelude(CORE);
+                let core_p = parse_prelude(CORE);
+                let (prelude_decls, core_nat) = (core_p.decls, core_p.nat_after);
                 let mut examples: Vec<(String, String)> = Vec::new();
                 for e in [
                     include_str!("../../examples/hdl/01-basics.typort"),
