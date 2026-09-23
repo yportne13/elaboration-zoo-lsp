@@ -49,6 +49,21 @@ static SZ: [AtomicU64; NB] = [const { AtomicU64::new(0) }; NB];
 /// （`std::env::var` 自身要分配 → 重入全局分配器 → 死锁）。默认 `usize::MAX`
 /// = 关闭。
 static TRACE_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// `L06L13MEM_TRACE_EXACT=<size>`：只追踪该精确大小的分配（归因特定桶）。
+/// `usize::MAX` = 不过滤（同 `TRACE_MIN` 的哨兵；size 不可能是 MAX）。
+///
+/// 与 `TRACE_SKIP`/`TRACE_MAX` 一样，**也必须在 `init_trace()` 里读**——原先
+/// 它们是在 `trace_big` 内用 `OnceLock` 惰性读环境变量的：第一次读发生在
+/// **分配器路径内部**（`bump_sz` → `trace_big`），而 Windows 上
+/// `std::env::var` 自己就要分配（`Vec<u16>` 键缓冲，键名 20-23 字符 ≈ 42-46B，
+/// ≥ 低阈值 TRACE_MIN）→ 该分配重入 `bump_sz` → 再进 `trace_big` →
+/// `OnceLock::get_or_init` 同线程重入自旋 ⇒ `L06L13MEM_TRACE_MIN<=46` 时
+/// 死锁，size-32/40 口径的栈根本采不到。三处惰性读全部改为下面的原子量。
+static TRACE_EXACT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// `L06L13MEM_TRACE_SKIP=<n>`：跳过前 n 次匹配（越过 parse 段的同尺寸分配）。
+static TRACE_SKIP: AtomicUsize = AtomicUsize::new(0);
+/// `L06L13MEM_TRACE_MAX=<n>`：最多打印 n 条栈（默认 100）。
+static TRACE_MAX: AtomicUsize = AtomicUsize::new(100);
 /// 相位闸：`trace_arm()` 置 true 后才输出调用栈（测量循环在 parse 结束后
 /// 置位，engine 段开始时再置位——把 parse 段噪声挡在栈外）。
 static TRACE_ARM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -62,7 +77,14 @@ fn trace_arm() {
     TRACE_ARM.store(true, Ordering::Relaxed);
 }
 
+fn env_usize(key: &str) -> Option<usize> {
+    std::env::var(key).ok().and_then(|v| v.parse::<usize>().ok())
+}
+
 fn init_trace() {
+    // 先**读完**全部环境变量（此刻 `TRACE_MIN` 仍是 MAX，分配器路径完全不
+    // 追踪），再一次性落原子量：这样 init_trace 里的分配（`env::var` 自己的
+    // `Vec<u16>`/`String`）不可能走进 `trace_big` 的任何一条路径。
     let min = std::env::var("L06L13MEM_TRACE_MIN")
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
@@ -72,7 +94,22 @@ fn init_trace() {
         } else {
             usize::MAX
         });
+    let exact = env_usize("L06L13MEM_TRACE_EXACT").filter(|&n| n > 0);
+    let skip = env_usize("L06L13MEM_TRACE_SKIP");
+    let max = env_usize("L06L13MEM_TRACE_MAX").filter(|&n| n > 0);
+
     TRACE_MIN.store(min, Ordering::Relaxed);
+    // 下面三项原先在 `trace_big` 内惰性读（`OnceLock` + `env::var`），会在
+    // 分配器路径里再分配而重入 → 低阈值下死锁；见 `TRACE_EXACT` 的注释。
+    if let Some(n) = exact {
+        TRACE_EXACT.store(n, Ordering::Relaxed);
+    }
+    if let Some(n) = skip {
+        TRACE_SKIP.store(n, Ordering::Relaxed);
+    }
+    if let Some(n) = max {
+        TRACE_MAX.store(n, Ordering::Relaxed);
+    }
 }
 
 #[inline]
@@ -98,10 +135,10 @@ fn bump_sz(size: usize) {
 
 fn trace_big(size: usize) {
     // `L06L13MEM_TRACE_EXACT=<size>`：只追踪该精确大小的分配（归因特定桶）。
-    if let Some(exact) = trace_exact() {
-        if size != exact {
-            return;
-        }
+    // 原子量（`init_trace` 里读）：分配器路径内不得读环境变量，见常量注释。
+    let exact = TRACE_EXACT.load(Ordering::Relaxed);
+    if exact != usize::MAX && size != exact {
+        return;
     }
     if !TRACE_ARM.load(Ordering::Relaxed) {
         return; // 相位闸未开：parse 段噪声不抽样
@@ -114,31 +151,18 @@ fn trace_big(size: usize) {
     }
     let _guard = TraceGuard;
     // `L06L13MEM_TRACE_SKIP=<n>`：跳过前 n 次匹配（越过 parse 段的同尺寸分配）。
-    let skip = trace_skip();
+    let skip = TRACE_SKIP.load(Ordering::Relaxed);
     static N: AtomicUsize = AtomicUsize::new(0);
     let i = N.fetch_add(1, Ordering::Relaxed);
     if i < skip {
         return;
     }
-    let cap: usize = std::env::var("L06L13MEM_TRACE_MAX")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100);
+    let cap: usize = TRACE_MAX.load(Ordering::Relaxed);
     if i - skip >= cap {
         return;
     }
     let bt = std::backtrace::Backtrace::capture();
     eprintln!("[big alloc] {size} B\n{bt}");
-}
-
-fn trace_exact() -> Option<usize> {
-    use std::sync::OnceLock;
-    static E: OnceLock<Option<usize>> = OnceLock::new();
-    *E.get_or_init(|| {
-        std::env::var("L06L13MEM_TRACE_EXACT")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-    })
 }
 
 /// 重入闸的 RAII 复位（含 panic 路径）。
@@ -148,17 +172,6 @@ impl Drop for TraceGuard {
     fn drop(&mut self) {
         IN_TRACE.store(false, Ordering::Relaxed);
     }
-}
-
-fn trace_skip() -> usize {
-    use std::sync::OnceLock;
-    static S: OnceLock<usize> = OnceLock::new();
-    *S.get_or_init(|| {
-        std::env::var("L06L13MEM_TRACE_SKIP")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(0)
-    })
 }
 
 unsafe impl GlobalAlloc for Counting {
