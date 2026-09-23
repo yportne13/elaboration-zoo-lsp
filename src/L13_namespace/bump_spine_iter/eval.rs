@@ -1,7 +1,11 @@
 //! eval：双栈迭代 eval（`W`/`eval_iter`）+ 运行时分支选择（`eval_aux`，
 //! 值层首匹配、SumCase 按构造子 index 制 + 原生 Nat O(1) 分派）。原
 //! bump_spine_iter.rs 的 "运行时分支选择" 与 "eval" 两节，逐行搬运
-//! （2026-09-23 拆分）。
+//! （2026-09-23 拆分）；同轮去冗余（perf-l13-round-2026-09-22 §3.2.3）：
+//! 子模式递归走单臂助手 `eval_aux_one`（不再每步 bump 构造 1 元臂表 +
+//! 深克隆子模式）。大表 Con 臂索引（同节候选）经 A/B 证伪回退：逐调用
+//! 重建索引本身要全表一遍触达，宽表超 L2 后反劣化（wide_enum k=11
+//! +9%），且小收益不稳（k=9 两窗口 -8%/-0.7%）。
 
 use bumpalo::Bump;
 use std::cell::RefCell;
@@ -23,13 +27,59 @@ use super::PatternDetail;
 // index 制 + 原生 Nat O(1) 分派）
 // --------------------------------------------------------------------------------
 
+/// 构造子头分类：Some((index, datas))；`Nat(k>0)` 的参数表按需 bump 构造
+/// （`eval_aux` / [`eval_aux_one`] 共用）。
+fn classify_head<'a>(bump: &'a Bump, v: V) -> Option<(u32, &'a [SumDataV<'a>])> {
+    if v_tag(v) != 7 {
+        return None;
+    }
+    match v_xcell_of(v) {
+        XCell::SumCase { index, datas, .. } => Some((*index, datas)),
+        XCell::Nat(k) if *k == 0 => Some((0, &[])),
+        XCell::Nat(k) => {
+            let inner = v_xcell(bump.alloc(XCell::Nat(k - 1)));
+            let ds: &'a [SumDataV<'a>] =
+                bump.alloc([SumDataV { name: "n", val: inner, icit: Icit::Expl }]);
+            Some((1, ds))
+        }
+        _ => None,
+    }
+}
+
+/// eval_aux 系的头部纪律：构造子头（SumCase / 原生 Nat）**不 force 直接
+/// 分派**（深链 O(n²) 规避）；非构造子头先 force 再分类，仍非构造子 →
+/// `u32::MAX`。force 的副作用（spine WHNF 回填等）无论后续臂形如何都保
+/// 留——与参考版逐句一致。
+#[allow(clippy::too_many_arguments)]
+fn classify_force_head<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'a>,
+    mutable: &RefCell<Mutable>,
+    head: V,
+) -> (u32, &'a [SumDataV<'a>]) {
+    match classify_head(bump, head) {
+        Some(x) => x,
+        None => {
+            let h2 = force(bump, spine, defs, metas, decl, mutable, head);
+            classify_head(bump, h2).unwrap_or((u32::MAX, &[]))
+        }
+    }
+}
+
 /// 按模式首匹配（参考版 `Compiler::eval_aux` 逐句）：
-/// - 构造子头（SumCase / 原生 Nat）**不 force 直接分派**（深链 O(n²) 规避）；
-///   非构造子头先 force 再分类，仍非构造子 → index = `u32::MAX`。
+/// - 构造子头（SumCase / 原生 Nat）**不 force 直接分派**（深链 O(n²) 规
+///   避）；非构造子头先 force 再分类，仍非构造子 → index = `u32::MAX`。
 /// - `Nat 0` → index 0（zero，无字段）；`Nat k>0` → index 1（succ，字段绑
 ///   `Nat(k-1)`——不建一元链）。
-/// - 第一遍：Con 模式 index 相等 → datas 与子模式 zip（zip 截断）逐个递归
-///   （每步单臂表，env 累积——head 本身不 prepend）；子模式失配 → 试下臂。
+/// - 第一遍：Con 模式 index 相等 → datas 与子模式 zip（zip 截断）逐个递
+///   归（**单臂助手** [`eval_aux_one`]，不再构造 1 元臂表，env 累积——
+///   head 本身不 prepend）；子模式失配 → 试下臂。头 `u32::MAX`（非构造
+///   子）直接跳过第一遍——Con 臂的 `constr_idx` 是 enum 内 case 序号，
+///   恒 ≠ `u32::MAX`（参考版的 `u32::MAX` 精确匹假阳，见 L13-code-review
+///   N7，实际不可达）。
 /// - 第二遍（兜底）：首个 Any/Bind 模式命中，**原始 head**（非 force 后的
 ///   值）prepend 进 env——参考版 `cxt.prepend(heads.clone())` 同款。
 #[allow(clippy::too_many_arguments)]
@@ -44,57 +94,19 @@ pub(super) fn eval_aux<'a>(
     env: Env<'a>,
     cases: &'a [(PatternDetail, &'a Tm<'a>)],
 ) -> Option<(&'a Tm<'a>, Env<'a>)> {
-    // 构造子头分类：Some((index, datas))；Nat(k>0) 的参数表按需 bump 构造
-    fn classify<'a>(bump: &'a Bump, v: V) -> Option<(u32, &'a [SumDataV<'a>])> {
-        if v_tag(v) != 7 {
-            return None;
-        }
-        match v_xcell_of(v) {
-            XCell::SumCase { index, datas, .. } => Some((*index, datas)),
-            XCell::Nat(k) if *k == 0 => Some((0, &[])),
-            XCell::Nat(k) => {
-                let inner = v_xcell(bump.alloc(XCell::Nat(k - 1)));
-                let ds: &'a [SumDataV<'a>] =
-                    bump.alloc([SumDataV { name: "n", val: inner, icit: Icit::Expl }]);
-                Some((1, ds))
-            }
-            _ => None,
-        }
-    }
-    let (index, datas): (u32, &[SumDataV<'a>]) = match classify(bump, head) {
-        Some(x) => x,
-        None => {
-            let h2 = force(bump, spine, defs, metas, decl, mutable, head);
-            match classify(bump, h2) {
-                Some((ix, ds)) => (ix, ds),
-                None => (u32::MAX, &[]),
-            }
-        }
-    };
-    // 第一遍：Con(index) 相等（子模式 zip 失配 → 试下一臂）
-    for (pat, body) in cases.iter() {
-        if let PatternDetail::Con(constr_idx, _, subs, _) = pat {
-            if *constr_idx == index {
-                let mut cur_body = *body;
-                let mut cur_env = env;
-                let mut ok = true;
-                for (d, sub) in datas.iter().zip(subs.iter()) {
-                    let arms1: &'a [(PatternDetail, &'a Tm<'a>)] =
-                        bump.alloc([(sub.clone(), cur_body)]);
-                    match eval_aux(bump, spine, defs, metas, decl, mutable, d.val, cur_env, arms1)
-                    {
-                        Some((b, e)) => {
-                            cur_body = b;
-                            cur_env = e;
-                        }
-                        None => {
-                            ok = false;
-                            break;
-                        }
+    let (index, datas): (u32, &[SumDataV<'a>]) =
+        classify_force_head(bump, spine, defs, metas, decl, mutable, head);
+    // 第一遍：Con(index) 相等（子模式 zip 失配 → 试下一臂）。头非构造子
+    // （u32::MAX）直接跳过——Con 臂的 constr_idx 恒 ≠ u32::MAX（见上）。
+    if index != u32::MAX {
+        for (pat, body) in cases.iter() {
+            if let PatternDetail::Con(constr_idx, _, subs, _) = pat {
+                if *constr_idx == index {
+                    if let Some(hit) = try_con_arm(
+                        bump, spine, defs, metas, decl, mutable, datas, env, subs, *body,
+                    ) {
+                        return Some(hit);
                     }
-                }
-                if ok {
-                    return Some((cur_body, cur_env));
                 }
             }
         }
@@ -109,6 +121,71 @@ pub(super) fn eval_aux<'a>(
         }
     }
     None
+}
+
+/// 单个 Con 臂的尝试：datas（头部字段值）与臂子模式 zip（zip 截断）逐个
+/// 递归（每步走单臂助手 [`eval_aux_one`]，env 累积——head 本身不
+/// prepend）；子模式失配 → None（= 试下一臂）。
+#[allow(clippy::too_many_arguments)]
+fn try_con_arm<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'a>,
+    mutable: &RefCell<Mutable>,
+    datas: &[SumDataV<'a>],
+    env: Env<'a>,
+    subs: &[PatternDetail],
+    body: &'a Tm<'a>,
+) -> Option<(&'a Tm<'a>, Env<'a>)> {
+    let mut cur_body = body;
+    let mut cur_env = env;
+    for (d, sub) in datas.iter().zip(subs.iter()) {
+        match eval_aux_one(bump, spine, defs, metas, decl, mutable, d.val, cur_env, sub, cur_body) {
+            Some((b, e)) => {
+                cur_body = b;
+                cur_env = e;
+            }
+            None => return None,
+        }
+    }
+    Some((cur_body, cur_env))
+}
+
+/// 单臂递归（`eval_aux` 递归"每步单臂表"的专用形态）：`pat` 命中 `head`
+/// 时返回 (体, 扩展 env)，None = 试下一臂。语义与把
+/// `[(pat.clone(), body)]` 喂给 [`eval_aux`] **逐点一致**，但省掉每
+/// (字段, 子模式) 一次的臂表 bump 分配 + `PatternDetail` 深克隆：
+/// - Con：同款头部纪律（classify/force 副作用保留），index 相等 →
+///   datas 与子模式 zip 递归（失配 → None）；非构造子头（`u32::MAX`）
+///   恒 miss。
+/// - Any/Bind：命中，绑**原始 head**（非 force 后的值）。
+#[allow(clippy::too_many_arguments)]
+fn eval_aux_one<'a>(
+    bump: &'a Bump,
+    spine: &mut Spine,
+    defs: &mut Vec<V>,
+    metas: &[MetaEntry],
+    decl: &Decls<'a>,
+    mutable: &RefCell<Mutable>,
+    head: V,
+    env: Env<'a>,
+    pat: &PatternDetail,
+    body: &'a Tm<'a>,
+) -> Option<(&'a Tm<'a>, Env<'a>)> {
+    // 头部纪律与 eval_aux 相同：Any/Bind 下 force 副作用也保留（1 元
+    // cases 递归同样会跑 classify/force）
+    let (index, datas) = classify_force_head(bump, spine, defs, metas, decl, mutable, head);
+    match pat {
+        PatternDetail::Any(..) | PatternDetail::Bind(_) => Some((body, env_ext(bump, env, head))),
+        PatternDetail::Con(constr_idx, _, subs, _) => {
+            if *constr_idx != index {
+                return None;
+            }
+            try_con_arm(bump, spine, defs, metas, decl, mutable, datas, env, subs, body)
+        }
+    }
 }
 
 // eval（双栈迭代 + 右链快速路径 + AppPruning 实参应用 + L09 变体）

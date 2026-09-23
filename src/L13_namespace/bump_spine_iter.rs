@@ -246,7 +246,7 @@ use syntax::LCons;
 #[allow(unused_imports)]
 pub(crate) use bench_src::{
     church_src, enum_src, gadt_src, match_src, moduletree_src, natadd_src, struct_src,
-    strchain_src,
+    strchain_src, wide_enum_src,
 };
 #[allow(unused_imports)]
 pub(crate) use compiler::{Compiler, Warning};

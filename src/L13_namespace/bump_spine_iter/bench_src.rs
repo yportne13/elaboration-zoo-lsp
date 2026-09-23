@@ -266,3 +266,50 @@ pub(crate) fn struct_src(k: u32) -> String {
 ", n - 1);
     s
 }
+
+/// 宽 enum 匹配负载：`2^k` 构造子的单 enum `W` + 两条深构造子链 + 三个
+/// 全表 match 折叠——`eval_aux` 值层分派臂表扫描的验证床（大表 Con 索引
+/// `CON_INDEX_MIN_ARMS` 的目标负载）：
+/// - `depth` + s 链（2^13 深，构造子循环取 `w1..w{2^k-1}`）：命中位随臂
+///   表均布（平均半表扫）。
+/// - `top` + r 链（2^12 深，全 `w{2^k-1}`）：命中在**末臂**（全表扫）。
+/// - `fall` + r 链：r 链构造子不在臂表（第一遍全 miss）+ Any 兜底在末
+///   臂（第一遍 + 兜底遍各扫一遍宽表）。
+///
+/// 语法与 `match`/`natadd` 同族（构造子应用括号形式 `w1 (s0)`）。
+pub(crate) fn wide_enum_src(k: u32) -> String {
+    let ctors = 1u32 << k;
+    let (chain_s, chain_r) = (1u64 << 13, 1u64 << 12);
+    let mut s = String::from("enum Nat {\n    zero\n    succ(x: Nat)\n}\n\nenum W {\n    w0\n");
+    for i in 1..ctors {
+        s += &format!("    w{i}(a: W)\n");
+    }
+    s += "}\n\ndef s0 : W = w0\n";
+    for i in 1..chain_s {
+        let j = (i % (ctors as u64 - 1)) + 1;
+        s += &format!("def s{i} : W = w{j} (s{})\n", i - 1);
+    }
+    s += "\ndef r0 : W = w0\n";
+    for i in 1..chain_r {
+        s += &format!("def r{i} : W = w{} (r{})\n", ctors - 1, i - 1);
+    }
+    s += "\ndef depth(x : W) : Nat =\n    match x {\n        case w0 => zero\n";
+    for i in 1..ctors {
+        s += &format!("        case w{i}(a) => succ (depth a)\n");
+    }
+    s += "    }\n\ndef top(x : W) : Nat =\n    match x {\n";
+    for i in 0..ctors - 1 {
+        s += &format!("        case w{i} => zero\n");
+    }
+    s += &format!("        case w{}(a) => succ (top a)\n    }}\n", ctors - 1);
+    s += "\ndef fall(x : W) : Nat =\n    match x {\n";
+    for i in 0..ctors - 1 {
+        s += &format!("        case w{i} => zero\n");
+    }
+    s += "        case _ => zero\n    }\n\n";
+    s += &format!("def total1 : Nat = depth s{}\n", chain_s - 1);
+    s += &format!("def total2 : Nat = top r{}\n", chain_r - 1);
+    s += &format!("def total3 : Nat = fall r{}\n", chain_r - 1);
+    s += "println total1\nprintln total2\nprintln total3\n";
+    s
+}

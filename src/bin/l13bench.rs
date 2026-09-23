@@ -477,7 +477,7 @@ fn run(cli: Cli) {
     let workloads: Vec<&str> = match cli.workload.as_str() {
         "all" => vec![
             "church", "natadd", "gadt", "strchain", "match", "enum", "struct", "moduletree",
-            "prelude-core", "prelude-core-show", "prelude-hdl", "examples-hdl",
+            "wide_enum", "prelude-core", "prelude-core-show", "prelude-hdl", "examples-hdl",
         ],
         w => vec![w],
     };
@@ -486,9 +486,12 @@ fn run(cli: Cli) {
         println!("== workload: {workload} ==");
         match workload {
             "church" | "natadd" | "gadt" | "strchain" | "match" | "enum" | "struct" | "moduletree"
-            | "universe" | "traitchain" | "macro" => {
+            | "wide_enum" | "universe" | "traitchain" | "macro" => {
                 let ks: Vec<u32> = if matches!(workload, "gadt" | "enum" | "moduletree") {
                     vec![9]
+                } else if workload == "wide_enum" {
+                    // 表宽轴 16/64/512/2048 臂；k>=13 单轮 >30s，勿入更大默认列
+                    vec![4, 6, 9, 11]
                 } else {
                     (9..=cli.max_k).collect()
                 };
@@ -501,6 +504,7 @@ fn run(cli: Cli) {
                         "match" => fast::match_src(k),
                         "struct" => fast::struct_src(k),
                         "moduletree" => fast::moduletree_src(),
+                        "wide_enum" => fast::wide_enum_src(k),
                         "universe" => universe_src(k),
                         "traitchain" => traitchain_src(k),
                         "macro" => macro_src(k),
