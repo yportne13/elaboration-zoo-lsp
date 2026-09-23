@@ -1512,6 +1512,15 @@ HDL 文件 21/25 跑参考版。
 另有 `twin_fallback_classes_are_exactly_the_known_set`：语料级钉住回落**类别集合**
 （此前只钉了逐文件归属，新增一个只在 `examples/` 之外触发的类别不会变红）。
 
+**这次撤除"没有"放大什么（推理，非实测）**：孪生接管文件不向参考域登记 trait
+实例与 inherent impl 的 `cxt.namespace` 条目（`twin_elaborate` 只合并 `cxt.decl`
+/ `type_map`，见 `src/lib.rs`）。接管面扩大后这一步是否变成问题？**跨文件两端都
+是参考版**——`twin_can_own` 拒绝任何带 `import` 或 `package` 的文件，所以 provider
+侧的实例/命名空间登记仍由参考版完成。唯一暴露面是"无 `package` 文件里声明的实例
+被另一个无 `import` 文件使用"，而后者本来就走 `symbol-defined-in-another-file`
+回落、视图本就不全。⇒ A3（孪生导出 `cxt.namespace`）仍是一个**真缺口**，但优先级
+低于 A2（把依赖文件喂进常驻孪生）。
+
 **实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
 孪生接管面从 8/30 恢复到 29/30。
 
