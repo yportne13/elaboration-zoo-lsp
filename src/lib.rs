@@ -264,7 +264,15 @@ impl Engine {
     /// reference engine, so a typo can never silently switch engines.  This is
     /// the general-purpose constructor's default ([`Backend::new`]) — the
     /// guard suites exercise the twin by setting the variable, while a bare
-    /// `cargo test` / `typort check` stays on the reference engine.
+    /// `cargo test` stays on the reference engine.
+    ///
+    /// **Not every CLI subcommand honours it**: `typort check` runs
+    /// [`Backend::on_change`], a reference-only pipeline with no `self.engine`
+    /// dispatch, so it constructs its backend with `Engine::Reference`
+    /// explicitly — setting the variable there would only pay the twin prelude
+    /// prime (~1.8–2.0 s) for no effect.  `typort emit` (via
+    /// [`Backend::process_file`]) and `typort stats` (which measures the twin
+    /// resident) do honour it.
     pub fn from_env() -> Engine {
         match std::env::var("TYPORT_LSP_ENGINE") {
             Ok(v) if v.eq_ignore_ascii_case("twin") => Engine::Twin,

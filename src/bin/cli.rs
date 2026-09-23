@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use elaboration_zoo_lsp::Backend;
+use elaboration_zoo_lsp::Engine;
 use elaboration_zoo_lsp::client::CliClient;
 use elaboration_zoo_lsp::TextDocumentItem;
 use lsp_types::Url;
@@ -643,7 +644,14 @@ fn run_check(files: Vec<String>, do_sample: bool) -> Result<(), Box<dyn Error + 
 
     let cli_client = CliClient::new();
     let source_map = cli_client.source_map.clone();
-    let backend = Backend::new(cli_client);
+    // `check` 是**纯参考版管线**：它走 `Backend::on_change`，而 `on_change`
+    // 自成一体的逐 decl `infer.infer(...)` 实现里没有 `self.engine` 分派——
+    // 孪生只在 `Backend::process_file`（LSP 分析循环与 `typort emit` 用）里
+    // 被调用。因此这里**显式**取参考版：否则 `TYPORT_LSP_ENGINE=twin` 会让
+    // `load_prelude` 白付一次孪生常驻 prime（实测 +1.8~2.0 s，3.4s → 5.4s）
+    // 而行为零变化。`stats` 仍走 `Backend::new`，因为孪生常驻的内存/缓存读数
+    // 正是它要量的东西。
+    let backend = Backend::new_with_engine(cli_client, Engine::Reference);
 
     // Load builtin prelude (core types, data structures, HDL primitives).
     backend.load_prelude();
@@ -740,10 +748,13 @@ fn run_stats(no_hdl: bool) -> Result<(), Box<dyn Error + Sync + Send>> {
             "pagefile_usage_bytes": pf,
             "pagefile_usage_mb": format!("{:.1}", pf as f64 / 1_048_576.0),
             "heap_histogram": heap_histogram,
-            // 引擎口径：LSP 默认跑孪生（`Engine::lsp_default`），而下面
-            // `infer_stats`/`backend_stats` 是参考版口径——孪生自己的缓存
-            // 容量/arena 分配量只有 `twin_mem_stats()` 报得出来。用
-            // `TYPORT_LSP_ENGINE=twin|reference` 切换本次统计的引擎。
+            // 引擎口径：`stats` 走 `Backend::new`（`Engine::from_env`），
+            // `TYPORT_LSP_ENGINE=twin` 时 `load_prelude` 会 prime 孪生常驻
+            // 检查点，`twin_mem_stats()` 因此有读数可报；而下面的
+            // `infer_stats`/`backend_stats` 恒为参考版口径（孪生的缓存容量/
+            // arena 分配量只有 `twin_mem_stats()` 报得出来）。
+            // 注意 `typort check` 不受该变量影响——它是纯参考版管线，见
+            // `run_check` 里的说明。
             "engine": format!("{:?}", backend.engine),
             "twin_mem_stats": elaboration_zoo_lsp::L13_namespace::twin_mem_stats(),
             "backend_stats": backend.backend_stats(),
