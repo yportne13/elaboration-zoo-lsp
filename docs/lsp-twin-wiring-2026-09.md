@@ -1521,6 +1521,45 @@ HDL 文件 21/25 跑参考版。
 回落、视图本就不全。⇒ A3（孪生导出 `cxt.namespace`）仍是一个**真缺口**，但优先级
 低于 A2（把依赖文件喂进常驻孪生）。
 
+### 实测：撤除前后的 examples 语料成本
+
+口径 `tests/twin_engine_bench.rs::bench_examples_per_file_by_engine`（release，
+每个 (文件, 引擎) 一个全新 Backend、一次 warmup + 5 次稳态 kick 取 min）。它量的是
+"该引擎拥有这个文件时的 kick 成本"，所以**已实现成本**要按当时实际归属求和：
+
+| | 参考版列合计 | 孪生列合计 | 已实现成本 | 相对"全参考版" |
+|---|---|---|---|---|
+| 撤除前（21 文件走参考版 + 8 走孪生 + 18-utils 走参考版） | — | — | **18,461 ms** | 0.93× |
+| 撤除后（29/30 走孪生 + 18-utils 走参考版） | 19,918 ms | 12,416 ms | **11,281 ms** | **0.57×** |
+
+⇒ 语料级每次 kick 从"基本没收益"变成 **1.64× 快**；HDL 主力文件 **2.7–4.1×**
+（`09-hierarchy` 4.10×、`05-bool` 3.71×、`03-bitwise` 3.58×、`13-adder-tree` 3.47×）。
+
+### 新增异常：`adder_proof` 在孪生侧慢 2.9×（已单独立项）
+
+同一个 sweep 里 `examples/adder_proof.typort` 是唯一"孪生远慢于参考版"的证明文件：
+
+| 口径 | 参考版 | 孪生 | 比值 |
+|---|---|---|---|
+| LSP kick（`process_file`，resident + 观察面 + 导出桥） | **~560 ms** | **~1641 ms** | **0.34×** |
+| bench（`bench_check_nf_bounded`，无观察面/无导出桥/无常驻） | 20.6 ms | **9.7 ms** | **2.1×（孪生更快）** |
+
+即**慢的不是 elaborator**（同一份 decls，bench 口径孪生快 2 倍），而是 LSP 专属
+机械。已做的分解（`bench_adder_proof_kick_cost_by_engine` + 临时探针，探针已撤）：
+
+- 常驻压实：**~228 ms/kick**（`TYPORT_TWIN_NO_COMPACT=1` 对照：关压实后"正常"
+  kick 降到 ~1420 ms，但每隔一 kick 重 prime 到 ~2700–3200 ms）；
+- 观察面（用户段 push）：**~216 ms/kick**（临时关 `machine.observe` 对照）；
+- 导出桥（`export` + `v_to_ref_val` 逐声明）：**~0 ms**；
+- 其余 **~1400 ms** 落在 `observe_user` 的声明循环内，未定位。计数探针显示该循环
+  每 kick 触发 **~2,900 次 `clone_cxt`**（首 kick 45,778 次），但 `clone_cxt` 本身
+  全是 Rc/`Copy` 克隆（`decls: Rc<Decls>`、`names_len=0`），所以那只是**工作形状**
+  而非成本本身——下一步需要采样器（`tools/attr_l13.sh` 那套）才能继续下切。
+
+参考基线：`docs/lsp-twin-wiring-2026-09.md` 的 2026-09-14 节记 adder_proof 为
+313–475 ms/kick（**test profile**，口径与本次 release 不同，不可直接比），
+`examples/adder_proof.typort` 自 2026-09-14 起未改动（`git log --since` 为空）。
+
 **实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
 孪生接管面从 8/30 恢复到 29/30。
 

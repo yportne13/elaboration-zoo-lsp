@@ -104,9 +104,50 @@ fn bench_kick_cost_by_engine() {
     }
 }
 
+/// Per-kick breakdown for `examples/adder_proof.typort`, both engines.
+///
+/// Added 2026-09-23 because the per-file sweep found this file at **0.36×**
+/// (twin 1607 ms vs reference 573 ms) while every other proof/HDL file is
+/// 1.5–4.9× *faster* on the twin.  Two things stand out in the sweep and this
+/// bench prints what the sweep's min-only output hides:
+///
+/// - `min` was *larger* than `first` (1607 vs 1450 ms) — the twin gets slower
+///   across kicks on this file, which is the signature of the resident
+///   compaction / re-prime path rather than of elaboration cost;
+/// - the 2026-09-14 wiring doc recorded adder_proof at ~278 ms/kick (313–475 ms
+///   after the in-place-compaction fix), so this is a ~6× regression since.
+///
+/// `TYPORT_KICK_PROBE=1` additionally prints the per-kick
+/// `restore(clones)=…ms loop+export=…ms` split (measured 225 ms + 1380 ms).
+#[test]
+#[ignore = "manual perf measurement; run with --release --ignored --nocapture"]
+fn bench_adder_proof_kick_cost_by_engine() {
+    let src = std::fs::read_to_string("examples/adder_proof.typort").unwrap();
+    let kicks = 8usize;
+    for eng in [Engine::Reference, Engine::Twin] {
+        let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
+        b.load_prelude();
+        let uri = Url::parse("file:///bench_adder.typort").unwrap();
+        let t0 = Instant::now();
+        b.process_file(&uri, &src, Some(0));
+        let first = t0.elapsed().as_secs_f64() * 1000.0;
+        let mut times = Vec::with_capacity(kicks);
+        for k in 0..kicks {
+            let t0 = Instant::now();
+            b.process_file(&uri, &src, Some(k as i32 + 1));
+            times.push(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        let min = times.iter().cloned().fold(f64::MAX, f64::min);
+        let max = times.iter().cloned().fold(0.0f64, f64::max);
+        println!(
+            "[BENCH-ADDER] {eng:?}: first={first:.0} ms | kicks=[{}] min={min:.0} max={max:.0}",
+            times.iter().map(|t| format!("{t:.0}")).collect::<Vec<_>>().join(", "),
+        );
+    }
+}
+
 /// Recursively collect every `.typort` under `dir`, sorted for stable output.
-fn collect_typort(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+fn collect_typort(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {    let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
