@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# tools/gate_l13.sh — L13 提交前快速门禁三件套（lib + parity 本体 + into_probe）。
+# tools/gate_l13.sh — L13 提交前门禁四件套（lib + parity 本体 + into_probe + 孪生 LSP 接线）。
 #
 # 用法：
 #   bash tools/gate_l13.sh                                  # 快速口径（日常改 L13 后跑这个）
 #   CARGO_TARGET_DIR="$PWD/target_gate" bash tools/gate_l13.sh  # CARGO_TARGET_DIR 原样透传给 cargo（日志也落在该目录下）
 #   GATE_FULL=1 bash tools/gate_l13.sh                      # 全量口径（parity/into 不 skip）
+#   GATE_NO_TWIN_LSP=1 bash tools/gate_l13.sh               # 跳过第四件（孪生 LSP 接线，约 80s）
 #   bash tools/gate_l13.sh --release --quiet                # 其余位置参数原样追加到每次 cargo test
 #                                                           #（常用 flag，如 --release 避开 dev-profile
 #                                                           # fat-LTO 重链悬崖，见 docs §3.4）
 #
+# 第四件（2026-09-23 补）：`tests/twin_engine_tests.rs` —— 孪生 LSP 接线的
+#   唯一执行渠道。此前它**不在门禁内**，只有手动全量 `cargo test` 才跑，于是
+#   "孪生接管 / 回落类别 / 诊断与警告 parity" 这些最贴近用户的行为没有提交前
+#   保障（它一跑 ~80s：每个 examples 文件新建两个 Backend 并各自 prime HDL
+#   prelude）。急用时可用 GATE_NO_TWIN_LSP=1 跳过，但别在改动 LSP 接线时跳。
+#
 # 为什么 parity/into 两件要 --skip "L13_namespace::"（skip 配方，无覆盖损失）：
 #   tests/l13_fast_parity.rs 与 tests/l13_into_probe.rs 都用
 #   `#[path = "../src/L13_namespace/mod.rs"] mod L13_namespace;` 把整个 L13
-#   以 cfg(test) 再编译进各自的测试二进制，于是 lib 的 409 个测试在每个
+#   以 cfg(test) 再编译进各自的测试二进制，于是 lib 的 411 个测试在每个
 #   二进制里各重复执行一遍：
-#     l13_fast_parity   423 = 409 重复 + 14 本体
-#     l13_into_probe    410 = 409 重复 +  1 本体
+#     l13_fast_parity   425 = 411 重复 + 14 本体
+#     l13_into_probe    412 = 411 重复 +  1 本体
 #   实测（round-2026-09-22，docs §3.4）重复执行占门禁墙钟 ~44%。
-#   --skip "L13_namespace::" 滤掉的 409 个在第一件套 `--lib L13_namespace::`
+#   --skip "L13_namespace::" 滤掉的 411 个在第一件套 `--lib L13_namespace::`
 #   里恰好跑过一次，所以只是去掉重复，不丢任何断言。
 #
 # 什么时候该跑全量（GATE_FULL=1，即不 skip 的 parity）：
@@ -75,6 +82,12 @@ run_suite() {
 run_suite lib        cargo test --lib L13_namespace:: "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 run_suite parity     cargo test --test l13_fast_parity "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" -- "${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}"
 run_suite into_probe cargo test --test l13_into_probe "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}" -- "${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}"
+# 第四件不带 --skip：twin_engine_tests 没有 #[path] 再编译 L13，不存在重复面。
+if [ "${GATE_NO_TWIN_LSP:-0}" = "1" ]; then
+    echo "== GATE_NO_TWIN_LSP=1: 跳过 twin_lsp 件套（孪生 LSP 接线本次无保障）"
+else
+    run_suite twin_lsp   cargo test --test twin_engine_tests "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+fi
 
 echo "== gate_l13: total $((SECONDS - t_all))s, fail=$fail, logs: $LOGDIR"
 exit "$fail"
