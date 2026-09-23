@@ -1,6 +1,7 @@
 use super::*;
 
 #[test]
+#[ignore] // 慢探针（3.9-5.3s，向工作目录写 probe-out.txt），不进门禁；显式跑：cargo test --lib probe_timing -- --ignored --nocapture
 fn probe_timing() {
     let files = [
         ("01-basics", include_str!("../../examples/hdl/01-basics.typort")),
