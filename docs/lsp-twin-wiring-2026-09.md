@@ -1495,6 +1495,23 @@ HDL 文件 21/25 跑参考版。
 任何东西能发现。重新开启是六行改动（声明了 module + `checks` 为空 + 无 module 与
 错误 span 重叠 ⇒ 不信任）。
 
+**连带后果（本轮一并钉住）**：闸在时，22 个回落文件的 goto/references/rename 由
+参考版服务，所以孪生侧的差异**看不见**；闸撤掉后它们全部落到孪生侧。新增两条
+测试把这个面钉住：
+
+- `twin_goto_definition_matches_reference_on_owned_file`：对孪生接管的源**逐
+  offset** 比 goto 结果（覆盖局部、全局 def、构造子、字段投影），唯一允许的分歧
+  是字段投影 token，且该分歧由下一条专门测试负责——所以它不能悄悄扩大。
+- `twin_field_projection_def_span_is_known_degraded`：钉住**已知降级**——`p.x`
+  的 `def_span` 在孪生侧退化成使用处 token（参考版指向字段声明）。根因是孪生的
+  项/值表示**不携带 binder span**（`Tm::Pi(&str, …)`、`SumDataV { name: &str, … }`
+  对参考版的 `Span<SmolStr>`），修它要贯穿整个 machine 的表示，**未做**。
+  用户可见后果：孪生接管文件上 F12 落在 `p.x` 处不动，字段声明处的
+  references/rename 看不到使用处。这是闸撤除后**优先级上升**的后续项。
+
+另有 `twin_fallback_classes_are_exactly_the_known_set`：语料级钉住回落**类别集合**
+（此前只钉了逐文件归属，新增一个只在 `examples/` 之外触发的类别不会变红）。
+
 **实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
 孪生接管面从 8/30 恢复到 29/30。
 

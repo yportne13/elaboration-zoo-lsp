@@ -922,3 +922,185 @@ fn twin_hdl_gate_removed_clean_module_files_stay_twin_owned() {
     }
 }
 
+// ── Fallback-class set, and the observation surfaces the gate removal exposed ──
+
+/// The fallback set is **exactly** the documented one — new classes must be a
+/// deliberate act.
+///
+/// Before 2026-09-23 only the per-file ownership of `examples/**` was pinned, so
+/// a *new* `note_twin_fallback` call site that only fires outside `examples/`
+/// (or whose class name happens to start with an existing one, since the
+/// ownership test matches by `starts_with`) could appear with nothing going red.
+/// This walks the corpus and pins the class set itself.
+#[test]
+fn twin_fallback_classes_are_exactly_the_known_set() {
+    /// Every class `src/lib.rs` may record.  Adding a call site means editing
+    /// this list on purpose.
+    const KNOWN: &[&str] = &[
+        "cross-file",
+        "untrusted-error",
+        "symbol-defined-in-another-file",
+        "hdl-check-gate",
+        "prelude-unavailable",
+        "resident-unavailable",
+        "prelude-prime-failed",
+        "observe-failed",
+        "no-document-id",
+        "no-parse-result",
+    ];
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                collect(&p, out);
+            } else if p.extension().map(|e| e == "typort").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    collect(std::path::Path::new("examples"), &mut files);
+    files.sort();
+    assert!(files.len() >= 30, "expected the examples tree, found {}", files.len());
+
+    let mut seen: Vec<String> = Vec::new();
+    for (i, path) in files.iter().enumerate() {
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let uri = Url::parse(&format!("file:///ex_cls_{i}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        tb.process_file(&uri, &src, Some(1));
+        if let Some(reason) = tb.twin_fallback_reason(uri.as_str()) {
+            let class = reason.split([' ', '(']).next().unwrap_or("").to_string();
+            assert!(
+                KNOWN.contains(&class.as_str()),
+                "{} fell back with an unknown class `{class}` (reason: {reason})",
+                path.display(),
+            );
+            seen.push(class);
+        }
+    }
+    // The corpus exercises exactly one class today; anything else means the
+    // engine-ownership picture moved and this test's KNOWN list needs a look.
+    assert_eq!(
+        seen,
+        vec!["untrusted-error".to_string()],
+        "expected only untrusted-error on the corpus, saw {seen:?}",
+    );
+}
+
+/// `goto_definition` on a twin-owned file must agree with the reference at
+/// **every** offset of a source that exercises a local, a global def, a
+/// constructor and a field projection.
+///
+/// This is the surface the HDL-gate removal exposed: while 22 of 30 example
+/// files were demoted, goto/references/rename for them were served by the
+/// reference engine, so no test could see twin-side differences.  See
+/// [`twin_field_projection_def_span_is_known_degraded`] for the one difference
+/// that is expected and deliberately pinned.
+#[test]
+fn twin_goto_definition_matches_reference_on_owned_file() {
+    let src = "struct P {\n    x: Nat\n    y: Nat\n}\n\ndef get(p: P): Nat = p.x\n\ndef use(p: P): Nat = get p\n";
+    let uri = Url::parse("file:///twin_goto_owned.typort").unwrap();
+
+    let rb = backend(Engine::Reference);
+    rb.process_file(&uri, src, Some(1));
+    let tb = backend(Engine::Twin);
+    tb.process_file(&uri, src, Some(1));
+    assert!(
+        tb.twin_tables.contains_key(uri.as_str()),
+        "fixture must be twin-owned: {:?}",
+        tb.twin_fallback_reason(uri.as_str()),
+    );
+
+    fn summary(
+        b: &Arc<Backend<CapturingClient>>,
+        uri: &Url,
+        off: usize,
+    ) -> Option<(String, u32, u32)> {
+        match b.goto_definition_at(uri, off)? {
+            lsp_types::GotoDefinitionResponse::Scalar(loc) => Some((
+                loc.uri.to_string(),
+                loc.range.start.line * 10_000 + loc.range.start.character,
+                loc.range.end.line * 10_000 + loc.range.end.character,
+            )),
+            other => Some((format!("{other:?}"), 0, 0)),
+        }
+    }
+
+    // The field-projection token is the one offset where the twin is *known* to
+    // differ (its `def_span` degrades to the use site); that gap has its own
+    // pinned test below, so it is skipped here rather than papered over.
+    let field_token = src.rfind(".x").unwrap() + 1;
+
+    let mut compared = 0usize;
+    for off in 0..src.len() {
+        if !src.is_char_boundary(off) || off == field_token {
+            continue;
+        }
+        let (t, r) = (summary(&tb, &uri, off), summary(&rb, &uri, off));
+        assert_eq!(
+            t, r,
+            "goto diverged at offset {off} ({:?}):\n  twin: {t:?}\n  ref : {r:?}",
+            &src[off.saturating_sub(6)..(off + 6).min(src.len())],
+        );
+        if r.is_some() {
+            compared += 1;
+        }
+    }
+    assert!(compared > 0, "no offset resolved to a definition — test is vacuous");
+    // Sanity: the skipped offset really is a divergence, otherwise the skip is
+    // hiding nothing and the dedicated test below is stale.
+    assert_ne!(
+        summary(&tb, &uri, field_token),
+        summary(&rb, &uri, field_token),
+        "the field token no longer diverges — drop the skip and this comment",
+    );
+}
+
+/// **Known degradation, deliberately pinned**: for a field projection `p.x` the
+/// twin records `def_span == span` (the use-site token), because its term/value
+/// representation drops binder spans — `Tm::Pi(&str, …)` / `SumDataV { name:
+/// &str, … }` against the reference's `Span<SmolStr>` carriers.
+///
+/// Consequences on a twin-owned file: F12 on `p.x` lands on the cursor instead
+/// of the field declaration, and references/rename anchored at the field
+/// declaration cannot see its uses.  Fixing it means threading spans through
+/// the twin's `Tm`/`SumDataV`/`SumParamV`, which is a representation change
+/// across the whole machine — tracked, not done here.  This test exists so the
+/// gap is measurable and so a fix shows up as a failure that must update it.
+#[test]
+fn twin_field_projection_def_span_is_known_degraded() {
+    let src = "struct P {\n    x: Nat\n}\n\ndef get(p: P): Nat = p.x\n";
+    let uri = Url::parse("file:///twin_field_def_span.typort").unwrap();
+    let use_off = src.rfind(".x").unwrap() + 1;
+
+    let rb = backend(Engine::Reference);
+    rb.process_file(&uri, src, Some(1));
+    let (r_span, r_def, _) = rb.resolved_hover_entry(uri.as_str(), use_off).expect("ref field hover");
+
+    let tb = backend(Engine::Twin);
+    tb.process_file(&uri, src, Some(1));
+    let (t_span, t_def, _) = tb.resolved_hover_entry(uri.as_str(), use_off).expect("twin field hover");
+
+    // Both engines agree on the *use-site* span (hover range is identical).
+    assert_eq!(
+        (t_span.start_offset, t_span.end_offset),
+        (r_span.start_offset, r_span.end_offset),
+        "use-site spans must agree",
+    );
+    // The reference points at the field's declaration token...
+    assert_ne!(
+        (r_def.start_offset, r_def.end_offset),
+        (r_span.start_offset, r_span.end_offset),
+        "reference must resolve the field to its declaration",
+    );
+    // ...the twin points at the use site (the pinned degradation).
+    assert_eq!(
+        (t_def.start_offset, t_def.end_offset),
+        (t_span.start_offset, t_span.end_offset),
+        "twin field def_span is no longer degraded — update this test (good news: \
+         goto/references/rename on field projections should now work)",
+    );
+}
+
