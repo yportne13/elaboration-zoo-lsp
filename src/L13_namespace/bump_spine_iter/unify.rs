@@ -478,7 +478,6 @@ pub(super) fn unify_iter<'a>(
     twin_stat_record(&TWIN_STAT_CONV, conv.memo.reclaim(CACHE_SHRINK_MIN_ENTRIES));
     let _ = conv.scratch1.reclaim(SPINE_SHRINK_MIN_ENTRIES);
     let _ = conv.scratch2.reclaim(SPINE_SHRINK_MIN_ENTRIES);
-    let memo = &mut conv.memo;
     // UItem 工作栈由调用方常驻复用（入口已 clear）；失败早退会留下非空
     // 栈，靠下次入口 clear 兜住（Rc 随 clear 正确减计，引用无 Drop）。
     // **不设** stack.is_empty() 断言：Call/Call spine 快路径的嵌套调用
@@ -488,7 +487,7 @@ pub(super) fn unify_iter<'a>(
     while let Some(item) = stack.pop() {
         let (l, t, u, fuel) = match item {
             UItem::Store(key) => {
-                memo.insert(key);
+                conv.memo.insert(key);
                 continue;
             }
             UItem::EvalCod2(b1, e1, b2, e2, l, fuel) => {
@@ -573,7 +572,7 @@ pub(super) fn unify_iter<'a>(
         if t.0 == u.0 && v_tag(t) != 7 && !is_objheaded(spine, t) {
             continue;
         }
-        if memo_on && memo.contains(&(t.0, u.0)) {
+        if memo_on && conv.memo.contains(&(t.0, u.0)) {
             continue; // 本轮已判等过的子对（命中连 force 都省——成功单调）
         }
         let t = force(bump, spine, defs, metas, decl, mutable, t);
@@ -606,6 +605,19 @@ pub(super) fn unify_iter<'a>(
                 // 逆序弹；首个对作入口，其余留子栈）。有 Flex 时三重快照
                 //（meta / trait_metas / 约束），失败回滚——中途可能已解出
                 // meta。conv 用全新草稿（子调用会清 memo）。
+                //
+                // S3 轮（2026-09-23）对「嵌套子 unify 共享父层 conv.memo」的
+                // 复核存档——成功单调论证本身成立：(1) meta 写入一次、真实
+                // 时间线只延长、推测窗口（META_JOURNAL 帧）要么整体回滚要么
+                // 整体保留，故 σ ⊆ σ' 且 σ ⊢ t≡u ⇒ σ' ⊢ t≡u，窗口稳定前缀的
+                // 条目在窗口内任一点（含推测态）有效；(2) 推测期新条目在失败
+                // 路径须整表清空、solve 触发的 trait_wrap 重入须保留入口
+                // reclaim 作上一候选作废条目的净化。该方案（`memo_preserve`
+                // 窗口标志 + `L13_NO_MEMO_SHARE` 消融）已按此协议落地实测：
+                // 八负载 min 口径 |Δ| ≤ 1%（噪声带，prelude-hdl fast/fast_ss
+                // 与 struct k=11 双向互有 ±0.4~1.6%）——memo 命中窗口被嵌套
+                // 切断的损失在现有负载形态下不构成可测成本，按 <3% 收益回退
+                // 纪律移除，机制回到「子调用独立草稿」。
                 let ok = if !has_flex {
                     // 无 Flex：子 unify 只比较基值，不可能改求解状态——免快照
                     let mut conv_fresh = ConvScratch::default();
@@ -681,7 +693,7 @@ pub(super) fn unify_iter<'a>(
                 };
                 if ok {
                     if memo_on {
-                        memo.insert((t.0, u.0));
+                        conv.memo.insert((t.0, u.0));
                     }
                     continue;
                 }
@@ -782,7 +794,7 @@ pub(super) fn unify_iter<'a>(
                 conv.scratch2 = a2;
                 if ok {
                     if memo_on {
-                        memo.insert((t.0, u.0));
+                        conv.memo.insert((t.0, u.0));
                     }
                     continue;
                 }
@@ -836,7 +848,7 @@ pub(super) fn unify_iter<'a>(
                     conv.scratch1 = args;
                     if ok {
                         if memo_on {
-                            memo.insert((t.0, u.0));
+                            conv.memo.insert((t.0, u.0));
                         }
                         continue;
                     }
@@ -876,7 +888,7 @@ pub(super) fn unify_iter<'a>(
             {
                 if n1 == n2 {
                     if memo_on {
-                        memo.insert((t.0, u.0));
+                        conv.memo.insert((t.0, u.0));
                     }
                     continue;
                 }
@@ -918,7 +930,7 @@ pub(super) fn unify_iter<'a>(
                 );
                 if ok {
                     if memo_on {
-                        memo.insert((t.0, u.0));
+                        conv.memo.insert((t.0, u.0));
                     }
                     continue;
                 }
@@ -1031,7 +1043,7 @@ pub(super) fn unify_iter<'a>(
                     conv.scratch2 = a2;
                     if ok {
                         if memo_on {
-                            memo.insert((t.0, u.0));
+                            conv.memo.insert((t.0, u.0));
                         }
                         continue;
                     }
@@ -1046,7 +1058,7 @@ pub(super) fn unify_iter<'a>(
                     conv.scratch2 = a2;
                     if ok {
                         if memo_on {
-                            memo.insert((t.0, u.0));
+                            conv.memo.insert((t.0, u.0));
                         }
                         continue;
                     }
@@ -1061,7 +1073,7 @@ pub(super) fn unify_iter<'a>(
                     conv.scratch2 = a2;
                     if ok {
                         if memo_on {
-                            memo.insert((t.0, u.0));
+                            conv.memo.insert((t.0, u.0));
                         }
                         continue;
                     }

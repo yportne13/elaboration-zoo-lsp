@@ -124,6 +124,17 @@ impl<'a> Compiler<'a> {
     /// fresh rigid（绑进探测器 cxt——`unify_pm` 的层级换算不容超上下文层）。
     /// 返回类型再与头部类型跑一次索引方程。成功 = 该构造子可能出现在头部类型
     /// 的值里；结构冲突（`Vec[A] zero` 上不可能有 `cons`）= absurd。
+    ///
+    /// **meta 探测回滚 journal 化（S3 轮）**：探测以 `mach.metas.clone()`
+    /// 整表快照 + 出口整表搬回实现回滚——prelude-hdl 的 meta 表万条级，
+    /// 每次探测一次 O(表) memcpy 是探测单次成本的大头（pcore/exhdl 采样
+    /// ~11% 的主要成分）。改为 META_JOURNAL 帧（Call/Call has-flex 同款）：
+    /// 入帧 → 探测（unify_pm 解头侧变量、infer 期新 meta 均经 journal 记
+    /// 就地写）→ 出帧逆序恢复 + 截断——恢复语义与整表快照等价（恢复到探
+    /// 测前状态），代价降到 O(探测期写入)。
+    /// 跨 match 编译点的 (Sum, ctor) 探测结果缓存（轮内 TLS 表）经三种键
+    /// 形落地实测均不划算（命中 5~6%，收益在噪声带），已按 <3% 纪律移除，
+    /// 论证与计数存档见下方注释。
     fn probe_accessible(
         mach: &mut Machine,
         bump: &'a Bump,
@@ -153,6 +164,17 @@ impl<'a> Compiler<'a> {
             }
             _ => return false,
         };
+        // S3 轮探测缓存（(Sum 形状, ctor) 轮内内容键控）探索结论存档：按
+        // 单元字/内容字/层级塌缩三种键形落地实测，跨 match 编译点的重复
+        // 探测在孪生现有形态下本就不存在——覆盖循环与臂前置过滤由
+        // `ctor_accessible` 的 per-match memo 覆盖，无参 Sum 在入口短路，
+        // 嵌套位置结算的各 (字段, ctor) 至多探一次；跨点重复仅占 5~6%
+        //（pcore 282 探 16 中 / phdl 702 探 48 中 / exhdl 2397 探 136 中，
+        // FUNC_PROF 计数），命中收益低于查询+守卫开销的噪声带（消融
+        // `L13_NO_PROBE_CACHE` 交错实测 |Δ| ≤ 1.5%）。探测单次成本的大头
+        // 是 meta 快照整表 clone（下方已改 META_JOURNAL 帧）与 clone_cxt，
+        // 前者与命中无关、后者不在本文件可改范围。缓存按 <3% 收益回退
+        // 纪律移除。
         let ctor_raw = Raw::Obj(
             Box::new(Raw::Var(sum_name_span(cxt, sum_name))),
             Some(ctor.clone()),
@@ -161,7 +183,13 @@ impl<'a> Compiler<'a> {
             Ok((_, ty)) => ty,
             Err(_) => return false,
         };
-        let snap = mach.metas.clone();
+        // meta 探测回滚：整表 clone → META_JOURNAL 帧（Call/Call has-flex
+        // 同款）。探测写入（unify_pm 解头侧变量、infer 期新 meta）先记帧，
+        // 出口逆序恢复 + 截断——语义与 `mach.metas = snap` 等价（恢复到探测
+        // 前状态），代价从 O(meta 表) memcpy 降到 O(探测期写入)；prelude-hdl
+        // 的 meta 表万条级，这是探测单次成本的大头。
+        let pre_meta_len = mach.metas.len();
+        super::force::META_JOURNAL.with(|j| j.borrow_mut().push(Vec::new()));
         // Π 链逐层实例化：头部 Sum 的隐式参数用其实参，其余绑定器用**探测
         // 上下文里的 fresh rigid**。绑定进探测器 cxt 而非超上下文的 scratch
         // 层——L13 的 `unify_pm` 走 `update_cxt` 的层级换算，层超出上下文会
@@ -188,7 +216,9 @@ impl<'a> Compiler<'a> {
             let env = env_ext(bump, env0, u);
             ty = mach.eval(bump, &probe_cxt, env, body);
         };
-        mach.metas = snap;
+        // 出帧 = 恢复探测前 meta 状态（成功/失败同型；帧内条目逆序恢复 +
+        // 截断到入帧长度），替代旧的整表搬回。
+        super::spine::meta_journal_rollback(&mut mach.metas, pre_meta_len);
         ok
     }
 

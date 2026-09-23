@@ -584,7 +584,12 @@ pub(super) fn force_inner<'a>(
                                     decl, mutable, pid, &args,
                                 ) {
                                     Some(r) => {
-                                        v = force(bump, spine, defs, metas, decl, mutable, r)
+                                        // S3 轮本地短路：force 的结果契约是规范
+                                        // WHNF，循环重派发只会原样落到叶臂（至多
+                                        // 白付 2~3 次必命中 memo 查询）——直接返回。
+                                        // 内层仍是 memo wrapper：中间结果的 memo
+                                        // 插入不受影响（命中率的来源）。
+                                        return force(bump, spine, defs, metas, decl, mutable, r);
                                     }
                                     None => return v,
                                 }
@@ -676,7 +681,9 @@ pub(super) fn force_inner<'a>(
                                 pid,
                                 &[],
                             ) {
-                                v = force(bump, spine, defs, metas, decl, mutable, r);
+                                // S3 轮本地短路：同 Decl 链 prim 臂——结果已是
+                                // 规范 WHNF，直接返回免循环重派发。
+                                return force(bump, spine, defs, metas, decl, mutable, r);
                             } else {
                                 return v;
                             }
