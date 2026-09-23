@@ -49,6 +49,27 @@ use super::syntax::{
 use super::typeclass::{TraitDefEntry, TraitState, v_to_ref_val};
 use super::unify::{unify_iter, ConvScratch, UItem};
 
+/// 第一/二组表（`clear_round` 每轮清 + 观察面每 kick 清）的归还档阈值：
+/// **槽 ≥24B** 的表（键带 `SmolStr` / 条目带 `String` / 值带三 `Rc`）。与
+/// force.rs 的 `CACHE_SHRINK_MIN_ENTRIES`（1<<18 × ~24B ≈ 6MB，配合
+/// [`FORCE_MEMO_CAP`] 的百万级 CAP）同构，但这两组表没有 force memo 式的
+/// CAP——沿用 1<<18 意味着归还档永不触发（归档项变死代码）。按「空桶
+/// ≥ ~0.3MB 才值得还，且须高于稳态峰值」定标 1<<13。稳态实测（l06l13mem
+/// k=11 + 临时表长探针，2026-09-23）：suffix_indexed_keys ≤ 4104
+/// （struct/strchain）、mutable.replay ≤ 4103、decl_suffix_index ≤ 98
+/// （prelude-core；hdl 形态的限定键也在千条级）——全在 1<<13 之下，归还
+/// 只对超阈病态峰值触发；阈值以下照旧只 `clear`，稳态复用与分配计数零
+/// 变化（归档预期，perf-l13-round §3.1.3）。
+const TBL_SHRINK_MIN_ENTRIES: usize = 1 << 13;
+/// 指针键/值表（`tm_import` / `val_import`：槽 16–20B）的同一水位：
+/// 1<<15 × ~20B ≈ 0.65MB。
+const PTR_TBL_SHRINK_MIN_ENTRIES: usize = 1 << 15;
+/// 观察面六表的归还水位：**稳态峰值实测**（l06l13mem k=11 + TBLPROBE）
+/// struct hover_table = 24605 条/轮、strchain 16382——观察面在 bench/LSP
+/// kick 口径是合法稳态（每轮同量重建），阈值必须在其上方，否则每轮付
+/// ~13 次 Vec 重增长（+2.6MB/轮 churn）拆掉稳态复用。定 1<<15（×40B 槽
+/// ≈ 1.3MB 空缓冲）：≥3.3 万条目的超大文件才触发归还。
+const OBS_TBL_SHRINK_MIN_ENTRIES: usize = 1 << 15;
 
 thread_local! {
     /// 稳态七表撤销日志（评审 B#2 二期）：`Tycker::observe_user` 每 kick
@@ -508,33 +529,93 @@ impl Machine {
     }
 
     /// 每轮 reset：metacontext + 名字表/类型表/轨迹 + 环境区域 + 可变全局
-    /// 表全部清空。spine 栈同轮清空（保容量）——tag-2 句柄只被当轮 bump 值 /
-    /// metas / defs 持有，轮边界后无任何旧句柄可达。decl 表随 Cxt 快照
-    /// 消亡（参考版每次调用新建 Cxt 同款）。L13 增量：trait_metas /
-    /// symbol_table / import_map / trait 方法缓存 / 指针导入表一并清空
-    ///（均为 per-run 状态——参考版 Infer::clone 的重置面 + 新建 Infer）。
+    /// 表全部清空。spine 栈同轮清空（保容量，到阈值归还）——tag-2 句柄只
+    /// 被当轮 bump 值 / metas / defs 持有，轮边界后无任何旧句柄可达。decl
+    /// 表随 Cxt 快照消亡（参考版每次调用新建 Cxt 同款）。L13 增量：
+    /// trait_metas / symbol_table / import_map / trait 方法缓存 / 指针导入
+    /// 表 / 可变全局五件 / 后缀索引与 memo / 观察面六表一并清空（均为
+    /// per-run 状态——参考版 Infer::clone 的重置面 + 新建 Infer），且全部
+    /// 挂归还档（[`ReclaimOnClear`]：`TBL_SHRINK_MIN_ENTRIES` /
+    /// `PTR_TBL_SHRINK_MIN_ENTRIES` / spine 档，逐表理由见各调用行注释）——
+    /// mem-l13-opt §3.3 归档的第一/二组"清空不还桶"在此收口：阈值以上的
+    /// 峰值容量不再常驻到进程结束（长会话 RSS），阈值以下照旧只 clear
+    /// （稳态复用与分配计数零变化）。
     pub(super) fn clear_round(&mut self) {
         self.metas.clear();
         self.defs.clear();
-        self.mutable.borrow_mut().clear();
         self.constraints.clear();
         // 压栈工作表的峰值容量同样常驻（`SPINE_SHRINK_MIN_ENTRIES`）。
         twin_stat_record(&TWIN_STAT_SPINE, self.spine.stack.reclaim(SPINE_SHRINK_MIN_ENTRIES));
+        // ── 第一组（per-run，参考版 Infer 重置面）归还档 ──
+        // 可变全局五件：清空语义留在 prim.rs `Mutable::clear`（不动），这里
+        // 叠加还桶（reclaim 内部的 clear 对已空表是 O(1) no-op）。map 槽
+        // (SmolStr,V) ~38B / replay 槽 (SmolStr,bool) ~37B / check 行缓存槽
+        // 24–32B（String 堆随 clear 已释放，还的是缓冲本体）。
+        {
+            let mut mu = self.mutable.borrow_mut();
+            mu.clear();
+            let _ = mu.map.reclaim(TBL_SHRINK_MIN_ENTRIES);
+            let _ = mu.replay.reclaim(TBL_SHRINK_MIN_ENTRIES);
+            let _ = mu.check_lines.reclaim(TBL_SHRINK_MIN_ENTRIES);
+            let _ = mu.check_line_set.reclaim(TBL_SHRINK_MIN_ENTRIES);
+            let _ = mu.check_seen.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        }
+        // trait 合成状态整体换新：旧 `TraitState`（含三张 HashMap 的桶数组）
+        // 随 drop 即刻归还——本就是"每轮新建"语义，无清空保容量问题，也正
+        // 因此不存在跨轮峰值滞留。
         self.tstate = TraitState::default();
-        self.trait_metas.clear();
-        self.symbol_table.clear();
-        self.import_map.clear();
-        self.trait_method_cache.clear();
-        self.tm_import.clear();
-        self.val_import.clear();
-        self.decl_suffix_index.clear();
-        self.suffix_indexed_keys.clear();
+        // trait 型 meta 下标表：槽 4B（裸 u32），走工作栈档
+        // （1<<16 × 4B ≈ 262KB）。
+        let _ = self.trait_metas.reclaim(SPINE_SHRINK_MIN_ENTRIES);
+        // 算符方法恢复表：键 (SmolStr, usize)+值 SmolStr，槽 ~66B（≥1<<13
+        // 条即 ~0.55MB 空桶，稳态峰值仅数十条——inherent impl 算符名）。
+        let _ = self.symbol_table.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        // import 别名表：键值均 SmolStr，槽 ~29B；稳态 = 文件 import 数，
+        // 数十条。
+        let _ = self.import_map.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        // trait 方法 elaboration 缓存：键 (SmolStr, SmolStr)+值 3×Rc，槽
+        // ~84B——本组最肥的空桶（1<<13 条 ≈ 0.7MB）；条目 keepalive 的 Rc
+        // 堆随 clear 释放，这里归还桶数组。prelude-hdl 稳态千条级，低于阈值。
+        let _ = self.trait_method_cache.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        // 指针导入表：键 usize + 值指针/V，槽 16–20B，水位 1<<15（≈0.65MB）；
+        // 稳态 = 每轮 export 产出数，数百条级。
+        let _ = self.tm_import.reclaim(PTR_TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.val_import.reclaim(PTR_TBL_SHRINK_MIN_ENTRIES);
+        // ── 第二组（per-kick / 后缀回退面）归还档 ──
+        // decl 后缀倒排索引与键集：mem-l13-opt §3.3 点名的 prelude-hdl 常驻
+        // 项（900+ decl 限定键 → 桶数组数百 KB 常驻到进程结束）；值侧
+        // `Rc<Vec<SmolStr>>` 堆随 clear 释放，这里还桶。稳态峰值数千条
+        // （955 decl 的限定键），低于 1<<13——只有超阈文件（≥8k 限定键）
+        // 触发归还，下一轮重建照旧。
+        let _ = self.decl_suffix_index.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.suffix_indexed_keys.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        // 后缀回退 memo：条目 SuffixMemo 槽 ~40B（Neg 臂的 blocked_heads
+        // Vec 堆随 clear 释放）；与 decl_suffix_index 同界清（版本号一并
+        // 归零，纪元语义不变——表已空，首次查询的 epoch 对齐是 no-op）。
+        let _ = self.suffix_memo.reclaim(TBL_SHRINK_MIN_ENTRIES);
+        self.suffix_memo_version = 0;
+        // `binding_name_mk` 是单个 `Option<SmolStr>`（≤23B 内联零堆）、
+        // `ns_method_cache` 整体 drop（桶随 HashSet 析构归还）——两者本就
+        // 无"清空保容量"问题，保持原写法。
         self.binding_name_mk = None;
         self.ns_method_cache = None;
-        // 后缀回退 memo 与 decl_suffix_index 同界清（版本号一并归零）
-        self.suffix_memo.clear();
-        self.suffix_memo_version = 0;
         self.clear_observation_tables();
+        self.reclaim_observation_tables();
+    }
+
+    /// 观察面六表的容量归还档（清空点在 [`Machine::clear_observation_tables`]/
+    /// entry.rs，这里只按 [`TBL_SHRINK_MIN_ENTRIES`] 还桶）：五张 Vec 槽
+    /// 32–40B（String 堆随 clear 已释放）+ `ctor_hover_memo` 槽 ~38B。
+    /// 调用点：`clear_round` 每轮、`observe_user` 每 kick 开、prime /
+    /// run_decls_with_prelude 的装载收尾——均已是观察表的轮界/ kick 界，
+    /// 只改清空的写法不动时机（[`ReclaimOnClear`] 同款纪律）。
+    pub(super) fn reclaim_observation_tables(&mut self) {
+        let _ = self.hover_table.reclaim(OBS_TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.completion_table.reclaim(OBS_TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.inlay_hint_table.reclaim(OBS_TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.println_spans.reclaim(OBS_TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.check_issue_lines.reclaim(OBS_TBL_SHRINK_MIN_ENTRIES);
+        let _ = self.ctor_hover_memo.reclaim(OBS_TBL_SHRINK_MIN_ENTRIES);
     }
 
     // Extend Cxt（源码 binder / inserted binder / define / fake_bind）
@@ -4854,8 +4935,8 @@ pub(super) fn chain_env<'a>(bump: &'a Bump, slots: &[V]) -> Env<'a> {
 /// elaborated 体（run 的 nf 输出用）。
 pub(super) enum DeclOut<'a> {
     Def { name: &'a str },
-    /// println：源码 span + elaboration 期即算好的 pretty 串（参考版
-    /// `DeclTm::Println(span, s, _)` 同形；span 供 LSP 的 INFORMATION 诊断）。
+    /// println：源码 span + elaborated 体（run 的 nf 输出用；原 Println 行
+    /// 的声明 span 与宏展开产物同形）。
     Println(&'a Tm<'a>, crate::parser_lib::Span<()>, String),
     Enum,
     Trait,
@@ -4863,4 +4944,99 @@ pub(super) enum DeclOut<'a> {
     Package,
     Import,
     Class,
+}
+
+// ── 第一/二组表归还档回归测试（mem-l13-opt §3.3 收口，perf-l13-round §3.1.3）──
+#[cfg(test)]
+mod clear_round_reclaim_tests {
+    //! 到阈值的表在 [`Machine::clear_round`] 后归还桶数组（长会话 RSS 不再
+    //! 滞留峰值容量）；阈值下的表保容量（稳态复用不回退，分配计数零变化）。
+
+    use super::*;
+
+    /// 把各表填到各自阈值（归还判据是容量越过 `min_entries`，恰过阈值即
+    /// 成立；`clear_round` 对本测试只触表操作，不涉 bump）。
+    fn stuffed_machine() -> Machine {
+        let mut m = Machine::new();
+        for i in 0..TBL_SHRINK_MIN_ENTRIES {
+            let k = SmolStr::new(format!("sym{i}"));
+            m.symbol_table.insert((k.clone(), 0), k.clone());
+            let k = SmolStr::new(format!("imp{i}"));
+            m.import_map.insert(k.clone(), k);
+            let k = SmolStr::new(format!("q{i}"));
+            m.decl_suffix_index.insert(k.clone(), Rc::new(Vec::new()));
+            m.suffix_indexed_keys.insert(k.clone());
+            m.suffix_memo.insert(
+                k,
+                SuffixMemo::Pos { full_key: SmolStr::new(""), bucket_ptr: 0 },
+            );
+            let k = SmolStr::new(format!("mut{i}"));
+            m.mutable.borrow_mut().map.insert(k, v_u(i as u32));
+        }
+        for i in 0..OBS_TBL_SHRINK_MIN_ENTRIES {
+            m.hover_table.push((empty_span(()), empty_span(()), String::new()));
+            m.completion_table.push((empty_span(()), SmolStr::new("")));
+            m.inlay_hint_table.push((i as u32, String::new()));
+            m.println_spans.push((empty_span(()), String::new()));
+            m.check_issue_lines.push((i, String::new()));
+            m.ctor_hover_memo.insert(SmolStr::new(format!("c{i}")), Rc::from(""));
+        }
+        m.trait_metas.extend(0..SPINE_SHRINK_MIN_ENTRIES as u32);
+        let leak: &'static Tm<'static> = Box::leak(Box::new(Tm::U(0)));
+        for i in 0..PTR_TBL_SHRINK_MIN_ENTRIES {
+            m.tm_import.insert(i, leak);
+            m.val_import.insert(i, v_u(i as u32));
+        }
+        m
+    }
+
+    #[test]
+    fn oversized_tables_shrink_on_clear_round() {
+        let mut m = stuffed_machine();
+        assert!(m.symbol_table.capacity() >= TBL_SHRINK_MIN_ENTRIES);
+        m.clear_round();
+        assert_eq!(m.symbol_table.capacity(), 0, "symbol_table 桶未归还");
+        assert_eq!(m.import_map.capacity(), 0, "import_map 桶未归还");
+        assert_eq!(m.decl_suffix_index.capacity(), 0, "decl_suffix_index 桶未归还");
+        assert_eq!(m.suffix_indexed_keys.capacity(), 0, "suffix_indexed_keys 桶未归还");
+        assert_eq!(m.suffix_memo.capacity(), 0, "suffix_memo 桶未归还");
+        assert_eq!(m.trait_metas.capacity(), 0, "trait_metas 缓冲未归还");
+        assert_eq!(m.tm_import.capacity(), 0, "tm_import 桶未归还");
+        assert_eq!(m.val_import.capacity(), 0, "val_import 桶未归还");
+        assert_eq!(m.hover_table.capacity(), 0, "hover_table 缓冲未归还");
+        assert_eq!(m.completion_table.capacity(), 0, "completion_table 缓冲未归还");
+        assert_eq!(m.inlay_hint_table.capacity(), 0, "inlay_hint_table 缓冲未归还");
+        assert_eq!(m.println_spans.capacity(), 0, "println_spans 缓冲未归还");
+        assert_eq!(m.check_issue_lines.capacity(), 0, "check_issue_lines 缓冲未归还");
+        assert_eq!(m.ctor_hover_memo.capacity(), 0, "ctor_hover_memo 桶未归还");
+        let mu = m.mutable.borrow();
+        assert_eq!(mu.map.capacity(), 0, "mutable.map 桶未归还");
+        assert_eq!(mu.replay.capacity(), 0, "mutable.replay 桶未归还");
+        assert_eq!(mu.check_lines.capacity(), 0, "check_lines 缓冲未归还");
+        assert_eq!(mu.check_line_set.capacity(), 0, "check_line_set 桶未归还");
+        assert_eq!(mu.check_seen.capacity(), 0, "check_seen 桶未归还");
+    }
+
+    #[test]
+    fn undersized_tables_keep_capacity_for_reuse() {
+        let mut m = Machine::new();
+        // 两轮小用量：clear 前后容量都在（阈值以下不 shrink——重建比留着贵）。
+        for i in 0..100u32 {
+            m.symbol_table.insert((SmolStr::new(format!("s{i}")), 0), SmolStr::new("x"));
+            m.trait_metas.push(i);
+        }
+        let cap0 = m.symbol_table.capacity();
+        assert!(cap0 > 0);
+        let tcap0 = m.trait_metas.capacity();
+        m.clear_round();
+        assert_eq!(m.symbol_table.capacity(), cap0, "小表容量被错误归还");
+        assert_eq!(m.trait_metas.capacity(), tcap0, "小表缓冲被错误归还");
+        // 第二轮照常复用并重新登记（语义面：clear_round 后表功能不变）。
+        for i in 0..100u32 {
+            m.symbol_table.insert((SmolStr::new(format!("s{i}")), 0), SmolStr::new("y"));
+            m.trait_metas.push(i);
+        }
+        assert_eq!(m.symbol_table.len(), 100);
+        assert_eq!(m.trait_metas.len(), 100);
+    }
 }

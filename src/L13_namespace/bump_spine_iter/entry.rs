@@ -802,9 +802,11 @@ pub(super) const RESIDENT_BUMP_LIMIT: usize = 512 << 20;
 ///
 /// 文件边界的粒度不足以约束峰值——单个大文件可在文件边界之前把 arena
 /// 累计分配到 ~1GB（`Bump` 不回收旧 chunk，`allocated_bytes` 即 chunk 链
-/// 总和 ≈ RSS 占用）。取 192MB：远大于 prelude 的 live 状态（~53MB，压实
-/// 拷贝成本 ~50ms/次），又远小于单文件可累积的量；实测把 prime 峰值从
-/// 962MB 压到阈值 + live 量级（见 `docs/` 的内存轮记录）。
+/// 总和 ≈ RSS 占用）。远大于 prelude 的 live 状态（实测 ~53MB，压实拷贝
+/// 成本 ~50ms/次），又远小于单文件可累积的量；**出厂 384MB** 是
+/// `docs/mem-round-2026-09-20.md` §7.3 的实测取舍（+1.3% 启动时间换
+/// −10% 活 arena 峰值，并保证单文件不会把 chunk 链顶到 1GB 量级；内存
+/// 受限部署可调 `192 << 20` 得 −19.7% / +5.4%）。
 const PRIME_COMPACT_BYTES: usize = 384 << 20;
 
 thread_local! {
@@ -1000,6 +1002,9 @@ impl Tycker {
             );
         }
         self.machine.clear_observation_tables();
+        // 归还档：prime 段 observe=false 表不该有条目，但前一会话遗留的
+        // 峰值容量（≥OBS_TBL_SHRINK_MIN_ENTRIES）在此随固化检查点一并归还。
+        self.machine.reclaim_observation_tables();
         // 收尾压实：把最后一个文件遗留的垃圾一并丢掉（若文件边界已压过，
         // 这里只处理尾巴；`compact_enabled` 关时跳过）。
         if compact::compact_enabled() {
@@ -1144,6 +1149,9 @@ impl Tycker {
         self.machine.icits.clear();
         self.machine.constraints.clear();
         self.machine.clear_observation_tables();
+        // 归还档（LSP 每 kick 界）：上一 kick 用户段撑大的观察表容量
+        // （大文件 10³ 级条目 × 32–40B 槽）不再跨 kick 常驻。
+        self.machine.reclaim_observation_tables();
         let pre_meta_len = self.machine.metas.len();
         // `trait_metas` is append-only (meta indices, order-preserving with
         // `metas`) and NOT covered by the seven-table journal — without this
@@ -1488,6 +1496,8 @@ impl Tycker {
             );
         }
         self.machine.clear_observation_tables();
+        // 归还档：装载收尾同 prime_resident（前次会话遗留容量一并归还）。
+        self.machine.reclaim_observation_tables();
         let mut ret = String::new();
         for (i, d) in user_ast.iter().enumerate() {
             cxt = Self::step_round_decl(&mut self.machine, bump, &mut cxt, d, i, &[], &mut ret)?;
