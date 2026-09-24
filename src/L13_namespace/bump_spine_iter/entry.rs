@@ -1128,7 +1128,15 @@ impl Tycker {
         };
         let over = match &self.resident {
             Some(r) => {
-                let budget = RESIDENT_BUMP_BUDGET.with(|c| c.get());
+                // A/B 实验（TYPORT_TWIN_BUMP_BUDGET_MB=N）：覆盖常驻用户段预算。
+                // 实测 compaction 每 kick 触发一次时，被压实的常驻态每次换地址
+                // ⇒ 用户段对它的访问全冷；调大预算让压实变成"每 N kick"可验证
+                // 这一代价。
+                let budget = std::env::var("TYPORT_TWIN_BUMP_BUDGET_MB")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .map(|mb| mb << 20)
+                    .unwrap_or_else(|| RESIDENT_BUMP_BUDGET.with(|c| c.get()));
                 self.bump.allocated_bytes().saturating_sub(r.base_bytes) > budget
             }
             None => true,
