@@ -102,9 +102,10 @@ pub(super) enum UItem<'a> {
 pub(super) fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
     let key = (decl as *const Decls<'a> as usize, decl.len());
     if let Some(hit) = TWIN_DECLB_CACHE.with(|c| {
-        c.borrow().as_ref().and_then(|(a, l, d)| {
-            (*a == key.0 && *l == key.1).then(|| d.clone())
-        })
+        c.borrow()
+            .iter()
+            .find(|(a, l, _)| *a == key.0 && *l == key.1)
+            .map(|(_, _, d)| d.clone())
     }) {
         return hit;
     }
@@ -138,13 +139,43 @@ pub(super) fn declb_of<'a>(bump: &'a Bump, decl: &Decls<'a>) -> Rc<Decls<'a>> {
         // SAFETY：'static 仅是存放口径——条目全指向当轮 bump，跨轮前
         // `force_memo_clear()` 已把本表清空（与 unify_stack 的借出重写同
         // 纪律）；`Decls<'a>` 与 `Decls<'static>` 布局无关生命周期参数。
-        *c.borrow_mut() = Some((
+        let mut c = c.borrow_mut();
+        // 多条目 + FIFO 淘汰（容量小、命中以"少数几个表实例交替"为主）。
+        if c.len() >= super::force::DECLB_CACHE_ENTRIES {
+            c.remove(0);
+        }
+        c.push((
             key.0,
             key.1,
             unsafe { std::mem::transmute::<Rc<Decls<'a>>, Rc<Decls<'static>>>(built.clone()) },
         ));
     });
     built
+}
+
+#[cfg(test)]
+mod declb_cache_tests {
+    use super::*;
+    use bumpalo::Bump;
+
+    /// 多条目缓存回归（2026-09-24）：两个 decl 表交替访问时，回到第一个必须
+    /// **命中**（返回同一个 `Rc`）。单条目实现在这里必然重建——而重建是 O(D)
+    /// 的键克隆 + 每条目 2 次 bump 分配；adder_proof 的 LSP kick 实测 44,757
+    /// 次调用里 27,837 次重建（62% miss）⇒ 每 kick 2,100 万条目 ≈ 1.7GB 的
+    /// arena 分配，是该 kick 分配量的全部来源（修复后 kick 1534→288ms）。
+    #[test]
+    fn declb_cache_survives_interleaved_tables() {
+        let bump = Bump::new();
+        let a: Decls<'_> = Decls::default();
+        let b: Decls<'_> = Decls::default();
+        let ra1 = declb_of(&bump, &a);
+        let _rb = declb_of(&bump, &b);
+        let ra2 = declb_of(&bump, &a);
+        assert!(
+            Rc::ptr_eq(&ra1, &ra2),
+            "declb_of 对同一 decl 表未命中（缓存退化成单条目？）"
+        );
+    }
 }
 
 /// `v_app` 可否安全应用到该值（参考版 `is_appliable`）：λ / Flex / Rigid /

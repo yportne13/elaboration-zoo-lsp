@@ -225,16 +225,22 @@ thread_local! {
     /// 写入」，外层回滚需继续撤销）。
     pub(super) static META_JOURNAL: RefCell<Vec<Vec<(usize, MetaEntry)>>> =
         const { RefCell::new(Vec::new()) };
-    /// `declb_of` 的单条目缓存（参考版 `DECLB_CACHE` 同款移植）：Match/Match
-    /// unify、quote、rename 每碰到一对 Match 值就重建整张 decl 存根表（O(D)
-    /// 键克隆 + 2 次 bump 分配/条目），adder_proof 这类 Match/Match 密集证明
-    /// 每 decl 数千次。键 = (decl 表地址, len)：decl 表是 COW `Rc`，轮内
-    /// `Rc::make_mut` 重分配换地址即自然 miss 重建；(addr, len) 双键挡住
-    /// 同轮 free→realloc 同址不同内容的 ABA。**存放口径 'static**：条目全
-    /// 指向当轮 bump（与 `unify_stack` 同纪律），`force_memo_clear()`——每个
-    /// `bump.reset()` 轮入口的唯一钩子——清空。
-    pub(super) static TWIN_DECLB_CACHE: RefCell<Option<(usize, usize, Rc<Decls<'static>>)>> =
-        const { RefCell::new(None) };
+    /// `declb_of` 的**多条目**缓存：Match/Match unify、quote、rename 每碰到
+    /// 一对 Match 值就重建整张 decl 存根表（O(D) 键克隆 + 2 次 bump 分配/
+    /// 条目），adder_proof 这类 Match/Match 密集证明每 kick 上万次。键 =
+    /// (decl 表地址, len)：decl 表是 COW `Rc`，轮内 `Rc::make_mut` 重分配换
+    /// 地址即自然 miss 重建；(addr, len) 双键挡住同轮 free→realloc 同址不同
+    /// 内容的 ABA。**存放口径 'static**：条目全指向当轮 bump（与 `unify_stack`
+    /// 同纪律），`force_memo_clear()`——每个 `bump.reset()` 轮入口的唯一钩子
+    /// ——清空。
+    ///
+    /// **为什么不是单条目**（2026-09-24）：单条目在"两个 decl 表实例交替出现"
+    /// 的负载上 100% 抖动——实测 adder_proof 的 LSP kick 里 `declb_of` 44,757
+    /// 次调用有 27,837 次重建（62% miss），每次重建 O(D=1416) ⇒ 2,100 万条目
+    /// /kick ≈ 1.7GB 的 arena 分配，正是该 kick 分配量的全部来源（参考版不
+    /// 走这条路，0 次）。多条目让交替访问命中；容量小且随轮清空，内存可控。
+    pub(super) static TWIN_DECLB_CACHE: RefCell<Vec<(usize, usize, Rc<Decls<'static>>)>> =
+        const { RefCell::new(Vec::new()) };
     /// quote 的 `Nat` 类型项缓存：`XCell::Nat(k)` quote 每次都要嵌套 quote
     /// 一遍闭合的 `Nat` Sum 值（轮内恒定、与层级无关）+ 两个新草稿栈。键 =
     /// Nat 值打包字（fake/真登记各一个地址，键随值换代自然失效）。轮界
@@ -396,7 +402,7 @@ pub fn twin_mem_stats() -> serde_json::Value {
 pub(super) fn force_memo_clear() {
     let snap = FORCE_MEMO.with(|m| m.borrow_mut().reclaim(CACHE_SHRINK_MIN_ENTRIES));
     twin_stat_record(&TWIN_STAT_FORCE, snap);
-    TWIN_DECLB_CACHE.with(|c| *c.borrow_mut() = None);
+    TWIN_DECLB_CACHE.with(|c| c.borrow_mut().clear());
     QUOTE_NAT_TM.with(|c| *c.borrow_mut() = None);
     STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
 }
@@ -505,6 +511,10 @@ pub(super) fn force<'a>(
     }
     r
 }
+
+/// `declb_of` 缓存容量（多条目，FIFO）。4 足以覆盖"少数几个 decl 表实例
+/// 交替"的访问形态，同时把常驻压在小量级（每条目 ≈ D×~80B）。
+pub(super) const DECLB_CACHE_ENTRIES: usize = 4;
 
 /// force 的实际臂集（无 memo；参考版 `force_inner` 逐臂对齐）：
 /// Flex（已解 → 展开应用；未解原样）、原生 Nat（WHNF 叶）、Obj（递归进内层

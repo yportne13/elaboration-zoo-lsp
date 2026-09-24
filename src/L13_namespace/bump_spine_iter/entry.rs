@@ -1624,7 +1624,7 @@ impl Tycker {
                 .enabled
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        let mut times: Vec<(u128, usize, String, u64, u64, u64, u64, u64, u64, u64)> = Vec::new();
+        let mut times: Vec<(u128, usize, String, u64, u64, u64, u64, u64, u64, u64, u64)> = Vec::new();
         let snap = || {
             use std::sync::atomic::Ordering::Relaxed;
             (
@@ -1634,6 +1634,9 @@ impl Tycker {
                 super::FUNC_PROF.quote.1.load(Relaxed),
                 super::FUNC_PROF.check_universe.1.load(Relaxed),
                 super::force::force_memo_len() as u64,
+                // bump 的 chunk 容量累计（bumpalo 语义：各 chunk 尺寸之和，
+                // 翻倍增长）——逐声明看"谁分配了 GB 级数据"。
+                self.bump.allocated_bytes() as u64,
             )
         };
         for (i, d) in ast.iter().enumerate() {
@@ -1664,6 +1667,7 @@ impl Tycker {
                     c1.4 - c0.4,
                     c0.5,
                     c1.5,
+                    c1.6 - c0.6,
                 ));
             }
             match r {
@@ -1687,10 +1691,11 @@ impl Tycker {
             for t in times.iter().take(8) {
                 let (us, i, name) = (&t.0, &t.1, &t.2);
                 let (force, hits, miss, quote, cuni) = (t.3, t.4, t.5, t.6, t.7);
-                let (mb, ma) = (t.8, t.9);
+                let (mb, ma, arena) = (t.8, t.9, t.10);
                 eprintln!(
-                    "[DECLTIME]   {:>7.2}ms [{i}] {force:>10} {hits:>10} {miss:>10} {quote:>10} {cuni:>9} {mb:>11} {ma:>10}  {name}",
-                    *us as f64 / 1e3
+                    "[DECLTIME]   {:>7.2}ms [{i}] {force:>10} {hits:>10} {miss:>10} {quote:>10} {cuni:>9} {mb:>11} {ma:>10} arena+{}MB  {name}",
+                    *us as f64 / 1e3,
+                    arena >> 20,
                 );
             }
         }
