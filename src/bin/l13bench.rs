@@ -376,6 +376,50 @@ fn bench_one(label: &str, decls: &[Decl], nat_after: &[usize], cli: &Cli, want: 
         format!("NF-DIVERGE basic={b_nf} fast={f_nf}")
     };
     println!("-- {label} ({} decls) {verdict}", decls.len());
+    // **尺寸不同 ≠ 语义不同**：`nf` 是 `tm_size` 的节点数，而 `tm_size` 会计入
+    // pretty **不打印**的槽位（`Sum` 的参数类型槽、`Match` 的模式内部、
+    // `AppPruning` 的掩码长度）。2026-09-23 adder_proof 实测 `NF-DIVERGE
+    // basic=26307 fast=26357`，而两版 pretty 范式**逐字符相同**（516 字符）——
+    // 该 DIVERGE 是度量粒度的假警报。所以尺寸不一致且两版都跑通时，自动补一次
+    // pretty 对比把判定说清楚（只在分歧时付这一次额外 elaboration 的钱）。
+    // `L13BENCH_NF_DUMP=1` 可强制在尺寸一致时也打印。
+    let force_dump = std::env::var_os("L13BENCH_NF_DUMP").is_some();
+    if force_dump || (!ok && b_nf != 0 && f_nf != 0) {
+        let bp = L13_namespace::bench_check_nf_pretty_bounded(decls, nat_after);
+        let mut t = fast::Tycker::new();
+        let fp = t.bench_check_nf_pretty_bounded(decls, nat_after);
+        match (bp, fp) {
+            (Some(b), Some(f)) if b == f => println!(
+                "   [NF] 两版 pretty 范式逐字符相同（{} 字符）⇒ 上面的尺寸差来自 \
+                 tm_size 计入但不打印的槽位，**不是语义分歧**",
+                b.len(),
+            ),
+            (Some(b), Some(f)) => {
+                let bc: Vec<char> = b.chars().collect();
+                let fc: Vec<char> = f.chars().collect();
+                let i = bc
+                    .iter()
+                    .zip(fc.iter())
+                    .position(|(x, y)| x != y)
+                    .unwrap_or(bc.len().min(fc.len()));
+                let lo = i.saturating_sub(60);
+                println!(
+                    "   [NF] **可见分歧**：pretty 串在第 {i} 个字符起不同（basic {} / fast {} 字符）",
+                    bc.len(),
+                    fc.len(),
+                );
+                println!(
+                    "   [NF] basic …{}",
+                    bc[lo..(i + 120).min(bc.len())].iter().collect::<String>()
+                );
+                println!(
+                    "   [NF] fast  …{}",
+                    fc[lo..(i + 120).min(fc.len())].iter().collect::<String>()
+                );
+            }
+            (a, c) => println!("   [NF] basic_ok={} fast_ok={}", a.is_some(), c.is_some()),
+        }
+    }
 
     let mut ts_basic: Vec<u128> = Vec::new();
     let mut ts_fast: Vec<u128> = Vec::new();

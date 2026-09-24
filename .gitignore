@@ -1,6 +1,11 @@
 /target
 /target_ag*
 target_split*/
+# 备用构建目录：`CARGO_TARGET_DIR=target_<x>` 的临时口径（target_mem /
+# target_opt_S6 / target_b1 …）。2026-09-23 一个 `git add -A` 把 target_b1
+# 的 1184 个产物文件提交了进去，故在此统一收口（其余几个此前只靠本地
+# .git/info/exclude，克隆到别处就会重演）。
+target_*/
 vscode_extension/client/node_modules
 vscode_extension/client/dist
 vscode_extension/client/out

@@ -1597,16 +1597,20 @@ prelude 与文件喂进 `bench_check_nf_bounded` 时，**用户文件是用 `fas
 | `09-hierarchy.typort` | **nf=1 ✓** |
 | `adder_proof.typort` | **NF-DIVERGE basic=26307 fast=26357** ← 新发现，见下 |
 
-> **新发现（待查）**：`adder_proof` 两版都跑完后，末 def 的 nf 尺寸稳定地差
-> **50 个节点**（26307 vs 26357，`--rounds 2` 两次一致），而同口径下
-> `theorem_proving` / `hdl_ops` / `09-hierarchy` 逐字节一致。`bench_check_nf_bounded`
-> 只回尺寸不回项，所以"这 50 个节点是语义不同的范式、还是可互相转换的表示差异
-> （如原生 Nat 折叠与 succ 链的边界）"**尚未判定**。LSP 侧看不到它：诊断 parity
-> 只比 ERROR+WARNING，INFORMATION（println 渲染）被显式排除。下一步用
-> `l13_fast_parity` 的 `assert_parity` 口径（Ok 输出逐字节）加一条 adder_proof
-> 用例即可定性。
+> **已定性（同日）：那条 `NF-DIVERGE` 是尺寸度量的假警报，不是语义分歧。**
+> `nf` 是 `tm_size` 的节点数，而 `tm_size` 会计入 pretty **不打印**的槽位
+> （`Sum` 的参数类型槽、`Match` 的模式内部、`AppPruning` 的掩码长度）。给两版
+> 各加一个 `bench_check_nf_pretty_bounded`（回 pretty 串而非节点数）后实测：
+> adder_proof 两版 pretty 范式**逐字符相同**（516 字符）。LSP 侧的独立佐证：
+> 新增 `twin_information_diagnostics_match_reference_on_proof_examples`（全诊断
+> parity，**含 INFORMATION**——此前所有 parity 断言都走 `errwarn`，把 println
+> 渲染显式排除在外）在 `theorem_proving` 与 `adder_proof` 上均通过。
+>
+> 连带改进：`l13bench` 现在**只在尺寸分歧且两版都跑通时自动补一次 pretty 对比**
+> 并打印判定（"逐字符相同 ⇒ 不是语义分歧" / "第 N 个字符起不同"），
+> `L13BENCH_NF_DUMP=1` 可强制打印。今后任何 `NF-DIVERGE` 都自带解释。
 
-**实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp 22 全绿；
+**实测**：门禁四件套 lib 406 / parity 14 / into_probe 1 / twin_lsp **26** 全绿；
 孪生接管面从 8/30 恢复到 29/30。
 
 

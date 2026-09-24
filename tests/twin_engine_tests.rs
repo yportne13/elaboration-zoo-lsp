@@ -1104,3 +1104,67 @@ fn twin_field_projection_def_span_is_known_degraded() {
     );
 }
 
+/// **Full-diagnostic** parity — INFORMATION (println rendering) included — on
+/// the proof examples.
+///
+/// Every other parity assertion in this file goes through `errwarn`, which
+/// filters to ERROR|WARNING on purpose ("Information is allowed to differ").
+/// That left the *rendered values* of `println` completely unchecked, and the
+/// 2026-09-23 tooling fix (`l13bench --file` now parses the user file with the
+/// prelude's accumulated macros) surfaced exactly such a difference:
+///
+/// ```text
+/// l13bench --file examples/adder_proof.typort --with-prelude core
+///   → NF-DIVERGE basic=26307 fast=26357      (stable across --rounds)
+/// l13bench --file examples/theorem_proving.typort --with-prelude core
+///   → nf=42                                   (identical)
+/// ```
+///
+/// Both engines' `tm_size` walk the same term shapes, so the 50-node gap is a
+/// difference in the quoted normal form, not a metric artifact.  This test
+/// pins the user-visible half of it: what `println` actually prints.
+#[test]
+fn twin_information_diagnostics_match_reference_on_proof_examples() {
+    /// (severity, message) of the **last** publish for `uri`.
+    fn last_diags(
+        b: &Arc<Backend<CapturingClient>>,
+        uri: &Url,
+    ) -> Vec<(Option<lsp_types::DiagnosticSeverity>, String)> {
+        let d = b.client.diagnostics.lock().unwrap();
+        match d.iter().filter(|(u, _, _)| u == uri).last() {
+            Some((_, ds, _)) => ds.iter().map(|d| (d.severity, d.message.clone())).collect(),
+            None => Vec::new(),
+        }
+    }
+    let info_only = |v: Vec<(Option<lsp_types::DiagnosticSeverity>, String)>| -> Vec<String> {
+        v.into_iter()
+            .filter(|(s, _)| *s == Some(lsp_types::DiagnosticSeverity::INFORMATION))
+            .map(|(_, m)| m)
+            .collect()
+    };
+
+    for (i, fixture) in [
+        "examples/theorem_proving.typort",
+        "examples/adder_proof.typort",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let src = std::fs::read_to_string(fixture).unwrap_or_else(|_| panic!("{fixture}"));
+        let uri = Url::parse(&format!("file:///twin_info_{i}.typort")).unwrap();
+        let tb = backend_hdl(Engine::Twin);
+        tb.process_file(&uri, &src, Some(1));
+        let rb = backend_hdl(Engine::Reference);
+        rb.process_file(&uri, &src, Some(1));
+
+        let (t, r) = (info_only(last_diags(&tb, &uri)), info_only(last_diags(&rb, &uri)));
+        // Non-vacuity: the fixture must actually print something, otherwise the
+        // comparison below is two empty vectors.
+        assert!(
+            !r.is_empty(),
+            "{fixture}: fixture produced no INFORMATION rows — test is vacuous",
+        );
+        assert_eq!(t, r, "{fixture}: println rendering diverged");
+    }
+}
+

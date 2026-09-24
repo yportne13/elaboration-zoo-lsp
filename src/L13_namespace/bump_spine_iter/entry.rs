@@ -1594,6 +1594,43 @@ impl Tycker {
         let r = tm_size(q);
         r
     }
+
+    /// [`Tycker::bench_check_nf_bounded`] 的**内容**变体：回末 def 值的 pretty
+    /// 串而非节点数（参考版 `bench_check_nf_pretty_bounded` 的对位）。互检只报
+    /// 尺寸时，`NF-DIVERGE basic=26307 fast=26357` 说不出差异在哪；本变体让
+    /// `l13bench --file` 能把两边的范式直接 diff。`Err` 回 `None`。
+    pub(crate) fn bench_check_nf_pretty_bounded(
+        &mut self,
+        ast: &[Decl],
+        nat_after: &[usize],
+    ) -> Option<String> {
+        self.bump.reset();
+        self.resident = None;
+        self.machine.clear_round();
+        force_memo_clear();
+        let bump = &self.bump;
+        let mut cxt = self.machine.prime_round(bump);
+        let mut last: Option<V> = None;
+        for (i, d) in ast.iter().enumerate() {
+            match self.machine.infer_decl(bump, &mut cxt, d) {
+                Ok((out, nc)) => {
+                    cxt = nc;
+                    if nat_after.contains(&i) {
+                        cxt = self.machine.register_nat_builtins(bump, &cxt);
+                    }
+                    if let DeclOut::Def { name } = out {
+                        last = cxt.decls.get(name).map(|e| e.val);
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+        let v = last?;
+        let q = self.machine.quote(bump, &cxt, 0, v);
+        let e = export(&self.machine.symbol_table, q);
+        let names = types_names_list(cxt.types);
+        Some(super::pretty::pretty_tm(0, names, &e).to_string())
+    }
 }
 
 /// 一次性口径入口（与参考版 `run` 同签名同 Ok 输出）。

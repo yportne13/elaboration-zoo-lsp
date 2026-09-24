@@ -4543,6 +4543,43 @@ pub(crate) fn bench_check_nf_bounded(
     }
 }
 
+/// [`bench_check_nf_bounded`] 的**内容**变体：回末 def 值的 pretty 串而非节点
+/// 数。`bench_check_nf_bounded` 只回尺寸，于是 `NF-DIVERGE basic=26307
+/// fast=26357` 这类输出只说明"不一样"，说不出"哪里不一样"（2026-09-23 在
+/// `examples/adder_proof.typort` 上撞到）。`Err` 回 `None`（与回 0 同义）。
+pub(crate) fn bench_check_nf_pretty_bounded(
+    decls: &[parser::syntax::Decl],
+    nat_after: &[usize],
+) -> Option<String> {
+    force_memo_clear();
+    let mut infer = Infer::new();
+    let mut cxt = Cxt::new(&infer);
+    let mut last: Option<SmolStr> = None;
+    for (i, d) in decls.iter().enumerate() {
+        let is_def = matches!(d, parser::syntax::Decl::Def { .. });
+        let name = if let parser::syntax::Decl::Def { name, .. } = d {
+            Some(name.data.clone())
+        } else {
+            None
+        };
+        match infer.infer_in_place(&mut cxt, d.clone()) {
+            Ok((_, _, nc)) => cxt = nc,
+            Err(_) => return None,
+        }
+        if nat_after.contains(&i) {
+            cxt::Cxt::register_nat_builtins(&mut cxt, &infer);
+        }
+        if is_def {
+            last = name;
+        }
+    }
+    let v = last.and_then(|n| cxt.decl.get(&n).map(|e| e.2.clone()))?;
+    let q = infer.quote(&cxt.decl, Lvl(0), &v);
+    let s = pretty_tm(0, cxt.names(), &q).to_string();
+    std::mem::forget(q);
+    Some(s)
+}
+
 /// [`bench_check_nf_bounded`] 的诊断孪生：首个 decl Err 直接把错误传出
 /// （而非吞成 0），供 l13bench `--file` 模式逐 decl 定位参考版失败点。
 pub(crate) fn bench_check_first_err_bounded(
