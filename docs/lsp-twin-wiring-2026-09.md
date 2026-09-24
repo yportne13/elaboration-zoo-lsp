@@ -1593,6 +1593,28 @@ HDL 文件 21/25 跑参考版。
   （首 kick 25,937），193 × 3234 条 ≈ 6×10⁵ 次迭代 ≈ **数 ms**，不是成本。
   （文档里"5 万次/轮"是 **bench 口径**的数字，LSP kick 口径下不成立。）
 
+**再证伪一个：实例候选收集的全表扫描**（`typeclass.rs` 的 `head_key_v` 给
+`None` 时 `instances.iter()` 全扫）。逐声明计数显示 `vec_adder_correct` 在两种
+prelude 下 **`idx_calls` / `fullscan_calls` 完全相同**（495 / 165），只有桶内实例数
+从 321 变 972（3×，总量微不足道）——**不是成本**。
+
+**结论：不是"干了更多活"，而是"每次操作更贵"。** `L13BENCH_DECLTIME` 现在同时
+报逐声明的 `force` / `f_hits` / `f_miss` / `quote` / `check_universe` 增量，实测：
+
+| prelude | `vec_adder_correct` 耗时 | force | f_hits | f_miss | quote | cuni |
+|---|---|---|---|---|---|---|
+| core | **343 ms** | 1,734,362 | 1,261,710 | 17,805 | 3,603 | 49 |
+| hdl | **1127 ms** | 1,734,362 | 1,261,710 | 17,805 | 3,603 | 49 |
+
+**每一个计数器逐位相同**，时间差 3.3×。而且相邻的文件声明 `add1_step2`
+（2.27M 次 force）**完全不受影响**（core 188 ms / hdl 192 ms）——所以**不是**
+"arena 变大 ⇒ 处处 cache miss" 那种全局效应，而是**这一条声明的构造**（
+`match (a,b)` 元组匹配 + `match (ci,abit,bbit)` 三元组 + 8 个 `calc` 臂 + 递归调用）
+与更大的 prelude 之间的特定交互。
+
+下一步（未做）：把这一条按构造切片（去掉 `calc` 臂 / 换成非元组 match / 去掉递归
+调用各做一版），看哪一块承载那 3.3×；或先补内核 tick 点再用采样器。
+
 **下一步的阻塞（已记录）**：继续下切需要采样器，但
 
 1. 孪生内核只有 **5 个 tick 点**（`bump_spine_iter/machine.rs`；`compiler.rs` /

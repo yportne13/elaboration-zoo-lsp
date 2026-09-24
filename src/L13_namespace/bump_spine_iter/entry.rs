@@ -1579,11 +1579,31 @@ impl Tycker {
         // 独占 1077ms/1223ms（HDL prelude）而 core prelude 下同一条只要 249ms
         // （即成本随 prelude 规模放大 4.3×）。关闭时每轮只多一次 `var_os`。
         let decl_time = std::env::var_os("L13BENCH_DECLTIME").is_some();
-        let mut times: Vec<(u128, usize, String)> = Vec::new();
+        if decl_time {
+            // 打开 FUNC_PROF 计数（`prof_count`/`prof_enter` 只在 enabled 时
+            // 自增）——孪生已接 force / quote / check_universe 三个计数点。
+            super::FUNC_PROF
+                .enabled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let mut times: Vec<(u128, usize, String, u64, u64, u64, u64, u64)> = Vec::new();
+        let snap = || {
+            use std::sync::atomic::Ordering::Relaxed;
+            (
+                super::FUNC_PROF.force.1.load(Relaxed),
+                super::FUNC_PROF.force_hits.1.load(Relaxed),
+                super::FUNC_PROF.force_misses.1.load(Relaxed),
+                super::FUNC_PROF.quote.1.load(Relaxed),
+                super::FUNC_PROF.check_universe.1.load(Relaxed),
+            )
+        };
         for (i, d) in ast.iter().enumerate() {
             let t0 = std::time::Instant::now();
+            let c0 = if decl_time { Some(snap()) } else { None };
             let r = self.machine.infer_decl(bump, &mut cxt, d);
             if decl_time {
+                let c1 = snap();
+                let c0 = c0.unwrap();
                 let name = match d {
                     Decl::Def { name, .. } => name.data.to_string(),
                     Decl::Enum { name, is_trait, .. } => {
@@ -1594,7 +1614,16 @@ impl Tycker {
                     Decl::Class { name, .. } => format!("class {}", name.data),
                     _ => "<other>".to_string(),
                 };
-                times.push((t0.elapsed().as_micros(), i, name));
+                times.push((
+                    t0.elapsed().as_micros(),
+                    i,
+                    name,
+                    c1.0 - c0.0,
+                    c1.1 - c0.1,
+                    c1.2 - c0.2,
+                    c1.3 - c0.3,
+                    c1.4 - c0.4,
+                ));
             }
             match r {
                 Ok((out, nc)) => {
@@ -1613,8 +1642,14 @@ impl Tycker {
             times.sort_by(|a, b| b.0.cmp(&a.0));
             let total: u128 = times.iter().map(|t| t.0).sum();
             eprintln!("[DECLTIME] total {:.1}ms over {} decls", total as f64 / 1e3, times.len());
-            for (us, i, name) in times.iter().take(12) {
-                eprintln!("[DECLTIME]   {:.2}ms  decl[{i}] {name}", *us as f64 / 1e3);
+            eprintln!("[DECLTIME]   time      decl      force    f_hits    f_miss     quote      cuni  name");
+            for t in times.iter().take(8) {
+                let (us, i, name) = (&t.0, &t.1, &t.2);
+                let (force, hits, miss, quote, cuni) = (t.3, t.4, t.5, t.6, t.7);
+                eprintln!(
+                    "[DECLTIME]   {:>7.2}ms [{i}] {force:>10} {hits:>10} {miss:>10} {quote:>10} {cuni:>9}  {name}",
+                    *us as f64 / 1e3
+                );
             }
         }
         let Some(v) = last else {
