@@ -1114,6 +1114,11 @@ impl Tycker {
         // 在 prime 收尾被清掉），所以"memo 太大拖慢用户段"这个假设在 LSP 口径
         // 下不成立——A/B（kick 入口清 memo）无差异，见 docs 的 adder_proof 节。
         let kick_memo0 = super::force::force_memo_len();
+        // A/B 实验：关用户段观察面（同 `bench_check_nf_bounded` 的
+        // `L13BENCH_NOBSERVE`），量化渲染在 LSP 口径下的占比。
+        if std::env::var_os("TYPORT_TWIN_NO_USER_OBSERVE").is_some() {
+            self.machine.observe = false;
+        }
         // A/B 实验（TYPORT_TWIN_KICK_CLEAR_MEMO=1）：kick 入口清 FORCE_MEMO。
         // 该表是**纯缓存**（键是打包值指针，语义上可随时丢弃），prime 之后它
         // 留着 prelude 的 ~59 万条（core prelude 只有 ~1.6 万）——用户段的

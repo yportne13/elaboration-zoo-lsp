@@ -236,6 +236,11 @@ pub(super) fn solve_bump<'a>(
     args: &[(V, Icit)],
     rhs: V,
 ) -> SolveRes {
+    // tick 补点：元变量求解器（solve/prune 族）此前零 tick，而它是 force 的
+    // 主要调用方之一——2026-09-23 的 tag-7 归因里，未打点的 force 调用方是
+    // 最后一批候选。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     match invert_bump(bump, spine, defs, metas, decl, mutable, ren, args) {
         Some(mask) => solve_with_pren_bump(
             bump, spine, work, vals, icits, defs, metas, decl, mutable, ren, m, args.len() as u32,
@@ -315,6 +320,9 @@ pub(super) fn rename_iter<'a>(
     cod0: u32,
     v0: V,
 ) -> Option<&'a Tm<'a>> {
+    // tick 补点：rename 任务栈（同 solve/prune 族，force 的主要调用方）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     let mut tasks: Vec<RJob<'a>> = vec![RJob::Ren {
         dom: dom0,
         cod: cod0,
@@ -736,6 +744,9 @@ pub(super) fn prune_meta_bump<'a>(
     mask: &[Option<Icit>], // 内先序
     m: u32,
 ) -> Option<u32> {
+    // tick 补点：剪枝（同 solve 族）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     let (mty, origin) = match &metas[m as usize] {
         MetaEntry::Unsolved(v, _, o, _) => (*v, *o),
         _ => unreachable!(), // 只对未解 meta 剪枝

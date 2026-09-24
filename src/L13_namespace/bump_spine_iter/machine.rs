@@ -2691,6 +2691,8 @@ impl Machine {
             // 精确键 → import 别名 → namespace 前缀 → `.name` 后缀唯一回退
             //（歧义报错；排除 namespace 方法键、要求首段可见）
             Raw::Var(x) => {
+            #[cfg(feature = "sampler")]
+            crate::sampler::tick();
                 if let Some(&blvl) = cxt.names.by_name.get(x.data.as_str()) {
                     let (ty, def_span) = *cxt.names.by_lvl.get(&blvl).expect("by_lvl 缺层级");
                     // 观察面：局部变量使用处现场渲染（与参考版使用处同溝）；
@@ -2893,6 +2895,8 @@ impl Machine {
             }
 
             Raw::Obj(x, t) => {
+            #[cfg(feature = "sampler")]
+            crate::sampler::tick();
                 // 字段名可缺省（中缀运算符前缀 / 空 `.foo` 补全场景）；参考版
                 // Obj 臂兣口 unwrap_or(empty_span("")) 同款
                 let t = t.clone().unwrap_or(empty_span(SmolStr::new("")));
@@ -3132,6 +3136,8 @@ impl Machine {
 
             // 应用
             Raw::App(t, u, arg) => {
+            #[cfg(feature = "sampler")]
+            crate::sampler::tick();
                 // 实参分派：命名 → insertUntilName 后按 Impl 应用；
                 // 位置 Impl → 直接应用；位置 Expl → 先 insert_t
                 let t_span = t.to_span();
@@ -3239,6 +3245,8 @@ impl Machine {
 
             // Infer let bindings
             Raw::Let(x, a_ty, t2, u2) => {
+            #[cfg(feature = "sampler")]
+            crate::sampler::tick();
                 // Raw::Tm 注解是缓存的已查类型（trait 方法 Π 链复用）——经
                 // 指针导入表取回本机结果，不再过 check_universe（参考版同款）
                 let (a_checked, va) = if let Raw::Tm(rc_tm, rc_ty) = a_ty.as_ref() {
