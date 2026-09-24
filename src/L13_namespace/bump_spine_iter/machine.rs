@@ -2136,6 +2136,10 @@ impl Machine {
         t_prime: V,
         t_span: &crate::parser_lib::Span<()>,
     ) -> Result<Cxt<'a>, Error> {
+        // tick 补点：`unify_pm`（GADT 索引精化的合一）此前零 tick，而栈采样显示
+        // 它占 inclusive 44.6%——本点是判断"次数差异 vs 单价差异"的关键。
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         let f1 = self.force_v(bump, cxt, t);
         let f2 = self.force_v(bump, cxt, t_prime);
         // (Rigid(x1, []), Rigid(x2, [])) if x1 == x2 → 同变量也走精化
