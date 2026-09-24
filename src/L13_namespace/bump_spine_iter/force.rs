@@ -544,6 +544,9 @@ pub(super) fn force_inner<'a>(
                 }
             },
             2 => {
+                // tick 补点：spine 链臂（解 flex 链 / prim 执行 / 卡住）
+                #[cfg(feature = "sampler")]
+                crate::sampler::tick();
                 let h = v_spine_of(v);
                 // 顶端槽的 `hk` 直接给出分派（省去非 flex/Decl 链的整趟走底）
                 match spine.stack[h].hk {
@@ -622,7 +625,11 @@ pub(super) fn force_inner<'a>(
                     _ => return v,
                 }
             }
-            7 => match v_xcell_of(v) {
+            7 => {
+                // tick 补点：tag-7 值单元臂（Nat 叶 / Obj / Call / Decl / SumCase）
+                #[cfg(feature = "sampler")]
+                crate::sampler::tick();
+                match v_xcell_of(v) {
                 // 原生 Nat 是 WHNF（定义上 succ^n zero 的压缩表示）
                 XCell::Nat(_) => return v,
                 // force 递归进卡住投影的内层并**重建** Obj（参考版 force
@@ -747,7 +754,8 @@ pub(super) fn force_inner<'a>(
                     };
                 }
                 _ => return v,
-            },
+                }
+            }
             _ => return v,
         }
     }

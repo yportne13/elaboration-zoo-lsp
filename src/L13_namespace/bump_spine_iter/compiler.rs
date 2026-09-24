@@ -142,6 +142,9 @@ impl<'a> Compiler<'a> {
         head_sum: V,
         ctor: &crate::parser_lib::Span<SmolStr>,
     ) -> bool {
+        // tick 补点（backlog §3 ①）：可达性探测（GADT 索引精化的核心）此前零 tick。
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         let (sum_name, head_params, impl_vals) = match v_xcell_of(head_sum) {
             XCell::Sum { name, params, .. } => {
                 if params.is_empty() {
@@ -284,6 +287,11 @@ impl<'a> Compiler<'a> {
         pat: &Pattern,
         head_ty: V,
     ) -> Result<(PatternDetail, Cxt<'a>), Error> {
+        // tick 补点（backlog §3 ①）：模式编译器此前只有 `compile` 入口一个点，
+        // 于是它的整段工作被"上一个 tick 点"吸收——2026-09-23 实测那正是
+        // `force` tag-7 臂那 2.8× 的归属地。
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         match pat {
             Pattern::Any(_, icit) => {
                 let b = self.make_implicit_name("");

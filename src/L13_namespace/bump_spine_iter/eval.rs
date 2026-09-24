@@ -94,6 +94,11 @@ pub(super) fn eval_aux<'a>(
     env: Env<'a>,
     cases: &'a [(PatternDetail, &'a Tm<'a>)],
 ) -> Option<(&'a Tm<'a>, Env<'a>)> {
+    // tick 补点（backlog §3 ②）：`eval_aux` 此前零 tick——它及其调用方
+    // （eval_iter 的循环体）是 tag-7 臂返回后那段未打点区间的主体，2026-09-23
+    // 实测该区间占 kick 的 ~85% 且 hdl/core 差 2.9×。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     let (index, datas): (u32, &[SumDataV<'a>]) =
         classify_force_head(bump, spine, defs, metas, decl, mutable, head);
     // 第一遍：Con(index) 相等（子模式 zip 失配 → 试下一臂）。头非构造子
@@ -264,6 +269,9 @@ pub(super) fn eval_iter<'a>(
     icits.clear();
     work.push(W::Tm(tm0, env0));
     while let Some(w) = work.pop() {
+        // tick 补点（backlog §3 ②）：eval 主循环体此前零 tick。
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         match w {
             W::Tm(Tm::Var(i), env) => {
                 vals.push(env_nth(defs, env, *i));

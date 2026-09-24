@@ -472,6 +472,10 @@ pub(super) fn unify_iter<'a>(
     trait_err: &mut Option<String>,
 ) -> bool {
     let memo_on = !NO_CONV_MEMO.load(std::sync::atomic::Ordering::Relaxed);
+    // tick 补点（backlog §3）：unify 工作表循环此前零 tick（只有 `Machine::unify`
+    // 入口那一个点，无法分辨循环体内部）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     // 草稿复用（Machine 常驻）：清空保容量，热路径零分配；容量到过阈值的表
     // 在清空时归还缓冲（memo 见 `CACHE_SHRINK_MIN_ENTRIES`，工作表见
     // `SPINE_SHRINK_MIN_ENTRIES`），否则峰值容量随常驻 Machine 到进程结束。
