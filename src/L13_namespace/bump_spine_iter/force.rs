@@ -73,6 +73,9 @@ pub(super) fn vapp1<'a>(
     a: V,
     i: Icit,
 ) -> V {
+    // tick 补点：force 的未打点调用方（tag-7 区间归因用）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     if v_tag(f) == 1 {
         let c = v_clo_of(f);
         let env = env_ext(bump, c.env, a);

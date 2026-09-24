@@ -1347,6 +1347,9 @@ impl Machine {
         t_prime: V,
         span: crate::parser_lib::Span<()>,
     ) -> Result<(), Error> {
+    // tick 补点：force 的未打点调用方（tag-7 区间归因用）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
 
         let mut trait_err: Option<String> = None;
         self.constraints.clear();
@@ -1728,6 +1731,9 @@ impl Machine {
         cxt: &Cxt<'a>,
         t: &Raw,
     ) -> Result<(&'a Tm<'a>, u32), Error> {
+    // tick 补点：force 的未打点调用方（tag-7 区间归因用）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
         super::prof_count(&super::FUNC_PROF.check_universe.1);
         let t_span = t.to_span();
         let x = self.infer_expr(bump, cxt, t)?;

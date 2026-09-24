@@ -1060,7 +1060,15 @@ impl Tycker {
         let cap_hint = r.cap_hint;
         let cxt = clone_cxt(&r.cxt);
         let cxt = {
-            let (cxt, _live) = self.compact_state(cxt, cap_hint);
+            let (cxt, live) = self.compact_state(cxt, cap_hint);
+            if std::env::var_os("TYPORT_KICK_PROBE").is_some() {
+                eprintln!(
+                    "[KICK_PROBE] compact: cap_hint={}MB live={}MB new_arena={}MB",
+                    cap_hint >> 20,
+                    live >> 20,
+                    self.bump.allocated_bytes() >> 20,
+                );
+            }
             cxt
         };
         // The force memo is keyed by packed `V` words (arena addresses) and
@@ -1114,6 +1122,7 @@ impl Tycker {
         // 在 prime 收尾被清掉），所以"memo 太大拖慢用户段"这个假设在 LSP 口径
         // 下不成立——A/B（kick 入口清 memo）无差异，见 docs 的 adder_proof 节。
         let kick_memo0 = super::force::force_memo_len();
+        let kick_arena0 = self.bump.allocated_bytes();
         // A/B 实验：关用户段观察面（同 `bench_check_nf_bounded` 的
         // `L13BENCH_NOBSERVE`），量化渲染在 LSP 口径下的占比。
         if std::env::var_os("TYPORT_TWIN_NO_USER_OBSERVE").is_some() {
@@ -1329,11 +1338,13 @@ impl Tycker {
         if let (Some(t0), Some(t_restore)) = (kick_t0, restore_done) {
             // µs 精度（评审 B#2 二期基线：七表克隆恢复在毫秒取整下不可见）。
             eprintln!(
-                "[KICK_PROBE] restore(clones)={:.1}ms loop+export={:.1}ms memo_start={} memo_end={}",
+                "[KICK_PROBE] restore(clones)={:.1}ms loop+export={:.1}ms memo_start={} memo_end={} arena_start={}MB arena_end={}MB",
                 t_restore.duration_since(t0).as_secs_f64() * 1e3,
                 t_restore.elapsed().as_secs_f64() * 1e3,
                 kick_memo0,
                 super::force::force_memo_len(),
+                kick_arena0 >> 20,
+                self.bump.allocated_bytes() >> 20,
             );
         }
         Ok(())

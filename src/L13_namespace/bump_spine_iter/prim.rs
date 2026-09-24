@@ -480,6 +480,9 @@ pub(super) fn prim_exec<'a>(
     pid: PrimId,
     args: &[(V, Icit)],
 ) -> Option<V> {
+    // tick 补点：force 的未打点调用方（tag-7 区间归因用）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     // 实参统一 force 到 WHNF 再进分派：非纯 prim 在 eval 点直呼时
     // （lazy_pure_prim 只拦纯 prim），实参可能是 eval 惰性产生的纯 prim
     // 中性 spine——不 force 则 lit_of / Nat / HDL 形状检查全部失准
