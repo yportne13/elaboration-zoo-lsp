@@ -1573,8 +1573,30 @@ impl Tycker {
         let bump = &self.bump;
         let mut cxt =  self.machine.prime_round(bump);
         let mut last: Option<V> = None;
+        // 逐声明计时（`L13BENCH_DECLTIME=1`）：定位"哪一条声明吃掉了成本"。
+        // 2026-09-23 为 adder_proof 的 LSP-kick 归因而加——bench 口径的
+        // `NF-DIVERGE`/总量都只说明"慢"，而这里一次就指出 `vec_adder_correct`
+        // 独占 1077ms/1223ms（HDL prelude）而 core prelude 下同一条只要 249ms
+        // （即成本随 prelude 规模放大 4.3×）。关闭时每轮只多一次 `var_os`。
+        let decl_time = std::env::var_os("L13BENCH_DECLTIME").is_some();
+        let mut times: Vec<(u128, usize, String)> = Vec::new();
         for (i, d) in ast.iter().enumerate() {
-            match  self.machine.infer_decl(bump, &mut cxt, d) {
+            let t0 = std::time::Instant::now();
+            let r = self.machine.infer_decl(bump, &mut cxt, d);
+            if decl_time {
+                let name = match d {
+                    Decl::Def { name, .. } => name.data.to_string(),
+                    Decl::Enum { name, is_trait, .. } => {
+                        format!("{} {}", if *is_trait { "trait" } else { "enum" }, name.data)
+                    }
+                    Decl::TraitDecl { name, .. } => format!("traitdecl {}", name.data),
+                    Decl::ImplDecl { .. } => "impl".to_string(),
+                    Decl::Class { name, .. } => format!("class {}", name.data),
+                    _ => "<other>".to_string(),
+                };
+                times.push((t0.elapsed().as_micros(), i, name));
+            }
+            match r {
                 Ok((out, nc)) => {
                     cxt = nc;
                     if nat_after.contains(&i) {
@@ -1585,6 +1607,14 @@ impl Tycker {
                     }
                 }
                 Err(_) => return 0,
+            }
+        }
+        if decl_time {
+            times.sort_by(|a, b| b.0.cmp(&a.0));
+            let total: u128 = times.iter().map(|t| t.0).sum();
+            eprintln!("[DECLTIME] total {:.1}ms over {} decls", total as f64 / 1e3, times.len());
+            for (us, i, name) in times.iter().take(12) {
+                eprintln!("[DECLTIME]   {:.2}ms  decl[{i}] {name}", *us as f64 / 1e3);
             }
         }
         let Some(v) = last else {

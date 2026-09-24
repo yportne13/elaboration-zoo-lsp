@@ -1549,10 +1549,7 @@ HDL 文件 21/25 跑参考版。
   kick 降到 ~1420 ms，但每隔一 kick 重 prime 到 ~2700–3200 ms）；
 - 观察面（用户段 push）：**~216 ms/kick**（临时关 `machine.observe` 对照）；
 - 导出桥（`export` + `v_to_ref_val` 逐声明）：**~0 ms**；
-- 其余 **~1200 ms** 在 `observe_user` 的声明循环内，**未定位**。计数探针显示该循环
-  每 kick 触发 **~2,900 次 `clone_cxt`**（首 kick 45,778 次），但 `clone_cxt` 本身
-  全是 Rc/`Copy` 克隆（`decls: Rc<Decls>`、`names_len=0`），属**工作形状**而非成本
-  本身——下一步需要采样器（`tools/attr_l13.sh` 那套）才能继续下切。
+- 其余 **~1200 ms** 在 `observe_user` 的声明循环内，**已定位到单条声明**，见下。
 
 参考基线：`docs/lsp-twin-wiring-2026-09.md` 的 2026-09-14 节记 adder_proof 为
 313–475 ms/kick（**test profile**，口径与本次 release 不同，不可直接比），
@@ -1563,7 +1560,54 @@ HDL 文件 21/25 跑参考版。
 > 内容**：两版都在第 5 个文件声明 `def add_right_eq` 上以
 > `error name not in scope: calc` 同错早退（`NF-DIVERGE basic=0 fast=0`），那 9.7 /
 > 20.6 ms 只是 prelude-core 前缀的成本（`--with-prelude hdl` 同理，943/963 仍在
-> prelude 内）。所以目前**没有任何 bench 口径能测这个文件**——见下一节。
+> prelude 内）。工具缺口已修（下一节），修好后本文件即可测。
+
+### adder_proof 的 ~1200 ms：定位到**单条声明**，且成本随 prelude 规模放大
+
+工具修好后的干净分解（`l13bench --file`，release，min-of-3；空文件作 prelude 基线）：
+
+| prelude | 空文件（纯 prelude） | adder_proof | **文件自身 25 条声明** |
+|---|---|---|---|
+| core（134 decls） | basic 17.1 / fast 7.6 ms | basic 324.2 / fast 399.3 | 参考 307 / **孪生 392** |
+| hdl（938 decls） | basic 3203.6 / fast 1416.9 ms | basic 3669.3 / fast 2640.5 | 参考 466 / **孪生 1224** |
+
+⇒ 孪生的单文件成本对 prelude 规模**敏感得多**（core→hdl：孪生 ×3.1、参考版 ×1.5）。
+
+**逐声明计时**（新增 `L13BENCH_DECLTIME=1`，见下）把 1224 ms 钉到一条：
+
+| 声明 | HDL prelude | core prelude | 倍数 |
+|---|---|---|---|
+| `def vec_adder_correct`（decl[957]，`examples/adder_proof.typort:228`） | **1077.6 ms** | **249.0 ms** | **4.3×** |
+| 次热 `streamFifoCC` / `moduleDefVL` / `dividerCore`（都在 prelude 内） | 191–208 ms | — | — |
+| 文件其余 24 条合计 | ~145 ms | ~150 ms | ≈1× |
+
+⇒ **HDL prelude 下 adder_proof 的 1224 ms 里 1078 ms 是这一条递归证明**，而它变慢的
+唯一原因是 prelude 变大（同一声明、同一份源码）。
+
+**已证伪的两个假设**（都用计数探针量过，探针已撤）：
+
+- **decl 表 `Rc::make_mut` 深拷贝**：每 kick 44 次写、其中 **37 次**因 `Rc` 共享而
+  深拷贝整张 **1416 条**表——真实的浪费，但 37 × ~30 µs ≈ **~1 ms**，不是成本。
+  （值得顺手修，但不是本条的原因。）
+- **`trait_metas` 全表扫描**：`solve_multi_trait_ref` 每 kick 只调 **193 次**
+  （首 kick 25,937），193 × 3234 条 ≈ 6×10⁵ 次迭代 ≈ **数 ms**，不是成本。
+  （文档里"5 万次/轮"是 **bench 口径**的数字，LSP kick 口径下不成立。）
+
+**下一步的阻塞（已记录）**：继续下切需要采样器，但
+
+1. 孪生内核只有 **5 个 tick 点**（`bump_spine_iter/machine.rs`；`compiler.rs` /
+   `eval.rs` / `force.rs` 零 tick），未打点的区间会被"上一个 tick 点"吸收
+   （`docs/perf-l13-round-2026-09-23b.md` §3 已列"内核 tick 补点"backlog）；
+2. **`--features sampler` 实际是 bin 级的**：包级开该 feature 时，十几个用
+   `#[path]` 包含 L13/L10 源码的 bin（`lXXbench` 等）因未包含 `sampler.rs` 而
+   `cannot find sampler in crate` 编译失败——所以 `cargo test --features sampler
+   --test twin_engine_bench` 建不起来（`attr_l13.sh` 一直只用 `--bin l13bench`，
+   这一点此前没被记录）。想在 LSP 口径采样，得先给这些目标补 `#[path]` 包含，
+   或把采样 bench 做成 bin。
+
+**新增工具**：`L13BENCH_DECLTIME=1`（`bump_spine_iter/entry.rs` 的
+`bench_check_nf_bounded` 内，bench-only 入口）打印逐声明耗时 Top-12 + 总计。关闭
+时每轮只多一次 `var_os`。这条探针一次就把"~1200 ms 未定位"变成"一条声明"。
 
 ### 工具缺口：`l13bench --file` 测不了几乎所有示例 —— **已修（2026-09-23）**
 
