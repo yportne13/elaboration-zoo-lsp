@@ -90,6 +90,12 @@ struct Cli {
     /// 两版都在 decl 1 报 `name not in scope: Nat`，示例级互检不可用。
     #[arg(long, default_value = "none")]
     with_prelude: String,
+
+    /// `--with-prelude hdl` 配套：只取 HDL 文件列表的前 N 个（诊断用）。
+    /// 用来扫描"文件成本随 prelude 规模如何变化"——渐变 ⇒ 规模/局部性效应，
+    /// 断崖 ⇒ 某个具体 prelude 文件的交互（2026-09-23 adder_proof 归因）。
+    #[arg(long)]
+    prelude_files: Option<usize>,
 }
 
 fn median(ts: &mut [u128]) -> u128 {
@@ -502,7 +508,10 @@ fn run(cli: Cli) {
             "core" => CORE.to_vec(),
             "hdl" => {
                 let mut f = CORE.to_vec();
-                f.extend_from_slice(HDL);
+                match cli.prelude_files {
+                    Some(n) => f.extend_from_slice(&HDL[..n.min(HDL.len())]),
+                    None => f.extend_from_slice(HDL),
+                }
                 f
             }
             other => {

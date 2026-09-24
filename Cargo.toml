@@ -63,6 +63,14 @@ path = "src/bin/l12bench.rs"
 name = "l13bench"
 path = "src/bin/l13bench.rs"
 
+# LSP-kick 采样归因口（只依赖库，故 `--features sampler` 下可单独构建——
+# 其它 bin 用 `#[path]` 直编 L13/L10 源码、未包含 sampler.rs，包级开该
+# feature 会编译失败）。见 src/bin/l13lspsample.rs 的文件头。
+[[bin]]
+name = "l13lspsample"
+path = "src/bin/l13lspsample.rs"
+test = false
+
 # Tool bins: 通过 #[path] 直接编译多层源码（含各自的 #[cfg(test)] 模块），
 # 其测试目标会跑重复的文件 IO 测试并互相覆盖固定路径——关掉 test 目标。
 #

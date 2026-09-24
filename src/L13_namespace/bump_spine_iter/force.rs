@@ -398,6 +398,12 @@ pub(super) fn force_memo_clear() {
     STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
 }
 
+/// 当前 `FORCE_MEMO` 的条目数（`L13BENCH_DECLTIME` 逐声明读数用：该表是
+/// **纯缓存**，键是打包值指针，命中率与表大小共同决定 force 的单位成本）。
+pub(super) fn force_memo_len() -> usize {
+    FORCE_MEMO.with(|m| m.borrow().len())
+}
+
 #[inline]
 fn force_taint_bump() {
     FORCE_TAINT.with(|t| t.set(t.get() + 1));
@@ -444,6 +450,12 @@ pub(super) fn force<'a>(
     v0: V,
 ) -> V {
     super::prof_count(&super::FUNC_PROF.force.1);
+    // tick 补点（backlog §3）：`force` 此前零 tick，于是它的时间全被"上一个
+    // tick 点"（多半是 `eval`）吸收——2026-09-23 的 self% 报告里 `eval` 独占
+    // 85.8% 而无法分辨。这条声明单次 kick 就有 173 万次 force，不拆开就只能
+    // 停在"eval 里"。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     let compound = v_tag(v0) == 7
         && matches!(
             v_xcell_of(v0),
@@ -455,6 +467,11 @@ pub(super) fn force<'a>(
     }
     let key = v0.0;
     let ver = PRIM_VERSION.with(|v| v.get());
+    // tick 补点：复合值走 memo 的**查找**路径（命中即返回；本点与下一个 tick
+    // 之间的区间 = 一次哈希查找 + 命中返回）。用于把 `force` 的 283ns/tick
+    // 拆成"值单元解引用 + memo 查找"与"真正的 force_inner"。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     if let Some(r) = FORCE_MEMO.with(|m| {
         m.borrow()
             .get(&key)
@@ -507,6 +524,10 @@ pub(super) fn force_inner<'a>(
     mutable: &RefCell<Mutable>,
     v0: V,
 ) -> V {
+    // tick 补点：真正的 forcing（memo 未命中/叶子臂）。与上面的 memo 查找点
+    // 配对，把 `force` 的 ns/tick 拆成两半。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     let mut v = v0;
     let mut work: Vec<W<'a>> = Vec::new();
     let mut vals: Vec<V> = Vec::new();

@@ -1109,6 +1109,18 @@ impl Tycker {
         user_ast: &[Decl],
     ) -> Result<(), Error> {
         self.user_errors.clear();
+        // 本 kick 起点的 FORCE_MEMO 条目数（`TYPORT_KICK_PROBE` 用）。
+        // 2026-09-23 实测：LSP 路径下它只有 ~3.6 万条（HDL prelude 的 59 万条
+        // 在 prime 收尾被清掉），所以"memo 太大拖慢用户段"这个假设在 LSP 口径
+        // 下不成立——A/B（kick 入口清 memo）无差异，见 docs 的 adder_proof 节。
+        let kick_memo0 = super::force::force_memo_len();
+        // A/B 实验（TYPORT_TWIN_KICK_CLEAR_MEMO=1）：kick 入口清 FORCE_MEMO。
+        // 该表是**纯缓存**（键是打包值指针，语义上可随时丢弃），prime 之后它
+        // 留着 prelude 的 ~59 万条（core prelude 只有 ~1.6 万）——用户段的
+        // force 命中就要在这张 ~30MB 的表上随机访问。
+        if std::env::var_os("TYPORT_TWIN_KICK_CLEAR_MEMO").is_some() {
+            super::force::force_memo_clear();
+        }
         let kick_t0 = if std::env::var_os("TYPORT_KICK_PROBE").is_some() {
             Some(std::time::Instant::now())
         } else {
@@ -1304,9 +1316,11 @@ impl Tycker {
         if let (Some(t0), Some(t_restore)) = (kick_t0, restore_done) {
             // µs 精度（评审 B#2 二期基线：七表克隆恢复在毫秒取整下不可见）。
             eprintln!(
-                "[KICK_PROBE] restore(clones)={:.1}ms loop+export={:.1}ms",
+                "[KICK_PROBE] restore(clones)={:.1}ms loop+export={:.1}ms memo_start={} memo_end={}",
                 t_restore.duration_since(t0).as_secs_f64() * 1e3,
                 t_restore.elapsed().as_secs_f64() * 1e3,
+                kick_memo0,
+                super::force::force_memo_len(),
             );
         }
         Ok(())
@@ -1586,7 +1600,7 @@ impl Tycker {
                 .enabled
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        let mut times: Vec<(u128, usize, String, u64, u64, u64, u64, u64)> = Vec::new();
+        let mut times: Vec<(u128, usize, String, u64, u64, u64, u64, u64, u64, u64)> = Vec::new();
         let snap = || {
             use std::sync::atomic::Ordering::Relaxed;
             (
@@ -1595,6 +1609,7 @@ impl Tycker {
                 super::FUNC_PROF.force_misses.1.load(Relaxed),
                 super::FUNC_PROF.quote.1.load(Relaxed),
                 super::FUNC_PROF.check_universe.1.load(Relaxed),
+                super::force::force_memo_len() as u64,
             )
         };
         for (i, d) in ast.iter().enumerate() {
@@ -1623,6 +1638,8 @@ impl Tycker {
                     c1.2 - c0.2,
                     c1.3 - c0.3,
                     c1.4 - c0.4,
+                    c0.5,
+                    c1.5,
                 ));
             }
             match r {
@@ -1642,12 +1659,13 @@ impl Tycker {
             times.sort_by(|a, b| b.0.cmp(&a.0));
             let total: u128 = times.iter().map(|t| t.0).sum();
             eprintln!("[DECLTIME] total {:.1}ms over {} decls", total as f64 / 1e3, times.len());
-            eprintln!("[DECLTIME]   time      decl      force    f_hits    f_miss     quote      cuni  name");
+            eprintln!("[DECLTIME]   time      decl      force    f_hits    f_miss     quote      cuni  memo_before memo_after  name");
             for t in times.iter().take(8) {
                 let (us, i, name) = (&t.0, &t.1, &t.2);
                 let (force, hits, miss, quote, cuni) = (t.3, t.4, t.5, t.6, t.7);
+                let (mb, ma) = (t.8, t.9);
                 eprintln!(
-                    "[DECLTIME]   {:>7.2}ms [{i}] {force:>10} {hits:>10} {miss:>10} {quote:>10} {cuni:>9}  {name}",
+                    "[DECLTIME]   {:>7.2}ms [{i}] {force:>10} {hits:>10} {miss:>10} {quote:>10} {cuni:>9} {mb:>11} {ma:>10}  {name}",
                     *us as f64 / 1e3
                 );
             }

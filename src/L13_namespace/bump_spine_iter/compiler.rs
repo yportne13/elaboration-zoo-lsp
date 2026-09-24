@@ -503,6 +503,9 @@ impl<'a> Compiler<'a> {
         cxt: &Cxt<'a>,
         target_val: V,
     ) -> Result<(), Error> {
+        // tick 补点（backlog §3）：模式编译器此前零 tick。
+        #[cfg(feature = "sampler")]
+        crate::sampler::tick();
         self.warnings = Vec::new();
         self.errors = Vec::new();
         self.implicit_counter = 0;

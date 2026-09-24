@@ -103,6 +103,9 @@ pub(super) fn quote_iter<'a>(
     v0: V,
     mut memo: Option<&mut QuoteMemo<'a>>,
 ) -> &'a Tm<'a> {
+    // tick 补点（backlog §3）：quote 此前零 tick（同 force）。
+    #[cfg(feature = "sampler")]
+    crate::sampler::tick();
     tasks.clear();
     done.clear();
     tasks.push(QJob::Q(v0, level0));
