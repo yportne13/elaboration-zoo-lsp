@@ -1535,7 +1535,7 @@ HDL 文件 21/25 跑参考版。
 ⇒ 语料级每次 kick 从"基本没收益"变成 **1.64× 快**；HDL 主力文件 **2.7–4.1×**
 （`09-hierarchy` 4.10×、`05-bool` 3.71×、`03-bitwise` 3.58×、`13-adder-tree` 3.47×）。
 
-### 新增异常：`adder_proof` 在孪生侧慢 2.9×（已单独立项）
+### 新增异常：`adder_proof` 在孪生侧慢 2.9× —— **已于 2026-09-24 解决，见下文「adder_proof 的根因与修复」**
 
 同一个 sweep 里 `examples/adder_proof.typort` 是唯一"孪生远慢于参考版"的证明文件：
 
@@ -1629,7 +1629,78 @@ prelude 下 **`idx_calls` / `fullscan_calls` 完全相同**（495 / 165），只
 
 **新增工具**：`L13BENCH_DECLTIME=1`（`bump_spine_iter/entry.rs` 的
 `bench_check_nf_bounded` 内，bench-only 入口）打印逐声明耗时 Top-12 + 总计。关闭
-时每轮只多一次 `var_os`。这条探针一次就把"~1200 ms 未定位"变成"一条声明"。
+时每轮只多一次 `var_os`。这条探针一次就把"~1200 ms 未定位"变成"一条声明"
+（该异常最终已解决，根因见下文「adder_proof 的根因与修复」）。
+
+### adder_proof 的根因与修复 —— **已解决（2026-09-24）**
+
+**结论先行**：根因是 `declb_of` 的 decl 存根表缓存**只有单条目**，在 Match/Match
+密集的证明上被多个 decl 表实例交替访问打成 100% 抖动。改多条目后：
+
+| prelude | 引擎 | 修复前 | 修复后 |
+|---|---|---|---|
+| hdl | Reference | 523 ms | 533 ms |
+| hdl | **Twin** | **1534 ms** | **287 ms** |
+| core | Reference | 446 ms | 451 ms |
+| core | **Twin** | 485 ms | **280 ms** |
+
+⇒ 孪生从"慢 2.93×"变成"**快 1.86×**"，且**对 prelude 规模的敏感度消失**
+（3.16× → 1.02×）。全 30 示例总计 1.60× → **1.78×**，`adder_proof` 由 x0.34
+（唯一回归）变为 x1.88。
+
+**定位链**（每步都有可复现的仪器，见下）：
+
+1. **逐声明计时**把 1224 ms 钉到单条 `def vec_adder_correct`（hdl 1077 ms vs
+   core 249 ms，4.3×）。
+2. **逐 tick 点对照**（hdl vs core，同一孪生二进制）：26 个 tick 点里**只有
+   `force` 的 tag-7 值单元臂那一段是 2.78×，其余全部 1.00~1.14×**，且 tick 数
+   逐位相同 ⇒ 不是"活干得多"，是"每件活更贵"。
+3. **栈采样 + PDB 符号化**（`l13lspsample` + `tools/pdb_syms.py`）给出真剖面：
+   差异集中在 `quote_iter`（self 4.2×）与 `force`（self 2.0×），由
+   `Compiler::compile` → `unify_pm` 驱动。**tick 口径的 self% 在此是误导的**
+   （tick 只在函数入口，循环体内无点，未打点区间被上一个 tick 吸收）——这条
+   教训值得记住：`attr_l13.sh` 那套栈采样链路才是归因工具。
+4. **arena 量级**：hdl 下单次 kick 的 bump chunk 容量达 3842 MB（core 1016 MB），
+   而压实本身是好的（live 50 MB、压实后 60 MB）⇒ 是 kick 自己分配的。
+5. **逐声明 arena 增量**：`vec_adder_correct` 一条就分配 **2055 MB**（core
+   449 MB），而 force 计数逐位相同（1,734,362）⇒ 分配次数相同、**每次分配更大**。
+6. **`declb_of` 计数**（LSP 窗口内）：44,757 次调用 / **27,837 次整表重建**
+   / **2,100 万条目每 kick**；参考版同窗口 **0 次**。每次重建是 O(D=1416) 的
+   键克隆 + 每条目 2 次 bump 分配 ⇒ **≈1.7 GB/kick**，正是第 4/5 步的分配量。
+
+**为什么单条目必然抖动**：缓存键是 `(decl 表地址, len)`，而 Match/Match unify、
+quote、rename 会交替用**多个** decl 表实例（各自是 COW `Rc`，`Rc::make_mut`
+重分配即换地址）。单条目在"两个实例交替"的访问序上命中率为 0，于是每次调用都
+重建整张 O(D) 存根表。
+
+**修复**：`TWIN_DECLB_CACHE` 由 `RefCell<Option<..>>` 改为 `RefCell<Vec<..>>`
+（`DECLB_CACHE_ENTRIES = 4`，FIFO 淘汰，轮界仍由 `force_memo_clear()` 清空）。
+键与 ABA 纪律不变；语义等价——`(地址, len)` 命中时返回的本就是同一张表。
+
+**语义等价性验证**：门禁 lib 407 / parity 14 / into_probe 1 / twin_lsp 26 全绿；
+30 个示例的 `l13bench --file` 范式互检**逐位不变**（8 个既有 NF-DIVERGE 前后
+数字完全相同）；新增回归测试
+`declb_cache_tests::declb_cache_survives_interleaved_tables`（已验证在容量退化
+成 1 时失败）。
+
+**本轮新增工具**（长期可用）：
+
+- `src/bin/l13lspsample.rs` —— LSP 口径采样口（只依赖库，故 `--features sampler`
+  下可单独构建；带 `core` 参数做 prelude 对照）
+- `tools/folded_attr.py` / `tools/folded_callers.py` —— folded 文件的 inclusive/
+  leaf/调用者归因
+- `tools/selftxt_diff.py` —— 两个采样报告并排 diff（逐 tick 点的 tick 数 + ns 比）
+- `L13_namespace::probe_count()` —— 孪生/参考同口径的 `probe_accessible` 计数
+  （实测两版窗口内都是 351 次，即"同活不同价"）
+- `l13bench --prelude-files N` —— 只取 HDL 列表前 N 个文件，扫"成本随 prelude
+  规模如何变化"（实测渐变、无断崖）
+- `L13BENCH_DECLTIME=1` 现在同时报逐声明的 arena 增量
+
+**过程中证伪的假设**（都量过，避免后人重走）：decl 表 `Rc::make_mut` 深拷贝、
+`trait_metas` 全表扫描、实例候选全表扫描、`FORCE_MEMO` 表大小、模式编译器调用量、
+`infer_expr` 各臂、eval/unify 循环、压实导致局部性变差、压实预算（128MB~4GB 无
+差异）、`refresh` 规模（仅 2,373 次调用 / 1.3 万次槽刷新 / 上下文 6 层）、
+观察面（关掉省 178 ms 但**分配 0 变化**）。
 
 ### 工具缺口：`l13bench --file` 测不了几乎所有示例 —— **已修（2026-09-23）**
 
