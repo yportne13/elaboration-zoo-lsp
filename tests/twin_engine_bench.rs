@@ -124,25 +124,37 @@ fn bench_kick_cost_by_engine() {
 fn bench_adder_proof_kick_cost_by_engine() {
     let src = std::fs::read_to_string("examples/adder_proof.typort").unwrap();
     let kicks = 8usize;
-    for eng in [Engine::Reference, Engine::Twin] {
-        let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
-        b.load_prelude();
-        let uri = Url::parse("file:///bench_adder.typort").unwrap();
-        let t0 = Instant::now();
-        b.process_file(&uri, &src, Some(0));
-        let first = t0.elapsed().as_secs_f64() * 1000.0;
-        let mut times = Vec::with_capacity(kicks);
-        for k in 0..kicks {
+    // 两种 prelude 都测：`hdl`（默认）与 `core`（`load_prelude_skip_hdl`）。
+    // 对照价值——2026-09-24 实测同一份源码、同一天平下，孪生对常驻规模敏感
+    // 2.07×（975→2019ms 采样口径）而参考版只 1.09×（484→527ms），且 core 下
+    // 孪生已经是参考的 2.0×。这组数字是"常驻工作集 ⇒ 单位操作成本"的证据，
+    // 也是"孪生还有独立于 prelude 规模的基础 2×"的证据。
+    for core_only in [false, true] {
+        for eng in [Engine::Reference, Engine::Twin] {
+            let b: Arc<Backend<SilentClient>> = Backend::new_with_engine(SilentClient, eng);
+            if core_only {
+                b.load_prelude_skip_hdl();
+            } else {
+                b.load_prelude();
+            }
+            let uri = Url::parse("file:///bench_adder.typort").unwrap();
             let t0 = Instant::now();
-            b.process_file(&uri, &src, Some(k as i32 + 1));
-            times.push(t0.elapsed().as_secs_f64() * 1000.0);
+            b.process_file(&uri, &src, Some(0));
+            let first = t0.elapsed().as_secs_f64() * 1000.0;
+            let mut times = Vec::with_capacity(kicks);
+            for k in 0..kicks {
+                let t0 = Instant::now();
+                b.process_file(&uri, &src, Some(k as i32 + 1));
+                times.push(t0.elapsed().as_secs_f64() * 1000.0);
+            }
+            let min = times.iter().cloned().fold(f64::MAX, f64::min);
+            let max = times.iter().cloned().fold(0.0f64, f64::max);
+            let prelude = if core_only { "core" } else { "hdl" };
+            println!(
+                "[BENCH-ADDER] {prelude:>4} {eng:?}: first={first:.0} ms | kicks=[{}] min={min:.0} max={max:.0}",
+                times.iter().map(|t| format!("{t:.0}")).collect::<Vec<_>>().join(", "),
+            );
         }
-        let min = times.iter().cloned().fold(f64::MAX, f64::min);
-        let max = times.iter().cloned().fold(0.0f64, f64::max);
-        println!(
-            "[BENCH-ADDER] {eng:?}: first={first:.0} ms | kicks=[{}] min={min:.0} max={max:.0}",
-            times.iter().map(|t| format!("{t:.0}")).collect::<Vec<_>>().join(", "),
-        );
     }
 }
 

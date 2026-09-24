@@ -20,6 +20,11 @@ pub mod pretty;
 mod canonical;
 pub(crate) mod bump_spine_iter;
 
+/// 可达性探测次数（孪生与参考版同口径；`l13lspsample` 打印窗口内增量）。
+pub fn probe_count() -> u64 {
+    pattern_match::probe_count() + bump_spine_iter::PROBE_COUNT.with(|c| c.get())
+}
+
 /// 孪生引擎的缓存/arena 规模读数（供 `typort stats` 报告）。
 ///
 /// LSP 默认跑孪生引擎（`Engine::lsp_default`），而 `--stats` 里的

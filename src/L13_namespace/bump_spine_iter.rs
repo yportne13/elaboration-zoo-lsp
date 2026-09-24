@@ -193,6 +193,14 @@ mod syntax;
 mod typeclass;
 mod unify;
 
+/// 构造子可达性探测次数（`compiler::probe_accessible` 入口自增）。与参考版
+/// `pattern_match::PROBE_COUNT` 同口径，用于"次数差异 vs 单价差异"的判别——
+/// `l13lspsample` 打印采样窗口内的增量（累计值含 prelude 与预热 kick，不可
+/// 直接跨引擎比）。
+thread_local! {
+    pub static PROBE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 // L13_namespace 的外部项（parser / pretty / mod.rs 项）：以本模块的私有
 // use 绑定恢复原 `super::` 路径面——子模块内 `use super::parser::…` 等
 // 与拆分前单文件逐字一致。（`typeclass` 求解器模块与子模块同名，见上。）

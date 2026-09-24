@@ -66,6 +66,16 @@ struct NestedCheck {
     arm_cxt: Cxt,
 }
 
+// TEMP-PROBE: 参考版可达性探测计数。
+thread_local! {
+    pub static PROBE_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// 采样窗口内的探测次数增量用（`l13lspsample` 打印）。
+pub fn probe_count() -> u64 {
+    PROBE_COUNT.with(|c| c.get())
+}
+
 impl Compiler {
     pub fn new(ret_type: Rc<Val>) -> Self {
         Compiler {
@@ -99,6 +109,8 @@ impl Compiler {
         head_sum: &Rc<Val>,
         ctor: &Constructor,
     ) -> bool {
+        // TEMP-PROBE: 参考版可达性探测次数（与孪生同口径对比）。
+        PROBE_COUNT.with(|c| c.set(c.get() + 1));
         let (sum_name, head_params, impl_vals) = match head_sum.as_ref() {
             Val::Sum(name, params, ..) => {
                 if params.is_empty() {

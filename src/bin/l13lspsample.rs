@@ -55,6 +55,9 @@ fn main() {
     let uri = Url::parse("file:///lspsample.typort").unwrap();
     // 预热：付常驻 prime 并让 arena 进入稳态（同 twin_engine_bench 的口径）。
     b.process_file(&uri, &src, Some(0));
+    // 探测计数只看**采样窗口内**的增量（`probe_count` 从进程启动累计，含
+    // prelude 与预热 kick——直接比总量会把 prelude 的工作算进来）。
+    let probes0 = elaboration_zoo_lsp::L13_namespace::probe_count();
     sampler::enable();
     for k in 0..kicks {
         let t0 = Instant::now();
@@ -62,6 +65,12 @@ fn main() {
         println!("[LSPSAMPLE] {engine:?} kick {k}: {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
     }
     sampler::disable();
+    println!(
+        "[LSPSAMPLE] probe_accessible calls in sampled window = {} ({} kicks, {:.1}/kick)",
+        elaboration_zoo_lsp::L13_namespace::probe_count() - probes0,
+        kicks,
+        (elaboration_zoo_lsp::L13_namespace::probe_count() - probes0) as f64 / kicks as f64
+    );
     let _ = std::fs::create_dir_all("target/bench_out");
     match sampler::write_folded("target/bench_out/lspsample.folded") {
         Ok(()) => println!(

@@ -145,6 +145,9 @@ impl<'a> Compiler<'a> {
         // tick 补点（backlog §3 ①）：可达性探测（GADT 索引精化的核心）此前零 tick。
         #[cfg(feature = "sampler")]
         crate::sampler::tick();
+        // 与参考版 `pattern_match::PROBE_COUNT` 同口径的计数（`l13lspsample`
+        // 打印采样窗口内的增量，用于判断"次数差异 vs 单价差异"）。
+        super::PROBE_COUNT.with(|c| c.set(c.get() + 1));
         let (sum_name, head_params, impl_vals) = match v_xcell_of(head_sum) {
             XCell::Sum { name, params, .. } => {
                 if params.is_empty() {
