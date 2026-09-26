@@ -446,6 +446,100 @@ fn icarus_wave_trace_produces_vcd() {
 }
 
 // ---------------------------------------------------------------------------
+// Design-side assertions (docs/hdl-blackbox-sim-design.md §7.1): the model's
+// translate_off-wrapped always block $displays `TYPORT_ASSERT_*` marker lines;
+// the Dut roundtrip captures them off stdout, so a behavioral violation inside
+// the design surfaces as a host-side failure.
+// ---------------------------------------------------------------------------
+
+/// aCounter (examples/hdl/26-assert.typort): `assert(count < 100, ...)` plus a
+/// when-wrapped `count >= 50` guard. Holding the counter below the guards must
+/// keep the failure list empty (expect_no_asserts passes).
+#[test]
+fn typort_assert_pass_below_threshold() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let cfg = SimConfig {
+        top: "aCounter".to_string(),
+        sources: vec![example_path("26-assert.typort")],
+        workdir: workdir("assert-pass"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    dut.set("reset", 1).unwrap().set("en", 1).unwrap().set("clk", 0).unwrap().eval().unwrap();
+    dut.set("reset", 0).unwrap();
+    // 40 enabled posedges → count == 40: the `count >= 50` guard branch is
+    // still dormant below 50, and the top-level guard holds by a wide margin.
+    for _ in 0..40 {
+        dut.set("clk", 1).unwrap().eval().unwrap();
+        dut.set("clk", 0).unwrap().eval().unwrap();
+    }
+    assert_eq!(dut.get("count").unwrap(), 40);
+    dut.expect_no_asserts().expect("no assertion may fire below the guards");
+    dut.finish().unwrap();
+}
+
+/// Violation capture: run count to 100, gate `en`, then take one more posedge
+/// (the assertion samples the PRE-update count, so the violation lands on the
+/// gated edge where count reads 100). The host captures the ERROR marker lines
+/// — including the %m hierarchical instance path — while the model stays
+/// responsive (marker + keep-running semantics, design doc §8).
+#[test]
+fn typort_assert_violation_captured() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let cfg = SimConfig {
+        top: "aCounter".to_string(),
+        sources: vec![example_path("26-assert.typort")],
+        workdir: workdir("assert-violation"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    dut.set("reset", 1).unwrap().set("en", 1).unwrap().set("clk", 0).unwrap().eval().unwrap();
+    dut.set("reset", 0).unwrap();
+    for _ in 0..100 {
+        dut.set("clk", 1).unwrap().eval().unwrap();
+        dut.set("clk", 0).unwrap().eval().unwrap();
+    }
+    assert_eq!(dut.get("count").unwrap(), 100);
+    assert!(dut.assert_failures().is_empty(), "no fire while count only READS 99 pre-update");
+    dut.set("en", 0).unwrap();
+    dut.set("clk", 1).unwrap().eval().unwrap();
+    dut.set("clk", 0).unwrap().eval().unwrap();
+    let failures = dut.assert_failures();
+    // count is frozen at 100, so both guards sample 100 exactly once: the
+    // unconditional top assert AND the when-wrapped half-way guard.
+    assert_eq!(failures.len(), 2, "both guards fire once: {failures:?}");
+    assert_eq!(
+        failures.iter().filter(|l| l.contains("count overflow")).count(),
+        1,
+        "top-level assert marker: {failures:?}"
+    );
+    assert_eq!(
+        failures.iter().filter(|l| l.contains("half-way guard")).count(),
+        1,
+        "when-wrapped assert folds into the same block: {failures:?}"
+    );
+    for line in &failures {
+        assert!(line.starts_with("TYPORT_ASSERT_ERROR"), "severity tag: {line}");
+        assert!(line.contains("tb_aCounter.dut"), "%m instance path present: {line}");
+    }
+    // the model is still alive: marker + keep-running (no $finish on ERROR)
+    assert_eq!(dut.get("count").unwrap(), 100);
+    dut.finish().unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // VCS / Vivado backends — command shapes follow veryl's runners; both are
 // UNTESTED here (no license/install on this machine) and skip when the
 // tools are missing. Same Dut API and golden vector as the other backends.

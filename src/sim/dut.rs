@@ -37,6 +37,11 @@ struct Shared {
     ch: Mutex<Channel>,
     edges: AtomicU64,
     stop: AtomicBool,
+    /// Design-side assertion marker lines (`TYPORT_ASSERT_<SEV> %0t %m: msg`,
+    /// $display'd by the model inside its translate_off block), captured in
+    /// roundtrip so behavioral failures surface on the host side
+    /// (docs/hdl-blackbox-sim-design.md §5.2).
+    failures: Mutex<Vec<String>>,
 }
 
 fn channel_poisoned() -> SimError {
@@ -71,6 +76,15 @@ impl Shared {
             let trimmed = out.trim_end();
             if trimmed.starts_with("VCD ") {
                 continue; // e.g. "VCD info: dumpfile wave.vcd opened..."
+            }
+            if trimmed.starts_with("TYPORT_ASSERT_") {
+                // Design assertion marker ($display from the model's
+                // translate_off block) — record it and keep the protocol
+                // desynchronized-free by continuing to the next line.
+                if let Ok(mut f) = self.failures.lock() {
+                    f.push(trimmed.to_string());
+                }
+                continue;
             }
             return Ok(trimmed.to_string());
         }
@@ -120,6 +134,7 @@ impl Dut {
             ch: Mutex::new(Channel { stdin, stdout }),
             edges: AtomicU64::new(0),
             stop: AtomicBool::new(false),
+            failures: Mutex::new(Vec::new()),
         });
         Ok(Dut {
             ports: top.ports.iter().cloned().map(|p| (p.name.clone(), p)).collect(),
@@ -214,6 +229,34 @@ impl Dut {
     /// `trace: true`).
     pub fn wave_path(&self) -> PathBuf {
         self.workdir.join("wave.vcd")
+    }
+
+    /// Design assertion marker lines captured from the model's stdout so far
+    /// (`TYPORT_ASSERT_<SEV> <time> <instance path>: <msg>`), oldest first.
+    pub fn assert_failures(&self) -> Vec<String> {
+        self.shared
+            .failures
+            .lock()
+            .map(|f| f.clone())
+            .unwrap_or_default()
+    }
+
+    /// Ok iff no design assertion has fired. The error carries every captured
+    /// marker line (%m instance path + message) for the test failure output.
+    pub fn expect_no_asserts(&self) -> Result<(), SimError> {
+        let f = self.assert_failures();
+        if f.is_empty() {
+            Ok(())
+        } else {
+            Err(SimError::CommandFailed {
+                tool: "model".into(),
+                output: format!(
+                    "{} design assertion(s) fired:\n{}",
+                    f.len(),
+                    f.join("\n")
+                ),
+            })
+        }
     }
 
     /// Stop all forked clocks, tell the model to finish, and wait for exit.

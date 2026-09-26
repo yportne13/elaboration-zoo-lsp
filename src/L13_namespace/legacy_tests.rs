@@ -1698,6 +1698,22 @@ fn test_examples_hdl_dir() {
             "q <= 8'd0;",                               // 复位值（sized 字面量）
             "vCntAsync u1 (",                           // 带时钟子模块的层次实例化
         ]),
+        ("26-assert.typort", include_str!("../../examples/hdl/26-assert.typort"), &[
+            "// synthesis translate_off",               // 断言块整块 translate_off 包裹
+            "// synthesis translate_on",
+            "always @(posedge clk) begin",              // 主时钟域断言块
+            "if (!(count < 100)) begin",                // 顶层断言：条件取反
+            "$display(\"TYPORT_ASSERT_ERROR %0t %m: count overflow\", $time);",
+            "if (count >= 50) begin",                   // when 内断言折叠成嵌套 if
+            "$display(\"TYPORT_ASSERT_ERROR %0t %m: half-way guard\", $time);",
+            "TYPORT_ASSERT_INFO %0t %m: a is high",     // 严重级别 INFO
+            "TYPORT_ASSERT_WARNING %0t %m: a is low",   // 严重级别 WARNING
+            "$display(\"TYPORT_ASSERT_ERROR %0t %m: fatal stop\", $time);",
+            "$finish;",                                 // FATAL 附带 $finish
+            "always @(posedge clk2) begin",             // 额外时钟域断言块
+            "$display(\"TYPORT_ASSERT_ERROR %0t %m: cd2 overflow\", $time);",
+            "input wire clk2",                          // 额外域时钟端口自动合成
+        ]),
     ];
 
     for (file, input, asserts) in examples {

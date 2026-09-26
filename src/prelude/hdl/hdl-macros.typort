@@ -3,6 +3,35 @@
 // HDL Macros: Expr (ergonomic hardware DSL), when, and module
 // ============================================================
 
+// ---------- assert 工厂（SpinalHDL 风格仿真断言，docs/hdl-blackbox-sim-design.md §3） ----------
+// 普通 typort def（非宏臂）：裸调用经 Expr 宏的 raw 直通臂即可工作。实现走
+// createSignalExpr 默认臂 → 当前 when 语境自动折叠（`when c { assert(a, "m") }`
+// 落树为 when(完整使能条件, assertExpr(...), None)，与 assign 同机制）。
+// 设计文档建议放 hdl-signals 工厂族旁；本批 hdl-signals 所有权受限，故落在
+// hdl-macros（加载序 hdl-types 之后，Bool 可见；hdl-verilog 更晚，不受影响）。
+def assertSev(cond: Bool, msg: String, sev: AssertSeverity): Unit =
+    let dummy = createSignalExpr("", assertExpr(cond.expr, msg, sev));
+    unit
+
+// 默认严重级 ERROR（与 SpinalHDL 的偏差：不用 FAILURE/$finish 默认——
+// 标记行 + 继续跑让宿主一次仿真收集全部违规，见设计文档 §8）。
+def assert(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertError)
+
+def assertFatal(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertFatal)
+
+def assertInfo(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertInfo)
+
+def assertWarning(cond: Bool, msg: String): Unit = assertSev(cond, msg, AssertWarning)
+
+// 额外时钟域变体：产码进 cd 自己的 translate_off 断言块，clk 端口经
+// collectClockCds 合并收集器进端口表。
+def assertSevCd(cond: Bool, msg: String, sev: AssertSeverity, cd: ClockDomain): Unit =
+    let dummy = createSignalExpr("", assertExprCd(cond.expr, msg, sev, cd));
+    unit
+
+def assertCd(cond: Bool, msg: String, cd: ClockDomain): Unit = assertSevCd(cond, msg, AssertError, cd)
+
+
 // Standalone when macro: expands at raw-expression positions where the first
 // token is a macro name (p_raw dispatch) — unbraced def bodies
 // (`def f(): Unit = when ...`), plain match case arms

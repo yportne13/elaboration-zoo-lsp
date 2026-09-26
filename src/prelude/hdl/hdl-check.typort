@@ -233,6 +233,15 @@ def updFacts(facts: List[DriveFacts], name: String, comb: Boolean, cond: Boolean
     }
 }
 
+// Local severity key for assert nodes' dedup keys (AssertSeverity lives in
+// hdl-core; keep this file loadable right after it).
+def chkSevKey(s: AssertSeverity): String = match s {
+    case AssertInfo => "I"
+    case AssertWarning => "W"
+    case AssertError => "E"
+    case AssertFatal => "F"
+}
+
 // Structural serialization key of an Expr node. The create-side def
 // accumulates REPLAYED statements: class fields are evaluated ~3x at
 // check time and each evaluation re-appends its statement into the
@@ -293,6 +302,8 @@ def exprKey(e: Expr): String = match e {
     case createMem(n, wc, w) => "cm:" + n + ":" + nat_to_dec(wc) + ":" + nat_to_dec(w)
     case memRead(m, a) => "mr:(" + exprKey(m) + "," + exprKey(a) + ")"
     case memWrite(m, a, d, en) => "mw:(" + exprKey(m) + "," + exprKey(a) + "," + exprKey(d) + "," + exprKey(en) + ")"
+    case assertExpr(c, m, s) => "as:(" + exprKey(c) + "," + m + "," + chkSevKey(s) + ")"
+    case assertExprCd(c, m, s, cd) => "asc:(" + exprKey(c) + "," + m + "," + chkSevKey(s) + "," + cd.clockName + "/" + cd.resetName + ")"
 }
 
 // ---------- module facts accumulator ----------
@@ -478,6 +489,11 @@ def scanStmt(e: Expr, underWhen: Boolean, acc: ModFacts): ModFacts = match e {
         let a1 = scanExpr(addr, acc);
         let a2 = scanExpr(data, a1);
         scanExpr(en, a2)
+    // assert 条件算一次"读取"、不是驱动（docs/hdl-blackbox-sim-design.md §3.4）：
+    // 只被断言读取的信号不触发 HDL002；条件信号进 reads；断言不进 DriveFacts，
+    // HDL010-013 不受影响。
+    case assertExpr(c, _, _) => scanExpr(c, acc)
+    case assertExprCd(c, _, _, _) => scanExpr(c, acc)
     case _ =>
         let d = declOf(e);
         match d {

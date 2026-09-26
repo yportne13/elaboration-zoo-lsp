@@ -66,6 +66,36 @@ def catLitStr(v: Nat): String = match v {
 def sizedLitStr(v: Nat, w: Nat): String =
     natToDec(w) + "'d" + natToDec(v)
 
+// ---- simulation assert emission (docs/hdl-blackbox-sim-design.md §3.3) ----
+// One assert = ONE `if` whose body $displays a `TYPORT_ASSERT_<SEV> %0t %m:
+// <msg>` marker line; the whole always block is translate_off-wrapped by
+// assertsVL. The marker word + %0t + %m let the sim host (src/sim/dut.rs)
+// capture failures off stdout while `%m` fills the hierarchical instance path
+// at simulation time (more precise than baking module names into the msg).
+
+def assertSevTag(s: AssertSeverity): String = match s {
+    case AssertInfo => "INFO"
+    case AssertWarning => "WARNING"
+    case AssertError => "ERROR"
+    case AssertFatal => "ERROR"
+}
+
+def assertIsFatal(s: AssertSeverity): Boolean = match s {
+    case AssertFatal => true
+    case _ => false
+}
+
+// Procedural form (4-space if indent, display at 6 — the clocked-block body
+// style). AssertFatal appends `$finish;` (the model exits early; the host
+// sees "model closed stdout" as the fatal signal).
+def assertLineRaw(condStr: String, msg: String, sev: AssertSeverity): String =
+    let disp = "      $display(\"TYPORT_ASSERT_" + assertSevTag(sev) + " %0t %m: " + msg + "\", $time);";
+    let fin = match assertIsFatal(sev) {
+        case true => "\n      $finish;"
+        case false => ""
+    };
+    "    if (!(" + condStr + ")) begin\n" + disp + fin + "\n    end"
+
 // Emit one memory write statement for the clocked always block:
 //   if (enable) mem[address] <= data;
 // An enable that evaluates to literal 1 (constructor form `literal(succ(zero))`)
@@ -172,6 +202,10 @@ def exprVL_proc(e: Expr): String = match e {
         exprVL_proc(mem) + "[" + exprVL_proc(address) + "]"
     case memWrite(mem, address, data, enable) =>
         memWriteLineRaw(exprVL_proc(mem), exprVL_proc(address), exprVL_proc(data), exprVL_proc(enable), enable)
+    case assertExpr(cond, msg, sev) =>
+        assertLineRaw(exprVL_proc(cond), msg, sev)
+    case assertExprCd(cond, msg, sev, _) =>
+        assertLineRaw(exprVL_proc(cond), msg, sev)
 }
 
 // Helper: emit condition string without redundant outer parens
@@ -276,6 +310,10 @@ def exprVL(e: Expr): String = match e {
         exprVL(mem) + "[" + exprVL(address) + "]"
     case memWrite(mem, address, data, enable) =>
         memWriteLineRaw(exprVL(mem), exprVL(address), exprVL(data), exprVL(enable), enable)
+    case assertExpr(cond, msg, sev) =>
+        assertLineRaw(exprVL(cond), msg, sev)
+    case assertExprCd(cond, msg, sev, _) =>
+        assertLineRaw(exprVL(cond), msg, sev)
 }
 
 def isSubSignal(e: Expr): Boolean = match e {
@@ -580,9 +618,93 @@ def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
     case _ => false
 }
 
-// Collect the set of extra clock domains referenced by regAssignCd (dedup by name)
+// Does an Expr tree contain a MAIN-cd assertExpr? (assertExprCd belongs to
+// its own extra domain and does NOT count here — mirror hasRegAssign vs
+// hasRegAssignCd.)
+def hasAssert(e: Expr): Boolean = match e {
+    case assertExpr(_, _, _) => true
+    case when(_, body, elseBody) =>
+        let b = hasAssert(body);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasAssert(eb)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasAssert(head);
+        match h {
+            case true => true
+            case false => hasAssert(tail)
+        }
+    case _ => false
+}
+
+// Extra-domain version: assertExprCd nodes matching THIS cd.
+def hasAssertCd(e: Expr, cd: ClockDomain): Boolean = match e {
+    case assertExpr(_, _, _) => false
+    case assertExprCd(_, _, _, c) =>
+        let same = cdEq(c, cd);
+        match same {
+            case true => true
+            case false => false
+        }
+    case when(_, body, elseBody) =>
+        let b = hasAssertCd(body, cd);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasAssertCd(eb, cd)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasAssertCd(head, cd);
+        match h {
+            case true => true
+            case false => hasAssertCd(tail, cd)
+        }
+    case _ => false
+}
+
+// Any assert (either variant, any cd). Gates the combinational always block:
+// when-wrapped asserts must NOT be emitted there (they are clocked, and
+// assertsVL owns them) — keeps has-clock and has-assert gating from
+// polluting each other (design doc §9-6).
+def hasAnyAssert(e: Expr): Boolean = match e {
+    case assertExpr(_, _, _) => true
+    case assertExprCd(_, _, _, _) => true
+    case when(_, body, elseBody) =>
+        let b = hasAnyAssert(body);
+        match b {
+            case true => true
+            case false => match elseBody {
+                case None => false
+                case Some(eb) => hasAnyAssert(eb)
+            }
+        }
+    case block(head, tail) =>
+        let h = hasAnyAssert(head);
+        match h {
+            case true => true
+            case false => hasAnyAssert(tail)
+        }
+    case _ => false
+}
+
+// Collect the set of extra clock domains referenced by regAssignCd OR
+// assertExprCd (dedup by name) — one merged walker so extra-domain asserts
+// also get their `input wire <clk>` port (extraCdPortsVL reads this list).
 def collectClockCdsOne(e: Expr, seen: List[String]): List[ClockDomain] = match e {
     case regAssignCd(_, _, c) =>
+        let nm = c.clockName;
+        let dup = strInList(nm, seen);
+        match dup {
+            case true => lnil
+            case false => lcons c lnil
+        }
+    case assertExprCd(_, _, _, c) =>
         let nm = c.clockName;
         let dup = strInList(nm, seen);
         match dup {
@@ -787,6 +909,10 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
         case createMem(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case memRead(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case memWrite(_, _, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        // Explicit skip arms (design doc §1.3-6/§3.3): without these the
+        // catch-all below would emit assert statements as continuous assigns.
+        case assertExpr(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        case assertExprCd(_, _, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case _ => lcons (exprVL(e)) (collectAssignLinesFiltered(tail, whenSigs))
     }
 }
@@ -808,11 +934,17 @@ def getWhenBody(e: Expr): Expr = match e {
 // it emits `if (cond) begin lhs = rhs; end`.
 def emitWhenLine(e: Expr): String =
     let has_clk = hasRegAssign(e);
+    let has_asrt = hasAnyAssert(e);
     match has_clk {
         case true => ""
-        case false =>
-            let condStr = emitCondStr(getWhenCond(e));
-            "    if (" + condStr + ") begin\n" + exprVL_proc(getWhenBody(e)) + "\n    end"
+        case false => match has_asrt {
+            // when-wrapped asserts are CLOCKED statements — assertsVL emits
+            // them inside the translate_off block, never here.
+            case true => ""
+            case false =>
+                let condStr = emitCondStr(getWhenCond(e));
+                "    if (" + condStr + ") begin\n" + exprVL_proc(getWhenBody(e)) + "\n    end"
+        }
     }
 
 // Collect, in insertion order, the lines that belong in the single merged
@@ -829,9 +961,16 @@ def collectAlwaysBodyLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): L
     case cons(e, tail) => match e {
         case when(_, _, _) =>
             let has_clk = hasRegAssign(e);
+            let has_asrt = hasAnyAssert(e);
             match has_clk {
                 case true => collectAlwaysBodyLines(tail, whenSigs)
-                case false => lcons (emitWhenLine(e)) (collectAlwaysBodyLines(tail, whenSigs))
+                case false => match has_asrt {
+                    // assert-only when nodes emit nothing here (assertsVL owns
+                    // them) — skip the element entirely so a lone assert-when
+                    // does not produce an empty `always @(*)` block.
+                    case true => collectAlwaysBodyLines(tail, whenSigs)
+                    case false => lcons (emitWhenLine(e)) (collectAlwaysBodyLines(tail, whenSigs))
+                }
             }
         case assign(_, _) =>
             let lhsName = getAssignLhsName(e);
@@ -905,6 +1044,106 @@ def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
     case ActiveHigh => resetName(cd)
     case ActiveLow => "!" + resetName(cd)
 }
+
+// ---- assert collection & block emission (mirror of the clocked family) ----
+
+// Assert lines for ONE statement node, for clock domain `cd` (isMain: plain
+// assertExpr belongs to the module default cd only; assertExprCd goes to its
+// own cd). when-wrapped asserts nest inside an `if (cond)` — the wrapper is
+// collected only when its body contains a matching assert, mirroring
+// collectClockLinesCd's when gating. Blocks recurse (defensive; generated
+// trees wrap one statement per when node).
+def collectAssertLinesOne(e: Expr, cd: ClockDomain, isMain: Boolean): List[String] = match e {
+    case assertExpr(c, m, s) =>
+        match isMain {
+            case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
+            case false => lnil
+        }
+    case assertExprCd(c, m, s, cdc) =>
+        let same = cdEq(cdc, cd);
+        match same {
+            case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
+            case false => lnil
+        }
+    case when(cond, body, elseBody) =>
+        let inner = match elseBody {
+            case None => collectAssertLinesOne(body, cd, isMain)
+            case Some(eb) => list_append(collectAssertLinesOne(body, cd, isMain), collectAssertLinesOne(eb, cd, isMain))
+        };
+        match inner {
+            case lnil => lnil
+            case _ =>
+                // the wrapper stays at base indent; only the nested body is
+                // indented one level
+                let opened = lcons ("    if (" + emitCondStr(cond) + ") begin") (indentLines inner);
+                list_append(opened, lcons "    end" lnil)
+        }
+    case block(head, tail) =>
+        list_append(collectAssertLinesOne(head, cd, isMain), collectAssertLinesOne(tail, cd, isMain))
+    case _ => lnil
+}
+
+// Collect assert lines across a module's whole expr list, for ONE cd.
+// Each statement is folded into ONE string (joinLines) BEFORE consing, so the
+// trailing list_reverse in assertsBlockVL flips whole statements — never the
+// lines inside one statement (the collectClockLinesCd discipline).
+def collectAssertLinesCd[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): List[String] = match es {
+    case nil => lnil
+    case cons(e, tail) =>
+        let line = joinLines(collectAssertLinesOne(e, cd, isMain));
+        match str_eq(line, "") {
+            case true => collectAssertLinesCd(tail, cd, isMain)
+            case false => lcons line (collectAssertLinesCd(tail, cd, isMain))
+        }
+}
+
+// The translate_off-wrapped assertion block for ONE clock domain (no reset
+// branch — asserts never reset). Empty when the domain has no assert lines:
+//   // synthesis translate_off
+//   always @(posedge clk) begin
+//     if (!(count < 100)) begin
+//       $display("TYPORT_ASSERT_ERROR %0t %m: count overflow", $time);
+//     end
+//   end
+//   // synthesis translate_on
+def assertsBlockVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain, isMain: Boolean): String =
+    let ls = list_reverse(collectAssertLinesCd(es, cd, isMain));
+    match ls {
+        case lnil => ""
+        case _ =>
+            // NOTE: the typort lexer strips `//` inside string literals as a
+            // line comment, so the Verilog comment marker is composed here.
+            let cm = "/" + "/";
+            let header = "  " + cm + " synthesis translate_off
+" + "  always @" + "(" + clockEdgeStr(cd) + " " + clockName(cd) + ") begin
+";
+            let tail_line = "
+  end
+  " + cm + " synthesis translate_on
+";
+            header + joinLines(ls) + tail_line
+    }
+
+// Recursively emit assert blocks for the EXTRA cds (skipping the main cd),
+// using the merged collectClockCds list (assertExprCd domains included).
+def assertsExtrasVL[ne: Nat](es: Vec[Expr] ne, mainCd: ClockDomain, cds: List[ClockDomain]): String = match cds {
+    case lnil => ""
+    case lcons(c, tail) =>
+        let sameAsMain = cdEq(c, mainCd);
+        match sameAsMain {
+            case true => assertsExtrasVL(es, mainCd, tail)
+            case false =>
+                let ab = assertsBlockVL(es, c, false);
+                ab + assertsExtrasVL(es, mainCd, tail)
+        }
+}
+
+// All assert blocks of a module: main cd first, then extra-cd blocks.
+def assertsVL[ne: Nat](es: Vec[Expr] ne, cd: ClockDomain): String =
+    let main = assertsBlockVL(es, cd, true);
+    let extras = collectClockCds es;
+    main + assertsExtrasVL(es, cd, extras)
+
 // Collect reset-init lines for ONE clock domain. Non-Cd init regs belong to
 // the module default cd only (isMain=true); createRegWidthInitCd belongs to
 // its own cd.
@@ -1209,7 +1448,13 @@ def extraCdPortsVL[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], acc: Strin
                     case lnil => false
                     case _ => true
                 };
-                let acc1 = acc + "," + "\n" + "  input wire " + clk_nm;
+                let acc1 = match str_eq(acc, "") {
+                    // First appended port (possible now that an assert-only
+                    // extra cd can be a module's ONLY clock content): no
+                    // leading comma.
+                    case true => "  input wire " + clk_nm
+                    case false => acc + "," + "\n" + "  input wire " + clk_nm
+                };
                 let acc2 = match hasInit {
                     case false => acc1
                     case true => acc1 + "," + "\n" + "  input wire " + reset_nm
@@ -1245,8 +1490,16 @@ def moduleDefVL(md: ModuleDef): String =
         case false => has_out_regs
         case true => true
     };
+    // A main-cd assert ALSO forces the clock port: assertions are always
+    // clocked (SpinalHDL semantics), so a purely combinational module with an
+    // assert still gets `input wire clk` (its block lives in assertsVL below).
+    // Extra-cd assert ports come via collectClockCds/extraCdPortsVL instead.
+    let has_assert_main = match list_reverse(collectAssertLinesCd(md.expr, md.cd, true)) {
+        case lnil => false
+        case _ => true
+    };
     let has_seq = match str_eq(clocked, "") {
-        case true => false
+        case true => has_assert_main
         case false => true
     };
     let has_ports = match port_lines {
@@ -1318,7 +1571,7 @@ def moduleDefVL(md: ModuleDef): String =
         }
         case false => "module " + md.name + " (\n" + p3 + "\n);\n"
     };
-    let body = header + wire_decls + reg_decls + mem_decls + assigns + clocked + always;
+    let body = header + wire_decls + reg_decls + mem_decls + assigns + clocked + assertsVL(md.expr, md.cd) + always;
     let body_with_inst = match has_instances {
         case false => body
         case true => body + joinLines(inst_lines) + "\n"
@@ -1496,8 +1749,14 @@ def manifestSynthPorts(md: ModuleDef): List[String] =
     // always block is emitted (see the has_seq note there) and the source did
     // not declare it (Verilog-compat folds `input clk` into a real port).
     let clocked = clockedVL(md.expr, md.cd, strInList(resetName(md.cd), port_names));
+    // Mirror moduleDefVL's has_seq, assert disjunct included: a main-cd assert
+    // synthesizes the clk port even with no clocked always block.
+    let has_assert_main = match list_reverse(collectAssertLinesCd(md.expr, md.cd, true)) {
+        case lnil => false
+        case _ => true
+    };
     let has_seq = match str_eq(clocked, "") {
-        case true => false
+        case true => has_assert_main
         case false => true
     };
     let clk_out = match strInList(clockName(md.cd), port_names) {

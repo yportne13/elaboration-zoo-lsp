@@ -1,0 +1,54 @@
+// ============================================================
+// HDL Example 26: 仿真断言（assert 全链，docs/hdl-blackbox-sim-design.md §3/§7）
+//
+//   assert(cond, "msg")           默认 ERROR 级，主时钟域
+//   assertInfo/assertWarning/     严重级别变体
+//   assertFatal(cond, "msg")      ERROR 标记行 + $finish
+//   assertCd(cond, "msg", cd)     额外时钟域断言（clk 端口自动合成）
+//
+// 产码：`// synthesis translate_off` 包裹的 `always @(posedge clk)` 块，
+// 每条断言一条 `if (!(cond)) begin $display("TYPORT_ASSERT_<SEV> %0t %m:
+// msg", $time); end`；when 内断言折叠成嵌套 if。仿真闭环验收（断言触发 →
+// Dut 捕获）见 tests/sim_tests.rs 的 typort_assert_* 用例。
+//
+// NOTE: 用 moduleTreeVL 而非设计文档 §7.1 草图的 designVL：测试引擎
+// (run_with_prelude) 对 designVL 的 def-replay 参数引用存在既有 lvl2ix
+// quote 限制，单模块场景两者产码一致（designVL 只在多模块闭包时有差异）。
+// ============================================================
+
+// --- 26a: 顶层断言 + when 内断言（设计文档 §7.1 验收用例） ---
+module aCounter {
+    input en = Bool
+    output reg count = UInt[8] init 0
+    when en {
+        count := count + 1
+    }
+    assert(count < 100, "count overflow")
+    when (count >= 50) {
+        assert(count < 100, "half-way guard")
+    }
+}
+println("=== 26a: aCounter (顶层 + when 内断言) ===")
+println(moduleTreeVL(aCounter.create.tree))
+
+// --- 26b: 严重级别 INFO / WARNING / FATAL ---
+module aSevs {
+    input a = Bool
+    assertInfo(a, "a is high")
+    assertWarning(!a, "a is low")
+    assertFatal(a, "fatal stop")
+}
+println("=== 26b: aSevs (严重级别 INFO/WARNING/FATAL) ===")
+println(moduleTreeVL(aSevs.create.tree))
+
+// --- 26c: 额外时钟域断言（设计文档 §7.3 回归用例） ---
+// NOTE: cd 用体内内联的 ClockDomain.mk。设计文档 §7.3 草图的"顶层 def cd2
+// / 模块参数"写法会踩测试引擎同款 lvl2ix quote 限制（CLI 引擎可正常产码）。
+module aCounterCd {
+    input en = Bool
+    output reg count = UInt[8] init 0
+    when en { count := count + 1 }
+    assertCd(count < 100, "cd2 overflow", ClockDomain.mk "clk2" "reset2" Async RisingEdge ActiveHigh)
+}
+println("=== 26c: aCounterCd (额外时钟域断言) ===")
+println(moduleTreeVL(aCounterCd.create.tree))

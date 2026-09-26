@@ -83,6 +83,16 @@ enum ClockDomainConfig {
     Async
 }
 
+// Severity of a simulation assertion (SpinalHDL assert/assertInfo/assertWarning/
+// assertFatal). Rendered into the `TYPORT_ASSERT_<SEV>` marker line; AssertFatal
+// additionally emits `$finish;` (docs/hdl-blackbox-sim-design.md §3.3).
+enum AssertSeverity {
+    AssertInfo
+    AssertWarning
+    AssertError
+    AssertFatal
+}
+
 struct ClockDomain {
     clockName: String
     resetName: String
@@ -150,6 +160,16 @@ enum Expr {
     createMem(name: String, wordCount: Nat, width: Nat)
     memRead(mem: Expr, address: Expr)
     memWrite(mem: Expr, address: Expr, data: Expr, enable: Expr)
+    // ---- simulation assertions (docs/hdl-blackbox-sim-design.md §3) ----
+    // assertExpr is a clocked assertion statement: codegen emits it inside a
+    // `// synthesis translate_off`-wrapped `always @(posedge <clk>)` block as
+    // `if (!cond) $display("TYPORT_ASSERT_<SEV> %0t %m: msg", $time)`.
+    // assertExprCd targets an EXTRA clock domain (its cd joins the port table
+    // via the merged collectClockCds walker). Flat in def.expr like memWrite;
+    // `assert(...)` factories wrap in the current when context via
+    // createSignalExpr's default arm.
+    assertExpr(cond: Expr, msg: String, sev: AssertSeverity)
+    assertExprCd(cond: Expr, msg: String, sev: AssertSeverity, cd: ClockDomain)
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)

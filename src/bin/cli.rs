@@ -615,7 +615,20 @@ fn run_test(
     // cleanly. Behavioral testbenches live in cargo test (tests/sim_tests).
     let mut dut = Dut::spawn(&model)?;
     dut.eval()?;
+    // Design-side assertions (`assert(...)` in the HDL): marker lines captured
+    // during the smoke session fail the command with a nonzero exit so CI
+    // catches behavioral violations, not just compile errors.
+    let assert_failures = dut.assert_failures();
     dut.finish()?;
+    if !assert_failures.is_empty() {
+        eprintln!(
+            "FAILED: {} design assertion(s) fired in {}:\n{}",
+            assert_failures.len(),
+            top_name,
+            assert_failures.join("\n")
+        );
+        std::process::exit(1);
+    }
 
     println!(
         "ok: {} model compiled and ran on {} (smoke eval); binary {}{}",

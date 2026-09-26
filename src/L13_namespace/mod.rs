@@ -323,6 +323,9 @@ mod legacy_tests;
 mod module_probe_tests;
 
 #[cfg(test)]
+mod hdl_assert_tests;
+
+#[cfg(test)]
 mod verilog_compat_tests;
 
 #[cfg(test)]
