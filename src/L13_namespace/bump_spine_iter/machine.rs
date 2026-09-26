@@ -49,6 +49,43 @@ use super::syntax::{
 use super::typeclass::{TraitDefEntry, TraitState, v_to_ref_val};
 use super::unify::{unify_iter, ConvScratch, UItem};
 
+/// App 臂余定义域是否引用 binder：不引用则实参值不进入类型，tyck 期的
+/// 实参求值可跳过（HDL 用户侧 create/tree 链的 tyck 期冗余运行由此消除；
+/// nf 期照常求值，println 输出与自检告警不受影响）。深度感知的标准
+/// occurs 扫描；Match/Call 形态保守按"引用"处理（不跳过，只损失机会
+/// 不损正确性）；AppPruning 的每个槽位（含 define 槽）都是一层 binder；
+/// Sum 参数望远镜逐层加深。
+fn binder_occurs(t: &Tm, d: u32) -> bool {
+    match t {
+        Tm::Var(i) => *i == d,
+        Tm::Decl(_) | Tm::U(_) | Tm::Meta(_) | Tm::LiteralType | Tm::LiteralIntro(_) => false,
+        Tm::Lam(_, _, b) => binder_occurs(b, d + 1),
+        Tm::App(f, a, _) => binder_occurs(f, d) || binder_occurs(a, d),
+        Tm::AppPruning(h, pr) => {
+            let mut slots = 0u32;
+            let mut cur: Option<&PrCons> = *pr;
+            while let Some(node) = cur {
+                slots += 1;
+                cur = node.next;
+            }
+            binder_occurs(h, d + slots)
+        }
+        Tm::Pi(_, _, a, b) => binder_occurs(a, d) || binder_occurs(b, d + 1),
+        Tm::Let(_, a, t, u) => {
+            binder_occurs(a, d) || binder_occurs(t, d) || binder_occurs(u, d + 1)
+        }
+        Tm::Obj(h, _) => binder_occurs(h, d),
+        Tm::Match(..) | Tm::Call(..) => true,
+        Tm::Sum(_, params, _, _) => params
+            .iter()
+            .enumerate()
+            .any(|(k, p)| binder_occurs(p.ty, d + k as u32) || binder_occurs(p.val, d + k as u32)),
+        Tm::SumCase { typ, datas, .. } => {
+            binder_occurs(typ, d) || datas.iter().any(|dd| binder_occurs(dd.val, d))
+        }
+    }
+}
+
 /// 第一/二组表（`clear_round` 每轮清 + 观察面每 kick 清）的归还档阈值：
 /// **槽 ≥24B** 的表（键带 `SmolStr` / 条目带 `String` / 值带三 `Rc`）。与
 /// force.rs 的 `CACHE_SHRINK_MIN_ENTRIES`（1<<18 × ~24B ≈ 6MB，配合
@@ -2416,7 +2453,13 @@ impl Machine {
                 };
                 // KEY DIFFERENCE: use check_pm instead of check（参考版同款注释）
                 let (u_checked, cxt) = self.check_pm(bump, cxt, u, a)?;
-                let arg_v = self.eval(bump, &cxt, cxt.env, u_checked);
+                // 余定义域不引用 binder 时实参值不进入类型，tyck 期的实参
+                // 求值可跳过（运行期 eval 照常驱动副作用；见 binder_occurs）。
+                let arg_v = if !binder_occurs(bcell.body, 0) {
+                    v_u(0)
+                } else {
+                    self.eval(bump, &cxt, cxt.env, u_checked)
+                };
                 let ty = {
                     let env = env_ext(bump, bcell.env, arg_v);
                     self.eval(bump, &cxt, env, bcell.body)
@@ -3231,7 +3274,13 @@ impl Machine {
                 if tuple_head {
                     self.push_hover(bump, cxt, u.to_span(), u.to_span(), a);
                 }
-                let arg_v = self.eval(bump, cxt, cxt.env, u_checked);
+                // 余定义域不引用 binder 时实参值不进入类型，tyck 期的实参
+                // 求值可跳过（运行期 eval 照常驱动副作用；见 binder_occurs）。
+                let arg_v = if !binder_occurs(bcell.body, 0) {
+                    v_u(0)
+                } else {
+                    self.eval(bump, cxt, cxt.env, u_checked)
+                };
                 // t u : B[x |-> u]
                 let ty = {
                     let env = env_ext(bump, bcell.env, arg_v);
