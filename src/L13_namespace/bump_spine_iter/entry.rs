@@ -1204,13 +1204,56 @@ impl Tycker {
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
         let decl_probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
+        // 逐 decl 计时（`TYPORT_KICK_DECLTIME=1`）：LSP kick 口径的成本归属，
+        // 是 `bench_check_nf_bounded` 的 `L13BENCH_DECLTIME` 的常驻用户段
+        // 对应物——bench 口径回答"哪条声明慢"，这里回答"哪条声明吃掉了
+        // 每次键击"。2026-09-24 用它定位到模块 class 声明独占 kick 的
+        // 68-85%（21-crossclock：i=2 一条 ≈1.9-3.1s / 2.8s kick），并顺带
+        // 暴露 force 的叶子臂占比 95%+（`force.rs` 的快路径由此而来）。
+        // 关闭时每 kick 只多一次 `var_os`。
+        let kick_decltime = std::env::var_os("TYPORT_KICK_DECLTIME").is_some();
+        if kick_decltime {
+            super::FUNC_PROF
+                .enabled
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         for (i, d) in user_ast.iter().enumerate() {
             let m0 = self.machine.metas.len();
+            let t0 = std::time::Instant::now();
+            let f0 = if kick_decltime {
+                use std::sync::atomic::Ordering::Relaxed;
+                Some((
+                    super::FUNC_PROF.force.1.load(Relaxed),
+                    super::FUNC_PROF.force_hits.1.load(Relaxed),
+                    super::FUNC_PROF.force_misses.1.load(Relaxed),
+                    self.bump.allocated_bytes(),
+                ))
+            } else {
+                None
+            };
             match Self::step_round_decl(&mut self.machine, bump, &mut cxt, d, i, &[], &mut sink) {
                 Ok(nc) => cxt = nc,
                 // Keep the previous cxt for subsequent decls (reference
                 // `elaborate` keeps `local_cxt` on error).
                 Err(e) => self.user_errors.push(e),
+            }
+            if let Some(f0) = f0 {
+                use std::sync::atomic::Ordering::Relaxed;
+                let name = match d {
+                    Decl::Def { name, .. } => format!("def {}", name.data),
+                    Decl::Enum { name, .. } => format!("enum {}", name.data),
+                    Decl::Println(_) => "println".to_string(),
+                    _ => "<other>".to_string(),
+                };
+                eprintln!(
+                    "[KDT] i={i:<3} {:>9.1}ms  force=+{:<9} hit=+{:<9} miss=+{:<7} arena=+{}MB  {}",
+                    t0.elapsed().as_secs_f64() * 1e3,
+                    super::FUNC_PROF.force.1.load(Relaxed) - f0.0,
+                    super::FUNC_PROF.force_hits.1.load(Relaxed) - f0.1,
+                    super::FUNC_PROF.force_misses.1.load(Relaxed) - f0.2,
+                    (self.bump.allocated_bytes() - f0.3) >> 20,
+                    name,
+                );
             }
             if decl_probe {
                 eprintln!("[DECL{}] metas+{}", i, self.machine.metas.len() - m0);

@@ -439,7 +439,7 @@ fn prim_is_pure(pid: PrimId) -> bool {
             | PrimId::StringConcat
             | PrimId::StrEq
             | PrimId::StrIndent2
-    )
+        )
 }
 
 // force（迭代；L13 参考版 force_inner 的臂集：Flex 链 / Nat 叶 / Obj 重建
@@ -471,6 +471,37 @@ pub(super) fn force<'a>(
             XCell::SumCase { .. } | XCell::Call { .. } | XCell::Obj { .. }
         );
     if !compound {
+        // 叶子臂（95-96% 的 force 调用，实测 21-crossclock 16.03M/16.04M）：
+        // 这些形状里绝大多数是**纯 WHNF 叶**——`force` 的结果与输入逐位相同
+        // （`Rigid`/`Clo`/`U`/`Pi`/`LiteralType` 与 `Nat`/`Sum`/`Lit`/`Match`），
+        // `force_inner` 对它们一律 `return v` 且无副作用；其余（tag 5 裸 meta、
+        // tag 2 spine 链、tag 7 的 `Decl`/`Obj`/`Call`/`SumCase`）才需要查
+        // `metas`/`decl` 或带副作用，那部分仍走 `force_inner`。
+        //
+        // 快路径：tag 0/1/3/4/6 与 tag 7 的 `Nat`/`Sum`/`Lit`/`Match` 这些
+        // **纯 WHNF 叶**在这里就地返回，省掉 `force_inner` 的四份草稿栈
+        // 构造 + `v_tag` 重派发 + loop 骨架（实测该 arm 的 self 时间占
+        // tag-7 分派的绝大部分）。语义与 `force_inner` 的对应臂逐位相同：
+        // 这些臂在 `force_inner` 里都是 `return v` 且无副作用。
+        //
+        // 注意**不能**在快路径里处理 tag 5（meta）与 tag 2（spine 链）与
+        // tag 7 的 `Decl`/`Obj`/`Call`/`SumCase`：它们要么需要查 `metas`，
+        // 要么有副作用（prim 执行 / taint），仍走 `force_inner`。
+        match v_tag(v0) {
+            // 0 = Lvl（Rigid）、1 = Clo、3 = U、4 = Pi、6 = LiteralType：
+            // 全部是 WHNF 叶，`force_inner` 的 `_ => return v` 臂。
+            0 | 1 | 3 | 4 | 6 => return v0,
+            7 => match v_xcell_of(v0) {
+                // Nat 是原生 WHNF（succ^n zero 的压缩表示）
+                XCell::Nat(_) | XCell::Sum { .. } | XCell::Lit(_) | XCell::Match { .. } => {
+                    return v0
+                }
+                // Decl / Obj / Call / SumCase 需要 `decl`/`metas` 或副作用
+                _ => {}
+            },
+            // tag 2（spine 链）与 tag 5（meta）：需要 metas / 可能 taint
+            _ => {}
+        }
         let _g = super::prof_enter(&super::FUNC_PROF.force_leaves.0, &super::FUNC_PROF.force_leaves.1);
         return force_inner(bump, spine, defs, metas, decl, mutable, v0);
     }
@@ -735,35 +766,37 @@ pub(super) fn force_inner<'a>(
                 // SumCase：force typ + 逐 data（副作用必须跑），变化才重建
                 XCell::SumCase { typ, index, datas, is_trait } => {
                     let tf = force(bump, spine, defs, metas, decl, mutable, *typ);
+                    // 是否已进入"需要重建"状态：`typ` 变了就立刻进入。
                     let mut changed = tf != *typ;
-                    let mut new_datas: Vec<SumDataV<'a>> = Vec::with_capacity(datas.len());
+                    // **惰性分配**：`new_datas` 只在首次检测到变化时才建。
+                    // 旧实现无条件 `Vec::with_capacity(datas.len())`——求和
+                    // 构造子的每个字段都在堆上要一块，而"无变化"（全部字段
+                    // force 后逐位不变）在 kick 里是常态，于是绝大多数
+                    // SumCase force 都白付一次分配 + 释放。改成 `None` 起步、
+                    // 首个变化处回填已见字段（与旧实现的回填语义逐位相同）。
+                    let mut new_datas: Option<Vec<SumDataV<'a>>> = None;
                     for (i, d) in datas.iter().enumerate() {
                         let df = force(bump, spine, defs, metas, decl, mutable, d.val);
-                        if changed {
-                            // 首变化后回填已见未变字段（原值指针相同）
-                            if new_datas.is_empty() {
-                                for d0 in datas.iter().take(i) {
-                                    new_datas.push(SumDataV { name: d0.name, val: d0.val, icit: d0.icit });
-                                }
-                            }
-                            new_datas.push(SumDataV { name: d.name, val: df, icit: d.icit });
-                        } else if df != d.val {
+                        if changed || df != d.val {
                             changed = true;
-                            for d0 in datas.iter().take(i) {
-                                new_datas.push(SumDataV { name: d0.name, val: d0.val, icit: d0.icit });
-                            }
-                            new_datas.push(SumDataV { name: d.name, val: df, icit: d.icit });
+                            let out = new_datas.get_or_insert_with(|| {
+                                // 首变化：把已见未变字段按原值指针回填。
+                                datas.iter().take(i)
+                                    .map(|d0| SumDataV { name: d0.name, val: d0.val, icit: d0.icit })
+                                    .collect()
+                            });
+                            out.push(SumDataV { name: d.name, val: df, icit: d.icit });
                         }
                     }
-                    return if changed {
-                        v_xcell(bump.alloc(XCell::SumCase {
+                    debug_assert_eq!(changed, new_datas.is_some());
+                    return match new_datas {
+                        Some(new_datas) => v_xcell(bump.alloc(XCell::SumCase {
                             typ: tf,
                             index: *index,
                             datas: bump.alloc_slice_copy(&new_datas),
                             is_trait: *is_trait,
-                        }))
-                    } else {
-                        v
+                        })),
+                        None => v,
                     };
                 }
                 _ => return v,
