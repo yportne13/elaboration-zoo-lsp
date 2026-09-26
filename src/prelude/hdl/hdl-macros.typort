@@ -247,7 +247,7 @@ macro_rules Expr {
 //     (user semantics: every class-body `let` is a struct field, no special
 //     cases — see the WHY note below). NO storage field.
 //   def $name.create[args]: $name[args] = ...   — runs the side-effect chain eagerly
-//   impl Module for $name { def tree = <chain minus instance recording> }
+//   impl Module for $name { def tree = this._res }  — reads the create-time tree
 // Usage:
 //   module myAdder[w: Nat]
 //       input a = UInt[w]
@@ -308,15 +308,31 @@ macro_rules Expr {
 //      `let u = child.create` inside the body records its instance into the
 //      parent's in-progress tree (the mkInstanceIfParent line runs after the
 //      restore, against the parent frame), so the instance lands in the tree
-//      exactly once per create run. The `_res` value is dead weight by
-//      design; the create-side side effects are what matter.
-//   2. `def tree` side — the same chain minus mkInstanceIfParent (the def has
-//      no `bn` and must not re-record instances) runs on EVERY `.tree`
-//      access, rebuilding the identical tree from a clean push. Idempotent:
-//      each run starts with change_mutable_default reset and ends by
-//      restoring the previous global tree, so repeated accesses print the
-//      same Verilog.
-// RED LINE (§8.3): both copies keep the ModuleDef push in constant form
+//      exactly once per create run.
+//   2. `def tree` side — reads the create-time tree straight off the
+//      instance: `def tree: ModuleTree = this._res` (the def has a `this`
+//      receiver — prepended by the inherent-impl method registration — and
+//      `this._res` projects the struct field through the ordinary Obj
+//      field-access path). The body does NOT replay the chain: replaying it
+//      re-ran every signal factory / child create on EVERY `.tree` access
+//      and again inside the Phase-B check of the method body (measured
+//      ~34% of per-keystroke user time on examples/hdl; the create-time
+//      `_res` was dead weight). Semantics: `_res` is captured at create
+//      time, AFTER the full chain ran and checkModuleTree validated it but
+//      BEFORE the module records itself into its parent (mkInstanceIfParent
+//      targets the parent frame only, so the module's own tree never
+//      contains the self-instance in either design); sub-module instances
+//      ARE inside `_res` (recorded by the children's own creates during the
+//      chain). The tree value is immutable, so returning the shared field
+//      is idempotent — repeated accesses print the same Verilog. The old
+//      replay only differed if ambient mutable state outside the tree
+//      preamble's resets (e.g. a user mutable global read by the body)
+//      changed between create and access — reading `_res` freezes the
+//      create-time snapshot instead, which is the more deterministic of the
+//      two. Note `def_needs_replay` no longer fires for `X.tree` (the body
+//      has no global ops), so Tm::Decl references return the registered
+//      closure instead of re-evaluating it.
+// RED LINE (§8.3): the create side keeps the ModuleDef push in constant form
 // `ModuleTree.mk(0 + 1, ... :: nil)` — deriving the head from the lambda
 // parameter (`x.num + 1` / `:: x.data`) leaves stuck GADT indices that make
 // every later tree access O(n²).
@@ -367,27 +383,8 @@ macro_rules module {
 			$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(None, subSignal(bn.name, stringify $rp)); )*
 			$( let $rb: Bool = Bool.mk(None, subSignal(bn.name, stringify $rb)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			// tree recomputes the chain on every access (minus instance recording).
-			def tree: ModuleTree =
-				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
-				let _ = create_global("WhenStack", whenStackEmpty);
-				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
-				let _ = create_global("CombCtx", CombCtx.mk(zero));
-				let _ = create_global("CompatCD", CompatCD.mk("", "", true));
-				$( let _ = compatFoldPort(stringify $ik); )*
-				$( let _ = compatFoldPort(stringify $pb); )*
-				let __vcd: ClockDomain = compatCD(stringify $name);
-				let _prev = get_global("ModuleTree");
-				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, __vcd, 0, nil) :: nil));
-				$( let $ik: Bool = Bool.mk(Some(stringify $ik), createBoolPortExpr("input")); )*
-				$( let $p: UInt[1 + ($hi) - ($lo)] = UInt.mk(Some(stringify $p), createPortExpr(compatDir(stringify $dir), "UInt", 1 + ($hi) - ($lo))); )*
-				$( let $rp: UInt[1 + ($rhi) - ($rlo)] = UInt.mk(Some(stringify $rp), createOutRegPortExpr("UInt", 1 + ($rhi) - ($rlo))); )*
-				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExpr); )*
-				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(compatDir(stringify $db))); )*
-				$($body)*
-				let _res = get_global("ModuleTree");
-				let _ = create_global("ModuleTree", _prev);
-				_res
+			// tree reads the create-time `_res` field (see the WHY note above).
+			def tree: ModuleTree = this._res
 		}
 	};
 	// With explicit clock domain: module foo[myCd] ... { ... }
@@ -421,24 +418,8 @@ macro_rules module {
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			// tree recomputes the chain on every access (minus instance recording).
-			def tree: ModuleTree =
-				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
-				let _ = create_global("WhenStack", whenStackEmpty);
-				// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
-				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
-				let _prev = get_global("ModuleTree");
-				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil));
-				$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
-				$( let $rp2: $rt2[$rw2] = $rt2.mk(Some(stringify $rp2), createOutRegPortExpr(stringify $rt2, $rw2)); )*
-				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExprInit($rbv)); )*
-				$( let $rb2: Bool = Bool.mk(Some(stringify $rb2), createOutRegBoolPortExpr); )*
-				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
-				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
-				$($body)*
-				let _res = get_global("ModuleTree");
-				let _ = create_global("ModuleTree", _prev);
-				_res
+			// tree reads the create-time `_res` field (see the WHY note above).
+			def tree: ModuleTree = this._res
 		}
 	};
 	// Without clock domain: uses defaultClockDomain
@@ -468,24 +449,8 @@ macro_rules module {
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
 			$( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
-			// tree recomputes the chain on every access (minus instance recording).
-			def tree: ModuleTree =
-				let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil));
-				let _ = create_global("WhenStack", whenStackEmpty);
-				// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
-				let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty);
-				let _prev = get_global("ModuleTree");
-				let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil));
-				$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
-				$( let $rp2: $rt2[$rw2] = $rt2.mk(Some(stringify $rp2), createOutRegPortExpr(stringify $rt2, $rw2)); )*
-				$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExprInit($rbv)); )*
-				$( let $rb2: Bool = Bool.mk(Some(stringify $rb2), createOutRegBoolPortExpr); )*
-				$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
-				$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
-				$($body)*
-				let _res = get_global("ModuleTree");
-				let _ = create_global("ModuleTree", _prev);
-				_res
+			// tree reads the create-time `_res` field (see the WHY note above).
+			def tree: ModuleTree = this._res
 		}
 	};
 }

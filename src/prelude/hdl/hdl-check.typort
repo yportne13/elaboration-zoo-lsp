@@ -237,10 +237,12 @@ def updFacts(facts: List[DriveFacts], name: String, comb: Boolean, cond: Boolean
 // accumulates REPLAYED statements: class fields are evaluated ~3x at
 // check time and each evaluation re-appends its statement into the
 // same def (the push only resets at whole-sandwich boundaries; codegen
-// never sees this because it reads the .tree rebuild). The scanner
-// dedups top-level statements by this key, collapsing replays. Two
-// literally-identical user statements therefore count as one driver —
-// an accepted blind spot (they are semantically the same driver).
+// never sees this: it reads a tree from a single clean pass — the
+// create-time `_res` capture, formerly the per-access .tree rebuild).
+// The scanner dedups top-level statements by this key, collapsing
+// replays. Two literally-identical user statements therefore count as
+// one driver — an accepted blind spot (they are semantically the same
+// driver).
 def exprKey(e: Expr): String = match e {
     case create(n) => "c:" + n
     case createIn(n) => "ci:" + n
