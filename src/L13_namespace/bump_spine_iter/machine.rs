@@ -1578,16 +1578,24 @@ impl Machine {
         // force 期望类型后分派（已解 meta 可能展开成 Pi）
         let a = self.force_v(bump, cxt, a);
         // 预检查值（class Phase-B / trait 方法缓存复用——参考版 check 的
-        // Raw::Tm 臂 649-666）：eval 驱动副作用（模块树全局）与良构性；
-        // 未注解字段（期望是 fresh meta）**直解** meta := Phase-A 类型（整
-        // unify 的 flex_flex 会重建闭包链产生幻影解，参考版注释）；注解
-        // 复验走 unify_catch。内层值不重复 elaboration——经指针导入表取回。
+        // Raw::Tm 臂 649-666）：未注解字段（期望是 fresh meta）**直解**
+        // meta := Phase-A 类型（整 unify 的 flex_flex 会重建闭包链产生幻
+        // 影解，参考版注释）；注解复验走 unify_catch。内层值不重复
+        // elaboration——经指针导入表取回。
+        //
+        // 参考版在此处有一句弃结果的 `let _ = self.eval(.., tm)`（39b5d79
+        // 引入，意图"让 Phase-B 检查也驱动模块树副作用"）。本机不做这次
+        // eval：它是**纯冗余的第二遍**——(a) 结果被丢弃，无人消费；(b) 同
+        // 一个 tm 由外层 Let 臂（本文件 Let 分支的 `vt = self.eval(..,
+        // t_tm)`）在同一 env 里立即再 eval 一遍，副作用（change_mutable /
+        // create_global / mkInstanceIfParent / report_check_issue）由那一遍
+        // 照常驱动； (c) 链上副作用 prim 全部按名幂等或首登记优先
+        // （ModuleRegistry 按 name 去重、CheckIssues 行级去重、可变全局为
+        // 固定值覆写/沙盒内 save-restore），少这一遍不改变任何可观察状态。
+        // （probe/phaseb 试点：Phase-B 检查期链重求值减半。）
         if let Raw::Tm(rc_tm, rc_ty) = t {
             let tm: &'a Tm<'a> = self.tm_import_lookup(rc_tm);
             let ty = self.val_import_lookup(rc_ty);
-            {
-                let _ = self.eval(bump, cxt, cxt.env, tm);
-            }
             match v_tag(a) {
                 5 => {
                     let m = v_meta_of(a);
