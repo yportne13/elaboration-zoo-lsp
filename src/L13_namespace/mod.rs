@@ -338,6 +338,9 @@ mod class_tests;
 mod module_tests;
 
 #[cfg(test)]
+mod hdl_enum_tests;
+
+#[cfg(test)]
 mod calc_tests;
 
 #[cfg(test)]
@@ -3836,6 +3839,7 @@ pub(crate) const PRELUDE_HDL: &[(&str, &str)] = &[
     ("hdl-clock", include_str!("../prelude/hdl/hdl-clock.typort")),
     ("hdl-bus", include_str!("../prelude/hdl/hdl-bus.typort")),
     ("hdl-signals", include_str!("../prelude/hdl/hdl-signals.typort")),
+    ("hdl-enum", include_str!("../prelude/hdl/hdl-enum.typort")),
     ("hdl-utils", include_str!("../prelude/hdl/hdl-utils.typort")),
     ("hdl-stream", include_str!("../prelude/hdl/hdl-stream.typort")),
     ("hdl-crossclock", include_str!("../prelude/hdl/hdl-crossclock.typort")),

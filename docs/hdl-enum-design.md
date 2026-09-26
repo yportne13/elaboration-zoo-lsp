@@ -1,7 +1,6 @@
 # 硬件 Enum（SpinalEnum 对应物）设计
 
-> 状态：设计稿（2026-09-26）。对应 docs/spinalhdl-gap.md §1「Enum (SpinalEnum) ❌」与 §8 未实现清单第 1 条。
-> 本文只做设计，不改源码。行号基于当前 master 工作树。
+> 状态：已实现 M1-M3（2026-09-26）。落点：`src/prelude/hdl/hdl-enum.typort`、`src/L13_namespace/parser/derive.rs`（`derive_hdlenum`）、`src/prelude/hdl/hdl-macros.typort`（无 default switch 臂）、`src/L13_namespace/hdl_enum_tests.rs`。与设计稿的偏差：元素复用 L07 构造子（EnumLit 包装被放弃——def 无法覆盖 L07 构造子的 decl 键）、穷尽性检查为显式 `switchFinalEnum` 直调（自动记录 case 的点分臂未接线，见 §4.7 宏臂注释）。原始设计稿如下（行号基于当时 master 工作树）。
 
 ---
 

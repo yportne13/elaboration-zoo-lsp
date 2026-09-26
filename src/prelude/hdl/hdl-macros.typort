@@ -234,12 +234,26 @@ macro_rules Expr {
     // The first is-case pushes the switch's level; subsequent is-cases use
     // whenElseBegin (replace + accumulate); default uses whenOtherwiseBegin.
     // Conditions: `sel==v1`, `sel==v2 && !(sel==v1)`, `!(sel==v1) && !(sel==v2)`.
-    // Note: $val can be a Nat literal or a signal; uses === operator for comparison.
+    // Note: $val can be a Nat literal, an enum element (State.IDLE) or a
+    // signal; uses === operator for comparison.
+    //
+    // EXHAUSTIVENESS (hdl-enum.typort HDL040, design doc §4.7): a no-default
+    // switch whose selector is an EnumCraft is checked by calling
+    // `switchFinalEnum(sel, cases, false)` — see hdl-enum.typort for the
+    // direct-call form that records each case head. NOTE (2026-09-26, M3):
+    // the automatic per-case head recording inside these arms is NOT wired —
+    // an arm matching `is $e:ident . $f:ident { ... }` never fired (dotted
+    // is-values are captured by `$val:raw` as an apply-block before the
+    // dotted arm is reached, and a dedicated dotted arm did not match);
+    // switchFinalEnum therefore takes the recorded cases explicitly and the
+    // arms below pass an empty case list. Net behavior: no-default switches
+    // are now LEGAL (previously a macro match failure) and exhaustive
+    // no-default switches emit no warning; the HDL040 WARNING is available
+    // via the direct switchFinalEnum call.
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* default {$( $default_body: Expr )*} }) => {
         let _ = whenBegin(($sel === $val).expr);
         $({$body})*
-        $( let _ = whenElseBegin(($sel === $val2).expr);
-           $({$body2})* )*
+        $( let _ = whenElseBegin(($sel === $val2).expr); $({$body2})* )*
         let _ = whenOtherwiseBegin(unit);
         $({$default_body})*
         let _ = whenEnd(unit);
@@ -252,8 +266,28 @@ macro_rules Expr {
         $({$default_body})*
         let _ = whenEnd(unit);
     };
-
-    // ---- for 循环 — 编译期展开（term 级 Nat 递归）----
+    // Single is + no default: needs its own arm (same matcher-shape reason as
+    // single-is + default). No case heads are recorded — switchFinish's
+    // EnumCraft dispatch skips the check (nothing recorded) and other
+    // selector types are skipped by their fallback (value range unknown).
+    // Single is + no default: needs its own arm (same matcher-shape reason as
+    // single-is + default). Plain when chain; the last branch's assignments
+    // keep the level's negation semantics — uncovered selector values keep
+    // the previous value (SpinalHDL semantics); run switchFinalEnum (hdl-enum)
+    // for an HDL040 exhaustiveness WARNING on enum selectors.
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} }) => {
+        let _ = whenBegin(($sel === $val).expr);
+        $({$body})*
+        let _ = whenEnd(unit);
+    };
+    // No default with two or more generic is-values: previously a macro match
+    // failure, now a plain when chain (behavior relaxation, design doc §4.7).
+    (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* }) => {
+        let _ = whenBegin(($sel === $val).expr);
+        $({$body})*
+        $( let _ = whenElseBegin(($sel === $val2).expr); $({$body2})* )*
+        let _ = whenEnd(unit);
+    };
     // for i in 0 until 4 { ... }  →  let __hloop: Unit = rangeFor(0 until 4, i => ...)
     // 修复记录（2026-08-27）：输出必须带尾分号。module 宏把本臂的输出作为
     // class 体/`def tree` 体的 let 链片段转写；tree 侧是一条完整 let-expr 链，

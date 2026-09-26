@@ -379,7 +379,7 @@ switch sel {
 
 - **语句**（不是表达式）；脱糖为 when 链：首臂 `whenBegin(sel === v1)`，后续臂 `whenElseBegin(sel === v2)`（否定累积），`default` 臂 `whenOtherwiseBegin`。
 - `is` 值：Nat 字面量或信号（经 `===` 比较）；`is`/`default` 是宏片段的一部分，不是普通函数也不是关键字。
-- **default 臂目前语法必需**（宏两条臂都以 `default` 结尾——`docs/hdl-enum-design.md` §1.1 同此结论）；穷尽性不做检查（覆盖不了的情况落入 default 之外是用户责任）。
+- **default 臂可省略（2026-09-26 放宽）**：无 `default` 的 switch 合法，脱糖为纯 when 链（未覆盖的选择子取值保持原值，SpinalHDL 语义）。枚举选择子的穷尽性检查经 `switchFinalEnum(sel, cases, false)` 显式调用（`hdl-enum.typort`，`#[derive(HdlEnum)]` 生成元素表），未覆盖元素报 **HDL040 WARNING**——详见 `docs/hdl-enum-design.md` §4.7；带 `default` 的 switch 不检查。
 - 函数式替代形态（库内部/少用）：`switchOnExpr(sel.expr).isValueExpr(v.expr, { body }).default({ body })`（`SwitchBuilder`，`hdl-ops.typort`）。
 
 ### 6.3 三目 / mux
@@ -729,7 +729,7 @@ println(moduleTreeVL(foo.create[myCd].tree))
 | 三目 `? :` | **已实现**：parser 直接脱糖为 `.mux` 方法调用（hdl-design 只记录了 `.mux` 方案） |
 | `cast` 证明形式 | **Eq 证明等宽 cast**（core/eq.typort `Cast` trait）；hdl-design 的"`Le` 证明 cast"已删除 |
 | 字面量宽度检查 | **仍开放**：`natFitsIn` 已定义但 `Into` impl 未接入；推荐在 `Into[UInt[w]] for Nat` 走 typeclass 约束时补 `natFitsIn` 检查（需编译器支持编译期 Nat 谓词） |
-| switch 穷尽性 | **不检查**；default 臂语法必需（宏臂结构）——硬件 Enum 设计稿若引入枚举 switch，需一并放宽 default |
+| switch 穷尽性 | **已放宽 + 显式检查**（2026-09-26）：no-default switch 合法（纯 when 链）；枚举选择子经 `switchFinalEnum` 显式调用报 HDL040 WARNING（hdl-enum.typort，`docs/hdl-enum-design.md` §4.7）；`is Enum.ELEM { }` 形态的自动记录未接线（`$val:raw` matcher 把点分 is 值当 apply-block 捕获），自动检查留二期 |
 | Vec（HVec） | 动态索引 `vecAtUInt` 已实现；fill 工厂/批量 `:=` 未实现，归入二期 Stream/FSM 波次评估 |
 | `assert` 断言 | **未实现**（gap §7 第 5 条未落地）；二期随自检阶段 2-4 评估 |
 | `ClockArea` | **未实现**；模块级域 + 每寄存器域工厂已覆盖现有多时钟需求 |

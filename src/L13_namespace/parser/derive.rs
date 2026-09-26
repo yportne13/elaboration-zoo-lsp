@@ -19,6 +19,7 @@ pub fn default_derive_registry() -> DeriveRegistry {
     let mut registry: DeriveRegistry = HashMap::new();
     registry.insert("Show".to_string(), derive_show);
     registry.insert("Bundle".to_string(), derive_bundle);
+    registry.insert("HdlEnum".to_string(), derive_hdlenum);
     registry
 }
 
@@ -960,4 +961,444 @@ fn derive_show(decl: &Decl, _bundle_types: &BundleSet) -> Vec<Decl> {
         }
         _ => vec![],
     }
+}
+
+// ============================================================
+//  Derive HdlEnum: hardware enum (the SpinalEnum counterpart,
+//  docs/hdl-enum-design.md M1+M2)
+// ============================================================
+
+fn hdl_v(name: &str) -> Raw {
+    Raw::Var(empty_span(SmolStr::new(name)))
+}
+
+fn hdl_str(s: &str) -> Raw {
+    Raw::LiteralIntro(empty_span(s.to_string()))
+}
+
+fn hdl_nat(n: u64) -> Raw {
+    Raw::Nat(empty_span(n))
+}
+
+fn hdl_app(f: Raw, a: Raw) -> Raw {
+    Raw::App(Box::new(f), Box::new(a), Either::Icit(Icit::Expl))
+}
+
+// Bracket-style application `T[a, b]` — fills IMPLICIT parameters (the same
+// shape the parser produces for `UInt[8]`).
+fn hdl_app_impl(f: Raw, a: Raw) -> Raw {
+    Raw::App(Box::new(f), Box::new(a), Either::Icit(Icit::Impl))
+}
+
+fn hdl_def(name: String, params: Vec<(Span<SmolStr>, Raw, Icit)>, ret: Raw, body: Raw) -> Decl {
+    Decl::Def {
+        name: empty_span(SmolStr::new(name)),
+        params,
+        ret_type: ret,
+        body,
+    }
+}
+
+fn hdl_bn_param() -> (Span<SmolStr>, Raw, Icit) {
+    (empty_span(SmolStr::new("bn")), hdl_v("BindingName"), Icit::Impl)
+}
+
+// `loopName(bn.name)` — the call-site let-binding name, loop-suffixed.
+fn hdl_loop_name() -> Raw {
+    hdl_app(
+        hdl_v("loopName"),
+        Raw::Obj(Box::new(hdl_v("bn")), Some(empty_span(SmolStr::new("name")))),
+    )
+}
+
+// `EnumCraft[Enum, w, 0]` / `EnumCraft[Enum, w, c]` — implicit type app.
+fn hdl_craft_ty(enum_name: &str, w: Raw, c: Raw) -> Raw {
+    hdl_app_impl(hdl_app_impl(hdl_app_impl(hdl_v("EnumCraft"), hdl_v(enum_name)), w), c)
+}
+
+// `lcons("A")(lcons("B")(...lnil))` — the element-name table, declaration
+// order. Read by the switch exhaustiveness check (hdl-macros's dotted-is
+// arms splice `Enum.hdlEnumElems`).
+fn hdl_elems_list(case_names: &[Span<SmolStr>]) -> Raw {
+    let mut list = hdl_v("lnil");
+    for case_name in case_names.iter().rev() {
+        list = hdl_app(hdl_app(hdl_v("lcons"), hdl_str(&case_name.data)), list);
+    }
+    list
+}
+
+// `def Enum.hdlEnumElems: List[String] = <list>`
+fn hdl_elems_def(enum_name: &str, case_names: &[Span<SmolStr>]) -> Decl {
+    hdl_def(
+        format!("{}.hdlEnumElems", enum_name),
+        vec![],
+        hdl_app_impl(hdl_v("List"), hdl_v("String")),
+        hdl_elems_list(case_names),
+    )
+}
+
+// `def Enum.hdlEnumOrdinal(s: Enum): Nat = match s { case A => 0 ... }`
+// The ordinal is the binary-encoding value; oneHot craft indices encode it
+// further through encValueOf/encFromCode (hdl-enum.typort) at the
+// assignment/comparison point.
+fn hdl_ordinal_def(enum_name: &str, case_names: &[Span<SmolStr>]) -> Decl {
+    let arms: Vec<(Pattern, Raw)> = case_names
+        .iter()
+        .enumerate()
+        .map(|(i, case_name)| {
+            (
+                Pattern::Con(case_name.clone(), vec![], Either::Icit(Icit::Expl)),
+                hdl_nat(i as u64),
+            )
+        })
+        .collect();
+    let body = Raw::Match(Box::new(hdl_v("s")), arms);
+    hdl_def(
+        format!("{}.hdlEnumOrdinal", enum_name),
+        vec![(
+            empty_span(SmolStr::new("s")),
+            hdl_v(enum_name),
+            Icit::Expl,
+        )],
+        hdl_v("Nat"),
+        body,
+    )
+}
+
+// `def Enum.count: Nat = <count>`
+fn hdl_count_def(enum_name: &str, count: u64) -> Decl {
+    hdl_def(format!("{}.count", enum_name), vec![], hdl_v("Nat"), hdl_nat(count))
+}
+
+// `def Enum.craft[bn: BindingName]: EnumCraft[Enum, w, 0]
+//     = enumCraftWireNamed[Enum](loopName(bn.name), w)` — default binary.
+fn hdl_craft_def(enum_name: &str, w: u64) -> Decl {
+    let ret = hdl_craft_ty(enum_name, hdl_nat(w), hdl_nat(0));
+    let body = hdl_app(
+        hdl_app(hdl_app_impl(hdl_v("enumCraftWireNamed"), hdl_v(enum_name)), hdl_loop_name()),
+        hdl_nat(w),
+    );
+    hdl_def(format!("{}.craft", enum_name), vec![hdl_bn_param()], ret, body)
+}
+
+// `def Enum.craftAs[e: Encoding][bn: BindingName]
+//     : EnumCraft[Enum, encWidthOf e count, encCodeOf e]
+//     = enumCraftWireEnc[Enum](loopName(bn.name), encWidthOf e count, encCodeOf e)`
+// The encoding is chosen at the call site (`Enum.craftAs[encOneHot]`) and
+// compiled into the craft's type indices.
+fn hdl_craft_as_def(enum_name: &str, count: u64) -> Decl {
+    let enc_w = hdl_app(hdl_app(hdl_v("encWidthOf"), hdl_v("e")), hdl_nat(count));
+    let enc_c = hdl_app(hdl_v("encCodeOf"), hdl_v("e"));
+    let ret = hdl_craft_ty(enum_name, enc_w.clone(), enc_c.clone());
+    let body = hdl_app(
+        hdl_app(
+            hdl_app(hdl_app_impl(hdl_v("enumCraftWireEnc"), hdl_v(enum_name)), hdl_loop_name()),
+            enc_w,
+        ),
+        enc_c,
+    );
+    hdl_def(
+        format!("{}.craftAs", enum_name),
+        vec![
+            (empty_span(SmolStr::new("e")), hdl_v("Encoding"), Icit::Impl),
+            hdl_bn_param(),
+        ],
+        ret,
+        body,
+    )
+}
+
+// `def Enum.reg[bn: BindingName]: EnumCraft[Enum, w, 0]
+//     = enumCraftRegNamed[Enum](loopName(bn.name), w, 0)` (default binary)
+fn hdl_reg_def(enum_name: &str, w: u64) -> Decl {
+    let ret = hdl_craft_ty(enum_name, hdl_nat(w), hdl_nat(0));
+    let body = hdl_app(
+        hdl_app(
+            hdl_app(hdl_app_impl(hdl_v("enumCraftRegNamed"), hdl_v(enum_name)), hdl_loop_name()),
+            hdl_nat(w),
+        ),
+        hdl_nat(0),
+    );
+    hdl_def(format!("{}.reg", enum_name), vec![hdl_bn_param()], ret, body)
+}
+
+// `def Enum.regInit[bn: BindingName](init: Enum): EnumCraft[Enum, w, 0]
+//     = enumCraftRegInitNamed[Enum](loopName(bn.name), w, 0,
+//         encValueOf(encBinary, Enum.hdlEnumOrdinal(init)))` — the init
+// literal is encoded through the default binary encoding at elaboration
+// time (the verilogLiteral reset path only understands plain literals).
+fn hdl_reg_init_def(enum_name: &str, w: u64) -> Decl {
+    let ret = hdl_craft_ty(enum_name, hdl_nat(w), hdl_nat(0));
+    let encoded = hdl_app(
+        hdl_app(hdl_v("encValueOf"), hdl_v("encBinary")),
+        hdl_app(
+            Raw::Obj(
+                Box::new(hdl_v(enum_name)),
+                Some(empty_span(SmolStr::new("hdlEnumOrdinal"))),
+            ),
+            hdl_v("init"),
+        ),
+    );
+    let body = hdl_app(
+        hdl_app(
+            hdl_app(
+                hdl_app(
+                    hdl_app_impl(hdl_v("enumCraftRegInitNamed"), hdl_v(enum_name)),
+                    hdl_loop_name(),
+                ),
+                hdl_nat(w),
+            ),
+            hdl_nat(0),
+        ),
+        encoded,
+    );
+    let init_param = (
+        empty_span(SmolStr::new("init")),
+        hdl_v(enum_name),
+        Icit::Expl,
+    );
+    hdl_def(
+        format!("{}.regInit", enum_name),
+        vec![hdl_bn_param(), init_param],
+        ret,
+        body,
+    )
+}
+
+// The DeriveMacro signature has no error channel, so a non-conforming
+// element (constructor with payload) is reported by generating one
+// deliberately unresolvable def under a fresh qualified key: its
+// elaboration error names the rule (the element defs and factories are
+// intentionally NOT generated in that case, so any later use of
+// `Enum.craft` fails too).
+fn hdl_err_def(enum_name: &str, _case_name: &str) -> Decl {
+    hdl_def(
+        format!("{}.hdlEnumError", enum_name),
+        vec![],
+        hdl_v("Unit"),
+        hdl_v("HdlEnum_error_constructors_must_have_no_payload"),
+    )
+}
+
+// max(1, ceil(log2(n))) — matches hdl-core's log2Up for n >= 1 with the
+// min-width-1 clamp (a 1-element enum still needs one bit).
+fn hdl_enum_binary_width(count: u64) -> u64 {
+    let mut w = 0u64;
+    let mut cap = 1u64;
+    while cap < count {
+        w += 1;
+        cap *= 2;
+    }
+    if w == 0 { 1 } else { w }
+}
+
+// Builder for a trait impl over the enum's craft type
+// (`impl[w: Nat, c: Nat] Trait[...] for <self_ty>`).
+fn hdl_craft_impl(
+    enum_name: &str,
+    self_ty: Raw,
+    trait_name: &str,
+    trait_params: Vec<Raw>,
+    methods: Vec<Decl>,
+) -> Decl {
+    Decl::ImplDecl {
+        name: self_ty,
+        params: vec![
+            (empty_span(SmolStr::new("w")), hdl_v("Nat"), Icit::Impl),
+            (empty_span(SmolStr::new("c")), hdl_v("Nat"), Icit::Impl),
+        ],
+        trait_name: empty_span(SmolStr::new(trait_name)),
+        trait_params,
+        methods: methods.into_iter().map(|d| (d, false)).collect(),
+        inherent: false,
+        from_class: false,
+    }
+}
+
+// The element-encoding method body shared by Into/Equal:
+// `literal(encValueOf(encFromCode(c), Enum.hdlEnumOrdinal(<receiver-expr>)))`
+// The craft's code index `c` (a phantom impl param) selects the encoding —
+// SpinalHDL's "element literal follows the craft's encoding".
+fn hdl_encoded_elem(enum_name: &str, elem_expr: Raw) -> Raw {
+    hdl_app(
+        hdl_v("literal"),
+        hdl_app(
+            hdl_app(hdl_v("encValueOf"), hdl_app(hdl_v("encFromCode"), hdl_v("c"))),
+            hdl_app(
+                Raw::Obj(
+                    Box::new(hdl_v(enum_name)),
+                    Some(empty_span(SmolStr::new("hdlEnumOrdinal"))),
+                ),
+                elem_expr,
+            ),
+        ),
+    )
+}
+
+// `impl[w: Nat, c: Nat] Into[EnumCraft[Enum, w, c]] for Enum`
+// Makes `st := Enum.ELEM` (the Expr macro's := Into conversion) encode the
+// element through the target craft's encoding.
+fn hdl_into_elem_impl(enum_name: &str) -> Decl {
+    let into_def = Decl::Def {
+        name: empty_span(SmolStr::new("into")),
+        params: vec![],
+        ret_type: hdl_craft_ty(enum_name, hdl_v("w"), hdl_v("c")),
+        body: hdl_app(
+            hdl_app(hdl_app_impl(hdl_v("EnumCraft.mk"), hdl_v(enum_name)), hdl_v("None")),
+            hdl_encoded_elem(enum_name, hdl_v("this")),
+        ),
+    };
+    hdl_craft_impl(
+        enum_name,
+        hdl_v(enum_name),
+        "Into",
+        vec![hdl_craft_ty(enum_name, hdl_v("w"), hdl_v("c"))],
+        vec![into_def],
+    )
+}
+
+// `impl[w: Nat, c: Nat] Into[EnumCraft[Enum, w, c]] for MuxExpr[Enum]`
+// `out := sel.mux(Enum.A, Enum.B)` — both branches are elements; encode
+// each through the target craft's encoding.
+fn hdl_into_mux_impl(enum_name: &str) -> Decl {
+    let true_encoded = hdl_encoded_elem(
+        enum_name,
+        Raw::Obj(
+            Box::new(hdl_v("this")),
+            Some(empty_span(SmolStr::new("trueVal"))),
+        ),
+    );
+    let false_encoded = hdl_encoded_elem(
+        enum_name,
+        Raw::Obj(
+            Box::new(hdl_v("this")),
+            Some(empty_span(SmolStr::new("falseVal"))),
+        ),
+    );
+    let muxed = hdl_app(
+        hdl_app(
+            hdl_app(
+                hdl_v("Expr.mux"),
+                Raw::Obj(
+                    Box::new(hdl_v("this")),
+                    Some(empty_span(SmolStr::new("condExpr"))),
+                ),
+            ),
+            true_encoded,
+        ),
+        false_encoded,
+    );
+    let body = hdl_app(
+        hdl_app(hdl_app_impl(hdl_v("EnumCraft.mk"), hdl_v(enum_name)), hdl_v("None")),
+        muxed,
+    );
+    let into_def = Decl::Def {
+        name: empty_span(SmolStr::new("into")),
+        params: vec![],
+        ret_type: hdl_craft_ty(enum_name, hdl_v("w"), hdl_v("c")),
+        body,
+    };
+    hdl_craft_impl(
+        enum_name,
+        hdl_app_impl(hdl_v("MuxExpr"), hdl_v(enum_name)),
+        "Into",
+        vec![hdl_craft_ty(enum_name, hdl_v("w"), hdl_v("c"))],
+        vec![into_def],
+    )
+}
+
+// `impl[w: Nat, c: Nat] Equal[Enum, Bool] for EnumCraft[Enum, w, c]`
+// `st === Enum.ELEM` / `st =/= Enum.ELEM` — compare against the encoded
+// element literal. The craft↔craft direction is the generic instance in
+// hdl-enum.typort.
+fn hdl_equal_elem_impl(enum_name: &str) -> Decl {
+    let mk_op = |op: &str, negate: &str| {
+        Decl::Def {
+            name: empty_span(SmolStr::new(op)),
+            params: vec![(
+                empty_span(SmolStr::new("that")),
+                hdl_v(enum_name),
+                Icit::Expl,
+            )],
+            ret_type: hdl_v("Bool"),
+            body: hdl_app(
+                hdl_app(hdl_v("Bool.mk"), hdl_v("None")),
+                hdl_app(
+                    hdl_app(
+                        hdl_app(hdl_v("binary"), Raw::Obj(
+                            Box::new(hdl_v("this")),
+                            Some(empty_span(SmolStr::new("zz_expr"))),
+                        )),
+                        hdl_str(negate),
+                    ),
+                    hdl_encoded_elem(enum_name, hdl_v("that")),
+                ),
+            ),
+        }
+    };
+    hdl_craft_impl(
+        enum_name,
+        hdl_craft_ty(enum_name, hdl_v("w"), hdl_v("c")),
+        "Equal",
+        vec![hdl_v(enum_name), hdl_v("Bool")],
+        vec![mk_op("===", "=="), mk_op("=/=", "!=")],
+    )
+}
+
+/// Derive HdlEnum: for `#[derive(HdlEnum)] enum State { IDLE RUN DONE }`
+/// generates (all plain defs/impls; dotted names resolve through the
+/// ordinary qualified-decl path, exactly like the Bundle derive's
+/// `TypeName.create`). Elements keep their L07 constructor identity — a
+/// generated `def State.IDLE` cannot overwrite the L07 constructor entry
+/// (def registration rejects redefinitions) — so the derive adds the
+/// hardware semantics AROUND the constructors instead:
+///   def State.count: Nat = 3
+///   def State.hdlEnumElems: List[String] = lcons("IDLE", ...)   (switch check)
+///   def State.hdlEnumOrdinal(s: State): Nat = match s { ... }   (encoding)
+///   def State.craft[bn]: EnumCraft[State, 2, 0]                 (default binary)
+///   def State.craftAs[e: Encoding][bn]: EnumCraft[State, encWidthOf e 3, encCodeOf e]
+///   def State.reg[bn]: EnumCraft[State, 2, 0]
+///   def State.regInit[bn](init: State): EnumCraft[State, 2, 0]
+///   impl Into[EnumCraft[State, w, c]] for State        (:= element encoding)
+///   impl Into[EnumCraft[State, w, c]] for MuxExpr[State]
+///   impl Equal[State, Bool] for EnumCraft[State, w, c] (=== =/= elements)
+/// The element count is known here, so the binary width is a CONCRETE Nat in
+/// every generated type.
+fn derive_hdlenum(decl: &Decl, _bundle_types: &BundleSet) -> Vec<Decl> {
+    let Decl::Enum { is_trait, name, params, cases } = decl else {
+        return vec![];
+    };
+    // Only plain, parameterless, non-empty enums: generated types hardcode
+    // the concrete element count, so type parameters cannot work.
+    if *is_trait || !params.is_empty() || cases.is_empty() {
+        return vec![];
+    }
+    let enum_name = name.data.as_str();
+    let case_names: Vec<Span<SmolStr>> = cases.iter().map(|(n, _, _)| n.clone()).collect();
+
+    let mut result: Vec<Decl> = Vec::new();
+    let mut conforming = true;
+    for (case_name, fields, _) in cases.iter() {
+        if !fields.is_empty() {
+            conforming = false;
+            result.push(hdl_err_def(enum_name, case_name.data.as_str()));
+        }
+    }
+    if !conforming {
+        return result;
+    }
+
+    let count = case_names.len() as u64;
+    let binary_w = hdl_enum_binary_width(count);
+    result.push(hdl_count_def(enum_name, count));
+    result.push(hdl_elems_def(enum_name, &case_names));
+    result.push(hdl_ordinal_def(enum_name, &case_names));
+    result.push(hdl_craft_def(enum_name, binary_w));
+    result.push(hdl_craft_as_def(enum_name, count));
+    result.push(hdl_reg_def(enum_name, binary_w));
+    result.push(hdl_reg_init_def(enum_name, binary_w));
+    result.push(hdl_into_elem_impl(enum_name));
+    result.push(hdl_into_mux_impl(enum_name));
+    result.push(hdl_equal_elem_impl(enum_name));
+    result
 }

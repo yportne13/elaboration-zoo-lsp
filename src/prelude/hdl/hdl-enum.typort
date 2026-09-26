@@ -1,0 +1,272 @@
+//! Hardware enums (the SpinalEnum counterpart): Encoding, EnumCraft,
+//! craft/reg factories, hardware ===/=/= and switch exhaustiveness (HDL040).
+// ============================================================
+// HDL Enum: Encoding / EnumCraft / factories / === =/= /
+//           asUInt asBits / RegNext / switch HDL040
+// ============================================================
+// Implements M1+M2+M3 of docs/hdl-enum-design.md. Encoding degrades at
+// elaboration time to (width + encoded Nat literal): a craft signal IS a
+// createWidth/createRegWidth node in the ModuleTree, so Verilog generation
+// and the self-check framework need ZERO changes (design doc §5.1).
+//
+// ELEMENTS keep their L07 constructor identity: for
+// `#[derive(HdlEnum)] enum State { IDLE RUN DONE }` the Rust derive
+// (parser/derive.rs) generates per enum — `State.count`,
+// `State.hdlEnumElems` (element-name table), `State.hdlEnumOrdinal`
+// (match-based ordinal), the craft/craftAs/reg/regInit factory defs, and
+// Into/Equal impls that encode an element through its ordinal AT THE
+// ASSIGNMENT/COMPARISON POINT. (The design doc's EnumLit wrapper structs
+// are not used: a generated `def State.IDLE` cannot overwrite the L07
+// constructor entry — def registration rejects redefinitions — so the
+// constructors themselves double as element values.)
+
+// ---------- Encoding ----------
+// The encoding is a VALUE consumed once by the craft factory; the consumed
+// form is two Nat indices (w = width, c = code) on the craft's TYPE. The
+// code index c is carried phantom-ly so element literals can re-derive the
+// encoding at the assignment/comparison point (the derived Into impl).
+
+enum Encoding {
+    encBinary
+    encSequential
+    encNative
+    encOneHot
+}
+
+def encCodeOf(e: Encoding): Nat = match e {
+    case encBinary => 0
+    case encSequential => 1
+    case encNative => 2
+    case encOneHot => 3
+}
+
+// Inverse map: from a craft type index back to the encoding.
+def encFromCode(c: Nat): Encoding = match c {
+    case zero => encBinary
+    case succ(zero) => encSequential
+    case succ(succ(zero)) => encNative
+    case _ => encOneHot
+}
+
+// 2^n by pure doubling (no Nat multiplication dependency).
+def hdlEnumPow2(n: Nat): Nat = match n {
+    case zero => 1
+    case succ(m) => (hdlEnumPow2 m) + (hdlEnumPow2 m)
+}
+
+// binary/sequential/native: width = max(1, log2Up(count));
+// oneHot: width = max(1, count).
+def encWidthOf(e: Encoding, count: Nat): Nat = match e {
+    case encOneHot => match count {
+        case zero => 1
+        case _ => count
+    }
+    case _ => match log2Up(count) {
+        case zero => 1
+        case w => w
+    }
+}
+
+// binary family: value = position; oneHot: value = 2^position.
+def encValueOf(e: Encoding, pos: Nat): Nat = match e {
+    case encOneHot => hdlEnumPow2(pos)
+    case _ => pos
+}
+
+// ---------- EnumCraft: the hardware signal ----------
+// w = encoding bit width, c = encoding code (phantom index used to recover
+// the encoding when literalizing elements). Same enum under different
+// encodings has different w — cross-encoding mixing is a type error
+// (binary/sequential/native share values, so their equal widths stay
+// mutually comparable, harmlessly). The zz_expr is always a create* node:
+// craft signals are plain bit vectors to every downstream consumer.
+
+struct EnumCraft[E: Type 0, w: Nat, c: Nat] {
+    name: Option[String]
+    zz_expr: Expr
+}
+
+// ---------- signal factories (derive-generated defs delegate here) ----------
+// Same shape as the new*Named family (hdl-signals): the create* node is
+// recorded through createSignalExpr, the wrapper struct carries it. E is
+// solved from each caller's declared return type.
+
+def enumCraftWireNamed[E: Type 0](name: String, w: Nat): EnumCraft[E, w, 0] =
+    let ex = createSignalExpr(name, createWidth(name, w));
+    EnumCraft.mk(Some(name), ex)
+
+def enumCraftWireEnc[E: Type 0](name: String, w: Nat, c: Nat): EnumCraft[E, w, c] =
+    let ex = createSignalExpr(name, createWidth(name, w));
+    EnumCraft.mk(Some(name), ex)
+
+// Register factories are c-GENERIC: regNext must preserve the source
+// craft's encoding index, while the derived reg/regInit defs pass c = 0
+// (default binary).
+def enumCraftRegNamed[E: Type 0](name: String, w: Nat, c: Nat): EnumCraft[E, w, c] =
+    let ex = createSignalExpr(name, createRegWidth(name, w));
+    EnumCraft.mk(Some(name), ex)
+
+// Async-reset register with the ENCODED init value (plain literal — the
+// verilogLiteral reset path only understands literal(Nat)).
+def enumCraftRegInitNamed[E: Type 0](name: String, w: Nat, c: Nat, v: Nat): EnumCraft[E, w, c] =
+    let ex = createSignalExpr(name, createRegWidthInit(name, w, literal(v)));
+    EnumCraft.mk(Some(name), ex)
+
+// ---------- Data: := assignment (the derived Into impls convert) ----------
+impl[E: Type 0, w: Nat, c: Nat] Data for EnumCraft[E, w, c] {
+    def :=[T](that: T): Unit where T: Into[EnumCraft[E, w, c]] =
+        let converted = _into_T.into that;
+        let assignment = pickAssign(this.zz_expr, converted.zz_expr);
+        let dummy_expr = createSignalExpr("", assignment);
+        unit
+    def expr: Expr = this.zz_expr
+}
+
+// mux wrapper → craft for ANY craft type (`out := sel.mux(a, b)` where
+// a/b are crafts). Element-valued muxes (MuxExpr[Enum]) get their own Into
+// impl from the derive, which encodes both branches.
+impl[E: Type 0, w: Nat, c: Nat] Into[EnumCraft[E, w, c]] for MuxExpr[EnumCraft[E, w, c]] {
+    def into: EnumCraft[E, w, c] =
+        EnumCraft.mk(None, Expr.mux(this.condExpr, this.trueVal.zz_expr, this.falseVal.zz_expr))
+}
+
+// ---------- hardware comparison: craft ↔ craft (same shape as Equal[UInt]) ----------
+// Same E, w, c on both sides; element comparisons are per-enum impls
+// generated by the derive (Equal[Enum, Bool] for EnumCraft[Enum, w, c]).
+
+impl[E: Type 0, w: Nat, c: Nat] Equal[EnumCraft[E, w, c], Bool] for EnumCraft[E, w, c] {
+    def ===(that: EnumCraft[E, w, c]): Bool =
+        Bool.mk(None, binary(this.zz_expr, "==", that.zz_expr))
+    def =/=(that: EnumCraft[E, w, c]): Bool =
+        Bool.mk(None, binary(this.zz_expr, "!=", that.zz_expr))
+}
+
+// ---------- conversions (same expr, zero cost) ----------
+impl[E: Type 0, w: Nat, c: Nat] EnumCraft[E, w, c] {
+    def asUInt: UInt[w] = UInt.mk(None, this.zz_expr)
+    def asBits: Bits[w] = Bits.mk(None, this.zz_expr)
+}
+
+// ---------- RegNext (same shape as the UInt impl in hdl-signals) ----------
+impl[E: Type 0, w: Nat, c: Nat] RegNext[EnumCraft[E, w, c]] for EnumCraft[E, w, c] {
+    def mkReg(name: String): EnumCraft[E, w, c] =
+        let r = enumCraftRegNamed(name, w, c);
+        let _ = createSignalExpr("", regAssign(r.zz_expr, this.zz_expr));
+        r
+    def mkRegWhen(name: String, cond: Bool): EnumCraft[E, w, c] =
+        let r = enumCraftRegNamed(name, w, c);
+        let _ = whenBegin(cond.zz_expr);
+        let _assignment = createSignalExpr("", regAssign(r.zz_expr, this.zz_expr));
+        let _ = whenEnd(unit);
+        r
+}
+
+// ============================================================
+//  switch over enum: exhaustiveness check (HDL040 WARNING)
+// ============================================================
+// The checked exhaustive-switch form is a DIRECT call (see switchFinalEnum
+// below): after a no-default switch statement, record each is-case with
+// scCons/shEnum and hand the chain over —
+//   let _ = switchFinalEnum(st,
+//       scCons (shEnum ("FsmState", "IDLE", FsmState.hdlEnumElems))
+//           (scCons (shEnum ("FsmState", "RUN", FsmState.hdlEnumElems))
+//           (scCons (shEnum ("FsmState", "DONE", FsmState.hdlEnumElems)) scEmpty)), false)
+// A missing element is reported as an HDL040 WARNING naming it; a fully
+// covered chain stays silent. Only EnumCraft selectors are checkable
+// (their element universe is statically known); UInt/Bool selectors have
+// an unknown value range. NOTE (2026-09-26, M3): the hdl-macros switch
+// arms do NOT record cases automatically (a dotted is-value is captured
+// by the raw matcher fragment as an apply-block before a dedicated
+// dotted arm could see it), so the check is this explicit one-line
+// call — see the arms' comment in hdl-macros.typort.
+// FILE ORDER: typort has no forward references.
+
+enum SwitchHead {
+    shEnum(enumName: String, elemName: String, elems: List[String])
+}
+
+enum SwitchCases {
+    scEmpty
+    scCons(head: SwitchHead, rest: SwitchCases)
+}
+
+// ---------- name-set arithmetic over the recorded cases ----------
+
+def scListContains(ls: List[String], s: String): Boolean = match ls {
+    case lnil => false
+    case lcons(h, t) => match str_eq(h, s) {
+        case true => true
+        case false => scListContains(t, s)
+    }
+}
+
+def scJoinTail(t: List[String], acc: String): String = match t {
+    case lnil => acc
+    case lcons(h, rest) => scJoinTail(rest, string_concat(string_concat(acc, ", "), h))
+}
+
+def scJoinNames(ls: List[String]): String = match ls {
+    case lnil => ""
+    case lcons(h, t) => scJoinTail(t, h)
+}
+
+// Element names covered by is-cases of the SAME enum as enumName
+// (another enum's heads — a type error downstream anyway — are ignored).
+def scCovered(cases: SwitchCases, enumName: String, acc: List[String]): List[String] = match cases {
+    case scEmpty => acc
+    case scCons(head, rest) => match head {
+        case shEnum(n, e, _) => match str_eq(n, enumName) {
+            case true => scCovered(rest, enumName, lcons(e, acc))
+            case false => scCovered(rest, enumName, acc)
+        }
+    }
+}
+
+// First recorded head: its element list is the universe.
+def scFirstEnum(cases: SwitchCases): Option[SwitchHead] = match cases {
+    case scEmpty => None
+    case scCons(head, rest) => match head {
+        case shEnum(_, _, _) => Some(head)
+    }
+}
+
+def scMissingElems(elems: List[String], covered: List[String], acc: List[String]): List[String] = match elems {
+    case lnil => acc
+    case lcons(e, t) => match scListContains(covered, e) {
+        case true => scMissingElems(t, covered, acc)
+        case false => scMissingElems(t, covered, lcons(e, acc))
+    }
+}
+
+// ---------- the check itself ----------
+// Same module-name discipline as pickAssign's HDV002 (hdl-core): the tree
+// global is read through get_global_default — never written — so the
+// declaration-time check evaluation of this def degrades to module "".
+
+def switchFinalEnumNamed[E: Type 0, w: Nat, c: Nat](sel: EnumCraft[E, w, c], cases: SwitchCases, enumName: String, elems: List[String]): Unit =
+    let covered = scCovered(cases, enumName, lnil);
+    let missing = scMissingElems(elems, covered, lnil);
+    match missing {
+        case lnil => unit
+        case _ =>
+            let mname = headModuleDef((get_global_default("ModuleTree", ModuleTree.mk(0, nil))).data).name;
+            let _ = report_check_issue("HDL040", mname, exprName(sel.zz_expr),
+                string_concat("switch over enum is not exhaustive (missing: ",
+                    string_concat(scJoinNames(missing), ") - add is-cases or a default branch")));
+            unit
+    }
+
+def switchFinalEnumNoDefault[E: Type 0, w: Nat, c: Nat](sel: EnumCraft[E, w, c], cases: SwitchCases): Unit =
+    match scFirstEnum(cases) {
+        case None => unit
+        case Some(head) => match head {
+            case shEnum(n, _, els) => switchFinalEnumNamed(sel, cases, n, els)
+        }
+    }
+
+// hasDefault=true skips the check (a default branch covers everything).
+def switchFinalEnum[E: Type 0, w: Nat, c: Nat](sel: EnumCraft[E, w, c], cases: SwitchCases, hasDefault: Boolean): Unit =
+    match hasDefault {
+        case true => unit
+        case false => switchFinalEnumNoDefault(sel, cases)
+    }
