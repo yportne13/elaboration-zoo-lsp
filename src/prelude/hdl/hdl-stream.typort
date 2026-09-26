@@ -67,7 +67,9 @@ def streamCombStageBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
 //  m2sPipe —— valid/payload 打一拍（collapsBubble 默认开）
 //  rValid = RegNextWhen(input.valid, input.ready) init False
 //  rData  = RegNextWhen(input.payload, input.ready)
-//  input.ready = out.valid || out.ready
+//  input.ready = out.ready || !rValid
+//  （Stream.scala:493-495：self.ready := m2sPipe.ready; setWhen(!m2sPipe.valid)
+//    —— 空时随时收，满时等下游；原 rValid || outReady 为满/空写反，F1 已修）
 // ============================================================
 
 def streamM2sPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[UInt[w]] =
@@ -78,7 +80,7 @@ def streamM2sPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[U
     let _ = createSignalExpr("", regAssign(rValid.zz_expr, input.valid.zz_expr));
     let _ = createSignalExpr("", regAssign(rData.zz_expr, input.payload.zz_expr));
     let _ = whenEnd(unit);
-    let _ = input.ready := Bool.mk(None, binary(rValid.zz_expr, "||", outReady.zz_expr));
+    let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "||", unary("!", rValid.zz_expr)));
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, UInt.mk(None, rData.zz_expr))
 
 def streamM2sPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[Bits[w]] =
@@ -89,7 +91,7 @@ def streamM2sPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[B
     let _ = createSignalExpr("", regAssign(rValid.zz_expr, input.valid.zz_expr));
     let _ = createSignalExpr("", regAssign(rData.zz_expr, input.payload.zz_expr));
     let _ = whenEnd(unit);
-    let _ = input.ready := Bool.mk(None, binary(rValid.zz_expr, "||", outReady.zz_expr));
+    let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "||", unary("!", rValid.zz_expr)));
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, Bits.mk(None, rData.zz_expr))
 
 def streamM2sPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
@@ -100,26 +102,74 @@ def streamM2sPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
     let _ = createSignalExpr("", regAssign(rValid.zz_expr, input.valid.zz_expr));
     let _ = createSignalExpr("", regAssign(rData.zz_expr, input.payload.zz_expr));
     let _ = whenEnd(unit);
-    let _ = input.ready := Bool.mk(None, binary(rValid.zz_expr, "||", outReady.zz_expr));
+    let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "||", unary("!", rValid.zz_expr)));
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, Bool.mk(None, rData.zz_expr))
 
 // ============================================================
-//  s2mPipe —— ready 打一拍
+//  s2mPipe —— skid buffer（ready 路径切一拍，延迟 0）
+//  rValidN = RegInit(True)；input.valid 时清 0；out.ready 时置 1
+//            （Stream.scala:499 RegInit(True) clearWhen(self.valid) setWhen(s2mPipe.ready)）
+//  rData   = RegNextWhen(input.payload, input.ready)   —— input.ready = rValidN，
+//            恰在反压开始的那一拍把直通拍存入 skid 寄存器
+//  input.ready = rValidN            （组合直通 → 零延迟）
+//  out.valid   = input.valid || !rValidN
+//  out.payload = rValidN ? input.payload : rData
+//  （原实现只把 ready 打一拍、无 rValidN/rData/bypass，反压沿上会丢数据，F2 已修）
 // ============================================================
 
 def streamS2mPipeUInt[bn: BindingName][w: Nat](input: Stream[UInt[w]]): Stream[UInt[w]] =
     let outReady = newBoolNamed(bn.name + "_ready");
-    let rReady = newBoolRegNamed(bn.name + "_ready_r");
-    let _ = createSignalExpr("", regAssign(rReady.zz_expr, outReady.zz_expr));
-    let _ = input.ready := Bool.mk(None, rReady.zz_expr);
-    Stream.mk(input.valid, outReady, input.payload)
+    let rValidN = newBoolRegInitNatNamed(bn.name + "_validN", 1);
+    let rData = newUIntRegNamed(bn.name + "_data", w);
+    let _ = whenBegin(input.valid.zz_expr);
+    let _ = createSignalExpr("", regAssign(rValidN.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(outReady.zz_expr);
+    let _ = createSignalExpr("", regAssign(rValidN.zz_expr, literal(1)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(rValidN.zz_expr);
+    let _ = createSignalExpr("", regAssign(rData.zz_expr, input.payload.zz_expr));
+    let _ = whenEnd(unit);
+    let _ = input.ready := Bool.mk(None, rValidN.zz_expr);
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "||", unary("!", rValidN.zz_expr))),
+              outReady,
+              UInt.mk(None, Expr.mux(rValidN.zz_expr, input.payload.zz_expr, rData.zz_expr)))
 
 def streamS2mPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[Bits[w]] =
     let outReady = newBoolNamed(bn.name + "_ready");
-    let rReady = newBoolRegNamed(bn.name + "_ready_r");
-    let _ = createSignalExpr("", regAssign(rReady.zz_expr, outReady.zz_expr));
-    let _ = input.ready := Bool.mk(None, rReady.zz_expr);
-    Stream.mk(input.valid, outReady, input.payload)
+    let rValidN = newBoolRegInitNatNamed(bn.name + "_validN", 1);
+    let rData = newBitsRegNamed(bn.name + "_data", w);
+    let _ = whenBegin(input.valid.zz_expr);
+    let _ = createSignalExpr("", regAssign(rValidN.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(outReady.zz_expr);
+    let _ = createSignalExpr("", regAssign(rValidN.zz_expr, literal(1)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(rValidN.zz_expr);
+    let _ = createSignalExpr("", regAssign(rData.zz_expr, input.payload.zz_expr));
+    let _ = whenEnd(unit);
+    let _ = input.ready := Bool.mk(None, rValidN.zz_expr);
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "||", unary("!", rValidN.zz_expr))),
+              outReady,
+              Bits.mk(None, Expr.mux(rValidN.zz_expr, input.payload.zz_expr, rData.zz_expr)))
+
+def streamS2mPipeBool[bn: BindingName](input: Stream[Bool]): Stream[Bool] =
+    let outReady = newBoolNamed(bn.name + "_ready");
+    let rValidN = newBoolRegInitNatNamed(bn.name + "_validN", 1);
+    let rData = newBoolRegNamed(bn.name + "_data");
+    let _ = whenBegin(input.valid.zz_expr);
+    let _ = createSignalExpr("", regAssign(rValidN.zz_expr, literal(0)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(outReady.zz_expr);
+    let _ = createSignalExpr("", regAssign(rValidN.zz_expr, literal(1)));
+    let _ = whenEnd(unit);
+    let _ = whenBegin(rValidN.zz_expr);
+    let _ = createSignalExpr("", regAssign(rData.zz_expr, input.payload.zz_expr));
+    let _ = whenEnd(unit);
+    let _ = input.ready := Bool.mk(None, rValidN.zz_expr);
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "||", unary("!", rValidN.zz_expr))),
+              outReady,
+              Bool.mk(None, Expr.mux(rValidN.zz_expr, input.payload.zz_expr, rData.zz_expr)))
 
 // ============================================================
 //  halfPipe —— 半流水：valid 打一拍；空时提前接受
@@ -148,40 +198,47 @@ def streamHalfPipeBits[bn: BindingName][w: Nat](input: Stream[Bits[w]]): Stream[
     Stream.mk(Bool.mk(None, rValid.zz_expr), outReady, Bits.mk(None, rData.zz_expr))
 
 // ============================================================
-//  throwWhen / haltWhen / continueWhen / takeWhen
+//  throwWhen / haltWhen / continueWhen / takeWhen（Stream.scala:553-600，全组合）
+//  throwWhen(cond)：丢弃拍必须强制消费 —— ready = cond || out.ready（F3 已修）
+//  continueWhen(cond)：next.valid = valid && cond；ready = out.ready && cond（F4 已修）
+//  haltWhen(cond) = continueWhen(!cond)；takeWhen(cond) = throwWhen(!cond)（F4 已修）
 // ============================================================
 
 def streamThrowWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
     let outReady = newBoolNamed("tw_ready");
-    let _ = input.ready := outReady;
+    let _ = input.ready := Bool.mk(None, binary(cond.zz_expr, "||", outReady.zz_expr));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
 def streamThrowWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
     let outReady = newBoolNamed("tw_ready");
-    let _ = input.ready := outReady;
+    let _ = input.ready := Bool.mk(None, binary(cond.zz_expr, "||", outReady.zz_expr));
     Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
 def streamHaltWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
     let outReady = newBoolNamed("hw_ready");
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", unary("!", cond.zz_expr)));
-    Stream.mk(input.valid, outReady, input.payload)
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
 def streamHaltWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
     let outReady = newBoolNamed("hw_ready");
     let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", unary("!", cond.zz_expr)));
-    Stream.mk(input.valid, outReady, input.payload)
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))), outReady, input.payload)
 
 def streamContinueWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
-    streamHaltWhenUInt(input, cond)
+    let outReady = newBoolNamed("cw_ready");
+    let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", cond.zz_expr));
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", cond.zz_expr)), outReady, input.payload)
 
 def streamContinueWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
-    streamHaltWhenBits(input, cond)
+    let outReady = newBoolNamed("cw_ready");
+    let _ = input.ready := Bool.mk(None, binary(outReady.zz_expr, "&&", cond.zz_expr));
+    Stream.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", cond.zz_expr)), outReady, input.payload)
 
 def streamTakeWhenUInt[w: Nat](input: Stream[UInt[w]], cond: Bool): Stream[UInt[w]] =
-    streamHaltWhenUInt(input, cond)
+    streamThrowWhenUInt(input, Bool.mk(None, unary("!", cond.zz_expr)))
 
 def streamTakeWhenBits[w: Nat](input: Stream[Bits[w]], cond: Bool): Stream[Bits[w]] =
-    streamHaltWhenBits(input, cond)
+    streamThrowWhenBits(input, Bool.mk(None, unary("!", cond.zz_expr)))
 
 // ============================================================
 //  StreamFifo —— RAM 指针式同步 FIFO（SpinalHDL StreamFifo）
@@ -428,12 +485,12 @@ def fragmentThrowWhenUInt[w: Nat](input: StreamFragment[UInt[w]], cond: Bool): S
 //  Flow —— 无 ready；FlowMux 按 select 选 flow
 // ============================================================
 
-def flowMuxPayload[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count): UInt[w] =
+def flowMuxPayload[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count, k: Nat): UInt[w] =
     match inputs {
         case nil => UInt.mk(None, literal(0))
         case cons(h, t) =>
-            let m = binary(select.zz_expr, "==", literal(0));
-            UInt.mk(None, Expr.mux(m, h.payload.zz_expr, (flowMuxPayload(select, t)).zz_expr))
+            let m = binary(select.zz_expr, "==", literal(k));
+            UInt.mk(None, Expr.mux(m, h.payload.zz_expr, (flowMuxPayload(select, t, k + 1)).zz_expr))
     }
 
 def flowMuxValid[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count, k: Nat): Bool =
@@ -445,4 +502,4 @@ def flowMuxValid[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow
     }
 
 def flowMuxUInt[s2: Nat, w: Nat, count: Nat](select: UInt[s2], inputs: Vec[Flow[UInt[w]]] count): Flow[UInt[w]] =
-    Flow.mk(flowMuxPayload(select, inputs), flowMuxValid(select, inputs, 0))
+    Flow.mk(flowMuxPayload(select, inputs, 0), flowMuxValid(select, inputs, 0))

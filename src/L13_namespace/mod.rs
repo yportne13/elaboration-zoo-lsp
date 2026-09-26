@@ -326,6 +326,9 @@ mod module_probe_tests;
 mod verilog_compat_tests;
 
 #[cfg(test)]
+mod hdl_stream_fix_tests;
+
+#[cfg(test)]
 mod class_tests;
 
 #[cfg(test)]

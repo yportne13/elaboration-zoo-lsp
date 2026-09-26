@@ -1618,8 +1618,8 @@ fn test_examples_hdl_dir() {
         ("19-stream.typort", include_str!("../../examples/hdl/19-stream.typort"), &[
             "reg p1_valid;",                   // m2sPipe valid 寄存器
             "reg [7:0] p1_data;",             // m2sPipe payload 寄存器
-            "assign push_ready = (p1_valid || p1_ready)", // collapsBubble
-            "assign p1_ready = p2_ready_r;",  // s2mPipe ready 打拍
+            "assign push_ready = (p1_ready || !p1_valid)", // F1 修正：collapsBubble（空随时收/满等下游）
+            "assign p1_ready = p2_validN;",   // F2 修正：s2mPipe skid buffer ready 直通
             "assign push_ready = (h1_ready || !h1_valid)", // halfPipe 提前接受
             "reg [2:0] fifo_ptrPush;",        // fifo 指针
             "reg [7:0] fifo_mem [0:3];",      // fifo RAM
