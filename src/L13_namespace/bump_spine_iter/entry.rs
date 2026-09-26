@@ -1052,7 +1052,11 @@ impl Tycker {
     /// `trait_method_cache`) carry no arena pointers and are re-snapshotted
     /// from the (unchanged) machine; `tm_import`/`val_import` are remapped by
     /// the copier.
-    fn compact_resident(&mut self) {
+    ///
+    /// `pub(super)`：observe.rs 的压实等价性验收按 kick 显式调用（摊平链
+    /// 冗余求值消除后，小文件的用户段垃圾不再撑大 arena，预算 0 也无法
+    /// 自然触发——见该用例内注释）。
+    pub(super) fn compact_resident(&mut self) {
         let Some(r) = self.resident.take() else { return };
         RESIDENT_COMPACTIONS.with(|c| c.set(c.get() + 1));
         // Stable capacity hint from prime's measured live state; the checkpoint

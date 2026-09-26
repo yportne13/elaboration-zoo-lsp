@@ -1002,13 +1002,19 @@ struct P {
         ).expect("parse");
 
         // Budget 0: the previous kick's (nonzero) user-segment garbage forces a
-        // compaction at the next kick's start.
+        // compaction at the next kick's start.  （2026-09-26 修订：摊平链冗余
+        // 求值消除——def tree 改读 _res / Raw::Tm 弃结果 eval 删除 / App 臂
+        // 跳过——之后，本用例的小文件单 kick 垃圾不再撑大 arena
+        // （allocated_bytes 不涨，`over` 判定失效），预算 0 无法再自然触发。
+        // 改为每个 kick 起点显式压实，保留用例本意：压实换 arena 后的跨
+        // kick 观察表仍须与全新重放逐字节一致。）
         set_resident_bump_budget(0);
         let before = resident_compactions();
         let mut resident = Tycker::new();
         resident.prime_resident(&pre).expect("prime");
         let mut kicks = Vec::new();
         for _ in 0..4 {
+            resident.compact_resident();
             resident.observe_user(&pre, &decls).expect("observe_user");
             let mut v: Vec<(u32, u32, u32, u32, String)> = resident
                 .hover_table()
