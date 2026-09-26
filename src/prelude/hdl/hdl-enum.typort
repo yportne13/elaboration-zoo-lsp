@@ -76,10 +76,12 @@ def encValueOf(e: Encoding, pos: Nat): Nat = match e {
 // ---------- EnumCraft: the hardware signal ----------
 // w = encoding bit width, c = encoding code (phantom index used to recover
 // the encoding when literalizing elements). Same enum under different
-// encodings has different w — cross-encoding mixing is a type error
-// (binary/sequential/native share values, so their equal widths stay
-// mutually comparable, harmlessly). The zz_expr is always a create* node:
-// craft signals are plain bit vectors to every downstream consumer.
+// encodings has different w — cross-encoding mixing is a type error; and
+// equal widths do NOT buy comparability: binary/sequential/native of one
+// enum share values but carry different c, so mixing them is still a type
+// error (conservatively rejected — the phantom index keeps encodings
+// apart). The zz_expr is always a create* node: craft signals are plain
+// bit vectors to every downstream consumer.
 
 struct EnumCraft[E: Type 0, w: Nat, c: Nat] {
     name: Option[String]

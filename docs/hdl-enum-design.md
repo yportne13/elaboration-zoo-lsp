@@ -1,6 +1,6 @@
 # 硬件 Enum（SpinalEnum 对应物）设计
 
-> 状态：已实现 M1-M3（2026-09-26）。落点：`src/prelude/hdl/hdl-enum.typort`、`src/L13_namespace/parser/derive.rs`（`derive_hdlenum`）、`src/prelude/hdl/hdl-macros.typort`（无 default switch 臂）、`src/L13_namespace/hdl_enum_tests.rs`。与设计稿的偏差：元素复用 L07 构造子（EnumLit 包装被放弃——def 无法覆盖 L07 构造子的 decl 键）、穷尽性检查为显式 `switchFinalEnum` 直调（自动记录 case 的点分臂未接线，见 §4.7 宏臂注释）。原始设计稿如下（行号基于当时 master 工作树）。
+> 状态：已实现 M1-M3（2026-09-26）。落点：`src/prelude/hdl/hdl-enum.typort`、`src/L13_namespace/parser/derive.rs`（`derive_hdlenum`）、`src/prelude/hdl/hdl-macros.typort`（无 default switch 臂）、`src/L13_namespace/hdl_enum_tests.rs`。与设计稿的偏差：① 元素复用 L07 构造子（EnumLit 包装被放弃——def 无法覆盖 L07 构造子的 decl 键）；② 穷尽性检查为显式 `switchFinalEnum` 直调 opt-in——HDL040 缺支自动上报未接线（宏臂不记录 case，见 §4.7 宏臂注释）；③ §8 验收基线中 §9 的 examples 新增用例未新增 examples 文件，改由 `hdl_enum_tests.rs` 承担；④ 示例命名避让 prelude 既有名——`State` 已被 `src/prelude/hdl/hdl-bus.typort:214` 的 `struct State[T]` 占用，全文示例统改 `FsmState`（§10-10）。原始设计稿如下（行号基于当时 master 工作树，示例名已按 ④ 统一为 `FsmState`）。
 
 ---
 
@@ -29,11 +29,11 @@
 | 机制 | 位置 | 对 enum 的意义 |
 |---|---|---|
 | `#[derive(...)]` 注册表 | `src/L13_namespace/parser/derive.rs:9-23`（`DeriveMacro = fn(&Decl, &BundleSet) -> Vec<Decl>`）、展开入口 `src/L13_namespace/parser/mod.rs:2850-2905` | 硬件 enum 走同一条路：新增 `derive_hdlenum`，从 `Decl::Enum` 生成一组 decl。`derive_show`（derive.rs:925-963）证明 enum decl 已流入 derive 管线 |
-| 点名 decl 解析 | `src/L13_namespace/elaboration.rs:2461-2497`：`Raw::Obj` 把 `A.b` 拼成完整路径查 decl 表 | `def State.IDLE` / `def State.craft` 这类**生成式点名 def** 可以按 `State.IDLE` / `State.craft` 访问（与 `AxiLite.create`、`Foo.create` 同机制） |
+| 点名 decl 解析 | `src/L13_namespace/elaboration.rs:2461-2497`：`Raw::Obj` 把 `A.b` 拼成完整路径查 decl 表 | `def FsmState.IDLE` / `def FsmState.craft` 这类**生成式点名 def** 可以按 `FsmState.IDLE` / `FsmState.craft` 访问（与 `AxiLite.create`、`Foo.create` 同机制） |
 | 类型参数可为未在字段中出现的幻影参数 | `struct UInt[width: Nat]`（`hdl-types.typort:112-115`，width 不出现在字段中） | `EnumLit[E]` 用 E 做 phantom 实现跨 enum 类型安全 |
-| 类型索引上的 def 调用 | `hdl-ops.typort:687`：`idx: UInt[log2Up n]` | `EnumCraft[State, encWidthOf e n, encCodeOf e]` 合法 |
+| 类型索引上的 def 调用 | `hdl-ops.typort:687`：`idx: UInt[log2Up n]` | `EnumCraft[FsmState, encWidthOf e n, encCodeOf e]` 合法 |
 | 信号模型全部走 `create*` Expr 变体 | `hdl-core.typort:96-153` | 编码降级后 craft 信号就是 `createWidth/createRegWidth`，Verilog/自检零改动 |
-| 自动命名 | `bn: BindingName`（`hdl-core.typort:9-12`）+ `newUInt`（`hdl-signals.typort:352-354`） | `let cur = State.craft` 自动得名 "cur" |
+| 自动命名 | `bn: BindingName`（`hdl-core.typort:9-12`）+ `newUInt`（`hdl-signals.typort:352-354`） | `let cur = FsmState.craft` 自动得名 "cur" |
 | trait 首匹配注册序 | `hdl-types.typort:242-247`（LetNamed 兜底实例 "MUST stay last"） | switch 检查的兜底 impl 必须最后注册 |
 | 自检上报通道 | `report_check_issue(code, module, sig, msg)`（`hdl-check.typort:601-603`）；运行中上报先例 `pickAssign` 的 HDV002（`hdl-core.typort:706-711`） | 穷尽性检查 HDL040 在 elaboration 期直接上报 WARNING |
 
@@ -43,7 +43,7 @@
 
 ### 目标（一期）
 
-1. `#[derive(HdlEnum)] enum State { IDLE RUN DONE }` 声明硬件 enum；元素为 elaboration 期纯值，**带 phantom 类型参数**阻止跨 enum 混用。
+1. `#[derive(HdlEnum)] enum FsmState { IDLE RUN DONE }` 声明硬件 enum；元素为 elaboration 期纯值，**带 phantom 类型参数**阻止跨 enum 混用。
 2. 四种编码 binary / sequential / native / oneHot：决定位宽与字面量编码值；编码选择编译进 craft 类型索引。
 3. craft 信号：wire 工厂、reg/regInit 工厂（异步复位）、`===`/`=/=`（craft↔craft、craft↔元素）、`:=`（Into 隐式转换）、mux、`asUInt`/`asBits`。
 4. switch over enum：现有宏臂原样工作（`===` 分派）；新增**无 default 臂**与**穷尽性检查**（HDL040 WARNING，缺哪个元素点名报出）。
@@ -65,7 +65,7 @@
 
 ```typort
 #[derive(HdlEnum)]
-enum State {
+enum FsmState {
     IDLE
     RUN
     DONE
@@ -75,7 +75,7 @@ enum State {
 - L07 语法原样：无名参构造子、空格分隔（同 `enum ClockEdge { RisingEdge FallingEdge }`，`hdl-core.typort:71-74`）。
 - **为什么复用 L07 enum 而不是新语法**：
   - 备选 A「新增 `hdlenum` 关键字/语句」：要动 parser 与 L07 语义边界，收益仅是省一个属性。
-  - 备选 B「纯 typort `macro_rules hdlenum`」：宏可以生成多条 `def`（模块宏先例），但 (1) 宏展开到顶层多 decl 的支持未验证；(2) `State.craft` 的返回类型需要 per-enum 的**具体宽度 Nat**，宏无法按元素个数算 `log2Up`（macro_rules 不能计数），只能退到运行期查表，类型不精确；(3) LSP hover/goto 对宏产物支持弱。
+  - 备选 B「纯 typort `macro_rules hdlenum`」：宏可以生成多条 `def`（模块宏先例），但 (1) 宏展开到顶层多 decl 的支持未验证；(2) `FsmState.craft` 的返回类型需要 per-enum 的**具体宽度 Nat**，宏无法按元素个数算 `log2Up`（macro_rules 不能计数），只能退到运行期查表，类型不精确；(3) LSP hover/goto 对宏产物支持弱。
   - 备选 C「Rust parser 内建 enum 声明」：过重。
   - **选定**：`Decl::Enum` + derive 注册（derive.rs:18-23 加一行），生成物是普通 decl，hover/goto/补全全部走既有机制。derive 校验：全部构造子必须无参，否则经 `expand_derives` 的错误通道（`parser/mod.rs:2850` 返回 `Vec<IError>`）报解析期错误。
 - 与 L07 的关系：**复用声明、注入语义**。L07 enum 本身保留——元素构造子仍是纯 elaboration 值，可参与普通 match（FSM 的纯逻辑译码等）；硬件语义全部由 derive 生成的补充 decl 承载。
@@ -89,21 +89,21 @@ module fsm {
     output busy = Bool
     output outState = UInt[2]
 
-    let st = State.regInit(State.IDLE)     // 状态寄存器，异步复位到 IDLE（编码后 0）
-    let nxt = State.craft                  // 组合信号，默认 binary 编码，宽 2
+    let st = FsmState.regInit(FsmState.IDLE)     // 状态寄存器，异步复位到 IDLE（编码后 0）
+    let nxt = FsmState.craft                  // 组合信号，默认 binary 编码，宽 2
 
     switch st {                            // 无 default：穷尽 → 不报 HDL040
-        is State.IDLE { when start   { st := State.RUN  } }
-        is State.RUN  { when doneIn  { st := State.DONE } }
-        is State.DONE { st := State.IDLE }
+        is FsmState.IDLE { when start   { st := FsmState.RUN  } }
+        is FsmState.RUN  { when doneIn  { st := FsmState.DONE } }
+        is FsmState.DONE { st := FsmState.IDLE }
     }
-    nxt := sel.mux(st, State.IDLE)         // mux（sel 为 Bool 时省略）
-    busy := st === State.RUN               // 硬件比较
+    nxt := sel.mux(st, FsmState.IDLE)         // mux（sel 为 Bool 时省略）
+    busy := st === FsmState.RUN               // 硬件比较
     outState := st.asUInt
 }
 ```
 
-oneHot：`let c = Cmd.craftAs[encOneHot]`。**编码选择在值上（`Encoding` 构造子），编译进 craft 类型索引**（§4.3），不放 enum 类型上（L07 enum 是纯类型，不能带硬件参数；`State[oneHot]` 形态要求新语法）。
+oneHot：`let c = Cmd.craftAs[encOneHot]`。**编码选择在值上（`Encoding` 构造子），编译进 craft 类型索引**（§4.3），不放 enum 类型上（L07 enum 是纯类型，不能带硬件参数；`FsmState[oneHot]` 形态要求新语法）。
 
 ---
 
@@ -113,7 +113,7 @@ oneHot：`let c = Cmd.craftAs[encOneHot]`。**编码选择在值上（`Encoding`
 
 ```typort
 struct EnumLit[E: Type 0] {
-    enumName: String     // "State"，用于 switch 穷尽匹配与 localparam 命名
+    enumName: String     // "FsmState"，用于 switch 穷尽匹配与 localparam 命名
     elemName: String     // "IDLE"
     elems: List[String]  // 本 enum 全部元素名（声明序）——序数/编码值的唯一事实源
 }
@@ -123,11 +123,11 @@ struct EnumLit[E: Type 0] {
 - derive 生成（等价 typort 源，实际由 Rust 直接构造 Raw AST，参照 `derive_bundle` 的 `build_*` 系列手法）：
 
 ```typort
-def State.IDLE: EnumLit[State] = EnumLit.mk[State]("State", "IDLE",
+def FsmState.IDLE: EnumLit[FsmState] = EnumLit.mk[FsmState]("FsmState", "IDLE",
     lcons ("IDLE") (lcons ("RUN") (lcons ("DONE") lnil)))
-def State.RUN:  EnumLit[State] = EnumLit.mk[State]("State", "RUN",  <同表>)
-def State.DONE: EnumLit[State] = EnumLit.mk[State]("State", "DONE", <同表>)
-def State.count: Nat = 3
+def FsmState.RUN:  EnumLit[FsmState] = EnumLit.mk[FsmState]("FsmState", "RUN",  <同表>)
+def FsmState.DONE: EnumLit[FsmState] = EnumLit.mk[FsmState]("FsmState", "DONE", <同表>)
+def FsmState.count: Nat = 3
 ```
 
 - 元素**序数**不在宏展开期计算（macro_rules 不能计数），而是携带元素名 + 全元素表，用时由纯函数查表：
@@ -143,7 +143,7 @@ def elemOrdHelp(ls: List[String], name: String, i: Nat): Nat = match ls {
 def litOrdinal[E: Type 0](l: EnumLit[E]): Nat = elemOrdHelp(l.elems, l.elemName, 0)
 ```
 
-- 元素访问用限定名 `State.IDLE`（SpinalHDL 靠 `import UartCtrlTxState._` 得裸名；Typort 无 import，记录为偏差 §7.1）。L07 构造子 `IDLE` 本身仍可 bare 使用（纯 match 场景）。
+- 元素访问用限定名 `FsmState.IDLE`（SpinalHDL 靠 `import UartCtrlTxState._` 得裸名；Typort 无 import，记录为偏差 §7.1）。L07 构造子 `IDLE` 本身仍可 bare 使用（纯 match 场景）。
 
 ### 4.2 编码（Encoding）
 
@@ -198,27 +198,27 @@ struct EnumCraft[E: Type 0, w: Nat, c: Nat] {
 
 ```typort
 // 默认 binary。宽 2 / 码 0 由 Rust 在 derive 期算好（元素个数已知），生成具体 Nat：
-def State.craft[bn: BindingName]: EnumCraft[State, 2, 0] =
+def FsmState.craft[bn: BindingName]: EnumCraft[FsmState, 2, 0] =
     let e = createSignalExpr(loopName(bn.name), createWidth(loopName(bn.name), 2));
     EnumCraft.mk(Some(loopName(bn.name)), e)
 
 // 显式编码：宽度在类型索引上调用 encWidthOf（UInt[log2Up n] 先例，hdl-ops.typort:687）
-def State.craftAs[e: Encoding][bn: BindingName]: EnumCraft[State, encWidthOf e 3, encCodeOf e] =
+def FsmState.craftAs[e: Encoding][bn: BindingName]: EnumCraft[FsmState, encWidthOf e 3, encCodeOf e] =
     let n = loopName(bn.name);
     let w = encWidthOf e 3;
     let ex = createSignalExpr(n, createWidth(n, w));
     EnumCraft.mk(Some(n), ex)
 
 // 寄存器（异步复位初值 = 编码后的 Nat 字面量，走 verilogLiteral 通道，hdl-core.typort:534）
-def State.reg[bn: BindingName]: EnumCraft[State, 2, 0] =
+def FsmState.reg[bn: BindingName]: EnumCraft[FsmState, 2, 0] =
     ... createRegWidth(loopName(bn.name), 2) ...
-def State.regInit[bn: BindingName](init: EnumLit[State]): EnumCraft[State, 2, 0] =
+def FsmState.regInit[bn: BindingName](init: EnumLit[FsmState]): EnumCraft[FsmState, 2, 0] =
     ... createRegWidthInit(loopName(bn.name), 2, literal(encValueOf(encBinary, litOrdinal init))) ...
 ```
 
-- 用户书写 `let cur = State.craft` / `let c = Cmd.craftAs[encOneHot]` / `let st = State.regInit(State.IDLE)`。
+- 用户书写 `let cur = FsmState.craft` / `let c = Cmd.craftAs[encOneHot]` / `let st = FsmState.regInit(FsmState.IDLE)`。
   **无需新增宏臂**：module 宏体内 `let x = <raw>` 落入 Expr 宏通用 let 臂（`hdl-macros.typort:157`）→ `nameWire` → `LetNamed` 泛型兜底实例（`hdl-types.typort:245-247`）恒等放行——craft 的 `zz_expr` 已是 create* 声明节点（`isDeclaredSignal` 判真，`hdl-core.typort:186-215`），与端口/reg 工厂产物的 let 行为一致。**因此不给 craft 定义专门 LetNamed 实例**（若定义，须赶在 `hdl-types` 的兜底实例之前注册，而 hdl-enum 晚于 hdl-types 加载，必然被兜底遮蔽——索性不做，见 §8 M1 说明）。
-- 隐式编码漏写的兜底：`State.craftAs` 不带 `[enc]` 时 `e` 留为 unsolved meta → `encWidthOf e 3` 卡死 → 宽度非 ground → HDL004 报警（`hdl-check.typort:605-675`）。报错不直指「漏编码」，记入 §9。
+- 隐式编码漏写的兜底：`FsmState.craftAs` 不带 `[enc]` 时 `e` 留为 unsolved meta → `encWidthOf e 3` 卡死 → 宽度非 ground → HDL004 报警（`hdl-check.typort:605-675`）。报错不直指「漏编码」，记入 §9。
 
 ### 4.4 赋值与隐式转换
 
@@ -245,7 +245,7 @@ impl[E: Type 0, w: Nat, c: Nat] Into[EnumCraft[E, w, c]] for MuxExpr[EnumCraft[E
 }
 ```
 
-- `:=` 复制 `Bits` 的实现形状（`hdl-types.typort:101-108`）；`pickAssign`（`hdl-core.typort:697-713`）自动区分组合/时钟赋值——`st := State.RUN` 落在 reg 上即 `regAssign`，`when` 内自动条件化（WhenStack 机制原样生效）。
+- `:=` 复制 `Bits` 的实现形状（`hdl-types.typort:101-108`）；`pickAssign`（`hdl-core.typort:697-713`）自动区分组合/时钟赋值——`st := FsmState.RUN` 落在 reg 上即 `regAssign`，`when` 内自动条件化（WhenStack 机制原样生效）。
 - `Into` 即 SpinalHDL「元素字面量随 craft 编码自动重编码」的对应物：编码发生在 elaboration 期赋值点。
 
 ### 4.5 硬件比较
@@ -277,11 +277,11 @@ impl[E: Type 0, w: Nat, c: Nat] EnumCraft[E, w, c] {
 }
 ```
 
-- 反向 `UInt → craft` 由 derive 生成 `def State.fromUInt(u: UInt[2]): EnumCraft[State, 2, 0]`（无检查重解释，SpinalHDL 语义；二期，§8 M4）——放 derive 是因为返回类型需要具体 w，且 E 无法从 UInt 推断。
+- 反向 `UInt → craft` 由 derive 生成 `def FsmState.fromUInt(u: UInt[2]): EnumCraft[FsmState, 2, 0]`（无检查重解释，SpinalHDL 语义；二期，§8 M4）——放 derive 是因为返回类型需要具体 w，且 E 无法从 UInt 推断。
 
 ### 4.7 switch 与穷尽性检查
 
-**is 接受枚举元素（零改动）**：现有 switch 宏臂（`hdl-macros.typort:209-225`）把每个分支转成 `($sel === $val)` —— `$val` 为 `State.IDLE` 时分派到 §4.5 的 craft↔lit `===`，`$val` 为 Nat 时仍是旧路径。**语法不变**：`is State.IDLE { ... }`（现有 `is` 不带括号，与 `is 0 { ... }` 一致）。
+**is 接受枚举元素（零改动）**：现有 switch 宏臂（`hdl-macros.typort:209-225`）把每个分支转成 `($sel === $val)` —— `$val` 为 `FsmState.IDLE` 时分派到 §4.5 的 craft↔lit `===`，`$val` 为 Nat 时仍是旧路径。**语法不变**：`is FsmState.IDLE { ... }`（现有 `is` 不带括号，与 `is 0 { ... }` 一致）。
 
 **穷尽性检查（HDL040，新增）**：枚举元素集合在 elaboration 期完全已知——这是与 Nat switch（值域未知）的本质差异，值得检查。设计：
 
@@ -386,11 +386,11 @@ let _ = report_check_issue("HDL040", mname, exprName(sel.zz_expr),
 
 | 用户构造 | ModuleTree 节点 | Verilog（既有产码函数） |
 |---|---|---|
-| `let cur = State.craft` | `createWidth("cur", 2)` | `reg/wire [1:0] cur;`（when 驱动 → reg：`wireLineSingle` hdl-verilog.typort:447-467；`wireOrRegLine`:435-440） |
+| `let cur = FsmState.craft` | `createWidth("cur", 2)` | `reg/wire [1:0] cur;`（when 驱动 → reg：`wireLineSingle` hdl-verilog.typort:447-467；`wireOrRegLine`:435-440） |
 | `input p = UInt[2]`（过渡期 enum 端口） | `createInWidth` | `input wire [1:0] p;`（`portLineSingle`:375-391） |
-| `let st = State.reg / regInit` | `createRegWidth / createRegWidthInit(name, 2, literal(v))` | `reg [1:0] st;` + 异步复位 `st <= v;`（`collectRegLines`:482-532、`collectInitLinesCd` hdl-verilog.typort:911-948、`verilogLiteral` hdl-core.typort:534-537——只认 `literal(v)`，故 regInit 必须产 `literal` 而非 `sizedLiteral`） |
-| `st := State.RUN` | `regAssign(st, literal(1))`（when 包裹由 WhenStack 完成） | `st <= 1;`（`exprVL_proc` hdl-verilog.typort:131-136） |
-| `st === State.RUN` | `binary(st, "==", literal(1))` | `(st == 1)`（`exprVL`:217-233） |
+| `let st = FsmState.reg / regInit` | `createRegWidth / createRegWidthInit(name, 2, literal(v))` | `reg [1:0] st;` + 异步复位 `st <= v;`（`collectRegLines`:482-532、`collectInitLinesCd` hdl-verilog.typort:911-948、`verilogLiteral` hdl-core.typort:534-537——只认 `literal(v)`，故 regInit 必须产 `literal` 而非 `sizedLiteral`） |
+| `st := FsmState.RUN` | `regAssign(st, literal(1))`（when 包裹由 WhenStack 完成） | `st <= 1;`（`exprVL_proc` hdl-verilog.typort:131-136） |
+| `st === FsmState.RUN` | `binary(st, "==", literal(1))` | `(st == 1)`（`exprVL`:217-233） |
 | `outState := st.asUInt` | `assign(outState, st)` | `assign outState = st;` |
 
 理由：
@@ -405,7 +405,7 @@ let _ = report_check_issue("HDL040", mname, exprName(sel.zz_expr),
 
 SpinalHDL 不生成 localparam，本设计一期对齐。若二期要生成：
 
-- **命名规则**：`localparam [w-1:0] <EnumName>_<ELEM> = <value>;`，如 `localparam [1:0] State_IDLE = 0;`。`<EnumName>` 是顶层唯一类型名，模块作用域内无冲突；元素名拼接保证跨 enum 不撞。
+- **命名规则**：`localparam [w-1:0] <EnumName>_<ELEM> = <value>;`，如 `localparam [1:0] FsmState_IDLE = 0;`。`<EnumName>` 是顶层唯一类型名，模块作用域内无冲突；元素名拼接保证跨 enum 不撞。
 - **实现形态（推荐 B）**：
   - 方案 A「EnumRegistry 全局 + 产码期读取」：derive 生成注册调用（声明期求值，`ModuleRegistry` 先例 hdl-core.typort:646-658；`moduleDefVL` 读全局先例 designVL hdl-verilog.typort:1402）。缺陷：**无法判断某模块用了哪个 enum**（craft 在树中与 UInt 不可区分，§5.1 的代价），要么每个模块发全部 enum 的 localparam（污染），要么不做过滤（不可行）。
   - **方案 B（选定）**：新增单个声明变体 `createEnumLocalparam(enumName: String, elemName: String, w: Nat, value: Nat)`，由 craft 工厂随首个信号声明一并发射（每元素一个节点），**渲染期按 (enumName, elemName) 去重**——不需要全局状态，天然只出现在用到的模块。
@@ -439,13 +439,13 @@ SpinalHDL 不生成 localparam，本设计一期对齐。若二期要生成：
 1. `default_derive_registry`（derive.rs:18-23）注册 `"HdlEnum" → derive_hdlenum`。
 2. `derive_hdlenum(decl: &Decl, _bundle: &BundleSet) -> Vec<Decl>`（预计 120-150 行）：
    - 匹配 `Decl::Enum { name, params, cases }`；要求所有 case 无字段（带 payload → 经 `expand_derives` 错误通道报「HdlEnum 构造子不能带参数」，parser/mod.rs:2850 返回 `Vec<IError>`）；空 enum 拒绝。
-   - Rust 期计算 `count`、binary 宽 `max(1, log2Up(count))`、oneHot 宽 `count`、各元素编码值——**位宽与编码值在 derive 期即具体 Nat**，`State.craft` 的返回类型是字面 `EnumCraft[State, 2, 0]`。
-   - 生成（全部是普通 `Decl::Def`，点名键 `"State.IDLE"` 等经 `Raw::Obj` decl 查表解析，elaboration.rs:2461-2497；`bn: BindingName` 隐参自动填充与 `derive_bundle` 的 `TypeName.create` 同机制，derive.rs:655-670）：
-     - `def State.<ELEM>: EnumLit[State]` × N（携带元素表）；
-     - `def State.count: Nat`；
-     - `def State.craft[bn]` / `def State.craftAs[e: Encoding][bn]`；
-     - `def State.reg[bn]` / `def State.regInit[bn](init: EnumLit[State])`；
-     - （M4）`def State.regAs[e][bn]` / `def State.regInitAs[e][bn](init)` / `def State.regOut[bn]` / `def State.regOutInit[bn](init)` / `def State.fromUInt(u: UInt[2])`。
+   - Rust 期计算 `count`、binary 宽 `max(1, log2Up(count))`、oneHot 宽 `count`、各元素编码值——**位宽与编码值在 derive 期即具体 Nat**，`FsmState.craft` 的返回类型是字面 `EnumCraft[FsmState, 2, 0]`。
+   - 生成（全部是普通 `Decl::Def`，点名键 `"FsmState.IDLE"` 等经 `Raw::Obj` decl 查表解析，elaboration.rs:2461-2497；`bn: BindingName` 隐参自动填充与 `derive_bundle` 的 `TypeName.create` 同机制，derive.rs:655-670）：
+     - `def FsmState.<ELEM>: EnumLit[FsmState]` × N（携带元素表）；
+     - `def FsmState.count: Nat`；
+     - `def FsmState.craft[bn]` / `def FsmState.craftAs[e: Encoding][bn]`；
+     - `def FsmState.reg[bn]` / `def FsmState.regInit[bn](init: EnumLit[FsmState])`；
+     - （M4）`def FsmState.regAs[e][bn]` / `def FsmState.regInitAs[e][bn](init)` / `def FsmState.regOut[bn]` / `def FsmState.regOutInit[bn](init)` / `def FsmState.fromUInt(u: UInt[2])`。
    - 生成体引用的全部符号（`createSignalExpr/createWidth/createRegWidth/literal/loopName/EnumCraft.mk/encValueOf/litOrdinal`）都在 prelude——**parser/elaborator/内建零改动**。
 
 不动的 Rust 面（明确列出以示边界）：`parser_lib*.rs`（derive 属性解析已有）、`L13_namespace/elaboration.rs`（点名解析/隐式填充/trait 求解全复用）、内建操作（`create_global/change_mutable/get_global/report_check_issue` 原样）、`hdl-verilog.typort`（一期）。
@@ -460,15 +460,15 @@ SpinalHDL 不生成 localparam，本设计一期对齐。若二期要生成：
 | `SpinalEnumElement[X]`（纯元素值） | `EnumLit[X]`（elaboration 期纯值）+ L07 构造子 | 元素不是类型 |
 | `SpinalEnumCraft[X]`（craft 信号） | `EnumCraft[X, w, c]` | 编码进类型索引 |
 | `X(binarySequential)` 默认编码 / `setDefaultEncoding` | `X.craft`（固定 binary）/ `X.craftAs[encOneHot]` | 无全局默认修改机制（全局可变默认会让类型索引依赖 elaboration 顺序，放弃） |
-| `val state = RegInit(IDLE)` | `let st = State.regInit(State.IDLE)` | 语法形态不同，语义同（异步复位到编码值） |
-| `state := START`（隐式重编码） | `st := State.RUN`（Into 编码） | 编码点从 elaborate 元数据移到 elaboration 期赋值点 |
-| `switch(state) { is(IDLE){...} }` | `switch st { is State.IDLE { ... } }` | is 不带括号（对齐本仓既有 switch） |
+| `val state = RegInit(IDLE)` | `let st = FsmState.regInit(FsmState.IDLE)` | 语法形态不同，语义同（异步复位到编码值） |
+| `state := START`（隐式重编码） | `st := FsmState.RUN`（Into 编码） | 编码点从 elaborate 元数据移到 elaboration 期赋值点 |
+| `switch(state) { is(IDLE){...} }` | `switch st { is FsmState.IDLE { ... } }` | is 不带括号（对齐本仓既有 switch） |
 | 比较自动重编码、跨编码可比较 | 同宽才可比（w/c 类型索引） | 更严格；跨宽度拒绝，同宽异码（binary/sequential/native）值一致可互比 |
 | Verilog：内联字面量，无 localparam | 同（一期） | 可选二期 localparam（§5.2） |
 
 **有意偏差（逐条）**：
 
-1. **限定名访问**：元素用 `State.IDLE`，不做 `import ... _` 裸名（Typort 无 import；且 prelude 内派生 enum 的点名 decl 会被自动别名成裸名——lib.rs:1285-1299——用户文件不受影响，但约定 derive 只在用户文件使用以免别名歧义）。
+1. **限定名访问**：元素用 `FsmState.IDLE`，不做 `import ... _` 裸名（Typort 无 import；且 prelude 内派生 enum 的点名 decl 会被自动别名成裸名——lib.rs:1285-1299——用户文件不受影响，但约定 derive 只在用户文件使用以免别名歧义）。
 2. **默认编码 binary 而非 native**：本模型不支持显式元素值，native ≡ binary（value=position、width=log2Up），差异不可观测；保留 `encNative` 名字仅为 API 对齐。SpinalHDL 的 native 优势（允许乱值/非常量宽）依赖 `newElement(v)`，列非目标。
 3. **编码身份编译进类型**：换取「跨编码混用 = 类型错误」的编译期保证；代价是失去 SpinalHDL 的跨编码自动重编码比较。需要跨编码时显式 `asUInt` 桥接。
 4. **is 单值**：SpinalHDL `is(A, B)` 多值分支暂不支持（现有 Nat switch 同为单值，一致性优先）。二期可加 `,` 分隔多值臂（展开为 `c1 || c2` 单条件）。
@@ -517,19 +517,19 @@ SpinalHDL 不生成 localparam，本设计一期对齐。若二期要生成：
 
 ```typort
 #[derive(HdlEnum)]
-enum State { IDLE RUN DONE }
+enum FsmState { IDLE RUN DONE }
 
 module enumBasics {
     input hit = Bool
     output isRun = Bool
     output code = UInt[2]
-    let cur = State.craft
+    let cur = FsmState.craft
     when hit {
-        cur := State.RUN
+        cur := FsmState.RUN
     } otherwise {
-        cur := State.IDLE
+        cur := FsmState.IDLE
     }
-    isRun := cur === State.RUN
+    isRun := cur === FsmState.RUN
     code := cur.asUInt
 }
 println(moduleTreeVL(enumBasics.create.tree))
@@ -563,11 +563,11 @@ endmodule
 module enumMux {
     input sel = Bool
     output q = UInt[2]
-    let a = State.craft
-    let b = State.craft
-    let out = State.craft
-    a := State.RUN
-    b := State.IDLE
+    let a = FsmState.craft
+    let b = FsmState.craft
+    let out = FsmState.craft
+    a := FsmState.RUN
+    b := FsmState.IDLE
     out := sel.mux(a, b)
     q := out.asUInt
 }
@@ -598,13 +598,13 @@ module fsm {
     input doneIn = Bool
     output busy = Bool
     output outState = UInt[2]
-    let st = State.regInit(State.IDLE)
+    let st = FsmState.regInit(FsmState.IDLE)
     switch st {
-        is State.IDLE { when start  { st := State.RUN  } }
-        is State.RUN  { when doneIn { st := State.DONE } }
-        is State.DONE { st := State.IDLE }
+        is FsmState.IDLE { when start  { st := FsmState.RUN  } }
+        is FsmState.RUN  { when doneIn { st := FsmState.DONE } }
+        is FsmState.DONE { st := FsmState.IDLE }
     }
-    busy := st === State.RUN
+    busy := st === FsmState.RUN
     outState := st.asUInt
 }
 ```
@@ -687,23 +687,23 @@ endmodule
 ```typort
 module fsmDecode {
     input adv = Bool
-    let st = State.regInit(State.IDLE)
-    when adv { st := State.DONE }
-    let last = State.craft
+    let st = FsmState.regInit(FsmState.IDLE)
+    when adv { st := FsmState.DONE }
+    let last = FsmState.craft
     switch st {
-        is State.IDLE { last := State.RUN  }
-        is State.RUN  { last := State.DONE }
-        is State.DONE { last := State.IDLE }
+        is FsmState.IDLE { last := FsmState.RUN  }
+        is FsmState.RUN  { last := FsmState.DONE }
+        is FsmState.DONE { last := FsmState.IDLE }
     }
 }
 ```
 
-去掉任一 `is` 分支（如 `is State.DONE`）→ 期望 WARNING：
+去掉任一 `is` 分支（如 `is FsmState.DONE`）→ 期望 WARNING：
 `HDL040|fsmDecode|st|switch over enum is not exhaustive (missing: DONE) — add is-cases or a default branch`。
 
 类型负例（均应**类型错误**，非 warning）：
-- `let x = State.craft  x := Cmd.NOP` —— `Into` 的 E phantom 不匹配。
-- `st === Cmd.NOP` —— `Equal[EnumLit[Cmd], Bool] for EnumCraft[State,...]` 无实例。
+- `let x = FsmState.craft  x := Cmd.NOP` —— `Into` 的 E phantom 不匹配。
+- `st === Cmd.NOP` —— `Equal[EnumLit[Cmd], Bool] for EnumCraft[FsmState,...]` 无实例。
 - `let c = Cmd.craftAs[encOneHot]  let d = Cmd.craft  c === d` —— 宽度 3 ≠ 2。
 - `enum Bad { A B(n: Nat) }` + `#[derive(HdlEnum)]` —— derive 解析期报「构造子不能带参数」。
 
@@ -711,7 +711,7 @@ module fsmDecode {
 
 ## 10. 风险与开放问题
 
-1. **隐式编码参数漏写**：`State.craftAs` 不带 `[enc]` 时宽度卡死为 unsolved meta，只能靠 HDL004 间接报警，报错信息不指因。缓解：文档强调；彻底解决需 elaborator 对「def 隐参 unsolved 且仅被类型索引消费」给专门诊断（Rust 层，二期）。
+1. **隐式编码参数漏写**：`FsmState.craftAs` 不带 `[enc]` 时宽度卡死为 unsolved meta，只能靠 HDL004 间接报警，报错信息不指因。缓解：文档强调；彻底解决需 elaborator 对「def 隐参 unsolved 且仅被类型索引消费」给专门诊断（Rust 层，二期）。
 2. **穷尽性是 WARNING 而非硬错误**：`report_check_issue` 通道只有 WARNING；硬失败需 typort 增加「检查期错误」内建或 Rust 侧错误通道。一期接受 WARNING（与自检框架阶段 1 的名字级定位一致）。
 3. **trait 首匹配注册序依赖**：`SwitchMark`/`SwitchFinal` 的泛型兜底实例必须最后注册（hdl-types.typort:242-247 的既有约定）；若类型类求解器将来改为最优匹配，需复核这三个 trait。
 4. **无 default switch 的行为放宽**：新宏臂让 `switch u8 { is 0 {...} }` 从「宏匹配失败」变为「合法 when 链」。对 UInt 这是语义放宽（原本写不出来）；如需保守，可在无 default 臂内对非 enum 选择子也发一条 HDL041 提示（`SwitchFinal` 兜底实例里做，一行代价）。
@@ -720,3 +720,4 @@ module fsmDecode {
 7. **宏臂匹配次序**：switch 新旧臂共存后，有 default 臂必须在前（字面 `default` token 使二者互斥，顺序其实无关，但保持显式）。when 臂与 switch 臂共享 WhenStack 约定不变。
 8. **元素表重复存储**：每个 EnumLit 携带全元素 `List[String]`（N 个元素 N 份表）。Val 层 Rc 共享可摊薄；如成瓶颈，derive 可生成单个共享 decl 再由各元素引用（开放）。
 9. **后续大项**：FSM 库（spinal.lib.fsm 的 StateMachine/StateRegEntryPoint 风格）、enum 端口/Bundle 字段（M4）、GrayCode 等自定义编码、`encNative` 显式元素值（需带 payload 构造子 + 元素值校验）。
+10. **示例命名须避让 prelude 既有名**：`State` 已被 `src/prelude/hdl/hdl-bus.typort:214` 的 `struct State[T]`（FSM 占位类型）占用——设计稿原示例 `#[derive(HdlEnum)] enum State { IDLE RUN DONE }` 及其 `craft/reg/regInit` 用法照抄无法编译，全文示例已统改 `FsmState`（与已落地的 `hdl_enum_tests.rs` 一致）。用户文件声明硬件 enum 时同样须避让 prelude 既有名：`State` 不可用。

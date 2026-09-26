@@ -1739,10 +1739,37 @@ def joinJsonLines(ls: List[String]): String = match ls {
     case lcons(s, tail) => s + ",\n" + joinJsonLines(tail)
 }
 
+// Manifest-side twin of extraCdPortsVL's port emission: for each extra cd
+// (not cdEq to the main cd) the clk input port is always declared and the
+// reset input port only when that cd has init regs — the same condition
+// extraCdPortsVL uses to emit `input wire <reset>`.
+def manifestExtraCdPorts[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], mainCd: ClockDomain): List[String] = match cds {
+    case lnil => lnil
+    case lcons(c, tail) =>
+        let isMain = cdEq(c, mainCd);
+        match isMain {
+            case true => manifestExtraCdPorts(es, tail, mainCd)
+            case false =>
+                let initLines = list_reverse(collectInitLinesCd(es, c, false));
+                let hasInit = match initLines {
+                    case lnil => false
+                    case _ => true
+                };
+                let rst_port = match hasInit {
+                    case false => lnil
+                    case true => lcons(portJsonLine(resetName(c), "input", 1, false, false), lnil)
+                };
+                list_append(
+                    lcons(portJsonLine(clockName(c), "input", 1, false, false), rst_port),
+                    manifestExtraCdPorts(es, tail, mainCd))
+        }
+}
+
 // The clk/reset ports are SYNTHESIZED by moduleDefVL (p1/p2 there) when the
-// module does not declare them itself — mirror those conditions so the
-// manifest lists every port the emitted Verilog declares. (Extra
-// clock-domain ports from collectClockCds are not mirrored yet.)
+// module does not declare them itself, and every extra clock domain in the
+// collectClockCds list (regAssignCd / assertExprCd references) gets its
+// clk/reset ports via extraCdPortsVL (p3 there) — mirror both so the
+// manifest lists every port the emitted Verilog declares.
 def manifestSynthPorts(md: ModuleDef): List[String] =
     let port_names = collectPortNames md.expr;
     // Mirror moduleDefVL's p1 condition: the clk port exists iff a clocked
@@ -1775,10 +1802,14 @@ def manifestSynthPorts(md: ModuleDef): List[String] =
         case false => lnil
         case true => lcons(portJsonLine(clockName(md.cd), "input", 1, false, false), lnil)
     };
-    match reset_out {
+    let with_reset = match reset_out {
         case false => with_clk
         case true => with_clk.append(lcons(portJsonLine(resetName(md.cd), "input", 1, false, false), lnil))
-    }
+    };
+    // Mirror extraCdPortsVL: one input entry per extra-cd clk (plus reset
+    // when that cd has init regs), main cd skipped — exactly the ports p3
+    // appends to the Verilog header.
+    with_reset.append(manifestExtraCdPorts(md.expr, collectClockCds md.expr, md.cd))
 
 def moduleJsonFull(md: ModuleDef): String =
     let ports = collectPortJson(md.expr).append(manifestSynthPorts(md));

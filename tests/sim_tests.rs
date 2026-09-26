@@ -539,6 +539,78 @@ fn typort_assert_violation_captured() {
     dut.finish().unwrap();
 }
 
+/// assertCd end-to-end (assert P2-1 acceptance): the design manifest carries
+/// the extra-domain `clk2` port, so the generated harness declares and
+/// connects it and the Dut can drive the extra domain (`set clk2 ...`) —
+/// before the mirror, the manifest lacked clk2 and the port floated (z), so
+/// the cd2 assertion could never fire in simulation. The source is written
+/// into the workdir from the test (examples/ stays untouched): a counter
+/// with `assertCd(count < 2, ...)` on clk2. Running count up to 2, gating
+/// en, then taking one posedge clk2 must capture the cd2 marker in
+/// assert_failures — the extra domain behaves like the main one.
+#[test]
+fn typort_assert_cd_domain_captured() {
+    if find_iverilog().is_none() {
+        eprintln!("[SKIP] iverilog not found — icarus backend unavailable");
+        return;
+    }
+    let dir = workdir("assert-cd");
+    let src = dir.join("27-assert-cd.typort");
+    std::fs::write(
+        &src,
+        r#"
+module aCounterCd {
+    input en = Bool
+    output reg count = UInt[8] init 0
+    when en { count := count + 1 }
+    assertCd(count < 2, "cd2 overflow", ClockDomain.mk "clk2" "reset2" Async RisingEdge ActiveHigh)
+}
+"#,
+    )
+    .unwrap();
+    let cfg = SimConfig {
+        top: "aCounterCd".to_string(),
+        sources: vec![src],
+        workdir: dir.join("build"),
+        simulator: Simulator::Icarus,
+        verilator_args: vec![],
+        trace: false,
+    };
+    let model = cfg.compile().expect("compile model (icarus)");
+    // P2-1: the manifest lists the extra-domain clock port (input, 1 bit)
+    // and — no init regs on that cd — no reset2.
+    let top = model.manifest.top_module().expect("top in manifest");
+    let clk2 = top.port("clk2").expect("manifest must carry the extra-domain clk2 port");
+    assert_eq!(clk2.dir, "input");
+    assert_eq!(clk2.width, 1);
+    assert!(top.port("reset2").is_none(), "no reset2 without init regs on cd2");
+
+    let mut dut = Dut::spawn(&model).expect("spawn dut");
+    dut.set("reset", 1).unwrap().set("en", 1).unwrap().set("clk", 0).unwrap().set("clk2", 0).unwrap().eval().unwrap();
+    dut.set("reset", 0).unwrap();
+    // 2 enabled posedges on the MAIN clock → count == 2
+    for _ in 0..2 {
+        dut.set("clk", 1).unwrap().eval().unwrap();
+        dut.set("clk", 0).unwrap().eval().unwrap();
+    }
+    assert_eq!(dut.get("count").unwrap(), 2);
+    // no violation yet: the cd2 guard still holds
+    assert!(dut.assert_failures().is_empty(), "cd2 guard holds at count 2");
+    // gate en (count frozen at 2), then take ONE posedge on the EXTRA domain:
+    // the cd2 assertion samples count == 2 and must fire there.
+    dut.set("en", 0).unwrap();
+    dut.set("clk2", 1).unwrap().eval().unwrap();
+    dut.set("clk2", 0).unwrap().eval().unwrap();
+    let failures = dut.assert_failures();
+    assert_eq!(failures.len(), 1, "exactly the cd2 marker: {failures:?}");
+    assert!(failures[0].contains("cd2 overflow"), "cd2 message: {failures:?}");
+    assert!(failures[0].starts_with("TYPORT_ASSERT_ERROR"), "severity tag: {failures:?}");
+    assert!(failures[0].contains("tb_aCounterCd.dut"), "%m instance path: {failures:?}");
+    // the model stays alive (marker + keep-running on ERROR)
+    assert_eq!(dut.get("count").unwrap(), 2);
+    dut.finish().unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // VCS / Vivado backends — command shapes follow veryl's runners; both are
 // UNTESTED here (no license/install on this machine) and skip when the

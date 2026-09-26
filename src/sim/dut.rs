@@ -40,9 +40,19 @@ struct Shared {
     /// Design-side assertion marker lines (`TYPORT_ASSERT_<SEV> %0t %m: msg`,
     /// $display'd by the model inside its translate_off block), captured in
     /// roundtrip so behavioral failures surface on the host side
-    /// (docs/hdl-blackbox-sim-design.md §5.2).
+    /// (docs/hdl-blackbox-sim-design.md §5.2). Capped at
+    /// [`ASSERT_FAILURES_CAP`] markers (see roundtrip).
     failures: Mutex<Vec<String>>,
+    /// Markers dropped after the capture cap was reached (kept so the
+    /// synthetic truncation line can report an exact count).
+    overflow: AtomicU64,
 }
+
+/// Upper bound on captured design-assertion markers: the first 100 are kept
+/// verbatim, then a single synthetic truncation line (whose dropped-count is
+/// refreshed on every further marker) closes the list — a runaway assertion
+/// can neither exhaust host memory nor hide that it fired.
+const ASSERT_FAILURES_CAP: usize = 100;
 
 fn channel_poisoned() -> SimError {
     SimError::CommandFailed {
@@ -81,8 +91,27 @@ impl Shared {
                 // Design assertion marker ($display from the model's
                 // translate_off block) — record it and keep the protocol
                 // desynchronized-free by continuing to the next line.
+                // Capture is capped: the first ASSERT_FAILURES_CAP markers
+                // are kept verbatim; beyond that one synthetic truncation
+                // line closes the list and its dropped-count is refreshed
+                // per marker, so the list stays O(1) no matter how often a
+                // hot assertion fires.
                 if let Ok(mut f) = self.failures.lock() {
-                    f.push(trimmed.to_string());
+                    if f.len() < ASSERT_FAILURES_CAP {
+                        f.push(trimmed.to_string());
+                    } else {
+                        let dropped = self.overflow.fetch_add(1, Ordering::SeqCst) + 1;
+                        let line = format!(
+                            "TYPORT_ASSERT_TRUNCATED: {} further design assertion \
+                             marker(s) dropped (first {ASSERT_FAILURES_CAP} kept)",
+                            dropped
+                        );
+                        if f.len() == ASSERT_FAILURES_CAP {
+                            f.push(line);
+                        } else {
+                            f[ASSERT_FAILURES_CAP] = line;
+                        }
+                    }
                 }
                 continue;
             }
@@ -135,6 +164,7 @@ impl Dut {
             edges: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             failures: Mutex::new(Vec::new()),
+            overflow: AtomicU64::new(0),
         });
         Ok(Dut {
             ports: top.ports.iter().cloned().map(|p| (p.name.clone(), p)).collect(),
@@ -260,7 +290,14 @@ impl Dut {
     }
 
     /// Stop all forked clocks, tell the model to finish, and wait for exit.
-    pub fn finish(mut self) -> Result<(), SimError> {
+    ///
+    /// Takes `&mut self` (not `self`) so callers can keep reading captured
+    /// state — `assert_failures()` in particular — AFTER the finish
+    /// handshake: the handshake's roundtrip routes any late
+    /// `TYPORT_ASSERT_*` line into the same list without consuming it.
+    /// Calling finish twice (or finishing near a `Drop`) is harmless: every
+    /// step is idempotent or best-effort.
+    pub fn finish(&mut self) -> Result<(), SimError> {
         self.stop_forks();
         let _ = self.shared.roundtrip("finish");
         self.child.wait().map_err(SimError::Io)?;

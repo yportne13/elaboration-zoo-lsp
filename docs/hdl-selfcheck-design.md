@@ -94,6 +94,9 @@ Verilog 生成器靠"端口优先于同名 wire"去重。检查器必须做同�
 | HDL023 | 模块内部驱动自己的 input 端口 | kIn 声明 ∈ 驱动集 |
 | HDL024 | instanceWithPorts 绕过分析 | 存在 raw 实例节点（对分析器不可见） |
 | HDL025 | 连接的子端口不存在 | conn 的端口 ∉ 子模块端口表（端口名拼写错误） |
+| HDL040 | switch over enum 穷尽性（缺支） | 选择子为 enum craft ∧ 无 default 臂 ∧ 覆盖集 ⊂ 元素集——elaboration 期直调 `switchFinalEnum` 上报 WARNING（非本表名字级扫描规则，随硬件 enum M3 落地，`docs/hdl-enum-design.md` §4.7） |
+
+编号段位说明：HDL030-039 已预留给 `docs/hdl-selfcheck-phase234-design.md` 的阶段 2-4 规则（组合环/latch/CDC）；HDL041+ 留作 switch 相关后续规则。
 
 后续阶段：
 

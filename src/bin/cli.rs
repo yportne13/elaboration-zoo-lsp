@@ -614,12 +614,36 @@ fn run_test(
     // Smoke session: the model must spawn, settle one eval, and exit
     // cleanly. Behavioral testbenches live in cargo test (tests/sim_tests).
     let mut dut = Dut::spawn(&model)?;
-    dut.eval()?;
+    // eval() returns Result<&mut Dut, _>; dropping the borrow here (map to
+    // ()) lets the failure snapshot and finish() below reuse `dut`.
+    let smoke_res = dut.eval().map(|_| ());
     // Design-side assertions (`assert(...)` in the HDL): marker lines captured
     // during the smoke session fail the command with a nonzero exit so CI
-    // catches behavioral violations, not just compile errors.
+    // catches behavioral violations, not just compile errors. The snapshot is
+    // taken AFTER the finish handshake: finish only stops the clock forks,
+    // sends the finish command and reaps the model — its roundtrip routes any
+    // late TYPORT_ASSERT_* line into the SAME captured list without consuming
+    // it, so markers arriving between the eval response and finish are
+    // counted too (they used to be lost when the snapshot preceded finish).
+    let finish_res = dut.finish();
     let assert_failures = dut.assert_failures();
-    dut.finish()?;
+    // A FATAL design assertion $finish's the model mid-smoke, so the smoke
+    // eval (or the finish handshake behind it) fails with a closed stdout.
+    // Report the markers captured before that teardown on this early-return
+    // path too — they are the diagnosis.
+    if smoke_res.is_err() || finish_res.is_err() {
+        if !assert_failures.is_empty() {
+            eprintln!(
+                "design assertion(s) fired in {} before the smoke session failed:\n{}",
+                top_name,
+                assert_failures.join("\n")
+            );
+        }
+    }
+    match smoke_res {
+        Err(e) => return Err(e.into()),
+        Ok(_) => finish_res?,
+    };
     if !assert_failures.is_empty() {
         eprintln!(
             "FAILED: {} design assertion(s) fired in {}:\n{}",

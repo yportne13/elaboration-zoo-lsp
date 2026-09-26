@@ -203,11 +203,13 @@ out.payload := rData
 
 ```
 rValidN     := True init；input.valid 时清 0；out.ready 时置 1   （即 rValidN := (rValidN && !input.valid) || out.ready）
-rData       := input.payload when !rValidN                       （仅 skid 时存）
+rData       := input.payload when rValidN                        （使能 = rValidN，即 input.ready；对齐 Stream.scala:498 的 RegNextWhen(self.payload, self.ready)）
 input.ready := rValidN                                           （组合直通 → 零延迟）
 out.valid   := input.valid || !rValidN
 out.payload := rValidN ? input.payload : rData                   （Expr.mux）
 ```
+
+- **rData 使能极性是正确性关键**：必须为 `rValidN`（= `input.ready`）——在反压**起始拍**（rValidN 尚为 1）锁存当前 payload，与 SpinalHDL `RegNextWhen(self.payload, self.ready)` 及已落地实现（`hdl-stream.typort` s2mPipe）一致；若误写成 `!rValidN`，首个反压拍的数据不会被锁存而丢失。
 
 - 代价：payload 宽 + 1 FF + payload 宽 mux2，延迟 0。
 - 现实现（`hdl-stream.typort:110-122`）整体重写；补 Bool 版。

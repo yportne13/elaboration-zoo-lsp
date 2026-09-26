@@ -474,10 +474,12 @@ def fragmentToStreamUInt[w: Nat](input: StreamFragment[UInt[w]]): Stream[UInt[w]
     let _ = input.ready := outReady;
     Stream.mk(input.valid, outReady, input.fragment)
 
-// Fragment 的 throwWhen
+// Fragment 的 throwWhen（与 streamThrowWhen 同一语义，Stream.scala 的
+// Fragment.throwWhen 复用 Stream.throwWhen）：丢弃拍必须强制消费 ——
+// ready = cond || outReady（原缺陷 ready = outReady，丢弃拍滞留，F3 同款）
 def fragmentThrowWhenUInt[w: Nat](input: StreamFragment[UInt[w]], cond: Bool): StreamFragment[UInt[w]] =
     let outReady = newBoolNamed("ftw_ready");
-    let _ = input.ready := outReady;
+    let _ = input.ready := Bool.mk(None, binary(cond.zz_expr, "||", outReady.zz_expr));
     StreamFragment.mk(Bool.mk(None, binary(input.valid.zz_expr, "&&", unary("!", cond.zz_expr))),
                       outReady, input.fragment, input.last)
 

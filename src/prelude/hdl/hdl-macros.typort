@@ -237,19 +237,15 @@ macro_rules Expr {
     // Note: $val can be a Nat literal, an enum element (State.IDLE) or a
     // signal; uses === operator for comparison.
     //
-    // EXHAUSTIVENESS (hdl-enum.typort HDL040, design doc §4.7): a no-default
-    // switch whose selector is an EnumCraft is checked by calling
-    // `switchFinalEnum(sel, cases, false)` — see hdl-enum.typort for the
-    // direct-call form that records each case head. NOTE (2026-09-26, M3):
-    // the automatic per-case head recording inside these arms is NOT wired —
-    // an arm matching `is $e:ident . $f:ident { ... }` never fired (dotted
-    // is-values are captured by `$val:raw` as an apply-block before the
-    // dotted arm is reached, and a dedicated dotted arm did not match);
-    // switchFinalEnum therefore takes the recorded cases explicitly and the
-    // arms below pass an empty case list. Net behavior: no-default switches
-    // are now LEGAL (previously a macro match failure) and exhaustive
-    // no-default switches emit no warning; the HDL040 WARNING is available
-    // via the direct switchFinalEnum call.
+    // EXHAUSTIVENESS (hdl-enum.typort HDL040, design doc §4.7): the arms
+    // below generate a PLAIN when chain only — no case heads are recorded
+    // and no check runs (a dotted is-value is captured by the raw matcher
+    // fragment as an apply-block before a dedicated dotted arm could see
+    // it, so per-case head recording is not wired). The no-default switch
+    // is therefore legal but UNCHECKED; the HDL040 exhaustiveness WARNING
+    // for EnumCraft selectors is available via the explicit one-line
+    // `switchFinalEnum(sel, cases, false)` direct call — see
+    // hdl-enum.typort for the form.
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} $( is $val2:raw {$( $body2: Expr )*})* default {$( $default_body: Expr )*} }) => {
         let _ = whenBegin(($sel === $val).expr);
         $({$body})*
@@ -267,14 +263,11 @@ macro_rules Expr {
         let _ = whenEnd(unit);
     };
     // Single is + no default: needs its own arm (same matcher-shape reason as
-    // single-is + default). No case heads are recorded — switchFinish's
-    // EnumCraft dispatch skips the check (nothing recorded) and other
-    // selector types are skipped by their fallback (value range unknown).
-    // Single is + no default: needs its own arm (same matcher-shape reason as
-    // single-is + default). Plain when chain; the last branch's assignments
-    // keep the level's negation semantics — uncovered selector values keep
-    // the previous value (SpinalHDL semantics); run switchFinalEnum (hdl-enum)
-    // for an HDL040 exhaustiveness WARNING on enum selectors.
+    // single-is + default). Plain when chain — the last branch's assignments
+    // keep the level's negation semantics, so uncovered selector values keep
+    // the previous value (SpinalHDL semantics). The arm body runs NO
+    // exhaustiveness check; for an HDL040 WARNING on an EnumCraft selector,
+    // call switchFinalEnum (hdl-enum) explicitly after the switch.
     (switch $sel:raw { is $val:raw {$( $body: Expr )*} }) => {
         let _ = whenBegin(($sel === $val).expr);
         $({$body})*

@@ -1,6 +1,6 @@
 # HDL assert 断言 / BlackBox / 仿真集成设计（hdl-blackbox-sim）
 
-> 状态：设计稿（2026-09-26）。
+> 状态：设计稿（2026-09-26）。P1（assert 全链）已实现（2026-09-26，commit ede8773 + 评审修复）；P2（BlackBox）/P3 未实现。
 > 输入：docs/spinalhdl-gap.md §5（BlackBox 行）/§6（assert 行）/§7 第 5 项/§8；docs/spinalhdl-lib-replication.md §4（仿真验收策略）/§5（B 级语言扩展）。
 > 结论先行：**assert 与 BlackBox 的全部语言侧机制落在 prelude .typort 文件**（`Expr`/`ModuleDef` 都是 typort enum/struct，宏系统也是 .typort 内的 `macro_rules`），Rust 侧只剩仿真失败回读（dut.rs ~30 行）与 `typort test` 退出码（cli.rs ~15 行）。**进程内仿真（SpinalSim FFI/VPI）不做**，以"Dut 协议 + 生成 testbench + in-design assert"替代。
 
@@ -280,7 +280,7 @@ let isBb = match md.bb { case None => false; case Some(_) => true };
 
 ### 5.4 分阶段实施计划
 
-**P1 — assert 全链（先行，最重要）**
+**P1 — assert 全链（先行，最重要）——已实现（2026-09-26，commit ede8773 + 评审修复）**
 
 | # | 落点 | 内容 |
 |---|---|---|

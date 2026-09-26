@@ -100,6 +100,23 @@ println(moduleTreeVL(f2S2mPipe.create.tree))
     assert!(output.contains("so_validN <= 0;"), "F2: rValidN clear, got:\n{}", output);
     assert!(output.contains("if (so_ready) begin"), "F2: setWhen(out.ready), got:\n{}", output);
     assert!(output.contains("so_validN <= 1;"), "F2: rValidN set, got:\n{}", output);
+    // 顺序承重（P2-2 钉住）：clear 块必须先于 set 块发射 —— 同一 posedge 上
+    // in_valid 与 so.ready 同时命中时，后写的 set（so_validN <= 1）胜出
+    // （对齐 Stream.scala RegInit(True) clearWhen(self.valid) setWhen(s2mPipe.ready)
+    // 的 last-assignment-wins 语义）。两个独立 contains 各自成立但顺序相反时
+    // 语义就翻了，所以用索引比较而非再补两个 contains。
+    let clear_block = output.find("if (in_valid) begin")
+        .expect("F2: clearWhen(input.valid) block missing");
+    let clear_assign = output[clear_block..].find("so_validN <= 0;")
+        .expect("F2: rValidN clear assignment missing") + clear_block;
+    let set_block = output.find("if (so_ready) begin")
+        .expect("F2: setWhen(out.ready) block missing");
+    let set_assign = output[set_block..].find("so_validN <= 1;")
+        .expect("F2: rValidN set assignment missing") + set_block;
+    assert!(
+        clear_block < set_block && clear_assign < set_assign,
+        "F2: rValidN clear must be emitted BEFORE set (same-cycle set wins), got:\n{}", output
+    );
     // rData 装载使能 = input.ready（= rValidN，对齐 Stream.scala RegNextWhen(payload, self.ready)）
     assert!(output.contains("so_data <= in_data;"), "F2: rData load, got:\n{}", output);
 }
@@ -157,6 +174,42 @@ println(moduleTreeVL(f3ThrowWhen.create.tree))
         "F3: out.valid = valid && !cond, got:\n{}", output);
     // payload 直通
     assert!(output.contains("assign tw_ready = dn_ready;"), "F3: outReady wiring, got:\n{}", output);
+}
+
+// ── F3 残留：fragmentThrowWhen 丢弃拍强制消费（P2-3） ──
+// streamThrowWhen 修复时漏掉了 Fragment 侧的同类缺陷：
+// fragmentThrowWhenUInt 的 input.ready 原为 outReady 直通，丢弃拍无法被
+// 下游消费而滞留。修为与 streamThrowWhen 一致的 cond || outReady
+// （Stream.scala Fragment.throwWhen 复用 Stream.throwWhen 语义）。
+
+#[test]
+fn fragment_throwwhen_forced_ready() {
+    let output = assert_ok(r#"
+module ftwFragmentThrow {
+    input in_valid = Bool
+    output in_ready = Bool
+    input in_data = UInt[8]
+    input drop = Bool
+    input dn_ready = Bool
+    let si = Stream.mk(in_valid, in_ready, in_data)
+    let frag = streamToFragmentUInt(si)
+    let fd = fragmentThrowWhenUInt(frag, drop)
+    let so = fragmentToStreamUInt(fd)
+    output outValid = Bool
+    outValid := so.valid
+    so.ready := dn_ready
+}
+println(moduleTreeVL(ftwFragmentThrow.create.tree))
+"#);
+    // 修复点：frag.ready（StreamFragment 的 input.ready）= cond || outReady
+    //（原缺陷 assign frag_ready = ftw_ready; 直通，丢弃拍滞留）
+    assert!(output.contains("assign frag_ready = (drop || ftw_ready);"),
+        "fragment throwWhen: input.ready = cond || outReady, got:\n{}", output);
+    // valid 门控与 last 透传保持不变
+    assert!(output.contains("assign outValid = (in_valid && !drop);"),
+        "fragment throwWhen: out.valid = valid && !cond, got:\n{}", output);
+    assert!(output.contains("assign str_ready = dn_ready;"),
+        "fragment throwWhen: outReady wiring, got:\n{}", output);
 }
 
 // ── F4: haltWhen —— out.valid 必须被 !cond 门控 ──

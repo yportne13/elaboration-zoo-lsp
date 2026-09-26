@@ -12,6 +12,11 @@
 //   - top-level assert   → unconditional clocked assertion
 //   - when-wrapped assert→ nested if (condition folded)
 //   - assertCd           → extra-domain block + synthesized `input wire clk2`
+//   - manifest           → extra-domain clk port mirrored into the module JSON
+//                          (moduleJsonFull, P2-1)
+//   - assertCd-only      → zero-port module header: the extra-cd port is the
+//                          ONLY port source, emitted without a leading comma
+//                          (P3-4)
 //   - severity variants  → INFO / WARNING / ERROR / FATAL(+ $finish)
 //   - pure-comb module   → assert alone still synthesizes the clk port
 //   - self-check         → assert cond counts as a read, never a drive
@@ -204,4 +209,94 @@ println(moduleTreeVL(aNotDrive2.create.tree))
 "#);
     assert!(!output2.contains("HDL010"), "assert must not count as a second driver, got: {}", output2);
     assert!(!output2.contains("HDL011"), "no mixed-driver false positive, got: {}", output2);
+}
+
+// ── manifest mirrors the extra-domain clock ports (assert P2-1) ──
+//
+// The design manifest (designManifestVL → moduleJsonFull) must list every
+// port the emitted Verilog declares — including the extra-domain clk that
+// collectClockCds/extraCdPortsVL synthesize into the module header. Before
+// this was mirrored, the Verilog had `input wire clk2` while the manifest
+// had no clk2 port, so the sim harness (built from the manifest) could not
+// connect or drive the extra domain and the assertCd path was unsimulatable.
+//
+// NOTE: exercised through moduleJsonFull(headModuleDef(tree.data)) — the
+// same renderer designManifestVL dispatches to, minus its ModuleRegistry
+// global ops. run_with_prelude panics inside those global ops (the known
+// def-replay lvl2ix quote limitation, see example 26's NOTE); the CLI emit
+// engine has no such limit and the real designManifestVL path is covered
+// end-to-end by tests/sim_tests.rs (every SimConfig::compile builds the
+// manifest through it).
+
+#[test]
+fn assert_cd_manifest_mirrors_extra_domain_ports() {
+    let output = assert_ok(r#"
+module aCounterCdM {
+    input en = Bool
+    output reg count = UInt[8] init 0
+    when en { count := count + 1 }
+    assertCd(count < 100, "cd2 overflow", ClockDomain.mk "clk2" "reset2" Async RisingEdge ActiveHigh)
+}
+println(moduleTreeVL(aCounterCdM.create.tree))
+println(moduleJsonFull(headModuleDef(aCounterCdM.create.tree.data)))
+"#);
+    // the emitted Verilog declares the extra-domain clock port …
+    assert!(output.contains("input wire clk2"), "extra-cd clk port in Verilog, got: {}", output);
+    // … and the manifest mirrors it: an input entry for clk2 (P2-1 fix)
+    assert!(
+        output.contains("{\"name\": \"clk2\", \"dir\": \"input\", \"width\": 1, \"signed\": false, \"reg\": false}"),
+        "manifest must list the extra-cd clk2 port, got: {}", output
+    );
+    // the main-domain synthesized ports are still listed
+    assert!(
+        output.contains("{\"name\": \"clk\", \"dir\": \"input\", \"width\": 1, \"signed\": false, \"reg\": false}"),
+        "manifest still lists the synthesized main clk port, got: {}", output
+    );
+    assert!(
+        output.contains("{\"name\": \"reset\", \"dir\": \"input\", \"width\": 1, \"signed\": false, \"reg\": false}"),
+        "manifest still lists the synthesized main reset port, got: {}", output
+    );
+    // reset2 is NOT mirrored: that cd has no init regs, and extraCdPortsVL
+    // emits a reset port only then — the manifest stays in lockstep
+    assert!(!output.contains("\"name\": \"reset2\""),
+        "no reset2 port without init regs on the extra cd, got: {}", output);
+    // declared ports are untouched
+    assert!(output.contains("{\"name\": \"count\", \"dir\": \"output\", \"width\": 8"),
+        "declared output port intact, got: {}", output);
+    assert!(output.contains("{\"name\": \"en\", \"dir\": \"input\", \"width\": 1"),
+        "declared input port intact, got: {}", output);
+}
+
+// ── assertCd-only module with NO declared ports (assert P3-4) ──
+//
+// Here the extra-cd ports are the module's ONLY port source: moduleDefVL
+// hits its has_no_port_content + has_extra_ports header branch, where
+// extraCdPortsVL must emit the first port WITHOUT a leading comma. Pins the
+// header shape (`module X (\n  input wire clk2\n);`) and the manifest's
+// port list, which must be exactly that one port (no main-domain clk: the
+// module has no main-cd assert and no clocked content).
+
+#[test]
+fn assert_cd_only_module_zero_port_header() {
+    let output = assert_ok(r#"
+module aBareCd {
+    assertCd(Bool.mk(None, literal(1)), "never fires", ClockDomain.mk "clk2" "reset2" Async RisingEdge ActiveHigh)
+}
+println(moduleTreeVL(aBareCd.create.tree))
+println(moduleJsonFull(headModuleDef(aBareCd.create.tree.data)))
+"#);
+    // the header opens the port list directly with the extra-cd clk — no
+    // leading comma, no `module X ()` empty-header fallback
+    assert!(
+        output.contains("module aBareCd (\n  input wire clk2\n);"),
+        "zero-port module header must start with the extra-cd clk port (no leading comma), got: {}",
+        output
+    );
+    assert!(output.contains("always @(posedge clk2) begin"), "extra-cd assert block, got: {}", output);
+    // the manifest lists exactly the one synthesized port
+    assert!(
+        output.contains("\"ports\": [{\"name\": \"clk2\", \"dir\": \"input\", \"width\": 1, \"signed\": false, \"reg\": false}]"),
+        "manifest port list must be exactly the extra-cd clk, got: {}", output
+    );
+    assert!(!output.contains("\"name\": \"clk\""), "no main-domain clk port for an assertCd-only module, got: {}", output);
 }
