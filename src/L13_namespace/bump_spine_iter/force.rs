@@ -216,6 +216,14 @@ thread_local! {
     static FORCE_MEMO: RefCell<FxHashMap<u64, (V, u64)>> =
         RefCell::new(FxHashMap::default());
     static FORCE_TAINT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// **纯 prim 结果缓存**（键 = `(prim, 已 force 的实参打包字列)`）。
+    /// 与 `FORCE_MEMO` 的区别：后者的键是**输入值指针**、且插在 `force`
+    /// 入口；本表的键是**已求值的实参内容**、且查在 `force_inner` 的
+    /// `HK_DECL` 臂**实参 force 之后**——这正是 §10.3 的设计要点：实参强制
+    /// 的副作用（其余路径上的 `report_check_issue` 等）必须照跑，缓存只能
+    /// 挡在它后面。轮界 `force_memo_clear()` 清空。
+    pub(super) static FORCE_PRIM_MEMO: RefCell<FxHashMap<(u8, Vec<u64>), V>> =
+        RefCell::new(FxHashMap::default());
     pub(super) static PRIM_VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// meta 就地写的撤销日志（perf-debt 评审轮）：栈非空时所有
     /// `metas[idx] = …` 写点先记 (下标, 旧值) 到栈顶；探测回滚 = 弹栈顶
@@ -403,6 +411,7 @@ pub(super) fn force_memo_clear() {
     let snap = FORCE_MEMO.with(|m| m.borrow_mut().reclaim(CACHE_SHRINK_MIN_ENTRIES));
     twin_stat_record(&TWIN_STAT_FORCE, snap);
     TWIN_DECLB_CACHE.with(|c| c.borrow_mut().clear());
+    FORCE_PRIM_MEMO.with(|c| c.borrow_mut().clear());
     QUOTE_NAT_TM.with(|c| *c.borrow_mut() = None);
     STUCK_DECL_INTERN.with(|c| c.borrow_mut().clear());
 }
@@ -426,6 +435,10 @@ pub(super) fn prim_version_bump() {
 
 /// 结果只依赖实参的 prim（可安全记忆化）；其余（mutable 全局 / 文件 IO /
 /// 诊断）一律按 impure 处理。参考版 `prim_is_pure` 的 PrimId 版。
+///
+/// **语义边界**：只声明「结果由实参决定」，**不含**「求值过程无副作用」
+/// ——`prim_exec` 内部的实参 force 可能触发其它路径的副作用 prim。任何基于
+/// 本函数的缓存都必须保证**实参强制仍然发生**（见 `FORCE_PRIM_MEMO`）。
 fn prim_is_pure(pid: PrimId) -> bool {
     matches!(
         pid,
@@ -439,7 +452,26 @@ fn prim_is_pure(pid: PrimId) -> bool {
             | PrimId::StringConcat
             | PrimId::StrEq
             | PrimId::StrIndent2
-        )
+    )
+}
+
+/// `PrimId` → 紧凑编号（`FORCE_PRIM_MEMO` 的键首项；`PrimId` 本身不是
+/// `Hash`，且用 u8 让键更小）。只对 `prim_is_pure` 白名单内的取值有意义；
+/// 其余返回 `u8::MAX`（它们不会进表）。
+fn pid_code(pid: PrimId) -> u8 {
+    match pid {
+        PrimId::NatAdd => 0,
+        PrimId::NatMul => 1,
+        PrimId::NatSub => 2,
+        PrimId::NatDiv => 3,
+        PrimId::NatRem => 4,
+        PrimId::NatToDec => 5,
+        PrimId::WidthRange => 6,
+        PrimId::StringConcat => 7,
+        PrimId::StrEq => 8,
+        PrimId::StrIndent2 => 9,
+        _ => u8::MAX,
+    }
 }
 
 // force（迭代；L13 参考版 force_inner 的臂集：Flex 链 / Nat 叶 / Obj 重建
@@ -470,6 +502,23 @@ pub(super) fn force<'a>(
             v_xcell_of(v0),
             XCell::SumCase { .. } | XCell::Call { .. } | XCell::Obj { .. }
         );
+    // **纯 prim 的 spine 链不进本 memo**（`FORCE_MEMO` 只认 tag 7 的三种
+    // 复合形状）——它们的缓存做在 `force_inner` 的 `HK_DECL` 臂、**实参
+    // force 之后**（`FORCE_PRIM_MEMO`）。这里记两条走过的弯路，防止有人
+    // 图省事把 tag-2 直接并进 `compound`：
+    //
+    // 1. **按下标当键（错）**：`Spine` 是 push/pop 栈，槽位下标会被回收复用
+    //    （`reclaim`/`clear_round`），同一轮内先后两条链可能同下标 → 错命中。
+    //    实测症状：输出里残留未归约的 `string_concat {...}` 链，并伴随
+    //    `Vec[ModuleDef](1) vs (0)` 的 unify 错误。（tag 7 没这个问题：
+    //    bump 分配地址同轮不复用——同一个 `V.0` 字段，两种语义。）
+    // 2. **在本函数入口按链内容当键（仍不等价）**：早退**跳过了 `prim_exec`
+    //    内部的实参 force**，而那一步可能触发其它路径上的副作用 prim
+    //    （`report_check_issue` 等 HDL 自检）→ 孪生少报 HDL001 警告
+    //    （02-arithmetic 实测）。taint 计数器只覆盖被 memo 的那次求值
+    //    **内部**，覆盖不到被整条跳过的链。
+    //
+    // 即 **纯度 ≠ 可跳过**。正解见 `FORCE_PRIM_MEMO` 与 docs §10/§11。
     if !compound {
         // 叶子臂（95-96% 的 force 调用，实测 21-crossclock 16.03M/16.04M）：
         // 这些形状里绝大多数是**纯 WHNF 叶**——`force` 的结果与输入逐位相同
@@ -642,8 +691,32 @@ pub(super) fn force_inner<'a>(
                                 // eval 期纯 prim 保持中性（lazy_pure_prim）后，
                                 // 链上实参是中性 spine，不 force 则 lit_of /
                                 // Nat 检查永不命中，prim 链无法归约。
+                                //
+                                // **这一步的副作用必须照跑**：§10.3 的设计要点
+                                // ——纯 prim 的实参强制本身可能触发其它路径上的
+                                // 副作用 prim（`report_check_issue` 等 HDL 自检），
+                                // 所以缓存只能挡在**实参 force 之后**。
                                 for a in args.iter_mut() {
                                     a.0 = force(bump, spine, defs, metas, decl, mutable, a.0);
+                                }
+                                // **纯 prim 的结果缓存（键 = 已 force 的实参）**：
+                                // 实参此刻已全部 WHNF，`prim_is_pure(pid)` 保证结果
+                                // 只由实参决定，因此命中即等价——省掉 `prim_exec`
+                                // 的分派与**结果在 arena 里的重新分配**（实测
+                                // `string_concat` 单条 2.79M 次/kick、33× 重入，
+                                // ≈84MB/kick 的中间值）。见 docs §10.1/§10.3。
+                                //
+                                // 键用实参打包字（`args` 已 reverse 成应用序）；
+                                // 轮界 `force_memo_clear()` 清空。
+                                let memo_key = if prim_is_pure(pid) {
+                                    Some((pid_code(pid), args.iter().map(|x| x.0 .0).collect::<Vec<_>>()))
+                                } else {
+                                    None
+                                };
+                                if let Some(k) = &memo_key {
+                                    if let Some(r) = FORCE_PRIM_MEMO.with(|m| m.borrow().get(k).copied()) {
+                                        return r;
+                                    }
                                 }
                                 // 复用本函数主栈（arm 入口处已排空，vapp1 臂
                                 // :同款）——旧实现每次 prim 执行三个新 Vec
@@ -657,7 +730,17 @@ pub(super) fn force_inner<'a>(
                                         // 白付 2~3 次必命中 memo 查询）——直接返回。
                                         // 内层仍是 memo wrapper：中间结果的 memo
                                         // 插入不受影响（命中率的来源）。
-                                        return force(bump, spine, defs, metas, decl, mutable, r);
+                                        let r = force(bump, spine, defs, metas, decl, mutable, r);
+                                        if let Some(k) = memo_key {
+                                            FORCE_PRIM_MEMO.with(|m| {
+                                                let mut m = m.borrow_mut();
+                                                if m.len() >= FORCE_MEMO_CAP {
+                                                    m.reclaim(CACHE_SHRINK_MIN_ENTRIES);
+                                                }
+                                                m.insert(k, r);
+                                            });
+                                        }
+                                        return r;
                                     }
                                     None => return v,
                                 }
