@@ -1,0 +1,703 @@
+//! FSM DSL (the SpinalHDL fsm counterpart, phase 1: pure typort, binary UInt
+//! state encoding).
+// ============================================================
+//  HDL FSM: Fsm / FsmSt / fsmNew + whenIsActive / goto /
+//  onEntry / onExit / whenIsNext / isActive + HDL060-064
+// ============================================================
+// Implements docs/hdl-stream-fsm-design.md §7 (phase 1 scope §2.2):
+//   - stateReg(init 0) + stateNext wire + default-first regAssign expansion
+//     (§7.3); binary UInt[w] encoding, stateCount is a check-only Nat value
+//     (rigid-parameter widths cannot be derived, §1.3 limit 5).
+//   - Transition-coverage self-checks HDL060-064 (§7.4) over the mutable
+//     global "FsmCtx" (module-macro prologue resets it, hdl-macros.typort).
+//   - Encoding funnel for the later hardware-Enum migration (§7.6): the
+//     state width, the reset literal, the === comparisons and the goto
+//     literals are all emitted from THIS file only (fsmNew / fsmStateEq /
+//     fsmGotoLog), so swapping UInt for EnumCraft touches a handful of defs.
+//
+// BODY SYNTAX (differs from the design draft, recorded in the doc): a braced
+// statement block at argument position is an EAGER apply-block in typort
+// (parser/mod.rs `f { stmts }` desugars to a let-chain VALUE evaluated
+// immediately), so `sIdle.whenIsActive({ stmts })` can NOT defer. Supported
+// shapes, both really deferred:
+//   1. method + lambda:  sIdle.whenIsActive(u => when(start) { sRun.goto() })
+//      (the lambda body is one raw expression — a `when` chain, or a
+//      `let _ = a; b; unit` chain);
+//   2. macro + braces:   whenIsActive(sIdle) { stmts }
+//      (the standalone macro below inlines whenBegin BEFORE the statements,
+//      same mechanism as the module-body `when` statement).
+// The method form REJECTS the draft shape loudly (Unit argument vs
+// Unit -> Unit parameter is a can't-unify error; a leading brace inside
+// parens is a parse error) — no silent miscompile.
+//
+// BOMB NOTE (2026-09-27): Fsm / FsmSt are DELIBERATELY non-parameterized.
+// The original draft `struct Fsm[w: Nat] { stateReg: UInt[w]; ... }` — a
+// parameterized struct whose FIELD type instantiates another parameterized
+// struct with the struct's own Nat parameter — diverged the elaborator at
+// prelude LOAD time (unbounded allocation, machine-killing 6GB+ peaks) from
+// the declaration alone. The signal fields are therefore flat Exprs and the
+// width rides along as an explicit `width: Nat` field (fsmNew still takes
+// [w: Nat] for createRegWidthInit/createWidth/sizedLiteral; the
+// `Into[UInt[width]] for Expr` instance below restores `st := ctrl.stateReg`).
+// Do NOT re-parameterize these structs over UInt fields — see the BOMB NOTE
+// at the struct site and docs/l13-struct-decl-dependent-field-divergence.md.
+
+// STRUCT SITE NOTE (2026-09-27): the ORIGINAL draft of these two structs was
+//   struct Fsm[w: Nat]    { stateReg: UInt[w], stateNext: UInt[w], ... }
+//   struct FsmSt[w: Nat]  { sm: Fsm[w], idx: Nat }
+// Per the task-A flattening decision they are NON-parameterized with raw
+// Expr signal fields; FsmSt lost its parameter together with Fsm. NOTE: the
+// watchdog bisection later showed the prelude-load divergence blamed on this
+// draft was actually caused by fsmCtxModuleReset's create_global("FsmCtx",
+// ..) call and a List-projection match in the same def (see
+// docs/l13-struct-decl-dependent-field-divergence.md) — the parameterized
+// UInt-field shape itself was never independently validated, and the flatten
+// is kept per the task-A decision (an explicit `width: Nat` field is also
+// the documented workaround for the impl-Nat-parameter freezing bug,
+// docs/l13-typeclass-instance-nat-param-bug.md).
+struct Fsm {
+    stateReg: Expr
+    stateNext: Expr
+    stateCount: Nat
+    width: Nat
+    name: String
+}
+
+struct FsmSt {
+    sm: Fsm
+    idx: Nat
+}
+
+// The flattened fields above are raw Exprs; this instance restores the
+// `st := ctrl.stateReg` assignment path (Data := needs T: Into[UInt[w]]).
+// Same shape as the proven `Into[UInt[width]] for Nat` (hdl-types.typort) —
+// impl heads with UInt[width] load fine everywhere (hdl-ops / hdl-utils
+// precedents).
+impl[width: Nat] Into[UInt[width]] for Expr {
+    def into: UInt[width] = UInt.mk(None, this)
+}
+
+
+
+// ============================================================
+//  FsmCtx: the transition-record global (HDL060-064 registry, §7.4)
+// ============================================================
+// A mutable global's name must be an existing TYPE name
+// (string_to_global_type resolves it by name), hence the FsmCtx wrapper
+// struct — same pattern as CombCtx (hdl-core.typort).
+//
+// Lifecycle (§7.4 adapted — see the doc's deviation notes):
+//   - fsmNew registers one FsmRec (module, name, stateCount);
+//   - whenIsActive pushes the state context, pop records the visit;
+//   - goto appends an edge and checks HDL060 / HDL064 inline;
+//   - HDL061 / HDL062 need the WHOLE body, so they are evaluated at DRAIN
+//     time: the module macro's prologue calls fsmCtxModuleReset, which
+//     reports the previous elaboration round's completed records and then
+//     resets. The class two-phase check evaluates the body ~3x and every
+//     create replays it once more, so a module's own records are always
+//     drained inside its own declaration's report window (the leftover of
+//     the LAST round is duplicate content of an already-reported round and
+//     collapses in the CheckIssues line dedup).
+//  The reports are keyed by the module name recorded at REGISTRATION time
+//  (reading the ambient ModuleTree at drain time would see the NEXT
+//  module's frame, or an empty tree at top level).
+
+struct FsmEdge {
+    from: Nat
+    to: Nat
+}
+
+struct FsmRec {
+    // Composite identity "module|binding" — records now PERSIST across the
+    // engine's replays (see fsmCtxModuleReset), so two modules using the
+    // same binding name must not collide.
+    module: String
+    name: String
+    stateCount: Nat
+    edges: List[FsmEdge]
+    declared: List[Nat]
+    visited: List[Nat]
+    noExit: List[Nat]
+    // An out-of-context goto was seen since the last state-context push
+    // (HDL064, reported at drain time — see fsmGotoLog's CHECK-PASS note).
+    ooc: Boolean
+}
+
+enum FsmCtxStack {
+    fsmStackEmpty
+    fsmStackCons(fsm: String, idx: Nat, rest: FsmCtxStack)
+}
+
+struct FsmCtx {
+    fsms: List[FsmRec]
+    stack: FsmCtxStack
+}
+
+def fsmCtxEmpty: FsmCtx = FsmCtx.mk(lnil, fsmStackEmpty)
+
+// The module name to attribute reports to: the head def of the ambient
+// module tree, "" outside any module (report_check_issue drops empty
+// module names — the no-panic fallback for out-of-module use).
+//
+// DUMMY PARAMETER (2026-09-27): the engine caches a PARAMETERLESS def's
+// declaration-time WHNF and only replays it when the body (transitively)
+// references a REPLAY_GLOBAL_OPS builtin (mod.rs `def_needs_replay`;
+// the list is create_global / change_mutable / change_mutable_default /
+// get_global). This body reads only `get_global_default`, which is NOT in
+// that list — a zero-arg `fsmReportModule()` therefore handed back the
+// load-time check's value (ModuleTree default -> head ModuleDef name "")
+// at EVERY call, so every HDL060/061/062/064 report was dropped as
+// module-less while the goto/tree emission itself stayed correct (probe:
+// inline lookup reports "probeA", the def call reports ""). Taking a Unit
+// parameter forces application-time re-evaluation; the argument is unused.
+def fsmReportModule(dummy: Unit): String =
+    let _ = dummy;
+    headModuleDef((get_global_default("ModuleTree", ModuleTree.mk(0, nil))).data).name
+
+def fsmNatInList(xs: List[Nat], x: Nat): Boolean = match xs {
+    case lnil => false
+    case lcons(h, t) => match nat_eq(h, x) {
+        case true => true
+        case false => fsmNatInList(t, x)
+    }
+}
+
+def fsmRecFind(recs: List[FsmRec], key: String): Option[FsmRec] = match recs {
+    case lnil => None
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => Some(r)
+        case false => fsmRecFind(rest, key)
+    }
+}
+
+// HDL064 bookkeeping: mark / clear the out-of-context goto flag (see the
+// CHECK-PASS note on fsmGotoLog).
+def fsmRecSetOoc(recs: List[FsmRec], key: String): List[FsmRec] = match recs {
+    case lnil => lnil
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, true)) rest
+        case false => lcons r (fsmRecSetOoc(rest, key))
+    }
+}
+
+def fsmRecClearOoc(recs: List[FsmRec], key: String): List[FsmRec] = match recs {
+    case lnil => lnil
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, false)) rest
+        case false => lcons r (fsmRecClearOoc(rest, key))
+    }
+}
+
+// fsmNew: register { module, name, stateCount } (§7.4 step 1). FIRST-WINS:
+// the record survives every later replay (fsmCtxModuleReset keeps the
+// records, only the context stack resets), and re-running fsmNew must not
+// create a duplicate.
+// LOAD GUARD: prelude-load declaration checks evaluate these bodies with
+// STUCK arguments; a write then would leave a "FsmCtx" entry (holding stale
+// meta/level references of the load's Infer) in the CACHED mutable map and
+// contaminate every later run — the same reason lib.rs resets WhenStack /
+// ModuleTree / HdlLoopIdx per run. nat_is_ground is false exactly for those
+// stuck Nats, so every write below is gated on its Nat arguments being
+// ground (at real call sites they are concrete literals).
+def fsmRecEnsure(recs: List[FsmRec], rec: FsmRec): List[FsmRec] = match recs {
+    case lnil => lcons rec lnil
+    case lcons(r, rest) => match str_eq(r.name, rec.name) {
+        case true => lcons r rest
+        case false => lcons r (fsmRecEnsure(rest, rec))
+    }
+}
+
+def fsmCtxRegister(name: String, stateCount: Nat): Unit =
+    match nat_is_ground(stateCount) {
+        case false => unit
+        case true =>
+            let mname = fsmReportModule(unit);
+            let key = name;
+            let rec = FsmRec.mk(mname, name, stateCount, lnil, lnil, lnil, lnil, false);
+            let _ = change_mutable_default("FsmCtx",
+                x => FsmCtx.mk(fsmRecEnsure(x.fsms, rec), x.stack),
+                FsmCtx.mk(lcons rec lnil, fsmStackEmpty));
+            unit
+    }
+
+// state(idx): record the declared state handle — the HDL061 universe is the
+// DECLARED handles (not 0..stateCount: a 2-bit encoding routinely has slack
+// encodings beyond the states the design means to use).
+def fsmRecSetDeclared(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
+    case lnil => lnil
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => match fsmNatInList(r.declared, idx) {
+            case true => lcons r rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, lcons idx r.declared, r.visited, r.noExit, r.ooc)) rest
+        }
+        case false => lcons r (fsmRecSetDeclared(rest, key, idx))
+    }
+}
+
+def fsmCtxDeclare(name: String, idx: Nat): Unit =
+    match nat_is_ground(idx) {
+        case false => unit
+        case true =>
+            let key = name;
+            let _ = change_mutable_default("FsmCtx",
+                x => FsmCtx.mk(fsmRecSetDeclared(x.fsms, key, idx), x.stack),
+                fsmCtxEmpty);
+            unit
+    }
+
+// whenIsActive entry: push the state context (§7.4 step 2), clearing the
+// record's out-of-context marker — see the CHECK-PASS note on fsmGotoLog.
+def fsmCtxPush(name: String, idx: Nat): Unit =
+    match nat_is_ground(idx) {
+        case false => unit
+        case true =>
+            let key = name;
+            let _ = change_mutable_default("FsmCtx",
+                x => FsmCtx.mk(fsmRecClearOoc(x.fsms, key), fsmStackCons(key, idx, x.stack)),
+                FsmCtx.mk(lnil, fsmStackCons(key, idx, fsmStackEmpty)));
+            unit
+    }
+
+// whenIsActive exit: pop the context and record the visit (HDL062 is
+// decided at drain time so a noExitCheck() written anywhere in the module
+// body — before or after the state body — exempts the state).
+def fsmRecSetVisited(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
+    case lnil => lnil
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => match fsmNatInList(r.visited, idx) {
+            case true => lcons r rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, lcons idx r.visited, r.noExit, r.ooc)) rest
+        }
+        case false => lcons r (fsmRecSetVisited(rest, key, idx))
+    }
+}
+
+// Twin-priming discipline (docs/l13-struct-decl-dependent-field-divergence.md):
+// match only on PLAIN arguments in small defs — a match whose scrutinee comes
+// straight from get_global_default (dependent-typed) makes the twin's priming
+// universe check reject the fresh-binder meta ("Pi(...) is not a universe").
+def fsmCtxPopVisitHelp(fsms: List[FsmRec], stack: FsmCtxStack): FsmCtx = match stack {
+    case fsmStackEmpty => fsmCtxEmpty
+    case fsmStackCons(topKey, topIdx, rest) => FsmCtx.mk(fsmRecSetVisited(fsms, topKey, topIdx), rest)
+}
+
+def fsmCtxPopApply(ctx: FsmCtx): Unit = match ctx.stack {
+    // LOAD GUARD: an empty stack means nothing to pop — and skipping the
+    // write keeps the "FsmCtx" key out of the cached map (see the guard
+    // note on fsmCtxRegister).
+    case fsmStackEmpty => unit
+    case fsmStackCons(_, _, _) =>
+        let _ = change_mutable_default("FsmCtx",
+            x => fsmCtxPopVisitHelp(x.fsms, x.stack),
+            fsmCtxEmpty);
+        unit
+}
+
+def fsmCtxPopRecordVisit(): Unit =
+    let ctx = get_global_default("FsmCtx", fsmCtxEmpty);
+    fsmCtxPopApply(ctx)
+
+// noExitCheck(): exempt a state from HDL062 (terminal states, §7.4).
+def fsmRecSetNoExit(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
+    case lnil => lnil
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => match fsmNatInList(r.noExit, idx) {
+            case true => lcons r rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, lcons idx r.noExit, r.ooc)) rest
+        }
+        case false => lcons r (fsmRecSetNoExit(rest, key, idx))
+    }
+}
+
+def fsmCtxNoExitMark(name: String, idx: Nat): Unit =
+    match nat_is_ground(idx) {
+        case false => unit
+        case true =>
+            let key = name;
+            let _ = change_mutable_default("FsmCtx",
+                x => FsmCtx.mk(fsmRecSetNoExit(x.fsms, key, idx), x.stack),
+                fsmCtxEmpty);
+            unit
+    }
+
+// goto: append the edge. The edge list feeds HDL061 (targets) and HDL062
+// (exit sources). The context stack is rebuilt empty when the key is
+// missing (out-of-module fallback: no panic, no record). Edges dedup:
+// the engine replays a module body several times (see fsmGotoLog).
+def fsmEdgeEq(a: FsmEdge, b: FsmEdge): Boolean = match nat_eq(a.from, b.from) {
+    case true => nat_eq(a.to, b.to)
+    case false => false
+}
+
+def fsmRecHasEdge(es: List[FsmEdge], edge: FsmEdge): Boolean = match es {
+    case lnil => false
+    case lcons(e, rest) => match fsmEdgeEq(e, edge) {
+        case true => true
+        case false => fsmRecHasEdge(rest, edge)
+    }
+}
+
+def fsmRecAddEdge(recs: List[FsmRec], key: String, edge: FsmEdge): List[FsmRec] = match recs {
+    case lnil => lnil
+    case lcons(r, rest) => match str_eq(r.name, key) {
+        case true => match fsmRecHasEdge(r.edges, edge) {
+            case true => lcons r rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, lcons edge r.edges, r.declared, r.visited, r.noExit, r.ooc)) rest
+        }
+        case false => lcons r (fsmRecAddEdge(rest, key, edge))
+    }
+}
+
+
+// ============================================================
+//  The tree-level goto (§7.3): stateNext := sizedLiteral(target, w) under
+//  the current when context, plus the HDL060 / HDL064 call-site checks.
+// ============================================================
+
+// The bookkeeping half of fsmGotoLog, split out so every match arm is a
+// single call (a nested match whose arm holds a let-chain diverges the
+// load — same family as docs/l13-struct-decl-dependent-field-divergence.md).
+def fsmGotoRecord(key: String, stack: FsmCtxStack, target: Nat): Unit = match stack {
+    case fsmStackEmpty =>
+        let _ = change_mutable_default("FsmCtx",
+            x => FsmCtx.mk(fsmRecSetOoc(x.fsms, key), x.stack),
+            fsmCtxEmpty);
+        unit
+    case fsmStackCons(_, i, _) =>
+        let _ = change_mutable_default("FsmCtx",
+            x => FsmCtx.mk(fsmRecAddEdge(x.fsms, key, FsmEdge.mk(i, target)), x.stack),
+            fsmCtxEmpty);
+        unit
+}
+
+// CHECK-PASS NOTE (2026-09-27): the engine evaluates a deferred lambda body
+// once during a declaration-check pass BEFORE the enclosing whenIsActive
+// method runs (watchdog bisect: the drain saw edge (1->1) = fromIdx fell
+// back to target, and the same eval logged HDL064). Reporting HDL064 at the
+// call site therefore warned on every FSM module. Instead the goto records
+// an out-of-context MARKER on its FsmRec, no edge is added, and the drain
+// reports HDL064; fsmCtxPush clears the marker, so a later real
+// state-context push in a full replay erases the check-pass artifact while
+// a genuinely bare goto (which runs after the push in the same replay)
+// re-marks it.
+def fsmGotoLog(name: String, stateCount: Nat, w: Nat, nextExpr: Expr, target: Nat): Unit =
+    let mname = fsmReportModule(unit);
+    let _ = match nat_gte(target, stateCount) {
+        case true =>
+            let _ = report_check_issue("HDL060", mname, name,
+                string_concat("goto target ", string_concat(nat_to_dec(target),
+                    string_concat(" out of range (stateCount = ", string_concat(nat_to_dec(stateCount), ")")))));
+            unit
+        case false => unit
+    };
+    let ctx = get_global_default("FsmCtx", fsmCtxEmpty);
+    let key = name;
+    let _ = match nat_is_ground(target) {
+        case false => unit
+        case true => fsmGotoRecord(key, ctx.stack, target)
+    };
+    let _ = createSignalExpr("", assign(nextExpr, sizedLiteral(target, w)));
+    unit
+
+// ============================================================
+//  Drain (HDL061 + HDL062) — called by the module macro prologue: report
+//  the PREVIOUS elaboration round's completed records, then reset. See the
+//  lifecycle note at the FsmCtx header.
+// ============================================================
+
+def fsmTargetList(edges: List[FsmEdge], acc: List[Nat]): List[Nat] = match edges {
+    case lnil => acc
+    case lcons(e, rest) => fsmTargetList(rest, lcons (e.to) acc)
+}
+
+def fsmFromList(edges: List[FsmEdge], acc: List[Nat]): List[Nat] = match edges {
+    case lnil => acc
+    case lcons(e, rest) => fsmFromList(rest, lcons (e.from) acc)
+}
+
+// HDL061: every declared state idx != 0 that no goto targets is unreachable
+// (the entry state 0 is reachable by reset). Universe = the declared handles
+// (fsmCtxDeclare) — see the note there for why it is not 0..stateCount.
+def fsmUnreachableReport(rec: FsmRec, targets: List[Nat], declared: List[Nat]): Unit = match declared {
+    case lnil => unit
+    case lcons(idx, rest) =>
+        let _ = match nat_eq(idx, 0) {
+            case true => unit
+            case false => match fsmNatInList(targets, idx) {
+                case true => unit
+                case false =>
+                    let _ = report_check_issue("HDL061", rec.module, rec.name,
+                        string_concat("state ", string_concat(nat_to_dec(idx),
+                            " is unreachable - no goto targets it (entry state 0 is reachable by reset)")));
+                    unit
+            }
+        };
+        fsmUnreachableReport(rec, targets, rest)
+}
+
+// Local boolean helpers (hdl-check.typort defines chkBand/chkBnot but its
+// defs are off-limits for phase 1; local one-liners mirror the chkCdEq
+// precedent without touching that file).
+def fsmBand(a: Boolean, b: Boolean): Boolean = match a {
+    case true => b
+    case false => false
+}
+
+def fsmNot(a: Boolean): Boolean = match a {
+    case true => false
+    case false => true
+}
+
+// HDL062: a state whose body ran but which has no outgoing goto may get
+// stuck; noExitCheck() exempts it (§7.4).
+def fsmNoExitReport(rec: FsmRec, visited: List[Nat]): Unit = match visited {
+    case lnil => unit
+    case lcons(idx, rest) =>
+        let hasExit = fsmNatInList(fsmFromList(rec.edges, lnil), idx);
+        let exempt = fsmNatInList(rec.noExit, idx);
+        let _ = match fsmBand(fsmNot(hasExit), fsmNot(exempt)) {
+            case true =>
+                let _ = report_check_issue("HDL062", rec.module, rec.name,
+                    string_concat("state ", string_concat(nat_to_dec(idx),
+                        " has no outgoing goto (FSM may get stuck) - add a goto or call noExitCheck()")));
+                unit
+            case false => unit
+        };
+        fsmNoExitReport(rec, rest)
+}
+
+// DRAIN COMPLETENESS GATE (2026-09-27, engine-measured): the engine
+// evaluates a module body in ~100 replay rounds whose final states are
+// growing PREFIXES of the body (drain dump: register-only -> declares ->
+// noExit -> first edge -> all edges). A drain therefore sees an arbitrary
+// partial prefix, and an ungated drain reported "state N is unreachable"
+// from a prefix that had not reached the later goto yet.
+// The gate is the design-wide ModuleRegistry (hdl-core): registerModuleTree
+// is called by checkModuleTree, i.e. at the END of a completed module body.
+// A record is reported only once its module has completed at least one full
+// body evaluation. Records persist across replays (fsmCtxModuleReset resets
+// only the context stack), so once the module is registered the record is
+// the UNION of every replay's operations — idempotent adds, hence complete.
+// DRAIN COMPLETENESS GATE (2026-09-27, engine-measured): the engine replays
+// a module body in ~100 rounds, most of which are growing PREFIXES of the
+// body (drain dump: register-only -> declares -> noExit -> first edge ->
+// all edges). A drain sees the previous round's records, so an ungated
+// drain reported "state N is unreachable" from a prefix that had not
+// reached the later goto yet.
+// The gate uses the ModuleTree global as the completion witness: at drain
+// time it still holds the previous round's tree (the prologue keeps it, the
+// module def is installed only after this hook). A round that ran to the
+// end of the module body restored the ambient tree (the macro's
+// `create_global("ModuleTree", _prev)` epilogue) — for a top-level module
+// that is the EMPTY tree; a round that aborted mid-body left its own module
+// tree in place. So: the head module name still equal to a record's module
+// name means that record came from an aborted prefix -> skip it. A report
+// from a completed round is complete by construction (the round reached
+// checkModuleTree). Repeats are idempotent: CheckIssues line dedup.
+def fsmTreeHeadName(dummy: Unit): String =
+    let _ = dummy;
+    let tree = get_global_default("ModuleTree", ModuleTree.mk(0, nil));
+    headModuleDef(tree.data).name
+
+def fsmRecordComplete(rec: FsmRec): Boolean = match str_eq(fsmTreeHeadName(unit), rec.module) {
+    case true => false
+    case false => true
+}
+
+// HDL064 at drain time (recorded by fsmGotoRecord; see fsmGotoLog's
+// CHECK-PASS note).
+def fsmOocReport(rec: FsmRec): Unit = match rec.ooc {
+    case false => unit
+    case true =>
+        let _ = report_check_issue("HDL064", rec.module, rec.name,
+            "goto outside any whenIsActive state context (SpinalHDL inGeneration assert counterpart)");
+        unit
+}
+
+// One reportable record's checks. Split from fsmCtxDrainAll so every match
+// arm stays a single call / plain statement (divergence discipline).
+def fsmReportRecord(rec: FsmRec): Unit =
+    let targets = fsmTargetList(rec.edges, lnil);
+    let _ = fsmUnreachableReport(rec, targets, rec.declared);
+    let _ = fsmNoExitReport(rec, rec.visited);
+    let _ = fsmOocReport(rec);
+    unit
+
+def fsmReportRecordGated(rec: FsmRec): Unit = match fsmRecordComplete(rec) {
+    case false => unit
+    case true => fsmReportRecord(rec)
+}
+
+def fsmCtxDrainAll(recs: List[FsmRec]): Unit = match recs {
+    case lnil => unit
+    case lcons(r, rest) =>
+        let _ = fsmReportRecordGated(r);
+        fsmCtxDrainAll(rest)
+}
+// The module-macro prologue hook: report the persisted records, then reset
+// the CONTEXT STACK for this replay round (the records survive — see the
+// gate note above; a stale stack frame from a partial round would otherwise
+// hide a genuinely out-of-context goto).
+//
+// SHAPE CONSTRAINTS (2026-09-27, full evidence chain in
+// docs/l13-struct-decl-dependent-field-divergence.md — all watchdog-bisected):
+// 1. The reset MUST go through change_mutable_default, NOT create_global:
+//    `create_global("FsmCtx", fsmCtxEmpty)` in this def diverged the prelude
+//    load (the original draft's unbounded-allocation bomb) and, once the
+//    unify fuel cap turned the loop into an error, reported `can't unify
+//    expected: Unit find: Type 0` at exactly this call. Every
+//    change_mutable_default / get_global_default call with the SAME key and
+//    value (fsmCtxRegister / fsmCtxDeclare / fsmCtxPopRecordVisit) checks
+//    clean, so the failing path is create_global's dependent global-type
+//    resolution against the FsmCtx struct (whose fields embed List[...]
+//    applications); create_global with a plain-enum global (WhenStack,
+//    hdl-core initWhenStack) is fine.
+// 2. The body must NOT match on `ctx.fsms` (a projection whose type is a
+//    parameterized type application) — matching `ctx.stack` (plain enum
+//    projection) or plain List ARGUMENTS is fine, but a List-projection
+//    match here diverged independently. `ctx.fsms` may only be passed as an
+//    argument (fsmCtxDrainAll).
+// 3. LOAD GUARD note (see fsmCtxRegister): this body is only CHECKED at
+//    prelude load, never executed there, so the key is not created during
+//    the load itself.
+def fsmCtxModuleReset(): Unit =
+    let ctx = get_global_default("FsmCtx", fsmCtxEmpty);
+    let _ = fsmCtxDrainAll(ctx.fsms);
+    let _ = change_mutable_default("FsmCtx", x => fsmCtxEmpty, fsmCtxEmpty);
+    unit
+
+// State-equality condition at the encoding funnel (§7.6): the ONLY place
+// that builds `stateReg === idx` — the future Enum migration swaps this
+// binary for a craft comparison.
+def fsmStateEqExpr(regExpr: Expr, idx: Nat): Expr =
+    binary(regExpr, "==", literal(idx))
+
+def fsmStateNeExpr(regExpr: Expr, idx: Nat): Expr =
+    binary(regExpr, "!=", literal(idx))
+
+// Hook conditions (onEntry / onExit) at the same funnel.
+def fsmOnEntryExpr(nextExpr: Expr, regExpr: Expr, idx: Nat): Expr =
+    binary(fsmStateEqExpr(nextExpr, idx), "&&", fsmStateNeExpr(regExpr, idx))
+
+def fsmOnExitExpr(nextExpr: Expr, regExpr: Expr, idx: Nat): Expr =
+    binary(fsmStateNeExpr(nextExpr, idx), "&&", fsmStateEqExpr(regExpr, idx))
+
+// fsmNew[w](stateCount) — §7.3 expansion:
+//   createRegWidthInit(name_stateReg, w, 0)      (entry state = reset state)
+//   createWidth(name_stateNext, w)
+//   stateNext = stateReg   (default-first, whenBegin(literal(1)) wrapped —
+//                           the design §7.3 documented fallback: the HDL011
+//                           refinement D5 lives in hdl-check.typort, which
+//                           phase 1 does not touch, so the default counts as
+//                           a conditional comb drive and FSM modules stay
+//                           HDL011-clean; codegen folds it into the same
+//                           always @(*) as an if (1) blocking default)
+//   stateReg <= stateNext  (clock edge)
+def fsmNew[w: Nat][bn: BindingName](stateCount: Nat): Fsm =
+    let base = loopName(bn.name);
+    let regName = base + "_stateReg";
+    let regExpr = createSignalExpr(regName, createRegWidthInit(regName, w, literal(0)));
+    let nextName = base + "_stateNext";
+    let nextExpr = createSignalExpr(nextName, createWidth(nextName, w));
+    let _ = whenBegin(literal(1));
+    let _ = createSignalExpr("", assign(nextExpr, regExpr));
+    let _ = whenEnd(unit);
+    let _ = createSignalExpr("", regAssign(regExpr, nextExpr));
+    let _ = fsmCtxRegister(base, stateCount);
+    // NOTE: `width` carries the encoding width as a RUNTIME Nat (sizedLiteral
+    // source for gotos). It must be a struct field: an impl's Nat parameter
+    // freezes as a dangling elaboration-time variable when used at runtime
+    // (docs/l13-typeclass-instance-nat-param-bug.md), while a top-level
+    // def's Nat parameter substitutes concretely (streamFifo -> createMem
+    // precedent). The signal fields are the raw Exprs — see the BOMB NOTE
+    // above for why they cannot be UInt[w].
+    Fsm.mk(regExpr, nextExpr, stateCount, w, base)
+
+impl Fsm {
+    // State handle: `let sIdle = ctrl.state(0)` (§7.2). Registers the handle
+    // as declared (the HDL061 universe).
+    def state(idx: Nat): FsmSt =
+        let _ = fsmCtxDeclare(this.name, idx);
+        FsmSt.mk(this, idx)
+    // Combinational query: stateReg === idx.
+    def isState(idx: Nat): Bool = Bool.mk(None, fsmStateEqExpr(this.stateReg, idx))
+    // Bare goto in the CURRENT when context (HDL064 fires outside any
+    // whenIsActive; same expansion as FsmSt.goto).
+    def goto(target: Nat): Unit = fsmGotoLog(this.name, this.stateCount, this.width, this.stateNext, target)
+}
+
+impl FsmSt {
+    def goto(): Unit = fsmGotoLog(this.sm.name, this.sm.stateCount, this.sm.width, this.sm.stateNext, this.idx)
+    def isActive: Bool = Bool.mk(None, fsmStateEqExpr(this.sm.stateReg, this.idx))
+    // HDL062 exemption for terminal states (§7.4).
+    def noExitCheck(): Unit = fsmCtxNoExitMark(this.sm.name, this.idx)
+    // whenIsActive: when(stateReg === idx) { body } + state-context push/pop.
+    // Call with a deferred lambda: sIdle.whenIsActive(u => when(start) { ... })
+    // or sIdle.whenIsActive { u => when(start) { ... } } — see the header
+    // note for why the braced block must wrap a lambda.
+    def whenIsActive(body: Unit -> Unit): Unit =
+        let _ = fsmCtxPush(this.sm.name, this.idx);
+        let _ = whenBegin(fsmStateEqExpr(this.sm.stateReg, this.idx));
+        let _ = body(unit);
+        let _ = whenEnd(unit);
+        fsmCtxPopRecordVisit()
+    def whenIsInactive(body: Unit -> Unit): Unit =
+        let _ = whenBegin(fsmStateNeExpr(this.sm.stateReg, this.idx));
+        let _ = body(unit);
+        whenEnd(unit)
+    // whenIsNext: when(stateNext === idx) { body } — the NEXT-state view.
+    def whenIsNext(body: Unit -> Unit): Unit =
+        let _ = whenBegin(fsmStateEqExpr(this.sm.stateNext, this.idx));
+        let _ = body(unit);
+        whenEnd(unit)
+    // onEntry: the cycle stateNext lands on idx (stateNext === idx && stateReg =/= idx).
+    def onEntry(body: Unit -> Unit): Unit =
+        let _ = whenBegin(fsmOnEntryExpr(this.sm.stateNext, this.sm.stateReg, this.idx));
+        let _ = body(unit);
+        whenEnd(unit)
+    // onExit: the last cycle in idx (stateNext =/= idx && stateReg === idx).
+    def onExit(body: Unit -> Unit): Unit =
+        let _ = whenBegin(fsmOnExitExpr(this.sm.stateNext, this.sm.stateReg, this.idx));
+        let _ = body(unit);
+        whenEnd(unit)
+}
+// ============================================================
+//  Standalone statement macros - the braced-body forms
+// ============================================================
+// Module-body statements dispatch through the Expr macro table (hdl-macros)
+// and fall to its raw passthrough arm, which wraps the statement as
+// let-binded single expression. An expansion that emits a let-chain
+// (whenBegin/whenEnd scaffolding) would nest inside that wrapper and break
+// the class field chain ('find unsolved meta') - the exact trap documented
+// on the Expr macro's discard-let arm. These macros therefore expand to ONE
+// call expression delegating to the FsmSt methods, whose body: Unit -> Unit
+// parameter defers the braced statements exactly like the for macro's
+// lambda body. They are pure sugar for the method form:
+//   whenIsActive(sIdle) { when start { sRun.goto() } }
+//   ==  sIdle.whenIsActive(u => when start { sRun.goto() }; unit)
+// Being single expressions, they also work at raw positions (def bodies).
+
+#[macro_export]
+macro_rules whenIsActive {
+    ($st:raw {$( $b: Expr )*}) => { ($st).whenIsActive(u => $($b)* unit) };
+}
+
+#[macro_export]
+macro_rules whenIsInactive {
+    ($st:raw {$( $b: Expr )*}) => { ($st).whenIsInactive(u => $($b)* unit) };
+}
+
+#[macro_export]
+macro_rules whenIsNext {
+    ($st:raw {$( $b: Expr )*}) => { ($st).whenIsNext(u => $($b)* unit) };
+}
+
+#[macro_export]
+macro_rules onEntry {
+    ($st:raw {$( $b: Expr )*}) => { ($st).onEntry(u => $($b)* unit) };
+}
+
+#[macro_export]
+macro_rules onExit {
+    ($st:raw {$( $b: Expr )*}) => { ($st).onExit(u => $($b)* unit) };
+}

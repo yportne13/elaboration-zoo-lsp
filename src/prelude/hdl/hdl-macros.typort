@@ -607,6 +607,7 @@ macro_rules module {
 			let _ = create_global("WhenStack", whenStackEmpty)
 			// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
 			let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
+			let _ = fsmCtxModuleReset()
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, $cd, 0, nil) :: nil))
 			$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*
@@ -638,6 +639,9 @@ macro_rules module {
 			let _ = create_global("WhenStack", whenStackEmpty)
 			// for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
 			let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
+			// FSM 转移记录（hdl-fsm HDL060-064）：每次 create 先排水上一轮已完成的
+			// 记录再清空（对齐 WhenStack/HdlLoopIdx 的 per-module 重置纪律）
+			let _ = fsmCtxModuleReset()
 			let _prev: ModuleTree = get_global("ModuleTree")
 			let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil))
 			$( let $rp: $rt[$rw] = $rt.mk(Some(stringify $rp), createOutRegPortExprInit(stringify $rt, $rw, $rv)); )*

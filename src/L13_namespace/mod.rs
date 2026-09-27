@@ -326,6 +326,9 @@ mod module_probe_tests;
 mod hdl_assert_tests;
 
 #[cfg(test)]
+mod hdl_fsm_tests;
+
+#[cfg(test)]
 mod verilog_compat_tests;
 
 #[cfg(test)]
@@ -3845,6 +3848,10 @@ pub(crate) const PRELUDE_HDL: &[(&str, &str)] = &[
     ("hdl-enum", include_str!("../prelude/hdl/hdl-enum.typort")),
     ("hdl-utils", include_str!("../prelude/hdl/hdl-utils.typort")),
     ("hdl-stream", include_str!("../prelude/hdl/hdl-stream.typort")),
+    // hdl-fsm 在 hdl-stream 之后（UInt/newUInt 工厂与 loopName 都已加载；
+    // 只依赖 hdl-core/hdl-types，report_check_issue 是 Rust prim 无加载序约束），
+    // 宏的 module prologue 调 fsmCtxModuleReset（hdl-macros 更晚加载不受影响）。
+    ("hdl-fsm", include_str!("../prelude/hdl/hdl-fsm.typort")),
     ("hdl-crossclock", include_str!("../prelude/hdl/hdl-crossclock.typort")),
     ("hdl-bus-proto", include_str!("../prelude/hdl/hdl-bus-proto.typort")),
     ("hdl-misc-io", include_str!("../prelude/hdl/hdl-misc-io.typort")),

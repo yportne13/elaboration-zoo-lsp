@@ -1,6 +1,6 @@
 # HDL Stream/Flow/Fragment 完整化与 FSM 设计（hdl-stream-fsm-design）
 
-> 状态：设计稿 · 2026-09-26
+> 状态：一期已实现（2026-09-27 收口）· 设计稿 2026-09-26。实现落点 `src/prelude/hdl/hdl-fsm.typort` + `hdl-macros.typort` prologue；测试 `src/L13_namespace/hdl_fsm_tests.rs`。**实现偏差**：Fsm/FsmSt 采用非参数化扁平 struct（§7.2 草案的 `Fsm[w]{stateReg: UInt[w]}` 形状因 prelude 加载发散被否决，详见 `docs/l13-struct-decl-dependent-field-divergence.md` 与 §9 偏差表）。
 > 范围：纯设计文档，不改源码。上游：`docs/spinalhdl-gap.md`（§5/§7/§8）、`docs/spinalhdl-lib-replication.md`（波次表 + 末尾语言限制）、`docs/hdl-selfcheck-design.md` 与 `docs/hdl-selfcheck-phase234-design.md`（规则编号段位）。
 > SpinalHDL 参考：`F:\projects\hermes\spinalhdl-ref\lib\src\main\scala\spinal\lib\`（Stream.scala / Flow.scala / Fragment.scala / MasterSlave.scala / fsm\*.scala），下文以 `Stream.scala:行` 引用。
 
@@ -396,11 +396,21 @@ module fsmDemo {
 }
 ```
 
-API 全集（`hdl-fsm.typort`）：
+API 全集（`hdl-fsm.typort`）。**实现偏差（2026-09-27）**：下草稿的
+`struct Fsm[w: Nat] { stateReg: UInt[w] ... }` 形状在收口期被否决——
+`create_global("FsmCtx", ..)` 依赖类型检查发散 + `match ctx.fsms`（List
+投影）发散，使加载表现为"声明即炸"（看门狗 6GB 击杀，最初误诊为 struct
+字段类型问题）。实际落地为**非参数化扁平 struct**：`Fsm { stateReg: Expr,
+stateNext: Expr, stateCount: Nat, width: Nat, name: String }`、
+`FsmSt { sm: Fsm, idx: Nat }`，信号字段携带裸 Expr，宽度以 `width: Nat`
+值字段随行（fsmNew 仍收 `[w: Nat]` 供 createRegWidthInit/createWidth/
+sizedLiteral），`Into[UInt[width]] for Expr` 实例恢复 `st := ctrl.stateReg`
+赋值路径。完整二分证据链见
+`docs/l13-struct-decl-dependent-field-divergence.md`：
 
 ```typort
 struct Fsm[w: Nat] {
-    stateReg: UInt[w]      // 寄存器，init 0（入口态）
+    stateReg: UInt[w]      // 寄存器，init 0（入口态）——草案形状，已被扁平化否决
     stateNext: UInt[w]     // 组合 wire（默认 = stateReg，被 goto 条件覆盖）
     stateCount: Nat        // 仅供自检记录（运行期不参与硬件）
     name: String           // bn 前缀，信号名 / 自检归属
@@ -533,7 +543,7 @@ regAssign(stateReg, stateNext)                           // 时钟沿
 | StreamMux/Demux（含 joinSel/regSel 变体） | 基础版 | joinSel/regSel 二期 |
 | Flow 全家族 | §5.5 | FlowFifo→经 flowToStream 复用 StreamFifo |
 | Fragment[T] + StreamFragment/FlowFragment 工厂 | `Stream[Fragment[T]]` 统一 + addFragmentLast 两版 | StreamFragment 独立 struct 废弃 |
-| FSM：State/StateMachine/StateEntryPoint/whenIsActive/whenIsInactive/onEntry/onExit/whenIsNext/goto | §7.2 全对应 | 有意偏差：①无独立 StateBoot——入口态即复位态（SpinalHDL 复位后先落 boot 态再 startFsm 跳入口，**入口态的 onEntry 在本设计永不触发**）；②编码 binary UInt（非 SpinalEnum）；③无 forceGoto/transitionCond 之分；④状态覆盖检查走 HDL060-064 warning（SpinalHDL 是 elaboration assert） |
+| FSM：State/StateMachine/StateEntryPoint/whenIsActive/whenIsInactive/onEntry/onExit/whenIsNext/goto | §7.2 全对应 | 有意偏差：①无独立 StateBoot——入口态即复位态（SpinalHDL 复位后先落 boot 态再 startFsm 跳入口，**入口态的 onEntry 在本设计永不触发**）；②编码 binary UInt（非 SpinalEnum）；③无 forceGoto/transitionCond 之分；④状态覆盖检查走 HDL060-064 warning（SpinalHDL 是 elaboration assert）；⑤**struct 扁平化**（2026-09-27 实现）：`Fsm`/`FsmSt` 非参数化、信号字段为裸 Expr、宽度以 `width: Nat` 值字段随行，`Into[UInt[w]] for Expr` 桥恢复 `:=`——§7.2 草案的 `Fsm[w]{stateReg: UInt[w]}` 参数化形状因加载发散被否决（`docs/l13-struct-decl-dependent-field-divergence.md`） |
 | FSM：StateFsm/StateDelay/StatesSerial/Parallel | 不做（§7.5） | 文档给出替代写法 |
 
 ## 10. 分阶段实施计划
