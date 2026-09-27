@@ -170,6 +170,24 @@ enum Expr {
     // createSignalExpr's default arm.
     assertExpr(cond: Expr, msg: String, sev: AssertSeverity)
     assertExprCd(cond: Expr, msg: String, sev: AssertSeverity, cd: ClockDomain)
+    // ---- BlackBox parameter marker (docs/hdl-blackbox-sim-design.md §4.5-3) ----
+    // The `blackbox` macro (hdl-macros.typort) renders the generic strings at
+    // CREATE time (ground params) and transports them as these DEDICATED
+    // marker nodes — pure emission channel, hdl-verilog picks them up by
+    // literal match with zero global reads. isInst=false is the SELF marker
+    // (lives in the blackbox def itself; stub header params), isInst=true the
+    // INSTANCE marker (lives in the parent def right after the instance node;
+    // ` #(.K(v), ...)` injection string).
+    // HISTORY (R2 review P1 fix, 2026-09-27): the channel originally piggy-
+    // backed on assertExpr with a literal-cond discriminant
+    // (assertExpr(literal(zero|succ(zero)), <params>, AssertError)) — byte-
+    // identical to a user constant Bool assertion (`assert(false.into, msg)`
+    // → literal(zero) ≡ SELF: bbIsBlackBox replaced the whole module body
+    // with a malformed stub; `assert(true.into, "sanity")` → literal(succ
+    // (zero)) ≡ INSTANCE: collectInstHelp consumed the assert, polluting the
+    // instance name with the msg). A dedicated variant ends the aliasing;
+    // hdl-check keeps the zero-read/zero-drive discipline via its own arms.
+    bbMarkerExpr(isInst: Boolean, params: String)
 }
 
 // Check if an Expr is a register signal (createReg/createRegWidth/createRegWidthInit etc.)
@@ -689,24 +707,45 @@ def registerModuleTree(t: ModuleTree): Unit =
 // blackbox-only side effects:
 //   1. each `generic K = v` line appends (K, v) to the mutable global
 //      "BlackBoxCtx" (CompatCD pattern: prologue reset, record-time read);
-//   2. before checkModuleTree runs, bbRegister upserts (name -> generics)
-//      into the mutable global "BlackBoxRegistry" so that
-//      - hdl-check's runChecks can gate the body rules (a blackbox has no
-//        body: HDL001/002/003/010-013/023 would all be false positives),
-//      - hdl-verilog can emit the `ifndef-guarded empty stub and inject
-//        `#(.K(v))` at instantiation sites.
+//   2. before checkModuleTree runs, bbRegisterLast upserts (name -> generics)
+//      into the mutable global "BlackBoxRegistry" (design-record use only —
+//      see the DEVIATION below; the actual blackbox dispatches read the
+//      DEDICATED bbMarkerExpr parameter markers, hdl-verilog/hdl-check):
+//      - hdl-check's runChecks gates the body rules via the pure marker
+//        predicate chkBbDefIsBlackBox (a blackbox has no body: HDL001/002/
+//        003/010-013/023 would all be false positives),
+//      - hdl-verilog emits the `ifndef-guarded empty stub and injects
+//        `#(.K(v))` at instantiation sites from the same markers.
 //
 // DEVIATION from §4.2 (fallback sanctioned by the design/task): ModuleDef does
 // NOT carry a `bb: Option[BlackBoxInfo]` field. That plan requires updating all
 // 7 ModuleDef.mk call sites, three of which sit inside the `module` macro arms
 // of hdl-macros.typort — a region whose ownership is restricted in this batch
 // (parallel module-macro prologue workstream). With the parallel registry the
-// ModuleDef arity stays untouched and every consumer reads the registry via the
-// same ensure-exists + get_global pattern designVL already uses for
-// "ModuleRegistry". Semantics mirror ModuleRegistry: FIRST registration wins;
-// two parameterizations of one blackbox name collide on that entry (known
+// ModuleDef arity stays untouched and every consumer reads the marker nodes or
+// the registry via the same ensure-exists + get_global pattern designVL
+// already uses for "ModuleRegistry".
+//
+// REGISTRATION SEMANTICS: LAST-WINS (hdl-macros.typort bbRegisterLast — same-
+// name entry dropped then re-prepended), NOT the FIRST-wins of
+// registerModuleTree. The class body is evaluated ~3x during the two-phase
+// check plus once more at create; check-round evaluations see NEUTRAL class
+// parameters, so first-wins would freeze the neutral generic values — last-
+// wins lets the final evaluation (the create, params ground) overwrite. Two
+// parameterizations of one blackbox name still collide on that entry (known
 // limitation, same as myAdder[8]/myAdder[16]; workaround = one declaration per
 // parameterization, setDefinitionName remains future work).
+//
+// HISTORY (P3 cleanup, 2026-09-27): the hdl-core-side registry writers/readers
+// (bbRegister, blackboxCtxTake, isBlackBoxName, bbGenericsOfName + their
+// helpers bbEntryIn/bbGensHelp) had NO remaining callers and were removed —
+// hdl-macros owns the registry writes (bbRegisterLast / bbCtxTakeGround, with
+// GROUND seeds: a polymorphic lnil in the global seed stalls List matches in
+// class-body evaluation contexts and poisons the mutable_map drain, lvl2ix),
+// and the check-side gate reads the bbMarkerExpr markers instead of the
+// registry (a get_global_default query is non-reducible in the class-body
+// check-evaluation context — it once silently skipped the five body rules for
+// ALL modules; docs/l13-typeclass-instance-nat-param-bug.md).
 
 enum BbGenVal {
     bbGenNat(v: Nat)
@@ -757,55 +796,9 @@ def bbGenericAddNat(key: String, v: Nat): Unit = bbCtxAdd(key, bbGenNat(v))
 
 def bbGenericAddStr(key: String, s: String): Unit = bbCtxAdd(key, bbGenStr(s))
 
-// Read-and-clear the per-create generic list (blackbox macro, at record time).
-def blackboxCtxTake(): List[BbGeneric] =
-    let _ = change_mutable_default("BlackBoxCtx", x => x, BlackBoxCtx.mk(lnil));
-    let gens = (get_global("BlackBoxCtx")).gens;
-    let _ = change_mutable("BlackBoxCtx", x => BlackBoxCtx.mk(lnil));
-    gens
-
-def bbEntryIn(es: List[BlackBoxEntry], name: String): Boolean = match es {
-    case lnil => false
-    case lcons(e, t) => match str_eq(e.name, name) {
-        case true => true
-        case false => bbEntryIn(t, name)
-    }
-}
-
-// Register a declared blackbox (called by the blackbox macro right before
-// checkModuleTree, so runChecks sees the entry while gating the body rules).
-// First registration wins, exactly like registerModuleTree.
-def bbRegister(name: String, info: BlackBoxInfo): Unit =
-    let _ = change_mutable_default("BlackBoxRegistry", x => x, BlackBoxRegistry.mk(lnil));
-    let _ = change_mutable("BlackBoxRegistry", x => match bbEntryIn(x.entries, name) {
-        case true => x
-        case false => BlackBoxRegistry.mk(lcons (BlackBoxEntry.mk(name, info)) (x.entries))
-    });
-    unit
-
-// Registry queries are READ-ONLY: they go through get_global_default (the
-// pickAssign precedent) so a query never creates the global, and they never
-// match on Option. Both constraints come from the prelude LOADER: the
-// declaration-time evaluation of a def body here runs once under the loading
-// context, and (a) change_mutable_default would seed the global with a lnil
-// whose type was solved in that context — the per-file mutable_map drain then
-// quotes the dangling level and panics (lvl2ix, see
-// docs/l13-typeclass-instance-nat-param-bug.md) — while (b) an Option match in
-// a def body caches a stuck scrutinee with the same effect. bbRegister is safe:
-// it only runs inside a blackbox create (user context, ground Nats only).
-def isBlackBoxName(name: String): Boolean =
-    bbEntryIn((get_global_default("BlackBoxRegistry", BlackBoxRegistry.mk(lnil))).entries, name)
-
-def bbGensHelp(es: List[BlackBoxEntry], name: String): List[BbGeneric] = match es {
-    case lnil => lnil
-    case lcons(e, t) => match str_eq(e.name, name) {
-        case true => e.info.generics
-        case false => bbGensHelp(t, name)
-    }
-}
-
-def bbGenericsOfName(name: String): List[BbGeneric] =
-    bbGensHelp((get_global_default("BlackBoxRegistry", BlackBoxRegistry.mk(lnil))).entries, name)
+// (blackboxCtxTake — read-and-clear the per-create generic list — was removed
+// as dead code: hdl-macros' ground-seed bbCtxTakeGround is the one the
+// blackbox macro uses, see the HISTORY note above.)
 
 // ---------- Verilog-compat: combinational-always context ----------
 // `always @(*)` in a Verilog-compat module wraps its statements in

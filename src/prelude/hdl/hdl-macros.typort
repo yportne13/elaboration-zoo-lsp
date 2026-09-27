@@ -59,14 +59,19 @@ def assertCd(cond: Bool, msg: String, cd: ClockDomain): Unit = assertSevCd(cond,
 //         上的纯谓词 chkBbDefIsBlackBox(md.expr)，见 hdl-check.typort 与设计
 //         文档 §4.5-4）；
 //      c. 两枚**参数标记**（纯发射通道）：createSignalExpr 追加
-//         assertExpr(literal(zero|succ(zero)), <参数串>, AssertError)——一枚进黑盒
-//         自身 def（msg = "parameter K = v, ..." stub 头参数串），一枚在
-//         restore 之后、mkInstanceIfParent 之前追加进父级 def（msg =
-//         " #(.K(v), ...)" 实例参数串，且 prepend 序使父级 exprs 里它紧跟
-//         instance 节点）。hdl-verilog 的发射链**零全局读**（实测任何可达
-//         全局 op 的 def 被 generic 上下文调用即触发 lvl2ix drain panic，
-//         docs/l13-typeclass-instance-nat-param-bug.md），参数串在 create
-//         期（参数 ground）渲染为纯字符串，发射端按字面匹配拾取。
+//         bbMarkerExpr(isInst=false, <stub 头参数串>)——SELF 标记进黑盒
+//         自身 def；bbMarkerExpr(isInst=true, <实例参数串>)——INSTANCE 标记
+//         在 restore 之后、mkInstanceIfParent 之前追加进父级 def（prepend 序
+//         使父级 exprs 里它紧跟 instance 节点）。hdl-verilog 的发射链**零全局
+//         读**（实测任何可达全局 op 的 def 被 generic 上下文调用即触发 lvl2ix
+//         drain panic，docs/l13-typeclass-instance-nat-param-bug.md），参数串
+//         在 create 期（参数 ground）渲染为纯字符串，发射端按变体字面拾取。
+//         专用变体（R2 评审 P1 修复，2026-09-27）：旧载体
+//         assertExpr(literal(zero|succ(zero)), <参数串>, AssertError) 与用户
+//         常量 Bool 断言逐字节同构（assert(false.into, msg) ≡ SELF 标记 →
+//         普通模块被误判黑盒、体被 stub 替换；assert(true.into, "sanity") ≡
+//         INSTANCE 标记 → 实例名被 msg 污染、断言本体被吞），bbMarkerExpr
+//         终结混叠；hdl-check 侧同步补零读零驱动臂。
 // 注册语义偏差（相对设计 §4.3 bbRegister 的 first-wins）：**last-wins**。
 // 类体在两阶段检查期被求值 ~3 次、create 再 replay 一次，检查期求值时类
 // 参数是 neutral——first-wins 会定格检查轮的 neutral 值；last-wins 让最后
@@ -162,13 +167,15 @@ macro_rules blackbox {
             // 自身 stub 参数标记（hdl-verilog 纯发射读）
             let __bbgens: List[BbGeneric] = bbCtxTakeGround
             let _ = bbRegisterLast(stringify $name, BlackBoxInfo.mk(__bbgens))
-            let _ = createSignalExpr("", assertExpr(literal(zero), bbParamsDeclStr(__bbgens), AssertError))
+            // SELF 标记（isInst=false）：stub 头参数串，留在黑盒 def 自身
+            let _ = createSignalExpr("", bbMarkerExpr(false, bbParamsDeclStr(__bbgens)))
             let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
             let _ = create_global("ModuleTree", _prev)
-            // 实例参数标记：必须先于 mkInstanceIfParent 追加——exprs 为 prepend
-            // 序（后写在前），这样父级 exprs 走序里 marker 紧跟其 instance 节点，
-            // collectInstHelp 原地拾取。顶层 create 无父级，标记落空树无害。
-            let _ = createSignalExpr("", assertExpr(literal(succ(zero)), bbInstParamsStr(__bbgens), AssertError))
+            // 实例参数标记（isInst=true）：必须先于 mkInstanceIfParent 追加——
+            // exprs 为 prepend 序（后写在前），这样父级 exprs 走序里 marker 紧跟
+            // 其 instance 节点，collectInstHelp 原地拾取。顶层 create 无父级，
+            // 标记落空树无害。
+            let _ = createSignalExpr("", bbMarkerExpr(true, bbInstParamsStr(__bbgens)))
             let _ = mkInstanceIfParent(bn.name, stringify $name)
             $( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
             $( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*

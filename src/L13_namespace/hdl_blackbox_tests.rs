@@ -11,9 +11,10 @@
 //   - hdl-verilog emits the `ifndef-guarded empty stub for the def carrying
 //     the blackbox SELF marker and injects `#(.K(v))` at instantiation sites
 //     (the parameter strings are rendered at CREATE time by hdl-macros and
-//     transported as literal-carrying assertExpr markers — the emission chain
-//     is PURE: any reachable global op trips the pre-existing lvl2ix drain
-//     bug, docs/l13-typeclass-instance-nat-param-bug.md).
+//     transported as the dedicated bbMarkerExpr(isInst, params) Expr variant —
+//     the emission chain is PURE: any reachable global op trips the
+//     pre-existing lvl2ix drain bug,
+//     docs/l13-typeclass-instance-nat-param-bug.md).
 //
 // Behavior pinned here (L1 self-check + L2 shape; the sim-level close-up with
 // a hand-written behavior model lives in tests/sim_tests.rs, per design §5.1):
@@ -226,10 +227,11 @@ println("created")
 fn plain_module_still_reports_hdl003() {
     // Control for the gating above: a regular module with an undriven output
     // must keep reporting HDL003 while the blackbox's own undriven output
-    // (dout) stays silent (the gate keys on the registry name, not on the
-    // mere absence of drives). No create call: the module class declaration's
-    // own check round is what reports (same shape as the existing
-    // legacy_tests::test_hdl_check_out_undriven case).
+    // (dout) stays silent (the gate keys on the blackbox SELF marker —
+    // chkBbDefIsBlackBox over the def's bbMarkerExpr(isInst=false, ...) node —
+    // not on the mere absence of drives, and never on the registry name).
+    // No create call: the module class declaration's own check round is what
+    // reports (same shape as the existing legacy_tests::test_hdl_check_out_undriven case).
     let output = assert_ok(r#"
 blackbox BbControl
     input  clk  = Bool
@@ -250,6 +252,81 @@ module noDrive[w: Nat]
     assert!(
         !output.contains("HDL003 [BbControl]"),
         "blackbox output stays gated, got: {}", output
+    );
+}
+
+// ── P1 aliasing regression (R2 review): user constant-Bool asserts are NOT ──
+// ── blackbox parameter markers                                             ──
+//
+// The marker channel originally piggybacked on
+// assertExpr(literal(zero|succ(zero)), <params>, AssertError) — byte-identical
+// to a user constant Bool assertion (Boolean.into → Bool.mk(None,
+// literal(bool_to_nat ...))). Repro #1: `assert(false.into, msg)` made
+// bbIsBlackBox replace the whole module body with a malformed stub. Repro #2:
+// `assert(true.into, "sanity")` right before a sub-module create made
+// collectInstHelp consume the assert as the INSTANCE parameter marker,
+// polluting the instance name (`<module><msg> u (...)`) and swallowing the
+// assertion. The dedicated bbMarkerExpr variant ends the aliasing; these two
+// tests pin the reviewer's exact repro shapes as negative cases.
+
+#[test]
+fn plain_module_bool_literal_assert_is_not_a_blackbox() {
+    // Repro #1 (SELF-marker alias): the module must keep its normal body and
+    // its user assert — no guarded stub, no msg hijacked as a parameter string.
+    let output = assert_ok(r#"
+module plainMarker {
+    input a = Bool
+    output y = Bool
+    y := a
+    assert(false.into, "parameter X = 1")
+}
+println(moduleTreeVL(plainMarker.create.tree))
+"#);
+    assert!(!output.contains("`ifndef"), "no blackbox stub guard, got: {}", output);
+    assert!(output.contains("module plainMarker ("), "plain module header, got: {}", output);
+    assert!(output.contains("assign y = a;"), "module body emitted, got: {}", output);
+    // the user assert survives verbatim in the translate-off block
+    assert!(
+        output.contains("$display(\"TYPORT_ASSERT_ERROR %0t %m: parameter X = 1\", $time);"),
+        "user assert emitted, got: {}", output
+    );
+    assert!(!output.contains("#(parameter"), "no stub #(...) header, got: {}", output);
+    assert!(!output.contains("endmodule\n`endif"), "no stub guard pair, got: {}", output);
+}
+
+#[test]
+fn plain_module_bool_literal_assert_does_not_pollute_instance() {
+    // Repro #2 (INSTANCE-marker alias): the assert sits right before the
+    // create, i.e. immediately AFTER the instance node in walk order (prepend
+    // order) — exactly where the blackbox INSTANCE marker is picked up. The
+    // instance line must stay clean and the assert must still be emitted.
+    // (The child declares its ports in the HEADER — in-body ports are
+    // module-internal signals with no connectable u.x handle, design §4.5-6.)
+    let output = assert_ok(r#"
+module inv
+    input a = Bool
+    output y = Bool
+{
+    y := !a
+}
+module markerUser {
+    input a = Bool
+    output y = Bool
+    assert(true.into, "sanity")
+    let u = inv.create
+    u.a := a
+    y := u.y
+}
+println(moduleTreeVL(markerUser.create.tree))
+"#);
+    // instance line unpolluted (the old shape was `invsanity u (.a(a), .y(y));`)
+    assert!(output.contains("inv u (.a(a), .y(y));"), "clean instance line, got: {}", output);
+    assert!(!output.contains("invsanity"), "instance name not polluted by the msg, got: {}", output);
+    // the user assert still lands in the translate-off block (not consumed as
+    // an instance parameter marker)
+    assert!(
+        output.contains("TYPORT_ASSERT_ERROR %0t %m: sanity"),
+        "user assert still emitted, got: {}", output
     );
 }
 

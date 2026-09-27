@@ -206,6 +206,11 @@ def exprVL_proc(e: Expr): String = match e {
         assertLineRaw(exprVL_proc(cond), msg, sev)
     case assertExprCd(cond, msg, sev, _) =>
         assertLineRaw(exprVL_proc(cond), msg, sev)
+    // BlackBox parameter marker: pure emission-channel payload, never a
+    // Verilog statement — statement-position collectors skip it explicitly
+    // (collectAssignLinesFiltered / collectAssertLinesOne / collectInstHelp);
+    // this arm is the defensive render ("" like nop) for an unreachable shape.
+    case bbMarkerExpr(_, _) => ""
 }
 
 // Helper: emit condition string without redundant outer parens
@@ -314,6 +319,8 @@ def exprVL(e: Expr): String = match e {
         assertLineRaw(exprVL(cond), msg, sev)
     case assertExprCd(cond, msg, sev, _) =>
         assertLineRaw(exprVL(cond), msg, sev)
+    // defensive render (see exprVL_proc); statement collectors skip markers
+    case bbMarkerExpr(_, _) => ""
 }
 
 def isSubSignal(e: Expr): Boolean = match e {
@@ -479,15 +486,25 @@ def portsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
 // evaluation poisons the end-of-run mutable_map drain (lvl2ix panic) - even
 // a read-only get_global_default. The whole emission chain here is PURE:
 // the blackbox parameter strings are rendered at CREATE time (ground params)
-// by the blackbox macro and transported as literal-carrying assertExpr
-// marker nodes
-//   assertExpr(literal(zero|succ(zero)), <params string>, AssertError)
-// - the SELF marker (cond zero) lives in the blackbox def itself (stub
-// header params), the INSTANCE marker (cond succ(zero)) in the parent def
+// by the blackbox macro and transported as the dedicated Expr marker variant
+//   bbMarkerExpr(isInst: Boolean, params: String)
+// - the SELF marker (isInst=false) lives in the blackbox def itself (stub
+// header params), the INSTANCE marker (isInst=true) in the parent def
 // right after its instance node (instance params; prepend order puts it
 // right after the instance in walk order). The "BlackBoxRegistry" global
 // remains CHECK-time only (hdl-check body-rule gating); its result is
 // consumed into a Boolean there and never flows into a quoted string.
+//
+// HISTORY (R2 review P1 fix, 2026-09-27): the markers were originally
+// transported as assertExpr(literal(zero|succ(zero)), <params>, AssertError)
+// — a shape byte-identical to a user constant Bool assertion
+// (`assert(false.into, msg)` → literal(zero) ≡ SELF marker: bbIsBlackBox
+// replaced the whole module body with a malformed stub; `assert(true.into,
+// "sanity")` → literal(succ(zero)) ≡ INSTANCE marker: collectInstHelp
+// consumed the assert and polluted the instance name with the msg). The
+// dedicated Expr variant bbMarkerExpr(isInst, params) (hdl-core.typort)
+// ends the aliasing — user asserts and parameter markers now match
+// distinct variants, so no literal-cond predicate is needed anywhere.
 
 // NOTE (single definition): the parameter-string RENDERERS live in
 // hdl-macros.typort (bbGenValStr / bbParamsDeclStr / bbInstItemsStr /
@@ -498,42 +515,19 @@ def portsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
 // dead under the pure-emission discipline: this file only does literal
 // pick-up from the marker nodes below.
 
-// The blackbox parameter-marker condition: the numeric literal 7777777 is
-// NOT used (unary Nat terms overflow the stack); the SELF marker carries
-// cond literal(zero), the INSTANCE marker literal(succ(zero)).
-def bbIsSelfMarkerCond(c: Expr): Boolean = match c {
-    case literal(v) => match v {
-        case zero => true
-        case _ => false
-    }
-    case _ => false
-}
-
-def bbIsInstMarkerCond(c: Expr): Boolean = match c {
-    case literal(v) => match v {
-        case succ(zero) => true
-        case _ => false
-    }
-    case _ => false
-}
-
-def bbIsMarkerCond(c: Expr): Boolean = match bbIsSelfMarkerCond(c) {
-    case true => true
-    case false => bbIsInstMarkerCond(c)
-}
-
-// Is this def a blackbox (carries the SELF marker)? PURE. The INSTANCE
-// marker (succ(zero), living in a PARENT def) must not trip this dispatch.
+// Is this def a blackbox (carries the SELF marker, isInst=false)? PURE. The
+// INSTANCE marker (isInst=true, living in a PARENT def) must not trip this
+// dispatch.
 // NOTE: flat element patterns only - nested deconstruction inside a cons
 // pattern compiles to dangling-level pattern quotes (lvl2ix, measured).
 def bbIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
     case nil => false
     case cons(e, tail) =>
         match e {
-            case assertExpr(c, _, _) =>
-                match bbIsSelfMarkerCond(c) {
-                    case true => true
-                    case false => bbIsBlackBox(tail)
+            case bbMarkerExpr(isInst, _) =>
+                match isInst {
+                    case true => bbIsBlackBox(tail)
+                    case false => true
                 }
             case _ => bbIsBlackBox(tail)
         }
@@ -545,10 +539,10 @@ def bbStubParams[en: Nat](es: Vec[Expr] en): String = match es {
     case nil => ""
     case cons(e, tail) =>
         match e {
-            case assertExpr(c, m, _) =>
-                match bbIsSelfMarkerCond(c) {
-                    case true => m
-                    case false => bbStubParams(tail)
+            case bbMarkerExpr(isInst, m) =>
+                match isInst {
+                    case true => bbStubParams(tail)
+                    case false => m
                 }
             case _ => bbStubParams(tail)
         }
@@ -725,11 +719,10 @@ def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
 // its own extra domain and does NOT count here — mirror hasRegAssign vs
 // hasRegAssignCd.)
 def hasAssert(e: Expr): Boolean = match e {
-    case assertExpr(c, _, _) =>
-        match bbIsMarkerCond(c) {
-            case true => false
-            case false => true
-        }
+    case assertExpr(_, _, _) => true
+    // blackbox parameter marker: not an assert, never counts (explicit arm —
+    // with the old literal-cond channel this needed bbIsMarkerCond)
+    case bbMarkerExpr(_, _) => false
     case when(_, body, elseBody) =>
         let b = hasAssert(body);
         match b {
@@ -780,12 +773,10 @@ def hasAssertCd(e: Expr, cd: ClockDomain): Boolean = match e {
 // assertsVL owns them) — keeps has-clock and has-assert gating from
 // polluting each other (design doc §9-6).
 def hasAnyAssert(e: Expr): Boolean = match e {
-    case assertExpr(c, _, _) =>
-        match bbIsMarkerCond(c) {
-            case true => false
-            case false => true
-        }
+    case assertExpr(_, _, _) => true
     case assertExprCd(_, _, _, _) => true
+    // blackbox parameter marker: not an assert, never counts
+    case bbMarkerExpr(_, _) => false
     case when(_, body, elseBody) =>
         let b = hasAnyAssert(body);
         match b {
@@ -830,6 +821,8 @@ def collectClockCdsOne(e: Expr, seen: List[String]): List[ClockDomain] = match e
         }
     case block(hd, tl) =>
         list_append(collectClockCdsOne(hd, seen), collectClockCdsOne(tl, seen))
+    // blackbox parameter marker carries no clock domain (explicit ignore)
+    case bbMarkerExpr(_, _) => lnil
     case _ => lnil
 }
 
@@ -1024,6 +1017,9 @@ def collectAssignLinesFiltered[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]
         // catch-all below would emit assert statements as continuous assigns.
         case assertExpr(_, _, _) => collectAssignLinesFiltered(tail, whenSigs)
         case assertExprCd(_, _, _, _) => collectAssignLinesFiltered(tail, whenSigs)
+        // blackbox parameter marker: pure emission channel, never a continuous
+        // assign (same catch-all hazard as the asserts above)
+        case bbMarkerExpr(_, _) => collectAssignLinesFiltered(tail, whenSigs)
         case _ => lcons (exprVL(e)) (collectAssignLinesFiltered(tail, whenSigs))
     }
 }
@@ -1165,14 +1161,12 @@ def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
 // collectClockLinesCd's when gating. Blocks recurse (defensive; generated
 // trees wrap one statement per when node).
 def collectAssertLinesOne(e: Expr, cd: ClockDomain, isMain: Boolean): List[String] = match e {
+    // with the dedicated bbMarkerExpr marker channel, EVERY assertExpr node is
+    // a user assert — no marker discrimination left here
     case assertExpr(c, m, s) =>
-        match bbIsMarkerCond(c) {
-            case true => lnil
-            case false =>
-                match isMain {
-                    case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
-                    case false => lnil
-                }
+        match isMain {
+            case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
+            case false => lnil
         }
     case assertExprCd(c, m, s, cdc) =>
         let same = cdEq(cdc, cd);
@@ -1180,6 +1174,11 @@ def collectAssertLinesOne(e: Expr, cd: ClockDomain, isMain: Boolean): List[Strin
             case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
             case false => lnil
         }
+    // blackbox parameter marker: not an assert — skipping it here is NOT the
+    // assert arm's business (bbIsBlackBox/bbStubParams/collectInstHelp own
+    // the marker channel). Before the dedicated bbMarkerExpr variant this
+    // predicate had to special-case the literal-cond markers.
+    case bbMarkerExpr(_, _) => lnil
     case when(cond, body, elseBody) =>
         let inner = match elseBody {
             case None => collectAssertLinesOne(body, cd, isMain)
@@ -1517,18 +1516,21 @@ def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], s
                 case _ => "(" + joinPortConns(conns) + ")"
             };
             // BlackBox parameter injection (§4.3, marker channel — see §4.5-3):
-            // the INSTANCE marker the blackbox macro left immediately after this
-            // instance node carries the create-time-rendered " #(.K(v), ...)"
-            // string, so a declared blackbox becomes `Name #(.K(v), ...)` with a
-            // pure literal pick-up (no global read: plain modules and generic-less
-            // blackboxes carry no marker and keep the bare name). Values come from
-            // the declared blackbox's own generic statements, not the
-            // instantiation site.
+            // the INSTANCE marker (bbMarkerExpr(isInst=true, ...)) the blackbox
+            // macro left immediately after this instance node carries the
+            // create-time-rendered " #(.K(v), ...)" string, so a declared
+            // blackbox becomes `Name #(.K(v), ...)` with a pure literal pick-up
+            // (no global read: plain modules and generic-less blackboxes carry
+            // no marker and keep the bare name). Values come from the declared
+            // blackbox's own generic statements, not the instantiation site.
+            // USER asserts are never markers (dedicated bbMarkerExpr variant,
+            // R2 review P1 fix): a plain `assert(true.into, "sanity")` before
+            // the create can no longer be consumed here.
             match tail {
                 case cons(e2, t2) =>
                     match e2 {
-                        case assertExpr(c, m, _) =>
-                            match bbIsInstMarkerCond(c) {
+                        case bbMarkerExpr(isInst, m) =>
+                            match isInst {
                                 case true =>
                                     lcons ("  " + moduleName + m + " " + instName + " " + portStr + ";") (collectInstHelp(t2, seenInsts, seenConns))
                                 case false =>
@@ -1542,6 +1544,11 @@ def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], s
             }
         case instanceWithPorts(instName, moduleName, ports) =>
             lcons ("  " + moduleName + " " + instName + " (" + ports + ");") (collectInstHelp(tail, seenInsts, seenConns))
+        // blackbox parameter marker at walk position (e.g. the SELF marker in
+        // the blackbox def itself, or any marker not preceded by its instance):
+        // carries no connection — skip explicitly, the subSignal machinery
+        // below is assign-shaped only
+        case bbMarkerExpr(_, _) => collectInstHelp(tail, seenInsts, seenConns)
         case _ =>
             let lhs = getAssignLhsExpr(e);
             let lhs_ss = isSubSignal(lhs);

@@ -304,6 +304,13 @@ def exprKey(e: Expr): String = match e {
     case memWrite(m, a, d, en) => "mw:(" + exprKey(m) + "," + exprKey(a) + "," + exprKey(d) + "," + exprKey(en) + ")"
     case assertExpr(c, m, s) => "as:(" + exprKey(c) + "," + m + "," + chkSevKey(s) + ")"
     case assertExprCd(c, m, s, cd) => "asc:(" + exprKey(c) + "," + m + "," + chkSevKey(s) + "," + cd.clockName + "/" + cd.resetName + ")"
+    // BlackBox parameter marker (hdl-core.typort bbMarkerExpr): S = SELF
+    // (isInst=false), I = INSTANCE (isInst=true)
+    case bbMarkerExpr(isInst, p) =>
+        match isInst {
+            case true => "bbm:(I," + p + ")"
+            case false => "bbm:(S," + p + ")"
+        }
 }
 
 // ---------- module facts accumulator ----------
@@ -405,6 +412,8 @@ def scanExpr(e: Expr, acc: ModFacts): ModFacts = match e {
         scanExpr(r, a1)
     case instance(_, _) => acc
     case instanceWithPorts(_, _, _) => acc
+    // blackbox parameter marker: pure emission-channel payload, zero reads
+    case bbMarkerExpr(_, _) => acc
     case _ =>
         let nm = exprName(e);
         match str_eq(nm, "") {
@@ -494,6 +503,10 @@ def scanStmt(e: Expr, underWhen: Boolean, acc: ModFacts): ModFacts = match e {
     // HDL010-013 不受影响。
     case assertExpr(c, _, _) => scanExpr(c, acc)
     case assertExprCd(c, _, _, _) => scanExpr(c, acc)
+    // blackbox parameter marker: zero reads, zero drives, not a declaration
+    // (the dedicated bbMarkerExpr variant ends the assertExpr aliasing — a
+    // user `assert(false.into, msg)` can no longer gate the body rules)
+    case bbMarkerExpr(_, _) => acc
     case _ =>
         let d = declOf(e);
         match d {
@@ -880,32 +893,28 @@ def ruleInsts(mname: String, insts: List[InstInfo], conns: List[ConnInfo], tbl: 
 
 // ---------- entry ----------
 
-// BlackBox 判定（本文件纯谓词，P2 收口修正）：黑盒宏在 def 自身的 expr 里留下
-// SELF 标记 assertExpr(literal(zero), <参数串>, AssertError)（纯发射通道，见
-// hdl-macros 的黑盒宏头注释与 docs/hdl-blackbox-sim-design.md §4.3 偏差记录）。
-// 这里按同一结构判定，**不读任何全局**：runChecks 运行在类体检查求值上下文，
+// BlackBox 判定（本文件纯谓词，P2 收口修正；R2 评审 P1 修复改判据）：黑盒宏在
+// def 自身的 expr 里留下 SELF 标记 bbMarkerExpr(isInst=false, <参数串>)
+//（专用变体纯发射通道，见 hdl-macros 的黑盒宏头注释与
+// docs/hdl-blackbox-sim-design.md §4.5-3；旧载体
+// assertExpr(literal(zero), <参数串>, AssertError) 与用户常量 Bool 断言
+// `assert(false.into, msg)` 逐字节同构，会把普通模块误判成黑盒、整模块体被
+// stub 静默替换——专用变体终结混叠）。
+// 这里按变体判定，**不读任何全局**：runChecks 运行在类体检查求值上下文，
 // 任何可达全局 op 的 def 调用在该上下文不可归约（docs/l13-typeclass-instance-
-// nat-param-bug.md 的 lvl2ix/毒化纪律），hdl-core 的 isBlackBoxName 因此返回
-// 停滞值、match 两支都不求值 —— 五条体规则会对**所有**模块静默跳过（HDL001/
-// 002/003/010-013 全局失效，assert/legacy 既有测试回归）。
+// nat-param-bug.md 的 lvl2ix/毒化纪律），注册表查询会返回停滞值、match 两支
+// 都不求值 —— 五条体规则会对**所有**模块静默跳过（HDL001/002/003/010-013
+// 全局失效，assert/legacy 既有测试回归）。
 // NOTE: 平面元素模式（cons 内不再嵌套解构）——嵌套模式编译出悬空级别模式引用
 // （lvl2ix，实测），与 hdl-verilog 的 bbIsBlackBox 同纪律。
-def chkBbSelfMarkerCond(c: Expr): Boolean = match c {
-    case literal(v) => match v {
-        case zero => true
-        case _ => false
-    }
-    case _ => false
-}
-
 def chkBbDefIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
     case nil => false
     case cons(e, tail) =>
         match e {
-            case assertExpr(c, _, _) =>
-                match chkBbSelfMarkerCond(c) {
-                    case true => true
-                    case false => chkBbDefIsBlackBox(tail)
+            case bbMarkerExpr(isInst, _) =>
+                match isInst {
+                    case true => chkBbDefIsBlackBox(tail)
+                    case false => true
                 }
             case _ => chkBbDefIsBlackBox(tail)
         }
@@ -924,9 +933,10 @@ def runChecks(md: ModuleDef): Unit =
     // BlackBox 本体门控（docs/hdl-blackbox-sim-design.md §4.4）：黑盒无体，
     // 五条体规则会全误报（HDL003 每个输出端口都“无驱动”、HDL001/002 端口
     // 读写缺失、HDL010-013/023 驱动规则对无体模块无意义）。判定用 def 自身的
-    // SELF 标记（chkBbDefIsBlackBox，纯谓词），见上方注释：原 registry 查询
-    // （hdl-core isBlackBoxName）在检查上下文不可用。端口表注册（上方）与
-    // ruleWidthGround（HDL004——黑盒宽度退化同样要报）无条件保留；
+    // SELF 标记（chkBbDefIsBlackBox，按 bbMarkerExpr(isInst=false) 变体判定
+    // 的纯谓词），见上方注释：registry 查询在检查上下文不可归约（原 hdl-core
+    // isBlackBoxName 因此删除）。端口表注册（上方）与 ruleWidthGround
+    // （HDL004——黑盒宽度退化同样要报）无条件保留；
     // HDL020/021/022/025 规则本体零改动，父级查的就是这张端口表，黑盒实例
     // 自动覆盖。
     let isBb = chkBbDefIsBlackBox(md.expr);
