@@ -211,6 +211,7 @@ mod observation_tests {
     /// 管线与参考版同界。
     #[test]
     fn hover_global_decl_use_matches_reference() {
+        with_big_stack(|| {
         let src = "def foo = \"hello\"\ndef bar = foo\n";
         let ast = parse(src, 42).expect("parse");
         let use_off = src.rfind("foo").unwrap();
@@ -239,12 +240,14 @@ mod observation_tests {
             (rf.1.start_offset, rf.1.end_offset, rf.1.path_id),
             "def-site span"
         );
+        })
     }
 
     /// Local variable (lambda binder) use-site hover: rendered string and
     /// def_span (pointing at the binder token) agree with the reference.
     #[test]
     fn hover_local_var_use_matches_reference() {
+        with_big_stack(|| {
         let src = "enum Nat {
     zero
     succ(x: Nat)
@@ -279,6 +282,7 @@ def d0 : Nat -> Nat = n => succ n
             (rf.1.start_offset, rf.1.end_offset, rf.1.path_id),
             "local def_span matches reference"
         );
+        })
     }
 
     /// Struct field projection hover: rendered field type agrees with the
@@ -286,6 +290,7 @@ def d0 : Nat -> Nat = n => succ n
     /// Sum values carry binder spans - see wiring doc).
     #[test]
     fn hover_field_projection_matches_reference() {
+        with_big_stack(|| {
         let src = "struct P {\n    x: String\n}\ndef get(p: P): String = p.x\n";
         let ast = parse(src, 44).expect("parse");
         let use_off = src.rfind(".x").unwrap() + 1;
@@ -304,12 +309,14 @@ def d0 : Nat -> Nat = n => succ n
 
         assert_eq!(&tw.2, &rf.2, "field rendered type");
         assert_eq!(tw.2, "String", "field type is String");
+        })
     }
 
     /// Type-ahead completion on a struct receiver: the set of offered field
     /// names keyed at the receiver span agrees with the reference.
     #[test]
     fn completion_struct_fields_matches_reference() {
+        with_big_stack(|| {
         let src = "struct P {\n    x: String\n    y: String\n}\ndef get(p: P): String = p.x\n";
         let ast = parse(src, 45).expect("parse");
 
@@ -337,6 +344,7 @@ def d0 : Nat -> Nat = n => succ n
 
         assert!(!twin_set.is_empty(), "twin offered no completions");
         assert_eq!(twin_set, ref_set, "completion sets (span-keyed) agree");
+        })
     }
 
     /// Inlay hints for inferred returns / un-annotated lets: label text and
@@ -344,6 +352,7 @@ def d0 : Nat -> Nat = n => succ n
     /// and let cases).
     #[test]
     fn inlay_hints_match_reference() {
+        with_big_stack(|| {
         let src = "def g = \"hi\"\ndef id(a: String): String = a\ndef h(b: String) = b\n";
         let ast = parse(src, 46).expect("parse");
 
@@ -371,6 +380,7 @@ def d0 : Nat -> Nat = n => succ n
 
         assert!(!ref_v.is_empty(), "fixture must produce inlay hints");
         assert_eq!(twin_v, ref_v, "inlay (offset, label) sets agree");
+        })
     }
 
     /// PM constructor-pattern hover: `case leaf` / `case node(x)` tokens must
@@ -379,6 +389,7 @@ def d0 : Nat -> Nat = n => succ n
     /// span at the enum declaration.
     #[test]
     fn hover_pm_constructor_patterns_match_reference() {
+        with_big_stack(|| {
         let src = "enum Tree {\n    leaf\n    node(x: Tree)\n}\ndef depth(t: Tree): Tree =\n    match t {\n        case leaf => leaf\n        case node(x) => x\n    }\n";
         let ast = parse(src, 48).expect("parse");
 
@@ -454,6 +465,7 @@ def d0 : Nat -> Nat = n => succ n
             "`case node` token must also hover as its Pi signature; got {:?}",
             node_entries
         );
+        })
     }
 
     /// Impl-header hover pair: `impl Trait for Ty` — the trait-name token
@@ -461,6 +473,7 @@ def d0 : Nat -> Nat = n => succ n
     /// resolves to the trait method's declaration span.
     #[test]
     fn hover_impl_header_matches_reference() {
+        with_big_stack(|| {
         let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\ntrait Pick[T] {\n    def pick(t: T): T\n}\nimpl Pick[Nat] for Nat {\n    def pick(t: Nat): Nat = t\n}\n";
         let ast = parse(src, 49).expect("parse");
 
@@ -502,6 +515,7 @@ def d0 : Nat -> Nat = n => succ n
             assert!(in_ref, "reference lacks {} hover entry", name);
             assert!(in_twin, "twin lacks {} hover entry", name);
         }
+        })
     }
 
     /// Trait-dispatched member access (`x.pick` resolved through the trait
@@ -509,6 +523,7 @@ def d0 : Nat -> Nat = n => succ n
     /// must hover with the trait method's declaration span on both engines.
     #[test]
     fn hover_trait_dispatched_method_matches_reference() {
+        with_big_stack(|| {
         let src = "enum Nat {\n    zero\n    succ(x: Nat)\n}\ntrait Pick {\n    def pick: Nat\n}\nimpl Pick for Nat {\n    def pick: Nat = zero\n}\ndef use(n: Nat): Nat = n.pick\n";
         let ast = parse(src, 50).expect("parse");
 
@@ -540,6 +555,7 @@ def d0 : Nat -> Nat = n => succ n
         let in_twin = twin_v.iter().any(|x| x.0 == use_pick as u32 && x.1 == (use_pick + 4) as u32);
         assert!(in_ref, "reference lacks trait-dispatch method hover");
         assert!(in_twin, "twin lacks trait-dispatch method hover");
+        })
     }
 
     /// Whole-table parity on a package + qualified-access + bare-name
@@ -549,6 +565,7 @@ def d0 : Nat -> Nat = n => succ n
     /// practice sets are equal — assert full equality).
     #[test]
     fn hover_table_full_matches_reference_on_qualified_fixture() {
+        with_big_stack(|| {
         let src = "package mylib\n\nenum Tree {\n    leaf\n    node(x: Tree)\n}\n\ndef t: Tree = leaf\n\ndef u: Tree = Tree.node(t)\n";
         let ast = parse(src, 47).expect("parse");
 
@@ -594,6 +611,7 @@ def d0 : Nat -> Nat = n => succ n
             "twin has entries absent from reference (should only duplicate): {:?}",
             foreign
         );
+        })
     }
 
     // ── 阶段 2：prelude 装载口径的双引擎互检 ──
@@ -604,6 +622,23 @@ def d0 : Nat -> Nat = n => succ n
     // 阶段 2 的验收面。
 
     use crate::L13_namespace::{PreludeParse, PRELUDE_CORE, PRELUDE_HDL, PRELUDE_SHOW};
+
+    /// HDL 全量 prelude 增大后，孪生走图（observe_user / priming 后的
+    /// 模块体 exprLet 展开链）递归深度超出测试线程默认栈——在 512MB 栈的
+    /// 独立线程里跑测试体。仅测试侧改动；引擎/LSP 线程不受影响。
+    /// 深度来源与遗留问题记录见
+    /// docs/l13-struct-decl-dependent-field-divergence.md 末节。
+    fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        match std::thread::Builder::new()
+            .stack_size(512 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn big-stack test thread")
+            .join()
+        {
+            Ok(v) => v,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
 
     /// 核心 prelude 文件序列（含 show——参考版加载器恒排在最后）。
     fn core_files() -> Vec<(&'static str, &'static str)> {
@@ -656,6 +691,7 @@ def d0 : Nat -> Nat = n => succ n
     /// 在某 HDL 例占 65% 采样）。此例锁死不再挂。
     #[test]
     fn expr_let_in_module_body_terminates() {
+        with_big_stack(|| {
         let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
         assert_eq!(pre.failed, None);
         let cases = [
@@ -672,6 +708,7 @@ def d0 : Nat -> Nat = n => succ n
             ).expect("parse");
             t.observe_user(&pre, &decls).expect("observe_user must terminate");
         }
+        })
     }
 
     /// 手动性能测量：把孪生 kick 拆成「prelude 重放」与「用户文件增量」，
@@ -715,6 +752,7 @@ def d0 : Nat -> Nat = n => succ n
     /// 参考域全局表交给孪生导出的前提。
     #[test]
     fn twin_exported_decls_render_sum_members_like_reference() {
+        with_big_stack(|| {
         let src = r#"enum Tree {
     leaf
     node(l: Tree, r: Tree)
@@ -757,6 +795,7 @@ struct P {
             assert_eq!(ts, rs, "sum rendering mismatch for {key}");
             assert!(ts.is_some(), "expected member list for {key}");
         }
+        })
     }
 
     /// 手动测量：常驻 bump 的内存占用（内存/CPU 权衡决策用）。
@@ -801,6 +840,7 @@ struct P {
     /// ERROR 诊断一致（错误 span 保真 + 逐 decl 不早退）。
     #[test]
     fn twin_user_errors_match_reference_diagnostics() {
+        with_big_stack(|| {
         let corpus = [
             // 单错：unify
             "def foo: Nat = true\n",
@@ -852,6 +892,7 @@ struct P {
             refs.sort();
             assert_eq!(twin, refs, "diagnostic mismatch for:\n{src}");
         }
+        })
     }
 
     /// **18-utils 分叉探针**（2026-09-11 调查的继任，2026-09-14 重启）。
@@ -939,6 +980,7 @@ struct P {
     /// 的状态泄漏（meta/实例/全局/别名）。
     #[test]
     fn resident_checkpoint_matches_fresh_replay_across_kicks() {
+        with_big_stack(|| {
         let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
         assert_eq!(pre.failed, None);
 
@@ -985,6 +1027,7 @@ struct P {
                 "resident kick {i} hover table diverged from fresh replay for:\n{src}",
             );
         }
+        })
     }
 
     /// **压实等价性验收（2026-09-14 编辑卡顿修复）**：常驻检查点被
@@ -994,6 +1037,7 @@ struct P {
     /// 炸出来——本用例把预算调到 0，强制每个 kick 起点压实一次。
     #[test]
     fn resident_compaction_matches_fresh_replay_across_kicks() {
+        with_big_stack(|| {
         let pre = crate::L13_namespace::parse_prelude_files(&hdl_files());
         assert_eq!(pre.failed, None);
         let src = include_str!("../../../examples/hdl/09-hierarchy.typort");
@@ -1046,6 +1090,7 @@ struct P {
         }
         // Restore the default budget so a later test on this thread is unaffected.
         set_resident_bump_budget(super::RESIDENT_BUMP_LIMIT);
+        })
     }
 
     /// 双引擎各跑一遍「prelude 装载 + 用户源」：
@@ -1176,6 +1221,7 @@ struct P {
     /// 顺带验证 prelude 短名别名 `Nat.zero`→`zero`）。
     #[test]
     fn prelude_tuple_mk_element_hover_matches_reference() {
+        with_big_stack(|| {
         let src = "def pair : Tuple2[Boolean, Boolean] = Tuple2.mk(true, false)\n\
                    def nz : Tuple2[Boolean, Nat] = Tuple2.mk(false, zero)\n";
         let (t_out, r_out, t, infer) = run_prelude_both(&core_files(), false, src, 100);
@@ -1210,6 +1256,7 @@ struct P {
             "`zero` element token must hover as Nat (alias resolution); got {:?}",
             at_zero
         );
+        })
     }
 
     /// prelude 装载口径下的观察面全表互检（hover/completion/inlay 三张，
@@ -1223,6 +1270,7 @@ struct P {
     ///   值层不持字段 binder span，接线文档"待评估补"项）。
     #[test]
     fn prelude_full_observation_tables_match_reference() {
+        with_big_stack(|| {
         let src = "def len(o: Option[Nat]): Nat =\n\
                       match o {\n\
                           case Some(n) => n\n\
@@ -1294,6 +1342,7 @@ struct P {
             "prelude-fixture observation tables diverge:\n{}",
             report.join("\n")
         );
+        })
     }
 
     /// 真实 HDL 负载端到端：全量 prelude（含 HDL）+ examples/hdl/
@@ -1303,9 +1352,11 @@ struct P {
     /// （nat_to_dec/HdlLoopIdx 口径敏感）。
     #[test]
     fn hdl_example_parity_with_full_prelude() {
+        with_big_stack(|| {
         let src = include_str!("../../../examples/hdl/09-hierarchy.typort");
         let (t_out, r_out, _t, _infer) = run_prelude_both(&hdl_files(), true, src, 102);
         assert_eq!(t_out, r_out, "HDL example output parity (vconnT path)");
         assert!(t_out.contains("=== 09"), "example must produce its println output");
+        })
     }
 }

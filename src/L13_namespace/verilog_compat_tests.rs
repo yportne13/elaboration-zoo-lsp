@@ -16,6 +16,22 @@
 
 use super::*;
 
+// HDL prelude 增大（hdl-fsm/hdl-enum/blackbox 等入库）后，verilog 兼容模块
+// 的声明/展开链加深，部分用例在默认测试线程栈上压线溢出——与 observe.rs
+// 的 with_big_stack 同款对策（仅测试侧，见
+// docs/l13-struct-decl-dependent-field-divergence.md 末节）。
+fn with_big_stack_vc<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    match std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn big-stack test thread")
+        .join()
+    {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e),
+    }
+}
+
 fn check_ok(input: &str) -> String {
     match run_with_prelude(input) {
         Ok(o) => o,
@@ -242,6 +258,7 @@ println (moduleTreeVL(m.create.tree))
 
 #[test]
 fn m2_case_comb_default() {
+    with_big_stack_vc(|| {
     // case/default → 互斥 when 链（标签经 CaseEq；default 恒真）。
     let out = check_ok(r#"
 module m(input [1:0] a, output reg [7:0] y);
@@ -258,6 +275,7 @@ println (moduleTreeVL(m.create.tree))
     assert!(out.contains("if (a == 2'd0)"), "case label 0:\n{out}");
     assert!(out.contains("!(a == 2'd0)"), "case negation:\n{out}");
     assert!(out.contains("y = 8'd255;"), "default body:\n{out}");
+    });
 }
 
 #[test]

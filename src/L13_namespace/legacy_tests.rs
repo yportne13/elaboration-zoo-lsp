@@ -1433,12 +1433,29 @@ module badConn
     }
 }
 
+// HDL prelude 增大（hdl-fsm/hdl-enum/blackbox 等入库）后，逐示例的声明
+// 检查链加深，27 例连跑在默认测试线程栈上压线溢出——与本仓库
+// observe.rs 的 with_big_stack 同款对策（仅测试侧，见
+// docs/l13-struct-decl-dependent-field-divergence.md 末节）。
+fn with_big_stack_legacy<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    match std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn big-stack test thread")
+        .join()
+    {
+        Ok(v) => v,
+        Err(e) => std::panic::resume_unwind(e),
+    }
+}
+
 // ============================================================
 // examples/hdl/ — 每个文件演示一组 HDL 特性，同时作为回归测试。
 // 新增示例文件时，在 EXAMPLES 里登记文件与关键输出断言。
 // ============================================================
 #[test]
 fn test_examples_hdl_dir() {
+    with_big_stack_legacy(|| {
     // (文件名, 文件内容, 关键输出断言)
     let examples: &[(&str, &str, &[&str])] = &[
         ("01-basics.typort", include_str!("../../examples/hdl/01-basics.typort"), &[
@@ -1713,6 +1730,16 @@ fn test_examples_hdl_dir() {
             "always @(posedge clk2) begin",             // 额外时钟域断言块
             "$display(\"TYPORT_ASSERT_ERROR %0t %m: cd2 overflow\", $time);",
             "input wire clk2",                          // 额外域时钟端口自动合成
+        ]),
+        ("27-blackbox.typort", include_str!("../../examples/hdl/27-blackbox.typort"), &[
+            "`ifndef TYPORT_BB_SyncRam",                // 黑盒 stub 的 ifndef 守卫
+            "module SyncRam #(parameter WIDTH = 8, parameter DEPTH = 64) (", // parameter 头
+            "input wire [5:0] addr",                    // log2Up depth 宽度端口
+            "output wire [7:0] dout",                   // 输出端口方向
+            "SyncRam #(.WIDTH(8), .DEPTH(64)) ram (.clk(clk), .we(we), .addr(addr), .din(din), .dout(dout));", // 实例化参数注入
+            "inverter uInv (.a(a), .y(inv));",          // 普通 module 实例（无参数）
+            "assign y = !a;",                           // 普通子模块体照常发射
+            "`endif",                                   // 守卫闭合
         ]),
     ];
 
