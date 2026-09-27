@@ -32,6 +32,153 @@ def assertSevCd(cond: Bool, msg: String, sev: AssertSeverity, cd: ClockDomain): 
 def assertCd(cond: Bool, msg: String, cd: ClockDomain): Unit = assertSevCd(cond, msg, AssertError, cd)
 
 
+// ---------- BlackBox 宏（docs/hdl-blackbox-sim-design.md §4，P2） ----------
+// 语法（端口分组 = module 宏的连续 run 机制；分组间不允许空行/交错）：
+//   blackbox SyncRam[depth: Nat, w: Nat]
+//       generic WIDTH = w
+//       input  clk  = Bool
+//       input  addr = UInt[log2Up depth]
+//       output dout = UInt[w]
+//   {
+//   }
+// 展开镜像 module 宏 plain 臂的声明链骨架（同一端口工厂 createPortExpr /
+// createBoolPortExpr、同一 ModuleTree push/restore 三明治、同一
+// ModuleRegistry 登记、同一 checkModuleTree 自检、同一 bn/subSignal 层次
+// 句柄与 def tree 形态），差异仅两处：
+//   1. 黑盒无体——体区必须是空 `{}`（宏字面匹配，非 Expr 表），黑盒 def 的
+//      exprs 只有端口声明；
+//   2. 黑盒专属副作用：
+//      a. prologue create_global("BlackBoxCtx", ...) 每次求值从空开始
+//         （WhenStack/HdlLoopIdx 的 per-create 重置纪律——类体在检查期会被
+//         求值多次）；`generic K = v` 逐条 bbGenericAddNat（v 为 elaboration
+//         期 Nat 表达式；String 泛型 v1 不经宏暴露，bbGenericAddStr 供 def
+//         直调）；
+//      b. checkModuleTree 之前 blackboxCtxTake() 读走并清空，bbRegisterLast
+//         注册进 "BlackBoxRegistry"（设计记录用；该注册表查询在类体检查求值
+//         上下文不可归约，故 hdl-check 的门控**不读它**——改用同一枚 SELF 标记
+//         上的纯谓词 chkBbDefIsBlackBox(md.expr)，见 hdl-check.typort 与设计
+//         文档 §4.5-4）；
+//      c. 两枚**参数标记**（纯发射通道）：createSignalExpr 追加
+//         assertExpr(literal(zero|succ(zero)), <参数串>, AssertError)——一枚进黑盒
+//         自身 def（msg = "parameter K = v, ..." stub 头参数串），一枚在
+//         restore 之后、mkInstanceIfParent 之前追加进父级 def（msg =
+//         " #(.K(v), ...)" 实例参数串，且 prepend 序使父级 exprs 里它紧跟
+//         instance 节点）。hdl-verilog 的发射链**零全局读**（实测任何可达
+//         全局 op 的 def 被 generic 上下文调用即触发 lvl2ix drain panic，
+//         docs/l13-typeclass-instance-nat-param-bug.md），参数串在 create
+//         期（参数 ground）渲染为纯字符串，发射端按字面匹配拾取。
+// 注册语义偏差（相对设计 §4.3 bbRegister 的 first-wins）：**last-wins**。
+// 类体在两阶段检查期被求值 ~3 次、create 再 replay 一次，检查期求值时类
+// 参数是 neutral——first-wins 会定格检查轮的 neutral 值；last-wins 让最后
+// 一次求值（= create，参数 ground）覆盖。同一黑盒多种参数化的 create 碰撞
+// 仍取最后一次（已知限制，setDefinitionName 列 P3）。
+// 泛型值 v1 仅支持 Nat（宏无法按类型分派 raw 值——宏系统无 literal 片段）。
+// 端口分组：generic 连续 run → Bool 端口连续 run → 类型化端口连续 run →
+// 再一段 Bool 端口连续 run（覆盖 Bool-先/类型-先两种顺序；typed-Bool-typed
+// 交错不支持，与 module 宏"连续 run"约束同类）。`output reg` 端口与显式
+// 时钟域参数不支持（设计 §4.3：黑盒 cd 恒 defaultClockDomain、不合成
+// clk/reset）。
+def bbDropEntryHelp(es: List[BlackBoxEntry], name: String): List[BlackBoxEntry] = match es {
+    case lnil => lnil
+    case lcons(e, t) => match str_eq(e.name, name) {
+        case true => bbDropEntryHelp(t, name)
+        case false => lcons (e) (bbDropEntryHelp(t, name))
+    }
+}
+
+// 地面化种子（lvl2ix 纪律）：全局 seed 里的多态 lnil 会在类体求值上下文
+// （含类参 rigid）中使后续 List match 停滞——先用带类型注记的 let 解出
+// 具体元素类型，再构造，全局里永远只存 ground 值。
+def bbCtxFresh: BlackBoxCtx =
+    let empty: List[BbGeneric] = lnil;
+    BlackBoxCtx.mk(empty)
+
+def bbRegistryFresh: BlackBoxRegistry =
+    let empty: List[BlackBoxEntry] = lnil;
+    BlackBoxRegistry.mk(empty)
+
+// last-wins 注册（见上）：同名项先摘除再前插，检查轮被 create 轮覆盖。
+// 仅在 blackbox 宏展开体内（用户文件上下文）调用——prelude 加载期不会执行。
+def bbRegisterLast(name: String, info: BlackBoxInfo): Unit =
+    let _ = change_mutable_default("BlackBoxRegistry", x => x, bbRegistryFresh);
+    let _ = change_mutable("BlackBoxRegistry", x => BlackBoxRegistry.mk(lcons (BlackBoxEntry.mk(name, info)) (bbDropEntryHelp(x.entries, name))));
+    unit
+
+// 读走并清空：清空时写入 ground 种子（不用 hdl-core 的 blackboxCtxTake——
+// 其清空分支写入多态 lnil，同样会毒化 drain）。
+def bbCtxTakeGround: List[BbGeneric] =
+    let gens = (get_global("BlackBoxCtx")).gens;
+    let _ = create_global("BlackBoxCtx", bbCtxFresh);
+    gens
+
+// 参数串渲染（create 期、参数 ground 时调用；从 hdl-verilog 移来——发射链
+// 零全局读纪律下，渲染必须在 create 期完成，hdl-verilog 只做字面拾取）。
+def bbGenValStr(v: BbGenVal): String = match v {
+    case bbGenNat(n) => nat_to_dec(n)
+    case bbGenStr(s) => s
+}
+
+// stub 头参数串："parameter WIDTH = 8, parameter DEPTH = 64"。
+def bbParamsDeclStr(gs: List[BbGeneric]): String = match list_reverse(gs) {
+    case lnil => ""
+    case lcons(g, lnil) => "parameter " + g.key + " = " + bbGenValStr(g.val)
+    case lcons(g, tail) => "parameter " + g.key + " = " + bbGenValStr(g.val) + ", " + bbParamsDeclStr(tail)
+}
+
+// 实例参数项：".WIDTH(8), .DEPTH(64)"。
+def bbInstItemsStr(gs: List[BbGeneric]): String = match list_reverse(gs) {
+    case lnil => ""
+    case lcons(g, lnil) => "." + g.key + "(" + bbGenValStr(g.val) + ")"
+    case lcons(g, tail) => "." + g.key + "(" + bbGenValStr(g.val) + "), " + bbInstItemsStr(tail)
+}
+
+// 实例参数串：" #(.WIDTH(8), .DEPTH(64))"；无泛型黑盒为 ""。
+def bbInstParamsStr(gs: List[BbGeneric]): String = match gs {
+    case lnil => ""
+    case _ => " #(" + bbInstItemsStr(gs) + ")"
+}
+
+// 黑盒声明宏：展开为与 module 宏同构的 class 声明链（骨架照抄 plain 臂）。
+// 每个脚手架绑定都是 `let _ = ...`（class 体里折叠进同一个 `_` 字段）；
+// 端口先以 Some(name) 句柄声明，restore 后以 subSignal 句柄覆盖，父级
+// `u.port := sig` 层次连接免费复用。
+#[macro_export]
+macro_rules blackbox {
+    ($name: ident $( $args: params )* $( generic $gk: ident = $gv: raw )* $( $db: ident $pb: ident = Bool )* $( $d: ident $p: ident = $t: ident [$w: raw] )* $( $db2: ident $pb2: ident = Bool )* {}) => {
+        class $name $({$args})* impl Module {
+            let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
+            let _ = create_global("WhenStack", whenStackEmpty)
+            // for 循环索引栈每次运行从空开始（早停的检查期 eval 会留下未弹出的帧）
+            let _ = create_global("HdlLoopIdx", hdlLoopIdxEmpty)
+            // BlackBoxCtx 每次求值从空开始：generic 语句逐条落入，随后一次性读走
+            let _ = create_global("BlackBoxCtx", bbCtxFresh)
+            let _prev: ModuleTree = get_global("ModuleTree")
+            let _ = change_mutable("ModuleTree", x => ModuleTree.mk(0 + 1, ModuleDef.mk(stringify $name, defaultClockDomain, 0, nil) :: nil))
+            $( let _ = bbGenericAddNat(stringify $gk, $gv); )*
+            $( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
+            $( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
+            $( let $pb2: Bool = Bool.mk(Some(stringify $pb2), createBoolPortExpr(stringify $db2)); )*
+            // 登记（设计记录；检查侧门控见 hdl-check 的纯标记谓词）+
+            // 自身 stub 参数标记（hdl-verilog 纯发射读）
+            let __bbgens: List[BbGeneric] = bbCtxTakeGround
+            let _ = bbRegisterLast(stringify $name, BlackBoxInfo.mk(__bbgens))
+            let _ = createSignalExpr("", assertExpr(literal(zero), bbParamsDeclStr(__bbgens), AssertError))
+            let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
+            let _ = create_global("ModuleTree", _prev)
+            // 实例参数标记：必须先于 mkInstanceIfParent 追加——exprs 为 prepend
+            // 序（后写在前），这样父级 exprs 走序里 marker 紧跟其 instance 节点，
+            // collectInstHelp 原地拾取。顶层 create 无父级，标记落空树无害。
+            let _ = createSignalExpr("", assertExpr(literal(succ(zero)), bbInstParamsStr(__bbgens), AssertError))
+            let _ = mkInstanceIfParent(bn.name, stringify $name)
+            $( let $pb: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb)); )*
+            $( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
+            $( let $pb2: Bool = Bool.mk(None, subSignal(bn.name, stringify $pb2)); )*
+            // tree reads the create-time `_res` field (same as the module macro).
+            def tree: ModuleTree = this._res
+        }
+    };
+}
+
 // Standalone when macro: expands at raw-expression positions where the first
 // token is a macro name (p_raw dispatch) — unbraced def bodies
 // (`def f(): Unit = when ...`), plain match case arms

@@ -222,6 +222,7 @@ endmodule
 ```
 
   参数值来自**注册的黑盒 def**（first-registration-wins 的既有语义），非实例点求值——与 ModuleRegistry 既有碰撞限制一致（hdl-core.typort:629 注释）：同一黑盒两种参数化（`create[64,8]` 与 `create[32,8]`）碰撞为同一 module 名，**记为已知限制**，workaround = 按参数化各声明一个黑盒（或二期补 setDefinitionName：stub 已有该方法名占位，hdl-bus.typort:201）。
+  **落地偏差**：参数串不经注册表查询，改为 create 期渲染 + 标记节点拾取（last-wins 注册），见 §4.5-3。
 - `instNamesOfDef`（:1359）/designVisit（:1378）不区分黑盒——黑盒 def 进 design 闭包，designVL 闭合发射 stub；designManifestVL（:1538）的端口/实例 JSON 自动含黑盒（instJsonSingle :1461 不带参数值，仿真工具不需要）。
 - **与 instanceWithPorts 的关系：并存**。instanceWithPorts 保持手工逃逸口（外部无 typort 声明的模块 + 原始端口串，HDL024 警告不变）；声明过黑盒的实例走 instance 变体（可查表、可自检、自动参数）。不做 `instanceWithParams` 新变体——"为外部带参模块声明一个 typort 黑盒"即覆盖该需求（黑盒声明本身就是端口/参数表）。
 
@@ -236,7 +237,24 @@ let isBb = match md.bb { case None => false; case Some(_) => true };
 // portTableAdd 与 ruleWidthGround（HDL004）无条件保留——黑盒宽度退化同样要报
 ```
 
+**落地偏差**：ModuleDef 无 bb 字段（§4.5-1），判定改为 def expr 上的纯标记谓词 `chkBbDefIsBlackBox`——注册表查询在检查上下文不可归约，会把五条体规则对所有模块一起静默跳过（§4.5-4）。
+
 - HDL024 不触发（黑盒实例不走 instanceWithPorts）；HDL022/020/021/025 规则函数本体零改动。
+
+### 4.5 P2 实现偏差记录（收口 2026-09-27）
+
+§4.1-§4.4 是设计草图；落地形态以下面为准（宏头注释与代码注释同源）。
+
+1. **数据模型改平行注册表（相对 §4.2）**：ModuleDef 不加 `bb: Option[BlackBoxInfo]` 字段（7 处 mk 调用点有 3 处在受限的 module 宏臂内），改用可变全局 `"BlackBoxRegistry"`（hdl-core.typort:690-808）+ `"BlackBoxCtx"`（CompatCD 模式）。因此 runChecks 不能按 `md.bb` 判定黑盒。
+2. **注册语义 last-wins（相对 §4.3 的 first-wins）**：类体在两阶段检查期被求值多次、create 再求值一次；检查轮里类参是 neutral，first-wins 会定格 neutral 值。宏用 `bbRegisterLast`（同名先摘除再前插）让最后一次求值（= create，参数已 ground）覆盖。同一黑盒多种参数化的 create 仍碰撞为同一 module 名（已知限制，workaround = 每种参数化各声明一个黑盒）。
+3. **参数通道 = 标记节点（marker channel），发射链零全局读**：实测任何"可达全局 op"的 def 被泛型（`[n: Nat]`）上下文或类体检查求值调用，都会污染 mutable_map 收尾 drain（lvl2ix panic），只读的 `get_global_default` 也不例外（docs/l13-typeclass-instance-nat-param-bug.md）。因此参数串在 **create 期**（参数 ground）由黑盒宏渲染成纯字符串，作为标记节点 `assertExpr(literal(zero|succ(zero)), <参数串>, AssertError)` 携带：SELF 标记（cond `zero`）留在黑盒 def 自身（stub 头参数串），INSTANCE 标记（cond `succ(zero)`）在 restore 后、`mkInstanceIfParent` 之前追加进父级 def（exprs 为 prepend 序 → 走序里紧跟其 instance 节点）。hdl-verilog 的 `bbIsBlackBox`/`bbStubParams`/collectInstHelp 全部按**纯结构字面**拾取，不读任何全局；`"BlackBoxRegistry"` 由此只剩设计记录用途（检查侧门控也已改用纯标记，见 4）。
+4. **自检门控改用纯标记谓词（本批收口修正，hdl-check.typort）**：原实现用 hdl-core 的 `isBlackBoxName`（`get_global_default("BlackBoxRegistry", ...)`）判黑盒。该查询在 runChecks 所处的**类体检查求值上下文**不可归约（与 3 同根因）——`match isBb` 两支都不求值，五条体规则于是对**所有**模块静默跳过：HDL001/002/003/010-013 全局失效，`hdl_assert_tests::assert_is_not_a_drive`、`legacy_tests::test_hdl_check_out_undriven`、`tests/hdl_check_locations.rs` 等既有绿测试回归（实测复现，HDL020/021/022/025 因走无条件规则而不受影响）。现改为 hdl-check 内纯谓词 `chkBbSelfMarkerCond`/`chkBbDefIsBlackBox(md.expr)`（与 hdl-verilog 的 bbIsBlackBox 同构；平面 cons 元素模式纪律，嵌套解构会编译出悬空级别引用）。注册表全局仍由宏维护，但检查侧不再读它。
+5. **测试引擎的 designVL 限制（既有，非本批引入）**：`run_with_prelude` 下**任何**多模块 `designVL` 闭包触发既有 lvl2ix quote 限制（已用纯双 module 设计复现；与黑盒无关；P1 批次在 examples/hdl/26-assert.typort 记录了同款限制）。故 `examples/hdl/27-blackbox.typort` 与 hdl_blackbox_tests 改用逐 def `moduleTreeVL`（单模块产码与 designVL 逐字节一致；黑盒 stub 本身就是独立 def，实例行在父模块文本内）。**CLI/emit 后端（生产路径）不受影响**：`typort emit examples/hdl/27-blackbox.typort --top 'ramWrap[64,8]'` 实测输出 §4.3 的完整闭包（stub + 带参实例 + 普通子模块）。
+6. **example 27 的两处形状修正**：普通子模块 `inverter` 的端口声明在宏头（`module inverter input a = Bool ... { body }`）——module 宏体内 `input x = Bool` 是模块内信号、没有可连接的 `u.x` 句柄，`u.x := sig` 会退化成普通 assign 并报 HDL022；`ramWrap` 增 `input a = Bool` 作为 `uInv.a` 的激励端口。
+7. **单一定义纪律**：参数串渲染族（`bbGenValStr`/`bbParamsDeclStr`/`bbInstItemsStr`/`bbInstParamsStr`）只在 hdl-macros.typort 定义（create 期使用；hdl-macros 先于 hdl-verilog 加载），hdl-verilog 不再重复定义（否则 prelude 报 `redefine bbGenValStr`），也不再有读注册表的渲染变体。
+8. 宏头注释另记：泛型值 v1 仅 Nat；端口分组按 module 宏的连续 run（generic → Bool → 类型化 → Bool；typed-Bool-typed 交错不支持）；`output reg` 端口与显式时钟域参数不支持；黑盒 cd 恒 defaultClockDomain、不合成 clk/reset。
+
+**P2 收口验证（2026-09-27）**：hdl_blackbox_tests 12/12；hdl_assert_tests 8/8；hdl_stream_fix_tests 11/11；test_examples_hdl_dir（含 27-blackbox 8 断言）通过；hdl_enum_tests 17/17；tests/hdl_check_locations.rs 2/2；tests/emit_tests.rs 10/10；全量 lib 套件 815 passed / 13 failed / 5 ignored，13 个失败全部在 hdl-fsm 域（9× hdl_fsm_tests + 4× bump_spine_iter observe，后者 priming hdl-fsm.typort 的 `topIdx`/`FsmCtxStack` 声明时 "not a universe"），与本批无关。
 
 ## 5. 仿真集成路线
 

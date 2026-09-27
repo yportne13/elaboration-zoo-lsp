@@ -677,6 +677,136 @@ def registerModuleTree(t: ModuleTree): Unit =
             unit
     }
 
+// ---------- BlackBox registry (docs/hdl-blackbox-sim-design.md §4) ----------
+// A vendor blackbox is declared with the `blackbox` macro (hdl-macros.typort):
+//   blackbox SyncRam[depth: Nat, w: Nat]
+//       generic WIDTH = w
+//       input clk = Bool
+//       output dout = UInt[w]
+//   { }
+// The expansion is the module macro's plain arm (same port factories, same
+// ModuleTree sandwich, same ModuleRegistry/self-check registration) plus two
+// blackbox-only side effects:
+//   1. each `generic K = v` line appends (K, v) to the mutable global
+//      "BlackBoxCtx" (CompatCD pattern: prologue reset, record-time read);
+//   2. before checkModuleTree runs, bbRegister upserts (name -> generics)
+//      into the mutable global "BlackBoxRegistry" so that
+//      - hdl-check's runChecks can gate the body rules (a blackbox has no
+//        body: HDL001/002/003/010-013/023 would all be false positives),
+//      - hdl-verilog can emit the `ifndef-guarded empty stub and inject
+//        `#(.K(v))` at instantiation sites.
+//
+// DEVIATION from §4.2 (fallback sanctioned by the design/task): ModuleDef does
+// NOT carry a `bb: Option[BlackBoxInfo]` field. That plan requires updating all
+// 7 ModuleDef.mk call sites, three of which sit inside the `module` macro arms
+// of hdl-macros.typort — a region whose ownership is restricted in this batch
+// (parallel module-macro prologue workstream). With the parallel registry the
+// ModuleDef arity stays untouched and every consumer reads the registry via the
+// same ensure-exists + get_global pattern designVL already uses for
+// "ModuleRegistry". Semantics mirror ModuleRegistry: FIRST registration wins;
+// two parameterizations of one blackbox name collide on that entry (known
+// limitation, same as myAdder[8]/myAdder[16]; workaround = one declaration per
+// parameterization, setDefinitionName remains future work).
+
+enum BbGenVal {
+    bbGenNat(v: Nat)
+    bbGenStr(s: String)
+}
+
+struct BbGeneric {
+    key: String
+    val: BbGenVal
+}
+
+struct BlackBoxInfo {
+    generics: List[BbGeneric]
+}
+
+struct BlackBoxEntry {
+    name: String
+    info: BlackBoxInfo
+}
+
+struct BlackBoxRegistry {
+    entries: List[BlackBoxEntry]
+}
+
+// Per-create scratch cell for the generic statements of one blackbox body
+// (the macro resets it in its prologue, CompatCD-style).
+struct BlackBoxCtx {
+    gens: List[BbGeneric]
+}
+
+def bbGenKeyIn(gs: List[BbGeneric], key: String): Boolean = match gs {
+    case lnil => false
+    case lcons(g, t) => match str_eq(g.key, key) {
+        case true => true
+        case false => bbGenKeyIn(t, key)
+    }
+}
+
+def bbCtxAdd(key: String, v: BbGenVal): Unit =
+    let _ = change_mutable_default("BlackBoxCtx", x => x, BlackBoxCtx.mk(lnil));
+    let _ = change_mutable("BlackBoxCtx", x => match bbGenKeyIn(x.gens, key) {
+        case true => x
+        case false => BlackBoxCtx.mk(lcons (BbGeneric.mk(key, v)) (x.gens))
+    });
+    unit
+
+def bbGenericAddNat(key: String, v: Nat): Unit = bbCtxAdd(key, bbGenNat(v))
+
+def bbGenericAddStr(key: String, s: String): Unit = bbCtxAdd(key, bbGenStr(s))
+
+// Read-and-clear the per-create generic list (blackbox macro, at record time).
+def blackboxCtxTake(): List[BbGeneric] =
+    let _ = change_mutable_default("BlackBoxCtx", x => x, BlackBoxCtx.mk(lnil));
+    let gens = (get_global("BlackBoxCtx")).gens;
+    let _ = change_mutable("BlackBoxCtx", x => BlackBoxCtx.mk(lnil));
+    gens
+
+def bbEntryIn(es: List[BlackBoxEntry], name: String): Boolean = match es {
+    case lnil => false
+    case lcons(e, t) => match str_eq(e.name, name) {
+        case true => true
+        case false => bbEntryIn(t, name)
+    }
+}
+
+// Register a declared blackbox (called by the blackbox macro right before
+// checkModuleTree, so runChecks sees the entry while gating the body rules).
+// First registration wins, exactly like registerModuleTree.
+def bbRegister(name: String, info: BlackBoxInfo): Unit =
+    let _ = change_mutable_default("BlackBoxRegistry", x => x, BlackBoxRegistry.mk(lnil));
+    let _ = change_mutable("BlackBoxRegistry", x => match bbEntryIn(x.entries, name) {
+        case true => x
+        case false => BlackBoxRegistry.mk(lcons (BlackBoxEntry.mk(name, info)) (x.entries))
+    });
+    unit
+
+// Registry queries are READ-ONLY: they go through get_global_default (the
+// pickAssign precedent) so a query never creates the global, and they never
+// match on Option. Both constraints come from the prelude LOADER: the
+// declaration-time evaluation of a def body here runs once under the loading
+// context, and (a) change_mutable_default would seed the global with a lnil
+// whose type was solved in that context — the per-file mutable_map drain then
+// quotes the dangling level and panics (lvl2ix, see
+// docs/l13-typeclass-instance-nat-param-bug.md) — while (b) an Option match in
+// a def body caches a stuck scrutinee with the same effect. bbRegister is safe:
+// it only runs inside a blackbox create (user context, ground Nats only).
+def isBlackBoxName(name: String): Boolean =
+    bbEntryIn((get_global_default("BlackBoxRegistry", BlackBoxRegistry.mk(lnil))).entries, name)
+
+def bbGensHelp(es: List[BlackBoxEntry], name: String): List[BbGeneric] = match es {
+    case lnil => lnil
+    case lcons(e, t) => match str_eq(e.name, name) {
+        case true => e.info.generics
+        case false => bbGensHelp(t, name)
+    }
+}
+
+def bbGenericsOfName(name: String): List[BbGeneric] =
+    bbGensHelp((get_global_default("BlackBoxRegistry", BlackBoxRegistry.mk(lnil))).entries, name)
+
 // ---------- Verilog-compat: combinational-always context ----------
 // `always @(*)` in a Verilog-compat module wraps its statements in
 // combBegin()/combEnd() (a depth counter in a mutable global, WhenStack

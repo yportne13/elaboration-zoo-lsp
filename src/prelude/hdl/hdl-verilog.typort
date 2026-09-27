@@ -469,6 +469,109 @@ def joinPortLines(ls: List[String]): String = match ls {
 def portsVL[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): String =
     joinPortLines(list_reverse(collectPortLines(es, whenSigs)))
 
+// ---- BlackBox emission (docs/hdl-blackbox-sim-design.md §4.3) ----
+// The blackbox macro registers each declared blackbox (name -> generics) in
+// the "BlackBoxRegistry" global (hdl-core.typort; DEVIATION from §4.2: the
+// registry replaces the ModuleDef.bb field, see the design/deviation notes
+// there). DEVIATION (lvl2ix discipline, docs/l13-typeclass-instance-nat-
+// param-bug.md, measured 2026-09-27): a def with a reachable global op that
+// runs inside a generic ([n: Nat]) caller context or a class-body check
+// evaluation poisons the end-of-run mutable_map drain (lvl2ix panic) - even
+// a read-only get_global_default. The whole emission chain here is PURE:
+// the blackbox parameter strings are rendered at CREATE time (ground params)
+// by the blackbox macro and transported as literal-carrying assertExpr
+// marker nodes
+//   assertExpr(literal(zero|succ(zero)), <params string>, AssertError)
+// - the SELF marker (cond zero) lives in the blackbox def itself (stub
+// header params), the INSTANCE marker (cond succ(zero)) in the parent def
+// right after its instance node (instance params; prepend order puts it
+// right after the instance in walk order). The "BlackBoxRegistry" global
+// remains CHECK-time only (hdl-check body-rule gating); its result is
+// consumed into a Boolean there and never flows into a quoted string.
+
+// NOTE (single definition): the parameter-string RENDERERS live in
+// hdl-macros.typort (bbGenValStr / bbParamsDeclStr / bbInstItemsStr /
+// bbInstParamsStr) because they must run at CREATE time, inside the blackbox
+// macro expansion — hdl-macros loads BEFORE hdl-verilog, so the definition
+// here would be a `redefine bbGenValStr` prelude load error, and the
+// registry-reading variants (bbParamsDecl/bbInstItems/bbInstParamsOf) are
+// dead under the pure-emission discipline: this file only does literal
+// pick-up from the marker nodes below.
+
+// The blackbox parameter-marker condition: the numeric literal 7777777 is
+// NOT used (unary Nat terms overflow the stack); the SELF marker carries
+// cond literal(zero), the INSTANCE marker literal(succ(zero)).
+def bbIsSelfMarkerCond(c: Expr): Boolean = match c {
+    case literal(v) => match v {
+        case zero => true
+        case _ => false
+    }
+    case _ => false
+}
+
+def bbIsInstMarkerCond(c: Expr): Boolean = match c {
+    case literal(v) => match v {
+        case succ(zero) => true
+        case _ => false
+    }
+    case _ => false
+}
+
+def bbIsMarkerCond(c: Expr): Boolean = match bbIsSelfMarkerCond(c) {
+    case true => true
+    case false => bbIsInstMarkerCond(c)
+}
+
+// Is this def a blackbox (carries the SELF marker)? PURE. The INSTANCE
+// marker (succ(zero), living in a PARENT def) must not trip this dispatch.
+// NOTE: flat element patterns only - nested deconstruction inside a cons
+// pattern compiles to dangling-level pattern quotes (lvl2ix, measured).
+def bbIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
+    case nil => false
+    case cons(e, tail) =>
+        match e {
+            case assertExpr(c, _, _) =>
+                match bbIsSelfMarkerCond(c) {
+                    case true => true
+                    case false => bbIsBlackBox(tail)
+                }
+            case _ => bbIsBlackBox(tail)
+        }
+}
+
+// The stub header params string carried by the SELF marker ("parameter K = v,
+// ..."; "" for a generic-less blackbox). PURE. Flat patterns (see above).
+def bbStubParams[en: Nat](es: Vec[Expr] en): String = match es {
+    case nil => ""
+    case cons(e, tail) =>
+        match e {
+            case assertExpr(c, m, _) =>
+                match bbIsSelfMarkerCond(c) {
+                    case true => m
+                    case false => bbStubParams(tail)
+                }
+            case _ => bbStubParams(tail)
+        }
+}
+
+// Empty module stub for a blackbox def, guarded by
+//   `ifndef TYPORT_BB_<Name> ... `endif
+// so a hand-written behavior model whose first line is
+// `define TYPORT_BB_<Name> (joined via the simulator's extra_args channel)
+// replaces the stub without duplicate-module errors; without a replacement the
+// stub itself elaborates fine. Ports go through the SAME portLineSingle /
+// portsVL path as ordinary modules (directions/widths/signedness identical);
+// there are no wire/reg/assign/always/instance sections and NO synthesized
+// clk/reset ports — the blackbox def's expr list holds only port declarations.
+def blackboxDefVL(md: ModuleDef, params: String): String =
+    let port_decls = portsVL(md.expr, lnil);
+    let genhead = match str_eq(params, "") {
+        case true => ""
+        case false => " #(" + params + ")"
+    };
+    "`ifndef TYPORT_BB_" + md.name + "\nmodule " + md.name + genhead + " (\n" + port_decls + "\n);\nendmodule\n`endif"
+
+
 // Helper: generate wire or reg declaration based on when-driven status
 def wireOrRegLine(name: String, widthStr: String, whenSigs: List[String]): String =
     let isWhen = strInList(name, whenSigs);
@@ -622,7 +725,11 @@ def hasRegAssignCd(e: Expr, cd: ClockDomain): Boolean = match e {
 // its own extra domain and does NOT count here — mirror hasRegAssign vs
 // hasRegAssignCd.)
 def hasAssert(e: Expr): Boolean = match e {
-    case assertExpr(_, _, _) => true
+    case assertExpr(c, _, _) =>
+        match bbIsMarkerCond(c) {
+            case true => false
+            case false => true
+        }
     case when(_, body, elseBody) =>
         let b = hasAssert(body);
         match b {
@@ -673,7 +780,11 @@ def hasAssertCd(e: Expr, cd: ClockDomain): Boolean = match e {
 // assertsVL owns them) — keeps has-clock and has-assert gating from
 // polluting each other (design doc §9-6).
 def hasAnyAssert(e: Expr): Boolean = match e {
-    case assertExpr(_, _, _) => true
+    case assertExpr(c, _, _) =>
+        match bbIsMarkerCond(c) {
+            case true => false
+            case false => true
+        }
     case assertExprCd(_, _, _, _) => true
     case when(_, body, elseBody) =>
         let b = hasAnyAssert(body);
@@ -1055,9 +1166,13 @@ def resetCondStr(cd: ClockDomain): String = match cd.resetPolarity {
 // trees wrap one statement per when node).
 def collectAssertLinesOne(e: Expr, cd: ClockDomain, isMain: Boolean): List[String] = match e {
     case assertExpr(c, m, s) =>
-        match isMain {
-            case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
-            case false => lnil
+        match bbIsMarkerCond(c) {
+            case true => lnil
+            case false =>
+                match isMain {
+                    case true => lcons (assertLineRaw(emitCondStr(c), m, s)) lnil
+                    case false => lnil
+                }
         }
     case assertExprCd(c, m, s, cdc) =>
         let same = cdEq(cdc, cd);
@@ -1401,7 +1516,30 @@ def collectInstHelp[elen: Nat](exprs: Vec[Expr] elen, seenInsts: List[String], s
                 case lnil => "()"
                 case _ => "(" + joinPortConns(conns) + ")"
             };
-            lcons ("  " + moduleName + " " + instName + " " + portStr + ";") (collectInstHelp(tail, seenInsts, seenConns))
+            // BlackBox parameter injection (§4.3, marker channel — see §4.5-3):
+            // the INSTANCE marker the blackbox macro left immediately after this
+            // instance node carries the create-time-rendered " #(.K(v), ...)"
+            // string, so a declared blackbox becomes `Name #(.K(v), ...)` with a
+            // pure literal pick-up (no global read: plain modules and generic-less
+            // blackboxes carry no marker and keep the bare name). Values come from
+            // the declared blackbox's own generic statements, not the
+            // instantiation site.
+            match tail {
+                case cons(e2, t2) =>
+                    match e2 {
+                        case assertExpr(c, m, _) =>
+                            match bbIsInstMarkerCond(c) {
+                                case true =>
+                                    lcons ("  " + moduleName + m + " " + instName + " " + portStr + ";") (collectInstHelp(t2, seenInsts, seenConns))
+                                case false =>
+                                    lcons ("  " + moduleName + " " + instName + " " + portStr + ";") (collectInstHelp(tail, seenInsts, seenConns))
+                            }
+                        case _ =>
+                            lcons ("  " + moduleName + " " + instName + " " + portStr + ";") (collectInstHelp(tail, seenInsts, seenConns))
+                    }
+                case _ =>
+                    lcons ("  " + moduleName + " " + instName + " " + portStr + ";") (collectInstHelp(tail, seenInsts, seenConns))
+            }
         case instanceWithPorts(instName, moduleName, ports) =>
             lcons ("  " + moduleName + " " + instName + " (" + ports + ");") (collectInstHelp(tail, seenInsts, seenConns))
         case _ =>
@@ -1463,8 +1601,9 @@ def extraCdPortsVL[ne: Nat](es: Vec[Expr] ne, cds: List[ClockDomain], acc: Strin
         }
 }
 
-// Generate Verilog for a single ModuleDef
-def moduleDefVL(md: ModuleDef): String =
+// The ORIGINAL module emission body (plain, non-blackbox path), kept verbatim;
+// moduleDefVL above dispatches registered blackboxes to the guarded stub.
+def moduleDefVLPlain(md: ModuleDef): String =
     let whenSigs = list_reverse(collectWhenDrivenSigs md.expr);
     let port_names = collectPortNames md.expr;
     let port_decls = portsVL(md.expr, whenSigs);
@@ -1577,6 +1716,14 @@ def moduleDefVL(md: ModuleDef): String =
         case true => body + joinLines(inst_lines) + "\n"
     };
     body_with_inst + "endmodule"
+
+// Generate Verilog for a single ModuleDef. A registered blackbox def emits
+// the guarded empty stub instead of the full body; everything else takes the
+// plain path above (original body, verbatim).
+def moduleDefVL(md: ModuleDef): String = match bbIsBlackBox(md.expr) {
+    case true => blackboxDefVL(md, bbStubParams(md.expr))
+    case false => moduleDefVLPlain(md)
+}
 
 // Generate Verilog for all ModuleDefs in a Vec
 def collectModuleVLs[n: Nat](data: Vec[ModuleDef] n): List[String] = match data {

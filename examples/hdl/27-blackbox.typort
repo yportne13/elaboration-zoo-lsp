@@ -1,0 +1,71 @@
+// ============================================================
+// HDL Example 27: BlackBox 代码生成全链（docs/hdl-blackbox-sim-design.md §4/§7.2）
+//
+//   blackbox Name[T: Nat, ...]   vendor 原语声明（SpinalHDL BlackBox 对应物）
+//     generic K = v              → Verilog parameter K（实例化时 #(.K(实参))）
+//     input/output 端口区        → 与 module 宏同一条 createPortExpr 路径
+//   { }                          黑盒无体
+//
+// 产码：`ifndef TYPORT_BB_<Name> 守卫的空 module stub（#(parameter ...) 头 +
+// 端口声明 + endmodule）——行为模型文件首行写 `define TYPORT_BB_<Name> 即可
+// 顶替 stub（经仿真后端 extra_args 加入编译，见 tests/sim_tests.rs）。实例化
+// 零新变体：`SyncRam.create[depth, w]` 走 mkInstanceIfParent → instance 节点，
+// collectInstHelp 查 BlackBoxRegistry 注入 #(.WIDTH(8), .DEPTH(64))。
+// 自检：端口表照常注册（HDL020/021/022/025 覆盖黑盒实例），黑盒本体的体规则
+// （HDL001/002/003/010-013/023）被门控。
+// ============================================================
+
+// --- 27a: blackbox 声明（设计文档 §7.2 验收用例的 SyncRam） ---
+blackbox SyncRam[depth: Nat, w: Nat]
+    generic WIDTH = w
+    generic DEPTH = depth
+    input  clk  = Bool
+    input  we   = Bool
+    input  addr = UInt[log2Up depth]
+    input  din  = UInt[w]
+    output dout = UInt[w]
+{
+}
+println("=== 27a: SyncRam stub (ifndef 守卫 + parameter 头 + 端口) ===")
+println(moduleTreeVL(SyncRam.create[64, 8].tree))
+
+// --- 27b: 黑盒实例化（参数注入） + 普通 module 混合层次 ---
+// NOTE: 用 moduleTreeVL 打印两个 def，而非设计文档 §7.2 草图的 designVL：
+// 测试引擎（run_with_prelude）对 designVL 的 def-replay 参数引用存在既有
+// lvl2ix quote 限制，**任何**多模块 designVL 闭包都触发（与黑盒无关，已用纯
+// 双 module 设计复现；examples/26-assert 对单模块场景有同款 NOTE）；测试引擎
+// 下 designVL 的发射路径因此不可用，逐 def moduleTreeVL 的产码逐字节一致
+// （黑盒 stub 是独立 def，实例行在父模块文本内）。CLI/emit 后端不受影响。
+// NOTE: 普通子模块 inverter 的端口声明在**宏头**（`module n <ports> { body }`）
+// —— 体内 `input x = Bool` 是模块内信号、没有可连接的 u.x 句柄（module 宏
+// 文档语义）；黑盒宏无体内端口臂，端口恒在头，故 uRam.port := 可用。
+module inverter
+    input a = Bool
+    output y = Bool
+{
+    y := !a
+}
+
+module ramWrap[depth: Nat, w: Nat] {
+    input clk = Bool
+    input we = Bool
+    input a = Bool
+    input addr = UInt[log2Up depth]
+    input din = UInt[w]
+    output dout = UInt[w]
+    output inv = Bool
+    let uInv = inverter.create
+    uInv.a := a
+    inv := uInv.y
+    let ram = SyncRam.create[depth, w]
+    ram.clk := clk
+    ram.we := we
+    ram.addr := addr
+    ram.din := din
+    dout := ram.dout
+}
+println("=== 27b: ramWrap[64, 8] + SyncRam[64, 8] (带参实例 + 普通子模块) ===")
+println(moduleTreeVL(ramWrap.create[64, 8].tree))
+println(moduleTreeVL(inverter.create.tree))
+println("=== 27c: SyncRam 黑盒 def 的 guarded stub ===")
+println(moduleTreeVL(SyncRam.create[64, 8].tree))

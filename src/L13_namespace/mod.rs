@@ -341,6 +341,9 @@ mod module_tests;
 mod hdl_enum_tests;
 
 #[cfg(test)]
+mod hdl_blackbox_tests;
+
+#[cfg(test)]
 mod calc_tests;
 
 #[cfg(test)]

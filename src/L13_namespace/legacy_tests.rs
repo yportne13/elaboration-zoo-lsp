@@ -1757,6 +1757,7 @@ fn test_examples_hdl_dir() {
             Err(e) => panic!("examples/hdl/{}: {} @ {}: {}", file, e.0.data, e.0.path_id, e.0.start_offset),
         }
     }
+    });
 }
 
 #[test]
