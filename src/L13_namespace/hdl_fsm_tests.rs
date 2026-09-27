@@ -87,7 +87,7 @@ println(moduleTreeVL(fsmDemo.create.tree))
     // transfers: guards conjoined with the state compare, sized goto literals.
     // Condition composition order is the engine's (WhenStack folds the inner
     // user condition outermost: `<user cond> && (<state cmp>)`) — see the
-    // design doc's deviation note.
+    // design doc's §7.7 deviation note (measured 2026-09-27).
     assert!(
         output.contains("if (start && (ctrl_stateReg == 0)) begin"),
         "sIdle + start guard, got:\n{}", output
@@ -447,6 +447,112 @@ println(moduleTreeVL(fsmHdl064.create.tree))
     );
     // inside whenIsActive the same goto does NOT warn (non-trigger)
     assert!(!output.contains("HDL060"), "target 0 is in range, got:\n{}", output);
+}
+
+// ── HDL064 ordering coverage (fixed 2026-09-27 review): a bare goto BEFORE
+// the first whenIsActive or BETWEEN two whenIsActive blocks used to be a
+// blind spot — fsmCtxPush cleared the flag evidence, so only a bare goto
+// AFTER the LAST whenIsActive was reported. The fix adds an accumulating
+// oocTargets channel: a bare goto never records an edge, so at drain its
+// target stays uncovered and reports, while an in-context goto's
+// check-pass pre-eval artifact is always covered by the edge the same goto
+// records in the real pass (hdl-fsm.typort, fsmGotoLog CHECK-PASS note).
+// The probe targets state 2, which no in-context goto targets.
+
+#[test]
+fn hdl064_bare_goto_before_first_when_is_active() {
+    let output = assert_ok(r#"
+module fsmHdl064First {
+    input go = Bool
+    let ctrl = fsmNew[2](3)
+    let sIdle = ctrl.state(0)
+    let sRun = ctrl.state(1)
+    let sErr = ctrl.state(2)
+    when go { ctrl.goto(2) }
+    whenIsActive(sIdle) {
+        when go { sRun.goto() }
+    }
+    whenIsActive(sRun) {
+        when go { sIdle.goto() }
+    }
+}
+println(moduleTreeVL(fsmHdl064First.create.tree))
+"#);
+    assert!(
+        output.contains("HDL064"),
+        "bare goto before the first whenIsActive must warn, got:\n{}", output
+    );
+    assert!(
+        output.contains("goto outside any whenIsActive state context"),
+        "HDL064 message, got:\n{}", output
+    );
+    assert!(output.contains("fsmHdl064First"), "HDL064 must carry the module name, got:\n{}", output);
+}
+
+#[test]
+fn hdl064_bare_goto_between_when_is_active() {
+    let output = assert_ok(r#"
+module fsmHdl064Mid {
+    input go = Bool
+    let ctrl = fsmNew[2](3)
+    let sIdle = ctrl.state(0)
+    let sRun = ctrl.state(1)
+    let sErr = ctrl.state(2)
+    whenIsActive(sIdle) {
+        when go { sRun.goto() }
+    }
+    when go { ctrl.goto(2) }
+    whenIsActive(sRun) {
+        when go { sIdle.goto() }
+    }
+}
+println(moduleTreeVL(fsmHdl064Mid.create.tree))
+"#);
+    assert!(
+        output.contains("HDL064"),
+        "bare goto between two whenIsActive blocks must warn, got:\n{}", output
+    );
+    assert!(
+        output.contains("goto outside any whenIsActive state context"),
+        "HDL064 message, got:\n{}", output
+    );
+}
+
+// ── HDL064 residual blind spot, PINNED as expected behavior: a bare goto
+// whose target is ALSO goto-targeted in-context by the same Fsm stays
+// silent before/between whenIsActive blocks — its record mutations are
+// identical to the engine's check-pass pre-eval artifact of the in-context
+// goto, so the drain's edge-coverage check suppresses it. Documented in
+// hdl-fsm.typort (fsmGotoLog CHECK-PASS note) and the design doc §7.7;
+// mitigation: put bare gotos at the end of the module body (the flag
+// channel then reports regardless of target, as
+// hdl064_bare_goto_outside_context pins). If this test ever fails, the
+// engine gained a way to distinguish the two — widen the rule.
+
+#[test]
+fn hdl064_blind_spot_covered_target_bare_goto_stays_silent() {
+    let output = assert_ok(r#"
+module fsmHdl064Covered {
+    input go = Bool
+    let ctrl = fsmNew[2](2)
+    let sIdle = ctrl.state(0)
+    let sRun = ctrl.state(1)
+    when go { ctrl.goto(1) }
+    whenIsActive(sIdle) {
+        when go { sRun.goto() }
+    }
+    whenIsActive(sRun) {
+        when go { sIdle.goto() }
+    }
+}
+println(moduleTreeVL(fsmHdl064Covered.create.tree))
+"#);
+    assert!(
+        !output.contains("HDL064"),
+        "covered-target bare goto before whenIsActive is the documented blind spot, got:\n{}", output
+    );
+    // the in-context edges themselves are clean
+    assert!(!output.contains("HDL061"), "both states are targeted, got:\n{}", output);
 }
 
 // ── HDL064 boundary case: a FULLY bare goto at module top level is an

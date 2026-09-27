@@ -108,9 +108,15 @@ struct FsmEdge {
 }
 
 struct FsmRec {
-    // Composite identity "module|binding" — records now PERSIST across the
-    // engine's replays (see fsmCtxModuleReset), so two modules using the
-    // same binding name must not collide.
+    // The module name exists for REPORT ATTRIBUTION (rec.module at drain
+    // time) and the fsmRecordComplete gate — every record helper below
+    // (fsmRecEnsure / fsmRecAddEdge / fsmRecSetDeclared / fsmRecSetVisited /
+    // fsmRecSetNoExit / fsmRecSetOoc / fsmRecClearOoc) matches by NAME alone
+    // and never compares module. That name-only matching is safe ONLY
+    // BECAUSE fsmCtxModuleReset wipes the WHOLE FsmCtx (records AND stack)
+    // at every module-macro prologue: if records persisted across modules,
+    // the first same-named record would win every lookup regardless of its
+    // module and cross-wire the two Fsm's bookkeeping.
     module: String
     name: String
     stateCount: Nat
@@ -118,9 +124,18 @@ struct FsmRec {
     declared: List[Nat]
     visited: List[Nat]
     noExit: List[Nat]
-    // An out-of-context goto was seen since the last state-context push
-    // (HDL064, reported at drain time — see fsmGotoLog's CHECK-PASS note).
+    // HDL064 out-of-context goto evidence (reported at drain time — see
+    // fsmGotoLog's CHECK-PASS note). Two channels:
+    //   - ooc: flag form; a later state-context push CLEARS it (that
+    //     clearing is what erases the engine's check-pass pre-eval
+    //     artifact), so it only survives a bare goto AFTER the last
+    //     whenIsActive;
+    //   - oocTargets: accumulating form (dedup); a push does NOT clear it.
+    //     At drain, a target is reported only if NO recorded edge covers it
+    //     — this catches bare gotos before/between whenIsActive blocks,
+    //     whose flag evidence the following push would wipe.
     ooc: Boolean
+    oocTargets: List[Nat]
 }
 
 enum FsmCtxStack {
@@ -162,36 +177,42 @@ def fsmNatInList(xs: List[Nat], x: Nat): Boolean = match xs {
     }
 }
 
-def fsmRecFind(recs: List[FsmRec], key: String): Option[FsmRec] = match recs {
-    case lnil => None
-    case lcons(r, rest) => match str_eq(r.name, key) {
-        case true => Some(r)
-        case false => fsmRecFind(rest, key)
-    }
-}
-
 // HDL064 bookkeeping: mark / clear the out-of-context goto flag (see the
 // CHECK-PASS note on fsmGotoLog).
-def fsmRecSetOoc(recs: List[FsmRec], key: String): List[FsmRec] = match recs {
+// fsmRecSetOoc ALSO appends the target to the accumulating oocTargets list
+// (one mutation, one change_mutable_default — fsmGotoRecord's arm must stay
+// a single call). The FLAG half is cleared by the next state-context push
+// (fsmRecClearOoc); the TARGET half is never cleared and is judged at drain
+// time by edge coverage (fsmOocUncoveredReport).
+def fsmRecSetOoc(recs: List[FsmRec], key: String, target: Nat): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
-        case true => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, true)) rest
-        case false => lcons r (fsmRecSetOoc(rest, key))
+        case true => match fsmNatInList(r.oocTargets, target) {
+            case true => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, true, r.oocTargets)) rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, true, lcons target r.oocTargets)) rest
+        }
+        case false => lcons r (fsmRecSetOoc(rest, key, target))
     }
 }
 
 def fsmRecClearOoc(recs: List[FsmRec], key: String): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
-        case true => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, false)) rest
+        // Clears only the FLAG — oocTargets survives on purpose (see the
+        // CHECK-PASS note on fsmGotoLog).
+        case true => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, r.noExit, false, r.oocTargets)) rest
         case false => lcons r (fsmRecClearOoc(rest, key))
     }
 }
 
-// fsmNew: register { module, name, stateCount } (§7.4 step 1). FIRST-WINS:
-// the record survives every later replay (fsmCtxModuleReset keeps the
-// records, only the context stack resets), and re-running fsmNew must not
-// create a duplicate.
+// fsmNew: register { module, name, stateCount } (§7.4 step 1). FIRST-WINS
+// dedup: one module body is evaluated several times (check passes + create
+// replays) between two prologue resets, so fsmNew re-runs and must not
+// create a duplicate. The record does NOT outlive fsmCtxModuleReset — the
+// prologue hook drains and then wipes the WHOLE FsmCtx (records + stack;
+// see the FsmRec header for why that wipe is what makes the name-only
+// matching safe, and the SHAPE CONSTRAINTS note on fsmCtxModuleReset for
+// why the wipe goes through change_mutable_default).
 // LOAD GUARD: prelude-load declaration checks evaluate these bodies with
 // STUCK arguments; a write then would leave a "FsmCtx" entry (holding stale
 // meta/level references of the load's Infer) in the CACHED mutable map and
@@ -213,7 +234,7 @@ def fsmCtxRegister(name: String, stateCount: Nat): Unit =
         case true =>
             let mname = fsmReportModule(unit);
             let key = name;
-            let rec = FsmRec.mk(mname, name, stateCount, lnil, lnil, lnil, lnil, false);
+            let rec = FsmRec.mk(mname, name, stateCount, lnil, lnil, lnil, lnil, false, lnil);
             let _ = change_mutable_default("FsmCtx",
                 x => FsmCtx.mk(fsmRecEnsure(x.fsms, rec), x.stack),
                 FsmCtx.mk(lcons rec lnil, fsmStackEmpty));
@@ -226,9 +247,9 @@ def fsmCtxRegister(name: String, stateCount: Nat): Unit =
 def fsmRecSetDeclared(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = match recs {
     case lnil => lnil
     case lcons(r, rest) => match str_eq(r.name, key) {
-        case true => match fsmNatInList(r.declared, idx) {
+            case true => match fsmNatInList(r.declared, idx) {
             case true => lcons r rest
-            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, lcons idx r.declared, r.visited, r.noExit, r.ooc)) rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, lcons idx r.declared, r.visited, r.noExit, r.ooc, r.oocTargets)) rest
         }
         case false => lcons r (fsmRecSetDeclared(rest, key, idx))
     }
@@ -246,7 +267,9 @@ def fsmCtxDeclare(name: String, idx: Nat): Unit =
     }
 
 // whenIsActive entry: push the state context (§7.4 step 2), clearing the
-// record's out-of-context marker — see the CHECK-PASS note on fsmGotoLog.
+// record's out-of-context FLAG — see the CHECK-PASS note on fsmGotoLog for
+// why that clearing erases only the check-pass artifact, and why the
+// accumulating oocTargets channel deliberately survives it.
 def fsmCtxPush(name: String, idx: Nat): Unit =
     match nat_is_ground(idx) {
         case false => unit
@@ -266,7 +289,7 @@ def fsmRecSetVisited(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = 
     case lcons(r, rest) => match str_eq(r.name, key) {
         case true => match fsmNatInList(r.visited, idx) {
             case true => lcons r rest
-            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, lcons idx r.visited, r.noExit, r.ooc)) rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, lcons idx r.visited, r.noExit, r.ooc, r.oocTargets)) rest
         }
         case false => lcons r (fsmRecSetVisited(rest, key, idx))
     }
@@ -303,7 +326,7 @@ def fsmRecSetNoExit(recs: List[FsmRec], key: String, idx: Nat): List[FsmRec] = m
     case lcons(r, rest) => match str_eq(r.name, key) {
         case true => match fsmNatInList(r.noExit, idx) {
             case true => lcons r rest
-            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, lcons idx r.noExit, r.ooc)) rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, r.edges, r.declared, r.visited, lcons idx r.noExit, r.ooc, r.oocTargets)) rest
         }
         case false => lcons r (fsmRecSetNoExit(rest, key, idx))
     }
@@ -342,7 +365,7 @@ def fsmRecAddEdge(recs: List[FsmRec], key: String, edge: FsmEdge): List[FsmRec] 
     case lcons(r, rest) => match str_eq(r.name, key) {
         case true => match fsmRecHasEdge(r.edges, edge) {
             case true => lcons r rest
-            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, lcons edge r.edges, r.declared, r.visited, r.noExit, r.ooc)) rest
+            case false => lcons (FsmRec.mk(r.module, r.name, r.stateCount, lcons edge r.edges, r.declared, r.visited, r.noExit, r.ooc, r.oocTargets)) rest
         }
         case false => lcons r (fsmRecAddEdge(rest, key, edge))
     }
@@ -360,7 +383,7 @@ def fsmRecAddEdge(recs: List[FsmRec], key: String, edge: FsmEdge): List[FsmRec] 
 def fsmGotoRecord(key: String, stack: FsmCtxStack, target: Nat): Unit = match stack {
     case fsmStackEmpty =>
         let _ = change_mutable_default("FsmCtx",
-            x => FsmCtx.mk(fsmRecSetOoc(x.fsms, key), x.stack),
+            x => FsmCtx.mk(fsmRecSetOoc(x.fsms, key, target), x.stack),
             fsmCtxEmpty);
         unit
     case fsmStackCons(_, i, _) =>
@@ -375,11 +398,26 @@ def fsmGotoRecord(key: String, stack: FsmCtxStack, target: Nat): Unit = match st
 // method runs (watchdog bisect: the drain saw edge (1->1) = fromIdx fell
 // back to target, and the same eval logged HDL064). Reporting HDL064 at the
 // call site therefore warned on every FSM module. Instead the goto records
-// an out-of-context MARKER on its FsmRec, no edge is added, and the drain
-// reports HDL064; fsmCtxPush clears the marker, so a later real
-// state-context push in a full replay erases the check-pass artifact while
-// a genuinely bare goto (which runs after the push in the same replay)
-// re-marks it.
+// out-of-context EVIDENCE on its FsmRec, no edge is added, and the DRAIN
+// reports HDL064. Evidence has two channels:
+//   - the `ooc` flag: set on a stack-empty goto, CLEARED by the next
+//     fsmCtxPush. A push following the goto erases the channel, so the flag
+//     only survives a bare goto AFTER the LAST whenIsActive;
+//   - `oocTargets` (accumulated by fsmRecSetOoc, never cleared by a push):
+//     at drain, a target is reported only if NO recorded edge covers it.
+//     This closes the ordering blind spot the flag alone had (a bare goto
+//     BEFORE the first whenIsActive or BETWEEN two of them had its flag
+//     wiped by the following push): a bare goto never produces an edge, so
+//     its target stays uncovered, while the check-pass artifact of a legit
+//     in-context goto is always covered by the edge the SAME goto records
+//     later in the same round's real pass. No false positive: the drain
+//     still reports nothing at the call site.
+// RESIDUAL BLIND SPOT (known limitation, review 2026-09-27): a bare goto
+// whose target is ALSO goto-targeted in-context by the same Fsm is
+// indistinguishable from the check-pass artifact (identical record
+// mutations) and is suppressed. Mitigation: put bare gotos at the END of
+// the module body (after the last whenIsActive), where the flag channel
+// reports regardless of target.
 def fsmGotoLog(name: String, stateCount: Nat, w: Nat, nextExpr: Expr, target: Nat): Unit =
     let mname = fsmReportModule(unit);
     let _ = match nat_gte(target, stateCount) {
@@ -450,6 +488,13 @@ def fsmNot(a: Boolean): Boolean = match a {
 
 // HDL062: a state whose body ran but which has no outgoing goto may get
 // stuck; noExitCheck() exempts it (§7.4).
+// UNIVERSE NOTE (design choice, 2026-09-27 review): the universe is
+// `visited` (states whose whenIsActive body actually ran), NOT `declared`
+// — a reachable-but-bodyless state (declared, goto-targeted, but whose
+// body never executed in the drained round) is NOT reported here.
+// Deliberate: a body that never ran is not known to lack an exit, and the
+// never-goto-targeted half of the declared universe is already HDL061's
+// job (fsmUnreachableReport).
 def fsmNoExitReport(rec: FsmRec, visited: List[Nat]): Unit = match visited {
     case lnil => unit
     case lcons(idx, rest) =>
@@ -466,18 +511,6 @@ def fsmNoExitReport(rec: FsmRec, visited: List[Nat]): Unit = match visited {
         fsmNoExitReport(rec, rest)
 }
 
-// DRAIN COMPLETENESS GATE (2026-09-27, engine-measured): the engine
-// evaluates a module body in ~100 replay rounds whose final states are
-// growing PREFIXES of the body (drain dump: register-only -> declares ->
-// noExit -> first edge -> all edges). A drain therefore sees an arbitrary
-// partial prefix, and an ungated drain reported "state N is unreachable"
-// from a prefix that had not reached the later goto yet.
-// The gate is the design-wide ModuleRegistry (hdl-core): registerModuleTree
-// is called by checkModuleTree, i.e. at the END of a completed module body.
-// A record is reported only once its module has completed at least one full
-// body evaluation. Records persist across replays (fsmCtxModuleReset resets
-// only the context stack), so once the module is registered the record is
-// the UNION of every replay's operations — idempotent adds, hence complete.
 // DRAIN COMPLETENESS GATE (2026-09-27, engine-measured): the engine replays
 // a module body in ~100 rounds, most of which are growing PREFIXES of the
 // body (drain dump: register-only -> declares -> noExit -> first edge ->
@@ -504,14 +537,35 @@ def fsmRecordComplete(rec: FsmRec): Boolean = match str_eq(fsmTreeHeadName(unit)
     case false => true
 }
 
-// HDL064 at drain time (recorded by fsmGotoRecord; see fsmGotoLog's
-// CHECK-PASS note).
+// HDL064 at drain time, channel 1 (recorded by fsmGotoRecord; see
+// fsmGotoLog's CHECK-PASS note): the flag form, which survives only a bare
+// goto AFTER the last whenIsActive.
 def fsmOocReport(rec: FsmRec): Unit = match rec.ooc {
     case false => unit
     case true =>
         let _ = report_check_issue("HDL064", rec.module, rec.name,
             "goto outside any whenIsActive state context (SpinalHDL inGeneration assert counterpart)");
         unit
+}
+
+// HDL064 at drain time, channel 2: the accumulated oocTargets that NO
+// recorded edge covers — the before/between-whenIsActive ordering cases the
+// flag cannot see (its evidence is cleared by the following push, while a
+// bare goto never records an edge). An in-context goto's check-pass
+// artifact is suppressed because the same goto records a covering edge in
+// the real pass. Same message as channel 1 so duplicate lines collapse in
+// the CheckIssues dedup.
+def fsmOocUncoveredReport(rec: FsmRec, targets: List[Nat], oocTs: List[Nat]): Unit = match oocTs {
+    case lnil => unit
+    case lcons(t, rest) =>
+        let _ = match fsmNatInList(targets, t) {
+            case true => unit
+            case false =>
+                let _ = report_check_issue("HDL064", rec.module, rec.name,
+                    "goto outside any whenIsActive state context (SpinalHDL inGeneration assert counterpart)");
+                unit
+        };
+        fsmOocUncoveredReport(rec, targets, rest)
 }
 
 // One reportable record's checks. Split from fsmCtxDrainAll so every match
@@ -521,6 +575,7 @@ def fsmReportRecord(rec: FsmRec): Unit =
     let _ = fsmUnreachableReport(rec, targets, rec.declared);
     let _ = fsmNoExitReport(rec, rec.visited);
     let _ = fsmOocReport(rec);
+    let _ = fsmOocUncoveredReport(rec, targets, rec.oocTargets);
     unit
 
 def fsmReportRecordGated(rec: FsmRec): Unit = match fsmRecordComplete(rec) {
@@ -534,10 +589,14 @@ def fsmCtxDrainAll(recs: List[FsmRec]): Unit = match recs {
         let _ = fsmReportRecordGated(r);
         fsmCtxDrainAll(rest)
 }
-// The module-macro prologue hook: report the persisted records, then reset
-// the CONTEXT STACK for this replay round (the records survive — see the
-// gate note above; a stale stack frame from a partial round would otherwise
-// hide a genuinely out-of-context goto).
+// The module-macro prologue hook: report the previous round's records, then
+// reset the WHOLE FsmCtx — records AND context stack — to fsmCtxEmpty via
+// change_mutable_default. The full wipe is safety-critical, not incidental:
+// every record helper matches by name alone (see the FsmRec header), so a
+// persisted record would let the next module's same-named Fsm reuse or
+// pollute it. It also keeps each round's drain reporting exactly that
+// round's records (each round starts empty), and guarantees no stale stack
+// frame from an aborted prefix round hides a genuinely out-of-context goto.
 //
 // SHAPE CONSTRAINTS (2026-09-27, full evidence chain in
 // docs/l13-struct-decl-dependent-field-divergence.md — all watchdog-bisected):

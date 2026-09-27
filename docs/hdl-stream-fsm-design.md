@@ -1,6 +1,6 @@
 # HDL Stream/Flow/Fragment 完整化与 FSM 设计（hdl-stream-fsm-design）
 
-> 状态：一期已实现（2026-09-27 收口）· 设计稿 2026-09-26。实现落点 `src/prelude/hdl/hdl-fsm.typort` + `hdl-macros.typort` prologue；测试 `src/L13_namespace/hdl_fsm_tests.rs`。**实现偏差**：Fsm/FsmSt 采用非参数化扁平 struct（§7.2 草案的 `Fsm[w]{stateReg: UInt[w]}` 形状因 prelude 加载发散被否决，详见 `docs/l13-struct-decl-dependent-field-divergence.md` 与 §9 偏差表）。
+> 状态：一期已实现（2026-09-27 收口；同日评审补记实现偏差，集中见 **§7.7**）· 设计稿 2026-09-26。实现落点 `src/prelude/hdl/hdl-fsm.typort` + `hdl-macros.typort` prologue；测试 `src/L13_namespace/hdl_fsm_tests.rs`。**实现偏差**：Fsm/FsmSt 采用非参数化扁平 struct（§7.2 草案的 `Fsm[w]{stateReg: UInt[w]}` 形状因 prelude 加载发散被否决，详见 `docs/l13-struct-decl-dependent-field-divergence.md` 与 §9 偏差表）；HDL011 D5 细化未做（落地 §7.3 的 when(1) 兜底包裹）；HDL060-064 排水机制由"checkModuleTree 收尾"变更为"下一模块宏 prologue 排水 + 完成门"（§7.4）；HDL064 语序盲区已收窄但有残留（§7.7）。
 > 范围：纯设计文档，不改源码。上游：`docs/spinalhdl-gap.md`（§5/§7/§8）、`docs/spinalhdl-lib-replication.md`（波次表 + 末尾语言限制）、`docs/hdl-selfcheck-design.md` 与 `docs/hdl-selfcheck-phase234-design.md`（规则编号段位）。
 > SpinalHDL 参考：`F:\projects\hermes\spinalhdl-ref\lib\src\main\scala\spinal\lib\`（Stream.scala / Flow.scala / Fragment.scala / MasterSlave.scala / fsm\*.scala），下文以 `Stream.scala:行` 引用。
 
@@ -449,24 +449,29 @@ regAssign(stateReg, stateNext)                           // 时钟沿
 
 `sX.goto()` 在用户 when 上下文内落树：`when(<全条件>, assign(stateNext, literal(idx)))`（WhenStack 合成完整使能条件，`hdl-core.typort:263-310`）。`onEntry/onExit/whenIsNext` 落同型 when+assign（body 是用户语句）。
 
-生成 Verilog（生成器依据：when 驱动信号声明为 reg——`hdl-verilog.typort:435-459`；无条件 assign 若 LHS 属 when 驱动集则并入 `always @(*)` 作 blocking default——`hdl-verilog.typort:818-857`；fsmNew 先于状态体执行保证 default 在 if 之前）：
+生成 Verilog（生成器依据：when 驱动信号声明为 reg——`hdl-verilog.typort:435-459`；无条件 assign 若 LHS 属 when 驱动集则并入 `always @(*)` 作 blocking default——`hdl-verilog.typort:818-857`；fsmNew 先于状态体执行保证 default 在 if 之前）。**下方为 2026-09-27 实跑修正后的期望形状**（原稿三处与实跑不符，见 §7.7 偏差 3）：①default 被 when(1) 包裹成 `if (1) begin ... end`（落地方案，见下文 HDL011 段）；②条件序是引擎 WhenStack 的折叠序 `<用户条件> && (<状态比较>)`——用户条件在最外，状态比较带括号在内层；③复位字面量是裸 `0`（非 `2'd0`）：
 
 ```verilog
   reg  [1:0] ctrl_stateReg;
   reg  [1:0] ctrl_stateNext;
   always @(posedge clk or posedge reset) begin
-    if (reset) ctrl_stateReg <= 2'd0;
-    else ctrl_stateReg <= ctrl_stateNext;
+    if (reset) begin
+      ctrl_stateReg <= 0;
+    end else begin
+      ctrl_stateReg <= ctrl_stateNext;
+    end
   end
   always @(*) begin
-    ctrl_stateNext = ctrl_stateReg;
-    if (ctrl_stateReg == 2'd0 && start) begin
+    if (1) begin
+      ctrl_stateNext = ctrl_stateReg;
+    end
+    if (start && (ctrl_stateReg == 0)) begin
       ctrl_stateNext = 2'd1;
     end
-    if (ctrl_stateReg == 2'd1 && finish) begin
+    if (finish && (ctrl_stateReg == 1)) begin
       ctrl_stateNext = 2'd2;
     end
-    if (ctrl_stateReg == 2'd1 && !(finish)) begin
+    if (!finish && (ctrl_stateReg == 1)) begin
       ctrl_stateNext = 2'd0;
     end
   end
@@ -474,10 +479,12 @@ regAssign(stateReg, stateNext)                           // 时钟沿
 
 **自检冲突与 HDL011 细化（决策 D5）**：`stateNext` 的驱动事实是 uncondComb=1 + condComb≥1，按现行判定（`hdl-check.typort:739/756-758`）必报 HDL011。但该判定是假阳性：生成器对 when 驱动的组合信号把无条件 default 与条件覆盖**合并进同一个 `always @(*)`**（blocking default + if，`hdl-verilog.typort:827-853`），不存在 assign+always 双驱动。细化方案（.typort 层改 `ruleDrivers`）：
 
+**【实现偏差，见 §7.7-1】D5 细化一期未做**（hdl-check 属并行所有权，且细化牵动 HDL011 全局语义）；实际落地的是下述"兜底退化"方案——fsmNew 的 default 以 `whenBegin(literal(1))` 包裹发射，FSM 模块 HDL011-clean。原方案降级为二期备选。
+
 - HDL011 新判定：`uncondComb ≥ 1 ∧ condClk ≥ 1`（组合 default + 时钟 when 覆盖 —— 真非法，assign + always @(posedge) 冲突）。
 - 原"uncondComb ∧ condComb"场景：当该信号同时有任何时钟驱动（anyClk）时由 HDL012 覆盖；纯组合的"default + 条件覆盖"是 FSM 的合法骨架，豁免。
 - **与自检阶段 2-4 设计的衔接**：`docs/hdl-selfcheck-phase234-design.md` 已在开放问题 7 独立指出"HDL011 的措辞可能过严"（生成器实际会合并 default，hdl-verilog.typort:836-842），且其 latch 规则（HDL032）以 `uncondComb = 0` 为进入条件——本细化后，FSM 的 stateNext（uncondComb=1）既不触发 HDL011 也不进 latch 判定（有 default 即无锁存），两个设计互补无冲突；实现时两处改动应合入同一次 HDL011 语义调整。
-- 兜底退化（若不想动检查器）：fsmNew 的 default 用 `whenBegin(literal(1))` 包裹发射（condComb 计数，绕开 uncond 组合）——生成 `if (1) begin ... end`，合法但难看；仅作备选记录。
+- 兜底退化（若不想动检查器）：fsmNew 的 default 用 `whenBegin(literal(1))` 包裹发射（condComb 计数，绕开 uncond 组合）——生成 `if (1) begin ... end`，合法但难看；**一期即按此方案落地**（见上方偏差注记）。
 - legacy_tests 无 HDL011 期望用例（已核对），细化无回归包袱。
 
 ### 7.4 转移覆盖检查（自检规则草案，HDL060-064）
@@ -487,7 +494,7 @@ regAssign(stateReg, stateNext)                           // 时钟沿
 - `fsmNew` 登记 `{ name, w, stateCount }`；
 - `whenIsActive` 执行时 push 当前 idx、结束时 pop（栈形态仿 `HdlLoopIdx`，`hdl-core.typort:749-798`）；
 - `goto` 追加一行 `"mod|fsm|from|to"`；
-- `checkModuleTree` 收尾（`hdl-check.typort` 内新增 `checkFsmLog`，挂在现有 HDL 规则之后）排水本模块记录并执行规则。
+- 【实现偏差，见 §7.7-2】~~`checkModuleTree` 收尾（`hdl-check.typort` 内新增 `checkFsmLog`，挂在现有 HDL 规则之后）排水本模块记录并执行规则。~~ **实际机制**：hdl-check 一期未动；排水挂在 **下一模块宏 prologue** 的 `fsmCtxModuleReset()`（`hdl-macros.typort`，对齐 WhenStack/HdlLoopIdx 的 per-module 重置位）——先报告上一轮已完成记录、再整清 FsmCtx（记录+栈，全清；记录匹配只按 name，持久化会让跨模块同名 Fsm 串线，见 hdl-fsm.typort FsmRec 头注）。报与不报由**完成门**（fsmRecordComplete）把关：排水时 ModuleTree 头部名仍等于记录的模块名 ⇒ 该记录来自中途夭折的前缀轮 ⇒ 跳过。该机制的引擎依赖与局限：①依赖引擎对模块体的**多轮前缀重放**（完整轮的记录由下一轮 prologue 报告）；若未来引擎改为**单轮求值**（无重放），排水点消失，HDL061/062/064 将**静默失效**——届时须把排水挂回 checkModuleTree 收尾；②嵌套模块（子模块体在同一外层体内求值）的 ModuleTree 见证语义按最内帧工作，gate 对嵌套场景未系统验证。
 
 | 码 | 规则 | 判定 | 级别 |
 |---|---|---|---|
@@ -508,6 +515,17 @@ regAssign(stateReg, stateNext)                           // 时钟沿
 ### 7.6 与硬件 Enum 的迁移点
 
 `fsmNew` 的编码在一处收口（`createRegWidthInit` + `===` 比较 + `literal` 常量）。硬件 Enum（spinalhdl-gap.md §8 二期候选）落地后，只需替换该收口点的类型与比较实现（`Enum === 枚举值`），DSL 层 API 不变——`state(idx: Nat)` 换成 `state(sym: EnumSym)`。
+
+### 7.7 一期实现偏差与已知限制（2026-09-27 收口评审补记）
+
+集中记录"本文前文计划/草案"与"hdl-fsm.typort 实际落地"的差异。逐条已在前文对应位置以【实现偏差】就地标注，此处汇总。
+
+1. **HDL011 细化（决策 D5）未做**（§7.3）。落地的是文中所记"兜底退化"方案：`fsmNew` 的 default 驱动以 `whenBegin(literal(1))` 包裹发射，生成 `if (1) begin <default> end`，HDL011 计条件驱动，FSM 模块 HDL011-clean。原 D5 方案（改 `ruleDrivers` 的 uncondComb/condClk 判定）留二期，且须与 `docs/hdl-selfcheck-phase234-design.md` 开放问题 7 的 HDL011 语义调整合入同一变更。
+2. **HDL060-064 排水机制变更**（§7.4）。原计划"checkModuleTree 收尾排水（hdl-check 内新增 checkFsmLog）"未做（hdl-check 一期不动）；实际为**下一模块宏 prologue** 调 `fsmCtxModuleReset()`——先报告上一轮已完成记录（HDL061/062/064），再经 `change_mutable_default("FsmCtx", x => fsmCtxEmpty, fsmCtxEmpty)` **连记录带栈整清**（非"仅清栈"：全部记录 helper 只按 name 匹配，记录若持久化，跨模块同名 Fsm 会串线——原稿/早期注释的"records persist"说法与此矛盾，2026-09-27 评审已改）。报告由**完成门**把关（ModuleTree 头部名 = 记录模块名 ⇒ 来自夭折前缀轮 ⇒ 跳过；重复报告靠 CheckIssues 行级去重折叠）。**引擎依赖**：机制依赖引擎对模块体的多轮前缀重放（完整轮的记录由下一轮 prologue 报告）；若引擎改为单轮求值，排水点消失，HDL061/062/064 将**静默失效**——届时须把排水挂回 checkModuleTree 收尾。**gate 局限**：嵌套模块（同一外层体内声明子模块）的完成见证按最内 ModuleTree 帧工作，未系统验证。
+3. **§7.3/§11.6 期望 Verilog 与实跑不符，已按实跑修正**（CLI 实测 `fsmDemo`）：条件序为 `<用户条件> && (<状态比较>)`（WhenStack 折叠序，原稿为状态比较在前）；复位字面量为裸 `0`（原稿 `2'd0`）；default 呈 `if (1) begin ... end`（when(1) 包裹的落地形状）。`hdl_fsm_tests.rs` 的断言串以实测为准，并引用本条。
+4. **S4 未交付项**（§10）："删除 hdl-misc-io 简化版并改写 20-misc"未做——旧 `stateMachine/stateGoto/stateIs` 与新 DSL **并存是现状**（两套 API 无命名冲突，旧版用户代码不受影响）；26-fsm.typort 未新建（编号被占），L2 由 hdl_fsm_tests 承担；L3 状态序列仿真未做。
+5. **HDL064 语序盲区：已收窄，有残留**。评审前实态：`fsmCtxPush`（whenIsActive 进入）无条件清 OOC 标记，裸 goto 出现在**任意 whenIsActive 之前或两个 whenIsActive 之间**时，其证据被后续 push 抹掉，HDL064 静默漏报（仅"裸 goto 在末个 whenIsActive 之后"可报）。**一期修复**（hdl-fsm.typort，不触碰"调用点直报"禁区——引擎对延迟 lambda 体有一次检查期预求值，直报必误报）：goto 在栈空时同时置 `ooc` 标记（push 可清，管"末位"场景）并向**累积的 `oocTargets`** 记录目标（push 不清）；排水时仅当目标**无任何已记录边覆盖**才报 HDL064——裸 goto 永不产生边故目标保持未覆盖，而合法 in-context goto 的检查期预求值残迹总被同一 goto 真实轮记录的边覆盖，无误报。**残留盲区**：裸 goto 的目标恰与同 Fsm 某 in-context goto 的目标重合时二者记录不可分辨，仍静默——缓解：把裸 goto 放在模块体末尾（flag 通道与目标无关必报）。回归测试：`hdl064_bare_goto_before_first_when_is_active` / `hdl064_bare_goto_between_when_is_active`（修复前漏报，现必报）与 `hdl064_blind_spot_covered_target_bare_goto_stays_silent`（钉住残留盲区为已知行为）。
+6. **HDL062 的宇宙是 visited 非 declared**（设计选择，hdl-fsm.typort fsmNoExitReport 注释）：可达但无体的状态（已声明、被 goto 指向、体从未执行）不报 HDL062——体未执行即无从证明缺出边，且"已声明但无入边"的另一半由 HDL061 覆盖。
 
 ## 8. 实现落点分级
 
@@ -555,6 +573,8 @@ regAssign(stateReg, stateNext)                           // 时钟沿
 | S3 Fragment | StreamData[Fragment[T]]；addFragmentLast 两版；isFirst/isLast/lastFire；废弃 StreamFragment struct | hdl-stream.typort + 示例改写 | 用例 19i'；L1+L2 |
 | S4 FSM | hdl-fsm.typort；module 宏 FsmCtx 重置；HDL060-064 + HDL011 细化；删除 hdl-misc-io 简化版并改写 20-misc | hdl-fsm.typort + hdl-check/hdl-macros 增量 | 用例 26-fsm 全部；L1+L2+L3（状态序列） |
 | S5（二期候选） | derive(StreamData)、FSM surface macro、StateDelay、StreamFifoLowLatency、Mux/Demux joinSel/regSel、Arbiter 其余策略、fragmentTransaction、硬件 Enum 迁移 | 各自立项 | — |
+
+**S4 交付注记（2026-09-27 评审，详见 §7.7）**：hdl-fsm.typort + 宏 prologue 重置 + HDL060-064 已交付（HDL011 细化未做，走 when(1) 兜底，§7.3）；**"删除 hdl-misc-io 简化版并改写 20-misc"未交付**——旧 `stateMachine/stateGoto/stateIs`（`hdl-misc-io.typort:203-225`）与新 DSL 并存，`examples/hdl/20-misc.typort` 的 miscFsm 仍用旧 API；**26-fsm.typort 用例未新建**（26 编号已被 26-assert 占用），L2 断言改由 `src/L13_namespace/hdl_fsm_tests.rs` 承担；**L3 状态序列仿真未做**。
 
 每阶段结束跑全量 examples 回归（L1）与 legacy_tests 断言（L2），L3 按 `tools/spinalhdl-verify/verify.py` 协议（仿真器缺席时标记 unverified）。
 
@@ -641,18 +661,20 @@ module fragLast {
 
 期望：`assign last = ...` 由 `willOverflowIfInc` 组合链产生；L3：5 元素一组的 last 脉冲周期核对。
 
-### 11.6 FSM 基线（新增 examples/hdl/26-fsm.typort，S4）
+### 11.6 FSM 基线（原计划新增 examples/hdl/26-fsm.typort，S4）
 
-§7.2 的 `fsmDemo` 全文即用例。期望 Verilog = §7.3 代码块（关键断言串：`ctrl_stateNext = ctrl_stateReg;` 默认行在 if 之前、`if (ctrl_stateReg == 2'd0 && start)`、`ctrl_stateReg <= ctrl_stateNext;`、复位行 `if (reset) ctrl_stateReg <= 2'd0;`）。
+【实现偏差，见 §7.7-4】26-fsm.typort **未新建**（26 编号已被 26-assert 占用）；本节用例由 `src/L13_namespace/hdl_fsm_tests.rs` 的 L2 断言承担（`fsm_acceptance_demo_verilog` 等）。
 
-自检触发用例（L2 断言 warning 文本）：
-- `sDone.goto()` 写 `sX.goto2()`（越界常量 4）→ HDL060；
+§7.2 的 `fsmDemo` 全文即用例。期望 Verilog = §7.3 实跑修正后的代码块（关键断言串，按 2026-09-27 实跑：`if (1) begin` + `ctrl_stateNext = ctrl_stateReg;` 默认行在所有 goto if 之前、条件序为用户条件在外 `if (start && (ctrl_stateReg == 0))`、`ctrl_stateReg <= ctrl_stateNext;`、复位行 `if (reset) begin` + 裸字面量 `ctrl_stateReg <= 0;`——原稿的 `2'd0` 复位行与 `ctrl_stateReg == 2'd0 && start` 条件序与实跑不符，已按实跑修正）。
+
+自检触发用例（L2 断言 warning 文本；已在 hdl_fsm_tests 落地）：
+- `sX.goto(4)`（越界常量）→ HDL060；
 - 4 状态只连 2 个 → HDL061；
-- `sDone.whenIsActive({ done := True })` 无 goto → HDL062（加 `sDone.noExitCheck()` 后消失）；
-- 状态体外的裸 `ctrl.goto(1)` → HDL064；
-- FSM 模块不再出现 HDL011（D5 细化的回归断言）。
+- `sDone.whenIsActive { done := true }` 无 goto → HDL062（加 `sDone.noExitCheck()` 后消失）；
+- 状态体外的裸 `ctrl.goto(1)` → HDL064（含语序覆盖：裸 goto 在首/中位置亦报，见 §7.7-5）；
+- FSM 模块不再出现 HDL011（when(1) 兜底的回归断言；D5 细化未做，见 §7.7-1）。
 
-L3：`v_fsm.typort` 时序激励——start 脉冲后状态序列 0→1→(finish)2→(复位路径)0，逐拍与 Python 参考状态机比对（协议见 `docs/spinalhdl-lib-replication.md` §4）。
+L3：`v_fsm.typort` 时序激励——start 脉冲后状态序列 0→1→(finish)2→(复位路径)0，逐拍与 Python 参考状态机比对（协议见 `docs/spinalhdl-lib-replication.md` §4）。【未做】仿真器缺席，一期未交付，记入偏差。
 
 ## 12. 风险与开放问题
 
@@ -662,4 +684,4 @@ L3：`v_fsm.typort` 时序激励——start 脉冲后状态序列 0→1→(finis
 - **O4 现状 m2sPipe 的 L3 盲区**：F1-F5 能存活至今说明现有激励未覆盖满/反压场景——S1 的 L3 用例必须补"valid 保持 + ready 拉低 N 拍 + 恢复"的标准反压序列，否则修正无法判定。
 - **O5 stateNext 的 always@(*) 依赖**：FSM 展开依赖"when 驱动 wire → reg 声明 + blocking default"生成器行为（`hdl-verilog.typort:435-459/827-857`）。该行为是现行既定语义（examples 大量使用），风险低，但 26-fsm 的 L2 断言会锁定它。
 - **O6 状态计数与检查日志的归属**：FsmCtx 是文件级全局，跨模块 create 重放（`docs/hdl-selfcheck-design.md` §2 的 ~3 次重放）会重复记录 goto——沿用 CheckIssues 的行级去重 + seen-set 通道即可，规则侧按 `"mod|fsm|from|to"` 整行幂等。
-- **O7 prelude 文件加载顺序**：hdl-fsm 依赖 hdl-check 的报告通道与 hdl-utils 的 counter；需排在 hdl-check 之后（对齐 hdl-check 现加载位次说明，`hdl-check.typort:62-67` 的 chkCdEq 本地拷贝先例）。
+- **O7 prelude 文件加载顺序**：【实现偏差，2026-09-27 评审修正】原稿称"hdl-fsm 依赖 hdl-check 的报告通道与 hdl-utils 的 counter；需排在 hdl-check 之后"——**与实现不符**。实际 hdl-fsm 只依赖 hdl-core（ModuleTree/headModuleDef/whenBegin/whenEnd/createSignalExpr/loopName/Expr 变体）与 hdl-types（Data/Bool/UInt/Into 桥）；`report_check_issue` 是 **Rust 内建 prim**（非 hdl-check 的 def，hdl-check 自己也只是调用方），无加载序约束。落地位置在 hdl-stream 之后、hdl-macros 之前即可（`src/L13_namespace/mod.rs` PRELUDE_HDL，hdl-macros 的 prologue 反向调用 fsmCtxModuleReset，更晚加载不受影响）。
