@@ -361,8 +361,11 @@ pub struct Backend<C: ClientLike + Send + Sync + 'static> {
     /// `document_id.len()`；`did_close` 开始删条目后 `len()` 会与仍存活的
     /// id 撞车，必须换成独立计数器（见 [`Self::next_path_id`]）。
     next_path_id: AtomicU32,
-    /// Full document text for incremental sync (maintained on the LSP server thread)
-    pub document_buffers: Mutex<HashMap<String, String>>,
+    /// Full document text for incremental sync (maintained on the LSP server
+    /// thread). 存 `Rope` 而非 `String`：增量编辑直接在 rope 上做
+    /// （position→offset 转换本就要 rope），省掉旧实现每键击两次全卷
+    /// 拷贝（String→Rope 重建 + 写回 Rope→String）。
+    pub document_buffers: Mutex<HashMap<String, Rope>>,
     /// Explicit formatter settings from
     /// `InitializeParams.initialization_options` (`{"format": {...}}`).
     /// `None` fields fall back to the per-request `FormattingOptions`.
@@ -3033,7 +3036,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     fn document_text(&self, uri: &Url) -> Option<String> {
         let buffers = self.document_buffers.lock().unwrap();
         match buffers.get(uri.as_str()) {
-            Some(t) => Some(t.clone()),
+            Some(t) => Some(t.to_string()),
             None => self.document_map.get(uri.as_str()).map(|r| r.to_string()),
         }
     }
@@ -3170,16 +3173,18 @@ impl LanguageServer for Backend<Client> {
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
-        // Store full text for incremental sync
+        // Store full text for incremental sync（rope 一份；作业直接移动
+        // params 自带的 String，不再多克隆一份全文）
+        let open_text = params.text_document.text;
         self.document_buffers.lock().unwrap().insert(
             params.text_document.uri.to_string(),
-            params.text_document.text.to_string(),
+            Rope::from_str(&open_text),
         );
         let uri = params.text_document.uri.to_string();
         self.pending_uris.insert(uri.clone(), true);
         let job = AnalysisJob {
             uri: params.text_document.uri.clone(),
-            text: params.text_document.text.to_string(),
+            text: open_text,
             version: Some(params.text_document.version),
         };
         self.job_sender.send(job).ok();
@@ -3190,35 +3195,35 @@ impl LanguageServer for Backend<Client> {
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
-        // Apply incremental edits to the stored document buffer
+        // Apply incremental edits to the stored document buffer（直接在常驻
+        // rope 上编辑：position→offset 本就需要 rope，旧实现每键击的
+        // String→Rope 全卷重建与写回 Rope→String 全卷拷贝都省掉；作业
+        // 仍需一次 to_string，与旧 buffer.clone() 同价）
         let full_text = {
             let mut buffers = self.document_buffers.lock().unwrap();
             if let Some(buffer) = buffers.get_mut(params.text_document.uri.as_str()) {
                 for change in &params.content_changes {
                     if let Some(range) = change.range {
                         // Incremental edit: replace text at the specified range
-                        let rope = Rope::from_str(buffer);
                         if let (Some(start), Some(end)) = (
-                            position_to_offset(range.start, &rope),
-                            position_to_offset(range.end, &rope),
+                            position_to_offset(range.start, buffer),
+                            position_to_offset(range.end, buffer),
                         ) {
-                            let mut rope = rope;
                             // Convert byte offsets to char offsets for ropey operations
-                            let start_char = rope.byte_to_char(start);
-                            let end_char = rope.byte_to_char(end);
-                            rope.remove(start_char..end_char);
-                            rope.insert(start_char, &change.text);
-                            *buffer = rope.to_string();
+                            let start_char = buffer.byte_to_char(start);
+                            let end_char = buffer.byte_to_char(end);
+                            buffer.remove(start_char..end_char);
+                            buffer.insert(start_char, &change.text);
                         } else {
                             // Fallback: position conversion failed, replace whole text
-                            *buffer = change.text.clone();
+                            *buffer = Rope::from_str(&change.text);
                         }
                     } else {
                         // No range = full text replacement
-                        *buffer = change.text.clone();
+                        *buffer = Rope::from_str(&change.text);
                     }
                 }
-                buffer.clone()
+                buffer.to_string()
             } else {
                 // No existing buffer — fallback to first change's text
                 params.content_changes[0].text.clone()
