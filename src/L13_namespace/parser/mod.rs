@@ -596,9 +596,28 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
     smolstr(Ident)
         .map(Raw::Var)
         .or(kw(ThisKeyword).map(|s| Raw::Var(s.map(|_| SmolStr::new("this")))))
-        .or(Cut((kw(TypeKeyword), string(Num))).map(|(_, num)| Raw::U(
-            num.and_then(|x| x.data.parse::<u32>().ok()).unwrap_or(0)
-        )))//TODO:do not unwrap
+        // `Type N` 的 N 超出 u32（含超过 u64 的长数字）：旧实现
+        // `unwrap_or(0)` 静默变 `Type 0`（`Type 99999999999` 与 `Type 0`
+        // 等价通过）。补一条解析错误并退化为 `Type 0`，与 Nat 字面量的
+        // u64 溢出同路径（错误经常规语法错误管道浮出，不 panic）。
+        // 注意 `Cut((kw, string))` 元组的尾部组件是 Option：Num 缺失时
+        // Cut 已 push_error 并就地降级（None），该分支不补第二报错。
+        .or(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
+            let (rest, (_, num)) = Cut((kw(TypeKeyword), string(Num))).parse(input, state)?;
+            let lvl = match num.as_ref().map(|x| x.data.parse::<u32>()) {
+                Some(Ok(n)) => n,
+                Some(Err(_)) => {
+                    state.push_error(IError {
+                        msg: num.as_ref().unwrap().to_span().map(|_| {
+                            ErrMsg::Custom("universe level does not fit in u32".to_owned())
+                        }),
+                    });
+                    0
+                }
+                None => 0,
+            };
+            Ok((rest, Raw::U(lvl)))
+        })
         .or(kw(Hole).map(Raw::Hole))
         .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
         .or(|input: &'b [TokenNode<'a>], state: &mut MacroState| {

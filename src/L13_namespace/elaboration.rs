@@ -500,6 +500,15 @@ impl Infer {
                 } else if x2_is_self && !x1_is_self {
                     Ok(cxt.update_cxt(self, *x2, t, true))
                 } else {
+                    // 双侧都已精化：直接覆盖 `x1 := Rigid(x2)`。2026-09-29 评审
+                    // F5 指出这会丢 x1 的既有精化（理论上可构造约束丢失），
+                    // 曾尝试对齐 (Rigid,_) 臂做 already-refined 递归传播——
+                    // 实测在全量语料上触发无限递归（STATUS_STACK_OVERFLOW，
+                    // repro_sumcase_panic 等 24 个测试目标命中）：env 精化链
+                    // 可能成环（x1→x2→x1）或指向带 spine 的 Rigid，递归无
+                    // 终止保证。回退为原覆盖语义，等 GADT 索引细化机制统一
+                    // 重写时（l08-l13-refactor-plan）按带 visited 集的收敛
+                    // 方案处理。
                     Ok(cxt.update_cxt(self, *x1, t_prime, true))
                 }
             }
@@ -1367,8 +1376,17 @@ impl Infer {
                 let mut universe_lvl = 0;
                 for p in params.iter() {
                     let u = self.infer_expr(cxt, p.1.clone());
-                    if let Ok(t) = u {
-                        if let Tm::U(lvl) = t.0.as_ref() {
+                    if let Ok((tm, _)) = u {
+                        // 取参数注解**求值并 force 后**的宇宙等级，而不是项的
+                        // 语法形态：旧 `Tm::U(lvl)` 匹配漏掉别名——`[A : U3]`
+                        //（U3 = Type 3）的 infer 结果是 `Tm::Decl("U3")`，贡献
+                        // 被静默丢弃，universe_lvl 停在 0，于是大宇宙参数域的
+                        // enum 落进 `Type 0`（Girard 式宇宙逃逸：`Bad[Type 2]
+                        // : Type 0` 通过）。字面量 `Type n` eval 后同为
+                        // `Val::U(n)`，故本判定与旧直写情形逐程序同值，只封住
+                        // 别名漏算，不改已接受程序的等级。
+                        let v = self.force(&cxt.decl, &self.eval(&cxt.decl, &cxt.env, &tm));
+                        if let Val::U(lvl) = v.as_ref() {
                             universe_lvl = max(*lvl, universe_lvl);
                         }
                     }
@@ -2763,7 +2781,16 @@ impl Infer {
             }
 
             // Infer universe type
-            Raw::U(x) => Ok((Tm::U(x).into(), Val::U(x + 1).into())),
+            // `checked_add`：`Type 4294967295` 的 `x + 1` 在 u32 上溢——debug
+            // 构建 panic、release 静默回绕成 `Type 0`（`Type MAX : Type 0` 假
+            // 通过）。超界报普通错误；parser 侧对超出 u32 的字面量另有报错。
+            Raw::U(x) => match x.checked_add(1) {
+                Some(lvl) => Ok((Tm::U(x).into(), Val::U(lvl).into())),
+                None => Err(Error(
+                    t_span.map(|_| format!("universe level {x} is too large")),
+                    vec![],
+                )),
+            },
 
             // Infer dependent function types
             Raw::Pi(x, i, a, b) => {

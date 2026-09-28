@@ -5303,3 +5303,65 @@ def const_zero(x: Nat): Nat =
             Ok(out) => panic!("通配臂之后的臂（运行时永不可达）被静默接受：\n{out}"),
         }
     }
+
+// ── 2026-09-29 评审修复回归钉 ────────────────────────────────────────────
+
+/// 宇宙等级溢出（评审 F2）：`Type 4294967295` 的 `x + 1` 此前在 u32 上
+/// 溢——debug 构建 panic、release 静默回绕成 `Type 0`（`Type MAX : Type 0`
+/// 假通过）；`Type 99999999999` 此前被 parser `unwrap_or(0)` 静默吞成
+/// `Type 0`。两条路径现在都必须报错，且不得 panic。
+#[test]
+fn test_universe_level_overflow_rejected() {
+    let overflow = "def x : Type 4294967295 = Nat\n";
+    match run_with_prelude(overflow) {
+        Err(e) => assert!(
+            e.0.data.contains("too large"),
+            "u32 溢出错误文案不符：{}", e.0.data
+        ),
+        Ok(out) => panic!("Type 4294967295 被静默接受：\n{out}"),
+    }
+    let big = "def y : Type 99999999999 = Nat\n";
+    match run_with_prelude(big) {
+        Err(e) => assert!(
+            e.0.data.contains("does not fit in u32"),
+            "超界字面量错误文案不符：{}", e.0.data
+        ),
+        Ok(out) => panic!("Type 99999999999 被静默接受（旧 unwrap_or(0) 路径）：\n{out}"),
+    }
+    // 正向对照：合法宇宙层级不受影响。
+    run_with_prelude("def z : Type 3 = Type 2\n")
+        .unwrap_or_else(|e| panic!("合法宇宙层级被误拒：{}", e.0.data));
+}
+
+/// enum 参数宇宙经别名引入（评审 F1）：universe 扫描旧实现只认
+/// `Tm::U` 语法形态——`[A : U4]`（U4 = Type 4）的 infer 结果是
+/// `Tm::Decl("U4")`，贡献被静默丢弃、universe_lvl 停在 0，大宇宙参数域
+/// 的 enum 落进 `Type 0`（Girard 式宇宙逃逸）。修复后别名与直写同判。
+#[test]
+fn test_enum_param_universe_via_alias_rejected() {
+    // 别名形态：修复前 leak 通过（Bad : Type 0），修复后必须拒。
+    let alias = r#"
+def U4 : Type 5 = Type 4
+enum Bad [A : U4] { mk }
+def leak : Type 0 = Bad[Type 3]
+"#;
+    match run_with_prelude(alias) {
+        Err(_) => {}
+        Ok(out) => panic!("别名宇宙参数被静默放进 Type 0：\n{out}"),
+    }
+    // 直写形态对照：修复前后行为一致（都应拒）。
+    let direct = r#"
+enum Bad2 [A : Type 4] { mk }
+def leak2 : Type 0 = Bad2[Type 3]
+"#;
+    match run_with_prelude(direct) {
+        Err(_) => {}
+        Ok(out) => panic!("直写大宇宙参数被静默放进 Type 0：\n{out}"),
+    }
+    // 反向对照：小宇宙参数化 enum 的合法用法不受影响。
+    let ok = r#"
+enum Fine [A : Type 0] { mk(x: A) }
+def use : Type 0 = Fine[Nat]
+"#;
+    run_with_prelude(ok).unwrap_or_else(|e| panic!("合法 enum 参数化被误拒：{}", e.0.data));
+}

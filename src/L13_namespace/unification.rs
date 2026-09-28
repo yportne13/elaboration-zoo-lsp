@@ -535,8 +535,14 @@ impl Infer {
                 // is a constant function over the meta's context.
                 // (rename with an empty renaming succeeds iff the rhs does not
                 // depend on any context variable or spine-scoped meta.)
+                //
+                // `occ: Some(m)`：与下方可逆路径（solve_with_pren）同款 occurs
+                // check——旧实现 `occ: None` 不拒绝 rhs 里的**裸** `Flex(m)`，
+                // 解出 `m := λ…m` 自环（此后每次 force 烧 fuel 降级并持续消耗
+                // 共享 fuel 池，可能把后续无关 unify 打成假 can't unify）。
+                // 带 occ 后 rename 命中 m 即 Err(Basic)，下方照旧降级 Stuck。
                 let empty = PartialRenaming {
-                    occ: None,
+                    occ: Some(m),
                     dom: Lvl(0),
                     cod: gamma,
                     ren: Rc::new(HashMap::new()),
