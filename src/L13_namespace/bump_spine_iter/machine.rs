@@ -4456,7 +4456,7 @@ impl Machine {
             Decl::Class { name, params, items, traits } => {
                 // ══ Phase A：在 create 的参数上下文里逐字段推类型（struct
                 // 尚不存在）══（参考版 1861-1967 逐句）
-                let __probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
+                let __probe = super::super::decl_probe_enabled();
                 let __pa0 = self.metas.len();
                 if __probe {
                     eprintln!("[CLASS {}] twin A-start", name.data);

@@ -2007,7 +2007,7 @@ impl Infer {
                 // implicit `bn: BindingName` for Module classes (mirrors the
                 // create's ctor params so inferred types quote to the same
                 // names/levels the create will use).
-                let __probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
+                let __probe = super::decl_probe_enabled();
                 let __pa0 = self.meta.len();
                 if __probe {
                     eprintln!("[CLASS {}] ref A-start", name.data);

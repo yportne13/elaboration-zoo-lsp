@@ -14,6 +14,17 @@ use super::{
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+/// [`Infer::solve_multi_trait`] 的待解条目快照缓冲池：旧实现每次调用
+/// `self.trait_metas.clone()` 整表快照（该表整个会话保持 prelude 规模），
+/// 改为 retain 单遍 + 待解条目收进带所有权的小缓冲，按 LIFO 复用（嵌套
+/// solve 重入链各取各的缓冲，互不踩），暖机后零分配。池上限 = 最大 solve
+/// 重入深度。见 twin 侧同点位 `bump_spine_iter/typeclass.rs` 的
+/// TRAIT_METAS_SNAP_POOL（12c23b9，含 A/B 数据）。
+thread_local! {
+    static TRAIT_METAS_SNAP_POOL: std::cell::RefCell<Vec<Vec<MetaVar>>> =
+        std::cell::RefCell::new(Vec::new());
+}
+
 /// True when `v` is an application of a *prim-backed* declaration.  Such a
 /// value only reaches the re-eval branches below after `unify`'s entry
 /// `force` already re-ran the prim (force's `Val::Decl` arm retries it) and
@@ -596,24 +607,44 @@ impl Infer {
     }
     pub fn solve_multi_trait(&mut self, cxt: &Cxt, m: MetaVar, allow_flex_defaulting: bool) -> Result<(), UnifyError> {
         let _g = super::prof_enter(&super::FUNC_PROF.solve_trait.0, &super::FUNC_PROF.solve_trait.1);
-        // Clean up entries pointing to truncated metas
-        self.trait_metas.retain(|mv| (mv.0 as usize) < self.meta.len());
-        // Iterate only trait-typed metas (not ALL metas)
-        for mv in self.trait_metas.clone() {
-            if mv.0 < m.0 { continue; }
-            let idx = mv.0 as usize;
-            if idx >= self.meta.len() { continue; }
-            let (x, meta_cxt) = match &self.meta[idx] {
-                MetaEntry::Unsolved(v, arc_cxt, _, _) => (v.clone(), arc_cxt.as_ref().clone()),
-                _ => continue,
-            };
-            let typ = self.solve_trait(&meta_cxt, &x, allow_flex_defaulting)
-                .map_err(UnifyError::Trait)?;
-            if let Some((_, val)) = typ {
-                self.meta[idx] = MetaEntry::Solved(val, x);
+        // 旧实现每次 `self.trait_metas.clone()` 整表快照——该表整个会话保持
+        // prelude 规模（均值 3234 条、峰值 6585 条），而 solve 是 unify 的通用
+        // 求解臂，每次 trait 求解都触发（twin 侧同点位 12c23b9 实测 5 万次/轮
+        // ≈ 每轮数百 MB 分配+memcpy；本参考版系同型移植）。改 retain 单遍 +
+        // 待解条目（`mv >= m` 是常量谓词，从逐条 visit 提前到收集期——逐条
+        // 等价）收进 LIFO 池化所有权小缓冲：嵌套 solve 重入链各取各的缓冲，
+        // 暖机后零分配。无语义状态、跨轮安全。
+        // 幸存条目的 `mv < meta.len()` 由 retain 在入口保证，此后 meta 只增、
+        // 或经嵌套求解截断——后者旧代码也是 visit 期 bounds 检查跳过，下面的
+        // 循环原样保留该现读检查。
+        let mut snap = TRAIT_METAS_SNAP_POOL.with(|p| p.borrow_mut().pop().unwrap_or_default());
+        let r = (|| {
+            snap.clear();
+            let ml = self.meta.len();
+            self.trait_metas.retain(|mv| {
+                let keep = (mv.0 as usize) < ml;
+                if keep && mv.0 >= m.0 {
+                    snap.push(*mv);
+                }
+                keep
+            });
+            for mv in snap.iter() {
+                let idx = mv.0 as usize;
+                if idx >= self.meta.len() { continue; }
+                let (x, meta_cxt) = match &self.meta[idx] {
+                    MetaEntry::Unsolved(v, arc_cxt, _, _) => (v.clone(), arc_cxt.as_ref().clone()),
+                    _ => continue,
+                };
+                let typ = self.solve_trait(&meta_cxt, &x, allow_flex_defaulting)
+                    .map_err(UnifyError::Trait)?;
+                if let Some((_, val)) = typ {
+                    self.meta[idx] = MetaEntry::Solved(val, x);
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })();
+        TRAIT_METAS_SNAP_POOL.with(|p| p.borrow_mut().push(snap));
+        r
     }
     pub fn solve_trait(&mut self, cxt: &Cxt, x: &Rc<Val>, allow_flex_defaulting: bool) -> Result<Option<(Rc<Tm>, Rc<Val>)>, String> {
         if let Val::Sum(name, params, _, true) = x.as_ref() {

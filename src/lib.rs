@@ -52,6 +52,9 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 use serde_json::Value;
 use lsp_types::notification::{DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument, Notification};
+// main_loop 的 method-first 分派按 `<Ty>::METHOD` 匹配方法名：请求侧的
+// METHOD 关联常量由 `request::Request` trait 提供，须在作用域内。
+use lsp_types::request::Request as _;
 use lsp_types::{CancelParams, NumberOrString, *};
 use crate::ls::Result;
 
@@ -788,7 +791,26 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         if def_span.start_offset as usize > rope.len_bytes() {
             return None;
         }
-        let before = rope.byte_slice(0..def_span.start_offset as usize).to_string();
+        // 旧实现拷贝声明前的整个文档前缀（百 KB 文件里 def 在尾部时每次
+        // hover 白拷全文）；而 extract_doc_prefix 只消费紧邻的连续 `///` 行。
+        // 改取声明上方至多 DOC_WINDOW_LINES 个完整行的小窗口：窗口首行不是
+        // doc 行 ⇒ 真实 doc 段必然整个落在窗口内，结果与全量扫描逐字节一致；
+        // 首行仍是 doc 行（>64 行的超长 doc 段，现实中不存在）才回退全量前缀。
+        const DOC_WINDOW_LINES: usize = 64;
+        let def_line = rope.byte_to_line(def_span.start_offset as usize);
+        let first_line = def_line.saturating_sub(DOC_WINDOW_LINES);
+        let window_start = if first_line == 0 {
+            0
+        } else {
+            rope.line_to_byte(first_line)
+        };
+        let window_head_is_doc = first_line == 0
+            || rope.line(first_line).to_string().trim_start().starts_with("///");
+        let before = if window_head_is_doc {
+            rope.byte_slice(0..def_span.start_offset as usize).to_string()
+        } else {
+            rope.byte_slice(window_start..def_span.start_offset as usize).to_string()
+        };
         // Single implementation shared with `typort doc`: complete lines above
         // the declaration (cut after the last newline, not before it) so the
         // declaration's own partial line (`def foo…`) is skipped without
@@ -3538,144 +3560,152 @@ impl Backend<Client> {
                         }
                         continue;
                     }
-                    match cast::<GotoDefinition>(req.clone()) {
-                        Ok((id, params)) => {
+                    // Method-first 分派：旧实现对每条请求顺序试探
+                    // `cast::<T>(req.clone())`——未知方法最多 12 次完整 JSON
+                    // 深克隆（被支持的方法平均也要先白付 1-10 次克隆）。先比
+                    // 方法名、命中才把 req 移进 cast（params 只反序列化一次）。
+                    let req_method = req.method.clone();
+                    match req_method.as_str() {
+                        GotoDefinition::METHOD => {
+                            let (id, params) = match cast::<GotoDefinition>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.goto_definition(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<HoverRequest>(req.clone()) {
-                        Ok((id, params)) => {
+                        HoverRequest::METHOD => {
+                            let (id, params) = match cast::<HoverRequest>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.hover(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<InlayHintRequest>(req.clone()) {
-                        Ok((id, params)) => {
+                        InlayHintRequest::METHOD => {
+                            let (id, params) = match cast::<InlayHintRequest>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.inlay_hint(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<Completion>(req.clone()) {
-                        Ok((id, params)) => {
+                        Completion::METHOD => {
+                            let (id, params) = match cast::<Completion>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.completion(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             if !self.cancelled_requests.lock().unwrap().remove(&id) {
                                 let resp = Response { id, result: Some(result), error: None };
                                 self.client.connection.sender.send(Message::Response(resp))?;
                             }
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<References>(req.clone()) {
-                        Ok((id, params)) => {
+                        References::METHOD => {
+                            let (id, params) = match cast::<References>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.references(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<SemanticTokensFullRequest>(req.clone()) {
-                        Ok((id, params)) => {
+                        SemanticTokensFullRequest::METHOD => {
+                            let (id, params) = match cast::<SemanticTokensFullRequest>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.semantic_tokens_full(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             if !self.cancelled_requests.lock().unwrap().remove(&id) {
                                 let resp = Response { id, result: Some(result), error: None };
                                 self.client.connection.sender.send(Message::Response(resp))?;
                             }
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<SemanticTokensRangeRequest>(req.clone()) {
-                        Ok((id, params)) => {
+                        SemanticTokensRangeRequest::METHOD => {
+                            let (id, params) = match cast::<SemanticTokensRangeRequest>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.semantic_tokens_range(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             if !self.cancelled_requests.lock().unwrap().remove(&id) {
                                 let resp = Response { id, result: Some(result), error: None };
                                 self.client.connection.sender.send(Message::Response(resp))?;
                             }
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<Rename>(req.clone()) {
-                        Ok((id, params)) => {
+                        Rename::METHOD => {
+                            let (id, params) = match cast::<Rename>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.rename(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<CodeActionRequest>(req.clone()) {
-                        Ok((id, params)) => {
+                        CodeActionRequest::METHOD => {
+                            let (id, params) = match cast::<CodeActionRequest>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.code_action(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<ExecuteCommand>(req.clone()) {
-                        Ok((id, params)) => {
+                        ExecuteCommand::METHOD => {
+                            let (id, params) = match cast::<ExecuteCommand>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.execute_command(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<Formatting>(req.clone()) {
-                        Ok((id, params)) => {
+                        Formatting::METHOD => {
+                            let (id, params) = match cast::<Formatting>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.formatting(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
-                    match cast::<RangeFormatting>(req.clone()) {
-                        Ok((id, params)) => {
+                        RangeFormatting::METHOD => {
+                            let (id, params) = match cast::<RangeFormatting>(req) {
+                                Ok(x) => x,
+                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            };
                             let result = self.range_formatting(params)?;
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                            continue;
                         }
-                        Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                        Err(ExtractError::MethodMismatch(req)) => req,
-                    };
+                        _ => {}
+                    }
                 }
                 Message::Response(resp) => {
                 }
@@ -3691,33 +3721,39 @@ impl Backend<Client> {
                             self.cancelled_requests.lock().unwrap().insert(rid);
                         }
                     } else {
-                        match on::<DidOpenTextDocument>(not.clone()) {
-                            Ok(params) => {
-                                self.did_open(params);
-                            },
-                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                            Err(ExtractError::MethodMismatch(not)) => (),
-                        }
-                        match on::<DidChangeTextDocument>(not.clone()) {
-                            Ok(params) => {
-                                self.did_change(params);
-                            },
-                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                            Err(ExtractError::MethodMismatch(not)) =>(),
-                        }
-                        match on::<DidCloseTextDocument>(not.clone()) {
-                            Ok(params) => {
-                                self.did_close(params);
-                            },
-                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                            Err(ExtractError::MethodMismatch(not)) => (),
-                        }
-                        match on::<DidSaveTextDocument>(not) {
-                            Ok(params) => {
-                                self.did_save(params);
-                            },
-                            Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                            Err(ExtractError::MethodMismatch(not)) => (),
+                        // 同请求侧：方法名先行（didSave 此前白付 3 次
+                        // not.clone() 的全文深克隆）。
+                        let not_method = not.method.clone();
+                        match not_method.as_str() {
+                            DidOpenTextDocument::METHOD => {
+                                match on::<DidOpenTextDocument>(not) {
+                                    Ok(params) => self.did_open(params),
+                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
+                                }
+                            }
+                            DidChangeTextDocument::METHOD => {
+                                match on::<DidChangeTextDocument>(not) {
+                                    Ok(params) => self.did_change(params),
+                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
+                                }
+                            }
+                            DidCloseTextDocument::METHOD => {
+                                match on::<DidCloseTextDocument>(not) {
+                                    Ok(params) => self.did_close(params),
+                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
+                                }
+                            }
+                            DidSaveTextDocument::METHOD => {
+                                match on::<DidSaveTextDocument>(not) {
+                                    Ok(params) => self.did_save(params),
+                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }

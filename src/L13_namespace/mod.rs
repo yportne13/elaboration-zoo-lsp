@@ -3770,6 +3770,15 @@ fn prelude_pool_disabled() -> bool {
     *NO_POOL.get_or_init(|| std::env::var_os("TYPORT_NO_PRELUDE_POOL").is_some())
 }
 
+/// 诊断开关：`TYPORT_DECL_PROBE` 打印 class 声明各相位的 meta 计数流水
+/// （参考版 elaboration.rs / twin machine.rs、observe.rs、entry.rs 各有
+/// 消费点）。`env::var_os` 每次 ~1-2µs，此前每个 class 声明各查一次，
+/// prelude+kick 累计上万次——进程启动后缓存一次即可。
+pub(crate) fn decl_probe_enabled() -> bool {
+    static PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PROBE.get_or_init(|| std::env::var_os("TYPORT_DECL_PROBE").is_some())
+}
+
 impl PreludeSlot {
     fn new(pool: &'static PreludePool) -> Self {
         let initial = if prelude_pool_disabled() {

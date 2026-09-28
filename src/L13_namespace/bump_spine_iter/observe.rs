@@ -941,7 +941,7 @@ struct P {
                 for e in infer.accumulated_errors.drain(..) {
                     rerrs.push(e.0.data.clone());
                 }
-                if std::env::var_os("TYPORT_DECL_PROBE").is_some() {
+                if crate::L13_namespace::decl_probe_enabled() {
                     eprintln!("[DECL{i}] ref metas+{}", infer.meta.len() - m0);
                 }
             }

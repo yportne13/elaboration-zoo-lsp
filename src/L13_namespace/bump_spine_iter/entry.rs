@@ -1214,7 +1214,7 @@ impl Tycker {
         let bump = &self.bump;
         let mut cxt = clone_cxt(&r.cxt);
         let mut sink = String::new();
-        let decl_probe = std::env::var_os("TYPORT_DECL_PROBE").is_some();
+        let decl_probe = super::super::decl_probe_enabled();
         // 逐 decl 计时（`TYPORT_KICK_DECLTIME=1`）：LSP kick 口径的成本归属，
         // 是 `bench_check_nf_bounded` 的 `L13BENCH_DECLTIME` 的常驻用户段
         // 对应物——bench 口径回答"哪条声明慢"，这里回答"哪条声明吃掉了
