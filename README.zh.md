@@ -5,7 +5,7 @@
 ## 特性
 
 ### 语言核心
-- **依赖类型**：全谱依赖类型，支持累积宇宙（`Type 0`, `Type 1`, …）
+- **依赖类型**：全谱依赖类型，带宇宙层级（`Type 0`, `Type 1`, …；转换要求层级相等，无累积）
 - **归纳族**：`enum` 支持索引和参数（类似 Agda/GADTs）
 - **结构化记录**：`struct` 带命名字段
 - **模式匹配**：支持依赖模式匹配和荒谬模式（absurd patterns）
@@ -16,7 +16,7 @@
 
 ### 定理证明
 - 归纳类型 `Eq`，支持 `refl`、`cong`、`trans`、`symm`、`subst`
-- 内置引理：`add_zero_right`、`add_comm`、`add_assoc`、`mul_one_right`
+- 内置引理：`add_zero_right`、`add_comm`、`add_assoc`（另有辅助引理 `add_succ_left`、`cong_succ`）
 - 基于类型类的求解器，支持关联类型和超 trait
 
 ### HDL（硬件描述语言）
@@ -25,19 +25,33 @@
 |------|------|------|
 | UInt / SInt / Bits | `let a = UInt[8]` | 无符号、有符号、位向量类型 |
 | Bool 信号 | `let cond = Bool` | 布尔线网类型 |
-| 算术运算 | `sum := a + b` | `+`, `-`, `*`, `+^`（进位） |
-| 位运算 | `x := a & b` | `&`, `|`, `^`, `~` |
+| 算术运算 | `sum := a + b` | `+`, `-`, `*`, `/`, `%`, `+^`（进位） |
+| 位运算 | `x := a & b` | `&`, `\|`, `^`, `~` |
 | 比较器 | `lt := a < b` | `<`, `<=`, `>`, `>=`, `===`, `=/=` |
-| 布尔逻辑 | `r := a && b` | `&&`, `||`, `!`, `^` |
+| 布尔逻辑 | `r := a && b` | `&&`, `\|\|`, `!`, `^` |
 | 单比特提取 | `b := a.apply[7]` | 也支持 `a[N]` 方括号语法 |
 | 范围切片 | `low := a.slice[3, 0]` | 提取 `(hi-lo+1)` 位 |
 | 左值位选 | `t[0] := x` | 赋值到特定位 |
 | 多路选择器 | `r := cond.mux(a, b)` | 条件多路复用（SpinalHDL 风格） |
 | 三目运算符 | `r := cond ? a : b` | C 风格三目运算符（脱糖为 `.mux`） |
 | 位拼接 | `f := e ## d` | 位拼接 |
+| 变量移位 | `r := a \|<< sh` / `a \|>> sh` | 保宽变量移位（UInt 移位量；SInt 的 `\|>>` 为算术移位） |
+| SInt abs/expand | `a := sa.abs` / `sa.expand` | 绝对值（UInt）/ 符号扩展（+1 位；UInt 的 `expand` 为零扩展） |
 | 寄存器 | `reg a = UInt[8]` | 带时钟/复位的时序元件 |
+| 带初值寄存器 | `reg a = UInt[8] init 42` | 带异步复位初值的寄存器 |
+| 输出寄存器端口 | `output reg x = UInt[8]` | 寄存器输出端口（`output reg [7:0] x`）；`x := v` 为时钟驱动，`init v` 追加异步复位 |
+| 延迟寄存器 | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL 风格延迟寄存器，适用于任意 Data（UInt/SInt/Bits/Bool） |
+| 计数器 | `let c = counter(8)` / `counterInc(8, en)` | SpinalHDL 风格计数器：自由运行或使能门控递增，`c.value`（reg）+ `c.willOverflow`（组合信号，`~value == 0`） |
+| 存储器 | `let m = memUInt(8, 256)` | SpinalHDL 风格 `Mem`，实现为 `reg [w-1:0] name [0:wordCount-1]` 数组；`m.write(addr, data, en)`（同步写口）、`m.readAsync(addr)`（组合读）、`m.readSync(addr)`（寄存读）、`m.readSyncCC(addr, crossClock)`（第二参数是 `Bool` 占位——尚无同步器；真 CDC 读用 `readSyncCCUInt`） |
+| 类型转换 | `a.asBits` / `b.asUInt` / `c.asBool` | 显式类型转换 |
+| Inout 端口 | `inout io = UInt[8]` | 三态双向端口（`inout wire [7:0] io`）；Bundle 的 `inout()` 方向（在 `impl IMasterSlave` 的 `asMaster` 中声明）在 master 与 slave 两侧都成为 inout 端口 |
 | 子模块 | `mkInstance("u", "Adder")` | 模块例化 |
 | Bundle | `#[derive(Bundle)]` + `impl IMasterSlave` | SpinalHDL 风格批量赋值；自动命名工厂（`TypeName.create`，绑定名前缀，嵌套 bundle 递归创建）；方向在 `impl IMasterSlave` 的 `asMaster` 中声明（struct 不带 in()/out() 标记），`asSlave` 自动翻转，嵌套 bundle 字段递归子 bundle 的 asMaster/asSlave |
+| 硬件枚举 | `#[derive(HdlEnum)] enum FsmState { IDLE RUN DONE }` | SpinalHDL 风格 `SpinalEnum`：元素定义（`FsmState.IDLE`）、`count` / `craft` / `reg` / `regInit` 工厂、编码比较；`switch` 穷尽性警告（HDL040） |
+| FSM | `let ctrl = fsmNew[2](4)` | SpinalHDL 风格 `StateMachine`：`ctrl.state(n)` 状态，`whenIsActive` / `goto` / `onEntry` / `onExit` / `whenIsNext` / `isActive`，转移覆盖自检（HDL060-064） |
+| BlackBox | `blackbox SyncRam[depth, w] { generic WIDTH = w … }` | 厂商原语声明：`ifndef` 守卫的 stub，带 `#(parameter …)` 头；例化时注入参数（`SyncRam.create[64, 8]`） |
+| 仿真断言 | `assert(count < 100, "msg")` | 严重级别变体 `assertInfo` / `assertWarning` / `assertFatal` / `assertCd`；产码为 `translate_off` 包裹的 `$display("TYPORT_ASSERT_<SEV> …")` 标记——`typort test` 捕获到触发即判定失败 |
+| Stream / 跨时钟 | `streamM2sPipeUInt[..]`、`bufferCCUIntCd(..)` | SpinalHDL Stream/Flow/Fragment 原语（按宽度的 `…UInt` / `…Bits` 变体）与 CDC 组件（2FF 同步器、翻转脉冲、异步 FIFO） |
 
 HDL 代码写在 `module` 块中，编译输出 Verilog：
 
@@ -56,7 +70,7 @@ println(moduleTreeVL(adder.create[8].tree))
 - **跳转到定义** – 导航到声明
 - **悬停信息** – 类型和文档展示
 - **自动补全** – 字段和方法建议
-- **语义令牌** – 语法高亮
+- **语法高亮** – VS Code 扩展内置 TextMate 语法（`vscode_extension/syntaxes/`）
 - **内联提示** – 推断的类型标注
 - **诊断信息** – 内联错误报告
 - **代码操作** – 快速修复
@@ -77,11 +91,31 @@ cargo run --release --bin typort -- lsp
 
 # 内存基准测试（需要 mem-profile 特性）
 cargo run --release --features mem-profile --bin typort -- stats
+
+# 交互式教程：一步步学习语言
+cargo run --release --bin typort -- tutorial
+
+# 列出课程 / 从第 3 课开始 / 清除进度
+cargo run --release --bin typort -- tutorial --list
+cargo run --release --bin typort -- tutorial --lesson 3
+cargo run --release --bin typort -- tutorial --reset
+
+# 面向 Verilog+SpinalHDL+Lean 工程师（或 AI）的速查表
+cargo run --release --bin typort -- quick        # 全部参考
+cargo run --release --bin typort -- quick hdl    # 单个主题
+cargo run --release --bin typort -- quick --list
 ```
 
 ### VS Code 扩展
 
 仓库中的 `vscode_extension/` 目录包含 VS Code 扩展，提供语法高亮和 LSP 集成支持。
+
+更多特性演示见 [`examples/hdl/`](examples/hdl/)，每个特性组一个文件
+（声明、算术、位运算、比较、布尔、位选与拼接、寄存器、控制流、层次、
+bundle、嵌套 bundle、存储器、加法器树、算术补充、inout、计数器、输出
+寄存器、utils、stream、杂项、跨时钟、Vec 索引与位宽适配、verilog 兼容、
+verilog 实践、verilog 复位与时钟层次、assert、blackbox）。每个文件运行时
+打印 Verilog，同时兼作回归测试（`test_examples_hdl_dir`）。
 
 ## 示例
 

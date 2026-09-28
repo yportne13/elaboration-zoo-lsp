@@ -103,11 +103,10 @@
 							"twin"
 						],
 						"enumDescriptions": [
-							"Reference elaborator (baseline; lower memory). Debug escape hatch for all hosts, including web.",
-							"L13 twin elaborator (default): ~3.8x faster per edit and faster startup, at ~2x memory. Files with project imports or twin-unsupported constructs fall back automatically."
+							"Reference elaborator (default on the web/wasm backend; lower memory). Available as a debug escape hatch on all hosts.",
+							"L13 twin elaborator (default on the desktop CLI backend): ~3.8x faster per edit and faster startup, at ~2x memory. Files with project imports or twin-unsupported constructs fall back automatically."
 						],
-						"default": "twin",
-						"markdownDescription": "Elaboration engine (sets `TYPORT_LSP_ENGINE`). Defaults to `twin` on both backends; `reference` is a baseline escape hatch for debugging."
+						"markdownDescription": "Elaboration engine (sets `TYPORT_LSP_ENGINE`). The default depends on the host: `twin` on the desktop CLI backend, `reference` on the web/wasm backend (the twin's resident state can exceed the wasm 2 GiB linear-memory ceiling and silently kill the server). An explicit setting here overrides the host default in both directions."
 					}
 				}
 			}

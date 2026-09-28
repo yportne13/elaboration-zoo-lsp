@@ -27,7 +27,7 @@ const SECTIONS: &[Section] = &[
         "概览 · Overview（你在 Verilog/SpinalHDL/Lean 里的对应物）",
         r#"TyportHDL = Lean 风格的依赖类型核心 + SpinalHDL 风格的硬件建模。
 
-  语言: 值 · 类型 · 函数 (依赖类型, 无 GADT)
+  语言: 值 · 类型 · 函数 (依赖类型 + 索引归纳族/GADT 风格)
   HDL : module 宏声明电路，生成 Verilog
   证明: Eq/类型即命题，可写定理与正确性证明
 
@@ -251,7 +251,8 @@ succ_injective 等自证例子见 examples/theorem_proving.typort）。
 生成 Verilog（在 .typort 文件里）:
    println(moduleTreeVL(half_adder.create.tree))     # 单模块
    println(allModulesVL(buildMultiTree()))           # 多模块树
-命令行落盘: typort emit foo.typort --top 'adder[8]' --out out/   # 含 manifest.json
+命令行落盘: typort emit foo.typort --top 'adder[8]' --out out/ --manifest
+   # （manifest 需显式 --manifest，额外产出 out/adder.manifest.json）
 
 参数化模块（隐式参数 = 编译期参数，SpinalHDL Generic）:
    module myAdder[w: Nat]
@@ -313,17 +314,17 @@ succ_injective 等自证例子见 examples/theorem_proving.typort）。
 自动命名: autoUInt(8) / autoUIntInput(8) / autoUIntOutput(8) / autoBool
           / autoUIntReg(8) / autoUIntRegInit(8, 5) — 信号名 = let 绑定名
 
-Stream / Flow / Fragment（SpinalHDL lib 移植, prelude 提供）:
+Stream / Flow / Fragment（SpinalHDL lib 移植, prelude 提供; 按宽度带后缀变体 …UInt/…Bits/…Bool）:
    Stream.mk(valid, ready, payload)
-   streamM2sPipe / streamS2mPipe / streamHalfPipe
-   streamThrowWhen / streamHaltWhen
-   streamFifoConnect / streamFifoCC / streamMux / streamDemux / streamFork
-   Fragment（last 信号）;  CcByToggleIO.mk / BufferCC / bufferCCUIntCd
+   streamM2sPipeUInt / streamS2mPipeUInt / streamHalfPipeUInt
+   streamThrowWhenUInt / streamHaltWhenUInt / streamContinueWhenUInt / streamTakeWhenUInt
+   streamFifoConnect / streamFifoCC / streamMuxUInt / streamDemuxUInt / streamForkUInt[2]
+   Fragment（last 信号）;  CcByToggleIO.mk / bufferCCUInt2 / bufferCCUIntCd
 
 时钟域（多时钟 / 跨时钟）:
    def inCd: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
    module ccPulse[inCd] { ... }              # 模块级时钟域参数
-   pulseCCByToggle / ccByToggle / bufferCCUIntCd / streamFifoCC[8][4]
+   pulseCCByToggle / ccByToggle / bufferCCUIntCd / streamFifoCC[8][4] / readSyncCCUInt
 
 仿真/波形: Typort.toml [test] 段配置 simulator + trace;
    typort test 编译模型并跑 smoke eval（见 examples/hdl、src/sim/）。
@@ -340,7 +341,8 @@ Stream / Flow / Fragment（SpinalHDL lib 移植, prelude 提供）:
 
 从 .typort 到 Verilog:
    typort emit examples/hdl/01-basics.typort --top 'basicDecls[8]' --out out/
-   # 产物: out/basicDecls.v + out/manifest.json（端口/宽度/方向/时钟域）
+   # 产物: out/basicDecls.v（--manifest 才额外产出 out/basicDecls.manifest.json：
+   # 端口/宽度/方向/时钟域）
 
 工程化（Typort.toml）:
    [project] name / top ;  [test] simulator = "verilator" | "icarus" | ...

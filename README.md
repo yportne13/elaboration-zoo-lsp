@@ -5,7 +5,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 ## Features
 
 ### Core Language
-- **Dependent types**: full-spectrum dependent types with cumulative universes (`Type 0`, `Type 1`, …)
+- **Dependent types**: full-spectrum dependent types with a universe hierarchy (`Type 0`, `Type 1`, …; conversion requires equal levels — no cumulativity)
 - **Inductive families**: `enum` with indices and parameters (similar to Agda/GADTs)
 - **Structural records**: `struct` with named fields
 - **Pattern matching**: with dependent pattern matching and absurd patterns
@@ -16,7 +16,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 
 ### Theorem Proving
 - Inductive `Eq` type with `refl`, `cong`, `trans`, `symm`, `subst`
-- Pre-proven lemmas: `add_zero_right`, `add_comm`, `add_assoc`, `mul_one_right`
+- Pre-proven lemmas: `add_zero_right`, `add_comm`, `add_assoc` (plus helpers `add_succ_left`, `cong_succ`)
 - Typeclass-based solver with associated types and supertrait support
 
 ### HDL (Hardware Description Language)
@@ -41,11 +41,16 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 | Output reg ports | `output reg x = UInt[8]` | Register output ports (`output reg [7:0] x`); `x := v` drives clocked, `init v` adds async reset |
 | Delayed register | `regNext(a)` / `regNextWhen(a, cond)` | SpinalHDL-style delay registers, works for any Data (UInt/SInt/Bits/Bool) |
 | Counter | `let c = counter(8)` / `counterInc(8, en)` | SpinalHDL-style counters: free-running or enable-gated increment, `c.value` (reg) + `c.willOverflow` (combinational, `~value == 0`) |
-| Memory | `let m = memUInt(8, 256)` | SpinalHDL-style `Mem` as a `reg [w-1:0] name [0:wordCount-1]` array; `m.write(addr, data, en)` (sync write port), `m.readAsync(addr)` (combinational read), `m.readSync(addr)` (registered read), `m.readSyncCC(addr, cd)` (cross-clock read) |
+| Memory | `let m = memUInt(8, 256)` | SpinalHDL-style `Mem` as a `reg [w-1:0] name [0:wordCount-1]` array; `m.write(addr, data, en)` (sync write port), `m.readAsync(addr)` (combinational read), `m.readSync(addr)` (registered read), `m.readSyncCC(addr, crossClock)` (2nd arg is a `Bool` placeholder — no synchronizer yet; use `readSyncCCUInt` for a true CDC read) |
 | Type casts | `a.asBits` / `b.asUInt` / `c.asBool` | Explicit type conversion |
 | Inout ports | `inout io = UInt[8]` | Tri-state bidirectional ports (`inout wire [7:0] io`); Bundle `inout()` directions (declared in `impl IMasterSlave`'s `asMaster`) become inout ports on both master and slave |
 | Sub-modules | `mkInstance("u", "Adder")` | Module instantiation |
 | Bundle | `#[derive(Bundle)]` + `impl IMasterSlave` | SpinalHDL-style bulk assignment; auto-named factory (`TypeName.create`, binding name prefix, nested bundles recurse); direction introduced in `impl IMasterSlave`'s `asMaster` (struct fields carry no in()/out() markers), `asSlave` auto-flips, nested bundle fields recurse through the child's asMaster/asSlave |
+| Hardware enum | `#[derive(HdlEnum)] enum FsmState { IDLE RUN DONE }` | SpinalHDL-style `SpinalEnum`: element defs (`FsmState.IDLE`), `count` / `craft` / `reg` / `regInit` factories, encoded comparisons; `switch` exhaustiveness warning (HDL040) |
+| FSM | `let ctrl = fsmNew[2](4)` | SpinalHDL-style `StateMachine`: `ctrl.state(n)` states, `whenIsActive` / `goto` / `onEntry` / `onExit` / `whenIsNext` / `isActive`, transfer-coverage self-checks (HDL060-064) |
+| BlackBox | `blackbox SyncRam[depth, w] { generic WIDTH = w … }` | Vendor primitive declaration: `ifndef`-guarded stub with a `#(parameter …)` header; parameters injected at instantiation (`SyncRam.create[64, 8]`) |
+| Simulation assert | `assert(count < 100, "msg")` | Severity variants `assertInfo` / `assertWarning` / `assertFatal` / `assertCd`; emits `translate_off`-wrapped `$display("TYPORT_ASSERT_<SEV> …")` markers — `typort test` fails the run when one fires |
+| Stream / cross-clock | `streamM2sPipeUInt[..]`, `bufferCCUIntCd(..)` | SpinalHDL Stream/Flow/Fragment primitives (per-width `…UInt` / `…Bits` variants) and CDC components (2FF synchronizer, toggle pulse, async FIFO) |
 
 HDL code is written inside a `module` block and compiles to Verilog:
 
@@ -65,14 +70,14 @@ group (declarations, arithmetic, bitwise, compare, bool, bit select & concat,
 registers, control flow, hierarchy, bundle, nested bundle, memory, adder tree,
 extra arithmetic, inout, counter, output reg, utils, stream, misc, cross-clock,
 vec index & width adapter, verilog compat, verilog practice, verilog reset &
-clock hierarchy). Each file prints its Verilog when run and doubles as a
-regression test (`test_examples_hdl_dir`).
+clock hierarchy, assert, blackbox). Each file prints its Verilog when run and
+doubles as a regression test (`test_examples_hdl_dir`).
 
 ### LSP Server
 - **Go to definition** – navigate to declarations
 - **Hover info** – type and doc display
 - **Completions** – field and method suggestions
-- **Semantic tokens** – syntax highlighting
+- **Syntax highlighting** – TextMate grammar bundled with the VS Code extension (`vscode_extension/syntaxes/`)
 - **Inlay hints** – inferred type annotations
 - **Diagnostics** – inline error reporting
 - **Code actions** – quick fixes
@@ -146,7 +151,7 @@ The project is structured as an **elaboration zoo** — each module (`L01_*` …
 
 ```bash
 # Quick memory stats after prelude loading
-cargo run --release --features mem-profile --bin typort -- --stats
+cargo run --release --features mem-profile --bin typort -- stats
 
 # Deep dhat heap profiling (~3 min)
 cargo run --release --features dhat-heap --bin typort -- --stats

@@ -1,5 +1,10 @@
 # HDL 语法参考
 
+> ⚠ **本文档为历史存档（早期目标语法稿），已被 `docs/hdl-language-spec.md` 取代，勿按本文写代码。**
+> 文中的 `Component` / `val` / 链式 `.elsewhen()` / `Le` 证明 cast / `ClockArea` 等
+> 均为当时的草案语法，与现行实现（`module` / `reg … init` 宏、`when c { } elsewhen`
+> 块风格、Eq 证明等宽 cast、无 ClockArea）不兼容。现行语法以权威规范为准。
+
 > HDL 是 Typort 的硬件描述扩展，风格介于 SpinalHDL 和 Verilog 之间。
 >
 > **当前状态**：HDL 是作为 Typort 库（`hdl.typort`）实现的，不是语言内建语法。

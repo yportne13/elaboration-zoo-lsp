@@ -1,10 +1,10 @@
 # HDL 语言规范（Typort HDL Language Specification）
 
-> **状态：权威规范草案 · 2026-09-26。**
+> **状态：权威规范草案 · 2026-09-26 首发，2026-09-29 回写（§0/§10/§11/§12 同步 Enum/FSM/BlackBox/assert/自检阶段 2-4 的已实现状态）。**
 > 本文档是 Typort HDL（SpinalHDL 风格硬件描述扩展）的**权威语言规范**：以当前实现为准描述全部用户可见语法与语义，并对待定项逐条给出决策记录。
 > 本文档**取代** `docs/hdl-syntax.md` 的目标语法描述（该文件保留为历史存档，不再维护）；`docs/hdl-design.md` / `hdl-design-discussion.md` 中的"待定"项以本文 §11 的决策记录为准。
-> 覆盖范围：当前已实现的全部语法 + 待定项决策。二期大特性（硬件 Enum、Stream/FSM 完整化、BlackBox、自检阶段 2-4）只在 §12 留引用，不展开。
-> 语法来源：`src/prelude/hdl/*.typort`（16 文件）、`examples/hdl/`（25 例）、`src/L13_namespace/module_tests.rs`、`src/L13_namespace/parser/mod.rs`。示例均可在 `examples/hdl/` 找到对应活样本。
+> 覆盖范围：当前已实现的全部语法 + 待定项决策。已落地的二期大特性（硬件 Enum、FSM、BlackBox、assert、自检阶段 2-4）在 §10/§11/§12 标注实现状态，展开仍以各自设计稿为准。
+> 语法来源：`src/prelude/hdl/*.typort`（19 文件）、`examples/hdl/`（27 例）、`src/L13_namespace/module_tests.rs`、`src/L13_namespace/parser/mod.rs`。示例均可在 `examples/hdl/` 找到对应活样本（Enum/FSM 暂以 `hdl_enum_tests.rs` / `hdl_fsm_tests.rs` 为活样本）。
 
 ---
 
@@ -27,7 +27,7 @@
 | 11 | UFix/SFix 定点数 | **远期（三期）**，排在硬件 Enum、Stream/FSM、BlackBox 之后 | 开放（推荐排期） |
 | 12 | 拼接/切片运算符终态 | 拼接唯一记号 `##`；切片用 `slice[hi, lo]` + 糖 `a[hi:lo]` / `a[N]`；不再引入独立 Verilog 风格运算符 | 已定（实现先于文档） |
 
-实现过程中隐性定案、但旧文档仍标"待定/缺失"的其他项（详见 §7/§9/§10）：SInt `abs`、`expand`、宽度保持变量移位 `|<<`/`|>>`、inout 端口、Counter、BufferCC/真跨时钟域、Verilog 兼容层 M1-M3 **均已实现**；`cast` 的 `Le` 证明版本**已删除**，统一走 Eq 证明的等宽 `Cast`（§7.9）；`assert` 断言、HVec 填充工厂**未实现**（§8.3/§12）。
+实现过程中隐性定案、但旧文档仍标"待定/缺失"的其他项（详见 §7/§9/§10）：SInt `abs`、`expand`、宽度保持变量移位 `|<<`/`|>>`、inout 端口、Counter、BufferCC/真跨时钟域、Verilog 兼容层 M1-M3 **均已实现**；`cast` 的 `Le` 证明版本**已删除**，统一走 Eq 证明的等宽 `Cast`（§7.9）；`assert` 断言**已实现**（2026-09-27，§11 补充记录）；HVec 填充工厂仍**未实现**（§12）。
 
 ---
 
@@ -540,7 +540,7 @@ let myRam = memUInt(8, 64)          // 64 × 8 位，reg [7:0] myRam [0:63]
 myRam.write(addr, data, en)          // 同步写：if (en) myRam[addr] <= data;
 let rd = myRam.readSync(addr)        // 同步读：生成寄存器（bn 命名）+ 时钟赋值
 let rc = myRam.readAsync(addr)       // 组合读：mem[addr] 表达式
-let r2 = myRam.readSyncCC(addr, cc)  // 跨时钟域读——当前与 readSync 相同（无同步器）
+let r2 = myRam.readSyncCC(addr, crossClock)  // 第二参数是 Bool 占位——当前与 readSync 相同（无同步器）
 ```
 
 - 工厂：`memUInt(w, wordCount)` / `memBits` / `memSInt` / `memBool(wordCount)`（宽度参先、字数参后，同 SpinalHDL 参数序）；显式命名 `newMemUIntNamed`。
@@ -595,7 +595,7 @@ println(moduleTreeVL(foo.create[myCd].tree))
 
 ### 10.1 诊断形态
 
-全部为 **WARNING**（阶段 1，跑过回归语料后再逐条升级）。来源两条管道：HDL 规则（typort 自检，§10.2）与 Verilog 兼容层检查（§10.4）。
+全部为 **WARNING**（阶段 1-4 已全部落地，跑过回归语料后再逐条升级）。来源两条管道：HDL 规则（typort 自检，§10.2）与 Verilog 兼容层检查（§10.4）。
 
 ### 10.2 警告规则表（hdl-check.typort）
 
@@ -615,6 +615,22 @@ println(moduleTreeVL(foo.create[myCd].tree))
 | HDL023 | 模块驱动自己的 input 端口 |
 | HDL024 | `instanceWithPorts`（原始端口串）绕过全部检查 |
 | HDL025 | 连接的端口在子模块上不存在 |
+| HDL030 | 模块内组合环（Tarjan SCC；逐环互斥豁免 + 有界枚举，无法完成时兜底报告） |
+| HDL031 | 跨模块组合环（环内含 ≥1 条跨模块边） |
+| HDL032 | 推断 latch：条件驱动不能覆盖全部情形（无无条件 default） |
+| HDL033 | 同根多个组合驱动的静态位区间相交 |
+| HDL034 | 驱动条件恒假（叶子集同时含 `p` 与 `!p`，死驱动） |
+| HDL035 | 同条件重复驱动，早者被后来者遮蔽 |
+| HDL036 | 组合信号（非寄存器）汇聚 ≥2 个时钟域 |
+| HDL037 | 跨域寄存采样无同步器链（CDC 边直达） |
+| HDL038 | 多 bit 信号经 2FF 同步器跨域（需要 Gray 编码） |
+| HDL039 | 同步器中段被绕过（读者不在链上） |
+| HDL040 | 枚举 switch 穷尽性缺支（`switchFinalEnum` 显式检查点名缺失元素） |
+| HDL060 | FSM `goto` 目标越界（`to ≥ stateCount`） |
+| HDL061 | FSM 不可达状态（非入口态且无任何入边） |
+| HDL062 | FSM 状态无出边（可能卡死；终态可 `noExitCheck()` 豁免） |
+| HDL063 | 预留：入口态不一致（一期入口恒 0，`fsmSetEntry` 未引入） |
+| HDL064 | `goto` 出现在状态上下文之外（`whenIsActive` 栈为空） |
 
 实现细节：声明 vs 引用是**结构判定**（语句位 create* = 声明，嵌套 create* = 读取）；同结构语句去重（exprKey）；同名 wire 与端口并存时**端口优先**、遮蔽 wire（与生成器一致）；模块端口表 `ModulePortTable` 全局共享供父模块检查子模块方向。
 
@@ -731,22 +747,22 @@ println(moduleTreeVL(foo.create[myCd].tree))
 | 字面量宽度检查 | **仍开放**：`natFitsIn` 已定义但 `Into` impl 未接入；推荐在 `Into[UInt[w]] for Nat` 走 typeclass 约束时补 `natFitsIn` 检查（需编译器支持编译期 Nat 谓词） |
 | switch 穷尽性 | **已放宽 + 显式检查**（2026-09-26）：no-default switch 合法（纯 when 链）；枚举选择子经 `switchFinalEnum` 显式调用报 HDL040 WARNING（hdl-enum.typort，`docs/hdl-enum-design.md` §4.7）；`is Enum.ELEM { }` 形态的自动记录未接线（`$val:raw` matcher 把点分 is 值当 apply-block 捕获），自动检查留二期 |
 | Vec（HVec） | 动态索引 `vecAtUInt` 已实现；fill 工厂/批量 `:=` 未实现，归入二期 Stream/FSM 波次评估 |
-| `assert` 断言 | **未实现**（gap §7 第 5 条未落地）；二期随自检阶段 2-4 评估 |
+| `assert` 断言 | **已实现**（2026-09-27）：`assert` / `assertInfo` / `assertWarning` / `assertFatal` / `assertCd`（`hdl-macros.typort`）；产码为 `translate_off` 包裹的 `TYPORT_ASSERT_<SEV> %0t %m` 标记行，fatal 附 `$finish`；`typort test`（`cli.rs run_test`）捕获标记失败即非零退出 |
 | `ClockArea` | **未实现**；模块级域 + 每寄存器域工厂已覆盖现有多时钟需求 |
 | `moduleVL` | 不存在；验收 API 为 `moduleTreeVL` / `allModulesVL` / `designVL` / `designManifestVL` |
 
 ---
 
-## 12. 范围边界（二期大特性，本文不展开）
+## 12. 范围边界（大特性状态表）
 
-以下特性**不在本规范覆盖范围内**，各自有设计稿，实现后应回填本文对应章节：
+> 2026-09-29 回写：下表原为"二期不展开"清单，其中四项现已落地——状态如实际；本文不展开细节，以各自设计稿 + 测试为准。
 
 | 特性 | 现状 | 设计文档 |
 |------|------|----------|
-| 硬件 Enum（SpinalEnum：编码/位宽、`===` 硬件比较、枚举 switch、`reg [1:0] state` 生成） | 未实现（L07 enum 是纯 elaboration 期数据） | `docs/hdl-enum-design.md`（2026-09-26 设计稿） |
-| 自检阶段 2/3/4（组合环、latch/位区间、CDC） | 阶段 1 已实现（§10.2） | `docs/hdl-selfcheck-phase234-design.md`（2026-09-26 设计稿） |
-| Stream/Flow/Fragment 完整握手 + FSM | `Stream[T]`/`Flow[T]` struct 与 UInt/Bits/Bool 全套流水原语已实现（hdl-stream.typort）；FSM 仅占位 | `docs/hdl-stream-fsm-design.md`（2026-09-26 设计稿） |
-| BlackBox 代码生成 | 语法占位 stub（hdl-bus.typort），无代码生成；仿真走外部 Verilog + `designManifestVL` | `docs/hdl-blackbox-sim-design.md`（2026-09-26 设计稿，含 assert 与仿真集成路线） |
+| 硬件 Enum（SpinalEnum：编码/位宽、`===` 硬件比较、枚举 switch、`reg [1:0] state` 生成） | **已实现**（M1-M3，2026-09-26）：`#[derive(HdlEnum)]` + EnumCraft/reg/regInit 工厂 + `switchFinalEnum` 穷尽性（HDL040）；穷尽性为显式 opt-in，宏臂自动上报未接线 | `docs/hdl-enum-design.md` |
+| 自检阶段 2/3/4（组合环、latch/位区间、CDC） | **已实现**（HDL030-039，2026-09-27，§10.2） | `docs/hdl-selfcheck-phase234-design.md` |
+| Stream/Flow/Fragment 完整握手 + FSM | Stream 原语已实现（hdl-stream.typort）；**FSM 一期已实现**（2026-09-27：`fsmNew`/`whenIsActive`/`goto`/`onEntry`/`onExit` + HDL060-064） | `docs/hdl-stream-fsm-design.md` |
+| BlackBox 代码生成 | **已实现**（2026-09-27）：`blackbox` 宏 + `ifndef` 守卫 stub 产码 + `#(parameter)` 注入 + assert 仿真集成（`typort test`） | `docs/hdl-blackbox-sim-design.md` |
 | UFix/SFix 定点数 | 未实现 | 见 §11 #9 排期建议 |
 
 ---

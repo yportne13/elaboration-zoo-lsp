@@ -8,6 +8,6 @@
 # dtolnay/rust-toolchain 只设 rustup default、不设 RUSTUP_TOOLCHAIN，本文件
 # 会覆盖它；固定具体版本保证 CI/新机器 rustup 就地自动下载的编译器与本地
 # 完全一致，不随 stable 漂移。升版本时同步改 .github/workflows/ci.yml 的
-# 三处 toolchain。
+# 四处 toolchain（test / build-vscode / build-cli / build-cli-macos）。
 [toolchain]
 channel = "1.98.1"
