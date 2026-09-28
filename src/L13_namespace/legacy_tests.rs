@@ -5321,13 +5321,15 @@ fn test_universe_level_overflow_rejected() {
         Ok(out) => panic!("Type 4294967295 被静默接受：\n{out}"),
     }
     let big = "def y : Type 99999999999 = Nat\n";
-    match run_with_prelude(big) {
-        Err(e) => assert!(
-            e.0.data.contains("does not fit in u32"),
-            "超界字面量错误文案不符：{}", e.0.data
-        ),
-        Ok(out) => panic!("Type 99999999999 被静默接受（旧 unwrap_or(0) 路径）：\n{out}"),
-    }
+    // 超出 u32 的字面量在 parser 期就推解析错误（run_with_prelude 对
+    // 解析错误只打印不返回——生产层错误处理债，见评审简洁性组 #4），
+    // 故此处直接断言 parser 的 IError 列表。
+    let errs = crate::L13_namespace::parser::parser(big, 0)
+        .expect("parse should succeed with pushed error");
+    assert!(
+        format!("{:?}", errs.1).contains("does not fit in u32"),
+        "超界字面量未推解析错误：{:?}", errs.1
+    );
     // 正向对照：合法宇宙层级不受影响。
     run_with_prelude("def z : Type 3 = Type 2\n")
         .unwrap_or_else(|e| panic!("合法宇宙层级被误拒：{}", e.0.data));
