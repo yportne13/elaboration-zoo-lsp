@@ -3735,13 +3735,6 @@ impl Backend<Client> {
     }
 }
 
-#[allow(unused)]
-enum CustomNotification {}
-impl Notification for CustomNotification {
-    type Params = InlayHintParams;
-    const METHOD: &'static str = "custom/notification";
-}
-
 /// Normalize a builtin:// URI for map lookups.
 /// VS Code serializes builtin:/// → builtin:/ (empty authority → no //),
 /// but our maps store keys with builtin:///.

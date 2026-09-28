@@ -2,37 +2,7 @@
 use ropey::Rope;
 use lsp_types::Position;
 
-// Copy of the functions from src/lib.rs to test in isolation
-fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
-    let line_byte_start = rope.try_line_to_byte(position.line as usize).ok()?;
-    let line_text = rope.line(position.line as usize);
-    let mut col_byte_offset = 0usize;
-    let mut utf16_count = 0u32;
-    for ch in line_text.chars() {
-        if utf16_count >= position.character {
-            break;
-        }
-        col_byte_offset += ch.len_utf8();
-        utf16_count += ch.len_utf16() as u32;
-    }
-    Some(line_byte_start + col_byte_offset)
-}
-
-fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
-    let line = rope.try_byte_to_line(offset).ok()?;
-    let line_byte_start = rope.try_line_to_byte(line).ok()?;
-    let line_text = rope.line(line);
-    let mut column = 0u32;
-    let mut byte_i = 0usize;
-    for ch in line_text.chars() {
-        if line_byte_start + byte_i >= offset {
-            break;
-        }
-        column += ch.len_utf16() as u32;
-        byte_i += ch.len_utf8();
-    }
-    Some(Position::new(line as u32, column))
-}
+use elaboration_zoo_lsp::{position_to_offset, offset_to_position};
 
 #[test]
 fn test_position_to_offset_ascii() {

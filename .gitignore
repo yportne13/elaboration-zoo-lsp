@@ -48,3 +48,8 @@ v3_fail.log
 
 # Temporary debug harnesses in the auto-discovered tests/ dir.
 /tests/zz_tmp_*.rs
+
+# spinalhdl-verify 的可再生产物（Verilator 编译中间件 + Python 缓存）。
+# 2026-09-29 曾随目录整体提交了 1054 个产物文件，解除跟踪并在此收口。
+tools/spinalhdl-verify/__pycache__/
+tools/spinalhdl-verify/work/

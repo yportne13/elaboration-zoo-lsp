@@ -3189,7 +3189,6 @@ impl Tycker {
     }
 
     /// 基准口径：check + nf（quote），返回结果树节点数。
-    #[allow(dead_code)]
     pub(crate) fn bench_check_nf(&mut self, raw: &Raw) -> u64 {
         self.bench_nf_impl(raw, false)
     }

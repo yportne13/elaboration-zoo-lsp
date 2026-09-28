@@ -114,7 +114,6 @@ impl SubstV {
     }
 
     /// x 是否已有解（旧 `update_cxt` 的"已解"判定）。
-    #[allow(dead_code)]
     fn has(&self, x: u32) -> bool {
         let mut cur = self.head.clone();
         while let Some(e) = cur {
