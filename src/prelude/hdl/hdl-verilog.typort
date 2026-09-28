@@ -949,11 +949,24 @@ def getAssignRhsStr(e: Expr): String = match e {
     case _ => ""
 }
 
+// Helper: assign 的 LHS 是否 reg/outreg（含其位选/片选）。compat 的
+// always @(*) 内 reg 赋值经 pickAssign（HDV002 分支）落成普通 assign
+// 节点——此处判别后路由进合并 always 块做阻塞赋值。
+def assignLhsIsReg(e: Expr): Boolean = match e {
+    case assign(lhs, _) => isRegExpr(lhs)
+    case _ => false
+}
+
 // Helper: check if a single assign expr should be emitted as a continuous assign
 // Assigns touching a subSignal on EITHER side are port connections (collected
 // by collectInstHelp), never continuous assigns — `u.port := sig` drives an
 // instance input, `sig := u.port` reads an instance output; both become
 // `.port(other_side)` connections.
+//
+// reg-LHS 的裸 assign 也不发连续赋值：IEEE 1364 连续赋值左值只能是 net，
+// 对 reg 目标非法（iverilog: "reg y cannot be driven by primitives or
+// continuous assignment"，2026-09-29 评审 P0-1，经 iverilog 12 实证）。
+// 它们由 collectAlwaysBodyLines 的 reg 臂收进 always @(*) 做阻塞赋值。
 def assignLineCheck(e: Expr, whenSigs: List[String]): List[String] =
     let lhsName = getAssignLhsName(e);
     let isWhen = strInList(lhsName, whenSigs);
@@ -967,7 +980,10 @@ def assignLineCheck(e: Expr, whenSigs: List[String]): List[String] =
                     let rhsSub = isSubSignalRhs(e);
                     match rhsSub {
                         case true => lnil
-                        case false => lcons (exprVL(e)) lnil
+                        case false => match assignLhsIsReg(e) {
+                            case true => lnil
+                            case false => lcons (exprVL(e)) lnil
+                        }
                     }
             }
     }
@@ -1084,7 +1100,13 @@ def collectAlwaysBodyLines[ne: Nat](es: Vec[Expr] ne, whenSigs: List[String]): L
             let isWhen = strInList(lhsName, whenSigs);
             match isWhen {
                 case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectAlwaysBodyLines(tail, whenSigs))
-                case false => collectAlwaysBodyLines(tail, whenSigs)
+                case false => match assignLhsIsReg(e) {
+                    // P0-1：compat always @(*) 内的 reg 赋值（pickAssign 的
+                    // HDV002 分支产出的裸 assign）——阻塞赋值收进本合并块。
+                    // 阻塞赋值的 reg 左值允许位选/片选（`y[3:0] = v;` 合法）。
+                    case true => lcons ("    " + lhsName + " = " + getAssignRhsStr(e) + ";") (collectAlwaysBodyLines(tail, whenSigs))
+                    case false => collectAlwaysBodyLines(tail, whenSigs)
+                }
             }
         case _ => collectAlwaysBodyLines(tail, whenSigs)
     }
@@ -1631,7 +1653,8 @@ def moduleDefVLPlain(md: ModuleDef): String =
     // (any regAssign/regAssignCd/memWrite, possibly under `when`). Counting
     // storage declarations instead would add a spurious clk port to purely
     // combinational modules — Verilog-compat `always @(*)` drives its regs
-    // combinationally (pickAssign → plain `assign`), so `clocked` stays "".
+    // combinationally（经 assignLhsIsReg 路由进合并 always @(*) 块的阻塞
+    // 赋值，非时钟块），so `clocked` stays "".
     let has_reg_any = match has_regs {
         case false => has_out_regs
         case true => true

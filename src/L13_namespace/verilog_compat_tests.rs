@@ -313,6 +313,30 @@ println (moduleTreeVL(m.create.tree))
 }
 
 #[test]
+fn m2_comb_reg_assign_routed_into_always_block() {
+    // 评审 P0-1（2026-09-29）：compat always @(*) 内的 reg 赋值经 pickAssign
+    // 落成裸 assign 节点，旧产码发连续赋值 `assign y = ...` —— IEEE 1364
+    // 连续赋值左值只能是 net，对 reg 非法（iverilog: "reg y cannot be
+    // driven by primitives or continuous assignment"，实证 12.0 拒绝）。
+    // 现产码：阻塞赋值收进合并 always @(*) 块；reg 左值的位选/片选同为
+    // 过程赋值（合法）。钉住三件事：无 `assign y`、有 always 块阻塞赋值、
+    // 位选写也在块内。
+    let out = check_ok(r#"
+module m(input [7:0] a, input [7:0] b, output reg [7:0] y, output reg [3:0] t);
+    always @(*) begin
+        y = a & b;
+        t[3:0] = a[7:4];
+    end
+endmodule
+println (moduleTreeVL(m.create.tree))
+"#);
+    assert!(!out.contains("assign y "), "reg 目标不得发连续赋值:\n{out}");
+    assert!(!out.contains("assign t"), "reg 目标不得发连续赋值:\n{out}");
+    assert!(out.contains("always @(*) begin\n    y = (a & b);\n    t[3:0] = a[7:4];\n  end"),
+        "reg 赋值必须以阻塞赋值收进 always @(*) 块:\n{out}");
+}
+
+#[test]
 fn m2_reg_init_port_dedup() {
     // 体内 `reg q = 0;` 与同名 output reg 端口：单一声明 + 复位分支赋值。
     let out = check_ok(r#"
