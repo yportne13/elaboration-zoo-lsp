@@ -682,3 +682,110 @@ fn parity_spine_escape_juxtaposed_paren() {
     assert_both_ok_contains(&format!("{pair}def p = new Pair(succ zero, zero)\nprintln p.fst\n"), "1");
     assert_both_ok_contains(&format!("{pair}def w = new Wrap(zero)\nprintln w.v\n"), "0");
 }
+
+// ── 自 tests/l13_into_probe.rs 迁入（v7，2026-09-29 评审简洁性组 #5；该
+//    文件自认 superseded by prelude cross-check suite，整层 #[path] 重编译
+//    只为这一个测试——迁入本套件后原文件删除，省一个 L13 编译单元）──
+// hdl-ops 真实形态（字段投影方法体：`this.zz_expr` 进 binary）的双引擎
+// 一致性钉。2026-09-23 之前的实际状态是 DIVERGE 而套件仍绿——basic 走到
+// 参考版加固后的 `lvl2ix: level 0 is out of scope ...` 诊断 panic，fast
+// 在孪生 quote.rs 的裸减法上 panic 成 `attempt to subtract with overflow`
+// （release 下 wrap 成巨大 u32，行为随机）。孪生侧已按参考版同口径加固
+// （bump_spine_iter/syntax.rs::lvl2ix），此处把结论钉死。
+#[test]
+fn parity_into_add_nat_uint_field_projection() {
+    let src = r#"def outParam[A](a: A): A = a
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+enum Expr {
+    binary(lhs: Expr, op: String, rhs: Expr)
+    literal(v: Nat)
+}
+enum Option[A] {
+    none
+    some(a: A)
+}
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+trait Into[O: outParam(Type 0)] {
+    def into: O
+}
+struct UInt[width: Nat] {
+    name: Option[String]
+    zz_expr: Expr
+}
+def binary(lhs: Expr, op: String, rhs: Expr): Expr = Expr.binary(lhs, op, rhs)
+impl[T] Into[T] for T {
+    def into: T = this
+}
+impl[width: Nat] Into[UInt[width]] for Nat {
+    def into: UInt[width] = UInt.mk(none, literal(this))
+}
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat = nat_add this that
+}
+impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
+    def +(that: UInt[width]): UInt[width] = UInt.mk(none, binary(this.zz_expr, "+", that.zz_expr))
+}
+impl[width: Nat] Add[Nat, UInt[width]] for UInt[width] {
+    def +(that: Nat): UInt[width] = this + that.into
+}
+def u: UInt[succ zero] = UInt.mk(none, literal(zero))
+def lifted: UInt[succ zero] = u + (succ zero)
+println lifted
+"#;
+    // 注意：本形态上双引擎都会 panic（参考版 lvl2ix 加固诊断）——本钉断言
+    // 的是**失败模式一致**（panic 文案逐字相同），与 assert_parity 的
+    // Ok/Err 判据不同层级，因此不用 join().unwrap() 口径的 run_basic/
+    // run_fast，而是照原探针把 panic 转成可比较的字符串。
+    fn panic_msg(e: &(dyn std::any::Any + Send)) -> String {
+        if let Some(s) = e.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = e.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic>".to_string()
+        }
+    }
+    fn run_out(spawn: fn(String) -> std::thread::JoinHandle<Result<String, String>>, src: &str) -> String {
+        let input = src.to_owned();
+        match spawn(input).join() {
+            Ok(Ok(s)) => format!("Ok({s})"),
+            Ok(Err(e)) => format!("Err({e})"),
+            Err(boxed) => format!("PANIC: {}", panic_msg(&*boxed)),
+        }
+    }
+    let b = run_out(
+        |input| {
+            std::thread::Builder::new()
+                .stack_size(256 * 1024 * 1024)
+                .spawn(move || L13_namespace::run(&input, 0).map_err(|e| e.0.data.to_string()))
+                .unwrap()
+        },
+        src,
+    );
+    let f = run_out(
+        |input| {
+            std::thread::Builder::new()
+                .stack_size(256 * 1024 * 1024)
+                .spawn(move || fast::run_fast(&input, 0).map_err(|e| e.0.data.to_string()))
+                .unwrap()
+        },
+        src,
+    );
+    assert_eq!(b, f, "REF/TWIN diverged on the hdl-ops field-projection shape");
+    // 防空转（原探针的第二个断言）：两侧都真的产生了结论——两侧都是空
+    // Ok 时 MATCH 无判别力（历史上单行枚举/宏吃换行一类形态就会退化）。
+    assert!(
+        b != "Ok()",
+        "探针退化：两侧都是空 Ok，判定失去判别力（b={b:?}）",
+    );
+}

@@ -2046,7 +2046,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let uri = normalize_builtin_uri(uri);
         let all_tables = self.all_hover_tables_owned();
         let semantic = all_tables.iter().find(|(u, _)| u == uri.as_str())?;
-        let targets: Vec<(u32, u32, u32)> = semantic.1.iter()
+        // 目标定义三元组收进哈希集：下方对全量 hover 表逐条匹配（大文件
+        // 单轮 2.4 万条 × targets 线性 any）由 O(1) 判定替代。
+        let targets: rustc_hash::FxHashSet<(u32, u32, u32)> = semantic.1.iter()
             .filter(|x| x.1.contains(offset))
             .map(|x| (x.1.path_id, x.1.start_offset, x.1.end_offset))
             .collect();
@@ -2057,9 +2059,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         for (file_uri, hover_table) in &all_tables {
             let f_rope = self.document_map.get(file_uri.as_str())?.clone();
             for x in hover_table.iter() {
-                if targets.iter().any(|(pid, so, eo)| {
-                    *pid == x.1.path_id && *so == x.1.start_offset && *eo == x.1.end_offset
-                }) {
+                if targets.contains(&(x.1.path_id, x.1.start_offset, x.1.end_offset)) {
                     // Macro-expansion splices rule-source tokens (their spans
                     // point into the macro DEFINITION file, e.g. hdl-macros)
                     // into the user document's hover table.  Such spans can

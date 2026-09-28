@@ -46,8 +46,10 @@ L07 参考版 + 孪生版已完成"精化机制从事实表/上下文改写 → 
 - `cargo test --lib L{XX}_*`：本层全部单测；
 - `cargo test --test l{XX}_blackbox*`：本层全部黑盒；
 - `cargo test --test l{XX}_fast_parity`：参考版 vs 孪生版逐字节；
-- L13 另需：`l13_into_probe.rs` 等专项套件 + examples 全量 `typort check`
-  （生产层，Verilog 生成路径不得受影响）；
+- L13 另需：examples 全量 `typort check`
+  （生产层，Verilog 生成路径不得受影响）。（原提的 `l13_into_probe.rs`
+  专项套件已并入 `l13_fast_parity.rs` 的
+  `parity_into_add_nat_uint_field_projection` 并删除原文件，2026-09-29）；
 - 性能：本层 bench（l{XX}bench）fast 列不慢于移植前 1.5×。
 
 ## 4. 风险与对策
