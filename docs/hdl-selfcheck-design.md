@@ -1,6 +1,7 @@
 # HDL 自检框架设计（self-check / lint）
 
-状态：阶段 1 实现中（2026-08-18 定稿）。
+状态：阶段 1-4 已实现（阶段 1 于 2026-08-18 定稿；阶段 2-4 组合环/latch/CDC
+于 2026-09-27 实现，设计与偏差见 hdl-selfcheck-phase234-design.md）。
 目标：一套在 **tyck 阶段** 运行、类似并部分超越 SpinalHDL 的硬件设计自检机制——
 组合逻辑环、信号悬空、多驱动、端口方向反接、latch、CDC 等。
 
@@ -96,7 +97,24 @@ Verilog 生成器靠"端口优先于同名 wire"去重。检查器必须做同�
 | HDL025 | 连接的子端口不存在 | conn 的端口 ∉ 子模块端口表（端口名拼写错误） |
 | HDL040 | switch over enum 穷尽性（缺支） | 选择子为 enum craft ∧ 无 default 臂 ∧ 覆盖集 ⊂ 元素集——elaboration 期直调 `switchFinalEnum` 上报 WARNING（非本表名字级扫描规则，随硬件 enum M3 落地，`docs/hdl-enum-design.md` §4.7） |
 
-编号段位说明：HDL030-039 已预留给 `docs/hdl-selfcheck-phase234-design.md` 的阶段 2-4 规则（组合环/latch/CDC）；HDL041+ 留作 switch 相关后续规则。
+编号段位说明：HDL030-039 已由 `docs/hdl-selfcheck-phase234-design.md` 的阶段 2-4 实现
+（2026-09-27，全 warning，报文/排水管线与阶段 1 相同）：
+
+| 码 | 规则 | 判定（名字级 + 图） |
+|---|---|---|
+| HDL030 | 组合逻辑环 | 组合驱动图 SCC ≥2 或自环，环边条件互斥则豁免（Rust builtin `check_comb_cycles`：Tarjan + 环路径） |
+| HDL031 | 跨层次组合环 | 环含 ≥1 条子模块组合穿透边（子模块 input→output 摘要边），message 带实例名 |
+| HDL032 | 推断锁存器 | kWire/kOut 仅条件驱动（无默认），T2 互补对/T3 收口判覆盖 |
+| HDL033 | 位区间重叠多驱动 | 同根两静态部分驱动区间相交且条件不互斥；两两不交/互斥的根抑制 HDL010/011（rangeSafe） |
+| HDL034 | 条件永假（死驱动） | 驱动使能含同选择器异值 eq 原子（裸信号 p/!p 形态因与 replay 残留不可区分不报，见 phase234 文档 §11.5） |
+| HDL035 | 同条件重复遮蔽 | 同目标两驱动 enableKey 相同，早者被源序遮蔽 |
+| HDL036 | 组合信号多域汇聚 | 域传播 fixpoint 后组合信号含 ≥2 时钟域 |
+| HDL037 | 跨域寄存采样无同步器 | 时钟驱动读单域异源信号且目标不在已识别同步链（链长 1 在 message 注明） |
+| HDL038 | 多 bit 过 2FF 同步器 | 已识别 2FF 链首宽度 > 1（streamFifoCC 二进制指针为预期告警） |
+| HDL039 | 同步链中段被读取 | 中间级读者 ∉ {下一级, 相邻级 XOR 边沿检测} |
+
+实现细节与设计偏差见 `docs/hdl-selfcheck-phase234-design.md`（§2 总体架构、§11 实现偏差
+清单）。HDL041+ 留作 switch 相关后续规则。
 
 后续阶段：
 

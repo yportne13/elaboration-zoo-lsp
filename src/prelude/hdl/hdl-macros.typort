@@ -169,7 +169,7 @@ macro_rules blackbox {
             let _ = bbRegisterLast(stringify $name, BlackBoxInfo.mk(__bbgens))
             // SELF 标记（isInst=false）：stub 头参数串，留在黑盒 def 自身
             let _ = createSignalExpr("", bbMarkerExpr(false, bbParamsDeclStr(__bbgens)))
-            let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
+            let _res: ModuleTree = checkModuleTreeAll(get_global("ModuleTree"))
             let _ = create_global("ModuleTree", _prev)
             // 实例参数标记（isInst=true）：必须先于 mkInstanceIfParent 追加——
             // exprs 为 prepend 序（后写在前），这样父级 exprs 走序里 marker 紧跟
@@ -585,7 +585,7 @@ macro_rules module {
 			$( let $rb: Bool = Bool.mk(Some(stringify $rb), createOutRegBoolPortExpr); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(compatDir(stringify $db))); )*
 			$($body)*
-			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
+			let _res: ModuleTree = checkModuleTreeAll(get_global("ModuleTree"))
 			let _ = create_global("ModuleTree", _prev)
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $ik: Bool = Bool.mk(None, subSignal(bn.name, stringify $ik)); )*
@@ -624,7 +624,7 @@ macro_rules module {
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
-			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
+			let _res: ModuleTree = checkModuleTreeAll(get_global("ModuleTree"))
 			let _ = create_global("ModuleTree", _prev)
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*
@@ -658,7 +658,7 @@ macro_rules module {
 			$( let $p: $t[$w] = $t.mk(Some(stringify $p), createPortExpr(stringify $d, stringify $t, $w)); )*
 			$( let $pb: Bool = Bool.mk(Some(stringify $pb), createBoolPortExpr(stringify $db)); )*
 			$($body)*
-			let _res: ModuleTree = checkModuleTree(get_global("ModuleTree"))
+			let _res: ModuleTree = checkModuleTreeAll(get_global("ModuleTree"))
 			let _ = create_global("ModuleTree", _prev)
 			let _ = mkInstanceIfParent(bn.name, stringify $name)
 			$( let $p: $t[$w] = $t.mk(None, subSignal(bn.name, stringify $p)); )*

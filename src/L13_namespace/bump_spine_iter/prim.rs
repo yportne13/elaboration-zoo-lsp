@@ -75,6 +75,11 @@ pub(super) enum PrimId {
     /// 端口方向并经 prelude 助手 `vconnEmit` 发射 assign（参考版 cxt.rs
     /// `vconn_builtin` 逐句）。
     VconnT,
+    /// `check_comb_cycles`：HDL 自检阶段 2 组合环检测（hdl-check-graph
+    /// .typort 经 `(module, edges)` 两字符串调用）。共享纯核心 =
+    /// cxt.rs `comb_cycle_reports`（解析 + Tarjan SCC + 互斥豁免 + 环路
+    /// 径），报告行走 `check_lines` 通道（同 `report_check_issue`）。
+    CheckCombCycles,
 }
 
 /// 可变全局表 + def-replay 备忘（参考版 `Infer.mutable_map` +
@@ -980,6 +985,30 @@ pub(super) fn prim_exec<'a>(
                 );
             }
             Some(noop)
+        }
+        // HDL 自检阶段 2 组合环检测：共享纯核心（解析/Tarjan/豁免/环路径）
+        // 在 cxt.rs `comb_cycle_reports`，报告行走 check_lines 通道
+        // （report_check_issue 同款行级去重 + 撤销帧记账）。
+        PrimId::CheckCombCycles => {
+            if args.len() < 2 {
+                return None;
+            }
+            let (Some(module), Some(blob)) = (lit_of(arg(0)?), lit_of(arg(1)?)) else {
+                return None;
+            };
+            let reports = crate::L13_namespace::cxt::comb_cycle_reports(module, blob);
+            if !reports.is_empty() {
+                let mut m = mutable.borrow_mut();
+                for (code, mdl, sig, msg) in reports {
+                    let key = SmolStr::new(format!("{}|{}|{}|{}", code, mdl, sig, msg));
+                    if !m.check_line_set.contains(&key) {
+                        m.check_line_set.insert(key.clone());
+                        m.check_lines.push(key.clone());
+                        state_journal_record(StateUndo::CheckLinesPush(key));
+                    }
+                }
+            }
+            Some(v_u(0))
         }
     }
 }

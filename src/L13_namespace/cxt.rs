@@ -373,7 +373,13 @@ fn report_check_issue(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<R
         _ => String::new(),
     };
     let (code, module, signal, message) = (get(0), get(1), get(2), get(3));
-    if code.is_empty() || module.is_empty() { return Some(Val::U(0).into()); }
+    push_check_issue(infer, &code, &module, &signal, &message);
+    Some(Val::U(0).into())
+}
+
+/// Shared append+dedup body of report_check_issue / check_comb_cycles.
+fn push_check_issue(infer: &Infer, code: &str, module: &str, signal: &str, message: &str) {
+    if code.is_empty() || module.is_empty() { return; }
     let line = format!("{}|{}|{}|{}", code, module, signal, message);
     if let Ok(mut map) = infer.mutable_map.write() {
         let existing = match map.get("CheckIssues") {
@@ -388,7 +394,302 @@ fn report_check_issue(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<R
             map.insert("CheckIssues".to_string(), Rc::new(Val::LiteralIntro(empty_span(next))));
         }
     }
+}
+
+// === HDL self-check phase 2 (hdl-check-graph.typort): combinational loops ===
+//
+// The typort side owns all Expr-shape-sensitive work (LHS root names, mux
+// branch conditions, condition-leaf extraction — design §3.4) and passes the
+// module's combinational drive graph as ONE newline-joined string, one edge
+// per line:
+//     "dst|src|cross|leaves"
+// where cross is "" for an in-module edge or the instance name of a
+// cross-hierarchy passthrough edge, and leaves is a ';'-joined list of
+// condition leaf keys ("" = unconditional). Leaf keys never contain '|',
+// ';' or '\n' (they are exprKey renderings + the "eq:..." / "!..." encodings
+// built by hdl-check-graph.typort).
+//
+// This builtin owns the index-array + deep-recursion work the typort side
+// must not do (design §3.4: pure-typort DFS depth = |V| stacks on top of the
+// measured 502-752-deep force recursion; immutable-map state threading is
+// O(V·(V+E)) allocation churn): iterative Tarjan SCC over the data-flow
+// graph, simple-cycle reconstruction, then the PER-CYCLE condition
+// mutual-exclusion exemption (§3.3: if two edges OF THE RING are
+// syntactically contradictory that ring is unsatisfiable — exempt that
+// ring and only that ring; a contradictory pair between edges that never
+// share a simple cycle must not silence the rings they do not belong to,
+// which the old SCC-level shortcut did). Reports go straight into the
+// existing "CheckIssues" channel — HDL030 (in-module) / HDL031 (through an
+// instance); no data flows back to typort.
+
+/// "eq:<exprKey>:<digits>" -> (exprKey, digits); anything else -> None.
+fn parse_eq_leaf(s: &str) -> Option<(&str, &str)> {
+    let r = s.strip_prefix("eq:")?;
+    let (sel, v) = r.rsplit_once(':')?;
+    if !v.is_empty() && v.bytes().all(|c| c.is_ascii_digit()) { Some((sel, v)) } else { None }
+}
+
+/// Condition-leaf mutual exclusion (design §3.3, string form):
+///   1. `c` vs `!c` (a leading '!' marks the negated leaf); or
+///   2. eq:s:v1 vs eq:s:v2 over the same selector with different values
+///      (distinct switch arms of one selector).
+fn leaf_contradx(a: &str, b: &str) -> bool {
+    if a == b { return false; }
+    if a.strip_prefix('!') == Some(b) || b.strip_prefix('!') == Some(a) { return true; }
+    match (parse_eq_leaf(a), parse_eq_leaf(b)) {
+        (Some((s1, v1)), Some((s2, v2))) => s1 == s2 && v1 != v2,
+        _ => false,
+    }
+}
+
+/// Any pair of leaves from the two sets mutually exclusive?
+fn leaves_contradict(l1: &[String], l2: &[String]) -> bool {
+    l1.iter().any(|a| l2.iter().any(|b| leaf_contradx(a, b)))
+}
+
+fn check_comb_cycles(infer: &Infer, _decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
+    if args.len() < 2 { return None; }
+    let module = match args[0].as_ref() {
+        Val::LiteralIntro(s) => s.data.to_string(),
+        _ => return Some(Val::U(0).into()),
+    };
+    let blob = match args[1].as_ref() {
+        Val::LiteralIntro(s) => s.data.to_string(),
+        _ => return Some(Val::U(0).into()),
+    };
+    for (code, m, sig, msg) in comb_cycle_reports(&module, &blob) {
+        push_check_issue(infer, &code, &m, &sig, &msg);
+    }
     Some(Val::U(0).into())
+}
+
+/// Pure core of `check_comb_cycles`, SHARED with the twin engine's
+/// `PrimId::CheckCombCycles` arm (bump_spine_iter/prim.rs): parse + Tarjan
+/// SCC + simple-cycle reconstruction + PER-CYCLE mutual-exclusion exemption.
+/// Returns (code, module, signal, message) report tuples.
+pub(crate) fn comb_cycle_reports(module: &str, blob: &str) -> Vec<(String, String, String, String)> {
+    let mut out: Vec<(String, String, String, String)> = Vec::new();
+    if module.is_empty() || blob.is_empty() { return out; }
+
+    // ---- parse edges, intern nodes (linear intern: module-scale node counts)
+    let mut nodes: Vec<String> = Vec::new();
+    let mut intern = |s: &str, nodes: &mut Vec<String>| -> usize {
+        if let Some(i) = nodes.iter().position(|n| n == s) { return i; }
+        nodes.push(s.to_string());
+        nodes.len() - 1
+    };
+    struct Edge { dst: usize, src: usize, cross: String, leaves: Vec<String> }
+    let mut edges: Vec<Edge> = Vec::new();
+    for line in blob.split('\n') {
+        if line.is_empty() { continue; }
+        let parts: Vec<&str> = line.splitn(4, '|').collect();
+        if parts.len() < 4 { continue; }
+        let leaves: Vec<String> = parts[3].split(';').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+        edges.push(Edge {
+            dst: intern(parts[0], &mut nodes),
+            src: intern(parts[1], &mut nodes),
+            cross: parts[2].to_string(),
+            leaves,
+        });
+    }
+    if edges.is_empty() { return out; }
+
+    // ---- adjacency by source (data-flow direction: src -> dst)
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (ei, e) in edges.iter().enumerate() {
+        adj[e.src].push(ei);
+    }
+
+    // ---- iterative Tarjan SCC
+    const NIL: usize = usize::MAX;
+    let mut index = vec![NIL; nodes.len()];
+    let mut lowlink = vec![0usize; nodes.len()];
+    let mut on_stack = vec![false; nodes.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut next_index = 0usize;
+    let mut scc_of = vec![NIL; nodes.len()];
+    let mut sccs: Vec<Vec<usize>> = Vec::new();
+    for start in 0..nodes.len() {
+        if index[start] != NIL { continue; }
+        index[start] = next_index;
+        lowlink[start] = next_index;
+        next_index += 1;
+        stack.push(start);
+        on_stack[start] = true;
+        // frames: (node, edge cursor into adj[node])
+        let mut frames: Vec<(usize, usize)> = vec![(start, 0)];
+        while let Some(frame) = frames.last_mut() {
+            let (v, ci) = *frame;
+            if ci < adj[v].len() {
+                frame.1 += 1;
+                let w = edges[adj[v][ci]].dst;
+                if index[w] == NIL {
+                    index[w] = next_index;
+                    lowlink[w] = next_index;
+                    next_index += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    frames.push((w, 0));
+                } else if on_stack[w] && index[w] < lowlink[v] {
+                    lowlink[v] = index[w];
+                }
+            } else {
+                frames.pop();
+                if let Some(parent) = frames.last_mut() {
+                    if lowlink[v] < lowlink[parent.0] {
+                        lowlink[parent.0] = lowlink[v];
+                    }
+                }
+                if lowlink[v] == index[v] {
+                    let id = sccs.len();
+                    let mut scc = Vec::new();
+                    while let Some(w) = stack.pop() {
+                        on_stack[w] = false;
+                        scc_of[w] = id;
+                        scc.push(w);
+                        if w == v { break; }
+                    }
+                    sccs.push(scc);
+                }
+            }
+        }
+    }
+
+    // ---- per-SCC: candidate rings (|SCC| >= 2, or a single self-edge),
+    // simple-cycle reconstruction, PER-CYCLE mutual-exclusion exemption,
+    // report.
+    for scc in sccs.iter() {
+        let id = scc_of[scc[0]];
+        let internal: Vec<usize> = (0..edges.len())
+            .filter(|&ei| scc_of[edges[ei].src] == id && scc_of[edges[ei].dst] == id)
+            .collect();
+        let self_loop = internal.iter().any(|&ei| edges[ei].src == edges[ei].dst);
+        if scc.len() < 2 && !self_loop { continue; }
+        // Fast pre-filter ONLY (§3.3): if no pair of internal edges carries
+        // mutually exclusive conditions, no simple cycle in this SCC can be
+        // exempt and the per-cycle check below is skipped outright. The
+        // pre-filter never exempts anything by itself — a contradiction
+        // between two edges that do not share a ring must not silence the
+        // rings they do belong to (the old SCC-level shortcut exempted the
+        // whole SCC on exactly such a pair and went silent on real rings).
+        let scc_contra = (0..internal.len()).any(|i| {
+            (i + 1..internal.len()).any(|j| {
+                leaves_contradict(&edges[internal[i]].leaves, &edges[internal[j]].leaves)
+            })
+        });
+        // Simple cycles: enumerate ALL simple cycles through the SCC's
+        // first-inserted node (bounded: 100_000 DFS steps, 4096 recorded
+        // rings), then judge the exemption on each cycle's OWN edge set.
+        let start = *scc.iter().min().unwrap();
+        let mut cycles: Vec<(Vec<usize>, Vec<usize>)> = Vec::new(); // (node path, edge path)
+        let mut on_path = vec![false; nodes.len()];
+        on_path[start] = true;
+        let mut path: Vec<usize> = vec![start];
+        let mut path_edges: Vec<usize> = Vec::new();
+        let mut steps = 0usize;
+        {
+            fn dfs(
+                cur: usize,
+                start: usize,
+                adj: &[Vec<usize>],
+                edges: &[Edge],
+                scc_of: &[usize],
+                id: usize,
+                on_path: &mut [bool],
+                path: &mut Vec<usize>,
+                path_edges: &mut Vec<usize>,
+                cycles: &mut Vec<(Vec<usize>, Vec<usize>)>,
+                steps: &mut usize,
+            ) {
+                *steps += 1;
+                if *steps > 100_000 || cycles.len() >= 4096 { return; } // bounded
+                for &ei in adj[cur].iter() {
+                    if *steps > 100_000 || cycles.len() >= 4096 { return; }
+                    let w = edges[ei].dst;
+                    if scc_of[w] != id { continue; }
+                    if w == start {
+                        let mut np = path.clone();
+                        np.push(start);
+                        let mut ep = path_edges.clone();
+                        ep.push(ei);
+                        cycles.push((np, ep));
+                        // keep going: a sibling edge can close a DIFFERENT
+                        // ring through the same nodes (e.g. the mux hold
+                        // self-loop next to the feedback ring)
+                        continue;
+                    }
+                    if !on_path[w] {
+                        on_path[w] = true;
+                        path.push(w);
+                        path_edges.push(ei);
+                        dfs(w, start, adj, edges, scc_of, id, on_path, path, path_edges, cycles, steps);
+                        path_edges.pop();
+                        path.pop();
+                        on_path[w] = false;
+                    }
+                }
+            }
+            dfs(start, start, &adj, &edges, &scc_of, id, &mut on_path, &mut path, &mut path_edges, &mut cycles, &mut steps);
+        }
+        let cut_short = steps > 100_000 || cycles.len() >= 4096;
+        // Per-cycle exemption + report; parallel-edge twins (same node
+        // sequence) dedup to the first report.
+        let mut reported: Vec<(String, String)> = Vec::new(); // (sig, path)
+        for (npath, epath) in cycles.iter() {
+            let exempt = scc_contra
+                && (0..epath.len()).any(|i| {
+                    (i + 1..epath.len()).any(|j| {
+                        leaves_contradict(&edges[epath[i]].leaves, &edges[epath[j]].leaves)
+                    })
+                });
+            if exempt { continue; }
+            let names: Vec<&str> = npath.iter().map(|&i| nodes[i].as_str()).collect();
+            let sig = nodes[npath[0]].clone();
+            let path_str = names.join(" -> ");
+            if reported.iter().any(|(s, p)| s == &sig && p == &path_str) { continue; }
+            let cross = epath.iter().map(|&ei| edges[ei].cross.as_str()).find(|c| !c.is_empty());
+            match cross {
+                Some(inst) => out.push((
+                    "HDL031".to_string(),
+                    module.to_string(),
+                    sig.clone(),
+                    format!("combinational loop through instance '{}': {}", inst, path_str),
+                )),
+                None => out.push((
+                    "HDL030".to_string(),
+                    module.to_string(),
+                    sig.clone(),
+                    format!("combinational loop: {}", path_str),
+                )),
+            }
+            reported.push((sig, path_str));
+        }
+        if reported.is_empty() && (cycles.is_empty() || cut_short) {
+            // The bounded search completed no ring (or was cut short with
+            // every enumerated ring exempt): report "exists" via the first
+            // internal edge, no full path — never stay silent on a candidate
+            // SCC we could not finish examining.
+            let e = &edges[internal[0]];
+            let cross = internal.iter().map(|&ei| edges[ei].cross.as_str()).find(|c| !c.is_empty());
+            let sig = nodes[e.src].clone();
+            let path_str = format!("{} -> {}", nodes[e.src], nodes[e.dst]);
+            match cross {
+                Some(inst) => out.push((
+                    "HDL031".to_string(),
+                    module.to_string(),
+                    sig,
+                    format!("combinational loop through instance '{}': {}", inst, path_str),
+                )),
+                None => out.push((
+                    "HDL030".to_string(),
+                    module.to_string(),
+                    sig,
+                    format!("combinational loop: {}", path_str),
+                )),
+            }
+        }
+    }
+    out
 }
 
 fn string_to_global_type(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
@@ -675,6 +976,21 @@ impl Cxt {
                 ("message", tm_decl("String")),
             ], Tm::U(0).into()),
             PrimFunc(Rc::new(report_check_issue)),
+        ).unwrap();
+
+        // HDL self-check phase 2 (hdl-check-graph.typort): combinational
+        // cycle detection. The edge graph arrives as one newline-joined
+        // String ("dst|src|cross|leaves" per line) — a String-only
+        // signature keeps it registrable here at Cxt::new time, exactly
+        // like report_check_issue (a List[String] parameter would mention
+        // the prelude's List type, which does not exist yet; the vconn
+        // builtin's registration comment covers that failure mode).
+        cxt = cxt.add_builtin(infer, "check_comb_cycles",
+            tm_pi(&[
+                ("module", tm_decl("String")),
+                ("edges", tm_decl("String")),
+            ], Tm::U(0).into()),
+            PrimFunc(Rc::new(check_comb_cycles)),
         ).unwrap();
 
         cxt = cxt.add_builtin(infer, "string_to_global_type",

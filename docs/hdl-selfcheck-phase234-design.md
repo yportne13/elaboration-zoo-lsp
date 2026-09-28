@@ -1,6 +1,12 @@
 # HDL 自检框架阶段 2/3/4 设计（组合环 · latch/位区间 · CDC）
 
-状态：设计稿（2026-09-26）。前置文档：docs/hdl-selfcheck-design.md（阶段 1 已实现合入；编号、架构、幂等性设计全部延续它，本文不重复其内容，只引用）。
+状态：**阶段 2-4 已实现（2026-09-27）**。实现落点：hdl-check-graph.typort（新文件，入口
+checkModuleTreeAll）、cxt.rs（check_comb_cycles builtin + twin 引擎 PrimId 镜像）、
+hdl-check.typort（runChecks 加 rangeSafe 参数 + registerPortTable 拆出）、hdl-macros
+（三处模块宏臂 + 黑盒宏臂的 `_res` 改调）、L13_namespace/mod.rs（prelude 表插入
+hdl-check-graph）、hdl_check_graph_tests.rs（21 个验收/回归用例）。实现与设计的偏差
+逐条记录在文末 §11（实现偏差清单，2026-09-27）。前置文档：docs/hdl-selfcheck-design.md
+（阶段 1 已实现合入；编号、架构、幂等性设计全部延续它，本文不重复其内容，只引用）。
 
 ---
 
@@ -294,12 +300,21 @@ builtin 内部（纯内存 Vec/HashSet）：
 1. 解析边 → 邻接表（src → dst 方向即数据流方向）。
 2. Tarjan SCC（迭代式或显式栈均可，Rust 无栈深顾虑）。候选环：
    |SCC| ≥ 2，或单节点自环（`t := t + 1` 自然产生自边）。
-3. 互斥豁免：SCC 内部边两两 `contradicts`（§3.3 规则原样移植到字符串比对），
-   任一对互斥 → 整环豁免。
-4. 环路径：在 SCC 内从任一节点沿内部边 DFS 回到起点，取一条简单环，
-   渲染 `a -> b -> a`。
-5. 报告：环内边全为模块内边 → `report_check_issue("HDL030", module, 环首节点,
-   "combinational loop: a -> b -> a")`；含 ≥1 条 cross 边 → `HDL031`，
+3. 互斥豁免（**per-cycle**，2026-09-27 评审修正）：先做 SCC 级**快速预筛**——
+   内部边两两 `contradicts`（§3.3 规则原样移植到字符串比对），无任何互斥
+   对则该 SCC 的环没有一条可能被豁免，直接跳过逐环判定；预筛本身**不豁免
+   任何环**。豁免判定落在重建出的**每条简单环自身**：仅当该环的边集内存在
+   互斥对才豁免这一条环。早期成文的"SCC 内任一互斥对 → 整环豁免"已被评审
+   证伪为漏报：互斥对的两条边不必同属一条环（评审探针 `when c {x:=y}
+   otherwise {x:=x}` + `y := x&&en`——SCC{x,y} 里保持环 x→x(!c) 与读边
+   x→y(c) 互斥，真环 x→y→x(c∧en 可满足) 并不含这对边，旧实现连它一起
+   豁免、零告警）。
+4. 环路径：在 SCC 内从首个节点枚举经过它的**全部**简单环（步数界 100_000、
+   环数界 4096），逐环豁免判定后渲染 `a -> b -> a`；搜索被截断且无一环
+   获报时回退为"存在环"式报告（取第一条内部边，不带全路径）——宁误报
+   不漏报。
+5. 报告：该环的边全为模块内边 → `report_check_issue("HDL030", module, 环首节点,
+   "combinational loop: a -> b -> a")`；该环自身含 ≥1 条 cross 边 → `HDL031`，
    message 带实例名（§3.5）。直接走既有行级去重管道，typort 侧零回传。
 
 **降级方案（若未来要撤掉 Rust builtin）**：typort 不动点可达性
@@ -919,3 +934,97 @@ HDL036 ×1（empty）+ HDL038 ×2（wrPtrSync1 / rdPtrSync1 链），其余 exam
    产生的报告现在依赖父文件轮次内的缓存命中。跨文件场景 mutable_map
    清空后缓存同步失效、子构造器重跑 → 自愈重建，与端口表同一论证，
    无新风险，但回归用例必须覆盖"父文件引用前文件模块"的组合。
+
+
+---
+
+## 11. 实现偏差清单（2026-09-27，阶段 2-4 实现实测）
+
+以下为实现相对本设计的全部偏差，每条附原因（均为看门狗实测换来的引擎纪律或宏系统既有约束）：
+
+1. **`_res` 改调共 4 处，非 3 处**：设计成文时 module 宏只有两个臂 + 黑盒臂；现文件还有
+   Verilog-compat 臂（hdl-macros 内第 4 个 `let _res: ModuleTree = ...`）。4 处全部改调
+   `checkModuleTreeAll`。
+2. **Twin 引擎镜像（设计未预见）**：bump_spine_iter 孪生引擎有封闭的 `PrimId` 内建表，
+   prelude 引用的每个 builtin 都必须登记。新增 `PrimId::CheckCombCycles`（prim.rs 枚举 +
+   exec 臂 + entry.rs 挂载），纯算法核心提取为 cxt.rs `comb_cycle_reports`（返回报告元组，
+   参考版/twin 各自推送 CheckIssues 通道）。
+3. **builtin 签名从 `List[String]` 改为单 `String`**：edges 以换行拼接的单字符串传入
+   （每行 `dst|src|cross|leaves`）。原因：`List` 类型在 `Cxt::new` 挂载时机不存在（同
+   vconnT 注册注释），String-only 签名才能在参考版/孪生两引擎安全挂载。
+4. **per-module 缓存（§3.6）取消**：实测发现 mutable 全局在 class 检查求值各轮的行为
+   不一致（读在某几轮返回停滞值、第一轮的写入在后续轮不一定可见），任何全局门要么整条
+   管线静默跳过（首版即如此：HDL001/010/020 全灭），要么从不命中。分析改为**每轮运行**，
+   幂等性/正确性由 **nlDedup（使能规范化）+ dedupDrives（(target,rhsKey) 首见保留）+
+   CheckIssues 行级去重（+ drain 侧 seen-set，阶段 1 同款）**承载（2026-09-27 评审更正：
+   原文笔下的 dupFree/leafResidue 门并非防线，见 4a/4b）。性能：其余规则 O(语句 + V·E)
+   每轮重跑，预算内（全量 L13_namespace 实测 527s vs 基线 ~450s，PEAK 2.6GB << 6GB；
+   看门狗口径：527s 已超旧默认超时 420s，.git/watchdog.ps1 默认 `-TimeoutSec` 已上调
+   **1500s**，内存红线 6GB 不变）。
+
+   4a. **dupFree 门——冗余保险，非防线（2026-09-27 评审更正）**：round 2（第二次
+   class-field 求值）确会把每条 when 包裹语句按 WhenStack 残留条件重录一份（`en` 变
+   `en && en`、`!en` 变 `!en && en`），但**检测器恒真**：scanAllEx 把每条语句 key 无条件
+   记入 seen（重复也记，hdl-check-graph.typort scanAllEx），seenLen 恒等于语句计数，
+   `dupFree = 语句计数 == seenLen` 永远成立——leaf 规则（HDL032/033/034/035）实际**每轮
+   都在运行**。真正挡住残留轮垃圾的是：nlDedup 在语句扫描时把每条使能规范化（重复叶
+   key 首见保留）+ dedupDrives 按 (target,rhsKey) 保留首轮干净副本 + 行级去重兜底。
+   该门保留为冗余保险，不承载正确性。
+
+   4b. **leafResidue 标记——不可达冗余保险（2026-09-27 评审更正）**：驱动使能叶集合内
+   同 key 两次（任意极性组合）即判残留的判定**恒假**：使能在进入 DriveSrc 之前已过
+   nlDedup（scanStmtEx 的 EnableCtx 构造），存储的驱动从不含重复叶 key。保留为廉价
+   跳线，防未来调用点漏掉 nlDedup 规范化。
+5. **HDL034 检测范围缩小**：裸信号 p/!p 形态（设计 §4.5 的 `when c && !c`）与第 4 条的
+   残留条件（`!en && en`）在叶层面**结构完全相同、不可区分**，为避免 latchOk/loopExempt
+   类模块的必然误报，HDL034 只保留 **eq-term 同选择器异值**检测（`when (sel == 0) &&
+   (sel == 1)`），并加"该选择器还出现在其它驱动的条件中 → 判为跨分支残留，跳过"的
+   防误报护栏。验收用例 §9.3 deadCond 相应改为 eq 形态；附带的引擎缺口实测：表面语法
+   `:=` 写在 `*Cd` 寄存器上会生成组合 assign（isRegExpr 不含 *Cd 变体，既有引擎缺口），
+   该形态会被 HDL030 如实报出（实测 xorExempt 首版即触发，属真阳性）。
+6. **HDL032 的轮次可见性**：leaf 规则每轮运行（dupFree 恒真，见 4a），但永不接收
+   残留轮的垃圾使能——nlDedup + dedupDrives 已在源头把残留剥掉；HDL032 的 coverage
+   计算同时排除 residue 驱动（同 key 双写使能，leafResidue 跳线）。
+7. **验收 §9.2 crossLoop 的子模块端口必须声明在模块头**
+   （`module passthru` 换行 `input pin = Bool` 再 `{`）。设计片段把端口写在 body
+   内——body 内 `input/output` 是**模块内部信号，无 subSignal 句柄**（module 宏文档
+   既有约束），`u.port := x` 不会形成连接、跨层边不存在。测试已按头声明形态改写。
+8. **验收 §9.2 loop-exempt 的互斥必须位于环的两条不同边上**（如
+   `when sel { u.pin := x }` + `when !sel { x := y }`）。原片段把互斥写在单条边条件的
+   两侧（`!sel && sel`），该形态属 HDL034 的死条件语义而非环豁免（设计 §3.3 豁免本义即
+   "两条边条件互斥"）。
+9. **HDL034 消息为固定串** `driver condition is always false`（设计 §4.5 含具体
+   `p`/`!p` 叶渲染；实现省略该拼接，contains 式断言不受影响）。
+10. **21-crossclock 实测 HDL038x2、无 HDL036**（设计 §5.3 预期 HDL036x1 有误）：设计认为
+    `empty = rdPtr == wrPtrSync2` 混合 outCd 与主域——实际 streamFifoCC 中 wrPtrSync2 声明
+    于 outCd（hdl-crossclock.typort:201 `newUIntRegCdNamed(..., outCd)`），与 rdPtr 同域，
+    不构成汇聚；`full`/`occupancy` 两侧均主域，亦无汇聚。实测输出仅 HDL038x2
+    （wrPtrSync1 链 crossed to clkB、rdPtrSync1 链 crossed to clkA，宽度均 2），
+    断言按实测写入（examples_21_crossclock_expected_warnings）。
+11. **全部规则每轮运行**（dupFree 恒真，见 4a；正确性由 nlDedup + dedupDrives +
+    行级去重承载，非轮次门控）；HDL030/031/036-039 同样每轮运行、行级去重兜底。
+    因此对 leaf 规则而言"模块被创建与否"不影响结果；CDC/组合环规则对
+    已创建模块在 create 轮必然覆盖。
+12. **规则表 HDL034 的已知漏报更新**：裸信号 p/!p 死条件形态不再报（第 5 条）；
+    eq 形态（同选择器异值，且该选择器不出现在其它驱动）仍然报出。
+13. **组合环互斥豁免 per-cycle 化（2026-09-27 评审 P1 修复）**：SCC 级一票豁免对
+    "互斥对不同属一条环"的真环漏报（评审探针 2 形态），改为 §3.4 修正后的
+    预筛 + 逐环豁免 + 全简单环枚举（步数界 100_000 / 环数界 4096，截断回退
+    "存在环"式报告）；HDL031 归因同步改为按该环自身的边判定。回归钉
+    `hdl030_true_ring_survives_hold_ring_mutex`（真环+保持环共存必报
+    HDL030 x→y→x）；`hdl030_loop_exempt_by_mutex` 单环互斥豁免语义不变。
+14. **CDC 链识别域锚对齐 §5.1 优先级**：chainNextOf 原以 `resolveCd(x, None, …)`
+    解析下一级域、忽略该级 regAssignCd 的驱动侧锚；现经 readerDriveCd 传递
+    驱动显式 cd，与链头 `resolveCd(d.target, d.cd, …)` 同优先级（驱动锚 >
+    声明锚 > 模块默认）。既有 CDC 用例中驱动锚与声明锚一致，行为不变。
+15. **HDL039 XOR 豁免操作数序无关**：exprKey 按操作数序渲染 binary，原实现只认
+    `binary(Ri, "^", R(i+1))` 一种顺序；XOR 对称，现 matcher 两个顺序都接受
+    （typort 无字典序字符串比较可做键规范化，不为此扩 builtin 表）。回归钉
+    `cdc_xor_edge_detect_operand_order_exempt`。
+16. **已知限制（记录，不实现）**：(a) 跨文件 HDL031 盲区——跨层边依赖
+    ModuleCombSummary，mutable_map 每文件清空（lib.rs 三处），父文件引用
+    前文件模块时前文件模块不在父文件 elaborate 轮中重构造、摘要缺失 →
+    跨层边不产 → HDL031 不触发（§3.5"摘要缺失不产边"的保守漏检在跨文件
+    场景的体现）；(b) twin 引擎 `PrimId::CheckCombCycles` 臂（prim.rs）无
+    独立自动化测试——纯核心 comb_cycle_reports 由参考引擎用例覆盖，twin 臂
+    仅同源共享该核心，未在 twin 引擎端到端跑组合环用例。

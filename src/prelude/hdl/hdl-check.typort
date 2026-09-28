@@ -758,9 +758,16 @@ def ruleOutUndriven(mname: String, ds: List[SigDecl], mf: ModFacts): Unit = matc
 }
 
 // HDL010/011/012/013: per-signal driver conflicts.
-def ruleDrivers(mname: String, facts: List[DriveFacts]): Unit = match facts {
+// rangeSafe (phase 3, hdl-check-graph.typort): roots whose comb drivers are
+// all partial bit-range writes with pairwise disjoint static ranges (or
+// mutually exclusive conditions). For those roots HDL010/011 are the
+// documented false positives of name-level conflict counting (a bit-sliced
+// bus is legally driven from several statements), so both are suppressed
+// here; HDL012/013 (comb/clk + multi-domain mixing) are NOT affected.
+def ruleDrivers(mname: String, facts: List[DriveFacts], rangeSafe: List[String]): Unit = match facts {
     case lnil => unit
     case lcons(f, t) =>
+        let safe = chkStrIn(f.name, rangeSafe);
         let multi = match f.uncondComb {
             case succ(succ(_)) => true
             case _ => false
@@ -779,11 +786,17 @@ def ruleDrivers(mname: String, facts: List[DriveFacts]): Unit = match facts {
         };
         let multiCd = chkBor(twoCds, chkBand(chkNatNonZero(f.defClk), hasExplicitCd));
         let _ = match multi {
-            case true => chkReport("HDL010", mname, f.name, "multiple unconditional assignments")
+            case true => match safe {
+                case true => unit
+                case false => chkReport("HDL010", mname, f.name, "multiple unconditional assignments")
+            }
             case false => unit
         };
         let _ = match mixed11 {
-            case true => chkReport("HDL011", mname, f.name, "unconditional and conditional assignments mixed (assign + always block conflict)")
+            case true => match safe {
+                case true => unit
+                case false => chkReport("HDL011", mname, f.name, "unconditional and conditional assignments mixed (assign + always block conflict)")
+            }
             case false => unit
         };
         let _ = match mixed12 {
@@ -794,7 +807,7 @@ def ruleDrivers(mname: String, facts: List[DriveFacts]): Unit = match facts {
             case true => chkReport("HDL013", mname, f.name, "register driven from multiple clock domains")
             case false => unit
         };
-        ruleDrivers(mname, t)
+        ruleDrivers(mname, t, rangeSafe)
 }
 
 // HDL023: the module drives its own input port.
@@ -920,15 +933,25 @@ def chkBbDefIsBlackBox[en: Nat](es: Vec[Expr] en): Boolean = match es {
         }
 }
 
-def runChecks(md: ModuleDef): Unit =
+// Port-table registration hoisted (phase 2): the graph file's
+// checkModuleTreeAll must re-register the entry on EVERY round — including
+// per-module cache hits — because the table self-heals by idempotent
+// overwrite (never cache-gated; hdl-selfcheck-design.md §2). runChecks calls
+// this too, so the entry is registered twice per analysis round (same
+// content, harmless overwrite).
+def registerPortTable(mname: String, decls: List[SigDecl]): Unit =
+    let entry = PortEntry.mk(
+        mname,
+        namesOfKind(decls, kIn),
+        list_append(namesOfKind(decls, kOut), namesOfKind(decls, kOutReg)),
+        namesOfKind(decls, kInOut));
+    let _ = change_mutable_default("ModulePortTable", x => portTableAdd(x, entry), ModulePortTable.mk(lnil));
+    unit
+
+def runChecks(md: ModuleDef, rangeSafe: List[String]): Unit =
     let mfRaw = scanAll(md.expr, ModFacts.mk(lnil, lnil, lnil, lnil, lnil, lnil));
     let mf = ModFacts.mk(dropShadowedWires(mfRaw.decls), mfRaw.reads, mfRaw.conns, mfRaw.insts, mfRaw.facts, mfRaw.seen);
-    let entry = PortEntry.mk(
-        md.name,
-        namesOfKind(mf.decls, kIn),
-        list_append(namesOfKind(mf.decls, kOut), namesOfKind(mf.decls, kOutReg)),
-        namesOfKind(mf.decls, kInOut));
-    let _ = change_mutable_default("ModulePortTable", x => portTableAdd(x, entry), ModulePortTable.mk(lnil));
+    let _ = registerPortTable(md.name, mf.decls);
     let tbl: ModulePortTable = get_global("ModulePortTable");
     // BlackBox 本体门控（docs/hdl-blackbox-sim-design.md §4.4）：黑盒无体，
     // 五条体规则会全误报（HDL003 每个输出端口都“无驱动”、HDL001/002 端口
@@ -946,7 +969,7 @@ def runChecks(md: ModuleDef): Unit =
             let _ = ruleDanglingRead(md.name, mf.reads, mf);
             let _ = ruleUnusedDecl(md.name, md.cd.clockName, md.cd.resetName, mf.decls, mf);
             let _ = ruleOutUndriven(md.name, mf.decls, mf);
-            let _ = ruleDrivers(md.name, mf.facts);
+            let _ = ruleDrivers(md.name, mf.facts, rangeSafe);
             let _ = ruleOwnInputDriven(md.name, mf.decls, mf);
             unit
     };
@@ -961,12 +984,20 @@ def runChecks(md: ModuleDef): Unit =
 // Also registers the def in the design-wide ModuleRegistry (see
 // hdl-core.typort) — this is the single choke point every completed
 // module body passes through.
+//
+// PHASE 2-4 NOTE: the module/blackbox macros now call the graph file's
+// checkModuleTreeAll instead (hdl-check-graph.typort, loaded after this
+// file — a typort def cannot call later-loaded defs, hence the entry
+// inversion). This def stays as the phase-1-only entry (roll-back path:
+// point the macros' three `_res` lines back here and delete the prelude's
+// hdl-check-graph entry); it passes an empty rangeSafe, i.e. exactly the
+// phase-1 behavior.
 def checkModuleTree(t: ModuleTree): ModuleTree =
     let md = headModuleDef(t.data);
     let skip = str_eq(md.name, "");
     let _ = match skip {
         case true => unit
-        case false => runChecks(md)
+        case false => runChecks(md, lnil)
     };
     let _ = registerModuleTree(t);
     t

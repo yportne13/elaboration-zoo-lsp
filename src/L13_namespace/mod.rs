@@ -329,6 +329,9 @@ mod hdl_assert_tests;
 mod hdl_fsm_tests;
 
 #[cfg(test)]
+mod hdl_check_graph_tests;
+
+#[cfg(test)]
 mod verilog_compat_tests;
 
 #[cfg(test)]
@@ -3840,6 +3843,10 @@ pub(crate) const PRELUDE_CORE: &[(&str, &str)] = &[
 pub(crate) const PRELUDE_HDL: &[(&str, &str)] = &[
     ("hdl-core", include_str!("../prelude/hdl/hdl-core.typort")),
     ("hdl-check", include_str!("../prelude/hdl/hdl-check.typort")),
+    // hdl-check-graph 在 hdl-check 之后（依赖 exprKey/runChecks/registerPortTable；
+    // 入口反转：宏的 _res 改调它的 checkModuleTreeAll，见
+    // docs/hdl-selfcheck-phase234-design.md §2.2）。
+    ("hdl-check-graph", include_str!("../prelude/hdl/hdl-check-graph.typort")),
     ("hdl-types", include_str!("../prelude/hdl/hdl-types.typort")),
     ("hdl-ops", include_str!("../prelude/hdl/hdl-ops.typort")),
     ("hdl-clock", include_str!("../prelude/hdl/hdl-clock.typort")),

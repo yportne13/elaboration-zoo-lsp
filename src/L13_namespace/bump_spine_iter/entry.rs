@@ -397,6 +397,13 @@ impl Machine {
                 PrimId::ReportCheckIssue,
                 pi(bump, vec![("code", st), ("module", st), ("signal", st), ("message", st)], u0()),
             ),
+            // HDL 自检阶段 2（hdl-check-graph.typort）：组合环检测，双
+            // String 签名与参考版 Cxt::new 挂载同款（cxt.rs 注释）。
+            (
+                "check_comb_cycles",
+                PrimId::CheckCombCycles,
+                pi(bump, vec![("module", st), ("edges", st)], u0()),
+            ),
             ("string_to_global_type", PrimId::StringToGlobalType, pi(bump, vec![("x", st)], u0())),
             (
                 "create_global",
