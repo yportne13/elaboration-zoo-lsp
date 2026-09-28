@@ -1226,49 +1226,34 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
                     return;
                 }
             };
-        // Register the virtual builtin documents (same URIs/order as before)
-        // so goto/hover across the prelude boundary and builtinContent
-        // requests keep working.
+        // Register the virtual builtin documents so goto/hover across the
+        // prelude boundary and builtinContent requests keep working.
+        //
+        // 这张表必须与 `PRELUDE_CORE/HDL/SHOW` 的加载顺序逐一对齐：prelude
+        // def span 里的 path_id 是加载器按加载顺序从 0 递增分配的
+        // （mod.rs load_prelude_state_impl），而 goto/hover 反查 URI 走的就是
+        // 这里的注册顺序（下方循环的 next_path_id()）。曾经这里是一份手抄
+        // include_str! 清单，PRELUDE_HDL 新增 hdl-check-graph/enum/fsm/
+        // verilog-compat 时漏同步，错位导致 hdl-check-graph 之后所有跨文件
+        // goto/hover 都指向错误的 prelude 文件（impl_goto_tests 的
+        // IMasterSlave→hdl-signals 即此根因）。现在直接从共享表生成，杜绝再漂移。
         {
-            let mut docs: Vec<(&'static str, &'static str)> = vec![
-                ("builtin:///op.typort", include_str!("prelude/core/op.typort")),
-                ("builtin:///eq.typort", include_str!("prelude/core/eq.typort")),
-                ("builtin:///nat.typort", include_str!("prelude/core/nat.typort")),
-                ("builtin:///calc.typort", include_str!("prelude/core/calc.typort")),
-                ("builtin:///bool.typort", include_str!("prelude/core/bool.typort")),
-                ("builtin:///option.typort", include_str!("prelude/data/option.typort")),
-                ("builtin:///result.typort", include_str!("prelude/data/result.typort")),
-                ("builtin:///order.typort", include_str!("prelude/data/order.typort")),
-                ("builtin:///void.typort", include_str!("prelude/core/void.typort")),
-                ("builtin:///decidable.typort", include_str!("prelude/data/decidable.typort")),
-                ("builtin:///vec.typort", include_str!("prelude/data/vec.typort")),
-                ("builtin:///either.typort", include_str!("prelude/data/either.typort")),
-                ("builtin:///list.typort", include_str!("prelude/data/list.typort")),
-                ("builtin:///string.typort", include_str!("prelude/data/string.typort")),
-                ("builtin:///nonempty.typort", include_str!("prelude/data/nonempty.typort")),
-            ];
+            let mut docs: Vec<(String, &'static str)> = L13_namespace::PRELUDE_CORE
+                .iter()
+                .map(|(name, src)| (format!("builtin:///{name}.typort"), *src))
+                .collect();
             if !skip_hdl {
-                docs.extend([
-                    ("builtin:///hdl-core.typort", include_str!("prelude/hdl/hdl-core.typort")),
-                    ("builtin:///hdl-check.typort", include_str!("prelude/hdl/hdl-check.typort")),
-                    ("builtin:///hdl-types.typort", include_str!("prelude/hdl/hdl-types.typort")),
-                    ("builtin:///hdl-ops.typort", include_str!("prelude/hdl/hdl-ops.typort")),
-                    ("builtin:///hdl-clock.typort", include_str!("prelude/hdl/hdl-clock.typort")),
-                    ("builtin:///hdl-bus.typort", include_str!("prelude/hdl/hdl-bus.typort")),
-                    ("builtin:///hdl-signals.typort", include_str!("prelude/hdl/hdl-signals.typort")),
-                    ("builtin:///hdl-utils.typort", include_str!("prelude/hdl/hdl-utils.typort")),
-                    ("builtin:///hdl-stream.typort", include_str!("prelude/hdl/hdl-stream.typort")),
-                    ("builtin:///hdl-crossclock.typort", include_str!("prelude/hdl/hdl-crossclock.typort")),
-                    ("builtin:///hdl-bus-proto.typort", include_str!("prelude/hdl/hdl-bus-proto.typort")),
-                    ("builtin:///hdl-misc-io.typort", include_str!("prelude/hdl/hdl-misc-io.typort")),
-                    ("builtin:///hdl-misc.typort", include_str!("prelude/hdl/hdl-misc.typort")),
-                    ("builtin:///hdl-macros.typort", include_str!("prelude/hdl/hdl-macros.typort")),
-                    ("builtin:///hdl-verilog.typort", include_str!("prelude/hdl/hdl-verilog.typort")),
-                ]);
+                docs.extend(
+                    L13_namespace::PRELUDE_HDL
+                        .iter()
+                        .map(|(name, src)| (format!("builtin:///{name}.typort"), *src)),
+                );
             }
-            docs.push(("builtin:///show.typort", include_str!("prelude/show.typort")));
-            for (uri, text) in docs {
-                let key = uri.to_string();
+            docs.push((
+                format!("builtin:///{}.typort", L13_namespace::PRELUDE_SHOW.0),
+                L13_namespace::PRELUDE_SHOW.1,
+            ));
+            for (key, text) in docs {
                 self.document_map.insert(key.clone(), Rope::from_str(text));
                 if !self.document_id.contains_key(&key) {
                     // 每个 prelude 文档取一个全新的单调 id：首次调用分配的
