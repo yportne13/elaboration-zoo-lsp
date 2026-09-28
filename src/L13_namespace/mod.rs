@@ -3642,9 +3642,12 @@ pub fn run(input: &str, path_id: u32) -> Result<String, Error> {
     let ast = parser::parser(&preprocess(input), path_id).unwrap();
     let mut cxt = Cxt::new(&infer);
     let mut ret = String::new();
-    //TODO: do not print err. return error
+    // 解析错误走 stderr（原 TODO "do not print err. return error" 的生产
+    // 部分已不成立：本函数是测试专用入口——CLI check 走 Backend::on_change、
+    // LSP 走 twin 引擎且 entry.rs 的 prelude.failed 快速失败已正确处理；
+    // 恢复式解析的错误+声明并存是测试依赖的行为，保持非致命）。
     for e in ast.1 {
-        println!("{:?}", e)
+        eprintln!("{:?}", e)
     }
     for tm in ast.0 {
         match &tm {
@@ -4266,9 +4269,10 @@ pub fn run_with_prelude(input: &str) -> Result<String, Error> {
         .map(|(d, e, _, _)| (d, e))
         .unwrap();
     println!("-----------------");
-    //TODO: do not print err. return error
+    // 解析错误走 stderr（生产部分已由 twin 引擎的 prelude.failed 覆盖，
+    // 本函数是测试专用入口；恢复式解析的错误+声明并存是测试依赖的行为）。
     for e in ast.1 {
-        println!("{:?}", e)
+        eprintln!("{:?}", e)
     }
     for tm in ast.0 {
         match &tm {
