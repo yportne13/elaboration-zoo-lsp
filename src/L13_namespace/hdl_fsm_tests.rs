@@ -602,3 +602,59 @@ println("fsm-fallback-ok")
     assert!(output.contains("fsm-fallback-ok"), "no panic outside a module, got:\n{}", output);
     assert!(!output.contains("HDL06"), "empty module name must not report, got:\n{}", output);
 }
+
+// ── HDL032 与 fsmNew 的 when(1) default（2026-09-29 评审 P2-5 回归钉）──
+// fsmNew 的 default 首赋值被 when(literal(1)) 包裹（HDL011 D5 兜底），其
+// 使能叶子恒真。检查器必须把它视为无条件 default：此前 hasUncondComb 只
+// 认空使能，每个 FSM 模块的 stateNext 都被 HDL032 误报 inferred latch。
+
+#[test]
+fn fsm_default_not_reported_as_latch() {
+    let output = assert_ok(r#"
+module fsmDemo {
+    input start = Bool
+    input finish = Bool
+    output done = Bool
+    output st = UInt[2]
+    let ctrl = fsmNew[2](4)
+    let sIdle = ctrl.state(0)
+    let sRun = ctrl.state(1)
+    let sDone = ctrl.state(2)
+    sDone.noExitCheck()
+    whenIsActive(sIdle) {
+        when start { sRun.goto() }
+    }
+    whenIsActive(sRun) {
+        when finish { sDone.goto() } otherwise { sIdle.goto() }
+    }
+    // done 有无条件 default：本钉只验证 when(1) default 不误报，
+    // done 缺 default 的真 latch 语义由 true_latch_still_reported 覆盖。
+    done := false
+    whenIsActive(sDone) {
+        done := true
+    }
+    st := ctrl.stateReg
+}
+"#);
+    assert!(
+        !output.contains("HDL032"),
+        "fsmNew 的 when(1) default 被 HDL032 误报 inferred latch:\n{}",
+        output
+    );
+}
+
+#[test]
+fn true_latch_still_reported() {
+    // 防修复矫枉过正：真 latch（条件驱动、无任何无条件 default）仍必须报。
+    let output = assert_ok(r#"
+module latchDemo {
+    input en = Bool
+    input d = UInt[8]
+    output q = UInt[8]
+    when en {
+        q := d
+    }
+}
+"#);
+    assert!(output.contains("HDL032"), "真 latch 未被报告:\n{}", output);
+}

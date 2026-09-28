@@ -1115,12 +1115,34 @@ def strEnableListEmpty: List[List[NegLeaf]] =
 def coveredBy(ls: List[List[NegLeaf]]): Boolean =
     chkBor(t2Scan(strEnableListEmpty, ls), t3Scan(strEnableListEmpty, ls))
 
+def enableAlwaysTrue(en: List[NegLeaf]): Boolean = match en {
+    // 恰一个正极性叶子、key 等于 literal(1) 的叶子——fsmNew 的 default
+    // 首赋值被 when(literal(1)) 包裹（hdl-fsm.typort 对 HDL011 D5 的
+    // 兜底），DriveSrc.enable 即此形状。语义上恒真使能就是无条件驱动：
+    // hasUncondComb 不认账的话，每个 FSM 模块的 stateNext 都被 HDL032
+    // 误报 latch（2026-09-29 评审 P2-5；与 docs/hdl-stream-fsm-design.md
+    // §7.3 when(1) 兜底的承诺对齐）。
+    // key 从 leavesOf(literal(1)) 现算（exprKey 改动自动跟随，不硬编码
+    // "l:1"）。注意：这里是**内联**调用而非独立 def——新增 prelude def
+    // 会触发 twin 引擎 def-replay 的 spine 索引越界
+    // （twin_engine_tests 全例崩溃，spine.rs len=1499 idx=65964，
+    // 2026-09-29 实测），单独 helper def 的形状暂不可用。
+    case lcons(h, lnil) => match leavesOf(literal(1)) {
+        case lcons(th, _) => chkBand(chkBnot(h.neg), str_eq(h.key, th.key))
+        case _ => false
+    }
+    case _ => false
+}
+
 def hasUncondComb(drives: List[DriveSrc], name: String): Boolean = match drives {
     case lnil => false
     case lcons(d, t) => match chkBand(chkBnot(d.clocked), str_eq(d.target, name)) {
         case true => match d.enable {
             case lnil => true
-            case _ => hasUncondComb(t, name)
+            case _ => match enableAlwaysTrue(d.enable) {
+                case true => true
+                case false => hasUncondComb(t, name)
+            }
         }
         case false => hasUncondComb(t, name)
     }
