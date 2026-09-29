@@ -12,6 +12,8 @@ vscode_extension/client/out
 node_modules
 *.vsix
 vscode_extension/client/server.wasm
+# tsc --build 增量编译缓存（曾误提交，2026-09-29 解除跟踪）
+vscode_extension/client/tsconfig.tsbuildinfo
 dhat-heap.json
 
 # Stats output
