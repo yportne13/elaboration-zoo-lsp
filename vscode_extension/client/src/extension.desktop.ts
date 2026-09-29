@@ -1,6 +1,6 @@
 import 'vscode-languageclient/node';
-import { ExtensionContext, window, workspace, commands, StatusBarItem, StatusBarAlignment, LogOutputChannel } from 'vscode';
-import { LanguageClient, LanguageClientOptions, State, StateChangeEvent, ErrorAction, CloseAction } from 'vscode-languageclient/node';
+import { ExtensionContext, Position, window, workspace, commands, StatusBarItem, StatusBarAlignment, LogOutputChannel } from 'vscode';
+import { LanguageClient, LanguageClientOptions, RequestType, State, StateChangeEvent, ErrorAction, CloseAction } from 'vscode-languageclient/node';
 import { activate as activateWasm, deactivate as deactivateWasm } from './extension';
 import { readEngine, showServerActions } from './serverActions';
 
@@ -219,6 +219,37 @@ export async function activate(context: ExtensionContext) {
 				restart: () => restartCliClient(),
 				showLog: () => logChannel?.show(),
 			});
+		}));
+
+		// ── Expand macro ──────────────────────────────────────────────────
+		// The CLI stdio server handles `typort-hdl/expandMacro` (lib.rs), so
+		// register the command here too; the wasm entry has its own copy in
+		// extension.ts. Without this, the palette command contributed in
+		// package.json is unregistered on the CLI backend.
+		type ExpandMacroParams = { uri: string; position: Position };
+		type ExpandMacroResult = { name: string; range: { start: Position; end: Position }; expanded_text: string };
+		const ExpandMacroRequest = new RequestType<ExpandMacroParams, ExpandMacroResult | null, void>('typort-hdl/expandMacro');
+		context.subscriptions.push(commands.registerCommand('typort-hdl.expandMacro', async () => {
+			const editor = window.activeTextEditor;
+			if (!editor || !client) {
+				return;
+			}
+			const uri = client.code2ProtocolConverter.asUri(editor.document.uri);
+			const position = editor.selection.active;
+			try {
+				const result = await client.sendRequest(ExpandMacroRequest, { uri, position });
+				if (result) {
+					const doc = await workspace.openTextDocument({
+						content: result.expanded_text,
+						language: 'typort',
+					});
+					await window.showTextDocument(doc, { preview: true });
+				} else {
+					window.showInformationMessage('No macro expansion found at cursor position.');
+				}
+			} catch (error) {
+				window.showErrorMessage(`Expand macro failed: ${error}`);
+			}
 		}));
 	} else {
 		await activateWasm(context, { canUseCli: true });

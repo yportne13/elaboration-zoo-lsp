@@ -1,6 +1,6 @@
 {
 	"name": "TyportHDL",
-	"description": "VS Code extension for the Typort language: LSP-powered hover, completion, diagnostics and HDL code generation.",
+	"description": "VS Code extension for the Typort language: LSP-powered hover, completion, diagnostics and macro expansion.",
 	"author": "TyportHDL contributors",
 	"license": "MIT",
 	"version": "1.0.0",
@@ -37,6 +37,10 @@
 			{
 				"command": "typort-hdl.expandMacro",
 				"title": "TyportHDL: Expand Macro"
+			},
+			{
+				"command": "typort-hdl.showServerActions",
+				"title": "TyportHDL: Show Server Actions"
 			}
 		],
 		"languages": [

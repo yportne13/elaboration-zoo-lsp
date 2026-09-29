@@ -37,9 +37,10 @@ const UNSET_ENGINE: Record<Backend, Engine> = {
 };
 
 /**
- * The user-set value, ignoring the schema default. `get()` alone cannot be
- * used here: the schema default (`twin`, see package.json) would be
- * indistinguishable from an explicit choice.
+ * The user-set value, ignoring fallbacks. `get()` alone cannot be used here:
+ * package.json declares no schema default for the engine setting, and the
+ * per-backend fallback (`UNSET_ENGINE`) must stay indistinguishable from an
+ * explicit choice.
  */
 function explicitEngine(): string | undefined {
 	const inspect = workspace.getConfiguration(SECTION).inspect<string>(ENGINE_KEY);
