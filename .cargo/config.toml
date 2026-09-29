@@ -6,3 +6,13 @@
 # Scoped to the Windows MSVC target so other platforms are unaffected.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/STACK:67108864"]
+
+# Same rationale as the MSVC block above, for the GNU target: the mingw
+# linker defaults the main-thread stack reserve to 2 MiB (ld's --stack takes
+# a byte count), which still overflows for this recursively-structured
+# typechecker/evaluator.  This is the target CI publishes as
+# typort-x86_64-windows.exe (cross-built with plain cargo --target in
+# .github/workflows/ci.yml build-cli), so without this flag every released
+# Windows binary dies on deep inputs; see docs/l13-force-recursion-stack-overflow.md.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "link-arg=-Wl,--stack,67108864"]
