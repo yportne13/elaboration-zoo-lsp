@@ -13,6 +13,7 @@ use lsp_types::{
     DidChangeTextDocumentParams, DidOpenTextDocumentParams, TextDocumentContentChangeEvent,
     TextDocumentItem, Url, VersionedTextDocumentIdentifier,
 };
+use ropey::Rope;
 use serde_json::json;
 
 use elaboration_zoo_lsp::client::Client;
@@ -319,4 +320,29 @@ fn unknown_request_gets_method_not_found() {
     assert_eq!(err.code, -32601, "未识别请求应回 -32601: {:?}", err);
     let hover = response_for(&s, 2).expect("-32601 之后服务端必须继续应答");
     assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
+}
+
+// ── 修复7e：inlay 单条越界不再让全文件 inlay 消失 ────────────────────────────
+//
+// 旧实现循环内 `offset_to_position(...)?`：任何一条越界（陈旧表）都让
+// inlay_hint_at 整体返回 None。回归：把 document_map 换成更短的 rope 模拟
+// 陈旧表后，仍应返回 Some（过滤后剩余项，可能为空），而不是 None。
+
+#[test]
+fn inlay_hint_skips_out_of_bounds_entries_instead_of_returning_none() {
+    let b = direct_backend();
+    let uri = Url::parse(URI).unwrap();
+    let src = "def f(x: Nat) = let y = x + 1; y\n";
+    b.process_file(&uri, src, Some(1));
+    b.drain_analysis_jobs();
+    // 测试前提：源码确实产出 inlay（否则本测试退化为 no-op）。
+    let hints = b.inlay_hint_at(&uri).unwrap_or_default();
+    assert!(!hints.is_empty(), "测试前提：源码应产出 inlay（实际 0 条）");
+    // 模拟陈旧表：rope 被替换成更短的文本而 inlay 表未重建——全部条目
+    // 都越界。旧实现走到第一条就 `?` 成 None；新实现逐条跳过后返回 Some。
+    b.document_map.insert(uri.to_string(), Rope::from_str("x\n"));
+    assert!(
+        b.inlay_hint_at(&uri).is_some(),
+        "越界条目应被逐条跳过，不得让整个文件的 inlay 变 None"
+    );
 }

@@ -1675,6 +1675,12 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         // (INFORMATION).
         let mut diags: Vec<Diagnostic> = Vec::new();
         for e in &errors {
+            // 宏展开拼接的 span 可能超出现 rope（陈旧表/跨文件拼接）：跳过
+            // 该条而不是 unwrap_or_default 钉到 (0,0)（对齐 cross_file_
+            // references 的越界防御）。
+            if e.0.end_offset as usize > rope.len_bytes() {
+                continue;
+            }
             let start_position = offset_to_position(e.0.start_offset as usize, &rope).unwrap_or_default();
             let end_position = offset_to_position(e.0.end_offset as usize, &rope).unwrap_or_default();
             let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), e.1.clone());
@@ -1683,6 +1689,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         }
         for e in parse_errs {
             let ie = e.clone().to_err();
+            if ie.0.end_offset as usize > rope.len_bytes() {
+                continue;
+            }
             let start_position = offset_to_position(ie.0.start_offset as usize, &rope).unwrap_or_default();
             let end_position = offset_to_position(ie.0.end_offset as usize, &rope).unwrap_or_default();
             let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), ie.0.data.clone());
@@ -1692,6 +1701,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         for (idx, line) in &checks {
             let anchor = decls.get(*idx).map(decl_span).unwrap_or_else(|| Span { data: (), start_offset: 0, end_offset: 0, path_id: 0 });
             let span = check_issue_span(text, line, anchor);
+            if span.end_offset as usize > rope.len_bytes() {
+                continue;
+            }
             let start_position = offset_to_position(span.start_offset as usize, &rope).unwrap_or_default();
             let end_position = offset_to_position(span.end_offset as usize, &rope).unwrap_or_default();
             let mut d = Diagnostic::new_simple(
@@ -1710,6 +1722,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         if !printlns.is_empty() {
             let mut with_print = diags;
             for (span, s) in &printlns {
+                if span.end_offset as usize > rope.len_bytes() {
+                    continue;
+                }
                 let start_position = offset_to_position(span.start_offset as usize, &rope).unwrap_or_default();
                 let end_position = offset_to_position(span.end_offset as usize, &rope).unwrap_or_default();
                 let mut d = Diagnostic::new_simple(Range::new(start_position, end_position), s.clone());
@@ -1896,6 +1911,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
 
             // 生成诊断（原有的 err_collect + parse errors）
             for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
+                if e.0.end_offset as usize > rope.len_bytes() {
+                    continue;
+                }
                 let start_position = offset_to_position(e.0.start_offset as usize, &rope).unwrap_or_default();
                 let end_position = offset_to_position(e.0.end_offset as usize, &rope).unwrap_or_default();
                 let mut diagnostic = Diagnostic::new_simple(
@@ -2576,6 +2594,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let mut diags = Vec::new();
         let mut quickfixes_for_uri = HashMap::new();
         for (e, severity) in err_collect.into_iter().chain(parse_errs.into_iter().map(|e| (e.to_err(), DiagnosticSeverity::ERROR))) {
+            if e.0.end_offset as usize > rope.len_bytes() {
+                continue;
+            }
             let start_position = offset_to_position(e.0.start_offset as usize, rope).unwrap_or_default();
             let end_position = offset_to_position(e.0.end_offset as usize, rope).unwrap_or_default();
             let mut diagnostic = Diagnostic::new_simple(
@@ -2611,6 +2632,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let mut diags = Vec::new();
         for job in &infer.println_jobs {
             let s = pretty_tm(0, job.names.clone(), &infer.nf(&job.decl, &job.env, &job.tm));
+            if job.span.end_offset as usize > rope.len_bytes() {
+                continue;
+            }
             let start_position = offset_to_position(job.span.start_offset as usize, rope).unwrap_or_default();
             let end_position = offset_to_position(job.span.end_offset as usize, rope).unwrap_or_default();
             let mut diagnostic = Diagnostic::new_simple(
@@ -2994,7 +3018,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         let rope = self.document_map.get(uri.as_str())?;
         let mut ret = Vec::new();
         for (offset, label) in &inlay {
-            let position = offset_to_position(*offset as usize, &rope)?;
+            // 单条越界（陈旧表）只跳过该条：旧实现 `?` 会让整个文件的
+            // inlay 全部消失。
+            let Some(position) = offset_to_position(*offset as usize, &rope) else {
+                continue;
+            };
             ret.push(InlayHint {
                 position,
                 label: InlayHintLabel::String(label.clone()),
