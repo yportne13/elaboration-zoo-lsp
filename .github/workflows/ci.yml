@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    name: L13 gate (lib + parity + into_probe + twin LSP)
+    name: L13 gate (lib + parity + twin LSP)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -38,6 +38,35 @@ jobs:
       # the gate stayed green.  `--examples --tests` is the cheap guard for it.
       - name: Check every example and test target builds
         run: cargo check --examples --tests
+
+  # Full-suite job: the L13 gate only exercises --lib + l13_fast_parity +
+  # twin_engine_tests, and the check above never *runs* anything.  Of the
+  # repo's 66 test targets (~50 integration tests for parser/HDL/emit/L02-L12
+  # plus non-L13 unit tests) none executed on CI before this job.
+  test-full:
+    name: Full test suite (all targets)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-fulltest-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-fulltest-
+
+      - name: Run the full test suite
+        run: cargo test --no-fail-fast
 
   dependencies:
     name: Build dependencies
