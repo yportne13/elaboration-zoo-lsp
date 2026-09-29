@@ -315,9 +315,11 @@ succ_injective 等自证例子见 examples/theorem_proving.typort）。
    *         UInt[w1]*UInt[w2] -> UInt[w1+w2]（不丢精度）
    Nat 字面量自动转换: a + 42 / a * 3（via Into）
    a.neg     SInt 取负
+   sa.abs / sa.expand    SInt 绝对值(-> UInt) / 符号扩展(+1 位; UInt expand 零扩展)
 
 比较:  < <= > >=（两侧位宽一致）;  相等/不等是 === / =/=  （结果 Bool）
 位运算:  & | ^ ~（按位）;  << >>（编译期 Nat 常量移位）
+         |<< |>>  保宽变量移位（移位量 = UInt 信号; SInt 的 |>> 是算术移位）
          a.andR / a.orR / a.xorR  归约 -> Bool
 
 位提取/切片/拼接:
@@ -325,6 +327,8 @@ succ_injective 等自证例子见 examples/theorem_proving.typort）。
    a.slice[7, 4]  范围 -> 宽度 4
    t[0] := x      LHS 位选赋值
    a ## b         拼接, 结果宽 = 左宽 + 右宽（含 Bool）
+   a.asBits / b.asUInt / c.asBool   显式类型转换
+   let inst = mkInstance("u", "Adder")   子模块例化（raw 形式; 层次连接见 `hdl` 节）
 "#
     ),
     section!(

@@ -75,6 +75,7 @@ module top {
     input b = UInt[8]
     output sum = UInt[8]
     let u = myAdder.create[8]
+    let inst = mkInstance("u_raw", "myAdder")
     u.a := a
     u.b := b
     sum := u.sum
@@ -102,6 +103,20 @@ module sigDemo {
     lo := a.slice[7, 4] ## a.slice[3, 0]
     let bit7 = Bool
     bit7 := a[7]
+    let sa = SInt[8]
+    let absu = UInt[8]
+    absu := sa.abs
+    let widened = SInt[9]
+    widened := sa.expand
+    let sh = UInt[3]
+    let shifted = UInt[8]
+    shifted := a |<< sh
+    let arith = SInt[8]
+    arith := sa |>> sh
+    let cv = Bits[8]
+    cv := a.asBits
+    let asbool = Bool
+    asbool := a.asBool
 }
 
 println(moduleTreeVL(top.create.tree))
