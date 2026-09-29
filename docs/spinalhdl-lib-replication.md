@@ -89,7 +89,7 @@
 **L2 结构断言**：生成的 Verilog 必须包含关键结构串（端口方向/宽度、reg 声明、assign 形态、when 条件、握手信号）。断言写进 `legacy_tests.rs` 的 examples 表（每波次新文件 + 断言组）。
 
 **L3 行为验证（真值表/时序）**：
-- `tools/spinalhdl-verify/verify.py`：跑 `typort check examples/…` 抓 Verilog → 用 **iverilog**（若可安装；否则 verilator + C++ 驱动）编译仿真 → 输入扫描与 Python 参考实现比对（组合逻辑全空间扫描，时序逻辑定向激励）。
+- `tools/spinalhdl-verify/verify.py`：跑 `typort check examples/…` 抓 Verilog → 生成 C++ testbench 与激励文件，用 **verilator** 编译仿真（verilator-only，无 iverilog 分支）→ 输入扫描与 Python 参考实现比对（组合逻辑全空间扫描，时序逻辑定向激励）。
 - 组合组件（CountOne/OHToUInt/MuxOH/CLZ/Bcd 等）：全输入空间 0..2^w-1 比对。
 - 时序组件（FIFO/Counter 家族/Timer/Divider/FSM）：脚本内定义参考状态机，驱动 clk 比对每拍输出。
 - 每个库组件在 `examples/hdl/verify/` 下有一个 `*_tb.py` 参考实现。

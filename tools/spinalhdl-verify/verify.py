@@ -17,7 +17,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dualclock_runner import run_dualclock_case
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TYPORT = os.environ.get("TYPORT", os.path.join(ROOT, "target", "release", "typort"))
+_TYPORT_DEFAULT = os.path.join(ROOT, "target", "release", "typort")
+# Windows 构建产物带 .exe 后缀；环境变量显式指定时原样使用
+TYPORT = os.environ.get("TYPORT") or (
+    _TYPORT_DEFAULT if os.path.exists(_TYPORT_DEFAULT) else _TYPORT_DEFAULT + ".exe"
+)
 VERILATOR = os.environ.get("VERILATOR", "verilator")
 CASE_DIR = os.path.join(ROOT, "tools", "spinalhdl-verify", "cases")
 
