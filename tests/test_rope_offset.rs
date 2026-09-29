@@ -164,3 +164,34 @@ fn test_did_change_simulation() {
     let result = rope.to_string();
     assert_eq!(result, "module 变量测试;");
 }
+
+#[test]
+fn test_character_past_line_end_clamps_to_line_content() {
+    // character 超出**行内容**长度必须收敛到行末（终止符之前），不得滑进
+    // 换行符乃至下一行行首（LSP 规范语义；旧实现 character=行内容长+1 时
+    // 会落到 '\n' 上、+2 落到下一行行首）。
+    let rope = Rope::from_str("ab\nline1\n");
+    // 行 0 内容 "ab"（byte 0..2）：character=2 → '\n' 处；再大也仍是 byte 2
+    assert_eq!(position_to_offset(Position::new(0, 2), &rope), Some(2));
+    assert_eq!(position_to_offset(Position::new(0, 3), &rope), Some(2));
+    assert_eq!(position_to_offset(Position::new(0, 99), &rope), Some(2));
+    // 行 1 起点 byte 3，内容 "line1"：character=9 → clamp 到 byte 8
+    assert_eq!(position_to_offset(Position::new(1, 9), &rope), Some(8));
+    // 空行：任何 character 都收敛到行首
+    let rope2 = Rope::from_str("a\n\nb");
+    assert_eq!(position_to_offset(Position::new(1, 0), &rope2), Some(2));
+    assert_eq!(position_to_offset(Position::new(1, 5), &rope2), Some(2));
+}
+
+#[test]
+fn test_character_past_line_end_crlf_never_splits_terminator() {
+    // CRLF：clamp 点在 '\r' 之前——绝不会落在 \r 与 \n 中间拆散终止符
+    let rope = Rope::from_str("ab\r\nline1\r\n");
+    // 行 0：内容 "ab"，'\r' 在 byte 2，clamp 后任何超长 character 都到 byte 2
+    assert_eq!(position_to_offset(Position::new(0, 2), &rope), Some(2));
+    assert_eq!(position_to_offset(Position::new(0, 3), &rope), Some(2));
+    assert_eq!(position_to_offset(Position::new(0, 99), &rope), Some(2));
+    // 行 1：起点 byte 4，内容 "line1"，'\r' 在 byte 9
+    assert_eq!(position_to_offset(Position::new(1, 9), &rope), Some(9));
+    assert_eq!(position_to_offset(Position::new(1, 10), &rope), Some(9));
+}

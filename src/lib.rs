@@ -3212,30 +3212,22 @@ impl LanguageServer for Backend<Client> {
             let mut buffers = self.document_buffers.lock().unwrap();
             if let Some(buffer) = buffers.get_mut(params.text_document.uri.as_str()) {
                 for change in &params.content_changes {
-                    if let Some(range) = change.range {
-                        // Incremental edit: replace text at the specified range
-                        if let (Some(start), Some(end)) = (
-                            position_to_offset(range.start, buffer),
-                            position_to_offset(range.end, buffer),
-                        ) {
-                            // Convert byte offsets to char offsets for ropey operations
-                            let start_char = buffer.byte_to_char(start);
-                            let end_char = buffer.byte_to_char(end);
-                            buffer.remove(start_char..end_char);
-                            buffer.insert(start_char, &change.text);
-                        } else {
-                            // Fallback: position conversion failed, replace whole text
-                            *buffer = Rope::from_str(&change.text);
-                        }
-                    } else {
-                        // No range = full text replacement
-                        *buffer = Rope::from_str(&change.text);
-                    }
+                    apply_content_change(buffer, change);
                 }
                 buffer.to_string()
             } else {
-                // No existing buffer — fallback to first change's text
-                params.content_changes[0].text.clone()
+                // 无 buffer（did_open 未到达/被跳过）：按「从零开始」的语义
+                // 应用整批 change（无 range 的项是全量替换，有 range 的项
+                // clamp 到当前内容上增量应用），并把缓冲注册进
+                // document_buffers，让后续 did_change 走正常增量路径。
+                // 旧实现取 [0].text 当全文且不注册 buffer——增量片段被当
+                // 成全文、后续 change 永远拿不到正确基线。
+                let mut buffer = Rope::new();
+                for change in &params.content_changes {
+                    apply_content_change(&mut buffer, change);
+                }
+                buffers.insert(params.text_document.uri.to_string(), buffer.clone());
+                buffer.to_string()
             }
         };
         let uri = params.text_document.uri.to_string();
@@ -3762,17 +3754,54 @@ pub fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
 pub fn position_to_offset(position: Position, rope: &Rope) -> Option<usize> {
     let line_byte_start = rope.try_line_to_byte(position.line as usize).ok()?;
     let line_text = rope.line(position.line as usize);
+    // LSP 语义：character 超出**行内容**长度时收敛到行末——不能滑进换行符
+    // （CRLF 下旧实现会落在 \r 与 \n 之间，拆散终止符）乃至下一行行首。
+    // 行切片含终止符，先量出内容长度（排除 \n 及紧邻 \n 的 \r）再 clamp。
+    let mut content_utf16 = 0u32;
+    let mut chars = line_text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\n' || (ch == '\r' && chars.peek() == Some(&'\n')) {
+            break;
+        }
+        content_utf16 += ch.len_utf16() as u32;
+    }
     // Convert UTF-16 code unit column to byte offset within line
     let mut col_byte_offset = 0usize;
     let mut utf16_count = 0u32;
     for ch in line_text.chars() {
-        if utf16_count >= position.character {
+        if utf16_count >= position.character.min(content_utf16) {
             break;
         }
         col_byte_offset += ch.len_utf8();
         utf16_count += ch.len_utf16() as u32;
     }
     Some(line_byte_start + col_byte_offset)
+}
+
+/// 越界端点的 clamp 解析：position_to_offset 只在**行号**超界时失败
+/// （character 越界在函数内部已 clamp 到行内容末尾），此时把端点钉到
+/// 文档末尾。did_change 的增量编辑用它替代旧的「整卷替换」兜底。
+fn clamped_position_offset(position: Position, rope: &Rope) -> usize {
+    position_to_offset(position, rope).unwrap_or_else(|| rope.len_bytes())
+}
+
+/// 把单个 content change 应用到 rope。无 range 为全量替换；有 range 先
+/// clamp 两端再增量应用（start > end 的畸形 range 按交换序处理，避免
+/// ropey 对逆序区间的 panic）。
+fn apply_content_change(buffer: &mut Rope, change: &TextDocumentContentChangeEvent) {
+    match change.range {
+        Some(range) => {
+            let start = clamped_position_offset(range.start, buffer);
+            let end = clamped_position_offset(range.end, buffer);
+            let (start, end) = if start <= end { (start, end) } else { (end, start) };
+            // ropey 的 remove/insert 用 char 偏移
+            let start_char = buffer.byte_to_char(start);
+            let end_char = buffer.byte_to_char(end);
+            buffer.remove(start_char..end_char);
+            buffer.insert(start_char, &change.text);
+        }
+        None => *buffer = Rope::from_str(&change.text),
+    }
 }
 
 /// Byte offset of the start of the member name being completed at `offset`:

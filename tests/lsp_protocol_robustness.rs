@@ -187,3 +187,87 @@ fn empty_content_changes_is_noop() {
     let rope = b.document_map.get(uri.as_str()).unwrap();
     assert_eq!(rope.to_string(), SRC, "空 contentChanges 不得改动文档");
 }
+
+// ── 修复4：越界 range 的破坏性 fallback ─────────────────────────────────────
+//
+// 旧实现 position_to_offset 失败时把整个 buffer 替换成 change.text（增量
+// 片段冒充全文）；URI 未 open 时取 [0].text 当全文且不回插 buffer。回归：
+// 越界端点 clamp 后照常应用增量；无 buffer 注册后能继续增量。
+
+#[test]
+fn out_of_range_incremental_change_clamps_instead_of_clobbering() {
+    let b = direct_backend();
+    let uri = Url::parse(URI).unwrap();
+    b.did_open(DidOpenTextDocumentParams {
+        text_document: TextDocumentItem {
+            uri: uri.clone(),
+            language_id: "typort".to_owned(),
+            version: 1,
+            text: "line0\nline1\n".to_owned(),
+        },
+    });
+    b.drain_analysis_jobs();
+
+    // start 合法、end 行号越界：期望 clamp 到文档末尾后增量替换
+    // （"line0\nline1\n" 从 (0,1) 到文档末尾替换为 "X" → "lX"）。
+    // 旧实现 position_to_offset 失败 → buffer 整卷变成 "X"。
+    b.did_change(DidChangeTextDocumentParams {
+        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 2 },
+        content_changes: vec![TextDocumentContentChangeEvent {
+            range: Some(lsp_types::Range {
+                start: lsp_types::Position { line: 0, character: 1 },
+                end: lsp_types::Position { line: 99, character: 0 },
+            }),
+            range_length: None,
+            text: "X".to_owned(),
+        }],
+    });
+    b.drain_analysis_jobs();
+    let rope = b.document_map.get(uri.as_str()).unwrap();
+    assert_eq!(rope.to_string(), "lX", "越界 range 应 clamp 后增量应用，而非整卷替换");
+}
+
+#[test]
+fn missing_buffer_registers_and_continues_incremental_path() {
+    let b = direct_backend();
+    let uri = Url::parse(URI).unwrap();
+
+    // 刻意不 did_open：第一笔 ranged change 从空内容起步并注册 buffer。
+    b.did_change(DidChangeTextDocumentParams {
+        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 1 },
+        content_changes: vec![TextDocumentContentChangeEvent {
+            range: Some(lsp_types::Range {
+                start: lsp_types::Position { line: 0, character: 0 },
+                end: lsp_types::Position { line: 0, character: 0 },
+            }),
+            range_length: None,
+            text: "hello".to_owned(),
+        }],
+    });
+
+    b.drain_analysis_jobs();
+
+    // 注意：DashMap 的读守卫不能跨 did_change/drain 持有——同线程对同 key
+    // 的 insert 要等读锁释放（非重入），守卫活到函数尾就会死锁。作用域内
+    // 用完即弃。
+    assert_eq!(b.document_map.get(uri.as_str()).unwrap().to_string(), "hello");
+
+    // 第二笔增量必须基于注册后的 buffer（旧实现拿不到 buffer，继续把
+    // [0].text 当全文，文档会变成 " world"）。
+
+    b.did_change(DidChangeTextDocumentParams {
+        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 2 },
+        content_changes: vec![TextDocumentContentChangeEvent {
+            range: Some(lsp_types::Range {
+                start: lsp_types::Position { line: 0, character: 5 },
+                end: lsp_types::Position { line: 0, character: 5 },
+            }),
+            range_length: None,
+            text: " world".to_owned(),
+        }],
+    });
+
+    b.drain_analysis_jobs();
+
+    assert_eq!(b.document_map.get(uri.as_str()).unwrap().to_string(), "hello world", "注册 buffer 后续增量应正常累积");
+}
