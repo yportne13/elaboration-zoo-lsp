@@ -100,3 +100,37 @@ fn semantic_tokens_full_does_not_kill_session() {
         );
     }
 }
+
+// ── 修复2：畸形 params panic 终结会话 ────────────────────────────────────────
+//
+// 旧实现对 cast::<T>/on::<T> 的 JsonError 一律 panic!，一个畸形请求/通知就
+// 能终结 main_loop。回归：畸形请求收到 -32602 错误响应，畸形通知被丢弃，
+// 两者之后服务端都必须继续应答。
+
+#[test]
+fn malformed_request_params_get_invalid_params_response() {
+    let s = run_session(vec![
+        // 缺 position 字段 → cast::<HoverRequest> JsonError
+        request(1, "textDocument/hover", json!({"textDocument": {"uri": URI}})),
+        request(2, "textDocument/hover", hover_params()),
+    ]);
+    let err = response_for(&s, 1).expect("畸形 params 的请求必须收到错误响应");
+    let err = err.error.as_ref().expect("应为 error 响应");
+    assert_eq!(err.code, -32602, "畸形 params 应回 -32602: {:?}", err);
+    let hover = response_for(&s, 2).expect("错误响应之后服务端必须继续应答");
+    assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
+}
+
+#[test]
+fn malformed_notification_is_dropped_and_session_survives() {
+    let s = run_session(vec![
+        // 缺 contentChanges 字段 → on::<DidChangeTextDocument> JsonError
+        notification(
+            "textDocument/didChange",
+            json!({"textDocument": {"uri": URI, "version": 2}}),
+        ),
+        request(3, "textDocument/hover", hover_params()),
+    ]);
+    let hover = response_for(&s, 3).expect("畸形通知被丢弃后服务端必须继续应答");
+    assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
+}

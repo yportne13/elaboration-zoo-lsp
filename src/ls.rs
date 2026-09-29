@@ -5,19 +5,25 @@ use lsp_types::*;
 use serde_json::Value;
 
 /// A JSON-RPC error object.
+///
+/// 携带 JSON-RPC 错误码与消息：main_loop 把 handler 的 Err 转成错误响应回给
+/// 客户端（旧实现里 handler 的 Err 沿 `?` 冒泡终结整个 main_loop）。
 #[derive(Clone, Debug)]
 /// #[serde(deny_unknown_fields)]
-pub struct Error {}
+pub struct Error {
+    pub code: i32,
+    pub message: String,
+}
 
 impl Error {
     fn method_not_found() -> Self {
-        Error {}
+        Error { code: -32601, message: "Method not found".to_owned() }
     }
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{} (code {})", self.message, self.code)
     }
 }
 

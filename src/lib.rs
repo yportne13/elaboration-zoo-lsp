@@ -3572,119 +3572,66 @@ impl Backend<Client> {
                     // `cast::<T>(req.clone())`——未知方法最多 12 次完整 JSON
                     // 深克隆（被支持的方法平均也要先白付 1-10 次克隆）。先比
                     // 方法名、命中才把 req 移进 cast（params 只反序列化一次）。
+                    //
+                    // 协议层失败的收尾全部是「回错误响应后继续」：cast 的
+                    // JsonError 回 -32602，handler 的 Err 回其自带错误码。
+                    // 旧实现里这两处分别走 panic! 和 `?`，一个畸形请求就能
+                    // 终结 main_loop（服务端假死）。JsonError 不携带 id
+                    // （lsp-server 0.7.8 只存 method/error），回包用分派前
+                    // 克隆的 req_id。
+                    let req_id = req.id.clone();
+                    let send_err = |id: RequestId, code: i32, message: String| -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
+                        let resp = Response::new_err(id, code, message);
+                        Ok(self.client.connection.sender.send(Message::Response(resp))?)
+                    };
+                    macro_rules! dispatch_request {
+                        ($ty:ty, $handler:ident) => {
+                            match cast::<$ty>(req) {
+                                Ok((id, params)) => match self.$handler(params) {
+                                    Ok(result) => {
+                                        let result = serde_json::to_value(&result).unwrap();
+                                        let resp = Response { id, result: Some(result), error: None };
+                                        self.client.connection.sender.send(Message::Response(resp))?;
+                                    }
+                                    Err(err) => send_err(id, err.code, err.message)?,
+                                },
+                                Err(ExtractError::JsonError { error, .. }) => {
+                                    send_err(req_id.clone(), -32602, format!("Invalid params: {error}"))?;
+                                }
+                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
+                            }
+                        };
+                    }
                     let req_method = req.method.clone();
                     match req_method.as_str() {
-                        GotoDefinition::METHOD => {
-                            let (id, params) = match cast::<GotoDefinition>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.goto_definition(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        HoverRequest::METHOD => {
-                            let (id, params) = match cast::<HoverRequest>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.hover(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        InlayHintRequest::METHOD => {
-                            let (id, params) = match cast::<InlayHintRequest>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.inlay_hint(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
+                        GotoDefinition::METHOD => dispatch_request!(GotoDefinition, goto_definition),
+                        HoverRequest::METHOD => dispatch_request!(HoverRequest, hover),
+                        InlayHintRequest::METHOD => dispatch_request!(InlayHintRequest, inlay_hint),
+                        References::METHOD => dispatch_request!(References, references),
+                        Rename::METHOD => dispatch_request!(Rename, rename),
+                        CodeActionRequest::METHOD => dispatch_request!(CodeActionRequest, code_action),
+                        ExecuteCommand::METHOD => dispatch_request!(ExecuteCommand, execute_command),
+                        Formatting::METHOD => dispatch_request!(Formatting, formatting),
+                        RangeFormatting::METHOD => dispatch_request!(RangeFormatting, range_formatting),
                         Completion::METHOD => {
-                            let (id, params) = match cast::<Completion>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                            // 唯一带取消抑制的请求：handler 完成后若 id 已被
+                            // $/cancelRequest 记录，则吞掉响应。
+                            match cast::<Completion>(req) {
+                                Ok((id, params)) => match self.completion(params) {
+                                    Ok(result) => {
+                                        let result = serde_json::to_value(&result).unwrap();
+                                        if !self.cancelled_requests.lock().unwrap().remove(&id) {
+                                            let resp = Response { id, result: Some(result), error: None };
+                                            self.client.connection.sender.send(Message::Response(resp))?;
+                                        }
+                                    }
+                                    Err(err) => send_err(id, err.code, err.message)?,
+                                },
+                                Err(ExtractError::JsonError { error, .. }) => {
+                                    send_err(req_id.clone(), -32602, format!("Invalid params: {error}"))?;
+                                }
                                 Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.completion(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            if !self.cancelled_requests.lock().unwrap().remove(&id) {
-                                let resp = Response { id, result: Some(result), error: None };
-                                self.client.connection.sender.send(Message::Response(resp))?;
                             }
-                        }
-                        References::METHOD => {
-                            let (id, params) = match cast::<References>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.references(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        Rename::METHOD => {
-                            let (id, params) = match cast::<Rename>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.rename(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        CodeActionRequest::METHOD => {
-                            let (id, params) = match cast::<CodeActionRequest>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.code_action(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        ExecuteCommand::METHOD => {
-                            let (id, params) = match cast::<ExecuteCommand>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.execute_command(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        Formatting::METHOD => {
-                            let (id, params) = match cast::<Formatting>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.formatting(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        RangeFormatting::METHOD => {
-                            let (id, params) = match cast::<RangeFormatting>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.range_formatting(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            let resp = Response { id, result: Some(result), error: None };
-                            self.client.connection.sender.send(Message::Response(resp))?;
                         }
                         _ => {}
                     }
@@ -3710,28 +3657,38 @@ impl Backend<Client> {
                             DidOpenTextDocument::METHOD => {
                                 match on::<DidOpenTextDocument>(not) {
                                     Ok(params) => self.did_open(params),
-                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    // 通知没有 id 可回包：畸形参数丢弃并记日志，
+                                    // 不再 panic 终结会话。
+                                    Err(ExtractError::JsonError { error, .. }) => {
+                                        eprintln!("typort-lsp: dropping malformed {not_method} notification: {error}");
+                                    }
                                     Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
                                 }
                             }
                             DidChangeTextDocument::METHOD => {
                                 match on::<DidChangeTextDocument>(not) {
                                     Ok(params) => self.did_change(params),
-                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::JsonError { error, .. }) => {
+                                        eprintln!("typort-lsp: dropping malformed {not_method} notification: {error}");
+                                    }
                                     Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
                                 }
                             }
                             DidCloseTextDocument::METHOD => {
                                 match on::<DidCloseTextDocument>(not) {
                                     Ok(params) => self.did_close(params),
-                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::JsonError { error, .. }) => {
+                                        eprintln!("typort-lsp: dropping malformed {not_method} notification: {error}");
+                                    }
                                     Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
                                 }
                             }
                             DidSaveTextDocument::METHOD => {
                                 match on::<DidSaveTextDocument>(not) {
                                     Ok(params) => self.did_save(params),
-                                    Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+                                    Err(ExtractError::JsonError { error, .. }) => {
+                                        eprintln!("typort-lsp: dropping malformed {not_method} notification: {error}");
+                                    }
                                     Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on not_method"),
                                 }
                             }
