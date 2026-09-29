@@ -2651,6 +2651,9 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// incremental rebuild set, and re-elaborate each affected file in order.
     pub fn process_file(&self, uri: &Url, text: &str, version: Option<i32>) {
         let start_all = std::time::Instant::now();
+        // 与 did_* 写侧同归一化：本函数也被测试/CLI 直接以 file:// 调用，
+        // memfs 作业进来的 URI 已在 did_change 归一化，这里兜底防直调漏网。
+        let uri = normalize_builtin_uri(uri);
         self.client.log_message(MessageType::LOG, format!("change: {}", uri.as_str()));
         let uri_str = uri.to_string();
         self.document_map.insert(uri_str.clone(), Rope::from_str(text));
@@ -3096,6 +3099,11 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         options: &FormattingOptions,
     ) -> Option<Vec<TextEdit>> {
         let uri = normalize_builtin_uri(uri);
+        // builtin:// 是只读虚拟文档（prelude）：回空编辑，不给只读文档发
+        // 整卷 TextEdit（客户端会弹 read-only 编辑错误）。
+        if uri.scheme() == "builtin" {
+            return Some(Vec::new());
+        }
         let text = self.document_text(&uri)?;
         let opts = self.format_options(options);
         let formatted = crate::format::format_document(&text, &opts)?;
@@ -3120,6 +3128,10 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
         options: &FormattingOptions,
     ) -> Option<Vec<TextEdit>> {
         let uri = normalize_builtin_uri(uri);
+        // builtin:// 只读虚拟文档：与 format_document_at 同守卫。
+        if uri.scheme() == "builtin" {
+            return Some(Vec::new());
+        }
         let text = self.document_text(&uri)?;
         let opts = self.format_options(options);
         let mut start_line = range.start.line as usize;
@@ -3204,17 +3216,21 @@ impl LanguageServer for Backend<Client> {
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
+        // 写侧与读侧同归一化：VS Code web 宿主的文档 URI 是 memfs://，读侧
+        // 请求全部 normalize 成 file:// 键；写侧若按原始 memfs 键存，web 版
+        // 的 hover/定义/诊断查找永远落空（整个特性死路）。
+        let doc_uri = normalize_builtin_uri(&params.text_document.uri);
         // Store full text for incremental sync（rope 一份；作业直接移动
         // params 自带的 String，不再多克隆一份全文）
         let open_text = params.text_document.text;
         self.document_buffers.lock().unwrap().insert(
-            params.text_document.uri.to_string(),
+            doc_uri.to_string(),
             Rope::from_str(&open_text),
         );
-        let uri = params.text_document.uri.to_string();
+        let uri = doc_uri.to_string();
         self.pending_uris.insert(uri.clone(), true);
         let job = AnalysisJob {
-            uri: params.text_document.uri.clone(),
+            uri: doc_uri.clone(),
             text: open_text,
             version: Some(params.text_document.version),
         };
@@ -3236,9 +3252,10 @@ impl LanguageServer for Backend<Client> {
         // rope 上编辑：position→offset 本就需要 rope，旧实现每键击的
         // String→Rope 全卷重建与写回 Rope→String 全卷拷贝都省掉；作业
         // 仍需一次 to_string，与旧 buffer.clone() 同价）
+        let doc_uri = normalize_builtin_uri(&params.text_document.uri);
         let full_text = {
             let mut buffers = self.document_buffers.lock().unwrap();
-            if let Some(buffer) = buffers.get_mut(params.text_document.uri.as_str()) {
+            if let Some(buffer) = buffers.get_mut(doc_uri.as_str()) {
                 for change in &params.content_changes {
                     apply_content_change(buffer, change);
                 }
@@ -3254,14 +3271,14 @@ impl LanguageServer for Backend<Client> {
                 for change in &params.content_changes {
                     apply_content_change(&mut buffer, change);
                 }
-                buffers.insert(params.text_document.uri.to_string(), buffer.clone());
+                buffers.insert(doc_uri.to_string(), buffer.clone());
                 buffer.to_string()
             }
         };
-        let uri = params.text_document.uri.to_string();
+        let uri = doc_uri.to_string();
         self.pending_uris.insert(uri.clone(), true);
         let job = AnalysisJob {
-            uri: params.text_document.uri.clone(),
+            uri: doc_uri.clone(),
             text: full_text,
             version: Some(params.text_document.version),
         };
@@ -3274,10 +3291,11 @@ impl LanguageServer for Backend<Client> {
             return;
         }
         if let Some(text) = params.text {
-            let uri = params.text_document.uri.to_string();
+            let doc_uri = normalize_builtin_uri(&params.text_document.uri);
+            let uri = doc_uri.to_string();
             self.pending_uris.insert(uri.clone(), true);
             let job = AnalysisJob {
-                uri: params.text_document.uri.clone(),
+                uri: doc_uri.clone(),
                 text,
                 version: None,
             };
@@ -3287,7 +3305,7 @@ impl LanguageServer for Backend<Client> {
     }
     fn did_close(&self, params: DidCloseTextDocumentParams) {
         debug!("file closed!");
-        let uri = params.text_document.uri;
+        let uri = normalize_builtin_uri(&params.text_document.uri);
         // builtin:// 是服务端自带的虚拟文档（prelude），不由客户端管理：与
         // did_open/did_change/did_save 一致地跳过，避免关闭一个 prelude 标签页
         // 就把它的 document_map / document_id 条目删掉（hover 的 doc 注释、
@@ -3771,10 +3789,13 @@ fn normalize_builtin_uri(uri: &Url) -> Url {
     }
     // VSCode may use memfs:// scheme for in-memory virtual files;
     // normalize to file:// to match keys in document_map / macro_expansion_map.
+    // 走字符串替换而非 set_scheme：memfs（非 special）→ file（special）的
+    // scheme 切换语义依赖 url 版本行为，失败时 set_scheme 静默返回原 URL，
+    // 归一化会整个失效。
     if uri.scheme() == "memfs" {
-        let mut u = uri.clone();
-        let _ = u.set_scheme("file");
-        return u;
+        if let Ok(normalized) = Url::parse(&uri.as_str().replacen("memfs://", "file://", 1)) {
+            return normalized;
+        }
     }
     uri.clone()
 }

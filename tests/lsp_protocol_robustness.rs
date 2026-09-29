@@ -346,3 +346,45 @@ fn inlay_hint_skips_out_of_bounds_entries_instead_of_returning_none() {
         "越界条目应被逐条跳过，不得让整个文件的 inlay 变 None"
     );
 }
+
+// ── 修复7c：memfs:// 写侧归一化 ─────────────────────────────────────────────
+//
+// 读侧请求全部把 memfs:// normalize 成 file:// 键，写侧（did_open/process_
+// file）却按原始 memfs URI 存——web 宿主文档永远查不到。回归：memfs
+// did_open 后必须以 file:// 键入库，且不得另存原始键。
+
+#[test]
+fn memfs_open_is_normalized_to_file_scheme() {
+    let b = direct_backend();
+    let uri = Url::parse("memfs:///workspace/m.typort").unwrap();
+    b.did_open(DidOpenTextDocumentParams {
+        text_document: TextDocumentItem {
+            uri: uri.clone(),
+            language_id: "typort".to_owned(),
+            version: 1,
+            text: SRC.to_owned(),
+        },
+    });
+    b.drain_analysis_jobs();
+    assert!(
+        b.document_map.get("file:///workspace/m.typort").is_some(),
+        "memfs did_open 应归一化为 file:// 键入库"
+    );
+    assert!(
+        b.document_map.get("memfs:///workspace/m.typort").is_none(),
+        "不得以原始 memfs 键另存一份"
+    );
+}
+
+// ── 修复7d：builtin 只读文档不做格式化 ──────────────────────────────────────
+//
+// 旧实现对 builtin:// 虚拟文档（prelude）也返回整卷 TextEdit，客户端会对
+// 只读编辑器报错。回归：返回空编辑集。
+
+#[test]
+fn formatting_builtin_readonly_document_returns_no_edits() {
+    let b = direct_backend();
+    let uri = Url::parse("builtin:///nat.typort").unwrap();
+    let edits = b.format_document_at(&uri, &lsp_types::FormattingOptions::default());
+    assert_eq!(edits, Some(vec![]), "builtin 只读文档应回空编辑");
+}
