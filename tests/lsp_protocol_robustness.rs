@@ -271,3 +271,34 @@ fn missing_buffer_registers_and_continues_incremental_path() {
 
     assert_eq!(b.document_map.get(uri.as_str()).unwrap().to_string(), "hello world", "注册 buffer 后续增量应正常累积");
 }
+
+// ── 修复6：executeCommand 参数畸形 ──────────────────────────────────────────
+//
+// 旧实现 args[0]/args[1] 直接索引 + serde unwrap：空参/单参/类型不符都会
+// panic 终结会话。回归：畸形参数收到 -32602，之后服务端继续应答。
+
+#[test]
+fn execute_command_bad_arguments_get_invalid_params_response() {
+    let s = run_session(vec![
+        request(1, "workspace/executeCommand", json!({
+            "command": "typort.applyQuickFix",
+            "arguments": []
+        })),
+        request(2, "workspace/executeCommand", json!({
+            "command": "typort.applyQuickFix",
+            "arguments": ["file:///a.typort"]
+        })),
+        request(3, "workspace/executeCommand", json!({
+            "command": "typort.applyQuickFix",
+            "arguments": [42, "id"]
+        })),
+        request(4, "textDocument/hover", hover_params()),
+    ]);
+    for id in [1, 2, 3] {
+        let r = response_for(&s, id).expect("畸形 arguments 的 executeCommand 必须收到错误响应");
+        let err = r.error.as_ref().expect("应为 error 响应");
+        assert_eq!(err.code, -32602, "缺参/类型错应回 -32602: {:?}", err);
+    }
+    let hover = response_for(&s, 4).expect("错误响应之后服务端必须继续应答");
+    assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
+}

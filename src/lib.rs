@@ -3395,8 +3395,17 @@ impl LanguageServer for Backend<Client> {
     fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
         if params.command == "typort.applyQuickFix" {
             let args = params.arguments;
-            let uri: String = serde_json::from_value(args[0].clone()).unwrap();
-            let id: String = serde_json::from_value(args[1].clone()).unwrap();
+            // 旧实现 args[0]/args[1] 直接索引 + serde unwrap：空参/单参/
+            // 类型不符都会 panic 终结会话。参数畸形统一回 -32602（handler
+            // 的 Err 由 dispatch_request! 转成错误响应，会话不受影响）。
+            let bad_args = || crate::ls::Error {
+                code: -32602,
+                message: "Invalid arguments: expected [uri: string, id: string]".to_owned(),
+            };
+            let uri: String = serde_json::from_value(args.first().ok_or_else(bad_args)?.clone())
+                .map_err(|_| bad_args())?;
+            let id: String = serde_json::from_value(args.get(1).ok_or_else(bad_args)?.clone())
+                .map_err(|_| bad_args())?;
 
 			let result_text = if let Some(map) = self.quickfix_map.get(&uri) {
 				if let Some(code_actions) = map.get(&id) {
