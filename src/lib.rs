@@ -3198,6 +3198,12 @@ impl LanguageServer for Backend<Client> {
         if params.text_document.uri.scheme() == "builtin" {
             return;
         }
+        // 空 contentChanges 是合法 no-op：直接返回。旧实现对未 open 的 URI
+        // 会落到 content_changes[0] 索引（越界 panic → document_buffers
+        // Mutex 中毒）。
+        if params.content_changes.is_empty() {
+            return;
+        }
         // Apply incremental edits to the stored document buffer（直接在常驻
         // rope 上编辑：position→offset 本就需要 rope，旧实现每键击的
         // String→Rope 全卷重建与写回 Rope→String 全卷拷贝都省掉；作业

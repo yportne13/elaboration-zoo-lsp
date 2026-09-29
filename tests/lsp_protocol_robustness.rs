@@ -9,14 +9,32 @@
 //! range、executeCommand 参数、未知请求 -32601、$/cancelRequest id 保真。
 
 use lsp_server::{Message, Request, RequestId, Response};
-use lsp_types::Url;
+use lsp_types::{
+    DidChangeTextDocumentParams, DidOpenTextDocumentParams, TextDocumentContentChangeEvent,
+    TextDocumentItem, Url, VersionedTextDocumentIdentifier,
+};
 use serde_json::json;
 
 use elaboration_zoo_lsp::client::Client;
+use elaboration_zoo_lsp::ls::LanguageServer;
 use elaboration_zoo_lsp::Backend;
 
 const URI: &str = "file:///robust.typort";
 const SRC: &str = "def foo(x: Nat): Nat = succ x\n";
+
+/// 直接调 Backend 方法（不经 main_loop）的测试夹具。LanguageServer 只为
+/// Backend<Client> 实现，所以仍用真实 Client：诊断/通知发进无人消费的
+/// unbounded 通道，两端刻意泄漏保活（ClientLike 的 send().unwrap() 依赖
+/// 接收端存活）。
+fn direct_backend() -> std::sync::Arc<Backend<Client>> {
+    let (to_server_tx, to_server_rx) = crossbeam_channel::unbounded::<Message>();
+    let (to_test_tx, to_test_rx) = crossbeam_channel::unbounded::<Message>();
+    let connection = lsp_server::Connection { sender: to_test_tx, receiver: to_server_rx };
+    let b = Backend::new(Client { connection });
+    b.load_prelude_skip_hdl();
+    std::mem::forget((to_server_tx, to_test_rx));
+    b
+}
 
 /// 一次批量会话的结果。
 struct Session {
@@ -133,4 +151,39 @@ fn malformed_notification_is_dropped_and_session_survives() {
     ]);
     let hover = response_for(&s, 3).expect("畸形通知被丢弃后服务端必须继续应答");
     assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
+}
+
+// ── 修复3：did_change 空 contentChanges 越界 panic ───────────────────────────
+//
+// 旧实现 buffer 缺失时取 content_changes[0].text：对未 open 的 URI 发
+// contentChanges: [] 会索引越界 panic（document_buffers Mutex 中毒）。
+// LSP 规范里空数组是合法 no-op。
+
+#[test]
+fn empty_content_changes_is_noop() {
+    let b = direct_backend();
+    let uri = Url::parse(URI).unwrap();
+
+    // 未 open 的 URI + 空数组：不得 panic（旧实现 content_changes[0] 越界）。
+    b.did_change(DidChangeTextDocumentParams {
+        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 1 },
+        content_changes: vec![],
+    });
+
+    // 已 open 的 URI + 空数组：缓冲与文档内容不变。
+    b.did_open(DidOpenTextDocumentParams {
+        text_document: TextDocumentItem {
+            uri: uri.clone(),
+            language_id: "typort".to_owned(),
+            version: 1,
+            text: SRC.to_owned(),
+        },
+    });
+    b.did_change(DidChangeTextDocumentParams {
+        text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 2 },
+        content_changes: vec![],
+    });
+    b.drain_analysis_jobs();
+    let rope = b.document_map.get(uri.as_str()).unwrap();
+    assert_eq!(rope.to_string(), SRC, "空 contentChanges 不得改动文档");
 }
