@@ -136,6 +136,11 @@ def zeros[n: Nat]: Vec[Nat] n =
 println(p1(7))
 println(p2(7))
 
+// --- def: multi-statement body + nat_to_dec string concat ---
+def describe(n: Nat): String =
+    let m = n + 1;
+    "succ(" + nat_to_dec(m) + ")"
+
 // --- def: pattern-based definition (multi-line match) ---
 def neg(b: Boolean): Boolean =
     match b {

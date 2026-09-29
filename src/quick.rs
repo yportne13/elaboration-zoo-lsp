@@ -58,7 +58,7 @@ const SECTIONS: &[Section] = &[
 多语句函数体用 let ...; 串联:
    def describe(n: Nat): String =
        let m = n + 1;
-       "succ(" + m + ")"
+       "succ(" + nat_to_dec(m) + ")"    # Nat 转串只能 nat_to_dec（String+Nat 无 Add 实例）
         # 最后一个表达式即返回值
 
 lambda:  x => 表达式
