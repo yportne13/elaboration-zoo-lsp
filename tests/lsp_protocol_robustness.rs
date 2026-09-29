@@ -302,3 +302,21 @@ fn execute_command_bad_arguments_get_invalid_params_response() {
     let hover = response_for(&s, 4).expect("错误响应之后服务端必须继续应答");
     assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
 }
+
+// ── 修复7a：未识别请求回 -32601 ─────────────────────────────────────────────
+//
+// 旧实现对未识别的请求静默丢弃（永不回包），客户端 promise 挂到自身超时。
+// 回归：未知方法收到 -32601，服务端继续应答。
+
+#[test]
+fn unknown_request_gets_method_not_found() {
+    let s = run_session(vec![
+        request(1, "textDocument/documentSymbol", json!({"textDocument": {"uri": URI}})),
+        request(2, "textDocument/hover", hover_params()),
+    ]);
+    let r = response_for(&s, 1).expect("未识别的请求必须收到错误响应");
+    let err = r.error.as_ref().expect("应为 error 响应");
+    assert_eq!(err.code, -32601, "未识别请求应回 -32601: {:?}", err);
+    let hover = response_for(&s, 2).expect("-32601 之后服务端必须继续应答");
+    assert!(hover.error.is_none(), "后续合法 hover 必须成功: {:?}", hover.error);
+}

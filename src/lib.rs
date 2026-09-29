@@ -3587,6 +3587,12 @@ impl Backend<Client> {
                     // （lsp-server 0.7.8 只存 method/error），回包用分派前
                     // 克隆的 req_id。
                     let req_id = req.id.clone();
+                    // 每个新请求开跑前清空取消集：单线程按序读取下，取消通
+                    // 知总是晚于其目标请求被处理完，此刻集合里只可能是已完
+                    // 成请求的陈旧条目，不清则永久泄漏。（取消本身在"分析
+                    // 内联进主循环"的架构下结构性无效果——请求派发时其取消
+                    // 必然尚未到达——此处仅做内存卫生。）
+                    self.cancelled_requests.lock().unwrap().clear();
                     let send_err = |id: RequestId, code: i32, message: String| -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
                         let resp = Response::new_err(id, code, message);
                         Ok(self.client.connection.sender.send(Message::Response(resp))?)
@@ -3640,7 +3646,13 @@ impl Backend<Client> {
                                 Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
                             }
                         }
-                        _ => {}
+                        _ => {
+                            // 未识别的请求按 JSON-RPC 规范回 -32601：旧实现
+                            // 静默丢弃、永不回包，客户端的 promise 只能挂到
+                            // 自身超时。（通知侧的 `_ => {}` 静默丢弃是正确
+                            // 语义，不受影响。）
+                            send_err(req_id, -32601, format!("Method not found: {req_method}"))?;
+                        }
                     }
                 }
                 Message::Response(resp) => {
@@ -3650,7 +3662,9 @@ impl Backend<Client> {
                     if is_cancel {
                         if let Ok(cancel) = serde_json::from_value::<CancelParams>(not.params) {
                             let rid = match cancel.id {
-                                NumberOrString::Number(n) => RequestId::from(n as i32),
+                                // lsp-types 与 lsp_server 的请求 id 都是 i32：
+                                // 不存在截断问题；超范围数值在反序列化时即被拒。
+                                NumberOrString::Number(n) => RequestId::from(n),
                                 NumberOrString::String(s) => RequestId::from(s),
                             };
                             self.client.log_message(MessageType::LOG, format!("cancelled request {:?}", rid));
