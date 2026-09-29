@@ -101,7 +101,10 @@ UInt[n] / SInt[n] / Bits[n] / Bool — HDL 数据类（见 `hdl` 节）
            case succ(m) => m
        }
 
-   enum Tree[T] { leaf(v: T); node(l: Tree[T], r: Tree[T]) }
+   enum Tree[T] {
+       leaf(v: T)
+       node(l: Tree[T], r: Tree[T])
+   }
    def depth[T](t: Tree[T]): Nat =
        match t {
            case leaf(_) => 0
@@ -122,10 +125,17 @@ UInt[n] / SInt[n] / Bits[n] / Bool — HDL 数据类（见 `hdl` 节）
         "adt",
         "枚举与结构体 · enum & struct（Lean inductive / Scala case class）",
         r#"enum = 求和类型（每个 case 一个构造子）:
-   enum Color { red; green; blue }
+   enum Color {
+       red
+       green
+       blue
+   }
    构造: Color.red（裸名 red 也自动可用）
 
-   enum Maybe[T] { nothing; just(v: T) }
+   enum Maybe[T] {
+       nothing
+       just(v: T)
+   }
 
 struct = 积类型（命名的元组，字段方法访问）:
    struct Point {
@@ -133,10 +143,17 @@ struct = 积类型（命名的元组，字段方法访问）:
        y: Nat
    }
    构造: new Point(1, 2)；访问: p.x / p.y
-   struct 可带隐式类型参数: struct Pair[A, B] { first: A; second: B }
+   struct 可带隐式类型参数:
+       struct Pair[A, B] {
+           first: A
+           second: B
+       }
 
 枚举构造子可带字段（看起来像 product 变体）:
-   enum Tree[T] { leaf(v: T); node(left: Tree[T], right: Tree[T]) }
+   enum Tree[T] {
+       leaf(v: T)
+       node(left: Tree[T], right: Tree[T])
+   }
    leaf(1) / node(leaf(1), leaf(2))
 "#
     ),
@@ -165,8 +182,12 @@ struct = 积类型（命名的元组，字段方法访问）:
 注意 prelude 已定义 Show/Add/Mul/Into/Equal/Compare 等，自定义用新名（如 Pretty）。
 
    trait Pretty { def pretty: String }
-   impl Pretty for Bool {
-       def pretty: String = match this { case true => "true"; case false => "false" }
+   impl Pretty for Boolean {
+       def pretty: String =
+           match this {
+               case true  => "true"
+               case false => "false"
+           }
    }
    impl[T] Pretty for Option[T] { def pretty: String = "some|none" }
 

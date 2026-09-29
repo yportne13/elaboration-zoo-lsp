@@ -24,6 +24,21 @@ def depth[T](t: Tree[T]): Nat =
             }
     }
 
+// --- adt: bare enum / generic enum / generic struct (one case per line) ---
+enum Color {
+    red
+    green
+    blue
+}
+enum Maybe[T] {
+    nothing
+    just(v: T)
+}
+struct Pair[A, B] {
+    first: A
+    second: B
+}
+
 // --- tc: typeclass trait (Describable, from examples/typeclass_complex) ---
 trait Describable {
     def describe: String
