@@ -1,4 +1,9 @@
 package-lock.json
 tsconfig.json
 *.vsix
-client/node_modules
+**/node_modules
+client/src
+client/bin
+client/out
+client/*.json
+**/*.tsbuildinfo
