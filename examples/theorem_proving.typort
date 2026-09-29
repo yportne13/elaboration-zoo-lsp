@@ -261,11 +261,12 @@ def subst_eg_calc: Eq(5 + 0, 5) =
 
 println(subst_eg_calc)
 
-// The `calc` block swallows the newline after its closing `}` (the macro
-// literal-token matcher skips one EndLine, see docs/calc-reasoning-design.md
-// 9.3), so the declaration loop cannot sync on a trailing println at EOF.
-// Re-printing the original (its println now sits directly above) here gives
-// the parser its final sync point and verifies that the calc variant
-// prints exactly the same value.
+// The `calc` block used to swallow the newline after its closing `}` (the
+// macro literal-token matcher skips one EndLine, see docs/calc-reasoning-design.md
+// 9.3), which silently dropped a trailing println at EOF — the re-print below
+// worked around it. The parser-side fix (p_raw trailing-newline handling, see
+// docs/hdl-def-body-hardware-statements.md fix 2) closed that hole; the extra
+// println is no longer required and is kept as a regression check that the
+// calc variant prints exactly the same value.
 
 println(subst_eg)

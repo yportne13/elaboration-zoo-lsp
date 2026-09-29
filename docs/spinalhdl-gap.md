@@ -4,6 +4,14 @@
 > 对照来源：SpinalHDL 官方文档 (spinalhdl.github.io/SpinalDoc-RTD) 的 Data types /
 > Sequential logic / Semantic (when-switch) / Structuring (components, clock domain) 章节。
 > 状态图例：✅ 已有　🟡 部分（缺子集）　❌ 缺失　— 优先级：必要 / 重要 / 可选。
+>
+> **2026-09-29 订正**：§1–§6 表格是基线 `a8a528d` 时的快照，其中标 ❌/🟡 的下列项
+> 此后均已落地（与 §7"本轮实现清单"及后续迭代一致，当前权威状态见
+> docs/hdl-language-spec.md 与 README 的 HDL 特性表）：SInt `abs`/`expand` 与
+> 除法/取模 `/` `%`（hdl-ops.typort）、`|<<`/`|>>` 保宽变量移位、硬件 Enum
+> （`#[derive(HdlEnum)]`，HDL040）、Vec 硬件向量（`vecAtUInt` 等）、Counter
+> （`counter`/`counterInc`/`willOverflow`，hdl-utils.typort）、assert 断言全家
+> （hdl-macros.typort）、BlackBox 产码（P2）、Stream/FSM（HDL060-064）。
 
 ## 1. 数据类型
 

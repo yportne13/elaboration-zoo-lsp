@@ -146,6 +146,10 @@ struct + 非依赖字段的先例（Bits/EnumCraft/UInt）与本轮扁平化结�
   平凡重置体复测 hdl060 仍失败——report_check_issue → CheckIssues →
   per-decl drain 管道在当前工作区状态下游全局失效（涉及 hdl-check /
   hdl-verilog / mod.rs，均在他人所有权内）。
+  （追记 2026-09-29：警告通道已随 `c42719a`（HDL 自检阶段 2-4）恢复——
+  hdl_check_graph_tests 的 HDL030-039 断言全绿，全量 `cargo test`
+  67 个测试目标通过（docs/review-2026-09-29.md §三）。上段为
+  2026-09-27 在途工作区的快照，非 master 现状。）
 - `fsm_acceptance_demo_verilog` 的 `if (1)` 默认驱动折叠断言：codegen
   属 hdl-verilog.typort（他人所有权）。
 - `fsm_method_lambda_form` 的 `find unsolved meta with type 'Type 0'`：

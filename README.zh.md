@@ -8,7 +8,7 @@
 - **依赖类型**：全谱依赖类型，带宇宙层级（`Type 0`, `Type 1`, …；转换要求层级相等，无累积）
 - **归纳族**：`enum` 支持索引和参数（类似 Agda/GADTs）
 - **结构化记录**：`struct` 带命名字段
-- **模式匹配**：支持依赖模式匹配和荒谬模式（absurd patterns）
+- **模式匹配**：支持依赖模式匹配和不可达分支检测
 - **隐式参数**：`[param: Type]` 语法配合实例推导
 - **类型类 / Trait**：`trait` / `impl`，实例合成，`where` 子句
 - **宏系统**：`macro_rules` 支持语法片段匹配（`ident`、`raw`、`params`）
@@ -66,6 +66,13 @@ module adder[w: Nat] {
 println(moduleTreeVL(adder.create[8].tree))
 ```
 
+更多特性演示见 [`examples/hdl/`](examples/hdl/)，每个特性组一个文件
+（声明、算术、位运算、比较、布尔、位选与拼接、寄存器、控制流、层次、
+bundle、嵌套 bundle、存储器、加法器树、算术补充、inout、计数器、输出
+寄存器、utils、stream、杂项、跨时钟、Vec 索引与位宽适配、verilog 兼容、
+verilog 实践、verilog 复位与时钟层次、assert、blackbox）。每个文件运行时
+打印 Verilog，同时兼作回归测试（`test_examples_hdl_dir`）。
+
 ### LSP 语言服务器
 - **跳转到定义** – 导航到声明
 - **悬停信息** – 类型和文档展示
@@ -110,13 +117,6 @@ cargo run --release --bin typort -- quick --list
 
 仓库中的 `vscode_extension/` 目录包含 VS Code 扩展，提供语法高亮和 LSP 集成支持。
 
-更多特性演示见 [`examples/hdl/`](examples/hdl/)，每个特性组一个文件
-（声明、算术、位运算、比较、布尔、位选与拼接、寄存器、控制流、层次、
-bundle、嵌套 bundle、存储器、加法器树、算术补充、inout、计数器、输出
-寄存器、utils、stream、杂项、跨时钟、Vec 索引与位宽适配、verilog 兼容、
-verilog 实践、verilog 复位与时钟层次、assert、blackbox）。每个文件运行时
-打印 Verilog，同时兼作回归测试（`test_examples_hdl_dir`）。
-
 ## 示例
 
 | 文件 | 主题 |
@@ -133,7 +133,7 @@ verilog 实践、verilog 复位与时钟层次、assert、blackbox）。每个�
 
 | 模块 | 特性 |
 |------|------|
-| `L01_nbe` | 求值（NBE）— 22 个表示变体，独立 `l01bench` 基准 |
+| `L01_nbe` | 求值（NBE）— 23 个表示变体，独立 `l01bench` 基准 |
 | `L02_tyck` | 类型检查基础 |
 | `L03_holes` | 元变量（holes） |
 | `L04_implicit` | 隐式参数推导 |

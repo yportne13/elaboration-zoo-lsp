@@ -1,7 +1,9 @@
 # L13 已知 Bug 记录（2026-08-06）
 
-> 两个由 adder-tree / calc-example 任务中实测发现、已定位但**未修复**的编译器 bug。
+> 两个由 adder-tree / calc-example 任务中实测发现、已定位的编译器 bug。
 > 记录触发条件、机制链（含代码位置）、影响与修复方向，供后续修复时参考。
+> （状态更新 2026-09-29：Bug 1 已随 p_raw 宏展开尾换行修复关闭，见 Bug 1 文末追记；
+> Bug 2 仍未修复。）
 
 ---
 
@@ -38,6 +40,11 @@
 **修复方向**（未修）：把 `is_decl_start` 检查从 `Some(at_sep)` 分支提出来放在 `skip(input)`
 之前（先看当前位置是否直接以声明关键字开头，是则 `continue`）；或 `None => break` 前检查
 剩余 input 是否非空且以声明关键字开头。注意保持 recover 语义（不要吞掉真正的错误恢复路径）。
+
+**（状态更新 2026-09-29）已修复**：根因随 p_raw 宏展开的尾换行处理修复关闭
+（parser/mod.rs——宏匹配器消费的尾换行按上下文回还），同族症状（def 体尾接
+when/switch/calc 后丢末条声明）见 docs/hdl-def-body-hardware-statements.md 修复 2；
+examples/theorem_proving.typort 末尾的"补偿 println"不再必要，保留作回归验证。
 
 ---
 

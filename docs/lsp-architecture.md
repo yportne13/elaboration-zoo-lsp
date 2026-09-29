@@ -14,15 +14,19 @@ LSP 服务器通过 stdio 与 VS Code（或 Web 演示版）通信。在 WASM（
 
 切换到**增量**同步：
 - 客户端每次编辑只发送更改的 `range` + `text`，而非整个文件
-- 服务器维护 `document_buffers: HashMap<String, String>` 按 URI 存储完整文档文本
+- 服务器维护 `document_buffers: HashMap<String, Rope>` 按 URI 存储完整文档文本
 - `didOpen` 时：从通知中存储完整文本
 - `didChange` 时：应用增量编辑（使用 `Rope` 进行位置/偏移转换）到存储的缓冲区，然后将重构的完整文本传递给分析工作线程
 - `didClose` 时：清理缓冲区
 
 这大幅减少了每次编辑的消息大小（大文件约 100 字节而非约 100 KB），消除了 WASM 传输中的共享缓冲区溢出问题。
 
+> **2026-09-29 更新**：缓冲区从 `String` 改为直接存 `Rope`（commit `669feea`）——增量编辑与
+> position→offset 转换都在常驻 rope 上就地完成，每键击省去旧的两次全卷拷贝
+> （String→Rope 重建 + 写回 Rope→String）；交给工作线程的仍是一次 `to_string` 快照。
+
 ### 权衡
-- 服务器必须维护自己的文档副本（每个打开文件多一个 `String`）
+- 服务器必须维护自己的文档副本（每个打开文件多一份 `Rope`，克隆共享底层存储而非整卷拷贝）
 - 位置/偏移转换需要 UTF-16 → 字节偏移映射（已在 `lib.rs` 中由 `position_to_offset` / `offset_to_position` 处理）
 
 ---

@@ -8,7 +8,7 @@ A dependently-typed programming language with an LSP server and built-in HDL (Ha
 - **Dependent types**: full-spectrum dependent types with a universe hierarchy (`Type 0`, `Type 1`, …; conversion requires equal levels — no cumulativity)
 - **Inductive families**: `enum` with indices and parameters (similar to Agda/GADTs)
 - **Structural records**: `struct` with named fields
-- **Pattern matching**: with dependent pattern matching and absurd patterns
+- **Pattern matching**: with dependent pattern matching and unreachable-branch detection
 - **Implicit arguments**: `[param: Type]` syntax with instance resolution
 - **Typeclasses / Traits**: with `trait` / `impl`, instance synthesis, and `where` clauses
 - **Macros**: `macro_rules` with pattern matching on syntax fragments (`ident`, `raw`, `params`)
@@ -133,7 +133,7 @@ The project is structured as an **elaboration zoo** — each module (`L01_*` …
 
 | Module | Feature |
 |--------|---------|
-| `L01_nbe` | Evaluation (NBE) — 22 representation variants, benchmarked via standalone `l01bench` |
+| `L01_nbe` | Evaluation (NBE) — 23 representation variants, benchmarked via standalone `l01bench` |
 | `L02_tyck` | Type checking basics |
 | `L03_holes` | Meta variables (holes) |
 | `L04_implicit` | Implicit argument inference |
@@ -154,7 +154,7 @@ The project is structured as an **elaboration zoo** — each module (`L01_*` …
 cargo run --release --features mem-profile --bin typort -- stats
 
 # Deep dhat heap profiling (~3 min)
-cargo run --release --features dhat-heap --bin typort -- --stats
+cargo run --release --features dhat-heap --bin typort -- stats
 ```
 
 ### Key Metrics

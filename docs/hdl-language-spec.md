@@ -35,7 +35,7 @@
 
 ### 1.1 HDL 是什么
 
-HDL 是 Typort 的硬件描述扩展：**纯库实现**（`src/prelude/hdl/*.typort`，16 文件约 8500 行），不是语言内建语法。用户写的"硬件语句"经三层机制落到一棵可打印的模块树：
+HDL 是 Typort 的硬件描述扩展：**纯库实现**（`src/prelude/hdl/*.typort`，19 文件约 1.24 万行），不是语言内建语法。用户写的"硬件语句"经三层机制落到一棵可打印的模块树：
 
 1. **宏转写**：`module` / `Expr` / `when` / `VExpr`（Verilog 兼容）四个 `#[macro_export]` 宏把表面语法转写为对 prelude 工厂函数的调用（`hdl-macros.typort`）。
 2. **全局可变状态**：信号创建、赋值、when 条件栈、for 循环索引栈都通过 `change_mutable`/`create_global` 写入 `Infer.mutable_map` 的全局槽（`ModuleTree` / `WhenStack` / `HdlLoopIdx` / `ModuleRegistry` / `ModulePortTable` 等，`hdl-core.typort`）。

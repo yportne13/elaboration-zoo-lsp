@@ -3,6 +3,12 @@
 > 状态：**未合并**。方案方向正确、功能验证通过，但存在严重性能退化与 debug 栈溢出，
 > 根因指向编译器"let 绑定 prim 调用在 def-check 时被急切求值"的行为，需要专项攻关。
 > 改动保留在分支 `task2/module-macro`（worktree `elaboration-zoo-lsp-wt2`）。
+>
+> **2026-09-29 订正**：worktree `elaboration-zoo-lsp-wt2` 已不存在（`git worktree list`
+> 无此项），分支 `task2/module-macro` 顶端为 `d8d817c`（2026-08-03，regNext 主题），
+> **不包含**本文所述未提交改动——当时的工作区状态已不可续接，本文仅存记录。
+> 后续同类重构见 module-redesign-analysis.md 的 2026-09-29 状态订正（现行宏走
+> 扁平字段路线，随 `1a2b4ce` 落地）。
 
 ## 1. 用户诉求
 
@@ -107,6 +113,6 @@ input/output/reg 同理。**删除了子模块例化特例分支**（`$m.create`
 
 ## 6. 已保留的资产
 
-- 分支 `task2/module-macro`（worktree `elaboration-zoo-lsp-wt2`）：完整改动未提交
-  （agent 异常退出前的工作区状态：5 个文件 + 若干 scratch 测试文件已清理）。
-- 若需继续，从该 worktree 的工作区状态续接（`git diff` 可见全部改动）。
+- 分支 `task2/module-macro`：仅含 2026-08-03 之前的 regNext 主题提交，**不含**本文所述
+  未提交的模块宏改动（worktree `elaboration-zoo-lsp-wt2` 已删除，工作区改动不可恢复）。
+- 本文与 module-redesign-analysis.md 的记录是这套方案唯一留存的形态。

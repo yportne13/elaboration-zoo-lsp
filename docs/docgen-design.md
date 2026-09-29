@@ -199,8 +199,9 @@
 - `Backend::on_change::<false>`（`lib.rs:1510`）逐文件分析：解析 → 逐 decl 详细化 →
   合并全局 `cxt.decl` → 记录 `file_symbols`（本文件新增的限定名集合，`lib.rs:2112`）→
   登记 `cxt.namespace`（inherent 方法，`lib.rs:2093`）→ 写 `document_map`/`document_id`。
-- `Backend::load_prelude` / `load_prelude_impl`（`lib.rs:1113+`）：加载 31 个内置
-  `.typort`（`PRELUDE_CORE`/`PRELUDE_HDL`/`PRELUDE_SHOW`，`mod.rs:3490/3509/3529`），
+- `Backend::load_prelude` / `load_prelude_impl`（`lib.rs:1113+`）：加载 35 个内置
+  `.typort`（`PRELUDE_CORE` 15 + `PRELUDE_HDL` 19 + `PRELUDE_SHOW` 1，见
+  `src/L13_namespace/mod.rs` 的 `PRELUDE_*` 表；随 HDL prelude 扩充增长），
   并注册虚拟 URI `builtin:///xxx.typort` 到 `document_map`。
 - `clone_prelude_state(include_hdl)`（`mod.rs:3762`）：返回 `(Infer, Cxt, macros)`，
   是参考引擎的进程级缓存，避免每次重放 prelude。
@@ -329,6 +330,10 @@ src/doc/
 
 `lib.rs` 增加 `pub mod doc;`。所有文件仅用 std + 现有依赖。
 
+> **落地偏差（2026-09-29 注）**：实际布局未拆 `options.rs`/`search.rs`
+> （`DocOptions` 并入 `mod.rs`）、`render_md.rs` 未实现；并新增设计稿未列的
+> `serve.rs`（`--serve` 本地预览）。与 §13.1 落地记录一致。
+
 ### 5.3 文档模型（IR）
 
 ```rust
@@ -389,7 +394,7 @@ pub struct SourceRef { pub uri: String, pub path_id: u32, pub start: u32, pub en
 
 ```
 let backend = Backend::new(DocClient::default());       // 捕获/静默 ClientLike
-if !opts.no_prelude { backend.load_prelude(); }         // 内置 31 文件 + macros
+if !opts.no_prelude { backend.load_prelude(); }         // 内置 35 文件 + macros
 for (uri, text) in sources {
     backend.on_change::<false>(TextDocumentItem { uri, text: &text, version: None });
 }
@@ -584,7 +589,7 @@ P0 采用**自写子集渲染器**（`markup.rs`），与 `render_doc_text` 已�
 
 - 全程不使用 HashMap 迭代顺序做输出顺序；所有列表显式 sort。
 - 进程内只加载一次 prelude（`clone_prelude_state` 缓存，`mod.rs:3762`）。
-- 解析 31 个 prelude 文件 + 用户文件一次；详细化一次。可接受的量级：
+- 解析 35 个 prelude 文件 + 用户文件一次；详细化一次。可接受的量级：
   prelude 详细化秒级（r13 prim 后约 4-5s），用户项目千行级亚秒。
 - P2 增量：以文件 mtime/内容 hash 缓存模型分片；本期不做。
 

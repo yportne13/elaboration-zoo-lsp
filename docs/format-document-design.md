@@ -1,6 +1,6 @@
 # Format Document（`textDocument/formatting`）设计方案
 
-> 状态：设计稿 v2（未实现）
+> 状态：设计稿 v2；D2 / Phase 1 与 Phase 2 **已落地**（见 §12），D3 未做
 > 调研基线：`master` @ f4d5da8
 > 隔离工作区：worktree `task/format-document-design`
 >
@@ -210,7 +210,7 @@ handler 要点：
 - **快照**：`tests/fixtures/format/*.typort`（input/expected），`UPDATE_SNAPSHOTS=1` 重生成。
 - **handler 测试**：仿 `tests/completion_handler_tests.rs` / `tests/hover_tests.rs`，用 `CapturingClient`
   构造 `Backend`，`load_prelude()`，`process_file(...)`，调 `format_document_at`，断言单个 TextEdit。
-- 命令：`cargo test`、`cargo test --test format_tests`。
+- 命令：`cargo test`、`cargo test --test format_handler_tests`。
   注意 `.github/workflows/ci.yml` **没有 `cargo test` 门禁**（仅打包 VSIX + 交叉编译 CLI）。
 
 ---

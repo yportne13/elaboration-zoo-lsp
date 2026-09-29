@@ -26,7 +26,7 @@ def name(param1: Type1, param2: Type2): ReturnType =
 **多参数**：逗号分隔或空格分隔：
 
 ```
-def add(x: Nat, y: Nat): Nat = nat_add_helper x y
+def add(x: Nat, y: Nat): Nat = nat_add x y
 ```
 
 **隐式参数**：用 `[ ]` 包围：
@@ -135,7 +135,7 @@ impl[params] TraitName[trait_args] for Type {
 
 ```
 impl Add[Nat, Nat] for Nat {
-    def +(that: Nat): Nat = nat_add_helper this that
+    def +(that: Nat): Nat = nat_add this that
 }
 ```
 
@@ -188,10 +188,14 @@ import mylib.MyType._            // 子命名空间：导入类型 MyType 的成
 ### 2.7 Derive
 
 ```
-derive Show, Eq for MyType
+#[derive(Show)]
+enum MyEnum { ... }
+
+#[derive(Bundle)]
+struct MyStruct[T] { ... }
 ```
 
-（当前实现中 derive 主要用于类型类实例的自动派生。）
+`#[derive(...)]` 写在 `enum` / `struct` 声明之前。当前内置派生：`Show`、`Bundle`、`HdlEnum`（详见 typeclass-syntax.md §6）。
 
 ### 2.8 调试输出
 
@@ -241,7 +245,7 @@ x => body                   // 显式参数
 
 ```
 x => x + 1
-[x: Nat] => x
+[x] => x
 ```
 
 ### 3.4 函数类型（Pi 类型）
@@ -262,8 +266,8 @@ Nat -> Nat
 ### 3.5 宇宙层级
 
 ```
-Type 0    // 可写为 U0
-Type 1    // U1
+Type 0
+Type 1
 ...
 ```
 
@@ -352,13 +356,11 @@ Typort 的运算符优先级由 parser 内嵌。以下按**优先级从高到低
 | | 隐式应用 | `f [x]` `f [n = x]` | 左 |
 | | 一元 | `!` `-`（前缀负号） | 右 |
 | | 乘除/取余 | `*` `/` `%` | 左 |
-| | 移位 | `<<` `>>` | 左 |
 | | 加法/减法 | `+` `-` `+^` `-^` | 左 |
-| | 位运算 | `&` | 左 |
-| | | `^` | 左 |
-| | | `\|` | 左 |
-| | 拼接 | `##` | 左 |
-| | 比较 | `<` `<=` `>` `>=` `===` `=/=` | 左 |
+| | 比较/移位 | `<` `<=` `>` `>=` `===` `=/=` `<<` `>>` `\|<<` `\|>>` | 左 |
+| | 位与/位或 | `&` `\|`（同级） | 左 |
+| | 位异或 | `^` | 左 |
+| | 拼接 | `##`（中缀算术/位运算里最低） | 左 |
 | | 赋值 | `:=` | 右 |
 | | Lambda | `=>` | 右 |
 | | Pi 类型 | `->`（函数类型箭头） | 右 |
@@ -371,7 +373,7 @@ Typort 的运算符优先级由 parser 内嵌。以下按**优先级从高到低
 ```
 a + b * c         // 解析为 a + (b * c)
 a .field + b      // 解析为 (a.field) + b
-\x => a + b       // 解析为 \x => (a + b)
+x => a + b        // 解析为 x => (a + b)
 f x + g y         // 解析为 (f x) + (g y)
 (x: A) -> B -> C  // 解析为 (x: A) -> (B -> C)
 a := b + c        // 解析为 a := (b + c)
@@ -423,9 +425,9 @@ a ## b + c        // 解析为 a ## (b + c)
 | `Unit` | 单元类型 | `unit` |
 | `Vec[T](len)` | 类型化向量 | `nil`, `cons(x, xs)` |
 | `Option[T]` | 可选值 | `None`, `Some x` |
-| `Result[T, E]` | 结果类型 | `Ok x`, `Err e` |
-| `Either[A, B]` | 二选一 | `Left a`, `Right b` |
-| `List[T]` | 链表 | `Empty`, `Cons(head, tail)` |
+| `Result[T, E]` | 结果类型 | `ok x`, `err e` |
+| `Either[A, B]` | 二选一 | `left a`, `right b` |
+| `List[T]` | 链表 | `lnil`, `lcons(head, tail)` |
 | `Product[A, B]` | 积 | `new Product(fst, snd)` |
 | `Eq[A](x, y)` | 等式 | `refl a` |
 
@@ -456,7 +458,7 @@ a ## b + c        // 解析为 a ## (b + c)
 
 ```
 // 函数定义
-def add(x: Nat, y: Nat): Nat = nat_add_helper x y
+def add(x: Nat, y: Nat): Nat = nat_add x y
 
 // 带隐式参数
 def id[A](x: A): A = x

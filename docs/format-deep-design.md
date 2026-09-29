@@ -1,6 +1,9 @@
 # Format Document 深度路线详细设计（D2 → D3）
 
-> 状态：设计稿（未实现）
+> 状态：设计稿；其中 **D2 已按 format-document-design.md §12 的变体落地**——trivia
+> 扫描/布局引擎/自检在 `src/format/{mod.rs,layout.rs}`（字符串感知扫描为
+> `layout.rs::scan_raw`，未走本文 §D2 提出的 lex.rs 侧信道 `lex_with_trivia`）；
+> §2.2 的关键字文法缩进规则与 **D3 未实现**
 > 基线：`master` @ f4d5da8
 > 上游：[format-document-design.md](./format-document-design.md) §11（深度路线总览）
 > 默认风险姿态：**不回归主线为硬前提，分小步合入，每步可回退**。

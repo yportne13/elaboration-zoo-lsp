@@ -4,6 +4,14 @@
 > 前置：class 机制已优化（见 L13-code-review.md 与 class_tests.rs），
 > module 宏将重构在优化后的 class 机制上。
 > 对照：docs/task2-module-macro-notes.md（上一次重构尝试的教训）。
+>
+> **2026-09-29 状态订正**：本方案未按"单字段 let 链"路线实施。`1a2b4ce`
+> 修复了参数化 class 无注解字段的类型推断（§2.1 末段的重构前提失效）后，
+> 现行 module 宏（`src/prelude/hdl/hdl-macros.typort`）改为**副作用扁平化
+> 为独立 class 字段**（代码注释原文 "the side-effect chain FLATTENED into
+> class-body fields — every `let` is a struct field"），§2.2 红线 1 作废；
+> §4.1 中 `modulePush`/`modulePop` 未落地，仅 `mkInstanceIfParent` 被采纳，
+> 宏收尾改调 `checkModuleTreeAll`（自检）。
 
 ## 1. 现状机制
 

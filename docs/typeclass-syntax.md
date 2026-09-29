@@ -140,7 +140,7 @@ impl[<泛型参数>] <TraitName>[<trait参数>] for <目标类型> {
 
 ```
 impl Add[Nat, Nat] for Nat {
-    def +(that: Nat): Nat = nat_add_helper this that
+    def +(that: Nat): Nat = nat_add this that
 }
 ```
 
@@ -167,7 +167,10 @@ impl Nat {
 
 impl[A] Option[A] {
     def get_or_else(default: A): A =
-        match this { case None => default; case Some(a) => a }
+        match this {
+            case None => default
+            case Some(a) => a
+        }
 }
 ```
 
@@ -309,13 +312,19 @@ println (two.method)     // OK → "foo_nat"
 
 ```
 #[derive(Show, Bundle)]
-struct Point[T] { x: T; y: T }
+struct Point[T] {
+    x: T
+    y: T
+}
 
 #[derive(Show)]
-enum Bool { true; false }
+enum Bool {
+    true
+    false
+}
 ```
 
-`#[derive(...)]` 放在 `enum` 或 `struct` 声明之前。
+`#[derive(...)]` 放在 `enum` 或 `struct` 声明之前（struct 字段与 enum case 均以换行分隔）。
 
 ### 6.2 内置 Derive
 
@@ -323,14 +332,16 @@ enum Bool { true; false }
 |--------|--------|----------|
 | `Show` | enum, struct | `impl Show for T { def show: String = ... }` |
 | `Bundle` | struct（单构造器） | `impl Bundle for T { ... }` |
+| `HdlEnum` | enum | SpinalHDL 风格硬件枚举：元素定义、`count` / `craft` / `reg` / `regInit` 工厂、编码比较 |
 
 ### 6.3 自定义 Derive
 
-通过 Rust 端 `DeriveRegistry` 注册：
+通过 Rust 端 `DeriveRegistry`（`parser/derive.rs`）注册；内置注册表由
+`default_derive_registry()` 构造（`Show` / `Bundle` / `HdlEnum`）：
 
 ```rust
-pub type DeriveMacro = fn(&Decl) -> Vec<Decl>;
-pub fn register_derive(name: &str, derive_fn: DeriveMacro);
+pub type DeriveMacro = fn(&Decl, &BundleSet) -> Vec<Decl>;
+pub type DeriveRegistry = HashMap<String, DeriveMacro>;
 ```
 
 ---
@@ -449,7 +460,7 @@ trait Add[T, O: outParam(Type 0)] {
 }
 
 impl Add[Nat, Nat] for Nat {
-    def +(that: Nat): Nat = nat_add_helper this that
+    def +(that: Nat): Nat = nat_add this that
 }
 
 def five = two + three

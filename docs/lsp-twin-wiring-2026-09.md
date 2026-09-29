@@ -1444,6 +1444,7 @@ adder_proof 的 didOpen 帧约 24 KB，是演示工作区里唯一越过该阈�
   并就地重启）与状态栏 `TyPort Ref|Twin` 标记。
 - 版本号 1.0.1 与 `/index.html`、`/TyportHDL/*`、`/myExt/*` 的
   `Cache-Control: no-cache`（破 web 交付链缓存）。
+  （订正 2026-09-29：版本号已由 `440de3e` 退回 **1.0.0**。）
 - web 默认引擎 reference（孪生在 web 上内存贴 2 GiB 硬顶，仍是 opt-in）。
 
 **拆除**（排查期临时加、现已无用）：服务端 `typort-hdl/ping` 处理、客户端探针 /

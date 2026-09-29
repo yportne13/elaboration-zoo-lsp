@@ -278,6 +278,8 @@ pretty（unify 入口已有 `println!` 注释块），对照旧机制同输入�
   查一次（应 OnceLock）；completion_table push 未过 lsp_collect 闸；
   mentions_level 原生递归无 visited；compose 的 cons_all O(|inner|·|outer|)
   递归。均已列入 round-6。
+  （注 2026-09-29：`DECL_PROBE` 的 OnceLock 化已随 `028f72e` 在 master 落地
+  （mod.rs `decl_probe_enabled`）；其余项仍限本补丁系列语境。）
 
 ### 评审轮（2026-09-17，5 子 agent 多角度评审）结论与处置
 

@@ -43,10 +43,10 @@
 |---|---|---|
 | L01 | 23 变体各自 bench 断言（先验正确后计时） | `src/L01_nbe` 内嵌 |
 | L02–L05 | `#[path]` 独立编译 + `main_with(mode, src)` | `tests/l0X_blackbox*.rs` |
-| L06–L08 | `elaboration_zoo_lsp::L0X::run` / `bump_spine_iter::run_fast` | `tests/l0X_blackbox*.rs` + `l0X_fast_parity.rs` |
+| L06–L08 | `elaboration_zoo_lsp::L0X::run` / `bump_spine_iter::run_fast` | `tests/l0X_blackbox*.rs`；fast_parity 仅 L07 起（无 `l06_fast_parity.rs`） |
 | L09–L13 | 同上 + `norm_err` Err 正文 parity | `tests/l0X_fast_parity.rs` |
 | L13 全语言（含 prelude） | `run_with_prelude` / LSP Backend | `src/L13_namespace/legacy_tests.rs`、`tests/twin_engine_tests.rs` |
-| HDL/示例 | `test_examples_hdl_dir`（include_str 全量） | `src/L13_namespace/legacy_tests.rs:1441` |
+| HDL/示例 | `test_examples_hdl_dir`（include_str 全量） | `src/L13_namespace/legacy_tests.rs::test_examples_hdl_dir` |
 
 > 方言分界（写用例前必读）：
 > **L02–L05** 是 elab-zoo 方言——`let x : T = e;`、λ 写 `\x. e` 或 `λ x. e`、
@@ -327,7 +327,7 @@ prelude 仅在 `run_with_prelude` / LSP 路径加载（L02–L12 章节测试不
 | G13-02 | 引理直引 | `def comm(n: Nat, m: Nat): Eq (n + m) (m + n) = add_comm n m` | Ok（prelude 预证引理签名稳定） | prelude core/nat |
 | G13-03 | calc 组合 | G12-09 全链 + 一条带 `cong` 步的链 | Ok | calc_tests |
 | G13-04 | List 程序族 | `list_map`/`list_foldr`/filter 组合（prelude data） | Ok + println 输出 golden | prelude data |
-| G13-05 | Vec 依赖程序 | `Vec[A](len)` 的 append/index（legacy `test_index` 形态） | Ok + comma 显示 golden | legacy_tests.rs:604 |
+| G13-05 | Vec 依赖程序 | `Vec[A](len)` 的 append/index（legacy `test_index` 形态） | Ok + comma 显示 golden | legacy_tests.rs::test_index |
 | G13-06 | Option/Result/Either | 三族构造+match（prelude data） | Ok | prelude |
 | G13-07 | prelude 单元级回归 | prelude 文件逐个 `load_prelude_skip_hdl` 后跑一条 smoke（**建议新增**：目前 prelude 只有 LSP/examples 间接覆盖） | 全部 Ok | **缺口：prelude 盲区**（P1） |
 
@@ -388,8 +388,9 @@ L02–L08 有成体系 blackbox（含错误位置/文案 golden + parity）；L0
    通用疫苗）。
 9. 深值残留路径（quote/pretty 深递归、递归 Drop）的定深拒绝或迭代化后补钉
    （G14-03 的登记残留）。
-10. 探针/临时文件清理：`tests/zz_tmp_l13_debug.rs`、`probe_macro_bugs.rs`、
-    `l13_into_probe.rs`（自述临抛件）移出测试编译面或转正。
+10. 探针/临时文件清理：仅剩 `tests/zz_tmp_l13_debug.rs`（`probe_macro_bugs.rs`
+    已随 `bbb673f` 删除；`l13_into_probe.rs` 已随 `5f6dc82` 收编进
+    `tests/l13_fast_parity.rs`）。
 
 **P2（整理与一致性）**
 

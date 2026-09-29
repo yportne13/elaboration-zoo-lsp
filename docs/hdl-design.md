@@ -1,6 +1,12 @@
 # HDL Design — 重构方案
 
 > 本文档承载 HDL 重构的设计决策和最终方案，不记录讨论过程。
+>
+> **历史快照（2026-08-30）**：本文"现有架构"类描述按当时代码，与现状已漂移——
+> prelude 清单现由 `src/L13_namespace/mod.rs` 的 `PRELUDE_CORE/HDL/SHOW` 表驱动
+> （`natarith.typort` 已不存在，`hdl.typort` 已拆为 19 个 `src/prelude/hdl/*.typort`），
+> 文中 Tm 变体清单缺 `Tm::OpCall`、各处行号锚均已偏移。当前权威形态见
+> docs/hdl-language-spec.md。
 
 ---
 

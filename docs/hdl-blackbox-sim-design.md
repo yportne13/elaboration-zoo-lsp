@@ -1,6 +1,6 @@
 # HDL assert 断言 / BlackBox / 仿真集成设计（hdl-blackbox-sim）
 
-> 状态：设计稿（2026-09-26）。P1（assert 全链）已实现（2026-09-26，commit ede8773 + 评审修复）；P2（BlackBox）/P3 未实现。
+> 状态：设计稿（2026-09-26）。P1（assert 全链）已实现（2026-09-26，commit ede8773 + 评审修复）；P2（BlackBox）已实现（`f242441`，混叠修复 `626dfa4`，收口与偏差记录见 §4.5）；P3 未实现。
 > 输入：docs/spinalhdl-gap.md §5（BlackBox 行）/§6（assert 行）/§7 第 5 项/§8；docs/spinalhdl-lib-replication.md §4（仿真验收策略）/§5（B 级语言扩展）。
 > 结论先行：**assert 与 BlackBox 的全部语言侧机制落在 prelude .typort 文件**（`Expr`/`ModuleDef` 都是 typort enum/struct，宏系统也是 .typort 内的 `macro_rules`），Rust 侧只剩仿真失败回读（dut.rs ~30 行）与 `typort test` 退出码（cli.rs ~15 行）。**进程内仿真（SpinalSim FFI/VPI）不做**，以"Dut 协议 + 生成 testbench + in-design assert"替代。
 
@@ -11,6 +11,9 @@
 - assert：完全缺失。`Expr`（src/prelude/hdl/hdl-core.typort:96-153）无断言变体，hdl-verilog.typort 的产码路径无 `$display`，examples 的 Verilog-compat 层把 `$display` 列为"仍未支持"（examples/hdl/23-verilog-compat.typort:21）。spinalhdl-gap.md:85 标记"重要"。
 - BlackBox：语法占位 stub（src/prelude/hdl/hdl-bus.typort:191-202）——`struct BlackBox { name }` 只有两个恒等方法 `addGeneric`/`setDefinitionName`，不存储信息、不进 ModuleTree、无产码。spinalhdl-gap.md:75 标记"可选"、spinalhdl-lib-replication.md §5 把"BlackBox 真实代码生成"列为 B 级前置。
 - assert 的使用模式在 SpinalHDL 参考库中真实存在：lib/src/main/scala/spinal/lib/Stream.scala:658（`assert(!(valid.fall...) , "Stream valid persistence failed")`）、Stream.scala:676 `formalAssertsMaster`（`when(past(isStall)) { assert(valid, ...) }`——when 包裹的时钟断言）。本设计落地后 hdl-stream.typort 可复刻这组不变量（P3 候选）。
+
+> 2026-09-29 注：本节是**设计时快照**——P1/P2 均已落地（见头部状态与 §4.5），
+> 上文"完全缺失 / 语法占位 stub / 无产码"已不成立。
 
 ### 1.2 仿真现状：外部仿真器 harness 已就位
 

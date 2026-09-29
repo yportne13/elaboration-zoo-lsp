@@ -119,10 +119,12 @@ L13 移植代码曾完整实现（参考版 + 孪生版，8 文件；裸语言�
 diff = 0），但五轮尝试 + 评审轮后仍未达验收，**已回退至 HEAD**。关键结论
 （完整数据见 `docs/wip/README.md`，含 2026-09-17 的 5-agent 评审轮处置表）：
 
-- **prelude 期 LSP 表总闸已落地**：prelude 加载末尾本就清空 hover/
-  completion/inlay 表，加载期渲染是纯死工作（hover 占 21s 中的 ~11s）；
-  加 `Infer.lsp_collect` 后 `typort check` 全量 prelude **21.1s → 9.3s**
-  （零行为变更；孪生版早有同款 `observe` 总闸，parity 表不分叉）。
+- **prelude 期 LSP 表总闸**（曾在移植分支实现，**随 L13 移植回退撤下**，
+  master 无此改动——补丁存档 `docs/wip/l13-explicit-subst-round4-patches.patch`）：
+  prelude 加载末尾本就清空 hover/completion/inlay 表，加载期渲染是纯死工作
+  （hover 占 21s 中的 ~11s）；加 `Infer.lsp_collect` 后 `typort check` 全量
+  prelude **21.1s → 9.3s**（零行为变更；孪生版早有同款 `observe` 总闸，
+  parity 表不分叉）。
 - **12k 深 quote 真身＝meta 解链**：`?m₁ := succ(?m₂) := succ(?m₃) …` 逐层
   force 展开，深度仅受 fuel 约束 ⇒ 默认测试栈必溢出（parity 崩因）；
   触发于 `nat.typort` 的 `nat_div`。
