@@ -3068,7 +3068,7 @@ impl<C: ClientLike + Send + Sync + 'static> Backend<C> {
     /// Current full text of `uri` (normalized by the caller), preferring the
     /// live sync buffer and falling back to the analysed rope.
     fn document_text(&self, uri: &Url) -> Option<String> {
-        let buffers = self.document_buffers.lock().unwrap();
+        let buffers = self.document_buffers.lock().unwrap_or_else(|e| e.into_inner());
         match buffers.get(uri.as_str()) {
             Some(t) => Some(t.to_string()),
             None => self.document_map.get(uri.as_str()).map(|r| r.to_string()),
@@ -3223,7 +3223,7 @@ impl LanguageServer for Backend<Client> {
         // Store full text for incremental sync（rope 一份；作业直接移动
         // params 自带的 String，不再多克隆一份全文）
         let open_text = params.text_document.text;
-        self.document_buffers.lock().unwrap().insert(
+        self.document_buffers.lock().unwrap_or_else(|e| e.into_inner()).insert(
             doc_uri.to_string(),
             Rope::from_str(&open_text),
         );
@@ -3254,7 +3254,7 @@ impl LanguageServer for Backend<Client> {
         // 仍需一次 to_string，与旧 buffer.clone() 同价）
         let doc_uri = normalize_builtin_uri(&params.text_document.uri);
         let full_text = {
-            let mut buffers = self.document_buffers.lock().unwrap();
+            let mut buffers = self.document_buffers.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(buffer) = buffers.get_mut(doc_uri.as_str()) {
                 for change in &params.content_changes {
                     apply_content_change(buffer, change);
@@ -3315,7 +3315,7 @@ impl LanguageServer for Backend<Client> {
         }
         let uri_str = uri.to_string();
         // 增量同步缓冲区（全文的又一份拷贝）最先释放。
-        self.document_buffers.lock().unwrap().remove(uri.as_str());
+        self.document_buffers.lock().unwrap_or_else(|e| e.into_inner()).remove(uri.as_str());
         // 关闭前已入队、尚未被 drain_analysis_jobs 取走的作业要丢掉：否则
         // drain 会把 process_file 跑一遍，document_map / document_id /
         // type_map / hover_table / file_symbols 全被重新插回来，等于没关。
@@ -3638,7 +3638,7 @@ impl Backend<Client> {
                     // 成请求的陈旧条目，不清则永久泄漏。（取消本身在"分析
                     // 内联进主循环"的架构下结构性无效果——请求派发时其取消
                     // 必然尚未到达——此处仅做内存卫生。）
-                    self.cancelled_requests.lock().unwrap().clear();
+                    self.cancelled_requests.lock().unwrap_or_else(|e| e.into_inner()).clear();
                     let send_err = |id: RequestId, code: i32, message: String| -> std::result::Result<(), Box<dyn Error + Sync + Send>> {
                         let resp = Response::new_err(id, code, message);
                         Ok(self.client.connection.sender.send(Message::Response(resp))?)
@@ -3679,7 +3679,7 @@ impl Backend<Client> {
                                 Ok((id, params)) => match self.completion(params) {
                                     Ok(result) => {
                                         let result = serde_json::to_value(&result).unwrap();
-                                        if !self.cancelled_requests.lock().unwrap().remove(&id) {
+                                        if !self.cancelled_requests.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) {
                                             let resp = Response { id, result: Some(result), error: None };
                                             self.client.connection.sender.send(Message::Response(resp))?;
                                         }
@@ -3714,7 +3714,7 @@ impl Backend<Client> {
                                 NumberOrString::String(s) => RequestId::from(s),
                             };
                             self.client.log_message(MessageType::LOG, format!("cancelled request {:?}", rid));
-                            self.cancelled_requests.lock().unwrap().insert(rid);
+                            self.cancelled_requests.lock().unwrap_or_else(|e| e.into_inner()).insert(rid);
                         }
                     } else {
                         // 同请求侧：方法名先行（didSave 此前白付 3 次
@@ -3773,7 +3773,11 @@ impl Backend<Client> {
                 self.drain_analysis_jobs();
             }
         }
-        Ok(())
+        // 通道关闭但从未收到 shutdown：客户端未握手直接 exit（LSP 规范要求
+        // 视为异常退出，exit code 1）或 EOF（客户端崩溃）。旧实现同样返回
+        // Ok(())，宿主无法区分正常关闭与崩溃。回 Err 让进程以非零码退出
+        // （run_lsp_server → CLI main 的 `?` 链）。
+        Err("client closed connection without shutdown".into())
     }
 }
 

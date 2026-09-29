@@ -55,6 +55,14 @@ fn run_session(msgs: Vec<Message>) -> Session {
     for m in msgs {
         to_server_tx.send(m).unwrap();
     }
+    // 规范关闭路径：shutdown + exit 让 main_loop 走正常退出（对"无
+    // shutdown 的断连"它返回 Err——那是 exit-code 修复要抓的异常路径）。
+    // 注意 lsp-server 的 handle_shutdown 在响应 shutdown 后会阻塞等 exit
+    // 通知，只发 shutdown 会以 ProtocolError 收场。
+    to_server_tx
+        .send(request(0xF000, "shutdown", json!(null)))
+        .unwrap();
+    to_server_tx.send(notification("exit", json!(null))).unwrap();
     drop(to_server_tx); // EOF：main_loop 处理完队列后自然退出
     b.main_loop()
         .expect("main_loop 不得返回 Err（协议层错误必须回包，不能终结会话）");
