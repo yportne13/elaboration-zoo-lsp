@@ -62,7 +62,7 @@ const SECTIONS: &[Section] = &[
         # 最后一个表达式即返回值
 
 lambda:  x => 表达式
-   map_opt(Some 1, x => x + 2)          # Some 3
+   map_opt(Some 1, x => x + 2)          # Some 3（map_opt 非内置——tutorial 第 9 课练习自行定义）
 
 按模式定义（多分支）:
    def neg(b: Boolean): Boolean =
@@ -271,7 +271,8 @@ succ_injective 等自证例子见 examples/theorem_proving.typort）。
 
 生成 Verilog（在 .typort 文件里）:
    println(moduleTreeVL(half_adder.create.tree))     # 单模块
-   println(allModulesVL(buildMultiTree()))           # 多模块树
+   println(allModulesVL(buildMultiTree()))           # 多模块树; buildMultiTree 非内置,
+                                                     # helper 定义见 examples/hdl/09-hierarchy.typort
 命令行落盘: typort emit foo.typort --top 'adder[8]' --out out/ --manifest
    # （manifest 需显式 --manifest，额外产出 out/adder.manifest.json）
 
@@ -345,7 +346,7 @@ Stream / Flow / Fragment（SpinalHDL lib 移植, prelude 提供; 按宽度带后
 时钟域（多时钟 / 跨时钟）:
    def inCd: ClockDomain = ClockDomain.mk "clkA" "rstA" Async RisingEdge ActiveHigh
    module ccPulse[inCd] { ... }              # 模块级时钟域参数
-   pulseCCByToggle / ccByToggle / bufferCCUIntCd / streamFifoCC[8][4] / readSyncCCUInt
+   pulseCCByToggle / ccByToggleUInt / bufferCCUIntCd / streamFifoCC[8][4] / readSyncCCUInt
 
 仿真/波形: Typort.toml [test] 段配置 simulator + trace;
    typort test 编译模型并跑 smoke eval（见 examples/hdl、src/sim/）。
