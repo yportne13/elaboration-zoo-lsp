@@ -46,7 +46,10 @@ use dashmap::DashMap;
 use log::debug;
 use ls::LanguageServer;
 use lsp_server::{ExtractError, Message, ProtocolError, Request, RequestId, Response};
-use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, Formatting, GotoDefinition, HoverRequest, InlayHintRequest, RangeFormatting, References, Rename, SemanticTokensFullRequest, SemanticTokensRangeRequest};
+// 注：semanticTokens/full·range 刻意不在请求分派里出现——capabilities 从未
+// 声明该能力，trait 默认实现返回 Err，`?` 会把 main_loop 整个带崩（服务端
+// 假死）。未声明的方法落到下方未识别请求分支处理。
+use lsp_types::request::{CodeActionRequest, Completion, ExecuteCommand, Formatting, GotoDefinition, HoverRequest, InlayHintRequest, RangeFormatting, References, Rename};
 use ropey::Rope;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -3627,32 +3630,6 @@ impl Backend<Client> {
                             let result = serde_json::to_value(&result).unwrap();
                             let resp = Response { id, result: Some(result), error: None };
                             self.client.connection.sender.send(Message::Response(resp))?;
-                        }
-                        SemanticTokensFullRequest::METHOD => {
-                            let (id, params) = match cast::<SemanticTokensFullRequest>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.semantic_tokens_full(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            if !self.cancelled_requests.lock().unwrap().remove(&id) {
-                                let resp = Response { id, result: Some(result), error: None };
-                                self.client.connection.sender.send(Message::Response(resp))?;
-                            }
-                        }
-                        SemanticTokensRangeRequest::METHOD => {
-                            let (id, params) = match cast::<SemanticTokensRangeRequest>(req) {
-                                Ok(x) => x,
-                                Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-                                Err(ExtractError::MethodMismatch(_)) => unreachable!("arm matched on req_method"),
-                            };
-                            let result = self.semantic_tokens_range(params)?;
-                            let result = serde_json::to_value(&result).unwrap();
-                            if !self.cancelled_requests.lock().unwrap().remove(&id) {
-                                let resp = Response { id, result: Some(result), error: None };
-                                self.client.connection.sender.send(Message::Response(resp))?;
-                            }
                         }
                         Rename::METHOD => {
                             let (id, params) = match cast::<Rename>(req) {
