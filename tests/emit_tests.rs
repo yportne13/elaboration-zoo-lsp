@@ -36,6 +36,27 @@ fn emit_plain_top_produces_verilog() {
 }
 
 #[test]
+fn emit_arith_shift_wraps_lhs_in_signed() {
+    // review-2026-09-29 HDL P1-4: `b.asSInt >> 1` used to emit `(b >>> 1)`.
+    // b is an unsigned wire and Verilog-2001 `>>>` takes its signedness from
+    // the LEFT operand alone, so the arithmetic shift silently degraded to a
+    // logical shift. The emitter now pins the signedness with $signed(...).
+    let src = r#"module shiftSigned {
+    input b = UInt[8]
+    output y = UInt[8]
+    let s = b.asSInt
+    y := (s >> 1).asUInt
+}
+"#;
+    let v = emit_verilog(&[(Url::parse("file:///shift_signed.typort").unwrap(), src.to_string())], "shiftSigned").unwrap();
+    assert!(
+        v.contains("($signed(b) >>> 1)"),
+        "expected $signed-wrapped arithmetic shift, got:\n{}",
+        &v[..v.len().min(600)]
+    );
+}
+
+#[test]
 fn emit_hierarchy_includes_submodules() {
     // 09-hierarchy's topWithAdder instantiates myAdder; allModulesVL must
     // emit every module in the tree, not just the top.

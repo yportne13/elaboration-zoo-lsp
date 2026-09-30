@@ -1569,7 +1569,7 @@ fn test_examples_hdl_dir() {
             "(sa % sb)",                 // SInt 取模
             "(a << sh)",                 // |<< 宽度保持变量左移
             "(a >> sh)",                 // |>> 宽度保持变量右移
-            "(sa >>> sh)",               // SInt |>> 算术右移
+            "($signed(sa) >>> sh)",      // SInt |>> 算术右移（$signed 钉住左操作数符号性）
             "(sa[7] ? -sa : sa)",        // abs mux 展开
             "{sa[7], sa}",               // SInt expand 符号扩展
             "assign ue = sa;",           // UInt expand 零扩展（赋值上下文）

@@ -49,6 +49,16 @@ def verilogBinOp(op: String): String =
             }
     }
 
+// Arithmetic right shift `>>>` (IEEE 1364-2001 §4.1.10): the shift is
+// ARITHMETIC only when the LEFT operand is signed. An SInt value does not
+// always live on a signed-declared wire — `b.asSInt >> 1` keeps the unsigned
+// wire `b` as its Expr — so a bare `(b >>> 1)` silently degrades to a LOGICAL
+// shift (review 2026-09-29 HDL P1-4). Wrapping the left operand in
+// `$signed(...)` pins the signedness at the shift site; for operands that
+// already carry a signed declaration it is a no-op.
+def arithShiftLhsStr(lstr: String): String =
+    "$signed(" + lstr + ")"
+
 // Sized literal for a concatenation operand.  IEEE 1364-2001 §4.1.14 forbids
 // unsized constants inside concatenations, so `{0, x}` is not legal Verilog.
 // A literal can only reach `##` as a Bool (value 0 or 1) — the Cat impls
@@ -156,7 +166,10 @@ def exprVL_proc(e: Expr): String = match e {
                 "{" + lstr + ", " + rstr + "}"
             case false =>
                 let opv = verilogBinOp(op);
-                "(" + exprVL_proc(lhs) + " " + opv + " " + exprVL_proc(rhs) + ")"
+                match str_eq(op, ">>>") {
+                    case true => "(" + arithShiftLhsStr(exprVL_proc(lhs)) + " " + opv + " " + exprVL_proc(rhs) + ")"
+                    case false => "(" + exprVL_proc(lhs) + " " + opv + " " + exprVL_proc(rhs) + ")"
+                }
         }
     case assign(lhs, rhs) =>
         "      " + exprVL_proc(lhs) + " = " + exprVL_proc(rhs) + ";"
@@ -216,7 +229,10 @@ def exprVL_proc(e: Expr): String = match e {
 // Helper: emit condition string without redundant outer parens
 def emitCondStr(cond: Expr): String = match cond {
     case binary(lhs, op, rhs) =>
-        exprVL_proc(lhs) + " " + verilogBinOp(op) + " " + exprVL_proc(rhs)
+        match str_eq(op, ">>>") {
+            case true => arithShiftLhsStr(exprVL_proc(lhs)) + " " + verilogBinOp(op) + " " + exprVL_proc(rhs)
+            case false => exprVL_proc(lhs) + " " + verilogBinOp(op) + " " + exprVL_proc(rhs)
+        }
     case _ => exprVL_proc(cond)
 }
 
@@ -268,7 +284,10 @@ def exprVL(e: Expr): String = match e {
                 "{" + lstr + ", " + rstr + "}"
             case false =>
                 let opv = verilogBinOp(op);
-                "(" + exprVL(lhs) + " " + opv + " " + exprVL(rhs) + ")"
+                match str_eq(op, ">>>") {
+                    case true => "(" + arithShiftLhsStr(exprVL(lhs)) + " " + opv + " " + exprVL(rhs) + ")"
+                    case false => "(" + exprVL(lhs) + " " + opv + " " + exprVL(rhs) + ")"
+                }
         }
     case assign(lhs, rhs) =>
         "  assign " + exprVL(lhs) + " = " + exprVL(rhs) + ";"
