@@ -625,10 +625,13 @@ impl[width: Nat] SInt[width] {
 }
 
 impl[width: Nat] UInt[width] {
-    // 零扩展：依赖 Verilog 赋值上下文把无符号 RHS 零扩展到目标宽度
-    // （与 resize 同一惯用法；`{1'b0, x}` 字面量拼接需要新的代码生成本地支持）。
+    // 零扩展：显式 `{1'b0, x}`——与 `+^` 的 pad-concat 同一发射形状
+    // （catLitStr 把拼接里的字面量 0 发射成 sized 1 位字面量，合法 Verilog）。
+    // 旧实现是 Expr 层 no-op，自决定上下文（拼接 `flag ## a.expand`、
+    // let 别名）静默丢 1 位（review-2026-09-29 P2-8）；赋值上下文不受影响
+    // （旧产码依赖 RHS 零扩展，新产码宽度已显式）。
     def expand: UInt[width + 1] =
-        UInt.mk(None, this.expr)
+        UInt.mk(None, binary(literal(0), "##", this.expr))
 }
 
 // ============================================================

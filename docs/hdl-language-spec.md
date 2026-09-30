@@ -501,7 +501,7 @@ let g = Area { let x = UInt[8]; x := a }   // 恒等分组：body(unit)，无命
 | `cast(prove)` | `def cast(prove: Eq(Self, U)): U` | core/eq.typort 的 `Cast` trait；**旧的 `Le` 证明版本已删除**，一切类型转换走 Eq 等宽证明（`x.cast(uint_cast_prove[w])`，example 13） |
 | `asBits` / `asUInt` / `asSInt` / `asBool` | 各类型互转 | 纯重标，同 Expr，不改位形；Bool → 宽 1 |
 | `abs` | `SInt[w].abs: UInt[w]` | 符号位 mux（`msb ? -x : x`） |
-| `expand` | `SInt[w].expand: SInt[w+1]`；`UInt[w].expand: UInt[w+1]` | SInt 符号扩展 `{msb, x}`；UInt 零扩展**依赖 Verilog 赋值上下文**（同 resize 惯用法） |
+| `expand` | `SInt[w].expand: SInt[w+1]`；`UInt[w].expand: UInt[w+1]` | SInt 符号扩展 `{msb, x}`；UInt 零扩展 `{1'b0, x}`（显式拼接，自决定上下文不再丢位——2026-09-30 前为依赖赋值上下文的 no-op） |
 | `reverse` | `reverse(bitsOrUInt)` | 位反转（SpinalHDL `reversed` 对应物） |
 
 ### 7.10 位宽工具函数（hdl-core）

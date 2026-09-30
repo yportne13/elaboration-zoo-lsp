@@ -1572,7 +1572,7 @@ fn test_examples_hdl_dir() {
             "($signed(sa) >>> sh)",      // SInt |>> 算术右移（$signed 钉住左操作数符号性）
             "(sa[7] ? -sa : sa)",        // abs mux 展开
             "{sa[7], sa}",               // SInt expand 符号扩展
-            "assign ue = sa;",           // UInt expand 零扩展（赋值上下文）
+            "assign ue = {1'b0, sa};",   // UInt expand 显式零扩展（不再依赖赋值上下文）
         ]),
         ("15-inout.typort", include_str!("../../examples/hdl/15-inout.typort"), &[
             "inout wire [7:0] io",       // UInt inout 端口

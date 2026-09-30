@@ -57,6 +57,26 @@ fn emit_arith_shift_wraps_lhs_in_signed() {
 }
 
 #[test]
+fn emit_uint_expand_zero_extends_in_concat() {
+    // review-2026-09-29 HDL P2-8: UInt.expand was an Expr-level no-op, so in
+    // the self-determined concat context `flag ## a.expand` emitted
+    // `{flag, a}` — one bit short. It now emits an explicit zero extension.
+    let src = r#"module expandConcat {
+    input flag = Bool
+    input a = UInt[8]
+    output y = UInt[10]
+    y := flag ## a.expand
+}
+"#;
+    let v = emit_verilog(&[(Url::parse("file:///expand_concat.typort").unwrap(), src.to_string())], "expandConcat").unwrap();
+    assert!(
+        v.contains("assign y = {flag, {1'b0, a}};"),
+        "expected explicit zero-extended concat, got:\n{}",
+        &v[..v.len().min(600)]
+    );
+}
+
+#[test]
 fn emit_hierarchy_includes_submodules() {
     // 09-hierarchy's topWithAdder instantiates myAdder; allModulesVL must
     // emit every module in the tree, not just the top.
