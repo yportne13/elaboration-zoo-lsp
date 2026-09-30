@@ -1481,3 +1481,73 @@ mod nested_delimiter_recovery {
         assert_eq!(decls.len(), 2, "both declarations should parse");
     }
 }
+
+// ===========================================================================
+// Category 18: Farthest-progress `.or_far()` error merging
+// ===========================================================================
+//
+// The resilient combinator `or` drops the first branch's error and lets the
+// LAST-tried alternative's error win whenever both branches fail. `or_far`
+// compares progress (source offset of the failure token via
+// `ErrorProgress::parse_progress`): the farther-failing branch's error wins,
+// and at equal progress the FIRST branch's error is kept — so the umbrella
+// message for decl-start junk is "expected `def`" (first alternative) instead
+// of "expected `macro_rules`" (last alternative). When the second branch
+// succeeds the first branch's error is still dropped (chumsky semantics: an
+// alternative's errors only surface when ALL branches fail — pushing them
+// would spam one error per failed alternative in the 9-way decl chain).
+//
+// Golden updates (deliberate, per upgrade-notes §2):
+//   - top-level junk token: Expect(MacroKeyword) → Expect(DefKeyword)
+//   - `lambda`/`if`-as-identifier atom failures: Expect(Hole)/Expect(Op) →
+//     Expect(Ident)
+// No decl counts, recovery positions, or error spans changed on any probe.
+//
+mod or_farthest_error_merging {
+    use super::*;
+    use elaboration_zoo_lsp::L13_namespace::parser::{BaseMsg, ErrMsg};
+    use elaboration_zoo_lsp::L13_namespace::parser::lex::TokenKind;
+
+    /// A `let` with a missing body inside a def keeps exactly one error and
+    /// both surrounding declarations — the dispatch chain must not lose decls
+    /// or multiply errors when merging alternative failures.
+    #[test]
+    fn let_missing_body_single_error_decls_recovered() {
+        let input = "\ndef f(n: Nat): Nat =\n    let x =\n    n\n\ndef g: Nat = 2\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "parser should never return None");
+        let (decls, errors) = result.unwrap();
+        assert_eq!(decls.len(), 2, "both defs should be recovered, decls: {:?}", decls.len());
+        assert_eq!(errors.len(), 1, "exactly one error for the missing let body, errors: {:?}", errors.len());
+    }
+
+    /// Keep-first at equal progress: junk that matches no declaration reports
+    /// the FIRST alternative's expectation (`def`), not the last-tried one
+    /// (`macro_rules`), with the error still anchored at the junk token.
+    #[test]
+    fn decl_start_junk_reports_first_alternative() {
+        let input = ")\ndef a: Nat = 1\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "parser should never return None");
+        let (decls, errors) = result.unwrap();
+        assert!(!errors.is_empty(), "junk `)` should error");
+        // Deliberate golden (or_far keep-first): the first decl alternative wins.
+        assert!(
+            errors.iter().any(|e| matches!(&e.msg.data,
+                ErrMsg::Base(BaseMsg::Expect(tk)) if *tk == TokenKind::DefKeyword)),
+            "expected the keep-first `expected def` error for decl-start junk, got {:?}",
+            errors.iter().map(|e| format!("{:?}", e.msg.data)).collect::<Vec<_>>()
+        );
+        let e0 = errors.first().unwrap();
+        assert!(
+            e0.msg.start_offset == 0 && e0.msg.end_offset == 1,
+            "error should stay anchored at the junk token, got @{}..{}",
+            e0.msg.start_offset, e0.msg.end_offset
+        );
+        assert!(
+            matches!(decls.last(), Some(Decl::Def { name, .. }) if name.data.as_str() == "a"),
+            "`def a` after the junk should still parse, decls: {}",
+            decls.len()
+        );
+    }
+}

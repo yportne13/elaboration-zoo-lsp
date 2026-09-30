@@ -21,6 +21,30 @@ pub trait Parser<I: Copy, A, S, E>: Sized + Copy {
     {
         move |input, state: &mut S| self.parse(input, state).or_else(|e| rhs.parse(input, state))//TODO: err combine
     }
+    /// Alternative combinator with **farthest-progress error merging**:
+    /// when both branches fail, keep the error whose failure point is farther
+    /// into the input (larger [`ErrorProgress::parse_progress`]); at equal
+    /// progress keep the *first* branch's error. When the second branch
+    /// succeeds, the first branch's error is still dropped silently — pushing
+    /// it into `state` would spam one error per failed alternative in the
+    /// long `a.or(b).or(c)…` dispatch chains (chumsky only reports alternative
+    /// errors when *all* branches fail, which is the behavior mirrored here).
+    ///
+    /// `or` (above) keeps its old last-branch-wins error selection; `or_far`
+    /// is the opt-in upgrade used by the L13 parser's dispatch chains.
+    fn or_far<P>(self, rhs: P) -> impl Parser<I, A, S, E>
+    where
+        P: Parser<I, A, S, E>,
+        E: ErrorProgress,
+    {
+        move |input, state: &mut S| match self.parse(input, state) {
+            Ok(x) => Ok(x),
+            Err(e1) => match rhs.parse(input, state) {
+                Ok(x) => Ok(x),
+                Err(e2) => Err(if e1.parse_progress() >= e2.parse_progress() { e1 } else { e2 }),
+            },
+        }
+    }
     fn map<B, F>(self, f: F) -> impl Parser<I, B, S, E>
     where
         F: Fn(A) -> B + Copy,
@@ -100,6 +124,13 @@ where
 /// Trait for types that can store parse errors (used by [`RecoverExt::recover_with`]).
 pub trait ErrorStore<E> {
     fn push_error(&mut self, error: E);
+}
+
+/// Progress tracking for parse errors, used by [`Parser::or_far`] to keep the
+/// farthest-failing alternative's error. The offset is typically the source
+/// offset of the token the branch failed at (0 for "no position information").
+pub trait ErrorProgress {
+    fn parse_progress(&self) -> u32;
 }
 
 impl<E> ErrorStore<E> for Vec<E> {

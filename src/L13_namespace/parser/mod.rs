@@ -162,6 +162,16 @@ pub struct IError {
     pub msg: Span<ErrMsg>,
 }
 
+/// Progress of an [`IError`] = the source offset of the token it was anchored
+/// at (the token the branch failed to match, for keyword-dispatch errors).
+/// Used by [`Parser::or_far`] to keep the farthest-failing alternative's error
+/// instead of the last-tried branch's error.
+impl crate::parser_lib_resilient::ErrorProgress for IError {
+    fn parse_progress(&self) -> u32 {
+        self.msg.start_offset
+    }
+}
+
 type IResult<'a, 'b, O> = Result<(&'b [TokenNode<'a>], O), IError>;
 
 pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroExpansionInfo>);
@@ -411,7 +421,7 @@ pub fn parser_with_macros(input: &str, id: u32, global_macros: &HashMap<String, 
         path_id: id,
     }) {
         Some((_, ret)) => {
-            let ret = (p_decl.map(Ok).or(p_macro_def.map(Err)))
+            let ret = (p_decl.map(Ok).or_far(p_macro_def.map(Err)))
                 .recover_with(
                     skip_until_decl,
                     || Ok(Decl::Package { path: vec![] }),
@@ -631,14 +641,14 @@ where
 fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     smolstr(Ident)
         .map(Raw::Var)
-        .or(kw(ThisKeyword).map(|s| Raw::Var(s.map(|_| SmolStr::new("this")))))
+        .or_far(kw(ThisKeyword).map(|s| Raw::Var(s.map(|_| SmolStr::new("this")))))
         // `Type N` 的 N 超出 u32（含超过 u64 的长数字）：旧实现
         // `unwrap_or(0)` 静默变 `Type 0`（`Type 99999999999` 与 `Type 0`
         // 等价通过）。补一条解析错误并退化为 `Type 0`，与 Nat 字面量的
         // u64 溢出同路径（错误经常规语法错误管道浮出，不 panic）。
         // 注意 `Cut((kw, string))` 元组的尾部组件是 Option：Num 缺失时
         // Cut 已 push_error 并就地降级（None），该分支不补第二报错。
-        .or(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
+        .or_far(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
             let (rest, (_, num)) = Cut((kw(TypeKeyword), string(Num))).parse(input, state)?;
             let lvl = match num.as_ref().map(|x| x.data.parse::<u32>()) {
                 Some(Ok(n)) => n,
@@ -654,9 +664,9 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
             };
             Ok((rest, Raw::U(lvl)))
         })
-        .or(kw(Hole).map(Raw::Hole))
-        .or(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
-        .or(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
+        .or_far(kw(Hole).map(Raw::Hole))
+        .or_far(string(Str).map(|x| Raw::LiteralIntro(x.map(|s| unescape(&s)))))
+        .or_far(|input: &'b [TokenNode<'a>], state: &mut MacroState| {
 
             // 整数超出 u64（如 `99999999999999999999999999`）：推一条解析
             // 错误并退化为 `Raw::Hole`，不再 panic；与常规语法错误同路径
@@ -675,7 +685,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                 }
             }
         })
-        .or(
+        .or_far(
             // Tuple literal: (a, b, ...) -> TupleN.mk a b ...
             paren_cut(
                 p_raw.many1_sep((kw(T![,]), kw(EndLine).option()))
@@ -694,7 +704,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
                     Err(paren_span) => Raw::Hole(paren_span),
                 }
             })
-            .or(paren_cut(p_raw).map(|x| x.unwrap_or_else(Raw::Hole)))
+            .or_far(paren_cut(p_raw).map(|x| x.unwrap_or_else(Raw::Hole)))
         )
         // Verilog concatenation `{a, b, c}` → `a ## b ## c` (the Cat trait).
         // A leading `{` is otherwise unparseable as an expression: block
@@ -705,7 +715,7 @@ fn p_atom1<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         // brace group that is not a concatenation — otherwise a `calc { ... }`
         // block would be partly eaten here and the calc macro's single-line
         // arm would mis-match (regression: calc_err_by_no_proof).
-        .or(p_concat)
+        .or_far(p_concat)
         .parse(input, state)
 }
 
@@ -737,7 +747,7 @@ fn p_concat<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
 }
 
 fn p_atom<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
-    let result = (p_atom1, Cut((kw(T![.]), smolstr(Ident).or(smolstr(Op)))).many0())
+    let result = (p_atom1, Cut((kw(T![.]), smolstr(Ident).or_far(smolstr(Op)))).many0())
         .map(|(x, t)| t.into_iter().fold(x, |x, t| {
             Raw::Obj(Box::new(x), t.1)
         }))
@@ -775,13 +785,13 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
             } else {
                 Err(IError { msg: op.map(|_| ErrMsg::Base(BaseMsg::ExpectAtom)) })
             }
-        }).or(p_atom).parse(input, state)?;
+        }).or_far(p_atom).parse(input, state)?;
 
         while let Ok((input_t, op)) = smolstr(Op)
-            .or(kw(LParen).map(|x| x.map(|_| SmolStr::new("("))))
-            //.or(kw(LCurly).map(|x| x.map(|_| SmolStr::new("{"))))
-            .or(kw(LSquare).map(|x| x.map(|_| SmolStr::new("["))))
-            .or(kw(Dot).map(|x| x.map(|_| SmolStr::new("."))))
+            .or_far(kw(LParen).map(|x| x.map(|_| SmolStr::new("("))))
+            //.or_far(kw(LCurly).map(|x| x.map(|_| SmolStr::new("{"))))
+            .or_far(kw(LSquare).map(|x| x.map(|_| SmolStr::new("["))))
+            .or_far(kw(Dot).map(|x| x.map(|_| SmolStr::new("."))))
             .parse(input, state) {
             if let Some((l_bp, ())) = postfix_binding_power(&op) {
                 if l_bp < min_bp {
@@ -984,7 +994,7 @@ fn expr_bp<'a: 'b, 'b>(min_bp: u8) -> impl Parser<&'b [TokenNode<'a>], Raw, Macr
                     };
 	                    Raw::app(Raw::Obj(Box::new(lhs), Some(op)), rhs)
 	                } else if &op.data == "." {
-	                    let name = match smolstr(Ident).or(smolstr(Op)).parse(input, state) {
+	                    let name = match smolstr(Ident).or_far(smolstr(Op)).parse(input, state) {
 	                        Ok((input_t, name)) => {
 	                            input = input_t;
 	                            name
@@ -1093,13 +1103,13 @@ fn infix_binding_power(op: &Span<SmolStr>) -> Option<(u8, u8)> {
 fn p_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Vec<(Either, Raw)>> {
     let named_impl_arg = square_cut(
         (smolstr(Ident), Cut((kw(Eq), p_raw))).map(|(x, t)| (Either::Name(x.clone()), t.1.unwrap_or(Raw::Hole(x.end_span()))))
-            .or(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
+            .or_far(p_raw.map(|t| (Either::Icit(Icit::Impl), t)))
             .many0_sep(kw(T![,]))
     ).map(|x| x.ok().unwrap_or_default());
 
     let explicit_arg = p_explicit_arg;
 
-    let arg_parser = named_impl_arg.or(explicit_arg);
+    let arg_parser = named_impl_arg.or_far(explicit_arg);
 
     arg_parser.parse(input, state)
 }
@@ -1217,7 +1227,7 @@ fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
 }
 
 fn p_bind<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Span<SmolStr>> {
-    smolstr(Ident).or(smolstr(Hole)).parse(input, state)
+    smolstr(Ident).or_far(smolstr(Hole)).parse(input, state)
 }
 
 fn p_lam_binder<'a: 'b, 'b>(
@@ -1227,11 +1237,11 @@ fn p_lam_binder<'a: 'b, 'b>(
     let explicit_binder = p_bind.map(|x| (x, Either::Icit(Icit::Expl)));
     let implicit_name_binder = square(
         (smolstr(Ident), Cut((kw(Eq), p_bind))).map(|(x, (_, y))| (y.unwrap_or(x.to_span().map(|_| SmolStr::new(""))), Either::Name(x)))
-            .or(p_bind.map(|x| (x, Either::Icit(Icit::Impl))))
+            .or_far(p_bind.map(|x| (x, Either::Icit(Icit::Impl))))
     );
 
     explicit_binder
-        .or(implicit_name_binder)
+        .or_far(implicit_name_binder)
         .parse(input, state)
 }
 
@@ -1305,7 +1315,7 @@ fn p_pi_binder<'a: 'b, 'b>(
     state: &mut MacroState,
 ) -> IResult<'a, 'b, Vec<(Span<SmolStr>, Raw, Icit)>> {
     // 组合所有可能的解析器
-    p_pi_impl_binder.or(p_pi_expl_binder).parse(input, state)
+    p_pi_impl_binder.or_far(p_pi_expl_binder).parse(input, state)
 }
 
 fn p_pi<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
@@ -1422,18 +1432,18 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
         string(Ident),
         brace(p_pattern.many1_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default())
     ).map(|x| Pattern::Con(x.0.map(|t| SmolStr::new(format!("{t}.mk"))), x.1, Either::Icit(Icit::Expl)))
-        .or((
+        .or_far((
             smolstr(Ident),
             paren_cut(p_pattern.many1_sep(kw(T![,]))).map(|x| x.ok().unwrap_or_default())
-                .or(square_cut(
+                .or_far(square_cut(
                     (smolstr(Ident), kw(Eq), p_pattern).map(|x| x.2.to_name(x.0))
-                        .or(p_pattern.map(|x| x.to_impl()))
+                        .or_far(p_pattern.map(|x| x.to_impl()))
                     .many1_sep(kw(T![,]))
                 ).map(|x| x.ok().unwrap_or_default()))
                 .many0()
                 .map(|x| x.concat()),
         ).map(|(x, t)| Pattern::Con(x, t, Either::Icit(Icit::Expl))))
-        .or(
+        .or_far(
             // Tuple pattern: (a, b, ...)
             paren_cut(p_pattern.many1_sep(kw(T![,])))
                 .map(|result| match result {
@@ -1450,7 +1460,7 @@ fn p_pattern<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> 
                     Err(paren_span) => Pattern::Any(paren_span.map(|_| true), Either::Icit(Icit::Expl)), // () → _
                 })
         )
-        .or(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
+        .or_far(kw(T![_]).map(|x| Pattern::Any(x.map(|_| true), Either::Icit(Icit::Expl))))
         .parse(input, state)
 }
 
@@ -1605,11 +1615,11 @@ fn p_raw<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
         }
     }
     p_lam
-        .or(p_let)
-        .or(p_pi)
-        .or(fun_or_spine)
-        .or(p_match)
-        .or(p_new)
+        .or_far(p_let)
+        .or_far(p_pi)
+        .or_far(fun_or_spine)
+        .or_far(p_match)
+        .or_far(p_new)
         .parse(input, state)
         .map_err(|_e| IError {
             msg: input
@@ -1642,7 +1652,7 @@ fn p_def<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRes
     ).option().map(|x| x.map(|(_, v)| v));
     Cut((
         kw(DefKeyword),
-        smolstr(Ident).or(smolstr(Op)),
+        smolstr(Ident).or_far(smolstr(Op)),
         p_pi_binder
             .many0()
             .map(|x| x.into_iter().flatten().collect::<Vec<_>>()),
@@ -1988,7 +1998,7 @@ fn p_struct<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> I
             (smolstr(Ident), kw(T![:]), p_raw)
                 .map(|(name, _, ty)| (name, ty))
                 .many0_sep(kw(EndLine)), // named fields
-        ), /*.or(
+        ), /*.or_far(
                paren(p_raw.many1_sep(kw(T![,]))).map(|fields| {
                    // tuple-like struct with positional fields
                    let mut unnamed_fields = Vec::new();
@@ -2029,7 +2039,7 @@ fn p_trait_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
     }
     // Try `def name(params): RetType where T: Into[Self] (= body)?`
     let (input, _) = kw(DefKeyword).parse(input, state)?;
-    let (input, name) = smolstr(Ident).or(smolstr(Op)).parse(input, state)?;
+    let (input, name) = smolstr(Ident).or_far(smolstr(Op)).parse(input, state)?;
     let (input, mut params) = p_pi_binder.many0().map(|x| x.into_iter().flatten().collect::<Vec<_>>()).parse(input, state)?;
     let (input, _) = kw(T![:]).parse(input, state)?;
     let (input, ret) = p_raw.parse(input, state)?;
@@ -2164,7 +2174,7 @@ fn p_impl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
                 kw(ForKeyword),
                 p_raw,
             )),
-        ).map(Ok).or(p_raw.map(Err)),
+        ).map(Ok).or_far(p_raw.map(Err)),
         brace(p_impl_body_item_def_or_type.many0_sep(kw(EndLine))),
     )).map(|x| match x.2 {
         Some(Ok((trait_name, trait_params, (_, name)))) => (x.1, trait_name.clone(), trait_params, name.unwrap_or(Raw::Hole(trait_name.end_span())), x.3, false),
@@ -2257,7 +2267,7 @@ fn p_macro_group_matcher<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut Mac
     if !rest.is_empty() {
         return Err(err_expect(rest, TokenKind::RParen));
     }
-    let (after, (_, s)) = (kw(RParen), string_is(Op, "*").or(string_is(Op, "+")).or(string_is(Op, "?")))
+    let (after, (_, s)) = (kw(RParen), string_is(Op, "*").or_far(string_is(Op, "+")).or_far(string_is(Op, "?")))
         .parse(&input[close..], state)?;
     let seq: Box<MacroMatcher> = MacroMatcher::Sequence(matchers).into();
     let m = if s.data == "*" {
@@ -2318,52 +2328,52 @@ fn p_macro_matcher_single<'a: 'b, 'b>(
         .map(|span| {
             MacroMatcher::Token(Ident, span)
         })
-        .or(string(Op).map(|span| {
+        .or_far(string(Op).map(|span| {
             MacroMatcher::Token(Op, span)
         }))
-        .or(string(Num).map(|span| {
+        .or_far(string(Num).map(|span| {
             MacroMatcher::Token(Num, span)
         }))
-        /*.or(string(LParen).map(|span| {
+        /*.or_far(string(LParen).map(|span| {
             MacroMatcher::Token(LParen, span)
         }))
-        .or(string(RParen).map(|span| {
+        .or_far(string(RParen).map(|span| {
             MacroMatcher::Token(RParen, span)
         }))*/
-        .or(string(LSquare).map(|span| {
+        .or_far(string(LSquare).map(|span| {
             MacroMatcher::Token(LSquare, span)
         }))
-        .or(string(RSquare).map(|span| {
+        .or_far(string(RSquare).map(|span| {
             MacroMatcher::Token(RSquare, span)
         }))
-        .or(string(LCurly).map(|span| {
+        .or_far(string(LCurly).map(|span| {
             MacroMatcher::Token(LCurly, span)
         }))
-        .or(string(RCurly).map(|span| {
+        .or_far(string(RCurly).map(|span| {
             MacroMatcher::Token(RCurly, span)
         }))
-        .or(string(LetKeyword).map(|span| MacroMatcher::Token(LetKeyword, span)))
-        .or(string(ForKeyword).map(|span| MacroMatcher::Token(ForKeyword, span)))
-        .or(string(Eq).map(|span| MacroMatcher::Token(Eq, span)))
-        .or(string(Dot).map(|span| MacroMatcher::Token(Dot, span)))
-        .or(string(ByKeyword).map(|span| MacroMatcher::Token(ByKeyword, span)))
-        .or(string(Hole).map(|span| MacroMatcher::Token(Hole, span)))
-        .or(string(Colon).map(|span| MacroMatcher::Token(Colon, span)))
+        .or_far(string(LetKeyword).map(|span| MacroMatcher::Token(LetKeyword, span)))
+        .or_far(string(ForKeyword).map(|span| MacroMatcher::Token(ForKeyword, span)))
+        .or_far(string(Eq).map(|span| MacroMatcher::Token(Eq, span)))
+        .or_far(string(Dot).map(|span| MacroMatcher::Token(Dot, span)))
+        .or_far(string(ByKeyword).map(|span| MacroMatcher::Token(ByKeyword, span)))
+        .or_far(string(Hole).map(|span| MacroMatcher::Token(Hole, span)))
+        .or_far(string(Colon).map(|span| MacroMatcher::Token(Colon, span)))
         // Verilog-compat layer: patterns for `module (...)`, `always @(...)`,
         // `q <= d ;`, `.a(x), .b(y)` need these as literal tokens. The
         // matcher itself (MacroMatcher::Token) has always been generic over
         // (kind, text); only the pattern-side parser was limited. Additive —
         // existing macro patterns never contain these tokens.
-        .or(string(LParen).map(|span| MacroMatcher::Token(LParen, span)))
-        .or(string(RParen).map(|span| MacroMatcher::Token(RParen, span)))
-        .or(string(Semi).map(|span| MacroMatcher::Token(Semi, span)))
-        .or(string(Comma).map(|span| MacroMatcher::Token(Comma, span)))
-        .or(string(CaseKeyword).map(|span| MacroMatcher::Token(CaseKeyword, span)))
-        .or(string(MatchKeyword).map(|span| MacroMatcher::Token(MatchKeyword, span)));
+        .or_far(string(LParen).map(|span| MacroMatcher::Token(LParen, span)))
+        .or_far(string(RParen).map(|span| MacroMatcher::Token(RParen, span)))
+        .or_far(string(Semi).map(|span| MacroMatcher::Token(Semi, span)))
+        .or_far(string(Comma).map(|span| MacroMatcher::Token(Comma, span)))
+        .or_far(string(CaseKeyword).map(|span| MacroMatcher::Token(CaseKeyword, span)))
+        .or_far(string(MatchKeyword).map(|span| MacroMatcher::Token(MatchKeyword, span)));
     
     metavar_parser
-        .or(p_macro_group_matcher)
-        .or(token_parser)
+        .or_far(p_macro_group_matcher)
+        .or_far(token_parser)
         .parse(input, state)
 }
 
@@ -2398,7 +2408,7 @@ fn p_macro_matcher<'a: 'b, 'b>(
     });
     
     repetition_parser
-        .or(p_macro_matcher_sequence.map(|matchers| {
+        .or_far(p_macro_matcher_sequence.map(|matchers| {
             if matchers.len() == 1 {
                 matchers.into_iter().next().unwrap()
             } else {
@@ -2448,16 +2458,16 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
     // 尝试解析分组
     let group_parser = paren(p_macro_transcriber_sequence.map(MacroTranscriber::Sequence))
         .map(|m| MacroTranscriber::Group(Delimiter::Parenthesis, vec![m]))
-        .or(square(p_macro_transcriber_sequence.map(MacroTranscriber::Sequence))
+        .or_far(square(p_macro_transcriber_sequence.map(MacroTranscriber::Sequence))
             .map(|m| MacroTranscriber::Group(Delimiter::Bracket, vec![m])))
-        .or(brace(p_macro_transcriber_sequence.map(|opt| {
+        .or_far(brace(p_macro_transcriber_sequence.map(|opt| {
             MacroTranscriber::Group(Delimiter::Brace, opt.map(|m| vec![m]).unwrap_or_default())
         })));
     
     // 尝试解析普通 token
     let token_parser = string(Ident)
-        .or(string(Op))
-        .or(string(Num))
+        .or_far(string(Op))
+        .or_far(string(Num))
         .map(|span| {
             let kind = match span.data.as_str() {
                 "(" => TokenKind::LParen,
@@ -2468,8 +2478,8 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
         });
     
     metavar_ref
-        .or(group_parser)
-        .or(token_parser)
+        .or_far(group_parser)
+        .or_far(token_parser)
         .parse(input, state)*/
     match (kw(LCurly), kw(EndLine).option()).parse(input, state) {
         Ok((input, _)) => {
@@ -2504,7 +2514,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                     ret.push(MacroTranscriber::Basic(owned));
                     let (i, o) = p_macro_transcriber_single.parse(i, state)?;
                     ret.push(MacroTranscriber::Group(o.into()));
-                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).or((kw(RParen), kw_is(Op, "?"))).parse(i, state)?;// op: * + ?
+                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or_far((kw(RParen), kw_is(Op, "+"))).or_far((kw(RParen), kw_is(Op, "?"))).parse(i, state)?;// op: * + ?
                     i_back = i;
                     input = i;
                 } else {
@@ -2544,7 +2554,7 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                     ret.push(MacroTranscriber::Basic(owned));
                     let (i, o) = p_macro_transcriber_single.parse(i, state)?;
                     ret.push(MacroTranscriber::Group(o.into()));
-                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or((kw(RParen), kw_is(Op, "+"))).or((kw(RParen), kw_is(Op, "?"))).parse(i, state)?;
+                    let (i, _) = (kw(RParen), kw_is(Op, "*")).or_far((kw(RParen), kw_is(Op, "+"))).or_far((kw(RParen), kw_is(Op, "?"))).parse(i, state)?;
                     i_back = i;
                     input = i;
                 } else {
@@ -2596,7 +2606,7 @@ fn p_macro_transcriber<'a: 'b, 'b>(
     });
     
     repetition_parser
-        .or(p_macro_transcriber_sequence.map(|transcribers| {
+        .or_far(p_macro_transcriber_sequence.map(|transcribers| {
             if transcribers.len() == 1 {
                 transcribers.into_iter().next().unwrap()
             } else {
@@ -3021,7 +3031,7 @@ fn p_class_body_item<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroSt
     // Try field: let name [: Type] = expr  (no Cut → can fall back)
     match (
         kw(LetKeyword),
-        smolstr(Ident).or(smolstr(Hole)),
+        smolstr(Ident).or_far(smolstr(Hole)),
         (kw(T![:]), kw(EndLine).option(), p_raw).map(|(_, _, t)| t).option(),
         kw(T![=]),
         kw(EndLine).option(),
@@ -3065,7 +3075,7 @@ fn p_class<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IR
         ).many0_sep(kw(T![,])))
             .option()
             .map(|x| x.map(|(_, v)| v).unwrap_or_default()),
-        brace(p_class_body_item.many0_sep((kw(T![;]).or(kw(EndLine))).many1())),
+        brace(p_class_body_item.many0_sep((kw(T![;]).or_far(kw(EndLine))).many1())),
     ))
     .map(|(class_kw, name, params, traits, body)| {
         let items = body.and_then(|r| r.ok()).unwrap_or_default();
@@ -3504,13 +3514,13 @@ fn p_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IRe
     // Check for #[derive(Trait1, Trait2, ...)] attribute before enum/struct/class
     let (input, derive_traits) = p_derive_attr.option().map(|x| x.unwrap_or_default()).parse(input, state)?;
     if !derive_traits.is_empty() {
-        let (input, decl) = p_enum.or(p_struct).or(p_class).parse(input, state).map_err(|e| IError {
+        let (input, decl) = p_enum.or_far(p_struct).or_far(p_class).parse(input, state).map_err(|e| IError {
             msg: e.msg.map(extract_base)
         })?;
         return Ok((input, Decl::Derive { traits: derive_traits, decl: Box::new(decl) }))
     }
-    p_def.or(p_print).or(p_enum).or(p_struct).or(p_class).or(p_trait_def).or(p_impl)
-        .or(p_package).or(p_import)
+    p_def.or_far(p_print).or_far(p_enum).or_far(p_struct).or_far(p_class).or_far(p_trait_def).or_far(p_impl)
+        .or_far(p_package).or_far(p_import)
         .parse(input, state)
         .map_err(|e| IError {
             msg: e.msg.map(extract_base)
