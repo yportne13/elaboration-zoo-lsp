@@ -113,6 +113,11 @@ fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<&'b [TokenN
 #[derive(Debug, Clone, Copy)]
 pub enum BaseMsg {
     Expect(TokenKind),
+    /// Like [`BaseMsg::Expect`], but also records the token kind actually
+    /// found at the failure point ("expected X, found Y"). Populated on the
+    /// high-frequency paths (`kw` / `kw_is` — the source of every delimiter /
+    /// EndLine expectation); other error sites keep `Expect`.
+    ExpectFound(TokenKind, TokenKind),
     EmptyVec,
     ExpectRaw,
     ExpectAtom,
@@ -140,6 +145,9 @@ impl fmt::Display for BaseMsg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BaseMsg::Expect(tk) => write!(f, "expected {}", tk),
+            BaseMsg::ExpectFound(expected, found) => {
+                write!(f, "expected {}, found {}", expected, found)
+            }
             BaseMsg::EmptyVec   => write!(f, "expected at least one element"),
             BaseMsg::ExpectRaw  => write!(f, "expected expression"),
             BaseMsg::ExpectAtom => write!(f, "expected atom"),
@@ -493,7 +501,9 @@ fn kw<'a: 'b, 'b>(p: TokenKind) -> impl Parser<&'b [TokenNode<'a>], Span<()>, Ma
                 })
         } else {
             Err(IError {
-                msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
+                // found 追踪（升级笔记 §3）：失败点是什么 token 就记什么，
+                // 渲染成 "expected X, found Y"。
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::ExpectFound(p, x.data.1)))
             })
         },
         _ => Err(IError {
@@ -511,6 +521,12 @@ fn kw_is<'a: 'b, 'b>(p: TokenKind, s: &'a str) -> impl Parser<&'b [TokenNode<'a>
                 .ok_or_else(|| IError {
                     msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))
                 })
+        } else if x.data.1 != p {
+            // 类别都不同：found 有信息量；同类别不同文本（kw_is 的字面量
+            // 匹配失败）时 found 会退化成 "expected X, found X"，保持 Expect。
+            Err(IError {
+                msg: x.map(|_| ErrMsg::Base(BaseMsg::ExpectFound(p, x.data.1)))
+            })
         } else {
             Err(IError {
                 msg: x.map(|_| ErrMsg::Base(BaseMsg::Expect(p)))

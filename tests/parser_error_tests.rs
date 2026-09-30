@@ -1532,9 +1532,13 @@ mod or_farthest_error_merging {
         let (decls, errors) = result.unwrap();
         assert!(!errors.is_empty(), "junk `)` should error");
         // Deliberate golden (or_far keep-first): the first decl alternative wins.
+        // (kw errors carry found-tracking since the found upgrade, so the
+        // variant is ExpectFound(DefKeyword, RParen) here.)
         assert!(
             errors.iter().any(|e| matches!(&e.msg.data,
-                ErrMsg::Base(BaseMsg::Expect(tk)) if *tk == TokenKind::DefKeyword)),
+                ErrMsg::Base(BaseMsg::Expect(tk)) if *tk == TokenKind::DefKeyword)
+                || matches!(&e.msg.data,
+                ErrMsg::Base(BaseMsg::ExpectFound(tk, _)) if *tk == TokenKind::DefKeyword)),
             "expected the keep-first `expected def` error for decl-start junk, got {:?}",
             errors.iter().map(|e| format!("{:?}", e.msg.data)).collect::<Vec<_>>()
         );
@@ -1549,5 +1553,77 @@ mod or_farthest_error_merging {
             "`def a` after the junk should still parse, decls: {}",
             decls.len()
         );
+    }
+}
+
+// ===========================================================================
+// Category 19: `found` tracking in errors
+// ===========================================================================
+//
+// Upgrade-notes §3: errors used to record only WHAT was expected
+// (`BaseMsg::Expect(tk)`), never what was actually encountered. The
+// high-frequency error source — the `kw` / `kw_is` token matchers, which
+// produce every delimiter and EndLine expectation — now emits
+// `BaseMsg::ExpectFound(expected, found)`, rendered as
+// "expected `)`, found `def`" through the normal Display → diagnostic path
+// (`IError::to_err`).
+//
+mod error_found_tracking {
+    use super::*;
+    use elaboration_zoo_lsp::L13_namespace::parser::{BaseMsg, ErrMsg};
+    use elaboration_zoo_lsp::L13_namespace::parser::lex::TokenKind;
+
+    /// Missing `)` at the end of an expression: the error says what was found
+    /// (the next declaration's `def`), not just what was expected.
+    #[test]
+    fn missing_rparen_reports_found_def() {
+        let input = "\ndef foo: Nat = (1 + 2\n\ndef bar: Nat = 3\n";
+        let errors = assert_parse_errors(input);
+        assert!(
+            errors.iter().any(|e| matches!(&e.msg.data,
+                ErrMsg::Base(BaseMsg::ExpectFound(TokenKind::RParen, TokenKind::DefKeyword)))),
+            "expected an `expected `)`, found `def`` error, got {:?}",
+            errors.iter().map(|e| format!("{:?}", e.msg.data)).collect::<Vec<_>>()
+        );
+        // Rendered text (the diagnostic message the LSP shows):
+        let rendered: Vec<String> = errors.iter().map(|e| format!("{}", e.msg.data)).collect();
+        assert!(
+            rendered.iter().any(|m| m.contains("expected `)`") && m.contains("found `def`")),
+            "rendered message should say expected `)` / found `def`, got {:?}",
+            rendered
+        );
+    }
+
+    /// Missing `=` in a def: found is the newline that ends the line.
+    #[test]
+    fn missing_eq_reports_found_newline() {
+        let input = "\ndef foo(a: Nat): Nat a + 1\ndef bar: Nat = 3\n";
+        let errors = assert_parse_errors(input);
+        assert!(
+            errors.iter().any(|e| matches!(&e.msg.data,
+                ErrMsg::Base(BaseMsg::ExpectFound(TokenKind::Eq, TokenKind::EndLine)))),
+            "expected an `expected `=`, found newline` error, got {:?}",
+            errors.iter().map(|e| format!("{:?}", e.msg.data)).collect::<Vec<_>>()
+        );
+    }
+
+    /// Stray `}` between declarations: "expected `def`, found `}`" — the found
+    /// kind is the offending delimiter itself.
+    #[test]
+    fn stray_rbrace_reports_found_delimiter() {
+        let input = "\ndef f(x: Nat): Nat = x\n}\ndef g: Nat = 5\n";
+        let errors = assert_parse_errors(input);
+        assert!(
+            errors.iter().any(|e| matches!(&e.msg.data,
+                ErrMsg::Base(BaseMsg::ExpectFound(TokenKind::DefKeyword, TokenKind::RCurly)))),
+            "expected an `expected `def`, found rcurly` error, got {:?}",
+            errors.iter().map(|e| format!("{:?}", e.msg.data)).collect::<Vec<_>>()
+        );
+    }
+
+    /// Legal input stays error-free (found tracking only annotates failures).
+    #[test]
+    fn legal_input_unaffected() {
+        assert_parse_ok("\ndef foo(a: Nat): Nat = a\nprintln(\"ok\")\n");
     }
 }
