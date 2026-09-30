@@ -1339,6 +1339,150 @@ def gdeclKeyOf(ds: List[GDecl], name: String): String = match ds {
 def isRegKind(k: SigKind): Boolean =
     chkBor(kindEq(k, kReg), kindEq(k, kOutReg))
 
+// ---------- HDL041: constant bit-select/part-select index out of range ----------
+// A bitsel/partsel carrying GROUND literal index(es) on a signal whose
+// declared width is a ground Nat must satisfy idx < width (BOTH ends of a
+// part range). Verilog reads/writes x outside the declared range - silent
+// wrong hardware (review 2026-09-29 P2-7: `a8.slice[9, 7]` emitted `a[9:7]`).
+// The walk covers LHS selects (drive targets) and RHS selects (reads) alike
+// by recursing through every statement/expression shape. Mems are excluded:
+// createMem's GDecl width is the CELL width, not the address space, so mem
+// indexes (memRead/memWrite addresses) are not comparable to it.
+//
+// SHAPE NOTE: the checks are decomposed into one-match-per-def tails on
+// purpose - a `let _ = match {...}; <more>` chain nested 5 match-levels deep
+// trips the parser's brace tracking ("expected `}`" xN, spans off; the same
+// shape recovers in user files but poisons the next prelude decls).
+
+// Mem/unknown-width bases yield None; only ground widths of non-mem signals
+// pass through.
+def oobWidthOf(ds: List[GDecl], nm: String): Option[Nat] = match gdeclKindOf(ds, nm) {
+    case None => None
+    case Some(k) => match kindEq(k, kMem) {
+        case true => None
+        case false => match gdeclWidthOf(ds, nm) {
+            case None => None
+            case Some(w) => match nat_is_ground(w) {
+                case true => Some(w)
+                case false => None
+            }
+        }
+    }
+}
+
+def oobIdxBad(mname: String, nm: String, idx: Nat, w: Nat): Unit = match chkNatLe(succ(idx), w) {
+    case true => unit
+    case false => chkReport("HDL041", mname, nm, "constant bit index " + nat_to_dec(idx) + " out of declared width " + nat_to_dec(w) + " - Verilog reads/writes x")
+}
+
+def oobRangeBad(mname: String, nm: String, hi: Nat, lo: Nat, w: Nat): Unit =
+    let badHi = chkBnot(chkNatLe(succ(hi), w));
+    let badLo = chkBnot(chkNatLe(succ(lo), w));
+    match chkBor(badHi, badLo) {
+        case true => chkReport("HDL041", mname, nm, "constant bit range [" + nat_to_dec(hi) + ":" + nat_to_dec(lo) + "] out of declared width " + nat_to_dec(w) + " - Verilog reads/writes x")
+        case false => unit
+    }
+
+def oobCheckIdx(mname: String, decls: List[GDecl], b: Expr, i: Expr): Unit =
+    let nm = exprName(b);
+    match str_eq(nm, "") {
+        case true => unit
+        case false => match litNat(i) {
+            case None => unit
+            case Some(idx) => match oobWidthOf(decls, nm) {
+                case None => unit
+                case Some(w) => oobIdxBad(mname, nm, idx, w)
+            }
+        }
+    }
+
+def oobCheckRange(mname: String, decls: List[GDecl], b: Expr, hiE: Expr, loE: Expr): Unit =
+    let nm = exprName(b);
+    match str_eq(nm, "") {
+        case true => unit
+        case false => match litNat(hiE) {
+            case None => unit
+            case Some(hv) => match litNat(loE) {
+                case None => unit
+                case Some(lv) => match oobWidthOf(decls, nm) {
+                    case None => unit
+                    case Some(w) => oobRangeBad(mname, nm, hv, lv, w)
+                }
+            }
+        }
+    }
+
+// Structural walker over statements AND sub-expressions (same shape coverage
+// as scanStmtEx/scanExprEx; create and createMem nodes are declarations without
+// selects and need no recursion).
+def oobScanExpr(mname: String, decls: List[GDecl], e: Expr): Unit = match e {
+    case subSignal(_, _) => unit
+    case literal(_) => unit
+    case sizedLiteral(_, _) => unit
+    case nop => unit
+    case bbMarkerExpr(_, _) => unit
+    case instance(_, _) => unit
+    case instanceWithPorts(_, _, _) => unit
+    case unary(_, x) => oobScanExpr(mname, decls, x)
+    case binary(l, _, r) =>
+        let _ = oobScanExpr(mname, decls, l);
+        oobScanExpr(mname, decls, r)
+    case mux(c, tv, fv) =>
+        let _ = oobScanExpr(mname, decls, c);
+        let _ = oobScanExpr(mname, decls, tv);
+        oobScanExpr(mname, decls, fv)
+    case bitsel(b, i) =>
+        let _ = oobCheckIdx(mname, decls, b, i);
+        let _ = oobScanExpr(mname, decls, b);
+        oobScanExpr(mname, decls, i)
+    case partsel(b, hiE, loE) =>
+        let _ = oobCheckRange(mname, decls, b, hiE, loE);
+        let _ = oobScanExpr(mname, decls, b);
+        let _ = oobScanExpr(mname, decls, hiE);
+        oobScanExpr(mname, decls, loE)
+    case memRead(m, a) =>
+        let _ = oobScanExpr(mname, decls, m);
+        oobScanExpr(mname, decls, a)
+    case when(c, b2, eb) =>
+        let _ = oobScanExpr(mname, decls, c);
+        let _ = oobScanExpr(mname, decls, b2);
+        match eb {
+            case None => unit
+            case Some(eb2) => oobScanExpr(mname, decls, eb2)
+        }
+    case assign(l, r) =>
+        let _ = oobScanExpr(mname, decls, l);
+        oobScanExpr(mname, decls, r)
+    case regAssign(l, r) =>
+        let _ = oobScanExpr(mname, decls, l);
+        oobScanExpr(mname, decls, r)
+    case regAssignCd(l, r, _) =>
+        let _ = oobScanExpr(mname, decls, l);
+        oobScanExpr(mname, decls, r)
+    case block(h, t) =>
+        let _ = oobScanExpr(mname, decls, h);
+        oobScanExpr(mname, decls, t)
+    case switch(v, cs) =>
+        let _ = oobScanExpr(mname, decls, v);
+        oobScanExpr(mname, decls, cs)
+    case memWrite(mem, addr, data, en) =>
+        let _ = oobScanExpr(mname, decls, mem);
+        let _ = oobScanExpr(mname, decls, addr);
+        let _ = oobScanExpr(mname, decls, data);
+        oobScanExpr(mname, decls, en)
+    case assertExpr(c, _, _) => oobScanExpr(mname, decls, c)
+    case assertExprCd(c, _, _, _) => oobScanExpr(mname, decls, c)
+    case _ => unit
+}
+
+def oobScanAll[ne: Nat](es: Vec[Expr] ne, mname: String, decls: List[GDecl]): Unit = match es {
+    case nil => unit
+    case cons(h, t) =>
+        let _ = oobScanExpr(mname, decls, h);
+        oobScanAll(t, mname, decls)
+}
+
+
 // Anchors from declarations. A decl carrying an explicit cd anchors there;
 // a register WITHOUT one is pre-anchored to the module default (mdcd) right
 // here — the lazy resolveCd fallback (decl cd > mdcd) would land on the same
@@ -1914,6 +2058,7 @@ def checkModuleAll(md: ModuleDef): Unit =
             let _ = ruleLatch(md.name, acc.decls, acc.drives);
             let _ = ruleDeadCond(md.name, acc.drives);
             let _ = ruleShadow(md.name, acc.drives);
+            let _ = oobScanAll(md.expr, md.name, acc.decls);
             unit
         case false => unit
     };

@@ -626,6 +626,7 @@ println(moduleTreeVL(foo.create[myCd].tree))
 | HDL038 | 多 bit 信号经 2FF 同步器跨域（需要 Gray 编码） |
 | HDL039 | 同步器中段被绕过（读者不在链上） |
 | HDL040 | 枚举 switch 穷尽性缺支（`switchFinalEnum` 显式检查点名缺失元素） |
+| HDL041 | 常量位选/片选索引越界（`a8[8]` / `a8.slice[9,7]`——Verilog 读写 x；信号索引与 mem 地址不在范围） |
 | HDL060 | FSM `goto` 目标越界（`to ≥ stateCount`） |
 | HDL061 | FSM 不可达状态（非入口态且无任何入边） |
 | HDL062 | FSM 状态无出边（可能卡死；终态可 `noExitCheck()` 豁免） |

@@ -692,3 +692,85 @@ fn examples_21_crossclock_expected_warnings() {
     assert!(!output.contains("HDL037"), "all crossings are synchronized chains, got:\n{}", output);
     assert!(!output.contains("HDL039"), "XOR edge reads are exempt, got:\n{}", output);
 }
+
+// ── HDL041: constant bit-select/part-select index out of the declared
+// width — silent x read/write in Verilog (review 2026-09-29 P2-7) ──
+
+#[test]
+fn hdl041_slice_index_out_of_range() {
+    let output = assert_ok(r#"
+module sliceOob {
+    input a = UInt[8]
+    output y = UInt[3]
+    y := a.slice[9, 7]
+}
+println(moduleTreeVL(sliceOob.create.tree))
+"#);
+    assert!(output.contains("HDL041"), "out-of-range part select must warn HDL041, got:\n{}", output);
+    assert!(
+        output.contains("constant bit range [9:7] out of declared width 8"),
+        "HDL041 message expected, got:\n{}", output
+    );
+}
+
+#[test]
+fn hdl041_bitsel_index_out_of_range() {
+    let output = assert_ok(r#"
+module bitselOob {
+    input a = UInt[8]
+    output z = Bool
+    z := a[8]
+}
+println(moduleTreeVL(bitselOob.create.tree))
+"#);
+    assert!(output.contains("HDL041"), "out-of-range bit select must warn HDL041, got:\n{}", output);
+    assert!(
+        output.contains("constant bit index 8 out of declared width 8"),
+        "HDL041 message expected, got:\n{}", output
+    );
+}
+
+// In-range constant selects stay silent (both read and drive sides).
+
+#[test]
+fn hdl041_in_range_selects_silent() {
+    let output = assert_ok(r#"
+module sliceOk {
+    input a = UInt[8]
+    input b = UInt[3]
+    output y = UInt[3]
+    output z = Bool
+    let t = UInt[8]
+    t.slice[2, 0] := b
+    t[7] := a[7]
+    y := a.slice[4, 2]
+    z := t[3]
+}
+println(moduleTreeVL(sliceOk.create.tree))
+"#);
+    assert!(!output.contains("HDL041"), "in-range selects must not warn HDL041, got:\n{}", output);
+    assert!(!output.contains("[hdl][warning]"), "zero warnings expected, got:\n{}", output);
+}
+
+// subSignal bases (child-port selects) stay out of scope: the port width is
+// declared in the CHILD module, not in this module's GDecl table.
+
+#[test]
+fn hdl041_subsignal_base_silent() {
+    let output = assert_ok(r#"
+module srcMod
+    output o = UInt[8]
+{
+    o := 1
+}
+module dynIdx {
+    input x = UInt[8]
+    output z = Bool
+    let u = srcMod.create
+    z := u.o[9]
+    x := u.o
+}
+println(moduleTreeVL(dynIdx.create.tree))
+"#);
+    assert!(!output.contains("HDL041"), "subSignal bases are out of scope, got:\n{}", output);
+}
