@@ -358,6 +358,9 @@ mod debug_test;
 #[cfg(test)]
 mod struct_refine_probe;
 
+#[cfg(test)]
+mod prim_safety_tests;
+
 type Rc<T> = std::rc::Rc<T>;
 
 // `decl.get` sits on the evaluator's hot paths (`Tm::Decl` eval arm, `v_app`,

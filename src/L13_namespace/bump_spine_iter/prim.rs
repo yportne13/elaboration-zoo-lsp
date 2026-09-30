@@ -663,18 +663,20 @@ pub(super) fn prim_exec<'a>(
         }
         PrimId::FileReadAllText => {
             let path = lit_of(arg(0)?)?;
-            let content = std::fs::read_to_string(path)
-                .unwrap_or_else(|e| panic!("file_read_all_text: failed to read '{}': {}", path, e));
-            Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&content)))))
+            // 文件族 IO 失败保持卡住（None）——与"实参非字面量"同口径
+            // （L07/L08 修复 D3 P1-4 同款；参考版 cxt.rs 同步），不 panic。
+            match std::fs::read_to_string(path) {
+                Ok(content) => Some(v_xcell(bump.alloc(XCell::Lit(bump.alloc_str(&content))))),
+                Err(_) => None,
+            }
         }
         PrimId::FileWriteAllText => {
             if args.len() < 2 {
                 return None;
             }
             let (path, content) = (lit_of(arg(0)?)?, lit_of(arg(1)?)?);
-            std::fs::write(path, content)
-                .unwrap_or_else(|e| panic!("file_write_all_text: failed to write '{}': {}", path, e));
-            Some(v_u(0))
+            // IO 失败卡住降级（L07/L08 同款），不 panic。
+            std::fs::write(path, content).ok().map(|()| v_u(0))
         }
         PrimId::FileAppendAllText => {
             if args.len() < 2 {
@@ -682,15 +684,14 @@ pub(super) fn prim_exec<'a>(
             }
             let (path, content) = (lit_of(arg(0)?)?, lit_of(arg(1)?)?);
             use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
+            // IO 失败卡住降级（L07/L08 同款），不 panic。
+            std::fs::OpenOptions::new()
                 .append(true)
                 .create(true)
                 .open(path)
-                .unwrap_or_else(|e| panic!("file_append_all_text: failed to open '{}': {}", path, e));
-            write!(file, "{}", content).unwrap_or_else(|e| {
-                panic!("file_append_all_text: failed to append to '{}': {}", path, e)
-            });
-            Some(v_u(0))
+                .and_then(|mut file| write!(file, "{}", content))
+                .ok()
+                .map(|()| v_u(0))
         }
         PrimId::FileExists => {
             let path = lit_of(arg(0)?)?;
@@ -700,9 +701,8 @@ pub(super) fn prim_exec<'a>(
         }
         PrimId::FileDelete => {
             let path = lit_of(arg(0)?)?;
-            std::fs::remove_file(path)
-                .unwrap_or_else(|e| panic!("file_delete: failed to delete '{}': {}", path, e));
-            Some(v_u(0))
+            // IO 失败卡住降级（L07/L08 同款），不 panic。
+            std::fs::remove_file(path).ok().map(|()| v_u(0))
         }
         // ── nat 族（参考版 cxt.rs 同名 PrimFunc 逐句）──
         PrimId::NatToDec => {

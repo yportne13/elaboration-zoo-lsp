@@ -858,9 +858,12 @@ fn file_read_all_text(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> 
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(path) => {
-            let content = std::fs::read_to_string(&path.data)
-                .unwrap_or_else(|e| panic!("file_read_all_text: failed to read '{}': {}", path.data, e));
-            Some(Val::LiteralIntro(path.clone().map(|_| content.clone())).into())
+            // 文件族 IO 失败保持卡住（None）——与"实参非字面量"同口径
+            // （L07/L08 修复 D3 P1-4 同款），源码可达路径不 panic。
+            match std::fs::read_to_string(&path.data) {
+                Ok(content) => Some(Val::LiteralIntro(path.clone().map(|_| content.clone())).into()),
+                Err(_) => None,
+            }
         },
         _ => None,
     }
@@ -870,9 +873,8 @@ fn file_write_all_text(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>>
     if args.len() < 2 { return None; }
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
-            std::fs::write(&path.data, &content.data)
-                .unwrap_or_else(|e| panic!("file_write_all_text: failed to write '{}': {}", path.data, e));
-            Some(Val::U(0).into())
+            // IO 失败卡住降级（L07/L08 同款），不 panic。
+            std::fs::write(&path.data, &content.data).ok().map(|()| Val::U(0).into())
         },
         _ => None,
     }
@@ -883,14 +885,14 @@ fn file_append_all_text(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>
     match (args[0].as_ref(), args[1].as_ref()) {
         (Val::LiteralIntro(path), Val::LiteralIntro(content)) => {
             use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
+            // IO 失败卡住降级（L07/L08 同款），不 panic。
+            std::fs::OpenOptions::new()
                 .append(true)
                 .create(true)
                 .open(&path.data)
-                .unwrap_or_else(|e| panic!("file_append_all_text: failed to open '{}': {}", path.data, e));
-            write!(file, "{}", content.data)
-                .unwrap_or_else(|e| panic!("file_append_all_text: failed to append to '{}': {}", path.data, e));
-            Some(Val::U(0).into())
+                .and_then(|mut file| write!(file, "{}", content.data))
+                .ok()
+                .map(|()| Val::U(0).into())
         },
         _ => None,
     }
@@ -911,9 +913,8 @@ fn file_delete(_: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(path) => {
-            std::fs::remove_file(&path.data)
-                .unwrap_or_else(|e| panic!("file_delete: failed to delete '{}': {}", path.data, e));
-            Some(Val::U(0).into())
+            // IO 失败卡住降级（L07/L08 同款），不 panic。
+            std::fs::remove_file(&path.data).ok().map(|()| Val::U(0).into())
         },
         _ => None,
     }
