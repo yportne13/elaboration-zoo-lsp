@@ -324,3 +324,87 @@ module fixedReg
         warns
     );
 }
+
+// ============================================================
+// 钉 4 —— 复杂依赖匹配下 Eq 类型合一失败（docs/l13-eq-unify-failure.md）
+// ============================================================
+//
+// 文档 bug：test_user_provided 场景（递归函数 g + 等式引理链 are/ale/aa +
+// 乘法分配引理 dm + 目标定理 t）在 t 的 succ(m) 分支合一失败，错误为
+// can't unify 且 expected/find 打印完全一致（expected 经 pattern_match 的
+// ret_type quote+eval 循环已固化 Rigid，find 是带未解 meta 的新推导；
+// 叠加 (Decl,_) 展开 quote+eval 不收敛与 lvl2ix 下溢）。
+//
+// 实测（2026-09-30，09c78e9 基线）：**已不复现**——
+//  - src/L13_namespace/legacy_tests.rs::test_user_provided（run_with_prelude
+//    路径）通过；
+//  - 本钉用 LSP Backend 路径复跑同一场景：零错误，println("ok") 存活。
+//    判断为被后续 elaborator 正确性修复顺带修掉（2026-09-29 7bade7e
+//    "宇宙溢出/别名漏算 + occurs check" 一轮前后），文档三处根因链
+//    （v_app(Decl) 不内联 / (Decl,_) 展开循环 / meta 状态不一致）至少
+//    在该路径上不再成立。
+//
+// 因此按任务口径**不加 #[ignore]**，直接钉正向断言。翻转条件：若
+// can't unify（expected/find 同文）重新出现，把本测试改回文档口径的
+// #[ignore] 锚（"known bug：修复后去掉 #[ignore] 并断言编译通过"）。
+
+#[test]
+fn eq_unify_pin_doc_scenario_compiles_clean() {
+    let (infos, warns, errs) = analyze(
+        r#"
+def g(n: Nat): Tuple2[Nat, Nat] =
+    match n {
+        case zero => (0, 0)
+        case succ(m) => (double(g(m)._1), g(m)._2)
+    }
+def are(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (a + c) (b + c) =
+    match c {
+        case zero => h
+        case succ(k) => cong_succ(are(a, b, k, h))
+    }
+def ale(a: Nat, b: Nat, c: Nat, h: Eq a b): Eq (c + a) (c + b) =
+    let h1 = add_comm(c, a);
+    let h2 = are(a, b, c, h);
+    let h3 = symm(add_comm(c, b));
+    trans(h1, trans(h2, h3))
+def aa(a: Nat, b: Nat): Eq ((a + b) + (a + b)) ((a + a) + (b + b)) =
+    let s1 = symm(add_assoc(a + b, a, b));
+    let s2 = are((a + b) + a, a + (b + a), b, add_assoc(a, b, a));
+    let s3 = are(a + (b + a), a + (a + b), b, ale(b + a, a + b, a, add_comm(b, a)));
+    let s4 = are(a + (a + b), (a + a) + b, b, symm(add_assoc(a, a, b)));
+    let s5 = add_assoc(a + a, b, b);
+    trans(s1, trans(s2, trans(s3, trans(s4, s5))))
+def dm(x: Nat, z: Nat): Eq(double(x)*z, double(x*z)) =
+    match z {
+        case zero => rfl
+        case succ(n) =>
+            let ih = dm(x, n);
+            let h1 = ale(double(x)*n, double(x*n), double(x), ih);
+            let h2 = symm(aa(x, x*n));
+            trans(rfl, trans(h1, h2))
+    }
+def t(n: Nat): Eq(double(g(n)._1) * g(n)._2, double(g(n)._1 * g(n)._2)) =
+    match n {
+        case zero => rfl
+        case succ(m) =>
+            let ret: Eq(double(g(succ(m))._1) * g(succ(m))._2, double(g(succ(m))._1 * g(succ(m))._2)) =
+                dm(g(succ(m))._1, g(succ(m))._2);
+            ret
+    }
+println("ok")
+"#,
+        "eq_unify_doc_repro",
+    );
+    assert!(
+        errs.is_empty(),
+        "eq-unify bug 复发？文档场景（递归函数+等式引理+乘法分配，t 的 succ(m) 分支）\
+         重新报 can't unify——按文件头注释把本测试翻回 #[ignore] 锚。errs: {:?}",
+        errs
+    );
+    assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
+    assert!(
+        infos.iter().any(|m| m.trim() == "ok"),
+        "末条 println(\"ok\") 应存活且求值，infos: {:?}",
+        infos
+    );
+}
