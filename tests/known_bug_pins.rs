@@ -170,3 +170,83 @@ println("when-last-survives")
     );
     assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
 }
+
+// ============================================================
+// 钉 2 —— GADT tuple match 穷尽检查（docs/l13-gadt-exhaustive-bug-report.md）
+// ============================================================
+//
+// 文档 bug：`match (l, x)`（l: Nat, x: Vec[Boolean] l）两臂 (zero,nil)/
+// (succ,cons) 已被 GADT 约束证明完备，旧实现仍报 non-exhaustive
+// （"non-exhaustive pattern: `Tuple2.mk(zero, cons)` not covered" 等——
+// 第一个 head 的索引约束不传播到第二个 head，`filter_accessible_constrs`
+// 看到的仍是未约束的 Vec[Boolean] l）。
+//
+// 实测（2026-09-30，commit 09c78e9 基线，LSP Backend 路径）：
+//   1. 文档最小复现**已不复现**——零错误零警告，两臂求值正确
+//      （test(nil) = true、test(cons(true, nil)) = false；
+//      src/L13_namespace/legacy_tests.rs::test_pm_vec_bool_exhaustive 在
+//      run_with_prelude 路径同样通过）。
+//   2. 对照组证明检查器仍然活跃且 GADT 过滤生效：只留 (zero, nil) 一臂的
+//      真·不完整 match 报 "match 不完整：模式位置 Tuple2.mk#1 缺少构造子
+//      succ"——**只**缺 succ 侧（(zero, cons) 因 x: Vec[Boolean] zero 不可能
+//      是 cons 而被正确过滤，不再像旧 bug 那样把不可达组合报成缺口）。
+//
+// 翻转条件：若文档 bug 复发（完备 match 重新报 non-exhaustive），测试 1 转红。
+// 注意 println 的输出形态是 2026-09-30 的 pretty 形态（枚举限定名
+// Boolean::true/false）；pretty 显示格式漂移时按显示锚点流程翻转文案，
+// 不算 bug 回归。
+
+#[test]
+fn gadt_pin_tuple_match_doc_repro_is_exhaustive() {
+    let (infos, warns, errs) = analyze(
+        r#"
+def test[l: Nat](x: Vec[Boolean] l): Boolean = match (l, x) {
+    case (zero, nil) => true
+    case (succ(m), cons(_, _)) => false
+}
+println(test(nil))
+println(test(cons(true, nil)))
+"#,
+        "gadt_doc_repro",
+    );
+    assert!(
+        errs.is_empty(),
+        "GADT tuple 穷尽 bug 复发？文档最小复现 (zero,nil)/(succ,cons) 完备 match 被报错误，errs: {:?}",
+        errs
+    );
+    assert!(warns.is_empty(), "unexpected warnings: {:?}", warns);
+    assert_eq!(
+        infos,
+        vec!["Boolean::true".to_string(), "Boolean::false".to_string()],
+        "两臂求值结果漂移（true 臂=zero/nil，false 臂=succ/cons），infos: {:?}",
+        infos
+    );
+}
+
+#[test]
+fn gadt_pin_exhaustiveness_checker_still_active_control() {
+    let (infos, _warns, errs) = analyze(
+        r#"
+def bad[l: Nat](x: Vec[Boolean] l): Boolean = match (l, x) {
+    case (zero, nil) => true
+}
+println("never")
+"#,
+        "gadt_control",
+    );
+    assert!(
+        errs.iter().any(|e| e.contains("match 不完整")),
+        "穷尽检查器失效漂移？（zero, nil) 单臂 match 应报 match 不完整，errs: {:?}",
+        errs
+    );
+    assert!(
+        errs.iter().any(|e| e.contains("Tuple2.mk#1 缺少构造子 succ")),
+        "缺口形态漂移？应只报第一 head 缺 succ（(zero, cons) 由 GADT 约束过滤、不得误报），errs: {:?}",
+        errs
+    );
+    assert!(
+        !infos.is_empty(),
+        "解析恢复后 println 应存活（末条声明不丢，见钉 1），infos: {:?}",
+        infos
+    );
+}
