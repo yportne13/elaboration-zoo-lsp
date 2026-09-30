@@ -739,7 +739,10 @@ fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
     if args.is_empty() { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            Some(infer.mutable_map.write().unwrap().get(&a.data).unwrap().clone())
+            // 缺名保持卡住（None），不 panic（L07 参考版 get_global 同款）：
+            // 卡住值在类型检查 / 输出面以 `get_global "名"` 原样现形，可诊断；
+            // 需要缺省值的调用点应改用 get_global_default。
+            infer.mutable_map.write().unwrap().get(&a.data).cloned()
         }
         _ => None,
     }

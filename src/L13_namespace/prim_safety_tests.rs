@@ -71,3 +71,45 @@ println (file_exists "l13_prim_safety_rt.txt")
     assert!(out.contains("hello"), "roundtrip readback, got: {}", out);
     assert!(out.contains("false"), "file deleted, got: {}", out);
 }
+
+// ── get_global：缺名卡住降级，不 panic ──
+
+#[test]
+fn get_global_missing_println_stays_stuck_not_panic() {
+    // 直接求值路径（修复前在 get_global 的 `.get(..).unwrap()` panic）：
+    // 卡住值渲染出 prim 名与缺失键名，可诊断。
+    let out = run_ok(r#"
+println (get_global "l13_prim_safety_ghost_key")
+println "survived"
+"#);
+    assert!(out.contains("get_global"), "stuck get_global call must render, got: {}", out);
+    assert!(out.contains("l13_prim_safety_ghost_key"), "offending key must render, got: {}", out);
+    assert!(out.contains("survived"), "elaboration must continue after missing key, got: {}", out);
+}
+
+#[test]
+fn get_global_missing_def_replay_stays_stuck_not_panic() {
+    // def-replay 路径（修复前首次读取重放时在同点 panic）。
+    let out = run_ok(r#"
+def g = get_global "l13_prim_safety_ghost_key"
+println "before"
+println g
+println "survived"
+"#);
+    assert!(out.contains("before"), "replay-only def declares cleanly, got: {}", out);
+    assert!(out.contains("survived"), "elaboration must continue after stuck replay, got: {}", out);
+}
+
+#[test]
+fn get_global_default_still_falls_back() {
+    // 缺省原语行为不变：缺键落 args[1]（键名走"键即类型名"的
+    // string_to_global_type 口径，与 prelude 的 ensure-exists 惯用法同形）。
+    let out = run_ok(r#"
+struct L13PrimSafetyBox2 {
+    v: String
+}
+def d : L13PrimSafetyBox2 = get_global_default "L13PrimSafetyBox2" (new L13PrimSafetyBox2("fallback"))
+println d.v
+"#);
+    assert!(out.contains("fallback"), "get_global_default must fall back, got: {}", out);
+}

@@ -47,7 +47,7 @@ pub(super) enum PrimId {
     CreateGlobal,
     /// `change_mutable`：读改写 mutable_map（v_app 实参到旧值），返回 U(0)。
     ChangeMutable,
-    /// `get_global`：读 mutable_map（缺名 panic——参考版 unwrap 同款）。
+    /// `get_global`：读 mutable_map（缺名卡住 None——参考版 get_global 同款）。
     GetGlobal,
     /// `get_global_default`：纯读 + 缺省（不写表）。
     GetGlobalDefault,
@@ -614,7 +614,9 @@ pub(super) fn prim_exec<'a>(
         }
         PrimId::GetGlobal => {
             let name = lit_of(arg(0)?)?;
-            Some(mutable.borrow().map.get(name).copied().unwrap())
+            // 缺名保持卡住（None），不 panic（参考版 cxt.rs get_global 同款；
+            // 需要缺省值的调用点走 GetGlobalDefault）。
+            mutable.borrow().map.get(name).copied()
         }
         PrimId::GetGlobalDefault => {
             if args.len() < 2 {
