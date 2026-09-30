@@ -1395,3 +1395,89 @@ mod op_errors {
         // This is not a parse error, but the test documents precedence behaviour.
     }
 }
+
+// ===========================================================================
+// Category 17: Nested-delimiter-aware declaration recovery
+// ===========================================================================
+//
+// `skip_until_decl` (the sync-point scanner behind `recover_with` /
+// `many1_sep_skip`) counts `(` / `[` / `{` nesting depth: an `EndLine` +
+// declaration keyword pair *inside* an open group is not a sync point. Before
+// this, recovery for a failed declaration resynced at the first newline before
+// a declaration keyword even when that newline sat inside a bracket group,
+// turning the group's interior lines into bogus top-level declarations
+// (interior `println(...)` → phantom `Println` decl, the group's closing
+// delimiter → phantom `Package` decl) and shifting the reported error span.
+//
+mod nested_delimiter_recovery {
+    use super::*;
+
+    /// A declaration that failed while a **balanced** bracket group is fully in
+    /// the recovery scanner's view: the interior `println("x")` line (inside
+    /// the group) must not become a top-level `Println` declaration, and the
+    /// group's closing `)` must not become a phantom `Package` declaration.
+    /// The trailing real declaration `def g` must still be recovered.
+    #[test]
+    fn balanced_group_interior_decl_kw_not_sync_point() {
+        let input = "def f: Nat = 1\n(\n    println(\"x\")\n)\ndef g: Nat = 2\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "parser should never return None");
+        let (decls, errors) = result.unwrap();
+        assert!(!errors.is_empty(), "the junk `(` line should produce an error");
+        assert!(
+            !decls.iter().any(|d| matches!(d, Decl::Println(_))),
+            "interior println inside the balanced group became a top-level decl \
+             (skip_until_decl synced inside the group), decls: {:?}",
+            decls.len()
+        );
+        assert!(
+            matches!(decls.last(), Some(Decl::Def { name, .. }) if name.data.as_str() == "g"),
+            "trailing `def g` should be recovered as the last declaration, decls: {}",
+            decls.len()
+        );
+    }
+
+    /// An **unclosed** group keeps the legacy recovery behavior: declarations
+    /// written after the unclosed opener are still recovered (the scanner
+    /// falls back to the first EndLine+decl-kw candidate when it reaches EOF
+    /// with depth > 0), so an unclosed paren while typing must not swallow the
+    /// rest of the file's declarations.
+    #[test]
+    fn unclosed_group_still_recovers_following_decls() {
+        let input = "def f: Nat = 1\n(\n    println(\"x\")\ndef a: Nat = 2\ndef b: Nat = 3\ndef c: Nat = 4\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "parser should never return None");
+        let (decls, _errors) = result.unwrap();
+        assert!(
+            matches!(decls.last(), Some(Decl::Def { name, .. }) if name.data.as_str() == "c"),
+            "declarations after the unclosed group should survive recovery, decls: {}",
+            decls.len()
+        );
+        assert!(decls.len() >= 5, "expected f + recovered a/b/c (+ recovery artifacts), got {}", decls.len());
+    }
+
+    /// Stray closing delimiters must not poison the depth counter (it is
+    /// clamped at 0): recovery for the declarations after them works as before.
+    #[test]
+    fn stray_close_delimiters_do_not_break_recovery() {
+        let input = "def f(x: Nat): Nat = x)\ndef g: Nat = 5\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "parser should never return None");
+        let (decls, errors) = result.unwrap();
+        assert!(!errors.is_empty(), "the stray `)` should produce an error");
+        assert!(
+            matches!(decls.last(), Some(Decl::Def { name, .. }) if name.data.as_str() == "g"),
+            "`def g` after the stray `)` should survive, decls: {}",
+            decls.len()
+        );
+    }
+
+    /// A legal multi-line bracket group (balanced, spanning newlines) must
+    /// parse with zero errors — the depth tracking only affects recovery.
+    #[test]
+    fn legal_multiline_group_unaffected() {
+        let input = "\ndef foo(a: Nat, b: Nat): Nat =\n    add(a,\n        b)\ndef bar: Nat = 3\n";
+        let (decls, _errors) = assert_parse_ok(input);
+        assert_eq!(decls.len(), 2, "both declarations should parse");
+    }
+}

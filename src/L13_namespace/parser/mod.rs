@@ -55,6 +55,24 @@ fn skip_until_inner<'a: 'b, 'b>(kind: TokenKind) -> impl Fn(&'b [TokenNode<'a>])
 /// keyword (`def`, `struct`, `enum`, `trait`, `impl`, `macro_rules`, `package`,
 /// `import`, `println`).
 ///
+/// The scan is **nested-delimiter aware** (chumsky-style): `(` / `[` / `{`
+/// increment a depth counter and `)` / `]` / `}` decrement it, and an
+/// `EndLine` + declaration keyword only counts as a sync point at depth 0.
+/// Without this, recovery for a declaration that failed *inside* a balanced
+/// multi-line group would resync at the group's interior newlines, turning
+/// interior `println`/`def` tokens into bogus top-level declarations and the
+/// closing delimiter into a garbage decl.
+///
+/// Unmatched *closing* delimiters are clamped (depth never goes negative) so a
+/// stray `)` / `}` does not poison the depth counting of the rest of the scan.
+///
+/// If the scan reaches EOF with depth > 0 (the failed declaration left a
+/// delimiter open — everything to EOF is syntactically inside it), we fall back
+/// to the legacy behavior and sync at the *first* `EndLine` + declaration
+/// keyword seen at any depth. This keeps recovery of the declarations the user
+/// wrote after the unclosed group (e.g. `def foo: Nat = (1 + 2\n\ndef bar: Nat
+/// = 3` still recovers `def bar`).
+///
 /// Returns `Some(remaining)` when a sync point is found, or `None` when no sync
 /// point exists in the remaining input — allowing the caller to distinguish
 /// "found at position 0" (still recover) from "not found at all" (stop).
@@ -65,13 +83,31 @@ fn skip_until_decl<'a: 'b, 'b>(input: &'b [TokenNode<'a>]) -> Option<&'b [TokenN
             | PackageKeyword | ImportKeyword | PrintlnKeyword | MacroKeyword
         )
     }
-    input.iter()
-        .enumerate()
-        .find(|(i, t)| {
-            t.data.1 == EndLine
-                && input.get(i + 1).map(|next| is_decl_kw(next.data.1)).unwrap_or(false)
-        })
-        .map(|(i, _)| &input[i..])
+    let mut depth: i32 = 0;
+    // First EndLine+decl-kw candidate at any depth — the legacy sync point,
+    // used only when EOF is reached with unclosed delimiters.
+    let mut legacy_fallback: Option<usize> = None;
+    for (i, t) in input.iter().enumerate() {
+        match t.data.1 {
+            LParen | LSquare | LCurly => depth += 1,
+            RParen | RSquare | RCurly => {
+                depth = (depth - 1).max(0);
+            }
+            EndLine => {
+                if input.get(i + 1).map(|next| is_decl_kw(next.data.1)).unwrap_or(false) {
+                    if depth == 0 {
+                        // Outside any (unclosed) group — the normal sync point.
+                        return Some(&input[i..]);
+                    }
+                    if legacy_fallback.is_none() {
+                        legacy_fallback = Some(i);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    legacy_fallback.map(|i| &input[i..])
 }
 
 #[derive(Debug, Clone, Copy)]
