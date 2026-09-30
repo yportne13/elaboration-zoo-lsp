@@ -250,3 +250,77 @@ println("never")
         infos
     );
 }
+
+// ============================================================
+// 钉 3 —— typeclass 实例 Nat 参数位宽冻结的 HDL004 兜底警告
+//          （docs/l13-typeclass-instance-nat-param-bug.md 复现 B / test-catalog G15-2）
+// ============================================================
+//
+// 文档 bug：`impl[w: Nat] Foo[UInt[w]] for UInt[w]` 形状的实例（prelude 里
+// 即 `impl[w: Nat] RegNext[UInt[w]] for UInt[w]`）在参数化 module 里被使用
+// 时，实例的 Nat 参数 w 到达消费点仍是冻结的 elaboration 变量，width_range
+// 数出 0/1 → **静默**生成无位宽（1 位）硬件。现有兜底 = HDL004 显式警告
+// （hdl-check.typort ruleWidthGround + Rust native nat_is_ground）。
+//
+// 实测（2026-09-30，09c78e9 基线，LSP Backend 路径）：
+//  - 参数化 module + regNext 且模块内存在至少一个 ground 位宽信号时，
+//    HDL004 对 regNext 产物 d（以及同为非 ground 的端口 a/y）出现，
+//    文案含 "width is not a ground number"。
+//  - 门控（hdl-check.typort ruleWidthGround 注释）：**全模块无任何 ground
+//    位宽**的纯参数化 module（文档 B1 原样）保持静默——该形态被当作
+//    Phase-A 一次性树丢弃；因此本钉在 B1 形状上加一个 ground 位宽信号
+//    把门打开。
+//  - 对照：固定宽度 module + regNext 零警告（位宽正确路径不受扰）。
+//
+// 翻转条件：复现 B 根治（meta 解支持消费点参数化）后，此钉按任务口径
+// 翻转为 "无 HDL004 且 reg 位宽正确"；端口类非 ground 宽度若届时仍按
+// 门控规则报告，以实测为准缩小断言范围。
+
+#[test]
+fn hdl004_pin_frozen_width_in_param_module_warns() {
+    let (infos, warns, errs) = analyze(
+        r#"
+module p4[w: Nat]
+    input a = UInt[w]
+    output y = UInt[w]
+{
+    let fix = UInt[8]
+    let d = regNext(a)
+    y := d
+}
+"#,
+        "hdl004_pin",
+    );
+    assert!(
+        errs.is_empty(),
+        "参数化 module + regNext 应能通过 elaboration（报错即另一形态的回归），errs: {:?}",
+        errs
+    );
+    assert!(
+        warns.iter().any(|w| w.contains("HDL004") && w.contains("[p4] d")),
+        "HDL004 兜底消失？regNext 产物 d 的位宽冻结警告未出现（根治后按注释翻转此钉），warns: {:?}",
+        warns
+    );
+}
+
+#[test]
+fn hdl004_pin_fixed_width_control_stays_clean() {
+    let (infos, warns, errs) = analyze(
+        r#"
+module fixedReg
+    input a = UInt[8]
+    output y = UInt[8]
+{
+    let d = regNext(a)
+    y := d
+}
+"#,
+        "hdl004_fixed_control",
+    );
+    assert!(errs.is_empty(), "errs: {:?}", errs);
+    assert!(
+        !warns.iter().any(|w| w.contains("HDL004")),
+        "固定宽度 module 不应报 HDL004（位宽冻结是参数化实例特有），warns: {:?}",
+        warns
+    );
+}
