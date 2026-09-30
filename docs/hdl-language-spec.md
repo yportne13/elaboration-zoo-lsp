@@ -530,7 +530,7 @@ println(moduleTreeVL(topWithPorts.create.tree))
 
 - 实例名 = let 绑定名（bn）；`u.port` 是带类型的 `subSignal("u", "port")` 句柄（create 时由宏覆写字段生成）。
 - 端口连接由生成器从 assign 的 LHS/RHS `subSignal` 推断（`.port(wire)`）；未连接端口报 HDL022，方向反接报 HDL020/021，端口不存在报 HDL025。
-- 单棵 `ModuleTree` 不携带子模块定义；全设计的注册表 `ModuleRegistry`（按模块名去重，首个注册者胜——**同一参数化模块的两次不同实例化会碰撞**，已知限制）。手动合并多树用 `buildMultiTree` 惯用法（example 09c）。
+- 单棵 `ModuleTree` 不携带子模块定义；全设计的注册表 `ModuleRegistry`（按模块名去重，首个注册者胜——**同一参数化模块的两次不同实例化会碰撞**，已知限制）。碰撞自检（2026-09-30）：第二次同名注册的声明签名（时钟域/端口宽度集）与首次不同时报 **HDL042 WARNING**；同一参数化的重复实例化与重放轮静默。手动合并多树用 `buildMultiTree` 惯用法（example 09c）。
 - 深层访问 `outer.inner.sig` 不支持（`pull()` 决策 #4）。
 
 ### 8.2 Mem
@@ -627,6 +627,7 @@ println(moduleTreeVL(foo.create[myCd].tree))
 | HDL039 | 同步器中段被绕过（读者不在链上） |
 | HDL040 | 枚举 switch 穷尽性缺支（`switchFinalEnum` 显式检查点名缺失元素） |
 | HDL041 | 常量位选/片选索引越界（`a8[8]` / `a8.slice[9,7]`——Verilog 读写 x；信号索引与 mem 地址不在范围） |
+| HDL042 | 同名模块二次注册且声明签名不同（时钟域/端口宽度集）——首个注册者胜，designVL 每名只发射一个 def，第二参数化的实例隐式错配（同一参数化的重放轮静默） |
 | HDL060 | FSM `goto` 目标越界（`to ≥ stateCount`） |
 | HDL061 | FSM 不可达状态（非入口态且无任何入边） |
 | HDL062 | FSM 状态无出边（可能卡死；终态可 `noExitCheck()` 豁免） |

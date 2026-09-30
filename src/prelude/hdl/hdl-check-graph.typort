@@ -1982,6 +1982,122 @@ def ruleCdc(mname: String, decls: List[GDecl], drives: List[DriveSrc], entries: 
 
 
 
+// ---------- HDL042: same-name second module registration (P3-10) ----------
+// ModuleRegistry dedups by NAME, first def wins (hdl-core). Two
+// parameterizations of one parametric module (myAdder[8] / myAdder[16])
+// collide: designVL emits ONE def and every later instance silently connects
+// to the wrong port widths. This rule makes the collision visible.
+//
+// WHY A SEPARATE "ModuleSigs" TABLE (probe-verified): the registry's stored
+// def is unusable as a comparison baseline - the class-field replay rounds
+// re-wrap statements with WhenStack residue (doubled declarations), and the
+// FIRST-registered def of a width-parametric module is the Phase-A round
+// whose widths are stuck at check time (designVL can FORCE them later, the
+// check must not - the phase234 red line). So the rule keeps its own
+// name -> (clock domain, ground declaration keys) record: the FIRST ground
+// round of a name records; later ground rounds whose key set (order- and
+// duplicate-insensitive) or clock domain differs warn. Replays of one
+// parameterization always match and stay silent; reports collapse at the
+// CheckIssues line-level dedup.
+
+struct DeclKey {
+    name: String
+    width: Nat
+}
+
+def declKeysEmpty: List[DeclKey] =
+    let e: List[DeclKey] = lnil;
+    e
+
+def declKeysOf[ne: Nat](es: Vec[Expr] ne, acc: List[DeclKey]): List[DeclKey] = match es {
+    case nil => acc
+    case cons(h, t) =>
+        match gDeclOf(h) {
+            case None => declKeysOf(t, acc)
+            case Some(gd) => match gd.width {
+                case None => declKeysOf(t, acc)
+                case Some(w) => match nat_is_ground(w) {
+                    case true => declKeysOf(t, lcons (DeclKey.mk(gd.name, w)) acc)
+                    case false => declKeysOf(t, acc)
+                }
+            }
+        }
+}
+
+// same name AND same width (natNeq on ground widths only)
+def keysContain(keys: List[DeclKey], nm: String, w: Nat): Boolean = match keys {
+    case lnil => false
+    case lcons(k, t) =>
+        match str_eq(k.name, nm) {
+            case true => match natNeq(k.width, w) {
+                case true => keysContain(t, nm, w)
+                case false => true
+            }
+            case false => keysContain(t, nm, w)
+        }
+}
+
+def allKeysMatch(keys: List[DeclKey], against: List[DeclKey]): Boolean = match keys {
+    case lnil => true
+    case lcons(k, t) =>
+        match keysContain(against, k.name, k.width) {
+            case true => allKeysMatch(t, against)
+            case false => false
+        }
+}
+
+def keysEqual(a: List[DeclKey], b: List[DeclKey]): Boolean =
+    chkBand(allKeysMatch(a, b), allKeysMatch(b, a))
+
+struct ModuleSigRec {
+    name: String
+    cd: ClockDomain
+    keys: List[DeclKey]
+}
+
+// Mutable-global names must equal their type name (ModuleRegistry et al.):
+// the wrapper struct carries the record list under the global "ModuleSigs".
+struct ModuleSigs {
+    recs: List[ModuleSigRec]
+}
+
+def moduleSigsFresh: ModuleSigs =
+    let r: List[ModuleSigRec] = lnil;
+    ModuleSigs.mk(r)
+
+def sigRecFind(recs: List[ModuleSigRec], name: String): Option[ModuleSigRec] = match recs {
+    case lnil => None
+    case lcons(r, t) => match str_eq(r.name, name) {
+        case true => Some(r)
+        case false => sigRecFind(t, name)
+    }
+}
+
+def sigRecDrop(recs: List[ModuleSigRec], name: String): List[ModuleSigRec] = match recs {
+    case lnil => recs
+    case lcons(r, t) => match str_eq(r.name, name) {
+        case true => sigRecDrop(t, name)
+        case false => lcons r (sigRecDrop(t, name))
+    }
+}
+
+def sigRecUpsert(recs: List[ModuleSigRec], rec: ModuleSigRec): List[ModuleSigRec] =
+    lcons rec (sigRecDrop(recs, rec.name))
+
+def ruleRegistryCollision[ne: Nat](mname: String, cd: ClockDomain, es: Vec[Expr] ne): Unit =
+    let fresh = declKeysOf(es, declKeysEmpty);
+    let sigs: ModuleSigs = get_global_default("ModuleSigs", moduleSigsFresh);
+    match sigRecFind(sigs.recs, mname) {
+        case None =>
+            let _ = change_mutable_default("ModuleSigs", x => ModuleSigs.mk(sigRecUpsert(x.recs, ModuleSigRec.mk(mname, cd, fresh))), moduleSigsFresh);
+            unit
+        case Some(prev) =>
+            match chkBand(keysEqual(fresh, prev.keys), chkCdEq(cd, prev.cd)) {
+                case true => unit
+                case false => chkReport("HDL042", mname, mname, "second registration under the same module name with a different declaration signature (port widths / clock domain) is ignored (first def wins, designVL emits one def per name) - declare the second parameterization as its own module")
+            }
+    }
+
 def cntVec[ne: Nat](es: Vec[Expr] ne, acc: Nat): Nat = match es {
     case nil => acc
     case cons(_, t) => cntVec(t, succ(acc))
@@ -2014,6 +2130,14 @@ def checkModuleAll(md: ModuleDef): Unit =
     };
     let rangeSafe = rangeSafeOf(acc.drives);
     let _ = runChecks(md, rangeSafe);
+    // HDL042: this round's own registration happens AFTER checkModuleAll
+    // returns (checkModuleTreeAll), so the registry here holds exactly the
+    // PREVIOUS rounds/modules - a name collision seen now is real. Ground
+    // gate keeps the Phase-A throwaway rounds out of the comparison.
+    let _ = match ground {
+        case true => ruleRegistryCollision(md.name, md.cd, md.expr)
+        case false => unit
+    };
     let named = chkBnot(str_eq(md.name, ""));
     // Comb cycles + cross-layer passthrough summary: name-level and
     // residue-immune -> run EVERY round (the create round's drive graph and

@@ -774,3 +774,89 @@ println(moduleTreeVL(dynIdx.create.tree))
 "#);
     assert!(!output.contains("HDL041"), "subSignal bases are out of scope, got:\n{}", output);
 }
+
+// ── HDL042: same-name second module registration with a different
+// parameterization — designVL emits one def per name, so the second
+// parameterization's instances silently connect to the wrong port widths
+// (review 2026-09-29 P3-10, spec §8.1 known limitation) ──
+
+#[test]
+fn hdl042_second_parameterization_warns() {
+    let output = assert_ok(r#"
+module myAdder[w: Nat]
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w]
+    input en = Bool
+{
+    sum := en.mux(a + b, a)
+}
+module top8 {
+    input a = UInt[8]
+    input b = UInt[8]
+    input en = Bool
+    output sum = UInt[8]
+    let u = myAdder.create[8]
+    u.a := a
+    u.b := b
+    u.en := en
+    sum := u.sum
+}
+module top16 {
+    input a = UInt[16]
+    input b = UInt[16]
+    input en = Bool
+    output sum = UInt[16]
+    let u = myAdder.create[16]
+    u.a := a
+    u.b := b
+    u.en := en
+    sum := u.sum
+}
+println(moduleTreeVL(top8.create.tree))
+println(moduleTreeVL(top16.create.tree))
+"#);
+    assert!(output.contains("HDL042"), "myAdder[16] after myAdder[8] must warn HDL042, got:\n{}", output);
+    assert!(
+        output.contains("second registration under the same module name"),
+        "HDL042 message expected, got:\n{}", output
+    );
+}
+
+// Non-trigger twin: the same parameterization instantiated twice (and a
+// plain module afterwards) is the ordinary case — every replay round of one
+// parameterization matches the recorded signature and stays silent.
+
+#[test]
+fn hdl042_same_parameterization_and_replays_silent() {
+    let output = assert_ok(r#"
+module myAdder[w: Nat]
+    input a = UInt[w]
+    input b = UInt[w]
+    output sum = UInt[w]
+    input en = Bool
+{
+    sum := en.mux(a + b, a)
+}
+module topA {
+    input a = UInt[8]
+    input b = UInt[8]
+    input en = Bool
+    output sum = UInt[8]
+    let u1 = myAdder.create[8]
+    let u2 = myAdder.create[8]
+    u1.a := a
+    u1.b := b
+    u1.en := en
+    sum := u1.sum
+}
+module topB {
+    input x = UInt[16]
+    output y = UInt[16]
+    y := x
+}
+println(moduleTreeVL(topA.create.tree))
+println(moduleTreeVL(topB.create.tree))
+"#);
+    assert!(!output.contains("HDL042"), "same parameterization must not warn HDL042, got:\n{}", output);
+}
