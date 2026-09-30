@@ -680,3 +680,59 @@ fn vals_eq_ground_native_nat_vs_unary_chain() {
     assert!(!Synth::vals_eq_ground(natv(6).as_ref(), nat_chain_val(7).as_ref()));
     assert!(Synth::vals_eq_ground(natv(0).as_ref(), nat_chain_val(0).as_ref()));
 }
+
+// ── typeclass solver effort cap: degrade to solve failure, never panic ──
+
+use super::typeclass::{Assertion, Instance};
+
+/// D3 P1-3（review-l07l12 同族回归钉）：求解器 effort 上限（1000）触顶时
+/// 降级为求解失败（`None`，调用方按常规 can't-solve 报可诊断错误），与
+/// L10-L12 的修复口径一致，不再 panic "Too much effort"。触发面：goal
+/// 与 1200 个互异具体实例全不匹配，把 generator 烧穿 1000 步。
+#[test]
+fn synth_effort_cap_returns_none_not_panic() {
+    let mut solver = Synth::new();
+    solver.new_trait(SmolStr::new("Loop"));
+    solver.set_trait_out_params(SmolStr::new("Loop"), vec![false]);
+    for k in 0..1200u64 {
+        solver.impl_trait_for(
+            SmolStr::new("Loop"),
+            Instance {
+                assertion: Assertion {
+                    name: SmolStr::new("Loop"),
+                    arguments: vec![Val::Nat(k).into()],
+                },
+                dependencies: List::new(),
+                lvl: empty_span(SmolStr::new("inst")),
+            },
+        );
+    }
+    let answer = solver.synth(Assertion {
+        name: SmolStr::new("Loop"),
+        arguments: vec![Val::Nat(9999).into()],
+    });
+    assert!(answer.is_none(), "effort cap must degrade to solve failure, got: {:?}", answer);
+}
+
+/// 端到端循环 impl（实例方法自引用自身 trait）必须以可诊断失败收场
+/// （当前为未解 meta 报错），绝不 panic / 挂死 elaborator。
+#[test]
+fn circular_impl_reports_diagnosable_failure_not_panic() {
+    let src = r#"
+trait Circ[T] {
+    def circ: Nat
+}
+
+impl[T] Circ[T] for T {
+    def circ: Nat = this.circ
+}
+
+def c[N: Circ[N]](x: N): Nat = x.circ
+"#;
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_with_prelude(src)));
+    match r {
+        // Ok / Err 都是可诊断结局；只有 panic 是回归。
+        Ok(Ok(_)) | Ok(Err(_)) => {}
+        Err(_) => panic!("circular impl must not panic the elaborator"),
+    }
+}

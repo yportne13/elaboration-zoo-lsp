@@ -526,7 +526,10 @@ impl Synth {
         loop {
             effort += 1;
             if effort > 1000 {
-                panic!("Too much effort :(");
+                // D3 P1-3（review-l07l12 同族）：effort 上限触顶（循环实例链
+                // 或超大搜索树）降级为求解失败（None），调用方按常规
+                // can't-solve 报可诊断错误——源码可达路径不再 panic。
+                break None;
             }
 
             // Terminate once we find an answer for the root goal.
