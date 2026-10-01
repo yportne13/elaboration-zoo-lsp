@@ -1,0 +1,47 @@
+def outParam[A](a: A): A = a
+enum Nat {
+    zero
+    succ(n: Nat)
+}
+enum Expr {
+    binary(lhs: Expr, op: String, rhs: Expr)
+    literal(v: Nat)
+}
+enum Option[A] {
+    none
+    some(a: A)
+}
+def nat_add(x: Nat, y: Nat): Nat =
+    match x {
+        case zero => y
+        case succ(n) => succ (nat_add n y)
+    }
+trait Add[T, O: outParam(Type 0)] {
+    def +(that: T): O
+}
+trait Into[O: outParam(Type 0)] {
+    def into: O
+}
+struct UInt[width: Nat] {
+    name: Option[String]
+    zz_expr: Expr
+}
+def binary(lhs: Expr, op: String, rhs: Expr): Expr = Expr.binary(lhs, op, rhs)
+impl[T] Into[T] for T {
+    def into: T = this
+}
+impl[width: Nat] Into[UInt[width]] for Nat {
+    def into: UInt[width] = UInt.mk(none, literal(this))
+}
+impl Add[Nat, Nat] for Nat {
+    def +(that: Nat): Nat = nat_add this that
+}
+impl[width: Nat] Add[UInt[width], UInt[width]] for UInt[width] {
+    def +(that: UInt[width]): UInt[width] = UInt.mk(none, binary(this.zz_expr, "+", that.zz_expr))
+}
+impl[width: Nat] Add[Nat, UInt[width]] for UInt[width] {
+    def +(that: Nat): UInt[width] = this + that.into
+}
+def u: UInt[succ zero] = UInt.mk(none, literal(zero))
+def lifted: UInt[succ zero] = u + (succ zero)
+println lifted
