@@ -1151,13 +1151,17 @@ fn p_explicit_arg<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState
 
 /// 单实参括号组「逃逸」哨兵 icit：`a (b)` 的后缀 `(`-call 折叠出的 App 以
 /// `Either::Name(SPINE_ESCAPE)` 记 icit。用户语法 `[name=..]` 的名字来自
-/// Ident 词法单元（不能为空/含 NUL），哨兵不可能撞名。p_spine 结算：
-/// 顶层带标记的**头/显式实参**拆成相邻实参（`f a (b)` 读作 `f a b`，
+/// Ident 词法单元（不能为空/含 NUL），哨兵不可能撞名。p_spine 结算
+/// （unescape_spine，递归拆尽哨兵链）：顶层带标记的**头/显式实参**摊平成
+/// 相邻平级实参（`f a (b)` 读作 `f a b`，`f n (x) (y)` 读作 `f n x y`，
 /// 修复 `lcons zero (lcons zero lnil)` 被读成 `lcons (zero (lcons …))`
-/// 导致调用点 can't unify 的误解析）；埋在算符/后缀之下的标记由
-/// `strip_spine_escapes` 剥回 Expl，保持调用读法（`succ (x) + y`、
-/// `xs.map (f).length`、`f a (b) (c)` 内层语义不变）。多实参逗号调用
-/// （`f(a, b)`，含带空格的 `xs.elem (x, eq)`）与空组（`f()`）从不标记。
+/// 的误解析，以及 2026-10 前「只拆一层」时 `add_assoc n (n * a) (n * k)`
+/// 被读成 `add_assoc (n (n * a)) (n * k)` 的错分组）。实参位的括号组从此
+/// 一律平级：部分应用的函数值实参须写 `f (g a b) c`。埋在算符/后缀之下
+/// 的标记由 `strip_spine_escapes` 剥回 Expl，保持调用读法（`succ (x) + y`、
+/// `xs.map (f).length` 内层语义不变）。多实参逗号调用（`f(a, b)`，含带
+/// 空格的 `xs.elem (x, eq)`）与空组（`f()`）从不标记；隐式 `x [T]` 折叠
+/// 是真实的类型应用，不打哨兵、不摊平。
 const SPINE_ESCAPE: &str = "\u{0}spine-escape";
 
 fn is_spine_escape(icit: &Either) -> bool {
@@ -1209,31 +1213,49 @@ fn strip_spine_escapes(t: &mut Raw) {
     }
 }
 
+/// 递归拆尽逃逸哨兵链（解析器 Q1 错分组修复，2026-10-01）：expr_bp 的
+/// 后缀循环贪心地把**任意多个**连续单实参括号组折叠进同一实参
+/// （`n (x) (y)` → `App(App(n, x, esc), y, esc)`），旧的「只拆一层」结算
+/// 会把首组胶连成对原子的应用（`add_assoc n (n * a) (n * k)` 被读作
+/// `add_assoc (n (n * a)) (n * k)`）。这里沿 acc 链拆到没有哨兵为止：
+/// 先递归 acc、再 push arg，实参保序；返回链头（首个非哨兵节点）——
+/// 头位调用方直接以它作 spine 头，实参位调用方先 push 链头再 extend
+/// 收集到的实参。非哨兵节点原样返回：隐参 `n [T]` 折叠是真实类型应用、
+/// 不打哨兵，不在此摊平；埋在算符/后缀之下的哨兵仍由 strip_spine_escapes
+/// 剥回 Expl。
+fn unescape_spine(raw: Raw, pieces: &mut Vec<(Either, Raw)>) -> Raw {
+    match raw {
+        Raw::App(acc, arg, mark) if is_spine_escape(&mark) => {
+            let head = unescape_spine(*acc, pieces);
+            pieces.push((Either::Icit(Icit::Expl), *arg));
+            head
+        }
+        other => other,
+    }
+}
+
 fn p_spine<'a: 'b, 'b>(input: &'b [TokenNode<'a>], state: &mut MacroState) -> IResult<'a, 'b, Raw> {
     let (input, head) = expr(input, state)?;
     let (input, args) = p_arg.many0().map(|x| x.concat()).parse(input, state)?;
 
-    // 逃逸哨兵结算（`f a (b)` 误解析修复，2026-09-19）：头/显式实参顶层
-    // 的单实参括号调用拆成两个相邻实参——`lcons zero (lcons zero lnil)`
-    // 折叠链正确落回 `lcons` 而不是 `zero`。隐式括号 `[..]` 的值经内层
-    // p_raw → p_spine（头位拆分）已净，永不带顶层标记到这里。
+    // 逃逸哨兵结算（`f a (b)` 误解析修复，2026-09-19；2026-10-01 从
+    // 「只拆一层」改为 unescape_spine 递归拆尽）：头/显式实参顶层的单实参
+    // 括号调用链全部摊平成相邻平级实参——`f n (x) (y)` 读作 `f n x y`
+    // 而不是 `f (n (x)) (y)`，`lcons zero (lcons zero lnil)` 折叠链正确
+    // 落回 `lcons`。实参位括号组从此一律平级，部分应用的函数值实参须写
+    // `f (g a b) c`。隐式括号 `[..]` 的值经内层 p_raw → p_spine（头位
+    // 摊平）已净，永不带顶层标记到这里；非 Expl icit 的实参（如命名隐参）
+    // 原样保留，残余哨兵由 strip_spine_escapes 兜底。
     let mut pieces: Vec<(Either, Raw)> = Vec::new();
-    let head = match head {
-        Raw::App(acc, arg, icit) if is_spine_escape(&icit) => {
-            pieces.push((Either::Icit(Icit::Expl), *arg));
-            *acc
-        }
-        other => other,
-    };
+    let head = unescape_spine(head, &mut pieces);
     for (icit, raw) in args {
-        match raw {
-            Raw::App(acc, arg, mark)
-                if is_spine_escape(&mark) && icit == Either::Icit(Icit::Expl) =>
-            {
-                pieces.push((Either::Icit(Icit::Expl), *acc));
-                pieces.push((Either::Icit(Icit::Expl), *arg));
-            }
-            _ => pieces.push((icit, raw)),
+        if icit == Either::Icit(Icit::Expl) {
+            let mut sub: Vec<(Either, Raw)> = Vec::new();
+            let inner = unescape_spine(raw, &mut sub);
+            pieces.push((icit, inner));
+            pieces.append(&mut sub);
+        } else {
+            pieces.push((icit, raw));
         }
     }
 
@@ -3660,6 +3682,127 @@ pub fn parser_test(input: &str, id: u32) -> Option<(Vec<Raw>, Vec<IError>)> {
         }
     }
 }
+
+/// 实参位单实参括号组的摊平（Q1 错分组修复，2026-10-01）AST 形状钉。
+///
+/// 背景：expr_bp 后缀循环贪心折叠任意多个连续单实参括号组，旧结算只拆
+/// 一层哨兵，`f n (x) (y)` 被读成 `f (n (x)) (y)`（首组胶连成对原子的
+/// 应用，`add_assoc n (n * a) (n * k)` 实测错分组）。unescape_spine 递归
+/// 拆尽后，实参位括号组一律平级；部分应用的函数值实参须写 `f (g a b) c`。
+/// 隐参 `x [T]` 折叠是真实类型应用，不打哨兵、保持胶连（见
+/// spine_impl_arg_type_application_stays_glued）。
+#[cfg(test)]
+mod spine_paren_shape {
+    use super::{is_spine_escape, parser_test, Either, Icit, Raw};
+
+    /// 结构串：App → `(app <icit> <l> <r>)`；icit 用 E(Expl)/I(Impl)/
+    /// `=name`（命名隐参）/`!esc`（哨兵，结算后不应出现）。其余节点记
+    /// 短标签，只够区分形状即可。
+    fn icit_shape(icit: &Either) -> String {
+        match icit {
+            Either::Icit(Icit::Expl) => "E".to_string(),
+            Either::Icit(Icit::Impl) => "I".to_string(),
+            Either::Name(_) if is_spine_escape(icit) => "!esc".to_string(),
+            Either::Name(s) => format!("={}", s.data),
+        }
+    }
+
+    fn shape(t: &Raw) -> String {
+        match t {
+            Raw::App(l, r, icit) => format!("(app {} {} {})", icit_shape(icit), shape(l), shape(r)),
+            Raw::Var(s) => s.data.to_string(),
+            Raw::Obj(x, Some(m)) => format!("{}.{}", shape(x), m.data),
+            Raw::Obj(x, None) => format!("{}._", shape(x)),
+            Raw::Lam(n, _, b) => format!("(lam {} {})", n.data, shape(b)),
+            Raw::Nat(n) => n.data.to_string(),
+            Raw::U(_) => "U".to_string(),
+            Raw::Hole(_) => "_".to_string(),
+            Raw::LiteralIntro(s) => format!("{:?}", s.data),
+            other => format!("({:?})", other.to_span()),
+        }
+    }
+
+    /// 解析单条表达式并渲染结构串；解析错误与残留哨兵都算失败。
+    fn one_shape(src: &str) -> String {
+        let (raws, errs) = parser_test(src, 0).expect("lex/parse must succeed");
+        assert!(errs.is_empty(), "unexpected parse errors for {src:?}: {errs:?}");
+        assert_eq!(raws.len(), 1, "expected exactly one top-level raw for {src:?}");
+        let s = shape(&raws[0]);
+        assert!(!s.contains("!esc"), "spine escape sentinel leaked: {src:?} -> {s}");
+        s
+    }
+
+    /// 核心：run ≥ 2 的实参位括号组全部摊平（旧读法 `g (n (x)) (y)`）。
+    #[test]
+    fn spine_arg_paren_run_flattens_all_groups() {
+        assert_eq!(one_shape("g n (x) (y)"), "(app E (app E (app E g n) x) y)");
+        assert_eq!(one_shape("g 0 (x) (y)"), "(app E (app E (app E g 0) x) y)");
+        // run=1（2026-09-19 修复形态）与每段 run=1 的混排不许回归
+        assert_eq!(one_shape("g n (x)"), "(app E (app E g n) x)");
+        assert_eq!(
+            one_shape("g n (x) y (z)"),
+            "(app E (app E (app E (app E g n) x) y) z)"
+        );
+        // 分析矩阵的原始触发形状：prelude add_assoc 调用点
+        assert_eq!(
+            one_shape("add_assoc n (n * a) (n * k)"),
+            "(app E (app E (app E add_assoc n) (app E n.* a)) (app E n.* k))"
+        );
+    }
+
+    /// 括号组内是 lambda 原子时同样摊平后续组（`f n ((x => x)) (y)`）。
+    #[test]
+    fn spine_lambda_group_arg_flattens() {
+        assert_eq!(
+            one_shape("g n ((x => x)) (y)"),
+            "(app E (app E (app E g n) (lam x x)) y)"
+        );
+    }
+
+    /// 头位折叠链与平级实参同构：`g (a) (b) (c) (d)` 仍读作四实参。
+    #[test]
+    fn spine_head_paren_run_stays_flat() {
+        assert_eq!(
+            one_shape("g (a) (b) (c) (d)"),
+            "(app E (app E (app E (app E g a) b) c) d)"
+        );
+        // 复杂实参在前（头位第一组折叠进头）：`g (n * a) n (n * k)`
+        assert_eq!(
+            one_shape("g (n * a) n (n * k)"),
+            "(app E (app E (app E g (app E n.* a)) n) (app E n.* k))"
+        );
+    }
+
+    /// 语义决策钉：部分应用的函数值实参必须显式括号 `g (n (x)) (y)`
+    /// ——内层组经 p_raw → p_spine 头位结算成真实应用，外层照常平级。
+    #[test]
+    fn spine_explicit_paren_grouping_still_applies() {
+        assert_eq!(
+            one_shape("g (n (x)) (y)"),
+            "(app E (app E g (app E n x)) y)"
+        );
+    }
+
+    /// 埋在算符/后缀之下的哨兵剥回 Expl，调用读法不变（守护 2026-09-19
+    /// 已有语义）。
+    #[test]
+    fn spine_escape_under_operator_keeps_call_reading() {
+        assert_eq!(one_shape("succ (x) + y"), "(app E (app E succ x).+ y)");
+        assert_eq!(one_shape("xs.map (f).length"), "(app E xs.map f).length");
+        // 多实参逗号调用 `f(a, b)` 从不标记、从不摊平
+        assert_eq!(one_shape("g(a, b)"), "(app E (app E g a) b)");
+    }
+
+    /// 同族问题现状钉（不修，见 unescape_spine 文档）：实参位隐参
+    /// `n [T]` 折叠是真实类型应用，保持胶连——摊平它会破坏
+    /// `f lnil[Nat] x` / `the List[Nat] xs` 这类惯用类型应用实参。
+    #[test]
+    fn spine_impl_arg_type_application_stays_glued() {
+        assert_eq!(one_shape("g n [T]"), "(app E g (app I n T))");
+        assert_eq!(one_shape("g [T] n"), "(app E (app I g T) n)");
+    }
+}
+
 
 #[test]
 fn test2() {

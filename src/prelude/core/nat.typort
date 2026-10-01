@@ -93,8 +93,9 @@ def add_assoc (n: Nat, m: Nat, k: Nat): Eq((n + m) + k, n + (m + k)) =
 // 乘法引理。语句形如 `n * succ m = n + n * m`：nat_mul 对第二个参数递归，
 // 左端 definitionally 展开（同 add_succ_right）；`n * m + n` 与左端不
 // definitionally 相等，不能作语句。
-// 注意：proof 里的 let 绑定不只是风格——`add_assoc n (n * a) (n * k)` 这类
-// 「裸变量后跟两个带括号复参」的调用会被解析器误当作对该变量的应用。
+// 注意：proof 里的 let 绑定现在只是风格——解析器自 2026-10 起把实参位的
+// 单实参括号组一律摊平成平级实参（`add_assoc n (n * a) (n * k)` 已按
+// 平级读法解析；mul_succ_left 保留 let 绑定的写法不变）。
 
 /// `a * 0 = 0`, by computation (the second argument is `zero`).
 def mul_zero_right(a: Nat): Eq (a * 0) 0 =
