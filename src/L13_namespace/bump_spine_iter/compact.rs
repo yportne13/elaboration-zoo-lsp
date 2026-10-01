@@ -460,6 +460,13 @@ impl<'o, 'n> Copier<'o, 'n> {
     /// MetaSnap<'static>): build at 'n then re-tag the Rc pointer as 'static,
     /// matching the resident's own storage convention (the bump lives as long
     /// as the resident, and compaction re-copies).
+    ///
+    /// 与 `machine.rs:1064-1080`（`new_meta` 的快照构造）是**同一生命周期
+    /// 擦除**的两种写法：那里对 `Rc::new(..)` 整体 `transmute::<Rc<MetaSnap<'a>>,
+    /// Rc<MetaSnap<'static>>>`，这里因为值已经是 `Rc<MetaSnap<'n>>` 的局部量，
+    /// 用 `from_raw(into_raw(inner) as *const MetaSnap<'static>)` 重标——
+    /// `MetaSnap<'x>` 对任意 `'x` 布局相同（生命周期被擦除），故两者等价；
+    /// 审计任一处都应同时看另一处。
     fn snap(&mut self, s: &Rc<MetaSnap<'o>>) -> Rc<MetaSnap<'static>> {
         let key = Rc::as_ptr(s) as usize;
         if let Some(r) = self.smap.get(&key) {
@@ -608,6 +615,26 @@ impl Tycker {
             let spine = c.spine(&self.machine.spine.stack);
             (cxt, metas, mut_, tm_imp, val_imp, defs, spine)
         };
+        // **换 arena = 所有「以 bump 地址为键」的 TLS 表当场失效**。这些表
+        // 不在 `Machine` 里（force.rs 的 `FORCE_MEMO`/`FORCE_PRIM_MEMO`/
+        // `TWIN_DECLB_CACHE`/`QUOTE_NAT_TM`/`STUCK_DECL_INTERN`），本函数
+        // 上面的 machine 字段清理覆盖不到；`force_memo_clear()` 正是它们的
+        // 唯一清空口（五张全是纯缓存，丢弃语义中性——`compact_resident` 的
+        // 注释同款论证）。放在 `drop(old)` **之前**：先断引用再释放。
+        // 调用方此前各自记得清（prime 的 per-decl/文件边界在压实前清、
+        // `compact_resident` 在压实后清），但 `prime_resident` 收尾那次
+        // 压实（entry.rs:1018）两不靠：它前面只有文件边界的清点，其后
+        // `register_vconn_builtin` 的 quote/decl_reg 已能再填表。不变量
+        // 放在换 arena 的原地才自洽。
+        super::force::force_memo_clear();
+        // 同一纪律的第二项：`ns_method_cache` 的键是 `NsCons` 的 bump 地址
+        // （`machine.rs:829-849`），旧 arena 释放后该地址可能被新 arena 的
+        // 同尺寸分配复用 ⇒ 命中上一代链的方法键集（Var 后缀回退的排除集错
+        // → 错解/漏解）。原先只由 `compact_resident` 的调用点在压实后清
+        // （`entry.rs:1107`），`prime_resident` 的三处（逐 decl / 文件边界 /
+        // 收尾）由 A3 在 R1 逐点补上——移到这里后所有调用点自动覆盖。
+        // （`RenBuf` 只存 u32 世代/槽位，非地址键，见 `rename.rs:46-80`。）
+        self.machine.ns_method_cache = None;
         drop(old);
         self.machine.metas = metas;
         self.machine.mutable = RefCell::new(mut_);

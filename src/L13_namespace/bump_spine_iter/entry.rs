@@ -932,6 +932,11 @@ impl Tycker {
                 force_memo_clear();
                 let (nc, live) = self.compact_state(cxt, cap_hint);
                 cxt = nc;
+                // 同一换 arena 纪律（见 [`Tycker::compact_resident`]）：
+                // `ns_method_cache` 以 NsCons 的 bump 地址为键，旧 arena 释放
+                // 后该地址可能被新 arena 的同尺寸分配复用——留着会命中旧链的
+                // 方法键集（Var 后缀回退的排除集错 → 错解/漏解）。
+                self.machine.ns_method_cache = None;
                 cap_hint = (live + live / 8 + (1 << 20)).max(8 << 20);
             }
             // TYPORT_TWIN_MEM：单 decl 的 arena 分配量（累计差）超过 64MB 时
@@ -972,6 +977,8 @@ impl Tycker {
                     // 就地压实：arena 只承载可达状态，峰值 RSS 不随装载累积。
                     let (nc, live) = self.compact_state(cxt, cap_hint);
                     cxt = nc;
+                    // 同文件边界：bump 地址键缓存随换 arena 弃用。
+                    self.machine.ns_method_cache = None;
                     cap_hint = (live + live / 8 + (1 << 20)).max(8 << 20);
                 }
                 if twin_mem_prof() {
@@ -1017,6 +1024,8 @@ impl Tycker {
         if compact::compact_enabled() {
             let (nc, live) = self.compact_state(cxt, cap_hint);
             cxt = nc;
+            // 收尾压实同样换 arena：bump 地址键缓存弃用（同文件边界）。
+            self.machine.ns_method_cache = None;
             if twin_mem_prof() {
                 eprintln!("[TMEM] final compact: live={} MB cap={} MB", live >> 20, self.bump.allocated_bytes() >> 20);
             }

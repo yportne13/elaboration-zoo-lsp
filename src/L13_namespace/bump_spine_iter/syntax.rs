@@ -204,7 +204,8 @@ pub(crate) fn v_spine_of(v: V) -> usize {
 pub(crate) fn v_pi_of<'a>(v: V) -> &'a PiCell<'a> {
     // SAFETY: v 是 `v_pi` 写出的 tag 4 打包字（`ptr|4`）。`PiCell` 含 `V(u64)`
 
-    // 字段故天然 ≥8 对齐（下方 const 断言钉住），`& !7` 还原分配地址。
+    // 字段故天然 ≥8 对齐（`env.rs` 末尾的 `const _: () = assert!(..)` 钉住），
+    // `& !7` 还原分配地址。
 
     unsafe { &*((v.0 & !7) as *const PiCell) }
 }

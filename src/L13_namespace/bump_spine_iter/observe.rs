@@ -23,7 +23,7 @@ impl Machine {
     /// push 期把类型渲染成 owned String 入表：走本机 println/错误消息同款
     /// `quote → export → pretty_tm` 管线（parity 已证该管线与参考版逐字节
     /// 一致）。bump 域 Tm 出表即弃，LSP 跨轮读到的只是字符串快照。
-    pub(crate) fn push_hover<'a>(
+    pub(super) fn push_hover<'a>(
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
@@ -100,7 +100,7 @@ impl Machine {
 
     /// 观察面 inlay（参考版 `push_inlay_hint` 同口径）：含未解 meta 跳过，
     /// label 超 80 字符截断。
-    pub(crate) fn push_inlay_hint<'a>(
+    pub(super) fn push_inlay_hint<'a>(
         &mut self,
         bump: &'a Bump,
         cxt: &Cxt<'a>,
@@ -186,7 +186,7 @@ impl Machine {
 
     /// 与参考版 `Infer::hover_entry_at` 同规则：同 path 内命中 offset 的最
     /// 小 span 胜出。
-    pub(crate) fn hover_entry_at(
+    pub(super) fn hover_entry_at(
         &self,
         path_id: u32,
         offset: usize,
