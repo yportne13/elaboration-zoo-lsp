@@ -3,6 +3,12 @@
 //! `Int` is a sign-magnitude encoding built from `Nat`: `ofNat n` is `n` and
 //! `negSucc n` is `-(n + 1)` (so zero has a single representation).  The usual
 //! arithmetic traits are implemented on top of the helpers here.
+//!
+//! `Show` covers the base types (`Nat`, `Int`, `Boolean`, `Ordering`, `Unit`,
+//! `String`, `Void`) and concrete `List` / `Option` / `Product` / `Tuple2` /
+//! `Either` / `Result` instances over them; generic conditional instances
+//! (`impl[T] Show for List[T] where T: Show`) are not yet supported by the
+//! elaborator, hence the per-element-type helpers below.
 
 /// Types that can be rendered as a `String`.
 trait Show {
@@ -126,4 +132,213 @@ impl Into[Int] for Nat {
 
 impl Into[Nat] for Int {
     def into: Nat = nat_of_int this
+}
+
+// === Show：基础类型 ===
+// 泛型条件实例（`impl[T] Show for List[T] where T: Show` 这类）elaborator
+// 暂不支持（where 约束、字典参数均解析失败），故此处只提供基础元素类型的
+// 具体实例，渲染复用各元素类型已有的 to-string 辅助函数。
+
+/// Render a `Boolean` as `true` / `false`.
+def show_bool(b: Boolean): String =
+    match b {
+        case true => "true"
+        case false => "false"
+    }
+
+impl Show for Boolean {
+    def show: String = show_bool this
+}
+
+/// Render an `Ordering` as its constructor name: `lt` / `eq` / `gt`.
+impl Show for Ordering {
+    def show: String =
+        match this {
+            case lt => "lt"
+            case eq => "eq"
+            case gt => "gt"
+        }
+}
+
+/// Render the single `Unit` value as `unit`.
+impl Show for Unit {
+    def show: String = "unit"
+}
+
+/// `Void` has no values; the empty match is vacuously complete.
+impl Show for Void {
+    def show: String = match this {}
+}
+
+/// A `String` shows as itself (raw, no quoting).
+impl Show for String {
+    def show: String = this
+}
+
+// === Show：List ===
+
+/// Render the body of a `List[Nat]` without brackets: `1, 2, 3`.
+def show_list_nat_aux(l: List[Nat]): String =
+    match l {
+        case lnil => ""
+        case lcons(x, lnil) => nat_to_dec x
+        case lcons(x, xs) => (nat_to_dec x) + ", " + (show_list_nat_aux xs)
+    }
+
+/// Render a `List[Nat]` as `[1, 2, 3]`.
+impl Show for List[Nat] {
+    def show: String = "[" + (show_list_nat_aux this) + "]"
+}
+
+/// Render the body of a `List[Int]` without brackets: `1, -2`.
+def show_list_int_aux(l: List[Int]): String =
+    match l {
+        case lnil => ""
+        case lcons(x, lnil) => int_to_string x
+        case lcons(x, xs) => (int_to_string x) + ", " + (show_list_int_aux xs)
+    }
+
+/// Render a `List[Int]` as `[1, -2]`.
+impl Show for List[Int] {
+    def show: String = "[" + (show_list_int_aux this) + "]"
+}
+
+/// Render the body of a `List[Boolean]` without brackets: `true, false`.
+def show_list_bool_aux(l: List[Boolean]): String =
+    match l {
+        case lnil => ""
+        case lcons(x, lnil) => show_bool x
+        case lcons(x, xs) => (show_bool x) + ", " + (show_list_bool_aux xs)
+    }
+
+/// Render a `List[Boolean]` as `[true, false]`.
+impl Show for List[Boolean] {
+    def show: String = "[" + (show_list_bool_aux this) + "]"
+}
+
+/// Render the body of a `List[String]` without brackets: `a, b`.
+def show_list_string_aux(l: List[String]): String =
+    match l {
+        case lnil => ""
+        case lcons(x, lnil) => x
+        case lcons(x, xs) => x + ", " + (show_list_string_aux xs)
+    }
+
+/// Render a `List[String]` as `[a, b]` (elements raw, no quotes).
+impl Show for List[String] {
+    def show: String = "[" + (show_list_string_aux this) + "]"
+}
+
+// === Show：Option ===
+
+/// Render an `Option[Nat]` as `some 3` / `none`.
+def show_option_nat(o: Option[Nat]): String =
+    match o {
+        case Some(t) => "some " + (nat_to_dec t)
+        case None => "none"
+    }
+
+/// Render an `Option[Nat]` as `some 3` / `none`.
+impl Show for Option[Nat] {
+    def show: String = show_option_nat this
+}
+
+/// Render an `Option[Int]` as `some -2` / `none`.
+def show_option_int(o: Option[Int]): String =
+    match o {
+        case Some(t) => "some " + (int_to_string t)
+        case None => "none"
+    }
+
+/// Render an `Option[Int]` as `some -2` / `none`.
+impl Show for Option[Int] {
+    def show: String = show_option_int this
+}
+
+/// Render an `Option[Boolean]` as `some true` / `none`.
+def show_option_bool(o: Option[Boolean]): String =
+    match o {
+        case Some(t) => "some " + (show_bool t)
+        case None => "none"
+    }
+
+/// Render an `Option[Boolean]` as `some true` / `none`.
+impl Show for Option[Boolean] {
+    def show: String = show_option_bool this
+}
+
+/// Render an `Option[String]` as `some s` (raw) / `none`.
+def show_option_string(o: Option[String]): String =
+    match o {
+        case Some(t) => "some " + t
+        case None => "none"
+    }
+
+/// Render an `Option[String]` as `some s` (raw) / `none`.
+impl Show for Option[String] {
+    def show: String = show_option_string this
+}
+
+// === Show：Product / Tuple2 ===
+
+/// Render a `Product[Nat, Nat]` as `(1, 2)`.
+def show_product_nat_nat(p: Product[Nat, Nat]): String =
+    "(" + (nat_to_dec p.fst) + ", " + (nat_to_dec p.snd) + ")"
+
+/// Render a `Product[Nat, Nat]` as `(1, 2)`.
+impl Show for Product[Nat, Nat] {
+    def show: String = show_product_nat_nat this
+}
+
+/// Render a `Product[Boolean, Boolean]` as `(true, false)`.
+def show_product_bool_bool(p: Product[Boolean, Boolean]): String =
+    "(" + (show_bool p.fst) + ", " + (show_bool p.snd) + ")"
+
+/// Render a `Product[Boolean, Boolean]` as `(true, false)`.
+impl Show for Product[Boolean, Boolean] {
+    def show: String = show_product_bool_bool this
+}
+
+/// Render a `Tuple2[Nat, Nat]` as `(3, 4)`.
+def show_tuple2_nat_nat(t: Tuple2[Nat, Nat]): String =
+    "(" + (nat_to_dec t._1) + ", " + (nat_to_dec t._2) + ")"
+
+/// Render a `Tuple2[Nat, Nat]` as `(3, 4)`.
+impl Show for Tuple2[Nat, Nat] {
+    def show: String = show_tuple2_nat_nat this
+}
+
+/// Render a `Tuple2[Boolean, Boolean]` as `(true, false)`.
+def show_tuple2_bool_bool(t: Tuple2[Boolean, Boolean]): String =
+    "(" + (show_bool t._1) + ", " + (show_bool t._2) + ")"
+
+/// Render a `Tuple2[Boolean, Boolean]` as `(true, false)`.
+impl Show for Tuple2[Boolean, Boolean] {
+    def show: String = show_tuple2_bool_bool this
+}
+
+// === Show：Either / Result ===
+
+/// Render an `Either[Nat, Boolean]` as `left 1` / `right true`.
+def show_either_nat_bool(e: Either[Nat, Boolean]): String =
+    match e {
+        case left(a) => "left " + (nat_to_dec a)
+        case right(b) => "right " + (show_bool b)
+    }
+
+/// Render an `Either[Nat, Boolean]` as `left 1` / `right true`.
+impl Show for Either[Nat, Boolean] {
+    def show: String = show_either_nat_bool this
+}
+
+/// Render a `Result[Nat, Boolean]` as `ok 7` / `err false`.
+def show_result_nat_bool(r: Result[Nat, Boolean]): String =
+    match r {
+        case ok(v) => "ok " + (nat_to_dec v)
+        case err(e) => "err " + (show_bool e)
+    }
+
+/// Render a `Result[Nat, Boolean]` as `ok 7` / `err false`.
+impl Show for Result[Nat, Boolean] {
+    def show: String = show_result_nat_bool this
 }
