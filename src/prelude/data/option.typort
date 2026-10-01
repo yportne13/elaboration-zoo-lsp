@@ -70,6 +70,35 @@ impl[T] Option[T] {
         }
 }
 
+impl[T] Option[T] {
+    /// `other` when this is `Some`, else `None`.
+    def and(other: Option[T]): Option[T] =
+        match this {
+            case Some(_) => other
+            case None => None
+        }
+    /// Pair up the contained values of `this` and `other`.
+    def zip[B](other: Option[B]): Option[Product[T, B]] =
+        match this {
+            case Some(t) =>
+                match other {
+                    case Some(u) => Some (new Product(t, u))
+                    case None => None
+                }
+            case None => None
+        }
+}
+
+// 嵌套一层的 impl：flatten 只在元素类型本身是 Option 时才有意义。
+impl[T] Option[Option[T]] {
+    /// Collapse `Some (Some x)` to `Some x`; `Some None` / `None` become `None`.
+    def flatten: Option[T] =
+        match this {
+            case Some(inner) => inner
+            case None => None
+        }
+}
+
 impl[T] Default for Option[T] {
     def default: Option[T] = None
 }

@@ -79,4 +79,25 @@ impl[A, B] Either[A, B] {
             case left(a) => err(f a)
             case right(b) => ok(b)
         }
+    /// Map `f` over the left value and `g` over the right value.
+    def bimap[C, D](f: A -> C, g: B -> D): Either[C, D] =
+        match this {
+            case left(a) => left(f a)
+            case right(b) => right(g b)
+        }
+    /// The left value as an `Option`, discarding a right value.
+    def left_to_option: Option[A] =
+        match this {
+            case left(a) => Some a
+            case right(_) => None
+        }
 }
+
+/// `Some b` becomes `right b`; `None` becomes `left if_none`.
+// 补齐转换格：option_to_result / either_to_option / result_to_either /
+// either_to_result 已有，唯缺 Option -> Either。
+def option_to_either[A, B](o: Option[B], if_none: A): Either[A, B] =
+    match o {
+        case Some(b) => right b
+        case None => left if_none
+    }

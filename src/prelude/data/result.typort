@@ -63,6 +63,24 @@ impl[Ok, Err] Result[Ok, Err] {
             case ok(v) => ok(v)
             case err(e) => f e
         }
+    /// Map `f` over the success value, falling back to `default` on error.
+    def map_or[U](default: U, f: Ok -> U): U =
+        match this {
+            case ok(v) => f v
+            case err(_) => default
+        }
+    /// Exchange success and failure.
+    def swap: Result[Err, Ok] =
+        match this {
+            case ok(v) => err(v)
+            case err(e) => ok(e)
+        }
+    /// Case analysis: apply `on_ok` to a success value or `on_err` to an error.
+    def elim[O](on_ok: Ok -> O, on_err: Err -> O): O =
+        match this {
+            case ok(v) => on_ok v
+            case err(e) => on_err e
+        }
 }
 
 /// `Some a` becomes `ok a`; `None` becomes `err default_err`.

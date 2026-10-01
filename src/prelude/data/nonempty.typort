@@ -34,4 +34,15 @@ impl[T] NonEmpty[T] {
                 let reversed_rest: NonEmpty[T] = (new NonEmpty(x, xs)).reverse;
                 new NonEmpty(reversed_rest.head, (reversed_rest.tail).append (lcons this.head lnil))
         }
+    /// Prepend `x`, keeping the list non-empty.
+    def cons(x: T): NonEmpty[T] = new NonEmpty(x, this.to_list)
+    /// Append another non-empty list at the end.
+    def append(that: NonEmpty[T]): NonEmpty[T] =
+        new NonEmpty(this.head, this.tail.append that.to_list)
+    /// Left fold with initial accumulator `z`.
+    def foldl[U](z: U, f: U -> T -> U): U =
+        this.tail.foldl (f z this.head) f
 }
+
+/// A single-element non-empty list.
+def nonempty_singleton[T](x: T): NonEmpty[T] = new NonEmpty(x, lnil)

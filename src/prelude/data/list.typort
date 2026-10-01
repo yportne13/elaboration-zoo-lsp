@@ -198,3 +198,154 @@ def list_reverse[T](l: List[T]): List[T] = l.reverse
 
 /// Free-function form of `List.length`.
 def list_length[T](l: List[T]): Nat = l.length
+
+impl[T] List[T] {
+    /// Right fold: `f x1 (f x2 (... (f xn z)))`.
+    def foldr[U](f: T -> U -> U, z: U): U =
+        match this {
+            case lnil => z
+            case lcons(x, xs) => f x (xs.foldr f z)
+        }
+    /// Left fold: `f (... (f z x1) x2 ...) xn`.
+    def foldl[U](z: U, f: U -> T -> U): U =
+        match this {
+            case lnil => z
+            case lcons(x, xs) => xs.foldl (f z x) f
+        }
+    /// Whether `x` occurs in the list, compared with `eq`.
+    def elem(x: T, eq: T -> T -> Boolean): Boolean =
+        match this {
+            case lnil => false
+            case lcons(y, ys) =>
+                let b = eq y x;
+                match b {
+                    case true => true
+                    case false => ys.elem x eq
+                }
+        }
+    /// Combine corresponding elements of `this` and `other` with `f`,
+    /// stopping at the shorter list.
+    def zip_with[B, C](f: T -> B -> C, other: List[B]): List[C] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) =>
+                match other {
+                    case lnil => lnil
+                    case lcons(y, ys) => lcons(f x y, xs.zip_with f ys)
+                }
+        }
+    /// The number of elements satisfying `p`.
+    def count(p: T -> Boolean): Nat =
+        match this {
+            case lnil => 0
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => succ (xs.count p)
+                    case false => xs.count p
+                }
+        }
+    /// The longest prefix of elements satisfying `p`.
+    def take_while(p: T -> Boolean): List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => lcons(x, xs.take_while p)
+                    case false => lnil
+                }
+        }
+    /// `this` with the longest satisfying prefix removed.
+    def drop_while(p: T -> Boolean): List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) =>
+                let b = p x;
+                match b {
+                    case true => xs.drop_while p
+                    case false => this
+                }
+        }
+    /// The last element, if any.
+    def last_option: Option[T] = list_last this
+    /// Split at index `n`: the first `n` elements paired with the rest.
+    def split_at(n: Nat): Product[List[T], List[T]] =
+        new Product(this.take n, this.drop n)
+    /// Map `f` over every element and concatenate the resulting lists.
+    def flat_map[U](f: T -> List[U]): List[U] = list_flatten (this.map f)
+    /// Insert `x` into `this`, which must already be sorted by `p`.
+    // 稳定插入：相等（eq）时 x 落在已有元素之后。
+    def insert(x: T, p: T -> T -> Ordering): List[T] =
+        match this {
+            case lnil => lcons x lnil
+            case lcons(y, ys) =>
+                let c = p x y;
+                match c {
+                    case gt => lcons(y, ys.insert x p)
+                    case lt => lcons(x, lcons(y, ys))
+                    case eq => lcons(x, lcons(y, ys))
+                }
+        }
+    /// Insertion sort ordered by `p` (stable).
+    def sort(p: T -> T -> Ordering): List[T] =
+        match this {
+            case lnil => lnil
+            case lcons(x, xs) => (xs.sort p).insert x p
+        }
+}
+
+// 以下 impl 放在本文件末尾的原因：
+// - Option/Vec 都定义在 list 之前，拿不到 List，其 to_list 只能在这里补
+//   （参照 string.typort 为更早的 Boolean 补 Into impl 的先例）；
+// - List[List[T]] / List[Product[T, B]] / List[Nat] 是嵌套/实例化类型，
+//   只能在元素类型已知处递归定义。
+impl[T] List[List[T]] {
+    /// Concatenate a list of lists (method form of `list_flatten`).
+    def concat: List[T] = list_flatten this
+}
+
+impl[T, B] List[Product[T, B]] {
+    /// Split a list of pairs into a pair of lists.
+    def unzip: Product[List[T], List[B]] =
+        match this {
+            case lnil => new Product(lnil, lnil)
+            case lcons(p, rest) =>
+                let tail_unzip = rest.unzip;
+                new Product(lcons(p.fst, tail_unzip.fst), lcons(p.snd, tail_unzip.snd))
+        }
+}
+
+impl List[Nat] {
+    /// The sum of a list of naturals (`0` for the empty list).
+    def sum: Nat =
+        match this {
+            case lnil => 0
+            case lcons(x, xs) => x + xs.sum
+        }
+}
+
+impl[T] Option[T] {
+    /// Convert to a list: `Some x` becomes the singleton `[x]`.
+    def to_list: List[T] =
+        match this {
+            case Some(x) => lcons x lnil
+            case None => lnil
+        }
+}
+
+impl[T, len: Nat] Vec[T] len {
+    /// Convert a length-indexed vector to a plain list.
+    def to_list: List[T] =
+        match this {
+            case nil => lnil
+            case cons(x, xs) => lcons(x, xs.to_list)
+        }
+}
+
+/// `x` repeated `n` times.
+def list_replicate[T](n: Nat, x: T): List[T] =
+    match n {
+        case zero => lnil
+        case succ(m) => lcons(x, list_replicate m x)
+    }

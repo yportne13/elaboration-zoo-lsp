@@ -95,6 +95,49 @@ impl[T, len: Nat] Vec[T] len {
                     case cons(_, xs) => xs.at (m, default)
                 }
         }
+    /// Concatenate `that` after `this`, summing the lengths.
+    // 结果索引必须写成 `m + len` 且对 this 递归，语义才是 `this ++ that`
+    //（与 List.append 一致）：nat_add 按第二参数递归，`m + 0` 可约回 m、
+    // `m + succ l` 可约成 `succ (m + l)`，两个分支都定义性归约；若写成
+    // `len + m`，对 this 递归时 nil 分支的 `0 + m` 卡死，只能对 that 递归，
+    // 而那会把参数顺序翻到前面（`that ++ this`），连带 snoc/reverse 语义全错。
+    def append[m: Nat](that: Vec[T] m): Vec[T] (m + len) =
+        match this {
+            case nil => that
+            case cons(x, xs) => cons x (xs.append that)
+        }
+    /// Append a single element at the end, growing the length by one.
+    def snoc(x: T): Vec[T] (len + 1) =
+        match this {
+            case nil => cons x nil
+            case cons(y, ys) => cons y (ys.snoc x)
+        }
+    /// The vector in reverse order.
+    def reverse: Vec[T] len =
+        match this {
+            case nil => nil
+            case cons(x, xs) => (xs.reverse).snoc x
+        }
+    /// Combine two equal-length vectors elementwise with `f`.
+    // 内层 match 只写 cons 分支即可：进入外层 cons 分支后 len 已细化为
+    // succ l，other : Vec[U] (succ l) 不可能是 nil。
+    def map2[U, V](other: Vec[U] len, f: T -> U -> V): Vec[V] len =
+        match this {
+            case nil => nil
+            case cons(x, xs) =>
+                match other {
+                    case cons(y, ys) => cons (f x y) (xs.map2 ys f)
+                }
+        }
+    /// Pair each element with the corresponding element of `other`.
+    def zip[U](other: Vec[U] len): Vec[Product[T, U]] len =
+        match this {
+            case nil => nil
+            case cons(x, xs) =>
+                match other {
+                    case cons(y, ys) => cons (new Product(x, y)) (xs.zip ys)
+                }
+        }
 }
 
 impl[T, len: Nat] Vec[T](succ len) {

@@ -44,4 +44,19 @@ impl Ordering {
             case gt => true
             case _ => false
         }
+    /// The opposite ordering (`lt` becomes `gt` and vice versa).
+    def reverse: Ordering =
+        match this {
+            case lt => gt
+            case eq => eq
+            case gt => lt
+        }
+    /// `this` when it already decides, else `f unit`; chains secondary
+    /// comparisons (e.g. lexicographic ordering on pairs).
+    def then_with(f: Unit -> Ordering): Ordering =
+        match this {
+            case lt => lt
+            case eq => f unit
+            case gt => gt
+        }
 }
