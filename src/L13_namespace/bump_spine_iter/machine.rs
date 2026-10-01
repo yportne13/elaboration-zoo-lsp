@@ -436,6 +436,15 @@ pub(crate) struct Machine {
     /// 命中即免每次 fallback 的全链重建（每方法一次 format! 分配，
     /// prelude-hdl 标识符密集 decl 单个数万次 fallback）。轮界 clear。
     pub(super) ns_method_cache: Option<(usize, FxHashSet<SmolStr>)>,
+    /// `fake_bind` 压入的**递归占位键栈**（2026-10-01，F2 错误集面修复）：
+    /// 一次 decl 的 elaboration 里可能嵌套多次 `fake_bind`（class Phase B 的
+    /// 内层 def 经 `infer_after_prefix` 走同一函数），故必须是栈——成功路径
+    /// 由 `decl_reg_in` 以真值覆盖后出栈；失败路径由 `infer_decl` /
+    /// `infer_after_prefix` 按**本入口的栈深差**弹出并把 stub 从调用方 decl
+    /// 表移除（对齐参考版 `Infer::infer(&Cxt)` → `infer_after_prefix` 的
+    /// `cxt.clone()` 隔离）。失败发生在 `fake_bind` 之前时本入口没压栈 ⇒ 深差
+    /// 为 0 ⇒ no-op。轮界本应为空，`clear_round` 仍防御性清空。
+    pub(super) decl_stub: Vec<SmolStr>,
     /// Var 后缀回退的**解析结果 memo**：裸名 → 已解析结果。回退查询对同一
     /// 裸名是重读纯函数（候选桶 + 活过滤），合成负载与真实源里高频重复
     /// （struct 负载 `P.mk`/`zero` 各 1 次/decl、名字全部相同；match 负载的
@@ -546,6 +555,7 @@ impl Machine {
             suffix_indexed_keys: FxHashSet::default(),
             binding_name_mk: None,
             ns_method_cache: None,
+            decl_stub: Vec::new(),
             suffix_memo: FxHashMap::default(),
             suffix_memo_version: 0,
             suffix_memo_epoch: 0,
@@ -581,6 +591,9 @@ impl Machine {
         self.metas.clear();
         self.defs.clear();
         self.constraints.clear();
+        // 防御性：轮界本应为空（每个 decl 的压/弹由 `infer_decl` /
+        // `infer_after_prefix` 配平）。
+        self.decl_stub.clear();
         // 压栈工作表的峰值容量同样常驻（`SPINE_SHRINK_MIN_ENTRIES`）。
         twin_stat_record(&TWIN_STAT_SPINE, self.spine.stack.reclaim(SPINE_SHRINK_MIN_ENTRIES));
         // ── 第一组（per-run，参考版 Infer 重置面）归还档 ──
@@ -802,6 +815,15 @@ impl Machine {
         // 后以真值静默覆盖同名条目；调用方需先 drop(fake) 释放 Rc 引用。
         let name = bump.alloc_str(x);
         let stub = bump.alloc(Tm::Decl(name));
+        // 撞名检查**先于任何写表动作**（参考版 `cxt.rs:1230-1232` 的同款惯用法：
+        // "a name already in the table (builtins included) is a `redefine` error,
+        // and the table is left untouched on that path"）。旧实现是"先 insert 再判
+        // `prev.is_some()`"——失败返回时旧条目已被 stub 覆盖且无回滚：Lead 实测该
+        // 形态会回落参考版故用户不可见，但内部不变量（失败 decl 不改声明表）已偏离，
+        // 且是任何放宽 `redefine` 信任度的改动的前置条件。
+        if cxt.decls.contains_key(x) {
+            return Err(Error(span.map(|_| format!("redefine {}", x)), vec![]));
+        }
         let prev = Rc::make_mut(&mut cxt.decls).insert(
             SmolStr::new(x),
             DeclEntry {
@@ -815,10 +837,12 @@ impl Machine {
                 prim: None,
             },
         );
-        if prev.is_some() {
-            return Err(Error(span.map(|_| format!("redefine {}", x)), vec![]));
-        }
+        // 上一行之前已查过 ⇒ 旧值必为 None（断言防未来把检查挪回 insert 之后）。
+        debug_assert!(prev.is_none(), "fake_bind: contains_key 检查被绕过");
         self.index_decl_key(x);
+        // 记录待确认的递归占位：失败时由入口按栈深差弹出并从调用方 decl 表
+        // 移除（成功路径由 `decl_reg_in` 覆盖真值后出栈）。
+        self.decl_stub.push(SmolStr::new(x));
         Ok(clone_cxt(cxt))
     }
 
@@ -3486,7 +3510,21 @@ impl Machine {
         } else {
             d
         };
-        self.infer_after_prefix_mut(bump, cxt, d)
+        let stub_depth = self.decl_stub.len();
+        let r = self.infer_after_prefix_mut(bump, cxt, d);
+        if r.is_err() && self.decl_stub.len() > stub_depth {
+            // 失败 decl 的递归占位必须从**调用方** cxt 撤掉：参考版 LSP 路径经
+            // `Infer::infer(&Cxt)` → `infer_after_prefix` 的 `cxt.clone()` 天然
+            // 隔离（elaboration.rs:1063-1066），孪生走就地写，只能显式回滚。
+            // 栈深差守卫：失败发生在 `fake_bind` 之前时本入口没压栈 ⇒ no-op；
+            // 嵌套层已在自己的入口配平，故这里弹到的必然是本次 decl 的键。
+            // `make_mut` 而非 `get_mut`：表可能仍被 `MetaSnap.cxt` 共享，
+            // `get_mut` 会返回 `None` ⇒ 清理变成"有时生效"。
+            if let Some(k) = self.decl_stub.pop() {
+                Rc::make_mut(&mut cxt.decls).remove(&k);
+            }
+        }
+        r
     }
 
     /// 已前缀的 decl 推断（class Phase B 复用，免二次前缀——参考版
@@ -3498,7 +3536,15 @@ impl Machine {
         d: &Decl,
     ) -> Result<(DeclOut<'a>, Cxt<'a>), Error> {
         let mut cxt = clone_cxt(cxt);
-        return self.infer_after_prefix_mut(bump, &mut cxt, d);
+        let stub_depth = self.decl_stub.len();
+        let r = self.infer_after_prefix_mut(bump, &mut cxt, d);
+        if r.is_err() && self.decl_stub.len() > stub_depth {
+            // 只配平栈、**不回滚表**：这里 `cxt` 是浅克隆、失败即弃，调用方的
+            // decl 表根本没被写。能安全 pop 的理由同 `infer_decl`（栈深差守卫：
+            // 失败在 `fake_bind` 之前 ⇒ 没压过栈 ⇒ no-op）。
+            self.decl_stub.pop();
+        }
+        r
     }
 
     /// [`Self::infer_after_prefix`] 的就地版：调用方独占 cxt 时免浅克隆
@@ -3675,6 +3721,8 @@ impl Machine {
                 }
                 drop(fake); // 释放 Rc 引用，decl_reg_in 的 make_mut 才能原地写
                 let out = self.decl_reg_in(bump, cxt, &name.data, name.to_span(), t_tm, vt, typ_tm, vtyp, None, rendered);
+                // 递归占位已被 decl_reg_in 以真值覆盖 ⇒ 出栈（配平 `fake_bind`）。
+                self.decl_stub.pop();
                 Ok((DeclOut::Def { name: bump.alloc_str(&name.data) }, out))
             }
             Decl::Println(t) => {
@@ -3829,6 +3877,9 @@ impl Machine {
                     let case_key = format!("{}.{}", name.data, case_name.data);
                     cxt = self.decl_reg_in(bump, &mut cxt, &case_key, case_name.to_span(), t_tm, vt, typ_tm, vtyp, None, None);
                 }
+                // 类型本体 + 构造子登记全部完成（`fake_bind` 的递归占位已被
+                // 真值覆盖）⇒ 出栈（配平 `fake_bind`）。
+                self.decl_stub.pop();
                 Ok((DeclOut::Enum, cxt))
             }
             // trait 声明（参考版 1672-1767）：supertrait 经前缀解析 + DFS
