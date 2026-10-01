@@ -356,6 +356,9 @@ mod calc_tests;
 mod prelude_stdlib_tests;
 
 #[cfg(test)]
+mod bare_ctor_member_tests;
+
+#[cfg(test)]
 mod debug_test;
 
 #[cfg(test)]

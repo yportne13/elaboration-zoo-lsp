@@ -3076,6 +3076,14 @@ impl Machine {
                     a_f = self.force_v(bump, cxt, cod);
                 }
                 a = a_f;
+                // 裸构造器接收者补 insert（参考版同点）：Var 直查返回存表
+                // 原样的泛型 Pi，不补隐式前缀则 head_key 对 Pi 恒 None，
+                // 查不到实例桶 → 误报 "has no object"。Sum/具体类型接收者
+                // insert 原样透传；隐式 lambda 接收者由 insert 的 Lam 守卫
+                // 豁免（与 App 路径同款口径）。
+                let (tm_i, a_i) = self.insert(bump, cxt, tm, a)?;
+                tm = tm_i;
+                a = a_i;
                 if v_tag(a) == 7 {
                     if let XCell::Sum { params, cases, .. } = v_xcell_of(a) {
                         // struct：单 case 且名字带 `.mk` → 剥 mk 的构造子类型

@@ -2576,6 +2576,16 @@ impl Infer {
                     tm = Tm::App(tm, bn_tm, Icit::Impl).into();
                     a = self.force(&cxt.decl, &self.closure_apply(&cxt.decl, cod, bn_val));
                 }
+                // 裸构造器接收者（`lnil.show`）：`Raw::Var` 直查分支返回存表
+                // 原样的泛型 Pi（`[T: Type 0] → List[T]`），须在此补跑 insert
+                // 把隐式前缀 fresh_meta 掉（`lnil → List[?T]`），下方
+                // namespace/trait 探测才能按实例头查桶；否则 head_key 对 Pi
+                // 恒 None，误报 "has no object"。已是 Sum/具体类型的接收者
+                // insert 原样透传；隐式 lambda 接收者由 insert 的 Lam 守卫豁免
+                //（与 App 路径同款口径）。
+                let (tm_i, a_i) = self.insert(cxt, Ok((tm, a)), receiver_span)?;
+                tm = tm_i;
+                a = a_i;
                 match (tm, a.as_ref()) {
                     (tm, Val::Sum(_, params, cases, _)) => {
                         let mut c = None;
