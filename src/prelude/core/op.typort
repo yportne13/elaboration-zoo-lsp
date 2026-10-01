@@ -162,12 +162,22 @@ trait Clone {
     def clone: Self
 }
 
+// prelude 的值都不可变，`clone` 恒等即可：blanket impl 让 `Clone` 对任意类型
+// 可用（此前该 trait 没有任何实例）。
+impl[T] Clone for T {
+    def clone: T = this
+}
+
 // ---------- Unit ----------
 
 /// The unit type: exactly one value, `unit`.
 enum Unit {
     /// The single value of `Unit`.
     unit
+}
+
+impl Default for Unit {
+    def default: Unit = unit
 }
 
 // ---------- Tuple types ----------

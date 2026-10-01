@@ -56,3 +56,23 @@ def eq_comm[A, x: A, y: A](e: Eq[A] x y): Eq[A] y x = symm e
 
 /// `eq_congr` is `cong` with the function argument last.
 def eq_congr[A, B, x: A, y: A, f: A -> B](e: Eq[A] x y): Eq[B] (f x) (f y) = cong f e
+
+/// Two-argument congruence: equal first arguments and equal second arguments
+/// give equal results under any two-argument function.
+def cong2[A, B, C, x: A, y: A, u: B, v: B](f: A -> B -> C, e1: Eq x y, e2: Eq u v): Eq (f x u) (f y v) =
+    match e1 {
+        case refl(a) =>
+            match e2 {
+                case refl(b) => refl (f a b)
+            }
+    }
+
+/// Congruence of application: equal functions applied to equal arguments give
+/// equal results.
+def cong_ap[A, B, f: A -> B, g: A -> B, x: A, y: A](e1: Eq f g, e2: Eq x y): Eq (f x) (g y) =
+    match e1 {
+        case refl(h) =>
+            match e2 {
+                case refl(a) => refl (h a)
+            }
+    }

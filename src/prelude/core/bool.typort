@@ -46,6 +46,36 @@ impl Or[Boolean, Boolean] for Boolean {
         }
 }
 
+// && / || 按接收者方法名分派（hdl Bool 同款机制）；放在 And/Or 实例之后，
+// 方法体里的 & / | 才能在 elaborate 时解析到已注册的实例。
+impl Boolean {
+    /// Logical AND via the `&&` token; same truth table as `&`.
+    def &&(that: Boolean): Boolean = this & that
+    /// Logical OR via the `||` token; same truth table as `|`.
+    def ||(that: Boolean): Boolean = this | that
+}
+
+impl Not for Boolean {
+    def ! : Boolean =
+        match this {
+            case false => true
+            case true => false
+        }
+}
+
+impl Equal[Boolean, Boolean] for Boolean {
+    def ===(that: Boolean): Boolean =
+        match this {
+            case true => that
+            case false => that.not
+        }
+    def =/=(that: Boolean): Boolean =
+        match this {
+            case true => that.not
+            case false => that
+        }
+}
+
 /// If-then-else as a function: `if_then_else cond t e`.
 def if_then_else[A](cond: Boolean, t: A, e: A): A =
     match cond {
@@ -99,6 +129,20 @@ def nat_gt(x: Nat, y: Nat): Boolean = nat_lt y x
 
 /// Greater-than-or-equal on `Nat`.
 def nat_gte(x: Nat, y: Nat): Boolean = nat_lte y x
+
+// `Equal` / `Compare` 的 Nat 实例放在本文件而非 nat.typort：结果类型是
+// `Boolean`，而 bool.typort 在 nat.typort 之后加载（op → eq → nat → calc → bool）。
+impl Equal[Nat, Boolean] for Nat {
+    def ===(that: Nat): Boolean = nat_eq this that
+    def =/=(that: Nat): Boolean = (nat_eq this that).not
+}
+
+impl Compare[Nat, Boolean] for Nat {
+    def <(that: Nat): Boolean = nat_lt this that
+    def <=(that: Nat): Boolean = nat_lte this that
+    def >(that: Nat): Boolean = nat_gt this that
+    def >=(that: Nat): Boolean = nat_gte this that
+}
 
 /// True when `n` is even.
 def is_even(n: Nat): Boolean =

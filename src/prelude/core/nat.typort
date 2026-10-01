@@ -90,6 +90,75 @@ def add_assoc (n: Nat, m: Nat, k: Nat): Eq((n + m) + k, n + (m + k)) =
         case succ(l) => cong_succ (add_assoc n m l)
     }
 
+// 乘法引理。语句形如 `n * succ m = n + n * m`：nat_mul 对第二个参数递归，
+// 左端 definitionally 展开（同 add_succ_right）；`n * m + n` 与左端不
+// definitionally 相等，不能作语句。
+// 注意：proof 里的 let 绑定不只是风格——`add_assoc n (n * a) (n * k)` 这类
+// 「裸变量后跟两个带括号复参」的调用会被解析器误当作对该变量的应用。
+
+/// `a * 0 = 0`, by computation (the second argument is `zero`).
+def mul_zero_right(a: Nat): Eq (a * 0) 0 =
+    rfl
+
+/// `0 * a = 0`, by induction on `a`.
+def mul_zero_left(a: Nat): Eq (0 * a) 0 =
+    match a {
+        case zero => rfl
+        case succ(k) => trans (cong (nat_add 0) (mul_zero_left k)) (add_zero_left 0)
+    }
+
+/// `n * (succ m) = n + n * m`, definitionally.
+def mul_succ_right(n: Nat, m: Nat): Eq (n * (succ m)) (n + (n * m)) =
+    rfl
+
+/// `(succ n) * m = n * m + m`, by induction on `m`.
+def mul_succ_left(n: Nat, m: Nat): Eq ((succ n) * m) ((n * m) + m) =
+    match m {
+        case zero => rfl
+        case succ(k) =>
+            let p1 = cong (nat_add (succ n)) (mul_succ_left n k);
+            let p2 = add_succ_left n ((n * k) + k);
+            let p3 = symm (cong succ (add_assoc n (n * k) k));
+            trans p1 (trans p2 p3)
+    }
+
+/// Multiplication is commutative: `n * m = m * n`.
+// 递归调用 `mul_comm k n` 不是结构递归（引擎不做终止检查；运行时按
+// (a, b) → (b-1, a) 递减，必终止）。
+def mul_comm(n: Nat, m: Nat): Eq (n * m) (m * n) =
+    match m {
+        case zero => symm (mul_zero_left n)
+        case succ(k) =>
+            let p1 = add_comm n (n * k);
+            let p2 = symm (cong2 nat_add (mul_comm k n) rfl);
+            let p3 = symm (mul_succ_left k n);
+            trans p1 (trans p2 p3)
+    }
+
+/// Left distributivity: `n * (a + b) = n * a + n * b`.
+def mul_distrib_left(n: Nat, a: Nat, b: Nat): Eq (n * (a + b)) ((n * a) + (n * b)) =
+    match b {
+        case zero => rfl
+        case succ(k) =>
+            let x1 = n * a;
+            let x2 = n * k;
+            let p1 = cong (nat_add n) (mul_distrib_left n a k);
+            let p2 = symm (add_assoc n x1 x2);
+            let p3 = cong2 nat_add (add_comm n x1) rfl;
+            let p4 = add_assoc x1 n x2;
+            trans p1 (trans p2 (trans p3 p4))
+    }
+
+/// Multiplication is associative: `(n * m) * k = n * (m * k)`.
+def mul_assoc(n: Nat, m: Nat, k: Nat): Eq ((n * m) * k) (n * (m * k)) =
+    match k {
+        case zero => rfl
+        case succ(l) =>
+            let p1 = cong (nat_add (n * m)) (mul_assoc n m l);
+            let p2 = symm (mul_distrib_left n m (m * l));
+            trans p1 p2
+    }
+
 /// Predecessor: `pred 0 = 0`, `pred (succ n) = n`.
 def pred(n: Nat): Nat =
     match n {
@@ -154,6 +223,14 @@ impl Rem[Nat, Nat] for Nat {
 
 /// Doubling: `n + n`.
 def double(n: Nat): Nat = n + n
+
+/// Exponentiation: `nat_pow n e` is `n` raised to `e` (`nat_pow n 0 = 1`),
+/// by recursion on the exponent.
+def nat_pow(n: Nat, e: Nat): Nat =
+    match e {
+        case zero => 1
+        case succ(k) => nat_mul n (nat_pow n k)
+    }
 
 impl Default for Nat {
     def default: Nat = zero
