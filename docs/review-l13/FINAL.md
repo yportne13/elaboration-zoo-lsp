@@ -17,11 +17,11 @@
 | `cargo check --all-targets` | 0 error / 3218 warn / 54.3s | **0 error** / 10.2s | 通过 |
 | `cargo test --lib` | 879 过 / 0 败 / 6 ignored | **882 过 / 0 败 / 6 ignored** | +3 |
 | `cargo test --test l13_fast_parity` | 533 过 / 0 败 / 6 ignored | **536 过 / 0 败 / 6 ignored** | +3 |
-| `cargo test --test twin_engine_tests` | 26 过 | **26 过 / 0 败** | 持平（内容已收紧） |
+| `cargo test --test twin_engine_tests` | 26 过 | **27 过 / 0 败** | +1（收紧断言 + F2 回归钉） |
 | `cargo test --test hdl042_engine_tests` | —（不存在） | **2 过** | 新增 |
 | `cargo test --test parser_error_tests` | — | **107 过** | +6 |
 | `namespace_tests` / `hdl_check_locations` / `emit_tests` / `lsp_protocol_robustness` / `known_bug_pins` | 30 / 2 / 12 / 11 / — | **30 / 2 / 12 / 11 / 8 全过** | 无回归 |
-| **`bash tools/gate_l13.sh`（仓库自带门禁）** | — | **fail=0，167s**（lib 521 + parity 15 + twin_lsp 26 + hdl042 2） | 通过 |
+| **`bash tools/gate_l13.sh`（仓库自带门禁）** | — | **fail=0**（评审树 166s / 主线复跑 199s；lib 521 + parity 15 + twin_lsp 27 + hdl042 2） | 通过 |
 
 **历史问题已复验修复**：`docs/review-l01l12/FINAL.md` 记录的 `cargo test --lib`
 `STATUS_ACCESS_VIOLATION` **不再复现**（885 用例全跑完，exit 0）。A4 给出了代码侧论证：
@@ -128,7 +128,7 @@
     （Lead 原以为 `test_n6_checked_ret_cache_unsoundness` 藏着活的 soundness 洞——
     A4 核对后判定 `checked_ret` 全仓只剩测试注释，孪生亦无同类缓存，属"记录了但已不成立"。）
 
-## 3. 残余问题（诚实记录，未修）
+## 3. 残余问题（诚实记录；**§3.3 已于 2026-10-01 修复**，保留本节作根因与修复记录）
 
 ### 3.1 [P0] 快版 `Machine::unify` 整机重借 —— Stacked Borrows 别名 UB（**三方一致，仍未修**）
 - **位置**：`bump_spine_iter/machine.rs:1310`（`let mach_ptr: *mut Machine = self;`）→
@@ -168,7 +168,7 @@
 - **修复三档**：遏制（per-request `catch_unwind` → 诊断 + 回落，最小项）/ 降级为可恢复 Err /
   根治（meta 解消费点参数化，架构级）。
 
-### 3.3 [P1] 孪生版会「拥有」一个错误集不完整的文件
+### 3.3 [P1 · 已于 2026-10-01 修复] 孪生版会「拥有」一个错误集不完整的文件
 - **位置**：孪生根因 `machine.rs:789-823`（`fake_bind` 就地写**调用方** `Cxt`，写入点 `:805`）
   + Def 臂三个错误出口 `:3543/:3552/:3616` 不回滚 stub + `entry.rs:1258` 保留同一 cxt。
 - **Lead 实测**（同一源码、真实 LSP 面、只取最后一次 publish）：
@@ -181,12 +181,20 @@
   A7 的值输出面闸只覆盖"**错误 + println**"，**错误但无 println** 的文件不在保护范围内。
 - **参考版为何不这样**：LSP 参考路径走 `Infer::infer(&Cxt)` → `elaboration.rs:1063-1066` 先
   `cxt.clone()` 隔离；其 `infer_in_place` 调用者全部首错即停。只有孪生把"就地 COW"与"错误不早退"交叉。
-- **修法裁决（已接受为立项）**：**方案 A（定点回滚，~20 行）可安全落地**——
-  `fake_bind` 撞名检查前移（对齐 `cxt.rs:1230`）+ 新增 `decl_stub: Vec<SmolStr>` **栈** +
-  `infer_decl:3489` 收口 `if r.is_err() { Rc::make_mut(&mut cxt.decls).remove(&k) }`。
-  **方案 C（遇错即停、交参考版接管）不建议单独落地**：A3 量化结论是"会让错误态速度收益归零且略负"
+- **已修复（2026-10-01，用户批准后落地，commit `4d90850`）**：按方案 A 定点回滚——
+  `fake_bind` 撞名检查前移（对齐 `cxt.rs:1230`，顺带修掉 redefine 时旧条目被存根覆盖）+
+  `Machine.decl_stub: Vec<SmolStr>` 栈 + 成功路径在 Def/Enum 臂尾出栈 +
+  失败路径出栈收口在 `infer_decl` / `infer_after_prefix`（`infer_after_prefix_mut` 的全部调用者），
+  `infer_decl` 用 `Rc::make_mut(&mut cxt.decls).remove(&k)` 回滚表项。
+  两处 Err 出栈带**栈深差守卫**——无条件 `pop()` 会在"内层 decl 在 `fake_bind` 之前失败、
+  错误冒泡到外层入口"时偷弹外层的键，反使外层存根泄漏（这是落地时对原方案的一处收紧）。
+  **验证**：双引擎错误集逐条相等（v0 与引用链 v1 两个变体）且**孪生未回落** ⇒ 修掉错诊断的
+  同时保留孪生在错误态的速度收益；回归钉
+  `tests/twin_engine_tests.rs::twin_reports_reference_error_set_after_failed_def`。
+  **残余（另立项）**：失败的 **class** decl 经 Phase B 克隆表注册的多个名字仍不撤回
+  （需 per-decl 的 decl 表写点 journal，即方案 B）。
+- **方案 C（遇错即停、交参考版接管）不建议单独落地**：A3 量化结论是"会让错误态速度收益归零且略负"
   （打字期多数按键带错 ⇒ 孪生部分 pass + 参考版完整 pass = 双付）。
-  **本轮未落地**：需编译 + parity 验证，且本轮按 3 轮上限收口。
 
 ### 3.4 [P2] `prune_vflex` 折叠序：L13 与 L05–L08/快版口径不一致（**本轮按纪律回退**）
 - `unification.rs:350-365` 的 `sp.iter().fold(...)`（`//TODO:need rev()?`）从**最内层**起折叠，
@@ -246,25 +254,27 @@
   - **A1**：P0 1（已修 + 已验证 + 已钉）/ **P1 0**（原有 P1 经 Lead 两次实验判定为**未证实**，
     A1 已退回 needs-verify）/ P2 2（机制清楚、可达性未证）/ P3 3 / needs-verify 5
   - **A2**：会签 1（SB UB，既有）/ P1 0 / P2 2（含 §3.4 回退项与覆盖缺口）/ P3 2（已修）
-  - **A3**：P0 1（SB UB，未修）/ P1 1（F2 错误集面，未修）/ P2 0 新增 / P3 3 / needs-verify 11
+  - **A3**：P0 1（SB UB，未修）/ **P1 1（F2 错误集面，已修 + 已实测验证 + 已钉）** / P2 0 新增 / P3 3 / needs-verify 11
   - **A4**：P0 0 / **P1 1（已修）** / P2 4（2 已修/加固、2 存量仅报告）/ P3 5（4 已修 / 1 仅记录）/ needs-verify 3
   - **A5**：P0 0 / P1 3（F1 已修 + 1 已修 + 1 仅报告）/ P2 4 / P3 7 / needs-verify 6
   - **A6**：P0 1（已修 + 实测背书）/ P1 1（已修 + 实测背书）/ P2 1（已修）/ P3 7 / needs-verify 2
   - **A7**：P0 0 / P1 3（全已修；其中 1 条降为孪生侧未闭合）/ P2 3（1 已修 + 2 待决策）/ P3 5 / needs-verify 1
-- **未闭合项集中在三处**：§3.1 SB UB（需 Miri + 立项）、§3.2 `lvl2ix` panic（需立项）、
-  §3.3 孪生错误集面（方案 A 已定、未落地）。三者**都不适合在没有 Miri 与专项验证的条件下盲改**——
-  盲改一个正在工作的依赖类型语言实现的风险高于保留有据可查的已知项。
-- **本轮的真实价值**：3 个 P0（自死锁挂起、宏栈溢出、构建破坏）与 8 个 P1 被**实测确认并修复**，
+- **未闭合项集中在两处**：§3.1 SB UB（需 Miri + 立项）、§3.2 `lvl2ix` panic（需立项）。
+  两者**都不适合在没有 Miri 与专项验证的条件下盲改**——盲改一个正在工作的依赖类型语言实现
+  的风险高于保留有据可查的已知项。
+  （§3.3 的孪生错误集面已于 2026-10-01 落地修复并经双引擎探针验证，残留仅"失败的 class decl
+  多名字回滚"，属方案 B 立项范畴。）
+- **本轮的真实价值**：3 个 P0（自死锁挂起、宏栈溢出、构建破坏）与 10 余个 P1 被**实测确认并修复**，
   全部经门禁与仓库自带 `tools/gate_l13.sh` 验证；另有 2 个由 Lead 探针发现的引擎分叉
-  （孪生 HDL042 误报、孪生错误集/值输出分叉）被定位或修掉。
+  （孪生 HDL042 误报、孪生错误集/值输出分叉）被定位并**全部修掉**。
 
 ## 6. 如何查看与复跑
 
 ```powershell
 $env:CARGO_TARGET_DIR='F:\projects\hermes\elaboration-zoo-lsp\target'
-Set-Location 'F:\projects\hermes\elaboration-zoo-lsp-review-l13'
-git diff                      # 26 个跟踪文件，+850/−247
-bash tools/gate_l13.sh        # 仓库自带 L13 门禁（4 件套，实测 fail=0 / 167s）
+Set-Location 'F:\projects\hermes\elaboration-zoo-lsp'   # 已合入 master
+git log --oneline -10                                   # 10 个分类提交
+bash tools/gate_l13.sh                                  # 仓库自带 L13 门禁（4 件套，主线复跑 fail=0 / 199s）
 cargo check --all-targets
 ```
 
@@ -273,13 +283,18 @@ cargo check --all-targets
   - R2：`a1-r2.md`、`a2-r2.md`、`a3-r2.md`、`a6-r2.md`、`a7-r2.md`
   - 交叉：`a1-cross-r2.md`、`a3-cross-r2.md`、`a6-cross-r2.md`、`a7-cross-r2.md`
   - 探针工具：`a7-probe.py`、`a7-probe-lvl2ix.typort`
-- 主线 `F:/projects/hermes/elaboration-zoo-lsp` **全程未被触碰**（`git status` 仍只有用户原有的
-  两个未跟踪 docs）；所有改动只落在 `review/l13-shared-perfect` 分支，**未提交**。
+- **状态**：10 个分类提交已**快进合并入主线 `master`**（`350b35a` → `8619512`），
+  合并后在主线工作树复跑验证：`cargo check --all-targets` 0 error、`cargo test --lib` 882 过、
+  `--test twin_engine_tests` 27 过、`bash tools/gate_l13.sh` **fail=0 / 199s**。
+  用户在主线原有的两个未跟踪 docs 全程未被触碰。
+  评审 worktree `F:/projects/hermes/elaboration-zoo-lsp-review-l13`（分支 `review/l13-shared-perfect`，
+  已与 master 同点）保留备查，不需要时可 `git worktree remove` 后删分支。
 
 ## 7. 下一轮首选项（按性价比排序）
 
-1. **§3.3 方案 A 落地**（~20 行，孪生定点回滚）：修掉唯一仍在用户面前可见的引擎分叉；
-   验收 = F2 无-println 源码两版 errs 相等 + 三个测试目标全绿。
+1. ~~**§3.3 方案 A 落地**~~ —— **已完成**（2026-10-01，commit `4d90850`；验收 = F2 无-println
+   源码两版 errs 逐条相等且孪生未回落 + 全门禁绿 + 主线复跑 fail=0）。
+   紧接着可做的是**方案 B**：失败的 class decl 经 Phase B 克隆表注册的多个名字仍不撤回。
 2. **§3.5 补 pruning / church / solve 三类 parity 负载**（≈4 条用例 /≤40 行）：
    这是 §3.4 与 grad 族结论的前置条件——**先有可区分的测试，才有资格改行为**。
 3. **§3.1 SB UB 立项 + CI 接 Miri**：`cargo +nightly miri test`（默认 permissive provenance），
