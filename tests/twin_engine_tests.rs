@@ -202,21 +202,45 @@ fn twin_resident_reuse_across_kicks_is_consistent() {
 /// Twin-authoritative diagnostics (stage 4) match the reference engine's on
 /// an error corpus.  The twin now owns the file's diagnostics entirely, so
 /// this guards message + span + severity parity through the real Backend.
+///
+/// **2026-09-30 (R2): every entry now states who must own it.**  The value
+/// surface gate (`src/lib.rs` `error-state-with-println`) hands any *error +
+/// println* file back to the reference engine, so for those entries the
+/// diagnostic comparison below degrades to reference-vs-reference: the signal
+/// has to come from the recorded **fallback reason** instead.  The same shape
+/// with the `println` removed stays twin-owned and is asserted as such, so this
+/// test never degenerates into "two reference runs" without saying so.
 #[test]
 fn twin_diagnostics_match_reference() {
-    let corpus: &[&str] = &[
-        "def foo: Nat = true",
-        "def qux: Nat = nope",
-        "def a: Nat = true\ndef b: Boolean = 1",
-        "def a: Nat = zero\ndef bad: Nat = true\ndef c: Nat = succ zero",
-        "def inc(n: Nat): Nat = succ n\ndef use: Nat = inc true",
-        "def s: String = 42",
-        "def ok: Nat = zero",
+    /// `(source, expected twin fallback class)`; `None` = the twin must own it.
+    const CORPUS: &[(&str, Option<&str>)] = &[
+        ("def foo: Nat = true", None),
+        ("def qux: Nat = nope", None),
+        ("def a: Nat = true\ndef b: Boolean = 1", None),
+        ("def a: Nat = zero\ndef bad: Nat = true\ndef c: Nat = succ zero", None),
+        ("def inc(n: Nat): Nat = succ n\ndef use: Nat = inc true", None),
+        ("def s: String = 42", None),
+        // 注意：**不能**用 `ok` 做这里的 def 名——它是 prelude 构造子
+        // （`src/prelude/data/result.typort:6` 的 `enum Result[T, E] { ok(..) err(..) }`），
+        // `def ok: Nat = zero` 会真的触发 `redefine ok`；`redefine` 不在信任名单 ⇒
+        // 孪生**正当**回落参考版 ⇒ 下面的比对会退化成参考 vs 参考（Lead 2026-10-01 实测：
+        // reason=`untrusted-error (redefine ok)`, twin_owned=false）。换一个非 prelude 名，
+        // 保住本条"合法程序必须由孪生拥有"的意图。
+        ("def okv: Nat = zero", None),
         // println INFORMATION diagnostics (reference publishes them in a
         // second phase; the twin publishes them in one pass — the final set
-        // must agree).
-        "def foo: Nat = succ zero\nprintln foo\n",
-        "def good: Nat = succ zero\nprintln good\ndef bad: Nat = true\n",
+        // must agree).  No errors here, so the value-surface gate stays off.
+        ("def foo: Nat = succ zero\nprintln foo\n", None),
+        // 值输出面闸（`src/lib.rs:1610-1617`）：错误 + println ⇒ 回落参考版。
+        // 孪生曾把失败的 decl 当不透明 rigid 求值出 `add 2 2`（LEAD-probes F2）。
+        // 该条下诊断比对退化为参考 vs 参考，判别力由下面的 reason 断言承担。
+        (
+            "def good: Nat = succ zero\nprintln good\ndef bad: Nat = true\n",
+            Some("error-state-with-println"),
+        ),
+        // 同形**去 println** 的对照：孪生仍拥有该文件，诊断由孪生发布并与参考
+        // 比对——这条保证本测试没有整体退化成"两次参考版"。
+        ("def good: Nat = succ zero\ndef bad: Nat = true\n", None),
     ];
     // (severity, message, start, end) of the last publish per engine.
     fn last_diags(b: &Arc<Backend<CapturingClient>>, uri: &Url) -> Vec<(Option<lsp_types::DiagnosticSeverity>, String, u32, u32)> {
@@ -229,17 +253,96 @@ fn twin_diagnostics_match_reference() {
             None => Vec::new(),
         }
     }
-    for (i, src) in corpus.iter().enumerate() {
+    for (i, (src, want_fallback)) in CORPUS.iter().enumerate() {
         let uri = Url::parse(&format!("file:///twin_diag_{i}.typort")).unwrap();
         let tb = backend(Engine::Twin);
         tb.process_file(&uri, src, Some(1));
         let rb = backend(Engine::Reference);
         rb.process_file(&uri, src, Some(1));
+        match want_fallback {
+            Some(class) => {
+                let reason = tb
+                    .twin_fallback_reason(uri.as_str())
+                    .unwrap_or_else(|| panic!("{src}: expected fallback `{class}`, none recorded"));
+                assert!(
+                    reason.starts_with(class),
+                    "{src}: expected fallback `{class}`, got `{reason}`",
+                );
+                assert!(!tb.twin_tables.contains_key(uri.as_str()), "{src}: stayed twin-owned");
+            }
+            None => {
+                // 断言 `None` 条目确实由孪生拥有：否则下面的诊断比对就是参考版
+                // vs 参考版（这正是本条测试在 2026-09-30 之前的漏洞）。
+                assert_eq!(
+                    tb.twin_fallback_reason(uri.as_str()),
+                    None,
+                    "{src}: unexpected twin fallback — diagnose it (or annotate this \
+                     entry with its class), the comparison below would be vacuous",
+                );
+                assert!(
+                    tb.twin_tables.contains_key(uri.as_str()),
+                    "{src}: twin did not own the file",
+                );
+            }
+        }
         assert_eq!(
             last_diags(&tb, &uri), last_diags(&rb, &uri),
             "diagnostic mismatch for:\n{src}",
         );
     }
+}
+
+/// **F2 回归钉（2026-10-01，A3 方案 A）**：一个**失败的 def** 被后续声明引用时，孪生必须像
+/// 参考版一样把该名判为"不在作用域"——而不是把它留成可求值的中性 stub。
+///
+/// 修复前（`bump_spine_iter/machine.rs` `fake_bind` 的递归 stub 未回滚）实测：
+/// REF errs = 2 条（`can't unify` + `error name not in scope: add`），TWIN errs = 1 条
+/// （只有 `can't unify`）；把最后一行换成 `println(add two two)` 时孪生还会照常算出并
+/// 打印 `add 2 2`。这里刻意**不带 println**：带 println 的形态会被值输出面闸
+/// （`src/lib.rs` `error-state-with-println`）整体交回参考版，使本测试退化成
+/// "参考 vs 参考"而恒真——错误集面只能靠无 println 的形态钉住。
+#[test]
+fn twin_reports_reference_error_set_after_failed_def() {
+    // `add` 是自引用的非递归 def ⇒ `can't unify`；此后它的名字不得再可解析。
+    let src = "def add : Nat -> Nat -> Nat =\n    fun a b => match a {\n        case zero => b\n        case succ(n) => succ(add n b)\n    }\ndef two : Nat = succ(succ(zero))\ndef use2: Nat = add two two\n";
+    let uri = Url::parse("file:///twin_failed_def_scope.typort").unwrap();
+
+    let rb = backend(Engine::Reference);
+    rb.process_file(&uri, src, Some(1));
+    let tb = backend(Engine::Twin);
+    tb.process_file(&uri, src, Some(1));
+
+    // 孪生必须拥有该文件（错误全在信任名单内、且无 println ⇒ 值输出面闸不触发），
+    // 否则下面的比对就是参考 vs 参考。
+    assert_eq!(
+        tb.twin_fallback_reason(uri.as_str()),
+        None,
+        "twin declined — the error-set comparison below would be vacuous",
+    );
+
+    /// ERROR 文案列表（取**最后一次** publish：`CapturingClient` 会累积多次 publish）。
+    fn last_errors(b: &Arc<Backend<CapturingClient>>, uri: &Url) -> Vec<String> {
+        let d = b.client.diagnostics.lock().unwrap();
+        match d.iter().filter(|(u, _, _)| u == uri).last() {
+            Some((_, ds, _)) => ds.iter()
+                .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
+                .map(|d| d.message.clone())
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+    let (t, r) = (last_errors(&tb, &uri), last_errors(&rb, &uri));
+    // 非空转：参考版必须报出 F2 的那半条（失败的 def 名不在作用域）。
+    assert!(
+        r.iter().any(|m| m.starts_with("error name not in scope: add")),
+        "reference lost the not-in-scope diagnostic: {r:?}",
+    );
+    // 核心契约：孪生不得再把失败的 def 名留成可解析项。
+    assert!(
+        t.iter().any(|m| m.starts_with("error name not in scope: add")),
+        "twin still hides the failed def's name (stub leaked into the declaration table): {t:?}",
+    );
+    assert_eq!(t, r, "twin/reference error sets diverge after a failed def");
 }
 
 /// A cross-file file (imports a project namespace) must fall back to the
@@ -927,20 +1030,34 @@ fn twin_hdl_gate_removed_clean_module_files_stay_twin_owned() {
 /// The fallback set is **exactly** the documented one — new classes must be a
 /// deliberate act.
 ///
-/// Before 2026-09-23 only the per-file ownership of `examples/**` was pinned, so
-/// a *new* `note_twin_fallback` call site that only fires outside `examples/`
-/// (or whose class name happens to start with an existing one, since the
-/// ownership test matches by `starts_with`) could appear with nothing going red.
-/// This walks the corpus and pins the class set itself.
+/// Two independent pins, because either alone is escapable (2026-09-30 R2):
+///
+/// 1. **Static, against the producer**: every string literal `src/lib.rs` passes
+///    as the class argument of `note_twin_fallback`, plus the three literals the
+///    dynamic `decline` variable can take, must appear in [`KNOWN`].  The corpus
+///    walk below can only see classes that actually fire on `examples/**`, so a
+///    new call site that never fires there used to be invisible — the gap this
+///    test's own header claimed to have closed.  The literal scan closes it for
+///    the shapes the producer uses today (any call whose class argument is a
+///    literal, multi-line included); a producer refactor that hides the literal
+///    makes the `>= 7` canary red instead of silently weakening the pin.
+/// 2. **Corpus**: every class observed while walking `examples/**` must be in
+///    [`KNOWN`], and the observed set is exactly the documented one — anything
+///    else means the engine-ownership picture moved.
 #[test]
 fn twin_fallback_classes_are_exactly_the_known_set() {
-    /// Every class `src/lib.rs` may record.  Adding a call site means editing
-    /// this list on purpose.
+    /// Every class `src/lib.rs` emits today.  `hdl-check-gate` was dropped here
+    /// on 2026-09-30: production has had no call site since 2026-09-23, so
+    /// keeping it in the permit list could only let a silent re-introduction
+    /// pass — the negative pin in
+    /// `twin_hdl_gate_removed_clean_module_files_stay_twin_owned` still guards
+    /// that class explicitly.  Adding a call site means editing this list on
+    /// purpose; the static pin below enforces it.
     const KNOWN: &[&str] = &[
         "cross-file",
         "untrusted-error",
         "symbol-defined-in-another-file",
-        "hdl-check-gate",
+        "error-state-with-println",
         "prelude-unavailable",
         "resident-unavailable",
         "prelude-prime-failed",
@@ -948,6 +1065,42 @@ fn twin_fallback_classes_are_exactly_the_known_set() {
         "no-document-id",
         "no-parse-result",
     ];
+    // ── 1. static pin against the producer ──
+    let lib_src = include_str!("../src/lib.rs");
+    let needle = "note_twin_fallback(";
+    let mut literal_classes: Vec<String> = Vec::new();
+    for (pos, pat) in lib_src.match_indices(needle) {
+        // The class argument follows the first comma.  A window (not a line) so
+        // multi-line call sites are seen; non-literal arguments are skipped —
+        // the dynamic `decline` values are covered by the explicit list below.
+        let rest = &lib_src[pos + pat.len()..];
+        let Some(comma) = rest.find(',') else { continue };
+        let arg = rest[comma + 1..].trim_start();
+        let Some(arg) = arg.strip_prefix('"') else { continue };
+        if let Some(end) = arg.find('"') {
+            literal_classes.push(arg[..end].to_string());
+        }
+    }
+    assert!(
+        literal_classes.len() >= 7,
+        "static scan of src/lib.rs found only {literal_classes:?} — if the call sites \
+         were reformatted, update this scan rather than lowering the bound",
+    );
+    for class in &literal_classes {
+        assert!(
+            KNOWN.contains(&class.as_str()),
+            "src/lib.rs emits `{class}` but KNOWN lacks it",
+        );
+    }
+    // The dynamic `decline` variable (`src/lib.rs` `twin_elaborate`) forwards one
+    // of three literals; those are assignments rather than call arguments, so the
+    // scan above cannot see them.
+    for class in ["resident-unavailable", "prelude-prime-failed", "observe-failed"] {
+        assert!(
+            KNOWN.contains(&class),
+            "dynamic `decline` value `{class}` missing from KNOWN",
+        );
+    }
     fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         for e in rd.flatten() {
