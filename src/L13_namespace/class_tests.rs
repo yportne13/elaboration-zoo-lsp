@@ -736,3 +736,70 @@ def c[N: Circ[N]](x: N): Nat = x.circ
         Err(_) => panic!("circular impl must not panic the elaborator"),
     }
 }
+
+// ── 挂起型回归钉的看门狗运行器（A1 R2） ──────────────────────────────────
+
+/// 在独立大栈线程里跑 `run_with_prelude`，**带超时**：正常返回结果，超时则以
+/// 测试失败（而非挂死）收场。跨线程只传归一化文案——L13 的 `Error` 携带非
+/// Send 的重试闭包（同 `tests/l13_fast_parity.rs` 的 `run_basic` 纪律）；
+/// worker 自身的 panic 也折成 `Err`，免得退化成整段超时。
+fn run_with_prelude_watchdog(src: &str, secs: u64) -> Result<String, String> {
+    let input = src.to_owned();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match run_with_prelude(&input) {
+                    Ok(o) => Ok(o),
+                    Err(e) => Err(e.0.data.clone()),
+                }
+            }));
+            // 接收端已超时离开时 send 失败属预期，忽略。
+            let _ = tx.send(match r {
+                Ok(v) => v,
+                Err(_) => Err("<elaborator panicked>".to_string()),
+            });
+        })
+        .expect("spawn watchdog thread");
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(r) => r,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+            "HANG REGRESSION（看门狗 {secs}s 触发）：回调体在 mutable_map 写锁存续期间被求值，\
+             回调里直接出现的 get_global 在同一线程重入同一把 std::sync::RwLock ⇒ 自死锁。\
+             修复口径见 cxt.rs `change_mutable` / `change_mutable_default`\
+             （取值 → 释放写锁 → v_app → 回填，与快版 PrimId::ChangeMutable 同款）。"
+        ),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("watchdog worker 未回传结果（线程在 catch_unwind 之外中止，例如栈溢出 abort）")
+        }
+    }
+}
+
+/// A1 R2 回归钉（P0，R1 已修；Lead 已用带看门狗的后台任务实测：不挂起、
+/// `errs=[]`、输出 `module  ();\nendmodule`）。
+///
+/// 旧实现 `change_mutable` / `change_mutable_default` 在**持有 `mutable_map`
+/// 写锁**期间调用 `v_app` 求值回调；`v_app`→`closure_apply`→`eval` 是**急切**
+/// 求值的，回调体里直接出现的 `get_global`（旧码也取写锁）/`change_mutable*`/
+/// `create_global` 因此会在同一线程重入同一把 `std::sync::RwLock` ⇒ 自死锁
+/// （**挂起**，不是 panic）。修复：取值 → 释放写锁 → 求值 → 重新取锁回填。
+///
+/// 这是挂起型用例，故走 `run_with_prelude_watchdog`（180s）：回归时本测试
+/// **失败**而不是把整队门禁挂死；被阻塞的 worker 线程持有的是它自己那个
+/// `Infer` 的锁，不会污染其它用例，进程退出时一并终结。
+#[test]
+fn regr_change_mutable_callback_reenters_mutable_map() {
+    let output = run_with_prelude_watchdog(r#"
+class probeReent {
+    let _ = change_mutable_default("ModuleTree", x => x, ModuleTree.mk(0, nil))
+    let _ = change_mutable("ModuleTree", x => get_global("ModuleTree"))
+    let _res: ModuleTree = get_global("ModuleTree")
+}
+println (moduleTreeVL(probeReent.create._res))
+"#, 180).unwrap_or_else(|e| panic!("expected OK, got error: {e}"));
+    assert!(
+        output.contains("endmodule"),
+        "expected the seeded ModuleTree to render as verilog, got:\n{output}"
+    );
+}

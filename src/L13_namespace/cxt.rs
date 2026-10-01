@@ -719,16 +719,19 @@ fn change_mutable(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val
     if args.len() < 2 { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            if let Ok(mut x) = infer.mutable_map.write() {
-                if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(
-                        decl,
-                        &args[1],
-                        x.clone(),
-                        Icit::Expl
-                    )
+            // 锁纪律（与快版 `PrimId::ChangeMutable`，prim.rs:591-611 同款）：
+            // 先把旧值取出并**释放写锁**，再 β 归约回调。回调体是急切求值的
+            // （`v_app` → `closure_apply` → `eval`），体里直接出现的
+            // `get_global` / `change_mutable(_default)` / `create_global`
+            // 会在同一线程重入本锁；持写锁重入 = 自死锁（挂起）。
+            // 旧实现在写锁存续期间调用 `v_app`。
+            let old = infer.mutable_map.read().ok().and_then(|m| m.get(&a.data).cloned());
+            if let Some(old) = old {
+                let next = infer.v_app(decl, &args[1], old, Icit::Expl);
+                if let Ok(mut m) = infer.mutable_map.write() {
+                    m.insert(a.data.clone(), next);
                 }
-            };
+            }
             Some(Val::U(0).into())
         }
         _ => None,
@@ -742,7 +745,12 @@ fn get_global(infer: &Infer, _: &Decl, args: &[Rc<Val>]) -> Option<Rc<Val>> {
             // 缺名保持卡住（None），不 panic（L07 参考版 get_global 同款）：
             // 卡住值在类型检查 / 输出面以 `get_global "名"` 原样现形，可诊断；
             // 需要缺省值的调用点应改用 get_global_default。
-            infer.mutable_map.write().unwrap().get(&a.data).cloned()
+            // 共享读锁（快版 `PrimId::GetGlobal` 的 `mutable.borrow()`、
+            // 本文件 `get_global_default` 同口径）：本 prim 只读，旧实现的
+            // 排他写锁既无必要、又让"被 change_mutable 持有写锁时读取"多一类
+            // 重入死锁面；同时也让 HDL 每个 module/frame 的 get_global 不再
+            // 争用排他锁。
+            infer.mutable_map.read().unwrap().get(&a.data).cloned()
         }
         _ => None,
     }
@@ -839,18 +847,16 @@ fn change_mutable_default(infer: &Infer, decl: &Decl, args: &[Rc<Val>]) -> Optio
     if args.len() < 3 { return None; }
     match args[0].as_ref() {
         Val::LiteralIntro(a) => {
-            if let Ok(mut x) = infer.mutable_map.write() {
-                if let Some(x) = x.get_mut(&a.data) {
-                    *x = infer.v_app(
-                        decl,
-                        &args[1],
-                        x.clone(),
-                        Icit::Expl
-                    )
-                } else {
-                    x.insert(a.data.clone(), args[2].clone());
-                }
+            // 锁纪律同 [`change_mutable`]（快版 `PrimId::ChangeMutableDefault`
+            // 同款）：取旧值 → 释放写锁 → β 归约回调 → 回填。
+            let old = infer.mutable_map.read().ok().and_then(|m| m.get(&a.data).cloned());
+            let next = match old {
+                Some(old) => infer.v_app(decl, &args[1], old, Icit::Expl),
+                None => args[2].clone(),
             };
+            if let Ok(mut m) = infer.mutable_map.write() {
+                m.insert(a.data.clone(), next);
+            }
             Some(Val::U(0).into())
         }
         _ => None,

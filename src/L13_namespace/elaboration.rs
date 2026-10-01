@@ -212,8 +212,13 @@ impl Infer {
                     let mk_key = if cxt.decl.contains_key("BindingName.mk") {
                         SmolStr::new("BindingName.mk")
                     } else {
+                        // 确定性选择（旧 `.find` 在 decl 这个 HashMap 上取
+                        // 任意一份：多份限定名 `.BindingName.mk` 并存时
+                        // 合成项指向哪一份随进程随机化而变，输出字节稳定性
+                        // 破口；快版 machine.rs:919-923 按登记序取首个，确定）
                         cxt.decl.keys()
-                            .find(|k| k.ends_with(".BindingName.mk"))
+                            .filter(|k| k.ends_with(".BindingName.mk"))
+                            .min_by(|a, b| a.as_str().cmp(b.as_str()))
                             .cloned()
                             .unwrap_or_else(|| SmolStr::new("BindingName.mk"))
                     };
@@ -2552,8 +2557,13 @@ impl Infer {
                     let mk_key = if cxt.decl.contains_key("BindingName.mk") {
                         SmolStr::new("BindingName.mk")
                     } else {
+                        // 确定性选择（旧 `.find` 在 decl 这个 HashMap 上取
+                        // 任意一份：多份限定名 `.BindingName.mk` 并存时
+                        // 合成项指向哪一份随进程随机化而变，输出字节稳定性
+                        // 破口；快版 machine.rs:919-923 按登记序取首个，确定）
                         cxt.decl.keys()
-                            .find(|k| k.ends_with(".BindingName.mk"))
+                            .filter(|k| k.ends_with(".BindingName.mk"))
+                            .min_by(|a, b| a.as_str().cmp(b.as_str()))
                             .cloned()
                             .unwrap_or_else(|| SmolStr::new("BindingName.mk"))
                     };
