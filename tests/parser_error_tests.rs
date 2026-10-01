@@ -105,6 +105,32 @@ def msg: String = "hello world
         assert!(errors.len() >= 1, "expected error for unterminated string");
     }
 
+    /// A leading UTF-8 BOM (U+FEFF) must be skipped, not lexed as `ErrToken`.
+    ///
+    /// U+FEFF is *not* in Unicode `White_Space`, so `char::is_whitespace()`
+    /// misses it and the catch-all `err_token` (`!c.is_ascii_whitespace()`)
+    /// swallowed it ⇒ one spurious top-level parse error per BOM document.
+    /// `fs::read_to_string` (`src/bin/cli.rs:705`) keeps the BOM on disk, and
+    /// a client may pass it through in `didOpen.text`.
+    #[test]
+    fn leading_bom_is_skipped() {
+        let input = "\u{feff}def f: Nat = 1\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "BOM file should still parse");
+        let (decls, errors) = result.unwrap();
+        assert!(
+            decls.iter().any(|d| matches!(d, Decl::Def { name, .. } if name.data.as_str() == "f")),
+            "the first declaration must survive the BOM, decls: {}",
+            decls.len(),
+        );
+        let rendered: Vec<String> = errors.iter().map(|e| format!("{}", e.msg.data)).collect();
+        assert!(
+            !rendered.iter().any(|m| m.contains("unexpected token")),
+            "BOM must not become an ErrToken, got {:?}",
+            rendered,
+        );
+    }
+
     /// Empty file (no declarations) — should parse to an empty Vec, not crash.
     #[test]
     fn empty_file() {
@@ -1625,5 +1651,110 @@ mod error_found_tracking {
     #[test]
     fn legal_input_unaffected() {
         assert_parse_ok("\ndef foo(a: Nat): Nat = a\nprintln(\"ok\")\n");
+    }
+}
+
+// ===========================================================================
+// Category 20: recursion bound for *named fragments* + delimiter rendering
+// ===========================================================================
+//
+// `MacroDepthGuard` bound the re-parse of an expansion (`p_raw` / `p_decl`)
+// but NOT the name-fragment matcher (`MacroFragment::Name` in macros.rs),
+// which recurses into the referenced macro's rules *before* any input is
+// consumed. A rule whose first matcher references its own macro
+// (`macro_rules Loop { ($x: Loop) => { $x } }`) therefore recursed without
+// any bound: two lines of user source overflowed the stack (the LSP parses
+// arbitrary documents, so this was user-triggerable).
+//
+// The fragment arm now shares the same thread-local guard, so the recursion
+// stops at `MAX_MACRO_EXPANSION_DEPTH` with a recorded parse error.
+//
+mod named_fragment_recursion_bound {
+    use super::*;
+    use elaboration_zoo_lsp::L13_namespace::parser::lex::TokenKind;
+
+    /// Same-position self reference in a *matcher*: bounded, reported, no crash.
+    #[test]
+    fn self_referential_named_fragment_is_bounded() {
+        let src = "macro_rules Loop { ($x: Loop) => { $x } }\ndef f = Loop 1\n";
+        // The parse result is !Send (Rc inside the AST), so only the error
+        // count leaves the thread — same pattern as the transcriber-level pin
+        // in tests/l13_fast_parity.rs.
+        let res = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || match parser(src, 0) {
+                Some((_decls, errs)) => errs.iter().map(|e| format!("{}", e.msg.data)).collect::<Vec<_>>(),
+                None => vec![],
+            })
+            .unwrap()
+            .join();
+        assert!(res.is_ok(), "named-fragment self reference must not overflow the stack");
+        let msgs = res.unwrap();
+        assert!(
+            msgs.iter().any(|m| m.contains("macro expansion too deep")),
+            "the depth limit must surface a parse error (not a silent degrade), got {:?}",
+            msgs
+        );
+    }
+
+    /// Mutual fragment recursion (`A -> B -> A`) takes the same path.
+    #[test]
+    fn mutually_recursive_named_fragments_are_bounded() {
+        let src = "macro_rules A { ($x: B) => { $x } }\nmacro_rules B { ($y: A) => { $y } }\ndef g = A 1\n";
+        let res = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || match parser(src, 0) { Some((_, errs)) => errs.len(), None => 0 })
+            .unwrap()
+            .join();
+        assert!(res.is_ok(), "mutual named-fragment recursion must not overflow the stack");
+        assert!(res.unwrap() > 0, "mutual fragment recursion should report the depth limit");
+    }
+
+    /// `TokenKind::Display` is the *only* text source for "expected X" /
+    /// "expected X, found Y" diagnostics. `LCurly` escaped the format string
+    /// (`"`{{}}`"`), so a missing `{` reported "expected `{}`".
+    #[test]
+    fn lcurly_display_renders_single_brace() {
+        assert_eq!(format!("{}", TokenKind::LCurly), "`{`");
+        assert_eq!(format!("{}", TokenKind::RCurly), "`}`");
+    }
+}
+
+// ===========================================================================
+// Category 21: malformed macro transcriptions must not panic
+// ===========================================================================
+//
+// The brace-transcriber scanner computes the literal-token run it just walked
+// as `i_back.len() - input.len() - 1 - need_remove_endline` (the `- 1` is the
+// not-yet-consumed `}`). When the `$( ... )*` group terminator `) *` is hit
+// before one body token was consumed, that difference is 0 — the subtraction
+// underflowed (debug: "attempt to subtract with overflow"; release:
+// `i_back[..usize::MAX]` → range-end index panic). The parser must survive
+// every byte prefix of a macro definition (the LSP parses while the user
+// types), so the pin only requires "returns Some, does not panic".
+//
+mod malformed_macro_transcriber {
+    use super::*;
+
+    /// `$({)*` — an inner brace-transcriber group that ends immediately.
+    #[test]
+    fn empty_group_brace_transcriber_does_not_panic() {
+        let input = "macro_rules m { () => { $({)* } }\n";
+        let result = parser(input, 0);
+        assert!(result.is_some(), "parser should return Some for valid UTF-8 input");
+    }
+
+    /// Truncation prefixes of the same definition: every prefix must survive
+    /// (the editor reparses on each keystroke).
+    #[test]
+    fn truncated_macro_definition_prefixes_do_not_panic() {
+        let full = "macro_rules m { () => { $({)* } }\n";
+        for end in 1..=full.len() {
+            if !full.is_char_boundary(end) {
+                continue;
+            }
+            let result = parser(&full[..end], 0);
+            assert!(result.is_some(), "prefix of length {} should parse to Some", end);
+        }
     }
 }

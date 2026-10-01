@@ -48,7 +48,13 @@ impl<F: FnMut(char) -> bool + Copy> Pattern for F {
             }
             matched += c.len_utf8();
         }
-        haystack.get(matched..)
+        // std 语义：首个 char 不匹配时返回 None（而不是 Some(整个 haystack)）。
+        // `is(closure)` 依赖这一点；`trim_start_matches_of` 对两种写法结果相同。
+        if matched == 0 {
+            None
+        } else {
+            haystack.get(matched..)
+        }
     }
     fn trim_start_matches_of<'a>(self, haystack: &'a str) -> &'a str {
         self.strip_prefix_of(haystack).unwrap_or(haystack)

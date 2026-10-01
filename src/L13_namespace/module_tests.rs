@@ -669,7 +669,8 @@ println(moduleTreeVL(uW.create.tree))
 // BLOCKED (master pre-existing class-expansion meta leak):
 // class 体内 `let <bind> = <对含 match 的 def 调用>` 在 create/tree 检查时因
 // dependent 隐式参数（string_to_global_type）产生悬挂 meta 而失败。机制链见
-// docs/for-hdl-blocker.md。修好前整体 #[ignore]，不破 CI。
+// docs/for-hdl-blocker.md。阻塞已解决（见上一条注释）：本测试当前**没有**
+// `#[ignore]`，是门禁的一部分。
 #[test]
 fn module_for_loop_unroll_naming() {
     let output = assert_ok(r#"

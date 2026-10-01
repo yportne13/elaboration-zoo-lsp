@@ -83,7 +83,7 @@ impl fmt::Display for TokenKind {
             TokenKind::RParen         => write!(f, "`)`"),
             TokenKind::LSquare        => write!(f, "`[`"),
             TokenKind::RSquare        => write!(f, "`]`"),
-            TokenKind::LCurly         => write!(f, "`{{}}`"),
+            TokenKind::LCurly         => write!(f, "`{{`"),
             TokenKind::RCurly         => write!(f, "`}}`"),
             TokenKind::Dot            => write!(f, "`.`"),
             TokenKind::Eq             => write!(f, "`=`"),
@@ -301,7 +301,13 @@ pub fn lex(input: Span<&str>) -> Option<(Input<'_>, Vec<Token<'_>>)> {
         p.with(whitespace).map(|(a, _)| a)
     }
     //let whitespace = pmatch(|c: char| c == ' ' || c == '\t' || c == '\r').option();
-    let whitespace = pmatch(|c: char| c.is_whitespace()).option();
+    // 前导空白：**额外吞掉文件开头的 UTF-8 BOM**（U+FEFF）。`fs::read_to_string`
+    // （`src/bin/cli.rs:705`）不剥 BOM，客户端也可能把它放进 `didOpen.text`；
+    // 而 U+FEFF 不在 Unicode `White_Space` 属性里 ⇒ `is_whitespace()` 不匹配它
+    // ⇒ BOM 落到 `err_token`（`!is_ascii_whitespace`）变成 `ErrToken`，顶层报一条
+    // 伪解析错误并触发恢复。只扩前导这一处（token 循环内的 `ws()` 不含 BOM），
+    // 所以文件中间的 U+FEFF 仍是 `ErrToken`（行为不变）。
+    let whitespace = pmatch(|c: char| c.is_whitespace() || c == '\u{feff}').option();
     whitespace
         .with(
             //ws(brace.or(ident).or(num).or(op))

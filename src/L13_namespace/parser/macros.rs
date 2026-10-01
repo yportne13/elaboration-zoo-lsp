@@ -2,7 +2,7 @@ use crate::parser_lib::ToSpan;
 use crate::{parser_lib::Span, parser_lib_resilient::Parser};
 
 use super::lex::TokenKind;
-use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo};
+use super::{TokenNode, IError, HashMap, ErrMsg, BaseMsg, extract_base, string, p_raw, p_pi_binder, empty_span, owned_tokens_to_string, ParserExt, kw, MacroState, MacroExpansionInfo, MacroDepthGuard, macro_depth_error};
 
 pub type OwnedToken = Span<(String, TokenKind)>;
 pub type OwnedTokenSlice = [Span<(String, TokenKind)>];
@@ -79,7 +79,29 @@ impl MacroMatcher {
                                 end_offset: t.end_offset,
                                 path_id: t.path_id,
                             }).collect())])),
-                        MacroFragment::Name(mname) => state.1.get(&mname.data).cloned().and_then(|x| x.iter()
+                        MacroFragment::Name(mname) => {
+                            // A named fragment recurses into the *matcher* of every
+                            // rule of the named macro — before any input is consumed
+                            // and before the transcriber re-parse (whose callers hold
+                            // an expansion guard). A same-position self reference
+                            // (`macro_rules m { ($x: m) => { $x } }`) therefore
+                            // recursed with no depth bound at all: user source of two
+                            // lines overflowed the stack. Share the expansion guard so
+                            // the recursion degrades to a parse error at the limit.
+                            let _guard = match MacroDepthGuard::enter() {
+                                Some(g) => g,
+                                None => {
+                                    // Propagate *and* record: the fragment arm's
+                                    // callers (`p_raw`/`p_decl` macro dispatch) swallow
+                                    // matcher errors (`if let Ok(..)`), so returning
+                                    // alone would silently degrade the macro call to a
+                                    // plain identifier application.
+                                    let e = macro_depth_error(input);
+                                    state.0.push(e.clone());
+                                    return Err(e);
+                                }
+                            };
+                            state.1.get(&mname.data).cloned().and_then(|x| x.iter()
                             .flat_map(|m| {
                                 m.matcher.to_parser().parse(input, state)
                                     .and_then(|(i, t)| {
@@ -123,6 +145,7 @@ impl MacroMatcher {
                             }).next()).ok_or(IError {
                                 msg: name.to_span().map(|_| ErrMsg::Base(BaseMsg::Expect(TokenKind::RParen))),//TODO: err msg
                             })
+                        }
                     }
                 },
                 MacroMatcher::Sequence(macro_matchers) => {

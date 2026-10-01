@@ -187,8 +187,11 @@ pub type MacroState = (Vec<IError>, HashMap<String, Vec<MacroRule>>, Vec<MacroEx
 /// 宏展开重解析的递归深度上限：自递归宏（`macro_rules m { () => { m } }` +
 /// `def x = m`）在展开后再次命中同名宏，若不加限制会无限递归直至栈溢出
 /// （LSP 可在任意用户源码上触发）。合法宏/块嵌套深度远小于此值；超限推
-
 /// 一条 IError 并停止展开（不再递归）。（L11/L12 同款守卫，f51a0e4。）
+///
+/// 命名片段（`$x: Expr` 一类，`MacroFragment::Name`）在 *匹配* 阶段递归
+/// 进入被引用宏的规则匹配器，早于任何 re-parse，因此**同样**在这一计数下
+/// 受同一上限约束（macros.rs 的 Name 臂）。
 
 const MAX_MACRO_EXPANSION_DEPTH: u32 = 256;
 
@@ -2537,7 +2540,16 @@ fn p_macro_transcriber_single<'a: 'b, 'b>(
                     input = input.get(1..).unwrap();
                 }
             }
-            let len = i_back.len() - input.len() - 1 - need_remove_endline;
+            // `i_back.len() >= input.len()` always holds (i_back only moves to a
+            // position input has already reached), but the trailing `- 1` (the
+            // still-unconsumed `}`) is NOT guaranteed: when the `$( ... )*`
+            // closing `) *` is hit before a single body token was consumed —
+            // e.g. `macro_rules m { () => { $({)* } }`, where the inner `{`
+            // opens a group-transcriber that immediately ends — the difference
+            // is 0 and the subtraction underflowed (debug: "attempt to subtract
+            // with overflow"; release: `i_back[..usize::MAX]` slice-index panic).
+            // Saturating keeps the empty-transcriber case an empty token list.
+            let len = i_back.len().saturating_sub(input.len() + 1 + need_remove_endline);
             let owned: Vec<OwnedToken> = i_back[..len].iter().map(|tok| Span {
                 data: (tok.data.0.to_owned(), tok.data.1),
                 start_offset: tok.start_offset,

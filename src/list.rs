@@ -175,7 +175,11 @@ impl<T: Clone> List<T> {
     }
 
     pub fn change_tail(self, new_tail: List<T>) -> List<T> {
-        let head_len = self.len() - new_tail.len();
+        // A tail longer than `self` means the caller wants to replace the whole
+        // list; clamping keeps the function total. (The one caller,
+        // L13 cxt::refresh, always passes a tail exactly one node shorter, so
+        // this only removes the `usize` underflow panic path.)
+        let head_len = self.len().saturating_sub(new_tail.len());
         let mut buf: Vec<T> = Vec::with_capacity(head_len);
         for elem in self.iter().take(head_len) {
             buf.push(elem.clone());
